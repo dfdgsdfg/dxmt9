@@ -1,0 +1,7 @@
+#pragma once
+
+#define DXMT9_VERSION_MAJOR 0
+#define DXMT9_VERSION_MINOR 1
+#define DXMT9_VERSION_PATCH 0
+#define DXMT9_VERSION "0.1.0"
+
