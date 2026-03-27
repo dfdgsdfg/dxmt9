@@ -1,4 +1,188 @@
-# Requirements
+# Core Layer Requirements
 
-TBD.
+The core layer is the Wine-facing half of dxmt9. It exposes the D3D9 COM interface
+surface to applications running under Wine and is responsible for enforcing D3D9
+semantics before handing work to the Metal backend.
 
+---
+
+## 1. Factory and Adapter
+
+**R-CORE-1.1** `Direct3DCreate9(SDKVersion)` must return a valid `IDirect3D9*` when
+`SDKVersion == D3D_SDK_VERSION`, and must return `NULL` for any other value.
+
+**R-CORE-1.2** The factory must enumerate exactly the physical GPU adapters present in
+the system. Adapter ordering must be stable across calls within a process lifetime.
+
+**R-CORE-1.3** `IDirect3D9::GetDeviceCaps()` must return a `D3DCAPS9` structure that
+accurately reflects the capabilities of the underlying Metal device. Fields that have
+no Metal equivalent must report the D3D9 minimum guarantee or the most restrictive
+safe value — never a capability the backend cannot actually satisfy.
+
+**R-CORE-1.4** `IDirect3D9::CheckDeviceFormat()` must return `D3D_OK` only for format
+and usage combinations the Metal backend can support. It must return
+`D3DERR_NOTAVAILABLE` for unsupported combinations. It must never silently lie.
+
+**R-CORE-1.5** `IDirect3D9::CreateDevice()` must reject `D3DDEVTYPE_REF` and
+`D3DDEVTYPE_NULLREF`. Only `D3DDEVTYPE_HAL` is supported.
+
+---
+
+## 2. Device Lifecycle
+
+**R-CORE-2.1** The device must implement `IDirect3DDevice9`. `IDirect3DDevice9Ex` is
+in scope but may be deferred to a later phase.
+
+**R-CORE-2.2** `TestCooperativeLevel()` must return `D3D_OK` while the device is
+operational. Device-lost state (`D3DERR_DEVICELOST`, `D3DERR_DEVICENOTRESET`) is only
+required when a GPU reset or mode change makes the device inoperable.
+
+**R-CORE-2.3** `Reset()` must release all resources in `D3DPOOL_DEFAULT` and rebuild
+the implicit swap chain. Resources in `D3DPOOL_MANAGED`, `D3DPOOL_SYSTEMMEM`, and
+`D3DPOOL_SCRATCH` must survive `Reset()` intact.
+
+**R-CORE-2.4** The device must track a single active swap chain created from
+`D3DPRESENT_PARAMETERS` at `CreateDevice()` time. `CreateAdditionalSwapChain()` must
+be supported for windowed multi-window scenarios.
+
+---
+
+## 3. Device State Machine
+
+**R-CORE-3.1** The device must maintain a complete shadow of all D3D9 mutable state:
+render states (`D3DRS_*`), texture stage states (`D3DTSS_*`), sampler states
+(`D3DSAMP_*`), transform matrices, lights, material, viewport, scissor rect, stream
+sources, index buffer, vertex declaration, shaders, shader constants, and render
+targets.
+
+**R-CORE-3.2** `GetRenderState` / `GetTextureStageState` / `GetSamplerState` must
+return the last value set by the corresponding `Set*` call, regardless of whether
+that value was applied to the GPU. The shadow must be authoritative.
+
+**R-CORE-3.3** State changes made between `BeginScene()` and `EndScene()` must take
+effect no later than the next draw call. State changes outside a scene may be deferred
+until `BeginScene()`.
+
+**R-CORE-3.4** `BeginScene()` must succeed when called once per frame. Nested
+`BeginScene()` calls must return `D3DERR_INVALIDCALL`. `EndScene()` without a matching
+`BeginScene()` must return `D3DERR_INVALIDCALL`.
+
+**R-CORE-3.5** `BeginScene()` and `EndScene()` are permitted to be no-ops from the
+GPU's perspective. Applications that omit them must still have their draw calls
+submitted correctly.
+
+**R-CORE-3.6** `IDirect3DStateBlock9` must capture and restore the full device state
+as documented for `D3DSBT_ALL`, `D3DSBT_PIXELSTATE`, and `D3DSBT_VERTEXSTATE`.
+`Apply()` must restore the captured state atomically from the application's viewpoint.
+
+---
+
+## 4. Resource Lifetime and Ownership
+
+**R-CORE-4.1** All COM objects returned from the device must implement correct
+`AddRef` / `Release` reference counting. An object must not be destroyed until its
+reference count reaches zero.
+
+**R-CORE-4.2** Resources must track their owning device. `GetDevice()` on any resource
+must return that device with an incremented reference count.
+
+**R-CORE-4.3** Resources created with `D3DPOOL_DEFAULT` must be destroyed when
+`Reset()` is called or the device is destroyed, whichever comes first.
+
+**R-CORE-4.4** Resources created with `D3DPOOL_MANAGED` must maintain a system-memory
+backup. The GPU copy may be invalidated and re-uploaded transparently; the
+application-visible contents must not change as a result.
+
+**R-CORE-4.5** `Lock()` on a vertex buffer or index buffer must return a CPU-writable
+pointer. `Unlock()` must make those writes visible to subsequent GPU draws. The lock
+semantics of `D3DLOCK_DISCARD` and `D3DLOCK_NOOVERWRITE` must be respected: DISCARD
+allows the implementation to return a fresh allocation; NOOVERWRITE guarantees the
+application will not overwrite in-use regions.
+
+**R-CORE-4.6** `Lock()` on a texture surface must return a CPU-accessible pointer with
+the correct pitch. Modifications made before `Unlock()` must be visible in subsequent
+texture samples.
+
+**R-CORE-4.7** `IDirect3DSurface9::GetContainer()` must return the owning texture when
+the surface is a mip level, and the device when it is a standalone render target.
+
+---
+
+## 5. Draw Calls
+
+**R-CORE-5.1** `DrawPrimitive` and `DrawIndexedPrimitive` must submit geometry using
+the currently bound vertex declaration (or FVF), stream sources, index buffer,
+shaders, and all active render/texture/sampler state at the time of the call.
+
+**R-CORE-5.2** `DrawPrimitiveUP` and `DrawIndexedPrimitiveUP` must copy caller-owned
+vertex and index data into GPU-accessible memory before issuing the draw. The caller's
+buffer may be freed immediately after the call returns.
+
+**R-CORE-5.3** `D3DPT_TRIANGLEFAN` must be supported. It has no Metal equivalent and
+must be decomposed into `D3DPT_TRIANGLELIST` before submission.
+
+**R-CORE-5.4** `Clear()` must support independent clearing of color, depth, and
+stencil. It must support rectangular sub-region clears via the `pRects` / `Count`
+parameters.
+
+---
+
+## 6. Shaders
+
+**R-CORE-6.1** `CreateVertexShader()` and `CreatePixelShader()` must accept D3D9
+shader bytecode for all shader models the device reports as supported in `D3DCAPS9`.
+The minimum required model is SM 2.0 (vs_2_0, ps_2_0).
+
+**R-CORE-6.2** `SetVertexShaderConstantF/I/B` and `SetPixelShaderConstantF/I/B` must
+store constants into the device shadow. Their values must be visible to shaders
+dispatched by subsequent draw calls.
+
+**R-CORE-6.3** When no vertex shader is set (`SetVertexShader(NULL)`), the fixed-
+function vertex pipeline must be active. Its behavior must be governed by the
+transform state, lighting state, material, active lights, FVF, and fog parameters.
+
+**R-CORE-6.4** When no pixel shader is set (`SetPixelShader(NULL)`), the fixed-
+function texture-and-lighting blending pipeline must be active. Its behavior must be
+governed by the texture stage state chain (`D3DTSS_COLOROP`, `D3DTSS_ALPHAOP`, and
+related arguments).
+
+---
+
+## 7. Vertex Format
+
+**R-CORE-7.1** Both `SetFVF()` (legacy flexible vertex format) and
+`SetVertexDeclaration()` (explicit `D3DVERTEXELEMENT9` array) must be supported and
+interoperable. Setting one must not require the other to be cleared.
+
+**R-CORE-7.2** The `D3DFVF_XYZRHW` flag (pre-transformed, screen-space vertex) must
+be handled. The backend must convert screen-space coordinates to Metal NDC, accounting
+for D3D9's half-pixel offset convention.
+
+**R-CORE-7.3** Multi-stream vertex binding (up to the device-reported
+`MaxStreams` capability) must be supported.
+
+---
+
+## 8. Queries
+
+**R-CORE-8.1** `D3DQUERYTYPE_EVENT` (GPU completion fence) must be supported.
+`Issue(D3DISSUE_END)` followed by `GetData()` must correctly indicate whether the GPU
+has completed all prior commands.
+
+**R-CORE-8.2** `D3DQUERYTYPE_OCCLUSION` must be supported if the Metal device supports
+visibility result buffers. The returned sample count is an approximation and is
+permitted to be clamped to a boolean (non-zero = visible).
+
+---
+
+## 9. Error Handling
+
+**R-CORE-9.1** All API calls must return documented `HRESULT` codes. `D3D_OK`
+(zero) on success, `D3DERR_INVALIDCALL` for bad arguments or illegal state
+transitions, and `D3DERR_OUTOFVIDEOMEMORY` / `E_OUTOFMEMORY` for allocation failures.
+
+**R-CORE-9.2** Null pointer arguments to methods that document them as invalid must
+return `D3DERR_INVALIDCALL`, not crash.
+
+**R-CORE-9.3** The device must never silently discard draw calls or state changes.
+Either the operation succeeds or it returns an error.
