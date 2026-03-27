@@ -181,3 +181,57 @@ interface.
 
 **R-BACK-8.3** All Metal object handles passed across the boundary must be opaque
 integer handles, not Objective-C object pointers.
+
+---
+
+## 9. Surface Operations
+
+**R-BACK-9.1** `submitSurfaceCopy()` (used by `UpdateSurface` and `UpdateTexture`)
+must correctly copy all specified mip levels and cube/array slices. Row pitch and
+slice pitch from the source must be respected exactly.
+
+**R-BACK-9.2** `submitStretchRect()` must produce correct results for both same-size
+(blit) and scaled (render pass) copies. The `MTLSamplerMinMagFilter` used for scaled
+copies must match the requested `D3DTEXTUREFILTERTYPE`.
+
+**R-BACK-9.3** `submitReadback()` (used by `GetRenderTargetData`) must block the
+calling thread until the GPU has written the result to the staging buffer. It must
+not return until the data is CPU-readable.
+
+**R-BACK-9.4** `submitColorFill()` must produce a correctly filled surface region.
+For full-surface fills, `MTLLoadActionClear` must be used. For partial fills, a
+scissored render pass or fragment shader fill must be used.
+
+**R-BACK-9.5** All surface operations must be emitted as lambdas into the command
+queue, except `submitReadback()` which must additionally commit the current chunk and
+wait for completion before returning.
+
+---
+
+## 10. Clip Planes
+
+**R-BACK-10.1** When `DrawDesc.clipPlaneMask != 0`, the vertex shader must output
+`[[clip_distance]]` values. The number of active clip distances must equal the number
+of set bits in `clipPlaneMask` (maximum 6).
+
+**R-BACK-10.2** Clip plane uniforms (transformed to clip space by the core) must be
+passed to the vertex shader via the fixed-function uniform buffer or a dedicated
+small constant buffer.
+
+**R-BACK-10.3** `clipPlaneMask` must be part of the vertex shader variant key. Draws
+with different `clipPlaneMask` values must not share a compiled vertex shader.
+
+---
+
+## 11. Multisampling
+
+**R-BACK-11.1** When a render target has `sampleCount > 1`, the `MTLRenderPassDescriptor`
+must use a multisample texture as the color attachment with
+`storeAction = MTLStoreActionMultisampleResolve` and a single-sample resolve texture.
+
+**R-BACK-11.2** The `PSO.rasterSampleCount` must match the render target's sample
+count. A draw call to a 4× MSAA render target must use a PSO compiled with
+`rasterSampleCount = 4`.
+
+**R-BACK-11.3** `GetRenderTargetData` on a multisample render target must resolve to
+the single-sample texture first, then read back from the resolve texture.

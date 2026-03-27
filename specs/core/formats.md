@@ -1,0 +1,177 @@
+# Format Mapping Spec
+
+This document defines the authoritative mapping between D3D9 surface formats
+(`D3DFORMAT`) and Metal pixel formats (`MTLPixelFormat`), and classifies each
+format as **Required**, **Optional**, or **Unsupported** for dxmt9.
+
+- **Required** — must be supported; `CheckDeviceFormat()` returns `D3D_OK`.
+- **Optional** — supported when the Metal device capability allows it;
+  `CheckDeviceFormat()` returns `D3D_OK` only if confirmed at init time.
+- **Unsupported** — never supported; `CheckDeviceFormat()` returns
+  `D3DERR_NOTAVAILABLE`.
+
+---
+
+## 1. Color / Render Target Formats
+
+| D3DFORMAT | MTLPixelFormat | Support | Notes |
+|---|---|---|---|
+| D3DFMT_A8R8G8B8 | BGRA8Unorm | **Required** | Primary backbuffer format |
+| D3DFMT_X8R8G8B8 | BGRA8Unorm | **Required** | Alpha treated as 1.0 on read |
+| D3DFMT_A8B8G8R8 | RGBA8Unorm | **Required** | |
+| D3DFMT_X8B8G8R8 | RGBA8Unorm | **Required** | Alpha treated as 1.0 on read |
+| D3DFMT_R5G6B5 | B5G6R5Unorm | **Required** | |
+| D3DFMT_A1R5G5B5 | BGR5A1Unorm | **Required** | |
+| D3DFMT_X1R5G5B5 | BGR5A1Unorm | **Required** | Alpha forced to 1 |
+| D3DFMT_A4R4G4B4 | ABGR4Unorm | **Required** | |
+| D3DFMT_A8 | A8Unorm | **Required** | Alpha-only |
+| D3DFMT_R8G8B8 | — | **Unsupported** | No 24-bit Metal format; apps must use A8R8G8B8 |
+| D3DFMT_A16B16G16R16F | RGBA16Float | **Required** | HDR render target |
+| D3DFMT_A32B32G32R32F | RGBA32Float | **Required** | Full precision HDR |
+| D3DFMT_G16R16F | RG16Float | **Required** | Two-component FP |
+| D3DFMT_R16F | R16Float | **Required** | Single-channel FP |
+| D3DFMT_G32R32F | RG32Float | **Required** | |
+| D3DFMT_R32F | R32Float | **Required** | |
+| D3DFMT_A16B16G16R16 | RGBA16Unorm | **Required** | 16-bit normalized |
+| D3DFMT_G16R16 | RG16Unorm | **Required** | |
+| D3DFMT_A2R10G10B10 | RGB10A2Unorm | **Required** | 10-bit HDR |
+| D3DFMT_A2B10G10R10 | BGR10A2Unorm | **Optional** | Check `MTLPixelFormatBGR10A2Unorm` availability |
+| D3DFMT_L8 | R8Unorm | **Required** | Single channel; shader must replicate to RGB |
+| D3DFMT_L16 | R16Unorm | **Required** | |
+| D3DFMT_A8L8 | RG8Unorm | **Required** | R=luminance, G=alpha; shader remaps |
+| D3DFMT_V8U8 | RG8Snorm | **Required** | Signed two-channel (bump) |
+| D3DFMT_Q8W8V8U8 | RGBA8Snorm | **Required** | Signed four-channel |
+| D3DFMT_V16U16 | RG16Snorm | **Required** | |
+| D3DFMT_CxV8U8 | — | **Unsupported** | Computed normal map; no Metal equivalent |
+
+### BGRA Byte-Order Note
+
+D3D9's `D3DFMT_A8R8G8B8` stores bytes in memory as B, G, R, A order (little-endian
+ARGB dword). Metal's `MTLPixelFormatBGRA8Unorm` matches this layout exactly. No
+swizzle is needed for this format when used as a texture or render target.
+
+For shader sampling, Metal presents BGRA textures with components in (B, G, R, A)
+order in RGBA register slots. When translating D3D9 shaders, the translator must
+**not** insert a swizzle — the D3D9 bytecode already references components by
+semantic meaning (RGBA), and the hardware delivers them correctly via `BGRA8Unorm`.
+
+For `D3DFMT_A8B8G8R8` (RGBA layout), Metal's `RGBA8Unorm` is used with no swizzle.
+
+For `D3DFMT_L8` (luminance), the shader for fixed-function or translated programs
+must replicate the R channel to G and B: `color.rgb = texture.rrr`.
+
+---
+
+## 2. Depth / Stencil Formats
+
+| D3DFORMAT | MTLPixelFormat | Support | Notes |
+|---|---|---|---|
+| D3DFMT_D24S8 | Depth24Unorm_Stencil8 | **Required (macOS)** | Not available on iOS/tvOS; see note |
+| D3DFMT_D24X8 | Depth24Unorm_Stencil8 | **Required (macOS)** | Stencil present but ignored by app |
+| D3DFMT_D16 | Depth16Unorm | **Required** | |
+| D3DFMT_D32 | Depth32Float | **Required** | Use float; D3D9 D32 = 32-bit fixed |
+| D3DFMT_D32F_LOCKABLE | Depth32Float | **Required** | Lockable depth — staging readback |
+| D3DFMT_D16_LOCKABLE | Depth16Unorm | **Required** | Staging readback |
+| D3DFMT_D15S1 | — | **Unsupported** | No Metal equivalent |
+| D3DFMT_D24X4S4 | — | **Unsupported** | No Metal equivalent |
+| D3DFMT_D24FS8 | Depth32Float_Stencil8 | **Optional** | Floating-point depth with stencil |
+| D3DFMT_S8_LOCKABLE | — | **Unsupported** | Stencil-only surface |
+
+**`Depth24Unorm_Stencil8` availability:** This format is not universally available in
+Metal. On Apple silicon Macs, query `[device supportsFamily:MTLGPUFamilyMac2]` or
+check `MTLPixelFormatDepth24Unorm_Stencil8` via `[device isDepth24Stencil8PixelFormatSupported]`.
+If unavailable, `D3DFMT_D24S8` must fall back to `Depth32Float_Stencil8`.
+`CheckDeviceFormat(D3DFMT_D24S8)` must return `D3D_OK` in both cases — the format is
+supported, just mapped differently.
+
+---
+
+## 3. Compressed Texture Formats (BC / DXTn)
+
+| D3DFORMAT | MTLPixelFormat | Support | Notes |
+|---|---|---|---|
+| D3DFMT_DXT1 | BC1_RGBA | **Required** | 4bpp, 1-bit alpha |
+| D3DFMT_DXT2 | BC2_RGBA | **Required** | 8bpp, premul alpha (treat as DXT3) |
+| D3DFMT_DXT3 | BC2_RGBA | **Required** | 8bpp, explicit alpha |
+| D3DFMT_DXT4 | BC3_RGBA | **Required** | 8bpp, premul alpha (treat as DXT5) |
+| D3DFMT_DXT5 | BC3_RGBA | **Required** | 8bpp, interpolated alpha |
+| D3DFMT_ATI1 / D3DFMT_BC4 | BC4_RUnorm | **Required** | 1-channel compressed |
+| D3DFMT_ATI2 / D3DFMT_BC5 | BC5_RGUnorm | **Required** | 2-channel compressed (normal maps) |
+
+Compressed formats are **not** valid as render targets. `CheckDeviceFormat()` must
+return `D3DERR_NOTAVAILABLE` for any compressed format combined with
+`D3DUSAGE_RENDERTARGET` or `D3DUSAGE_DEPTHSTENCIL`.
+
+BC formats are supported on all Metal devices (Mac and Apple silicon).
+
+---
+
+## 4. Index Buffer Formats
+
+| D3DFORMAT | Metal index type | Support |
+|---|---|---|
+| D3DFMT_INDEX16 | MTLIndexTypeUInt16 | **Required** |
+| D3DFMT_INDEX32 | MTLIndexTypeUInt32 | **Required** |
+
+---
+
+## 5. Vertex Buffer Formats (D3DDECLTYPE → MTLVertexFormat)
+
+| D3DDECLTYPE | MTLVertexFormat | Notes |
+|---|---|---|
+| FLOAT1 | Float | |
+| FLOAT2 | Float2 | |
+| FLOAT3 | Float3 | |
+| FLOAT4 | Float4 | |
+| D3DCOLOR | UChar4Normalized_BGRA | BGRA byte order → RGBA float [0,1] |
+| UBYTE4 | UChar4 | Unsigned byte, no normalization |
+| UBYTE4N | UChar4Normalized | |
+| SHORT2 | Short2 | |
+| SHORT4 | Short4 | |
+| SHORT2N | Short2Normalized | |
+| SHORT4N | Short4Normalized | |
+| USHORT2N | UShort2Normalized | |
+| USHORT4N | UShort4Normalized | |
+| UDEC3 | UInt1010102Normalized | 10-10-10-2, unsigned |
+| DEC3N | Int1010102Normalized | 10-10-10-2, signed normalized |
+| FLOAT16_2 | Half2 | |
+| FLOAT16_4 | Half4 | |
+
+`D3DCOLOR` in a vertex buffer is stored as BGRA. `MTLVertexFormatUChar4Normalized_BGRA`
+reads bytes as B,G,R,A and presents them as `float4(r,g,b,a)` in the shader — the
+swizzle is handled by the Metal vertex fetch hardware, so the generated vertex shader
+sees the correct RGBA order without any extra instructions.
+
+---
+
+## 6. Format Capability Classification Rules
+
+`CheckDeviceFormat(Adapter, DeviceType, AdapterFormat, Usage, RType, CheckFormat)`:
+
+1. If `CheckFormat` is in the Unsupported table → return `D3DERR_NOTAVAILABLE`.
+2. If `CheckFormat` is Required → return `D3D_OK` for all valid `Usage`/`RType`
+   combinations, subject to the following restrictions:
+   - Compressed formats + `RENDERTARGET` or `DEPTHSTENCIL` → `D3DERR_NOTAVAILABLE`
+   - Depth formats + `RENDERTARGET` → `D3DERR_NOTAVAILABLE`
+   - `D3DFMT_L8`, `D3DFMT_L16`, `D3DFMT_A8L8` + `RENDERTARGET` → `D3DERR_NOTAVAILABLE`
+3. If `CheckFormat` is Optional → query device capability at init and return
+   accordingly.
+4. Any format not listed in this spec → `D3DERR_NOTAVAILABLE`.
+
+---
+
+## 7. Format Conversion at Upload
+
+Formats that have no exact Metal equivalent require CPU-side conversion when texture
+data is uploaded via `Lock`/`Unlock`:
+
+| D3DFORMAT | Conversion | Target MTLPixelFormat |
+|---|---|---|
+| D3DFMT_R8G8B8 (24bpp) | Expand to 32bpp: insert A=0xFF | BGRA8Unorm |
+| D3DFMT_X8R8G8B8 | Set A=0xFF in-place | BGRA8Unorm |
+| D3DFMT_X1R5G5B5 | Set A=1 | BGR5A1Unorm |
+| D3DFMT_L8 | Copy R channel, pad G=B=R, A=0xFF | RGBA8Unorm (or keep as R8Unorm) |
+| D3DFMT_A8L8 | R=L, G=A, expand to RGBA | RGBA8Unorm |
+
+Conversion is performed by the core on the CPU during the Lock/Unlock cycle. The
+backend receives converted data in the target Metal format.

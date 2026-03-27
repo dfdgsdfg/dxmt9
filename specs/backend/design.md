@@ -299,3 +299,117 @@ FFPVertexUniforms {
     float     fogStart, fogEnd, fogDensity
 }
 ```
+
+---
+
+## 11. Clip Plane Design
+
+D3D9 supports up to 6 user clip planes (`D3DRS_CLIPPLANEENABLE` bitmask,
+`SetClipPlane(index, float[4])`). Metal surfaces these as vertex shader
+`[[clip_distance]]` outputs.
+
+### Uniform layout
+
+Clip planes are stored in the fixed-function uniform buffer and also injected into
+the programmable shader constant block:
+
+```
+// Appended to FFPVertexUniforms when any clip plane is enabled:
+float4  clipPlane[6]   // in clip space (post-projection)
+```
+
+D3D9 clip planes are specified in world space. The core must transform them to
+clip space before passing to the backend:
+
+```
+clipPlane_clip[i] = transpose(inverse(worldViewProj)) * clipPlane_world[i]
+```
+
+### Vertex shader emission
+
+When `clipPlaneMask != 0`, the vertex shader must output `[[clip_distance]]` values.
+
+**For fixed-function shaders:** the backend generates code in the FFP vertex shader:
+```metal
+vertex VSOut ff_vertex(...) {
+    VSOut out;
+    // ... standard transform ...
+    out.position = projPos;
+    out.clipDist[0] = dot(projPos, uniforms.clipPlane[0]);  // if bit 0 set
+    out.clipDist[1] = dot(projPos, uniforms.clipPlane[1]);  // if bit 1 set
+    // ... up to 6
+    return out;
+}
+```
+
+**For programmable shaders:** the translator injects a post-transform epilog after
+the shader's `oPos` write. The clip plane values are passed as additional float4
+constants above the normal constant register range (or via a separate small buffer).
+
+### `[[clip_distance]]` declaration in MSL
+
+```metal
+struct VertexOut {
+    float4 position [[position]];
+    float  clipDist [[clip_distance]] [6];
+    // ... other varyings
+};
+```
+
+Only the enabled clip planes (per `clipPlaneMask`) need to be written; others may be
+zero. Metal clips the primitive when any `clipDist[i] < 0`.
+
+### Variant key
+
+`clipPlaneMask` (6-bit) is part of the vertex shader variant key. Shaders compiled
+without clip planes must not be reused for draws with clip planes active.
+
+---
+
+## 12. MSAA Design
+
+D3D9 `D3DPRESENT_PARAMETERS.MultiSampleType` and `CreateRenderTarget` with
+`MultiSample` parameter enable multisample antialiasing.
+
+### Supported sample counts
+
+Report the following in `CheckDeviceMultiSampleType()`:
+- `D3DMULTISAMPLE_NONE` (1×) — always supported
+- `D3DMULTISAMPLE_2_SAMPLES` (2×) — supported if `[device supports:MTLSampleCount2]`
+- `D3DMULTISAMPLE_4_SAMPLES` (4×) — supported if `[device supports:MTLSampleCount4]`
+- `D3DMULTISAMPLE_8_SAMPLES` (8×) — optional; check `MTLSampleCount8`
+
+### Multisample render target
+
+A multisample render target is a `MTLTexture` with `sampleCount > 1` and
+`textureType = MTLTextureType2DMultisample`. It cannot be sampled directly.
+
+The corresponding `MTLRenderPassDescriptor` attachment:
+```objc
+att.texture     = msaaTexture          // multisample texture
+att.storeAction = MTLStoreActionMultisampleResolve
+att.resolveTexture = resolveTexture    // single-sample resolve target
+```
+
+### Resolve target
+
+Each multisample render target has an associated single-sample **resolve texture**
+(`MTLTexture` with `sampleCount = 1`). The resolve texture is what the application
+samples when it uses the render target as a texture.
+
+```
+MsaaRenderTarget {
+    MTLTexture  msaaTex      // sampleCount = N, MTLStorageModePrivate
+    MTLTexture  resolveTex   // sampleCount = 1, MTLStorageModePrivate
+}
+```
+
+When the render pass closes (`endEncoding`):
+- `storeAction = MTLStoreActionMultisampleResolve` automatically resolves `msaaTex`
+  → `resolveTex`.
+- Subsequent `SetTexture()` calls bind `resolveTex` for sampling.
+
+### `GetRenderTargetData` on MSAA surface
+
+Must resolve first (if not already resolved), then read back `resolveTex` via staging
+buffer. The application cannot directly access the multisample texture data.

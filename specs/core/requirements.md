@@ -125,13 +125,33 @@ must be decomposed into `D3DPT_TRIANGLELIST` before submission.
 stencil. It must support rectangular sub-region clears via the `pRects` / `Count`
 parameters.
 
+**R-CORE-5.5** `StretchRect()` must be supported for surface-to-surface copies,
+including copies to and from render targets, with and without scaling. The `Filter`
+parameter (`D3DTEXF_NONE`, `D3DTEXF_POINT`, `D3DTEXF_LINEAR`) must be respected.
+
+**R-CORE-5.6** `UpdateSurface()` must be supported for copying from a `D3DPOOL_SYSTEMMEM`
+surface to a `D3DPOOL_DEFAULT` surface of a compatible format.
+
+**R-CORE-5.7** `UpdateTexture()` must be supported for uploading all mip levels of a
+`D3DPOOL_SYSTEMMEM` texture to a `D3DPOOL_DEFAULT` texture.
+
+**R-CORE-5.8** `GetRenderTargetData()` must be supported for reading back a render
+target into a `D3DPOOL_SYSTEMMEM` or `D3DPOOL_SCRATCH` surface. This operation is
+permitted to stall the CPU until GPU completion.
+
+**R-CORE-5.9** `ColorFill()` must fill a render target surface or plain surface with
+a solid color. Partial-rectangle fills must be supported.
+
 ---
 
 ## 6. Shaders
 
 **R-CORE-6.1** `CreateVertexShader()` and `CreatePixelShader()` must accept D3D9
 shader bytecode for all shader models the device reports as supported in `D3DCAPS9`.
-The minimum required model is SM 2.0 (vs_2_0, ps_2_0).
+The target shader model coverage is **SM 1.x through SM 3.0** (vs_1_1, ps_1_1
+through ps_1_4, vs_2_0, ps_2_0, vs_2_x, ps_2_x / ps_2_a / ps_2_b, vs_3_0, ps_3_0).
+SM 1.x must be supported because many DX8-era games use ps_1_4 / vs_1_1 and will not
+accept a device that reports only SM 2.0.
 
 **R-CORE-6.2** `SetVertexShaderConstantF/I/B` and `SetPixelShaderConstantF/I/B` must
 store constants into the device shadow. Their values must be visible to shaders
