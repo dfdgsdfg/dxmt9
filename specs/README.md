@@ -3,17 +3,77 @@
 This directory contains specifications for dxmt9 — a Wine/D3D9-to-Metal translation
 layer. Specs describe *what* the system must be and do, not how to build it.
 
+---
+
 ## Structure
 
 ```
 specs/
-├── core/               Wine-facing D3D9 layer
-│   ├── requirements.md D3D9 COM contracts, state machine rules, resource semantics
-│   └── design.md       COM object model, device state structure, core/backend boundary
-├── backend/            Metal translation layer
-│   ├── requirements.md Translation correctness, command encoding, PSO cache invariants
-│   └── design.md       Command queue, encoder lifecycle, resource allocation model
-└── experiments/        Compatibility validation
-    ├── requirements.md What each experiment must establish
-    └── design.md       Experiment structure and acceptance criteria
+├── core/                   Wine-facing D3D9 layer
+│   ├── requirements.md     D3D9 COM contracts, state machine rules, resource semantics
+│   ├── design.md           COM object model, device state, core/backend boundary
+│   ├── formats.md          D3DFMT → MTLPixelFormat mapping tables
+│   ├── caps.md             D3DCAPS9 advertised values
+│   ├── wsi.md              HWND → CAMetalLayer window integration
+│   └── queries.md          GPU query design in deferred pipeline
+├── backend/                Metal translation layer
+│   ├── requirements.md     Translation correctness, command encoding, PSO cache
+│   ├── design.md           Command queue, encoder lifecycle, resource allocation
+│   └── surface-ops.md      UpdateSurface, StretchRect, ColorFill, GetRenderTargetData
+├── experiments/            Compatibility validation
+│   ├── requirements.md     What each experiment must establish
+│   └── design.md           Experiment structure and acceptance criteria
+└── verification/           Formal verification
+    ├── requirements.md     What must be formally proven and why
+    ├── design.md           TLA+ approach, C++ binding, how to run TLC
+    └── tla/                TLA+ modules (checked with TLC model checker)
+        ├── CommandQueue.tla         3-thread ring buffer
+        ├── ResourceLifetime.tla     Deferred GPU resource destruction
+        ├── EncoderLifecycle.tla     MTLCommandEncoder state machine
+        └── QuerySeqId.tla           D3D9 query seq-ID fence
 ```
+
+---
+
+## Dependencies
+
+### Reading specs
+
+No tooling required — all specs are Markdown and TLA+.
+Mermaid diagrams in Markdown render in GitHub, VS Code (Mermaid extension),
+and the TLA+ Toolbox.
+
+### Checking TLA+ specs
+
+The `.tla` files in `specs/verification/tla/` are checked with **TLC**,
+the model checker bundled with the TLA+ tools.
+
+**Install (macOS):**
+
+```sh
+brew install tla-tools
+```
+
+**Install (any platform — Java required):**
+
+```sh
+curl -L -o tla2tools.jar \
+  https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+```
+
+**Run all specs:**
+
+```sh
+bash scripts/verify_tla.sh
+```
+
+**GUI alternative:** [TLA+ Toolbox](https://github.com/tlaplus/tlaplus/releases) —
+open a `.tla` file, create a model using the values in the matching `.cfg`,
+click **Run TLC**.
+
+**Expected result:** `No error has been found.` for all four modules.
+
+### TLA+ version
+
+TLC 2.17 or later (ships with tla-tools 1.8+). Earlier versions may not
+support all temporal property syntax used in the specs.

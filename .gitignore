@@ -15,4 +15,5 @@ compile_commands.json
 .DS_Store
 .idea/
 .vscode/
-
+states/
+.cache/

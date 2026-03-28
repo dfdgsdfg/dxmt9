@@ -1,0 +1,130 @@
+# Verification Requirements
+
+The verification layer provides machine-checked evidence that the most
+error-prone concurrent and stateful subsystems of dxmt9 satisfy their
+behavioral specifications. Informal English specs and code review are
+necessary but not sufficient for these subsystems.
+
+---
+
+## 1. Scope
+
+**R-VERIF-1.1** Formal verification is required for any subsystem where
+correctness depends on the interleaving of two or more concurrent agents
+(threads, callbacks, GPU signals).
+
+**R-VERIF-1.2** Formal verification is required for any subsystem where
+safety depends on a protocol tracked by monotonically advancing counters
+(sequence IDs, reference counts, fence values).
+
+**R-VERIF-1.3** Verification is not required for pure functions (shader
+translation math, format mapping tables, decomposition algorithms). Those
+are covered by unit tests and property-based tests.
+
+**R-VERIF-1.4** For each verified subsystem, the formal spec must:
+- Identify all agents and their actions.
+- Identify all safety invariants that must hold in every reachable state.
+- Identify all liveness properties that must hold under fair scheduling.
+- Trace each property back to a requirement ID in `core/` or `backend/`.
+
+---
+
+## 2. Command Queue
+
+Traceability: R-BACK-2.1, R-BACK-2.2
+
+**R-VERIF-2.1** The formal spec must prove that the ring buffer never
+allows the Wine thread's write index to overwrite a slot that is still
+Pending, Encoding, or GPU (ring overwrite safety).
+
+**R-VERIF-2.2** The formal spec must prove that the number of simultaneously
+in-flight chunks (Pending + Encoding + GPU) never exceeds `MAX_INFLIGHT`
+in any reachable state (back-pressure correctness).
+
+**R-VERIF-2.3** The formal spec must prove that `completedSeqId` never
+exceeds `currentSeqId` (seq ID monotonicity).
+
+**R-VERIF-2.4** The formal spec must prove, under weak fairness of the
+encode and finish threads, that every committed chunk eventually reaches
+the Free state (no permanent stall).
+
+**R-VERIF-2.5** The formal spec must prove that once the Wine thread stops
+committing, all in-flight work eventually drains and the queue reaches
+quiescence.
+
+---
+
+## 3. Resource Lifetime
+
+Traceability: R-BACK-5.6, R-BACK-7.3
+
+**R-VERIF-3.1** The formal spec must prove that a resource's underlying
+Metal object is never freed while the GPU is still executing commands that
+reference it (no use-after-free).
+
+**R-VERIF-3.2** The formal spec must prove that `FreeResource` is only
+reachable from `DestroyPending` when `completedSeqId >= lastUsedSeqId`.
+No other path to the Freed state may exist.
+
+**R-VERIF-3.3** The formal spec must prove that a resource in
+`DestroyPending` is eventually freed once the GPU has drained past its
+last-use sequence ID (no permanent leak).
+
+---
+
+## 4. Encoder Lifecycle
+
+Traceability: R-BACK-2.4, R-BACK-2.6
+
+**R-VERIF-4.1** The formal spec must prove that at most one
+`MTLCommandEncoder` of any kind is active at any point in the command
+stream (mutual exclusion).
+
+**R-VERIF-4.2** The formal spec must prove that a transition between two
+different encoder kinds (Render → Blit, Blit → Compute, etc.) always
+passes through the `None` state, i.e., `endEncoding` is always called
+before opening a different kind.
+
+**R-VERIF-4.3** The formal spec must prove that a Render encoder's active
+render target is always a valid non-null render target whenever the encoder
+is in the Render state.
+
+**R-VERIF-4.4** The formal spec must prove that when a hazard is detected
+(Bloom filter conflict), no further draw merging into the existing encoder
+is possible until the encoder is ended and a new one is opened.
+
+---
+
+## 5. Query Resolution
+
+Traceability: R-CORE-8.1, R-CORE-8.2, core/queries.md §2–3
+
+**R-VERIF-5.1** The formal spec must prove that a query is never
+transitioned to the Resolved state before `completedSeqId >= issuedSeqId`
+(premature resolution is impossible).
+
+**R-VERIF-5.2** The formal spec must prove that every Issued query
+eventually resolves (no permanent S_FALSE).
+
+**R-VERIF-5.3** The formal spec must prove deadlock freedom for the
+busy-wait pattern `while (GetData(D3DGETDATA_FLUSH) == S_FALSE) {}`.
+Specifically: if a query is Issued and a FLUSH is requested, the system
+eventually reaches Resolved without the Wine thread being permanently
+blocked.
+
+---
+
+## 6. Verification Evidence
+
+**R-VERIF-6.1** Each TLA+ specification must be checked exhaustively by
+TLC with the model parameters defined in the corresponding `.cfg` file.
+TLC must report zero errors and zero invariant violations.
+
+**R-VERIF-6.2** The TLC model parameters (ring size, inflight limit,
+etc.) must be documented with their production counterparts so reviewers
+can assess coverage.
+
+**R-VERIF-6.3** Each C++ implementation of a verified subsystem must
+include debug-mode assertions (`DXMT_ASSERT`) for every safety invariant
+in the corresponding TLA+ spec. The assertions must reference the TLA+
+invariant name in a comment.

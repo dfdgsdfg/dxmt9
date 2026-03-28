@@ -1,5 +1,8 @@
 dxmt9_lib = static_library(
   'dxmt9',
+  'backend.cpp',
+  'com.cpp',
+  'core.cpp',
   'dxmt9.cpp',
   include_directories: dxmt9_inc,
   install: true,
@@ -11,4 +14,3 @@ dxmt9_dep = declare_dependency(
 )
 
 meson.override_dependency('dxmt9', dxmt9_dep)
-
