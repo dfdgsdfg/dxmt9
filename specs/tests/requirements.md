@@ -282,3 +282,53 @@ failing is a regression.
 - List of tests whose `upstream-commit` differs from the current vkd3d HEAD
   (upstream drift report)
 - Count of passing / failing / skipped tests per shader model
+
+---
+
+## 11. WSI Integration Test
+
+The WSI test exercises the full PE → COM → Wine → Metal presentation stack.
+It is the only test category that **requires Wine** and **cannot run as a native
+macOS executable** — it is therefore separate from the R-TEST-7.1 scope.
+
+**R-TEST-11.1** There must be a cross-compiled Win32 PE test executable
+(`tests/wsi_present/wsi_present.exe`) that:
+
+1. Creates a Win32 window via `CreateWindow`.
+2. Calls `Direct3DCreate9` (routed through our `d3d9.dll`).
+3. Creates an `IDirect3DDevice9` with that window as `hDeviceWindow`.
+4. Clears and presents 180 frames (red / green / blue, 60 frames each).
+5. Exits with code 0 on success, non-zero on any `FAILED(hr)` result.
+
+**R-TEST-11.2** The test executable must be built from source using llvm-mingw
+targeting `aarch64-w64-mingw32`. It must not depend on any pre-built binary or
+Wine-specific SDK — only the standard `d3d9.h` / `windows.h` headers from
+llvm-mingw's sysroot.
+
+**R-TEST-11.3** The pass criterion is:
+
+| Check | Criterion |
+|---|---|
+| `Direct3DCreate9` | Returns non-null |
+| `CreateDevice` | `SUCCEEDED(hr)` |
+| `Present` × 180 | All `SUCCEEDED(hr)` |
+| Exit code | 0 |
+| Visual | Window cycles visibly red → green → blue (manual check) |
+
+**R-TEST-11.4** The test must be runnable with any ARM64-capable Wine build that
+provides `winemac.drv` (e.g., Apple Game Porting Toolkit Wine, CrossOver 24+).
+It must not require a custom Wine fork.
+
+**R-TEST-11.5** Installation procedure:
+
+```sh
+cp build/src/libdxmt9.dylib      <wine-prefix>/drive_c/windows/system32/dxmt9.dll
+cp build-win32/src/win32/d3d9.dll <wine-prefix>/drive_c/windows/system32/d3d9.dll
+WINEDLLOVERRIDES="d3d9=n,b" wine tests/wsi_present/wsi_present.exe
+```
+
+**R-TEST-11.6** When `macdrv_get_cocoa_view` is not available (symbol absent from
+`RTLD_DEFAULT` — i.e., running outside Wine), `CreateDevice` must still succeed
+and `Present` must not crash. The present is a no-op in this case (no visible
+output). This behaviour is validated by the existing `dxmt9-core-spec` test
+suite which exercises the present path with a null window handle.

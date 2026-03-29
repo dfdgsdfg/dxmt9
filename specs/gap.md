@@ -78,7 +78,7 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 | MSAA: multisample + resolve textures | ✅ | metal |
 | Wine bridge: `WinemetalApi` (shader-only — 4 fields; window/layer removed) | ✅ | metal |
 | Shader compilation thunk: `dxmt9_winemetal_compile_shader()` | ✅ | metal |
-| WSI: `macdrv_get_cocoa_view` dlsym + lazy `CAMetalLayer` attach on first present | ✅ | metal; `encodePresent` lazy-creates via `dispatch_sync` to main thread |
+| WSI: `macdrv_get_cocoa_view` dlsym + lazy `CAMetalLayer` attach on first present | ✅ | metal; `encodePresent` lazy-creates via `dispatch_sync` to main thread; requires dxmt9 Wine fork |
 | `setMaxFrameLatency()` wired to `CAMetalLayer.maximumDrawableCount` | ✅ | metal |
 | **D3DBC → MSL translation**: SM2/SM3 arithmetic, texture, flow control (IF/ELSE/ENDIF, LOOP/ENDLOOP, REP/ENDREP, CALL/RET/LABEL), transcendental (SINCOS, LOG, EXP), comparison (SGE, SLT), matrix (M4x4, M4x3, M3x4, M3x3, M3x2), MOVA | ✅ | metal; R-BACK-4.1 |
 
@@ -97,7 +97,7 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 | `src/win32/device.cpp` — `IDirect3DDevice9Ex` + 12 resource wrappers | ✅ | All device + Ex methods |
 | llvm-mingw cross-build (`cross/aarch64-windows.ini`) | ✅ | ARM64 PE; builds with llvm-mingw ≥ 20260324 |
 | `dxmt9_imports.def` → `libdxmt9.dll.a` import stub | ✅ | All `dxmt9c_*` + winemetal symbols |
-| `WinemetalApi` window/layer callbacks | ⚠️ | Stubs only; to be replaced by direct `macdrv_get_cocoa_view` in dylib |
+| `WinemetalApi` window/layer callbacks | ✅ | Removed; WSI handled natively in dylib via `macdrv_get_cocoa_view` (dxmt9 Wine fork) |
 
 ---
 
@@ -127,6 +127,7 @@ the tests spec.
 
 | Area | Status | Spec |
 |---|---|---|
+| WSI integration test (`tests/wsi_present/`) | ⚠️ | R-TEST-11.1–11.6; exe built, requires ARM64 Wine to run |
 | `shader_runner_dxmt9` backend | ✅ | R-TEST-1.1 |
 | Expanded `.shader_test` corpus (arithmetic, comparison, flow control, transcendental, matrix, source modifiers, texture, FFP sanity/alpha test) | ✅ | R-TEST-1.3, R-TEST-1.4 |
 | Provenance blocks on corpus files | ✅ | R-TEST-9.1 |

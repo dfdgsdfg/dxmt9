@@ -27,25 +27,46 @@ graph LR
 
 ## 2. HWND → NSView Resolution
 
-Wine's macOS window driver (`winemac.drv`) already exports:
+Wine's macOS window driver (`winemac.drv`) exposes window data through the
+`macdrv_win_data` struct internally, but does not export a public accessor for
+the client-area `NSView`. Our Wine fork adds this accessor:
 
 ```c
-/* Available in any Wine build on macOS — no fork required */
-NSView* macdrv_get_cocoa_view(HWND hwnd);
+/* Added to dlls/winemac.drv/window.c in github.com/dfdgsdfg/wine */
+macdrv_view macdrv_get_cocoa_view(HWND hwnd);
+/* macdrv_view is NSView* cast to an opaque type — safe to cast back */
 ```
 
-`libdxmt9.dylib` resolves this symbol at runtime via `dlopen` / `dlsym`:
+The implementation:
+```c
+macdrv_view macdrv_get_cocoa_view(HWND hwnd)
+{
+    struct macdrv_win_data *data = get_win_data(hwnd);
+    macdrv_view ret = NULL;
+    if (data)
+        ret = data->client_view;
+    release_win_data(data);
+    return ret;
+}
+```
+
+`libdxmt9.dylib` resolves this symbol at runtime via `dlsym(RTLD_DEFAULT, ...)`.
+`RTLD_DEFAULT` searches all already-loaded images; `winemac.drv` (a Mach-O `.so`)
+is loaded into the same ARM64 address space before `libdxmt9.dylib`:
 
 ```c
-static NSView* get_nsview(HWND hwnd) {
-    static auto fn = (NSView*(*)(HWND))
-        dlsym(dlopen("winemac.drv", RTLD_NOLOAD | RTLD_LAZY), "macdrv_get_cocoa_view");
-    return fn ? fn(hwnd) : nullptr;
+static NSView* get_nsview_for_hwnd(u64 hwnd) {
+    using Fn = NSView* (*)(void*);
+    static Fn fn = reinterpret_cast<Fn>(
+        dlsym(RTLD_DEFAULT, "macdrv_get_cocoa_view"));
+    if (!fn) return nil;
+    return fn(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)));
 }
 ```
 
 If the symbol is absent (non-Wine environment, unit tests) the function returns
-`nullptr` and device creation fails gracefully with `D3DERR_INVALIDCALL`.
+`nullptr`; `Present` becomes a no-op and the device remains usable for offscreen
+rendering and `GetRenderTargetData` readback.
 
 ---
 
@@ -184,5 +205,6 @@ cp build-win32/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
 WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
 ```
 
-Works with any Wine on macOS that includes `winemac.drv` (stock Wine, GPTK,
-CrossOver) — no Wine fork required.
+Requires the dxmt9 Wine fork (`github.com/dfdgsdfg/wine`) which adds
+`macdrv_get_cocoa_view` to `winemac.drv`. The fork's only change to Wine is
+`dlls/winemac.drv/window.c` + `macdrv.h`; it tracks `wine-mirror/wine` main.

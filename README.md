@@ -81,7 +81,13 @@ Output: `build-win32/src/win32/d3d9.dll`
 
 ### Installing into a Wine prefix
 
+`libdxmt9.dylib` looks up `macdrv_get_cocoa_view` at runtime via `dlsym`.
+This function is present in the dxmt9 Wine fork — it is not in stock Wine.
+
 ```sh
+# Build Wine from https://github.com/dfdgsdfg/wine (tracks wine-mirror/wine main;
+# the only change is macdrv_get_cocoa_view in dlls/winemac.drv/window.c).
+# Then install dxmt9 into the prefix:
 cp build/src/libdxmt9.dylib ~/.wine/drive_c/windows/system32/dxmt9.dll
 cp build-win32/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
 WINEDLLOVERRIDES="d3d9=n,b" wine game.exe
@@ -132,4 +138,4 @@ scripts/         verify_tla.sh
 | Formal verification (TLC, all 4 specs) | Complete |
 | C ABI bridge (`dxmt9c_*` — `libdxmt9.dylib` exports) | Complete |
 | Win32 PE wrapper (`d3d9.dll` — llvm-mingw cross-build) | Complete |
-| `WinemetalApi` bridge (Wine fork — HWND→NSView, CAMetalLayer) | Pending |
+| WSI (`macdrv_get_cocoa_view` + `CAMetalLayer` — requires dxmt9 Wine fork) | Complete |
