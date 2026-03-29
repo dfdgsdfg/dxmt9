@@ -1,284 +1,100 @@
 # Experiments Requirements
 
-Experiments are isolated, self-contained programs that validate a specific aspect of
-the translation layer in isolation — before or independently of Wine integration.
-Each experiment has a defined input, an expected output, and a pass/fail criterion.
-
-Two complementary test sources are used:
-
-**Primary — vkd3d `shader_runner`** (https://gitlab.winehq.org/wine/vkd3d, LGPL-2.1):
-Portable `.shader_test` files with inline `probe` assertions. Covers SM2/SM3
-programmable shaders. dxmt9 adds one backend (`shader_runner_dxmt9`); the same files
-run against `shader_runner_d3d9` on Windows to produce oracle values.
-
-**Complementary — Wine `dlls/d3d9/tests/visual.c`**
-(https://github.com/wine-mirror/wine, LGPL-2.1):
-29,000-line rendering test suite covering ps_1_1 through ps_3_0, fixed-function
-lighting, fog, alpha test, texture ops, and stateblock behaviour. Hardcoded expected
-D3DCOLOR values were verified against real D3D9 hardware. Used where
-`shader_runner_d3d9` does not reach: ps_1_x shaders and fixed-function
-corner cases. Tests are ported into dxmt9's own test format rather than run directly.
+Experiments are uncontrolled, end-to-end integration runs against real D3D9
+software. Unlike tests (which have pixel-exact oracles), experiments ask
+"does this real application run correctly through dxmt9?" — pass criteria are
+coarser and human-reviewable.
 
 ---
 
-## 1. Shader Translation Correctness
+## 1. Scope
 
-**R-EXP-1.1** dxmt9 must provide a `shader_runner_dxmt9` backend that implements the
-vkd3d `shader_runner` backend interface. It must accept the same `.shader_test` files
-as the existing `shader_runner_d3d9` and `shader_runner_vulkan` backends.
+**R-WILD-1.1** Each experiment must target a specific real D3D9 application:
+a known-working open-source game, tech demo, or SDK sample that exercises a
+meaningful subset of the D3D9 surface area.
 
-**R-EXP-1.2** Oracle values for all `probe` assertions in `.shader_test` files must
-be produced by running the same file through `shader_runner_d3d9` on a Windows host
-with a conformant D3D9 device (hardware or WARP). Oracle values must never be derived
-from the dxmt9 backend itself.
+**R-WILD-1.2** Experiments must not require Wine. They must run the application
+against dxmt9 directly via a native macOS launcher that injects dxmt9 as the
+D3D9 implementation (no PE loader, no Wine DLL stack). If a Wine path is
+unavoidable, it must be documented as a dependency.
 
-**R-EXP-1.3** The `.shader_test` corpus must cover the following opcode groups for
-`ps_2_0`, `vs_2_0`, `ps_3_0`, and `vs_3_0`:
+**R-WILD-1.3** Each experiment must be reproducible: given the same application
+binary and the same dxmt9 build, the outcome must be deterministic across runs
+on the same machine.
 
-| Group | Opcodes | Coverage required |
+---
+
+## 2. Pass Criteria
+
+**R-WILD-2.1** An experiment passes if all of the following hold:
+- The application launches without crashing (exit code 0 or normal shutdown)
+- At least one frame is rendered (pixel variance above a minimum threshold)
+- No Metal validation errors or `DXMT_ASSERT` failures are triggered
+- The rendered output is visually plausible (fuzzy screenshot comparison or
+  human sign-off)
+
+**R-WILD-2.2** An experiment fails if any of the following occur:
+- Crash or GPU device lost during the run
+- Black screen (all pixels below luminance threshold) for more than 2 seconds
+- Metal API validation layer reports an error
+- `DXMT_ASSERT` fires
+
+**R-WILD-2.3** Pixel-exact comparison is not required. Fuzzy comparison uses
+structural similarity (SSIM ≥ 0.90 against a stored reference screenshot) or
+human sign-off for the initial reference.
+
+---
+
+## 3. Application Catalogue
+
+Each experiment entry specifies the application and what D3D9 features it
+exercises. The catalogue grows as compatibility improves.
+
+**R-WILD-3.1** The initial catalogue must include at least one application per
+major feature group:
+
+| Application | License | Key features exercised |
 |---|---|---|
-| Arithmetic | MOV, ADD, SUB, MUL, MAD, RCP, RSQ, ABS, NRM, SGN | One test per opcode |
-| Vector | DP3, DP4, CRS, MIN, MAX | One test per opcode |
-| Comparison | CMP, CND, SGE, SLT | One test per opcode |
-| Transcendental | POW, LOG, EXP, SINCOS | One test per opcode |
-| Texture | TEX, TEXLDD, TEXLDL, DSX, DSY | One test per opcode |
-| Matrix | M4x4, M4x3, M3x4, M3x3, M3x2 | One test per opcode |
-| Flow control | IF/ELSE/ENDIF, REP/ENDREP, LOOP/ENDLOOP, CALL/RET | One test per construct |
-| VS-specific | MOVA (address register), SETP | One test per opcode |
-| Source modifiers | negate, abs, swizzle, partial swizzle | One test per modifier |
-| Write masks | `.x`, `.xy`, `.xyz`, `.xw`, out-of-order | One test per case |
+| Microsoft DirectX SDK `BasicHLSL` sample | MS DirectX SDK (free) | vs_2_0/ps_2_0, constant buffers, diffuse lighting |
+| Microsoft DirectX SDK `Tutorial07` | MS DirectX SDK (free) | Texture mapping, vs_2_0/ps_2_0 |
+| Quake III Arena (ioquake3 + pak0.pk3) | GPL / commercial data | SM1.x shaders, dynamic lighting, BSP |
+| Neverball (open source) | GPL | Fixed-function + SM2, shadow maps |
 
-**R-EXP-1.4** The `.shader_test` files must follow the vkd3d format:
-
-```
-[require]
-shader model >= ps_2_0
-
-[pixel shader]
-float4 main(float2 uv : TEXCOORD0) : COLOR
-{
-    return float4(uv, 0.0, 1.0);
-}
-
-[test]
-draw quad
-probe (0, 0) rgba(0.0, 0.0, 0.0, 1.0) 1       ; 1 ULP tolerance
-probe (31, 31) rgba(1.0, 1.0, 0.0, 1.0) 1
-```
-
-For opcodes where the HLSL frontend cannot exercise the instruction directly, raw
-D3DBC hex blobs (`[pixel shader d3dbc-hex]`) may be used.
-
-**R-EXP-1.5** Each opcode listed in R-EXP-1.3 that is not yet implemented in
-`translateSpirvToMsl()` must have a corresponding `.shader_test` file committed
-*before* the implementation. Tests are written first, failing, then the opcode is
-implemented until the test passes (test-first for each opcode).
+**R-WILD-3.2** When a new opcode group or backend feature is implemented, at
+least one catalogue entry must be identified that exercises it in a real
+rendering context.
 
 ---
 
-## 2. Fixed-Function Pipeline Correctness
+## 4. Reference Screenshots
 
-**R-EXP-2.1** There must be `.shader_test` files (or equivalent Wine `visual.c`-style
-tests for ps_1_x) for each major fixed-function feature:
+**R-WILD-4.1** Each catalogue entry must have a reference screenshot committed
+to `experiments/references/<app-name>.png`. The reference is captured from a
+known-good run (either on Windows D3D9 or a previously passing dxmt9 build)
+and committed after human review.
 
-- Directional lighting (single light, diffuse only)
-- Point lighting (attenuation, with and without specular)
-- Spot lighting (inner/outer cone angles)
-- Multiple lights (up to 8, mixed types)
-- Texture combine operations: MODULATE, ADD, ADDSIGNED, BUMPENVMAP, DOTPRODUCT3
-- Fog: linear, exp, exp2 in both vertex-fog and pixel-fog modes
-- Alpha test: all eight compare functions
-- Texture coordinate generation: CAMERASPACENORMAL, SPHEREMAP, CAMERASPACEPOSITION
+**R-WILD-4.2** Reference screenshots must be captured at a fixed resolution
+(1280×720) with a fixed scene state (deterministic camera position / game tick).
 
-**R-EXP-2.2** For ps_1_x coverage (where the vkd3d D3D9 backend skips below ps_2_0),
-oracle values must be taken from Wine `visual.c` hardcoded expected colors. Each
-ported test must cite the originating Wine test function name in a comment (see
-section 8).
-
-**R-EXP-2.3** Each fixed-function experiment must validate that the `FFPKey` correctly
-captures the relevant state: two setups that differ only in the tested feature must
-produce different rendered outputs.
+**R-WILD-4.3** Updating a reference screenshot requires an explicit commit with
+a comment explaining why the visual output changed. Automated reference updates
+are forbidden.
 
 ---
 
-## 3. Half-Pixel Offset
+## 5. Catalogue Manifest
 
-**R-EXP-3.1** There must be a `.shader_test` that renders a 1×1 pixel quad at each
-corner of a 16×16 render target and verifies that exactly the expected pixels are
-covered (zero tolerance on coverage).
-
-**R-EXP-3.2** The test must cover both programmable shaders (`vs_2_0` writing `oPos`)
-and pre-transformed vertices (`D3DFVF_XYZRHW`).
-
----
-
-## 4. Coordinate System
-
-**R-EXP-4.1** There must be a test verifying winding order: a clockwise triangle
-(D3D9 front-face) must not be culled with `D3DCULL_CCW` and must be culled with
-`D3DCULL_CW`.
-
-**R-EXP-4.2** There must be a test verifying that a triangle at `z = 0.5` in clip
-space renders at the correct depth in the depth buffer.
-
----
-
-## 5. Resource Mapping and Synchronisation
-
-**R-EXP-5.1** There must be a test demonstrating that `D3DLOCK_DISCARD` on a dynamic
-vertex buffer returns memory not visible to an already-submitted draw, and that the
-new data is visible to the subsequent draw.
-
-**R-EXP-5.2** There must be a test demonstrating that texture data written via
-`Lock`/`Unlock` on a `D3DPOOL_MANAGED` texture is correctly uploaded and visible in
-a subsequent texture sample.
-
----
-
-## 6. Presentation
-
-**R-EXP-6.1** There must be a test that creates a swap chain, renders a colored frame,
-and calls `Present()`. Pass criterion: the rendered color is readable via
-`GetRenderTargetData()` before `Present()`.
-
----
-
-## 7. Regression Scope
-
-**R-EXP-7.1** All experiments must be runnable without Wine — as native macOS
-executables that drive the backend directly, without D3D9 COM layer involvement.
-
-**R-EXP-7.2** All experiments must be deterministic. Non-determinism from async PSO
-compilation must be masked by running a warm-up pass before the measured draw.
-
-**R-EXP-7.3** The vkd3d `.shader_test` files used by dxmt9 must be tracked in
-`tests/shader_tests/` and kept in sync with the upstream vkd3d corpus. New opcode
-tests added upstream that fall within the SM2/SM3 arithmetic and texture groups must
-be pulled in within one release cycle.
-
----
-
-## 8. Wine visual.c Complementary Coverage
-
-Wine `dlls/d3d9/tests/visual.c` is the complementary oracle for areas outside
-`shader_runner`'s scope. It is not run directly; individual tests are ported into
-dxmt9's test suite.
-
-**R-EXP-8.1** Each test ported from `visual.c` must:
-- Cite the originating Wine test function in a comment:
-  `// derived from Wine: visual.c:<function_name>`
-- Use the same hardcoded expected D3DCOLOR as the original test, converted to
-  float RGBA for `probe` assertions.
-- Preserve the original `max_diff` tolerance (typically 1–2 per channel).
-
-**R-EXP-8.2** The following `visual.c` test functions must be ported:
-
-| Wine function | What it covers |
-|---|---|
-| `test_sanity` | Basic clear + readback sanity |
-| `lighting_test` | Directional, point, spot lights; specular; material |
-| `fog_test` | Vertex fog, pixel fog, linear/exp/exp2 |
-| `alpha_test` | All eight `D3DCMP_*` functions |
-| `texture_transform_test` | Projected textures, texture matrix |
-| `texop_test` | All `D3DTOP_*` texture combine operations |
-| `texbem_test` | `D3DTOP_BUMPENVMAP` |
-| `ps_1_4_test` | ps_1_4 shaders: texld, arithmetic |
-| `fixed_function_varying_test` | Vertex color diffuse/specular in FFP |
-| `vshader_version_varying_test` | vs_1_1 output registers |
-
-**R-EXP-8.3** Wine `visual.c` coverage fills the gap below ps_2_0. No `visual.c`
-test should duplicate a `.shader_test` that already covers the same behaviour at
-SM2/SM3 level — the two sources are additive, not redundant.
-
-**R-EXP-8.4** When a `visual.c` test references a feature that is also covered by
-a newer `shader_runner` test at a higher shader model, the `visual.c` test is
-retained for ps_1_x regression coverage only and must be annotated accordingly.
-
----
-
-## 9. Provenance
-
-Every `.shader_test` file must carry a machine-readable provenance block as
-leading comments so that the origin and trustworthiness of each oracle value can
-be audited without reading the test body.
-
-**R-EXP-9.1** Each `.shader_test` file must begin with a provenance block in the
-following format:
-
-```
-; [provenance]
-; source: vkd3d
-; upstream-url: https://gitlab.winehq.org/wine/vkd3d
-; upstream-commit: <git SHA of the vkd3d commit this file was taken from or last synced to>
-; oracle: shader_runner_d3d9
-; oracle-env: Windows 11 / WARP
-; oracle-date: YYYY-MM-DD
-```
-
-For tests ported from Wine `visual.c`:
-
-```
-; [provenance]
-; source: wine/visual.c:<function_name>
-; upstream-url: https://github.com/wine-mirror/wine
-; upstream-commit: <git SHA>
-; oracle: real D3D9 hardware (recorded in Wine test history)
-; oracle-date: YYYY-MM-DD
-```
-
-For tests with math-derived oracle values:
-
-```
-; [provenance]
-; source: dxmt9
-; oracle: math-derivation
-; oracle-date: YYYY-MM-DD
-```
-
-**R-EXP-9.2** The `oracle-env` field must identify the hardware or software
-rasterizer used to produce the reference values. Acceptable values:
-- `Windows <version> / WARP` — Microsoft software rasterizer (preferred; deterministic)
-- `Windows <version> / <GPU model>` — specific hardware (note: may have driver quirks)
-- `math-derivation` — analytically computed; no hardware involved
-
-**R-EXP-9.3** When a `.shader_test` file is updated (oracle values changed, new
-probes added), the `upstream-commit` and `oracle-date` fields must be updated to
-reflect the new state. Stale provenance is treated as a test defect.
-
-**R-EXP-9.4** Oracle values produced by the dxmt9 backend itself are forbidden.
-The `oracle` field must never read `shader_runner_dxmt9`.
-
----
-
-## 10. Manifest
-
-A machine-readable manifest tracks every test file in the corpus, enabling coverage
-reports, upstream sync checks, and gap analysis without running the tests.
-
-**R-EXP-10.1** `tests/shader_tests/MANIFEST.toml` must list every `.shader_test`
-file in the corpus. Each entry must include:
+**R-WILD-5.1** `experiments/CATALOGUE.toml` must list every catalogue entry:
 
 ```toml
-[[test]]
-file    = "arithmetic/mad.shader_test"
-source  = "vkd3d"                        # vkd3d | wine/visual.c | dxmt9
-models  = ["ps_2_0", "ps_3_0"]           # shader models exercised
-opcodes = ["MAD"]                        # D3DBC opcodes under test
-status  = "passing"                      # passing | failing | skipped
+[[app]]
+name        = "dx-sdk-basicherl"
+binary      = "experiments/apps/BasicHLSL.exe"
+launcher    = "experiments/launchers/basicherl.sh"
+reference   = "experiments/references/basicherl.png"
+features    = ["vs_2_0", "ps_2_0", "lighting", "texturing"]
+status      = "passing"   # passing | failing | untested
 ```
 
-**R-EXP-10.2** The manifest must be updated atomically with any change to the
-corpus: adding, removing, or renaming a `.shader_test` file without updating
-`MANIFEST.toml` is a build error (enforced by a Meson custom target that diffs
-the manifest against the filesystem).
-
-**R-EXP-10.3** The manifest `status` field must reflect the last known run result
-on the dxmt9 backend. A `failing` entry is permitted (test-first workflow) but
-must have a corresponding open implementation task. A `passing` entry that begins
-failing is a regression.
-
-**R-EXP-10.4** The manifest must be queryable to produce:
-- List of all opcodes with no passing test (coverage gap report)
-- List of tests whose `upstream-commit` differs from the current vkd3d HEAD
-  (upstream drift report)
-- Count of passing / failing / skipped tests per shader model
+**R-WILD-5.2** The `status` field reflects the last known run result. A
+`failing` entry must have an open issue documenting the failure mode.

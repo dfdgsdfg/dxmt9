@@ -103,24 +103,51 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 
 ---
 
-## Experiments Layer
+## Tests Layer
 
-No experiments exist yet. All R-EXP-1.x through R-EXP-10.x are not started.
+No tests exist yet. All R-TEST-1.x through R-TEST-10.x are not started.
 
 | Area | Status | Spec |
 |---|---|---|
-| `shader_runner_dxmt9` backend | ❌ | R-EXP-1.1 |
-| `.shader_test` corpus — arithmetic + texture opcodes | ❌ | R-EXP-1.3 |
-| `.shader_test` corpus — flow control (IF/LOOP/REP/CALL) | ❌ | R-EXP-1.3 |
-| `.shader_test` corpus — transcendental (SINCOS/LOG/EXP) | ❌ | R-EXP-1.3 |
-| `.shader_test` corpus — matrix ops (M4x4…M3x2), MOVA | ❌ | R-EXP-1.3 |
-| Fixed-function `.shader_test` files | ❌ | R-EXP-2.1 |
-| Wine `visual.c` ports (ps_1_x, FFP) | ❌ | R-EXP-8.2 |
-| Half-pixel offset test | ❌ | R-EXP-3.1 |
-| Winding / coordinate system tests | ❌ | R-EXP-4.1–4.2 |
-| Resource mapping tests (DISCARD, MANAGED) | ❌ | R-EXP-5.1–5.2 |
-| Provenance blocks on all `.shader_test` files | ❌ | R-EXP-9.1 |
-| `MANIFEST.toml` + `check_manifest.sh` | ❌ | R-EXP-10.1–10.2 |
+| `shader_runner_dxmt9` backend | ❌ | R-TEST-1.1 |
+| `.shader_test` corpus — arithmetic + texture opcodes | ❌ | R-TEST-1.3 |
+| `.shader_test` corpus — flow control (IF/LOOP/REP/CALL) | ❌ | R-TEST-1.3 |
+| `.shader_test` corpus — transcendental (SINCOS/LOG/EXP) | ❌ | R-TEST-1.3 |
+| `.shader_test` corpus — matrix ops (M4x4…M3x2), MOVA | ❌ | R-TEST-1.3 |
+| Fixed-function `.shader_test` files | ❌ | R-TEST-2.1 |
+| Wine `visual.c` ports (ps_1_x, FFP) | ❌ | R-TEST-8.2 |
+| Half-pixel offset test | ❌ | R-TEST-3.1 |
+| Winding / coordinate system tests | ❌ | R-TEST-4.1–4.2 |
+| Resource mapping tests (DISCARD, MANAGED) | ❌ | R-TEST-5.1–5.2 |
+| Provenance blocks on all `.shader_test` files | ❌ | R-TEST-9.1 |
+| `MANIFEST.toml` + `check_manifest.sh` | ❌ | R-TEST-10.1–10.2 |
+
+---
+
+## Experiments Layer
+
+No experiments exist yet. All R-WILD-1.x through R-WILD-5.x are not started.
+
+| Area | Status | Spec |
+|---|---|---|
+| Application catalogue + `CATALOGUE.toml` | ❌ | R-WILD-3.1, R-WILD-5.1 |
+| Launcher injection harness | ❌ | R-WILD-1.2 |
+| Reference screenshots | ❌ | R-WILD-4.1 |
+| SSIM comparison script | ❌ | R-WILD-2.3 |
+
+---
+
+## Benchmarks Layer
+
+No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
+
+| Area | Status | Spec |
+|---|---|---|
+| `dxmt9-bench` harness | ❌ | R-BENCH-1.1 |
+| Draw call throughput workload | ❌ | R-BENCH-2.2 |
+| PSO compile cold/warm workload | ❌ | R-BENCH-2.1 |
+| Reference stack baselines (wined3d, DXVK+MoltenVK) | ❌ | R-BENCH-3.1 |
+| `bench_compare.sh` regression script | ❌ | R-BENCH-4.3 |
 
 ---
 
@@ -131,7 +158,9 @@ No experiments exist yet. All R-EXP-1.x through R-EXP-10.x are not started.
 | Core | 38 | 0 | 0 |
 | Backend | 25 | 0 | 0 |
 | Verification | 9 | 0 | 0 |
-| Experiments | 0 | 0 | 12 |
+| Tests | 0 | 0 | 12 |
+| Experiments | 0 | 0 | 4 |
+| Benchmarks | 0 | 0 | 5 |
 
 ---
 
@@ -139,8 +168,9 @@ No experiments exist yet. All R-EXP-1.x through R-EXP-10.x are not started.
 
 | Priority | Work | Spec anchor |
 |---|---|---|
-| 1 | `shader_runner_dxmt9` backend + first arithmetic `.shader_test` files | R-EXP-1.1, R-EXP-1.3 |
-| 2 | Flow control + transcendental + matrix `.shader_test` files | R-EXP-1.3 |
-| 3 | `MANIFEST.toml` + `check_manifest.sh` + provenance blocks | R-EXP-9.1, R-EXP-10.1–10.2 |
-| 4 | Wine `visual.c` ports (ps_1_x + FFP) | R-EXP-8.2 |
-| 5 | Half-pixel, winding, resource mapping tests | R-EXP-3.1, R-EXP-4.x, R-EXP-5.x |
+| 1 | `shader_runner_dxmt9` backend + first arithmetic `.shader_test` files | R-TEST-1.1, R-TEST-1.3 |
+| 2 | `MANIFEST.toml` + provenance blocks + `check_manifest.sh` | R-TEST-9.1, R-TEST-10.1–10.2 |
+| 3 | Flow control + transcendental + matrix `.shader_test` files | R-TEST-1.3 |
+| 4 | Wine `visual.c` ports (ps_1_x + FFP) | R-TEST-8.2 |
+| 5 | `dxmt9-bench` harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
+| 6 | First experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |

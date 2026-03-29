@@ -18,11 +18,12 @@ if host_machine.system() == 'darwin'
   ])
 endif
 
-dxmt9_lib = static_library(
+dxmt9_lib = shared_library(
   'dxmt9',
   dxmt9_srcs,
   include_directories: dxmt9_inc,
   dependencies: dxmt9_deps,
+  install_dir: get_option('libdir'),
   install: true,
 )
 

@@ -21,17 +21,23 @@ specs/
 │   ├── requirements.md     Translation correctness, command encoding, PSO cache
 │   ├── design.md           Command queue, encoder lifecycle, resource allocation
 │   └── surface-ops.md      UpdateSurface, StretchRect, ColorFill, GetRenderTargetData
-├── experiments/            Compatibility validation
-│   ├── requirements.md     What each experiment must establish
-│   └── design.md           Experiment structure and acceptance criteria
-└── verification/           Formal verification
-    ├── requirements.md     What must be formally proven and why
-    ├── design.md           TLA+ approach, C++ binding, how to run TLC
-    └── tla/                TLA+ modules (checked with TLC model checker)
-        ├── CommandQueue.tla         3-thread ring buffer
-        ├── ResourceLifetime.tla     Deferred GPU resource destruction
-        ├── EncoderLifecycle.tla     MTLCommandEncoder state machine
-        └── QuerySeqId.tla           D3D9 query seq-ID fence
+├── verification/           Formal verification (TLA+ model checking)
+│   ├── requirements.md     What must be formally proven and why
+│   ├── design.md           TLA+ approach, C++ binding, how to run TLC
+│   └── tla/                TLA+ modules (checked with TLC model checker)
+│       ├── CommandQueue.tla         3-thread ring buffer
+│       ├── ResourceLifetime.tla     Deferred GPU resource destruction
+│       ├── EncoderLifecycle.tla     MTLCommandEncoder state machine
+│       └── QuerySeqId.tla           D3D9 query seq-ID fence
+├── tests/                  Controlled correctness tests (oracle-based, pixel-exact)
+│   ├── requirements.md     shader_runner corpus, Wine visual.c ports, provenance, manifest
+│   └── design.md           shader_runner_dxmt9 backend, .shader_test format, MANIFEST.toml
+├── experiments/            Wild integration tests (real D3D9 applications, fuzzy pass criteria)
+│   ├── requirements.md     Catalogue, pass criteria, screenshot comparison
+│   └── design.md           Launcher injection, SSIM comparison, failure triage
+└── benchmarks/             Performance measurement and regression tracking
+    ├── requirements.md     Workloads, reference stacks, regression policy
+    └── design.md           Harness, timing, comparison script, baseline format
 ```
 
 ---
