@@ -18,6 +18,7 @@
 #include <deque>
 #include <iomanip>
 #include <future>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -27,6 +28,7 @@
 #include <thread>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -958,6 +960,20 @@ constexpr u32 kD3DSIO_DP3 = 8;
 constexpr u32 kD3DSIO_DP4 = 9;
 constexpr u32 kD3DSIO_MIN = 10;
 constexpr u32 kD3DSIO_MAX = 11;
+constexpr u32 kD3DSIO_SLT = 12;
+constexpr u32 kD3DSIO_SGE = 13;
+constexpr u32 kD3DSIO_EXP = 14;
+constexpr u32 kD3DSIO_LOG = 15;
+constexpr u32 kD3DSIO_M4x4 = 20;
+constexpr u32 kD3DSIO_M4x3 = 21;
+constexpr u32 kD3DSIO_M3x4 = 22;
+constexpr u32 kD3DSIO_M3x3 = 23;
+constexpr u32 kD3DSIO_M3x2 = 24;
+constexpr u32 kD3DSIO_CALL = 25;
+constexpr u32 kD3DSIO_LOOP = 27;
+constexpr u32 kD3DSIO_RET = 28;
+constexpr u32 kD3DSIO_ENDLOOP = 29;
+constexpr u32 kD3DSIO_LABEL = 30;
 constexpr u32 kD3DSIO_LRP = 18;
 constexpr u32 kD3DSIO_FRC = 19;
 constexpr u32 kD3DSIO_DCL = 31;
@@ -966,6 +982,14 @@ constexpr u32 kD3DSIO_CRS = 33;
 constexpr u32 kD3DSIO_SGN = 34;
 constexpr u32 kD3DSIO_ABS = 35;
 constexpr u32 kD3DSIO_NRM = 36;
+constexpr u32 kD3DSIO_SINCOS = 37;
+constexpr u32 kD3DSIO_REP = 38;
+constexpr u32 kD3DSIO_ENDREP = 39;
+constexpr u32 kD3DSIO_IF = 40;
+constexpr u32 kD3DSIO_ELSE = 42;
+constexpr u32 kD3DSIO_ENDIF = 43;
+constexpr u32 kD3DSIO_BREAK = 44;
+constexpr u32 kD3DSIO_MOVA = 46;
 constexpr u32 kD3DSIO_DEFB = 47;
 constexpr u32 kD3DSIO_DEFI = 48;
 constexpr u32 kD3DSIO_TEXCOORD = 49;
@@ -1279,10 +1303,52 @@ std::string opcodeName(u32 opcode) {
       return "min";
     case kD3DSIO_MAX:
       return "max";
+    case kD3DSIO_SLT:
+      return "slt";
+    case kD3DSIO_SGE:
+      return "sge";
+    case kD3DSIO_EXP:
+      return "exp";
+    case kD3DSIO_LOG:
+      return "log";
+    case kD3DSIO_M4x4:
+      return "m4x4";
+    case kD3DSIO_M4x3:
+      return "m4x3";
+    case kD3DSIO_M3x4:
+      return "m3x4";
+    case kD3DSIO_M3x3:
+      return "m3x3";
+    case kD3DSIO_M3x2:
+      return "m3x2";
+    case kD3DSIO_CALL:
+      return "call";
     case kD3DSIO_LRP:
       return "lrp";
     case kD3DSIO_FRC:
       return "frc";
+    case kD3DSIO_SINCOS:
+      return "sincos";
+    case kD3DSIO_REP:
+      return "rep";
+    case kD3DSIO_ENDREP:
+      return "endrep";
+    case kD3DSIO_IF:
+      return "if";
+    case kD3DSIO_ELSE:
+      return "else";
+    case kD3DSIO_ENDIF:
+      return "endif";
+    case kD3DSIO_BREAK:
+      return "break";
+    case kD3DSIO_RET:
+      return "ret";
+    case kD3DSIO_LOOP:
+      return "loop";
+    case kD3DSIO_ENDLOOP:
+      return "endloop";
+    case kD3DSIO_LABEL:
+      return "label";
     case kD3DSIO_DCL:
       return "dcl";
     case kD3DSIO_DEFB:
@@ -1325,6 +1391,12 @@ std::string opcodeName(u32 opcode) {
       return "texldl";
     case kD3DSIO_BREAKP:
       return "breakp";
+    case kD3DSIO_MOVA:
+      return "mova";
+    case kD3DSIO_EXPP:
+      return "expp";
+    case kD3DSIO_LOGP:
+      return "logp";
     case kD3DSIO_PHASE:
       return "phase";
     case kD3DSIO_COMMENT:
@@ -1341,6 +1413,13 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_NOP:
     case kD3DSIO_PHASE:
       return 0;
+    case kD3DSIO_ELSE:
+    case kD3DSIO_ENDIF:
+    case kD3DSIO_ENDLOOP:
+    case kD3DSIO_ENDREP:
+    case kD3DSIO_RET:
+    case kD3DSIO_BREAK:
+      return 0;
     case kD3DSIO_MOV:
     case kD3DSIO_DEFB:
     case kD3DSIO_DEFI:
@@ -1352,7 +1431,19 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_DSY:
     case kD3DSIO_SETP:
     case kD3DSIO_BREAKP:
+    case kD3DSIO_MOVA:
+    case kD3DSIO_SINCOS:
+    case kD3DSIO_LOG:
+    case kD3DSIO_LOGP:
+    case kD3DSIO_EXP:
+    case kD3DSIO_EXPP:
       return 2;
+    case kD3DSIO_LABEL:
+    case kD3DSIO_CALL:
+    case kD3DSIO_IF:
+    case kD3DSIO_LOOP:
+    case kD3DSIO_REP:
+      return 1;
     case kD3DSIO_ADD:
     case kD3DSIO_SUB:
     case kD3DSIO_MUL:
@@ -1370,6 +1461,13 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_DP2ADD:
     case kD3DSIO_TEXLDD:
     case kD3DSIO_TEXLDL:
+    case kD3DSIO_SLT:
+    case kD3DSIO_SGE:
+    case kD3DSIO_M4x4:
+    case kD3DSIO_M4x3:
+    case kD3DSIO_M3x4:
+    case kD3DSIO_M3x3:
+    case kD3DSIO_M3x2:
       return 3;
     case kD3DSIO_MAD:
     case kD3DSIO_LRP:
@@ -1448,6 +1546,10 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       return "float4(0.0f)";
     case D3DRegisterKind::Address:
     case D3DRegisterKind::Loop:
+      if (reg.kind == D3DRegisterKind::Address) {
+        return "float4(a0)";
+      }
+      return "float4(aL)";
     case D3DRegisterKind::MiscType:
     case D3DRegisterKind::Predicate:
     case D3DRegisterKind::Sampler:
@@ -1464,6 +1566,15 @@ std::string decodeOperandToken(const u32 token, D3DShaderStage stage, bool desti
   D3DRegisterRef reg = decodeRegisterRef(token, stage);
   return registerName(reg, stage, destination);
 }
+
+u32 decodeLabelIndex(u32 token) {
+  return token & 0x7ffu;
+}
+
+struct FlowBlock {
+  u32 opcode = 0;
+  bool sawElse = false;
+};
 
 SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader, bool vertex, const DrawDesc& desc) {
   SpirvModule module;
@@ -1528,8 +1639,22 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader, bool vertex, co
     }
 
     const u32 operandCount = (token >> 24) & 0xfu;
-    if (operandCount == 0 && opcode != kD3DSIO_NOP) {
-      throw std::runtime_error("missing D3D operand count");
+    if (operandCount == 0) {
+      switch (opcode) {
+        case kD3DSIO_NOP:
+        case kD3DSIO_ELSE:
+        case kD3DSIO_ENDIF:
+        case kD3DSIO_ENDLOOP:
+        case kD3DSIO_ENDREP:
+        case kD3DSIO_RET:
+        case kD3DSIO_BREAK:
+        case kD3DSIO_PHASE:
+        case kD3DSIO_COMMENT:
+        case kD3DSIO_END:
+          break;
+        default:
+          throw std::runtime_error("missing D3D operand count");
+      }
     }
     const size_t operandBytes = static_cast<size_t>(operandCount) * sizeof(u32);
     if (offset + operandBytes > bytes.size()) {
@@ -1570,6 +1695,8 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     out << "  float4 outTexcoord0 = float4(0.0f);\n";
     out << "  float outFogFactor = 1.0f;\n";
     out << "  float outPointSize = 1.0f;\n";
+    out << "  int a0 = 0;\n";
+    out << "  int aL = 0;\n";
     out << "  float4 r[32];\n";
     out << "  float4 cFloat[" << kMaxVertexConstants << "];\n";
     out << "  int4 cInt[" << kMaxIntegerConstants << "];\n";
@@ -1577,7 +1704,10 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     out << "  for (uint i = 0; i < " << kMaxVertexConstants << "; ++i) { cFloat[i] = uniforms.vsFloatConst[i]; }\n";
     out << "  for (uint i = 0; i < " << kMaxIntegerConstants << "; ++i) { cInt[i] = uniforms.vsIntConst[i]; }\n";
     out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { cBool[i] = uniforms.vsBoolConst[i]; }\n";
-    for (const auto& instruction : module.instructions) {
+    std::vector<FlowBlock> controlStack;
+    size_t callDepth = 0;
+    for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
+      const auto& instruction = module.instructions[instructionIndex];
       if (instruction.opcode == kD3DSIO_COMMENT || instruction.opcode == kD3DSIO_PHASE) {
         continue;
       }
@@ -1591,6 +1721,8 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
           out << static_cast<i32>(instruction.operands[i]);
         } else if (instruction.opcode == kD3DSIO_DEFB && i > 0) {
           out << (instruction.operands[i] != 0u ? "true" : "false");
+        } else if (instruction.opcode == kD3DSIO_LABEL || instruction.opcode == kD3DSIO_CALL) {
+          out << "label" << decodeLabelIndex(instruction.operands[i]);
         } else {
           out << decodeOperandToken(instruction.operands[i], module.stage, destination);
         }
@@ -1627,14 +1759,97 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         }
       };
 
+      if (instruction.opcode == kD3DSIO_LABEL) {
+        if (instruction.operands.empty()) {
+          throw std::runtime_error("LABEL requires a label operand");
+        }
+        out << "  // label " << decodeLabelIndex(instruction.operands[0]) << "\n";
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_CALL) {
+        if (instruction.operands.empty()) {
+          throw std::runtime_error("CALL requires a label operand");
+        }
+        out << "  // call label " << decodeLabelIndex(instruction.operands[0]) << "\n";
+        out << "  do {\n";
+        ++callDepth;
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_RET) {
+        if (callDepth > 0) {
+          --callDepth;
+          out << "  break;\n";
+          out << "  } while (false);\n";
+        } else {
+          out << "  return out;\n";
+        }
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_IF) {
+        if (instruction.operands.empty()) {
+          throw std::runtime_error("IF requires a condition operand");
+        }
+        out << "  if ((" << readSrc(0) << ").x != 0.0f) {\n";
+        controlStack.push_back(FlowBlock{instruction.opcode, false});
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_ELSE) {
+        if (controlStack.empty() || controlStack.back().opcode != kD3DSIO_IF || controlStack.back().sawElse) {
+          throw std::runtime_error("ELSE without matching IF");
+        }
+        controlStack.back().sawElse = true;
+        out << "  } else {\n";
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_ENDIF) {
+        if (controlStack.empty() || controlStack.back().opcode != kD3DSIO_IF) {
+          throw std::runtime_error("ENDIF without matching IF");
+        }
+        controlStack.pop_back();
+        out << "  }\n";
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_LOOP || instruction.opcode == kD3DSIO_REP) {
+        if (instruction.operands.empty()) {
+          throw std::runtime_error("loop requires a count operand");
+        }
+        const auto loopIndex = instructionIndex;
+        const auto countExpr = "max(0, int(round(" + readSrc(0) + ".x)))";
+        if (instruction.opcode == kD3DSIO_LOOP) {
+          out << "  for (int dxmt9_loop_" << loopIndex << " = 0, dxmt9_loopCount_" << loopIndex << " = "
+              << countExpr << "; dxmt9_loop_" << loopIndex << " < dxmt9_loopCount_" << loopIndex
+              << "; ++dxmt9_loop_" << loopIndex << ") {\n";
+        } else {
+          out << "  for (int dxmt9_rep_" << loopIndex << " = 0, dxmt9_repCount_" << loopIndex << " = " << countExpr
+              << "; dxmt9_rep_" << loopIndex << " < dxmt9_repCount_" << loopIndex << "; ++dxmt9_rep_"
+              << loopIndex << ") {\n";
+        }
+        controlStack.push_back(FlowBlock{instruction.opcode, false});
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_ENDLOOP || instruction.opcode == kD3DSIO_ENDREP) {
+        if (controlStack.empty() ||
+            (instruction.opcode == kD3DSIO_ENDLOOP && controlStack.back().opcode != kD3DSIO_LOOP) ||
+            (instruction.opcode == kD3DSIO_ENDREP && controlStack.back().opcode != kD3DSIO_REP)) {
+          throw std::runtime_error("loop end without matching opener");
+        }
+        controlStack.pop_back();
+        out << "  }\n";
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_BREAK) {
+        out << "  break;\n";
+        continue;
+      }
+
       switch (instruction.opcode) {
         case kD3DSIO_NOP:
           break;
         case kD3DSIO_MOV: {
-          if (instruction.operands.size() < 2) {
-            throw std::runtime_error("MOV requires 2 operands");
-          }
-          const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("MOV requires 2 operands");
+        }
+        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
           const auto dstMask = decodeWriteMask(instruction.operands[0]);
           const auto value = readSrc(1);
           switch (dst.kind) {
@@ -1684,20 +1899,50 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
             case D3DRegisterKind::ConstBool:
               out << "  cBool[" << dst.index << "] = " << value << ".x != 0.0f ? 1u : 0u;\n";
               break;
-            default:
-              throw std::runtime_error("unsupported MOV destination");
-          }
-          break;
+          default:
+            throw std::runtime_error("unsupported MOV destination");
         }
+        break;
+      }
+      case kD3DSIO_MOVA: {
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("MOVA requires 2 operands");
+        }
+        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto value = readSrc(1);
+        switch (dst.kind) {
+          case D3DRegisterKind::Address:
+            out << "  a0 = int(round(" << value << ".x));\n";
+            break;
+          case D3DRegisterKind::Loop:
+            out << "  aL = int(round(" << value << ".x));\n";
+            break;
+          default:
+            throw std::runtime_error("MOVA requires an address register destination");
+        }
+        break;
+      }
         case kD3DSIO_ADD:
         case kD3DSIO_SUB:
         case kD3DSIO_MUL:
         case kD3DSIO_MAD:
-        case kD3DSIO_MIN:
-        case kD3DSIO_MAX:
-        case kD3DSIO_RCP:
-        case kD3DSIO_RSQ:
-        case kD3DSIO_FRC:
+      case kD3DSIO_MIN:
+      case kD3DSIO_MAX:
+      case kD3DSIO_SLT:
+      case kD3DSIO_SGE:
+      case kD3DSIO_EXP:
+      case kD3DSIO_LOG:
+      case kD3DSIO_EXPP:
+      case kD3DSIO_LOGP:
+      case kD3DSIO_SINCOS:
+      case kD3DSIO_M4x4:
+      case kD3DSIO_M4x3:
+      case kD3DSIO_M3x4:
+      case kD3DSIO_M3x3:
+      case kD3DSIO_M3x2:
+      case kD3DSIO_RCP:
+      case kD3DSIO_RSQ:
+      case kD3DSIO_FRC:
         case kD3DSIO_LRP:
         case kD3DSIO_DP3:
         case kD3DSIO_DP4:
@@ -1739,6 +1984,81 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
             case kD3DSIO_MAX:
               value = "max(" + readSrc(1) + ", " + readSrc(2) + ")";
               break;
+            case kD3DSIO_SLT:
+              value = "select(float4(0.0f), float4(1.0f), (" + readSrc(1) + ") < (" + readSrc(2) + "))";
+              break;
+            case kD3DSIO_SGE:
+              value = "select(float4(0.0f), float4(1.0f), (" + readSrc(1) + ") >= (" + readSrc(2) + "))";
+              break;
+            case kD3DSIO_EXP:
+            case kD3DSIO_EXPP:
+              value = "float4(exp2(" + readSrc(1) + "))";
+              break;
+            case kD3DSIO_LOG:
+            case kD3DSIO_LOGP:
+              value = "float4(log2(max(" + readSrc(1) + ", float4(1.0e-8f))))";
+              break;
+            case kD3DSIO_SINCOS:
+              value = "float4(sin(" + readSrc(1) + "), cos(" + readSrc(1) + "), 0.0f, 0.0f)";
+              break;
+            case kD3DSIO_M4x4: {
+              const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+              if (base.kind != D3DRegisterKind::ConstFloat) {
+                throw std::runtime_error("M4x4 requires a float constant matrix base");
+              }
+              const auto src = readSrc(1);
+              value = "float4(dot(" + src + ", cFloat[" + std::to_string(base.index + 0) + "]), dot(" + src +
+                      ", cFloat[" + std::to_string(base.index + 1) + "]), dot(" + src + ", cFloat[" +
+                      std::to_string(base.index + 2) + "]), dot(" + src + ", cFloat[" +
+                      std::to_string(base.index + 3) + "]))";
+              break;
+            }
+            case kD3DSIO_M4x3: {
+              const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+              if (base.kind != D3DRegisterKind::ConstFloat) {
+                throw std::runtime_error("M4x3 requires a float constant matrix base");
+              }
+              const auto src = readSrc(1);
+              value = "float4(dot(" + src + ", cFloat[" + std::to_string(base.index + 0) + "]), dot(" + src +
+                      ", cFloat[" + std::to_string(base.index + 1) + "]), dot(" + src + ", cFloat[" +
+                      std::to_string(base.index + 2) + "]), 0.0f)";
+              break;
+            }
+            case kD3DSIO_M3x4: {
+              const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+              if (base.kind != D3DRegisterKind::ConstFloat) {
+                throw std::runtime_error("M3x4 requires a float constant matrix base");
+              }
+              const auto src = readSrc(1);
+              value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
+                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
+                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 2) +
+                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 3) + "].xyz))";
+              break;
+            }
+            case kD3DSIO_M3x3: {
+              const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+              if (base.kind != D3DRegisterKind::ConstFloat) {
+                throw std::runtime_error("M3x3 requires a float constant matrix base");
+              }
+              const auto src = readSrc(1);
+              value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
+                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
+                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 2) +
+                      "].xyz), 0.0f)";
+              break;
+            }
+            case kD3DSIO_M3x2: {
+              const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+              if (base.kind != D3DRegisterKind::ConstFloat) {
+                throw std::runtime_error("M3x2 requires a float constant matrix base");
+              }
+              const auto src = readSrc(1);
+              value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
+                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
+                      "].xyz), 0.0f, 0.0f)";
+              break;
+            }
             case kD3DSIO_RCP:
               value = "float4(1.0f) / max(" + readSrc(1) + ", float4(1.0e-8f))";
               break;
@@ -1901,8 +2221,14 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
           // Texture instructions are lowered through the supported TEXLD-style sample path above when present.
           break;
         default:
-          throw std::runtime_error("unsupported D3D opcode");
+          throw std::runtime_error("unsupported D3D opcode: " + opcodeName(instruction.opcode));
       }
+    }
+    if (!controlStack.empty()) {
+      throw std::runtime_error("unbalanced D3D control flow");
+    }
+    if (callDepth != 0) {
+      throw std::runtime_error("unbalanced D3D CALL/RET");
     }
 
     out << "  out.position = outPosition;\n";
@@ -1939,6 +2265,8 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   out << "  float4 outPosition = float4(0.0f);\n";
   out << "  float outFogFactor = 1.0f;\n";
   out << "  float outPointSize = 1.0f;\n";
+  out << "  int a0 = 0;\n";
+  out << "  int aL = 0;\n";
   out << "  float4 r[32];\n";
   out << "  float4 cFloat[" << kMaxPixelConstants << "];\n";
   out << "  int4 cInt[" << kMaxIntegerConstants << "];\n";
@@ -1946,7 +2274,10 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   out << "  for (uint i = 0; i < " << kMaxPixelConstants << "; ++i) { cFloat[i] = uniforms.psFloatConst[i]; }\n";
   out << "  for (uint i = 0; i < " << kMaxIntegerConstants << "; ++i) { cInt[i] = uniforms.psIntConst[i]; }\n";
   out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { cBool[i] = uniforms.psBoolConst[i]; }\n";
-  for (const auto& instruction : module.instructions) {
+    std::vector<FlowBlock> controlStack;
+    size_t callDepth = 0;
+    for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
+      const auto& instruction = module.instructions[instructionIndex];
     if (instruction.opcode == kD3DSIO_COMMENT || instruction.opcode == kD3DSIO_PHASE) {
       continue;
     }
@@ -1960,6 +2291,8 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         out << static_cast<i32>(instruction.operands[i]);
       } else if (instruction.opcode == kD3DSIO_DEFB && i > 0) {
         out << (instruction.operands[i] != 0u ? "true" : "false");
+      } else if (instruction.opcode == kD3DSIO_LABEL || instruction.opcode == kD3DSIO_CALL) {
+        out << "label" << decodeLabelIndex(instruction.operands[i]);
       } else {
         out << decodeOperandToken(instruction.operands[i], module.stage, destination);
       }
@@ -1995,6 +2328,89 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         out << "  " << target << " = dxmt9_merge(" << target << ", " << finalValue << ", " << mask << "u);\n";
       }
     };
+
+    if (instruction.opcode == kD3DSIO_LABEL) {
+      if (instruction.operands.empty()) {
+        throw std::runtime_error("LABEL requires a label operand");
+      }
+      out << "  // label " << decodeLabelIndex(instruction.operands[0]) << "\n";
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_CALL) {
+      if (instruction.operands.empty()) {
+        throw std::runtime_error("CALL requires a label operand");
+      }
+      out << "  // call label " << decodeLabelIndex(instruction.operands[0]) << "\n";
+      out << "  do {\n";
+      ++callDepth;
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_RET) {
+      if (callDepth > 0) {
+        --callDepth;
+        out << "  break;\n";
+        out << "  } while (false);\n";
+      } else {
+        out << "  return color;\n";
+      }
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_IF) {
+      if (instruction.operands.empty()) {
+        throw std::runtime_error("IF requires a condition operand");
+      }
+      out << "  if ((" << readSrc(0) << ").x != 0.0f) {\n";
+      controlStack.push_back(FlowBlock{instruction.opcode, false});
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_ELSE) {
+      if (controlStack.empty() || controlStack.back().opcode != kD3DSIO_IF || controlStack.back().sawElse) {
+        throw std::runtime_error("ELSE without matching IF");
+      }
+      controlStack.back().sawElse = true;
+      out << "  } else {\n";
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_ENDIF) {
+      if (controlStack.empty() || controlStack.back().opcode != kD3DSIO_IF) {
+        throw std::runtime_error("ENDIF without matching IF");
+      }
+      controlStack.pop_back();
+      out << "  }\n";
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_LOOP || instruction.opcode == kD3DSIO_REP) {
+      if (instruction.operands.empty()) {
+        throw std::runtime_error("loop requires a count operand");
+      }
+      const auto loopIndex = instructionIndex;
+      const auto countExpr = "max(0, int(round(" + readSrc(0) + ".x)))";
+      if (instruction.opcode == kD3DSIO_LOOP) {
+        out << "  for (int dxmt9_loop_" << loopIndex << " = 0, dxmt9_loopCount_" << loopIndex << " = " << countExpr
+            << "; dxmt9_loop_" << loopIndex << " < dxmt9_loopCount_" << loopIndex << "; ++dxmt9_loop_"
+            << loopIndex << ") {\n";
+      } else {
+        out << "  for (int dxmt9_rep_" << loopIndex << " = 0, dxmt9_repCount_" << loopIndex << " = " << countExpr
+            << "; dxmt9_rep_" << loopIndex << " < dxmt9_repCount_" << loopIndex << "; ++dxmt9_rep_"
+            << loopIndex << ") {\n";
+      }
+      controlStack.push_back(FlowBlock{instruction.opcode, false});
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_ENDLOOP || instruction.opcode == kD3DSIO_ENDREP) {
+      if (controlStack.empty() ||
+          (instruction.opcode == kD3DSIO_ENDLOOP && controlStack.back().opcode != kD3DSIO_LOOP) ||
+          (instruction.opcode == kD3DSIO_ENDREP && controlStack.back().opcode != kD3DSIO_REP)) {
+        throw std::runtime_error("loop end without matching opener");
+      }
+      controlStack.pop_back();
+      out << "  }\n";
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_BREAK) {
+      out << "  break;\n";
+      continue;
+    }
 
     switch (instruction.opcode) {
       case kD3DSIO_NOP:
@@ -2067,12 +2483,42 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         }
         break;
       }
+      case kD3DSIO_MOVA: {
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("MOVA requires 2 operands");
+        }
+        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto value = readSrc(1);
+        switch (dst.kind) {
+          case D3DRegisterKind::Address:
+            out << "  a0 = int(round(" << value << ".x));\n";
+            break;
+          case D3DRegisterKind::Loop:
+            out << "  aL = int(round(" << value << ".x));\n";
+            break;
+          default:
+            throw std::runtime_error("MOVA requires an address register destination");
+        }
+        break;
+      }
       case kD3DSIO_ADD:
       case kD3DSIO_SUB:
       case kD3DSIO_MUL:
       case kD3DSIO_MAD:
       case kD3DSIO_MIN:
       case kD3DSIO_MAX:
+      case kD3DSIO_SLT:
+      case kD3DSIO_SGE:
+      case kD3DSIO_EXP:
+      case kD3DSIO_LOG:
+      case kD3DSIO_EXPP:
+      case kD3DSIO_LOGP:
+      case kD3DSIO_SINCOS:
+      case kD3DSIO_M4x4:
+      case kD3DSIO_M4x3:
+      case kD3DSIO_M3x4:
+      case kD3DSIO_M3x3:
+      case kD3DSIO_M3x2:
       case kD3DSIO_RCP:
       case kD3DSIO_RSQ:
       case kD3DSIO_FRC:
@@ -2114,6 +2560,81 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
           case kD3DSIO_MAX:
             value = "max(" + readSrc(1) + ", " + readSrc(2) + ")";
             break;
+          case kD3DSIO_SLT:
+            value = "select(float4(0.0f), float4(1.0f), (" + readSrc(1) + ") < (" + readSrc(2) + "))";
+            break;
+          case kD3DSIO_SGE:
+            value = "select(float4(0.0f), float4(1.0f), (" + readSrc(1) + ") >= (" + readSrc(2) + "))";
+            break;
+          case kD3DSIO_EXP:
+          case kD3DSIO_EXPP:
+            value = "float4(exp2(" + readSrc(1) + "))";
+            break;
+          case kD3DSIO_LOG:
+          case kD3DSIO_LOGP:
+            value = "float4(log2(max(" + readSrc(1) + ", float4(1.0e-8f))))";
+            break;
+          case kD3DSIO_SINCOS:
+            value = "float4(sin(" + readSrc(1) + "), cos(" + readSrc(1) + "), 0.0f, 0.0f)";
+            break;
+          case kD3DSIO_M4x4: {
+            const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+            if (base.kind != D3DRegisterKind::ConstFloat) {
+              throw std::runtime_error("M4x4 requires a float constant matrix base");
+            }
+            const auto src = readSrc(1);
+            value = "float4(dot(" + src + ", cFloat[" + std::to_string(base.index + 0) + "]), dot(" + src +
+                    ", cFloat[" + std::to_string(base.index + 1) + "]), dot(" + src + ", cFloat[" +
+                    std::to_string(base.index + 2) + "]), dot(" + src + ", cFloat[" +
+                    std::to_string(base.index + 3) + "]))";
+            break;
+          }
+          case kD3DSIO_M4x3: {
+            const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+            if (base.kind != D3DRegisterKind::ConstFloat) {
+              throw std::runtime_error("M4x3 requires a float constant matrix base");
+            }
+            const auto src = readSrc(1);
+            value = "float4(dot(" + src + ", cFloat[" + std::to_string(base.index + 0) + "]), dot(" + src +
+                    ", cFloat[" + std::to_string(base.index + 1) + "]), dot(" + src + ", cFloat[" +
+                    std::to_string(base.index + 2) + "]), 0.0f)";
+            break;
+          }
+          case kD3DSIO_M3x4: {
+            const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+            if (base.kind != D3DRegisterKind::ConstFloat) {
+              throw std::runtime_error("M3x4 requires a float constant matrix base");
+            }
+            const auto src = readSrc(1);
+            value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
+                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
+                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 2) +
+                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 3) + "].xyz))";
+            break;
+          }
+          case kD3DSIO_M3x3: {
+            const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+            if (base.kind != D3DRegisterKind::ConstFloat) {
+              throw std::runtime_error("M3x3 requires a float constant matrix base");
+            }
+            const auto src = readSrc(1);
+            value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
+                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
+                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 2) +
+                    "].xyz), 0.0f)";
+            break;
+          }
+          case kD3DSIO_M3x2: {
+            const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+            if (base.kind != D3DRegisterKind::ConstFloat) {
+              throw std::runtime_error("M3x2 requires a float constant matrix base");
+            }
+            const auto src = readSrc(1);
+            value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
+                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
+                    "].xyz), 0.0f, 0.0f)";
+            break;
+          }
           case kD3DSIO_RCP:
             value = "float4(1.0f) / max(" + readSrc(1) + ", float4(1.0e-8f))";
             break;
@@ -2220,9 +2741,15 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       case kD3DSIO_TEXM3x3:
         break;
       default:
-        throw std::runtime_error("unsupported D3D opcode");
+        throw std::runtime_error("unsupported D3D opcode: " + opcodeName(instruction.opcode));
     }
-  }
+    }
+    if (!controlStack.empty()) {
+      throw std::runtime_error("unbalanced D3D control flow");
+    }
+    if (callDepth != 0) {
+      throw std::runtime_error("unbalanced D3D CALL/RET");
+    }
   out << "  color = outColor;\n";
   out << "  if (uniforms.alphaTestEnable != 0u) {\n";
   out << "    bool pass = true;\n";

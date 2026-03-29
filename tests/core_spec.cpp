@@ -81,11 +81,31 @@ std::array<u8, 4> bgra(u8 b, u8 g, u8 r, u8 a) {
 
 constexpr u32 kD3DSIO_MOV = 1u;
 constexpr u32 kD3DSIO_ADD = 2u;
+constexpr u32 kD3DSIO_SLT = 12u;
+constexpr u32 kD3DSIO_SGE = 13u;
+constexpr u32 kD3DSIO_EXP = 14u;
+constexpr u32 kD3DSIO_LOG = 15u;
+constexpr u32 kD3DSIO_M4x4 = 20u;
+constexpr u32 kD3DSIO_M4x3 = 21u;
+constexpr u32 kD3DSIO_M3x2 = 24u;
+constexpr u32 kD3DSIO_CALL = 25u;
+constexpr u32 kD3DSIO_LOOP = 27u;
+constexpr u32 kD3DSIO_RET = 28u;
+constexpr u32 kD3DSIO_ENDLOOP = 29u;
+constexpr u32 kD3DSIO_LABEL = 30u;
 constexpr u32 kD3DSIO_DEF = 66u;
+constexpr u32 kD3DSIO_SINCOS = 37u;
+constexpr u32 kD3DSIO_REP = 38u;
+constexpr u32 kD3DSIO_ENDREP = 39u;
+constexpr u32 kD3DSIO_IF = 40u;
+constexpr u32 kD3DSIO_ELSE = 42u;
+constexpr u32 kD3DSIO_ENDIF = 43u;
+constexpr u32 kD3DSIO_MOVA = 46u;
 constexpr u32 kD3DSIO_END = 0xffffu;
 
 constexpr u32 kD3DSPR_TEMP = 0u;
 constexpr u32 kD3DSPR_CONST = 2u;
+constexpr u32 kD3DSPR_ADDR = 3u;
 constexpr u32 kD3DSPR_RASTOUT = 4u;
 constexpr u32 kD3DSPR_COLOROUT = 8u;
 
@@ -109,6 +129,10 @@ u32 makeDstToken(u32 regType, u32 regIndex, u32 writeMask = 0xfu, u32 modifier =
 u32 makeSrcToken(u32 regType, u32 regIndex, u32 swizzle = 0xe4u, u32 modifier = 0u) {
   return (1u << 31) | encodeRegisterType(regType) | ((modifier & 0xfu) << 24) | ((swizzle & 0xffu) << 16) |
          (regIndex & 0x7ffu);
+}
+
+u32 makeLabelToken(u32 label) {
+  return (1u << 31) | (label & 0x7ffu);
 }
 
 std::vector<u32> makeVertexBytecode() {
@@ -142,6 +166,105 @@ std::vector<u32> makePixelBytecode() {
   words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
   words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
   words.push_back(makeDstToken(kD3DSPR_COLOROUT, 0));
+  words.push_back(makeSrcToken(kD3DSPR_TEMP, 0));
+  words.push_back(kD3DSIO_END);
+  return words;
+}
+
+std::vector<u32> makeControlFlowBytecode() {
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(true, 3, 0));
+
+  auto appendDef = [&](u32 index, float x, float y, float z, float w) {
+    words.push_back(makeInstructionToken(kD3DSIO_DEF, 5));
+    words.push_back(makeDstToken(kD3DSPR_CONST, index));
+    words.push_back(std::bit_cast<u32>(x));
+    words.push_back(std::bit_cast<u32>(y));
+    words.push_back(std::bit_cast<u32>(z));
+    words.push_back(std::bit_cast<u32>(w));
+  };
+
+  appendDef(0, 1.0f, 2.0f, 3.0f, 4.0f);
+  appendDef(1, 2.0f, 2.0f, 2.0f, 2.0f);
+  appendDef(2, 3.0f, 3.0f, 3.0f, 3.0f);
+  appendDef(3, 0.5f, 0.25f, 0.75f, 1.0f);
+  appendDef(10, 1.0f, 0.0f, 0.0f, 0.0f);
+  appendDef(11, 0.0f, 1.0f, 0.0f, 0.0f);
+  appendDef(12, 0.0f, 0.0f, 1.0f, 0.0f);
+  appendDef(13, 0.0f, 0.0f, 0.0f, 1.0f);
+  appendDef(14, 4.0f, 3.0f, 2.0f, 1.0f);
+  appendDef(15, 1.0f, 0.0f, 1.0f, 0.0f);
+  appendDef(16, 0.0f, 1.0f, 0.0f, 1.0f);
+  appendDef(17, 2.0f, 2.0f, 2.0f, 2.0f);
+  appendDef(18, 3.0f, 3.0f, 3.0f, 3.0f);
+  appendDef(19, 4.0f, 4.0f, 4.0f, 4.0f);
+
+  words.push_back(makeInstructionToken(kD3DSIO_MOVA, 2));
+  words.push_back(makeDstToken(kD3DSPR_ADDR, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+
+  words.push_back(makeInstructionToken(kD3DSIO_IF, 1));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_ELSE, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
+  words.push_back(makeInstructionToken(kD3DSIO_ENDIF, 0));
+
+  words.push_back(makeInstructionToken(kD3DSIO_LOOP, 1));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 1));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 2));
+  words.push_back(makeInstructionToken(kD3DSIO_ENDLOOP, 0));
+
+  words.push_back(makeInstructionToken(kD3DSIO_REP, 1));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 2));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 2));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 3));
+  words.push_back(makeInstructionToken(kD3DSIO_ENDREP, 0));
+
+  words.push_back(makeInstructionToken(kD3DSIO_CALL, 1));
+  words.push_back(makeLabelToken(7));
+  words.push_back(makeInstructionToken(kD3DSIO_LABEL, 1));
+  words.push_back(makeLabelToken(7));
+  words.push_back(makeInstructionToken(kD3DSIO_SINCOS, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 3));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 3));
+  words.push_back(makeInstructionToken(kD3DSIO_LOG, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 4));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 3));
+  words.push_back(makeInstructionToken(kD3DSIO_EXP, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 5));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 3));
+  words.push_back(makeInstructionToken(kD3DSIO_SLT, 3));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 6));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 3));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
+  words.push_back(makeInstructionToken(kD3DSIO_SGE, 3));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 7));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
+  words.push_back(makeInstructionToken(kD3DSIO_M4x4, 3));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 8));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 10));
+  words.push_back(makeInstructionToken(kD3DSIO_M4x3, 3));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 9));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 14));
+  words.push_back(makeInstructionToken(kD3DSIO_M3x2, 3));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 10));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 18));
+  words.push_back(makeInstructionToken(kD3DSIO_RET, 0));
+
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_RASTOUT, 0));
   words.push_back(makeSrcToken(kD3DSPR_TEMP, 0));
   words.push_back(kD3DSIO_END);
   return words;
@@ -476,6 +599,37 @@ void testShaderThunk() {
   checkContains(ffpPixelSource, "ffp pixel hash", "ffp pixel source");
   checkContains(ffpPixelSource, "discard_fragment()", "ffp pixel alpha test");
   dxmt9_winemetal_destroy_shader(ffpPixelHandle);
+
+  const auto controlWords = makeControlFlowBytecode();
+  WinemetalShaderCompileRequest controlRequest{};
+  controlRequest.kind = WinemetalShaderKind_D3DBytecodeVertex;
+  controlRequest.bytecode = controlWords.data();
+  controlRequest.bytecodeSize = static_cast<dxmt9_u64>(controlWords.size() * sizeof(u32));
+  controlRequest.bytecodeHash = hashBytes(std::as_bytes(std::span(controlWords)));
+  controlRequest.clipPlaneMask = 1u;
+  const auto controlHandle = dxmt9_winemetal_compile_shader(&controlRequest);
+  check(controlHandle != 0, "control flow shader thunk");
+  const auto controlSource = shaderSourceToString(controlHandle);
+  checkContains(controlSource, "vertex VSOut dxmt9_vs", "control flow vertex shader source");
+  checkContains(controlSource, "call label 7", "control flow call comment");
+  checkContains(controlSource, "label 7", "control flow label comment");
+  checkContains(controlSource, "do {", "control flow call wrapper");
+  checkContains(controlSource, "break;", "control flow return break");
+  checkContains(controlSource, "} while (false);", "control flow call wrapper close");
+  checkContains(controlSource, "if ((cFloat[0]).x != 0.0f)", "control flow if translation");
+  checkContains(controlSource, "} else {", "control flow else translation");
+  checkContains(controlSource, "for (int dxmt9_loop_", "control flow loop translation");
+  checkContains(controlSource, "for (int dxmt9_rep_", "control flow rep translation");
+  checkContains(controlSource, "a0 = int(round(", "control flow mova translation");
+  checkContains(controlSource, "float4(sin(", "control flow sin translation");
+  checkContains(controlSource, "cos(", "control flow cos translation");
+  checkContains(controlSource, "float4(log2(", "control flow log translation");
+  checkContains(controlSource, "float4(exp2(", "control flow exp translation");
+  checkContains(controlSource, "select(float4(0.0f), float4(1.0f),", "control flow compare translation");
+  checkContains(controlSource, "m4x4", "control flow matrix opcode");
+  checkContains(controlSource, "m4x3", "control flow matrix opcode");
+  checkContains(controlSource, "m3x2", "control flow matrix opcode");
+  dxmt9_winemetal_destroy_shader(controlHandle);
 }
 
 void testDeviceCoreFlow() {
