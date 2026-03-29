@@ -33,9 +33,26 @@ This installs:
 | `llvm` | C++20 / ObjC++ compiler |
 | `tla+-toolbox` (cask) | TLC model checker for formal verification |
 
+**llvm-mingw** (required for the Win32 PE `d3d9.dll` only):
+
+`llvm-mingw` is not in Homebrew. Download the latest pre-built universal binary from GitHub and unpack it:
+
+```sh
+curl -L https://github.com/mstorsjo/llvm-mingw/releases/download/20260324/llvm-mingw-20260324-ucrt-macos-universal.tar.xz \
+  | tar -xJ --strip-components=1 -C ~/llvm-mingw
+```
+
+Then add it to your PATH for the cross-compilation step:
+
+```sh
+export PATH="$HOME/llvm-mingw/bin:$PATH"
+```
+
 ---
 
 ## Build
+
+### `libdxmt9.dylib` (macOS native)
 
 ```sh
 meson setup build
@@ -49,6 +66,25 @@ To use the Homebrew LLVM toolchain explicitly:
 CC=$(brew --prefix llvm)/bin/clang \
 CXX=$(brew --prefix llvm)/bin/clang++ \
 meson setup build
+```
+
+### `d3d9.dll` (Win32 PE, cross-compiled for ARM64 Windows / Wine)
+
+Requires llvm-mingw on PATH (see Prerequisites above).
+
+```sh
+meson setup build-win32 --cross-file cross/aarch64-windows.ini
+meson compile -C build-win32
+```
+
+Output: `build-win32/src/win32/d3d9.dll`
+
+### Installing into a Wine prefix
+
+```sh
+cp build/src/libdxmt9.dylib ~/.wine/drive_c/windows/system32/dxmt9.dll
+cp build-win32/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
+WINEDLLOVERRIDES="d3d9=n,b" wine game.exe
 ```
 
 ---
@@ -71,8 +107,10 @@ four modules. The same check runs as part of `meson test`.
 ## Repository layout
 
 ```
-include/dxmt9/   Public headers (core.hpp, assert.hpp, winemetal.h)
-src/             Implementation (core, backend sim + Metal, Wine bridge)
+include/dxmt9/   Public headers (core.hpp, assert.hpp, winemetal.h, device_c.h)
+src/             Implementation (core, backend sim + Metal, Wine bridge, C ABI)
+  win32/         Win32 PE d3d9.dll (cross-compiled with llvm-mingw)
+cross/           Meson cross-file for ARM64 Windows (aarch64-windows.ini)
 tests/           Smoke tests and core spec tests
 specs/           Specifications and formal verification
   core/          D3D9 COM requirements and design
@@ -92,4 +130,6 @@ scripts/         verify_tla.sh
 | Core (D3D9 COM surface, device state, draw calls) | Complete |
 | Metal backend (command queue, PSO cache, FFP shaders, D3DBC translation) | Complete |
 | Formal verification (TLC, all 4 specs) | Complete |
-| `IDirect3DDevice9Ex` | Next |
+| C ABI bridge (`dxmt9c_*` — `libdxmt9.dylib` exports) | Complete |
+| Win32 PE wrapper (`d3d9.dll` — llvm-mingw cross-build) | Complete |
+| `WinemetalApi` bridge (Wine fork — HWND→NSView, CAMetalLayer) | Pending |
