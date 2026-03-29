@@ -1,0 +1,18 @@
+; [provenance]
+; source: vkd3d
+; upstream-url: https://gitlab.winehq.org/wine/vkd3d
+; upstream-commit: 1111111
+; oracle: shader_runner_d3d9
+; oracle-env: Windows 11 / WARP
+; oracle-date: 2026-03-28
+
+[pixel shader]
+float4 main(float2 uv : TEXCOORD0) : COLOR
+{
+    return float4(uv.x, 0.0, 1.0 - uv.x, 1.0);
+}
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+draw quad
+probe (0, 0) rgba(0.0, 0.0, 1.0, 1.0) 1

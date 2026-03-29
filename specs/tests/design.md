@@ -245,7 +245,8 @@ tests/
 └── meson.build
 scripts/
 ├── check_manifest.sh             Fails if MANIFEST.toml ↔ filesystem diverge
-└── check_drift.sh                Reports .shader_test files behind upstream commit
+├── check_drift.sh                Reports .shader_test files behind upstream commit
+└── sync_corpus.sh                Refreshes vkd3d-sourced files from a local checkout
 ```
 
 The `shader_runner_dxmt9` binary is built as a Meson test target and run with each
@@ -310,6 +311,8 @@ are behind.
 ## 10. Manifest
 
 `tests/shader_tests/MANIFEST.toml` is the machine-readable index of the corpus.
+Rows for upstream-sourced tests may also carry `upstream-commit` so the sync tool
+can keep provenance and manifest state aligned.
 
 ### Format
 
@@ -353,6 +356,16 @@ tomlq -r '.test[].file' tests/shader_tests/MANIFEST.toml | sort > /tmp/manifest.
 diff /tmp/actual.txt /tmp/manifest.txt
 ```
 
+The sync workflow is separate:
+
+```sh
+# Refresh vkd3d-sourced tests from a local upstream checkout.
+DXMT9_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/sync_corpus.sh
+
+# Report which tracked vkd3d files are behind that checkout.
+DXMT9_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/check_drift.sh
+```
+
 ### Queries
 
 ```sh
@@ -360,8 +373,8 @@ diff /tmp/actual.txt /tmp/manifest.txt
 tomlq -r '.test[] | select(.status != "passing") | .opcodes[]' MANIFEST.toml | sort -u
 
 # Tests behind upstream vkd3d HEAD:
-# (compare provenance upstream-commit in each file vs. current vkd3d HEAD)
-scripts/check_drift.sh
+# (compare recorded provenance commits against the configured checkout)
+DXMT9_UPSTREAM_ROOT=/path/to/vkd3d scripts/check_drift.sh
 
 # Count by shader model:
 tomlq -r '.test[] | .models[]' MANIFEST.toml | sort | uniq -c

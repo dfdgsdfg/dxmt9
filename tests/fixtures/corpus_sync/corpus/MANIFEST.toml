@@ -1,0 +1,16 @@
+[[test]]
+file = "arithmetic/mov.shader_test"
+status = "passing"
+source = "vkd3d"
+models = ["ps_2_0"]
+opcodes = ["MOV"]
+oracle = "shader_runner_d3d9"
+oracle-date = "2026-03-28"
+upstream-commit = "1111111"
+
+[[test]]
+file = "visual_c/sanity.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "math-derivation"
+oracle-date = "2026-03-29"

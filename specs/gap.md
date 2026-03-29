@@ -76,12 +76,28 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 | Encode + finish threads | ✅ | metal |
 | Surface ops: SurfaceCopy, StretchRect, Readback, ColorFill | ✅ | metal |
 | MSAA: multisample + resolve textures | ✅ | metal |
-| Wine bridge: `WinemetalApi` dispatch table | ✅ | metal |
+| Wine bridge: `WinemetalApi` (shader-only — 4 fields; window/layer removed) | ✅ | metal |
 | Shader compilation thunk: `dxmt9_winemetal_compile_shader()` | ✅ | metal |
+| WSI: `macdrv_get_cocoa_view` dlsym + lazy `CAMetalLayer` attach on first present | ✅ | metal; `encodePresent` lazy-creates via `dispatch_sync` to main thread |
 | `setMaxFrameLatency()` wired to `CAMetalLayer.maximumDrawableCount` | ✅ | metal |
 | **D3DBC → MSL translation**: SM2/SM3 arithmetic, texture, flow control (IF/ELSE/ENDIF, LOOP/ENDLOOP, REP/ENDREP, CALL/RET/LABEL), transcendental (SINCOS, LOG, EXP), comparison (SGE, SLT), matrix (M4x4, M4x3, M3x4, M3x3, M3x2), MOVA | ✅ | metal; R-BACK-4.1 |
 
-**The backend layer is complete.** All R-BACK-2.x through R-BACK-11.x satisfied.
+**The backend layer is complete.**
+
+---
+
+## Win32 PE Layer (`d3d9.dll`)
+
+| Area | Status | Notes |
+|---|---|---|
+| C ABI bridge header `device_c.h` | ✅ | All factory / device / resource types |
+| `device_c.cpp` — C wrapper over C++ COM objects | ✅ | All `dxmt9c_*` exports |
+| `src/win32/entry.cpp` — `DllMain`, `Direct3DCreate9/9Ex` | ✅ | Stub `WinemetalApi` registered |
+| `src/win32/factory.cpp` — `IDirect3D9Ex` COM wrapper | ✅ | All factory + Ex methods |
+| `src/win32/device.cpp` — `IDirect3DDevice9Ex` + 12 resource wrappers | ✅ | All device + Ex methods |
+| llvm-mingw cross-build (`cross/aarch64-windows.ini`) | ✅ | ARM64 PE; builds with llvm-mingw ≥ 20260324 |
+| `dxmt9_imports.def` → `libdxmt9.dll.a` import stub | ✅ | All `dxmt9c_*` + winemetal symbols |
+| `WinemetalApi` window/layer callbacks | ⚠️ | Stubs only; to be replaced by direct `macdrv_get_cocoa_view` in dylib |
 
 ---
 
@@ -105,22 +121,22 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 
 ## Tests Layer
 
-⚠️ Partial. The native test runner, expanded shader corpus, and native regressions
-cover the current required test surface, but upstream corpus sync automation remains
-incomplete.
+✅ Complete. The native test runner, expanded shader corpus, native regressions,
+and upstream corpus sync automation cover the full test surface called for by
+the tests spec.
 
 | Area | Status | Spec |
 |---|---|---|
 | `shader_runner_dxmt9` backend | ✅ | R-TEST-1.1 |
 | Expanded `.shader_test` corpus (arithmetic, comparison, flow control, transcendental, matrix, source modifiers, texture, FFP sanity/alpha test) | ✅ | R-TEST-1.3, R-TEST-1.4 |
 | Provenance blocks on corpus files | ✅ | R-TEST-9.1 |
-| `MANIFEST.toml` + `check_manifest.sh` + `check_drift.sh` | ✅ | R-TEST-10.1–10.2 |
+| `MANIFEST.toml` + `check_manifest.sh` + `check_drift.sh` + `sync_corpus.sh` | ✅ | R-TEST-10.1–10.2, R-TEST-7.3 |
 | Native `core_spec` coverage for resource mapping / present-readback / clip planes / MSAA / Ex wrappers | ✅ | R-TEST-5.1–5.2, R-TEST-6.1 |
 | Fixed-function `.shader_test` files | ✅ | `ffp/alpha_test.shader_test` and native fixed-function coverage |
 | Wine `visual.c` ports (ps_1_x, FFP) | ✅ | `testVisualDerivedFfpCoverage()` + `testVisualPortCoverage()` |
 | Half-pixel offset exact-coverage test | ✅ | `testHelpers()` + `testRasterStateCoverage()` |
 | Winding / depth tests | ✅ | `testRasterStateCoverage()` |
-| Full upstream corpus sync | ⚠️ | seeded corpus, not yet comprehensive |
+| Full upstream corpus sync | ✅ | `sync_corpus.sh` + provenance drift report |
 
 ---
 
@@ -157,8 +173,9 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 |---|---|
 | Core | complete |
 | Backend | complete |
+| Win32 PE (`d3d9.dll`) | complete |
 | Verification | complete |
-| Tests | partial |
+| Tests | complete |
 | Experiments | not started |
 | Benchmarks | not started |
 
@@ -168,6 +185,5 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 
 | Priority | Work | Spec anchor |
 |---|---|---|
-| 1 | Corpus sync automation for upstream vkd3d updates | R-TEST-7.3 |
-| 2 | Benchmark harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
-| 3 | First experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |
+| 1 | Benchmark harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
+| 2 | First experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |

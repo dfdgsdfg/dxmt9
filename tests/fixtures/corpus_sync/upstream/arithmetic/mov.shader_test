@@ -1,0 +1,10 @@
+[pixel shader]
+float4 main(float2 uv : TEXCOORD0) : COLOR
+{
+    return float4(uv.y, 1.0 - uv.y, 0.0, 1.0);
+}
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+draw quad
+probe (0, 0) rgba(0.0, 1.0, 0.0, 1.0) 1

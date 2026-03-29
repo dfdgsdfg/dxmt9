@@ -7,6 +7,8 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/winemetal.h"
 
+#include <dlfcn.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -58,6 +60,16 @@ void registerLayerHandle(u64 handle, CAMetalLayer* layer) {
 void unregisterLayerHandle(u64 handle) {
   std::lock_guard lock(gLayerRegistryMutex);
   gLayerRegistry.erase(handle);
+}
+
+/* Resolve a Wine HWND to the backing NSView via macdrv_get_cocoa_view(),
+ * which is exported by winemac.drv and available via RTLD_DEFAULT in any
+ * macOS Wine process.  Returns nil when running outside Wine (tests, etc.). */
+static NSView* get_nsview_for_hwnd(u64 hwnd) {
+  using Fn = NSView* (*)(void*);
+  static Fn fn = reinterpret_cast<Fn>(dlsym(RTLD_DEFAULT, "macdrv_get_cocoa_view"));
+  if (!fn) return nil;
+  return fn(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)));
 }
 
 template <typename T>
@@ -3222,6 +3234,15 @@ class MetalBackendDevice final : public BackendDevice {
     }
     purgeResourcesUnlocked();
     layers_.clear();
+    /* Release CAMetalLayers we created via the lazy WSI path. */
+    for (u64 hwnd : registeredHwnds_) {
+      CAMetalLayer* layer = lookupLayerHandle(hwnd);
+      if (layer) {
+        unregisterLayerHandle(hwnd);
+        [layer release];
+      }
+    }
+    registeredHwnds_.clear();
   }
 
   void setDeviceLostObserver(DeviceLostObserver observer) override {
@@ -4233,6 +4254,27 @@ class MetalBackendDevice final : public BackendDevice {
     CAMetalLayer* layer = nullptr;
     if (present.window.value != 0) {
       layer = lookupLayerHandle(present.window.value);
+      if (!layer) {
+        /* First present for this HWND: resolve to NSView via macdrv_get_cocoa_view
+         * and attach a new CAMetalLayer.  NSView mutation must happen on the main
+         * thread; dispatch_sync guarantees completion before we continue. */
+        u64 hwnd = present.window.value;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          @autoreleasepool {
+            NSView* view = get_nsview_for_hwnd(hwnd);
+            if (!view) return;
+            CAMetalLayer* newLayer = [CAMetalLayer layer];
+            view.wantsLayer = YES;
+            view.layer = newLayer;
+            [newLayer retain];
+            registerLayerHandle(hwnd, newLayer);
+          }
+        });
+        layer = lookupLayerHandle(present.window.value);
+        if (layer) {
+          registeredHwnds_.push_back(present.window.value);
+        }
+      }
     }
     if (!layer) {
       return;
@@ -4638,6 +4680,7 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretchPipelineCache_;
   std::unordered_map<DepthStencilKey, ObjcPtr<id<MTLDepthStencilState>>, DepthStencilKeyHash> depthCache_;
   std::unordered_map<u64, LayerRecord> layers_;
+  std::vector<u64> registeredHwnds_; /* HWNDs whose CAMetalLayers we created */
   RingArena argbufArena_{1 << 20};
   RingArena lambdaStoreArena_{1 << 18};
   RingArena stagingArena_{1 << 20};
@@ -4658,83 +4701,7 @@ std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limit
 
 extern "C" {
 
-using dxmt9::core::u32;
 using dxmt9::core::u64;
-
-u64 winemetal_get_view_for_hwnd(u64 hwnd) {
-  return hwnd;
-}
-
-u64 winemetal_create_metal_layer(u64 viewHandle, u64 deviceHandle, const WinemetalPresentParams* params) {
-  @autoreleasepool {
-    auto* view = reinterpret_cast<NSView*>(static_cast<uintptr_t>(viewHandle));
-    auto* device = reinterpret_cast<id<MTLDevice>>(static_cast<uintptr_t>(deviceHandle));
-    auto* layer = [CAMetalLayer layer];
-    if (device) {
-      layer.device = device;
-    }
-    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    layer.drawableSize = CGSizeMake(params ? std::max(1u, params->width) : 1u,
-                                    params ? std::max(1u, params->height) : 1u);
-    layer.displaySyncEnabled = params ? params->displaySyncEnabled : YES;
-    layer.maximumDrawableCount = 3;
-    layer.framebufferOnly = YES;
-    if (view) {
-      view.wantsLayer = YES;
-      view.layer = layer;
-    }
-    auto handle = static_cast<u64>(reinterpret_cast<uintptr_t>([layer retain]));
-    dxmt9::core::registerLayerHandle(handle, layer);
-    return handle;
-  }
-}
-
-void winemetal_resize_metal_layer(u64 layerHandle, u32 width, u32 height) {
-  auto* layer = reinterpret_cast<CAMetalLayer*>(static_cast<uintptr_t>(layerHandle));
-  if (layer) {
-    layer.drawableSize = CGSizeMake(std::max(1u, width), std::max(1u, height));
-  }
-}
-
-void winemetal_set_sync_enabled(u64 layerHandle, bool enabled) {
-  auto* layer = reinterpret_cast<CAMetalLayer*>(static_cast<uintptr_t>(layerHandle));
-  if (layer) {
-    layer.displaySyncEnabled = enabled ? YES : NO;
-  }
-}
-
-void winemetal_destroy_metal_layer(u64 layerHandle) {
-  auto* layer = reinterpret_cast<CAMetalLayer*>(static_cast<uintptr_t>(layerHandle));
-  if (!layer) {
-    return;
-  }
-  dxmt9::core::unregisterLayerHandle(layerHandle);
-  [layer release];
-}
-
-u64 winemetal_next_drawable(u64 layerHandle) {
-  @autoreleasepool {
-    auto* layer = reinterpret_cast<CAMetalLayer*>(static_cast<uintptr_t>(layerHandle));
-    if (!layer) {
-      return 0;
-    }
-    id<CAMetalDrawable> drawable = [layer nextDrawable];
-    if (!drawable) {
-      return 0;
-    }
-    return static_cast<u64>(reinterpret_cast<uintptr_t>([drawable retain]));
-  }
-}
-
-void winemetal_present_drawable(u64 commandBufferHandle, u64 drawableHandle) {
-  auto* commandBuffer = reinterpret_cast<id<MTLCommandBuffer>>(static_cast<uintptr_t>(commandBufferHandle));
-  auto* drawable = reinterpret_cast<id<CAMetalDrawable>>(static_cast<uintptr_t>(drawableHandle));
-  if (!commandBuffer || !drawable) {
-    return;
-  }
-  [commandBuffer presentDrawable:drawable];
-  [drawable release];
-}
 
 u64 winemetal_compile_shader(const WinemetalShaderCompileRequest* request) {
   if (!request) {

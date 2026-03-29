@@ -20,38 +20,18 @@ IDirect3D9*   CreateFactoryImpl(D9CFactory* f);
 IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f);
 
 /* ── WinemetalApi stub ───────────────────────────────────────────────────────
- * A real Wine fork replaces these with real implementations that call into
- * Wine's window-management layer (HWND→NSView lookup, CAMetalLayer lifecycle,
- * shader compilation thunk).  For testing without Wine, all operations are
- * no-ops that return 0 / nullptr. */
-
-static dxmt9_u64 stub_get_view(dxmt9_u64 hwnd) {
-    return hwnd; /* pass-through so CreateDevice doesn't crash on addr=0 */
-}
-static dxmt9_u64 stub_create_layer(dxmt9_u64, dxmt9_u64,
-                                    const WinemetalPresentParams*) { return 0; }
-static void      stub_resize_layer(dxmt9_u64, dxmt9_u32, dxmt9_u32) {}
-static void      stub_set_sync(dxmt9_u64, bool) {}
-static void      stub_destroy_layer(dxmt9_u64) {}
-static dxmt9_u64 stub_next_drawable(dxmt9_u64) { return 0; }
-static void      stub_present_drawable(dxmt9_u64, dxmt9_u64) {}
-static dxmt9_u64 stub_compile_shader(const WinemetalShaderCompileRequest*) { return 0; }
-static const char* stub_shader_source(dxmt9_u64) { return nullptr; }
-static dxmt9_u64 stub_shader_source_size(dxmt9_u64) { return 0; }
-static void      stub_destroy_shader(dxmt9_u64) {}
-
+ * Window/layer management is now handled directly inside libdxmt9.dylib via
+ * macdrv_get_cocoa_view() — no callbacks needed here.
+ *
+ * The only optional override is compile_shader: a Wine build with the Apple
+ * Metal shader converter can call dxmt9_winemetal_set_api() with a real
+ * implementation.  For standalone use all shader functions are null so
+ * libdxmt9.dylib falls back to its built-in D3DBC→MSL translator. */
 static const WinemetalApi kStubApi = {
-    stub_get_view,
-    stub_create_layer,
-    stub_resize_layer,
-    stub_set_sync,
-    stub_destroy_layer,
-    stub_next_drawable,
-    stub_present_drawable,
-    stub_compile_shader,
-    stub_shader_source,
-    stub_shader_source_size,
-    stub_destroy_shader,
+    nullptr, /* compile_shader  — use built-in translator */
+    nullptr, /* shader_source   — unused without compile_shader */
+    nullptr, /* shader_source_size */
+    nullptr, /* destroy_shader */
 };
 
 /* ── DllMain ─────────────────────────────────────────────────────────────── */

@@ -10,12 +10,10 @@ extern "C" {
 typedef uint32_t dxmt9_u32;
 typedef uint64_t dxmt9_u64;
 
-typedef struct WinemetalPresentParams {
-  dxmt9_u32 width;
-  dxmt9_u32 height;
-  bool displaySyncEnabled;
-  dxmt9_u32 sampleCount;
-} WinemetalPresentParams;
+/* WinemetalShaderCompileRequest — passed to compile_shader for ahead-of-time
+ * MSL generation.  An optional Wine build with the Apple shader converter can
+ * provide a faster compile_shader implementation; the default falls back to
+ * the built-in D3DBC→MSL translator in libdxmt9.dylib. */
 
 typedef enum WinemetalShaderKind {
   WinemetalShaderKind_D3DBytecodeVertex = 0,
@@ -39,15 +37,17 @@ typedef struct WinemetalShaderCompileRequest {
   dxmt9_u32 fogMode;
 } WinemetalShaderCompileRequest;
 
+/* WinemetalApi — ABI contract between d3d9.dll and libdxmt9.dylib.
+ *
+ * Window/layer management (HWND→NSView lookup, CAMetalLayer lifecycle,
+ * drawable vending) is handled directly inside libdxmt9.dylib via
+ * macdrv_get_cocoa_view() from Wine's winemac.drv — no Wine fork required.
+ *
+ * The only optional override is compile_shader, which a Wine build that
+ * includes the Apple Metal shader converter can provide for faster PSO
+ * compilation.  All pointers may be null; libdxmt9.dylib falls back to its
+ * built-in translator when compile_shader is null. */
 typedef struct WinemetalApi {
-  dxmt9_u64 (*get_view_for_hwnd)(dxmt9_u64 hwnd);
-  dxmt9_u64 (*create_metal_layer)(dxmt9_u64 viewHandle, dxmt9_u64 deviceHandle,
-                                  const WinemetalPresentParams* params);
-  void (*resize_metal_layer)(dxmt9_u64 layerHandle, dxmt9_u32 width, dxmt9_u32 height);
-  void (*set_sync_enabled)(dxmt9_u64 layerHandle, bool enabled);
-  void (*destroy_metal_layer)(dxmt9_u64 layerHandle);
-  dxmt9_u64 (*next_drawable)(dxmt9_u64 layerHandle);
-  void (*present_drawable)(dxmt9_u64 commandBufferHandle, dxmt9_u64 drawableHandle);
   dxmt9_u64 (*compile_shader)(const WinemetalShaderCompileRequest* request);
   const char* (*shader_source)(dxmt9_u64 shaderHandle);
   dxmt9_u64 (*shader_source_size)(dxmt9_u64 shaderHandle);
@@ -57,14 +57,6 @@ typedef struct WinemetalApi {
 const WinemetalApi* dxmt9_winemetal_get_api(void);
 void dxmt9_winemetal_set_api(const WinemetalApi* api);
 
-dxmt9_u64 dxmt9_winemetal_get_view_for_hwnd(dxmt9_u64 hwnd);
-dxmt9_u64 dxmt9_winemetal_create_metal_layer(dxmt9_u64 viewHandle, dxmt9_u64 deviceHandle,
-                                            const WinemetalPresentParams* params);
-void dxmt9_winemetal_resize_metal_layer(dxmt9_u64 layerHandle, dxmt9_u32 width, dxmt9_u32 height);
-void dxmt9_winemetal_set_sync_enabled(dxmt9_u64 layerHandle, bool enabled);
-void dxmt9_winemetal_destroy_metal_layer(dxmt9_u64 layerHandle);
-dxmt9_u64 dxmt9_winemetal_next_drawable(dxmt9_u64 layerHandle);
-void dxmt9_winemetal_present_drawable(dxmt9_u64 commandBufferHandle, dxmt9_u64 drawableHandle);
 dxmt9_u64 dxmt9_winemetal_compile_shader(const WinemetalShaderCompileRequest* request);
 const char* dxmt9_winemetal_shader_source(dxmt9_u64 shaderHandle);
 dxmt9_u64 dxmt9_winemetal_shader_source_size(dxmt9_u64 shaderHandle);
