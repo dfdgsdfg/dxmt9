@@ -2,6 +2,7 @@
 
 #include <array>
 #include <bit>
+#include <functional>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -129,6 +130,17 @@ enum class BlendOp : u32 {
   RevSubtract = 3,
   Min = 4,
   Max = 5,
+};
+
+enum class StencilOp : u32 {
+  Keep = 1,
+  Zero = 2,
+  Replace = 3,
+  IncrSat = 4,
+  DecrSat = 5,
+  Invert = 6,
+  Incr = 7,
+  Decr = 8,
 };
 
 enum class BlendFactor : u32 {
@@ -330,6 +342,21 @@ inline constexpr u32 RS_SEPARATE_ALPHA_BLEND_ENABLE = 34;
 inline constexpr u32 RS_SRC_BLEND_ALPHA = 35;
 inline constexpr u32 RS_DEST_BLEND_ALPHA = 36;
 inline constexpr u32 RS_BLEND_OP_ALPHA = 37;
+inline constexpr u32 RS_STENCIL_ENABLE = 38;
+inline constexpr u32 RS_STENCIL_FUNC = 39;
+inline constexpr u32 RS_STENCIL_FAIL = 40;
+inline constexpr u32 RS_STENCIL_ZFAIL = 41;
+inline constexpr u32 RS_STENCIL_PASS = 42;
+inline constexpr u32 RS_STENCIL_REF = 43;
+inline constexpr u32 RS_STENCIL_MASK = 44;
+inline constexpr u32 RS_STENCIL_WRITEMASK = 45;
+inline constexpr u32 RS_STENCIL_CCW_FUNC = 46;
+inline constexpr u32 RS_STENCIL_CCW_FAIL = 47;
+inline constexpr u32 RS_STENCIL_CCW_ZFAIL = 48;
+inline constexpr u32 RS_STENCIL_CCW_PASS = 49;
+inline constexpr u32 RS_STENCIL_CCW_REF = 50;
+inline constexpr u32 RS_STENCIL_CCW_MASK = 51;
+inline constexpr u32 RS_STENCIL_CCW_WRITEMASK = 52;
 
 inline constexpr u32 TSS_COLOR_OP = 1;
 inline constexpr u32 TSS_COLOR_ARG1 = 2;
@@ -639,11 +666,31 @@ struct BackendLimits {
   bool supportsSampleCount8 = false;
 };
 
+struct DisplayMode {
+  u32 width = 0;
+  u32 height = 0;
+  u32 refreshRate = 60;
+  Format format = Format::A8R8G8B8;
+};
+
 struct AdapterInfo {
   u32 ordinal = 0;
   std::string name = "Adapter 0";
   u64 registryId = 0;
   u32 displayId = 0;
+  DisplayMode displayMode{};
+};
+
+struct AdapterIdentifier {
+  std::string description;
+  std::string deviceName;
+  std::string driver;
+  u64 driverVersion = 0;
+  u32 vendorId = 0;
+  u32 deviceId = 0;
+  u32 subSysId = 0;
+  u32 revision = 0;
+  u32 monitor = 0;
 };
 
 struct DeviceCaps {
@@ -778,6 +825,8 @@ class SwapChain;
 
 class BackendDevice {
  public:
+  using DeviceLostObserver = std::function<void(bool)>;
+
   virtual ~BackendDevice() = default;
 
   virtual BufferHandle createBuffer(const BufferDesc& desc) = 0;
@@ -802,6 +851,7 @@ class BackendDevice {
   virtual void submitReadback(const ReadbackDesc& desc) { (void)desc; }
   virtual void submitColorFill(const ColorFillDesc& desc) { (void)desc; }
   virtual void present(const SwapDesc& desc) = 0;
+  virtual void setDeviceLostObserver(DeviceLostObserver observer) { (void)observer; }
   virtual void flush() {}
 };
 
@@ -826,6 +876,7 @@ std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::
 u32 bytesPerPixel(Format format);
 std::string formatName(Format format);
 std::string backendFormatName(BackendPixelFormat format);
+std::shared_ptr<BackendDevice> makeBackendDevice(const BackendLimits& limits = {});
 std::shared_ptr<BackendDevice> makeSimBackendDevice();
 
 constexpr u32 sampleCount(MultiSampleType type) noexcept {
@@ -1041,6 +1092,7 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   const PresentParameters& params() const noexcept { return params_; }
   std::shared_ptr<Surface> backBuffer() const noexcept { return backBuffer_; }
   std::shared_ptr<Surface> depthStencilSurface() const noexcept { return depthStencilSurface_; }
+  std::shared_ptr<Device> device() const noexcept { return owner_.lock(); }
   bool displaySyncEnabled() const noexcept;
   void resize(const PresentParameters& params);
   HResult present(std::shared_ptr<BackendDevice> backend, const SwapDesc& desc);
@@ -1077,6 +1129,9 @@ class Device : public std::enable_shared_from_this<Device> {
   std::shared_ptr<StateBlock> createStateBlock() const;
   std::shared_ptr<SwapChain> createAdditionalSwapChain(const PresentParameters& params);
   std::shared_ptr<SwapChain> swapChain(size_t index = 0) const;
+  size_t swapChainCount() const noexcept { return swapChains_.size(); }
+  HResult testCooperativeLevel() const;
+  void setDeviceLost(bool lost) noexcept { deviceLost_ = lost; }
 
   HResult setRenderState(u32 key, u32 value);
   HResult setRenderStateFloat(u32 key, f32 value);
@@ -1173,6 +1228,7 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 submittedSequenceId_ = 0;
   u64 completedSequenceId_ = 0;
   bool inScene_ = false;
+  bool deviceLost_ = false;
 };
 
 class Factory {
@@ -1182,6 +1238,12 @@ class Factory {
   size_t adapterCount() const noexcept { return adapters_.size(); }
   const AdapterInfo& adapter(size_t index) const;
   const DeviceCaps& caps(size_t index) const;
+  AdapterIdentifier getAdapterIdentifier(size_t index) const;
+  std::vector<DisplayMode> enumAdapterModes(size_t index, Format format) const;
+  DisplayMode getAdapterDisplayMode(size_t index) const;
+  u32 getAdapterMonitor(size_t index) const;
+  HRESULT checkDeviceType(size_t adapterIndex, DeviceType deviceType, Format adapterFormat,
+                          Format backBufferFormat, bool windowed) const;
   HRESULT checkDeviceFormat(size_t adapterIndex, Format format, u32 usage) const;
   HRESULT checkDeviceMultiSampleType(size_t adapterIndex, Format format, MultiSampleType type) const;
   std::shared_ptr<Device> createDevice(size_t adapterIndex, const PresentParameters& params,

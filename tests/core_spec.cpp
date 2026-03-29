@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -12,6 +13,7 @@
 
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9/winemetal.h"
 
 using namespace dxmt9::core;
 
@@ -57,11 +59,99 @@ void checkBytes(std::span<const u8> actual, std::span<const u8> expected, std::s
   }
 }
 
+void checkContains(std::string_view haystack, std::string_view needle, std::string_view message) {
+  if (haystack.find(needle) == std::string_view::npos) {
+    std::ostringstream out;
+    out << message << " (missing '" << needle << "')";
+    fail(out.str());
+  }
+}
+
+std::string shaderSourceToString(dxmt9_u64 shaderHandle) {
+  const char* source = dxmt9_winemetal_shader_source(shaderHandle);
+  check(source != nullptr, "shader source");
+  const dxmt9_u64 length = dxmt9_winemetal_shader_source_size(shaderHandle);
+  check(length != 0, "shader source size");
+  return std::string(source, static_cast<size_t>(length));
+}
+
 std::array<u8, 4> bgra(u8 b, u8 g, u8 r, u8 a) {
   return {b, g, r, a};
 }
 
+constexpr u32 kD3DSIO_MOV = 1u;
+constexpr u32 kD3DSIO_ADD = 2u;
+constexpr u32 kD3DSIO_DEF = 66u;
+constexpr u32 kD3DSIO_END = 0xffffu;
+
+constexpr u32 kD3DSPR_TEMP = 0u;
+constexpr u32 kD3DSPR_CONST = 2u;
+constexpr u32 kD3DSPR_RASTOUT = 4u;
+constexpr u32 kD3DSPR_COLOROUT = 8u;
+
+u32 encodeRegisterType(u32 regType) {
+  return ((regType & 0x7u) << 28) | (((regType >> 3) & 0x3u) << 11);
+}
+
+u32 makeVersionToken(bool vertex, u32 major, u32 minor) {
+  return ((vertex ? 0xfffeu : 0xffffu) << 16) | ((major & 0xffu) << 8) | (minor & 0xffu);
+}
+
+u32 makeInstructionToken(u32 opcode, u32 operandCount) {
+  return (opcode & 0xffffu) | ((operandCount & 0xfu) << 24);
+}
+
+u32 makeDstToken(u32 regType, u32 regIndex, u32 writeMask = 0xfu, u32 modifier = 0u) {
+  return (1u << 31) | encodeRegisterType(regType) | ((modifier & 0xfu) << 20) | ((writeMask & 0xfu) << 16) |
+         (regIndex & 0x7ffu);
+}
+
+u32 makeSrcToken(u32 regType, u32 regIndex, u32 swizzle = 0xe4u, u32 modifier = 0u) {
+  return (1u << 31) | encodeRegisterType(regType) | ((modifier & 0xfu) << 24) | ((swizzle & 0xffu) << 16) |
+         (regIndex & 0x7ffu);
+}
+
+std::vector<u32> makeVertexBytecode() {
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(true, 2, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_DEF, 5));
+  words.push_back(makeDstToken(kD3DSPR_CONST, 0));
+  words.push_back(std::bit_cast<u32>(1.0f));
+  words.push_back(std::bit_cast<u32>(2.0f));
+  words.push_back(std::bit_cast<u32>(3.0f));
+  words.push_back(std::bit_cast<u32>(4.0f));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_RASTOUT, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(kD3DSIO_END);
+  return words;
+}
+
+std::vector<u32> makePixelBytecode() {
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(false, 2, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_DEF, 5));
+  words.push_back(makeDstToken(kD3DSPR_CONST, 0));
+  words.push_back(std::bit_cast<u32>(0.25f));
+  words.push_back(std::bit_cast<u32>(0.5f));
+  words.push_back(std::bit_cast<u32>(0.75f));
+  words.push_back(std::bit_cast<u32>(1.0f));
+  words.push_back(makeInstructionToken(kD3DSIO_ADD, 3));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_COLOROUT, 0));
+  words.push_back(makeSrcToken(kD3DSPR_TEMP, 0));
+  words.push_back(kD3DSIO_END);
+  return words;
+}
+
 struct RecordingBackend final : BackendDevice {
+  void setDeviceLostObserver(DeviceLostObserver observer) override {
+    deviceLostObserver = std::move(observer);
+  }
+
   BufferHandle createBuffer(const BufferDesc& desc) override {
     createdBuffers.push_back(desc);
     return Handle{nextHandle++};
@@ -142,6 +232,13 @@ struct RecordingBackend final : BackendDevice {
   std::vector<ReadbackDesc> readbacks;
   std::vector<ColorFillDesc> colorFills;
   std::vector<SwapDesc> presents;
+  DeviceLostObserver deviceLostObserver;
+
+  void triggerDeviceLost(bool lost = true) {
+    if (deviceLostObserver) {
+      deviceLostObserver(lost);
+    }
+  }
 };
 
 void testFormatAndCaps() {
@@ -173,6 +270,26 @@ void testFormatAndCaps() {
   checkEq(factory.caps(0).maxTextureHeight, 4096u, "max texture height");
   checkEq(factory.caps(0).numSimultaneousRTs, 2u, "simultaneous RT count");
   checkEq(factory.caps(0).maxAnisotropy, 8u, "max anisotropy");
+
+  checkEq(factory.checkDeviceType(0, DeviceType::Hal, Format::A8R8G8B8, Format::A8R8G8B8, true), D3D_OK,
+          "HAL windowed device type");
+  checkEq(factory.checkDeviceType(0, DeviceType::Hal, Format::A8R8G8B8, Format::A8R8G8B8, false), D3D_OK,
+          "HAL fullscreen device type");
+  checkEq(factory.checkDeviceType(0, DeviceType::Ref, Format::A8R8G8B8, Format::A8R8G8B8, true),
+          D3DERR_NOTAVAILABLE, "non-HAL device type");
+  const auto modes = factory.enumAdapterModes(0, Format::A8R8G8B8);
+  check(!modes.empty(), "adapter modes");
+  checkEq(modes.front().width, 640u, "first adapter mode width");
+  checkEq(modes.front().height, 480u, "first adapter mode height");
+  checkEq(modes.front().format, Format::A8R8G8B8, "first adapter mode format");
+  const auto displayMode = factory.getAdapterDisplayMode(0);
+  checkEq(displayMode.width, 1920u, "adapter display width");
+  checkEq(displayMode.height, 1080u, "adapter display height");
+  checkEq(displayMode.format, Format::A8R8G8B8, "adapter display format");
+  const auto identifier = factory.getAdapterIdentifier(0);
+  checkEq(identifier.description, std::string("Adapter 0"), "adapter description");
+  checkEq(identifier.monitor, 1u, "adapter monitor");
+  checkEq(factory.getAdapterMonitor(0), 1u, "adapter monitor lookup");
 
   checkEq(factory.checkDeviceFormat(0, Format::A8R8G8B8, UsageTexture), D3D_OK, "A8R8G8B8 texture support");
   checkEq(factory.checkDeviceFormat(0, Format::L8, UsageRenderTarget), D3DERR_NOTAVAILABLE,
@@ -249,6 +366,92 @@ void testFfpKeys() {
   checkEq(pixelKey.stages[0].alphaOp, static_cast<u32>(TextureOp::Modulate), "pixel key alpha op");
   checkEq(pixelKey.stages[0].texCoordIndex, 4u, "pixel key texcoord");
   check(pixelKey.hash != 0, "pixel key hash");
+}
+
+void testShaderThunk() {
+  const auto vertexWords = makeVertexBytecode();
+  const auto pixelWords = makePixelBytecode();
+
+  WinemetalShaderCompileRequest vertexRequest{};
+  vertexRequest.kind = WinemetalShaderKind_D3DBytecodeVertex;
+  vertexRequest.bytecode = vertexWords.data();
+  vertexRequest.bytecodeSize = static_cast<dxmt9_u64>(vertexWords.size() * sizeof(u32));
+  vertexRequest.bytecodeHash = hashBytes(std::as_bytes(std::span(vertexWords)));
+  vertexRequest.clipPlaneMask = 1u;
+  vertexRequest.sampleCount = 4u;
+  const auto vertexHandle = dxmt9_winemetal_compile_shader(&vertexRequest);
+  check(vertexHandle != 0, "vertex shader thunk");
+  const auto vertexSource = shaderSourceToString(vertexHandle);
+  checkEq(dxmt9_winemetal_shader_source_size(vertexHandle), static_cast<dxmt9_u64>(vertexSource.size()),
+          "vertex shader source size");
+  checkContains(vertexSource, "vertex VSOut dxmt9_vs", "vertex shader source");
+  checkContains(vertexSource, "def c0", "vertex shader decode comment");
+  checkContains(vertexSource, "cFloat[0] = float4(1.0f, 2.0f, 3.0f, 4.0f)", "vertex shader constant define");
+  checkContains(vertexSource, "outPosition = cFloat[0]", "vertex shader mov translation");
+  checkContains(vertexSource, "clip_distance", "vertex shader clip distance");
+  dxmt9_winemetal_destroy_shader(vertexHandle);
+
+  WinemetalShaderCompileRequest pixelRequest{};
+  pixelRequest.kind = WinemetalShaderKind_D3DBytecodePixel;
+  pixelRequest.bytecode = pixelWords.data();
+  pixelRequest.bytecodeSize = static_cast<dxmt9_u64>(pixelWords.size() * sizeof(u32));
+  pixelRequest.bytecodeHash = hashBytes(std::as_bytes(std::span(pixelWords)));
+  pixelRequest.alphaTestEnable = 1u;
+  pixelRequest.alphaTestFunc = static_cast<u32>(CompareFunc::GreaterEqual);
+  pixelRequest.alphaRef = 0.5f;
+  const auto pixelHandle = dxmt9_winemetal_compile_shader(&pixelRequest);
+  check(pixelHandle != 0, "pixel shader thunk");
+  const auto pixelSource = shaderSourceToString(pixelHandle);
+  checkContains(pixelSource, "fragment float4 dxmt9_fs", "pixel shader source");
+  checkContains(pixelSource, "def c0", "pixel shader decode comment");
+  checkContains(pixelSource, "add r0, c0, c0", "pixel shader arithmetic comment");
+  checkContains(pixelSource, "r[0] = (cFloat[0] + cFloat[0])", "pixel shader arithmetic translation");
+  checkContains(pixelSource, "discard_fragment()", "pixel shader alpha test");
+  dxmt9_winemetal_destroy_shader(pixelHandle);
+
+  DeviceState state;
+  state.reset();
+  state.renderStates[RS_LIGHTING] = 1;
+  state.renderStates[RS_SPECULAR_ENABLE] = 1;
+  state.renderStates[RS_ALPHA_TEST_ENABLE] = 1;
+  state.renderStates[RS_ALPHA_FUNC] = static_cast<u32>(CompareFunc::GreaterEqual);
+  state.renderStates[RS_ALPHA_REF] = 128;
+  state.renderStates[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Exp2);
+  state.renderStates[RS_CLIP_PLANE_ENABLE] = 1;
+  state.lightEnabled[0] = true;
+  state.lights[0].type = LightType::Point;
+  state.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::SelectArg1);
+  state.textureStageStates[0][TSS_ALPHA_OP] = static_cast<u32>(TextureOp::Modulate);
+  state.textureStageStates[0][TSS_TEXCOORD_INDEX] = 4;
+  state.textureStageStates[0][TSS_TEXTURE_TRANSFORM_FLAGS] = 7;
+
+  const auto vertexKey = makeFfpVertexKey(state);
+  WinemetalShaderCompileRequest ffpVertexRequest{};
+  ffpVertexRequest.kind = WinemetalShaderKind_FfpVertex;
+  ffpVertexRequest.variantKey = &vertexKey;
+  ffpVertexRequest.textured = true;
+  ffpVertexRequest.clipPlaneMask = vertexKey.clipPlaneMask;
+  const auto ffpVertexHandle = dxmt9_winemetal_compile_shader(&ffpVertexRequest);
+  check(ffpVertexHandle != 0, "ffp vertex shader thunk");
+  const auto ffpVertexSource = shaderSourceToString(ffpVertexHandle);
+  checkContains(ffpVertexSource, "ffp vertex hash", "ffp vertex source");
+  checkContains(ffpVertexSource, "halfPixelFixup", "ffp vertex half-pixel");
+  dxmt9_winemetal_destroy_shader(ffpVertexHandle);
+
+  const auto pixelKey = makeFfpPixelKey(state);
+  WinemetalShaderCompileRequest ffpPixelRequest{};
+  ffpPixelRequest.kind = WinemetalShaderKind_FfpPixel;
+  ffpPixelRequest.variantKey = &pixelKey;
+  ffpPixelRequest.textured = true;
+  ffpPixelRequest.alphaTestEnable = pixelKey.alphaTestEnable ? 1u : 0u;
+  ffpPixelRequest.alphaTestFunc = pixelKey.alphaTestFunc;
+  ffpPixelRequest.alphaRef = 0.5f;
+  const auto ffpPixelHandle = dxmt9_winemetal_compile_shader(&ffpPixelRequest);
+  check(ffpPixelHandle != 0, "ffp pixel shader thunk");
+  const auto ffpPixelSource = shaderSourceToString(ffpPixelHandle);
+  checkContains(ffpPixelSource, "ffp pixel hash", "ffp pixel source");
+  checkContains(ffpPixelSource, "discard_fragment()", "ffp pixel alpha test");
+  dxmt9_winemetal_destroy_shader(ffpPixelHandle);
 }
 
 void testDeviceCoreFlow() {
@@ -622,6 +825,13 @@ void testComWrappers() {
   check(d3d != nullptr, "Direct3DCreate9");
   checkEq(d3d->AddRef(), 2u, "factory addref");
   checkEq(d3d->Release(), 1u, "factory release after addref");
+  checkEq(d3d->GetAdapterCount(), size_t{1}, "factory adapter count");
+  checkEq(d3d->CheckDeviceType(0, DeviceType::Hal, Format::A8R8G8B8, Format::A8R8G8B8, true), D3D_OK,
+          "factory device type");
+  checkEq(d3d->CheckDeviceType(0, DeviceType::Hal, Format::A8R8G8B8, Format::A8R8G8B8, false), D3D_OK,
+          "factory fullscreen device type");
+  check(!d3d->EnumAdapterModes(0, Format::R8G8B8).size(), "unsupported adapter modes");
+  checkEq(d3d->GetAdapterDisplayMode(0).width, 1920u, "factory adapter mode width");
 
   void* unknown = nullptr;
   check(d3d->QueryInterface(InterfaceId::IUnknown, &unknown), "factory query interface");
@@ -637,6 +847,21 @@ void testComWrappers() {
   auto* device = d3d->CreateDevice(0, params);
   check(device != nullptr, "wrapper device create");
   check(device->coreDevice().swapChain() != nullptr, "wrapper core device swap chain");
+  checkEq(device->GetDeviceCaps().maxTextureWidth, 16384u, "wrapper caps");
+  checkEq(device->TestCooperativeLevel(), D3D_OK, "wrapper cooperative level");
+  checkEq(device->GetSwapChainCount(), size_t{1}, "wrapper swap chain count");
+  auto* primarySwapChain = device->GetSwapChain();
+  check(primarySwapChain != nullptr, "wrapper primary swap chain");
+  check(primarySwapChain->backBuffer() != nullptr, "wrapper primary back buffer");
+  checkEq(primarySwapChain->Present(), D3D_OK, "wrapper primary swap present");
+  checkEq(primarySwapChain->Release(), 0u, "wrapper primary swap release");
+  auto* extraSwapChain = device->CreateAdditionalSwapChain(params);
+  check(extraSwapChain != nullptr, "wrapper additional swap chain");
+  check(extraSwapChain->backBuffer() != nullptr, "wrapper additional back buffer");
+  checkEq(extraSwapChain->presentParameters().backBufferWidth, 320u, "wrapper additional params");
+  checkEq(extraSwapChain->Present(), D3D_OK, "wrapper additional swap present");
+  checkEq(device->GetSwapChainCount(), size_t{2}, "wrapper swap chain count after create");
+  checkEq(extraSwapChain->Release(), 0u, "wrapper additional swap release");
   checkEq(device->AddRef(), 2u, "device addref");
   checkEq(device->Release(), 1u, "device release after addref");
 
@@ -649,6 +874,37 @@ void testComWrappers() {
   checkEq(d3d->Release(), 0u, "factory release");
 }
 
+void testFullscreenAndDeviceLost() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.windowed = false;
+  params.backBufferWidth = 0;
+  params.backBufferHeight = 0;
+  params.backBufferFormat = Format::Unknown;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{101};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "fullscreen device create");
+  checkEq(device->presentParameters().windowed, false, "fullscreen mode stored");
+  checkEq(device->presentParameters().backBufferWidth, 1920u, "fullscreen default width stored");
+  checkEq(device->presentParameters().backBufferHeight, 1080u, "fullscreen default height stored");
+  checkEq(device->swapChain()->backBuffer()->desc().width, 1920u, "fullscreen back buffer width");
+  checkEq(device->swapChain()->backBuffer()->desc().height, 1080u, "fullscreen back buffer height");
+  checkEq(device->swapChain()->backBuffer()->desc().format, Format::A8R8G8B8, "fullscreen back buffer format");
+  checkEq(device->testCooperativeLevel(), D3D_OK, "fullscreen cooperative level");
+
+  backend->triggerDeviceLost(true);
+  checkEq(device->testCooperativeLevel(), D3DERR_DEVICELOST, "triggered lost state");
+  checkEq(device->present(), D3DERR_DEVICELOST, "present while lost");
+  checkEq(device->reset(params), D3D_OK, "reset after device lost");
+  checkEq(device->testCooperativeLevel(), D3D_OK, "recovered cooperative level");
+  checkEq(device->swapChain()->backBuffer()->desc().width, 1920u, "fullscreen reset width");
+  checkEq(device->swapChain()->backBuffer()->desc().height, 1080u, "fullscreen reset height");
+}
+
 }  // namespace
 
 int main() {
@@ -656,8 +912,10 @@ int main() {
     testFormatAndCaps();
     testHelpers();
     testFfpKeys();
+    testShaderThunk();
     testDeviceCoreFlow();
     testComWrappers();
+    testFullscreenAndDeviceLost();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

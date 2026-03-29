@@ -9,6 +9,7 @@ layer. Specs describe *what* the system must be and do, not how to build it.
 
 ```
 specs/
+├── gap.md                  Spec–implementation gap tracker (what is / isn't built yet)
 ├── core/                   Wine-facing D3D9 layer
 │   ├── requirements.md     D3D9 COM contracts, state machine rules, resource semantics
 │   ├── design.md           COM object model, device state, core/backend boundary

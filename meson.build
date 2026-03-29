@@ -14,10 +14,13 @@ project(
 
 dxmt9_inc = include_directories('include')
 
+if host_machine.system() == 'darwin'
+  add_languages('objc', 'objcpp', native: false)
+endif
+
 subdir('include')
 subdir('src')
 
 if get_option('build_tests')
   subdir('tests')
 endif
-

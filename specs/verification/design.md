@@ -189,6 +189,9 @@ interface is stable.
 bash scripts/verify_tla.sh
 ```
 
+This is the current verification path in the repository. Remote CI is not
+configured yet; when it is added, it should invoke the same script.
+
 ### Expected output
 
 ```

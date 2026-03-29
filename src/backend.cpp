@@ -6,6 +6,10 @@
 
 namespace dxmt9::core {
 
+#if defined(__APPLE__)
+std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits);
+#endif
+
 namespace {
 
 enum class CommandKind {
@@ -44,6 +48,10 @@ struct SurfaceRecord {
 
 class SimBackendDevice final : public BackendDevice {
  public:
+  void setDeviceLostObserver(DeviceLostObserver observer) override {
+    deviceLostObserver_ = std::move(observer);
+  }
+
   BufferHandle createBuffer(const BufferDesc& desc) override {
     const Handle handle{nextHandle_++};
     BufferRecord record;
@@ -173,11 +181,22 @@ class SimBackendDevice final : public BackendDevice {
   std::unordered_map<u64, BufferRecord> buffers_;
   std::unordered_map<u64, TextureRecord> textures_;
   std::unordered_map<u64, SurfaceRecord> surfaces_;
+  DeviceLostObserver deviceLostObserver_;
   std::vector<CommandRecord> pending_;
   std::deque<std::vector<CommandRecord>> committedFrames_;
 };
 
 }  // namespace
+
+std::shared_ptr<BackendDevice> makeBackendDevice(const BackendLimits& limits) {
+  (void)limits;
+#if defined(__APPLE__)
+  if (auto backend = makeMetalBackendDevice(limits)) {
+    return backend;
+  }
+#endif
+  return makeSimBackendDevice();
+}
 
 std::shared_ptr<BackendDevice> makeSimBackendDevice() {
   return std::make_shared<SimBackendDevice>();

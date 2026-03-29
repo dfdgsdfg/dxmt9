@@ -1169,6 +1169,52 @@ bool formatSupportsUsage(Format format, u32 usage, const BackendLimits& limits) 
   return true;
 }
 
+bool isDisplayModeFormat(Format format) {
+  const auto* info = findFormatInfo(format);
+  return info && info->renderTarget && !info->depthStencil && !info->compressed;
+}
+
+std::vector<DisplayMode> makeAdapterModes(Format format, const BackendLimits& limits) {
+  if (!isDisplayModeFormat(format) || !formatSupportsUsage(format, UsageRenderTarget, limits)) {
+    return {};
+  }
+
+  constexpr std::array<std::pair<u32, u32>, 5> kCommonModes = {
+      std::pair{640u, 480u},
+      std::pair{800u, 600u},
+      std::pair{1024u, 768u},
+      std::pair{1280u, 720u},
+      std::pair{1920u, 1080u},
+  };
+
+  std::vector<DisplayMode> modes;
+  for (const auto& [width, height] : kCommonModes) {
+    if (width > limits.maxTextureSize || height > limits.maxTextureSize) {
+      continue;
+    }
+    modes.push_back({width, height, 60, format});
+  }
+  return modes;
+}
+
+PresentParameters normalizePresentParameters(const AdapterInfo& adapter, PresentParameters params) {
+  if (params.backBufferFormat == Format::Unknown) {
+    params.backBufferFormat = adapter.displayMode.format;
+  }
+  if (!params.windowed) {
+    if (params.backBufferWidth == 0) {
+      params.backBufferWidth = adapter.displayMode.width;
+    }
+    if (params.backBufferHeight == 0) {
+      params.backBufferHeight = adapter.displayMode.height;
+    }
+  } else {
+    params.backBufferWidth = std::max(1u, params.backBufferWidth);
+    params.backBufferHeight = std::max(1u, params.backBufferHeight);
+  }
+  return params;
+}
+
 u64 hashBytes(std::span<const std::byte> bytes) {
   u64 hash = kFnvOffset;
   for (const auto byte : bytes) {
@@ -1327,6 +1373,21 @@ void DeviceState::reset() {
   renderStates[RS_SRC_BLEND_ALPHA] = static_cast<u32>(BlendFactor::One);
   renderStates[RS_DEST_BLEND_ALPHA] = static_cast<u32>(BlendFactor::Zero);
   renderStates[RS_BLEND_OP_ALPHA] = static_cast<u32>(BlendOp::Add);
+  renderStates[RS_STENCIL_ENABLE] = 0;
+  renderStates[RS_STENCIL_FUNC] = static_cast<u32>(CompareFunc::Always);
+  renderStates[RS_STENCIL_FAIL] = static_cast<u32>(StencilOp::Keep);
+  renderStates[RS_STENCIL_ZFAIL] = static_cast<u32>(StencilOp::Keep);
+  renderStates[RS_STENCIL_PASS] = static_cast<u32>(StencilOp::Keep);
+  renderStates[RS_STENCIL_REF] = 0;
+  renderStates[RS_STENCIL_MASK] = 0xffu;
+  renderStates[RS_STENCIL_WRITEMASK] = 0xffu;
+  renderStates[RS_STENCIL_CCW_FUNC] = static_cast<u32>(CompareFunc::Always);
+  renderStates[RS_STENCIL_CCW_FAIL] = static_cast<u32>(StencilOp::Keep);
+  renderStates[RS_STENCIL_CCW_ZFAIL] = static_cast<u32>(StencilOp::Keep);
+  renderStates[RS_STENCIL_CCW_PASS] = static_cast<u32>(StencilOp::Keep);
+  renderStates[RS_STENCIL_CCW_REF] = 0;
+  renderStates[RS_STENCIL_CCW_MASK] = 0xffu;
+  renderStates[RS_STENCIL_CCW_WRITEMASK] = 0xffu;
 
   for (auto& stage : textureStageStates) {
     stage[TSS_COLOR_OP] = static_cast<u32>(TextureOp::Disable);
@@ -1762,12 +1823,13 @@ HResult SwapChain::present(std::shared_ptr<BackendDevice> backend, const SwapDes
 Device::Device(AdapterInfo adapter, BackendLimits limits, std::shared_ptr<BackendDevice> backend,
                PresentParameters params, u32 behaviorFlags)
     : adapter_(std::move(adapter)), limits_(limits),
-      caps_(makeDefaultCaps(limits_)), backend_(backend ? std::move(backend) : makeSimBackendDevice()),
-      presentParameters_(params), behaviorFlags_(behaviorFlags) {
+      caps_(makeDefaultCaps(limits_)), backend_(backend ? std::move(backend) : makeBackendDevice(limits_)),
+      presentParameters_(normalizePresentParameters(adapter_, params)), behaviorFlags_(behaviorFlags) {
   state_.reset();
   const u32 width = std::max(1u, presentParameters_.backBufferWidth);
   const u32 height = std::max(1u, presentParameters_.backBufferHeight);
   state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
+  deviceLost_ = false;
 }
 
 Device::~Device() {
@@ -1779,6 +1841,10 @@ Device::~Device() {
   // default-pool resources are invalidated.
   DXMT_ASSERT(completedSequenceId_ == submittedSequenceId_);
   invalidateDefaultPoolResources();
+}
+
+HResult Device::testCooperativeLevel() const {
+  return deviceLost_ ? D3DERR_DEVICELOST : D3D_OK;
 }
 
 std::shared_ptr<Buffer> Device::createBuffer(const BufferDesc& desc) {
@@ -1833,16 +1899,17 @@ HResult Device::applyStateBlock(const StateBlock& block) {
 }
 
 std::shared_ptr<SwapChain> Device::createAdditionalSwapChain(const PresentParameters& params) {
-  auto backBuffer = createSurface({std::max(1u, params.backBufferWidth), std::max(1u, params.backBufferHeight),
-                                   params.backBufferFormat, Pool::Default, UsageRenderTarget, true, false,
-                                   params.multiSampleType});
+  const auto normalized = normalizePresentParameters(adapter_, params);
+  auto backBuffer = createSurface({std::max(1u, normalized.backBufferWidth),
+                                   std::max(1u, normalized.backBufferHeight), normalized.backBufferFormat,
+                                   Pool::Default, UsageRenderTarget, true, false, normalized.multiSampleType});
   std::shared_ptr<Surface> depth;
-  if (params.enableAutoDepthStencil) {
-    depth = createSurface({std::max(1u, params.backBufferWidth), std::max(1u, params.backBufferHeight),
-                           params.autoDepthStencilFormat, Pool::Default, UsageDepthStencil, false, true,
-                           params.multiSampleType});
+  if (normalized.enableAutoDepthStencil) {
+    depth = createSurface({std::max(1u, normalized.backBufferWidth),
+                           std::max(1u, normalized.backBufferHeight), normalized.autoDepthStencilFormat,
+                           Pool::Default, UsageDepthStencil, false, true, normalized.multiSampleType});
   }
-  auto swapChain = std::make_shared<SwapChain>(shared_from_this(), Handle{nextHandle_++}, params, backBuffer,
+  auto swapChain = std::make_shared<SwapChain>(shared_from_this(), Handle{nextHandle_++}, normalized, backBuffer,
                                                depth);
   swapChains_.push_back(swapChain);
   return swapChain;
@@ -2292,6 +2359,9 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
 }
 
 HResult Device::present() {
+  if (deviceLost_) {
+    return D3DERR_DEVICELOST;
+  }
   auto desc = snapshotSwapDesc();
   submitPresentInternal(desc);
   if (backend_) {
@@ -2304,7 +2374,8 @@ HResult Device::present() {
 }
 
 HResult Device::reset(const PresentParameters& params) {
-  presentParameters_ = params;
+  presentParameters_ = normalizePresentParameters(adapter_, params);
+  deviceLost_ = false;
   if (backend_) {
     backend_->flush();
   }
@@ -2314,11 +2385,12 @@ HResult Device::reset(const PresentParameters& params) {
   DXMT_ASSERT(completedSequenceId_ == submittedSequenceId_);
   invalidateDefaultPoolResources();
   state_.reset();
-  state_.viewport = {0, 0, std::max(1u, params.backBufferWidth), std::max(1u, params.backBufferHeight), 0.0f,
+  state_.viewport = {0, 0, std::max(1u, presentParameters_.backBufferWidth),
+                     std::max(1u, presentParameters_.backBufferHeight), 0.0f,
                      1.0f};
   for (auto& chain : swapChains_) {
     if (chain) {
-      chain->resize(params);
+      chain->resize(presentParameters_);
     }
   }
   if (!swapChains_.empty() && swapChains_.front()) {
@@ -2334,6 +2406,35 @@ HResult Device::reset(const PresentParameters& params) {
   }
   submittedSequenceId_ = 0;
   completedSequenceId_ = 0;
+  return D3D_OK;
+}
+
+HResult Device::checkDeviceMultiSampleType(Format format, MultiSampleType type) const {
+  if (type == MultiSampleType::None) {
+    return D3D_OK;
+  }
+
+  const auto supportsCount = [this](u32 count) {
+    switch (count) {
+      case 2:
+        return limits_.supportsSampleCount2;
+      case 4:
+        return limits_.supportsSampleCount4;
+      case 8:
+        return limits_.supportsSampleCount8;
+      default:
+        return false;
+    }
+  };
+
+  const u32 count = dxmt9::core::sampleCount(type);
+  if (!supportsCount(count)) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  if (!formatSupportsUsage(format, UsageRenderTarget, limits_) &&
+      !formatSupportsUsage(format, UsageDepthStencil, limits_)) {
+    return D3DERR_NOTAVAILABLE;
+  }
   return D3D_OK;
 }
 
@@ -2716,8 +2817,8 @@ FfpPixelKey makeFfpPixelKey(const DeviceState& state) {
 }
 
 Factory::Factory(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
-    : limits_(limits), backend_(backend ? std::move(backend) : makeSimBackendDevice()) {
-  adapters_.push_back({0, "Adapter 0", 1, 1});
+    : limits_(limits), backend_(backend ? std::move(backend) : makeBackendDevice(limits_)) {
+  adapters_.push_back({0, "Adapter 0", 1, 1, {1920, 1080, 60, Format::A8R8G8B8}});
   adapterCaps_.push_back(makeDefaultCaps(limits_));
 }
 
@@ -2733,6 +2834,59 @@ const DeviceCaps& Factory::caps(size_t index) const {
     throw std::out_of_range("caps index out of range");
   }
   return adapterCaps_[index];
+}
+
+AdapterIdentifier Factory::getAdapterIdentifier(size_t index) const {
+  const auto& info = adapter(index);
+  AdapterIdentifier identifier;
+  identifier.description = info.name;
+  identifier.deviceName = info.name;
+  identifier.driver = "dxmt9";
+  identifier.driverVersion = info.registryId;
+  identifier.vendorId = 0;
+  identifier.deviceId = static_cast<u32>(info.ordinal);
+  identifier.subSysId = 0;
+  identifier.revision = 1;
+  identifier.monitor = info.displayId;
+  return identifier;
+}
+
+std::vector<DisplayMode> Factory::enumAdapterModes(size_t index, Format format) const {
+  if (index >= adapters_.size()) {
+    return {};
+  }
+  return makeAdapterModes(format, limits_);
+}
+
+DisplayMode Factory::getAdapterDisplayMode(size_t index) const {
+  return adapter(index).displayMode;
+}
+
+u32 Factory::getAdapterMonitor(size_t index) const {
+  return adapter(index).displayId;
+}
+
+HRESULT Factory::checkDeviceType(size_t adapterIndex, DeviceType deviceType, Format adapterFormat,
+                                 Format backBufferFormat, bool windowed) const {
+  if (adapterIndex >= adapters_.size()) {
+    return D3DERR_INVALIDCALL;
+  }
+  if (deviceType != DeviceType::Hal) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  const auto displayFormat = adapter(adapterIndex).displayMode.format;
+  if (windowed) {
+    if (!isDisplayModeFormat(adapterFormat) || !isDisplayModeFormat(backBufferFormat)) {
+      return D3DERR_NOTAVAILABLE;
+    }
+  } else if (adapterFormat != displayFormat || backBufferFormat != displayFormat) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  if (!formatSupportsUsage(adapterFormat, UsageRenderTarget, limits_) ||
+      !formatSupportsUsage(backBufferFormat, UsageRenderTarget, limits_)) {
+    return D3DERR_NOTAVAILABLE;
+  }
+  return D3D_OK;
 }
 
 HRESULT Factory::checkDeviceFormat(size_t adapterIndex, Format format, u32 usage) const {
@@ -2777,12 +2931,26 @@ HRESULT Factory::checkDeviceMultiSampleType(size_t adapterIndex, Format format, 
 
 std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const PresentParameters& params,
                                               u32 behaviorFlags) {
-  if (adapterIndex >= adapters_.size() || !params.windowed) {
+  if (adapterIndex >= adapters_.size()) {
+    return {};
+  }
+  const auto& adapterInfo = adapters_[adapterIndex];
+  const auto normalized = normalizePresentParameters(adapterInfo, params);
+  if (checkDeviceType(adapterIndex, DeviceType::Hal, adapterInfo.displayMode.format, normalized.backBufferFormat,
+                      normalized.windowed) != D3D_OK) {
     return {};
   }
   auto device = std::shared_ptr<Device>(
-      new Device(adapters_[adapterIndex], limits_, backend_, params, behaviorFlags));
+      new Device(adapterInfo, limits_, backend_, normalized, behaviorFlags));
   device->initializeDefaultSwapChain();
+  if (auto backend = device->backend()) {
+    std::weak_ptr<Device> weak = device;
+    backend->setDeviceLostObserver([weak](bool lost) {
+      if (auto locked = weak.lock()) {
+        locked->setDeviceLost(lost);
+      }
+    });
+  }
   return device;
 }
 
