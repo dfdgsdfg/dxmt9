@@ -152,6 +152,20 @@ struct RecordingBackend final : BackendDevice {
     deviceLostObserver = std::move(observer);
   }
 
+  void setPresentationStatusObserver(PresentationStatusObserver observer) override {
+    presentationStatusObserver = std::move(observer);
+  }
+
+  void setMaxFrameLatency(u32 latency) override {
+    maxFrameLatency = latency;
+    maxFrameLatencyCalls.push_back(latency);
+  }
+
+  HResult waitForVBlank(const SwapDesc& desc) override {
+    waitForVBlankCalls.push_back(desc);
+    return D3D_OK;
+  }
+
   BufferHandle createBuffer(const BufferDesc& desc) override {
     createdBuffers.push_back(desc);
     return Handle{nextHandle++};
@@ -233,10 +247,20 @@ struct RecordingBackend final : BackendDevice {
   std::vector<ColorFillDesc> colorFills;
   std::vector<SwapDesc> presents;
   DeviceLostObserver deviceLostObserver;
+  PresentationStatusObserver presentationStatusObserver;
+  u32 maxFrameLatency = 3;
+  std::vector<u32> maxFrameLatencyCalls;
+  std::vector<SwapDesc> waitForVBlankCalls;
 
   void triggerDeviceLost(bool lost = true) {
     if (deviceLostObserver) {
       deviceLostObserver(lost);
+    }
+  }
+
+  void triggerPresentationOccluded(bool occluded = true) {
+    if (presentationStatusObserver) {
+      presentationStatusObserver(occluded);
     }
   }
 };
@@ -838,6 +862,8 @@ void testComWrappers() {
   auto* queriedFactory = static_cast<IDirect3D9*>(unknown);
   check(queriedFactory != nullptr, "factory query result");
   checkEq(queriedFactory->Release(), 1u, "factory qi release");
+  void* exUnknown = nullptr;
+  check(!d3d->QueryInterface(InterfaceId::Direct3D9Ex, &exUnknown), "base factory must not expose ex");
 
   PresentParameters params{};
   params.backBufferWidth = 320;
@@ -870,8 +896,131 @@ void testComWrappers() {
   auto* queriedDevice = static_cast<IDirect3DDevice9*>(deviceUnknown);
   check(queriedDevice != nullptr, "device query result");
   checkEq(queriedDevice->Release(), 1u, "device qi release");
+  check(!device->QueryInterface(InterfaceId::Direct3DDevice9Ex, &deviceUnknown),
+        "base device must not expose ex");
   checkEq(device->Release(), 0u, "device release");
   checkEq(d3d->Release(), 0u, "factory release");
+}
+
+void testComWrappersEx() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  BackendLimits limits{};
+  limits.maxTextureSize = 8192;
+  limits.maxColorAttachments = 4;
+  limits.maxAnisotropy = 16;
+  limits.supportsBgr10A2 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "Direct3DCreate9Ex");
+  checkEq(d3d->AddRef(), 2u, "factory ex addref");
+  checkEq(d3d->Release(), 1u, "factory ex release after addref");
+
+  void* exUnknown = nullptr;
+  check(d3d->QueryInterface(InterfaceId::Direct3D9Ex, &exUnknown), "factory ex query interface");
+  auto* queriedFactory = static_cast<IDirect3D9Ex*>(exUnknown);
+  check(queriedFactory != nullptr, "factory ex query result");
+  checkEq(queriedFactory->Release(), 1u, "factory ex qi release");
+
+  checkEq(d3d->GetAdapterModeCountEx(0, nullptr), d3d->EnumAdapterModes(0, Format::A8R8G8B8).size(),
+          "ex adapter mode count");
+  DisplayModeFilter filter{};
+  filter.format = Format::A8R8G8B8;
+  DisplayModeEx mode{};
+  check(d3d->EnumAdapterModesEx(0, &filter, 0, &mode), "ex enum adapter modes");
+  checkEq(mode.scanLineOrdering, DisplayScanLineOrdering::Progressive, "ex scanline ordering");
+  DisplayModeEx currentMode{};
+  DisplayRotation rotation = DisplayRotation::Rotate90;
+  check(d3d->GetAdapterDisplayModeEx(0, &currentMode, &rotation), "ex adapter display mode");
+  checkEq(rotation, DisplayRotation::Identity, "ex rotation");
+  Luid luid0{};
+  Luid luid1{};
+  check(d3d->GetAdapterLUID(0, &luid0), "ex adapter luid");
+  check(d3d->GetAdapterLUID(0, &luid1), "ex adapter luid stable");
+  checkEq(luid0.lowPart, luid1.lowPart, "luid low stable");
+  checkEq(luid0.highPart, luid1.highPart, "luid high stable");
+  check(luid0.lowPart != 0 || luid0.highPart != 0, "luid non-zero");
+
+  PresentParameters params{};
+  params.windowed = false;
+  params.backBufferWidth = 0;
+  params.backBufferHeight = 0;
+  params.backBufferFormat = Format::Unknown;
+  params.presentationInterval = PresentInterval::Default;
+  params.deviceWindow = Handle{202};
+  DisplayModeEx fullscreenMode{};
+  fullscreenMode.width = 1024;
+  fullscreenMode.height = 768;
+  fullscreenMode.format = Format::A8R8G8B8;
+
+  auto* device = d3d->CreateDeviceEx(0, params, &fullscreenMode);
+  check(device != nullptr, "wrapper ex device create");
+  check(device->coreDevice().swapChain() != nullptr, "wrapper ex core device swap chain");
+  void* deviceUnknown = nullptr;
+  check(device->QueryInterface(InterfaceId::Direct3DDevice9Ex, &deviceUnknown), "device ex query interface");
+  auto* queriedDevice = static_cast<IDirect3DDevice9Ex*>(deviceUnknown);
+  check(queriedDevice != nullptr, "device ex query result");
+  checkEq(queriedDevice->Release(), 1u, "device ex qi release");
+  checkEq(device->GetMaximumFrameLatency(), 3u, "default max frame latency");
+  checkEq(device->SetMaximumFrameLatency(0), D3D_OK, "set frame latency clamp low");
+  checkEq(device->GetMaximumFrameLatency(), 1u, "clamped low frame latency");
+  checkEq(backend->maxFrameLatencyCalls.back(), 1u, "backend received low frame latency");
+  checkEq(device->SetMaximumFrameLatency(99), D3D_OK, "set frame latency clamp high");
+  checkEq(device->GetMaximumFrameLatency(), 3u, "clamped high frame latency");
+  checkEq(backend->maxFrameLatencyCalls.back(), 3u, "backend received high frame latency");
+
+  checkEq(device->CheckDeviceState(params.deviceWindow), D3D_OK, "initial device state");
+  backend->triggerPresentationOccluded(true);
+  checkEq(device->CheckDeviceState(params.deviceWindow), S_PRESENT_OCCLUDED, "occluded device state");
+  backend->triggerDeviceLost(true);
+  checkEq(device->CheckDeviceState(params.deviceWindow), D3DERR_DEVICELOST, "lost beats occluded");
+  checkEq(device->ResetEx(params, &fullscreenMode), D3D_OK, "device ex reset");
+  checkEq(device->CheckDeviceState(params.deviceWindow), D3D_OK, "device recovered after reset");
+  checkEq(device->coreDevice().presentParameters().backBufferWidth, 1024u, "reset ex width");
+  checkEq(device->coreDevice().presentParameters().backBufferHeight, 768u, "reset ex height");
+  const auto displayModeEx = device->GetDisplayModeEx();
+  checkEq(displayModeEx.width, 1024u, "device ex display mode width");
+  checkEq(displayModeEx.height, 768u, "device ex display mode height");
+  checkEq(displayModeEx.scanLineOrdering, DisplayScanLineOrdering::Progressive,
+          "device ex display mode scanline");
+
+  checkEq(device->WaitForVBlank(0), D3D_OK, "wait for vblank");
+  checkEq(backend->waitForVBlankCalls.size(), size_t{1}, "backend wait for vblank call");
+  checkEq(device->CheckResourceResidency(), S_OK, "check resource residency");
+  i32 priority = 123;
+  checkEq(device->GetGPUThreadPriority(&priority), D3D_OK, "get gpu priority");
+  checkEq(priority, 0, "gpu priority zero");
+  checkEq(device->SetGPUThreadPriority(7), D3D_OK, "set gpu priority");
+  checkEq(device->SetConvolutionMonoKernel(), E_NOTIMPL, "mono kernel not impl");
+  checkEq(device->ComposeRects(), E_NOTIMPL, "compose rects not impl");
+
+  Handle sharedHandle{123};
+  auto rt = device->CreateRenderTargetEx({128, 64, Format::A8R8G8B8, Pool::Default, UsageRenderTarget, true,
+                                          false, MultiSampleType::Four},
+                                         &sharedHandle);
+  check(rt != nullptr, "render target ex");
+  checkEq(sharedHandle.value, 0u, "render target shared handle cleared");
+  check(rt->desc().renderTarget, "render target flagged");
+
+  sharedHandle = Handle{123};
+  auto offscreen = device->CreateOffscreenPlainSurfaceEx({32, 32, Format::A8R8G8B8, Pool::SystemMem, 0, false,
+                                                          false, MultiSampleType::None},
+                                                         &sharedHandle);
+  check(offscreen != nullptr, "offscreen ex");
+  checkEq(sharedHandle.value, 0u, "offscreen shared handle cleared");
+
+  sharedHandle = Handle{123};
+  auto depth = device->CreateDepthStencilSurfaceEx({64, 64, Format::D24S8, Pool::Default, UsageDepthStencil, false,
+                                                    true, MultiSampleType::Two},
+                                                   &sharedHandle);
+  check(depth != nullptr, "depth ex");
+  checkEq(sharedHandle.value, 0u, "depth shared handle cleared");
+  check(depth->desc().depthStencil, "depth flagged");
+
+  checkEq(device->Release(), 0u, "device ex release");
+  checkEq(d3d->Release(), 0u, "factory ex release");
 }
 
 void testFullscreenAndDeviceLost() {
@@ -915,6 +1064,7 @@ int main() {
     testShaderThunk();
     testDeviceCoreFlow();
     testComWrappers();
+    testComWrappersEx();
     testFullscreenAndDeviceLost();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';

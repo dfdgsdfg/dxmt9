@@ -7,6 +7,10 @@
 namespace dxmt9::com {
 
 using core::HResult;
+using core::DisplayModeEx;
+using core::DisplayModeFilter;
+using core::DisplayRotation;
+using core::Luid;
 using core::u32;
 
 inline constexpr u32 D3D_SDK_VERSION = 32;
@@ -14,7 +18,9 @@ inline constexpr u32 D3D_SDK_VERSION = 32;
 enum class InterfaceId {
   IUnknown,
   Direct3D9,
+  Direct3D9Ex,
   Direct3DDevice9,
+  Direct3DDevice9Ex,
   Direct3DSwapChain9,
 };
 
@@ -28,6 +34,8 @@ class IUnknown {
 
 class IDirect3DDevice9;
 class IDirect3DSwapChain9;
+class IDirect3DDevice9Ex;
+class IDirect3D9Ex;
 
 class IDirect3D9 : public IUnknown {
  public:
@@ -46,6 +54,19 @@ class IDirect3D9 : public IUnknown {
                                                    core::MultiSampleType type) const = 0;
   virtual IDirect3DDevice9* CreateDevice(size_t adapterIndex, const core::PresentParameters& params,
                                          u32 behaviorFlags = 0) = 0;
+};
+
+class IDirect3D9Ex : public IDirect3D9 {
+ public:
+  virtual size_t GetAdapterModeCountEx(size_t adapterIndex, const DisplayModeFilter* filter = nullptr) const = 0;
+  virtual bool EnumAdapterModesEx(size_t adapterIndex, const DisplayModeFilter* filter, size_t modeIndex,
+                                  DisplayModeEx* mode) const = 0;
+  virtual bool GetAdapterDisplayModeEx(size_t adapterIndex, DisplayModeEx* mode,
+                                       DisplayRotation* rotation) const = 0;
+  virtual bool GetAdapterLUID(size_t adapterIndex, Luid* luid) const = 0;
+  virtual IDirect3DDevice9Ex* CreateDeviceEx(size_t adapterIndex, const core::PresentParameters& params,
+                                             const DisplayModeEx* fullscreenMode = nullptr,
+                                             u32 behaviorFlags = 0) = 0;
 };
 
 class IDirect3DSwapChain9 : public IUnknown {
@@ -131,6 +152,32 @@ class IDirect3DDevice9 : public IUnknown {
                                             const std::shared_ptr<core::Surface>& dst) = 0;
 };
 
-IDirect3D9* Direct3DCreate9(u32 sdkVersion);
+class IDirect3DDevice9Ex : public IDirect3DDevice9 {
+ public:
+  virtual core::HResult CheckDeviceState(core::Handle destinationWindow) const = 0;
+  virtual core::HResult ResetEx(const core::PresentParameters& params,
+                                const DisplayModeEx* fullscreenMode = nullptr) = 0;
+  virtual core::HResult PresentEx(const core::Rect* sourceRect = nullptr, const core::Rect* destRect = nullptr,
+                                  core::Handle destinationWindowOverride = {}, const void* dirtyRegion = nullptr,
+                                  u32 flags = 0) = 0;
+  virtual core::HResult SetMaximumFrameLatency(u32 latency) = 0;
+  virtual u32 GetMaximumFrameLatency() const = 0;
+  virtual core::HResult WaitForVBlank(size_t swapChainIndex = 0) = 0;
+  virtual core::HResult CheckResourceResidency(std::span<void* const> resources = {}) const = 0;
+  virtual DisplayModeEx GetDisplayModeEx(size_t swapChainIndex = 0) const = 0;
+  virtual core::HResult GetGPUThreadPriority(core::i32* priority) const = 0;
+  virtual core::HResult SetGPUThreadPriority(core::i32 priority) = 0;
+  virtual core::HResult SetConvolutionMonoKernel() = 0;
+  virtual core::HResult ComposeRects() = 0;
+  virtual std::shared_ptr<core::Surface> CreateRenderTargetEx(const core::SurfaceDesc& desc,
+                                                              core::Handle* sharedHandle = nullptr) = 0;
+  virtual std::shared_ptr<core::Surface> CreateOffscreenPlainSurfaceEx(const core::SurfaceDesc& desc,
+                                                                       core::Handle* sharedHandle = nullptr) = 0;
+  virtual std::shared_ptr<core::Surface> CreateDepthStencilSurfaceEx(const core::SurfaceDesc& desc,
+                                                                      core::Handle* sharedHandle = nullptr) = 0;
+};
+
+IDirect3D9* Direct3DCreate9(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend = {});
+IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend = {});
 
 }  // namespace dxmt9::com

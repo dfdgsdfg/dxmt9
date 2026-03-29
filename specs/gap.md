@@ -12,6 +12,9 @@ and the spec set.
 - The backend carries `RingSafety`, `EncodeSafety`, `WineCommit`, and
   `NoUseAfterFree` debug annotations.
 - The shader thunk path is wired through the opaque `winemetal` bridge.
+- `IDirect3D9Ex` and `IDirect3DDevice9Ex` are implemented, including adapter
+  Ex queries, `CheckDeviceState()`, `ResetEx()`, `PresentEx()`, latency control,
+  vblank wait, residency, GPU priority, and the Ex surface helpers.
 
 ## Verification
 
@@ -22,6 +25,5 @@ and the spec set.
 
 ## Next Priority
 
-| Priority | Work | Spec anchor |
-|---|---|---|
-| 1 | Keep TLC local-only for now; remote CI hookup is deferred | R-VERIF-6.1 |
+No core Ex gaps remain. Remaining work is backend-specific and tracked in
+`specs/backend`.

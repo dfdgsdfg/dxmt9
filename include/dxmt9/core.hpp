@@ -27,11 +27,13 @@ using HResult = HRESULT;
 constexpr HRESULT S_OK = 0;
 constexpr HRESULT S_FALSE = 1;
 constexpr HRESULT D3D_OK = 0;
+constexpr HRESULT E_NOTIMPL = static_cast<HRESULT>(0x80004001);
 constexpr HRESULT D3DERR_INVALIDCALL = static_cast<HRESULT>(0x8876086c);
 constexpr HRESULT D3DERR_NOTAVAILABLE = static_cast<HRESULT>(0x8876086a);
 constexpr HRESULT D3DERR_DEVICELOST = static_cast<HRESULT>(0x88760868);
 constexpr HRESULT D3DERR_DEVICENOTRESET = static_cast<HRESULT>(0x88760869);
 constexpr HRESULT D3DERR_NOTFOUND = static_cast<HRESULT>(0x88760866);
+constexpr HRESULT S_PRESENT_OCCLUDED = static_cast<HRESULT>(0x08760878);
 
 inline constexpr u32 kMaxAdapters = 4;
 inline constexpr u32 kMaxRenderTargets = 4;
@@ -673,6 +675,36 @@ struct DisplayMode {
   Format format = Format::A8R8G8B8;
 };
 
+enum class DisplayScanLineOrdering : u32 {
+  Unknown = 0,
+  Progressive = 1,
+  Interlaced = 2,
+};
+
+enum class DisplayRotation : u32 {
+  Identity = 1,
+  Rotate90 = 2,
+  Rotate180 = 3,
+  Rotate270 = 4,
+};
+
+struct DisplayModeEx {
+  u32 width = 0;
+  u32 height = 0;
+  u32 refreshRate = 60;
+  Format format = Format::A8R8G8B8;
+  DisplayScanLineOrdering scanLineOrdering = DisplayScanLineOrdering::Progressive;
+};
+
+struct DisplayModeFilter {
+  Format format = Format::Unknown;
+};
+
+struct Luid {
+  u32 lowPart = 0;
+  i32 highPart = 0;
+};
+
 struct AdapterInfo {
   u32 ordinal = 0;
   std::string name = "Adapter 0";
@@ -826,6 +858,7 @@ class SwapChain;
 class BackendDevice {
  public:
   using DeviceLostObserver = std::function<void(bool)>;
+  using PresentationStatusObserver = std::function<void(bool)>;
 
   virtual ~BackendDevice() = default;
 
@@ -852,6 +885,12 @@ class BackendDevice {
   virtual void submitColorFill(const ColorFillDesc& desc) { (void)desc; }
   virtual void present(const SwapDesc& desc) = 0;
   virtual void setDeviceLostObserver(DeviceLostObserver observer) { (void)observer; }
+  virtual void setPresentationStatusObserver(PresentationStatusObserver observer) { (void)observer; }
+  virtual void setMaxFrameLatency(u32 latency) { (void)latency; }
+  virtual HResult waitForVBlank(const SwapDesc& desc) {
+    (void)desc;
+    return D3D_OK;
+  }
   virtual void flush() {}
 };
 
@@ -1131,7 +1170,22 @@ class Device : public std::enable_shared_from_this<Device> {
   std::shared_ptr<SwapChain> swapChain(size_t index = 0) const;
   size_t swapChainCount() const noexcept { return swapChains_.size(); }
   HResult testCooperativeLevel() const;
+  HResult checkDeviceState() const;
+  HResult resetEx(const PresentParameters& params, const DisplayModeEx* fullscreenMode = nullptr);
+  HResult presentEx(const Rect* sourceRect = nullptr, const Rect* destRect = nullptr,
+                    Handle destinationWindowOverride = {}, const void* dirtyRegion = nullptr,
+                    u32 flags = 0);
+  HResult setMaximumFrameLatency(u32 latency);
+  u32 maximumFrameLatency() const noexcept { return maximumFrameLatency_; }
+  HResult waitForVBlank(size_t swapChainIndex = 0);
+  HResult checkResourceResidency(std::span<void* const> resources = {}) const;
+  DisplayModeEx getDisplayModeEx(size_t swapChainIndex = 0) const;
+  HResult getGPUThreadPriority(i32* priority) const;
+  HResult setGPUThreadPriority(i32 priority);
+  HResult setConvolutionMonoKernel();
+  HResult composeRects();
   void setDeviceLost(bool lost) noexcept { deviceLost_ = lost; }
+  void setPresentOccluded(bool occluded) noexcept { presentOccluded_ = occluded; }
 
   HResult setRenderState(u32 key, u32 value);
   HResult setRenderStateFloat(u32 key, f32 value);
@@ -1227,8 +1281,10 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 nextHandle_ = 1;
   u64 submittedSequenceId_ = 0;
   u64 completedSequenceId_ = 0;
+  u32 maximumFrameLatency_ = 3;
   bool inScene_ = false;
   bool deviceLost_ = false;
+  bool presentOccluded_ = false;
 };
 
 class Factory {

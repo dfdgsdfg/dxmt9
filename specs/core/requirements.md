@@ -30,8 +30,8 @@ and usage combinations the Metal backend can support. It must return
 
 ## 2. Device Lifecycle
 
-**R-CORE-2.1** The device must implement `IDirect3DDevice9`. `IDirect3DDevice9Ex` is
-in scope but may be deferred to a later phase.
+**R-CORE-2.1** The device must implement `IDirect3DDevice9`. `IDirect3DDevice9Ex`
+is also required; see section 10.
 
 **R-CORE-2.2** `TestCooperativeLevel()` must return `D3D_OK` while the device is
 operational. Device-lost state (`D3DERR_DEVICELOST`, `D3DERR_DEVICENOTRESET`) is only
@@ -206,3 +206,76 @@ return `D3DERR_INVALIDCALL`, not crash.
 
 **R-CORE-9.3** The device must never silently discard draw calls or state changes.
 Either the operation succeeds or it returns an error.
+
+---
+
+## 10. IDirect3DDevice9Ex
+
+The Ex interface is required for applications that probe `Direct3DCreate9Ex` or
+call `ResetEx` / `PresentEx`. It extends the base device and factory interfaces
+without changing existing semantics.
+
+**R-CORE-10.1** `Direct3DCreate9Ex(SDKVersion, ppD3D)` must return a valid
+`IDirect3D9Ex*` when `SDKVersion == D3D_SDK_VERSION`. `IDirect3D9Ex` inherits
+all `IDirect3D9` methods; the existing factory implementation must be reused.
+
+**R-CORE-10.2** `IDirect3D9Ex::GetAdapterModeCountEx(Adapter, pFilter)` must
+return the count of display modes matching `pFilter`. If `pFilter` is `NULL`
+or `Format == D3DFMT_UNKNOWN`, all modes must be returned. The underlying mode
+list is the same as `EnumAdapterModes()`.
+
+**R-CORE-10.3** `IDirect3D9Ex::EnumAdapterModesEx(Adapter, pFilter, Mode, pMode)`
+must fill a `D3DDISPLAYMODEEX` for the matching mode.
+`D3DDISPLAYMODEEX::ScanLineOrdering` must be `D3DSCANLINEORDERING_PROGRESSIVE`.
+
+**R-CORE-10.4** `IDirect3D9Ex::GetAdapterDisplayModeEx(Adapter, pMode, pRotation)`
+must return the current display mode as `D3DDISPLAYMODEEX`.
+`*pRotation` must be set to `D3DDISPLAYROTATION_IDENTITY`.
+
+**R-CORE-10.5** `IDirect3D9Ex::GetAdapterLUID(Adapter, pLUID)` must return a
+non-zero `LUID` that is stable for the adapter within the process lifetime.
+It may be synthesised from the Metal device registry ID.
+
+**R-CORE-10.6** `IDirect3D9Ex::CreateDeviceEx()` must create an
+`IDirect3DDevice9Ex`. The additional `D3DDISPLAYMODEEX*` parameter overrides
+the fullscreen display mode; if `NULL`, behaviour is identical to `CreateDevice()`.
+
+**R-CORE-10.7** `IDirect3DDevice9Ex` inherits all `IDirect3DDevice9` methods.
+The existing device implementation must be reused without modification.
+
+**R-CORE-10.8** `CheckDeviceState(hDestinationWindow)` must return `D3D_OK`
+while the device is operational, `S_PRESENT_OCCLUDED` when the window is
+minimised or occluded, and `D3DERR_DEVICELOST` when the device is lost. It
+replaces `TestCooperativeLevel()` for Ex applications.
+
+**R-CORE-10.9** `ResetEx(pPresentationParameters, pFullscreenDisplayMode)` must
+behave identically to `Reset()` for `D3DPOOL_DEFAULT` invalidation and swap-chain
+rebuild. When `pFullscreenDisplayMode` is non-`NULL` it must be forwarded through
+`normalizePresentParameters()`.
+
+**R-CORE-10.10** `PresentEx(pSourceRect, pDestRect, hDestWindowOverride,
+pDirtyRegion, dwFlags)` must present the swap chain. `pSourceRect`,
+`pDestRect`, `pDirtyRegion`, and `dwFlags` are hints and may be ignored; the
+full back buffer must always be presented.
+
+**R-CORE-10.11** `SetMaximumFrameLatency(MaxLatency)` must clamp the backend
+frame latency to `max(1, min(MaxLatency, 3))`.
+`GetMaximumFrameLatency()` must return the current value.
+
+**R-CORE-10.12** `WaitForVBlank(SwapChainIndex)` must return `D3D_OK`. A
+best-effort vblank wait is acceptable; a busy-sleep no-op is not.
+
+**R-CORE-10.13** `CheckResourceResidency(pResourceArray, NumResources)` must
+return `S_OK`. Metal manages residency transparently.
+
+**R-CORE-10.14** `GetGPUThreadPriority(pPriority)` must return `D3D_OK` with
+`*pPriority = 0`. `SetGPUThreadPriority(Priority)` must return `D3D_OK` and
+ignore `Priority`. Metal does not expose GPU thread priority.
+
+**R-CORE-10.15** `SetConvolutionMonoKernel()` and `ComposeRects()` must return
+`E_NOTIMPL`.
+
+**R-CORE-10.16** `CreateRenderTargetEx()`, `CreateOffscreenPlainSurfaceEx()`, and
+`CreateDepthStencilSurfaceEx()` must delegate to their non-Ex counterparts.
+The `pSharedHandle` output parameter must be set to `NULL` (shared surfaces are
+not supported).

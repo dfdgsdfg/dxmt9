@@ -269,6 +269,8 @@ metal_ndc.w = 1.0 / rhw
 
 ## 8. Alpha Test
 
+
+
 `D3DRS_ALPHATESTENABLE` with `D3DRS_ALPHAFUNC` / `D3DRS_ALPHAREF` has no Metal
 hardware equivalent. It is encoded into `FFPKeyPS` (or a programmable shader variant
 key) and emitted as a `discard_fragment()` conditional at the end of the pixel shader.
@@ -280,3 +282,70 @@ if (!(outColor.a < r)) discard_fragment();
 
 Each distinct (`alphaTestEnable`, `alphaTestFunc`) combination must produce a
 separately cached shader variant.
+
+---
+
+## 9. IDirect3DDevice9Ex Extension
+
+`IDirect3D9Ex` and `IDirect3DDevice9Ex` extend the base interfaces without
+replacing them. The implementation reuses the existing class hierarchy.
+
+```mermaid
+classDiagram
+    class IDirect3D9
+    class IDirect3D9Ex {
+        <<COM interface>>
+        +GetAdapterModeCountEx()
+        +EnumAdapterModesEx()
+        +GetAdapterDisplayModeEx()
+        +GetAdapterLUID()
+        +CreateDeviceEx()
+    }
+    class IDirect3DDevice9
+    class IDirect3DDevice9Ex {
+        <<COM interface>>
+        +CheckDeviceState()
+        +ResetEx()
+        +PresentEx()
+        +SetMaximumFrameLatency()
+        +GetMaximumFrameLatency()
+        +WaitForVBlank()
+        +CheckResourceResidency()
+        +CreateRenderTargetEx()
+        +CreateOffscreenPlainSurfaceEx()
+        +CreateDepthStencilSurfaceEx()
+        +GetGPUThreadPriority()
+        +SetGPUThreadPriority()
+        +SetConvolutionMonoKernel()
+        +ComposeRects()
+        +GetDisplayModeEx()
+    }
+    IDirect3D9 <|-- IDirect3D9Ex
+    IDirect3DDevice9 <|-- IDirect3DDevice9Ex
+```
+
+**Class layout:** `Direct3D9ExImpl` inherits `IDirect3D9Ex` (which inherits
+`IDirect3D9`) and delegates all base methods to the existing `Factory`
+implementation. `Direct3DDevice9ExImpl` inherits `IDirect3DDevice9Ex` and
+delegates all base methods to the existing `Direct3DDevice9Impl`. No existing
+code changes.
+
+**Ex-only method mappings:**
+
+| Ex method | Implementation |
+|---|---|
+| `CheckDeviceState()` | `deviceLost_` flag; adds `S_PRESENT_OCCLUDED` for minimised window |
+| `ResetEx()` | `reset()` + `normalizePresentParameters()` with `D3DDISPLAYMODEEX` |
+| `PresentEx()` | `present()` — dirty-rect and rotation hints ignored |
+| `SetMaximumFrameLatency()` | `backend_->setMaxFrameLatency(n)` (new backend method) |
+| `GetMaximumFrameLatency()` | Returns `maxFrameLatency_` |
+| `WaitForVBlank()` | `CAMetalLayer` drawable wait or `CVDisplayLink` callback |
+| `CheckResourceResidency()` | Always `S_OK` — Metal manages residency |
+| `GetAdapterLUID()` | Synthesised from `MTLDevice.registryID` |
+| `GetGPUThreadPriority()` | Always returns 0 |
+| `SetGPUThreadPriority()` | No-op, returns `D3D_OK` |
+| `SetConvolutionMonoKernel()` | `E_NOTIMPL` |
+| `ComposeRects()` | `E_NOTIMPL` |
+| `CreateRenderTargetEx()` | Delegates to `CreateRenderTarget()`; `*pSharedHandle = NULL` |
+| `CreateOffscreenPlainSurfaceEx()` | Delegates to `CreateOffscreenPlainSurface()`; `*pSharedHandle = NULL` |
+| `CreateDepthStencilSurfaceEx()` | Delegates to `CreateDepthStencilSurface()`; `*pSharedHandle = NULL` |

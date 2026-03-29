@@ -1215,6 +1215,19 @@ PresentParameters normalizePresentParameters(const AdapterInfo& adapter, Present
   return params;
 }
 
+SwapDesc makeSwapDesc(const PresentParameters& params) {
+  SwapDesc desc;
+  desc.window = params.deviceWindow;
+  desc.width = params.backBufferWidth;
+  desc.height = params.backBufferHeight;
+  desc.format = params.backBufferFormat;
+  desc.interval = params.presentationInterval;
+  desc.windowed = params.windowed;
+  desc.displaySyncEnabled = params.presentationInterval != PresentInterval::Immediate;
+  desc.multiSampleType = params.multiSampleType;
+  return desc;
+}
+
 u64 hashBytes(std::span<const std::byte> bytes) {
   u64 hash = kFnvOffset;
   for (const auto byte : bytes) {
@@ -1830,6 +1843,10 @@ Device::Device(AdapterInfo adapter, BackendLimits limits, std::shared_ptr<Backen
   const u32 height = std::max(1u, presentParameters_.backBufferHeight);
   state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
   deviceLost_ = false;
+  maximumFrameLatency_ = 3;
+  if (backend_) {
+    backend_->setMaxFrameLatency(maximumFrameLatency_);
+  }
 }
 
 Device::~Device() {
@@ -1845,6 +1862,16 @@ Device::~Device() {
 
 HResult Device::testCooperativeLevel() const {
   return deviceLost_ ? D3DERR_DEVICELOST : D3D_OK;
+}
+
+HResult Device::checkDeviceState() const {
+  if (deviceLost_) {
+    return D3DERR_DEVICELOST;
+  }
+  if (presentOccluded_) {
+    return S_PRESENT_OCCLUDED;
+  }
+  return D3D_OK;
 }
 
 std::shared_ptr<Buffer> Device::createBuffer(const BufferDesc& desc) {
@@ -2359,6 +2386,16 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
 }
 
 HResult Device::present() {
+  return presentEx();
+}
+
+HResult Device::presentEx(const Rect* sourceRect, const Rect* destRect, Handle destinationWindowOverride,
+                          const void* dirtyRegion, u32 flags) {
+  (void)sourceRect;
+  (void)destRect;
+  (void)destinationWindowOverride;
+  (void)dirtyRegion;
+  (void)flags;
   if (deviceLost_) {
     return D3DERR_DEVICELOST;
   }
@@ -2374,8 +2411,26 @@ HResult Device::present() {
 }
 
 HResult Device::reset(const PresentParameters& params) {
-  presentParameters_ = normalizePresentParameters(adapter_, params);
+  return resetEx(params, nullptr);
+}
+
+HResult Device::resetEx(const PresentParameters& params, const DisplayModeEx* fullscreenMode) {
+  auto adjusted = params;
+  if (fullscreenMode) {
+    adjusted.windowed = false;
+    if (fullscreenMode->width != 0) {
+      adjusted.backBufferWidth = fullscreenMode->width;
+    }
+    if (fullscreenMode->height != 0) {
+      adjusted.backBufferHeight = fullscreenMode->height;
+    }
+    if (fullscreenMode->format != Format::Unknown) {
+      adjusted.backBufferFormat = fullscreenMode->format;
+    }
+  }
+  presentParameters_ = normalizePresentParameters(adapter_, adjusted);
   deviceLost_ = false;
+  presentOccluded_ = false;
   if (backend_) {
     backend_->flush();
   }
@@ -2406,7 +2461,66 @@ HResult Device::reset(const PresentParameters& params) {
   }
   submittedSequenceId_ = 0;
   completedSequenceId_ = 0;
+  if (backend_) {
+    backend_->setMaxFrameLatency(maximumFrameLatency_);
+  }
   return D3D_OK;
+}
+
+HResult Device::setMaximumFrameLatency(u32 latency) {
+  maximumFrameLatency_ = std::clamp(latency, 1u, 3u);
+  if (backend_) {
+    backend_->setMaxFrameLatency(maximumFrameLatency_);
+  }
+  return D3D_OK;
+}
+
+HResult Device::waitForVBlank(size_t swapChainIndex) {
+  auto chain = swapChain(swapChainIndex);
+  if (!chain) {
+    return D3DERR_INVALIDCALL;
+  }
+  if (backend_) {
+    return backend_->waitForVBlank(makeSwapDesc(chain->params()));
+  }
+  return D3D_OK;
+}
+
+HResult Device::checkResourceResidency(std::span<void* const> resources) const {
+  (void)resources;
+  return S_OK;
+}
+
+DisplayModeEx Device::getDisplayModeEx(size_t swapChainIndex) const {
+  DisplayModeEx mode;
+  const auto chain = swapChain(swapChainIndex);
+  const auto& params = chain ? chain->params() : presentParameters_;
+  mode.width = std::max(1u, params.backBufferWidth);
+  mode.height = std::max(1u, params.backBufferHeight);
+  mode.refreshRate = 60;
+  mode.format = params.backBufferFormat;
+  mode.scanLineOrdering = DisplayScanLineOrdering::Progressive;
+  return mode;
+}
+
+HResult Device::getGPUThreadPriority(i32* priority) const {
+  if (priority) {
+    *priority = 0;
+  }
+  return D3D_OK;
+}
+
+HResult Device::setGPUThreadPriority(i32 priority) {
+  (void)priority;
+  return D3D_OK;
+}
+
+HResult Device::setConvolutionMonoKernel() {
+  return E_NOTIMPL;
+}
+
+HResult Device::composeRects() {
+  return E_NOTIMPL;
 }
 
 HResult Device::checkDeviceMultiSampleType(Format format, MultiSampleType type) const {
@@ -2950,6 +3064,12 @@ std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const Present
         locked->setDeviceLost(lost);
       }
     });
+    backend->setPresentationStatusObserver([weak](bool occluded) {
+      if (auto locked = weak.lock()) {
+        locked->setPresentOccluded(occluded);
+      }
+    });
+    backend->setMaxFrameLatency(device->maximumFrameLatency());
   }
   return device;
 }

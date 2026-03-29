@@ -34,6 +34,32 @@ core::SwapDesc makeSwapDesc(const core::PresentParameters& params) {
   return desc;
 }
 
+core::PresentParameters applyFullscreenMode(core::PresentParameters params, const core::DisplayModeEx* fullscreenMode) {
+  if (!fullscreenMode) {
+    return params;
+  }
+  params.windowed = false;
+  if (fullscreenMode->width != 0) {
+    params.backBufferWidth = fullscreenMode->width;
+  }
+  if (fullscreenMode->height != 0) {
+    params.backBufferHeight = fullscreenMode->height;
+  }
+  if (fullscreenMode->format != core::Format::Unknown) {
+    params.backBufferFormat = fullscreenMode->format;
+  }
+  return params;
+}
+
+core::DisplayModeEx makeDisplayModeEx(const core::DisplayMode& mode) {
+  return {mode.width, mode.height, mode.refreshRate, mode.format, core::DisplayScanLineOrdering::Progressive};
+}
+
+core::Luid makeLuid(const core::AdapterInfo& adapter) {
+  const core::u64 raw = adapter.registryId != 0 ? adapter.registryId : static_cast<core::u64>(adapter.ordinal + 1);
+  return {static_cast<core::u32>(raw & 0xffffffffu), static_cast<core::i32>(raw >> 32)};
+}
+
 class Direct3DSwapChain9Impl final : public IDirect3DSwapChain9, public RefCounted<Direct3DSwapChain9Impl> {
  public:
   Direct3DSwapChain9Impl(std::shared_ptr<core::Device> device, std::shared_ptr<core::SwapChain> swapChain)
@@ -77,9 +103,10 @@ class Direct3DSwapChain9Impl final : public IDirect3DSwapChain9, public RefCount
   std::shared_ptr<core::SwapChain> swapChain_;
 };
 
-class Direct3DDevice9Impl final : public IDirect3DDevice9, public RefCounted<Direct3DDevice9Impl> {
+class Direct3DDevice9Impl final : public IDirect3DDevice9Ex, public RefCounted<Direct3DDevice9Impl> {
  public:
-  explicit Direct3DDevice9Impl(std::shared_ptr<core::Device> device) : device_(std::move(device)) {}
+  explicit Direct3DDevice9Impl(std::shared_ptr<core::Device> device, bool exSupported = false)
+      : device_(std::move(device)), exSupported_(exSupported) {}
 
   u32 AddRef() override { return this->addRef(); }
 
@@ -95,6 +122,13 @@ class Direct3DDevice9Impl final : public IDirect3DDevice9, public RefCounted<Dir
         *object = static_cast<IDirect3DDevice9*>(this);
         AddRef();
         return true;
+      case InterfaceId::Direct3DDevice9Ex:
+        if (exSupported_) {
+          *object = static_cast<IDirect3DDevice9Ex*>(this);
+          AddRef();
+          return true;
+        }
+        [[fallthrough]];
       default:
         *object = nullptr;
         return false;
@@ -246,14 +280,95 @@ class Direct3DDevice9Impl final : public IDirect3DDevice9, public RefCounted<Dir
     return device_->getRenderTargetData(src, dst);
   }
 
+  core::HResult CheckDeviceState(core::Handle destinationWindow) const override {
+    (void)destinationWindow;
+    return device_->checkDeviceState();
+  }
+
+  core::HResult ResetEx(const core::PresentParameters& params,
+                        const DisplayModeEx* fullscreenMode = nullptr) override {
+    return device_->resetEx(params, fullscreenMode);
+  }
+
+  core::HResult PresentEx(const core::Rect* sourceRect = nullptr, const core::Rect* destRect = nullptr,
+                          core::Handle destinationWindowOverride = {}, const void* dirtyRegion = nullptr,
+                          u32 flags = 0) override {
+    return device_->presentEx(sourceRect, destRect, destinationWindowOverride, dirtyRegion, flags);
+  }
+
+  core::HResult SetMaximumFrameLatency(u32 latency) override { return device_->setMaximumFrameLatency(latency); }
+
+  u32 GetMaximumFrameLatency() const override { return device_->maximumFrameLatency(); }
+
+  core::HResult WaitForVBlank(size_t swapChainIndex = 0) override {
+    return device_->waitForVBlank(swapChainIndex);
+  }
+
+  core::HResult CheckResourceResidency(std::span<void* const> resources = {}) const override {
+    return device_->checkResourceResidency(resources);
+  }
+
+  DisplayModeEx GetDisplayModeEx(size_t swapChainIndex = 0) const override {
+    return device_->getDisplayModeEx(swapChainIndex);
+  }
+
+  core::HResult GetGPUThreadPriority(core::i32* priority) const override {
+    return device_->getGPUThreadPriority(priority);
+  }
+
+  core::HResult SetGPUThreadPriority(core::i32 priority) override {
+    return device_->setGPUThreadPriority(priority);
+  }
+
+  core::HResult SetConvolutionMonoKernel() override { return device_->setConvolutionMonoKernel(); }
+
+  core::HResult ComposeRects() override { return device_->composeRects(); }
+
+  std::shared_ptr<core::Surface> CreateRenderTargetEx(const core::SurfaceDesc& desc,
+                                                      core::Handle* sharedHandle = nullptr) override {
+    if (sharedHandle) {
+      *sharedHandle = {};
+    }
+    auto rtDesc = desc;
+    rtDesc.renderTarget = true;
+    rtDesc.depthStencil = false;
+    rtDesc.usage |= core::UsageRenderTarget;
+    return device_->createSurface(rtDesc);
+  }
+
+  std::shared_ptr<core::Surface> CreateOffscreenPlainSurfaceEx(const core::SurfaceDesc& desc,
+                                                               core::Handle* sharedHandle = nullptr) override {
+    if (sharedHandle) {
+      *sharedHandle = {};
+    }
+    auto surfaceDesc = desc;
+    surfaceDesc.renderTarget = false;
+    surfaceDesc.depthStencil = false;
+    return device_->createSurface(surfaceDesc);
+  }
+
+  std::shared_ptr<core::Surface> CreateDepthStencilSurfaceEx(const core::SurfaceDesc& desc,
+                                                             core::Handle* sharedHandle = nullptr) override {
+    if (sharedHandle) {
+      *sharedHandle = {};
+    }
+    auto dsDesc = desc;
+    dsDesc.renderTarget = false;
+    dsDesc.depthStencil = true;
+    dsDesc.usage |= core::UsageDepthStencil;
+    return device_->createSurface(dsDesc);
+  }
+
  private:
   std::shared_ptr<core::Device> device_;
+  bool exSupported_ = false;
 };
 
-class Direct3D9Impl final : public IDirect3D9, public RefCounted<Direct3D9Impl> {
+class Direct3D9Impl final : public IDirect3D9Ex, public RefCounted<Direct3D9Impl> {
  public:
-  explicit Direct3D9Impl(core::BackendLimits limits = {}, std::shared_ptr<core::BackendDevice> backend = {})
-      : factory_(limits, std::move(backend)) {}
+  explicit Direct3D9Impl(core::BackendLimits limits = {}, std::shared_ptr<core::BackendDevice> backend = {},
+                         bool exSupported = false)
+      : factory_(limits, std::move(backend)), exSupported_(exSupported) {}
 
   u32 AddRef() override { return this->addRef(); }
 
@@ -269,6 +384,13 @@ class Direct3D9Impl final : public IDirect3D9, public RefCounted<Direct3D9Impl> 
         *object = static_cast<IDirect3D9*>(this);
         AddRef();
         return true;
+      case InterfaceId::Direct3D9Ex:
+        if (exSupported_) {
+          *object = static_cast<IDirect3D9Ex*>(this);
+          AddRef();
+          return true;
+        }
+        [[fallthrough]];
       default:
         *object = nullptr;
         return false;
@@ -301,24 +423,91 @@ class Direct3D9Impl final : public IDirect3D9, public RefCounted<Direct3D9Impl> 
 
   IDirect3DDevice9* CreateDevice(size_t adapterIndex, const core::PresentParameters& params,
                                  u32 behaviorFlags = 0) override {
-    auto device = factory_.createDevice(adapterIndex, params, behaviorFlags);
+    return CreateDeviceEx(adapterIndex, params, nullptr, behaviorFlags);
+  }
+
+  size_t GetAdapterModeCountEx(size_t adapterIndex, const DisplayModeFilter* filter = nullptr) const override {
+    if (adapterIndex >= factory_.adapterCount()) {
+      return 0;
+    }
+    const auto format = filter && filter->format != core::Format::Unknown ? filter->format
+                                                                           : factory_.getAdapterDisplayMode(adapterIndex).format;
+    return factory_.enumAdapterModes(adapterIndex, format).size();
+  }
+
+  bool EnumAdapterModesEx(size_t adapterIndex, const DisplayModeFilter* filter, size_t modeIndex,
+                          DisplayModeEx* mode) const override {
+    if (!mode) {
+      return false;
+    }
+    if (adapterIndex >= factory_.adapterCount()) {
+      return false;
+    }
+    const auto format = filter && filter->format != core::Format::Unknown ? filter->format
+                                                                           : factory_.getAdapterDisplayMode(adapterIndex).format;
+    const auto modes = factory_.enumAdapterModes(adapterIndex, format);
+    if (modeIndex >= modes.size()) {
+      return false;
+    }
+    *mode = makeDisplayModeEx(modes[modeIndex]);
+    return true;
+  }
+
+  bool GetAdapterDisplayModeEx(size_t adapterIndex, DisplayModeEx* mode, DisplayRotation* rotation) const override {
+    if (!mode) {
+      return false;
+    }
+    if (adapterIndex >= factory_.adapterCount()) {
+      return false;
+    }
+    *mode = makeDisplayModeEx(factory_.getAdapterDisplayMode(adapterIndex));
+    if (rotation) {
+      *rotation = DisplayRotation::Identity;
+    }
+    return true;
+  }
+
+  bool GetAdapterLUID(size_t adapterIndex, Luid* luid) const override {
+    if (!luid) {
+      return false;
+    }
+    if (adapterIndex >= factory_.adapterCount()) {
+      return false;
+    }
+    *luid = makeLuid(factory_.adapter(adapterIndex));
+    return true;
+  }
+
+  IDirect3DDevice9Ex* CreateDeviceEx(size_t adapterIndex, const core::PresentParameters& params,
+                                     const DisplayModeEx* fullscreenMode = nullptr,
+                                     u32 behaviorFlags = 0) override {
+    auto adjusted = applyFullscreenMode(params, fullscreenMode);
+    auto device = factory_.createDevice(adapterIndex, adjusted, behaviorFlags);
     if (!device) {
       return nullptr;
     }
-    return new Direct3DDevice9Impl(std::move(device));
+    return new Direct3DDevice9Impl(std::move(device), exSupported_);
   }
 
  private:
   core::Factory factory_;
+  bool exSupported_ = false;
 };
 
 }  // namespace
 
-IDirect3D9* Direct3DCreate9(u32 sdkVersion) {
+IDirect3D9* Direct3DCreate9(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend) {
   if (sdkVersion != D3D_SDK_VERSION) {
     return nullptr;
   }
-  return new Direct3D9Impl();
+  return new Direct3D9Impl({}, std::move(backend), false);
+}
+
+IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend) {
+  if (sdkVersion != D3D_SDK_VERSION) {
+    return nullptr;
+  }
+  return new Direct3D9Impl({}, std::move(backend), true);
 }
 
 }  // namespace dxmt9::com

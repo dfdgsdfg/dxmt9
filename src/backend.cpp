@@ -1,6 +1,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
 
+#include <algorithm>
 #include <deque>
 #include <unordered_map>
 
@@ -50,6 +51,20 @@ class SimBackendDevice final : public BackendDevice {
  public:
   void setDeviceLostObserver(DeviceLostObserver observer) override {
     deviceLostObserver_ = std::move(observer);
+  }
+
+  void setPresentationStatusObserver(PresentationStatusObserver observer) override {
+    presentationStatusObserver_ = std::move(observer);
+  }
+
+  void setMaxFrameLatency(u32 latency) override {
+    maxFrameLatency_ = std::clamp(latency, 1u, 3u);
+  }
+
+  HResult waitForVBlank(const SwapDesc& desc) override {
+    (void)desc;
+    flush();
+    return D3D_OK;
   }
 
   BufferHandle createBuffer(const BufferDesc& desc) override {
@@ -154,6 +169,9 @@ class SimBackendDevice final : public BackendDevice {
     record.kind = CommandKind::Present;
     record.present = desc;
     pending_.push_back(std::move(record));
+    if (presentationStatusObserver_) {
+      presentationStatusObserver_(false);
+    }
     commitPendingFrame();
   }
 
@@ -182,6 +200,7 @@ class SimBackendDevice final : public BackendDevice {
   std::unordered_map<u64, TextureRecord> textures_;
   std::unordered_map<u64, SurfaceRecord> surfaces_;
   DeviceLostObserver deviceLostObserver_;
+  PresentationStatusObserver presentationStatusObserver_;
   std::vector<CommandRecord> pending_;
   std::deque<std::vector<CommandRecord>> committedFrames_;
 };

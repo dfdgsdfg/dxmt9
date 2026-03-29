@@ -2673,6 +2673,22 @@ class MetalBackendDevice final : public BackendDevice {
     deviceLostObserver_ = std::move(observer);
   }
 
+  void setPresentationStatusObserver(PresentationStatusObserver observer) override {
+    std::lock_guard lock(mutex_);
+    presentationStatusObserver_ = std::move(observer);
+  }
+
+  void setMaxFrameLatency(u32 latency) override {
+    std::lock_guard lock(mutex_);
+    maxFrameLatency_ = std::clamp(latency, 1u, 3u);
+  }
+
+  HResult waitForVBlank(const SwapDesc& desc) override {
+    (void)desc;
+    flush();
+    return D3D_OK;
+  }
+
   bool ready() const noexcept { return ready_; }
 
   BufferHandle createBuffer(const BufferDesc& desc) override {
@@ -3595,12 +3611,18 @@ class MetalBackendDevice final : public BackendDevice {
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     layer.drawableSize = CGSizeMake(std::max(1u, present.width), std::max(1u, present.height));
     layer.displaySyncEnabled = present.displaySyncEnabled;
-    layer.maximumDrawableCount = 3;
+    layer.maximumDrawableCount = std::clamp(maxFrameLatency_, 1u, 3u);
     layer.framebufferOnly = YES;
 
     id<CAMetalDrawable> drawable = [layer nextDrawable];
     if (!drawable) {
+      if (presentationStatusObserver_) {
+        presentationStatusObserver_(true);
+      }
       return;
+    }
+    if (presentationStatusObserver_) {
+      presentationStatusObserver_(false);
     }
 
     auto blit = [commandBuffer blitCommandEncoder];
@@ -3974,6 +3996,8 @@ class MetalBackendDevice final : public BackendDevice {
   Handle currentBackBuffer_{};
   bool backBufferDiscardAfterPresent_ = false;
   DeviceLostObserver deviceLostObserver_;
+  PresentationStatusObserver presentationStatusObserver_;
+  u32 maxFrameLatency_ = 3;
   std::unordered_map<u64, BufferRecord> buffers_;
   std::unordered_map<u64, TextureRecord> textures_;
   std::unordered_map<u64, SurfaceRecord> surfaces_;
