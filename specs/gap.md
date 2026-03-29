@@ -130,7 +130,7 @@ No experiments exist yet. All R-WILD-1.x through R-WILD-5.x are not started.
 
 | Area | Status | Spec |
 |---|---|---|
-| Application catalogue + `CATALOGUE.toml` | ❌ | R-WILD-3.1, R-WILD-5.1 |
+| Application catalogue + `CATALOGUE.toml` (BasicHLSL, Tutorial07, HDRFormats, DXUT, Irrlicht) | ❌ | R-WILD-3.1, R-WILD-5.1 |
 | Launcher injection harness | ❌ | R-WILD-1.2 |
 | Reference screenshots | ❌ | R-WILD-4.1 |
 | SSIM comparison script | ❌ | R-WILD-2.3 |

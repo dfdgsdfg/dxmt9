@@ -53,12 +53,13 @@ exercises. The catalogue grows as compatibility improves.
 **R-WILD-3.1** The initial catalogue must include at least one application per
 major feature group:
 
-| Application | License | Key features exercised |
-|---|---|---|
-| Microsoft DirectX SDK `BasicHLSL` sample | MS DirectX SDK (free) | vs_2_0/ps_2_0, constant buffers, diffuse lighting |
-| Microsoft DirectX SDK `Tutorial07` | MS DirectX SDK (free) | Texture mapping, vs_2_0/ps_2_0 |
-| Quake III Arena (ioquake3 + pak0.pk3) | GPL / commercial data | SM1.x shaders, dynamic lighting, BSP |
-| Neverball (open source) | GPL | Fixed-function + SM2, shadow maps |
+| Application | Source | License | Key features exercised |
+|---|---|---|---|
+| Microsoft DirectX SDK `BasicHLSL` | https://github.com/walbourn/directx-sdk-samples | MS DirectX SDK (redistributable) | vs_2_0/ps_2_0, constant buffers, diffuse lighting |
+| Microsoft DirectX SDK `Tutorial07` | https://github.com/walbourn/directx-sdk-samples | MS DirectX SDK (redistributable) | Texture mapping, vs_2_0/ps_2_0 |
+| Microsoft DirectX SDK `HDRFormats` | https://github.com/walbourn/directx-sdk-samples | MS DirectX SDK (redistributable) | FP16/FP32 render targets, HDR tone-mapping, ps_3_0 |
+| DXUT `SimpleSample` / `BasicHLSL11` | https://github.com/walbourn/DXUT | MIT | Skinned meshes, state management, more complex draw loop |
+| Irrlicht engine demo (`20.ManagedLights`) | https://github.com/zaki/irrlicht | zlib | D3D9 backend, FFP lighting with 8 dynamic lights, scene graph |
 
 **R-WILD-3.2** When a new opcode group or backend feature is implemented, at
 least one catalogue entry must be identified that exercises it in a real
@@ -89,11 +90,53 @@ are forbidden.
 ```toml
 [[app]]
 name        = "dx-sdk-basicherl"
-binary      = "experiments/apps/BasicHLSL.exe"
+source      = "https://github.com/walbourn/directx-sdk-samples"
+license     = "ms-directx-sdk"
+binary      = "experiments/apps/BasicHLSL/BasicHLSL.exe"
 launcher    = "experiments/launchers/basicherl.sh"
 reference   = "experiments/references/basicherl.png"
 features    = ["vs_2_0", "ps_2_0", "lighting", "texturing"]
-status      = "passing"   # passing | failing | untested
+status      = "untested"   # passing | failing | untested
+
+[[app]]
+name        = "dx-sdk-tutorial07"
+source      = "https://github.com/walbourn/directx-sdk-samples"
+license     = "ms-directx-sdk"
+binary      = "experiments/apps/Tutorial07/Tutorial07.exe"
+launcher    = "experiments/launchers/tutorial07.sh"
+reference   = "experiments/references/tutorial07.png"
+features    = ["vs_2_0", "ps_2_0", "texturing"]
+status      = "untested"
+
+[[app]]
+name        = "dx-sdk-hdrformats"
+source      = "https://github.com/walbourn/directx-sdk-samples"
+license     = "ms-directx-sdk"
+binary      = "experiments/apps/HDRFormats/HDRFormats.exe"
+launcher    = "experiments/launchers/hdrformats.sh"
+reference   = "experiments/references/hdrformats.png"
+features    = ["ps_3_0", "fp16_rt", "fp32_rt", "hdr_tonemap"]
+status      = "untested"
+
+[[app]]
+name        = "dxut-simplesample"
+source      = "https://github.com/walbourn/DXUT"
+license     = "mit"
+binary      = "experiments/apps/DXUTSimpleSample/SimpleSample.exe"
+launcher    = "experiments/launchers/dxut_simplesample.sh"
+reference   = "experiments/references/dxut_simplesample.png"
+features    = ["vs_2_0", "ps_2_0", "skinned_mesh", "state_management"]
+status      = "untested"
+
+[[app]]
+name        = "irrlicht-managed-lights"
+source      = "https://github.com/zaki/irrlicht"
+license     = "zlib"
+binary      = "experiments/apps/irrlicht/20.ManagedLights"
+launcher    = "experiments/launchers/irrlicht_managed_lights.sh"
+reference   = "experiments/references/irrlicht_managed_lights.png"
+features    = ["ffp", "dynamic_lighting", "scene_graph", "d3d9_backend"]
+status      = "untested"
 ```
 
 **R-WILD-5.2** The `status` field reflects the last known run result. A
