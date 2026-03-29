@@ -151,3 +151,67 @@ The following events must trigger device-lost behavior:
 
 In windowed mode, window resize does **not** cause device lost. The swap chain
 silently resizes.
+
+---
+
+## 8. Wine Integration and Initialization Protocol
+
+`libdxmt9.dylib` is a native macOS shared library. The actual `d3d9.dll` loaded by
+Wine is a thin PE wrapper (built with mingw-w64 or Wine's PE toolchain, in a
+separate Wine fork repository) that links to `libdxmt9.dylib` via Wine's unix-call
+mechanism. On Apple Silicon, Wine's PE and unix address spaces are unified, so the
+dylib's symbols are directly callable from PE code.
+
+### 8.1 Initialization Sequence
+
+The PE wrapper must perform the following steps in `DllMain(DLL_PROCESS_ATTACH)`:
+
+1. **Populate a `WinemetalApi` table** with Wine's own implementations of each
+   bridge function (HWND→view lookup, `CAMetalLayer` lifecycle, drawable
+   management, shader compilation thunk).
+
+2. **Register the table** by calling:
+   ```c
+   dxmt9_winemetal_set_api(&wine_winemetal_api);
+   ```
+   This one call wires all 11 bridge functions into `libdxmt9.dylib` for the
+   lifetime of the process.
+
+3. **Export the Win32 entry points** with the standard signatures:
+   ```c
+   IDirect3D9* WINAPI Direct3DCreate9(UINT sdkVersion);
+   HRESULT     WINAPI Direct3DCreate9Ex(UINT sdkVersion, IDirect3D9Ex** ppD3D);
+   ```
+   Each calls `dxmt9::com::Direct3DCreate9` / `Direct3DCreate9Ex` with a
+   freshly constructed `MetalBackendDevice`.
+
+### 8.2 ABI Contract
+
+The `WinemetalApi` struct in `include/dxmt9/winemetal.h` is the complete ABI
+contract between the PE wrapper and `libdxmt9.dylib`. All 11 function pointers
+must be non-null when `dxmt9_winemetal_set_api` is called. The PE wrapper owns
+the lifetime of any objects returned as opaque `dxmt9_u64` handles.
+
+| Handle type | Owned by | Released by |
+|---|---|---|
+| `view_handle` | Wine window system | never (Wine owns NSView lifetime) |
+| `layer_handle` | PE wrapper / swap chain | `winemetal_destroy_metal_layer` |
+| `drawable_handle` | `CAMetalLayer` | `winemetal_present_drawable` (consumes it) |
+| `shader_handle` | dxmt9 backend | `winemetal_destroy_shader` |
+
+### 8.3 Installation
+
+```sh
+# Wine DLL directory (per-prefix):
+cp build/src/libdxmt9.dylib ~/.wine/drive_c/windows/system32/
+cp wine-fork/build/d3d9.dll  ~/.wine/drive_c/windows/system32/
+
+# Override so Wine loads the native build, not its built-in d3d9:
+WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
+# or permanently via winetricks / Wine registry:
+# HKCU\Software\Wine\DllOverrides  d3d9 = "native,builtin"
+```
+
+The PE `d3d9.dll` build lives in the Wine fork repository, not here. This
+repository's responsibility ends at `libdxmt9.dylib` and the `WinemetalApi`
+ABI boundary.
