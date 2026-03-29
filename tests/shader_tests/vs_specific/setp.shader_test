@@ -1,0 +1,12 @@
+; [provenance]
+; source: dxmt9
+; oracle: source-inspection
+; oracle-date: 2026-03-29
+
+[vertex shader d3dbc-hex]
+fffe0300 05000042 a00f0000 3f800000 40000000 40400000 40800000
+0200004f b00f1000 a0e40000 0000ffff
+
+[test]
+expect-source vertex contains "p[0] ="
+expect-source vertex contains "!= 0.0f"

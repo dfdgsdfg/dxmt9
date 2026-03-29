@@ -1,0 +1,12 @@
+; [provenance]
+; source: dxmt9
+; oracle: source-inspection
+; oracle-date: 2026-03-29
+
+[pixel shader d3dbc-hex]
+ffff0200 05000042 a00f0000 3f800000 40000000 40400000 40800000
+05000042 a00f0001 40000000 40000000 40000000 40000000 03000020
+800f0000 a0e40000 a0e40001 02000001 800f0800 80e40000 0000ffff
+
+[test]
+expect-source pixel contains "pow(cFloat[0], cFloat[1])"

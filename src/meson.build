@@ -2,6 +2,7 @@ dxmt9_srcs = [
   'backend.cpp',
   'com.cpp',
   'core.cpp',
+  'device_c.cpp',
   'dxmt9.cpp',
   'winemetal_bridge.cpp',
 ]

@@ -16,11 +16,11 @@ dxmt9_inc = include_directories('include')
 
 if host_machine.system() == 'darwin'
   add_languages('objc', 'objcpp', native: false)
-endif
-
-subdir('include')
-subdir('src')
-
-if get_option('build_tests')
-  subdir('tests')
+  subdir('include')
+  subdir('src')
+  if get_option('build_tests')
+    subdir('tests')
+  endif
+elif host_machine.system() == 'windows'
+  subdir('src/win32')
 endif

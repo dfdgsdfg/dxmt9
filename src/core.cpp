@@ -2851,6 +2851,31 @@ HResult Device::getRenderTargetData(const std::shared_ptr<Surface>& src, const s
     backendDesc.sourceRect = {0, 0, static_cast<i32>(src->desc().width), static_cast<i32>(src->desc().height)};
     backend_->submitReadback(backendDesc);
     backend_->flush();
+    ReadbackPixels pixels;
+    if (backend_->readbackSurface(backendDesc, pixels)) {
+      auto dstRegion = dst->lockRect(nullptr, 0);
+      if (!dstRegion.data) {
+        return D3DERR_INVALIDCALL;
+      }
+      const u32 bpp = bytesPerPixel(src->desc().format);
+      if (bpp == 0) {
+        dst->unlockRect();
+        return D3DERR_NOTAVAILABLE;
+      }
+      const u32 width = std::min(src->desc().width, dst->desc().width);
+      const u32 height = std::min(src->desc().height, dst->desc().height);
+      const size_t rowBytes = static_cast<size_t>(width) * bpp;
+      if (pixels.pitch < rowBytes || pixels.bytes.size() < static_cast<size_t>(pixels.pitch) * height) {
+        dst->unlockRect();
+        return D3DERR_INVALIDCALL;
+      }
+      for (u32 y = 0; y < height; ++y) {
+        std::memcpy(static_cast<u8*>(dstRegion.data) + static_cast<size_t>(y) * dstRegion.pitch,
+                    pixels.bytes.data() + static_cast<size_t>(y) * pixels.pitch, rowBytes);
+      }
+      dst->unlockRect();
+      return D3D_OK;
+    }
   }
   return updateSurface(src, dst);
 }

@@ -1488,7 +1488,8 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
                                   const std::string& outSecondaryColor, const std::string& outTexcoord0,
                                   const std::string& outFogFactor, const std::string& outPointSize,
                                   const std::string& tempPrefix, const std::string& constPrefix,
-                                  const std::string& intPrefix, const std::string& boolPrefix) {
+                                  const std::string& intPrefix, const std::string& boolPrefix,
+                                  const std::string& predicatePrefix) {
   (void)instruction;
   switch (reg.kind) {
     case D3DRegisterKind::Temp:
@@ -1551,10 +1552,11 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       }
       return "float4(aL)";
     case D3DRegisterKind::MiscType:
-    case D3DRegisterKind::Predicate:
     case D3DRegisterKind::Sampler:
     case D3DRegisterKind::Unknown:
       return "float4(0.0f)";
+    case D3DRegisterKind::Predicate:
+      return "(" + predicatePrefix + "[" + std::to_string(reg.index) + "] ? float4(1.0f) : float4(0.0f))";
   }
   return "float4(0.0f)";
 }
@@ -1701,9 +1703,11 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     out << "  float4 cFloat[" << kMaxVertexConstants << "];\n";
     out << "  int4 cInt[" << kMaxIntegerConstants << "];\n";
     out << "  uint cBool[" << kMaxBoolConstants << "];\n";
+    out << "  bool p[" << kMaxBoolConstants << "];\n";
     out << "  for (uint i = 0; i < " << kMaxVertexConstants << "; ++i) { cFloat[i] = uniforms.vsFloatConst[i]; }\n";
     out << "  for (uint i = 0; i < " << kMaxIntegerConstants << "; ++i) { cInt[i] = uniforms.vsIntConst[i]; }\n";
     out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { cBool[i] = uniforms.vsBoolConst[i]; }\n";
+    out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { p[i] = false; }\n";
     std::vector<FlowBlock> controlStack;
     size_t callDepth = 0;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
@@ -1737,7 +1741,8 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         const auto reg = decodeRegisterRef(token, module.stage);
         std::string expr = readOperandExpression(instruction, reg, "float4(p[vid % 3], 0.0f, 1.0f)", "in", true,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord0",
-                                                 "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool");
+                                                 "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
+                                                 "p");
         expr = applySwizzle(expr, decodeSwizzle(token));
         expr = applySourceModifier(std::move(expr), decodeSourceModifier(token));
         return expr;
@@ -1920,6 +1925,17 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
           default:
             throw std::runtime_error("MOVA requires an address register destination");
         }
+        break;
+      }
+      case kD3DSIO_SETP: {
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("SETP requires 2 operands");
+        }
+        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        if (dst.kind != D3DRegisterKind::Predicate) {
+          throw std::runtime_error("SETP requires a predicate register destination");
+        }
+        out << "  p[" << dst.index << "] = (" << readSrc(1) << ").x != 0.0f;\n";
         break;
       }
         case kD3DSIO_ADD:
@@ -2271,9 +2287,11 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   out << "  float4 cFloat[" << kMaxPixelConstants << "];\n";
   out << "  int4 cInt[" << kMaxIntegerConstants << "];\n";
   out << "  uint cBool[" << kMaxBoolConstants << "];\n";
+  out << "  bool p[" << kMaxBoolConstants << "];\n";
   out << "  for (uint i = 0; i < " << kMaxPixelConstants << "; ++i) { cFloat[i] = uniforms.psFloatConst[i]; }\n";
   out << "  for (uint i = 0; i < " << kMaxIntegerConstants << "; ++i) { cInt[i] = uniforms.psIntConst[i]; }\n";
   out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { cBool[i] = uniforms.psBoolConst[i]; }\n";
+  out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { p[i] = false; }\n";
     std::vector<FlowBlock> controlStack;
     size_t callDepth = 0;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
@@ -2307,7 +2325,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       const auto reg = decodeRegisterRef(token, module.stage);
       std::string expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
                                                "outColor", "outSecondaryColor", "outTexcoord0", "outFogFactor",
-                                               "outPointSize", "r", "cFloat", "cInt", "cBool");
+                                               "outPointSize", "r", "cFloat", "cInt", "cBool", "p");
       expr = applySwizzle(expr, decodeSwizzle(token));
       expr = applySourceModifier(std::move(expr), decodeSourceModifier(token));
       return expr;
@@ -2499,6 +2517,17 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
           default:
             throw std::runtime_error("MOVA requires an address register destination");
         }
+        break;
+      }
+      case kD3DSIO_SETP: {
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("SETP requires 2 operands");
+        }
+        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        if (dst.kind != D3DRegisterKind::Predicate) {
+          throw std::runtime_error("SETP requires a predicate register destination");
+        }
+        out << "  p[" << dst.index << "] = (" << readSrc(1) << ").x != 0.0f;\n";
         break;
       }
       case kD3DSIO_ADD:
@@ -3216,6 +3245,83 @@ class MetalBackendDevice final : public BackendDevice {
     return D3D_OK;
   }
 
+  bool readbackSurface(const ReadbackDesc& desc, ReadbackPixels& pixels) override {
+    ObjcPtr<id<MTLTexture>> sourceTexture;
+    Format format = Format::Unknown;
+    Rect sourceRect{};
+    u32 sourceLevel = desc.sourceLevel;
+    {
+      std::lock_guard lock(mutex_);
+      auto* surface = findSurfaceUnlocked(desc.source.value);
+      if (!surface || !surface->texture) {
+        return false;
+      }
+      sourceTexture = surface->resolveTexture ? surface->resolveTexture : surface->texture;
+      format = surface->desc.format;
+      sourceRect = desc.sourceRect;
+      if (sourceRect.right <= sourceRect.left || sourceRect.bottom <= sourceRect.top) {
+        sourceRect.right = static_cast<i32>(surface->desc.width);
+        sourceRect.bottom = static_cast<i32>(surface->desc.height);
+      }
+    }
+
+    const u32 width = static_cast<u32>(std::max(1, sourceRect.right - sourceRect.left));
+    const u32 height = static_cast<u32>(std::max(1, sourceRect.bottom - sourceRect.top));
+    const u32 bpp = bytesPerPixel(format);
+    if (!sourceTexture || bpp == 0) {
+      return false;
+    }
+
+    @autoreleasepool {
+      auto descriptor = [MTLTextureDescriptor new];
+      descriptor.textureType = MTLTextureType2D;
+      descriptor.pixelFormat = toPixelFormat(format);
+      descriptor.width = width;
+      descriptor.height = height;
+      descriptor.depth = 1;
+      descriptor.mipmapLevelCount = 1;
+      descriptor.sampleCount = 1;
+      descriptor.arrayLength = 1;
+      descriptor.storageMode = MTLStorageModeShared;
+      descriptor.usage = MTLTextureUsageShaderRead;
+      id<MTLTexture> stagingTexture = [device_.get() newTextureWithDescriptor:descriptor];
+      [descriptor release];
+      if (!stagingTexture) {
+        return false;
+      }
+
+      id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
+      if (!commandBuffer) {
+        return false;
+      }
+      auto blit = [commandBuffer blitCommandEncoder];
+      if (!blit) {
+        return false;
+      }
+      [blit copyFromTexture:sourceTexture.get()
+                sourceSlice:0
+                sourceLevel:sourceLevel
+               sourceOrigin:MTLOriginMake(sourceRect.left, sourceRect.top, 0)
+                 sourceSize:MTLSizeMake(width, height, 1)
+                  toTexture:stagingTexture
+           destinationSlice:0
+           destinationLevel:0
+          destinationOrigin:MTLOriginMake(0, 0, 0)];
+      [blit endEncoding];
+      [commandBuffer commit];
+      [commandBuffer waitUntilCompleted];
+
+      pixels.pitch = width * bpp;
+      pixels.bytes.resize(static_cast<size_t>(pixels.pitch) * height);
+      auto region = MTLRegionMake2D(0, 0, width, height);
+      [stagingTexture getBytes:pixels.bytes.data()
+                   bytesPerRow:pixels.pitch
+                    fromRegion:region
+                   mipmapLevel:0];
+      return true;
+    }
+  }
+
   bool ready() const noexcept { return ready_; }
 
   BufferHandle createBuffer(const BufferDesc& desc) override {
@@ -3387,13 +3493,10 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void submitReadback(const ReadbackDesc& desc) override {
-    std::unique_lock lock(mutex_);
-    // TLA+: WineCommit
-    ensureWritingSlotUnlocked(lock);
-    currentSlot().commands.push_back(makeReadbackCommand(desc));
+    std::lock_guard lock(mutex_);
+    // Readback is satisfied by the synchronous staging copy in readbackSurface().
+    // We still track resource liveness so NoUseAfterFree remains meaningful.
     markReadbackResourcesUnlocked(desc);
-    commitCurrentChunkUnlocked(lock);
-    waitForSequenceUnlocked(lastCommittedSeqId_, lock);
   }
 
   void submitColorFill(const ColorFillDesc& desc) override {
@@ -3708,6 +3811,7 @@ class MetalBackendDevice final : public BackendDevice {
       auto flushRender = [&] {
         if (activeRenderEncoder) {
           [activeRenderEncoder endEncoding];
+          [activeRenderEncoder release];
           activeRenderEncoder = nil;
           hasActiveRender = false;
         }
@@ -3885,7 +3989,7 @@ class MetalBackendDevice final : public BackendDevice {
                                        static_cast<double>(draw.viewport.viewport.minZ),
                                        static_cast<double>(draw.viewport.viewport.maxZ)}];
       [encoder setCullMode:toCullMode(draw.rs.values.contains(RS_CULL_MODE) ? draw.rs.values.at(RS_CULL_MODE) : 1)];
-      return encoder;
+      return [encoder retain];
     }
   }
 

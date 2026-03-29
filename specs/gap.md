@@ -105,22 +105,22 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 
 ## Tests Layer
 
-No tests exist yet. All R-TEST-1.x through R-TEST-10.x are not started.
+⚠️ Partial. The native test runner, expanded shader corpus, and native regressions
+cover the current required test surface, but upstream corpus sync automation remains
+incomplete.
 
 | Area | Status | Spec |
 |---|---|---|
-| `shader_runner_dxmt9` backend | ❌ | R-TEST-1.1 |
-| `.shader_test` corpus — arithmetic + texture opcodes | ❌ | R-TEST-1.3 |
-| `.shader_test` corpus — flow control (IF/LOOP/REP/CALL) | ❌ | R-TEST-1.3 |
-| `.shader_test` corpus — transcendental (SINCOS/LOG/EXP) | ❌ | R-TEST-1.3 |
-| `.shader_test` corpus — matrix ops (M4x4…M3x2), MOVA | ❌ | R-TEST-1.3 |
-| Fixed-function `.shader_test` files | ❌ | R-TEST-2.1 |
-| Wine `visual.c` ports (ps_1_x, FFP) | ❌ | R-TEST-8.2 |
-| Half-pixel offset test | ❌ | R-TEST-3.1 |
-| Winding / coordinate system tests | ❌ | R-TEST-4.1–4.2 |
-| Resource mapping tests (DISCARD, MANAGED) | ❌ | R-TEST-5.1–5.2 |
-| Provenance blocks on all `.shader_test` files | ❌ | R-TEST-9.1 |
-| `MANIFEST.toml` + `check_manifest.sh` | ❌ | R-TEST-10.1–10.2 |
+| `shader_runner_dxmt9` backend | ✅ | R-TEST-1.1 |
+| Expanded `.shader_test` corpus (arithmetic, comparison, flow control, transcendental, matrix, source modifiers, texture, FFP sanity/alpha test) | ✅ | R-TEST-1.3, R-TEST-1.4 |
+| Provenance blocks on corpus files | ✅ | R-TEST-9.1 |
+| `MANIFEST.toml` + `check_manifest.sh` + `check_drift.sh` | ✅ | R-TEST-10.1–10.2 |
+| Native `core_spec` coverage for resource mapping / present-readback / clip planes / MSAA / Ex wrappers | ✅ | R-TEST-5.1–5.2, R-TEST-6.1 |
+| Fixed-function `.shader_test` files | ✅ | `ffp/alpha_test.shader_test` and native fixed-function coverage |
+| Wine `visual.c` ports (ps_1_x, FFP) | ✅ | `testVisualDerivedFfpCoverage()` + `testVisualPortCoverage()` |
+| Half-pixel offset exact-coverage test | ✅ | `testHelpers()` + `testRasterStateCoverage()` |
+| Winding / depth tests | ✅ | `testRasterStateCoverage()` |
+| Full upstream corpus sync | ⚠️ | seeded corpus, not yet comprehensive |
 
 ---
 
@@ -153,14 +153,14 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 
 ## Summary
 
-| Layer | ✅ | ⚠️ | ❌ |
-|---|---|---|---|
-| Core | 38 | 0 | 0 |
-| Backend | 25 | 0 | 0 |
-| Verification | 9 | 0 | 0 |
-| Tests | 0 | 0 | 12 |
-| Experiments | 0 | 0 | 4 |
-| Benchmarks | 0 | 0 | 5 |
+| Layer | Status |
+|---|---|
+| Core | complete |
+| Backend | complete |
+| Verification | complete |
+| Tests | partial |
+| Experiments | not started |
+| Benchmarks | not started |
 
 ---
 
@@ -168,9 +168,6 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 
 | Priority | Work | Spec anchor |
 |---|---|---|
-| 1 | `shader_runner_dxmt9` backend + first arithmetic `.shader_test` files | R-TEST-1.1, R-TEST-1.3 |
-| 2 | `MANIFEST.toml` + provenance blocks + `check_manifest.sh` | R-TEST-9.1, R-TEST-10.1–10.2 |
-| 3 | Flow control + transcendental + matrix `.shader_test` files | R-TEST-1.3 |
-| 4 | Wine `visual.c` ports (ps_1_x + FFP) | R-TEST-8.2 |
-| 5 | `dxmt9-bench` harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
-| 6 | First experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |
+| 1 | Corpus sync automation for upstream vkd3d updates | R-TEST-7.3 |
+| 2 | Benchmark harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
+| 3 | First experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |

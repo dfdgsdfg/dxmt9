@@ -1,0 +1,16 @@
+; [provenance]
+; source: dxmt9
+; oracle: source-inspection
+; oracle-date: 2026-03-29
+
+[pixel shader d3dbc-hex]
+ffff0200 05000042 a00f0000 3e800000 3f000000 3f400000 3f800000
+05000042 a00f0001 3dcccccd 3e4ccccd 3e99999a 3ecccccd 02000033
+800f0000 90e40001 0300004e 800f0001 90e40001 90e40000 0200004c
+800f0002 90e40001 0200004d 800f0003 90e40001 02000001 800f0800
+80e40000 0000ffff
+
+[test]
+expect-source pixel contains "tex0.sample"
+expect-source pixel contains "dfdx("
+expect-source pixel contains "dfdy("

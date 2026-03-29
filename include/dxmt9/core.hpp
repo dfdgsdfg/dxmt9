@@ -511,6 +511,8 @@ struct FfpPixelStage {
   u32 resultArg = 0;
   u32 texType = 0;
   u32 texCoordIndex = 0;
+
+  friend constexpr bool operator==(const FfpPixelStage&, const FfpPixelStage&) = default;
 };
 
 struct FfpPixelKey {
@@ -840,6 +842,11 @@ struct ReadbackDesc {
   u32 destinationSampleCount = 1;
 };
 
+struct ReadbackPixels {
+  std::vector<u8> bytes;
+  u32 pitch = 0;
+};
+
 struct ColorFillDesc {
   Handle destination{};
   Rect rect{};
@@ -890,6 +897,11 @@ class BackendDevice {
   virtual HResult waitForVBlank(const SwapDesc& desc) {
     (void)desc;
     return D3D_OK;
+  }
+  virtual bool readbackSurface(const ReadbackDesc& desc, ReadbackPixels& pixels) {
+    (void)desc;
+    (void)pixels;
+    return false;
   }
   virtual void flush() {}
 };

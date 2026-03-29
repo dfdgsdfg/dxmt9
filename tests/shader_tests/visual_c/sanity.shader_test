@@ -1,0 +1,8 @@
+; [provenance]
+; source: dxmt9
+; oracle: math-derivation
+; oracle-date: 2026-03-29
+
+[test]
+clear rgba(0.0, 0.0, 1.0, 1.0)
+probe (0, 0) rgba(0.0, 0.0, 1.0, 1.0) 0

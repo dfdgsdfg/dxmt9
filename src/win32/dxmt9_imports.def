@@ -1,0 +1,154 @@
+; Import definition for libdxmt9.dylib (installed as dxmt9.dll in the Wine prefix).
+; Used by dlltool to generate the import stub library:
+;   aarch64-w64-mingw32-dlltool -m arm64 -d dxmt9_imports.def -l libdxmt9.dll.a
+LIBRARY dxmt9
+EXPORTS
+  ; Wire API
+  dxmt9_winemetal_set_api
+  dxmt9_winemetal_get_api
+  ; Factory
+  dxmt9c_factory_create
+  dxmt9c_factory_addref
+  dxmt9c_factory_release
+  dxmt9c_factory_adapter_count
+  dxmt9c_factory_get_adapter_identifier
+  dxmt9c_factory_get_adapter_mode_count
+  dxmt9c_factory_enum_adapter_modes
+  dxmt9c_factory_get_adapter_display_mode
+  dxmt9c_factory_get_adapter_monitor
+  dxmt9c_factory_check_device_type
+  dxmt9c_factory_check_device_format
+  dxmt9c_factory_check_device_multisample
+  dxmt9c_factory_get_caps
+  dxmt9c_factory_get_adapter_luid
+  dxmt9c_factory_create_device
+  ; Device
+  dxmt9c_device_addref
+  dxmt9c_device_release
+  dxmt9c_device_get_caps
+  dxmt9c_device_test_cooperative_level
+  dxmt9c_device_check_device_state
+  dxmt9c_device_reset
+  dxmt9c_device_reset_ex
+  dxmt9c_device_present
+  dxmt9c_device_begin_scene
+  dxmt9c_device_end_scene
+  dxmt9c_device_clear
+  dxmt9c_device_set_viewport
+  dxmt9c_device_get_viewport
+  dxmt9c_device_set_scissor_rect
+  dxmt9c_device_get_scissor_rect
+  dxmt9c_device_set_transform
+  dxmt9c_device_get_transform
+  dxmt9c_device_set_material
+  dxmt9c_device_get_material
+  dxmt9c_device_set_light
+  dxmt9c_device_light_enable
+  dxmt9c_device_set_render_state
+  dxmt9c_device_get_render_state
+  dxmt9c_device_set_texture_stage_state
+  dxmt9c_device_get_texture_stage_state
+  dxmt9c_device_set_sampler_state
+  dxmt9c_device_get_sampler_state
+  dxmt9c_device_set_clip_plane
+  dxmt9c_device_get_clip_plane
+  dxmt9c_device_set_fvf
+  dxmt9c_device_get_fvf
+  dxmt9c_device_set_vertex_declaration
+  dxmt9c_device_set_stream_source
+  dxmt9c_device_set_stream_source_freq
+  dxmt9c_device_set_indices
+  dxmt9c_device_set_texture
+  dxmt9c_device_set_vertex_shader
+  dxmt9c_device_set_pixel_shader
+  dxmt9c_device_set_vs_const_f
+  dxmt9c_device_get_vs_const_f
+  dxmt9c_device_set_ps_const_f
+  dxmt9c_device_get_ps_const_f
+  dxmt9c_device_set_vs_const_i
+  dxmt9c_device_set_ps_const_i
+  dxmt9c_device_set_vs_const_b
+  dxmt9c_device_set_ps_const_b
+  dxmt9c_device_set_render_target
+  dxmt9c_device_get_render_target
+  dxmt9c_device_set_depth_stencil
+  dxmt9c_device_get_depth_stencil
+  dxmt9c_device_draw_primitive
+  dxmt9c_device_draw_indexed_primitive
+  dxmt9c_device_draw_primitive_up
+  dxmt9c_device_draw_indexed_primitive_up
+  dxmt9c_device_update_surface
+  dxmt9c_device_update_texture
+  dxmt9c_device_stretch_rect
+  dxmt9c_device_color_fill
+  dxmt9c_device_get_render_target_data
+  dxmt9c_device_set_maximum_frame_latency
+  dxmt9c_device_get_maximum_frame_latency
+  dxmt9c_device_wait_for_vblank
+  dxmt9c_device_check_device_multisample
+  dxmt9c_device_get_swap_chain
+  dxmt9c_device_get_swap_chain_count
+  dxmt9c_device_create_additional_swap_chain
+  dxmt9c_device_create_texture
+  dxmt9c_device_create_cube_texture
+  dxmt9c_device_create_volume_texture
+  dxmt9c_device_create_vertex_buffer
+  dxmt9c_device_create_index_buffer
+  dxmt9c_device_create_render_target
+  dxmt9c_device_create_depth_stencil
+  dxmt9c_device_create_offscreen_surface
+  dxmt9c_device_create_vertex_shader
+  dxmt9c_device_create_pixel_shader
+  dxmt9c_device_create_vertex_declaration
+  dxmt9c_device_create_query
+  dxmt9c_device_create_state_block
+  dxmt9c_device_begin_state_block
+  dxmt9c_device_end_state_block
+  ; Swap chain
+  dxmt9c_swapchain_addref
+  dxmt9c_swapchain_release
+  dxmt9c_swapchain_present
+  dxmt9c_swapchain_get_back_buffer
+  dxmt9c_swapchain_get_depth_stencil
+  dxmt9c_swapchain_get_present_params
+  ; Texture
+  dxmt9c_texture_addref
+  dxmt9c_texture_release
+  dxmt9c_texture_lock_rect
+  dxmt9c_texture_unlock_rect
+  dxmt9c_texture_get_surface_level
+  dxmt9c_texture_get_level_count
+  dxmt9c_texture_get_level_desc
+  dxmt9c_texture_generate_mip_sublevels
+  ; Buffer
+  dxmt9c_buffer_addref
+  dxmt9c_buffer_release
+  dxmt9c_buffer_lock
+  dxmt9c_buffer_unlock
+  ; Surface
+  dxmt9c_surface_addref
+  dxmt9c_surface_release
+  dxmt9c_surface_lock_rect
+  dxmt9c_surface_unlock_rect
+  dxmt9c_surface_get_desc
+  dxmt9c_surface_get_container_texture
+  ; Shader
+  dxmt9c_shader_addref
+  dxmt9c_shader_release
+  dxmt9c_shader_get_bytecode
+  ; Vertex declaration
+  dxmt9c_vdecl_addref
+  dxmt9c_vdecl_release
+  dxmt9c_vdecl_get_declaration
+  ; Query
+  dxmt9c_query_addref
+  dxmt9c_query_release
+  dxmt9c_query_issue
+  dxmt9c_query_get_data
+  dxmt9c_query_get_data_size
+  dxmt9c_query_get_type
+  ; State block
+  dxmt9c_stateblock_addref
+  dxmt9c_stateblock_release
+  dxmt9c_stateblock_capture
+  dxmt9c_stateblock_apply

@@ -101,6 +101,8 @@ constexpr u32 kD3DSIO_IF = 40u;
 constexpr u32 kD3DSIO_ELSE = 42u;
 constexpr u32 kD3DSIO_ENDIF = 43u;
 constexpr u32 kD3DSIO_MOVA = 46u;
+constexpr u32 kD3DSIO_POW = 32u;
+constexpr u32 kD3DSIO_SETP = 79u;
 constexpr u32 kD3DSIO_END = 0xffffu;
 
 constexpr u32 kD3DSPR_TEMP = 0u;
@@ -108,6 +110,7 @@ constexpr u32 kD3DSPR_CONST = 2u;
 constexpr u32 kD3DSPR_ADDR = 3u;
 constexpr u32 kD3DSPR_RASTOUT = 4u;
 constexpr u32 kD3DSPR_COLOROUT = 8u;
+constexpr u32 kD3DSPR_PREDICATE = 19u;
 
 u32 encodeRegisterType(u32 regType) {
   return ((regType & 0x7u) << 28) | (((regType >> 3) & 0x3u) << 11);
@@ -230,6 +233,9 @@ std::vector<u32> makeControlFlowBytecode() {
 
   words.push_back(makeInstructionToken(kD3DSIO_CALL, 1));
   words.push_back(makeLabelToken(7));
+  words.push_back(makeInstructionToken(kD3DSIO_SETP, 2));
+  words.push_back(makeDstToken(kD3DSPR_PREDICATE, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
   words.push_back(makeInstructionToken(kD3DSIO_LABEL, 1));
   words.push_back(makeLabelToken(7));
   words.push_back(makeInstructionToken(kD3DSIO_SINCOS, 2));
@@ -241,6 +247,10 @@ std::vector<u32> makeControlFlowBytecode() {
   words.push_back(makeInstructionToken(kD3DSIO_EXP, 2));
   words.push_back(makeDstToken(kD3DSPR_TEMP, 5));
   words.push_back(makeSrcToken(kD3DSPR_CONST, 3));
+  words.push_back(makeInstructionToken(kD3DSIO_POW, 3));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 5));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
   words.push_back(makeInstructionToken(kD3DSIO_SLT, 3));
   words.push_back(makeDstToken(kD3DSPR_TEMP, 6));
   words.push_back(makeSrcToken(kD3DSPR_CONST, 3));
@@ -625,11 +635,265 @@ void testShaderThunk() {
   checkContains(controlSource, "cos(", "control flow cos translation");
   checkContains(controlSource, "float4(log2(", "control flow log translation");
   checkContains(controlSource, "float4(exp2(", "control flow exp translation");
+  checkContains(controlSource, "pow(", "control flow pow translation");
   checkContains(controlSource, "select(float4(0.0f), float4(1.0f),", "control flow compare translation");
+  checkContains(controlSource, "p[0] =", "control flow setp translation");
   checkContains(controlSource, "m4x4", "control flow matrix opcode");
   checkContains(controlSource, "m4x3", "control flow matrix opcode");
   checkContains(controlSource, "m3x2", "control flow matrix opcode");
   dxmt9_winemetal_destroy_shader(controlHandle);
+}
+
+void testVisualDerivedFfpCoverage() {
+  // derived from Wine: visual.c:lighting_test
+  DeviceState lightingState;
+  lightingState.reset();
+  lightingState.renderStates[RS_LIGHTING] = 1;
+  lightingState.renderStates[RS_SPECULAR_ENABLE] = 1;
+  lightingState.lightEnabled[0] = true;
+  lightingState.lights[0].type = LightType::Directional;
+  lightingState.lights[0].diffuse = {1.0f, 0.5f, 0.25f, 1.0f};
+  const auto lightingVertexKey = makeFfpVertexKey(lightingState);
+  check(lightingVertexKey.lightingEnabled, "lighting visual key");
+  check(lightingVertexKey.specularEnabled, "lighting specular visual key");
+  checkEq(lightingVertexKey.lightType[0], static_cast<u32>(LightType::Directional),
+          "lighting visual light type");
+  WinemetalShaderCompileRequest lightingRequest{};
+  lightingRequest.kind = WinemetalShaderKind_FfpVertex;
+  lightingRequest.variantKey = &lightingVertexKey;
+  const auto lightingHandle = dxmt9_winemetal_compile_shader(&lightingRequest);
+  check(lightingHandle != 0, "lighting ffp shader");
+  const auto lightingSource = shaderSourceToString(lightingHandle);
+  checkContains(lightingSource, "out.color.rgb *= 1.0", "lighting visual source");
+  dxmt9_winemetal_destroy_shader(lightingHandle);
+
+  // derived from Wine: visual.c:fog_test
+  DeviceState fogState;
+  fogState.reset();
+  fogState.renderStates[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Exp2);
+  fogState.renderStates[RS_ALPHA_TEST_ENABLE] = 1;
+  fogState.renderStates[RS_ALPHA_FUNC] = static_cast<u32>(CompareFunc::GreaterEqual);
+  fogState.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::Modulate);
+  const auto fogPixelKey = makeFfpPixelKey(fogState);
+  checkEq(fogPixelKey.fogMode, FogMode::Exp2, "fog visual key");
+  WinemetalShaderCompileRequest fogRequest{};
+  fogRequest.kind = WinemetalShaderKind_FfpPixel;
+  fogRequest.variantKey = &fogPixelKey;
+  fogRequest.alphaTestEnable = fogPixelKey.alphaTestEnable ? 1u : 0u;
+  fogRequest.alphaTestFunc = fogPixelKey.alphaTestFunc;
+  fogRequest.alphaRef = 0.5f;
+  const auto fogHandle = dxmt9_winemetal_compile_shader(&fogRequest);
+  check(fogHandle != 0, "fog ffp shader");
+  const auto fogSource = shaderSourceToString(fogHandle);
+  checkContains(fogSource, "fogFactor", "fog visual source");
+  checkContains(fogSource, "mix(fogColor, color, fog)", "fog visual blend");
+  dxmt9_winemetal_destroy_shader(fogHandle);
+
+  // derived from Wine: visual.c:texture_transform_test
+  DeviceState transformState;
+  transformState.reset();
+  transformState.textureStageStates[0][TSS_TEXCOORD_INDEX] = 4;
+  transformState.textureStageStates[0][TSS_TEXTURE_TRANSFORM_FLAGS] = 7;
+  const auto transformVertexKey = makeFfpVertexKey(transformState);
+  checkEq(transformVertexKey.texCoordGen[0], 4u, "texture transform texcoord");
+  checkEq(transformVertexKey.texTransformFlags[0], 7u, "texture transform flags");
+
+  // derived from Wine: visual.c:texop_test
+  DeviceState texopState;
+  texopState.reset();
+  texopState.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::Add);
+  texopState.textureStageStates[0][TSS_ALPHA_OP] = static_cast<u32>(TextureOp::Modulate);
+  texopState.textureStageStates[0][TSS_TEXCOORD_INDEX] = 4;
+  texopState.textureStageStates[0][TSS_TEXTURE_TRANSFORM_FLAGS] = 7;
+  const auto texopPixelKey = makeFfpPixelKey(texopState);
+  checkEq(texopPixelKey.stages[0].colorOp, static_cast<u32>(TextureOp::Add), "texop visual color op");
+  checkEq(texopPixelKey.stages[0].alphaOp, static_cast<u32>(TextureOp::Modulate), "texop visual alpha op");
+  checkEq(texopPixelKey.stages[0].texCoordIndex, 4u, "texop visual texcoord");
+  WinemetalShaderCompileRequest texopRequest{};
+  texopRequest.kind = WinemetalShaderKind_FfpPixel;
+  texopRequest.variantKey = &texopPixelKey;
+  texopRequest.textured = true;
+  const auto texopHandle = dxmt9_winemetal_compile_shader(&texopRequest);
+  check(texopHandle != 0, "texop ffp shader");
+  const auto texopSource = shaderSourceToString(texopHandle);
+  checkContains(texopSource, "color += texColor", "texop add source");
+  dxmt9_winemetal_destroy_shader(texopHandle);
+
+  // derived from Wine: visual.c:fixed_function_varying_test
+  DeviceState varyingState;
+  varyingState.reset();
+  varyingState.renderStates[RS_LIGHTING] = 1;
+  varyingState.renderStates[RS_SPECULAR_ENABLE] = 1;
+  varyingState.lightEnabled[0] = true;
+  varyingState.lights[0].type = LightType::Point;
+  varyingState.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::SelectArg1);
+  varyingState.textureStageStates[0][TSS_ALPHA_OP] = static_cast<u32>(TextureOp::Modulate);
+  const auto varyingVertexKey = makeFfpVertexKey(varyingState);
+  const auto varyingPixelKey = makeFfpPixelKey(varyingState);
+  check(varyingVertexKey.hash != 0, "varying vertex hash");
+  check(varyingPixelKey.hash != 0, "varying pixel hash");
+  check(varyingVertexKey != lightingVertexKey, "varying vertex key differs");
+  check(varyingPixelKey.hash != fogPixelKey.hash, "varying pixel key differs");
+}
+
+void testVisualPortCoverage() {
+  // derived from Wine: visual.c:test_sanity
+  auto backend = std::make_shared<RecordingBackend>();
+  BackendLimits limits{};
+  limits.maxTextureSize = 4096;
+  limits.maxColorAttachments = 4;
+  limits.maxAnisotropy = 16;
+  limits.supportsBgr10A2 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+
+  Factory factory(limits, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 32;
+  params.backBufferHeight = 32;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{11};
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "visual sanity device");
+  auto backBuffer = device->swapChain()->backBuffer();
+  auto probeSurface = device->createSurface({32, 32, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
+  check(backBuffer != nullptr && probeSurface != nullptr, "visual sanity surfaces");
+  ClearDesc clear{};
+  clear.clearColor = true;
+  clear.color = {0.0f, 0.0f, 0.0f, 1.0f};
+  clear.colorAttachments[0] = {backBuffer->handle(), backBuffer->level(), backBuffer->multiSampleCount()};
+  checkEq(device->clear(clear), D3D_OK, "visual sanity clear");
+  checkEq(device->getRenderTargetData(backBuffer, probeSurface), D3D_OK, "visual sanity readback");
+  auto region = probeSurface->lockRect(nullptr, 0);
+  check(region.data != nullptr, "visual sanity lock");
+  const auto sanityPixel = bgra(0x00, 0x00, 0x00, 0xff);
+  checkBytes(std::span<const u8>(static_cast<const u8*>(region.data), 4),
+             std::span<const u8>(sanityPixel.data(), sanityPixel.size()), "visual sanity pixel");
+  probeSurface->unlockRect();
+
+  // derived from Wine: visual.c:alpha_test
+  DeviceState alphaState;
+  alphaState.reset();
+  alphaState.renderStates[RS_ALPHA_TEST_ENABLE] = 1;
+  const std::array<CompareFunc, 8> alphaFuncs{
+      CompareFunc::Never,        CompareFunc::Less,      CompareFunc::Equal,       CompareFunc::LessEqual,
+      CompareFunc::Greater,      CompareFunc::NotEqual,  CompareFunc::GreaterEqual, CompareFunc::Always};
+  u64 alphaHash = 0;
+  for (size_t i = 0; i < alphaFuncs.size(); ++i) {
+    alphaState.renderStates[RS_ALPHA_FUNC] = static_cast<u32>(alphaFuncs[i]);
+    alphaState.renderStates[RS_ALPHA_REF] = 128;
+    const auto pixelKey = makeFfpPixelKey(alphaState);
+    check(pixelKey.alphaTestEnable, "alpha test pixel key enabled");
+    checkEq(pixelKey.alphaTestFunc, static_cast<u32>(alphaFuncs[i]), "alpha test function key");
+    check(pixelKey.hash != 0, "alpha test hash");
+    if (i == 0) {
+      alphaHash = pixelKey.hash;
+    } else {
+      check(pixelKey.hash != alphaHash, "alpha test hash varies");
+    }
+  }
+  const auto alphaPixelKey = makeFfpPixelKey(alphaState);
+  WinemetalShaderCompileRequest alphaRequest{};
+  alphaRequest.kind = WinemetalShaderKind_FfpPixel;
+  alphaRequest.variantKey = &alphaPixelKey;
+  alphaRequest.textured = true;
+  alphaRequest.alphaTestEnable = 1u;
+  alphaRequest.alphaTestFunc = alphaPixelKey.alphaTestFunc;
+  alphaRequest.alphaRef = 0.5f;
+  const auto alphaHandle = dxmt9_winemetal_compile_shader(&alphaRequest);
+  check(alphaHandle != 0, "alpha test visual shader");
+  const auto alphaSource = shaderSourceToString(alphaHandle);
+  checkContains(alphaSource, "discard_fragment()", "alpha test visual source");
+  dxmt9_winemetal_destroy_shader(alphaHandle);
+
+  // derived from Wine: visual.c:texbem_test
+  DeviceState texbemState;
+  texbemState.reset();
+  texbemState.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::BumpEnvMap);
+  texbemState.textureStageStates[0][TSS_ALPHA_OP] = static_cast<u32>(TextureOp::BumpEnvMapLuminance);
+  texbemState.textureStageStates[0][TSS_TEXCOORD_INDEX] = 1;
+  const auto texbemKey = makeFfpPixelKey(texbemState);
+  checkEq(texbemKey.stages[0].colorOp, static_cast<u32>(TextureOp::BumpEnvMap), "texbem color op");
+  checkEq(texbemKey.stages[0].alphaOp, static_cast<u32>(TextureOp::BumpEnvMapLuminance), "texbem alpha op");
+  checkEq(texbemKey.stages[0].texCoordIndex, 1u, "texbem texcoord");
+  check(texbemKey.hash != 0, "texbem hash");
+
+  // derived from Wine: visual.c:ps_1_4_test
+  DeviceState ps14State;
+  ps14State.reset();
+  ps14State.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::AddSigned);
+  ps14State.textureStageStates[0][TSS_ALPHA_OP] = static_cast<u32>(TextureOp::Modulate);
+  ps14State.textureStageStates[1][TSS_COLOR_OP] = static_cast<u32>(TextureOp::DotProduct3);
+  const auto ps14Key = makeFfpPixelKey(ps14State);
+  check(ps14Key.hash != 0, "ps_1_4 hash");
+  check(ps14Key != texbemKey, "ps_1_4 key differs from texbem");
+
+  // derived from Wine: visual.c:vshader_version_varying_test
+  DeviceState baselineVertexState;
+  baselineVertexState.reset();
+  const auto baselineVertexKey = makeFfpVertexKey(baselineVertexState);
+  DeviceState varyingState;
+  varyingState.reset();
+  varyingState.renderStates[RS_LIGHTING] = 1;
+  varyingState.renderStates[RS_SPECULAR_ENABLE] = 1;
+  varyingState.renderStates[RS_VERTEX_BLEND] = 2;
+  varyingState.lightEnabled[0] = true;
+  varyingState.lights[0].type = LightType::Point;
+  const auto varyingVertexKey = makeFfpVertexKey(varyingState);
+  check(varyingVertexKey.hash != 0, "vshader varying hash");
+  check(varyingVertexKey.vertexBlend == 2u, "vshader varying vertex blend");
+  check(varyingVertexKey.indexedVertexBlend, "vshader varying indexed blend");
+  check(varyingVertexKey != baselineVertexKey, "vshader varying key differs");
+}
+
+void testRasterStateCoverage() {
+  auto backend = std::make_shared<RecordingBackend>();
+  BackendLimits limits{};
+  limits.maxTextureSize = 4096;
+  limits.maxColorAttachments = 4;
+  limits.maxAnisotropy = 16;
+  limits.supportsBgr10A2 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+
+  Factory factory(limits, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 16;
+  params.backBufferHeight = 16;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{12};
+  params.enableAutoDepthStencil = true;
+  params.autoDepthStencilFormat = Format::D24S8;
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "raster coverage device");
+  auto depthStencil = device->swapChain()->depthStencilSurface();
+  check(depthStencil != nullptr, "raster coverage depth stencil");
+
+  const auto fixup = halfPixelFixup(Viewport{0, 0, 16, 16, 0.0f, 1.0f});
+  checkNear(fixup[0], 1.0f / 16.0f, 1.0e-6f, "raster half-pixel x");
+  checkNear(fixup[1], 1.0f / 16.0f, 1.0e-6f, "raster half-pixel y");
+
+  checkEq(device->setViewport({0, 0, 16, 16, 0.0f, 1.0f}), D3D_OK, "raster viewport");
+  checkEq(device->setRenderState(RS_CULL_MODE, static_cast<u32>(CullMode::Ccw)), D3D_OK, "raster cull ccw");
+  checkEq(device->setRenderState(RS_Z_ENABLE, 1), D3D_OK, "raster depth enable");
+  checkEq(device->setRenderState(RS_Z_WRITE_ENABLE, 1), D3D_OK, "raster depth write");
+  checkEq(device->setRenderState(RS_Z_FUNC, static_cast<u32>(CompareFunc::LessEqual)), D3D_OK,
+          "raster depth func");
+  checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1), D3D_OK, "raster draw ccw");
+  check(!backend->draws.empty(), "raster draw recorded");
+  const auto& firstDraw = backend->draws.back();
+  checkEq(firstDraw.viewport.viewport.width, 16u, "raster draw viewport width");
+  checkEq(firstDraw.viewport.viewport.height, 16u, "raster draw viewport height");
+  checkEq(firstDraw.rs.values.at(RS_CULL_MODE), static_cast<u32>(CullMode::Ccw), "raster cull state ccw");
+  checkEq(firstDraw.rs.values.at(RS_Z_ENABLE), 1u, "raster depth enable state");
+  checkEq(firstDraw.rs.values.at(RS_Z_WRITE_ENABLE), 1u, "raster depth write state");
+  checkEq(firstDraw.rs.values.at(RS_Z_FUNC), static_cast<u32>(CompareFunc::LessEqual), "raster depth func state");
+  checkEq(device->setRenderState(RS_CULL_MODE, static_cast<u32>(CullMode::Cw)), D3D_OK, "raster cull cw");
+  checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1), D3D_OK, "raster draw cw");
+  const auto& secondDraw = backend->draws.back();
+  checkEq(secondDraw.rs.values.at(RS_CULL_MODE), static_cast<u32>(CullMode::Cw), "raster cull state cw");
 }
 
 void testDeviceCoreFlow() {
@@ -1216,6 +1480,9 @@ int main() {
     testHelpers();
     testFfpKeys();
     testShaderThunk();
+    testVisualDerivedFfpCoverage();
+    testVisualPortCoverage();
+    testRasterStateCoverage();
     testDeviceCoreFlow();
     testComWrappers();
     testComWrappersEx();

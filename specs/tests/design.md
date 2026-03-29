@@ -241,7 +241,7 @@ tests/
 │       ├── fog_test.shader_test        ; // derived from Wine: visual.c:fog_test
 │       ├── alpha_test.shader_test      ; // derived from Wine: visual.c:alpha_test
 │       └── ...
-├── shader_runner_dxmt9.c         dxmt9 backend for shader_runner
+├── shader_runner_dxmt9.cpp       dxmt9 backend for shader_runner
 └── meson.build
 scripts/
 ├── check_manifest.sh             Fails if MANIFEST.toml ↔ filesystem diverge

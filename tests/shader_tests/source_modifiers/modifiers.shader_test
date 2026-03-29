@@ -1,0 +1,18 @@
+; [provenance]
+; source: dxmt9
+; oracle: source-inspection
+; oracle-date: 2026-03-29
+
+[pixel shader d3dbc-hex]
+ffff0200 05000042 a00f0000 3f800000 40000000 40400000 40800000
+05000042 a00f0001 40a00000 40c00000 40e00000 41000000 02000001
+800f0000 a1e40000 02000001 800f0001 abe40001 02000001 800f0002
+ace40000 02000001 800f0003 a0b10001 02000001 800f0004 a0400001
+02000001 800f0800 80e40000 0000ffff
+
+[test]
+expect-source pixel contains "-(cFloat[0])"
+expect-source pixel contains "abs(cFloat[1])"
+expect-source pixel contains "-abs(cFloat[0])"
+expect-source pixel contains "float4(cFloat[1].y, cFloat[1].x, cFloat[1].w, cFloat[1].z)"
+expect-source pixel contains "float4(cFloat[1].x, cFloat[1].x, cFloat[1].x, cFloat[1].y)"

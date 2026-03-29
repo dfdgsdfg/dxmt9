@@ -1,0 +1,125 @@
+[[test]]
+file = "arithmetic/mov.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "math-derivation"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "arithmetic/add.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "math-derivation"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "arithmetic/math.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "comparison/sge.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "math-derivation"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "comparison/slt.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "ffp/alpha_test.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "math-derivation"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "flow_control/control.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "matrix/matrix.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "matrix/matrix2.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "source_modifiers/write_masks.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "source_modifiers/modifiers.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "texture/texldl.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "texture/texture.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "transcendental/transcendental.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "transcendental/pow.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "vector/vector.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "visual_c/sanity.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "math-derivation"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "vs_specific/setp.shader_test"
+status = "passing"
+source = "dxmt9"
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
