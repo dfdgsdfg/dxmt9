@@ -18,6 +18,8 @@
 #include <cstring>
 #include <exception>
 #include <deque>
+#include <cstdio>
+#include <cstdlib>
 #include <iomanip>
 #include <future>
 #include <functional>
@@ -41,6 +43,31 @@ namespace {
 constexpr size_t kRingSize = 32;
 constexpr size_t kMaxInflight = 3;
 
+bool queueTraceEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_TRACE_QUEUE");
+    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+u64 queueTraceFromSeq() {
+  static const u64 value = [] {
+    const char* env = std::getenv("DXMT9_TRACE_QUEUE_FROM");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    return static_cast<u64>(std::strtoull(env, nullptr, 10));
+  }();
+  return value;
+}
+
+void emitQueueTraceLine(const std::string& line) {
+  std::fputs(line.c_str(), stderr);
+  std::fputc('\n', stderr);
+  std::fflush(stderr);
+}
+
 std::mutex gLayerRegistryMutex;
 std::unordered_map<u64, CAMetalLayer*> gLayerRegistry;
 
@@ -62,14 +89,70 @@ void unregisterLayerHandle(u64 handle) {
   gLayerRegistry.erase(handle);
 }
 
-/* Resolve a Wine HWND to the backing NSView via macdrv_get_cocoa_view(),
- * which is exported by winemac.drv and available via RTLD_DEFAULT in any
- * macOS Wine process.  Returns nil when running outside Wine (tests, etc.). */
+struct WineMacInterop {
+  using GetCocoaViewFn = NSView* (*)(void*);
+  using GetCocoaWindowFn = void* (*)(void*, int);
+  using CreateMetalDeviceFn = void* (*)();
+  using ReleaseMetalDeviceFn = void (*)(void*);
+  using CreateMetalViewFn = void* (*)(void*, void*);
+  using GetMetalLayerFn = void* (*)(void*);
+  using ReleaseMetalViewFn = void (*)(void*);
+
+  GetCocoaViewFn getCocoaView = nullptr;
+  GetCocoaWindowFn getCocoaWindow = nullptr;
+  CreateMetalDeviceFn createMetalDevice = nullptr;
+  ReleaseMetalDeviceFn releaseMetalDevice = nullptr;
+  CreateMetalViewFn createMetalView = nullptr;
+  GetMetalLayerFn getMetalLayer = nullptr;
+  ReleaseMetalViewFn releaseMetalView = nullptr;
+};
+
+WineMacInterop resolveWineMacInterop() {
+  WineMacInterop interop;
+  interop.getCocoaView = reinterpret_cast<WineMacInterop::GetCocoaViewFn>(dlsym(RTLD_DEFAULT, "macdrv_get_cocoa_view"));
+  if (interop.getCocoaView) {
+    return interop;
+  }
+
+  /* Heroic Wine 11.5 and DXMT hosts expose a private winemac function table
+   * instead of the older direct macdrv_get_cocoa_view() entrypoint. The index
+   * mapping below is inferred from the host winemac.so wrappers:
+   *   3: get_cocoa_window
+   *   4: create_metal_device
+   *   5: release_metal_device
+   *   6: view_create_metal_view
+   *   7: view_get_metal_layer
+   *   8: view_release_metal_view
+   */
+  auto* functions = reinterpret_cast<void* const*>(dlsym(RTLD_DEFAULT, "macdrv_functions"));
+  if (!functions) {
+    functions = reinterpret_cast<void* const*>(dlsym(RTLD_DEFAULT, "_macdrv_functions"));
+  }
+  if (!functions) {
+    return interop;
+  }
+
+  interop.getCocoaWindow = reinterpret_cast<WineMacInterop::GetCocoaWindowFn>(functions[3]);
+  interop.createMetalDevice = reinterpret_cast<WineMacInterop::CreateMetalDeviceFn>(functions[4]);
+  interop.releaseMetalDevice = reinterpret_cast<WineMacInterop::ReleaseMetalDeviceFn>(functions[5]);
+  interop.createMetalView = reinterpret_cast<WineMacInterop::CreateMetalViewFn>(functions[6]);
+  interop.getMetalLayer = reinterpret_cast<WineMacInterop::GetMetalLayerFn>(functions[7]);
+  interop.releaseMetalView = reinterpret_cast<WineMacInterop::ReleaseMetalViewFn>(functions[8]);
+  return interop;
+}
+
+const WineMacInterop& wineMacInterop() {
+  static const WineMacInterop interop = resolveWineMacInterop();
+  return interop;
+}
+
+/* Resolve a Wine HWND to the backing NSView when the host still exposes the
+ * legacy macdrv_get_cocoa_view() helper. Returns nil on newer hosts that
+ * require the DXMT-style metal-view path instead. */
 static NSView* get_nsview_for_hwnd(u64 hwnd) {
-  using Fn = NSView* (*)(void*);
-  static Fn fn = reinterpret_cast<Fn>(dlsym(RTLD_DEFAULT, "macdrv_get_cocoa_view"));
-  if (!fn) return nil;
-  return fn(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)));
+  const auto& interop = wineMacInterop();
+  if (!interop.getCocoaView) return nil;
+  return interop.getCocoaView(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)));
 }
 
 template <typename T>
@@ -3189,6 +3272,8 @@ DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
 struct LayerRecord {
   ObjcPtr<CAMetalLayer*> layer;
   Handle window{};
+  void* wineMetalView = nullptr;
+  bool usesWineMetalView = false;
 };
 
 class MetalBackendDevice final : public BackendDevice {
@@ -3233,16 +3318,19 @@ class MetalBackendDevice final : public BackendDevice {
       persistShaderArchive(shaderArchive_.get(), shaderArchiveURL_.get());
     }
     purgeResourcesUnlocked();
-    layers_.clear();
-    /* Release CAMetalLayers we created via the lazy WSI path. */
-    for (u64 hwnd : registeredHwnds_) {
-      CAMetalLayer* layer = lookupLayerHandle(hwnd);
-      if (layer) {
-        unregisterLayerHandle(hwnd);
-        [layer release];
+    const auto& interop = wineMacInterop();
+    for (auto& [hwnd, record] : layers_) {
+      unregisterLayerHandle(hwnd);
+      if (record.wineMetalView && interop.releaseMetalView) {
+        interop.releaseMetalView(record.wineMetalView);
+        record.wineMetalView = nullptr;
       }
     }
-    registeredHwnds_.clear();
+    layers_.clear();
+    if (wineMetalDevice_ && interop.releaseMetalDevice) {
+      interop.releaseMetalDevice(wineMetalDevice_);
+    }
+    wineMetalDevice_ = nullptr;
   }
 
   void setDeviceLostObserver(DeviceLostObserver observer) override {
@@ -3491,7 +3579,7 @@ class MetalBackendDevice final : public BackendDevice {
     // TLA+: WineCommit
     ensureWritingSlotUnlocked(lock);
     currentSlot().commands.push_back(makeClearCommand(desc));
-    if (!desc.colorAttachments.empty()) {
+    if (desc.colorAttachments[0].handle) {
       currentBackBuffer_ = desc.colorAttachments[0].handle;
     }
     markClearResourcesUnlocked(desc);
@@ -3538,10 +3626,11 @@ class MetalBackendDevice final : public BackendDevice {
     op.present = desc;
     op.presentSource = currentBackBuffer_;
     currentSlot().commands.push_back(std::move(op));
+    traceQueueUnlocked("present.enqueue", *writingSlot_);
     commitCurrentChunkUnlocked(lock);
   }
 
-  void flush() override {
+ void flush() override {
     std::unique_lock lock(mutex_);
     // TLA+: WineCommit
     commitCurrentChunkUnlocked(lock);
@@ -3549,6 +3638,230 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
  private:
+  static const char* slotStateName(ChunkSlot::State state) {
+    switch (state) {
+      case ChunkSlot::State::Free:
+        return "free";
+      case ChunkSlot::State::Writing:
+        return "writing";
+      case ChunkSlot::State::Pending:
+        return "pending";
+      case ChunkSlot::State::Encoding:
+        return "encoding";
+      case ChunkSlot::State::GPU:
+        return "gpu";
+    }
+    return "unknown";
+  }
+
+  bool shouldTraceQueueUnlocked(std::optional<size_t> slotIndex, u64 seqId) const {
+    if (!queueTraceEnabled()) {
+      return false;
+    }
+    const u64 threshold = queueTraceFromSeq();
+    if (threshold == 0) {
+      return true;
+    }
+    if (seqId >= threshold && seqId != 0) {
+      return true;
+    }
+    if (slotIndex.has_value()) {
+      const auto& slot = slots_[*slotIndex];
+      if (slot.seqId >= threshold && slot.seqId != 0) {
+        return true;
+      }
+    }
+    if (writingSlot_.has_value()) {
+      const auto& slot = slots_[*writingSlot_];
+      if (slot.seqId >= threshold && slot.seqId != 0) {
+        return true;
+      }
+    }
+    if (completedSeqId_ >= threshold || lastCommittedSeqId_ >= threshold) {
+      return true;
+    }
+    return false;
+  }
+
+  std::string formatActiveSlotsUnlocked() const {
+    std::ostringstream out;
+    bool first = true;
+    for (size_t i = 0; i < slots_.size(); ++i) {
+      const auto& slot = slots_[i];
+      if (slot.state == ChunkSlot::State::Free) {
+        continue;
+      }
+      if (!first) {
+        out << ' ';
+      }
+      first = false;
+      out << i << ':' << slotStateName(slot.state);
+      if (slot.seqId != 0) {
+        out << '#' << slot.seqId;
+      }
+      if (!slot.commands.empty()) {
+        out << '/' << slot.commands.size();
+      }
+    }
+    if (first) {
+      out << "none";
+    }
+    return out.str();
+  }
+
+  void traceQueueUnlocked(const char* event, std::optional<size_t> slotIndex = std::nullopt, u64 seqId = 0,
+                          const char* extra = nullptr) const {
+    if (!shouldTraceQueueUnlocked(slotIndex, seqId)) {
+      return;
+    }
+    std::ostringstream out;
+    out << "[dxmt9-queue] " << event
+        << " seq=" << static_cast<unsigned long long>(seqId)
+        << " slot=";
+    if (slotIndex.has_value()) {
+      out << *slotIndex;
+    } else {
+      out << '-';
+    }
+    out << " writeIndex=" << writeIndex_
+        << " writing=";
+    if (writingSlot_.has_value()) {
+      out << *writingSlot_;
+    } else {
+      out << '-';
+    }
+    out << " ready=" << readySlots_.size()
+        << " completedQ=" << completedSeqQueue_.size()
+        << " inflight=" << inflightCount_
+        << " completed=" << static_cast<unsigned long long>(completedSeqId_)
+        << " lastCommitted=" << static_cast<unsigned long long>(lastCommittedSeqId_)
+        << " slots=[" << formatActiveSlotsUnlocked() << "]";
+    if (extra && extra[0] != '\0') {
+      out << ' ' << extra;
+    }
+    emitQueueTraceLine(out.str());
+  }
+
+  void tracePresentEvent(const char* event, u64 seqId, u64 windowHandle) const {
+    if (!queueTraceEnabled()) {
+      return;
+    }
+    const u64 threshold = queueTraceFromSeq();
+    if (threshold != 0 && seqId != 0 && seqId < threshold) {
+      return;
+    }
+    std::ostringstream out;
+    out << "[dxmt9-present] " << event
+        << " seq=" << static_cast<unsigned long long>(seqId)
+        << " hwnd=" << static_cast<unsigned long long>(windowHandle);
+    emitQueueTraceLine(out.str());
+  }
+
+  CAMetalLayer* ensurePresentLayerUnlocked(u64 hwnd, u64 seqId) {
+    if (!hwnd) {
+      return nullptr;
+    }
+    tracePresentEvent("layer.ensure.begin", seqId, hwnd);
+    if (auto* layer = lookupLayerHandle(hwnd)) {
+      tracePresentEvent("layer.ensure.cached", seqId, hwnd);
+      return layer;
+    }
+
+    LayerRecord record;
+    record.window = {hwnd};
+    const auto& interop = wineMacInterop();
+
+    if (interop.getCocoaView) {
+      __block CAMetalLayer* legacyLayer = nil;
+      dispatch_sync(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+          NSView* view = get_nsview_for_hwnd(hwnd);
+          if (!view) return;
+          CAMetalLayer* newLayer = [CAMetalLayer layer];
+          view.wantsLayer = YES;
+          view.layer = newLayer;
+          legacyLayer = newLayer;
+        }
+      });
+      if (!legacyLayer) {
+        tracePresentEvent("legacy-view.nil", seqId, hwnd);
+        return nullptr;
+      }
+      record.layer = ObjcPtr<CAMetalLayer*>::retain(legacyLayer);
+    } else if (interop.getCocoaWindow && interop.createMetalDevice && interop.createMetalView &&
+               interop.getMetalLayer) {
+      tracePresentEvent("table-path.begin", seqId, hwnd);
+      if (!wineMetalDevice_) {
+        tracePresentEvent("metal-device.begin", seqId, hwnd);
+        wineMetalDevice_ = interop.createMetalDevice();
+        if (!wineMetalDevice_) {
+          tracePresentEvent("metal-device.nil", seqId, hwnd);
+          return nullptr;
+        }
+        tracePresentEvent("metal-device.ok", seqId, hwnd);
+      } else {
+        tracePresentEvent("metal-device.cached", seqId, hwnd);
+      }
+
+      tracePresentEvent("cocoa-window.begin", seqId, hwnd);
+      void* cocoaWindow = interop.getCocoaWindow(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)), 1);
+      if (!cocoaWindow) {
+        tracePresentEvent("cocoa-window.nil", seqId, hwnd);
+        return nullptr;
+      }
+      tracePresentEvent("cocoa-window.ok", seqId, hwnd);
+
+      __block void* cocoaView = nullptr;
+      tracePresentEvent("content-view.begin", seqId, hwnd);
+      dispatch_sync(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+          id object = static_cast<id>(cocoaWindow);
+          if ([object isKindOfClass:[NSWindow class]]) {
+            cocoaView = [static_cast<NSWindow*>(object) contentView];
+          } else if ([object isKindOfClass:[NSView class]]) {
+            cocoaView = object;
+          }
+        }
+      });
+      if (!cocoaView) {
+        tracePresentEvent("content-view.nil", seqId, hwnd);
+        return nullptr;
+      }
+      tracePresentEvent("content-view.ok", seqId, hwnd);
+
+      tracePresentEvent("metal-view.begin", seqId, hwnd);
+      void* metalView = interop.createMetalView(cocoaView, wineMetalDevice_);
+      if (!metalView) {
+        tracePresentEvent("metal-view.nil", seqId, hwnd);
+        return nullptr;
+      }
+      tracePresentEvent("metal-view.ok", seqId, hwnd);
+
+      tracePresentEvent("metal-layer.begin", seqId, hwnd);
+      auto* layer = static_cast<CAMetalLayer*>(interop.getMetalLayer(metalView));
+      if (!layer) {
+        if (metalView && interop.releaseMetalView) {
+          interop.releaseMetalView(metalView);
+        }
+        tracePresentEvent("metal-layer.nil", seqId, hwnd);
+        return nullptr;
+      }
+      tracePresentEvent("metal-layer.ok", seqId, hwnd);
+
+      record.layer = ObjcPtr<CAMetalLayer*>::retain(layer);
+      record.wineMetalView = metalView;
+      record.usesWineMetalView = true;
+    } else {
+      tracePresentEvent("interop.unavailable", seqId, hwnd);
+      return nullptr;
+    }
+
+    CAMetalLayer* layer = record.layer.get();
+    registerLayerHandle(hwnd, layer);
+    layers_[hwnd] = std::move(record);
+    return layer;
+  }
+
   BufferRecord* findBufferUnlocked(u64 handle) {
     auto it = buffers_.find(handle);
     return it == buffers_.end() ? nullptr : &it->second;
@@ -3576,6 +3889,9 @@ class MetalBackendDevice final : public BackendDevice {
       DXMT_ASSERT(slots_[*writingSlot_].state == ChunkSlot::State::Writing);
       return;
     }
+    if (slots_[writeIndex_].state != ChunkSlot::State::Free || inflightCount_ >= kMaxInflight) {
+      traceQueueUnlocked("writer.wait.begin", writeIndex_);
+    }
     writeCv_.wait(lock, [this] {
       return stop_ || (slots_[writeIndex_].state == ChunkSlot::State::Free &&
                        inflightCount_ < kMaxInflight);
@@ -3583,12 +3899,14 @@ class MetalBackendDevice final : public BackendDevice {
     if (stop_) {
       return;
     }
+    traceQueueUnlocked("writer.wait.end", writeIndex_);
     // TLA+: RingSafety
     DXMT_ASSERT(slots_[writeIndex_].state == ChunkSlot::State::Free);
     slots_[writeIndex_].state = ChunkSlot::State::Writing;
     slots_[writeIndex_].seqId = 0;
     slots_[writeIndex_].commands.clear();
     writingSlot_ = writeIndex_;
+    traceQueueUnlocked("writer.acquire", *writingSlot_);
   }
 
   void commitCurrentChunkUnlocked(std::unique_lock<std::mutex>& lock) {
@@ -3599,13 +3917,18 @@ class MetalBackendDevice final : public BackendDevice {
     ChunkSlot& slot = slots_[*writingSlot_];
     if (slot.commands.empty()) {
       slot.state = ChunkSlot::State::Free;
+      traceQueueUnlocked("commit.empty", *writingSlot_);
       writingSlot_.reset();
       return;
+    }
+    if (inflightCount_ >= kMaxInflight) {
+      traceQueueUnlocked("commit.wait.begin", *writingSlot_);
     }
     writeCv_.wait(lock, [this] { return stop_ || inflightCount_ < kMaxInflight; });
     if (stop_) {
       return;
     }
+    traceQueueUnlocked("commit.wait.end", *writingSlot_);
     // TLA+: WineCommit
     slot.seqId = nextSeqId_++;
     slot.state = ChunkSlot::State::Pending;
@@ -3618,7 +3941,10 @@ class MetalBackendDevice final : public BackendDevice {
     // TLA+: BoundedInflight
     DXMT_ASSERT(inflightCount_ <= kMaxInflight);
     // TLA+: RingSafety
-    DXMT_ASSERT(slots_[writeIndex_].state == ChunkSlot::State::Free);
+    // The producer may wrap onto a still-in-flight slot here. Safety is enforced
+    // when ensureWritingSlotUnlocked() reacquires the next write slot.
+    DXMT_ASSERT(writeIndex_ < kRingSize);
+    traceQueueUnlocked("commit.publish", readySlots_.back(), slot.seqId);
     encodeCv_.notify_one();
   }
 
@@ -3801,6 +4127,7 @@ class MetalBackendDevice final : public BackendDevice {
           // TLA+: EncodeSafety
           DXMT_ASSERT(slot.state == ChunkSlot::State::Pending);
           slot.state = ChunkSlot::State::Encoding;
+          traceQueueUnlocked("encode.dequeue", slotIndex, slot.seqId);
           slotCopy = slot;
         }
 
@@ -3919,7 +4246,7 @@ class MetalBackendDevice final : public BackendDevice {
             flushPendingClear();
             flushRender();
             flushBlit();
-            encodePresent(commandBuffer, command.present, command.presentSource);
+            encodePresent(commandBuffer, command.present, command.presentSource, slot.seqId);
             break;
         }
       }
@@ -3929,18 +4256,19 @@ class MetalBackendDevice final : public BackendDevice {
       flushBlit();
 
       const u64 seqId = slot.seqId;
+      {
+        std::lock_guard lock(mutex_);
+        slots_[slotIndex].state = ChunkSlot::State::GPU;
+        traceQueueUnlocked("encode.commit", slotIndex, seqId);
+      }
       [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
         (void)buffer;
         std::lock_guard completionLock(mutex_);
         completedSeqQueue_.push_back(seqId);
+        traceQueueUnlocked("gpu.complete", slotIndex, seqId);
         finishCv_.notify_all();
       }];
       [commandBuffer commit];
-
-      {
-        std::lock_guard lock(mutex_);
-        slots_[slotIndex].state = ChunkSlot::State::GPU;
-      }
     }
   }
 
@@ -3959,6 +4287,7 @@ class MetalBackendDevice final : public BackendDevice {
     stagingArena_.reclaim(completedSeqId_);
     copyTempArena_.reclaim(completedSeqId_);
     completedSeqQueue_.push_back(seqId);
+    traceQueueUnlocked("finish.inline", slotIndex, seqId);
     writeCv_.notify_all();
     finishCv_.notify_all();
   }
@@ -4245,9 +4574,11 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
-  void encodePresent(id<MTLCommandBuffer> commandBuffer, const SwapDesc& present, Handle sourceHandle) {
+  void encodePresent(id<MTLCommandBuffer> commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
+    tracePresentEvent("begin", seqId, present.window.value);
     auto* source = findSurfaceUnlocked(sourceHandle.value);
     if (!source || !source->texture) {
+      tracePresentEvent("missing-source", seqId, present.window.value);
       return;
     }
 
@@ -4255,28 +4586,11 @@ class MetalBackendDevice final : public BackendDevice {
     if (present.window.value != 0) {
       layer = lookupLayerHandle(present.window.value);
       if (!layer) {
-        /* First present for this HWND: resolve to NSView via macdrv_get_cocoa_view
-         * and attach a new CAMetalLayer.  NSView mutation must happen on the main
-         * thread; dispatch_sync guarantees completion before we continue. */
-        u64 hwnd = present.window.value;
-        dispatch_sync(dispatch_get_main_queue(), ^{
-          @autoreleasepool {
-            NSView* view = get_nsview_for_hwnd(hwnd);
-            if (!view) return;
-            CAMetalLayer* newLayer = [CAMetalLayer layer];
-            view.wantsLayer = YES;
-            view.layer = newLayer;
-            [newLayer retain];
-            registerLayerHandle(hwnd, newLayer);
-          }
-        });
-        layer = lookupLayerHandle(present.window.value);
-        if (layer) {
-          registeredHwnds_.push_back(present.window.value);
-        }
+        layer = ensurePresentLayerUnlocked(present.window.value, seqId);
       }
     }
     if (!layer) {
+      tracePresentEvent("missing-layer", seqId, present.window.value);
       return;
     }
 
@@ -4287,16 +4601,19 @@ class MetalBackendDevice final : public BackendDevice {
     layer.maximumDrawableCount = std::clamp(maxFrameLatency_, 1u, 3u);
     layer.framebufferOnly = YES;
 
+    tracePresentEvent("nextDrawable.begin", seqId, present.window.value);
     id<CAMetalDrawable> drawable = [layer nextDrawable];
     if (!drawable) {
       if (presentationStatusObserver_) {
         presentationStatusObserver_(true);
       }
+      tracePresentEvent("nextDrawable.nil", seqId, present.window.value);
       return;
     }
     if (presentationStatusObserver_) {
       presentationStatusObserver_(false);
     }
+    tracePresentEvent("nextDrawable.ok", seqId, present.window.value);
 
     auto blit = [commandBuffer blitCommandEncoder];
     if (blit) {
@@ -4313,6 +4630,7 @@ class MetalBackendDevice final : public BackendDevice {
       [blit endEncoding];
     }
     [commandBuffer presentDrawable:drawable];
+    tracePresentEvent("scheduled", seqId, present.window.value);
     backBufferDiscardAfterPresent_ = true;
   }
 
@@ -4593,6 +4911,7 @@ class MetalBackendDevice final : public BackendDevice {
           if (inflightCount_ > 0) {
             --inflightCount_;
           }
+          traceQueueUnlocked("finish.dequeue", std::nullopt, seqId);
           reclaimCompletedSlotsUnlocked(seqId);
           argbufArena_.reclaim(completedSeqId_);
           lambdaStoreArena_.reclaim(completedSeqId_);
@@ -4609,9 +4928,11 @@ class MetalBackendDevice final : public BackendDevice {
   void reclaimCompletedSlotsUnlocked(u64 seqId) {
     for (auto& slot : slots_) {
       if (slot.state == ChunkSlot::State::GPU && slot.seqId == seqId) {
+        const size_t slotIndex = static_cast<size_t>(&slot - slots_.data());
         slot.state = ChunkSlot::State::Free;
         slot.commands.clear();
         slot.seqId = 0;
+        traceQueueUnlocked("reclaim.free", slotIndex, seqId);
         // TLA+: SeqIdSafety
         DXMT_ASSERT(completedSeqId_ <= nextSeqId_);
       }
@@ -4619,7 +4940,13 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void waitForSequenceUnlocked(u64 seqId, std::unique_lock<std::mutex>& lock) {
+    if (completedSeqId_ < seqId) {
+      traceQueueUnlocked("wait.seq.begin", std::nullopt, seqId);
+    }
     finishCv_.wait(lock, [this, seqId] { return stop_ || completedSeqId_ >= seqId; });
+    if (!stop_) {
+      traceQueueUnlocked("wait.seq.end", std::nullopt, seqId);
+    }
   }
 
   void tryGarbageCollectUnlocked() {
@@ -4680,7 +5007,7 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretchPipelineCache_;
   std::unordered_map<DepthStencilKey, ObjcPtr<id<MTLDepthStencilState>>, DepthStencilKeyHash> depthCache_;
   std::unordered_map<u64, LayerRecord> layers_;
-  std::vector<u64> registeredHwnds_; /* HWNDs whose CAMetalLayers we created */
+  void* wineMetalDevice_ = nullptr;
   RingArena argbufArena_{1 << 20};
   RingArena lambdaStoreArena_{1 << 18};
   RingArena stagingArena_{1 << 20};

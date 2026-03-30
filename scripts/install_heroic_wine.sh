@@ -18,12 +18,14 @@ Options:
                           Default: <repo>/build-x86_64/src
   --mingw-bin-dir <path>  Directory containing libc++.dll and libunwind.dll.
                           Default: ~/llvm-mingw/x86_64-w64-mingw32/bin
+  --legacy-system32-bridge
+                          Also copy dxmt9.dll into <prefix>/drive_c/windows/system32.
+                          Only use this for the old native-DLL bridge path.
   --help                  Show this message.
 
 This script installs the currently-built dxmt9 binaries into a Heroic Wine
 runtime and prefix:
   - d3d9.dll   -> <prefix>/drive_c/windows/system32
-  - dxmt9.dll  -> <prefix>/drive_c/windows/system32
   - dxmt9.dll  -> <wine-root>/lib/wine/x86_64-windows
   - dxmt9.so   -> <wine-root>/lib/wine/x86_64-unix
   - libc++.dll -> <prefix>/drive_c/windows/system32
@@ -91,6 +93,7 @@ wine_root=""
 pe_build_dir="$repo_root/build-win32-x64/src/win32"
 unix_build_dir="$repo_root/build-x86_64/src"
 mingw_bin_dir="$HOME/llvm-mingw/x86_64-w64-mingw32/bin"
+legacy_system32_bridge=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -113,6 +116,10 @@ while [[ $# -gt 0 ]]; do
     --mingw-bin-dir)
       mingw_bin_dir=${2:-}
       shift 2
+      ;;
+    --legacy-system32-bridge)
+      legacy_system32_bridge=true
+      shift
       ;;
     --help|-h)
       usage
@@ -158,11 +165,14 @@ if [[ ! -f "$unix_build_dir/dxmt9.so" && -f "$repo_root/build/src/dxmt9.so" ]]; 
 fi
 
 install_file "$pe_build_dir/d3d9.dll" "$system32_dir/d3d9.dll"
-install_file "$pe_build_dir/dxmt9.dll" "$system32_dir/dxmt9.dll"
 install_file "$pe_build_dir/dxmt9.dll" "$windows_runtime_dir/dxmt9.dll"
 install_file "$unix_build_dir/dxmt9.so" "$unix_runtime_dir/dxmt9.so"
 install_file "$mingw_bin_dir/libc++.dll" "$system32_dir/libc++.dll"
 install_file "$mingw_bin_dir/libunwind.dll" "$system32_dir/libunwind.dll"
+
+if [[ "$legacy_system32_bridge" == true ]]; then
+  install_file "$pe_build_dir/dxmt9.dll" "$system32_dir/dxmt9.dll"
+fi
 
 wine_bin="$wine_root/bin/wine"
 if [[ ! -x "$wine_bin" && -x "$wine_root/bin/wine64" ]]; then

@@ -70,32 +70,39 @@ CXX=$(brew --prefix llvm)/bin/clang++ \
 meson setup build
 ```
 
-### PE DLLs (`d3d9.dll` + `dxmt9.dll`)
+### Wine builtin PE pair (`d3d9.dll` + `dxmt9.dll`)
 
-Requires llvm-mingw on PATH (see Prerequisites above).
+Requires llvm-mingw on PATH plus a Wine toolchain root that provides
+`winebuild`, `libwinecrt0.a`, `libntdll.a`, `libdbghelp.a`, `winemac.so`, and
+`ntdll.so`.
 
 ```sh
-meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
-meson compile -C build-win32-x64
+meson setup build-win32-x64-builtin \
+  --cross-file cross/x86_64-windows.ini \
+  -Dwine_builtin_dll=true \
+  -Dwine_install_path=/path/to/wine/toolchain
+meson compile -C build-win32-x64-builtin
 ```
 
 Outputs:
 
-- `build-win32-x64/src/win32/d3d9.dll`
-- `build-win32-x64/src/win32/dxmt9.dll`
+- `build-win32-x64-builtin/src/win32/d3d9.dll`
+- `build-win32-x64-builtin/src/win32/dxmt9.dll`
 
-### x86_64 unix module for Wine64 / Rosetta
+### x86_64 unix module for Wine64 / Rosetta (`dxmt9.so`)
 
 On Apple Silicon, current macOS Wine hosts run Wine64 as x86_64 under Rosetta 2.
 That includes GPTK, CrossOver, and vanilla Wine builds packaged for macOS.
 Build an x86_64 `dxmt9.so` using a meson native file:
 
 ```sh
-meson setup build-x86_64 --native-file cross/x86_64-macos.ini
-meson compile -C build-x86_64
+meson setup build-x86_64-builtin \
+  --native-file cross/x86_64-macos.ini \
+  -Dwine_install_path=/path/to/wine/toolchain
+meson compile -C build-x86_64-builtin
 ```
 
-Output: `build-x86_64/src/dxmt9.so`
+Output: `build-x86_64-builtin/src/dxmt9.so`
 
 ---
 
@@ -134,7 +141,9 @@ You also need a recent macOS Wine build with:
 
 Confirmed host:
 
-- Heroic Wine 11.4 on macOS, tested on 2026-03-30
+- Heroic Wine 11.5 on macOS, tested on 2026-03-31 with the builtin
+  `d3d9.dll` + `dxmt9.dll` + `dxmt9.so` layout; `wsi_present_x64.exe`
+  completes the full 180-frame present smoke
 
 Intended hosts that follow the same Wine runtime model:
 
@@ -151,16 +160,13 @@ Example install:
 export WINEPREFIX="$HOME/.wine"
 export WINE_ROOT="/path/to/your/wine/runtime"
 
-cp build-win32-x64/src/win32/d3d9.dll \
+cp build-win32-x64-builtin/src/win32/d3d9.dll \
   "$WINEPREFIX/drive_c/windows/system32/d3d9.dll"
 
-cp build-win32-x64/src/win32/dxmt9.dll \
-  "$WINEPREFIX/drive_c/windows/system32/dxmt9.dll"
-
-cp build-win32-x64/src/win32/dxmt9.dll \
+cp build-win32-x64-builtin/src/win32/dxmt9.dll \
   "$WINE_ROOT/lib/wine/x86_64-windows/dxmt9.dll"
 
-cp build-x86_64/src/dxmt9.so \
+cp build-x86_64-builtin/src/dxmt9.so \
   "$WINE_ROOT/lib/wine/x86_64-unix/dxmt9.so"
 
 # Required when the PE bridge was built with llvm-mingw's libc++ runtime
@@ -176,10 +182,8 @@ WINEDLLOVERRIDES="d3d9=n,b" \
 What goes where:
 
 - `d3d9.dll` goes into the Wine prefix because applications load it directly.
-- `dxmt9.dll` currently needs to be present in both the Wine prefix and Wine's
-  `x86_64-windows` runtime directory. The `system32` copy satisfies Wine's PE
-  import resolver for `d3d9.dll`; the runtime copy is the bridge module used by
-  the unixlib path.
+- `dxmt9.dll` goes into Wine's `x86_64-windows` runtime directory as the builtin
+  PE bridge. It is not copied into `system32` on the verified builtin path.
 - `dxmt9.so` goes into Wine's `x86_64-unix` runtime directory because it is the
   unix-side backend module.
 
@@ -210,7 +214,8 @@ The script auto-detects the latest `Wine-*` runtime under Heroic, installs the
 latest plain Heroic Wine runtime by default, skips Heroic `*-DXMT` variants
 unless you pass `--wine-root`, installs the two PE DLLs and unix module, copies
 `libc++.dll` / `libunwind.dll`, and creates `.dxmt9-backup` copies before
-overwriting an existing file.
+overwriting an existing file. This is the verified install path for Heroic Wine
+11.5.
 
 ### For developers
 
@@ -221,16 +226,21 @@ locations as above:
 meson setup build
 meson compile -C build
 
-meson setup build-x86_64 --native-file cross/x86_64-macos.ini
-meson compile -C build-x86_64
+meson setup build-x86_64-builtin \
+  --native-file cross/x86_64-macos.ini \
+  -Dwine_install_path=/path/to/wine/toolchain
+meson compile -C build-x86_64-builtin
 
 export PATH="$HOME/llvm-mingw/bin:$PATH"
-meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
-meson compile -C build-win32-x64
+meson setup build-win32-x64-builtin \
+  --cross-file cross/x86_64-windows.ini \
+  -Dwine_builtin_dll=true \
+  -Dwine_install_path=/path/to/wine/toolchain
+meson compile -C build-win32-x64-builtin
 ```
 
 If you are on Intel macOS and your Wine runtime is also x86_64, you can use the
-normal `build/src/dxmt9.so` output directly instead of `build-x86_64/src/dxmt9.so`.
+normal `build/src/dxmt9.so` output directly instead of `build-x86_64-builtin/src/dxmt9.so`.
 
 ---
 
@@ -277,4 +287,4 @@ scripts/         verify_tla.sh, install_heroic_wine.sh, corpus tooling
 | Formal verification (TLC, all 4 specs) | Complete |
 | C ABI bridge (`dxmt9c_*` between `dxmt9.dll` and `dxmt9.so`) | Complete |
 | PE bridge stack (`d3d9.dll` + `dxmt9.dll`) | Complete |
-| WSI (`macdrv_get_cocoa_view` + `CAMetalLayer`) | Complete |
+| WSI (`winemac` legacy + fallback resolution, `CAMetalLayer`) | Complete |

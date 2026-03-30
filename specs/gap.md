@@ -97,10 +97,10 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 | `src/win32/device.cpp` — `IDirect3DDevice9Ex` + 12 resource wrappers | ✅ | All device + Ex methods |
 | llvm-mingw cross-build (`cross/x86_64-windows.ini`, `cross/aarch64-windows.ini`) | ✅ | x86_64 PE (primary; Wine64/Rosetta/GPTK) + ARM64 PE; both build with llvm-mingw ≥ 20260324 |
 | `d3d9.dll` as user-facing PE DLL | ✅ | Present |
-| `dxmt9.dll` as separate PE bridge | ❌ | Current tree imports the backend directly instead of a separate PE bridge |
-| `dxmt9.so` as Wine unix module | ❌ | Current backend is a native dylib, not a Wine unix module |
-| PE bridge ↔ unix module thunk mechanism | ❌ | No Wine unix-call / unixlib split yet |
-| No direct Mach-O import from `d3d9.dll` | ❌ | Current model expects a native dylib under a PE DLL name |
+| `dxmt9.dll` as separate PE bridge | ✅ | Built in `build-win32-x64-builtin/src/win32/dxmt9.dll` |
+| `dxmt9.so` as Wine unix module | ✅ | Built in `build-x86_64-builtin/src/dxmt9.so`; links to Wine `winemac.so` + `ntdll.so` |
+| PE bridge ↔ unix module thunk mechanism | ✅ | Builtin PE/unix pair via Wine unixlib |
+| No direct Mach-O import from `d3d9.dll` | ✅ | `d3d9.dll` -> `dxmt9.dll` PE bridge -> Wine unixlib -> `dxmt9.so` |
 
 ---
 
@@ -130,7 +130,7 @@ the tests spec.
 
 | Area | Status | Spec |
 |---|---|---|
-| WSI integration test (`tests/wsi_present/`) | ⚠️ | Test executable exists, but the spec now requires a separate PE bridge + unix module split that is not implemented yet |
+| WSI integration test (`tests/wsi_present/`) | ✅ | Heroic Wine 11.5 builtin path passes the full 180-frame `wsi_present_x64.exe` smoke |
 | `shader_runner_dxmt9` backend | ✅ | R-TEST-1.1 |
 | Expanded `.shader_test` corpus (arithmetic, comparison, flow control, transcendental, matrix, source modifiers, texture, FFP sanity/alpha test) | ✅ | R-TEST-1.3, R-TEST-1.4 |
 | Provenance blocks on corpus files | ✅ | R-TEST-9.1 |
@@ -191,3 +191,4 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 |---|---|---|
 | 1 | Benchmark harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
 | 2 | First experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |
+| 3 | Experiment catalogue + launcher harness | R-WILD-1.2, R-WILD-3.1 |

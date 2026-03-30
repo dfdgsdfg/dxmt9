@@ -3,9 +3,9 @@
  * Minimal Win32 + D3D9 smoke test for the WSI path.
  * Cross-compile:
  *   PATH=~/llvm-mingw/bin:$PATH
- *   aarch64-w64-mingw32-clang++ -o wsi_present.exe main.cpp -ld3d9 -luser32 -lgdi32
+ *   x86_64-w64-mingw32-clang++ -o wsi_present_x64.exe main.cpp -ld3d9 -luser32 -lgdi32
  * Run:
- *   wine64 wsi_present.exe
+ *   wine64 wsi_present_x64.exe
  *
  * Expected: window appears, cycles red/green/blue for 3 seconds, exits 0.
  * Any crash or blank black window (no colour) indicates a WSI failure.
@@ -65,6 +65,7 @@ int main() {
     }
 
     printf("OK: device created\n");
+    fflush(stdout);
 
     /* Cycle through red / green / blue, ~60 frames each (~3 seconds total) */
     static const D3DCOLOR colours[] = {
@@ -89,15 +90,21 @@ int main() {
         hr = dev->Present(nullptr, nullptr, nullptr, nullptr);
         if (FAILED(hr)) {
             fprintf(stderr, "FAIL: Present hr=0x%08lx at frame %d\n", hr, frame);
+            fflush(stderr);
             dev->Release();
             d3d->Release();
             return 1;
         }
         ++frame;
+        if ((frame % 30) == 0) {
+            printf("OK: reached frame %d\n", frame);
+            fflush(stdout);
+        }
     }
 
 done:
     printf("OK: %d frames presented without error\n", frame);
+    fflush(stdout);
     dev->Release();
     d3d->Release();
     DestroyWindow(hwnd);

@@ -5,3 +5,23 @@ option(
   description: 'Build the bootstrap smoke test.',
 )
 
+option(
+  'wine_build_path',
+  type: 'string',
+  value: '',
+  description: 'Path to a Wine build tree providing winebuild and builtin import libraries.',
+)
+
+option(
+  'wine_install_path',
+  type: 'string',
+  value: '',
+  description: 'Path to a Wine install tree providing winebuild/runtime libs for builtin modules.',
+)
+
+option(
+  'wine_builtin_dll',
+  type: 'boolean',
+  value: false,
+  description: 'Build dxmt9.dll as a Wine builtin PE bridge when Wine toolchain assets are available.',
+)

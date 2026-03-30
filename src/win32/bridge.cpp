@@ -25,6 +25,16 @@ using WineUnloadUnixLibFn = NTSTATUS (WINAPI *)(unixlib_module_t lib);
 using WineUnixCallDispatcherVar = NTSTATUS (WINAPI *)(unixlib_handle_t handle,
                                                       unsigned int code,
                                                       void *args);
+using NtQueryVirtualMemoryFn = NTSTATUS (WINAPI *)(HANDLE process,
+                                                   const void *base_address,
+                                                   ULONG info_class,
+                                                   void *buffer,
+                                                   SIZE_T size,
+                                                   SIZE_T *result_size);
+
+constexpr ULONG kMemoryWineUnixFuncs = 1000;
+
+extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 struct BridgeState {
   std::once_flag initialized;
@@ -32,8 +42,10 @@ struct BridgeState {
   WineLoadUnixLibFn load_unix_lib = nullptr;
   WineUnloadUnixLibFn unload_unix_lib = nullptr;
   WineUnixCallDispatcherVar dispatcher = nullptr;
+  WineUnixCallDispatcherVar fallback_dispatcher = nullptr;
   unixlib_module_t module = 0;
   unixlib_handle_t handle = 0;
+  unixlib_handle_t fallback_handle = 0;
   NTSTATUS status = DXMT9_STATUS_NOT_SUPPORTED;
 };
 
@@ -47,6 +59,39 @@ T resolveProc(HMODULE module, const char *name) {
   return reinterpret_cast<T>(GetProcAddress(module, name));
 }
 
+NTSTATUS initializeDispatcherOnlyFallback(BridgeState& state) {
+  const auto dispatcher_export = GetProcAddress(state.ntdll, "__wine_unix_call_dispatcher");
+  if (!dispatcher_export) {
+    return DXMT9_STATUS_NOT_SUPPORTED;
+  }
+
+  state.fallback_dispatcher = *reinterpret_cast<WineUnixCallDispatcherVar *>(dispatcher_export);
+  if (!state.fallback_dispatcher) {
+    return DXMT9_STATUS_NOT_SUPPORTED;
+  }
+
+  const auto nt_query_virtual_memory =
+      reinterpret_cast<NtQueryVirtualMemoryFn>(GetProcAddress(state.ntdll, "NtQueryVirtualMemory"));
+  if (!nt_query_virtual_memory) {
+    return DXMT9_STATUS_NOT_SUPPORTED;
+  }
+
+  const NTSTATUS status = nt_query_virtual_memory(GetCurrentProcess(),
+                                                  reinterpret_cast<void *>(&__ImageBase),
+                                                  kMemoryWineUnixFuncs,
+                                                  &state.fallback_handle,
+                                                  sizeof(state.fallback_handle),
+                                                  nullptr);
+  if (status != DXMT9_STATUS_SUCCESS || !state.fallback_handle) {
+    return status;
+  }
+
+  state.handle = state.fallback_handle;
+  state.dispatcher = state.fallback_dispatcher;
+  state.module = 0;
+  return DXMT9_STATUS_SUCCESS;
+}
+
 void initializeBridge() {
   auto& state = bridgeState();
   state.ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -54,6 +99,16 @@ void initializeBridge() {
     state.status = DXMT9_STATUS_DLL_NOT_FOUND;
     return;
   }
+
+#if defined(DXMT9_WINE_BUILTIN_DLL)
+  state.status = __wine_init_unix_call();
+  if (state.status == DXMT9_STATUS_SUCCESS && __wine_unixlib_handle && __wine_unix_call_dispatcher) {
+    state.handle = __wine_unixlib_handle;
+    state.dispatcher = __wine_unix_call_dispatcher;
+    state.module = 0;
+    return;
+  }
+#endif
 
   state.load_unix_lib = resolveProc<WineLoadUnixLibFn>(state.ntdll, "__wine_load_unix_lib");
   state.unload_unix_lib = resolveProc<WineUnloadUnixLibFn>(state.ntdll, "__wine_unload_unix_lib");
@@ -63,18 +118,20 @@ void initializeBridge() {
     state.dispatcher = *reinterpret_cast<WineUnixCallDispatcherVar *>(dispatcher_export);
   }
 
-  if (!state.load_unix_lib || !state.dispatcher) {
-    state.status = DXMT9_STATUS_NOT_SUPPORTED;
-    return;
+  if (state.load_unix_lib && state.dispatcher) {
+    static WCHAR module_name[] = L"dxmt9.so";
+    UNICODE_STRING name{};
+    name.Buffer = module_name;
+    name.Length = static_cast<USHORT>((wcslen(module_name)) * sizeof(WCHAR));
+    name.MaximumLength = name.Length + sizeof(WCHAR);
+
+    state.status = state.load_unix_lib(&name, &state.module, &state.handle);
+    if (state.status == DXMT9_STATUS_SUCCESS) {
+      return;
+    }
   }
 
-  static WCHAR module_name[] = L"dxmt9.so";
-  UNICODE_STRING name{};
-  name.Buffer = module_name;
-  name.Length = static_cast<USHORT>((wcslen(module_name)) * sizeof(WCHAR));
-  name.MaximumLength = name.Length + sizeof(WCHAR);
-
-  state.status = state.load_unix_lib(&name, &state.module, &state.handle);
+  state.status = initializeDispatcherOnlyFallback(state);
 }
 
 NTSTATUS ensureBridgeReady() {
@@ -128,18 +185,4 @@ extern "C" __declspec(dllexport) HRESULT WINAPI dxmt9_bridge_create9_ex(UINT sdk
   }
   *ppD3D = CreateFactoryExImpl(factory);
   return *ppD3D ? S_OK : E_OUTOFMEMORY;
-}
-
-extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
-  if (reason == DLL_PROCESS_ATTACH) {
-    DisableThreadLibraryCalls(instance);
-  } else if (reason == DLL_PROCESS_DETACH) {
-    auto& state = bridgeState();
-    if (state.unload_unix_lib && state.module) {
-      state.unload_unix_lib(state.module);
-      state.module = 0;
-      state.handle = 0;
-    }
-  }
-  return TRUE;
 }

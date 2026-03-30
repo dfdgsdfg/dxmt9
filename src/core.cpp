@@ -2165,7 +2165,23 @@ HResult Device::endScene() {
 }
 
 ClearDesc Device::snapshotClearDesc(const ClearDesc& desc) const {
-  return desc;
+  ClearDesc snapshot = desc;
+  if (snapshot.clearColor) {
+    bool hasExplicitColor = false;
+    for (const auto& attachment : snapshot.colorAttachments) {
+      if (attachment.handle) {
+        hasExplicitColor = true;
+        break;
+      }
+    }
+    if (!hasExplicitColor) {
+      snapshot.colorAttachments = state_.renderTargets;
+    }
+  }
+  if ((snapshot.clearDepth || snapshot.clearStencil) && !snapshot.depthStencil.handle) {
+    snapshot.depthStencil = state_.depthStencil;
+  }
+  return snapshot;
 }
 
 SwapDesc Device::snapshotSwapDesc() const {

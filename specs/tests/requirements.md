@@ -292,7 +292,7 @@ It is the only test category that **requires Wine** and **cannot run as a native
 macOS executable** — it is therefore separate from the R-TEST-7.1 scope.
 
 **R-TEST-11.1** There must be a cross-compiled Win32 PE test executable
-(`tests/wsi_present/wsi_present.exe`) that:
+(`tests/wsi_present/wsi_present_x64.exe`) that:
 
 1. Creates a Win32 window via `CreateWindow`.
 2. Calls `Direct3DCreate9` (routed through our `d3d9.dll`).
@@ -315,27 +315,41 @@ must not depend on any pre-built binary or Wine-specific SDK — only the standa
 | Exit code | 0 |
 | Visual | Window cycles visibly red → green → blue (manual check) |
 
-**R-TEST-11.4** The test must be runnable with any Wine64-capable build on macOS
-that provides `winemac.drv` (including x86_64 Wine64 under Rosetta and native
-ARM64 Wine builds). It must not require a custom Wine fork.
+**R-TEST-11.4** The test must be runnable with a recent Wine64-capable build on
+macOS that provides:
+
+- `winemac.drv`
+- Wine builtin-module support (`winebuild` + builtin import libs at build time)
+- the `x86_64-windows` / `x86_64-unix` runtime module directories
+
+It must not require a custom Wine fork, but it may require a separate Wine
+toolchain install tree for building the builtin PE bridge.
 
 **R-TEST-11.5** Installation procedure:
 
 ```sh
-meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
-meson compile -C build-win32-x64
-meson setup build-x86_64 --native-file cross/x86_64-macos.ini
-meson compile -C build-x86_64
-cp build-win32-x64/src/win32/d3d9.dll <wine-prefix>/drive_c/windows/system32/d3d9.dll
-cp build-win32-x64/src/win32/dxmt9.dll <wine-prefix>/drive_c/windows/system32/dxmt9.dll
-cp build-win32-x64/src/win32/dxmt9.dll <wine-root>/lib/wine/x86_64-windows/dxmt9.dll
-cp build-x86_64/src/dxmt9.so          <wine-root>/lib/wine/x86_64-unix/dxmt9.so
-WINEDLLOVERRIDES="d3d9=n,b" wine tests/wsi_present/wsi_present.exe
+# Build-time Wine toolchain root must provide winebuild, libwinecrt0.a,
+# libntdll.a, libdbghelp.a, winemac.so, and ntdll.so.
+meson setup build-win32-x64-builtin \
+  --cross-file cross/x86_64-windows.ini \
+  -Dwine_builtin_dll=true \
+  -Dwine_install_path=<wine-toolchain-root>
+meson compile -C build-win32-x64-builtin
+
+meson setup build-x86_64-builtin \
+  --native-file cross/x86_64-macos.ini \
+  -Dwine_install_path=<wine-toolchain-root>
+meson compile -C build-x86_64-builtin
+
+cp build-win32-x64-builtin/src/win32/d3d9.dll <wine-prefix>/drive_c/windows/system32/d3d9.dll
+cp build-win32-x64-builtin/src/win32/dxmt9.dll <wine-root>/lib/wine/x86_64-windows/dxmt9.dll
+cp build-x86_64-builtin/src/dxmt9.so          <wine-root>/lib/wine/x86_64-unix/dxmt9.so
+WINEDLLOVERRIDES="d3d9=n,b" wine tests/wsi_present/wsi_present_x64.exe
 ```
 
-**R-TEST-11.6** When `macdrv_get_cocoa_view` is not available (symbol absent from
-`RTLD_DEFAULT` in the unix module — i.e., running outside Wine or without
-`winemac.drv` loaded), `CreateDevice` must still succeed and `Present` must not
-crash. The present is a no-op in this case (no visible output). This behaviour
-is validated by the existing `dxmt9-core-spec` test suite which exercises the
-present path with a null window handle.
+**R-TEST-11.6** When neither the legacy `macdrv_get_cocoa_view` export nor the
+`macdrv_functions` fallback table is available (for example outside Wine or
+without `winemac.drv` loaded), `CreateDevice` must still succeed and `Present`
+must not crash. The present is a no-op in this case (no visible output). This
+behaviour is validated by the existing `dxmt9-core-spec` test suite which
+exercises the present path with a null window handle.

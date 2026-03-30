@@ -25,36 +25,37 @@ graph LR
 
 ---
 
-## 2. HWND → NSView Resolution
+## 2. HWND → Cocoa View Resolution
 
-Wine's macOS window driver (`winemac.drv`) exports `macdrv_get_cocoa_view` as a
-global symbol in distributions that include it. **No custom Wine fork is required.**
-GPTK 2.0+, current CrossOver, and recent vanilla Wine builds on macOS are all
-valid host candidates as long as they expose the symbol:
+`dxmt9.so` supports two Wine host paths:
 
-```c
-/* Exported from winemac.drv in GPTK 2.0+ and equivalent Wine distributions */
-macdrv_view macdrv_get_cocoa_view(HWND hwnd);
-/* macdrv_view is NSView* cast to an opaque type — safe to cast back */
-```
+1. Legacy direct symbol path:
+   - `macdrv_get_cocoa_view(HWND)` returns the backing `NSView*`
+2. Builtin-module fallback path used by Heroic Wine 11.5:
+   - `macdrv_functions[3]` returns a `WineWindow*`
+   - `dxmt9.so` resolves `-[WineWindow contentView]` on the Cocoa main queue
+   - `macdrv_functions[6]` creates a `WineMetalView*` from that
+     `WineContentView*`
+   - `macdrv_functions[7]` returns the `CAMetalLayer*`
 
-`dxmt9.so` resolves this symbol at runtime via `dlsym(RTLD_DEFAULT, ...)`.
-`RTLD_DEFAULT` searches all already-loaded images in the process; `winemac.drv.so`
-is loaded by Wine before any D3D9 call reaches `dxmt9.so`:
+The resolution order is:
 
 ```c
-static NSView* get_nsview_for_hwnd(u64 hwnd) {
-    using Fn = NSView* (*)(void*);
-    static Fn fn = reinterpret_cast<Fn>(
-        dlsym(RTLD_DEFAULT, "macdrv_get_cocoa_view"));
-    if (!fn) return nil;
-    return fn(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)));
-}
+// 1. Try legacy direct NSView export
+macdrv_get_cocoa_view(hwnd)
+
+// 2. Otherwise fall back to Heroic/DXMT-style function table
+macdrv_functions[3] -> WineWindow*
+WineWindow.contentView -> WineContentView*
+macdrv_functions[6](WineContentView*, metal_device) -> WineMetalView*
+macdrv_functions[7](WineMetalView*) -> CAMetalLayer*
 ```
 
-If the symbol is absent (non-Wine environment, unit tests, or an older Wine build)
-the function returns `nullptr`; `Present` becomes a no-op and the device remains
-usable for offscreen rendering and `GetRenderTargetData` readback.
+`dxmt9.so` resolves the legacy symbol or function table at runtime via
+`dlsym(RTLD_DEFAULT, ...)`. If neither path is available (non-Wine environment,
+unit tests, or an older Wine build), the function returns `nullptr`; `Present`
+becomes a no-op and the device remains usable for offscreen rendering and
+`GetRenderTargetData` readback.
 
 ---
 
@@ -62,8 +63,12 @@ usable for offscreen rendering and `GetRenderTargetData` readback.
 
 ### 3.1 Creation (at CreateDevice / CreateAdditionalSwapChain)
 
-1. Resolve `HWND` to `NSView*` via `macdrv_get_cocoa_view(hwnd)`.
-2. Create and attach a `CAMetalLayer` as the view's backing layer:
+1. Resolve `HWND` to either:
+   - `NSView*` directly through `macdrv_get_cocoa_view(hwnd)`, or
+   - `WineWindow* -> contentView -> WineMetalView -> CAMetalLayer*` through the
+     `macdrv_functions` fallback path.
+2. If using the legacy `NSView*` path, create and attach a `CAMetalLayer` as
+   the view's backing layer:
    ```objc
    CAMetalLayer *layer = [CAMetalLayer layer];
    layer.device          = mtlDevice;
@@ -75,7 +80,9 @@ usable for offscreen rendering and `GetRenderTargetData` readback.
    nsView.wantsLayer     = YES;
    nsView.layer          = layer;
    ```
-3. Store `CAMetalLayer*` in the `SwapChain` object.
+3. If using the `WineMetalView` fallback path, store the returned
+   `WineMetalView*` for later release and use its `CAMetalLayer*` directly.
+4. Store `CAMetalLayer*` in the `SwapChain` object.
 
 ### 3.2 Resize
 
@@ -222,41 +229,64 @@ for macOS, as long as it provides:
 
 Confirmed host:
 
-- Heroic Wine 11.4 on macOS, validated on 2026-03-30
+- Heroic Wine 11.5 on macOS, validated on 2026-03-31 with the builtin-module
+  layout: `dxmt9.dll` loads as a Wine builtin PE bridge, `dxmt9.so` loads as
+  the unix module, and the full 180-frame `wsi_present_x64.exe` smoke passes
 
 Known unsupported host:
 
 - GPTK 1.1 / Wine 7.7, which does not provide the required unixlib bridge path
 
 ```sh
-# Build x86_64 dxmt9.so unix module (requires meson native file for x86_64 target):
-meson setup build-x86_64 --native-file cross/x86_64-macos.ini
-meson compile -C build-x86_64
+# Build prerequisites for Wine builtin modules:
+# - winebuild
+# - libwinecrt0.a
+# - libntdll.a
+# - libdbghelp.a
+# - x86_64-unix/winemac.so
+# - x86_64-unix/ntdll.so
+#
+# These may come from a Wine build tree or from a separate Wine toolchain
+# install tree. A runtime-only Wine app bundle is not sufficient unless it
+# ships those build-time assets.
 
-# Build x86_64 d3d9.dll and dxmt9.dll PE binaries:
-meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
-meson compile -C build-win32-x64
+# Build x86_64 dxmt9.so unix module as a Wine unix module:
+meson setup build-x86_64-builtin \
+  --native-file cross/x86_64-macos.ini \
+  -Dwine_install_path=<wine-toolchain-root>
+meson compile -C build-x86_64-builtin
+
+# Build x86_64 d3d9.dll and dxmt9.dll as Wine builtin PE modules:
+meson setup build-win32-x64-builtin \
+  --cross-file cross/x86_64-windows.ini \
+  -Dwine_builtin_dll=true \
+  -Dwine_install_path=<wine-toolchain-root>
+meson compile -C build-win32-x64-builtin
 
 # Install the user-facing D3D9 override into the Wine prefix:
-cp build-win32-x64/src/win32/d3d9.dll \
+cp build-win32-x64-builtin/src/win32/d3d9.dll \
   <wine-prefix>/drive_c/windows/system32/d3d9.dll
-cp build-win32-x64/src/win32/dxmt9.dll \
-  <wine-prefix>/drive_c/windows/system32/dxmt9.dll
 
 # Install the internal bridge and unix module into Wine's module directories:
-cp build-win32-x64/src/win32/dxmt9.dll \
+cp build-win32-x64-builtin/src/win32/dxmt9.dll \
   <wine-root>/lib/wine/x86_64-windows/dxmt9.dll
-cp build-x86_64/src/dxmt9.so \
+cp build-x86_64-builtin/src/dxmt9.so \
   <wine-root>/lib/wine/x86_64-unix/dxmt9.so
 
 WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
 ```
 
-No custom Wine fork is required. On a compatible macOS Wine host,
-`winemac.drv.so` exports `macdrv_get_cocoa_view`, and `dxmt9.so` finds it via
-`dlsym(RTLD_DEFAULT, ...)` at the first `Present` call.
+No custom Wine fork is required. On a compatible macOS Wine host, `dxmt9.so`
+finds either the legacy `macdrv_get_cocoa_view` export or the `macdrv_functions`
+fallback table via `dlsym(RTLD_DEFAULT, ...)` at the first `Present` call.
 
-Current implementation note: `dxmt9.dll` is installed in both
-`<wine-prefix>/drive_c/windows/system32` and
-`<wine-root>/lib/wine/x86_64-windows`. The `system32` copy satisfies PE import
-resolution for `d3d9.dll`; the runtime copy remains the Wine bridge module.
+Current implementation note: the default installation layout is now:
+
+- `d3d9.dll` in `<wine-prefix>/drive_c/windows/system32`
+- `dxmt9.dll` in `<wine-root>/lib/wine/x86_64-windows`
+- `dxmt9.so` in `<wine-root>/lib/wine/x86_64-unix`
+
+`dxmt9.dll` is no longer copied into `system32` by default. A legacy
+`system32/dxmt9.dll` staging mode still exists only for the old native-bridge
+layout and should not be used for builtin-module hosts such as Heroic Wine
+11.5.
