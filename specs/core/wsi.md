@@ -27,32 +27,20 @@ graph LR
 
 ## 2. HWND → NSView Resolution
 
-Wine's macOS window driver (`winemac.drv`) exposes window data through the
-`macdrv_win_data` struct internally, but does not export a public accessor for
-the client-area `NSView`. Our Wine fork adds this accessor:
+Wine's macOS window driver (`winemac.drv`) exports `macdrv_get_cocoa_view` as a
+global symbol in distributions that include it. **No custom Wine fork is required.**
+GPTK 2.0+, current CrossOver, and recent vanilla Wine builds on macOS are all
+valid host candidates as long as they expose the symbol:
 
 ```c
-/* Added to dlls/winemac.drv/window.c in github.com/dfdgsdfg/wine */
+/* Exported from winemac.drv in GPTK 2.0+ and equivalent Wine distributions */
 macdrv_view macdrv_get_cocoa_view(HWND hwnd);
 /* macdrv_view is NSView* cast to an opaque type — safe to cast back */
 ```
 
-The implementation:
-```c
-macdrv_view macdrv_get_cocoa_view(HWND hwnd)
-{
-    struct macdrv_win_data *data = get_win_data(hwnd);
-    macdrv_view ret = NULL;
-    if (data)
-        ret = data->client_view;
-    release_win_data(data);
-    return ret;
-}
-```
-
-`libdxmt9.dylib` resolves this symbol at runtime via `dlsym(RTLD_DEFAULT, ...)`.
-`RTLD_DEFAULT` searches all already-loaded images; `winemac.drv` (a Mach-O `.so`)
-is loaded into the same ARM64 address space before `libdxmt9.dylib`:
+`dxmt9.so` resolves this symbol at runtime via `dlsym(RTLD_DEFAULT, ...)`.
+`RTLD_DEFAULT` searches all already-loaded images in the process; `winemac.drv.so`
+is loaded by Wine before any D3D9 call reaches `dxmt9.so`:
 
 ```c
 static NSView* get_nsview_for_hwnd(u64 hwnd) {
@@ -64,9 +52,9 @@ static NSView* get_nsview_for_hwnd(u64 hwnd) {
 }
 ```
 
-If the symbol is absent (non-Wine environment, unit tests) the function returns
-`nullptr`; `Present` becomes a no-op and the device remains usable for offscreen
-rendering and `GetRenderTargetData` readback.
+If the symbol is absent (non-Wine environment, unit tests, or an older Wine build)
+the function returns `nullptr`; `Present` becomes a no-op and the device remains
+usable for offscreen rendering and `GetRenderTargetData` readback.
 
 ---
 
@@ -136,24 +124,26 @@ The `AdapterIdentifier` for each adapter must include the monitor's `CGDirectDis
 
 ---
 
-## 6. WinemetalApi — Reduced Scope
+## 6. PE Bridge and Unix Module Split
 
-The original design routed all window/layer operations through a `WinemetalApi`
-callback table that a Wine fork had to populate. Since `macdrv_get_cocoa_view` and
-`CAMetalLayer` manipulation are available without any Wine patching, the table is
-reduced to one optional callback:
+The Wine-facing runtime is split into three binaries:
 
-| Function pointer | Purpose | Required? |
+| Binary | Kind | Role |
 |---|---|---|
-| `compile_shader` | Wine-side MSL compilation (Apple shader converter) | Optional |
+| `d3d9.dll` | PE DLL | User-facing D3D9 COM exports (`Direct3DCreate9`, `Direct3DCreate9Ex`) |
+| `dxmt9.dll` | PE DLL | Internal bridge layer; marshals plain C / POD requests from `d3d9.dll` into Wine unix calls |
+| `dxmt9.so` | Wine unix module | Native Metal / ObjC implementation, WSI, shader translation, and backend execution |
+
+The bridge and unix module communicate through Wine's PE↔unix thunk mechanism.
+`d3d9.dll` and `dxmt9.dll` are both PE images; `dxmt9.so` is the unix-side module
+loaded by Wine. On macOS, `dxmt9.so` is still a Mach-O binary, but it follows
+Wine's `.so` naming and loader conventions. The PE bridge must never import a
+Mach-O / `.dylib` binary as if it were a Windows DLL.
 
 All window/layer functions (`get_view`, `create_layer`, `resize_layer`,
-`set_sync`, `destroy_layer`, `next_drawable`, `present_drawable`) are implemented
-directly in `libdxmt9.dylib` using `macdrv_get_cocoa_view` + ObjC Metal APIs.
-They are removed from `WinemetalApi`.
-
-The stub `WinemetalApi` registered in `d3d9.dll`'s `DllMain` remains as a
-no-op fallback for non-Wine environments (testing, future ports).
+`set_sync`, `destroy_layer`, `next_drawable`, `present_drawable`) live in
+`dxmt9.so` using `macdrv_get_cocoa_view` + ObjC Metal APIs. The PE bridge owns
+only marshalling, opaque handles, and Wine-visible thunk entry points.
 
 ---
 
@@ -179,32 +169,94 @@ Windowed resize does **not** cause device lost.
 
 ---
 
-## 9. Win32 PE Wrapper and Initialization
+## 9. PE DLL, Bridge DLL, and Unix Module Initialization
 
-`libdxmt9.dylib` is a native Mach-O ARM64 dylib compiled with Apple clang.
-`d3d9.dll` is a PE32+ ARM64 DLL cross-compiled with llvm-mingw, living in
-`src/win32/` of this repository. On Apple Silicon, Wine's PE and native code
-share the ARM64 address space, so calls from the PE DLL into the dylib are
-direct function calls — no thunking needed.
+`d3d9.dll` is the user-facing PE32+ D3D9 module loaded by the application.
+`dxmt9.dll` is a second PE32+ bridge DLL loaded by `d3d9.dll`. `dxmt9.so` is the
+unix-side Wine module that contains the native Metal and WSI implementation.
+
+On the common macOS Wine64 / Rosetta path:
+
+- `d3d9.dll` target: `x86_64-w64-mingw32`
+- `dxmt9.dll` target: `x86_64-w64-mingw32`
+- `dxmt9.so` target: host-side x86_64 Mach-O module loaded through Wine's unix
+  loader path
+
+32-bit x86 is not the primary target. The architecture split is therefore:
+
+1. `d3d9.dll` handles COM entry points and user-visible D3D9 ABI.
+2. `dxmt9.dll` handles plain-C marshalling and Wine unix-call dispatch.
+3. `dxmt9.so` handles ObjC, Metal, `macdrv_get_cocoa_view`, and GPU execution.
 
 ### 9.1 Initialization Sequence
 
 `d3d9.dll`'s `DllMain(DLL_PROCESS_ATTACH)`:
 
-1. Registers a stub `WinemetalApi` via `dxmt9_winemetal_set_api(&kStubApi)`.
-   (A future Wine build with Apple shader converter support would call this
-   again with a real `compile_shader` implementation.)
-2. Exports `Direct3DCreate9` / `Direct3DCreate9Ex`, each calling
-   `dxmt9c_factory_create()` and wrapping the result in a COM object.
+1. Initializes the D3D9-side wrapper state.
+2. Resolves and loads `dxmt9.dll` as the internal PE bridge.
+3. Exports `Direct3DCreate9` / `Direct3DCreate9Ex`; each calls into `dxmt9.dll`
+   for factory creation.
 
-### 9.2 Installation
+`dxmt9.dll` then:
+
+1. Registers its unix-call table with Wine.
+2. Marshals `dxmt9c_*`, WSI, and shader requests into `dxmt9.so`.
+3. Never imports `dxmt9.so` as a normal PE dependency; the handoff is through
+   Wine's unix-call / unixlib path only.
+
+`dxmt9.so` then:
+
+1. Resolves `macdrv_get_cocoa_view` from `RTLD_DEFAULT`.
+2. Creates `CAMetalLayer` objects on demand.
+3. Owns all Metal device, queue, shader, and presentation state.
+
+### 9.2 Installation (x86_64 / Rosetta)
+
+The primary supported path is x86_64 Wine running under Rosetta 2 on Apple
+Silicon. The Wine host may be GPTK, CrossOver, or a recent vanilla Wine build
+for macOS, as long as it provides:
+
+- Wine unixlib support
+- `winemac.drv`
+- the standard `x86_64-windows` and `x86_64-unix` runtime directories
+
+Confirmed host:
+
+- Heroic Wine 11.4 on macOS, validated on 2026-03-30
+
+Known unsupported host:
+
+- GPTK 1.1 / Wine 7.7, which does not provide the required unixlib bridge path
 
 ```sh
-cp build/src/libdxmt9.dylib   ~/.wine/drive_c/windows/system32/dxmt9.dll
-cp build-win32/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
+# Build x86_64 dxmt9.so unix module (requires meson native file for x86_64 target):
+meson setup build-x86_64 --native-file cross/x86_64-macos.ini
+meson compile -C build-x86_64
+
+# Build x86_64 d3d9.dll and dxmt9.dll PE binaries:
+meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
+meson compile -C build-win32-x64
+
+# Install the user-facing D3D9 override into the Wine prefix:
+cp build-win32-x64/src/win32/d3d9.dll \
+  <wine-prefix>/drive_c/windows/system32/d3d9.dll
+cp build-win32-x64/src/win32/dxmt9.dll \
+  <wine-prefix>/drive_c/windows/system32/dxmt9.dll
+
+# Install the internal bridge and unix module into Wine's module directories:
+cp build-win32-x64/src/win32/dxmt9.dll \
+  <wine-root>/lib/wine/x86_64-windows/dxmt9.dll
+cp build-x86_64/src/dxmt9.so \
+  <wine-root>/lib/wine/x86_64-unix/dxmt9.so
+
 WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
 ```
 
-Requires the dxmt9 Wine fork (`github.com/dfdgsdfg/wine`) which adds
-`macdrv_get_cocoa_view` to `winemac.drv`. The fork's only change to Wine is
-`dlls/winemac.drv/window.c` + `macdrv.h`; it tracks `wine-mirror/wine` main.
+No custom Wine fork is required. On a compatible macOS Wine host,
+`winemac.drv.so` exports `macdrv_get_cocoa_view`, and `dxmt9.so` finds it via
+`dlsym(RTLD_DEFAULT, ...)` at the first `Present` call.
+
+Current implementation note: `dxmt9.dll` is installed in both
+`<wine-prefix>/drive_c/windows/system32` and
+`<wine-root>/lib/wine/x86_64-windows`. The `system32` copy satisfies PE import
+resolution for `d3d9.dll`; the runtime copy remains the Wine bridge module.

@@ -301,9 +301,9 @@ macOS executable** — it is therefore separate from the R-TEST-7.1 scope.
 5. Exits with code 0 on success, non-zero on any `FAILED(hr)` result.
 
 **R-TEST-11.2** The test executable must be built from source using llvm-mingw
-targeting `aarch64-w64-mingw32`. It must not depend on any pre-built binary or
-Wine-specific SDK — only the standard `d3d9.h` / `windows.h` headers from
-llvm-mingw's sysroot.
+targeting `x86_64-w64-mingw32` for the default macOS/Rosetta Wine64 path. It
+must not depend on any pre-built binary or Wine-specific SDK — only the standard
+`d3d9.h` / `windows.h` headers from llvm-mingw's sysroot.
 
 **R-TEST-11.3** The pass criterion is:
 
@@ -315,20 +315,27 @@ llvm-mingw's sysroot.
 | Exit code | 0 |
 | Visual | Window cycles visibly red → green → blue (manual check) |
 
-**R-TEST-11.4** The test must be runnable with any ARM64-capable Wine build that
-provides `winemac.drv` (e.g., Apple Game Porting Toolkit Wine, CrossOver 24+).
-It must not require a custom Wine fork.
+**R-TEST-11.4** The test must be runnable with any Wine64-capable build on macOS
+that provides `winemac.drv` (including x86_64 Wine64 under Rosetta and native
+ARM64 Wine builds). It must not require a custom Wine fork.
 
 **R-TEST-11.5** Installation procedure:
 
 ```sh
-cp build/src/libdxmt9.dylib      <wine-prefix>/drive_c/windows/system32/dxmt9.dll
-cp build-win32/src/win32/d3d9.dll <wine-prefix>/drive_c/windows/system32/d3d9.dll
+meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
+meson compile -C build-win32-x64
+meson setup build-x86_64 --native-file cross/x86_64-macos.ini
+meson compile -C build-x86_64
+cp build-win32-x64/src/win32/d3d9.dll <wine-prefix>/drive_c/windows/system32/d3d9.dll
+cp build-win32-x64/src/win32/dxmt9.dll <wine-prefix>/drive_c/windows/system32/dxmt9.dll
+cp build-win32-x64/src/win32/dxmt9.dll <wine-root>/lib/wine/x86_64-windows/dxmt9.dll
+cp build-x86_64/src/dxmt9.so          <wine-root>/lib/wine/x86_64-unix/dxmt9.so
 WINEDLLOVERRIDES="d3d9=n,b" wine tests/wsi_present/wsi_present.exe
 ```
 
 **R-TEST-11.6** When `macdrv_get_cocoa_view` is not available (symbol absent from
-`RTLD_DEFAULT` — i.e., running outside Wine), `CreateDevice` must still succeed
-and `Present` must not crash. The present is a no-op in this case (no visible
-output). This behaviour is validated by the existing `dxmt9-core-spec` test
-suite which exercises the present path with a null window handle.
+`RTLD_DEFAULT` in the unix module — i.e., running outside Wine or without
+`winemac.drv` loaded), `CreateDevice` must still succeed and `Present` must not
+crash. The present is a no-op in this case (no visible output). This behaviour
+is validated by the existing `dxmt9-core-spec` test suite which exercises the
+present path with a null window handle.

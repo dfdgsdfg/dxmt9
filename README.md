@@ -3,8 +3,8 @@
 Wine / D3D9-to-Metal translation layer for macOS.
 
 Translates Direct3D 9 API calls from applications running under Wine directly
-into Metal — no Vulkan middle layer. Targets plain `IDirect3DDevice9`;
-`IDirect3DDevice9Ex` is next.
+into Metal with no Vulkan middle layer. Supports `IDirect3D9`,
+`IDirect3D9Ex`, `IDirect3DDevice9`, and `IDirect3DDevice9Ex`.
 
 Related projects: [DXMT](https://github.com/3Shain/dxmt) (D3D11/D3D12 Metal),
 [d3d9-webgl](https://github.com/LostMyCode/d3d9-webgl) (D3D9 reference).
@@ -33,7 +33,7 @@ This installs:
 | `llvm` | C++20 / ObjC++ compiler |
 | `tla+-toolbox` (cask) | TLC model checker for formal verification |
 
-**llvm-mingw** (required for the Win32 PE `d3d9.dll` only):
+**llvm-mingw** (required for the Win32 PE bridge DLLs):
 
 `llvm-mingw` is not in Homebrew. Download the latest pre-built universal binary from GitHub and unpack it:
 
@@ -52,13 +52,15 @@ export PATH="$HOME/llvm-mingw/bin:$PATH"
 
 ## Build
 
-### `libdxmt9.dylib` (macOS native)
+### Native unix module (`dxmt9.so`)
 
 ```sh
 meson setup build
 meson compile -C build
 meson test -C build
 ```
+
+Output: `build/src/dxmt9.so`
 
 To use the Homebrew LLVM toolchain explicitly:
 
@@ -68,30 +70,167 @@ CXX=$(brew --prefix llvm)/bin/clang++ \
 meson setup build
 ```
 
-### `d3d9.dll` (Win32 PE, cross-compiled for ARM64 Windows / Wine)
+### PE DLLs (`d3d9.dll` + `dxmt9.dll`)
 
 Requires llvm-mingw on PATH (see Prerequisites above).
 
 ```sh
-meson setup build-win32 --cross-file cross/aarch64-windows.ini
-meson compile -C build-win32
+meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
+meson compile -C build-win32-x64
 ```
 
-Output: `build-win32/src/win32/d3d9.dll`
+Outputs:
 
-### Installing into a Wine prefix
+- `build-win32-x64/src/win32/d3d9.dll`
+- `build-win32-x64/src/win32/dxmt9.dll`
 
-`libdxmt9.dylib` looks up `macdrv_get_cocoa_view` at runtime via `dlsym`.
-This function is present in the dxmt9 Wine fork — it is not in stock Wine.
+### x86_64 unix module for Wine64 / Rosetta
+
+On Apple Silicon, current macOS Wine hosts run Wine64 as x86_64 under Rosetta 2.
+That includes GPTK, CrossOver, and vanilla Wine builds packaged for macOS.
+Build an x86_64 `dxmt9.so` using a meson native file:
 
 ```sh
-# Build Wine from https://github.com/dfdgsdfg/wine (tracks wine-mirror/wine main;
-# the only change is macdrv_get_cocoa_view in dlls/winemac.drv/window.c).
-# Then install dxmt9 into the prefix:
-cp build/src/libdxmt9.dylib ~/.wine/drive_c/windows/system32/dxmt9.dll
-cp build-win32/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
-WINEDLLOVERRIDES="d3d9=n,b" wine game.exe
+meson setup build-x86_64 --native-file cross/x86_64-macos.ini
+meson compile -C build-x86_64
 ```
+
+Output: `build-x86_64/src/dxmt9.so`
+
+---
+
+## Runtime Layout
+
+`dxmt9` is split into three runtime binaries:
+
+| Binary | Kind | Role |
+|---|---|---|
+| `d3d9.dll` | PE DLL | User-facing D3D9 entry points loaded by the app |
+| `dxmt9.dll` | PE DLL | Internal bridge that marshals `dxmt9c_*` and shader calls into Wine unixlib |
+| `dxmt9.so` | Wine unix module | Native Metal backend, WSI, shader translation, and presentation |
+
+`d3d9.dll` imports `dxmt9.dll`. `dxmt9.dll` loads `dxmt9.so` through Wine's
+unixlib loader. The PE bridge must not import a Mach-O `.dylib` directly.
+
+---
+
+## Installing dxmt9
+
+### For users
+
+You need these files from a release or local build:
+
+- `d3d9.dll`
+- `dxmt9.dll`
+- `dxmt9.so`
+- `libc++.dll` and `libunwind.dll` from `llvm-mingw` if your Wine prefix does
+  not already have them
+
+You also need a recent macOS Wine build with:
+
+- unixlib support
+- `winemac.drv`
+- a standard Wine runtime layout with `x86_64-windows` and `x86_64-unix`
+
+Confirmed host:
+
+- Heroic Wine 11.4 on macOS, tested on 2026-03-30
+
+Intended hosts that follow the same Wine runtime model:
+
+- recent CrossOver
+- recent vanilla Wine on macOS
+
+Known unsupported host:
+
+- GPTK 1.1 / Wine 7.7, which is too old for this unixlib bridge model
+
+Example install:
+
+```sh
+export WINEPREFIX="$HOME/.wine"
+export WINE_ROOT="/path/to/your/wine/runtime"
+
+cp build-win32-x64/src/win32/d3d9.dll \
+  "$WINEPREFIX/drive_c/windows/system32/d3d9.dll"
+
+cp build-win32-x64/src/win32/dxmt9.dll \
+  "$WINEPREFIX/drive_c/windows/system32/dxmt9.dll"
+
+cp build-win32-x64/src/win32/dxmt9.dll \
+  "$WINE_ROOT/lib/wine/x86_64-windows/dxmt9.dll"
+
+cp build-x86_64/src/dxmt9.so \
+  "$WINE_ROOT/lib/wine/x86_64-unix/dxmt9.so"
+
+# Required when the PE bridge was built with llvm-mingw's libc++ runtime
+cp "$HOME/llvm-mingw/x86_64-w64-mingw32/bin/libc++.dll" \
+  "$WINEPREFIX/drive_c/windows/system32/libc++.dll"
+cp "$HOME/llvm-mingw/x86_64-w64-mingw32/bin/libunwind.dll" \
+  "$WINEPREFIX/drive_c/windows/system32/libunwind.dll"
+
+WINEDLLOVERRIDES="d3d9=n,b" \
+  "$WINE_ROOT/bin/wine" game.exe
+```
+
+What goes where:
+
+- `d3d9.dll` goes into the Wine prefix because applications load it directly.
+- `dxmt9.dll` currently needs to be present in both the Wine prefix and Wine's
+  `x86_64-windows` runtime directory. The `system32` copy satisfies Wine's PE
+  import resolver for `d3d9.dll`; the runtime copy is the bridge module used by
+  the unixlib path.
+- `dxmt9.so` goes into Wine's `x86_64-unix` runtime directory because it is the
+  unix-side backend module.
+
+Typical `WINE_ROOT` examples:
+
+- GPTK:
+  `/Applications/Game Porting Toolkit.app/Contents/Resources/wine`
+- CrossOver:
+  `/Applications/CrossOver.app/Contents/SharedSupport/CrossOver`
+- Vanilla Wine:
+  the root that contains `bin/wine64` and `lib/wine/`
+
+Typical `WINEPREFIX` examples:
+
+- GPTK or vanilla Wine:
+  `~/.wine` or a custom prefix path
+- CrossOver:
+  the bottle prefix path managed by CrossOver
+
+For Heroic's bundled Wine, the repo includes an installer helper that stages
+the files into the current Heroic runtime and a target prefix:
+
+```sh
+bash scripts/install_heroic_wine.sh --prefix "/path/to/heroic/prefix"
+```
+
+The script auto-detects the latest `Wine-*` runtime under Heroic, installs the
+latest plain Heroic Wine runtime by default, skips Heroic `*-DXMT` variants
+unless you pass `--wine-root`, installs the two PE DLLs and unix module, copies
+`libc++.dll` / `libunwind.dll`, and creates `.dxmt9-backup` copies before
+overwriting an existing file.
+
+### For developers
+
+Build the unix module and PE DLLs locally, then install them into the same
+locations as above:
+
+```sh
+meson setup build
+meson compile -C build
+
+meson setup build-x86_64 --native-file cross/x86_64-macos.ini
+meson compile -C build-x86_64
+
+export PATH="$HOME/llvm-mingw/bin:$PATH"
+meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
+meson compile -C build-win32-x64
+```
+
+If you are on Intel macOS and your Wine runtime is also x86_64, you can use the
+normal `build/src/dxmt9.so` output directly instead of `build-x86_64/src/dxmt9.so`.
 
 ---
 
@@ -114,9 +253,9 @@ four modules. The same check runs as part of `meson test`.
 
 ```
 include/dxmt9/   Public headers (core.hpp, assert.hpp, winemetal.h, device_c.h)
-src/             Implementation (core, backend sim + Metal, Wine bridge, C ABI)
-  win32/         Win32 PE d3d9.dll (cross-compiled with llvm-mingw)
-cross/           Meson cross-file for ARM64 Windows (aarch64-windows.ini)
+src/             Implementation (core, backend sim + Metal, unix module, C ABI)
+  win32/         Win32 PE bridge stack (`d3d9.dll` + `dxmt9.dll`)
+cross/           Meson cross/native files for Wine x86_64 and Windows cross-builds
 tests/           Smoke tests and core spec tests
 specs/           Specifications and formal verification
   core/          D3D9 COM requirements and design
@@ -124,7 +263,7 @@ specs/           Specifications and formal verification
   verification/  TLA+ specs (CommandQueue, ResourceLifetime,
                  EncoderLifecycle, QuerySeqId) + .cfg model files
   gap.md         Spec–implementation gap tracker
-scripts/         verify_tla.sh
+scripts/         verify_tla.sh, install_heroic_wine.sh, corpus tooling
 ```
 
 ---
@@ -136,6 +275,6 @@ scripts/         verify_tla.sh
 | Core (D3D9 COM surface, device state, draw calls) | Complete |
 | Metal backend (command queue, PSO cache, FFP shaders, D3DBC translation) | Complete |
 | Formal verification (TLC, all 4 specs) | Complete |
-| C ABI bridge (`dxmt9c_*` — `libdxmt9.dylib` exports) | Complete |
-| Win32 PE wrapper (`d3d9.dll` — llvm-mingw cross-build) | Complete |
-| WSI (`macdrv_get_cocoa_view` + `CAMetalLayer` — requires dxmt9 Wine fork) | Complete |
+| C ABI bridge (`dxmt9c_*` between `dxmt9.dll` and `dxmt9.so`) | Complete |
+| PE bridge stack (`d3d9.dll` + `dxmt9.dll`) | Complete |
+| WSI (`macdrv_get_cocoa_view` + `CAMetalLayer`) | Complete |

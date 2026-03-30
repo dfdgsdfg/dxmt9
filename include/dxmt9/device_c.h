@@ -1,6 +1,7 @@
-/* dxmt9/device_c.h — C ABI bridge between the PE d3d9.dll wrapper and
- * libdxmt9.dylib.  All types use stdint / plain C so this header is safe to
- * include from both Apple clang (Mach-O) and llvm-mingw (PE) compilations.
+/* dxmt9/device_c.h — C ABI bridge between the PE dxmt9.dll bridge and
+ * the unix-side dxmt9.so module. All types use stdint / plain C so this
+ * header is safe to include from both Apple clang (Mach-O) and llvm-mingw
+ * (PE) compilations.
  *
  * Enum fields carry raw D3D9 wire values (e.g. D3DFORMAT = 21 for A8R8G8B8).
  * Conversion to internal dxmt9 types happens inside device_c.cpp. */

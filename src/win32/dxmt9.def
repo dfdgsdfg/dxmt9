@@ -1,0 +1,4 @@
+LIBRARY dxmt9.dll
+EXPORTS
+  dxmt9_bridge_create9
+  dxmt9_bridge_create9_ex

@@ -13,7 +13,7 @@ typedef uint64_t dxmt9_u64;
 /* WinemetalShaderCompileRequest — passed to compile_shader for ahead-of-time
  * MSL generation.  An optional Wine build with the Apple shader converter can
  * provide a faster compile_shader implementation; the default falls back to
- * the built-in D3DBC→MSL translator in libdxmt9.dylib. */
+ * the built-in D3DBC→MSL translator in dxmt9.so. */
 
 typedef enum WinemetalShaderKind {
   WinemetalShaderKind_D3DBytecodeVertex = 0,
@@ -37,15 +37,15 @@ typedef struct WinemetalShaderCompileRequest {
   dxmt9_u32 fogMode;
 } WinemetalShaderCompileRequest;
 
-/* WinemetalApi — ABI contract between d3d9.dll and libdxmt9.dylib.
+/* WinemetalApi — ABI contract between the PE bridge and dxmt9.so.
  *
  * Window/layer management (HWND→NSView lookup, CAMetalLayer lifecycle,
- * drawable vending) is handled directly inside libdxmt9.dylib via
+ * drawable vending) is handled directly inside dxmt9.so via
  * macdrv_get_cocoa_view() from Wine's winemac.drv — no Wine fork required.
  *
  * The only optional override is compile_shader, which a Wine build that
  * includes the Apple Metal shader converter can provide for faster PSO
- * compilation.  All pointers may be null; libdxmt9.dylib falls back to its
+ * compilation.  All pointers may be null; dxmt9.so falls back to its
  * built-in translator when compile_shader is null. */
 typedef struct WinemetalApi {
   dxmt9_u64 (*compile_shader)(const WinemetalShaderCompileRequest* request);

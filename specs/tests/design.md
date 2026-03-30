@@ -209,7 +209,8 @@ of the test suite: it is a cross-compiled Win32 PE executable that exercises
 the full presentation stack end-to-end under Wine, including:
 
 - `d3d9.dll` PE wrapper (COM entry points)
-- `libdxmt9.dylib` C ABI bridge + Metal backend
+- `dxmt9.dll` PE bridge (Wine-visible thunk layer)
+- `dxmt9.so` unix-side Metal backend
 - `macdrv_get_cocoa_view` HWND→NSView resolution (Wine `winemac.drv`)
 - Lazy `CAMetalLayer` creation via `dispatch_sync` to main thread
 - Metal `nextDrawable` + `presentDrawable` on a real `CAMetalLayer`
@@ -218,43 +219,55 @@ the full presentation stack end-to-end under Wine, including:
 sequenceDiagram
     participant App as wsi_present.exe
     participant D3D as d3d9.dll (PE)
-    participant Lib as libdxmt9.dylib
+    participant Bridge as dxmt9.dll (PE bridge)
+    participant Unix as dxmt9.so
     participant Wine as winemac.drv
 
     App->>D3D: Direct3DCreate9()
-    D3D->>Lib: dxmt9c_factory_create()
+    D3D->>Bridge: dxmt9c_factory_create()
+    Bridge->>Unix: wine unix-call
     App->>D3D: CreateDevice(hwnd, ...)
-    D3D->>Lib: dxmt9c_factory_create_device(hwnd, ...)
+    D3D->>Bridge: dxmt9c_factory_create_device(hwnd, ...)
+    Bridge->>Unix: wine unix-call
     App->>D3D: Present()
-    D3D->>Lib: dxmt9c_device_present()
-    Note over Lib: encodePresent: lookupLayerHandle(hwnd) → nil
-    Lib->>Wine: macdrv_get_cocoa_view(hwnd) [dlsym, first call only]
-    Wine-->>Lib: NSView*
-    Note over Lib: Creates CAMetalLayer, attaches to NSView
-    Lib->>Lib: [layer nextDrawable] + present
+    D3D->>Bridge: dxmt9c_device_present()
+    Bridge->>Unix: wine unix-call
+    Note over Unix: encodePresent: lookupLayerHandle(hwnd) → nil
+    Unix->>Wine: macdrv_get_cocoa_view(hwnd) [dlsym, first call only]
+    Wine-->>Unix: NSView*
+    Note over Unix: Creates CAMetalLayer, attaches to NSView
+    Unix->>Unix: [layer nextDrawable] + present
 ```
 
 ### Build
 
 ```sh
 PATH=~/llvm-mingw/bin:$PATH
-aarch64-w64-mingw32-clang++ -o tests/wsi_present/wsi_present.exe \
+x86_64-w64-mingw32-clang++ -o tests/wsi_present/wsi_present.exe \
     tests/wsi_present/main.cpp -ld3d9 -luser32 -lgdi32
 ```
 
 The resulting `wsi_present.exe` is checked in as a pre-built binary so the test
-can be run without a separate cross-compile step.
+can be run without a separate cross-compile step on the common Rosetta/Wine64
+path.
 
 ### Run
 
 ```sh
-cp build/src/libdxmt9.dylib      ~/.wine/drive_c/windows/system32/dxmt9.dll
-cp build-win32/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
+meson setup build-win32-x64 --cross-file cross/x86_64-windows.ini
+meson compile -C build-win32-x64
+meson setup build-x86_64 --native-file cross/x86_64-macos.ini
+meson compile -C build-x86_64
+cp build-win32-x64/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
+cp build-win32-x64/src/win32/dxmt9.dll ~/.wine/drive_c/windows/system32/dxmt9.dll
+cp build-win32-x64/src/win32/dxmt9.dll <wine-root>/lib/wine/x86_64-windows/dxmt9.dll
+cp build-x86_64/src/dxmt9.so          <wine-root>/lib/wine/x86_64-unix/dxmt9.so
 WINEDLLOVERRIDES="d3d9=n,b" wine tests/wsi_present/wsi_present.exe
 ```
 
-Requires an ARM64-capable Wine build (`winemac.drv` with `macdrv_get_cocoa_view`).
-The test is **not** part of `meson test` because it cannot run without Wine.
+Requires a Wine64-capable build on macOS (`winemac.drv` with or without
+`macdrv_get_cocoa_view`). The test is **not** part of `meson test` because it
+cannot run without Wine.
 
 ### What is NOT tested by this path
 
@@ -263,7 +276,8 @@ The test is **not** part of `meson test` because it cannot run without Wine.
 | Metal shader correctness | `dxmt9-shader-corpus` |
 | Device state, draw calls | `dxmt9-core-spec` |
 | Present with null window (no WSI) | `dxmt9-core-spec` R-TEST-6.1 |
-| ARM64 PE DLL loading | `wsi_present.exe` under Wine |
+| x86_64 PE DLL loading | `wsi_present.exe` under Wine64 |
+| PE bridge ↔ unix module dispatch | `wsi_present.exe` under Wine64 |
 | `macdrv_get_cocoa_view` resolution | `wsi_present.exe` under Wine |
 | Visual frame output | Manual observation |
 

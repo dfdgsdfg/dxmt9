@@ -1,4 +1,7 @@
 build/
+build-win32/
+build-win32-x64/
+build-x86_64/
 builddir/
 meson-logs/
 meson-private/

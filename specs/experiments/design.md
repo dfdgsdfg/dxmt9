@@ -14,7 +14,7 @@ Each experiment is a launcher script that:
 ```mermaid
 graph LR
     subgraph Launcher["experiments/launchers/<app>.sh"]
-        INJECT["Inject dxmt9.dylib\nvia DYLD_INSERT_LIBRARIES\nor Wine PE override"]
+        INJECT["Inject native backend\nor install d3d9.dll + dxmt9.dll + dxmt9.so"]
         RUN["Run app for N frames"]
         SHOT["Capture screenshot"]
         CMP["SSIM vs reference\n≥ 0.90 = pass"]
@@ -32,7 +32,7 @@ graph LR
 
 ## 2. Injection Mechanism
 
-On macOS, dxmt9 is injected via `DYLD_INSERT_LIBRARIES`:
+For native macOS experiments, dxmt9 is injected via `DYLD_INSERT_LIBRARIES`:
 
 ```sh
 DYLD_INSERT_LIBRARIES=/path/to/libdxmt9.dylib \
@@ -45,9 +45,13 @@ DXMT9_LOG=/tmp/dxmt9_exp.log \
 the experiment. `DXMT9_LOG` captures `DXMT_ASSERT` output for post-run
 analysis.
 
-For applications that require Wine, the launcher sets the Wine DLL override:
+For applications that require Wine, the launcher installs the PE/user-facing DLL,
+the PE bridge, and the unix module, then sets the Wine DLL override:
 
 ```sh
+cp build-win32-x64/src/win32/d3d9.dll "$WINEPREFIX/drive_c/windows/system32/d3d9.dll"
+cp build-win32-x64/src/win32/dxmt9.dll "<wine-root>/lib/wine/x86_64-windows/dxmt9.dll"
+cp build-x86_64/src/wine/dxmt9.so "<wine-root>/lib/wine/x86_64-unix/dxmt9.so"
 WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
 ```
 

@@ -1,4 +1,4 @@
-# src/win32/meson.build — builds the Win32 PE d3d9.dll
+# src/win32/meson.build — builds the Win32 PE d3d9.dll and dxmt9.dll bridge.
 #
 # Invoked when cross-compiling for Windows:
 #   meson setup build-win32 --cross-file cross/aarch64-windows.ini
@@ -10,35 +10,30 @@ if host_machine.system() != 'windows'
   subdir_done()
 endif
 
-# ── import stub for libdxmt9.dylib (installed as dxmt9.dll in the prefix) ───
-
-_cpu = host_machine.cpu_family()
-_dlltool_machine = _cpu == 'aarch64' ? 'arm64' : 'i386:x86-64'
-
-dlltool = find_program(
-  'aarch64-w64-mingw32-dlltool',
-  'x86_64-w64-mingw32-dlltool',
-  'llvm-dlltool',
-  'dlltool',
-  required: true,
-)
-
-dxmt9_import = custom_target('dxmt9_import_lib',
-  input:   files('dxmt9_imports.def'),
-  output:  'libdxmt9.dll.a',
-  command: [dlltool,
-            '--machine',     _dlltool_machine,
-            '--input-def',   '@INPUT@',
-            '--output-lib',  '@OUTPUT@'],
-)
-
-# ── d3d9.dll ─────────────────────────────────────────────────────────────────
-
-d3d9_srcs = files(
-  'entry.cpp',
+d3d9_bridge_srcs = files(
+  'bridge.cpp',
   'factory.cpp',
   'device.cpp',
 )
+
+cpp_compiler = meson.get_compiler('cpp')
+dxguid_dep = cpp_compiler.find_library('dxguid', required: true)
+
+d3d9_bridge_install_dir = get_option('prefix') / 'wine' / (host_machine.cpu_family() == 'x86_64' ? 'x86_64-windows' : host_machine.cpu_family() + '-windows')
+
+dxmt9_bridge_dll = shared_library(
+  'dxmt9',
+  d3d9_bridge_srcs + [bridge_codegen[1]],
+  name_prefix: '',
+  name_suffix: 'dll',
+  vs_module_defs: files('dxmt9.def')[0],
+  include_directories: [dxmt9_inc, bridge_gen_inc],
+  dependencies: [dxguid_dep],
+  install: true,
+  install_dir: d3d9_bridge_install_dir,
+)
+
+d3d9_srcs = files('d3d9_entry.cpp')
 
 d3d9_dll = shared_library(
   'd3d9',
@@ -46,9 +41,9 @@ d3d9_dll = shared_library(
   name_prefix:         '',
   name_suffix:         'dll',
   vs_module_defs:      files('d3d9.def')[0],
-  include_directories: dxmt9_inc,
-  link_args: [dxmt9_import[0].full_path()],
-  link_depends: [dxmt9_import],
+  include_directories: [dxmt9_inc, bridge_gen_inc],
+  dependencies: [dxguid_dep],
+  link_with: [dxmt9_bridge_dll],
   install:      true,
   install_dir:  get_option('prefix') / 'windows',
 )
