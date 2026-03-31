@@ -141,6 +141,7 @@ Current local verification set:
 - `dx-sdk-tutorial07`
 - `dx-sdk-hdrformats`
 - `dxut-simple-sample`
+- `irrlicht-managed-lights`
 
 Current verified Wine host:
 - Heroic Wine 11.5 builtin path

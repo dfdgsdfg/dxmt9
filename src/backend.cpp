@@ -134,6 +134,8 @@ class SimBackendDevice final : public BackendDevice {
 
   void unmapBuffer(BufferHandle) override {}
 
+  void uploadTextureLevel(TextureHandle, u32, u32, u32, u32, std::span<const u8>) override {}
+
   void submitDraw(const DrawDesc& desc) override {
     CommandRecord record;
     record.kind = CommandKind::Draw;

@@ -890,6 +890,15 @@ class BackendDevice {
     return nullptr;
   }
   virtual void unmapBuffer(BufferHandle handle) { (void)handle; }
+  virtual void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
+                                  std::span<const u8> bytes) {
+    (void)handle;
+    (void)level;
+    (void)width;
+    (void)height;
+    (void)pitch;
+    (void)bytes;
+  }
   virtual void submitDraw(const DrawDesc& desc) = 0;
   virtual void submitClear(const ClearDesc& desc) = 0;
   virtual void submitSurfaceCopy(const SurfaceCopyDesc& desc) { (void)desc; }
@@ -1047,6 +1056,8 @@ class Texture : public std::enable_shared_from_this<Texture> {
   std::vector<std::weak_ptr<Surface>> surfaces_;
   bool valid_ = true;
   bool locked_ = false;
+
+  void syncLevelToBackend(u32 level);
 };
 
 class Surface : public std::enable_shared_from_this<Surface> {

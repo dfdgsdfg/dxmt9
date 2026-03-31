@@ -1611,6 +1611,7 @@ LockedRegion Texture::lockRect(u32 level, const Rect* rect, u32 flags) {
 void Texture::unlockRect(u32 level) {
   if (level < levels_.size()) {
     levels_[level].dirty = true;
+    syncLevelToBackend(level);
   }
   locked_ = false;
 }
@@ -1665,6 +1666,7 @@ void Texture::fillColor(const Rect* rect, ColorRGBA color) {
   auto& storage = levels_[0];
   fillBuffer(storage.bytes, storage.pitch, storage.width, storage.height, desc_.format, rect, color);
   storage.dirty = true;
+  syncLevelToBackend(0);
 }
 
 void Texture::fillColor(u32 level, const Rect* rect, ColorRGBA color) {
@@ -1674,6 +1676,7 @@ void Texture::fillColor(u32 level, const Rect* rect, ColorRGBA color) {
   auto& storage = levels_[level];
   fillBuffer(storage.bytes, storage.pitch, storage.width, storage.height, desc_.format, rect, color);
   storage.dirty = true;
+  syncLevelToBackend(level);
 }
 
 void Texture::copyFrom(const Texture& src) {
@@ -1684,7 +1687,20 @@ void Texture::copyFrom(const Texture& src) {
   for (size_t i = 0; i < levels; ++i) {
     levels_[i].bytes = src.levels_[i].bytes;
     levels_[i].dirty = true;
+    syncLevelToBackend(static_cast<u32>(i));
   }
+}
+
+void Texture::syncLevelToBackend(u32 level) {
+  if (!valid_ || !backend_ || !handle_ || level >= levels_.size()) {
+    return;
+  }
+  const auto& storage = levels_[level];
+  if (storage.bytes.empty() || storage.width == 0 || storage.height == 0 || storage.pitch == 0) {
+    return;
+  }
+  backend_->uploadTextureLevel(handle_, level, storage.width, storage.height, storage.pitch,
+                               std::span<const u8>(storage.bytes.data(), storage.bytes.size()));
 }
 
 void Texture::invalidate() {

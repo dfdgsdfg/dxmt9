@@ -12,6 +12,7 @@ python3 scripts/run_experiment.py run dx-sdk-basichlsl --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run dx-sdk-tutorial07 --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run dx-sdk-hdrformats --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run dxut-simple-sample --wine-root "$WINE_ROOT"
+python3 scripts/run_experiment.py run irrlicht-managed-lights --wine-root "$WINE_ROOT"
 ```
 
 One-shot wrappers for the verified real apps:
@@ -21,6 +22,7 @@ bash scripts/run_basic_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_tutorial07_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_hdrformats_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_simple_sample_experiment.sh --wine-root "$WINE_ROOT"
+bash scripts/run_irrlicht_managed_lights_experiment.sh --wine-root "$WINE_ROOT"
 ```
 
 Permanent-prefix installer for Heroic:
@@ -64,6 +66,11 @@ Current verified real application entry:
   - direct backbuffer capture
   - `ssim = 1.0000`
 - `dx-sdk-hdrformats`
+  - Heroic Wine 11.5 builtin path
+  - 180 frames
+  - direct backbuffer capture
+  - `ssim = 1.0000`
+- `irrlicht-managed-lights`
   - Heroic Wine 11.5 builtin path
   - 180 frames
   - direct backbuffer capture

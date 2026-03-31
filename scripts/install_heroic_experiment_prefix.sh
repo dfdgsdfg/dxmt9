@@ -63,6 +63,7 @@ if [[ "$skip_build" != true ]]; then
   bash "$repo_root/scripts/build_tutorial07.sh"
   bash "$repo_root/scripts/build_hdrformats.sh"
   bash "$repo_root/scripts/build_simple_sample.sh"
+  bash "$repo_root/scripts/build_irrlicht_managed_lights.sh"
 fi
 
 cmd=(
@@ -83,4 +84,5 @@ Experiment commands:
   bash scripts/run_tutorial07_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
   bash scripts/run_hdrformats_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
   bash scripts/run_simple_sample_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  bash scripts/run_irrlicht_managed_lights_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
 EOF

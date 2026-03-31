@@ -3679,6 +3679,70 @@ class MetalBackendDevice final : public BackendDevice {
     (void)handle;
   }
 
+  void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
+                          std::span<const u8> bytes) override {
+    std::lock_guard lock(mutex_);
+    auto it = textures_.find(handle.value);
+    if (it == textures_.end() || !it->second.texture || bytes.empty()) {
+      return;
+    }
+
+    id<MTLTexture> texture = it->second.texture.get();
+    const NSUInteger mipLevel = static_cast<NSUInteger>(level);
+    const NSUInteger mipWidth = static_cast<NSUInteger>(std::max(1u, width));
+    const NSUInteger mipHeight = static_cast<NSUInteger>(std::max(1u, height));
+    const MTLRegion region = MTLRegionMake2D(0, 0, mipWidth, mipHeight);
+
+    @autoreleasepool {
+      if (texture.storageMode != MTLStorageModePrivate) {
+        [texture replaceRegion:region mipmapLevel:mipLevel withBytes:bytes.data() bytesPerRow:pitch];
+        return;
+      }
+
+      auto descriptor = [MTLTextureDescriptor new];
+      descriptor.textureType = MTLTextureType2D;
+      descriptor.pixelFormat = texture.pixelFormat;
+      descriptor.width = mipWidth;
+      descriptor.height = mipHeight;
+      descriptor.depth = 1;
+      descriptor.mipmapLevelCount = 1;
+      descriptor.sampleCount = 1;
+      descriptor.arrayLength = 1;
+      descriptor.storageMode = MTLStorageModeShared;
+      descriptor.usage = MTLTextureUsageShaderRead;
+      id<MTLTexture> stagingTexture = [device_.get() newTextureWithDescriptor:descriptor];
+      [descriptor release];
+      if (!stagingTexture) {
+        return;
+      }
+      [stagingTexture replaceRegion:region mipmapLevel:0 withBytes:bytes.data() bytesPerRow:pitch];
+
+      id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
+      if (!commandBuffer) {
+        [stagingTexture release];
+        return;
+      }
+      id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+      if (!blit) {
+        [stagingTexture release];
+        return;
+      }
+      [blit copyFromTexture:stagingTexture
+                sourceSlice:0
+                sourceLevel:0
+               sourceOrigin:MTLOriginMake(0, 0, 0)
+                 sourceSize:MTLSizeMake(mipWidth, mipHeight, 1)
+                  toTexture:texture
+           destinationSlice:0
+           destinationLevel:mipLevel
+          destinationOrigin:MTLOriginMake(0, 0, 0)];
+      [blit endEncoding];
+      [commandBuffer commit];
+      [commandBuffer waitUntilCompleted];
+      [stagingTexture release];
+    }
+  }
+
   void submitDraw(const DrawDesc& desc) override {
     std::unique_lock lock(mutex_);
     // TLA+: WineCommit

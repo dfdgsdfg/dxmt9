@@ -147,8 +147,10 @@ the tests spec.
 ## Experiments Layer
 
 ⚠️ Partial. The runner, launcher harness, output layout, one verified local
-bootstrap entry, and four verified real application entries exist. The
-remaining real-application catalogue from R-WILD-3.1 is still not staged.
+bootstrap entry, and the full initial real-application catalogue from
+R-WILD-3.1 exist. The layer remains partial because the current implementation
+depends on the Wine builtin path rather than the native macOS injection path
+described by R-WILD-1.2.
 
 | Area | Status | Spec |
 |---|---|---|
@@ -156,9 +158,9 @@ remaining real-application catalogue from R-WILD-3.1 is still not staged.
 | Wine launcher injection harness (`run_experiment.py`, launcher scripts, Heroic staging) | ⚠️ | R-WILD-1.2 |
 | Internal backbuffer frame dump + SSIM comparison + `result.json` output | ✅ | R-WILD-2.3, R-WILD-4.1 |
 | Bootstrap verified entry: `dxmt9-wsi-present-local` on Heroic Wine 11.5 | ✅ | local workflow validation |
-| Verified real application entries: `dx-sdk-basichlsl`, `dx-sdk-tutorial07`, `dx-sdk-hdrformats`, `dxut-simple-sample` | ✅ | Heroic Wine 11.5, direct capture, SSIM 1.0000 |
-| Remaining real application binaries for Irrlicht | ❌ | R-WILD-3.1 |
-| Reference screenshots for remaining catalogue entries | ❌ | R-WILD-4.1 |
+| Verified real application entries: `dx-sdk-basichlsl`, `dx-sdk-tutorial07`, `dx-sdk-hdrformats`, `dxut-simple-sample`, `irrlicht-managed-lights` | ✅ | Heroic Wine 11.5, direct capture, SSIM 1.0000 |
+| Initial catalogue from R-WILD-3.1 staged and verified | ✅ | All five required feature groups covered |
+| Reference screenshots for initial catalogue entries | ✅ | R-WILD-4.1 |
 
 ---
 
