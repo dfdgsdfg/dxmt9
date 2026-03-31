@@ -146,14 +146,19 @@ the tests spec.
 
 ## Experiments Layer
 
-No experiments exist yet. All R-WILD-1.x through R-WILD-5.x are not started.
+⚠️ Partial. The runner, launcher harness, output layout, one verified local
+bootstrap entry, and the first verified real application entry exist. The
+remaining real-application catalogue from R-WILD-3.1 is still not staged.
 
 | Area | Status | Spec |
 |---|---|---|
-| Application catalogue + `CATALOGUE.toml` (BasicHLSL, Tutorial07, HDRFormats, DXUT, Irrlicht) | ❌ | R-WILD-3.1, R-WILD-5.1 |
-| Launcher injection harness | ❌ | R-WILD-1.2 |
-| Reference screenshots | ❌ | R-WILD-4.1 |
-| SSIM comparison script | ❌ | R-WILD-2.3 |
+| `experiments/CATALOGUE.toml` + launcher tree scaffolded | ✅ | R-WILD-5.1 |
+| Wine launcher injection harness (`run_experiment.py`, launcher scripts, Heroic staging) | ⚠️ | R-WILD-1.2 |
+| Internal backbuffer frame dump + SSIM comparison + `result.json` output | ✅ | R-WILD-2.3, R-WILD-4.1 |
+| Bootstrap verified entry: `dxmt9-wsi-present-local` on Heroic Wine 11.5 | ✅ | local workflow validation |
+| First verified real application entry: `dx-sdk-basichlsl` | ✅ | Heroic Wine 11.5, 240 frames, direct capture, SSIM 1.0000 |
+| Remaining real application binaries for Tutorial07 / HDRFormats / DXUT / Irrlicht | ❌ | R-WILD-3.1 |
+| Reference screenshots for remaining catalogue entries | ❌ | R-WILD-4.1 |
 
 ---
 
@@ -171,6 +176,51 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 
 ---
 
+## D3D8 Layer (`d3d8.dll`)
+
+No implementation exists yet. All R-D3D8-1.x through R-D3D8-11.x are not started.
+
+| Area | Status | Spec |
+|---|---|---|
+| `Direct3DCreate8` entry point + `ValidatePixelShader` stub | ❌ | R-D3D8-1.1, R-D3D8-1.2 |
+| `IDirect3D8` factory (delegate to D3D9) | ❌ | R-D3D8-2.1–2.3 |
+| Vertex shader handle table + `CreateVertexShader` | ❌ | R-D3D8-3.1–3.6 |
+| Pixel shader handle table + `CreatePixelShader` | ❌ | R-D3D8-3.7–3.10 |
+| D3D8 vertex declaration parser (`D3DVSD_*` → `D3DVERTEXELEMENT9`) | ❌ | R-D3D8-4.1–4.6 |
+| State block token table | ❌ | R-D3D8-5.1–5.6 |
+| `SetRenderTarget(RT, DS)` split | ❌ | R-D3D8-6.1–6.3 |
+| `CreateRenderTarget` / `CreateDepthStencilSurface` signature fix | ❌ | R-D3D8-7.1–7.2 |
+| `CreateImageSurface` → `CreateOffscreenPlainSurface` | ❌ | R-D3D8-7.3 |
+| `CopyRects` → loop of `UpdateSurface` | ❌ | R-D3D8-7.4 |
+| TSS → sampler state remapping (10 states) | ❌ | R-D3D8-8.1–8.2 |
+| `Present` / `GetBackBuffer` signature fix | ❌ | R-D3D8-9.1–9.2 |
+| Capabilities clamping to D3D8 limits | ❌ | R-D3D8-10.1–10.2 |
+| Pass-through methods + resource wrapper unwrapping | ❌ | R-D3D8-11.1 |
+
+---
+
+## D3D7 / DirectDraw 7 Layer (`ddraw.dll`)
+
+No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started.
+
+| Area | Status | Spec |
+|---|---|---|
+| `DirectDrawCreate` / `DirectDrawCreateEx` entry points | ❌ | R-D3D7-1.1–1.4 |
+| `IDirectDraw7` (SetCooperativeLevel, CreateSurface, etc.) | ❌ | R-D3D7-2.1–2.11 |
+| `IDirect3D7` (EnumDevices, CreateDevice, CreateVertexBuffer) | ❌ | R-D3D7-3.1–3.6 |
+| `IDirectDrawSurface7` classification (primary / depth / tex / RT / cube / mip) | ❌ | R-D3D7-4.1–4.9 |
+| `IDirectDrawSurface7` ops (Lock, Unlock, Blt, BltFast, Flip) | ❌ | R-D3D7-5.1–5.9 |
+| `IDirect3DDevice7` draw calls (DrawPrimitive, DrawPrimitiveVB, etc.) | ❌ | R-D3D7-6.1–6.7 |
+| `IDirect3DDevice7` state (SetRenderTarget, SetTransform, SetRenderState, etc.) | ❌ | R-D3D7-6.8–6.18 |
+| `IDirect3DVertexBuffer7` (Lock, Unlock, GetDesc) | ❌ | R-D3D7-7.1–7.5 |
+| Vertex count → primitive count conversion | ❌ | R-D3D7-8.1 |
+| `DDPIXELFORMAT` → `D3DFORMAT` parser | ❌ | R-D3D7-9.1 |
+| D3D7 render state / transform mapping tables | ❌ | R-D3D7-6.12, R-D3D7-6.11 |
+| Strided vertex packing (`DrawPrimitiveStrided`) | ❌ | R-D3D7-6.4–6.5 |
+| Mip chain traversal (`GetAttachedSurface`) | ❌ | R-D3D7-4.8 |
+
+---
+
 ## Summary
 
 | Layer | Status |
@@ -180,7 +230,9 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 | Win32 PE (`d3d9.dll`) | complete |
 | Verification | complete |
 | Tests | complete |
-| Experiments | not started |
+| D3D8 (`d3d8.dll`) | not started |
+| D3D7 / DirectDraw 7 (`ddraw.dll`) | not started |
+| Experiments | partial |
 | Benchmarks | not started |
 
 ---
@@ -189,6 +241,10 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 
 | Priority | Work | Spec anchor |
 |---|---|---|
-| 1 | Benchmark harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
-| 2 | First experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |
-| 3 | Experiment catalogue + launcher harness | R-WILD-1.2, R-WILD-3.1 |
+| 1 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |
+| 2 | D3D8 shader handle table + declaration parser | R-D3D8-3.1, R-D3D8-4.1 |
+| 3 | D3D8 remaining device methods (state blocks, RT split, CopyRects) | R-D3D8-5.1, R-D3D8-6.1 |
+| 4 | D3D7 entry points + IDirectDraw7 + DDSurface7 classification | R-D3D7-1.1, R-D3D7-4.1 |
+| 5 | D3D7 IDirect3DDevice7 draw calls and state | R-D3D7-6.1 |
+| 6 | Benchmark harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
+| 7 | First real experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |

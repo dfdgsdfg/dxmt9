@@ -93,7 +93,7 @@ constexpr u32 kD3DSIO_LOOP = 27u;
 constexpr u32 kD3DSIO_RET = 28u;
 constexpr u32 kD3DSIO_ENDLOOP = 29u;
 constexpr u32 kD3DSIO_LABEL = 30u;
-constexpr u32 kD3DSIO_DEF = 66u;
+constexpr u32 kD3DSIO_DEF = 81u;
 constexpr u32 kD3DSIO_SINCOS = 37u;
 constexpr u32 kD3DSIO_REP = 38u;
 constexpr u32 kD3DSIO_ENDREP = 39u;
@@ -102,7 +102,7 @@ constexpr u32 kD3DSIO_ELSE = 42u;
 constexpr u32 kD3DSIO_ENDIF = 43u;
 constexpr u32 kD3DSIO_MOVA = 46u;
 constexpr u32 kD3DSIO_POW = 32u;
-constexpr u32 kD3DSIO_SETP = 79u;
+constexpr u32 kD3DSIO_SETP = 94u;
 constexpr u32 kD3DSIO_END = 0xffffu;
 
 constexpr u32 kD3DSPR_TEMP = 0u;

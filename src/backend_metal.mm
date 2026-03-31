@@ -209,7 +209,7 @@ u64 makeHash(const std::string& source) {
   return hashString(source);
 }
 
-MTLPixelFormat toPixelFormat(Format format) {
+MTLPixelFormat toPixelFormat(Format format, const BackendLimits& limits) {
   switch (format) {
     case Format::A8R8G8B8:
     case Format::X8R8G8B8:
@@ -260,7 +260,11 @@ MTLPixelFormat toPixelFormat(Format format) {
       return MTLPixelFormatRG16Snorm;
     case Format::D24S8:
     case Format::D24X8:
-      return MTLPixelFormatDepth24Unorm_Stencil8;
+      if (limits.supportsDepth24Stencil8) {
+        return MTLPixelFormatDepth24Unorm_Stencil8;
+      }
+      return limits.supportsDepth32FloatStencil8 ? MTLPixelFormatDepth32Float_Stencil8
+                                                 : MTLPixelFormatDepth32Float;
     case Format::D16:
     case Format::D16_LOCKABLE:
       return MTLPixelFormatDepth16Unorm;
@@ -1065,6 +1069,7 @@ constexpr u32 kD3DSIO_M3x4 = 22;
 constexpr u32 kD3DSIO_M3x3 = 23;
 constexpr u32 kD3DSIO_M3x2 = 24;
 constexpr u32 kD3DSIO_CALL = 25;
+constexpr u32 kD3DSIO_CALLNZ = 26;
 constexpr u32 kD3DSIO_LOOP = 27;
 constexpr u32 kD3DSIO_RET = 28;
 constexpr u32 kD3DSIO_ENDLOOP = 29;
@@ -1081,45 +1086,47 @@ constexpr u32 kD3DSIO_SINCOS = 37;
 constexpr u32 kD3DSIO_REP = 38;
 constexpr u32 kD3DSIO_ENDREP = 39;
 constexpr u32 kD3DSIO_IF = 40;
+constexpr u32 kD3DSIO_IFC = 41;
 constexpr u32 kD3DSIO_ELSE = 42;
 constexpr u32 kD3DSIO_ENDIF = 43;
 constexpr u32 kD3DSIO_BREAK = 44;
+constexpr u32 kD3DSIO_BREAKC = 45;
 constexpr u32 kD3DSIO_MOVA = 46;
 constexpr u32 kD3DSIO_DEFB = 47;
 constexpr u32 kD3DSIO_DEFI = 48;
-constexpr u32 kD3DSIO_TEXCOORD = 49;
-constexpr u32 kD3DSIO_TEXKILL = 50;
-constexpr u32 kD3DSIO_CND = 65;
-constexpr u32 kD3DSIO_DEF = 66;
-constexpr u32 kD3DSIO_TEXREG2RGB = 67;
-constexpr u32 kD3DSIO_TEXDP3TEX = 68;
-constexpr u32 kD3DSIO_TEXM3x2DEPTH = 69;
-constexpr u32 kD3DSIO_TEXDP3 = 70;
-constexpr u32 kD3DSIO_TEXM3x3 = 71;
-constexpr u32 kD3DSIO_TEX = 51;
-constexpr u32 kD3DSIO_TEXDEPTH = 72;
-constexpr u32 kD3DSIO_CMP = 73;
-constexpr u32 kD3DSIO_BEM = 74;
-constexpr u32 kD3DSIO_DP2ADD = 75;
-constexpr u32 kD3DSIO_TEXBEM = 52;
-constexpr u32 kD3DSIO_TEXBEML = 53;
-constexpr u32 kD3DSIO_TEXREG2AR = 54;
-constexpr u32 kD3DSIO_TEXREG2GB = 55;
-constexpr u32 kD3DSIO_TEXM3x2PAD = 56;
-constexpr u32 kD3DSIO_TEXM3x2TEX = 57;
-constexpr u32 kD3DSIO_TEXM3x3PAD = 58;
-constexpr u32 kD3DSIO_TEXM3x3TEX = 59;
-constexpr u32 kD3DSIO_RESERVED0 = 60;
-constexpr u32 kD3DSIO_TEXM3x3SPEC = 61;
-constexpr u32 kD3DSIO_TEXM3x3VSPEC = 62;
-constexpr u32 kD3DSIO_EXPP = 63;
-constexpr u32 kD3DSIO_LOGP = 64;
-constexpr u32 kD3DSIO_DSX = 76;
-constexpr u32 kD3DSIO_DSY = 77;
-constexpr u32 kD3DSIO_TEXLDD = 78;
-constexpr u32 kD3DSIO_SETP = 79;
-constexpr u32 kD3DSIO_TEXLDL = 80;
-constexpr u32 kD3DSIO_BREAKP = 81;
+constexpr u32 kD3DSIO_TEXCOORD = 64;
+constexpr u32 kD3DSIO_TEXKILL = 65;
+constexpr u32 kD3DSIO_TEX = 66;
+constexpr u32 kD3DSIO_TEXBEM = 67;
+constexpr u32 kD3DSIO_TEXBEML = 68;
+constexpr u32 kD3DSIO_TEXREG2AR = 69;
+constexpr u32 kD3DSIO_TEXREG2GB = 70;
+constexpr u32 kD3DSIO_TEXM3x2PAD = 71;
+constexpr u32 kD3DSIO_TEXM3x2TEX = 72;
+constexpr u32 kD3DSIO_TEXM3x3PAD = 73;
+constexpr u32 kD3DSIO_TEXM3x3TEX = 74;
+constexpr u32 kD3DSIO_TEXM3x3DIFF = 75;
+constexpr u32 kD3DSIO_TEXM3x3SPEC = 76;
+constexpr u32 kD3DSIO_TEXM3x3VSPEC = 77;
+constexpr u32 kD3DSIO_EXPP = 78;
+constexpr u32 kD3DSIO_LOGP = 79;
+constexpr u32 kD3DSIO_CND = 80;
+constexpr u32 kD3DSIO_DEF = 81;
+constexpr u32 kD3DSIO_TEXREG2RGB = 82;
+constexpr u32 kD3DSIO_TEXDP3TEX = 83;
+constexpr u32 kD3DSIO_TEXM3x2DEPTH = 84;
+constexpr u32 kD3DSIO_TEXDP3 = 85;
+constexpr u32 kD3DSIO_TEXM3x3 = 86;
+constexpr u32 kD3DSIO_TEXDEPTH = 87;
+constexpr u32 kD3DSIO_CMP = 88;
+constexpr u32 kD3DSIO_BEM = 89;
+constexpr u32 kD3DSIO_DP2ADD = 90;
+constexpr u32 kD3DSIO_DSX = 91;
+constexpr u32 kD3DSIO_DSY = 92;
+constexpr u32 kD3DSIO_TEXLDD = 93;
+constexpr u32 kD3DSIO_SETP = 94;
+constexpr u32 kD3DSIO_TEXLDL = 95;
+constexpr u32 kD3DSIO_BREAKP = 96;
 constexpr u32 kD3DSIO_PHASE = 0xfffdu;
 constexpr u32 kD3DSIO_COMMENT = 0xfffeu;
 constexpr u32 kD3DSIO_END = 0xffffu;
@@ -1357,7 +1364,7 @@ std::string applySourceModifier(std::string expr, u32 modifier) {
     case 12:
       return "-abs(" + expr + ")";
     default:
-      throw std::runtime_error("unsupported D3D source modifier");
+      throw std::runtime_error("unsupported D3D source modifier " + std::to_string(modifier));
   }
 }
 
@@ -1517,21 +1524,21 @@ u32 fixedOperandCount(u32 opcode) {
       return 0;
     case kD3DSIO_MOV:
     case kD3DSIO_DEFB:
-    case kD3DSIO_DEFI:
     case kD3DSIO_RCP:
     case kD3DSIO_RSQ:
     case kD3DSIO_FRC:
-    case kD3DSIO_DCL:
     case kD3DSIO_DSX:
     case kD3DSIO_DSY:
     case kD3DSIO_SETP:
     case kD3DSIO_BREAKP:
     case kD3DSIO_MOVA:
-    case kD3DSIO_SINCOS:
     case kD3DSIO_LOG:
     case kD3DSIO_LOGP:
     case kD3DSIO_EXP:
     case kD3DSIO_EXPP:
+    case kD3DSIO_SGN:
+    case kD3DSIO_ABS:
+    case kD3DSIO_NRM:
       return 2;
     case kD3DSIO_LABEL:
     case kD3DSIO_CALL:
@@ -1548,12 +1555,6 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_MAX:
     case kD3DSIO_POW:
     case kD3DSIO_CRS:
-    case kD3DSIO_SGN:
-    case kD3DSIO_ABS:
-    case kD3DSIO_NRM:
-    case kD3DSIO_CND:
-    case kD3DSIO_CMP:
-    case kD3DSIO_DP2ADD:
     case kD3DSIO_TEXLDD:
     case kD3DSIO_TEXLDL:
     case kD3DSIO_SLT:
@@ -1566,8 +1567,12 @@ u32 fixedOperandCount(u32 opcode) {
       return 3;
     case kD3DSIO_MAD:
     case kD3DSIO_LRP:
+    case kD3DSIO_CND:
+    case kD3DSIO_CMP:
+    case kD3DSIO_DP2ADD:
       return 4;
     case kD3DSIO_DEF:
+    case kD3DSIO_DEFI:
       return 5;
     case kD3DSIO_COMMENT:
     case kD3DSIO_END:
@@ -1735,22 +1740,56 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader, bool vertex, co
       continue;
     }
 
-    const u32 operandCount = (token >> 24) & 0xfu;
-    if (operandCount == 0) {
-      switch (opcode) {
-        case kD3DSIO_NOP:
-        case kD3DSIO_ELSE:
-        case kD3DSIO_ENDIF:
-        case kD3DSIO_ENDLOOP:
-        case kD3DSIO_ENDREP:
-        case kD3DSIO_RET:
-        case kD3DSIO_BREAK:
-        case kD3DSIO_PHASE:
-        case kD3DSIO_COMMENT:
-        case kD3DSIO_END:
-          break;
-        default:
-          throw std::runtime_error("missing D3D operand count");
+    u32 operandCount = 0;
+    try {
+      operandCount = fixedOperandCount(opcode);
+    } catch (const std::runtime_error&) {
+      operandCount = (token >> 24) & 0xfu;
+      if (operandCount == 0) {
+        switch (opcode) {
+          case kD3DSIO_NOP:
+          case kD3DSIO_ELSE:
+          case kD3DSIO_ENDIF:
+          case kD3DSIO_ENDLOOP:
+          case kD3DSIO_ENDREP:
+          case kD3DSIO_RET:
+          case kD3DSIO_BREAK:
+          case kD3DSIO_PHASE:
+          case kD3DSIO_COMMENT:
+          case kD3DSIO_END:
+            break;
+          default: {
+            std::ostringstream message;
+            message << "missing D3D operand count"
+                    << " opcode=" << opcodeName(opcode)
+                    << " token=0x" << std::hex << token
+                    << " offset=0x" << offset - sizeof(u32);
+            if (!module.instructions.empty()) {
+              const auto& previous = module.instructions.back();
+              message << " prevOpcode=" << opcodeName(previous.opcode)
+                      << " prevTokenCount=" << std::dec << previous.operands.size()
+                      << " prevOperands=[";
+              for (size_t i = 0; i < previous.operands.size(); ++i) {
+                if (i != 0) {
+                  message << ",";
+                }
+                message << "0x" << std::hex << previous.operands[i];
+              }
+              message << "]";
+            }
+            const size_t rawCount = module.words.size();
+            const size_t rawStart = rawCount > 8 ? rawCount - 8 : 0;
+            message << " rawWords=[";
+            for (size_t i = rawStart; i < rawCount; ++i) {
+              if (i != rawStart) {
+                message << ",";
+              }
+              message << "0x" << std::hex << module.words[i];
+            }
+            message << "]";
+            throw std::runtime_error(message.str());
+          }
+        }
       }
     }
     const size_t operandBytes = static_cast<size_t>(operandCount) * sizeof(u32);
@@ -1785,8 +1824,8 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   if (vertex) {
     out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
     out << "  VSOut out;\n";
-    out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
-    out << "  float4 outPosition = float4(p[vid % 3], 0.0, 1.0);\n";
+    out << "  float2 dxmt9_positions[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
+    out << "  float4 outPosition = float4(dxmt9_positions[vid % 3], 0.0, 1.0);\n";
     out << "  float4 outColor = float4(1.0f);\n";
     out << "  float4 outSecondaryColor = float4(0.0f);\n";
     out << "  float4 outTexcoord0 = float4(0.0f);\n";
@@ -1834,7 +1873,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         }
         const auto token = instruction.operands[index];
         const auto reg = decodeRegisterRef(token, module.stage);
-        std::string expr = readOperandExpression(instruction, reg, "float4(p[vid % 3], 0.0f, 1.0f)", "in", true,
+        std::string expr = readOperandExpression(instruction, reg, "float4(dxmt9_positions[vid % 3], 0.0f, 1.0f)", "in", true,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord0",
                                                  "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
                                                  "p");
@@ -1939,6 +1978,13 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       }
       if (instruction.opcode == kD3DSIO_BREAK) {
         out << "  break;\n";
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_BREAKP) {
+        if (instruction.operands.empty()) {
+          throw std::runtime_error("BREAKP requires a predicate operand");
+        }
+        out << "  if ((" << readSrc(0) << ").x != 0.0f) { break; }\n";
         continue;
       }
 
@@ -2288,7 +2334,13 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
                                                  std::bit_cast<f32>(instruction.operands[3]),
                                                  std::bit_cast<f32>(instruction.operands[4])};
           if (dst.kind != D3DRegisterKind::ConstFloat) {
-            throw std::runtime_error("DEF requires a float constant destination");
+            std::ostringstream message;
+            message << "DEF requires a float constant destination"
+                    << " token=0x" << std::hex << instruction.operands[0]
+                    << " regType=" << std::dec << decodeRegisterType(instruction.operands[0])
+                    << " regIndex=" << dst.index
+                    << " kind=" << static_cast<u32>(dst.kind);
+            throw std::runtime_error(message.str());
           }
           out << "  cFloat[" << dst.index << "] = " << formatFloatVec4(values) << ";\n";
           break;
@@ -2524,6 +2576,13 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       out << "  break;\n";
       continue;
     }
+    if (instruction.opcode == kD3DSIO_BREAKP) {
+      if (instruction.operands.empty()) {
+        throw std::runtime_error("BREAKP requires a predicate operand");
+      }
+      out << "  if ((" << readSrc(0) << ").x != 0.0f) { break; }\n";
+      continue;
+    }
 
     switch (instruction.opcode) {
       case kD3DSIO_NOP:
@@ -2535,7 +2594,13 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
                                                std::bit_cast<f32>(instruction.operands[3]),
                                                std::bit_cast<f32>(instruction.operands[4])};
         if (dst.kind != D3DRegisterKind::ConstFloat) {
-          throw std::runtime_error("DEF requires a float constant destination");
+          std::ostringstream message;
+          message << "DEF requires a float constant destination"
+                  << " token=0x" << std::hex << instruction.operands[0]
+                  << " regType=" << std::dec << decodeRegisterType(instruction.operands[0])
+                  << " regIndex=" << dst.index
+                  << " kind=" << static_cast<u32>(dst.kind);
+          throw std::runtime_error(message.str());
         }
         out << "  cFloat[" << dst.index << "] = " << formatFloatVec4(values) << ";\n";
         break;
@@ -3284,6 +3349,9 @@ class MetalBackendDevice final : public BackendDevice {
       if (!device_) {
         return;
       }
+      if ([device_.get() respondsToSelector:@selector(isDepth24Stencil8PixelFormatSupported)]) {
+        limits_.supportsDepth24Stencil8 = [device_.get() isDepth24Stencil8PixelFormatSupported];
+      }
       commandQueue_ = ObjcPtr<id<MTLCommandQueue>>::adopt([device_.get() newCommandQueue]);
       shaderArchiveURL_ = makeShaderArchiveURL();
       shaderArchive_ = loadShaderArchive(device_.get(), shaderArchiveURL_.get());
@@ -3384,7 +3452,7 @@ class MetalBackendDevice final : public BackendDevice {
     @autoreleasepool {
       auto descriptor = [MTLTextureDescriptor new];
       descriptor.textureType = MTLTextureType2D;
-      descriptor.pixelFormat = toPixelFormat(format);
+      descriptor.pixelFormat = toPixelFormat(format, limits_);
       descriptor.width = width;
       descriptor.height = height;
       descriptor.depth = 1;
@@ -3460,7 +3528,7 @@ class MetalBackendDevice final : public BackendDevice {
       @autoreleasepool {
         auto descriptor = [MTLTextureDescriptor new];
         descriptor.textureType = toTextureType(desc.type, false);
-        descriptor.pixelFormat = toPixelFormat(desc.format);
+        descriptor.pixelFormat = toPixelFormat(desc.format, limits_);
         descriptor.width = std::max(1u, desc.width);
         descriptor.height = std::max(1u, desc.height);
         descriptor.depth = std::max(1u, desc.depth);
@@ -3487,7 +3555,7 @@ class MetalBackendDevice final : public BackendDevice {
       @autoreleasepool {
         auto descriptor = [MTLTextureDescriptor new];
         descriptor.textureType = toTextureType(TextureType::TwoD, desc.multiSampleType != MultiSampleType::None);
-        descriptor.pixelFormat = toPixelFormat(desc.format);
+        descriptor.pixelFormat = toPixelFormat(desc.format, limits_);
         descriptor.width = std::max(1u, desc.width);
         descriptor.height = std::max(1u, desc.height);
         descriptor.depth = 1;
@@ -4451,7 +4519,7 @@ class MetalBackendDevice final : public BackendDevice {
         rect.width = static_cast<NSUInteger>(std::max(0, fill.rect.right - fill.rect.left));
         rect.height = static_cast<NSUInteger>(std::max(0, fill.rect.bottom - fill.rect.top));
         [encoder setScissorRect:rect];
-        auto pipeline = pipelineForColorFill(fill.color, static_cast<u32>(toPixelFormat(surface->desc.format))).get();
+        auto pipeline = pipelineForColorFill(fill.color, static_cast<u32>(toPixelFormat(surface->desc.format, limits_))).get();
         if (pipeline) {
           [encoder setRenderPipelineState:pipeline.get()];
           [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -4525,7 +4593,7 @@ class MetalBackendDevice final : public BackendDevice {
       if (!encoder) {
         return;
       }
-      auto pipeline = pipelineForStretchRect(stretch, static_cast<u32>(toPixelFormat(dst->desc.format))).get();
+      auto pipeline = pipelineForStretchRect(stretch, static_cast<u32>(toPixelFormat(dst->desc.format, limits_))).get();
       if (!pipeline) {
         [encoder endEncoding];
         return;
@@ -4660,7 +4728,7 @@ class MetalBackendDevice final : public BackendDevice {
         return 0;
       }
       if (auto* surface = findSurfaceUnlocked(handle.value); surface) {
-        return static_cast<u32>(toPixelFormat(surface->desc.format));
+        return static_cast<u32>(toPixelFormat(surface->desc.format, limits_));
       }
       return 0;
     };

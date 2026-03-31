@@ -1261,6 +1261,12 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult getRenderTargetData(const std::shared_ptr<Surface>& src, const std::shared_ptr<Surface>& dst);
 
  private:
+  struct ExperimentCaptureConfig {
+    std::string path;
+    u32 frame = 0;
+    bool captured = false;
+  };
+
   friend class StateBlock;
   friend class SwapChain;
   friend class Texture;
@@ -1272,6 +1278,7 @@ class Device : public std::enable_shared_from_this<Device> {
   void submitClearInternal(const ClearDesc& desc);
   void submitDrawInternal(const DrawDesc& desc);
   void submitPresentInternal(const SwapDesc& desc);
+  void maybeCaptureExperimentFrame();
   void resetState();
 
   AdapterInfo adapter_{};
@@ -1293,10 +1300,12 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 nextHandle_ = 1;
   u64 submittedSequenceId_ = 0;
   u64 completedSequenceId_ = 0;
+  u32 presentCount_ = 0;
   u32 maximumFrameLatency_ = 3;
   bool inScene_ = false;
   bool deviceLost_ = false;
   bool presentOccluded_ = false;
+  ExperimentCaptureConfig experimentCapture_{};
 };
 
 class Factory {

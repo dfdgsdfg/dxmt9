@@ -61,6 +61,61 @@ static dxmt9::core::Format fmtFromD3D(uint32_t d3d) {
   }
 }
 
+static uint32_t fmtToD3D(dxmt9::core::Format format) {
+  using F = dxmt9::core::Format;
+  switch (format) {
+    case F::A8R8G8B8: return 21;
+    case F::X8R8G8B8: return 22;
+    case F::A8B8G8R8: return 32;
+    case F::X8B8G8R8: return 33;
+    case F::R5G6B5: return 23;
+    case F::A1R5G5B5: return 25;
+    case F::X1R5G5B5: return 24;
+    case F::A4R4G4B4: return 26;
+    case F::A8: return 28;
+    case F::R8G8B8: return 20;
+    case F::A16B16G16R16F: return 113;
+    case F::A32B32G32R32F: return 116;
+    case F::G16R16F: return 112;
+    case F::R16F: return 111;
+    case F::G32R32F: return 115;
+    case F::R32F: return 114;
+    case F::A16B16G16R16: return 36;
+    case F::G16R16: return 34;
+    case F::A2R10G10B10: return 35;
+    case F::A2B10G10R10: return 31;
+    case F::L8: return 50;
+    case F::L16: return 81;
+    case F::A8L8: return 51;
+    case F::V8U8: return 60;
+    case F::Q8W8V8U8: return 63;
+    case F::V16U16: return 64;
+    case F::CxV8U8: return 117;
+    case F::DXT1: return 827611204u;
+    case F::DXT2: return 844388420u;
+    case F::DXT3: return 861165636u;
+    case F::DXT4: return 877942852u;
+    case F::DXT5: return 894720068u;
+    case F::ATI1:
+    case F::BC4: return 826889281u;
+    case F::ATI2:
+    case F::BC5: return 843666497u;
+    case F::D24S8: return 75;
+    case F::D24X8: return 77;
+    case F::D16: return 80;
+    case F::D32: return 71;
+    case F::D32F_LOCKABLE: return 82;
+    case F::D16_LOCKABLE: return 70;
+    case F::D15S1: return 73;
+    case F::D24X4S4: return 79;
+    case F::D24FS8: return 83;
+    case F::S8_LOCKABLE: return 85;
+    case F::INDEX16: return 101;
+    case F::INDEX32: return 102;
+    case F::Unknown: default: return 0;
+  }
+}
+
 static dxmt9::core::MultiSampleType msTypeFromD3D(uint32_t d3d) {
   using M = dxmt9::core::MultiSampleType;
   switch (d3d) {
@@ -71,6 +126,16 @@ static dxmt9::core::MultiSampleType msTypeFromD3D(uint32_t d3d) {
   }
 }
 
+static uint32_t msTypeToD3D(dxmt9::core::MultiSampleType ms) {
+  using M = dxmt9::core::MultiSampleType;
+  switch (ms) {
+    case M::Two: return 2;
+    case M::Four: return 4;
+    case M::Eight: return 8;
+    case M::None: default: return 0;
+  }
+}
+
 static dxmt9::core::Pool poolFromD3D(uint32_t d3d) {
   using P = dxmt9::core::Pool;
   switch (d3d) {
@@ -78,6 +143,27 @@ static dxmt9::core::Pool poolFromD3D(uint32_t d3d) {
     case 2:  return P::SystemMem;
     case 3:  return P::Scratch;
     default: return P::Default;
+  }
+}
+
+static uint32_t poolToD3D(dxmt9::core::Pool pool) {
+  using P = dxmt9::core::Pool;
+  switch (pool) {
+    case P::Managed: return 1;
+    case P::SystemMem: return 2;
+    case P::Scratch: return 3;
+    case P::Default: default: return 0;
+  }
+}
+
+static uint32_t textureTypeToResourceType(dxmt9::core::TextureType type) {
+  using T = dxmt9::core::TextureType;
+  switch (type) {
+    case T::Volume: return 4;      /* D3DRTYPE_VOLUMETEXTURE */
+    case T::Cube: return 5;        /* D3DRTYPE_CUBETEXTURE */
+    case T::TwoD:
+    case T::Array2D:
+    default: return 3;             /* D3DRTYPE_TEXTURE */
   }
 }
 
@@ -336,7 +422,7 @@ extern "C" int32_t dxmt9c_factory_enum_adapter_modes(D9CFactory* f, uint32_t ada
   if (outW)       *outW       = m.width;
   if (outH)       *outH       = m.height;
   if (outRefresh) *outRefresh = m.refreshRate;
-  if (outFmt)     *outFmt     = d3dFmt;
+  if (outFmt)     *outFmt     = fmtToD3D(m.format);
   return dxmt9::core::D3D_OK;
 }
 
@@ -347,8 +433,7 @@ extern "C" int32_t dxmt9c_factory_get_adapter_display_mode(D9CFactory* f, uint32
   if (outW)       *outW       = m.width;
   if (outH)       *outH       = m.height;
   if (outRefresh) *outRefresh = m.refreshRate;
-  if (outFmt)     *outFmt     = 21; /* A8R8G8B8 as D3DFORMAT */
-  (void)m.format;
+  if (outFmt)     *outFmt     = fmtToD3D(m.format);
   return dxmt9::core::D3D_OK;
 }
 
@@ -1060,7 +1145,26 @@ extern "C" int32_t dxmt9c_swapchain_get_present_params(D9CSwapChain* s,
   std::memset(out, 0, sizeof(*out));
   out->backBufferWidth  = p.backBufferWidth;
   out->backBufferHeight = p.backBufferHeight;
+  out->backBufferFormat = fmtToD3D(p.backBufferFormat);
+  out->backBufferCount = p.backBufferCount;
+  out->multiSampleType = msTypeToD3D(p.multiSampleType);
+  out->swapEffect = p.discardSwapEffect ? 1u : 2u;
+  out->deviceWindow = p.deviceWindow.value;
   out->windowed         = p.windowed;
+  out->enableAutoDepthStencil = p.enableAutoDepthStencil;
+  out->autoDepthStencilFormat = fmtToD3D(p.autoDepthStencilFormat);
+  switch (p.presentationInterval) {
+    case dxmt9::core::PresentInterval::Immediate:
+      out->presentationInterval = 0;
+      break;
+    case dxmt9::core::PresentInterval::Two:
+      out->presentationInterval = 2;
+      break;
+    case dxmt9::core::PresentInterval::Default:
+    default:
+      out->presentationInterval = 1;
+      break;
+  }
   return dxmt9::core::D3D_OK;
 }
 
@@ -1104,11 +1208,17 @@ extern "C" uint32_t dxmt9c_texture_get_level_count(D9CTexture* t) {
 extern "C" int32_t dxmt9c_texture_get_level_desc(D9CTexture* t, uint32_t level,
                                                    D9CSurfaceDesc* out) {
   if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
-  (void)level;
   auto& d = t->obj->desc();
   std::memset(out, 0, sizeof(*out));
-  out->width  = d.width;
-  out->height = d.height;
+  const uint32_t shift = std::min<uint32_t>(level, 31);
+  out->format = fmtToD3D(d.format);
+  out->resourceType = textureTypeToResourceType(d.type);
+  out->usage = d.usage;
+  out->pool = poolToD3D(d.pool);
+  out->multiSampleType = 0;
+  out->multiSampleQuality = 0;
+  out->width  = std::max(1u, d.width >> shift);
+  out->height = std::max(1u, d.height >> shift);
   return dxmt9::core::D3D_OK;
 }
 extern "C" int32_t dxmt9c_texture_generate_mip_sublevels(D9CTexture* /*t*/) {
@@ -1170,6 +1280,14 @@ extern "C" int32_t dxmt9c_surface_get_desc(D9CSurface* s, D9CSurfaceDesc* out) {
   if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
   auto& d = s->obj->desc();
   std::memset(out, 0, sizeof(*out));
+  out->format = fmtToD3D(d.format);
+  out->resourceType = 1; /* D3DRTYPE_SURFACE */
+  out->usage = d.usage;
+  if (d.renderTarget) out->usage |= 1u;        /* D3DUSAGE_RENDERTARGET */
+  if (d.depthStencil) out->usage |= 2u;        /* D3DUSAGE_DEPTHSTENCIL */
+  out->pool = poolToD3D(d.pool);
+  out->multiSampleType = msTypeToD3D(d.multiSampleType);
+  out->multiSampleQuality = d.multiSampleType == dxmt9::core::MultiSampleType::None ? 0u : 1u;
   out->width  = d.width;
   out->height = d.height;
   return dxmt9::core::D3D_OK;

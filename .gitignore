@@ -21,3 +21,5 @@ compile_commands.json
 states/
 .cache/
 tmp
+experiments/output/*
+!experiments/output/.gitkeep

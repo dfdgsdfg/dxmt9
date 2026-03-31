@@ -59,9 +59,15 @@ WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
 
 ## 3. Screenshot Capture
 
-Screenshots are captured via `CGWindowListCreateImageFromArray` (macOS
-ScreenCaptureKit) or by reading back the back buffer via
-`GetRenderTargetData()` at the end of a fixed frame.
+Screenshots are captured either via macOS window capture or by reading back the
+back buffer via `GetRenderTargetData()` at the end of a fixed frame.
+
+The current `dxmt9` runner prefers the second path. Launchers set
+`DXMT9_EXPERIMENT_CAPTURE_PATH` and `DXMT9_EXPERIMENT_CAPTURE_FRAME`, and the
+core dumps a BMP from the presented back buffer on the requested `Present`
+count. The runner then converts that dump into `actual.png` before SSIM
+comparison. Window capture remains a fallback for applications that cannot use
+the internal frame-dump path.
 
 Comparison uses **SSIM** (Structural Similarity Index):
 - SSIM ≥ 0.90 → pass (visually equivalent)
@@ -124,3 +130,14 @@ experiments/
 └── output/                     Run output (gitignored)
     └── .gitkeep
 ```
+
+---
+
+## 7. Current Verified Entries
+
+Current local verification set:
+- `dxmt9-wsi-present-local`
+- `dx-sdk-basichlsl`
+
+Current verified Wine host:
+- Heroic Wine 11.5 builtin path
