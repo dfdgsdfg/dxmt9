@@ -328,10 +328,14 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         Image.open(actual_dump_path).save(actual_path)
 
     if app.reference_path.exists():
+        if reference_link_path.exists() or reference_link_path.is_symlink():
+            reference_link_path.unlink()
         reference_link_path.symlink_to(app.reference_path.resolve())
     elif args.accept_reference and actual_path.exists():
         app.reference_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(actual_path, app.reference_path)
+        if reference_link_path.exists() or reference_link_path.is_symlink():
+            reference_link_path.unlink()
         reference_link_path.symlink_to(app.reference_path.resolve())
         result["reference_created"] = True
 

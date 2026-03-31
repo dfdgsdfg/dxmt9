@@ -1869,7 +1869,12 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
 
       auto readSrc = [&](size_t index) {
         if (index >= instruction.operands.size()) {
-          throw std::runtime_error("missing D3D source operand");
+          std::ostringstream message;
+          message << "missing D3D source operand"
+                  << " opcode=" << opcodeName(instruction.opcode)
+                  << " requestedIndex=" << index
+                  << " operandCount=" << instruction.operands.size();
+          throw std::runtime_error(message.str());
         }
         const auto token = instruction.operands[index];
         const auto reg = decodeRegisterRef(token, module.stage);
@@ -2466,7 +2471,12 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
 
     auto readSrc = [&](size_t index) {
       if (index >= instruction.operands.size()) {
-        throw std::runtime_error("missing D3D source operand");
+        std::ostringstream message;
+        message << "missing D3D source operand"
+                << " opcode=" << opcodeName(instruction.opcode)
+                << " requestedIndex=" << index
+                << " operandCount=" << instruction.operands.size();
+        throw std::runtime_error(message.str());
       }
       const auto token = instruction.operands[index];
       const auto reg = decodeRegisterRef(token, module.stage);

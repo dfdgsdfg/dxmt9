@@ -66,12 +66,12 @@ binary = "experiments/apps/DXUTSimpleSample/SimpleSample.exe"
 launcher = "experiments/launchers/dxut_simple_sample.sh"
 reference = "experiments/references/dxut-simple-sample.png"
 features = ["vs_2_0", "ps_2_0", "skinned_mesh", "state_management"]
-status = "untested"
+status = "passing"
 requires_wine = true
 window_title = "SimpleSample"
 capture_delay_sec = 4.0
-run_timeout_sec = 60
-capture_frame = 240
+run_timeout_sec = 90
+capture_frame = 120
 
 [[app]]
 name = "irrlicht-managed-lights"

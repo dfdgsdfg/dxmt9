@@ -139,6 +139,7 @@ Current local verification set:
 - `dxmt9-wsi-present-local`
 - `dx-sdk-basichlsl`
 - `dx-sdk-tutorial07`
+- `dxut-simple-sample`
 
 Current verified Wine host:
 - Heroic Wine 11.5 builtin path
