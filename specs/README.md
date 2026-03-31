@@ -17,6 +17,12 @@ specs/
 │   ├── caps.md             D3DCAPS9 advertised values
 │   ├── wsi.md              HWND → CAMetalLayer window integration
 │   └── queries.md          GPU query design in deferred pipeline
+├── d3d8/                   D3D8 shim layer (d3d8.dll → D3D9)
+│   ├── requirements.md     Shader handle table, decl parser, API differences vs D3D9
+│   └── design.md           Object model, handle table layout, TSS remapping
+├── d3d7/                   D3D7 / DirectDraw 7 layer (ddraw.dll → D3D9)
+│   ├── requirements.md     IDirectDraw7, IDirect3D7, IDirect3DDevice7, surface classification
+│   └── design.md           DDSurface7 object model, RS/transform mapping, mip chain
 ├── backend/                Metal translation layer
 │   ├── requirements.md     Translation correctness, command encoding, PSO cache
 │   ├── design.md           Command queue, encoder lifecycle, resource allocation

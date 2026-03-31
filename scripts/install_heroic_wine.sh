@@ -13,11 +13,17 @@ Options:
   --prefix <path>         Target Wine prefix. Required.
   --wine-root <path>      Heroic Wine runtime root. Auto-detected when omitted.
   --pe-build-dir <path>   Directory containing d3d9.dll and dxmt9.dll.
-                          Default: <repo>/build-win32-x64/src/win32
+                          Default: <repo>/build-win32-x64-builtin/src/win32
+  --wow64-pe-build-dir <path>
+                          Directory containing 32-bit d3d9.dll and dxmt9.dll.
+                          Installed into syswow64 + i386-windows when set.
   --unix-build-dir <path> Directory containing dxmt9.so.
-                          Default: <repo>/build-x86_64/src
+                          Default: <repo>/build-x86_64-builtin/src
   --mingw-bin-dir <path>  Directory containing libc++.dll and libunwind.dll.
                           Default: ~/llvm-mingw/x86_64-w64-mingw32/bin
+  --wow64-mingw-bin-dir <path>
+                          Directory containing 32-bit libc++.dll and
+                          libunwind.dll. Default: ~/llvm-mingw/i686-w64-mingw32/bin
   --legacy-system32-bridge
                           Also copy dxmt9.dll into <prefix>/drive_c/windows/system32.
                           Only use this for the old native-DLL bridge path.
@@ -25,14 +31,24 @@ Options:
 
 This script installs the currently-built dxmt9 binaries into a Heroic Wine
 runtime and prefix:
-  - d3d9.dll   -> <prefix>/drive_c/windows/system32
-  - dxmt9.dll  -> <wine-root>/lib/wine/x86_64-windows
-  - dxmt9.so   -> <wine-root>/lib/wine/x86_64-unix
-  - libc++.dll -> <prefix>/drive_c/windows/system32
+  64-bit lane:
+  - d3d9.dll      -> <prefix>/drive_c/windows/system32
+  - dxmt9.dll     -> <wine-root>/lib/wine/x86_64-windows
+  - dxmt9.so      -> <wine-root>/lib/wine/x86_64-unix
+  - libc++.dll    -> <prefix>/drive_c/windows/system32
   - libunwind.dll -> <prefix>/drive_c/windows/system32
+
+  Optional WoW64 32-bit lane:
+  - d3d9.dll      -> <prefix>/drive_c/windows/syswow64
+  - dxmt9.dll     -> <wine-root>/lib/wine/i386-windows
+  - libc++.dll    -> <prefix>/drive_c/windows/syswow64
+  - libunwind.dll -> <prefix>/drive_c/windows/syswow64
 
 If an existing target file is present, a one-time .dxmt9-backup copy is created
 before overwrite.
+
+For 32-bit D3D9 games under Heroic, the game's config must also enable WoW64:
+  "enableWoW64": true
 EOF
 }
 
@@ -90,9 +106,11 @@ install_file() {
 
 prefix=""
 wine_root=""
-pe_build_dir="$repo_root/build-win32-x64/src/win32"
-unix_build_dir="$repo_root/build-x86_64/src"
+pe_build_dir="$repo_root/build-win32-x64-builtin/src/win32"
+wow64_pe_build_dir=""
+unix_build_dir="$repo_root/build-x86_64-builtin/src"
 mingw_bin_dir="$HOME/llvm-mingw/x86_64-w64-mingw32/bin"
+wow64_mingw_bin_dir="$HOME/llvm-mingw/i686-w64-mingw32/bin"
 legacy_system32_bridge=false
 
 while [[ $# -gt 0 ]]; do
@@ -109,12 +127,20 @@ while [[ $# -gt 0 ]]; do
       pe_build_dir=${2:-}
       shift 2
       ;;
+    --wow64-pe-build-dir)
+      wow64_pe_build_dir=${2:-}
+      shift 2
+      ;;
     --unix-build-dir)
       unix_build_dir=${2:-}
       shift 2
       ;;
     --mingw-bin-dir)
       mingw_bin_dir=${2:-}
+      shift 2
+      ;;
+    --wow64-mingw-bin-dir)
+      wow64_mingw_bin_dir=${2:-}
       shift 2
       ;;
     --legacy-system32-bridge)
@@ -147,7 +173,9 @@ if [[ -z "$wine_root" ]]; then
 fi
 
 system32_dir="$prefix/drive_c/windows/system32"
+syswow64_dir="$prefix/drive_c/windows/syswow64"
 windows_runtime_dir="$wine_root/lib/wine/x86_64-windows"
+i386_windows_runtime_dir="$wine_root/lib/wine/i386-windows"
 unix_runtime_dir="$wine_root/lib/wine/x86_64-unix"
 
 if [[ ! -d "$windows_runtime_dir" ]]; then
@@ -160,8 +188,17 @@ if [[ ! -d "$unix_runtime_dir" ]]; then
   exit 1
 fi
 
+if [[ -n "$wow64_pe_build_dir" && ! -d "$i386_windows_runtime_dir" ]]; then
+  printf 'error: missing Heroic WoW64 runtime dir: %s\n' "$i386_windows_runtime_dir" >&2
+  exit 1
+fi
+
 if [[ ! -f "$unix_build_dir/dxmt9.so" && -f "$repo_root/build/src/dxmt9.so" ]]; then
   unix_build_dir="$repo_root/build/src"
+fi
+
+if [[ -z "$wow64_pe_build_dir" && -f "$repo_root/build-win32-x86-builtin/src/win32/d3d9.dll" ]]; then
+  wow64_pe_build_dir="$repo_root/build-win32-x86-builtin/src/win32"
 fi
 
 install_file "$pe_build_dir/d3d9.dll" "$system32_dir/d3d9.dll"
@@ -169,6 +206,13 @@ install_file "$pe_build_dir/dxmt9.dll" "$windows_runtime_dir/dxmt9.dll"
 install_file "$unix_build_dir/dxmt9.so" "$unix_runtime_dir/dxmt9.so"
 install_file "$mingw_bin_dir/libc++.dll" "$system32_dir/libc++.dll"
 install_file "$mingw_bin_dir/libunwind.dll" "$system32_dir/libunwind.dll"
+
+if [[ -n "$wow64_pe_build_dir" ]]; then
+  install_file "$wow64_pe_build_dir/d3d9.dll" "$syswow64_dir/d3d9.dll"
+  install_file "$wow64_pe_build_dir/dxmt9.dll" "$i386_windows_runtime_dir/dxmt9.dll"
+  install_file "$wow64_mingw_bin_dir/libc++.dll" "$syswow64_dir/libc++.dll"
+  install_file "$wow64_mingw_bin_dir/libunwind.dll" "$syswow64_dir/libunwind.dll"
+fi
 
 if [[ "$legacy_system32_bridge" == true ]]; then
   install_file "$pe_build_dir/dxmt9.dll" "$system32_dir/dxmt9.dll"
