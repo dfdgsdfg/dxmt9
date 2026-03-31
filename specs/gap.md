@@ -147,7 +147,7 @@ the tests spec.
 ## Experiments Layer
 
 ⚠️ Partial. The runner, launcher harness, output layout, one verified local
-bootstrap entry, and the first verified real application entry exist. The
+bootstrap entry, and two verified real application entries exist. The
 remaining real-application catalogue from R-WILD-3.1 is still not staged.
 
 | Area | Status | Spec |
@@ -156,8 +156,8 @@ remaining real-application catalogue from R-WILD-3.1 is still not staged.
 | Wine launcher injection harness (`run_experiment.py`, launcher scripts, Heroic staging) | ⚠️ | R-WILD-1.2 |
 | Internal backbuffer frame dump + SSIM comparison + `result.json` output | ✅ | R-WILD-2.3, R-WILD-4.1 |
 | Bootstrap verified entry: `dxmt9-wsi-present-local` on Heroic Wine 11.5 | ✅ | local workflow validation |
-| First verified real application entry: `dx-sdk-basichlsl` | ✅ | Heroic Wine 11.5, 240 frames, direct capture, SSIM 1.0000 |
-| Remaining real application binaries for Tutorial07 / HDRFormats / DXUT / Irrlicht | ❌ | R-WILD-3.1 |
+| Verified real application entries: `dx-sdk-basichlsl`, `dx-sdk-tutorial07` | ✅ | Heroic Wine 11.5, direct capture, SSIM 1.0000 |
+| Remaining real application binaries for HDRFormats / DXUT / Irrlicht | ❌ | R-WILD-3.1 |
 | Reference screenshots for remaining catalogue entries | ❌ | R-WILD-4.1 |
 
 ---

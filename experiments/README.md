@@ -9,12 +9,20 @@ Primary entrypoint:
 python3 scripts/run_experiment.py list
 python3 scripts/run_experiment.py run dxmt9-wsi-present-local
 python3 scripts/run_experiment.py run dx-sdk-basichlsl --wine-root "$WINE_ROOT"
+python3 scripts/run_experiment.py run dx-sdk-tutorial07 --wine-root "$WINE_ROOT"
 ```
 
-One-shot wrapper for the first real app:
+One-shot wrappers for the verified real apps:
 
 ```sh
 bash scripts/run_basic_experiment.sh --wine-root "$WINE_ROOT"
+bash scripts/run_tutorial07_experiment.sh --wine-root "$WINE_ROOT"
+```
+
+Permanent-prefix installer for Heroic:
+
+```sh
+bash scripts/install_heroic_experiment_prefix.sh --prefix "$HOME/.wine-dxmt9-heroic" --wine-root "$WINE_ROOT"
 ```
 
 The runner:
@@ -39,6 +47,11 @@ Current verified real application entry:
 - `dx-sdk-basichlsl`
   - Heroic Wine 11.5 builtin path
   - 240 frames
+  - direct backbuffer capture
+  - `ssim = 1.0000`
+- `dx-sdk-tutorial07`
+  - Heroic Wine 11.5 builtin path
+  - 180 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
 

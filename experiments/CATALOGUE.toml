@@ -36,12 +36,12 @@ binary = "experiments/apps/Tutorial07/Tutorial07.exe"
 launcher = "experiments/launchers/dx_sdk_tutorial07.sh"
 reference = "experiments/references/dx-sdk-tutorial07.png"
 features = ["vs_2_0", "ps_2_0", "texturing"]
-status = "untested"
+status = "passing"
 requires_wine = true
 window_title = "Tutorial 07"
 capture_delay_sec = 3.0
 run_timeout_sec = 45
-capture_frame = 180
+capture_frame = 120
 
 [[app]]
 name = "dx-sdk-hdrformats"
