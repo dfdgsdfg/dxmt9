@@ -675,6 +675,8 @@ struct SurfaceRecord {
   SurfaceDesc desc{};
   ObjcPtr<id<MTLTexture>> texture;
   ObjcPtr<id<MTLTexture>> resolveTexture;
+  TextureHandle aliasTexture{};
+  u32 level = 0;
   bool destroyPending = false;
   u64 lastUsedSeqId = 0;
 };
@@ -3587,6 +3589,40 @@ class MetalBackendDevice final : public BackendDevice {
         [descriptor release];
       }
     }
+    surfaces_[handle.value] = std::move(record);
+    return handle;
+  }
+
+  SurfaceHandle createSurfaceForTexture(TextureHandle textureHandle, u32 level, const SurfaceDesc& desc) override {
+    std::lock_guard lock(mutex_);
+    auto textureIt = textures_.find(textureHandle.value);
+    if (textureIt == textures_.end() || !textureIt->second.texture) {
+      return {};
+    }
+
+    const Handle handle{nextHandle_++};
+    SurfaceRecord record;
+    record.desc = desc;
+    record.aliasTexture = textureHandle;
+    record.level = level;
+
+    @autoreleasepool {
+      id<MTLTexture> textureView = nil;
+      id<MTLTexture> parentTexture = textureIt->second.texture.get();
+      if (level == 0 && desc.width == textureIt->second.desc.width && desc.height == textureIt->second.desc.height) {
+        textureView = [parentTexture retain];
+      } else {
+        NSRange levels = NSMakeRange(level, 1);
+        NSRange slices = NSMakeRange(0, 1);
+        textureView = [parentTexture newTextureViewWithPixelFormat:parentTexture.pixelFormat
+                                                       textureType:parentTexture.textureType
+                                                            levels:levels
+                                                            slices:slices];
+      }
+      record.texture = textureView ? ObjcPtr<id<MTLTexture>>::adopt(textureView)
+                                   : ObjcPtr<id<MTLTexture>>::retain(parentTexture);
+    }
+
     surfaces_[handle.value] = std::move(record);
     return handle;
   }

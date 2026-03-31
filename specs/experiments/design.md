@@ -139,6 +139,7 @@ Current local verification set:
 - `dxmt9-wsi-present-local`
 - `dx-sdk-basichlsl`
 - `dx-sdk-tutorial07`
+- `dx-sdk-hdrformats`
 - `dxut-simple-sample`
 
 Current verified Wine host:

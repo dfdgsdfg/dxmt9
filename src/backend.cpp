@@ -45,6 +45,8 @@ struct TextureRecord {
 
 struct SurfaceRecord {
   SurfaceDesc desc{};
+  TextureHandle texture{};
+  u32 level = 0;
 };
 
 class SimBackendDevice final : public BackendDevice {
@@ -88,6 +90,16 @@ class SimBackendDevice final : public BackendDevice {
     const Handle handle{nextHandle_++};
     SurfaceRecord record;
     record.desc = desc;
+    surfaces_[handle.value] = std::move(record);
+    return handle;
+  }
+
+  SurfaceHandle createSurfaceForTexture(TextureHandle texture, u32 level, const SurfaceDesc& desc) override {
+    const Handle handle{nextHandle_++};
+    SurfaceRecord record;
+    record.desc = desc;
+    record.texture = texture;
+    record.level = level;
     surfaces_[handle.value] = std::move(record);
     return handle;
   }

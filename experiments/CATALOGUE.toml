@@ -51,12 +51,12 @@ binary = "experiments/apps/HDRFormats/HDRFormats.exe"
 launcher = "experiments/launchers/dx_sdk_hdrformats.sh"
 reference = "experiments/references/dx-sdk-hdrformats.png"
 features = ["ps_3_0", "fp16_rt", "fp32_rt", "hdr_tonemap"]
-status = "untested"
+status = "passing"
 requires_wine = true
 window_title = "HDRFormats"
 capture_delay_sec = 4.0
 run_timeout_sec = 60
-capture_frame = 240
+capture_frame = 120
 
 [[app]]
 name = "dxut-simple-sample"

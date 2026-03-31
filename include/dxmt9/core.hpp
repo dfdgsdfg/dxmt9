@@ -875,6 +875,12 @@ class BackendDevice {
     (void)desc;
     return {};
   }
+  virtual SurfaceHandle createSurfaceForTexture(TextureHandle texture, u32 level, const SurfaceDesc& desc) {
+    (void)texture;
+    (void)level;
+    (void)desc;
+    return {};
+  }
   virtual void destroyBuffer(BufferHandle handle) = 0;
   virtual void destroyTexture(TextureHandle handle) = 0;
   virtual void destroySurface(SurfaceHandle handle) { (void)handle; }

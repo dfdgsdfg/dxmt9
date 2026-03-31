@@ -1638,7 +1638,10 @@ std::shared_ptr<Surface> Texture::surfaceLevel(u32 level) {
   surfaceDesc.usage = desc_.usage;
   surfaceDesc.renderTarget = (desc_.usage & UsageRenderTarget) != 0;
   surfaceDesc.depthStencil = (desc_.usage & UsageDepthStencil) != 0;
-  auto surfaceHandle = backend_ ? backend_->createSurface(surfaceDesc) : SurfaceHandle{};
+  auto surfaceHandle = backend_ ? backend_->createSurfaceForTexture(handle_, level, surfaceDesc) : SurfaceHandle{};
+  if (!surfaceHandle && backend_) {
+    surfaceHandle = backend_->createSurface(surfaceDesc);
+  }
   if (!surfaceHandle) {
     surfaceHandle = Handle{owner->nextHandle_++};
   }
