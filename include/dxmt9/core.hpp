@@ -733,11 +733,16 @@ struct DeviceCaps {
   u32 caps2 = 0;
   u32 caps3 = 0;
   u32 presentationIntervals = 0;
+  u32 cursorCaps = 0;
+  u32 primitiveMiscCaps = 0;
   u32 rasterCaps = 0;
   u32 zCmpCaps = 0;
   u32 alphaCmpCaps = 0;
   u32 shadeCaps = 0;
   u32 textureCaps = 0;
+  u32 textureFilterCaps = 0;
+  u32 cubetextureFilterCaps = 0;
+  u32 volumeTextureFilterCaps = 0;
   u32 linePatternCaps = 0;
   u32 maxAnisotropy = 16;
   u32 maxUserClipPlanes = 6;
@@ -755,44 +760,51 @@ struct DeviceCaps {
   u32 textureAddressCaps = 0;
   u32 volumeTextureAddressCaps = 0;
   u32 lineCaps = 0;
-  u32 vertexShaderVersion = 0x00030000;
-  u32 pixelShaderVersion = 0x00030000;
+  u32 vertexShaderVersion = 0xfffe0300;
+  u32 pixelShaderVersion = 0xffff0300;
   u32 maxVertexShaderConst = kMaxVertexConstants;
-  f32 pixelShader1xMaxValue = 8.0f;
-  u32 ps20Caps = 0;
+  f32 pixelShader1xMaxValue = 1024.0f;
+  u32 ps20Caps = 0x0000001f;
   u32 ps20DynamicFlowControlDepth = 24;
   u32 ps20NumTemps = 32;
   u32 ps20StaticFlowControlDepth = 4;
   u32 ps20NumInstructionSlots = 512;
-  u32 vs20Caps = 0;
+  u32 vs20Caps = 0x00000001;
   u32 vs20DynamicFlowControlDepth = 24;
   u32 vs20NumTemps = 32;
   u32 vs20StaticFlowControlDepth = 4;
   u32 maxTextureWidth = 16384;
   u32 maxTextureHeight = 16384;
   u32 maxVolumeExtent = 2048;
-  u32 maxTextureRepeat = 8192;
-  u32 maxTextureAspectRatio = 0;
+  u32 maxTextureRepeat = 32768;
+  u32 maxTextureAspectRatio = 16384;
   f32 maxTextureLODBias = 16.0f;
-  u32 maxSimultaneousTextures = kMaxTextures;
+  u32 maxSimultaneousTextures = 8;
   u32 maxActiveLights = kMaxLights;
   u32 numSimultaneousRTs = kMaxRenderTargets;
   u32 maxRenderTargetWidth = 16384;
   u32 maxRenderTargetHeight = 16384;
   u32 maxStreams = kMaxStreams;
-  u32 maxStreamStride = 255;
-  u32 maxPrimitiveCount = 16777215;
+  u32 maxStreamStride = 1024;
+  u32 maxPrimitiveCount = 5592405;
   u32 maxVertexIndex = 16777215;
   u32 maxVertexBlendMatrices = 4;
-  u32 maxVertexBlendMatrixIndex = 255;
-  u32 fvfCaps = 0;
-  u32 vertexProcessingCaps = 0;
+  u32 maxVertexBlendMatrixIndex = 0;
+  u32 fvfCaps = 0x00100008;
+  u32 vertexProcessingCaps = 0x0000013b;
   u32 devCaps = 0;
   u32 devCaps2 = 0;
-  f32 maxPointSize = 256.0f;
+  u32 declTypes = 0x0000030f;
+  u32 stretchRectFilterCaps = 0;
+  f32 maxPointSize = 64.0f;
   u32 masterAdapterOrdinal = 0;
   u32 adapterOrdinalInGroup = 0;
   u32 numberOfAdaptersInGroup = 1;
+  u32 vertexTextureFilterCaps = 0x01000100;
+  u32 maxVShaderInstructionsExecuted = 65535;
+  u32 maxPShaderInstructionsExecuted = 65535;
+  u32 maxVertexShader30InstructionSlots = 512;
+  u32 maxPixelShader30InstructionSlots = 512;
 };
 
 struct FormatInfo {
@@ -890,6 +902,10 @@ class BackendDevice {
     return nullptr;
   }
   virtual void unmapBuffer(BufferHandle handle) { (void)handle; }
+  virtual void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) {
+    (void)handle;
+    (void)bytes;
+  }
   virtual void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
                                   std::span<const u8> bytes) {
     (void)handle;

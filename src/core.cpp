@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -55,9 +57,43 @@ std::optional<u32> parseEnvU32(const char* name) {
   return static_cast<u32>(parsed);
 }
 
+std::optional<u32> parseEnvU32Auto(const char* name) {
+  const char* value = std::getenv(name);
+  if (!value || *value == '\0') {
+    return std::nullopt;
+  }
+  char* end = nullptr;
+  const auto parsed = std::strtoull(value, &end, 0);
+  if (!end || *end != '\0') {
+    return std::nullopt;
+  }
+  return static_cast<u32>(parsed);
+}
+
 std::string getenvString(const char* name) {
   const char* value = std::getenv(name);
   return value ? std::string(value) : std::string();
+}
+
+bool renderTraceEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_TRACE_RENDER");
+    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+void emitRenderTrace(const char* fmt, ...) {
+  if (!renderTraceEnabled()) {
+    return;
+  }
+  std::fputs("[dxmt9-render] ", stderr);
+  va_list args;
+  va_start(args, fmt);
+  std::vfprintf(stderr, fmt, args);
+  va_end(args);
+  std::fputc('\n', stderr);
+  std::fflush(stderr);
 }
 
 u32 clampToBits(float value, u32 bits) {
@@ -1331,6 +1367,33 @@ u64 hashString(std::string_view text) {
 }
 
 DeviceCaps makeDefaultCaps(const BackendLimits& limits) {
+  constexpr u32 kCaps = 0x00000000u;
+  constexpr u32 kCaps2 = 0x20000u | 0x40000000u | 0x20000000u;
+  constexpr u32 kCaps3 = 0x00000020u | 0x00000100u | 0x00000200u;
+  constexpr u32 kCursorCaps = 0x00000001u | 0x00000002u;
+  constexpr u32 kPrimitiveMiscCaps = 0x002ecff2u;
+  constexpr u32 kRasterCaps = 0x07332191u;
+  constexpr u32 kCmpCaps = 0x000000ffu;
+  constexpr u32 kShadeCaps = 0x00000008u | 0x00000200u | 0x00004000u | 0x00080000u;
+  constexpr u32 kTextureCaps = 0x0001ec85u;
+  constexpr u32 kFilterCaps = 0x07030700u;
+  constexpr u32 kCubeFilterCaps = 0x07030700u;
+  constexpr u32 kVolumeFilterCaps = 0x03030300u;
+  constexpr u32 kStretchRectFilterCaps = 0x03000300u;
+  constexpr u32 kAddressCaps = 0x0000001fu;
+  constexpr u32 kStencilCaps = 0x00000001u | 0x00000002u | 0x00000004u |
+                               0x00000008u | 0x00000010u | 0x00000020u |
+                               0x00000040u | 0x00000080u | 0x00000100u;
+  constexpr u32 kSrcBlendCaps = 0x00003fffu;
+  constexpr u32 kDestBlendCaps = 0x000027ffu;
+  constexpr u32 kTextureOpCaps = 0x03feffffu;
+  constexpr u32 kVertexProcessingCaps = 0x0000013bu;
+  constexpr u32 kDeclTypes = 0x0000030fu;
+  constexpr u32 kFvfCaps = 0x00100008u;
+  constexpr u32 kLineCaps = 0x0000001fu;
+  constexpr u32 kDevCaps = 0x0019aff0u;
+  constexpr u32 kDevCaps2 = 0x00000001u | 0x00000010u | 0x00000040u;
+
   DeviceCaps caps;
   caps.maxTextureWidth = std::min(16384u, limits.maxTextureSize);
   caps.maxTextureHeight = std::min(16384u, limits.maxTextureSize);
@@ -1339,31 +1402,54 @@ DeviceCaps makeDefaultCaps(const BackendLimits& limits) {
   caps.maxAnisotropy = limits.maxAnisotropy;
   caps.numSimultaneousRTs = std::min(kMaxRenderTargets, limits.maxColorAttachments);
   caps.maxVertexShaderConst = kMaxVertexConstants;
-  caps.maxSimultaneousTextures = kMaxTextures;
+  caps.maxSimultaneousTextures = 8;
   caps.maxActiveLights = kMaxLights;
   caps.maxStreams = kMaxStreams;
-  caps.vertexShaderVersion = 0x00030000;
-  caps.pixelShaderVersion = 0x00030000;
-  caps.presentationIntervals = static_cast<u32>(PresentInterval::Immediate) |
-                               static_cast<u32>(PresentInterval::Default) |
-                               static_cast<u32>(PresentInterval::Two);
-  caps.textureCaps = 1;
-  caps.rasterCaps = 1;
-  caps.zCmpCaps = 1;
-  caps.alphaCmpCaps = 1;
-  caps.shadeCaps = 1;
-  caps.stencilCaps = 1;
-  caps.srcBlendCaps = 1;
-  caps.destBlendCaps = 1;
-  caps.alphaBlendCaps = 1;
-  caps.textureBlendCaps = 1;
-  caps.textureAddressCaps = 1;
-  caps.volumeTextureAddressCaps = 1;
-  caps.lineCaps = 1;
-  caps.fvfCaps = 1;
-  caps.vertexProcessingCaps = 1;
-  caps.devCaps = 1;
-  caps.devCaps2 = 1;
+  caps.vertexShaderVersion = 0xfffe0300u;
+  caps.pixelShaderVersion = 0xffff0300u;
+  caps.caps = kCaps;
+  caps.caps2 = kCaps2;
+  caps.caps3 = kCaps3;
+  caps.presentationIntervals = 0x80000000u | 0x00000001u;
+  caps.cursorCaps = kCursorCaps;
+  caps.primitiveMiscCaps = kPrimitiveMiscCaps;
+  caps.textureCaps = kTextureCaps;
+  caps.textureFilterCaps = kFilterCaps;
+  caps.cubetextureFilterCaps = kCubeFilterCaps;
+  caps.volumeTextureFilterCaps = kVolumeFilterCaps;
+  caps.rasterCaps = kRasterCaps;
+  caps.zCmpCaps = kCmpCaps;
+  caps.alphaCmpCaps = kCmpCaps;
+  caps.shadeCaps = kShadeCaps;
+  caps.stencilCaps = kStencilCaps;
+  caps.srcBlendCaps = kSrcBlendCaps;
+  caps.destBlendCaps = kDestBlendCaps;
+  caps.alphaBlendCaps = kCmpCaps;
+  caps.textureBlendCaps = kTextureOpCaps;
+  caps.textureAddressCaps = kAddressCaps;
+  caps.volumeTextureAddressCaps = kAddressCaps;
+  caps.lineCaps = kLineCaps;
+  caps.fvfCaps = kFvfCaps;
+  caps.vertexProcessingCaps = kVertexProcessingCaps;
+  caps.devCaps = kDevCaps;
+  caps.devCaps2 = kDevCaps2;
+  caps.declTypes = kDeclTypes;
+  caps.stretchRectFilterCaps = kStretchRectFilterCaps;
+  caps.vs20Caps = 0x00000001u;
+  caps.ps20Caps = 0x0000001fu;
+  caps.maxTextureRepeat = 32768;
+  caps.maxTextureAspectRatio = 16384;
+  caps.maxUserClipPlanes = 8;
+  caps.maxPointSize = 64.0f;
+  caps.maxPrimitiveCount = 5592405;
+  caps.maxStreamStride = 1024;
+  caps.maxVertexBlendMatrixIndex = 0;
+  caps.pixelShader1xMaxValue = 1024.0f;
+  caps.vertexTextureFilterCaps = 0x01000100u;
+  caps.maxVShaderInstructionsExecuted = 65535;
+  caps.maxPShaderInstructionsExecuted = 65535;
+  caps.maxVertexShader30InstructionSlots = 512;
+  caps.maxPixelShader30InstructionSlots = 512;
   return caps;
 }
 
@@ -1554,6 +1640,7 @@ LockedRegion Buffer::lock(u64 offset, u64 size, u32 flags) {
 
 void Buffer::unlock() {
   if (backend_ && handle_) {
+    backend_->uploadBufferData(handle_, storage_);
     backend_->unmapBuffer(handle_);
   }
   locked_ = false;
@@ -2229,6 +2316,11 @@ HResult Device::setClipPlane(u32 index, const ClipPlane& plane) {
 }
 
 HResult Device::setViewport(const Viewport& viewport) {
+  if (viewport.width == 0 || viewport.height == 0 || !std::isfinite(viewport.minZ) ||
+      !std::isfinite(viewport.maxZ) || viewport.minZ < 0.0f || viewport.maxZ > 1.0f ||
+      viewport.minZ > viewport.maxZ) {
+    return D3DERR_INVALIDCALL;
+  }
   state_.viewport = viewport;
   return D3D_OK;
 }
@@ -2755,6 +2847,20 @@ void Device::invalidateDefaultPoolResources() {
 }
 
 void Device::submitClearInternal(const ClearDesc& desc) {
+  emitRenderTrace("clear seq=%llu color=%d depth=%d stencil=%d color0=0x%llx depthStencil=0x%llx rects=%zu rgba=(%.3f,%.3f,%.3f,%.3f) depthValue=%.3f stencilValue=%u",
+                  static_cast<unsigned long long>(submittedSequenceId_ + 1),
+                  desc.clearColor ? 1 : 0,
+                  desc.clearDepth ? 1 : 0,
+                  desc.clearStencil ? 1 : 0,
+                  static_cast<unsigned long long>(desc.colorAttachments[0].handle.value),
+                  static_cast<unsigned long long>(desc.depthStencil.handle.value),
+                  desc.rects.size(),
+                  desc.color.r,
+                  desc.color.g,
+                  desc.color.b,
+                  desc.color.a,
+                  desc.depth,
+                  desc.stencil);
   backend_->submitClear(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
@@ -2763,6 +2869,19 @@ void Device::submitClearInternal(const ClearDesc& desc) {
 }
 
 void Device::submitDrawInternal(const DrawDesc& desc) {
+  emitRenderTrace("draw seq=%llu primType=%u primCount=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u fvf=0x%x lighting=%u alphaTest=%u clipMask=0x%x",
+                  static_cast<unsigned long long>(submittedSequenceId_ + 1),
+                  static_cast<unsigned>(desc.primitiveType),
+                  desc.primitiveCount,
+                  static_cast<unsigned long long>(desc.rts.color[0].handle.value),
+                  static_cast<unsigned long long>(desc.rts.depthStencil.handle.value),
+                  static_cast<unsigned long long>(desc.textures[0].handle.value),
+                  static_cast<unsigned>(desc.vertexShader.kind),
+                  static_cast<unsigned>(desc.pixelShader.kind),
+                  desc.vertexDecl.fvf,
+                  desc.rs.values.contains(RS_LIGHTING) ? desc.rs.values.at(RS_LIGHTING) : 0u,
+                  desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) ? desc.rs.values.at(RS_ALPHA_TEST_ENABLE) : 0u,
+                  desc.clipPlaneMask);
   backend_->submitDraw(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
@@ -2774,6 +2893,14 @@ void Device::submitDrawInternal(const DrawDesc& desc) {
 }
 
 void Device::submitPresentInternal(const SwapDesc& desc) {
+  emitRenderTrace("present seq=%llu window=0x%llx size=%ux%u fmt=%u windowed=%d interval=%u",
+                  static_cast<unsigned long long>(submittedSequenceId_ + 1),
+                  static_cast<unsigned long long>(desc.window.value),
+                  desc.width,
+                  desc.height,
+                  static_cast<unsigned>(desc.format),
+                  desc.windowed ? 1 : 0,
+                  static_cast<unsigned>(desc.interval));
   backend_->present(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
@@ -3126,7 +3253,16 @@ FfpPixelKey makeFfpPixelKey(const DeviceState& state) {
 
 Factory::Factory(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
     : limits_(limits), backend_(backend ? std::move(backend) : makeBackendDevice(limits_)) {
-  adapters_.push_back({0, "Adapter 0", 1, 1, {1920, 1080, 60, Format::A8R8G8B8}});
+  AdapterInfo adapter;
+  adapter.ordinal = 0;
+  adapter.name = getenvString("DXMT9_ADAPTER_NAME");
+  if (adapter.name.empty()) {
+    adapter.name = "NVIDIA GeForce 6800";
+  }
+  adapter.registryId = 1;
+  adapter.displayId = 1;
+  adapter.displayMode = {1920, 1080, 60, Format::A8R8G8B8};
+  adapters_.push_back(std::move(adapter));
   adapterCaps_.push_back(makeDefaultCaps(limits_));
 }
 
@@ -3148,13 +3284,16 @@ AdapterIdentifier Factory::getAdapterIdentifier(size_t index) const {
   const auto& info = adapter(index);
   AdapterIdentifier identifier;
   identifier.description = info.name;
-  identifier.deviceName = info.name;
-  identifier.driver = "dxmt9";
+  identifier.deviceName = "\\\\.\\DISPLAY1";
+  identifier.driver = getenvString("DXMT9_ADAPTER_DRIVER");
+  if (identifier.driver.empty()) {
+    identifier.driver = "nvd3dum.dll";
+  }
   identifier.driverVersion = info.registryId;
-  identifier.vendorId = 0;
-  identifier.deviceId = static_cast<u32>(info.ordinal);
+  identifier.vendorId = parseEnvU32Auto("DXMT9_ADAPTER_VENDOR_ID").value_or(0x10deu);
+  identifier.deviceId = parseEnvU32Auto("DXMT9_ADAPTER_DEVICE_ID").value_or(0x0041u);
   identifier.subSysId = 0;
-  identifier.revision = 1;
+  identifier.revision = 0;
   identifier.monitor = info.displayId;
   return identifier;
 }
@@ -3182,13 +3321,20 @@ HRESULT Factory::checkDeviceType(size_t adapterIndex, DeviceType deviceType, For
   if (deviceType != DeviceType::Hal) {
     return D3DERR_NOTAVAILABLE;
   }
-  const auto displayFormat = adapter(adapterIndex).displayMode.format;
   if (windowed) {
     if (!isDisplayModeFormat(adapterFormat) || !isDisplayModeFormat(backBufferFormat)) {
       return D3DERR_NOTAVAILABLE;
     }
-  } else if (adapterFormat != displayFormat || backBufferFormat != displayFormat) {
-    return D3DERR_NOTAVAILABLE;
+  } else {
+    if (!isDisplayModeFormat(adapterFormat) || !isDisplayModeFormat(backBufferFormat)) {
+      return D3DERR_NOTAVAILABLE;
+    }
+    if (adapterFormat != backBufferFormat) {
+      return D3DERR_NOTAVAILABLE;
+    }
+    if (enumAdapterModes(adapterIndex, backBufferFormat).empty()) {
+      return D3DERR_NOTAVAILABLE;
+    }
   }
   if (!formatSupportsUsage(adapterFormat, UsageRenderTarget, limits_) ||
       !formatSupportsUsage(backBufferFormat, UsageRenderTarget, limits_)) {
@@ -3244,9 +3390,20 @@ std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const Present
   }
   const auto& adapterInfo = adapters_[adapterIndex];
   const auto normalized = normalizePresentParameters(adapterInfo, params);
-  if (checkDeviceType(adapterIndex, DeviceType::Hal, adapterInfo.displayMode.format, normalized.backBufferFormat,
+  const auto fullscreenAdapterFormat =
+      normalized.windowed ? adapterInfo.displayMode.format : normalized.backBufferFormat;
+  if (checkDeviceType(adapterIndex, DeviceType::Hal, fullscreenAdapterFormat, normalized.backBufferFormat,
                       normalized.windowed) != D3D_OK) {
     return {};
+  }
+  if (!normalized.windowed) {
+    const auto modes = enumAdapterModes(adapterIndex, normalized.backBufferFormat);
+    const auto match = std::find_if(modes.begin(), modes.end(), [&](const DisplayMode& mode) {
+      return mode.width == normalized.backBufferWidth && mode.height == normalized.backBufferHeight;
+    });
+    if (match == modes.end()) {
+      return {};
+    }
   }
   auto device = std::shared_ptr<Device>(
       new Device(adapterInfo, limits_, backend_, normalized, behaviorFlags));

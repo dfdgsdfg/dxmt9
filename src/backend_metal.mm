@@ -62,6 +62,17 @@ u64 queueTraceFromSeq() {
   return value;
 }
 
+int fixedFunctionTraceBudget() {
+  static const int budget = [] {
+    const char* env = std::getenv("DXMT9_TRACE_FVF");
+    if (!env || env[0] == '\0') {
+      return 0;
+    }
+    return std::max(0, std::atoi(env));
+  }();
+  return budget;
+}
+
 void emitQueueTraceLine(const std::string& line) {
   std::fputs(line.c_str(), stderr);
   std::fputc('\n', stderr);
@@ -275,6 +286,31 @@ MTLPixelFormat toPixelFormat(Format format, const BackendLimits& limits) {
       return MTLPixelFormatDepth32Float_Stencil8;
     default:
       return MTLPixelFormatBGRA8Unorm;
+  }
+}
+
+bool formatHasStencilAspect(Format format) {
+  switch (format) {
+    case Format::D24S8:
+    case Format::D24FS8:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool formatHasDepthAspect(Format format) {
+  switch (format) {
+    case Format::D24S8:
+    case Format::D24X8:
+    case Format::D16:
+    case Format::D32:
+    case Format::D32F_LOCKABLE:
+    case Format::D16_LOCKABLE:
+    case Format::D24FS8:
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -712,10 +748,14 @@ struct DrawUniforms {
   std::array<u32, kMaxBoolConstants> psBoolConst{};
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
   std::array<f32, 2> halfPixelFixup{};
+  std::array<f32, 2> viewportOrigin{};
+  std::array<f32, 2> viewportSize{};
   f32 alphaRef = 0.0f;
   f32 fogStart = 1.0f;
   f32 fogEnd = 1.0f;
   f32 fogDensity = 1.0f;
+  u32 vertexStreamOffset = 0;
+  u32 vertexStreamStride = 0;
   u32 clipPlaneMask = 0;
   u32 alphaTestEnable = 0;
   u32 alphaTestFunc = static_cast<u32>(CompareFunc::Always);
@@ -961,10 +1001,14 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  uint psBoolConst[" << kMaxBoolConstants << "];\n";
   out << "  float4 clipPlanes[6];\n";
   out << "  float2 halfPixelFixup;\n";
+  out << "  float2 viewportOrigin;\n";
+  out << "  float2 viewportSize;\n";
   out << "  float alphaRef;\n";
   out << "  float fogStart;\n";
   out << "  float fogEnd;\n";
   out << "  float fogDensity;\n";
+  out << "  uint vertexStreamOffset;\n";
+  out << "  uint vertexStreamStride;\n";
   out << "  uint clipPlaneMask;\n";
   out << "  uint alphaTestEnable;\n";
   out << "  uint alphaTestFunc;\n";
@@ -987,6 +1031,21 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "                  (mask & 4u) != 0u ? next.z : current.z,\n";
   out << "                  (mask & 8u) != 0u ? next.w : current.w);\n";
   out << "}\n";
+  out << "inline float dxmt9_load_f32(const device uchar* base, uint offset) {\n";
+  out << "  return as_type<float>(*reinterpret_cast<const device uint*>(base + offset));\n";
+  out << "}\n";
+  out << "inline float2 dxmt9_load_f32x2(const device uchar* base, uint offset) {\n";
+  out << "  return float2(dxmt9_load_f32(base, offset), dxmt9_load_f32(base, offset + 4u));\n";
+  out << "}\n";
+  out << "inline float4 dxmt9_load_f32x4(const device uchar* base, uint offset) {\n";
+  out << "  return float4(dxmt9_load_f32(base, offset), dxmt9_load_f32(base, offset + 4u),\n";
+  out << "                dxmt9_load_f32(base, offset + 8u), dxmt9_load_f32(base, offset + 12u));\n";
+  out << "}\n";
+  out << "inline float4 dxmt9_load_d3dcolor(const device uchar* base, uint offset) {\n";
+  out << "  const uint raw = *reinterpret_cast<const device uint*>(base + offset);\n";
+  out << "  return float4(float((raw >> 16) & 0xffu), float((raw >> 8) & 0xffu), float(raw & 0xffu),\n";
+  out << "                float((raw >> 24) & 0xffu)) / 255.0f;\n";
+  out << "}\n";
   return out.str();
 }
 
@@ -1003,6 +1062,11 @@ DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
     uniforms.psBoolConst[i] = desc.psConst.bools[i] ? 1u : 0u;
   }
   uniforms.halfPixelFixup = halfPixelFixup(desc.viewport.viewport);
+  uniforms.viewportOrigin = {static_cast<f32>(desc.viewport.viewport.x), static_cast<f32>(desc.viewport.viewport.y)};
+  uniforms.viewportSize = {static_cast<f32>(std::max(1u, desc.viewport.viewport.width)),
+                           static_cast<f32>(std::max(1u, desc.viewport.viewport.height))};
+  uniforms.vertexStreamOffset = desc.vertexDecl.streams[0].offset;
+  uniforms.vertexStreamStride = desc.vertexDecl.streams[0].stride;
   uniforms.clipPlaneMask = desc.clipPlaneMask;
   uniforms.alphaTestEnable = desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) &&
                              desc.rs.values.at(RS_ALPHA_TEST_ENABLE) != 0;
@@ -1023,6 +1087,178 @@ DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
     uniforms.clipPlanes[i] = desc.clipPlanes[i];
   }
   return uniforms;
+}
+
+constexpr u32 kFvfPositionMask = 0x000eu;
+constexpr u32 kFvfXyz = 0x0002u;
+constexpr u32 kFvfXyzrhw = 0x0004u;
+constexpr u32 kFvfDiffuse = 0x0040u;
+constexpr u32 kFvfSpecular = 0x0080u;
+constexpr u32 kFvfTexCountMask = 0x0f00u;
+constexpr u32 kFvfTexCountShift = 8u;
+
+constexpr u32 kD3DDeclTypeFloat1 = 0u;
+constexpr u32 kD3DDeclTypeFloat2 = 1u;
+constexpr u32 kD3DDeclTypeFloat3 = 2u;
+constexpr u32 kD3DDeclTypeFloat4 = 3u;
+constexpr u32 kD3DDeclTypeD3DColor = 4u;
+constexpr u32 kD3DDeclUsageTexcoord = 5u;
+constexpr u32 kD3DDeclUsagePositionT = 9u;
+constexpr u32 kD3DDeclUsageColor = 10u;
+
+struct FixedFunctionVertexLayout {
+  bool valid = false;
+  bool preTransformed = false;
+  bool hasDiffuse = false;
+  bool hasTexcoord0 = false;
+  u32 stride = 0;
+  u32 positionOffset = 0;
+  u32 diffuseOffset = 0;
+  u32 texcoord0Offset = 0;
+  u64 hash = 0;
+};
+
+u32 declTypeSize(u32 type) {
+  switch (type) {
+    case kD3DDeclTypeFloat1:
+      return 4;
+    case kD3DDeclTypeFloat2:
+      return 8;
+    case kD3DDeclTypeFloat3:
+      return 12;
+    case kD3DDeclTypeFloat4:
+      return 16;
+    case kD3DDeclTypeD3DColor:
+      return 4;
+    default:
+      return 0;
+  }
+}
+
+u32 fvfTexcoordSize(u32 fvf, u32 index) {
+  const u32 code = (fvf >> (16u + index * 2u)) & 0x3u;
+  switch (code) {
+    case 1u:
+      return 3;
+    case 2u:
+      return 4;
+    case 3u:
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
+  u64 hash = 1469598103934665603ull;
+  hash ^= static_cast<u64>(layout.valid);
+  hash *= 1099511628211ull;
+  hash ^= static_cast<u64>(layout.preTransformed);
+  hash *= 1099511628211ull;
+  hash ^= static_cast<u64>(layout.hasDiffuse);
+  hash *= 1099511628211ull;
+  hash ^= static_cast<u64>(layout.hasTexcoord0);
+  hash *= 1099511628211ull;
+  hash ^= layout.stride;
+  hash *= 1099511628211ull;
+  hash ^= layout.positionOffset;
+  hash *= 1099511628211ull;
+  hash ^= layout.diffuseOffset;
+  hash *= 1099511628211ull;
+  hash ^= layout.texcoord0Offset;
+  hash *= 1099511628211ull;
+  return hash;
+}
+
+std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const DrawDesc& desc) {
+  FixedFunctionVertexLayout layout;
+  if (!desc.vertexDecl.elements.empty()) {
+    u32 computedStride = 0;
+    for (const auto& element : desc.vertexDecl.elements) {
+      if (element.stream != 0) {
+        continue;
+      }
+      const u32 size = declTypeSize(element.type);
+      if (size == 0) {
+        continue;
+      }
+      computedStride = std::max(computedStride, static_cast<u32>(element.offset + size));
+      if (element.usage == kD3DDeclUsagePositionT && element.usageIndex == 0 &&
+          element.type == kD3DDeclTypeFloat4) {
+        layout.valid = true;
+        layout.preTransformed = true;
+        layout.positionOffset = element.offset;
+      } else if (element.usage == kD3DDeclUsageColor && element.usageIndex == 0 &&
+                 element.type == kD3DDeclTypeD3DColor) {
+        layout.hasDiffuse = true;
+        layout.diffuseOffset = element.offset;
+      } else if (element.usage == kD3DDeclUsageTexcoord && element.usageIndex == 0 &&
+                 element.type == kD3DDeclTypeFloat2) {
+        layout.hasTexcoord0 = true;
+        layout.texcoord0Offset = element.offset;
+      }
+    }
+    layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : computedStride;
+    if (layout.valid) {
+      layout.hash = hashFixedFunctionLayout(layout);
+      return layout;
+    }
+    return std::nullopt;
+  }
+
+  const u32 fvf = desc.vertexDecl.fvf;
+  if ((fvf & kFvfPositionMask) != kFvfXyzrhw) {
+    return std::nullopt;
+  }
+
+  layout.valid = true;
+  layout.preTransformed = true;
+  u32 offset = 0;
+  layout.positionOffset = offset;
+  offset += 16;
+
+  if ((fvf & kFvfDiffuse) != 0) {
+    layout.hasDiffuse = true;
+    layout.diffuseOffset = offset;
+    offset += 4;
+  }
+  if ((fvf & kFvfSpecular) != 0) {
+    offset += 4;
+  }
+
+  const u32 texCount = (fvf & kFvfTexCountMask) >> kFvfTexCountShift;
+  if (texCount > 0) {
+    layout.hasTexcoord0 = fvfTexcoordSize(fvf, 0) >= 2;
+    layout.texcoord0Offset = offset;
+  }
+  for (u32 i = 0; i < texCount; ++i) {
+    offset += fvfTexcoordSize(fvf, i) * 4u;
+  }
+
+  layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : offset;
+  layout.hash = hashFixedFunctionLayout(layout);
+  return layout;
+}
+
+u32 primitiveVertexCount(PrimitiveType type, u32 primitiveCount) {
+  switch (type) {
+    case PrimitiveType::PointList:
+      return primitiveCount;
+    case PrimitiveType::LineList:
+      return primitiveCount * 2u;
+    case PrimitiveType::LineStrip:
+      return primitiveCount + 1u;
+    case PrimitiveType::TriangleList:
+    case PrimitiveType::TriangleFan:
+      return primitiveCount * 3u;
+    case PrimitiveType::TriangleStrip:
+      return primitiveCount + 2u;
+  }
+  return primitiveCount * 3u;
+}
+
+u32 indexElementSize(IndexType type) {
+  return type == IndexType::UInt32 ? 4u : 2u;
 }
 
 enum class D3DRegisterKind : u32 {
@@ -2984,22 +3220,54 @@ std::string makeTranslatedFragmentSource(const ShaderRef& shader, const DrawDesc
 
 std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
   std::ostringstream out;
+  const auto layout = decodeFixedFunctionVertexLayout(desc);
   out << makeShaderPrelude(key.clipPlaneMask != 0);
-  out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
-  out << "  VSOut out;\n";
-  out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
-  out << "  out.position = float4(p[vid % 3], 0.0, 1.0);\n";
-  out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
-  out << "  out.color = float4(1.0);\n";
-  out << "  out.texcoord0 = float2(vid & 1u, (vid >> 1u) & 1u);\n";
-  out << "  out.fogFactor = 1.0;\n";
+  if (layout && layout->preTransformed) {
+    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
+           "device const uchar* stream0 [[buffer(1)]]) {\n";
+    out << "  VSOut out;\n";
+    out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
+        << layout->stride << "u;\n";
+    out << "  const uint base = uniforms.vertexStreamOffset + vid * stride;\n";
+    out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
+    out << "  float clipW = fabs(inPosition.w) > 1.0e-8f ? (1.0f / inPosition.w) : 1.0f;\n";
+    out << "  float2 viewportSize = max(uniforms.viewportSize, float2(1.0f));\n";
+    out << "  float2 ndc = float2(((inPosition.x - uniforms.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
+    out << "                     1.0f - ((inPosition.y - uniforms.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
+    out << "  out.position = float4(ndc * clipW, inPosition.z * clipW, clipW);\n";
+    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
+    if (layout->hasDiffuse) {
+      out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
+    } else {
+      out << "  out.color = float4(1.0);\n";
+    }
+    out << "  out.secondaryColor = float4(0.0);\n";
+    if (layout->hasTexcoord0) {
+      out << "  out.texcoord0 = dxmt9_load_f32x2(stream0, base + " << layout->texcoord0Offset << "u);\n";
+    } else {
+      out << "  out.texcoord0 = float2(0.0);\n";
+    }
+    out << "  out.fogFactor = 1.0;\n";
+    out << "  out.pointSize = 1.0;\n";
+  } else {
+    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
+    out << "  VSOut out;\n";
+    out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
+    out << "  out.position = float4(p[vid % 3], 0.0, 1.0);\n";
+    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
+    out << "  out.color = float4(1.0);\n";
+    out << "  out.secondaryColor = float4(0.0);\n";
+    out << "  out.texcoord0 = float2(vid & 1u, (vid >> 1u) & 1u);\n";
+    out << "  out.fogFactor = 1.0;\n";
+    out << "  out.pointSize = 1.0;\n";
+  }
   out << "  if (" << (key.lightingEnabled ? "true" : "false") << ") {\n";
   out << "    out.color.rgb *= 1.0;\n";
   out << "  }\n";
   if (key.clipPlaneMask != 0 || desc.clipPlaneMask != 0) {
     out << "  for (uint i = 0; i < 6; ++i) {\n";
     out << "    if ((uniforms.clipPlaneMask & (1u << i)) != 0u) {\n";
-    out << "      out.clipDistance[i] = dot(uniforms.clipPlanes[i], out.position);\n";
+      out << "      out.clipDistance[i] = dot(uniforms.clipPlanes[i], out.position);\n";
     out << "    }\n";
     out << "  }\n";
   }
@@ -3281,8 +3549,10 @@ ShaderVariantKey makeShaderVariantKey(const DrawDesc& desc, std::span<const u32>
                                       std::span<const BlendAttachmentKey> blendAttachments, u32 depthFormat,
                                       u32 stencilFormat) {
   ShaderVariantKey key;
+  const auto layout = decodeFixedFunctionVertexLayout(desc);
+  const u64 layoutHash = layout ? layout->hash : 0ull;
   key.hash = desc.vertexShader.hash ^ (desc.pixelShader.hash << 1) ^ desc.clipPlaneMask ^ depthFormat ^
-             (stencilFormat << 1);
+             (stencilFormat << 1) ^ (layoutHash << 1) ^ desc.vertexDecl.fvf;
   key.textured = desc.textures[0].handle != Handle{};
   const auto minFilterIt = desc.samplers[0].states.find(SAMP_MIN_FILTER);
   const auto magFilterIt = desc.samplers[0].states.find(SAMP_MAG_FILTER);
@@ -3521,7 +3791,7 @@ class MetalBackendDevice final : public BackendDevice {
     record.shadow.resize(static_cast<size_t>(desc.size));
     if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
       @autoreleasepool {
-        const auto options = toResourceOptions(desc.pool, desc.usage);
+        const auto options = MTLResourceStorageModeShared;
         id<MTLBuffer> buffer = [device_.get() newBufferWithLength:static_cast<NSUInteger>(desc.size)
                                                           options:options];
         record.buffer = ObjcPtr<id<MTLBuffer>>::adopt(buffer);
@@ -3677,6 +3947,24 @@ class MetalBackendDevice final : public BackendDevice {
   void unmapBuffer(BufferHandle handle) override {
     std::lock_guard lock(mutex_);
     (void)handle;
+  }
+
+  void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) override {
+    std::lock_guard lock(mutex_);
+    auto it = buffers_.find(handle.value);
+    if (it == buffers_.end()) {
+      return;
+    }
+    it->second.shadow.assign(bytes.begin(), bytes.end());
+    if (!it->second.buffer || bytes.empty()) {
+      return;
+    }
+    void* contents = [it->second.buffer.get() contents];
+    if (!contents) {
+      return;
+    }
+    const size_t copySize = std::min(bytes.size(), static_cast<size_t>([it->second.buffer.get() length]));
+    std::memcpy(contents, bytes.data(), copySize);
   }
 
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
@@ -4495,13 +4783,25 @@ class MetalBackendDevice final : public BackendDevice {
       }
 
       if (auto* depthSurface = findSurfaceUnlocked(draw.rts.depthStencil.handle.value);
-          depthSurface && depthSurface->texture) {
-        auto depth = desc.depthAttachment;
-        depth.texture = depthSurface->texture.get();
-        depth.loadAction = clear.has_value() ? MTLLoadActionClear : MTLLoadActionLoad;
-        depth.storeAction = MTLStoreActionStore;
-        if (clear.has_value()) {
-          depth.clearDepth = clear->depth;
+          depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
+        if (formatHasDepthAspect(depthSurface->desc.format)) {
+          auto depth = desc.depthAttachment;
+          depth.texture = depthSurface->texture.get();
+          depth.loadAction = (clear.has_value() && clear->clearDepth) ? MTLLoadActionClear : MTLLoadActionLoad;
+          depth.storeAction = MTLStoreActionStore;
+          if (clear.has_value()) {
+            depth.clearDepth = clear->depth;
+          }
+        }
+        if (formatHasStencilAspect(depthSurface->desc.format)) {
+          auto stencil = desc.stencilAttachment;
+          stencil.texture = depthSurface->texture.get();
+          stencil.loadAction =
+              (clear.has_value() && clear->clearStencil) ? MTLLoadActionClear : MTLLoadActionLoad;
+          stencil.storeAction = MTLStoreActionStore;
+          if (clear.has_value()) {
+            stencil.clearStencil = clear->stencil;
+          }
         }
       }
 
@@ -4545,6 +4845,148 @@ class MetalBackendDevice final : public BackendDevice {
     *uniforms = buildDrawUniforms(draw);
     [encoder setVertexBytes:uniforms length:sizeof(DrawUniforms) atIndex:0];
     [encoder setFragmentBytes:uniforms length:sizeof(DrawUniforms) atIndex:0];
+    const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
+    static std::atomic<int> ffTraceRemaining{fixedFunctionTraceBudget()};
+    const u32 primitiveCount = std::max<u32>(1, draw.primitiveCount);
+    const NSUInteger vertexCount =
+        static_cast<NSUInteger>(std::max(1u, primitiveVertexCount(draw.primitiveType, primitiveCount)));
+    ObjcPtr<id<MTLBuffer>> transientVertexBuffer;
+    if (ffLayout) {
+      id<MTLBuffer> vertexBuffer = nil;
+      NSUInteger vertexBufferOffset = 0;
+      std::span<const u8> vertexShadow;
+      if (!draw.userVertexData.empty()) {
+        id<MTLBuffer> uploaded =
+            [device_.get() newBufferWithBytes:draw.userVertexData.data()
+                                       length:static_cast<NSUInteger>(draw.userVertexData.size())
+                                      options:MTLResourceStorageModeShared];
+        transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
+        vertexBuffer = transientVertexBuffer.get();
+        vertexShadow = draw.userVertexData;
+      } else if (draw.vertexDecl.streams[0].buffer) {
+        if (auto* buffer = findBufferUnlocked(draw.vertexDecl.streams[0].buffer->handle().value);
+            buffer && buffer->buffer) {
+          vertexBuffer = buffer->buffer.get();
+          vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
+          vertexShadow = buffer->shadow;
+        } else {
+          const auto bytes = draw.vertexDecl.streams[0].buffer->bytes();
+          if (!bytes.empty()) {
+            id<MTLBuffer> uploaded =
+                [device_.get() newBufferWithBytes:bytes.data()
+                                           length:static_cast<NSUInteger>(bytes.size())
+                                          options:MTLResourceStorageModeShared];
+            transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
+            vertexBuffer = transientVertexBuffer.get();
+            vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
+            vertexShadow = bytes;
+          }
+        }
+      }
+      if (!vertexBuffer) {
+        return;
+      }
+      uniforms->vertexStreamOffset = 0;
+      uniforms->vertexStreamStride =
+          draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride;
+      [encoder setVertexBytes:uniforms length:sizeof(DrawUniforms) atIndex:0];
+      [encoder setVertexBuffer:vertexBuffer offset:vertexBufferOffset atIndex:1];
+
+      if (ffTraceRemaining.load(std::memory_order_relaxed) > 0 && ffLayout->preTransformed && !vertexShadow.empty()) {
+        int expected = ffTraceRemaining.load(std::memory_order_relaxed);
+        while (expected > 0 &&
+               !ffTraceRemaining.compare_exchange_weak(expected, expected - 1, std::memory_order_relaxed)) {
+        }
+        if (expected > 0) {
+          std::ostringstream trace;
+          trace << "[dxmt9-ffp] seq=" << static_cast<unsigned long long>(seqId)
+                << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
+                << " baseVertex=" << draw.baseVertexIndex
+                << " startIndex=" << draw.startIndex
+                << " primCount=" << draw.primitiveCount
+                << " stride=" << uniforms->vertexStreamStride
+                << " viewport=(" << uniforms->viewportOrigin[0] << "," << uniforms->viewportOrigin[1]
+                << " " << uniforms->viewportSize[0] << "x" << uniforms->viewportSize[1] << ")"
+                << " zEnable=" << (draw.rs.values.contains(RS_Z_ENABLE) ? draw.rs.values.at(RS_Z_ENABLE) : 0u)
+                << " zFunc=" << (draw.rs.values.contains(RS_Z_FUNC) ? draw.rs.values.at(RS_Z_FUNC) : 0u)
+                << " alphaBlend="
+                << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
+                << " srcBlend=" << (draw.rs.values.contains(RS_SRC_BLEND) ? draw.rs.values.at(RS_SRC_BLEND) : 0u)
+                << " dstBlend=" << (draw.rs.values.contains(RS_DEST_BLEND) ? draw.rs.values.at(RS_DEST_BLEND) : 0u);
+
+          auto readF32 = [&](size_t absoluteOffset) {
+            float value = 0.0f;
+            if (absoluteOffset + sizeof(float) <= vertexShadow.size()) {
+              std::memcpy(&value, vertexShadow.data() + absoluteOffset, sizeof(float));
+            }
+            return value;
+          };
+          auto readU32 = [&](size_t absoluteOffset) {
+            u32 value = 0;
+            if (absoluteOffset + sizeof(u32) <= vertexShadow.size()) {
+              std::memcpy(&value, vertexShadow.data() + absoluteOffset, sizeof(u32));
+            }
+            return value;
+          };
+
+          const size_t stride = static_cast<size_t>(uniforms->vertexStreamStride ? uniforms->vertexStreamStride
+                                                                                : ffLayout->stride);
+          for (u32 i = 0; i < 4; ++i) {
+            const size_t base = static_cast<size_t>(draw.vertexDecl.streams[0].offset) +
+                                static_cast<size_t>(draw.baseVertexIndex + static_cast<int>(i)) * stride;
+            trace << " v" << i << "=("
+                  << readF32(base + ffLayout->positionOffset + 0) << ","
+                  << readF32(base + ffLayout->positionOffset + 4) << ","
+                  << readF32(base + ffLayout->positionOffset + 8) << ","
+                  << readF32(base + ffLayout->positionOffset + 12) << ")";
+            if (ffLayout->hasDiffuse) {
+              const u32 rgba = readU32(base + ffLayout->diffuseOffset);
+              trace << " c" << i << "=0x" << std::hex << rgba << std::dec;
+            }
+            if (ffLayout->hasTexcoord0) {
+              trace << " uv" << i << "=("
+                    << readF32(base + ffLayout->texcoord0Offset + 0) << ","
+                    << readF32(base + ffLayout->texcoord0Offset + 4) << ")";
+            }
+          }
+
+          if (draw.indexBuffer) {
+            const auto* indexRecord = findBufferUnlocked(draw.indexBuffer.value);
+            if (indexRecord && !indexRecord->shadow.empty()) {
+              trace << " idx=";
+              const size_t start = static_cast<size_t>(draw.startIndex) * indexElementSize(draw.indexType);
+              for (u32 i = 0; i < std::min<u32>(6u, vertexCount); ++i) {
+                if (i) {
+                  trace << ",";
+                }
+                if (draw.indexType == IndexType::UInt16 &&
+                    start + static_cast<size_t>(i + 1) * sizeof(u16) <= indexRecord->shadow.size()) {
+                  u16 index = 0;
+                  std::memcpy(&index, indexRecord->shadow.data() + start + static_cast<size_t>(i) * sizeof(u16),
+                              sizeof(u16));
+                  trace << index;
+                } else if (draw.indexType == IndexType::UInt32 &&
+                           start + static_cast<size_t>(i + 1) * sizeof(u32) <= indexRecord->shadow.size()) {
+                  u32 index = 0;
+                  std::memcpy(&index, indexRecord->shadow.data() + start + static_cast<size_t>(i) * sizeof(u32),
+                              sizeof(u32));
+                  trace << index;
+                } else {
+                  trace << '?';
+                }
+              }
+            }
+          }
+          trace << " tex0=";
+          if (draw.textures[0].handle) {
+            trace << static_cast<unsigned long long>(draw.textures[0].handle.value);
+          } else {
+            trace << 0;
+          }
+          emitQueueTraceLine(trace.str());
+        }
+      }
+    }
     if (draw.textures[0].handle) {
       if (auto* texture = findTextureUnlocked(draw.textures[0].handle.value); texture && texture->texture) {
         [encoder setFragmentTexture:texture->texture.get() atIndex:0];
@@ -4555,19 +4997,45 @@ class MetalBackendDevice final : public BackendDevice {
       }
     }
     const auto primitiveType = toPrimitiveType(draw.primitiveType);
-    const u64 primitiveCount = std::max<u32>(1, draw.primitiveCount);
-    if (draw.indexBuffer) {
-      auto* buffer = findBufferUnlocked(draw.indexBuffer.value);
-      if (buffer && buffer->buffer) {
+    if (draw.indexBuffer || !draw.userIndexData.empty()) {
+      ObjcPtr<id<MTLBuffer>> transientIndexBuffer;
+      id<MTLBuffer> indexBuffer = nil;
+      NSUInteger indexBufferOffset = static_cast<NSUInteger>(draw.startIndex) * indexElementSize(draw.indexType);
+      if (!draw.userIndexData.empty()) {
+        id<MTLBuffer> uploaded =
+            [device_.get() newBufferWithBytes:draw.userIndexData.data()
+                                       length:static_cast<NSUInteger>(draw.userIndexData.size())
+                                      options:MTLResourceStorageModeShared];
+        transientIndexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
+        indexBuffer = transientIndexBuffer.get();
+      } else {
+        auto* buffer = findBufferUnlocked(draw.indexBuffer.value);
+        if (buffer && buffer->buffer) {
+          indexBuffer = buffer->buffer.get();
+        } else if (buffer && !buffer->shadow.empty()) {
+          id<MTLBuffer> uploaded =
+              [device_.get() newBufferWithBytes:buffer->shadow.data()
+                                         length:static_cast<NSUInteger>(buffer->shadow.size())
+                                        options:MTLResourceStorageModeShared];
+          transientIndexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
+          indexBuffer = transientIndexBuffer.get();
+        }
+      }
+      if (indexBuffer) {
         [encoder drawIndexedPrimitives:primitiveType
-                            indexCount:static_cast<NSUInteger>(primitiveCount * 3)
+                            indexCount:vertexCount
                              indexType:toIndexType(draw.indexType)
-                           indexBuffer:buffer->buffer.get()
-                     indexBufferOffset:0];
+                           indexBuffer:indexBuffer
+                     indexBufferOffset:indexBufferOffset
+                         instanceCount:1
+                            baseVertex:draw.baseVertexIndex
+                          baseInstance:0];
         return;
       }
     }
-    [encoder drawPrimitives:primitiveType vertexStart:0 vertexCount:static_cast<NSUInteger>(primitiveCount * 3)];
+    [encoder drawPrimitives:primitiveType
+                vertexStart:static_cast<NSUInteger>(draw.startVertex)
+                vertexCount:vertexCount];
   }
 
   void encodeClearPass(id<MTLCommandBuffer> commandBuffer, const ClearDesc& clear) {
@@ -4867,8 +5335,16 @@ class MetalBackendDevice final : public BackendDevice {
                                               : blend.destinationRGBBlendFactor;
       blend.colorWriteMask = rs.contains(RS_COLOR_WRITE_ENABLE) ? rs.at(RS_COLOR_WRITE_ENABLE) : 0xfu;
     }
-    const u32 depthFormat = resolvePixelFormat(draw.rts.depthStencil.handle);
-    const u32 stencilFormat = depthFormat;
+    u32 depthFormat = 0;
+    u32 stencilFormat = 0;
+    if (draw.rts.depthStencil.handle) {
+      if (auto* surface = findSurfaceUnlocked(draw.rts.depthStencil.handle.value);
+          surface && surface->desc.depthStencil) {
+        const auto pixelFormat = static_cast<u32>(toPixelFormat(surface->desc.format, limits_));
+        depthFormat = formatHasDepthAspect(surface->desc.format) ? pixelFormat : 0u;
+        stencilFormat = formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
+      }
+    }
     const auto key = makeShaderVariantKey(draw, colorFormats, blendAttachments, depthFormat, stencilFormat);
     {
       std::lock_guard lock(cacheMutex_);

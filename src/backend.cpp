@@ -134,6 +134,14 @@ class SimBackendDevice final : public BackendDevice {
 
   void unmapBuffer(BufferHandle) override {}
 
+  void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) override {
+    auto it = buffers_.find(handle.value);
+    if (it == buffers_.end()) {
+      return;
+    }
+    it->second.storage.assign(bytes.begin(), bytes.end());
+  }
+
   void uploadTextureLevel(TextureHandle, u32, u32, u32, u32, std::span<const u8>) override {}
 
   void submitDraw(const DrawDesc& desc) override {

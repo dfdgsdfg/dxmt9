@@ -444,7 +444,7 @@ void testFormatAndCaps() {
   checkEq(displayMode.height, 1080u, "adapter display height");
   checkEq(displayMode.format, Format::A8R8G8B8, "adapter display format");
   const auto identifier = factory.getAdapterIdentifier(0);
-  checkEq(identifier.description, std::string("Adapter 0"), "adapter description");
+  checkEq(identifier.description, std::string("NVIDIA GeForce 6800"), "adapter description");
   checkEq(identifier.monitor, 1u, "adapter monitor");
   checkEq(factory.getAdapterMonitor(0), 1u, "adapter monitor lookup");
 
