@@ -28,3 +28,4 @@ experiments/output/*
 !experiments/output/.gitkeep
 experiments/apps/**/*.trace.txt
 *.log
+**/__pycache__
