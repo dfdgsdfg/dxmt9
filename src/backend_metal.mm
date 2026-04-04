@@ -23,6 +23,8 @@
 #include <iomanip>
 #include <future>
 #include <functional>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -80,6 +82,22 @@ bool debugDisableScissor() {
   return value;
 }
 
+bool debugDisableAlphaTest() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_DISABLE_ALPHA_TEST");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return value;
+}
+
+bool debugForceExpandIndexed() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_FORCE_EXPAND_INDEXED");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return value;
+}
+
 bool directLayerAttachEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_DIRECT_LAYER_ATTACH");
@@ -130,6 +148,27 @@ u64 textureTraceHandle() {
     return static_cast<u64>(std::strtoull(env, nullptr, 0));
   }();
   return handle;
+}
+
+u64 gpuDumpTextureHandle() {
+  static const u64 handle = [] {
+    const char* env = std::getenv("DXMT9_DUMP_GPU_TEXTURE_HANDLE");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    return static_cast<u64>(std::strtoull(env, nullptr, 0));
+  }();
+  return handle;
+}
+
+const char* gpuDumpTexturePath() {
+  static const char* path = std::getenv("DXMT9_DUMP_GPU_TEXTURE_PATH");
+  return path && path[0] != '\0' ? path : nullptr;
+}
+
+bool shouldDumpGpuTexture(Handle handle) {
+  const u64 wanted = gpuDumpTextureHandle();
+  return wanted != 0ull && handle.value == wanted;
 }
 
 u64 traceEncodeSeq() {
@@ -251,6 +290,88 @@ void emitQueueTraceLine(const std::string& line) {
 
 void emitTextureTraceLine(const std::string& line) {
   emitQueueTraceLine(line);
+}
+
+struct BmpColor {
+  u8 r = 0;
+  u8 g = 0;
+  u8 b = 0;
+  u8 a = 255;
+};
+
+BmpColor decodeBmpColor(Format format, const u8* src) {
+  switch (format) {
+    case Format::A8R8G8B8:
+    case Format::X8R8G8B8:
+      return {src[2], src[1], src[0], static_cast<u8>(format == Format::X8R8G8B8 ? 255u : src[3])};
+    case Format::A8B8G8R8:
+    case Format::X8B8G8R8:
+      return {src[0], src[1], src[2], static_cast<u8>(format == Format::X8B8G8R8 ? 255u : src[3])};
+    default:
+      return {};
+  }
+}
+
+bool writeTextureBmp(const std::string& path, Format format, u32 width, u32 height, u32 pitch,
+                     std::span<const u8> bytes) {
+  if (path.empty() || width == 0 || height == 0 || pitch == 0) {
+    return false;
+  }
+  const u32 srcBytesPerPixel = bytesPerPixel(format);
+  if (srcBytesPerPixel == 0 || bytes.size() < static_cast<size_t>(pitch) * height) {
+    return false;
+  }
+  const u32 bytesPerRow = width * 4;
+  const u32 imageSize = bytesPerRow * height;
+  const u32 fileSize = 14 + 40 + imageSize;
+  std::vector<u8> out(fileSize, 0);
+
+  auto writeU16 = [&](size_t offset, u16 value) {
+    out[offset + 0] = static_cast<u8>(value & 0xffu);
+    out[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
+  };
+  auto writeU32 = [&](size_t offset, u32 value) {
+    out[offset + 0] = static_cast<u8>(value & 0xffu);
+    out[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
+    out[offset + 2] = static_cast<u8>((value >> 16) & 0xffu);
+    out[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
+  };
+  auto writeI32 = [&](size_t offset, i32 value) { writeU32(offset, static_cast<u32>(value)); };
+
+  out[0] = 'B';
+  out[1] = 'M';
+  writeU32(2, fileSize);
+  writeU32(10, 14 + 40);
+  writeU32(14, 40);
+  writeI32(18, static_cast<i32>(width));
+  writeI32(22, -static_cast<i32>(height));
+  writeU16(26, 1);
+  writeU16(28, 32);
+  writeU32(30, 0);
+  writeU32(34, imageSize);
+  writeI32(38, 2835);
+  writeI32(42, 2835);
+
+  size_t dstOffset = 14 + 40;
+  for (u32 y = 0; y < height; ++y) {
+    const u8* srcRow = bytes.data() + static_cast<size_t>(y) * pitch;
+    for (u32 x = 0; x < width; ++x) {
+      const auto color = decodeBmpColor(format, srcRow + x * srcBytesPerPixel);
+      out[dstOffset++] = color.b;
+      out[dstOffset++] = color.g;
+      out[dstOffset++] = color.r;
+      out[dstOffset++] = color.a;
+    }
+  }
+
+  std::error_code ec;
+  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+  std::ofstream stream(path, std::ios::binary);
+  if (!stream) {
+    return false;
+  }
+  stream.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+  return stream.good();
 }
 
 std::mutex gLayerRegistryMutex;
@@ -1200,7 +1321,9 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  float4 position [[position]];\n";
   out << "  float4 color;\n";
   out << "  float4 secondaryColor;\n";
-  out << "  float2 texcoord0;\n";
+  for (size_t i = 0; i < kMaxTextureStages; ++i) {
+    out << "  float2 texcoord" << i << ";\n";
+  }
   out << "  float fogFactor;\n";
   out << "  float pointSize [[point_size]];\n";
   if (withClipDistances) {
@@ -1251,6 +1374,14 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "    default: value = current; break;\n";
   out << "  }\n";
   out << "  return dxmt9_apply_texture_arg_flags(value, arg);\n";
+  out << "}\n";
+  out << "inline float2 dxmt9_select_texcoord(VSOut in, uint index) {\n";
+  out << "  switch (index) {\n";
+  for (size_t i = 0; i < kMaxTextureStages; ++i) {
+    out << "    case " << i << "u: return in.texcoord" << i << ";\n";
+  }
+  out << "    default: return in.texcoord0;\n";
+  out << "  }\n";
   out << "}\n";
   out << "inline float4 dxmt9_apply_texture_op(uint op, float4 arg1, float4 arg2, float4 current) {\n";
   out << "  switch (op) {\n";
@@ -1339,7 +1470,7 @@ DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
   uniforms.vertexStreamStride = desc.vertexDecl.streams[0].stride;
   uniforms.vertexBaseIndex = 0;
   uniforms.clipPlaneMask = desc.clipPlaneMask;
-  uniforms.alphaTestEnable = desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) &&
+  uniforms.alphaTestEnable = !debugDisableAlphaTest() && desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) &&
                              desc.rs.values.at(RS_ALPHA_TEST_ENABLE) != 0;
   uniforms.alphaTestFunc = desc.rs.values.contains(RS_ALPHA_FUNC)
                                ? desc.rs.values.at(RS_ALPHA_FUNC)
@@ -1387,11 +1518,11 @@ struct FixedFunctionVertexLayout {
   bool preTransformed = false;
   u32 positionComponents = 0;
   bool hasDiffuse = false;
-  bool hasTexcoord0 = false;
+  std::array<bool, kMaxTextureStages> hasTexcoord{};
   u32 stride = 0;
   u32 positionOffset = 0;
   u32 diffuseOffset = 0;
-  u32 texcoord0Offset = 0;
+  std::array<u32, kMaxTextureStages> texcoordOffset{};
   u64 hash = 0;
 };
 
@@ -1450,16 +1581,18 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasDiffuse);
   hash *= 1099511628211ull;
-  hash ^= static_cast<u64>(layout.hasTexcoord0);
-  hash *= 1099511628211ull;
   hash ^= layout.stride;
   hash *= 1099511628211ull;
   hash ^= layout.positionOffset;
   hash *= 1099511628211ull;
   hash ^= layout.diffuseOffset;
   hash *= 1099511628211ull;
-  hash ^= layout.texcoord0Offset;
-  hash *= 1099511628211ull;
+  for (size_t i = 0; i < layout.hasTexcoord.size(); ++i) {
+    hash ^= static_cast<u64>(layout.hasTexcoord[i]);
+    hash *= 1099511628211ull;
+    hash ^= layout.texcoordOffset[i];
+    hash *= 1099511628211ull;
+  }
   return hash;
 }
 
@@ -1534,10 +1667,10 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
                  element.type == kD3DDeclTypeD3DColor) {
         layout.hasDiffuse = true;
         layout.diffuseOffset = element.offset;
-      } else if (element.usage == kD3DDeclUsageTexcoord && element.usageIndex == 0 &&
+      } else if (element.usage == kD3DDeclUsageTexcoord && element.usageIndex < kMaxTextureStages &&
                  element.type == kD3DDeclTypeFloat2) {
-        layout.hasTexcoord0 = true;
-        layout.texcoord0Offset = element.offset;
+        layout.hasTexcoord[element.usageIndex] = true;
+        layout.texcoordOffset[element.usageIndex] = element.offset;
       }
     }
     layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : computedStride;
@@ -1571,10 +1704,19 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
 
   const u32 texCount = (fvf & kFvfTexCountMask) >> kFvfTexCountShift;
   if (texCount > 0) {
-    layout.hasTexcoord0 = fvfTexcoordSize(fvf, 0) >= 2;
-    layout.texcoord0Offset = offset;
+    for (u32 i = 0; i < std::min<u32>(texCount, kMaxTextureStages); ++i) {
+      if (fvfTexcoordSize(fvf, i) >= 2u) {
+        layout.hasTexcoord[i] = true;
+        layout.texcoordOffset[i] = offset;
+      }
+      offset += fvfTexcoordSize(fvf, i) * 4u;
+    }
+  } else {
+    for (u32 i = 0; i < texCount; ++i) {
+      offset += fvfTexcoordSize(fvf, i) * 4u;
+    }
   }
-  for (u32 i = 0; i < texCount; ++i) {
+  for (u32 i = std::min<u32>(texCount, kMaxTextureStages); i < texCount; ++i) {
     offset += fvfTexcoordSize(fvf, i) * 4u;
   }
 
@@ -3694,33 +3836,34 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
   constexpr u32 kTciIndexMask = 0x0000ffffu;
   constexpr u32 kTciGenMask = 0xffff0000u;
   constexpr u32 kTciCameraSpacePosition = 0x00020000u;
-  const u32 stage0TexCoordIndex = key.texCoordGen[0] & kTciIndexMask;
-  const u32 stage0TexCoordGen = key.texCoordGen[0] & kTciGenMask;
-  const auto emitStage0Texcoord = [&](std::ostringstream& shader, const char* positionExpr) {
-    shader << "  float4 dxmt9_texcoord0 = float4(0.0f, 0.0f, 1.0f, 1.0f);\n";
-    if (layout && layout->hasTexcoord0 && stage0TexCoordIndex == 0u) {
-      shader << "  dxmt9_texcoord0 = float4(dxmt9_load_f32x2(stream0, base + " << layout->texcoord0Offset
-             << "u), 1.0f, 1.0f);\n";
-    }
-    // D3D9 startup/UI paths sometimes leave camera-space texgen enabled on
-    // XYZRHW draws. Feeding screen-space XYZRHW into projected texgen produces
-    // the giant diagonal smears seen in Anno 1701. For pre-transformed
-    // vertices, preserve the authored texcoords instead of treating screen
-    // coordinates as camera-space positions.
-    if (stage0TexCoordGen == kTciCameraSpacePosition &&
-        !(layout && layout->preTransformed)) {
-      shader << "  dxmt9_texcoord0 = float4(" << positionExpr << ".xyz, 1.0f);\n";
-    }
-    // Legacy UI paths frequently leave texgen / projected texture-transform
-    // state enabled while submitting XYZRHW quads with authored UVs. Applying
-    // that state to pre-transformed vertices causes severe diagonal smearing
-    // in Anno 1701's menu background. For XYZRHW draws, use the provided UVs
-    // directly and ignore the stale transform state.
-    if (layout && layout->preTransformed) {
-      shader << "  out.texcoord0 = dxmt9_texcoord0.xy;\n";
-    } else {
-      shader << "  out.texcoord0 = dxmt9_apply_texture_transform(dxmt9_texcoord0, uniforms, 0u, "
-             << key.texTransformFlags[0] << "u);\n";
+  const auto emitStageTexcoords = [&](std::ostringstream& shader, const char* positionExpr) {
+    for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+      const u32 texCoordIndex = key.texCoordGen[stage] & kTciIndexMask;
+      const u32 texCoordGen = key.texCoordGen[stage] & kTciGenMask;
+      shader << "  float4 dxmt9_texcoord" << stage << " = float4(0.0f, 0.0f, 1.0f, 1.0f);\n";
+      if (layout && texCoordIndex < layout->hasTexcoord.size() && layout->hasTexcoord[texCoordIndex]) {
+        shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_load_f32x2(stream0, base + "
+               << layout->texcoordOffset[texCoordIndex] << "u), 1.0f, 1.0f);\n";
+      }
+      // D3D9 startup/UI paths sometimes leave camera-space texgen enabled on
+      // XYZRHW draws. Feeding screen-space XYZRHW into projected texgen produces
+      // the giant diagonal smears seen in Anno 1701. For pre-transformed
+      // vertices, preserve the authored texcoords instead of treating screen
+      // coordinates as camera-space positions.
+      if (texCoordGen == kTciCameraSpacePosition && !(layout && layout->preTransformed)) {
+        shader << "  dxmt9_texcoord" << stage << " = float4(" << positionExpr << ".xyz, 1.0f);\n";
+      }
+      // Legacy UI paths frequently leave texgen / projected texture-transform
+      // state enabled while submitting XYZRHW quads with authored UVs. Applying
+      // that state to pre-transformed vertices causes severe diagonal smearing
+      // in Anno 1701's menu background. For XYZRHW draws, use the provided UVs
+      // directly and ignore the stale transform state.
+      if (layout && layout->preTransformed) {
+        shader << "  out.texcoord" << stage << " = dxmt9_texcoord" << stage << ".xy;\n";
+      } else {
+        shader << "  out.texcoord" << stage << " = dxmt9_apply_texture_transform(dxmt9_texcoord" << stage
+               << ", uniforms, " << stage << "u, " << key.texTransformFlags[stage] << "u);\n";
+      }
     }
   };
   out << makeShaderPrelude(key.clipPlaneMask != 0);
@@ -3745,7 +3888,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
       out << "  out.color = float4(1.0);\n";
     }
     out << "  out.secondaryColor = float4(0.0);\n";
-    emitStage0Texcoord(out, "inPosition");
+    emitStageTexcoords(out, "inPosition");
     out << "  out.fogFactor = 1.0;\n";
     out << "  out.pointSize = 1.0;\n";
   } else if (layout) {
@@ -3787,7 +3930,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
       out << "  out.color = float4(1.0);\n";
     }
     out << "  out.secondaryColor = float4(0.0);\n";
-    emitStage0Texcoord(out, "inPosition");
+    emitStageTexcoords(out, "inPosition");
     out << "  out.fogFactor = 1.0;\n";
     out << "  out.pointSize = 1.0;\n";
   } else {
@@ -3799,6 +3942,9 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
     out << "  out.color = float4(1.0);\n";
     out << "  out.secondaryColor = float4(0.0);\n";
     out << "  out.texcoord0 = float2(vid & 1u, (vid >> 1u) & 1u);\n";
+    for (size_t i = 1; i < kMaxTextureStages; ++i) {
+      out << "  out.texcoord" << i << " = out.texcoord0;\n";
+    }
     out << "  out.fogFactor = 1.0;\n";
     out << "  out.pointSize = 1.0;\n";
   }
@@ -3820,7 +3966,17 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
 
 std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
   std::ostringstream out;
-  const bool textured = desc.textures[0].handle != Handle{};
+  std::vector<size_t> activeStages;
+  activeStages.reserve(kMaxTextureStages);
+  for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+    const bool stageEnabled =
+        key.stages[stage].colorOp != static_cast<u32>(TextureOp::Disable) ||
+        key.stages[stage].alphaOp != static_cast<u32>(TextureOp::Disable);
+    if (stageEnabled && desc.textures[stage].handle != Handle{}) {
+      activeStages.push_back(stage);
+    }
+  }
+  const bool textured = !activeStages.empty();
   const bool debugFfpUv = [] {
     const char* env = std::getenv("DXMT9_DEBUG_FFP_UV");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
@@ -3829,10 +3985,22 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
     const char* env = std::getenv("DXMT9_DEBUG_FFP_TEXTURE");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
+  const bool debugFfpAlpha = [] {
+    const char* env = std::getenv("DXMT9_DEBUG_FFP_ALPHA");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
   out << makeShaderPrelude(desc.clipPlaneMask != 0);
   if (textured) {
     out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
-    out << "texture2d<float> tex0 [[texture(0)]], sampler samp0 [[sampler(0)]]) {\n";
+    for (size_t i = 0; i < activeStages.size(); ++i) {
+      const size_t stage = activeStages[i];
+      if (i != 0) {
+        out << ", ";
+      }
+      out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], sampler samp" << stage
+          << " [[sampler(" << stage << ")]]";
+    }
+    out << ") {\n";
   } else {
     out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
   }
@@ -3843,7 +4011,6 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
   out << "  float4 tfactor = uniforms.textureFactor;\n";
   out << "  float4 temp = float4(0.0);\n";
   if (textured) {
-    out << "  float4 texColor = tex0.sample(samp0, in.texcoord0);\n";
     if (debugFfpUv) {
       out << "  return float4(fract(in.texcoord0.x), fract(in.texcoord0.y), 0.0, 1.0);\n";
       out << "}\n";
@@ -3851,23 +4018,58 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
       return out.str();
     }
     if (debugFfpTexture) {
-      out << "  return texColor;\n";
+      const size_t stage = activeStages.front();
+      const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
+      out << "  return tex" << stage << ".sample(samp" << stage
+          << ", dxmt9_select_texcoord(in, " << coordIndex << "u));\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
     }
-    out << "  float4 colorArg1 = dxmt9_select_texture_arg(" << key.stages[0].colorArg1
-        << "u, current, diffuse, specular, texColor, tfactor, temp);\n";
-    out << "  float4 colorArg2 = dxmt9_select_texture_arg(" << key.stages[0].colorArg2
-        << "u, current, diffuse, specular, texColor, tfactor, temp);\n";
-    out << "  color = dxmt9_apply_texture_op(" << key.stages[0].colorOp
-        << "u, colorArg1, colorArg2, current);\n";
-    out << "  float4 alphaArg1 = dxmt9_select_texture_arg(" << key.stages[0].alphaArg1
-        << "u, current, diffuse, specular, texColor, tfactor, temp);\n";
-    out << "  float4 alphaArg2 = dxmt9_select_texture_arg(" << key.stages[0].alphaArg2
-        << "u, current, diffuse, specular, texColor, tfactor, temp);\n";
-    out << "  color.a = dxmt9_apply_texture_op(" << key.stages[0].alphaOp
-        << "u, alphaArg1, alphaArg2, current).a;\n";
+    if (debugFfpAlpha) {
+      const size_t stage = activeStages.front();
+      const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
+      out << "  float alpha = tex" << stage << ".sample(samp" << stage
+          << ", dxmt9_select_texcoord(in, " << coordIndex << "u)).a;\n";
+      out << "  return float4(alpha, alpha, alpha, 1.0);\n";
+      out << "}\n";
+      out << "// ffp pixel hash " << key.hash << "\n";
+      return out.str();
+    }
+    for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+      const auto& stageKey = key.stages[stage];
+      const bool stageEnabled =
+          stageKey.colorOp != static_cast<u32>(TextureOp::Disable) ||
+          stageKey.alphaOp != static_cast<u32>(TextureOp::Disable);
+      if (!stageEnabled) {
+        continue;
+      }
+      const bool hasTexture = desc.textures[stage].handle != Handle{};
+      const u32 coordIndex = stageKey.texCoordIndex & 0xffffu;
+      if (hasTexture) {
+        out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
+            << ", dxmt9_select_texcoord(in, " << coordIndex << "u));\n";
+      } else {
+        out << "  float4 texColor" << stage << " = float4(1.0f);\n";
+      }
+      out << "  float4 colorArg1_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg1
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
+      out << "  float4 colorArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg2
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
+      out << "  float4 stageResult" << stage << " = dxmt9_apply_texture_op(" << stageKey.colorOp
+          << "u, colorArg1_" << stage << ", colorArg2_" << stage << ", current);\n";
+      out << "  float4 alphaArg1_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg1
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
+      out << "  float4 alphaArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg2
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
+      out << "  stageResult" << stage << ".a = dxmt9_apply_texture_op(" << stageKey.alphaOp
+          << "u, alphaArg1_" << stage << ", alphaArg2_" << stage << ", current).a;\n";
+      out << "  current = stageResult" << stage << ";\n";
+      if (stageKey.resultArg == 5u) {
+        out << "  temp = stageResult" << stage << ";\n";
+      }
+    }
+    out << "  color = current;\n";
   }
   if (key.alphaTestEnable) {
     out << "  bool pass = true;\n";
@@ -4614,50 +4816,53 @@ class MetalBackendDevice final : public BackendDevice {
     @autoreleasepool {
       if (texture.storageMode != MTLStorageModePrivate) {
         [texture replaceRegion:region mipmapLevel:mipLevel withBytes:normalizedBytes.data() bytesPerRow:pitch];
-        return;
-      }
+      } else {
+        auto descriptor = [MTLTextureDescriptor new];
+        descriptor.textureType = MTLTextureType2D;
+        descriptor.pixelFormat = texture.pixelFormat;
+        descriptor.width = mipWidth;
+        descriptor.height = mipHeight;
+        descriptor.depth = 1;
+        descriptor.mipmapLevelCount = 1;
+        descriptor.sampleCount = 1;
+        descriptor.arrayLength = 1;
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.usage = MTLTextureUsageShaderRead;
+        id<MTLTexture> stagingTexture = [device_.get() newTextureWithDescriptor:descriptor];
+        [descriptor release];
+        if (!stagingTexture) {
+          return;
+        }
+        [stagingTexture replaceRegion:region mipmapLevel:0 withBytes:normalizedBytes.data() bytesPerRow:pitch];
 
-      auto descriptor = [MTLTextureDescriptor new];
-      descriptor.textureType = MTLTextureType2D;
-      descriptor.pixelFormat = texture.pixelFormat;
-      descriptor.width = mipWidth;
-      descriptor.height = mipHeight;
-      descriptor.depth = 1;
-      descriptor.mipmapLevelCount = 1;
-      descriptor.sampleCount = 1;
-      descriptor.arrayLength = 1;
-      descriptor.storageMode = MTLStorageModeShared;
-      descriptor.usage = MTLTextureUsageShaderRead;
-      id<MTLTexture> stagingTexture = [device_.get() newTextureWithDescriptor:descriptor];
-      [descriptor release];
-      if (!stagingTexture) {
-        return;
+        id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
+        if (!commandBuffer) {
+          [stagingTexture release];
+          return;
+        }
+        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+        if (!blit) {
+          [stagingTexture release];
+          return;
+        }
+        [blit copyFromTexture:stagingTexture
+                  sourceSlice:0
+                  sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(mipWidth, mipHeight, 1)
+                    toTexture:texture
+             destinationSlice:0
+             destinationLevel:mipLevel
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+        [commandBuffer commit];
+        [commandBuffer waitUntilCompleted];
+        [stagingTexture release];
       }
-      [stagingTexture replaceRegion:region mipmapLevel:0 withBytes:normalizedBytes.data() bytesPerRow:pitch];
+    }
 
-      id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
-      if (!commandBuffer) {
-        [stagingTexture release];
-        return;
-      }
-      id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-      if (!blit) {
-        [stagingTexture release];
-        return;
-      }
-      [blit copyFromTexture:stagingTexture
-                sourceSlice:0
-                sourceLevel:0
-               sourceOrigin:MTLOriginMake(0, 0, 0)
-                 sourceSize:MTLSizeMake(mipWidth, mipHeight, 1)
-                  toTexture:texture
-           destinationSlice:0
-           destinationLevel:mipLevel
-          destinationOrigin:MTLOriginMake(0, 0, 0)];
-      [blit endEncoding];
-      [commandBuffer commit];
-      [commandBuffer waitUntilCompleted];
-      [stagingTexture release];
+    if (level == 0 && shouldDumpGpuTexture(handle)) {
+      dumpTextureSnapshotUnlocked(handle, it->second.desc, it->second.texture.get());
     }
   }
 
@@ -5770,6 +5975,13 @@ class MetalBackendDevice final : public BackendDevice {
                 << " " << uniforms->viewportSize[0] << "x" << uniforms->viewportSize[1] << ")"
                 << " zEnable=" << (draw.rs.values.contains(RS_Z_ENABLE) ? draw.rs.values.at(RS_Z_ENABLE) : 0u)
                 << " zFunc=" << (draw.rs.values.contains(RS_Z_FUNC) ? draw.rs.values.at(RS_Z_FUNC) : 0u)
+                << " alphaTest="
+                << (draw.rs.values.contains(RS_ALPHA_TEST_ENABLE) ? draw.rs.values.at(RS_ALPHA_TEST_ENABLE) : 0u)
+                << " alphaFunc="
+                << (draw.rs.values.contains(RS_ALPHA_FUNC) ? draw.rs.values.at(RS_ALPHA_FUNC)
+                                                           : static_cast<u32>(CompareFunc::Always))
+                << " alphaRef="
+                << (draw.rs.values.contains(RS_ALPHA_REF) ? draw.rs.values.at(RS_ALPHA_REF) : 0u)
                 << " alphaBlend="
                 << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
                 << " srcBlend=" << (draw.rs.values.contains(RS_SRC_BLEND) ? draw.rs.values.at(RS_SRC_BLEND) : 0u)
@@ -5846,10 +6058,10 @@ class MetalBackendDevice final : public BackendDevice {
               const u32 rgba = readU32(base + ffLayout->diffuseOffset);
               trace << " c" << i << "=0x" << std::hex << rgba << std::dec;
             }
-            if (ffLayout->hasTexcoord0) {
+            if (ffLayout->hasTexcoord[0]) {
               trace << " uv" << i << "=("
-                    << readF32(base + ffLayout->texcoord0Offset + 0) << ","
-                    << readF32(base + ffLayout->texcoord0Offset + 4) << ")";
+                    << readF32(base + ffLayout->texcoordOffset[0] + 0) << ","
+                    << readF32(base + ffLayout->texcoordOffset[0] + 4) << ")";
             }
           }
 
@@ -5918,10 +6130,10 @@ class MetalBackendDevice final : public BackendDevice {
                       << readF32(refBase + ffLayout->positionOffset + 4) << ","
                       << readF32(refBase + ffLayout->positionOffset + 8) << ","
                       << readF32(refBase + ffLayout->positionOffset + 12) << ")";
-                if (ffLayout->hasTexcoord0) {
+                if (ffLayout->hasTexcoord[0]) {
                   trace << " uv=("
-                        << readF32(refBase + ffLayout->texcoord0Offset + 0) << ","
-                        << readF32(refBase + ffLayout->texcoord0Offset + 4) << ")";
+                        << readF32(refBase + ffLayout->texcoordOffset[0] + 0) << ","
+                        << readF32(refBase + ffLayout->texcoordOffset[0] + 4) << ")";
                 }
                 if (ffLayout->hasDiffuse) {
                   const u32 rgba = readU32(refBase + ffLayout->diffuseOffset);
@@ -5987,65 +6199,35 @@ class MetalBackendDevice final : public BackendDevice {
       [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
       [encoder setVertexBuffer:vertexBuffer offset:vertexBufferOffset atIndex:1];
     }
-	    if (draw.textures[0].handle) {
-	      if (const u64 skipped = skippedTextureHandle();
-	          skipped != 0ull && draw.textures[0].handle.value == skipped) {
-	        if (traceEncode || shouldTraceTexture(draw.textures[0].handle)) {
-	          std::ostringstream out;
-	          out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
-	              << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value);
-	          emitQueueTraceLine(out.str());
-	        }
-	        return;
-	      }
-	      if (auto* texture = findTextureUnlocked(draw.textures[0].handle.value); texture && texture->texture) {
-	        if (shouldTraceTexture(draw.textures[0].handle)) {
-	          std::ostringstream out;
-          out << "[dxmt9-texture] bind handle=0x" << std::hex << draw.textures[0].handle.value << std::dec
+    for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+      if (!draw.textures[stage].handle) {
+        continue;
+      }
+      if (const u64 skipped = skippedTextureHandle();
+          skipped != 0ull && draw.textures[stage].handle.value == skipped) {
+        if (traceEncode || shouldTraceTexture(draw.textures[stage].handle)) {
+          std::ostringstream out;
+          out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
+              << " tex" << stage << "=" << static_cast<unsigned long long>(draw.textures[stage].handle.value);
+          emitQueueTraceLine(out.str());
+        }
+        return;
+      }
+      if (auto* texture = findTextureUnlocked(draw.textures[stage].handle.value); texture && texture->texture) {
+        if (shouldTraceTexture(draw.textures[stage].handle)) {
+          std::ostringstream out;
+          out << "[dxmt9-texture] bind stage=" << stage
+              << " handle=0x" << std::hex << draw.textures[stage].handle.value << std::dec
               << " format=" << static_cast<unsigned>(texture->desc.format)
               << " size=" << texture->desc.width << "x" << texture->desc.height
-              << " levels=" << texture->desc.levels
-              << " alphaBlend="
-              << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
-              << " srcBlend=" << (draw.rs.values.contains(RS_SRC_BLEND) ? draw.rs.values.at(RS_SRC_BLEND) : 0u)
-              << " dstBlend=" << (draw.rs.values.contains(RS_DEST_BLEND) ? draw.rs.values.at(RS_DEST_BLEND) : 0u)
-              << " alphaTest="
-              << (draw.rs.values.contains(RS_ALPHA_TEST_ENABLE) ? draw.rs.values.at(RS_ALPHA_TEST_ENABLE) : 0u)
-              << " alphaFunc="
-              << (draw.rs.values.contains(RS_ALPHA_FUNC) ? draw.rs.values.at(RS_ALPHA_FUNC) : 0u)
-              << " alphaRef="
-              << (draw.rs.values.contains(RS_ALPHA_REF) ? draw.rs.values.at(RS_ALPHA_REF) : 0u)
-              << " colorOp0="
-              << (draw.textures[0].stageStates.contains(TSS_COLOR_OP)
-                      ? draw.textures[0].stageStates.at(TSS_COLOR_OP)
-                      : 0u)
-              << " colorArg10="
-              << (draw.textures[0].stageStates.contains(TSS_COLOR_ARG1)
-                      ? draw.textures[0].stageStates.at(TSS_COLOR_ARG1)
-                      : 0u)
-              << " colorArg20="
-              << (draw.textures[0].stageStates.contains(TSS_COLOR_ARG2)
-                      ? draw.textures[0].stageStates.at(TSS_COLOR_ARG2)
-                      : 0u)
-              << " alphaOp0="
-              << (draw.textures[0].stageStates.contains(TSS_ALPHA_OP)
-                      ? draw.textures[0].stageStates.at(TSS_ALPHA_OP)
-                      : 0u)
-              << " alphaArg10="
-              << (draw.textures[0].stageStates.contains(TSS_ALPHA_ARG1)
-                      ? draw.textures[0].stageStates.at(TSS_ALPHA_ARG1)
-                      : 0u)
-              << " alphaArg20="
-              << (draw.textures[0].stageStates.contains(TSS_ALPHA_ARG2)
-                      ? draw.textures[0].stageStates.at(TSS_ALPHA_ARG2)
-                      : 0u);
+              << " levels=" << texture->desc.levels;
           emitTextureTraceLine(out.str());
         }
-        [encoder setFragmentTexture:texture->texture.get() atIndex:0];
+        [encoder setFragmentTexture:texture->texture.get() atIndex:stage];
       }
-      auto sampler = makeSampler(draw.samplers[0]);
+      auto sampler = makeSampler(draw.samplers[stage]);
       if (sampler) {
-        [encoder setFragmentSamplerState:sampler.get() atIndex:0];
+        [encoder setFragmentSamplerState:sampler.get() atIndex:stage];
       }
     }
     const auto primitiveType = toPrimitiveType(draw.primitiveType);
@@ -6096,6 +6278,18 @@ class MetalBackendDevice final : public BackendDevice {
                                                          : computeVertexDeclStride(draw));
       const size_t streamBase = static_cast<size_t>(draw.vertexDecl.streams[0].offset);
       const size_t firstIndexByte = static_cast<size_t>(draw.startIndex) * indexElementSize(draw.indexType);
+      if (debugForceExpandIndexed()) {
+        std::ostringstream out;
+        out << "[dxmt9-expanded-check] seq=" << static_cast<unsigned long long>(seqId)
+            << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
+            << " ff=" << (ffLayout ? 1 : 0)
+            << " vertexBytes=" << vertexBytes.size()
+            << " indexBytes=" << indexBytes.size()
+            << " stride=" << stride
+            << " startIndex=" << draw.startIndex
+            << " baseVertex=" << draw.baseVertexIndex;
+        emitQueueTraceLine(out.str());
+      }
       if (!vertexBytes.empty() && !indexBytes.empty() && stride != 0) {
         std::vector<u8> expandedVertices(static_cast<size_t>(vertexCount) * stride, 0);
         for (NSUInteger i = 0; i < vertexCount; ++i) {
@@ -6157,10 +6351,10 @@ class MetalBackendDevice final : public BackendDevice {
                       << readExpandedF32(base + ffLayout->positionOffset + 4) << ","
                       << readExpandedF32(base + ffLayout->positionOffset + 8) << ","
                       << readExpandedF32(base + ffLayout->positionOffset + 12) << ")";
-                if (ffLayout->hasTexcoord0) {
+                if (ffLayout->hasTexcoord[0]) {
                   trace << " uv" << i << "=("
-                        << readExpandedF32(base + ffLayout->texcoord0Offset + 0) << ","
-                        << readExpandedF32(base + ffLayout->texcoord0Offset + 4) << ")";
+                        << readExpandedF32(base + ffLayout->texcoordOffset[0] + 0) << ","
+                        << readExpandedF32(base + ffLayout->texcoordOffset[0] + 4) << ")";
                 }
               }
               emitQueueTraceLine(trace.str());
@@ -6180,6 +6374,13 @@ class MetalBackendDevice final : public BackendDevice {
           [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
           expandedIndexedDraw = true;
         }
+      }
+      if (debugForceExpandIndexed()) {
+        std::ostringstream out;
+        out << "[dxmt9-expanded-check] seq=" << static_cast<unsigned long long>(seqId)
+            << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
+            << " expanded=" << (expandedIndexedDraw ? 1 : 0);
+        emitQueueTraceLine(out.str());
       }
       if (expandedIndexedDraw) {
         [encoder drawPrimitives:primitiveType vertexStart:0 vertexCount:vertexCount];
@@ -6523,6 +6724,87 @@ class MetalBackendDevice final : public BackendDevice {
     [commandBuffer presentDrawable:drawable];
     tracePresentEvent("scheduled", seqId, present.window.value);
     backBufferDiscardAfterPresent_ = true;
+  }
+
+  void dumpTextureSnapshotUnlocked(Handle handle, const TextureDesc& desc, id<MTLTexture> sourceTexture) {
+    if (!sourceTexture || !shouldDumpGpuTexture(handle) || dumpedGpuTextures_.contains(handle.value)) {
+      return;
+    }
+    if (desc.levels == 0 || desc.width == 0 || desc.height == 0) {
+      return;
+    }
+    const char* path = gpuDumpTexturePath();
+    if (!path || path[0] == '\0') {
+      return;
+    }
+    if (desc.format != Format::A8R8G8B8 && desc.format != Format::X8R8G8B8 &&
+        desc.format != Format::A8B8G8R8 && desc.format != Format::X8B8G8R8) {
+      std::ostringstream out;
+      out << "[dxmt9-texture] gpu-dump skip handle=0x" << std::hex << handle.value << std::dec
+          << " unsupported-format=" << static_cast<unsigned>(desc.format);
+      emitTextureTraceLine(out.str());
+      dumpedGpuTextures_.insert(handle.value);
+      return;
+    }
+
+    @autoreleasepool {
+      auto descriptor = [MTLTextureDescriptor new];
+      descriptor.textureType = MTLTextureType2D;
+      descriptor.pixelFormat = sourceTexture.pixelFormat;
+      descriptor.width = std::max(1u, desc.width);
+      descriptor.height = std::max(1u, desc.height);
+      descriptor.depth = 1;
+      descriptor.mipmapLevelCount = 1;
+      descriptor.sampleCount = 1;
+      descriptor.arrayLength = 1;
+      descriptor.storageMode = MTLStorageModeShared;
+      descriptor.usage = MTLTextureUsageShaderRead;
+      id<MTLTexture> stagingTexture = [device_.get() newTextureWithDescriptor:descriptor];
+      [descriptor release];
+      if (!stagingTexture) {
+        return;
+      }
+
+      id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
+      if (!commandBuffer) {
+        [stagingTexture release];
+        return;
+      }
+      id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+      if (!blit) {
+        [stagingTexture release];
+        return;
+      }
+      [blit copyFromTexture:sourceTexture
+                sourceSlice:0
+                sourceLevel:0
+               sourceOrigin:MTLOriginMake(0, 0, 0)
+                 sourceSize:MTLSizeMake(std::max(1u, desc.width), std::max(1u, desc.height), 1)
+                  toTexture:stagingTexture
+           destinationSlice:0
+           destinationLevel:0
+          destinationOrigin:MTLOriginMake(0, 0, 0)];
+      [blit endEncoding];
+      [commandBuffer commit];
+      [commandBuffer waitUntilCompleted];
+
+      const u32 pitch = std::max(1u, desc.width) * 4u;
+      std::vector<u8> bytes(static_cast<size_t>(pitch) * std::max(1u, desc.height));
+      auto region = MTLRegionMake2D(0, 0, std::max(1u, desc.width), std::max(1u, desc.height));
+      [stagingTexture getBytes:bytes.data() bytesPerRow:pitch fromRegion:region mipmapLevel:0];
+      [stagingTexture release];
+
+      const bool wrote = writeTextureBmp(path, desc.format, std::max(1u, desc.width), std::max(1u, desc.height),
+                                         pitch, bytes);
+      std::ostringstream out;
+      out << "[dxmt9-texture] gpu-dump handle=0x" << std::hex << handle.value << std::dec
+          << " size=" << desc.width << "x" << desc.height
+          << " format=" << static_cast<unsigned>(desc.format)
+          << " path=" << path
+          << " wrote=" << (wrote ? 1 : 0);
+      emitTextureTraceLine(out.str());
+      dumpedGpuTextures_.insert(handle.value);
+    }
   }
 
   ObjcPtr<id<MTLSamplerState>> makeSampler(bool linear) {
@@ -6954,6 +7236,7 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<u64, BufferRecord> buffers_;
   std::unordered_map<u64, TextureRecord> textures_;
   std::unordered_map<u64, SurfaceRecord> surfaces_;
+  std::unordered_set<u64> dumpedGpuTextures_;
   std::mutex cacheMutex_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> drawPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> fillPipelineCache_;
