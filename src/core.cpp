@@ -75,12 +75,35 @@ std::string getenvString(const char* name) {
   return value ? std::string(value) : std::string();
 }
 
+bool getenvFlag(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+}
+
 bool renderTraceEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_TRACE_RENDER");
     return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return enabled;
+}
+
+std::optional<u32> textureDumpHandle() {
+  static const auto value = parseEnvU32Auto("DXMT9_DUMP_TEXTURE_HANDLE");
+  return value;
+}
+
+std::string textureDumpDir() {
+  static const std::string value = [] {
+    const auto env = getenvString("DXMT9_DUMP_TEXTURE_DIR");
+    return env.empty() ? std::string("/tmp") : env;
+  }();
+  return value;
+}
+
+std::optional<u32> drawTraceTextureHandle() {
+  static const auto value = parseEnvU32Auto("DXMT9_TRACE_DRAW_TEX0");
+  return value;
 }
 
 void emitRenderTrace(const char* fmt, ...) {
@@ -94,6 +117,296 @@ void emitRenderTrace(const char* fmt, ...) {
   va_end(args);
   std::fputc('\n', stderr);
   std::fflush(stderr);
+}
+
+constexpr u32 kFvfPositionMask = 0x000eu;
+constexpr u32 kFvfXyzrhw = 0x0004u;
+constexpr u32 kFvfDiffuse = 0x0040u;
+constexpr u32 kFvfSpecular = 0x0080u;
+constexpr u32 kFvfTexCountMask = 0x0f00u;
+constexpr u32 kFvfTexCountShift = 8u;
+
+constexpr u32 kDeclTypeFloat1 = 0u;
+constexpr u32 kDeclTypeFloat2 = 1u;
+constexpr u32 kDeclTypeFloat3 = 2u;
+constexpr u32 kDeclTypeFloat4 = 3u;
+constexpr u32 kDeclTypeD3DColor = 4u;
+constexpr u32 kDeclUsagePosition = 0u;
+constexpr u32 kDeclUsageTexcoord = 5u;
+constexpr u32 kDeclUsagePositionT = 9u;
+constexpr u32 kDeclUsageColor = 10u;
+
+u32 declTypeSize(u32 type) {
+  switch (type) {
+    case kDeclTypeFloat1:
+      return 4;
+    case kDeclTypeFloat2:
+      return 8;
+    case kDeclTypeFloat3:
+      return 12;
+    case kDeclTypeFloat4:
+      return 16;
+    case kDeclTypeD3DColor:
+      return 4;
+    default:
+      return 0;
+  }
+}
+
+u32 fvfTexcoordSize(u32 fvf, u32 index) {
+  const u32 code = (fvf >> (16u + index * 2u)) & 0x3u;
+  switch (code) {
+    case 1u:
+      return 3;
+    case 2u:
+      return 4;
+    case 3u:
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+struct DrawTraceLayout {
+  bool valid = false;
+  bool preTransformed = false;
+  u32 positionComponents = 0;
+  u32 stride = 0;
+  u32 positionOffset = 0;
+  std::optional<u32> diffuseOffset;
+  std::optional<u32> tex0Offset;
+  std::optional<u32> tex1Offset;
+};
+
+std::optional<DrawTraceLayout> decodeDrawTraceLayout(const DrawDesc& desc) {
+  DrawTraceLayout layout;
+  if (!desc.vertexDecl.elements.empty()) {
+    u32 computedStride = 0;
+    for (const auto& element : desc.vertexDecl.elements) {
+      if (element.stream != 0) {
+        continue;
+      }
+      const u32 size = declTypeSize(element.type);
+      if (size != 0) {
+        computedStride = std::max(computedStride, static_cast<u32>(element.offset + size));
+      }
+      if (element.usage == kDeclUsagePositionT && element.usageIndex == 0 && element.type == kDeclTypeFloat4) {
+        layout.valid = true;
+        layout.preTransformed = true;
+        layout.positionComponents = 4;
+        layout.positionOffset = element.offset;
+      } else if (element.usage == kDeclUsagePosition && element.usageIndex == 0 &&
+                 (element.type == kDeclTypeFloat3 || element.type == kDeclTypeFloat4)) {
+        layout.valid = true;
+        layout.preTransformed = false;
+        layout.positionComponents = element.type == kDeclTypeFloat4 ? 4u : 3u;
+        layout.positionOffset = element.offset;
+      } else if (element.usage == kDeclUsageColor && element.usageIndex == 0 &&
+                 element.type == kDeclTypeD3DColor) {
+        layout.diffuseOffset = element.offset;
+      } else if (element.usage == kDeclUsageTexcoord && element.type == kDeclTypeFloat2) {
+        if (element.usageIndex == 0) {
+          layout.tex0Offset = element.offset;
+        } else if (element.usageIndex == 1) {
+          layout.tex1Offset = element.offset;
+        }
+      }
+    }
+    layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : computedStride;
+    return layout.valid ? std::optional<DrawTraceLayout>(layout) : std::nullopt;
+  }
+
+  const u32 fvf = desc.vertexDecl.fvf;
+  if ((fvf & kFvfPositionMask) != kFvfXyzrhw) {
+    return std::nullopt;
+  }
+  layout.valid = true;
+  layout.preTransformed = true;
+  layout.positionComponents = 4;
+  layout.positionOffset = 0;
+  u32 offset = 16;
+  if ((fvf & kFvfDiffuse) != 0) {
+    layout.diffuseOffset = offset;
+    offset += 4;
+  }
+  if ((fvf & kFvfSpecular) != 0) {
+    offset += 4;
+  }
+  const u32 texCount = (fvf & kFvfTexCountMask) >> kFvfTexCountShift;
+  if (texCount > 0 && fvfTexcoordSize(fvf, 0) >= 2) {
+    layout.tex0Offset = offset;
+  }
+  if (texCount > 1) {
+    offset += fvfTexcoordSize(fvf, 0) * 4u;
+    if (fvfTexcoordSize(fvf, 1) >= 2) {
+      layout.tex1Offset = offset;
+    }
+  }
+  for (u32 i = 1; i < texCount; ++i) {
+    if (i > 1) {
+      offset += fvfTexcoordSize(fvf, i - 1) * 4u;
+    }
+  }
+  layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : offset;
+  return layout;
+}
+
+void emitDrawTraceDump(u64 seqId, const DrawDesc& desc, const std::shared_ptr<Buffer>& indexBuffer) {
+  const auto wanted = drawTraceTextureHandle();
+  if (!wanted || desc.textures.empty() || !desc.textures[0].handle || desc.textures[0].handle.value != *wanted) {
+    return;
+  }
+
+  std::span<const u8> vertexBytes;
+  if (!desc.userVertexData.empty()) {
+    vertexBytes = desc.userVertexData;
+  } else if (desc.vertexDecl.streams[0].buffer) {
+    vertexBytes = desc.vertexDecl.streams[0].buffer->bytes();
+  }
+
+  std::span<const u8> indexBytes;
+  if (!desc.userIndexData.empty()) {
+    indexBytes = desc.userIndexData;
+  } else if (indexBuffer) {
+    indexBytes = indexBuffer->bytes();
+  }
+
+  auto readIndex = [&](u32 logicalIndex) -> std::optional<u32> {
+    if (!desc.indexBuffer && desc.userIndexData.empty()) {
+      return logicalIndex;
+    }
+    const size_t base = static_cast<size_t>(desc.startIndex + logicalIndex) *
+                        (desc.indexType == IndexType::UInt32 ? sizeof(u32) : sizeof(u16));
+    if (desc.indexType == IndexType::UInt32) {
+      if (base + sizeof(u32) > indexBytes.size()) {
+        return std::nullopt;
+      }
+      u32 value = 0;
+      std::memcpy(&value, indexBytes.data() + base, sizeof(u32));
+      return value;
+    }
+    if (base + sizeof(u16) > indexBytes.size()) {
+      return std::nullopt;
+    }
+    u16 value = 0;
+    std::memcpy(&value, indexBytes.data() + base, sizeof(u16));
+    return static_cast<u32>(value);
+  };
+
+  const auto layout = decodeDrawTraceLayout(desc);
+  std::ostringstream out;
+  out << "[dxmt9-draw] seq=" << static_cast<unsigned long long>(seqId)
+      << " tex0=0x" << std::hex
+      << static_cast<unsigned long long>(desc.textures[0].handle.value) << std::dec
+      << " fvf=0x" << std::hex << desc.vertexDecl.fvf << std::dec
+      << " elems=" << desc.vertexDecl.elements.size()
+      << " stride=" << desc.vertexDecl.streams[0].stride
+      << " startIndex=" << desc.startIndex
+      << " baseVertex=" << desc.baseVertexIndex
+      << " primCount=" << desc.primitiveCount;
+  for (size_t i = 0; i < desc.vertexDecl.elements.size(); ++i) {
+    const auto& e = desc.vertexDecl.elements[i];
+    out << " e" << i << "=("
+        << e.stream << "," << e.offset << "," << e.type << "," << e.usage << "," << e.usageIndex << ")";
+  }
+  if (!layout || vertexBytes.empty()) {
+    emitRenderTrace("%s vertexBytes=%zu layout=%s", out.str().c_str(), vertexBytes.size(),
+                    layout ? "ok" : "none");
+    return;
+  }
+
+  if (indexBytes.empty() && (desc.indexBuffer || indexBuffer)) {
+    emitRenderTrace("%s vertexBytes=%zu indexBytes=0 layoutStride=%u posOff=%u tex0=%d tex1=%d diffuse=%d",
+                    out.str().c_str(),
+                    vertexBytes.size(),
+                    layout->stride,
+                    layout->positionOffset,
+                    layout->tex0Offset ? static_cast<int>(*layout->tex0Offset) : -1,
+                    layout->tex1Offset ? static_cast<int>(*layout->tex1Offset) : -1,
+                    layout->diffuseOffset ? static_cast<int>(*layout->diffuseOffset) : -1);
+    return;
+  }
+
+  auto readF32 = [&](size_t absoluteOffset) -> float {
+    float value = 0.0f;
+    if (absoluteOffset + sizeof(float) <= vertexBytes.size()) {
+      std::memcpy(&value, vertexBytes.data() + absoluteOffset, sizeof(float));
+    }
+    return value;
+  };
+  auto readU32 = [&](size_t absoluteOffset) -> u32 {
+    u32 value = 0;
+    if (absoluteOffset + sizeof(u32) <= vertexBytes.size()) {
+      std::memcpy(&value, vertexBytes.data() + absoluteOffset, sizeof(u32));
+    }
+    return value;
+  };
+
+  out << " layoutStride=" << layout->stride
+      << " preT=" << static_cast<unsigned>(layout->preTransformed)
+      << " posComp=" << layout->positionComponents
+      << " posOff=" << layout->positionOffset
+      << " tex0Off=" << (layout->tex0Offset ? static_cast<int>(*layout->tex0Offset) : -1)
+      << " tex1Off=" << (layout->tex1Offset ? static_cast<int>(*layout->tex1Offset) : -1)
+      << " diffuseOff=" << (layout->diffuseOffset ? static_cast<int>(*layout->diffuseOffset) : -1)
+      << " vertexBytes=" << vertexBytes.size()
+      << " indexBytes=" << indexBytes.size()
+      << " m0=(" << desc.worldViewProj.m[0] << "," << desc.worldViewProj.m[1] << ","
+      << desc.worldViewProj.m[2] << "," << desc.worldViewProj.m[3] << ")"
+      << " m1=(" << desc.worldViewProj.m[4] << "," << desc.worldViewProj.m[5] << ","
+      << desc.worldViewProj.m[6] << "," << desc.worldViewProj.m[7] << ")"
+      << " m2=(" << desc.worldViewProj.m[8] << "," << desc.worldViewProj.m[9] << ","
+      << desc.worldViewProj.m[10] << "," << desc.worldViewProj.m[11] << ")"
+      << " m3=(" << desc.worldViewProj.m[12] << "," << desc.worldViewProj.m[13] << ","
+      << desc.worldViewProj.m[14] << "," << desc.worldViewProj.m[15] << ")";
+
+  const u32 tracedRefs = std::min<u32>(12u, std::max<u32>(1u, desc.primitiveCount * 3u));
+  for (u32 i = 0; i < tracedRefs; ++i) {
+    const auto maybeIndex = readIndex(i);
+    if (!maybeIndex) {
+      break;
+    }
+    const size_t base = static_cast<size_t>(desc.vertexDecl.streams[0].offset) +
+                        static_cast<size_t>(desc.baseVertexIndex + static_cast<i32>(*maybeIndex)) * layout->stride;
+    const float px = readF32(base + layout->positionOffset + 0);
+    const float py = readF32(base + layout->positionOffset + 4);
+    const float pz = readF32(base + layout->positionOffset + 8);
+    const float pw = layout->positionComponents >= 4 ? readF32(base + layout->positionOffset + 12) : 1.0f;
+    out << " r" << i << "#" << *maybeIndex << "=("
+        << px << "," << py << "," << pz;
+    if (layout->positionComponents >= 4) {
+      out << "," << pw;
+    }
+    out << ")";
+    if (i == 0) {
+      const std::array<float, 4> pos4{px, py, pz, pw};
+      std::array<float, 4> clipRow{};
+      std::array<float, 4> clipCol{};
+      for (size_t row = 0; row < 4; ++row) {
+        for (size_t col = 0; col < 4; ++col) {
+          clipRow[row] += desc.worldViewProj.m[row * 4 + col] * pos4[col];
+          clipCol[row] += pos4[col] * desc.worldViewProj.m[col * 4 + row];
+        }
+      }
+      out << " clipRow=(" << clipRow[0] << "," << clipRow[1] << "," << clipRow[2] << "," << clipRow[3] << ")";
+      out << " clipCol=(" << clipCol[0] << "," << clipCol[1] << "," << clipCol[2] << "," << clipCol[3] << ")";
+    }
+    if (layout->tex0Offset) {
+      out << " uv0=("
+          << readF32(base + *layout->tex0Offset + 0) << ","
+          << readF32(base + *layout->tex0Offset + 4) << ")";
+    }
+    if (layout->tex1Offset) {
+      out << " uv1=("
+          << readF32(base + *layout->tex1Offset + 0) << ","
+          << readF32(base + *layout->tex1Offset + 4) << ")";
+    }
+    if (layout->diffuseOffset) {
+      out << " c=0x" << std::hex << readU32(base + *layout->diffuseOffset) << std::dec;
+    }
+  }
+
+  emitRenderTrace("%s", out.str().c_str());
 }
 
 u32 clampToBits(float value, u32 bits) {
@@ -1323,6 +1636,9 @@ std::vector<DisplayMode> makeAdapterModes(Format format, const BackendLimits& li
 }
 
 PresentParameters normalizePresentParameters(const AdapterInfo& adapter, PresentParameters params) {
+  if (getenvFlag("DXMT9_FORCE_WINDOWED")) {
+    params.windowed = true;
+  }
   if (params.backBufferFormat == Format::Unknown) {
     params.backBufferFormat = adapter.displayMode.format;
   }
@@ -1577,26 +1893,27 @@ void DeviceState::reset() {
   renderStates[RS_STENCIL_CCW_MASK] = 0xffu;
   renderStates[RS_STENCIL_CCW_WRITEMASK] = 0xffu;
 
-  for (auto& stage : textureStageStates) {
-    stage[TSS_COLOR_OP] = static_cast<u32>(TextureOp::Disable);
-    stage[TSS_COLOR_ARG1] = 0;
-    stage[TSS_COLOR_ARG2] = 0;
-    stage[TSS_ALPHA_OP] = static_cast<u32>(TextureOp::Disable);
-    stage[TSS_ALPHA_ARG1] = 0;
-    stage[TSS_ALPHA_ARG2] = 0;
-    stage[TSS_RESULT_ARG] = 0;
-    stage[TSS_TEXCOORD_INDEX] = 0;
+  for (size_t stageIndex = 0; stageIndex < textureStageStates.size(); ++stageIndex) {
+    auto& stage = textureStageStates[stageIndex];
+    stage[TSS_COLOR_OP] = static_cast<u32>(stageIndex == 0 ? TextureOp::Modulate : TextureOp::Disable);
+    stage[TSS_COLOR_ARG1] = 2;  // D3DTA_TEXTURE
+    stage[TSS_COLOR_ARG2] = 1;  // D3DTA_CURRENT
+    stage[TSS_ALPHA_OP] = static_cast<u32>(stageIndex == 0 ? TextureOp::SelectArg1 : TextureOp::Disable);
+    stage[TSS_ALPHA_ARG1] = 2;  // D3DTA_TEXTURE
+    stage[TSS_ALPHA_ARG2] = 1;  // D3DTA_CURRENT
+    stage[TSS_RESULT_ARG] = 1;  // D3DTA_CURRENT
+    stage[TSS_TEXCOORD_INDEX] = static_cast<u32>(stageIndex);
     stage[TSS_TEXTURE_TRANSFORM_FLAGS] = 0;
     stage[TSS_TEXTURE_TYPE] = 0;
   }
 
   for (auto& sampler : samplerStates) {
-    sampler[SAMP_MIN_FILTER] = 0;
-    sampler[SAMP_MAG_FILTER] = 0;
+    sampler[SAMP_MIN_FILTER] = 1;
+    sampler[SAMP_MAG_FILTER] = 1;
     sampler[SAMP_MIP_FILTER] = 0;
-    sampler[SAMP_ADDRESS_U] = 0;
-    sampler[SAMP_ADDRESS_V] = 0;
-    sampler[SAMP_ADDRESS_W] = 0;
+    sampler[SAMP_ADDRESS_U] = 1;
+    sampler[SAMP_ADDRESS_V] = 1;
+    sampler[SAMP_ADDRESS_W] = 1;
     sampler[SAMP_MAX_ANISOTROPY] = 1;
     sampler[SAMP_MIPMAP_LOD_BIAS] = 0;
   }
@@ -1785,6 +2102,22 @@ void Texture::syncLevelToBackend(u32 level) {
   const auto& storage = levels_[level];
   if (storage.bytes.empty() || storage.width == 0 || storage.height == 0 || storage.pitch == 0) {
     return;
+  }
+  if (const auto wanted = textureDumpHandle(); wanted && *wanted == handle_.value) {
+    const auto path = (std::filesystem::path(textureDumpDir()) /
+                       ("dxmt9_tex_" + std::to_string(handle_.value) + "_level_" +
+                        std::to_string(level) + ".bmp"))
+                          .string();
+    if (writeBmpScreenshot(path, desc_.format, storage.width, storage.height, storage.pitch,
+                           std::span<const u8>(storage.bytes.data(), storage.bytes.size()))) {
+      emitRenderTrace("texture dump handle=0x%x level=%u path=%s format=%u size=%ux%u pitch=%u",
+                      handle_.value, level, path.c_str(), static_cast<unsigned>(desc_.format),
+                      storage.width, storage.height, storage.pitch);
+    } else {
+      emitRenderTrace("texture dump handle=0x%x level=%u failed format=%u size=%ux%u pitch=%u",
+                      handle_.value, level, static_cast<unsigned>(desc_.format), storage.width,
+                      storage.height, storage.pitch);
+    }
   }
   backend_->uploadTextureLevel(handle_, level, storage.width, storage.height, storage.pitch,
                                std::span<const u8>(storage.bytes.data(), storage.bytes.size()));
@@ -1983,12 +2316,265 @@ HRESULT Query::getData(void* output, size_t size, u32 flags, u64 completedSequen
   return D3DERR_NOTAVAILABLE;
 }
 
+namespace {
+
+template <typename K, typename V>
+void applyMapDelta(std::unordered_map<K, V>& dst,
+                   const std::unordered_map<K, V>& before,
+                   const std::unordered_map<K, V>& after) {
+  for (const auto& [key, value] : after) {
+    const auto beforeIt = before.find(key);
+    if (beforeIt == before.end() || beforeIt->second != value) {
+      dst[key] = value;
+    }
+  }
+  for (const auto& [key, _] : before) {
+    if (!after.contains(key)) {
+      dst.erase(key);
+    }
+  }
+}
+
+template <typename K, typename V>
+void captureMapDelta(std::unordered_map<K, V>& snapshot,
+                     const std::unordered_map<K, V>& before,
+                     const std::unordered_map<K, V>& recorded,
+                     const std::unordered_map<K, V>& current) {
+  for (const auto& [key, value] : recorded) {
+    const auto beforeIt = before.find(key);
+    if (beforeIt == before.end() || beforeIt->second != value) {
+      const auto currentIt = current.find(key);
+      if (currentIt != current.end()) {
+        snapshot[key] = currentIt->second;
+      } else {
+        snapshot.erase(key);
+      }
+    }
+  }
+  for (const auto& [key, value] : before) {
+    if (!recorded.contains(key)) {
+      const auto currentIt = current.find(key);
+      if (currentIt == current.end() || currentIt->second != value) {
+        if (currentIt != current.end()) {
+          snapshot[key] = currentIt->second;
+        } else {
+          snapshot.erase(key);
+        }
+      }
+    }
+  }
+}
+
+template <typename T>
+void applyIfChanged(T& dst, const T& before, const T& after) {
+  if (!(before == after)) {
+    dst = after;
+  }
+}
+
+template <typename T>
+void captureIfRecorded(T& snapshot, const T& before, const T& recorded, const T& current) {
+  if (!(before == recorded)) {
+    snapshot = current;
+  }
+}
+
+template <size_t FloatCount>
+void applyShaderConstantsDelta(ShaderConstantSnapshot<FloatCount>& dst,
+                               const ShaderConstantSnapshot<FloatCount>& before,
+                               const ShaderConstantSnapshot<FloatCount>& after) {
+  for (size_t i = 0; i < after.float4.size(); ++i) {
+    if (before.float4[i] != after.float4[i]) {
+      dst.float4[i] = after.float4[i];
+    }
+  }
+  for (size_t i = 0; i < after.int4.size(); ++i) {
+    if (before.int4[i] != after.int4[i]) {
+      dst.int4[i] = after.int4[i];
+    }
+  }
+  for (size_t i = 0; i < after.bools.size(); ++i) {
+    if (before.bools[i] != after.bools[i]) {
+      dst.bools[i] = after.bools[i];
+    }
+  }
+}
+
+template <size_t FloatCount>
+void captureShaderConstantsDelta(ShaderConstantSnapshot<FloatCount>& snapshot,
+                                 const ShaderConstantSnapshot<FloatCount>& before,
+                                 const ShaderConstantSnapshot<FloatCount>& recorded,
+                                 const ShaderConstantSnapshot<FloatCount>& current) {
+  for (size_t i = 0; i < recorded.float4.size(); ++i) {
+    if (before.float4[i] != recorded.float4[i]) {
+      snapshot.float4[i] = current.float4[i];
+    }
+  }
+  for (size_t i = 0; i < recorded.int4.size(); ++i) {
+    if (before.int4[i] != recorded.int4[i]) {
+      snapshot.int4[i] = current.int4[i];
+    }
+  }
+  for (size_t i = 0; i < recorded.bools.size(); ++i) {
+    if (before.bools[i] != recorded.bools[i]) {
+      snapshot.bools[i] = current.bools[i];
+    }
+  }
+}
+
+}  // namespace
+
 void StateBlock::capture(const DeviceState& state) {
-  snapshot_ = state;
+  if (mode_ == CaptureMode::FullSnapshot) {
+    snapshot_ = state;
+    baseline_ = {};
+    recordedRenderStates_.clear();
+    return;
+  }
+
+  const DeviceState recorded = snapshot_;
+  captureIfRecorded(snapshot_.viewport, baseline_.viewport, recorded.viewport, state.viewport);
+  captureIfRecorded(snapshot_.scissorRect, baseline_.scissorRect, recorded.scissorRect, state.scissorRect);
+  captureIfRecorded(snapshot_.scissorEnabled, baseline_.scissorEnabled, recorded.scissorEnabled, state.scissorEnabled);
+  if (!recordedRenderStates_.empty()) {
+    for (u32 key : recordedRenderStates_) {
+      const auto currentIt = state.renderStates.find(key);
+      if (currentIt != state.renderStates.end()) {
+        snapshot_.renderStates[key] = currentIt->second;
+      } else {
+        snapshot_.renderStates.erase(key);
+      }
+    }
+  } else {
+    captureMapDelta(snapshot_.renderStates, baseline_.renderStates, recorded.renderStates, state.renderStates);
+  }
+  for (size_t i = 0; i < snapshot_.textureStageStates.size(); ++i) {
+    captureMapDelta(snapshot_.textureStageStates[i], baseline_.textureStageStates[i], recorded.textureStageStates[i],
+                    state.textureStageStates[i]);
+  }
+  for (size_t i = 0; i < snapshot_.samplerStates.size(); ++i) {
+    captureMapDelta(snapshot_.samplerStates[i], baseline_.samplerStates[i], recorded.samplerStates[i],
+                    state.samplerStates[i]);
+  }
+  captureMapDelta(snapshot_.transforms, baseline_.transforms, recorded.transforms, state.transforms);
+  for (size_t i = 0; i < snapshot_.lights.size(); ++i) {
+    captureIfRecorded(snapshot_.lights[i], baseline_.lights[i], recorded.lights[i], state.lights[i]);
+    captureIfRecorded(snapshot_.lightEnabled[i], baseline_.lightEnabled[i], recorded.lightEnabled[i],
+                      state.lightEnabled[i]);
+  }
+  captureIfRecorded(snapshot_.material, baseline_.material, recorded.material, state.material);
+  for (size_t i = 0; i < snapshot_.streamBuffers.size(); ++i) {
+    if (baseline_.streamBuffers[i] != recorded.streamBuffers[i] ||
+        baseline_.streamOffsets[i] != recorded.streamOffsets[i] ||
+        baseline_.streamStrides[i] != recorded.streamStrides[i]) {
+      snapshot_.streamBuffers[i] = state.streamBuffers[i];
+      snapshot_.streamOffsets[i] = state.streamOffsets[i];
+      snapshot_.streamStrides[i] = state.streamStrides[i];
+    }
+  }
+  if (baseline_.indexBuffer != recorded.indexBuffer || baseline_.indexType != recorded.indexType) {
+    snapshot_.indexBuffer = state.indexBuffer;
+    snapshot_.indexType = state.indexType;
+  }
+  captureIfRecorded(snapshot_.vertexDecl, baseline_.vertexDecl, recorded.vertexDecl, state.vertexDecl);
+  captureIfRecorded(snapshot_.fvf, baseline_.fvf, recorded.fvf, state.fvf);
+  captureIfRecorded(snapshot_.vertexShader, baseline_.vertexShader, recorded.vertexShader, state.vertexShader);
+  captureIfRecorded(snapshot_.pixelShader, baseline_.pixelShader, recorded.pixelShader, state.pixelShader);
+  captureShaderConstantsDelta(snapshot_.vsConst, baseline_.vsConst, recorded.vsConst, state.vsConst);
+  captureShaderConstantsDelta(snapshot_.psConst, baseline_.psConst, recorded.psConst, state.psConst);
+  for (size_t i = 0; i < snapshot_.textures.size(); ++i) {
+    captureIfRecorded(snapshot_.textures[i], baseline_.textures[i], recorded.textures[i], state.textures[i]);
+  }
+  for (size_t i = 0; i < snapshot_.renderTargets.size(); ++i) {
+    captureIfRecorded(snapshot_.renderTargets[i], baseline_.renderTargets[i], recorded.renderTargets[i],
+                      state.renderTargets[i]);
+  }
+  captureIfRecorded(snapshot_.depthStencil, baseline_.depthStencil, recorded.depthStencil, state.depthStencil);
+  for (size_t i = 0; i < snapshot_.clipPlanes.size(); ++i) {
+    captureIfRecorded(snapshot_.clipPlanes[i], baseline_.clipPlanes[i], recorded.clipPlanes[i], state.clipPlanes[i]);
+  }
+}
+
+void StateBlock::captureDelta(const DeviceState& before, const DeviceState& after) {
+  mode_ = CaptureMode::Delta;
+  baseline_ = before;
+  snapshot_ = after;
+  recordedRenderStates_.clear();
+}
+
+void StateBlock::captureDelta(const DeviceState& before, const DeviceState& after,
+                              const std::unordered_set<u32>& recordedRenderStates) {
+  mode_ = CaptureMode::Delta;
+  baseline_ = before;
+  snapshot_ = after;
+  recordedRenderStates_ = recordedRenderStates;
 }
 
 void StateBlock::apply(Device& device) const {
-  device.mutableState() = snapshot_;
+  auto& state = device.mutableState();
+  if (mode_ == CaptureMode::FullSnapshot) {
+    const bool inScene = state.inScene;
+    state = snapshot_;
+    state.inScene = inScene;
+    return;
+  }
+
+  applyIfChanged(state.viewport, baseline_.viewport, snapshot_.viewport);
+  applyIfChanged(state.scissorRect, baseline_.scissorRect, snapshot_.scissorRect);
+  applyIfChanged(state.scissorEnabled, baseline_.scissorEnabled, snapshot_.scissorEnabled);
+  if (!recordedRenderStates_.empty()) {
+    for (u32 key : recordedRenderStates_) {
+      const auto snapshotIt = snapshot_.renderStates.find(key);
+      if (snapshotIt != snapshot_.renderStates.end()) {
+        state.renderStates[key] = snapshotIt->second;
+      } else {
+        state.renderStates.erase(key);
+      }
+    }
+  } else {
+    applyMapDelta(state.renderStates, baseline_.renderStates, snapshot_.renderStates);
+  }
+  for (size_t i = 0; i < state.textureStageStates.size(); ++i) {
+    applyMapDelta(state.textureStageStates[i], baseline_.textureStageStates[i], snapshot_.textureStageStates[i]);
+  }
+  for (size_t i = 0; i < state.samplerStates.size(); ++i) {
+    applyMapDelta(state.samplerStates[i], baseline_.samplerStates[i], snapshot_.samplerStates[i]);
+  }
+  applyMapDelta(state.transforms, baseline_.transforms, snapshot_.transforms);
+  for (size_t i = 0; i < state.lights.size(); ++i) {
+    applyIfChanged(state.lights[i], baseline_.lights[i], snapshot_.lights[i]);
+    applyIfChanged(state.lightEnabled[i], baseline_.lightEnabled[i], snapshot_.lightEnabled[i]);
+  }
+  applyIfChanged(state.material, baseline_.material, snapshot_.material);
+  for (size_t i = 0; i < state.streamBuffers.size(); ++i) {
+    if (baseline_.streamBuffers[i] != snapshot_.streamBuffers[i] ||
+        baseline_.streamOffsets[i] != snapshot_.streamOffsets[i] ||
+        baseline_.streamStrides[i] != snapshot_.streamStrides[i]) {
+      state.streamBuffers[i] = snapshot_.streamBuffers[i];
+      state.streamOffsets[i] = snapshot_.streamOffsets[i];
+      state.streamStrides[i] = snapshot_.streamStrides[i];
+    }
+  }
+  if (baseline_.indexBuffer != snapshot_.indexBuffer || baseline_.indexType != snapshot_.indexType) {
+    state.indexBuffer = snapshot_.indexBuffer;
+    state.indexType = snapshot_.indexType;
+  }
+  applyIfChanged(state.vertexDecl, baseline_.vertexDecl, snapshot_.vertexDecl);
+  applyIfChanged(state.fvf, baseline_.fvf, snapshot_.fvf);
+  applyIfChanged(state.vertexShader, baseline_.vertexShader, snapshot_.vertexShader);
+  applyIfChanged(state.pixelShader, baseline_.pixelShader, snapshot_.pixelShader);
+  applyShaderConstantsDelta(state.vsConst, baseline_.vsConst, snapshot_.vsConst);
+  applyShaderConstantsDelta(state.psConst, baseline_.psConst, snapshot_.psConst);
+  for (size_t i = 0; i < state.textures.size(); ++i) {
+    applyIfChanged(state.textures[i], baseline_.textures[i], snapshot_.textures[i]);
+  }
+  for (size_t i = 0; i < state.renderTargets.size(); ++i) {
+    applyIfChanged(state.renderTargets[i], baseline_.renderTargets[i], snapshot_.renderTargets[i]);
+  }
+  applyIfChanged(state.depthStencil, baseline_.depthStencil, snapshot_.depthStencil);
+  for (size_t i = 0; i < state.clipPlanes.size(); ++i) {
+    applyIfChanged(state.clipPlanes[i], baseline_.clipPlanes[i], snapshot_.clipPlanes[i]);
+  }
 }
 
 SwapChain::SwapChain(std::shared_ptr<Device> owner, SwapChainHandle handle, PresentParameters params,
@@ -2169,6 +2755,9 @@ std::shared_ptr<SwapChain> Device::swapChain(size_t index) const {
 
 HResult Device::setRenderState(u32 key, u32 value) {
   state_.renderStates[key] = value;
+  if (key == RS_SCISSOR_TEST_ENABLE) {
+    state_.scissorEnabled = value != 0;
+  }
   return D3D_OK;
 }
 
@@ -2283,11 +2872,14 @@ HResult Device::setIndices(std::shared_ptr<Buffer> buffer, IndexType indexType) 
 HResult Device::setFVF(u32 fvf) {
   state_.fvf = fvf;
   state_.vertexDecl.fvf = fvf;
+  state_.vertexDecl.elements.clear();
   return D3D_OK;
 }
 
 HResult Device::setVertexDeclaration(std::vector<VertexElement> elements) {
   state_.vertexDecl.elements = std::move(elements);
+  state_.fvf = 0;
+  state_.vertexDecl.fvf = 0;
   return D3D_OK;
 }
 
@@ -2327,7 +2919,6 @@ HResult Device::setViewport(const Viewport& viewport) {
 
 HResult Device::setScissorRect(const Rect& rect) {
   state_.scissorRect = rect;
-  state_.scissorEnabled = true;
   return D3D_OK;
 }
 
@@ -2338,6 +2929,10 @@ HResult Device::setRenderTarget(u32 index, std::shared_ptr<Surface> surface) {
   state_.renderTargets[index] = surface ? RenderTargetAttachment{surface->handle(), surface->level(),
                                                                 surface->multiSampleCount()}
                                         : RenderTargetAttachment{};
+  if (index == 0 && surface) {
+    const auto& desc = surface->desc();
+    state_.viewport = {0, 0, std::max(1u, desc.width), std::max(1u, desc.height), 0.0f, 1.0f};
+  }
   return D3D_OK;
 }
 
@@ -2432,7 +3027,8 @@ DrawDesc Device::snapshotDrawDesc(PrimitiveType type, u32 primitiveCount, u32 st
   desc.rts.depthStencil = state_.depthStencil;
   desc.viewport.viewport = state_.viewport;
   desc.viewport.scissor = state_.scissorRect;
-  desc.viewport.scissorEnabled = state_.scissorEnabled;
+  desc.viewport.scissorEnabled =
+      state_.renderStates.contains(RS_SCISSOR_TEST_ENABLE) && state_.renderStates.at(RS_SCISSOR_TEST_ENABLE) != 0;
   desc.clipPlaneMask = state_.renderStates.contains(RS_CLIP_PLANE_ENABLE)
                            ? state_.renderStates.at(RS_CLIP_PLANE_ENABLE)
                            : 0;
@@ -2440,6 +3036,10 @@ DrawDesc Device::snapshotDrawDesc(PrimitiveType type, u32 primitiveCount, u32 st
   const Matrix4x4 view = lookupTransform(state_, XFORM_VIEW);
   const Matrix4x4 proj = lookupTransform(state_, XFORM_PROJECTION);
   const Matrix4x4 worldViewProj = multiplyMatrix(multiplyMatrix(world, view), proj);
+  desc.worldViewProj = worldViewProj;
+  for (size_t i = 0; i < kMaxTextureStages; ++i) {
+    desc.textureTransforms[i] = lookupTransform(state_, XFORM_TEXTURE_BASE + static_cast<u32>(i));
+  }
   for (size_t i = 0; i < kMaxClipPlanes; ++i) {
     if ((desc.clipPlaneMask & (1u << i)) != 0) {
       desc.clipPlanes[i] = transformClipPlane(worldViewProj, state_.clipPlanes[i]);
@@ -2869,7 +3469,14 @@ void Device::submitClearInternal(const ClearDesc& desc) {
 }
 
 void Device::submitDrawInternal(const DrawDesc& desc) {
-  emitRenderTrace("draw seq=%llu primType=%u primCount=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u fvf=0x%x lighting=%u alphaTest=%u clipMask=0x%x",
+  const auto stageState = [&](size_t stageIndex, u32 key) -> u32 {
+    if (stageIndex >= desc.textures.size()) {
+      return 0u;
+    }
+    const auto it = desc.textures[stageIndex].stageStates.find(key);
+    return it != desc.textures[stageIndex].stageStates.end() ? it->second : 0u;
+  };
+  emitRenderTrace("draw seq=%llu primType=%u primCount=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u fvf=0x%x lighting=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x",
                   static_cast<unsigned long long>(submittedSequenceId_ + 1),
                   static_cast<unsigned>(desc.primitiveType),
                   desc.primitiveCount,
@@ -2881,7 +3488,19 @@ void Device::submitDrawInternal(const DrawDesc& desc) {
                   desc.vertexDecl.fvf,
                   desc.rs.values.contains(RS_LIGHTING) ? desc.rs.values.at(RS_LIGHTING) : 0u,
                   desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) ? desc.rs.values.at(RS_ALPHA_TEST_ENABLE) : 0u,
+                  desc.rs.values.contains(RS_ALPHABLEND_ENABLE) ? desc.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u,
+                  desc.rs.values.contains(RS_SRC_BLEND) ? desc.rs.values.at(RS_SRC_BLEND) : 0u,
+                  desc.rs.values.contains(RS_DEST_BLEND) ? desc.rs.values.at(RS_DEST_BLEND) : 0u,
+                  stageState(0, TSS_COLOR_OP),
+                  stageState(0, TSS_ALPHA_OP),
+                  stageState(0, TSS_TEXCOORD_INDEX),
+                  stageState(0, TSS_TEXTURE_TRANSFORM_FLAGS),
+                  stageState(1, TSS_COLOR_OP),
+                  stageState(1, TSS_ALPHA_OP),
+                  stageState(1, TSS_TEXCOORD_INDEX),
+                  stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
                   desc.clipPlaneMask);
+  emitDrawTraceDump(submittedSequenceId_ + 1, desc, state_.indexBuffer);
   backend_->submitDraw(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
@@ -2915,26 +3534,38 @@ void Device::maybeCaptureExperimentFrame() {
   if (presentCount_ < experimentCapture_.frame) {
     return;
   }
+  emitRenderTrace("capture frame=%u path=%s begin", presentCount_, experimentCapture_.path.c_str());
   auto chain = swapChain(0);
   if (!chain) {
+    emitRenderTrace("capture frame=%u aborted: no swap chain", presentCount_);
     return;
   }
   auto backBuffer = chain->backBuffer();
   if (!backBuffer || !backBuffer->valid()) {
+    emitRenderTrace("capture frame=%u aborted: invalid backbuffer", presentCount_);
     return;
   }
   const auto& desc = backBuffer->desc();
   const u32 bpp = bytesPerPixel(desc.format);
   if (bpp == 0) {
+    emitRenderTrace("capture frame=%u aborted: unsupported format=%u", presentCount_, static_cast<unsigned>(desc.format));
     return;
   }
   auto scratch = createSurface(
       {desc.width, desc.height, desc.format, Pool::Scratch, 0, false, false, MultiSampleType::None});
-  if (!scratch || getRenderTargetData(backBuffer, scratch) != D3D_OK) {
+  if (!scratch) {
+    emitRenderTrace("capture frame=%u aborted: scratch alloc failed", presentCount_);
+    return;
+  }
+  const auto readbackHr = getRenderTargetData(backBuffer, scratch);
+  if (readbackHr != D3D_OK) {
+    emitRenderTrace("capture frame=%u aborted: getRenderTargetData hr=0x%08x", presentCount_,
+                    static_cast<unsigned>(readbackHr));
     return;
   }
   auto region = scratch->lockRect(nullptr, 0);
   if (!region.data) {
+    emitRenderTrace("capture frame=%u aborted: lockRect failed", presentCount_);
     return;
   }
   const size_t byteCount = static_cast<size_t>(region.pitch) * desc.height;
@@ -2944,6 +3575,9 @@ void Device::maybeCaptureExperimentFrame() {
   scratch->unlockRect();
   if (wrote) {
     experimentCapture_.captured = true;
+    emitRenderTrace("capture frame=%u wrote=%s", presentCount_, experimentCapture_.path.c_str());
+  } else {
+    emitRenderTrace("capture frame=%u aborted: writeBmp failed", presentCount_);
   }
 }
 

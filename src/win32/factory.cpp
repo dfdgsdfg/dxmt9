@@ -4,6 +4,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d9.h>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include "dxmt9/device_c.h"
 
@@ -17,6 +20,55 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
+
+static bool dxmt9FactoryDebugEnabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("DXMT9_DEBUG");
+        return env && env[0] && env[0] != '0';
+    }();
+    return enabled;
+}
+
+static HANDLE dxmt9FactoryDebugFile() {
+    static HANDLE handle = []() -> HANDLE {
+        const char* path = std::getenv("DXMT9_DEBUG_LOG");
+        if (!path || !path[0]) return INVALID_HANDLE_VALUE;
+        return CreateFileA(path,
+                           FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr,
+                           OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    }();
+    return handle;
+}
+
+static void dxmt9FactoryDebugLog(const char* fmt, ...) {
+    if (!dxmt9FactoryDebugEnabled()) return;
+    char message[2048];
+    std::memcpy(message, "[dxmt9-factory] ", 16);
+    va_list args;
+    va_start(args, fmt);
+    const int body = std::vsnprintf(message + 16, sizeof(message) - 18, fmt, args);
+    va_end(args);
+    size_t len = 16;
+    if (body > 0) {
+        len += static_cast<size_t>(body);
+        if (len > sizeof(message) - 2) len = sizeof(message) - 2;
+    }
+    message[len++] = '\n';
+    message[len] = '\0';
+
+    if (HANDLE file = dxmt9FactoryDebugFile(); file != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(file, message, static_cast<DWORD>(len), &written, nullptr);
+        return;
+    }
+
+    std::fputs(message, stderr);
+    std::fflush(stderr);
+}
 
 /* D9CPresentParams ← D3DPRESENT_PARAMETERS */
 static D9CPresentParams toCpp(const D3DPRESENT_PARAMETERS& pp) {
@@ -137,8 +189,13 @@ class D3D9FactoryImpl final : public IDirect3D9Ex {
     D9CFactory* f_;
 
 public:
-    explicit D3D9FactoryImpl(D9CFactory* f) : f_(f) {}
-    ~D3D9FactoryImpl() { dxmt9c_factory_release(f_); }
+    explicit D3D9FactoryImpl(D9CFactory* f) : f_(f) {
+        dxmt9FactoryDebugLog("ctor this=%p factory=%p", this, f_);
+    }
+    ~D3D9FactoryImpl() {
+        dxmt9FactoryDebugLog("dtor this=%p factory=%p", this, f_);
+        dxmt9c_factory_release(f_);
+    }
 
     /* ── IUnknown ── */
 
@@ -167,12 +224,14 @@ public:
     }
 
     UINT STDMETHODCALLTYPE GetAdapterCount() override {
+        dxmt9FactoryDebugLog("GetAdapterCount");
         return dxmt9c_factory_adapter_count(f_);
     }
 
     HRESULT STDMETHODCALLTYPE GetAdapterIdentifier(UINT adapter, DWORD /*flags*/,
                                                     D3DADAPTER_IDENTIFIER9* pId) override {
         if (!pId) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("GetAdapterIdentifier adapter=%u", adapter);
         D9CAdapterIdentifier ci{};
         HRESULT hr = hr32(dxmt9c_factory_get_adapter_identifier(f_, adapter, &ci));
         if (FAILED(hr)) return hr;
@@ -187,11 +246,21 @@ public:
         memcpy(&pId->DeviceIdentifier, ci.deviceIdentifier,
                sizeof(pId->DeviceIdentifier));
         pId->WHQLLevel   = ci.whqlLevel;
+        dxmt9FactoryDebugLog("GetAdapterIdentifier -> driver=%s desc=%s device=%s vendor=0x%04x deviceId=0x%04x subsys=0x%08x rev=%u driverVersion=0x%llx",
+                             pId->Driver,
+                             pId->Description,
+                             pId->DeviceName,
+                             (unsigned)pId->VendorId,
+                             (unsigned)pId->DeviceId,
+                             (unsigned)pId->SubSysId,
+                             (unsigned)pId->Revision,
+                             static_cast<unsigned long long>(pId->DriverVersion.QuadPart));
         return S_OK;
     }
 
     UINT STDMETHODCALLTYPE GetAdapterModeCount(UINT adapter,
                                                 D3DFORMAT fmt) override {
+        dxmt9FactoryDebugLog("GetAdapterModeCount adapter=%u fmt=%u", adapter, (unsigned)fmt);
         return dxmt9c_factory_get_adapter_mode_count(f_, adapter,
                                                       (uint32_t)fmt);
     }
@@ -200,24 +269,32 @@ public:
                                                 UINT mode,
                                                 D3DDISPLAYMODE* pMode) override {
         if (!pMode) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("EnumAdapterModes adapter=%u fmt=%u mode=%u", adapter, (unsigned)fmt, mode);
         uint32_t w, h, refresh, f;
         HRESULT hr = hr32(dxmt9c_factory_enum_adapter_modes(
             f_, adapter, (uint32_t)fmt, mode, &w, &h, &refresh, &f));
         if (FAILED(hr)) return hr;
         pMode->Width = w; pMode->Height = h;
         pMode->RefreshRate = refresh; pMode->Format = (D3DFORMAT)f;
+        dxmt9FactoryDebugLog("EnumAdapterModes -> %ux%u refresh=%u fmt=%u",
+                             (unsigned)pMode->Width, (unsigned)pMode->Height,
+                             (unsigned)pMode->RefreshRate, (unsigned)pMode->Format);
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetAdapterDisplayMode(UINT adapter,
                                                      D3DDISPLAYMODE* pMode) override {
         if (!pMode) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("GetAdapterDisplayMode adapter=%u", adapter);
         uint32_t w, h, refresh, f;
         HRESULT hr = hr32(dxmt9c_factory_get_adapter_display_mode(
             f_, adapter, &w, &h, &refresh, &f));
         if (FAILED(hr)) return hr;
         pMode->Width = w; pMode->Height = h;
         pMode->RefreshRate = refresh; pMode->Format = (D3DFORMAT)f;
+        dxmt9FactoryDebugLog("GetAdapterDisplayMode -> %ux%u refresh=%u fmt=%u",
+                             (unsigned)pMode->Width, (unsigned)pMode->Height,
+                             (unsigned)pMode->RefreshRate, (unsigned)pMode->Format);
         return S_OK;
     }
 
@@ -225,10 +302,14 @@ public:
                                                D3DFORMAT adapterFmt,
                                                D3DFORMAT backFmt,
                                                BOOL windowed) override {
-        return hr32(dxmt9c_factory_check_device_type(
+        dxmt9FactoryDebugLog("CheckDeviceType adapter=%u adapterFmt=%u backFmt=%u windowed=%u",
+                             adapter, (unsigned)adapterFmt, (unsigned)backFmt, windowed ? 1u : 0u);
+        const HRESULT hr = hr32(dxmt9c_factory_check_device_type(
             f_, adapter, (uint32_t)D3DDEVTYPE_HAL,
             (uint32_t)adapterFmt, (uint32_t)backFmt,
             windowed ? 1u : 0u));
+        dxmt9FactoryDebugLog("CheckDeviceType -> hr=0x%08x", (unsigned)hr);
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE CheckDeviceFormat(UINT adapter, D3DDEVTYPE,
@@ -236,8 +317,12 @@ public:
                                                  DWORD usage,
                                                  D3DRESOURCETYPE /*rtype*/,
                                                  D3DFORMAT fmt) override {
-        return hr32(dxmt9c_factory_check_device_format(
+        dxmt9FactoryDebugLog("CheckDeviceFormat adapter=%u fmt=%u usage=0x%x",
+                             adapter, (unsigned)fmt, (unsigned)usage);
+        const HRESULT hr = hr32(dxmt9c_factory_check_device_format(
             f_, adapter, (uint32_t)fmt, usage));
+        dxmt9FactoryDebugLog("CheckDeviceFormat -> hr=0x%08x", (unsigned)hr);
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE CheckDeviceMultiSampleType(UINT adapter,
@@ -246,35 +331,60 @@ public:
                                                           BOOL windowed,
                                                           D3DMULTISAMPLE_TYPE msType,
                                                           DWORD* pQuality) override {
+        dxmt9FactoryDebugLog("CheckDeviceMultiSampleType adapter=%u fmt=%u windowed=%u msType=%u",
+                             adapter, (unsigned)fmt, windowed ? 1u : 0u, (unsigned)msType);
         HRESULT hr = hr32(dxmt9c_factory_check_device_multisample(
             f_, adapter, (uint32_t)fmt, (uint32_t)msType,
             windowed ? 1u : 0u));
         if (pQuality) *pQuality = SUCCEEDED(hr) ? 1u : 0u;
+        dxmt9FactoryDebugLog("CheckDeviceMultiSampleType -> hr=0x%08x quality=%u",
+                             (unsigned)hr, pQuality ? (unsigned)*pQuality : 0u);
         return hr;
     }
 
     HRESULT STDMETHODCALLTYPE CheckDepthStencilMatch(UINT, D3DDEVTYPE,
                                                       D3DFORMAT, D3DFORMAT,
                                                       D3DFORMAT) override {
+        dxmt9FactoryDebugLog("CheckDepthStencilMatch -> hr=0x%08x", (unsigned)S_OK);
         return S_OK; /* all depth-stencil combinations accepted */
     }
 
     HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT, D3DDEVTYPE,
                                                            D3DFORMAT,
                                                            D3DFORMAT) override {
+        dxmt9FactoryDebugLog("CheckDeviceFormatConversion -> hr=0x%08x",
+                             (unsigned)D3DERR_NOTAVAILABLE);
         return D3DERR_NOTAVAILABLE;
     }
 
     HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT adapter, D3DDEVTYPE,
                                              D3DCAPS9* pCaps) override {
         if (!pCaps) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("GetDeviceCaps adapter=%u", adapter);
         D9CCaps cc{};
         HRESULT hr = hr32(dxmt9c_factory_get_caps(f_, adapter, &cc));
-        if (SUCCEEDED(hr)) fillD3DCaps9(cc, pCaps);
+        if (SUCCEEDED(hr)) {
+            fillD3DCaps9(cc, pCaps);
+            dxmt9FactoryDebugLog("GetDeviceCaps -> vs=0x%08x ps=0x%08x maxTex=%ux%u maxRT=%u maxLights=%u maxStreams=%u maxAniso=%u intervals=0x%x devCaps=0x%x rasterCaps=0x%x texCaps=0x%x textureOpCaps=0x%x",
+                                 (unsigned)pCaps->VertexShaderVersion,
+                                 (unsigned)pCaps->PixelShaderVersion,
+                                 (unsigned)pCaps->MaxTextureWidth,
+                                 (unsigned)pCaps->MaxTextureHeight,
+                                 (unsigned)pCaps->NumSimultaneousRTs,
+                                 (unsigned)pCaps->MaxActiveLights,
+                                 (unsigned)pCaps->MaxStreams,
+                                 (unsigned)pCaps->MaxAnisotropy,
+                                 (unsigned)pCaps->PresentationIntervals,
+                                 (unsigned)pCaps->DevCaps,
+                                 (unsigned)pCaps->RasterCaps,
+                                 (unsigned)pCaps->TextureCaps,
+                                 (unsigned)pCaps->TextureOpCaps);
+        }
         return hr;
     }
 
     HMONITOR STDMETHODCALLTYPE GetAdapterMonitor(UINT adapter) override {
+        dxmt9FactoryDebugLog("GetAdapterMonitor adapter=%u", adapter);
         return (HMONITOR)(uintptr_t)dxmt9c_factory_get_adapter_monitor(f_,
                                                                          adapter);
     }
@@ -284,12 +394,21 @@ public:
                                             D3DPRESENT_PARAMETERS* pPP,
                                             IDirect3DDevice9** ppDevice) override {
         if (!pPP || !ppDevice) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("CreateDevice adapter=%u hwnd=%p behavior=0x%x windowed=%u size=%ux%u fmt=%u",
+                             adapter, hwnd, (unsigned)behaviorFlags,
+                             pPP->Windowed ? 1u : 0u,
+                             (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
+                             (unsigned)pPP->BackBufferFormat);
         D9CPresentParams cpp = toCpp(*pPP);
         cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
         D9CDevice* dev = dxmt9c_factory_create_device(f_, adapter, &cpp,
                                                        behaviorFlags, nullptr);
-        if (!dev) return D3DERR_INVALIDCALL;
+        if (!dev) {
+            dxmt9FactoryDebugLog("CreateDevice -> failed");
+            return D3DERR_INVALIDCALL;
+        }
         *ppDevice = CreateDeviceImpl(dev, this, adapter, behaviorFlags, hwnd);
+        dxmt9FactoryDebugLog("CreateDevice -> device=%p", *ppDevice);
         return S_OK;
     }
 
@@ -297,6 +416,7 @@ public:
 
     UINT STDMETHODCALLTYPE GetAdapterModeCountEx(UINT adapter,
                                                   const D3DDISPLAYMODEFILTER*) override {
+        dxmt9FactoryDebugLog("GetAdapterModeCountEx adapter=%u", adapter);
         return dxmt9c_factory_get_adapter_mode_count(f_, adapter,
                                                       (uint32_t)D3DFMT_X8R8G8B8);
     }
@@ -306,6 +426,7 @@ public:
                                                   UINT mode,
                                                   D3DDISPLAYMODEEX* pMode) override {
         if (!pMode) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("EnumAdapterModesEx adapter=%u mode=%u", adapter, mode);
         uint32_t fmt = pFilter ? (uint32_t)pFilter->Format : (uint32_t)D3DFMT_X8R8G8B8;
         uint32_t w, h, refresh, f;
         HRESULT hr = hr32(dxmt9c_factory_enum_adapter_modes(
@@ -324,6 +445,7 @@ public:
                                                        D3DDISPLAYMODEEX* pMode,
                                                        D3DDISPLAYROTATION* pRot) override {
         uint32_t w, h, refresh, f;
+        dxmt9FactoryDebugLog("GetAdapterDisplayModeEx adapter=%u", adapter);
         HRESULT hr = hr32(dxmt9c_factory_get_adapter_display_mode(
             f_, adapter, &w, &h, &refresh, &f));
         if (FAILED(hr)) return hr;
@@ -334,6 +456,9 @@ public:
             pMode->RefreshRate      = refresh;
             pMode->Format           = (D3DFORMAT)f;
             pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
+            dxmt9FactoryDebugLog("GetAdapterDisplayModeEx -> %ux%u refresh=%u fmt=%u",
+                                 (unsigned)pMode->Width, (unsigned)pMode->Height,
+                                 (unsigned)pMode->RefreshRate, (unsigned)pMode->Format);
         }
         if (pRot) *pRot = D3DDISPLAYROTATION_IDENTITY;
         return S_OK;
@@ -345,6 +470,11 @@ public:
                                               D3DDISPLAYMODEEX* pFsMode,
                                               IDirect3DDevice9Ex** ppDevice) override {
         if (!pPP || !ppDevice) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("CreateDeviceEx adapter=%u hwnd=%p behavior=0x%x windowed=%u size=%ux%u fmt=%u fsMode=%d",
+                             adapter, hwnd, (unsigned)behaviorFlags,
+                             pPP->Windowed ? 1u : 0u,
+                             (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
+                             (unsigned)pPP->BackBufferFormat, pFsMode ? 1 : 0);
         D9CPresentParams cpp = toCpp(*pPP);
         cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
         D9CDisplayModeEx cdme{};
@@ -352,13 +482,18 @@ public:
         D9CDevice* dev = dxmt9c_factory_create_device(f_, adapter, &cpp,
                                                        behaviorFlags,
                                                        pFsMode ? &cdme : nullptr);
-        if (!dev) return D3DERR_INVALIDCALL;
+        if (!dev) {
+            dxmt9FactoryDebugLog("CreateDeviceEx -> failed");
+            return D3DERR_INVALIDCALL;
+        }
         *ppDevice = CreateDeviceImpl(dev, this, adapter, behaviorFlags, hwnd);
+        dxmt9FactoryDebugLog("CreateDeviceEx -> device=%p", *ppDevice);
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetAdapterLUID(UINT adapter, LUID* pLuid) override {
         if (!pLuid) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("GetAdapterLUID adapter=%u", adapter);
         uint32_t lo; int32_t hi;
         HRESULT hr = hr32(dxmt9c_factory_get_adapter_luid(f_, adapter, &lo, &hi));
         if (SUCCEEDED(hr)) { pLuid->LowPart = lo; pLuid->HighPart = hi; }
@@ -369,10 +504,14 @@ public:
 /* ── factory constructors (called from entry.cpp) ────────────────────────── */
 
 IDirect3D9* CreateFactoryImpl(D9CFactory* f) {
-    return new D3D9FactoryImpl(f);
+    auto* impl = new D3D9FactoryImpl(f);
+    dxmt9FactoryDebugLog("CreateFactoryImpl impl=%p", impl);
+    return impl;
 }
 IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f) {
-    return new D3D9FactoryImpl(f);
+    auto* impl = new D3D9FactoryImpl(f);
+    dxmt9FactoryDebugLog("CreateFactoryExImpl impl=%p", impl);
+    return impl;
 }
 
 /* ── fillD3DCaps9 exported for device.cpp ────────────────────────────────── */

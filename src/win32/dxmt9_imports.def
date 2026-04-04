@@ -125,6 +125,7 @@ EXPORTS
   dxmt9c_buffer_release
   dxmt9c_buffer_lock
   dxmt9c_buffer_unlock
+  dxmt9c_buffer_get_desc
   ; Surface
   dxmt9c_surface_addref
   dxmt9c_surface_release

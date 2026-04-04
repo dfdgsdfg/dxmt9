@@ -4,13 +4,75 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d9.h>
+#include <atomic>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include "dxmt9/device_c.h"
 
 /* declared in factory.cpp */
 void FillD3DCaps9(const D9CCaps& src, D3DCAPS9* out);
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
+
+static bool dxmt9DeviceDebugEnabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("DXMT9_DEBUG");
+        return env && env[0] && env[0] != '0';
+    }();
+    return enabled;
+}
+
+static HANDLE dxmt9DeviceDebugFile() {
+    static HANDLE handle = []() -> HANDLE {
+        const char* path = std::getenv("DXMT9_DEBUG_LOG");
+        if (!path || !path[0]) return INVALID_HANDLE_VALUE;
+        return CreateFileA(path,
+                           FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr,
+                           OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    }();
+    return handle;
+}
+
+static void dxmt9DeviceDebugLog(const char* fmt, ...) {
+    if (!dxmt9DeviceDebugEnabled()) return;
+    char message[2048];
+    std::memcpy(message, "[dxmt9-device] ", 15);
+    va_list args;
+    va_start(args, fmt);
+    const int body = std::vsnprintf(message + 15, sizeof(message) - 17, fmt, args);
+    va_end(args);
+    size_t len = 15;
+    if (body > 0) {
+        len += static_cast<size_t>(body);
+        if (len > sizeof(message) - 2) len = sizeof(message) - 2;
+    }
+    message[len++] = '\n';
+    message[len] = '\0';
+
+    if (HANDLE file = dxmt9DeviceDebugFile(); file != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(file, message, static_cast<DWORD>(len), &written, nullptr);
+        return;
+    }
+
+    std::fputs(message, stderr);
+    std::fflush(stderr);
+}
+
+static bool dxmt9LeakStateBlocksEnabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("DXMT9_LEAK_STATEBLOCKS");
+        return env && env[0] && env[0] != '0';
+    }();
+    return enabled;
+}
 
 static D9CRect toR(const RECT& r) {
     D9CRect c; c.left = r.left; c.top = r.top;
@@ -29,11 +91,19 @@ static D9CRect toR(const RECT& r) {
 class D3D9SurfaceImpl final : public IDirect3DSurface9 {
     ULONG               refs_ = 1;
     D9CSurface*         s_;
-    IDirect3DBaseTexture9* owner_; /* borrowed – no extra ref on owner */
+    IDirect3DDevice9*   device_;
+    IUnknown*           container_;
 public:
-    D3D9SurfaceImpl(D9CSurface* s, IDirect3DBaseTexture9* owner)
-        : s_(s), owner_(owner) {}
-    ~D3D9SurfaceImpl() { dxmt9c_surface_release(s_); }
+    D3D9SurfaceImpl(D9CSurface* s, IDirect3DDevice9* device, IUnknown* container)
+        : s_(s), device_(device), container_(container) {
+        if (device_) device_->AddRef();
+        if (container_) container_->AddRef();
+    }
+    ~D3D9SurfaceImpl() {
+        dxmt9c_surface_release(s_);
+        if (container_) container_->Release();
+        if (device_) device_->Release();
+    }
 
     D9CSurface* raw() const { return s_; }
 
@@ -52,19 +122,36 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
         if (!pp) return D3DERR_INVALIDCALL;
-        *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            dxmt9DeviceDebugLog("surface_get_device this=%p -> invalid (device=null)", this);
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        dxmt9DeviceDebugLog("surface_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
+        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
+        dxmt9DeviceDebugLog("surface_set_private_data surface=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
+        dxmt9DeviceDebugLog("surface_get_private_data surface=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
+        dxmt9DeviceDebugLog("surface_free_private_data surface=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() override {}
     D3DRESOURCETYPE STDMETHODCALLTYPE GetType() override { return D3DRTYPE_SURFACE; }
     HRESULT STDMETHODCALLTYPE GetContainer(REFIID riid, void** ppv) override {
         if (!ppv) return E_POINTER;
-        if (!owner_) { *ppv = nullptr; return D3DERR_INVALIDCALL; }
-        return owner_->QueryInterface(riid, ppv);
+        if (!container_) { *ppv = nullptr; return D3DERR_INVALIDCALL; }
+        return container_->QueryInterface(riid, ppv);
     }
     HRESULT STDMETHODCALLTYPE GetDesc(D3DSURFACE_DESC* pD) override {
         if (!pD) return D3DERR_INVALIDCALL;
@@ -76,24 +163,52 @@ public:
             pD->MultiSampleType    = (D3DMULTISAMPLE_TYPE)sd.multiSampleType;
             pD->MultiSampleQuality = sd.multiSampleQuality;
             pD->Width  = sd.width;             pD->Height = sd.height;
+            dxmt9DeviceDebugLog("surface_get_desc this=%p fmt=%u usage=0x%x pool=%u msaa=%u/%u size=%ux%u",
+                                this,
+                                (unsigned)pD->Format,
+                                (unsigned)pD->Usage,
+                                (unsigned)pD->Pool,
+                                (unsigned)pD->MultiSampleType,
+                                (unsigned)pD->MultiSampleQuality,
+                                (unsigned)pD->Width,
+                                (unsigned)pD->Height);
+        } else {
+            dxmt9DeviceDebugLog("surface_get_desc this=%p -> hr=0x%08x", this, (unsigned)hr);
         }
         return hr;
     }
     HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT* pLR, const RECT* pRect,
                                         DWORD flags) override {
         if (!pLR) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("surface_lock_rect surface=%p flags=0x%x rect=%s",
+                            this,
+                            (unsigned)flags,
+                            pRect ? "<custom>" : "<full>");
         D9CLockedRect lr{}; D9CRect cr{};
         if (pRect) cr = toR(*pRect);
         HRESULT hr = hr32(dxmt9c_surface_lock_rect(s_, &lr,
                           pRect ? &cr : nullptr, flags));
-        if (SUCCEEDED(hr)) { pLR->Pitch = lr.pitch; pLR->pBits = lr.bits; }
+        if (SUCCEEDED(hr)) {
+            pLR->Pitch = lr.pitch; pLR->pBits = lr.bits;
+            dxmt9DeviceDebugLog("surface_lock_rect -> pitch=%ld bits=%p",
+                                (long)pLR->Pitch, pLR->pBits);
+        } else {
+            dxmt9DeviceDebugLog("surface_lock_rect -> hr=0x%08x", (unsigned)hr);
+        }
         return hr;
     }
     HRESULT STDMETHODCALLTYPE UnlockRect() override {
+        dxmt9DeviceDebugLog("surface_unlock_rect surface=%p", this);
         return hr32(dxmt9c_surface_unlock_rect(s_));
     }
-    HRESULT STDMETHODCALLTYPE GetDC(HDC*) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE ReleaseDC(HDC) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetDC(HDC* phdc) override {
+        dxmt9DeviceDebugLog("surface_get_dc surface=%p phdc=%p", this, phdc);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE ReleaseDC(HDC hdc) override {
+        dxmt9DeviceDebugLog("surface_release_dc surface=%p hdc=%p", this, hdc);
+        return E_NOTIMPL;
+    }
 };
 
 /* ── Texture2D ────────────────────────────────────────────────────────────── */
@@ -101,9 +216,15 @@ public:
 class D3D9TextureImpl final : public IDirect3DTexture9 {
     ULONG       refs_ = 1;
     D9CTexture* t_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9TextureImpl(D9CTexture* t) : t_(t) {}
-    ~D3D9TextureImpl() { dxmt9c_texture_release(t_); }
+    D3D9TextureImpl(D9CTexture* t, IDirect3DDevice9* device) : t_(t), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9TextureImpl() {
+        dxmt9c_texture_release(t_);
+        if (device_) device_->Release();
+    }
 
     D9CTexture* raw() const { return t_; }
 
@@ -122,11 +243,29 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            dxmt9DeviceDebugLog("texture_get_device this=%p -> invalid (device=null)", this);
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        dxmt9DeviceDebugLog("texture_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
+        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
+        dxmt9DeviceDebugLog("texture_set_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
+        dxmt9DeviceDebugLog("texture_get_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
+        dxmt9DeviceDebugLog("texture_free_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() override {}
@@ -157,9 +296,14 @@ public:
     HRESULT STDMETHODCALLTYPE GetSurfaceLevel(UINT level,
                                                IDirect3DSurface9** ppS) override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u", this, level);
         D9CSurface* s = dxmt9c_texture_get_surface_level(t_, level);
-        if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, this);
+        if (!s) {
+            dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u -> invalid", this, level);
+            return D3DERR_INVALIDCALL;
+        }
+        *ppS = new D3D9SurfaceImpl(s, device_, static_cast<IDirect3DBaseTexture9*>(this));
+        dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u -> surface=%p", this, level, *ppS);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE LockRect(UINT level, D3DLOCKED_RECT* pLR,
@@ -169,7 +313,10 @@ public:
         if (pRect) cr = toR(*pRect);
         HRESULT hr = hr32(dxmt9c_texture_lock_rect(t_, level, &lr,
                           pRect ? &cr : nullptr, flags));
-        if (SUCCEEDED(hr)) { pLR->Pitch = lr.pitch; pLR->pBits = lr.bits; }
+        if (SUCCEEDED(hr)) {
+            pLR->Pitch = lr.pitch;
+            pLR->pBits = lr.bits;
+        }
         return hr;
     }
     HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) override {
@@ -183,9 +330,15 @@ public:
 class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
     ULONG       refs_ = 1;
     D9CTexture* t_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9CubeTextureImpl(D9CTexture* t) : t_(t) {}
-    ~D3D9CubeTextureImpl() { dxmt9c_texture_release(t_); }
+    D3D9CubeTextureImpl(D9CTexture* t, IDirect3DDevice9* device) : t_(t), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9CubeTextureImpl() {
+        dxmt9c_texture_release(t_);
+        if (device_) device_->Release();
+    }
 
     D9CTexture* raw() const { return t_; }
 
@@ -204,11 +357,29 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            dxmt9DeviceDebugLog("swapchain_get_device this=%p -> invalid (device=null)", this);
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        dxmt9DeviceDebugLog("swapchain_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
+        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
+        dxmt9DeviceDebugLog("cube_set_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
+        dxmt9DeviceDebugLog("cube_get_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
+        dxmt9DeviceDebugLog("cube_free_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() override {}
@@ -239,10 +410,18 @@ public:
     HRESULT STDMETHODCALLTYPE GetCubeMapSurface(D3DCUBEMAP_FACES face, UINT level,
                                                  IDirect3DSurface9** ppS) override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u",
+                            this, static_cast<unsigned>(face), level);
         UINT idx = (UINT)face * dxmt9c_texture_get_level_count(t_) + level;
         D9CSurface* s = dxmt9c_texture_get_surface_level(t_, idx);
-        if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, this);
+        if (!s) {
+            dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u -> invalid",
+                                this, static_cast<unsigned>(face), level);
+            return D3DERR_INVALIDCALL;
+        }
+        *ppS = new D3D9SurfaceImpl(s, device_, static_cast<IDirect3DBaseTexture9*>(this));
+        dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u -> surface=%p",
+                            this, static_cast<unsigned>(face), level, *ppS);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE LockRect(D3DCUBEMAP_FACES face, UINT level,
@@ -269,9 +448,15 @@ public:
 class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
     ULONG       refs_ = 1;
     D9CTexture* t_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9VolumeTextureImpl(D9CTexture* t) : t_(t) {}
-    ~D3D9VolumeTextureImpl() { dxmt9c_texture_release(t_); }
+    D3D9VolumeTextureImpl(D9CTexture* t, IDirect3DDevice9* device) : t_(t), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9VolumeTextureImpl() {
+        dxmt9c_texture_release(t_);
+        if (device_) device_->Release();
+    }
 
     D9CTexture* raw() const { return t_; }
 
@@ -290,11 +475,29 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            dxmt9DeviceDebugLog("stateblock_get_device this=%p -> invalid (device=null)", this);
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        dxmt9DeviceDebugLog("stateblock_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
+        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
+        dxmt9DeviceDebugLog("volume_set_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
+        dxmt9DeviceDebugLog("volume_get_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
+        dxmt9DeviceDebugLog("volume_free_private_data texture=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() override {}
@@ -323,9 +526,15 @@ public:
 class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
     ULONG      refs_ = 1;
     D9CBuffer* b_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9VertexBufferImpl(D9CBuffer* b) : b_(b) {}
-    ~D3D9VertexBufferImpl() { dxmt9c_buffer_release(b_); }
+    D3D9VertexBufferImpl(D9CBuffer* b, IDirect3DDevice9* device) : b_(b), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9VertexBufferImpl() {
+        dxmt9c_buffer_release(b_);
+        if (device_) device_->Release();
+    }
 
     D9CBuffer* raw() const { return b_; }
 
@@ -343,11 +552,27 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
+        dxmt9DeviceDebugLog("vb_set_private_data vb=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
+        dxmt9DeviceDebugLog("vb_get_private_data vb=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
+        dxmt9DeviceDebugLog("vb_free_private_data vb=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() override {}
@@ -355,8 +580,27 @@ public:
     HRESULT STDMETHODCALLTYPE Lock(UINT off, UINT size, void** pp, DWORD flags) override {
         return hr32(dxmt9c_buffer_lock(b_, off, size, pp, flags));
     }
-    HRESULT STDMETHODCALLTYPE Unlock() override { return hr32(dxmt9c_buffer_unlock(b_)); }
-    HRESULT STDMETHODCALLTYPE GetDesc(D3DVERTEXBUFFER_DESC*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Unlock() override {
+        return hr32(dxmt9c_buffer_unlock(b_));
+    }
+    HRESULT STDMETHODCALLTYPE GetDesc(D3DVERTEXBUFFER_DESC* pDesc) override {
+        if (!pDesc) return D3DERR_INVALIDCALL;
+        D9CBufferDesc desc{};
+        const HRESULT hr = hr32(dxmt9c_buffer_get_desc(b_, &desc));
+        if (FAILED(hr)) {
+            dxmt9DeviceDebugLog("vb_get_desc vb=%p -> hr=0x%08x", this, (unsigned)hr);
+            return hr;
+        }
+        pDesc->Format = D3DFMT_VERTEXDATA;
+        pDesc->Type = D3DRTYPE_VERTEXBUFFER;
+        pDesc->Usage = desc.usage;
+        pDesc->Pool = static_cast<D3DPOOL>(desc.pool);
+        pDesc->Size = desc.size;
+        pDesc->FVF = desc.fvf;
+        dxmt9DeviceDebugLog("vb_get_desc vb=%p -> size=%u usage=0x%x pool=%u fvf=0x%x",
+                            this, desc.size, desc.usage, desc.pool, desc.fvf);
+        return S_OK;
+    }
 };
 
 /* ── IndexBuffer ──────────────────────────────────────────────────────────── */
@@ -364,9 +608,15 @@ public:
 class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
     ULONG      refs_ = 1;
     D9CBuffer* b_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9IndexBufferImpl(D9CBuffer* b) : b_(b) {}
-    ~D3D9IndexBufferImpl() { dxmt9c_buffer_release(b_); }
+    D3D9IndexBufferImpl(D9CBuffer* b, IDirect3DDevice9* device) : b_(b), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9IndexBufferImpl() {
+        dxmt9c_buffer_release(b_);
+        if (device_) device_->Release();
+    }
 
     D9CBuffer* raw() const { return b_; }
 
@@ -384,11 +634,27 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
+        dxmt9DeviceDebugLog("ib_set_private_data ib=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
+        dxmt9DeviceDebugLog("ib_get_private_data ib=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
+        dxmt9DeviceDebugLog("ib_free_private_data ib=%p -> E_NOTIMPL", this);
+        return E_NOTIMPL;
+    }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() override {}
@@ -396,8 +662,26 @@ public:
     HRESULT STDMETHODCALLTYPE Lock(UINT off, UINT size, void** pp, DWORD flags) override {
         return hr32(dxmt9c_buffer_lock(b_, off, size, pp, flags));
     }
-    HRESULT STDMETHODCALLTYPE Unlock() override { return hr32(dxmt9c_buffer_unlock(b_)); }
-    HRESULT STDMETHODCALLTYPE GetDesc(D3DINDEXBUFFER_DESC*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE Unlock() override {
+        return hr32(dxmt9c_buffer_unlock(b_));
+    }
+    HRESULT STDMETHODCALLTYPE GetDesc(D3DINDEXBUFFER_DESC* pDesc) override {
+        if (!pDesc) return D3DERR_INVALIDCALL;
+        D9CBufferDesc desc{};
+        const HRESULT hr = hr32(dxmt9c_buffer_get_desc(b_, &desc));
+        if (FAILED(hr)) {
+            dxmt9DeviceDebugLog("ib_get_desc ib=%p -> hr=0x%08x", this, (unsigned)hr);
+            return hr;
+        }
+        pDesc->Format = static_cast<D3DFORMAT>(desc.format);
+        pDesc->Type = D3DRTYPE_INDEXBUFFER;
+        pDesc->Usage = desc.usage;
+        pDesc->Pool = static_cast<D3DPOOL>(desc.pool);
+        pDesc->Size = desc.size;
+        dxmt9DeviceDebugLog("ib_get_desc ib=%p -> size=%u usage=0x%x pool=%u fmt=%u",
+                            this, desc.size, desc.usage, desc.pool, desc.format);
+        return S_OK;
+    }
 };
 
 /* ── VertexShader ─────────────────────────────────────────────────────────── */
@@ -405,9 +689,15 @@ public:
 class D3D9VertexShaderImpl final : public IDirect3DVertexShader9 {
     ULONG      refs_ = 1;
     D9CShader* s_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9VertexShaderImpl(D9CShader* s) : s_(s) {}
-    ~D3D9VertexShaderImpl() { dxmt9c_shader_release(s_); }
+    D3D9VertexShaderImpl(D9CShader* s, IDirect3DDevice9* device) : s_(s), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9VertexShaderImpl() {
+        dxmt9c_shader_release(s_);
+        if (device_) device_->Release();
+    }
 
     D9CShader* raw() const { return s_; }
 
@@ -424,7 +714,14 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetFunction(void* pData, UINT* pSize) override {
         if (!pSize) return D3DERR_INVALIDCALL;
@@ -437,9 +734,15 @@ public:
 class D3D9PixelShaderImpl final : public IDirect3DPixelShader9 {
     ULONG      refs_ = 1;
     D9CShader* s_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9PixelShaderImpl(D9CShader* s) : s_(s) {}
-    ~D3D9PixelShaderImpl() { dxmt9c_shader_release(s_); }
+    D3D9PixelShaderImpl(D9CShader* s, IDirect3DDevice9* device) : s_(s), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9PixelShaderImpl() {
+        dxmt9c_shader_release(s_);
+        if (device_) device_->Release();
+    }
 
     D9CShader* raw() const { return s_; }
 
@@ -456,7 +759,14 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetFunction(void* pData, UINT* pSize) override {
         if (!pSize) return D3DERR_INVALIDCALL;
@@ -469,9 +779,15 @@ public:
 class D3D9VertexDeclImpl final : public IDirect3DVertexDeclaration9 {
     ULONG          refs_ = 1;
     D9CVertexDecl* d_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9VertexDeclImpl(D9CVertexDecl* d) : d_(d) {}
-    ~D3D9VertexDeclImpl() { dxmt9c_vdecl_release(d_); }
+    D3D9VertexDeclImpl(D9CVertexDecl* d, IDirect3DDevice9* device) : d_(d), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9VertexDeclImpl() {
+        dxmt9c_vdecl_release(d_);
+        if (device_) device_->Release();
+    }
 
     D9CVertexDecl* raw() const { return d_; }
 
@@ -488,7 +804,14 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetDeclaration(D3DVERTEXELEMENT9* pE,
                                               UINT* pCount) override {
@@ -511,9 +834,15 @@ public:
 class D3D9QueryImpl final : public IDirect3DQuery9 {
     ULONG    refs_ = 1;
     D9CQuery* q_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9QueryImpl(D9CQuery* q) : q_(q) {}
-    ~D3D9QueryImpl() { dxmt9c_query_release(q_); }
+    D3D9QueryImpl(D9CQuery* q, IDirect3DDevice9* device) : q_(q), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9QueryImpl() {
+        dxmt9c_query_release(q_);
+        if (device_) device_->Release();
+    }
 
     ULONG STDMETHODCALLTYPE AddRef()  override { return ++refs_; }
     ULONG STDMETHODCALLTYPE Release() override {
@@ -528,7 +857,14 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
     }
     D3DQUERYTYPE STDMETHODCALLTYPE GetType()     override { return (D3DQUERYTYPE)dxmt9c_query_get_type(q_); }
     DWORD        STDMETHODCALLTYPE GetDataSize()  override { return dxmt9c_query_get_data_size(q_); }
@@ -541,15 +877,40 @@ public:
 /* ── StateBlock ───────────────────────────────────────────────────────────── */
 
 class D3D9StateBlockImpl final : public IDirect3DStateBlock9 {
-    ULONG          refs_ = 1;
+    std::atomic<ULONG> refs_{1};
     D9CStateBlock* sb_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9StateBlockImpl(D9CStateBlock* sb) : sb_(sb) {}
-    ~D3D9StateBlockImpl() { dxmt9c_stateblock_release(sb_); }
+    D3D9StateBlockImpl(D9CStateBlock* sb, IDirect3DDevice9* device) : sb_(sb), device_(device) {
+        if (device_) device_->AddRef();
+        dxmt9DeviceDebugLog("stateblock_ctor this=%p sb=%p device=%p refs=%u",
+                            this, static_cast<void*>(sb_), static_cast<void*>(device_),
+                            (unsigned)refs_.load());
+    }
+    ~D3D9StateBlockImpl() {
+        dxmt9DeviceDebugLog("stateblock_dtor this=%p sb=%p device=%p leak=%u",
+                            this, static_cast<void*>(sb_), static_cast<void*>(device_),
+                            dxmt9LeakStateBlocksEnabled() ? 1u : 0u);
+        if (sb_ && !dxmt9LeakStateBlocksEnabled()) {
+            dxmt9c_stateblock_release(sb_);
+        }
+        sb_ = nullptr;
+        if (device_) device_->Release();
+        device_ = nullptr;
+    }
 
-    ULONG STDMETHODCALLTYPE AddRef()  override { return ++refs_; }
+    ULONG STDMETHODCALLTYPE AddRef()  override {
+        const ULONG refs = refs_.fetch_add(1) + 1;
+        dxmt9DeviceDebugLog("stateblock_addref this=%p sb=%p refs=%u",
+                            this, static_cast<void*>(sb_), (unsigned)refs);
+        return refs;
+    }
     ULONG STDMETHODCALLTYPE Release() override {
-        ULONG r = --refs_; if (!r) delete this; return r;
+        const ULONG refs = refs_.fetch_sub(1) - 1;
+        dxmt9DeviceDebugLog("stateblock_release this=%p sb=%p refs=%u",
+                            this, static_cast<void*>(sb_), (unsigned)refs);
+        if (!refs) delete this;
+        return refs;
     }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
         if (!ppv) return E_POINTER;
@@ -560,10 +921,27 @@ public:
         *ppv = nullptr; return E_NOINTERFACE;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE Capture() override { return hr32(dxmt9c_stateblock_capture(sb_)); }
-    HRESULT STDMETHODCALLTYPE Apply()   override { return hr32(dxmt9c_stateblock_apply(sb_)); }
+    HRESULT STDMETHODCALLTYPE Capture() override {
+        dxmt9DeviceDebugLog("stateblock_capture sb=%p", this);
+        const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));
+        dxmt9DeviceDebugLog("stateblock_capture -> hr=0x%08x", (unsigned)hr);
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE Apply() override {
+        dxmt9DeviceDebugLog("stateblock_apply sb=%p", this);
+        const HRESULT hr = hr32(dxmt9c_stateblock_apply(sb_));
+        dxmt9DeviceDebugLog("stateblock_apply -> hr=0x%08x", (unsigned)hr);
+        return hr;
+    }
 };
 
 /* ── SwapChain ────────────────────────────────────────────────────────────── */
@@ -571,9 +949,15 @@ public:
 class D3D9SwapChainImpl final : public IDirect3DSwapChain9 {
     ULONG        refs_ = 1;
     D9CSwapChain* sc_;
+    IDirect3DDevice9* device_;
 public:
-    explicit D3D9SwapChainImpl(D9CSwapChain* sc) : sc_(sc) {}
-    ~D3D9SwapChainImpl() { dxmt9c_swapchain_release(sc_); }
+    D3D9SwapChainImpl(D9CSwapChain* sc, IDirect3DDevice9* device) : sc_(sc), device_(device) {
+        if (device_) device_->AddRef();
+    }
+    ~D3D9SwapChainImpl() {
+        dxmt9c_swapchain_release(sc_);
+        if (device_) device_->Release();
+    }
 
     ULONG STDMETHODCALLTYPE AddRef()  override { return ++refs_; }
     ULONG STDMETHODCALLTYPE Release() override {
@@ -590,6 +974,11 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
                                        HWND wnd, const RGNDATA* dirty,
                                        DWORD flags) override {
+        dxmt9DeviceDebugLog("swapchain_present sc=%p wnd=%p flags=0x%x src=%s dst=%s dirty=%p",
+                            this, wnd, (unsigned)flags,
+                            src ? "<custom>" : "<full>",
+                            dst ? "<custom>" : "<full>",
+                            dirty);
         D9CRect cs{}, cd{};
         if (src) cs = toR(*src); if (dst) cd = toR(*dst);
         return hr32(dxmt9c_swapchain_present(sc_,
@@ -602,19 +991,41 @@ public:
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT idx, D3DBACKBUFFER_TYPE,
                                              IDirect3DSurface9** ppS) override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("swapchain_get_back_buffer sc=%p idx=%u", this, idx);
         D9CSurface* s = dxmt9c_swapchain_get_back_buffer(sc_, idx, 0);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, nullptr);
+        *ppS = new D3D9SurfaceImpl(s, device_, static_cast<IDirect3DSwapChain9*>(this));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetRasterStatus(D3DRASTER_STATUS* p) override {
         if (p) memset(p, 0, sizeof(*p)); return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetDisplayMode(D3DDISPLAYMODE* p) override {
-        if (p) memset(p, 0, sizeof(*p)); return S_OK;
+        if (!p) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("swapchain_get_display_mode sc=%p", this);
+        D9CPresentParams cpp{};
+        const HRESULT hr = hr32(dxmt9c_swapchain_get_present_params(sc_, &cpp));
+        if (FAILED(hr)) {
+            dxmt9DeviceDebugLog("swapchain_get_display_mode -> hr=0x%08x", (unsigned)hr);
+            return hr;
+        }
+        p->Width = cpp.backBufferWidth;
+        p->Height = cpp.backBufferHeight;
+        p->RefreshRate = cpp.fullScreenRefreshRateHz;
+        p->Format = static_cast<D3DFORMAT>(cpp.backBufferFormat);
+        dxmt9DeviceDebugLog("swapchain_get_display_mode -> %ux%u fmt=%u hz=%u",
+                            p->Width, p->Height, (unsigned)p->Format, p->RefreshRate);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) override {
-        if (!pp) return D3DERR_INVALIDCALL; *pp = nullptr; return D3DERR_INVALIDCALL;
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPresentParameters(D3DPRESENT_PARAMETERS* pPP) override {
         if (!pPP) return D3DERR_INVALIDCALL;
@@ -707,7 +1118,14 @@ public:
                    UINT adapter, DWORD behaviorFlags, HWND window)
         : dev_(dev), factory_(factory)
         , adapter_(adapter), behaviorFlags_(behaviorFlags)
-        , creationWindow_(window) {}
+        , creationWindow_(window) {
+        for (UINT& freq : streamFreq_) {
+            freq = 1;
+        }
+        dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u behavior=0x%x window=%p",
+                            this, static_cast<void*>(dev_), static_cast<void*>(factory_),
+                            adapter_, (unsigned)behaviorFlags_, window);
+    }
 
     ~D3D9DeviceImpl() {
         releaseAllBound();
@@ -725,7 +1143,10 @@ public:
         if (IsEqualGUID(riid, IID_IUnknown)          ||
             IsEqualGUID(riid, IID_IDirect3DDevice9)  ||
             IsEqualGUID(riid, IID_IDirect3DDevice9Ex)) {
-            *ppv = this; AddRef(); return S_OK;
+            *ppv = this;
+            dxmt9DeviceDebugLog("device_query_interface this=%p -> out=%p", this, *ppv);
+            AddRef();
+            return S_OK;
         }
         *ppv = nullptr; return E_NOINTERFACE;
     }
@@ -733,15 +1154,25 @@ public:
     /* ── device info ── */
 
     HRESULT STDMETHODCALLTYPE TestCooperativeLevel() override {
-        return hr32(dxmt9c_device_test_cooperative_level(dev_));
+        dxmt9DeviceDebugLog("device_test_cooperative_level device=%p", this);
+        const HRESULT hr = hr32(dxmt9c_device_test_cooperative_level(dev_));
+        dxmt9DeviceDebugLog("device_test_cooperative_level -> hr=0x%08x", (unsigned)hr);
+        return hr;
     }
-    UINT STDMETHODCALLTYPE GetAvailableTextureMem() override { return 0x80000000u; }
+    UINT STDMETHODCALLTYPE GetAvailableTextureMem() override {
+        dxmt9DeviceDebugLog("device_get_available_texture_mem device=%p", this);
+        const UINT value = 0x80000000u;
+        dxmt9DeviceDebugLog("device_get_available_texture_mem -> %u (0x%x)",
+                            value, (unsigned)value);
+        return value;
+    }
     HRESULT STDMETHODCALLTYPE EvictManagedResources() override { return S_OK; }
 
     HRESULT STDMETHODCALLTYPE GetDirect3D(IDirect3D9** ppD3D) override {
         if (!ppD3D) return D3DERR_INVALIDCALL;
         factory_->AddRef();
         *ppD3D = static_cast<IDirect3D9*>(factory_);
+        dxmt9DeviceDebugLog("device_get_direct3d this=%p -> factory=%p", this, static_cast<void*>(*ppD3D));
         return S_OK;
     }
 
@@ -749,12 +1180,49 @@ public:
         if (!pCaps) return D3DERR_INVALIDCALL;
         D9CCaps cc{};
         HRESULT hr = hr32(dxmt9c_device_get_caps(dev_, &cc));
-        if (SUCCEEDED(hr)) FillD3DCaps9(cc, pCaps);
+        if (SUCCEEDED(hr)) {
+            FillD3DCaps9(cc, pCaps);
+            dxmt9DeviceDebugLog("device_get_caps -> vs=0x%08x ps=0x%08x maxTex=%ux%u maxRT=%u maxLights=%u maxStreams=%u maxAniso=%u intervals=0x%x devCaps=0x%x rasterCaps=0x%x texCaps=0x%x textureOpCaps=0x%x",
+                                (unsigned)pCaps->VertexShaderVersion,
+                                (unsigned)pCaps->PixelShaderVersion,
+                                (unsigned)pCaps->MaxTextureWidth,
+                                (unsigned)pCaps->MaxTextureHeight,
+                                (unsigned)pCaps->NumSimultaneousRTs,
+                                (unsigned)pCaps->MaxActiveLights,
+                                (unsigned)pCaps->MaxStreams,
+                                (unsigned)pCaps->MaxAnisotropy,
+                                (unsigned)pCaps->PresentationIntervals,
+                                (unsigned)pCaps->DevCaps,
+                                (unsigned)pCaps->RasterCaps,
+                                (unsigned)pCaps->TextureCaps,
+                                (unsigned)pCaps->TextureOpCaps);
+        } else {
+            dxmt9DeviceDebugLog("device_get_caps -> hr=0x%08x", (unsigned)hr);
+        }
         return hr;
     }
 
-    HRESULT STDMETHODCALLTYPE GetDisplayMode(UINT /*sc*/, D3DDISPLAYMODE* pMode) override {
-        if (pMode) memset(pMode, 0, sizeof(*pMode)); return S_OK;
+    HRESULT STDMETHODCALLTYPE GetDisplayMode(UINT sc, D3DDISPLAYMODE* pMode) override {
+        if (!pMode) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_get_display_mode device=%p sc=%u", this, sc);
+        D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, sc);
+        if (!chain) {
+            return D3DERR_INVALIDCALL;
+        }
+        D9CPresentParams cpp{};
+        const HRESULT hr = hr32(dxmt9c_swapchain_get_present_params(chain, &cpp));
+        dxmt9c_swapchain_release(chain);
+        if (FAILED(hr)) {
+            dxmt9DeviceDebugLog("device_get_display_mode -> hr=0x%08x", (unsigned)hr);
+            return hr;
+        }
+        pMode->Width = cpp.backBufferWidth;
+        pMode->Height = cpp.backBufferHeight;
+        pMode->RefreshRate = cpp.fullScreenRefreshRateHz;
+        pMode->Format = static_cast<D3DFORMAT>(cpp.backBufferFormat);
+        dxmt9DeviceDebugLog("device_get_display_mode -> %ux%u fmt=%u hz=%u",
+                            pMode->Width, pMode->Height, (unsigned)pMode->Format, pMode->RefreshRate);
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetCreationParameters(
@@ -768,9 +1236,19 @@ public:
     }
 
     /* ── cursor (stubs) ── */
-    HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT, UINT, IDirect3DSurface9*) override { return S_OK; }
-    void    STDMETHODCALLTYPE SetCursorPosition(int, int, DWORD) override {}
-    BOOL    STDMETHODCALLTYPE ShowCursor(BOOL) override { return FALSE; }
+    HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT x, UINT y, IDirect3DSurface9* surface) override {
+        dxmt9DeviceDebugLog("device_set_cursor_properties device=%p x=%u y=%u surface=%p",
+                            this, x, y, surface);
+        return S_OK;
+    }
+    void    STDMETHODCALLTYPE SetCursorPosition(int x, int y, DWORD flags) override {
+        dxmt9DeviceDebugLog("device_set_cursor_position device=%p x=%d y=%d flags=0x%x",
+                            this, x, y, (unsigned)flags);
+    }
+    BOOL    STDMETHODCALLTYPE ShowCursor(BOOL show) override {
+        dxmt9DeviceDebugLog("device_show_cursor device=%p show=%u", this, (unsigned)show);
+        return FALSE;
+    }
 
     /* ── swap chains ── */
 
@@ -789,7 +1267,7 @@ public:
         cpp.presentationInterval = pPP->PresentationInterval;
         D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
         if (!sc) return D3DERR_INVALIDCALL;
-        *ppSC = new D3D9SwapChainImpl(sc);
+        *ppSC = new D3D9SwapChainImpl(sc, this);
         return S_OK;
     }
 
@@ -798,7 +1276,7 @@ public:
         if (!ppSC) return D3DERR_INVALIDCALL;
         D9CSwapChain* sc = dxmt9c_device_get_swap_chain(dev_, index);
         if (!sc) return D3DERR_INVALIDCALL;
-        *ppSC = new D3D9SwapChainImpl(sc);
+        *ppSC = new D3D9SwapChainImpl(sc, this);
         return S_OK;
     }
 
@@ -829,6 +1307,11 @@ public:
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
                                        HWND wnd, const RGNDATA* dirty) override {
+        dxmt9DeviceDebugLog("device_present device=%p wnd=%p src=%s dst=%s dirty=%p",
+                            this, wnd,
+                            src ? "<custom>" : "<full>",
+                            dst ? "<custom>" : "<full>",
+                            dirty);
         D9CRect cs{}, cd{};
         if (src) cs = toR(*src); if (dst) cd = toR(*dst);
         return hr32(dxmt9c_device_present(dev_,
@@ -840,20 +1323,31 @@ public:
                                              D3DBACKBUFFER_TYPE,
                                              IDirect3DSurface9** ppS) override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_get_back_buffer device=%p sc=%u idx=%u", this, sc, idx);
         D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, sc);
         if (!chain) return D3DERR_INVALIDCALL;
         D9CSurface* s = dxmt9c_swapchain_get_back_buffer(chain, idx, 0);
-        dxmt9c_swapchain_release(chain);
-        if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, nullptr);
+        if (!s) {
+            dxmt9c_swapchain_release(chain);
+            return D3DERR_INVALIDCALL;
+        }
+        auto* swapchain = new D3D9SwapChainImpl(chain, this);
+        *ppS = new D3D9SurfaceImpl(s, this, static_cast<IDirect3DSwapChain9*>(swapchain));
+        swapchain->Release();
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetRasterStatus(UINT, D3DRASTER_STATUS* p) override {
         if (p) memset(p, 0, sizeof(*p)); return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetDialogBoxMode(BOOL) override { return S_OK; }
-    void    STDMETHODCALLTYPE SetGammaRamp(UINT, DWORD, const D3DGAMMARAMP*) override {}
+    HRESULT STDMETHODCALLTYPE SetDialogBoxMode(BOOL enableDialogs) override {
+        dxmt9DeviceDebugLog("device_set_dialog_box_mode device=%p enable=%u", this, (unsigned)enableDialogs);
+        return S_OK;
+    }
+    void    STDMETHODCALLTYPE SetGammaRamp(UINT swapChain, DWORD flags, const D3DGAMMARAMP*) override {
+        dxmt9DeviceDebugLog("device_set_gamma_ramp device=%p swapChain=%u flags=0x%x",
+                            this, swapChain, (unsigned)flags);
+    }
     void    STDMETHODCALLTYPE GetGammaRamp(UINT, D3DGAMMARAMP* p) override {
         if (p) memset(p, 0, sizeof(*p));
     }
@@ -866,11 +1360,14 @@ public:
                                              IDirect3DTexture9** ppTex,
                                              HANDLE*) override {
         if (!ppTex) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_texture device=%p size=%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
+                            this, w, h, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
         D9CTexture* t = dxmt9c_device_create_texture(dev_, w, h, levels,
                                                       usage, (uint32_t)fmt,
                                                       (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
-        *ppTex = new D3D9TextureImpl(t);
+        *ppTex = new D3D9TextureImpl(t, this);
+        dxmt9DeviceDebugLog("device_create_texture -> texture=%p", *ppTex);
         return S_OK;
     }
 
@@ -880,11 +1377,14 @@ public:
                                                    IDirect3DVolumeTexture9** ppTex,
                                                    HANDLE*) override {
         if (!ppTex) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_volume_texture device=%p size=%ux%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
+                            this, w, h, d, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
         D9CTexture* t = dxmt9c_device_create_volume_texture(dev_, w, h, d, levels,
                                                              usage, (uint32_t)fmt,
                                                              (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
-        *ppTex = new D3D9VolumeTextureImpl(t);
+        *ppTex = new D3D9VolumeTextureImpl(t, this);
+        dxmt9DeviceDebugLog("device_create_volume_texture -> texture=%p", *ppTex);
         return S_OK;
     }
 
@@ -894,11 +1394,14 @@ public:
                                                  IDirect3DCubeTexture9** ppTex,
                                                  HANDLE*) override {
         if (!ppTex) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_cube_texture device=%p size=%u levels=%u usage=0x%x fmt=%u pool=%u",
+                            this, size, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
         D9CTexture* t = dxmt9c_device_create_cube_texture(dev_, size, levels,
                                                            usage, (uint32_t)fmt,
                                                            (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
-        *ppTex = new D3D9CubeTextureImpl(t);
+        *ppTex = new D3D9CubeTextureImpl(t, this);
+        dxmt9DeviceDebugLog("device_create_cube_texture -> texture=%p", *ppTex);
         return S_OK;
     }
 
@@ -907,10 +1410,13 @@ public:
                                                   IDirect3DVertexBuffer9** ppBuf,
                                                   HANDLE*) override {
         if (!ppBuf) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_vertex_buffer device=%p len=%u usage=0x%x fvf=0x%x pool=%u",
+                            this, len, (unsigned)usage, (unsigned)fvf, (unsigned)pool);
         D9CBuffer* b = dxmt9c_device_create_vertex_buffer(dev_, len, usage,
                                                            fvf, (uint32_t)pool);
         if (!b) return D3DERR_INVALIDCALL;
-        *ppBuf = new D3D9VertexBufferImpl(b);
+        *ppBuf = new D3D9VertexBufferImpl(b, this);
+        dxmt9DeviceDebugLog("device_create_vertex_buffer -> buffer=%p", *ppBuf);
         return S_OK;
     }
 
@@ -919,11 +1425,14 @@ public:
                                                  IDirect3DIndexBuffer9** ppBuf,
                                                  HANDLE*) override {
         if (!ppBuf) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_index_buffer device=%p len=%u usage=0x%x fmt=%u pool=%u",
+                            this, len, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
         D9CBuffer* b = dxmt9c_device_create_index_buffer(dev_, len, usage,
                                                           (uint32_t)fmt,
                                                           (uint32_t)pool);
         if (!b) return D3DERR_INVALIDCALL;
-        *ppBuf = new D3D9IndexBufferImpl(b);
+        *ppBuf = new D3D9IndexBufferImpl(b, this);
+        dxmt9DeviceDebugLog("device_create_index_buffer -> buffer=%p", *ppBuf);
         return S_OK;
     }
 
@@ -933,13 +1442,16 @@ public:
                                                   IDirect3DSurface9** ppS,
                                                   HANDLE* psh) override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_render_target device=%p size=%ux%u fmt=%u ms=%u msQual=%u lockable=%u",
+                            this, w, h, (unsigned)fmt, (unsigned)ms, (unsigned)msQual, (unsigned)lockable);
         uint64_t sh = psh ? (uint64_t)(uintptr_t)*psh : 0;
         D9CSurface* s = dxmt9c_device_create_render_target(dev_, w, h,
                                                             (uint32_t)fmt,
                                                             (uint32_t)ms, msQual,
                                                             lockable ? 1u : 0u, &sh);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, nullptr);
+        *ppS = new D3D9SurfaceImpl(s, this, nullptr);
+        dxmt9DeviceDebugLog("device_create_render_target -> surface=%p", *ppS);
         return S_OK;
     }
 
@@ -951,13 +1463,16 @@ public:
                                                          IDirect3DSurface9** ppS,
                                                          HANDLE* psh) override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_depth_stencil_surface device=%p size=%ux%u fmt=%u ms=%u msQual=%u discard=%u",
+                            this, w, h, (unsigned)fmt, (unsigned)ms, (unsigned)msQual, (unsigned)discard);
         uint64_t sh = 0;
         D9CSurface* s = dxmt9c_device_create_depth_stencil(dev_, w, h,
                                                             (uint32_t)fmt,
                                                             (uint32_t)ms, msQual,
                                                             discard ? 1u : 0u, &sh);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, nullptr);
+        *ppS = new D3D9SurfaceImpl(s, this, nullptr);
+        dxmt9DeviceDebugLog("device_create_depth_stencil_surface -> surface=%p", *ppS);
         return S_OK;
     }
 
@@ -965,6 +1480,10 @@ public:
                                              const RECT* srcRect,
                                              IDirect3DSurface9* dst,
                                              const POINT* dstPt) override {
+        dxmt9DeviceDebugLog("device_update_surface device=%p src=%p dst=%p srcRect=%s dstPt=%s",
+                            this, src, dst,
+                            srcRect ? "<custom>" : "<full>",
+                            dstPt ? "<custom>" : "<origin>");
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect);
         if (dstPt) { cd.left = dstPt->x; cd.top = dstPt->y;
@@ -982,11 +1501,15 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* rt,
                                                    IDirect3DSurface9* dst) override {
+        dxmt9DeviceDebugLog("device_get_render_target_data device=%p rt=%p dst=%p",
+                            this, rt, dst);
         return hr32(dxmt9c_device_get_render_target_data(dev_,
                     rawSurf(rt), rawSurf(dst)));
     }
 
-    HRESULT STDMETHODCALLTYPE GetFrontBufferData(UINT, IDirect3DSurface9*) override {
+    HRESULT STDMETHODCALLTYPE GetFrontBufferData(UINT sc, IDirect3DSurface9* surface) override {
+        dxmt9DeviceDebugLog("device_get_front_buffer_data device=%p sc=%u surface=%p",
+                            this, sc, surface);
         return D3DERR_INVALIDCALL;
     }
 
@@ -995,6 +1518,10 @@ public:
                                            IDirect3DSurface9* dst,
                                            const RECT* dstRect,
                                            D3DTEXTUREFILTERTYPE filter) override {
+        dxmt9DeviceDebugLog("device_stretch_rect device=%p src=%p dst=%p filter=%u srcRect=%s dstRect=%s",
+                            this, src, dst, (unsigned)filter,
+                            srcRect ? "<custom>" : "<full>",
+                            dstRect ? "<custom>" : "<full>");
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
         return hr32(dxmt9c_device_stretch_rect(dev_,
@@ -1006,6 +1533,8 @@ public:
     HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9* pSurf,
                                          const RECT* pRect,
                                          D3DCOLOR color) override {
+        dxmt9DeviceDebugLog("device_color_fill device=%p surf=%p rect=%s color=0x%08x",
+                            this, pSurf, pRect ? "<custom>" : "<full>", (unsigned)color);
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
         return hr32(dxmt9c_device_color_fill(dev_, rawSurf(pSurf),
                     pRect ? &cr : nullptr, (uint32_t)color));
@@ -1017,12 +1546,15 @@ public:
                                                            IDirect3DSurface9** ppS,
                                                            HANDLE*) override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_offscreen_surface device=%p size=%ux%u fmt=%u pool=%u",
+                            this, w, h, (unsigned)fmt, (unsigned)pool);
         uint64_t sh = 0;
         D9CSurface* s = dxmt9c_device_create_offscreen_surface(dev_, w, h,
                                                                 (uint32_t)fmt,
                                                                 (uint32_t)pool, &sh);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, nullptr);
+        *ppS = new D3D9SurfaceImpl(s, this, nullptr);
+        dxmt9DeviceDebugLog("device_create_offscreen_surface -> surface=%p", *ppS);
         return S_OK;
     }
 
@@ -1030,35 +1562,57 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD idx,
                                                IDirect3DSurface9* pSurf) override {
+        dxmt9DeviceDebugLog("device_set_render_target device=%p idx=%u surf=%p",
+                            this, (unsigned)idx, pSurf);
         return hr32(dxmt9c_device_set_render_target(dev_, idx, rawSurf(pSurf)));
     }
 
     HRESULT STDMETHODCALLTYPE GetRenderTarget(DWORD idx,
                                                IDirect3DSurface9** ppS) override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u",
+                            this, (unsigned)idx);
         D9CSurface* s = dxmt9c_device_get_render_target(dev_, idx);
-        *ppS = s ? new D3D9SurfaceImpl(s, nullptr) : nullptr;
+        *ppS = s ? new D3D9SurfaceImpl(s, this, nullptr) : nullptr;
+        dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> surface=%p",
+                            this, (unsigned)idx, ppS ? static_cast<void*>(*ppS) : nullptr);
         return s ? S_OK : D3DERR_NOTFOUND;
     }
 
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) override {
+        dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
         return hr32(dxmt9c_device_set_depth_stencil(dev_, rawSurf(pSurf)));
     }
 
     HRESULT STDMETHODCALLTYPE GetDepthStencilSurface(IDirect3DSurface9** ppS) override {
         if (!ppS) return D3DERR_INVALIDCALL;
         D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
-        *ppS = s ? new D3D9SurfaceImpl(s, nullptr) : nullptr;
+        *ppS = s ? new D3D9SurfaceImpl(s, this, nullptr) : nullptr;
+        dxmt9DeviceDebugLog("device_get_depth_stencil_surface device=%p -> surface=%p",
+                            this, ppS ? static_cast<void*>(*ppS) : nullptr);
         return s ? S_OK : S_FALSE;
     }
 
     /* ── scene ── */
-    HRESULT STDMETHODCALLTYPE BeginScene() override { return hr32(dxmt9c_device_begin_scene(dev_)); }
-    HRESULT STDMETHODCALLTYPE EndScene()   override { return hr32(dxmt9c_device_end_scene(dev_)); }
+    HRESULT STDMETHODCALLTYPE BeginScene() override {
+        dxmt9DeviceDebugLog("device_begin_scene device=%p", this);
+        const HRESULT hr = hr32(dxmt9c_device_begin_scene(dev_));
+        dxmt9DeviceDebugLog("device_begin_scene -> hr=0x%08x", (unsigned)hr);
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE EndScene()   override {
+        dxmt9DeviceDebugLog("device_end_scene device=%p", this);
+        const HRESULT hr = hr32(dxmt9c_device_end_scene(dev_));
+        dxmt9DeviceDebugLog("device_end_scene -> hr=0x%08x", (unsigned)hr);
+        return hr;
+    }
 
     HRESULT STDMETHODCALLTYPE Clear(DWORD count, const D3DRECT* pRects,
                                      DWORD flags, D3DCOLOR color,
                                      float z, DWORD stencil) override {
+        dxmt9DeviceDebugLog("device_clear device=%p count=%u flags=0x%x color=0x%08x z=%f stencil=%u",
+                            this, (unsigned)count, (unsigned)flags, (unsigned)color, z,
+                            (unsigned)stencil);
         return hr32(dxmt9c_device_clear(dev_, count,
             reinterpret_cast<const D9CRect*>(pRects),
             flags, (uint32_t)color, z, stencil));
@@ -1068,18 +1622,30 @@ public:
     HRESULT STDMETHODCALLTYPE SetTransform(D3DTRANSFORMSTATETYPE state,
                                             const D3DMATRIX* pM) override {
         if (!pM) return D3DERR_INVALIDCALL;
-        return hr32(dxmt9c_device_set_transform(dev_, (uint32_t)state,
+        dxmt9DeviceDebugLog(
+            "device_set_transform device=%p state=%u "
+            "m=[[%g,%g,%g,%g],[%g,%g,%g,%g],[%g,%g,%g,%g],[%g,%g,%g,%g]]",
+            this, (unsigned)state,
+            pM->m[0][0], pM->m[0][1], pM->m[0][2], pM->m[0][3],
+            pM->m[1][0], pM->m[1][1], pM->m[1][2], pM->m[1][3],
+            pM->m[2][0], pM->m[2][1], pM->m[2][2], pM->m[2][3],
+            pM->m[3][0], pM->m[3][1], pM->m[3][2], pM->m[3][3]);
+        const HRESULT hr = hr32(dxmt9c_device_set_transform(dev_, (uint32_t)state,
                     reinterpret_cast<const D9CMatrix*>(pM)));
+        dxmt9DeviceDebugLog("device_set_transform -> hr=0x%08x", (unsigned)hr);
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE GetTransform(D3DTRANSFORMSTATETYPE state,
                                             D3DMATRIX* pM) override {
         if (!pM) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_get_transform device=%p state=%u", this, (unsigned)state);
         return hr32(dxmt9c_device_get_transform(dev_, (uint32_t)state,
                     reinterpret_cast<D9CMatrix*>(pM)));
     }
     HRESULT STDMETHODCALLTYPE MultiplyTransform(D3DTRANSFORMSTATETYPE state,
                                                  const D3DMATRIX* pM) override {
         if (!pM) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_multiply_transform device=%p state=%u", this, (unsigned)state);
         D3DMATRIX cur{};
         GetTransform(state, &cur);
         /* multiply 4x4 */
@@ -1097,6 +1663,8 @@ public:
     /* ── viewport / scissor ── */
     HRESULT STDMETHODCALLTYPE SetViewport(const D3DVIEWPORT9* pVP) override {
         if (!pVP) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_set_viewport device=%p x=%u y=%u w=%u h=%u minZ=%f maxZ=%f",
+                            this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
         D9CViewport vp{ pVP->X, pVP->Y, pVP->Width, pVP->Height,
                         pVP->MinZ, pVP->MaxZ };
         return hr32(dxmt9c_device_set_viewport(dev_, &vp));
@@ -1108,10 +1676,14 @@ public:
         pVP->X = vp.x; pVP->Y = vp.y;
         pVP->Width = vp.width; pVP->Height = vp.height;
         pVP->MinZ = vp.minZ;   pVP->MaxZ   = vp.maxZ;
+        dxmt9DeviceDebugLog("device_get_viewport device=%p -> x=%u y=%u w=%u h=%u minZ=%f maxZ=%f",
+                            this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetScissorRect(const RECT* pR) override {
         if (!pR) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_set_scissor_rect device=%p rect=%ld,%ld-%ld,%ld",
+                            this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
         D9CRect cr = toR(*pR);
         return hr32(dxmt9c_device_set_scissor_rect(dev_, &cr));
     }
@@ -1127,16 +1699,19 @@ public:
     /* ── material / lights ── */
     HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) override {
         if (!pM) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_set_material device=%p", this);
         return hr32(dxmt9c_device_set_material(dev_,
                     reinterpret_cast<const D9CMaterial*>(pM)));
     }
     HRESULT STDMETHODCALLTYPE GetMaterial(D3DMATERIAL9* pM) override {
         if (!pM) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_get_material device=%p", this);
         return hr32(dxmt9c_device_get_material(dev_,
                     reinterpret_cast<D9CMaterial*>(pM)));
     }
     HRESULT STDMETHODCALLTYPE SetLight(DWORD idx, const D3DLIGHT9* pL) override {
         if (!pL) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_set_light device=%p idx=%u type=%u", this, (unsigned)idx, (unsigned)pL->Type);
         D9CLight cl{};
         cl.type = (uint32_t)pL->Type;
         memcpy(&cl.diffuse,  &pL->Diffuse,  sizeof(D9CColorRGBA));
@@ -1156,30 +1731,41 @@ public:
         return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
     }
     HRESULT STDMETHODCALLTYPE GetLight(DWORD, D3DLIGHT9* pL) override {
+        dxmt9DeviceDebugLog("device_get_light device=%p", this);
         if (pL) memset(pL, 0, sizeof(*pL)); return S_OK; /* stub */
     }
     HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) override {
+        dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
         return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));
     }
     HRESULT STDMETHODCALLTYPE GetLightEnable(DWORD, BOOL* pEn) override {
+        dxmt9DeviceDebugLog("device_get_light_enable device=%p", this);
         if (pEn) *pEn = FALSE; return S_OK; /* stub */
     }
 
     /* ── clip planes ── */
     HRESULT STDMETHODCALLTYPE SetClipPlane(DWORD idx, const float* pPlane) override {
+        dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
         return hr32(dxmt9c_device_set_clip_plane(dev_, idx, pPlane));
     }
     HRESULT STDMETHODCALLTYPE GetClipPlane(DWORD idx, float* pPlane) override {
+        dxmt9DeviceDebugLog("device_get_clip_plane device=%p idx=%u", this, (unsigned)idx);
         return hr32(dxmt9c_device_get_clip_plane(dev_, idx, pPlane));
     }
-    HRESULT STDMETHODCALLTYPE SetClipStatus(const D3DCLIPSTATUS9*) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetClipStatus(const D3DCLIPSTATUS9*) override {
+        dxmt9DeviceDebugLog("device_set_clip_status device=%p", this);
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE GetClipStatus(D3DCLIPSTATUS9* p) override {
+        dxmt9DeviceDebugLog("device_get_clip_status device=%p", this);
         if (p) memset(p, 0, sizeof(*p)); return S_OK;
     }
 
     /* ── render states ── */
     HRESULT STDMETHODCALLTYPE SetRenderState(D3DRENDERSTATETYPE state,
                                               DWORD value) override {
+        dxmt9DeviceDebugLog("device_set_render_state device=%p state=%u value=0x%x",
+                            this, (unsigned)state, (unsigned)value);
         return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
     }
     HRESULT STDMETHODCALLTYPE GetRenderState(D3DRENDERSTATETYPE state,
@@ -1193,19 +1779,27 @@ public:
     HRESULT STDMETHODCALLTYPE CreateStateBlock(D3DSTATEBLOCKTYPE type,
                                                 IDirect3DStateBlock9** ppSB) override {
         if (!ppSB) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_state_block device=%p type=%u", this, (unsigned)type);
         D9CStateBlock* sb = dxmt9c_device_create_state_block(dev_, (uint32_t)type);
         if (!sb) return D3DERR_INVALIDCALL;
-        *ppSB = new D3D9StateBlockImpl(sb);
+        *ppSB = new D3D9StateBlockImpl(sb, this);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE BeginStateBlock() override {
-        return hr32(dxmt9c_device_begin_state_block(dev_));
+        dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
+        const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
+        dxmt9DeviceDebugLog("device_begin_state_block -> hr=0x%08x", (unsigned)hr);
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** ppSB) override {
         if (!ppSB) return D3DERR_INVALIDCALL;
+        *ppSB = nullptr;
+        dxmt9DeviceDebugLog("device_end_state_block device=%p", this);
         D9CStateBlock* sb = nullptr;
         HRESULT hr = hr32(dxmt9c_device_end_state_block(dev_, &sb));
-        if (SUCCEEDED(hr) && sb) *ppSB = new D3D9StateBlockImpl(sb);
+        if (SUCCEEDED(hr) && sb) *ppSB = new D3D9StateBlockImpl(sb, this);
+        dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
+                            (unsigned)hr, static_cast<void*>(sb), *ppSB);
         return hr;
     }
 
@@ -1213,6 +1807,8 @@ public:
     HRESULT STDMETHODCALLTYPE SetTextureStageState(DWORD stage,
                                                     D3DTEXTURESTAGESTATETYPE type,
                                                     DWORD value) override {
+        dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
+                            this, (unsigned)stage, (unsigned)type, (unsigned)value);
         return hr32(dxmt9c_device_set_texture_stage_state(dev_, stage,
                     (uint32_t)type, value));
     }
@@ -1226,6 +1822,8 @@ public:
     HRESULT STDMETHODCALLTYPE SetSamplerState(DWORD sampler,
                                                D3DSAMPLERSTATETYPE type,
                                                DWORD value) override {
+        dxmt9DeviceDebugLog("device_set_sampler_state device=%p sampler=%u type=%u value=0x%x",
+                            this, (unsigned)sampler, (unsigned)type, (unsigned)value);
         return hr32(dxmt9c_device_set_sampler_state(dev_, sampler,
                     (uint32_t)type, value));
     }
@@ -1237,26 +1835,48 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE ValidateDevice(DWORD* pPasses) override {
+        dxmt9DeviceDebugLog("device_validate_device device=%p", this);
         if (pPasses) *pPasses = 1; return S_OK;
     }
 
     /* ── palette (stubs) ── */
-    HRESULT STDMETHODCALLTYPE SetPaletteEntries(UINT, const PALETTEENTRY*) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE GetPaletteEntries(UINT, PALETTEENTRY*) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE SetCurrentTexturePalette(UINT) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetPaletteEntries(UINT palette, const PALETTEENTRY*) override {
+        dxmt9DeviceDebugLog("device_set_palette_entries device=%p palette=%u", this, palette);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPaletteEntries(UINT palette, PALETTEENTRY*) override {
+        dxmt9DeviceDebugLog("device_get_palette_entries device=%p palette=%u", this, palette);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetCurrentTexturePalette(UINT palette) override {
+        dxmt9DeviceDebugLog("device_set_current_texture_palette device=%p palette=%u", this, palette);
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE GetCurrentTexturePalette(UINT* p) override {
+        dxmt9DeviceDebugLog("device_get_current_texture_palette device=%p", this);
         if (p) *p = 0; return S_OK;
     }
 
     /* ── soft VP / NPatches (stubs) ── */
-    HRESULT STDMETHODCALLTYPE SetSoftwareVertexProcessing(BOOL) override { return S_OK; }
-    BOOL    STDMETHODCALLTYPE GetSoftwareVertexProcessing() override { return FALSE; }
-    HRESULT STDMETHODCALLTYPE SetNPatchMode(float) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetSoftwareVertexProcessing(BOOL enable) override {
+        dxmt9DeviceDebugLog("device_set_software_vertex_processing device=%p enable=%u", this, (unsigned)enable);
+        return S_OK;
+    }
+    BOOL    STDMETHODCALLTYPE GetSoftwareVertexProcessing() override {
+        dxmt9DeviceDebugLog("device_get_software_vertex_processing device=%p", this);
+        return FALSE;
+    }
+    HRESULT STDMETHODCALLTYPE SetNPatchMode(float segments) override {
+        dxmt9DeviceDebugLog("device_set_npatch_mode device=%p segments=%f", this, segments);
+        return S_OK;
+    }
     float   STDMETHODCALLTYPE GetNPatchMode() override { return 0.0f; }
 
     /* ── textures ── */
     HRESULT STDMETHODCALLTYPE SetTexture(DWORD stage,
                                           IDirect3DBaseTexture9* pTex) override {
+        dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
+                            this, (unsigned)stage, pTex);
         setRef(textures_[stage < 16 ? stage : 0], pTex);
         return hr32(dxmt9c_device_set_texture(dev_, stage, rawTex(pTex)));
     }
@@ -1266,11 +1886,14 @@ public:
         IDirect3DBaseTexture9* t = textures_[stage < 16 ? stage : 0];
         if (t) t->AddRef();
         *ppTex = t;
+        dxmt9DeviceDebugLog("device_get_texture device=%p stage=%u -> tex=%p",
+                            this, (unsigned)stage, static_cast<void*>(t));
         return S_OK;
     }
 
     /* ── FVF / vertex declaration ── */
     HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) override {
+        dxmt9DeviceDebugLog("device_set_fvf device=%p fvf=0x%x", this, (unsigned)fvf);
         return hr32(dxmt9c_device_set_fvf(dev_, fvf));
     }
     HRESULT STDMETHODCALLTYPE GetFVF(DWORD* pFVF) override {
@@ -1294,11 +1917,12 @@ public:
         }
         D9CVertexDecl* d = dxmt9c_device_create_vertex_declaration(dev_, tmp);
         if (!d) return D3DERR_INVALIDCALL;
-        *ppVD = new D3D9VertexDeclImpl(d);
+        *ppVD = new D3D9VertexDeclImpl(d, this);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
             IDirect3DVertexDeclaration9* pVD) override {
+        dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
         setRef(vdecl_, pVD);
         return hr32(dxmt9c_device_set_vertex_declaration(dev_, rawVD(pVD)));
     }
@@ -1313,12 +1937,14 @@ public:
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* pFn,
                                                   IDirect3DVertexShader9** ppVS) override {
         if (!pFn || !ppVS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_vertex_shader device=%p code=%p", this, pFn);
         D9CShader* s = dxmt9c_device_create_vertex_shader(dev_, reinterpret_cast<const uint32_t*>(pFn));
         if (!s) return D3DERR_INVALIDCALL;
-        *ppVS = new D3D9VertexShaderImpl(s);
+        *ppVS = new D3D9VertexShaderImpl(s, this);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShader(IDirect3DVertexShader9* pVS) override {
+        dxmt9DeviceDebugLog("device_set_vertex_shader device=%p shader=%p", this, pVS);
         setRef(vs_, pVS);
         return hr32(dxmt9c_device_set_vertex_shader(dev_, rawVS(pVS)));
     }
@@ -1328,6 +1954,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
                                                         UINT count) override {
+        dxmt9DeviceDebugLog("device_set_vertex_shader_constant_f device=%p start=%u count=%u data=%p",
+                            this, start, count, pData);
         return hr32(dxmt9c_device_set_vs_const_f(dev_, start, pData, count));
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start, float* pData,
@@ -1336,6 +1964,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
                                                         UINT count) override {
+        dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
+                            this, start, count, pData);
         return hr32(dxmt9c_device_set_vs_const_i(dev_, start,
                     reinterpret_cast<const int32_t*>(pData), count));
     }
@@ -1345,6 +1975,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
                                                         UINT count) override {
+        dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
+                            this, start, count, pData);
         return hr32(dxmt9c_device_set_vs_const_b(dev_, start,
                     reinterpret_cast<const uint32_t*>(pData), count));
     }
@@ -1357,6 +1989,8 @@ public:
     HRESULT STDMETHODCALLTYPE SetStreamSource(UINT stream,
                                                IDirect3DVertexBuffer9* pBuf,
                                                UINT offset, UINT stride) override {
+        dxmt9DeviceDebugLog("device_set_stream_source device=%p stream=%u buf=%p offset=%u stride=%u",
+                            this, stream, pBuf, offset, stride);
         setRef(streamSrc_[stream < 16 ? stream : 0], pBuf);
         streamOff_[stream < 16 ? stream : 0] = offset;
         streamStr_[stream < 16 ? stream : 0] = stride;
@@ -1375,15 +2009,22 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetStreamSourceFreq(UINT stream, UINT freq) override {
+        dxmt9DeviceDebugLog("device_set_stream_source_freq device=%p stream=%u freq=0x%x",
+                            this, stream, (unsigned)freq);
         streamFreq_[stream < 16 ? stream : 0] = freq;
         return hr32(dxmt9c_device_set_stream_source_freq(dev_, stream, freq));
     }
     HRESULT STDMETHODCALLTYPE GetStreamSourceFreq(UINT stream, UINT* pFreq) override {
-        if (pFreq) *pFreq = streamFreq_[stream < 16 ? stream : 0]; return S_OK;
+        const UINT freq = streamFreq_[stream < 16 ? stream : 0];
+        if (pFreq) *pFreq = freq;
+        dxmt9DeviceDebugLog("device_get_stream_source_freq device=%p stream=%u -> freq=0x%x",
+                            this, stream, (unsigned)freq);
+        return S_OK;
     }
 
     /* ── indices ── */
     HRESULT STDMETHODCALLTYPE SetIndices(IDirect3DIndexBuffer9* pIBuf) override {
+        dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
         setRef(indexBuf_, pIBuf);
         return hr32(dxmt9c_device_set_indices(dev_, rawIBuf(pIBuf)));
     }
@@ -1396,12 +2037,14 @@ public:
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* pFn,
                                                  IDirect3DPixelShader9** ppPS) override {
         if (!pFn || !ppPS) return D3DERR_INVALIDCALL;
+        dxmt9DeviceDebugLog("device_create_pixel_shader device=%p code=%p", this, pFn);
         D9CShader* s = dxmt9c_device_create_pixel_shader(dev_, reinterpret_cast<const uint32_t*>(pFn));
         if (!s) return D3DERR_INVALIDCALL;
-        *ppPS = new D3D9PixelShaderImpl(s);
+        *ppPS = new D3D9PixelShaderImpl(s, this);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) override {
+        dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
         setRef(ps_, pPS);
         return hr32(dxmt9c_device_set_pixel_shader(dev_, rawPS(pPS)));
     }
@@ -1411,6 +2054,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
                                                        UINT count) override {
+        dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
+                            this, start, count, pData);
         return hr32(dxmt9c_device_set_ps_const_f(dev_, start, pData, count));
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantF(UINT start, float* pData,
@@ -1419,6 +2064,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
                                                        UINT count) override {
+        dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
+                            this, start, count, pData);
         return hr32(dxmt9c_device_set_ps_const_i(dev_, start,
                     reinterpret_cast<const int32_t*>(pData), count));
     }
@@ -1428,6 +2075,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
                                                        UINT count) override {
+        dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
+                            this, start, count, pData);
         return hr32(dxmt9c_device_set_ps_const_b(dev_, start,
                     reinterpret_cast<const uint32_t*>(pData), count));
     }
@@ -1440,6 +2089,8 @@ public:
     HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE type,
                                              UINT startVertex,
                                              UINT count) override {
+        dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
+                            this, (unsigned)type, startVertex, count);
         return hr32(dxmt9c_device_draw_primitive(dev_, (uint32_t)type,
                     startVertex, count));
     }
@@ -1448,6 +2099,9 @@ public:
                                                     UINT minVertex, UINT numVertices,
                                                     UINT startIndex,
                                                     UINT count) override {
+        dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
+                            this, (unsigned)type, baseVertex, minVertex, numVertices,
+                            startIndex, count);
         return hr32(dxmt9c_device_draw_indexed_primitive(dev_, (uint32_t)type,
                     baseVertex, minVertex, numVertices, startIndex, count));
     }
@@ -1455,6 +2109,8 @@ public:
                                                UINT count,
                                                const void* pData,
                                                UINT stride) override {
+        dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
+                            this, (unsigned)type, count, pData, stride);
         return hr32(dxmt9c_device_draw_primitive_up(dev_, (uint32_t)type,
                     count, pData, stride));
     }
@@ -1466,6 +2122,9 @@ public:
                                                       D3DFORMAT idxFmt,
                                                       const void* pVtxData,
                                                       UINT stride) override {
+        dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
+                            this, (unsigned)type, minVertex, numVertices, count,
+                            pIdxData, (unsigned)idxFmt, pVtxData, stride);
         return hr32(dxmt9c_device_draw_indexed_primitive_up(dev_,
                     (uint32_t)type, minVertex, numVertices, count,
                     pIdxData, (uint32_t)idxFmt, pVtxData, stride));
@@ -1474,6 +2133,7 @@ public:
                                                IDirect3DVertexBuffer9*,
                                                IDirect3DVertexDeclaration9*,
                                                DWORD) override {
+        dxmt9DeviceDebugLog("device_process_vertices device=%p", this);
         return D3DERR_INVALIDCALL;
     }
     HRESULT STDMETHODCALLTYPE DrawRectPatch(UINT, const float*, const D3DRECTPATCH_INFO*) override { return D3DERR_INVALIDCALL; }
@@ -1486,7 +2146,7 @@ public:
         if (!ppQ) { /* just checking support */ return S_OK; }
         D9CQuery* q = dxmt9c_device_create_query(dev_, (uint32_t)type);
         if (!q) return D3DERR_NOTAVAILABLE;
-        *ppQ = new D3D9QueryImpl(q);
+        *ppQ = new D3D9QueryImpl(q, this);
         return S_OK;
     }
 
@@ -1589,7 +2249,19 @@ public:
     HRESULT STDMETHODCALLTYPE GetDisplayModeEx(UINT /*sc*/,
                                                 D3DDISPLAYMODEEX* pMode,
                                                 D3DDISPLAYROTATION* pRot) override {
-        if (pMode) memset(pMode, 0, sizeof(*pMode));
+        if (pMode) {
+            D3DDISPLAYMODE mode{};
+            if (SUCCEEDED(GetDisplayMode(0, &mode))) {
+                pMode->Size = sizeof(*pMode);
+                pMode->Width = mode.Width;
+                pMode->Height = mode.Height;
+                pMode->RefreshRate = mode.RefreshRate;
+                pMode->Format = mode.Format;
+                pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
+            } else {
+                memset(pMode, 0, sizeof(*pMode));
+            }
+        }
         if (pRot)  *pRot = D3DDISPLAYROTATION_IDENTITY;
         return S_OK;
     }

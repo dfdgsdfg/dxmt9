@@ -27,6 +27,14 @@ typedef struct D9CStateBlock D9CStateBlock;
 typedef struct D9CVertexDecl D9CVertexDecl;
 typedef struct D9CShader     D9CShader;
 
+typedef struct D9CBufferDesc {
+    uint32_t size;
+    uint32_t usage;
+    uint32_t pool;
+    uint32_t fvf;
+    uint32_t format;
+} D9CBufferDesc;
+
 /* ── plain C structs (D3D9 field layout, basic C types) ──────────────────── */
 
 typedef struct D9CRect {
@@ -400,6 +408,7 @@ uint32_t dxmt9c_buffer_release(D9CBuffer*);
 int32_t  dxmt9c_buffer_lock(D9CBuffer*, uint32_t offset, uint32_t size,
                              void** data, uint32_t flags);
 int32_t  dxmt9c_buffer_unlock(D9CBuffer*);
+int32_t  dxmt9c_buffer_get_desc(D9CBuffer*, D9CBufferDesc*);
 
 /* ── surface ─────────────────────────────────────────────────────────────── */
 

@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -98,21 +99,21 @@ enum class TextureType : u32 {
 };
 
 enum class TextureOp : u32 {
-  Disable = 0,
-  SelectArg1 = 1,
-  SelectArg2 = 2,
-  Modulate = 3,
-  Add = 4,
-  AddSigned = 5,
-  AddSmooth = 6,
-  Subtract = 7,
-  AddSigned2x = 8,
-  Modulate4x = 9,
-  Modulate2x = 10,
-  DotProduct3 = 11,
-  Lerp = 12,
-  BumpEnvMap = 13,
-  BumpEnvMapLuminance = 14,
+  Disable = 1,
+  SelectArg1 = 2,
+  SelectArg2 = 3,
+  Modulate = 4,
+  Modulate2x = 5,
+  Modulate4x = 6,
+  Add = 7,
+  AddSigned = 8,
+  AddSigned2x = 9,
+  Subtract = 10,
+  AddSmooth = 11,
+  DotProduct3 = 24,
+  Lerp = 26,
+  BumpEnvMap = 22,
+  BumpEnvMapLuminance = 23,
 };
 
 enum class CompareFunc : u32 {
@@ -307,58 +308,60 @@ inline constexpr u32 UsageWriteOnly = 1u << 7;
 inline constexpr u32 UsageDiscard = 1u << 8;
 inline constexpr u32 UsageNoOverwrite = 1u << 9;
 
-inline constexpr u32 RS_LIGHTING = 1;
-inline constexpr u32 RS_SPECULAR_ENABLE = 2;
-inline constexpr u32 RS_NORMALIZE_NORMALS = 3;
-inline constexpr u32 RS_FOG_TABLE_MODE = 4;
-inline constexpr u32 RS_FOG_FROM_VERTEX = 5;
-inline constexpr u32 RS_RANGE_FOG = 6;
-inline constexpr u32 RS_ALPHA_TEST_ENABLE = 7;
-inline constexpr u32 RS_ALPHA_FUNC = 8;
-inline constexpr u32 RS_ALPHA_REF = 9;
-inline constexpr u32 RS_FOG_ENABLE = 10;
-inline constexpr u32 RS_FOG_COLOR = 11;
-inline constexpr u32 RS_FOG_START = 12;
-inline constexpr u32 RS_FOG_END = 13;
-inline constexpr u32 RS_FOG_DENSITY = 14;
-inline constexpr u32 RS_AMBIENT = 15;
-inline constexpr u32 RS_DIFFUSE_MATERIAL_SOURCE = 16;
-inline constexpr u32 RS_SPECULAR_MATERIAL_SOURCE = 17;
-inline constexpr u32 RS_AMBIENT_MATERIAL_SOURCE = 18;
-inline constexpr u32 RS_EMISSIVE_MATERIAL_SOURCE = 19;
-inline constexpr u32 RS_VERTEX_BLEND = 20;
-inline constexpr u32 RS_CLIP_PLANE_ENABLE = 21;
-inline constexpr u32 RS_POINT_SPRITE_ENABLE = 22;
-inline constexpr u32 RS_POINT_SCALE_ENABLE = 23;
-inline constexpr u32 RS_CULL_MODE = 24;
-inline constexpr u32 RS_Z_WRITE_ENABLE = 25;
-inline constexpr u32 RS_Z_FUNC = 26;
-inline constexpr u32 RS_SRC_BLEND = 27;
-inline constexpr u32 RS_DEST_BLEND = 28;
-inline constexpr u32 RS_BLEND_OP = 29;
-inline constexpr u32 RS_COLOR_WRITE_ENABLE = 30;
-inline constexpr u32 RS_Z_ENABLE = 31;
-inline constexpr u32 RS_ALPHABLEND_ENABLE = 32;
-inline constexpr u32 RS_BLEND_FACTOR = 33;
-inline constexpr u32 RS_SEPARATE_ALPHA_BLEND_ENABLE = 34;
-inline constexpr u32 RS_SRC_BLEND_ALPHA = 35;
-inline constexpr u32 RS_DEST_BLEND_ALPHA = 36;
-inline constexpr u32 RS_BLEND_OP_ALPHA = 37;
-inline constexpr u32 RS_STENCIL_ENABLE = 38;
-inline constexpr u32 RS_STENCIL_FUNC = 39;
-inline constexpr u32 RS_STENCIL_FAIL = 40;
-inline constexpr u32 RS_STENCIL_ZFAIL = 41;
-inline constexpr u32 RS_STENCIL_PASS = 42;
-inline constexpr u32 RS_STENCIL_REF = 43;
-inline constexpr u32 RS_STENCIL_MASK = 44;
-inline constexpr u32 RS_STENCIL_WRITEMASK = 45;
-inline constexpr u32 RS_STENCIL_CCW_FUNC = 46;
-inline constexpr u32 RS_STENCIL_CCW_FAIL = 47;
-inline constexpr u32 RS_STENCIL_CCW_ZFAIL = 48;
-inline constexpr u32 RS_STENCIL_CCW_PASS = 49;
-inline constexpr u32 RS_STENCIL_CCW_REF = 50;
-inline constexpr u32 RS_STENCIL_CCW_MASK = 51;
-inline constexpr u32 RS_STENCIL_CCW_WRITEMASK = 52;
+inline constexpr u32 RS_LIGHTING = 137;
+inline constexpr u32 RS_SPECULAR_ENABLE = 29;
+inline constexpr u32 RS_NORMALIZE_NORMALS = 143;
+inline constexpr u32 RS_FOG_TABLE_MODE = 35;
+inline constexpr u32 RS_FOG_FROM_VERTEX = 140;
+inline constexpr u32 RS_RANGE_FOG = 48;
+inline constexpr u32 RS_ALPHA_TEST_ENABLE = 15;
+inline constexpr u32 RS_ALPHA_FUNC = 25;
+inline constexpr u32 RS_ALPHA_REF = 24;
+inline constexpr u32 RS_FOG_ENABLE = 28;
+inline constexpr u32 RS_FOG_COLOR = 34;
+inline constexpr u32 RS_FOG_START = 36;
+inline constexpr u32 RS_FOG_END = 37;
+inline constexpr u32 RS_FOG_DENSITY = 38;
+inline constexpr u32 RS_AMBIENT = 139;
+inline constexpr u32 RS_DIFFUSE_MATERIAL_SOURCE = 145;
+inline constexpr u32 RS_SPECULAR_MATERIAL_SOURCE = 146;
+inline constexpr u32 RS_AMBIENT_MATERIAL_SOURCE = 147;
+inline constexpr u32 RS_EMISSIVE_MATERIAL_SOURCE = 148;
+inline constexpr u32 RS_VERTEX_BLEND = 151;
+inline constexpr u32 RS_CLIP_PLANE_ENABLE = 152;
+inline constexpr u32 RS_POINT_SPRITE_ENABLE = 156;
+inline constexpr u32 RS_POINT_SCALE_ENABLE = 157;
+inline constexpr u32 RS_CULL_MODE = 22;
+inline constexpr u32 RS_Z_WRITE_ENABLE = 14;
+inline constexpr u32 RS_Z_FUNC = 23;
+inline constexpr u32 RS_SRC_BLEND = 19;
+inline constexpr u32 RS_DEST_BLEND = 20;
+inline constexpr u32 RS_BLEND_OP = 171;
+inline constexpr u32 RS_SCISSOR_TEST_ENABLE = 174;
+inline constexpr u32 RS_COLOR_WRITE_ENABLE = 168;
+inline constexpr u32 RS_Z_ENABLE = 7;
+inline constexpr u32 RS_ALPHABLEND_ENABLE = 27;
+inline constexpr u32 RS_BLEND_FACTOR = 193;
+inline constexpr u32 RS_SEPARATE_ALPHA_BLEND_ENABLE = 206;
+inline constexpr u32 RS_SRC_BLEND_ALPHA = 207;
+inline constexpr u32 RS_DEST_BLEND_ALPHA = 208;
+inline constexpr u32 RS_BLEND_OP_ALPHA = 209;
+inline constexpr u32 RS_STENCIL_ENABLE = 52;
+inline constexpr u32 RS_STENCIL_FUNC = 56;
+inline constexpr u32 RS_STENCIL_FAIL = 53;
+inline constexpr u32 RS_STENCIL_ZFAIL = 54;
+inline constexpr u32 RS_STENCIL_PASS = 55;
+inline constexpr u32 RS_STENCIL_REF = 57;
+inline constexpr u32 RS_STENCIL_MASK = 58;
+inline constexpr u32 RS_STENCIL_WRITEMASK = 59;
+inline constexpr u32 RS_STENCIL_CCW_FUNC = 189;
+inline constexpr u32 RS_STENCIL_CCW_FAIL = 186;
+inline constexpr u32 RS_STENCIL_CCW_ZFAIL = 187;
+inline constexpr u32 RS_STENCIL_CCW_PASS = 188;
+inline constexpr u32 RS_STENCIL_CCW_REF = RS_STENCIL_REF;
+inline constexpr u32 RS_STENCIL_CCW_MASK = RS_STENCIL_MASK;
+inline constexpr u32 RS_STENCIL_CCW_WRITEMASK = RS_STENCIL_WRITEMASK;
+inline constexpr u32 RS_TEXTURE_FACTOR = 60;
 
 inline constexpr u32 TSS_COLOR_OP = 1;
 inline constexpr u32 TSS_COLOR_ARG1 = 2;
@@ -366,19 +369,19 @@ inline constexpr u32 TSS_COLOR_ARG2 = 3;
 inline constexpr u32 TSS_ALPHA_OP = 4;
 inline constexpr u32 TSS_ALPHA_ARG1 = 5;
 inline constexpr u32 TSS_ALPHA_ARG2 = 6;
-inline constexpr u32 TSS_RESULT_ARG = 7;
-inline constexpr u32 TSS_TEXCOORD_INDEX = 8;
-inline constexpr u32 TSS_TEXTURE_TRANSFORM_FLAGS = 9;
-inline constexpr u32 TSS_TEXTURE_TYPE = 10;
+inline constexpr u32 TSS_RESULT_ARG = 28;
+inline constexpr u32 TSS_TEXCOORD_INDEX = 11;
+inline constexpr u32 TSS_TEXTURE_TRANSFORM_FLAGS = 24;
+inline constexpr u32 TSS_TEXTURE_TYPE = 32;  // D3DTSS_CONSTANT; kept as internal placeholder key.
 
-inline constexpr u32 SAMP_MIN_FILTER = 1;
-inline constexpr u32 SAMP_MAG_FILTER = 2;
-inline constexpr u32 SAMP_MIP_FILTER = 3;
-inline constexpr u32 SAMP_ADDRESS_U = 4;
-inline constexpr u32 SAMP_ADDRESS_V = 5;
-inline constexpr u32 SAMP_ADDRESS_W = 6;
-inline constexpr u32 SAMP_MAX_ANISOTROPY = 7;
+inline constexpr u32 SAMP_ADDRESS_U = 1;
+inline constexpr u32 SAMP_ADDRESS_V = 2;
+inline constexpr u32 SAMP_ADDRESS_W = 3;
+inline constexpr u32 SAMP_MAG_FILTER = 5;
+inline constexpr u32 SAMP_MIN_FILTER = 6;
+inline constexpr u32 SAMP_MIP_FILTER = 7;
 inline constexpr u32 SAMP_MIPMAP_LOD_BIAS = 8;
+inline constexpr u32 SAMP_MAX_ANISOTROPY = 10;
 inline constexpr u32 QUERY_GETDATA_FLUSH = 1u << 0;
 
 inline constexpr u32 XFORM_WORLD_BASE = 1;
@@ -393,6 +396,8 @@ struct Rect {
   i32 top = 0;
   i32 right = 0;
   i32 bottom = 0;
+
+  friend constexpr bool operator==(const Rect&, const Rect&) = default;
 };
 
 struct Viewport {
@@ -402,6 +407,8 @@ struct Viewport {
   u32 height = 0;
   f32 minZ = 0.0f;
   f32 maxZ = 1.0f;
+
+  friend constexpr bool operator==(const Viewport&, const Viewport&) = default;
 };
 
 struct ColorRGBA {
@@ -409,12 +416,16 @@ struct ColorRGBA {
   f32 g = 0.0f;
   f32 b = 0.0f;
   f32 a = 1.0f;
+
+  friend constexpr bool operator==(const ColorRGBA&, const ColorRGBA&) = default;
 };
 
 using ClipPlane = std::array<f32, 4>;
 
 struct Matrix4x4 {
   std::array<f32, 16> m{};
+
+  friend constexpr bool operator==(const Matrix4x4&, const Matrix4x4&) = default;
 };
 
 struct Material {
@@ -423,6 +434,8 @@ struct Material {
   ColorRGBA diffuse{1.0f, 1.0f, 1.0f, 1.0f};
   ColorRGBA specular{};
   f32 power = 0.0f;
+
+  friend constexpr bool operator==(const Material&, const Material&) = default;
 };
 
 struct Light {
@@ -440,6 +453,8 @@ struct Light {
   f32 attenuation2 = 0.0f;
   f32 theta = 0.5f;
   f32 phi = 1.0f;
+
+  friend constexpr bool operator==(const Light&, const Light&) = default;
 };
 
 struct VertexElement {
@@ -449,21 +464,29 @@ struct VertexElement {
   u32 method = 0;
   u32 usage = 0;
   u32 usageIndex = 0;
+
+  friend constexpr bool operator==(const VertexElement&, const VertexElement&) = default;
 };
 
 struct StreamBinding {
   std::shared_ptr<class Buffer> buffer;
   u32 offset = 0;
   u32 stride = 0;
+
+  friend bool operator==(const StreamBinding&, const StreamBinding&) = default;
 };
 
 struct TextureBinding {
   Handle handle{};
   std::unordered_map<u32, u32> stageStates;
+
+  friend bool operator==(const TextureBinding&, const TextureBinding&) = default;
 };
 
 struct SamplerSnapshot {
   std::unordered_map<u32, u32> states;
+
+  friend bool operator==(const SamplerSnapshot&, const SamplerSnapshot&) = default;
 };
 
 template <size_t FloatCount>
@@ -471,6 +494,8 @@ struct ShaderConstantSnapshot {
   std::array<std::array<f32, 4>, FloatCount> float4{};
   std::array<std::array<i32, 4>, kMaxIntegerConstants> int4{};
   std::array<bool, kMaxBoolConstants> bools{};
+
+  friend bool operator==(const ShaderConstantSnapshot&, const ShaderConstantSnapshot&) = default;
 };
 
 using VertexShaderConstants = ShaderConstantSnapshot<kMaxVertexConstants>;
@@ -479,6 +504,8 @@ using PixelShaderConstants = ShaderConstantSnapshot<kMaxPixelConstants>;
 struct ShaderBytecode {
   std::vector<u8> bytes;
   u64 hash = 0;
+
+  friend bool operator==(const ShaderBytecode&, const ShaderBytecode&) = default;
 };
 
 struct FfpVertexKey {
@@ -538,18 +565,24 @@ struct ShaderRef {
   ShaderBytecode bytecode;
   std::optional<FfpVertexKey> vertexKey;
   std::optional<FfpPixelKey> pixelKey;
+
+  friend bool operator==(const ShaderRef&, const ShaderRef&) = default;
 };
 
 struct VertexDeclSnapshot {
   std::vector<VertexElement> elements;
   std::array<StreamBinding, kMaxStreams> streams{};
   u32 fvf = 0;
+
+  friend bool operator==(const VertexDeclSnapshot&, const VertexDeclSnapshot&) = default;
 };
 
 struct RenderTargetAttachment {
   Handle handle{};
   u32 level = 0;
   u32 sampleCount = 1;
+
+  friend constexpr bool operator==(const RenderTargetAttachment&, const RenderTargetAttachment&) = default;
 };
 
 struct RenderTargetSnapshot {
@@ -585,6 +618,8 @@ struct DrawDesc {
   RenderStateSnapshot rs{};
   RenderTargetSnapshot rts{};
   ViewportScissor viewport{};
+  Matrix4x4 worldViewProj{};
+  std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
   std::vector<u8> userVertexData;
@@ -1153,14 +1188,25 @@ class Query : public std::enable_shared_from_this<Query> {
 
 class StateBlock : public std::enable_shared_from_this<StateBlock> {
  public:
+  enum class CaptureMode {
+    FullSnapshot,
+    Delta,
+  };
+
   StateBlock() = default;
 
   void capture(const DeviceState& state);
+  void captureDelta(const DeviceState& before, const DeviceState& after);
+  void captureDelta(const DeviceState& before, const DeviceState& after,
+                    const std::unordered_set<u32>& recordedRenderStates);
   void apply(Device& device) const;
   const DeviceState& snapshot() const noexcept { return snapshot_; }
 
  private:
+  CaptureMode mode_ = CaptureMode::FullSnapshot;
   DeviceState snapshot_;
+  DeviceState baseline_;
+  std::unordered_set<u32> recordedRenderStates_{};
 };
 
 class SwapChain : public std::enable_shared_from_this<SwapChain> {
@@ -1253,7 +1299,9 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult setPixelShader(const ShaderRef& shader);
   HResult setClipPlane(u32 index, const ClipPlane& plane);
   HResult setViewport(const Viewport& viewport);
+  Viewport viewport() const noexcept { return state_.viewport; }
   HResult setScissorRect(const Rect& rect);
+  Rect scissorRect() const noexcept { return state_.scissorRect; }
   HResult setRenderTarget(u32 index, std::shared_ptr<Surface> surface);
   HResult setDepthStencilSurface(std::shared_ptr<Surface> surface);
 

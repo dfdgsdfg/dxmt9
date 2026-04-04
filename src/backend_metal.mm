@@ -51,6 +51,43 @@ bool queueTraceEnabled() {
   return enabled;
 }
 
+const char* queueTraceFilePath() {
+  static const char* path = std::getenv("DXMT9_TRACE_FILE");
+  return path && path[0] != '\0' ? path : nullptr;
+}
+
+bool debugForceVisibleDraw() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_DEBUG_FORCE_VISIBLE");
+    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool debugSkipAllDraws() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_SKIP_ALL_DRAWS");
+    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool debugDisableScissor() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_DISABLE_SCISSOR");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return value;
+}
+
+bool directLayerAttachEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_DIRECT_LAYER_ATTACH");
+    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
 u64 queueTraceFromSeq() {
   static const u64 value = [] {
     const char* env = std::getenv("DXMT9_TRACE_QUEUE_FROM");
@@ -73,10 +110,147 @@ int fixedFunctionTraceBudget() {
   return budget;
 }
 
+u64 fixedFunctionTraceTextureHandle() {
+  static const u64 value = [] {
+    const char* env = std::getenv("DXMT9_TRACE_FVF_TEX0");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    return static_cast<u64>(std::strtoull(env, nullptr, 0));
+  }();
+  return value;
+}
+
+u64 textureTraceHandle() {
+  static const u64 handle = [] {
+    const char* env = std::getenv("DXMT9_TRACE_TEXTURE_HANDLE");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    return static_cast<u64>(std::strtoull(env, nullptr, 0));
+  }();
+  return handle;
+}
+
+u64 traceEncodeSeq() {
+  static const u64 value = [] {
+    const char* env = std::getenv("DXMT9_TRACE_ENCODE_SEQ");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    return static_cast<u64>(std::strtoull(env, nullptr, 0));
+  }();
+  return value;
+}
+
+bool shouldTraceTexture(Handle handle) {
+  const u64 wanted = textureTraceHandle();
+  return wanted != 0ull && handle.value == wanted;
+}
+
+u64 skippedTextureHandle() {
+  static const u64 value = [] {
+    const char* env = std::getenv("DXMT9_SKIP_TEXTURE_HANDLE");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 0);
+    if (end == env) {
+      return 0ull;
+    }
+    return static_cast<u64>(parsed);
+  }();
+  return value;
+}
+
+u64 forcedPresentTextureHandle() {
+  static const u64 value = [] {
+    const char* env = std::getenv("DXMT9_FORCE_PRESENT_TEXTURE_HANDLE");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 0);
+    if (end == env) {
+      return 0ull;
+    }
+    return static_cast<u64>(parsed);
+  }();
+  return value;
+}
+
+bool shouldTraceEncode(const DrawDesc& draw, u64 seqId) {
+  const u64 seq = traceEncodeSeq();
+  if (seq != 0ull && seqId == seq) {
+    return true;
+  }
+  const u64 wanted = textureTraceHandle();
+  if (wanted != 0ull && draw.textures[0].handle && draw.textures[0].handle.value == wanted) {
+    return true;
+  }
+  const u64 ffWanted = fixedFunctionTraceTextureHandle();
+  return ffWanted != 0ull && draw.textures[0].handle && draw.textures[0].handle.value == ffWanted;
+}
+
+std::span<const u8> normalizeTextureUploadBytes(Format format, u32 width, u32 height, u32 pitch,
+                                                std::span<const u8> bytes, std::vector<u8>& scratch) {
+  if (bytes.empty()) {
+    return bytes;
+  }
+
+  switch (format) {
+    case Format::X8R8G8B8:
+    case Format::X8B8G8R8: {
+      const size_t rowBytes = static_cast<size_t>(pitch);
+      const size_t expected = rowBytes * static_cast<size_t>(height);
+      if (expected == 0 || bytes.size() < expected) {
+        return bytes;
+      }
+      scratch.assign(bytes.begin(), bytes.begin() + expected);
+      for (u32 y = 0; y < height; ++y) {
+        u8* row = scratch.data() + static_cast<size_t>(y) * rowBytes;
+        for (u32 x = 0; x < width; ++x) {
+          row[static_cast<size_t>(x) * 4 + 3] = 0xffu;
+        }
+      }
+      return scratch;
+    }
+    case Format::X1R5G5B5: {
+      const size_t rowBytes = static_cast<size_t>(pitch);
+      const size_t expected = rowBytes * static_cast<size_t>(height);
+      if (expected == 0 || bytes.size() < expected) {
+        return bytes;
+      }
+      scratch.assign(bytes.begin(), bytes.begin() + expected);
+      for (u32 y = 0; y < height; ++y) {
+        auto* row = reinterpret_cast<u16*>(scratch.data() + static_cast<size_t>(y) * rowBytes);
+        for (u32 x = 0; x < width; ++x) {
+          row[x] |= 0x8000u;
+        }
+      }
+      return scratch;
+    }
+    default:
+      return bytes;
+  }
+}
+
 void emitQueueTraceLine(const std::string& line) {
   std::fputs(line.c_str(), stderr);
   std::fputc('\n', stderr);
   std::fflush(stderr);
+  if (const char* path = queueTraceFilePath()) {
+    if (std::FILE* file = std::fopen(path, "a")) {
+      std::fputs(line.c_str(), file);
+      std::fputc('\n', file);
+      std::fclose(file);
+    }
+  }
+}
+
+void emitTextureTraceLine(const std::string& line) {
+  emitQueueTraceLine(line);
 }
 
 std::mutex gLayerRegistryMutex;
@@ -743,6 +917,8 @@ struct DrawUniforms {
   std::array<std::array<f32, 4>, kMaxVertexConstants> vsFloatConst{};
   std::array<std::array<i32, 4>, kMaxIntegerConstants> vsIntConst{};
   std::array<u32, kMaxBoolConstants> vsBoolConst{};
+  std::array<std::array<f32, 4>, 4> ffpWorldViewProj{};
+  std::array<std::array<std::array<f32, 4>, 4>, kMaxTextureStages> ffpTextureTransforms{};
   std::array<std::array<f32, 4>, kMaxPixelConstants> psFloatConst{};
   std::array<std::array<i32, 4>, kMaxIntegerConstants> psIntConst{};
   std::array<u32, kMaxBoolConstants> psBoolConst{};
@@ -750,12 +926,14 @@ struct DrawUniforms {
   std::array<f32, 2> halfPixelFixup{};
   std::array<f32, 2> viewportOrigin{};
   std::array<f32, 2> viewportSize{};
+  std::array<f32, 4> textureFactor{1.0f, 1.0f, 1.0f, 1.0f};
   f32 alphaRef = 0.0f;
   f32 fogStart = 1.0f;
   f32 fogEnd = 1.0f;
   f32 fogDensity = 1.0f;
   u32 vertexStreamOffset = 0;
   u32 vertexStreamStride = 0;
+  i32 vertexBaseIndex = 0;
   u32 clipPlaneMask = 0;
   u32 alphaTestEnable = 0;
   u32 alphaTestFunc = static_cast<u32>(CompareFunc::Always);
@@ -996,6 +1174,8 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  float4 vsFloatConst[" << kMaxVertexConstants << "];\n";
   out << "  int4 vsIntConst[" << kMaxIntegerConstants << "];\n";
   out << "  uint vsBoolConst[" << kMaxBoolConstants << "];\n";
+  out << "  float4 ffpWorldViewProj[4];\n";
+  out << "  float4 ffpTextureTransforms[" << kMaxTextureStages << "][4];\n";
   out << "  float4 psFloatConst[" << kMaxPixelConstants << "];\n";
   out << "  int4 psIntConst[" << kMaxIntegerConstants << "];\n";
   out << "  uint psBoolConst[" << kMaxBoolConstants << "];\n";
@@ -1003,12 +1183,14 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  float2 halfPixelFixup;\n";
   out << "  float2 viewportOrigin;\n";
   out << "  float2 viewportSize;\n";
+  out << "  float4 textureFactor;\n";
   out << "  float alphaRef;\n";
   out << "  float fogStart;\n";
   out << "  float fogEnd;\n";
   out << "  float fogDensity;\n";
   out << "  uint vertexStreamOffset;\n";
   out << "  uint vertexStreamStride;\n";
+  out << "  int vertexBaseIndex;\n";
   out << "  uint clipPlaneMask;\n";
   out << "  uint alphaTestEnable;\n";
   out << "  uint alphaTestFunc;\n";
@@ -1041,10 +1223,77 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  return float4(dxmt9_load_f32(base, offset), dxmt9_load_f32(base, offset + 4u),\n";
   out << "                dxmt9_load_f32(base, offset + 8u), dxmt9_load_f32(base, offset + 12u));\n";
   out << "}\n";
+  out << "inline float3 dxmt9_load_f32x3(const device uchar* base, uint offset) {\n";
+  out << "  return float3(dxmt9_load_f32(base, offset), dxmt9_load_f32(base, offset + 4u),\n";
+  out << "                dxmt9_load_f32(base, offset + 8u));\n";
+  out << "}\n";
   out << "inline float4 dxmt9_load_d3dcolor(const device uchar* base, uint offset) {\n";
   out << "  const uint raw = *reinterpret_cast<const device uint*>(base + offset);\n";
   out << "  return float4(float((raw >> 16) & 0xffu), float((raw >> 8) & 0xffu), float(raw & 0xffu),\n";
   out << "                float((raw >> 24) & 0xffu)) / 255.0f;\n";
+  out << "}\n";
+  out << "inline float4 dxmt9_apply_texture_arg_flags(float4 value, uint arg) {\n";
+  out << "  if ((arg & 0x20u) != 0u) value = value.aaaa;\n";
+  out << "  if ((arg & 0x10u) != 0u) value = float4(1.0f) - value;\n";
+  out << "  return value;\n";
+  out << "}\n";
+  out << "inline float4 dxmt9_select_texture_arg(uint arg, float4 current, float4 diffuse,\n";
+  out << "                                       float4 specular, float4 texture, float4 tfactor,\n";
+  out << "                                       float4 temp) {\n";
+  out << "  float4 value = current;\n";
+  out << "  switch (arg & 0x0fu) {\n";
+  out << "    case 0u: value = diffuse; break;\n";
+  out << "    case 1u: value = current; break;\n";
+  out << "    case 2u: value = texture; break;\n";
+  out << "    case 3u: value = tfactor; break;\n";
+  out << "    case 4u: value = specular; break;\n";
+  out << "    case 5u: value = temp; break;\n";
+  out << "    default: value = current; break;\n";
+  out << "  }\n";
+  out << "  return dxmt9_apply_texture_arg_flags(value, arg);\n";
+  out << "}\n";
+  out << "inline float4 dxmt9_apply_texture_op(uint op, float4 arg1, float4 arg2, float4 current) {\n";
+  out << "  switch (op) {\n";
+  out << "    case 1u: return current;\n";
+  out << "    case 2u: return arg1;\n";
+  out << "    case 3u: return arg2;\n";
+  out << "    case 4u: return arg1 * arg2;\n";
+  out << "    case 5u: return saturate(arg1 * arg2 * 2.0f);\n";
+  out << "    case 6u: return saturate(arg1 * arg2 * 4.0f);\n";
+  out << "    case 7u: return saturate(arg1 + arg2);\n";
+  out << "    case 8u: return saturate(arg1 + arg2 - float4(0.5f));\n";
+  out << "    case 9u: return saturate((arg1 + arg2 - float4(0.5f)) * 2.0f);\n";
+  out << "    case 10u: return saturate(arg1 - arg2);\n";
+  out << "    case 11u: return saturate(arg1 + arg2 - arg1 * arg2);\n";
+  out << "    case 26u: return mix(arg2, arg1, current);\n";
+  out << "    default: return arg1;\n";
+  out << "  }\n";
+  out << "}\n";
+  out << "inline float2 dxmt9_apply_texture_transform(float4 coord,\n";
+  out << "                                            constant DrawUniforms& uniforms,\n";
+  out << "                                            uint stage,\n";
+  out << "                                            uint flags) {\n";
+  out << "  const uint count = flags & 0xffu;\n";
+  out << "  if (count == 0u) {\n";
+  out << "    return coord.xy;\n";
+  out << "  }\n";
+  out << "  float4 transformed = float4(dot(uniforms.ffpTextureTransforms[stage][0], coord),\n";
+  out << "                              dot(uniforms.ffpTextureTransforms[stage][1], coord),\n";
+  out << "                              dot(uniforms.ffpTextureTransforms[stage][2], coord),\n";
+  out << "                              dot(uniforms.ffpTextureTransforms[stage][3], coord));\n";
+  out << "  if ((flags & 0x100u) != 0u && count >= 2u) {\n";
+  out << "    const uint divisorIndex = min(count - 1u, 3u);\n";
+  out << "    const float q = transformed[divisorIndex];\n";
+  out << "    if (fabs(q) > 1.0e-8f) {\n";
+  out << "      transformed.xy /= q;\n";
+  out << "    } else {\n";
+  out << "      transformed.xy = float2(0.0f);\n";
+  out << "    }\n";
+  out << "  }\n";
+  out << "  if (count == 1u) {\n";
+  out << "    return float2(transformed.x, 0.0f);\n";
+  out << "  }\n";
+  out << "  return transformed.xy;\n";
   out << "}\n";
   return out.str();
 }
@@ -1056,6 +1305,18 @@ DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
   for (size_t i = 0; i < kMaxBoolConstants; ++i) {
     uniforms.vsBoolConst[i] = desc.vsConst.bools[i] ? 1u : 0u;
   }
+  for (size_t row = 0; row < 4; ++row) {
+    for (size_t col = 0; col < 4; ++col) {
+      uniforms.ffpWorldViewProj[row][col] = desc.worldViewProj.m[row * 4 + col];
+    }
+  }
+  for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+    for (size_t row = 0; row < 4; ++row) {
+      for (size_t col = 0; col < 4; ++col) {
+        uniforms.ffpTextureTransforms[stage][row][col] = desc.textureTransforms[stage].m[row * 4 + col];
+      }
+    }
+  }
   uniforms.psFloatConst = desc.psConst.float4;
   uniforms.psIntConst = desc.psConst.int4;
   for (size_t i = 0; i < kMaxBoolConstants; ++i) {
@@ -1065,8 +1326,18 @@ DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
   uniforms.viewportOrigin = {static_cast<f32>(desc.viewport.viewport.x), static_cast<f32>(desc.viewport.viewport.y)};
   uniforms.viewportSize = {static_cast<f32>(std::max(1u, desc.viewport.viewport.width)),
                            static_cast<f32>(std::max(1u, desc.viewport.viewport.height))};
+  if (desc.rs.values.contains(RS_TEXTURE_FACTOR)) {
+    const u32 raw = desc.rs.values.at(RS_TEXTURE_FACTOR);
+    uniforms.textureFactor = {
+        static_cast<f32>((raw >> 16) & 0xffu) / 255.0f,
+        static_cast<f32>((raw >> 8) & 0xffu) / 255.0f,
+        static_cast<f32>(raw & 0xffu) / 255.0f,
+        static_cast<f32>((raw >> 24) & 0xffu) / 255.0f,
+    };
+  }
   uniforms.vertexStreamOffset = desc.vertexDecl.streams[0].offset;
   uniforms.vertexStreamStride = desc.vertexDecl.streams[0].stride;
+  uniforms.vertexBaseIndex = 0;
   uniforms.clipPlaneMask = desc.clipPlaneMask;
   uniforms.alphaTestEnable = desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) &&
                              desc.rs.values.at(RS_ALPHA_TEST_ENABLE) != 0;
@@ -1102,19 +1373,39 @@ constexpr u32 kD3DDeclTypeFloat2 = 1u;
 constexpr u32 kD3DDeclTypeFloat3 = 2u;
 constexpr u32 kD3DDeclTypeFloat4 = 3u;
 constexpr u32 kD3DDeclTypeD3DColor = 4u;
+constexpr u32 kD3DDeclUsagePosition = 0u;
 constexpr u32 kD3DDeclUsageTexcoord = 5u;
 constexpr u32 kD3DDeclUsagePositionT = 9u;
 constexpr u32 kD3DDeclUsageColor = 10u;
+constexpr u32 kD3DSP_DCL_USAGE_SHIFT = 0u;
+constexpr u32 kD3DSP_DCL_USAGE_MASK = 0x0000000fu;
+constexpr u32 kD3DSP_DCL_USAGEINDEX_SHIFT = 16u;
+constexpr u32 kD3DSP_DCL_USAGEINDEX_MASK = 0x000f0000u;
 
 struct FixedFunctionVertexLayout {
   bool valid = false;
   bool preTransformed = false;
+  u32 positionComponents = 0;
   bool hasDiffuse = false;
   bool hasTexcoord0 = false;
   u32 stride = 0;
   u32 positionOffset = 0;
   u32 diffuseOffset = 0;
   u32 texcoord0Offset = 0;
+  u64 hash = 0;
+};
+
+struct VertexInputBinding {
+  bool valid = false;
+  u32 offset = 0;
+  u32 type = 0;
+  u32 usage = 0;
+  u32 usageIndex = 0;
+};
+
+struct VertexShaderInputLayout {
+  u32 stride = 0;
+  std::array<VertexInputBinding, 16> inputs{};
   u64 hash = 0;
 };
 
@@ -1155,6 +1446,8 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.preTransformed);
   hash *= 1099511628211ull;
+  hash ^= layout.positionComponents;
+  hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasDiffuse);
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasTexcoord0);
@@ -1167,6 +1460,48 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash *= 1099511628211ull;
   hash ^= layout.texcoord0Offset;
   hash *= 1099511628211ull;
+  return hash;
+}
+
+u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout) {
+  u64 hash = 1469598103934665603ull;
+  hash ^= layout.stride;
+  hash *= 1099511628211ull;
+  for (const auto& input : layout.inputs) {
+    hash ^= static_cast<u64>(input.valid);
+    hash *= 1099511628211ull;
+    hash ^= input.offset;
+    hash *= 1099511628211ull;
+    hash ^= input.type;
+    hash *= 1099511628211ull;
+    hash ^= input.usage;
+    hash *= 1099511628211ull;
+    hash ^= input.usageIndex;
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+u64 hashVertexDeclaration(const VertexDeclSnapshot& decl) {
+  u64 hash = 1469598103934665603ull;
+  hash ^= decl.fvf;
+  hash *= 1099511628211ull;
+  hash ^= decl.streams[0].stride;
+  hash *= 1099511628211ull;
+  for (const auto& element : decl.elements) {
+    hash ^= element.stream;
+    hash *= 1099511628211ull;
+    hash ^= element.offset;
+    hash *= 1099511628211ull;
+    hash ^= element.type;
+    hash *= 1099511628211ull;
+    hash ^= element.method;
+    hash *= 1099511628211ull;
+    hash ^= element.usage;
+    hash *= 1099511628211ull;
+    hash ^= element.usageIndex;
+    hash *= 1099511628211ull;
+  }
   return hash;
 }
 
@@ -1187,6 +1522,13 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
           element.type == kD3DDeclTypeFloat4) {
         layout.valid = true;
         layout.preTransformed = true;
+        layout.positionComponents = 4;
+        layout.positionOffset = element.offset;
+      } else if (element.usage == kD3DDeclUsagePosition && element.usageIndex == 0 &&
+                 (element.type == kD3DDeclTypeFloat3 || element.type == kD3DDeclTypeFloat4)) {
+        layout.valid = true;
+        layout.preTransformed = false;
+        layout.positionComponents = element.type == kD3DDeclTypeFloat4 ? 4u : 3u;
         layout.positionOffset = element.offset;
       } else if (element.usage == kD3DDeclUsageColor && element.usageIndex == 0 &&
                  element.type == kD3DDeclTypeD3DColor) {
@@ -1213,6 +1555,7 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
 
   layout.valid = true;
   layout.preTransformed = true;
+  layout.positionComponents = 4;
   u32 offset = 0;
   layout.positionOffset = offset;
   offset += 16;
@@ -1255,6 +1598,20 @@ u32 primitiveVertexCount(PrimitiveType type, u32 primitiveCount) {
       return primitiveCount + 2u;
   }
   return primitiveCount * 3u;
+}
+
+u32 computeVertexDeclStride(const DrawDesc& desc) {
+  if (desc.vertexDecl.streams[0].stride != 0) {
+    return desc.vertexDecl.streams[0].stride;
+  }
+  u32 computedStride = 0;
+  for (const auto& element : desc.vertexDecl.elements) {
+    if (element.stream != 0) {
+      continue;
+    }
+    computedStride = std::max(computedStride, static_cast<u32>(element.offset + declTypeSize(element.type)));
+  }
+  return computedStride;
 }
 
 u32 indexElementSize(IndexType type) {
@@ -1840,10 +2197,7 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       return "(" + boolPrefix + "[" + std::to_string(reg.index) + "] != 0u ? float4(1.0f) : float4(0.0f))";
     case D3DRegisterKind::Input:
       if (vertexStage) {
-        if (reg.index == 0) {
-          return vertexInputs;
-        }
-        return "float4(0.0f)";
+        return vertexInputs + "[" + std::to_string(reg.index) + "]";
       }
       if (reg.index == 0) {
         return "float4(" + pixelInputs + ".color)";
@@ -1909,6 +2263,49 @@ std::string decodeOperandToken(const u32 token, D3DShaderStage stage, bool desti
 
 u32 decodeLabelIndex(u32 token) {
   return token & 0x7ffu;
+}
+
+std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const SpirvModule& module, const DrawDesc& desc) {
+  if (module.stage != D3DShaderStage::Vertex) {
+    return std::nullopt;
+  }
+
+  VertexShaderInputLayout layout;
+  layout.stride = computeVertexDeclStride(desc);
+  bool hasBinding = false;
+  for (const auto& instruction : module.instructions) {
+    if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
+      continue;
+    }
+    const u32 semanticToken = instruction.operands[0];
+    const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
+    if (dst.kind != D3DRegisterKind::Input || dst.index >= layout.inputs.size()) {
+      continue;
+    }
+    const u32 usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT;
+    const u32 usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT;
+    for (const auto& element : desc.vertexDecl.elements) {
+      if (element.stream != 0) {
+        continue;
+      }
+      if (element.usage == usage && element.usageIndex == usageIndex) {
+        layout.inputs[dst.index] = VertexInputBinding{
+            .valid = true,
+            .offset = element.offset,
+            .type = element.type,
+            .usage = usage,
+            .usageIndex = usageIndex,
+        };
+        hasBinding = true;
+        break;
+      }
+    }
+  }
+  if (!hasBinding) {
+    return std::nullopt;
+  }
+  layout.hash = hashVertexShaderInputLayout(layout);
+  return layout;
 }
 
 struct FlowBlock {
@@ -2060,7 +2457,43 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   std::ostringstream out;
   out << makeShaderPrelude(desc.clipPlaneMask != 0);
   if (vertex) {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
+    const auto inputLayout = decodeVertexShaderInputLayout(module, desc);
+    const bool traceShaderInputs = [] {
+      const char* env = std::getenv("DXMT9_TRACE_SHADER_INPUTS");
+      return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+    }();
+    if (traceShaderInputs) {
+      std::ostringstream trace;
+      trace << "[dxmt9-shader] vertex inputs";
+      for (const auto& instruction : module.instructions) {
+        if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
+          continue;
+        }
+        const u32 semanticToken = instruction.operands[0];
+        const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
+        trace << " dcl(v" << dst.index
+              << ":usage=" << ((semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT)
+              << ",idx=" << ((semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT)
+              << ",tok=0x" << std::hex << semanticToken << ",reg=0x" << instruction.operands[1] << std::dec << ")";
+      }
+      if (inputLayout) {
+        trace << " mapped";
+        for (size_t i = 0; i < inputLayout->inputs.size(); ++i) {
+          const auto& binding = inputLayout->inputs[i];
+          if (!binding.valid) {
+            continue;
+          }
+          trace << " v" << i << "->off" << binding.offset << "/type" << binding.type
+                << "/usage" << binding.usage << ":" << binding.usageIndex;
+        }
+      } else {
+        trace << " mapped=none";
+      }
+      std::fprintf(stderr, "%s\n", trace.str().c_str());
+      std::fflush(stderr);
+    }
+    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
+           "device const uchar* stream0 [[buffer(1)]]) {\n";
     out << "  VSOut out;\n";
     out << "  float2 dxmt9_positions[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
     out << "  float4 outPosition = float4(dxmt9_positions[vid % 3], 0.0, 1.0);\n";
@@ -2069,6 +2502,43 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     out << "  float4 outTexcoord0 = float4(0.0f);\n";
     out << "  float outFogFactor = 1.0f;\n";
     out << "  float outPointSize = 1.0f;\n";
+    out << "  float4 vin[16];\n";
+    out << "  for (uint i = 0; i < 16u; ++i) { vin[i] = float4(0.0f); }\n";
+    out << "  vin[0] = float4(dxmt9_positions[vid % 3], 0.0f, 1.0f);\n";
+    if (inputLayout) {
+      out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
+          << inputLayout->stride << "u;\n";
+      out << "  const int vertexIndex = max(0, int(vid) + uniforms.vertexBaseIndex);\n";
+      out << "  const uint base = uniforms.vertexStreamOffset + uint(vertexIndex) * stride;\n";
+      for (size_t i = 0; i < inputLayout->inputs.size(); ++i) {
+        const auto& binding = inputLayout->inputs[i];
+        if (!binding.valid) {
+          continue;
+        }
+        switch (binding.type) {
+          case kD3DDeclTypeFloat1:
+            out << "  vin[" << i << "] = float4(dxmt9_load_f32(stream0, base + " << binding.offset
+                << "u), 0.0f, 0.0f, 1.0f);\n";
+            break;
+          case kD3DDeclTypeFloat2:
+            out << "  vin[" << i << "] = float4(dxmt9_load_f32x2(stream0, base + " << binding.offset
+                << "u), 0.0f, 1.0f);\n";
+            break;
+          case kD3DDeclTypeFloat3:
+            out << "  vin[" << i << "] = float4(dxmt9_load_f32x3(stream0, base + " << binding.offset
+                << "u), 1.0f);\n";
+            break;
+          case kD3DDeclTypeFloat4:
+            out << "  vin[" << i << "] = dxmt9_load_f32x4(stream0, base + " << binding.offset << "u);\n";
+            break;
+          case kD3DDeclTypeD3DColor:
+            out << "  vin[" << i << "] = dxmt9_load_d3dcolor(stream0, base + " << binding.offset << "u);\n";
+            break;
+          default:
+            break;
+        }
+      }
+    }
     out << "  int a0 = 0;\n";
     out << "  int aL = 0;\n";
     out << "  float4 r[32];\n";
@@ -2116,7 +2586,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         }
         const auto token = instruction.operands[index];
         const auto reg = decodeRegisterRef(token, module.stage);
-        std::string expr = readOperandExpression(instruction, reg, "float4(dxmt9_positions[vid % 3], 0.0f, 1.0f)", "in", true,
+        std::string expr = readOperandExpression(instruction, reg, "vin", "in", true,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord0",
                                                  "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
                                                  "p");
@@ -3221,6 +3691,38 @@ std::string makeTranslatedFragmentSource(const ShaderRef& shader, const DrawDesc
 std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
   std::ostringstream out;
   const auto layout = decodeFixedFunctionVertexLayout(desc);
+  constexpr u32 kTciIndexMask = 0x0000ffffu;
+  constexpr u32 kTciGenMask = 0xffff0000u;
+  constexpr u32 kTciCameraSpacePosition = 0x00020000u;
+  const u32 stage0TexCoordIndex = key.texCoordGen[0] & kTciIndexMask;
+  const u32 stage0TexCoordGen = key.texCoordGen[0] & kTciGenMask;
+  const auto emitStage0Texcoord = [&](std::ostringstream& shader, const char* positionExpr) {
+    shader << "  float4 dxmt9_texcoord0 = float4(0.0f, 0.0f, 1.0f, 1.0f);\n";
+    if (layout && layout->hasTexcoord0 && stage0TexCoordIndex == 0u) {
+      shader << "  dxmt9_texcoord0 = float4(dxmt9_load_f32x2(stream0, base + " << layout->texcoord0Offset
+             << "u), 1.0f, 1.0f);\n";
+    }
+    // D3D9 startup/UI paths sometimes leave camera-space texgen enabled on
+    // XYZRHW draws. Feeding screen-space XYZRHW into projected texgen produces
+    // the giant diagonal smears seen in Anno 1701. For pre-transformed
+    // vertices, preserve the authored texcoords instead of treating screen
+    // coordinates as camera-space positions.
+    if (stage0TexCoordGen == kTciCameraSpacePosition &&
+        !(layout && layout->preTransformed)) {
+      shader << "  dxmt9_texcoord0 = float4(" << positionExpr << ".xyz, 1.0f);\n";
+    }
+    // Legacy UI paths frequently leave texgen / projected texture-transform
+    // state enabled while submitting XYZRHW quads with authored UVs. Applying
+    // that state to pre-transformed vertices causes severe diagonal smearing
+    // in Anno 1701's menu background. For XYZRHW draws, use the provided UVs
+    // directly and ignore the stale transform state.
+    if (layout && layout->preTransformed) {
+      shader << "  out.texcoord0 = dxmt9_texcoord0.xy;\n";
+    } else {
+      shader << "  out.texcoord0 = dxmt9_apply_texture_transform(dxmt9_texcoord0, uniforms, 0u, "
+             << key.texTransformFlags[0] << "u);\n";
+    }
+  };
   out << makeShaderPrelude(key.clipPlaneMask != 0);
   if (layout && layout->preTransformed) {
     out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
@@ -3228,7 +3730,8 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
     out << "  VSOut out;\n";
     out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
         << layout->stride << "u;\n";
-    out << "  const uint base = uniforms.vertexStreamOffset + vid * stride;\n";
+    out << "  const int vertexIndex = max(0, int(vid) + uniforms.vertexBaseIndex);\n";
+    out << "  const uint base = uniforms.vertexStreamOffset + uint(vertexIndex) * stride;\n";
     out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
     out << "  float clipW = fabs(inPosition.w) > 1.0e-8f ? (1.0f / inPosition.w) : 1.0f;\n";
     out << "  float2 viewportSize = max(uniforms.viewportSize, float2(1.0f));\n";
@@ -3242,11 +3745,49 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
       out << "  out.color = float4(1.0);\n";
     }
     out << "  out.secondaryColor = float4(0.0);\n";
-    if (layout->hasTexcoord0) {
-      out << "  out.texcoord0 = dxmt9_load_f32x2(stream0, base + " << layout->texcoord0Offset << "u);\n";
+    emitStage0Texcoord(out, "inPosition");
+    out << "  out.fogFactor = 1.0;\n";
+    out << "  out.pointSize = 1.0;\n";
+  } else if (layout) {
+    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
+           "device const uchar* stream0 [[buffer(1)]]) {\n";
+    out << "  VSOut out;\n";
+    out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
+        << layout->stride << "u;\n";
+    out << "  const int vertexIndex = max(0, int(vid) + uniforms.vertexBaseIndex);\n";
+    out << "  const uint base = uniforms.vertexStreamOffset + uint(vertexIndex) * stride;\n";
+    if (layout->positionComponents == 4) {
+      out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
     } else {
-      out << "  out.texcoord0 = float2(0.0);\n";
+      out << "  float4 inPosition = float4(dxmt9_load_f32x3(stream0, base + " << layout->positionOffset
+          << "u), 1.0f);\n";
     }
+    out << "  float4 clip;\n";
+    out << "  bool identityWvp = all(uniforms.ffpWorldViewProj[0] == float4(1.0, 0.0, 0.0, 0.0)) &&\n";
+    out << "                     all(uniforms.ffpWorldViewProj[1] == float4(0.0, 1.0, 0.0, 0.0)) &&\n";
+    out << "                     all(uniforms.ffpWorldViewProj[2] == float4(0.0, 0.0, 1.0, 0.0)) &&\n";
+    out << "                     all(uniforms.ffpWorldViewProj[3] == float4(0.0, 0.0, 0.0, 1.0));\n";
+    out << "  bool pixelSpacePosition = identityWvp && (fabs(inPosition.x) > 2.0f || fabs(inPosition.y) > 2.0f);\n";
+    out << "  if (pixelSpacePosition) {\n";
+    out << "    float2 viewportSize = max(uniforms.viewportSize, float2(1.0f));\n";
+    out << "    float2 ndc = float2(((inPosition.x - uniforms.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
+    out << "                       1.0f - ((inPosition.y - uniforms.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
+    out << "    clip = float4(ndc, inPosition.z, 1.0f);\n";
+    out << "  } else {\n";
+    out << "    clip.x = dot(uniforms.ffpWorldViewProj[0], inPosition);\n";
+    out << "    clip.y = dot(uniforms.ffpWorldViewProj[1], inPosition);\n";
+    out << "    clip.z = dot(uniforms.ffpWorldViewProj[2], inPosition);\n";
+    out << "    clip.w = dot(uniforms.ffpWorldViewProj[3], inPosition);\n";
+    out << "  }\n";
+    out << "  out.position = clip;\n";
+    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
+    if (layout->hasDiffuse) {
+      out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
+    } else {
+      out << "  out.color = float4(1.0);\n";
+    }
+    out << "  out.secondaryColor = float4(0.0);\n";
+    emitStage0Texcoord(out, "inPosition");
     out << "  out.fogFactor = 1.0;\n";
     out << "  out.pointSize = 1.0;\n";
   } else {
@@ -3280,6 +3821,14 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
 std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
   std::ostringstream out;
   const bool textured = desc.textures[0].handle != Handle{};
+  const bool debugFfpUv = [] {
+    const char* env = std::getenv("DXMT9_DEBUG_FFP_UV");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  const bool debugFfpTexture = [] {
+    const char* env = std::getenv("DXMT9_DEBUG_FFP_TEXTURE");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
   out << makeShaderPrelude(desc.clipPlaneMask != 0);
   if (textured) {
     out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
@@ -3288,20 +3837,37 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
     out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
   }
   out << "  float4 color = in.color;\n";
+  out << "  float4 current = color;\n";
+  out << "  float4 diffuse = in.color;\n";
+  out << "  float4 specular = in.secondaryColor;\n";
+  out << "  float4 tfactor = uniforms.textureFactor;\n";
+  out << "  float4 temp = float4(0.0);\n";
   if (textured) {
     out << "  float4 texColor = tex0.sample(samp0, in.texcoord0);\n";
-    switch (key.stages[0].colorOp) {
-      case static_cast<u32>(TextureOp::SelectArg1):
-        out << "  color = color;\n";
-        break;
-      case static_cast<u32>(TextureOp::Add):
-        out << "  color += texColor;\n";
-        break;
-      case static_cast<u32>(TextureOp::Modulate):
-      default:
-        out << "  color *= texColor;\n";
-        break;
+    if (debugFfpUv) {
+      out << "  return float4(fract(in.texcoord0.x), fract(in.texcoord0.y), 0.0, 1.0);\n";
+      out << "}\n";
+      out << "// ffp pixel hash " << key.hash << "\n";
+      return out.str();
     }
+    if (debugFfpTexture) {
+      out << "  return texColor;\n";
+      out << "}\n";
+      out << "// ffp pixel hash " << key.hash << "\n";
+      return out.str();
+    }
+    out << "  float4 colorArg1 = dxmt9_select_texture_arg(" << key.stages[0].colorArg1
+        << "u, current, diffuse, specular, texColor, tfactor, temp);\n";
+    out << "  float4 colorArg2 = dxmt9_select_texture_arg(" << key.stages[0].colorArg2
+        << "u, current, diffuse, specular, texColor, tfactor, temp);\n";
+    out << "  color = dxmt9_apply_texture_op(" << key.stages[0].colorOp
+        << "u, colorArg1, colorArg2, current);\n";
+    out << "  float4 alphaArg1 = dxmt9_select_texture_arg(" << key.stages[0].alphaArg1
+        << "u, current, diffuse, specular, texColor, tfactor, temp);\n";
+    out << "  float4 alphaArg2 = dxmt9_select_texture_arg(" << key.stages[0].alphaArg2
+        << "u, current, diffuse, specular, texColor, tfactor, temp);\n";
+    out << "  color.a = dxmt9_apply_texture_op(" << key.stages[0].alphaOp
+        << "u, alphaArg1, alphaArg2, current).a;\n";
   }
   if (key.alphaTestEnable) {
     out << "  bool pass = true;\n";
@@ -3370,12 +3936,16 @@ std::string makeTexturedVertexSource(u64 variantHash) {
   return out.str();
 }
 
-std::string makeTexturedFragmentSource(u64 variantHash) {
+std::string makeTexturedFragmentSource(u64 variantHash, bool forceOpaqueAlpha = false) {
   std::ostringstream out;
   out << "#include <metal_stdlib>\nusing namespace metal;\n";
   out << "struct VSOut { float4 position [[position]]; float2 uv; };\n";
   out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], texture2d<float> tex0 [[texture(0)]], sampler samp0 [[sampler(0)]]) {\n";
-  out << "  return tex0.sample(samp0, in.uv);\n";
+  out << "  float4 color = tex0.sample(samp0, in.uv);\n";
+  if (forceOpaqueAlpha) {
+    out << "  color.a = 1.0;\n";
+  }
+  out << "  return color;\n";
   out << "}\n";
   out << "// variant " << variantHash << "\n";
   return out.str();
@@ -3550,7 +4120,7 @@ ShaderVariantKey makeShaderVariantKey(const DrawDesc& desc, std::span<const u32>
                                       u32 stencilFormat) {
   ShaderVariantKey key;
   const auto layout = decodeFixedFunctionVertexLayout(desc);
-  const u64 layoutHash = layout ? layout->hash : 0ull;
+  const u64 layoutHash = layout ? layout->hash : hashVertexDeclaration(desc.vertexDecl);
   key.hash = desc.vertexShader.hash ^ (desc.pixelShader.hash << 1) ^ desc.clipPlaneMask ^ depthFormat ^
              (stencilFormat << 1) ^ (layoutHash << 1) ^ desc.vertexDecl.fvf;
   key.textured = desc.textures[0].handle != Handle{};
@@ -3575,6 +4145,9 @@ ShaderVariantKey makeShaderVariantKey(const DrawDesc& desc, std::span<const u32>
 
 DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
   DepthStencilKey key;
+  if (debugForceVisibleDraw()) {
+    return key;
+  }
   const auto it = desc.rs.values.find(RS_Z_ENABLE);
   key.depthEnable = it != desc.rs.values.end() && it->second != 0;
   const auto writeIt = desc.rs.values.find(RS_Z_WRITE_ENABLE);
@@ -3825,6 +4398,17 @@ class MetalBackendDevice final : public BackendDevice {
       }
     }
     textures_[handle.value] = std::move(record);
+    if (shouldTraceTexture(handle)) {
+      std::ostringstream out;
+      out << "[dxmt9-texture] create handle=0x" << std::hex << handle.value << std::dec
+          << " format=" << static_cast<unsigned>(desc.format)
+          << " type=" << static_cast<unsigned>(desc.type)
+          << " size=" << desc.width << "x" << desc.height
+          << " levels=" << desc.levels
+          << " usage=0x" << std::hex << desc.usage << std::dec
+          << " pool=" << static_cast<unsigned>(desc.pool);
+      emitTextureTraceLine(out.str());
+    }
     return handle;
   }
 
@@ -3974,6 +4558,52 @@ class MetalBackendDevice final : public BackendDevice {
     if (it == textures_.end() || !it->second.texture || bytes.empty()) {
       return;
     }
+    if (shouldTraceTexture(handle)) {
+      u32 minAlpha = 255u;
+      u32 maxAlpha = 0u;
+      u64 nonZeroAlpha = 0u;
+      u64 nonZeroRgb = 0u;
+      if ((it->second.desc.format == Format::A8R8G8B8 || it->second.desc.format == Format::A8B8G8R8 ||
+           it->second.desc.format == Format::X8R8G8B8 || it->second.desc.format == Format::X8B8G8R8) &&
+          pitch >= width * 4u) {
+        for (u32 y = 0; y < height; ++y) {
+          const u8* row = bytes.data() + static_cast<size_t>(y) * pitch;
+          for (u32 x = 0; x < width; ++x) {
+            const u8 b = row[static_cast<size_t>(x) * 4u + 0u];
+            const u8 g = row[static_cast<size_t>(x) * 4u + 1u];
+            const u8 r = row[static_cast<size_t>(x) * 4u + 2u];
+            const u8 a = row[static_cast<size_t>(x) * 4u + 3u];
+            minAlpha = std::min<u32>(minAlpha, a);
+            maxAlpha = std::max<u32>(maxAlpha, a);
+            nonZeroAlpha += (a != 0u) ? 1u : 0u;
+            nonZeroRgb += (r != 0u || g != 0u || b != 0u) ? 1u : 0u;
+          }
+        }
+      }
+      std::ostringstream out;
+      out << "[dxmt9-texture] upload handle=0x" << std::hex << handle.value << std::dec
+          << " level=" << level
+          << " size=" << width << "x" << height
+          << " pitch=" << pitch
+          << " bytes=" << bytes.size()
+          << " alphaMin=" << minAlpha
+          << " alphaMax=" << maxAlpha
+          << " nonZeroAlpha=" << nonZeroAlpha
+          << " nonZeroRgb=" << nonZeroRgb
+          << " head=";
+      const size_t preview = std::min<size_t>(16, bytes.size());
+      for (size_t i = 0; i < preview; ++i) {
+        if (i) {
+          out << ',';
+        }
+        out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(bytes[i]) << std::dec;
+      }
+      emitTextureTraceLine(out.str());
+    }
+
+    std::vector<u8> normalizedStorage;
+    const auto normalizedBytes =
+        normalizeTextureUploadBytes(it->second.desc.format, width, height, pitch, bytes, normalizedStorage);
 
     id<MTLTexture> texture = it->second.texture.get();
     const NSUInteger mipLevel = static_cast<NSUInteger>(level);
@@ -3983,7 +4613,7 @@ class MetalBackendDevice final : public BackendDevice {
 
     @autoreleasepool {
       if (texture.storageMode != MTLStorageModePrivate) {
-        [texture replaceRegion:region mipmapLevel:mipLevel withBytes:bytes.data() bytesPerRow:pitch];
+        [texture replaceRegion:region mipmapLevel:mipLevel withBytes:normalizedBytes.data() bytesPerRow:pitch];
         return;
       }
 
@@ -4003,7 +4633,7 @@ class MetalBackendDevice final : public BackendDevice {
       if (!stagingTexture) {
         return;
       }
-      [stagingTexture replaceRegion:region mipmapLevel:0 withBytes:bytes.data() bytesPerRow:pitch];
+      [stagingTexture replaceRegion:region mipmapLevel:0 withBytes:normalizedBytes.data() bytesPerRow:pitch];
 
       id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
       if (!commandBuffer) {
@@ -4092,6 +4722,14 @@ class MetalBackendDevice final : public BackendDevice {
     op.present = desc;
     op.presentSource = currentBackBuffer_;
     currentSlot().commands.push_back(std::move(op));
+    if (queueTraceEnabled()) {
+      std::ostringstream out;
+      out << "[dxmt9-present] enqueue"
+          << " hwnd=" << static_cast<unsigned long long>(desc.window.value)
+          << " source=0x" << std::hex << static_cast<unsigned long long>(currentBackBuffer_.value) << std::dec
+          << " size=" << desc.width << "x" << desc.height;
+      emitQueueTraceLine(out.str());
+    }
     traceQueueUnlocked("present.enqueue", *writingSlot_);
     commitCurrentChunkUnlocked(lock);
   }
@@ -4269,31 +4907,81 @@ class MetalBackendDevice final : public BackendDevice {
         tracePresentEvent("metal-device.cached", seqId, hwnd);
       }
 
-      tracePresentEvent("cocoa-window.begin", seqId, hwnd);
-      void* cocoaWindow = interop.getCocoaWindow(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)), 1);
-      if (!cocoaWindow) {
-        tracePresentEvent("cocoa-window.nil", seqId, hwnd);
-        return nullptr;
-      }
-      tracePresentEvent("cocoa-window.ok", seqId, hwnd);
-
       __block void* cocoaView = nullptr;
-      tracePresentEvent("content-view.begin", seqId, hwnd);
-      dispatch_sync(dispatch_get_main_queue(), ^{
-        @autoreleasepool {
-          id object = static_cast<id>(cocoaWindow);
-          if ([object isKindOfClass:[NSWindow class]]) {
-            cocoaView = [static_cast<NSWindow*>(object) contentView];
-          } else if ([object isKindOfClass:[NSView class]]) {
-            cocoaView = object;
-          }
+      __block bool haveWindowObject = false;
+      for (int queryMode : {0, 1}) {
+        tracePresentEvent(queryMode == 0 ? "cocoa-object.begin.0" : "cocoa-object.begin.1", seqId, hwnd);
+        void* cocoaObject = interop.getCocoaWindow(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)), queryMode);
+        if (!cocoaObject) {
+          tracePresentEvent(queryMode == 0 ? "cocoa-object.nil.0" : "cocoa-object.nil.1", seqId, hwnd);
+          continue;
         }
-      });
+        tracePresentEvent(queryMode == 0 ? "cocoa-object.ok.0" : "cocoa-object.ok.1", seqId, hwnd);
+        tracePresentEvent("content-view.begin", seqId, hwnd);
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          @autoreleasepool {
+            id object = static_cast<id>(cocoaObject);
+            if (queueTraceEnabled()) {
+              std::ostringstream out;
+              out << "[dxmt9-present] cocoa-object.class"
+                  << " seq=" << static_cast<unsigned long long>(seqId)
+                  << " hwnd=" << static_cast<unsigned long long>(hwnd)
+                  << " mode=" << queryMode
+                  << " class=" << (object ? [NSStringFromClass([object class]) UTF8String] : "nil");
+              emitQueueTraceLine(out.str());
+            }
+            if ([object isKindOfClass:[NSView class]]) {
+              cocoaView = object;
+              return;
+            }
+            if ([object isKindOfClass:[NSWindow class]]) {
+              haveWindowObject = true;
+              cocoaView = [static_cast<NSWindow*>(object) contentView];
+            }
+          }
+        });
+        if (cocoaView) {
+          break;
+        }
+      }
       if (!cocoaView) {
-        tracePresentEvent("content-view.nil", seqId, hwnd);
+        tracePresentEvent(haveWindowObject ? "content-view.nil" : "cocoa-object.nil", seqId, hwnd);
         return nullptr;
       }
       tracePresentEvent("content-view.ok", seqId, hwnd);
+
+      if (directLayerAttachEnabled()) {
+        __block CAMetalLayer* directLayer = nil;
+        tracePresentEvent("direct-layer.begin", seqId, hwnd);
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          @autoreleasepool {
+            NSView* view = static_cast<NSView*>(cocoaView);
+            if (!view) {
+              return;
+            }
+          CAMetalLayer* newLayer = [CAMetalLayer layer];
+          view.wantsLayer = YES;
+          view.layer = newLayer;
+          newLayer.opaque = YES;
+          newLayer.frame = view.bounds;
+          if (view.window.screen) {
+            newLayer.contentsScale = view.window.screen.backingScaleFactor;
+          } else if (NSScreen.mainScreen) {
+            newLayer.contentsScale = NSScreen.mainScreen.backingScaleFactor;
+            }
+            directLayer = newLayer;
+          }
+        });
+        if (directLayer) {
+          tracePresentEvent("direct-layer.ok", seqId, hwnd);
+          record.layer = ObjcPtr<CAMetalLayer*>::retain(directLayer);
+          CAMetalLayer* layer = record.layer.get();
+          registerLayerHandle(hwnd, layer);
+          layers_[hwnd] = std::move(record);
+          return layer;
+        }
+        tracePresentEvent("direct-layer.nil", seqId, hwnd);
+      }
 
       tracePresentEvent("metal-view.begin", seqId, hwnd);
       void* metalView = interop.createMetalView(cocoaView, wineMetalDevice_);
@@ -4313,6 +5001,56 @@ class MetalBackendDevice final : public BackendDevice {
         return nullptr;
       }
       tracePresentEvent("metal-layer.ok", seqId, hwnd);
+
+      if (queueTraceEnabled()) {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          @autoreleasepool {
+            NSView* parentView = static_cast<NSView*>(cocoaView);
+            id metalViewObject = static_cast<id>(metalView);
+            std::ostringstream out;
+            out << "[dxmt9-present] metal-view.info"
+                << " seq=" << static_cast<unsigned long long>(seqId)
+                << " hwnd=" << static_cast<unsigned long long>(hwnd)
+                << " parentClass=" << (parentView ? [NSStringFromClass([parentView class]) UTF8String] : "nil")
+                << " metalClass=" << (metalViewObject ? [NSStringFromClass([metalViewObject class]) UTF8String] : "nil");
+            if (parentView) {
+              const NSRect bounds = parentView.bounds;
+              out << " parentBounds=" << bounds.origin.x << "," << bounds.origin.y << " "
+                  << bounds.size.width << "x" << bounds.size.height;
+            }
+            if ([metalViewObject isKindOfClass:[NSView class]]) {
+              NSView* metalSubview = static_cast<NSView*>(metalViewObject);
+              if ([metalSubview respondsToSelector:@selector(setOpaque:)]) {
+                [reinterpret_cast<id>(metalSubview) setOpaque:YES];
+              }
+              const NSRect frame = metalSubview.frame;
+              const NSRect bounds = metalSubview.bounds;
+              out << " metalFrame=" << frame.origin.x << "," << frame.origin.y << " "
+                  << frame.size.width << "x" << frame.size.height
+                  << " metalBounds=" << bounds.origin.x << "," << bounds.origin.y << " "
+                  << bounds.size.width << "x" << bounds.size.height
+                  << " hidden=" << ([metalSubview isHidden] ? 1 : 0)
+                  << " superClass="
+                  << (metalSubview.superview ? [NSStringFromClass([metalSubview.superview class]) UTF8String] : "nil");
+              if (parentView) {
+                const auto* subviews = parentView.subviews;
+                out << " subviews=" << subviews.count;
+                for (NSUInteger i = 0; i < subviews.count; ++i) {
+                  NSView* sibling = subviews[i];
+                  if (sibling == metalSubview) {
+                    out << " metalIndex=" << i;
+                  }
+                }
+              }
+            }
+            const CGRect layerFrame = layer.frame;
+            out << " layerFrame=" << layerFrame.origin.x << "," << layerFrame.origin.y << " "
+                << layerFrame.size.width << "x" << layerFrame.size.height
+                << " layerOpaque=" << ([layer isOpaque] ? 1 : 0);
+            emitQueueTraceLine(out.str());
+          }
+        });
+      }
 
       record.layer = ObjcPtr<CAMetalLayer*>::retain(layer);
       record.wineMetalView = metalView;
@@ -4812,11 +5550,19 @@ class MetalBackendDevice final : public BackendDevice {
       if (discardAfterPresent) {
         backBufferDiscardAfterPresent_ = false;
       }
-      [encoder setViewport:MTLViewport{0, 0, static_cast<double>(std::max(1u, draw.viewport.viewport.width)),
-                                       static_cast<double>(std::max(1u, draw.viewport.viewport.height)),
+      const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
+      double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
+      double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
+      double viewportOriginX = 0.0;
+      double viewportOriginY = 0.0;
+      if (ffLayout && ffLayout->preTransformed) {
+        viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
+        viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
+      }
+      [encoder setViewport:MTLViewport{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
                                        static_cast<double>(draw.viewport.viewport.minZ),
                                        static_cast<double>(draw.viewport.viewport.maxZ)}];
-      [encoder setCullMode:toCullMode(draw.rs.values.contains(RS_CULL_MODE) ? draw.rs.values.at(RS_CULL_MODE) : 1)];
+      [encoder setCullMode:MTLCullModeNone];
       return [encoder retain];
     }
   }
@@ -4824,17 +5570,46 @@ class MetalBackendDevice final : public BackendDevice {
   void encodeDraw(id<MTLCommandBuffer> commandBuffer, id<MTLRenderCommandEncoder> encoder, const DrawDesc& draw,
                   u64 seqId) {
     (void)commandBuffer;
+    if (debugSkipAllDraws()) {
+      if (queueTraceEnabled()) {
+        std::ostringstream out;
+        out << "[dxmt9-debug] skip all draws seq=" << static_cast<unsigned long long>(seqId)
+            << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value);
+        emitQueueTraceLine(out.str());
+      }
+      return;
+    }
+    const bool traceEncode = shouldTraceEncode(draw, seqId);
     if (!encoder) {
+      if (traceEncode) {
+        emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-encoder");
+      }
       return;
     }
     const auto depthKey = makeDepthStencilKey(draw);
     auto pipeline = pipelineForDraw(draw).get();
     if (!pipeline) {
+      if (traceEncode) {
+        std::ostringstream out;
+        out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
+            << " skipped reason=no-pipeline"
+            << " rt0=" << static_cast<unsigned long long>(draw.rts.color[0].handle.value)
+            << " ds=" << static_cast<unsigned long long>(draw.rts.depthStencil.handle.value)
+            << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
+            << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
+            << " alphaBlend="
+            << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
+            << " colorWrite="
+            << (draw.rs.values.contains(RS_COLOR_WRITE_ENABLE) ? draw.rs.values.at(RS_COLOR_WRITE_ENABLE) : 0xfu);
+        emitQueueTraceLine(out.str());
+      }
       return;
     }
     auto depthState = depthStencilStateFor(depthKey);
     if (depthState) {
       [encoder setDepthStencilState:depthState.get()];
+    } else if (debugForceVisibleDraw()) {
+      [encoder setDepthStencilState:nil];
     }
     [encoder setRenderPipelineState:pipeline.get()];
     auto* uniforms = argbufArena_.allocate<DrawUniforms>(seqId);
@@ -4843,64 +5618,150 @@ class MetalBackendDevice final : public BackendDevice {
       uniforms = &fallbackUniforms;
     }
     *uniforms = buildDrawUniforms(draw);
-    [encoder setVertexBytes:uniforms length:sizeof(DrawUniforms) atIndex:0];
-    [encoder setFragmentBytes:uniforms length:sizeof(DrawUniforms) atIndex:0];
+    id<MTLBuffer> uploadedUniformBuffer =
+        [device_.get() newBufferWithBytes:uniforms
+                                   length:sizeof(DrawUniforms)
+                                  options:MTLResourceStorageModeShared];
+    ObjcPtr<id<MTLBuffer>> transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploadedUniformBuffer);
+    if (!transientUniformBuffer) {
+      return;
+    }
+    [encoder setVertexBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
+    [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
     const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
+    if (auto* surface = findSurfaceUnlocked(draw.rts.color[0].handle.value); surface && surface->texture) {
+      double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
+      double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
+      double viewportOriginX = 0.0;
+      double viewportOriginY = 0.0;
+      if (ffLayout && ffLayout->preTransformed) {
+        viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
+        viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
+      }
+      [encoder setViewport:MTLViewport{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
+                                       static_cast<double>(draw.viewport.viewport.minZ),
+                                       static_cast<double>(draw.viewport.viewport.maxZ)}];
+      MTLScissorRect scissor{};
+      if (draw.viewport.scissorEnabled && !debugDisableScissor()) {
+        scissor.x = static_cast<NSUInteger>(std::max(0, draw.viewport.scissor.left));
+        scissor.y = static_cast<NSUInteger>(std::max(0, draw.viewport.scissor.top));
+        scissor.width = static_cast<NSUInteger>(std::max(0, draw.viewport.scissor.right - draw.viewport.scissor.left));
+        scissor.height =
+            static_cast<NSUInteger>(std::max(0, draw.viewport.scissor.bottom - draw.viewport.scissor.top));
+      } else {
+        scissor.x = 0;
+        scissor.y = 0;
+        scissor.width = static_cast<NSUInteger>(std::max(1u, surface->desc.width));
+        scissor.height = static_cast<NSUInteger>(std::max(1u, surface->desc.height));
+      }
+      [encoder setScissorRect:scissor];
+      if (ffLayout && ffLayout->preTransformed) {
+        [encoder setCullMode:MTLCullModeNone];
+      } else {
+        [encoder setCullMode:toCullMode(draw.rs.values.contains(RS_CULL_MODE) ? draw.rs.values.at(RS_CULL_MODE) : 1u)];
+      }
+    }
     static std::atomic<int> ffTraceRemaining{fixedFunctionTraceBudget()};
     const u32 primitiveCount = std::max<u32>(1, draw.primitiveCount);
     const NSUInteger vertexCount =
         static_cast<NSUInteger>(std::max(1u, primitiveVertexCount(draw.primitiveType, primitiveCount)));
+    const bool indexedDraw = draw.indexBuffer || !draw.userIndexData.empty();
     ObjcPtr<id<MTLBuffer>> transientVertexBuffer;
-    if (ffLayout) {
-      id<MTLBuffer> vertexBuffer = nil;
-      NSUInteger vertexBufferOffset = 0;
-      std::span<const u8> vertexShadow;
-      if (!draw.userVertexData.empty()) {
-        id<MTLBuffer> uploaded =
-            [device_.get() newBufferWithBytes:draw.userVertexData.data()
-                                       length:static_cast<NSUInteger>(draw.userVertexData.size())
-                                      options:MTLResourceStorageModeShared];
-        transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
-        vertexBuffer = transientVertexBuffer.get();
-        vertexShadow = draw.userVertexData;
-      } else if (draw.vertexDecl.streams[0].buffer) {
-        if (auto* buffer = findBufferUnlocked(draw.vertexDecl.streams[0].buffer->handle().value);
-            buffer && buffer->buffer) {
-          vertexBuffer = buffer->buffer.get();
+    std::span<const u8> vertexBytes;
+    id<MTLBuffer> vertexBuffer = nil;
+    NSUInteger vertexBufferOffset = 0;
+    if (!draw.userVertexData.empty()) {
+      id<MTLBuffer> uploaded =
+          [device_.get() newBufferWithBytes:draw.userVertexData.data()
+                                     length:static_cast<NSUInteger>(draw.userVertexData.size())
+                                    options:MTLResourceStorageModeShared];
+      transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
+      vertexBuffer = transientVertexBuffer.get();
+      vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
+      vertexBytes = draw.userVertexData;
+    } else if (draw.vertexDecl.streams[0].buffer) {
+      if (auto* buffer = findBufferUnlocked(draw.vertexDecl.streams[0].buffer->handle().value);
+          buffer && buffer->buffer) {
+        vertexBuffer = buffer->buffer.get();
+        vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
+        if (!buffer->shadow.empty()) {
+          vertexBytes = buffer->shadow;
+        } else if (void* contents = [buffer->buffer.get() contents]; contents) {
+          vertexBytes = std::span<const u8>(static_cast<const u8*>(contents),
+                                            static_cast<size_t>([buffer->buffer.get() length]));
+        }
+      } else {
+        const auto bytes = draw.vertexDecl.streams[0].buffer->bytes();
+        if (!bytes.empty()) {
+          id<MTLBuffer> uploaded =
+              [device_.get() newBufferWithBytes:bytes.data()
+                                         length:static_cast<NSUInteger>(bytes.size())
+                                        options:MTLResourceStorageModeShared];
+          transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
+          vertexBuffer = transientVertexBuffer.get();
           vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
-          vertexShadow = buffer->shadow;
-        } else {
-          const auto bytes = draw.vertexDecl.streams[0].buffer->bytes();
-          if (!bytes.empty()) {
-            id<MTLBuffer> uploaded =
-                [device_.get() newBufferWithBytes:bytes.data()
-                                           length:static_cast<NSUInteger>(bytes.size())
-                                          options:MTLResourceStorageModeShared];
-            transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
-            vertexBuffer = transientVertexBuffer.get();
-            vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
-            vertexShadow = bytes;
-          }
+          vertexBytes = bytes;
         }
       }
+    }
+    if (ffLayout) {
       if (!vertexBuffer) {
+        if (traceEncode) {
+          emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-vertex-buffer");
+        }
         return;
       }
       uniforms->vertexStreamOffset = 0;
       uniforms->vertexStreamStride =
           draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride;
-      [encoder setVertexBytes:uniforms length:sizeof(DrawUniforms) atIndex:0];
+      uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+      if (ffLayout->preTransformed) {
+        if (auto* targetSurface = findSurfaceUnlocked(draw.rts.color[0].handle.value); targetSurface) {
+          uniforms->viewportOrigin = {0.0f, 0.0f};
+          uniforms->viewportSize = {static_cast<f32>(std::max(1u, targetSurface->desc.width)),
+                                    static_cast<f32>(std::max(1u, targetSurface->desc.height))};
+        }
+      }
+      transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(
+          [device_.get() newBufferWithBytes:uniforms
+                                     length:sizeof(DrawUniforms)
+                                    options:MTLResourceStorageModeShared]);
+      if (!transientUniformBuffer) {
+        return;
+      }
+      [encoder setVertexBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
+      [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
       [encoder setVertexBuffer:vertexBuffer offset:vertexBufferOffset atIndex:1];
 
-      if (ffTraceRemaining.load(std::memory_order_relaxed) > 0 && ffLayout->preTransformed && !vertexShadow.empty()) {
-        int expected = ffTraceRemaining.load(std::memory_order_relaxed);
-        while (expected > 0 &&
-               !ffTraceRemaining.compare_exchange_weak(expected, expected - 1, std::memory_order_relaxed)) {
+      const u64 ffTraceTex0 = fixedFunctionTraceTextureHandle();
+      const bool forceTrace =
+          ffTraceTex0 != 0 && draw.textures[0].handle && draw.textures[0].handle.value == ffTraceTex0;
+      if ((forceTrace || ffTraceRemaining.load(std::memory_order_relaxed) > 0) && !vertexBytes.empty()) {
+        bool shouldTrace = forceTrace;
+        if (!shouldTrace) {
+          int expected = ffTraceRemaining.load(std::memory_order_relaxed);
+          while (expected > 0 &&
+                 !ffTraceRemaining.compare_exchange_weak(expected, expected - 1, std::memory_order_relaxed)) {
+          }
+          shouldTrace = expected > 0;
         }
-        if (expected > 0) {
+        if (shouldTrace) {
           std::ostringstream trace;
+          const auto stageStateValue = [&](u32 key, u32 fallback) -> u32 {
+            const auto it = draw.textures[0].stageStates.find(key);
+            return it != draw.textures[0].stageStates.end() ? it->second : fallback;
+          };
+          const auto stageStateValueAt = [&](size_t stageIndex, u32 key, u32 fallback) -> u32 {
+            if (stageIndex >= draw.textures.size()) {
+              return fallback;
+            }
+            const auto it = draw.textures[stageIndex].stageStates.find(key);
+            return it != draw.textures[stageIndex].stageStates.end() ? it->second : fallback;
+          };
           trace << "[dxmt9-ffp] seq=" << static_cast<unsigned long long>(seqId)
                 << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
+                << " ffLayout=1"
+                << " preT=" << (ffLayout->preTransformed ? 1 : 0)
                 << " baseVertex=" << draw.baseVertexIndex
                 << " startIndex=" << draw.startIndex
                 << " primCount=" << draw.primitiveCount
@@ -4912,26 +5773,68 @@ class MetalBackendDevice final : public BackendDevice {
                 << " alphaBlend="
                 << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
                 << " srcBlend=" << (draw.rs.values.contains(RS_SRC_BLEND) ? draw.rs.values.at(RS_SRC_BLEND) : 0u)
-                << " dstBlend=" << (draw.rs.values.contains(RS_DEST_BLEND) ? draw.rs.values.at(RS_DEST_BLEND) : 0u);
+                << " dstBlend=" << (draw.rs.values.contains(RS_DEST_BLEND) ? draw.rs.values.at(RS_DEST_BLEND) : 0u)
+                << " tci0=0x" << std::hex
+                << stageStateValue(TSS_TEXCOORD_INDEX, 0u)
+                << std::dec
+                << " ttff0=0x" << std::hex
+                << stageStateValue(TSS_TEXTURE_TRANSFORM_FLAGS, 0u)
+                << std::dec
+                << " colorOp0=" << stageStateValue(TSS_COLOR_OP, static_cast<u32>(TextureOp::Disable))
+                << " colorArg10=" << stageStateValue(TSS_COLOR_ARG1, 0u)
+                << " colorArg20=" << stageStateValue(TSS_COLOR_ARG2, 0u)
+                << " alphaOp0=" << stageStateValue(TSS_ALPHA_OP, static_cast<u32>(TextureOp::Disable))
+                << " alphaArg10=" << stageStateValue(TSS_ALPHA_ARG1, 0u)
+                << " alphaArg20=" << stageStateValue(TSS_ALPHA_ARG2, 0u)
+                << " colorOp1=" << stageStateValueAt(1, TSS_COLOR_OP, static_cast<u32>(TextureOp::Disable))
+                << " colorArg11=" << stageStateValueAt(1, TSS_COLOR_ARG1, 0u)
+                << " colorArg21=" << stageStateValueAt(1, TSS_COLOR_ARG2, 0u)
+                << " alphaOp1=" << stageStateValueAt(1, TSS_ALPHA_OP, static_cast<u32>(TextureOp::Disable))
+                << " alphaArg11=" << stageStateValueAt(1, TSS_ALPHA_ARG1, 0u)
+                << " alphaArg21=" << stageStateValueAt(1, TSS_ALPHA_ARG2, 0u)
+                << " elems=" << draw.vertexDecl.elements.size()
+                << " tfactor=0x"
+                << std::hex
+                << (draw.rs.values.contains(RS_TEXTURE_FACTOR) ? draw.rs.values.at(RS_TEXTURE_FACTOR) : 0u)
+                << std::dec;
+          trace << " texM0=["
+                << uniforms->ffpTextureTransforms[0][0][0] << "," << uniforms->ffpTextureTransforms[0][0][1] << ","
+                << uniforms->ffpTextureTransforms[0][0][2] << "," << uniforms->ffpTextureTransforms[0][0][3] << ";"
+                << uniforms->ffpTextureTransforms[0][1][0] << "," << uniforms->ffpTextureTransforms[0][1][1] << ","
+                << uniforms->ffpTextureTransforms[0][1][2] << "," << uniforms->ffpTextureTransforms[0][1][3] << ";"
+                << uniforms->ffpTextureTransforms[0][2][0] << "," << uniforms->ffpTextureTransforms[0][2][1] << ","
+                << uniforms->ffpTextureTransforms[0][2][2] << "," << uniforms->ffpTextureTransforms[0][2][3] << ";"
+                << uniforms->ffpTextureTransforms[0][3][0] << "," << uniforms->ffpTextureTransforms[0][3][1] << ","
+                << uniforms->ffpTextureTransforms[0][3][2] << "," << uniforms->ffpTextureTransforms[0][3][3] << "]";
+          for (size_t i = 0; i < draw.vertexDecl.elements.size(); ++i) {
+            const auto& e = draw.vertexDecl.elements[i];
+            trace << " e" << i << "={s=" << e.stream
+                  << ",off=" << e.offset
+                  << ",type=" << e.type
+                  << ",usage=" << e.usage
+                  << ",idx=" << e.usageIndex
+                  << "}";
+          }
 
           auto readF32 = [&](size_t absoluteOffset) {
             float value = 0.0f;
-            if (absoluteOffset + sizeof(float) <= vertexShadow.size()) {
-              std::memcpy(&value, vertexShadow.data() + absoluteOffset, sizeof(float));
+            if (absoluteOffset + sizeof(float) <= vertexBytes.size()) {
+              std::memcpy(&value, vertexBytes.data() + absoluteOffset, sizeof(float));
             }
             return value;
           };
           auto readU32 = [&](size_t absoluteOffset) {
             u32 value = 0;
-            if (absoluteOffset + sizeof(u32) <= vertexShadow.size()) {
-              std::memcpy(&value, vertexShadow.data() + absoluteOffset, sizeof(u32));
+            if (absoluteOffset + sizeof(u32) <= vertexBytes.size()) {
+              std::memcpy(&value, vertexBytes.data() + absoluteOffset, sizeof(u32));
             }
             return value;
           };
 
           const size_t stride = static_cast<size_t>(uniforms->vertexStreamStride ? uniforms->vertexStreamStride
                                                                                 : ffLayout->stride);
-          for (u32 i = 0; i < 4; ++i) {
+          const u32 tracedVertexCount = std::min<u32>(static_cast<u32>(vertexCount), 24u);
+          for (u32 i = 0; i < tracedVertexCount; ++i) {
             const size_t base = static_cast<size_t>(draw.vertexDecl.streams[0].offset) +
                                 static_cast<size_t>(draw.baseVertexIndex + static_cast<int>(i)) * stride;
             trace << " v" << i << "=("
@@ -4952,27 +5855,77 @@ class MetalBackendDevice final : public BackendDevice {
 
           if (draw.indexBuffer) {
             const auto* indexRecord = findBufferUnlocked(draw.indexBuffer.value);
+            std::span<const u8> indexBytes;
             if (indexRecord && !indexRecord->shadow.empty()) {
+              indexBytes = indexRecord->shadow;
+            } else if (indexRecord && indexRecord->buffer) {
+              if (void* contents = [indexRecord->buffer.get() contents]; contents) {
+                indexBytes = std::span<const u8>(static_cast<const u8*>(contents),
+                                                 static_cast<size_t>([indexRecord->buffer.get() length]));
+              }
+            }
+            if (!indexBytes.empty()) {
               trace << " idx=";
               const size_t start = static_cast<size_t>(draw.startIndex) * indexElementSize(draw.indexType);
-              for (u32 i = 0; i < std::min<u32>(6u, vertexCount); ++i) {
+              const u32 tracedIndexCount =
+                  std::min<u32>(primitiveCount * 3u, 36u);
+              for (u32 i = 0; i < tracedIndexCount; ++i) {
                 if (i) {
                   trace << ",";
                 }
                 if (draw.indexType == IndexType::UInt16 &&
-                    start + static_cast<size_t>(i + 1) * sizeof(u16) <= indexRecord->shadow.size()) {
+                    start + static_cast<size_t>(i + 1) * sizeof(u16) <= indexBytes.size()) {
                   u16 index = 0;
-                  std::memcpy(&index, indexRecord->shadow.data() + start + static_cast<size_t>(i) * sizeof(u16),
+                  std::memcpy(&index, indexBytes.data() + start + static_cast<size_t>(i) * sizeof(u16),
                               sizeof(u16));
                   trace << index;
                 } else if (draw.indexType == IndexType::UInt32 &&
-                           start + static_cast<size_t>(i + 1) * sizeof(u32) <= indexRecord->shadow.size()) {
+                           start + static_cast<size_t>(i + 1) * sizeof(u32) <= indexBytes.size()) {
                   u32 index = 0;
-                  std::memcpy(&index, indexRecord->shadow.data() + start + static_cast<size_t>(i) * sizeof(u32),
+                  std::memcpy(&index, indexBytes.data() + start + static_cast<size_t>(i) * sizeof(u32),
                               sizeof(u32));
                   trace << index;
                 } else {
                   trace << '?';
+                }
+              }
+              trace << " ref=";
+              const u32 tracedRefs = std::min<u32>(12u, tracedIndexCount);
+              for (u32 i = 0; i < tracedRefs; ++i) {
+                u32 vertexIndex = 0;
+                bool haveIndex = false;
+                if (draw.indexType == IndexType::UInt16 &&
+                    start + static_cast<size_t>(i + 1) * sizeof(u16) <= indexBytes.size()) {
+                  u16 index = 0;
+                  std::memcpy(&index, indexBytes.data() + start + static_cast<size_t>(i) * sizeof(u16),
+                              sizeof(u16));
+                  vertexIndex = static_cast<u32>(index);
+                  haveIndex = true;
+                } else if (draw.indexType == IndexType::UInt32 &&
+                           start + static_cast<size_t>(i + 1) * sizeof(u32) <= indexBytes.size()) {
+                  std::memcpy(&vertexIndex, indexBytes.data() + start + static_cast<size_t>(i) * sizeof(u32),
+                              sizeof(u32));
+                  haveIndex = true;
+                }
+                if (!haveIndex) {
+                  break;
+                }
+                const size_t refBase = static_cast<size_t>(draw.vertexDecl.streams[0].offset) +
+                                       static_cast<size_t>(draw.baseVertexIndex + static_cast<int>(vertexIndex)) *
+                                           stride;
+                trace << " r" << i << "#" << vertexIndex << "=("
+                      << readF32(refBase + ffLayout->positionOffset + 0) << ","
+                      << readF32(refBase + ffLayout->positionOffset + 4) << ","
+                      << readF32(refBase + ffLayout->positionOffset + 8) << ","
+                      << readF32(refBase + ffLayout->positionOffset + 12) << ")";
+                if (ffLayout->hasTexcoord0) {
+                  trace << " uv=("
+                        << readF32(refBase + ffLayout->texcoord0Offset + 0) << ","
+                        << readF32(refBase + ffLayout->texcoord0Offset + 4) << ")";
+                }
+                if (ffLayout->hasDiffuse) {
+                  const u32 rgba = readU32(refBase + ffLayout->diffuseOffset);
+                  trace << " c=0x" << std::hex << rgba << std::dec;
                 }
               }
             }
@@ -4983,12 +5936,111 @@ class MetalBackendDevice final : public BackendDevice {
           } else {
             trace << 0;
           }
+          trace << " tex1=";
+          if (draw.textures.size() > 1 && draw.textures[1].handle) {
+            trace << static_cast<unsigned long long>(draw.textures[1].handle.value);
+          } else {
+            trace << 0;
+          }
           emitQueueTraceLine(trace.str());
         }
       }
     }
-    if (draw.textures[0].handle) {
-      if (auto* texture = findTextureUnlocked(draw.textures[0].handle.value); texture && texture->texture) {
+    if (!ffLayout && vertexBuffer) {
+      const u64 ffTraceTex0 = fixedFunctionTraceTextureHandle();
+      const bool forceTrace =
+          ffTraceTex0 != 0 && draw.textures[0].handle && draw.textures[0].handle.value == ffTraceTex0;
+      if (forceTrace) {
+        std::ostringstream trace;
+        trace << "[dxmt9-ffp] seq=" << static_cast<unsigned long long>(seqId)
+              << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
+              << " ffLayout=0"
+              << " baseVertex=" << draw.baseVertexIndex
+              << " startIndex=" << draw.startIndex
+              << " primCount=" << draw.primitiveCount
+              << " stride=" << computeVertexDeclStride(draw)
+              << " elems=" << draw.vertexDecl.elements.size();
+        for (size_t i = 0; i < draw.vertexDecl.elements.size(); ++i) {
+          const auto& e = draw.vertexDecl.elements[i];
+          trace << " e" << i << "={s=" << e.stream
+                << ",off=" << e.offset
+                << ",type=" << e.type
+                << ",usage=" << e.usage
+                << ",idx=" << e.usageIndex
+                << "}";
+        }
+        emitQueueTraceLine(trace.str());
+      }
+    }
+    if (!ffLayout && vertexBuffer) {
+      uniforms->vertexStreamOffset = 0;
+      uniforms->vertexStreamStride = computeVertexDeclStride(draw);
+      uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+      transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(
+          [device_.get() newBufferWithBytes:uniforms
+                                     length:sizeof(DrawUniforms)
+                                    options:MTLResourceStorageModeShared]);
+      if (!transientUniformBuffer) {
+        return;
+      }
+      [encoder setVertexBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
+      [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
+      [encoder setVertexBuffer:vertexBuffer offset:vertexBufferOffset atIndex:1];
+    }
+	    if (draw.textures[0].handle) {
+	      if (const u64 skipped = skippedTextureHandle();
+	          skipped != 0ull && draw.textures[0].handle.value == skipped) {
+	        if (traceEncode || shouldTraceTexture(draw.textures[0].handle)) {
+	          std::ostringstream out;
+	          out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
+	              << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value);
+	          emitQueueTraceLine(out.str());
+	        }
+	        return;
+	      }
+	      if (auto* texture = findTextureUnlocked(draw.textures[0].handle.value); texture && texture->texture) {
+	        if (shouldTraceTexture(draw.textures[0].handle)) {
+	          std::ostringstream out;
+          out << "[dxmt9-texture] bind handle=0x" << std::hex << draw.textures[0].handle.value << std::dec
+              << " format=" << static_cast<unsigned>(texture->desc.format)
+              << " size=" << texture->desc.width << "x" << texture->desc.height
+              << " levels=" << texture->desc.levels
+              << " alphaBlend="
+              << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
+              << " srcBlend=" << (draw.rs.values.contains(RS_SRC_BLEND) ? draw.rs.values.at(RS_SRC_BLEND) : 0u)
+              << " dstBlend=" << (draw.rs.values.contains(RS_DEST_BLEND) ? draw.rs.values.at(RS_DEST_BLEND) : 0u)
+              << " alphaTest="
+              << (draw.rs.values.contains(RS_ALPHA_TEST_ENABLE) ? draw.rs.values.at(RS_ALPHA_TEST_ENABLE) : 0u)
+              << " alphaFunc="
+              << (draw.rs.values.contains(RS_ALPHA_FUNC) ? draw.rs.values.at(RS_ALPHA_FUNC) : 0u)
+              << " alphaRef="
+              << (draw.rs.values.contains(RS_ALPHA_REF) ? draw.rs.values.at(RS_ALPHA_REF) : 0u)
+              << " colorOp0="
+              << (draw.textures[0].stageStates.contains(TSS_COLOR_OP)
+                      ? draw.textures[0].stageStates.at(TSS_COLOR_OP)
+                      : 0u)
+              << " colorArg10="
+              << (draw.textures[0].stageStates.contains(TSS_COLOR_ARG1)
+                      ? draw.textures[0].stageStates.at(TSS_COLOR_ARG1)
+                      : 0u)
+              << " colorArg20="
+              << (draw.textures[0].stageStates.contains(TSS_COLOR_ARG2)
+                      ? draw.textures[0].stageStates.at(TSS_COLOR_ARG2)
+                      : 0u)
+              << " alphaOp0="
+              << (draw.textures[0].stageStates.contains(TSS_ALPHA_OP)
+                      ? draw.textures[0].stageStates.at(TSS_ALPHA_OP)
+                      : 0u)
+              << " alphaArg10="
+              << (draw.textures[0].stageStates.contains(TSS_ALPHA_ARG1)
+                      ? draw.textures[0].stageStates.at(TSS_ALPHA_ARG1)
+                      : 0u)
+              << " alphaArg20="
+              << (draw.textures[0].stageStates.contains(TSS_ALPHA_ARG2)
+                      ? draw.textures[0].stageStates.at(TSS_ALPHA_ARG2)
+                      : 0u);
+          emitTextureTraceLine(out.str());
+        }
         [encoder setFragmentTexture:texture->texture.get() atIndex:0];
       }
       auto sampler = makeSampler(draw.samplers[0]);
@@ -4997,7 +6049,142 @@ class MetalBackendDevice final : public BackendDevice {
       }
     }
     const auto primitiveType = toPrimitiveType(draw.primitiveType);
-    if (draw.indexBuffer || !draw.userIndexData.empty()) {
+    if (!ffLayout) {
+      uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+    }
+    bool expandedIndexedDraw = false;
+    if (traceEncode) {
+      std::ostringstream out;
+      out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
+          << " draw rt0=" << static_cast<unsigned long long>(draw.rts.color[0].handle.value)
+          << " ds=" << static_cast<unsigned long long>(draw.rts.depthStencil.handle.value)
+          << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
+          << " indexed=" << (indexedDraw ? 1 : 0)
+          << " primType=" << static_cast<unsigned>(draw.primitiveType)
+          << " primCount=" << draw.primitiveCount
+          << " vertexCount=" << static_cast<unsigned long long>(vertexCount)
+          << " vertexBaseIndex=" << uniforms->vertexBaseIndex
+          << " colorWrite="
+          << (draw.rs.values.contains(RS_COLOR_WRITE_ENABLE) ? draw.rs.values.at(RS_COLOR_WRITE_ENABLE) : 0xfu)
+          << " zEnable=" << (draw.rs.values.contains(RS_Z_ENABLE) ? draw.rs.values.at(RS_Z_ENABLE) : 0u)
+          << " zWrite=" << (draw.rs.values.contains(RS_Z_WRITE_ENABLE) ? draw.rs.values.at(RS_Z_WRITE_ENABLE) : 0u)
+          << " zFunc=" << (draw.rs.values.contains(RS_Z_FUNC) ? draw.rs.values.at(RS_Z_FUNC) : 0u)
+          << " alphaBlend="
+          << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
+          << " srcBlend=" << (draw.rs.values.contains(RS_SRC_BLEND) ? draw.rs.values.at(RS_SRC_BLEND) : 0u)
+          << " dstBlend=" << (draw.rs.values.contains(RS_DEST_BLEND) ? draw.rs.values.at(RS_DEST_BLEND) : 0u)
+          << " forceVisible=" << (debugForceVisibleDraw() ? 1 : 0);
+      emitQueueTraceLine(out.str());
+    }
+    if (indexedDraw) {
+      std::span<const u8> indexBytes;
+      if (!draw.userIndexData.empty()) {
+        indexBytes = draw.userIndexData;
+      } else {
+        auto* indexRecord = findBufferUnlocked(draw.indexBuffer.value);
+        if (indexRecord && !indexRecord->shadow.empty()) {
+          indexBytes = indexRecord->shadow;
+        } else if (indexRecord && indexRecord->buffer) {
+          if (void* contents = [indexRecord->buffer.get() contents]; contents) {
+            indexBytes = std::span<const u8>(static_cast<const u8*>(contents),
+                                             static_cast<size_t>([indexRecord->buffer.get() length]));
+          }
+        }
+      }
+      const size_t stride = static_cast<size_t>(ffLayout ? (uniforms->vertexStreamStride ? uniforms->vertexStreamStride
+                                                                                         : ffLayout->stride)
+                                                         : computeVertexDeclStride(draw));
+      const size_t streamBase = static_cast<size_t>(draw.vertexDecl.streams[0].offset);
+      const size_t firstIndexByte = static_cast<size_t>(draw.startIndex) * indexElementSize(draw.indexType);
+      if (!vertexBytes.empty() && !indexBytes.empty() && stride != 0) {
+        std::vector<u8> expandedVertices(static_cast<size_t>(vertexCount) * stride, 0);
+        for (NSUInteger i = 0; i < vertexCount; ++i) {
+          i32 vertexIndex = draw.baseVertexIndex;
+          bool haveIndex = false;
+          if (draw.indexType == IndexType::UInt16 &&
+              firstIndexByte + static_cast<size_t>(i + 1) * sizeof(u16) <= indexBytes.size()) {
+            u16 index = 0;
+            std::memcpy(&index, indexBytes.data() + firstIndexByte + static_cast<size_t>(i) * sizeof(u16),
+                        sizeof(u16));
+            vertexIndex += static_cast<i32>(index);
+            haveIndex = true;
+          } else if (draw.indexType == IndexType::UInt32 &&
+                     firstIndexByte + static_cast<size_t>(i + 1) * sizeof(u32) <= indexBytes.size()) {
+            u32 index = 0;
+            std::memcpy(&index, indexBytes.data() + firstIndexByte + static_cast<size_t>(i) * sizeof(u32),
+                        sizeof(u32));
+            vertexIndex += static_cast<i32>(index);
+            haveIndex = true;
+          }
+          if (!haveIndex || vertexIndex < 0) {
+            continue;
+          }
+          const size_t sourceOffset = streamBase + static_cast<size_t>(vertexIndex) * stride;
+          if (sourceOffset + stride > vertexBytes.size()) {
+            continue;
+          }
+          std::memcpy(expandedVertices.data() + static_cast<size_t>(i) * stride,
+                      vertexBytes.data() + sourceOffset, stride);
+        }
+        id<MTLBuffer> expandedBuffer =
+            [device_.get() newBufferWithBytes:expandedVertices.data()
+                                       length:static_cast<NSUInteger>(expandedVertices.size())
+                                      options:MTLResourceStorageModeShared];
+        if (expandedBuffer) {
+          transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(expandedBuffer);
+          [encoder setVertexBuffer:transientVertexBuffer.get() offset:0 atIndex:1];
+          if (ffLayout && ffLayout->preTransformed && vertexCount >= 6 && draw.textures[0].handle != Handle{}) {
+            const bool traceExpanded = [] {
+              const char* env = std::getenv("DXMT9_TRACE_FVF_EXPANDED");
+              return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+            }();
+            if (traceExpanded) {
+              auto readExpandedF32 = [&](size_t absoluteOffset) {
+                float value = 0.0f;
+                if (absoluteOffset + sizeof(float) <= expandedVertices.size()) {
+                  std::memcpy(&value, expandedVertices.data() + absoluteOffset, sizeof(float));
+                }
+                return value;
+              };
+              std::ostringstream trace;
+              trace << "[dxmt9-expanded] seq=" << static_cast<unsigned long long>(seqId)
+                    << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
+                    << " stride=" << stride;
+              for (NSUInteger i = 0; i < std::min<NSUInteger>(vertexCount, 6); ++i) {
+                const size_t base = static_cast<size_t>(i) * stride;
+                trace << " v" << i << "=("
+                      << readExpandedF32(base + ffLayout->positionOffset + 0) << ","
+                      << readExpandedF32(base + ffLayout->positionOffset + 4) << ","
+                      << readExpandedF32(base + ffLayout->positionOffset + 8) << ","
+                      << readExpandedF32(base + ffLayout->positionOffset + 12) << ")";
+                if (ffLayout->hasTexcoord0) {
+                  trace << " uv" << i << "=("
+                        << readExpandedF32(base + ffLayout->texcoord0Offset + 0) << ","
+                        << readExpandedF32(base + ffLayout->texcoord0Offset + 4) << ")";
+                }
+              }
+              emitQueueTraceLine(trace.str());
+            }
+          }
+          vertexBytes = std::span<const u8>(expandedVertices.data(), expandedVertices.size());
+          uniforms->vertexStreamOffset = 0;
+          uniforms->vertexBaseIndex = 0;
+          transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(
+              [device_.get() newBufferWithBytes:uniforms
+                                         length:sizeof(DrawUniforms)
+                                        options:MTLResourceStorageModeShared]);
+          if (!transientUniformBuffer) {
+            return;
+          }
+          [encoder setVertexBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
+          [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
+          expandedIndexedDraw = true;
+        }
+      }
+      if (expandedIndexedDraw) {
+        [encoder drawPrimitives:primitiveType vertexStart:0 vertexCount:vertexCount];
+        return;
+      }
       ObjcPtr<id<MTLBuffer>> transientIndexBuffer;
       id<MTLBuffer> indexBuffer = nil;
       NSUInteger indexBufferOffset = static_cast<NSUInteger>(draw.startIndex) * indexElementSize(draw.indexType);
@@ -5028,13 +6215,13 @@ class MetalBackendDevice final : public BackendDevice {
                            indexBuffer:indexBuffer
                      indexBufferOffset:indexBufferOffset
                          instanceCount:1
-                            baseVertex:draw.baseVertexIndex
+                            baseVertex:0
                           baseInstance:0];
         return;
       }
     }
     [encoder drawPrimitives:primitiveType
-                vertexStart:static_cast<NSUInteger>(draw.startVertex)
+                vertexStart:0
                 vertexCount:vertexCount];
   }
 
@@ -5222,10 +6409,53 @@ class MetalBackendDevice final : public BackendDevice {
 
   void encodePresent(id<MTLCommandBuffer> commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
     tracePresentEvent("begin", seqId, present.window.value);
+    if (queueTraceEnabled()) {
+      std::ostringstream out;
+      out << "[dxmt9-present] source"
+          << " seq=" << static_cast<unsigned long long>(seqId)
+          << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+          << " handle=0x" << std::hex << static_cast<unsigned long long>(sourceHandle.value) << std::dec;
+      emitQueueTraceLine(out.str());
+    }
     auto* source = findSurfaceUnlocked(sourceHandle.value);
     if (!source || !source->texture) {
       tracePresentEvent("missing-source", seqId, present.window.value);
       return;
+    }
+    id<MTLTexture> sourceTexture = source->resolveTexture ? source->resolveTexture.get() : source->texture.get();
+    u64 forcedTextureHandle = forcedPresentTextureHandle();
+    if (forcedTextureHandle != 0ull) {
+      if (auto* forced = findTextureUnlocked(forcedTextureHandle); forced && forced->texture) {
+        sourceTexture = forced->texture.get();
+        if (queueTraceEnabled()) {
+          std::ostringstream out;
+          out << "[dxmt9-present] force-texture"
+              << " seq=" << static_cast<unsigned long long>(seqId)
+              << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+              << " handle=0x" << std::hex << forcedTextureHandle << std::dec
+              << " size=" << forced->desc.width << "x" << forced->desc.height
+              << " fmt=" << static_cast<unsigned>(forced->desc.format);
+          emitQueueTraceLine(out.str());
+        }
+      } else if (queueTraceEnabled()) {
+        std::ostringstream out;
+        out << "[dxmt9-present] force-texture-missing"
+            << " seq=" << static_cast<unsigned long long>(seqId)
+            << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+            << " handle=0x" << std::hex << forcedTextureHandle << std::dec;
+        emitQueueTraceLine(out.str());
+      }
+    }
+    if (queueTraceEnabled()) {
+      std::ostringstream out;
+      out << "[dxmt9-present] source.info"
+          << " seq=" << static_cast<unsigned long long>(seqId)
+          << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+          << " size=" << source->desc.width << "x" << source->desc.height
+          << " fmt=" << static_cast<unsigned>(source->desc.format)
+          << " sampleCount="
+          << (source->desc.multiSampleType == MultiSampleType::None ? 1u : sampleCount(source->desc.multiSampleType));
+      emitQueueTraceLine(out.str());
     }
 
     CAMetalLayer* layer = nullptr;
@@ -5242,10 +6472,11 @@ class MetalBackendDevice final : public BackendDevice {
 
     layer.device = device_.get();
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    layer.opaque = YES;
     layer.drawableSize = CGSizeMake(std::max(1u, present.width), std::max(1u, present.height));
     layer.displaySyncEnabled = present.displaySyncEnabled;
     layer.maximumDrawableCount = std::clamp(maxFrameLatency_, 1u, 3u);
-    layer.framebufferOnly = YES;
+    layer.framebufferOnly = NO;
 
     tracePresentEvent("nextDrawable.begin", seqId, present.window.value);
     id<CAMetalDrawable> drawable = [layer nextDrawable];
@@ -5261,20 +6492,34 @@ class MetalBackendDevice final : public BackendDevice {
     }
     tracePresentEvent("nextDrawable.ok", seqId, present.window.value);
 
-    auto blit = [commandBuffer blitCommandEncoder];
-    if (blit) {
-      id<MTLTexture> sourceTexture = source->resolveTexture ? source->resolveTexture.get() : source->texture.get();
-      [blit copyFromTexture:sourceTexture
-                sourceSlice:0
-                sourceLevel:0
-               sourceOrigin:MTLOriginMake(0, 0, 0)
-                 sourceSize:MTLSizeMake(std::max(1u, present.width), std::max(1u, present.height), 1)
-                  toTexture:drawable.texture
-           destinationSlice:0
-           destinationLevel:0
-          destinationOrigin:MTLOriginMake(0, 0, 0)];
-      [blit endEncoding];
+    auto desc = [MTLRenderPassDescriptor renderPassDescriptor];
+    auto attachment = desc.colorAttachments[0];
+    attachment.texture = drawable.texture;
+    attachment.loadAction = MTLLoadActionDontCare;
+    attachment.storeAction = MTLStoreActionStore;
+    auto encoder = [commandBuffer renderCommandEncoderWithDescriptor:desc];
+    if (!encoder) {
+      tracePresentEvent("encoder.nil", seqId, present.window.value);
+      return;
     }
+    auto pipeline = pipelineForPresent(source->desc.format).get();
+    if (!pipeline) {
+      [encoder endEncoding];
+      tracePresentEvent("pipeline.nil", seqId, present.window.value);
+      return;
+    }
+    [encoder setRenderPipelineState:pipeline.get()];
+    [encoder setFragmentTexture:sourceTexture atIndex:0];
+    auto sampler = makeSampler(false);
+    if (sampler) {
+      [encoder setFragmentSamplerState:sampler.get() atIndex:0];
+    }
+    const double width = std::max(1u, present.width);
+    const double height = std::max(1u, present.height);
+    [encoder setViewport:(MTLViewport){0.0, 0.0, width, height, 0.0, 1.0}];
+    [encoder setScissorRect:MTLScissorRect{0, 0, static_cast<NSUInteger>(width), static_cast<NSUInteger>(height)}];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
     [commandBuffer presentDrawable:drawable];
     tracePresentEvent("scheduled", seqId, present.window.value);
     backBufferDiscardAfterPresent_ = true;
@@ -5314,7 +6559,8 @@ class MetalBackendDevice final : public BackendDevice {
     std::array<u32, kMaxRenderTargets> colorFormats{};
     std::array<BlendAttachmentKey, kMaxRenderTargets> blendAttachments{};
     const auto& rs = draw.rs.values;
-    const bool blendEnabled = rs.contains(RS_ALPHABLEND_ENABLE) && rs.at(RS_ALPHABLEND_ENABLE) != 0;
+    const bool blendEnabled =
+        !debugForceVisibleDraw() && rs.contains(RS_ALPHABLEND_ENABLE) && rs.at(RS_ALPHABLEND_ENABLE) != 0;
     for (size_t i = 0; i < kMaxRenderTargets; ++i) {
       colorFormats[i] = resolvePixelFormat(draw.rts.color[i].handle);
       auto& blend = blendAttachments[i];
@@ -5333,7 +6579,9 @@ class MetalBackendDevice final : public BackendDevice {
       blend.destinationAlphaBlendFactor = rs.contains(RS_DEST_BLEND_ALPHA)
                                               ? rs.at(RS_DEST_BLEND_ALPHA)
                                               : blend.destinationRGBBlendFactor;
-      blend.colorWriteMask = rs.contains(RS_COLOR_WRITE_ENABLE) ? rs.at(RS_COLOR_WRITE_ENABLE) : 0xfu;
+      blend.colorWriteMask = debugForceVisibleDraw()
+                                 ? 0xfu
+                                 : (rs.contains(RS_COLOR_WRITE_ENABLE) ? rs.at(RS_COLOR_WRITE_ENABLE) : 0xfu);
     }
     u32 depthFormat = 0;
     u32 stencilFormat = 0;
@@ -5511,6 +6759,57 @@ class MetalBackendDevice final : public BackendDevice {
     return shared;
   }
 
+  std::shared_future<ObjcPtr<id<MTLRenderPipelineState>>> pipelineForPresent(Format sourceFormat) {
+    ShaderVariantKey key;
+    key.hash = sourceFormat == Format::X8R8G8B8 || sourceFormat == Format::X8B8G8R8 ? 1u : 0u;
+    key.textured = true;
+    key.sampleCount = 1u;
+    key.colorFormats[0] = static_cast<u32>(MTLPixelFormatBGRA8Unorm);
+    key.blend[0].pixelFormat = static_cast<u32>(MTLPixelFormatBGRA8Unorm);
+    std::lock_guard lock(cacheMutex_);
+    if (auto it = presentPipelineCache_.find(key); it != presentPipelineCache_.end()) {
+      return it->second.future;
+    }
+    const bool forceOpaqueAlpha = sourceFormat == Format::X8R8G8B8 || sourceFormat == Format::X8B8G8R8;
+    auto future = std::async(std::launch::async, [this, forceOpaqueAlpha]() {
+      @autoreleasepool {
+        auto vsLib = makeLibrary(device_.get(), makeTexturedVertexSource(makeHash("present")));
+        auto fsLib = makeLibrary(device_.get(), makeTexturedFragmentSource(makeHash(forceOpaqueAlpha ? "present-opaque" : "present"), forceOpaqueAlpha));
+        if (!vsLib || !fsLib) {
+          return ObjcPtr<id<MTLRenderPipelineState>>{};
+        }
+        auto vs = [vsLib.get() newFunctionWithName:@"dxmt9_vs"];
+        auto fs = [fsLib.get() newFunctionWithName:@"dxmt9_fs"];
+        auto desc = [MTLRenderPipelineDescriptor new];
+        desc.vertexFunction = vs;
+        desc.fragmentFunction = fs;
+        desc.rasterSampleCount = 1;
+        desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        if (shaderArchive_) {
+          auto archive = shaderArchive_.get();
+          NSArray<id<MTLBinaryArchive>>* archives = @[archive];
+          desc.binaryArchives = archives;
+          NSError* archiveError = nil;
+          if (![archive addRenderPipelineFunctionsWithDescriptor:desc error:&archiveError] && archiveError) {
+            NSLog(@"dxmt9: binary archive update failed: %@", archiveError);
+          }
+        }
+        NSError* error = nil;
+        id<MTLRenderPipelineState> pipeline = [device_.get() newRenderPipelineStateWithDescriptor:desc error:&error];
+        if (!pipeline) {
+          NSLog(@"dxmt9: present pipeline compile failed: %@", error);
+        } else if (shaderArchive_) {
+          persistShaderArchive(shaderArchive_.get(), shaderArchiveURL_.get());
+        }
+        [desc release];
+        return ObjcPtr<id<MTLRenderPipelineState>>::adopt(pipeline);
+      }
+    });
+    auto shared = future.share();
+    presentPipelineCache_.emplace(key, PipelineCacheEntry{shared});
+    return shared;
+  }
+
   ObjcPtr<id<MTLDepthStencilState>> depthStencilStateFor(const DepthStencilKey& key) {
     std::lock_guard lock(cacheMutex_);
     if (auto it = depthCache_.find(key); it != depthCache_.end()) {
@@ -5659,6 +6958,7 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> drawPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> fillPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretchPipelineCache_;
+  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> presentPipelineCache_;
   std::unordered_map<DepthStencilKey, ObjcPtr<id<MTLDepthStencilState>>, DepthStencilKeyHash> depthCache_;
   std::unordered_map<u64, LayerRecord> layers_;
   void* wineMetalDevice_ = nullptr;

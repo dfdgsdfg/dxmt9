@@ -127,7 +127,9 @@ class IDirect3DDevice9 : public IUnknown {
   virtual core::HResult SetPixelShader(const core::ShaderRef& shader) = 0;
   virtual core::HResult SetClipPlane(u32 index, const core::ClipPlane& plane) = 0;
   virtual core::HResult SetViewport(const core::Viewport& viewport) = 0;
+  virtual core::Viewport GetViewport() const = 0;
   virtual core::HResult SetScissorRect(const core::Rect& rect) = 0;
+  virtual core::Rect GetScissorRect() const = 0;
   virtual core::HResult SetRenderTarget(u32 index, std::shared_ptr<core::Surface> surface) = 0;
   virtual core::HResult SetDepthStencilSurface(std::shared_ptr<core::Surface> surface) = 0;
   virtual std::shared_ptr<core::Buffer> CreateBuffer(const core::BufferDesc& desc) = 0;

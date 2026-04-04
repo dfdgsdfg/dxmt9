@@ -1,10 +1,496 @@
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
+#include <algorithm>
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
 #include <memory>
-#include <vector>
 #include <cstring>
+#include <dlfcn.h>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#if defined(__APPLE__)
+#include <mach/kern_return.h>
+#include <mach/mach_init.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_statistics.h>
+#endif
+
+namespace {
+
+bool dxmt9DebugEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_DEBUG");
+    return env && env[0] && env[0] != '0';
+  }();
+  return enabled;
+}
+
+void dxmt9DebugLog(const char* fmt, ...) {
+  if (!dxmt9DebugEnabled()) return;
+  std::fputs("[dxmt9-debug] ", stderr);
+  va_list args;
+  va_start(args, fmt);
+  std::vfprintf(stderr, fmt, args);
+  va_end(args);
+  std::fputc('\n', stderr);
+  std::fflush(stderr);
+}
+
+uint32_t usageFromD3D(uint32_t usage) {
+  using namespace dxmt9::core;
+  uint32_t out = 0;
+  if ((usage & 0x00000001u) != 0) out |= UsageRenderTarget;   /* D3DUSAGE_RENDERTARGET */
+  if ((usage & 0x00000002u) != 0) out |= UsageDepthStencil;   /* D3DUSAGE_DEPTHSTENCIL */
+  if ((usage & 0x00000008u) != 0) out |= UsageWriteOnly;      /* D3DUSAGE_WRITEONLY */
+  if ((usage & 0x00000200u) != 0) out |= UsageDynamic;        /* D3DUSAGE_DYNAMIC */
+  if ((usage & 0x00000400u) != 0) out |= UsageAutoGenMipmap;  /* D3DUSAGE_AUTOGENMIPMAP */
+  return out;
+}
+
+uint32_t usageToD3D(uint32_t usage) {
+  using namespace dxmt9::core;
+  uint32_t out = 0;
+  if ((usage & UsageRenderTarget) != 0) out |= 0x00000001u;   /* D3DUSAGE_RENDERTARGET */
+  if ((usage & UsageDepthStencil) != 0) out |= 0x00000002u;   /* D3DUSAGE_DEPTHSTENCIL */
+  if ((usage & UsageWriteOnly) != 0) out |= 0x00000008u;      /* D3DUSAGE_WRITEONLY */
+  if ((usage & UsageDynamic) != 0) out |= 0x00000200u;        /* D3DUSAGE_DYNAMIC */
+  if ((usage & UsageAutoGenMipmap) != 0) out |= 0x00000400u;  /* D3DUSAGE_AUTOGENMIPMAP */
+  return out;
+}
+
+struct Low4GBAllocation {
+  void* ptr = nullptr;
+  size_t size = 0;
+  bool viaNt = false;
+  bool viaHeap = false;
+
+  constexpr explicit operator bool() const noexcept { return ptr != nullptr; }
+};
+
+struct ShadowLock {
+  void* nativePtr = nullptr;
+  uint32_t nativePitch = 0;
+  uint32_t rowBytes = 0;
+  uint32_t rows = 0;
+  Low4GBAllocation shadow{};
+};
+
+constexpr uint32_t kShaderEndToken = 0x0000ffffu;
+constexpr uint32_t kD3DSIO_NOP = 0u;
+constexpr uint32_t kD3DSIO_MOV = 1u;
+constexpr uint32_t kD3DSIO_ADD = 2u;
+constexpr uint32_t kD3DSIO_SUB = 3u;
+constexpr uint32_t kD3DSIO_MAD = 4u;
+constexpr uint32_t kD3DSIO_MUL = 5u;
+constexpr uint32_t kD3DSIO_RCP = 6u;
+constexpr uint32_t kD3DSIO_RSQ = 7u;
+constexpr uint32_t kD3DSIO_DP3 = 8u;
+constexpr uint32_t kD3DSIO_DP4 = 9u;
+constexpr uint32_t kD3DSIO_MIN = 10u;
+constexpr uint32_t kD3DSIO_MAX = 11u;
+constexpr uint32_t kD3DSIO_SLT = 12u;
+constexpr uint32_t kD3DSIO_SGE = 13u;
+constexpr uint32_t kD3DSIO_EXP = 14u;
+constexpr uint32_t kD3DSIO_LOG = 15u;
+constexpr uint32_t kD3DSIO_LRP = 18u;
+constexpr uint32_t kD3DSIO_FRC = 19u;
+constexpr uint32_t kD3DSIO_M4x4 = 20u;
+constexpr uint32_t kD3DSIO_M4x3 = 21u;
+constexpr uint32_t kD3DSIO_M3x4 = 22u;
+constexpr uint32_t kD3DSIO_M3x3 = 23u;
+constexpr uint32_t kD3DSIO_M3x2 = 24u;
+constexpr uint32_t kD3DSIO_CALL = 25u;
+constexpr uint32_t kD3DSIO_CALLNZ = 26u;
+constexpr uint32_t kD3DSIO_LOOP = 27u;
+constexpr uint32_t kD3DSIO_RET = 28u;
+constexpr uint32_t kD3DSIO_ENDLOOP = 29u;
+constexpr uint32_t kD3DSIO_LABEL = 30u;
+constexpr uint32_t kD3DSIO_DCL = 31u;
+constexpr uint32_t kD3DSIO_POW = 32u;
+constexpr uint32_t kD3DSIO_CRS = 33u;
+constexpr uint32_t kD3DSIO_SGN = 34u;
+constexpr uint32_t kD3DSIO_ABS = 35u;
+constexpr uint32_t kD3DSIO_NRM = 36u;
+constexpr uint32_t kD3DSIO_SINCOS = 37u;
+constexpr uint32_t kD3DSIO_REP = 38u;
+constexpr uint32_t kD3DSIO_ENDREP = 39u;
+constexpr uint32_t kD3DSIO_IF = 40u;
+constexpr uint32_t kD3DSIO_IFC = 41u;
+constexpr uint32_t kD3DSIO_ELSE = 42u;
+constexpr uint32_t kD3DSIO_ENDIF = 43u;
+constexpr uint32_t kD3DSIO_BREAK = 44u;
+constexpr uint32_t kD3DSIO_BREAKC = 45u;
+constexpr uint32_t kD3DSIO_MOVA = 46u;
+constexpr uint32_t kD3DSIO_DEFB = 47u;
+constexpr uint32_t kD3DSIO_DEFI = 48u;
+constexpr uint32_t kD3DSIO_TEXCOORD = 64u;
+constexpr uint32_t kD3DSIO_TEXKILL = 65u;
+constexpr uint32_t kD3DSIO_TEX = 66u;
+constexpr uint32_t kD3DSIO_TEXBEM = 67u;
+constexpr uint32_t kD3DSIO_TEXBEML = 68u;
+constexpr uint32_t kD3DSIO_TEXREG2AR = 69u;
+constexpr uint32_t kD3DSIO_TEXREG2GB = 70u;
+constexpr uint32_t kD3DSIO_TEXM3x2PAD = 71u;
+constexpr uint32_t kD3DSIO_TEXM3x2TEX = 72u;
+constexpr uint32_t kD3DSIO_TEXM3x3PAD = 73u;
+constexpr uint32_t kD3DSIO_TEXM3x3TEX = 74u;
+constexpr uint32_t kD3DSIO_TEXM3x3DIFF = 75u;
+constexpr uint32_t kD3DSIO_TEXM3x3SPEC = 76u;
+constexpr uint32_t kD3DSIO_TEXM3x3VSPEC = 77u;
+constexpr uint32_t kD3DSIO_EXPP = 78u;
+constexpr uint32_t kD3DSIO_LOGP = 79u;
+constexpr uint32_t kD3DSIO_CND = 80u;
+constexpr uint32_t kD3DSIO_DEF = 81u;
+constexpr uint32_t kD3DSIO_TEXREG2RGB = 82u;
+constexpr uint32_t kD3DSIO_TEXDP3TEX = 83u;
+constexpr uint32_t kD3DSIO_TEXM3x2DEPTH = 84u;
+constexpr uint32_t kD3DSIO_TEXDP3 = 85u;
+constexpr uint32_t kD3DSIO_TEXM3x3 = 86u;
+constexpr uint32_t kD3DSIO_TEXDEPTH = 87u;
+constexpr uint32_t kD3DSIO_CMP = 88u;
+constexpr uint32_t kD3DSIO_BEM = 89u;
+constexpr uint32_t kD3DSIO_DP2ADD = 90u;
+constexpr uint32_t kD3DSIO_DSX = 91u;
+constexpr uint32_t kD3DSIO_DSY = 92u;
+constexpr uint32_t kD3DSIO_TEXLDD = 93u;
+constexpr uint32_t kD3DSIO_SETP = 94u;
+constexpr uint32_t kD3DSIO_TEXLDL = 95u;
+constexpr uint32_t kD3DSIO_BREAKP = 96u;
+constexpr uint32_t kD3DSIO_PHASE = 0xfffdu;
+constexpr uint32_t kD3DSIO_COMMENT = 0xfffeu;
+constexpr uint32_t kD3DSIO_END = 0xffffu;
+
+uint32_t shaderFixedOperandCount(uint32_t opcode, bool* known) {
+  *known = true;
+  switch (opcode) {
+    case kD3DSIO_NOP:
+    case kD3DSIO_PHASE:
+    case kD3DSIO_ELSE:
+    case kD3DSIO_ENDIF:
+    case kD3DSIO_ENDLOOP:
+    case kD3DSIO_ENDREP:
+    case kD3DSIO_RET:
+    case kD3DSIO_BREAK:
+    case kD3DSIO_COMMENT:
+    case kD3DSIO_END:
+      return 0;
+    case kD3DSIO_MOV:
+    case kD3DSIO_DEFB:
+    case kD3DSIO_RCP:
+    case kD3DSIO_RSQ:
+    case kD3DSIO_FRC:
+    case kD3DSIO_DSX:
+    case kD3DSIO_DSY:
+    case kD3DSIO_SETP:
+    case kD3DSIO_BREAKP:
+    case kD3DSIO_MOVA:
+    case kD3DSIO_LOG:
+    case kD3DSIO_LOGP:
+    case kD3DSIO_EXP:
+    case kD3DSIO_EXPP:
+    case kD3DSIO_SGN:
+    case kD3DSIO_ABS:
+    case kD3DSIO_NRM:
+    case kD3DSIO_TEX:
+    case kD3DSIO_TEXCOORD:
+    case kD3DSIO_TEXKILL:
+    case kD3DSIO_TEXBEM:
+    case kD3DSIO_TEXBEML:
+    case kD3DSIO_TEXREG2AR:
+    case kD3DSIO_TEXREG2GB:
+    case kD3DSIO_TEXM3x2PAD:
+    case kD3DSIO_TEXM3x2TEX:
+    case kD3DSIO_TEXM3x3PAD:
+    case kD3DSIO_TEXM3x3TEX:
+    case kD3DSIO_TEXM3x3DIFF:
+    case kD3DSIO_TEXM3x3SPEC:
+    case kD3DSIO_TEXM3x3VSPEC:
+    case kD3DSIO_TEXREG2RGB:
+    case kD3DSIO_TEXDP3TEX:
+    case kD3DSIO_TEXM3x2DEPTH:
+    case kD3DSIO_TEXDP3:
+    case kD3DSIO_TEXM3x3:
+    case kD3DSIO_TEXDEPTH:
+      return 2;
+    case kD3DSIO_LABEL:
+    case kD3DSIO_CALL:
+    case kD3DSIO_CALLNZ:
+    case kD3DSIO_IF:
+    case kD3DSIO_IFC:
+    case kD3DSIO_LOOP:
+    case kD3DSIO_REP:
+      return 1;
+    case kD3DSIO_ADD:
+    case kD3DSIO_SUB:
+    case kD3DSIO_MUL:
+    case kD3DSIO_DP3:
+    case kD3DSIO_DP4:
+    case kD3DSIO_MIN:
+    case kD3DSIO_MAX:
+    case kD3DSIO_POW:
+    case kD3DSIO_CRS:
+    case kD3DSIO_TEXLDD:
+    case kD3DSIO_TEXLDL:
+    case kD3DSIO_SLT:
+    case kD3DSIO_SGE:
+    case kD3DSIO_M4x4:
+    case kD3DSIO_M4x3:
+    case kD3DSIO_M3x4:
+    case kD3DSIO_M3x3:
+    case kD3DSIO_M3x2:
+    case kD3DSIO_BEM:
+    case kD3DSIO_SINCOS:
+      return 3;
+    case kD3DSIO_MAD:
+    case kD3DSIO_LRP:
+    case kD3DSIO_CND:
+    case kD3DSIO_CMP:
+    case kD3DSIO_DP2ADD:
+      return 4;
+    case kD3DSIO_DEF:
+    case kD3DSIO_DEFI:
+      return 5;
+    default:
+      *known = false;
+      return 0;
+  }
+}
+
+bool computeShaderBytecodeWordCount(const uint32_t* bytecode, size_t* outWords) {
+  constexpr size_t kMaxShaderDwords = 1u << 16;
+  if (!bytecode || !outWords) return false;
+  size_t words = 1; /* version token */
+  while (words < kMaxShaderDwords) {
+    const uint32_t token = bytecode[words++];
+    const uint32_t opcode = token & 0xffffu;
+    if (opcode == kD3DSIO_END) {
+      *outWords = words;
+      return true;
+    }
+    if (opcode == kD3DSIO_COMMENT) {
+      const size_t commentWords = static_cast<size_t>((token >> 16) & 0x7fffu);
+      if (commentWords > kMaxShaderDwords - words) return false;
+      words += commentWords;
+      continue;
+    }
+    if (opcode == kD3DSIO_PHASE) {
+      continue;
+    }
+    bool known = false;
+    size_t operandCount = shaderFixedOperandCount(opcode, &known);
+    if (!known) {
+      operandCount = static_cast<size_t>((token >> 24) & 0x0fu);
+    }
+    if (operandCount > kMaxShaderDwords - words) return false;
+    words += operandCount;
+  }
+  return false;
+}
+
+bool pointerFits32Bit(const void* ptr) {
+  return reinterpret_cast<uintptr_t>(ptr) <= 0xffffffffu;
+}
+
+using NtAllocateVirtualMemoryFn =
+    int32_t (*)(void* process, void** baseAddress, uintptr_t zeroBits,
+                size_t* regionSize, uint32_t allocationType, uint32_t protect);
+using NtFreeVirtualMemoryFn =
+    int32_t (*)(void* process, void** baseAddress, size_t* regionSize, uint32_t freeType);
+using GetProcessHeapFn = void* (*)();
+using RtlAllocateHeapFn = void* (*)(void* heap, uint32_t flags, size_t size);
+using RtlFreeHeapFn = uint8_t (*)(void* heap, uint32_t flags, void* ptr);
+
+NtAllocateVirtualMemoryFn resolveNtAllocateVirtualMemory() {
+  static const auto fn = [] {
+    if (auto* sym = dlsym(RTLD_DEFAULT, "NtAllocateVirtualMemory")) {
+      return reinterpret_cast<NtAllocateVirtualMemoryFn>(sym);
+    }
+    if (auto* sym = dlsym(RTLD_DEFAULT, "_NtAllocateVirtualMemory")) {
+      return reinterpret_cast<NtAllocateVirtualMemoryFn>(sym);
+    }
+    return static_cast<NtAllocateVirtualMemoryFn>(nullptr);
+  }();
+  return fn;
+}
+
+NtFreeVirtualMemoryFn resolveNtFreeVirtualMemory() {
+  static const auto fn = [] {
+    if (auto* sym = dlsym(RTLD_DEFAULT, "NtFreeVirtualMemory")) {
+      return reinterpret_cast<NtFreeVirtualMemoryFn>(sym);
+    }
+    if (auto* sym = dlsym(RTLD_DEFAULT, "_NtFreeVirtualMemory")) {
+      return reinterpret_cast<NtFreeVirtualMemoryFn>(sym);
+    }
+    return static_cast<NtFreeVirtualMemoryFn>(nullptr);
+  }();
+  return fn;
+}
+
+GetProcessHeapFn resolveGetProcessHeap() {
+  static const auto fn = [] {
+    if (auto* sym = dlsym(RTLD_DEFAULT, "GetProcessHeap")) {
+      return reinterpret_cast<GetProcessHeapFn>(sym);
+    }
+    if (auto* sym = dlsym(RTLD_DEFAULT, "_GetProcessHeap")) {
+      return reinterpret_cast<GetProcessHeapFn>(sym);
+    }
+    return static_cast<GetProcessHeapFn>(nullptr);
+  }();
+  return fn;
+}
+
+RtlAllocateHeapFn resolveRtlAllocateHeap() {
+  static const auto fn = [] {
+    if (auto* sym = dlsym(RTLD_DEFAULT, "RtlAllocateHeap")) {
+      return reinterpret_cast<RtlAllocateHeapFn>(sym);
+    }
+    if (auto* sym = dlsym(RTLD_DEFAULT, "_RtlAllocateHeap")) {
+      return reinterpret_cast<RtlAllocateHeapFn>(sym);
+    }
+    return static_cast<RtlAllocateHeapFn>(nullptr);
+  }();
+  return fn;
+}
+
+RtlFreeHeapFn resolveRtlFreeHeap() {
+  static const auto fn = [] {
+    if (auto* sym = dlsym(RTLD_DEFAULT, "RtlFreeHeap")) {
+      return reinterpret_cast<RtlFreeHeapFn>(sym);
+    }
+    if (auto* sym = dlsym(RTLD_DEFAULT, "_RtlFreeHeap")) {
+      return reinterpret_cast<RtlFreeHeapFn>(sym);
+    }
+    return static_cast<RtlFreeHeapFn>(nullptr);
+  }();
+  return fn;
+}
+
+Low4GBAllocation allocateLow4GB(size_t size) {
+#if defined(__APPLE__)
+  if (size == 0) return {};
+  const mach_vm_size_t rounded =
+      static_cast<mach_vm_size_t>((size + vm_page_size - 1) & ~(static_cast<size_t>(vm_page_size) - 1));
+  const uintptr_t limit = 0x100000000ull;
+  const uintptr_t step =
+      std::max<uintptr_t>(0x10000u, (static_cast<uintptr_t>(rounded) + 0xffffu) & ~0xffffull);
+
+  if (auto getProcessHeap = resolveGetProcessHeap()) {
+    if (auto rtlAlloc = resolveRtlAllocateHeap()) {
+      void* heap = getProcessHeap();
+      if (heap) {
+        if (void* ptr = rtlAlloc(heap, 0, size)) {
+          if (pointerFits32Bit(ptr)) {
+            dxmt9DebugLog("allocateLow4GB using process heap ptr=%p size=%zu", ptr, size);
+            return {ptr, size, false, true};
+          }
+          if (auto rtlFree = resolveRtlFreeHeap()) {
+            rtlFree(heap, 0, ptr);
+          }
+        }
+      }
+    }
+  }
+
+  if (auto ntAlloc = resolveNtAllocateVirtualMemory()) {
+    const auto ntFree = resolveNtFreeVirtualMemory();
+    for (uintptr_t attempt = 0x10000000u;
+         attempt + rounded < limit;
+         attempt += step) {
+      void* base = reinterpret_cast<void*>(attempt);
+      size_t region = static_cast<size_t>(rounded);
+      const int32_t status =
+          ntAlloc(reinterpret_cast<void*>(static_cast<intptr_t>(-1)), &base, 0, &region,
+                  0x3000u /* MEM_COMMIT|MEM_RESERVE */, 0x04u /* PAGE_READWRITE */);
+      if (status != 0) {
+        continue;
+      }
+      if (reinterpret_cast<uintptr_t>(base) <= 0xffffffffu) {
+        return {base, region, true, false};
+      }
+      if (ntFree) {
+        size_t freeSize = 0;
+        ntFree(reinterpret_cast<void*>(static_cast<intptr_t>(-1)), &base, &freeSize,
+               0x8000u /* MEM_RELEASE */);
+      }
+    }
+  }
+
+  auto tryAllocate = [&](mach_vm_address_t address, int flags) -> Low4GBAllocation {
+    mach_vm_address_t candidate = address;
+    const kern_return_t kr = mach_vm_allocate(mach_task_self(), &candidate, rounded, flags);
+    if (kr != KERN_SUCCESS) {
+      return {};
+    }
+    if (candidate > 0xffffffffu) {
+      mach_vm_deallocate(mach_task_self(), candidate, rounded);
+      return {};
+    }
+    return {reinterpret_cast<void*>(static_cast<uintptr_t>(candidate)),
+            static_cast<size_t>(rounded), false, false};
+  };
+
+  if (auto alloc = tryAllocate(0, VM_FLAGS_ANYWHERE | VM_FLAGS_4GB_CHUNK)) {
+    return alloc;
+  }
+
+  static mach_vm_address_t nextHint = 0x10000000u;
+  for (mach_vm_address_t attempt = nextHint;
+       attempt + rounded < limit;
+       attempt += step) {
+    if (auto alloc = tryAllocate(attempt, VM_FLAGS_FIXED)) {
+      nextHint = attempt + step;
+      return alloc;
+    }
+  }
+  dxmt9DebugLog("allocateLow4GB failed size=%zu rounded=%llu", size,
+                static_cast<unsigned long long>(rounded));
+  return {};
+#else
+  (void)size;
+  return {};
+#endif
+}
+
+void freeLow4GB(Low4GBAllocation alloc) {
+#if defined(__APPLE__)
+  if (!alloc.ptr || alloc.size == 0) return;
+  if (alloc.viaHeap) {
+    if (auto getProcessHeap = resolveGetProcessHeap()) {
+      if (auto rtlFree = resolveRtlFreeHeap()) {
+        if (void* heap = getProcessHeap()) {
+          rtlFree(heap, 0, alloc.ptr);
+        }
+      }
+    }
+    return;
+  }
+  if (alloc.viaNt) {
+    if (auto ntFree = resolveNtFreeVirtualMemory()) {
+      void* base = alloc.ptr;
+      size_t freeSize = 0;
+      ntFree(reinterpret_cast<void*>(static_cast<intptr_t>(-1)), &base, &freeSize,
+             0x8000u /* MEM_RELEASE */);
+    }
+    return;
+  }
+  mach_vm_deallocate(mach_task_self(),
+                     static_cast<mach_vm_address_t>(reinterpret_cast<uintptr_t>(alloc.ptr)),
+                     static_cast<mach_vm_size_t>(alloc.size));
+#else
+  (void)alloc;
+#endif
+}
+
+void releaseShadowLock(ShadowLock& lock) {
+  freeLow4GB(lock.shadow);
+  lock = ShadowLock{};
+}
+
+}  // namespace
 
 /* ── format conversion ───────────────────────────────────────────────────── */
 
@@ -119,10 +605,23 @@ static uint32_t fmtToD3D(dxmt9::core::Format format) {
 static dxmt9::core::MultiSampleType msTypeFromD3D(uint32_t d3d) {
   using M = dxmt9::core::MultiSampleType;
   switch (d3d) {
+    case 0:  return M::None;
     case 2:  return M::Two;
     case 4:  return M::Four;
     case 8:  return M::Eight;
     default: return M::None;
+  }
+}
+
+static bool isSupportedD3DMultisample(uint32_t d3d) {
+  switch (d3d) {
+    case 0:
+    case 2:
+    case 4:
+    case 8:
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -223,13 +722,18 @@ static void fillCCaps(const dxmt9::core::DeviceCaps& src, D9CCaps* out) {
   out->caps2                   = src.caps2;
   out->caps3                   = src.caps3;
   out->presentationIntervals   = src.presentationIntervals;
+  out->cursorCaps              = src.cursorCaps;
+  out->primitiveMiscCaps       = src.primitiveMiscCaps;
   out->rasterCaps              = src.rasterCaps;
   out->zCmpCaps                = src.zCmpCaps;
   out->srcBlendCaps            = src.srcBlendCaps;
   out->destBlendCaps           = src.destBlendCaps;
-  out->alphaBlendCaps          = src.alphaBlendCaps;
+  out->alphaBlendCaps          = src.alphaCmpCaps;
   out->shadeCaps               = src.shadeCaps;
   out->textureCaps             = src.textureCaps;
+  out->textureFilterCaps       = src.textureFilterCaps;
+  out->cubetextureFilterCaps   = src.cubetextureFilterCaps;
+  out->volumeTextureFilterCaps = src.volumeTextureFilterCaps;
   out->maxAnisotropy           = src.maxAnisotropy;
   out->maxUserClipPlanes       = src.maxUserClipPlanes;
   out->maxVertexW              = src.maxVertexW;
@@ -239,6 +743,8 @@ static void fillCCaps(const dxmt9::core::DeviceCaps& src, D9CCaps* out) {
   out->guardBandBottom         = src.guardBandBottom;
   out->extentsAdjust           = src.extentsAdjust;
   out->stencilCaps             = src.stencilCaps;
+  out->lineCaps                = src.lineCaps;
+  out->textureBlendCaps        = src.textureBlendCaps;
   out->vertexShaderVersion     = src.vertexShaderVersion;
   out->pixelShaderVersion      = src.pixelShaderVersion;
   out->maxVertexShaderConst    = src.maxVertexShaderConst;
@@ -272,9 +778,16 @@ static void fillCCaps(const dxmt9::core::DeviceCaps& src, D9CCaps* out) {
   out->maxSimultaneousTextures = src.maxSimultaneousTextures;
   out->maxActiveLights         = src.maxActiveLights;
   out->vertexProcessingCaps    = src.vertexProcessingCaps;
+  out->vertexTextureFilterCaps = src.vertexTextureFilterCaps;
+  out->maxVShaderInstructionsExecuted = src.maxVShaderInstructionsExecuted;
+  out->maxPShaderInstructionsExecuted = src.maxPShaderInstructionsExecuted;
+  out->maxVertexShader30InstructionSlots = src.maxVertexShader30InstructionSlots;
+  out->maxPixelShader30InstructionSlots = src.maxPixelShader30InstructionSlots;
   out->maxTextureBlendStages   = 8;   /* fixed D3D9 max */
   out->devCaps                 = src.devCaps;
   out->devCaps2                = src.devCaps2;
+  out->declTypes               = src.declTypes;
+  out->stretchRectFilterCaps   = src.stretchRectFilterCaps;
   out->masterAdapterOrdinal    = src.masterAdapterOrdinal;
   out->adapterOrdinalInGroup   = src.adapterOrdinalInGroup;
   out->numberOfAdaptersInGroup = src.numberOfAdaptersInGroup;
@@ -307,6 +820,9 @@ struct D9CFactory {
 struct D9CDevice {
   dxmt9::com::IDirect3DDevice9Ex* iface;
   std::atomic<uint32_t>           refs{1};
+  bool                            stateBlockRecording = false;
+  std::optional<dxmt9::core::DeviceState> stateBlockBaseState;
+  std::unordered_set<uint32_t>    stateBlockRenderStates;
 
   explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {}
   ~D9CDevice() { if (iface) iface->Release(); }
@@ -326,17 +842,21 @@ struct D9CTexture {
   std::shared_ptr<dxmt9::core::Texture> obj;
   D9CDevice*                            device; /* back-pointer, non-owning */
   std::atomic<uint32_t>                 refs{1};
+  std::unordered_map<uint32_t, ShadowLock> wow64Locks;
 };
 
 struct D9CBuffer {
   std::shared_ptr<dxmt9::core::Buffer> obj;
   std::atomic<uint32_t>                refs{1};
+  ShadowLock wow64Lock;
+  D9CBufferDesc                        desc{};
 };
 
 struct D9CSurface {
   std::shared_ptr<dxmt9::core::Surface> obj;
   D9CTexture*                           ownerTex{nullptr}; /* if texture level */
   std::atomic<uint32_t>                 refs{1};
+  ShadowLock                            wow64Lock;
 };
 
 struct D9CShader {
@@ -367,9 +887,14 @@ struct D9CStateBlock {
 
 extern "C" D9CFactory* dxmt9c_factory_create(void) {
   using namespace dxmt9;
+  dxmt9DebugLog("factory_create begin");
   auto* ex = com::Direct3DCreate9Ex(com::D3D_SDK_VERSION,
                                      core::makeBackendDevice());
-  if (!ex) return nullptr;
+  if (!ex) {
+    dxmt9DebugLog("factory_create failed");
+    return nullptr;
+  }
+  dxmt9DebugLog("factory_create ok iface=%p", static_cast<void*>(ex));
   return new D9CFactory(ex);
 }
 
@@ -452,12 +977,16 @@ extern "C" int32_t dxmt9c_factory_check_device_type(D9CFactory* f, uint32_t adap
 
 extern "C" int32_t dxmt9c_factory_check_device_format(D9CFactory* f, uint32_t adapter,
                                                         uint32_t d3dFmt, uint32_t usage) {
-  return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt), usage);
+  return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt), usageFromD3D(usage));
 }
 
 extern "C" int32_t dxmt9c_factory_check_device_multisample(D9CFactory* f, uint32_t adapter,
                                                              uint32_t d3dFmt, uint32_t msType,
                                                              uint32_t windowed) {
+  if (!isSupportedD3DMultisample(msType)) {
+    (void)windowed;
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
   return f->iface->CheckDeviceMultiSampleType(adapter, fmtFromD3D(d3dFmt),
                                                msTypeFromD3D(msType));
   (void)windowed;
@@ -467,6 +996,21 @@ extern "C" int32_t dxmt9c_factory_get_caps(D9CFactory* f, uint32_t adapter, D9CC
   if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
   fillCCaps(f->iface->GetDeviceCaps(adapter), out);
   out->adapterOrdinal = adapter;
+  dxmt9DebugLog("factory_get_caps adapter=%u vs=0x%x ps=0x%x maxTex=%ux%u maxRT=%u maxLights=%u maxStreams=%u maxAniso=%u intervals=0x%x devCaps=0x%x rasterCaps=0x%x texCaps=0x%x textureOpCaps=0x%x",
+                adapter,
+                out->vertexShaderVersion,
+                out->pixelShaderVersion,
+                out->maxTextureWidth,
+                out->maxTextureHeight,
+                out->numSimultaneousRTs,
+                out->maxActiveLights,
+                out->maxStreams,
+                out->maxAnisotropy,
+                out->presentationIntervals,
+                out->devCaps,
+                out->rasterCaps,
+                out->textureCaps,
+                out->textureBlendCaps);
   return dxmt9::core::D3D_OK;
 }
 
@@ -484,6 +1028,15 @@ extern "C" D9CDevice* dxmt9c_factory_create_device(D9CFactory* f, uint32_t adapt
                                                      uint32_t behaviorFlags,
                                                      const D9CDisplayModeEx* fullscreen) {
   if (!pp) return nullptr;
+  dxmt9DebugLog("factory_create_device begin adapter=%u windowed=%u size=%ux%u fmt=%u hwnd=%llu behavior=0x%x fullscreen=%d",
+                adapter,
+                pp->windowed,
+                pp->backBufferWidth,
+                pp->backBufferHeight,
+                pp->backBufferFormat,
+                static_cast<unsigned long long>(pp->deviceWindow),
+                behaviorFlags,
+                fullscreen ? 1 : 0);
   auto params = ppFromC(*pp);
   dxmt9::com::IDirect3DDevice9Ex* dev = nullptr;
 
@@ -493,7 +1046,11 @@ extern "C" D9CDevice* dxmt9c_factory_create_device(D9CFactory* f, uint32_t adapt
   } else {
     dev = f->iface->CreateDeviceEx(adapter, params, nullptr, behaviorFlags);
   }
-  if (!dev) return nullptr;
+  if (!dev) {
+    dxmt9DebugLog("factory_create_device failed");
+    return nullptr;
+  }
+  dxmt9DebugLog("factory_create_device ok iface=%p", static_cast<void*>(dev));
   return new D9CDevice(dev);
 }
 
@@ -513,6 +1070,20 @@ extern "C" uint32_t dxmt9c_device_release(D9CDevice* d) {
 extern "C" int32_t dxmt9c_device_get_caps(D9CDevice* d, D9CCaps* out) {
   if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
   fillCCaps(d->iface->GetDeviceCaps(), out);
+  dxmt9DebugLog("device_get_caps vs=0x%x ps=0x%x maxTex=%ux%u maxRT=%u maxLights=%u maxStreams=%u maxAniso=%u intervals=0x%x devCaps=0x%x rasterCaps=0x%x texCaps=0x%x textureOpCaps=0x%x",
+                out->vertexShaderVersion,
+                out->pixelShaderVersion,
+                out->maxTextureWidth,
+                out->maxTextureHeight,
+                out->numSimultaneousRTs,
+                out->maxActiveLights,
+                out->maxStreams,
+                out->maxAnisotropy,
+                out->presentationIntervals,
+                out->devCaps,
+                out->rasterCaps,
+                out->textureCaps,
+                out->textureBlendCaps);
   return dxmt9::core::D3D_OK;
 }
 
@@ -540,11 +1111,17 @@ extern "C" int32_t dxmt9c_device_present(D9CDevice* d,
                                           const D9CRect* src, const D9CRect* dst,
                                           uint64_t destWindow, const void* dirty,
                                           uint32_t flags) {
+  dxmt9DebugLog("device_present begin destWindow=%llu flags=0x%x src=%d dst=%d",
+                static_cast<unsigned long long>(destWindow),
+                flags,
+                src ? 1 : 0,
+                dst ? 1 : 0);
   using R = dxmt9::core::Rect;
   R* ps = src ? new R{src->left,src->top,src->right,src->bottom} : nullptr;
   R* pd = dst ? new R{dst->left,dst->top,dst->right,dst->bottom} : nullptr;
   auto hr = d->iface->PresentEx(ps, pd, {destWindow}, dirty, flags);
   delete ps; delete pd;
+  dxmt9DebugLog("device_present hr=0x%08x", static_cast<unsigned>(hr));
   return hr;
 }
 extern "C" int32_t dxmt9c_device_begin_scene(D9CDevice* d) {
@@ -580,15 +1157,26 @@ extern "C" int32_t dxmt9c_device_set_viewport(D9CDevice* d, const D9CViewport* v
   return d->iface->SetViewport({vp->x,vp->y,vp->width,vp->height,vp->minZ,vp->maxZ});
 }
 extern "C" void dxmt9c_device_get_viewport(D9CDevice* d, D9CViewport* vp) {
-  /* no getter in internal interface; mirror from device state */
-  (void)d; (void)vp;
+  if (!d || !vp) return;
+  const auto value = d->iface->GetViewport();
+  vp->x = value.x;
+  vp->y = value.y;
+  vp->width = value.width;
+  vp->height = value.height;
+  vp->minZ = value.minZ;
+  vp->maxZ = value.maxZ;
 }
 extern "C" int32_t dxmt9c_device_set_scissor_rect(D9CDevice* d, const D9CRect* r) {
   if (!r) return dxmt9::core::D3DERR_INVALIDCALL;
   return d->iface->SetScissorRect({r->left,r->top,r->right,r->bottom});
 }
 extern "C" void dxmt9c_device_get_scissor_rect(D9CDevice* d, D9CRect* r) {
-  (void)d; (void)r;
+  if (!d || !r) return;
+  const auto value = d->iface->GetScissorRect();
+  r->left = value.left;
+  r->top = value.top;
+  r->right = value.right;
+  r->bottom = value.bottom;
 }
 
 extern "C" int32_t dxmt9c_device_set_transform(D9CDevice* d, uint32_t state,
@@ -639,6 +1227,9 @@ extern "C" int32_t dxmt9c_device_light_enable(D9CDevice* d, uint32_t i, uint32_t
 }
 
 extern "C" int32_t dxmt9c_device_set_render_state(D9CDevice* d, uint32_t s, uint32_t v) {
+  if (d && d->stateBlockRecording) {
+    d->stateBlockRenderStates.insert(s);
+  }
   return d->iface->SetRenderState(s, v);
 }
 extern "C" uint32_t dxmt9c_device_get_render_state(D9CDevice* d, uint32_t s) {
@@ -916,6 +1507,10 @@ extern "C" int32_t dxmt9c_device_wait_for_vblank(D9CDevice* d, uint32_t idx) {
 extern "C" int32_t dxmt9c_device_check_device_multisample(D9CDevice* d,
                                                             uint32_t fmt, uint32_t msType,
                                                             uint32_t windowed) {
+  if (!isSupportedD3DMultisample(msType)) {
+    (void)windowed;
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
   return d->iface->CheckDeviceMultiSampleType(fmtFromD3D(fmt), msTypeFromD3D(msType));
   (void)windowed;
 }
@@ -940,14 +1535,22 @@ extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* d
 extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, uint32_t h,
                                                       uint32_t levels, uint32_t usage,
                                                       uint32_t fmt, uint32_t pool) {
+  dxmt9DebugLog("device_create_texture begin device=%p size=%ux%u levels=%u usage=0x%x fmt=%u(%s) pool=%u",
+                static_cast<void*>(d), w, h, levels, usage, fmt,
+                dxmt9::core::formatName(fmtFromD3D(fmt)).c_str(), pool);
   dxmt9::core::TextureDesc desc;
   desc.width = w; desc.height = h; desc.levels = levels ? levels : 1;
   desc.format = fmtFromD3D(fmt);
   desc.pool = poolFromD3D(pool);
-  desc.usage = usage;
+  desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::TwoD;
   auto tex = d->iface->CreateTexture(desc);
-  if (!tex) return nullptr;
+  if (!tex) {
+    dxmt9DebugLog("device_create_texture failed device=%p", static_cast<void*>(d));
+    return nullptr;
+  }
+  dxmt9DebugLog("device_create_texture ok texture=%p levels=%u",
+                static_cast<void*>(tex.get()), tex->levelCount());
   return new D9CTexture{tex, d};
 }
 extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t size,
@@ -957,7 +1560,7 @@ extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t 
   desc.width = size; desc.height = size; desc.levels = levels ? levels : 1;
   desc.format = fmtFromD3D(fmt);
   desc.pool = poolFromD3D(pool);
-  desc.usage = usage;
+  desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::Cube;
   auto tex = d->iface->CreateTexture(desc);
   if (!tex) return nullptr;
@@ -972,7 +1575,7 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_
   desc.levels = levels ? levels : 1;
   desc.format = fmtFromD3D(fmt);
   desc.pool = poolFromD3D(pool);
-  desc.usage = usage;
+  desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::Volume;
   auto tex = d->iface->CreateTexture(desc);
   if (!tex) return nullptr;
@@ -980,20 +1583,36 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_
 }
 
 extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer(D9CDevice* d, uint32_t len,
-                                                           uint32_t usage, uint32_t /*fvf*/,
+                                                           uint32_t usage, uint32_t fvf,
                                                            uint32_t pool) {
-  dxmt9::core::BufferDesc desc{len, poolFromD3D(pool), usage};
+  dxmt9::core::BufferDesc desc{len, poolFromD3D(pool),
+                               static_cast<uint32_t>(usageFromD3D(usage) |
+                                                     dxmt9::core::UsageVertexBuffer)};
   auto buf = d->iface->CreateBuffer(desc);
   if (!buf) return nullptr;
-  return new D9CBuffer{buf};
+  auto* out = new D9CBuffer{buf};
+  out->desc.size = len;
+  out->desc.usage = usage;
+  out->desc.pool = pool;
+  out->desc.fvf = fvf;
+  out->desc.format = 0;
+  return out;
 }
 extern "C" D9CBuffer* dxmt9c_device_create_index_buffer(D9CDevice* d, uint32_t len,
-                                                          uint32_t usage, uint32_t /*fmt*/,
+                                                          uint32_t usage, uint32_t fmt,
                                                           uint32_t pool) {
-  dxmt9::core::BufferDesc desc{len, poolFromD3D(pool), usage};
+  dxmt9::core::BufferDesc desc{len, poolFromD3D(pool),
+                               static_cast<uint32_t>(usageFromD3D(usage) |
+                                                     dxmt9::core::UsageIndexBuffer)};
   auto buf = d->iface->CreateBuffer(desc);
   if (!buf) return nullptr;
-  return new D9CBuffer{buf};
+  auto* out = new D9CBuffer{buf};
+  out->desc.size = len;
+  out->desc.usage = usage;
+  out->desc.pool = pool;
+  out->desc.fvf = 0;
+  out->desc.format = fmt;
+  return out;
 }
 
 extern "C" D9CSurface* dxmt9c_device_create_render_target(D9CDevice* d, uint32_t w,
@@ -1039,10 +1658,20 @@ extern "C" D9CSurface* dxmt9c_device_create_offscreen_surface(D9CDevice* d, uint
 
 extern "C" D9CShader* dxmt9c_device_create_vertex_shader(D9CDevice* d,
                                                            const uint32_t* bytecode) {
-  /* count dwords until end token 0xFFFF */
+  dxmt9DebugLog("device_create_vertex_shader begin device=%p bytecode=%p",
+                static_cast<void*>(d), bytecode);
+  if (!bytecode) {
+    dxmt9DebugLog("device_create_vertex_shader failed: null bytecode");
+    return nullptr;
+  }
   size_t n = 0;
-  while (bytecode[n] != 0xFFFF) ++n;
-  ++n; /* include end token */
+  if (!computeShaderBytecodeWordCount(bytecode, &n)) {
+    dxmt9DebugLog("device_create_vertex_shader failed: invalid bytecode layout bytecode=%p",
+                  bytecode);
+    return nullptr;
+  }
+  dxmt9DebugLog("device_create_vertex_shader bytecode=%p dwords=%zu version=0x%08x end=0x%08x",
+                bytecode, n, bytecode[0], bytecode[n - 1]);
   dxmt9::core::ShaderBytecode bc;
   bc.bytes.assign(reinterpret_cast<const uint8_t*>(bytecode),
                   reinterpret_cast<const uint8_t*>(bytecode) + n*4);
@@ -1061,6 +1690,7 @@ extern "C" D9CShader* dxmt9c_device_create_vertex_shader(D9CDevice* d,
 extern "C" D9CShader* dxmt9c_device_create_pixel_shader(D9CDevice* d,
                                                           const uint32_t* bytecode) {
   (void)d;
+  dxmt9DebugLog("device_create_pixel_shader bytecode=%p", bytecode);
   return dxmt9c_device_create_vertex_shader(d, bytecode); /* same logic */
 }
 
@@ -1103,12 +1733,33 @@ extern "C" D9CStateBlock* dxmt9c_device_create_state_block(D9CDevice* d, uint32_
   if (!sb) return nullptr;
   return new D9CStateBlock{sb, d};
 }
-extern "C" int32_t dxmt9c_device_begin_state_block(D9CDevice* /*d*/) {
-  return dxmt9::core::E_NOTIMPL;
+extern "C" int32_t dxmt9c_device_begin_state_block(D9CDevice* d) {
+  if (!d || d->stateBlockRecording) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  d->stateBlockBaseState = d->dev().state();
+  d->stateBlockRenderStates.clear();
+  d->stateBlockRecording = true;
+  return dxmt9::core::D3D_OK;
 }
 extern "C" int32_t dxmt9c_device_end_state_block(D9CDevice* d, D9CStateBlock** out) {
-  (void)d; (void)out;
-  return dxmt9::core::E_NOTIMPL;
+  if (!out) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  *out = nullptr;
+  if (!d || !d->stateBlockRecording) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  d->stateBlockRecording = false;
+  if (!d->stateBlockBaseState.has_value()) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  auto sb = std::make_shared<dxmt9::core::StateBlock>();
+  sb->captureDelta(*d->stateBlockBaseState, d->dev().state(), d->stateBlockRenderStates);
+  d->stateBlockBaseState.reset();
+  d->stateBlockRenderStates.clear();
+  *out = new D9CStateBlock{sb, d};
+  return dxmt9::core::D3D_OK;
 }
 
 /* ── swap chain ──────────────────────────────────────────────────────────── */
@@ -1176,21 +1827,100 @@ extern "C" void dxmt9c_texture_addref(D9CTexture* t) {
 extern "C" uint32_t dxmt9c_texture_release(D9CTexture* t) {
   if (!t) return 0;
   uint32_t r = t->refs.fetch_sub(1) - 1;
-  if (r == 0) delete t;
+  if (r == 0) {
+    for (auto& [_, lock] : t->wow64Locks) {
+      releaseShadowLock(lock);
+    }
+    delete t;
+  }
   return r;
 }
 extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level,
                                              D9CLockedRect* out, const D9CRect* r,
                                              uint32_t flags) {
   if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
+  if (r) {
+    dxmt9DebugLog("texture_lock_rect begin texture=%p level=%u flags=0x%x rect=(%d,%d)-(%d,%d)",
+                  static_cast<void*>(t), level, flags, r->left, r->top, r->right, r->bottom);
+  } else {
+    dxmt9DebugLog("texture_lock_rect begin texture=%p level=%u flags=0x%x rect=<full>",
+                  static_cast<void*>(t), level, flags);
+  }
   dxmt9::core::Rect* pr = r ? new dxmt9::core::Rect{r->left,r->top,r->right,r->bottom} : nullptr;
   auto lr = t->obj->lockRect(level, pr, flags);
   delete pr;
   out->pitch = static_cast<int32_t>(lr.pitch);
   out->bits  = lr.data;
+  if (lr.data && !pointerFits32Bit(lr.data)) {
+    const auto& desc = t->obj->desc();
+    const uint32_t levelWidth = std::max(1u, desc.width >> std::min(level, 31u));
+    const uint32_t levelHeight = std::max(1u, desc.height >> std::min(level, 31u));
+    const uint32_t bpp = dxmt9::core::bytesPerPixel(desc.format);
+    const int32_t left = r ? std::clamp(r->left, 0, static_cast<int32_t>(levelWidth)) : 0;
+    const int32_t top = r ? std::clamp(r->top, 0, static_cast<int32_t>(levelHeight)) : 0;
+    const int32_t right = r ? std::clamp(r->right, left, static_cast<int32_t>(levelWidth))
+                            : static_cast<int32_t>(levelWidth);
+    const int32_t bottom = r ? std::clamp(r->bottom, top, static_cast<int32_t>(levelHeight))
+                             : static_cast<int32_t>(levelHeight);
+    const uint32_t rowBytes = static_cast<uint32_t>(std::max<int32_t>(0, right - left)) * bpp;
+    const uint32_t rows = static_cast<uint32_t>(std::max<int32_t>(0, bottom - top));
+    const size_t shadowBytes = static_cast<size_t>(rowBytes) * rows;
+    auto& shadow = t->wow64Locks[level];
+    if (rowBytes == 0 || rows == 0) {
+      dxmt9DebugLog("texture_lock_rect shadow alloc failed texture=%p level=%u nativeBits=%p rowBytes=%u rows=%u",
+                    static_cast<void*>(t), level, lr.data, rowBytes, rows);
+      out->pitch = 0;
+      out->bits = nullptr;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    if (!shadow.shadow || shadow.shadow.size < shadowBytes) {
+      releaseShadowLock(shadow);
+      shadow.shadow = allocateLow4GB(shadowBytes);
+    }
+    if (!shadow.shadow) {
+      dxmt9DebugLog("texture_lock_rect shadow alloc failed texture=%p level=%u nativeBits=%p rowBytes=%u rows=%u",
+                    static_cast<void*>(t), level, lr.data, rowBytes, rows);
+      out->pitch = 0;
+      out->bits = nullptr;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    shadow.nativePtr = lr.data;
+    shadow.nativePitch = lr.pitch;
+    shadow.rowBytes = rowBytes;
+    shadow.rows = rows;
+    auto* dst = static_cast<uint8_t*>(shadow.shadow.ptr);
+    auto* src = static_cast<const uint8_t*>(shadow.nativePtr);
+    for (uint32_t row = 0; row < rows; ++row) {
+      std::memcpy(dst + static_cast<size_t>(row) * rowBytes,
+                  src + static_cast<size_t>(row) * shadow.nativePitch,
+                  rowBytes);
+    }
+    out->pitch = static_cast<int32_t>(rowBytes);
+    out->bits = shadow.shadow.ptr;
+    dxmt9DebugLog("texture_lock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p rowBytes=%u rows=%u",
+                  static_cast<void*>(t), level, shadow.nativePtr, out->bits, rowBytes, rows);
+  }
+  dxmt9DebugLog("texture_lock_rect ok texture=%p level=%u pitch=%d bits=%p",
+                static_cast<void*>(t), level, out->pitch, out->bits);
   return dxmt9::core::D3D_OK;
 }
 extern "C" int32_t dxmt9c_texture_unlock_rect(D9CTexture* t, uint32_t level) {
+  if (auto it = t->wow64Locks.find(level); it != t->wow64Locks.end()) {
+    auto& shadow = it->second;
+    auto* dst = static_cast<uint8_t*>(shadow.nativePtr);
+    auto* src = static_cast<const uint8_t*>(shadow.shadow.ptr);
+    for (uint32_t row = 0; row < shadow.rows; ++row) {
+      std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
+                  src + static_cast<size_t>(row) * shadow.rowBytes,
+                  shadow.rowBytes);
+    }
+    dxmt9DebugLog("texture_unlock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p rowBytes=%u rows=%u",
+                  static_cast<void*>(t), level, shadow.nativePtr, shadow.shadow.ptr,
+                  shadow.rowBytes, shadow.rows);
+    releaseShadowLock(shadow);
+    t->wow64Locks.erase(it);
+  }
+  dxmt9DebugLog("texture_unlock_rect texture=%p level=%u", static_cast<void*>(t), level);
   t->obj->unlockRect(level);
   return dxmt9::core::D3D_OK;
 }
@@ -1213,12 +1943,16 @@ extern "C" int32_t dxmt9c_texture_get_level_desc(D9CTexture* t, uint32_t level,
   const uint32_t shift = std::min<uint32_t>(level, 31);
   out->format = fmtToD3D(d.format);
   out->resourceType = textureTypeToResourceType(d.type);
-  out->usage = d.usage;
+  out->usage = usageToD3D(d.usage);
   out->pool = poolToD3D(d.pool);
   out->multiSampleType = 0;
   out->multiSampleQuality = 0;
   out->width  = std::max(1u, d.width >> shift);
   out->height = std::max(1u, d.height >> shift);
+  dxmt9DebugLog("texture_get_level_desc texture=%p level=%u fmt=%u(%s) usage=0x%x pool=%u size=%ux%u",
+                static_cast<void*>(t), level, out->format,
+                dxmt9::core::formatName(d.format).c_str(), out->usage, out->pool,
+                out->width, out->height);
   return dxmt9::core::D3D_OK;
 }
 extern "C" int32_t dxmt9c_texture_generate_mip_sublevels(D9CTexture* /*t*/) {
@@ -1233,18 +1967,59 @@ extern "C" void dxmt9c_buffer_addref(D9CBuffer* b) {
 extern "C" uint32_t dxmt9c_buffer_release(D9CBuffer* b) {
   if (!b) return 0;
   uint32_t r = b->refs.fetch_sub(1) - 1;
-  if (r == 0) delete b;
+  if (r == 0) {
+    releaseShadowLock(b->wow64Lock);
+    delete b;
+  }
   return r;
 }
 extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t size,
                                        void** data, uint32_t flags) {
   if (!data) return dxmt9::core::D3DERR_INVALIDCALL;
-  auto lr = b->obj->lock(offset, size ? size : b->obj->desc().size, flags);
+  dxmt9DebugLog("buffer_lock begin buffer=%p offset=%u size=%u flags=0x%x",
+                static_cast<void*>(b), offset, size, flags);
+  const uint32_t actualSize = size ? size : b->obj->desc().size;
+  auto lr = b->obj->lock(offset, actualSize, flags);
   *data = lr.data;
+  if (lr.data && !pointerFits32Bit(lr.data)) {
+    if (!b->wow64Lock.shadow || b->wow64Lock.shadow.size < actualSize) {
+      releaseShadowLock(b->wow64Lock);
+      b->wow64Lock.shadow = allocateLow4GB(actualSize);
+    }
+    if (!b->wow64Lock.shadow) {
+      dxmt9DebugLog("buffer_lock shadow alloc failed buffer=%p native=%p size=%u",
+                    static_cast<void*>(b), lr.data, actualSize);
+      *data = nullptr;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    b->wow64Lock.nativePtr = lr.data;
+    b->wow64Lock.rowBytes = actualSize;
+    b->wow64Lock.rows = 1;
+    std::memcpy(b->wow64Lock.shadow.ptr, lr.data, actualSize);
+    *data = b->wow64Lock.shadow.ptr;
+    dxmt9DebugLog("buffer_lock shadow buffer=%p native=%p shadow=%p size=%u",
+                  static_cast<void*>(b), lr.data, *data, actualSize);
+  }
+  dxmt9DebugLog("buffer_lock ok buffer=%p data=%p", static_cast<void*>(b), *data);
   return dxmt9::core::D3D_OK;
 }
 extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
+  if (b->wow64Lock.shadow) {
+    std::memcpy(b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr, b->wow64Lock.rowBytes);
+    dxmt9DebugLog("buffer_unlock shadow buffer=%p native=%p shadow=%p size=%u",
+                  static_cast<void*>(b), b->wow64Lock.nativePtr, b->wow64Lock.shadow.ptr,
+                  b->wow64Lock.rowBytes);
+    releaseShadowLock(b->wow64Lock);
+  }
   b->obj->unlock();
+  return dxmt9::core::D3D_OK;
+}
+
+extern "C" int32_t dxmt9c_buffer_get_desc(D9CBuffer* b, D9CBufferDesc* out) {
+  if (!b || !out) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  *out = b->desc;
   return dxmt9::core::D3D_OK;
 }
 
@@ -1257,6 +2032,7 @@ extern "C" uint32_t dxmt9c_surface_release(D9CSurface* s) {
   if (!s) return 0;
   uint32_t r = s->refs.fetch_sub(1) - 1;
   if (r == 0) {
+    releaseShadowLock(s->wow64Lock);
     if (s->ownerTex) dxmt9c_texture_release(s->ownerTex);
     delete s;
   }
@@ -1270,9 +2046,45 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out,
   delete pr;
   out->pitch = static_cast<int32_t>(lr.pitch);
   out->bits  = lr.data;
+  if (lr.data && !pointerFits32Bit(lr.data)) {
+    const auto& desc = s->obj->desc();
+    const int32_t top = r ? r->top : 0;
+    const int32_t bottom = r ? r->bottom : static_cast<int32_t>(desc.height);
+    const uint32_t rows = bottom > top ? static_cast<uint32_t>(bottom - top) : 0u;
+    const uint32_t rowBytes = static_cast<uint32_t>(std::abs(out->pitch));
+    const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(rowBytes);
+    if (bytes != 0) {
+      if (!s->wow64Lock.shadow || s->wow64Lock.shadow.size < bytes) {
+        releaseShadowLock(s->wow64Lock);
+        s->wow64Lock.shadow = allocateLow4GB(bytes);
+      }
+      if (!s->wow64Lock.shadow) {
+        out->bits = nullptr;
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      s->wow64Lock.nativePtr = lr.data;
+      s->wow64Lock.nativePitch = rowBytes;
+      s->wow64Lock.rowBytes = rowBytes;
+      s->wow64Lock.rows = rows;
+      std::memcpy(s->wow64Lock.shadow.ptr, lr.data, bytes);
+      out->bits = s->wow64Lock.shadow.ptr;
+      dxmt9DebugLog("surface_lock_rect shadow surface=%p native=%p shadow=%p pitch=%u rows=%u bytes=%zu",
+                    static_cast<void*>(s), lr.data, out->bits, rowBytes, rows, bytes);
+    }
+  }
   return dxmt9::core::D3D_OK;
 }
 extern "C" int32_t dxmt9c_surface_unlock_rect(D9CSurface* s) {
+  if (s->wow64Lock.shadow) {
+    const size_t bytes = static_cast<size_t>(s->wow64Lock.rowBytes) *
+                         static_cast<size_t>(s->wow64Lock.rows);
+    if (bytes != 0) {
+      std::memcpy(s->wow64Lock.nativePtr, s->wow64Lock.shadow.ptr, bytes);
+      dxmt9DebugLog("surface_unlock_rect shadow surface=%p native=%p shadow=%p bytes=%zu",
+                    static_cast<void*>(s), s->wow64Lock.nativePtr, s->wow64Lock.shadow.ptr, bytes);
+    }
+    releaseShadowLock(s->wow64Lock);
+  }
   s->obj->unlockRect();
   return dxmt9::core::D3D_OK;
 }
@@ -1282,9 +2094,9 @@ extern "C" int32_t dxmt9c_surface_get_desc(D9CSurface* s, D9CSurfaceDesc* out) {
   std::memset(out, 0, sizeof(*out));
   out->format = fmtToD3D(d.format);
   out->resourceType = 1; /* D3DRTYPE_SURFACE */
-  out->usage = d.usage;
-  if (d.renderTarget) out->usage |= 1u;        /* D3DUSAGE_RENDERTARGET */
-  if (d.depthStencil) out->usage |= 2u;        /* D3DUSAGE_DEPTHSTENCIL */
+  out->usage = usageToD3D(d.usage);
+  if (d.renderTarget) out->usage |= 0x00000001u;  /* D3DUSAGE_RENDERTARGET */
+  if (d.depthStencil) out->usage |= 0x00000002u;  /* D3DUSAGE_DEPTHSTENCIL */
   out->pool = poolToD3D(d.pool);
   out->multiSampleType = msTypeToD3D(d.multiSampleType);
   out->multiSampleQuality = d.multiSampleType == dxmt9::core::MultiSampleType::None ? 0u : 1u;
@@ -1302,15 +2114,34 @@ extern "C" void dxmt9c_shader_addref(D9CShader* s) {
   if (s) s->refs.fetch_add(1);
 }
 extern "C" uint32_t dxmt9c_shader_release(D9CShader* s) {
+  dxmt9DebugLog("shader_release begin shader=%p", static_cast<void*>(s));
   if (!s) return 0;
   uint32_t r = s->refs.fetch_sub(1) - 1;
+  dxmt9DebugLog("shader_release shader=%p refs=%u dwords=%zu",
+                static_cast<void*>(s), r, s->bytecodeWords.size());
   if (r == 0) delete s;
   return r;
 }
 extern "C" int32_t dxmt9c_shader_get_bytecode(D9CShader* s, void* data, uint32_t* size) {
+  dxmt9DebugLog("shader_get_bytecode begin shader=%p data=%p size_ptr=%p",
+                static_cast<void*>(s), data, static_cast<void*>(size));
+  if (!s) {
+    dxmt9DebugLog("shader_get_bytecode failed: null shader");
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   uint32_t bytes = static_cast<uint32_t>(s->bytecodeWords.size() * 4);
-  if (!data) { if (size) *size = bytes; return dxmt9::core::D3D_OK; }
-  if (size && *size < bytes) return dxmt9::core::D3DERR_INVALIDCALL;
+  if (!data) {
+    dxmt9DebugLog("shader_get_bytecode query shader=%p bytes=%u", static_cast<void*>(s), bytes);
+    if (size) *size = bytes;
+    return dxmt9::core::D3D_OK;
+  }
+  if (size && *size < bytes) {
+    dxmt9DebugLog("shader_get_bytecode too-small shader=%p provided=%u required=%u",
+                  static_cast<void*>(s), *size, bytes);
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  dxmt9DebugLog("shader_get_bytecode copy shader=%p dst=%p bytes=%u",
+                static_cast<void*>(s), data, bytes);
   std::memcpy(data, s->bytecodeWords.data(), bytes);
   if (size) *size = bytes;
   return dxmt9::core::D3D_OK;
@@ -1389,5 +2220,25 @@ extern "C" int32_t dxmt9c_stateblock_capture(D9CStateBlock* s) {
 }
 extern "C" int32_t dxmt9c_stateblock_apply(D9CStateBlock* s) {
   s->obj->apply(s->device->dev());
+  const auto& state = s->device->dev().state();
+  const auto rsValue = [&](uint32_t key) -> uint32_t {
+    const auto it = state.renderStates.find(key);
+    return it != state.renderStates.end() ? it->second : 0u;
+  };
+  dxmt9DebugLog("stateblock_apply device=%p alphaBlend=%u srcBlend=%u dstBlend=%u alphaTest=%u alphaFunc=%u alphaRef=%u lighting=%u colorOp0=%u alphaOp0=%u",
+                static_cast<void*>(s->device),
+                rsValue(dxmt9::core::RS_ALPHABLEND_ENABLE),
+                rsValue(dxmt9::core::RS_SRC_BLEND),
+                rsValue(dxmt9::core::RS_DEST_BLEND),
+                rsValue(dxmt9::core::RS_ALPHA_TEST_ENABLE),
+                rsValue(dxmt9::core::RS_ALPHA_FUNC),
+                rsValue(dxmt9::core::RS_ALPHA_REF),
+                rsValue(dxmt9::core::RS_LIGHTING),
+                state.textureStageStates[0].contains(dxmt9::core::TSS_COLOR_OP)
+                    ? state.textureStageStates[0].at(dxmt9::core::TSS_COLOR_OP)
+                    : 0u,
+                state.textureStageStates[0].contains(dxmt9::core::TSS_ALPHA_OP)
+                    ? state.textureStageStates[0].at(dxmt9::core::TSS_ALPHA_OP)
+                    : 0u);
   return dxmt9::core::D3D_OK;
 }

@@ -230,7 +230,9 @@ class Direct3DDevice9Impl final : public IDirect3DDevice9Ex, public RefCounted<D
     return device_->setClipPlane(index, plane);
   }
   core::HResult SetViewport(const core::Viewport& viewport) override { return device_->setViewport(viewport); }
+  core::Viewport GetViewport() const override { return device_->viewport(); }
   core::HResult SetScissorRect(const core::Rect& rect) override { return device_->setScissorRect(rect); }
+  core::Rect GetScissorRect() const override { return device_->scissorRect(); }
   core::HResult SetRenderTarget(u32 index, std::shared_ptr<core::Surface> surface) override {
     return device_->setRenderTarget(index, std::move(surface));
   }

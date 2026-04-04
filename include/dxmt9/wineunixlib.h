@@ -62,6 +62,9 @@ extern NTSTATUS (WINAPI *__wine_unix_call_dispatcher)(unixlib_handle_t handle,
                                                       unsigned int code,
                                                       void *args);
 extern unixlib_handle_t __wine_unixlib_handle;
+extern NTSTATUS WINAPI __wine_unix_call(unixlib_handle_t handle,
+                                        unsigned int code,
+                                        void *args);
 extern NTSTATUS WINAPI __wine_init_unix_call(void);
 extern NTSTATUS WINAPI __wine_load_unix_lib(const UNICODE_STRING *name,
                                             unixlib_module_t *lib,
