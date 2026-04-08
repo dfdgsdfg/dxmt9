@@ -166,6 +166,31 @@ const char* gpuDumpTexturePath() {
   return path && path[0] != '\0' ? path : nullptr;
 }
 
+const char* shaderDumpDir() {
+  static const char* path = std::getenv("DXMT9_DUMP_SHADER_DIR");
+  return path && path[0] != '\0' ? path : nullptr;
+}
+
+void maybeDumpShaderSource(const char* label, const std::string& source) {
+  const char* dir = shaderDumpDir();
+  if (!dir || !label) {
+    return;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  const u64 hash = hashBytes(std::as_bytes(std::span(source)));
+  const auto path = std::filesystem::path(dir) /
+                    (std::string(label) + "-" + std::to_string(hash) + ".metal");
+  if (std::filesystem::exists(path, ec)) {
+    return;
+  }
+  std::ofstream out(path, std::ios::binary);
+  if (!out) {
+    return;
+  }
+  out.write(source.data(), static_cast<std::streamsize>(source.size()));
+}
+
 bool shouldDumpGpuTexture(Handle handle) {
   const u64 wanted = gpuDumpTextureHandle();
   return wanted != 0ull && handle.value == wanted;
@@ -1505,9 +1530,11 @@ constexpr u32 kD3DDeclTypeFloat3 = 2u;
 constexpr u32 kD3DDeclTypeFloat4 = 3u;
 constexpr u32 kD3DDeclTypeD3DColor = 4u;
 constexpr u32 kD3DDeclUsagePosition = 0u;
+constexpr u32 kD3DDeclUsagePSize = 4u;
 constexpr u32 kD3DDeclUsageTexcoord = 5u;
 constexpr u32 kD3DDeclUsagePositionT = 9u;
 constexpr u32 kD3DDeclUsageColor = 10u;
+constexpr u32 kD3DDeclUsageFog = 11u;
 constexpr u32 kD3DSP_DCL_USAGE_SHIFT = 0u;
 constexpr u32 kD3DSP_DCL_USAGE_MASK = 0x0000000fu;
 constexpr u32 kD3DSP_DCL_USAGEINDEX_SHIFT = 16u;
@@ -2450,6 +2477,50 @@ std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const Spirv
   return layout;
 }
 
+std::string readPixelInputExpression(u32 token, const std::string& pixelInputs) {
+  const u32 type = decodeRegisterType(token);
+  const u32 index = decodeRegisterIndex(token);
+  switch (type) {
+    case kD3DSPR_INPUT:
+      if (index == 0) {
+        return "float4(" + pixelInputs + ".color)";
+      }
+      if (index == 1) {
+        return "float4(" + pixelInputs + ".secondaryColor)";
+      }
+      break;
+    case kD3DSPR_ADDR:
+      return "float4(dxmt9_select_texcoord(" + pixelInputs + ", " + std::to_string(index) + "u), 0.0f, 1.0f)";
+    case kD3DSPR_RASTOUT:
+      if (index == 0) {
+        return pixelInputs + ".position";
+      }
+      if (index == 1) {
+        return "float4(" + pixelInputs + ".fogFactor)";
+      }
+      if (index == 2) {
+        return "float4(" + pixelInputs + ".pointSize)";
+      }
+      break;
+    default:
+      break;
+  }
+
+  if (index == 0) {
+    return "float4(" + pixelInputs + ".color)";
+  }
+  if (index == 1) {
+    return "float4(dxmt9_select_texcoord(" + pixelInputs + ", 0u), 0.0f, 1.0f)";
+  }
+  if (index == 2) {
+    return "float4(" + pixelInputs + ".secondaryColor)";
+  }
+  if (index == 3) {
+    return "float4(" + pixelInputs + ".fogFactor)";
+  }
+  return "float4(0.0f)";
+}
+
 struct FlowBlock {
   u32 opcode = 0;
   bool sawElse = false;
@@ -3270,6 +3341,24 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   }
 
   const bool textured = module.usesTexture || desc.textures[0].handle != Handle{};
+  const bool traceShaderInputs = [] {
+    const char* env = std::getenv("DXMT9_TRACE_SHADER_INPUTS");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  if (traceShaderInputs) {
+    std::ostringstream trace;
+    trace << "[dxmt9-shader] pixel inputs";
+    for (const auto& instruction : module.instructions) {
+      if (instruction.opcode != kD3DSIO_DCL || instruction.operands.empty()) {
+        continue;
+      }
+      trace << " dcl(" << decodeOperandToken(instruction.operands[0], module.stage, true)
+            << ",type=" << decodeRegisterType(instruction.operands[0])
+            << ",tok=0x" << std::hex << instruction.operands[0] << std::dec << ")";
+    }
+    std::fprintf(stderr, "%s\n", trace.str().c_str());
+    std::fflush(stderr);
+  }
   if (textured) {
     out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
     out << "texture2d<float> tex0 [[texture(0)]], sampler samp0 [[sampler(0)]]) {\n";
@@ -3330,9 +3419,14 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       }
       const auto token = instruction.operands[index];
       const auto reg = decodeRegisterRef(token, module.stage);
-      std::string expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
-                                               "outColor", "outSecondaryColor", "outTexcoord0", "outFogFactor",
-                                               "outPointSize", "r", "cFloat", "cInt", "cBool", "p");
+      std::string expr;
+      if (reg.kind == D3DRegisterKind::Input) {
+        expr = readPixelInputExpression(token, "in");
+      } else {
+        expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
+                                     "outColor", "outSecondaryColor", "outTexcoord0", "outFogFactor",
+                                     "outPointSize", "r", "cFloat", "cInt", "cBool", "p");
+      }
       expr = applySwizzle(expr, decodeSwizzle(token));
       expr = applySourceModifier(std::move(expr), decodeSourceModifier(token));
       return expr;
@@ -4296,25 +4390,37 @@ std::string makeShaderSourceFromRequest(const WinemetalShaderCompileRequest& req
 std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex) {
   if (vertex) {
     if (desc.vertexShader.kind == ShaderRef::Kind::Bytecode) {
-      return makeTranslatedVertexSource(desc.vertexShader, desc);
+      auto source = makeTranslatedVertexSource(desc.vertexShader, desc);
+      maybeDumpShaderSource("translated-vs", source);
+      return source;
     }
     if (desc.vertexShader.kind == ShaderRef::Kind::FixedFunctionVertex && desc.vertexShader.vertexKey) {
-      return makeFfpVertexSource(*desc.vertexShader.vertexKey, desc);
+      auto source = makeFfpVertexSource(*desc.vertexShader.vertexKey, desc);
+      maybeDumpShaderSource("ffp-vs", source);
+      return source;
     }
     const u64 variantHash = desc.vertexShader.hash ^ desc.clipPlaneMask ^ desc.rts.color[0].sampleCount;
-    return desc.textures[0].handle ? makeTexturedVertexSource(variantHash)
-                                   : makeGenericVertexSource(variantHash);
+    auto source = desc.textures[0].handle ? makeTexturedVertexSource(variantHash)
+                                          : makeGenericVertexSource(variantHash);
+    maybeDumpShaderSource("builtin-vs", source);
+    return source;
   }
 
   if (desc.pixelShader.kind == ShaderRef::Kind::Bytecode) {
-    return makeTranslatedFragmentSource(desc.pixelShader, desc);
+    auto source = makeTranslatedFragmentSource(desc.pixelShader, desc);
+    maybeDumpShaderSource("translated-fs", source);
+    return source;
   }
   if (desc.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel && desc.pixelShader.pixelKey) {
-    return makeFfpPixelSource(*desc.pixelShader.pixelKey, desc);
+    auto source = makeFfpPixelSource(*desc.pixelShader.pixelKey, desc);
+    maybeDumpShaderSource("ffp-fs", source);
+    return source;
   }
   const u64 variantHash = desc.pixelShader.hash ^ desc.clipPlaneMask ^ desc.rts.color[0].sampleCount;
-  return desc.textures[0].handle ? makeTexturedFragmentSource(variantHash)
-                                 : makeGenericFragmentSource({1.0f, 1.0f, 1.0f, 1.0f}, variantHash);
+  auto source = desc.textures[0].handle ? makeTexturedFragmentSource(variantHash)
+                                        : makeGenericFragmentSource({1.0f, 1.0f, 1.0f, 1.0f}, variantHash);
+  maybeDumpShaderSource("builtin-fs", source);
+  return source;
 }
 
 ShaderVariantKey makeShaderVariantKey(const DrawDesc& desc, std::span<const u32> colorFormats,

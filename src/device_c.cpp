@@ -5,6 +5,8 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <cstring>
 #include <dlfcn.h>
@@ -38,6 +40,47 @@ void dxmt9DebugLog(const char* fmt, ...) {
   va_end(args);
   std::fputc('\n', stderr);
   std::fflush(stderr);
+}
+
+const char* dxmt9ShaderDumpDir() {
+  static const char* path = [] {
+    const char* env = std::getenv("DXMT9_DUMP_SHADER_BYTECODE_DIR");
+    return env && env[0] ? env : nullptr;
+  }();
+  return path;
+}
+
+void maybeDumpShaderBytecode(const char* label, const uint32_t* bytecode, size_t wordCount, uint64_t hash) {
+  const char* dir = dxmt9ShaderDumpDir();
+  if (!dir || !label || !bytecode || wordCount == 0) {
+    return;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  if (ec) {
+    return;
+  }
+  const auto base = std::filesystem::path(dir) /
+                    (std::string(label) + "-" + std::to_string(hash));
+  const auto binPath = base.string() + ".bin";
+  const auto txtPath = base.string() + ".txt";
+  if (!std::filesystem::exists(binPath, ec)) {
+    std::ofstream bin(binPath, std::ios::binary);
+    if (bin) {
+      bin.write(reinterpret_cast<const char*>(bytecode), static_cast<std::streamsize>(wordCount * sizeof(uint32_t)));
+    }
+  }
+  if (!std::filesystem::exists(txtPath, ec)) {
+    std::ofstream txt(txtPath);
+    if (txt) {
+      txt << "words=" << wordCount << "\n";
+      for (size_t i = 0; i < wordCount; ++i) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%08x", bytecode[i]);
+        txt << i << ": 0x" << buf << "\n";
+      }
+    }
+  }
 }
 
 uint32_t usageFromD3D(uint32_t usage) {
@@ -1682,6 +1725,7 @@ extern "C" D9CShader* dxmt9c_device_create_vertex_shader(D9CDevice* d,
   ref.kind = dxmt9::core::ShaderRef::Kind::Bytecode;
   ref.hash = bc.hash;
   ref.bytecode = std::move(bc);
+  maybeDumpShaderBytecode("shader", bytecode, n, ref.hash);
   auto* s = new D9CShader;
   s->ref = std::move(ref);
   s->bytecodeWords.assign(bytecode, bytecode + n);
