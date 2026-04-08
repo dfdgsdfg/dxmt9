@@ -12,6 +12,7 @@ sampler2D g_TextureSampler : register(s0);
 struct VS_INPUT
 {
     float4 Position : POSITION0;
+    float2 TexCoord : TEXCOORD0;
 };
 
 struct VS_OUTPUT
@@ -24,7 +25,7 @@ struct VS_OUTPUT
 VS_OUTPUT BasicHLSLVS(VS_INPUT input)
 {
     VS_OUTPUT output;
-    float2 uv = input.Position.xy * float2(0.5f, -0.5f) + 0.5f;
+    float2 uv = input.TexCoord;
     float2 centered = uv - 0.5f.xx;
     float radial = saturate(1.0f - dot(centered, centered) * 1.65f);
     float sweep = frac(g_fTime * 0.08f + uv.x * 0.35f + uv.y * 0.15f);

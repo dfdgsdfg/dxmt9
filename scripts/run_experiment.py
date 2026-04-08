@@ -233,7 +233,10 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     if not app.binary_path.exists():
         raise FileNotFoundError(f"binary not found: {app.binary_path}")
 
-    output_dir = DEFAULT_OUTPUT_ROOT / app.name
+    output_name = app.name
+    if getattr(args, "output_suffix", None):
+        output_name = f"{app.name}-{args.output_suffix}"
+    output_dir = DEFAULT_OUTPUT_ROOT / output_name
     output_dir.mkdir(parents=True, exist_ok=True)
     actual_path = output_dir / "actual.png"
     actual_dump_path = output_dir / "actual.bmp"
@@ -294,7 +297,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             deadline = time.monotonic() + app.capture_delay_sec
             while time.monotonic() < deadline and process.poll() is None:
                 time.sleep(0.1)
-            if process.poll() is None and app.capture_frame <= 0 and not actual_dump_path.exists():
+            if process.poll() is None and not actual_dump_path.exists():
                 try:
                     window_info = capture_frontmost_window(actual_path, app.window_title, timeout_sec=10.0)
                 except Exception as exc:  # noqa: BLE001
@@ -413,6 +416,7 @@ def main() -> int:
     run_parser.add_argument("--unix-build-dir", help="Unix build dir containing dxmt9.so")
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
+    run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")
 
     args = parser.parse_args()
     apps = load_catalogue(CATALOGUE_PATH)

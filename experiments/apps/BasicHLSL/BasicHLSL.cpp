@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
 
@@ -26,11 +27,24 @@ struct AppState {
     ID3DXConstantTable* vertexConstants = nullptr;
     IDirect3DVertexDeclaration9* vertexDecl = nullptr;
     IDirect3DVertexBuffer9* vertexBuffer = nullptr;
-    IDirect3DIndexBuffer9* indexBuffer = nullptr;
     IDirect3DTexture9* texture = nullptr;
+    IDirect3DTexture9* sceneTarget = nullptr;
+    IDirect3DSurface9* sceneSurface = nullptr;
     D3DPRESENT_PARAMETERS pp{};
     int frame = 0;
     bool quit = false;
+    int captureFrame = -1;
+    bool captureDone = false;
+    char capturePath[MAX_PATH]{};
+};
+
+struct FullscreenVertex {
+    float x;
+    float y;
+    float z;
+    float w;
+    float u;
+    float v;
 };
 
 template <typename T>
@@ -89,6 +103,60 @@ bool asset_path(const char* name, char* buffer, size_t buffer_size) {
     return written > 0 && static_cast<size_t>(written) < buffer_size;
 }
 
+void init_capture(AppState& app) {
+    const char* capture_path = std::getenv("DXMT9_EXPERIMENT_CAPTURE_PATH");
+    const char* capture_frame = std::getenv("DXMT9_EXPERIMENT_CAPTURE_FRAME");
+    if (!capture_path || !*capture_path) {
+        return;
+    }
+    std::snprintf(app.capturePath, sizeof(app.capturePath), "%s", capture_path);
+    if (capture_frame && *capture_frame) {
+        app.captureFrame = std::atoi(capture_frame);
+    }
+}
+
+void maybe_capture_surface(AppState& app, int completed_frame, IDirect3DSurface9* source) {
+    if (app.captureDone || app.captureFrame <= 0 || completed_frame != app.captureFrame) {
+        return;
+    }
+    if (!source) {
+        return;
+    }
+
+    IDirect3DSurface9* staging = nullptr;
+    D3DSURFACE_DESC desc{};
+    source->GetDesc(&desc);
+    HRESULT hr = S_OK;
+    hr = app.device->CreateOffscreenPlainSurface(
+        desc.Width,
+        desc.Height,
+        desc.Format,
+        D3DPOOL_SYSTEMMEM,
+        &staging,
+        nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateOffscreenPlainSurface(capture)", hr);
+        return;
+    }
+
+    hr = app.device->GetRenderTargetData(source, staging);
+    if (FAILED(hr)) {
+        print_hresult("GetRenderTargetData(capture)", hr);
+        safe_release_t(staging);
+        return;
+    }
+
+    hr = D3DXSaveSurfaceToFileA(app.capturePath, D3DXIFF_BMP, staging, nullptr, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("D3DXSaveSurfaceToFileA(capture)", hr);
+    } else {
+        trace_log("OK: captured frame %d -> %s", completed_frame, app.capturePath);
+        app.captureDone = true;
+    }
+
+    safe_release_t(staging);
+}
+
 bool create_checker_texture(IDirect3DDevice9* device, IDirect3DTexture9** out_texture) {
     if (!device || !out_texture) {
         return false;
@@ -132,6 +200,67 @@ bool create_checker_texture(IDirect3DDevice9* device, IDirect3DTexture9** out_te
 
     texture->UnlockRect(0);
     *out_texture = texture;
+    return true;
+}
+
+bool create_fullscreen_triangle(AppState& app) {
+    static const D3DVERTEXELEMENT9 kVertexDecl[] = {
+        {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+        D3DDECL_END(),
+    };
+    static const FullscreenVertex kVertices[6] = {
+        {-1.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+        {-1.0f,  1.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+        { 1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+        { 1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+        {-1.0f,  1.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+        { 1.0f,  1.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+    };
+
+    HRESULT hr = app.device->CreateVertexDeclaration(kVertexDecl, &app.vertexDecl);
+    if (FAILED(hr)) {
+        print_hresult("CreateVertexDeclaration", hr);
+        return false;
+    }
+
+    hr = app.device->CreateVertexBuffer(sizeof(kVertices), 0, 0, D3DPOOL_MANAGED, &app.vertexBuffer, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateVertexBuffer", hr);
+        return false;
+    }
+
+    void* mapped = nullptr;
+    hr = app.vertexBuffer->Lock(0, 0, &mapped, 0);
+    if (FAILED(hr)) {
+        print_hresult("VertexBuffer::Lock", hr);
+        return false;
+    }
+    std::memcpy(mapped, kVertices, sizeof(kVertices));
+    app.vertexBuffer->Unlock();
+    return true;
+}
+
+bool create_scene_target(AppState& app) {
+    HRESULT hr = app.device->CreateTexture(
+        kWidth,
+        kHeight,
+        1,
+        D3DUSAGE_RENDERTARGET,
+        app.pp.BackBufferFormat,
+        D3DPOOL_DEFAULT,
+        &app.sceneTarget,
+        nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateTexture(sceneTarget)", hr);
+        return false;
+    }
+
+    hr = app.sceneTarget->GetSurfaceLevel(0, &app.sceneSurface);
+    if (FAILED(hr)) {
+        print_hresult("GetSurfaceLevel(sceneTarget)", hr);
+        return false;
+    }
     return true;
 }
 
@@ -302,16 +431,42 @@ bool create_scene_resources(AppState& app) {
     }
     trace_log("OK: scene texture created");
 
+    if (!create_fullscreen_triangle(app)) {
+        return false;
+    }
+    trace_log("OK: fullscreen triangle created");
+
+    if (!create_scene_target(app)) {
+        return false;
+    }
+    trace_log("OK: scene target created");
+
     app.device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
     app.device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
     app.device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
     app.device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
     app.device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+    app.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
 
     return true;
 }
 
 void render_frame(AppState& app) {
+    IDirect3DSurface9* backbuffer = nullptr;
+    HRESULT hr = app.device->GetRenderTarget(0, &backbuffer);
+    if (FAILED(hr)) {
+        print_hresult("GetRenderTarget(backbuffer)", hr);
+        app.quit = true;
+        return;
+    }
+    hr = app.device->SetRenderTarget(0, app.sceneSurface);
+    if (FAILED(hr)) {
+        print_hresult("SetRenderTarget(scene)", hr);
+        safe_release_t(backbuffer);
+        app.quit = true;
+        return;
+    }
+
     const float time_sec = static_cast<float>(app.frame) / 60.0f;
     if (app.frame == 0) {
         trace_log("OK: frame0 start");
@@ -339,6 +494,8 @@ void render_frame(AppState& app) {
 
     app.device->SetVertexShader(app.vertexShader);
     app.device->SetPixelShader(app.pixelShader);
+    app.device->SetVertexDeclaration(app.vertexDecl);
+    app.device->SetStreamSource(0, app.vertexBuffer, 0, sizeof(FullscreenVertex));
     app.device->SetTexture(0, app.texture);
 
     if (app.vertexConstants) {
@@ -352,7 +509,7 @@ void render_frame(AppState& app) {
         app.vertexConstants->SetVector(app.device, "g_LightDiffuse0", &light_diffuse0);
     }
 
-    HRESULT hr = app.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 1);
+    hr = app.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
     if (FAILED(hr)) {
         print_hresult("DrawPrimitive", hr);
         app.quit = true;
@@ -369,6 +526,23 @@ void render_frame(AppState& app) {
         trace_log("OK: frame0 ended scene");
     }
 
+    hr = app.device->SetRenderTarget(0, backbuffer);
+    if (FAILED(hr)) {
+        print_hresult("SetRenderTarget(backbuffer)", hr);
+        safe_release_t(backbuffer);
+        app.quit = true;
+        return;
+    }
+    hr = app.device->StretchRect(app.sceneSurface, nullptr, backbuffer, nullptr, D3DTEXF_NONE);
+    if (FAILED(hr)) {
+        print_hresult("StretchRect(scene->backbuffer)", hr);
+        safe_release_t(backbuffer);
+        app.quit = true;
+        return;
+    }
+
+    maybe_capture_surface(app, app.frame + 1, backbuffer);
+
     if (app.frame == 0 && !app.quit) {
         trace_log("OK: frame0 presenting");
     }
@@ -381,6 +555,7 @@ void render_frame(AppState& app) {
     if (app.frame == 0) {
         trace_log("OK: frame0 presented");
     }
+    safe_release_t(backbuffer);
 
     ++app.frame;
     if ((app.frame % 60) == 0) {
@@ -392,8 +567,9 @@ void render_frame(AppState& app) {
 }
 
 void cleanup(AppState& app) {
+    safe_release_t(app.sceneSurface);
+    safe_release_t(app.sceneTarget);
     safe_release_t(app.texture);
-    safe_release_t(app.indexBuffer);
     safe_release_t(app.vertexBuffer);
     safe_release_t(app.vertexDecl);
     safe_release_t(app.vertexConstants);
@@ -411,6 +587,7 @@ void cleanup(AppState& app) {
 
 int main() {
     AppState app{};
+    init_capture(app);
     char trace_path[MAX_PATH]{};
     if (asset_path("BasicHLSL.trace.txt", trace_path, sizeof(trace_path))) {
         DeleteFileA(trace_path);

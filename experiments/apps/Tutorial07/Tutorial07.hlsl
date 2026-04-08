@@ -8,6 +8,7 @@ sampler2D g_TextureSampler : register(s0);
 struct VS_INPUT
 {
     float4 Position : POSITION0;
+    float2 TexCoord : TEXCOORD0;
 };
 
 struct VS_OUTPUT
@@ -20,7 +21,7 @@ struct VS_OUTPUT
 VS_OUTPUT Tutorial07VS(VS_INPUT input)
 {
     VS_OUTPUT output;
-    float2 uv = input.Position.xy * float2(0.5f, -0.5f) + 0.5f;
+    float2 uv = input.TexCoord;
     float band = frac(g_fTime * 0.045f + uv.y * 0.55f - uv.x * 0.20f);
     float lift = saturate(1.0f - dot(uv - 0.5f.xx, uv - 0.5f.xx) * 1.85f);
 

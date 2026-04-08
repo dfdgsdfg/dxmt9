@@ -15,6 +15,18 @@ python3 scripts/run_experiment.py run dxut-simple-sample --wine-root "$WINE_ROOT
 python3 scripts/run_experiment.py run irrlicht-managed-lights --wine-root "$WINE_ROOT"
 ```
 
+DX9 regression suite:
+
+```sh
+bash scripts/run_dx9_regression_suite.sh --wine-root "$WINE_ROOT"
+```
+
+Builtin-oracle compare suite for shader samples:
+
+```sh
+bash scripts/run_dx9_oracle_compare_suite.sh --wine-root "$WINE_ROOT"
+```
+
 One-shot wrappers for the verified real apps:
 
 ```sh
@@ -39,6 +51,15 @@ The runner:
 - captures the presented back buffer directly from dxmt9 when `capture_frame` is set
 - falls back to window capture only when an internal frame dump is unavailable
 - writes `actual.png`, `diff.png`, `ssim.txt`, `dxmt9.log`, and `result.json`
+
+Current note:
+
+- the committed sample references are stale for several shader apps
+- use the builtin-oracle compare suite to judge current renderer parity
+- current builtin-vs-dxmt9 sample parity:
+  - `dx-sdk-basichlsl`: `0.9539`
+  - `dx-sdk-tutorial07`: `0.9094`
+  - `dxut-simple-sample`: `0.9426`
 
 Current verified bootstrap entry:
 

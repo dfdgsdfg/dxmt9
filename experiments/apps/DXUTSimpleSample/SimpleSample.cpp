@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
 
@@ -26,11 +27,25 @@ struct AppState {
     IDirect3DPixelShader9* pixelShader = nullptr;
     ID3DXConstantTable* vertexConstants = nullptr;
     ID3DXConstantTable* pixelConstants = nullptr;
+    IDirect3DVertexDeclaration9* vertexDecl = nullptr;
+    IDirect3DVertexBuffer9* vertexBuffer = nullptr;
     IDirect3DTexture9* baseTexture = nullptr;
     IDirect3DTexture9* overlayTexture = nullptr;
     D3DPRESENT_PARAMETERS pp{};
     int frame = 0;
     bool quit = false;
+    int captureFrame = -1;
+    bool captureDone = false;
+    char capturePath[MAX_PATH]{};
+};
+
+struct FullscreenVertex {
+    float x;
+    float y;
+    float z;
+    float w;
+    float u;
+    float v;
 };
 
 template <typename T>
@@ -87,6 +102,66 @@ bool asset_path(const char* name, char* buffer, size_t buffer_size) {
     }
     int written = std::snprintf(buffer, buffer_size, "%s\\%s", dir, name);
     return written > 0 && static_cast<size_t>(written) < buffer_size;
+}
+
+void init_capture(AppState& app) {
+    const char* capture_path = std::getenv("DXMT9_EXPERIMENT_CAPTURE_PATH");
+    const char* capture_frame = std::getenv("DXMT9_EXPERIMENT_CAPTURE_FRAME");
+    if (!capture_path || !*capture_path) {
+        return;
+    }
+    std::snprintf(app.capturePath, sizeof(app.capturePath), "%s", capture_path);
+    if (capture_frame && *capture_frame) {
+        app.captureFrame = std::atoi(capture_frame);
+    }
+}
+
+void maybe_capture_backbuffer(AppState& app, int completed_frame) {
+    if (app.captureDone || app.captureFrame <= 0 || completed_frame != app.captureFrame) {
+        return;
+    }
+
+    IDirect3DSurface9* backbuffer = nullptr;
+    IDirect3DSurface9* staging = nullptr;
+    HRESULT hr = app.device->GetRenderTarget(0, &backbuffer);
+    if (FAILED(hr)) {
+        print_hresult("GetRenderTarget(capture)", hr);
+        return;
+    }
+
+    D3DSURFACE_DESC desc{};
+    backbuffer->GetDesc(&desc);
+    hr = app.device->CreateOffscreenPlainSurface(
+        desc.Width,
+        desc.Height,
+        desc.Format,
+        D3DPOOL_SYSTEMMEM,
+        &staging,
+        nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateOffscreenPlainSurface(capture)", hr);
+        safe_release_t(backbuffer);
+        return;
+    }
+
+    hr = app.device->GetRenderTargetData(backbuffer, staging);
+    if (FAILED(hr)) {
+        print_hresult("GetRenderTargetData(capture)", hr);
+        safe_release_t(staging);
+        safe_release_t(backbuffer);
+        return;
+    }
+
+    hr = D3DXSaveSurfaceToFileA(app.capturePath, D3DXIFF_BMP, staging, nullptr, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("D3DXSaveSurfaceToFileA(capture)", hr);
+    } else {
+        trace_log("OK: captured frame %d -> %s", completed_frame, app.capturePath);
+        app.captureDone = true;
+    }
+
+    safe_release_t(staging);
+    safe_release_t(backbuffer);
 }
 
 bool create_texture_pattern(IDirect3DDevice9* device, IDirect3DTexture9** out_texture, bool overlay) {
@@ -152,6 +227,44 @@ bool create_texture_pattern(IDirect3DDevice9* device, IDirect3DTexture9** out_te
 
     texture->UnlockRect(0);
     *out_texture = texture;
+    return true;
+}
+
+bool create_fullscreen_triangle(AppState& app) {
+    static const D3DVERTEXELEMENT9 kVertexDecl[] = {
+        {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+        D3DDECL_END(),
+    };
+    static const FullscreenVertex kVertices[6] = {
+        {-1.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+        {-1.0f,  1.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+        { 1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+        { 1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+        {-1.0f,  1.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+        { 1.0f,  1.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+    };
+
+    HRESULT hr = app.device->CreateVertexDeclaration(kVertexDecl, &app.vertexDecl);
+    if (FAILED(hr)) {
+        print_hresult("CreateVertexDeclaration", hr);
+        return false;
+    }
+
+    hr = app.device->CreateVertexBuffer(sizeof(kVertices), 0, 0, D3DPOOL_MANAGED, &app.vertexBuffer, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateVertexBuffer", hr);
+        return false;
+    }
+
+    void* mapped = nullptr;
+    hr = app.vertexBuffer->Lock(0, 0, &mapped, 0);
+    if (FAILED(hr)) {
+        print_hresult("VertexBuffer::Lock", hr);
+        return false;
+    }
+    std::memcpy(mapped, kVertices, sizeof(kVertices));
+    app.vertexBuffer->Unlock();
     return true;
 }
 
@@ -325,11 +438,17 @@ bool create_scene_resources(AppState& app) {
     }
     trace_log("OK: textures created");
 
+    if (!create_fullscreen_triangle(app)) {
+        return false;
+    }
+    trace_log("OK: fullscreen triangle created");
+
     app.device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
     app.device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
     app.device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-    app.device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-    app.device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+    app.device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    app.device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    app.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
     return true;
 }
 
@@ -358,6 +477,8 @@ void render_frame(AppState& app) {
     }
 
     app.device->SetVertexShader(app.vertexShader);
+    app.device->SetVertexDeclaration(app.vertexDecl);
+    app.device->SetStreamSource(0, app.vertexBuffer, 0, sizeof(FullscreenVertex));
     if (app.vertexConstants) {
         app.vertexConstants->SetMatrix(app.device, "g_mWorldViewProjection", &identity);
         app.vertexConstants->SetVector(app.device, "g_TintA", &tint_a);
@@ -376,7 +497,7 @@ void render_frame(AppState& app) {
         app.pixelConstants->SetFloat(app.device, "g_PassMix", 0.0f);
         app.pixelConstants->SetFloat(app.device, "g_OverlayAlpha", 1.0f);
     }
-    HRESULT hr = app.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 1);
+    HRESULT hr = app.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
     if (FAILED(hr)) {
         print_hresult("DrawPrimitive(base)", hr);
         app.quit = true;
@@ -395,7 +516,7 @@ void render_frame(AppState& app) {
         app.pixelConstants->SetFloat(app.device, "g_PassMix", 1.0f);
         app.pixelConstants->SetFloat(app.device, "g_OverlayAlpha", overlay_color.w);
     }
-    hr = app.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 1);
+    hr = app.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 2);
     if (FAILED(hr)) {
         print_hresult("DrawPrimitive(overlay)", hr);
         app.quit = true;
@@ -407,6 +528,7 @@ void render_frame(AppState& app) {
     }
 
     app.device->EndScene();
+    maybe_capture_backbuffer(app, app.frame + 1);
     hr = app.device->Present(nullptr, nullptr, nullptr, nullptr);
     if (FAILED(hr)) {
         print_hresult("Present", hr);
@@ -426,6 +548,8 @@ void render_frame(AppState& app) {
 void cleanup(AppState& app) {
     safe_release_t(app.overlayTexture);
     safe_release_t(app.baseTexture);
+    safe_release_t(app.vertexBuffer);
+    safe_release_t(app.vertexDecl);
     safe_release_t(app.pixelConstants);
     safe_release_t(app.vertexConstants);
     safe_release_t(app.pixelShader);
@@ -442,6 +566,7 @@ void cleanup(AppState& app) {
 
 int main() {
     AppState app{};
+    init_capture(app);
     char trace_path[MAX_PATH]{};
     if (asset_path("SimpleSample.trace.txt", trace_path, sizeof(trace_path))) {
         DeleteFileA(trace_path);

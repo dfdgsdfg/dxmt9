@@ -42,10 +42,11 @@ exp_run_wine_binary() {
 
   local binary=${1:-"$DXMT9_EXPERIMENT_BINARY"}
   shift || true
+  local dll_overrides=${DXMT9_EXPERIMENT_WINE_DLLOVERRIDES:-d3d9=n,b}
 
   exp_log "running $binary"
   WINEPREFIX="$DXMT9_EXPERIMENT_PREFIX" \
-  WINEDLLOVERRIDES="d3d9=n,b" \
+  WINEDLLOVERRIDES="$dll_overrides" \
   DXMT9_VALIDATE=1 \
   DXMT9_LOG="$DXMT9_EXPERIMENT_LOG" \
   "$DXMT9_EXPERIMENT_WINE_BIN" "$binary" "$@"

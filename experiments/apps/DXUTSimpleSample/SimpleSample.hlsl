@@ -11,6 +11,7 @@ sampler2D g_TextureSampler : register(s0);
 struct VS_INPUT
 {
     float4 Position : POSITION0;
+    float2 TexCoord : TEXCOORD0;
 };
 
 struct VS_OUTPUT
@@ -23,7 +24,7 @@ struct VS_OUTPUT
 VS_OUTPUT SimpleSampleVS(VS_INPUT input)
 {
     VS_OUTPUT output;
-    float2 uv = input.Position.xy * float2(0.5f, -0.5f) + 0.5f;
+    float2 uv = input.TexCoord;
     float swing = frac(g_fTime * 0.05f + uv.x * 0.30f - uv.y * 0.18f);
     float focus = saturate(1.0f - dot(uv - 0.5f.xx, uv - 0.5f.xx) * 1.7f);
 
