@@ -2884,8 +2884,7 @@ HResult Device::setFVF(u32 fvf) {
 
 HResult Device::setVertexDeclaration(std::vector<VertexElement> elements) {
   state_.vertexDecl.elements = std::move(elements);
-  state_.fvf = 0;
-  state_.vertexDecl.fvf = 0;
+  state_.vertexDecl.fvf = state_.fvf;
   return D3D_OK;
 }
 

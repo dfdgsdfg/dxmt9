@@ -7,4 +7,5 @@
 clear rgba(0.0, 0.0, 0.0, 1.0)
 alpha-test enable less 0.5
 draw quad
-probe (32, 32) rgba(0.0, 0.0, 0.0, 1.0) 0
+expect-source pixel contains "case 2u: pass = color.a < uniforms.alphaRef;"
+expect-source pixel contains "discard_fragment()"

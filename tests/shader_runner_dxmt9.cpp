@@ -386,6 +386,46 @@ std::string compileShaderSource(const ShaderSection& section, const CorpusTest& 
   return source;
 }
 
+std::string compileDefaultFfpSource(ShaderSection::Kind kind, const CorpusTest& test) {
+  DeviceState state;
+  state.reset();
+  if (test.alphaTestEnable) {
+    state.renderStates[RS_ALPHA_TEST_ENABLE] = 1;
+    state.renderStates[RS_ALPHA_FUNC] = static_cast<u32>(test.alphaTestFunc);
+    state.renderStates[RS_ALPHA_REF] = static_cast<u32>(std::lround(std::clamp(test.alphaRef, 0.0f, 1.0f) * 255.0f));
+  }
+
+  WinemetalShaderCompileRequest request{};
+  request.clipPlaneMask = test.clipPlaneMask;
+  request.alphaTestEnable = test.alphaTestEnable ? 1u : 0u;
+  request.alphaTestFunc = static_cast<u32>(test.alphaTestFunc);
+  request.alphaRef = test.alphaRef;
+
+  if (kind == ShaderSection::Kind::Vertex) {
+    const auto key = makeFfpVertexKey(state);
+    request.kind = WinemetalShaderKind_FfpVertex;
+    request.variantKey = &key;
+    const auto handle = dxmt9_winemetal_compile_shader(&request);
+    if (handle == 0) {
+      fail("ffp vertex shader compilation failed");
+    }
+    const auto source = shaderSourceToString(handle);
+    dxmt9_winemetal_destroy_shader(handle);
+    return source;
+  }
+
+  const auto key = makeFfpPixelKey(state);
+  request.kind = WinemetalShaderKind_FfpPixel;
+  request.variantKey = &key;
+  const auto handle = dxmt9_winemetal_compile_shader(&request);
+  if (handle == 0) {
+    fail("ffp pixel shader compilation failed");
+  }
+  const auto source = shaderSourceToString(handle);
+  dxmt9_winemetal_destroy_shader(handle);
+  return source;
+}
+
 ShaderRef makeShaderRef(const ShaderSection& section) {
   ShaderRef ref;
   ref.kind = ShaderRef::Kind::Bytecode;
@@ -407,11 +447,23 @@ void runCorpusFile(const std::string& path) {
 
   std::string vertexSource;
   std::string pixelSource;
+  const bool needsVertexSource = std::any_of(test.sourceExpectations.begin(), test.sourceExpectations.end(),
+                                             [](const auto& expectation) {
+                                               return expectation.kind == ShaderSection::Kind::Vertex;
+                                             });
+  const bool needsPixelSource = std::any_of(test.sourceExpectations.begin(), test.sourceExpectations.end(),
+                                            [](const auto& expectation) {
+                                              return expectation.kind == ShaderSection::Kind::Pixel;
+                                            });
   if (test.vertexShader) {
     vertexSource = compileShaderSource(*test.vertexShader, test);
+  } else if (needsVertexSource) {
+    vertexSource = compileDefaultFfpSource(ShaderSection::Kind::Vertex, test);
   }
   if (test.pixelShader) {
     pixelSource = compileShaderSource(*test.pixelShader, test);
+  } else if (needsPixelSource) {
+    pixelSource = compileDefaultFfpSource(ShaderSection::Kind::Pixel, test);
   }
 
   for (const auto& expectation : test.sourceExpectations) {

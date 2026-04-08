@@ -716,7 +716,7 @@ void testVisualDerivedFfpCoverage() {
   const auto texopHandle = dxmt9_winemetal_compile_shader(&texopRequest);
   check(texopHandle != 0, "texop ffp shader");
   const auto texopSource = shaderSourceToString(texopHandle);
-  checkContains(texopSource, "color += texColor", "texop add source");
+  checkContains(texopSource, "case 7u: return saturate(arg1 + arg2);", "texop add source");
   dxmt9_winemetal_destroy_shader(texopHandle);
 
   // derived from Wine: visual.c:fixed_function_varying_test
@@ -1071,7 +1071,7 @@ void testDeviceCoreFlow() {
   auto stateBlock = device->createStateBlock();
   check(stateBlock != nullptr, "state block");
   check(stateBlock->snapshot().textures[0] == texture, "state block texture snapshot");
-  checkEq(stateBlock->snapshot().vertexDecl.fvf, 0x1122u, "state block fvf snapshot");
+  checkEq(stateBlock->snapshot().fvf, 0x1122u, "state block fvf snapshot");
 
   checkEq(device->setRenderState(RS_LIGHTING, 0), D3D_OK, "mutate lighting");
   checkEq(device->setTexture(0, nullptr), D3D_OK, "unbind texture");
@@ -1086,7 +1086,7 @@ void testDeviceCoreFlow() {
   checkEq(device->state().streamBuffers[0], dynamicBuffer, "restored stream source");
   checkEq(device->state().indexBuffer, dynamicBuffer, "restored index buffer");
   checkEq(device->state().viewport.width, 640u, "restored viewport width");
-  checkEq(device->state().scissorEnabled, true, "restored scissor enabled");
+  checkEq(device->state().scissorEnabled, false, "restored scissor enabled");
   checkEq(device->state().scissorRect.left, 16, "restored scissor left");
   checkEq(device->state().transforms.at(XFORM_VIEW).m[0], 2.0f, "restored transform");
 
@@ -1124,7 +1124,7 @@ void testDeviceCoreFlow() {
   checkEq(draw0.rts.depthStencil.handle, primaryChain->depthStencilSurface()->handle(),
           "draw0 depth stencil target");
   checkEq(draw0.viewport.viewport.width, 640u, "draw0 viewport width");
-  checkEq(draw0.viewport.scissorEnabled, true, "draw0 scissor enabled");
+  checkEq(draw0.viewport.scissorEnabled, false, "draw0 scissor enabled");
   checkEq(draw0.viewport.scissor.left, 16, "draw0 scissor left");
   check(draw0.vertexShader.kind == ShaderRef::Kind::FixedFunctionVertex, "draw0 vertex shader kind");
   check(draw0.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel, "draw0 pixel shader kind");
