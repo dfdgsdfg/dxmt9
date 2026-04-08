@@ -121,6 +121,8 @@ void emitRenderTrace(const char* fmt, ...) {
 
 constexpr u32 kFvfPositionMask = 0x000eu;
 constexpr u32 kFvfXyzrhw = 0x0004u;
+constexpr u32 kFvfXyz = 0x0002u;
+constexpr u32 kFvfNormal = 0x0010u;
 constexpr u32 kFvfDiffuse = 0x0040u;
 constexpr u32 kFvfSpecular = 0x0080u;
 constexpr u32 kFvfTexCountMask = 0x0f00u;
@@ -217,14 +219,18 @@ std::optional<DrawTraceLayout> decodeDrawTraceLayout(const DrawDesc& desc) {
   }
 
   const u32 fvf = desc.vertexDecl.fvf;
-  if ((fvf & kFvfPositionMask) != kFvfXyzrhw) {
+  const u32 position = fvf & kFvfPositionMask;
+  if (position != kFvfXyzrhw && position != kFvfXyz) {
     return std::nullopt;
   }
   layout.valid = true;
-  layout.preTransformed = true;
-  layout.positionComponents = 4;
+  layout.preTransformed = position == kFvfXyzrhw;
+  layout.positionComponents = layout.preTransformed ? 4u : 3u;
   layout.positionOffset = 0;
-  u32 offset = 16;
+  u32 offset = layout.preTransformed ? 16u : 12u;
+  if ((fvf & kFvfNormal) != 0) {
+    offset += 12u;
+  }
   if ((fvf & kFvfDiffuse) != 0) {
     layout.diffuseOffset = offset;
     offset += 4;

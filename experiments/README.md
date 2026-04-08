@@ -21,7 +21,7 @@ DX9 regression suite:
 bash scripts/run_dx9_regression_suite.sh --wine-root "$WINE_ROOT"
 ```
 
-Builtin-oracle compare suite for shader samples:
+Builtin-oracle compare suite for selected DX9 sample apps:
 
 ```sh
 bash scripts/run_dx9_oracle_compare_suite.sh --wine-root "$WINE_ROOT"
@@ -60,6 +60,7 @@ Current note:
   - `dx-sdk-basichlsl`: `0.9539`
   - `dx-sdk-tutorial07`: `0.9094`
   - `dxut-simple-sample`: `0.9426`
+  - `irrlicht-managed-lights`: `0.9979`
 
 Current verified bootstrap entry:
 

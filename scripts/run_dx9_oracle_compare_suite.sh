@@ -8,6 +8,7 @@ apps=(
   "dx-sdk-basichlsl"
   "dx-sdk-tutorial07"
   "dxut-simple-sample"
+  "irrlicht-managed-lights"
 )
 
 usage() {

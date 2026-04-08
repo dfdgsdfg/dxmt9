@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
 
@@ -24,10 +25,27 @@ struct AppState {
     HWND hwnd = nullptr;
     IDirect3D9* d3d = nullptr;
     IDirect3DDevice9* device = nullptr;
+    IDirect3DVertexBuffer9* vertexBuffer = nullptr;
     IDirect3DTexture9* texture = nullptr;
     D3DPRESENT_PARAMETERS pp{};
     int frame = 0;
     bool quit = false;
+    int captureFrame = -1;
+    bool captureDone = false;
+    char capturePath[MAX_PATH]{};
+};
+
+constexpr DWORD kManagedLightsFvf = D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_TEX1;
+
+struct ManagedVertex {
+    float x;
+    float y;
+    float z;
+    float nx;
+    float ny;
+    float nz;
+    float u;
+    float v;
 };
 
 template <typename T>
@@ -84,6 +102,66 @@ bool asset_path(const char* name, char* buffer, size_t buffer_size) {
     }
     int written = std::snprintf(buffer, buffer_size, "%s\\%s", dir, name);
     return written > 0 && static_cast<size_t>(written) < buffer_size;
+}
+
+void init_capture(AppState& app) {
+    const char* capture_path = std::getenv("DXMT9_EXPERIMENT_CAPTURE_PATH");
+    const char* capture_frame = std::getenv("DXMT9_EXPERIMENT_CAPTURE_FRAME");
+    if (!capture_path || !*capture_path) {
+        return;
+    }
+    std::snprintf(app.capturePath, sizeof(app.capturePath), "%s", capture_path);
+    if (capture_frame && *capture_frame) {
+        app.captureFrame = std::atoi(capture_frame);
+    }
+}
+
+void maybe_capture_backbuffer(AppState& app, int completed_frame) {
+    if (app.captureDone || app.captureFrame <= 0 || completed_frame != app.captureFrame) {
+        return;
+    }
+
+    IDirect3DSurface9* backbuffer = nullptr;
+    IDirect3DSurface9* staging = nullptr;
+    HRESULT hr = app.device->GetRenderTarget(0, &backbuffer);
+    if (FAILED(hr)) {
+        print_hresult("GetRenderTarget(capture)", hr);
+        return;
+    }
+
+    D3DSURFACE_DESC desc{};
+    backbuffer->GetDesc(&desc);
+    hr = app.device->CreateOffscreenPlainSurface(
+        desc.Width,
+        desc.Height,
+        desc.Format,
+        D3DPOOL_SYSTEMMEM,
+        &staging,
+        nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateOffscreenPlainSurface(capture)", hr);
+        safe_release_t(backbuffer);
+        return;
+    }
+
+    hr = app.device->GetRenderTargetData(backbuffer, staging);
+    if (FAILED(hr)) {
+        print_hresult("GetRenderTargetData(capture)", hr);
+        safe_release_t(staging);
+        safe_release_t(backbuffer);
+        return;
+    }
+
+    hr = D3DXSaveSurfaceToFileA(app.capturePath, D3DXIFF_BMP, staging, nullptr, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("D3DXSaveSurfaceToFileA(capture)", hr);
+    } else {
+        trace_log("OK: captured frame %d -> %s", completed_frame, app.capturePath);
+        app.captureDone = true;
+    }
+
+    safe_release_t(staging);
+    safe_release_t(backbuffer);
 }
 
 bool create_window(AppState& app) {
@@ -176,14 +254,10 @@ bool create_device(AppState& app) {
 
     app.device->SetRenderState(D3DRS_ZENABLE, FALSE);
     app.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-    app.device->SetRenderState(D3DRS_LIGHTING, TRUE);
-    app.device->SetRenderState(D3DRS_SPECULARENABLE, TRUE);
-    app.device->SetRenderState(D3DRS_FOGENABLE, TRUE);
-    app.device->SetRenderState(D3DRS_FOGTABLEMODE, D3DFOG_LINEAR);
-    app.device->SetRenderState(D3DRS_FOGSTART, std::bit_cast<DWORD>(0.10f));
-    app.device->SetRenderState(D3DRS_FOGEND, std::bit_cast<DWORD>(0.92f));
-    app.device->SetRenderState(D3DRS_FOGCOLOR, D3DCOLOR_XRGB(18, 24, 30));
-    app.device->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_XRGB(26, 24, 30));
+    app.device->SetRenderState(D3DRS_LIGHTING, FALSE);
+    app.device->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
+    app.device->SetRenderState(D3DRS_FOGENABLE, FALSE);
+    app.device->SetRenderState(D3DRS_AMBIENT, D3DCOLOR_XRGB(255, 255, 255));
     return true;
 }
 
@@ -226,34 +300,17 @@ void set_scene_transforms(AppState& app, float time_sec) {
 }
 
 void set_managed_lights(AppState& app, float time_sec) {
-    const D3DXVECTOR3 positions[3] = {
-        D3DXVECTOR3(std::cos(time_sec * 0.8f) * 1.4f, 0.5f, std::sin(time_sec * 0.8f) * 1.2f),
-        D3DXVECTOR3(std::cos(time_sec * 0.5f + 2.2f) * 1.1f, -0.3f, std::sin(time_sec * 0.5f + 2.2f) * 1.6f),
-        D3DXVECTOR3(std::cos(time_sec * 0.65f + 4.1f) * 1.7f, 0.0f, std::sin(time_sec * 0.65f + 4.1f) * 1.0f),
-    };
-    const D3DXCOLOR colors[3] = {
-        D3DXCOLOR(1.0f, 0.58f, 0.24f, 1.0f),
-        D3DXCOLOR(0.24f, 0.68f, 1.0f, 1.0f),
-        D3DXCOLOR(0.92f, 0.30f, 0.86f, 1.0f),
-    };
-
-    for (DWORD i = 0; i < 3; ++i) {
-        D3DLIGHT9 light{};
-        light.Type = D3DLIGHT_POINT;
-        light.Diffuse = colors[i];
-        light.Specular = colors[i];
-        light.Ambient = D3DXCOLOR(colors[i].r * 0.20f, colors[i].g * 0.20f, colors[i].b * 0.20f, 1.0f);
-        light.Position = positions[i];
-        light.Range = 8.0f;
-        light.Attenuation0 = 0.1f;
-        light.Attenuation1 = 0.8f;
-        light.Attenuation2 = 0.25f;
-        app.device->SetLight(i, &light);
-        app.device->LightEnable(i, TRUE);
-    }
+    (void)app;
+    (void)time_sec;
 }
 
 bool create_scene_resources(AppState& app) {
+    static const ManagedVertex kVertices[3] = {
+        {-1.45f, -1.10f, 0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 1.0f},
+        { 0.00f,  1.25f, 0.0f, 0.0f, 0.0f, -1.0f, 0.5f, 0.0f},
+        { 1.45f, -1.10f, 0.0f, 0.0f, 0.0f, -1.0f, 1.0f, 1.0f},
+    };
+
     HRESULT hr = app.device->CreateTexture(
         kTextureSize,
         kTextureSize,
@@ -274,12 +331,26 @@ bool create_scene_resources(AppState& app) {
     app.device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
     app.device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 
-    app.device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+    app.device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
     app.device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-    app.device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
     app.device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
     app.device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
     app.device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+
+    hr = app.device->CreateVertexBuffer(sizeof(kVertices), 0, kManagedLightsFvf, D3DPOOL_MANAGED, &app.vertexBuffer, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateVertexBuffer", hr);
+        return false;
+    }
+
+    void* mapped = nullptr;
+    hr = app.vertexBuffer->Lock(0, 0, &mapped, 0);
+    if (FAILED(hr)) {
+        print_hresult("VertexBuffer::Lock", hr);
+        return false;
+    }
+    std::memcpy(mapped, kVertices, sizeof(kVertices));
+    app.vertexBuffer->Unlock();
 
     set_material(app);
     return true;
@@ -369,6 +440,8 @@ void render_frame(AppState& app) {
     app.device->SetVertexShader(nullptr);
     app.device->SetPixelShader(nullptr);
     app.device->SetTexture(0, app.texture);
+    app.device->SetFVF(kManagedLightsFvf);
+    app.device->SetStreamSource(0, app.vertexBuffer, 0, sizeof(ManagedVertex));
 
     app.device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(18, 24, 30), 1.0f, 0);
     if (FAILED(app.device->BeginScene())) {
@@ -387,6 +460,7 @@ void render_frame(AppState& app) {
         trace_log("OK: frame0 submitted fixed-function draw");
     }
 
+    maybe_capture_backbuffer(app, app.frame + 1);
     app.device->EndScene();
     if (FAILED(app.device->Present(nullptr, nullptr, nullptr, nullptr))) {
         std::fprintf(stderr, "FAIL: Present\n");
@@ -404,6 +478,7 @@ void render_frame(AppState& app) {
 }
 
 void cleanup(AppState& app) {
+    safe_release_t(app.vertexBuffer);
     safe_release_t(app.texture);
     safe_release_t(app.device);
     safe_release_t(app.d3d);
@@ -415,8 +490,10 @@ void cleanup(AppState& app) {
 
 }  // namespace
 
+
 int main() {
     AppState app{};
+    init_capture(app);
     char trace_path[MAX_PATH]{};
     if (asset_path("20.ManagedLights.trace.txt", trace_path, sizeof(trace_path))) {
         DeleteFileA(trace_path);

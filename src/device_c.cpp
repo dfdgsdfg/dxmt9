@@ -1222,12 +1222,30 @@ extern "C" void dxmt9c_device_get_scissor_rect(D9CDevice* d, D9CRect* r) {
   r->bottom = value.bottom;
 }
 
+static uint32_t transformStateFromD3D(uint32_t state) {
+  switch (state) {
+    case 2u:
+      return dxmt9::core::XFORM_VIEW;
+    case 3u:
+      return dxmt9::core::XFORM_PROJECTION;
+    default:
+      break;
+  }
+  if (state >= 16u && state < 24u) {
+    return dxmt9::core::XFORM_TEXTURE_BASE + (state - 16u);
+  }
+  if (state >= 256u && state < 260u) {
+    return dxmt9::core::XFORM_WORLD_BASE + (state - 256u);
+  }
+  return state;
+}
+
 extern "C" int32_t dxmt9c_device_set_transform(D9CDevice* d, uint32_t state,
                                                 const D9CMatrix* m) {
   if (!m) return dxmt9::core::D3DERR_INVALIDCALL;
   dxmt9::core::Matrix4x4 mat;
   std::memcpy(mat.m.data(), m->m, 16 * sizeof(float));
-  return d->iface->SetTransform(state, mat);
+  return d->iface->SetTransform(transformStateFromD3D(state), mat);
 }
 extern "C" int32_t dxmt9c_device_get_transform(D9CDevice* d, uint32_t state,
                                                 D9CMatrix* m) {

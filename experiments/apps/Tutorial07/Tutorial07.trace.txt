@@ -11,7 +11,7 @@ OK: frame0 start
 OK: frame0 scene begun
 OK: frame0 drew orbit pass
 OK: rendered frame 60
-OK: captured frame 120 -> /Users/dididi/workspaces/dxmt9/experiments/output/dx-sdk-tutorial07/actual.bmp
+OK: captured frame 120 -> /Users/dididi/workspaces/dxmt9/experiments/output/dx-sdk-tutorial07-dxmt9-compare/actual.bmp
 OK: rendered frame 120
 OK: rendered frame 180
 OK: Tutorial07 finished at frame 180

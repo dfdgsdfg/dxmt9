@@ -1519,6 +1519,7 @@ DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
 constexpr u32 kFvfPositionMask = 0x000eu;
 constexpr u32 kFvfXyz = 0x0002u;
 constexpr u32 kFvfXyzrhw = 0x0004u;
+constexpr u32 kFvfNormal = 0x0010u;
 constexpr u32 kFvfDiffuse = 0x0040u;
 constexpr u32 kFvfSpecular = 0x0080u;
 constexpr u32 kFvfTexCountMask = 0x0f00u;
@@ -1709,16 +1710,21 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
   }
 
   const u32 fvf = desc.vertexDecl.fvf;
-  if ((fvf & kFvfPositionMask) != kFvfXyzrhw) {
+  const u32 position = fvf & kFvfPositionMask;
+  if (position != kFvfXyzrhw && position != kFvfXyz) {
     return std::nullopt;
   }
 
   layout.valid = true;
-  layout.preTransformed = true;
-  layout.positionComponents = 4;
+  layout.preTransformed = position == kFvfXyzrhw;
+  layout.positionComponents = layout.preTransformed ? 4u : 3u;
   u32 offset = 0;
   layout.positionOffset = offset;
-  offset += 16;
+  offset += layout.preTransformed ? 16u : 12u;
+
+  if ((fvf & kFvfNormal) != 0) {
+    offset += 12u;
+  }
 
   if ((fvf & kFvfDiffuse) != 0) {
     layout.hasDiffuse = true;
@@ -4011,10 +4017,14 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
     out << "                       1.0f - ((inPosition.y - uniforms.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
     out << "    clip = float4(ndc, inPosition.z, 1.0f);\n";
     out << "  } else {\n";
-    out << "    clip.x = dot(uniforms.ffpWorldViewProj[0], inPosition);\n";
-    out << "    clip.y = dot(uniforms.ffpWorldViewProj[1], inPosition);\n";
-    out << "    clip.z = dot(uniforms.ffpWorldViewProj[2], inPosition);\n";
-    out << "    clip.w = dot(uniforms.ffpWorldViewProj[3], inPosition);\n";
+    out << "    clip.x = dot(float4(uniforms.ffpWorldViewProj[0].x, uniforms.ffpWorldViewProj[1].x,\n";
+    out << "                           uniforms.ffpWorldViewProj[2].x, uniforms.ffpWorldViewProj[3].x), inPosition);\n";
+    out << "    clip.y = dot(float4(uniforms.ffpWorldViewProj[0].y, uniforms.ffpWorldViewProj[1].y,\n";
+    out << "                           uniforms.ffpWorldViewProj[2].y, uniforms.ffpWorldViewProj[3].y), inPosition);\n";
+    out << "    clip.z = dot(float4(uniforms.ffpWorldViewProj[0].z, uniforms.ffpWorldViewProj[1].z,\n";
+    out << "                           uniforms.ffpWorldViewProj[2].z, uniforms.ffpWorldViewProj[3].z), inPosition);\n";
+    out << "    clip.w = dot(float4(uniforms.ffpWorldViewProj[0].w, uniforms.ffpWorldViewProj[1].w,\n";
+    out << "                           uniforms.ffpWorldViewProj[2].w, uniforms.ffpWorldViewProj[3].w), inPosition);\n";
     out << "  }\n";
     out << "  out.position = clip;\n";
     out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
@@ -6264,7 +6274,7 @@ class MetalBackendDevice final : public BackendDevice {
         }
       }
     }
-    if (!ffLayout && vertexBuffer) {
+    if (vertexBuffer) {
       const u64 ffTraceTex0 = fixedFunctionTraceTextureHandle();
       const bool forceTrace =
           ffTraceTex0 != 0 && draw.textures[0].handle && draw.textures[0].handle.value == ffTraceTex0;
@@ -6272,11 +6282,13 @@ class MetalBackendDevice final : public BackendDevice {
         std::ostringstream trace;
         trace << "[dxmt9-ffp] seq=" << static_cast<unsigned long long>(seqId)
               << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
-              << " ffLayout=0"
+              << " ffLayout=" << (ffLayout ? 1 : 0)
               << " baseVertex=" << draw.baseVertexIndex
               << " startIndex=" << draw.startIndex
               << " primCount=" << draw.primitiveCount
-              << " stride=" << computeVertexDeclStride(draw)
+              << " stride="
+              << (ffLayout ? (draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride)
+                           : computeVertexDeclStride(draw))
               << " elems=" << draw.vertexDecl.elements.size();
         for (size_t i = 0; i < draw.vertexDecl.elements.size(); ++i) {
           const auto& e = draw.vertexDecl.elements[i];
@@ -6289,10 +6301,10 @@ class MetalBackendDevice final : public BackendDevice {
         }
         emitQueueTraceLine(trace.str());
       }
-    }
-    if (!ffLayout && vertexBuffer) {
       uniforms->vertexStreamOffset = 0;
-      uniforms->vertexStreamStride = computeVertexDeclStride(draw);
+      uniforms->vertexStreamStride =
+          ffLayout ? (draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride)
+                   : computeVertexDeclStride(draw);
       uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
       transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(
           [device_.get() newBufferWithBytes:uniforms
