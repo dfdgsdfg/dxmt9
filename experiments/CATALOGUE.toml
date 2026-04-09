@@ -87,3 +87,20 @@ window_title = "Irrlicht Engine Demo"
 capture_delay_sec = 5.0
 run_timeout_sec = 60
 capture_frame = 120
+
+[[app]]
+name = "anno-1404-gold"
+source = "local-heroic"
+license = "commercial"
+binary = "/Users/dididi/games/_Heroic/Anno 1404 Gold Edition/Anno4.exe"
+launcher = "experiments/launchers/anno_1404_gold.sh"
+reference = "experiments/references/anno-1404-gold.png"
+features = ["commercial", "d3d9", "bink", "ui", "scene"]
+status = "exploratory"
+requires_wine = true
+window_title = "Anno 1404"
+capture_delay_sec = 8.0
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+allow_timeout = true

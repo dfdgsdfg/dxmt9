@@ -13,6 +13,7 @@ python3 scripts/run_experiment.py run dx-sdk-tutorial07 --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run dx-sdk-hdrformats --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run dxut-simple-sample --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run irrlicht-managed-lights --wine-root "$WINE_ROOT"
+python3 scripts/run_experiment.py run anno-1404-gold --wine-root "$WINE_ROOT" --prefix "$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
 ```
 
 DX9 regression suite:
@@ -35,6 +36,7 @@ bash scripts/run_tutorial07_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_hdrformats_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_simple_sample_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_irrlicht_managed_lights_experiment.sh --wine-root "$WINE_ROOT"
+bash scripts/run_anno1404_experiment.sh
 ```
 
 Permanent-prefix installer for Heroic:
@@ -101,3 +103,13 @@ Current verified real application entry:
 Current verified host:
 
 - Heroic Wine 11.5 builtin path
+
+Current exploratory commercial target:
+
+- `anno-1404-gold`
+  - local Heroic install
+  - supported runtime: `Wine-11.6-DXMT`
+  - plain `Wine-11.6` is research-only because the game currently trips Wine's
+    `d3dx10_43` / `D3DX10SaveTextureToMemory` path before it becomes a usable
+    baseline
+  - reference-free exploratory capture for real-game bring-up

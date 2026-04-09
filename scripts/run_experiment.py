@@ -46,6 +46,8 @@ class ExperimentApp:
     capture_delay_sec: float = 3.0
     run_timeout_sec: float = 45.0
     capture_frame: int = 0
+    reference_optional: bool = False
+    allow_timeout: bool = False
 
     @classmethod
     def from_toml(cls, data: dict[str, Any]) -> "ExperimentApp":
@@ -63,6 +65,8 @@ class ExperimentApp:
             capture_delay_sec=float(data.get("capture_delay_sec", 3.0)),
             run_timeout_sec=float(data.get("run_timeout_sec", 45.0)),
             capture_frame=int(data.get("capture_frame", 0)),
+            reference_optional=bool(data.get("reference_optional", False)),
+            allow_timeout=bool(data.get("allow_timeout", False)),
         )
 
     @property
@@ -145,6 +149,11 @@ def capture_frontmost_window(output_path: Path, expected_title: str | None, time
             last_error = exc.stderr.strip() or exc.stdout.strip() or str(exc)
             time.sleep(0.2)
     raise RuntimeError(last_error or "unable to capture frontmost window")
+
+
+def capture_full_screen(output_path: Path) -> dict[str, Any]:
+    run_command(["screencapture", "-x", str(output_path)])
+    return {"capture_mode": "full_screen"}
 
 
 def image_luma_metrics(path: Path) -> dict[str, float]:
@@ -293,6 +302,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         )
         capture_error: str | None = None
         window_info: dict[str, Any] | None = None
+        timed_out = False
         try:
             deadline = time.monotonic() + app.capture_delay_sec
             while time.monotonic() < deadline and process.poll() is None:
@@ -302,8 +312,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                     window_info = capture_frontmost_window(actual_path, app.window_title, timeout_sec=10.0)
                 except Exception as exc:  # noqa: BLE001
                     capture_error = str(exc)
+                    try:
+                        window_info = capture_full_screen(actual_path)
+                    except Exception:  # noqa: BLE001
+                        pass
             process.wait(timeout=args.timeout or app.run_timeout_sec)
         except subprocess.TimeoutExpired:
+            timed_out = True
             os.killpg(process.pid, signal.SIGTERM)
             try:
                 process.wait(timeout=5)
@@ -325,6 +340,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         "capture_error": capture_error,
         "window_info": window_info,
         "failures": [],
+        "timed_out": timed_out,
     }
 
     if actual_dump_path.exists() and not actual_path.exists():
@@ -346,7 +362,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     if log_markers:
         result["failures"].append({"type": "log_markers", "markers": log_markers})
 
-    if process.returncode != 0:
+    if process.returncode != 0 and not (timed_out and app.allow_timeout):
         result["failures"].append({"type": "process_exit", "returncode": process.returncode})
 
     if capture_error and not actual_dump_path.exists() and not actual_path.exists():
@@ -367,7 +383,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         write_diff_image(actual_path, app.reference_path, diff_path)
         if ssim < SSIM_THRESHOLD:
             result["failures"].append({"type": "ssim", "value": ssim, "threshold": SSIM_THRESHOLD})
-    elif not app.reference_path.exists():
+    elif not app.reference_path.exists() and not app.reference_optional:
         result["failures"].append({"type": "missing_reference"})
 
     result["status"] = "pass" if not result["failures"] else "fail"
