@@ -111,13 +111,12 @@ binary = "experiments/apps/MultiTextureTerrain/MultiTextureTerrain.exe"
 launcher = "experiments/launchers/dxmt9_multitextureterrain.sh"
 reference = "experiments/references/dxmt9-multitexture-terrain.png"
 features = ["multi_texture", "blend_map", "terrain_proxy", "ps_2_0"]
-status = "exploratory"
+status = "passing"
 requires_wine = true
 window_title = "MultiTextureTerrain"
 capture_delay_sec = 4.0
 run_timeout_sec = 45
 capture_frame = 120
-reference_optional = true
 
 [[app]]
 name = "anno-1404-gold"

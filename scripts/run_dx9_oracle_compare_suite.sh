@@ -10,6 +10,7 @@ apps=(
   "dxut-simple-sample"
   "irrlicht-managed-lights"
   "dxmt9-water-rt"
+  "dxmt9-multitexture-terrain"
 )
 
 usage() {

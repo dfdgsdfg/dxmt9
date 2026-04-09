@@ -127,6 +127,7 @@ Current exploratory feature targets:
   - repo-local DX9 sample
   - multi-sampler terrain material blend
   - intended as the second focused proxy for outdoor terrain/material bugs
+  - builtin-oracle compare currently matches and can be used as a regression gate
 
 Current exploratory commercial-oracle candidate:
 

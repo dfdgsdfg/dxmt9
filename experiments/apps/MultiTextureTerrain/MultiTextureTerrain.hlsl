@@ -6,25 +6,25 @@ sampler2D g_GrassSampler = sampler_state {
     Texture = <g_GrassTexture>;
     MinFilter = LINEAR;
     MagFilter = LINEAR;
-    MipFilter = LINEAR;
-    AddressU = WRAP;
-    AddressV = WRAP;
+    MipFilter = NONE;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
 };
 
 sampler2D g_RockSampler = sampler_state {
     Texture = <g_RockTexture>;
     MinFilter = LINEAR;
     MagFilter = LINEAR;
-    MipFilter = LINEAR;
-    AddressU = WRAP;
-    AddressV = WRAP;
+    MipFilter = NONE;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
 };
 
 sampler2D g_BlendSampler = sampler_state {
     Texture = <g_BlendTexture>;
     MinFilter = LINEAR;
     MagFilter = LINEAR;
-    MipFilter = LINEAR;
+    MipFilter = NONE;
     AddressU = CLAMP;
     AddressV = CLAMP;
 };
@@ -51,14 +51,14 @@ VSOut MultiTextureTerrainVS(VSIn input) {
 
 float4 MultiTextureTerrainPS(VSOut input) : COLOR0 {
     float2 grassUv = input.Tex0;
-    float2 rockUv = input.Tex0 * float2(1.75, 1.35) + float2(0.12, 0.05);
-    float2 blendUv = input.Tex0 * float2(0.25, 0.55);
+    float2 rockUv = input.Tex0 * float2(0.82, 0.74) + float2(0.10, 0.06);
+    float2 blendUv = input.Tex0;
     float4 grass = tex2D(g_GrassSampler, grassUv);
     float4 rock = tex2D(g_RockSampler, rockUv);
     float blend = tex2D(g_BlendSampler, blendUv).r;
 
     float4 terrain = lerp(grass, rock, blend);
-    float fog = saturate((blendUv.y - 0.15) / 0.85);
+    float fog = saturate((input.Tex0.y - 0.22) / 0.78);
     float3 fogColor = float3(0.72, 0.80, 0.88);
     terrain.rgb = lerp(terrain.rgb, fogColor, fog * 0.35);
     return terrain * input.Color;

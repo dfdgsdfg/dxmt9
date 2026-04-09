@@ -249,16 +249,18 @@ bool create_texture(IDirect3DDevice9* device, UINT size, IDirect3DTexture9** out
 DWORD make_grass(UINT x, UINT y, UINT size) {
     const float u = static_cast<float>(x) / static_cast<float>(size);
     const float v = static_cast<float>(y) / static_cast<float>(size);
-    const unsigned r = static_cast<unsigned>(48 + 22 * (0.5f + 0.5f * std::sin(u * 34.0f)));
-    const unsigned g = static_cast<unsigned>(118 + 70 * (0.4f + 0.6f * std::sin(v * 18.0f + u * 7.0f)));
-    const unsigned b = static_cast<unsigned>(28 + 20 * (0.5f + 0.5f * std::sin(u * 21.0f)));
+    const float band = 0.5f + 0.5f * std::sin((u * 3.0f + v * 2.0f) * 3.1415926f);
+    const unsigned r = static_cast<unsigned>(52 + 18 * band);
+    const unsigned g = static_cast<unsigned>(120 + 42 * (0.35f + 0.65f * band));
+    const unsigned b = static_cast<unsigned>(34 + 16 * (1.0f - band * 0.6f));
     return 0xff000000u | (r << 16) | (g << 8) | b;
 }
 
 DWORD make_rock(UINT x, UINT y, UINT size) {
     const float u = static_cast<float>(x) / static_cast<float>(size);
     const float v = static_cast<float>(y) / static_cast<float>(size);
-    const unsigned shade = static_cast<unsigned>(76 + 52 * (0.5f + 0.5f * std::sin(u * 20.0f + v * 25.0f)));
+    const float ridge = 0.5f + 0.5f * std::sin((u * 2.4f - v * 1.8f) * 3.1415926f);
+    const unsigned shade = static_cast<unsigned>(82 + 40 * ridge);
     const unsigned r = shade;
     const unsigned g = static_cast<unsigned>(shade * 0.92f);
     const unsigned b = static_cast<unsigned>(shade * 0.84f);
@@ -268,9 +270,9 @@ DWORD make_rock(UINT x, UINT y, UINT size) {
 DWORD make_blend(UINT x, UINT y, UINT size) {
     const float u = static_cast<float>(x) / static_cast<float>(size);
     const float v = static_cast<float>(y) / static_cast<float>(size);
-    float ridge = 0.5f + 0.25f * std::sin(u * 7.0f) + 0.12f * std::sin(u * 19.0f);
-    float mask = v > ridge ? 0.85f : 0.15f;
-    mask += 0.12f * std::sin((u + v) * 16.0f);
+    float ridge = 0.42f + 0.18f * std::sin(u * 5.0f) + 0.08f * std::sin(u * 11.0f);
+    float mask = v > ridge ? 0.80f : 0.18f;
+    mask += 0.08f * std::sin((u + v) * 8.0f);
     if (mask < 0.0f) mask = 0.0f;
     if (mask > 1.0f) mask = 1.0f;
     const unsigned c = static_cast<unsigned>(mask * 255.0f);
@@ -289,10 +291,10 @@ bool create_geometry(AppState& app) {
     static const TerrainVertex kVertices[6] = {
         {-1.0f, -1.0f, 0.0f, 1.0f, kWhite, 0.0f, 1.0f},
         {-1.0f,  0.10f, 0.0f, 1.0f, kWhite, 0.0f, 0.0f},
-        { 1.0f, -1.0f, 0.0f, 1.0f, kWhite, 4.0f, 1.0f},
-        { 1.0f, -1.0f, 0.0f, 1.0f, kWhite, 4.0f, 1.0f},
+        { 1.0f, -1.0f, 0.0f, 1.0f, kWhite, 1.0f, 1.0f},
+        { 1.0f, -1.0f, 0.0f, 1.0f, kWhite, 1.0f, 1.0f},
         {-1.0f,  0.10f, 0.0f, 1.0f, kWhite, 0.0f, 0.0f},
-        { 1.0f,  0.10f, 0.0f, 1.0f, kWhite, 4.0f, 0.0f},
+        { 1.0f,  0.10f, 0.0f, 1.0f, kWhite, 1.0f, 0.0f},
     };
 
     HRESULT hr = app.device->CreateVertexDeclaration(kVertexDecl, &app.vertexDecl);
@@ -355,7 +357,9 @@ bool create_scene_resources(AppState& app) {
     for (DWORD sampler = 0; sampler < 3; ++sampler) {
         app.device->SetSamplerState(sampler, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
         app.device->SetSamplerState(sampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-        app.device->SetSamplerState(sampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+        app.device->SetSamplerState(sampler, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        app.device->SetSamplerState(sampler, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        app.device->SetSamplerState(sampler, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
     }
     return true;
 }
