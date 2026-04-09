@@ -11,6 +11,7 @@ apps=(
   "dx-sdk-hdrformats"
   "dxut-simple-sample"
   "irrlicht-managed-lights"
+  "dxmt9-water-rt"
 )
 
 usage() {

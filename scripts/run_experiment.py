@@ -111,6 +111,77 @@ def run_command(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[st
     return subprocess.run(cmd, check=True, text=True, **kwargs)
 
 
+def find_window_by_title(expected_title: str) -> dict[str, Any] | None:
+    script = r"""
+import Foundation
+import CoreGraphics
+
+let expected = CommandLine.arguments[1].lowercased()
+let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+var matches: [[String: Any]] = []
+for w in list {
+    let owner = (w[kCGWindowOwnerName as String] as? String) ?? ""
+    let name = (w[kCGWindowName as String] as? String) ?? ""
+    let haystack = (owner + " " + name).lowercased()
+    if !haystack.contains(expected) {
+        continue
+    }
+    let bounds = (w[kCGWindowBounds as String] as? [String: Any]) ?? [:]
+    let width = (bounds["Width"] as? Double) ?? 0
+    let height = (bounds["Height"] as? Double) ?? 0
+    if width < 64 || height < 64 {
+        continue
+    }
+    let area = width * height
+    matches.append([
+        "window_id": w[kCGWindowNumber as String] ?? 0,
+        "process_name": owner,
+        "window_title": name,
+        "x": Int((bounds["X"] as? Double) ?? 0),
+        "y": Int((bounds["Y"] as? Double) ?? 0),
+        "width": Int(width),
+        "height": Int(height),
+        "layer": w[kCGWindowLayer as String] ?? 0,
+        "area": area,
+    ])
+}
+if matches.isEmpty {
+    print("null")
+} else {
+    let sorted = matches.sorted { lhs, rhs in
+        let lArea = (lhs["area"] as? Double) ?? 0
+        let rArea = (rhs["area"] as? Double) ?? 0
+        if lArea != rArea { return lArea > rArea }
+        let lLayer = (lhs["layer"] as? Int) ?? 0
+        let rLayer = (rhs["layer"] as? Int) ?? 0
+        return lLayer > rLayer
+    }
+    let best = sorted[0]
+    let data = try! JSONSerialization.data(withJSONObject: best, options: [])
+    print(String(data: data, encoding: .utf8)!)
+}
+"""
+    result = run_command(["swift", "-e", script, expected_title], capture_output=True)
+    payload = result.stdout.strip()
+    if not payload or payload == "null":
+        return None
+    info = json.loads(payload)
+    info.pop("area", None)
+    return info
+
+
+def capture_window_by_title(output_path: Path, expected_title: str, timeout_sec: float) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        info = find_window_by_title(expected_title)
+        if info is not None:
+            run_command(["screencapture", "-x", "-l", str(info["window_id"]), str(output_path)])
+            info["capture_mode"] = "window_id"
+            return info
+        time.sleep(0.2)
+    raise RuntimeError(f"unable to find onscreen window matching title: {expected_title}")
+
+
 def capture_frontmost_window(output_path: Path, expected_title: str | None, timeout_sec: float) -> dict[str, Any]:
     script = """
         tell application "System Events"
@@ -239,8 +310,9 @@ def stage_dxmt9(prefix: Path, wine_root: Path | None, pe_build_dir: Path, unix_b
 def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     if not app.launcher_path.exists():
         raise FileNotFoundError(f"launcher not found: {app.launcher_path}")
-    if not app.binary_path.exists():
-        raise FileNotFoundError(f"binary not found: {app.binary_path}")
+    binary_path = Path(args.binary).expanduser().resolve() if args.binary else app.binary_path
+    if not binary_path.exists():
+        raise FileNotFoundError(f"binary not found: {binary_path}")
 
     output_name = app.name
     if getattr(args, "output_suffix", None):
@@ -278,7 +350,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     env.update(
         {
             "DXMT9_EXPERIMENT_NAME": app.name,
-            "DXMT9_EXPERIMENT_BINARY": str(app.binary_path),
+            "DXMT9_EXPERIMENT_BINARY": str(binary_path),
             "DXMT9_EXPERIMENT_PREFIX": str(prefix),
             "DXMT9_EXPERIMENT_WINE_ROOT": str(wine_root) if wine_root else "",
             "DXMT9_EXPERIMENT_WINE_BIN": str(wine_bin),
@@ -309,7 +381,10 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 time.sleep(0.1)
             if process.poll() is None and not actual_dump_path.exists():
                 try:
-                    window_info = capture_frontmost_window(actual_path, app.window_title, timeout_sec=10.0)
+                    if app.window_title:
+                        window_info = capture_window_by_title(actual_path, app.window_title, timeout_sec=10.0)
+                    else:
+                        window_info = capture_frontmost_window(actual_path, app.window_title, timeout_sec=10.0)
                 except Exception as exc:  # noqa: BLE001
                     capture_error = str(exc)
                     try:
@@ -330,7 +405,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
     result: dict[str, Any] = {
         "name": app.name,
-        "binary": str(app.binary_path),
+        "binary": str(binary_path),
         "launcher": str(app.launcher_path),
         "reference": str(app.reference_path),
         "prefix": str(prefix),
@@ -343,7 +418,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         "timed_out": timed_out,
     }
 
-    if actual_dump_path.exists() and not actual_path.exists():
+    if actual_dump_path.exists():
         Image.open(actual_dump_path).save(actual_path)
 
     if app.reference_path.exists():
@@ -427,6 +502,7 @@ def main() -> int:
     run_parser.add_argument("--wine-root", help="Wine runtime root")
     run_parser.add_argument("--wine-bin", help="Wine executable path")
     run_parser.add_argument("--prefix", help="Wine prefix path")
+    run_parser.add_argument("--binary", help="Override the binary path for this run")
     run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll and dxmt9.dll")
     run_parser.add_argument("--unix-build-dir", help="Unix build dir containing dxmt9.so")

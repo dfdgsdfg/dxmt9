@@ -89,6 +89,37 @@ run_timeout_sec = 60
 capture_frame = 120
 
 [[app]]
+name = "dxmt9-water-rt"
+source = "repo-local"
+license = "internal"
+binary = "experiments/apps/WaterRT/WaterRT.exe"
+launcher = "experiments/launchers/dxmt9_water_rt.sh"
+reference = "experiments/references/dxmt9-water-rt.png"
+features = ["render_to_texture", "projected_uv", "alpha_blend", "commercial-water-proxy"]
+status = "passing"
+requires_wine = true
+window_title = "WaterRT"
+capture_delay_sec = 4.0
+run_timeout_sec = 45
+capture_frame = 120
+
+[[app]]
+name = "dxmt9-multitexture-terrain"
+source = "repo-local"
+license = "internal"
+binary = "experiments/apps/MultiTextureTerrain/MultiTextureTerrain.exe"
+launcher = "experiments/launchers/dxmt9_multitextureterrain.sh"
+reference = "experiments/references/dxmt9-multitexture-terrain.png"
+features = ["multi_texture", "blend_map", "terrain_proxy", "ps_2_0"]
+status = "exploratory"
+requires_wine = true
+window_title = "MultiTextureTerrain"
+capture_delay_sec = 4.0
+run_timeout_sec = 45
+capture_frame = 120
+reference_optional = true
+
+[[app]]
 name = "anno-1404-gold"
 source = "local-heroic"
 license = "commercial"
@@ -99,8 +130,25 @@ features = ["commercial", "d3d9", "bink", "ui", "scene"]
 status = "exploratory"
 requires_wine = true
 window_title = "Anno 1404"
-capture_delay_sec = 8.0
-run_timeout_sec = 20
+capture_delay_sec = 40.0
+run_timeout_sec = 55
+capture_frame = 0
+reference_optional = true
+allow_timeout = true
+
+[[app]]
+name = "street-fighter-iv-benchmark"
+source = "local-external"
+license = "commercial"
+binary = "/Users/dididi/games/_Heroic/Street Fighter IV Benchmark/Benchmark.exe"
+launcher = "experiments/launchers/street_fighter_iv_benchmark.sh"
+reference = "experiments/references/street-fighter-iv-benchmark.png"
+features = ["commercial", "benchmark", "d3d9ex", "scene", "ui"]
+status = "exploratory"
+requires_wine = true
+window_title = "Street Fighter IV"
+capture_delay_sec = 25.0
+run_timeout_sec = 50
 capture_frame = 0
 reference_optional = true
 allow_timeout = true

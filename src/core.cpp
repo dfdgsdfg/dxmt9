@@ -3481,15 +3481,21 @@ void Device::submitDrawInternal(const DrawDesc& desc) {
     const auto it = desc.textures[stageIndex].stageStates.find(key);
     return it != desc.textures[stageIndex].stageStates.end() ? it->second : 0u;
   };
-  emitRenderTrace("draw seq=%llu primType=%u primCount=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u fvf=0x%x lighting=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x",
+  emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x",
                   static_cast<unsigned long long>(submittedSequenceId_ + 1),
                   static_cast<unsigned>(desc.primitiveType),
                   desc.primitiveCount,
+                  desc.startVertex,
+                  desc.baseVertexIndex,
+                  desc.startIndex,
                   static_cast<unsigned long long>(desc.rts.color[0].handle.value),
                   static_cast<unsigned long long>(desc.rts.depthStencil.handle.value),
                   static_cast<unsigned long long>(desc.textures[0].handle.value),
                   static_cast<unsigned>(desc.vertexShader.kind),
                   static_cast<unsigned>(desc.pixelShader.kind),
+                  static_cast<unsigned long long>(hashShaderRef(desc.vertexShader)),
+                  static_cast<unsigned long long>(hashShaderRef(desc.pixelShader)),
+                  static_cast<unsigned long long>(hashStateState(state_)),
                   desc.vertexDecl.fvf,
                   desc.rs.values.contains(RS_LIGHTING) ? desc.rs.values.at(RS_LIGHTING) : 0u,
                   desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) ? desc.rs.values.at(RS_ALPHA_TEST_ENABLE) : 0u,
