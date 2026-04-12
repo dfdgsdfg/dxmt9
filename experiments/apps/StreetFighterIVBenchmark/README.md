@@ -64,6 +64,26 @@ bash scripts/run_sfiv_benchmark_experiment.sh \
 ```
 
   Notes:
+  - use a fresh prefix for reliable results
+  - if an older prefix has been touched by prior `winetricks`, debug envs, or
+    manual DLL experiments, delete it and recreate it with:
+
+```sh
+rm -rf "$HOME/Games/_Prefixes/Street Fighter IV Benchmark"
+export WINEPREFIX="$HOME/Games/_Prefixes/Street Fighter IV Benchmark"
+"$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6-DXMT/Contents/Resources/wine/bin/wineboot" -u
+```
+
+  - the direct manual launch baseline is:
+
+```sh
+cd "/Users/dididi/games/_Windows/STREETFIGHTERIV_BENCHMARK" && \
+export WINEPREFIX="$HOME/Games/_Prefixes/Street Fighter IV Benchmark" && \
+export WINEDLLOVERRIDES="d3d9=n,b;ddraw=n,b" && \
+"$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6-DXMT/Contents/Resources/wine/bin/wine" \
+start /unix ./StreetFighterIV_Benchmark.exe
+```
+
   - the wrapper extracts the public installer when needed
   - it ensures native `d3dx9_41` is installed into the Heroic prefix with `winetricks`
   - it then copies the 32-bit `d3dx9_41.dll` next to the extracted benchmark EXE

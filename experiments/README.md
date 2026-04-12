@@ -135,6 +135,9 @@ Current exploratory commercial-oracle candidate:
 
 - `street-fighter-iv-benchmark`
   - Heroic `11.6-DXMT` research lane for `dxmt9`
+  - keep the Heroic prefix fresh; if the benchmark starts failing after local DLL
+    or `winetricks` experiments, recreate the prefix instead of trying to
+    salvage it
   - wrapper now installs prefix-native `d3dx9_41` and mirrors the 32-bit DLL next to the extracted benchmark binary
 - `street-fighter-iv-benchmark-crossover-oracle`
   - CrossOver `Heroic` bottle oracle lane
