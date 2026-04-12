@@ -151,3 +151,23 @@ run_timeout_sec = 50
 capture_frame = 0
 reference_optional = true
 allow_timeout = true
+
+[[app]]
+name = "street-fighter-iv-benchmark-crossover-oracle"
+source = "local-external"
+license = "commercial"
+binary = "/private/tmp/sfiv-msi/Program Files/CAPCOM/STREETFIGHTERIV_BENCHMARK/StreetFighterIV_Benchmark.exe"
+launcher = "experiments/launchers/street_fighter_iv_benchmark.sh"
+reference = "experiments/references/street-fighter-iv-benchmark-crossover-oracle.png"
+features = ["commercial", "benchmark", "d3d9ex", "scene", "ui", "crossover-oracle"]
+status = "exploratory"
+requires_wine = true
+window_title = "STREET FIGHTER IV Benchmark"
+capture_delay_sec = 10.0
+run_timeout_sec = 50
+capture_frame = 0
+reference_optional = true
+allow_timeout = true
+skip_stage = true
+wine_dll_overrides = "d3d9=b;d3dx9_41=b"
+cx_bottle = "Heroic"

@@ -14,7 +14,8 @@ python3 scripts/run_experiment.py run dx-sdk-hdrformats --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run dxut-simple-sample --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run irrlicht-managed-lights --wine-root "$WINE_ROOT"
 python3 scripts/run_experiment.py run anno-1404-gold --wine-root "$WINE_ROOT" --prefix "$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
-python3 scripts/run_experiment.py run street-fighter-iv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/Benchmark.exe"
+python3 scripts/run_experiment.py run street-fighter-iv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
+python3 scripts/run_experiment.py run street-fighter-iv-benchmark-crossover-oracle --wine-root "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver" --wine-bin "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine" --prefix "$HOME/Library/Application Support/CrossOver/Bottles/Heroic" --binary "/path/to/StreetFighterIV_Benchmark.exe"
 ```
 
 DX9 regression suite:
@@ -38,7 +39,8 @@ bash scripts/run_hdrformats_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_simple_sample_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_irrlicht_managed_lights_experiment.sh --wine-root "$WINE_ROOT"
 bash scripts/run_anno1404_experiment.sh
-bash scripts/run_sfiv_benchmark_experiment.sh --binary "/path/to/Benchmark.exe"
+bash scripts/run_sfiv_benchmark_experiment.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+bash scripts/run_sfiv_benchmark_crossover_oracle.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 ```
 
 Permanent-prefix installer for Heroic:
@@ -132,5 +134,9 @@ Current exploratory feature targets:
 Current exploratory commercial-oracle candidate:
 
 - `street-fighter-iv-benchmark`
-  - benchmark-style D3D9Ex target
-  - use `--binary` if the local install path differs from the default catalogue path
+  - Heroic `11.6-DXMT` research lane for `dxmt9`
+  - wrapper now installs prefix-native `d3dx9_41` and mirrors the 32-bit DLL next to the extracted benchmark binary
+- `street-fighter-iv-benchmark-crossover-oracle`
+  - CrossOver `Heroic` bottle oracle lane
+  - uses builtin `d3d9` / `d3dx9_41` for commercial visual comparison
+  - current automatic capture is not trustworthy yet; use this lane as a manual visual oracle host until window capture is stabilized

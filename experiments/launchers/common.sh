@@ -16,6 +16,11 @@ exp_require_var() {
 }
 
 exp_stage_dxmt9() {
+  if [[ "${DXMT9_EXPERIMENT_SKIP_STAGE:-}" == "1" ]]; then
+    exp_log "skipping dxmt9 staging"
+    return 0
+  fi
+
   exp_require_var DXMT9_EXPERIMENT_PREFIX
   exp_require_var DXMT9_EXPERIMENT_PE_BUILD_DIR
   exp_require_var DXMT9_EXPERIMENT_UNIX_BUILD_DIR
@@ -46,12 +51,23 @@ exp_run_wine_binary() {
   local workdir=${DXMT9_EXPERIMENT_WORKDIR:-$exp_repo_root}
 
   exp_log "running $binary"
-  (
-    cd "$workdir"
-    WINEPREFIX="$DXMT9_EXPERIMENT_PREFIX" \
-    WINEDLLOVERRIDES="$dll_overrides" \
-    DXMT9_VALIDATE=1 \
-    DXMT9_LOG="$DXMT9_EXPERIMENT_LOG" \
-    "$DXMT9_EXPERIMENT_WINE_BIN" "$binary" "$@"
-  )
+  if [[ -n "${DXMT9_EXPERIMENT_CX_BOTTLE:-}" ]]; then
+    (
+      cd "$workdir"
+      CX_ROOT="${DXMT9_EXPERIMENT_WINE_ROOT:-}" \
+      CX_BOTTLE="$DXMT9_EXPERIMENT_CX_BOTTLE" \
+      DXMT9_VALIDATE=1 \
+      DXMT9_LOG="$DXMT9_EXPERIMENT_LOG" \
+      "$DXMT9_EXPERIMENT_WINE_BIN" --bottle "$DXMT9_EXPERIMENT_CX_BOTTLE" --wait-all --dll "$dll_overrides" "$binary" "$@"
+    )
+  else
+    (
+      cd "$workdir"
+      WINEPREFIX="$DXMT9_EXPERIMENT_PREFIX" \
+      WINEDLLOVERRIDES="$dll_overrides" \
+      DXMT9_VALIDATE=1 \
+      DXMT9_LOG="$DXMT9_EXPERIMENT_LOG" \
+      "$DXMT9_EXPERIMENT_WINE_BIN" "$binary" "$@"
+    )
+  fi
 }

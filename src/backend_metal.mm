@@ -1347,7 +1347,7 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  float4 color;\n";
   out << "  float4 secondaryColor;\n";
   for (size_t i = 0; i < kMaxTextureStages; ++i) {
-    out << "  float2 texcoord" << i << ";\n";
+    out << "  float4 texcoord" << i << ";\n";
   }
   out << "  float fogFactor;\n";
   out << "  float pointSize [[point_size]];\n";
@@ -1400,7 +1400,7 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  }\n";
   out << "  return dxmt9_apply_texture_arg_flags(value, arg);\n";
   out << "}\n";
-  out << "inline float2 dxmt9_select_texcoord(VSOut in, uint index) {\n";
+  out << "inline float4 dxmt9_select_texcoord(VSOut in, uint index) {\n";
   out << "  switch (index) {\n";
   for (size_t i = 0; i < kMaxTextureStages; ++i) {
     out << "    case " << i << "u: return in.texcoord" << i << ";\n";
@@ -2496,7 +2496,7 @@ std::string readPixelInputExpression(u32 token, const std::string& pixelInputs) 
       }
       break;
     case kD3DSPR_ADDR:
-      return "float4(dxmt9_select_texcoord(" + pixelInputs + ", " + std::to_string(index) + "u), 0.0f, 1.0f)";
+      return "dxmt9_select_texcoord(" + pixelInputs + ", " + std::to_string(index) + "u)";
     case kD3DSPR_RASTOUT:
       if (index == 0) {
         return pixelInputs + ".position";
@@ -2516,7 +2516,7 @@ std::string readPixelInputExpression(u32 token, const std::string& pixelInputs) 
     return "float4(" + pixelInputs + ".color)";
   }
   if (index == 1) {
-    return "float4(dxmt9_select_texcoord(" + pixelInputs + ", 0u), 0.0f, 1.0f)";
+    return "dxmt9_select_texcoord(" + pixelInputs + ", 0u)";
   }
   if (index == 2) {
     return "float4(" + pixelInputs + ".secondaryColor)";
@@ -3329,7 +3329,10 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     out << "  out.position = outPosition;\n";
     out << "  out.color = outColor;\n";
     out << "  out.secondaryColor = outSecondaryColor;\n";
-    out << "  out.texcoord0 = outTexcoord0.xy;\n";
+    out << "  out.texcoord0 = outTexcoord0;\n";
+    for (size_t i = 1; i < kMaxTextureStages; ++i) {
+      out << "  out.texcoord" << i << " = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
+    }
     out << "  out.fogFactor = outFogFactor;\n";
     out << "  out.pointSize = outPointSize;\n";
     out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
@@ -3959,10 +3962,11 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
       // in Anno 1701's menu background. For XYZRHW draws, use the provided UVs
       // directly and ignore the stale transform state.
       if (layout && layout->preTransformed) {
-        shader << "  out.texcoord" << stage << " = dxmt9_texcoord" << stage << ".xy;\n";
+        shader << "  out.texcoord" << stage << " = dxmt9_texcoord" << stage << ";\n";
       } else {
-        shader << "  out.texcoord" << stage << " = dxmt9_apply_texture_transform(dxmt9_texcoord" << stage
-               << ", uniforms, " << stage << "u, " << key.texTransformFlags[stage] << "u);\n";
+        shader << "  out.texcoord" << stage << " = float4(dxmt9_apply_texture_transform(dxmt9_texcoord" << stage
+               << ", uniforms, " << stage << "u, " << key.texTransformFlags[stage]
+               << "u), dxmt9_texcoord" << stage << ".zw);\n";
       }
     }
   };
@@ -4045,7 +4049,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
     out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
     out << "  out.color = float4(1.0);\n";
     out << "  out.secondaryColor = float4(0.0);\n";
-    out << "  out.texcoord0 = float2(vid & 1u, (vid >> 1u) & 1u);\n";
+    out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
     for (size_t i = 1; i < kMaxTextureStages; ++i) {
       out << "  out.texcoord" << i << " = out.texcoord0;\n";
     }
@@ -4125,7 +4129,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
       const size_t stage = activeStages.front();
       const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
       out << "  return tex" << stage << ".sample(samp" << stage
-          << ", dxmt9_select_texcoord(in, " << coordIndex << "u));\n";
+          << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy);\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
@@ -4134,7 +4138,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
       const size_t stage = activeStages.front();
       const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
       out << "  float alpha = tex" << stage << ".sample(samp" << stage
-          << ", dxmt9_select_texcoord(in, " << coordIndex << "u)).a;\n";
+          << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy).a;\n";
       out << "  return float4(alpha, alpha, alpha, 1.0);\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
@@ -4152,7 +4156,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
       const u32 coordIndex = stageKey.texCoordIndex & 0xffffu;
       if (hasTexture) {
         out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
-            << ", dxmt9_select_texcoord(in, " << coordIndex << "u));\n";
+            << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy);\n";
       } else {
         out << "  float4 texColor" << stage << " = float4(1.0f);\n";
       }
@@ -6025,6 +6029,68 @@ class MetalBackendDevice final : public BackendDevice {
         }
       }
     }
+    if (traceEncode && !ffLayout && !vertexBytes.empty() && !draw.vertexDecl.elements.empty()) {
+      auto readF32 = [&](size_t absoluteOffset) {
+        float value = 0.0f;
+        if (absoluteOffset + sizeof(float) <= vertexBytes.size()) {
+          std::memcpy(&value, vertexBytes.data() + absoluteOffset, sizeof(float));
+        }
+        return value;
+      };
+      auto readU32 = [&](size_t absoluteOffset) {
+        u32 value = 0;
+        if (absoluteOffset + sizeof(u32) <= vertexBytes.size()) {
+          std::memcpy(&value, vertexBytes.data() + absoluteOffset, sizeof(u32));
+        }
+        return value;
+      };
+
+      std::optional<u32> positionOffset;
+      std::optional<u32> colorOffset;
+      std::optional<u32> texcoord0Offset;
+      for (const auto& element : draw.vertexDecl.elements) {
+        if (!positionOffset && element.usage == kD3DDeclUsagePosition && element.usageIndex == 0 &&
+            element.type == kD3DDeclTypeFloat4) {
+          positionOffset = element.offset;
+        } else if (!colorOffset && element.usage == kD3DDeclUsageColor && element.usageIndex == 0 &&
+                   element.type == kD3DDeclTypeD3DColor) {
+          colorOffset = element.offset;
+        } else if (!texcoord0Offset && element.usage == kD3DDeclUsageTexcoord && element.usageIndex == 0 &&
+                   element.type == kD3DDeclTypeFloat4) {
+          texcoord0Offset = element.offset;
+        }
+      }
+
+      if (positionOffset && texcoord0Offset) {
+        const size_t stride = static_cast<size_t>(computeVertexDeclStride(draw));
+        const size_t streamBase = static_cast<size_t>(draw.vertexDecl.streams[0].offset);
+        std::ostringstream trace;
+        trace << "[dxmt9-encode-verts] seq=" << static_cast<unsigned long long>(seqId)
+              << " startVertex=" << draw.startVertex
+              << " baseVertex=" << draw.baseVertexIndex
+              << " stride=" << stride
+              << " bytes=" << vertexBytes.size();
+        const u32 tracedVertexCount = std::min<u32>(static_cast<u32>(vertexCount), 6u);
+        for (u32 i = 0; i < tracedVertexCount; ++i) {
+          const size_t base = streamBase +
+                              static_cast<size_t>(draw.startVertex + i) * stride;
+          trace << " v" << i << "=("
+                << readF32(base + *positionOffset + 0) << ","
+                << readF32(base + *positionOffset + 4) << ","
+                << readF32(base + *positionOffset + 8) << ","
+                << readF32(base + *positionOffset + 12) << ")";
+          if (colorOffset) {
+            trace << " c=0x" << std::hex << readU32(base + *colorOffset) << std::dec;
+          }
+          trace << " uv=("
+                << readF32(base + *texcoord0Offset + 0) << ","
+                << readF32(base + *texcoord0Offset + 4) << ","
+                << readF32(base + *texcoord0Offset + 8) << ","
+                << readF32(base + *texcoord0Offset + 12) << ")";
+        }
+        emitQueueTraceLine(trace.str());
+      }
+    }
     if (ffLayout) {
       if (!vertexBuffer) {
         if (traceEncode) {
@@ -6035,7 +6101,13 @@ class MetalBackendDevice final : public BackendDevice {
       uniforms->vertexStreamOffset = 0;
       uniforms->vertexStreamStride =
           draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride;
-      uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+      if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
+        vertexBufferOffset += static_cast<NSUInteger>(draw.startVertex) *
+                              static_cast<NSUInteger>(uniforms->vertexStreamStride);
+        uniforms->vertexBaseIndex = 0;
+      } else {
+        uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+      }
       if (ffLayout->preTransformed) {
         if (auto* targetSurface = findSurfaceUnlocked(draw.rts.color[0].handle.value); targetSurface) {
           uniforms->viewportOrigin = {0.0f, 0.0f};
@@ -6274,7 +6346,7 @@ class MetalBackendDevice final : public BackendDevice {
         }
       }
     }
-    if (vertexBuffer) {
+    if (vertexBuffer && !ffLayout) {
       const u64 ffTraceTex0 = fixedFunctionTraceTextureHandle();
       const bool forceTrace =
           ffTraceTex0 != 0 && draw.textures[0].handle && draw.textures[0].handle.value == ffTraceTex0;
@@ -6305,7 +6377,13 @@ class MetalBackendDevice final : public BackendDevice {
       uniforms->vertexStreamStride =
           ffLayout ? (draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride)
                    : computeVertexDeclStride(draw);
-      uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+      if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
+        vertexBufferOffset += static_cast<NSUInteger>(draw.startVertex) *
+                              static_cast<NSUInteger>(uniforms->vertexStreamStride);
+        uniforms->vertexBaseIndex = 0;
+      } else {
+        uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+      }
       transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(
           [device_.get() newBufferWithBytes:uniforms
                                      length:sizeof(DrawUniforms)
@@ -6349,9 +6427,6 @@ class MetalBackendDevice final : public BackendDevice {
       }
     }
     const auto primitiveType = toPrimitiveType(draw.primitiveType);
-    if (!ffLayout) {
-      uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
-    }
     bool expandedIndexedDraw = false;
     if (traceEncode) {
       std::ostringstream out;
@@ -6359,10 +6434,14 @@ class MetalBackendDevice final : public BackendDevice {
           << " draw rt0=" << static_cast<unsigned long long>(draw.rts.color[0].handle.value)
           << " ds=" << static_cast<unsigned long long>(draw.rts.depthStencil.handle.value)
           << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
+          << " ffLayout=" << (ffLayout ? 1 : 0)
           << " indexed=" << (indexedDraw ? 1 : 0)
           << " primType=" << static_cast<unsigned>(draw.primitiveType)
           << " primCount=" << draw.primitiveCount
           << " vertexCount=" << static_cast<unsigned long long>(vertexCount)
+          << " vertexStreamStride=" << uniforms->vertexStreamStride
+          << " vertexBufferOffset=" << vertexBufferOffset
+          << " vertexStreamOffset=" << uniforms->vertexStreamOffset
           << " vertexBaseIndex=" << uniforms->vertexBaseIndex
           << " colorWrite="
           << (draw.rs.values.contains(RS_COLOR_WRITE_ENABLE) ? draw.rs.values.at(RS_COLOR_WRITE_ENABLE) : 0xfu)

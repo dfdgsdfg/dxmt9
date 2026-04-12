@@ -48,6 +48,9 @@ class ExperimentApp:
     capture_frame: int = 0
     reference_optional: bool = False
     allow_timeout: bool = False
+    skip_stage: bool = False
+    wine_dll_overrides: str | None = None
+    cx_bottle: str | None = None
 
     @classmethod
     def from_toml(cls, data: dict[str, Any]) -> "ExperimentApp":
@@ -67,6 +70,9 @@ class ExperimentApp:
             capture_frame=int(data.get("capture_frame", 0)),
             reference_optional=bool(data.get("reference_optional", False)),
             allow_timeout=bool(data.get("allow_timeout", False)),
+            skip_stage=bool(data.get("skip_stage", False)),
+            wine_dll_overrides=data.get("wine_dll_overrides"),
+            cx_bottle=data.get("cx_bottle"),
         )
 
     @property
@@ -338,13 +344,14 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         temp_prefix = True
 
     wine_root = Path(args.wine_root).expanduser().resolve() if args.wine_root else detect_heroic_wine_root()
-    if app.requires_wine and wine_root is None:
+    if app.requires_wine and wine_root is None and not args.wine_bin:
         raise FileNotFoundError("no Wine root supplied and Heroic runtime auto-detect failed")
     wine_bin = Path(args.wine_bin).expanduser().resolve() if args.wine_bin else resolve_wine_bin(wine_root)  # type: ignore[arg-type]
     pe_build_dir = Path(args.pe_build_dir).expanduser().resolve() if args.pe_build_dir else DEFAULT_PE_BUILD_DIR
     unix_build_dir = Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR
 
-    stage_dxmt9(prefix, wine_root, pe_build_dir, unix_build_dir)
+    if not app.skip_stage:
+        stage_dxmt9(prefix, wine_root, pe_build_dir, unix_build_dir)
 
     env = os.environ.copy()
     env.update(
@@ -360,8 +367,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             "DXMT9_EXPERIMENT_LOG": str(log_path),
             "DXMT9_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
             "DXMT9_EXPERIMENT_CAPTURE_FRAME": str(app.capture_frame),
+            "DXMT9_EXPERIMENT_SKIP_STAGE": "1" if app.skip_stage else "",
         }
     )
+    if app.wine_dll_overrides:
+        env["DXMT9_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
+    if app.cx_bottle:
+        env["DXMT9_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
 
     with log_path.open("wb") as log_fp:
         process = subprocess.Popen(
