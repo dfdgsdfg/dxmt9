@@ -13,6 +13,7 @@
 #include <mutex>
 
 #include "dxmt9/device_c.h"
+#include "dxmt9/runtime.hpp"
 #include "dxmt9/wineunixlib.h"
 
 /* Forward declarations — implemented in factory.cpp / device.cpp */
@@ -58,23 +59,13 @@ BridgeState& bridgeState() {
   return state;
 }
 
-bool bridgeDebugEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_DEBUG");
-    return env && env[0] && env[0] != '0';
-  }();
-  return enabled;
-}
-
 void bridgeDebugLog(const char* fmt, ...) {
-  if (!bridgeDebugEnabled()) return;
-  std::fputs("[dxmt9-bridge] ", stderr);
   va_list args;
   va_start(args, fmt);
-  std::vfprintf(stderr, fmt, args);
+  char buffer[2048];
+  std::vsnprintf(buffer, sizeof(buffer), fmt, args);
   va_end(args);
-  std::fputc('\n', stderr);
-  std::fflush(stderr);
+  dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Debug, "dxmt9-bridge", buffer);
 }
 
 template <typename T>
@@ -160,17 +151,13 @@ void initializeBridge() {
     }
   }
 #endif
-  state.status = __wine_init_unix_call();
-  bridgeDebugLog("initialize: __wine_init_unix_call status=0x%08lx handle=0x%llx dispatcher=%p",
+  state.status = initializeDispatcherOnlyFallback(state);
+  bridgeDebugLog("initialize: builtin dispatcher-only status=0x%08lx handle=0x%llx dispatcher=%p",
                  static_cast<unsigned long>(state.status),
-                 static_cast<unsigned long long>(__wine_unixlib_handle),
-                 reinterpret_cast<void*>(__wine_unix_call_dispatcher));
-  if (state.status == DXMT9_STATUS_SUCCESS && __wine_unixlib_handle && __wine_unix_call_dispatcher) {
-    state.handle = __wine_unixlib_handle;
-    state.dispatcher = __wine_unix_call_dispatcher;
+                 static_cast<unsigned long long>(state.handle),
+                 reinterpret_cast<void*>(state.dispatcher));
+  if (state.status == DXMT9_STATUS_SUCCESS && state.handle && state.dispatcher) {
     state.module = 0;
-    bridgeDebugLog("initialize: using builtin handle, dispatcher=%p",
-                   reinterpret_cast<void*>(state.dispatcher));
     return;
   }
 #endif
@@ -225,10 +212,10 @@ extern "C" NTSTATUS dxmt9_bridge_unix_call(unsigned int code, void *args) {
                    reinterpret_cast<void*>(state.dispatcher));
     return state.dispatcher(state.handle, code, args);
   }
-  bridgeDebugLog("unix_call: fallback __wine_unix_call handle=0x%llx code=%u",
+  bridgeDebugLog("unix_call: builtin path missing dispatcher handle=0x%llx code=%u",
                  static_cast<unsigned long long>(state.handle),
                  code);
-  return __wine_unix_call(state.handle, code, args);
+  return DXMT9_STATUS_NOT_SUPPORTED;
 #else
   return state.dispatcher(state.handle, code, args);
 #endif

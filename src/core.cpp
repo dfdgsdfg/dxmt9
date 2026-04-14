@@ -1,5 +1,6 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9/runtime.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -45,64 +46,43 @@ u32 clampToByte(float value) {
 }
 
 std::optional<u32> parseEnvU32(const char* name) {
-  const char* value = std::getenv(name);
-  if (!value || *value == '\0') {
-    return std::nullopt;
-  }
-  char* end = nullptr;
-  const auto parsed = std::strtoul(value, &end, 10);
-  if (!end || *end != '\0') {
-    return std::nullopt;
-  }
-  return static_cast<u32>(parsed);
+  return dxmt9::runtime::getenvU32(name);
 }
 
 std::optional<u32> parseEnvU32Auto(const char* name) {
-  const char* value = std::getenv(name);
-  if (!value || *value == '\0') {
-    return std::nullopt;
-  }
-  char* end = nullptr;
-  const auto parsed = std::strtoull(value, &end, 0);
-  if (!end || *end != '\0') {
-    return std::nullopt;
-  }
-  return static_cast<u32>(parsed);
+  return dxmt9::runtime::getenvU32Auto(name);
 }
 
 std::string getenvString(const char* name) {
-  const char* value = std::getenv(name);
-  return value ? std::string(value) : std::string();
+  return dxmt9::runtime::getenvString(name);
 }
 
 bool getenvFlag(const char* name) {
-  const char* value = std::getenv(name);
-  return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  return dxmt9::runtime::getenvFlag(name);
 }
 
 bool renderTraceEnabled() {
   static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_TRACE_RENDER");
-    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+    return dxmt9::runtime::getenvFlag("DXMT_TRACE_RENDER");
   }();
   return enabled;
 }
 
 std::optional<u32> textureDumpHandle() {
-  static const auto value = parseEnvU32Auto("DXMT9_DUMP_TEXTURE_HANDLE");
+  static const auto value = parseEnvU32Auto("DXMT_DUMP_TEXTURE_HANDLE");
   return value;
 }
 
 std::string textureDumpDir() {
   static const std::string value = [] {
-    const auto env = getenvString("DXMT9_DUMP_TEXTURE_DIR");
+    const auto env = getenvString("DXMT_DUMP_TEXTURE_DIR");
     return env.empty() ? std::string("/tmp") : env;
   }();
   return value;
 }
 
 std::optional<u32> drawTraceTextureHandle() {
-  static const auto value = parseEnvU32Auto("DXMT9_TRACE_DRAW_TEX0");
+  static const auto value = parseEnvU32Auto("DXMT_TRACE_DRAW_TEX0");
   return value;
 }
 
@@ -110,13 +90,12 @@ void emitRenderTrace(const char* fmt, ...) {
   if (!renderTraceEnabled()) {
     return;
   }
-  std::fputs("[dxmt9-render] ", stderr);
   va_list args;
   va_start(args, fmt);
-  std::vfprintf(stderr, fmt, args);
+  char message[2048];
+  std::vsnprintf(message, sizeof(message), fmt, args);
   va_end(args);
-  std::fputc('\n', stderr);
-  std::fflush(stderr);
+  dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Info, "dxmt9-render", message);
 }
 
 constexpr u32 kFvfPositionMask = 0x000eu;
@@ -1642,7 +1621,7 @@ std::vector<DisplayMode> makeAdapterModes(Format format, const BackendLimits& li
 }
 
 PresentParameters normalizePresentParameters(const AdapterInfo& adapter, PresentParameters params) {
-  if (getenvFlag("DXMT9_FORCE_WINDOWED")) {
+  if (getenvFlag("DXMT_FORCE_WINDOWED")) {
     params.windowed = true;
   }
   if (params.backBufferFormat == Format::Unknown) {
@@ -2634,8 +2613,8 @@ Device::Device(AdapterInfo adapter, BackendLimits limits, std::shared_ptr<Backen
   if (backend_) {
     backend_->setMaxFrameLatency(maximumFrameLatency_);
   }
-  experimentCapture_.path = getenvString("DXMT9_EXPERIMENT_CAPTURE_PATH");
-  experimentCapture_.frame = parseEnvU32("DXMT9_EXPERIMENT_CAPTURE_FRAME").value_or(0);
+  experimentCapture_.path = getenvString("DXMT_EXPERIMENT_CAPTURE_PATH");
+  experimentCapture_.frame = parseEnvU32("DXMT_CAPTURE_FRAME").value_or(0);
 }
 
 Device::~Device() {
@@ -3900,7 +3879,7 @@ Factory::Factory(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
     : limits_(limits), backend_(backend ? std::move(backend) : makeBackendDevice(limits_)) {
   AdapterInfo adapter;
   adapter.ordinal = 0;
-  adapter.name = getenvString("DXMT9_ADAPTER_NAME");
+  adapter.name = getenvString("DXMT_ADAPTER_NAME");
   if (adapter.name.empty()) {
     adapter.name = "NVIDIA GeForce 6800";
   }
@@ -3930,13 +3909,13 @@ AdapterIdentifier Factory::getAdapterIdentifier(size_t index) const {
   AdapterIdentifier identifier;
   identifier.description = info.name;
   identifier.deviceName = "\\\\.\\DISPLAY1";
-  identifier.driver = getenvString("DXMT9_ADAPTER_DRIVER");
+  identifier.driver = getenvString("DXMT_ADAPTER_DRIVER");
   if (identifier.driver.empty()) {
     identifier.driver = "nvd3dum.dll";
   }
   identifier.driverVersion = info.registryId;
-  identifier.vendorId = parseEnvU32Auto("DXMT9_ADAPTER_VENDOR_ID").value_or(0x10deu);
-  identifier.deviceId = parseEnvU32Auto("DXMT9_ADAPTER_DEVICE_ID").value_or(0x0041u);
+  identifier.vendorId = parseEnvU32Auto("DXMT_ADAPTER_VENDOR_ID").value_or(0x10deu);
+  identifier.deviceId = parseEnvU32Auto("DXMT_ADAPTER_DEVICE_ID").value_or(0x0041u);
   identifier.subSysId = 0;
   identifier.revision = 0;
   identifier.monitor = info.displayId;

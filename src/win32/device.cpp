@@ -11,66 +11,24 @@
 #include <cstring>
 #include <unordered_map>
 #include "dxmt9/device_c.h"
+#include "dxmt9/runtime.hpp"
 
 /* declared in factory.cpp */
 void FillD3DCaps9(const D9CCaps& src, D3DCAPS9* out);
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
-static bool dxmt9DeviceDebugEnabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("DXMT9_DEBUG");
-        return env && env[0] && env[0] != '0';
-    }();
-    return enabled;
-}
-
-static HANDLE dxmt9DeviceDebugFile() {
-    static HANDLE handle = []() -> HANDLE {
-        const char* path = std::getenv("DXMT9_DEBUG_LOG");
-        if (!path || !path[0]) return INVALID_HANDLE_VALUE;
-        return CreateFileA(path,
-                           FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           nullptr,
-                           OPEN_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
-    }();
-    return handle;
-}
-
 static void dxmt9DeviceDebugLog(const char* fmt, ...) {
-    if (!dxmt9DeviceDebugEnabled()) return;
-    char message[2048];
-    std::memcpy(message, "[dxmt9-device] ", 15);
     va_list args;
     va_start(args, fmt);
-    const int body = std::vsnprintf(message + 15, sizeof(message) - 17, fmt, args);
+    char message[2048];
+    std::vsnprintf(message, sizeof(message), fmt, args);
     va_end(args);
-    size_t len = 15;
-    if (body > 0) {
-        len += static_cast<size_t>(body);
-        if (len > sizeof(message) - 2) len = sizeof(message) - 2;
-    }
-    message[len++] = '\n';
-    message[len] = '\0';
-
-    if (HANDLE file = dxmt9DeviceDebugFile(); file != INVALID_HANDLE_VALUE) {
-        DWORD written = 0;
-        WriteFile(file, message, static_cast<DWORD>(len), &written, nullptr);
-        return;
-    }
-
-    std::fputs(message, stderr);
-    std::fflush(stderr);
+    dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Debug, "dxmt9-device", message);
 }
 
 static bool dxmt9LeakStateBlocksEnabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("DXMT9_LEAK_STATEBLOCKS");
-        return env && env[0] && env[0] != '0';
-    }();
+    static const bool enabled = dxmt9::runtime::getenvFlag("DXMT_LEAK_STATEBLOCKS");
     return enabled;
 }
 

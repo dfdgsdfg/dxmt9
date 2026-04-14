@@ -356,24 +356,24 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     env = os.environ.copy()
     env.update(
         {
-            "DXMT9_EXPERIMENT_NAME": app.name,
-            "DXMT9_EXPERIMENT_BINARY": str(binary_path),
-            "DXMT9_EXPERIMENT_PREFIX": str(prefix),
-            "DXMT9_EXPERIMENT_WINE_ROOT": str(wine_root) if wine_root else "",
-            "DXMT9_EXPERIMENT_WINE_BIN": str(wine_bin),
-            "DXMT9_EXPERIMENT_PE_BUILD_DIR": str(pe_build_dir),
-            "DXMT9_EXPERIMENT_UNIX_BUILD_DIR": str(unix_build_dir),
-            "DXMT9_EXPERIMENT_OUTPUT_DIR": str(output_dir),
-            "DXMT9_EXPERIMENT_LOG": str(log_path),
-            "DXMT9_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
-            "DXMT9_EXPERIMENT_CAPTURE_FRAME": str(app.capture_frame),
-            "DXMT9_EXPERIMENT_SKIP_STAGE": "1" if app.skip_stage else "",
+            "DXMT_EXPERIMENT_NAME": app.name,
+            "DXMT_EXPERIMENT_BINARY": str(binary_path),
+            "DXMT_EXPERIMENT_PREFIX": str(prefix),
+            "DXMT_EXPERIMENT_WINE_ROOT": str(wine_root) if wine_root else "",
+            "DXMT_EXPERIMENT_WINE_BIN": str(wine_bin),
+            "DXMT_EXPERIMENT_PE_BUILD_DIR": str(pe_build_dir),
+            "DXMT_EXPERIMENT_UNIX_BUILD_DIR": str(unix_build_dir),
+            "DXMT_EXPERIMENT_OUTPUT_DIR": str(output_dir),
+            "DXMT_EXPERIMENT_LOG": str(log_path),
+            "DXMT_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
+            "DXMT_CAPTURE_FRAME": str(app.capture_frame),
+            "DXMT_EXPERIMENT_SKIP_STAGE": "1" if app.skip_stage else "",
         }
     )
     if app.wine_dll_overrides:
-        env["DXMT9_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
+        env["DXMT_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
     if app.cx_bottle:
-        env["DXMT9_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
+        env["DXMT_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
 
     with log_path.open("wb") as log_fp:
         process = subprocess.Popen(

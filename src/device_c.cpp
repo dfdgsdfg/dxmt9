@@ -1,6 +1,7 @@
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9/runtime.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cstdarg>
@@ -23,31 +24,18 @@
 
 namespace {
 
-bool dxmt9DebugEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_DEBUG");
-    return env && env[0] && env[0] != '0';
-  }();
-  return enabled;
-}
-
 void dxmt9DebugLog(const char* fmt, ...) {
-  if (!dxmt9DebugEnabled()) return;
-  std::fputs("[dxmt9-debug] ", stderr);
   va_list args;
   va_start(args, fmt);
-  std::vfprintf(stderr, fmt, args);
+  char buffer[2048];
+  std::vsnprintf(buffer, sizeof(buffer), fmt, args);
   va_end(args);
-  std::fputc('\n', stderr);
-  std::fflush(stderr);
+  dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Debug, "dxmt9-debug", buffer);
 }
 
 const char* dxmt9ShaderDumpDir() {
-  static const char* path = [] {
-    const char* env = std::getenv("DXMT9_DUMP_SHADER_BYTECODE_DIR");
-    return env && env[0] ? env : nullptr;
-  }();
-  return path;
+  static const std::string path = dxmt9::runtime::getenvString("DXMT_DUMP_SHADER_BYTECODE_DIR");
+  return path.empty() ? nullptr : path.c_str();
 }
 
 void maybeDumpShaderBytecode(const char* label, const uint32_t* bytecode, size_t wordCount, uint64_t hash) {

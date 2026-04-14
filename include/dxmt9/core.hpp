@@ -342,6 +342,7 @@ inline constexpr u32 RS_COLOR_WRITE_ENABLE = 168;
 inline constexpr u32 RS_Z_ENABLE = 7;
 inline constexpr u32 RS_ALPHABLEND_ENABLE = 27;
 inline constexpr u32 RS_BLEND_FACTOR = 193;
+inline constexpr u32 RS_SRGB_WRITE_ENABLE = 194;
 inline constexpr u32 RS_SEPARATE_ALPHA_BLEND_ENABLE = 206;
 inline constexpr u32 RS_SRC_BLEND_ALPHA = 207;
 inline constexpr u32 RS_DEST_BLEND_ALPHA = 208;
@@ -382,6 +383,7 @@ inline constexpr u32 SAMP_MIN_FILTER = 6;
 inline constexpr u32 SAMP_MIP_FILTER = 7;
 inline constexpr u32 SAMP_MIPMAP_LOD_BIAS = 8;
 inline constexpr u32 SAMP_MAX_ANISOTROPY = 10;
+inline constexpr u32 SAMP_SRGB_TEXTURE = 11;
 inline constexpr u32 QUERY_GETDATA_FLUSH = 1u << 0;
 
 inline constexpr u32 XFORM_WORLD_BASE = 1;

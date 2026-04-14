@@ -206,11 +206,11 @@ def sync_corpus(args: argparse.Namespace) -> int:
     upstream_root = Path(args.upstream_root).resolve() if args.upstream_root else None
 
     if upstream_root is None:
-        raise SystemExit("sync requires --upstream-root or DXMT9_UPSTREAM_ROOT")
+        raise SystemExit("sync requires --upstream-root or DXMT_UPSTREAM_ROOT")
 
-    upstream_commit = get_upstream_commit(upstream_root, args.upstream_commit or os.environ.get("DXMT9_UPSTREAM_COMMIT"))
-    oracle_date = args.oracle_date or os.environ.get("DXMT9_ORACLE_DATE") or dt.date.today().isoformat()
-    upstream_url = args.upstream_url or os.environ.get("DXMT9_UPSTREAM_URL") or DEFAULT_VKD3D_URL
+    upstream_commit = get_upstream_commit(upstream_root, args.upstream_commit or os.environ.get("DXMT_UPSTREAM_COMMIT"))
+    oracle_date = args.oracle_date or os.environ.get("DXMT_ORACLE_DATE") or dt.date.today().isoformat()
+    upstream_url = args.upstream_url or os.environ.get("DXMT_UPSTREAM_URL") or DEFAULT_VKD3D_URL
 
     entries = load_corpus_manifest(manifest_path)
     manifest_changed = False
@@ -284,8 +284,8 @@ def read_provenance_from_file(path: Path) -> dict[str, str]:
 def drift_report(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     manifest_path = Path(args.manifest).resolve() if args.manifest else default_manifest_path(root)
-    upstream_root_arg = args.upstream_root or os.environ.get("DXMT9_UPSTREAM_ROOT")
-    upstream_commit_arg = args.upstream_commit or os.environ.get("DXMT9_UPSTREAM_COMMIT")
+    upstream_root_arg = args.upstream_root or os.environ.get("DXMT_UPSTREAM_ROOT")
+    upstream_commit_arg = args.upstream_commit or os.environ.get("DXMT_UPSTREAM_COMMIT")
 
     entries = load_corpus_manifest(manifest_path)
 
@@ -359,7 +359,7 @@ def drift_report(args: argparse.Namespace) -> int:
         print(f"oracle: {entry.get('oracle')}")
 
     print()
-    print("report-only: set DXMT9_UPSTREAM_ROOT or pass --upstream-root to compare provenance commits")
+    print("report-only: set DXMT_UPSTREAM_ROOT or pass --upstream-root to compare provenance commits")
     return 0
 
 

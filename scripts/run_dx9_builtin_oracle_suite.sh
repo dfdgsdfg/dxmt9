@@ -96,7 +96,7 @@ for app in "${apps[@]}"; do
     cmd+=(--cleanup-temp-prefix)
   fi
 
-  if ! DXMT9_EXPERIMENT_WINE_DLLOVERRIDES='d3d9=b' "${cmd[@]}" | tee -a "$suite_log"; then
+  if ! DXMT_EXPERIMENT_WINE_DLLOVERRIDES='d3d9=b' "${cmd[@]}" | tee -a "$suite_log"; then
     status=1
   fi
   printf '\n' | tee -a "$suite_log"

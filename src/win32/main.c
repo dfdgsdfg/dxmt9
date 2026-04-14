@@ -9,10 +9,6 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
 
   DisableThreadLibraryCalls(instance);
 
-#if defined(DXMT9_WINE_BUILTIN_DLL)
-  return !__wine_init_unix_call();
-#else
   (void)reserved;
   return TRUE;
-#endif
 }

@@ -4,6 +4,7 @@ dxmt9_native_srcs = [
   'core.cpp',
   'device_c.cpp',
   'dxmt9.cpp',
+  'runtime.cpp',
   'winemetal_bridge.cpp',
 ]
 

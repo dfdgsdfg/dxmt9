@@ -104,8 +104,8 @@ bool asset_path(const char* name, char* buffer, size_t buffer_size) {
 }
 
 void init_capture(AppState& app) {
-    const char* capture_path = std::getenv("DXMT9_EXPERIMENT_CAPTURE_PATH");
-    const char* capture_frame = std::getenv("DXMT9_EXPERIMENT_CAPTURE_FRAME");
+    const char* capture_path = std::getenv("DXMT_EXPERIMENT_CAPTURE_PATH");
+    const char* capture_frame = std::getenv("DXMT_CAPTURE_FRAME");
     if (!capture_path || !*capture_path) {
         return;
     }

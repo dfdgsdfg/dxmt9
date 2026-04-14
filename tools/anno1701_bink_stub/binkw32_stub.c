@@ -116,7 +116,7 @@ static int reject_low_bink_open(void) {
     return cached;
   }
   {
-    const char* env = getenv("DXMT9_BINK_REJECT_LOW_OPEN");
+    const char* env = getenv("DXMT_BINK_REJECT_LOW_OPEN");
     cached = (env && env[0] != '\0' && strcmp(env, "0") != 0) ? 1 : 0;
   }
   return cached;
@@ -129,7 +129,7 @@ static uint32_t low_bink_max_fake_opens(void) {
   }
   cached = 1u;
   {
-    const char* env = getenv("DXMT9_BINK_LOW_OPEN_FAKE_COUNT");
+    const char* env = getenv("DXMT_BINK_LOW_OPEN_FAKE_COUNT");
     if (env && env[0] != '\0') {
       char* end = NULL;
       unsigned long value = strtoul(env, &end, 0);
@@ -172,7 +172,7 @@ static uint32_t fake_bink_frames(void) {
   }
   cached = 1u;
   {
-    const char* env = getenv("DXMT9_BINK_FAKE_FRAMES");
+    const char* env = getenv("DXMT_BINK_FAKE_FRAMES");
     if (env && env[0] != '\0') {
       char* end = NULL;
       unsigned long value = strtoul(env, &end, 0);
@@ -192,7 +192,7 @@ static int32_t fake_bink_surface_type_override(void) {
   }
   initialized = 1;
   {
-    const char* env = getenv("DXMT9_BINK_SURFACE_TYPE");
+    const char* env = getenv("DXMT_BINK_SURFACE_TYPE");
     if (env && env[0] != '\0') {
       char* end = NULL;
       long value = strtol(env, &end, 0);
@@ -253,7 +253,7 @@ static int realtime_bink_wait(void) {
     return cached;
   }
   {
-    const char* env = getenv("DXMT9_BINK_REALTIME");
+    const char* env = getenv("DXMT_BINK_REALTIME");
     cached = (env && env[0] != '\0' && strcmp(env, "0") != 0) ? 1 : 0;
   }
   return cached;

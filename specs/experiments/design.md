@@ -36,14 +36,15 @@ For native macOS experiments, dxmt9 is injected via `DYLD_INSERT_LIBRARIES`:
 
 ```sh
 DYLD_INSERT_LIBRARIES=/path/to/libdxmt9.dylib \
-DXMT9_VALIDATE=1 \
-DXMT9_LOG=/tmp/dxmt9_exp.log \
+DXMT_VALIDATE=1 \
+DXMT_LOG_LEVEL=debug \
+DXMT_LOG_PATH=/tmp \
   ./app_binary --frames 300 --width 1280 --height 720
 ```
 
-`DXMT9_VALIDATE=1` enables the Metal API validation layer for the duration of
-the experiment. `DXMT9_LOG` captures `DXMT_ASSERT` output for post-run
-analysis.
+`DXMT_VALIDATE=1` enables the Metal API validation layer for the duration of
+the experiment. `DXMT_LOG_LEVEL` controls runtime verbosity and
+`DXMT_LOG_PATH` stores per-executable dxmt9 logs for post-run analysis.
 
 For applications that require Wine, the launcher installs the PE/user-facing DLL,
 the PE bridge, and the unix module, then sets the Wine DLL override:
@@ -63,7 +64,7 @@ Screenshots are captured either via macOS window capture or by reading back the
 back buffer via `GetRenderTargetData()` at the end of a fixed frame.
 
 The current `dxmt9` runner prefers the second path. Launchers set
-`DXMT9_EXPERIMENT_CAPTURE_PATH` and `DXMT9_EXPERIMENT_CAPTURE_FRAME`, and the
+`DXMT_EXPERIMENT_CAPTURE_PATH` and `DXMT_CAPTURE_FRAME`, and the
 core dumps a BMP from the presented back buffer on the requested `Present`
 count. The runner then converts that dump into `actual.png` before SSIM
 comparison. Window capture remains a fallback for applications that cannot use

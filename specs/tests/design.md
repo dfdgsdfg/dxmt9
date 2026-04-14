@@ -454,10 +454,10 @@ The sync workflow is separate:
 
 ```sh
 # Refresh vkd3d-sourced tests from a local upstream checkout.
-DXMT9_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/sync_corpus.sh
+DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/sync_corpus.sh
 
 # Report which tracked vkd3d files are behind that checkout.
-DXMT9_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/check_drift.sh
+DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/check_drift.sh
 ```
 
 ### Queries
@@ -468,7 +468,7 @@ tomlq -r '.test[] | select(.status != "passing") | .opcodes[]' MANIFEST.toml | s
 
 # Tests behind upstream vkd3d HEAD:
 # (compare recorded provenance commits against the configured checkout)
-DXMT9_UPSTREAM_ROOT=/path/to/vkd3d scripts/check_drift.sh
+DXMT_UPSTREAM_ROOT=/path/to/vkd3d scripts/check_drift.sh
 
 # Count by shader model:
 tomlq -r '.test[] | .models[]' MANIFEST.toml | sort | uniq -c

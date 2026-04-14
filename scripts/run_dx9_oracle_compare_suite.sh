@@ -107,7 +107,7 @@ run_lane() {
     cmd+=(--cleanup-temp-prefix)
   fi
 
-  DXMT9_EXPERIMENT_WINE_DLLOVERRIDES="$overrides" "${cmd[@]}" | tee -a "$suite_log" || true
+  DXMT_EXPERIMENT_WINE_DLLOVERRIDES="$overrides" "${cmd[@]}" | tee -a "$suite_log" || true
   printf '\n' | tee -a "$suite_log"
 }
 

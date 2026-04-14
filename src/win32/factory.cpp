@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "dxmt9/device_c.h"
+#include "dxmt9/runtime.hpp"
 
 /* Forward declarations — CreateDevice wrapper lives in device.cpp */
 IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
@@ -21,53 +22,13 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
-static bool dxmt9FactoryDebugEnabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("DXMT9_DEBUG");
-        return env && env[0] && env[0] != '0';
-    }();
-    return enabled;
-}
-
-static HANDLE dxmt9FactoryDebugFile() {
-    static HANDLE handle = []() -> HANDLE {
-        const char* path = std::getenv("DXMT9_DEBUG_LOG");
-        if (!path || !path[0]) return INVALID_HANDLE_VALUE;
-        return CreateFileA(path,
-                           FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           nullptr,
-                           OPEN_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
-    }();
-    return handle;
-}
-
 static void dxmt9FactoryDebugLog(const char* fmt, ...) {
-    if (!dxmt9FactoryDebugEnabled()) return;
-    char message[2048];
-    std::memcpy(message, "[dxmt9-factory] ", 16);
     va_list args;
     va_start(args, fmt);
-    const int body = std::vsnprintf(message + 16, sizeof(message) - 18, fmt, args);
+    char message[2048];
+    std::vsnprintf(message, sizeof(message), fmt, args);
     va_end(args);
-    size_t len = 16;
-    if (body > 0) {
-        len += static_cast<size_t>(body);
-        if (len > sizeof(message) - 2) len = sizeof(message) - 2;
-    }
-    message[len++] = '\n';
-    message[len] = '\0';
-
-    if (HANDLE file = dxmt9FactoryDebugFile(); file != INVALID_HANDLE_VALUE) {
-        DWORD written = 0;
-        WriteFile(file, message, static_cast<DWORD>(len), &written, nullptr);
-        return;
-    }
-
-    std::fputs(message, stderr);
-    std::fflush(stderr);
+    dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Debug, "dxmt9-factory", message);
 }
 
 /* D9CPresentParams ← D3DPRESENT_PARAMETERS */

@@ -2,9 +2,12 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9/runtime.hpp"
 #include "dxmt9/winemetal.h"
 
 #include <dlfcn.h>
@@ -47,20 +50,20 @@ constexpr size_t kMaxInflight = 3;
 
 bool queueTraceEnabled() {
   static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_TRACE_QUEUE");
+    const char* env = std::getenv("DXMT_TRACE_QUEUE");
     return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return enabled;
 }
 
 const char* queueTraceFilePath() {
-  static const char* path = std::getenv("DXMT9_TRACE_FILE");
+  static const char* path = std::getenv("DXMT_TRACE_FILE");
   return path && path[0] != '\0' ? path : nullptr;
 }
 
 bool debugForceVisibleDraw() {
   static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_DEBUG_FORCE_VISIBLE");
+    const char* env = std::getenv("DXMT_DEBUG_FORCE_VISIBLE");
     return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return enabled;
@@ -68,7 +71,7 @@ bool debugForceVisibleDraw() {
 
 bool debugSkipAllDraws() {
   static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_SKIP_ALL_DRAWS");
+    const char* env = std::getenv("DXMT_SKIP_ALL_DRAWS");
     return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return enabled;
@@ -76,7 +79,7 @@ bool debugSkipAllDraws() {
 
 bool debugDisableScissor() {
   static const bool value = [] {
-    const char* env = std::getenv("DXMT9_DISABLE_SCISSOR");
+    const char* env = std::getenv("DXMT_DISABLE_SCISSOR");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return value;
@@ -84,7 +87,7 @@ bool debugDisableScissor() {
 
 bool debugDisableAlphaTest() {
   static const bool value = [] {
-    const char* env = std::getenv("DXMT9_DISABLE_ALPHA_TEST");
+    const char* env = std::getenv("DXMT_DISABLE_ALPHA_TEST");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return value;
@@ -92,7 +95,7 @@ bool debugDisableAlphaTest() {
 
 bool debugForceExpandIndexed() {
   static const bool value = [] {
-    const char* env = std::getenv("DXMT9_FORCE_EXPAND_INDEXED");
+    const char* env = std::getenv("DXMT_FORCE_EXPAND_INDEXED");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return value;
@@ -100,7 +103,7 @@ bool debugForceExpandIndexed() {
 
 bool directLayerAttachEnabled() {
   static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_DIRECT_LAYER_ATTACH");
+    const char* env = std::getenv("DXMT_DIRECT_LAYER_ATTACH");
     return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return enabled;
@@ -108,7 +111,7 @@ bool directLayerAttachEnabled() {
 
 u64 queueTraceFromSeq() {
   static const u64 value = [] {
-    const char* env = std::getenv("DXMT9_TRACE_QUEUE_FROM");
+    const char* env = std::getenv("DXMT_TRACE_QUEUE_FROM");
     if (!env || env[0] == '\0') {
       return 0ull;
     }
@@ -119,7 +122,7 @@ u64 queueTraceFromSeq() {
 
 int fixedFunctionTraceBudget() {
   static const int budget = [] {
-    const char* env = std::getenv("DXMT9_TRACE_FVF");
+    const char* env = std::getenv("DXMT_TRACE_FVF");
     if (!env || env[0] == '\0') {
       return 0;
     }
@@ -130,7 +133,7 @@ int fixedFunctionTraceBudget() {
 
 u64 fixedFunctionTraceTextureHandle() {
   static const u64 value = [] {
-    const char* env = std::getenv("DXMT9_TRACE_FVF_TEX0");
+    const char* env = std::getenv("DXMT_TRACE_FVF_TEX0");
     if (!env || env[0] == '\0') {
       return 0ull;
     }
@@ -141,7 +144,7 @@ u64 fixedFunctionTraceTextureHandle() {
 
 u64 textureTraceHandle() {
   static const u64 handle = [] {
-    const char* env = std::getenv("DXMT9_TRACE_TEXTURE_HANDLE");
+    const char* env = std::getenv("DXMT_TRACE_TEXTURE_HANDLE");
     if (!env || env[0] == '\0') {
       return 0ull;
     }
@@ -152,7 +155,7 @@ u64 textureTraceHandle() {
 
 u64 gpuDumpTextureHandle() {
   static const u64 handle = [] {
-    const char* env = std::getenv("DXMT9_DUMP_GPU_TEXTURE_HANDLE");
+    const char* env = std::getenv("DXMT_DUMP_GPU_TEXTURE_HANDLE");
     if (!env || env[0] == '\0') {
       return 0ull;
     }
@@ -162,12 +165,12 @@ u64 gpuDumpTextureHandle() {
 }
 
 const char* gpuDumpTexturePath() {
-  static const char* path = std::getenv("DXMT9_DUMP_GPU_TEXTURE_PATH");
+  static const char* path = std::getenv("DXMT_DUMP_GPU_TEXTURE_PATH");
   return path && path[0] != '\0' ? path : nullptr;
 }
 
 const char* shaderDumpDir() {
-  static const char* path = std::getenv("DXMT9_DUMP_SHADER_DIR");
+  static const char* path = std::getenv("DXMT_DUMP_SHADER_DIR");
   return path && path[0] != '\0' ? path : nullptr;
 }
 
@@ -198,7 +201,7 @@ bool shouldDumpGpuTexture(Handle handle) {
 
 u64 traceEncodeSeq() {
   static const u64 value = [] {
-    const char* env = std::getenv("DXMT9_TRACE_ENCODE_SEQ");
+    const char* env = std::getenv("DXMT_TRACE_ENCODE_SEQ");
     if (!env || env[0] == '\0') {
       return 0ull;
     }
@@ -214,7 +217,7 @@ bool shouldTraceTexture(Handle handle) {
 
 u64 skippedTextureHandle() {
   static const u64 value = [] {
-    const char* env = std::getenv("DXMT9_SKIP_TEXTURE_HANDLE");
+    const char* env = std::getenv("DXMT_SKIP_TEXTURE_HANDLE");
     if (!env || env[0] == '\0') {
       return 0ull;
     }
@@ -230,7 +233,7 @@ u64 skippedTextureHandle() {
 
 u64 forcedPresentTextureHandle() {
   static const u64 value = [] {
-    const char* env = std::getenv("DXMT9_FORCE_PRESENT_TEXTURE_HANDLE");
+    const char* env = std::getenv("DXMT_FORCE_PRESENT_TEXTURE_HANDLE");
     if (!env || env[0] == '\0') {
       return 0ull;
     }
@@ -316,6 +319,160 @@ void emitQueueTraceLine(const std::string& line) {
 void emitTextureTraceLine(const std::string& line) {
   emitQueueTraceLine(line);
 }
+
+bool compatHudEnabled() {
+  static const bool enabled = dxmt9::runtime::getenvFlag("DXMT_COMPAT_HUD");
+  return enabled;
+}
+
+enum CompatFlagBits : u32 {
+  CompatFlagFp16 = 1u << 0,
+  CompatFlagMrt = 1u << 1,
+  CompatFlagSrgb = 1u << 2,
+  CompatFlagProjected = 1u << 3,
+  CompatFlagMsaa = 1u << 4,
+  CompatFlagQuery = 1u << 5,
+};
+
+bool isFloatRenderTargetFormat(Format format) {
+  switch (format) {
+    case Format::A16B16G16R16F:
+    case Format::A32B32G32R32F:
+    case Format::G16R16F:
+    case Format::R16F:
+    case Format::G32R32F:
+    case Format::R32F:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool matrixIsIdentity(const Matrix4x4& matrix) {
+  for (u32 row = 0; row < 4; ++row) {
+    for (u32 col = 0; col < 4; ++col) {
+      const float expected = row == col ? 1.0f : 0.0f;
+      if (std::fabs(matrix.m[row * 4 + col] - expected) > 1.0e-6f) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+std::string formatCompatFlags(u32 flags) {
+  std::ostringstream out;
+  const auto appendFlag = [&](u32 bit, const char* text) {
+    if ((flags & bit) == 0) {
+      return;
+    }
+    if (out.tellp() > 0) {
+      out << ' ';
+    }
+    out << text;
+  };
+  appendFlag(CompatFlagFp16, "F16");
+  appendFlag(CompatFlagMrt, "MRT");
+  appendFlag(CompatFlagSrgb, "SRG");
+  appendFlag(CompatFlagProjected, "PJT");
+  appendFlag(CompatFlagMsaa, "MSA");
+  appendFlag(CompatFlagQuery, "QRY");
+  if (out.tellp() == 0) {
+    out << '-';
+  }
+  return out.str();
+}
+
+class DeveloperHudState {
+ public:
+  DeveloperHudState() = default;
+
+  ~DeveloperHudState() {
+    @autoreleasepool {
+      if (hud_) {
+        for (NSString* label : labels_) {
+          [label release];
+        }
+        labels_.clear();
+        [hud_ release];
+        hud_ = nil;
+      }
+    }
+  }
+
+  void update(u32 frame, u64 seqId, u32 flags, const std::string& errorSummary) {
+    if (!ensureInitialized()) {
+      return;
+    }
+
+    std::ostringstream heading;
+    heading << "dxmt9 frame=" << frame << " seq=" << seqId;
+    updateLine(0, heading.str());
+    updateLine(1, "compat " + formatCompatFlags(flags));
+    updateLine(2, errorSummary.empty() ? std::string("last-error -") : std::string("last-error ") + errorSummary);
+  }
+
+ private:
+  bool ensureInitialized() {
+    if (initialized_) {
+      return available_;
+    }
+    initialized_ = true;
+    if (!compatHudEnabled()) {
+      return false;
+    }
+
+    @autoreleasepool {
+      Class hudClass = objc_lookUpClass("_CADeveloperHUDProperties");
+      if (!hudClass) {
+        return false;
+      }
+      const auto instanceFn = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
+      hud_ = [instanceFn(reinterpret_cast<id>(hudClass), @selector(instance)) retain];
+      if (!hud_) {
+        return false;
+      }
+
+      addLabel("com.github.3shain.dxmt9-heading", "com.apple.hud-graph.default");
+      addLabel("com.github.3shain.dxmt9-flags", "com.github.3shain.dxmt9-heading");
+      addLabel("com.github.3shain.dxmt9-error", "com.github.3shain.dxmt9-flags");
+      available_ = true;
+    }
+    return available_;
+  }
+
+  void addLabel(const char* label, const char* after) {
+    NSString* labelString = [[NSString alloc] initWithUTF8String:label];
+    NSString* afterString = [NSString stringWithUTF8String:after];
+    const auto addFn = reinterpret_cast<BOOL (*)(id, SEL, id, id)>(objc_msgSend);
+    (void)addFn(hud_, @selector(addLabel:after:), labelString, afterString);
+    labels_.push_back(labelString);
+  }
+
+  void updateLine(size_t index, const std::string& value) {
+    if (index >= labels_.size()) {
+      return;
+    }
+    NSString* valueString = [NSString stringWithUTF8String:value.c_str()];
+    const auto updateFn = reinterpret_cast<void (*)(id, SEL, id, id)>(objc_msgSend);
+    updateFn(hud_, @selector(updateLabel:value:), labels_[index], valueString);
+  }
+
+  bool initialized_ = false;
+  bool available_ = false;
+  id hud_ = nil;
+  std::vector<NSString*> labels_{};
+};
+
+struct CommandBufferDiagnostics {
+  u64 seqId = 0;
+  size_t slotIndex = 0;
+  bool hasDraw = false;
+  bool hasPresent = false;
+  bool hasBlit = false;
+  u32 frame = 0;
+  u32 compatFlags = 0;
+};
 
 struct BmpColor {
   u8 r = 0;
@@ -2678,7 +2835,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   if (vertex) {
     const auto inputLayout = decodeVertexShaderInputLayout(module, desc);
     const bool traceShaderInputs = [] {
-      const char* env = std::getenv("DXMT9_TRACE_SHADER_INPUTS");
+      const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
       return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
     }();
     if (traceShaderInputs) {
@@ -3351,7 +3508,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
 
   const bool textured = module.usesTexture || desc.textures[0].handle != Handle{};
   const bool traceShaderInputs = [] {
-    const char* env = std::getenv("DXMT9_TRACE_SHADER_INPUTS");
+    const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   if (traceShaderInputs) {
@@ -4086,15 +4243,15 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
   }
   const bool textured = !activeStages.empty();
   const bool debugFfpUv = [] {
-    const char* env = std::getenv("DXMT9_DEBUG_FFP_UV");
+    const char* env = std::getenv("DXMT_DEBUG_FFP_UV");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   const bool debugFfpTexture = [] {
-    const char* env = std::getenv("DXMT9_DEBUG_FFP_TEXTURE");
+    const char* env = std::getenv("DXMT_DEBUG_FFP_TEXTURE");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   const bool debugFfpAlpha = [] {
-    const char* env = std::getenv("DXMT9_DEBUG_FFP_ALPHA");
+    const char* env = std::getenv("DXMT_DEBUG_FFP_ALPHA");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   out << makeShaderPrelude(desc.clipPlaneMask != 0);
@@ -4664,6 +4821,12 @@ class MetalBackendDevice final : public BackendDevice {
       [blit endEncoding];
       [commandBuffer commit];
       [commandBuffer waitUntilCompleted];
+      {
+        std::lock_guard lock(mutex_);
+        CommandBufferDiagnostics diagnostics;
+        diagnostics.hasBlit = true;
+        inspectCommandBufferCompletionUnlocked(commandBuffer, diagnostics, "readback");
+      }
 
       pixels.pitch = width * bpp;
       pixels.bytes.resize(static_cast<size_t>(pixels.pitch) * height);
@@ -4977,6 +5140,9 @@ class MetalBackendDevice final : public BackendDevice {
         [blit endEncoding];
         [commandBuffer commit];
         [commandBuffer waitUntilCompleted];
+        CommandBufferDiagnostics diagnostics;
+        diagnostics.hasBlit = true;
+        inspectCommandBufferCompletionUnlocked(commandBuffer, diagnostics, "texture-upload");
         [stagingTexture release];
       }
     }
@@ -5067,6 +5233,204 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
  private:
+  u32 compatFlagsForSurfaceUnlocked(Handle handle) const {
+    if (!handle) {
+      return 0;
+    }
+    const auto* surface = findSurfaceUnlocked(handle.value);
+    if (!surface) {
+      return 0;
+    }
+    return isFloatRenderTargetFormat(surface->desc.format) ? CompatFlagFp16 : 0u;
+  }
+
+  u32 compatFlagsForDrawUnlocked(const DrawDesc& draw) const {
+    u32 flags = 0;
+    u32 colorTargets = 0;
+    for (size_t i = 0; i < draw.rts.color.size(); ++i) {
+      const auto& attachment = draw.rts.color[i];
+      if (!attachment.handle) {
+        continue;
+      }
+      ++colorTargets;
+      flags |= compatFlagsForSurfaceUnlocked(attachment.handle);
+      if (attachment.sampleCount > 1) {
+        flags |= CompatFlagMsaa;
+      }
+    }
+    if (colorTargets > 1) {
+      flags |= CompatFlagMrt;
+    }
+    if (draw.rts.depthStencil.handle && draw.rts.depthStencil.sampleCount > 1) {
+      flags |= CompatFlagMsaa;
+    }
+    if (const auto srgbIt = draw.rs.values.find(RS_SRGB_WRITE_ENABLE);
+        srgbIt != draw.rs.values.end() && srgbIt->second != 0) {
+      flags |= CompatFlagSrgb;
+    }
+    for (const auto& sampler : draw.samplers) {
+      if (const auto srgbIt = sampler.states.find(SAMP_SRGB_TEXTURE);
+          srgbIt != sampler.states.end() && srgbIt->second != 0) {
+        flags |= CompatFlagSrgb;
+      }
+    }
+    for (size_t stage = 0; stage < draw.textureTransforms.size(); ++stage) {
+      if (!draw.textures[stage].handle) {
+        continue;
+      }
+      if (!matrixIsIdentity(draw.textureTransforms[stage])) {
+        flags |= CompatFlagProjected;
+        break;
+      }
+    }
+    return flags;
+  }
+
+  u32 compatFlagsForClearUnlocked(const ClearDesc& clear) const {
+    u32 flags = 0;
+    u32 colorTargets = 0;
+    for (const auto& attachment : clear.colorAttachments) {
+      if (!attachment.handle) {
+        continue;
+      }
+      ++colorTargets;
+      flags |= compatFlagsForSurfaceUnlocked(attachment.handle);
+      if (attachment.sampleCount > 1) {
+        flags |= CompatFlagMsaa;
+      }
+    }
+    if (colorTargets > 1) {
+      flags |= CompatFlagMrt;
+    }
+    if (clear.depthStencil.handle && clear.depthStencil.sampleCount > 1) {
+      flags |= CompatFlagMsaa;
+    }
+    return flags;
+  }
+
+  u32 compatFlagsForPresentUnlocked(const SwapDesc& present, Handle sourceHandle) const {
+    u32 flags = compatFlagsForSurfaceUnlocked(sourceHandle);
+    if (present.multiSampleType != MultiSampleType::None) {
+      flags |= CompatFlagMsaa;
+    }
+    return flags;
+  }
+
+  CommandBufferDiagnostics summarizeChunkUnlocked(size_t slotIndex, const ChunkSlot& slot) {
+    CommandBufferDiagnostics diagnostics;
+    diagnostics.seqId = slot.seqId;
+    diagnostics.slotIndex = slotIndex;
+    for (const auto& command : slot.commands) {
+      switch (command.kind) {
+        case MetalCommandRecord::Kind::Draw:
+          diagnostics.hasDraw = true;
+          diagnostics.compatFlags |= compatFlagsForDrawUnlocked(command.draw);
+          break;
+        case MetalCommandRecord::Kind::Clear:
+          diagnostics.compatFlags |= compatFlagsForClearUnlocked(command.clear);
+          break;
+        case MetalCommandRecord::Kind::SurfaceCopy:
+        case MetalCommandRecord::Kind::StretchRect:
+        case MetalCommandRecord::Kind::Readback:
+          diagnostics.hasBlit = true;
+          break;
+        case MetalCommandRecord::Kind::ColorFill:
+          diagnostics.hasDraw = true;
+          break;
+        case MetalCommandRecord::Kind::Present:
+          diagnostics.hasPresent = true;
+          diagnostics.compatFlags |= compatFlagsForPresentUnlocked(command.present, command.presentSource);
+          break;
+      }
+    }
+    if (diagnostics.hasPresent) {
+      diagnostics.frame = ++presentedFrameCount_;
+      lastCompatFlags_ = diagnostics.compatFlags;
+    }
+    return diagnostics;
+  }
+
+  std::string commandBufferStatusName(MTLCommandBufferStatus status) const {
+    switch (status) {
+      case MTLCommandBufferStatusNotEnqueued:
+        return "not-enqueued";
+      case MTLCommandBufferStatusEnqueued:
+        return "enqueued";
+      case MTLCommandBufferStatusCommitted:
+        return "committed";
+      case MTLCommandBufferStatusScheduled:
+        return "scheduled";
+      case MTLCommandBufferStatusCompleted:
+        return "completed";
+      case MTLCommandBufferStatusError:
+        return "error";
+    }
+    return "unknown";
+  }
+
+  void updateCompatHudUnlocked(const CommandBufferDiagnostics& diagnostics) {
+    if (!compatHudEnabled()) {
+      return;
+    }
+    const u32 frame = diagnostics.frame != 0 ? diagnostics.frame : presentedFrameCount_;
+    const u32 flags = diagnostics.compatFlags != 0 ? diagnostics.compatFlags : lastCompatFlags_;
+    compatHud_.update(frame, diagnostics.seqId, flags, lastCommandBufferErrorSummary_);
+  }
+
+  void inspectCommandBufferCompletionUnlocked(id<MTLCommandBuffer> commandBuffer,
+                                              const CommandBufferDiagnostics& diagnostics,
+                                              const char* context) {
+    if (!commandBuffer) {
+      return;
+    }
+
+    const MTLCommandBufferStatus status = [commandBuffer status];
+    if (queueTraceEnabled()) {
+      dxmt9::runtime::logf(dxmt9::runtime::LogLevel::Debug, "dxmt9-metal",
+                           "%s seq=%llu slot=%zu frame=%u status=%s draw=%d present=%d blit=%d",
+                           context,
+                           static_cast<unsigned long long>(diagnostics.seqId),
+                           diagnostics.slotIndex,
+                           diagnostics.frame,
+                           commandBufferStatusName(status).c_str(),
+                           diagnostics.hasDraw ? 1 : 0,
+                           diagnostics.hasPresent ? 1 : 0,
+                           diagnostics.hasBlit ? 1 : 0);
+    }
+
+    if (status == MTLCommandBufferStatusError) {
+      std::ostringstream summary;
+      summary << context << " seq=" << diagnostics.seqId << " status=error";
+      if (NSError* error = [commandBuffer error]) {
+        summary << " error=" << [[error localizedDescription] UTF8String];
+      }
+      lastCommandBufferErrorSummary_ = summary.str();
+      dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Error, "dxmt9-metal", lastCommandBufferErrorSummary_);
+    } else if (diagnostics.hasPresent) {
+      lastCommandBufferErrorSummary_.clear();
+    }
+
+    if ([reinterpret_cast<id>(commandBuffer) respondsToSelector:@selector(logs)]) {
+      const auto logsFn = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
+      NSArray* logs = logsFn(reinterpret_cast<id>(commandBuffer), @selector(logs));
+      for (id logEntry in logs) {
+        NSString* description = [logEntry description];
+        if (!description) {
+          continue;
+        }
+        dxmt9::runtime::logf(dxmt9::runtime::LogLevel::Warn, "dxmt9-metal",
+                             "%s seq=%llu metal-log=%s",
+                             context,
+                             static_cast<unsigned long long>(diagnostics.seqId),
+                             [description UTF8String]);
+      }
+    }
+
+    if (diagnostics.hasPresent || status == MTLCommandBufferStatusError) {
+      updateCompatHudUnlocked(diagnostics);
+    }
+  }
+
   static const char* slotStateName(ChunkSlot::State state) {
     switch (state) {
       case ChunkSlot::State::Free:
@@ -5396,12 +5760,27 @@ class MetalBackendDevice final : public BackendDevice {
     return it == buffers_.end() ? nullptr : &it->second;
   }
 
+  const BufferRecord* findBufferUnlocked(u64 handle) const {
+    auto it = buffers_.find(handle);
+    return it == buffers_.end() ? nullptr : &it->second;
+  }
+
   TextureRecord* findTextureUnlocked(u64 handle) {
     auto it = textures_.find(handle);
     return it == textures_.end() ? nullptr : &it->second;
   }
 
+  const TextureRecord* findTextureUnlocked(u64 handle) const {
+    auto it = textures_.find(handle);
+    return it == textures_.end() ? nullptr : &it->second;
+  }
+
   SurfaceRecord* findSurfaceUnlocked(u64 handle) {
+    auto it = surfaces_.find(handle);
+    return it == surfaces_.end() ? nullptr : &it->second;
+  }
+
+  const SurfaceRecord* findSurfaceUnlocked(u64 handle) const {
     auto it = surfaces_.find(handle);
     return it == surfaces_.end() ? nullptr : &it->second;
   }
@@ -5785,14 +6164,16 @@ class MetalBackendDevice final : public BackendDevice {
       flushBlit();
 
       const u64 seqId = slot.seqId;
+      CommandBufferDiagnostics diagnostics;
       {
         std::lock_guard lock(mutex_);
+        diagnostics = summarizeChunkUnlocked(slotIndex, slot);
         slots_[slotIndex].state = ChunkSlot::State::GPU;
         traceQueueUnlocked("encode.commit", slotIndex, seqId);
       }
       [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-        (void)buffer;
         std::lock_guard completionLock(mutex_);
+        inspectCommandBufferCompletionUnlocked(buffer, diagnostics, "queue");
         completedSeqQueue_.push_back(seqId);
         traceQueueUnlocked("gpu.complete", slotIndex, seqId);
         finishCv_.notify_all();
@@ -6526,7 +6907,7 @@ class MetalBackendDevice final : public BackendDevice {
           [encoder setVertexBuffer:transientVertexBuffer.get() offset:0 atIndex:1];
           if (ffLayout && ffLayout->preTransformed && vertexCount >= 6 && draw.textures[0].handle != Handle{}) {
             const bool traceExpanded = [] {
-              const char* env = std::getenv("DXMT9_TRACE_FVF_EXPANDED");
+              const char* env = std::getenv("DXMT_TRACE_FVF_EXPANDED");
               return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
             }();
             if (traceExpanded) {
@@ -6984,6 +7365,12 @@ class MetalBackendDevice final : public BackendDevice {
       [blit endEncoding];
       [commandBuffer commit];
       [commandBuffer waitUntilCompleted];
+      {
+        std::lock_guard lock(mutex_);
+        CommandBufferDiagnostics diagnostics;
+        diagnostics.hasBlit = true;
+        inspectCommandBufferCompletionUnlocked(commandBuffer, diagnostics, "gpu-dump");
+      }
 
       const u32 pitch = std::max(1u, desc.width) * 4u;
       std::vector<u8> bytes(static_cast<size_t>(pitch) * std::max(1u, desc.height));
@@ -7448,6 +7835,10 @@ class MetalBackendDevice final : public BackendDevice {
   RingArena copyTempArena_{1 << 20};
   ObjcPtr<NSURL*> shaderArchiveURL_;
   ObjcPtr<id<MTLBinaryArchive>> shaderArchive_;
+  DeveloperHudState compatHud_{};
+  u32 presentedFrameCount_ = 0;
+  u32 lastCompatFlags_ = 0;
+  std::string lastCommandBufferErrorSummary_;
   bool ready_ = false;
 };
 
