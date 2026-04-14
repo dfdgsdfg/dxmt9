@@ -1,12 +1,8 @@
-dxmt9_native_srcs = [
-  'backend.cpp',
-  'com.cpp',
-  'core.cpp',
-  'device_c.cpp',
-  'dxmt9.cpp',
-  'runtime.cpp',
-  'winemetal_bridge.cpp',
-]
+subdir('util')
+subdir('d3d9')
+subdir('dxmt9')
+
+dxmt9_native_srcs = dxmt9_util_srcs + dxmt9_frontend_srcs + dxmt9_runtime_srcs
 
 dxmt9_deps = []
 dxmt9_unix_link_args = [
@@ -35,7 +31,6 @@ if host_machine.system() == 'darwin'
 endif
 
 if host_machine.system() == 'darwin'
-  dxmt9_native_srcs += ['backend_metal.mm']
   dxmt9_deps += dependency('appleframeworks', modules: [
     'AppKit',
     'Foundation',

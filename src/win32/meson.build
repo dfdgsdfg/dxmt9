@@ -15,7 +15,7 @@ d3d9_bridge_srcs = files(
   'bridge.cpp',
   'factory.cpp',
   'device.cpp',
-  '../runtime.cpp',
+  '../util/runtime.cpp',
 )
 
 c_compiler = meson.get_compiler('c')
