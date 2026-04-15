@@ -37,7 +37,7 @@ typedef struct WinemetalShaderCompileRequest {
   dxmt9_u32 fogMode;
 } WinemetalShaderCompileRequest;
 
-/* WinemetalApi — ABI contract between the PE bridge and dxmt9.so.
+/* WinemetalApi — ABI contract exposed by the winemetal bridge layer.
  *
  * Window/layer management (HWND→NSView lookup, CAMetalLayer lifecycle,
  * drawable vending) is handled directly inside dxmt9.so via

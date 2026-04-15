@@ -10,8 +10,8 @@
 #include "dxmt9_hud.hpp"
 #include "dxmt9_presenter_support.hpp"
 #include "dxmt9_queue.hpp"
+#include "dxmt9_shader_service.hpp"
 #include "util/config/config.hpp"
-#include "dxmt9/winemetal.h"
 
 #include <algorithm>
 #include <array>
@@ -4117,14 +4117,6 @@ u64 registerShaderBlob(std::string source) {
   return handle;
 }
 
-ShaderBlob* findShaderBlob(u64 handle) {
-  std::lock_guard lock(gShaderBlobMutex);
-  if (auto it = gShaderBlobRegistry.find(handle); it != gShaderBlobRegistry.end()) {
-    return it->second.get();
-  }
-  return nullptr;
-}
-
 std::string makeShaderSourceFromRequest(const WinemetalShaderCompileRequest& request) {
   DrawDesc desc;
   desc.rts.color[0].sampleCount = std::max<u32>(1u, request.sampleCount);
@@ -4912,28 +4904,30 @@ class MetalBackendDevice final : public BackendDevice {
 
   metalqueue::QueueTraceSnapshot makeQueueTraceSnapshotUnlocked(std::optional<size_t> slotIndex,
                                                                u64 seqId) const {
-    return metalqueue::makeQueueTraceSnapshot(
-        slotIndex,
-        writingSlot_,
-        writeIndex_,
-        readySlots_.size(),
-        completedSeqQueue_.size(),
-        inflightCount_,
-        completedSeqId_,
-        lastCommittedSeqId_,
-        seqId,
-        [this](auto& builder) {
-          for (size_t i = 0; i < slots_.size(); ++i) {
-            const auto& slot = slots_[i];
-            if (slot.state == ChunkSlot::State::Free) {
-              continue;
-            }
-            builder.addActiveSlot(i,
-                                  static_cast<metalqueue::QueueSlotState>(static_cast<int>(slot.state)),
-                                  slot.seqId,
-                                  slot.commands.size());
-          }
-        });
+    metalqueue::QueueTraceState state;
+    state.slotIndex = slotIndex;
+    state.writingSlot = writingSlot_;
+    state.writeIndex = writeIndex_;
+    state.readyCount = readySlots_.size();
+    state.completedQueueCount = completedSeqQueue_.size();
+    state.inflightCount = inflightCount_;
+    state.completedSeqId = completedSeqId_;
+    state.lastCommittedSeqId = lastCommittedSeqId_;
+    state.eventSeqId = seqId;
+    state.activeSlots.reserve(slots_.size());
+    for (size_t i = 0; i < slots_.size(); ++i) {
+      const auto& slot = slots_[i];
+      if (slot.state == ChunkSlot::State::Free) {
+        continue;
+      }
+      state.activeSlots.push_back({
+          .index = i,
+          .state = static_cast<metalqueue::QueueSlotState>(static_cast<int>(slot.state)),
+          .seqId = slot.seqId,
+          .commandCount = slot.commands.size(),
+      });
+    }
+    return metalqueue::makeQueueTraceSnapshot(state);
   }
 
   BufferRecord* findBufferUnlocked(u64 handle) {
@@ -5348,37 +5342,53 @@ class MetalBackendDevice final : public BackendDevice {
       CommandBufferDiagnostics diagnostics;
       {
         std::lock_guard lock(mutex_);
-        diagnostics = metalqueue::makeChunkSummary(slot.seqId, slotIndex, [&](auto& builder) {
-          for (const auto& command : slot.commands) {
-            switch (command.kind) {
-              case MetalCommandRecord::Kind::Draw:
-                builder.observeDraw(compatFlagsForDrawUnlocked(command.draw));
-                break;
-              case MetalCommandRecord::Kind::Clear:
-                builder.observeDraw(compatFlagsForClearUnlocked(command.clear));
-                break;
-              case MetalCommandRecord::Kind::SurfaceCopy:
-              case MetalCommandRecord::Kind::StretchRect:
-              case MetalCommandRecord::Kind::Readback:
-                builder.observeBlit();
-                break;
-              case MetalCommandRecord::Kind::ColorFill:
-                builder.observeDraw(0);
-                break;
-              case MetalCommandRecord::Kind::Present:
-                builder.observePresent(compatFlagsForPresentUnlocked(command.present, command.presentSource));
-                break;
-            }
+        std::vector<metalqueue::ChunkObservation> observations;
+        observations.reserve(slot.commands.size());
+        for (const auto& command : slot.commands) {
+          switch (command.kind) {
+            case MetalCommandRecord::Kind::Draw:
+              observations.push_back({
+                  .kind = metalqueue::ChunkObservationKind::Draw,
+                  .compatFlags = compatFlagsForDrawUnlocked(command.draw),
+              });
+              break;
+            case MetalCommandRecord::Kind::Clear:
+              observations.push_back({
+                  .kind = metalqueue::ChunkObservationKind::Draw,
+                  .compatFlags = compatFlagsForClearUnlocked(command.clear),
+              });
+              break;
+            case MetalCommandRecord::Kind::SurfaceCopy:
+            case MetalCommandRecord::Kind::StretchRect:
+            case MetalCommandRecord::Kind::Readback:
+              observations.push_back({
+                  .kind = metalqueue::ChunkObservationKind::Blit,
+                  .compatFlags = 0,
+              });
+              break;
+            case MetalCommandRecord::Kind::ColorFill:
+              observations.push_back({
+                  .kind = metalqueue::ChunkObservationKind::Draw,
+                  .compatFlags = 0,
+              });
+              break;
+            case MetalCommandRecord::Kind::Present:
+              observations.push_back({
+                  .kind = metalqueue::ChunkObservationKind::Present,
+                  .compatFlags = compatFlagsForPresentUnlocked(command.present, command.presentSource),
+              });
+              break;
           }
-        });
-        compatHud_.notePresent(diagnostics);
+        }
+        diagnostics = compatHud_.prepareForSubmission(
+            metalqueue::summarizeChunk(slot.seqId, slotIndex, observations));
         slots_[slotIndex].state = ChunkSlot::State::GPU;
         metalqueue::traceQueueEvent("encode.commit", makeQueueTraceSnapshotUnlocked(slotIndex, seqId));
       }
       [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
         std::lock_guard completionLock(mutex_);
         if (completionTracker_.inspect(buffer, diagnostics, "queue")) {
-          compatHud_.update(diagnostics, completionTracker_.lastErrorSummary());
+          compatHud_.completeSubmission(diagnostics, completionTracker_.lastErrorSummary());
         }
         completedSeqQueue_.push_back(seqId);
         metalqueue::traceQueueEvent("gpu.complete", makeQueueTraceSnapshotUnlocked(slotIndex, seqId));
@@ -7113,35 +7123,38 @@ std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limit
 
 }  // namespace dxmt9::core
 
-extern "C" {
+namespace dxmt9::core::shader_service {
 
-using dxmt9::core::u64;
-
-u64 winemetal_compile_shader(const WinemetalShaderCompileRequest* request) {
-  if (!request) {
-    return 0;
-  }
+u64 compile(const WinemetalShaderCompileRequest& request) {
   try {
-    return dxmt9::core::registerShaderBlob(dxmt9::core::makeShaderSourceFromRequest(*request));
+    return dxmt9::core::registerShaderBlob(dxmt9::core::makeShaderSourceFromRequest(request));
   } catch (const std::exception& e) {
     NSLog(@"dxmt9: shader compilation request failed: %s", e.what());
     return 0;
   }
 }
 
-const char* winemetal_shader_source(u64 shaderHandle) {
-  auto* blob = dxmt9::core::findShaderBlob(shaderHandle);
-  return blob ? blob->source.c_str() : nullptr;
+std::string source(u64 shaderHandle) {
+  std::lock_guard lock(dxmt9::core::gShaderBlobMutex);
+  if (auto it = dxmt9::core::gShaderBlobRegistry.find(shaderHandle);
+      it != dxmt9::core::gShaderBlobRegistry.end()) {
+    return it->second->source;
+  }
+  return {};
 }
 
-u64 winemetal_shader_source_size(u64 shaderHandle) {
-  auto* blob = dxmt9::core::findShaderBlob(shaderHandle);
-  return blob ? static_cast<u64>(blob->source.size()) : 0;
+u64 sourceSize(u64 shaderHandle) {
+  std::lock_guard lock(dxmt9::core::gShaderBlobMutex);
+  if (auto it = dxmt9::core::gShaderBlobRegistry.find(shaderHandle);
+      it != dxmt9::core::gShaderBlobRegistry.end()) {
+    return static_cast<u64>(it->second->source.size());
+  }
+  return 0;
 }
 
-void winemetal_destroy_shader(u64 shaderHandle) {
+void destroy(u64 shaderHandle) {
   std::lock_guard lock(dxmt9::core::gShaderBlobMutex);
   dxmt9::core::gShaderBlobRegistry.erase(shaderHandle);
 }
 
-}  // extern "C"
+}  // namespace dxmt9::core::shader_service

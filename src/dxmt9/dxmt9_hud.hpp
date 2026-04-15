@@ -44,8 +44,8 @@ class DeveloperHudState {
 
 class DeveloperHudController {
  public:
-  void notePresent(metalqueue::CommandBufferDiagnostics& diagnostics);
-  void update(const metalqueue::CommandBufferDiagnostics& diagnostics, const std::string& errorSummary);
+  metalqueue::CommandBufferDiagnostics prepareForSubmission(metalqueue::CommandBufferDiagnostics diagnostics);
+  void completeSubmission(const metalqueue::CommandBufferDiagnostics& diagnostics, const std::string& errorSummary);
 
  private:
   DeveloperHudState state_{};

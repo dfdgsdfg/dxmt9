@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -60,68 +61,34 @@ struct ChunkSummaryInput {
   u32 compatFlags = 0;
 };
 
-class ChunkSummaryBuilder {
- public:
-  ChunkSummaryBuilder(u64 seqId, size_t slotIndex);
-
-  void observeDraw(u32 compatFlags);
-  void observeBlit();
-  void observePresent(u32 compatFlags);
-
-  CommandBufferDiagnostics finish() const;
-
- private:
-  CommandBufferDiagnostics diagnostics_{};
+enum class ChunkObservationKind {
+  Draw,
+  Blit,
+  Present,
 };
 
-class QueueTraceSnapshotBuilder {
- public:
-  QueueTraceSnapshotBuilder(std::optional<size_t> slotIndex, u64 eventSeqId);
-
-  void setWritingSlot(std::optional<size_t> slotIndex);
-  void setWriteIndex(size_t index);
-  void setReadyCount(size_t count);
-  void setCompletedQueueCount(size_t count);
-  void setInflightCount(size_t count);
-  void setCompletedSeqId(u64 seqId);
-  void setLastCommittedSeqId(u64 seqId);
-  void addActiveSlot(size_t index, QueueSlotState state, u64 seqId, size_t commandCount);
-
-  QueueTraceSnapshot finish() &&;
-
- private:
-  QueueTraceSnapshot snapshot_{};
+struct ChunkObservation {
+  ChunkObservationKind kind = ChunkObservationKind::Draw;
+  u32 compatFlags = 0;
 };
 
-template <typename EnumerateFn>
-CommandBufferDiagnostics makeChunkSummary(u64 seqId, size_t slotIndex, EnumerateFn&& enumerate) {
-  ChunkSummaryBuilder builder(seqId, slotIndex);
-  enumerate(builder);
-  return builder.finish();
-}
+struct QueueTraceState {
+  std::optional<size_t> slotIndex;
+  std::optional<size_t> writingSlot;
+  size_t writeIndex = 0;
+  size_t readyCount = 0;
+  size_t completedQueueCount = 0;
+  size_t inflightCount = 0;
+  u64 completedSeqId = 0;
+  u64 lastCommittedSeqId = 0;
+  u64 eventSeqId = 0;
+  std::vector<ActiveSlotInfo> activeSlots;
+};
 
-template <typename EnumerateFn>
-QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
-                                         std::optional<size_t> writingSlot,
-                                         size_t writeIndex,
-                                         size_t readyCount,
-                                         size_t completedQueueCount,
-                                         size_t inflightCount,
-                                         u64 completedSeqId,
-                                         u64 lastCommittedSeqId,
-                                         u64 eventSeqId,
-                                         EnumerateFn&& enumerate) {
-  QueueTraceSnapshotBuilder builder(slotIndex, eventSeqId);
-  builder.setWritingSlot(writingSlot);
-  builder.setWriteIndex(writeIndex);
-  builder.setReadyCount(readyCount);
-  builder.setCompletedQueueCount(completedQueueCount);
-  builder.setInflightCount(inflightCount);
-  builder.setCompletedSeqId(completedSeqId);
-  builder.setLastCommittedSeqId(lastCommittedSeqId);
-  enumerate(builder);
-  return std::move(builder).finish();
-}
+CommandBufferDiagnostics summarizeChunk(u64 seqId,
+                                        size_t slotIndex,
+                                        std::span<const ChunkObservation> observations);
+QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state);
 
 bool queueTraceEnabled();
 const char* queueTraceFilePath();

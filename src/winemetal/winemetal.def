@@ -1,0 +1,8 @@
+LIBRARY winemetal.dll
+EXPORTS
+  dxmt9_winemetal_get_api
+  dxmt9_winemetal_set_api
+  dxmt9_winemetal_compile_shader
+  dxmt9_winemetal_shader_source
+  dxmt9_winemetal_shader_source_size
+  dxmt9_winemetal_destroy_shader

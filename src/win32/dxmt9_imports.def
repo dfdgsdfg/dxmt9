@@ -3,9 +3,6 @@
 ;   aarch64-w64-mingw32-dlltool -m arm64 -d dxmt9_imports.def -l libdxmt9.dll.a
 LIBRARY dxmt9
 EXPORTS
-  ; Wire API
-  dxmt9_winemetal_set_api
-  dxmt9_winemetal_get_api
   ; Factory
   dxmt9c_factory_create
   dxmt9c_factory_addref
