@@ -1,6 +1,6 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
-#include "dxmt9/runtime.hpp"
+#include "util/runtime.hpp"
 
 #include <algorithm>
 #include <cmath>

@@ -1,16 +1,17 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
-#import <QuartzCore/CAMetalLayer.h>
 #import <objc/message.h>
-#import <objc/runtime.h>
+#import <QuartzCore/CAMetalLayer.h>
 
 #include "dxmt9/assert.hpp"
+#include "dxmt9_capture.hpp"
 #include "dxmt9/core.hpp"
-#include "dxmt9/runtime.hpp"
+#include "dxmt9_hud.hpp"
+#include "dxmt9_presenter_support.hpp"
+#include "dxmt9_queue.hpp"
+#include "util/runtime.hpp"
 #include "dxmt9/winemetal.h"
-
-#include <dlfcn.h>
 
 #include <algorithm>
 #include <array>
@@ -45,21 +46,30 @@ namespace dxmt9::core {
 
 namespace {
 
+using dxmt9::core::metalcapture::gpuDumpTextureHandle;
+using dxmt9::core::metalcapture::gpuDumpTexturePath;
+using dxmt9::core::metalcapture::writeTextureBmp;
+using dxmt9::core::metalhud::compatHudEnabled;
+using dxmt9::core::metalhud::DeveloperHudState;
+using dxmt9::core::metalhud::formatCompatFlags;
+using dxmt9::core::metalhud::isFloatRenderTargetFormat;
+using dxmt9::core::metalhud::matrixIsIdentity;
+using dxmt9::core::metalpresent::directLayerAttachEnabled;
+using dxmt9::core::metalpresent::get_nsview_for_hwnd;
+using dxmt9::core::metalpresent::lookupLayerHandle;
+using dxmt9::core::metalpresent::registerLayerHandle;
+using dxmt9::core::metalpresent::unregisterLayerHandle;
+using dxmt9::core::metalpresent::wineMacInterop;
+using dxmt9::core::metalqueue::CommandBufferDiagnostics;
+using dxmt9::core::metalqueue::emitQueueTraceLine;
+using dxmt9::core::metalqueue::emitTextureTraceLine;
+using dxmt9::core::metalqueue::queueTraceEnabled;
+using dxmt9::core::metalqueue::queueTraceFilePath;
+using dxmt9::core::metalqueue::queueTraceFromSeq;
+using enum dxmt9::core::metalhud::CompatFlagBits;
+
 constexpr size_t kRingSize = 32;
 constexpr size_t kMaxInflight = 3;
-
-bool queueTraceEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT_TRACE_QUEUE");
-    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-const char* queueTraceFilePath() {
-  static const char* path = std::getenv("DXMT_TRACE_FILE");
-  return path && path[0] != '\0' ? path : nullptr;
-}
 
 bool debugForceVisibleDraw() {
   static const bool enabled = [] {
@@ -101,24 +111,6 @@ bool debugForceExpandIndexed() {
   return value;
 }
 
-bool directLayerAttachEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT_DIRECT_LAYER_ATTACH");
-    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-u64 queueTraceFromSeq() {
-  static const u64 value = [] {
-    const char* env = std::getenv("DXMT_TRACE_QUEUE_FROM");
-    if (!env || env[0] == '\0') {
-      return 0ull;
-    }
-    return static_cast<u64>(std::strtoull(env, nullptr, 10));
-  }();
-  return value;
-}
 
 int fixedFunctionTraceBudget() {
   static const int budget = [] {
@@ -151,22 +143,6 @@ u64 textureTraceHandle() {
     return static_cast<u64>(std::strtoull(env, nullptr, 0));
   }();
   return handle;
-}
-
-u64 gpuDumpTextureHandle() {
-  static const u64 handle = [] {
-    const char* env = std::getenv("DXMT_DUMP_GPU_TEXTURE_HANDLE");
-    if (!env || env[0] == '\0') {
-      return 0ull;
-    }
-    return static_cast<u64>(std::strtoull(env, nullptr, 0));
-  }();
-  return handle;
-}
-
-const char* gpuDumpTexturePath() {
-  static const char* path = std::getenv("DXMT_DUMP_GPU_TEXTURE_PATH");
-  return path && path[0] != '\0' ? path : nullptr;
 }
 
 const char* shaderDumpDir() {
@@ -301,346 +277,6 @@ std::span<const u8> normalizeTextureUploadBytes(Format format, u32 width, u32 he
     default:
       return bytes;
   }
-}
-
-void emitQueueTraceLine(const std::string& line) {
-  std::fputs(line.c_str(), stderr);
-  std::fputc('\n', stderr);
-  std::fflush(stderr);
-  if (const char* path = queueTraceFilePath()) {
-    if (std::FILE* file = std::fopen(path, "a")) {
-      std::fputs(line.c_str(), file);
-      std::fputc('\n', file);
-      std::fclose(file);
-    }
-  }
-}
-
-void emitTextureTraceLine(const std::string& line) {
-  emitQueueTraceLine(line);
-}
-
-bool compatHudEnabled() {
-  static const bool enabled = dxmt9::runtime::getenvFlag("DXMT_COMPAT_HUD");
-  return enabled;
-}
-
-enum CompatFlagBits : u32 {
-  CompatFlagFp16 = 1u << 0,
-  CompatFlagMrt = 1u << 1,
-  CompatFlagSrgb = 1u << 2,
-  CompatFlagProjected = 1u << 3,
-  CompatFlagMsaa = 1u << 4,
-  CompatFlagQuery = 1u << 5,
-};
-
-bool isFloatRenderTargetFormat(Format format) {
-  switch (format) {
-    case Format::A16B16G16R16F:
-    case Format::A32B32G32R32F:
-    case Format::G16R16F:
-    case Format::R16F:
-    case Format::G32R32F:
-    case Format::R32F:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool matrixIsIdentity(const Matrix4x4& matrix) {
-  for (u32 row = 0; row < 4; ++row) {
-    for (u32 col = 0; col < 4; ++col) {
-      const float expected = row == col ? 1.0f : 0.0f;
-      if (std::fabs(matrix.m[row * 4 + col] - expected) > 1.0e-6f) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-std::string formatCompatFlags(u32 flags) {
-  std::ostringstream out;
-  const auto appendFlag = [&](u32 bit, const char* text) {
-    if ((flags & bit) == 0) {
-      return;
-    }
-    if (out.tellp() > 0) {
-      out << ' ';
-    }
-    out << text;
-  };
-  appendFlag(CompatFlagFp16, "F16");
-  appendFlag(CompatFlagMrt, "MRT");
-  appendFlag(CompatFlagSrgb, "SRG");
-  appendFlag(CompatFlagProjected, "PJT");
-  appendFlag(CompatFlagMsaa, "MSA");
-  appendFlag(CompatFlagQuery, "QRY");
-  if (out.tellp() == 0) {
-    out << '-';
-  }
-  return out.str();
-}
-
-class DeveloperHudState {
- public:
-  DeveloperHudState() = default;
-
-  ~DeveloperHudState() {
-    @autoreleasepool {
-      if (hud_) {
-        for (NSString* label : labels_) {
-          [label release];
-        }
-        labels_.clear();
-        [hud_ release];
-        hud_ = nil;
-      }
-    }
-  }
-
-  void update(u32 frame, u64 seqId, u32 flags, const std::string& errorSummary) {
-    if (!ensureInitialized()) {
-      return;
-    }
-
-    std::ostringstream heading;
-    heading << "dxmt9 frame=" << frame << " seq=" << seqId;
-    updateLine(0, heading.str());
-    updateLine(1, "compat " + formatCompatFlags(flags));
-    updateLine(2, errorSummary.empty() ? std::string("last-error -") : std::string("last-error ") + errorSummary);
-  }
-
- private:
-  bool ensureInitialized() {
-    if (initialized_) {
-      return available_;
-    }
-    initialized_ = true;
-    if (!compatHudEnabled()) {
-      return false;
-    }
-
-    @autoreleasepool {
-      Class hudClass = objc_lookUpClass("_CADeveloperHUDProperties");
-      if (!hudClass) {
-        return false;
-      }
-      const auto instanceFn = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
-      hud_ = [instanceFn(reinterpret_cast<id>(hudClass), @selector(instance)) retain];
-      if (!hud_) {
-        return false;
-      }
-
-      addLabel("com.github.3shain.dxmt9-heading", "com.apple.hud-graph.default");
-      addLabel("com.github.3shain.dxmt9-flags", "com.github.3shain.dxmt9-heading");
-      addLabel("com.github.3shain.dxmt9-error", "com.github.3shain.dxmt9-flags");
-      available_ = true;
-    }
-    return available_;
-  }
-
-  void addLabel(const char* label, const char* after) {
-    NSString* labelString = [[NSString alloc] initWithUTF8String:label];
-    NSString* afterString = [NSString stringWithUTF8String:after];
-    const auto addFn = reinterpret_cast<BOOL (*)(id, SEL, id, id)>(objc_msgSend);
-    (void)addFn(hud_, @selector(addLabel:after:), labelString, afterString);
-    labels_.push_back(labelString);
-  }
-
-  void updateLine(size_t index, const std::string& value) {
-    if (index >= labels_.size()) {
-      return;
-    }
-    NSString* valueString = [NSString stringWithUTF8String:value.c_str()];
-    const auto updateFn = reinterpret_cast<void (*)(id, SEL, id, id)>(objc_msgSend);
-    updateFn(hud_, @selector(updateLabel:value:), labels_[index], valueString);
-  }
-
-  bool initialized_ = false;
-  bool available_ = false;
-  id hud_ = nil;
-  std::vector<NSString*> labels_{};
-};
-
-struct CommandBufferDiagnostics {
-  u64 seqId = 0;
-  size_t slotIndex = 0;
-  bool hasDraw = false;
-  bool hasPresent = false;
-  bool hasBlit = false;
-  u32 frame = 0;
-  u32 compatFlags = 0;
-};
-
-struct BmpColor {
-  u8 r = 0;
-  u8 g = 0;
-  u8 b = 0;
-  u8 a = 255;
-};
-
-BmpColor decodeBmpColor(Format format, const u8* src) {
-  switch (format) {
-    case Format::A8R8G8B8:
-    case Format::X8R8G8B8:
-      return {src[2], src[1], src[0], static_cast<u8>(format == Format::X8R8G8B8 ? 255u : src[3])};
-    case Format::A8B8G8R8:
-    case Format::X8B8G8R8:
-      return {src[0], src[1], src[2], static_cast<u8>(format == Format::X8B8G8R8 ? 255u : src[3])};
-    default:
-      return {};
-  }
-}
-
-bool writeTextureBmp(const std::string& path, Format format, u32 width, u32 height, u32 pitch,
-                     std::span<const u8> bytes) {
-  if (path.empty() || width == 0 || height == 0 || pitch == 0) {
-    return false;
-  }
-  const u32 srcBytesPerPixel = bytesPerPixel(format);
-  if (srcBytesPerPixel == 0 || bytes.size() < static_cast<size_t>(pitch) * height) {
-    return false;
-  }
-  const u32 bytesPerRow = width * 4;
-  const u32 imageSize = bytesPerRow * height;
-  const u32 fileSize = 14 + 40 + imageSize;
-  std::vector<u8> out(fileSize, 0);
-
-  auto writeU16 = [&](size_t offset, u16 value) {
-    out[offset + 0] = static_cast<u8>(value & 0xffu);
-    out[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
-  };
-  auto writeU32 = [&](size_t offset, u32 value) {
-    out[offset + 0] = static_cast<u8>(value & 0xffu);
-    out[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
-    out[offset + 2] = static_cast<u8>((value >> 16) & 0xffu);
-    out[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
-  };
-  auto writeI32 = [&](size_t offset, i32 value) { writeU32(offset, static_cast<u32>(value)); };
-
-  out[0] = 'B';
-  out[1] = 'M';
-  writeU32(2, fileSize);
-  writeU32(10, 14 + 40);
-  writeU32(14, 40);
-  writeI32(18, static_cast<i32>(width));
-  writeI32(22, -static_cast<i32>(height));
-  writeU16(26, 1);
-  writeU16(28, 32);
-  writeU32(30, 0);
-  writeU32(34, imageSize);
-  writeI32(38, 2835);
-  writeI32(42, 2835);
-
-  size_t dstOffset = 14 + 40;
-  for (u32 y = 0; y < height; ++y) {
-    const u8* srcRow = bytes.data() + static_cast<size_t>(y) * pitch;
-    for (u32 x = 0; x < width; ++x) {
-      const auto color = decodeBmpColor(format, srcRow + x * srcBytesPerPixel);
-      out[dstOffset++] = color.b;
-      out[dstOffset++] = color.g;
-      out[dstOffset++] = color.r;
-      out[dstOffset++] = color.a;
-    }
-  }
-
-  std::error_code ec;
-  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-  std::ofstream stream(path, std::ios::binary);
-  if (!stream) {
-    return false;
-  }
-  stream.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
-  return stream.good();
-}
-
-std::mutex gLayerRegistryMutex;
-std::unordered_map<u64, CAMetalLayer*> gLayerRegistry;
-
-CAMetalLayer* lookupLayerHandle(u64 handle) {
-  std::lock_guard lock(gLayerRegistryMutex);
-  if (auto it = gLayerRegistry.find(handle); it != gLayerRegistry.end()) {
-    return it->second;
-  }
-  return nullptr;
-}
-
-void registerLayerHandle(u64 handle, CAMetalLayer* layer) {
-  std::lock_guard lock(gLayerRegistryMutex);
-  gLayerRegistry[handle] = layer;
-}
-
-void unregisterLayerHandle(u64 handle) {
-  std::lock_guard lock(gLayerRegistryMutex);
-  gLayerRegistry.erase(handle);
-}
-
-struct WineMacInterop {
-  using GetCocoaViewFn = NSView* (*)(void*);
-  using GetCocoaWindowFn = void* (*)(void*, int);
-  using CreateMetalDeviceFn = void* (*)();
-  using ReleaseMetalDeviceFn = void (*)(void*);
-  using CreateMetalViewFn = void* (*)(void*, void*);
-  using GetMetalLayerFn = void* (*)(void*);
-  using ReleaseMetalViewFn = void (*)(void*);
-
-  GetCocoaViewFn getCocoaView = nullptr;
-  GetCocoaWindowFn getCocoaWindow = nullptr;
-  CreateMetalDeviceFn createMetalDevice = nullptr;
-  ReleaseMetalDeviceFn releaseMetalDevice = nullptr;
-  CreateMetalViewFn createMetalView = nullptr;
-  GetMetalLayerFn getMetalLayer = nullptr;
-  ReleaseMetalViewFn releaseMetalView = nullptr;
-};
-
-WineMacInterop resolveWineMacInterop() {
-  WineMacInterop interop;
-  interop.getCocoaView = reinterpret_cast<WineMacInterop::GetCocoaViewFn>(dlsym(RTLD_DEFAULT, "macdrv_get_cocoa_view"));
-  if (interop.getCocoaView) {
-    return interop;
-  }
-
-  /* Heroic Wine 11.5 and DXMT hosts expose a private winemac function table
-   * instead of the older direct macdrv_get_cocoa_view() entrypoint. The index
-   * mapping below is inferred from the host winemac.so wrappers:
-   *   3: get_cocoa_window
-   *   4: create_metal_device
-   *   5: release_metal_device
-   *   6: view_create_metal_view
-   *   7: view_get_metal_layer
-   *   8: view_release_metal_view
-   */
-  auto* functions = reinterpret_cast<void* const*>(dlsym(RTLD_DEFAULT, "macdrv_functions"));
-  if (!functions) {
-    functions = reinterpret_cast<void* const*>(dlsym(RTLD_DEFAULT, "_macdrv_functions"));
-  }
-  if (!functions) {
-    return interop;
-  }
-
-  interop.getCocoaWindow = reinterpret_cast<WineMacInterop::GetCocoaWindowFn>(functions[3]);
-  interop.createMetalDevice = reinterpret_cast<WineMacInterop::CreateMetalDeviceFn>(functions[4]);
-  interop.releaseMetalDevice = reinterpret_cast<WineMacInterop::ReleaseMetalDeviceFn>(functions[5]);
-  interop.createMetalView = reinterpret_cast<WineMacInterop::CreateMetalViewFn>(functions[6]);
-  interop.getMetalLayer = reinterpret_cast<WineMacInterop::GetMetalLayerFn>(functions[7]);
-  interop.releaseMetalView = reinterpret_cast<WineMacInterop::ReleaseMetalViewFn>(functions[8]);
-  return interop;
-}
-
-const WineMacInterop& wineMacInterop() {
-  static const WineMacInterop interop = resolveWineMacInterop();
-  return interop;
-}
-
-/* Resolve a Wine HWND to the backing NSView when the host still exposes the
- * legacy macdrv_get_cocoa_view() helper. Returns nil on newer hosts that
- * require the DXMT-style metal-view path instead. */
-static NSView* get_nsview_for_hwnd(u64 hwnd) {
-  const auto& interop = wineMacInterop();
-  if (!interop.getCocoaView) return nil;
-  return interop.getCocoaView(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)));
 }
 
 template <typename T>

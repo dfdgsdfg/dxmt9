@@ -1,22 +1,12 @@
-/* src/win32/factory.cpp — IDirect3D9 / IDirect3D9Ex COM wrapper.
+/* src/d3d9/d3d9_pe_factory.cpp — PE-side IDirect3D9 / IDirect3D9Ex COM wrapper.
  * All methods delegate to the dxmt9c_factory_* C API. */
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <d3d9.h>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include "dxmt9/device_c.h"
-#include "dxmt9/runtime.hpp"
-
-/* Forward declarations — CreateDevice wrapper lives in device.cpp */
-IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
-                                     IDirect3D9Ex* pFactory,
-                                     UINT adapter,
-                                     DWORD behaviorFlags,
-                                     HWND window);
+#include "d3d9_pe.hpp"
+#include "util/runtime.hpp"
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 

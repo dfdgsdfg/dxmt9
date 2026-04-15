@@ -1,20 +1,14 @@
-/* src/win32/device.cpp — IDirect3DDevice9Ex and all resource COM wrappers.
+/* src/d3d9/d3d9_pe_device.cpp — PE-side IDirect3DDevice9Ex and resource COM wrappers.
  * All methods delegate to the dxmt9c_* C API from dxmt9/device_c.h. */
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <d3d9.h>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
-#include "dxmt9/device_c.h"
-#include "dxmt9/runtime.hpp"
-
-/* declared in factory.cpp */
-void FillD3DCaps9(const D9CCaps& src, D3DCAPS9* out);
+#include "d3d9_pe.hpp"
+#include "util/runtime.hpp"
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 

@@ -1,7 +1,7 @@
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
-#include "dxmt9/runtime.hpp"
+#include "util/runtime.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cstdarg>

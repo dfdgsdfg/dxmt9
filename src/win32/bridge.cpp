@@ -12,13 +12,10 @@
 #include <cstdlib>
 #include <mutex>
 
+#include "d3d9/d3d9_pe.hpp"
 #include "dxmt9/device_c.h"
-#include "dxmt9/runtime.hpp"
+#include "util/runtime.hpp"
 #include "dxmt9/wineunixlib.h"
-
-/* Forward declarations — implemented in factory.cpp / device.cpp */
-IDirect3D9*   CreateFactoryImpl(D9CFactory* f);
-IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f);
 
 namespace {
 
