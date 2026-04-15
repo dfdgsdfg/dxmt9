@@ -23,11 +23,11 @@ struct CommandBufferDiagnostics {
 };
 
 enum class QueueSlotState {
-  Free,
-  Writing,
-  Pending,
-  Encoding,
-  GPU,
+  Free = 0,
+  Writing = 1,
+  Pending = 2,
+  Encoding = 3,
+  GPU = 4,
 };
 
 struct ActiveSlotInfo {
@@ -59,6 +59,69 @@ struct ChunkSummaryInput {
   u32 frame = 0;
   u32 compatFlags = 0;
 };
+
+class ChunkSummaryBuilder {
+ public:
+  ChunkSummaryBuilder(u64 seqId, size_t slotIndex);
+
+  void observeDraw(u32 compatFlags);
+  void observeBlit();
+  void observePresent(u32 compatFlags);
+
+  CommandBufferDiagnostics finish() const;
+
+ private:
+  CommandBufferDiagnostics diagnostics_{};
+};
+
+class QueueTraceSnapshotBuilder {
+ public:
+  QueueTraceSnapshotBuilder(std::optional<size_t> slotIndex, u64 eventSeqId);
+
+  void setWritingSlot(std::optional<size_t> slotIndex);
+  void setWriteIndex(size_t index);
+  void setReadyCount(size_t count);
+  void setCompletedQueueCount(size_t count);
+  void setInflightCount(size_t count);
+  void setCompletedSeqId(u64 seqId);
+  void setLastCommittedSeqId(u64 seqId);
+  void addActiveSlot(size_t index, QueueSlotState state, u64 seqId, size_t commandCount);
+
+  QueueTraceSnapshot finish() &&;
+
+ private:
+  QueueTraceSnapshot snapshot_{};
+};
+
+template <typename EnumerateFn>
+CommandBufferDiagnostics makeChunkSummary(u64 seqId, size_t slotIndex, EnumerateFn&& enumerate) {
+  ChunkSummaryBuilder builder(seqId, slotIndex);
+  enumerate(builder);
+  return builder.finish();
+}
+
+template <typename EnumerateFn>
+QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
+                                         std::optional<size_t> writingSlot,
+                                         size_t writeIndex,
+                                         size_t readyCount,
+                                         size_t completedQueueCount,
+                                         size_t inflightCount,
+                                         u64 completedSeqId,
+                                         u64 lastCommittedSeqId,
+                                         u64 eventSeqId,
+                                         EnumerateFn&& enumerate) {
+  QueueTraceSnapshotBuilder builder(slotIndex, eventSeqId);
+  builder.setWritingSlot(writingSlot);
+  builder.setWriteIndex(writeIndex);
+  builder.setReadyCount(readyCount);
+  builder.setCompletedQueueCount(completedQueueCount);
+  builder.setInflightCount(inflightCount);
+  builder.setCompletedSeqId(completedSeqId);
+  builder.setLastCommittedSeqId(lastCommittedSeqId);
+  enumerate(builder);
+  return std::move(builder).finish();
+}
 
 bool queueTraceEnabled();
 const char* queueTraceFilePath();

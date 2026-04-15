@@ -4910,81 +4910,30 @@ class MetalBackendDevice final : public BackendDevice {
     return flags;
   }
 
-  static metalqueue::QueueSlotState toQueueSlotState(ChunkSlot::State state) {
-    switch (state) {
-      case ChunkSlot::State::Free:
-        return metalqueue::QueueSlotState::Free;
-      case ChunkSlot::State::Writing:
-        return metalqueue::QueueSlotState::Writing;
-      case ChunkSlot::State::Pending:
-        return metalqueue::QueueSlotState::Pending;
-      case ChunkSlot::State::Encoding:
-        return metalqueue::QueueSlotState::Encoding;
-      case ChunkSlot::State::GPU:
-        return metalqueue::QueueSlotState::GPU;
-    }
-    return metalqueue::QueueSlotState::Free;
-  }
-
-  metalqueue::ChunkSummaryInput makeChunkSummaryInputUnlocked(size_t slotIndex, const ChunkSlot& slot) {
-    metalqueue::ChunkSummaryInput input;
-    input.seqId = slot.seqId;
-    input.slotIndex = slotIndex;
-    for (const auto& command : slot.commands) {
-      switch (command.kind) {
-        case MetalCommandRecord::Kind::Draw:
-          input.hasDraw = true;
-          input.compatFlags |= compatFlagsForDrawUnlocked(command.draw);
-          break;
-        case MetalCommandRecord::Kind::Clear:
-          input.compatFlags |= compatFlagsForClearUnlocked(command.clear);
-          break;
-        case MetalCommandRecord::Kind::SurfaceCopy:
-        case MetalCommandRecord::Kind::StretchRect:
-        case MetalCommandRecord::Kind::Readback:
-          input.hasBlit = true;
-          break;
-        case MetalCommandRecord::Kind::ColorFill:
-          input.hasDraw = true;
-          break;
-        case MetalCommandRecord::Kind::Present:
-          input.hasPresent = true;
-          input.compatFlags |= compatFlagsForPresentUnlocked(command.present, command.presentSource);
-          break;
-      }
-    }
-    if (input.hasPresent) {
-      input.frame = compatHud_.recordPresentedFrame(input.compatFlags);
-    }
-    return input;
-  }
-
   metalqueue::QueueTraceSnapshot makeQueueTraceSnapshotUnlocked(std::optional<size_t> slotIndex,
                                                                u64 seqId) const {
-    metalqueue::QueueTraceSnapshot snapshot;
-    snapshot.slotIndex = slotIndex;
-    snapshot.writingSlot = writingSlot_;
-    snapshot.writeIndex = writeIndex_;
-    snapshot.readyCount = readySlots_.size();
-    snapshot.completedQueueCount = completedSeqQueue_.size();
-    snapshot.inflightCount = inflightCount_;
-    snapshot.completedSeqId = completedSeqId_;
-    snapshot.lastCommittedSeqId = lastCommittedSeqId_;
-    snapshot.eventSeqId = seqId;
-    snapshot.activeSlots.reserve(slots_.size());
-    for (size_t i = 0; i < slots_.size(); ++i) {
-      const auto& slot = slots_[i];
-      if (slot.state == ChunkSlot::State::Free) {
-        continue;
-      }
-      snapshot.activeSlots.push_back({
-          .index = i,
-          .state = toQueueSlotState(slot.state),
-          .seqId = slot.seqId,
-          .commandCount = slot.commands.size(),
-      });
-    }
-    return snapshot;
+    return metalqueue::makeQueueTraceSnapshot(
+        slotIndex,
+        writingSlot_,
+        writeIndex_,
+        readySlots_.size(),
+        completedSeqQueue_.size(),
+        inflightCount_,
+        completedSeqId_,
+        lastCommittedSeqId_,
+        seqId,
+        [this](auto& builder) {
+          for (size_t i = 0; i < slots_.size(); ++i) {
+            const auto& slot = slots_[i];
+            if (slot.state == ChunkSlot::State::Free) {
+              continue;
+            }
+            builder.addActiveSlot(i,
+                                  static_cast<metalqueue::QueueSlotState>(static_cast<int>(slot.state)),
+                                  slot.seqId,
+                                  slot.commands.size());
+          }
+        });
   }
 
   BufferRecord* findBufferUnlocked(u64 handle) {
@@ -5399,7 +5348,30 @@ class MetalBackendDevice final : public BackendDevice {
       CommandBufferDiagnostics diagnostics;
       {
         std::lock_guard lock(mutex_);
-        diagnostics = metalqueue::summarizeChunk(makeChunkSummaryInputUnlocked(slotIndex, slot));
+        diagnostics = metalqueue::makeChunkSummary(slot.seqId, slotIndex, [&](auto& builder) {
+          for (const auto& command : slot.commands) {
+            switch (command.kind) {
+              case MetalCommandRecord::Kind::Draw:
+                builder.observeDraw(compatFlagsForDrawUnlocked(command.draw));
+                break;
+              case MetalCommandRecord::Kind::Clear:
+                builder.observeDraw(compatFlagsForClearUnlocked(command.clear));
+                break;
+              case MetalCommandRecord::Kind::SurfaceCopy:
+              case MetalCommandRecord::Kind::StretchRect:
+              case MetalCommandRecord::Kind::Readback:
+                builder.observeBlit();
+                break;
+              case MetalCommandRecord::Kind::ColorFill:
+                builder.observeDraw(0);
+                break;
+              case MetalCommandRecord::Kind::Present:
+                builder.observePresent(compatFlagsForPresentUnlocked(command.present, command.presentSource));
+                break;
+            }
+          }
+        });
+        compatHud_.notePresent(diagnostics);
         slots_[slotIndex].state = ChunkSlot::State::GPU;
         metalqueue::traceQueueEvent("encode.commit", makeQueueTraceSnapshotUnlocked(slotIndex, seqId));
       }

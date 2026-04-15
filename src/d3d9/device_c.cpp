@@ -10,12 +10,12 @@
 #include <fstream>
 #include <memory>
 #include <cstring>
-#include <dlfcn.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #if defined(__APPLE__)
+#include <dlfcn.h>
 #include <mach/kern_return.h>
 #include <mach/mach_init.h>
 #include <mach/mach_vm.h>
@@ -334,6 +334,7 @@ using RtlAllocateHeapFn = void* (*)(void* heap, uint32_t flags, size_t size);
 using RtlFreeHeapFn = uint8_t (*)(void* heap, uint32_t flags, void* ptr);
 
 NtAllocateVirtualMemoryFn resolveNtAllocateVirtualMemory() {
+#if defined(__APPLE__)
   static const auto fn = [] {
     if (auto* sym = dlsym(RTLD_DEFAULT, "NtAllocateVirtualMemory")) {
       return reinterpret_cast<NtAllocateVirtualMemoryFn>(sym);
@@ -344,9 +345,13 @@ NtAllocateVirtualMemoryFn resolveNtAllocateVirtualMemory() {
     return static_cast<NtAllocateVirtualMemoryFn>(nullptr);
   }();
   return fn;
+#else
+  return nullptr;
+#endif
 }
 
 NtFreeVirtualMemoryFn resolveNtFreeVirtualMemory() {
+#if defined(__APPLE__)
   static const auto fn = [] {
     if (auto* sym = dlsym(RTLD_DEFAULT, "NtFreeVirtualMemory")) {
       return reinterpret_cast<NtFreeVirtualMemoryFn>(sym);
@@ -357,9 +362,13 @@ NtFreeVirtualMemoryFn resolveNtFreeVirtualMemory() {
     return static_cast<NtFreeVirtualMemoryFn>(nullptr);
   }();
   return fn;
+#else
+  return nullptr;
+#endif
 }
 
 GetProcessHeapFn resolveGetProcessHeap() {
+#if defined(__APPLE__)
   static const auto fn = [] {
     if (auto* sym = dlsym(RTLD_DEFAULT, "GetProcessHeap")) {
       return reinterpret_cast<GetProcessHeapFn>(sym);
@@ -370,9 +379,13 @@ GetProcessHeapFn resolveGetProcessHeap() {
     return static_cast<GetProcessHeapFn>(nullptr);
   }();
   return fn;
+#else
+  return nullptr;
+#endif
 }
 
 RtlAllocateHeapFn resolveRtlAllocateHeap() {
+#if defined(__APPLE__)
   static const auto fn = [] {
     if (auto* sym = dlsym(RTLD_DEFAULT, "RtlAllocateHeap")) {
       return reinterpret_cast<RtlAllocateHeapFn>(sym);
@@ -383,9 +396,13 @@ RtlAllocateHeapFn resolveRtlAllocateHeap() {
     return static_cast<RtlAllocateHeapFn>(nullptr);
   }();
   return fn;
+#else
+  return nullptr;
+#endif
 }
 
 RtlFreeHeapFn resolveRtlFreeHeap() {
+#if defined(__APPLE__)
   static const auto fn = [] {
     if (auto* sym = dlsym(RTLD_DEFAULT, "RtlFreeHeap")) {
       return reinterpret_cast<RtlFreeHeapFn>(sym);
@@ -396,6 +413,9 @@ RtlFreeHeapFn resolveRtlFreeHeap() {
     return static_cast<RtlFreeHeapFn>(nullptr);
   }();
   return fn;
+#else
+  return nullptr;
+#endif
 }
 
 Low4GBAllocation allocateLow4GB(size_t size) {

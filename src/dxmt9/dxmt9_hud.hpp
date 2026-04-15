@@ -44,7 +44,7 @@ class DeveloperHudState {
 
 class DeveloperHudController {
  public:
-  u32 recordPresentedFrame(u32 flags);
+  void notePresent(metalqueue::CommandBufferDiagnostics& diagnostics);
   void update(const metalqueue::CommandBufferDiagnostics& diagnostics, const std::string& errorSummary);
 
  private:

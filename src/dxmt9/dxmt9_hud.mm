@@ -136,10 +136,13 @@ void DeveloperHudState::updateLine(size_t index, const std::string& value) {
   updateFn(hud_, @selector(updateLabel:value:), labels_[index], valueString);
 }
 
-u32 DeveloperHudController::recordPresentedFrame(u32 flags) {
+void DeveloperHudController::notePresent(metalqueue::CommandBufferDiagnostics& diagnostics) {
+  if (!diagnostics.hasPresent) {
+    return;
+  }
   presentedFrame_ += 1;
-  lastCompatFlags_ = flags;
-  return presentedFrame_;
+  lastCompatFlags_ = diagnostics.compatFlags;
+  diagnostics.frame = presentedFrame_;
 }
 
 void DeveloperHudController::update(const metalqueue::CommandBufferDiagnostics& diagnostics,

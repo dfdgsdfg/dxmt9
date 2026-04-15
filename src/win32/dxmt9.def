@@ -2,3 +2,4 @@ LIBRARY dxmt9.dll
 EXPORTS
   dxmt9_pe_create9
   dxmt9_pe_create9_ex
+  dxmt9_pe_create_shader_validator

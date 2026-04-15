@@ -63,6 +63,78 @@ void emitTextureTraceLine(const std::string& line) {
   emitQueueTraceLine(line);
 }
 
+ChunkSummaryBuilder::ChunkSummaryBuilder(u64 seqId, size_t slotIndex) {
+  diagnostics_.seqId = seqId;
+  diagnostics_.slotIndex = slotIndex;
+}
+
+void ChunkSummaryBuilder::observeDraw(u32 compatFlags) {
+  diagnostics_.hasDraw = true;
+  diagnostics_.compatFlags |= compatFlags;
+}
+
+void ChunkSummaryBuilder::observeBlit() {
+  diagnostics_.hasBlit = true;
+}
+
+void ChunkSummaryBuilder::observePresent(u32 compatFlags) {
+  diagnostics_.hasPresent = true;
+  diagnostics_.compatFlags |= compatFlags;
+}
+
+CommandBufferDiagnostics ChunkSummaryBuilder::finish() const {
+  return diagnostics_;
+}
+
+QueueTraceSnapshotBuilder::QueueTraceSnapshotBuilder(std::optional<size_t> slotIndex, u64 eventSeqId) {
+  snapshot_.slotIndex = slotIndex;
+  snapshot_.eventSeqId = eventSeqId;
+}
+
+void QueueTraceSnapshotBuilder::setWritingSlot(std::optional<size_t> slotIndex) {
+  snapshot_.writingSlot = slotIndex;
+}
+
+void QueueTraceSnapshotBuilder::setWriteIndex(size_t index) {
+  snapshot_.writeIndex = index;
+}
+
+void QueueTraceSnapshotBuilder::setReadyCount(size_t count) {
+  snapshot_.readyCount = count;
+}
+
+void QueueTraceSnapshotBuilder::setCompletedQueueCount(size_t count) {
+  snapshot_.completedQueueCount = count;
+}
+
+void QueueTraceSnapshotBuilder::setInflightCount(size_t count) {
+  snapshot_.inflightCount = count;
+}
+
+void QueueTraceSnapshotBuilder::setCompletedSeqId(u64 seqId) {
+  snapshot_.completedSeqId = seqId;
+}
+
+void QueueTraceSnapshotBuilder::setLastCommittedSeqId(u64 seqId) {
+  snapshot_.lastCommittedSeqId = seqId;
+}
+
+void QueueTraceSnapshotBuilder::addActiveSlot(size_t index,
+                                              QueueSlotState state,
+                                              u64 seqId,
+                                              size_t commandCount) {
+  snapshot_.activeSlots.push_back({
+      .index = index,
+      .state = state,
+      .seqId = seqId,
+      .commandCount = commandCount,
+  });
+}
+
+QueueTraceSnapshot QueueTraceSnapshotBuilder::finish() && {
+  return std::move(snapshot_);
+}
+
 CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input) {
   CommandBufferDiagnostics diagnostics;
   diagnostics.seqId = input.seqId;
