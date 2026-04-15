@@ -79,6 +79,21 @@ std::array<u8, 4> bgra(u8 b, u8 g, u8 r, u8 a) {
   return {b, g, r, a};
 }
 
+std::array<u8, 4> readPixel(const LockedRegion& region, u32 x, u32 y) {
+  const auto* bytes = static_cast<const u8*>(region.data);
+  const size_t offset = static_cast<size_t>(y) * region.pitch + static_cast<size_t>(x) * 4u;
+  return {bytes[offset + 0], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]};
+}
+
+struct ScreenSpaceTexturedVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float rhw = 1.0f;
+  float u = 0.0f;
+  float v = 0.0f;
+};
+
 constexpr u32 kD3DSIO_MOV = 1u;
 constexpr u32 kD3DSIO_ADD = 2u;
 constexpr u32 kD3DSIO_SLT = 12u;
@@ -111,6 +126,9 @@ constexpr u32 kD3DSPR_ADDR = 3u;
 constexpr u32 kD3DSPR_RASTOUT = 4u;
 constexpr u32 kD3DSPR_COLOROUT = 8u;
 constexpr u32 kD3DSPR_PREDICATE = 19u;
+constexpr u32 kFvfXyzrhw = 0x0004u;
+constexpr u32 kFvfTex1 = 0x0100u;
+constexpr u32 kTextureAddressBorder = 4u;
 
 u32 encodeRegisterType(u32 regType) {
   return ((regType & 0x7u) << 28) | (((regType >> 3) & 0x3u) << 11);
@@ -1055,6 +1073,9 @@ void testDeviceCoreFlow() {
           "texture stage alpha op");
   checkEq(device->setSamplerState(0, SAMP_MAX_ANISOTROPY, 4), D3D_OK, "sampler state");
   checkEq(device->setSamplerState(0, SAMP_MIN_FILTER, 2), D3D_OK, "sampler min filter");
+  checkEq(device->setSamplerState(0, SAMP_ADDRESS_U, kTextureAddressBorder), D3D_OK, "sampler address u");
+  checkEq(device->setSamplerState(0, SAMP_ADDRESS_V, kTextureAddressBorder), D3D_OK, "sampler address v");
+  checkEq(device->setSamplerState(0, SAMP_BORDER_COLOR, 0xffffffffu), D3D_OK, "sampler border color");
   checkEq(device->setTexture(0, texture), D3D_OK, "texture binding");
   checkEq(device->setStreamSource(0, dynamicBuffer, 8, 16), D3D_OK, "stream source");
   checkEq(device->setIndices(dynamicBuffer, IndexType::UInt32), D3D_OK, "index buffer");
@@ -1112,6 +1133,9 @@ void testDeviceCoreFlow() {
           "draw0 alpha op");
   checkEq(draw0.samplers[0].states.at(SAMP_MAX_ANISOTROPY), 4u, "draw0 max anisotropy");
   checkEq(draw0.samplers[0].states.at(SAMP_MIN_FILTER), 2u, "draw0 min filter");
+  checkEq(draw0.samplers[0].states.at(SAMP_ADDRESS_U), kTextureAddressBorder, "draw0 address u");
+  checkEq(draw0.samplers[0].states.at(SAMP_ADDRESS_V), kTextureAddressBorder, "draw0 address v");
+  checkEq(draw0.samplers[0].states.at(SAMP_BORDER_COLOR), 0xffffffffu, "draw0 border color");
   checkEq(draw0.rs.values.at(RS_LIGHTING), 1u, "draw0 lighting state");
   checkEq(draw0.rs.values.at(RS_ALPHA_TEST_ENABLE), 1u, "draw0 alpha test state");
   checkEq(draw0.clipPlaneMask, 1u, "draw0 clip plane mask");
@@ -1258,6 +1282,89 @@ void testDeviceCoreFlow() {
   check(!backend->presents[1].displaySyncEnabled, "immediate present after reset");
   checkEq(device->swapChain()->backBuffer()->desc().width, 800u, "swapchain width after reset");
   checkEq(device->swapChain()->backBuffer()->desc().height, 600u, "swapchain height after reset");
+}
+
+void testMetalSamplerBorderColorCoverage() {
+#if !defined(__APPLE__)
+  return;
+#else
+  BackendLimits limits{};
+  limits.maxTextureSize = 1024;
+  limits.maxColorAttachments = 4;
+  limits.maxAnisotropy = 16;
+  limits.supportsBgr10A2 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+
+  Factory factory(limits);
+  PresentParameters params{};
+  params.backBufferWidth = 64;
+  params.backBufferHeight = 64;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{31337};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "metal sampler border device");
+  auto backBuffer = device->swapChain()->backBuffer();
+  auto readbackSurface = device->createSurface({64, 64, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
+  auto texture = device->createTexture({1, 1, 1, 1, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
+  check(backBuffer != nullptr, "metal sampler border back buffer");
+  check(readbackSurface != nullptr, "metal sampler border readback");
+  check(texture != nullptr, "metal sampler border texture");
+
+  auto textureLevel0 = texture->surfaceLevel(0);
+  check(textureLevel0 != nullptr, "metal sampler border level0");
+  textureLevel0->fillColor(nullptr, {1.0f, 0.0f, 0.0f, 1.0f});
+
+  checkEq(device->setRenderTarget(0, backBuffer), D3D_OK, "metal sampler border render target");
+  checkEq(device->setViewport({0, 0, 64, 64, 0.0f, 1.0f}), D3D_OK, "metal sampler border viewport");
+  checkEq(device->setFVF(kFvfXyzrhw | kFvfTex1), D3D_OK, "metal sampler border fvf");
+  checkEq(device->setTexture(0, texture), D3D_OK, "metal sampler border bind texture");
+  checkEq(device->setTextureStageState(0, TSS_COLOR_OP, static_cast<u32>(TextureOp::SelectArg1)), D3D_OK,
+          "metal sampler border color op");
+  checkEq(device->setTextureStageState(0, TSS_ALPHA_OP, static_cast<u32>(TextureOp::SelectArg1)), D3D_OK,
+          "metal sampler border alpha op");
+  checkEq(device->setSamplerState(0, SAMP_MIN_FILTER, 1), D3D_OK, "metal sampler border min filter");
+  checkEq(device->setSamplerState(0, SAMP_MAG_FILTER, 1), D3D_OK, "metal sampler border mag filter");
+  checkEq(device->setSamplerState(0, SAMP_ADDRESS_U, kTextureAddressBorder), D3D_OK,
+          "metal sampler border address u");
+  checkEq(device->setSamplerState(0, SAMP_ADDRESS_V, kTextureAddressBorder), D3D_OK,
+          "metal sampler border address v");
+  checkEq(device->setSamplerState(0, SAMP_BORDER_COLOR, 0xffffffffu), D3D_OK,
+          "metal sampler border color");
+
+  ClearDesc clear{};
+  clear.clearColor = true;
+  clear.color = {0.0f, 0.0f, 0.0f, 1.0f};
+  clear.colorAttachments[0] = {backBuffer->handle(), backBuffer->level(), backBuffer->multiSampleCount()};
+  checkEq(device->clear(clear), D3D_OK, "metal sampler border clear");
+
+  const std::array<ScreenSpaceTexturedVertex, 6> quad{
+      ScreenSpaceTexturedVertex{0.0f, 0.0f, 0.0f, 1.0f, -0.5f, -0.5f},
+      ScreenSpaceTexturedVertex{64.0f, 0.0f, 0.0f, 1.0f, 1.5f, -0.5f},
+      ScreenSpaceTexturedVertex{0.0f, 64.0f, 0.0f, 1.0f, -0.5f, 1.5f},
+      ScreenSpaceTexturedVertex{64.0f, 0.0f, 0.0f, 1.0f, 1.5f, -0.5f},
+      ScreenSpaceTexturedVertex{64.0f, 64.0f, 0.0f, 1.0f, 1.5f, 1.5f},
+      ScreenSpaceTexturedVertex{0.0f, 64.0f, 0.0f, 1.0f, -0.5f, 1.5f},
+  };
+  const auto* quadBytes = reinterpret_cast<const u8*>(quad.data());
+  checkEq(device->drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                                  std::span<const u8>(quadBytes, sizeof(quad))),
+          D3D_OK, "metal sampler border draw");
+  checkEq(device->getRenderTargetData(backBuffer, readbackSurface), D3D_OK, "metal sampler border readback");
+
+  auto region = readbackSurface->lockRect(nullptr, 0);
+  check(region.data != nullptr, "metal sampler border lock");
+  const auto whitePixel = bgra(0xff, 0xff, 0xff, 0xff);
+  const auto redPixel = bgra(0x00, 0x00, 0xff, 0xff);
+  checkEq(readPixel(region, 8, 8), whitePixel, "metal sampler border top-left");
+  checkEq(readPixel(region, 56, 8), whitePixel, "metal sampler border top-right");
+  checkEq(readPixel(region, 32, 32), redPixel, "metal sampler border center");
+  checkEq(readPixel(region, 8, 56), whitePixel, "metal sampler border bottom-left");
+  checkEq(readPixel(region, 56, 56), whitePixel, "metal sampler border bottom-right");
+  readbackSurface->unlockRect();
+#endif
 }
 
 void testComWrappers() {
@@ -1484,6 +1591,7 @@ int main() {
     testVisualPortCoverage();
     testRasterStateCoverage();
     testDeviceCoreFlow();
+    testMetalSamplerBorderColorCoverage();
     testComWrappers();
     testComWrappersEx();
     testFullscreenAndDeviceLost();

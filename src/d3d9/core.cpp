@@ -1901,6 +1901,7 @@ void DeviceState::reset() {
     sampler[SAMP_ADDRESS_W] = 1;
     sampler[SAMP_MAX_ANISOTROPY] = 1;
     sampler[SAMP_MIPMAP_LOD_BIAS] = 0;
+    sampler[SAMP_BORDER_COLOR] = 0;
   }
 
   for (auto& transform : transforms) {

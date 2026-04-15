@@ -384,6 +384,7 @@ inline constexpr u32 SAMP_MIP_FILTER = 7;
 inline constexpr u32 SAMP_MIPMAP_LOD_BIAS = 8;
 inline constexpr u32 SAMP_MAX_ANISOTROPY = 10;
 inline constexpr u32 SAMP_SRGB_TEXTURE = 11;
+inline constexpr u32 SAMP_BORDER_COLOR = 15;
 inline constexpr u32 QUERY_GETDATA_FLUSH = 1u << 0;
 
 inline constexpr u32 XFORM_WORLD_BASE = 1;

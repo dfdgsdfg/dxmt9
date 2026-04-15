@@ -7408,7 +7408,66 @@ class MetalBackendDevice final : public BackendDevice {
   ObjcPtr<id<MTLSamplerState>> makeSampler(const SamplerSnapshot& snapshot) {
     const auto minFilter = snapshot.states.contains(SAMP_MIN_FILTER) ? snapshot.states.at(SAMP_MIN_FILTER) : 0u;
     const auto magFilter = snapshot.states.contains(SAMP_MAG_FILTER) ? snapshot.states.at(SAMP_MAG_FILTER) : 0u;
-    return makeSampler(minFilter == 2u || magFilter == 2u);
+    const auto mipFilter = snapshot.states.contains(SAMP_MIP_FILTER) ? snapshot.states.at(SAMP_MIP_FILTER) : 0u;
+    const auto addressU = snapshot.states.contains(SAMP_ADDRESS_U) ? snapshot.states.at(SAMP_ADDRESS_U) : 1u;
+    const auto addressV = snapshot.states.contains(SAMP_ADDRESS_V) ? snapshot.states.at(SAMP_ADDRESS_V) : 1u;
+    const auto addressW = snapshot.states.contains(SAMP_ADDRESS_W) ? snapshot.states.at(SAMP_ADDRESS_W) : 1u;
+    const auto borderColor = snapshot.states.contains(SAMP_BORDER_COLOR) ? snapshot.states.at(SAMP_BORDER_COLOR) : 0u;
+    auto resolveAddressMode = [](u32 value) {
+      switch (value) {
+        case 1u:
+          return MTLSamplerAddressModeRepeat;
+        case 2u:
+          return MTLSamplerAddressModeMirrorRepeat;
+        case 4u:
+          return MTLSamplerAddressModeClampToBorderColor;
+        case 3u:
+        default:
+          return MTLSamplerAddressModeClampToEdge;
+      }
+    };
+    auto resolveBorderColor = [](u32 value) {
+      // Metal only exposes exact black/white border samplers. Keep those exact
+      // mappings; other D3D9 border colors still need shader-side emulation.
+      switch (value) {
+        case 0x00000000u:
+          return MTLSamplerBorderColorTransparentBlack;
+        case 0xff000000u:
+          return MTLSamplerBorderColorOpaqueBlack;
+        case 0xffffffffu:
+          return MTLSamplerBorderColorOpaqueWhite;
+        default:
+          return (value >> 24) == 0u ? MTLSamplerBorderColorTransparentBlack : MTLSamplerBorderColorOpaqueBlack;
+      }
+    };
+
+    @autoreleasepool {
+      auto descriptor = [MTLSamplerDescriptor new];
+      descriptor.minFilter = minFilter == 2u ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+      descriptor.magFilter = magFilter == 2u ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+      switch (mipFilter) {
+        case 2u:
+          descriptor.mipFilter = MTLSamplerMipFilterLinear;
+          break;
+        case 1u:
+          descriptor.mipFilter = MTLSamplerMipFilterNearest;
+          break;
+        default:
+          descriptor.mipFilter = MTLSamplerMipFilterNotMipmapped;
+          break;
+      }
+      descriptor.sAddressMode = resolveAddressMode(addressU);
+      descriptor.tAddressMode = resolveAddressMode(addressV);
+      descriptor.rAddressMode = resolveAddressMode(addressW);
+      if (descriptor.sAddressMode == MTLSamplerAddressModeClampToBorderColor ||
+          descriptor.tAddressMode == MTLSamplerAddressModeClampToBorderColor ||
+          descriptor.rAddressMode == MTLSamplerAddressModeClampToBorderColor) {
+        descriptor.borderColor = resolveBorderColor(borderColor);
+      }
+      id<MTLSamplerState> sampler = [device_.get() newSamplerStateWithDescriptor:descriptor];
+      [descriptor release];
+      return sampler ? ObjcPtr<id<MTLSamplerState>>::adopt(sampler) : ObjcPtr<id<MTLSamplerState>>{};
+    }
   }
 
   std::shared_future<ObjcPtr<id<MTLRenderPipelineState>>> pipelineForDraw(const DrawDesc& draw) {
