@@ -1,8 +1,17 @@
 dxmt9_util_srcs = files(
+  'config/config.cpp',
+  'log/log.cpp',
+  'thread.cpp',
   'util_bmp.cpp',
-  'util_env.cpp',
-  'util_log.cpp',
+  'util_string.cpp',
 )
+
+if host_machine.system() == 'windows'
+  dxmt9_util_srcs += files(
+    'com/com_guid.cpp',
+    'com/com_private_data.cpp',
+  )
+endif
 
 dxmt9_util_internal_inc = include_directories('.', '..')
 

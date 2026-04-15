@@ -1,18 +1,16 @@
-/* src/win32/bridge.cpp — PE bridge between d3d9.dll and dxmt9.so.
+/* src/win32/bridge.cpp — PE bridge between dxmt9.dll and dxmt9.so.
  *
- * This module owns the PE/unix bridge bootstrap and forwards d3d9 entrypoints
- * to the frontend wrappers and unix-side dxmt9.so via Wine unixlib dispatch. */
+ * This module owns PE/unix bridge bootstrap and unixlib dispatch only.
+ * D3D9 object creation remains frontend-owned under src/d3d9. */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winternl.h>
-#include <d3d9.h>
+#include <cstdarg>
 #include <cstdlib>
 #include <mutex>
 
-#include "d3d9/d3d9_pe.hpp"
-#include "dxmt9/device_c.h"
-#include "util/util_log.hpp"
+#include "util/log/log.hpp"
 #include "dxmt9/wineunixlib.h"
 
 namespace {
@@ -212,47 +210,4 @@ extern "C" NTSTATUS dxmt9_bridge_unix_call(unsigned int code, void *args) {
 #else
   return state.dispatcher(state.handle, code, args);
 #endif
-}
-
-extern "C" __declspec(dllexport) IDirect3D9* WINAPI dxmt9_bridge_create9(UINT sdkVersion) {
-  if (sdkVersion != D3D_SDK_VERSION) {
-    return nullptr;
-  }
-  const NTSTATUS status = ensureBridgeReady();
-  if (status != DXMT9_STATUS_SUCCESS) {
-    return nullptr;
-  }
-  D9CFactory *factory = dxmt9c_factory_create();
-  if (!factory) {
-    bridgeDebugLog("create9: factory create failed");
-    return nullptr;
-  }
-  bridgeDebugLog("create9: factory=%p", factory);
-  auto* result = CreateFactoryImpl(factory);
-  bridgeDebugLog("create9: result=%p", result);
-  return result;
-}
-
-extern "C" __declspec(dllexport) HRESULT WINAPI dxmt9_bridge_create9_ex(UINT sdkVersion,
-                                                                         IDirect3D9Ex **ppD3D) {
-  if (!ppD3D) {
-    return E_POINTER;
-  }
-  *ppD3D = nullptr;
-  if (sdkVersion != D3D_SDK_VERSION) {
-    return D3DERR_INVALIDCALL;
-  }
-  const NTSTATUS status = ensureBridgeReady();
-  if (status != DXMT9_STATUS_SUCCESS) {
-    return static_cast<HRESULT>(status);
-  }
-  D9CFactory *factory = dxmt9c_factory_create();
-  if (!factory) {
-    bridgeDebugLog("create9_ex: factory create failed");
-    return E_OUTOFMEMORY;
-  }
-  bridgeDebugLog("create9_ex: factory=%p", factory);
-  *ppD3D = CreateFactoryExImpl(factory);
-  bridgeDebugLog("create9_ex: result=%p", *ppD3D);
-  return *ppD3D ? S_OK : E_OUTOFMEMORY;
 }

@@ -9,9 +9,9 @@
 #include <atomic>
 #include <cstring>
 
-extern "C" __declspec(dllimport) IDirect3D9 *WINAPI dxmt9_bridge_create9(UINT sdkVersion);
-extern "C" __declspec(dllimport) HRESULT WINAPI dxmt9_bridge_create9_ex(UINT sdkVersion,
-                                                                         IDirect3D9Ex **ppD3D);
+extern "C" __declspec(dllimport) IDirect3D9 *WINAPI dxmt9_pe_create9(UINT sdkVersion);
+extern "C" __declspec(dllimport) HRESULT WINAPI dxmt9_pe_create9_ex(UINT sdkVersion,
+                                                                    IDirect3D9Ex **ppD3D);
 
 typedef HRESULT (WINAPI *shader_validator_cb)(const char *file, int line,
                                               DWORD_PTR arg3, DWORD_PTR message_id,
@@ -95,11 +95,11 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
 }
 
 extern "C" IDirect3D9 *WINAPI Direct3DCreate9(UINT sdkVersion) {
-  return dxmt9_bridge_create9(sdkVersion);
+  return dxmt9_pe_create9(sdkVersion);
 }
 
 extern "C" HRESULT WINAPI Direct3DCreate9Ex(UINT sdkVersion, IDirect3D9Ex **ppD3D) {
-  return dxmt9_bridge_create9_ex(sdkVersion, ppD3D);
+  return dxmt9_pe_create9_ex(sdkVersion, ppD3D);
 }
 
 extern "C" IDirect3DShaderValidator9 *WINAPI Direct3DShaderValidatorCreate9(void) {

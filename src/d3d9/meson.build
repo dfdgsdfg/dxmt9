@@ -5,6 +5,7 @@ dxmt9_frontend_srcs = files(
 )
 
 dxmt9_pe_wrapper_srcs = files(
+  'd3d9_pe_exports.cpp',
   'd3d9_pe_factory.cpp',
   'd3d9_pe_device.cpp',
 )

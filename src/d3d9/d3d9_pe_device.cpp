@@ -2,12 +2,14 @@
  * All methods delegate to the dxmt9c_* C API from dxmt9/device_c.h. */
 
 #include <atomic>
+#include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include "d3d9_pe.hpp"
-#include "util/util_env.hpp"
-#include "util/util_log.hpp"
+#include "util/com/com_private_data.hpp"
+#include "util/config/config.hpp"
+#include "util/log/log.hpp"
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
@@ -21,6 +23,51 @@ static void dxmt9DeviceDebugLog(const char* fmt, ...) {
 static bool dxmt9LeakStateBlocksEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT_LEAK_STATEBLOCKS");
     return enabled;
+}
+
+static HRESULT setPrivateData(dxmt9::util::ComPrivateData& storage,
+                              REFGUID guid,
+                              const void* data,
+                              DWORD size,
+                              DWORD flags,
+                              const char* label,
+                              const void* self) {
+    HRESULT hr = D3DERR_INVALIDCALL;
+    if ((flags & D3DSPD_IUNKNOWN) != 0) {
+        const auto* ifacePtr = reinterpret_cast<IUnknown* const*>(data);
+        hr = ifacePtr ? storage.setInterface(guid, *ifacePtr) : D3DERR_INVALIDCALL;
+    } else {
+        hr = storage.setData(guid, size, data);
+    }
+    dxmt9DeviceDebugLog("%s_set_private_data this=%p size=%u flags=0x%x -> hr=0x%08x",
+                        label, self, (unsigned)size, (unsigned)flags, (unsigned)hr);
+    return hr;
+}
+
+static HRESULT getPrivateData(dxmt9::util::ComPrivateData& storage,
+                              REFGUID guid,
+                              void* data,
+                              DWORD* size,
+                              const char* label,
+                              const void* self) {
+    UINT localSize = size ? static_cast<UINT>(*size) : 0u;
+    HRESULT hr = storage.getData(guid, size ? &localSize : nullptr, data);
+    if (size) {
+        *size = static_cast<DWORD>(localSize);
+    }
+    dxmt9DeviceDebugLog("%s_get_private_data this=%p data=%p size=%u -> hr=0x%08x",
+                        label, self, data, size ? (unsigned)*size : 0u, (unsigned)hr);
+    return hr;
+}
+
+static HRESULT freePrivateData(dxmt9::util::ComPrivateData& storage,
+                               REFGUID guid,
+                               const char* label,
+                               const void* self) {
+    HRESULT hr = storage.removeData(guid);
+    dxmt9DeviceDebugLog("%s_free_private_data this=%p -> hr=0x%08x",
+                        label, self, (unsigned)hr);
+    return hr;
 }
 
 static D9CRect toR(const RECT& r) {
@@ -42,6 +89,7 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
     D9CSurface*         s_;
     IDirect3DDevice9*   device_;
     IUnknown*           container_;
+    dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9SurfaceImpl(D9CSurface* s, IDirect3DDevice9* device, IUnknown* container)
         : s_(s), device_(device), container_(container) {
@@ -81,17 +129,14 @@ public:
         dxmt9DeviceDebugLog("surface_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
-        dxmt9DeviceDebugLog("surface_set_private_data surface=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) override {
+        return setPrivateData(privateData_, guid, data, size, flags, "surface", this);
     }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
-        dxmt9DeviceDebugLog("surface_get_private_data surface=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) override {
+        return getPrivateData(privateData_, guid, data, size, "surface", this);
     }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
-        dxmt9DeviceDebugLog("surface_free_private_data surface=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) override {
+        return freePrivateData(privateData_, guid, "surface", this);
     }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
@@ -166,6 +211,7 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
     ULONG       refs_ = 1;
     D9CTexture* t_;
     IDirect3DDevice9* device_;
+    dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9TextureImpl(D9CTexture* t, IDirect3DDevice9* device) : t_(t), device_(device) {
         if (device_) device_->AddRef();
@@ -203,17 +249,14 @@ public:
         dxmt9DeviceDebugLog("texture_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
-        dxmt9DeviceDebugLog("texture_set_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) override {
+        return setPrivateData(privateData_, guid, data, size, flags, "texture", this);
     }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
-        dxmt9DeviceDebugLog("texture_get_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) override {
+        return getPrivateData(privateData_, guid, data, size, "texture", this);
     }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
-        dxmt9DeviceDebugLog("texture_free_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) override {
+        return freePrivateData(privateData_, guid, "texture", this);
     }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
@@ -280,6 +323,7 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
     ULONG       refs_ = 1;
     D9CTexture* t_;
     IDirect3DDevice9* device_;
+    dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9CubeTextureImpl(D9CTexture* t, IDirect3DDevice9* device) : t_(t), device_(device) {
         if (device_) device_->AddRef();
@@ -317,17 +361,14 @@ public:
         dxmt9DeviceDebugLog("swapchain_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
-        dxmt9DeviceDebugLog("cube_set_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) override {
+        return setPrivateData(privateData_, guid, data, size, flags, "cube", this);
     }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
-        dxmt9DeviceDebugLog("cube_get_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) override {
+        return getPrivateData(privateData_, guid, data, size, "cube", this);
     }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
-        dxmt9DeviceDebugLog("cube_free_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) override {
+        return freePrivateData(privateData_, guid, "cube", this);
     }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
@@ -398,6 +439,7 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
     ULONG       refs_ = 1;
     D9CTexture* t_;
     IDirect3DDevice9* device_;
+    dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9VolumeTextureImpl(D9CTexture* t, IDirect3DDevice9* device) : t_(t), device_(device) {
         if (device_) device_->AddRef();
@@ -435,17 +477,14 @@ public:
         dxmt9DeviceDebugLog("stateblock_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
-        dxmt9DeviceDebugLog("volume_set_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) override {
+        return setPrivateData(privateData_, guid, data, size, flags, "volume", this);
     }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
-        dxmt9DeviceDebugLog("volume_get_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) override {
+        return getPrivateData(privateData_, guid, data, size, "volume", this);
     }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
-        dxmt9DeviceDebugLog("volume_free_private_data texture=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) override {
+        return freePrivateData(privateData_, guid, "volume", this);
     }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
@@ -476,6 +515,7 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
     ULONG      refs_ = 1;
     D9CBuffer* b_;
     IDirect3DDevice9* device_;
+    dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9VertexBufferImpl(D9CBuffer* b, IDirect3DDevice9* device) : b_(b), device_(device) {
         if (device_) device_->AddRef();
@@ -510,17 +550,14 @@ public:
         *pp = device_;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
-        dxmt9DeviceDebugLog("vb_set_private_data vb=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) override {
+        return setPrivateData(privateData_, guid, data, size, flags, "vb", this);
     }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
-        dxmt9DeviceDebugLog("vb_get_private_data vb=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) override {
+        return getPrivateData(privateData_, guid, data, size, "vb", this);
     }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
-        dxmt9DeviceDebugLog("vb_free_private_data vb=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) override {
+        return freePrivateData(privateData_, guid, "vb", this);
     }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }
@@ -558,6 +595,7 @@ class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
     ULONG      refs_ = 1;
     D9CBuffer* b_;
     IDirect3DDevice9* device_;
+    dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9IndexBufferImpl(D9CBuffer* b, IDirect3DDevice9* device) : b_(b), device_(device) {
         if (device_) device_->AddRef();
@@ -592,17 +630,14 @@ public:
         *pp = device_;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID,const void*,DWORD,DWORD) override {
-        dxmt9DeviceDebugLog("ib_set_private_data ib=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) override {
+        return setPrivateData(privateData_, guid, data, size, flags, "ib", this);
     }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID,void*,DWORD*) override {
-        dxmt9DeviceDebugLog("ib_get_private_data ib=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) override {
+        return getPrivateData(privateData_, guid, data, size, "ib", this);
     }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID) override {
-        dxmt9DeviceDebugLog("ib_free_private_data ib=%p -> E_NOTIMPL", this);
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) override {
+        return freePrivateData(privateData_, guid, "ib", this);
     }
     DWORD STDMETHODCALLTYPE SetPriority(DWORD) override { return 0; }
     DWORD STDMETHODCALLTYPE GetPriority() override { return 0; }

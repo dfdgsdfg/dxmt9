@@ -2,14 +2,34 @@
 
 #include "dxmt9_queue.hpp"
 
-#include "util/util_env.hpp"
-#include "util/util_log.hpp"
+#include "util/config/config.hpp"
+#include "util/log/log.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
 
 namespace dxmt9::core::metalqueue {
+
+namespace {
+
+const char* slotStateName(QueueSlotState state) {
+  switch (state) {
+    case QueueSlotState::Free:
+      return "free";
+    case QueueSlotState::Writing:
+      return "writing";
+    case QueueSlotState::Pending:
+      return "pending";
+    case QueueSlotState::Encoding:
+      return "encoding";
+    case QueueSlotState::GPU:
+      return "gpu";
+  }
+  return "unknown";
+}
+
+}  // namespace
 
 bool queueTraceEnabled() {
   static const bool enabled = dxmt9::util::getenvFlag("DXMT_TRACE_QUEUE");
@@ -41,6 +61,94 @@ void emitQueueTraceLine(const std::string& line) {
 
 void emitTextureTraceLine(const std::string& line) {
   emitQueueTraceLine(line);
+}
+
+CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input) {
+  CommandBufferDiagnostics diagnostics;
+  diagnostics.seqId = input.seqId;
+  diagnostics.slotIndex = input.slotIndex;
+  diagnostics.hasDraw = input.hasDraw;
+  diagnostics.hasPresent = input.hasPresent;
+  diagnostics.hasBlit = input.hasBlit;
+  diagnostics.frame = input.frame;
+  diagnostics.compatFlags = input.compatFlags;
+  return diagnostics;
+}
+
+bool shouldTraceQueue(const QueueTraceSnapshot& snapshot) {
+  if (!queueTraceEnabled()) {
+    return false;
+  }
+  const u64 threshold = queueTraceFromSeq();
+  if (threshold == 0) {
+    return true;
+  }
+  if (snapshot.eventSeqId >= threshold && snapshot.eventSeqId != 0) {
+    return true;
+  }
+  for (const auto& slot : snapshot.activeSlots) {
+    if (slot.seqId >= threshold && slot.seqId != 0) {
+      return true;
+    }
+  }
+  if (snapshot.completedSeqId >= threshold || snapshot.lastCommittedSeqId >= threshold) {
+    return true;
+  }
+  return false;
+}
+
+std::string formatActiveSlots(const QueueTraceSnapshot& snapshot) {
+  std::ostringstream out;
+  bool first = true;
+  for (const auto& slot : snapshot.activeSlots) {
+    if (!first) {
+      out << ' ';
+    }
+    first = false;
+    out << slot.index << ':' << slotStateName(slot.state);
+    if (slot.seqId != 0) {
+      out << '#' << slot.seqId;
+    }
+    if (slot.commandCount != 0) {
+      out << '/' << slot.commandCount;
+    }
+  }
+  if (first) {
+    out << "none";
+  }
+  return out.str();
+}
+
+void traceQueueEvent(const char* event, const QueueTraceSnapshot& snapshot, const char* extra) {
+  if (!shouldTraceQueue(snapshot)) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-queue] " << event
+      << " seq=" << static_cast<unsigned long long>(snapshot.eventSeqId)
+      << " slot=";
+  if (snapshot.slotIndex.has_value()) {
+    out << *snapshot.slotIndex;
+  } else {
+    out << '-';
+  }
+  out << " writeIndex=" << snapshot.writeIndex
+      << " writing=";
+  if (snapshot.writingSlot.has_value()) {
+    out << *snapshot.writingSlot;
+  } else {
+    out << '-';
+  }
+  out << " ready=" << snapshot.readyCount
+      << " completedQ=" << snapshot.completedQueueCount
+      << " inflight=" << snapshot.inflightCount
+      << " completed=" << static_cast<unsigned long long>(snapshot.completedSeqId)
+      << " lastCommitted=" << static_cast<unsigned long long>(snapshot.lastCommittedSeqId)
+      << " slots=[" << formatActiveSlots(snapshot) << "]";
+  if (extra && extra[0] != '\0') {
+    out << ' ' << extra;
+  }
+  emitQueueTraceLine(out.str());
 }
 
 std::string CompletionTracker::commandBufferStatusName(MTLCommandBufferStatus status) const {

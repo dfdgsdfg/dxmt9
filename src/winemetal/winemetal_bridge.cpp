@@ -51,8 +51,6 @@ extern "C" const WinemetalApi* dxmt9_winemetal_get_api(void) {
 extern "C" void dxmt9_winemetal_set_api(const WinemetalApi* api) {
   auto& state = dispatchState();
   if (api) {
-    /* Only override non-null entries so a partial override (e.g. only
-     * compile_shader) does not clobber the native fallbacks. */
     if (api->compile_shader)     state.api.compile_shader     = api->compile_shader;
     if (api->shader_source)      state.api.shader_source      = api->shader_source;
     if (api->shader_source_size) state.api.shader_source_size = api->shader_source_size;

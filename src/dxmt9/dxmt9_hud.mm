@@ -3,7 +3,7 @@
 
 #include "dxmt9_hud.hpp"
 
-#include "util/util_env.hpp"
+#include "util/config/config.hpp"
 
 #include <cmath>
 #include <sstream>

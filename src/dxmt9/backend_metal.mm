@@ -10,7 +10,7 @@
 #include "dxmt9_hud.hpp"
 #include "dxmt9_presenter_support.hpp"
 #include "dxmt9_queue.hpp"
-#include "util/util_env.hpp"
+#include "util/config/config.hpp"
 #include "dxmt9/winemetal.h"
 
 #include <algorithm>
@@ -4815,7 +4815,7 @@ class MetalBackendDevice final : public BackendDevice {
           << " size=" << desc.width << "x" << desc.height;
       emitQueueTraceLine(out.str());
     }
-    traceQueueUnlocked("present.enqueue", *writingSlot_);
+    metalqueue::traceQueueEvent("present.enqueue", makeQueueTraceSnapshotUnlocked(*writingSlot_, slots_[*writingSlot_].seqId));
     commitCurrentChunkUnlocked(lock);
   }
 
@@ -4910,141 +4910,81 @@ class MetalBackendDevice final : public BackendDevice {
     return flags;
   }
 
-  CommandBufferDiagnostics summarizeChunkUnlocked(size_t slotIndex, const ChunkSlot& slot) {
-    CommandBufferDiagnostics diagnostics;
-    diagnostics.seqId = slot.seqId;
-    diagnostics.slotIndex = slotIndex;
+  static metalqueue::QueueSlotState toQueueSlotState(ChunkSlot::State state) {
+    switch (state) {
+      case ChunkSlot::State::Free:
+        return metalqueue::QueueSlotState::Free;
+      case ChunkSlot::State::Writing:
+        return metalqueue::QueueSlotState::Writing;
+      case ChunkSlot::State::Pending:
+        return metalqueue::QueueSlotState::Pending;
+      case ChunkSlot::State::Encoding:
+        return metalqueue::QueueSlotState::Encoding;
+      case ChunkSlot::State::GPU:
+        return metalqueue::QueueSlotState::GPU;
+    }
+    return metalqueue::QueueSlotState::Free;
+  }
+
+  metalqueue::ChunkSummaryInput makeChunkSummaryInputUnlocked(size_t slotIndex, const ChunkSlot& slot) {
+    metalqueue::ChunkSummaryInput input;
+    input.seqId = slot.seqId;
+    input.slotIndex = slotIndex;
     for (const auto& command : slot.commands) {
       switch (command.kind) {
         case MetalCommandRecord::Kind::Draw:
-          diagnostics.hasDraw = true;
-          diagnostics.compatFlags |= compatFlagsForDrawUnlocked(command.draw);
+          input.hasDraw = true;
+          input.compatFlags |= compatFlagsForDrawUnlocked(command.draw);
           break;
         case MetalCommandRecord::Kind::Clear:
-          diagnostics.compatFlags |= compatFlagsForClearUnlocked(command.clear);
+          input.compatFlags |= compatFlagsForClearUnlocked(command.clear);
           break;
         case MetalCommandRecord::Kind::SurfaceCopy:
         case MetalCommandRecord::Kind::StretchRect:
         case MetalCommandRecord::Kind::Readback:
-          diagnostics.hasBlit = true;
+          input.hasBlit = true;
           break;
         case MetalCommandRecord::Kind::ColorFill:
-          diagnostics.hasDraw = true;
+          input.hasDraw = true;
           break;
         case MetalCommandRecord::Kind::Present:
-          diagnostics.hasPresent = true;
-          diagnostics.compatFlags |= compatFlagsForPresentUnlocked(command.present, command.presentSource);
+          input.hasPresent = true;
+          input.compatFlags |= compatFlagsForPresentUnlocked(command.present, command.presentSource);
           break;
       }
     }
-    if (diagnostics.hasPresent) {
-      diagnostics.frame = compatHud_.recordPresentedFrame(diagnostics.compatFlags);
+    if (input.hasPresent) {
+      input.frame = compatHud_.recordPresentedFrame(input.compatFlags);
     }
-    return diagnostics;
+    return input;
   }
 
-  static const char* slotStateName(ChunkSlot::State state) {
-    switch (state) {
-      case ChunkSlot::State::Free:
-        return "free";
-      case ChunkSlot::State::Writing:
-        return "writing";
-      case ChunkSlot::State::Pending:
-        return "pending";
-      case ChunkSlot::State::Encoding:
-        return "encoding";
-      case ChunkSlot::State::GPU:
-        return "gpu";
-    }
-    return "unknown";
-  }
-
-  bool shouldTraceQueueUnlocked(std::optional<size_t> slotIndex, u64 seqId) const {
-    if (!queueTraceEnabled()) {
-      return false;
-    }
-    const u64 threshold = queueTraceFromSeq();
-    if (threshold == 0) {
-      return true;
-    }
-    if (seqId >= threshold && seqId != 0) {
-      return true;
-    }
-    if (slotIndex.has_value()) {
-      const auto& slot = slots_[*slotIndex];
-      if (slot.seqId >= threshold && slot.seqId != 0) {
-        return true;
-      }
-    }
-    if (writingSlot_.has_value()) {
-      const auto& slot = slots_[*writingSlot_];
-      if (slot.seqId >= threshold && slot.seqId != 0) {
-        return true;
-      }
-    }
-    if (completedSeqId_ >= threshold || lastCommittedSeqId_ >= threshold) {
-      return true;
-    }
-    return false;
-  }
-
-  std::string formatActiveSlotsUnlocked() const {
-    std::ostringstream out;
-    bool first = true;
+  metalqueue::QueueTraceSnapshot makeQueueTraceSnapshotUnlocked(std::optional<size_t> slotIndex,
+                                                               u64 seqId) const {
+    metalqueue::QueueTraceSnapshot snapshot;
+    snapshot.slotIndex = slotIndex;
+    snapshot.writingSlot = writingSlot_;
+    snapshot.writeIndex = writeIndex_;
+    snapshot.readyCount = readySlots_.size();
+    snapshot.completedQueueCount = completedSeqQueue_.size();
+    snapshot.inflightCount = inflightCount_;
+    snapshot.completedSeqId = completedSeqId_;
+    snapshot.lastCommittedSeqId = lastCommittedSeqId_;
+    snapshot.eventSeqId = seqId;
+    snapshot.activeSlots.reserve(slots_.size());
     for (size_t i = 0; i < slots_.size(); ++i) {
       const auto& slot = slots_[i];
       if (slot.state == ChunkSlot::State::Free) {
         continue;
       }
-      if (!first) {
-        out << ' ';
-      }
-      first = false;
-      out << i << ':' << slotStateName(slot.state);
-      if (slot.seqId != 0) {
-        out << '#' << slot.seqId;
-      }
-      if (!slot.commands.empty()) {
-        out << '/' << slot.commands.size();
-      }
+      snapshot.activeSlots.push_back({
+          .index = i,
+          .state = toQueueSlotState(slot.state),
+          .seqId = slot.seqId,
+          .commandCount = slot.commands.size(),
+      });
     }
-    if (first) {
-      out << "none";
-    }
-    return out.str();
-  }
-
-  void traceQueueUnlocked(const char* event, std::optional<size_t> slotIndex = std::nullopt, u64 seqId = 0,
-                          const char* extra = nullptr) const {
-    if (!shouldTraceQueueUnlocked(slotIndex, seqId)) {
-      return;
-    }
-    std::ostringstream out;
-    out << "[dxmt9-queue] " << event
-        << " seq=" << static_cast<unsigned long long>(seqId)
-        << " slot=";
-    if (slotIndex.has_value()) {
-      out << *slotIndex;
-    } else {
-      out << '-';
-    }
-    out << " writeIndex=" << writeIndex_
-        << " writing=";
-    if (writingSlot_.has_value()) {
-      out << *writingSlot_;
-    } else {
-      out << '-';
-    }
-    out << " ready=" << readySlots_.size()
-        << " completedQ=" << completedSeqQueue_.size()
-        << " inflight=" << inflightCount_
-        << " completed=" << static_cast<unsigned long long>(completedSeqId_)
-        << " lastCommitted=" << static_cast<unsigned long long>(lastCommittedSeqId_)
-        << " slots=[" << formatActiveSlotsUnlocked() << "]";
-    if (extra && extra[0] != '\0') {
-      out << ' ' << extra;
-    }
-    emitQueueTraceLine(out.str());
+    return snapshot;
   }
 
   BufferRecord* findBufferUnlocked(u64 handle) {
@@ -5090,7 +5030,7 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
     if (slots_[writeIndex_].state != ChunkSlot::State::Free || inflightCount_ >= kMaxInflight) {
-      traceQueueUnlocked("writer.wait.begin", writeIndex_);
+      metalqueue::traceQueueEvent("writer.wait.begin", makeQueueTraceSnapshotUnlocked(writeIndex_, slots_[writeIndex_].seqId));
     }
     writeCv_.wait(lock, [this] {
       return stop_ || (slots_[writeIndex_].state == ChunkSlot::State::Free &&
@@ -5099,14 +5039,14 @@ class MetalBackendDevice final : public BackendDevice {
     if (stop_) {
       return;
     }
-    traceQueueUnlocked("writer.wait.end", writeIndex_);
+    metalqueue::traceQueueEvent("writer.wait.end", makeQueueTraceSnapshotUnlocked(writeIndex_, slots_[writeIndex_].seqId));
     // TLA+: RingSafety
     DXMT_ASSERT(slots_[writeIndex_].state == ChunkSlot::State::Free);
     slots_[writeIndex_].state = ChunkSlot::State::Writing;
     slots_[writeIndex_].seqId = 0;
     slots_[writeIndex_].commands.clear();
     writingSlot_ = writeIndex_;
-    traceQueueUnlocked("writer.acquire", *writingSlot_);
+    metalqueue::traceQueueEvent("writer.acquire", makeQueueTraceSnapshotUnlocked(*writingSlot_, slots_[*writingSlot_].seqId));
   }
 
   void commitCurrentChunkUnlocked(std::unique_lock<std::mutex>& lock) {
@@ -5117,18 +5057,18 @@ class MetalBackendDevice final : public BackendDevice {
     ChunkSlot& slot = slots_[*writingSlot_];
     if (slot.commands.empty()) {
       slot.state = ChunkSlot::State::Free;
-      traceQueueUnlocked("commit.empty", *writingSlot_);
+      metalqueue::traceQueueEvent("commit.empty", makeQueueTraceSnapshotUnlocked(*writingSlot_, slots_[*writingSlot_].seqId));
       writingSlot_.reset();
       return;
     }
     if (inflightCount_ >= kMaxInflight) {
-      traceQueueUnlocked("commit.wait.begin", *writingSlot_);
+      metalqueue::traceQueueEvent("commit.wait.begin", makeQueueTraceSnapshotUnlocked(*writingSlot_, slots_[*writingSlot_].seqId));
     }
     writeCv_.wait(lock, [this] { return stop_ || inflightCount_ < kMaxInflight; });
     if (stop_) {
       return;
     }
-    traceQueueUnlocked("commit.wait.end", *writingSlot_);
+    metalqueue::traceQueueEvent("commit.wait.end", makeQueueTraceSnapshotUnlocked(*writingSlot_, slots_[*writingSlot_].seqId));
     // TLA+: WineCommit
     slot.seqId = nextSeqId_++;
     slot.state = ChunkSlot::State::Pending;
@@ -5144,7 +5084,7 @@ class MetalBackendDevice final : public BackendDevice {
     // The producer may wrap onto a still-in-flight slot here. Safety is enforced
     // when ensureWritingSlotUnlocked() reacquires the next write slot.
     DXMT_ASSERT(writeIndex_ < kRingSize);
-    traceQueueUnlocked("commit.publish", readySlots_.back(), slot.seqId);
+    metalqueue::traceQueueEvent("commit.publish", makeQueueTraceSnapshotUnlocked(readySlots_.back(), slot.seqId));
     encodeCv_.notify_one();
   }
 
@@ -5327,7 +5267,7 @@ class MetalBackendDevice final : public BackendDevice {
           // TLA+: EncodeSafety
           DXMT_ASSERT(slot.state == ChunkSlot::State::Pending);
           slot.state = ChunkSlot::State::Encoding;
-          traceQueueUnlocked("encode.dequeue", slotIndex, slot.seqId);
+          metalqueue::traceQueueEvent("encode.dequeue", makeQueueTraceSnapshotUnlocked(slotIndex, slot.seqId));
           slotCopy = slot;
         }
 
@@ -5459,9 +5399,9 @@ class MetalBackendDevice final : public BackendDevice {
       CommandBufferDiagnostics diagnostics;
       {
         std::lock_guard lock(mutex_);
-        diagnostics = summarizeChunkUnlocked(slotIndex, slot);
+        diagnostics = metalqueue::summarizeChunk(makeChunkSummaryInputUnlocked(slotIndex, slot));
         slots_[slotIndex].state = ChunkSlot::State::GPU;
-        traceQueueUnlocked("encode.commit", slotIndex, seqId);
+        metalqueue::traceQueueEvent("encode.commit", makeQueueTraceSnapshotUnlocked(slotIndex, seqId));
       }
       [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
         std::lock_guard completionLock(mutex_);
@@ -5469,7 +5409,7 @@ class MetalBackendDevice final : public BackendDevice {
           compatHud_.update(diagnostics, completionTracker_.lastErrorSummary());
         }
         completedSeqQueue_.push_back(seqId);
-        traceQueueUnlocked("gpu.complete", slotIndex, seqId);
+        metalqueue::traceQueueEvent("gpu.complete", makeQueueTraceSnapshotUnlocked(slotIndex, seqId));
         finishCv_.notify_all();
       }];
       [commandBuffer commit];
@@ -5491,7 +5431,7 @@ class MetalBackendDevice final : public BackendDevice {
     stagingArena_.reclaim(completedSeqId_);
     copyTempArena_.reclaim(completedSeqId_);
     completedSeqQueue_.push_back(seqId);
-    traceQueueUnlocked("finish.inline", slotIndex, seqId);
+    metalqueue::traceQueueEvent("finish.inline", makeQueueTraceSnapshotUnlocked(slotIndex, seqId));
     writeCv_.notify_all();
     finishCv_.notify_all();
   }
@@ -7083,7 +7023,7 @@ class MetalBackendDevice final : public BackendDevice {
           if (inflightCount_ > 0) {
             --inflightCount_;
           }
-          traceQueueUnlocked("finish.dequeue", std::nullopt, seqId);
+          metalqueue::traceQueueEvent("finish.dequeue", makeQueueTraceSnapshotUnlocked(std::nullopt, seqId));
           reclaimCompletedSlotsUnlocked(seqId);
           argbufArena_.reclaim(completedSeqId_);
           lambdaStoreArena_.reclaim(completedSeqId_);
@@ -7104,7 +7044,7 @@ class MetalBackendDevice final : public BackendDevice {
         slot.state = ChunkSlot::State::Free;
         slot.commands.clear();
         slot.seqId = 0;
-        traceQueueUnlocked("reclaim.free", slotIndex, seqId);
+        metalqueue::traceQueueEvent("reclaim.free", makeQueueTraceSnapshotUnlocked(slotIndex, seqId));
         // TLA+: SeqIdSafety
         DXMT_ASSERT(completedSeqId_ <= nextSeqId_);
       }
@@ -7113,11 +7053,11 @@ class MetalBackendDevice final : public BackendDevice {
 
   void waitForSequenceUnlocked(u64 seqId, std::unique_lock<std::mutex>& lock) {
     if (completedSeqId_ < seqId) {
-      traceQueueUnlocked("wait.seq.begin", std::nullopt, seqId);
+      metalqueue::traceQueueEvent("wait.seq.begin", makeQueueTraceSnapshotUnlocked(std::nullopt, seqId));
     }
     finishCv_.wait(lock, [this, seqId] { return stop_ || completedSeqId_ >= seqId; });
     if (!stop_) {
-      traceQueueUnlocked("wait.seq.end", std::nullopt, seqId);
+      metalqueue::traceQueueEvent("wait.seq.end", makeQueueTraceSnapshotUnlocked(std::nullopt, seqId));
     }
   }
 

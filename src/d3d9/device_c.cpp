@@ -1,8 +1,9 @@
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
-#include "util/util_env.hpp"
-#include "util/util_log.hpp"
+#include "util/config/config.hpp"
+#include "util/log/log.hpp"
+#include <cstdarg>
 #include <algorithm>
 #include <atomic>
 #include <filesystem>

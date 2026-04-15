@@ -1,6 +1,7 @@
-#include "util_log.hpp"
+#include "log.hpp"
 
-#include "util_env.hpp"
+#include "../config/config.hpp"
+#include "../util_string.hpp"
 
 #include <array>
 #include <cstdio>
@@ -104,7 +105,7 @@ const char* levelPrefix(LogLevel level) {
 
 LogLevel configuredLogLevel() {
   static const LogLevel level = [] {
-    const auto value = getenvString("DXMT_LOG_LEVEL");
+    const auto value = str::toLowerAscii(getenvString("DXMT_LOG_LEVEL"));
     if (value == "trace") return LogLevel::Trace;
     if (value == "debug") return LogLevel::Debug;
     if (value == "info" || value.empty()) return LogLevel::Info;

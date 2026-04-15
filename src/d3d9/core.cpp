@@ -1,8 +1,8 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
 #include "util/util_bmp.hpp"
-#include "util/util_env.hpp"
-#include "util/util_log.hpp"
+#include "util/config/config.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
 #include <cmath>

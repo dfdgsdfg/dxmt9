@@ -1,10 +1,11 @@
 /* src/d3d9/d3d9_pe_factory.cpp — PE-side IDirect3D9 / IDirect3D9Ex COM wrapper.
  * All methods delegate to the dxmt9c_factory_* C API. */
 
+#include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 #include "d3d9_pe.hpp"
-#include "util/util_log.hpp"
+#include "util/log/log.hpp"
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
