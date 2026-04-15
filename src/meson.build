@@ -1,5 +1,6 @@
 subdir('util')
 subdir('d3d9')
+subdir('winemetal')
 subdir('dxmt9')
 dxmt9_anchor_srcs = files('dxmt9/dxmt9.cpp')
 
@@ -63,7 +64,7 @@ dxmt9_native_lib = shared_library(
   dxmt9_anchor_srcs,
   include_directories: [dxmt9_inc, bridge_gen_inc],
   dependencies: dxmt9_deps,
-  link_whole: [dxmt9_util_lib, dxmt9_frontend_lib, dxmt9_runtime_lib],
+  link_whole: [dxmt9_util_lib, dxmt9_frontend_lib, dxmt9_winemetal_lib, dxmt9_runtime_lib],
   install: false,
 )
 
@@ -81,7 +82,7 @@ dxmt9_unix_module = shared_library(
   dxmt9_anchor_srcs + [bridge_codegen[2]],
   include_directories: [dxmt9_inc, bridge_gen_inc],
   dependencies: dxmt9_deps,
-  link_whole: [dxmt9_util_lib, dxmt9_frontend_lib, dxmt9_runtime_lib],
+  link_whole: [dxmt9_util_lib, dxmt9_frontend_lib, dxmt9_winemetal_lib, dxmt9_runtime_lib],
   link_args: dxmt9_unix_link_args,
   name_prefix: '',
   name_suffix: 'so',
