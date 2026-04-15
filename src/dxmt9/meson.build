@@ -4,7 +4,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_capture.cpp',
   'dxmt9_hud.mm',
   'dxmt9_presenter_support.mm',
-  'dxmt9_queue.cpp',
+  'dxmt9_queue.mm',
   'winemetal_bridge.cpp',
 )
 

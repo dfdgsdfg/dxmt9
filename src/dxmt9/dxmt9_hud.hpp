@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 
 #include "dxmt9/core.hpp"
+#include "dxmt9_queue.hpp"
 
 #include <string>
 #include <vector>
@@ -39,6 +40,17 @@ class DeveloperHudState {
   bool available_ = false;
   id hud_ = nil;
   std::vector<NSString*> labels_{};
+};
+
+class DeveloperHudController {
+ public:
+  u32 recordPresentedFrame(u32 flags);
+  void update(const metalqueue::CommandBufferDiagnostics& diagnostics, const std::string& errorSummary);
+
+ private:
+  DeveloperHudState state_{};
+  u32 presentedFrame_ = 0;
+  u32 lastCompatFlags_ = 0;
 };
 
 }  // namespace dxmt9::core::metalhud

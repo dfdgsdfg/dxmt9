@@ -1,10 +1,9 @@
-#include "runtime.hpp"
+#include "util_log.hpp"
+
+#include "util_env.hpp"
 
 #include <array>
-#include <cstdarg>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -18,7 +17,7 @@
 #include <mach-o/dyld.h>
 #endif
 
-namespace dxmt9::runtime {
+namespace dxmt9::util {
 
 namespace {
 
@@ -103,68 +102,6 @@ const char* levelPrefix(LogLevel level) {
 
 }  // namespace
 
-std::string getenvString(const char* name) {
-  const char* value = std::getenv(name);
-  return value ? std::string(value) : std::string();
-}
-
-bool getenvFlag(const char* name) {
-  const char* value = std::getenv(name);
-  return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
-}
-
-std::optional<std::uint32_t> getenvU32(const char* name) {
-  const char* value = std::getenv(name);
-  if (!value || value[0] == '\0') {
-    return std::nullopt;
-  }
-  char* end = nullptr;
-  const auto parsed = std::strtoul(value, &end, 10);
-  if (!end || *end != '\0') {
-    return std::nullopt;
-  }
-  return static_cast<std::uint32_t>(parsed);
-}
-
-std::optional<std::uint32_t> getenvU32Auto(const char* name) {
-  const char* value = std::getenv(name);
-  if (!value || value[0] == '\0') {
-    return std::nullopt;
-  }
-  char* end = nullptr;
-  const auto parsed = std::strtoull(value, &end, 0);
-  if (!end || *end != '\0') {
-    return std::nullopt;
-  }
-  return static_cast<std::uint32_t>(parsed);
-}
-
-std::optional<std::uint64_t> getenvU64(const char* name) {
-  const char* value = std::getenv(name);
-  if (!value || value[0] == '\0') {
-    return std::nullopt;
-  }
-  char* end = nullptr;
-  const auto parsed = std::strtoull(value, &end, 10);
-  if (!end || *end != '\0') {
-    return std::nullopt;
-  }
-  return static_cast<std::uint64_t>(parsed);
-}
-
-std::optional<std::uint64_t> getenvU64Auto(const char* name) {
-  const char* value = std::getenv(name);
-  if (!value || value[0] == '\0') {
-    return std::nullopt;
-  }
-  char* end = nullptr;
-  const auto parsed = std::strtoull(value, &end, 0);
-  if (!end || *end != '\0') {
-    return std::nullopt;
-  }
-  return static_cast<std::uint64_t>(parsed);
-}
-
 LogLevel configuredLogLevel() {
   static const LogLevel level = [] {
     const auto value = getenvString("DXMT_LOG_LEVEL");
@@ -201,19 +138,28 @@ void logLine(LogLevel level, const char* tag, const std::string& line) {
   }
 }
 
-void logf(LogLevel level, const char* tag, const char* fmt, ...) {
+void vlogf(LogLevel level, const char* tag, const char* fmt, std::va_list args) {
   if (!shouldLog(level)) {
     return;
   }
   std::array<char, 4096> buffer{};
-  va_list args;
-  va_start(args, fmt);
   const int written = std::vsnprintf(buffer.data(), buffer.size(), fmt, args);
-  va_end(args);
   if (written <= 0) {
     return;
   }
-  logLine(level, tag, std::string(buffer.data(), static_cast<std::size_t>(std::min<int>(written, static_cast<int>(buffer.size() - 1)))));
+  logLine(level, tag,
+          std::string(buffer.data(),
+                      static_cast<std::size_t>(std::min<int>(written, static_cast<int>(buffer.size() - 1)))));
 }
 
-}  // namespace dxmt9::runtime
+void logf(LogLevel level, const char* tag, const char* fmt, ...) {
+  if (!shouldLog(level)) {
+    return;
+  }
+  std::va_list args;
+  va_start(args, fmt);
+  vlogf(level, tag, fmt, args);
+  va_end(args);
+}
+
+}  // namespace dxmt9::util

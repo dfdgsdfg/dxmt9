@@ -3,7 +3,7 @@
 
 #include "dxmt9_hud.hpp"
 
-#include "util/runtime.hpp"
+#include "util/util_env.hpp"
 
 #include <cmath>
 #include <sstream>
@@ -11,7 +11,7 @@
 namespace dxmt9::core::metalhud {
 
 bool compatHudEnabled() {
-  static const bool enabled = dxmt9::runtime::getenvFlag("DXMT_COMPAT_HUD");
+  static const bool enabled = dxmt9::util::getenvFlag("DXMT_COMPAT_HUD");
   return enabled;
 }
 
@@ -134,6 +134,19 @@ void DeveloperHudState::updateLine(size_t index, const std::string& value) {
   NSString* valueString = [NSString stringWithUTF8String:value.c_str()];
   const auto updateFn = reinterpret_cast<void (*)(id, SEL, id, id)>(objc_msgSend);
   updateFn(hud_, @selector(updateLabel:value:), labels_[index], valueString);
+}
+
+u32 DeveloperHudController::recordPresentedFrame(u32 flags) {
+  presentedFrame_ += 1;
+  lastCompatFlags_ = flags;
+  return presentedFrame_;
+}
+
+void DeveloperHudController::update(const metalqueue::CommandBufferDiagnostics& diagnostics,
+                                    const std::string& errorSummary) {
+  const u32 frame = diagnostics.frame != 0 ? diagnostics.frame : presentedFrame_;
+  const u32 flags = diagnostics.compatFlags != 0 ? diagnostics.compatFlags : lastCompatFlags_;
+  state_.update(frame, diagnostics.seqId, flags, errorSummary);
 }
 
 }  // namespace dxmt9::core::metalhud

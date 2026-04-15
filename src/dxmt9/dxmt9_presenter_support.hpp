@@ -4,6 +4,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <cstdint>
+#include <unordered_map>
 
 namespace dxmt9::core::metalpresent {
 
@@ -35,5 +36,25 @@ struct WineMacInterop {
 
 const WineMacInterop& wineMacInterop();
 NSView* get_nsview_for_hwnd(u64 hwnd);
+
+class PresenterState {
+ public:
+  PresenterState() = default;
+  ~PresenterState();
+
+  CAMetalLayer* lookupLayer(u64 hwnd) const;
+  CAMetalLayer* ensureLayer(u64 hwnd, u64 seqId);
+  void traceEvent(const char* event, u64 seqId, u64 windowHandle) const;
+
+ private:
+  struct LayerRecord {
+    CAMetalLayer* layer = nil;
+    void* wineMetalView = nullptr;
+    bool usesWineMetalView = false;
+  };
+
+  std::unordered_map<u64, LayerRecord> layers_;
+  void* wineMetalDevice_ = nullptr;
+};
 
 }  // namespace dxmt9::core::metalpresent

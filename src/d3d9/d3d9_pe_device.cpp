@@ -2,27 +2,24 @@
  * All methods delegate to the dxmt9c_* C API from dxmt9/device_c.h. */
 
 #include <atomic>
-#include <cstdarg>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include "d3d9_pe.hpp"
-#include "util/runtime.hpp"
+#include "util/util_env.hpp"
+#include "util/util_log.hpp"
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
 static void dxmt9DeviceDebugLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    char message[2048];
-    std::vsnprintf(message, sizeof(message), fmt, args);
+    dxmt9::util::vlogf(dxmt9::util::LogLevel::Debug, "dxmt9-device", fmt, args);
     va_end(args);
-    dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Debug, "dxmt9-device", message);
 }
 
 static bool dxmt9LeakStateBlocksEnabled() {
-    static const bool enabled = dxmt9::runtime::getenvFlag("DXMT_LEAK_STATEBLOCKS");
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT_LEAK_STATEBLOCKS");
     return enabled;
 }
 

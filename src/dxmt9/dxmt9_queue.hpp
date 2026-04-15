@@ -1,5 +1,7 @@
 #pragma once
 
+#import <Metal/Metal.h>
+
 #include <cstdint>
 #include <string>
 
@@ -24,5 +26,16 @@ u64 queueTraceFromSeq();
 
 void emitQueueTraceLine(const std::string& line);
 void emitTextureTraceLine(const std::string& line);
+
+class CompletionTracker {
+ public:
+  bool inspect(id<MTLCommandBuffer> commandBuffer, const CommandBufferDiagnostics& diagnostics, const char* context);
+  const std::string& lastErrorSummary() const noexcept { return lastErrorSummary_; }
+
+ private:
+  std::string commandBufferStatusName(MTLCommandBufferStatus status) const;
+
+  std::string lastErrorSummary_;
+};
 
 }  // namespace dxmt9::core::metalqueue

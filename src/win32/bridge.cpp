@@ -1,20 +1,18 @@
 /* src/win32/bridge.cpp — PE bridge between d3d9.dll and dxmt9.so.
  *
- * This module owns the Win32 COM wrappers and forwards all dxmt9c_* / shader
- * calls to the unix-side dxmt9.so via Wine unixlib dispatch. */
+ * This module owns the PE/unix bridge bootstrap and forwards d3d9 entrypoints
+ * to the frontend wrappers and unix-side dxmt9.so via Wine unixlib dispatch. */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winternl.h>
 #include <d3d9.h>
-#include <cstdarg>
-#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 
 #include "d3d9/d3d9_pe.hpp"
 #include "dxmt9/device_c.h"
-#include "util/runtime.hpp"
+#include "util/util_log.hpp"
 #include "dxmt9/wineunixlib.h"
 
 namespace {
@@ -59,10 +57,8 @@ BridgeState& bridgeState() {
 void bridgeDebugLog(const char* fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  char buffer[2048];
-  std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+  dxmt9::util::vlogf(dxmt9::util::LogLevel::Debug, "dxmt9-bridge", fmt, args);
   va_end(args);
-  dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Debug, "dxmt9-bridge", buffer);
 }
 
 template <typename T>

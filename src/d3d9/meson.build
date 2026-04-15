@@ -11,6 +11,22 @@ dxmt9_pe_wrapper_srcs = files(
 
 dxmt9_d3d9_internal_inc = include_directories('.', '..')
 
+if host_machine.system() == 'windows'
+  dxmt9_pe_wrapper_lib = static_library(
+    'dxmt9_pe_wrapper',
+    dxmt9_pe_wrapper_srcs,
+    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+    dependencies: [dxmt9_util_dep],
+    install: false,
+  )
+
+  dxmt9_pe_wrapper_dep = declare_dependency(
+    link_with: dxmt9_pe_wrapper_lib,
+    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+    dependencies: [dxmt9_util_dep],
+  )
+endif
+
 if host_machine.system() == 'darwin'
   dxmt9_frontend_lib = static_library(
     'dxmt9_frontend',

@@ -1,12 +1,10 @@
 /* src/d3d9/d3d9_pe_factory.cpp — PE-side IDirect3D9 / IDirect3D9Ex COM wrapper.
  * All methods delegate to the dxmt9c_factory_* C API. */
 
-#include <cstdarg>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include "d3d9_pe.hpp"
-#include "util/runtime.hpp"
+#include "util/util_log.hpp"
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -15,10 +13,8 @@ static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 static void dxmt9FactoryDebugLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    char message[2048];
-    std::vsnprintf(message, sizeof(message), fmt, args);
+    dxmt9::util::vlogf(dxmt9::util::LogLevel::Debug, "dxmt9-factory", fmt, args);
     va_end(args);
-    dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Debug, "dxmt9-factory", message);
 }
 
 /* D9CPresentParams ← D3DPRESENT_PARAMETERS */

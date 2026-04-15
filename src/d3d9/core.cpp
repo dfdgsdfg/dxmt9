@@ -1,6 +1,8 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
-#include "util/runtime.hpp"
+#include "util/util_bmp.hpp"
+#include "util/util_env.hpp"
+#include "util/util_log.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -46,24 +48,24 @@ u32 clampToByte(float value) {
 }
 
 std::optional<u32> parseEnvU32(const char* name) {
-  return dxmt9::runtime::getenvU32(name);
+  return dxmt9::util::getenvU32(name);
 }
 
 std::optional<u32> parseEnvU32Auto(const char* name) {
-  return dxmt9::runtime::getenvU32Auto(name);
+  return dxmt9::util::getenvU32Auto(name);
 }
 
 std::string getenvString(const char* name) {
-  return dxmt9::runtime::getenvString(name);
+  return dxmt9::util::getenvString(name);
 }
 
 bool getenvFlag(const char* name) {
-  return dxmt9::runtime::getenvFlag(name);
+  return dxmt9::util::getenvFlag(name);
 }
 
 bool renderTraceEnabled() {
   static const bool enabled = [] {
-    return dxmt9::runtime::getenvFlag("DXMT_TRACE_RENDER");
+    return dxmt9::util::getenvFlag("DXMT_TRACE_RENDER");
   }();
   return enabled;
 }
@@ -92,10 +94,8 @@ void emitRenderTrace(const char* fmt, ...) {
   }
   va_list args;
   va_start(args, fmt);
-  char message[2048];
-  std::vsnprintf(message, sizeof(message), fmt, args);
+  dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-render", fmt, args);
   va_end(args);
-  dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Info, "dxmt9-render", message);
 }
 
 constexpr u32 kFvfPositionMask = 0x000eu;
@@ -477,69 +477,7 @@ ColorRGBA decodeColor(Format format, const u8* src) {
 
 bool writeBmpScreenshot(const std::string& path, Format format, u32 width, u32 height, u32 pitch,
                         std::span<const u8> bytes) {
-  if (path.empty() || width == 0 || height == 0 || pitch == 0) {
-    return false;
-  }
-  const u32 srcBytesPerPixel = bytesPerPixel(format);
-  if (srcBytesPerPixel == 0) {
-    return false;
-  }
-  const u32 bytesPerRow = width * 4;
-  const u32 imageSize = bytesPerRow * height;
-  const u32 fileSize = 14 + 40 + imageSize;
-  std::vector<u8> out(fileSize, 0);
-
-  auto writeU16 = [&](size_t offset, u16 value) {
-    out[offset + 0] = static_cast<u8>(value & 0xffu);
-    out[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
-  };
-  auto writeU32 = [&](size_t offset, u32 value) {
-    out[offset + 0] = static_cast<u8>(value & 0xffu);
-    out[offset + 1] = static_cast<u8>((value >> 8) & 0xffu);
-    out[offset + 2] = static_cast<u8>((value >> 16) & 0xffu);
-    out[offset + 3] = static_cast<u8>((value >> 24) & 0xffu);
-  };
-  auto writeI32 = [&](size_t offset, i32 value) { writeU32(offset, static_cast<u32>(value)); };
-
-  out[0] = 'B';
-  out[1] = 'M';
-  writeU32(2, fileSize);
-  writeU32(10, 14 + 40);
-  writeU32(14, 40);
-  writeI32(18, static_cast<i32>(width));
-  writeI32(22, -static_cast<i32>(height));
-  writeU16(26, 1);
-  writeU16(28, 32);
-  writeU32(30, 0);
-  writeU32(34, imageSize);
-  writeI32(38, 2835);
-  writeI32(42, 2835);
-
-  if (bytes.size() < static_cast<size_t>(pitch) * height) {
-    return false;
-  }
-
-  size_t dstOffset = 14 + 40;
-  for (u32 y = 0; y < height; ++y) {
-    const u8* srcRow = bytes.data() + static_cast<size_t>(y) * pitch;
-    for (u32 x = 0; x < width; ++x) {
-      const u32 srcOffset = x * srcBytesPerPixel;
-      const auto color = decodeColor(format, srcRow + srcOffset);
-      out[dstOffset++] = static_cast<u8>(clampToByte(color.b));
-      out[dstOffset++] = static_cast<u8>(clampToByte(color.g));
-      out[dstOffset++] = static_cast<u8>(clampToByte(color.r));
-      out[dstOffset++] = static_cast<u8>(clampToByte(color.a));
-    }
-  }
-
-  std::error_code ec;
-  std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-  std::ofstream stream(path, std::ios::binary);
-  if (!stream) {
-    return false;
-  }
-  stream.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
-  return stream.good();
+  return dxmt9::util::writeBmp(path, format, width, height, pitch, bytes);
 }
 
 bool encodeColor(Format format, ColorRGBA c, u8* dst) {

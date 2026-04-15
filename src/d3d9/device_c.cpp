@@ -1,11 +1,10 @@
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
-#include "util/runtime.hpp"
+#include "util/util_env.hpp"
+#include "util/util_log.hpp"
 #include <algorithm>
 #include <atomic>
-#include <cstdarg>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -27,14 +26,12 @@ namespace {
 void dxmt9DebugLog(const char* fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  char buffer[2048];
-  std::vsnprintf(buffer, sizeof(buffer), fmt, args);
+  dxmt9::util::vlogf(dxmt9::util::LogLevel::Debug, "dxmt9-debug", fmt, args);
   va_end(args);
-  dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Debug, "dxmt9-debug", buffer);
 }
 
 const char* dxmt9ShaderDumpDir() {
-  static const std::string path = dxmt9::runtime::getenvString("DXMT_DUMP_SHADER_BYTECODE_DIR");
+  static const std::string path = dxmt9::util::getenvString("DXMT_DUMP_SHADER_BYTECODE_DIR");
   return path.empty() ? nullptr : path.c_str();
 }
 

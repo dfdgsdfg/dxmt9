@@ -10,7 +10,7 @@
 #include "dxmt9_hud.hpp"
 #include "dxmt9_presenter_support.hpp"
 #include "dxmt9_queue.hpp"
-#include "util/runtime.hpp"
+#include "util/util_env.hpp"
 #include "dxmt9/winemetal.h"
 
 #include <algorithm>
@@ -49,17 +49,10 @@ namespace {
 using dxmt9::core::metalcapture::gpuDumpTextureHandle;
 using dxmt9::core::metalcapture::gpuDumpTexturePath;
 using dxmt9::core::metalcapture::writeTextureBmp;
-using dxmt9::core::metalhud::compatHudEnabled;
-using dxmt9::core::metalhud::DeveloperHudState;
+using dxmt9::core::metalhud::DeveloperHudController;
 using dxmt9::core::metalhud::formatCompatFlags;
 using dxmt9::core::metalhud::isFloatRenderTargetFormat;
 using dxmt9::core::metalhud::matrixIsIdentity;
-using dxmt9::core::metalpresent::directLayerAttachEnabled;
-using dxmt9::core::metalpresent::get_nsview_for_hwnd;
-using dxmt9::core::metalpresent::lookupLayerHandle;
-using dxmt9::core::metalpresent::registerLayerHandle;
-using dxmt9::core::metalpresent::unregisterLayerHandle;
-using dxmt9::core::metalpresent::wineMacInterop;
 using dxmt9::core::metalqueue::CommandBufferDiagnostics;
 using dxmt9::core::metalqueue::emitQueueTraceLine;
 using dxmt9::core::metalqueue::emitTextureTraceLine;
@@ -72,53 +65,38 @@ constexpr size_t kRingSize = 32;
 constexpr size_t kMaxInflight = 3;
 
 bool debugForceVisibleDraw() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT_DEBUG_FORCE_VISIBLE");
-    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
+  static const bool enabled = dxmt9::util::getenvFlag("DXMT_DEBUG_FORCE_VISIBLE");
   return enabled;
 }
 
 bool debugSkipAllDraws() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT_SKIP_ALL_DRAWS");
-    return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
+  static const bool enabled = dxmt9::util::getenvFlag("DXMT_SKIP_ALL_DRAWS");
   return enabled;
 }
 
 bool debugDisableScissor() {
-  static const bool value = [] {
-    const char* env = std::getenv("DXMT_DISABLE_SCISSOR");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
+  static const bool value = dxmt9::util::getenvFlag("DXMT_DISABLE_SCISSOR");
   return value;
 }
 
 bool debugDisableAlphaTest() {
-  static const bool value = [] {
-    const char* env = std::getenv("DXMT_DISABLE_ALPHA_TEST");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
+  static const bool value = dxmt9::util::getenvFlag("DXMT_DISABLE_ALPHA_TEST");
   return value;
 }
 
 bool debugForceExpandIndexed() {
-  static const bool value = [] {
-    const char* env = std::getenv("DXMT_FORCE_EXPAND_INDEXED");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
+  static const bool value = dxmt9::util::getenvFlag("DXMT_FORCE_EXPAND_INDEXED");
   return value;
 }
 
 
 int fixedFunctionTraceBudget() {
   static const int budget = [] {
-    const char* env = std::getenv("DXMT_TRACE_FVF");
-    if (!env || env[0] == '\0') {
+    const auto env = dxmt9::util::getenvString("DXMT_TRACE_FVF");
+    if (env.empty()) {
       return 0;
     }
-    return std::max(0, std::atoi(env));
+    return std::max(0, std::atoi(env.c_str()));
   }();
   return budget;
 }
@@ -4304,13 +4282,6 @@ DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
   return key;
 }
 
-struct LayerRecord {
-  ObjcPtr<CAMetalLayer*> layer;
-  Handle window{};
-  void* wineMetalView = nullptr;
-  bool usesWineMetalView = false;
-};
-
 class MetalBackendDevice final : public BackendDevice {
  public:
   explicit MetalBackendDevice(const BackendLimits& limits) : limits_(limits) {
@@ -4356,19 +4327,6 @@ class MetalBackendDevice final : public BackendDevice {
       persistShaderArchive(shaderArchive_.get(), shaderArchiveURL_.get());
     }
     purgeResourcesUnlocked();
-    const auto& interop = wineMacInterop();
-    for (auto& [hwnd, record] : layers_) {
-      unregisterLayerHandle(hwnd);
-      if (record.wineMetalView && interop.releaseMetalView) {
-        interop.releaseMetalView(record.wineMetalView);
-        record.wineMetalView = nullptr;
-      }
-    }
-    layers_.clear();
-    if (wineMetalDevice_ && interop.releaseMetalDevice) {
-      interop.releaseMetalDevice(wineMetalDevice_);
-    }
-    wineMetalDevice_ = nullptr;
   }
 
   void setDeviceLostObserver(DeviceLostObserver observer) override {
@@ -4461,7 +4419,7 @@ class MetalBackendDevice final : public BackendDevice {
         std::lock_guard lock(mutex_);
         CommandBufferDiagnostics diagnostics;
         diagnostics.hasBlit = true;
-        inspectCommandBufferCompletionUnlocked(commandBuffer, diagnostics, "readback");
+        completionTracker_.inspect(commandBuffer, diagnostics, "readback");
       }
 
       pixels.pitch = width * bpp;
@@ -4778,7 +4736,7 @@ class MetalBackendDevice final : public BackendDevice {
         [commandBuffer waitUntilCompleted];
         CommandBufferDiagnostics diagnostics;
         diagnostics.hasBlit = true;
-        inspectCommandBufferCompletionUnlocked(commandBuffer, diagnostics, "texture-upload");
+        completionTracker_.inspect(commandBuffer, diagnostics, "texture-upload");
         [stagingTexture release];
       }
     }
@@ -4980,91 +4938,9 @@ class MetalBackendDevice final : public BackendDevice {
       }
     }
     if (diagnostics.hasPresent) {
-      diagnostics.frame = ++presentedFrameCount_;
-      lastCompatFlags_ = diagnostics.compatFlags;
+      diagnostics.frame = compatHud_.recordPresentedFrame(diagnostics.compatFlags);
     }
     return diagnostics;
-  }
-
-  std::string commandBufferStatusName(MTLCommandBufferStatus status) const {
-    switch (status) {
-      case MTLCommandBufferStatusNotEnqueued:
-        return "not-enqueued";
-      case MTLCommandBufferStatusEnqueued:
-        return "enqueued";
-      case MTLCommandBufferStatusCommitted:
-        return "committed";
-      case MTLCommandBufferStatusScheduled:
-        return "scheduled";
-      case MTLCommandBufferStatusCompleted:
-        return "completed";
-      case MTLCommandBufferStatusError:
-        return "error";
-    }
-    return "unknown";
-  }
-
-  void updateCompatHudUnlocked(const CommandBufferDiagnostics& diagnostics) {
-    if (!compatHudEnabled()) {
-      return;
-    }
-    const u32 frame = diagnostics.frame != 0 ? diagnostics.frame : presentedFrameCount_;
-    const u32 flags = diagnostics.compatFlags != 0 ? diagnostics.compatFlags : lastCompatFlags_;
-    compatHud_.update(frame, diagnostics.seqId, flags, lastCommandBufferErrorSummary_);
-  }
-
-  void inspectCommandBufferCompletionUnlocked(id<MTLCommandBuffer> commandBuffer,
-                                              const CommandBufferDiagnostics& diagnostics,
-                                              const char* context) {
-    if (!commandBuffer) {
-      return;
-    }
-
-    const MTLCommandBufferStatus status = [commandBuffer status];
-    if (queueTraceEnabled()) {
-      dxmt9::runtime::logf(dxmt9::runtime::LogLevel::Debug, "dxmt9-metal",
-                           "%s seq=%llu slot=%zu frame=%u status=%s draw=%d present=%d blit=%d",
-                           context,
-                           static_cast<unsigned long long>(diagnostics.seqId),
-                           diagnostics.slotIndex,
-                           diagnostics.frame,
-                           commandBufferStatusName(status).c_str(),
-                           diagnostics.hasDraw ? 1 : 0,
-                           diagnostics.hasPresent ? 1 : 0,
-                           diagnostics.hasBlit ? 1 : 0);
-    }
-
-    if (status == MTLCommandBufferStatusError) {
-      std::ostringstream summary;
-      summary << context << " seq=" << diagnostics.seqId << " status=error";
-      if (NSError* error = [commandBuffer error]) {
-        summary << " error=" << [[error localizedDescription] UTF8String];
-      }
-      lastCommandBufferErrorSummary_ = summary.str();
-      dxmt9::runtime::logLine(dxmt9::runtime::LogLevel::Error, "dxmt9-metal", lastCommandBufferErrorSummary_);
-    } else if (diagnostics.hasPresent) {
-      lastCommandBufferErrorSummary_.clear();
-    }
-
-    if ([reinterpret_cast<id>(commandBuffer) respondsToSelector:@selector(logs)]) {
-      const auto logsFn = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
-      NSArray* logs = logsFn(reinterpret_cast<id>(commandBuffer), @selector(logs));
-      for (id logEntry in logs) {
-        NSString* description = [logEntry description];
-        if (!description) {
-          continue;
-        }
-        dxmt9::runtime::logf(dxmt9::runtime::LogLevel::Warn, "dxmt9-metal",
-                             "%s seq=%llu metal-log=%s",
-                             context,
-                             static_cast<unsigned long long>(diagnostics.seqId),
-                             [description UTF8String]);
-      }
-    }
-
-    if (diagnostics.hasPresent || status == MTLCommandBufferStatusError) {
-      updateCompatHudUnlocked(diagnostics);
-    }
   }
 
   static const char* slotStateName(ChunkSlot::State state) {
@@ -5169,226 +5045,6 @@ class MetalBackendDevice final : public BackendDevice {
       out << ' ' << extra;
     }
     emitQueueTraceLine(out.str());
-  }
-
-  void tracePresentEvent(const char* event, u64 seqId, u64 windowHandle) const {
-    if (!queueTraceEnabled()) {
-      return;
-    }
-    const u64 threshold = queueTraceFromSeq();
-    if (threshold != 0 && seqId != 0 && seqId < threshold) {
-      return;
-    }
-    std::ostringstream out;
-    out << "[dxmt9-present] " << event
-        << " seq=" << static_cast<unsigned long long>(seqId)
-        << " hwnd=" << static_cast<unsigned long long>(windowHandle);
-    emitQueueTraceLine(out.str());
-  }
-
-  CAMetalLayer* ensurePresentLayerUnlocked(u64 hwnd, u64 seqId) {
-    if (!hwnd) {
-      return nullptr;
-    }
-    tracePresentEvent("layer.ensure.begin", seqId, hwnd);
-    if (auto* layer = lookupLayerHandle(hwnd)) {
-      tracePresentEvent("layer.ensure.cached", seqId, hwnd);
-      return layer;
-    }
-
-    LayerRecord record;
-    record.window = {hwnd};
-    const auto& interop = wineMacInterop();
-
-    if (interop.getCocoaView) {
-      __block CAMetalLayer* legacyLayer = nil;
-      dispatch_sync(dispatch_get_main_queue(), ^{
-        @autoreleasepool {
-          NSView* view = get_nsview_for_hwnd(hwnd);
-          if (!view) return;
-          CAMetalLayer* newLayer = [CAMetalLayer layer];
-          view.wantsLayer = YES;
-          view.layer = newLayer;
-          legacyLayer = newLayer;
-        }
-      });
-      if (!legacyLayer) {
-        tracePresentEvent("legacy-view.nil", seqId, hwnd);
-        return nullptr;
-      }
-      record.layer = ObjcPtr<CAMetalLayer*>::retain(legacyLayer);
-    } else if (interop.getCocoaWindow && interop.createMetalDevice && interop.createMetalView &&
-               interop.getMetalLayer) {
-      tracePresentEvent("table-path.begin", seqId, hwnd);
-      if (!wineMetalDevice_) {
-        tracePresentEvent("metal-device.begin", seqId, hwnd);
-        wineMetalDevice_ = interop.createMetalDevice();
-        if (!wineMetalDevice_) {
-          tracePresentEvent("metal-device.nil", seqId, hwnd);
-          return nullptr;
-        }
-        tracePresentEvent("metal-device.ok", seqId, hwnd);
-      } else {
-        tracePresentEvent("metal-device.cached", seqId, hwnd);
-      }
-
-      __block void* cocoaView = nullptr;
-      __block bool haveWindowObject = false;
-      for (int queryMode : {0, 1}) {
-        tracePresentEvent(queryMode == 0 ? "cocoa-object.begin.0" : "cocoa-object.begin.1", seqId, hwnd);
-        void* cocoaObject = interop.getCocoaWindow(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)), queryMode);
-        if (!cocoaObject) {
-          tracePresentEvent(queryMode == 0 ? "cocoa-object.nil.0" : "cocoa-object.nil.1", seqId, hwnd);
-          continue;
-        }
-        tracePresentEvent(queryMode == 0 ? "cocoa-object.ok.0" : "cocoa-object.ok.1", seqId, hwnd);
-        tracePresentEvent("content-view.begin", seqId, hwnd);
-        dispatch_sync(dispatch_get_main_queue(), ^{
-          @autoreleasepool {
-            id object = static_cast<id>(cocoaObject);
-            if (queueTraceEnabled()) {
-              std::ostringstream out;
-              out << "[dxmt9-present] cocoa-object.class"
-                  << " seq=" << static_cast<unsigned long long>(seqId)
-                  << " hwnd=" << static_cast<unsigned long long>(hwnd)
-                  << " mode=" << queryMode
-                  << " class=" << (object ? [NSStringFromClass([object class]) UTF8String] : "nil");
-              emitQueueTraceLine(out.str());
-            }
-            if ([object isKindOfClass:[NSView class]]) {
-              cocoaView = object;
-              return;
-            }
-            if ([object isKindOfClass:[NSWindow class]]) {
-              haveWindowObject = true;
-              cocoaView = [static_cast<NSWindow*>(object) contentView];
-            }
-          }
-        });
-        if (cocoaView) {
-          break;
-        }
-      }
-      if (!cocoaView) {
-        tracePresentEvent(haveWindowObject ? "content-view.nil" : "cocoa-object.nil", seqId, hwnd);
-        return nullptr;
-      }
-      tracePresentEvent("content-view.ok", seqId, hwnd);
-
-      if (directLayerAttachEnabled()) {
-        __block CAMetalLayer* directLayer = nil;
-        tracePresentEvent("direct-layer.begin", seqId, hwnd);
-        dispatch_sync(dispatch_get_main_queue(), ^{
-          @autoreleasepool {
-            NSView* view = static_cast<NSView*>(cocoaView);
-            if (!view) {
-              return;
-            }
-          CAMetalLayer* newLayer = [CAMetalLayer layer];
-          view.wantsLayer = YES;
-          view.layer = newLayer;
-          newLayer.opaque = YES;
-          newLayer.frame = view.bounds;
-          if (view.window.screen) {
-            newLayer.contentsScale = view.window.screen.backingScaleFactor;
-          } else if (NSScreen.mainScreen) {
-            newLayer.contentsScale = NSScreen.mainScreen.backingScaleFactor;
-            }
-            directLayer = newLayer;
-          }
-        });
-        if (directLayer) {
-          tracePresentEvent("direct-layer.ok", seqId, hwnd);
-          record.layer = ObjcPtr<CAMetalLayer*>::retain(directLayer);
-          CAMetalLayer* layer = record.layer.get();
-          registerLayerHandle(hwnd, layer);
-          layers_[hwnd] = std::move(record);
-          return layer;
-        }
-        tracePresentEvent("direct-layer.nil", seqId, hwnd);
-      }
-
-      tracePresentEvent("metal-view.begin", seqId, hwnd);
-      void* metalView = interop.createMetalView(cocoaView, wineMetalDevice_);
-      if (!metalView) {
-        tracePresentEvent("metal-view.nil", seqId, hwnd);
-        return nullptr;
-      }
-      tracePresentEvent("metal-view.ok", seqId, hwnd);
-
-      tracePresentEvent("metal-layer.begin", seqId, hwnd);
-      auto* layer = static_cast<CAMetalLayer*>(interop.getMetalLayer(metalView));
-      if (!layer) {
-        if (metalView && interop.releaseMetalView) {
-          interop.releaseMetalView(metalView);
-        }
-        tracePresentEvent("metal-layer.nil", seqId, hwnd);
-        return nullptr;
-      }
-      tracePresentEvent("metal-layer.ok", seqId, hwnd);
-
-      if (queueTraceEnabled()) {
-        dispatch_sync(dispatch_get_main_queue(), ^{
-          @autoreleasepool {
-            NSView* parentView = static_cast<NSView*>(cocoaView);
-            id metalViewObject = static_cast<id>(metalView);
-            std::ostringstream out;
-            out << "[dxmt9-present] metal-view.info"
-                << " seq=" << static_cast<unsigned long long>(seqId)
-                << " hwnd=" << static_cast<unsigned long long>(hwnd)
-                << " parentClass=" << (parentView ? [NSStringFromClass([parentView class]) UTF8String] : "nil")
-                << " metalClass=" << (metalViewObject ? [NSStringFromClass([metalViewObject class]) UTF8String] : "nil");
-            if (parentView) {
-              const NSRect bounds = parentView.bounds;
-              out << " parentBounds=" << bounds.origin.x << "," << bounds.origin.y << " "
-                  << bounds.size.width << "x" << bounds.size.height;
-            }
-            if ([metalViewObject isKindOfClass:[NSView class]]) {
-              NSView* metalSubview = static_cast<NSView*>(metalViewObject);
-              if ([metalSubview respondsToSelector:@selector(setOpaque:)]) {
-                [reinterpret_cast<id>(metalSubview) setOpaque:YES];
-              }
-              const NSRect frame = metalSubview.frame;
-              const NSRect bounds = metalSubview.bounds;
-              out << " metalFrame=" << frame.origin.x << "," << frame.origin.y << " "
-                  << frame.size.width << "x" << frame.size.height
-                  << " metalBounds=" << bounds.origin.x << "," << bounds.origin.y << " "
-                  << bounds.size.width << "x" << bounds.size.height
-                  << " hidden=" << ([metalSubview isHidden] ? 1 : 0)
-                  << " superClass="
-                  << (metalSubview.superview ? [NSStringFromClass([metalSubview.superview class]) UTF8String] : "nil");
-              if (parentView) {
-                const auto* subviews = parentView.subviews;
-                out << " subviews=" << subviews.count;
-                for (NSUInteger i = 0; i < subviews.count; ++i) {
-                  NSView* sibling = subviews[i];
-                  if (sibling == metalSubview) {
-                    out << " metalIndex=" << i;
-                  }
-                }
-              }
-            }
-            const CGRect layerFrame = layer.frame;
-            out << " layerFrame=" << layerFrame.origin.x << "," << layerFrame.origin.y << " "
-                << layerFrame.size.width << "x" << layerFrame.size.height
-                << " layerOpaque=" << ([layer isOpaque] ? 1 : 0);
-            emitQueueTraceLine(out.str());
-          }
-        });
-      }
-
-      record.layer = ObjcPtr<CAMetalLayer*>::retain(layer);
-      record.wineMetalView = metalView;
-      record.usesWineMetalView = true;
-    } else {
-      tracePresentEvent("interop.unavailable", seqId, hwnd);
-      return nullptr;
-    }
-
-    CAMetalLayer* layer = record.layer.get();
-    registerLayerHandle(hwnd, layer);
-    layers_[hwnd] = std::move(record);
-    return layer;
   }
 
   BufferRecord* findBufferUnlocked(u64 handle) {
@@ -5809,7 +5465,9 @@ class MetalBackendDevice final : public BackendDevice {
       }
       [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
         std::lock_guard completionLock(mutex_);
-        inspectCommandBufferCompletionUnlocked(buffer, diagnostics, "queue");
+        if (completionTracker_.inspect(buffer, diagnostics, "queue")) {
+          compatHud_.update(diagnostics, completionTracker_.lastErrorSummary());
+        }
         completedSeqQueue_.push_back(seqId);
         traceQueueUnlocked("gpu.complete", slotIndex, seqId);
         finishCv_.notify_all();
@@ -6823,7 +6481,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void encodePresent(id<MTLCommandBuffer> commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
-    tracePresentEvent("begin", seqId, present.window.value);
+    presenterState_.traceEvent("begin", seqId, present.window.value);
     if (queueTraceEnabled()) {
       std::ostringstream out;
       out << "[dxmt9-present] source"
@@ -6834,7 +6492,7 @@ class MetalBackendDevice final : public BackendDevice {
     }
     auto* source = findSurfaceUnlocked(sourceHandle.value);
     if (!source || !source->texture) {
-      tracePresentEvent("missing-source", seqId, present.window.value);
+      presenterState_.traceEvent("missing-source", seqId, present.window.value);
       return;
     }
     id<MTLTexture> sourceTexture = source->resolveTexture ? source->resolveTexture.get() : source->texture.get();
@@ -6875,13 +6533,13 @@ class MetalBackendDevice final : public BackendDevice {
 
     CAMetalLayer* layer = nullptr;
     if (present.window.value != 0) {
-      layer = lookupLayerHandle(present.window.value);
+      layer = presenterState_.lookupLayer(present.window.value);
       if (!layer) {
-        layer = ensurePresentLayerUnlocked(present.window.value, seqId);
+        layer = presenterState_.ensureLayer(present.window.value, seqId);
       }
     }
     if (!layer) {
-      tracePresentEvent("missing-layer", seqId, present.window.value);
+      presenterState_.traceEvent("missing-layer", seqId, present.window.value);
       return;
     }
 
@@ -6893,19 +6551,19 @@ class MetalBackendDevice final : public BackendDevice {
     layer.maximumDrawableCount = std::clamp(maxFrameLatency_, 1u, 3u);
     layer.framebufferOnly = NO;
 
-    tracePresentEvent("nextDrawable.begin", seqId, present.window.value);
+    presenterState_.traceEvent("nextDrawable.begin", seqId, present.window.value);
     id<CAMetalDrawable> drawable = [layer nextDrawable];
     if (!drawable) {
       if (presentationStatusObserver_) {
         presentationStatusObserver_(true);
       }
-      tracePresentEvent("nextDrawable.nil", seqId, present.window.value);
+      presenterState_.traceEvent("nextDrawable.nil", seqId, present.window.value);
       return;
     }
     if (presentationStatusObserver_) {
       presentationStatusObserver_(false);
     }
-    tracePresentEvent("nextDrawable.ok", seqId, present.window.value);
+    presenterState_.traceEvent("nextDrawable.ok", seqId, present.window.value);
 
     auto desc = [MTLRenderPassDescriptor renderPassDescriptor];
     auto attachment = desc.colorAttachments[0];
@@ -6914,13 +6572,13 @@ class MetalBackendDevice final : public BackendDevice {
     attachment.storeAction = MTLStoreActionStore;
     auto encoder = [commandBuffer renderCommandEncoderWithDescriptor:desc];
     if (!encoder) {
-      tracePresentEvent("encoder.nil", seqId, present.window.value);
+      presenterState_.traceEvent("encoder.nil", seqId, present.window.value);
       return;
     }
     auto pipeline = pipelineForPresent(source->desc.format).get();
     if (!pipeline) {
       [encoder endEncoding];
-      tracePresentEvent("pipeline.nil", seqId, present.window.value);
+      presenterState_.traceEvent("pipeline.nil", seqId, present.window.value);
       return;
     }
     [encoder setRenderPipelineState:pipeline.get()];
@@ -6936,7 +6594,7 @@ class MetalBackendDevice final : public BackendDevice {
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder endEncoding];
     [commandBuffer presentDrawable:drawable];
-    tracePresentEvent("scheduled", seqId, present.window.value);
+    presenterState_.traceEvent("scheduled", seqId, present.window.value);
     backBufferDiscardAfterPresent_ = true;
   }
 
@@ -7005,7 +6663,7 @@ class MetalBackendDevice final : public BackendDevice {
         std::lock_guard lock(mutex_);
         CommandBufferDiagnostics diagnostics;
         diagnostics.hasBlit = true;
-        inspectCommandBufferCompletionUnlocked(commandBuffer, diagnostics, "gpu-dump");
+        completionTracker_.inspect(commandBuffer, diagnostics, "gpu-dump");
       }
 
       const u32 pitch = std::max(1u, desc.width) * 4u;
@@ -7522,18 +7180,15 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretchPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> presentPipelineCache_;
   std::unordered_map<DepthStencilKey, ObjcPtr<id<MTLDepthStencilState>>, DepthStencilKeyHash> depthCache_;
-  std::unordered_map<u64, LayerRecord> layers_;
-  void* wineMetalDevice_ = nullptr;
+  metalpresent::PresenterState presenterState_{};
   RingArena argbufArena_{1 << 20};
   RingArena lambdaStoreArena_{1 << 18};
   RingArena stagingArena_{1 << 20};
   RingArena copyTempArena_{1 << 20};
   ObjcPtr<NSURL*> shaderArchiveURL_;
   ObjcPtr<id<MTLBinaryArchive>> shaderArchive_;
-  DeveloperHudState compatHud_{};
-  u32 presentedFrameCount_ = 0;
-  u32 lastCompatFlags_ = 0;
-  std::string lastCommandBufferErrorSummary_;
+  metalqueue::CompletionTracker completionTracker_{};
+  metalhud::DeveloperHudController compatHud_{};
   bool ready_ = false;
 };
 

@@ -1,5 +1,7 @@
 dxmt9_util_srcs = files(
-  'runtime.cpp',
+  'util_bmp.cpp',
+  'util_env.cpp',
+  'util_log.cpp',
 )
 
 dxmt9_util_internal_inc = include_directories('.', '..')
