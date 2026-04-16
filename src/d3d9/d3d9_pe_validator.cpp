@@ -38,7 +38,8 @@ HRESULT WINAPI shader_validator_query_interface(IDirect3DShaderValidator9 *iface
   if (IsEqualGUID(iid, IID_IUnknown)) {
     *out = iface;
     auto *impl = reinterpret_cast<ShaderValidatorImpl *>(iface);
-    return static_cast<HRESULT>(++impl->refs), S_OK;
+    ++impl->refs;
+    return S_OK;
   }
   *out = nullptr;
   return E_NOINTERFACE;
@@ -82,7 +83,7 @@ const IDirect3DShaderValidator9Vtbl shader_validator_vtbl = {
 
 }  // namespace
 
-extern "C" __declspec(dllexport) IDirect3DShaderValidator9 *WINAPI
+extern "C" IDirect3DShaderValidator9 *WINAPI
 dxmt9_pe_create_shader_validator(void) {
   auto *validator = new ShaderValidatorImpl{};
   validator->iface.lpVtbl = &shader_validator_vtbl;

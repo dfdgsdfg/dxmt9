@@ -44,8 +44,18 @@ class DeveloperHudState {
 
 class DeveloperHudController {
  public:
+  template <typename CommandContainer, typename ObservationMapper>
+  metalqueue::CommandBufferDiagnostics prepareForSubmission(u64 seqId,
+                                                            size_t slotIndex,
+                                                            const CommandContainer& commands,
+                                                            ObservationMapper&& mapObservation) {
+    return prepareForSubmission(
+        metalqueue::summarizeChunk(seqId, slotIndex, commands, std::forward<ObservationMapper>(mapObservation)));
+  }
+
   metalqueue::CommandBufferDiagnostics prepareForSubmission(metalqueue::CommandBufferDiagnostics diagnostics);
-  void completeSubmission(const metalqueue::CommandBufferDiagnostics& diagnostics, const std::string& errorSummary);
+  void completeSubmission(const metalqueue::CommandBufferDiagnostics& diagnostics,
+                          const metalqueue::CompletionTracker& completionTracker);
 
  private:
   DeveloperHudState state_{};

@@ -148,10 +148,10 @@ DeveloperHudController::prepareForSubmission(metalqueue::CommandBufferDiagnostic
 }
 
 void DeveloperHudController::completeSubmission(const metalqueue::CommandBufferDiagnostics& diagnostics,
-                                                const std::string& errorSummary) {
+                                                const metalqueue::CompletionTracker& completionTracker) {
   const u32 frame = diagnostics.frame != 0 ? diagnostics.frame : presentedFrame_;
   const u32 flags = diagnostics.compatFlags != 0 ? diagnostics.compatFlags : lastCompatFlags_;
-  state_.update(frame, diagnostics.seqId, flags, errorSummary);
+  state_.update(frame, diagnostics.seqId, flags, completionTracker.lastErrorSummary());
 }
 
 }  // namespace dxmt9::core::metalhud

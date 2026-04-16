@@ -3,6 +3,7 @@
 #import <Metal/Metal.h>
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -89,6 +90,73 @@ CommandBufferDiagnostics summarizeChunk(u64 seqId,
                                         size_t slotIndex,
                                         std::span<const ChunkObservation> observations);
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state);
+
+template <typename CommandContainer, typename ObservationMapper>
+CommandBufferDiagnostics summarizeChunk(u64 seqId,
+                                        size_t slotIndex,
+                                        const CommandContainer& commands,
+                                        ObservationMapper&& mapObservation) {
+  std::vector<ChunkObservation> observations;
+  observations.reserve(commands.size());
+  for (const auto& command : commands) {
+    observations.push_back(std::invoke(std::forward<ObservationMapper>(mapObservation), command));
+  }
+  return summarizeChunk(seqId, slotIndex, std::span<const ChunkObservation>(observations.data(), observations.size()));
+}
+
+template <typename SlotContainer, typename SlotMapper>
+QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
+                                          std::optional<size_t> writingSlot,
+                                          size_t writeIndex,
+                                          size_t readyCount,
+                                          size_t completedQueueCount,
+                                          size_t inflightCount,
+                                          u64 completedSeqId,
+                                          u64 lastCommittedSeqId,
+                                          u64 eventSeqId,
+                                          const SlotContainer& slots,
+                                          SlotMapper&& mapSlot) {
+  QueueTraceState state;
+  state.slotIndex = slotIndex;
+  state.writingSlot = writingSlot;
+  state.writeIndex = writeIndex;
+  state.readyCount = readyCount;
+  state.completedQueueCount = completedQueueCount;
+  state.inflightCount = inflightCount;
+  state.completedSeqId = completedSeqId;
+  state.lastCommittedSeqId = lastCommittedSeqId;
+  state.eventSeqId = eventSeqId;
+  state.activeSlots.reserve(slots.size());
+  for (size_t i = 0; i < slots.size(); ++i) {
+    auto mapped = std::invoke(std::forward<SlotMapper>(mapSlot), i, slots[i]);
+    if (mapped.has_value()) {
+      state.activeSlots.push_back(*mapped);
+    }
+  }
+  return makeQueueTraceSnapshot(state);
+}
+
+template <typename SlotContainer, typename SlotMapper>
+void traceQueueEvent(const char* event,
+                     std::optional<size_t> slotIndex,
+                     std::optional<size_t> writingSlot,
+                     size_t writeIndex,
+                     size_t readyCount,
+                     size_t completedQueueCount,
+                     size_t inflightCount,
+                     u64 completedSeqId,
+                     u64 lastCommittedSeqId,
+                     u64 eventSeqId,
+                     const SlotContainer& slots,
+                     SlotMapper&& mapSlot,
+                     const char* extra = nullptr) {
+  traceQueueEvent(
+      event,
+      makeQueueTraceSnapshot(slotIndex, writingSlot, writeIndex, readyCount, completedQueueCount,
+                             inflightCount, completedSeqId, lastCommittedSeqId, eventSeqId, slots,
+                             std::forward<SlotMapper>(mapSlot)),
+      extra);
+}
 
 bool queueTraceEnabled();
 const char* queueTraceFilePath();

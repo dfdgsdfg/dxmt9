@@ -5,6 +5,8 @@ dxmt9_runtime_srcs = files(
   'dxmt9_hud.mm',
   'dxmt9_presenter_support.mm',
   'dxmt9_queue.mm',
+  'dxmt9_shader_service.cpp',
+  'dxmt9_shader_service_exports.cpp',
 )
 
 dxmt9_runtime_internal_inc = include_directories('.', '..')

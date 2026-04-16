@@ -1,23 +1,28 @@
 #include "winemetal_dispatch_internal.hpp"
 #include "../winemetal_thunks.hpp"
 
-#if defined(WINE_UNIX_LIB)
-#include "../wineunixlib.h"
-#else
-#include "dxmt9_shader_service.hpp"
-#endif
-
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <string>
 
-namespace {
-
-#if !defined(WINE_UNIX_LIB)
-thread_local std::string gShaderSourceScratch;
+#if defined(WINE_UNIX_LIB)
+#define DXMT9_SHADER_SERVICE_API __attribute__((weak_import))
 #endif
 
+#include "dxmt9_shader_service.hpp"
+
+#if defined(WINE_UNIX_LIB)
+#include "../wineunixlib.h"
+#endif
+
+#include "util/util_buffer.hpp"
+
+namespace {
+
+thread_local std::string gShaderSourceScratch;
+
+#if defined(WINE_UNIX_LIB)
 WinemetalShaderCompileRequest decodeRequest(const Dxmt9WinemetalCompileShaderParams& params) {
   WinemetalShaderCompileRequest request{};
   request.kind = static_cast<WinemetalShaderKind>(params.kind);
@@ -34,45 +39,76 @@ WinemetalShaderCompileRequest decodeRequest(const Dxmt9WinemetalCompileShaderPar
   request.fogMode = params.fog_mode;
   return request;
 }
+#endif
 
 }  // namespace
 
 extern "C" dxmt9_u64 dxmt9_winemetal_default_compile_shader(const WinemetalShaderCompileRequest* request) {
 #if defined(WINE_UNIX_LIB)
-  (void)request;
-  return 0;
-#else
-  if (!request) {
+  if (!request || dxmt9_shader_service_compile == nullptr) {
     return 0;
   }
-  return dxmt9::core::shader_service::compile(*request);
+  return dxmt9_shader_service_compile(request);
+#else
+  return dxmt9_shader_service_compile(request);
 #endif
 }
 
 extern "C" const char* dxmt9_winemetal_default_shader_source(dxmt9_u64 shaderHandle) {
 #if defined(WINE_UNIX_LIB)
-  (void)shaderHandle;
-  return nullptr;
+  if (dxmt9_shader_service_source_size == nullptr || dxmt9_shader_service_source_copy == nullptr) {
+    return nullptr;
+  }
+  const dxmt9_u64 sourceSize = dxmt9_shader_service_source_size(shaderHandle);
+  if (sourceSize == 0) {
+    gShaderSourceScratch.clear();
+    return nullptr;
+  }
+  gShaderSourceScratch.resize(static_cast<size_t>(sourceSize) + 1u);
+  const dxmt9_u64 bytesWritten = dxmt9_shader_service_source_copy(
+      shaderHandle, gShaderSourceScratch.data(), static_cast<dxmt9_u64>(gShaderSourceScratch.size()));
+  if (bytesWritten == 0) {
+    gShaderSourceScratch.clear();
+    return nullptr;
+  }
+  gShaderSourceScratch.resize(static_cast<size_t>(bytesWritten));
+  return gShaderSourceScratch.c_str();
 #else
-  gShaderSourceScratch = dxmt9::core::shader_service::source(shaderHandle);
-  return gShaderSourceScratch.empty() ? nullptr : gShaderSourceScratch.c_str();
+  const dxmt9_u64 sourceSize = dxmt9_shader_service_source_size(shaderHandle);
+  if (sourceSize == 0) {
+    gShaderSourceScratch.clear();
+    return nullptr;
+  }
+  gShaderSourceScratch.resize(static_cast<size_t>(sourceSize) + 1u);
+  const dxmt9_u64 bytesWritten = dxmt9_shader_service_source_copy(
+      shaderHandle, gShaderSourceScratch.data(), static_cast<dxmt9_u64>(gShaderSourceScratch.size()));
+  if (bytesWritten == 0) {
+    gShaderSourceScratch.clear();
+    return nullptr;
+  }
+  gShaderSourceScratch.resize(static_cast<size_t>(bytesWritten));
+  return gShaderSourceScratch.c_str();
 #endif
 }
 
 extern "C" dxmt9_u64 dxmt9_winemetal_default_shader_source_size(dxmt9_u64 shaderHandle) {
 #if defined(WINE_UNIX_LIB)
-  (void)shaderHandle;
+  if (dxmt9_shader_service_source_size != nullptr) {
+    return dxmt9_shader_service_source_size(shaderHandle);
+  }
   return 0;
 #else
-  return dxmt9::core::shader_service::sourceSize(shaderHandle);
+  return dxmt9_shader_service_source_size(shaderHandle);
 #endif
 }
 
 extern "C" void dxmt9_winemetal_default_destroy_shader(dxmt9_u64 shaderHandle) {
 #if defined(WINE_UNIX_LIB)
-  (void)shaderHandle;
+  if (dxmt9_shader_service_destroy != nullptr) {
+    dxmt9_shader_service_destroy(shaderHandle);
+  }
 #else
-  dxmt9::core::shader_service::destroy(shaderHandle);
+  dxmt9_shader_service_destroy(shaderHandle);
 #endif
 }
 
@@ -111,11 +147,7 @@ NTSTATUS shaderSourceCopyCall(void* args) {
   }
 
   char* destination = reinterpret_cast<char*>(static_cast<uintptr_t>(params->buffer_ptr));
-  const size_t sourceSize = std::strlen(source);
-  const size_t bytesToCopy = std::min<size_t>(sourceSize, static_cast<size_t>(params->buffer_capacity - 1u));
-  std::memcpy(destination, source, bytesToCopy);
-  destination[bytesToCopy] = '\0';
-  params->bytes_written = static_cast<uint64_t>(bytesToCopy);
+  params->bytes_written = dxmt9::util::copyStringToBuffer(source, destination, params->buffer_capacity);
   return DXMT9_STATUS_SUCCESS;
 }
 

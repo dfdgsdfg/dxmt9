@@ -22,7 +22,7 @@ void dxmt9PeDebugLog(const char* fmt, ...) {
 
 }  // namespace
 
-extern "C" __declspec(dllexport) IDirect3D9* WINAPI dxmt9_pe_create9(UINT sdkVersion) {
+extern "C" IDirect3D9* WINAPI dxmt9_pe_create9(UINT sdkVersion) {
   if (sdkVersion != D3D_SDK_VERSION) {
     return nullptr;
   }
@@ -39,8 +39,8 @@ extern "C" __declspec(dllexport) IDirect3D9* WINAPI dxmt9_pe_create9(UINT sdkVer
   return result;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI dxmt9_pe_create9_ex(UINT sdkVersion,
-                                                                     IDirect3D9Ex** ppD3D) {
+extern "C" HRESULT WINAPI dxmt9_pe_create9_ex(UINT sdkVersion,
+                                              IDirect3D9Ex** ppD3D) {
   if (!ppD3D) {
     return E_POINTER;
   }
