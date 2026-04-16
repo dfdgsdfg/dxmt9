@@ -1,27 +1,28 @@
 dxmt9_winemetal_internal_inc = include_directories('.', '..', '../dxmt9')
 
-dxmt9_winemetal_api_srcs = files(
-  'winemetal_dispatch.cpp',
-)
+dxmt9_winemetal_api_srcs = files()
+
+dxmt9_winemetal_deps = [dxmt9_util_dep]
 
 if host_machine.system() == 'windows'
   dxmt9_winemetal_api_srcs += files('winemetal_thunks.cpp')
 else
   dxmt9_winemetal_api_srcs += files('unix/winemetal_unix.cpp')
+  dxmt9_winemetal_deps += [dxmt9_shader_service_dep]
 endif
 
 dxmt9_winemetal_lib = static_library(
   'dxmt9_winemetal',
   dxmt9_winemetal_api_srcs,
   include_directories: [dxmt9_inc, dxmt9_winemetal_internal_inc],
-  dependencies: [dxmt9_util_dep],
+  dependencies: dxmt9_winemetal_deps,
   install: false,
 )
 
 dxmt9_winemetal_dep = declare_dependency(
   link_with: dxmt9_winemetal_lib,
   include_directories: [dxmt9_inc, dxmt9_winemetal_internal_inc],
-  dependencies: [dxmt9_util_dep],
+  dependencies: dxmt9_winemetal_deps,
 )
 
 if host_machine.system() != 'windows'
@@ -94,7 +95,7 @@ endif
 
 winemetal_dll = shared_library(
   'winemetal',
-  files('main.c', 'winemetal_dispatch.cpp', 'winemetal_thunks.cpp'),
+  files('main.c', 'winemetal_thunks.cpp'),
   name_prefix: '',
   name_suffix: 'dll',
   vs_module_defs: files('winemetal.def')[0],

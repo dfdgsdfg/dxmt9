@@ -1,4 +1,3 @@
-#include "winemetal_dispatch_internal.hpp"
 #include "winemetal_thunks.hpp"
 #include "wineunixlib.h"
 
@@ -11,9 +10,7 @@ namespace {
 
 thread_local std::string gShaderSourceScratch;
 
-}  // namespace
-
-extern "C" dxmt9_u64 dxmt9_winemetal_default_compile_shader(const WinemetalShaderCompileRequest* request) {
+dxmt9_u64 compileShaderViaUnixCall(const WinemetalShaderCompileRequest* request) {
   if (!request) {
     return 0;
   }
@@ -38,7 +35,7 @@ extern "C" dxmt9_u64 dxmt9_winemetal_default_compile_shader(const WinemetalShade
   return params.ret;
 }
 
-extern "C" dxmt9_u64 dxmt9_winemetal_default_shader_source_size(dxmt9_u64 shaderHandle) {
+dxmt9_u64 shaderSourceSizeViaUnixCall(dxmt9_u64 shaderHandle) {
   Dxmt9WinemetalShaderSourceSizeParams params{};
   params.shader_handle = shaderHandle;
   if (WINE_UNIX_CALL(DXMT9_WINEMETAL_CALL_SHADER_SOURCE_SIZE, &params) != DXMT9_STATUS_SUCCESS) {
@@ -47,8 +44,8 @@ extern "C" dxmt9_u64 dxmt9_winemetal_default_shader_source_size(dxmt9_u64 shader
   return params.ret;
 }
 
-extern "C" const char* dxmt9_winemetal_default_shader_source(dxmt9_u64 shaderHandle) {
-  const dxmt9_u64 size = dxmt9_winemetal_default_shader_source_size(shaderHandle);
+const char* shaderSourceViaUnixCall(dxmt9_u64 shaderHandle) {
+  const dxmt9_u64 size = shaderSourceSizeViaUnixCall(shaderHandle);
   if (size == 0) {
     gShaderSourceScratch.clear();
     return nullptr;
@@ -71,8 +68,26 @@ extern "C" const char* dxmt9_winemetal_default_shader_source(dxmt9_u64 shaderHan
   return gShaderSourceScratch.c_str();
 }
 
-extern "C" void dxmt9_winemetal_default_destroy_shader(dxmt9_u64 shaderHandle) {
+void destroyShaderViaUnixCall(dxmt9_u64 shaderHandle) {
   Dxmt9WinemetalDestroyShaderParams params{};
   params.shader_handle = shaderHandle;
   (void)WINE_UNIX_CALL(DXMT9_WINEMETAL_CALL_DESTROY_SHADER, &params);
+}
+
+}  // namespace
+
+extern "C" dxmt9_u64 dxmt9_winemetal_compile_shader(const WinemetalShaderCompileRequest* request) {
+  return compileShaderViaUnixCall(request);
+}
+
+extern "C" const char* dxmt9_winemetal_shader_source(dxmt9_u64 shaderHandle) {
+  return shaderSourceViaUnixCall(shaderHandle);
+}
+
+extern "C" dxmt9_u64 dxmt9_winemetal_shader_source_size(dxmt9_u64 shaderHandle) {
+  return shaderSourceSizeViaUnixCall(shaderHandle);
+}
+
+extern "C" void dxmt9_winemetal_destroy_shader(dxmt9_u64 shaderHandle) {
+  destroyShaderViaUnixCall(shaderHandle);
 }

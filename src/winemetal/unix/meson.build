@@ -11,6 +11,7 @@ shared_library(
   name_prefix: '',
   name_suffix: 'so',
   include_directories: [dxmt9_inc, include_directories('..', '../..')],
+  dependencies: [dxmt9_util_dep, dxmt9_shader_service_dep],
   cpp_args: ['-DWINE_UNIX_LIB=1'],
   native: true,
   build_rpath: '@loader_path/:@loader_path/../../',

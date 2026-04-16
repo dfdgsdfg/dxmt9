@@ -1,14 +1,9 @@
-#include "winemetal_dispatch_internal.hpp"
 #include "../winemetal_thunks.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <string>
-
-#if defined(WINE_UNIX_LIB)
-#define DXMT9_SHADER_SERVICE_API __attribute__((weak_import))
-#endif
 
 #include "dxmt9_shader_service.hpp"
 
@@ -43,22 +38,14 @@ WinemetalShaderCompileRequest decodeRequest(const Dxmt9WinemetalCompileShaderPar
 
 }  // namespace
 
-extern "C" dxmt9_u64 dxmt9_winemetal_default_compile_shader(const WinemetalShaderCompileRequest* request) {
-#if defined(WINE_UNIX_LIB)
-  if (!request || dxmt9_shader_service_compile == nullptr) {
+dxmt9_u64 compileShaderViaService(const WinemetalShaderCompileRequest* request) {
+  if (!request) {
     return 0;
   }
   return dxmt9_shader_service_compile(request);
-#else
-  return dxmt9_shader_service_compile(request);
-#endif
 }
 
-extern "C" const char* dxmt9_winemetal_default_shader_source(dxmt9_u64 shaderHandle) {
-#if defined(WINE_UNIX_LIB)
-  if (dxmt9_shader_service_source_size == nullptr || dxmt9_shader_service_source_copy == nullptr) {
-    return nullptr;
-  }
+const char* shaderSourceViaService(dxmt9_u64 shaderHandle) {
   const dxmt9_u64 sourceSize = dxmt9_shader_service_source_size(shaderHandle);
   if (sourceSize == 0) {
     gShaderSourceScratch.clear();
@@ -73,43 +60,30 @@ extern "C" const char* dxmt9_winemetal_default_shader_source(dxmt9_u64 shaderHan
   }
   gShaderSourceScratch.resize(static_cast<size_t>(bytesWritten));
   return gShaderSourceScratch.c_str();
-#else
-  const dxmt9_u64 sourceSize = dxmt9_shader_service_source_size(shaderHandle);
-  if (sourceSize == 0) {
-    gShaderSourceScratch.clear();
-    return nullptr;
-  }
-  gShaderSourceScratch.resize(static_cast<size_t>(sourceSize) + 1u);
-  const dxmt9_u64 bytesWritten = dxmt9_shader_service_source_copy(
-      shaderHandle, gShaderSourceScratch.data(), static_cast<dxmt9_u64>(gShaderSourceScratch.size()));
-  if (bytesWritten == 0) {
-    gShaderSourceScratch.clear();
-    return nullptr;
-  }
-  gShaderSourceScratch.resize(static_cast<size_t>(bytesWritten));
-  return gShaderSourceScratch.c_str();
-#endif
 }
 
-extern "C" dxmt9_u64 dxmt9_winemetal_default_shader_source_size(dxmt9_u64 shaderHandle) {
-#if defined(WINE_UNIX_LIB)
-  if (dxmt9_shader_service_source_size != nullptr) {
-    return dxmt9_shader_service_source_size(shaderHandle);
-  }
-  return 0;
-#else
+dxmt9_u64 shaderSourceSizeViaService(dxmt9_u64 shaderHandle) {
   return dxmt9_shader_service_source_size(shaderHandle);
-#endif
 }
 
-extern "C" void dxmt9_winemetal_default_destroy_shader(dxmt9_u64 shaderHandle) {
-#if defined(WINE_UNIX_LIB)
-  if (dxmt9_shader_service_destroy != nullptr) {
-    dxmt9_shader_service_destroy(shaderHandle);
-  }
-#else
+void destroyShaderViaService(dxmt9_u64 shaderHandle) {
   dxmt9_shader_service_destroy(shaderHandle);
-#endif
+}
+
+extern "C" dxmt9_u64 dxmt9_winemetal_compile_shader(const WinemetalShaderCompileRequest* request) {
+  return compileShaderViaService(request);
+}
+
+extern "C" const char* dxmt9_winemetal_shader_source(dxmt9_u64 shaderHandle) {
+  return shaderSourceViaService(shaderHandle);
+}
+
+extern "C" dxmt9_u64 dxmt9_winemetal_shader_source_size(dxmt9_u64 shaderHandle) {
+  return shaderSourceSizeViaService(shaderHandle);
+}
+
+extern "C" void dxmt9_winemetal_destroy_shader(dxmt9_u64 shaderHandle) {
+  destroyShaderViaService(shaderHandle);
 }
 
 #if defined(WINE_UNIX_LIB)
@@ -122,7 +96,7 @@ NTSTATUS compileShaderCall(void* args) {
     return DXMT9_STATUS_INVALID_PARAMETER;
   }
   const auto request = decodeRequest(*params);
-  params->ret = dxmt9_winemetal_default_compile_shader(&request);
+  params->ret = compileShaderViaService(&request);
   return DXMT9_STATUS_SUCCESS;
 }
 
@@ -131,7 +105,7 @@ NTSTATUS shaderSourceSizeCall(void* args) {
   if (!params) {
     return DXMT9_STATUS_INVALID_PARAMETER;
   }
-  params->ret = dxmt9_winemetal_default_shader_source_size(params->shader_handle);
+  params->ret = shaderSourceSizeViaService(params->shader_handle);
   return DXMT9_STATUS_SUCCESS;
 }
 
@@ -140,7 +114,7 @@ NTSTATUS shaderSourceCopyCall(void* args) {
   if (!params) {
     return DXMT9_STATUS_INVALID_PARAMETER;
   }
-  const char* source = dxmt9_winemetal_default_shader_source(params->shader_handle);
+  const char* source = shaderSourceViaService(params->shader_handle);
   if (!source || params->buffer_capacity == 0 || params->buffer_ptr == 0) {
     params->bytes_written = 0;
     return DXMT9_STATUS_SUCCESS;
@@ -156,7 +130,7 @@ NTSTATUS destroyShaderCall(void* args) {
   if (!params) {
     return DXMT9_STATUS_INVALID_PARAMETER;
   }
-  dxmt9_winemetal_default_destroy_shader(params->shader_handle);
+  destroyShaderViaService(params->shader_handle);
   return DXMT9_STATUS_SUCCESS;
 }
 

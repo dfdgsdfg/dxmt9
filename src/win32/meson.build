@@ -86,7 +86,7 @@ dxmt9_bridge_dll = shared_library(
   name_suffix: 'dll',
   vs_module_defs: files('dxmt9.def')[0],
   include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_win32_internal_inc],
-  dependencies: dxmt9_bridge_deps + [dxmt9_util_dep, dxmt9_pe_bridge_dep],
+  dependencies: dxmt9_bridge_deps + [dxmt9_util_dep, dxmt9_pe_exports_dep],
   c_args: dxmt9_bridge_c_args,
   cpp_args: dxmt9_bridge_cpp_args,
   install: true,

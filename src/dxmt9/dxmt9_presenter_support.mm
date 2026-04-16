@@ -1,9 +1,8 @@
-#import <dlfcn.h>
-
 #include "dxmt9_presenter_support.hpp"
 
 #include "dxmt9_queue.hpp"
 #include "util/config/config.hpp"
+#include "util/dynamic_symbol.hpp"
 
 #include <cstdlib>
 #include <sstream>
@@ -40,15 +39,12 @@ void unregisterLayerHandle(u64 handle) {
 static WineMacInterop resolveWineMacInterop() {
   WineMacInterop interop;
   interop.getCocoaView =
-      reinterpret_cast<WineMacInterop::GetCocoaViewFn>(dlsym(RTLD_DEFAULT, "macdrv_get_cocoa_view"));
+      dxmt9::util::resolveDefaultSymbol<WineMacInterop::GetCocoaViewFn>("macdrv_get_cocoa_view");
   if (interop.getCocoaView) {
     return interop;
   }
 
-  auto* functions = reinterpret_cast<void* const*>(dlsym(RTLD_DEFAULT, "macdrv_functions"));
-  if (!functions) {
-    functions = reinterpret_cast<void* const*>(dlsym(RTLD_DEFAULT, "_macdrv_functions"));
-  }
+  auto* functions = dxmt9::util::resolveDefaultSymbol<void* const*>("macdrv_functions", "_macdrv_functions");
   if (!functions) {
     return interop;
   }

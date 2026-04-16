@@ -1,5 +1,6 @@
 dxmt9_util_srcs = files(
   'config/config.cpp',
+  'dynamic_symbol.cpp',
   'log/log.cpp',
   'thread.cpp',
   'util_bmp.cpp',

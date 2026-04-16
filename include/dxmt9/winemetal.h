@@ -37,26 +37,6 @@ typedef struct WinemetalShaderCompileRequest {
   dxmt9_u32 fogMode;
 } WinemetalShaderCompileRequest;
 
-/* WinemetalApi — ABI contract exposed by the winemetal bridge layer.
- *
- * Window/layer management (HWND→NSView lookup, CAMetalLayer lifecycle,
- * drawable vending) is handled directly inside dxmt9.so via
- * macdrv_get_cocoa_view() from Wine's winemac.drv — no Wine fork required.
- *
- * The only optional override is compile_shader, which a Wine build that
- * includes the Apple Metal shader converter can provide for faster PSO
- * compilation.  All pointers may be null; dxmt9.so falls back to its
- * built-in translator when compile_shader is null. */
-typedef struct WinemetalApi {
-  dxmt9_u64 (*compile_shader)(const WinemetalShaderCompileRequest* request);
-  const char* (*shader_source)(dxmt9_u64 shaderHandle);
-  dxmt9_u64 (*shader_source_size)(dxmt9_u64 shaderHandle);
-  void (*destroy_shader)(dxmt9_u64 shaderHandle);
-} WinemetalApi;
-
-const WinemetalApi* dxmt9_winemetal_get_api(void);
-void dxmt9_winemetal_set_api(const WinemetalApi* api);
-
 dxmt9_u64 dxmt9_winemetal_compile_shader(const WinemetalShaderCompileRequest* request);
 const char* dxmt9_winemetal_shader_source(dxmt9_u64 shaderHandle);
 dxmt9_u64 dxmt9_winemetal_shader_source_size(dxmt9_u64 shaderHandle);

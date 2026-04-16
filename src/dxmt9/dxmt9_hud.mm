@@ -147,6 +147,17 @@ DeveloperHudController::prepareForSubmission(metalqueue::CommandBufferDiagnostic
   return diagnostics;
 }
 
+bool DeveloperHudController::observeCompletion(id<MTLCommandBuffer> commandBuffer,
+                                               const metalqueue::CommandBufferDiagnostics& diagnostics,
+                                               metalqueue::CompletionTracker& completionTracker,
+                                               const char* context) {
+  if (!completionTracker.inspect(commandBuffer, diagnostics, context)) {
+    return false;
+  }
+  completeSubmission(diagnostics, completionTracker);
+  return true;
+}
+
 void DeveloperHudController::completeSubmission(const metalqueue::CommandBufferDiagnostics& diagnostics,
                                                 const metalqueue::CompletionTracker& completionTracker) {
   const u32 frame = diagnostics.frame != 0 ? diagnostics.frame : presentedFrame_;

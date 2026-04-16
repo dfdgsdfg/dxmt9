@@ -2,9 +2,11 @@
 
 #import <Foundation/Foundation.h>
 
+#include "dxmt9_backend_types.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9_queue.hpp"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -44,16 +46,64 @@ class DeveloperHudState {
 
 class DeveloperHudController {
  public:
-  template <typename CommandContainer, typename ObservationMapper>
+  struct CompatFlagResolver {
+    std::function<u32(const DrawDesc&)> draw;
+    std::function<u32(const ClearDesc&)> clear;
+    std::function<u32(const SwapDesc&, Handle)> present;
+  };
+
+  template <typename CommandContainer>
   metalqueue::CommandBufferDiagnostics prepareForSubmission(u64 seqId,
                                                             size_t slotIndex,
                                                             const CommandContainer& commands,
-                                                            ObservationMapper&& mapObservation) {
-    return prepareForSubmission(
-        metalqueue::summarizeChunk(seqId, slotIndex, commands, std::forward<ObservationMapper>(mapObservation)));
+                                                            const CompatFlagResolver& resolver) {
+    std::vector<metalqueue::ChunkObservation> observations;
+    observations.reserve(commands.size());
+    for (const auto& command : commands) {
+      switch (command.kind) {
+        case MetalCommandRecord::Kind::Draw:
+          observations.push_back(metalqueue::ChunkObservation{
+              .kind = metalqueue::ChunkObservationKind::Draw,
+              .compatFlags = resolver.draw ? resolver.draw(command.draw) : 0,
+          });
+          break;
+        case MetalCommandRecord::Kind::Clear:
+          observations.push_back(metalqueue::ChunkObservation{
+              .kind = metalqueue::ChunkObservationKind::Draw,
+              .compatFlags = resolver.clear ? resolver.clear(command.clear) : 0,
+          });
+          break;
+        case MetalCommandRecord::Kind::SurfaceCopy:
+        case MetalCommandRecord::Kind::StretchRect:
+        case MetalCommandRecord::Kind::Readback:
+          observations.push_back(metalqueue::ChunkObservation{
+              .kind = metalqueue::ChunkObservationKind::Blit,
+              .compatFlags = 0,
+          });
+          break;
+        case MetalCommandRecord::Kind::ColorFill:
+          observations.push_back(metalqueue::ChunkObservation{
+              .kind = metalqueue::ChunkObservationKind::Draw,
+              .compatFlags = 0,
+          });
+          break;
+        case MetalCommandRecord::Kind::Present:
+          observations.push_back(metalqueue::ChunkObservation{
+              .kind = metalqueue::ChunkObservationKind::Present,
+              .compatFlags = resolver.present ? resolver.present(command.present, command.presentSource) : 0,
+          });
+          break;
+      }
+    }
+    return prepareForSubmission(metalqueue::summarizeChunk(
+        seqId, slotIndex, std::span<const metalqueue::ChunkObservation>(observations.data(), observations.size())));
   }
 
   metalqueue::CommandBufferDiagnostics prepareForSubmission(metalqueue::CommandBufferDiagnostics diagnostics);
+  bool observeCompletion(id<MTLCommandBuffer> commandBuffer,
+                         const metalqueue::CommandBufferDiagnostics& diagnostics,
+                         metalqueue::CompletionTracker& completionTracker,
+                         const char* context = "queue");
   void completeSubmission(const metalqueue::CommandBufferDiagnostics& diagnostics,
                           const metalqueue::CompletionTracker& completionTracker);
 

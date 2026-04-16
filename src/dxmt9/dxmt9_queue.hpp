@@ -2,6 +2,8 @@
 
 #import <Metal/Metal.h>
 
+#include "dxmt9_backend_types.hpp"
+
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -136,6 +138,43 @@ QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
   return makeQueueTraceSnapshot(state);
 }
 
+template <typename SlotContainer>
+QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
+                                          std::optional<size_t> writingSlot,
+                                          size_t writeIndex,
+                                          size_t readyCount,
+                                          size_t completedQueueCount,
+                                          size_t inflightCount,
+                                          u64 completedSeqId,
+                                          u64 lastCommittedSeqId,
+                                          u64 eventSeqId,
+                                          const SlotContainer& slots) {
+  QueueTraceState state;
+  state.slotIndex = slotIndex;
+  state.writingSlot = writingSlot;
+  state.writeIndex = writeIndex;
+  state.readyCount = readyCount;
+  state.completedQueueCount = completedQueueCount;
+  state.inflightCount = inflightCount;
+  state.completedSeqId = completedSeqId;
+  state.lastCommittedSeqId = lastCommittedSeqId;
+  state.eventSeqId = eventSeqId;
+  state.activeSlots.reserve(slots.size());
+  for (size_t i = 0; i < slots.size(); ++i) {
+    const auto& slot = slots[i];
+    if (slot.state == ChunkSlot::State::Free) {
+      continue;
+    }
+    state.activeSlots.push_back(ActiveSlotInfo{
+        .index = i,
+        .state = static_cast<QueueSlotState>(static_cast<int>(slot.state)),
+        .seqId = slot.seqId,
+        .commandCount = slot.commands.size(),
+    });
+  }
+  return makeQueueTraceSnapshot(state);
+}
+
 template <typename SlotContainer, typename SlotMapper>
 void traceQueueEvent(const char* event,
                      std::optional<size_t> slotIndex,
@@ -155,6 +194,26 @@ void traceQueueEvent(const char* event,
       makeQueueTraceSnapshot(slotIndex, writingSlot, writeIndex, readyCount, completedQueueCount,
                              inflightCount, completedSeqId, lastCommittedSeqId, eventSeqId, slots,
                              std::forward<SlotMapper>(mapSlot)),
+      extra);
+}
+
+template <typename SlotContainer>
+void traceQueueEvent(const char* event,
+                     std::optional<size_t> slotIndex,
+                     std::optional<size_t> writingSlot,
+                     size_t writeIndex,
+                     size_t readyCount,
+                     size_t completedQueueCount,
+                     size_t inflightCount,
+                     u64 completedSeqId,
+                     u64 lastCommittedSeqId,
+                     u64 eventSeqId,
+                     const SlotContainer& slots,
+                     const char* extra = nullptr) {
+  traceQueueEvent(
+      event,
+      makeQueueTraceSnapshot(slotIndex, writingSlot, writeIndex, readyCount, completedQueueCount,
+                             inflightCount, completedSeqId, lastCommittedSeqId, eventSeqId, slots),
       extra);
 }
 

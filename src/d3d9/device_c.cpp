@@ -2,6 +2,7 @@
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
 #include "util/config/config.hpp"
+#include "util/dynamic_symbol.hpp"
 #include "util/log/log.hpp"
 #include <cstdarg>
 #include <algorithm>
@@ -15,7 +16,6 @@
 #include <vector>
 
 #if defined(__APPLE__)
-#include <dlfcn.h>
 #include <mach/kern_return.h>
 #include <mach/mach_init.h>
 #include <mach/mach_vm.h>
@@ -335,15 +335,9 @@ using RtlFreeHeapFn = uint8_t (*)(void* heap, uint32_t flags, void* ptr);
 
 NtAllocateVirtualMemoryFn resolveNtAllocateVirtualMemory() {
 #if defined(__APPLE__)
-  static const auto fn = [] {
-    if (auto* sym = dlsym(RTLD_DEFAULT, "NtAllocateVirtualMemory")) {
-      return reinterpret_cast<NtAllocateVirtualMemoryFn>(sym);
-    }
-    if (auto* sym = dlsym(RTLD_DEFAULT, "_NtAllocateVirtualMemory")) {
-      return reinterpret_cast<NtAllocateVirtualMemoryFn>(sym);
-    }
-    return static_cast<NtAllocateVirtualMemoryFn>(nullptr);
-  }();
+  static const auto fn =
+      dxmt9::util::resolveDefaultSymbol<NtAllocateVirtualMemoryFn>("NtAllocateVirtualMemory",
+                                                                   "_NtAllocateVirtualMemory");
   return fn;
 #else
   return nullptr;
@@ -352,15 +346,9 @@ NtAllocateVirtualMemoryFn resolveNtAllocateVirtualMemory() {
 
 NtFreeVirtualMemoryFn resolveNtFreeVirtualMemory() {
 #if defined(__APPLE__)
-  static const auto fn = [] {
-    if (auto* sym = dlsym(RTLD_DEFAULT, "NtFreeVirtualMemory")) {
-      return reinterpret_cast<NtFreeVirtualMemoryFn>(sym);
-    }
-    if (auto* sym = dlsym(RTLD_DEFAULT, "_NtFreeVirtualMemory")) {
-      return reinterpret_cast<NtFreeVirtualMemoryFn>(sym);
-    }
-    return static_cast<NtFreeVirtualMemoryFn>(nullptr);
-  }();
+  static const auto fn =
+      dxmt9::util::resolveDefaultSymbol<NtFreeVirtualMemoryFn>("NtFreeVirtualMemory",
+                                                               "_NtFreeVirtualMemory");
   return fn;
 #else
   return nullptr;
@@ -369,15 +357,8 @@ NtFreeVirtualMemoryFn resolveNtFreeVirtualMemory() {
 
 GetProcessHeapFn resolveGetProcessHeap() {
 #if defined(__APPLE__)
-  static const auto fn = [] {
-    if (auto* sym = dlsym(RTLD_DEFAULT, "GetProcessHeap")) {
-      return reinterpret_cast<GetProcessHeapFn>(sym);
-    }
-    if (auto* sym = dlsym(RTLD_DEFAULT, "_GetProcessHeap")) {
-      return reinterpret_cast<GetProcessHeapFn>(sym);
-    }
-    return static_cast<GetProcessHeapFn>(nullptr);
-  }();
+  static const auto fn =
+      dxmt9::util::resolveDefaultSymbol<GetProcessHeapFn>("GetProcessHeap", "_GetProcessHeap");
   return fn;
 #else
   return nullptr;
@@ -386,15 +367,8 @@ GetProcessHeapFn resolveGetProcessHeap() {
 
 RtlAllocateHeapFn resolveRtlAllocateHeap() {
 #if defined(__APPLE__)
-  static const auto fn = [] {
-    if (auto* sym = dlsym(RTLD_DEFAULT, "RtlAllocateHeap")) {
-      return reinterpret_cast<RtlAllocateHeapFn>(sym);
-    }
-    if (auto* sym = dlsym(RTLD_DEFAULT, "_RtlAllocateHeap")) {
-      return reinterpret_cast<RtlAllocateHeapFn>(sym);
-    }
-    return static_cast<RtlAllocateHeapFn>(nullptr);
-  }();
+  static const auto fn =
+      dxmt9::util::resolveDefaultSymbol<RtlAllocateHeapFn>("RtlAllocateHeap", "_RtlAllocateHeap");
   return fn;
 #else
   return nullptr;
@@ -403,15 +377,8 @@ RtlAllocateHeapFn resolveRtlAllocateHeap() {
 
 RtlFreeHeapFn resolveRtlFreeHeap() {
 #if defined(__APPLE__)
-  static const auto fn = [] {
-    if (auto* sym = dlsym(RTLD_DEFAULT, "RtlFreeHeap")) {
-      return reinterpret_cast<RtlFreeHeapFn>(sym);
-    }
-    if (auto* sym = dlsym(RTLD_DEFAULT, "_RtlFreeHeap")) {
-      return reinterpret_cast<RtlFreeHeapFn>(sym);
-    }
-    return static_cast<RtlFreeHeapFn>(nullptr);
-  }();
+  static const auto fn =
+      dxmt9::util::resolveDefaultSymbol<RtlFreeHeapFn>("RtlFreeHeap", "_RtlFreeHeap");
   return fn;
 #else
   return nullptr;
