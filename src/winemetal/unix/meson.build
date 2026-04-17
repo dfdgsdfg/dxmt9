@@ -5,9 +5,14 @@ endif
 dxmt9_winemetal_unix_runtime_subdir = host_machine.cpu_family() == 'x86_64' ? 'x86_64-unix' : host_machine.cpu_family() + '-unix'
 dxmt9_winemetal_unix_install_dir = get_option('libdir') / 'wine' / dxmt9_winemetal_unix_runtime_subdir
 
-shared_library(
+dxmt9_winemetal_unix_module = shared_library(
   'winemetal',
-  files('../winemetal_shader_bridge.cpp', 'winemetal_unix.cpp') + [bridge_codegen[2], bridge_codegen[3]],
+  files(
+    '../winemetal_public_api.cpp',
+    '../winemetal_shader_bridge_internal.cpp',
+    '../winemetal_unix_call_handlers.cpp',
+    'winemetal_unix.cpp',
+  ) + [bridge_codegen[2], bridge_codegen[3]],
   name_prefix: '',
   name_suffix: 'so',
   include_directories: [dxmt9_inc, bridge_gen_inc, include_directories('..', '../..')],
@@ -16,7 +21,6 @@ shared_library(
     dxmt9_frontend_dep,
     dxmt9_runtime_dep,
     dxmt9_winemetal_service_abi_dep,
-    dxmt9_winemetal_bridge_core_dep,
     dependency('appleframeworks', modules: [
       'AppKit',
       'Foundation',

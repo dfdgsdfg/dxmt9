@@ -88,6 +88,16 @@ struct QueueTraceState {
   std::vector<ActiveSlotInfo> activeSlots;
 };
 
+struct QueueLifecycleContext {
+  std::optional<size_t> writingSlot;
+  size_t writeIndex = 0;
+  size_t readyCount = 0;
+  size_t completedQueueCount = 0;
+  size_t inflightCount = 0;
+  u64 completedSeqId = 0;
+  u64 lastCommittedSeqId = 0;
+};
+
 enum class QueueLifecycleEvent {
   PresentEnqueue,
   WriterWaitBegin,
@@ -275,6 +285,22 @@ void traceQueueSlotsEvent(const char* event,
                           u64 lastCommittedSeqId,
                           std::span<const ChunkSlot> slots,
                           const char* extra = nullptr);
+
+class QueueLifecycleController {
+ public:
+  void traceEvent(QueueLifecycleEvent event,
+                  std::optional<size_t> slotIndex,
+                  u64 eventSeqId,
+                  const QueueLifecycleContext& context,
+                  std::span<const ChunkSlot> slots,
+                  const char* extra = nullptr) const;
+  void tracePresentEnqueue(size_t slotIndex,
+                           u64 eventSeqId,
+                           const QueueLifecycleContext& context,
+                           std::span<const ChunkSlot> slots,
+                           const SwapDesc& present,
+                           Handle sourceHandle) const;
+};
 
 class CompletionTracker {
  public:

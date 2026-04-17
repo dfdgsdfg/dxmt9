@@ -100,33 +100,13 @@ if host_machine.system() == 'windows'
   subdir_done()
 endif
 
-dxmt9_winemetal_bridge_core_lib = static_library(
-  'dxmt9_winemetal_bridge_core',
-  files('winemetal_shader_bridge.cpp') + [bridge_codegen[0]],
-  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
-  dependencies: [
-    dxmt9_util_dep,
-    dxmt9_winemetal_service_abi_dep,
-  ],
-  install: false,
-)
-
-dxmt9_winemetal_bridge_core_dep = declare_dependency(
-  link_with: dxmt9_winemetal_bridge_core_lib,
-  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
-  dependencies: [
-    dxmt9_util_dep,
-    dxmt9_winemetal_service_abi_dep,
-  ],
-)
+subdir('unix')
 
 dxmt9_winemetal_dep = declare_dependency(
+  link_with: dxmt9_winemetal_unix_module,
   include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
   dependencies: [
     dxmt9_util_dep,
     dxmt9_winemetal_service_abi_dep,
-    dxmt9_winemetal_bridge_core_dep,
   ],
 )
-
-subdir('unix')

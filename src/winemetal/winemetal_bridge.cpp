@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <mutex>
 
+#include "util/dynamic_symbol.hpp"
 #include "util/log/log.hpp"
 #include "dxmt9/wineunixlib.h"
 
@@ -78,11 +79,12 @@ void bridgeTraceLog(const char* fmt, ...) {
 
 template <typename T>
 T resolveProc(HMODULE module, const char *name) {
-  return reinterpret_cast<T>(GetProcAddress(module, name));
+  return dxmt9::util::resolveModuleSymbol<T>(reinterpret_cast<void*>(module), name);
 }
 
 NTSTATUS initializeDispatcherOnlyFallback(BridgeState& state) {
-  const auto dispatcher_export = GetProcAddress(state.ntdll, "__wine_unix_call_dispatcher");
+  const auto dispatcher_export =
+      dxmt9::util::resolveModuleSymbol<void*>(reinterpret_cast<void*>(state.ntdll), "__wine_unix_call_dispatcher");
   bridgeDebugLog("dispatcher-only fallback: export=%p", dispatcher_export);
   if (!dispatcher_export) {
     return DXMT9_STATUS_NOT_SUPPORTED;
@@ -95,7 +97,8 @@ NTSTATUS initializeDispatcherOnlyFallback(BridgeState& state) {
   }
 
   const auto nt_query_virtual_memory =
-      reinterpret_cast<NtQueryVirtualMemoryFn>(GetProcAddress(state.ntdll, "NtQueryVirtualMemory"));
+      dxmt9::util::resolveModuleSymbol<NtQueryVirtualMemoryFn>(reinterpret_cast<void*>(state.ntdll),
+                                                               "NtQueryVirtualMemory");
   if (!nt_query_virtual_memory) {
     return DXMT9_STATUS_NOT_SUPPORTED;
   }
@@ -128,7 +131,8 @@ void initializeWinemetalUnixBridge() {
     return;
   }
 
-  const auto dispatcher_export = GetProcAddress(state.ntdll, "__wine_unix_call_dispatcher");
+  const auto dispatcher_export =
+      dxmt9::util::resolveModuleSymbol<void*>(reinterpret_cast<void*>(state.ntdll), "__wine_unix_call_dispatcher");
   bridgeDebugLog("initialize(%ls): dispatcher export=%p", state.module_name, dispatcher_export);
   if (dispatcher_export) {
     state.dispatcher = *reinterpret_cast<WineUnixCallDispatcherVar *>(dispatcher_export);
@@ -136,8 +140,8 @@ void initializeWinemetalUnixBridge() {
   }
 
   state.init_unix_call = resolveProc<WineInitUnixCallFn>(state.ntdll, "__wine_init_unix_call");
-  state.unixlib_handle_ptr =
-      reinterpret_cast<unixlib_handle_t *>(GetProcAddress(state.ntdll, "__wine_unixlib_handle"));
+  state.unixlib_handle_ptr = dxmt9::util::resolveModuleSymbol<unixlib_handle_t*>(
+      reinterpret_cast<void*>(state.ntdll), "__wine_unixlib_handle");
   state.load_unix_lib = resolveProc<WineLoadUnixLibFn>(state.ntdll, "__wine_load_unix_lib");
   state.unload_unix_lib = resolveProc<WineUnloadUnixLibFn>(state.ntdll, "__wine_unload_unix_lib");
 
