@@ -32,6 +32,44 @@ const char* slotStateName(QueueSlotState state) {
   return "unknown";
 }
 
+const char* lifecycleEventName(QueueLifecycleEvent event) {
+  switch (event) {
+    case QueueLifecycleEvent::PresentEnqueue:
+      return "present.enqueue";
+    case QueueLifecycleEvent::WriterWaitBegin:
+      return "writer.wait.begin";
+    case QueueLifecycleEvent::WriterWaitEnd:
+      return "writer.wait.end";
+    case QueueLifecycleEvent::WriterAcquire:
+      return "writer.acquire";
+    case QueueLifecycleEvent::CommitEmpty:
+      return "commit.empty";
+    case QueueLifecycleEvent::CommitWaitBegin:
+      return "commit.wait.begin";
+    case QueueLifecycleEvent::CommitWaitEnd:
+      return "commit.wait.end";
+    case QueueLifecycleEvent::CommitPublish:
+      return "commit.publish";
+    case QueueLifecycleEvent::EncodeDequeue:
+      return "encode.dequeue";
+    case QueueLifecycleEvent::EncodeCommit:
+      return "encode.commit";
+    case QueueLifecycleEvent::GpuComplete:
+      return "gpu.complete";
+    case QueueLifecycleEvent::FinishInline:
+      return "finish.inline";
+    case QueueLifecycleEvent::FinishDequeue:
+      return "finish.dequeue";
+    case QueueLifecycleEvent::ReclaimFree:
+      return "reclaim.free";
+    case QueueLifecycleEvent::WaitSeqBegin:
+      return "wait.seq.begin";
+    case QueueLifecycleEvent::WaitSeqEnd:
+      return "wait.seq.end";
+  }
+  return "unknown";
+}
+
 u32 compatFlagsForSurface(const std::function<u32(Handle)>& resolveSurfaceFlags, Handle handle) {
   if (!handle || !resolveSurfaceFlags) {
     return 0;
@@ -353,6 +391,23 @@ void traceQueueEvent(const char* event, const QueueTraceSnapshot& snapshot, cons
     out << ' ' << extra;
   }
   emitQueueTraceLine(out.str());
+}
+
+void traceLifecycleEvent(QueueLifecycleEvent event,
+                         std::optional<size_t> slotIndex,
+                         u64 eventSeqId,
+                         std::optional<size_t> writingSlot,
+                         size_t writeIndex,
+                         size_t readyCount,
+                         size_t completedQueueCount,
+                         size_t inflightCount,
+                         u64 completedSeqId,
+                         u64 lastCommittedSeqId,
+                         std::span<const ChunkSlot> slots,
+                         const char* extra) {
+  traceQueueSlotsEvent(lifecycleEventName(event), slotIndex, eventSeqId, writingSlot, writeIndex,
+                       readyCount, completedQueueCount, inflightCount, completedSeqId,
+                       lastCommittedSeqId, slots, extra);
 }
 
 void traceQueueSlotsEvent(const char* event,

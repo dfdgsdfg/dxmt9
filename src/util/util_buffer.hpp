@@ -17,6 +17,7 @@ inline T* u64ToPtr(u64 value) {
   return reinterpret_cast<T*>(static_cast<std::uintptr_t>(value));
 }
 
+u64 copyBytesToBuffer(const void* source, u64 sourceSize, void* buffer, u64 bufferCapacity);
 u64 copyStringToBuffer(std::string_view source, char* buffer, u64 bufferCapacity);
 
 }  // namespace dxmt9::util

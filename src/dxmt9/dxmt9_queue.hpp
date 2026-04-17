@@ -88,6 +88,25 @@ struct QueueTraceState {
   std::vector<ActiveSlotInfo> activeSlots;
 };
 
+enum class QueueLifecycleEvent {
+  PresentEnqueue,
+  WriterWaitBegin,
+  WriterWaitEnd,
+  WriterAcquire,
+  CommitEmpty,
+  CommitWaitBegin,
+  CommitWaitEnd,
+  CommitPublish,
+  EncodeDequeue,
+  EncodeCommit,
+  GpuComplete,
+  FinishInline,
+  FinishDequeue,
+  ReclaimFree,
+  WaitSeqBegin,
+  WaitSeqEnd,
+};
+
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
                                         size_t slotIndex,
                                         std::span<const ChunkObservation> observations);
@@ -232,6 +251,18 @@ CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input);
 bool shouldTraceQueue(const QueueTraceSnapshot& snapshot);
 std::string formatActiveSlots(const QueueTraceSnapshot& snapshot);
 void traceQueueEvent(const char* event, const QueueTraceSnapshot& snapshot, const char* extra = nullptr);
+void traceLifecycleEvent(QueueLifecycleEvent event,
+                         std::optional<size_t> slotIndex,
+                         u64 eventSeqId,
+                         std::optional<size_t> writingSlot,
+                         size_t writeIndex,
+                         size_t readyCount,
+                         size_t completedQueueCount,
+                         size_t inflightCount,
+                         u64 completedSeqId,
+                         u64 lastCommittedSeqId,
+                         std::span<const ChunkSlot> slots,
+                         const char* extra = nullptr);
 void traceQueueSlotsEvent(const char* event,
                           std::optional<size_t> slotIndex,
                           u64 eventSeqId,

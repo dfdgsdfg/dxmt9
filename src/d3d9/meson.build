@@ -33,7 +33,7 @@ if host_machine.system() == 'windows'
 
   dxmt9_bridge_exports_lib = static_library(
     'dxmt9_bridge_exports',
-    dxmt9_frontend_export_srcs,
+    dxmt9_frontend_export_srcs + [bridge_codegen[1]],
     include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
     dependencies: [dxmt9_util_dep, dxmt9_pe_core_dep],
     install: false,

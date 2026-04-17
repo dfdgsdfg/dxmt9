@@ -18,6 +18,11 @@ using WCHAR = wchar_t;
 using UINT64 = uint64_t;
 using LONG = int32_t;
 using NTSTATUS = LONG;
+typedef struct _UNICODE_STRING {
+  uint16_t Length;
+  uint16_t MaximumLength;
+  WCHAR* Buffer;
+} UNICODE_STRING;
 
 #ifndef DECLSPEC_EXPORT
 #define DECLSPEC_EXPORT __attribute__((visibility("default")))

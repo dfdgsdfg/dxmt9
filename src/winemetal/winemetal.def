@@ -1,8 +1,6 @@
 LIBRARY winemetal.dll
 EXPORTS
-  dxmt9_pe_create9
-  dxmt9_pe_create9_ex
-  dxmt9_pe_create_shader_validator
+  dxmt9_bridge_unix_call
   dxmt9_winemetal_compile_shader
   dxmt9_winemetal_shader_source
   dxmt9_winemetal_shader_source_size

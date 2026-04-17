@@ -148,4 +148,22 @@ void DeveloperHudController::completeSubmission(const metalqueue::CommandBufferD
   state_.update(frame, diagnostics.seqId, flags, completionTracker.lastErrorSummary());
 }
 
+bool SubmissionDiagnosticsController::inspect(id<MTLCommandBuffer> commandBuffer,
+                                              const metalqueue::CommandBufferDiagnostics& diagnostics,
+                                              const char* context) {
+  return completionTracker_.inspect(commandBuffer, diagnostics, context);
+}
+
+void SubmissionDiagnosticsController::attachQueueSubmission(
+    id<MTLCommandBuffer> commandBuffer,
+    u64 seqId,
+    size_t slotIndex,
+    std::span<const MetalCommandRecord> commands,
+    const std::function<u32(Handle)>& resolveSurfaceFlags,
+    const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
+    const char* context) {
+  hudController_.attachCompletionHandler(commandBuffer, seqId, slotIndex, commands, resolveSurfaceFlags,
+                                         completionTracker_, onCompletion, context);
+}
+
 }  // namespace dxmt9::core::metalhud

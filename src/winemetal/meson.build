@@ -65,7 +65,7 @@ if host_machine.system() == 'windows'
 
   winemetal_dll = shared_library(
     'winemetal',
-    files('main.c', 'winemetal_thunks.cpp', 'winemetal_bridge.cpp') + [bridge_codegen[1]],
+    files('main.c', 'winemetal_thunks.cpp', 'winemetal_bridge.cpp'),
     name_prefix: '',
     name_suffix: 'dll',
     vs_module_defs: files('winemetal.def')[0],
@@ -73,7 +73,6 @@ if host_machine.system() == 'windows'
     dependencies: winemetal_bridge_deps + [
       dxguid_dep,
       dxmt9_util_dep,
-      dxmt9_bridge_exports_dep,
     ],
     c_args: winemetal_bridge_c_args,
     cpp_args: winemetal_bridge_cpp_args,

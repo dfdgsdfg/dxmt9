@@ -62,4 +62,23 @@ class DeveloperHudController {
   u32 lastCompatFlags_ = 0;
 };
 
+class SubmissionDiagnosticsController {
+ public:
+  bool inspect(id<MTLCommandBuffer> commandBuffer,
+               const metalqueue::CommandBufferDiagnostics& diagnostics,
+               const char* context);
+  void attachQueueSubmission(id<MTLCommandBuffer> commandBuffer,
+                             u64 seqId,
+                             size_t slotIndex,
+                             std::span<const MetalCommandRecord> commands,
+                             const std::function<u32(Handle)>& resolveSurfaceFlags,
+                             const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
+                             const char* context = "queue");
+  const metalqueue::CompletionTracker& completionTracker() const noexcept { return completionTracker_; }
+
+ private:
+  metalqueue::CompletionTracker completionTracker_{};
+  DeveloperHudController hudController_{};
+};
+
 }  // namespace dxmt9::core::metalhud
