@@ -2,6 +2,10 @@
 
 #include "util/log/log.hpp"
 
+#if defined(__APPLE__)
+#include <execinfo.h>
+#endif
+
 #include <mutex>
 #include <unordered_map>
 
@@ -35,7 +39,30 @@ u64 compile(const WinemetalShaderCompileRequest& request) {
     return registerShaderBlob(dxmt9::core::makeShaderSourceFromRequest(request));
   } catch (const std::exception& e) {
     dxmt9::util::logf(dxmt9::util::LogLevel::Error, "dxmt9-shader-service",
-                      "compile failed: %s", e.what());
+                      "compile failed: %s kind=%u bytecode=%p size=%llu hash=0x%llx variant=%p sample=%u alpha=%u fog=%u",
+                      e.what(),
+                      static_cast<unsigned>(request.kind),
+                      request.bytecode,
+                      static_cast<unsigned long long>(request.bytecodeSize),
+                      static_cast<unsigned long long>(request.bytecodeHash),
+                      request.variantKey,
+                      static_cast<unsigned>(request.sampleCount),
+                      static_cast<unsigned>(request.alphaTestEnable),
+                      static_cast<unsigned>(request.fogMode));
+#if defined(__APPLE__)
+    void* frames[16];
+    const int frameCount = backtrace(frames, 16);
+    if (frameCount > 0) {
+      char** symbols = backtrace_symbols(frames, frameCount);
+      if (symbols) {
+        for (int i = 0; i < frameCount; ++i) {
+          dxmt9::util::logf(dxmt9::util::LogLevel::Error, "dxmt9-shader-service",
+                            "bt[%d]=%s", i, symbols[i]);
+        }
+        free(symbols);
+      }
+    }
+#endif
     return 0;
   }
 }

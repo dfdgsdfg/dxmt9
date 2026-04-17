@@ -1,7 +1,8 @@
 /* src/win32/bridge.cpp — PE bridge between dxmt9.dll and dxmt9.so.
  *
  * This module owns PE/unix bridge bootstrap and unixlib dispatch only.
- * D3D9 object creation remains frontend-owned under src/d3d9. */
+ * D3D9 object creation remains frontend-owned under src/d3d9.
+ */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>

@@ -46,5 +46,6 @@ if host_machine.system() == 'darwin'
 elif host_machine.system() == 'windows'
   subdir('src/util')
   subdir('src/d3d9')
+  subdir('src/winemetal')
   subdir('src/win32')
 endif

@@ -1,10 +1,4 @@
 # src/win32/meson.build — builds the Win32 PE d3d9.dll and dxmt9.dll bridge.
-#
-# Invoked when cross-compiling for Windows:
-#   meson setup build-win32 --cross-file cross/aarch64-windows.ini
-#   meson compile -C build-win32
-#
-# Prerequisites: llvm-mingw on PATH (provides aarch64-w64-mingw32-* tools).
 
 if host_machine.system() != 'windows'
   subdir_done()
@@ -61,7 +55,7 @@ if wine_builtin_dll
       join_paths(wine_build_path, 'dlls/dbghelp', d3d9_bridge_runtime_subdir),
     ], required: true)
     winebuild = join_paths(wine_build_path, 'tools/winebuild/winebuild')
-else
+  else
     lib_winecrt0 = c_compiler.find_library('winecrt0', dirs: [
       join_paths(wine_install_path, 'lib/wine', d3d9_bridge_runtime_subdir),
     ], required: true)

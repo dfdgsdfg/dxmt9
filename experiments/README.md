@@ -52,7 +52,7 @@ bash scripts/install_heroic_experiment_prefix.sh --prefix "$HOME/.wine-dxmt9-her
 The runner:
 
 - reads [`CATALOGUE.toml`](./CATALOGUE.toml)
-- stages `d3d9.dll`, `dxmt9.dll`, and `dxmt9.so` into a Wine runtime/prefix
+- stages `d3d9.dll`, `dxmt9.dll`, `winemetal.dll`, `winemetal.so`, and `dxmt9.so` into a Wine runtime/prefix
 - runs the selected launcher
 - captures the presented back buffer directly from dxmt9 when `capture_frame` is set
 - falls back to window capture only when an internal frame dump is unavailable
@@ -79,34 +79,34 @@ sample binaries are staged.
 Current verified real application entry:
 
 - `dx-sdk-basichlsl`
-  - Heroic Wine 11.5 builtin path
+  - Heroic Wine 11.6 builtin path
   - 240 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
 - `dx-sdk-tutorial07`
-  - Heroic Wine 11.5 builtin path
+  - Heroic Wine 11.6 builtin path
   - 180 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
 - `dxut-simple-sample`
-  - Heroic Wine 11.5 builtin path
+  - Heroic Wine 11.6 builtin path
   - 180 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
 - `dx-sdk-hdrformats`
-  - Heroic Wine 11.5 builtin path
+  - Heroic Wine 11.6 builtin path
   - 180 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
 - `irrlicht-managed-lights`
-  - Heroic Wine 11.5 builtin path
+  - Heroic Wine 11.6 builtin path
   - 180 frames
   - direct backbuffer capture
   - `ssim = 1.0000`
 
 Current verified host:
 
-- Heroic Wine 11.5 builtin path
+- Heroic Wine 11.6 builtin path
 
 Current exploratory commercial target:
 

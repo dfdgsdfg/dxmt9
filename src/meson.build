@@ -68,8 +68,6 @@ dxmt9_native_lib = shared_library(
     dxmt9_util_lib,
     dxmt9_frontend_lib,
     dxmt9_shader_service_core_lib,
-    dxmt9_winemetal_service_abi_lib,
-    dxmt9_winemetal_lib,
     dxmt9_runtime_lib,
   ],
   install: false,
@@ -78,6 +76,7 @@ dxmt9_native_lib = shared_library(
 dxmt9_dep = declare_dependency(
   include_directories: dxmt9_inc,
   link_with: dxmt9_native_lib,
+  dependencies: [dxmt9_winemetal_dep],
 )
 
 meson.override_dependency('dxmt9', dxmt9_dep)
@@ -93,8 +92,6 @@ dxmt9_unix_module = shared_library(
     dxmt9_util_lib,
     dxmt9_frontend_lib,
     dxmt9_shader_service_core_lib,
-    dxmt9_winemetal_service_abi_lib,
-    dxmt9_winemetal_lib,
     dxmt9_runtime_lib,
   ],
   link_args: dxmt9_unix_link_args,
