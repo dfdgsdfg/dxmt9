@@ -22,6 +22,7 @@ bridge_codegen = custom_target(
     'dxmt9_bridge_ops.generated.h',
     'dxmt9_device_c_bridge_exports.generated.cpp',
     'dxmt9_wine_unix_dispatch.generated.cpp',
+    'dxmt9_wine_unix_entries.generated.h',
   ],
   command: [
     python3,
@@ -29,6 +30,7 @@ bridge_codegen = custom_target(
     '--ops-header', '@OUTPUT0@',
     '--client-cpp', '@OUTPUT1@',
     '--server-cpp', '@OUTPUT2@',
+    '--server-entries', '@OUTPUT3@',
   ],
   depend_files: files(
     'include/dxmt9/device_c.h',

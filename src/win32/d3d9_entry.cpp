@@ -1,7 +1,7 @@
 /* src/win32/d3d9_entry.cpp — user-facing d3d9.dll entry points.
  *
  * d3d9.dll is intentionally thin: it exposes Direct3DCreate9 / 9Ex and forwards
- * those calls into the internal dxmt9.dll PE bridge. */
+ * those calls into the internal winemetal.dll PE bridge. */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>

@@ -23,7 +23,7 @@ from PIL import Image
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CATALOGUE_PATH = REPO_ROOT / "experiments" / "CATALOGUE.toml"
 DEFAULT_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "win32"
-DEFAULT_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "win32"
+DEFAULT_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "winemetal"
 DEFAULT_UNIX_BUILD_DIR = REPO_ROOT / "build-x86_64-builtin" / "src"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
 
@@ -310,7 +310,6 @@ def stage_dxmt9(
         str(REPO_ROOT / "scripts" / "install_heroic_wine.sh"),
         "--prefix",
         str(prefix),
-        "--legacy-system32-bridge",
         "--pe-build-dir",
         str(pe_build_dir),
         "--runtime-pe-build-dir",
@@ -533,7 +532,7 @@ def main() -> int:
     run_parser.add_argument("--binary", help="Override the binary path for this run")
     run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
-    run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime dxmt9.dll")
+    run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
     run_parser.add_argument("--unix-build-dir", help="Unix build dir containing dxmt9.so")
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")

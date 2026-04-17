@@ -2,9 +2,11 @@ dxmt9_winemetal_internal_inc = include_directories('.', '..', '../dxmt9')
 
 if host_machine.system() == 'windows'
   cc = meson.get_compiler('c')
+  cpp = meson.get_compiler('cpp')
   wine_builtin_dll = get_option('wine_builtin_dll')
   wine_build_path = get_option('wine_build_path')
   wine_install_path = get_option('wine_install_path')
+  dxguid_dep = cpp.find_library('dxguid', required: true)
 
   winemetal_runtime_subdir = 'x86_64-windows'
   if host_machine.cpu_family() == 'x86'
@@ -63,12 +65,16 @@ if host_machine.system() == 'windows'
 
   winemetal_dll = shared_library(
     'winemetal',
-    files('main.c', 'winemetal_thunks.cpp', 'winemetal_bridge.cpp'),
+    files('main.c', 'winemetal_thunks.cpp', 'winemetal_bridge.cpp') + [bridge_codegen[1]],
     name_prefix: '',
     name_suffix: 'dll',
     vs_module_defs: files('winemetal.def')[0],
     include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
-    dependencies: winemetal_bridge_deps + [dxmt9_util_dep],
+    dependencies: winemetal_bridge_deps + [
+      dxguid_dep,
+      dxmt9_util_dep,
+      dxmt9_bridge_exports_dep,
+    ],
     c_args: winemetal_bridge_c_args,
     cpp_args: winemetal_bridge_cpp_args,
     install: true,
@@ -95,29 +101,33 @@ if host_machine.system() == 'windows'
   subdir_done()
 endif
 
-dxmt9_winemetal_host_lib = shared_library(
-  'dxmt9_winemetal_host',
-  files('winemetal_shader_bridge.cpp'),
-  include_directories: [dxmt9_inc, dxmt9_winemetal_internal_inc],
+dxmt9_winemetal_bridge_core_lib = static_library(
+  'dxmt9_winemetal_bridge_core',
+  files('winemetal_shader_bridge.cpp') + [bridge_codegen[0]],
+  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
   dependencies: [
     dxmt9_util_dep,
-    dxmt9_frontend_dep,
-    dxmt9_runtime_dep,
     dxmt9_winemetal_service_abi_dep,
-    dependency('appleframeworks', modules: [
-      'AppKit',
-      'Foundation',
-      'Metal',
-      'QuartzCore',
-    ]),
   ],
   install: false,
 )
 
+dxmt9_winemetal_bridge_core_dep = declare_dependency(
+  link_with: dxmt9_winemetal_bridge_core_lib,
+  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
+  dependencies: [
+    dxmt9_util_dep,
+    dxmt9_winemetal_service_abi_dep,
+  ],
+)
+
 dxmt9_winemetal_dep = declare_dependency(
-  link_with: dxmt9_winemetal_host_lib,
-  include_directories: [dxmt9_inc, dxmt9_winemetal_internal_inc],
-  dependencies: [dxmt9_util_dep, dxmt9_frontend_dep, dxmt9_runtime_dep, dxmt9_winemetal_service_abi_dep],
+  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
+  dependencies: [
+    dxmt9_util_dep,
+    dxmt9_winemetal_service_abi_dep,
+    dxmt9_winemetal_bridge_core_dep,
+  ],
 )
 
 subdir('unix')

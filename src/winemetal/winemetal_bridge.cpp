@@ -1,7 +1,8 @@
-/* src/winemetal/winemetal_bridge.cpp — PE bridge between winemetal.dll and winemetal.so.
+/* src/winemetal/winemetal_bridge.cpp — sole PE bridge between winemetal.dll and
+ * winemetal.so.
  *
- * This module owns PE/unix bridge bootstrap and unixlib dispatch for the
- * winemetal shader bridge only.
+ * This module owns PE/unix bridge bootstrap and unixlib dispatch for both the
+ * main dxmt9 C ABI bridge and the winemetal shader bridge.
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -172,17 +173,28 @@ NTSTATUS ensureBridgeReady(BridgeState& state, void (*initializer)()) {
 
 }  // namespace
 
-extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void *args) {
+extern "C" NTSTATUS dxmt9_bridge_unix_call(unsigned int code, void *args) {
   auto& state = winemetalUnixBridgeState();
   const NTSTATUS status = ensureBridgeReady(state, initializeWinemetalUnixBridge);
   if (status != DXMT9_STATUS_SUCCESS) {
-    bridgeDebugLog("winemetal_unix_call: bridge not ready status=0x%08lx",
+    bridgeDebugLog("dxmt9_bridge_unix_call: bridge not ready status=0x%08lx",
                    static_cast<unsigned long>(status));
     return status;
   }
-  bridgeTraceLog("winemetal_unix_call: handle=0x%llx code=%u dispatcher=%p",
+  bridgeTraceLog("dxmt9_bridge_unix_call: handle=0x%llx code=%u dispatcher=%p",
                  static_cast<unsigned long long>(state.handle),
                  code,
                  reinterpret_cast<void*>(state.dispatcher));
-  return state.dispatcher(state.handle, code, args);
+  const NTSTATUS call_status = state.dispatcher(state.handle, code, args);
+  if (call_status != DXMT9_STATUS_SUCCESS) {
+    bridgeDebugLog("dxmt9_bridge_unix_call: code=%u args=%p status=0x%08lx",
+                   code,
+                   args,
+                   static_cast<unsigned long>(call_status));
+  }
+  return call_status;
+}
+
+extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void *args) {
+  return dxmt9_bridge_unix_call(code, args);
 }

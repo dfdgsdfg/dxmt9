@@ -1,5 +1,6 @@
-#include "winemetal_shader_bridge.hpp"
+#include "winemetal_unix_bridge.hpp"
 
+#include "dxmt9/winemetal.h"
 #include "util/util_buffer.hpp"
 #include "winemetal_service_abi.hpp"
 

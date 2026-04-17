@@ -70,7 +70,7 @@ CXX=$(brew --prefix llvm)/bin/clang++ \
 meson setup build
 ```
 
-### Wine builtin PE bridge set (`d3d9.dll` + `dxmt9.dll` + `winemetal.dll`)
+### Wine builtin PE bridge set (`d3d9.dll` + `winemetal.dll`)
 
 Requires llvm-mingw on PATH plus a Wine toolchain root that provides
 `winebuild`, `libwinecrt0.a`, `libntdll.a`, `libdbghelp.a`, `winemac.so`, and
@@ -87,7 +87,6 @@ meson compile -C build-win32-x64-builtin
 Outputs:
 
 - `build-win32-x64-builtin/src/win32/d3d9.dll`
-- `build-win32-x64-builtin/src/win32/dxmt9.dll`
 - `build-win32-x64-builtin/src/winemetal/winemetal.dll`
 
 ### x86_64 unix module for Wine64 / Rosetta (`dxmt9.so`)
@@ -112,20 +111,19 @@ Outputs:
 
 ## Runtime Layout
 
-`dxmt9` is split into five runtime binaries:
+`dxmt9` is split into four runtime binaries:
 
 | Binary | Kind | Role |
 |---|---|---|
 | `d3d9.dll` | PE DLL | User-facing D3D9 entry points loaded by the app |
-| `dxmt9.dll` | PE DLL | Internal bridge that marshals the main `dxmt9c_*` D3D9 C ABI into `dxmt9.so` |
-| `winemetal.dll` | PE DLL | Internal shader bridge that marshals the `winemetal` shader ABI into `winemetal.so` |
-| `winemetal.so` | Wine unix module | unix-call bridge for the shader ABI exported by `winemetal.dll` |
+| `winemetal.dll` | PE DLL | Internal PE bridge that marshals both the main `dxmt9c_*` D3D9 C ABI and the `winemetal` shader ABI into `winemetal.so` |
+| `winemetal.so` | Wine unix module | unix-call bridge module exported by `winemetal.dll` |
 | `dxmt9.so` | Wine unix module | Native Metal backend, WSI, shader translation, and presentation |
 
-`d3d9.dll` imports `dxmt9.dll`. `dxmt9.dll` uses its paired `dxmt9.so` unixlib
-for the main D3D9 C ABI bridge. `winemetal.dll` uses its paired
-`winemetal.so` unixlib for shader bridge calls. The PE bridge must not import a
-Mach-O `.dylib` directly.
+`d3d9.dll` imports `winemetal.dll`. `winemetal.dll` uses its paired
+`winemetal.so` unixlib as the sole bridge boundary for both the main D3D9 C ABI
+and the shader ABI. `dxmt9.so` remains the runtime/backend module behind that
+bridge. The PE bridge must not import a Mach-O `.dylib` directly.
 
 ---
 
@@ -136,7 +134,6 @@ Mach-O `.dylib` directly.
 You need these files from a release or local build:
 
 - `d3d9.dll`
-- `dxmt9.dll`
 - `winemetal.dll`
 - `dxmt9.so`
 - `winemetal.so`
@@ -152,7 +149,7 @@ You also need a recent macOS Wine build with:
 Confirmed host:
 
 - Heroic Wine 11.6 on macOS, tested on 2026-04-17 with the builtin
-  `d3d9.dll` + `dxmt9.dll` + `winemetal.dll` + `dxmt9.so` + `winemetal.so`
+  `d3d9.dll` + `winemetal.dll` + `dxmt9.so` + `winemetal.so`
   layout; `wsi_present_x64.exe`
   completes the full 180-frame present smoke
 
@@ -173,9 +170,6 @@ export WINE_ROOT="/path/to/your/wine/runtime"
 
 cp build-win32-x64-builtin/src/win32/d3d9.dll \
   "$WINEPREFIX/drive_c/windows/system32/d3d9.dll"
-
-cp build-win32-x64-builtin/src/win32/dxmt9.dll \
-  "$WINE_ROOT/lib/wine/x86_64-windows/dxmt9.dll"
 
 cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
   "$WINE_ROOT/lib/wine/x86_64-windows/winemetal.dll"
@@ -199,13 +193,11 @@ WINEDLLOVERRIDES="d3d9=n,b" \
 What goes where:
 
 - `d3d9.dll` goes into the Wine prefix because applications load it directly.
-- `dxmt9.dll` goes into Wine's `x86_64-windows` runtime directory as the builtin
-  PE bridge for `dxmt9.so`. It is not copied into `system32` on the verified
-  builtin path.
 - `winemetal.dll` goes into Wine's `x86_64-windows` runtime directory as the builtin
-  PE shader bridge. It is not copied into `system32` on the verified builtin path.
+  PE bridge for both the main D3D9 C ABI and the shader ABI. It is not copied
+  into `system32` on the verified builtin path.
 - `winemetal.so` goes into Wine's `x86_64-unix` runtime directory because it is
-  the unix-side bridge module for shader ABI calls.
+  the unix-side bridge module paired with `winemetal.dll`.
 - `dxmt9.so` goes into Wine's `x86_64-unix` runtime directory because it is the
   unix-side backend module.
 
@@ -286,8 +278,8 @@ four modules. The same check runs as part of `meson test`.
 ```
 include/dxmt9/   Public headers (core.hpp, assert.hpp, winemetal.h, device_c.h)
 src/             Implementation (D3D9 frontend, Metal runtime, util, bridge layers)
-  win32/         Win32 PE bridge stack (`d3d9.dll` + `dxmt9.dll`)
-  winemetal/     Shader bridge stack (`winemetal.dll` + `winemetal.so`)
+  win32/         Win32 PE forwarding layer (`d3d9.dll`)
+  winemetal/     Unified bridge stack (`winemetal.dll` + `winemetal.so`)
 cross/           Meson cross/native files for Wine x86_64 and Windows cross-builds
 tests/           Smoke tests and core spec tests
 specs/           Specifications and formal verification
@@ -308,7 +300,7 @@ scripts/         verify_tla.sh, install_heroic_wine.sh, corpus tooling
 | Core (D3D9 COM surface, device state, draw calls) | Complete |
 | Metal backend (command queue, PSO cache, FFP shaders, D3DBC translation) | Complete |
 | Formal verification (TLC, all 4 specs) | Complete |
-| C ABI bridge (`dxmt9c_*` between `dxmt9.dll` and `dxmt9.so`) | Complete |
-| PE bridge stack (`d3d9.dll` + `dxmt9.dll`) | Complete |
-| Shader bridge stack (`winemetal.dll` + `winemetal.so`) | Complete |
+| Main bridge ABI (`dxmt9c_*` through `winemetal.dll` / `winemetal.so`) | Complete |
+| PE forwarding layer (`d3d9.dll`) | Complete |
+| Unified bridge stack (`winemetal.dll` + `winemetal.so`) | Complete |
 | WSI (`winemac` legacy + fallback resolution, `CAMetalLayer`) | Complete |

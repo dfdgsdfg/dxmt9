@@ -28,7 +28,6 @@ exp_stage_dxmt9() {
   local -a cmd
   cmd=(bash "$exp_repo_root/scripts/install_heroic_wine.sh"
        --prefix "$DXMT_EXPERIMENT_PREFIX"
-       --legacy-system32-bridge
        --pe-build-dir "$DXMT_EXPERIMENT_PE_BUILD_DIR"
        --unix-build-dir "$DXMT_EXPERIMENT_UNIX_BUILD_DIR")
 

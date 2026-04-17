@@ -85,7 +85,7 @@ dxmt9_unix_install_dir = get_option('libdir') / 'wine' / dxmt9_unix_runtime_subd
 
 dxmt9_unix_module = shared_library(
   'dxmt9',
-  dxmt9_anchor_srcs + [bridge_codegen[2]],
+  dxmt9_anchor_srcs,
   include_directories: [dxmt9_inc, bridge_gen_inc],
   dependencies: dxmt9_deps,
   link_whole: [
