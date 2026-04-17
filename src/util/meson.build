@@ -5,6 +5,7 @@ dxmt9_util_srcs = files(
   'thread.cpp',
   'util_bmp.cpp',
   'util_buffer.cpp',
+  'util_hash.cpp',
   'util_string.cpp',
 )
 

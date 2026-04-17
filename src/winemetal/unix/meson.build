@@ -17,9 +17,9 @@ dxmt9_winemetal_unix_module = shared_library(
   name_suffix: 'so',
   include_directories: [dxmt9_inc, bridge_gen_inc, include_directories('..', '../..')],
   dependencies: [
+    dxmt9_bridge_service_dep,
+    dxmt9_shader_source_provider_dep,
     dxmt9_util_dep,
-    dxmt9_frontend_dep,
-    dxmt9_runtime_dep,
     dxmt9_winemetal_service_abi_dep,
     dependency('appleframeworks', modules: [
       'AppKit',

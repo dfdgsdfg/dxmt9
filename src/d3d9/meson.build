@@ -73,3 +73,9 @@ dxmt9_frontend_dep = declare_dependency(
   include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
   dependencies: [dxmt9_util_dep],
 )
+
+dxmt9_bridge_service_dep = declare_dependency(
+  link_with: dxmt9_frontend_lib,
+  include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+  dependencies: [dxmt9_util_dep],
+)

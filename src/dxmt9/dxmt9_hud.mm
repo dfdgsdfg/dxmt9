@@ -87,14 +87,6 @@ void DeveloperHudState::updateLine(size_t index, const std::string& value) {
 }
 
 metalqueue::CommandBufferDiagnostics
-DeveloperHudController::prepareForSubmission(u64 seqId,
-                                             size_t slotIndex,
-                                             std::span<const MetalCommandRecord> commands,
-                                             const std::function<u32(Handle)>& resolveSurfaceFlags) {
-  return prepareForSubmission(metalqueue::summarizeCommands(seqId, slotIndex, commands, resolveSurfaceFlags));
-}
-
-metalqueue::CommandBufferDiagnostics
 DeveloperHudController::prepareForSubmission(metalqueue::CommandBufferDiagnostics diagnostics) {
   if (!diagnostics.hasPresent) {
     return diagnostics;
@@ -107,25 +99,22 @@ DeveloperHudController::prepareForSubmission(metalqueue::CommandBufferDiagnostic
 
 void DeveloperHudController::attachCompletionHandler(
     id<MTLCommandBuffer> commandBuffer,
-    u64 seqId,
-    size_t slotIndex,
-    std::span<const MetalCommandRecord> commands,
-    const std::function<u32(Handle)>& resolveSurfaceFlags,
+    const metalqueue::CommandBufferDiagnostics& diagnostics,
     metalqueue::CompletionTracker& completionTracker,
     const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
     const char* context) {
   if (!commandBuffer) {
     return;
   }
-  const auto diagnostics = prepareForSubmission(seqId, slotIndex, commands, resolveSurfaceFlags);
+  const auto preparedDiagnostics = prepareForSubmission(diagnostics);
   auto* self = this;
   auto* tracker = &completionTracker;
   const auto completion = onCompletion;
   const std::string contextValue = context ? context : "queue";
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-    (void)self->observeCompletion(buffer, diagnostics, *tracker, contextValue.c_str());
+    (void)self->observeCompletion(buffer, preparedDiagnostics, *tracker, contextValue.c_str());
     if (completion) {
-      completion(diagnostics);
+      completion(preparedDiagnostics);
     }
   }];
 }
@@ -156,14 +145,10 @@ bool SubmissionDiagnosticsController::inspect(id<MTLCommandBuffer> commandBuffer
 
 void SubmissionDiagnosticsController::attachQueueSubmission(
     id<MTLCommandBuffer> commandBuffer,
-    u64 seqId,
-    size_t slotIndex,
-    std::span<const MetalCommandRecord> commands,
-    const std::function<u32(Handle)>& resolveSurfaceFlags,
+    const metalqueue::CommandBufferDiagnostics& diagnostics,
     const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
     const char* context) {
-  hudController_.attachCompletionHandler(commandBuffer, seqId, slotIndex, commands, resolveSurfaceFlags,
-                                         completionTracker_, onCompletion, context);
+  hudController_.attachCompletionHandler(commandBuffer, diagnostics, completionTracker_, onCompletion, context);
 }
 
 }  // namespace dxmt9::core::metalhud

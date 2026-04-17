@@ -107,6 +107,5 @@ dxmt9_winemetal_dep = declare_dependency(
   include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
   dependencies: [
     dxmt9_util_dep,
-    dxmt9_winemetal_service_abi_dep,
   ],
 )

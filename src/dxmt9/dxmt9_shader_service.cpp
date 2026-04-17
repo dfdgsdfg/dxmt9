@@ -1,5 +1,6 @@
 #include "dxmt9_shader_service.hpp"
 
+#include "util/util_hash.hpp"
 #include "util/log/log.hpp"
 
 #if defined(__APPLE__)
@@ -17,6 +18,7 @@ using u64 = shader_service::u64;
 
 struct ShaderBlob {
   std::string source;
+  u64 sourceHash = 0;
 };
 
 std::mutex gShaderBlobMutex;
@@ -26,7 +28,12 @@ u64 gNextShaderBlobHandle = 1;
 u64 registerShaderBlob(std::string source) {
   std::lock_guard lock(gShaderBlobMutex);
   const u64 handle = gNextShaderBlobHandle++;
-  gShaderBlobRegistry.emplace(handle, ShaderBlob{.source = std::move(source)});
+  const u64 sourceHash = dxmt9::util::fnv1a64(source);
+  gShaderBlobRegistry.emplace(handle, ShaderBlob{.source = std::move(source), .sourceHash = sourceHash});
+  dxmt9::util::logf(dxmt9::util::LogLevel::Debug, "dxmt9-shader-service",
+                    "compiled shader handle=%llu source-hash=0x%llx",
+                    static_cast<unsigned long long>(handle),
+                    static_cast<unsigned long long>(sourceHash));
   return handle;
 }
 

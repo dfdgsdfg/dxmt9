@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -288,18 +289,65 @@ void traceQueueSlotsEvent(const char* event,
 
 class QueueLifecycleController {
  public:
-  void traceEvent(QueueLifecycleEvent event,
-                  std::optional<size_t> slotIndex,
-                  u64 eventSeqId,
-                  const QueueLifecycleContext& context,
-                  std::span<const ChunkSlot> slots,
-                  const char* extra = nullptr) const;
-  void tracePresentEnqueue(size_t slotIndex,
-                           u64 eventSeqId,
-                           const QueueLifecycleContext& context,
-                           std::span<const ChunkSlot> slots,
-                           const SwapDesc& present,
-                           Handle sourceHandle) const;
+  CommandBufferDiagnostics summarizeSubmission(
+      u64 seqId,
+      size_t slotIndex,
+      std::span<const MetalCommandRecord> commands,
+      const std::function<u32(Handle)>& resolveSurfaceFlags) const;
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void onEvent(QueueLifecycleEvent event,
+               std::optional<size_t> slotIndex,
+               u64 eventSeqId,
+               std::optional<size_t> writingSlot,
+               size_t writeIndex,
+               const ReadyContainer& readySlots,
+               const CompletedContainer& completedSeqQueue,
+               size_t inflightCount,
+               u64 completedSeqId,
+               u64 lastCommittedSeqId,
+               const SlotContainer& slots,
+               const char* extra = nullptr) const {
+    const QueueLifecycleContext context{
+        .writingSlot = writingSlot,
+        .writeIndex = writeIndex,
+        .readyCount = readySlots.size(),
+        .completedQueueCount = completedSeqQueue.size(),
+        .inflightCount = inflightCount,
+        .completedSeqId = completedSeqId,
+        .lastCommittedSeqId = lastCommittedSeqId,
+    };
+    traceLifecycleEvent(event, slotIndex, eventSeqId, context.writingSlot, context.writeIndex,
+                        context.readyCount, context.completedQueueCount, context.inflightCount,
+                        context.completedSeqId, context.lastCommittedSeqId,
+                        std::span<const ChunkSlot>(slots.data(), slots.size()), extra);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void onPresentEnqueue(size_t slotIndex,
+                        u64 eventSeqId,
+                        std::optional<size_t> writingSlot,
+                        size_t writeIndex,
+                        const ReadyContainer& readySlots,
+                        const CompletedContainer& completedSeqQueue,
+                        size_t inflightCount,
+                        u64 completedSeqId,
+                        u64 lastCommittedSeqId,
+                        const SlotContainer& slots,
+                        const SwapDesc& present,
+                        Handle sourceHandle) const {
+    if (queueTraceEnabled()) {
+      std::ostringstream out;
+      out << "[dxmt9-present] enqueue"
+          << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+          << " source=0x" << std::hex << static_cast<unsigned long long>(sourceHandle.value) << std::dec
+          << " size=" << present.width << "x" << present.height;
+      emitQueueTraceLine(out.str());
+    }
+    onEvent(QueueLifecycleEvent::PresentEnqueue, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId,
+            slots);
+  }
 };
 
 class CompletionTracker {

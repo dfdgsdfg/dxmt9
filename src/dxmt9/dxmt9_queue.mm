@@ -302,6 +302,14 @@ CommandBufferDiagnostics summarizeCommands(u64 seqId,
   return summarizeChunk(seqId, slotIndex, std::span<const ChunkObservation>(observations.data(), observations.size()));
 }
 
+CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
+    u64 seqId,
+    size_t slotIndex,
+    std::span<const MetalCommandRecord> commands,
+    const std::function<u32(Handle)>& resolveSurfaceFlags) const {
+  return summarizeCommands(seqId, slotIndex, commands, resolveSurfaceFlags);
+}
+
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state) {
   QueueTraceSnapshot snapshot;
   snapshot.slotIndex = state.slotIndex;
@@ -426,34 +434,6 @@ void traceQueueSlotsEvent(const char* event,
                                                 completedQueueCount, inflightCount, completedSeqId,
                                                 lastCommittedSeqId, slots),
                   extra);
-}
-
-void QueueLifecycleController::traceEvent(QueueLifecycleEvent event,
-                                          std::optional<size_t> slotIndex,
-                                          u64 eventSeqId,
-                                          const QueueLifecycleContext& context,
-                                          std::span<const ChunkSlot> slots,
-                                          const char* extra) const {
-  traceLifecycleEvent(event, slotIndex, eventSeqId, context.writingSlot, context.writeIndex, context.readyCount,
-                      context.completedQueueCount, context.inflightCount, context.completedSeqId,
-                      context.lastCommittedSeqId, slots, extra);
-}
-
-void QueueLifecycleController::tracePresentEnqueue(size_t slotIndex,
-                                                   u64 eventSeqId,
-                                                   const QueueLifecycleContext& context,
-                                                   std::span<const ChunkSlot> slots,
-                                                   const SwapDesc& present,
-                                                   Handle sourceHandle) const {
-  if (queueTraceEnabled()) {
-    std::ostringstream out;
-    out << "[dxmt9-present] enqueue"
-        << " hwnd=" << static_cast<unsigned long long>(present.window.value)
-        << " source=0x" << std::hex << static_cast<unsigned long long>(sourceHandle.value) << std::dec
-        << " size=" << present.width << "x" << present.height;
-    emitQueueTraceLine(out.str());
-  }
-  traceEvent(QueueLifecycleEvent::PresentEnqueue, slotIndex, eventSeqId, context, slots);
 }
 
 std::string CompletionTracker::commandBufferStatusName(MTLCommandBufferStatus status) const {

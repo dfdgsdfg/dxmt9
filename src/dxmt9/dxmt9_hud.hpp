@@ -34,18 +34,10 @@ class DeveloperHudState {
 
 class DeveloperHudController {
  public:
-  metalqueue::CommandBufferDiagnostics prepareForSubmission(
-      u64 seqId,
-      size_t slotIndex,
-      std::span<const MetalCommandRecord> commands,
-      const std::function<u32(Handle)>& resolveSurfaceFlags);
   metalqueue::CommandBufferDiagnostics prepareForSubmission(metalqueue::CommandBufferDiagnostics diagnostics);
   void attachCompletionHandler(
       id<MTLCommandBuffer> commandBuffer,
-      u64 seqId,
-      size_t slotIndex,
-      std::span<const MetalCommandRecord> commands,
-      const std::function<u32(Handle)>& resolveSurfaceFlags,
+      const metalqueue::CommandBufferDiagnostics& diagnostics,
       metalqueue::CompletionTracker& completionTracker,
       const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
       const char* context = "queue");
@@ -68,10 +60,7 @@ class SubmissionDiagnosticsController {
                const metalqueue::CommandBufferDiagnostics& diagnostics,
                const char* context);
   void attachQueueSubmission(id<MTLCommandBuffer> commandBuffer,
-                             u64 seqId,
-                             size_t slotIndex,
-                             std::span<const MetalCommandRecord> commands,
-                             const std::function<u32(Handle)>& resolveSurfaceFlags,
+                             const metalqueue::CommandBufferDiagnostics& diagnostics,
                              const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
                              const char* context = "queue");
   const metalqueue::CompletionTracker& completionTracker() const noexcept { return completionTracker_; }
