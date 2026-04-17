@@ -5,7 +5,6 @@
 
 #include "util/config/config.hpp"
 
-#include <cmath>
 #include <sstream>
 
 namespace dxmt9::core::metalhud {
@@ -13,55 +12,6 @@ namespace dxmt9::core::metalhud {
 bool compatHudEnabled() {
   static const bool enabled = dxmt9::util::getenvFlag("DXMT_COMPAT_HUD");
   return enabled;
-}
-
-bool isFloatRenderTargetFormat(Format format) {
-  switch (format) {
-    case Format::A16B16G16R16F:
-    case Format::A32B32G32R32F:
-    case Format::G16R16F:
-    case Format::R16F:
-    case Format::G32R32F:
-    case Format::R32F:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool matrixIsIdentity(const Matrix4x4& matrix) {
-  for (u32 row = 0; row < 4; ++row) {
-    for (u32 col = 0; col < 4; ++col) {
-      const float expected = row == col ? 1.0f : 0.0f;
-      if (std::fabs(matrix.m[row * 4 + col] - expected) > 1.0e-6f) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-std::string formatCompatFlags(u32 flags) {
-  std::ostringstream out;
-  const auto appendFlag = [&](u32 bit, const char* text) {
-    if ((flags & bit) == 0) {
-      return;
-    }
-    if (out.tellp() > 0) {
-      out << ' ';
-    }
-    out << text;
-  };
-  appendFlag(CompatFlagFp16, "F16");
-  appendFlag(CompatFlagMrt, "MRT");
-  appendFlag(CompatFlagSrgb, "SRG");
-  appendFlag(CompatFlagProjected, "PJT");
-  appendFlag(CompatFlagMsaa, "MSA");
-  appendFlag(CompatFlagQuery, "QRY");
-  if (out.tellp() == 0) {
-    out << '-';
-  }
-  return out.str();
 }
 
 DeveloperHudState::DeveloperHudState() = default;
@@ -87,7 +37,7 @@ void DeveloperHudState::update(u32 frame, u64 seqId, u32 flags, const std::strin
   std::ostringstream heading;
   heading << "dxmt9 frame=" << frame << " seq=" << seqId;
   updateLine(0, heading.str());
-  updateLine(1, "compat " + formatCompatFlags(flags));
+  updateLine(1, "compat " + metalcompat::formatCompatFlags(flags));
   updateLine(2, errorSummary.empty() ? std::string("last-error -") : std::string("last-error ") + errorSummary);
 }
 
@@ -137,6 +87,14 @@ void DeveloperHudState::updateLine(size_t index, const std::string& value) {
 }
 
 metalqueue::CommandBufferDiagnostics
+DeveloperHudController::prepareForSubmission(u64 seqId,
+                                             size_t slotIndex,
+                                             std::span<const MetalCommandRecord> commands,
+                                             const std::function<u32(Handle)>& resolveSurfaceFlags) {
+  return prepareForSubmission(metalqueue::summarizeCommands(seqId, slotIndex, commands, resolveSurfaceFlags));
+}
+
+metalqueue::CommandBufferDiagnostics
 DeveloperHudController::prepareForSubmission(metalqueue::CommandBufferDiagnostics diagnostics) {
   if (!diagnostics.hasPresent) {
     return diagnostics;
@@ -145,6 +103,31 @@ DeveloperHudController::prepareForSubmission(metalqueue::CommandBufferDiagnostic
   lastCompatFlags_ = diagnostics.compatFlags;
   diagnostics.frame = presentedFrame_;
   return diagnostics;
+}
+
+void DeveloperHudController::attachCompletionHandler(
+    id<MTLCommandBuffer> commandBuffer,
+    u64 seqId,
+    size_t slotIndex,
+    std::span<const MetalCommandRecord> commands,
+    const std::function<u32(Handle)>& resolveSurfaceFlags,
+    metalqueue::CompletionTracker& completionTracker,
+    const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
+    const char* context) {
+  if (!commandBuffer) {
+    return;
+  }
+  const auto diagnostics = prepareForSubmission(seqId, slotIndex, commands, resolveSurfaceFlags);
+  auto* self = this;
+  auto* tracker = &completionTracker;
+  const auto completion = onCompletion;
+  const std::string contextValue = context ? context : "queue";
+  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+    (void)self->observeCompletion(buffer, diagnostics, *tracker, contextValue.c_str());
+    if (completion) {
+      completion(diagnostics);
+    }
+  }];
 }
 
 bool DeveloperHudController::observeCompletion(id<MTLCommandBuffer> commandBuffer,

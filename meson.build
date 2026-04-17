@@ -32,7 +32,6 @@ bridge_codegen = custom_target(
   ],
   depend_files: files(
     'include/dxmt9/device_c.h',
-    'include/dxmt9/winemetal.h',
     'scripts/gen_wine_bridge.py',
   ),
 )

@@ -1,22 +1,23 @@
-#define DXMT9_SHADER_SERVICE_API __attribute__((visibility("default")))
-
 #include "dxmt9_shader_service.hpp"
 #include "util/util_buffer.hpp"
+#include "winemetal/winemetal_service_abi.hpp"
 
 extern "C" dxmt9_u64
-dxmt9_shader_service_compile(const WinemetalShaderCompileRequest* request) {
+dxmt9_winemetal_service_compile_shader(const WinemetalShaderCompileRequest* request) {
   if (!request) {
     return 0;
   }
   return dxmt9::core::shader_service::compile(*request);
 }
 
-extern "C" dxmt9_u64 dxmt9_shader_service_source_size(dxmt9_u64 shaderHandle) {
+extern "C" dxmt9_u64 dxmt9_winemetal_service_shader_source_size(dxmt9_u64 shaderHandle) {
   return dxmt9::core::shader_service::sourceSize(shaderHandle);
 }
 
 extern "C" dxmt9_u64
-dxmt9_shader_service_source_copy(dxmt9_u64 shaderHandle, char* buffer, dxmt9_u64 bufferCapacity) {
+dxmt9_winemetal_service_shader_source_copy(dxmt9_u64 shaderHandle,
+                                           char* buffer,
+                                           dxmt9_u64 bufferCapacity) {
   if (!buffer || bufferCapacity == 0) {
     return 0;
   }
@@ -28,6 +29,6 @@ dxmt9_shader_service_source_copy(dxmt9_u64 shaderHandle, char* buffer, dxmt9_u64
   return dxmt9::util::copyStringToBuffer(source, buffer, bufferCapacity);
 }
 
-extern "C" void dxmt9_shader_service_destroy(dxmt9_u64 shaderHandle) {
+extern "C" void dxmt9_winemetal_service_destroy_shader(dxmt9_u64 shaderHandle) {
   dxmt9::core::shader_service::destroy(shaderHandle);
 }

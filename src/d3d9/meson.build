@@ -9,7 +9,7 @@ dxmt9_pe_core_srcs = files(
   'd3d9_pe_device.cpp',
 )
 
-dxmt9_pe_bridge_srcs = files(
+dxmt9_frontend_export_srcs = files(
   'd3d9_pe_exports.cpp',
   'd3d9_pe_validator.cpp',
 )
@@ -31,16 +31,16 @@ if host_machine.system() == 'windows'
     dependencies: [dxmt9_util_dep],
   )
 
-  dxmt9_pe_exports_lib = static_library(
-    'dxmt9_pe_exports',
-    dxmt9_pe_bridge_srcs,
+  dxmt9_bridge_exports_lib = static_library(
+    'dxmt9_bridge_exports',
+    dxmt9_frontend_export_srcs,
     include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
     dependencies: [dxmt9_util_dep, dxmt9_pe_core_dep],
     install: false,
   )
 
-  dxmt9_pe_exports_dep = declare_dependency(
-    link_with: dxmt9_pe_exports_lib,
+  dxmt9_bridge_exports_dep = declare_dependency(
+    link_with: dxmt9_bridge_exports_lib,
     include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
     dependencies: [dxmt9_util_dep, dxmt9_pe_core_dep],
   )

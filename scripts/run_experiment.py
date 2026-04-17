@@ -23,6 +23,7 @@ from PIL import Image
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CATALOGUE_PATH = REPO_ROOT / "experiments" / "CATALOGUE.toml"
 DEFAULT_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "win32"
+DEFAULT_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "win32"
 DEFAULT_UNIX_BUILD_DIR = REPO_ROOT / "build-x86_64-builtin" / "src"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
 
@@ -297,14 +298,23 @@ def scan_log_for_failures(log_path: Path) -> list[str]:
     return [marker for marker in markers if marker in content]
 
 
-def stage_dxmt9(prefix: Path, wine_root: Path | None, pe_build_dir: Path, unix_build_dir: Path) -> None:
+def stage_dxmt9(
+    prefix: Path,
+    wine_root: Path | None,
+    pe_build_dir: Path,
+    runtime_pe_build_dir: Path,
+    unix_build_dir: Path,
+) -> None:
     cmd = [
         "bash",
         str(REPO_ROOT / "scripts" / "install_heroic_wine.sh"),
         "--prefix",
         str(prefix),
+        "--legacy-system32-bridge",
         "--pe-build-dir",
         str(pe_build_dir),
+        "--runtime-pe-build-dir",
+        str(runtime_pe_build_dir),
         "--unix-build-dir",
         str(unix_build_dir),
     ]
@@ -348,10 +358,15 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         raise FileNotFoundError("no Wine root supplied and Heroic runtime auto-detect failed")
     wine_bin = Path(args.wine_bin).expanduser().resolve() if args.wine_bin else resolve_wine_bin(wine_root)  # type: ignore[arg-type]
     pe_build_dir = Path(args.pe_build_dir).expanduser().resolve() if args.pe_build_dir else DEFAULT_PE_BUILD_DIR
+    runtime_pe_build_dir = (
+        Path(args.runtime_pe_build_dir).expanduser().resolve()
+        if args.runtime_pe_build_dir
+        else DEFAULT_RUNTIME_PE_BUILD_DIR
+    )
     unix_build_dir = Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR
 
     if not app.skip_stage:
-        stage_dxmt9(prefix, wine_root, pe_build_dir, unix_build_dir)
+        stage_dxmt9(prefix, wine_root, pe_build_dir, runtime_pe_build_dir, unix_build_dir)
 
     env = os.environ.copy()
     env.update(
@@ -362,6 +377,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             "DXMT_EXPERIMENT_WINE_ROOT": str(wine_root) if wine_root else "",
             "DXMT_EXPERIMENT_WINE_BIN": str(wine_bin),
             "DXMT_EXPERIMENT_PE_BUILD_DIR": str(pe_build_dir),
+            "DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR": str(runtime_pe_build_dir),
             "DXMT_EXPERIMENT_UNIX_BUILD_DIR": str(unix_build_dir),
             "DXMT_EXPERIMENT_OUTPUT_DIR": str(output_dir),
             "DXMT_EXPERIMENT_LOG": str(log_path),
@@ -517,6 +533,7 @@ def main() -> int:
     run_parser.add_argument("--binary", help="Override the binary path for this run")
     run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll and dxmt9.dll")
+    run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime dxmt9.dll")
     run_parser.add_argument("--unix-build-dir", help="Unix build dir containing dxmt9.so")
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")

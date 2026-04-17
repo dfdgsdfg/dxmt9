@@ -2,6 +2,7 @@
 
 #include "dxmt9_queue.hpp"
 
+#include "dxmt9_compat.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -12,6 +13,8 @@
 namespace dxmt9::core::metalqueue {
 
 namespace {
+
+using enum dxmt9::core::metalcompat::CompatFlagBits;
 
 const char* slotStateName(QueueSlotState state) {
   switch (state) {
@@ -27,6 +30,156 @@ const char* slotStateName(QueueSlotState state) {
       return "gpu";
   }
   return "unknown";
+}
+
+u32 compatFlagsForSurface(const std::function<u32(Handle)>& resolveSurfaceFlags, Handle handle) {
+  if (!handle || !resolveSurfaceFlags) {
+    return 0;
+  }
+  return resolveSurfaceFlags(handle);
+}
+
+u32 compatFlagsForDraw(const DrawDesc& draw, const std::function<u32(Handle)>& resolveSurfaceFlags) {
+  u32 flags = 0;
+  u32 colorTargets = 0;
+  for (const auto& attachment : draw.rts.color) {
+    if (!attachment.handle) {
+      continue;
+    }
+    ++colorTargets;
+    flags |= compatFlagsForSurface(resolveSurfaceFlags, attachment.handle);
+    if (attachment.sampleCount > 1) {
+      flags |= CompatFlagMsaa;
+    }
+  }
+  if (colorTargets > 1) {
+    flags |= CompatFlagMrt;
+  }
+  if (draw.rts.depthStencil.handle && draw.rts.depthStencil.sampleCount > 1) {
+    flags |= CompatFlagMsaa;
+  }
+  if (const auto srgbIt = draw.rs.values.find(RS_SRGB_WRITE_ENABLE);
+      srgbIt != draw.rs.values.end() && srgbIt->second != 0) {
+    flags |= CompatFlagSrgb;
+  }
+  for (const auto& sampler : draw.samplers) {
+    if (const auto srgbIt = sampler.states.find(SAMP_SRGB_TEXTURE);
+        srgbIt != sampler.states.end() && srgbIt->second != 0) {
+      flags |= CompatFlagSrgb;
+    }
+  }
+  for (size_t stage = 0; stage < draw.textureTransforms.size(); ++stage) {
+    if (!draw.textures[stage].handle) {
+      continue;
+    }
+    if (!metalcompat::matrixIsIdentity(draw.textureTransforms[stage])) {
+      flags |= CompatFlagProjected;
+      break;
+    }
+  }
+  return flags;
+}
+
+u32 compatFlagsForClear(const ClearDesc& clear, const std::function<u32(Handle)>& resolveSurfaceFlags) {
+  u32 flags = 0;
+  u32 colorTargets = 0;
+  for (const auto& attachment : clear.colorAttachments) {
+    if (!attachment.handle) {
+      continue;
+    }
+    ++colorTargets;
+    flags |= compatFlagsForSurface(resolveSurfaceFlags, attachment.handle);
+    if (attachment.sampleCount > 1) {
+      flags |= CompatFlagMsaa;
+    }
+  }
+  if (colorTargets > 1) {
+    flags |= CompatFlagMrt;
+  }
+  if (clear.depthStencil.handle && clear.depthStencil.sampleCount > 1) {
+    flags |= CompatFlagMsaa;
+  }
+  return flags;
+}
+
+u32 compatFlagsForPresent(const SwapDesc& present,
+                          Handle sourceHandle,
+                          const std::function<u32(Handle)>& resolveSurfaceFlags) {
+  u32 flags = compatFlagsForSurface(resolveSurfaceFlags, sourceHandle);
+  if (present.multiSampleType != MultiSampleType::None) {
+    flags |= CompatFlagMsaa;
+  }
+  return flags;
+}
+
+ChunkObservation makeChunkObservation(const MetalCommandRecord& command,
+                                      const std::function<u32(Handle)>& resolveSurfaceFlags) {
+  switch (command.kind) {
+    case MetalCommandRecord::Kind::Draw:
+      return ChunkObservation{
+          .kind = ChunkObservationKind::Draw,
+          .compatFlags = compatFlagsForDraw(command.draw, resolveSurfaceFlags),
+      };
+    case MetalCommandRecord::Kind::Clear:
+      return ChunkObservation{
+          .kind = ChunkObservationKind::Draw,
+          .compatFlags = compatFlagsForClear(command.clear, resolveSurfaceFlags),
+      };
+    case MetalCommandRecord::Kind::SurfaceCopy:
+    case MetalCommandRecord::Kind::StretchRect:
+    case MetalCommandRecord::Kind::Readback:
+      return ChunkObservation{
+          .kind = ChunkObservationKind::Blit,
+          .compatFlags = 0,
+      };
+    case MetalCommandRecord::Kind::ColorFill:
+      return ChunkObservation{
+          .kind = ChunkObservationKind::Draw,
+          .compatFlags = 0,
+      };
+    case MetalCommandRecord::Kind::Present:
+      return ChunkObservation{
+          .kind = ChunkObservationKind::Present,
+          .compatFlags = compatFlagsForPresent(command.present, command.presentSource, resolveSurfaceFlags),
+      };
+  }
+  return ChunkObservation{};
+}
+
+QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
+                                          u64 eventSeqId,
+                                          std::optional<size_t> writingSlot,
+                                          size_t writeIndex,
+                                          size_t readyCount,
+                                          size_t completedQueueCount,
+                                          size_t inflightCount,
+                                          u64 completedSeqId,
+                                          u64 lastCommittedSeqId,
+                                          std::span<const ChunkSlot> slots) {
+  QueueTraceState traceState;
+  traceState.slotIndex = slotIndex;
+  traceState.writingSlot = writingSlot;
+  traceState.writeIndex = writeIndex;
+  traceState.readyCount = readyCount;
+  traceState.completedQueueCount = completedQueueCount;
+  traceState.inflightCount = inflightCount;
+  traceState.completedSeqId = completedSeqId;
+  traceState.lastCommittedSeqId = lastCommittedSeqId;
+  traceState.eventSeqId = eventSeqId;
+  traceState.activeSlots.reserve(slots.size());
+  for (size_t i = 0; i < slots.size(); ++i) {
+    const auto& slot = slots[i];
+    if (slot.state == ChunkSlot::State::Free) {
+      continue;
+    }
+    traceState.activeSlots.push_back(ActiveSlotInfo{
+        .index = i,
+        .state = static_cast<QueueSlotState>(static_cast<int>(slot.state)),
+        .seqId = slot.seqId,
+        .commandCount = slot.commands.size(),
+    });
+  }
+  return makeQueueTraceSnapshot(traceState);
 }
 
 }  // namespace
@@ -97,6 +250,18 @@ CommandBufferDiagnostics summarizeChunk(u64 seqId,
     }
   }
   return summarizeChunk(input);
+}
+
+CommandBufferDiagnostics summarizeCommands(u64 seqId,
+                                           size_t slotIndex,
+                                           std::span<const MetalCommandRecord> commands,
+                                           const std::function<u32(Handle)>& resolveSurfaceFlags) {
+  std::vector<ChunkObservation> observations;
+  observations.reserve(commands.size());
+  for (const auto& command : commands) {
+    observations.push_back(makeChunkObservation(command, resolveSurfaceFlags));
+  }
+  return summarizeChunk(seqId, slotIndex, std::span<const ChunkObservation>(observations.data(), observations.size()));
 }
 
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state) {
@@ -188,6 +353,24 @@ void traceQueueEvent(const char* event, const QueueTraceSnapshot& snapshot, cons
     out << ' ' << extra;
   }
   emitQueueTraceLine(out.str());
+}
+
+void traceQueueSlotsEvent(const char* event,
+                          std::optional<size_t> slotIndex,
+                          u64 eventSeqId,
+                          std::optional<size_t> writingSlot,
+                          size_t writeIndex,
+                          size_t readyCount,
+                          size_t completedQueueCount,
+                          size_t inflightCount,
+                          u64 completedSeqId,
+                          u64 lastCommittedSeqId,
+                          std::span<const ChunkSlot> slots,
+                          const char* extra) {
+  traceQueueEvent(event, makeQueueTraceSnapshot(slotIndex, eventSeqId, writingSlot, writeIndex, readyCount,
+                                                completedQueueCount, inflightCount, completedSeqId,
+                                                lastCommittedSeqId, slots),
+                  extra);
 }
 
 std::string CompletionTracker::commandBufferStatusName(MTLCommandBufferStatus status) const {

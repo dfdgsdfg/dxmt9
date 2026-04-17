@@ -74,4 +74,8 @@ extern NTSTATUS WINAPI __wine_unload_unix_lib(unixlib_module_t lib);
 }
 #endif
 
+#ifndef WINE_UNIX_CALL
+#define WINE_UNIX_CALL(code, args) __wine_unix_call_dispatcher(__wine_unixlib_handle, (code), (args))
+#endif
+
 #endif

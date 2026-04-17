@@ -7,8 +7,8 @@ dxmt9_winemetal_deps = [dxmt9_util_dep]
 if host_machine.system() == 'windows'
   dxmt9_winemetal_api_srcs += files('winemetal_thunks.cpp')
 else
-  dxmt9_winemetal_api_srcs += files('unix/winemetal_unix.cpp')
-  dxmt9_winemetal_deps += [dxmt9_shader_service_dep]
+  dxmt9_winemetal_api_srcs += files('winemetal_shader_bridge.cpp')
+  dxmt9_winemetal_deps += [dxmt9_winemetal_service_abi_dep]
 endif
 
 dxmt9_winemetal_lib = static_library(

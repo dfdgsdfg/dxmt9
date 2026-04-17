@@ -7,11 +7,11 @@ dxmt9_winemetal_unix_install_dir = get_option('libdir') / 'wine' / dxmt9_winemet
 
 shared_library(
   'winemetal',
-  'winemetal_unix.cpp',
+  files('../winemetal_shader_bridge.cpp', 'winemetal_unix.cpp'),
   name_prefix: '',
   name_suffix: 'so',
   include_directories: [dxmt9_inc, include_directories('..', '../..')],
-  dependencies: [dxmt9_util_dep, dxmt9_shader_service_dep],
+  dependencies: [dxmt9_util_dep, dxmt9_winemetal_service_abi_dep],
   cpp_args: ['-DWINE_UNIX_LIB=1'],
   native: true,
   build_rpath: '@loader_path/:@loader_path/../../',

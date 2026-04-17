@@ -91,6 +91,10 @@ struct QueueTraceState {
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
                                         size_t slotIndex,
                                         std::span<const ChunkObservation> observations);
+CommandBufferDiagnostics summarizeCommands(u64 seqId,
+                                          size_t slotIndex,
+                                          std::span<const MetalCommandRecord> commands,
+                                          const std::function<u32(Handle)>& resolveSurfaceFlags);
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state);
 
 template <typename CommandContainer, typename ObservationMapper>
@@ -228,6 +232,18 @@ CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input);
 bool shouldTraceQueue(const QueueTraceSnapshot& snapshot);
 std::string formatActiveSlots(const QueueTraceSnapshot& snapshot);
 void traceQueueEvent(const char* event, const QueueTraceSnapshot& snapshot, const char* extra = nullptr);
+void traceQueueSlotsEvent(const char* event,
+                          std::optional<size_t> slotIndex,
+                          u64 eventSeqId,
+                          std::optional<size_t> writingSlot,
+                          size_t writeIndex,
+                          size_t readyCount,
+                          size_t completedQueueCount,
+                          size_t inflightCount,
+                          u64 completedSeqId,
+                          u64 lastCommittedSeqId,
+                          std::span<const ChunkSlot> slots,
+                          const char* extra = nullptr);
 
 class CompletionTracker {
  public:

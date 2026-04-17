@@ -50,15 +50,9 @@ class Proto:
 
 
 PROTOTYPE_RE = re.compile(
-    r"^(?P<ret>.+?)\s+(?P<name>(?:dxmt9c|dxmt9_winemetal)_[A-Za-z0-9_]+)\s*\((?P<params>.*)\)$",
+    r"^(?P<ret>.+?)\s+(?P<name>dxmt9c_[A-Za-z0-9_]+)\s*\((?P<params>.*)\)$",
     re.S,
 )
-WINEMETAL_PROTOS = [
-    "dxmt9_u64 dxmt9_winemetal_compile_shader(const WinemetalShaderCompileRequest* request)",
-    "const char* dxmt9_winemetal_shader_source(dxmt9_u64 shaderHandle)",
-    "dxmt9_u64 dxmt9_winemetal_shader_source_size(dxmt9_u64 shaderHandle)",
-    "void dxmt9_winemetal_destroy_shader(dxmt9_u64 shaderHandle)",
-]
 
 
 def normalize_whitespace(value: str) -> str:
@@ -172,9 +166,7 @@ def collect_device_c_prototypes() -> list[Proto]:
 
 
 def collect_prototypes() -> list[Proto]:
-    protos = collect_device_c_prototypes()
-    protos.extend(parse_prototype(raw) for raw in WINEMETAL_PROTOS)
-    return protos
+    return collect_device_c_prototypes()
 
 
 def wow64_field_decl(param: Param) -> str:
@@ -196,7 +188,6 @@ def write_ops_header(path: pathlib.Path, protos: list[Proto]) -> None:
     lines.append("")
     lines.append('#include <stdint.h>')
     lines.append('#include "dxmt9/device_c.h"')
-    lines.append('#include "dxmt9/winemetal.h"')
     lines.append("")
     lines.append("namespace dxmt9::bridge {")
     lines.append("enum class BridgeOpcode : unsigned int {")
@@ -237,7 +228,6 @@ def write_client_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append("#include <type_traits>")
     lines.append("")
     lines.append('#include "dxmt9/device_c.h"')
-    lines.append('#include "dxmt9/winemetal.h"')
     lines.append('#include "dxmt9/wineunixlib.h"')
     lines.append(f'#include "{ops_header_name}"')
     lines.append("")
@@ -360,7 +350,6 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append('#include <unordered_map>')
     lines.append("")
     lines.append('#include "dxmt9/device_c.h"')
-    lines.append('#include "dxmt9/winemetal.h"')
     lines.append('#include "dxmt9/wineunixlib.h"')
     lines.append(f'#include "{ops_header_name}"')
     lines.append("")

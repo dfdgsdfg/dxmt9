@@ -61,7 +61,7 @@ if wine_builtin_dll
       join_paths(wine_build_path, 'dlls/dbghelp', d3d9_bridge_runtime_subdir),
     ], required: true)
     winebuild = join_paths(wine_build_path, 'tools/winebuild/winebuild')
-  else
+else
     lib_winecrt0 = c_compiler.find_library('winecrt0', dirs: [
       join_paths(wine_install_path, 'lib/wine', d3d9_bridge_runtime_subdir),
     ], required: true)
@@ -86,7 +86,7 @@ dxmt9_bridge_dll = shared_library(
   name_suffix: 'dll',
   vs_module_defs: files('dxmt9.def')[0],
   include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_win32_internal_inc],
-  dependencies: dxmt9_bridge_deps + [dxmt9_util_dep, dxmt9_pe_exports_dep],
+  dependencies: dxmt9_bridge_deps + [dxmt9_util_dep, dxmt9_bridge_exports_dep],
   c_args: dxmt9_bridge_c_args,
   cpp_args: dxmt9_bridge_cpp_args,
   install: true,

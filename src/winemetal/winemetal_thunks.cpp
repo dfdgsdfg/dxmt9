@@ -1,4 +1,5 @@
 #include "winemetal_thunks.hpp"
+#include "util/util_buffer.hpp"
 #include "wineunixlib.h"
 
 #include <algorithm>
@@ -17,10 +18,10 @@ dxmt9_u64 compileShaderViaUnixCall(const WinemetalShaderCompileRequest* request)
 
   Dxmt9WinemetalCompileShaderParams params{};
   params.kind = static_cast<uint32_t>(request->kind);
-  params.bytecode_ptr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(request->bytecode));
+  params.bytecode_ptr = dxmt9::util::ptrToU64(request->bytecode);
   params.bytecode_size = request->bytecodeSize;
   params.bytecode_hash = request->bytecodeHash;
-  params.variant_key_ptr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(request->variantKey));
+  params.variant_key_ptr = dxmt9::util::ptrToU64(request->variantKey);
   params.textured = request->textured ? 1u : 0u;
   params.clip_plane_mask = request->clipPlaneMask;
   params.sample_count = request->sampleCount;
@@ -55,7 +56,7 @@ const char* shaderSourceViaUnixCall(dxmt9_u64 shaderHandle) {
 
   Dxmt9WinemetalShaderSourceCopyParams params{};
   params.shader_handle = shaderHandle;
-  params.buffer_ptr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(gShaderSourceScratch.data()));
+  params.buffer_ptr = dxmt9::util::ptrToU64(gShaderSourceScratch.data());
   params.buffer_capacity = static_cast<uint64_t>(gShaderSourceScratch.size());
   if (WINE_UNIX_CALL(DXMT9_WINEMETAL_CALL_SHADER_SOURCE_COPY, &params) != DXMT9_STATUS_SUCCESS ||
       params.bytes_written == 0) {
