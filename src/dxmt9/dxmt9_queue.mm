@@ -337,7 +337,7 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
   return summarizeCommands(seqId, slotIndex, commands, resolveSurfaceFlags);
 }
 
-void QueueLifecycleController::recordTransition(const QueueTransitionRecord& record) const {
+void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
   switch (record.event) {
     case QueueLifecycleEvent::PresentEnqueue:
       if (record.slotIndex.has_value() && record.present) {
@@ -423,18 +423,24 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
   submissionBinding_ = binding;
 }
 
-void QueueLifecycleController::attachTrackedSubmission(
+void QueueLifecycleController::commitTrackedSubmission(
     id<MTLCommandBuffer> commandBuffer,
-    const CommandBufferDiagnostics& diagnostics,
+    size_t slotIndex,
+    u64 seqId,
+    std::span<const MetalCommandRecord> commands,
     metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
-    const QueueSubmissionRecord& record,
+    const std::function<u32(Handle)>& resolveSurfaceFlags,
+    const QueueControllerState& beforeCommitState,
+    const QueueControllerState& afterCommitState,
     const char* context) const {
-  recordTransition(QueueTransitionRecord{
+  const auto diagnostics = summarizeSubmission(seqId, slotIndex, commands, resolveSurfaceFlags);
+
+  observeTransition(QueueTransitionRecord{
       .event = QueueLifecycleEvent::EncodeCommit,
-      .before = record.beforeCommitState,
-      .after = record.afterCommitState,
-      .slotIndex = record.slotIndex,
-      .eventSeqId = record.seqId,
+      .before = beforeCommitState,
+      .after = afterCommitState,
+      .slotIndex = slotIndex,
+      .eventSeqId = seqId,
   });
 
   if (!commandBuffer) {
@@ -450,19 +456,20 @@ void QueueLifecycleController::attachTrackedSubmission(
   auto* self = this;
   auto* diagnosticsController = &submissionDiagnostics;
   const std::string contextValue = context ? context : "queue";
-  const auto submissionRecord = record;
+  const auto submissionSlotIndex = slotIndex;
+  const auto submissionSeqId = seqId;
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
     (void)diagnosticsController->observeQueueSubmission(buffer, preparedDiagnostics, contextValue.c_str());
     std::lock_guard completionLock(*binding.mutex);
     const QueueControllerState before = makeTrackedSubmissionState(binding);
-    binding.completedSeqQueue->push_back(submissionRecord.seqId);
+    binding.completedSeqQueue->push_back(submissionSeqId);
     const QueueControllerState after = makeTrackedSubmissionState(binding);
-    self->recordTransition(QueueTransitionRecord{
+    self->observeTransition(QueueTransitionRecord{
         .event = QueueLifecycleEvent::GpuComplete,
         .before = before,
         .after = after,
-        .slotIndex = submissionRecord.slotIndex,
-        .eventSeqId = submissionRecord.seqId,
+        .slotIndex = submissionSlotIndex,
+        .eventSeqId = submissionSeqId,
     });
     if (binding.finishCv) {
       binding.finishCv->notify_all();

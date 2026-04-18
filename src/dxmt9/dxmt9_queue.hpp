@@ -331,24 +331,21 @@ class QueueLifecycleController {
     std::condition_variable* finishCv = nullptr;
   };
 
-  struct QueueSubmissionRecord {
-    size_t slotIndex = 0;
-    u64 seqId = 0;
-    QueueControllerState beforeCommitState{};
-    QueueControllerState afterCommitState{};
-  };
-
   CommandBufferDiagnostics summarizeSubmission(
       u64 seqId,
       size_t slotIndex,
       std::span<const MetalCommandRecord> commands,
       const std::function<u32(Handle)>& resolveSurfaceFlags) const;
-  void recordTransition(const QueueTransitionRecord& record) const;
+  void observeTransition(const QueueTransitionRecord& record) const;
   void bindTrackedSubmissionState(SubmissionBinding binding);
-  void attachTrackedSubmission(id<MTLCommandBuffer> commandBuffer,
-                               const CommandBufferDiagnostics& diagnostics,
+  void commitTrackedSubmission(id<MTLCommandBuffer> commandBuffer,
+                               size_t slotIndex,
+                               u64 seqId,
+                               std::span<const MetalCommandRecord> commands,
                                metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
-                               const QueueSubmissionRecord& record,
+                               const std::function<u32(Handle)>& resolveSurfaceFlags,
+                               const QueueControllerState& beforeCommitState,
+                               const QueueControllerState& afterCommitState,
                                const char* context = "queue") const;
 
  private:

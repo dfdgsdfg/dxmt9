@@ -4769,9 +4769,15 @@ class MetalBackendDevice final : public BackendDevice {
     op.presentSource = currentBackBuffer_;
     currentSlot().commands.push_back(std::move(op));
     const auto after = makeQueueControllerStateUnlocked();
-    recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::PresentEnqueue, before, after,
-                                  *writingSlot_, slots_[*writingSlot_].seqId, 0, &desc,
-                                  currentBackBuffer_);
+    queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+        .event = metalqueue::QueueLifecycleEvent::PresentEnqueue,
+        .before = before,
+        .after = after,
+        .slotIndex = *writingSlot_,
+        .eventSeqId = slots_[*writingSlot_].seqId,
+        .present = &desc,
+        .sourceHandle = currentBackBuffer_,
+    });
     commitCurrentChunkUnlocked(lock);
   }
 
@@ -4843,26 +4849,6 @@ class MetalBackendDevice final : public BackendDevice {
     };
   }
 
-  void recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent event,
-                                     const metalqueue::QueueControllerState& before,
-                                     const metalqueue::QueueControllerState& after,
-                                     std::optional<size_t> slotIndex,
-                                     u64 eventSeqId,
-                                     size_t inflightLimit = 0,
-                                     const SwapDesc* present = nullptr,
-                                     Handle sourceHandle = {}) {
-    queueLifecycle_.recordTransition(metalqueue::QueueTransitionRecord{
-        .event = event,
-        .before = before,
-        .after = after,
-        .slotIndex = slotIndex,
-        .eventSeqId = eventSeqId,
-        .inflightLimit = inflightLimit,
-        .present = present,
-        .sourceHandle = sourceHandle,
-    });
-  }
-
   void ensureWritingSlotUnlocked(std::unique_lock<std::mutex>& lock) {
     if (writingSlot_) {
       // TLA+: RingSafety
@@ -4871,9 +4857,14 @@ class MetalBackendDevice final : public BackendDevice {
     }
     if (slots_[writeIndex_].state != ChunkSlot::State::Free || inflightCount_ >= kMaxInflight) {
       const auto beforeWait = makeQueueControllerStateUnlocked();
-      recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::WriterWaitBegin, beforeWait,
-                                    beforeWait, writeIndex_, slots_[writeIndex_].seqId,
-                                    kMaxInflight);
+      queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+          .event = metalqueue::QueueLifecycleEvent::WriterWaitBegin,
+          .before = beforeWait,
+          .after = beforeWait,
+          .slotIndex = writeIndex_,
+          .eventSeqId = slots_[writeIndex_].seqId,
+          .inflightLimit = kMaxInflight,
+      });
     }
     writeCv_.wait(lock, [this] {
       return stop_ || (slots_[writeIndex_].state == ChunkSlot::State::Free &&
@@ -4883,8 +4874,13 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
     const auto beforeAcquire = makeQueueControllerStateUnlocked();
-    recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::WriterWaitEnd, beforeAcquire,
-                                  beforeAcquire, writeIndex_, slots_[writeIndex_].seqId);
+    queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+        .event = metalqueue::QueueLifecycleEvent::WriterWaitEnd,
+        .before = beforeAcquire,
+        .after = beforeAcquire,
+        .slotIndex = writeIndex_,
+        .eventSeqId = slots_[writeIndex_].seqId,
+    });
     // TLA+: RingSafety
     DXMT_ASSERT(slots_[writeIndex_].state == ChunkSlot::State::Free);
     slots_[writeIndex_].state = ChunkSlot::State::Writing;
@@ -4892,8 +4888,13 @@ class MetalBackendDevice final : public BackendDevice {
     slots_[writeIndex_].commands.clear();
     writingSlot_ = writeIndex_;
     const auto afterAcquire = makeQueueControllerStateUnlocked();
-    recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::WriterAcquire, beforeAcquire,
-                                  afterAcquire, *writingSlot_, slots_[*writingSlot_].seqId);
+    queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+        .event = metalqueue::QueueLifecycleEvent::WriterAcquire,
+        .before = beforeAcquire,
+        .after = afterAcquire,
+        .slotIndex = *writingSlot_,
+        .eventSeqId = slots_[*writingSlot_].seqId,
+    });
   }
 
   void commitCurrentChunkUnlocked(std::unique_lock<std::mutex>& lock) {
@@ -4908,23 +4909,38 @@ class MetalBackendDevice final : public BackendDevice {
       slot.state = ChunkSlot::State::Free;
       writingSlot_.reset();
       const auto afterEmpty = makeQueueControllerStateUnlocked();
-      recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::CommitEmpty, beforeEmpty,
-                                    afterEmpty, slotIndex, slot.seqId);
+      queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+          .event = metalqueue::QueueLifecycleEvent::CommitEmpty,
+          .before = beforeEmpty,
+          .after = afterEmpty,
+          .slotIndex = slotIndex,
+          .eventSeqId = slot.seqId,
+      });
       return;
     }
     if (inflightCount_ >= kMaxInflight) {
       const auto beforeWait = makeQueueControllerStateUnlocked();
-      recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::CommitWaitBegin, beforeWait,
-                                    beforeWait, *writingSlot_, slots_[*writingSlot_].seqId,
-                                    kMaxInflight);
+      queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+          .event = metalqueue::QueueLifecycleEvent::CommitWaitBegin,
+          .before = beforeWait,
+          .after = beforeWait,
+          .slotIndex = *writingSlot_,
+          .eventSeqId = slots_[*writingSlot_].seqId,
+          .inflightLimit = kMaxInflight,
+      });
     }
     writeCv_.wait(lock, [this] { return stop_ || inflightCount_ < kMaxInflight; });
     if (stop_) {
       return;
     }
     const auto beforePublish = makeQueueControllerStateUnlocked();
-    recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::CommitWaitEnd, beforePublish,
-                                  beforePublish, *writingSlot_, slots_[*writingSlot_].seqId);
+    queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+        .event = metalqueue::QueueLifecycleEvent::CommitWaitEnd,
+        .before = beforePublish,
+        .after = beforePublish,
+        .slotIndex = *writingSlot_,
+        .eventSeqId = slots_[*writingSlot_].seqId,
+    });
     // TLA+: WineCommit
     slot.seqId = nextSeqId_++;
     slot.state = ChunkSlot::State::Pending;
@@ -4941,8 +4957,13 @@ class MetalBackendDevice final : public BackendDevice {
     // when ensureWritingSlotUnlocked() reacquires the next write slot.
     DXMT_ASSERT(writeIndex_ < kRingSize);
     const auto afterPublish = makeQueueControllerStateUnlocked();
-    recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::CommitPublish, beforePublish,
-                                  afterPublish, readySlots_.back(), slot.seqId);
+    queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+        .event = metalqueue::QueueLifecycleEvent::CommitPublish,
+        .before = beforePublish,
+        .after = afterPublish,
+        .slotIndex = readySlots_.back(),
+        .eventSeqId = slot.seqId,
+    });
     encodeCv_.notify_one();
   }
 
@@ -5127,8 +5148,13 @@ class MetalBackendDevice final : public BackendDevice {
           DXMT_ASSERT(slot.state == ChunkSlot::State::Pending);
           slot.state = ChunkSlot::State::Encoding;
           const auto afterDequeue = makeQueueControllerStateUnlocked();
-          recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::EncodeDequeue,
-                                        beforeDequeue, afterDequeue, slotIndex, slot.seqId);
+          queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+              .event = metalqueue::QueueLifecycleEvent::EncodeDequeue,
+              .before = beforeDequeue,
+              .after = afterDequeue,
+              .slotIndex = slotIndex,
+              .eventSeqId = slot.seqId,
+          });
           slotCopy = slot;
         }
 
@@ -5257,24 +5283,20 @@ class MetalBackendDevice final : public BackendDevice {
       flushBlit();
 
       const u64 seqId = slot.seqId;
-      const auto submissionDiagnostics = queueLifecycle_.summarizeSubmission(
-          seqId, slotIndex, std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
-          [this](Handle handle) { return compatFlagsForSurfaceUnlocked(handle); });
       {
         std::lock_guard lock(mutex_);
         const auto beforeCommit = makeQueueControllerStateUnlocked();
         slots_[slotIndex].state = ChunkSlot::State::GPU;
         const auto afterCommit = makeQueueControllerStateUnlocked();
-        queueLifecycle_.attachTrackedSubmission(
+        queueLifecycle_.commitTrackedSubmission(
             commandBuffer,
-            submissionDiagnostics,
+            slotIndex,
+            seqId,
+            std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
             submissionDiagnostics_,
-            metalqueue::QueueLifecycleController::QueueSubmissionRecord{
-                .slotIndex = slotIndex,
-                .seqId = seqId,
-                .beforeCommitState = beforeCommit,
-                .afterCommitState = afterCommit,
-            });
+            [this](Handle handle) { return compatFlagsForSurfaceUnlocked(handle); },
+            beforeCommit,
+            afterCommit);
       }
       [commandBuffer commit];
     }
@@ -5297,8 +5319,13 @@ class MetalBackendDevice final : public BackendDevice {
     copyTempArena_.reclaim(completedSeqId_);
     completedSeqQueue_.push_back(seqId);
     const auto afterFinish = makeQueueControllerStateUnlocked();
-    recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::FinishInline, beforeFinish,
-                                  afterFinish, slotIndex, seqId);
+    queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+        .event = metalqueue::QueueLifecycleEvent::FinishInline,
+        .before = beforeFinish,
+        .after = afterFinish,
+        .slotIndex = slotIndex,
+        .eventSeqId = seqId,
+    });
     writeCv_.notify_all();
     finishCv_.notify_all();
   }
@@ -6892,8 +6919,12 @@ class MetalBackendDevice final : public BackendDevice {
             --inflightCount_;
           }
           const auto afterFinishDequeue = makeQueueControllerStateUnlocked();
-          recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::FinishDequeue,
-                                        beforeFinishDequeue, afterFinishDequeue, std::nullopt, seqId);
+          queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+              .event = metalqueue::QueueLifecycleEvent::FinishDequeue,
+              .before = beforeFinishDequeue,
+              .after = afterFinishDequeue,
+              .eventSeqId = seqId,
+          });
           reclaimCompletedSlotsUnlocked(seqId);
           argbufArena_.reclaim(completedSeqId_);
           lambdaStoreArena_.reclaim(completedSeqId_);
@@ -6916,8 +6947,13 @@ class MetalBackendDevice final : public BackendDevice {
         slot.commands.clear();
         slot.seqId = 0;
         const auto afterReclaim = makeQueueControllerStateUnlocked();
-        recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::ReclaimFree, beforeReclaim,
-                                      afterReclaim, slotIndex, seqId);
+        queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+            .event = metalqueue::QueueLifecycleEvent::ReclaimFree,
+            .before = beforeReclaim,
+            .after = afterReclaim,
+            .slotIndex = slotIndex,
+            .eventSeqId = seqId,
+        });
         // TLA+: SeqIdSafety
         DXMT_ASSERT(completedSeqId_ <= nextSeqId_);
       }
@@ -6927,14 +6963,22 @@ class MetalBackendDevice final : public BackendDevice {
   void waitForSequenceUnlocked(u64 seqId, std::unique_lock<std::mutex>& lock) {
     if (completedSeqId_ < seqId) {
       const auto beforeWait = makeQueueControllerStateUnlocked();
-      recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::WaitSeqBegin, beforeWait,
-                                    beforeWait, std::nullopt, seqId);
+      queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+          .event = metalqueue::QueueLifecycleEvent::WaitSeqBegin,
+          .before = beforeWait,
+          .after = beforeWait,
+          .eventSeqId = seqId,
+      });
     }
     finishCv_.wait(lock, [this, seqId] { return stop_ || completedSeqId_ >= seqId; });
     if (!stop_) {
       const auto afterWait = makeQueueControllerStateUnlocked();
-      recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent::WaitSeqEnd, afterWait,
-                                    afterWait, std::nullopt, seqId);
+      queueLifecycle_.observeTransition(metalqueue::QueueTransitionRecord{
+          .event = metalqueue::QueueLifecycleEvent::WaitSeqEnd,
+          .before = afterWait,
+          .after = afterWait,
+          .eventSeqId = seqId,
+      });
     }
   }
 

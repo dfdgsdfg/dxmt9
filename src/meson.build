@@ -29,10 +29,9 @@ dxmt9_native_lib = shared_library(
     dxmt9_winemetal_internal_inc,
     include_directories('..'),
   ],
-  dependencies: dxmt9_deps + [dxmt9_util_dep],
-  link_whole: [
-    dxmt9_winemetal_frontend_service_shim_lib,
-    dxmt9_winemetal_runtime_service_shim_lib,
+  dependencies: dxmt9_deps + [
+    dxmt9_util_dep,
+    dxmt9_winemetal_service_shim_dep,
   ],
   install: false,
 )

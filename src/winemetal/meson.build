@@ -108,7 +108,7 @@ endif
 
 dxmt9_winemetal_frontend_service_shim_lib = static_library(
   'dxmt9_winemetal_frontend_service_shim',
-  dxmt9_frontend_srcs,
+  files('../d3d9/d3d9_winemetal_service_shim.cpp'),
   include_directories: [
     dxmt9_inc,
     bridge_gen_inc,
@@ -116,13 +116,16 @@ dxmt9_winemetal_frontend_service_shim_lib = static_library(
     dxmt9_d3d9_internal_inc,
     include_directories('..'),
   ],
-  dependencies: [dxmt9_util_dep],
+  dependencies: [
+    dxmt9_util_dep,
+    dxmt9_frontend_dep,
+  ],
   install: false,
 )
 
 dxmt9_winemetal_runtime_service_shim_lib = static_library(
   'dxmt9_winemetal_runtime_service_shim',
-  dxmt9_runtime_srcs + dxmt9_shader_service_core_srcs + dxmt9_winemetal_service_abi_srcs,
+  dxmt9_winemetal_service_abi_srcs,
   include_directories: [
     dxmt9_inc,
     bridge_gen_inc,
@@ -130,7 +133,11 @@ dxmt9_winemetal_runtime_service_shim_lib = static_library(
     dxmt9_runtime_internal_inc,
     include_directories('..'),
   ],
-  dependencies: [dxmt9_util_dep],
+  dependencies: [
+    dxmt9_util_dep,
+    dxmt9_runtime_dep,
+    dxmt9_shader_service_core_dep,
+  ],
   install: false,
 )
 

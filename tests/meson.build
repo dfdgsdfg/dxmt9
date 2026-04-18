@@ -11,7 +11,7 @@ core_spec = executable(
   'dxmt9-core-spec',
   'core_spec.cpp',
   include_directories: dxmt9_inc,
-  dependencies: dxmt9_dep,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
 )
 
 test('dxmt9-core-spec', core_spec)
@@ -20,7 +20,7 @@ shader_runner = executable(
   'shader_runner_dxmt9',
   'shader_runner_dxmt9.cpp',
   include_directories: dxmt9_inc,
-  dependencies: dxmt9_dep,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
 )
 
 if host_machine.system() == 'darwin'
