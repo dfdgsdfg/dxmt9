@@ -1,7 +1,7 @@
 dxmt9_util_srcs = files(
   'com/com_guid.cpp',
   'com/com_private_data_core.cpp',
-  'com/com_private_data_win32.cpp',
+  'com/com_private_data_iface.cpp',
   'config/config.cpp',
   'dynamic_symbol.cpp',
   'log/log.cpp',

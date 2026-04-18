@@ -1,6 +1,9 @@
-dxmt9_frontend_srcs = files(
+dxmt9_frontend_core_srcs = files(
   'com.cpp',
   'core.cpp',
+)
+
+dxmt9_frontend_bridge_srcs = files(
   'device_c.cpp',
 )
 
@@ -36,18 +39,46 @@ if host_machine.system() == 'windows'
 
 endif
 
-dxmt9_frontend_lib = static_library(
-  'dxmt9_frontend',
-  dxmt9_frontend_srcs,
+dxmt9_frontend_core_lib = static_library(
+  'dxmt9_frontend_core',
+  dxmt9_frontend_core_srcs,
   include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
   dependencies: [dxmt9_util_dep],
   install: false,
 )
 
-dxmt9_frontend_dep = declare_dependency(
-  link_with: dxmt9_frontend_lib,
+dxmt9_frontend_core_dep = declare_dependency(
+  link_with: dxmt9_frontend_core_lib,
   include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
   dependencies: [dxmt9_util_dep],
+)
+
+dxmt9_frontend_bridge_lib = static_library(
+  'dxmt9_frontend_bridge',
+  dxmt9_frontend_bridge_srcs,
+  include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+  dependencies: [
+    dxmt9_util_dep,
+    dxmt9_frontend_core_dep,
+  ],
+  install: false,
+)
+
+dxmt9_frontend_bridge_dep = declare_dependency(
+  link_with: dxmt9_frontend_bridge_lib,
+  include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+  dependencies: [
+    dxmt9_util_dep,
+    dxmt9_frontend_core_dep,
+  ],
+)
+
+dxmt9_frontend_dep = declare_dependency(
+  include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+  dependencies: [
+    dxmt9_frontend_core_dep,
+    dxmt9_frontend_bridge_dep,
+  ],
 )
 
 if host_machine.system() == 'windows'

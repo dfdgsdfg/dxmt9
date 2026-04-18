@@ -31,7 +31,8 @@ dxmt9_native_lib = shared_library(
   ],
   dependencies: dxmt9_deps + [
     dxmt9_util_dep,
-    dxmt9_frontend_dep,
+    dxmt9_frontend_core_dep,
+    dxmt9_frontend_bridge_dep,
     dxmt9_runtime_dep,
     dxmt9_shader_service_core_dep,
     dxmt9_winemetal_runtime_service_shim_dep,

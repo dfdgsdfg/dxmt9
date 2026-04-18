@@ -136,27 +136,19 @@ enum class QueueLifecycleEvent {
   WaitSeqEnd,
 };
 
-enum class QueueTransitionCause {
-  PresentEnqueue,
-  WriterWaitBegin,
-  WriterWaitEnd,
-  WriterAcquire,
-  CommitEmpty,
-  CommitWaitBegin,
-  CommitWaitEnd,
-  CommitPublish,
-  EncodeDequeue,
-  EncodeCommit,
-  GpuComplete,
-  FinishInline,
-  FinishDequeue,
-  ReclaimFree,
-  WaitSeqBegin,
-  WaitSeqEnd,
+enum class QueueOperationKind {
+  PresentMutation,
+  WriterMutation,
+  CommitMutation,
+  EncodeMutation,
+  CompletionMutation,
+  FinishMutation,
+  ReclaimMutation,
+  WaitMutation,
 };
 
 struct QueueTransitionRecord {
-  QueueTransitionCause cause = QueueTransitionCause::PresentEnqueue;
+  QueueOperationKind operation = QueueOperationKind::PresentMutation;
   QueueControllerState before{};
   QueueControllerState after{};
   std::optional<size_t> slotIndex;
@@ -171,8 +163,6 @@ struct QueueSubmissionRecord {
   size_t slotIndex = 0;
   u64 seqId = 0;
   std::span<const MetalCommandRecord> commands;
-  metalhud::SubmissionDiagnosticsController* submissionDiagnostics = nullptr;
-  std::function<u32(Handle)> resolveSurfaceFlags;
   const char* context = "queue";
 };
 
@@ -358,13 +348,10 @@ class QueueLifecycleController {
     std::span<ChunkSlot> slots;
     std::mutex* mutex = nullptr;
     std::condition_variable* finishCv = nullptr;
+    metalhud::SubmissionDiagnosticsController* submissionDiagnostics = nullptr;
+    std::function<u32(Handle)> resolveSurfaceFlags;
   };
 
-  CommandBufferDiagnostics summarizeSubmission(
-      u64 seqId,
-      size_t slotIndex,
-      std::span<const MetalCommandRecord> commands,
-      const std::function<u32(Handle)>& resolveSurfaceFlags) const;
   void bindTrackedSubmissionState(SubmissionBinding binding);
   void transition(QueueTransitionRecord record, const std::function<void()>& mutate = {});
   void submit(const QueueSubmissionRecord& record);
@@ -372,6 +359,10 @@ class QueueLifecycleController {
  private:
   QueueControllerState currentState() const;
   QueueLifecycleEvent classifyTransition(const QueueTransitionRecord& record) const;
+  CommandBufferDiagnostics summarizeSubmission(
+      u64 seqId,
+      size_t slotIndex,
+      std::span<const MetalCommandRecord> commands) const;
   void observeTransition(const QueueTransitionRecord& record) const;
   void notePresentEnqueue(const QueueControllerState& state,
                           size_t slotIndex,
