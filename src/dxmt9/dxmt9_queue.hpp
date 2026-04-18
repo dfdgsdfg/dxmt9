@@ -326,7 +326,7 @@ class QueueLifecycleController {
     size_t* inflightCount = nullptr;
     u64* completedSeqId = nullptr;
     u64* lastCommittedSeqId = nullptr;
-    std::span<const ChunkSlot> slots;
+    std::span<ChunkSlot> slots;
     std::mutex* mutex = nullptr;
     std::condition_variable* finishCv = nullptr;
   };
@@ -336,19 +336,36 @@ class QueueLifecycleController {
       size_t slotIndex,
       std::span<const MetalCommandRecord> commands,
       const std::function<u32(Handle)>& resolveSurfaceFlags) const;
-  void observeTransition(const QueueTransitionRecord& record) const;
   void bindTrackedSubmissionState(SubmissionBinding binding);
+  void presentEnqueue(size_t slotIndex,
+                      u64 eventSeqId,
+                      const SwapDesc& present,
+                      Handle sourceHandle,
+                      const std::function<void()>& mutate);
+  void writerWaitBeginIfNeeded(size_t slotIndex, u64 eventSeqId, size_t inflightLimit) const;
+  void writerWaitEnd(size_t slotIndex, u64 eventSeqId) const;
+  void writerAcquire(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
+  void commitEmpty(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
+  void commitWaitBeginIfNeeded(size_t slotIndex, u64 eventSeqId, size_t inflightLimit) const;
+  void commitWaitEnd(size_t slotIndex, u64 eventSeqId) const;
+  void commitPublish(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
+  void encodeDequeue(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
   void commitTrackedSubmission(id<MTLCommandBuffer> commandBuffer,
                                size_t slotIndex,
                                u64 seqId,
                                std::span<const MetalCommandRecord> commands,
                                metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
                                const std::function<u32(Handle)>& resolveSurfaceFlags,
-                               const QueueControllerState& beforeCommitState,
-                               const QueueControllerState& afterCommitState,
-                               const char* context = "queue") const;
+                               const char* context = "queue");
+  void finishInline(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
+  void finishDequeue(u64 eventSeqId, const std::function<void()>& mutate);
+  void reclaimFree(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
+  void waitSeqBeginIfNeeded(u64 targetSeqId) const;
+  void waitSeqEnd(u64 targetSeqId) const;
 
  private:
+  QueueControllerState currentState() const;
+  void observeTransition(const QueueTransitionRecord& record) const;
   void notePresentEnqueue(const QueueControllerState& state,
                           size_t slotIndex,
                           u64 eventSeqId,

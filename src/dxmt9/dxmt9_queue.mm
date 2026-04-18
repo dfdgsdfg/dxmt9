@@ -233,7 +233,7 @@ QueueLifecycleContext makeLifecycleContext(const QueueControllerState& state) {
   };
 }
 
-QueueControllerState makeTrackedSubmissionState(
+QueueControllerState makeBoundQueueState(
     const QueueLifecycleController::SubmissionBinding& state) {
   return QueueControllerState{
       .writingSlot = state.writingSlot ? *state.writingSlot : std::optional<size_t>{},
@@ -423,6 +423,149 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
   submissionBinding_ = binding;
 }
 
+QueueControllerState QueueLifecycleController::currentState() const {
+  return makeBoundQueueState(submissionBinding_);
+}
+
+void QueueLifecycleController::presentEnqueue(size_t slotIndex,
+                                              u64 eventSeqId,
+                                              const SwapDesc& present,
+                                              Handle sourceHandle,
+                                              const std::function<void()>& mutate) {
+  const auto before = currentState();
+  if (mutate) {
+    mutate();
+  }
+  const auto after = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::PresentEnqueue,
+      .before = before,
+      .after = after,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+      .present = &present,
+      .sourceHandle = sourceHandle,
+  });
+}
+
+void QueueLifecycleController::writerWaitBeginIfNeeded(size_t slotIndex,
+                                                       u64 eventSeqId,
+                                                       size_t inflightLimit) const {
+  const auto state = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::WriterWaitBegin,
+      .before = state,
+      .after = state,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+      .inflightLimit = inflightLimit,
+  });
+}
+
+void QueueLifecycleController::writerWaitEnd(size_t slotIndex, u64 eventSeqId) const {
+  const auto state = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::WriterWaitEnd,
+      .before = state,
+      .after = state,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+  });
+}
+
+void QueueLifecycleController::writerAcquire(size_t slotIndex,
+                                             u64 eventSeqId,
+                                             const std::function<void()>& mutate) {
+  const auto before = currentState();
+  if (mutate) {
+    mutate();
+  }
+  const auto after = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::WriterAcquire,
+      .before = before,
+      .after = after,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+  });
+}
+
+void QueueLifecycleController::commitEmpty(size_t slotIndex,
+                                           u64 eventSeqId,
+                                           const std::function<void()>& mutate) {
+  const auto before = currentState();
+  if (mutate) {
+    mutate();
+  }
+  const auto after = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::CommitEmpty,
+      .before = before,
+      .after = after,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+  });
+}
+
+void QueueLifecycleController::commitWaitBeginIfNeeded(size_t slotIndex,
+                                                       u64 eventSeqId,
+                                                       size_t inflightLimit) const {
+  const auto state = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::CommitWaitBegin,
+      .before = state,
+      .after = state,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+      .inflightLimit = inflightLimit,
+  });
+}
+
+void QueueLifecycleController::commitWaitEnd(size_t slotIndex, u64 eventSeqId) const {
+  const auto state = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::CommitWaitEnd,
+      .before = state,
+      .after = state,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+  });
+}
+
+void QueueLifecycleController::commitPublish(size_t slotIndex,
+                                             u64 eventSeqId,
+                                             const std::function<void()>& mutate) {
+  const auto before = currentState();
+  if (mutate) {
+    mutate();
+  }
+  const auto after = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::CommitPublish,
+      .before = before,
+      .after = after,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+  });
+}
+
+void QueueLifecycleController::encodeDequeue(size_t slotIndex,
+                                             u64 eventSeqId,
+                                             const std::function<void()>& mutate) {
+  const auto before = currentState();
+  if (mutate) {
+    mutate();
+  }
+  const auto after = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::EncodeDequeue,
+      .before = before,
+      .after = after,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+  });
+}
+
 void QueueLifecycleController::commitTrackedSubmission(
     id<MTLCommandBuffer> commandBuffer,
     size_t slotIndex,
@@ -430,10 +573,14 @@ void QueueLifecycleController::commitTrackedSubmission(
     std::span<const MetalCommandRecord> commands,
     metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
     const std::function<u32(Handle)>& resolveSurfaceFlags,
-    const QueueControllerState& beforeCommitState,
-    const QueueControllerState& afterCommitState,
-    const char* context) const {
+    const char* context) {
   const auto diagnostics = summarizeSubmission(seqId, slotIndex, commands, resolveSurfaceFlags);
+
+  const auto beforeCommitState = currentState();
+  if (slotIndex < submissionBinding_.slots.size()) {
+    submissionBinding_.slots[slotIndex].state = ChunkSlot::State::GPU;
+  }
+  const auto afterCommitState = currentState();
 
   observeTransition(QueueTransitionRecord{
       .event = QueueLifecycleEvent::EncodeCommit,
@@ -461,9 +608,9 @@ void QueueLifecycleController::commitTrackedSubmission(
   [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
     (void)diagnosticsController->observeQueueSubmission(buffer, preparedDiagnostics, contextValue.c_str());
     std::lock_guard completionLock(*binding.mutex);
-    const QueueControllerState before = makeTrackedSubmissionState(binding);
+    const QueueControllerState before = makeBoundQueueState(binding);
     binding.completedSeqQueue->push_back(submissionSeqId);
-    const QueueControllerState after = makeTrackedSubmissionState(binding);
+    const QueueControllerState after = makeBoundQueueState(binding);
     self->observeTransition(QueueTransitionRecord{
         .event = QueueLifecycleEvent::GpuComplete,
         .before = before,
@@ -475,6 +622,75 @@ void QueueLifecycleController::commitTrackedSubmission(
       binding.finishCv->notify_all();
     }
   }];
+}
+
+void QueueLifecycleController::finishInline(size_t slotIndex,
+                                            u64 eventSeqId,
+                                            const std::function<void()>& mutate) {
+  const auto before = currentState();
+  if (mutate) {
+    mutate();
+  }
+  const auto after = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::FinishInline,
+      .before = before,
+      .after = after,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+  });
+}
+
+void QueueLifecycleController::finishDequeue(u64 eventSeqId,
+                                             const std::function<void()>& mutate) {
+  const auto before = currentState();
+  if (mutate) {
+    mutate();
+  }
+  const auto after = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::FinishDequeue,
+      .before = before,
+      .after = after,
+      .eventSeqId = eventSeqId,
+  });
+}
+
+void QueueLifecycleController::reclaimFree(size_t slotIndex,
+                                           u64 eventSeqId,
+                                           const std::function<void()>& mutate) {
+  const auto before = currentState();
+  if (mutate) {
+    mutate();
+  }
+  const auto after = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::ReclaimFree,
+      .before = before,
+      .after = after,
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+  });
+}
+
+void QueueLifecycleController::waitSeqBeginIfNeeded(u64 targetSeqId) const {
+  const auto state = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::WaitSeqBegin,
+      .before = state,
+      .after = state,
+      .eventSeqId = targetSeqId,
+  });
+}
+
+void QueueLifecycleController::waitSeqEnd(u64 targetSeqId) const {
+  const auto state = currentState();
+  observeTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::WaitSeqEnd,
+      .before = state,
+      .after = state,
+      .eventSeqId = targetSeqId,
+  });
 }
 
 void QueueLifecycleController::notePresentEnqueue(const QueueControllerState& state,
