@@ -99,6 +99,17 @@ struct QueueLifecycleContext {
   u64 lastCommittedSeqId = 0;
 };
 
+struct QueueControllerState {
+  std::optional<size_t> writingSlot;
+  size_t writeIndex = 0;
+  size_t readyCount = 0;
+  size_t completedQueueCount = 0;
+  size_t inflightCount = 0;
+  u64 completedSeqId = 0;
+  u64 lastCommittedSeqId = 0;
+  std::span<const ChunkSlot> slots;
+};
+
 enum class QueueLifecycleEvent {
   PresentEnqueue,
   WriterWaitBegin,
@@ -294,6 +305,56 @@ class QueueLifecycleController {
       size_t slotIndex,
       std::span<const MetalCommandRecord> commands,
       const std::function<u32(Handle)>& resolveSurfaceFlags) const;
+
+  void notePresentEnqueue(const QueueControllerState& state,
+                          size_t slotIndex,
+                          u64 eventSeqId,
+                          const SwapDesc& present,
+                          Handle sourceHandle) const;
+  void noteWriterWaitBeginIfNeeded(const QueueControllerState& state,
+                                   size_t slotIndex,
+                                   u64 eventSeqId,
+                                   size_t inflightLimit) const;
+  void noteWriterWaitEnd(const QueueControllerState& state,
+                         size_t slotIndex,
+                         u64 eventSeqId) const;
+  void noteWriterAcquire(const QueueControllerState& state,
+                         size_t slotIndex,
+                         u64 eventSeqId) const;
+  void noteCommitEmpty(const QueueControllerState& state,
+                       size_t slotIndex,
+                       u64 eventSeqId) const;
+  void noteCommitWaitBeginIfNeeded(const QueueControllerState& state,
+                                   size_t slotIndex,
+                                   u64 eventSeqId,
+                                   size_t inflightLimit) const;
+  void noteCommitWaitEnd(const QueueControllerState& state,
+                         size_t slotIndex,
+                         u64 eventSeqId) const;
+  void noteCommitPublish(const QueueControllerState& state,
+                         size_t slotIndex,
+                         u64 eventSeqId) const;
+  void noteEncodeDequeue(const QueueControllerState& state,
+                         size_t slotIndex,
+                         u64 eventSeqId) const;
+  void noteEncodeCommit(const QueueControllerState& state,
+                        size_t slotIndex,
+                        u64 eventSeqId) const;
+  void noteGpuComplete(const QueueControllerState& state,
+                       size_t slotIndex,
+                       u64 eventSeqId) const;
+  void noteFinishInline(const QueueControllerState& state,
+                        size_t slotIndex,
+                        u64 eventSeqId) const;
+  void noteFinishDequeue(const QueueControllerState& state,
+                         u64 eventSeqId) const;
+  void noteReclaimFree(const QueueControllerState& state,
+                       size_t slotIndex,
+                       u64 eventSeqId) const;
+  void noteWaitSeqBeginIfNeeded(const QueueControllerState& state,
+                                u64 targetSeqId) const;
+  void noteWaitSeqEnd(const QueueControllerState& state,
+                      u64 targetSeqId) const;
 
   template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
   void onEvent(QueueLifecycleEvent event,

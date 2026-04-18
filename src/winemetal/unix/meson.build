@@ -9,17 +9,15 @@ dxmt9_winemetal_unix_module = shared_library(
   'winemetal',
   files(
     '../winemetal_public_api.cpp',
-    '../winemetal_bridge_service_abi.cpp',
     '../winemetal_unix_call_handlers.cpp',
     'winemetal_unix.cpp',
-  ) + [bridge_codegen[2], bridge_codegen[3]],
+  ),
   name_prefix: '',
   name_suffix: 'so',
   include_directories: [dxmt9_inc, bridge_gen_inc, include_directories('..', '../..')],
   dependencies: [
-    dxmt9_frontend_service_abi_dep,
-    dxmt9_runtime_service_abi_dep,
     dxmt9_util_dep,
+    dxmt9_winemetal_service_provider_dep,
     dependency('appleframeworks', modules: [
       'AppKit',
       'Foundation',

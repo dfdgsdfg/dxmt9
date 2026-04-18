@@ -80,6 +80,12 @@ if host_machine.system() == 'windows'
     install_dir: winemetal_install_dir,
   )
 
+  dxmt9_winemetal_import_dep = declare_dependency(
+    link_with: winemetal_dll,
+    include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
+    dependencies: [dxmt9_util_dep],
+  )
+
   dxmt9_winemetal_dep = declare_dependency(
     link_with: winemetal_dll,
     include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
@@ -99,6 +105,31 @@ if host_machine.system() == 'windows'
 
   subdir_done()
 endif
+
+dxmt9_winemetal_runtime_bridge_provider_lib = static_library(
+  'dxmt9_winemetal_runtime_bridge_provider',
+  files('winemetal_bridge_service_abi.cpp'),
+  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
+  dependencies: [
+    dxmt9_util_dep,
+    dxmt9_runtime_bridge_provider_dep,
+  ],
+  install: false,
+)
+
+dxmt9_winemetal_service_provider_dep = declare_dependency(
+  link_with: [
+    dxmt9_frontend_bridge_provider_lib,
+    dxmt9_winemetal_runtime_bridge_provider_lib,
+  ],
+  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
+  dependencies: [
+    dxmt9_frontend_dep,
+    dxmt9_runtime_dep,
+    dxmt9_runtime_bridge_provider_dep,
+    dxmt9_util_dep,
+  ],
+)
 
 subdir('unix')
 

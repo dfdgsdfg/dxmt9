@@ -220,6 +220,18 @@ QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
   return makeQueueTraceSnapshot(traceState);
 }
 
+QueueLifecycleContext makeLifecycleContext(const QueueControllerState& state) {
+  return QueueLifecycleContext{
+      .writingSlot = state.writingSlot,
+      .writeIndex = state.writeIndex,
+      .readyCount = state.readyCount,
+      .completedQueueCount = state.completedQueueCount,
+      .inflightCount = state.inflightCount,
+      .completedSeqId = state.completedSeqId,
+      .lastCommittedSeqId = state.lastCommittedSeqId,
+  };
+}
+
 }  // namespace
 
 bool queueTraceEnabled() {
@@ -308,6 +320,187 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
     std::span<const MetalCommandRecord> commands,
     const std::function<u32(Handle)>& resolveSurfaceFlags) const {
   return summarizeCommands(seqId, slotIndex, commands, resolveSurfaceFlags);
+}
+
+void QueueLifecycleController::notePresentEnqueue(const QueueControllerState& state,
+                                                  size_t slotIndex,
+                                                  u64 eventSeqId,
+                                                  const SwapDesc& present,
+                                                  Handle sourceHandle) const {
+  if (queueTraceEnabled()) {
+    std::ostringstream out;
+    out << "[dxmt9-present] enqueue"
+        << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+        << " source=0x" << std::hex << static_cast<unsigned long long>(sourceHandle.value) << std::dec
+        << " size=" << present.width << "x" << present.height;
+    emitQueueTraceLine(out.str());
+  }
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::PresentEnqueue, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteWriterWaitBeginIfNeeded(const QueueControllerState& state,
+                                                           size_t slotIndex,
+                                                           u64 eventSeqId,
+                                                           size_t inflightLimit) const {
+  if (slotIndex >= state.slots.size()) {
+    return;
+  }
+  if (state.slots[slotIndex].state == ChunkSlot::State::Free && state.inflightCount < inflightLimit) {
+    return;
+  }
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::WriterWaitBegin, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteWriterWaitEnd(const QueueControllerState& state,
+                                                 size_t slotIndex,
+                                                 u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::WriterWaitEnd, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteWriterAcquire(const QueueControllerState& state,
+                                                 size_t slotIndex,
+                                                 u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::WriterAcquire, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteCommitEmpty(const QueueControllerState& state,
+                                               size_t slotIndex,
+                                               u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::CommitEmpty, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteCommitWaitBeginIfNeeded(const QueueControllerState& state,
+                                                           size_t slotIndex,
+                                                           u64 eventSeqId,
+                                                           size_t inflightLimit) const {
+  if (state.inflightCount < inflightLimit) {
+    return;
+  }
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::CommitWaitBegin, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteCommitWaitEnd(const QueueControllerState& state,
+                                                 size_t slotIndex,
+                                                 u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::CommitWaitEnd, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteCommitPublish(const QueueControllerState& state,
+                                                 size_t slotIndex,
+                                                 u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::CommitPublish, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteEncodeDequeue(const QueueControllerState& state,
+                                                 size_t slotIndex,
+                                                 u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::EncodeDequeue, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteEncodeCommit(const QueueControllerState& state,
+                                                size_t slotIndex,
+                                                u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::EncodeCommit, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteGpuComplete(const QueueControllerState& state,
+                                               size_t slotIndex,
+                                               u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::GpuComplete, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteFinishInline(const QueueControllerState& state,
+                                                size_t slotIndex,
+                                                u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::FinishInline, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteFinishDequeue(const QueueControllerState& state,
+                                                 u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::FinishDequeue, std::nullopt, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteReclaimFree(const QueueControllerState& state,
+                                               size_t slotIndex,
+                                               u64 eventSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::ReclaimFree, slotIndex, eventSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteWaitSeqBeginIfNeeded(const QueueControllerState& state,
+                                                        u64 targetSeqId) const {
+  if (state.completedSeqId >= targetSeqId) {
+    return;
+  }
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::WaitSeqBegin, std::nullopt, targetSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
+}
+
+void QueueLifecycleController::noteWaitSeqEnd(const QueueControllerState& state,
+                                              u64 targetSeqId) const {
+  const auto context = makeLifecycleContext(state);
+  traceLifecycleEvent(QueueLifecycleEvent::WaitSeqEnd, std::nullopt, targetSeqId, context.writingSlot,
+                      context.writeIndex, context.readyCount, context.completedQueueCount,
+                      context.inflightCount, context.completedSeqId, context.lastCommittedSeqId,
+                      state.slots);
 }
 
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state) {

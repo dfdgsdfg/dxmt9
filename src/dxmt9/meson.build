@@ -58,3 +58,7 @@ dxmt9_runtime_dep = declare_dependency(
 dxmt9_runtime_service_abi_dep = declare_dependency(
   dependencies: [dxmt9_winemetal_service_abi_dep, dxmt9_runtime_dep],
 )
+
+dxmt9_runtime_bridge_provider_dep = declare_dependency(
+  dependencies: [dxmt9_winemetal_service_abi_dep],
+)

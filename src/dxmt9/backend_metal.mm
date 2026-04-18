@@ -4754,9 +4754,8 @@ class MetalBackendDevice final : public BackendDevice {
     op.present = desc;
     op.presentSource = currentBackBuffer_;
     currentSlot().commands.push_back(std::move(op));
-    queueLifecycle_.notePresentEnqueue(*writingSlot_, slots_[*writingSlot_].seqId, writingSlot_, writeIndex_,
-                                       readySlots_, completedSeqQueue_, inflightCount_, completedSeqId_,
-                                       lastCommittedSeqId_, slots_, desc, currentBackBuffer_);
+    queueLifecycle_.notePresentEnqueue(makeQueueControllerStateUnlocked(), *writingSlot_,
+                                       slots_[*writingSlot_].seqId, desc, currentBackBuffer_);
     commitCurrentChunkUnlocked(lock);
   }
 
@@ -4815,6 +4814,38 @@ class MetalBackendDevice final : public BackendDevice {
     return slots_[*writingSlot_];
   }
 
+  metalqueue::QueueControllerState makeQueueControllerStateUnlocked() const {
+    return metalqueue::QueueControllerState{
+        .writingSlot = writingSlot_,
+        .writeIndex = writeIndex_,
+        .readyCount = readySlots_.size(),
+        .completedQueueCount = completedSeqQueue_.size(),
+        .inflightCount = inflightCount_,
+        .completedSeqId = completedSeqId_,
+        .lastCommittedSeqId = lastCommittedSeqId_,
+        .slots = std::span<const ChunkSlot>(slots_.data(), slots_.size()),
+    };
+  }
+
+  metalhud::SubmissionDiagnosticsController::TrackedQueueSubmissionState
+  makeTrackedQueueSubmissionStateUnlocked(size_t slotIndex, u64 seqId) {
+    return metalhud::SubmissionDiagnosticsController::TrackedQueueSubmissionState{
+        .slotIndex = slotIndex,
+        .seqId = seqId,
+        .queueLifecycle = &queueLifecycle_,
+        .writingSlot = &writingSlot_,
+        .writeIndex = &writeIndex_,
+        .readySlots = &readySlots_,
+        .completedSeqQueue = &completedSeqQueue_,
+        .inflightCount = &inflightCount_,
+        .completedSeqId = &completedSeqId_,
+        .lastCommittedSeqId = &lastCommittedSeqId_,
+        .slots = std::span<const ChunkSlot>(slots_.data(), slots_.size()),
+        .mutex = &mutex_,
+        .finishCv = &finishCv_,
+    };
+  }
+
   void ensureWritingSlotUnlocked(std::unique_lock<std::mutex>& lock) {
     if (writingSlot_) {
       // TLA+: RingSafety
@@ -4822,10 +4853,8 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
     if (slots_[writeIndex_].state != ChunkSlot::State::Free || inflightCount_ >= kMaxInflight) {
-      queueLifecycle_.noteWriterWaitBeginIfNeeded(writeIndex_, slots_[writeIndex_].seqId, writingSlot_,
-                                                  writeIndex_, readySlots_, completedSeqQueue_,
-                                                  inflightCount_, completedSeqId_, lastCommittedSeqId_,
-                                                  slots_, kMaxInflight);
+      queueLifecycle_.noteWriterWaitBeginIfNeeded(makeQueueControllerStateUnlocked(), writeIndex_,
+                                                  slots_[writeIndex_].seqId, kMaxInflight);
     }
     writeCv_.wait(lock, [this] {
       return stop_ || (slots_[writeIndex_].state == ChunkSlot::State::Free &&
@@ -4834,18 +4863,16 @@ class MetalBackendDevice final : public BackendDevice {
     if (stop_) {
       return;
     }
-    queueLifecycle_.noteWriterWaitEnd(writeIndex_, slots_[writeIndex_].seqId, writingSlot_, writeIndex_,
-                                      readySlots_, completedSeqQueue_, inflightCount_, completedSeqId_,
-                                      lastCommittedSeqId_, slots_);
+    queueLifecycle_.noteWriterWaitEnd(makeQueueControllerStateUnlocked(), writeIndex_,
+                                      slots_[writeIndex_].seqId);
     // TLA+: RingSafety
     DXMT_ASSERT(slots_[writeIndex_].state == ChunkSlot::State::Free);
     slots_[writeIndex_].state = ChunkSlot::State::Writing;
     slots_[writeIndex_].seqId = 0;
     slots_[writeIndex_].commands.clear();
     writingSlot_ = writeIndex_;
-    queueLifecycle_.noteWriterAcquire(*writingSlot_, slots_[*writingSlot_].seqId, writingSlot_,
-                                      writeIndex_, readySlots_, completedSeqQueue_, inflightCount_,
-                                      completedSeqId_, lastCommittedSeqId_, slots_);
+    queueLifecycle_.noteWriterAcquire(makeQueueControllerStateUnlocked(), *writingSlot_,
+                                      slots_[*writingSlot_].seqId);
   }
 
   void commitCurrentChunkUnlocked(std::unique_lock<std::mutex>& lock) {
@@ -4856,26 +4883,21 @@ class MetalBackendDevice final : public BackendDevice {
     ChunkSlot& slot = slots_[*writingSlot_];
     if (slot.commands.empty()) {
       slot.state = ChunkSlot::State::Free;
-      queueLifecycle_.noteCommitEmpty(*writingSlot_, slots_[*writingSlot_].seqId, writingSlot_,
-                                      writeIndex_, readySlots_, completedSeqQueue_, inflightCount_,
-                                      completedSeqId_, lastCommittedSeqId_, slots_);
+      queueLifecycle_.noteCommitEmpty(makeQueueControllerStateUnlocked(), *writingSlot_,
+                                      slots_[*writingSlot_].seqId);
       writingSlot_.reset();
       return;
     }
     if (inflightCount_ >= kMaxInflight) {
-      queueLifecycle_.noteCommitWaitBeginIfNeeded(*writingSlot_, slots_[*writingSlot_].seqId,
-                                                  writingSlot_, writeIndex_, readySlots_,
-                                                  completedSeqQueue_, inflightCount_,
-                                                  completedSeqId_, lastCommittedSeqId_, slots_,
-                                                  kMaxInflight);
+      queueLifecycle_.noteCommitWaitBeginIfNeeded(makeQueueControllerStateUnlocked(), *writingSlot_,
+                                                  slots_[*writingSlot_].seqId, kMaxInflight);
     }
     writeCv_.wait(lock, [this] { return stop_ || inflightCount_ < kMaxInflight; });
     if (stop_) {
       return;
     }
-    queueLifecycle_.noteCommitWaitEnd(*writingSlot_, slots_[*writingSlot_].seqId, writingSlot_,
-                                      writeIndex_, readySlots_, completedSeqQueue_, inflightCount_,
-                                      completedSeqId_, lastCommittedSeqId_, slots_);
+    queueLifecycle_.noteCommitWaitEnd(makeQueueControllerStateUnlocked(), *writingSlot_,
+                                      slots_[*writingSlot_].seqId);
     // TLA+: WineCommit
     slot.seqId = nextSeqId_++;
     slot.state = ChunkSlot::State::Pending;
@@ -4891,9 +4913,8 @@ class MetalBackendDevice final : public BackendDevice {
     // The producer may wrap onto a still-in-flight slot here. Safety is enforced
     // when ensureWritingSlotUnlocked() reacquires the next write slot.
     DXMT_ASSERT(writeIndex_ < kRingSize);
-    queueLifecycle_.noteCommitPublish(readySlots_.back(), slot.seqId, writingSlot_, writeIndex_,
-                                      readySlots_, completedSeqQueue_, inflightCount_,
-                                      completedSeqId_, lastCommittedSeqId_, slots_);
+    queueLifecycle_.noteCommitPublish(makeQueueControllerStateUnlocked(), readySlots_.back(),
+                                      slot.seqId);
     encodeCv_.notify_one();
   }
 
@@ -5076,9 +5097,7 @@ class MetalBackendDevice final : public BackendDevice {
           // TLA+: EncodeSafety
           DXMT_ASSERT(slot.state == ChunkSlot::State::Pending);
           slot.state = ChunkSlot::State::Encoding;
-          queueLifecycle_.noteEncodeDequeue(slotIndex, slot.seqId, writingSlot_, writeIndex_,
-                                            readySlots_, completedSeqQueue_, inflightCount_,
-                                            completedSeqId_, lastCommittedSeqId_, slots_);
+          queueLifecycle_.noteEncodeDequeue(makeQueueControllerStateUnlocked(), slotIndex, slot.seqId);
           slotCopy = slot;
         }
 
@@ -5214,9 +5233,7 @@ class MetalBackendDevice final : public BackendDevice {
         std::lock_guard lock(mutex_);
         slots_[slotIndex].state = ChunkSlot::State::GPU;
         submissionDiagnostics_.attachTrackedQueueSubmission(
-            commandBuffer, submissionDiagnostics, queueLifecycle_, slotIndex, seqId, writingSlot_,
-            writeIndex_, readySlots_, completedSeqQueue_, inflightCount_, completedSeqId_,
-            lastCommittedSeqId_, slots_, mutex_, finishCv_);
+            commandBuffer, submissionDiagnostics, makeTrackedQueueSubmissionStateUnlocked(slotIndex, seqId));
       }
       [commandBuffer commit];
     }
@@ -5237,9 +5254,7 @@ class MetalBackendDevice final : public BackendDevice {
     stagingArena_.reclaim(completedSeqId_);
     copyTempArena_.reclaim(completedSeqId_);
     completedSeqQueue_.push_back(seqId);
-    queueLifecycle_.noteFinishInline(slotIndex, seqId, writingSlot_, writeIndex_, readySlots_,
-                                     completedSeqQueue_, inflightCount_, completedSeqId_,
-                                     lastCommittedSeqId_, slots_);
+    queueLifecycle_.noteFinishInline(makeQueueControllerStateUnlocked(), slotIndex, seqId);
     writeCv_.notify_all();
     finishCv_.notify_all();
   }
@@ -6831,9 +6846,7 @@ class MetalBackendDevice final : public BackendDevice {
           if (inflightCount_ > 0) {
             --inflightCount_;
           }
-          queueLifecycle_.noteFinishDequeue(seqId, writingSlot_, writeIndex_, readySlots_,
-                                            completedSeqQueue_, inflightCount_, completedSeqId_,
-                                            lastCommittedSeqId_, slots_);
+          queueLifecycle_.noteFinishDequeue(makeQueueControllerStateUnlocked(), seqId);
           reclaimCompletedSlotsUnlocked(seqId);
           argbufArena_.reclaim(completedSeqId_);
           lambdaStoreArena_.reclaim(completedSeqId_);
@@ -6854,9 +6867,7 @@ class MetalBackendDevice final : public BackendDevice {
         slot.state = ChunkSlot::State::Free;
         slot.commands.clear();
         slot.seqId = 0;
-        queueLifecycle_.noteReclaimFree(slotIndex, seqId, writingSlot_, writeIndex_, readySlots_,
-                                        completedSeqQueue_, inflightCount_, completedSeqId_,
-                                        lastCommittedSeqId_, slots_);
+        queueLifecycle_.noteReclaimFree(makeQueueControllerStateUnlocked(), slotIndex, seqId);
         // TLA+: SeqIdSafety
         DXMT_ASSERT(completedSeqId_ <= nextSeqId_);
       }
@@ -6865,15 +6876,11 @@ class MetalBackendDevice final : public BackendDevice {
 
   void waitForSequenceUnlocked(u64 seqId, std::unique_lock<std::mutex>& lock) {
     if (completedSeqId_ < seqId) {
-      queueLifecycle_.noteWaitSeqBeginIfNeeded(seqId, writingSlot_, writeIndex_, readySlots_,
-                                               completedSeqQueue_, inflightCount_, completedSeqId_,
-                                               lastCommittedSeqId_, slots_);
+      queueLifecycle_.noteWaitSeqBeginIfNeeded(makeQueueControllerStateUnlocked(), seqId);
     }
     finishCv_.wait(lock, [this, seqId] { return stop_ || completedSeqId_ >= seqId; });
     if (!stop_) {
-      queueLifecycle_.noteWaitSeqEnd(seqId, writingSlot_, writeIndex_, readySlots_,
-                                     completedSeqQueue_, inflightCount_, completedSeqId_,
-                                     lastCommittedSeqId_, slots_);
+      queueLifecycle_.noteWaitSeqEnd(makeQueueControllerStateUnlocked(), seqId);
     }
   }
 

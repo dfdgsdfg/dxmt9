@@ -9,7 +9,17 @@ dxmt9_util_srcs = files(
   'util_buffer.cpp',
   'util_hash.cpp',
   'util_string.cpp',
+  'wsi_monitor_headless.cpp',
+  'wsi_window_headless.cpp',
 )
+
+if host_machine.system() == 'darwin'
+  dxmt9_util_srcs += files('wsi_platform_darwin.cpp')
+elif host_machine.system() == 'windows'
+  dxmt9_util_srcs += files('wsi_platform_win32.cpp')
+else
+  dxmt9_util_srcs += files('wsi_platform_headless.cpp')
+endif
 
 if host_machine.system() == 'windows'
   dxmt9_util_srcs += files(
