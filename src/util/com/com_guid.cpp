@@ -11,7 +11,7 @@ std::size_t GuidHash::operator()(REFGUID guid) const noexcept {
 }
 
 bool guidEqual(REFGUID a, REFGUID b) noexcept {
-  return InlineIsEqualGUID(a, b) != FALSE;
+  return InlineIsEqualGUID(a, b);
 }
 
 std::string formatGuid(REFGUID guid) {

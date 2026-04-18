@@ -136,8 +136,27 @@ enum class QueueLifecycleEvent {
   WaitSeqEnd,
 };
 
+enum class QueueTransitionCause {
+  PresentEnqueue,
+  WriterWaitBegin,
+  WriterWaitEnd,
+  WriterAcquire,
+  CommitEmpty,
+  CommitWaitBegin,
+  CommitWaitEnd,
+  CommitPublish,
+  EncodeDequeue,
+  EncodeCommit,
+  GpuComplete,
+  FinishInline,
+  FinishDequeue,
+  ReclaimFree,
+  WaitSeqBegin,
+  WaitSeqEnd,
+};
+
 struct QueueTransitionRecord {
-  QueueLifecycleEvent event = QueueLifecycleEvent::PresentEnqueue;
+  QueueTransitionCause cause = QueueTransitionCause::PresentEnqueue;
   QueueControllerState before{};
   QueueControllerState after{};
   std::optional<size_t> slotIndex;
@@ -145,6 +164,16 @@ struct QueueTransitionRecord {
   size_t inflightLimit = 0;
   const SwapDesc* present = nullptr;
   Handle sourceHandle{};
+};
+
+struct QueueSubmissionRecord {
+  id<MTLCommandBuffer> commandBuffer = nil;
+  size_t slotIndex = 0;
+  u64 seqId = 0;
+  std::span<const MetalCommandRecord> commands;
+  metalhud::SubmissionDiagnosticsController* submissionDiagnostics = nullptr;
+  std::function<u32(Handle)> resolveSurfaceFlags;
+  const char* context = "queue";
 };
 
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
@@ -337,34 +366,12 @@ class QueueLifecycleController {
       std::span<const MetalCommandRecord> commands,
       const std::function<u32(Handle)>& resolveSurfaceFlags) const;
   void bindTrackedSubmissionState(SubmissionBinding binding);
-  void presentEnqueue(size_t slotIndex,
-                      u64 eventSeqId,
-                      const SwapDesc& present,
-                      Handle sourceHandle,
-                      const std::function<void()>& mutate);
-  void writerWaitBeginIfNeeded(size_t slotIndex, u64 eventSeqId, size_t inflightLimit) const;
-  void writerWaitEnd(size_t slotIndex, u64 eventSeqId) const;
-  void writerAcquire(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
-  void commitEmpty(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
-  void commitWaitBeginIfNeeded(size_t slotIndex, u64 eventSeqId, size_t inflightLimit) const;
-  void commitWaitEnd(size_t slotIndex, u64 eventSeqId) const;
-  void commitPublish(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
-  void encodeDequeue(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
-  void commitTrackedSubmission(id<MTLCommandBuffer> commandBuffer,
-                               size_t slotIndex,
-                               u64 seqId,
-                               std::span<const MetalCommandRecord> commands,
-                               metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
-                               const std::function<u32(Handle)>& resolveSurfaceFlags,
-                               const char* context = "queue");
-  void finishInline(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
-  void finishDequeue(u64 eventSeqId, const std::function<void()>& mutate);
-  void reclaimFree(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate);
-  void waitSeqBeginIfNeeded(u64 targetSeqId) const;
-  void waitSeqEnd(u64 targetSeqId) const;
+  void transition(QueueTransitionRecord record, const std::function<void()>& mutate = {});
+  void submit(const QueueSubmissionRecord& record);
 
  private:
   QueueControllerState currentState() const;
+  QueueLifecycleEvent classifyTransition(const QueueTransitionRecord& record) const;
   void observeTransition(const QueueTransitionRecord& record) const;
   void notePresentEnqueue(const QueueControllerState& state,
                           size_t slotIndex,

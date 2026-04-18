@@ -44,7 +44,7 @@ ComPrivateDataEntry& ComPrivateDataEntry::operator=(ComPrivateDataEntry&& other)
 }
 
 bool ComPrivateDataEntry::hasGuid(REFGUID guid) const {
-  return InlineIsEqualGUID(m_guid, guid) != FALSE;
+  return InlineIsEqualGUID(m_guid, guid);
 }
 
 HRESULT ComPrivateData::setData(REFGUID guid, UINT size, const void* data) {

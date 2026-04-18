@@ -56,6 +56,9 @@ using dxmt9::core::metalcompat::isFloatRenderTargetFormat;
 using dxmt9::core::metalcompat::matrixIsIdentity;
 using dxmt9::core::metalhud::DeveloperHudController;
 using dxmt9::core::metalqueue::CommandBufferDiagnostics;
+using dxmt9::core::metalqueue::QueueSubmissionRecord;
+using dxmt9::core::metalqueue::QueueTransitionCause;
+using dxmt9::core::metalqueue::QueueTransitionRecord;
 using dxmt9::core::metalqueue::emitQueueTraceLine;
 using dxmt9::core::metalqueue::emitTextureTraceLine;
 using dxmt9::core::metalqueue::queueTraceEnabled;
@@ -4762,7 +4765,14 @@ class MetalBackendDevice final : public BackendDevice {
     std::unique_lock lock(mutex_);
     // TLA+: WineCommit
     ensureWritingSlotUnlocked(lock);
-    queueLifecycle_.presentEnqueue(*writingSlot_, slots_[*writingSlot_].seqId, desc, currentBackBuffer_, [&] {
+    queueLifecycle_.transition(QueueTransitionRecord{
+                                   .cause = QueueTransitionCause::PresentEnqueue,
+                                   .slotIndex = *writingSlot_,
+                                   .eventSeqId = slots_[*writingSlot_].seqId,
+                                   .present = &desc,
+                                   .sourceHandle = currentBackBuffer_,
+                               },
+                               [&] {
       MetalCommandRecord op;
       op.kind = MetalCommandRecord::Kind::Present;
       op.present = desc;
@@ -4834,7 +4844,12 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
     if (slots_[writeIndex_].state != ChunkSlot::State::Free || inflightCount_ >= kMaxInflight) {
-      queueLifecycle_.writerWaitBeginIfNeeded(writeIndex_, slots_[writeIndex_].seqId, kMaxInflight);
+      queueLifecycle_.transition(QueueTransitionRecord{
+          .cause = QueueTransitionCause::WriterWaitBegin,
+          .slotIndex = writeIndex_,
+          .eventSeqId = slots_[writeIndex_].seqId,
+          .inflightLimit = kMaxInflight,
+      });
     }
     writeCv_.wait(lock, [this] {
       return stop_ || (slots_[writeIndex_].state == ChunkSlot::State::Free &&
@@ -4843,10 +4858,19 @@ class MetalBackendDevice final : public BackendDevice {
     if (stop_) {
       return;
     }
-    queueLifecycle_.writerWaitEnd(writeIndex_, slots_[writeIndex_].seqId);
+    queueLifecycle_.transition(QueueTransitionRecord{
+        .cause = QueueTransitionCause::WriterWaitEnd,
+        .slotIndex = writeIndex_,
+        .eventSeqId = slots_[writeIndex_].seqId,
+    });
     // TLA+: RingSafety
     DXMT_ASSERT(slots_[writeIndex_].state == ChunkSlot::State::Free);
-    queueLifecycle_.writerAcquire(writeIndex_, slots_[writeIndex_].seqId, [&] {
+    queueLifecycle_.transition(QueueTransitionRecord{
+                                   .cause = QueueTransitionCause::WriterAcquire,
+                                   .slotIndex = writeIndex_,
+                                   .eventSeqId = slots_[writeIndex_].seqId,
+                               },
+                               [&] {
       slots_[writeIndex_].state = ChunkSlot::State::Writing;
       slots_[writeIndex_].seqId = 0;
       slots_[writeIndex_].commands.clear();
@@ -4862,24 +4886,43 @@ class MetalBackendDevice final : public BackendDevice {
     ChunkSlot& slot = slots_[*writingSlot_];
     if (slot.commands.empty()) {
       const size_t slotIndex = *writingSlot_;
-      queueLifecycle_.commitEmpty(slotIndex, slot.seqId, [&] {
+      queueLifecycle_.transition(QueueTransitionRecord{
+                                     .cause = QueueTransitionCause::CommitEmpty,
+                                     .slotIndex = slotIndex,
+                                     .eventSeqId = slot.seqId,
+                                 },
+                                 [&] {
         slot.state = ChunkSlot::State::Free;
         writingSlot_.reset();
       });
       return;
     }
     if (inflightCount_ >= kMaxInflight) {
-      queueLifecycle_.commitWaitBeginIfNeeded(*writingSlot_, slots_[*writingSlot_].seqId, kMaxInflight);
+      queueLifecycle_.transition(QueueTransitionRecord{
+          .cause = QueueTransitionCause::CommitWaitBegin,
+          .slotIndex = *writingSlot_,
+          .eventSeqId = slots_[*writingSlot_].seqId,
+          .inflightLimit = kMaxInflight,
+      });
     }
     writeCv_.wait(lock, [this] { return stop_ || inflightCount_ < kMaxInflight; });
     if (stop_) {
       return;
     }
-    queueLifecycle_.commitWaitEnd(*writingSlot_, slots_[*writingSlot_].seqId);
+    queueLifecycle_.transition(QueueTransitionRecord{
+        .cause = QueueTransitionCause::CommitWaitEnd,
+        .slotIndex = *writingSlot_,
+        .eventSeqId = slots_[*writingSlot_].seqId,
+    });
     // TLA+: WineCommit
     const size_t publishedSlotIndex = *writingSlot_;
     const u64 publishedSeqId = nextSeqId_;
-    queueLifecycle_.commitPublish(publishedSlotIndex, publishedSeqId, [&] {
+    queueLifecycle_.transition(QueueTransitionRecord{
+                                   .cause = QueueTransitionCause::CommitPublish,
+                                   .slotIndex = publishedSlotIndex,
+                                   .eventSeqId = publishedSeqId,
+                               },
+                               [&] {
       slot.seqId = nextSeqId_++;
       slot.state = ChunkSlot::State::Pending;
       lastCommittedSeqId_ = slot.seqId;
@@ -5075,7 +5118,12 @@ class MetalBackendDevice final : public BackendDevice {
           // TLA+: CommandQueue
           // TLA+: EncodeSafety
           DXMT_ASSERT(slot.state == ChunkSlot::State::Pending);
-          queueLifecycle_.encodeDequeue(slotIndex, slot.seqId, [&] {
+          queueLifecycle_.transition(QueueTransitionRecord{
+                                         .cause = QueueTransitionCause::EncodeDequeue,
+                                         .slotIndex = slotIndex,
+                                         .eventSeqId = slot.seqId,
+                                     },
+                                     [&] {
             readySlots_.pop_front();
             slot.state = ChunkSlot::State::Encoding;
           });
@@ -5209,14 +5257,15 @@ class MetalBackendDevice final : public BackendDevice {
       const u64 seqId = slot.seqId;
       {
         std::lock_guard lock(mutex_);
-        queueLifecycle_.commitTrackedSubmission(
-            commandBuffer,
-            slotIndex,
-            seqId,
-            std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
-            submissionDiagnostics_,
-            [this](Handle handle) { return compatFlagsForSurfaceUnlocked(handle); },
-            "queue");
+        queueLifecycle_.submit(QueueSubmissionRecord{
+            .commandBuffer = commandBuffer,
+            .slotIndex = slotIndex,
+            .seqId = seqId,
+            .commands = std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
+            .submissionDiagnostics = &submissionDiagnostics_,
+            .resolveSurfaceFlags = [this](Handle handle) { return compatFlagsForSurfaceUnlocked(handle); },
+            .context = "queue",
+        });
       }
       [commandBuffer commit];
     }
@@ -5225,7 +5274,12 @@ class MetalBackendDevice final : public BackendDevice {
   void finishChunk(size_t slotIndex, u64 seqId) {
     std::lock_guard lock(mutex_);
     auto& slot = slots_[slotIndex];
-    queueLifecycle_.finishInline(slotIndex, seqId, [&] {
+    queueLifecycle_.transition(QueueTransitionRecord{
+                                   .cause = QueueTransitionCause::FinishInline,
+                                   .slotIndex = slotIndex,
+                                   .eventSeqId = seqId,
+                               },
+                               [&] {
       slot.state = ChunkSlot::State::Free;
       slot.seqId = seqId;
       slot.commands.clear();
@@ -6825,7 +6879,11 @@ class MetalBackendDevice final : public BackendDevice {
             return;
           }
           seqId = completedSeqQueue_.front();
-          queueLifecycle_.finishDequeue(seqId, [&] {
+          queueLifecycle_.transition(QueueTransitionRecord{
+                                         .cause = QueueTransitionCause::FinishDequeue,
+                                         .eventSeqId = seqId,
+                                     },
+                                     [&] {
             completedSeqQueue_.pop_front();
             completedSeqId_ = std::max(completedSeqId_, seqId);
             if (inflightCount_ > 0) {
@@ -6849,7 +6907,12 @@ class MetalBackendDevice final : public BackendDevice {
     for (auto& slot : slots_) {
       if (slot.state == ChunkSlot::State::GPU && slot.seqId == seqId) {
         const size_t slotIndex = static_cast<size_t>(&slot - slots_.data());
-        queueLifecycle_.reclaimFree(slotIndex, seqId, [&] {
+        queueLifecycle_.transition(QueueTransitionRecord{
+                                       .cause = QueueTransitionCause::ReclaimFree,
+                                       .slotIndex = slotIndex,
+                                       .eventSeqId = seqId,
+                                   },
+                                   [&] {
           slot.state = ChunkSlot::State::Free;
           slot.commands.clear();
           slot.seqId = 0;
@@ -6862,11 +6925,17 @@ class MetalBackendDevice final : public BackendDevice {
 
   void waitForSequenceUnlocked(u64 seqId, std::unique_lock<std::mutex>& lock) {
     if (completedSeqId_ < seqId) {
-      queueLifecycle_.waitSeqBeginIfNeeded(seqId);
+      queueLifecycle_.transition(QueueTransitionRecord{
+          .cause = QueueTransitionCause::WaitSeqBegin,
+          .eventSeqId = seqId,
+      });
     }
     finishCv_.wait(lock, [this, seqId] { return stop_ || completedSeqId_ >= seqId; });
     if (!stop_) {
-      queueLifecycle_.waitSeqEnd(seqId);
+      queueLifecycle_.transition(QueueTransitionRecord{
+          .cause = QueueTransitionCause::WaitSeqEnd,
+          .eventSeqId = seqId,
+      });
     }
   }
 

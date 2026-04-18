@@ -1,6 +1,6 @@
 #pragma once
 
-#include <d3d9.h>
+#include "com_types.hpp"
 
 #include <vector>
 

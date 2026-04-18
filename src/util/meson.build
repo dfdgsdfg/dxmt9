@@ -1,4 +1,7 @@
 dxmt9_util_srcs = files(
+  'com/com_guid.cpp',
+  'com/com_private_data_core.cpp',
+  'com/com_private_data_win32.cpp',
   'config/config.cpp',
   'dynamic_symbol.cpp',
   'log/log.cpp',
@@ -19,14 +22,6 @@ elif host_machine.system() == 'windows'
   dxmt9_util_srcs += files('wsi_platform_win32.cpp')
 else
   dxmt9_util_srcs += files('wsi_platform_headless.cpp')
-endif
-
-if host_machine.system() == 'windows'
-  dxmt9_util_srcs += files(
-    'com/com_guid.cpp',
-    'com/com_private_data_core.cpp',
-    'com/com_private_data_win32.cpp',
-  )
 endif
 
 dxmt9_util_internal_inc = include_directories('.', '..')

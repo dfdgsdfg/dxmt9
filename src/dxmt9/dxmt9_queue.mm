@@ -338,7 +338,7 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
 }
 
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
-  switch (record.event) {
+  switch (classifyTransition(record)) {
     case QueueLifecycleEvent::PresentEnqueue:
       if (record.slotIndex.has_value() && record.present) {
         notePresentEnqueue(record.after, *record.slotIndex, record.eventSeqId, *record.present,
@@ -423,174 +423,80 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
   submissionBinding_ = binding;
 }
 
+QueueLifecycleEvent QueueLifecycleController::classifyTransition(const QueueTransitionRecord& record) const {
+  switch (record.cause) {
+    case QueueTransitionCause::PresentEnqueue:
+      return QueueLifecycleEvent::PresentEnqueue;
+    case QueueTransitionCause::WriterWaitBegin:
+      return QueueLifecycleEvent::WriterWaitBegin;
+    case QueueTransitionCause::WriterWaitEnd:
+      return QueueLifecycleEvent::WriterWaitEnd;
+    case QueueTransitionCause::WriterAcquire:
+      return QueueLifecycleEvent::WriterAcquire;
+    case QueueTransitionCause::CommitEmpty:
+      return QueueLifecycleEvent::CommitEmpty;
+    case QueueTransitionCause::CommitWaitBegin:
+      return QueueLifecycleEvent::CommitWaitBegin;
+    case QueueTransitionCause::CommitWaitEnd:
+      return QueueLifecycleEvent::CommitWaitEnd;
+    case QueueTransitionCause::CommitPublish:
+      return QueueLifecycleEvent::CommitPublish;
+    case QueueTransitionCause::EncodeDequeue:
+      return QueueLifecycleEvent::EncodeDequeue;
+    case QueueTransitionCause::EncodeCommit:
+      return QueueLifecycleEvent::EncodeCommit;
+    case QueueTransitionCause::GpuComplete:
+      return QueueLifecycleEvent::GpuComplete;
+    case QueueTransitionCause::FinishInline:
+      return QueueLifecycleEvent::FinishInline;
+    case QueueTransitionCause::FinishDequeue:
+      return QueueLifecycleEvent::FinishDequeue;
+    case QueueTransitionCause::ReclaimFree:
+      return QueueLifecycleEvent::ReclaimFree;
+    case QueueTransitionCause::WaitSeqBegin:
+      return QueueLifecycleEvent::WaitSeqBegin;
+    case QueueTransitionCause::WaitSeqEnd:
+      return QueueLifecycleEvent::WaitSeqEnd;
+  }
+  return QueueLifecycleEvent::PresentEnqueue;
+}
+
 QueueControllerState QueueLifecycleController::currentState() const {
   return makeBoundQueueState(submissionBinding_);
 }
 
-void QueueLifecycleController::presentEnqueue(size_t slotIndex,
-                                              u64 eventSeqId,
-                                              const SwapDesc& present,
-                                              Handle sourceHandle,
-                                              const std::function<void()>& mutate) {
+void QueueLifecycleController::transition(QueueTransitionRecord record,
+                                          const std::function<void()>& mutate) {
   const auto before = currentState();
   if (mutate) {
     mutate();
   }
   const auto after = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::PresentEnqueue,
-      .before = before,
-      .after = after,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-      .present = &present,
-      .sourceHandle = sourceHandle,
-  });
+  record.before = before;
+  record.after = after;
+  observeTransition(record);
 }
 
-void QueueLifecycleController::writerWaitBeginIfNeeded(size_t slotIndex,
-                                                       u64 eventSeqId,
-                                                       size_t inflightLimit) const {
-  const auto state = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::WriterWaitBegin,
-      .before = state,
-      .after = state,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-      .inflightLimit = inflightLimit,
-  });
-}
-
-void QueueLifecycleController::writerWaitEnd(size_t slotIndex, u64 eventSeqId) const {
-  const auto state = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::WriterWaitEnd,
-      .before = state,
-      .after = state,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::writerAcquire(size_t slotIndex,
-                                             u64 eventSeqId,
-                                             const std::function<void()>& mutate) {
-  const auto before = currentState();
-  if (mutate) {
-    mutate();
-  }
-  const auto after = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::WriterAcquire,
-      .before = before,
-      .after = after,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::commitEmpty(size_t slotIndex,
-                                           u64 eventSeqId,
-                                           const std::function<void()>& mutate) {
-  const auto before = currentState();
-  if (mutate) {
-    mutate();
-  }
-  const auto after = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::CommitEmpty,
-      .before = before,
-      .after = after,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::commitWaitBeginIfNeeded(size_t slotIndex,
-                                                       u64 eventSeqId,
-                                                       size_t inflightLimit) const {
-  const auto state = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::CommitWaitBegin,
-      .before = state,
-      .after = state,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-      .inflightLimit = inflightLimit,
-  });
-}
-
-void QueueLifecycleController::commitWaitEnd(size_t slotIndex, u64 eventSeqId) const {
-  const auto state = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::CommitWaitEnd,
-      .before = state,
-      .after = state,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::commitPublish(size_t slotIndex,
-                                             u64 eventSeqId,
-                                             const std::function<void()>& mutate) {
-  const auto before = currentState();
-  if (mutate) {
-    mutate();
-  }
-  const auto after = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::CommitPublish,
-      .before = before,
-      .after = after,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::encodeDequeue(size_t slotIndex,
-                                             u64 eventSeqId,
-                                             const std::function<void()>& mutate) {
-  const auto before = currentState();
-  if (mutate) {
-    mutate();
-  }
-  const auto after = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::EncodeDequeue,
-      .before = before,
-      .after = after,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::commitTrackedSubmission(
-    id<MTLCommandBuffer> commandBuffer,
-    size_t slotIndex,
-    u64 seqId,
-    std::span<const MetalCommandRecord> commands,
-    metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
-    const std::function<u32(Handle)>& resolveSurfaceFlags,
-    const char* context) {
-  const auto diagnostics = summarizeSubmission(seqId, slotIndex, commands, resolveSurfaceFlags);
+void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
+  const auto diagnostics = summarizeSubmission(
+      record.seqId, record.slotIndex, record.commands,
+      record.resolveSurfaceFlags ? record.resolveSurfaceFlags : std::function<u32(Handle)>{[](Handle) { return 0u; }});
 
   const auto beforeCommitState = currentState();
-  if (slotIndex < submissionBinding_.slots.size()) {
-    submissionBinding_.slots[slotIndex].state = ChunkSlot::State::GPU;
+  if (record.slotIndex < submissionBinding_.slots.size()) {
+    submissionBinding_.slots[record.slotIndex].state = ChunkSlot::State::GPU;
   }
   const auto afterCommitState = currentState();
 
   observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::EncodeCommit,
+      .cause = QueueTransitionCause::EncodeCommit,
       .before = beforeCommitState,
       .after = afterCommitState,
-      .slotIndex = slotIndex,
-      .eventSeqId = seqId,
+      .slotIndex = record.slotIndex,
+      .eventSeqId = record.seqId,
   });
 
-  if (!commandBuffer) {
+  if (!record.commandBuffer) {
     return;
   }
 
@@ -599,20 +505,25 @@ void QueueLifecycleController::commitTrackedSubmission(
     return;
   }
 
-  const auto preparedDiagnostics = submissionDiagnostics.prepareQueueSubmission(diagnostics);
+  CommandBufferDiagnostics preparedDiagnostics = diagnostics;
+  auto* diagnosticsController = record.submissionDiagnostics;
+  if (diagnosticsController) {
+    preparedDiagnostics = diagnosticsController->prepareQueueSubmission(diagnostics);
+  }
   auto* self = this;
-  auto* diagnosticsController = &submissionDiagnostics;
-  const std::string contextValue = context ? context : "queue";
-  const auto submissionSlotIndex = slotIndex;
-  const auto submissionSeqId = seqId;
-  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-    (void)diagnosticsController->observeQueueSubmission(buffer, preparedDiagnostics, contextValue.c_str());
+  const std::string contextValue = record.context ? record.context : "queue";
+  const auto submissionSlotIndex = record.slotIndex;
+  const auto submissionSeqId = record.seqId;
+  [record.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+    if (diagnosticsController) {
+      (void)diagnosticsController->observeQueueSubmission(buffer, preparedDiagnostics, contextValue.c_str());
+    }
     std::lock_guard completionLock(*binding.mutex);
     const QueueControllerState before = makeBoundQueueState(binding);
     binding.completedSeqQueue->push_back(submissionSeqId);
     const QueueControllerState after = makeBoundQueueState(binding);
     self->observeTransition(QueueTransitionRecord{
-        .event = QueueLifecycleEvent::GpuComplete,
+        .cause = QueueTransitionCause::GpuComplete,
         .before = before,
         .after = after,
         .slotIndex = submissionSlotIndex,
@@ -622,75 +533,6 @@ void QueueLifecycleController::commitTrackedSubmission(
       binding.finishCv->notify_all();
     }
   }];
-}
-
-void QueueLifecycleController::finishInline(size_t slotIndex,
-                                            u64 eventSeqId,
-                                            const std::function<void()>& mutate) {
-  const auto before = currentState();
-  if (mutate) {
-    mutate();
-  }
-  const auto after = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::FinishInline,
-      .before = before,
-      .after = after,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::finishDequeue(u64 eventSeqId,
-                                             const std::function<void()>& mutate) {
-  const auto before = currentState();
-  if (mutate) {
-    mutate();
-  }
-  const auto after = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::FinishDequeue,
-      .before = before,
-      .after = after,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::reclaimFree(size_t slotIndex,
-                                           u64 eventSeqId,
-                                           const std::function<void()>& mutate) {
-  const auto before = currentState();
-  if (mutate) {
-    mutate();
-  }
-  const auto after = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::ReclaimFree,
-      .before = before,
-      .after = after,
-      .slotIndex = slotIndex,
-      .eventSeqId = eventSeqId,
-  });
-}
-
-void QueueLifecycleController::waitSeqBeginIfNeeded(u64 targetSeqId) const {
-  const auto state = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::WaitSeqBegin,
-      .before = state,
-      .after = state,
-      .eventSeqId = targetSeqId,
-  });
-}
-
-void QueueLifecycleController::waitSeqEnd(u64 targetSeqId) const {
-  const auto state = currentState();
-  observeTransition(QueueTransitionRecord{
-      .event = QueueLifecycleEvent::WaitSeqEnd,
-      .before = state,
-      .after = state,
-      .eventSeqId = targetSeqId,
-  });
 }
 
 void QueueLifecycleController::notePresentEnqueue(const QueueControllerState& state,
