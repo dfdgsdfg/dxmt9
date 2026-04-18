@@ -27,20 +27,6 @@ dxmt9_shader_service_core_dep = declare_dependency(
   dependencies: [dxmt9_util_dep],
 )
 
-dxmt9_winemetal_service_abi_lib = static_library(
-  'dxmt9_winemetal_service_abi',
-  dxmt9_winemetal_service_abi_srcs,
-  include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
-  dependencies: [dxmt9_util_dep, dxmt9_shader_service_core_dep],
-  install: false,
-)
-
-dxmt9_winemetal_service_abi_dep = declare_dependency(
-  link_with: dxmt9_winemetal_service_abi_lib,
-  include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
-  dependencies: [dxmt9_util_dep, dxmt9_shader_service_core_dep],
-)
-
 dxmt9_runtime_lib = static_library(
   'dxmt9_runtime',
   dxmt9_runtime_srcs,
@@ -55,10 +41,17 @@ dxmt9_runtime_dep = declare_dependency(
   dependencies: [dxmt9_util_dep],
 )
 
-dxmt9_runtime_service_abi_dep = declare_dependency(
-  dependencies: [dxmt9_winemetal_service_abi_dep, dxmt9_runtime_dep],
+dxmt9_runtime_service_shim_lib = static_library(
+  'dxmt9_runtime_service_shim',
+  dxmt9_winemetal_service_abi_srcs,
+  include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
+  dependencies: [dxmt9_util_dep],
+  link_whole: [dxmt9_shader_service_core_lib, dxmt9_runtime_lib],
+  install: false,
 )
 
-dxmt9_runtime_bridge_provider_dep = declare_dependency(
-  dependencies: [dxmt9_winemetal_service_abi_dep],
+dxmt9_runtime_service_shim_dep = declare_dependency(
+  link_with: dxmt9_runtime_service_shim_lib,
+  include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
+  dependencies: [dxmt9_util_dep],
 )

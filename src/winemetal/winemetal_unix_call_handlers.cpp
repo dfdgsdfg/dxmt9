@@ -1,6 +1,6 @@
 #include "winemetal_unix_call_handlers.hpp"
 
-#include "util/util_buffer.hpp"
+#include "util/unixcall_marshal.hpp"
 #include "winemetal_bridge_service_abi.h"
 
 #include <cstdint>
@@ -14,10 +14,10 @@ WinemetalShaderCompileRequest decodeCompileShaderRequest(
     const Dxmt9WinemetalCompileShaderParams& params) {
   return WinemetalShaderCompileRequest{
       .kind = static_cast<WinemetalShaderKind>(params.kind),
-      .bytecode = dxmt9::util::u64ToPtr<const void>(params.bytecode_ptr),
+      .bytecode = dxmt9::util::marshal::decodePtr<const void>(params.bytecode_ptr),
       .bytecodeSize = params.bytecode_size,
       .bytecodeHash = params.bytecode_hash,
-      .variantKey = dxmt9::util::u64ToPtr<const void>(params.variant_key_ptr),
+      .variantKey = dxmt9::util::marshal::decodePtr<const void>(params.variant_key_ptr),
       .textured = params.textured != 0,
       .clipPlaneMask = params.clip_plane_mask,
       .sampleCount = params.sample_count,
@@ -58,7 +58,7 @@ extern "C" NTSTATUS dxmt9_winemetal_shader_source_copy_unix_call(void* opaque) {
     params->bytes_written = 0;
     return kStatusSuccess;
   }
-  char* destination = dxmt9::util::u64ToPtr<char>(params->buffer_ptr);
+  char* destination = dxmt9::util::marshal::decodePtr<char>(params->buffer_ptr);
   params->bytes_written = dxmt9_winemetal_bridge_shader_source_copy(
       params->shader_handle, destination, params->buffer_capacity);
   return kStatusSuccess;

@@ -11,6 +11,13 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <deque>
+#include <condition_variable>
+#include <mutex>
+
+namespace dxmt9::core::metalhud {
+class SubmissionDiagnosticsController;
+}
 
 namespace dxmt9::core::metalqueue {
 
@@ -127,6 +134,17 @@ enum class QueueLifecycleEvent {
   ReclaimFree,
   WaitSeqBegin,
   WaitSeqEnd,
+};
+
+struct QueueTransitionRecord {
+  QueueLifecycleEvent event = QueueLifecycleEvent::PresentEnqueue;
+  QueueControllerState before{};
+  QueueControllerState after{};
+  std::optional<size_t> slotIndex;
+  u64 eventSeqId = 0;
+  size_t inflightLimit = 0;
+  const SwapDesc* present = nullptr;
+  Handle sourceHandle{};
 };
 
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
@@ -300,11 +318,34 @@ void traceQueueSlotsEvent(const char* event,
 
 class QueueLifecycleController {
  public:
+  struct TrackedSubmissionState {
+    size_t slotIndex = 0;
+    u64 seqId = 0;
+    QueueControllerState beforeCommitState{};
+    QueueControllerState afterCommitState{};
+    std::optional<size_t>* writingSlot = nullptr;
+    size_t* writeIndex = nullptr;
+    std::deque<size_t>* readySlots = nullptr;
+    std::deque<u64>* completedSeqQueue = nullptr;
+    size_t* inflightCount = nullptr;
+    u64* completedSeqId = nullptr;
+    u64* lastCommittedSeqId = nullptr;
+    std::span<const ChunkSlot> slots;
+    std::mutex* mutex = nullptr;
+    std::condition_variable* finishCv = nullptr;
+  };
+
   CommandBufferDiagnostics summarizeSubmission(
       u64 seqId,
       size_t slotIndex,
       std::span<const MetalCommandRecord> commands,
       const std::function<u32(Handle)>& resolveSurfaceFlags) const;
+  void recordTransition(const QueueTransitionRecord& record) const;
+  void attachTrackedSubmission(id<MTLCommandBuffer> commandBuffer,
+                               const CommandBufferDiagnostics& diagnostics,
+                               metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
+                               const TrackedSubmissionState& state,
+                               const char* context = "queue") const;
 
   void notePresentEnqueue(const QueueControllerState& state,
                           size_t slotIndex,

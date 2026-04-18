@@ -9,24 +9,6 @@
 
 namespace dxmt9::core::metalhud {
 
-namespace {
-
-metalqueue::QueueControllerState makeQueueControllerState(
-    const SubmissionDiagnosticsController::TrackedQueueSubmissionState& state) {
-  return metalqueue::QueueControllerState{
-      .writingSlot = state.writingSlot ? *state.writingSlot : std::optional<size_t>{},
-      .writeIndex = state.writeIndex ? *state.writeIndex : 0,
-      .readyCount = state.readySlots ? state.readySlots->size() : 0,
-      .completedQueueCount = state.completedSeqQueue ? state.completedSeqQueue->size() : 0,
-      .inflightCount = state.inflightCount ? *state.inflightCount : 0,
-      .completedSeqId = state.completedSeqId ? *state.completedSeqId : 0,
-      .lastCommittedSeqId = state.lastCommittedSeqId ? *state.lastCommittedSeqId : 0,
-      .slots = state.slots,
-  };
-}
-
-}  // namespace
-
 bool compatHudEnabled() {
   static const bool enabled = dxmt9::util::getenvFlag("DXMT_COMPAT_HUD");
   return enabled;
@@ -167,33 +149,6 @@ void SubmissionDiagnosticsController::attachQueueSubmission(
     const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
     const char* context) {
   hudController_.attachCompletionHandler(commandBuffer, diagnostics, completionTracker_, onCompletion, context);
-}
-
-void SubmissionDiagnosticsController::attachTrackedQueueSubmission(
-    id<MTLCommandBuffer> commandBuffer,
-    const metalqueue::CommandBufferDiagnostics& diagnostics,
-    const TrackedQueueSubmissionState& state,
-    const char* context) {
-  if (state.queueLifecycle) {
-    state.queueLifecycle->noteEncodeCommit(makeQueueControllerState(state), state.slotIndex, state.seqId);
-  }
-  attachQueueSubmission(
-      commandBuffer,
-      diagnostics,
-      [state](const metalqueue::CommandBufferDiagnostics&) {
-        if (!state.mutex || !state.completedSeqQueue) {
-          return;
-        }
-        std::lock_guard completionLock(*state.mutex);
-        state.completedSeqQueue->push_back(state.seqId);
-        if (state.queueLifecycle) {
-          state.queueLifecycle->noteGpuComplete(makeQueueControllerState(state), state.slotIndex, state.seqId);
-        }
-        if (state.finishCv) {
-          state.finishCv->notify_all();
-        }
-      },
-      context);
 }
 
 }  // namespace dxmt9::core::metalhud

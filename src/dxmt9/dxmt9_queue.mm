@@ -3,6 +3,7 @@
 #include "dxmt9_queue.hpp"
 
 #include "dxmt9_compat.hpp"
+#include "dxmt9_hud.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -232,6 +233,20 @@ QueueLifecycleContext makeLifecycleContext(const QueueControllerState& state) {
   };
 }
 
+QueueControllerState makeTrackedSubmissionState(
+    const QueueLifecycleController::TrackedSubmissionState& state) {
+  return QueueControllerState{
+      .writingSlot = state.writingSlot ? *state.writingSlot : std::optional<size_t>{},
+      .writeIndex = state.writeIndex ? *state.writeIndex : 0,
+      .readyCount = state.readySlots ? state.readySlots->size() : 0,
+      .completedQueueCount = state.completedSeqQueue ? state.completedSeqQueue->size() : 0,
+      .inflightCount = state.inflightCount ? *state.inflightCount : 0,
+      .completedSeqId = state.completedSeqId ? *state.completedSeqId : 0,
+      .lastCommittedSeqId = state.lastCommittedSeqId ? *state.lastCommittedSeqId : 0,
+      .slots = state.slots,
+  };
+}
+
 }  // namespace
 
 bool queueTraceEnabled() {
@@ -320,6 +335,127 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
     std::span<const MetalCommandRecord> commands,
     const std::function<u32(Handle)>& resolveSurfaceFlags) const {
   return summarizeCommands(seqId, slotIndex, commands, resolveSurfaceFlags);
+}
+
+void QueueLifecycleController::recordTransition(const QueueTransitionRecord& record) const {
+  switch (record.event) {
+    case QueueLifecycleEvent::PresentEnqueue:
+      if (record.slotIndex.has_value() && record.present) {
+        notePresentEnqueue(record.after, *record.slotIndex, record.eventSeqId, *record.present,
+                           record.sourceHandle);
+      }
+      return;
+    case QueueLifecycleEvent::WriterWaitBegin:
+      if (record.slotIndex.has_value()) {
+        noteWriterWaitBeginIfNeeded(record.before, *record.slotIndex, record.eventSeqId,
+                                    record.inflightLimit);
+      }
+      return;
+    case QueueLifecycleEvent::WriterWaitEnd:
+      if (record.slotIndex.has_value()) {
+        noteWriterWaitEnd(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::WriterAcquire:
+      if (record.slotIndex.has_value()) {
+        noteWriterAcquire(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::CommitEmpty:
+      if (record.slotIndex.has_value()) {
+        noteCommitEmpty(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::CommitWaitBegin:
+      if (record.slotIndex.has_value()) {
+        noteCommitWaitBeginIfNeeded(record.before, *record.slotIndex, record.eventSeqId,
+                                    record.inflightLimit);
+      }
+      return;
+    case QueueLifecycleEvent::CommitWaitEnd:
+      if (record.slotIndex.has_value()) {
+        noteCommitWaitEnd(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::CommitPublish:
+      if (record.slotIndex.has_value()) {
+        noteCommitPublish(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::EncodeDequeue:
+      if (record.slotIndex.has_value()) {
+        noteEncodeDequeue(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::EncodeCommit:
+      if (record.slotIndex.has_value()) {
+        noteEncodeCommit(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::GpuComplete:
+      if (record.slotIndex.has_value()) {
+        noteGpuComplete(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::FinishInline:
+      if (record.slotIndex.has_value()) {
+        noteFinishInline(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::FinishDequeue:
+      noteFinishDequeue(record.after, record.eventSeqId);
+      return;
+    case QueueLifecycleEvent::ReclaimFree:
+      if (record.slotIndex.has_value()) {
+        noteReclaimFree(record.after, *record.slotIndex, record.eventSeqId);
+      }
+      return;
+    case QueueLifecycleEvent::WaitSeqBegin:
+      noteWaitSeqBeginIfNeeded(record.before, record.eventSeqId);
+      return;
+    case QueueLifecycleEvent::WaitSeqEnd:
+      noteWaitSeqEnd(record.after, record.eventSeqId);
+      return;
+  }
+}
+
+void QueueLifecycleController::attachTrackedSubmission(
+    id<MTLCommandBuffer> commandBuffer,
+    const CommandBufferDiagnostics& diagnostics,
+    metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
+    const TrackedSubmissionState& state,
+    const char* context) const {
+  recordTransition(QueueTransitionRecord{
+      .event = QueueLifecycleEvent::EncodeCommit,
+      .before = state.beforeCommitState,
+      .after = state.afterCommitState,
+      .slotIndex = state.slotIndex,
+      .eventSeqId = state.seqId,
+  });
+
+  submissionDiagnostics.attachQueueSubmission(
+      commandBuffer,
+      diagnostics,
+      [this, state](const CommandBufferDiagnostics&) {
+        if (!state.mutex || !state.completedSeqQueue) {
+          return;
+        }
+        std::lock_guard completionLock(*state.mutex);
+        const QueueControllerState before = makeTrackedSubmissionState(state);
+        state.completedSeqQueue->push_back(state.seqId);
+        const QueueControllerState after = makeTrackedSubmissionState(state);
+        recordTransition(QueueTransitionRecord{
+            .event = QueueLifecycleEvent::GpuComplete,
+            .before = before,
+            .after = after,
+            .slotIndex = state.slotIndex,
+            .eventSeqId = state.seqId,
+        });
+        if (state.finishCv) {
+          state.finishCv->notify_all();
+        }
+      },
+      context);
 }
 
 void QueueLifecycleController::notePresentEnqueue(const QueueControllerState& state,

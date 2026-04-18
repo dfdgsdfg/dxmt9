@@ -61,22 +61,6 @@ class DeveloperHudController {
 
 class SubmissionDiagnosticsController {
  public:
-  struct TrackedQueueSubmissionState {
-    size_t slotIndex = 0;
-    metalqueue::u64 seqId = 0;
-    const metalqueue::QueueLifecycleController* queueLifecycle = nullptr;
-    std::optional<size_t>* writingSlot = nullptr;
-    size_t* writeIndex = nullptr;
-    std::deque<size_t>* readySlots = nullptr;
-    std::deque<metalqueue::u64>* completedSeqQueue = nullptr;
-    size_t* inflightCount = nullptr;
-    metalqueue::u64* completedSeqId = nullptr;
-    metalqueue::u64* lastCommittedSeqId = nullptr;
-    std::span<const ChunkSlot> slots;
-    std::mutex* mutex = nullptr;
-    std::condition_variable* finishCv = nullptr;
-  };
-
   bool inspect(id<MTLCommandBuffer> commandBuffer,
                const metalqueue::CommandBufferDiagnostics& diagnostics,
                const char* context);
@@ -84,10 +68,6 @@ class SubmissionDiagnosticsController {
                              const metalqueue::CommandBufferDiagnostics& diagnostics,
                              const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
                              const char* context = "queue");
-  void attachTrackedQueueSubmission(id<MTLCommandBuffer> commandBuffer,
-                                    const metalqueue::CommandBufferDiagnostics& diagnostics,
-                                    const TrackedQueueSubmissionState& state,
-                                    const char* context = "queue");
   const metalqueue::CompletionTracker& completionTracker() const noexcept { return completionTracker_; }
 
  private:
