@@ -449,6 +449,122 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
   submissionBinding_ = binding;
 }
 
+void QueueLifecycleController::enqueuePresent(size_t slotIndex,
+                                              u64 eventSeqId,
+                                              const SwapDesc& present,
+                                              Handle sourceHandle,
+                                              const std::function<void()>& mutate) {
+  transition(QueueTransitionRecord{
+                 .slotIndex = slotIndex,
+                 .eventSeqId = eventSeqId,
+                 .present = &present,
+                 .sourceHandle = sourceHandle,
+             },
+             mutate);
+}
+
+void QueueLifecycleController::observeWriterWait(size_t slotIndex,
+                                                 u64 eventSeqId,
+                                                 size_t inflightLimit) {
+  transition(QueueTransitionRecord{
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+      .inflightLimit = inflightLimit,
+  });
+}
+
+void QueueLifecycleController::acquireWriterSlot(size_t slotIndex,
+                                                 u64 eventSeqId,
+                                                 size_t inflightLimit,
+                                                 const std::function<void()>& mutate) {
+  transition(QueueTransitionRecord{
+                 .slotIndex = slotIndex,
+                 .eventSeqId = eventSeqId,
+                 .inflightLimit = inflightLimit,
+             },
+             mutate);
+}
+
+void QueueLifecycleController::commitEmpty(size_t slotIndex,
+                                           u64 eventSeqId,
+                                           const std::function<void()>& mutate) {
+  transition(QueueTransitionRecord{
+                 .slotIndex = slotIndex,
+                 .eventSeqId = eventSeqId,
+             },
+             mutate);
+}
+
+void QueueLifecycleController::observeCommitWait(size_t slotIndex,
+                                                 u64 eventSeqId,
+                                                 size_t inflightLimit) {
+  transition(QueueTransitionRecord{
+      .slotIndex = slotIndex,
+      .eventSeqId = eventSeqId,
+      .inflightLimit = inflightLimit,
+  });
+}
+
+void QueueLifecycleController::commitPublish(size_t slotIndex,
+                                             u64 eventSeqId,
+                                             size_t inflightLimit,
+                                             const std::function<void()>& mutate) {
+  transition(QueueTransitionRecord{
+                 .slotIndex = slotIndex,
+                 .eventSeqId = eventSeqId,
+                 .inflightLimit = inflightLimit,
+             },
+             mutate);
+}
+
+void QueueLifecycleController::encodeDequeue(size_t slotIndex,
+                                             u64 eventSeqId,
+                                             const std::function<void()>& mutate) {
+  transition(QueueTransitionRecord{
+                 .slotIndex = slotIndex,
+                 .eventSeqId = eventSeqId,
+             },
+             mutate);
+}
+
+void QueueLifecycleController::enqueueSubmission(const QueueSubmissionRecord& record) {
+  pendingSubmissions_.push_back(record);
+  drainPendingSubmissions();
+}
+
+void QueueLifecycleController::finishInline(size_t slotIndex,
+                                            u64 eventSeqId,
+                                            const std::function<void()>& mutate) {
+  transition(QueueTransitionRecord{
+                 .slotIndex = slotIndex,
+                 .eventSeqId = eventSeqId,
+             },
+             mutate);
+}
+
+void QueueLifecycleController::finishDequeue(u64 eventSeqId,
+                                             const std::function<void()>& mutate) {
+  transition(QueueTransitionRecord{
+      .eventSeqId = eventSeqId,
+  }, mutate);
+}
+
+void QueueLifecycleController::reclaimFree(size_t slotIndex,
+                                           u64 eventSeqId,
+                                           const std::function<void()>& mutate) {
+  transition(QueueTransitionRecord{
+                 .slotIndex = slotIndex,
+                 .eventSeqId = eventSeqId,
+             },
+             mutate);
+}
+
+void QueueLifecycleController::observeWaitForSequence(u64 targetSeqId) {
+  transition(QueueTransitionRecord{
+      .eventSeqId = targetSeqId,
+  });
+}
+
 QueueLifecycleEvent QueueLifecycleController::classifyTransition(const QueueTransitionRecord& record) const {
   if (record.present) {
     return QueueLifecycleEvent::PresentEnqueue;
@@ -589,6 +705,14 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
   }];
 
   [record.commandBuffer commit];
+}
+
+void QueueLifecycleController::drainPendingSubmissions() {
+  while (!pendingSubmissions_.empty()) {
+    const QueueSubmissionRecord record = pendingSubmissions_.front();
+    pendingSubmissions_.pop_front();
+    submit(record);
+  }
 }
 
 void QueueLifecycleController::notePresentEnqueue(const QueueControllerState& state,

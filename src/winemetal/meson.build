@@ -132,7 +132,24 @@ dxmt9_winemetal_runtime_service_shim_dep = declare_dependency(
   dependencies: [dxmt9_util_dep],
 )
 
+dxmt9_unix_runtime_root_lib = static_library(
+  'dxmt9_unix_runtime_root',
+  files('unix_runtime_root.cpp'),
+  include_directories: [
+    dxmt9_inc,
+    bridge_gen_inc,
+    dxmt9_winemetal_internal_inc,
+    dxmt9_runtime_internal_inc,
+    include_directories('..'),
+  ],
+  dependencies: [
+    dxmt9_util_dep,
+  ],
+  install: false,
+)
+
 dxmt9_unix_runtime_root_dep = declare_dependency(
+  link_with: dxmt9_unix_runtime_root_lib,
   include_directories: [
     dxmt9_inc,
     bridge_gen_inc,
@@ -141,7 +158,7 @@ dxmt9_unix_runtime_root_dep = declare_dependency(
   ],
   dependencies: [
     dxmt9_util_dep,
-    dxmt9_frontend_core_dep,
+    dxmt9_frontend_provider_dep,
     dxmt9_runtime_dep,
     dxmt9_shader_service_core_dep,
     dxmt9_winemetal_runtime_service_shim_dep,

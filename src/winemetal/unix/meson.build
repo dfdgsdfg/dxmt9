@@ -68,7 +68,6 @@ dxmt9_winemetal_unix_module = shared_library(
   ],
   dependencies: [
     dxmt9_util_dep,
-    dxmt9_frontend_bridge_dep,
     dxmt9_unix_runtime_root_dep,
     dependency('appleframeworks', modules: [
       'AppKit',

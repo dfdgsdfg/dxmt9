@@ -31,7 +31,6 @@ dxmt9_native_lib = shared_library(
   ],
   dependencies: dxmt9_deps + [
     dxmt9_util_dep,
-    dxmt9_frontend_bridge_dep,
     dxmt9_unix_runtime_root_dep,
   ],
   install: false,

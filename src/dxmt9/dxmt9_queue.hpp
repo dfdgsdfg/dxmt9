@@ -341,8 +341,28 @@ class QueueLifecycleController {
   };
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
-  void transition(QueueTransitionRecord record, const std::function<void()>& mutate = {});
-  void submit(const QueueSubmissionRecord& record);
+  void enqueuePresent(size_t slotIndex,
+                      u64 eventSeqId,
+                      const SwapDesc& present,
+                      Handle sourceHandle,
+                      const std::function<void()>& mutate = {});
+  void observeWriterWait(size_t slotIndex, u64 eventSeqId, size_t inflightLimit);
+  void acquireWriterSlot(size_t slotIndex,
+                         u64 eventSeqId,
+                         size_t inflightLimit,
+                         const std::function<void()>& mutate = {});
+  void commitEmpty(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
+  void observeCommitWait(size_t slotIndex, u64 eventSeqId, size_t inflightLimit);
+  void commitPublish(size_t slotIndex,
+                     u64 eventSeqId,
+                     size_t inflightLimit,
+                     const std::function<void()>& mutate = {});
+  void encodeDequeue(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
+  void enqueueSubmission(const QueueSubmissionRecord& record);
+  void finishInline(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
+  void finishDequeue(u64 eventSeqId, const std::function<void()>& mutate = {});
+  void reclaimFree(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
+  void observeWaitForSequence(u64 targetSeqId);
 
  private:
   QueueControllerState currentState() const;
@@ -401,8 +421,12 @@ class QueueLifecycleController {
                                 u64 targetSeqId) const;
   void noteWaitSeqEnd(const QueueControllerState& state,
                       u64 targetSeqId) const;
+  void transition(QueueTransitionRecord record, const std::function<void()>& mutate = {});
+  void submit(const QueueSubmissionRecord& record);
+  void drainPendingSubmissions();
 
   SubmissionBinding submissionBinding_{};
+  std::deque<QueueSubmissionRecord> pendingSubmissions_{};
 };
 
 class CompletionTracker {

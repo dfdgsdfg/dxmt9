@@ -4,7 +4,15 @@
 #include <cstring>
 
 #if defined(_WIN32)
-#include <d3d9.h>
+#include <windef.h>
+#include <guiddef.h>
+#include <unknwn.h>
+
+#ifndef D3DERR_INVALIDCALL
+constexpr HRESULT D3DERR_INVALIDCALL = static_cast<HRESULT>(0x8876086cL);
+constexpr HRESULT D3DERR_NOTFOUND = static_cast<HRESULT>(0x88760866L);
+constexpr HRESULT D3DERR_MOREDATA = static_cast<HRESULT>(0x88760867L);
+#endif
 #else
 
 using UINT = unsigned int;
