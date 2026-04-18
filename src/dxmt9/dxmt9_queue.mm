@@ -485,6 +485,30 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
   return true;
 }
 
+void QueueLifecycleController::presentAndCommit(
+    std::unique_lock<std::mutex>& lock,
+    size_t inflightLimit,
+    const SwapDesc& present,
+    Handle sourceHandle,
+    const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+  if (!ensureWriterSlot(lock, inflightLimit)) {
+    return;
+  }
+  appendPresentCommand(present, sourceHandle);
+  (void)commitCurrentChunk(lock, inflightLimit, onBeforePublish);
+}
+
+void QueueLifecycleController::flushAndWait(
+    std::unique_lock<std::mutex>& lock,
+    size_t inflightLimit,
+    const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+  (void)commitCurrentChunk(lock, inflightLimit, onBeforePublish);
+
+  auto* nextSeqId = submissionBinding_.nextSeqId;
+  const u64 targetSeqId = (!nextSeqId || *nextSeqId == 0) ? 0 : *nextSeqId - 1;
+  waitForSequence(lock, targetSeqId);
+}
+
 bool QueueLifecycleController::commitCurrentChunk(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
@@ -568,6 +592,34 @@ bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lo
     slot.state = ChunkSlot::State::Encoding;
   });
   slotCopy = slot;
+  return true;
+}
+
+bool QueueLifecycleController::runEncodeIteration(
+    std::unique_lock<std::mutex>& lock,
+    const std::function<std::optional<QueueSubmissionRecord>(size_t, const ChunkSlot&)>& encodeFn,
+    const std::function<void(u64)>& onInlineComplete) {
+  size_t slotIndex = 0;
+  ChunkSlot slotCopy;
+  if (!dequeueReadySlot(lock, slotIndex, slotCopy)) {
+    return false;
+  }
+
+  lock.unlock();
+  std::optional<QueueSubmissionRecord> submission;
+  if (encodeFn) {
+    submission = encodeFn(slotIndex, slotCopy);
+  }
+  lock.lock();
+
+  if (submission.has_value()) {
+    enqueueSubmission(*submission);
+  } else {
+    completeInlineChunk(slotIndex, slotCopy.seqId);
+    if (onInlineComplete) {
+      onInlineComplete(slotCopy.seqId);
+    }
+  }
   return true;
 }
 
@@ -662,6 +714,19 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
   }
   if (submissionBinding_.writeCv) {
     submissionBinding_.writeCv->notify_all();
+  }
+  return true;
+}
+
+bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& lock,
+                                                  const std::function<void(u64)>& onAfterFinish) {
+  u64 seqId = 0;
+  if (!drainCompletedSequence(lock, seqId)) {
+    return false;
+  }
+  reclaimCompletedGpuSlots(seqId);
+  if (onAfterFinish) {
+    onAfterFinish(seqId);
   }
   return true;
 }
@@ -927,6 +992,7 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
   const auto binding = submissionBinding_;
   if (!binding.mutex || !binding.completedSeqQueue) {
     [record.commandBuffer commit];
+    [record.commandBuffer release];
     return;
   }
 
@@ -959,6 +1025,7 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
   }];
 
   [record.commandBuffer commit];
+  [record.commandBuffer release];
 }
 
 void QueueLifecycleController::drainPendingSubmissions() {

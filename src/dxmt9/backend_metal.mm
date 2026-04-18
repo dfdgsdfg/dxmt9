@@ -4769,16 +4769,17 @@ class MetalBackendDevice final : public BackendDevice {
   void present(const SwapDesc& desc) override {
     std::unique_lock lock(mutex_);
     // TLA+: WineCommit
-    ensureWritingSlotUnlocked(lock);
-    queueLifecycle_.appendPresentCommand(desc, currentBackBuffer_);
-    commitCurrentChunkUnlocked(lock);
+    queueLifecycle_.presentAndCommit(lock, kMaxInflight, desc, currentBackBuffer_, [this](const ChunkSlot& slot) {
+      updateLastUsedSeqIdsUnlocked(slot);
+    });
   }
 
  void flush() override {
     std::unique_lock lock(mutex_);
     // TLA+: WineCommit
-    commitCurrentChunkUnlocked(lock);
-    waitForSequenceUnlocked(nextSeqId_ == 0 ? 0 : nextSeqId_ - 1, lock);
+    queueLifecycle_.flushAndWait(lock, kMaxInflight, [this](const ChunkSlot& slot) {
+      updateLastUsedSeqIdsUnlocked(slot);
+    });
   }
 
  private:
@@ -4831,12 +4832,6 @@ class MetalBackendDevice final : public BackendDevice {
 
   void ensureWritingSlotUnlocked(std::unique_lock<std::mutex>& lock) {
     (void)queueLifecycle_.ensureWriterSlot(lock, kMaxInflight);
-  }
-
-  void commitCurrentChunkUnlocked(std::unique_lock<std::mutex>& lock) {
-    (void)queueLifecycle_.commitCurrentChunk(lock, kMaxInflight, [this](const ChunkSlot& slot) {
-      updateLastUsedSeqIdsUnlocked(slot);
-    });
   }
 
   void updateLastUsedSeqIdsUnlocked(const ChunkSlot& slot) {
@@ -5003,31 +4998,33 @@ class MetalBackendDevice final : public BackendDevice {
   void encodeLoop() {
     @autoreleasepool {
       while (true) {
-        size_t slotIndex = 0;
-        ChunkSlot slotCopy;
-        {
-          std::unique_lock lock(mutex_);
-          if (!queueLifecycle_.dequeueReadySlot(lock, slotIndex, slotCopy)) {
-            return;
-          }
+        std::unique_lock lock(mutex_);
+        if (!queueLifecycle_.runEncodeIteration(
+                lock,
+                [this](size_t slotIndex, const ChunkSlot& slot) {
+                  return encodeChunk(slotIndex, slot);
+                },
+                [this](u64) {
+                  argbufArena_.reclaim(completedSeqId_);
+                  lambdaStoreArena_.reclaim(completedSeqId_);
+                  stagingArena_.reclaim(completedSeqId_);
+                  copyTempArena_.reclaim(completedSeqId_);
+                })) {
+          return;
         }
-
-        encodeChunk(slotIndex, slotCopy);
       }
     }
   }
 
-  void encodeChunk(size_t slotIndex, const ChunkSlot& slot) {
+  std::optional<metalqueue::QueueSubmissionRecord> encodeChunk(size_t slotIndex, const ChunkSlot& slot) {
     @autoreleasepool {
       if (!device_ || !commandQueue_) {
-        finishChunk(slotIndex, slot.seqId);
-        return;
+        return std::nullopt;
       }
 
       id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
       if (!commandBuffer) {
-        finishChunk(slotIndex, slot.seqId);
-        return;
+        return std::nullopt;
       }
 
       id<MTLRenderCommandEncoder> activeRenderEncoder = nil;
@@ -5137,25 +5134,14 @@ class MetalBackendDevice final : public BackendDevice {
       flushBlit();
 
       const u64 seqId = slot.seqId;
-      {
-        std::lock_guard lock(mutex_);
-        queueLifecycle_.submitEncodedChunk(
-            commandBuffer,
-            slotIndex,
-            seqId,
-            std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
-            "queue");
-      }
+      return metalqueue::QueueSubmissionRecord{
+          .commandBuffer = [commandBuffer retain],
+          .slotIndex = slotIndex,
+          .seqId = seqId,
+          .commands = std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
+          .context = "queue",
+      };
     }
-  }
-
-  void finishChunk(size_t slotIndex, u64 seqId) {
-    std::lock_guard lock(mutex_);
-    queueLifecycle_.completeInlineChunk(slotIndex, seqId);
-    argbufArena_.reclaim(completedSeqId_);
-    lambdaStoreArena_.reclaim(completedSeqId_);
-    stagingArena_.reclaim(completedSeqId_);
-    copyTempArena_.reclaim(completedSeqId_);
   }
 
   id<MTLRenderCommandEncoder> beginRenderPass(id<MTLCommandBuffer> commandBuffer, const DrawDesc& draw,
@@ -6732,18 +6718,15 @@ class MetalBackendDevice final : public BackendDevice {
   void finishLoop() {
     @autoreleasepool {
       while (true) {
-        u64 seqId = 0;
-        {
-          std::unique_lock lock(mutex_);
-          if (!queueLifecycle_.drainCompletedSequence(lock, seqId)) {
-            return;
-          }
-          queueLifecycle_.reclaimCompletedGpuSlots(seqId);
-          argbufArena_.reclaim(completedSeqId_);
-          lambdaStoreArena_.reclaim(completedSeqId_);
-          stagingArena_.reclaim(completedSeqId_);
-          copyTempArena_.reclaim(completedSeqId_);
-          tryGarbageCollectUnlocked();
+        std::unique_lock lock(mutex_);
+        if (!queueLifecycle_.runFinishIteration(lock, [this](u64) {
+              argbufArena_.reclaim(completedSeqId_);
+              lambdaStoreArena_.reclaim(completedSeqId_);
+              stagingArena_.reclaim(completedSeqId_);
+              copyTempArena_.reclaim(completedSeqId_);
+              tryGarbageCollectUnlocked();
+            })) {
+          return;
         }
       }
     }

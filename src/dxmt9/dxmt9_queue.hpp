@@ -346,10 +346,22 @@ class QueueLifecycleController {
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
   bool ensureWriterSlot(std::unique_lock<std::mutex>& lock, size_t inflightLimit);
+  void presentAndCommit(std::unique_lock<std::mutex>& lock,
+                        size_t inflightLimit,
+                        const SwapDesc& present,
+                        Handle sourceHandle,
+                        const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
+  void flushAndWait(std::unique_lock<std::mutex>& lock,
+                    size_t inflightLimit,
+                    const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
   bool commitCurrentChunk(std::unique_lock<std::mutex>& lock,
                           size_t inflightLimit,
                           const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
   bool dequeueReadySlot(std::unique_lock<std::mutex>& lock, size_t& slotIndex, ChunkSlot& slotCopy);
+  bool runEncodeIteration(
+      std::unique_lock<std::mutex>& lock,
+      const std::function<std::optional<QueueSubmissionRecord>(size_t, const ChunkSlot&)>& encodeFn,
+      const std::function<void(u64)>& onInlineComplete = {});
   void appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
   void submitEncodedChunk(id<MTLCommandBuffer> commandBuffer,
                           size_t slotIndex,
@@ -358,6 +370,8 @@ class QueueLifecycleController {
                           const char* context = "queue");
   void completeInlineChunk(size_t slotIndex, u64 seqId);
   bool drainCompletedSequence(std::unique_lock<std::mutex>& lock, u64& seqId);
+  bool runFinishIteration(std::unique_lock<std::mutex>& lock,
+                          const std::function<void(u64)>& onAfterFinish = {});
   void reclaimCompletedGpuSlots(u64 seqId);
   void waitForSequence(std::unique_lock<std::mutex>& lock, u64 targetSeqId);
 

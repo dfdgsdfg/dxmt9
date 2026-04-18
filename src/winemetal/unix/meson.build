@@ -52,8 +52,6 @@ dxmt9_winemetal_unix_install_dir = get_option('libdir') / 'wine' / dxmt9_winemet
 dxmt9_winemetal_unix_module = shared_library(
   'winemetal',
   files(
-    '../winemetal_public_api.cpp',
-    '../winemetal_bridge_service_abi.cpp',
     '../winemetal_unix_call_handlers.cpp',
     'winemetal_unix.cpp',
   ),
