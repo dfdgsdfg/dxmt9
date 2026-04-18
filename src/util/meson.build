@@ -24,7 +24,8 @@ endif
 if host_machine.system() == 'windows'
   dxmt9_util_srcs += files(
     'com/com_guid.cpp',
-    'com/com_private_data.cpp',
+    'com/com_private_data_core.cpp',
+    'com/com_private_data_win32.cpp',
   )
 endif
 

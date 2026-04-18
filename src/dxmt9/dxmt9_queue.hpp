@@ -318,11 +318,7 @@ void traceQueueSlotsEvent(const char* event,
 
 class QueueLifecycleController {
  public:
-  struct TrackedSubmissionState {
-    size_t slotIndex = 0;
-    u64 seqId = 0;
-    QueueControllerState beforeCommitState{};
-    QueueControllerState afterCommitState{};
+  struct SubmissionBinding {
     std::optional<size_t>* writingSlot = nullptr;
     size_t* writeIndex = nullptr;
     std::deque<size_t>* readySlots = nullptr;
@@ -335,18 +331,27 @@ class QueueLifecycleController {
     std::condition_variable* finishCv = nullptr;
   };
 
+  struct QueueSubmissionRecord {
+    size_t slotIndex = 0;
+    u64 seqId = 0;
+    QueueControllerState beforeCommitState{};
+    QueueControllerState afterCommitState{};
+  };
+
   CommandBufferDiagnostics summarizeSubmission(
       u64 seqId,
       size_t slotIndex,
       std::span<const MetalCommandRecord> commands,
       const std::function<u32(Handle)>& resolveSurfaceFlags) const;
   void recordTransition(const QueueTransitionRecord& record) const;
+  void bindTrackedSubmissionState(SubmissionBinding binding);
   void attachTrackedSubmission(id<MTLCommandBuffer> commandBuffer,
                                const CommandBufferDiagnostics& diagnostics,
                                metalhud::SubmissionDiagnosticsController& submissionDiagnostics,
-                               const TrackedSubmissionState& state,
+                               const QueueSubmissionRecord& record,
                                const char* context = "queue") const;
 
+ private:
   void notePresentEnqueue(const QueueControllerState& state,
                           size_t slotIndex,
                           u64 eventSeqId,
@@ -396,6 +401,8 @@ class QueueLifecycleController {
                                 u64 targetSeqId) const;
   void noteWaitSeqEnd(const QueueControllerState& state,
                       u64 targetSeqId) const;
+
+  SubmissionBinding submissionBinding_{};
 };
 
 class CompletionTracker {

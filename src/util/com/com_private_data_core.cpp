@@ -14,13 +14,6 @@ ComPrivateDataEntry::ComPrivateDataEntry(REFGUID guid, UINT size, const void* da
   std::memcpy(m_data, data, size);
 }
 
-ComPrivateDataEntry::ComPrivateDataEntry(REFGUID guid, const IUnknown* iface)
-    : m_guid(guid), m_type(ComPrivateDataType::Iface), m_iface(const_cast<IUnknown*>(iface)) {
-  if (m_iface) {
-    m_iface->AddRef();
-  }
-}
-
 ComPrivateDataEntry::~ComPrivateDataEntry() {
   destroy();
 }
@@ -52,48 +45,6 @@ ComPrivateDataEntry& ComPrivateDataEntry::operator=(ComPrivateDataEntry&& other)
 
 bool ComPrivateDataEntry::hasGuid(REFGUID guid) const {
   return InlineIsEqualGUID(m_guid, guid) != FALSE;
-}
-
-HRESULT ComPrivateDataEntry::get(UINT& size, void* data) const {
-  UINT requiredSize = 0;
-  if (m_type == ComPrivateDataType::Iface) {
-    requiredSize = sizeof(IUnknown*);
-  } else if (m_type == ComPrivateDataType::Data) {
-    requiredSize = m_size;
-  }
-
-  if (!data) {
-    size = requiredSize;
-    return S_OK;
-  }
-
-  const HRESULT result = size < requiredSize ? D3DERR_MOREDATA : S_OK;
-  if (size >= requiredSize) {
-    if (m_type == ComPrivateDataType::Iface) {
-      if (m_iface) {
-        m_iface->AddRef();
-      }
-      std::memcpy(data, &m_iface, requiredSize);
-    } else {
-      std::memcpy(data, m_data, requiredSize);
-    }
-  }
-
-  size = requiredSize;
-  return result;
-}
-
-void ComPrivateDataEntry::destroy() {
-  if (m_data) {
-    std::free(m_data);
-  }
-  if (m_iface) {
-    m_iface->Release();
-  }
-  m_data = nullptr;
-  m_iface = nullptr;
-  m_size = 0;
-  m_type = ComPrivateDataType::None;
 }
 
 HRESULT ComPrivateData::setData(REFGUID guid, UINT size, const void* data) {

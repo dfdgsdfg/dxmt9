@@ -4249,6 +4249,19 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
 
+    queueLifecycle_.bindTrackedSubmissionState({
+        .writingSlot = &writingSlot_,
+        .writeIndex = &writeIndex_,
+        .readySlots = &readySlots_,
+        .completedSeqQueue = &completedSeqQueue_,
+        .inflightCount = &inflightCount_,
+        .completedSeqId = &completedSeqId_,
+        .lastCommittedSeqId = &lastCommittedSeqId_,
+        .slots = std::span<const ChunkSlot>(slots_.data(), slots_.size()),
+        .mutex = &mutex_,
+        .finishCv = &finishCv_,
+    });
+
     stop_ = false;
     encodeThread_ = std::thread([this] { encodeLoop(); });
     finishThread_ = std::thread([this] { finishLoop(); });
@@ -4830,29 +4843,6 @@ class MetalBackendDevice final : public BackendDevice {
     };
   }
 
-  metalqueue::QueueLifecycleController::TrackedSubmissionState
-  makeTrackedQueueSubmissionStateUnlocked(size_t slotIndex,
-                                          u64 seqId,
-                                          const metalqueue::QueueControllerState& beforeCommitState,
-                                          const metalqueue::QueueControllerState& afterCommitState) {
-    return metalqueue::QueueLifecycleController::TrackedSubmissionState{
-        .slotIndex = slotIndex,
-        .seqId = seqId,
-        .beforeCommitState = beforeCommitState,
-        .afterCommitState = afterCommitState,
-        .writingSlot = &writingSlot_,
-        .writeIndex = &writeIndex_,
-        .readySlots = &readySlots_,
-        .completedSeqQueue = &completedSeqQueue_,
-        .inflightCount = &inflightCount_,
-        .completedSeqId = &completedSeqId_,
-        .lastCommittedSeqId = &lastCommittedSeqId_,
-        .slots = std::span<const ChunkSlot>(slots_.data(), slots_.size()),
-        .mutex = &mutex_,
-        .finishCv = &finishCv_,
-    };
-  }
-
   void recordQueueTransitionUnlocked(metalqueue::QueueLifecycleEvent event,
                                      const metalqueue::QueueControllerState& before,
                                      const metalqueue::QueueControllerState& after,
@@ -5279,7 +5269,12 @@ class MetalBackendDevice final : public BackendDevice {
             commandBuffer,
             submissionDiagnostics,
             submissionDiagnostics_,
-            makeTrackedQueueSubmissionStateUnlocked(slotIndex, seqId, beforeCommit, afterCommit));
+            metalqueue::QueueLifecycleController::QueueSubmissionRecord{
+                .slotIndex = slotIndex,
+                .seqId = seqId,
+                .beforeCommitState = beforeCommit,
+                .afterCommitState = afterCommit,
+            });
       }
       [commandBuffer commit];
     }

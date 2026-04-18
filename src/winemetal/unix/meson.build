@@ -68,16 +68,13 @@ dxmt9_winemetal_unix_module = shared_library(
   ],
   dependencies: [
     dxmt9_util_dep,
+    dxmt9_winemetal_service_shim_dep,
     dependency('appleframeworks', modules: [
       'AppKit',
       'Foundation',
       'Metal',
       'QuartzCore',
     ]),
-  ],
-  link_whole: [
-    dxmt9_winemetal_frontend_service_shim_lib,
-    dxmt9_winemetal_runtime_service_shim_lib,
   ],
   cpp_args: ['-DWINE_UNIX_LIB=1'],
   link_args: dxmt9_winemetal_unix_link_args,
