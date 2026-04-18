@@ -1,7 +1,7 @@
 #include "winemetal_unix_call_handlers.hpp"
 
 #include "util/util_buffer.hpp"
-#include "winemetal_shader_bridge_internal.hpp"
+#include "winemetal_bridge_service_abi.h"
 
 #include <cstdint>
 
@@ -10,6 +10,24 @@ namespace {
 constexpr std::int32_t kStatusSuccess = 0;
 constexpr std::int32_t kStatusInvalidParameter = static_cast<std::int32_t>(0xC000000Du);
 
+WinemetalShaderCompileRequest decodeCompileShaderRequest(
+    const Dxmt9WinemetalCompileShaderParams& params) {
+  return WinemetalShaderCompileRequest{
+      .kind = static_cast<WinemetalShaderKind>(params.kind),
+      .bytecode = dxmt9::util::u64ToPtr<const void>(params.bytecode_ptr),
+      .bytecodeSize = params.bytecode_size,
+      .bytecodeHash = params.bytecode_hash,
+      .variantKey = dxmt9::util::u64ToPtr<const void>(params.variant_key_ptr),
+      .textured = params.textured != 0,
+      .clipPlaneMask = params.clip_plane_mask,
+      .sampleCount = params.sample_count,
+      .alphaTestEnable = params.alpha_test_enable,
+      .alphaTestFunc = params.alpha_test_func,
+      .alphaRef = params.alpha_ref,
+      .fogMode = params.fog_mode,
+  };
+}
+
 }  // namespace
 
 extern "C" NTSTATUS dxmt9_winemetal_compile_shader_unix_call(void* opaque) {
@@ -17,8 +35,8 @@ extern "C" NTSTATUS dxmt9_winemetal_compile_shader_unix_call(void* opaque) {
   if (!params) {
     return kStatusInvalidParameter;
   }
-  const auto request = dxmt9::winemetal::decodeCompileShaderRequest(*params);
-  params->ret = dxmt9::winemetal::compileShader(&request);
+  const auto request = decodeCompileShaderRequest(*params);
+  params->ret = dxmt9_winemetal_bridge_compile_shader(&request);
   return kStatusSuccess;
 }
 
@@ -27,7 +45,7 @@ extern "C" NTSTATUS dxmt9_winemetal_shader_source_size_unix_call(void* opaque) {
   if (!params) {
     return kStatusInvalidParameter;
   }
-  params->ret = dxmt9::winemetal::shaderSourceSize(params->shader_handle);
+  params->ret = dxmt9_winemetal_bridge_shader_source_size(params->shader_handle);
   return kStatusSuccess;
 }
 
@@ -41,8 +59,8 @@ extern "C" NTSTATUS dxmt9_winemetal_shader_source_copy_unix_call(void* opaque) {
     return kStatusSuccess;
   }
   char* destination = dxmt9::util::u64ToPtr<char>(params->buffer_ptr);
-  params->bytes_written =
-      dxmt9::winemetal::copyShaderSource(params->shader_handle, destination, params->buffer_capacity);
+  params->bytes_written = dxmt9_winemetal_bridge_shader_source_copy(
+      params->shader_handle, destination, params->buffer_capacity);
   return kStatusSuccess;
 }
 
@@ -51,6 +69,6 @@ extern "C" NTSTATUS dxmt9_winemetal_destroy_shader_unix_call(void* opaque) {
   if (!params) {
     return kStatusInvalidParameter;
   }
-  dxmt9::winemetal::destroyShader(params->shader_handle);
+  dxmt9_winemetal_bridge_destroy_shader(params->shader_handle);
   return kStatusSuccess;
 }

@@ -7,7 +7,9 @@
 #include "dxmt9_queue.hpp"
 
 #include <string>
+#include <condition_variable>
 #include <functional>
+#include <mutex>
 #include <vector>
 
 namespace dxmt9::core::metalhud {
@@ -63,6 +65,42 @@ class SubmissionDiagnosticsController {
                              const metalqueue::CommandBufferDiagnostics& diagnostics,
                              const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
                              const char* context = "queue");
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void attachTrackedQueueSubmission(
+      id<MTLCommandBuffer> commandBuffer,
+      const metalqueue::CommandBufferDiagnostics& diagnostics,
+      const metalqueue::QueueLifecycleController& queueLifecycle,
+      size_t slotIndex,
+      dxmt9::core::metalqueue::u64 seqId,
+      std::optional<size_t>& writingSlot,
+      size_t writeIndex,
+      const ReadyContainer& readySlots,
+      CompletedContainer& completedSeqQueue,
+      size_t& inflightCount,
+      dxmt9::core::metalqueue::u64& completedSeqId,
+      dxmt9::core::metalqueue::u64& lastCommittedSeqId,
+      const SlotContainer& slots,
+      std::mutex& mutex,
+      std::condition_variable& finishCv,
+      const char* context = "queue") {
+    queueLifecycle.noteEncodeCommit(slotIndex, seqId, writingSlot, writeIndex, readySlots,
+                                    completedSeqQueue, inflightCount, completedSeqId,
+                                    lastCommittedSeqId, slots);
+    attachQueueSubmission(
+        commandBuffer,
+        diagnostics,
+        [&queueLifecycle, slotIndex, seqId, &writingSlot, writeIndex, &readySlots,
+         &completedSeqQueue, &inflightCount, &completedSeqId, &lastCommittedSeqId, &slots,
+         &mutex, &finishCv](const metalqueue::CommandBufferDiagnostics&) {
+          std::lock_guard completionLock(mutex);
+          completedSeqQueue.push_back(seqId);
+          queueLifecycle.noteGpuComplete(slotIndex, seqId, writingSlot, writeIndex, readySlots,
+                                         completedSeqQueue, inflightCount, completedSeqId,
+                                         lastCommittedSeqId, slots);
+          finishCv.notify_all();
+        },
+        context);
+  }
   const metalqueue::CompletionTracker& completionTracker() const noexcept { return completionTracker_; }
 
  private:

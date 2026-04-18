@@ -324,18 +324,18 @@ class QueueLifecycleController {
   }
 
   template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
-  void onPresentEnqueue(size_t slotIndex,
-                        u64 eventSeqId,
-                        std::optional<size_t> writingSlot,
-                        size_t writeIndex,
-                        const ReadyContainer& readySlots,
-                        const CompletedContainer& completedSeqQueue,
-                        size_t inflightCount,
-                        u64 completedSeqId,
-                        u64 lastCommittedSeqId,
-                        const SlotContainer& slots,
-                        const SwapDesc& present,
-                        Handle sourceHandle) const {
+  void notePresentEnqueue(size_t slotIndex,
+                          u64 eventSeqId,
+                          std::optional<size_t> writingSlot,
+                          size_t writeIndex,
+                          const ReadyContainer& readySlots,
+                          const CompletedContainer& completedSeqQueue,
+                          size_t inflightCount,
+                          u64 completedSeqId,
+                          u64 lastCommittedSeqId,
+                          const SlotContainer& slots,
+                          const SwapDesc& present,
+                          Handle sourceHandle) const {
     if (queueTraceEnabled()) {
       std::ostringstream out;
       out << "[dxmt9-present] enqueue"
@@ -347,6 +347,239 @@ class QueueLifecycleController {
     onEvent(QueueLifecycleEvent::PresentEnqueue, slotIndex, eventSeqId, writingSlot, writeIndex,
             readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId,
             slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteWriterWaitBeginIfNeeded(size_t slotIndex,
+                                   u64 eventSeqId,
+                                   std::optional<size_t> writingSlot,
+                                   size_t writeIndex,
+                                   const ReadyContainer& readySlots,
+                                   const CompletedContainer& completedSeqQueue,
+                                   size_t inflightCount,
+                                   u64 completedSeqId,
+                                   u64 lastCommittedSeqId,
+                                   const SlotContainer& slots,
+                                   size_t inflightLimit) const {
+    if (slots[slotIndex].state == ChunkSlot::State::Free && inflightCount < inflightLimit) {
+      return;
+    }
+    onEvent(QueueLifecycleEvent::WriterWaitBegin, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteWriterWaitEnd(size_t slotIndex,
+                         u64 eventSeqId,
+                         std::optional<size_t> writingSlot,
+                         size_t writeIndex,
+                         const ReadyContainer& readySlots,
+                         const CompletedContainer& completedSeqQueue,
+                         size_t inflightCount,
+                         u64 completedSeqId,
+                         u64 lastCommittedSeqId,
+                         const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::WriterWaitEnd, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteWriterAcquire(size_t slotIndex,
+                         u64 eventSeqId,
+                         std::optional<size_t> writingSlot,
+                         size_t writeIndex,
+                         const ReadyContainer& readySlots,
+                         const CompletedContainer& completedSeqQueue,
+                         size_t inflightCount,
+                         u64 completedSeqId,
+                         u64 lastCommittedSeqId,
+                         const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::WriterAcquire, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteCommitEmpty(size_t slotIndex,
+                       u64 eventSeqId,
+                       std::optional<size_t> writingSlot,
+                       size_t writeIndex,
+                       const ReadyContainer& readySlots,
+                       const CompletedContainer& completedSeqQueue,
+                       size_t inflightCount,
+                       u64 completedSeqId,
+                       u64 lastCommittedSeqId,
+                       const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::CommitEmpty, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteCommitWaitBeginIfNeeded(size_t slotIndex,
+                                   u64 eventSeqId,
+                                   std::optional<size_t> writingSlot,
+                                   size_t writeIndex,
+                                   const ReadyContainer& readySlots,
+                                   const CompletedContainer& completedSeqQueue,
+                                   size_t inflightCount,
+                                   u64 completedSeqId,
+                                   u64 lastCommittedSeqId,
+                                   const SlotContainer& slots,
+                                   size_t inflightLimit) const {
+    if (inflightCount < inflightLimit) {
+      return;
+    }
+    onEvent(QueueLifecycleEvent::CommitWaitBegin, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteCommitWaitEnd(size_t slotIndex,
+                         u64 eventSeqId,
+                         std::optional<size_t> writingSlot,
+                         size_t writeIndex,
+                         const ReadyContainer& readySlots,
+                         const CompletedContainer& completedSeqQueue,
+                         size_t inflightCount,
+                         u64 completedSeqId,
+                         u64 lastCommittedSeqId,
+                         const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::CommitWaitEnd, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteCommitPublish(size_t slotIndex,
+                         u64 eventSeqId,
+                         std::optional<size_t> writingSlot,
+                         size_t writeIndex,
+                         const ReadyContainer& readySlots,
+                         const CompletedContainer& completedSeqQueue,
+                         size_t inflightCount,
+                         u64 completedSeqId,
+                         u64 lastCommittedSeqId,
+                         const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::CommitPublish, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteEncodeDequeue(size_t slotIndex,
+                         u64 eventSeqId,
+                         std::optional<size_t> writingSlot,
+                         size_t writeIndex,
+                         const ReadyContainer& readySlots,
+                         const CompletedContainer& completedSeqQueue,
+                         size_t inflightCount,
+                         u64 completedSeqId,
+                         u64 lastCommittedSeqId,
+                         const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::EncodeDequeue, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteEncodeCommit(size_t slotIndex,
+                        u64 eventSeqId,
+                        std::optional<size_t> writingSlot,
+                        size_t writeIndex,
+                        const ReadyContainer& readySlots,
+                        const CompletedContainer& completedSeqQueue,
+                        size_t inflightCount,
+                        u64 completedSeqId,
+                        u64 lastCommittedSeqId,
+                        const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::EncodeCommit, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteGpuComplete(size_t slotIndex,
+                       u64 eventSeqId,
+                       std::optional<size_t> writingSlot,
+                       size_t writeIndex,
+                       const ReadyContainer& readySlots,
+                       const CompletedContainer& completedSeqQueue,
+                       size_t inflightCount,
+                       u64 completedSeqId,
+                       u64 lastCommittedSeqId,
+                       const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::GpuComplete, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteFinishInline(size_t slotIndex,
+                        u64 eventSeqId,
+                        std::optional<size_t> writingSlot,
+                        size_t writeIndex,
+                        const ReadyContainer& readySlots,
+                        const CompletedContainer& completedSeqQueue,
+                        size_t inflightCount,
+                        u64 completedSeqId,
+                        u64 lastCommittedSeqId,
+                        const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::FinishInline, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteFinishDequeue(u64 eventSeqId,
+                         std::optional<size_t> writingSlot,
+                         size_t writeIndex,
+                         const ReadyContainer& readySlots,
+                         const CompletedContainer& completedSeqQueue,
+                         size_t inflightCount,
+                         u64 completedSeqId,
+                         u64 lastCommittedSeqId,
+                         const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::FinishDequeue, std::nullopt, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteReclaimFree(size_t slotIndex,
+                       u64 eventSeqId,
+                       std::optional<size_t> writingSlot,
+                       size_t writeIndex,
+                       const ReadyContainer& readySlots,
+                       const CompletedContainer& completedSeqQueue,
+                       size_t inflightCount,
+                       u64 completedSeqId,
+                       u64 lastCommittedSeqId,
+                       const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::ReclaimFree, slotIndex, eventSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteWaitSeqBeginIfNeeded(u64 targetSeqId,
+                                std::optional<size_t> writingSlot,
+                                size_t writeIndex,
+                                const ReadyContainer& readySlots,
+                                const CompletedContainer& completedSeqQueue,
+                                size_t inflightCount,
+                                u64 completedSeqId,
+                                u64 lastCommittedSeqId,
+                                const SlotContainer& slots) const {
+    if (completedSeqId >= targetSeqId) {
+      return;
+    }
+    onEvent(QueueLifecycleEvent::WaitSeqBegin, std::nullopt, targetSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
+  }
+
+  template <typename ReadyContainer, typename CompletedContainer, typename SlotContainer>
+  void noteWaitSeqEnd(u64 targetSeqId,
+                      std::optional<size_t> writingSlot,
+                      size_t writeIndex,
+                      const ReadyContainer& readySlots,
+                      const CompletedContainer& completedSeqQueue,
+                      size_t inflightCount,
+                      u64 completedSeqId,
+                      u64 lastCommittedSeqId,
+                      const SlotContainer& slots) const {
+    onEvent(QueueLifecycleEvent::WaitSeqEnd, std::nullopt, targetSeqId, writingSlot, writeIndex,
+            readySlots, completedSeqQueue, inflightCount, completedSeqId, lastCommittedSeqId, slots);
   }
 };
 

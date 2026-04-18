@@ -17,6 +17,9 @@ dxmt9_frontend_export_srcs = files(
 dxmt9_d3d9_internal_inc = include_directories('.', '..')
 
 if host_machine.system() == 'windows'
+  cpp = meson.get_compiler('cpp')
+  dxguid_dep = cpp.find_library('dxguid', required: true)
+
   dxmt9_pe_core_lib = static_library(
     'dxmt9_pe_core',
     dxmt9_pe_core_srcs,
@@ -44,20 +47,6 @@ if host_machine.system() == 'windows'
     include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
     dependencies: [dxmt9_util_dep],
   )
-
-  dxmt9_bridge_exports_lib = static_library(
-    'dxmt9_bridge_exports',
-    dxmt9_frontend_export_srcs,
-    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
-    dependencies: [dxmt9_util_dep, dxmt9_pe_core_dep, dxmt9_bridge_imports_dep],
-    install: false,
-  )
-
-  dxmt9_bridge_exports_dep = declare_dependency(
-    link_with: dxmt9_bridge_exports_lib,
-    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
-    dependencies: [dxmt9_util_dep, dxmt9_pe_core_dep, dxmt9_bridge_imports_dep],
-  )
 endif
 
 dxmt9_frontend_lib = static_library(
@@ -74,8 +63,34 @@ dxmt9_frontend_dep = declare_dependency(
   dependencies: [dxmt9_util_dep],
 )
 
-dxmt9_bridge_service_dep = declare_dependency(
+dxmt9_frontend_service_abi_dep = declare_dependency(
   link_with: dxmt9_frontend_lib,
   include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
   dependencies: [dxmt9_util_dep],
 )
+
+if host_machine.system() == 'windows'
+  dxmt9_d3d9_entry_shim_lib = static_library(
+    'dxmt9_d3d9_entry_shim',
+    dxmt9_frontend_export_srcs,
+    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+    dependencies: [
+      dxguid_dep,
+      dxmt9_util_dep,
+      dxmt9_pe_core_dep,
+      dxmt9_bridge_imports_dep,
+    ],
+    install: false,
+  )
+
+  dxmt9_d3d9_entry_shim_dep = declare_dependency(
+    link_with: dxmt9_d3d9_entry_shim_lib,
+    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+    dependencies: [
+      dxguid_dep,
+      dxmt9_util_dep,
+      dxmt9_pe_core_dep,
+      dxmt9_bridge_imports_dep,
+    ],
+  )
+endif

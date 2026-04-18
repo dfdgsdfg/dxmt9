@@ -55,6 +55,6 @@ dxmt9_runtime_dep = declare_dependency(
   dependencies: [dxmt9_util_dep],
 )
 
-dxmt9_shader_source_provider_dep = declare_dependency(
-  dependencies: [dxmt9_runtime_dep],
+dxmt9_runtime_service_abi_dep = declare_dependency(
+  dependencies: [dxmt9_winemetal_service_abi_dep, dxmt9_runtime_dep],
 )

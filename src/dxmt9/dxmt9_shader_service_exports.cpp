@@ -1,6 +1,6 @@
 #include "dxmt9_shader_service.hpp"
 #include "util/util_buffer.hpp"
-#include "winemetal/winemetal_service_abi.hpp"
+#include "winemetal/winemetal_service_abi.h"
 
 extern "C" dxmt9_u64
 dxmt9_winemetal_service_compile_shader(const WinemetalShaderCompileRequest* request) {
