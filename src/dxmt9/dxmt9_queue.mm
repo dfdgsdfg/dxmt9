@@ -255,6 +255,14 @@ std::optional<ChunkSlot::State> slotStateFor(const QueueControllerState& state,
   return state.slots[*slotIndex].state;
 }
 
+size_t slotCommandCountFor(const QueueControllerState& state,
+                           std::optional<size_t> slotIndex) {
+  if (!slotIndex.has_value() || *slotIndex >= state.slots.size()) {
+    return 0;
+  }
+  return state.slots[*slotIndex].commands.size();
+}
+
 bool writerCanProceed(const QueueControllerState& state,
                       std::optional<size_t> slotIndex,
                       size_t inflightLimit) {
@@ -263,54 +271,6 @@ bool writerCanProceed(const QueueControllerState& state,
   }
   return state.slots[*slotIndex].state == ChunkSlot::State::Free &&
          state.inflightCount < inflightLimit;
-}
-
-QueueLifecycleEvent classifyWriterMutation(const QueueTransitionRecord& record) {
-  if (!record.before.writingSlot.has_value() && record.after.writingSlot.has_value()) {
-    return QueueLifecycleEvent::WriterAcquire;
-  }
-  if (writerCanProceed(record.after, record.slotIndex, record.inflightLimit)) {
-    return QueueLifecycleEvent::WriterWaitEnd;
-  }
-  return QueueLifecycleEvent::WriterWaitBegin;
-}
-
-QueueLifecycleEvent classifyCommitMutation(const QueueTransitionRecord& record) {
-  if (record.after.readyCount > record.before.readyCount ||
-      record.after.lastCommittedSeqId > record.before.lastCommittedSeqId ||
-      record.after.inflightCount > record.before.inflightCount) {
-    return QueueLifecycleEvent::CommitPublish;
-  }
-  if (record.before.writingSlot.has_value() && !record.after.writingSlot.has_value()) {
-    return QueueLifecycleEvent::CommitEmpty;
-  }
-  if (record.after.inflightCount < record.inflightLimit) {
-    return QueueLifecycleEvent::CommitWaitEnd;
-  }
-  return QueueLifecycleEvent::CommitWaitBegin;
-}
-
-QueueLifecycleEvent classifyEncodeMutation(const QueueTransitionRecord& record) {
-  const auto beforeState = slotStateFor(record.before, record.slotIndex);
-  const auto afterState = slotStateFor(record.after, record.slotIndex);
-  if (beforeState == ChunkSlot::State::Pending && afterState == ChunkSlot::State::Encoding) {
-    return QueueLifecycleEvent::EncodeDequeue;
-  }
-  return QueueLifecycleEvent::EncodeCommit;
-}
-
-QueueLifecycleEvent classifyFinishMutation(const QueueTransitionRecord& record) {
-  if (record.after.completedQueueCount < record.before.completedQueueCount) {
-    return QueueLifecycleEvent::FinishDequeue;
-  }
-  return QueueLifecycleEvent::FinishInline;
-}
-
-QueueLifecycleEvent classifyWaitMutation(const QueueTransitionRecord& record) {
-  if (record.after.completedSeqId >= record.eventSeqId) {
-    return QueueLifecycleEvent::WaitSeqEnd;
-  }
-  return QueueLifecycleEvent::WaitSeqBegin;
 }
 
 }  // namespace
@@ -490,25 +450,72 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
 }
 
 QueueLifecycleEvent QueueLifecycleController::classifyTransition(const QueueTransitionRecord& record) const {
-  switch (record.operation) {
-    case QueueOperationKind::PresentMutation:
-      return QueueLifecycleEvent::PresentEnqueue;
-    case QueueOperationKind::WriterMutation:
-      return classifyWriterMutation(record);
-    case QueueOperationKind::CommitMutation:
-      return classifyCommitMutation(record);
-    case QueueOperationKind::EncodeMutation:
-      return classifyEncodeMutation(record);
-    case QueueOperationKind::CompletionMutation:
-      return QueueLifecycleEvent::GpuComplete;
-    case QueueOperationKind::FinishMutation:
-      return classifyFinishMutation(record);
-    case QueueOperationKind::ReclaimMutation:
-      return QueueLifecycleEvent::ReclaimFree;
-    case QueueOperationKind::WaitMutation:
-      return classifyWaitMutation(record);
+  if (record.present) {
+    return QueueLifecycleEvent::PresentEnqueue;
   }
-  return QueueLifecycleEvent::PresentEnqueue;
+
+  if (record.after.completedQueueCount < record.before.completedQueueCount) {
+    return QueueLifecycleEvent::FinishDequeue;
+  }
+
+  if (!record.slotIndex.has_value()) {
+    return record.after.completedSeqId >= record.eventSeqId ? QueueLifecycleEvent::WaitSeqEnd
+                                                            : QueueLifecycleEvent::WaitSeqBegin;
+  }
+
+  const auto beforeState = slotStateFor(record.before, record.slotIndex);
+  const auto afterState = slotStateFor(record.after, record.slotIndex);
+  const auto beforeCommandCount = slotCommandCountFor(record.before, record.slotIndex);
+  const auto afterCommandCount = slotCommandCountFor(record.after, record.slotIndex);
+
+  if (!record.before.writingSlot.has_value() && record.after.writingSlot.has_value()) {
+    return QueueLifecycleEvent::WriterAcquire;
+  }
+
+  if (beforeState == ChunkSlot::State::Pending && afterState == ChunkSlot::State::Encoding) {
+    return QueueLifecycleEvent::EncodeDequeue;
+  }
+
+  if (beforeState == ChunkSlot::State::Encoding && afterState == ChunkSlot::State::GPU) {
+    return QueueLifecycleEvent::EncodeCommit;
+  }
+
+  if (record.after.completedQueueCount > record.before.completedQueueCount &&
+      record.after.inflightCount == record.before.inflightCount) {
+    return QueueLifecycleEvent::GpuComplete;
+  }
+
+  if (record.after.completedQueueCount > record.before.completedQueueCount &&
+      record.after.inflightCount < record.before.inflightCount) {
+    return QueueLifecycleEvent::FinishInline;
+  }
+
+  if (beforeState == ChunkSlot::State::GPU && afterState == ChunkSlot::State::Free) {
+    return QueueLifecycleEvent::ReclaimFree;
+  }
+
+  if (record.before.writingSlot.has_value() && !record.after.writingSlot.has_value()) {
+    if (record.after.readyCount > record.before.readyCount ||
+        record.after.lastCommittedSeqId > record.before.lastCommittedSeqId ||
+        record.after.inflightCount > record.before.inflightCount ||
+        afterState == ChunkSlot::State::Pending) {
+      return QueueLifecycleEvent::CommitPublish;
+    }
+    return QueueLifecycleEvent::CommitEmpty;
+  }
+
+  if (record.before.writingSlot.has_value() || record.after.writingSlot.has_value()) {
+    return record.after.inflightCount < record.inflightLimit ? QueueLifecycleEvent::CommitWaitEnd
+                                                             : QueueLifecycleEvent::CommitWaitBegin;
+  }
+
+  if (beforeCommandCount != afterCommandCount) {
+    return QueueLifecycleEvent::PresentEnqueue;
+  }
+
+  return writerCanProceed(record.after, record.slotIndex, record.inflightLimit)
+             ? QueueLifecycleEvent::WriterWaitEnd
+             : QueueLifecycleEvent::WriterWaitBegin;
 }
 
 QueueControllerState QueueLifecycleController::currentState() const {
@@ -537,7 +544,6 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
   const auto afterCommitState = currentState();
 
   observeTransition(QueueTransitionRecord{
-      .operation = QueueOperationKind::EncodeMutation,
       .before = beforeCommitState,
       .after = afterCommitState,
       .slotIndex = record.slotIndex,
@@ -550,6 +556,7 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
 
   const auto binding = submissionBinding_;
   if (!binding.mutex || !binding.completedSeqQueue) {
+    [record.commandBuffer commit];
     return;
   }
 
@@ -571,7 +578,6 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
     binding.completedSeqQueue->push_back(submissionSeqId);
     const QueueControllerState after = makeBoundQueueState(binding);
     self->observeTransition(QueueTransitionRecord{
-        .operation = QueueOperationKind::CompletionMutation,
         .before = before,
         .after = after,
         .slotIndex = submissionSlotIndex,
@@ -581,6 +587,8 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
       binding.finishCv->notify_all();
     }
   }];
+
+  [record.commandBuffer commit];
 }
 
 void QueueLifecycleController::notePresentEnqueue(const QueueControllerState& state,

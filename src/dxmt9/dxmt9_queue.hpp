@@ -136,19 +136,7 @@ enum class QueueLifecycleEvent {
   WaitSeqEnd,
 };
 
-enum class QueueOperationKind {
-  PresentMutation,
-  WriterMutation,
-  CommitMutation,
-  EncodeMutation,
-  CompletionMutation,
-  FinishMutation,
-  ReclaimMutation,
-  WaitMutation,
-};
-
 struct QueueTransitionRecord {
-  QueueOperationKind operation = QueueOperationKind::PresentMutation;
   QueueControllerState before{};
   QueueControllerState after{};
   std::optional<size_t> slotIndex;

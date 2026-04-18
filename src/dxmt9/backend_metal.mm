@@ -57,7 +57,6 @@ using dxmt9::core::metalcompat::matrixIsIdentity;
 using dxmt9::core::metalhud::DeveloperHudController;
 using dxmt9::core::metalqueue::CommandBufferDiagnostics;
 using dxmt9::core::metalqueue::QueueSubmissionRecord;
-using dxmt9::core::metalqueue::QueueOperationKind;
 using dxmt9::core::metalqueue::QueueTransitionRecord;
 using dxmt9::core::metalqueue::emitQueueTraceLine;
 using dxmt9::core::metalqueue::emitTextureTraceLine;
@@ -4768,7 +4767,6 @@ class MetalBackendDevice final : public BackendDevice {
     // TLA+: WineCommit
     ensureWritingSlotUnlocked(lock);
     queueLifecycle_.transition(QueueTransitionRecord{
-                                   .operation = QueueOperationKind::PresentMutation,
                                    .slotIndex = *writingSlot_,
                                    .eventSeqId = slots_[*writingSlot_].seqId,
                                    .present = &desc,
@@ -4847,7 +4845,6 @@ class MetalBackendDevice final : public BackendDevice {
     }
     if (slots_[writeIndex_].state != ChunkSlot::State::Free || inflightCount_ >= kMaxInflight) {
       queueLifecycle_.transition(QueueTransitionRecord{
-          .operation = QueueOperationKind::WriterMutation,
           .slotIndex = writeIndex_,
           .eventSeqId = slots_[writeIndex_].seqId,
           .inflightLimit = kMaxInflight,
@@ -4861,7 +4858,6 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
     queueLifecycle_.transition(QueueTransitionRecord{
-        .operation = QueueOperationKind::WriterMutation,
         .slotIndex = writeIndex_,
         .eventSeqId = slots_[writeIndex_].seqId,
         .inflightLimit = kMaxInflight,
@@ -4869,7 +4865,6 @@ class MetalBackendDevice final : public BackendDevice {
     // TLA+: RingSafety
     DXMT_ASSERT(slots_[writeIndex_].state == ChunkSlot::State::Free);
     queueLifecycle_.transition(QueueTransitionRecord{
-                                   .operation = QueueOperationKind::WriterMutation,
                                    .slotIndex = writeIndex_,
                                    .eventSeqId = slots_[writeIndex_].seqId,
                                    .inflightLimit = kMaxInflight,
@@ -4891,7 +4886,6 @@ class MetalBackendDevice final : public BackendDevice {
     if (slot.commands.empty()) {
       const size_t slotIndex = *writingSlot_;
       queueLifecycle_.transition(QueueTransitionRecord{
-                                     .operation = QueueOperationKind::CommitMutation,
                                      .slotIndex = slotIndex,
                                      .eventSeqId = slot.seqId,
                                  },
@@ -4903,7 +4897,6 @@ class MetalBackendDevice final : public BackendDevice {
     }
     if (inflightCount_ >= kMaxInflight) {
       queueLifecycle_.transition(QueueTransitionRecord{
-          .operation = QueueOperationKind::CommitMutation,
           .slotIndex = *writingSlot_,
           .eventSeqId = slots_[*writingSlot_].seqId,
           .inflightLimit = kMaxInflight,
@@ -4914,7 +4907,6 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
     queueLifecycle_.transition(QueueTransitionRecord{
-        .operation = QueueOperationKind::CommitMutation,
         .slotIndex = *writingSlot_,
         .eventSeqId = slots_[*writingSlot_].seqId,
         .inflightLimit = kMaxInflight,
@@ -4923,7 +4915,6 @@ class MetalBackendDevice final : public BackendDevice {
     const size_t publishedSlotIndex = *writingSlot_;
     const u64 publishedSeqId = nextSeqId_;
     queueLifecycle_.transition(QueueTransitionRecord{
-                                   .operation = QueueOperationKind::CommitMutation,
                                    .slotIndex = publishedSlotIndex,
                                    .eventSeqId = publishedSeqId,
                                    .inflightLimit = kMaxInflight,
@@ -5125,7 +5116,6 @@ class MetalBackendDevice final : public BackendDevice {
           // TLA+: EncodeSafety
           DXMT_ASSERT(slot.state == ChunkSlot::State::Pending);
           queueLifecycle_.transition(QueueTransitionRecord{
-                                         .operation = QueueOperationKind::EncodeMutation,
                                          .slotIndex = slotIndex,
                                          .eventSeqId = slot.seqId,
                                      },
@@ -5271,7 +5261,6 @@ class MetalBackendDevice final : public BackendDevice {
             .context = "queue",
         });
       }
-      [commandBuffer commit];
     }
   }
 
@@ -5279,7 +5268,6 @@ class MetalBackendDevice final : public BackendDevice {
     std::lock_guard lock(mutex_);
     auto& slot = slots_[slotIndex];
     queueLifecycle_.transition(QueueTransitionRecord{
-                                   .operation = QueueOperationKind::FinishMutation,
                                    .slotIndex = slotIndex,
                                    .eventSeqId = seqId,
                                },
@@ -6884,7 +6872,6 @@ class MetalBackendDevice final : public BackendDevice {
           }
           seqId = completedSeqQueue_.front();
           queueLifecycle_.transition(QueueTransitionRecord{
-                                         .operation = QueueOperationKind::FinishMutation,
                                          .eventSeqId = seqId,
                                      },
                                      [&] {
@@ -6912,7 +6899,6 @@ class MetalBackendDevice final : public BackendDevice {
       if (slot.state == ChunkSlot::State::GPU && slot.seqId == seqId) {
         const size_t slotIndex = static_cast<size_t>(&slot - slots_.data());
         queueLifecycle_.transition(QueueTransitionRecord{
-                                       .operation = QueueOperationKind::ReclaimMutation,
                                        .slotIndex = slotIndex,
                                        .eventSeqId = seqId,
                                    },
@@ -6930,14 +6916,12 @@ class MetalBackendDevice final : public BackendDevice {
   void waitForSequenceUnlocked(u64 seqId, std::unique_lock<std::mutex>& lock) {
     if (completedSeqId_ < seqId) {
       queueLifecycle_.transition(QueueTransitionRecord{
-          .operation = QueueOperationKind::WaitMutation,
           .eventSeqId = seqId,
       });
     }
     finishCv_.wait(lock, [this, seqId] { return stop_ || completedSeqId_ >= seqId; });
     if (!stop_) {
       queueLifecycle_.transition(QueueTransitionRecord{
-          .operation = QueueOperationKind::WaitMutation,
           .eventSeqId = seqId,
       });
     }
