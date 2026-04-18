@@ -328,6 +328,7 @@ class QueueLifecycleController {
   struct SubmissionBinding {
     std::optional<size_t>* writingSlot = nullptr;
     size_t* writeIndex = nullptr;
+    u64* nextSeqId = nullptr;
     std::deque<size_t>* readySlots = nullptr;
     std::deque<u64>* completedSeqQueue = nullptr;
     size_t* inflightCount = nullptr;
@@ -335,12 +336,39 @@ class QueueLifecycleController {
     u64* lastCommittedSeqId = nullptr;
     std::span<ChunkSlot> slots;
     std::mutex* mutex = nullptr;
+    std::condition_variable* writeCv = nullptr;
+    std::condition_variable* encodeCv = nullptr;
     std::condition_variable* finishCv = nullptr;
+    bool* stop = nullptr;
     metalhud::SubmissionDiagnosticsController* submissionDiagnostics = nullptr;
     std::function<u32(Handle)> resolveSurfaceFlags;
   };
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
+  bool ensureWriterSlot(std::unique_lock<std::mutex>& lock, size_t inflightLimit);
+  bool commitCurrentChunk(std::unique_lock<std::mutex>& lock,
+                          size_t inflightLimit,
+                          const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
+  bool dequeueReadySlot(std::unique_lock<std::mutex>& lock, size_t& slotIndex, ChunkSlot& slotCopy);
+  void appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
+  void submitEncodedChunk(id<MTLCommandBuffer> commandBuffer,
+                          size_t slotIndex,
+                          u64 seqId,
+                          std::span<const MetalCommandRecord> commands,
+                          const char* context = "queue");
+  void completeInlineChunk(size_t slotIndex, u64 seqId);
+  bool drainCompletedSequence(std::unique_lock<std::mutex>& lock, u64& seqId);
+  void reclaimCompletedGpuSlots(u64 seqId);
+  void waitForSequence(std::unique_lock<std::mutex>& lock, u64 targetSeqId);
+
+ private:
+  QueueControllerState currentState() const;
+  QueueLifecycleEvent classifyTransition(const QueueTransitionRecord& record) const;
+  CommandBufferDiagnostics summarizeSubmission(
+      u64 seqId,
+      size_t slotIndex,
+      std::span<const MetalCommandRecord> commands) const;
+  void observeTransition(const QueueTransitionRecord& record) const;
   void enqueuePresent(size_t slotIndex,
                       u64 eventSeqId,
                       const SwapDesc& present,
@@ -358,20 +386,10 @@ class QueueLifecycleController {
                      size_t inflightLimit,
                      const std::function<void()>& mutate = {});
   void encodeDequeue(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
-  void enqueueSubmission(const QueueSubmissionRecord& record);
   void finishInline(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
   void finishDequeue(u64 eventSeqId, const std::function<void()>& mutate = {});
   void reclaimFree(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
   void observeWaitForSequence(u64 targetSeqId);
-
- private:
-  QueueControllerState currentState() const;
-  QueueLifecycleEvent classifyTransition(const QueueTransitionRecord& record) const;
-  CommandBufferDiagnostics summarizeSubmission(
-      u64 seqId,
-      size_t slotIndex,
-      std::span<const MetalCommandRecord> commands) const;
-  void observeTransition(const QueueTransitionRecord& record) const;
   void notePresentEnqueue(const QueueControllerState& state,
                           size_t slotIndex,
                           u64 eventSeqId,
@@ -422,6 +440,7 @@ class QueueLifecycleController {
   void noteWaitSeqEnd(const QueueControllerState& state,
                       u64 targetSeqId) const;
   void transition(QueueTransitionRecord record, const std::function<void()>& mutate = {});
+  void enqueueSubmission(const QueueSubmissionRecord& record);
   void submit(const QueueSubmissionRecord& record);
   void drainPendingSubmissions();
 

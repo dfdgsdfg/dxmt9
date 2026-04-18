@@ -4,7 +4,9 @@ dxmt9_util_com_core_srcs = files(
   'com/com_private_data_iface.cpp',
 )
 
-dxmt9_util_srcs = dxmt9_util_com_core_srcs + files(
+dxmt9_util_com_leaf_srcs = files()
+
+dxmt9_util_common_srcs = files(
   'config/config.cpp',
   'dynamic_symbol.cpp',
   'log/log.cpp',
@@ -19,13 +21,17 @@ dxmt9_util_srcs = dxmt9_util_com_core_srcs + files(
   'wsi_window_headless.cpp',
 )
 
+dxmt9_util_wsi_leaf_srcs = files()
+
 if host_machine.system() == 'darwin'
-  dxmt9_util_srcs += files('wsi_platform_darwin.cpp')
+  dxmt9_util_wsi_leaf_srcs += files('wsi_platform_darwin.cpp')
 elif host_machine.system() == 'windows'
-  dxmt9_util_srcs += files('wsi_platform_win32.cpp')
+  dxmt9_util_wsi_leaf_srcs += files('wsi_platform_win32.cpp')
 else
-  dxmt9_util_srcs += files('wsi_platform_headless.cpp')
+  dxmt9_util_wsi_leaf_srcs += files('wsi_platform_headless.cpp')
 endif
+
+dxmt9_util_srcs = dxmt9_util_com_core_srcs + dxmt9_util_com_leaf_srcs + dxmt9_util_common_srcs + dxmt9_util_wsi_leaf_srcs
 
 dxmt9_util_internal_inc = include_directories('.', '..')
 

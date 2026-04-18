@@ -449,6 +449,260 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
   submissionBinding_ = binding;
 }
 
+bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lock,
+                                                size_t inflightLimit) {
+  auto* writingSlot = submissionBinding_.writingSlot;
+  auto* writeIndex = submissionBinding_.writeIndex;
+  auto* inflightCount = submissionBinding_.inflightCount;
+  auto* writeCv = submissionBinding_.writeCv;
+  auto* stop = submissionBinding_.stop;
+  if (!writingSlot || !writeIndex || !inflightCount || !writeCv || !stop) {
+    return false;
+  }
+
+  if (writingSlot->has_value()) {
+    return true;
+  }
+
+  auto& slots = submissionBinding_.slots;
+  if (slots[*writeIndex].state != ChunkSlot::State::Free || *inflightCount >= inflightLimit) {
+    observeWriterWait(*writeIndex, slots[*writeIndex].seqId, inflightLimit);
+  }
+  writeCv->wait(lock, [&] {
+    return *stop || (slots[*writeIndex].state == ChunkSlot::State::Free &&
+                     *inflightCount < inflightLimit);
+  });
+  if (*stop) {
+    return false;
+  }
+  observeWriterWait(*writeIndex, slots[*writeIndex].seqId, inflightLimit);
+  acquireWriterSlot(*writeIndex, slots[*writeIndex].seqId, inflightLimit, [&] {
+    slots[*writeIndex].state = ChunkSlot::State::Writing;
+    slots[*writeIndex].seqId = 0;
+    slots[*writeIndex].commands.clear();
+    *writingSlot = *writeIndex;
+  });
+  return true;
+}
+
+bool QueueLifecycleController::commitCurrentChunk(
+    std::unique_lock<std::mutex>& lock,
+    size_t inflightLimit,
+    const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+  auto* writingSlot = submissionBinding_.writingSlot;
+  auto* writeIndex = submissionBinding_.writeIndex;
+  auto* nextSeqId = submissionBinding_.nextSeqId;
+  auto* readySlots = submissionBinding_.readySlots;
+  auto* inflightCount = submissionBinding_.inflightCount;
+  auto* lastCommittedSeqId = submissionBinding_.lastCommittedSeqId;
+  auto* writeCv = submissionBinding_.writeCv;
+  auto* encodeCv = submissionBinding_.encodeCv;
+  auto* stop = submissionBinding_.stop;
+  if (!writingSlot || !writeIndex || !nextSeqId || !readySlots || !inflightCount ||
+      !lastCommittedSeqId || !writeCv || !stop) {
+    return false;
+  }
+  if (!writingSlot->has_value()) {
+    return false;
+  }
+
+  auto& slots = submissionBinding_.slots;
+  auto& slot = slots[**writingSlot];
+  if (slot.commands.empty()) {
+    const size_t slotIndex = **writingSlot;
+    commitEmpty(slotIndex, slot.seqId, [&] {
+      slot.state = ChunkSlot::State::Free;
+      writingSlot->reset();
+    });
+    return false;
+  }
+
+  if (*inflightCount >= inflightLimit) {
+    observeCommitWait(**writingSlot, slot.seqId, inflightLimit);
+  }
+  writeCv->wait(lock, [&] { return *stop || *inflightCount < inflightLimit; });
+  if (*stop) {
+    return false;
+  }
+
+  const size_t publishedSlotIndex = **writingSlot;
+  const u64 publishedSeqId = *nextSeqId;
+  observeCommitWait(publishedSlotIndex, slot.seqId, inflightLimit);
+  commitPublish(publishedSlotIndex, publishedSeqId, inflightLimit, [&] {
+    slot.seqId = (*nextSeqId)++;
+    slot.state = ChunkSlot::State::Pending;
+    *lastCommittedSeqId = slot.seqId;
+    ++(*inflightCount);
+    if (onBeforePublish) {
+      onBeforePublish(slot);
+    }
+    readySlots->push_back(publishedSlotIndex);
+    writingSlot->reset();
+    *writeIndex = (*writeIndex + 1) % slots.size();
+  });
+  if (encodeCv) {
+    encodeCv->notify_one();
+  }
+  return true;
+}
+
+bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lock,
+                                                size_t& slotIndex,
+                                                ChunkSlot& slotCopy) {
+  auto* readySlots = submissionBinding_.readySlots;
+  auto* encodeCv = submissionBinding_.encodeCv;
+  auto* stop = submissionBinding_.stop;
+  if (!readySlots || !encodeCv || !stop) {
+    return false;
+  }
+
+  encodeCv->wait(lock, [&] { return *stop || !readySlots->empty(); });
+  if (*stop && readySlots->empty()) {
+    return false;
+  }
+
+  slotIndex = readySlots->front();
+  auto& slot = submissionBinding_.slots[slotIndex];
+  encodeDequeue(slotIndex, slot.seqId, [&] {
+    readySlots->pop_front();
+    slot.state = ChunkSlot::State::Encoding;
+  });
+  slotCopy = slot;
+  return true;
+}
+
+void QueueLifecycleController::appendPresentCommand(const SwapDesc& present, Handle sourceHandle) {
+  auto* writingSlot = submissionBinding_.writingSlot;
+  if (!writingSlot || !writingSlot->has_value()) {
+    return;
+  }
+
+  const size_t slotIndex = **writingSlot;
+  auto& slot = submissionBinding_.slots[slotIndex];
+  enqueuePresent(slotIndex, slot.seqId, present, sourceHandle, [&] {
+    MetalCommandRecord op;
+    op.kind = MetalCommandRecord::Kind::Present;
+    op.present = present;
+    op.presentSource = sourceHandle;
+    slot.commands.push_back(std::move(op));
+  });
+}
+
+void QueueLifecycleController::submitEncodedChunk(id<MTLCommandBuffer> commandBuffer,
+                                                  size_t slotIndex,
+                                                  u64 seqId,
+                                                  std::span<const MetalCommandRecord> commands,
+                                                  const char* context) {
+  enqueueSubmission(QueueSubmissionRecord{
+      .commandBuffer = commandBuffer,
+      .slotIndex = slotIndex,
+      .seqId = seqId,
+      .commands = commands,
+      .context = context,
+  });
+}
+
+void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) {
+  if (slotIndex >= submissionBinding_.slots.size()) {
+    return;
+  }
+
+  auto& slot = submissionBinding_.slots[slotIndex];
+  auto* completedSeqId = submissionBinding_.completedSeqId;
+  auto* inflightCount = submissionBinding_.inflightCount;
+  auto* completedSeqQueue = submissionBinding_.completedSeqQueue;
+  finishInline(slotIndex, seqId, [&] {
+    slot.state = ChunkSlot::State::Free;
+    slot.seqId = seqId;
+    slot.commands.clear();
+    if (inflightCount && *inflightCount > 0) {
+      --(*inflightCount);
+    }
+    if (completedSeqId) {
+      *completedSeqId = std::max(*completedSeqId, seqId);
+    }
+    if (completedSeqQueue) {
+      completedSeqQueue->push_back(seqId);
+    }
+  });
+  if (submissionBinding_.writeCv) {
+    submissionBinding_.writeCv->notify_all();
+  }
+  if (submissionBinding_.finishCv) {
+    submissionBinding_.finishCv->notify_all();
+  }
+}
+
+bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mutex>& lock,
+                                                      u64& seqId) {
+  auto* completedSeqQueue = submissionBinding_.completedSeqQueue;
+  auto* finishCv = submissionBinding_.finishCv;
+  auto* stop = submissionBinding_.stop;
+  auto* completedSeqId = submissionBinding_.completedSeqId;
+  auto* inflightCount = submissionBinding_.inflightCount;
+  if (!completedSeqQueue || !finishCv || !stop || !completedSeqId || !inflightCount) {
+    return false;
+  }
+
+  finishCv->wait(lock, [&] { return *stop || !completedSeqQueue->empty(); });
+  if (*stop && completedSeqQueue->empty()) {
+    return false;
+  }
+
+  seqId = completedSeqQueue->front();
+  finishDequeue(seqId, [&] {
+    completedSeqQueue->pop_front();
+    *completedSeqId = std::max(*completedSeqId, seqId);
+    if (*inflightCount > 0) {
+      --(*inflightCount);
+    }
+  });
+  if (submissionBinding_.finishCv) {
+    submissionBinding_.finishCv->notify_all();
+  }
+  if (submissionBinding_.writeCv) {
+    submissionBinding_.writeCv->notify_all();
+  }
+  return true;
+}
+
+void QueueLifecycleController::reclaimCompletedGpuSlots(u64 seqId) {
+  bool reclaimed = false;
+  auto& slots = submissionBinding_.slots;
+  for (size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
+    auto& slot = slots[slotIndex];
+    if (slot.state != ChunkSlot::State::GPU || slot.seqId != seqId) {
+      continue;
+    }
+    reclaimFree(slotIndex, seqId, [&] {
+      slot.state = ChunkSlot::State::Free;
+      slot.commands.clear();
+      slot.seqId = 0;
+    });
+    reclaimed = true;
+  }
+  if (reclaimed && submissionBinding_.writeCv) {
+    submissionBinding_.writeCv->notify_all();
+  }
+}
+
+void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& lock,
+                                               u64 targetSeqId) {
+  auto* completedSeqId = submissionBinding_.completedSeqId;
+  auto* finishCv = submissionBinding_.finishCv;
+  auto* stop = submissionBinding_.stop;
+  if (!completedSeqId || !finishCv || !stop) {
+    return;
+  }
+  if (*completedSeqId < targetSeqId) {
+    observeWaitForSequence(targetSeqId);
+  }
+  finishCv->wait(lock, [&] { return *stop || *completedSeqId >= targetSeqId; });
+  if (!*stop) {
+    observeWaitForSequence(targetSeqId);
+  }
+}
+
 void QueueLifecycleController::enqueuePresent(size_t slotIndex,
                                               u64 eventSeqId,
                                               const SwapDesc& present,
