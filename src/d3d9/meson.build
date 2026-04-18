@@ -34,19 +34,6 @@ if host_machine.system() == 'windows'
     dependencies: [dxmt9_util_dep],
   )
 
-  dxmt9_bridge_imports_lib = static_library(
-    'dxmt9_bridge_imports',
-    [bridge_codegen[1]],
-    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
-    dependencies: [dxmt9_util_dep],
-    install: false,
-  )
-
-  dxmt9_bridge_imports_dep = declare_dependency(
-    link_with: dxmt9_bridge_imports_lib,
-    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
-    dependencies: [dxmt9_util_dep],
-  )
 endif
 
 dxmt9_frontend_lib = static_library(
@@ -63,22 +50,16 @@ dxmt9_frontend_dep = declare_dependency(
   dependencies: [dxmt9_util_dep],
 )
 
-dxmt9_frontend_service_abi_dep = declare_dependency(
-  link_with: dxmt9_frontend_lib,
-  include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
-  dependencies: [dxmt9_util_dep],
-)
-
 if host_machine.system() == 'windows'
   dxmt9_d3d9_forwarder_lib = static_library(
     'dxmt9_d3d9_forwarder',
-    dxmt9_frontend_export_srcs,
+    dxmt9_frontend_export_srcs + [bridge_codegen[1]],
     include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
     dependencies: [
       dxguid_dep,
       dxmt9_util_dep,
       dxmt9_pe_core_dep,
-      dxmt9_bridge_imports_dep,
+      dxmt9_winemetal_import_dep,
     ],
     install: false,
   )
@@ -90,7 +71,7 @@ if host_machine.system() == 'windows'
       dxguid_dep,
       dxmt9_util_dep,
       dxmt9_pe_core_dep,
-      dxmt9_bridge_imports_dep,
+      dxmt9_winemetal_import_dep,
     ],
   )
 endif

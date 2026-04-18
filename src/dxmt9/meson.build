@@ -40,18 +40,3 @@ dxmt9_runtime_dep = declare_dependency(
   include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
   dependencies: [dxmt9_util_dep],
 )
-
-dxmt9_runtime_service_shim_lib = static_library(
-  'dxmt9_runtime_service_shim',
-  dxmt9_winemetal_service_abi_srcs,
-  include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
-  dependencies: [dxmt9_util_dep],
-  link_whole: [dxmt9_shader_service_core_lib, dxmt9_runtime_lib],
-  install: false,
-)
-
-dxmt9_runtime_service_shim_dep = declare_dependency(
-  link_with: dxmt9_runtime_service_shim_lib,
-  include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
-  dependencies: [dxmt9_util_dep],
-)

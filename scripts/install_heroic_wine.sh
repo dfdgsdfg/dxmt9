@@ -26,7 +26,7 @@ Options:
                           Directory containing builtin 32-bit winemetal.dll for
                           <wine-root>/lib/wine/i386-windows.
                           Default: <repo>/build-win32-x86-builtin/src/winemetal
-  --unix-build-dir <path> Directory containing dxmt9.so and winemetal.so.
+  --unix-build-dir <path> Directory containing winemetal.so.
                           Default: <repo>/build-x86_64-builtin/src
   --mingw-bin-dir <path>  Directory containing libc++.dll and libunwind.dll.
                           Default: ~/llvm-mingw/x86_64-w64-mingw32/bin
@@ -41,7 +41,6 @@ runtime and prefix:
   - d3d9.dll      -> <prefix>/drive_c/windows/system32
   - winemetal.dll -> <wine-root>/lib/wine/x86_64-windows
   - winemetal.so  -> <wine-root>/lib/wine/x86_64-unix
-  - dxmt9.so      -> <wine-root>/lib/wine/x86_64-unix
   - libc++.dll    -> <prefix>/drive_c/windows/system32
   - libunwind.dll -> <prefix>/drive_c/windows/system32
 
@@ -206,10 +205,6 @@ if [[ -n "$wow64_runtime_pe_build_dir" && ! -d "$i386_windows_runtime_dir" ]]; t
   exit 1
 fi
 
-if [[ ! -f "$unix_build_dir/dxmt9.so" && -f "$repo_root/build/src/dxmt9.so" ]]; then
-  unix_build_dir="$repo_root/build/src"
-fi
-
 if [[ ! -f "$unix_build_dir/winemetal/unix/winemetal.so" && -f "$repo_root/build/src/winemetal/unix/winemetal.so" ]]; then
   unix_build_dir="$repo_root/build/src"
 fi
@@ -240,7 +235,6 @@ fi
 install_file "$pe_build_dir/d3d9.dll" "$system32_dir/d3d9.dll"
 install_file "$runtime_pe_build_dir/winemetal.dll" "$windows_runtime_dir/winemetal.dll"
 install_file "$unix_build_dir/winemetal/unix/winemetal.so" "$unix_runtime_dir/winemetal.so"
-install_file "$unix_build_dir/dxmt9.so" "$unix_runtime_dir/dxmt9.so"
 install_file "$mingw_bin_dir/libc++.dll" "$system32_dir/libc++.dll"
 install_file "$mingw_bin_dir/libunwind.dll" "$system32_dir/libunwind.dll"
 

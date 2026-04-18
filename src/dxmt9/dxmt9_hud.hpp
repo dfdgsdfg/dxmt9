@@ -40,12 +40,6 @@ class DeveloperHudState {
 class DeveloperHudController {
  public:
   metalqueue::CommandBufferDiagnostics prepareForSubmission(metalqueue::CommandBufferDiagnostics diagnostics);
-  void attachCompletionHandler(
-      id<MTLCommandBuffer> commandBuffer,
-      const metalqueue::CommandBufferDiagnostics& diagnostics,
-      metalqueue::CompletionTracker& completionTracker,
-      const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
-      const char* context = "queue");
   bool observeCompletion(id<MTLCommandBuffer> commandBuffer,
                          const metalqueue::CommandBufferDiagnostics& diagnostics,
                          metalqueue::CompletionTracker& completionTracker,
@@ -61,13 +55,14 @@ class DeveloperHudController {
 
 class SubmissionDiagnosticsController {
  public:
+  metalqueue::CommandBufferDiagnostics prepareQueueSubmission(
+      metalqueue::CommandBufferDiagnostics diagnostics);
   bool inspect(id<MTLCommandBuffer> commandBuffer,
                const metalqueue::CommandBufferDiagnostics& diagnostics,
                const char* context);
-  void attachQueueSubmission(id<MTLCommandBuffer> commandBuffer,
-                             const metalqueue::CommandBufferDiagnostics& diagnostics,
-                             const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
-                             const char* context = "queue");
+  bool observeQueueSubmission(id<MTLCommandBuffer> commandBuffer,
+                              const metalqueue::CommandBufferDiagnostics& diagnostics,
+                              const char* context = "queue");
   const metalqueue::CompletionTracker& completionTracker() const noexcept { return completionTracker_; }
 
  private:

@@ -433,29 +433,35 @@ void QueueLifecycleController::attachTrackedSubmission(
       .eventSeqId = state.seqId,
   });
 
-  submissionDiagnostics.attachQueueSubmission(
-      commandBuffer,
-      diagnostics,
-      [this, state](const CommandBufferDiagnostics&) {
-        if (!state.mutex || !state.completedSeqQueue) {
-          return;
-        }
-        std::lock_guard completionLock(*state.mutex);
-        const QueueControllerState before = makeTrackedSubmissionState(state);
-        state.completedSeqQueue->push_back(state.seqId);
-        const QueueControllerState after = makeTrackedSubmissionState(state);
-        recordTransition(QueueTransitionRecord{
-            .event = QueueLifecycleEvent::GpuComplete,
-            .before = before,
-            .after = after,
-            .slotIndex = state.slotIndex,
-            .eventSeqId = state.seqId,
-        });
-        if (state.finishCv) {
-          state.finishCv->notify_all();
-        }
-      },
-      context);
+  if (!commandBuffer) {
+    return;
+  }
+
+  const auto preparedDiagnostics = submissionDiagnostics.prepareQueueSubmission(diagnostics);
+  auto* self = this;
+  auto* diagnosticsController = &submissionDiagnostics;
+  const auto trackedState = state;
+  const std::string contextValue = context ? context : "queue";
+  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+    (void)diagnosticsController->observeQueueSubmission(buffer, preparedDiagnostics, contextValue.c_str());
+    if (!trackedState.mutex || !trackedState.completedSeqQueue) {
+      return;
+    }
+    std::lock_guard completionLock(*trackedState.mutex);
+    const QueueControllerState before = makeTrackedSubmissionState(trackedState);
+    trackedState.completedSeqQueue->push_back(trackedState.seqId);
+    const QueueControllerState after = makeTrackedSubmissionState(trackedState);
+    self->recordTransition(QueueTransitionRecord{
+        .event = QueueLifecycleEvent::GpuComplete,
+        .before = before,
+        .after = after,
+        .slotIndex = trackedState.slotIndex,
+        .eventSeqId = trackedState.seqId,
+    });
+    if (trackedState.finishCv) {
+      trackedState.finishCv->notify_all();
+    }
+  }];
 }
 
 void QueueLifecycleController::notePresentEnqueue(const QueueControllerState& state,

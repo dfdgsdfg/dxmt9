@@ -97,28 +97,6 @@ DeveloperHudController::prepareForSubmission(metalqueue::CommandBufferDiagnostic
   return diagnostics;
 }
 
-void DeveloperHudController::attachCompletionHandler(
-    id<MTLCommandBuffer> commandBuffer,
-    const metalqueue::CommandBufferDiagnostics& diagnostics,
-    metalqueue::CompletionTracker& completionTracker,
-    const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
-    const char* context) {
-  if (!commandBuffer) {
-    return;
-  }
-  const auto preparedDiagnostics = prepareForSubmission(diagnostics);
-  auto* self = this;
-  auto* tracker = &completionTracker;
-  const auto completion = onCompletion;
-  const std::string contextValue = context ? context : "queue";
-  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-    (void)self->observeCompletion(buffer, preparedDiagnostics, *tracker, contextValue.c_str());
-    if (completion) {
-      completion(preparedDiagnostics);
-    }
-  }];
-}
-
 bool DeveloperHudController::observeCompletion(id<MTLCommandBuffer> commandBuffer,
                                                const metalqueue::CommandBufferDiagnostics& diagnostics,
                                                metalqueue::CompletionTracker& completionTracker,
@@ -137,18 +115,22 @@ void DeveloperHudController::completeSubmission(const metalqueue::CommandBufferD
   state_.update(frame, diagnostics.seqId, flags, completionTracker.lastErrorSummary());
 }
 
+metalqueue::CommandBufferDiagnostics SubmissionDiagnosticsController::prepareQueueSubmission(
+    metalqueue::CommandBufferDiagnostics diagnostics) {
+  return hudController_.prepareForSubmission(diagnostics);
+}
+
 bool SubmissionDiagnosticsController::inspect(id<MTLCommandBuffer> commandBuffer,
                                               const metalqueue::CommandBufferDiagnostics& diagnostics,
                                               const char* context) {
   return completionTracker_.inspect(commandBuffer, diagnostics, context);
 }
 
-void SubmissionDiagnosticsController::attachQueueSubmission(
+bool SubmissionDiagnosticsController::observeQueueSubmission(
     id<MTLCommandBuffer> commandBuffer,
     const metalqueue::CommandBufferDiagnostics& diagnostics,
-    const std::function<void(const metalqueue::CommandBufferDiagnostics&)>& onCompletion,
     const char* context) {
-  hudController_.attachCompletionHandler(commandBuffer, diagnostics, completionTracker_, onCompletion, context);
+  return hudController_.observeCompletion(commandBuffer, diagnostics, completionTracker_, context);
 }
 
 }  // namespace dxmt9::core::metalhud

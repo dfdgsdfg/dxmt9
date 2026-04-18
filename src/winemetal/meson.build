@@ -108,20 +108,26 @@ endif
 
 dxmt9_winemetal_frontend_service_shim_lib = static_library(
   'dxmt9_winemetal_frontend_service_shim',
-  [files('winemetal_bridge_service_abi.cpp'), bridge_codegen[2], bridge_codegen[3]],
-  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
-  dependencies: [dxmt9_util_dep],
-  link_whole: [dxmt9_frontend_lib, dxmt9_runtime_lib],
+  objects: dxmt9_frontend_lib.extract_all_objects(recursive: false),
   install: false,
 )
 
-dxmt9_winemetal_service_shim_dep = declare_dependency(
-  link_with: [
-    dxmt9_winemetal_frontend_service_shim_lib,
-    dxmt9_runtime_service_shim_lib,
+dxmt9_winemetal_runtime_service_shim_lib = static_library(
+  'dxmt9_winemetal_runtime_service_shim',
+  dxmt9_winemetal_service_abi_srcs,
+  objects: [
+    dxmt9_shader_service_core_lib.extract_all_objects(recursive: false),
+    dxmt9_runtime_lib.extract_all_objects(recursive: false),
   ],
-  include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
+  include_directories: [
+    dxmt9_inc,
+    bridge_gen_inc,
+    dxmt9_winemetal_internal_inc,
+    dxmt9_runtime_internal_inc,
+    include_directories('..'),
+  ],
   dependencies: [dxmt9_util_dep],
+  install: false,
 )
 
 subdir('unix')

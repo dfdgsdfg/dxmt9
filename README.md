@@ -52,7 +52,7 @@ export PATH="$HOME/llvm-mingw/bin:$PATH"
 
 ## Build
 
-### Native unix module (`dxmt9.so`)
+### Native unix module root (`winemetal.so`)
 
 ```sh
 meson setup build
@@ -60,7 +60,7 @@ meson compile -C build
 meson test -C build
 ```
 
-Output: `build/src/dxmt9.so`
+Output: `build/src/winemetal/unix/winemetal.so`
 
 To use the Homebrew LLVM toolchain explicitly:
 
@@ -89,11 +89,11 @@ Outputs:
 - `build-win32-x64-builtin/src/win32/d3d9.dll`
 - `build-win32-x64-builtin/src/winemetal/winemetal.dll`
 
-### x86_64 unix module for Wine64 / Rosetta (`dxmt9.so`)
+### x86_64 unix module for Wine64 / Rosetta (`winemetal.so`)
 
 On Apple Silicon, current macOS Wine hosts run Wine64 as x86_64 under Rosetta 2.
 That includes GPTK, CrossOver, and vanilla Wine builds packaged for macOS.
-Build an x86_64 `dxmt9.so` using a meson native file:
+Build an x86_64 `winemetal.so` using a meson native file:
 
 ```sh
 meson setup build-x86_64-builtin \
@@ -102,28 +102,26 @@ meson setup build-x86_64-builtin \
 meson compile -C build-x86_64-builtin
 ```
 
-Outputs:
+Output:
 
-- `build-x86_64-builtin/src/dxmt9.so`
 - `build-x86_64-builtin/src/winemetal/unix/winemetal.so`
 
 ---
 
 ## Runtime Layout
 
-`dxmt9` is split into four runtime binaries:
+`dxmt9` is split into three runtime binaries:
 
 | Binary | Kind | Role |
 |---|---|---|
 | `d3d9.dll` | PE DLL | User-facing D3D9 entry points loaded by the app |
 | `winemetal.dll` | PE DLL | Internal PE bridge that marshals both the main `dxmt9c_*` D3D9 C ABI and the `winemetal` shader ABI into `winemetal.so` |
-| `winemetal.so` | Wine unix module | unix-call bridge module exported by `winemetal.dll` |
-| `dxmt9.so` | Wine unix module | Native Metal backend, WSI, shader translation, and presentation |
+| `winemetal.so` | Wine unix module | Unified unix runtime root: unix-call bridge, Metal backend, WSI, shader translation, and presentation |
 
 `d3d9.dll` imports `winemetal.dll`. `winemetal.dll` uses its paired
-`winemetal.so` unixlib as the sole bridge boundary for both the main D3D9 C ABI
-and the shader ABI. `dxmt9.so` remains the runtime/backend module behind that
-bridge. The PE bridge must not import a Mach-O `.dylib` directly.
+`winemetal.so` unixlib as the sole bridge boundary and unix runtime root for
+both the main D3D9 C ABI and the shader ABI. The PE bridge must not import a
+Mach-O `.dylib` directly.
 
 ---
 
@@ -135,7 +133,6 @@ You need these files from a release or local build:
 
 - `d3d9.dll`
 - `winemetal.dll`
-- `dxmt9.so`
 - `winemetal.so`
 - `libc++.dll` and `libunwind.dll` from `llvm-mingw` if your Wine prefix does
   not already have them
@@ -149,7 +146,7 @@ You also need a recent macOS Wine build with:
 Confirmed host:
 
 - Heroic Wine 11.6 on macOS, tested on 2026-04-17 with the builtin
-  `d3d9.dll` + `winemetal.dll` + `dxmt9.so` + `winemetal.so`
+  `d3d9.dll` + `winemetal.dll` + `winemetal.so`
   layout; `wsi_present_x64.exe`
   completes the full 180-frame present smoke
 
@@ -177,9 +174,6 @@ cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
 cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
   "$WINE_ROOT/lib/wine/x86_64-unix/winemetal.so"
 
-cp build-x86_64-builtin/src/dxmt9.so \
-  "$WINE_ROOT/lib/wine/x86_64-unix/dxmt9.so"
-
 # Required when the PE bridge was built with llvm-mingw's libc++ runtime
 cp "$HOME/llvm-mingw/x86_64-w64-mingw32/bin/libc++.dll" \
   "$WINEPREFIX/drive_c/windows/system32/libc++.dll"
@@ -197,9 +191,7 @@ What goes where:
   PE bridge for both the main D3D9 C ABI and the shader ABI. It is not copied
   into `system32` on the verified builtin path.
 - `winemetal.so` goes into Wine's `x86_64-unix` runtime directory because it is
-  the unix-side bridge module paired with `winemetal.dll`.
-- `dxmt9.so` goes into Wine's `x86_64-unix` runtime directory because it is the
-  unix-side backend module.
+  the unix-side bridge module and unified runtime root paired with `winemetal.dll`.
 
 Typical `WINE_ROOT` examples:
 
@@ -226,7 +218,7 @@ bash scripts/install_heroic_wine.sh --prefix "/path/to/heroic/prefix"
 
 The script auto-detects the latest `Wine-*` runtime under Heroic, installs the
 latest plain Heroic Wine runtime by default, skips Heroic `*-DXMT` variants
-unless you pass `--wine-root`, installs the three PE DLLs and two unix modules,
+unless you pass `--wine-root`, installs the two PE DLLs and one unix module,
 copies `libc++.dll` / `libunwind.dll`, and creates `.dxmt9-backup` copies
 before overwriting an existing file. This is the verified install path for
 Heroic Wine 11.6.
@@ -254,7 +246,8 @@ meson compile -C build-win32-x64-builtin
 ```
 
 If you are on Intel macOS and your Wine runtime is also x86_64, you can use the
-normal `build/src/dxmt9.so` output directly instead of `build-x86_64-builtin/src/dxmt9.so`.
+normal `build/src/winemetal/unix/winemetal.so` output directly instead of
+`build-x86_64-builtin/src/winemetal/unix/winemetal.so`.
 
 ---
 

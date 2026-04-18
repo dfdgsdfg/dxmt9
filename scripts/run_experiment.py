@@ -533,7 +533,7 @@ def main() -> int:
     run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
     run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
-    run_parser.add_argument("--unix-build-dir", help="Unix build dir containing dxmt9.so")
+    run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal.so")
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
     run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")
