@@ -924,6 +924,16 @@ public:
     return MTLDevice_hasUnifiedMemory(handle);
   }
 
+  bool
+  supportsDepth24Stencil8() const {
+    return MTLDevice_supportsDepth24Stencil8(handle);
+  }
+
+  Reference<Library>
+  newLibraryFromSource(const char *source, Error &error) {
+    return Reference<Library>(MTLDevice_newLibraryFromSource(handle, source, &error.handle));
+  }
+
   Reference<FXTemporalScaler>
   newTemporalScaler(const WMTFXTemporalScalerInfo &info) {
     return Reference<FXTemporalScaler>(MTLDevice_newTemporalScaler(handle, &info));

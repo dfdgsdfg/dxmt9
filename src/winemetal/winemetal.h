@@ -1557,6 +1557,13 @@ WINEMETAL_API bool MTLDevice_supportsTextureSampleCount(obj_handle_t device, uin
 
 WINEMETAL_API bool MTLDevice_hasUnifiedMemory(obj_handle_t device);
 
+WINEMETAL_API bool MTLDevice_supportsDepth24Stencil8(obj_handle_t device);
+
+WINEMETAL_API obj_handle_t MTLDevice_newLibraryFromSource(obj_handle_t device, const char *source,
+                                                          obj_handle_t *err_out);
+
+WINEMETAL_API void WMTGetShaderCachePath(char *out, uint64_t capacity);
+
 enum WMTCaptureDestination : uint8_t {
   WMTCaptureDestinationDeveloperTools = 1,
   WMTCaptureDestinationGPUTraceDocument = 2,
