@@ -4,7 +4,12 @@ dxmt9_frontend_core_srcs = files(
 )
 
 dxmt9_frontend_provider_srcs = files(
-  'device_c.cpp',
+  'device_c_common.cpp',
+  'device_c_factory.cpp',
+  'device_c_device_state_draw.cpp',
+  'device_c_resources.cpp',
+  'device_c_shader_vdecl.cpp',
+  'device_c_swapchain_query_stateblock.cpp',
 )
 
 dxmt9_pe_core_srcs = files(

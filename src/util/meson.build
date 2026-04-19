@@ -13,6 +13,7 @@ dxmt9_util_common_srcs = files(
   'sha1/sha1.c',
   'sha1/sha1_util.cpp',
   'thread.cpp',
+  'unixcall_marshal.cpp',
   'util_bmp.cpp',
   'util_buffer.cpp',
   'util_hash.cpp',

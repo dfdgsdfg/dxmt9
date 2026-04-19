@@ -1,6 +1,6 @@
 #if defined(WINE_UNIX_LIB)
 #include "../wineunixlib.h"
-#include "../winemetal_unix_call_handlers.hpp"
+#include "dxmt9unix_shader_handlers.hpp"
 #endif
 
 #if defined(WINE_UNIX_LIB)

@@ -1,7 +1,7 @@
-#include "winemetal_unix_call_handlers.hpp"
+#include "dxmt9unix_shader_handlers.hpp"
 
 #include "util/unixcall_marshal.hpp"
-#include "winemetal_service_abi.h"
+#include "winemetal/winemetal_service_abi.h"
 
 #include <cstdint>
 
@@ -10,14 +10,14 @@ namespace {
 constexpr std::int32_t kStatusSuccess = 0;
 constexpr std::int32_t kStatusInvalidParameter = static_cast<std::int32_t>(0xC000000Du);
 
-WinemetalShaderCompileRequest decodeCompileShaderRequest(
+WinemetalShaderCompileRequest compileShaderRequestFromParams(
     const Dxmt9WinemetalCompileShaderParams& params) {
   return WinemetalShaderCompileRequest{
       .kind = static_cast<WinemetalShaderKind>(params.kind),
-      .bytecode = dxmt9::util::marshal::decodePtr<const void>(params.bytecode_ptr),
+      .bytecode = dxmt9::util::marshal::decodeNullablePtr<const void>(params.bytecode_ptr),
       .bytecodeSize = params.bytecode_size,
       .bytecodeHash = params.bytecode_hash,
-      .variantKey = dxmt9::util::marshal::decodePtr<const void>(params.variant_key_ptr),
+      .variantKey = dxmt9::util::marshal::decodeNullablePtr<const void>(params.variant_key_ptr),
       .textured = params.textured != 0,
       .clipPlaneMask = params.clip_plane_mask,
       .sampleCount = params.sample_count,
@@ -35,7 +35,7 @@ extern "C" NTSTATUS dxmt9_winemetal_compile_shader_unix_call(void* opaque) {
   if (!params) {
     return kStatusInvalidParameter;
   }
-  const auto request = decodeCompileShaderRequest(*params);
+  const auto request = compileShaderRequestFromParams(*params);
   params->ret = dxmt9_winemetal_service_compile_shader(&request);
   return kStatusSuccess;
 }
@@ -54,11 +54,12 @@ extern "C" NTSTATUS dxmt9_winemetal_shader_source_copy_unix_call(void* opaque) {
   if (!params) {
     return kStatusInvalidParameter;
   }
-  if (params->buffer_capacity == 0 || params->buffer_ptr == 0) {
+  char* destination = dxmt9::util::marshal::decodeCharBuffer(
+      params->buffer_ptr, params->buffer_capacity);
+  if (!destination) {
     params->bytes_written = 0;
     return kStatusSuccess;
   }
-  char* destination = dxmt9::util::marshal::decodePtr<char>(params->buffer_ptr);
   params->bytes_written = dxmt9_winemetal_service_shader_source_copy(
       params->shader_handle, destination, params->buffer_capacity);
   return kStatusSuccess;

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "dxmt9/wineunixlib.h"
-#include "winemetal_thunks.hpp"
+#include "winemetal/winemetal_thunks.hpp"
 
 #ifdef __cplusplus
 extern "C" {

@@ -162,7 +162,7 @@ dxmt9_unix_provider_module = shared_library(
   'dxmt9unix',
   files(
     'unix/dxmt9unix_unix.cpp',
-    'winemetal_unix_call_handlers.cpp',
+    '../dxmt9/dxmt9unix_shader_handlers.cpp',
   ),
   bridge_codegen[2],
   name_prefix: '',
