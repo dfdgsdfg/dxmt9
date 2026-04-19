@@ -1,0 +1,93 @@
+#include "device_c_provider_api.hpp"
+
+extern "C" D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice* arg0, uint32_t index) {
+  return dxmt9p_device_get_swap_chain(arg0, index);
+}
+
+extern "C" uint32_t dxmt9c_device_get_swap_chain_count(D9CDevice* arg0) {
+  return dxmt9p_device_get_swap_chain_count(arg0);
+}
+
+extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* arg0, const D9CPresentParams* arg1) {
+  return dxmt9p_device_create_additional_swap_chain(arg0, arg1);
+}
+
+extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* arg0, uint32_t type) {
+  return dxmt9p_device_create_query(arg0, type);
+}
+
+extern "C" D9CStateBlock* dxmt9c_device_create_state_block(D9CDevice* arg0, uint32_t type) {
+  return dxmt9p_device_create_state_block(arg0, type);
+}
+
+extern "C" int32_t dxmt9c_device_begin_state_block(D9CDevice* arg0) {
+  return dxmt9p_device_begin_state_block(arg0);
+}
+
+extern "C" int32_t dxmt9c_device_end_state_block(D9CDevice* arg0, D9CStateBlock** arg1) {
+  return dxmt9p_device_end_state_block(arg0, arg1);
+}
+
+extern "C" void dxmt9c_swapchain_addref(D9CSwapChain* arg0) {
+  dxmt9p_swapchain_addref(arg0);
+}
+
+extern "C" uint32_t dxmt9c_swapchain_release(D9CSwapChain* arg0) {
+  return dxmt9p_swapchain_release(arg0);
+}
+
+extern "C" int32_t dxmt9c_swapchain_present(D9CSwapChain* arg0, const D9CRect* src, const D9CRect* dst, uint64_t destWindow, const void* dirtyRegion, uint32_t flags) {
+  return dxmt9p_swapchain_present(arg0, src, dst, destWindow, dirtyRegion, flags);
+}
+
+extern "C" D9CSurface* dxmt9c_swapchain_get_back_buffer(D9CSwapChain* arg0, uint32_t index, uint32_t type) {
+  return dxmt9p_swapchain_get_back_buffer(arg0, index, type);
+}
+
+extern "C" D9CSurface* dxmt9c_swapchain_get_depth_stencil(D9CSwapChain* arg0) {
+  return dxmt9p_swapchain_get_depth_stencil(arg0);
+}
+
+extern "C" int32_t dxmt9c_swapchain_get_present_params(D9CSwapChain* arg0, D9CPresentParams* arg1) {
+  return dxmt9p_swapchain_get_present_params(arg0, arg1);
+}
+
+extern "C" void dxmt9c_query_addref(D9CQuery* arg0) {
+  dxmt9p_query_addref(arg0);
+}
+
+extern "C" uint32_t dxmt9c_query_release(D9CQuery* arg0) {
+  return dxmt9p_query_release(arg0);
+}
+
+extern "C" int32_t dxmt9c_query_issue(D9CQuery* arg0, uint32_t flags) {
+  return dxmt9p_query_issue(arg0, flags);
+}
+
+extern "C" int32_t dxmt9c_query_get_data(D9CQuery* arg0, void* data, uint32_t size, uint32_t flags) {
+  return dxmt9p_query_get_data(arg0, data, size, flags);
+}
+
+extern "C" uint32_t dxmt9c_query_get_data_size(D9CQuery* arg0) {
+  return dxmt9p_query_get_data_size(arg0);
+}
+
+extern "C" uint32_t dxmt9c_query_get_type(D9CQuery* arg0) {
+  return dxmt9p_query_get_type(arg0);
+}
+
+extern "C" void dxmt9c_stateblock_addref(D9CStateBlock* arg0) {
+  dxmt9p_stateblock_addref(arg0);
+}
+
+extern "C" uint32_t dxmt9c_stateblock_release(D9CStateBlock* arg0) {
+  return dxmt9p_stateblock_release(arg0);
+}
+
+extern "C" int32_t dxmt9c_stateblock_capture(D9CStateBlock* arg0) {
+  return dxmt9p_stateblock_capture(arg0);
+}
+
+extern "C" int32_t dxmt9c_stateblock_apply(D9CStateBlock* arg0) {
+  return dxmt9p_stateblock_apply(arg0);
+}

@@ -1,4 +1,4 @@
-#include "device_c_common.hpp"
+#include "device_c_provider.hpp"
 
 using namespace dxmt9::d3d9::devicec;
 

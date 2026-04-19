@@ -130,9 +130,9 @@ if host_machine.system() == 'windows'
   subdir_done()
 endif
 
-dxmt9_winemetal_runtime_service_shim_lib = static_library(
-  'dxmt9_winemetal_runtime_service_shim',
-  dxmt9_winemetal_service_abi_srcs,
+dxmt9unix_service_abi_lib = static_library(
+  'dxmt9unix_service_abi',
+  dxmt9unix_service_abi_srcs,
   include_directories: [
     dxmt9_inc,
     bridge_gen_inc,
@@ -146,8 +146,8 @@ dxmt9_winemetal_runtime_service_shim_lib = static_library(
   install: false,
 )
 
-dxmt9_winemetal_runtime_service_shim_dep = declare_dependency(
-  link_with: dxmt9_winemetal_runtime_service_shim_lib,
+dxmt9unix_service_abi_dep = declare_dependency(
+  link_with: dxmt9unix_service_abi_lib,
   include_directories: [
     dxmt9_inc,
     bridge_gen_inc,
@@ -175,10 +175,11 @@ dxmt9_unix_provider_module = shared_library(
   ],
   dependencies: [
     dxmt9_util_dep,
+    dxmt9_frontend_bridge_dep,
     dxmt9_frontend_provider_dep,
     dxmt9_runtime_dep,
     dxmt9_shader_service_core_dep,
-    dxmt9_winemetal_runtime_service_shim_dep,
+    dxmt9unix_service_abi_dep,
     dxmt9_winemetal_unix_framework_dep,
   ],
   cpp_args: ['-DWINE_UNIX_LIB=1'],

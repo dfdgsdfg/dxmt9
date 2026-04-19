@@ -1,7 +1,7 @@
+#include "dxmt9/dxmt9unix_service_abi.h"
 #include "dxmt9unix_shader_handlers.hpp"
 
 #include "util/unixcall_marshal.hpp"
-#include "winemetal/winemetal_service_abi.h"
 
 #include <cstdint>
 
@@ -36,7 +36,7 @@ extern "C" NTSTATUS dxmt9_winemetal_compile_shader_unix_call(void* opaque) {
     return kStatusInvalidParameter;
   }
   const auto request = compileShaderRequestFromParams(*params);
-  params->ret = dxmt9_winemetal_service_compile_shader(&request);
+  params->ret = dxmt9unix_service_compile_shader(&request);
   return kStatusSuccess;
 }
 
@@ -45,7 +45,7 @@ extern "C" NTSTATUS dxmt9_winemetal_shader_source_size_unix_call(void* opaque) {
   if (!params) {
     return kStatusInvalidParameter;
   }
-  params->ret = dxmt9_winemetal_service_shader_source_size(params->shader_handle);
+  params->ret = dxmt9unix_service_shader_source_size(params->shader_handle);
   return kStatusSuccess;
 }
 
@@ -60,7 +60,7 @@ extern "C" NTSTATUS dxmt9_winemetal_shader_source_copy_unix_call(void* opaque) {
     params->bytes_written = 0;
     return kStatusSuccess;
   }
-  params->bytes_written = dxmt9_winemetal_service_shader_source_copy(
+  params->bytes_written = dxmt9unix_service_shader_source_copy(
       params->shader_handle, destination, params->buffer_capacity);
   return kStatusSuccess;
 }
@@ -70,6 +70,6 @@ extern "C" NTSTATUS dxmt9_winemetal_destroy_shader_unix_call(void* opaque) {
   if (!params) {
     return kStatusInvalidParameter;
   }
-  dxmt9_winemetal_service_destroy_shader(params->shader_handle);
+  dxmt9unix_service_destroy_shader(params->shader_handle);
   return kStatusSuccess;
 }
