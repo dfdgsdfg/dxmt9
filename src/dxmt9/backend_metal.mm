@@ -334,13 +334,6 @@ WMT::Reference<WMT::Device> bootstrapWrappedDevice() {
   return WMT::Reference<WMT::Device>(device);
 }
 
-ObjcPtr<id<MTLDevice>> retainDeviceFromWrapper(const WMT::Device& device) {
-  if (!device) {
-    return {};
-  }
-  return ObjcPtr<id<MTLDevice>>::retain(fromWmtHandle<id<MTLDevice>>(device.handle));
-}
-
 WMT::Reference<WMT::CommandQueue> bootstrapWrappedCommandQueue(WMT::Device& device) {
   if (!device) {
     return {};
@@ -352,94 +345,83 @@ WMT::Reference<WMT::CommandQueue> bootstrapWrappedCommandQueue(WMT::Device& devi
   return commandQueue;
 }
 
-ObjcPtr<id<MTLCommandQueue>> retainCommandQueueFromWrapper(WMT::CommandQueue& queue) {
+WMT::Reference<WMT::CommandBuffer> bootstrapCommandBuffer(WMT::CommandQueue& queue) {
   if (!queue) {
     return {};
   }
-  return ObjcPtr<id<MTLCommandQueue>>::retain(fromWmtHandle<id<MTLCommandQueue>>(queue.handle));
-}
-
-ObjcPtr<id<MTLCommandBuffer>> bootstrapCommandBufferFromWrapper(WMT::CommandQueue& queue) {
-  if (!queue) {
-    return {};
-  }
-  auto commandBuffer = queue.commandBuffer();
-  if (!commandBuffer) {
-    return {};
-  }
-  return ObjcPtr<id<MTLCommandBuffer>>::retain(fromWmtHandle<id<MTLCommandBuffer>>(commandBuffer.handle));
+  return queue.commandBuffer();
 }
 
 u64 makeHash(const std::string& source) {
   return hashString(source);
 }
 
-MTLPixelFormat toPixelFormat(Format format, const BackendLimits& limits) {
+WMTPixelFormat toPixelFormat(Format format, const BackendLimits& limits) {
   switch (format) {
     case Format::A8R8G8B8:
     case Format::X8R8G8B8:
-      return MTLPixelFormatBGRA8Unorm;
+      return WMTPixelFormatBGRA8Unorm;
     case Format::A8B8G8R8:
     case Format::X8B8G8R8:
-      return MTLPixelFormatRGBA8Unorm;
+      return WMTPixelFormatRGBA8Unorm;
     case Format::R5G6B5:
-      return MTLPixelFormatB5G6R5Unorm;
+      return WMTPixelFormatB5G6R5Unorm;
     case Format::A1R5G5B5:
     case Format::X1R5G5B5:
-      return MTLPixelFormatBGR5A1Unorm;
+      return WMTPixelFormatBGR5A1Unorm;
     case Format::A4R4G4B4:
-      return MTLPixelFormatABGR4Unorm;
+      return WMTPixelFormatABGR4Unorm;
     case Format::A8:
-      return MTLPixelFormatA8Unorm;
+      return WMTPixelFormatA8Unorm;
     case Format::A16B16G16R16F:
-      return MTLPixelFormatRGBA16Float;
+      return WMTPixelFormatRGBA16Float;
     case Format::A32B32G32R32F:
-      return MTLPixelFormatRGBA32Float;
+      return WMTPixelFormatRGBA32Float;
     case Format::G16R16F:
-      return MTLPixelFormatRG16Float;
+      return WMTPixelFormatRG16Float;
     case Format::R16F:
-      return MTLPixelFormatR16Float;
+      return WMTPixelFormatR16Float;
     case Format::G32R32F:
-      return MTLPixelFormatRG32Float;
+      return WMTPixelFormatRG32Float;
     case Format::R32F:
-      return MTLPixelFormatR32Float;
+      return WMTPixelFormatR32Float;
     case Format::A16B16G16R16:
-      return MTLPixelFormatRGBA16Unorm;
+      return WMTPixelFormatRGBA16Unorm;
     case Format::G16R16:
-      return MTLPixelFormatRG16Unorm;
+      return WMTPixelFormatRG16Unorm;
     case Format::A2R10G10B10:
-      return MTLPixelFormatRGB10A2Unorm;
+      return WMTPixelFormatRGB10A2Unorm;
     case Format::A2B10G10R10:
-      return MTLPixelFormatBGR10A2Unorm;
+      return WMTPixelFormatBGR10A2Unorm;
     case Format::L8:
-      return MTLPixelFormatR8Unorm;
+      return WMTPixelFormatR8Unorm;
     case Format::L16:
-      return MTLPixelFormatR16Unorm;
+      return WMTPixelFormatR16Unorm;
     case Format::A8L8:
-      return MTLPixelFormatRG8Unorm;
+      return WMTPixelFormatRG8Unorm;
     case Format::V8U8:
-      return MTLPixelFormatRG8Snorm;
+      return WMTPixelFormatRG8Snorm;
     case Format::Q8W8V8U8:
-      return MTLPixelFormatRGBA8Snorm;
+      return WMTPixelFormatRGBA8Snorm;
     case Format::V16U16:
-      return MTLPixelFormatRG16Snorm;
+      return WMTPixelFormatRG16Snorm;
     case Format::D24S8:
     case Format::D24X8:
       if (limits.supportsDepth24Stencil8) {
-        return MTLPixelFormatDepth24Unorm_Stencil8;
+        return WMTPixelFormatDepth24Unorm_Stencil8;
       }
-      return limits.supportsDepth32FloatStencil8 ? MTLPixelFormatDepth32Float_Stencil8
-                                                 : MTLPixelFormatDepth32Float;
+      return limits.supportsDepth32FloatStencil8 ? WMTPixelFormatDepth32Float_Stencil8
+                                                 : WMTPixelFormatDepth32Float;
     case Format::D16:
     case Format::D16_LOCKABLE:
-      return MTLPixelFormatDepth16Unorm;
+      return WMTPixelFormatDepth16Unorm;
     case Format::D32:
     case Format::D32F_LOCKABLE:
-      return MTLPixelFormatDepth32Float;
+      return WMTPixelFormatDepth32Float;
     case Format::D24FS8:
-      return MTLPixelFormatDepth32Float_Stencil8;
+      return WMTPixelFormatDepth32Float_Stencil8;
     default:
-      return MTLPixelFormatBGRA8Unorm;
+      return WMTPixelFormatBGRA8Unorm;
   }
 }
 
@@ -468,208 +450,141 @@ bool formatHasDepthAspect(Format format) {
   }
 }
 
-MTLTextureType toTextureType(TextureType type, bool multisample) {
+WMTTextureType toTextureType(TextureType type, bool multisample) {
   switch (type) {
     case TextureType::TwoD:
-      return multisample ? MTLTextureType2DMultisample : MTLTextureType2D;
+      return multisample ? WMTTextureType2DMultisample : WMTTextureType2D;
     case TextureType::Cube:
-      return MTLTextureTypeCube;
+      return WMTTextureTypeCube;
     case TextureType::Volume:
-      return MTLTextureType3D;
+      return WMTTextureType3D;
     case TextureType::Array2D:
-      return multisample ? MTLTextureType2DMultisampleArray : MTLTextureType2DArray;
+      return multisample ? WMTTextureType2DMultisampleArray : WMTTextureType2DArray;
   }
-  return multisample ? MTLTextureType2DMultisample : MTLTextureType2D;
+  return multisample ? WMTTextureType2DMultisample : WMTTextureType2D;
 }
 
-MTLStorageMode toStorageMode(Pool pool, u32 usage) {
-  if (pool == Pool::SystemMem || pool == Pool::Scratch) {
-    return MTLStorageModeShared;
+WMTResourceOptions toResourceOptions(Pool pool, u32 usage) {
+  if (pool == Pool::SystemMem || pool == Pool::Scratch || pool == Pool::Managed) {
+    return WMTResourceStorageModeShared;
   }
-  if (pool == Pool::Managed) {
-    return MTLStorageModeShared;
-  }
-  return (usage & UsageDynamic) != 0 ? MTLStorageModeShared : MTLStorageModePrivate;
+  return (usage & UsageDynamic) != 0 ? WMTResourceStorageModeShared : WMTResourceStorageModePrivate;
 }
 
-MTLResourceOptions toResourceOptions(Pool pool, u32 usage) {
-  const auto storageMode = toStorageMode(pool, usage);
-  MTLResourceOptions options = 0;
-  switch (storageMode) {
-    case MTLStorageModeShared:
-      options |= MTLResourceStorageModeShared;
-      break;
-    case MTLStorageModePrivate:
-      options |= MTLResourceStorageModePrivate;
-      break;
-    default:
-      options |= MTLResourceStorageModeShared;
-      break;
-  }
-  return options;
-}
-
-MTLTextureUsage toTextureUsage(const SurfaceDesc& desc) {
-  MTLTextureUsage usage = MTLTextureUsageUnknown;
+WMTTextureUsage toTextureUsage(const SurfaceDesc& desc) {
+  WMTTextureUsage usage = WMTTextureUsageUnknown;
   if (desc.renderTarget || desc.depthStencil) {
-    usage |= MTLTextureUsageRenderTarget;
+    usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsageRenderTarget);
   }
-  usage |= MTLTextureUsageShaderRead;
+  usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsageShaderRead);
   return usage;
 }
 
-MTLTextureUsage toTextureUsage(const TextureDesc& desc) {
-  MTLTextureUsage usage = MTLTextureUsageShaderRead;
+WMTTextureUsage toTextureUsage(const TextureDesc& desc) {
+  WMTTextureUsage usage = WMTTextureUsageShaderRead;
   if ((desc.usage & UsageRenderTarget) != 0 || (desc.usage & UsageDepthStencil) != 0) {
-    usage |= MTLTextureUsageRenderTarget;
+    usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsageRenderTarget);
   }
   return usage;
 }
 
-MTLPrimitiveType toPrimitiveType(PrimitiveType type) {
+WMTPrimitiveType toPrimitiveType(PrimitiveType type) {
   switch (type) {
     case PrimitiveType::PointList:
-      return MTLPrimitiveTypePoint;
+      return WMTPrimitiveTypePoint;
     case PrimitiveType::LineList:
-      return MTLPrimitiveTypeLine;
+      return WMTPrimitiveTypeLine;
     case PrimitiveType::LineStrip:
-      return MTLPrimitiveTypeLineStrip;
+      return WMTPrimitiveTypeLineStrip;
     case PrimitiveType::TriangleList:
     case PrimitiveType::TriangleFan:
-      return MTLPrimitiveTypeTriangle;
+      return WMTPrimitiveTypeTriangle;
     case PrimitiveType::TriangleStrip:
-      return MTLPrimitiveTypeTriangleStrip;
+      return WMTPrimitiveTypeTriangleStrip;
   }
-  return MTLPrimitiveTypeTriangle;
+  return WMTPrimitiveTypeTriangle;
 }
 
-MTLIndexType toIndexType(IndexType type) {
-  return type == IndexType::UInt32 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16;
+WMTIndexType toIndexType(IndexType type) {
+  return type == IndexType::UInt32 ? WMTIndexTypeUInt32 : WMTIndexTypeUInt16;
 }
 
-MTLCompareFunction toCompareFunction(u32 value) {
+WMTCompareFunction toCompareFunction(u32 value) {
   switch (static_cast<CompareFunc>(value)) {
-    case CompareFunc::Never:
-      return MTLCompareFunctionNever;
-    case CompareFunc::Less:
-      return MTLCompareFunctionLess;
-    case CompareFunc::Equal:
-      return MTLCompareFunctionEqual;
-    case CompareFunc::LessEqual:
-      return MTLCompareFunctionLessEqual;
-    case CompareFunc::Greater:
-      return MTLCompareFunctionGreater;
-    case CompareFunc::NotEqual:
-      return MTLCompareFunctionNotEqual;
-    case CompareFunc::GreaterEqual:
-      return MTLCompareFunctionGreaterEqual;
-    case CompareFunc::Always:
-      return MTLCompareFunctionAlways;
+    case CompareFunc::Never:      return WMTCompareFunctionNever;
+    case CompareFunc::Less:       return WMTCompareFunctionLess;
+    case CompareFunc::Equal:      return WMTCompareFunctionEqual;
+    case CompareFunc::LessEqual:  return WMTCompareFunctionLessEqual;
+    case CompareFunc::Greater:    return WMTCompareFunctionGreater;
+    case CompareFunc::NotEqual:   return WMTCompareFunctionNotEqual;
+    case CompareFunc::GreaterEqual: return WMTCompareFunctionGreaterEqual;
+    case CompareFunc::Always:     return WMTCompareFunctionAlways;
   }
-  return MTLCompareFunctionAlways;
+  return WMTCompareFunctionAlways;
 }
 
-[[maybe_unused]] MTLBlendOperation toBlendOperation(u32 value) {
+[[maybe_unused]] WMTBlendOperation toBlendOperation(u32 value) {
   switch (static_cast<BlendOp>(value)) {
-    case BlendOp::Add:
-      return MTLBlendOperationAdd;
-    case BlendOp::Subtract:
-      return MTLBlendOperationSubtract;
-    case BlendOp::RevSubtract:
-      return MTLBlendOperationReverseSubtract;
-    case BlendOp::Min:
-      return MTLBlendOperationMin;
-    case BlendOp::Max:
-      return MTLBlendOperationMax;
+    case BlendOp::Add:          return WMTBlendOperationAdd;
+    case BlendOp::Subtract:     return WMTBlendOperationSubtract;
+    case BlendOp::RevSubtract:  return WMTBlendOperationReverseSubtract;
+    case BlendOp::Min:          return WMTBlendOperationMin;
+    case BlendOp::Max:          return WMTBlendOperationMax;
   }
-  return MTLBlendOperationAdd;
+  return WMTBlendOperationAdd;
 }
 
-[[maybe_unused]] MTLBlendFactor toBlendFactor(u32 value) {
+[[maybe_unused]] WMTBlendFactor toBlendFactor(u32 value) {
   switch (static_cast<BlendFactor>(value)) {
-    case BlendFactor::Zero:
-      return MTLBlendFactorZero;
-    case BlendFactor::One:
-      return MTLBlendFactorOne;
-    case BlendFactor::SrcColor:
-      return MTLBlendFactorSourceColor;
-    case BlendFactor::InvSrcColor:
-      return MTLBlendFactorOneMinusSourceColor;
-    case BlendFactor::SrcAlpha:
-      return MTLBlendFactorSourceAlpha;
-    case BlendFactor::InvSrcAlpha:
-      return MTLBlendFactorOneMinusSourceAlpha;
-    case BlendFactor::DestAlpha:
-      return MTLBlendFactorDestinationAlpha;
-    case BlendFactor::InvDestAlpha:
-      return MTLBlendFactorOneMinusDestinationAlpha;
-    case BlendFactor::DestColor:
-      return MTLBlendFactorDestinationColor;
-    case BlendFactor::InvDestColor:
-      return MTLBlendFactorOneMinusDestinationColor;
-    case BlendFactor::SrcAlphaSat:
-      return MTLBlendFactorSourceAlphaSaturated;
-    case BlendFactor::BothSrcAlpha:
-      return MTLBlendFactorBlendAlpha;
-    case BlendFactor::BothInvSrcAlpha:
-      return MTLBlendFactorOneMinusBlendAlpha;
-    case BlendFactor::BlendFactor:
-      return MTLBlendFactorBlendColor;
-    case BlendFactor::InvBlendFactor:
-      return MTLBlendFactorOneMinusBlendColor;
+    case BlendFactor::Zero:           return WMTBlendFactorZero;
+    case BlendFactor::One:            return WMTBlendFactorOne;
+    case BlendFactor::SrcColor:       return WMTBlendFactorSourceColor;
+    case BlendFactor::InvSrcColor:    return WMTBlendFactorOneMinusSourceColor;
+    case BlendFactor::SrcAlpha:       return WMTBlendFactorSourceAlpha;
+    case BlendFactor::InvSrcAlpha:    return WMTBlendFactorOneMinusSourceAlpha;
+    case BlendFactor::DestAlpha:      return WMTBlendFactorDestinationAlpha;
+    case BlendFactor::InvDestAlpha:   return WMTBlendFactorOneMinusDestinationAlpha;
+    case BlendFactor::DestColor:      return WMTBlendFactorDestinationColor;
+    case BlendFactor::InvDestColor:   return WMTBlendFactorOneMinusDestinationColor;
+    case BlendFactor::SrcAlphaSat:    return WMTBlendFactorSourceAlphaSaturated;
+    case BlendFactor::BothSrcAlpha:   return WMTBlendFactorBlendAlpha;
+    case BlendFactor::BothInvSrcAlpha: return WMTBlendFactorOneMinusBlendAlpha;
+    case BlendFactor::BlendFactor:    return WMTBlendFactorBlendColor;
+    case BlendFactor::InvBlendFactor: return WMTBlendFactorOneMinusBlendColor;
   }
-  return MTLBlendFactorOne;
+  return WMTBlendFactorOne;
 }
 
-MTLCullMode toCullMode(u32 value) {
+WMTCullMode toCullMode(u32 value) {
   switch (static_cast<CullMode>(value)) {
-    case CullMode::None:
-      return MTLCullModeNone;
-    case CullMode::Cw:
-      return MTLCullModeBack;
-    case CullMode::Ccw:
-      return MTLCullModeFront;
+    case CullMode::None: return WMTCullModeNone;
+    case CullMode::Cw:   return WMTCullModeBack;
+    case CullMode::Ccw:  return WMTCullModeFront;
   }
-  return MTLCullModeNone;
+  return WMTCullModeNone;
 }
 
-MTLStencilOperation toStencilOperation(u32 value) {
+WMTStencilOperation toStencilOperation(u32 value) {
   switch (static_cast<StencilOp>(value)) {
-    case StencilOp::Keep:
-      return MTLStencilOperationKeep;
-    case StencilOp::Zero:
-      return MTLStencilOperationZero;
-    case StencilOp::Replace:
-      return MTLStencilOperationReplace;
-    case StencilOp::IncrSat:
-      return MTLStencilOperationIncrementClamp;
-    case StencilOp::DecrSat:
-      return MTLStencilOperationDecrementClamp;
-    case StencilOp::Invert:
-      return MTLStencilOperationInvert;
-    case StencilOp::Incr:
-      return MTLStencilOperationIncrementWrap;
-    case StencilOp::Decr:
-      return MTLStencilOperationDecrementWrap;
+    case StencilOp::Keep:    return WMTStencilOperationKeep;
+    case StencilOp::Zero:    return WMTStencilOperationZero;
+    case StencilOp::Replace: return WMTStencilOperationReplace;
+    case StencilOp::IncrSat: return WMTStencilOperationIncrementClamp;
+    case StencilOp::DecrSat: return WMTStencilOperationDecrementClamp;
+    case StencilOp::Invert:  return WMTStencilOperationInvert;
+    case StencilOp::Incr:    return WMTStencilOperationIncrementWrap;
+    case StencilOp::Decr:    return WMTStencilOperationDecrementWrap;
   }
-  return MTLStencilOperationKeep;
+  return WMTStencilOperationKeep;
 }
 
-MTLColorWriteMask toColorWriteMask(u32 value) {
-  MTLColorWriteMask mask = 0;
-  if ((value & 0x1u) != 0) {
-    mask |= MTLColorWriteMaskRed;
-  }
-  if ((value & 0x2u) != 0) {
-    mask |= MTLColorWriteMaskGreen;
-  }
-  if ((value & 0x4u) != 0) {
-    mask |= MTLColorWriteMaskBlue;
-  }
-  if ((value & 0x8u) != 0) {
-    mask |= MTLColorWriteMaskAlpha;
-  }
-  return mask == 0 ? MTLColorWriteMaskAll : mask;
+uint8_t toColorWriteMask(u32 value) {
+  uint8_t mask = 0;
+  if ((value & 0x1u) != 0) mask |= WMTColorWriteMaskRed;
+  if ((value & 0x2u) != 0) mask |= WMTColorWriteMaskGreen;
+  if ((value & 0x4u) != 0) mask |= WMTColorWriteMaskBlue;
+  if ((value & 0x8u) != 0) mask |= WMTColorWriteMaskAlpha;
+  return mask == 0 ? WMTColorWriteMaskAll : mask;
 }
 
 struct AttachmentKey {
@@ -848,7 +763,8 @@ AttachmentKey makeAttachmentKey(const ClearDesc& clear) {
 
 struct BufferRecord {
   BufferDesc desc{};
-  ObjcPtr<id<MTLBuffer>> buffer;
+  WMT::Reference<WMT::Buffer> buffer;
+  void* contents = nullptr;  // CPU-mapped pointer (shared mode only)
   std::vector<u8> shadow;
   bool destroyPending = false;
   u64 lastUsedSeqId = 0;
@@ -856,15 +772,16 @@ struct BufferRecord {
 
 struct TextureRecord {
   TextureDesc desc{};
-  ObjcPtr<id<MTLTexture>> texture;
+  WMT::Reference<WMT::Texture> texture;
+  bool isPrivate = false;  // true if storage mode is private (no CPU access)
   bool destroyPending = false;
   u64 lastUsedSeqId = 0;
 };
 
 struct SurfaceRecord {
   SurfaceDesc desc{};
-  ObjcPtr<id<MTLTexture>> texture;
-  ObjcPtr<id<MTLTexture>> resolveTexture;
+  WMT::Reference<WMT::Texture> texture;
+  WMT::Reference<WMT::Texture> resolveTexture;
   TextureHandle aliasTexture{};
   u32 level = 0;
   bool destroyPending = false;
@@ -1040,7 +957,7 @@ struct ShaderVariantKeyHash {
 };
 
 struct PipelineCacheEntry {
-  std::shared_future<ObjcPtr<id<MTLRenderPipelineState>>> future;
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> future;
 };
 
 struct DepthStencilKey {
@@ -4065,70 +3982,28 @@ std::string makeTexturedFragmentSource(u64 variantHash, bool forceOpaqueAlpha = 
   return out.str();
 }
 
-ObjcPtr<id<MTLLibrary>> makeLibrary(id<MTLDevice> device, const std::string& source) {
-  NSError* error = nil;
-  NSString* nsSource = makeNSString(source);
-  id<MTLLibrary> library = [device newLibraryWithSource:nsSource options:nil error:&error];
-  [nsSource release];
-  if (!library) {
-    NSLog(@"dxmt9: Metal shader compile failed: %@", error);
+WMT::Reference<WMT::Library> makeLibraryWMT(WMT::Device& device, const std::string& source) {
+  WMT::Error error{};
+  auto lib = device.newLibraryFromSource(source.c_str(), error);
+  if (!lib) {
     return {};
   }
-  return ObjcPtr<id<MTLLibrary>>::adopt(library);
+  return lib;
 }
 
-ObjcPtr<NSURL*> makeShaderArchiveURL() {
-  @autoreleasepool {
-    NSArray<NSString*>* caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
-    NSString* basePath = caches.count > 0 ? caches[0] : NSTemporaryDirectory();
-    NSString* dir = [basePath stringByAppendingPathComponent:@"dxmt9"];
-    NSError* error = nil;
-    [[NSFileManager defaultManager] createDirectoryAtPath:dir
-                              withIntermediateDirectories:YES
-                                               attributes:nil
-                                                    error:&error];
-    if (error) {
-      NSLog(@"dxmt9: shader cache directory creation failed: %@", error);
-    }
-    NSString* archivePath = [dir stringByAppendingPathComponent:@"shader-archive.metallib"];
-    return ObjcPtr<NSURL*>::retain([NSURL fileURLWithPath:archivePath]);
-  }
+void initShaderArchive(WMT::Device& device, const std::string& path,
+                       WMT::Reference<WMT::BinaryArchive>& archiveOut) {
+  WMT::Error err{};
+  auto archive = device.newBinaryArchive(path.c_str(), err);
+  archiveOut = std::move(archive);
 }
 
-ObjcPtr<id<MTLBinaryArchive>> loadShaderArchive(id<MTLDevice> device, NSURL* url) {
-  if (!device || !url) {
-    return {};
-  }
-  @autoreleasepool {
-    auto desc = [MTLBinaryArchiveDescriptor new];
-    desc.url = url;
-    NSError* error = nil;
-    id<MTLBinaryArchive> archive = [device newBinaryArchiveWithDescriptor:desc error:&error];
-    if (!archive) {
-      desc.url = nil;
-      archive = [device newBinaryArchiveWithDescriptor:desc error:&error];
-    }
-    [desc release];
-    if (!archive) {
-      if (error) {
-        NSLog(@"dxmt9: binary archive creation failed: %@", error);
-      }
-      return {};
-    }
-    return ObjcPtr<id<MTLBinaryArchive>>::adopt(archive);
-  }
-}
-
-void persistShaderArchive(id<MTLBinaryArchive> archive, NSURL* url) {
-  if (!archive || !url) {
+void persistShaderArchiveWMT(WMT::BinaryArchive& archive, const std::string& path) {
+  if (!archive || path.empty()) {
     return;
   }
-  @autoreleasepool {
-    NSError* error = nil;
-    if (![archive serializeToURL:url error:&error] && error) {
-      NSLog(@"dxmt9: binary archive write failed: %@", error);
-    }
-  }
+  WMT::Error err{};
+  archive.serialize(path.c_str(), err);
 }
 
 std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex);
@@ -4293,24 +4168,19 @@ DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
 class MetalBackendDevice final : public BackendDevice {
  public:
   explicit MetalBackendDevice(const BackendLimits& limits) : limits_(limits) {
-    @autoreleasepool {
-      wrappedDevice_ = bootstrapWrappedDevice();
-      device_ = retainDeviceFromWrapper(wrappedDevice_);
-      if (!device_) {
-        return;
-      }
-      if ([device_.get() respondsToSelector:@selector(isDepth24Stencil8PixelFormatSupported)]) {
-        limits_.supportsDepth24Stencil8 = [device_.get() isDepth24Stencil8PixelFormatSupported];
-      }
-      wrappedCommandQueue_ = bootstrapWrappedCommandQueue(wrappedDevice_);
-      commandQueue_ = retainCommandQueueFromWrapper(wrappedCommandQueue_);
-      shaderArchiveURL_ = makeShaderArchiveURL();
-      shaderArchive_ = loadShaderArchive(device_.get(), shaderArchiveURL_.get());
-    }
-
-    if (!device_ || !commandQueue_) {
+    wrappedDevice_ = bootstrapWrappedDevice();
+    if (!wrappedDevice_) {
       return;
     }
+    limits_.supportsDepth24Stencil8 = wrappedDevice_.supportsDepth24Stencil8();
+    wrappedCommandQueue_ = bootstrapWrappedCommandQueue(wrappedDevice_);
+    if (!wrappedCommandQueue_) {
+      return;
+    }
+    char cachePath[4096]{};
+    WMTGetShaderCachePath(cachePath, sizeof(cachePath));
+    shaderArchivePath_ = cachePath;
+    initShaderArchive(wrappedDevice_, shaderArchivePath_, shaderArchive_);
 
     queueLifecycle_.bindTrackedSubmissionState({
         .writingSlot = &writingSlot_,
@@ -4353,7 +4223,7 @@ class MetalBackendDevice final : public BackendDevice {
     }
     std::lock_guard lock(mutex_);
     if (shaderArchive_) {
-      persistShaderArchive(shaderArchive_.get(), shaderArchiveURL_.get());
+      persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
     }
     purgeResourcesUnlocked();
   }
@@ -4380,7 +4250,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   bool readbackSurface(const ReadbackDesc& desc, ReadbackPixels& pixels) override {
-    ObjcPtr<id<MTLTexture>> sourceTexture;
+    WMT::Reference<WMT::Texture> sourceTexture;
     Format format = Format::Unknown;
     Rect sourceRect{};
     u32 sourceLevel = desc.sourceLevel;
@@ -4406,59 +4276,72 @@ class MetalBackendDevice final : public BackendDevice {
       return false;
     }
 
-    @autoreleasepool {
-      auto descriptor = [MTLTextureDescriptor new];
-      descriptor.textureType = MTLTextureType2D;
-      descriptor.pixelFormat = toPixelFormat(format, limits_);
-      descriptor.width = width;
-      descriptor.height = height;
-      descriptor.depth = 1;
-      descriptor.mipmapLevelCount = 1;
-      descriptor.sampleCount = 1;
-      descriptor.arrayLength = 1;
-      descriptor.storageMode = MTLStorageModeShared;
-      descriptor.usage = MTLTextureUsageShaderRead;
-      id<MTLTexture> stagingTexture = [device_.get() newTextureWithDescriptor:descriptor];
-      [descriptor release];
+    {
+      WMTTextureInfo stagingInfo{};
+      stagingInfo.type = WMTTextureType2D;
+      stagingInfo.pixel_format = toPixelFormat(format, limits_);
+      stagingInfo.width = width;
+      stagingInfo.height = height;
+      stagingInfo.depth = 1;
+      stagingInfo.mipmap_level_count = 1;
+      stagingInfo.sample_count = 1;
+      stagingInfo.array_length = 1;
+      stagingInfo.options = WMTResourceStorageModeShared;
+      stagingInfo.usage = WMTTextureUsageShaderRead;
+      auto stagingTexture = wrappedDevice_.newTexture(stagingInfo);
       if (!stagingTexture) {
         return false;
       }
 
-      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(wrappedCommandQueue_);
-      id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
+      auto commandBuffer = bootstrapCommandBuffer(wrappedCommandQueue_);
       if (!commandBuffer) {
         return false;
       }
-      auto blit = [commandBuffer blitCommandEncoder];
+      auto blit = commandBuffer.blitCommandEncoder();
       if (!blit) {
         return false;
       }
-      [blit copyFromTexture:sourceTexture.get()
-                sourceSlice:0
-                sourceLevel:sourceLevel
-               sourceOrigin:MTLOriginMake(sourceRect.left, sourceRect.top, 0)
-                 sourceSize:MTLSizeMake(width, height, 1)
-                  toTexture:stagingTexture
-           destinationSlice:0
-           destinationLevel:0
-          destinationOrigin:MTLOriginMake(0, 0, 0)];
-      [blit endEncoding];
-      [commandBuffer commit];
-      [commandBuffer waitUntilCompleted];
-      {
-        std::lock_guard lock(mutex_);
-        CommandBufferDiagnostics diagnostics;
-        diagnostics.hasBlit = true;
-        submissionDiagnostics_.inspect(commandBuffer, diagnostics, "readback");
-      }
+      WMTOrigin srcOrigin{(uint64_t)sourceRect.left, (uint64_t)sourceRect.top, 0};
+      WMTSize srcSize{width, height, 1};
+      WMTOrigin dstOrigin{0, 0, 0};
+      blit.copyFromTextureToTexture(WMT::Texture{sourceTexture.handle}, 0, sourceLevel,
+                                    srcOrigin, srcSize,
+                                    WMT::Texture{stagingTexture.handle}, 0, 0, dstOrigin);
+      blit.endEncoding();
+      commandBuffer.commit();
+      commandBuffer.waitUntilCompleted();
 
       pixels.pitch = width * bpp;
       pixels.bytes.resize(static_cast<size_t>(pixels.pitch) * height);
-      auto region = MTLRegionMake2D(0, 0, width, height);
-      [stagingTexture getBytes:pixels.bytes.data()
-                   bytesPerRow:pixels.pitch
-                    fromRegion:region
-                   mipmapLevel:0];
+      // Read back from staging texture by mapping it via replaceRegion in reverse:
+      // stagingTexture is shared mode, so we can read its contents
+      // Use WMT::Texture::replaceRegion in REVERSE is not right.
+      // Instead, use a buffer-based readback: create buffer, blit texture to buffer, read buffer.
+      // For simplicity: use a staging buffer + blit texture-to-buffer pattern.
+      WMTBufferInfo bufInfo{};
+      bufInfo.length = static_cast<uint64_t>(pixels.pitch) * height;
+      bufInfo.options = WMTResourceStorageModeShared;
+      auto readbackBuf = wrappedDevice_.newBuffer(bufInfo);
+      if (readbackBuf) {
+        auto cmdBuf2 = bootstrapCommandBuffer(wrappedCommandQueue_);
+        if (cmdBuf2) {
+          auto blit2 = cmdBuf2.blitCommandEncoder();
+          if (blit2) {
+            WMTOrigin origin{0, 0, 0};
+            WMTSize size{width, height, 1};
+            blit2.copyFromTextureToBuffer(WMT::Texture{stagingTexture.handle}, 0, 0,
+                                          origin, size,
+                                          WMT::Buffer{readbackBuf.handle},
+                                          0, pixels.pitch, 0);
+            blit2.endEncoding();
+          }
+          cmdBuf2.commit();
+          cmdBuf2.waitUntilCompleted();
+        }
+        if (bufInfo.memory.ptr) {
+          std::memcpy(pixels.bytes.data(), bufInfo.memory.ptr, pixels.bytes.size());
+        }
+      }
       return true;
     }
   }
@@ -4472,12 +4355,11 @@ class MetalBackendDevice final : public BackendDevice {
     record.desc = desc;
     record.shadow.resize(static_cast<size_t>(desc.size));
     if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
-      @autoreleasepool {
-        const auto options = MTLResourceStorageModeShared;
-        id<MTLBuffer> buffer = [device_.get() newBufferWithLength:static_cast<NSUInteger>(desc.size)
-                                                          options:options];
-        record.buffer = ObjcPtr<id<MTLBuffer>>::adopt(buffer);
-      }
+      WMTBufferInfo info{};
+      info.length = desc.size;
+      info.options = WMTResourceStorageModeShared;
+      record.buffer = wrappedDevice_.newBuffer(info);
+      record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
     }
     buffers_[handle.value] = std::move(record);
     return handle;
@@ -4489,22 +4371,19 @@ class MetalBackendDevice final : public BackendDevice {
     TextureRecord record;
     record.desc = desc;
     if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
-      @autoreleasepool {
-        auto descriptor = [MTLTextureDescriptor new];
-        descriptor.textureType = toTextureType(desc.type, false);
-        descriptor.pixelFormat = toPixelFormat(desc.format, limits_);
-        descriptor.width = std::max(1u, desc.width);
-        descriptor.height = std::max(1u, desc.height);
-        descriptor.depth = std::max(1u, desc.depth);
-        descriptor.mipmapLevelCount = std::max(1u, desc.levels);
-        descriptor.sampleCount = 1;
-        descriptor.arrayLength = 1;
-        descriptor.storageMode = toStorageMode(desc.pool, desc.usage);
-        descriptor.usage = toTextureUsage(desc);
-        id<MTLTexture> texture = [device_.get() newTextureWithDescriptor:descriptor];
-        record.texture = ObjcPtr<id<MTLTexture>>::adopt(texture);
-        [descriptor release];
-      }
+      WMTTextureInfo info{};
+      info.type = toTextureType(desc.type, false);
+      info.pixel_format = toPixelFormat(desc.format, limits_);
+      info.width = std::max(1u, desc.width);
+      info.height = std::max(1u, desc.height);
+      info.depth = std::max(1u, desc.depth);
+      info.mipmap_level_count = std::max(1u, desc.levels);
+      info.sample_count = 1;
+      info.array_length = 1;
+      info.options = toResourceOptions(desc.pool, desc.usage);
+      info.usage = toTextureUsage(desc);
+      record.texture = wrappedDevice_.newTexture(info);
+      record.isPrivate = (info.options == WMTResourceStorageModePrivate);
     }
     textures_[handle.value] = std::move(record);
     if (shouldTraceTexture(handle)) {
@@ -4527,29 +4406,25 @@ class MetalBackendDevice final : public BackendDevice {
     SurfaceRecord record;
     record.desc = desc;
     if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
-      @autoreleasepool {
-        auto descriptor = [MTLTextureDescriptor new];
-        descriptor.textureType = toTextureType(TextureType::TwoD, desc.multiSampleType != MultiSampleType::None);
-        descriptor.pixelFormat = toPixelFormat(desc.format, limits_);
-        descriptor.width = std::max(1u, desc.width);
-        descriptor.height = std::max(1u, desc.height);
-        descriptor.depth = 1;
-        descriptor.mipmapLevelCount = 1;
-        descriptor.sampleCount = std::max(1u, sampleCount(desc.multiSampleType));
-        descriptor.storageMode = toStorageMode(desc.pool, desc.usage);
-        descriptor.usage = toTextureUsage(desc);
-        id<MTLTexture> texture = [device_.get() newTextureWithDescriptor:descriptor];
-        record.texture = ObjcPtr<id<MTLTexture>>::adopt(texture);
-        if (descriptor.sampleCount > 1) {
-          MTLTextureDescriptor* resolve = [descriptor copy];
-          resolve.sampleCount = 1;
-          resolve.textureType = MTLTextureType2D;
-          resolve.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
-          id<MTLTexture> resolveTexture = [device_.get() newTextureWithDescriptor:resolve];
-          record.resolveTexture = ObjcPtr<id<MTLTexture>>::adopt(resolveTexture);
-          [resolve release];
-        }
-        [descriptor release];
+      const uint32_t sc = std::max(1u, sampleCount(desc.multiSampleType));
+      WMTTextureInfo info{};
+      info.type = toTextureType(TextureType::TwoD, desc.multiSampleType != MultiSampleType::None);
+      info.pixel_format = toPixelFormat(desc.format, limits_);
+      info.width = std::max(1u, desc.width);
+      info.height = std::max(1u, desc.height);
+      info.depth = 1;
+      info.mipmap_level_count = 1;
+      info.sample_count = sc;
+      info.array_length = 1;
+      info.options = toResourceOptions(desc.pool, desc.usage);
+      info.usage = toTextureUsage(desc);
+      record.texture = wrappedDevice_.newTexture(info);
+      if (sc > 1) {
+        WMTTextureInfo resolveInfo = info;
+        resolveInfo.sample_count = 1;
+        resolveInfo.type = WMTTextureType2D;
+        resolveInfo.usage = static_cast<WMTTextureUsage>(WMTTextureUsageShaderRead | WMTTextureUsageRenderTarget);
+        record.resolveTexture = wrappedDevice_.newTexture(resolveInfo);
       }
     }
     surfaces_[handle.value] = std::move(record);
@@ -4569,21 +4444,21 @@ class MetalBackendDevice final : public BackendDevice {
     record.aliasTexture = textureHandle;
     record.level = level;
 
-    @autoreleasepool {
-      id<MTLTexture> textureView = nil;
-      id<MTLTexture> parentTexture = textureIt->second.texture.get();
-      if (level == 0 && desc.width == textureIt->second.desc.width && desc.height == textureIt->second.desc.height) {
-        textureView = [parentTexture retain];
+    {
+      WMT::Texture parentTexture{textureIt->second.texture.handle};
+      if (level == 0 && desc.width == textureIt->second.desc.width &&
+          desc.height == textureIt->second.desc.height) {
+        record.texture = WMT::Reference<WMT::Texture>(parentTexture);
       } else {
-        NSRange levels = NSMakeRange(level, 1);
-        NSRange slices = NSMakeRange(0, 1);
-        textureView = [parentTexture newTextureViewWithPixelFormat:parentTexture.pixelFormat
-                                                       textureType:parentTexture.textureType
-                                                            levels:levels
-                                                            slices:slices];
+        WMTTextureSwizzleChannels swizzle{
+            WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+            WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
+        uint64_t gpuId = 0;
+        auto view = parentTexture.newTextureView(
+            parentTexture.pixelFormat(), parentTexture.textureType(),
+            level, 1, 0, 1, swizzle, gpuId);
+        record.texture = view ? std::move(view) : WMT::Reference<WMT::Texture>(parentTexture);
       }
-      record.texture = textureView ? ObjcPtr<id<MTLTexture>>::adopt(textureView)
-                                   : ObjcPtr<id<MTLTexture>>::retain(parentTexture);
     }
 
     surfaces_[handle.value] = std::move(record);
@@ -4627,12 +4502,12 @@ class MetalBackendDevice final : public BackendDevice {
     BufferRecord& record = it->second;
     if ((flags & UsageDiscard) != 0) {
       std::fill(record.shadow.begin(), record.shadow.end(), 0);
-      if (record.buffer) {
-        std::memset([record.buffer.get() contents], 0, record.shadow.size());
+      if (record.contents) {
+        std::memset(record.contents, 0, record.shadow.size());
       }
     }
-    if (record.buffer) {
-      return [record.buffer.get() contents];
+    if (record.contents) {
+      return record.contents;
     }
     return record.shadow.empty() ? nullptr : record.shadow.data();
   }
@@ -4649,15 +4524,11 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
     it->second.shadow.assign(bytes.begin(), bytes.end());
-    if (!it->second.buffer || bytes.empty()) {
+    if (!it->second.buffer || bytes.empty() || !it->second.contents) {
       return;
     }
-    void* contents = [it->second.buffer.get() contents];
-    if (!contents) {
-      return;
-    }
-    const size_t copySize = std::min(bytes.size(), static_cast<size_t>([it->second.buffer.get() length]));
-    std::memcpy(contents, bytes.data(), copySize);
+    const size_t copySize = std::min(bytes.size(), static_cast<size_t>(it->second.desc.size));
+    std::memcpy(it->second.contents, bytes.data(), copySize);
   }
 
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
@@ -4714,66 +4585,56 @@ class MetalBackendDevice final : public BackendDevice {
     const auto normalizedBytes =
         normalizeTextureUploadBytes(it->second.desc.format, width, height, pitch, bytes, normalizedStorage);
 
-    id<MTLTexture> texture = it->second.texture.get();
-    const NSUInteger mipLevel = static_cast<NSUInteger>(level);
-    const NSUInteger mipWidth = static_cast<NSUInteger>(std::max(1u, width));
-    const NSUInteger mipHeight = static_cast<NSUInteger>(std::max(1u, height));
-    const MTLRegion region = MTLRegionMake2D(0, 0, mipWidth, mipHeight);
+    WMT::Texture texture{it->second.texture.handle};
+    const uint32_t mipLevel = level;
+    const uint32_t mipWidth = std::max(1u, width);
+    const uint32_t mipHeight = std::max(1u, height);
 
-    @autoreleasepool {
-      if (texture.storageMode != MTLStorageModePrivate) {
-        [texture replaceRegion:region mipmapLevel:mipLevel withBytes:normalizedBytes.data() bytesPerRow:pitch];
-      } else {
-        auto descriptor = [MTLTextureDescriptor new];
-        descriptor.textureType = MTLTextureType2D;
-        descriptor.pixelFormat = texture.pixelFormat;
-        descriptor.width = mipWidth;
-        descriptor.height = mipHeight;
-        descriptor.depth = 1;
-        descriptor.mipmapLevelCount = 1;
-        descriptor.sampleCount = 1;
-        descriptor.arrayLength = 1;
-        descriptor.storageMode = MTLStorageModeShared;
-        descriptor.usage = MTLTextureUsageShaderRead;
-        id<MTLTexture> stagingTexture = [device_.get() newTextureWithDescriptor:descriptor];
-        [descriptor release];
-        if (!stagingTexture) {
-          return;
-        }
-        [stagingTexture replaceRegion:region mipmapLevel:0 withBytes:normalizedBytes.data() bytesPerRow:pitch];
-
-        auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(wrappedCommandQueue_);
-        id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
-        if (!commandBuffer) {
-          [stagingTexture release];
-          return;
-        }
-        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-        if (!blit) {
-          [stagingTexture release];
-          return;
-        }
-        [blit copyFromTexture:stagingTexture
-                  sourceSlice:0
-                  sourceLevel:0
-                 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake(mipWidth, mipHeight, 1)
-                    toTexture:texture
-             destinationSlice:0
-             destinationLevel:mipLevel
-            destinationOrigin:MTLOriginMake(0, 0, 0)];
-        [blit endEncoding];
-        [commandBuffer commit];
-        [commandBuffer waitUntilCompleted];
-        CommandBufferDiagnostics diagnostics;
-        diagnostics.hasBlit = true;
-        submissionDiagnostics_.inspect(commandBuffer, diagnostics, "texture-upload");
-        [stagingTexture release];
+    if (!it->second.isPrivate) {
+      WMTOrigin origin{0, 0, 0};
+      WMTSize size{mipWidth, mipHeight, 1};
+      texture.replaceRegion(origin, size, mipLevel, 0, normalizedBytes.data(), pitch, 0);
+    } else {
+      WMTTextureInfo stagingInfo{};
+      stagingInfo.type = WMTTextureType2D;
+      stagingInfo.pixel_format = texture.pixelFormat();
+      stagingInfo.width = mipWidth;
+      stagingInfo.height = mipHeight;
+      stagingInfo.depth = 1;
+      stagingInfo.mipmap_level_count = 1;
+      stagingInfo.sample_count = 1;
+      stagingInfo.array_length = 1;
+      stagingInfo.options = WMTResourceStorageModeShared;
+      stagingInfo.usage = WMTTextureUsageShaderRead;
+      auto stagingTexture = wrappedDevice_.newTexture(stagingInfo);
+      if (!stagingTexture) {
+        return;
       }
+      {
+        WMTOrigin origin{0, 0, 0};
+        WMTSize size{mipWidth, mipHeight, 1};
+        WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
+                                                          normalizedBytes.data(), pitch, 0);
+      }
+      auto commandBuffer = bootstrapCommandBuffer(wrappedCommandQueue_);
+      if (!commandBuffer) {
+        return;
+      }
+      auto blit = commandBuffer.blitCommandEncoder();
+      if (!blit) {
+        return;
+      }
+      WMTOrigin origin{0, 0, 0};
+      WMTSize size{mipWidth, mipHeight, 1};
+      blit.copyFromTextureToTexture(WMT::Texture{stagingTexture.handle}, 0, 0,
+                                    origin, size, texture, 0, mipLevel, origin);
+      blit.endEncoding();
+      commandBuffer.commit();
+      commandBuffer.waitUntilCompleted();
     }
 
     if (level == 0 && shouldDumpGpuTexture(handle)) {
-      dumpTextureSnapshotUnlocked(handle, it->second.desc, it->second.texture.get());
+      dumpTextureSnapshotUnlocked(handle, it->second.desc, it->second.texture.handle);
     }
   }
 
@@ -5080,19 +4941,19 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   std::optional<metalqueue::QueueSubmissionRecord> encodeChunk(size_t slotIndex, const ChunkSlot& slot) {
-    @autoreleasepool {
-      if (!device_ || !commandQueue_) {
+    {
+      if (!wrappedDevice_ || !wrappedCommandQueue_) {
         return std::nullopt;
       }
 
-      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(wrappedCommandQueue_);
-      id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
-      if (!commandBuffer) {
+      auto ownedCommandBuffer = bootstrapCommandBuffer(wrappedCommandQueue_);
+      if (!ownedCommandBuffer) {
         return std::nullopt;
       }
+      auto commandBuffer = ownedCommandBuffer;
 
-      id<MTLRenderCommandEncoder> activeRenderEncoder = nil;
-      id<MTLBlitCommandEncoder> activeBlitEncoder = nil;
+      WMT::Reference<WMT::RenderCommandEncoder> activeRenderEncoder{};
+      WMT::Reference<WMT::BlitCommandEncoder> activeBlitEncoder{};
       AttachmentKey activeKey{};
       HazardBloom activeWriteBloom{};
       bool hasActiveRender = false;
@@ -5100,23 +4961,22 @@ class MetalBackendDevice final : public BackendDevice {
 
       auto flushRender = [&] {
         if (activeRenderEncoder) {
-          [activeRenderEncoder endEncoding];
-          [activeRenderEncoder release];
-          activeRenderEncoder = nil;
+          activeRenderEncoder.endEncoding();
+          activeRenderEncoder = {};
           hasActiveRender = false;
         }
       };
 
       auto flushBlit = [&] {
         if (activeBlitEncoder) {
-          [activeBlitEncoder endEncoding];
-          activeBlitEncoder = nil;
+          activeBlitEncoder.endEncoding();
+          activeBlitEncoder = {};
         }
       };
 
       auto startRenderPass = [&](const DrawDesc& draw, const std::optional<ClearDesc>& clear) {
         activeRenderEncoder = beginRenderPass(commandBuffer, draw, clear);
-        hasActiveRender = activeRenderEncoder != nil;
+        hasActiveRender = static_cast<bool>(activeRenderEncoder);
         activeKey = makeAttachmentKey(draw.rts);
         activeWriteBloom = makeAttachmentBloom(draw.rts);
       };
@@ -5199,7 +5059,7 @@ class MetalBackendDevice final : public BackendDevice {
 
       const u64 seqId = slot.seqId;
       return metalqueue::QueueSubmissionRecord{
-          .commandBuffer = [commandBuffer retain],
+          .commandBuffer = (id<MTLCommandBuffer>)(uintptr_t)commandBuffer.handle,
           .slotIndex = slotIndex,
           .seqId = seqId,
           .commands = std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
@@ -5208,56 +5068,57 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
-  id<MTLRenderCommandEncoder> beginRenderPass(id<MTLCommandBuffer> commandBuffer, const DrawDesc& draw,
-                                              const std::optional<ClearDesc>& clear) {
+  WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(WMT::CommandBuffer& commandBuffer,
+                                                             const DrawDesc& draw,
+                                                             const std::optional<ClearDesc>& clear) {
     auto* surface = findSurfaceUnlocked(draw.rts.color[0].handle.value);
     if (!surface || !surface->texture) {
-      return nil;
+      return {};
     }
-    @autoreleasepool {
-      auto desc = [MTLRenderPassDescriptor renderPassDescriptor];
-      auto attachment = desc.colorAttachments[0];
-      attachment.texture = surface->texture.get();
+    {
+      WMTRenderPassInfo passInfo{};
+      auto& attachment = passInfo.colors[0];
+      attachment.texture = surface->texture.handle;
       const bool discardAfterPresent = !clear.has_value() && backBufferDiscardAfterPresent_ &&
                                        draw.rts.color[0].handle == currentBackBuffer_;
-      attachment.loadAction = clear.has_value() ? MTLLoadActionClear
-                                                : (discardAfterPresent ? MTLLoadActionDontCare
-                                                                       : MTLLoadActionLoad);
-      attachment.storeAction = MTLStoreActionStore;
+      attachment.load_action = clear.has_value() ? WMTLoadActionClear
+                                                  : (discardAfterPresent ? WMTLoadActionDontCare
+                                                                         : WMTLoadActionLoad);
+      attachment.store_action = WMTStoreActionStore;
       if (surface->resolveTexture) {
-        attachment.resolveTexture = surface->resolveTexture.get();
-        attachment.storeAction = MTLStoreActionMultisampleResolve;
+        attachment.resolve_texture = surface->resolveTexture.handle;
+        attachment.store_action = WMTStoreActionMultisampleResolve;
       }
       if (clear.has_value()) {
-        attachment.clearColor = MTLClearColorMake(clear->color.r, clear->color.g, clear->color.b, clear->color.a);
+        attachment.clear_color = WMTClearColor{clear->color.r, clear->color.g,
+                                               clear->color.b, clear->color.a};
       }
 
       if (auto* depthSurface = findSurfaceUnlocked(draw.rts.depthStencil.handle.value);
           depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
         if (formatHasDepthAspect(depthSurface->desc.format)) {
-          auto depth = desc.depthAttachment;
-          depth.texture = depthSurface->texture.get();
-          depth.loadAction = (clear.has_value() && clear->clearDepth) ? MTLLoadActionClear : MTLLoadActionLoad;
-          depth.storeAction = MTLStoreActionStore;
+          passInfo.depth.texture = depthSurface->texture.handle;
+          passInfo.depth.load_action = (clear.has_value() && clear->clearDepth)
+                                           ? WMTLoadActionClear : WMTLoadActionLoad;
+          passInfo.depth.store_action = WMTStoreActionStore;
           if (clear.has_value()) {
-            depth.clearDepth = clear->depth;
+            passInfo.depth.clear_depth = clear->depth;
           }
         }
         if (formatHasStencilAspect(depthSurface->desc.format)) {
-          auto stencil = desc.stencilAttachment;
-          stencil.texture = depthSurface->texture.get();
-          stencil.loadAction =
-              (clear.has_value() && clear->clearStencil) ? MTLLoadActionClear : MTLLoadActionLoad;
-          stencil.storeAction = MTLStoreActionStore;
+          passInfo.stencil.texture = depthSurface->texture.handle;
+          passInfo.stencil.load_action = (clear.has_value() && clear->clearStencil)
+                                             ? WMTLoadActionClear : WMTLoadActionLoad;
+          passInfo.stencil.store_action = WMTStoreActionStore;
           if (clear.has_value()) {
-            stencil.clearStencil = clear->stencil;
+            passInfo.stencil.clear_stencil = clear->stencil;
           }
         }
       }
 
-      id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:desc];
+      auto encoder = commandBuffer.renderCommandEncoder(passInfo);
       if (!encoder) {
-        return nil;
+        return {};
       }
       if (discardAfterPresent) {
         backBufferDiscardAfterPresent_ = false;
@@ -5271,16 +5132,19 @@ class MetalBackendDevice final : public BackendDevice {
         viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
         viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
       }
-      [encoder setViewport:MTLViewport{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
-                                       static_cast<double>(draw.viewport.viewport.minZ),
-                                       static_cast<double>(draw.viewport.viewport.maxZ)}];
-      [encoder setCullMode:MTLCullModeNone];
-      return [encoder retain];
+      WMTViewport vp{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
+                     static_cast<double>(draw.viewport.viewport.minZ),
+                     static_cast<double>(draw.viewport.viewport.maxZ)};
+      encoder.setViewport(vp);
+      encoder.setRasterizerState(WMTTriangleFillModeFill, WMTCullModeNone,
+                                 WMTDepthClipModeClip, WMTWindingClockwise,
+                                 0.0f, 0.0f, 0.0f);
+      return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
     }
   }
 
-  void encodeDraw(id<MTLCommandBuffer> commandBuffer, id<MTLRenderCommandEncoder> encoder, const DrawDesc& draw,
-                  u64 seqId) {
+  void encodeDraw(WMT::CommandBuffer& commandBuffer, WMT::RenderCommandEncoder& encoder,
+                  const DrawDesc& draw, u64 seqId) {
     (void)commandBuffer;
     if (debugSkipAllDraws()) {
       if (queueTraceEnabled()) {
@@ -5319,27 +5183,25 @@ class MetalBackendDevice final : public BackendDevice {
     }
     auto depthState = depthStencilStateFor(depthKey);
     if (depthState) {
-      [encoder setDepthStencilState:depthState.get()];
-    } else if (debugForceVisibleDraw()) {
-      [encoder setDepthStencilState:nil];
+      encoder.setDepthStencilState(depthState);
     }
-    [encoder setRenderPipelineState:pipeline.get()];
+    encoder.setRenderPipelineState(pipeline);
     auto* uniforms = argbufArena_.allocate<DrawUniforms>(seqId);
     DrawUniforms fallbackUniforms{};
     if (!uniforms) {
       uniforms = &fallbackUniforms;
     }
     *uniforms = buildDrawUniforms(draw);
-    id<MTLBuffer> uploadedUniformBuffer =
-        [device_.get() newBufferWithBytes:uniforms
-                                   length:sizeof(DrawUniforms)
-                                  options:MTLResourceStorageModeShared];
-    ObjcPtr<id<MTLBuffer>> transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploadedUniformBuffer);
+    WMTBufferInfo uniformInfo{};
+    uniformInfo.length = sizeof(DrawUniforms);
+    uniformInfo.options = WMTResourceStorageModeShared;
+    uniformInfo.memory.set((void *)uniforms);
+    auto transientUniformBuffer = wrappedDevice_.newBuffer(uniformInfo);
     if (!transientUniformBuffer) {
       return;
     }
-    [encoder setVertexBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
-    [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
+    encoder.setVertexBuffer(transientUniformBuffer, 0, 0);
+    encoder.setFragmentBuffer(transientUniformBuffer, 0, 0);
     const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
     if (auto* surface = findSurfaceUnlocked(draw.rts.color[0].handle.value); surface && surface->texture) {
       double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
@@ -5350,68 +5212,69 @@ class MetalBackendDevice final : public BackendDevice {
         viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
         viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
       }
-      [encoder setViewport:MTLViewport{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
-                                       static_cast<double>(draw.viewport.viewport.minZ),
-                                       static_cast<double>(draw.viewport.viewport.maxZ)}];
-      MTLScissorRect scissor{};
+      encoder.setViewport(WMTViewport{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
+                                      static_cast<double>(draw.viewport.viewport.minZ),
+                                      static_cast<double>(draw.viewport.viewport.maxZ)});
+      WMTScissorRect scissor{};
       if (draw.viewport.scissorEnabled && !debugDisableScissor()) {
-        scissor.x = static_cast<NSUInteger>(std::max(0, draw.viewport.scissor.left));
-        scissor.y = static_cast<NSUInteger>(std::max(0, draw.viewport.scissor.top));
-        scissor.width = static_cast<NSUInteger>(std::max(0, draw.viewport.scissor.right - draw.viewport.scissor.left));
+        scissor.x = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.left));
+        scissor.y = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.top));
+        scissor.width = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.right - draw.viewport.scissor.left));
         scissor.height =
-            static_cast<NSUInteger>(std::max(0, draw.viewport.scissor.bottom - draw.viewport.scissor.top));
+            static_cast<uint64_t>(std::max(0, draw.viewport.scissor.bottom - draw.viewport.scissor.top));
       } else {
         scissor.x = 0;
         scissor.y = 0;
-        scissor.width = static_cast<NSUInteger>(std::max(1u, surface->desc.width));
-        scissor.height = static_cast<NSUInteger>(std::max(1u, surface->desc.height));
+        scissor.width = static_cast<uint64_t>(std::max(1u, surface->desc.width));
+        scissor.height = static_cast<uint64_t>(std::max(1u, surface->desc.height));
       }
-      [encoder setScissorRect:scissor];
+      encoder.setScissorRect(scissor);
       if (ffLayout && ffLayout->preTransformed) {
-        [encoder setCullMode:MTLCullModeNone];
+        encoder.setCullMode(WMTCullModeNone);
       } else {
-        [encoder setCullMode:toCullMode(draw.rs.values.contains(RS_CULL_MODE) ? draw.rs.values.at(RS_CULL_MODE) : 1u)];
+        encoder.setCullMode(static_cast<WMTCullMode>(toCullMode(
+            draw.rs.values.contains(RS_CULL_MODE) ? draw.rs.values.at(RS_CULL_MODE) : 1u)));
       }
     }
     static std::atomic<int> ffTraceRemaining{fixedFunctionTraceBudget()};
     const u32 primitiveCount = std::max<u32>(1, draw.primitiveCount);
-    const NSUInteger vertexCount =
-        static_cast<NSUInteger>(std::max(1u, primitiveVertexCount(draw.primitiveType, primitiveCount)));
+    const uint64_t vertexCount =
+        static_cast<uint64_t>(std::max(1u, primitiveVertexCount(draw.primitiveType, primitiveCount)));
     const bool indexedDraw = draw.indexBuffer || !draw.userIndexData.empty();
-    ObjcPtr<id<MTLBuffer>> transientVertexBuffer;
+    WMT::Reference<WMT::Buffer> transientVertexBuffer;
     std::span<const u8> vertexBytes;
-    id<MTLBuffer> vertexBuffer = nil;
-    NSUInteger vertexBufferOffset = 0;
+    WMT::Buffer vertexBuffer{};
+    uint64_t vertexBufferOffset = 0;
+    auto makeTransientBuffer = [&](const void* data, size_t len) -> WMT::Reference<WMT::Buffer> {
+      WMTBufferInfo bi{};
+      bi.length = len;
+      bi.options = WMTResourceStorageModeShared;
+      bi.memory.set((void *)data);
+      return wrappedDevice_.newBuffer(bi);
+    };
     if (!draw.userVertexData.empty()) {
-      id<MTLBuffer> uploaded =
-          [device_.get() newBufferWithBytes:draw.userVertexData.data()
-                                     length:static_cast<NSUInteger>(draw.userVertexData.size())
-                                    options:MTLResourceStorageModeShared];
-      transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
-      vertexBuffer = transientVertexBuffer.get();
-      vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
+      transientVertexBuffer = makeTransientBuffer(draw.userVertexData.data(),
+                                                   draw.userVertexData.size());
+      vertexBuffer = transientVertexBuffer;
+      vertexBufferOffset = draw.vertexDecl.streams[0].offset;
       vertexBytes = draw.userVertexData;
     } else if (draw.vertexDecl.streams[0].buffer) {
       if (auto* buffer = findBufferUnlocked(draw.vertexDecl.streams[0].buffer->handle().value);
           buffer && buffer->buffer) {
-        vertexBuffer = buffer->buffer.get();
-        vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
+        vertexBuffer = WMT::Buffer{buffer->buffer.handle};
+        vertexBufferOffset = draw.vertexDecl.streams[0].offset;
         if (!buffer->shadow.empty()) {
           vertexBytes = buffer->shadow;
-        } else if (void* contents = [buffer->buffer.get() contents]; contents) {
-          vertexBytes = std::span<const u8>(static_cast<const u8*>(contents),
-                                            static_cast<size_t>([buffer->buffer.get() length]));
+        } else if (buffer->contents) {
+          vertexBytes = std::span<const u8>(static_cast<const u8*>(buffer->contents),
+                                            static_cast<size_t>(buffer->desc.size));
         }
       } else {
         const auto bytes = draw.vertexDecl.streams[0].buffer->bytes();
         if (!bytes.empty()) {
-          id<MTLBuffer> uploaded =
-              [device_.get() newBufferWithBytes:bytes.data()
-                                         length:static_cast<NSUInteger>(bytes.size())
-                                        options:MTLResourceStorageModeShared];
-          transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
-          vertexBuffer = transientVertexBuffer.get();
-          vertexBufferOffset = static_cast<NSUInteger>(draw.vertexDecl.streams[0].offset);
+          transientVertexBuffer = makeTransientBuffer(bytes.data(), bytes.size());
+          vertexBuffer = transientVertexBuffer;
+          vertexBufferOffset = draw.vertexDecl.streams[0].offset;
           vertexBytes = bytes;
         }
       }
@@ -5489,8 +5352,8 @@ class MetalBackendDevice final : public BackendDevice {
       uniforms->vertexStreamStride =
           draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride;
       if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
-        vertexBufferOffset += static_cast<NSUInteger>(draw.startVertex) *
-                              static_cast<NSUInteger>(uniforms->vertexStreamStride);
+        vertexBufferOffset += static_cast<uint64_t>(draw.startVertex) *
+                              static_cast<uint64_t>(uniforms->vertexStreamStride);
         uniforms->vertexBaseIndex = 0;
       } else {
         uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
@@ -5502,16 +5365,17 @@ class MetalBackendDevice final : public BackendDevice {
                                     static_cast<f32>(std::max(1u, targetSurface->desc.height))};
         }
       }
-      transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(
-          [device_.get() newBufferWithBytes:uniforms
-                                     length:sizeof(DrawUniforms)
-                                    options:MTLResourceStorageModeShared]);
+      {
+        WMTBufferInfo bi{}; bi.length = sizeof(DrawUniforms);
+        bi.options = WMTResourceStorageModeShared; bi.memory.set((void *)uniforms);
+        transientUniformBuffer = wrappedDevice_.newBuffer(bi);
+      }
       if (!transientUniformBuffer) {
         return;
       }
-      [encoder setVertexBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
-      [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
-      [encoder setVertexBuffer:vertexBuffer offset:vertexBufferOffset atIndex:1];
+      encoder.setVertexBuffer(transientUniformBuffer, 0, 0);
+      encoder.setFragmentBuffer(transientUniformBuffer, 0, 0);
+      encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
 
       const u64 ffTraceTex0 = fixedFunctionTraceTextureHandle();
       const bool forceTrace =
@@ -5645,11 +5509,9 @@ class MetalBackendDevice final : public BackendDevice {
             std::span<const u8> indexBytes;
             if (indexRecord && !indexRecord->shadow.empty()) {
               indexBytes = indexRecord->shadow;
-            } else if (indexRecord && indexRecord->buffer) {
-              if (void* contents = [indexRecord->buffer.get() contents]; contents) {
-                indexBytes = std::span<const u8>(static_cast<const u8*>(contents),
-                                                 static_cast<size_t>([indexRecord->buffer.get() length]));
-              }
+            } else if (indexRecord && indexRecord->buffer && indexRecord->contents) {
+              indexBytes = std::span<const u8>(static_cast<const u8*>(indexRecord->contents),
+                                               static_cast<size_t>(indexRecord->desc.size));
             }
             if (!indexBytes.empty()) {
               trace << " idx=";
@@ -5765,22 +5627,23 @@ class MetalBackendDevice final : public BackendDevice {
           ffLayout ? (draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride)
                    : computeVertexDeclStride(draw);
       if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
-        vertexBufferOffset += static_cast<NSUInteger>(draw.startVertex) *
-                              static_cast<NSUInteger>(uniforms->vertexStreamStride);
+        vertexBufferOffset += static_cast<uint64_t>(draw.startVertex) *
+                              static_cast<uint64_t>(uniforms->vertexStreamStride);
         uniforms->vertexBaseIndex = 0;
       } else {
         uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
       }
-      transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(
-          [device_.get() newBufferWithBytes:uniforms
-                                     length:sizeof(DrawUniforms)
-                                    options:MTLResourceStorageModeShared]);
+      {
+        WMTBufferInfo bi{}; bi.length = sizeof(DrawUniforms);
+        bi.options = WMTResourceStorageModeShared; bi.memory.set((void *)uniforms);
+        transientUniformBuffer = wrappedDevice_.newBuffer(bi);
+      }
       if (!transientUniformBuffer) {
         return;
       }
-      [encoder setVertexBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
-      [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
-      [encoder setVertexBuffer:vertexBuffer offset:vertexBufferOffset atIndex:1];
+      encoder.setVertexBuffer(transientUniformBuffer, 0, 0);
+      encoder.setFragmentBuffer(transientUniformBuffer, 0, 0);
+      encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
     }
     for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
       if (!draw.textures[stage].handle) {
@@ -5806,11 +5669,11 @@ class MetalBackendDevice final : public BackendDevice {
               << " levels=" << texture->desc.levels;
           emitTextureTraceLine(out.str());
         }
-        [encoder setFragmentTexture:texture->texture.get() atIndex:stage];
+        encoder.setFragmentTexture(WMT::Texture{texture->texture.handle}, (uint8_t)stage);
       }
       auto sampler = makeSampler(draw.samplers[stage]);
       if (sampler) {
-        [encoder setFragmentSamplerState:sampler.get() atIndex:stage];
+        encoder.setFragmentSamplerState(sampler, (uint8_t)stage);
       }
     }
     const auto primitiveType = toPrimitiveType(draw.primitiveType);
@@ -5850,11 +5713,9 @@ class MetalBackendDevice final : public BackendDevice {
         auto* indexRecord = findBufferUnlocked(draw.indexBuffer.value);
         if (indexRecord && !indexRecord->shadow.empty()) {
           indexBytes = indexRecord->shadow;
-        } else if (indexRecord && indexRecord->buffer) {
-          if (void* contents = [indexRecord->buffer.get() contents]; contents) {
-            indexBytes = std::span<const u8>(static_cast<const u8*>(contents),
-                                             static_cast<size_t>([indexRecord->buffer.get() length]));
-          }
+        } else if (indexRecord && indexRecord->buffer && indexRecord->contents) {
+          indexBytes = std::span<const u8>(static_cast<const u8*>(indexRecord->contents),
+                                           static_cast<size_t>(indexRecord->desc.size));
         }
       }
       const size_t stride = static_cast<size_t>(ffLayout ? (uniforms->vertexStreamStride ? uniforms->vertexStreamStride
@@ -5876,7 +5737,7 @@ class MetalBackendDevice final : public BackendDevice {
       }
       if (!vertexBytes.empty() && !indexBytes.empty() && stride != 0) {
         std::vector<u8> expandedVertices(static_cast<size_t>(vertexCount) * stride, 0);
-        for (NSUInteger i = 0; i < vertexCount; ++i) {
+        for (uint64_t i = 0; i < vertexCount; ++i) {
           i32 vertexIndex = draw.baseVertexIndex;
           bool haveIndex = false;
           if (draw.indexType == IndexType::UInt16 &&
@@ -5904,13 +5765,15 @@ class MetalBackendDevice final : public BackendDevice {
           std::memcpy(expandedVertices.data() + static_cast<size_t>(i) * stride,
                       vertexBytes.data() + sourceOffset, stride);
         }
-        id<MTLBuffer> expandedBuffer =
-            [device_.get() newBufferWithBytes:expandedVertices.data()
-                                       length:static_cast<NSUInteger>(expandedVertices.size())
-                                      options:MTLResourceStorageModeShared];
-        if (expandedBuffer) {
-          transientVertexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(expandedBuffer);
-          [encoder setVertexBuffer:transientVertexBuffer.get() offset:0 atIndex:1];
+        {
+          WMTBufferInfo bi{};
+          bi.length = expandedVertices.size();
+          bi.options = WMTResourceStorageModeShared;
+          bi.memory.set((void *)expandedVertices.data());
+          transientVertexBuffer = wrappedDevice_.newBuffer(bi);
+        }
+        if (transientVertexBuffer) {
+          encoder.setVertexBuffer(transientVertexBuffer, 0, 1);
           if (ffLayout && ffLayout->preTransformed && vertexCount >= 6 && draw.textures[0].handle != Handle{}) {
             const bool traceExpanded = [] {
               const char* env = std::getenv("DXMT_TRACE_FVF_EXPANDED");
@@ -5928,7 +5791,7 @@ class MetalBackendDevice final : public BackendDevice {
               trace << "[dxmt9-expanded] seq=" << static_cast<unsigned long long>(seqId)
                     << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
                     << " stride=" << stride;
-              for (NSUInteger i = 0; i < std::min<NSUInteger>(vertexCount, 6); ++i) {
+              for (uint64_t i = 0; i < std::min<uint64_t>(vertexCount, 6); ++i) {
                 const size_t base = static_cast<size_t>(i) * stride;
                 trace << " v" << i << "=("
                       << readExpandedF32(base + ffLayout->positionOffset + 0) << ","
@@ -5947,15 +5810,16 @@ class MetalBackendDevice final : public BackendDevice {
           vertexBytes = std::span<const u8>(expandedVertices.data(), expandedVertices.size());
           uniforms->vertexStreamOffset = 0;
           uniforms->vertexBaseIndex = 0;
-          transientUniformBuffer = ObjcPtr<id<MTLBuffer>>::adopt(
-              [device_.get() newBufferWithBytes:uniforms
-                                         length:sizeof(DrawUniforms)
-                                        options:MTLResourceStorageModeShared]);
+          {
+            WMTBufferInfo bi{}; bi.length = sizeof(DrawUniforms);
+            bi.options = WMTResourceStorageModeShared; bi.memory.set((void *)uniforms);
+            transientUniformBuffer = wrappedDevice_.newBuffer(bi);
+          }
           if (!transientUniformBuffer) {
             return;
           }
-          [encoder setVertexBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
-          [encoder setFragmentBuffer:transientUniformBuffer.get() offset:0 atIndex:0];
+          encoder.setVertexBuffer(transientUniformBuffer, 0, 0);
+          encoder.setFragmentBuffer(transientUniformBuffer, 0, 0);
           expandedIndexedDraw = true;
         }
       }
@@ -5967,50 +5831,41 @@ class MetalBackendDevice final : public BackendDevice {
         emitQueueTraceLine(out.str());
       }
       if (expandedIndexedDraw) {
-        [encoder drawPrimitives:primitiveType vertexStart:0 vertexCount:vertexCount];
+        encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
         return;
       }
-      ObjcPtr<id<MTLBuffer>> transientIndexBuffer;
-      id<MTLBuffer> indexBuffer = nil;
-      NSUInteger indexBufferOffset = static_cast<NSUInteger>(draw.startIndex) * indexElementSize(draw.indexType);
+      WMT::Reference<WMT::Buffer> transientIndexBuffer;
+      WMT::Buffer indexBuffer{};
+      uint64_t indexBufferOffset = static_cast<uint64_t>(draw.startIndex) * indexElementSize(draw.indexType);
       if (!draw.userIndexData.empty()) {
-        id<MTLBuffer> uploaded =
-            [device_.get() newBufferWithBytes:draw.userIndexData.data()
-                                       length:static_cast<NSUInteger>(draw.userIndexData.size())
-                                      options:MTLResourceStorageModeShared];
-        transientIndexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
-        indexBuffer = transientIndexBuffer.get();
+        WMTBufferInfo bi{}; bi.length = draw.userIndexData.size();
+        bi.options = WMTResourceStorageModeShared;
+        bi.memory.set((void *)draw.userIndexData.data());
+        transientIndexBuffer = wrappedDevice_.newBuffer(bi);
+        indexBuffer = transientIndexBuffer;
       } else {
         auto* buffer = findBufferUnlocked(draw.indexBuffer.value);
         if (buffer && buffer->buffer) {
-          indexBuffer = buffer->buffer.get();
+          indexBuffer = WMT::Buffer{buffer->buffer.handle};
         } else if (buffer && !buffer->shadow.empty()) {
-          id<MTLBuffer> uploaded =
-              [device_.get() newBufferWithBytes:buffer->shadow.data()
-                                         length:static_cast<NSUInteger>(buffer->shadow.size())
-                                        options:MTLResourceStorageModeShared];
-          transientIndexBuffer = ObjcPtr<id<MTLBuffer>>::adopt(uploaded);
-          indexBuffer = transientIndexBuffer.get();
+          WMTBufferInfo bi{}; bi.length = buffer->shadow.size();
+          bi.options = WMTResourceStorageModeShared;
+          bi.memory.set((void *)buffer->shadow.data());
+          transientIndexBuffer = wrappedDevice_.newBuffer(bi);
+          indexBuffer = transientIndexBuffer;
         }
       }
       if (indexBuffer) {
-        [encoder drawIndexedPrimitives:primitiveType
-                            indexCount:vertexCount
-                             indexType:toIndexType(draw.indexType)
-                           indexBuffer:indexBuffer
-                     indexBufferOffset:indexBufferOffset
-                         instanceCount:1
-                            baseVertex:0
-                          baseInstance:0];
+        encoder.drawIndexedPrimitives(primitiveType, toIndexType(draw.indexType),
+                                      (uint64_t)vertexCount, indexBuffer, indexBufferOffset,
+                                      1, 0, 0);
         return;
       }
     }
-    [encoder drawPrimitives:primitiveType
-                vertexStart:0
-                vertexCount:vertexCount];
+    encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
   }
 
-  void encodeClearPass(id<MTLCommandBuffer> commandBuffer, const ClearDesc& clear) {
+  void encodeClearPass(WMT::CommandBuffer& commandBuffer, const ClearDesc& clear) {
     if (clear.colorAttachments[0].handle == Handle{} && clear.depthStencil.handle == Handle{}) {
       return;
     }
@@ -6018,181 +5873,157 @@ class MetalBackendDevice final : public BackendDevice {
     if (!surface || !surface->texture) {
       return;
     }
-    @autoreleasepool {
-      auto desc = [MTLRenderPassDescriptor renderPassDescriptor];
-      auto attachment = desc.colorAttachments[0];
-      attachment.texture = surface->texture.get();
-      attachment.loadAction = MTLLoadActionClear;
-      attachment.storeAction = MTLStoreActionStore;
-      if (surface->resolveTexture) {
-        attachment.resolveTexture = surface->resolveTexture.get();
-        attachment.storeAction = MTLStoreActionMultisampleResolve;
-      }
-      attachment.clearColor = MTLClearColorMake(clear.color.r, clear.color.g, clear.color.b, clear.color.a);
-      auto encoder = [commandBuffer renderCommandEncoderWithDescriptor:desc];
-      if (encoder) {
-        [encoder endEncoding];
-      }
+    WMTRenderPassInfo passInfo{};
+    passInfo.colors[0].texture = surface->texture.handle;
+    passInfo.colors[0].load_action = WMTLoadActionClear;
+    passInfo.colors[0].store_action = WMTStoreActionStore;
+    if (surface->resolveTexture) {
+      passInfo.colors[0].resolve_texture = surface->resolveTexture.handle;
+      passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
+    }
+    passInfo.colors[0].clear_color = WMTClearColor{clear.color.r, clear.color.g,
+                                                   clear.color.b, clear.color.a};
+    auto encoder = commandBuffer.renderCommandEncoder(passInfo);
+    if (encoder) {
+      encoder.endEncoding();
     }
   }
 
-  void encodeColorFillPass(id<MTLCommandBuffer> commandBuffer, const ClearDesc& clear) {
+  void encodeColorFillPass(WMT::CommandBuffer& commandBuffer, const ClearDesc& clear) {
     encodeClearPass(commandBuffer, clear);
   }
 
-  void encodeColorFill(id<MTLCommandBuffer> commandBuffer, const ColorFillDesc& fill) {
+  void encodeColorFill(WMT::CommandBuffer& commandBuffer, const ColorFillDesc& fill) {
     auto* surface = findSurfaceUnlocked(fill.destination.value);
     if (!surface || !surface->texture) {
       return;
     }
-    @autoreleasepool {
-      auto desc = [MTLRenderPassDescriptor renderPassDescriptor];
-      auto attachment = desc.colorAttachments[0];
-      attachment.texture = surface->texture.get();
-      attachment.loadAction = fill.hasRect ? MTLLoadActionLoad : MTLLoadActionClear;
-      attachment.storeAction = MTLStoreActionStore;
-      if (surface->resolveTexture) {
-        attachment.resolveTexture = surface->resolveTexture.get();
-        attachment.storeAction = MTLStoreActionMultisampleResolve;
-      }
-      if (!fill.hasRect) {
-        attachment.clearColor = MTLClearColorMake(fill.color.r, fill.color.g, fill.color.b, fill.color.a);
-      }
-      auto encoder = [commandBuffer renderCommandEncoderWithDescriptor:desc];
-      if (!encoder) {
-        return;
-      }
-      if (fill.hasRect) {
-        MTLScissorRect rect{};
-        rect.x = static_cast<NSUInteger>(std::max(0, fill.rect.left));
-        rect.y = static_cast<NSUInteger>(std::max(0, fill.rect.top));
-        rect.width = static_cast<NSUInteger>(std::max(0, fill.rect.right - fill.rect.left));
-        rect.height = static_cast<NSUInteger>(std::max(0, fill.rect.bottom - fill.rect.top));
-        [encoder setScissorRect:rect];
-        auto pipeline = pipelineForColorFill(fill.color, static_cast<u32>(toPixelFormat(surface->desc.format, limits_))).get();
-        if (pipeline) {
-          [encoder setRenderPipelineState:pipeline.get()];
-          [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-        }
-      }
-      [encoder endEncoding];
+    WMTRenderPassInfo passInfo{};
+    passInfo.colors[0].texture = surface->texture.handle;
+    passInfo.colors[0].load_action = fill.hasRect ? WMTLoadActionLoad : WMTLoadActionClear;
+    passInfo.colors[0].store_action = WMTStoreActionStore;
+    if (surface->resolveTexture) {
+      passInfo.colors[0].resolve_texture = surface->resolveTexture.handle;
+      passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
     }
+    if (!fill.hasRect) {
+      passInfo.colors[0].clear_color = WMTClearColor{fill.color.r, fill.color.g,
+                                                     fill.color.b, fill.color.a};
+    }
+    auto encoder = commandBuffer.renderCommandEncoder(passInfo);
+    if (!encoder) {
+      return;
+    }
+    if (fill.hasRect) {
+      WMTScissorRect rect{};
+      rect.x = static_cast<uint64_t>(std::max(0, fill.rect.left));
+      rect.y = static_cast<uint64_t>(std::max(0, fill.rect.top));
+      rect.width = static_cast<uint64_t>(std::max(0, fill.rect.right - fill.rect.left));
+      rect.height = static_cast<uint64_t>(std::max(0, fill.rect.bottom - fill.rect.top));
+      encoder.setScissorRect(rect);
+      auto pipeline = pipelineForColorFill(fill.color,
+                        static_cast<u32>(toPixelFormat(surface->desc.format, limits_))).get();
+      if (pipeline) {
+        encoder.setRenderPipelineState(pipeline);
+        encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+      }
+    }
+    encoder.endEncoding();
   }
 
-  void encodeSurfaceCopy(id<MTLCommandBuffer> commandBuffer, const SurfaceCopyDesc& copy) {
+  void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer, const SurfaceCopyDesc& copy) {
     auto* src = findSurfaceUnlocked(copy.source.value);
     auto* dst = findSurfaceUnlocked(copy.destination.value);
     if (!src || !dst || !src->texture || !dst->texture) {
       return;
     }
-    @autoreleasepool {
-      auto blit = [commandBuffer blitCommandEncoder];
-      if (!blit) {
-        return;
-      }
-      const NSUInteger srcLevel = copy.sourceLevel;
-      const NSUInteger dstLevel = copy.destinationLevel;
-      const NSUInteger srcW = std::max(1, copy.sourceRect.right - copy.sourceRect.left);
-      const NSUInteger srcH = std::max(1, copy.sourceRect.bottom - copy.sourceRect.top);
-      const NSUInteger dstW = std::max(1, copy.destinationRect.right - copy.destinationRect.left);
-      const NSUInteger dstH = std::max(1, copy.destinationRect.bottom - copy.destinationRect.top);
-      if (srcW == dstW && srcH == dstH) {
-        [blit copyFromTexture:src->texture.get()
-                  sourceSlice:0
-                  sourceLevel:srcLevel
-                 sourceOrigin:MTLOriginMake(copy.sourceRect.left, copy.sourceRect.top, 0)
-                   sourceSize:MTLSizeMake(srcW, srcH, 1)
-                    toTexture:dst->texture.get()
-             destinationSlice:0
-             destinationLevel:dstLevel
-            destinationOrigin:MTLOriginMake(copy.destinationRect.left, copy.destinationRect.top, 0)];
-      } else {
-        [blit endEncoding];
-        encodeStretchRect(commandBuffer, {
-                                    .source = copy.source,
-                                    .destination = copy.destination,
-                                    .sourceRect = copy.sourceRect,
-                                    .destinationRect = copy.destinationRect,
-                                    .linear = true,
-                                    .sourceSampleCount = src->desc.multiSampleType == MultiSampleType::None ? 1u : sampleCount(src->desc.multiSampleType),
-                                    .destinationSampleCount = dst->desc.multiSampleType == MultiSampleType::None ? 1u : sampleCount(dst->desc.multiSampleType),
-                                });
-        return;
-      }
-      [blit endEncoding];
+    const uint32_t srcW = static_cast<uint32_t>(std::max(1, copy.sourceRect.right - copy.sourceRect.left));
+    const uint32_t srcH = static_cast<uint32_t>(std::max(1, copy.sourceRect.bottom - copy.sourceRect.top));
+    const uint32_t dstW = static_cast<uint32_t>(std::max(1, copy.destinationRect.right - copy.destinationRect.left));
+    const uint32_t dstH = static_cast<uint32_t>(std::max(1, copy.destinationRect.bottom - copy.destinationRect.top));
+    if (srcW == dstW && srcH == dstH) {
+      auto blit = commandBuffer.blitCommandEncoder();
+      if (!blit) return;
+      WMTOrigin srcOrigin{(uint64_t)copy.sourceRect.left, (uint64_t)copy.sourceRect.top, 0};
+      WMTSize srcSize{srcW, srcH, 1};
+      WMTOrigin dstOrigin{(uint64_t)copy.destinationRect.left, (uint64_t)copy.destinationRect.top, 0};
+      blit.copyFromTextureToTexture(WMT::Texture{src->texture.handle}, 0, copy.sourceLevel,
+                                    srcOrigin, srcSize,
+                                    WMT::Texture{dst->texture.handle}, 0, copy.destinationLevel,
+                                    dstOrigin);
+      blit.endEncoding();
+    } else {
+      encodeStretchRect(commandBuffer, {
+          .source = copy.source,
+          .destination = copy.destination,
+          .sourceRect = copy.sourceRect,
+          .destinationRect = copy.destinationRect,
+          .linear = true,
+          .sourceSampleCount = src->desc.multiSampleType == MultiSampleType::None ? 1u : sampleCount(src->desc.multiSampleType),
+          .destinationSampleCount = dst->desc.multiSampleType == MultiSampleType::None ? 1u : sampleCount(dst->desc.multiSampleType),
+      });
     }
   }
 
-  void encodeStretchRect(id<MTLCommandBuffer> commandBuffer, const StretchRectDesc& stretch) {
+  void encodeStretchRect(WMT::CommandBuffer& commandBuffer, const StretchRectDesc& stretch) {
     auto* src = findSurfaceUnlocked(stretch.source.value);
     auto* dst = findSurfaceUnlocked(stretch.destination.value);
     if (!src || !dst || !src->texture || !dst->texture) {
       return;
     }
-    @autoreleasepool {
-      auto desc = [MTLRenderPassDescriptor renderPassDescriptor];
-      auto attachment = desc.colorAttachments[0];
-      attachment.texture = dst->texture.get();
-      attachment.loadAction = MTLLoadActionLoad;
-      attachment.storeAction = MTLStoreActionStore;
+    {
+      WMTRenderPassInfo passInfo{};
+      passInfo.colors[0].texture = dst->texture.handle;
+      passInfo.colors[0].load_action = WMTLoadActionLoad;
+      passInfo.colors[0].store_action = WMTStoreActionStore;
       if (dst->resolveTexture) {
-        attachment.resolveTexture = dst->resolveTexture.get();
-        attachment.storeAction = MTLStoreActionMultisampleResolve;
+        passInfo.colors[0].resolve_texture = dst->resolveTexture.handle;
+        passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
       }
-      auto encoder = [commandBuffer renderCommandEncoderWithDescriptor:desc];
-      if (!encoder) {
-        return;
-      }
-      auto pipeline = pipelineForStretchRect(stretch, static_cast<u32>(toPixelFormat(dst->desc.format, limits_))).get();
+      auto encoder = commandBuffer.renderCommandEncoder(passInfo);
+      if (!encoder) return;
+      auto pipeline = pipelineForStretchRect(stretch,
+                        static_cast<u32>(toPixelFormat(dst->desc.format, limits_))).get();
       if (!pipeline) {
-        [encoder endEncoding];
+        encoder.endEncoding();
         return;
       }
-      [encoder setRenderPipelineState:pipeline.get()];
-      [encoder setFragmentTexture:src->texture.get() atIndex:0];
+      encoder.setRenderPipelineState(pipeline);
+      encoder.setFragmentTexture(WMT::Texture{src->texture.handle}, 0);
       auto sampler = makeSampler(stretch.linear);
-      if (sampler) {
-        [encoder setFragmentSamplerState:sampler.get() atIndex:0];
-      }
-      [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-      [encoder endEncoding];
+      if (sampler) encoder.setFragmentSamplerState(sampler, 0);
+      encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+      encoder.endEncoding();
     }
   }
 
-  void encodeReadback(id<MTLCommandBuffer> commandBuffer, const ReadbackDesc& readback) {
+  void encodeReadback(WMT::CommandBuffer& commandBuffer, const ReadbackDesc& readback) {
     auto* src = findSurfaceUnlocked(readback.source.value);
     auto* dst = findSurfaceUnlocked(readback.destination.value);
     if (!src || !dst || !src->texture) {
       return;
     }
-    @autoreleasepool {
-      auto blit = [commandBuffer blitCommandEncoder];
-      if (!blit) {
+    {
+      auto blit = commandBuffer.blitCommandEncoder();
+      if (!blit) return;
+      WMT::Texture sourceTexture{src->resolveTexture ? src->resolveTexture.handle : src->texture.handle};
+      const uint32_t w = static_cast<uint32_t>(std::max(1, readback.sourceRect.right - readback.sourceRect.left));
+      const uint32_t h = static_cast<uint32_t>(std::max(1, readback.sourceRect.bottom - readback.sourceRect.top));
+      if (!dst->texture) {
+        blit.endEncoding();
         return;
       }
-      id<MTLTexture> sourceTexture = src->resolveTexture ? src->resolveTexture.get() : src->texture.get();
-      auto region = MTLRegionMake2D(readback.sourceRect.left, readback.sourceRect.top,
-                                    std::max(1, readback.sourceRect.right - readback.sourceRect.left),
-                                    std::max(1, readback.sourceRect.bottom - readback.sourceRect.top));
-      auto* dstSurface = findSurfaceUnlocked(readback.destination.value);
-      if (!dstSurface || !dstSurface->texture) {
-        [blit endEncoding];
-        return;
-      }
-      [blit copyFromTexture:sourceTexture
-                sourceSlice:0
-                sourceLevel:readback.sourceLevel
-               sourceOrigin:region.origin
-                 sourceSize:region.size
-                  toTexture:dstSurface->texture.get()
-           destinationSlice:0
-           destinationLevel:0
-          destinationOrigin:MTLOriginMake(0, 0, 0)];
-      [blit endEncoding];
+      WMTOrigin srcOrigin{(uint64_t)readback.sourceRect.left, (uint64_t)readback.sourceRect.top, 0};
+      WMTSize srcSize{w, h, 1};
+      WMTOrigin dstOrigin{0, 0, 0};
+      blit.copyFromTextureToTexture(sourceTexture, 0, readback.sourceLevel,
+                                    srcOrigin, srcSize,
+                                    WMT::Texture{dst->texture.handle}, 0, 0, dstOrigin);
+      blit.endEncoding();
     }
   }
 
-  void encodePresent(id<MTLCommandBuffer> commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
+  void encodePresent(WMT::CommandBuffer& commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
     presenterState_.traceEvent("begin", seqId, present.window.value);
     if (queueTraceEnabled()) {
       std::ostringstream out;
@@ -6207,11 +6038,11 @@ class MetalBackendDevice final : public BackendDevice {
       presenterState_.traceEvent("missing-source", seqId, present.window.value);
       return;
     }
-    id<MTLTexture> sourceTexture = source->resolveTexture ? source->resolveTexture.get() : source->texture.get();
+    obj_handle_t sourceTextureHandle = source->resolveTexture ? source->resolveTexture.handle : source->texture.handle;
     u64 forcedTextureHandle = forcedPresentTextureHandle();
     if (forcedTextureHandle != 0ull) {
       if (auto* forced = findTextureUnlocked(forcedTextureHandle); forced && forced->texture) {
-        sourceTexture = forced->texture.get();
+        sourceTextureHandle = forced->texture.handle;
         if (queueTraceEnabled()) {
           std::ostringstream out;
           out << "[dxmt9-present] force-texture"
@@ -6255,72 +6086,71 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
 
-    layer.device = device_.get();
-    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    layer.opaque = YES;
-    layer.drawableSize = CGSizeMake(std::max(1u, present.width), std::max(1u, present.height));
-    layer.displaySyncEnabled = present.displaySyncEnabled;
-    layer.maximumDrawableCount = std::clamp(maxFrameLatency_, 1u, 3u);
-    layer.framebufferOnly = NO;
+    {
+      WMTLayerProps props{};
+      props.device = wrappedDevice_.handle;
+      props.pixel_format = WMTPixelFormatBGRA8Unorm;
+      props.opaque = true;
+      props.framebuffer_only = false;
+      props.drawable_width = std::max(1u, present.width);
+      props.drawable_height = std::max(1u, present.height);
+      props.display_sync_enabled = present.displaySyncEnabled;
+      props.contents_scale = 1.0;
+      MetalLayer_setProps((obj_handle_t)layer, &props);
+      MetalLayer_setMaximumDrawableCount((obj_handle_t)layer, std::clamp(maxFrameLatency_, 1u, 3u));
+    }
 
     presenterState_.traceEvent("nextDrawable.begin", seqId, present.window.value);
-    id<CAMetalDrawable> drawable = [layer nextDrawable];
+    WMT::MetalLayer wmtLayer{(obj_handle_t)layer};
+    auto drawable = wmtLayer.nextDrawable();
     if (!drawable) {
-      if (presentationStatusObserver_) {
-        presentationStatusObserver_(true);
-      }
+      if (presentationStatusObserver_) presentationStatusObserver_(true);
       presenterState_.traceEvent("nextDrawable.nil", seqId, present.window.value);
       return;
     }
-    if (presentationStatusObserver_) {
-      presentationStatusObserver_(false);
-    }
+    if (presentationStatusObserver_) presentationStatusObserver_(false);
     presenterState_.traceEvent("nextDrawable.ok", seqId, present.window.value);
 
-    auto desc = [MTLRenderPassDescriptor renderPassDescriptor];
-    auto attachment = desc.colorAttachments[0];
-    attachment.texture = drawable.texture;
-    attachment.loadAction = MTLLoadActionDontCare;
-    attachment.storeAction = MTLStoreActionStore;
-    auto encoder = [commandBuffer renderCommandEncoderWithDescriptor:desc];
+    auto drawableTex = drawable.texture();
+    WMTRenderPassInfo passInfo{};
+    passInfo.colors[0].texture = drawableTex.handle;
+    passInfo.colors[0].load_action = WMTLoadActionDontCare;
+    passInfo.colors[0].store_action = WMTStoreActionStore;
+    auto encoder = commandBuffer.renderCommandEncoder(passInfo);
     if (!encoder) {
       presenterState_.traceEvent("encoder.nil", seqId, present.window.value);
       return;
     }
     auto pipeline = pipelineForPresent(source->desc.format).get();
     if (!pipeline) {
-      [encoder endEncoding];
+      encoder.endEncoding();
       presenterState_.traceEvent("pipeline.nil", seqId, present.window.value);
       return;
     }
-    [encoder setRenderPipelineState:pipeline.get()];
-    [encoder setFragmentTexture:sourceTexture atIndex:0];
+    encoder.setRenderPipelineState(pipeline);
+    encoder.setFragmentTexture(WMT::Texture{sourceTextureHandle}, 0);
     auto sampler = makeSampler(false);
-    if (sampler) {
-      [encoder setFragmentSamplerState:sampler.get() atIndex:0];
-    }
+    if (sampler) encoder.setFragmentSamplerState(sampler, 0);
     const double width = std::max(1u, present.width);
     const double height = std::max(1u, present.height);
-    [encoder setViewport:(MTLViewport){0.0, 0.0, width, height, 0.0, 1.0}];
-    [encoder setScissorRect:MTLScissorRect{0, 0, static_cast<NSUInteger>(width), static_cast<NSUInteger>(height)}];
-    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-    [encoder endEncoding];
-    [commandBuffer presentDrawable:drawable];
+    encoder.setViewport(WMTViewport{0.0, 0.0, width, height, 0.0, 1.0});
+    encoder.setScissorRect(WMTScissorRect{0, 0, (uint64_t)width, (uint64_t)height});
+    encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+    encoder.endEncoding();
+    commandBuffer.presentDrawable(drawable);
     presenterState_.traceEvent("scheduled", seqId, present.window.value);
     backBufferDiscardAfterPresent_ = true;
   }
 
-  void dumpTextureSnapshotUnlocked(Handle handle, const TextureDesc& desc, id<MTLTexture> sourceTexture) {
-    if (!sourceTexture || !shouldDumpGpuTexture(handle) || dumpedGpuTextures_.contains(handle.value)) {
+  void dumpTextureSnapshotUnlocked(Handle handle, const TextureDesc& desc,
+                                   obj_handle_t sourceTextureHandle) {
+    if (!sourceTextureHandle || !shouldDumpGpuTexture(handle) ||
+        dumpedGpuTextures_.contains(handle.value)) {
       return;
     }
-    if (desc.levels == 0 || desc.width == 0 || desc.height == 0) {
-      return;
-    }
+    if (desc.levels == 0 || desc.width == 0 || desc.height == 0) return;
     const char* path = gpuDumpTexturePath();
-    if (!path || path[0] == '\0') {
-      return;
-    }
+    if (!path || path[0] == '\0') return;
     if (desc.format != Format::A8R8G8B8 && desc.format != Format::X8R8G8B8 &&
         desc.format != Format::A8B8G8R8 && desc.format != Format::X8B8G8R8) {
       std::ostringstream out;
@@ -6331,88 +6161,83 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
 
-    @autoreleasepool {
-      auto descriptor = [MTLTextureDescriptor new];
-      descriptor.textureType = MTLTextureType2D;
-      descriptor.pixelFormat = sourceTexture.pixelFormat;
-      descriptor.width = std::max(1u, desc.width);
-      descriptor.height = std::max(1u, desc.height);
-      descriptor.depth = 1;
-      descriptor.mipmapLevelCount = 1;
-      descriptor.sampleCount = 1;
-      descriptor.arrayLength = 1;
-      descriptor.storageMode = MTLStorageModeShared;
-      descriptor.usage = MTLTextureUsageShaderRead;
-      id<MTLTexture> stagingTexture = [device_.get() newTextureWithDescriptor:descriptor];
-      [descriptor release];
-      if (!stagingTexture) {
-        return;
-      }
+    WMT::Texture srcTex{sourceTextureHandle};
+    WMTTextureInfo stagingInfo{};
+    stagingInfo.type = WMTTextureType2D;
+    stagingInfo.pixel_format = srcTex.pixelFormat();
+    stagingInfo.width = std::max(1u, desc.width);
+    stagingInfo.height = std::max(1u, desc.height);
+    stagingInfo.depth = 1; stagingInfo.mipmap_level_count = 1;
+    stagingInfo.sample_count = 1; stagingInfo.array_length = 1;
+    stagingInfo.options = WMTResourceStorageModeShared;
+    stagingInfo.usage = WMTTextureUsageShaderRead;
+    auto stagingTexture = wrappedDevice_.newTexture(stagingInfo);
+    if (!stagingTexture) return;
 
-      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(wrappedCommandQueue_);
-      id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
-      if (!commandBuffer) {
-        [stagingTexture release];
-        return;
-      }
-      id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-      if (!blit) {
-        [stagingTexture release];
-        return;
-      }
-      [blit copyFromTexture:sourceTexture
-                sourceSlice:0
-                sourceLevel:0
-               sourceOrigin:MTLOriginMake(0, 0, 0)
-                 sourceSize:MTLSizeMake(std::max(1u, desc.width), std::max(1u, desc.height), 1)
-                  toTexture:stagingTexture
-           destinationSlice:0
-           destinationLevel:0
-          destinationOrigin:MTLOriginMake(0, 0, 0)];
-      [blit endEncoding];
-      [commandBuffer commit];
-      [commandBuffer waitUntilCompleted];
-      {
-        std::lock_guard lock(mutex_);
-        CommandBufferDiagnostics diagnostics;
-        diagnostics.hasBlit = true;
-        submissionDiagnostics_.inspect(commandBuffer, diagnostics, "gpu-dump");
-      }
-
-      const u32 pitch = std::max(1u, desc.width) * 4u;
-      std::vector<u8> bytes(static_cast<size_t>(pitch) * std::max(1u, desc.height));
-      auto region = MTLRegionMake2D(0, 0, std::max(1u, desc.width), std::max(1u, desc.height));
-      [stagingTexture getBytes:bytes.data() bytesPerRow:pitch fromRegion:region mipmapLevel:0];
-      [stagingTexture release];
-
-      const bool wrote = writeTextureBmp(path, desc.format, std::max(1u, desc.width), std::max(1u, desc.height),
-                                         pitch, bytes);
-      std::ostringstream out;
-      out << "[dxmt9-texture] gpu-dump handle=0x" << std::hex << handle.value << std::dec
-          << " size=" << desc.width << "x" << desc.height
-          << " format=" << static_cast<unsigned>(desc.format)
-          << " path=" << path
-          << " wrote=" << (wrote ? 1 : 0);
-      emitTextureTraceLine(out.str());
-      dumpedGpuTextures_.insert(handle.value);
+    auto commandBuffer = bootstrapCommandBuffer(wrappedCommandQueue_);
+    if (!commandBuffer) return;
+    auto blit = commandBuffer.blitCommandEncoder();
+    if (!blit) return;
+    WMTOrigin origin{0,0,0};
+    WMTSize size{std::max(1u,desc.width), std::max(1u,desc.height), 1};
+    blit.copyFromTextureToTexture(srcTex, 0, 0, origin, size,
+                                  WMT::Texture{stagingTexture.handle}, 0, 0, origin);
+    blit.endEncoding();
+    commandBuffer.commit();
+    commandBuffer.waitUntilCompleted();
+    {
+      std::lock_guard lock(mutex_);
+      CommandBufferDiagnostics diagnostics;
+      diagnostics.hasBlit = true;
+      submissionDiagnostics_.inspect(commandBuffer.handle, diagnostics, "gpu-dump");
     }
+
+    // Read back via a buffer blit
+    const u32 pitch = std::max(1u, desc.width) * 4u;
+    std::vector<u8> bytes(static_cast<size_t>(pitch) * std::max(1u, desc.height));
+    WMTBufferInfo bufInfo{};
+    bufInfo.length = bytes.size();
+    bufInfo.options = WMTResourceStorageModeShared;
+    auto readBuf = wrappedDevice_.newBuffer(bufInfo);
+    if (readBuf && bufInfo.memory.ptr) {
+      auto cmdBuf2 = bootstrapCommandBuffer(wrappedCommandQueue_);
+      if (cmdBuf2) {
+        auto blit2 = cmdBuf2.blitCommandEncoder();
+        if (blit2) {
+          blit2.copyFromTextureToBuffer(WMT::Texture{stagingTexture.handle}, 0, 0,
+                                        origin, size, WMT::Buffer{readBuf.handle},
+                                        0, pitch, 0);
+          blit2.endEncoding();
+        }
+        cmdBuf2.commit(); cmdBuf2.waitUntilCompleted();
+      }
+      std::memcpy(bytes.data(), bufInfo.memory.ptr, bytes.size());
+    }
+    const bool wrote = writeTextureBmp(path, desc.format, std::max(1u, desc.width),
+                                       std::max(1u, desc.height), pitch, bytes);
+    std::ostringstream out;
+    out << "[dxmt9-texture] gpu-dump handle=0x" << std::hex << handle.value << std::dec
+        << " size=" << desc.width << "x" << desc.height
+        << " format=" << static_cast<unsigned>(desc.format)
+        << " path=" << path << " wrote=" << (wrote ? 1 : 0);
+    emitTextureTraceLine(out.str());
+    dumpedGpuTextures_.insert(handle.value);
   }
 
-  ObjcPtr<id<MTLSamplerState>> makeSampler(bool linear) {
-    @autoreleasepool {
-      auto descriptor = [MTLSamplerDescriptor new];
-      descriptor.minFilter = linear ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
-      descriptor.magFilter = linear ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
-      descriptor.sAddressMode = MTLSamplerAddressModeClampToEdge;
-      descriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;
-      descriptor.rAddressMode = MTLSamplerAddressModeClampToEdge;
-      id<MTLSamplerState> sampler = [device_.get() newSamplerStateWithDescriptor:descriptor];
-      [descriptor release];
-      return sampler ? ObjcPtr<id<MTLSamplerState>>::adopt(sampler) : ObjcPtr<id<MTLSamplerState>>{};
-    }
+  WMT::Reference<WMT::SamplerState> makeSampler(bool linear) {
+    WMTSamplerInfo info{};
+    auto f = linear ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
+    info.min_filter = f;
+    info.mag_filter = f;
+    info.mip_filter = WMTSamplerMipFilterNotMipmapped;
+    info.s_address_mode = WMTSamplerAddressModeClampToEdge;
+    info.t_address_mode = WMTSamplerAddressModeClampToEdge;
+    info.r_address_mode = WMTSamplerAddressModeClampToEdge;
+    info.normalized_coords = true;
+    return wrappedDevice_.newSamplerState(info);
   }
 
-  ObjcPtr<id<MTLSamplerState>> makeSampler(const SamplerSnapshot& snapshot) {
+  WMT::Reference<WMT::SamplerState> makeSampler(const SamplerSnapshot& snapshot) {
     const auto minFilter = snapshot.states.contains(SAMP_MIN_FILTER) ? snapshot.states.at(SAMP_MIN_FILTER) : 0u;
     const auto magFilter = snapshot.states.contains(SAMP_MAG_FILTER) ? snapshot.states.at(SAMP_MAG_FILTER) : 0u;
     const auto mipFilter = snapshot.states.contains(SAMP_MIP_FILTER) ? snapshot.states.at(SAMP_MIP_FILTER) : 0u;
@@ -6420,64 +6245,45 @@ class MetalBackendDevice final : public BackendDevice {
     const auto addressV = snapshot.states.contains(SAMP_ADDRESS_V) ? snapshot.states.at(SAMP_ADDRESS_V) : 1u;
     const auto addressW = snapshot.states.contains(SAMP_ADDRESS_W) ? snapshot.states.at(SAMP_ADDRESS_W) : 1u;
     const auto borderColor = snapshot.states.contains(SAMP_BORDER_COLOR) ? snapshot.states.at(SAMP_BORDER_COLOR) : 0u;
-    auto resolveAddressMode = [](u32 value) {
+    auto resolveAddressMode = [](u32 value) -> WMTSamplerAddressMode {
       switch (value) {
-        case 1u:
-          return MTLSamplerAddressModeRepeat;
-        case 2u:
-          return MTLSamplerAddressModeMirrorRepeat;
-        case 4u:
-          return MTLSamplerAddressModeClampToBorderColor;
+        case 1u: return WMTSamplerAddressModeRepeat;
+        case 2u: return WMTSamplerAddressModeMirrorRepeat;
+        case 4u: return WMTSamplerAddressModeClampToBorderColor;
         case 3u:
-        default:
-          return MTLSamplerAddressModeClampToEdge;
+        default: return WMTSamplerAddressModeClampToEdge;
       }
     };
-    auto resolveBorderColor = [](u32 value) {
-      // Metal only exposes exact black/white border samplers. Keep those exact
-      // mappings; other D3D9 border colors still need shader-side emulation.
+    auto resolveBorderColor = [](u32 value) -> WMTSamplerBorderColor {
       switch (value) {
-        case 0x00000000u:
-          return MTLSamplerBorderColorTransparentBlack;
-        case 0xff000000u:
-          return MTLSamplerBorderColorOpaqueBlack;
-        case 0xffffffffu:
-          return MTLSamplerBorderColorOpaqueWhite;
-        default:
-          return (value >> 24) == 0u ? MTLSamplerBorderColorTransparentBlack : MTLSamplerBorderColorOpaqueBlack;
+        case 0x00000000u: return WMTSamplerBorderColorTransparentBlack;
+        case 0xff000000u: return WMTSamplerBorderColorOpaqueBlack;
+        case 0xffffffffu: return WMTSamplerBorderColorOpaqueWhite;
+        default: return (value >> 24) == 0u ? WMTSamplerBorderColorTransparentBlack : WMTSamplerBorderColorOpaqueBlack;
       }
     };
 
-    @autoreleasepool {
-      auto descriptor = [MTLSamplerDescriptor new];
-      descriptor.minFilter = minFilter == 2u ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
-      descriptor.magFilter = magFilter == 2u ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
-      switch (mipFilter) {
-        case 2u:
-          descriptor.mipFilter = MTLSamplerMipFilterLinear;
-          break;
-        case 1u:
-          descriptor.mipFilter = MTLSamplerMipFilterNearest;
-          break;
-        default:
-          descriptor.mipFilter = MTLSamplerMipFilterNotMipmapped;
-          break;
-      }
-      descriptor.sAddressMode = resolveAddressMode(addressU);
-      descriptor.tAddressMode = resolveAddressMode(addressV);
-      descriptor.rAddressMode = resolveAddressMode(addressW);
-      if (descriptor.sAddressMode == MTLSamplerAddressModeClampToBorderColor ||
-          descriptor.tAddressMode == MTLSamplerAddressModeClampToBorderColor ||
-          descriptor.rAddressMode == MTLSamplerAddressModeClampToBorderColor) {
-        descriptor.borderColor = resolveBorderColor(borderColor);
-      }
-      id<MTLSamplerState> sampler = [device_.get() newSamplerStateWithDescriptor:descriptor];
-      [descriptor release];
-      return sampler ? ObjcPtr<id<MTLSamplerState>>::adopt(sampler) : ObjcPtr<id<MTLSamplerState>>{};
+    WMTSamplerInfo info{};
+    info.min_filter = minFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
+    info.mag_filter = magFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
+    switch (mipFilter) {
+      case 2u: info.mip_filter = WMTSamplerMipFilterLinear; break;
+      case 1u: info.mip_filter = WMTSamplerMipFilterNearest; break;
+      default: info.mip_filter = WMTSamplerMipFilterNotMipmapped; break;
     }
+    info.s_address_mode = resolveAddressMode(addressU);
+    info.t_address_mode = resolveAddressMode(addressV);
+    info.r_address_mode = resolveAddressMode(addressW);
+    if (info.s_address_mode == WMTSamplerAddressModeClampToBorderColor ||
+        info.t_address_mode == WMTSamplerAddressModeClampToBorderColor ||
+        info.r_address_mode == WMTSamplerAddressModeClampToBorderColor) {
+      info.border_color = resolveBorderColor(borderColor);
+    }
+    info.normalized_coords = true;
+    return wrappedDevice_.newSamplerState(info);
   }
 
-  std::shared_future<ObjcPtr<id<MTLRenderPipelineState>>> pipelineForDraw(const DrawDesc& draw) {
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineForDraw(const DrawDesc& draw) {
     auto resolvePixelFormat = [this](Handle handle) -> u32 {
       if (!handle) {
         return 0;
@@ -6532,57 +6338,47 @@ class MetalBackendDevice final : public BackendDevice {
         return it->second.future;
       }
       auto future = std::async(std::launch::async, [this, draw, key]() {
-        @autoreleasepool {
-          auto vsSource = makeDrawShaderSource(draw, true);
-          auto fsSource = makeDrawShaderSource(draw, false);
-          auto vsLib = makeLibrary(device_.get(), vsSource);
-          auto fsLib = makeLibrary(device_.get(), fsSource);
-          if (!vsLib || !fsLib) {
-            return ObjcPtr<id<MTLRenderPipelineState>>{};
-          }
-          auto vs = [vsLib.get() newFunctionWithName:@"dxmt9_vs"];
-          auto fs = [fsLib.get() newFunctionWithName:@"dxmt9_fs"];
-          if (!vs || !fs) {
-            return ObjcPtr<id<MTLRenderPipelineState>>{};
-          }
-          auto desc = [MTLRenderPipelineDescriptor new];
-          desc.vertexFunction = vs;
-          desc.fragmentFunction = fs;
-          desc.rasterSampleCount = std::max(1u, key.sampleCount);
-          desc.alphaToCoverageEnabled = key.alphaToCoverage;
-          desc.depthAttachmentPixelFormat = static_cast<MTLPixelFormat>(key.depthFormat);
-          desc.stencilAttachmentPixelFormat = static_cast<MTLPixelFormat>(key.stencilFormat);
-          if (shaderArchive_) {
-            auto archive = shaderArchive_.get();
-            NSArray<id<MTLBinaryArchive>>* archives = @[archive];
-            desc.binaryArchives = archives;
-            NSError* archiveError = nil;
-            if (![archive addRenderPipelineFunctionsWithDescriptor:desc error:&archiveError] && archiveError) {
-              NSLog(@"dxmt9: binary archive update failed: %@", archiveError);
-            }
-          }
-          for (size_t i = 0; i < kMaxRenderTargets; ++i) {
-            auto* colorAttachment = desc.colorAttachments[i];
-            colorAttachment.pixelFormat = static_cast<MTLPixelFormat>(key.colorFormats[i]);
-            colorAttachment.blendingEnabled = key.blend[i].blendingEnabled;
-            colorAttachment.rgbBlendOperation = toBlendOperation(key.blend[i].rgbBlendOperation);
-            colorAttachment.alphaBlendOperation = toBlendOperation(key.blend[i].alphaBlendOperation);
-            colorAttachment.sourceRGBBlendFactor = toBlendFactor(key.blend[i].sourceRGBBlendFactor);
-            colorAttachment.destinationRGBBlendFactor = toBlendFactor(key.blend[i].destinationRGBBlendFactor);
-            colorAttachment.sourceAlphaBlendFactor = toBlendFactor(key.blend[i].sourceAlphaBlendFactor);
-            colorAttachment.destinationAlphaBlendFactor = toBlendFactor(key.blend[i].destinationAlphaBlendFactor);
-            colorAttachment.writeMask = toColorWriteMask(key.blend[i].colorWriteMask);
-          }
-          NSError* error = nil;
-          id<MTLRenderPipelineState> pipeline = [device_.get() newRenderPipelineStateWithDescriptor:desc error:&error];
-          if (!pipeline) {
-            NSLog(@"dxmt9: pipeline compile failed: %@", error);
-          } else if (shaderArchive_) {
-            persistShaderArchive(shaderArchive_.get(), shaderArchiveURL_.get());
-          }
-          [desc release];
-          return ObjcPtr<id<MTLRenderPipelineState>>::adopt(pipeline);
+        auto vsSource = makeDrawShaderSource(draw, true);
+        auto fsSource = makeDrawShaderSource(draw, false);
+        auto vsLib = makeLibraryWMT(wrappedDevice_, vsSource);
+        auto fsLib = makeLibraryWMT(wrappedDevice_, fsSource);
+        if (!vsLib || !fsLib) {
+          return WMT::Reference<WMT::RenderPipelineState>{};
         }
+        auto vs = vsLib.newFunction("dxmt9_vs");
+        auto fs = fsLib.newFunction("dxmt9_fs");
+        if (!vs || !fs) {
+          return WMT::Reference<WMT::RenderPipelineState>{};
+        }
+        WMTRenderPipelineInfo info{};
+        info.vertex_function = vs.handle;
+        info.fragment_function = fs.handle;
+        info.raster_sample_count = std::max(1u, key.sampleCount);
+        info.alpha_to_coverage_enabled = key.alphaToCoverage;
+        info.depth_pixel_format = static_cast<WMTPixelFormat>(key.depthFormat);
+        info.stencil_pixel_format = static_cast<WMTPixelFormat>(key.stencilFormat);
+        info.rasterization_enabled = true;
+        if (shaderArchive_) {
+          info.binary_archive_for_serialization = shaderArchive_.handle;
+        }
+        for (size_t i = 0; i < kMaxRenderTargets; ++i) {
+          auto& ca = info.colors[i];
+          ca.pixel_format = static_cast<WMTPixelFormat>(key.colorFormats[i]);
+          ca.blending_enabled = key.blend[i].blendingEnabled;
+          ca.rgb_blend_operation = toBlendOperation(key.blend[i].rgbBlendOperation);
+          ca.alpha_blend_operation = toBlendOperation(key.blend[i].alphaBlendOperation);
+          ca.src_rgb_blend_factor = toBlendFactor(key.blend[i].sourceRGBBlendFactor);
+          ca.dst_rgb_blend_factor = toBlendFactor(key.blend[i].destinationRGBBlendFactor);
+          ca.src_alpha_blend_factor = toBlendFactor(key.blend[i].sourceAlphaBlendFactor);
+          ca.dst_alpha_blend_factor = toBlendFactor(key.blend[i].destinationAlphaBlendFactor);
+          ca.write_mask = toColorWriteMask(key.blend[i].colorWriteMask);
+        }
+        WMT::Error err{};
+        auto pso = wrappedDevice_.newRenderPipelineState(info, err);
+        if (pso && shaderArchive_) {
+          persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+        }
+        return pso;
       });
       auto shared = future.share();
       drawPipelineCache_.emplace(key, PipelineCacheEntry{shared});
@@ -6590,8 +6386,8 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
-  std::shared_future<ObjcPtr<id<MTLRenderPipelineState>>> pipelineForColorFill(const ColorRGBA& color,
-                                                                               u32 pixelFormat) {
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineForColorFill(const ColorRGBA& color,
+                                                                                     u32 pixelFormat) {
     ShaderVariantKey key;
     key.hash = static_cast<u64>(std::bit_cast<u32>(color.r)) ^
                (static_cast<u64>(std::bit_cast<u32>(color.g)) << 1) ^ pixelFormat;
@@ -6602,45 +6398,33 @@ class MetalBackendDevice final : public BackendDevice {
       return it->second.future;
     }
     auto future = std::async(std::launch::async, [this, color, pixelFormat]() {
-      @autoreleasepool {
-        auto vsLib = makeLibrary(device_.get(), makeGenericVertexSource(makeHash("fill")));
-        auto fsLib = makeLibrary(device_.get(), makeGenericFragmentSource(color, makeHash("fill")));
-        if (!vsLib || !fsLib) {
-          return ObjcPtr<id<MTLRenderPipelineState>>{};
-        }
-        auto vs = [vsLib.get() newFunctionWithName:@"dxmt9_vs"];
-        auto fs = [fsLib.get() newFunctionWithName:@"dxmt9_fs"];
-        auto desc = [MTLRenderPipelineDescriptor new];
-        desc.vertexFunction = vs;
-        desc.fragmentFunction = fs;
-        desc.colorAttachments[0].pixelFormat = static_cast<MTLPixelFormat>(pixelFormat);
-        if (shaderArchive_) {
-          auto archive = shaderArchive_.get();
-          NSArray<id<MTLBinaryArchive>>* archives = @[archive];
-          desc.binaryArchives = archives;
-          NSError* archiveError = nil;
-          if (![archive addRenderPipelineFunctionsWithDescriptor:desc error:&archiveError] && archiveError) {
-            NSLog(@"dxmt9: binary archive update failed: %@", archiveError);
-          }
-        }
-        NSError* error = nil;
-        id<MTLRenderPipelineState> pipeline = [device_.get() newRenderPipelineStateWithDescriptor:desc error:&error];
-        if (!pipeline) {
-          NSLog(@"dxmt9: color fill pipeline compile failed: %@", error);
-        } else if (shaderArchive_) {
-          persistShaderArchive(shaderArchive_.get(), shaderArchiveURL_.get());
-        }
-        [desc release];
-        return ObjcPtr<id<MTLRenderPipelineState>>::adopt(pipeline);
+      auto vsLib = makeLibraryWMT(wrappedDevice_, makeGenericVertexSource(makeHash("fill")));
+      auto fsLib = makeLibraryWMT(wrappedDevice_, makeGenericFragmentSource(color, makeHash("fill")));
+      if (!vsLib || !fsLib) {
+        return WMT::Reference<WMT::RenderPipelineState>{};
       }
+      auto vs = vsLib.newFunction("dxmt9_vs");
+      auto fs = fsLib.newFunction("dxmt9_fs");
+      WMTRenderPipelineInfo info{};
+      info.vertex_function = vs.handle;
+      info.fragment_function = fs.handle;
+      info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
+      info.colors[0].write_mask = WMTColorWriteMaskAll;
+      info.rasterization_enabled = true;
+      info.raster_sample_count = 1;
+      if (shaderArchive_) info.binary_archive_for_serialization = shaderArchive_.handle;
+      WMT::Error err{};
+      auto pso = wrappedDevice_.newRenderPipelineState(info, err);
+      if (pso && shaderArchive_) persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+      return pso;
     });
     auto shared = future.share();
     fillPipelineCache_.emplace(key, PipelineCacheEntry{shared});
     return shared;
   }
 
-  std::shared_future<ObjcPtr<id<MTLRenderPipelineState>>> pipelineForStretchRect(const StretchRectDesc& stretch,
-                                                                                 u32 pixelFormat) {
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineForStretchRect(const StretchRectDesc& stretch,
+                                                                                       u32 pixelFormat) {
     ShaderVariantKey key;
     key.hash = stretch.linear ? 1u : 0u;
     key.textured = true;
@@ -6653,131 +6437,90 @@ class MetalBackendDevice final : public BackendDevice {
       return it->second.future;
     }
     auto future = std::async(std::launch::async, [this, stretch, pixelFormat]() {
-      @autoreleasepool {
-        auto vsLib = makeLibrary(device_.get(), makeTexturedVertexSource(makeHash("stretch")));
-        auto fsLib = makeLibrary(device_.get(), makeTexturedFragmentSource(makeHash("stretch")));
-        if (!vsLib || !fsLib) {
-          return ObjcPtr<id<MTLRenderPipelineState>>{};
-        }
-        auto vs = [vsLib.get() newFunctionWithName:@"dxmt9_vs"];
-        auto fs = [fsLib.get() newFunctionWithName:@"dxmt9_fs"];
-        auto desc = [MTLRenderPipelineDescriptor new];
-        desc.vertexFunction = vs;
-        desc.fragmentFunction = fs;
-        desc.rasterSampleCount = std::max(1u, stretch.destinationSampleCount);
-        desc.colorAttachments[0].pixelFormat = static_cast<MTLPixelFormat>(pixelFormat);
-        if (shaderArchive_) {
-          auto archive = shaderArchive_.get();
-          NSArray<id<MTLBinaryArchive>>* archives = @[archive];
-          desc.binaryArchives = archives;
-          NSError* archiveError = nil;
-          if (![archive addRenderPipelineFunctionsWithDescriptor:desc error:&archiveError] && archiveError) {
-            NSLog(@"dxmt9: binary archive update failed: %@", archiveError);
-          }
-        }
-        NSError* error = nil;
-        id<MTLRenderPipelineState> pipeline = [device_.get() newRenderPipelineStateWithDescriptor:desc error:&error];
-        if (!pipeline) {
-          NSLog(@"dxmt9: stretch pipeline compile failed: %@", error);
-        } else if (shaderArchive_) {
-          persistShaderArchive(shaderArchive_.get(), shaderArchiveURL_.get());
-        }
-        [desc release];
-        return ObjcPtr<id<MTLRenderPipelineState>>::adopt(pipeline);
-      }
+      auto vsLib = makeLibraryWMT(wrappedDevice_, makeTexturedVertexSource(makeHash("stretch")));
+      auto fsLib = makeLibraryWMT(wrappedDevice_, makeTexturedFragmentSource(makeHash("stretch")));
+      if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
+      auto vs = vsLib.newFunction("dxmt9_vs");
+      auto fs = fsLib.newFunction("dxmt9_fs");
+      WMTRenderPipelineInfo info{};
+      info.vertex_function = vs.handle;
+      info.fragment_function = fs.handle;
+      info.raster_sample_count = std::max(1u, stretch.destinationSampleCount);
+      info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
+      info.colors[0].write_mask = WMTColorWriteMaskAll;
+      info.rasterization_enabled = true;
+      if (shaderArchive_) info.binary_archive_for_serialization = shaderArchive_.handle;
+      WMT::Error err{};
+      auto pso = wrappedDevice_.newRenderPipelineState(info, err);
+      if (pso && shaderArchive_) persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+      return pso;
     });
     auto shared = future.share();
     stretchPipelineCache_.emplace(key, PipelineCacheEntry{shared});
     return shared;
   }
 
-  std::shared_future<ObjcPtr<id<MTLRenderPipelineState>>> pipelineForPresent(Format sourceFormat) {
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineForPresent(Format sourceFormat) {
     ShaderVariantKey key;
     key.hash = sourceFormat == Format::X8R8G8B8 || sourceFormat == Format::X8B8G8R8 ? 1u : 0u;
     key.textured = true;
     key.sampleCount = 1u;
-    key.colorFormats[0] = static_cast<u32>(MTLPixelFormatBGRA8Unorm);
-    key.blend[0].pixelFormat = static_cast<u32>(MTLPixelFormatBGRA8Unorm);
+    key.colorFormats[0] = static_cast<u32>(WMTPixelFormatBGRA8Unorm);
+    key.blend[0].pixelFormat = static_cast<u32>(WMTPixelFormatBGRA8Unorm);
     std::lock_guard lock(cacheMutex_);
     if (auto it = presentPipelineCache_.find(key); it != presentPipelineCache_.end()) {
       return it->second.future;
     }
     const bool forceOpaqueAlpha = sourceFormat == Format::X8R8G8B8 || sourceFormat == Format::X8B8G8R8;
     auto future = std::async(std::launch::async, [this, forceOpaqueAlpha]() {
-      @autoreleasepool {
-        auto vsLib = makeLibrary(device_.get(), makeTexturedVertexSource(makeHash("present")));
-        auto fsLib = makeLibrary(device_.get(), makeTexturedFragmentSource(makeHash(forceOpaqueAlpha ? "present-opaque" : "present"), forceOpaqueAlpha));
-        if (!vsLib || !fsLib) {
-          return ObjcPtr<id<MTLRenderPipelineState>>{};
-        }
-        auto vs = [vsLib.get() newFunctionWithName:@"dxmt9_vs"];
-        auto fs = [fsLib.get() newFunctionWithName:@"dxmt9_fs"];
-        auto desc = [MTLRenderPipelineDescriptor new];
-        desc.vertexFunction = vs;
-        desc.fragmentFunction = fs;
-        desc.rasterSampleCount = 1;
-        desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-        if (shaderArchive_) {
-          auto archive = shaderArchive_.get();
-          NSArray<id<MTLBinaryArchive>>* archives = @[archive];
-          desc.binaryArchives = archives;
-          NSError* archiveError = nil;
-          if (![archive addRenderPipelineFunctionsWithDescriptor:desc error:&archiveError] && archiveError) {
-            NSLog(@"dxmt9: binary archive update failed: %@", archiveError);
-          }
-        }
-        NSError* error = nil;
-        id<MTLRenderPipelineState> pipeline = [device_.get() newRenderPipelineStateWithDescriptor:desc error:&error];
-        if (!pipeline) {
-          NSLog(@"dxmt9: present pipeline compile failed: %@", error);
-        } else if (shaderArchive_) {
-          persistShaderArchive(shaderArchive_.get(), shaderArchiveURL_.get());
-        }
-        [desc release];
-        return ObjcPtr<id<MTLRenderPipelineState>>::adopt(pipeline);
-      }
+      auto vsLib = makeLibraryWMT(wrappedDevice_, makeTexturedVertexSource(makeHash("present")));
+      auto fsLib = makeLibraryWMT(wrappedDevice_, makeTexturedFragmentSource(
+                                       makeHash(forceOpaqueAlpha ? "present-opaque" : "present"), forceOpaqueAlpha));
+      if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
+      auto vs = vsLib.newFunction("dxmt9_vs");
+      auto fs = fsLib.newFunction("dxmt9_fs");
+      WMTRenderPipelineInfo info{};
+      info.vertex_function = vs.handle;
+      info.fragment_function = fs.handle;
+      info.raster_sample_count = 1;
+      info.colors[0].pixel_format = WMTPixelFormatBGRA8Unorm;
+      info.colors[0].write_mask = WMTColorWriteMaskAll;
+      info.rasterization_enabled = true;
+      if (shaderArchive_) info.binary_archive_for_serialization = shaderArchive_.handle;
+      WMT::Error err{};
+      auto pso = wrappedDevice_.newRenderPipelineState(info, err);
+      if (pso && shaderArchive_) persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+      return pso;
     });
     auto shared = future.share();
     presentPipelineCache_.emplace(key, PipelineCacheEntry{shared});
     return shared;
   }
 
-  ObjcPtr<id<MTLDepthStencilState>> depthStencilStateFor(const DepthStencilKey& key) {
+  WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(const DepthStencilKey& key) {
     std::lock_guard lock(cacheMutex_);
     if (auto it = depthCache_.find(key); it != depthCache_.end()) {
       return it->second;
     }
-    @autoreleasepool {
-      auto desc = [MTLDepthStencilDescriptor new];
-      desc.depthCompareFunction = toCompareFunction(key.depthFunc);
-      desc.depthWriteEnabled = key.depthEnable && key.depthWrite;
-      auto applyFace = [](MTLStencilDescriptor* stencil, const StencilFaceKey& face) {
-        if (!stencil) {
-          return;
-        }
-        stencil.stencilCompareFunction = toCompareFunction(face.compareFunction);
-        stencil.stencilFailureOperation = toStencilOperation(face.failureOperation);
-        stencil.depthFailureOperation = toStencilOperation(face.depthFailureOperation);
-        stencil.depthStencilPassOperation = toStencilOperation(face.passOperation);
-        stencil.readMask = face.readMask;
-        stencil.writeMask = face.writeMask;
-      };
-      if (key.front.enabled || key.back.enabled) {
-        auto front = [MTLStencilDescriptor new];
-        auto back = [MTLStencilDescriptor new];
-        applyFace(front, key.front);
-        applyFace(back, key.back.enabled ? key.back : key.front);
-        desc.frontFaceStencil = front;
-        desc.backFaceStencil = back;
-        [front release];
-        [back release];
-      }
-      id<MTLDepthStencilState> state = [device_.get() newDepthStencilStateWithDescriptor:desc];
-      [desc release];
-      auto wrapped = ObjcPtr<id<MTLDepthStencilState>>::adopt(state);
-      depthCache_.emplace(key, wrapped);
-      return wrapped;
+    WMTDepthStencilInfo info{};
+    info.depth_compare_function = static_cast<WMTCompareFunction>(toCompareFunction(key.depthFunc));
+    info.depth_write_enabled = key.depthEnable && key.depthWrite;
+    auto applyFace = [](WMTStencilInfo& stencilInfo, const StencilFaceKey& face) {
+      stencilInfo.enabled = face.enabled;
+      stencilInfo.stencil_compare_function = static_cast<WMTCompareFunction>(toCompareFunction(face.compareFunction));
+      stencilInfo.stencil_fail_op = static_cast<WMTStencilOperation>(toStencilOperation(face.failureOperation));
+      stencilInfo.depth_fail_op = static_cast<WMTStencilOperation>(toStencilOperation(face.depthFailureOperation));
+      stencilInfo.depth_stencil_pass_op = static_cast<WMTStencilOperation>(toStencilOperation(face.passOperation));
+      stencilInfo.read_mask = static_cast<uint8_t>(face.readMask);
+      stencilInfo.write_mask = static_cast<uint8_t>(face.writeMask);
+    };
+    if (key.front.enabled || key.back.enabled) {
+      applyFace(info.front_stencil, key.front);
+      applyFace(info.back_stencil, key.back.enabled ? key.back : key.front);
     }
+    auto state = wrappedDevice_.newDepthStencilState(info);
+    depthCache_.emplace(key, state);
+    return state;
   }
 
   void finishLoop() {
@@ -6828,8 +6571,6 @@ class MetalBackendDevice final : public BackendDevice {
   BackendLimits limits_{};
   WMT::Reference<WMT::Device> wrappedDevice_{};
   WMT::Reference<WMT::CommandQueue> wrappedCommandQueue_{};
-  ObjcPtr<id<MTLDevice>> device_;
-  ObjcPtr<id<MTLCommandQueue>> commandQueue_;
   std::thread encodeThread_;
   std::thread finishThread_;
   std::mutex mutex_;
@@ -6861,14 +6602,14 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> fillPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretchPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> presentPipelineCache_;
-  std::unordered_map<DepthStencilKey, ObjcPtr<id<MTLDepthStencilState>>, DepthStencilKeyHash> depthCache_;
+  std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash> depthCache_;
   metalpresent::PresenterState presenterState_{};
   RingArena argbufArena_{1 << 20};
   RingArena lambdaStoreArena_{1 << 18};
   RingArena stagingArena_{1 << 20};
   RingArena copyTempArena_{1 << 20};
-  ObjcPtr<NSURL*> shaderArchiveURL_;
-  ObjcPtr<id<MTLBinaryArchive>> shaderArchive_;
+  std::string shaderArchivePath_{};
+  WMT::Reference<WMT::BinaryArchive> shaderArchive_{};
   metalqueue::QueueLifecycleController queueLifecycle_{};
   metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
   bool ready_ = false;

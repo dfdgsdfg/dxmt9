@@ -619,6 +619,11 @@ extern "C" enum WMTPixelFormat MTLTexture_pixelFormat(obj_handle_t texture) {
   return (enum WMTPixelFormat)[(id<MTLTexture>)texture pixelFormat];
 }
 
+extern "C" enum WMTTextureType MTLTexture_textureType(obj_handle_t texture) {
+  if (!texture) return WMTTextureType2D;
+  return (enum WMTTextureType)[(id<MTLTexture>)texture textureType];
+}
+
 extern "C" uint64_t MTLTexture_width(obj_handle_t texture) {
   return texture ? (uint64_t)[(id<MTLTexture>)texture width] : 0;
 }
@@ -1278,6 +1283,16 @@ extern "C" void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder,
       const struct wmtcmd_render_dispatch_threads_per_tile *b =
           (const struct wmtcmd_render_dispatch_threads_per_tile *)next;
       [enc dispatchThreadsPerTile:MTLSizeMake(b->width, b->height, 1)];
+      break;
+    }
+    case WMTRenderCommandSetFragmentSamplerState: {
+      const struct wmtcmd_render_setsamplerstate *b = (const struct wmtcmd_render_setsamplerstate *)next;
+      [enc setFragmentSamplerState:(id<MTLSamplerState>)b->sampler_state atIndex:b->index];
+      break;
+    }
+    case WMTRenderCommandSetStencilReferenceValue: {
+      const struct wmtcmd_render_setstencilref *b = (const struct wmtcmd_render_setstencilref *)next;
+      [enc setStencilReferenceValue:b->stencil_ref];
       break;
     }
     }

@@ -286,6 +286,11 @@ public:
     return MTLTexture_pixelFormat(handle);
   }
 
+  WMTTextureType
+  textureType() {
+    return MTLTexture_textureType(handle);
+  }
+
   uint64_t
   width() {
     return MTLTexture_width(handle);
@@ -516,6 +521,109 @@ public:
     cmd.stages = after;
     MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
   }
+
+  void
+  setDepthStencilState(DepthStencilState dsso, uint8_t stencil_ref = 0) {
+    struct wmtcmd_render_setdsso cmd;
+    cmd.type = WMTRenderCommandSetDSSO;
+    cmd.next.set(nullptr);
+    cmd.dsso = dsso.handle;
+    cmd.stencil_ref = stencil_ref;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  setStencilReferenceValue(uint8_t stencil_ref) {
+    struct wmtcmd_render_setstencilref cmd;
+    cmd.type = WMTRenderCommandSetStencilReferenceValue;
+    cmd.next.set(nullptr);
+    cmd.stencil_ref = stencil_ref;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  setBlendColorAndStencilRef(float r, float g, float b_val, float a, uint8_t stencil_ref) {
+    struct wmtcmd_render_setblendcolor cmd;
+    cmd.type = WMTRenderCommandSetBlendFactorAndStencilRef;
+    cmd.next.set(nullptr);
+    cmd.red = r;
+    cmd.green = g;
+    cmd.blue = b_val;
+    cmd.alpha = a;
+    cmd.stencil_ref = stencil_ref;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  setScissorRect(WMTScissorRect rect) {
+    struct wmtcmd_render_setscissorrect cmd;
+    cmd.type = WMTRenderCommandSetScissorRect;
+    cmd.next.set(nullptr);
+    cmd.scissor_rect = rect;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  setCullMode(WMTCullMode cull_mode) {
+    // Set only cull mode; leave other rasterizer state unchanged
+    setRasterizerState(WMTTriangleFillModeFill, cull_mode,
+                       WMTDepthClipModeClip, WMTWindingClockwise, 0.0f, 0.0f, 0.0f);
+  }
+
+  void
+  setRasterizerState(WMTTriangleFillMode fill_mode, WMTCullMode cull_mode,
+                     WMTDepthClipMode depth_clip_mode, WMTWinding winding,
+                     float depth_bias, float slope_scale, float depth_bias_clamp) {
+    struct wmtcmd_render_setrasterizerstate cmd;
+    cmd.type = WMTRenderCommandSetRasterizerState;
+    cmd.next.set(nullptr);
+    cmd.fill_mode = fill_mode;
+    cmd.cull_mode = cull_mode;
+    cmd.depth_clip_mode = depth_clip_mode;
+    cmd.winding = winding;
+    cmd.depth_bias = depth_bias;
+    cmd.scole_scale = slope_scale;
+    cmd.depth_bias_clamp = depth_bias_clamp;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  setFragmentSamplerState(SamplerState sampler, uint8_t index) {
+    struct wmtcmd_render_setsamplerstate cmd;
+    cmd.type = WMTRenderCommandSetFragmentSamplerState;
+    cmd.next.set(nullptr);
+    cmd.sampler_state = sampler.handle;
+    cmd.index = index;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  setVisibilityResultMode(WMTVisibilityResultMode mode, uint64_t offset) {
+    struct wmtcmd_render_setvisibilitymode cmd;
+    cmd.type = WMTRenderCommandSetVisibilityMode;
+    cmd.next.set(nullptr);
+    cmd.mode = mode;
+    cmd.offset = offset;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  drawIndexedPrimitives(WMTPrimitiveType primitive_type, WMTIndexType index_type,
+                        uint64_t index_count, Buffer index_buffer, uint64_t index_buffer_offset,
+                        uint32_t instance_count, int32_t base_vertex, uint32_t base_instance) {
+    struct wmtcmd_render_draw_indexed cmd;
+    cmd.type = WMTRenderCommandDrawIndexed;
+    cmd.next.set(nullptr);
+    cmd.primitive_type = primitive_type;
+    cmd.index_type = index_type;
+    cmd.index_count = index_count;
+    cmd.index_buffer = index_buffer.handle;
+    cmd.index_buffer_offset = index_buffer_offset;
+    cmd.instance_count = instance_count;
+    cmd.base_vertex = base_vertex;
+    cmd.base_instance = base_instance;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
 };
 
 class BlitCommandEncoder : public CommandEncoder {
@@ -553,6 +661,67 @@ public:
     cmd.len = len;
     cmd.dst_buffer = dst.handle;
     cmd.dst_offset = dst_offset;
+    MTLBlitCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  copyFromTextureToTexture(Texture src, uint32_t src_slice, uint32_t src_level,
+                            WMTOrigin src_origin, WMTSize src_size,
+                            Texture dst, uint32_t dst_slice, uint32_t dst_level,
+                            WMTOrigin dst_origin) {
+    struct wmtcmd_blit_copy_from_texture_to_texture cmd;
+    cmd.type = WMTBlitCommandCopyFromTextureToTexture;
+    cmd.next.set(nullptr);
+    cmd.src = src.handle;
+    cmd.src_slice = src_slice;
+    cmd.src_level = src_level;
+    cmd.src_origin = src_origin;
+    cmd.src_size = src_size;
+    cmd.dst = dst.handle;
+    cmd.dst_slice = dst_slice;
+    cmd.dst_level = dst_level;
+    cmd.dst_origin = dst_origin;
+    MTLBlitCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  copyFromTextureToBuffer(Texture src, uint32_t slice, uint32_t level,
+                           WMTOrigin origin, WMTSize size,
+                           Buffer dst, uint64_t offset,
+                           uint64_t bytes_per_row, uint64_t bytes_per_image) {
+    struct wmtcmd_blit_copy_from_texture_to_buffer cmd;
+    cmd.type = WMTBlitCommandCopyFromTextureToBuffer;
+    cmd.next.set(nullptr);
+    cmd.src = src.handle;
+    cmd.slice = slice;
+    cmd.level = level;
+    cmd.origin = origin;
+    cmd.size = size;
+    cmd.dst = dst.handle;
+    cmd.offset = offset;
+    cmd.bytes_per_row = bytes_per_row;
+    cmd.bytes_per_image = bytes_per_image;
+    MTLBlitCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  generateMipmaps(Texture texture) {
+    struct wmtcmd_blit_generate_mipmaps cmd;
+    cmd.type = WMTBlitCommandGenerateMipmaps;
+    cmd.next.set(nullptr);
+    cmd.texture = texture.handle;
+    MTLBlitCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  fillBuffer(Buffer buffer, uint64_t offset, uint64_t length, uint8_t value) {
+    struct wmtcmd_blit_fillbuffer cmd;
+    cmd.type = WMTBlitCommandFillBuffer;
+    cmd.next.set(nullptr);
+    cmd.buffer = buffer.handle;
+    cmd.offset = offset;
+    cmd.length = length;
+    cmd.value = value;
     MTLBlitCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
   }
 };

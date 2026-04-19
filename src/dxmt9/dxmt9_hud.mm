@@ -97,17 +97,18 @@ metalqueue::CommandBufferDiagnostics SubmissionDiagnosticsController::prepareQue
   return hudController_.prepareForSubmission(diagnostics);
 }
 
-bool SubmissionDiagnosticsController::inspect(id<MTLCommandBuffer> commandBuffer,
+bool SubmissionDiagnosticsController::inspect(obj_handle_t commandBuffer,
                                               const metalqueue::CommandBufferDiagnostics& diagnostics,
                                               const char* context) {
-  return completionTracker_.inspect(commandBuffer, diagnostics, context);
+  return completionTracker_.inspect((id<MTLCommandBuffer>)commandBuffer, diagnostics, context);
 }
 
 bool SubmissionDiagnosticsController::observeQueueSubmission(
-    id<MTLCommandBuffer> commandBuffer,
+    obj_handle_t commandBuffer,
     const metalqueue::CommandBufferDiagnostics& diagnostics,
     const char* context) {
-  return hudController_.observeCompletion(commandBuffer, diagnostics, completionTracker_, context);
+  return hudController_.observeCompletion((id<MTLCommandBuffer>)commandBuffer, diagnostics,
+                                         completionTracker_, context);
 }
 
 }  // namespace dxmt9::core::metalhud

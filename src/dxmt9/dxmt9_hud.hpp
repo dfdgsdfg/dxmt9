@@ -58,10 +58,10 @@ class SubmissionDiagnosticsController {
  public:
   metalqueue::CommandBufferDiagnostics prepareQueueSubmission(
       metalqueue::CommandBufferDiagnostics diagnostics);
-  bool inspect(id<MTLCommandBuffer> commandBuffer,
+  bool inspect(obj_handle_t commandBuffer,
                const metalqueue::CommandBufferDiagnostics& diagnostics,
                const char* context);
-  bool observeQueueSubmission(id<MTLCommandBuffer> commandBuffer,
+  bool observeQueueSubmission(obj_handle_t commandBuffer,
                               const metalqueue::CommandBufferDiagnostics& diagnostics,
                               const char* context = "queue");
   const metalqueue::CompletionTracker& completionTracker() const noexcept { return completionTracker_; }

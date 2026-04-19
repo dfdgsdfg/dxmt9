@@ -1132,6 +1132,8 @@ enum WMTRenderCommandType : uint16_t {
   WMTRenderCommandDXMTTessellationMeshDrawIndirect,
   WMTRenderCommandDXMTTessellationMeshDrawIndexedIndirect,
   WMTRenderCommandDispatchThreadsPerTile,
+  WMTRenderCommandSetFragmentSamplerState,
+  WMTRenderCommandSetStencilReferenceValue,
 };
 
 struct wmtcmd_render_nop {
@@ -1509,9 +1511,25 @@ struct wmtcmd_render_dispatch_threads_per_tile {
   uint32_t height;
 };
 
+struct wmtcmd_render_setsamplerstate {
+  enum WMTRenderCommandType type;
+  uint16_t reserved[3];
+  struct WMTMemoryPointer next;
+  obj_handle_t sampler_state;
+  uint8_t index;
+};
+
+struct wmtcmd_render_setstencilref {
+  enum WMTRenderCommandType type;
+  uint16_t reserved[3];
+  struct WMTMemoryPointer next;
+  uint8_t stencil_ref;
+};
+
 WINEMETAL_API void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder, const struct wmtcmd_base *cmd_head);
 
 WINEMETAL_API enum WMTPixelFormat MTLTexture_pixelFormat(obj_handle_t texture);
+WINEMETAL_API enum WMTTextureType MTLTexture_textureType(obj_handle_t texture);
 WINEMETAL_API uint64_t MTLTexture_width(obj_handle_t texture);
 WINEMETAL_API uint64_t MTLTexture_height(obj_handle_t texture);
 WINEMETAL_API uint64_t MTLTexture_depth(obj_handle_t texture);
