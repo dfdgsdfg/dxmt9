@@ -16,19 +16,23 @@ bool directLayerAttachEnabled() {
 }
 
 static std::mutex gLayerRegistryMutex;
-static std::unordered_map<u64, CAMetalLayer*> gLayerRegistry;
+static std::unordered_map<u64, uintptr_t> gLayerRegistry;
+
+static CAMetalLayer* asCAMetalLayer(uintptr_t handle) {
+  return reinterpret_cast<CAMetalLayer*>(handle);
+}
 
 CAMetalLayer* lookupLayerHandle(u64 handle) {
   std::lock_guard lock(gLayerRegistryMutex);
   if (auto it = gLayerRegistry.find(handle); it != gLayerRegistry.end()) {
-    return it->second;
+    return asCAMetalLayer(it->second);
   }
   return nullptr;
 }
 
 void registerLayerHandle(u64 handle, CAMetalLayer* layer) {
   std::lock_guard lock(gLayerRegistryMutex);
-  gLayerRegistry[handle] = layer;
+  gLayerRegistry[handle] = reinterpret_cast<uintptr_t>(layer);
 }
 
 void unregisterLayerHandle(u64 handle) {
