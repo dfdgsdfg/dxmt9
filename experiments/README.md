@@ -52,7 +52,8 @@ bash scripts/install_heroic_experiment_prefix.sh --prefix "$HOME/.wine-dxmt9-her
 The runner:
 
 - reads [`CATALOGUE.toml`](./CATALOGUE.toml)
-- stages `d3d9.dll`, `winemetal.dll`, and `winemetal.so` into a Wine runtime/prefix
+- stages `d3d9.dll`, `winemetal.dll`, `dxmt9unix.dll`, `winemetal.so`, and the
+  private `dxmt9unix.so` helper into a Wine runtime/prefix
 - runs the selected launcher
 - captures the presented back buffer directly from dxmt9 when `capture_frame` is set
 - falls back to window capture only when an internal frame dump is unavailable

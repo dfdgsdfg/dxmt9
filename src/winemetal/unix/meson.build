@@ -3,9 +3,7 @@ if host_machine.system() == 'windows'
 endif
 
 dxmt9_winemetal_unix_runtime_subdir = host_machine.cpu_family() == 'x86_64' ? 'x86_64-unix' : host_machine.cpu_family() + '-unix'
-dxmt9_winemetal_unix_link_args = [
-  '-Wl,-install_name,@rpath/winemetal.so',
-]
+dxmt9_winemetal_unix_common_link_args = []
 dxmt9_winemetal_unix_override_options = {}
 
 wine_build_path = get_option('wine_build_path')
@@ -30,7 +28,7 @@ if host_machine.system() == 'darwin'
     if not wine_build_path.startswith('/')
       wine_build_path = join_paths(meson.project_source_root(), wine_build_path)
     endif
-    dxmt9_winemetal_unix_link_args += [
+    dxmt9_winemetal_unix_common_link_args += [
       join_paths(wine_build_path, 'dlls/winemac.drv/winemac.so'),
       join_paths(wine_build_path, 'dlls/ntdll/ntdll.so'),
     ]
@@ -39,7 +37,7 @@ if host_machine.system() == 'darwin'
     if not wine_install_path.startswith('/')
       wine_install_path = join_paths(meson.project_source_root(), wine_install_path)
     endif
-    dxmt9_winemetal_unix_link_args += [
+    dxmt9_winemetal_unix_common_link_args += [
       join_paths(wine_install_path, 'lib/wine', dxmt9_winemetal_unix_runtime_subdir, 'winemac.so'),
       join_paths(wine_install_path, 'lib/wine', dxmt9_winemetal_unix_runtime_subdir, 'ntdll.so'),
     ]
@@ -48,6 +46,12 @@ if host_machine.system() == 'darwin'
 endif
 
 dxmt9_winemetal_unix_install_dir = get_option('libdir') / 'wine' / dxmt9_winemetal_unix_runtime_subdir
+dxmt9_winemetal_unix_framework_dep = dependency('appleframeworks', modules: [
+  'AppKit',
+  'Foundation',
+  'Metal',
+  'QuartzCore',
+])
 
 dxmt9_winemetal_unix_module = shared_library(
   'winemetal',
@@ -55,27 +59,23 @@ dxmt9_winemetal_unix_module = shared_library(
     '../winemetal_unix_call_handlers.cpp',
     'winemetal_unix.cpp',
   ),
-  bridge_codegen[2],
   name_prefix: '',
   name_suffix: 'so',
   include_directories: [
     dxmt9_inc,
-    bridge_gen_inc,
     dxmt9_winemetal_internal_inc,
     include_directories('../..'),
   ],
   dependencies: [
     dxmt9_util_dep,
-    dxmt9_unix_runtime_root_dep,
-    dependency('appleframeworks', modules: [
-      'AppKit',
-      'Foundation',
-      'Metal',
-      'QuartzCore',
-    ]),
+    dxmt9_frontend_core_dep,
+    dxmt9_runtime_dep,
+    dxmt9_shader_service_core_dep,
+    dxmt9_winemetal_runtime_service_shim_dep,
+    dxmt9_winemetal_unix_framework_dep,
   ],
   cpp_args: ['-DWINE_UNIX_LIB=1'],
-  link_args: dxmt9_winemetal_unix_link_args,
+  link_args: ['-Wl,-install_name,@rpath/winemetal.so'] + dxmt9_winemetal_unix_common_link_args,
   build_rpath: '@loader_path/:@loader_path/../../',
   install_rpath: '',
   override_options: dxmt9_winemetal_unix_override_options,
