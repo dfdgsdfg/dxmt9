@@ -27,12 +27,14 @@ bridge_codegen = custom_target(
   command: [
     python3,
     files('scripts/gen_wine_bridge.py'),
+    '--schema-header', files('src/winemetal/winemetal_unix_schema.h'),
     '--ops-header', '@OUTPUT0@',
     '--client-cpp', '@OUTPUT1@',
     '--server-cpp', '@OUTPUT2@',
     '--server-entries', '@OUTPUT3@',
   ],
   depend_files: files(
+    'src/winemetal/winemetal_unix_schema.h',
     'include/dxmt9/device_c.h',
     'scripts/gen_wine_bridge.py',
   ),

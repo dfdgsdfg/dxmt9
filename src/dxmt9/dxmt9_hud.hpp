@@ -1,10 +1,11 @@
 #pragma once
 
-#import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 
 #include "dxmt9_compat.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9_queue.hpp"
+#include "../winemetal/Metal.hpp"
 
 #include <string>
 #include <deque>
@@ -33,8 +34,8 @@ class DeveloperHudState {
 
   bool initialized_ = false;
   bool available_ = false;
-  id hud_ = nil;
-  std::vector<NSString*> labels_{};
+  WMT::Reference<WMT::DeveloperHUDProperties> hud_{};
+  std::vector<WMT::Reference<WMT::String>> labels_{};
 };
 
 class DeveloperHudController {

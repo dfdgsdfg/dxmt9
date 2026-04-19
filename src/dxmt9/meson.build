@@ -1,5 +1,5 @@
 dxmt9_shader_service_core_srcs = files('dxmt9_shader_service.cpp')
-dxmt9unix_service_abi_srcs = files('dxmt9_shader_service_exports.cpp')
+dxmt9_provider_service_abi_srcs = files('dxmt9_shader_service_exports.cpp')
 
 dxmt9_runtime_srcs = files(
   'backend.cpp',

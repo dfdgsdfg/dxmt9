@@ -1,6 +1,6 @@
 LIBRARY winemetal.dll
 EXPORTS
-  dxmt9_bridge_unix_call
+  dxmt9_winemetal_unix_call
   dxmt9_winemetal_compile_shader
   dxmt9_winemetal_shader_source
   dxmt9_winemetal_shader_source_size

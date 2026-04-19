@@ -10,12 +10,12 @@
 namespace {
 
 thread_local std::string gShaderSourceScratch;
-extern "C" NTSTATUS dxmt9_bridge_unix_call(unsigned int code, void* args);
+extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void* args);
 
 NTSTATUS providerUnixCall(unsigned int code, void* args) {
   dxmt9::util::logf(dxmt9::util::LogLevel::Debug, "winemetal-thunks",
                     "unix_call code=%u args=%p", code, args);
-  return dxmt9_bridge_unix_call(code, args);
+  return dxmt9_winemetal_unix_call(code, args);
 }
 
 dxmt9_u64 compileShaderViaUnixCall(const WinemetalShaderCompileRequest* request) {

@@ -154,8 +154,37 @@ def parse_prototype(raw: str) -> Proto:
     )
 
 
-def collect_device_c_prototypes() -> list[Proto]:
-    text = DEVICE_C_HEADER.read_text()
+def load_schema_text(path: pathlib.Path, visited: set[pathlib.Path] | None = None) -> str:
+    if visited is None:
+        visited = set()
+    path = path.resolve()
+    if path in visited:
+        return ""
+    visited.add(path)
+
+    lines: list[str] = []
+    include_re = re.compile(r'^\s*#\s*include\s+"([^"]+)"')
+    for raw_line in path.read_text().splitlines():
+        match = include_re.match(raw_line)
+        if not match:
+            lines.append(raw_line)
+            continue
+
+        include_path = match.group(1)
+        resolved = (path.parent / include_path).resolve()
+        if not resolved.exists():
+            resolved = (REPO_ROOT / include_path).resolve()
+        if not resolved.exists():
+            lines.append(raw_line)
+            continue
+
+        lines.append(load_schema_text(resolved, visited))
+
+    return "\n".join(lines)
+
+
+def collect_device_c_prototypes(schema_header: pathlib.Path) -> list[Proto]:
+    text = load_schema_text(schema_header)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     matches = re.finditer(
         r"([A-Za-z_][A-Za-z0-9_\s\*]*?\s+dxmt9c_[A-Za-z0-9_]+\s*\([^;]*?\)\s*;)",
@@ -165,8 +194,8 @@ def collect_device_c_prototypes() -> list[Proto]:
     return [parse_prototype(match.group(1)[:-1]) for match in matches]
 
 
-def collect_prototypes() -> list[Proto]:
-    return collect_device_c_prototypes()
+def collect_prototypes(schema_header: pathlib.Path) -> list[Proto]:
+    return collect_device_c_prototypes(schema_header)
 
 
 def wow64_field_decl(param: Param) -> str:
@@ -231,7 +260,7 @@ def write_client_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append('#include "dxmt9/wineunixlib.h"')
     lines.append(f'#include "{ops_header_name}"')
     lines.append("")
-    lines.append('extern "C" NTSTATUS dxmt9_bridge_unix_call(unsigned int code, void *args);')
+    lines.append('extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void *args);')
     lines.append("")
     lines.append("namespace dxmt9::bridge {")
     lines.append("template <typename T>")
@@ -251,7 +280,7 @@ def write_client_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
         for param in proto.params:
             lines.append(f"  args.{param.name} = {param.name};")
         lines.append(
-            f"  const NTSTATUS status = dxmt9_bridge_unix_call(static_cast<unsigned int>(dxmt9::bridge::BridgeOpcode::{proto.name}), &args);"
+            f"  const NTSTATUS status = dxmt9_winemetal_unix_call(static_cast<unsigned int>(dxmt9::bridge::BridgeOpcode::{proto.name}), &args);"
         )
         if proto.return_type == "void":
             lines.append("  (void)status;")
@@ -411,13 +440,14 @@ def write_server_entries(path: pathlib.Path, protos: list[Proto]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--schema-header", required=False, default=str(DEVICE_C_HEADER))
     parser.add_argument("--ops-header", required=True)
     parser.add_argument("--client-cpp", required=True)
     parser.add_argument("--server-cpp", required=True)
     parser.add_argument("--server-entries", required=True)
     args = parser.parse_args()
 
-    protos = collect_prototypes()
+    protos = collect_prototypes(pathlib.Path(args.schema_header))
 
     ops_header = pathlib.Path(args.ops_header)
     client_cpp = pathlib.Path(args.client_cpp)

@@ -1,5 +1,5 @@
 #include "dxmt9_shader_service.hpp"
-#include "dxmt9unix_service_abi.h"
+#include "dxmt9_provider_service_abi.h"
 #include "util/unixcall_marshal.hpp"
 #include "util/util_buffer.hpp"
 
@@ -26,7 +26,7 @@ WinemetalShaderCompileRequest decodeCompileShaderRequest(
 }  // namespace
 
 extern "C" dxmt9_u64
-dxmt9unix_service_compile_shader(const WinemetalShaderCompileRequest* request) {
+dxmt9_provider_service_compile_shader(const WinemetalShaderCompileRequest* request) {
   if (!request) {
     return 0;
   }
@@ -34,22 +34,22 @@ dxmt9unix_service_compile_shader(const WinemetalShaderCompileRequest* request) {
 }
 
 extern "C" dxmt9_u64
-dxmt9unix_service_compile_shader_marshaled(const Dxmt9WinemetalCompileShaderParams* params) {
+dxmt9_provider_service_compile_shader_marshaled(const Dxmt9WinemetalCompileShaderParams* params) {
   if (!params) {
     return 0;
   }
   const auto request = decodeCompileShaderRequest(*params);
-  return dxmt9unix_service_compile_shader(&request);
+  return dxmt9_provider_service_compile_shader(&request);
 }
 
-extern "C" dxmt9_u64 dxmt9unix_service_shader_source_size(dxmt9_u64 shaderHandle) {
+extern "C" dxmt9_u64 dxmt9_provider_service_shader_source_size(dxmt9_u64 shaderHandle) {
   return dxmt9::core::shader_service::sourceSize(shaderHandle);
 }
 
 extern "C" dxmt9_u64
-dxmt9unix_service_shader_source_copy(dxmt9_u64 shaderHandle,
-                                     char* buffer,
-                                     dxmt9_u64 bufferCapacity) {
+dxmt9_provider_service_shader_source_copy(dxmt9_u64 shaderHandle,
+                                          char* buffer,
+                                          dxmt9_u64 bufferCapacity) {
   if (!buffer || bufferCapacity == 0) {
     return 0;
   }
@@ -62,7 +62,7 @@ dxmt9unix_service_shader_source_copy(dxmt9_u64 shaderHandle,
 }
 
 extern "C" dxmt9_u64
-dxmt9unix_service_shader_source_copy_marshaled(const Dxmt9WinemetalShaderSourceCopyParams* params) {
+dxmt9_provider_service_shader_source_copy_marshaled(const Dxmt9WinemetalShaderSourceCopyParams* params) {
   if (!params) {
     return 0;
   }
@@ -71,18 +71,18 @@ dxmt9unix_service_shader_source_copy_marshaled(const Dxmt9WinemetalShaderSourceC
   if (!destination) {
     return 0;
   }
-  return dxmt9unix_service_shader_source_copy(
+  return dxmt9_provider_service_shader_source_copy(
       params->shader_handle, destination, params->buffer_capacity);
 }
 
-extern "C" void dxmt9unix_service_destroy_shader(dxmt9_u64 shaderHandle) {
+extern "C" void dxmt9_provider_service_destroy_shader(dxmt9_u64 shaderHandle) {
   dxmt9::core::shader_service::destroy(shaderHandle);
 }
 
-extern "C" void dxmt9unix_service_destroy_shader_marshaled(
+extern "C" void dxmt9_provider_service_destroy_shader_marshaled(
     const Dxmt9WinemetalDestroyShaderParams* params) {
   if (!params) {
     return;
   }
-  dxmt9unix_service_destroy_shader(params->shader_handle);
+  dxmt9_provider_service_destroy_shader(params->shader_handle);
 }

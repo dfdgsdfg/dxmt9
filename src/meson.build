@@ -4,7 +4,7 @@ subdir('dxmt9')
 subdir('winemetal')
 dxmt9_anchor_srcs = files('dxmt9/dxmt9.cpp')
 dxmt9_native_bridge_srcs = files(
-  'dxmt9/dxmt9unix_public_api.cpp',
+  'dxmt9/dxmt9_provider_public_api.cpp',
 )
 
 dxmt9_deps = []
@@ -35,7 +35,8 @@ dxmt9_native_lib = shared_library(
     dxmt9_frontend_provider_dep,
     dxmt9_runtime_dep,
     dxmt9_shader_service_core_dep,
-    dxmt9unix_service_abi_dep,
+    dxmt9_provider_service_abi_dep,
+    dxmt9_winemetal_dep,
   ],
   install: false,
 )

@@ -110,19 +110,17 @@ Output:
 
 ## Runtime Layout
 
-`dxmt9` is split into three public runtime binaries plus two private bridge helpers:
+`dxmt9` is split into three runtime binaries:
 
 | Binary | Kind | Role |
 |---|---|---|
 | `d3d9.dll` | PE DLL | User-facing D3D9 entry points loaded by the app |
-| `winemetal.dll` | PE DLL | Internal PE bridge that dispatches `dxmt9c_*` and shader/provider calls into `dxmt9unix.so` and keeps a paired thin `winemetal.so` native-service root |
-| `dxmt9unix.dll` | PE DLL | Private PE helper that forwards `dxmt9c_*` unix calls into `dxmt9unix.so` on Wine hosts without `__wine_load_unix_lib` |
-| `winemetal.so` | Wine unix module | Thin native-service unix root |
-| `dxmt9unix.so` | Wine unix module | Private DX9 provider/runtime + shader-service unix module |
+| `winemetal.dll` | PE DLL | Internal PE bridge that dispatches `dxmt9c_*` and shader/provider calls into `winemetal.so` |
+| `winemetal.so` | Wine unix module | Single unixlib root that hosts generated `dxmt9c_*` dispatch plus provider/runtime + shader-service handlers |
 
-`d3d9.dll` imports `winemetal.dll`. `winemetal.dll` loads both `winemetal.so`
-and the private `dxmt9unix.so` unixlib helper. The PE bridge must not import a
-Mach-O `.dylib` directly.
+`d3d9.dll` imports `winemetal.dll`. `winemetal.dll` dispatches into the single
+`winemetal.so` unixlib. The PE bridge must not import a Mach-O `.dylib`
+directly.
 
 ---
 
@@ -134,9 +132,7 @@ You need these files from a release or local build:
 
 - `d3d9.dll`
 - `winemetal.dll`
-- `dxmt9unix.dll`
 - `winemetal.so`
-- `dxmt9unix.so`
 - `libc++.dll` and `libunwind.dll` from `llvm-mingw` if your Wine prefix does
   not already have them
 
@@ -149,10 +145,8 @@ You also need a recent macOS Wine build with:
 Confirmed host:
 
 - Heroic Wine 11.6 on macOS, tested on 2026-04-17 with the builtin
-  `d3d9.dll` + `winemetal.dll` + `winemetal.so` + private `dxmt9unix.so`
-  plus private `dxmt9unix.dll`
-  layout; `wsi_present_x64.exe`
-  completes the full 180-frame present smoke
+  `d3d9.dll` + `winemetal.dll` + `winemetal.so` layout;
+  `wsi_present_x64.exe` completes the full 180-frame present smoke
 
 Intended hosts that follow the same Wine runtime model:
 
@@ -174,13 +168,9 @@ cp build-win32-x64-builtin/src/win32/d3d9.dll \
 
 cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
   "$WINE_ROOT/lib/wine/x86_64-windows/winemetal.dll"
-cp build-win32-x64-builtin/src/winemetal/dxmt9unix.dll \
-  "$WINE_ROOT/lib/wine/x86_64-windows/dxmt9unix.dll"
 
 cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
   "$WINE_ROOT/lib/wine/x86_64-unix/winemetal.so"
-cp build-x86_64-builtin/src/winemetal/dxmt9unix.so \
-  "$WINE_ROOT/lib/wine/x86_64-unix/dxmt9unix.so"
 
 # Required when the PE bridge was built with llvm-mingw's libc++ runtime
 cp "$HOME/llvm-mingw/x86_64-w64-mingw32/bin/libc++.dll" \
@@ -198,13 +188,8 @@ What goes where:
 - `winemetal.dll` goes into Wine's `x86_64-windows` runtime directory as the builtin
   PE bridge for both the main D3D9 C ABI and the public shader ABI. It is not copied
   into `system32` on the verified builtin path.
-- `dxmt9unix.dll` goes into Wine's `x86_64-windows` runtime directory as the
-  private PE helper that forwards provider-side unix calls into `dxmt9unix.so`.
 - `winemetal.so` goes into Wine's `x86_64-unix` runtime directory because it is
-  the thin unix-side native-service root paired with `winemetal.dll`.
-- `dxmt9unix.so` goes into Wine's `x86_64-unix` runtime directory as the
-  private DX9 provider/runtime + shader-service unix helper loaded by
-  `winemetal.dll`.
+  the single unix-side service root paired with `winemetal.dll`.
 
 Typical `WINE_ROOT` examples:
 
@@ -231,11 +216,10 @@ bash scripts/install_heroic_wine.sh --prefix "/path/to/heroic/prefix"
 
 The script auto-detects the latest `Wine-*` runtime under Heroic, installs the
 latest plain Heroic Wine runtime by default, skips Heroic `*-DXMT` variants
-unless you pass `--wine-root`, installs the private bridge helpers
-(`winemetal.dll`, `dxmt9unix.dll`, `winemetal.so`, `dxmt9unix.so`), copies
-`libc++.dll` / `libunwind.dll`, and creates `.dxmt9-backup` copies before
-overwriting an existing file. This is the verified install path for Heroic
-Wine 11.6.
+unless you pass `--wine-root`, installs `winemetal.dll` and `winemetal.so`,
+copies `libc++.dll` / `libunwind.dll`, and creates `.dxmt9-backup` copies
+before overwriting an existing file. This is the verified install path for
+Heroic Wine 11.6.
 
 ### For developers
 

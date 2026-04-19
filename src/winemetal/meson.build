@@ -80,22 +80,6 @@ if host_machine.system() == 'windows'
     install_dir: winemetal_install_dir,
   )
 
-  dxmt9unix_dll = shared_library(
-    'dxmt9unix',
-    files('main.c', 'dxmt9unix_bridge.cpp'),
-    name_prefix: '',
-    name_suffix: 'dll',
-    vs_module_defs: files('dxmt9unix.def')[0],
-    include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
-    dependencies: winemetal_bridge_deps + [
-      dxmt9_util_dep,
-    ],
-    c_args: winemetal_bridge_c_args,
-    cpp_args: winemetal_bridge_cpp_args,
-    install: true,
-    install_dir: winemetal_install_dir,
-  )
-
   dxmt9_winemetal_import_dep = declare_dependency(
     link_with: winemetal_dll,
     include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_winemetal_internal_inc],
@@ -117,22 +101,14 @@ if host_machine.system() == 'windows'
       depends: winemetal_dll,
       build_by_default: true,
     )
-    custom_target(
-      'dxmt9unix_builtin_postprocess',
-      input: dxmt9unix_dll,
-      output: 'dxmt9unix.dll.postproc',
-      command: [winebuild, '--builtin', '@INPUT@'],
-      depends: dxmt9unix_dll,
-      build_by_default: true,
-    )
   endif
 
   subdir_done()
 endif
 
-dxmt9unix_service_abi_lib = static_library(
-  'dxmt9unix_service_abi',
-  dxmt9unix_service_abi_srcs,
+dxmt9_provider_service_abi_lib = static_library(
+  'dxmt9_provider_service_abi',
+  dxmt9_provider_service_abi_srcs,
   include_directories: [
     dxmt9_inc,
     bridge_gen_inc,
@@ -146,8 +122,8 @@ dxmt9unix_service_abi_lib = static_library(
   install: false,
 )
 
-dxmt9unix_service_abi_dep = declare_dependency(
-  link_with: dxmt9unix_service_abi_lib,
+dxmt9_provider_service_abi_dep = declare_dependency(
+  link_with: dxmt9_provider_service_abi_lib,
   include_directories: [
     dxmt9_inc,
     bridge_gen_inc,
@@ -157,39 +133,6 @@ dxmt9unix_service_abi_dep = declare_dependency(
 )
 
 subdir('unix')
-
-dxmt9_unix_provider_module = shared_library(
-  'dxmt9unix',
-  files(
-    'unix/dxmt9unix_unix.cpp',
-    '../dxmt9/dxmt9unix_shader_handlers.cpp',
-  ),
-  bridge_codegen[2],
-  name_prefix: '',
-  name_suffix: 'so',
-  include_directories: [
-    dxmt9_inc,
-    bridge_gen_inc,
-    dxmt9_winemetal_internal_inc,
-    include_directories('..'),
-  ],
-  dependencies: [
-    dxmt9_util_dep,
-    dxmt9_frontend_bridge_dep,
-    dxmt9_frontend_provider_dep,
-    dxmt9_runtime_dep,
-    dxmt9_shader_service_core_dep,
-    dxmt9unix_service_abi_dep,
-    dxmt9_winemetal_unix_framework_dep,
-  ],
-  cpp_args: ['-DWINE_UNIX_LIB=1'],
-  link_args: ['-Wl,-install_name,@rpath/dxmt9unix.so'] + dxmt9_winemetal_unix_common_link_args,
-  build_rpath: '@loader_path/:@loader_path/../../',
-  install_rpath: '',
-  override_options: dxmt9_winemetal_unix_override_options,
-  install: true,
-  install_dir: dxmt9_winemetal_unix_install_dir,
-)
 
 dxmt9_winemetal_dep = declare_dependency(
   link_with: dxmt9_winemetal_unix_module,

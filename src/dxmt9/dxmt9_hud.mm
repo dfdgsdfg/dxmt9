@@ -1,6 +1,3 @@
-#import <objc/message.h>
-#import <objc/runtime.h>
-
 #include "dxmt9_hud.hpp"
 
 #include "util/config/config.hpp"
@@ -16,18 +13,7 @@ bool compatHudEnabled() {
 
 DeveloperHudState::DeveloperHudState() = default;
 
-DeveloperHudState::~DeveloperHudState() {
-  @autoreleasepool {
-    if (hud_) {
-      for (NSString* label : labels_) {
-        [label release];
-      }
-      labels_.clear();
-      [hud_ release];
-      hud_ = nil;
-    }
-  }
-}
+DeveloperHudState::~DeveloperHudState() = default;
 
 void DeveloperHudState::update(u32 frame, u64 seqId, u32 flags, const std::string& errorSummary) {
   if (!ensureInitialized()) {
@@ -50,40 +36,31 @@ bool DeveloperHudState::ensureInitialized() {
     return false;
   }
 
-  @autoreleasepool {
-    Class hudClass = objc_lookUpClass("_CADeveloperHUDProperties");
-    if (!hudClass) {
-      return false;
-    }
-    const auto instanceFn = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
-    hud_ = [instanceFn(reinterpret_cast<id>(hudClass), @selector(instance)) retain];
-    if (!hud_) {
-      return false;
-    }
-
-    addLabel("com.github.3shain.dxmt9-heading", "com.apple.hud-graph.default");
-    addLabel("com.github.3shain.dxmt9-flags", "com.github.3shain.dxmt9-heading");
-    addLabel("com.github.3shain.dxmt9-error", "com.github.3shain.dxmt9-flags");
-    available_ = true;
+  hud_ = WMT::DeveloperHUDProperties::instance();
+  if (!hud_) {
+    return false;
   }
+
+  addLabel("com.github.3shain.dxmt9-heading", "com.apple.hud-graph.default");
+  addLabel("com.github.3shain.dxmt9-flags", "com.github.3shain.dxmt9-heading");
+  addLabel("com.github.3shain.dxmt9-error", "com.github.3shain.dxmt9-flags");
+  available_ = true;
   return available_;
 }
 
 void DeveloperHudState::addLabel(const char* label, const char* after) {
-  NSString* labelString = [[NSString alloc] initWithUTF8String:label];
-  NSString* afterString = [NSString stringWithUTF8String:after];
-  const auto addFn = reinterpret_cast<BOOL (*)(id, SEL, id, id)>(objc_msgSend);
-  (void)addFn(hud_, @selector(addLabel:after:), labelString, afterString);
-  labels_.push_back(labelString);
+  auto labelString = WMT::MakeString(label, WMTUTF8StringEncoding);
+  auto afterString = WMT::MakeString(after, WMTUTF8StringEncoding);
+  (void)hud_.addLabel(labelString, afterString);
+  labels_.push_back(std::move(labelString));
 }
 
 void DeveloperHudState::updateLine(size_t index, const std::string& value) {
   if (index >= labels_.size()) {
     return;
   }
-  NSString* valueString = [NSString stringWithUTF8String:value.c_str()];
-  const auto updateFn = reinterpret_cast<void (*)(id, SEL, id, id)>(objc_msgSend);
-  updateFn(hud_, @selector(updateLabel:value:), labels_[index], valueString);
+  auto valueString = WMT::MakeString(value.c_str(), WMTUTF8StringEncoding);
+  hud_.updateLabel(labels_[index], valueString);
 }
 
 metalqueue::CommandBufferDiagnostics

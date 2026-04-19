@@ -1,10 +1,8 @@
-/* src/winemetal/winemetal_bridge.cpp — PE bridge bootstrap for the thin
- * native-service winemetal.so path and the private dxmt9unix provider path.
+/* src/winemetal/winemetal_bridge.cpp — PE bridge bootstrap for the single
+ * winemetal.so unixlib path.
  *
- * winemetal.so is the native-service unix module.
- * dxmt9unix.so is the private DX9 provider/runtime + shader-service unix
- * module paired with a private dxmt9unix.dll PE helper on Wine hosts without
- * __wine_load_unix_lib.
+ * winemetal.so hosts both the generated dxmt9c_* unix server surface and the
+ * provider-side shader/runtime unix handlers.
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -25,7 +23,6 @@ using WineUnixCallDispatcherVar = NTSTATUS (WINAPI *)(unixlib_handle_t handle,
                                                       unsigned int code,
                                                       void *args);
 using WineInitUnixCallFn = NTSTATUS (WINAPI *)(void);
-using Dxmt9UnixBridgeFn = NTSTATUS (WINAPI *)(unsigned int code, void* args);
 using NtQueryVirtualMemoryFn = NTSTATUS (WINAPI *)(HANDLE process,
                                                    const void *base_address,
                                                    ULONG info_class,
@@ -53,28 +50,10 @@ struct BridgeState {
   NTSTATUS status = DXMT9_STATUS_NOT_SUPPORTED;
 };
 
-struct HelperDllState {
-  std::once_flag initialized;
-  const WCHAR* module_name = nullptr;
-  const char* export_name = nullptr;
-  HMODULE module = nullptr;
-  Dxmt9UnixBridgeFn bridge_call = nullptr;
-  NTSTATUS status = DXMT9_STATUS_NOT_SUPPORTED;
-};
-
 BridgeState& winemetalUnixBridgeState() {
-  static BridgeState state{
-      .module_name = L"winemetal.so",
-      .allow_builtin_dispatcher_fallback = true,
-  };
-  return state;
-}
-
-HelperDllState& dxmt9UnixBridgeState() {
-  static HelperDllState state{
-      .module_name = L"dxmt9unix.dll",
-      .export_name = "dxmt9unix_bridge_unix_call",
-  };
+  static BridgeState state{};
+  state.module_name = L"winemetal.so";
+  state.allow_builtin_dispatcher_fallback = true;
   return state;
 }
 
@@ -176,55 +155,12 @@ void initializeWinemetalUnixBridge() {
   initializeBridgeState(winemetalUnixBridgeState());
 }
 
-void initializeDxmt9UnixBridge() {
-  auto& state = dxmt9UnixBridgeState();
-  state.module = LoadLibraryW(state.module_name);
-  bridgeDebugLog("initialize(%ls): module=%p", state.module_name, state.module);
-  if (!state.module) {
-    state.status = DXMT9_STATUS_DLL_NOT_FOUND;
-    return;
-  }
-  state.bridge_call = resolveProc<Dxmt9UnixBridgeFn>(state.module, state.export_name);
-  bridgeDebugLog("initialize(%ls): export %s=%p",
-                 state.module_name,
-                 state.export_name,
-                 reinterpret_cast<void*>(state.bridge_call));
-  state.status = state.bridge_call ? DXMT9_STATUS_SUCCESS : DXMT9_STATUS_NOT_SUPPORTED;
-}
-
 NTSTATUS ensureBridgeReady(BridgeState& state, void (*initializer)()) {
   std::call_once(state.initialized, initializer);
   return state.status;
 }
 
-NTSTATUS ensureHelperBridgeReady(HelperDllState& state, void (*initializer)()) {
-  std::call_once(state.initialized, initializer);
-  return state.status;
-}
-
 }  // namespace
-
-extern "C" NTSTATUS dxmt9_bridge_unix_call(unsigned int code, void *args) {
-  auto& state = dxmt9UnixBridgeState();
-  const NTSTATUS status = ensureHelperBridgeReady(state, initializeDxmt9UnixBridge);
-  if (status != DXMT9_STATUS_SUCCESS) {
-    bridgeDebugLog("dxmt9_bridge_unix_call: bridge not ready status=0x%08lx",
-                   static_cast<unsigned long>(status));
-    return status;
-  }
-  bridgeTraceLog("dxmt9_bridge_unix_call: module=%p code=%u bridge=%p",
-                 state.module,
-                 code,
-                 reinterpret_cast<void*>(state.bridge_call));
-  const NTSTATUS call_status = state.bridge_call(code, args);
-  if (call_status != DXMT9_STATUS_SUCCESS) {
-    bridgeDebugLog("dxmt9_bridge_unix_call: code=%u args=%p status=0x%08lx",
-                   code,
-                   args,
-                   static_cast<unsigned long>(call_status));
-  }
-  return call_status;
-}
 
 extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void *args) {
   auto& state = winemetalUnixBridgeState();

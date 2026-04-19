@@ -1,9 +1,8 @@
-#import <objc/message.h>
-
 #include "dxmt9_queue.hpp"
 
 #include "dxmt9_compat.hpp"
 #include "dxmt9_hud.hpp"
+#include "../winemetal/Metal.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -1368,7 +1367,8 @@ bool CompletionTracker::inspect(id<MTLCommandBuffer> commandBuffer,
     return false;
   }
 
-  const MTLCommandBufferStatus status = [commandBuffer status];
+  WMT::CommandBuffer wrapped{reinterpret_cast<obj_handle_t>(commandBuffer)};
+  const MTLCommandBufferStatus status = static_cast<MTLCommandBufferStatus>(wrapped.status());
   if (queueTraceEnabled()) {
     dxmt9::util::logf(dxmt9::util::LogLevel::Debug, "dxmt9-metal",
                       "%s seq=%llu slot=%zu frame=%u status=%s draw=%d present=%d blit=%d",
@@ -1385,8 +1385,9 @@ bool CompletionTracker::inspect(id<MTLCommandBuffer> commandBuffer,
   if (status == MTLCommandBufferStatusError) {
     std::ostringstream summary;
     summary << context << " seq=" << diagnostics.seqId << " status=error";
-    if (NSError* error = [commandBuffer error]) {
-      summary << " error=" << [[error localizedDescription] UTF8String];
+    WMT::Error error = wrapped.error();
+    if (error) {
+      summary << " error=" << error.description().getUTF8String();
     }
     lastErrorSummary_ = summary.str();
     dxmt9::util::logLine(dxmt9::util::LogLevel::Error, "dxmt9-metal", lastErrorSummary_);
@@ -1394,19 +1395,19 @@ bool CompletionTracker::inspect(id<MTLCommandBuffer> commandBuffer,
     lastErrorSummary_.clear();
   }
 
-  if ([reinterpret_cast<id>(commandBuffer) respondsToSelector:@selector(logs)]) {
-    const auto logsFn = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend);
-    NSArray* logs = logsFn(reinterpret_cast<id>(commandBuffer), @selector(logs));
-    for (id logEntry in logs) {
-      NSString* description = [logEntry description];
+  WMT::LogContainer logs = wrapped.logs();
+  if (logs) {
+    for (WMT::Object logEntry : logs.elements()) {
+      WMT::String description = logEntry.description();
       if (!description) {
         continue;
       }
-      dxmt9::util::logf(dxmt9::util::LogLevel::Warn, "dxmt9-metal",
+      dxmt9::util::logf(dxmt9::util::LogLevel::Warn,
+                        "dxmt9-metal",
                         "%s seq=%llu metal-log=%s",
                         context,
                         static_cast<unsigned long long>(diagnostics.seqId),
-                        [description UTF8String]);
+                        description.getUTF8String().c_str());
     }
   }
 
