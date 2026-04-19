@@ -56,7 +56,6 @@ dxmt9_winemetal_unix_framework_dep = dependency('appleframeworks', modules: [
 dxmt9_winemetal_unix_module = shared_library(
   'winemetal',
   files(
-    '../winemetal_unix_call_handlers.cpp',
     'winemetal_unix.cpp',
   ),
   name_prefix: '',
@@ -68,10 +67,6 @@ dxmt9_winemetal_unix_module = shared_library(
   ],
   dependencies: [
     dxmt9_util_dep,
-    dxmt9_frontend_core_dep,
-    dxmt9_runtime_dep,
-    dxmt9_shader_service_core_dep,
-    dxmt9_winemetal_runtime_service_shim_dep,
     dxmt9_winemetal_unix_framework_dep,
   ],
   cpp_args: ['-DWINE_UNIX_LIB=1'],

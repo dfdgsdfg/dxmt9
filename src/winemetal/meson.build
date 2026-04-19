@@ -156,45 +156,14 @@ dxmt9_winemetal_runtime_service_shim_dep = declare_dependency(
   dependencies: [dxmt9_util_dep],
 )
 
-dxmt9_unix_runtime_root_lib = static_library(
-  'dxmt9_unix_runtime_root',
-  files('unix_runtime_root.cpp'),
-  link_whole: [
-    dxmt9_frontend_provider_lib,
-    dxmt9_runtime_lib,
-    dxmt9_shader_service_core_lib,
-    dxmt9_winemetal_runtime_service_shim_lib,
-  ],
-  include_directories: [
-    dxmt9_inc,
-    bridge_gen_inc,
-    dxmt9_winemetal_internal_inc,
-    dxmt9_runtime_internal_inc,
-    include_directories('..'),
-  ],
-  dependencies: [
-    dxmt9_util_dep,
-  ],
-  install: false,
-)
-
-dxmt9_unix_runtime_root_dep = declare_dependency(
-  link_with: dxmt9_unix_runtime_root_lib,
-  include_directories: [
-    dxmt9_inc,
-    bridge_gen_inc,
-    dxmt9_winemetal_internal_inc,
-  ],
-  dependencies: [
-    dxmt9_util_dep,
-  ],
-)
-
 subdir('unix')
 
 dxmt9_unix_provider_module = shared_library(
   'dxmt9unix',
-  files('unix/dxmt9unix_unix.cpp'),
+  files(
+    'unix/dxmt9unix_unix.cpp',
+    'winemetal_unix_call_handlers.cpp',
+  ),
   bridge_codegen[2],
   name_prefix: '',
   name_suffix: 'so',
@@ -206,7 +175,10 @@ dxmt9_unix_provider_module = shared_library(
   ],
   dependencies: [
     dxmt9_util_dep,
-    dxmt9_unix_runtime_root_dep,
+    dxmt9_frontend_provider_dep,
+    dxmt9_runtime_dep,
+    dxmt9_shader_service_core_dep,
+    dxmt9_winemetal_runtime_service_shim_dep,
     dxmt9_winemetal_unix_framework_dep,
   ],
   cpp_args: ['-DWINE_UNIX_LIB=1'],

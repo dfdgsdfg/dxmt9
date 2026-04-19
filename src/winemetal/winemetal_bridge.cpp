@@ -1,9 +1,10 @@
-/* src/winemetal/winemetal_bridge.cpp — PE bridge bootstrap for both
- * winemetal.so and the private dxmt9unix unix provider path.
+/* src/winemetal/winemetal_bridge.cpp — PE bridge bootstrap for the thin
+ * native-service winemetal.so path and the private dxmt9unix provider path.
  *
- * winemetal.so is the native Metal/shader service unix module.
- * dxmt9unix.so is the private DX9 provider/runtime unix module paired with a
- * private dxmt9unix.dll PE helper on Wine hosts without __wine_load_unix_lib.
+ * winemetal.so is the native-service unix module.
+ * dxmt9unix.so is the private DX9 provider/runtime + shader-service unix
+ * module paired with a private dxmt9unix.dll PE helper on Wine hosts without
+ * __wine_load_unix_lib.
  */
 
 #define WIN32_LEAN_AND_MEAN
