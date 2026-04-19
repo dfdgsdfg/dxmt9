@@ -65,6 +65,78 @@ extern "C" void NSObject_release(obj_handle_t obj) {
   [(id)obj release];
 }
 
+extern "C" obj_handle_t NSArray_object(obj_handle_t array, uint64_t index) {
+  if (!array) {
+    return NULL_OBJECT_HANDLE;
+  }
+  return (obj_handle_t)[(NSArray *)array objectAtIndex:index];
+}
+
+extern "C" uint64_t NSArray_count(obj_handle_t array) {
+  if (!array) {
+    return 0;
+  }
+  return [(NSArray *)array count];
+}
+
+extern "C" obj_handle_t WMTCopyAllDevices() {
+  return (obj_handle_t)MTLCopyAllDevices();
+}
+
+extern "C" uint64_t MTLDevice_recommendedMaxWorkingSetSize(obj_handle_t device) {
+  if (!device) {
+    return 0;
+  }
+  return [(id<MTLDevice>)device recommendedMaxWorkingSetSize];
+}
+
+extern "C" uint64_t MTLDevice_currentAllocatedSize(obj_handle_t device) {
+  if (!device) {
+    return 0;
+  }
+  return [(id<MTLDevice>)device currentAllocatedSize];
+}
+
+extern "C" obj_handle_t MTLDevice_name(obj_handle_t device) {
+  if (!device) {
+    return NULL_OBJECT_HANDLE;
+  }
+  return (obj_handle_t)[(id<MTLDevice>)device name];
+}
+
+extern "C" uint64_t MTLDevice_registryID(obj_handle_t device) {
+  if (!device) {
+    return 0;
+  }
+  return [(id<MTLDevice>)device registryID];
+}
+
+extern "C" obj_handle_t MTLDevice_newCommandQueue(obj_handle_t device, uint64_t maxCommandBufferCount) {
+  if (!device) {
+    return NULL_OBJECT_HANDLE;
+  }
+  id<MTLDevice> metal_device = (id<MTLDevice>)device;
+  if (maxCommandBufferCount != 0 &&
+      [metal_device respondsToSelector:@selector(newCommandQueueWithMaxCommandBufferCount:)]) {
+    return (obj_handle_t)[metal_device newCommandQueueWithMaxCommandBufferCount:maxCommandBufferCount];
+  }
+  return (obj_handle_t)[metal_device newCommandQueue];
+}
+
+extern "C" obj_handle_t MTLCommandQueue_commandBuffer(obj_handle_t queue) {
+  if (!queue) {
+    return NULL_OBJECT_HANDLE;
+  }
+  return (obj_handle_t)[(id<MTLCommandQueue>)queue commandBuffer];
+}
+
+extern "C" obj_handle_t MTLDevice_newSharedEvent(obj_handle_t device) {
+  if (!device) {
+    return NULL_OBJECT_HANDLE;
+  }
+  return (obj_handle_t)[(id<MTLDevice>)device newSharedEvent];
+}
+
 extern "C" uint32_t
 NSString_getCString(obj_handle_t str, char *buffer, uint64_t maxLength, enum WMTStringEncoding encoding) {
   if (!str || !buffer || maxLength == 0) {

@@ -13,6 +13,7 @@
 #include "dxmt9_presenter_support.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_shader_service.hpp"
+#include "../winemetal/Metal.hpp"
 #include "util/config/config.hpp"
 
 #include <algorithm>
@@ -309,6 +310,54 @@ class ObjcPtr {
 template <typename T>
 T* ptr(T object) {
   return object;
+}
+
+template <typename T>
+obj_handle_t toWmtHandle(T object) {
+  return static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>(object));
+}
+
+template <typename T>
+T fromWmtHandle(obj_handle_t handle) {
+  return reinterpret_cast<T>(static_cast<uintptr_t>(handle));
+}
+
+ObjcPtr<id<MTLDevice>> bootstrapDeviceFromWrapper() {
+  auto devices = WMT::CopyAllDevices();
+  ObjcPtr<id<MTLDevice>> result;
+  if (!devices || devices.count() == 0) {
+    return result;
+  }
+  auto device = WMT::Device{devices.object(0)};
+  if (device) {
+    device.retain();
+    result = ObjcPtr<id<MTLDevice>>::adopt(fromWmtHandle<id<MTLDevice>>(device.handle));
+  }
+  return result;
+}
+
+ObjcPtr<id<MTLCommandQueue>> bootstrapCommandQueueFromWrapper(id<MTLDevice> device) {
+  if (!device) {
+    return {};
+  }
+  WMT::Device wrapped{toWmtHandle(device)};
+  auto commandQueue = wrapped.newCommandQueue(0);
+  if (!commandQueue) {
+    return {};
+  }
+  return ObjcPtr<id<MTLCommandQueue>>::retain(fromWmtHandle<id<MTLCommandQueue>>(commandQueue.handle));
+}
+
+ObjcPtr<id<MTLCommandBuffer>> bootstrapCommandBufferFromWrapper(id<MTLCommandQueue> queue) {
+  if (!queue) {
+    return {};
+  }
+  WMT::CommandQueue wrapped{toWmtHandle(queue)};
+  auto commandBuffer = wrapped.commandBuffer();
+  if (!commandBuffer) {
+    return {};
+  }
+  return ObjcPtr<id<MTLCommandBuffer>>::retain(fromWmtHandle<id<MTLCommandBuffer>>(commandBuffer.handle));
 }
 
 u64 makeHash(const std::string& source) {
@@ -4235,14 +4284,14 @@ class MetalBackendDevice final : public BackendDevice {
  public:
   explicit MetalBackendDevice(const BackendLimits& limits) : limits_(limits) {
     @autoreleasepool {
-      device_ = ObjcPtr<id<MTLDevice>>::adopt(MTLCreateSystemDefaultDevice());
+      device_ = bootstrapDeviceFromWrapper();
       if (!device_) {
         return;
       }
       if ([device_.get() respondsToSelector:@selector(isDepth24Stencil8PixelFormatSupported)]) {
         limits_.supportsDepth24Stencil8 = [device_.get() isDepth24Stencil8PixelFormatSupported];
       }
-      commandQueue_ = ObjcPtr<id<MTLCommandQueue>>::adopt([device_.get() newCommandQueue]);
+      commandQueue_ = bootstrapCommandQueueFromWrapper(device_.get());
       shaderArchiveURL_ = makeShaderArchiveURL();
       shaderArchive_ = loadShaderArchive(device_.get(), shaderArchiveURL_.get());
     }
@@ -4363,7 +4412,8 @@ class MetalBackendDevice final : public BackendDevice {
         return false;
       }
 
-      id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
+      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(commandQueue_.get());
+      id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
       if (!commandBuffer) {
         return false;
       }
@@ -4680,7 +4730,8 @@ class MetalBackendDevice final : public BackendDevice {
         }
         [stagingTexture replaceRegion:region mipmapLevel:0 withBytes:normalizedBytes.data() bytesPerRow:pitch];
 
-        id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
+        auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(commandQueue_.get());
+        id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
         if (!commandBuffer) {
           [stagingTexture release];
           return;
@@ -5022,7 +5073,8 @@ class MetalBackendDevice final : public BackendDevice {
         return std::nullopt;
       }
 
-      id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
+      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(commandQueue_.get());
+      id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
       if (!commandBuffer) {
         return std::nullopt;
       }
@@ -6285,7 +6337,8 @@ class MetalBackendDevice final : public BackendDevice {
         return;
       }
 
-      id<MTLCommandBuffer> commandBuffer = [commandQueue_.get() commandBuffer];
+      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(commandQueue_.get());
+      id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
       if (!commandBuffer) {
         [stagingTexture release];
         return;
