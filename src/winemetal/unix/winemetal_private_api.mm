@@ -83,6 +83,27 @@ extern "C" obj_handle_t WMTCopyAllDevices() {
   return (obj_handle_t)MTLCopyAllDevices();
 }
 
+extern "C" obj_handle_t MacdrvMetalDevice_create() {
+  auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
+  auto pfn_create_metal_device = macdrv_functions
+                                     ? macdrv_functions->macdrv_create_metal_device
+                                     : resolveMacdrvSymbol<macdrv_metal_device (*)()>("macdrv_create_metal_device");
+  if (!pfn_create_metal_device) {
+    return NULL_OBJECT_HANDLE;
+  }
+  return (obj_handle_t)pfn_create_metal_device();
+}
+
+extern "C" void MacdrvMetalDevice_release(obj_handle_t device) {
+  auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
+  auto pfn_release_metal_device = macdrv_functions
+                                      ? macdrv_functions->macdrv_release_metal_device
+                                      : resolveMacdrvSymbol<void (*)(macdrv_metal_device)>("macdrv_release_metal_device");
+  if (pfn_release_metal_device && device) {
+    pfn_release_metal_device((macdrv_metal_device)device);
+  }
+}
+
 extern "C" uint64_t MTLDevice_recommendedMaxWorkingSetSize(obj_handle_t device) {
   if (!device) {
     return 0;
@@ -376,6 +397,36 @@ extern "C" obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t devi
   obj_handle_t view_handle = (obj_handle_t)metal_view;
   obj_handle_t layer_handle = metal_view ? (obj_handle_t)pfn_get_metal_layer(metal_view) : NULL_OBJECT_HANDLE;
   pfn_release_win_data(win_data);
+
+  if (layer) {
+    *layer = layer_handle;
+  }
+  return view_handle;
+}
+
+extern "C" obj_handle_t CreateMetalViewFromCocoaView(obj_handle_t cocoa_view, obj_handle_t device,
+                                                      obj_handle_t *layer) {
+  auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
+  auto pfn_create_metal_view = macdrv_functions
+                                   ? macdrv_functions->macdrv_view_create_metal_view
+                                   : resolveMacdrvSymbol<macdrv_metal_view (*)(macdrv_view, macdrv_metal_device)>(
+                                         "macdrv_view_create_metal_view");
+  auto pfn_get_metal_layer = macdrv_functions
+                                 ? macdrv_functions->macdrv_view_get_metal_layer
+                                 : resolveMacdrvSymbol<macdrv_metal_layer (*)(macdrv_metal_view)>(
+                                       "macdrv_view_get_metal_layer");
+
+  if (!pfn_create_metal_view || !pfn_get_metal_layer || !cocoa_view) {
+    if (layer) {
+      *layer = NULL_OBJECT_HANDLE;
+    }
+    return NULL_OBJECT_HANDLE;
+  }
+
+  macdrv_metal_view metal_view =
+      pfn_create_metal_view((macdrv_view)cocoa_view, (macdrv_metal_device)device);
+  obj_handle_t view_handle = (obj_handle_t)metal_view;
+  obj_handle_t layer_handle = metal_view ? (obj_handle_t)pfn_get_metal_layer(metal_view) : NULL_OBJECT_HANDLE;
 
   if (layer) {
     *layer = layer_handle;

@@ -43,6 +43,10 @@ WINEMETAL_API uint64_t NSArray_count(obj_handle_t array);
 
 WINEMETAL_API obj_handle_t WMTCopyAllDevices();
 
+WINEMETAL_API obj_handle_t MacdrvMetalDevice_create();
+
+WINEMETAL_API void MacdrvMetalDevice_release(obj_handle_t device);
+
 enum WMTStringEncoding : uint64_t {
   WMTASCIIStringEncoding = 1,
   WMTNEXTSTEPStringEncoding = 2,
@@ -1658,6 +1662,9 @@ WINEMETAL_API void MetalLayer_getProps(obj_handle_t layer, struct WMTLayerProps 
 WINEMETAL_API void MetalLayer_setMaximumDrawableCount(obj_handle_t layer, uint32_t count);
 
 WINEMETAL_API obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer);
+
+WINEMETAL_API obj_handle_t CreateMetalViewFromCocoaView(obj_handle_t cocoa_view, obj_handle_t device,
+                                                        obj_handle_t *layer);
 
 WINEMETAL_API void ReleaseMetalView(obj_handle_t view);
 

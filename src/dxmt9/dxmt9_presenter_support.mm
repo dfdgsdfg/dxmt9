@@ -1,6 +1,7 @@
 #include "dxmt9_presenter_support.hpp"
 
 #include "dxmt9_queue.hpp"
+#include "../winemetal/Metal.hpp"
 #include "util/config/config.hpp"
 #include "util/dynamic_symbol.hpp"
 
@@ -88,19 +89,18 @@ NSView* get_nsview_for_hwnd(u64 hwnd) {
 }
 
 PresenterState::~PresenterState() {
-  const auto& interop = wineMacInterop();
   for (auto& [hwnd, record] : layers_) {
     unregisterLayerHandle(hwnd);
-    if (record.wineMetalViewHandle && interop.releaseMetalView) {
-      interop.releaseMetalView(asOpaquePointer(record.wineMetalViewHandle));
+    if (record.wineMetalViewHandle) {
+      WMT::MacdrvMetalView{static_cast<obj_handle_t>(record.wineMetalViewHandle)}.release();
     }
     if (record.layerHandle) {
       [asCAMetalLayer(record.layerHandle) release];
     }
   }
   layers_.clear();
-  if (wineMetalDeviceHandle_ && interop.releaseMetalDevice) {
-    interop.releaseMetalDevice(asOpaquePointer(wineMetalDeviceHandle_));
+  if (wineMetalDeviceHandle_) {
+    WMT::MacdrvMetalDevice{static_cast<obj_handle_t>(wineMetalDeviceHandle_)}.release();
   }
   wineMetalDeviceHandle_ = 0;
 }
@@ -156,12 +156,12 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       return nullptr;
     }
     record.layerHandle = toLayerHandle([legacyLayer retain]);
-  } else if (interop.getCocoaWindow && interop.createMetalDevice && interop.createMetalView &&
-             interop.getMetalLayer) {
+  } else if (interop.getCocoaWindow) {
     traceEvent("table-path.begin", seqId, hwnd);
     if (!wineMetalDeviceHandle_) {
       traceEvent("metal-device.begin", seqId, hwnd);
-      wineMetalDeviceHandle_ = toOpaqueHandle(interop.createMetalDevice());
+      auto macdrvDevice = WMT::CreateMacdrvMetalDevice();
+      wineMetalDeviceHandle_ = static_cast<uintptr_t>(macdrvDevice.handle);
       if (!wineMetalDeviceHandle_) {
         traceEvent("metal-device.nil", seqId, hwnd);
         return nullptr;
@@ -248,7 +248,12 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
     }
 
     traceEvent("metal-view.begin", seqId, hwnd);
-    void* metalView = interop.createMetalView(cocoaView, asOpaquePointer(wineMetalDeviceHandle_));
+    WMT::MetalLayer wrappedLayer;
+    auto metalView = WMT::CreateMetalViewFromCocoaView(
+        static_cast<obj_handle_t>(toOpaqueHandle(cocoaView)),
+        WMT::MacdrvMetalDevice{static_cast<obj_handle_t>(wineMetalDeviceHandle_)},
+        wrappedLayer
+    );
     if (!metalView) {
       traceEvent("metal-view.nil", seqId, hwnd);
       return nullptr;
@@ -256,10 +261,10 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
     traceEvent("metal-view.ok", seqId, hwnd);
 
     traceEvent("metal-layer.begin", seqId, hwnd);
-    auto* layer = static_cast<CAMetalLayer*>(interop.getMetalLayer(metalView));
+    auto* layer = asCAMetalLayer(static_cast<uintptr_t>(wrappedLayer.handle));
     if (!layer) {
-      if (metalView && interop.releaseMetalView) {
-        interop.releaseMetalView(metalView);
+      if (metalView) {
+        metalView.release();
       }
       traceEvent("metal-layer.nil", seqId, hwnd);
       return nullptr;
@@ -270,7 +275,7 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       dispatch_sync(dispatch_get_main_queue(), ^{
         @autoreleasepool {
           NSView* parentView = static_cast<NSView*>(cocoaView);
-          id metalViewObject = static_cast<id>(metalView);
+          id metalViewObject = static_cast<id>(asOpaquePointer(static_cast<uintptr_t>(metalView.handle)));
           std::ostringstream out;
           out << "[dxmt9-present] metal-view.info"
               << " seq=" << static_cast<unsigned long long>(seqId)
@@ -317,7 +322,7 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
     }
 
     record.layerHandle = toLayerHandle([layer retain]);
-    record.wineMetalViewHandle = toOpaqueHandle(metalView);
+    record.wineMetalViewHandle = static_cast<uintptr_t>(metalView.handle);
     record.usesWineMetalView = true;
   } else {
     traceEvent("interop.unavailable", seqId, hwnd);

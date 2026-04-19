@@ -10,6 +10,58 @@ namespace WMT {
 
 class String;
 
+class MacdrvMetalDevice {
+public:
+  obj_handle_t handle;
+
+  MacdrvMetalDevice() {
+    handle = NULL_OBJECT_HANDLE;
+  }
+
+  MacdrvMetalDevice(obj_handle_t h) {
+    handle = h;
+  }
+
+  void
+  release() {
+    MacdrvMetalDevice_release(handle);
+  }
+
+  operator bool() const {
+    return handle != 0;
+  }
+
+  operator obj_handle_t() const {
+    return handle;
+  }
+};
+
+class MacdrvMetalView {
+public:
+  obj_handle_t handle;
+
+  MacdrvMetalView() {
+    handle = NULL_OBJECT_HANDLE;
+  }
+
+  MacdrvMetalView(obj_handle_t h) {
+    handle = h;
+  }
+
+  void
+  release() {
+    ReleaseMetalView(handle);
+  }
+
+  operator bool() const {
+    return handle != 0;
+  }
+
+  operator obj_handle_t() const {
+    return handle;
+  }
+};
+
 class Object {
 public:
   obj_handle_t handle;
@@ -1017,13 +1069,23 @@ MakeDispatchData(void *native_ptr, uint64_t length) {
   return Reference<DispatchData>(DispatchData_alloc_init((uint64_t)native_ptr, length));
 }
 
-inline Object
-CreateMetalViewFromHWND(intptr_t hwnd, Device device, MetalLayer &layer) {
+inline MacdrvMetalDevice
+CreateMacdrvMetalDevice() {
+  return {::MacdrvMetalDevice_create()};
+}
+
+inline MacdrvMetalView
+CreateMetalViewFromHWND(intptr_t hwnd, MacdrvMetalDevice device, MetalLayer &layer) {
   return {::CreateMetalViewFromHWND(hwnd, device.handle, &layer.handle)};
 }
 
+inline MacdrvMetalView
+CreateMetalViewFromCocoaView(obj_handle_t cocoaView, MacdrvMetalDevice device, MetalLayer &layer) {
+  return {::CreateMetalViewFromCocoaView(cocoaView, device.handle, &layer.handle)};
+}
+
 inline void
-ReleaseMetalView(Object view) {
+ReleaseMetalView(MacdrvMetalView view) {
   return ::ReleaseMetalView(view.handle);
 }
 
