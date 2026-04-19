@@ -93,22 +93,15 @@ PresenterState::~PresenterState() {
     unregisterLayerHandle(hwnd);
     if (record.wineMetalViewHandle && interop.releaseMetalView) {
       interop.releaseMetalView(asOpaquePointer(record.wineMetalViewHandle));
-    } else if (record.wineMetalView && interop.releaseMetalView) {
-      interop.releaseMetalView(record.wineMetalView);
     }
     if (record.layerHandle) {
       [asCAMetalLayer(record.layerHandle) release];
-    } else if (record.layer) {
-      [record.layer release];
     }
   }
   layers_.clear();
   if (wineMetalDeviceHandle_ && interop.releaseMetalDevice) {
     interop.releaseMetalDevice(asOpaquePointer(wineMetalDeviceHandle_));
-  } else if (wineMetalDevice_ && interop.releaseMetalDevice) {
-    interop.releaseMetalDevice(wineMetalDevice_);
   }
-  wineMetalDevice_ = nullptr;
   wineMetalDeviceHandle_ = 0;
 }
 
@@ -162,15 +155,13 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       traceEvent("legacy-view.nil", seqId, hwnd);
       return nullptr;
     }
-    record.layer = [legacyLayer retain];
-    record.layerHandle = toLayerHandle(record.layer);
+    record.layerHandle = toLayerHandle([legacyLayer retain]);
   } else if (interop.getCocoaWindow && interop.createMetalDevice && interop.createMetalView &&
              interop.getMetalLayer) {
     traceEvent("table-path.begin", seqId, hwnd);
     if (!wineMetalDeviceHandle_) {
       traceEvent("metal-device.begin", seqId, hwnd);
-      wineMetalDevice_ = interop.createMetalDevice();
-      wineMetalDeviceHandle_ = toOpaqueHandle(wineMetalDevice_);
+      wineMetalDeviceHandle_ = toOpaqueHandle(interop.createMetalDevice());
       if (!wineMetalDeviceHandle_) {
         traceEvent("metal-device.nil", seqId, hwnd);
         return nullptr;
@@ -247,8 +238,7 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       });
       if (directLayer) {
         traceEvent("direct-layer.ok", seqId, hwnd);
-        record.layer = [directLayer retain];
-        record.layerHandle = toLayerHandle(record.layer);
+        record.layerHandle = toLayerHandle([directLayer retain]);
         CAMetalLayer* layer = asCAMetalLayer(record.layerHandle);
         registerLayerHandle(hwnd, layer);
         layers_[hwnd] = std::move(record);
@@ -326,10 +316,8 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       });
     }
 
-    record.layer = [layer retain];
-    record.layerHandle = toLayerHandle(record.layer);
-    record.wineMetalView = metalView;
-    record.wineMetalViewHandle = toOpaqueHandle(record.wineMetalView);
+    record.layerHandle = toLayerHandle([layer retain]);
+    record.wineMetalViewHandle = toOpaqueHandle(metalView);
     record.usesWineMetalView = true;
   } else {
     traceEvent("interop.unavailable", seqId, hwnd);

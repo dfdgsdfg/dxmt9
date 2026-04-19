@@ -48,15 +48,12 @@ class PresenterState {
 
  private:
   struct LayerRecord {
-    CAMetalLayer* layer = nil;
     uintptr_t layerHandle = 0;
-    void* wineMetalView = nullptr;
     uintptr_t wineMetalViewHandle = 0;
     bool usesWineMetalView = false;
   };
 
   std::unordered_map<u64, LayerRecord> layers_;
-  void* wineMetalDevice_ = nullptr;
   uintptr_t wineMetalDeviceHandle_ = 0;
 };
 
