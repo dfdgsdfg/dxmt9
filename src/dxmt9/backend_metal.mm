@@ -322,38 +322,48 @@ T fromWmtHandle(obj_handle_t handle) {
   return reinterpret_cast<T>(static_cast<uintptr_t>(handle));
 }
 
-ObjcPtr<id<MTLDevice>> bootstrapDeviceFromWrapper() {
+WMT::Reference<WMT::Device> bootstrapWrappedDevice() {
   auto devices = WMT::CopyAllDevices();
-  ObjcPtr<id<MTLDevice>> result;
   if (!devices || devices.count() == 0) {
-    return result;
+    return {};
   }
   auto device = WMT::Device{devices.object(0)};
-  if (device) {
-    device.retain();
-    result = ObjcPtr<id<MTLDevice>>::adopt(fromWmtHandle<id<MTLDevice>>(device.handle));
-  }
-  return result;
-}
-
-ObjcPtr<id<MTLCommandQueue>> bootstrapCommandQueueFromWrapper(id<MTLDevice> device) {
   if (!device) {
     return {};
   }
-  WMT::Device wrapped{toWmtHandle(device)};
-  auto commandQueue = wrapped.newCommandQueue(0);
+  return WMT::Reference<WMT::Device>(device);
+}
+
+ObjcPtr<id<MTLDevice>> retainDeviceFromWrapper(const WMT::Device& device) {
+  if (!device) {
+    return {};
+  }
+  return ObjcPtr<id<MTLDevice>>::retain(fromWmtHandle<id<MTLDevice>>(device.handle));
+}
+
+WMT::Reference<WMT::CommandQueue> bootstrapWrappedCommandQueue(WMT::Device& device) {
+  if (!device) {
+    return {};
+  }
+  auto commandQueue = device.newCommandQueue(0);
   if (!commandQueue) {
     return {};
   }
-  return ObjcPtr<id<MTLCommandQueue>>::retain(fromWmtHandle<id<MTLCommandQueue>>(commandQueue.handle));
+  return commandQueue;
 }
 
-ObjcPtr<id<MTLCommandBuffer>> bootstrapCommandBufferFromWrapper(id<MTLCommandQueue> queue) {
+ObjcPtr<id<MTLCommandQueue>> retainCommandQueueFromWrapper(WMT::CommandQueue& queue) {
   if (!queue) {
     return {};
   }
-  WMT::CommandQueue wrapped{toWmtHandle(queue)};
-  auto commandBuffer = wrapped.commandBuffer();
+  return ObjcPtr<id<MTLCommandQueue>>::retain(fromWmtHandle<id<MTLCommandQueue>>(queue.handle));
+}
+
+ObjcPtr<id<MTLCommandBuffer>> bootstrapCommandBufferFromWrapper(WMT::CommandQueue& queue) {
+  if (!queue) {
+    return {};
+  }
+  auto commandBuffer = queue.commandBuffer();
   if (!commandBuffer) {
     return {};
   }
@@ -4284,14 +4294,16 @@ class MetalBackendDevice final : public BackendDevice {
  public:
   explicit MetalBackendDevice(const BackendLimits& limits) : limits_(limits) {
     @autoreleasepool {
-      device_ = bootstrapDeviceFromWrapper();
+      wrappedDevice_ = bootstrapWrappedDevice();
+      device_ = retainDeviceFromWrapper(wrappedDevice_);
       if (!device_) {
         return;
       }
       if ([device_.get() respondsToSelector:@selector(isDepth24Stencil8PixelFormatSupported)]) {
         limits_.supportsDepth24Stencil8 = [device_.get() isDepth24Stencil8PixelFormatSupported];
       }
-      commandQueue_ = bootstrapCommandQueueFromWrapper(device_.get());
+      wrappedCommandQueue_ = bootstrapWrappedCommandQueue(wrappedDevice_);
+      commandQueue_ = retainCommandQueueFromWrapper(wrappedCommandQueue_);
       shaderArchiveURL_ = makeShaderArchiveURL();
       shaderArchive_ = loadShaderArchive(device_.get(), shaderArchiveURL_.get());
     }
@@ -4412,7 +4424,7 @@ class MetalBackendDevice final : public BackendDevice {
         return false;
       }
 
-      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(commandQueue_.get());
+      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(wrappedCommandQueue_);
       id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
       if (!commandBuffer) {
         return false;
@@ -4730,7 +4742,7 @@ class MetalBackendDevice final : public BackendDevice {
         }
         [stagingTexture replaceRegion:region mipmapLevel:0 withBytes:normalizedBytes.data() bytesPerRow:pitch];
 
-        auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(commandQueue_.get());
+        auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(wrappedCommandQueue_);
         id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
         if (!commandBuffer) {
           [stagingTexture release];
@@ -5073,7 +5085,7 @@ class MetalBackendDevice final : public BackendDevice {
         return std::nullopt;
       }
 
-      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(commandQueue_.get());
+      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(wrappedCommandQueue_);
       id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
       if (!commandBuffer) {
         return std::nullopt;
@@ -6337,7 +6349,7 @@ class MetalBackendDevice final : public BackendDevice {
         return;
       }
 
-      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(commandQueue_.get());
+      auto ownedCommandBuffer = bootstrapCommandBufferFromWrapper(wrappedCommandQueue_);
       id<MTLCommandBuffer> commandBuffer = ownedCommandBuffer.get();
       if (!commandBuffer) {
         [stagingTexture release];
@@ -6814,6 +6826,8 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   BackendLimits limits_{};
+  WMT::Reference<WMT::Device> wrappedDevice_{};
+  WMT::Reference<WMT::CommandQueue> wrappedCommandQueue_{};
   ObjcPtr<id<MTLDevice>> device_;
   ObjcPtr<id<MTLCommandQueue>> commandQueue_;
   std::thread encodeThread_;
