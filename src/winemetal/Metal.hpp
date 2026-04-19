@@ -556,6 +556,11 @@ public:
     MetalLayer_getProps(handle, &props);
   };
 
+  void
+  setMaximumDrawableCount(uint32_t count) {
+    MetalLayer_setMaximumDrawableCount(handle, count);
+  }
+
   bool
   setColorSpace(WMTColorSpace colorspace) {
     return MetalLayer_setColorSpace(handle, colorspace);

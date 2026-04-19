@@ -152,6 +152,22 @@ extern "C" void MTLCommandBuffer_commit(obj_handle_t cmdbuf) {
   [(id<MTLCommandBuffer>)cmdbuf commit];
 }
 
+extern "C" void MTLCommandBuffer_presentDrawable(obj_handle_t cmdbuf, obj_handle_t drawable) {
+  if (!cmdbuf || !drawable) {
+    return;
+  }
+  [(id<MTLCommandBuffer>)cmdbuf presentDrawable:(id<CAMetalDrawable>)drawable];
+}
+
+extern "C" void MTLCommandBuffer_presentDrawableAfterMinimumDuration(obj_handle_t cmdbuf,
+                                                                     obj_handle_t drawable,
+                                                                     double after) {
+  if (!cmdbuf || !drawable) {
+    return;
+  }
+  [(id<MTLCommandBuffer>)cmdbuf presentDrawable:(id<CAMetalDrawable>)drawable afterMinimumDuration:after];
+}
+
 extern "C" void MTLCommandBuffer_waitUntilCompleted(obj_handle_t cmdbuf) {
   if (!cmdbuf) {
     return;
@@ -239,6 +255,18 @@ extern "C" void MetalLayer_getProps(obj_handle_t layer, struct WMTLayerProps *pr
   props->display_sync_enabled = metal_layer.displaySyncEnabled;
   props->framebuffer_only = metal_layer.framebufferOnly;
   props->pixel_format = (WMTPixelFormat)metal_layer.pixelFormat;
+}
+
+extern "C" void MetalLayer_setMaximumDrawableCount(obj_handle_t layer, uint32_t count) {
+  if (!layer) {
+    return;
+  }
+  execute_on_main(^{
+    CAMetalLayer *metal_layer = (CAMetalLayer *)layer;
+    if ([metal_layer respondsToSelector:@selector(setMaximumDrawableCount:)]) {
+      metal_layer.maximumDrawableCount = count;
+    }
+  });
 }
 
 extern "C" obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer) {

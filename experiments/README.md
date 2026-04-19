@@ -30,6 +30,24 @@ Builtin-oracle compare suite for selected DX9 sample apps:
 bash scripts/run_dx9_oracle_compare_suite.sh --wine-root "$WINE_ROOT"
 ```
 
+Stale temp-prefix cleanup for interrupted suite runs:
+
+```sh
+python3 scripts/cleanup_dxmt9_temp_prefixes.py --dry-run
+python3 scripts/cleanup_dxmt9_temp_prefixes.py --all
+```
+
+Notes:
+
+- `run_experiment.py` now cleans auto-created temp prefixes on normal exit and on
+  `SIGINT`/`SIGTERM`/`SIGHUP`
+- auto-created temp prefixes now live under `tmp/prefixes` in the repo root by
+  default
+- oracle/regression suite wrappers run stale temp-prefix cleanup automatically
+  before starting
+- use the cleanup script when earlier runs were killed hard or the machine was
+  interrupted and old `dxmt9-exp-*` prefixes remain under that temp root
+
 One-shot wrappers for the verified real apps:
 
 ```sh

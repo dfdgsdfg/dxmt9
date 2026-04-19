@@ -86,6 +86,14 @@ suite_log="$suite_dir/suite.log"
 
 : > "$suite_log"
 
+cleanup_stale_prefixes() {
+  printf '==> cleaning stale temp prefixes\n' | tee -a "$suite_log"
+  python3 "$repo_root/scripts/cleanup_dxmt9_temp_prefixes.py" --all | tee -a "$suite_log"
+  printf '\n' | tee -a "$suite_log"
+}
+
+cleanup_stale_prefixes
+
 run_lane() {
   local app=$1
   local suffix=$2

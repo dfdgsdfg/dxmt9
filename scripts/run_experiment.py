@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
 import os
@@ -26,6 +27,7 @@ DEFAULT_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "win32"
 DEFAULT_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "winemetal"
 DEFAULT_UNIX_BUILD_DIR = REPO_ROOT / "build-x86_64-builtin" / "src"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
+DEFAULT_TEMP_PREFIX_ROOT = REPO_ROOT / "tmp" / "prefixes"
 
 SSIM_THRESHOLD = 0.90
 BLACK_LUMA_THRESHOLD = 8.0
@@ -322,6 +324,24 @@ def stage_dxmt9(
     run_command(cmd, cwd=REPO_ROOT)
 
 
+def terminate_process_group(process: subprocess.Popen[str] | None, sig: signal.Signals) -> None:
+    if process is None or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def create_temp_prefix(app_name: str) -> Path:
+    prefix_name = f"dxmt9-exp-{app_name}-"
+    try:
+        DEFAULT_TEMP_PREFIX_ROOT.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix=prefix_name, dir=DEFAULT_TEMP_PREFIX_ROOT))
+    except OSError:
+        return Path(tempfile.mkdtemp(prefix=prefix_name))
+
+
 def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     if not app.launcher_path.exists():
         raise FileNotFoundError(f"launcher not found: {app.launcher_path}")
@@ -349,163 +369,200 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         prefix = Path(args.prefix).expanduser().resolve()
         temp_prefix = False
     else:
-        prefix = Path(tempfile.mkdtemp(prefix=f"dxmt9-exp-{app.name}-"))
+        prefix = create_temp_prefix(app.name)
         temp_prefix = True
 
+    cleanup_enabled = temp_prefix and args.cleanup_temp_prefix
+    cleanup_done = False
+    process: subprocess.Popen[str] | None = None
+    capture_error: str | None = None
+    window_info: dict[str, Any] | None = None
+    timed_out = False
+    previous_signal_handlers: dict[signal.Signals, Any] = {}
+
+    def cleanup_temp_prefix() -> None:
+        nonlocal cleanup_done
+        if cleanup_done or not cleanup_enabled:
+            return
+        shutil.rmtree(prefix, ignore_errors=True)
+        cleanup_done = True
+
+    def handle_termination(signum: int, _frame: Any) -> None:
+        terminate_process_group(process, signal.SIGTERM)
+        cleanup_temp_prefix()
+        raise SystemExit(128 + signum)
+
+    if cleanup_enabled:
+        atexit.register(cleanup_temp_prefix)
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            previous_signal_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, handle_termination)
+
     wine_root = Path(args.wine_root).expanduser().resolve() if args.wine_root else detect_heroic_wine_root()
-    if app.requires_wine and wine_root is None and not args.wine_bin:
-        raise FileNotFoundError("no Wine root supplied and Heroic runtime auto-detect failed")
-    wine_bin = Path(args.wine_bin).expanduser().resolve() if args.wine_bin else resolve_wine_bin(wine_root)  # type: ignore[arg-type]
-    pe_build_dir = Path(args.pe_build_dir).expanduser().resolve() if args.pe_build_dir else DEFAULT_PE_BUILD_DIR
-    runtime_pe_build_dir = (
-        Path(args.runtime_pe_build_dir).expanduser().resolve()
-        if args.runtime_pe_build_dir
-        else DEFAULT_RUNTIME_PE_BUILD_DIR
-    )
-    unix_build_dir = Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR
-
-    if not app.skip_stage:
-        stage_dxmt9(prefix, wine_root, pe_build_dir, runtime_pe_build_dir, unix_build_dir)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "DXMT_EXPERIMENT_NAME": app.name,
-            "DXMT_EXPERIMENT_BINARY": str(binary_path),
-            "DXMT_EXPERIMENT_PREFIX": str(prefix),
-            "DXMT_EXPERIMENT_WINE_ROOT": str(wine_root) if wine_root else "",
-            "DXMT_EXPERIMENT_WINE_BIN": str(wine_bin),
-            "DXMT_EXPERIMENT_PE_BUILD_DIR": str(pe_build_dir),
-            "DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR": str(runtime_pe_build_dir),
-            "DXMT_EXPERIMENT_UNIX_BUILD_DIR": str(unix_build_dir),
-            "DXMT_EXPERIMENT_OUTPUT_DIR": str(output_dir),
-            "DXMT_EXPERIMENT_LOG": str(log_path),
-            "DXMT_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
-            "DXMT_CAPTURE_FRAME": str(app.capture_frame),
-            "DXMT_EXPERIMENT_SKIP_STAGE": "1" if app.skip_stage else "",
-        }
-    )
-    if app.wine_dll_overrides:
-        env["DXMT_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
-    if app.cx_bottle:
-        env["DXMT_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
-
-    with log_path.open("wb") as log_fp:
-        process = subprocess.Popen(
-            ["bash", str(app.launcher_path)],
-            cwd=REPO_ROOT,
-            env=env,
-            stdout=log_fp,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
+    try:
+        if app.requires_wine and wine_root is None and not args.wine_bin:
+            raise FileNotFoundError("no Wine root supplied and Heroic runtime auto-detect failed")
+        wine_bin = Path(args.wine_bin).expanduser().resolve() if args.wine_bin else resolve_wine_bin(wine_root)  # type: ignore[arg-type]
+        pe_build_dir = Path(args.pe_build_dir).expanduser().resolve() if args.pe_build_dir else DEFAULT_PE_BUILD_DIR
+        runtime_pe_build_dir = (
+            Path(args.runtime_pe_build_dir).expanduser().resolve()
+            if args.runtime_pe_build_dir
+            else DEFAULT_RUNTIME_PE_BUILD_DIR
         )
-        capture_error: str | None = None
-        window_info: dict[str, Any] | None = None
-        timed_out = False
-        try:
-            deadline = time.monotonic() + app.capture_delay_sec
-            while time.monotonic() < deadline and process.poll() is None:
-                time.sleep(0.1)
-            if process.poll() is None and not actual_dump_path.exists():
-                try:
-                    if app.window_title:
-                        window_info = capture_window_by_title(actual_path, app.window_title, timeout_sec=10.0)
-                    else:
-                        window_info = capture_frontmost_window(actual_path, app.window_title, timeout_sec=10.0)
-                except Exception as exc:  # noqa: BLE001
-                    capture_error = str(exc)
+        unix_build_dir = Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR
+
+        if not app.skip_stage:
+            stage_dxmt9(prefix, wine_root, pe_build_dir, runtime_pe_build_dir, unix_build_dir)
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "DXMT_EXPERIMENT_NAME": app.name,
+                "DXMT_EXPERIMENT_BINARY": str(binary_path),
+                "DXMT_EXPERIMENT_PREFIX": str(prefix),
+                "DXMT_EXPERIMENT_WINE_ROOT": str(wine_root) if wine_root else "",
+                "DXMT_EXPERIMENT_WINE_BIN": str(wine_bin),
+                "DXMT_EXPERIMENT_PE_BUILD_DIR": str(pe_build_dir),
+                "DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR": str(runtime_pe_build_dir),
+                "DXMT_EXPERIMENT_UNIX_BUILD_DIR": str(unix_build_dir),
+                "DXMT_EXPERIMENT_OUTPUT_DIR": str(output_dir),
+                "DXMT_EXPERIMENT_LOG": str(log_path),
+                "DXMT_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
+                "DXMT_CAPTURE_FRAME": str(app.capture_frame),
+                "DXMT_EXPERIMENT_SKIP_STAGE": "1" if app.skip_stage else "",
+            }
+        )
+        if app.wine_dll_overrides:
+            env["DXMT_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
+        if app.cx_bottle:
+            env["DXMT_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
+
+        with log_path.open("wb") as log_fp:
+            process = subprocess.Popen(
+                ["bash", str(app.launcher_path)],
+                cwd=REPO_ROOT,
+                env=env,
+                stdout=log_fp,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            try:
+                deadline = time.monotonic() + app.capture_delay_sec
+                while time.monotonic() < deadline and process.poll() is None:
+                    time.sleep(0.1)
+                if process.poll() is None and not actual_dump_path.exists():
                     try:
-                        window_info = capture_full_screen(actual_path)
-                    except Exception:  # noqa: BLE001
-                        pass
-            process.wait(timeout=args.timeout or app.run_timeout_sec)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(process.pid, signal.SIGTERM)
+                        if app.window_title:
+                            window_info = capture_window_by_title(actual_path, app.window_title, timeout_sec=10.0)
+                        else:
+                            window_info = capture_frontmost_window(actual_path, app.window_title, timeout_sec=10.0)
+                    except Exception as exc:  # noqa: BLE001
+                        capture_error = str(exc)
+                        try:
+                            window_info = capture_full_screen(actual_path)
+                        except Exception:  # noqa: BLE001
+                            pass
+                process.wait(timeout=args.timeout or app.run_timeout_sec)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                terminate_process_group(process, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    terminate_process_group(process, signal.SIGKILL)
+                    process.wait(timeout=5)
+            finally:
+                log_fp.flush()
+
+        result: dict[str, Any] = {
+            "name": app.name,
+            "binary": str(binary_path),
+            "launcher": str(app.launcher_path),
+            "reference": str(app.reference_path),
+            "prefix": str(prefix),
+            "wine_root": str(wine_root) if wine_root else None,
+            "wine_bin": str(wine_bin),
+            "returncode": process.returncode if process is not None else None,
+            "capture_error": capture_error,
+            "window_info": window_info,
+            "failures": [],
+            "timed_out": timed_out,
+        }
+
+        if actual_dump_path.exists():
+            Image.open(actual_dump_path).save(actual_path)
+
+        if app.reference_path.exists():
+            if reference_link_path.exists() or reference_link_path.is_symlink():
+                reference_link_path.unlink()
+            reference_link_path.symlink_to(app.reference_path.resolve())
+        elif args.accept_reference and actual_path.exists():
+            app.reference_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(actual_path, app.reference_path)
+            if reference_link_path.exists() or reference_link_path.is_symlink():
+                reference_link_path.unlink()
+            reference_link_path.symlink_to(app.reference_path.resolve())
+            result["reference_created"] = True
+
+        log_markers = scan_log_for_failures(log_path)
+        if log_markers:
+            result["failures"].append({"type": "log_markers", "markers": log_markers})
+
+        if process is not None and process.returncode != 0 and not (timed_out and app.allow_timeout):
+            result["failures"].append({"type": "process_exit", "returncode": process.returncode})
+
+        if capture_error and not actual_dump_path.exists() and not actual_path.exists():
+            result["failures"].append({"type": "capture", "message": capture_error})
+
+        if actual_path.exists():
+            metrics = image_luma_metrics(actual_path)
+            result["image_metrics"] = metrics
+            if metrics["mean_luma"] <= BLACK_LUMA_THRESHOLD and metrics["variance"] <= BLACK_VARIANCE_THRESHOLD:
+                result["failures"].append({"type": "black_screen", **metrics})
+        else:
+            result["failures"].append({"type": "missing_capture"})
+
+        if app.reference_path.exists() and actual_path.exists():
+            ssim = compute_ssim(actual_path, app.reference_path)
+            result["ssim"] = ssim
+            ssim_path.write_text(f"{ssim:.6f}\n")
+            write_diff_image(actual_path, app.reference_path, diff_path)
+            if ssim < SSIM_THRESHOLD:
+                result["failures"].append({"type": "ssim", "value": ssim, "threshold": SSIM_THRESHOLD})
+        elif not app.reference_path.exists() and not app.reference_optional:
+            result["failures"].append({"type": "missing_reference"})
+
+        result["status"] = "pass" if not result["failures"] else "fail"
+        result_path.write_text(json.dumps(result, indent=2, sort_keys=True))
+
+        print(f"experiment: {app.name}")
+        print(f"status: {result['status']}")
+        print(f"output: {output_dir}")
+        print(f"prefix: {prefix}")
+        if "ssim" in result:
+            print(f"ssim: {result['ssim']:.4f}")
+        if result["failures"]:
+            print("failures:")
+            for failure in result["failures"]:
+                print(f"  - {failure}")
+
+        return 0 if result["status"] == "pass" else 1
+    finally:
+        if process is not None and process.poll() is None:
+            terminate_process_group(process, signal.SIGTERM)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
-        finally:
-            log_fp.flush()
-
-    result: dict[str, Any] = {
-        "name": app.name,
-        "binary": str(binary_path),
-        "launcher": str(app.launcher_path),
-        "reference": str(app.reference_path),
-        "prefix": str(prefix),
-        "wine_root": str(wine_root) if wine_root else None,
-        "wine_bin": str(wine_bin),
-        "returncode": process.returncode,
-        "capture_error": capture_error,
-        "window_info": window_info,
-        "failures": [],
-        "timed_out": timed_out,
-    }
-
-    if actual_dump_path.exists():
-        Image.open(actual_dump_path).save(actual_path)
-
-    if app.reference_path.exists():
-        if reference_link_path.exists() or reference_link_path.is_symlink():
-            reference_link_path.unlink()
-        reference_link_path.symlink_to(app.reference_path.resolve())
-    elif args.accept_reference and actual_path.exists():
-        app.reference_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(actual_path, app.reference_path)
-        if reference_link_path.exists() or reference_link_path.is_symlink():
-            reference_link_path.unlink()
-        reference_link_path.symlink_to(app.reference_path.resolve())
-        result["reference_created"] = True
-
-    log_markers = scan_log_for_failures(log_path)
-    if log_markers:
-        result["failures"].append({"type": "log_markers", "markers": log_markers})
-
-    if process.returncode != 0 and not (timed_out and app.allow_timeout):
-        result["failures"].append({"type": "process_exit", "returncode": process.returncode})
-
-    if capture_error and not actual_dump_path.exists() and not actual_path.exists():
-        result["failures"].append({"type": "capture", "message": capture_error})
-
-    if actual_path.exists():
-        metrics = image_luma_metrics(actual_path)
-        result["image_metrics"] = metrics
-        if metrics["mean_luma"] <= BLACK_LUMA_THRESHOLD and metrics["variance"] <= BLACK_VARIANCE_THRESHOLD:
-            result["failures"].append({"type": "black_screen", **metrics})
-    else:
-        result["failures"].append({"type": "missing_capture"})
-
-    if app.reference_path.exists() and actual_path.exists():
-        ssim = compute_ssim(actual_path, app.reference_path)
-        result["ssim"] = ssim
-        ssim_path.write_text(f"{ssim:.6f}\n")
-        write_diff_image(actual_path, app.reference_path, diff_path)
-        if ssim < SSIM_THRESHOLD:
-            result["failures"].append({"type": "ssim", "value": ssim, "threshold": SSIM_THRESHOLD})
-    elif not app.reference_path.exists() and not app.reference_optional:
-        result["failures"].append({"type": "missing_reference"})
-
-    result["status"] = "pass" if not result["failures"] else "fail"
-    result_path.write_text(json.dumps(result, indent=2, sort_keys=True))
-
-    print(f"experiment: {app.name}")
-    print(f"status: {result['status']}")
-    print(f"output: {output_dir}")
-    print(f"prefix: {prefix}")
-    if "ssim" in result:
-        print(f"ssim: {result['ssim']:.4f}")
-    if result["failures"]:
-        print("failures:")
-        for failure in result["failures"]:
-            print(f"  - {failure}")
-
-    if temp_prefix and args.cleanup_temp_prefix:
-        shutil.rmtree(prefix, ignore_errors=True)
-
-    return 0 if result["status"] == "pass" else 1
+                terminate_process_group(process, signal.SIGKILL)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        for sig, previous in previous_signal_handlers.items():
+            signal.signal(sig, previous)
+        if cleanup_enabled:
+            atexit.unregister(cleanup_temp_prefix)
+            cleanup_temp_prefix()
 
 
 def print_catalogue(apps: list[ExperimentApp]) -> None:
