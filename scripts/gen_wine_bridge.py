@@ -266,34 +266,40 @@ def write_client_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
 def wow64_param_call_expr(param: Param, lines: list[str], post_lines: list[str]) -> str:
     info = param.type_info
     if is_opaque_handle_pointer(info) and info.pointer_depth == 1:
-        return f"dxmt9::bridge::wow64::lookup_handle<{param.field_type}>(args->{param.name})"
+        return f"dxmt9::util::marshal::wow64::decodeHandle<{param.field_type}>(args->{param.name})"
     if is_opaque_handle_pointer(info) and info.pointer_depth == 2:
-        lines.append(f"  auto wow64_{param.name} = dxmt9::bridge::wow64::widen_pointer<uint32_t *>(args->{param.name});")
+        lines.append(
+            f"  auto wow64_{param.name} = dxmt9::util::marshal::wow64::decodePtr<uint32_t *>(args->{param.name});"
+        )
         lines.append(f"  {info.base_type} *native_{param.name} = nullptr;")
         post_lines.append(
-            f"  if (wow64_{param.name}) *wow64_{param.name} = dxmt9::bridge::wow64::register_handle(native_{param.name});"
+            f"  if (wow64_{param.name}) *wow64_{param.name} = dxmt9::util::marshal::wow64::encodeHandle(native_{param.name});"
         )
         return f"&native_{param.name}"
     if is_pointer_like(info):
-        return f"dxmt9::bridge::wow64::widen_pointer<{param.field_type}>(args->{param.name})"
+        return f"dxmt9::util::marshal::wow64::decodePtr<{param.field_type}>(args->{param.name})"
     return f"args->{param.name}"
 
 
 def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
     if proto.name == "dxmt9c_texture_lock_rect":
         lines.append(f"NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
-        lines.append(f"  auto *args = reinterpret_cast<dxmt9::bridge::Args32_{proto.name} *>(opaque);")
+        lines.append(
+            f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
+        )
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
-        lines.append("  auto *wow64_out = dxmt9::bridge::wow64::widen_pointer<dxmt9::bridge::wow64::LockedRect32 *>(args->out);")
+        lines.append(
+            "  auto *wow64_out = dxmt9::util::marshal::wow64::decodePtr<dxmt9::util::marshal::wow64::LockedRect32 *>(args->out);"
+        )
         lines.append("  D9CLockedRect native_out{};")
         lines.append(
             "  args->ret = dxmt9c_texture_lock_rect("
-            "dxmt9::bridge::wow64::lookup_handle<D9CTexture*>(args->arg0), "
+            "dxmt9::util::marshal::wow64::decodeHandle<D9CTexture*>(args->arg0), "
             "args->level, wow64_out ? &native_out : nullptr, "
-            "dxmt9::bridge::wow64::widen_pointer<const D9CRect*>(args->arg3), "
+            "dxmt9::util::marshal::wow64::decodePtr<const D9CRect*>(args->arg3), "
             "args->flags);"
         )
-        lines.append("  if (wow64_out) dxmt9::bridge::wow64::store_locked_rect(wow64_out, native_out);")
+        lines.append("  if (wow64_out) dxmt9::util::marshal::wow64::storeLockedRect(wow64_out, native_out);")
         lines.append("  return DXMT9_STATUS_SUCCESS;")
         lines.append("}")
         lines.append("")
@@ -301,18 +307,22 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
 
     if proto.name == "dxmt9c_surface_lock_rect":
         lines.append(f"NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
-        lines.append(f"  auto *args = reinterpret_cast<dxmt9::bridge::Args32_{proto.name} *>(opaque);")
+        lines.append(
+            f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
+        )
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
-        lines.append("  auto *wow64_out = dxmt9::bridge::wow64::widen_pointer<dxmt9::bridge::wow64::LockedRect32 *>(args->arg1);")
+        lines.append(
+            "  auto *wow64_out = dxmt9::util::marshal::wow64::decodePtr<dxmt9::util::marshal::wow64::LockedRect32 *>(args->arg1);"
+        )
         lines.append("  D9CLockedRect native_out{};")
         lines.append(
             "  args->ret = dxmt9c_surface_lock_rect("
-            "dxmt9::bridge::wow64::lookup_handle<D9CSurface*>(args->arg0), "
+            "dxmt9::util::marshal::wow64::decodeHandle<D9CSurface*>(args->arg0), "
             "wow64_out ? &native_out : nullptr, "
-            "dxmt9::bridge::wow64::widen_pointer<const D9CRect*>(args->arg2), "
+            "dxmt9::util::marshal::wow64::decodePtr<const D9CRect*>(args->arg2), "
             "args->flags);"
         )
-        lines.append("  if (wow64_out) dxmt9::bridge::wow64::store_locked_rect(wow64_out, native_out);")
+        lines.append("  if (wow64_out) dxmt9::util::marshal::wow64::storeLockedRect(wow64_out, native_out);")
         lines.append("  return DXMT9_STATUS_SUCCESS;")
         lines.append("}")
         lines.append("")
@@ -320,17 +330,19 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
 
     if proto.name == "dxmt9c_buffer_lock":
         lines.append(f"NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
-        lines.append(f"  auto *args = reinterpret_cast<dxmt9::bridge::Args32_{proto.name} *>(opaque);")
+        lines.append(
+            f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
+        )
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
         lines.append("  void *native_data = nullptr;")
         lines.append(
             "  args->ret = dxmt9c_buffer_lock("
-            "dxmt9::bridge::wow64::lookup_handle<D9CBuffer*>(args->arg0), "
+            "dxmt9::util::marshal::wow64::decodeHandle<D9CBuffer*>(args->arg0), "
             "args->offset, args->size, "
             "args->data ? &native_data : nullptr, "
             "args->flags);"
         )
-        lines.append("  dxmt9::bridge::wow64::store_pointer(args->data, native_data);")
+        lines.append("  dxmt9::util::marshal::wow64::storeEncodedPointer(args->data, native_data);")
         lines.append("  return DXMT9_STATUS_SUCCESS;")
         lines.append("}")
         lines.append("")
@@ -344,85 +356,14 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append("// Generated by scripts/gen_wine_bridge.py. Do not edit by hand.")
     lines.append("#define WINE_UNIX_LIB 1")
     lines.append("")
-    lines.append('#include <cstddef>')
-    lines.append('#include <cstdint>')
-    lines.append('#include <mutex>')
-    lines.append('#include <unordered_map>')
-    lines.append("")
     lines.append('#include "dxmt9/device_c.h"')
     lines.append('#include "dxmt9/wineunixlib.h"')
     lines.append(f'#include "{ops_header_name}"')
-    lines.append("")
-    lines.append("namespace dxmt9::bridge::wow64 {")
-    lines.append("struct HandleRegistry {")
-    lines.append("  std::mutex mutex;")
-    lines.append("  uint32_t next = 1;")
-    lines.append("  std::unordered_map<uint32_t, uintptr_t> values;")
-    lines.append("};")
-    lines.append("")
-    lines.append("inline HandleRegistry& registry() {")
-    lines.append("  static HandleRegistry value;")
-    lines.append("  return value;")
-    lines.append("}")
-    lines.append("")
-    lines.append("template <typename T>")
-    lines.append("T lookup_handle(uint32_t token) {")
-    lines.append("  if (!token) return nullptr;")
-    lines.append("  auto& reg = registry();")
-    lines.append("  std::lock_guard<std::mutex> lock(reg.mutex);")
-    lines.append("  const auto it = reg.values.find(token);")
-    lines.append("  if (it == reg.values.end()) return nullptr;")
-    lines.append("  return reinterpret_cast<T>(it->second);")
-    lines.append("}")
-    lines.append("")
-    lines.append("template <typename T>")
-    lines.append("uint32_t register_handle(T value) {")
-    lines.append("  if (!value) return 0;")
-    lines.append("  auto& reg = registry();")
-    lines.append("  std::lock_guard<std::mutex> lock(reg.mutex);")
-    lines.append("  uint32_t token = reg.next++;")
-    lines.append("  if (!token) token = reg.next++;")
-    lines.append("  reg.values[token] = reinterpret_cast<uintptr_t>(value);")
-    lines.append("  return token;")
-    lines.append("}")
-    lines.append("")
-    lines.append("inline void erase_handle(uint32_t token) {")
-    lines.append("  if (!token) return;")
-    lines.append("  auto& reg = registry();")
-    lines.append("  std::lock_guard<std::mutex> lock(reg.mutex);")
-    lines.append("  reg.values.erase(token);")
-    lines.append("}")
-    lines.append("")
-    lines.append("template <typename T>")
-    lines.append("T widen_pointer(uint32_t value) {")
-    lines.append("  return reinterpret_cast<T>(static_cast<uintptr_t>(value));")
-    lines.append("}")
-    lines.append("")
-    lines.append("template <typename T>")
-    lines.append("uint32_t narrow_pointer(T value) {")
-    lines.append("  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(value));")
-    lines.append("}")
-    lines.append("")
-    lines.append("struct LockedRect32 {")
-    lines.append("  int32_t pitch;")
-    lines.append("  uint32_t bits;")
-    lines.append("};")
-    lines.append("")
-    lines.append("inline void store_locked_rect(LockedRect32* out, const D9CLockedRect& native) {")
-    lines.append("  if (!out) return;")
-    lines.append("  out->pitch = native.pitch;")
-    lines.append("  out->bits = narrow_pointer(native.bits);")
-    lines.append("}")
-    lines.append("")
-    lines.append("inline void store_pointer(uint32_t out, const void* native) {")
-    lines.append("  if (!out) return;")
-    lines.append("  *widen_pointer<uint32_t*>(out) = narrow_pointer(native);")
-    lines.append("}")
-    lines.append("}  // namespace dxmt9::bridge::wow64")
+    lines.append('#include "util/unixcall_marshal.hpp"')
     lines.append("")
     for proto in protos:
         lines.append(f"NTSTATUS thunk_{proto.name}(void *opaque) {{")
-        lines.append(f"  auto *args = reinterpret_cast<dxmt9::bridge::Args_{proto.name} *>(opaque);")
+        lines.append(f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args_{proto.name}>(opaque);")
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
         call_args = ", ".join(f"args->{param.name}" for param in proto.params)
         if proto.return_type == "void":
@@ -435,7 +376,7 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
         if emit_custom_wow64_thunk(proto, lines):
             continue
         lines.append(f"NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
-        lines.append(f"  auto *args = reinterpret_cast<dxmt9::bridge::Args32_{proto.name} *>(opaque);")
+        lines.append(f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);")
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
         wow64_prelude: list[str] = []
         wow64_post: list[str] = []
@@ -445,14 +386,14 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
         if proto.return_type == "void":
             lines.append(f"  {call_expr};")
         elif is_opaque_handle_pointer(proto.return_info):
-            lines.append(f"  args->ret = dxmt9::bridge::wow64::register_handle({call_expr});")
+            lines.append(f"  args->ret = dxmt9::util::marshal::wow64::encodeHandle({call_expr});")
         elif is_pointer_like(proto.return_info):
-            lines.append(f"  args->ret = dxmt9::bridge::wow64::narrow_pointer({call_expr});")
+            lines.append(f"  args->ret = dxmt9::util::marshal::wow64::encodePtr({call_expr});")
         else:
             lines.append(f"  args->ret = {call_expr};")
         lines.extend(wow64_post)
         if proto.name.endswith("_release") and proto.params and is_opaque_handle_pointer(proto.params[0].type_info):
-            lines.append(f"  dxmt9::bridge::wow64::erase_handle(args->{proto.params[0].name});")
+            lines.append(f"  dxmt9::util::marshal::wow64::eraseHandle(args->{proto.params[0].name});")
         lines.append("  return DXMT9_STATUS_SUCCESS;")
         lines.append("}")
         lines.append("")
