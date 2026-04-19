@@ -18,6 +18,10 @@ bool directLayerAttachEnabled() {
 static std::mutex gLayerRegistryMutex;
 static std::unordered_map<u64, uintptr_t> gLayerRegistry;
 
+static uintptr_t toLayerHandle(CAMetalLayer* layer) {
+  return reinterpret_cast<uintptr_t>(layer);
+}
+
 static CAMetalLayer* asCAMetalLayer(uintptr_t handle) {
   return reinterpret_cast<CAMetalLayer*>(handle);
 }
@@ -32,7 +36,7 @@ CAMetalLayer* lookupLayerHandle(u64 handle) {
 
 void registerLayerHandle(u64 handle, CAMetalLayer* layer) {
   std::lock_guard lock(gLayerRegistryMutex);
-  gLayerRegistry[handle] = reinterpret_cast<uintptr_t>(layer);
+  gLayerRegistry[handle] = toLayerHandle(layer);
 }
 
 void unregisterLayerHandle(u64 handle) {
@@ -82,7 +86,9 @@ PresenterState::~PresenterState() {
     if (record.wineMetalView && interop.releaseMetalView) {
       interop.releaseMetalView(record.wineMetalView);
     }
-    if (record.layer) {
+    if (record.layerHandle) {
+      [asCAMetalLayer(record.layerHandle) release];
+    } else if (record.layer) {
       [record.layer release];
     }
   }
@@ -144,6 +150,7 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       return nullptr;
     }
     record.layer = [legacyLayer retain];
+    record.layerHandle = toLayerHandle(record.layer);
   } else if (interop.getCocoaWindow && interop.createMetalDevice && interop.createMetalView &&
              interop.getMetalLayer) {
     traceEvent("table-path.begin", seqId, hwnd);
@@ -227,7 +234,8 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       if (directLayer) {
         traceEvent("direct-layer.ok", seqId, hwnd);
         record.layer = [directLayer retain];
-        CAMetalLayer* layer = record.layer;
+        record.layerHandle = toLayerHandle(record.layer);
+        CAMetalLayer* layer = asCAMetalLayer(record.layerHandle);
         registerLayerHandle(hwnd, layer);
         layers_[hwnd] = std::move(record);
         return layer;
@@ -305,6 +313,7 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
     }
 
     record.layer = [layer retain];
+    record.layerHandle = toLayerHandle(record.layer);
     record.wineMetalView = metalView;
     record.usesWineMetalView = true;
   } else {
@@ -312,7 +321,7 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
     return nullptr;
   }
 
-  CAMetalLayer* layer = record.layer;
+  CAMetalLayer* layer = asCAMetalLayer(record.layerHandle);
   registerLayerHandle(hwnd, layer);
   layers_[hwnd] = std::move(record);
   return layer;

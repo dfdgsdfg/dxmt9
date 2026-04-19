@@ -49,6 +49,7 @@ class PresenterState {
  private:
   struct LayerRecord {
     CAMetalLayer* layer = nil;
+    uintptr_t layerHandle = 0;
     void* wineMetalView = nullptr;
     bool usesWineMetalView = false;
   };
