@@ -942,6 +942,18 @@ struct DepthStencilKeyHash {
   }
 };
 
+// Container for the four draw-side pipeline caches and the depth/stencil
+// state cache. C3 groups these together as a stepping stone toward a full
+// dxmt9::PipelineCache extraction; for now the build lambdas still live on
+// MetalBackendDevice and reach in through a single `pipelineCache_` member.
+struct PipelineCache {
+  std::mutex mutex;
+  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> draw;
+  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> fill;
+  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretch;
+  std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash> depth;
+};
+
 NSString* makeNSString(const std::string& text) {
   return [[NSString alloc] initWithUTF8String:text.c_str()];
 }
@@ -6262,8 +6274,8 @@ class MetalBackendDevice final : public BackendDevice {
     }
     const auto key = makeShaderVariantKey(draw, colorFormats, blendAttachments, depthFormat, stencilFormat);
     {
-      std::lock_guard lock(cacheMutex_);
-      if (auto it = drawPipelineCache_.find(key); it != drawPipelineCache_.end()) {
+      std::lock_guard lock(pipelineCache_.mutex);
+      if (auto it = pipelineCache_.draw.find(key); it != pipelineCache_.draw.end()) {
         return it->second.future;
       }
       auto future = std::async(std::launch::async, [this, draw, key]() {
@@ -6312,7 +6324,7 @@ class MetalBackendDevice final : public BackendDevice {
         return pso;
       });
       auto shared = future.share();
-      drawPipelineCache_.emplace(key, PipelineCacheEntry{shared});
+      pipelineCache_.draw.emplace(key, PipelineCacheEntry{shared});
       return shared;
     }
   }
@@ -6324,8 +6336,8 @@ class MetalBackendDevice final : public BackendDevice {
                (static_cast<u64>(std::bit_cast<u32>(color.g)) << 1) ^ pixelFormat;
     key.colorFormats[0] = pixelFormat;
     key.blend[0].pixelFormat = pixelFormat;
-    std::lock_guard lock(cacheMutex_);
-    if (auto it = fillPipelineCache_.find(key); it != fillPipelineCache_.end()) {
+    std::lock_guard lock(pipelineCache_.mutex);
+    if (auto it = pipelineCache_.fill.find(key); it != pipelineCache_.fill.end()) {
       return it->second.future;
     }
     auto future = std::async(std::launch::async, [this, color, pixelFormat]() {
@@ -6351,7 +6363,7 @@ class MetalBackendDevice final : public BackendDevice {
       return pso;
     });
     auto shared = future.share();
-    fillPipelineCache_.emplace(key, PipelineCacheEntry{shared});
+    pipelineCache_.fill.emplace(key, PipelineCacheEntry{shared});
     return shared;
   }
 
@@ -6364,8 +6376,8 @@ class MetalBackendDevice final : public BackendDevice {
     key.sampleCount = std::max(1u, stretch.destinationSampleCount);
     key.colorFormats[0] = pixelFormat;
     key.blend[0].pixelFormat = pixelFormat;
-    std::lock_guard lock(cacheMutex_);
-    if (auto it = stretchPipelineCache_.find(key); it != stretchPipelineCache_.end()) {
+    std::lock_guard lock(pipelineCache_.mutex);
+    if (auto it = pipelineCache_.stretch.find(key); it != pipelineCache_.stretch.end()) {
       return it->second.future;
     }
     auto future = std::async(std::launch::async, [this, stretch, pixelFormat]() {
@@ -6389,7 +6401,7 @@ class MetalBackendDevice final : public BackendDevice {
       return pso;
     });
     auto shared = future.share();
-    stretchPipelineCache_.emplace(key, PipelineCacheEntry{shared});
+    pipelineCache_.stretch.emplace(key, PipelineCacheEntry{shared});
     return shared;
   }
 
@@ -6397,8 +6409,8 @@ class MetalBackendDevice final : public BackendDevice {
   // its own pipeline per (opaqueAlpha) variant using buildPresentPipeline.
 
   WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(const DepthStencilKey& key) {
-    std::lock_guard lock(cacheMutex_);
-    if (auto it = depthCache_.find(key); it != depthCache_.end()) {
+    std::lock_guard lock(pipelineCache_.mutex);
+    if (auto it = pipelineCache_.depth.find(key); it != pipelineCache_.depth.end()) {
       return it->second;
     }
     WMTDepthStencilInfo info{};
@@ -6418,7 +6430,7 @@ class MetalBackendDevice final : public BackendDevice {
       applyFace(info.back_stencil, key.back.enabled ? key.back : key.front);
     }
     auto state = wrappedDevice_.newDepthStencilState(info);
-    depthCache_.emplace(key, state);
+    pipelineCache_.depth.emplace(key, state);
     return state;
   }
 
@@ -6497,12 +6509,7 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<u64, TextureRecord> textures_;
   std::unordered_map<u64, SurfaceRecord> surfaces_;
   std::unordered_set<u64> dumpedGpuTextures_;
-  std::mutex cacheMutex_;
-  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> drawPipelineCache_;
-  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> fillPipelineCache_;
-  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretchPipelineCache_;
-  // presentPipelineCache_ moved to dxmt9::Presenter (C4).
-  std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash> depthCache_;
+  PipelineCache pipelineCache_{};
   std::unordered_map<u64, std::unique_ptr<dxmt9::Presenter>> presenters_{};
   std::mutex presentersMutex_{};
   RingArena argbufArena_{1 << 20};
