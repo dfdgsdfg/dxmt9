@@ -4099,17 +4099,17 @@ DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
 class MetalBackendDevice final : public BackendDevice {
  public:
   MetalBackendDevice(const BackendLimits& limits, WMT::Reference<WMT::Device> wmtDevice,
-                     dxmt9::CommandQueue& commandQueue)
-      : limits_(limits), commandQueue_(&commandQueue) {
+                     dxmt9::CommandQueue& commandQueue,
+                     WMT::Reference<WMT::BinaryArchive>& shaderArchive,
+                     const std::string& shaderArchivePath)
+      : limits_(limits), commandQueue_(&commandQueue),
+        shaderArchive_(&shaderArchive), shaderArchivePath_(&shaderArchivePath) {
     wrappedDevice_ = std::move(wmtDevice);
     if (!wrappedDevice_ || !commandQueue_->valid()) {
       return;
     }
     limits_.supportsDepth24Stencil8 = wrappedDevice_.supportsDepth24Stencil8();
-    char cachePath[4096]{};
-    WMTGetShaderCachePath(cachePath, sizeof(cachePath));
-    shaderArchivePath_ = cachePath;
-    initShaderArchive(wrappedDevice_, shaderArchivePath_, shaderArchive_);
+    // Shader archive is owned by DeviceImpl; we just reference it.
 
     queueLifecycle_.bindTrackedSubmissionState({
         .writingSlot = &writingSlot_,
@@ -4156,8 +4156,8 @@ class MetalBackendDevice final : public BackendDevice {
       finishThread_.join();
     }
     std::lock_guard lock(mutex_);
-    if (shaderArchive_) {
-      persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+    if (*shaderArchive_) {
+      persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
     }
     purgeResourcesUnlocked();
   }
@@ -6293,8 +6293,8 @@ class MetalBackendDevice final : public BackendDevice {
         info.depth_pixel_format = static_cast<WMTPixelFormat>(key.depthFormat);
         info.stencil_pixel_format = static_cast<WMTPixelFormat>(key.stencilFormat);
         info.rasterization_enabled = true;
-        if (shaderArchive_) {
-          info.binary_archive_for_serialization = shaderArchive_.handle;
+        if (*shaderArchive_) {
+          info.binary_archive_for_serialization = (*shaderArchive_).handle;
         }
         for (size_t i = 0; i < kMaxRenderTargets; ++i) {
           auto& ca = info.colors[i];
@@ -6310,8 +6310,8 @@ class MetalBackendDevice final : public BackendDevice {
         }
         WMT::Error err{};
         auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-        if (pso && shaderArchive_) {
-          persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+        if (pso && *shaderArchive_) {
+          persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
         }
         return pso;
       });
@@ -6348,10 +6348,10 @@ class MetalBackendDevice final : public BackendDevice {
       info.colors[0].write_mask = WMTColorWriteMaskAll;
       info.rasterization_enabled = true;
       info.raster_sample_count = 1;
-      if (shaderArchive_) info.binary_archive_for_serialization = shaderArchive_.handle;
+      if (*shaderArchive_) info.binary_archive_for_serialization = (*shaderArchive_).handle;
       WMT::Error err{};
       auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-      if (pso && shaderArchive_) persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+      if (pso && *shaderArchive_) persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
       return pso;
     });
     auto shared = future.share();
@@ -6386,10 +6386,10 @@ class MetalBackendDevice final : public BackendDevice {
       info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
       info.colors[0].write_mask = WMTColorWriteMaskAll;
       info.rasterization_enabled = true;
-      if (shaderArchive_) info.binary_archive_for_serialization = shaderArchive_.handle;
+      if (*shaderArchive_) info.binary_archive_for_serialization = (*shaderArchive_).handle;
       WMT::Error err{};
       auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-      if (pso && shaderArchive_) persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+      if (pso && *shaderArchive_) persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
       return pso;
     });
     auto shared = future.share();
@@ -6424,10 +6424,10 @@ class MetalBackendDevice final : public BackendDevice {
       info.colors[0].pixel_format = WMTPixelFormatBGRA8Unorm;
       info.colors[0].write_mask = WMTColorWriteMaskAll;
       info.rasterization_enabled = true;
-      if (shaderArchive_) info.binary_archive_for_serialization = shaderArchive_.handle;
+      if (*shaderArchive_) info.binary_archive_for_serialization = (*shaderArchive_).handle;
       WMT::Error err{};
       auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-      if (pso && shaderArchive_) persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
+      if (pso && *shaderArchive_) persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
       return pso;
     });
     auto shared = future.share();
@@ -6548,8 +6548,11 @@ class MetalBackendDevice final : public BackendDevice {
   RingArena lambdaStoreArena_{1 << 18};
   RingArena stagingArena_{1 << 20};
   RingArena copyTempArena_{1 << 20};
-  std::string shaderArchivePath_{};
-  WMT::Reference<WMT::BinaryArchive> shaderArchive_{};
+  // shaderArchive_/shaderArchivePath_ are owned by DeviceImpl (C2). We keep
+  // pointers to those fields; lifetime-safe because DeviceImpl destroys the
+  // backend (which joins threads) before the archive is released.
+  WMT::Reference<WMT::BinaryArchive>* shaderArchive_ = nullptr;
+  const std::string* shaderArchivePath_ = nullptr;
   metalqueue::QueueLifecycleController queueLifecycle_{};
   metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
   bool ready_ = false;
@@ -6563,8 +6566,11 @@ std::string makeShaderSourceFromRequest(const WinemetalShaderCompileRequest& req
 
 std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits,
                                                       WMT::Reference<WMT::Device> wmtDevice,
-                                                      dxmt9::CommandQueue& commandQueue) {
-  auto backend = std::make_shared<MetalBackendDevice>(limits, std::move(wmtDevice), commandQueue);
+                                                      dxmt9::CommandQueue& commandQueue,
+                                                      WMT::Reference<WMT::BinaryArchive>& shaderArchive,
+                                                      const std::string& shaderArchivePath) {
+  auto backend = std::make_shared<MetalBackendDevice>(limits, std::move(wmtDevice), commandQueue,
+                                                       shaderArchive, shaderArchivePath);
   return backend->ready() ? std::static_pointer_cast<BackendDevice>(std::move(backend))
                           : std::shared_ptr<BackendDevice>{};
 }

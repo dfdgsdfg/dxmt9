@@ -9,11 +9,14 @@
 #include "../winemetal/Metal.hpp"
 
 #include <memory>
+#include <string>
 
 namespace dxmt9::core {
 
 std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits,
                                                       WMT::Reference<WMT::Device> wmtDevice,
-                                                      dxmt9::CommandQueue& commandQueue);
+                                                      dxmt9::CommandQueue& commandQueue,
+                                                      WMT::Reference<WMT::BinaryArchive>& shaderArchive,
+                                                      const std::string& shaderArchivePath);
 
 }  // namespace dxmt9::core
