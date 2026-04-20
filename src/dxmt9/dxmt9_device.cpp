@@ -58,6 +58,8 @@ class DeviceImpl final : public Device {
   CommandQueue& queue() override { return queue_; }
   const core::BackendLimits& limits() const override { return limits_; }
   std::shared_ptr<core::BackendDevice> backend() override { return backend_; }
+  WMT::Reference<WMT::BinaryArchive>* shaderArchive() override { return &shaderArchive_; }
+  const std::string* shaderArchivePath() override { return &shaderArchivePath_; }
 
   bool ready() const noexcept { return static_cast<bool>(backend_); }
 

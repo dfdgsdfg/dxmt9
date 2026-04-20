@@ -12,6 +12,7 @@
 #include "dxmt9_command_queue.hpp"
 
 #include <memory>
+#include <string>
 
 namespace dxmt9 {
 
@@ -35,6 +36,12 @@ class Device {
   // dissolution into Renderer/CommandQueue/Presenter is completed in
   // subsequent passes.
   virtual std::shared_ptr<core::BackendDevice> backend() = 0;
+
+  // Shader archive accessors — borrowed pointers used by Presenter to build
+  // its present pipeline with cache persistence. May return nullptr on test
+  // paths (StubDxmt9Device) or when the archive was not initialized.
+  virtual WMT::Reference<WMT::BinaryArchive>* shaderArchive() { return nullptr; }
+  virtual const std::string* shaderArchivePath() { return nullptr; }
 };
 
 struct DEVICE_DESC {

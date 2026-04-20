@@ -5972,7 +5972,8 @@ class MetalBackendDevice final : public BackendDevice {
     if (it != presenters_.end()) {
       return it->second.get();
     }
-    auto presenter = std::make_unique<dxmt9::Presenter>(wrappedDevice_, hwnd, seqId);
+    auto presenter = std::make_unique<dxmt9::Presenter>(wrappedDevice_, hwnd, seqId,
+                                                          shaderArchive_, shaderArchivePath_);
     if (!presenter->valid()) {
       return nullptr;
     }
@@ -6045,11 +6046,8 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
 
-    auto pipeline = pipelineForPresent(source->desc.format).get();
-    if (!pipeline) {
-      dxmt9::presentimpl::traceEvent("pipeline.nil", seqId, present.window.value);
-      return;
-    }
+    const bool opaqueAlpha =
+        source->desc.format == Format::X8R8G8B8 || source->desc.format == Format::X8B8G8R8;
 
     dxmt9::Presenter::EncodeParams params{};
     params.source = WMT::Texture{sourceTextureHandle};
@@ -6058,10 +6056,8 @@ class MetalBackendDevice final : public BackendDevice {
     params.displaySyncEnabled = present.displaySyncEnabled;
     params.contentsScale = 1.0;
     params.maxDrawableCount = maxFrameLatency_;
-    params.pipeline = pipeline;
+    params.opaqueAlpha = opaqueAlpha;
     params.seqId = seqId;
-    auto sampler = makeSampler(false);
-    if (sampler) params.sampler = sampler;
 
     const auto presentResult = presenter->encodeCommands(commandBuffer, params);
     if (!presentResult.acquired) {
@@ -6397,43 +6393,8 @@ class MetalBackendDevice final : public BackendDevice {
     return shared;
   }
 
-  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineForPresent(Format sourceFormat) {
-    ShaderVariantKey key;
-    key.hash = sourceFormat == Format::X8R8G8B8 || sourceFormat == Format::X8B8G8R8 ? 1u : 0u;
-    key.textured = true;
-    key.sampleCount = 1u;
-    key.colorFormats[0] = static_cast<u32>(WMTPixelFormatBGRA8Unorm);
-    key.blend[0].pixelFormat = static_cast<u32>(WMTPixelFormatBGRA8Unorm);
-    std::lock_guard lock(cacheMutex_);
-    if (auto it = presentPipelineCache_.find(key); it != presentPipelineCache_.end()) {
-      return it->second.future;
-    }
-    const bool forceOpaqueAlpha = sourceFormat == Format::X8R8G8B8 || sourceFormat == Format::X8B8G8R8;
-    auto future = std::async(std::launch::async, [this, forceOpaqueAlpha]() {
-      auto vsLib = makeLibraryWMT(wrappedDevice_, makeTexturedVertexSource(makeHash("present")));
-      auto fsLib = makeLibraryWMT(wrappedDevice_, makeTexturedFragmentSource(
-                                       makeHash(forceOpaqueAlpha ? "present-opaque" : "present"), forceOpaqueAlpha));
-      if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
-      auto vs = vsLib.newFunction("dxmt9_vs");
-      auto fs = fsLib.newFunction("dxmt9_fs");
-      WMTRenderPipelineInfo info{};
-      info.max_tessellation_factor = 1;
-      info.vertex_function = vs.handle;
-      info.fragment_function = fs.handle;
-      info.raster_sample_count = 1;
-      info.colors[0].pixel_format = WMTPixelFormatBGRA8Unorm;
-      info.colors[0].write_mask = WMTColorWriteMaskAll;
-      info.rasterization_enabled = true;
-      if (*shaderArchive_) info.binary_archive_for_serialization = (*shaderArchive_).handle;
-      WMT::Error err{};
-      auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-      if (pso && *shaderArchive_) persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
-      return pso;
-    });
-    auto shared = future.share();
-    presentPipelineCache_.emplace(key, PipelineCacheEntry{shared});
-    return shared;
-  }
+  // pipelineForPresent moved to dxmt9::Presenter (C4); each Presenter caches
+  // its own pipeline per (opaqueAlpha) variant using buildPresentPipeline.
 
   WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(const DepthStencilKey& key) {
     std::lock_guard lock(cacheMutex_);
@@ -6540,7 +6501,7 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> drawPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> fillPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretchPipelineCache_;
-  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> presentPipelineCache_;
+  // presentPipelineCache_ moved to dxmt9::Presenter (C4).
   std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash> depthCache_;
   std::unordered_map<u64, std::unique_ptr<dxmt9::Presenter>> presenters_{};
   std::mutex presentersMutex_{};
@@ -6562,6 +6523,42 @@ class MetalBackendDevice final : public BackendDevice {
 
 std::string makeShaderSourceFromRequest(const WinemetalShaderCompileRequest& request) {
   return makeShaderSourceFromRequestInternal(request);
+}
+
+// Exposed for dxmt9::Presenter's per-instance pipeline cache. Builds a textured
+// blit pipeline (present pipeline) on a background task. opaqueAlpha=true
+// forces the fragment shader to output alpha=1, used for X8R8G8B8/X8B8G8R8
+// swap chains where the source has no alpha channel.
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
+                     WMT::Reference<WMT::BinaryArchive>* archive,
+                     const std::string* archivePath) {
+  // Copy the retained device into the async lambda; archive pointer remains
+  // valid because DeviceImpl (the owner) outlives the Presenter + this task.
+  auto future = std::async(std::launch::async, [device, opaqueAlpha, archive, archivePath]() mutable {
+    auto vsLib = makeLibraryWMT(device, makeTexturedVertexSource(makeHash("present")));
+    auto fsLib = makeLibraryWMT(device, makeTexturedFragmentSource(
+                                     makeHash(opaqueAlpha ? "present-opaque" : "present"), opaqueAlpha));
+    if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
+    auto vs = vsLib.newFunction("dxmt9_vs");
+    auto fs = fsLib.newFunction("dxmt9_fs");
+    WMTRenderPipelineInfo info{};
+    info.max_tessellation_factor = 1;
+    info.vertex_function = vs.handle;
+    info.fragment_function = fs.handle;
+    info.raster_sample_count = 1;
+    info.colors[0].pixel_format = WMTPixelFormatBGRA8Unorm;
+    info.colors[0].write_mask = WMTColorWriteMaskAll;
+    info.rasterization_enabled = true;
+    if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
+    WMT::Error err{};
+    auto pso = device.newRenderPipelineState(info, err);
+    if (pso && archive && *archive && archivePath) {
+      persistShaderArchiveWMT(*archive, *archivePath);
+    }
+    return pso;
+  });
+  return future.share();
 }
 
 std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits,

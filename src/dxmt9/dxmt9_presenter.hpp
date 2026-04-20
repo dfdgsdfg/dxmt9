@@ -5,13 +5,15 @@
 // Mirrors dxmt's class Presenter (dxmt/src/dxmt/dxmt_presenter.hpp). Each
 // Presenter owns the per-hwnd macdrv resources (CAMetalLayer, MetalView,
 // macdrv MetalDevice) acquired at construction and released in the
-// destructor. Callers supply the present pipeline + sampler (still cached
-// device-wide) as EncodeParams.
+// destructor. The present pipeline + sampler are owned here too — dxmt's
+// "fatter" Presenter shape.
 
 #include "dxmt9_presenter_macdrv.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <cstdint>
+#include <future>
+#include <string>
 
 namespace dxmt9 {
 
@@ -24,8 +26,7 @@ class Presenter {
     bool displaySyncEnabled = true;      // vsync
     double contentsScale = 1.0;          // CAMetalLayer.contentsScale
     uint32_t maxDrawableCount = 3;       // CAMetalLayer.maximumDrawableCount
-    WMT::RenderPipelineState pipeline{}; // textured-blit pipeline (not owned)
-    WMT::SamplerState sampler{};         // source sampler (not owned)
+    bool opaqueAlpha = false;            // X8R8G8B8/X8B8G8R8 → force alpha=1
     uint64_t seqId = 0;                  // for trace events
   };
 
@@ -35,7 +36,11 @@ class Presenter {
   };
 
   // Acquire the hwnd's CAMetalLayer up-front; on failure valid() is false.
-  Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId);
+  // archive + archivePath are borrowed pointers (owned by DeviceImpl) used
+  // for pipeline persistence — pass nullptr to skip.
+  Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
+            WMT::Reference<WMT::BinaryArchive>* archive,
+            const std::string* archivePath);
   ~Presenter();
 
   Presenter(const Presenter&) = delete;
@@ -48,10 +53,24 @@ class Presenter {
   EncodeResult encodeCommands(WMT::CommandBuffer& commandBuffer, const EncodeParams& params);
 
  private:
+  // Return the pipeline future for the requested variant, kicking off the
+  // build if this is the first request.
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>&
+      pipelineFor(bool opaqueAlpha);
+
   WMT::Device device_{};
   uint64_t hwnd_ = 0;
   presentimpl::LayerAcquisition acquisition_{};
   WMT::MetalLayer layer_{};
+  // Pipeline cache — two variants (alpha-preserving + alpha-forced-to-1).
+  // std::shared_future lets concurrent encodeCommands calls share the result
+  // of a single async build.
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineAlpha_{};
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineOpaque_{};
+  WMT::Reference<WMT::SamplerState> sampler_{};
+  // Borrowed from DeviceImpl; used by the async pipeline builder.
+  WMT::Reference<WMT::BinaryArchive>* archive_ = nullptr;
+  const std::string* archivePath_ = nullptr;
 };
 
 }  // namespace dxmt9

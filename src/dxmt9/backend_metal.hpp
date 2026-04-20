@@ -8,6 +8,7 @@
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <future>
 #include <memory>
 #include <string>
 
@@ -18,5 +19,12 @@ std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limit
                                                       dxmt9::CommandQueue& commandQueue,
                                                       WMT::Reference<WMT::BinaryArchive>& shaderArchive,
                                                       const std::string& shaderArchivePath);
+
+// Build a textured blit (present) pipeline on a background task. Exposed so
+// dxmt9::Presenter can own its own pipeline cache, matching dxmt's Presenter.
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
+                     WMT::Reference<WMT::BinaryArchive>* archive,
+                     const std::string* archivePath);
 
 }  // namespace dxmt9::core

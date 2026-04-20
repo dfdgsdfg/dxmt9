@@ -1,17 +1,31 @@
 #include "dxmt9_presenter.hpp"
+#include "backend_metal.hpp"
 
 #include <algorithm>
 
 namespace dxmt9 {
 
-Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId)
+Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
+                     WMT::Reference<WMT::BinaryArchive>* archive,
+                     const std::string* archivePath)
     : device_(device), hwnd_(hwnd),
       acquisition_(presentimpl::acquireLayerForHwnd(hwnd, seqId)),
-      layer_(acquisition_.layerHandle) {}
+      layer_(acquisition_.layerHandle),
+      archive_(archive), archivePath_(archivePath) {}
 
 Presenter::~Presenter() {
   presentimpl::releaseLayerAcquisition(acquisition_);
   layer_ = WMT::MetalLayer{};
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>&
+Presenter::pipelineFor(bool opaqueAlpha) {
+  auto& slot = opaqueAlpha ? pipelineOpaque_ : pipelineAlpha_;
+  if (!slot.valid()) {
+    slot = core::buildPresentPipeline(WMT::Reference<WMT::Device>{device_.handle},
+                                       opaqueAlpha, archive_, archivePath_);
+  }
+  return slot;
 }
 
 Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuffer,
@@ -36,6 +50,28 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
                                         std::clamp<uint32_t>(params.maxDrawableCount, 1u, 3u));
   }
 
+  auto pipelineFuture = pipelineFor(params.opaqueAlpha);
+  auto pipeline = pipelineFuture.get();
+  if (!pipeline) {
+    presentimpl::traceEvent("pipeline.nil", params.seqId, hwnd_);
+    return result;
+  }
+
+  if (!sampler_) {
+    WMTSamplerInfo info{};
+    info.min_filter = WMTSamplerMinMagFilterLinear;
+    info.mag_filter = WMTSamplerMinMagFilterLinear;
+    info.mip_filter = WMTSamplerMipFilterNotMipmapped;
+    info.s_address_mode = WMTSamplerAddressModeClampToEdge;
+    info.t_address_mode = WMTSamplerAddressModeClampToEdge;
+    info.r_address_mode = WMTSamplerAddressModeClampToEdge;
+    info.max_anisotroy = 1;
+    info.compare_function = WMTCompareFunctionNever;
+    info.lod_max_clamp = 1e9f;
+    info.normalized_coords = true;
+    sampler_ = WMT::Reference<WMT::Device>{device_.handle}.newSamplerState(info);
+  }
+
   presentimpl::traceEvent("nextDrawable.begin", params.seqId, hwnd_);
   auto drawable = layer_.nextDrawable();
   if (!drawable) {
@@ -52,18 +88,15 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   passInfo.colors[0].store_action = WMTStoreActionStore;
 
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
-  if (!encoder || !params.pipeline) {
-    if (encoder) {
-      encoder.endEncoding();
-    }
+  if (!encoder) {
     presentimpl::traceEvent("encoder.nil", params.seqId, hwnd_);
     return result;
   }
 
-  encoder.setRenderPipelineState(params.pipeline);
+  encoder.setRenderPipelineState(pipeline);
   encoder.setFragmentTexture(params.source, 0);
-  if (params.sampler) {
-    encoder.setFragmentSamplerState(params.sampler, 0);
+  if (sampler_) {
+    encoder.setFragmentSamplerState(sampler_, 0);
   }
 
   const double width = std::max<uint32_t>(1u, params.width);

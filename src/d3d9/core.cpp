@@ -2529,7 +2529,9 @@ void SwapChain::ensurePresenter() {
   if (!hwnd) {
     return;
   }
-  presenter_ = std::make_unique<dxmt9::Presenter>(wmtDevice, hwnd, 0ull);
+  presenter_ = std::make_unique<dxmt9::Presenter>(wmtDevice, hwnd, 0ull,
+                                                    upper->shaderArchive(),
+                                                    upper->shaderArchivePath());
   if (!presenter_->valid()) {
     presenter_.reset();
   }
