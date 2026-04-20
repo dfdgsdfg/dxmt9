@@ -639,7 +639,7 @@ void QueueLifecycleController::appendPresentCommand(const SwapDesc& present, Han
   });
 }
 
-void QueueLifecycleController::submitEncodedChunk(id<MTLCommandBuffer> commandBuffer,
+void QueueLifecycleController::submitEncodedChunk(obj_handle_t commandBuffer,
                                                   size_t slotIndex,
                                                   u64 seqId,
                                                   std::span<const MetalCommandRecord> commands,
@@ -988,10 +988,12 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
     return;
   }
 
+  id<MTLCommandBuffer> objcCommandBuffer = (id<MTLCommandBuffer>)(uintptr_t)record.commandBuffer;
+
   const auto binding = submissionBinding_;
   if (!binding.mutex || !binding.completedSeqQueue) {
-    [record.commandBuffer commit];
-    [record.commandBuffer release];
+    [objcCommandBuffer commit];
+    [objcCommandBuffer release];
     return;
   }
 
@@ -1004,9 +1006,10 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
   const std::string contextValue = record.context ? record.context : "queue";
   const auto submissionSlotIndex = record.slotIndex;
   const auto submissionSeqId = record.seqId;
-  [record.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+  [objcCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
     if (diagnosticsController) {
-      (void)diagnosticsController->observeQueueSubmission(buffer, preparedDiagnostics, contextValue.c_str());
+      (void)diagnosticsController->observeQueueSubmission((obj_handle_t)(uintptr_t)buffer,
+                                                           preparedDiagnostics, contextValue.c_str());
     }
     std::lock_guard completionLock(*binding.mutex);
     const QueueControllerState before = makeBoundQueueState(binding);
@@ -1023,8 +1026,8 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
     }
   }];
 
-  [record.commandBuffer commit];
-  [record.commandBuffer release];
+  [objcCommandBuffer commit];
+  [objcCommandBuffer release];
 }
 
 void QueueLifecycleController::drainPendingSubmissions() {
@@ -1360,14 +1363,14 @@ std::string CompletionTracker::commandBufferStatusName(MTLCommandBufferStatus st
   return "unknown";
 }
 
-bool CompletionTracker::inspect(id<MTLCommandBuffer> commandBuffer,
+bool CompletionTracker::inspect(obj_handle_t commandBuffer,
                                 const CommandBufferDiagnostics& diagnostics,
                                 const char* context) {
   if (!commandBuffer) {
     return false;
   }
 
-  WMT::CommandBuffer wrapped{reinterpret_cast<obj_handle_t>(commandBuffer)};
+  WMT::CommandBuffer wrapped{commandBuffer};
   const MTLCommandBufferStatus status = static_cast<MTLCommandBufferStatus>(wrapped.status());
   if (queueTraceEnabled()) {
     dxmt9::util::logf(dxmt9::util::LogLevel::Debug, "dxmt9-metal",

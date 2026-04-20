@@ -5058,8 +5058,10 @@ class MetalBackendDevice final : public BackendDevice {
       flushBlit();
 
       const u64 seqId = slot.seqId;
+      // Retain ownership for the submission record; the queue will release after commit.
+      NSObject_retain(commandBuffer.handle);
       return metalqueue::QueueSubmissionRecord{
-          .commandBuffer = (id<MTLCommandBuffer>)(uintptr_t)commandBuffer.handle,
+          .commandBuffer = commandBuffer.handle,
           .slotIndex = slotIndex,
           .seqId = seqId,
           .commands = std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
