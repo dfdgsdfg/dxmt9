@@ -262,66 +262,6 @@ std::span<const u8> normalizeTextureUploadBytes(Format format, u32 width, u32 he
   }
 }
 
-template <typename T>
-class ObjcPtr {
- public:
-  struct AdoptTag {};
-  struct RetainTag {};
-
-  ObjcPtr() = default;
-  explicit ObjcPtr(T object, AdoptTag) : object_(object) {}
-  explicit ObjcPtr(T object, RetainTag) : object_(object) {
-    if (object_) {
-      [object_ retain];
-    }
-  }
-
-  ObjcPtr(const ObjcPtr& other) : object_(other.object_) {
-    if (object_) {
-      [object_ retain];
-    }
-  }
-
-  ObjcPtr(ObjcPtr&& other) noexcept : object_(other.object_) { other.object_ = nil; }
-
-  ~ObjcPtr() {
-    if (object_) {
-      [object_ release];
-    }
-  }
-
-  ObjcPtr& operator=(ObjcPtr other) noexcept {
-    swap(other);
-    return *this;
-  }
-
-  void swap(ObjcPtr& other) noexcept { std::swap(object_, other.object_); }
-
-  T get() const noexcept { return object_; }
-  explicit operator bool() const noexcept { return object_ != nil; }
-
-  static ObjcPtr adopt(T object) { return ObjcPtr(object, AdoptTag{}); }
-  static ObjcPtr retain(T object) { return ObjcPtr(object, RetainTag{}); }
-
- private:
-  T object_ = nil;
-};
-
-template <typename T>
-T* ptr(T object) {
-  return object;
-}
-
-template <typename T>
-obj_handle_t toWmtHandle(T object) {
-  return static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>(object));
-}
-
-template <typename T>
-T fromWmtHandle(obj_handle_t handle) {
-  return reinterpret_cast<T>(static_cast<uintptr_t>(handle));
-}
-
 WMT::Reference<WMT::Device> bootstrapWrappedDevice() {
   auto devices = WMT::CopyAllDevices();
   if (!devices || devices.count() == 0) {

@@ -68,11 +68,6 @@ dxmt9_winemetal_unix_module = shared_library(
   ],
   dependencies: [
     dxmt9_util_dep,
-    dxmt9_frontend_bridge_dep,
-    dxmt9_frontend_provider_dep,
-    dxmt9_runtime_dep,
-    dxmt9_shader_service_core_dep,
-    dxmt9_provider_service_abi_dep,
     dxmt9_winemetal_unix_framework_dep,
   ],
   cpp_args: ['-DWINE_UNIX_LIB=1'],
