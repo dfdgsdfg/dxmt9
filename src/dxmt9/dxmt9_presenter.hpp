@@ -2,13 +2,13 @@
 
 // Upper-runtime Presenter — per-window wrapper around a WMT::MetalLayer.
 //
-// Mirrors dxmt's class Presenter (dxmt/src/dxmt/dxmt_presenter.hpp). Owns a
-// handle to the CAMetalLayer created by the macdrv bridge, applies layer
-// properties, acquires the next drawable, and encodes the present blit into
-// a caller-provided WMT::CommandBuffer. Does NOT own the layer's lifetime:
-// the CAMetalLayer is held by the HWND's NSView via macdrv, so the Presenter
-// only keeps a weak handle.
+// Mirrors dxmt's class Presenter (dxmt/src/dxmt/dxmt_presenter.hpp). Each
+// Presenter owns the per-hwnd macdrv resources (CAMetalLayer, MetalView,
+// macdrv MetalDevice) acquired at construction and released in the
+// destructor. Callers supply the present pipeline + sampler (still cached
+// device-wide) as EncodeParams.
 
+#include "dxmt9_presenter_macdrv.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <cstdint>
@@ -26,6 +26,7 @@ class Presenter {
     uint32_t maxDrawableCount = 3;       // CAMetalLayer.maximumDrawableCount
     WMT::RenderPipelineState pipeline{}; // textured-blit pipeline (not owned)
     WMT::SamplerState sampler{};         // source sampler (not owned)
+    uint64_t seqId = 0;                  // for trace events
   };
 
   struct EncodeResult {
@@ -33,15 +34,24 @@ class Presenter {
     bool encoded = false;                // render encoder was opened + committed
   };
 
-  Presenter(WMT::Device device, WMT::MetalLayer layer);
+  // Acquire the hwnd's CAMetalLayer up-front; on failure valid() is false.
+  Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId);
+  ~Presenter();
+
+  Presenter(const Presenter&) = delete;
+  Presenter& operator=(const Presenter&) = delete;
+
+  bool valid() const noexcept { return acquisition_.valid(); }
+  uint64_t hwnd() const noexcept { return hwnd_; }
+  WMT::MetalLayer layer() const noexcept { return layer_; }
 
   EncodeResult encodeCommands(WMT::CommandBuffer& commandBuffer, const EncodeParams& params);
 
-  WMT::MetalLayer layer() const noexcept { return layer_; }
-
  private:
-  WMT::Device device_;
-  WMT::MetalLayer layer_;
+  WMT::Device device_{};
+  uint64_t hwnd_ = 0;
+  presentimpl::LayerAcquisition acquisition_{};
+  WMT::MetalLayer layer_{};
 };
 
 }  // namespace dxmt9

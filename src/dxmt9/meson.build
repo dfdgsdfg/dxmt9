@@ -8,7 +8,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_device.cpp',
   'dxmt9_hud.mm',
   'dxmt9_presenter.cpp',
-  'dxmt9_presenter_support.mm',
+  'dxmt9_presenter_macdrv.mm',
   'dxmt9_queue.cpp',
 )
 

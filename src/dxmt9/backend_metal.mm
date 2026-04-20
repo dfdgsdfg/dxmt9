@@ -11,7 +11,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_presenter.hpp"
-#include "dxmt9_presenter_support.hpp"
+#include "dxmt9_presenter_macdrv.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_shader_service.hpp"
 #include "../winemetal/Metal.hpp"
@@ -5980,8 +5980,22 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
+  dxmt9::Presenter* ensurePresenterLocked(u64 hwnd, u64 seqId) {
+    auto it = presenters_.find(hwnd);
+    if (it != presenters_.end()) {
+      return it->second.get();
+    }
+    auto presenter = std::make_unique<dxmt9::Presenter>(wrappedDevice_, hwnd, seqId);
+    if (!presenter->valid()) {
+      return nullptr;
+    }
+    auto* raw = presenter.get();
+    presenters_.emplace(hwnd, std::move(presenter));
+    return raw;
+  }
+
   void encodePresent(WMT::CommandBuffer& commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
-    presenterState_.traceEvent("begin", seqId, present.window.value);
+    dxmt9::presentimpl::traceEvent("begin", seqId, present.window.value);
     if (queueTraceEnabled()) {
       std::ostringstream out;
       out << "[dxmt9-present] source"
@@ -5992,7 +6006,7 @@ class MetalBackendDevice final : public BackendDevice {
     }
     auto* source = findSurfaceUnlocked(sourceHandle.value);
     if (!source || !source->texture) {
-      presenterState_.traceEvent("missing-source", seqId, present.window.value);
+      dxmt9::presentimpl::traceEvent("missing-source", seqId, present.window.value);
       return;
     }
     obj_handle_t sourceTextureHandle = source->resolveTexture ? source->resolveTexture.handle : source->texture.handle;
@@ -6031,30 +6045,22 @@ class MetalBackendDevice final : public BackendDevice {
       emitQueueTraceLine(out.str());
     }
 
-    CAMetalLayer* layer = nullptr;
+    dxmt9::Presenter* presenter = nullptr;
     if (present.window.value != 0) {
-      layer = presenterState_.lookupLayer(present.window.value);
-      if (!layer) {
-        layer = presenterState_.ensureLayer(present.window.value, seqId);
-      }
+      std::lock_guard lock(presentersMutex_);
+      presenter = ensurePresenterLocked(present.window.value, seqId);
     }
-    if (!layer) {
-      presenterState_.traceEvent("missing-layer", seqId, present.window.value);
+    if (!presenter) {
+      dxmt9::presentimpl::traceEvent("missing-layer", seqId, present.window.value);
       return;
     }
 
     auto pipeline = pipelineForPresent(source->desc.format).get();
     if (!pipeline) {
-      presenterState_.traceEvent("pipeline.nil", seqId, present.window.value);
+      dxmt9::presentimpl::traceEvent("pipeline.nil", seqId, present.window.value);
       return;
     }
 
-    // Delegate to the upper-runtime Presenter object for layer-configured
-    // drawable acquisition + present-blit encode. The registry hands us the
-    // CAMetalLayer*; the Presenter wraps it in a WMT::MetalLayer handle and
-    // owns the encode/commit logic.
-    presenterState_.traceEvent("nextDrawable.begin", seqId, present.window.value);
-    dxmt9::Presenter presenter{wrappedDevice_, WMT::MetalLayer{(obj_handle_t)layer}};
     dxmt9::Presenter::EncodeParams params{};
     params.source = WMT::Texture{sourceTextureHandle};
     params.width = present.width;
@@ -6063,22 +6069,19 @@ class MetalBackendDevice final : public BackendDevice {
     params.contentsScale = 1.0;
     params.maxDrawableCount = maxFrameLatency_;
     params.pipeline = pipeline;
+    params.seqId = seqId;
     auto sampler = makeSampler(false);
     if (sampler) params.sampler = sampler;
 
-    const auto presentResult = presenter.encodeCommands(commandBuffer, params);
+    const auto presentResult = presenter->encodeCommands(commandBuffer, params);
     if (!presentResult.acquired) {
       if (presentationStatusObserver_) presentationStatusObserver_(true);
-      presenterState_.traceEvent("nextDrawable.nil", seqId, present.window.value);
       return;
     }
     if (presentationStatusObserver_) presentationStatusObserver_(false);
-    presenterState_.traceEvent("nextDrawable.ok", seqId, present.window.value);
     if (!presentResult.encoded) {
-      presenterState_.traceEvent("encoder.nil", seqId, present.window.value);
       return;
     }
-    presenterState_.traceEvent("scheduled", seqId, present.window.value);
     backBufferDiscardAfterPresent_ = true;
   }
 
@@ -6549,7 +6552,8 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretchPipelineCache_;
   std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> presentPipelineCache_;
   std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash> depthCache_;
-  metalpresent::PresenterState presenterState_{};
+  std::unordered_map<u64, std::unique_ptr<dxmt9::Presenter>> presenters_{};
+  std::mutex presentersMutex_{};
   RingArena argbufArena_{1 << 20};
   RingArena lambdaStoreArena_{1 << 18};
   RingArena stagingArena_{1 << 20};

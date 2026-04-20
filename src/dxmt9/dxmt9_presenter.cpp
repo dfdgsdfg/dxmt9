@@ -4,8 +4,15 @@
 
 namespace dxmt9 {
 
-Presenter::Presenter(WMT::Device device, WMT::MetalLayer layer)
-    : device_(device), layer_(layer) {}
+Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId)
+    : device_(device), hwnd_(hwnd),
+      acquisition_(presentimpl::acquireLayerForHwnd(hwnd, seqId)),
+      layer_(acquisition_.layerHandle) {}
+
+Presenter::~Presenter() {
+  presentimpl::releaseLayerAcquisition(acquisition_);
+  layer_ = WMT::MetalLayer{};
+}
 
 Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuffer,
                                                    const EncodeParams& params) {
@@ -14,7 +21,6 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     return result;
   }
 
-  // Apply layer properties for this present.
   {
     WMTLayerProps props{};
     props.device = device_.handle;
@@ -30,11 +36,14 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
                                         std::clamp<uint32_t>(params.maxDrawableCount, 1u, 3u));
   }
 
+  presentimpl::traceEvent("nextDrawable.begin", params.seqId, hwnd_);
   auto drawable = layer_.nextDrawable();
   if (!drawable) {
+    presentimpl::traceEvent("nextDrawable.nil", params.seqId, hwnd_);
     return result;
   }
   result.acquired = true;
+  presentimpl::traceEvent("nextDrawable.ok", params.seqId, hwnd_);
 
   auto drawableTex = drawable.texture();
   WMTRenderPassInfo passInfo{};
@@ -47,6 +56,7 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     if (encoder) {
       encoder.endEncoding();
     }
+    presentimpl::traceEvent("encoder.nil", params.seqId, hwnd_);
     return result;
   }
 
@@ -65,6 +75,7 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   commandBuffer.presentDrawable(drawable);
 
   result.encoded = true;
+  presentimpl::traceEvent("scheduled", params.seqId, hwnd_);
   return result;
 }
 
