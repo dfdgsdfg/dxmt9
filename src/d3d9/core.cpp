@@ -1,5 +1,6 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9/dxmt9_device.hpp"
 #include "util/util_bmp.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -2541,7 +2542,7 @@ HResult SwapChain::present(std::shared_ptr<BackendDevice> backend, const SwapDes
 Device::Device(AdapterInfo adapter, BackendLimits limits, std::shared_ptr<BackendDevice> backend,
                PresentParameters params, u32 behaviorFlags)
     : adapter_(std::move(adapter)), limits_(limits),
-      caps_(makeDefaultCaps(limits_)), backend_(backend ? std::move(backend) : makeBackendDevice(limits_)),
+      caps_(makeDefaultCaps(limits_)), backend_(std::move(backend)),
       presentParameters_(normalizePresentParameters(adapter_, params)), behaviorFlags_(behaviorFlags) {
   state_.reset();
   const u32 width = std::max(1u, presentParameters_.backBufferWidth);
@@ -3814,8 +3815,59 @@ FfpPixelKey makeFfpPixelKey(const DeviceState& state) {
   return key;
 }
 
-Factory::Factory(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
-    : limits_(limits), backend_(backend ? std::move(backend) : makeBackendDevice(limits_)) {
+namespace {
+
+// Test-only wrapper: builds a dxmt9::Device around an externally-provided
+// BackendDevice. Returns a null WMT::Device — tests don't exercise the
+// Metal surface, only the core object graph.
+class StubDxmt9Device final : public dxmt9::Device {
+ public:
+  StubDxmt9Device(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
+      : limits_(limits), backend_(std::move(backend)) {}
+  WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
+  const BackendLimits& limits() const override { return limits_; }
+  std::shared_ptr<BackendDevice> backend() override { return backend_; }
+ private:
+  BackendLimits limits_{};
+  std::shared_ptr<BackendDevice> backend_;
+};
+
+}  // namespace
+
+// Exposed for com.cpp's backward-compat Direct3DCreate9/Ex overloads.
+std::shared_ptr<dxmt9::Device> makeStubDxmt9Device(BackendLimits limits,
+                                                    std::shared_ptr<BackendDevice> backend) {
+  if (!backend) {
+    backend = std::make_shared<NullBackendDevice>();
+  }
+  return std::make_shared<StubDxmt9Device>(limits, std::move(backend));
+}
+
+namespace {
+
+// Test convenience: build a real dxmt9::Device by selecting the first WMT
+// device. Falls back to a NullBackendDevice wrapper if no WMT devices are
+// available. Used by Factory(BackendLimits) for tests that exercise the
+// real Metal backend without going through dxmt9c_factory_create().
+std::shared_ptr<dxmt9::Device> bootstrapDeviceForTests(BackendLimits limits) {
+  auto wmtDevices = WMT::CopyAllDevices();
+  if (wmtDevices && wmtDevices.count() > 0) {
+    dxmt9::DEVICE_DESC desc{};
+    desc.device = WMT::Device{wmtDevices.object(0)};
+    desc.limits = limits;
+    if (auto upper = dxmt9::CreateDXMT9Device(desc)) {
+      return std::shared_ptr<dxmt9::Device>(std::move(upper));
+    }
+  }
+  return makeStubDxmt9Device(limits, std::make_shared<NullBackendDevice>());
+}
+
+}  // namespace
+
+Factory::Factory(std::shared_ptr<dxmt9::Device> device)
+    : device_(std::move(device)),
+      limits_(device_ ? device_->limits() : BackendLimits{}),
+      backend_(device_ ? device_->backend() : std::shared_ptr<BackendDevice>{}) {
   AdapterInfo adapter;
   adapter.ordinal = 0;
   adapter.name = getenvString("DXMT_ADAPTER_NAME");
@@ -3828,6 +3880,12 @@ Factory::Factory(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
   adapters_.push_back(std::move(adapter));
   adapterCaps_.push_back(makeDefaultCaps(limits_));
 }
+
+Factory::Factory(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
+    : Factory(makeStubDxmt9Device(
+          limits, backend ? std::move(backend) : std::make_shared<NullBackendDevice>())) {}
+
+Factory::Factory(BackendLimits limits) : Factory(bootstrapDeviceForTests(limits)) {}
 
 const AdapterInfo& Factory::adapter(size_t index) const {
   if (index >= adapters_.size()) {

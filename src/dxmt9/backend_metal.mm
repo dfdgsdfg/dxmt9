@@ -4107,8 +4107,9 @@ DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
 
 class MetalBackendDevice final : public BackendDevice {
  public:
-  explicit MetalBackendDevice(const BackendLimits& limits) : limits_(limits) {
-    wrappedDevice_ = bootstrapWrappedDevice();
+  MetalBackendDevice(const BackendLimits& limits, WMT::Reference<WMT::Device> wmtDevice)
+      : limits_(limits) {
+    wrappedDevice_ = std::move(wmtDevice);
     if (!wrappedDevice_) {
       return;
     }
@@ -6568,9 +6569,11 @@ std::string makeShaderSourceFromRequest(const WinemetalShaderCompileRequest& req
   return makeShaderSourceFromRequestInternal(request);
 }
 
-std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits) {
-  auto backend = std::make_shared<MetalBackendDevice>(limits);
-  return backend->ready() ? std::static_pointer_cast<BackendDevice>(std::move(backend)) : std::shared_ptr<BackendDevice>{};
+std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits,
+                                                      WMT::Reference<WMT::Device> wmtDevice) {
+  auto backend = std::make_shared<MetalBackendDevice>(limits, std::move(wmtDevice));
+  return backend->ready() ? std::static_pointer_cast<BackendDevice>(std::move(backend))
+                          : std::shared_ptr<BackendDevice>{};
 }
 
 }  // namespace dxmt9::core

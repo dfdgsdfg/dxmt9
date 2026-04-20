@@ -1,8 +1,10 @@
 #pragma once
 
 #include "dxmt9/core.hpp"
+#include "dxmt9/dxmt9_device.hpp"
 
 #include <atomic>
+#include <memory>
 
 namespace dxmt9::com {
 
@@ -179,7 +181,18 @@ class IDirect3DDevice9Ex : public IDirect3DDevice9 {
                                                                       core::Handle* sharedHandle = nullptr) = 0;
 };
 
-IDirect3D9* Direct3DCreate9(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend = {});
-IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend = {});
+// The upper-runtime dxmt9::Device is the consumer shape. Callers build the
+// Device via dxmt9::CreateDXMT9Device() and hand it to the factory by value.
+// See include/dxmt9/dxmt9_device.hpp.
+IDirect3D9* Direct3DCreate9(u32 sdkVersion, std::unique_ptr<dxmt9::Device> device);
+IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion, std::unique_ptr<dxmt9::Device> device);
+
+// Test-only overloads: wrap an existing BackendDevice in a stub dxmt9::Device.
+// Default-constructed variants build an empty factory (no devices enumerable
+// until a dxmt9::Device is supplied).
+IDirect3D9* Direct3DCreate9(u32 sdkVersion);
+IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion);
+IDirect3D9* Direct3DCreate9(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend);
+IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend);
 
 }  // namespace dxmt9::com

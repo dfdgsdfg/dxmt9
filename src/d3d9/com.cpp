@@ -368,9 +368,8 @@ class Direct3DDevice9Impl final : public IDirect3DDevice9Ex, public RefCounted<D
 
 class Direct3D9Impl final : public IDirect3D9Ex, public RefCounted<Direct3D9Impl> {
  public:
-  explicit Direct3D9Impl(core::BackendLimits limits = {}, std::shared_ptr<core::BackendDevice> backend = {},
-                         bool exSupported = false)
-      : factory_(limits, std::move(backend)), exSupported_(exSupported) {}
+  explicit Direct3D9Impl(std::shared_ptr<dxmt9::Device> device, bool exSupported = false)
+      : factory_(std::move(device)), exSupported_(exSupported) {}
 
   u32 AddRef() override { return this->addRef(); }
 
@@ -498,18 +497,47 @@ class Direct3D9Impl final : public IDirect3D9Ex, public RefCounted<Direct3D9Impl
 
 }  // namespace
 
-IDirect3D9* Direct3DCreate9(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend) {
-  if (sdkVersion != D3D_SDK_VERSION) {
+IDirect3D9* Direct3DCreate9(u32 sdkVersion, std::unique_ptr<dxmt9::Device> device) {
+  if (sdkVersion != D3D_SDK_VERSION || !device) {
     return nullptr;
   }
-  return new Direct3D9Impl({}, std::move(backend), false);
+  return new Direct3D9Impl(std::shared_ptr<dxmt9::Device>(std::move(device)), false);
+}
+
+IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion, std::unique_ptr<dxmt9::Device> device) {
+  if (sdkVersion != D3D_SDK_VERSION || !device) {
+    return nullptr;
+  }
+  return new Direct3D9Impl(std::shared_ptr<dxmt9::Device>(std::move(device)), true);
+}
+
+// Test-only overloads — wrap a BackendDevice in a stub dxmt9::Device, or
+// construct a factory with no attached device.
+}  // namespace dxmt9::com
+namespace dxmt9::core {
+std::shared_ptr<dxmt9::Device> makeStubDxmt9Device(BackendLimits limits,
+                                                    std::shared_ptr<BackendDevice> backend);
+}
+namespace dxmt9::com {
+
+IDirect3D9* Direct3DCreate9(u32 sdkVersion) {
+  if (sdkVersion != D3D_SDK_VERSION) return nullptr;
+  return new Direct3D9Impl(core::makeStubDxmt9Device({}, nullptr), false);
+}
+
+IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion) {
+  if (sdkVersion != D3D_SDK_VERSION) return nullptr;
+  return new Direct3D9Impl(core::makeStubDxmt9Device({}, nullptr), true);
+}
+
+IDirect3D9* Direct3DCreate9(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend) {
+  if (sdkVersion != D3D_SDK_VERSION) return nullptr;
+  return new Direct3D9Impl(core::makeStubDxmt9Device({}, std::move(backend)), false);
 }
 
 IDirect3D9Ex* Direct3DCreate9Ex(u32 sdkVersion, std::shared_ptr<core::BackendDevice> backend) {
-  if (sdkVersion != D3D_SDK_VERSION) {
-    return nullptr;
-  }
-  return new Direct3D9Impl({}, std::move(backend), true);
+  if (sdkVersion != D3D_SDK_VERSION) return nullptr;
+  return new Direct3D9Impl(core::makeStubDxmt9Device({}, std::move(backend)), true);
 }
 
 }  // namespace dxmt9::com

@@ -14,6 +14,10 @@
 #include <utility>
 #include <vector>
 
+namespace dxmt9 {
+class Device;  // forward decl — defined in dxmt9/dxmt9_device.hpp
+}
+
 namespace dxmt9::core {
 
 using u8 = std::uint8_t;
@@ -996,8 +1000,10 @@ std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::
 u32 bytesPerPixel(Format format);
 std::string formatName(Format format);
 std::string backendFormatName(BackendPixelFormat format);
-std::shared_ptr<BackendDevice> makeBackendDevice(const BackendLimits& limits = {});
-std::shared_ptr<BackendDevice> makeSimBackendDevice();
+// makeBackendDevice and makeSimBackendDevice have been retired. The upper
+// runtime creation path is dxmt9::CreateDXMT9Device() (see
+// include/dxmt9/dxmt9_device.hpp). Downstream consumers receive the
+// std::shared_ptr<BackendDevice> via dxmt9::Device::backend().
 
 constexpr u32 sampleCount(MultiSampleType type) noexcept {
   switch (type) {
@@ -1394,7 +1400,20 @@ class Device : public std::enable_shared_from_this<Device> {
 
 class Factory {
  public:
-  explicit Factory(BackendLimits limits = {}, std::shared_ptr<BackendDevice> backend = {});
+  // Consume an upper dxmt9::Device (retained as shared_ptr so child D3D9
+  // objects can share it). The Factory derives limits_ and backend_ from
+  // the upper Device for the existing resource-creation code paths.
+  explicit Factory(std::shared_ptr<dxmt9::Device> device);
+
+  // Test-only convenience: wrap an existing BackendDevice in a stub
+  // dxmt9::Device. Used by unit tests that inject a recording backend
+  // without going through WMT device selection.
+  Factory(BackendLimits limits, std::shared_ptr<BackendDevice> backend);
+
+  // Test-only convenience: build a factory with the given limits and no
+  // backend — for tests that exercise adapter enumeration without ever
+  // creating a Device.
+  explicit Factory(BackendLimits limits);
 
   size_t adapterCount() const noexcept { return adapters_.size(); }
   const AdapterInfo& adapter(size_t index) const;
@@ -1410,7 +1429,10 @@ class Factory {
   std::shared_ptr<Device> createDevice(size_t adapterIndex, const PresentParameters& params,
                                        u32 behaviorFlags = 0);
 
+  std::shared_ptr<dxmt9::Device> upperDevice() const noexcept { return device_; }
+
  private:
+  std::shared_ptr<dxmt9::Device> device_;
   BackendLimits limits_{};
   std::shared_ptr<BackendDevice> backend_;
   std::vector<AdapterInfo> adapters_;

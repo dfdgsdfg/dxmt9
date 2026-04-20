@@ -1,11 +1,30 @@
 #include "device_c_provider.hpp"
 
+#include "dxmt9/dxmt9_device.hpp"
+#include "../winemetal/Metal.hpp"
+
 using namespace dxmt9::d3d9::devicec;
 
 extern "C" D9CFactory* dxmt9c_factory_create(void) {
   dxmt9DebugLog("factory_create begin");
-  auto* ex = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
-                                           dxmt9::core::makeBackendDevice());
+
+  // Top-down creation: pick a WMT Metal device, wrap in the upper dxmt9::Device,
+  // then hand ownership to the COM factory. Matches dxmt's D3D11CoreCreateDevice
+  // / CreateDXMTDevice flow (dxmt/src/d3d11/d3d11.cpp).
+  auto wmtDevices = WMT::CopyAllDevices();
+  if (!wmtDevices || wmtDevices.count() == 0) {
+    dxmt9DebugLog("factory_create: no WMT devices");
+    return nullptr;
+  }
+  dxmt9::DEVICE_DESC desc{};
+  desc.device = WMT::Device{wmtDevices.object(0)};
+  auto device = dxmt9::CreateDXMT9Device(desc);
+  if (!device) {
+    dxmt9DebugLog("factory_create: CreateDXMT9Device failed");
+    return nullptr;
+  }
+
+  auto* ex = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION, std::move(device));
   if (!ex) {
     dxmt9DebugLog("factory_create failed");
     return nullptr;
