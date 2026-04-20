@@ -13,6 +13,7 @@
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_presenter_macdrv.hpp"
 #include "dxmt9_queue.hpp"
+#include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9_shader_service.hpp"
 #include "../winemetal/Metal.hpp"
 #include "util/config/config.hpp"
@@ -273,17 +274,6 @@ WMT::Reference<WMT::Device> bootstrapWrappedDevice() {
     return {};
   }
   return WMT::Reference<WMT::Device>(device);
-}
-
-WMT::Reference<WMT::CommandQueue> bootstrapWrappedCommandQueue(WMT::Device& device) {
-  if (!device) {
-    return {};
-  }
-  auto commandQueue = device.newCommandQueue(0);
-  if (!commandQueue) {
-    return {};
-  }
-  return commandQueue;
 }
 
 WMT::Reference<WMT::CommandBuffer> bootstrapCommandBuffer(WMT::CommandQueue& queue) {
@@ -4108,17 +4098,14 @@ DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
 
 class MetalBackendDevice final : public BackendDevice {
  public:
-  MetalBackendDevice(const BackendLimits& limits, WMT::Reference<WMT::Device> wmtDevice)
-      : limits_(limits) {
+  MetalBackendDevice(const BackendLimits& limits, WMT::Reference<WMT::Device> wmtDevice,
+                     dxmt9::CommandQueue& commandQueue)
+      : limits_(limits), commandQueue_(&commandQueue) {
     wrappedDevice_ = std::move(wmtDevice);
-    if (!wrappedDevice_) {
+    if (!wrappedDevice_ || !commandQueue_->valid()) {
       return;
     }
     limits_.supportsDepth24Stencil8 = wrappedDevice_.supportsDepth24Stencil8();
-    wrappedCommandQueue_ = bootstrapWrappedCommandQueue(wrappedDevice_);
-    if (!wrappedCommandQueue_) {
-      return;
-    }
     char cachePath[4096]{};
     WMTGetShaderCachePath(cachePath, sizeof(cachePath));
     shaderArchivePath_ = cachePath;
@@ -4246,7 +4233,7 @@ class MetalBackendDevice final : public BackendDevice {
         return false;
       }
 
-      auto commandBuffer = bootstrapCommandBuffer(wrappedCommandQueue_);
+      auto commandBuffer = bootstrapCommandBuffer(commandQueue_->raw());
       if (!commandBuffer) {
         return false;
       }
@@ -4276,7 +4263,7 @@ class MetalBackendDevice final : public BackendDevice {
       bufInfo.options = WMTResourceStorageModeShared;
       auto readbackBuf = wrappedDevice_.newBuffer(bufInfo);
       if (readbackBuf) {
-        auto cmdBuf2 = bootstrapCommandBuffer(wrappedCommandQueue_);
+        auto cmdBuf2 = bootstrapCommandBuffer(commandQueue_->raw());
         if (cmdBuf2) {
           auto blit2 = cmdBuf2.blitCommandEncoder();
           if (blit2) {
@@ -4569,7 +4556,7 @@ class MetalBackendDevice final : public BackendDevice {
         WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
                                                           normalizedBytes.data(), pitch, 0);
       }
-      auto commandBuffer = bootstrapCommandBuffer(wrappedCommandQueue_);
+      auto commandBuffer = bootstrapCommandBuffer(commandQueue_->raw());
       if (!commandBuffer) {
         return;
       }
@@ -4895,11 +4882,11 @@ class MetalBackendDevice final : public BackendDevice {
 
   std::optional<metalqueue::QueueSubmissionRecord> encodeChunk(size_t slotIndex, const ChunkSlot& slot) {
     {
-      if (!wrappedDevice_ || !wrappedCommandQueue_) {
+      if (!wrappedDevice_ || !commandQueue_ || !commandQueue_->valid()) {
         return std::nullopt;
       }
 
-      auto ownedCommandBuffer = bootstrapCommandBuffer(wrappedCommandQueue_);
+      auto ownedCommandBuffer = bootstrapCommandBuffer(commandQueue_->raw());
       if (!ownedCommandBuffer) {
         return std::nullopt;
       }
@@ -6120,7 +6107,7 @@ class MetalBackendDevice final : public BackendDevice {
     auto stagingTexture = wrappedDevice_.newTexture(stagingInfo);
     if (!stagingTexture) return;
 
-    auto commandBuffer = bootstrapCommandBuffer(wrappedCommandQueue_);
+    auto commandBuffer = bootstrapCommandBuffer(commandQueue_->raw());
     if (!commandBuffer) return;
     auto blit = commandBuffer.blitCommandEncoder();
     if (!blit) return;
@@ -6146,7 +6133,7 @@ class MetalBackendDevice final : public BackendDevice {
     bufInfo.options = WMTResourceStorageModeShared;
     auto readBuf = wrappedDevice_.newBuffer(bufInfo);
     if (readBuf && bufInfo.memory.ptr) {
-      auto cmdBuf2 = bootstrapCommandBuffer(wrappedCommandQueue_);
+      auto cmdBuf2 = bootstrapCommandBuffer(commandQueue_->raw());
       if (cmdBuf2) {
         auto blit2 = cmdBuf2.blitCommandEncoder();
         if (blit2) {
@@ -6521,7 +6508,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   BackendLimits limits_{};
   WMT::Reference<WMT::Device> wrappedDevice_{};
-  WMT::Reference<WMT::CommandQueue> wrappedCommandQueue_{};
+  dxmt9::CommandQueue* commandQueue_ = nullptr;
   std::thread encodeThread_;
   std::thread finishThread_;
   std::thread completionThread_;  // dxmt-style: waits on cmdbuf.waitUntilCompleted()
@@ -6575,8 +6562,9 @@ std::string makeShaderSourceFromRequest(const WinemetalShaderCompileRequest& req
 }
 
 std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits,
-                                                      WMT::Reference<WMT::Device> wmtDevice) {
-  auto backend = std::make_shared<MetalBackendDevice>(limits, std::move(wmtDevice));
+                                                      WMT::Reference<WMT::Device> wmtDevice,
+                                                      dxmt9::CommandQueue& commandQueue) {
+  auto backend = std::make_shared<MetalBackendDevice>(limits, std::move(wmtDevice), commandQueue);
   return backend->ready() ? std::static_pointer_cast<BackendDevice>(std::move(backend))
                           : std::shared_ptr<BackendDevice>{};
 }

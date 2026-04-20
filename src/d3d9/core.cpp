@@ -3856,12 +3856,14 @@ namespace {
 class StubDxmt9Device final : public dxmt9::Device {
  public:
   StubDxmt9Device(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
-      : limits_(limits), backend_(std::move(backend)) {}
+      : limits_(limits), queue_(WMT::Device{NULL_OBJECT_HANDLE}), backend_(std::move(backend)) {}
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
+  dxmt9::CommandQueue& queue() override { return queue_; }
   const BackendLimits& limits() const override { return limits_; }
   std::shared_ptr<BackendDevice> backend() override { return backend_; }
  private:
   BackendLimits limits_{};
+  dxmt9::CommandQueue queue_;
   std::shared_ptr<BackendDevice> backend_;
 };
 

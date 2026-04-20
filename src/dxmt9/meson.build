@@ -3,6 +3,7 @@ dxmt9_provider_service_abi_srcs = files('dxmt9_shader_service_exports.cpp')
 
 dxmt9_runtime_srcs = files(
   'backend_metal.mm',
+  'dxmt9_command_queue.cpp',
   'dxmt9_compat.cpp',
   'dxmt9_capture.cpp',
   'dxmt9_device.cpp',

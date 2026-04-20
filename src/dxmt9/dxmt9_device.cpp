@@ -11,10 +11,12 @@ class DeviceImpl final : public Device {
  public:
   explicit DeviceImpl(const DEVICE_DESC& desc)
       : wmt_device_(desc.device),
+        queue_(wmt_device_),
         limits_(desc.limits),
-        backend_(core::makeMetalBackendDevice(limits_, wmt_device_)) {}
+        backend_(core::makeMetalBackendDevice(limits_, wmt_device_, queue_)) {}
 
   WMT::Device wmtDevice() override { return wmt_device_; }
+  CommandQueue& queue() override { return queue_; }
   const core::BackendLimits& limits() const override { return limits_; }
   std::shared_ptr<core::BackendDevice> backend() override { return backend_; }
 
@@ -22,6 +24,7 @@ class DeviceImpl final : public Device {
 
  private:
   WMT::Reference<WMT::Device> wmt_device_;
+  CommandQueue queue_;
   core::BackendLimits limits_{};
   std::shared_ptr<core::BackendDevice> backend_;
 };

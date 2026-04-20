@@ -9,6 +9,7 @@
 
 #include "../../src/winemetal/Metal.hpp"
 #include "core.hpp"
+#include "dxmt9_command_queue.hpp"
 
 #include <memory>
 
@@ -20,6 +21,11 @@ class Device {
 
   // The retained WMT Metal device.
   virtual WMT::Device wmtDevice() = 0;
+
+  // The upper-runtime CommandQueue (owns the WMT::CommandQueue handle).
+  // Matches dxmt::Device::queue() in public shape. Returns a null-valued
+  // CommandQueue on test paths where no Metal device is available.
+  virtual CommandQueue& queue() = 0;
 
   // Capability limits queried at construction.
   virtual const core::BackendLimits& limits() const = 0;

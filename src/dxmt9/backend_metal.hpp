@@ -5,6 +5,7 @@
 // device so the upper runtime can expose that device to the COM layer.
 
 #include "dxmt9/core.hpp"
+#include "dxmt9/dxmt9_command_queue.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <memory>
@@ -12,6 +13,7 @@
 namespace dxmt9::core {
 
 std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits,
-                                                      WMT::Reference<WMT::Device> wmtDevice);
+                                                      WMT::Reference<WMT::Device> wmtDevice,
+                                                      dxmt9::CommandQueue& commandQueue);
 
 }  // namespace dxmt9::core
