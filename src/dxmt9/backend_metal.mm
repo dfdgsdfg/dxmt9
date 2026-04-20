@@ -4114,12 +4114,12 @@ class MetalBackendDevice final : public BackendDevice {
     queueLifecycle_.bindTrackedSubmissionState({
         .writingSlot = &writingSlot_,
         .writeIndex = &writeIndex_,
-        .nextSeqId = &nextSeqId_,
+        .nextSeqId = &commandQueue_->nextSeqId_,
         .readySlots = &readySlots_,
         .completedSeqQueue = &completedSeqQueue_,
         .inflightCount = &inflightCount_,
-        .completedSeqId = &completedSeqId_,
-        .lastCommittedSeqId = &lastCommittedSeqId_,
+        .completedSeqId = &commandQueue_->completedSeqId_,
+        .lastCommittedSeqId = &commandQueue_->lastCommittedSeqId_,
         .slots = std::span<ChunkSlot>(slots_.data(), slots_.size()),
         .mutex = &mutex_,
         .writeCv = &writeCv_,
@@ -4436,7 +4436,7 @@ class MetalBackendDevice final : public BackendDevice {
       return nullptr;
     }
     if ((flags & UsageDiscard) == 0 && (flags & UsageNoOverwrite) == 0 &&
-        it->second.lastUsedSeqId > completedSeqId_) {
+        it->second.lastUsedSeqId > commandQueue_->completedSeqId_) {
       waitForSequenceUnlocked(it->second.lastUsedSeqId, lock);
     }
     BufferRecord& record = it->second;
@@ -4759,7 +4759,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void markDrawResourcesUnlocked(const DrawDesc& desc, u64 seqId = 0) {
     if (seqId == 0) {
-      seqId = nextSeqId_;
+      seqId = commandQueue_->nextSeqId_;
     }
     markBufferUseUnlocked(desc.indexBuffer, seqId);
     for (const auto& stream : desc.vertexDecl.streams) {
@@ -4778,7 +4778,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void markClearResourcesUnlocked(const ClearDesc& desc, u64 seqId = 0) {
     if (seqId == 0) {
-      seqId = nextSeqId_;
+      seqId = commandQueue_->nextSeqId_;
     }
     for (const auto& attachment : desc.colorAttachments) {
       markSurfaceUseUnlocked(attachment.handle, seqId);
@@ -4788,7 +4788,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void markSurfaceCopyResourcesUnlocked(const SurfaceCopyDesc& desc, u64 seqId = 0) {
     if (seqId == 0) {
-      seqId = nextSeqId_;
+      seqId = commandQueue_->nextSeqId_;
     }
     markSurfaceUseUnlocked(desc.source, seqId);
     markSurfaceUseUnlocked(desc.destination, seqId);
@@ -4796,7 +4796,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void markStretchResourcesUnlocked(const StretchRectDesc& desc, u64 seqId = 0) {
     if (seqId == 0) {
-      seqId = nextSeqId_;
+      seqId = commandQueue_->nextSeqId_;
     }
     markSurfaceUseUnlocked(desc.source, seqId);
     markSurfaceUseUnlocked(desc.destination, seqId);
@@ -4804,7 +4804,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void markReadbackResourcesUnlocked(const ReadbackDesc& desc, u64 seqId = 0) {
     if (seqId == 0) {
-      seqId = nextSeqId_;
+      seqId = commandQueue_->nextSeqId_;
     }
     markSurfaceUseUnlocked(desc.source, seqId);
     markSurfaceUseUnlocked(desc.destination, seqId);
@@ -4812,7 +4812,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void markColorFillResourcesUnlocked(const ColorFillDesc& desc, u64 seqId = 0) {
     if (seqId == 0) {
-      seqId = nextSeqId_;
+      seqId = commandQueue_->nextSeqId_;
     }
     markSurfaceUseUnlocked(desc.destination, seqId);
   }
@@ -4869,10 +4869,10 @@ class MetalBackendDevice final : public BackendDevice {
                   return encodeChunk(slotIndex, slot);
                 },
                 [this](u64) {
-                  argbufArena_.reclaim(completedSeqId_);
-                  lambdaStoreArena_.reclaim(completedSeqId_);
-                  stagingArena_.reclaim(completedSeqId_);
-                  copyTempArena_.reclaim(completedSeqId_);
+                  argbufArena_.reclaim(commandQueue_->completedSeqId_);
+                  lambdaStoreArena_.reclaim(commandQueue_->completedSeqId_);
+                  stagingArena_.reclaim(commandQueue_->completedSeqId_);
+                  copyTempArena_.reclaim(commandQueue_->completedSeqId_);
                 })) {
           return;
         }
@@ -6466,10 +6466,10 @@ class MetalBackendDevice final : public BackendDevice {
       while (true) {
         std::unique_lock lock(mutex_);
         if (!queueLifecycle_.runFinishIteration(lock, [this](u64) {
-              argbufArena_.reclaim(completedSeqId_);
-              lambdaStoreArena_.reclaim(completedSeqId_);
-              stagingArena_.reclaim(completedSeqId_);
-              copyTempArena_.reclaim(completedSeqId_);
+              argbufArena_.reclaim(commandQueue_->completedSeqId_);
+              lambdaStoreArena_.reclaim(commandQueue_->completedSeqId_);
+              stagingArena_.reclaim(commandQueue_->completedSeqId_);
+              copyTempArena_.reclaim(commandQueue_->completedSeqId_);
               tryGarbageCollectUnlocked();
             })) {
           return;
@@ -6495,9 +6495,9 @@ class MetalBackendDevice final : public BackendDevice {
         }
       }
     };
-    gcMap(buffers_, completedSeqId_);
-    gcMap(textures_, completedSeqId_);
-    gcMap(surfaces_, completedSeqId_);
+    gcMap(buffers_, commandQueue_->completedSeqId_);
+    gcMap(textures_, commandQueue_->completedSeqId_);
+    gcMap(surfaces_, commandQueue_->completedSeqId_);
   }
 
   void purgeResourcesUnlocked() {
@@ -6520,9 +6520,9 @@ class MetalBackendDevice final : public BackendDevice {
   std::array<ChunkSlot, kRingSize> slots_{};
   std::optional<size_t> writingSlot_;
   size_t writeIndex_ = 0;
-  u64 nextSeqId_ = 1;
-  u64 lastCommittedSeqId_ = 0;
-  u64 completedSeqId_ = 0;
+  // Sequence counters moved to dxmt9::CommandQueue (C1). Accessed here via
+  // commandQueue_->nextSeqId_ etc. Binding pointers below likewise target
+  // the CommandQueue's fields.
   size_t inflightCount_ = 0;
   std::deque<size_t> readySlots_;
   std::deque<u64> completedSeqQueue_;

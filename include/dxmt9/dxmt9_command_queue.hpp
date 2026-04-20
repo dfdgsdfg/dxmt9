@@ -9,6 +9,8 @@
 
 #include "../../src/winemetal/Metal.hpp"
 
+#include <cstdint>
+
 namespace dxmt9 {
 
 class CommandQueue {
@@ -33,6 +35,15 @@ class CommandQueue {
 
   // The WMT::Device this queue was created on.
   WMT::Device device() const noexcept { return device_; }
+
+  // Sequence counters. Guarded externally by the owning backend's mutex
+  // (the binding into QueueLifecycleController takes raw pointers to these).
+  // Moved here from MetalBackendDevice as the first step of queue-state
+  // consolidation; the actual read/write mutex migration happens in a later
+  // phase when the chunk-ring moves.
+  std::uint64_t nextSeqId_ = 1;           // next seq to allocate
+  std::uint64_t completedSeqId_ = 0;      // gpu-completed watermark
+  std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
 
  private:
   WMT::Device device_{};
