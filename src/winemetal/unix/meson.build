@@ -59,13 +59,10 @@ dxmt9_winemetal_unix_module = shared_library(
     'winemetal_unix.cpp',
     'winemetal_private_api.mm',
   ),
-  bridge_codegen[2],
-  files('../../dxmt9/dxmt9_provider_shader_handlers.cpp'),
   name_prefix: '',
   name_suffix: 'so',
   include_directories: [
     dxmt9_inc,
-    bridge_gen_inc,
     dxmt9_winemetal_internal_inc,
     include_directories('../..'),
   ],

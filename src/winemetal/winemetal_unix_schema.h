@@ -1,11 +1,11 @@
 #pragma once
 
 /*
- * Native-service unix bridge schema placeholder.
+ * Native-service unix bridge schema (placeholder).
  *
- * Exact-parity upstream ownership wants this header to describe only the
- * native-service thunk surface that winemetal.so publishes. The current bridge
- * generator still needs dxmt9c_* declarations during the transition, but those
- * are now injected from a separately extracted schema target instead of by
- * including the public device_c.h ABI here directly.
+ * winemetal.so no longer hosts the generated device_c bridge; the only
+ * thunk surface it publishes is the WMT wrapper API implemented in
+ * winemetal_private_api.mm and declared in winemetal.h. This header remains
+ * as a compatibility stub in case downstream bridge-generation targets still
+ * reference it; it intentionally declares nothing.
  */
