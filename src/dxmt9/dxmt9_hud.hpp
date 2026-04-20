@@ -1,7 +1,5 @@
 #pragma once
 
-#import <Metal/Metal.h>
-
 #include "dxmt9_compat.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9_queue.hpp"
@@ -41,7 +39,7 @@ class DeveloperHudState {
 class DeveloperHudController {
  public:
   metalqueue::CommandBufferDiagnostics prepareForSubmission(metalqueue::CommandBufferDiagnostics diagnostics);
-  bool observeCompletion(id<MTLCommandBuffer> commandBuffer,
+  bool observeCompletion(obj_handle_t commandBuffer,
                          const metalqueue::CommandBufferDiagnostics& diagnostics,
                          metalqueue::CompletionTracker& completionTracker,
                          const char* context = "queue");

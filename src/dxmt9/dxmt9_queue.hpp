@@ -1,9 +1,7 @@
 #pragma once
 
-#import <Metal/Metal.h>
-
 #include "dxmt9_backend_types.hpp"
-#include "../winemetal/winemetal.h"
+#include "../winemetal/Metal.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -148,7 +146,10 @@ struct QueueTransitionRecord {
 };
 
 struct QueueSubmissionRecord {
-  obj_handle_t commandBuffer = 0;  // WMT command buffer handle (retained)
+  // RAII-owned command buffer — released when the record is destroyed (after
+  // finish-thread processing). Matches dxmt's CommandChunk::attached_cmdbuf
+  // ownership model.
+  WMT::Reference<WMT::CommandBuffer> commandBuffer{};
   size_t slotIndex = 0;
   u64 seqId = 0;
   std::span<const MetalCommandRecord> commands;
@@ -364,7 +365,7 @@ class QueueLifecycleController {
       const std::function<std::optional<QueueSubmissionRecord>(size_t, const ChunkSlot&)>& encodeFn,
       const std::function<void(u64)>& onInlineComplete = {});
   void appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
-  void submitEncodedChunk(obj_handle_t commandBuffer,
+  void submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,
                           size_t slotIndex,
                           u64 seqId,
                           std::span<const MetalCommandRecord> commands,
@@ -455,12 +456,41 @@ class QueueLifecycleController {
   void noteWaitSeqEnd(const QueueControllerState& state,
                       u64 targetSeqId) const;
   void transition(QueueTransitionRecord record, const std::function<void()>& mutate = {});
-  void enqueueSubmission(const QueueSubmissionRecord& record);
-  void submit(const QueueSubmissionRecord& record);
+  void enqueueSubmission(QueueSubmissionRecord record);
+  void submit(QueueSubmissionRecord& record);
   void drainPendingSubmissions();
 
   SubmissionBinding submissionBinding_{};
   std::deque<QueueSubmissionRecord> pendingSubmissions_{};
+
+ public:
+  // Records that have been committed to Metal and are awaiting GPU completion.
+  // The owning MetalBackendDevice runs a dedicated completion-watcher thread
+  // that pops from this queue, calls waitUntilCompleted() on each
+  // commandBuffer, and then drives the downstream completion pipeline
+  // (diagnostics + completedSeqQueue + transitions).
+  struct PendingCompletion {
+    WMT::Reference<WMT::CommandBuffer> commandBuffer;
+    CommandBufferDiagnostics diagnostics{};
+    std::string contextValue{};
+    size_t slotIndex = 0;
+    u64 seqId = 0;
+  };
+
+  // Drain one pending completion — blocks on waitUntilCompleted() and then
+  // runs the diagnostics / completedSeqQueue / transition work. Called from
+  // the dedicated completion-watcher thread. Returns true if a record was
+  // processed, false on stop. `stop` is read under pendingCompletionMutex_.
+  bool processOnePendingCompletion(bool& stop);
+
+  void notifyPendingCompletionStop() {
+    pendingCompletionCv_.notify_all();
+  }
+
+ private:
+  std::mutex pendingCompletionMutex_{};
+  std::condition_variable pendingCompletionCv_{};
+  std::deque<PendingCompletion> pendingCompletion_{};
 };
 
 class CompletionTracker {
@@ -469,7 +499,7 @@ class CompletionTracker {
   const std::string& lastErrorSummary() const noexcept { return lastErrorSummary_; }
 
  private:
-  std::string commandBufferStatusName(MTLCommandBufferStatus status) const;
+  std::string commandBufferStatusName(WMTCommandBufferStatus status) const;
 
   std::string lastErrorSummary_;
 };

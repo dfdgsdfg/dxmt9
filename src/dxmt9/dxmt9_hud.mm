@@ -74,11 +74,11 @@ DeveloperHudController::prepareForSubmission(metalqueue::CommandBufferDiagnostic
   return diagnostics;
 }
 
-bool DeveloperHudController::observeCompletion(id<MTLCommandBuffer> commandBuffer,
+bool DeveloperHudController::observeCompletion(obj_handle_t commandBuffer,
                                                const metalqueue::CommandBufferDiagnostics& diagnostics,
                                                metalqueue::CompletionTracker& completionTracker,
                                                const char* context) {
-  if (!completionTracker.inspect((obj_handle_t)(uintptr_t)commandBuffer, diagnostics, context)) {
+  if (!completionTracker.inspect(commandBuffer, diagnostics, context)) {
     return false;
   }
   completeSubmission(diagnostics, completionTracker);
@@ -107,7 +107,7 @@ bool SubmissionDiagnosticsController::observeQueueSubmission(
     obj_handle_t commandBuffer,
     const metalqueue::CommandBufferDiagnostics& diagnostics,
     const char* context) {
-  return hudController_.observeCompletion((id<MTLCommandBuffer>)(uintptr_t)commandBuffer, diagnostics,
+  return hudController_.observeCompletion(commandBuffer, diagnostics,
                                          completionTracker_, context);
 }
 

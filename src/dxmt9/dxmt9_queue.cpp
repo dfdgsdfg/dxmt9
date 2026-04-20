@@ -639,18 +639,18 @@ void QueueLifecycleController::appendPresentCommand(const SwapDesc& present, Han
   });
 }
 
-void QueueLifecycleController::submitEncodedChunk(obj_handle_t commandBuffer,
+void QueueLifecycleController::submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,
                                                   size_t slotIndex,
                                                   u64 seqId,
                                                   std::span<const MetalCommandRecord> commands,
                                                   const char* context) {
-  enqueueSubmission(QueueSubmissionRecord{
-      .commandBuffer = commandBuffer,
-      .slotIndex = slotIndex,
-      .seqId = seqId,
-      .commands = commands,
-      .context = context,
-  });
+  QueueSubmissionRecord record;
+  record.commandBuffer = std::move(commandBuffer);
+  record.slotIndex = slotIndex;
+  record.seqId = seqId;
+  record.commands = commands;
+  record.context = context;
+  enqueueSubmission(record);
 }
 
 void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) {
@@ -845,8 +845,8 @@ void QueueLifecycleController::encodeDequeue(size_t slotIndex,
              mutate);
 }
 
-void QueueLifecycleController::enqueueSubmission(const QueueSubmissionRecord& record) {
-  pendingSubmissions_.push_back(record);
+void QueueLifecycleController::enqueueSubmission(QueueSubmissionRecord record) {
+  pendingSubmissions_.push_back(std::move(record));
   drainPendingSubmissions();
 }
 
@@ -968,7 +968,7 @@ void QueueLifecycleController::transition(QueueTransitionRecord record,
   observeTransition(record);
 }
 
-void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
+void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   const auto diagnostics = summarizeSubmission(record.seqId, record.slotIndex, record.commands);
 
   const auto beforeCommitState = currentState();
@@ -988,12 +988,12 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
     return;
   }
 
-  id<MTLCommandBuffer> objcCommandBuffer = (id<MTLCommandBuffer>)(uintptr_t)record.commandBuffer;
-
   const auto binding = submissionBinding_;
   if (!binding.mutex || !binding.completedSeqQueue) {
-    [objcCommandBuffer commit];
-    [objcCommandBuffer release];
+    // No binding → just commit; the reference releases when `record` is
+    // destroyed by the caller. Covers teardown paths that bypass the
+    // finish-thread.
+    record.commandBuffer.commit();
     return;
   }
 
@@ -1002,37 +1002,73 @@ void QueueLifecycleController::submit(const QueueSubmissionRecord& record) {
   if (diagnosticsController) {
     preparedDiagnostics = diagnosticsController->prepareQueueSubmission(diagnostics);
   }
-  auto* self = this;
-  const std::string contextValue = record.context ? record.context : "queue";
-  const auto submissionSlotIndex = record.slotIndex;
-  const auto submissionSeqId = record.seqId;
-  [objcCommandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-    if (diagnosticsController) {
-      (void)diagnosticsController->observeQueueSubmission((obj_handle_t)(uintptr_t)buffer,
-                                                           preparedDiagnostics, contextValue.c_str());
+
+  // Commit and hand the record (including the retained WMT::CommandBuffer) to
+  // the completion-watcher thread via pendingCompletion_. That thread will
+  // call waitUntilCompleted() — the upstream-dxmt finish-thread shape — then
+  // push the seqId into completedSeqQueue and fire the transition callbacks.
+  record.commandBuffer.commit();
+
+  {
+    std::lock_guard lock(pendingCompletionMutex_);
+    PendingCompletion pending;
+    pending.commandBuffer = std::move(record.commandBuffer);
+    pending.diagnostics = preparedDiagnostics;
+    pending.contextValue = record.context ? record.context : "queue";
+    pending.slotIndex = record.slotIndex;
+    pending.seqId = record.seqId;
+    pendingCompletion_.push_back(std::move(pending));
+  }
+  pendingCompletionCv_.notify_all();
+}
+
+bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
+  PendingCompletion pending;
+  {
+    std::unique_lock<std::mutex> lock(pendingCompletionMutex_);
+    pendingCompletionCv_.wait(lock, [&] { return stop || !pendingCompletion_.empty(); });
+    if (stop && pendingCompletion_.empty()) {
+      return false;
     }
+    pending = std::move(pendingCompletion_.front());
+    pendingCompletion_.pop_front();
+  }
+
+  // Block until GPU completes — upstream dxmt's WaitForFinishThread pattern.
+  if (pending.commandBuffer &&
+      pending.commandBuffer.status() <= WMTCommandBufferStatusScheduled) {
+    pending.commandBuffer.waitUntilCompleted();
+  }
+
+  const auto binding = submissionBinding_;
+  auto* diagnosticsController = binding.submissionDiagnostics;
+  if (diagnosticsController && pending.commandBuffer) {
+    (void)diagnosticsController->observeQueueSubmission(pending.commandBuffer.handle,
+                                                         pending.diagnostics,
+                                                         pending.contextValue.c_str());
+  }
+  if (binding.mutex && binding.completedSeqQueue) {
     std::lock_guard completionLock(*binding.mutex);
     const QueueControllerState before = makeBoundQueueState(binding);
-    binding.completedSeqQueue->push_back(submissionSeqId);
+    binding.completedSeqQueue->push_back(pending.seqId);
     const QueueControllerState after = makeBoundQueueState(binding);
-    self->observeTransition(QueueTransitionRecord{
+    observeTransition(QueueTransitionRecord{
         .before = before,
         .after = after,
-        .slotIndex = submissionSlotIndex,
-        .eventSeqId = submissionSeqId,
+        .slotIndex = pending.slotIndex,
+        .eventSeqId = pending.seqId,
     });
     if (binding.finishCv) {
       binding.finishCv->notify_all();
     }
-  }];
-
-  [objcCommandBuffer commit];
-  [objcCommandBuffer release];
+  }
+  // pending.commandBuffer is released when `pending` goes out of scope.
+  return true;
 }
 
 void QueueLifecycleController::drainPendingSubmissions() {
   while (!pendingSubmissions_.empty()) {
-    const QueueSubmissionRecord record = pendingSubmissions_.front();
+    QueueSubmissionRecord record = std::move(pendingSubmissions_.front());
     pendingSubmissions_.pop_front();
     submit(record);
   }
@@ -1345,19 +1381,19 @@ void traceQueueSlotsEvent(const char* event,
                   extra);
 }
 
-std::string CompletionTracker::commandBufferStatusName(MTLCommandBufferStatus status) const {
+std::string CompletionTracker::commandBufferStatusName(WMTCommandBufferStatus status) const {
   switch (status) {
-    case MTLCommandBufferStatusNotEnqueued:
+    case WMTCommandBufferStatusNotEnqueued:
       return "not-enqueued";
-    case MTLCommandBufferStatusEnqueued:
+    case WMTCommandBufferStatusEnqueued:
       return "enqueued";
-    case MTLCommandBufferStatusCommitted:
+    case WMTCommandBufferStatusCommitted:
       return "committed";
-    case MTLCommandBufferStatusScheduled:
+    case WMTCommandBufferStatusScheduled:
       return "scheduled";
-    case MTLCommandBufferStatusCompleted:
+    case WMTCommandBufferStatusCompleted:
       return "completed";
-    case MTLCommandBufferStatusError:
+    case WMTCommandBufferStatusError:
       return "error";
   }
   return "unknown";
@@ -1371,7 +1407,7 @@ bool CompletionTracker::inspect(obj_handle_t commandBuffer,
   }
 
   WMT::CommandBuffer wrapped{commandBuffer};
-  const MTLCommandBufferStatus status = static_cast<MTLCommandBufferStatus>(wrapped.status());
+  const WMTCommandBufferStatus status = wrapped.status();
   if (queueTraceEnabled()) {
     dxmt9::util::logf(dxmt9::util::LogLevel::Debug, "dxmt9-metal",
                       "%s seq=%llu slot=%zu frame=%u status=%s draw=%d present=%d blit=%d",
@@ -1385,7 +1421,7 @@ bool CompletionTracker::inspect(obj_handle_t commandBuffer,
                       diagnostics.hasBlit ? 1 : 0);
   }
 
-  if (status == MTLCommandBufferStatusError) {
+  if (status == WMTCommandBufferStatusError) {
     std::ostringstream summary;
     summary << context << " seq=" << diagnostics.seqId << " status=error";
     WMT::Error error = wrapped.error();
@@ -1414,7 +1450,7 @@ bool CompletionTracker::inspect(obj_handle_t commandBuffer,
     }
   }
 
-  return diagnostics.hasPresent || status == MTLCommandBufferStatusError;
+  return diagnostics.hasPresent || status == WMTCommandBufferStatusError;
 }
 
 }  // namespace dxmt9::core::metalqueue

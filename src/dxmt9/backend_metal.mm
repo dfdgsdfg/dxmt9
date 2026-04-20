@@ -4145,6 +4145,7 @@ class MetalBackendDevice final : public BackendDevice {
     stop_ = false;
     encodeThread_ = std::thread([this] { encodeLoop(); });
     finishThread_ = std::thread([this] { finishLoop(); });
+    completionThread_ = std::thread([this] { completionWatcherLoop(); });
     ready_ = true;
   }
 
@@ -4156,8 +4157,12 @@ class MetalBackendDevice final : public BackendDevice {
       finishCv_.notify_all();
       writeCv_.notify_all();
     }
+    queueLifecycle_.notifyPendingCompletionStop();
     if (encodeThread_.joinable()) {
       encodeThread_.join();
+    }
+    if (completionThread_.joinable()) {
+      completionThread_.join();
     }
     if (finishThread_.joinable()) {
       finishThread_.join();
@@ -4167,6 +4172,12 @@ class MetalBackendDevice final : public BackendDevice {
       persistShaderArchiveWMT(shaderArchive_, shaderArchivePath_);
     }
     purgeResourcesUnlocked();
+  }
+
+  void completionWatcherLoop() {
+    while (queueLifecycle_.processOnePendingCompletion(stop_)) {
+      // continue until processOnePendingCompletion returns false (stop)
+    }
   }
 
   void setDeviceLostObserver(DeviceLostObserver observer) override {
@@ -4999,15 +5010,17 @@ class MetalBackendDevice final : public BackendDevice {
       flushBlit();
 
       const u64 seqId = slot.seqId;
-      // Retain ownership for the submission record; the queue will release after commit.
-      NSObject_retain(commandBuffer.handle);
-      return metalqueue::QueueSubmissionRecord{
-          .commandBuffer = commandBuffer.handle,
-          .slotIndex = slotIndex,
-          .seqId = seqId,
-          .commands = std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size()),
-          .context = "queue",
-      };
+      // Hand the retained WMT::CommandBuffer to the queue. `commandBuffer`
+      // (local WMT::Reference<WMT::CommandBuffer> in encodeChunk) is moved
+      // out; the completion-watcher thread owns it from here and releases
+      // it once the GPU finishes waitUntilCompleted().
+      metalqueue::QueueSubmissionRecord record;
+      record.commandBuffer = std::move(commandBuffer);
+      record.slotIndex = slotIndex;
+      record.seqId = seqId;
+      record.commands = std::span<const MetalCommandRecord>(slot.commands.data(), slot.commands.size());
+      record.context = "queue";
+      return record;
     }
   }
 
@@ -6521,6 +6534,7 @@ class MetalBackendDevice final : public BackendDevice {
   WMT::Reference<WMT::CommandQueue> wrappedCommandQueue_{};
   std::thread encodeThread_;
   std::thread finishThread_;
+  std::thread completionThread_;  // dxmt-style: waits on cmdbuf.waitUntilCompleted()
   std::mutex mutex_;
   std::condition_variable encodeCv_;
   std::condition_variable finishCv_;
