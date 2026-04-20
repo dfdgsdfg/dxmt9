@@ -6293,6 +6293,8 @@ class MetalBackendDevice final : public BackendDevice {
           return WMT::Reference<WMT::RenderPipelineState>{};
         }
         WMTRenderPipelineInfo info{};
+      info.max_tessellation_factor = 1;
+        info.max_tessellation_factor = 1;
         info.vertex_function = vs.handle;
         info.fragment_function = fs.handle;
         info.raster_sample_count = std::max(1u, key.sampleCount);
@@ -6348,6 +6350,7 @@ class MetalBackendDevice final : public BackendDevice {
       auto vs = vsLib.newFunction("dxmt9_vs");
       auto fs = fsLib.newFunction("dxmt9_fs");
       WMTRenderPipelineInfo info{};
+      info.max_tessellation_factor = 1;
       info.vertex_function = vs.handle;
       info.fragment_function = fs.handle;
       info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
@@ -6385,6 +6388,7 @@ class MetalBackendDevice final : public BackendDevice {
       auto vs = vsLib.newFunction("dxmt9_vs");
       auto fs = fsLib.newFunction("dxmt9_fs");
       WMTRenderPipelineInfo info{};
+      info.max_tessellation_factor = 1;
       info.vertex_function = vs.handle;
       info.fragment_function = fs.handle;
       info.raster_sample_count = std::max(1u, stretch.destinationSampleCount);
@@ -6422,6 +6426,7 @@ class MetalBackendDevice final : public BackendDevice {
       auto vs = vsLib.newFunction("dxmt9_vs");
       auto fs = fsLib.newFunction("dxmt9_fs");
       WMTRenderPipelineInfo info{};
+      info.max_tessellation_factor = 1;
       info.vertex_function = vs.handle;
       info.fragment_function = fs.handle;
       info.raster_sample_count = 1;
