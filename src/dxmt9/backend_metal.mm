@@ -6045,8 +6045,11 @@ class MetalBackendDevice final : public BackendDevice {
       emitQueueTraceLine(out.str());
     }
 
-    dxmt9::Presenter* presenter = nullptr;
-    if (present.window.value != 0) {
+    // Prefer the Presenter owned by the originating core::SwapChain (passed
+    // through SwapDesc). Fall back to the legacy per-backend map for paths
+    // that never attached a swap chain (defensive; expected to be unused).
+    dxmt9::Presenter* presenter = present.presenter;
+    if (!presenter && present.window.value != 0) {
       std::lock_guard lock(presentersMutex_);
       presenter = ensurePresenterLocked(present.window.value, seqId);
     }

@@ -15,7 +15,8 @@
 #include <vector>
 
 namespace dxmt9 {
-class Device;  // forward decl — defined in dxmt9/dxmt9_device.hpp
+class Device;     // forward decl — defined in dxmt9/dxmt9_device.hpp
+class Presenter;  // forward decl — defined in src/dxmt9/dxmt9_presenter.hpp
 }
 
 namespace dxmt9::core {
@@ -654,6 +655,9 @@ struct SwapDesc {
   bool windowed = true;
   bool displaySyncEnabled = true;
   MultiSampleType multiSampleType = MultiSampleType::None;
+  // Owned by the SwapChain this desc was built from; the backend uses this
+  // to target the per-window Presenter without an hwnd-keyed registry.
+  dxmt9::Presenter* presenter = nullptr;
 };
 
 struct PresentParameters {
@@ -1236,18 +1240,27 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   void resize(const PresentParameters& params);
   HResult present(std::shared_ptr<BackendDevice> backend, const SwapDesc& desc);
 
+  // Per-window Presenter (WMT::MetalLayer-centric upper object). Owned by
+  // this swap chain; nullptr on test paths where the upper dxmt9::Device
+  // has no WMT::Device.
+  dxmt9::Presenter* presenter() const noexcept { return presenter_.get(); }
+
  private:
+  void ensurePresenter();
+
   std::weak_ptr<Device> owner_;
   SwapChainHandle handle_{};
   PresentParameters params_{};
   std::shared_ptr<Surface> backBuffer_;
   std::shared_ptr<Surface> depthStencilSurface_;
+  std::unique_ptr<dxmt9::Presenter> presenter_{};
 };
 
 class Device : public std::enable_shared_from_this<Device> {
  public:
   Device(AdapterInfo adapter, BackendLimits limits, std::shared_ptr<BackendDevice> backend,
-         PresentParameters params, u32 behaviorFlags);
+         PresentParameters params, u32 behaviorFlags,
+         std::shared_ptr<dxmt9::Device> upperDevice = {});
   ~Device();
 
   Device(const Device&) = delete;
@@ -1375,6 +1388,12 @@ class Device : public std::enable_shared_from_this<Device> {
   BackendLimits limits_{};
   DeviceCaps caps_{};
   std::shared_ptr<BackendDevice> backend_;
+  std::shared_ptr<dxmt9::Device> upperDevice_{};
+
+ public:
+  const std::shared_ptr<dxmt9::Device>& upperDevice() const noexcept { return upperDevice_; }
+
+ private:
   PresentParameters presentParameters_{};
   [[maybe_unused]] u32 behaviorFlags_ = 0;
   DeviceState state_{};

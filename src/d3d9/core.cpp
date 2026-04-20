@@ -1,6 +1,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "../dxmt9/dxmt9_presenter.hpp"
 #include "util/util_bmp.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -2505,9 +2506,34 @@ void StateBlock::apply(Device& device) const {
 SwapChain::SwapChain(std::shared_ptr<Device> owner, SwapChainHandle handle, PresentParameters params,
                      std::shared_ptr<Surface> backBuffer, std::shared_ptr<Surface> depthStencil)
     : owner_(std::move(owner)), handle_(handle), params_(params), backBuffer_(std::move(backBuffer)),
-      depthStencilSurface_(std::move(depthStencil)) {}
+      depthStencilSurface_(std::move(depthStencil)) {
+  ensurePresenter();
+}
 
 SwapChain::~SwapChain() = default;
+
+void SwapChain::ensurePresenter() {
+  auto owner = owner_.lock();
+  if (!owner) {
+    return;
+  }
+  const auto& upper = owner->upperDevice();
+  if (!upper) {
+    return;
+  }
+  auto wmtDevice = upper->wmtDevice();
+  if (!wmtDevice) {
+    return;
+  }
+  const u64 hwnd = params_.deviceWindow.value;
+  if (!hwnd) {
+    return;
+  }
+  presenter_ = std::make_unique<dxmt9::Presenter>(wmtDevice, hwnd, 0ull);
+  if (!presenter_->valid()) {
+    presenter_.reset();
+  }
+}
 
 bool SwapChain::displaySyncEnabled() const noexcept {
   return params_.presentationInterval != PresentInterval::Immediate;
@@ -2540,9 +2566,11 @@ HResult SwapChain::present(std::shared_ptr<BackendDevice> backend, const SwapDes
 }
 
 Device::Device(AdapterInfo adapter, BackendLimits limits, std::shared_ptr<BackendDevice> backend,
-               PresentParameters params, u32 behaviorFlags)
+               PresentParameters params, u32 behaviorFlags,
+               std::shared_ptr<dxmt9::Device> upperDevice)
     : adapter_(std::move(adapter)), limits_(limits),
       caps_(makeDefaultCaps(limits_)), backend_(std::move(backend)),
+      upperDevice_(std::move(upperDevice)),
       presentParameters_(normalizePresentParameters(adapter_, params)), behaviorFlags_(behaviorFlags) {
   state_.reset();
   const u32 width = std::max(1u, presentParameters_.backBufferWidth);
@@ -2915,6 +2943,9 @@ SwapDesc Device::snapshotSwapDesc() const {
   desc.windowed = presentParameters_.windowed;
   desc.displaySyncEnabled = presentParameters_.presentationInterval != PresentInterval::Immediate;
   desc.multiSampleType = presentParameters_.multiSampleType;
+  if (!swapChains_.empty()) {
+    desc.presenter = swapChains_[0]->presenter();
+  }
   return desc;
 }
 
@@ -3227,7 +3258,9 @@ HResult Device::waitForVBlank(size_t swapChainIndex) {
     return D3DERR_INVALIDCALL;
   }
   if (backend_) {
-    return backend_->waitForVBlank(makeSwapDesc(chain->params()));
+    auto vblankDesc = makeSwapDesc(chain->params());
+    vblankDesc.presenter = chain->presenter();
+    return backend_->waitForVBlank(vblankDesc);
   }
   return D3D_OK;
 }
@@ -4027,7 +4060,7 @@ std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const Present
     }
   }
   auto device = std::shared_ptr<Device>(
-      new Device(adapterInfo, limits_, backend_, normalized, behaviorFlags));
+      new Device(adapterInfo, limits_, backend_, normalized, behaviorFlags, device_));
   device->initializeDefaultSwapChain();
   if (auto backend = device->backend()) {
     std::weak_ptr<Device> weak = device;
