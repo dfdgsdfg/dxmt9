@@ -846,8 +846,7 @@ void QueueLifecycleController::encodeDequeue(size_t slotIndex,
 }
 
 void QueueLifecycleController::enqueueSubmission(QueueSubmissionRecord record) {
-  pendingSubmissions_.push_back(std::move(record));
-  drainPendingSubmissions();
+  submit(record);
 }
 
 void QueueLifecycleController::finishInline(size_t slotIndex,
@@ -1064,14 +1063,6 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
   }
   // pending.commandBuffer is released when `pending` goes out of scope.
   return true;
-}
-
-void QueueLifecycleController::drainPendingSubmissions() {
-  while (!pendingSubmissions_.empty()) {
-    QueueSubmissionRecord record = std::move(pendingSubmissions_.front());
-    pendingSubmissions_.pop_front();
-    submit(record);
-  }
 }
 
 void QueueLifecycleController::notePresentEnqueue(const QueueControllerState& state,

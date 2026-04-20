@@ -458,10 +458,8 @@ class QueueLifecycleController {
   void transition(QueueTransitionRecord record, const std::function<void()>& mutate = {});
   void enqueueSubmission(QueueSubmissionRecord record);
   void submit(QueueSubmissionRecord& record);
-  void drainPendingSubmissions();
 
   SubmissionBinding submissionBinding_{};
-  std::deque<QueueSubmissionRecord> pendingSubmissions_{};
 
  public:
   // Records that have been committed to Metal and are awaiting GPU completion.
