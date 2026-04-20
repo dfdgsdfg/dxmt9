@@ -3,6 +3,7 @@
 #import <Metal/Metal.h>
 
 #include "dxmt9_backend_types.hpp"
+#include "../winemetal/winemetal.h"
 
 #include <cstdint>
 #include <functional>
@@ -147,7 +148,7 @@ struct QueueTransitionRecord {
 };
 
 struct QueueSubmissionRecord {
-  id<MTLCommandBuffer> commandBuffer = nil;
+  obj_handle_t commandBuffer = 0;  // WMT command buffer handle (retained)
   size_t slotIndex = 0;
   u64 seqId = 0;
   std::span<const MetalCommandRecord> commands;
@@ -363,7 +364,7 @@ class QueueLifecycleController {
       const std::function<std::optional<QueueSubmissionRecord>(size_t, const ChunkSlot&)>& encodeFn,
       const std::function<void(u64)>& onInlineComplete = {});
   void appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
-  void submitEncodedChunk(id<MTLCommandBuffer> commandBuffer,
+  void submitEncodedChunk(obj_handle_t commandBuffer,
                           size_t slotIndex,
                           u64 seqId,
                           std::span<const MetalCommandRecord> commands,
@@ -464,7 +465,7 @@ class QueueLifecycleController {
 
 class CompletionTracker {
  public:
-  bool inspect(id<MTLCommandBuffer> commandBuffer, const CommandBufferDiagnostics& diagnostics, const char* context);
+  bool inspect(obj_handle_t commandBuffer, const CommandBufferDiagnostics& diagnostics, const char* context);
   const std::string& lastErrorSummary() const noexcept { return lastErrorSummary_; }
 
  private:

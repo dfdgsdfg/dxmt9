@@ -186,6 +186,7 @@ def load_schema_text(path: pathlib.Path, visited: set[pathlib.Path] | None = Non
 def collect_device_c_prototypes(schema_header: pathlib.Path) -> list[Proto]:
     text = load_schema_text(schema_header)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"^\s*#.*$", "", text, flags=re.M)
     matches = re.finditer(
         r"([A-Za-z_][A-Za-z0-9_\s\*]*?\s+dxmt9c_[A-Za-z0-9_]+\s*\([^;]*?\)\s*;)",
         text,
@@ -194,8 +195,12 @@ def collect_device_c_prototypes(schema_header: pathlib.Path) -> list[Proto]:
     return [parse_prototype(match.group(1)[:-1]) for match in matches]
 
 
-def collect_prototypes(schema_header: pathlib.Path) -> list[Proto]:
-    return collect_device_c_prototypes(schema_header)
+def collect_prototypes(schema_headers: list[pathlib.Path]) -> list[Proto]:
+    ordered: dict[str, Proto] = {}
+    for schema_header in schema_headers:
+        for proto in collect_device_c_prototypes(schema_header):
+            ordered.setdefault(proto.name, proto)
+    return list(ordered.values())
 
 
 def wow64_field_decl(param: Param) -> str:
@@ -440,14 +445,19 @@ def write_server_entries(path: pathlib.Path, protos: list[Proto]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--schema-header", required=False, default=str(DEVICE_C_HEADER))
+    parser.add_argument("--schema-header", dest="schema_headers", action="append")
     parser.add_argument("--ops-header", required=True)
     parser.add_argument("--client-cpp", required=True)
     parser.add_argument("--server-cpp", required=True)
     parser.add_argument("--server-entries", required=True)
     args = parser.parse_args()
 
-    protos = collect_prototypes(pathlib.Path(args.schema_header))
+    schema_headers = (
+        [pathlib.Path(path) for path in args.schema_headers]
+        if args.schema_headers
+        else [DEVICE_C_HEADER]
+    )
+    protos = collect_prototypes(schema_headers)
 
     ops_header = pathlib.Path(args.ops_header)
     client_cpp = pathlib.Path(args.client_cpp)

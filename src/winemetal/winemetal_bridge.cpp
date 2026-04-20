@@ -1,8 +1,11 @@
 /* src/winemetal/winemetal_bridge.cpp — PE bridge bootstrap for the single
  * winemetal.so unixlib path.
  *
- * winemetal.so hosts both the generated dxmt9c_* unix server surface and the
- * provider-side shader/runtime unix handlers.
+ * winemetal.so now hosts only the WMT wrapper surface (Metal API C functions
+ * in winemetal_private_api.mm). The device_c generated bridge and provider/
+ * runtime unix handlers have been removed; winemetal.so exposes its WMT
+ * functions as direct symbol exports, resolved via the builtin-dispatcher
+ * fallback path established below.
  */
 
 #define WIN32_LEAN_AND_MEAN

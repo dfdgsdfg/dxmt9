@@ -1,7 +1,6 @@
 #pragma once
 
 #include "dxmt9/winemetal.h"
-#include "dxmt9_bridge_ops.generated.h"
 
 #include <stdint.h>
 #ifdef __cplusplus
@@ -12,11 +11,13 @@
 extern "C" {
 #endif
 
+// Shader-service unix-call IDs. The device_c generated bridge has been
+// removed from winemetal.so, so these start at 0 (no base offset).
 enum dxmt9_winemetal_call_id {
-  DXMT9_WINEMETAL_CALL_COMPILE_SHADER = dxmt9::bridge::kBridgeOpcodeCount + 0,
-  DXMT9_WINEMETAL_CALL_SHADER_SOURCE_SIZE = dxmt9::bridge::kBridgeOpcodeCount + 1,
-  DXMT9_WINEMETAL_CALL_SHADER_SOURCE_COPY = dxmt9::bridge::kBridgeOpcodeCount + 2,
-  DXMT9_WINEMETAL_CALL_DESTROY_SHADER = dxmt9::bridge::kBridgeOpcodeCount + 3,
+  DXMT9_WINEMETAL_CALL_COMPILE_SHADER = 0,
+  DXMT9_WINEMETAL_CALL_SHADER_SOURCE_SIZE = 1,
+  DXMT9_WINEMETAL_CALL_SHADER_SOURCE_COPY = 2,
+  DXMT9_WINEMETAL_CALL_DESTROY_SHADER = 3,
 };
 
 typedef struct Dxmt9WinemetalCompileShaderParams {

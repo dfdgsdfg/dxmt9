@@ -16,8 +16,21 @@ dxmt9_inc = include_directories('include')
 bridge_gen_inc = include_directories('.')
 
 python3 = find_program('python3', required: true)
+device_c_unix_schema = custom_target(
+  'dxmt9_device_c_unix_schema_codegen',
+  input: files('include/dxmt9/device_c.h'),
+  output: 'dxmt9_device_c_unix_schema.generated.h',
+  command: [
+    python3,
+    files('scripts/extract_device_c_schema.py'),
+    '@INPUT@',
+    '@OUTPUT@',
+  ],
+)
+
 bridge_codegen = custom_target(
   'dxmt9_wine_bridge_codegen',
+  input: device_c_unix_schema,
   output: [
     'dxmt9_bridge_ops.generated.h',
     'dxmt9_device_c_bridge_exports.generated.cpp',
@@ -28,6 +41,7 @@ bridge_codegen = custom_target(
     python3,
     files('scripts/gen_wine_bridge.py'),
     '--schema-header', files('src/winemetal/winemetal_unix_schema.h'),
+    '--schema-header', '@INPUT@',
     '--ops-header', '@OUTPUT0@',
     '--client-cpp', '@OUTPUT1@',
     '--server-cpp', '@OUTPUT2@',
@@ -35,8 +49,8 @@ bridge_codegen = custom_target(
   ],
   depend_files: files(
     'src/winemetal/winemetal_unix_schema.h',
-    'include/dxmt9/device_c.h',
     'scripts/gen_wine_bridge.py',
+    'scripts/extract_device_c_schema.py',
   ),
 )
 

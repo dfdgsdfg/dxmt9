@@ -1,6 +1,7 @@
 #include "dxmt9_presenter_support.hpp"
 
 #include "dxmt9_queue.hpp"
+#include "../winemetal/Metal.hpp"
 #include "util/config/config.hpp"
 #include "util/dynamic_symbol.hpp"
 
@@ -16,19 +17,35 @@ bool directLayerAttachEnabled() {
 }
 
 static std::mutex gLayerRegistryMutex;
-static std::unordered_map<u64, CAMetalLayer*> gLayerRegistry;
+static std::unordered_map<u64, uintptr_t> gLayerRegistry;
+
+static uintptr_t toLayerHandle(CAMetalLayer* layer) {
+  return reinterpret_cast<uintptr_t>(layer);
+}
+
+static CAMetalLayer* asCAMetalLayer(uintptr_t handle) {
+  return reinterpret_cast<CAMetalLayer*>(handle);
+}
+
+static uintptr_t toOpaqueHandle(void* value) {
+  return reinterpret_cast<uintptr_t>(value);
+}
+
+static void* asOpaquePointer(uintptr_t handle) {
+  return reinterpret_cast<void*>(handle);
+}
 
 CAMetalLayer* lookupLayerHandle(u64 handle) {
   std::lock_guard lock(gLayerRegistryMutex);
   if (auto it = gLayerRegistry.find(handle); it != gLayerRegistry.end()) {
-    return it->second;
+    return asCAMetalLayer(it->second);
   }
   return nullptr;
 }
 
 void registerLayerHandle(u64 handle, CAMetalLayer* layer) {
   std::lock_guard lock(gLayerRegistryMutex);
-  gLayerRegistry[handle] = layer;
+  gLayerRegistry[handle] = toLayerHandle(layer);
 }
 
 void unregisterLayerHandle(u64 handle) {
@@ -72,21 +89,20 @@ NSView* get_nsview_for_hwnd(u64 hwnd) {
 }
 
 PresenterState::~PresenterState() {
-  const auto& interop = wineMacInterop();
   for (auto& [hwnd, record] : layers_) {
     unregisterLayerHandle(hwnd);
-    if (record.wineMetalView && interop.releaseMetalView) {
-      interop.releaseMetalView(record.wineMetalView);
+    if (record.wineMetalViewHandle) {
+      WMT::MacdrvMetalView{static_cast<obj_handle_t>(record.wineMetalViewHandle)}.release();
     }
-    if (record.layer) {
-      [record.layer release];
+    if (record.layerHandle) {
+      [asCAMetalLayer(record.layerHandle) release];
     }
   }
   layers_.clear();
-  if (wineMetalDevice_ && interop.releaseMetalDevice) {
-    interop.releaseMetalDevice(wineMetalDevice_);
+  if (wineMetalDeviceHandle_) {
+    WMT::MacdrvMetalDevice{static_cast<obj_handle_t>(wineMetalDeviceHandle_)}.release();
   }
-  wineMetalDevice_ = nullptr;
+  wineMetalDeviceHandle_ = 0;
 }
 
 CAMetalLayer* PresenterState::lookupLayer(u64 hwnd) const {
@@ -139,14 +155,14 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       traceEvent("legacy-view.nil", seqId, hwnd);
       return nullptr;
     }
-    record.layer = [legacyLayer retain];
-  } else if (interop.getCocoaWindow && interop.createMetalDevice && interop.createMetalView &&
-             interop.getMetalLayer) {
+    record.layerHandle = toLayerHandle([legacyLayer retain]);
+  } else if (interop.getCocoaWindow) {
     traceEvent("table-path.begin", seqId, hwnd);
-    if (!wineMetalDevice_) {
+    if (!wineMetalDeviceHandle_) {
       traceEvent("metal-device.begin", seqId, hwnd);
-      wineMetalDevice_ = interop.createMetalDevice();
-      if (!wineMetalDevice_) {
+      auto macdrvDevice = WMT::CreateMacdrvMetalDevice();
+      wineMetalDeviceHandle_ = static_cast<uintptr_t>(macdrvDevice.handle);
+      if (!wineMetalDeviceHandle_) {
         traceEvent("metal-device.nil", seqId, hwnd);
         return nullptr;
       }
@@ -222,8 +238,8 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       });
       if (directLayer) {
         traceEvent("direct-layer.ok", seqId, hwnd);
-        record.layer = [directLayer retain];
-        CAMetalLayer* layer = record.layer;
+        record.layerHandle = toLayerHandle([directLayer retain]);
+        CAMetalLayer* layer = asCAMetalLayer(record.layerHandle);
         registerLayerHandle(hwnd, layer);
         layers_[hwnd] = std::move(record);
         return layer;
@@ -232,7 +248,12 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
     }
 
     traceEvent("metal-view.begin", seqId, hwnd);
-    void* metalView = interop.createMetalView(cocoaView, wineMetalDevice_);
+    WMT::MetalLayer wrappedLayer;
+    auto metalView = WMT::CreateMetalViewFromCocoaView(
+        static_cast<obj_handle_t>(toOpaqueHandle(cocoaView)),
+        WMT::MacdrvMetalDevice{static_cast<obj_handle_t>(wineMetalDeviceHandle_)},
+        wrappedLayer
+    );
     if (!metalView) {
       traceEvent("metal-view.nil", seqId, hwnd);
       return nullptr;
@@ -240,10 +261,10 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
     traceEvent("metal-view.ok", seqId, hwnd);
 
     traceEvent("metal-layer.begin", seqId, hwnd);
-    auto* layer = static_cast<CAMetalLayer*>(interop.getMetalLayer(metalView));
+    auto* layer = asCAMetalLayer(static_cast<uintptr_t>(wrappedLayer.handle));
     if (!layer) {
-      if (metalView && interop.releaseMetalView) {
-        interop.releaseMetalView(metalView);
+      if (metalView) {
+        metalView.release();
       }
       traceEvent("metal-layer.nil", seqId, hwnd);
       return nullptr;
@@ -254,7 +275,7 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       dispatch_sync(dispatch_get_main_queue(), ^{
         @autoreleasepool {
           NSView* parentView = static_cast<NSView*>(cocoaView);
-          id metalViewObject = static_cast<id>(metalView);
+          id metalViewObject = static_cast<id>(asOpaquePointer(static_cast<uintptr_t>(metalView.handle)));
           std::ostringstream out;
           out << "[dxmt9-present] metal-view.info"
               << " seq=" << static_cast<unsigned long long>(seqId)
@@ -300,15 +321,15 @@ CAMetalLayer* PresenterState::ensureLayer(u64 hwnd, u64 seqId) {
       });
     }
 
-    record.layer = [layer retain];
-    record.wineMetalView = metalView;
+    record.layerHandle = toLayerHandle([layer retain]);
+    record.wineMetalViewHandle = static_cast<uintptr_t>(metalView.handle);
     record.usesWineMetalView = true;
   } else {
     traceEvent("interop.unavailable", seqId, hwnd);
     return nullptr;
   }
 
-  CAMetalLayer* layer = record.layer;
+  CAMetalLayer* layer = asCAMetalLayer(record.layerHandle);
   registerLayerHandle(hwnd, layer);
   layers_[hwnd] = std::move(record);
   return layer;

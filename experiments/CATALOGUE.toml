@@ -14,6 +14,54 @@ run_timeout_sec = 20
 capture_frame = 150
 
 [[app]]
+name = "d9vk-d3d9-clear"
+source = "https://github.com/Joshua-Ashton/d9vk"
+license = "zlib"
+binary = "experiments/apps/D9VKD3D9Clear/d3d9-clear-x64.exe"
+launcher = "experiments/launchers/dx9_fast_sanity.sh"
+reference = "experiments/references/d9vk-d3d9-clear.png"
+features = ["fast-sanity", "clear", "reset", "present", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "d9vk-d3d9-clear"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "d9vk-d3d9-buffer"
+source = "https://github.com/Joshua-Ashton/d9vk"
+license = "zlib"
+binary = "experiments/apps/D9VKD3D9Buffer/d3d9-buffer-x64.exe"
+launcher = "experiments/launchers/dx9_fast_sanity.sh"
+reference = "experiments/references/d9vk-d3d9-buffer.png"
+features = ["fast-sanity", "vertex-buffer", "lock-flags", "default-pool", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "d9vk-d3d9-buffer"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "d9vk-d3d9-triangle"
+source = "https://github.com/Joshua-Ashton/d9vk"
+license = "zlib"
+binary = "experiments/apps/D9VKD3D9Triangle/d3d9-triangle-x64.exe"
+launcher = "experiments/launchers/dx9_fast_sanity.sh"
+reference = "experiments/references/d9vk-d3d9-triangle.png"
+features = ["fast-sanity", "shader", "texture-upload", "render-target", "depth-stencil", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "d9vk-d3d9-triangle"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
 name = "dx-sdk-basichlsl"
 source = "https://github.com/walbourn/directx-sdk-samples"
 license = "ms-directx-sdk"

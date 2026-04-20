@@ -43,6 +43,10 @@ WINEMETAL_API uint64_t NSArray_count(obj_handle_t array);
 
 WINEMETAL_API obj_handle_t WMTCopyAllDevices();
 
+WINEMETAL_API obj_handle_t MacdrvMetalDevice_create();
+
+WINEMETAL_API void MacdrvMetalDevice_release(obj_handle_t device);
+
 enum WMTStringEncoding : uint64_t {
   WMTASCIIStringEncoding = 1,
   WMTNEXTSTEPStringEncoding = 2,
@@ -1128,6 +1132,8 @@ enum WMTRenderCommandType : uint16_t {
   WMTRenderCommandDXMTTessellationMeshDrawIndirect,
   WMTRenderCommandDXMTTessellationMeshDrawIndexedIndirect,
   WMTRenderCommandDispatchThreadsPerTile,
+  WMTRenderCommandSetFragmentSamplerState,
+  WMTRenderCommandSetStencilReferenceValue,
 };
 
 struct wmtcmd_render_nop {
@@ -1505,9 +1511,25 @@ struct wmtcmd_render_dispatch_threads_per_tile {
   uint32_t height;
 };
 
+struct wmtcmd_render_setsamplerstate {
+  enum WMTRenderCommandType type;
+  uint16_t reserved[3];
+  struct WMTMemoryPointer next;
+  obj_handle_t sampler_state;
+  uint8_t index;
+};
+
+struct wmtcmd_render_setstencilref {
+  enum WMTRenderCommandType type;
+  uint16_t reserved[3];
+  struct WMTMemoryPointer next;
+  uint8_t stencil_ref;
+};
+
 WINEMETAL_API void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder, const struct wmtcmd_base *cmd_head);
 
 WINEMETAL_API enum WMTPixelFormat MTLTexture_pixelFormat(obj_handle_t texture);
+WINEMETAL_API enum WMTTextureType MTLTexture_textureType(obj_handle_t texture);
 WINEMETAL_API uint64_t MTLTexture_width(obj_handle_t texture);
 WINEMETAL_API uint64_t MTLTexture_height(obj_handle_t texture);
 WINEMETAL_API uint64_t MTLTexture_depth(obj_handle_t texture);
@@ -1552,6 +1574,13 @@ WINEMETAL_API bool MTLDevice_supportsBCTextureCompression(obj_handle_t device);
 WINEMETAL_API bool MTLDevice_supportsTextureSampleCount(obj_handle_t device, uint8_t sample_count);
 
 WINEMETAL_API bool MTLDevice_hasUnifiedMemory(obj_handle_t device);
+
+WINEMETAL_API bool MTLDevice_supportsDepth24Stencil8(obj_handle_t device);
+
+WINEMETAL_API obj_handle_t MTLDevice_newLibraryFromSource(obj_handle_t device, const char *source,
+                                                          obj_handle_t *err_out);
+
+WINEMETAL_API void WMTGetShaderCachePath(char *out, uint64_t capacity);
 
 enum WMTCaptureDestination : uint8_t {
   WMTCaptureDestinationDeveloperTools = 1,
@@ -1658,6 +1687,9 @@ WINEMETAL_API void MetalLayer_getProps(obj_handle_t layer, struct WMTLayerProps 
 WINEMETAL_API void MetalLayer_setMaximumDrawableCount(obj_handle_t layer, uint32_t count);
 
 WINEMETAL_API obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer);
+
+WINEMETAL_API obj_handle_t CreateMetalViewFromCocoaView(obj_handle_t cocoa_view, obj_handle_t device,
+                                                        obj_handle_t *layer);
 
 WINEMETAL_API void ReleaseMetalView(obj_handle_t view);
 
