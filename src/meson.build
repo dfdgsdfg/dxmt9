@@ -24,7 +24,6 @@ dxmt9_native_lib = shared_library(
   dxmt9_native_bridge_srcs,
   include_directories: [
     dxmt9_inc,
-    bridge_gen_inc,
     dxmt9_winemetal_internal_inc,
     include_directories('..'),
   ],
