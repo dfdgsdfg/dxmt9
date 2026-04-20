@@ -10,6 +10,7 @@
 #include "dxmt9_compat.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9_hud.hpp"
+#include "dxmt9_presenter.hpp"
 #include "dxmt9_presenter_support.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_shader_service.hpp"
@@ -6042,58 +6043,41 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
 
-    {
-      WMTLayerProps props{};
-      props.device = wrappedDevice_.handle;
-      props.pixel_format = WMTPixelFormatBGRA8Unorm;
-      props.opaque = true;
-      props.framebuffer_only = false;
-      props.drawable_width = std::max(1u, present.width);
-      props.drawable_height = std::max(1u, present.height);
-      props.display_sync_enabled = present.displaySyncEnabled;
-      props.contents_scale = 1.0;
-      MetalLayer_setProps((obj_handle_t)layer, &props);
-      MetalLayer_setMaximumDrawableCount((obj_handle_t)layer, std::clamp(maxFrameLatency_, 1u, 3u));
+    auto pipeline = pipelineForPresent(source->desc.format).get();
+    if (!pipeline) {
+      presenterState_.traceEvent("pipeline.nil", seqId, present.window.value);
+      return;
     }
 
+    // Delegate to the upper-runtime Presenter object for layer-configured
+    // drawable acquisition + present-blit encode. The registry hands us the
+    // CAMetalLayer*; the Presenter wraps it in a WMT::MetalLayer handle and
+    // owns the encode/commit logic.
     presenterState_.traceEvent("nextDrawable.begin", seqId, present.window.value);
-    WMT::MetalLayer wmtLayer{(obj_handle_t)layer};
-    auto drawable = wmtLayer.nextDrawable();
-    if (!drawable) {
+    dxmt9::Presenter presenter{wrappedDevice_, WMT::MetalLayer{(obj_handle_t)layer}};
+    dxmt9::Presenter::EncodeParams params{};
+    params.source = WMT::Texture{sourceTextureHandle};
+    params.width = present.width;
+    params.height = present.height;
+    params.displaySyncEnabled = present.displaySyncEnabled;
+    params.contentsScale = 1.0;
+    params.maxDrawableCount = maxFrameLatency_;
+    params.pipeline = pipeline;
+    auto sampler = makeSampler(false);
+    if (sampler) params.sampler = sampler;
+
+    const auto presentResult = presenter.encodeCommands(commandBuffer, params);
+    if (!presentResult.acquired) {
       if (presentationStatusObserver_) presentationStatusObserver_(true);
       presenterState_.traceEvent("nextDrawable.nil", seqId, present.window.value);
       return;
     }
     if (presentationStatusObserver_) presentationStatusObserver_(false);
     presenterState_.traceEvent("nextDrawable.ok", seqId, present.window.value);
-
-    auto drawableTex = drawable.texture();
-    WMTRenderPassInfo passInfo{};
-    passInfo.colors[0].texture = drawableTex.handle;
-    passInfo.colors[0].load_action = WMTLoadActionDontCare;
-    passInfo.colors[0].store_action = WMTStoreActionStore;
-    auto encoder = commandBuffer.renderCommandEncoder(passInfo);
-    if (!encoder) {
+    if (!presentResult.encoded) {
       presenterState_.traceEvent("encoder.nil", seqId, present.window.value);
       return;
     }
-    auto pipeline = pipelineForPresent(source->desc.format).get();
-    if (!pipeline) {
-      encoder.endEncoding();
-      presenterState_.traceEvent("pipeline.nil", seqId, present.window.value);
-      return;
-    }
-    encoder.setRenderPipelineState(pipeline);
-    encoder.setFragmentTexture(WMT::Texture{sourceTextureHandle}, 0);
-    auto sampler = makeSampler(false);
-    if (sampler) encoder.setFragmentSamplerState(sampler, 0);
-    const double width = std::max(1u, present.width);
-    const double height = std::max(1u, present.height);
-    encoder.setViewport(WMTViewport{0.0, 0.0, width, height, 0.0, 1.0});
-    encoder.setScissorRect(WMTScissorRect{0, 0, (uint64_t)width, (uint64_t)height});
-    encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
-    encoder.endEncoding();
-    commandBuffer.presentDrawable(drawable);
     presenterState_.traceEvent("scheduled", seqId, present.window.value);
     backBufferDiscardAfterPresent_ = true;
   }
