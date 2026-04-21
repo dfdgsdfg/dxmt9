@@ -3903,8 +3903,7 @@ std::shared_ptr<dxmt9::Device> bootstrapDeviceForTests(BackendLimits limits) {
 
 Factory::Factory(std::shared_ptr<dxmt9::Device> device)
     : device_(std::move(device)),
-      limits_(device_ ? device_->limits() : BackendLimits{}),
-      backend_(device_ ? device_->backend() : std::shared_ptr<BackendDevice>{}) {
+      limits_(device_ ? device_->limits() : BackendLimits{}) {
   AdapterInfo adapter;
   adapter.ordinal = 0;
   adapter.name = getenvString("DXMT_ADAPTER_NAME");
@@ -4064,7 +4063,9 @@ std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const Present
     }
   }
   auto device = std::shared_ptr<Device>(
-      new Device(adapterInfo, limits_, backend_, normalized, behaviorFlags, device_));
+      new Device(adapterInfo, limits_,
+                  device_ ? device_->backend() : std::shared_ptr<BackendDevice>{},
+                  normalized, behaviorFlags, device_));
   device->initializeDefaultSwapChain();
   if (auto backend = device->backend()) {
     std::weak_ptr<Device> weak = device;

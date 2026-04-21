@@ -1453,7 +1453,6 @@ class Factory {
  private:
   std::shared_ptr<dxmt9::Device> device_;
   BackendLimits limits_{};
-  std::shared_ptr<BackendDevice> backend_;
   std::vector<AdapterInfo> adapters_;
   std::vector<DeviceCaps> adapterCaps_;
 };
