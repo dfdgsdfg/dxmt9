@@ -966,6 +966,17 @@ struct ResourcePool {
   u64 nextHandle = 1;
 };
 
+// Per-frame bump-ring allocators used by the encode thread for transient
+// buffers (arg buffers, lambda capture storage, upload staging, copy temp).
+// All four are reclaimed in lockstep on the finish path keyed by
+// completedSeqId_.
+struct FrameAllocators {
+  RingArena argbuf{1 << 20};
+  RingArena lambdaStore{1 << 18};
+  RingArena staging{1 << 20};
+  RingArena copyTemp{1 << 20};
+};
+
 NSString* makeNSString(const std::string& text) {
   return [[NSString alloc] initWithUTF8String:text.c_str()];
 }
@@ -4881,10 +4892,10 @@ class MetalBackendDevice final : public BackendDevice {
                   return encodeChunk(slotIndex, slot);
                 },
                 [this](u64) {
-                  argbufArena_.reclaim(commandQueue_->completedSeqId_);
-                  lambdaStoreArena_.reclaim(commandQueue_->completedSeqId_);
-                  stagingArena_.reclaim(commandQueue_->completedSeqId_);
-                  copyTempArena_.reclaim(commandQueue_->completedSeqId_);
+                  allocators_.argbuf.reclaim(commandQueue_->completedSeqId_);
+                  allocators_.lambdaStore.reclaim(commandQueue_->completedSeqId_);
+                  allocators_.staging.reclaim(commandQueue_->completedSeqId_);
+                  allocators_.copyTemp.reclaim(commandQueue_->completedSeqId_);
                 })) {
           return;
         }
@@ -5142,7 +5153,7 @@ class MetalBackendDevice final : public BackendDevice {
       encoder.setDepthStencilState(depthState);
     }
     encoder.setRenderPipelineState(pipeline);
-    auto* uniforms = argbufArena_.allocate<DrawUniforms>(seqId);
+    auto* uniforms = allocators_.argbuf.allocate<DrawUniforms>(seqId);
     DrawUniforms fallbackUniforms{};
     if (!uniforms) {
       uniforms = &fallbackUniforms;
@@ -6420,10 +6431,10 @@ class MetalBackendDevice final : public BackendDevice {
       while (true) {
         std::unique_lock lock(commandQueue_->mutex_);
         if (!commandQueue_->queueLifecycle_.runFinishIteration(lock, [this](u64) {
-              argbufArena_.reclaim(commandQueue_->completedSeqId_);
-              lambdaStoreArena_.reclaim(commandQueue_->completedSeqId_);
-              stagingArena_.reclaim(commandQueue_->completedSeqId_);
-              copyTempArena_.reclaim(commandQueue_->completedSeqId_);
+              allocators_.argbuf.reclaim(commandQueue_->completedSeqId_);
+              allocators_.lambdaStore.reclaim(commandQueue_->completedSeqId_);
+              allocators_.staging.reclaim(commandQueue_->completedSeqId_);
+              allocators_.copyTemp.reclaim(commandQueue_->completedSeqId_);
               tryGarbageCollectUnlocked();
             })) {
           return;
@@ -6481,10 +6492,7 @@ class MetalBackendDevice final : public BackendDevice {
   ResourcePool pool_{};
   PipelineCache pipelineCache_{};
   // presenters_ map removed — Presenter ownership lives on core::SwapChain.
-  RingArena argbufArena_{1 << 20};
-  RingArena lambdaStoreArena_{1 << 18};
-  RingArena stagingArena_{1 << 20};
-  RingArena copyTempArena_{1 << 20};
+  FrameAllocators allocators_{};
   // shaderArchive_/shaderArchivePath_ are owned by DeviceImpl (C2). We keep
   // pointers to those fields; lifetime-safe because DeviceImpl destroys the
   // backend (which joins threads) before the archive is released.
