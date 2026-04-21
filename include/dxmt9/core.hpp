@@ -1258,7 +1258,7 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
 
 class Device : public std::enable_shared_from_this<Device> {
  public:
-  Device(AdapterInfo adapter, BackendLimits limits, std::shared_ptr<BackendDevice> backend,
+  Device(AdapterInfo adapter, BackendLimits limits,
          PresentParameters params, u32 behaviorFlags,
          std::shared_ptr<dxmt9::Device> upperDevice = {});
   ~Device();

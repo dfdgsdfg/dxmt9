@@ -2567,11 +2567,12 @@ HResult SwapChain::present(std::shared_ptr<BackendDevice> backend, const SwapDes
   return D3D_OK;
 }
 
-Device::Device(AdapterInfo adapter, BackendLimits limits, std::shared_ptr<BackendDevice> backend,
+Device::Device(AdapterInfo adapter, BackendLimits limits,
                PresentParameters params, u32 behaviorFlags,
                std::shared_ptr<dxmt9::Device> upperDevice)
     : adapter_(std::move(adapter)), limits_(limits),
-      caps_(makeDefaultCaps(limits_)), backend_(std::move(backend)),
+      caps_(makeDefaultCaps(limits_)),
+      backend_(upperDevice ? upperDevice->backend() : std::shared_ptr<BackendDevice>{}),
       upperDevice_(std::move(upperDevice)),
       presentParameters_(normalizePresentParameters(adapter_, params)), behaviorFlags_(behaviorFlags) {
   state_.reset();
@@ -4063,9 +4064,7 @@ std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const Present
     }
   }
   auto device = std::shared_ptr<Device>(
-      new Device(adapterInfo, limits_,
-                  device_ ? device_->backend() : std::shared_ptr<BackendDevice>{},
-                  normalized, behaviorFlags, device_));
+      new Device(adapterInfo, limits_, normalized, behaviorFlags, device_));
   device->initializeDefaultSwapChain();
   if (auto backend = device->backend()) {
     std::weak_ptr<Device> weak = device;
