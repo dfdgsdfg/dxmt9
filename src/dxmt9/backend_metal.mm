@@ -4133,16 +4133,16 @@ class MetalBackendDevice final : public BackendDevice {
         .completedSeqId = &commandQueue_->completedSeqId_,
         .lastCommittedSeqId = &commandQueue_->lastCommittedSeqId_,
         .slots = std::span<ChunkSlot>(commandQueue_->slots_.data(), commandQueue_->slots_.size()),
-        .mutex = &mutex_,
-        .writeCv = &writeCv_,
-        .encodeCv = &encodeCv_,
-        .finishCv = &finishCv_,
-        .stop = &stop_,
+        .mutex = &commandQueue_->mutex_,
+        .writeCv = &commandQueue_->writeCv_,
+        .encodeCv = &commandQueue_->encodeCv_,
+        .finishCv = &commandQueue_->finishCv_,
+        .stop = &commandQueue_->stop_,
         .submissionDiagnostics = &commandQueue_->submissionDiagnostics_,
         .resolveSurfaceFlags = [this](Handle handle) { return compatFlagsForSurfaceUnlocked(handle); },
     });
 
-    stop_ = false;
+    commandQueue_->stop_ = false;
     encodeThread_ = std::thread([this] { encodeLoop(); });
     finishThread_ = std::thread([this] { finishLoop(); });
     completionThread_ = std::thread([this] { completionWatcherLoop(); });
@@ -4151,11 +4151,11 @@ class MetalBackendDevice final : public BackendDevice {
 
   ~MetalBackendDevice() override {
     {
-      std::lock_guard lock(mutex_);
-      stop_ = true;
-      encodeCv_.notify_all();
-      finishCv_.notify_all();
-      writeCv_.notify_all();
+      std::lock_guard lock(commandQueue_->mutex_);
+      commandQueue_->stop_ = true;
+      commandQueue_->encodeCv_.notify_all();
+      commandQueue_->finishCv_.notify_all();
+      commandQueue_->writeCv_.notify_all();
     }
     commandQueue_->queueLifecycle_.notifyPendingCompletionStop();
     if (encodeThread_.joinable()) {
@@ -4167,7 +4167,7 @@ class MetalBackendDevice final : public BackendDevice {
     if (finishThread_.joinable()) {
       finishThread_.join();
     }
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     if (*shaderArchive_) {
       persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
     }
@@ -4175,23 +4175,23 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void completionWatcherLoop() {
-    while (commandQueue_->queueLifecycle_.processOnePendingCompletion(stop_)) {
+    while (commandQueue_->queueLifecycle_.processOnePendingCompletion(commandQueue_->stop_)) {
       // continue until processOnePendingCompletion returns false (stop)
     }
   }
 
   void setDeviceLostObserver(DeviceLostObserver observer) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     deviceLostObserver_ = std::move(observer);
   }
 
   void setPresentationStatusObserver(PresentationStatusObserver observer) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     presentationStatusObserver_ = std::move(observer);
   }
 
   void setMaxFrameLatency(u32 latency) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     maxFrameLatency_ = std::clamp(latency, 1u, 3u);
   }
 
@@ -4207,7 +4207,7 @@ class MetalBackendDevice final : public BackendDevice {
     Rect sourceRect{};
     u32 sourceLevel = desc.sourceLevel;
     {
-      std::lock_guard lock(mutex_);
+      std::lock_guard lock(commandQueue_->mutex_);
       auto* surface = findSurfaceUnlocked(desc.source.value);
       if (!surface || !surface->texture) {
         return false;
@@ -4301,7 +4301,7 @@ class MetalBackendDevice final : public BackendDevice {
   bool ready() const noexcept { return ready_; }
 
   BufferHandle createBuffer(const BufferDesc& desc) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     const Handle handle{nextHandle_++};
     BufferRecord record;
     record.desc = desc;
@@ -4318,7 +4318,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   TextureHandle createTexture(const TextureDesc& desc) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     const Handle handle{nextHandle_++};
     TextureRecord record;
     record.desc = desc;
@@ -4353,7 +4353,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   SurfaceHandle createSurface(const SurfaceDesc& desc) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     const Handle handle{nextHandle_++};
     SurfaceRecord record;
     record.desc = desc;
@@ -4384,7 +4384,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   SurfaceHandle createSurfaceForTexture(TextureHandle textureHandle, u32 level, const SurfaceDesc& desc) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     auto textureIt = textures_.find(textureHandle.value);
     if (textureIt == textures_.end() || !textureIt->second.texture) {
       return {};
@@ -4418,7 +4418,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void destroyBuffer(BufferHandle handle) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     if (auto it = buffers_.find(handle.value); it != buffers_.end()) {
       it->second.destroyPending = true;
       tryGarbageCollectUnlocked();
@@ -4426,7 +4426,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void destroyTexture(TextureHandle handle) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     if (auto it = textures_.find(handle.value); it != textures_.end()) {
       it->second.destroyPending = true;
       tryGarbageCollectUnlocked();
@@ -4434,7 +4434,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void destroySurface(SurfaceHandle handle) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     if (auto it = surfaces_.find(handle.value); it != surfaces_.end()) {
       it->second.destroyPending = true;
       tryGarbageCollectUnlocked();
@@ -4442,7 +4442,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void* mapBuffer(BufferHandle handle, u32 flags) override {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(commandQueue_->mutex_);
     auto it = buffers_.find(handle.value);
     if (it == buffers_.end()) {
       return nullptr;
@@ -4465,12 +4465,12 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void unmapBuffer(BufferHandle handle) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     (void)handle;
   }
 
   void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     auto it = buffers_.find(handle.value);
     if (it == buffers_.end()) {
       return;
@@ -4485,7 +4485,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
                           std::span<const u8> bytes) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     auto it = textures_.find(handle.value);
     if (it == textures_.end() || !it->second.texture || bytes.empty()) {
       return;
@@ -4591,7 +4591,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void submitDraw(const DrawDesc& desc) override {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(commandQueue_->mutex_);
     // TLA+: WineCommit
     ensureWritingSlotUnlocked(lock);
     currentSlot().commands.push_back(makeDrawCommand(desc));
@@ -4600,7 +4600,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void submitClear(const ClearDesc& desc) override {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(commandQueue_->mutex_);
     // TLA+: WineCommit
     ensureWritingSlotUnlocked(lock);
     currentSlot().commands.push_back(makeClearCommand(desc));
@@ -4611,7 +4611,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void submitSurfaceCopy(const SurfaceCopyDesc& desc) override {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(commandQueue_->mutex_);
     // TLA+: WineCommit
     ensureWritingSlotUnlocked(lock);
     currentSlot().commands.push_back(makeSurfaceCopyCommand(desc));
@@ -4619,7 +4619,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void submitStretchRect(const StretchRectDesc& desc) override {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(commandQueue_->mutex_);
     // TLA+: WineCommit
     ensureWritingSlotUnlocked(lock);
     currentSlot().commands.push_back(makeStretchRectCommand(desc));
@@ -4627,14 +4627,14 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void submitReadback(const ReadbackDesc& desc) override {
-    std::lock_guard lock(mutex_);
+    std::lock_guard lock(commandQueue_->mutex_);
     // Readback is satisfied by the synchronous staging copy in readbackSurface().
     // We still track resource liveness so NoUseAfterFree remains meaningful.
     markReadbackResourcesUnlocked(desc);
   }
 
   void submitColorFill(const ColorFillDesc& desc) override {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(commandQueue_->mutex_);
     // TLA+: WineCommit
     ensureWritingSlotUnlocked(lock);
     currentSlot().commands.push_back(makeColorFillCommand(desc));
@@ -4643,7 +4643,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void present(const SwapDesc& desc) override {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(commandQueue_->mutex_);
     // TLA+: WineCommit
     commandQueue_->queueLifecycle_.presentAndCommit(lock, kMaxInflight, desc, currentBackBuffer_, [this](const ChunkSlot& slot) {
       updateLastUsedSeqIdsUnlocked(slot);
@@ -4651,7 +4651,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
  void flush() override {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(commandQueue_->mutex_);
     // TLA+: WineCommit
     commandQueue_->queueLifecycle_.flushAndWait(lock, kMaxInflight, [this](const ChunkSlot& slot) {
       updateLastUsedSeqIdsUnlocked(slot);
@@ -4874,7 +4874,7 @@ class MetalBackendDevice final : public BackendDevice {
   void encodeLoop() {
     @autoreleasepool {
       while (true) {
-        std::unique_lock lock(mutex_);
+        std::unique_lock lock(commandQueue_->mutex_);
         if (!commandQueue_->queueLifecycle_.runEncodeIteration(
                 lock,
                 [this](size_t slotIndex, const ChunkSlot& slot) {
@@ -6108,7 +6108,7 @@ class MetalBackendDevice final : public BackendDevice {
     commandBuffer.commit();
     commandBuffer.waitUntilCompleted();
     {
-      std::lock_guard lock(mutex_);
+      std::lock_guard lock(commandQueue_->mutex_);
       CommandBufferDiagnostics diagnostics;
       diagnostics.hasBlit = true;
       commandQueue_->submissionDiagnostics_.inspect(commandBuffer.handle, diagnostics, "gpu-dump");
@@ -6418,7 +6418,7 @@ class MetalBackendDevice final : public BackendDevice {
   void finishLoop() {
     @autoreleasepool {
       while (true) {
-        std::unique_lock lock(mutex_);
+        std::unique_lock lock(commandQueue_->mutex_);
         if (!commandQueue_->queueLifecycle_.runFinishIteration(lock, [this](u64) {
               argbufArena_.reclaim(commandQueue_->completedSeqId_);
               lambdaStoreArena_.reclaim(commandQueue_->completedSeqId_);
@@ -6466,11 +6466,10 @@ class MetalBackendDevice final : public BackendDevice {
   std::thread encodeThread_;
   std::thread finishThread_;
   std::thread completionThread_;  // dxmt-style: waits on cmdbuf.waitUntilCompleted()
-  std::mutex mutex_;
-  std::condition_variable encodeCv_;
-  std::condition_variable finishCv_;
-  std::condition_variable writeCv_;
-  bool stop_ = true;
+  // mutex_, condition variables, stop_ all moved to dxmt9::CommandQueue (C7b).
+  // Accessed via commandQueue_->. Threads remain here because their bodies
+  // call into this class's methods (encodeChunk, tryGarbageCollectUnlocked,
+  // etc.) and must be joined before *this tears down.
   // Chunk-ring state + seqId counters + queueLifecycle + diagnostics moved
   // to dxmt9::CommandQueue (C1, C7a). Accessed via commandQueue_->.
   u64 nextHandle_ = 1;

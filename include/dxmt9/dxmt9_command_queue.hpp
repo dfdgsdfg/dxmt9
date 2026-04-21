@@ -11,8 +11,10 @@
 #include "../../src/dxmt9/dxmt9_hud.hpp"
 
 #include <array>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <mutex>
 #include <optional>
 
 namespace dxmt9 {
@@ -60,6 +62,15 @@ class CommandQueue {
 
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
   core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
+
+  // Synchronization. The backend's worker threads wait on these; backend
+  // still owns the std::thread objects so it can join them in its dtor
+  // before CommandQueue tears down (destruction order safety).
+  std::mutex mutex_{};
+  std::condition_variable writeCv_{};
+  std::condition_variable encodeCv_{};
+  std::condition_variable finishCv_{};
+  bool stop_ = true;
 
  private:
   WMT::Device device_{};
