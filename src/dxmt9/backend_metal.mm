@@ -5863,41 +5863,8 @@ std::string makeShaderSourceFromRequest(const WinemetalShaderCompileRequest& req
   return makeShaderSourceFromRequestInternal(request);
 }
 
-// Exposed for dxmt9::Presenter's per-instance pipeline cache. Builds a textured
-// blit pipeline (present pipeline) on a background task. opaqueAlpha=true
-// forces the fragment shader to output alpha=1, used for X8R8G8B8/X8B8G8R8
-// swap chains where the source has no alpha channel.
-std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
-buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
-                     WMT::Reference<WMT::BinaryArchive>* archive,
-                     const std::string* archivePath) {
-  // Copy the retained device into the async lambda; archive pointer remains
-  // valid because DeviceImpl (the owner) outlives the Presenter + this task.
-  auto future = std::async(std::launch::async, [device, opaqueAlpha, archive, archivePath]() mutable {
-    auto vsLib = makeLibrary(device, makeTexturedVertexSource(makeHash("present")));
-    auto fsLib = makeLibrary(device, makeTexturedFragmentSource(
-                                     makeHash(opaqueAlpha ? "present-opaque" : "present"), opaqueAlpha));
-    if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
-    auto vs = vsLib.newFunction("dxmt9_vs");
-    auto fs = fsLib.newFunction("dxmt9_fs");
-    WMTRenderPipelineInfo info{};
-    info.max_tessellation_factor = 1;
-    info.vertex_function = vs.handle;
-    info.fragment_function = fs.handle;
-    info.raster_sample_count = 1;
-    info.colors[0].pixel_format = WMTPixelFormatBGRA8Unorm;
-    info.colors[0].write_mask = WMTColorWriteMaskAll;
-    info.rasterization_enabled = true;
-    if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
-    WMT::Error err{};
-    auto pso = device.newRenderPipelineState(info, err);
-    if (pso && archive && *archive && archivePath) {
-      persistShaderArchive(*archive, *archivePath);
-    }
-    return pso;
-  });
-  return future.share();
-}
+// buildPresentPipeline moved to dxmt9_pipeline_cache.{hpp,cpp}
+// (dxmt9::pipeline:: namespace). Presenter calls it directly.
 
 std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limits,
                                                       WMT::Reference<WMT::Device> wmtDevice,

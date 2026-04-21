@@ -1,7 +1,10 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_shader_sources.hpp"
 
 #include <cstdint>
+#include <future>
+#include <utility>
 
 namespace dxmt9::pipeline {
 
@@ -110,6 +113,38 @@ WMT::Reference<WMT::DepthStencilState> Cache::depthStencilStateFor(WMT::Device& 
   auto state = device.newDepthStencilState(info);
   depth.emplace(key, state);
   return state;
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
+                     WMT::Reference<WMT::BinaryArchive>* archive,
+                     const std::string* archivePath) {
+  auto future = std::async(std::launch::async,
+                            [device, opaqueAlpha, archive, archivePath]() mutable {
+    auto vsLib = shaders::makeLibrary(device, shaders::makeTexturedVertexSource(shaders::makeHash("present")));
+    auto fsLib = shaders::makeLibrary(device, shaders::makeTexturedFragmentSource(
+                                          shaders::makeHash(opaqueAlpha ? "present-opaque" : "present"),
+                                          opaqueAlpha));
+    if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
+    auto vs = vsLib.newFunction("dxmt9_vs");
+    auto fs = fsLib.newFunction("dxmt9_fs");
+    WMTRenderPipelineInfo info{};
+    info.max_tessellation_factor = 1;
+    info.vertex_function = vs.handle;
+    info.fragment_function = fs.handle;
+    info.raster_sample_count = 1;
+    info.colors[0].pixel_format = WMTPixelFormatBGRA8Unorm;
+    info.colors[0].write_mask = WMTColorWriteMaskAll;
+    info.rasterization_enabled = true;
+    if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
+    WMT::Error err{};
+    auto pso = device.newRenderPipelineState(info, err);
+    if (pso && archive && *archive && archivePath) {
+      shaders::persistShaderArchive(*archive, *archivePath);
+    }
+    return pso;
+  });
+  return future.share();
 }
 
 }  // namespace dxmt9::pipeline

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <future>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 namespace dxmt9::pipeline {
@@ -122,5 +123,15 @@ class Cache {
   PipelineMap stretch{};
   DepthMap depth{};
 };
+
+// Build the textured blit (present) pipeline on a background task. Used by
+// dxmt9::Presenter. opaqueAlpha=true forces the fragment shader to output
+// alpha=1 for X8R8G8B8 / X8B8G8R8 swap chains. archive + archivePath are
+// borrowed pointers to DeviceImpl-owned state (nullptr allowed = no archive
+// persistence).
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
+                     WMT::Reference<WMT::BinaryArchive>* archive,
+                     const std::string* archivePath);
 
 }  // namespace dxmt9::pipeline

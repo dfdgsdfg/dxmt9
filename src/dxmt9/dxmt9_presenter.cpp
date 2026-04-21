@@ -1,5 +1,5 @@
 #include "dxmt9_presenter.hpp"
-#include "backend_metal.hpp"
+#include "dxmt9_pipeline_cache.hpp"
 
 #include <algorithm>
 
@@ -22,8 +22,8 @@ std::shared_future<WMT::Reference<WMT::RenderPipelineState>>&
 Presenter::pipelineFor(bool opaqueAlpha) {
   auto& slot = opaqueAlpha ? pipelineOpaque_ : pipelineAlpha_;
   if (!slot.valid()) {
-    slot = core::buildPresentPipeline(WMT::Reference<WMT::Device>{device_.handle},
-                                       opaqueAlpha, archive_, archivePath_);
+    slot = pipeline::buildPresentPipeline(WMT::Reference<WMT::Device>{device_.handle},
+                                            opaqueAlpha, archive_, archivePath_);
   }
   return slot;
 }
