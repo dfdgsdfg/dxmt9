@@ -954,6 +954,18 @@ struct PipelineCache {
   std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash> depth;
 };
 
+// Container for the three resource pools + the gpu-texture-dump dedup set +
+// the handle allocator. Grouped per C6 as a named structure; the underlying
+// mutex is still commandQueue_->mutex_ (shared with queue state) pending a
+// mutex split when the pools move out of MetalBackendDevice entirely.
+struct ResourcePool {
+  std::unordered_map<u64, BufferRecord> buffers;
+  std::unordered_map<u64, TextureRecord> textures;
+  std::unordered_map<u64, SurfaceRecord> surfaces;
+  std::unordered_set<u64> dumpedGpuTextures;
+  u64 nextHandle = 1;
+};
+
 NSString* makeNSString(const std::string& text) {
   return [[NSString alloc] initWithUTF8String:text.c_str()];
 }
@@ -4302,7 +4314,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   BufferHandle createBuffer(const BufferDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    const Handle handle{nextHandle_++};
+    const Handle handle{pool_.nextHandle++};
     BufferRecord record;
     record.desc = desc;
     record.shadow.resize(static_cast<size_t>(desc.size));
@@ -4313,13 +4325,13 @@ class MetalBackendDevice final : public BackendDevice {
       record.buffer = wrappedDevice_.newBuffer(info);
       record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
     }
-    buffers_[handle.value] = std::move(record);
+    pool_.buffers[handle.value] = std::move(record);
     return handle;
   }
 
   TextureHandle createTexture(const TextureDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    const Handle handle{nextHandle_++};
+    const Handle handle{pool_.nextHandle++};
     TextureRecord record;
     record.desc = desc;
     if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
@@ -4337,7 +4349,7 @@ class MetalBackendDevice final : public BackendDevice {
       record.texture = wrappedDevice_.newTexture(info);
       record.isPrivate = (info.options == WMTResourceStorageModePrivate);
     }
-    textures_[handle.value] = std::move(record);
+    pool_.textures[handle.value] = std::move(record);
     if (shouldTraceTexture(handle)) {
       std::ostringstream out;
       out << "[dxmt9-texture] create handle=0x" << std::hex << handle.value << std::dec
@@ -4354,7 +4366,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   SurfaceHandle createSurface(const SurfaceDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    const Handle handle{nextHandle_++};
+    const Handle handle{pool_.nextHandle++};
     SurfaceRecord record;
     record.desc = desc;
     if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
@@ -4379,18 +4391,18 @@ class MetalBackendDevice final : public BackendDevice {
         record.resolveTexture = wrappedDevice_.newTexture(resolveInfo);
       }
     }
-    surfaces_[handle.value] = std::move(record);
+    pool_.surfaces[handle.value] = std::move(record);
     return handle;
   }
 
   SurfaceHandle createSurfaceForTexture(TextureHandle textureHandle, u32 level, const SurfaceDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    auto textureIt = textures_.find(textureHandle.value);
-    if (textureIt == textures_.end() || !textureIt->second.texture) {
+    auto textureIt = pool_.textures.find(textureHandle.value);
+    if (textureIt == pool_.textures.end() || !textureIt->second.texture) {
       return {};
     }
 
-    const Handle handle{nextHandle_++};
+    const Handle handle{pool_.nextHandle++};
     SurfaceRecord record;
     record.desc = desc;
     record.aliasTexture = textureHandle;
@@ -4413,13 +4425,13 @@ class MetalBackendDevice final : public BackendDevice {
       }
     }
 
-    surfaces_[handle.value] = std::move(record);
+    pool_.surfaces[handle.value] = std::move(record);
     return handle;
   }
 
   void destroyBuffer(BufferHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    if (auto it = buffers_.find(handle.value); it != buffers_.end()) {
+    if (auto it = pool_.buffers.find(handle.value); it != pool_.buffers.end()) {
       it->second.destroyPending = true;
       tryGarbageCollectUnlocked();
     }
@@ -4427,7 +4439,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void destroyTexture(TextureHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    if (auto it = textures_.find(handle.value); it != textures_.end()) {
+    if (auto it = pool_.textures.find(handle.value); it != pool_.textures.end()) {
       it->second.destroyPending = true;
       tryGarbageCollectUnlocked();
     }
@@ -4435,7 +4447,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void destroySurface(SurfaceHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    if (auto it = surfaces_.find(handle.value); it != surfaces_.end()) {
+    if (auto it = pool_.surfaces.find(handle.value); it != pool_.surfaces.end()) {
       it->second.destroyPending = true;
       tryGarbageCollectUnlocked();
     }
@@ -4443,8 +4455,8 @@ class MetalBackendDevice final : public BackendDevice {
 
   void* mapBuffer(BufferHandle handle, u32 flags) override {
     std::unique_lock lock(commandQueue_->mutex_);
-    auto it = buffers_.find(handle.value);
-    if (it == buffers_.end()) {
+    auto it = pool_.buffers.find(handle.value);
+    if (it == pool_.buffers.end()) {
       return nullptr;
     }
     if ((flags & UsageDiscard) == 0 && (flags & UsageNoOverwrite) == 0 &&
@@ -4471,8 +4483,8 @@ class MetalBackendDevice final : public BackendDevice {
 
   void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    auto it = buffers_.find(handle.value);
-    if (it == buffers_.end()) {
+    auto it = pool_.buffers.find(handle.value);
+    if (it == pool_.buffers.end()) {
       return;
     }
     it->second.shadow.assign(bytes.begin(), bytes.end());
@@ -4486,8 +4498,8 @@ class MetalBackendDevice final : public BackendDevice {
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
                           std::span<const u8> bytes) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    auto it = textures_.find(handle.value);
-    if (it == textures_.end() || !it->second.texture || bytes.empty()) {
+    auto it = pool_.textures.find(handle.value);
+    if (it == pool_.textures.end() || !it->second.texture || bytes.empty()) {
       return;
     }
     if (shouldTraceTexture(handle)) {
@@ -4671,33 +4683,33 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   BufferRecord* findBufferUnlocked(u64 handle) {
-    auto it = buffers_.find(handle);
-    return it == buffers_.end() ? nullptr : &it->second;
+    auto it = pool_.buffers.find(handle);
+    return it == pool_.buffers.end() ? nullptr : &it->second;
   }
 
   const BufferRecord* findBufferUnlocked(u64 handle) const {
-    auto it = buffers_.find(handle);
-    return it == buffers_.end() ? nullptr : &it->second;
+    auto it = pool_.buffers.find(handle);
+    return it == pool_.buffers.end() ? nullptr : &it->second;
   }
 
   TextureRecord* findTextureUnlocked(u64 handle) {
-    auto it = textures_.find(handle);
-    return it == textures_.end() ? nullptr : &it->second;
+    auto it = pool_.textures.find(handle);
+    return it == pool_.textures.end() ? nullptr : &it->second;
   }
 
   const TextureRecord* findTextureUnlocked(u64 handle) const {
-    auto it = textures_.find(handle);
-    return it == textures_.end() ? nullptr : &it->second;
+    auto it = pool_.textures.find(handle);
+    return it == pool_.textures.end() ? nullptr : &it->second;
   }
 
   SurfaceRecord* findSurfaceUnlocked(u64 handle) {
-    auto it = surfaces_.find(handle);
-    return it == surfaces_.end() ? nullptr : &it->second;
+    auto it = pool_.surfaces.find(handle);
+    return it == pool_.surfaces.end() ? nullptr : &it->second;
   }
 
   const SurfaceRecord* findSurfaceUnlocked(u64 handle) const {
-    auto it = surfaces_.find(handle);
-    return it == surfaces_.end() ? nullptr : &it->second;
+    auto it = pool_.surfaces.find(handle);
+    return it == pool_.surfaces.end() ? nullptr : &it->second;
   }
 
   ChunkSlot& currentSlot() {
@@ -6067,7 +6079,7 @@ class MetalBackendDevice final : public BackendDevice {
   void dumpTextureSnapshotUnlocked(Handle handle, const TextureDesc& desc,
                                    obj_handle_t sourceTextureHandle) {
     if (!sourceTextureHandle || !shouldDumpGpuTexture(handle) ||
-        dumpedGpuTextures_.contains(handle.value)) {
+        pool_.dumpedGpuTextures.contains(handle.value)) {
       return;
     }
     if (desc.levels == 0 || desc.width == 0 || desc.height == 0) return;
@@ -6079,7 +6091,7 @@ class MetalBackendDevice final : public BackendDevice {
       out << "[dxmt9-texture] gpu-dump skip handle=0x" << std::hex << handle.value << std::dec
           << " unsupported-format=" << static_cast<unsigned>(desc.format);
       emitTextureTraceLine(out.str());
-      dumpedGpuTextures_.insert(handle.value);
+      pool_.dumpedGpuTextures.insert(handle.value);
       return;
     }
 
@@ -6143,7 +6155,7 @@ class MetalBackendDevice final : public BackendDevice {
         << " format=" << static_cast<unsigned>(desc.format)
         << " path=" << path << " wrote=" << (wrote ? 1 : 0);
     emitTextureTraceLine(out.str());
-    dumpedGpuTextures_.insert(handle.value);
+    pool_.dumpedGpuTextures.insert(handle.value);
   }
 
   WMT::Reference<WMT::SamplerState> makeSampler(bool linear) {
@@ -6449,15 +6461,15 @@ class MetalBackendDevice final : public BackendDevice {
         }
       }
     };
-    gcMap(buffers_, commandQueue_->completedSeqId_);
-    gcMap(textures_, commandQueue_->completedSeqId_);
-    gcMap(surfaces_, commandQueue_->completedSeqId_);
+    gcMap(pool_.buffers, commandQueue_->completedSeqId_);
+    gcMap(pool_.textures, commandQueue_->completedSeqId_);
+    gcMap(pool_.surfaces, commandQueue_->completedSeqId_);
   }
 
   void purgeResourcesUnlocked() {
-    buffers_.clear();
-    textures_.clear();
-    surfaces_.clear();
+    pool_.buffers.clear();
+    pool_.textures.clear();
+    pool_.surfaces.clear();
   }
 
   BackendLimits limits_{};
@@ -6472,16 +6484,13 @@ class MetalBackendDevice final : public BackendDevice {
   // etc.) and must be joined before *this tears down.
   // Chunk-ring state + seqId counters + queueLifecycle + diagnostics moved
   // to dxmt9::CommandQueue (C1, C7a). Accessed via commandQueue_->.
-  u64 nextHandle_ = 1;
+  // pool_.nextHandle, resource maps, and pool_.dumpedGpuTextures grouped into pool_ (C6).
   Handle currentBackBuffer_{};
   bool backBufferDiscardAfterPresent_ = false;
   DeviceLostObserver deviceLostObserver_;
   PresentationStatusObserver presentationStatusObserver_;
   u32 maxFrameLatency_ = 3;
-  std::unordered_map<u64, BufferRecord> buffers_;
-  std::unordered_map<u64, TextureRecord> textures_;
-  std::unordered_map<u64, SurfaceRecord> surfaces_;
-  std::unordered_set<u64> dumpedGpuTextures_;
+  ResourcePool pool_{};
   PipelineCache pipelineCache_{};
   // presenters_ map removed — Presenter ownership lives on core::SwapChain.
   RingArena argbufArena_{1 << 20};
