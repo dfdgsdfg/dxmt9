@@ -73,6 +73,13 @@ struct Pool {
   // GPU-completed watermark. Called from the finish thread under the queue
   // mutex. Preserves dxmt9's TLA+ NoUseAfterFree invariant.
   void reclaimCompleted(u64 completedSeqId);
+
+  // Drop ALL records (teardown path; bypasses destroyPending / seq checks).
+  void purgeAll() noexcept {
+    buffers.clear();
+    textures.clear();
+    surfaces.clear();
+  }
 };
 
 }  // namespace dxmt9::resources

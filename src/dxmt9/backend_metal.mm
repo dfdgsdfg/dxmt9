@@ -5833,11 +5833,7 @@ class MetalBackendDevice final : public BackendDevice {
     pool_.reclaimCompleted(commandQueue_->completedSeqId_);
   }
 
-  void purgeResourcesUnlocked() {
-    pool_.buffers.clear();
-    pool_.textures.clear();
-    pool_.surfaces.clear();
-  }
+  void purgeResourcesUnlocked() { pool_.purgeAll(); }
 
   BackendLimits limits_{};
   WMT::Reference<WMT::Device> wrappedDevice_{};
