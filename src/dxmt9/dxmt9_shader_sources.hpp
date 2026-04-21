@@ -47,4 +47,10 @@ void initShaderArchive(WMT::Device& device, const std::string& path,
 // Serialize the archive to disk. No-op if archive is empty or path is empty.
 void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path);
 
+// Shared MSL prelude used by the draw / FFP shader generators: defines
+// DrawUniforms, VSOut, and a library of helper inline functions
+// (dxmt9_load_*, dxmt9_apply_texture_*, dxmt9_select_*, etc). When
+// withClipDistances is true, VSOut gets a clipDistance[6] array.
+std::string makeShaderPrelude(bool withClipDistances);
+
 }  // namespace dxmt9::shaders

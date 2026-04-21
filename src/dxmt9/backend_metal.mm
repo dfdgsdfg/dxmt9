@@ -15,6 +15,7 @@
 #include "dxmt9_queue.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_resource_pool.hpp"
@@ -299,6 +300,7 @@ using dxmt9::shaders::makeTexturedVertexSource;
 using dxmt9::shaders::makeTexturedFragmentSource;
 using dxmt9::shaders::initShaderArchive;
 using dxmt9::shaders::persistShaderArchive;
+using dxmt9::shaders::makeShaderPrelude;
 
 // Type conversion helpers moved to dxmt9_format_convert.{hpp,cpp}
 // (dxmt9::convert:: namespace). Imported via `using` declarations below.
@@ -506,146 +508,8 @@ struct SpirvModule {
   std::vector<D3DDecodedInstruction> instructions;
 };
 
-std::string makeShaderPrelude(bool withClipDistances) {
-  std::ostringstream out;
-  out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct DrawUniforms {\n";
-  out << "  float4 vsFloatConst[" << kMaxVertexConstants << "];\n";
-  out << "  int4 vsIntConst[" << kMaxIntegerConstants << "];\n";
-  out << "  uint vsBoolConst[" << kMaxBoolConstants << "];\n";
-  out << "  float4 ffpWorldViewProj[4];\n";
-  out << "  float4 ffpTextureTransforms[" << kMaxTextureStages << "][4];\n";
-  out << "  float4 psFloatConst[" << kMaxPixelConstants << "];\n";
-  out << "  int4 psIntConst[" << kMaxIntegerConstants << "];\n";
-  out << "  uint psBoolConst[" << kMaxBoolConstants << "];\n";
-  out << "  float4 clipPlanes[6];\n";
-  out << "  float2 halfPixelFixup;\n";
-  out << "  float2 viewportOrigin;\n";
-  out << "  float2 viewportSize;\n";
-  out << "  float4 textureFactor;\n";
-  out << "  float alphaRef;\n";
-  out << "  float fogStart;\n";
-  out << "  float fogEnd;\n";
-  out << "  float fogDensity;\n";
-  out << "  uint vertexStreamOffset;\n";
-  out << "  uint vertexStreamStride;\n";
-  out << "  int vertexBaseIndex;\n";
-  out << "  uint clipPlaneMask;\n";
-  out << "  uint alphaTestEnable;\n";
-  out << "  uint alphaTestFunc;\n";
-  out << "  uint fogMode;\n";
-  out << "};\n";
-  out << "struct VSOut {\n";
-  out << "  float4 position [[position]];\n";
-  out << "  float4 color;\n";
-  out << "  float4 secondaryColor;\n";
-  for (size_t i = 0; i < kMaxTextureStages; ++i) {
-    out << "  float4 texcoord" << i << ";\n";
-  }
-  out << "  float fogFactor;\n";
-  out << "  float pointSize [[point_size]];\n";
-  if (withClipDistances) {
-    out << "  float clipDistance [[clip_distance]] [6];\n";
-  }
-  out << "};\n";
-  out << "inline float4 dxmt9_merge(float4 current, float4 next, uint mask) {\n";
-  out << "  return float4((mask & 1u) != 0u ? next.x : current.x,\n";
-  out << "                  (mask & 2u) != 0u ? next.y : current.y,\n";
-  out << "                  (mask & 4u) != 0u ? next.z : current.z,\n";
-  out << "                  (mask & 8u) != 0u ? next.w : current.w);\n";
-  out << "}\n";
-  out << "inline float dxmt9_load_f32(const device uchar* base, uint offset) {\n";
-  out << "  return as_type<float>(*reinterpret_cast<const device uint*>(base + offset));\n";
-  out << "}\n";
-  out << "inline float2 dxmt9_load_f32x2(const device uchar* base, uint offset) {\n";
-  out << "  return float2(dxmt9_load_f32(base, offset), dxmt9_load_f32(base, offset + 4u));\n";
-  out << "}\n";
-  out << "inline float4 dxmt9_load_f32x4(const device uchar* base, uint offset) {\n";
-  out << "  return float4(dxmt9_load_f32(base, offset), dxmt9_load_f32(base, offset + 4u),\n";
-  out << "                dxmt9_load_f32(base, offset + 8u), dxmt9_load_f32(base, offset + 12u));\n";
-  out << "}\n";
-  out << "inline float3 dxmt9_load_f32x3(const device uchar* base, uint offset) {\n";
-  out << "  return float3(dxmt9_load_f32(base, offset), dxmt9_load_f32(base, offset + 4u),\n";
-  out << "                dxmt9_load_f32(base, offset + 8u));\n";
-  out << "}\n";
-  out << "inline float4 dxmt9_load_d3dcolor(const device uchar* base, uint offset) {\n";
-  out << "  const uint raw = *reinterpret_cast<const device uint*>(base + offset);\n";
-  out << "  return float4(float((raw >> 16) & 0xffu), float((raw >> 8) & 0xffu), float(raw & 0xffu),\n";
-  out << "                float((raw >> 24) & 0xffu)) / 255.0f;\n";
-  out << "}\n";
-  out << "inline float4 dxmt9_apply_texture_arg_flags(float4 value, uint arg) {\n";
-  out << "  if ((arg & 0x20u) != 0u) value = value.aaaa;\n";
-  out << "  if ((arg & 0x10u) != 0u) value = float4(1.0f) - value;\n";
-  out << "  return value;\n";
-  out << "}\n";
-  out << "inline float4 dxmt9_select_texture_arg(uint arg, float4 current, float4 diffuse,\n";
-  out << "                                       float4 specular, float4 texture, float4 tfactor,\n";
-  out << "                                       float4 temp) {\n";
-  out << "  float4 value = current;\n";
-  out << "  switch (arg & 0x0fu) {\n";
-  out << "    case 0u: value = diffuse; break;\n";
-  out << "    case 1u: value = current; break;\n";
-  out << "    case 2u: value = texture; break;\n";
-  out << "    case 3u: value = tfactor; break;\n";
-  out << "    case 4u: value = specular; break;\n";
-  out << "    case 5u: value = temp; break;\n";
-  out << "    default: value = current; break;\n";
-  out << "  }\n";
-  out << "  return dxmt9_apply_texture_arg_flags(value, arg);\n";
-  out << "}\n";
-  out << "inline float4 dxmt9_select_texcoord(VSOut in, uint index) {\n";
-  out << "  switch (index) {\n";
-  for (size_t i = 0; i < kMaxTextureStages; ++i) {
-    out << "    case " << i << "u: return in.texcoord" << i << ";\n";
-  }
-  out << "    default: return in.texcoord0;\n";
-  out << "  }\n";
-  out << "}\n";
-  out << "inline float4 dxmt9_apply_texture_op(uint op, float4 arg1, float4 arg2, float4 current) {\n";
-  out << "  switch (op) {\n";
-  out << "    case 1u: return current;\n";
-  out << "    case 2u: return arg1;\n";
-  out << "    case 3u: return arg2;\n";
-  out << "    case 4u: return arg1 * arg2;\n";
-  out << "    case 5u: return saturate(arg1 * arg2 * 2.0f);\n";
-  out << "    case 6u: return saturate(arg1 * arg2 * 4.0f);\n";
-  out << "    case 7u: return saturate(arg1 + arg2);\n";
-  out << "    case 8u: return saturate(arg1 + arg2 - float4(0.5f));\n";
-  out << "    case 9u: return saturate((arg1 + arg2 - float4(0.5f)) * 2.0f);\n";
-  out << "    case 10u: return saturate(arg1 - arg2);\n";
-  out << "    case 11u: return saturate(arg1 + arg2 - arg1 * arg2);\n";
-  out << "    case 26u: return mix(arg2, arg1, current);\n";
-  out << "    default: return arg1;\n";
-  out << "  }\n";
-  out << "}\n";
-  out << "inline float2 dxmt9_apply_texture_transform(float4 coord,\n";
-  out << "                                            constant DrawUniforms& uniforms,\n";
-  out << "                                            uint stage,\n";
-  out << "                                            uint flags) {\n";
-  out << "  const uint count = flags & 0xffu;\n";
-  out << "  if (count == 0u) {\n";
-  out << "    return coord.xy;\n";
-  out << "  }\n";
-  out << "  float4 transformed = float4(dot(uniforms.ffpTextureTransforms[stage][0], coord),\n";
-  out << "                              dot(uniforms.ffpTextureTransforms[stage][1], coord),\n";
-  out << "                              dot(uniforms.ffpTextureTransforms[stage][2], coord),\n";
-  out << "                              dot(uniforms.ffpTextureTransforms[stage][3], coord));\n";
-  out << "  if ((flags & 0x100u) != 0u && count >= 2u) {\n";
-  out << "    const uint divisorIndex = min(count - 1u, 3u);\n";
-  out << "    const float q = transformed[divisorIndex];\n";
-  out << "    if (fabs(q) > 1.0e-8f) {\n";
-  out << "      transformed.xy /= q;\n";
-  out << "    } else {\n";
-  out << "      transformed.xy = float2(0.0f);\n";
-  out << "    }\n";
-  out << "  }\n";
-  out << "  if (count == 1u) {\n";
-  out << "    return float2(transformed.x, 0.0f);\n";
-  out << "  }\n";
-  out << "  return transformed.xy;\n";
-  out << "}\n";
-  return out.str();
-}
+// makeShaderPrelude moved to dxmt9_shader_sources.{hpp,cpp}
+// (dxmt9::shaders:: namespace). Keeping a dead-code-to-be-removed marker:
 
 DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
   DrawUniforms uniforms;
@@ -709,43 +573,35 @@ DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
   return uniforms;
 }
 
-constexpr u32 kFvfPositionMask = 0x000eu;
-constexpr u32 kFvfXyz = 0x0002u;
-constexpr u32 kFvfXyzrhw = 0x0004u;
-constexpr u32 kFvfNormal = 0x0010u;
-constexpr u32 kFvfDiffuse = 0x0040u;
-constexpr u32 kFvfSpecular = 0x0080u;
-constexpr u32 kFvfTexCountMask = 0x0f00u;
-constexpr u32 kFvfTexCountShift = 8u;
-
-constexpr u32 kD3DDeclTypeFloat1 = 0u;
-constexpr u32 kD3DDeclTypeFloat2 = 1u;
-constexpr u32 kD3DDeclTypeFloat3 = 2u;
-constexpr u32 kD3DDeclTypeFloat4 = 3u;
-constexpr u32 kD3DDeclTypeD3DColor = 4u;
-constexpr u32 kD3DDeclUsagePosition = 0u;
-constexpr u32 kD3DDeclUsagePSize = 4u;
-constexpr u32 kD3DDeclUsageTexcoord = 5u;
-constexpr u32 kD3DDeclUsagePositionT = 9u;
-constexpr u32 kD3DDeclUsageColor = 10u;
-constexpr u32 kD3DDeclUsageFog = 11u;
+// FVF / D3D-decl constants moved to dxmt9_ffp_shaders.hpp
+// (dxmt9::ffp:: namespace). Aliased into this TU below.
+using dxmt9::ffp::kFvfPositionMask;
+using dxmt9::ffp::kFvfXyz;
+using dxmt9::ffp::kFvfXyzrhw;
+using dxmt9::ffp::kFvfNormal;
+using dxmt9::ffp::kFvfDiffuse;
+using dxmt9::ffp::kFvfSpecular;
+using dxmt9::ffp::kFvfTexCountMask;
+using dxmt9::ffp::kFvfTexCountShift;
+using dxmt9::ffp::kD3DDeclTypeFloat1;
+using dxmt9::ffp::kD3DDeclTypeFloat2;
+using dxmt9::ffp::kD3DDeclTypeFloat3;
+using dxmt9::ffp::kD3DDeclTypeFloat4;
+using dxmt9::ffp::kD3DDeclTypeD3DColor;
+using dxmt9::ffp::kD3DDeclUsagePosition;
+using dxmt9::ffp::kD3DDeclUsagePSize;
+using dxmt9::ffp::kD3DDeclUsageTexcoord;
+using dxmt9::ffp::kD3DDeclUsagePositionT;
+using dxmt9::ffp::kD3DDeclUsageColor;
+using dxmt9::ffp::kD3DDeclUsageFog;
+using dxmt9::ffp::declTypeSize;
 constexpr u32 kD3DSP_DCL_USAGE_SHIFT = 0u;
 constexpr u32 kD3DSP_DCL_USAGE_MASK = 0x0000000fu;
 constexpr u32 kD3DSP_DCL_USAGEINDEX_SHIFT = 16u;
 constexpr u32 kD3DSP_DCL_USAGEINDEX_MASK = 0x000f0000u;
 
-struct FixedFunctionVertexLayout {
-  bool valid = false;
-  bool preTransformed = false;
-  u32 positionComponents = 0;
-  bool hasDiffuse = false;
-  std::array<bool, kMaxTextureStages> hasTexcoord{};
-  u32 stride = 0;
-  u32 positionOffset = 0;
-  u32 diffuseOffset = 0;
-  std::array<u32, kMaxTextureStages> texcoordOffset{};
-  u64 hash = 0;
-};
+// FixedFunctionVertexLayout moved to dxmt9_ffp_shaders.{hpp,cpp}
+using FixedFunctionVertexLayout = dxmt9::ffp::FixedFunctionVertexLayout;
 
 struct VertexInputBinding {
   bool valid = false;
@@ -761,61 +617,9 @@ struct VertexShaderInputLayout {
   u64 hash = 0;
 };
 
-u32 declTypeSize(u32 type) {
-  switch (type) {
-    case kD3DDeclTypeFloat1:
-      return 4;
-    case kD3DDeclTypeFloat2:
-      return 8;
-    case kD3DDeclTypeFloat3:
-      return 12;
-    case kD3DDeclTypeFloat4:
-      return 16;
-    case kD3DDeclTypeD3DColor:
-      return 4;
-    default:
-      return 0;
-  }
-}
+// declTypeSize + fvfTexcoordSize moved to dxmt9_ffp_shaders.cpp (anonymous).
 
-u32 fvfTexcoordSize(u32 fvf, u32 index) {
-  const u32 code = (fvf >> (16u + index * 2u)) & 0x3u;
-  switch (code) {
-    case 1u:
-      return 3;
-    case 2u:
-      return 4;
-    case 3u:
-      return 1;
-    default:
-      return 2;
-  }
-}
-
-u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
-  u64 hash = 1469598103934665603ull;
-  hash ^= static_cast<u64>(layout.valid);
-  hash *= 1099511628211ull;
-  hash ^= static_cast<u64>(layout.preTransformed);
-  hash *= 1099511628211ull;
-  hash ^= layout.positionComponents;
-  hash *= 1099511628211ull;
-  hash ^= static_cast<u64>(layout.hasDiffuse);
-  hash *= 1099511628211ull;
-  hash ^= layout.stride;
-  hash *= 1099511628211ull;
-  hash ^= layout.positionOffset;
-  hash *= 1099511628211ull;
-  hash ^= layout.diffuseOffset;
-  hash *= 1099511628211ull;
-  for (size_t i = 0; i < layout.hasTexcoord.size(); ++i) {
-    hash ^= static_cast<u64>(layout.hasTexcoord[i]);
-    hash *= 1099511628211ull;
-    hash ^= layout.texcoordOffset[i];
-    hash *= 1099511628211ull;
-  }
-  return hash;
-}
+// hashFixedFunctionLayout moved to dxmt9_ffp_shaders.cpp (anonymous).
 
 u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout) {
   u64 hash = 1469598103934665603ull;
@@ -859,97 +663,9 @@ u64 hashVertexDeclaration(const VertexDeclSnapshot& decl) {
   return hash;
 }
 
-std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const DrawDesc& desc) {
-  FixedFunctionVertexLayout layout;
-  if (!desc.vertexDecl.elements.empty()) {
-    u32 computedStride = 0;
-    for (const auto& element : desc.vertexDecl.elements) {
-      if (element.stream != 0) {
-        continue;
-      }
-      const u32 size = declTypeSize(element.type);
-      if (size == 0) {
-        continue;
-      }
-      computedStride = std::max(computedStride, static_cast<u32>(element.offset + size));
-      if (element.usage == kD3DDeclUsagePositionT && element.usageIndex == 0 &&
-          element.type == kD3DDeclTypeFloat4) {
-        layout.valid = true;
-        layout.preTransformed = true;
-        layout.positionComponents = 4;
-        layout.positionOffset = element.offset;
-      } else if (element.usage == kD3DDeclUsagePosition && element.usageIndex == 0 &&
-                 (element.type == kD3DDeclTypeFloat3 || element.type == kD3DDeclTypeFloat4)) {
-        layout.valid = true;
-        layout.preTransformed = false;
-        layout.positionComponents = element.type == kD3DDeclTypeFloat4 ? 4u : 3u;
-        layout.positionOffset = element.offset;
-      } else if (element.usage == kD3DDeclUsageColor && element.usageIndex == 0 &&
-                 element.type == kD3DDeclTypeD3DColor) {
-        layout.hasDiffuse = true;
-        layout.diffuseOffset = element.offset;
-      } else if (element.usage == kD3DDeclUsageTexcoord && element.usageIndex < kMaxTextureStages &&
-                 element.type == kD3DDeclTypeFloat2) {
-        layout.hasTexcoord[element.usageIndex] = true;
-        layout.texcoordOffset[element.usageIndex] = element.offset;
-      }
-    }
-    layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : computedStride;
-    if (layout.valid) {
-      layout.hash = hashFixedFunctionLayout(layout);
-      return layout;
-    }
-    return std::nullopt;
-  }
-
-  const u32 fvf = desc.vertexDecl.fvf;
-  const u32 position = fvf & kFvfPositionMask;
-  if (position != kFvfXyzrhw && position != kFvfXyz) {
-    return std::nullopt;
-  }
-
-  layout.valid = true;
-  layout.preTransformed = position == kFvfXyzrhw;
-  layout.positionComponents = layout.preTransformed ? 4u : 3u;
-  u32 offset = 0;
-  layout.positionOffset = offset;
-  offset += layout.preTransformed ? 16u : 12u;
-
-  if ((fvf & kFvfNormal) != 0) {
-    offset += 12u;
-  }
-
-  if ((fvf & kFvfDiffuse) != 0) {
-    layout.hasDiffuse = true;
-    layout.diffuseOffset = offset;
-    offset += 4;
-  }
-  if ((fvf & kFvfSpecular) != 0) {
-    offset += 4;
-  }
-
-  const u32 texCount = (fvf & kFvfTexCountMask) >> kFvfTexCountShift;
-  if (texCount > 0) {
-    for (u32 i = 0; i < std::min<u32>(texCount, kMaxTextureStages); ++i) {
-      if (fvfTexcoordSize(fvf, i) >= 2u) {
-        layout.hasTexcoord[i] = true;
-        layout.texcoordOffset[i] = offset;
-      }
-      offset += fvfTexcoordSize(fvf, i) * 4u;
-    }
-  } else {
-    for (u32 i = 0; i < texCount; ++i) {
-      offset += fvfTexcoordSize(fvf, i) * 4u;
-    }
-  }
-  for (u32 i = std::min<u32>(texCount, kMaxTextureStages); i < texCount; ++i) {
-    offset += fvfTexcoordSize(fvf, i) * 4u;
-  }
-
-  layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : offset;
-  layout.hash = hashFixedFunctionLayout(layout);
-  return layout;
-}
+// decodeFixedFunctionVertexLayout moved to dxmt9_ffp_shaders.cpp; the name
+// is imported via `using` below.
+using dxmt9::ffp::decodeFixedFunctionVertexLayout;
 
 u32 primitiveVertexCount(PrimitiveType type, u32 primitiveCount) {
   switch (type) {
@@ -3126,281 +2842,13 @@ std::string makeTranslatedFragmentSource(const ShaderRef& shader, const DrawDesc
   return translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, false, desc), desc, false);
 }
 
-std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
-  std::ostringstream out;
-  const auto layout = decodeFixedFunctionVertexLayout(desc);
-  constexpr u32 kTciIndexMask = 0x0000ffffu;
-  constexpr u32 kTciGenMask = 0xffff0000u;
-  constexpr u32 kTciCameraSpacePosition = 0x00020000u;
-  const auto emitStageTexcoords = [&](std::ostringstream& shader, const char* positionExpr) {
-    for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
-      const u32 texCoordIndex = key.texCoordGen[stage] & kTciIndexMask;
-      const u32 texCoordGen = key.texCoordGen[stage] & kTciGenMask;
-      shader << "  float4 dxmt9_texcoord" << stage << " = float4(0.0f, 0.0f, 1.0f, 1.0f);\n";
-      if (layout && texCoordIndex < layout->hasTexcoord.size() && layout->hasTexcoord[texCoordIndex]) {
-        shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_load_f32x2(stream0, base + "
-               << layout->texcoordOffset[texCoordIndex] << "u), 1.0f, 1.0f);\n";
-      }
-      // D3D9 startup/UI paths sometimes leave camera-space texgen enabled on
-      // XYZRHW draws. Feeding screen-space XYZRHW into projected texgen produces
-      // the giant diagonal smears seen in Anno 1701. For pre-transformed
-      // vertices, preserve the authored texcoords instead of treating screen
-      // coordinates as camera-space positions.
-      if (texCoordGen == kTciCameraSpacePosition && !(layout && layout->preTransformed)) {
-        shader << "  dxmt9_texcoord" << stage << " = float4(" << positionExpr << ".xyz, 1.0f);\n";
-      }
-      // Legacy UI paths frequently leave texgen / projected texture-transform
-      // state enabled while submitting XYZRHW quads with authored UVs. Applying
-      // that state to pre-transformed vertices causes severe diagonal smearing
-      // in Anno 1701's menu background. For XYZRHW draws, use the provided UVs
-      // directly and ignore the stale transform state.
-      if (layout && layout->preTransformed) {
-        shader << "  out.texcoord" << stage << " = dxmt9_texcoord" << stage << ";\n";
-      } else {
-        shader << "  out.texcoord" << stage << " = float4(dxmt9_apply_texture_transform(dxmt9_texcoord" << stage
-               << ", uniforms, " << stage << "u, " << key.texTransformFlags[stage]
-               << "u), dxmt9_texcoord" << stage << ".zw);\n";
-      }
-    }
-  };
-  out << makeShaderPrelude(key.clipPlaneMask != 0);
-  if (layout && layout->preTransformed) {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
-           "device const uchar* stream0 [[buffer(1)]]) {\n";
-    out << "  VSOut out;\n";
-    out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
-        << layout->stride << "u;\n";
-    out << "  const int vertexIndex = max(0, int(vid) + uniforms.vertexBaseIndex);\n";
-    out << "  const uint base = uniforms.vertexStreamOffset + uint(vertexIndex) * stride;\n";
-    out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
-    out << "  float clipW = fabs(inPosition.w) > 1.0e-8f ? (1.0f / inPosition.w) : 1.0f;\n";
-    out << "  float2 viewportSize = max(uniforms.viewportSize, float2(1.0f));\n";
-    out << "  float2 ndc = float2(((inPosition.x - uniforms.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
-    out << "                     1.0f - ((inPosition.y - uniforms.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
-    out << "  out.position = float4(ndc * clipW, inPosition.z * clipW, clipW);\n";
-    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
-    if (layout->hasDiffuse) {
-      out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
-    } else {
-      out << "  out.color = float4(1.0);\n";
-    }
-    out << "  out.secondaryColor = float4(0.0);\n";
-    emitStageTexcoords(out, "inPosition");
-    out << "  out.fogFactor = 1.0;\n";
-    out << "  out.pointSize = 1.0;\n";
-  } else if (layout) {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
-           "device const uchar* stream0 [[buffer(1)]]) {\n";
-    out << "  VSOut out;\n";
-    out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
-        << layout->stride << "u;\n";
-    out << "  const int vertexIndex = max(0, int(vid) + uniforms.vertexBaseIndex);\n";
-    out << "  const uint base = uniforms.vertexStreamOffset + uint(vertexIndex) * stride;\n";
-    if (layout->positionComponents == 4) {
-      out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
-    } else {
-      out << "  float4 inPosition = float4(dxmt9_load_f32x3(stream0, base + " << layout->positionOffset
-          << "u), 1.0f);\n";
-    }
-    out << "  float4 clip;\n";
-    out << "  bool identityWvp = all(uniforms.ffpWorldViewProj[0] == float4(1.0, 0.0, 0.0, 0.0)) &&\n";
-    out << "                     all(uniforms.ffpWorldViewProj[1] == float4(0.0, 1.0, 0.0, 0.0)) &&\n";
-    out << "                     all(uniforms.ffpWorldViewProj[2] == float4(0.0, 0.0, 1.0, 0.0)) &&\n";
-    out << "                     all(uniforms.ffpWorldViewProj[3] == float4(0.0, 0.0, 0.0, 1.0));\n";
-    out << "  bool pixelSpacePosition = identityWvp && (fabs(inPosition.x) > 2.0f || fabs(inPosition.y) > 2.0f);\n";
-    out << "  if (pixelSpacePosition) {\n";
-    out << "    float2 viewportSize = max(uniforms.viewportSize, float2(1.0f));\n";
-    out << "    float2 ndc = float2(((inPosition.x - uniforms.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
-    out << "                       1.0f - ((inPosition.y - uniforms.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
-    out << "    clip = float4(ndc, inPosition.z, 1.0f);\n";
-    out << "  } else {\n";
-    out << "    clip.x = dot(float4(uniforms.ffpWorldViewProj[0].x, uniforms.ffpWorldViewProj[1].x,\n";
-    out << "                           uniforms.ffpWorldViewProj[2].x, uniforms.ffpWorldViewProj[3].x), inPosition);\n";
-    out << "    clip.y = dot(float4(uniforms.ffpWorldViewProj[0].y, uniforms.ffpWorldViewProj[1].y,\n";
-    out << "                           uniforms.ffpWorldViewProj[2].y, uniforms.ffpWorldViewProj[3].y), inPosition);\n";
-    out << "    clip.z = dot(float4(uniforms.ffpWorldViewProj[0].z, uniforms.ffpWorldViewProj[1].z,\n";
-    out << "                           uniforms.ffpWorldViewProj[2].z, uniforms.ffpWorldViewProj[3].z), inPosition);\n";
-    out << "    clip.w = dot(float4(uniforms.ffpWorldViewProj[0].w, uniforms.ffpWorldViewProj[1].w,\n";
-    out << "                           uniforms.ffpWorldViewProj[2].w, uniforms.ffpWorldViewProj[3].w), inPosition);\n";
-    out << "  }\n";
-    out << "  out.position = clip;\n";
-    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
-    if (layout->hasDiffuse) {
-      out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
-    } else {
-      out << "  out.color = float4(1.0);\n";
-    }
-    out << "  out.secondaryColor = float4(0.0);\n";
-    emitStageTexcoords(out, "inPosition");
-    out << "  out.fogFactor = 1.0;\n";
-    out << "  out.pointSize = 1.0;\n";
-  } else {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
-    out << "  VSOut out;\n";
-    out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
-    out << "  out.position = float4(p[vid % 3], 0.0, 1.0);\n";
-    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
-    out << "  out.color = float4(1.0);\n";
-    out << "  out.secondaryColor = float4(0.0);\n";
-    out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
-    for (size_t i = 1; i < kMaxTextureStages; ++i) {
-      out << "  out.texcoord" << i << " = out.texcoord0;\n";
-    }
-    out << "  out.fogFactor = 1.0;\n";
-    out << "  out.pointSize = 1.0;\n";
-  }
-  out << "  if (" << (key.lightingEnabled ? "true" : "false") << ") {\n";
-  out << "    out.color.rgb *= 1.0;\n";
-  out << "  }\n";
-  if (key.clipPlaneMask != 0 || desc.clipPlaneMask != 0) {
-    out << "  for (uint i = 0; i < 6; ++i) {\n";
-    out << "    if ((uniforms.clipPlaneMask & (1u << i)) != 0u) {\n";
-      out << "      out.clipDistance[i] = dot(uniforms.clipPlanes[i], out.position);\n";
-    out << "    }\n";
-    out << "  }\n";
-  }
-  out << "  return out;\n";
-  out << "}\n";
-  out << "// ffp vertex hash " << key.hash << "\n";
-  return out.str();
-}
-
-std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
-  std::ostringstream out;
-  std::vector<size_t> activeStages;
-  activeStages.reserve(kMaxTextureStages);
-  for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
-    const bool stageEnabled =
-        key.stages[stage].colorOp != static_cast<u32>(TextureOp::Disable) ||
-        key.stages[stage].alphaOp != static_cast<u32>(TextureOp::Disable);
-    if (stageEnabled && desc.textures[stage].handle != Handle{}) {
-      activeStages.push_back(stage);
-    }
-  }
-  const bool textured = !activeStages.empty();
-  const bool debugFfpUv = [] {
-    const char* env = std::getenv("DXMT_DEBUG_FFP_UV");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  const bool debugFfpTexture = [] {
-    const char* env = std::getenv("DXMT_DEBUG_FFP_TEXTURE");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  const bool debugFfpAlpha = [] {
-    const char* env = std::getenv("DXMT_DEBUG_FFP_ALPHA");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  out << makeShaderPrelude(desc.clipPlaneMask != 0);
-  if (textured) {
-    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
-    for (size_t i = 0; i < activeStages.size(); ++i) {
-      const size_t stage = activeStages[i];
-      if (i != 0) {
-        out << ", ";
-      }
-      out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], sampler samp" << stage
-          << " [[sampler(" << stage << ")]]";
-    }
-    out << ") {\n";
-  } else {
-    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
-  }
-  out << "  float4 color = in.color;\n";
-  out << "  float4 current = color;\n";
-  out << "  float4 diffuse = in.color;\n";
-  out << "  float4 specular = in.secondaryColor;\n";
-  out << "  float4 tfactor = uniforms.textureFactor;\n";
-  out << "  float4 temp = float4(0.0);\n";
-  if (textured) {
-    if (debugFfpUv) {
-      out << "  return float4(fract(in.texcoord0.x), fract(in.texcoord0.y), 0.0, 1.0);\n";
-      out << "}\n";
-      out << "// ffp pixel hash " << key.hash << "\n";
-      return out.str();
-    }
-    if (debugFfpTexture) {
-      const size_t stage = activeStages.front();
-      const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
-      out << "  return tex" << stage << ".sample(samp" << stage
-          << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy);\n";
-      out << "}\n";
-      out << "// ffp pixel hash " << key.hash << "\n";
-      return out.str();
-    }
-    if (debugFfpAlpha) {
-      const size_t stage = activeStages.front();
-      const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
-      out << "  float alpha = tex" << stage << ".sample(samp" << stage
-          << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy).a;\n";
-      out << "  return float4(alpha, alpha, alpha, 1.0);\n";
-      out << "}\n";
-      out << "// ffp pixel hash " << key.hash << "\n";
-      return out.str();
-    }
-    for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
-      const auto& stageKey = key.stages[stage];
-      const bool stageEnabled =
-          stageKey.colorOp != static_cast<u32>(TextureOp::Disable) ||
-          stageKey.alphaOp != static_cast<u32>(TextureOp::Disable);
-      if (!stageEnabled) {
-        continue;
-      }
-      const bool hasTexture = desc.textures[stage].handle != Handle{};
-      const u32 coordIndex = stageKey.texCoordIndex & 0xffffu;
-      if (hasTexture) {
-        out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
-            << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy);\n";
-      } else {
-        out << "  float4 texColor" << stage << " = float4(1.0f);\n";
-      }
-      out << "  float4 colorArg1_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg1
-          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
-      out << "  float4 colorArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg2
-          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
-      out << "  float4 stageResult" << stage << " = dxmt9_apply_texture_op(" << stageKey.colorOp
-          << "u, colorArg1_" << stage << ", colorArg2_" << stage << ", current);\n";
-      out << "  float4 alphaArg1_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg1
-          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
-      out << "  float4 alphaArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg2
-          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
-      out << "  stageResult" << stage << ".a = dxmt9_apply_texture_op(" << stageKey.alphaOp
-          << "u, alphaArg1_" << stage << ", alphaArg2_" << stage << ", current).a;\n";
-      out << "  current = stageResult" << stage << ";\n";
-      if (stageKey.resultArg == 5u) {
-        out << "  temp = stageResult" << stage << ";\n";
-      }
-    }
-    out << "  color = current;\n";
-  }
-  if (key.alphaTestEnable) {
-    out << "  bool pass = true;\n";
-    out << "  switch (uniforms.alphaTestFunc) {\n";
-    out << "    case 2u: pass = color.a < uniforms.alphaRef; break;\n";
-    out << "    case 3u: pass = color.a == uniforms.alphaRef; break;\n";
-    out << "    case 4u: pass = color.a <= uniforms.alphaRef; break;\n";
-    out << "    case 5u: pass = color.a > uniforms.alphaRef; break;\n";
-    out << "    case 6u: pass = color.a != uniforms.alphaRef; break;\n";
-    out << "    case 7u: pass = color.a >= uniforms.alphaRef; break;\n";
-    out << "    case 8u: pass = true; break;\n";
-    out << "    default: pass = true; break;\n";
-    out << "  }\n";
-    out << "  if (!pass) { discard_fragment(); }\n";
-  }
-  if (key.fogMode != FogMode::None) {
-    out << "  float fog = clamp(in.fogFactor, 0.0, 1.0);\n";
-    out << "  float4 fogColor = float4(0.5, 0.5, 0.5, 1.0);\n";
-    out << "  color = mix(fogColor, color, fog);\n";
-  }
-  out << "  return color;\n";
-  out << "}\n";
-  out << "// ffp pixel hash " << key.hash << "\n";
-  return out.str();
-}
 
 // makeGenericVertexSource/makeGenericFragmentSource/makeTexturedVertexSource/
 // makeTexturedFragmentSource/makeLibraryWMT/initShaderArchive/persistShaderArchiveWMT
-// moved to dxmt9_shader_sources.{hpp,cpp} (dxmt9::shaders:: namespace); used
-// via the `using` declarations at the top of this file.
+// + makeShaderPrelude moved to dxmt9_shader_sources.{hpp,cpp}.
+// makeFfpVertexSource / makeFfpPixelSource moved to dxmt9_ffp_shaders.{hpp,cpp}.
+using dxmt9::ffp::makeFfpVertexSource;
+using dxmt9::ffp::makeFfpPixelSource;
 
 
 std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex);
