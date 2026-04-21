@@ -15,6 +15,7 @@
 #include "dxmt9_queue.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_d3d9_bytecode.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_pipeline_cache.hpp"
@@ -489,24 +490,8 @@ NSString* makeNSString(const std::string& text) {
   return [[NSString alloc] initWithUTF8String:text.c_str()];
 }
 
-enum class D3DShaderStage { Vertex, Pixel };
-
-struct D3DDecodedInstruction {
-  u32 opcode = 0;
-  u32 controls = 0;
-  bool predicated = false;
-  std::vector<u32> operands;
-};
-
-struct SpirvModule {
-  std::vector<u32> words;
-  u64 hash = 0;
-  bool usesTexture = false;
-  D3DShaderStage stage = D3DShaderStage::Vertex;
-  u32 major = 0;
-  u32 minor = 0;
-  std::vector<D3DDecodedInstruction> instructions;
-};
+// D3DShaderStage / D3DDecodedInstruction / SpirvModule moved to
+// dxmt9_d3d9_bytecode.hpp (dxmt9::d3d9bc:: namespace). Aliased below.
 
 // makeShaderPrelude moved to dxmt9_shader_sources.{hpp,cpp}
 // (dxmt9::shaders:: namespace). Keeping a dead-code-to-be-removed marker:
@@ -595,10 +580,8 @@ using dxmt9::ffp::kD3DDeclUsagePositionT;
 using dxmt9::ffp::kD3DDeclUsageColor;
 using dxmt9::ffp::kD3DDeclUsageFog;
 using dxmt9::ffp::declTypeSize;
-constexpr u32 kD3DSP_DCL_USAGE_SHIFT = 0u;
-constexpr u32 kD3DSP_DCL_USAGE_MASK = 0x0000000fu;
-constexpr u32 kD3DSP_DCL_USAGEINDEX_SHIFT = 16u;
-constexpr u32 kD3DSP_DCL_USAGEINDEX_MASK = 0x000f0000u;
+// kD3DSP_DCL_* now in dxmt9_d3d9_bytecode.hpp (accessed via the
+// `using namespace dxmt9::d3d9bc;` introduced below alongside the opcodes).
 
 // FixedFunctionVertexLayout moved to dxmt9_ffp_shaders.{hpp,cpp}
 using FixedFunctionVertexLayout = dxmt9::ffp::FixedFunctionVertexLayout;
@@ -702,129 +685,15 @@ u32 indexElementSize(IndexType type) {
   return type == IndexType::UInt32 ? 4u : 2u;
 }
 
-enum class D3DRegisterKind : u32 {
-  Temp,
-  Input,
-  ConstFloat,
-  Address,
-  RastOut,
-  AttrOut,
-  TexCoordOut,
-  ConstInt,
-  ColorOut,
-  DepthOut,
-  Sampler,
-  ConstBool,
-  Loop,
-  MiscType,
-  Predicate,
-  Unknown,
-};
+// D3DRegisterKind / D3DRegisterRef + kD3DSIO_* + kD3DSPR_* + kD3DSP_DCL_*
+// moved to dxmt9_d3d9_bytecode.hpp (dxmt9::d3d9bc:: namespace). Aliased below.
+using dxmt9::d3d9bc::D3DShaderStage;
+using dxmt9::d3d9bc::D3DDecodedInstruction;
+using dxmt9::d3d9bc::SpirvModule;
+using dxmt9::d3d9bc::D3DRegisterKind;
+using dxmt9::d3d9bc::D3DRegisterRef;
+using namespace dxmt9::d3d9bc;  // pulls in all kD3DSIO_* / kD3DSPR_* / kD3DSP_DCL_*
 
-struct D3DRegisterRef {
-  D3DRegisterKind kind = D3DRegisterKind::Unknown;
-  u32 index = 0;
-};
-
-constexpr u32 kD3DSIO_NOP = 0;
-constexpr u32 kD3DSIO_MOV = 1;
-constexpr u32 kD3DSIO_ADD = 2;
-constexpr u32 kD3DSIO_SUB = 3;
-constexpr u32 kD3DSIO_MAD = 4;
-constexpr u32 kD3DSIO_MUL = 5;
-constexpr u32 kD3DSIO_RCP = 6;
-constexpr u32 kD3DSIO_RSQ = 7;
-constexpr u32 kD3DSIO_DP3 = 8;
-constexpr u32 kD3DSIO_DP4 = 9;
-constexpr u32 kD3DSIO_MIN = 10;
-constexpr u32 kD3DSIO_MAX = 11;
-constexpr u32 kD3DSIO_SLT = 12;
-constexpr u32 kD3DSIO_SGE = 13;
-constexpr u32 kD3DSIO_EXP = 14;
-constexpr u32 kD3DSIO_LOG = 15;
-constexpr u32 kD3DSIO_M4x4 = 20;
-constexpr u32 kD3DSIO_M4x3 = 21;
-constexpr u32 kD3DSIO_M3x4 = 22;
-constexpr u32 kD3DSIO_M3x3 = 23;
-constexpr u32 kD3DSIO_M3x2 = 24;
-constexpr u32 kD3DSIO_CALL = 25;
-constexpr u32 kD3DSIO_CALLNZ = 26;
-constexpr u32 kD3DSIO_LOOP = 27;
-constexpr u32 kD3DSIO_RET = 28;
-constexpr u32 kD3DSIO_ENDLOOP = 29;
-constexpr u32 kD3DSIO_LABEL = 30;
-constexpr u32 kD3DSIO_LRP = 18;
-constexpr u32 kD3DSIO_FRC = 19;
-constexpr u32 kD3DSIO_DCL = 31;
-constexpr u32 kD3DSIO_POW = 32;
-constexpr u32 kD3DSIO_CRS = 33;
-constexpr u32 kD3DSIO_SGN = 34;
-constexpr u32 kD3DSIO_ABS = 35;
-constexpr u32 kD3DSIO_NRM = 36;
-constexpr u32 kD3DSIO_SINCOS = 37;
-constexpr u32 kD3DSIO_REP = 38;
-constexpr u32 kD3DSIO_ENDREP = 39;
-constexpr u32 kD3DSIO_IF = 40;
-constexpr u32 kD3DSIO_IFC = 41;
-constexpr u32 kD3DSIO_ELSE = 42;
-constexpr u32 kD3DSIO_ENDIF = 43;
-constexpr u32 kD3DSIO_BREAK = 44;
-constexpr u32 kD3DSIO_BREAKC = 45;
-constexpr u32 kD3DSIO_MOVA = 46;
-constexpr u32 kD3DSIO_DEFB = 47;
-constexpr u32 kD3DSIO_DEFI = 48;
-constexpr u32 kD3DSIO_TEXCOORD = 64;
-constexpr u32 kD3DSIO_TEXKILL = 65;
-constexpr u32 kD3DSIO_TEX = 66;
-constexpr u32 kD3DSIO_TEXBEM = 67;
-constexpr u32 kD3DSIO_TEXBEML = 68;
-constexpr u32 kD3DSIO_TEXREG2AR = 69;
-constexpr u32 kD3DSIO_TEXREG2GB = 70;
-constexpr u32 kD3DSIO_TEXM3x2PAD = 71;
-constexpr u32 kD3DSIO_TEXM3x2TEX = 72;
-constexpr u32 kD3DSIO_TEXM3x3PAD = 73;
-constexpr u32 kD3DSIO_TEXM3x3TEX = 74;
-constexpr u32 kD3DSIO_TEXM3x3DIFF = 75;
-constexpr u32 kD3DSIO_TEXM3x3SPEC = 76;
-constexpr u32 kD3DSIO_TEXM3x3VSPEC = 77;
-constexpr u32 kD3DSIO_EXPP = 78;
-constexpr u32 kD3DSIO_LOGP = 79;
-constexpr u32 kD3DSIO_CND = 80;
-constexpr u32 kD3DSIO_DEF = 81;
-constexpr u32 kD3DSIO_TEXREG2RGB = 82;
-constexpr u32 kD3DSIO_TEXDP3TEX = 83;
-constexpr u32 kD3DSIO_TEXM3x2DEPTH = 84;
-constexpr u32 kD3DSIO_TEXDP3 = 85;
-constexpr u32 kD3DSIO_TEXM3x3 = 86;
-constexpr u32 kD3DSIO_TEXDEPTH = 87;
-constexpr u32 kD3DSIO_CMP = 88;
-constexpr u32 kD3DSIO_BEM = 89;
-constexpr u32 kD3DSIO_DP2ADD = 90;
-constexpr u32 kD3DSIO_DSX = 91;
-constexpr u32 kD3DSIO_DSY = 92;
-constexpr u32 kD3DSIO_TEXLDD = 93;
-constexpr u32 kD3DSIO_SETP = 94;
-constexpr u32 kD3DSIO_TEXLDL = 95;
-constexpr u32 kD3DSIO_BREAKP = 96;
-constexpr u32 kD3DSIO_PHASE = 0xfffdu;
-constexpr u32 kD3DSIO_COMMENT = 0xfffeu;
-constexpr u32 kD3DSIO_END = 0xffffu;
-
-constexpr u32 kD3DSPR_TEMP = 0;
-constexpr u32 kD3DSPR_INPUT = 1;
-constexpr u32 kD3DSPR_CONST = 2;
-constexpr u32 kD3DSPR_ADDR = 3;
-constexpr u32 kD3DSPR_RASTOUT = 4;
-constexpr u32 kD3DSPR_ATTROUT = 5;
-constexpr u32 kD3DSPR_TEXCRDOUT = 6;
-constexpr u32 kD3DSPR_CONSTINT = 7;
-constexpr u32 kD3DSPR_COLOROUT = 8;
-constexpr u32 kD3DSPR_DEPTHOUT = 9;
-constexpr u32 kD3DSPR_SAMPLER = 10;
-constexpr u32 kD3DSPR_CONSTBOOL = 14;
-constexpr u32 kD3DSPR_LOOP = 15;
-constexpr u32 kD3DSPR_MISCTYPE = 17;
-constexpr u32 kD3DSPR_PREDICATE = 19;
 
 std::string formatFloatLiteral(f32 value) {
   std::ostringstream out;
