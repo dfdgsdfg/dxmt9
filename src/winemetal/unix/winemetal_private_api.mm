@@ -445,6 +445,31 @@ extern "C" void ReleaseMetalView(obj_handle_t view) {
   }
 }
 
+// Legacy fallback — old macdrv only exports macdrv_get_cocoa_view and has no
+// macdrv_functions / get_win_data. The caller's best bet is to install a
+// fresh CAMetalLayer directly on the window's NSView.
+extern "C" obj_handle_t AcquireLegacyHwndLayer(intptr_t hwnd) {
+  using GetCocoaViewFn = NSView *(*)(void *);
+  auto pfn_get_cocoa_view = resolveMacdrvSymbol<GetCocoaViewFn>("macdrv_get_cocoa_view");
+  if (!pfn_get_cocoa_view) {
+    return NULL_OBJECT_HANDLE;
+  }
+  NSView *view = pfn_get_cocoa_view(reinterpret_cast<void *>(static_cast<uintptr_t>(hwnd)));
+  if (!view) {
+    return NULL_OBJECT_HANDLE;
+  }
+  __block CAMetalLayer *result = nil;
+  dispatch_sync(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
+      CAMetalLayer *newLayer = [CAMetalLayer layer];
+      view.wantsLayer = YES;
+      view.layer = newLayer;
+      result = [newLayer retain];
+    }
+  });
+  return static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>(result));
+}
+
 // ---------------------------------------------------------------------------
 // WMT API implementations — full Metal wrapper surface
 // ---------------------------------------------------------------------------
