@@ -17,6 +17,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_resource_pool.hpp"
 #include "dxmt9_shader_service.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "../winemetal/Metal.hpp"
@@ -431,32 +432,12 @@ AttachmentKey makeAttachmentKey(const ClearDesc& clear) {
   return key;
 }
 
-struct BufferRecord {
-  BufferDesc desc{};
-  WMT::Reference<WMT::Buffer> buffer;
-  void* contents = nullptr;  // CPU-mapped pointer (shared mode only)
-  std::vector<u8> shadow;
-  bool destroyPending = false;
-  u64 lastUsedSeqId = 0;
-};
-
-struct TextureRecord {
-  TextureDesc desc{};
-  WMT::Reference<WMT::Texture> texture;
-  bool isPrivate = false;  // true if storage mode is private (no CPU access)
-  bool destroyPending = false;
-  u64 lastUsedSeqId = 0;
-};
-
-struct SurfaceRecord {
-  SurfaceDesc desc{};
-  WMT::Reference<WMT::Texture> texture;
-  WMT::Reference<WMT::Texture> resolveTexture;
-  TextureHandle aliasTexture{};
-  u32 level = 0;
-  bool destroyPending = false;
-  u64 lastUsedSeqId = 0;
-};
+// Resource record types + Pool moved to dxmt9_resource_pool.{hpp,cpp}
+// (dxmt9::resources:: namespace). Aliased so the rest of this TU keeps
+// the short names.
+using BufferRecord = dxmt9::resources::BufferRecord;
+using TextureRecord = dxmt9::resources::TextureRecord;
+using SurfaceRecord = dxmt9::resources::SurfaceRecord;
 
 struct DrawUniforms {
   std::array<std::array<f32, 4>, kMaxVertexConstants> vsFloatConst{};
@@ -570,13 +551,7 @@ class RingArena {
 // the handle allocator. Grouped per C6 as a named structure; the underlying
 // mutex is still commandQueue_->mutex_ (shared with queue state) pending a
 // mutex split when the pools move out of MetalBackendDevice entirely.
-struct ResourcePool {
-  std::unordered_map<u64, BufferRecord> buffers;
-  std::unordered_map<u64, TextureRecord> textures;
-  std::unordered_map<u64, SurfaceRecord> surfaces;
-  std::unordered_set<u64> dumpedGpuTextures;
-  u64 nextHandle = 1;
-};
+using ResourcePool = dxmt9::resources::Pool;
 
 // Per-frame bump-ring allocators used by the encode thread for transient
 // buffers (arg buffers, lambda capture storage, upload staging, copy temp).
@@ -4220,35 +4195,12 @@ class MetalBackendDevice final : public BackendDevice {
     return isFloatRenderTargetFormat(surface->desc.format) ? CompatFlagFp16 : 0u;
   }
 
-  BufferRecord* findBufferUnlocked(u64 handle) {
-    auto it = pool_.buffers.find(handle);
-    return it == pool_.buffers.end() ? nullptr : &it->second;
-  }
-
-  const BufferRecord* findBufferUnlocked(u64 handle) const {
-    auto it = pool_.buffers.find(handle);
-    return it == pool_.buffers.end() ? nullptr : &it->second;
-  }
-
-  TextureRecord* findTextureUnlocked(u64 handle) {
-    auto it = pool_.textures.find(handle);
-    return it == pool_.textures.end() ? nullptr : &it->second;
-  }
-
-  const TextureRecord* findTextureUnlocked(u64 handle) const {
-    auto it = pool_.textures.find(handle);
-    return it == pool_.textures.end() ? nullptr : &it->second;
-  }
-
-  SurfaceRecord* findSurfaceUnlocked(u64 handle) {
-    auto it = pool_.surfaces.find(handle);
-    return it == pool_.surfaces.end() ? nullptr : &it->second;
-  }
-
-  const SurfaceRecord* findSurfaceUnlocked(u64 handle) const {
-    auto it = pool_.surfaces.find(handle);
-    return it == pool_.surfaces.end() ? nullptr : &it->second;
-  }
+  BufferRecord* findBufferUnlocked(u64 handle) { return pool_.findBuffer(handle); }
+  const BufferRecord* findBufferUnlocked(u64 handle) const { return pool_.findBuffer(handle); }
+  TextureRecord* findTextureUnlocked(u64 handle) { return pool_.findTexture(handle); }
+  const TextureRecord* findTextureUnlocked(u64 handle) const { return pool_.findTexture(handle); }
+  SurfaceRecord* findSurfaceUnlocked(u64 handle) { return pool_.findSurface(handle); }
+  const SurfaceRecord* findSurfaceUnlocked(u64 handle) const { return pool_.findSurface(handle); }
 
   ChunkSlot& currentSlot() {
     // TLA+: RingSafety
@@ -5965,21 +5917,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void tryGarbageCollectUnlocked() {
-    auto gcMap = [](auto& map, u64 completed) {
-      for (auto it = map.begin(); it != map.end();) {
-        auto& record = it->second;
-        if (record.destroyPending && record.lastUsedSeqId <= completed) {
-          // TLA+: NoUseAfterFree
-          DXMT_ASSERT(record.lastUsedSeqId <= completed);
-          it = map.erase(it);
-        } else {
-          ++it;
-        }
-      }
-    };
-    gcMap(pool_.buffers, commandQueue_->completedSeqId_);
-    gcMap(pool_.textures, commandQueue_->completedSeqId_);
-    gcMap(pool_.surfaces, commandQueue_->completedSeqId_);
+    pool_.reclaimCompleted(commandQueue_->completedSeqId_);
   }
 
   void purgeResourcesUnlocked() {
