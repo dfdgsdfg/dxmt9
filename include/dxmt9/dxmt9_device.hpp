@@ -42,6 +42,16 @@ class Device {
   // paths (StubDxmt9Device) or when the archive was not initialized.
   virtual WMT::Reference<WMT::BinaryArchive>* shaderArchive() { return nullptr; }
   virtual const std::string* shaderArchivePath() { return nullptr; }
+
+  // Device-level observers and frame-latency governor. Previously on
+  // BackendDevice; migrated up so the backend is a pure Renderer.
+  // DeviceImpl stores them; the backend invokes the notify* variants.
+  virtual void setDeviceLostObserver(core::BackendDevice::DeviceLostObserver) {}
+  virtual void setPresentationStatusObserver(core::BackendDevice::PresentationStatusObserver) {}
+  virtual void notifyDeviceLost(bool /*lost*/) {}
+  virtual void notifyPresentationStatus(bool /*occluded*/) {}
+  virtual void setMaxFrameLatency(std::uint32_t /*latency*/) {}
+  virtual std::uint32_t maxFrameLatency() const { return 3; }
 };
 
 struct DEVICE_DESC {

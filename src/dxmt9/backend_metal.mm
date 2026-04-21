@@ -14,6 +14,7 @@
 #include "dxmt9_presenter_macdrv.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
+#include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_shader_service.hpp"
@@ -3672,8 +3673,9 @@ class MetalBackendDevice final : public BackendDevice {
   MetalBackendDevice(const BackendLimits& limits, WMT::Reference<WMT::Device> wmtDevice,
                      dxmt9::CommandQueue& commandQueue,
                      WMT::Reference<WMT::BinaryArchive>& shaderArchive,
-                     const std::string& shaderArchivePath)
-      : limits_(limits), commandQueue_(&commandQueue),
+                     const std::string& shaderArchivePath,
+                     dxmt9::Device& upperDevice)
+      : limits_(limits), commandQueue_(&commandQueue), upperDevice_(&upperDevice),
         shaderArchive_(&shaderArchive), shaderArchivePath_(&shaderArchivePath) {
     wrappedDevice_ = std::move(wmtDevice);
     if (!wrappedDevice_ || !commandQueue_->valid()) {
@@ -3727,19 +3729,20 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
+  // Observer setters + maxFrameLatency moved to dxmt9::Device (task 3).
+  // The backend keeps the BackendDevice overrides as thin forwarders to
+  // the upper device so the existing core::Device wiring path
+  // (backend->setDeviceLostObserver) keeps working during the transition.
   void setDeviceLostObserver(DeviceLostObserver observer) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    deviceLostObserver_ = std::move(observer);
+    if (upperDevice_) upperDevice_->setDeviceLostObserver(std::move(observer));
   }
 
   void setPresentationStatusObserver(PresentationStatusObserver observer) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    presentationStatusObserver_ = std::move(observer);
+    if (upperDevice_) upperDevice_->setPresentationStatusObserver(std::move(observer));
   }
 
   void setMaxFrameLatency(u32 latency) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    maxFrameLatency_ = std::clamp(latency, 1u, 3u);
+    if (upperDevice_) upperDevice_->setMaxFrameLatency(latency);
   }
 
   HResult waitForVBlank(const SwapDesc& desc) override {
@@ -5595,16 +5598,16 @@ class MetalBackendDevice final : public BackendDevice {
     params.height = present.height;
     params.displaySyncEnabled = present.displaySyncEnabled;
     params.contentsScale = 1.0;
-    params.maxDrawableCount = maxFrameLatency_;
+    params.maxDrawableCount = upperDevice_ ? upperDevice_->maxFrameLatency() : 3u;
     params.opaqueAlpha = opaqueAlpha;
     params.seqId = seqId;
 
     const auto presentResult = presenter->encodeCommands(commandBuffer, params);
     if (!presentResult.acquired) {
-      if (presentationStatusObserver_) presentationStatusObserver_(true);
+      if (upperDevice_) upperDevice_->notifyPresentationStatus(true);
       return;
     }
-    if (presentationStatusObserver_) presentationStatusObserver_(false);
+    if (upperDevice_) upperDevice_->notifyPresentationStatus(false);
     if (!presentResult.encoded) {
       return;
     }
@@ -5988,6 +5991,7 @@ class MetalBackendDevice final : public BackendDevice {
   BackendLimits limits_{};
   WMT::Reference<WMT::Device> wrappedDevice_{};
   dxmt9::CommandQueue* commandQueue_ = nullptr;
+  dxmt9::Device* upperDevice_ = nullptr;  // observers + maxFrameLatency live here (task 3)
   // Threads moved to CommandQueue (C7c). Loop bodies supplied via
   // commandQueue_->startThreads() in the ctor; joined via stopThreads() in
   // the dtor before any other teardown.
@@ -6000,9 +6004,9 @@ class MetalBackendDevice final : public BackendDevice {
   // pool_.nextHandle, resource maps, and pool_.dumpedGpuTextures grouped into pool_ (C6).
   Handle currentBackBuffer_{};
   bool backBufferDiscardAfterPresent_ = false;
-  DeviceLostObserver deviceLostObserver_;
-  PresentationStatusObserver presentationStatusObserver_;
-  u32 maxFrameLatency_ = 3;
+  // deviceLostObserver_/presentationStatusObserver_/maxFrameLatency_ moved
+  // to dxmt9::Device (task 3). Accessed via upperDevice_->notify*/... or
+  // upperDevice_->maxFrameLatency().
   ResourcePool pool_{};
   PipelineCache pipelineCache_{};
   // presenters_ map removed — Presenter ownership lives on core::SwapChain.
@@ -6061,9 +6065,10 @@ std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limit
                                                       WMT::Reference<WMT::Device> wmtDevice,
                                                       dxmt9::CommandQueue& commandQueue,
                                                       WMT::Reference<WMT::BinaryArchive>& shaderArchive,
-                                                      const std::string& shaderArchivePath) {
+                                                      const std::string& shaderArchivePath,
+                                                      dxmt9::Device& upperDevice) {
   auto backend = std::make_shared<MetalBackendDevice>(limits, std::move(wmtDevice), commandQueue,
-                                                       shaderArchive, shaderArchivePath);
+                                                       shaderArchive, shaderArchivePath, upperDevice);
   return backend->ready() ? std::static_pointer_cast<BackendDevice>(std::move(backend))
                           : std::shared_ptr<BackendDevice>{};
 }

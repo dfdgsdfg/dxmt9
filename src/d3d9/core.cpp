@@ -3864,6 +3864,20 @@ class StubDxmt9Device final : public dxmt9::Device {
   dxmt9::CommandQueue& queue() override { return queue_; }
   const BackendLimits& limits() const override { return limits_; }
   std::shared_ptr<BackendDevice> backend() override { return backend_; }
+
+  // Tests drive the backend's trigger* helpers directly, expecting the
+  // observer wired by Factory::createDevice to fire. Forward through so the
+  // mock backend stays the source of truth on the stub path.
+  void setDeviceLostObserver(BackendDevice::DeviceLostObserver observer) override {
+    if (backend_) backend_->setDeviceLostObserver(std::move(observer));
+  }
+  void setPresentationStatusObserver(BackendDevice::PresentationStatusObserver observer) override {
+    if (backend_) backend_->setPresentationStatusObserver(std::move(observer));
+  }
+  void setMaxFrameLatency(std::uint32_t latency) override {
+    if (backend_) backend_->setMaxFrameLatency(latency);
+  }
+
  private:
   BackendLimits limits_{};
   dxmt9::CommandQueue queue_;
@@ -4066,19 +4080,19 @@ std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const Present
   auto device = std::shared_ptr<Device>(
       new Device(adapterInfo, limits_, normalized, behaviorFlags, device_));
   device->initializeDefaultSwapChain();
-  if (auto backend = device->backend()) {
+  if (device_) {
     std::weak_ptr<Device> weak = device;
-    backend->setDeviceLostObserver([weak](bool lost) {
+    device_->setDeviceLostObserver([weak](bool lost) {
       if (auto locked = weak.lock()) {
         locked->setDeviceLost(lost);
       }
     });
-    backend->setPresentationStatusObserver([weak](bool occluded) {
+    device_->setPresentationStatusObserver([weak](bool occluded) {
       if (auto locked = weak.lock()) {
         locked->setPresentOccluded(occluded);
       }
     });
-    backend->setMaxFrameLatency(device->maximumFrameLatency());
+    device_->setMaxFrameLatency(device->maximumFrameLatency());
   }
   return device;
 }

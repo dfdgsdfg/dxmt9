@@ -27,7 +27,7 @@ class DeviceImpl final : public Device {
       shaders::initShaderArchive(wmt_device_, shaderArchivePath_, shaderArchive_);
     }
     backend_ = core::makeMetalBackendDevice(limits_, wmt_device_, queue_,
-                                             shaderArchive_, shaderArchivePath_);
+                                             shaderArchive_, shaderArchivePath_, *this);
   }
 
   ~DeviceImpl() override {
@@ -47,6 +47,23 @@ class DeviceImpl final : public Device {
   WMT::Reference<WMT::BinaryArchive>* shaderArchive() override { return &shaderArchive_; }
   const std::string* shaderArchivePath() override { return &shaderArchivePath_; }
 
+  void setDeviceLostObserver(core::BackendDevice::DeviceLostObserver observer) override {
+    deviceLostObserver_ = std::move(observer);
+  }
+  void setPresentationStatusObserver(core::BackendDevice::PresentationStatusObserver observer) override {
+    presentationStatusObserver_ = std::move(observer);
+  }
+  void notifyDeviceLost(bool lost) override {
+    if (deviceLostObserver_) deviceLostObserver_(lost);
+  }
+  void notifyPresentationStatus(bool occluded) override {
+    if (presentationStatusObserver_) presentationStatusObserver_(occluded);
+  }
+  void setMaxFrameLatency(std::uint32_t latency) override {
+    maxFrameLatency_ = latency == 0 ? 1u : (latency > 3u ? 3u : latency);
+  }
+  std::uint32_t maxFrameLatency() const override { return maxFrameLatency_; }
+
   bool ready() const noexcept { return static_cast<bool>(backend_); }
 
  private:
@@ -55,6 +72,9 @@ class DeviceImpl final : public Device {
   core::BackendLimits limits_{};
   std::string shaderArchivePath_{};
   WMT::Reference<WMT::BinaryArchive> shaderArchive_{};
+  core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
+  core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
+  std::uint32_t maxFrameLatency_ = 3;
   // backend_ is declared last so it destructs first; see ~DeviceImpl().
   std::shared_ptr<core::BackendDevice> backend_;
 };

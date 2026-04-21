@@ -18,7 +18,8 @@ std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limit
                                                       WMT::Reference<WMT::Device> wmtDevice,
                                                       dxmt9::CommandQueue& commandQueue,
                                                       WMT::Reference<WMT::BinaryArchive>& shaderArchive,
-                                                      const std::string& shaderArchivePath);
+                                                      const std::string& shaderArchivePath,
+                                                      dxmt9::Device& upperDevice);
 
 // Build a textured blit (present) pipeline on a background task. Exposed so
 // dxmt9::Presenter can own its own pipeline cache, matching dxmt's Presenter.
