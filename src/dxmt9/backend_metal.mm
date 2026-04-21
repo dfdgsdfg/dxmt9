@@ -15,6 +15,7 @@
 #include "dxmt9_queue.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9_shader_service.hpp"
+#include "dxmt9_shader_sources.hpp"
 #include "../winemetal/Metal.hpp"
 #include "util/config/config.hpp"
 
@@ -283,9 +284,16 @@ WMT::Reference<WMT::CommandBuffer> bootstrapCommandBuffer(WMT::CommandQueue& que
   return queue.commandBuffer();
 }
 
-u64 makeHash(const std::string& source) {
-  return hashString(source);
-}
+// makeHash + makeLibraryWMT + shader source helpers moved to
+// dxmt9_shader_sources.{hpp,cpp}; callers use dxmt9::shaders:: qualified.
+using dxmt9::shaders::makeHash;
+using dxmt9::shaders::makeLibrary;
+using dxmt9::shaders::makeGenericVertexSource;
+using dxmt9::shaders::makeGenericFragmentSource;
+using dxmt9::shaders::makeTexturedVertexSource;
+using dxmt9::shaders::makeTexturedFragmentSource;
+using dxmt9::shaders::initShaderArchive;
+using dxmt9::shaders::persistShaderArchive;
 
 WMTPixelFormat toPixelFormat(Format format, const BackendLimits& limits) {
   switch (format) {
@@ -3891,86 +3899,11 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
   return out.str();
 }
 
-std::string makeGenericVertexSource(u64 variantHash) {
-  std::ostringstream out;
-  out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; };\n";
-  out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]]) {\n";
-  out << "  VSOut out;\n";
-  out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
-  out << "  out.position = float4(p[vid % 3], 0.0, 1.0);\n";
-  out << "  return out;\n";
-  out << "}\n";
-  out << "// variant " << variantHash << "\n";
-  return out.str();
-}
+// makeGenericVertexSource/makeGenericFragmentSource/makeTexturedVertexSource/
+// makeTexturedFragmentSource/makeLibraryWMT/initShaderArchive/persistShaderArchiveWMT
+// moved to dxmt9_shader_sources.{hpp,cpp} (dxmt9::shaders:: namespace); used
+// via the `using` declarations at the top of this file.
 
-std::string makeGenericFragmentSource(ColorRGBA color, u64 variantHash) {
-  std::ostringstream out;
-  out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; };\n";
-  out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]]) {\n";
-  out << "  (void)in;\n";
-  out << "  return float4(" << color.r << "f, " << color.g << "f, " << color.b << "f, " << color.a << "f);\n";
-  out << "}\n";
-  out << "// variant " << variantHash << "\n";
-  return out.str();
-}
-
-std::string makeTexturedVertexSource(u64 variantHash) {
-  std::ostringstream out;
-  out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; float2 uv; };\n";
-  out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]]) {\n";
-  out << "  VSOut out;\n";
-  out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
-  out << "  float2 uv[3] = { float2(0.0, 1.0), float2(2.0, 1.0), float2(0.0, -1.0) };\n";
-  out << "  out.position = float4(p[vid % 3], 0.0, 1.0);\n";
-  out << "  out.uv = uv[vid % 3];\n";
-  out << "  return out;\n";
-  out << "}\n";
-  out << "// variant " << variantHash << "\n";
-  return out.str();
-}
-
-std::string makeTexturedFragmentSource(u64 variantHash, bool forceOpaqueAlpha = false) {
-  std::ostringstream out;
-  out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; float2 uv; };\n";
-  out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], texture2d<float> tex0 [[texture(0)]], sampler samp0 [[sampler(0)]]) {\n";
-  out << "  float4 color = tex0.sample(samp0, in.uv);\n";
-  if (forceOpaqueAlpha) {
-    out << "  color.a = 1.0;\n";
-  }
-  out << "  return color;\n";
-  out << "}\n";
-  out << "// variant " << variantHash << "\n";
-  return out.str();
-}
-
-WMT::Reference<WMT::Library> makeLibraryWMT(WMT::Device& device, const std::string& source) {
-  WMT::Error error{};
-  auto lib = device.newLibraryFromSource(source.c_str(), error);
-  if (!lib) {
-    return {};
-  }
-  return lib;
-}
-
-void initShaderArchive(WMT::Device& device, const std::string& path,
-                       WMT::Reference<WMT::BinaryArchive>& archiveOut) {
-  WMT::Error err{};
-  auto archive = device.newBinaryArchive(path.c_str(), err);
-  archiveOut = std::move(archive);
-}
-
-void persistShaderArchiveWMT(WMT::BinaryArchive& archive, const std::string& path) {
-  if (!archive || path.empty()) {
-    return;
-  }
-  WMT::Error err{};
-  archive.serialize(path.c_str(), err);
-}
 
 std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex);
 
@@ -4180,7 +4113,7 @@ class MetalBackendDevice final : public BackendDevice {
     }
     std::lock_guard lock(commandQueue_->mutex_);
     if (*shaderArchive_) {
-      persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
+      persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
     }
     purgeResourcesUnlocked();
   }
@@ -6273,8 +6206,8 @@ class MetalBackendDevice final : public BackendDevice {
       auto future = std::async(std::launch::async, [this, draw, key]() {
         auto vsSource = makeDrawShaderSource(draw, true);
         auto fsSource = makeDrawShaderSource(draw, false);
-        auto vsLib = makeLibraryWMT(wrappedDevice_, vsSource);
-        auto fsLib = makeLibraryWMT(wrappedDevice_, fsSource);
+        auto vsLib = makeLibrary(wrappedDevice_, vsSource);
+        auto fsLib = makeLibrary(wrappedDevice_, fsSource);
         if (!vsLib || !fsLib) {
           return WMT::Reference<WMT::RenderPipelineState>{};
         }
@@ -6311,7 +6244,7 @@ class MetalBackendDevice final : public BackendDevice {
         WMT::Error err{};
         auto pso = wrappedDevice_.newRenderPipelineState(info, err);
         if (pso && *shaderArchive_) {
-          persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
+          persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
         }
         return pso;
       });
@@ -6333,8 +6266,8 @@ class MetalBackendDevice final : public BackendDevice {
       return it->second.future;
     }
     auto future = std::async(std::launch::async, [this, color, pixelFormat]() {
-      auto vsLib = makeLibraryWMT(wrappedDevice_, makeGenericVertexSource(makeHash("fill")));
-      auto fsLib = makeLibraryWMT(wrappedDevice_, makeGenericFragmentSource(color, makeHash("fill")));
+      auto vsLib = makeLibrary(wrappedDevice_, makeGenericVertexSource(makeHash("fill")));
+      auto fsLib = makeLibrary(wrappedDevice_, makeGenericFragmentSource(color, makeHash("fill")));
       if (!vsLib || !fsLib) {
         return WMT::Reference<WMT::RenderPipelineState>{};
       }
@@ -6351,7 +6284,7 @@ class MetalBackendDevice final : public BackendDevice {
       if (*shaderArchive_) info.binary_archive_for_serialization = (*shaderArchive_).handle;
       WMT::Error err{};
       auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-      if (pso && *shaderArchive_) persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
+      if (pso && *shaderArchive_) persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
       return pso;
     });
     auto shared = future.share();
@@ -6373,8 +6306,8 @@ class MetalBackendDevice final : public BackendDevice {
       return it->second.future;
     }
     auto future = std::async(std::launch::async, [this, stretch, pixelFormat]() {
-      auto vsLib = makeLibraryWMT(wrappedDevice_, makeTexturedVertexSource(makeHash("stretch")));
-      auto fsLib = makeLibraryWMT(wrappedDevice_, makeTexturedFragmentSource(makeHash("stretch")));
+      auto vsLib = makeLibrary(wrappedDevice_, makeTexturedVertexSource(makeHash("stretch")));
+      auto fsLib = makeLibrary(wrappedDevice_, makeTexturedFragmentSource(makeHash("stretch")));
       if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
       auto vs = vsLib.newFunction("dxmt9_vs");
       auto fs = fsLib.newFunction("dxmt9_fs");
@@ -6389,7 +6322,7 @@ class MetalBackendDevice final : public BackendDevice {
       if (*shaderArchive_) info.binary_archive_for_serialization = (*shaderArchive_).handle;
       WMT::Error err{};
       auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-      if (pso && *shaderArchive_) persistShaderArchiveWMT(*shaderArchive_, *shaderArchivePath_);
+      if (pso && *shaderArchive_) persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
       return pso;
     });
     auto shared = future.share();
@@ -6518,8 +6451,8 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
   // Copy the retained device into the async lambda; archive pointer remains
   // valid because DeviceImpl (the owner) outlives the Presenter + this task.
   auto future = std::async(std::launch::async, [device, opaqueAlpha, archive, archivePath]() mutable {
-    auto vsLib = makeLibraryWMT(device, makeTexturedVertexSource(makeHash("present")));
-    auto fsLib = makeLibraryWMT(device, makeTexturedFragmentSource(
+    auto vsLib = makeLibrary(device, makeTexturedVertexSource(makeHash("present")));
+    auto fsLib = makeLibrary(device, makeTexturedFragmentSource(
                                      makeHash(opaqueAlpha ? "present-opaque" : "present"), opaqueAlpha));
     if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
     auto vs = vsLib.newFunction("dxmt9_vs");
@@ -6536,7 +6469,7 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
     WMT::Error err{};
     auto pso = device.newRenderPipelineState(info, err);
     if (pso && archive && *archive && archivePath) {
-      persistShaderArchiveWMT(*archive, *archivePath);
+      persistShaderArchive(*archive, *archivePath);
     }
     return pso;
   });

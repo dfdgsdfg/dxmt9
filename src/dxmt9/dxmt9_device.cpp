@@ -1,5 +1,6 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "backend_metal.hpp"
+#include "dxmt9_shader_sources.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <string>
@@ -15,21 +16,6 @@ std::string resolveShaderCachePath() {
   return std::string(buf);
 }
 
-void initShaderArchive(WMT::Device& device, const std::string& path,
-                       WMT::Reference<WMT::BinaryArchive>& archiveOut) {
-  WMT::Error err{};
-  auto archive = device.newBinaryArchive(path.c_str(), err);
-  archiveOut = std::move(archive);
-}
-
-void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path) {
-  if (!archive || path.empty()) {
-    return;
-  }
-  WMT::Error err{};
-  archive.serialize(path.c_str(), err);
-}
-
 class DeviceImpl final : public Device {
  public:
   explicit DeviceImpl(const DEVICE_DESC& desc)
@@ -38,7 +24,7 @@ class DeviceImpl final : public Device {
         limits_(desc.limits),
         shaderArchivePath_(resolveShaderCachePath()) {
     if (wmt_device_) {
-      initShaderArchive(wmt_device_, shaderArchivePath_, shaderArchive_);
+      shaders::initShaderArchive(wmt_device_, shaderArchivePath_, shaderArchive_);
     }
     backend_ = core::makeMetalBackendDevice(limits_, wmt_device_, queue_,
                                              shaderArchive_, shaderArchivePath_);
@@ -50,7 +36,7 @@ class DeviceImpl final : public Device {
     // own writes; this catches any final state.
     backend_.reset();
     if (shaderArchive_) {
-      persistShaderArchive(shaderArchive_, shaderArchivePath_);
+      shaders::persistShaderArchive(shaderArchive_, shaderArchivePath_);
     }
   }
 
