@@ -1,17 +1,24 @@
 #pragma once
 
-// Upper-runtime CommandQueue — owns the WMT::CommandQueue handle and exposes
-// the minimal API that upper consumers (dxmt9::Device, backend, swap chain)
-// need. Mirrors dxmt's class CommandQueue (dxmt/src/dxmt/dxmt_command_queue.hpp)
-// in PUBLIC SHAPE; the full chunk-ring + thread orchestration still lives
-// inside MetalBackendDevice for now and reaches through this object for
-// handle access.
+// Upper-runtime CommandQueue — owns the WMT::CommandQueue handle + the chunk
+// ring state. Mirrors dxmt's class CommandQueue (dxmt/src/dxmt/dxmt_command_queue.hpp).
+// The worker threads (encode/finish/completion) still live on
+// MetalBackendDevice for now; they access queue state through this object.
 
 #include "../../src/winemetal/Metal.hpp"
+#include "../../src/dxmt9/dxmt9_backend_types.hpp"
+#include "../../src/dxmt9/dxmt9_queue.hpp"
+#include "../../src/dxmt9/dxmt9_hud.hpp"
 
+#include <array>
 #include <cstdint>
+#include <deque>
+#include <optional>
 
 namespace dxmt9 {
+
+// Size of the chunk ring. Matches upstream dxmt's kCommandChunkCount.
+inline constexpr size_t kCommandChunkCount = 32;
 
 class CommandQueue {
  public:
@@ -36,14 +43,23 @@ class CommandQueue {
   // The WMT::Device this queue was created on.
   WMT::Device device() const noexcept { return device_; }
 
-  // Sequence counters. Guarded externally by the owning backend's mutex
-  // (the binding into QueueLifecycleController takes raw pointers to these).
-  // Moved here from MetalBackendDevice as the first step of queue-state
-  // consolidation; the actual read/write mutex migration happens in a later
-  // phase when the chunk-ring moves.
+  // Sequence counters + chunk-ring state. Guarded externally by the owning
+  // backend's mutex (the binding into QueueLifecycleController takes raw
+  // pointers to these). Ownership is on CommandQueue; the mutex migration
+  // happens in a later phase along with the worker threads.
   std::uint64_t nextSeqId_ = 1;           // next seq to allocate
   std::uint64_t completedSeqId_ = 0;      // gpu-completed watermark
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
+
+  std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
+  std::optional<size_t> writingSlot_{};
+  size_t writeIndex_ = 0;
+  size_t inflightCount_ = 0;
+  std::deque<size_t> readySlots_{};
+  std::deque<std::uint64_t> completedSeqQueue_{};
+
+  core::metalqueue::QueueLifecycleController queueLifecycle_{};
+  core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
 
  private:
   WMT::Device device_{};

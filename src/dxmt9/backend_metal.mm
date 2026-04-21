@@ -4123,22 +4123,22 @@ class MetalBackendDevice final : public BackendDevice {
     limits_.supportsDepth24Stencil8 = wrappedDevice_.supportsDepth24Stencil8();
     // Shader archive is owned by DeviceImpl; we just reference it.
 
-    queueLifecycle_.bindTrackedSubmissionState({
-        .writingSlot = &writingSlot_,
-        .writeIndex = &writeIndex_,
+    commandQueue_->queueLifecycle_.bindTrackedSubmissionState({
+        .writingSlot = &commandQueue_->writingSlot_,
+        .writeIndex = &commandQueue_->writeIndex_,
         .nextSeqId = &commandQueue_->nextSeqId_,
-        .readySlots = &readySlots_,
-        .completedSeqQueue = &completedSeqQueue_,
-        .inflightCount = &inflightCount_,
+        .readySlots = &commandQueue_->readySlots_,
+        .completedSeqQueue = &commandQueue_->completedSeqQueue_,
+        .inflightCount = &commandQueue_->inflightCount_,
         .completedSeqId = &commandQueue_->completedSeqId_,
         .lastCommittedSeqId = &commandQueue_->lastCommittedSeqId_,
-        .slots = std::span<ChunkSlot>(slots_.data(), slots_.size()),
+        .slots = std::span<ChunkSlot>(commandQueue_->slots_.data(), commandQueue_->slots_.size()),
         .mutex = &mutex_,
         .writeCv = &writeCv_,
         .encodeCv = &encodeCv_,
         .finishCv = &finishCv_,
         .stop = &stop_,
-        .submissionDiagnostics = &submissionDiagnostics_,
+        .submissionDiagnostics = &commandQueue_->submissionDiagnostics_,
         .resolveSurfaceFlags = [this](Handle handle) { return compatFlagsForSurfaceUnlocked(handle); },
     });
 
@@ -4157,7 +4157,7 @@ class MetalBackendDevice final : public BackendDevice {
       finishCv_.notify_all();
       writeCv_.notify_all();
     }
-    queueLifecycle_.notifyPendingCompletionStop();
+    commandQueue_->queueLifecycle_.notifyPendingCompletionStop();
     if (encodeThread_.joinable()) {
       encodeThread_.join();
     }
@@ -4175,7 +4175,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void completionWatcherLoop() {
-    while (queueLifecycle_.processOnePendingCompletion(stop_)) {
+    while (commandQueue_->queueLifecycle_.processOnePendingCompletion(stop_)) {
       // continue until processOnePendingCompletion returns false (stop)
     }
   }
@@ -4645,7 +4645,7 @@ class MetalBackendDevice final : public BackendDevice {
   void present(const SwapDesc& desc) override {
     std::unique_lock lock(mutex_);
     // TLA+: WineCommit
-    queueLifecycle_.presentAndCommit(lock, kMaxInflight, desc, currentBackBuffer_, [this](const ChunkSlot& slot) {
+    commandQueue_->queueLifecycle_.presentAndCommit(lock, kMaxInflight, desc, currentBackBuffer_, [this](const ChunkSlot& slot) {
       updateLastUsedSeqIdsUnlocked(slot);
     });
   }
@@ -4653,7 +4653,7 @@ class MetalBackendDevice final : public BackendDevice {
  void flush() override {
     std::unique_lock lock(mutex_);
     // TLA+: WineCommit
-    queueLifecycle_.flushAndWait(lock, kMaxInflight, [this](const ChunkSlot& slot) {
+    commandQueue_->queueLifecycle_.flushAndWait(lock, kMaxInflight, [this](const ChunkSlot& slot) {
       updateLastUsedSeqIdsUnlocked(slot);
     });
   }
@@ -4702,12 +4702,12 @@ class MetalBackendDevice final : public BackendDevice {
 
   ChunkSlot& currentSlot() {
     // TLA+: RingSafety
-    DXMT_ASSERT(writingSlot_.has_value());
-    return slots_[*writingSlot_];
+    DXMT_ASSERT(commandQueue_->writingSlot_.has_value());
+    return commandQueue_->slots_[*commandQueue_->writingSlot_];
   }
 
   void ensureWritingSlotUnlocked(std::unique_lock<std::mutex>& lock) {
-    (void)queueLifecycle_.ensureWriterSlot(lock, kMaxInflight);
+    (void)commandQueue_->queueLifecycle_.ensureWriterSlot(lock, kMaxInflight);
   }
 
   void updateLastUsedSeqIdsUnlocked(const ChunkSlot& slot) {
@@ -4875,7 +4875,7 @@ class MetalBackendDevice final : public BackendDevice {
     @autoreleasepool {
       while (true) {
         std::unique_lock lock(mutex_);
-        if (!queueLifecycle_.runEncodeIteration(
+        if (!commandQueue_->queueLifecycle_.runEncodeIteration(
                 lock,
                 [this](size_t slotIndex, const ChunkSlot& slot) {
                   return encodeChunk(slotIndex, slot);
@@ -6111,7 +6111,7 @@ class MetalBackendDevice final : public BackendDevice {
       std::lock_guard lock(mutex_);
       CommandBufferDiagnostics diagnostics;
       diagnostics.hasBlit = true;
-      submissionDiagnostics_.inspect(commandBuffer.handle, diagnostics, "gpu-dump");
+      commandQueue_->submissionDiagnostics_.inspect(commandBuffer.handle, diagnostics, "gpu-dump");
     }
 
     // Read back via a buffer blit
@@ -6419,7 +6419,7 @@ class MetalBackendDevice final : public BackendDevice {
     @autoreleasepool {
       while (true) {
         std::unique_lock lock(mutex_);
-        if (!queueLifecycle_.runFinishIteration(lock, [this](u64) {
+        if (!commandQueue_->queueLifecycle_.runFinishIteration(lock, [this](u64) {
               argbufArena_.reclaim(commandQueue_->completedSeqId_);
               lambdaStoreArena_.reclaim(commandQueue_->completedSeqId_);
               stagingArena_.reclaim(commandQueue_->completedSeqId_);
@@ -6433,7 +6433,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void waitForSequenceUnlocked(u64 seqId, std::unique_lock<std::mutex>& lock) {
-    queueLifecycle_.waitForSequence(lock, seqId);
+    commandQueue_->queueLifecycle_.waitForSequence(lock, seqId);
   }
 
   void tryGarbageCollectUnlocked() {
@@ -6471,15 +6471,8 @@ class MetalBackendDevice final : public BackendDevice {
   std::condition_variable finishCv_;
   std::condition_variable writeCv_;
   bool stop_ = true;
-  std::array<ChunkSlot, kRingSize> slots_{};
-  std::optional<size_t> writingSlot_;
-  size_t writeIndex_ = 0;
-  // Sequence counters moved to dxmt9::CommandQueue (C1). Accessed here via
-  // commandQueue_->nextSeqId_ etc. Binding pointers below likewise target
-  // the CommandQueue's fields.
-  size_t inflightCount_ = 0;
-  std::deque<size_t> readySlots_;
-  std::deque<u64> completedSeqQueue_;
+  // Chunk-ring state + seqId counters + queueLifecycle + diagnostics moved
+  // to dxmt9::CommandQueue (C1, C7a). Accessed via commandQueue_->.
   u64 nextHandle_ = 1;
   Handle currentBackBuffer_{};
   bool backBufferDiscardAfterPresent_ = false;
@@ -6501,8 +6494,6 @@ class MetalBackendDevice final : public BackendDevice {
   // backend (which joins threads) before the archive is released.
   WMT::Reference<WMT::BinaryArchive>* shaderArchive_ = nullptr;
   const std::string* shaderArchivePath_ = nullptr;
-  metalqueue::QueueLifecycleController queueLifecycle_{};
-  metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
   bool ready_ = false;
 };
 
