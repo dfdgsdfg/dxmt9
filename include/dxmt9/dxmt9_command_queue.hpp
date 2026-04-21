@@ -14,8 +14,10 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <optional>
+#include <thread>
 
 namespace dxmt9 {
 
@@ -44,6 +46,15 @@ class CommandQueue {
 
   // The WMT::Device this queue was created on.
   WMT::Device device() const noexcept { return device_; }
+
+  // Thread management — owned by CommandQueue (C7c). The backend supplies
+  // the loop bodies at startup and MUST call stopThreads() before tearing
+  // down its state so the threads (which call back into backend methods)
+  // are joined while that state is still valid.
+  void startThreads(std::function<void()> encodeLoop,
+                     std::function<void()> finishLoop,
+                     std::function<void()> completionLoop);
+  void stopThreads();
 
   // Sequence counters + chunk-ring state. Guarded externally by the owning
   // backend's mutex (the binding into QueueLifecycleController takes raw
@@ -77,6 +88,14 @@ class CommandQueue {
   WMT::Reference<WMT::CommandQueue> queue_{};
   // Non-owning view exposed via raw() — kept in sync with queue_.
   WMT::CommandQueue queueView_{};
+
+  // Worker threads (C7c). Owned here so CommandQueue's dtor can deterministically
+  // join them; backend is responsible for signalling stop via stopThreads()
+  // while its own state is still valid.
+  std::thread encodeThread_{};
+  std::thread finishThread_{};
+  std::thread completionThread_{};
+  bool threadsStarted_ = false;
 };
 
 }  // namespace dxmt9

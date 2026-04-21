@@ -4154,30 +4154,18 @@ class MetalBackendDevice final : public BackendDevice {
         .resolveSurfaceFlags = [this](Handle handle) { return compatFlagsForSurfaceUnlocked(handle); },
     });
 
-    commandQueue_->stop_ = false;
-    encodeThread_ = std::thread([this] { encodeLoop(); });
-    finishThread_ = std::thread([this] { finishLoop(); });
-    completionThread_ = std::thread([this] { completionWatcherLoop(); });
+    commandQueue_->startThreads(
+        [this] { encodeLoop(); },
+        [this] { finishLoop(); },
+        [this] { completionWatcherLoop(); });
     ready_ = true;
   }
 
   ~MetalBackendDevice() override {
-    {
-      std::lock_guard lock(commandQueue_->mutex_);
-      commandQueue_->stop_ = true;
-      commandQueue_->encodeCv_.notify_all();
-      commandQueue_->finishCv_.notify_all();
-      commandQueue_->writeCv_.notify_all();
-    }
-    commandQueue_->queueLifecycle_.notifyPendingCompletionStop();
-    if (encodeThread_.joinable()) {
-      encodeThread_.join();
-    }
-    if (completionThread_.joinable()) {
-      completionThread_.join();
-    }
-    if (finishThread_.joinable()) {
-      finishThread_.join();
+    // Threads are owned by CommandQueue but run bodies on *this; stop them
+    // before tearing down our own state.
+    if (commandQueue_) {
+      commandQueue_->stopThreads();
     }
     std::lock_guard lock(commandQueue_->mutex_);
     if (*shaderArchive_) {
@@ -6475,9 +6463,9 @@ class MetalBackendDevice final : public BackendDevice {
   BackendLimits limits_{};
   WMT::Reference<WMT::Device> wrappedDevice_{};
   dxmt9::CommandQueue* commandQueue_ = nullptr;
-  std::thread encodeThread_;
-  std::thread finishThread_;
-  std::thread completionThread_;  // dxmt-style: waits on cmdbuf.waitUntilCompleted()
+  // Threads moved to CommandQueue (C7c). Loop bodies supplied via
+  // commandQueue_->startThreads() in the ctor; joined via stopThreads() in
+  // the dtor before any other teardown.
   // mutex_, condition variables, stop_ all moved to dxmt9::CommandQueue (C7b).
   // Accessed via commandQueue_->. Threads remain here because their bodies
   // call into this class's methods (encodeChunk, tryGarbageCollectUnlocked,
