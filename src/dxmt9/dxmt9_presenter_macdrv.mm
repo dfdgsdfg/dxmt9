@@ -2,7 +2,6 @@
 
 #include "dxmt9_queue.hpp"
 #include "../winemetal/Metal.hpp"
-#include "util/config/config.hpp"
 #include "util/dynamic_symbol.hpp"
 
 #import <AppKit/AppKit.h>
@@ -14,70 +13,44 @@ namespace dxmt9::presentimpl {
 
 namespace {
 
-struct WineMacInterop {
-  using GetCocoaViewFn = NSView* (*)(void*);
-  using GetCocoaWindowFn = void* (*)(void*, int);
-  using CreateMetalDeviceFn = void* (*)();
-  using ReleaseMetalDeviceFn = void (*)(void*);
-  using CreateMetalViewFn = void* (*)(void*, void*);
-  using GetMetalLayerFn = void* (*)(void*);
-  using ReleaseMetalViewFn = void (*)(void*);
+// Legacy fallback only — used when the running macdrv predates the
+// `macdrv_functions` table and the individual get_win_data/... symbols
+// that WMT::CreateMetalViewFromHWND needs. Looks up the view directly
+// and installs a fresh CAMetalLayer on it.
+using GetCocoaViewFn = NSView* (*)(void*);
 
-  GetCocoaViewFn getCocoaView = nullptr;
-  GetCocoaWindowFn getCocoaWindow = nullptr;
-  CreateMetalDeviceFn createMetalDevice = nullptr;
-  ReleaseMetalDeviceFn releaseMetalDevice = nullptr;
-  CreateMetalViewFn createMetalView = nullptr;
-  GetMetalLayerFn getMetalLayer = nullptr;
-  ReleaseMetalViewFn releaseMetalView = nullptr;
-};
-
-WineMacInterop resolveWineMacInterop() {
-  WineMacInterop interop;
-  interop.getCocoaView =
-      dxmt9::util::resolveDefaultSymbol<WineMacInterop::GetCocoaViewFn>("macdrv_get_cocoa_view");
-  if (interop.getCocoaView) {
-    return interop;
-  }
-
-  auto* functions = dxmt9::util::resolveDefaultSymbol<void* const*>("macdrv_functions", "_macdrv_functions");
-  if (!functions) {
-    return interop;
-  }
-
-  interop.getCocoaWindow = reinterpret_cast<WineMacInterop::GetCocoaWindowFn>(functions[3]);
-  interop.createMetalDevice = reinterpret_cast<WineMacInterop::CreateMetalDeviceFn>(functions[4]);
-  interop.releaseMetalDevice = reinterpret_cast<WineMacInterop::ReleaseMetalDeviceFn>(functions[5]);
-  interop.createMetalView = reinterpret_cast<WineMacInterop::CreateMetalViewFn>(functions[6]);
-  interop.getMetalLayer = reinterpret_cast<WineMacInterop::GetMetalLayerFn>(functions[7]);
-  interop.releaseMetalView = reinterpret_cast<WineMacInterop::ReleaseMetalViewFn>(functions[8]);
-  return interop;
+GetCocoaViewFn legacyGetCocoaView() {
+  static const auto fn =
+      dxmt9::util::resolveDefaultSymbol<GetCocoaViewFn>("macdrv_get_cocoa_view");
+  return fn;
 }
 
-const WineMacInterop& wineMacInterop() {
-  static const WineMacInterop interop = resolveWineMacInterop();
-  return interop;
-}
-
-bool directLayerAttachEnabled() {
-  static const bool enabled = dxmt9::util::getenvFlag("DXMT_DIRECT_LAYER_ATTACH");
-  return enabled;
-}
-
-NSView* getNSViewForHwnd(u64 hwnd) {
-  const auto& interop = wineMacInterop();
-  if (!interop.getCocoaView) {
+NSView* getLegacyNSViewForHwnd(u64 hwnd) {
+  auto fn = legacyGetCocoaView();
+  if (!fn) {
     return nil;
   }
-  return interop.getCocoaView(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)));
-}
-
-uintptr_t toOpaqueHandle(void* value) {
-  return reinterpret_cast<uintptr_t>(value);
+  return fn(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)));
 }
 
 CAMetalLayer* asCAMetalLayer(uintptr_t handle) {
   return reinterpret_cast<CAMetalLayer*>(handle);
+}
+
+CAMetalLayer* installFreshLayerOnView(NSView* view) {
+  __block CAMetalLayer* result = nil;
+  dispatch_sync(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
+      if (!view) {
+        return;
+      }
+      CAMetalLayer* newLayer = [CAMetalLayer layer];
+      view.wantsLayer = YES;
+      view.layer = newLayer;
+      result = [newLayer retain];
+    }
+  });
+  return result;
 }
 
 }  // namespace
@@ -105,39 +78,23 @@ LayerAcquisition acquireLayerForHwnd(u64 hwnd, u64 seqId) {
   }
   traceEvent("layer.ensure.begin", seqId, hwnd);
 
-  const auto& interop = wineMacInterop();
-
-  // Legacy path: old macdrv exports the view directly and we install a fresh
-  // CAMetalLayer on it.
-  if (interop.getCocoaView) {
-    __block CAMetalLayer* legacyLayer = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      @autoreleasepool {
-        NSView* view = getNSViewForHwnd(hwnd);
-        if (!view) {
-          return;
-        }
-        CAMetalLayer* newLayer = [CAMetalLayer layer];
-        view.wantsLayer = YES;
-        view.layer = newLayer;
-        legacyLayer = newLayer;
-      }
-    });
-    if (!legacyLayer) {
+  // Path 1: legacy macdrv — predates `macdrv_functions` / get_win_data. The
+  // `macdrv_get_cocoa_view` export returns the NSView directly; we install
+  // a fresh CAMetalLayer on it.
+  if (auto* view = getLegacyNSViewForHwnd(hwnd)) {
+    traceEvent("legacy-view.ok", seqId, hwnd);
+    CAMetalLayer* layer = installFreshLayerOnView(view);
+    if (!layer) {
       traceEvent("legacy-view.nil", seqId, hwnd);
       return result;
     }
-    result.layerHandle = static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>([legacyLayer retain]));
+    result.layerHandle = static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>(layer));
     return result;
   }
 
-  if (!interop.getCocoaWindow) {
-    traceEvent("interop.unavailable", seqId, hwnd);
-    return result;
-  }
-
-  traceEvent("table-path.begin", seqId, hwnd);
-  traceEvent("metal-device.begin", seqId, hwnd);
+  // Path 2 (primary): winemetal's CreateMetalViewFromHWND encapsulates the
+  // full macdrv_functions lookup + get_win_data + macdrv_view_create_metal_view
+  // behind the thunk boundary. No direct macdrv symbol resolution here.
   auto macdrvDevice = WMT::CreateMacdrvMetalDevice();
   if (!macdrvDevice) {
     traceEvent("metal-device.nil", seqId, hwnd);
@@ -146,100 +103,20 @@ LayerAcquisition acquireLayerForHwnd(u64 hwnd, u64 seqId) {
   result.macdrvDeviceHandle = macdrvDevice.handle;
   traceEvent("metal-device.ok", seqId, hwnd);
 
-  __block void* cocoaView = nullptr;
-  __block bool haveWindowObject = false;
-  for (int queryMode : {0, 1}) {
-    traceEvent(queryMode == 0 ? "cocoa-object.begin.0" : "cocoa-object.begin.1", seqId, hwnd);
-    void* cocoaObject = interop.getCocoaWindow(reinterpret_cast<void*>(static_cast<uintptr_t>(hwnd)), queryMode);
-    if (!cocoaObject) {
-      traceEvent(queryMode == 0 ? "cocoa-object.nil.0" : "cocoa-object.nil.1", seqId, hwnd);
-      continue;
-    }
-    traceEvent(queryMode == 0 ? "cocoa-object.ok.0" : "cocoa-object.ok.1", seqId, hwnd);
-    traceEvent("content-view.begin", seqId, hwnd);
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      @autoreleasepool {
-        id object = static_cast<id>(cocoaObject);
-        if ([object isKindOfClass:[NSView class]]) {
-          cocoaView = object;
-          return;
-        }
-        if ([object isKindOfClass:[NSWindow class]]) {
-          haveWindowObject = true;
-          cocoaView = [static_cast<NSWindow*>(object) contentView];
-        }
-      }
-    });
-    if (cocoaView) {
-      break;
-    }
-  }
-  if (!cocoaView) {
-    traceEvent(haveWindowObject ? "content-view.nil" : "cocoa-object.nil", seqId, hwnd);
-    releaseLayerAcquisition(result);
-    return result;
-  }
-  traceEvent("content-view.ok", seqId, hwnd);
-
-  if (directLayerAttachEnabled()) {
-    __block CAMetalLayer* directLayer = nil;
-    traceEvent("direct-layer.begin", seqId, hwnd);
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      @autoreleasepool {
-        NSView* view = static_cast<NSView*>(cocoaView);
-        if (!view) {
-          return;
-        }
-        CAMetalLayer* newLayer = [CAMetalLayer layer];
-        view.wantsLayer = YES;
-        view.layer = newLayer;
-        newLayer.opaque = YES;
-        newLayer.frame = view.bounds;
-        if (view.window.screen) {
-          newLayer.contentsScale = view.window.screen.backingScaleFactor;
-        } else if (NSScreen.mainScreen) {
-          newLayer.contentsScale = NSScreen.mainScreen.backingScaleFactor;
-        }
-        directLayer = newLayer;
-      }
-    });
-    if (directLayer) {
-      traceEvent("direct-layer.ok", seqId, hwnd);
-      result.layerHandle = static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>([directLayer retain]));
-      // macdrvDevice we created is not needed on this path.
-      if (result.macdrvDeviceHandle) {
-        WMT::MacdrvMetalDevice{result.macdrvDeviceHandle}.release();
-        result.macdrvDeviceHandle = 0;
-      }
-      return result;
-    }
-    traceEvent("direct-layer.nil", seqId, hwnd);
-  }
-
-  traceEvent("metal-view.begin", seqId, hwnd);
-  WMT::MetalLayer wrappedLayer;
-  auto metalView = WMT::CreateMetalViewFromCocoaView(
-      static_cast<obj_handle_t>(toOpaqueHandle(cocoaView)),
-      WMT::MacdrvMetalDevice{result.macdrvDeviceHandle},
-      wrappedLayer);
-  if (!metalView) {
+  WMT::MetalLayer layer;
+  auto metalView = WMT::CreateMetalViewFromHWND(static_cast<intptr_t>(hwnd), macdrvDevice, layer);
+  if (!metalView || !layer) {
     traceEvent("metal-view.nil", seqId, hwnd);
     releaseLayerAcquisition(result);
     return result;
   }
   traceEvent("metal-view.ok", seqId, hwnd);
 
-  if (!wrappedLayer) {
-    traceEvent("metal-layer.nil", seqId, hwnd);
-    metalView.release();
-    releaseLayerAcquisition(result);
-    return result;
-  }
-  traceEvent("metal-layer.ok", seqId, hwnd);
-
+  // Retain the layer for ourselves; winemetal returns +1 on the view but the
+  // layer comes from -[macdrv_view metalLayer] which is +0.
   result.layerHandle =
-      static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>([asCAMetalLayer(wrappedLayer.handle) retain]));
-  result.metalViewHandle = static_cast<obj_handle_t>(metalView.handle);
+      static_cast<obj_handle_t>(reinterpret_cast<uintptr_t>([asCAMetalLayer(layer.handle) retain]));
+  result.metalViewHandle = metalView.handle;
   return result;
 }
 
