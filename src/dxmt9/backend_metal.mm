@@ -18,6 +18,7 @@
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_resource_pool.hpp"
+#include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_service.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "../winemetal/Metal.hpp"
@@ -466,83 +467,9 @@ struct DrawUniforms {
   u32 fogMode = static_cast<u32>(FogMode::None);
 };
 
-class RingArena {
- public:
-  explicit RingArena(size_t capacity = 1 << 20) : storage_(capacity) {}
-
-  void reclaim(u64 completedSeqId) {
-    while (!allocations_.empty() && allocations_.front().seqId <= completedSeqId) {
-      cursor_ = std::max(cursor_, allocations_.front().offset + allocations_.front().size);
-      allocations_.pop_front();
-    }
-    if (allocations_.empty()) {
-      cursor_ = 0;
-    }
-  }
-
-  std::byte* allocateBytes(size_t size, size_t alignment, u64 seqId) {
-    if (size == 0 || storage_.empty()) {
-      return nullptr;
-    }
-    const size_t alignedSize = alignUp(size, alignment);
-    if (alignedSize > storage_.size()) {
-      return nullptr;
-    }
-
-    auto canPlace = [&](size_t offset) {
-      if (offset + alignedSize > storage_.size()) {
-        return false;
-      }
-      for (const auto& allocation : allocations_) {
-        const size_t begin = allocation.offset;
-        const size_t end = allocation.offset + allocation.size;
-        const size_t newBegin = offset;
-        const size_t newEnd = offset + alignedSize;
-        if (!(newEnd <= begin || newBegin >= end)) {
-          return false;
-        }
-      }
-      return true;
-    };
-
-    size_t offset = alignUp(cursor_, alignment);
-    if (!canPlace(offset)) {
-      offset = 0;
-      if (!canPlace(offset)) {
-        // TLA+: RingSafety
-        DXMT_ASSERT(false && "ring arena exhausted");
-        return nullptr;
-      }
-    }
-
-    allocations_.push_back({offset, alignedSize, seqId});
-    cursor_ = offset + alignedSize;
-    return storage_.data() + offset;
-  }
-
-  template <typename T>
-  T* allocate(u64 seqId, size_t count = 1) {
-    return reinterpret_cast<T*>(allocateBytes(sizeof(T) * count, alignof(T), seqId));
-  }
-
- private:
-  struct Allocation {
-    size_t offset = 0;
-    size_t size = 0;
-    u64 seqId = 0;
-  };
-
-  static size_t alignUp(size_t value, size_t alignment) {
-    if (alignment <= 1) {
-      return value;
-    }
-    return (value + alignment - 1) & ~(alignment - 1);
-  }
-
-  std::vector<std::byte> storage_;
-  size_t cursor_ = 0;
-  std::deque<Allocation> allocations_;
-};
+// RingArena + FrameAllocators moved to dxmt9_ring_arena.hpp
+// (dxmt9::scratch:: namespace). Alias keeps short names here.
+using RingArena = dxmt9::scratch::RingArena;
 
 // ShaderVariantKey / DepthStencilKey / PipelineCache all live in
 // dxmt9_pipeline_cache.{hpp,cpp}; aliased above.
@@ -554,15 +481,7 @@ class RingArena {
 using ResourcePool = dxmt9::resources::Pool;
 
 // Per-frame bump-ring allocators used by the encode thread for transient
-// buffers (arg buffers, lambda capture storage, upload staging, copy temp).
-// All four are reclaimed in lockstep on the finish path keyed by
-// completedSeqId_.
-struct FrameAllocators {
-  RingArena argbuf{1 << 20};
-  RingArena lambdaStore{1 << 18};
-  RingArena staging{1 << 20};
-  RingArena copyTemp{1 << 20};
-};
+using FrameAllocators = dxmt9::scratch::FrameAllocators;
 
 NSString* makeNSString(const std::string& text) {
   return [[NSString alloc] initWithUTF8String:text.c_str()];
@@ -4383,10 +4302,7 @@ class MetalBackendDevice final : public BackendDevice {
                   return encodeChunk(slotIndex, slot);
                 },
                 [this](u64) {
-                  allocators_.argbuf.reclaim(commandQueue_->completedSeqId_);
-                  allocators_.lambdaStore.reclaim(commandQueue_->completedSeqId_);
-                  allocators_.staging.reclaim(commandQueue_->completedSeqId_);
-                  allocators_.copyTemp.reclaim(commandQueue_->completedSeqId_);
+                  allocators_.reclaim(commandQueue_->completedSeqId_);
                 })) {
           return;
         }
@@ -5900,10 +5816,7 @@ class MetalBackendDevice final : public BackendDevice {
       while (true) {
         std::unique_lock lock(commandQueue_->mutex_);
         if (!commandQueue_->queueLifecycle_.runFinishIteration(lock, [this](u64) {
-              allocators_.argbuf.reclaim(commandQueue_->completedSeqId_);
-              allocators_.lambdaStore.reclaim(commandQueue_->completedSeqId_);
-              allocators_.staging.reclaim(commandQueue_->completedSeqId_);
-              allocators_.copyTemp.reclaim(commandQueue_->completedSeqId_);
+              allocators_.reclaim(commandQueue_->completedSeqId_);
               tryGarbageCollectUnlocked();
             })) {
           return;
