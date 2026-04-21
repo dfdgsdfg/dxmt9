@@ -5979,21 +5979,6 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
-  dxmt9::Presenter* ensurePresenterLocked(u64 hwnd, u64 seqId) {
-    auto it = presenters_.find(hwnd);
-    if (it != presenters_.end()) {
-      return it->second.get();
-    }
-    auto presenter = std::make_unique<dxmt9::Presenter>(wrappedDevice_, hwnd, seqId,
-                                                          shaderArchive_, shaderArchivePath_);
-    if (!presenter->valid()) {
-      return nullptr;
-    }
-    auto* raw = presenter.get();
-    presenters_.emplace(hwnd, std::move(presenter));
-    return raw;
-  }
-
   void encodePresent(WMT::CommandBuffer& commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
     dxmt9::presentimpl::traceEvent("begin", seqId, present.window.value);
     if (queueTraceEnabled()) {
@@ -6045,14 +6030,10 @@ class MetalBackendDevice final : public BackendDevice {
       emitQueueTraceLine(out.str());
     }
 
-    // Prefer the Presenter owned by the originating core::SwapChain (passed
-    // through SwapDesc). Fall back to the legacy per-backend map for paths
-    // that never attached a swap chain (defensive; expected to be unused).
+    // The originating core::SwapChain owns the Presenter and passes it via
+    // SwapDesc. Missing presenter = no layer available (hwnd=0 or failed
+    // acquisition in SwapChain::ensurePresenter).
     dxmt9::Presenter* presenter = present.presenter;
-    if (!presenter && present.window.value != 0) {
-      std::lock_guard lock(presentersMutex_);
-      presenter = ensurePresenterLocked(present.window.value, seqId);
-    }
     if (!presenter) {
       dxmt9::presentimpl::traceEvent("missing-layer", seqId, present.window.value);
       return;
@@ -6510,8 +6491,7 @@ class MetalBackendDevice final : public BackendDevice {
   std::unordered_map<u64, SurfaceRecord> surfaces_;
   std::unordered_set<u64> dumpedGpuTextures_;
   PipelineCache pipelineCache_{};
-  std::unordered_map<u64, std::unique_ptr<dxmt9::Presenter>> presenters_{};
-  std::mutex presentersMutex_{};
+  // presenters_ map removed — Presenter ownership lives on core::SwapChain.
   RingArena argbufArena_{1 << 20};
   RingArena lambdaStoreArena_{1 << 18};
   RingArena stagingArena_{1 << 20};
