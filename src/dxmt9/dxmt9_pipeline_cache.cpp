@@ -1,0 +1,115 @@
+#include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_format_convert.hpp"
+
+#include <cstdint>
+
+namespace dxmt9::pipeline {
+
+namespace {
+constexpr u64 kFnvOffset = 1469598103934665603ull;
+constexpr u64 kFnvPrime = 1099511628211ull;
+
+inline u64 mix(u64 hash, u64 value) {
+  hash ^= value;
+  hash *= kFnvPrime;
+  return hash;
+}
+}  // namespace
+
+std::size_t BlendAttachmentKeyHash::operator()(const BlendAttachmentKey& key) const noexcept {
+  u64 hash = kFnvOffset;
+  hash = mix(hash, static_cast<u64>(key.blendingEnabled));
+  hash = mix(hash, key.rgbBlendOperation);
+  hash = mix(hash, key.alphaBlendOperation);
+  hash = mix(hash, key.sourceRGBBlendFactor);
+  hash = mix(hash, key.destinationRGBBlendFactor);
+  hash = mix(hash, key.sourceAlphaBlendFactor);
+  hash = mix(hash, key.destinationAlphaBlendFactor);
+  hash = mix(hash, key.colorWriteMask);
+  hash = mix(hash, key.pixelFormat);
+  return static_cast<std::size_t>(hash);
+}
+
+std::size_t StencilFaceKeyHash::operator()(const StencilFaceKey& key) const noexcept {
+  u64 hash = kFnvOffset;
+  hash = mix(hash, static_cast<u64>(key.enabled));
+  hash = mix(hash, key.compareFunction);
+  hash = mix(hash, key.failureOperation);
+  hash = mix(hash, key.depthFailureOperation);
+  hash = mix(hash, key.passOperation);
+  hash = mix(hash, key.readMask);
+  hash = mix(hash, key.writeMask);
+  return static_cast<std::size_t>(hash);
+}
+
+std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const noexcept {
+  u64 hash = key.hash;
+  hash = mix(hash, static_cast<u64>(key.textured));
+  hash = mix(hash, static_cast<u64>(key.linear));
+  hash = mix(hash, static_cast<u64>(key.clipPlanes));
+  hash = mix(hash, static_cast<u64>(key.alphaTest));
+  hash = mix(hash, static_cast<u64>(key.alphaToCoverage));
+  hash = mix(hash, key.sampleCount);
+  for (auto fmt : key.colorFormats) {
+    hash = mix(hash, fmt);
+  }
+  for (const auto& b : key.blend) {
+    hash = mix(hash, static_cast<u64>(b.blendingEnabled));
+    hash = mix(hash, b.rgbBlendOperation);
+    hash = mix(hash, b.alphaBlendOperation);
+    hash = mix(hash, b.sourceRGBBlendFactor);
+    hash = mix(hash, b.destinationRGBBlendFactor);
+    hash = mix(hash, b.sourceAlphaBlendFactor);
+    hash = mix(hash, b.destinationAlphaBlendFactor);
+    hash = mix(hash, b.colorWriteMask);
+    hash = mix(hash, b.pixelFormat);
+  }
+  hash = mix(hash, key.depthFormat);
+  hash = mix(hash, key.stencilFormat);
+  return static_cast<std::size_t>(hash);
+}
+
+std::size_t DepthStencilKeyHash::operator()(const DepthStencilKey& key) const noexcept {
+  u64 hash = kFnvOffset;
+  hash = mix(hash, static_cast<u64>(key.depthEnable));
+  hash = mix(hash, static_cast<u64>(key.depthWrite));
+  hash = mix(hash, key.depthFunc);
+  StencilFaceKeyHash faceHash{};
+  hash = mix(hash, static_cast<u64>(faceHash(key.front)));
+  hash = mix(hash, static_cast<u64>(faceHash(key.back)));
+  return static_cast<std::size_t>(hash);
+}
+
+WMT::Reference<WMT::DepthStencilState> Cache::depthStencilStateFor(WMT::Device& device,
+                                                                     const DepthStencilKey& key) {
+  std::lock_guard lock(mutex);
+  if (auto it = depth.find(key); it != depth.end()) {
+    return it->second;
+  }
+  WMTDepthStencilInfo info{};
+  info.depth_compare_function =
+      static_cast<WMTCompareFunction>(convert::toCompareFunction(key.depthFunc));
+  info.depth_write_enabled = key.depthEnable && key.depthWrite;
+  auto applyFace = [](WMTStencilInfo& stencilInfo, const StencilFaceKey& face) {
+    stencilInfo.enabled = face.enabled;
+    stencilInfo.stencil_compare_function =
+        static_cast<WMTCompareFunction>(convert::toCompareFunction(face.compareFunction));
+    stencilInfo.stencil_fail_op =
+        static_cast<WMTStencilOperation>(convert::toStencilOperation(face.failureOperation));
+    stencilInfo.depth_fail_op =
+        static_cast<WMTStencilOperation>(convert::toStencilOperation(face.depthFailureOperation));
+    stencilInfo.depth_stencil_pass_op =
+        static_cast<WMTStencilOperation>(convert::toStencilOperation(face.passOperation));
+    stencilInfo.read_mask = static_cast<uint8_t>(face.readMask);
+    stencilInfo.write_mask = static_cast<uint8_t>(face.writeMask);
+  };
+  if (key.front.enabled || key.back.enabled) {
+    applyFace(info.front_stencil, key.front);
+    applyFace(info.back_stencil, key.back.enabled ? key.back : key.front);
+  }
+  auto state = device.newDepthStencilState(info);
+  depth.emplace(key, state);
+  return state;
+}
+
+}  // namespace dxmt9::pipeline

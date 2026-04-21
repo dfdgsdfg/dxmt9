@@ -15,6 +15,7 @@
 #include "dxmt9_queue.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_shader_service.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "../winemetal/Metal.hpp"
@@ -393,77 +394,19 @@ HazardBloom makeDrawReadBloom(const DrawDesc& draw) {
   return bloom;
 }
 
-struct BlendAttachmentKey {
-  bool blendingEnabled = false;
-  u32 rgbBlendOperation = static_cast<u32>(BlendOp::Add);
-  u32 alphaBlendOperation = static_cast<u32>(BlendOp::Add);
-  u32 sourceRGBBlendFactor = static_cast<u32>(BlendFactor::One);
-  u32 destinationRGBBlendFactor = static_cast<u32>(BlendFactor::Zero);
-  u32 sourceAlphaBlendFactor = static_cast<u32>(BlendFactor::One);
-  u32 destinationAlphaBlendFactor = static_cast<u32>(BlendFactor::Zero);
-  u32 colorWriteMask = 0xfu;
-  u32 pixelFormat = 0;
-
-  friend bool operator==(const BlendAttachmentKey&, const BlendAttachmentKey&) = default;
-};
-
-struct BlendAttachmentKeyHash {
-  size_t operator()(const BlendAttachmentKey& key) const noexcept {
-    u64 hash = 1469598103934665603ull;
-    hash ^= static_cast<u64>(key.blendingEnabled);
-    hash *= 1099511628211ull;
-    hash ^= key.rgbBlendOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.alphaBlendOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.sourceRGBBlendFactor;
-    hash *= 1099511628211ull;
-    hash ^= key.destinationRGBBlendFactor;
-    hash *= 1099511628211ull;
-    hash ^= key.sourceAlphaBlendFactor;
-    hash *= 1099511628211ull;
-    hash ^= key.destinationAlphaBlendFactor;
-    hash *= 1099511628211ull;
-    hash ^= key.colorWriteMask;
-    hash *= 1099511628211ull;
-    hash ^= key.pixelFormat;
-    hash *= 1099511628211ull;
-    return static_cast<size_t>(hash);
-  }
-};
-
-struct StencilFaceKey {
-  bool enabled = false;
-  u32 compareFunction = static_cast<u32>(CompareFunc::Always);
-  u32 failureOperation = static_cast<u32>(StencilOp::Keep);
-  u32 depthFailureOperation = static_cast<u32>(StencilOp::Keep);
-  u32 passOperation = static_cast<u32>(StencilOp::Keep);
-  u32 readMask = 0xffu;
-  u32 writeMask = 0xffu;
-
-  friend bool operator==(const StencilFaceKey&, const StencilFaceKey&) = default;
-};
-
-struct StencilFaceKeyHash {
-  size_t operator()(const StencilFaceKey& key) const noexcept {
-    u64 hash = 1469598103934665603ull;
-    hash ^= static_cast<u64>(key.enabled);
-    hash *= 1099511628211ull;
-    hash ^= key.compareFunction;
-    hash *= 1099511628211ull;
-    hash ^= key.failureOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.depthFailureOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.passOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.readMask;
-    hash *= 1099511628211ull;
-    hash ^= key.writeMask;
-    hash *= 1099511628211ull;
-    return static_cast<size_t>(hash);
-  }
-};
+// Pipeline-cache key types + Cache class moved to dxmt9_pipeline_cache.{hpp,cpp}
+// (dxmt9::pipeline:: namespace). Imported as aliases so the rest of this TU
+// keeps using the short names.
+using BlendAttachmentKey = dxmt9::pipeline::BlendAttachmentKey;
+using BlendAttachmentKeyHash = dxmt9::pipeline::BlendAttachmentKeyHash;
+using StencilFaceKey = dxmt9::pipeline::StencilFaceKey;
+using StencilFaceKeyHash = dxmt9::pipeline::StencilFaceKeyHash;
+using ShaderVariantKey = dxmt9::pipeline::ShaderVariantKey;
+using ShaderVariantKeyHash = dxmt9::pipeline::ShaderVariantKeyHash;
+using DepthStencilKey = dxmt9::pipeline::DepthStencilKey;
+using DepthStencilKeyHash = dxmt9::pipeline::DepthStencilKeyHash;
+using PipelineCacheEntry = dxmt9::pipeline::Entry;
+using PipelineCache = dxmt9::pipeline::Cache;
 
 AttachmentKey makeAttachmentKey(const RenderTargetSnapshot& rts) {
   AttachmentKey key;
@@ -619,135 +562,8 @@ class RingArena {
   std::deque<Allocation> allocations_;
 };
 
-struct ShaderVariantKey {
-  u64 hash = 0;
-  bool textured = false;
-  bool linear = false;
-  bool clipPlanes = false;
-  bool alphaTest = false;
-  bool alphaToCoverage = false;
-  u32 sampleCount = 1;
-  std::array<u32, kMaxRenderTargets> colorFormats{};
-  std::array<BlendAttachmentKey, kMaxRenderTargets> blend{};
-  u32 depthFormat = 0;
-  u32 stencilFormat = 0;
-
-  friend bool operator==(const ShaderVariantKey&, const ShaderVariantKey&) = default;
-};
-
-struct ShaderVariantKeyHash {
-  size_t operator()(const ShaderVariantKey& key) const noexcept {
-    u64 hash = key.hash;
-    hash ^= static_cast<u64>(key.textured);
-    hash *= 1099511628211ull;
-    hash ^= static_cast<u64>(key.linear);
-    hash *= 1099511628211ull;
-    hash ^= static_cast<u64>(key.clipPlanes);
-    hash *= 1099511628211ull;
-    hash ^= static_cast<u64>(key.alphaTest);
-    hash *= 1099511628211ull;
-    hash ^= static_cast<u64>(key.alphaToCoverage);
-    hash *= 1099511628211ull;
-    hash ^= key.sampleCount;
-    hash *= 1099511628211ull;
-    for (auto fmt : key.colorFormats) {
-      hash ^= fmt;
-      hash *= 1099511628211ull;
-    }
-    for (const auto& blend : key.blend) {
-      hash ^= static_cast<u64>(blend.blendingEnabled);
-      hash *= 1099511628211ull;
-      hash ^= blend.rgbBlendOperation;
-      hash *= 1099511628211ull;
-      hash ^= blend.alphaBlendOperation;
-      hash *= 1099511628211ull;
-      hash ^= blend.sourceRGBBlendFactor;
-      hash *= 1099511628211ull;
-      hash ^= blend.destinationRGBBlendFactor;
-      hash *= 1099511628211ull;
-      hash ^= blend.sourceAlphaBlendFactor;
-      hash *= 1099511628211ull;
-      hash ^= blend.destinationAlphaBlendFactor;
-      hash *= 1099511628211ull;
-      hash ^= blend.colorWriteMask;
-      hash *= 1099511628211ull;
-      hash ^= blend.pixelFormat;
-      hash *= 1099511628211ull;
-    }
-    hash ^= key.depthFormat;
-    hash *= 1099511628211ull;
-    hash ^= key.stencilFormat;
-    hash *= 1099511628211ull;
-    return static_cast<size_t>(hash);
-  }
-};
-
-struct PipelineCacheEntry {
-  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> future;
-};
-
-struct DepthStencilKey {
-  bool depthEnable = false;
-  bool depthWrite = false;
-  u32 depthFunc = static_cast<u32>(CompareFunc::Always);
-  StencilFaceKey front{};
-  StencilFaceKey back{};
-
-  friend bool operator==(const DepthStencilKey&, const DepthStencilKey&) = default;
-};
-
-struct DepthStencilKeyHash {
-  size_t operator()(const DepthStencilKey& key) const noexcept {
-    u64 hash = 1469598103934665603ull;
-    hash ^= static_cast<u64>(key.depthEnable);
-    hash *= 1099511628211ull;
-    hash ^= static_cast<u64>(key.depthWrite);
-    hash *= 1099511628211ull;
-    hash ^= key.depthFunc;
-    hash *= 1099511628211ull;
-    hash ^= static_cast<u64>(key.front.enabled);
-    hash *= 1099511628211ull;
-    hash ^= key.front.compareFunction;
-    hash *= 1099511628211ull;
-    hash ^= key.front.failureOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.front.depthFailureOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.front.passOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.front.readMask;
-    hash *= 1099511628211ull;
-    hash ^= key.front.writeMask;
-    hash *= 1099511628211ull;
-    hash ^= static_cast<u64>(key.back.enabled);
-    hash *= 1099511628211ull;
-    hash ^= key.back.compareFunction;
-    hash *= 1099511628211ull;
-    hash ^= key.back.failureOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.back.depthFailureOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.back.passOperation;
-    hash *= 1099511628211ull;
-    hash ^= key.back.readMask;
-    hash *= 1099511628211ull;
-    hash ^= key.back.writeMask;
-    hash *= 1099511628211ull;
-    return static_cast<size_t>(hash);
-  }
-};
-
-// Container for the four draw-side pipeline caches and the depth/stencil
-// state cache. C3 groups these together as a stepping stone toward a full
-// dxmt9::PipelineCache extraction; for now the build lambdas still live on
-// MetalBackendDevice and reach in through a single `pipelineCache_` member.
-struct PipelineCache {
-  std::mutex mutex;
-  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> draw;
-  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> fill;
-  std::unordered_map<ShaderVariantKey, PipelineCacheEntry, ShaderVariantKeyHash> stretch;
-  std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash> depth;
-};
+// ShaderVariantKey / DepthStencilKey / PipelineCache all live in
+// dxmt9_pipeline_cache.{hpp,cpp}; aliased above.
 
 // Container for the three resource pools + the gpu-texture-dump dedup set +
 // the handle allocator. Grouped per C6 as a named structure; the underlying
@@ -6121,29 +5937,7 @@ class MetalBackendDevice final : public BackendDevice {
   // its own pipeline per (opaqueAlpha) variant using buildPresentPipeline.
 
   WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(const DepthStencilKey& key) {
-    std::lock_guard lock(pipelineCache_.mutex);
-    if (auto it = pipelineCache_.depth.find(key); it != pipelineCache_.depth.end()) {
-      return it->second;
-    }
-    WMTDepthStencilInfo info{};
-    info.depth_compare_function = static_cast<WMTCompareFunction>(toCompareFunction(key.depthFunc));
-    info.depth_write_enabled = key.depthEnable && key.depthWrite;
-    auto applyFace = [](WMTStencilInfo& stencilInfo, const StencilFaceKey& face) {
-      stencilInfo.enabled = face.enabled;
-      stencilInfo.stencil_compare_function = static_cast<WMTCompareFunction>(toCompareFunction(face.compareFunction));
-      stencilInfo.stencil_fail_op = static_cast<WMTStencilOperation>(toStencilOperation(face.failureOperation));
-      stencilInfo.depth_fail_op = static_cast<WMTStencilOperation>(toStencilOperation(face.depthFailureOperation));
-      stencilInfo.depth_stencil_pass_op = static_cast<WMTStencilOperation>(toStencilOperation(face.passOperation));
-      stencilInfo.read_mask = static_cast<uint8_t>(face.readMask);
-      stencilInfo.write_mask = static_cast<uint8_t>(face.writeMask);
-    };
-    if (key.front.enabled || key.back.enabled) {
-      applyFace(info.front_stencil, key.front);
-      applyFace(info.back_stencil, key.back.enabled ? key.back : key.front);
-    }
-    auto state = wrappedDevice_.newDepthStencilState(info);
-    pipelineCache_.depth.emplace(key, state);
-    return state;
+    return pipelineCache_.depthStencilStateFor(wrappedDevice_, key);
   }
 
   void finishLoop() {

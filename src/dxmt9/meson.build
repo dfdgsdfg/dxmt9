@@ -8,6 +8,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_capture.cpp',
   'dxmt9_device.cpp',
   'dxmt9_format_convert.cpp',
+  'dxmt9_pipeline_cache.cpp',
   'dxmt9_hud.mm',
   'dxmt9_presenter.cpp',
   'dxmt9_presenter_macdrv.cpp',
