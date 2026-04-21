@@ -3623,21 +3623,12 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
-  // Observer setters + maxFrameLatency moved to dxmt9::Device (task 3).
-  // The backend keeps the BackendDevice overrides as thin forwarders to
-  // the upper device so the existing core::Device wiring path
-  // (backend->setDeviceLostObserver) keeps working during the transition.
-  void setDeviceLostObserver(DeviceLostObserver observer) override {
-    if (upperDevice_) upperDevice_->setDeviceLostObserver(std::move(observer));
-  }
-
-  void setPresentationStatusObserver(PresentationStatusObserver observer) override {
-    if (upperDevice_) upperDevice_->setPresentationStatusObserver(std::move(observer));
-  }
-
-  void setMaxFrameLatency(u32 latency) override {
-    if (upperDevice_) upperDevice_->setMaxFrameLatency(latency);
-  }
+  // Observer setters + setMaxFrameLatency: no overrides here. Factory wires
+  // observers directly on the upper dxmt9::Device in createDevice (task 3).
+  // BackendDevice's default no-op bodies are correct for this class since
+  // production never calls backend->setDeviceLostObserver anymore — the
+  // invocation path goes through upperDevice_->notifyPresentationStatus
+  // from encodePresent, with storage on DeviceImpl.
 
   HResult waitForVBlank(const SwapDesc& desc) override {
     (void)desc;
