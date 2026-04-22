@@ -927,8 +927,19 @@ class BackendDevice {
 
   virtual ~BackendDevice() = default;
 
-  virtual BufferHandle createBuffer(const BufferDesc& desc) = 0;
-  virtual TextureHandle createTexture(const TextureDesc& desc) = 0;
+  // Resource CRUD: all default to no-op returning empty handles. Production
+  // routes through dxmt9::Device (DeviceImpl implements these against the
+  // dxmt9::resources::Pool it owns). BackendDevice-side overrides remain
+  // only on MockBackendDevice for tests that assert on BackendDevice
+  // behavior directly.
+  virtual BufferHandle createBuffer(const BufferDesc& desc) {
+    (void)desc;
+    return {};
+  }
+  virtual TextureHandle createTexture(const TextureDesc& desc) {
+    (void)desc;
+    return {};
+  }
   virtual SurfaceHandle createSurface(const SurfaceDesc& desc) {
     (void)desc;
     return {};
@@ -939,8 +950,8 @@ class BackendDevice {
     (void)desc;
     return {};
   }
-  virtual void destroyBuffer(BufferHandle handle) = 0;
-  virtual void destroyTexture(TextureHandle handle) = 0;
+  virtual void destroyBuffer(BufferHandle handle) { (void)handle; }
+  virtual void destroyTexture(TextureHandle handle) { (void)handle; }
   virtual void destroySurface(SurfaceHandle handle) { (void)handle; }
   virtual void* mapBuffer(BufferHandle handle, u32 flags) {
     (void)handle;

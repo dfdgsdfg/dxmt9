@@ -885,52 +885,10 @@ class MetalBackendDevice final : public BackendDevice {
 
   bool ready() const noexcept { return ready_; }
 
-  BufferHandle createBuffer(const BufferDesc& desc) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    return pool_->createBuffer(wrappedDevice_, desc);
-  }
-
-  TextureHandle createTexture(const TextureDesc& desc) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    const auto handle = pool_->createTexture(wrappedDevice_, limits_, desc);
-    if (shouldTraceTexture(handle)) {
-      std::ostringstream out;
-      out << "[dxmt9-texture] create handle=0x" << std::hex << handle.value << std::dec
-          << " format=" << static_cast<unsigned>(desc.format)
-          << " type=" << static_cast<unsigned>(desc.type)
-          << " size=" << desc.width << "x" << desc.height
-          << " levels=" << desc.levels
-          << " usage=0x" << std::hex << desc.usage << std::dec
-          << " pool=" << static_cast<unsigned>(desc.pool);
-      emitTextureTraceLine(out.str());
-    }
-    return handle;
-  }
-
-  SurfaceHandle createSurface(const SurfaceDesc& desc) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    return pool_->createSurface(wrappedDevice_, limits_, desc);
-  }
-
-  SurfaceHandle createSurfaceForTexture(TextureHandle textureHandle, u32 level, const SurfaceDesc& desc) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    return pool_->createSurfaceForTexture(textureHandle, level, desc);
-  }
-
-  void destroyBuffer(BufferHandle handle) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    pool_->markDestroyAndGc(pool_->buffers, handle.value, commandQueue_->completedSeqId_);
-  }
-
-  void destroyTexture(TextureHandle handle) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    pool_->markDestroyAndGc(pool_->textures, handle.value, commandQueue_->completedSeqId_);
-  }
-
-  void destroySurface(SurfaceHandle handle) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    pool_->markDestroyAndGc(pool_->surfaces, handle.value, commandQueue_->completedSeqId_);
-  }
+  // Resource CRUD overrides removed (Step 3a). DeviceImpl implements these
+  // directly against pool_ after Step 2a. Production never routes back
+  // through MetalBackendDevice for resource lifecycle; tests use
+  // MockBackendDevice which carries its own overrides.
 
   void* mapBuffer(BufferHandle handle, u32 flags) override {
     std::unique_lock lock(commandQueue_->mutex_);
