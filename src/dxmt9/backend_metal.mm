@@ -780,11 +780,7 @@ class MetalBackendDevice final : public BackendDevice {
   // invocation path goes through upperDevice_->notifyPresentationStatus
   // from encodePresent, with storage on DeviceImpl.
 
-  HResult waitForVBlank(const SwapDesc& desc) override {
-    (void)desc;
-    flush();
-    return D3D_OK;
-  }
+  // waitForVBlank lives on CommandQueue (Step 3b).
 
   bool readbackSurface(const ReadbackDesc& desc, ReadbackPixels& pixels) override {
     WMT::Reference<WMT::Texture> sourceTexture;
@@ -985,73 +981,11 @@ class MetalBackendDevice final : public BackendDevice {
     emitTextureTraceLine(out.str());
   }
 
-  void submitDraw(const DrawDesc& desc) override {
-    std::unique_lock lock(commandQueue_->mutex_);
-    // TLA+: WineCommit
-    ensureWritingSlotUnlocked(lock);
-    currentSlot().commands.push_back(makeDrawCommand(desc));
-    currentBackBuffer_ = desc.rts.color[0].handle;
-    markDrawResourcesUnlocked(desc);
-  }
-
-  void submitClear(const ClearDesc& desc) override {
-    std::unique_lock lock(commandQueue_->mutex_);
-    // TLA+: WineCommit
-    ensureWritingSlotUnlocked(lock);
-    currentSlot().commands.push_back(makeClearCommand(desc));
-    if (desc.colorAttachments[0].handle) {
-      currentBackBuffer_ = desc.colorAttachments[0].handle;
-    }
-    markClearResourcesUnlocked(desc);
-  }
-
-  void submitSurfaceCopy(const SurfaceCopyDesc& desc) override {
-    std::unique_lock lock(commandQueue_->mutex_);
-    // TLA+: WineCommit
-    ensureWritingSlotUnlocked(lock);
-    currentSlot().commands.push_back(makeSurfaceCopyCommand(desc));
-    markSurfaceCopyResourcesUnlocked(desc);
-  }
-
-  void submitStretchRect(const StretchRectDesc& desc) override {
-    std::unique_lock lock(commandQueue_->mutex_);
-    // TLA+: WineCommit
-    ensureWritingSlotUnlocked(lock);
-    currentSlot().commands.push_back(makeStretchRectCommand(desc));
-    markStretchResourcesUnlocked(desc);
-  }
-
-  void submitReadback(const ReadbackDesc& desc) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    // Readback is satisfied by the synchronous staging copy in readbackSurface().
-    // We still track resource liveness so NoUseAfterFree remains meaningful.
-    markReadbackResourcesUnlocked(desc);
-  }
-
-  void submitColorFill(const ColorFillDesc& desc) override {
-    std::unique_lock lock(commandQueue_->mutex_);
-    // TLA+: WineCommit
-    ensureWritingSlotUnlocked(lock);
-    currentSlot().commands.push_back(makeColorFillCommand(desc));
-    currentBackBuffer_ = desc.destination;
-    markColorFillResourcesUnlocked(desc);
-  }
-
-  void present(const SwapDesc& desc) override {
-    std::unique_lock lock(commandQueue_->mutex_);
-    // TLA+: WineCommit
-    commandQueue_->queueLifecycle_.presentAndCommit(lock, kMaxInflight, desc, currentBackBuffer_, [this](const ChunkSlot& slot) {
-      updateLastUsedSeqIdsUnlocked(slot);
-    });
-  }
-
- void flush() override {
-    std::unique_lock lock(commandQueue_->mutex_);
-    // TLA+: WineCommit
-    commandQueue_->queueLifecycle_.flushAndWait(lock, kMaxInflight, [this](const ChunkSlot& slot) {
-      updateLastUsedSeqIdsUnlocked(slot);
-    });
-  }
+  // Step 3b: submit{Draw,Clear,SurfaceCopy,StretchRect,Readback,ColorFill},
+  // present, and flush moved to dxmt9::CommandQueue. DeviceImpl dispatches
+  // directly through queue_. Backend no longer implements these overrides —
+  // the defaulted no-op on BackendDevice is correct because production
+  // never invokes them via the backend pointer anymore.
 
  private:
   u32 compatFlagsForSurfaceUnlocked(Handle handle) const {
@@ -1072,113 +1006,9 @@ class MetalBackendDevice final : public BackendDevice {
   SurfaceRecord* findSurfaceUnlocked(u64 handle) { return pool_->findSurface(handle); }
   const SurfaceRecord* findSurfaceUnlocked(u64 handle) const { return pool_->findSurface(handle); }
 
-  ChunkSlot& currentSlot() {
-    // TLA+: RingSafety
-    DXMT_ASSERT(commandQueue_->writingSlot_.has_value());
-    return commandQueue_->slots_[*commandQueue_->writingSlot_];
-  }
-
-  void ensureWritingSlotUnlocked(std::unique_lock<std::mutex>& lock) {
-    (void)commandQueue_->queueLifecycle_.ensureWriterSlot(lock, kMaxInflight);
-  }
-
-  void updateLastUsedSeqIdsUnlocked(const ChunkSlot& slot) {
-    for (const auto& command : slot.commands) {
-      switch (command.kind) {
-        case MetalCommandRecord::Kind::Draw:
-          markDrawResourcesUnlocked(command.draw, slot.seqId);
-          break;
-        case MetalCommandRecord::Kind::Clear:
-          markClearResourcesUnlocked(command.clear, slot.seqId);
-          break;
-        case MetalCommandRecord::Kind::SurfaceCopy:
-          markSurfaceCopyResourcesUnlocked(command.surfaceCopy, slot.seqId);
-          break;
-        case MetalCommandRecord::Kind::StretchRect:
-          markStretchResourcesUnlocked(command.stretchRect, slot.seqId);
-          break;
-        case MetalCommandRecord::Kind::Readback:
-          markReadbackResourcesUnlocked(command.readback, slot.seqId);
-          break;
-        case MetalCommandRecord::Kind::ColorFill:
-          markColorFillResourcesUnlocked(command.colorFill, slot.seqId);
-          break;
-        case MetalCommandRecord::Kind::Present:
-          if (command.presentSource) {
-            if (auto* surface = findSurfaceUnlocked(command.presentSource.value)) {
-              surface->lastUsedSeqId = std::max(surface->lastUsedSeqId, slot.seqId);
-            }
-          }
-          break;
-      }
-    }
-  }
-
-  // mark*ResourcesUnlocked helpers are now methods on pool_ (task 3).
-  // Backend uses inline aliases that inject the default seqId (nextSeqId_).
-  u64 seqIdForMark(u64 seqId) const {
-    return seqId == 0 ? commandQueue_->nextSeqId_ : seqId;
-  }
-  void markDrawResourcesUnlocked(const DrawDesc& desc, u64 seqId = 0) {
-    pool_->markDrawResources(desc, seqIdForMark(seqId));
-  }
-  void markClearResourcesUnlocked(const ClearDesc& desc, u64 seqId = 0) {
-    pool_->markClearResources(desc, seqIdForMark(seqId));
-  }
-  void markSurfaceCopyResourcesUnlocked(const SurfaceCopyDesc& desc, u64 seqId = 0) {
-    pool_->markSurfaceCopyResources(desc, seqIdForMark(seqId));
-  }
-  void markStretchResourcesUnlocked(const StretchRectDesc& desc, u64 seqId = 0) {
-    pool_->markStretchResources(desc, seqIdForMark(seqId));
-  }
-  void markReadbackResourcesUnlocked(const ReadbackDesc& desc, u64 seqId = 0) {
-    pool_->markReadbackResources(desc, seqIdForMark(seqId));
-  }
-  void markColorFillResourcesUnlocked(const ColorFillDesc& desc, u64 seqId = 0) {
-    pool_->markColorFillResources(desc, seqIdForMark(seqId));
-  }
-
-  MetalCommandRecord makeDrawCommand(const DrawDesc& desc) {
-    MetalCommandRecord op;
-    op.kind = MetalCommandRecord::Kind::Draw;
-    op.draw = desc;
-    return op;
-  }
-
-  MetalCommandRecord makeClearCommand(const ClearDesc& desc) {
-    MetalCommandRecord op;
-    op.kind = MetalCommandRecord::Kind::Clear;
-    op.clear = desc;
-    return op;
-  }
-
-  MetalCommandRecord makeSurfaceCopyCommand(const SurfaceCopyDesc& desc) {
-    MetalCommandRecord op;
-    op.kind = MetalCommandRecord::Kind::SurfaceCopy;
-    op.surfaceCopy = desc;
-    return op;
-  }
-
-  MetalCommandRecord makeStretchRectCommand(const StretchRectDesc& desc) {
-    MetalCommandRecord op;
-    op.kind = MetalCommandRecord::Kind::StretchRect;
-    op.stretchRect = desc;
-    return op;
-  }
-
-  MetalCommandRecord makeReadbackCommand(const ReadbackDesc& desc) {
-    MetalCommandRecord op;
-    op.kind = MetalCommandRecord::Kind::Readback;
-    op.readback = desc;
-    return op;
-  }
-
-  MetalCommandRecord makeColorFillCommand(const ColorFillDesc& desc) {
-    MetalCommandRecord op;
-    op.kind = MetalCommandRecord::Kind::ColorFill;
-    op.colorFill = desc;
-    return op;
-  }
+  // currentSlot / ensureWritingSlotUnlocked / updateLastUsedSeqIdsUnlocked /
+  // markXResourcesUnlocked / seqIdForMark / makeXCommand moved to
+  // dxmt9::CommandQueue (Step 3b). Backend retains only encodeChunk paths.
 
   void encodeLoop() {
     @autoreleasepool {
@@ -1342,7 +1172,7 @@ class MetalBackendDevice final : public BackendDevice {
       auto& attachment = passInfo.colors[0];
       attachment.texture = surface->texture.handle;
       const bool discardAfterPresent = !clear.has_value() && backBufferDiscardAfterPresent_ &&
-                                       draw.rts.color[0].handle == currentBackBuffer_;
+                                       draw.rts.color[0].handle == commandQueue_->currentBackBuffer_;
       attachment.load_action = clear.has_value() ? WMTLoadActionClear
                                                   : (discardAfterPresent ? WMTLoadActionDontCare
                                                                          : WMTLoadActionLoad);
@@ -2400,7 +2230,8 @@ class MetalBackendDevice final : public BackendDevice {
   // Chunk-ring state + seqId counters + queueLifecycle + diagnostics moved
   // to dxmt9::CommandQueue (C1, C7a). Accessed via commandQueue_->.
   // pool_->nextHandle, resource maps, and pool_->dumpedGpuTextures grouped into pool_ (C6).
-  Handle currentBackBuffer_{};
+  // currentBackBuffer_ moved to CommandQueue (Step 3b); accessed via
+  // commandQueue_->currentBackBuffer_.
   bool backBufferDiscardAfterPresent_ = false;
   // deviceLostObserver_/presentationStatusObserver_/maxFrameLatency_ moved
   // to dxmt9::Device (task 3). Accessed via upperDevice_->notify*/... or

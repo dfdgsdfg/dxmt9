@@ -972,13 +972,16 @@ class BackendDevice {
     (void)pitch;
     (void)bytes;
   }
-  virtual void submitDraw(const DrawDesc& desc) = 0;
-  virtual void submitClear(const ClearDesc& desc) = 0;
+  // Submission overrides: after Step 3b, production routes these through
+  // dxmt9::CommandQueue. BackendDevice versions default to no-op; only
+  // MockBackendDevice (test) overrides them to record calls.
+  virtual void submitDraw(const DrawDesc& desc) { (void)desc; }
+  virtual void submitClear(const ClearDesc& desc) { (void)desc; }
   virtual void submitSurfaceCopy(const SurfaceCopyDesc& desc) { (void)desc; }
   virtual void submitStretchRect(const StretchRectDesc& desc) { (void)desc; }
   virtual void submitReadback(const ReadbackDesc& desc) { (void)desc; }
   virtual void submitColorFill(const ColorFillDesc& desc) { (void)desc; }
-  virtual void present(const SwapDesc& desc) = 0;
+  virtual void present(const SwapDesc& desc) { (void)desc; }
   virtual void setDeviceLostObserver(DeviceLostObserver observer) { (void)observer; }
   virtual void setPresentationStatusObserver(PresentationStatusObserver observer) { (void)observer; }
   virtual void setMaxFrameLatency(u32 latency) { (void)latency; }

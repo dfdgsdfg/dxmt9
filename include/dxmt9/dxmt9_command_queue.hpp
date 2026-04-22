@@ -21,8 +21,14 @@
 
 namespace dxmt9 {
 
+namespace resources { struct Pool; }
+
 // Size of the chunk ring. Matches upstream dxmt's kCommandChunkCount.
 inline constexpr size_t kCommandChunkCount = 32;
+
+// Maximum chunks the writer is allowed to hold while waiting for GPU
+// completion. Previously a file-local constant inside backend_metal.mm.
+inline constexpr size_t kMaxInflight = 3;
 
 class CommandQueue {
  public:
@@ -56,6 +62,19 @@ class CommandQueue {
                      std::function<void()> completionLoop);
   void stopThreads();
 
+  // Chunk-ring submission. Previously on MetalBackendDevice. Pool is
+  // passed in so GC resource marking can flow through the dxmt9::Device
+  // owner. Acquires mutex_ internally.
+  void submitDraw(resources::Pool& pool, const core::DrawDesc& desc);
+  void submitClear(resources::Pool& pool, const core::ClearDesc& desc);
+  void submitSurfaceCopy(resources::Pool& pool, const core::SurfaceCopyDesc& desc);
+  void submitStretchRect(resources::Pool& pool, const core::StretchRectDesc& desc);
+  void submitReadback(resources::Pool& pool, const core::ReadbackDesc& desc);
+  void submitColorFill(resources::Pool& pool, const core::ColorFillDesc& desc);
+  void submitPresent(resources::Pool& pool, const core::SwapDesc& desc);
+  void submitFlush(resources::Pool& pool);
+  core::HResult waitForVBlank(resources::Pool& pool);
+
   // Sequence counters + chunk-ring state. Guarded externally by the owning
   // backend's mutex (the binding into QueueLifecycleController takes raw
   // pointers to these). Ownership is on CommandQueue; the mutex migration
@@ -70,6 +89,10 @@ class CommandQueue {
   size_t inflightCount_ = 0;
   std::deque<size_t> readySlots_{};
   std::deque<std::uint64_t> completedSeqQueue_{};
+
+  // Last destination handle for a color-write (draw/clear/colorFill). Drives
+  // the presentation source in submitPresent. Previously backend-resident.
+  core::Handle currentBackBuffer_{};
 
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
   core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};

@@ -132,34 +132,36 @@ class DeviceImpl final : public Device {
     if (backend_) backend_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
 
-  // Submit / present / flush — forward to backend while the encoder lives
-  // there. Step 3 will move these onto a RenderContext that DeviceImpl owns.
+  // Submit / present / flush — Step 3b: go directly through the owned
+  // CommandQueue + Pool. Backend no longer participates in the submission
+  // path. readbackSurface still forwards to backend (synchronous Metal
+  // blit resident there until Step 3d).
   void submitDraw(const core::DrawDesc& desc) override {
-    if (backend_) backend_->submitDraw(desc);
+    queue_.submitDraw(pool_, desc);
   }
   void submitClear(const core::ClearDesc& desc) override {
-    if (backend_) backend_->submitClear(desc);
+    queue_.submitClear(pool_, desc);
   }
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc) override {
-    if (backend_) backend_->submitSurfaceCopy(desc);
+    queue_.submitSurfaceCopy(pool_, desc);
   }
   void submitStretchRect(const core::StretchRectDesc& desc) override {
-    if (backend_) backend_->submitStretchRect(desc);
+    queue_.submitStretchRect(pool_, desc);
   }
   void submitReadback(const core::ReadbackDesc& desc) override {
-    if (backend_) backend_->submitReadback(desc);
+    queue_.submitReadback(pool_, desc);
   }
   void submitColorFill(const core::ColorFillDesc& desc) override {
-    if (backend_) backend_->submitColorFill(desc);
+    queue_.submitColorFill(pool_, desc);
   }
   void present(const core::SwapDesc& desc) override {
-    if (backend_) backend_->present(desc);
+    queue_.submitPresent(pool_, desc);
   }
   void flush() override {
-    if (backend_) backend_->flush();
+    queue_.submitFlush(pool_);
   }
-  core::HResult waitForVBlank(const core::SwapDesc& desc) override {
-    return backend_ ? backend_->waitForVBlank(desc) : core::HResult{0};
+  core::HResult waitForVBlank(const core::SwapDesc&) override {
+    return queue_.waitForVBlank(pool_);
   }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
     return backend_ && backend_->readbackSurface(desc, pixels);
