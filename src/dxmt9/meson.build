@@ -11,6 +11,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_format_convert.cpp',
   'dxmt9_pipeline_cache.cpp',
   'dxmt9_resource_pool.cpp',
+  'dxmt9_shader_translator.cpp',
   'dxmt9_hud.mm',
   'dxmt9_presenter.cpp',
   'dxmt9_presenter_macdrv.cpp',

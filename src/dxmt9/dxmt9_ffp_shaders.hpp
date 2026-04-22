@@ -62,6 +62,29 @@ struct FixedFunctionVertexLayout {
 // unknown types (caller typically treats that as "skip").
 u32 declTypeSize(u32 type);
 
+// Combined stride computation: returns the declared stream[0].stride if set,
+// otherwise the maximum (offset + size) over all elements on stream[0].
+u32 computeVertexDeclStride(const core::DrawDesc& desc);
+
+// Per-input-register binding for the translated programmable vertex path.
+struct VertexInputBinding {
+  bool valid = false;
+  u32 offset = 0;
+  u32 type = 0;
+  u32 usage = 0;
+  u32 usageIndex = 0;
+};
+
+// Decoded DCL declaration layout for a D3D9 programmable vertex shader.
+// Populated by the shader translator; members indexed by D3DSPR_INPUT reg.
+struct VertexShaderInputLayout {
+  u32 stride = 0;
+  std::array<VertexInputBinding, 16> inputs{};
+  u64 hash = 0;
+};
+
+u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout);
+
 // Decode a DrawDesc's vertex declaration into a FixedFunctionVertexLayout.
 // Returns nullopt if the declaration doesn't describe a position attribute
 // recognizable as FFP (e.g., it's a programmable-pipeline decl).

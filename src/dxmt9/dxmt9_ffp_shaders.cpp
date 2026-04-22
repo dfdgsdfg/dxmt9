@@ -427,4 +427,37 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
   return out.str();
 }
 
+u32 computeVertexDeclStride(const DrawDesc& desc) {
+  if (desc.vertexDecl.streams[0].stride != 0) {
+    return desc.vertexDecl.streams[0].stride;
+  }
+  u32 computedStride = 0;
+  for (const auto& element : desc.vertexDecl.elements) {
+    if (element.stream != 0) {
+      continue;
+    }
+    computedStride = std::max(computedStride, static_cast<u32>(element.offset + declTypeSize(element.type)));
+  }
+  return computedStride;
+}
+
+u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout) {
+  u64 hash = 1469598103934665603ull;
+  hash ^= layout.stride;
+  hash *= 1099511628211ull;
+  for (const auto& input : layout.inputs) {
+    hash ^= static_cast<u64>(input.valid);
+    hash *= 1099511628211ull;
+    hash ^= input.offset;
+    hash *= 1099511628211ull;
+    hash ^= input.type;
+    hash *= 1099511628211ull;
+    hash ^= input.usage;
+    hash *= 1099511628211ull;
+    hash ^= input.usageIndex;
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
 }  // namespace dxmt9::ffp
