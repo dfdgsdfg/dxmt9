@@ -2740,60 +2740,8 @@ class MetalBackendDevice final : public BackendDevice {
       }
     }
     const auto key = makeShaderVariantKey(draw, colorFormats, blendAttachments, depthFormat, stencilFormat);
-    {
-      std::lock_guard lock(pipelineCache_.mutex);
-      if (auto it = pipelineCache_.draw.find(key); it != pipelineCache_.draw.end()) {
-        return it->second.future;
-      }
-      auto future = std::async(std::launch::async, [this, draw, key]() {
-        auto vsSource = makeDrawShaderSource(draw, true);
-        auto fsSource = makeDrawShaderSource(draw, false);
-        auto vsLib = makeLibrary(wrappedDevice_, vsSource);
-        auto fsLib = makeLibrary(wrappedDevice_, fsSource);
-        if (!vsLib || !fsLib) {
-          return WMT::Reference<WMT::RenderPipelineState>{};
-        }
-        auto vs = vsLib.newFunction("dxmt9_vs");
-        auto fs = fsLib.newFunction("dxmt9_fs");
-        if (!vs || !fs) {
-          return WMT::Reference<WMT::RenderPipelineState>{};
-        }
-        WMTRenderPipelineInfo info{};
-      info.max_tessellation_factor = 1;
-        info.max_tessellation_factor = 1;
-        info.vertex_function = vs.handle;
-        info.fragment_function = fs.handle;
-        info.raster_sample_count = std::max(1u, key.sampleCount);
-        info.alpha_to_coverage_enabled = key.alphaToCoverage;
-        info.depth_pixel_format = static_cast<WMTPixelFormat>(key.depthFormat);
-        info.stencil_pixel_format = static_cast<WMTPixelFormat>(key.stencilFormat);
-        info.rasterization_enabled = true;
-        if (*shaderArchive_) {
-          info.binary_archive_for_serialization = (*shaderArchive_).handle;
-        }
-        for (size_t i = 0; i < kMaxRenderTargets; ++i) {
-          auto& ca = info.colors[i];
-          ca.pixel_format = static_cast<WMTPixelFormat>(key.colorFormats[i]);
-          ca.blending_enabled = key.blend[i].blendingEnabled;
-          ca.rgb_blend_operation = toBlendOperation(key.blend[i].rgbBlendOperation);
-          ca.alpha_blend_operation = toBlendOperation(key.blend[i].alphaBlendOperation);
-          ca.src_rgb_blend_factor = toBlendFactor(key.blend[i].sourceRGBBlendFactor);
-          ca.dst_rgb_blend_factor = toBlendFactor(key.blend[i].destinationRGBBlendFactor);
-          ca.src_alpha_blend_factor = toBlendFactor(key.blend[i].sourceAlphaBlendFactor);
-          ca.dst_alpha_blend_factor = toBlendFactor(key.blend[i].destinationAlphaBlendFactor);
-          ca.write_mask = toColorWriteMask(key.blend[i].colorWriteMask);
-        }
-        WMT::Error err{};
-        auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-        if (pso && *shaderArchive_) {
-          persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
-        }
-        return pso;
-      });
-      auto shared = future.share();
-      pipelineCache_.draw.emplace(key, PipelineCacheEntry{shared});
-      return shared;
-    }
+    return pipelineCache_.getOrBuildDrawPipeline(wrappedDevice_, key, draw,
+                                                    shaderArchive_, shaderArchivePath_);
   }
 
 

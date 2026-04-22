@@ -1,4 +1,5 @@
 #include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_draw_shader.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_shader_sources.hpp"
 
@@ -206,6 +207,66 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
   });
   auto shared = future.share();
   this->stretch.emplace(key, Entry{shared});
+  return shared;
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
+                                const ShaderVariantKey& key,
+                                const core::DrawDesc& draw,
+                                WMT::Reference<WMT::BinaryArchive>* archive,
+                                const std::string* archivePath) {
+  std::lock_guard lock(mutex);
+  if (auto it = this->draw.find(key); it != this->draw.end()) {
+    return it->second.future;
+  }
+  auto future = std::async(std::launch::async,
+                            [device, key, draw, archive, archivePath]() mutable {
+    auto vsSource = drawshader::makeDrawShaderSource(draw, true);
+    auto fsSource = drawshader::makeDrawShaderSource(draw, false);
+    auto vsLib = shaders::makeLibrary(device, vsSource);
+    auto fsLib = shaders::makeLibrary(device, fsSource);
+    if (!vsLib || !fsLib) {
+      return WMT::Reference<WMT::RenderPipelineState>{};
+    }
+    auto vs = vsLib.newFunction("dxmt9_vs");
+    auto fs = fsLib.newFunction("dxmt9_fs");
+    if (!vs || !fs) {
+      return WMT::Reference<WMT::RenderPipelineState>{};
+    }
+    WMTRenderPipelineInfo info{};
+    info.max_tessellation_factor = 1;
+    info.vertex_function = vs.handle;
+    info.fragment_function = fs.handle;
+    info.raster_sample_count = std::max(1u, key.sampleCount);
+    info.alpha_to_coverage_enabled = key.alphaToCoverage;
+    info.depth_pixel_format = static_cast<WMTPixelFormat>(key.depthFormat);
+    info.stencil_pixel_format = static_cast<WMTPixelFormat>(key.stencilFormat);
+    info.rasterization_enabled = true;
+    if (archive && *archive) {
+      info.binary_archive_for_serialization = (*archive).handle;
+    }
+    for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+      auto& ca = info.colors[i];
+      ca.pixel_format = static_cast<WMTPixelFormat>(key.colorFormats[i]);
+      ca.blending_enabled = key.blend[i].blendingEnabled;
+      ca.rgb_blend_operation = convert::toBlendOperation(key.blend[i].rgbBlendOperation);
+      ca.alpha_blend_operation = convert::toBlendOperation(key.blend[i].alphaBlendOperation);
+      ca.src_rgb_blend_factor = convert::toBlendFactor(key.blend[i].sourceRGBBlendFactor);
+      ca.dst_rgb_blend_factor = convert::toBlendFactor(key.blend[i].destinationRGBBlendFactor);
+      ca.src_alpha_blend_factor = convert::toBlendFactor(key.blend[i].sourceAlphaBlendFactor);
+      ca.dst_alpha_blend_factor = convert::toBlendFactor(key.blend[i].destinationAlphaBlendFactor);
+      ca.write_mask = convert::toColorWriteMask(key.blend[i].colorWriteMask);
+    }
+    WMT::Error err{};
+    auto pso = device.newRenderPipelineState(info, err);
+    if (pso && archive && *archive && archivePath) {
+      shaders::persistShaderArchive(*archive, *archivePath);
+    }
+    return pso;
+  });
+  auto shared = future.share();
+  this->draw.emplace(key, Entry{shared});
   return shared;
 }
 

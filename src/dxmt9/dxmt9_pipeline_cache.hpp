@@ -136,6 +136,17 @@ class Cache {
                              WMT::Reference<WMT::BinaryArchive>* archive,
                              const std::string* archivePath);
 
+  // Look up or build a D3D9 draw pipeline keyed by the fully-resolved
+  // ShaderVariantKey (caller computes color-formats, blend, depth/stencil
+  // formats, etc.). The closure invokes dxmt9::drawshader::makeDrawShaderSource
+  // for VS+FS source generation.
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
+                          const ShaderVariantKey& key,
+                          const core::DrawDesc& draw,
+                          WMT::Reference<WMT::BinaryArchive>* archive,
+                          const std::string* archivePath);
+
   std::mutex mutex{};
   PipelineMap draw{};
   PipelineMap fill{};
