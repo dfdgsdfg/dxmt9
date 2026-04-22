@@ -945,42 +945,12 @@ class MetalBackendDevice final : public BackendDevice {
 
   BufferHandle createBuffer(const BufferDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    const Handle handle{pool_.nextHandle++};
-    BufferRecord record;
-    record.desc = desc;
-    record.shadow.resize(static_cast<size_t>(desc.size));
-    if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
-      WMTBufferInfo info{};
-      info.length = desc.size;
-      info.options = WMTResourceStorageModeShared;
-      record.buffer = wrappedDevice_.newBuffer(info);
-      record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
-    }
-    pool_.buffers[handle.value] = std::move(record);
-    return handle;
+    return pool_.createBuffer(wrappedDevice_, desc);
   }
 
   TextureHandle createTexture(const TextureDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    const Handle handle{pool_.nextHandle++};
-    TextureRecord record;
-    record.desc = desc;
-    if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
-      WMTTextureInfo info{};
-      info.type = toTextureType(desc.type, false);
-      info.pixel_format = toPixelFormat(desc.format, limits_);
-      info.width = std::max(1u, desc.width);
-      info.height = std::max(1u, desc.height);
-      info.depth = std::max(1u, desc.depth);
-      info.mipmap_level_count = std::max(1u, desc.levels);
-      info.sample_count = 1;
-      info.array_length = 1;
-      info.options = toResourceOptions(desc.pool, desc.usage);
-      info.usage = toTextureUsage(desc);
-      record.texture = wrappedDevice_.newTexture(info);
-      record.isPrivate = (info.options == WMTResourceStorageModePrivate);
-    }
-    pool_.textures[handle.value] = std::move(record);
+    const auto handle = pool_.createTexture(wrappedDevice_, limits_, desc);
     if (shouldTraceTexture(handle)) {
       std::ostringstream out;
       out << "[dxmt9-texture] create handle=0x" << std::hex << handle.value << std::dec

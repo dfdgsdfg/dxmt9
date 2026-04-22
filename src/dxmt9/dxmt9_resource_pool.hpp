@@ -97,6 +97,16 @@ struct Pool {
   // `contents` if the buffer is shared-mode). Returns true if the handle
   // resolved. Caller holds the pool's mutex.
   bool uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount);
+
+  // Allocate a new buffer record (shared-mode WMT buffer + shadow).
+  // Pool::Scratch / Pool::SystemMem skip the WMT allocation.
+  core::BufferHandle createBuffer(WMT::Device device, const core::BufferDesc& desc);
+
+  // Allocate a new texture record. WMT texture is created for non-system
+  // pools; pixel format + storage mode derived from the device limits.
+  core::TextureHandle createTexture(WMT::Device device,
+                                     const core::BackendLimits& limits,
+                                     const core::TextureDesc& desc);
 };
 
 }  // namespace dxmt9::resources
