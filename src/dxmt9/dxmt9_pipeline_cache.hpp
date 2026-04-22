@@ -117,6 +117,25 @@ class Cache {
   WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(WMT::Device& device,
                                                                 const DepthStencilKey& key);
 
+  // Look up or build a solid-color fill pipeline keyed by (color, pixelFormat).
+  // archive + archivePath are borrowed pointers for cache persistence; pass
+  // nullptr to skip archive serialization.
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
+                          const core::ColorRGBA& color,
+                          u32 pixelFormat,
+                          WMT::Reference<WMT::BinaryArchive>* archive,
+                          const std::string* archivePath);
+
+  // Look up or build a textured-blit (stretch-rect) pipeline keyed by
+  // (linear, sampleCount, pixelFormat).
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
+                             const core::StretchRectDesc& stretch,
+                             u32 pixelFormat,
+                             WMT::Reference<WMT::BinaryArchive>* archive,
+                             const std::string* archivePath);
+
   std::mutex mutex{};
   PipelineMap draw{};
   PipelineMap fill{};

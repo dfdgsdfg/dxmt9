@@ -2,6 +2,8 @@
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_shader_sources.hpp"
 
+#include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <future>
 #include <utility>
@@ -113,6 +115,98 @@ WMT::Reference<WMT::DepthStencilState> Cache::depthStencilStateFor(WMT::Device& 
   auto state = device.newDepthStencilState(info);
   depth.emplace(key, state);
   return state;
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
+                                const core::ColorRGBA& color,
+                                u32 pixelFormat,
+                                WMT::Reference<WMT::BinaryArchive>* archive,
+                                const std::string* archivePath) {
+  ShaderVariantKey key{};
+  // Hash includes color channels + format so matching fills share a pipeline.
+  key.hash = static_cast<u64>(std::bit_cast<u32>(color.r)) ^
+             (static_cast<u64>(std::bit_cast<u32>(color.g)) << 1) ^ pixelFormat;
+  key.colorFormats[0] = pixelFormat;
+  key.blend[0].pixelFormat = pixelFormat;
+  std::lock_guard lock(mutex);
+  if (auto it = fill.find(key); it != fill.end()) {
+    return it->second.future;
+  }
+  auto future = std::async(std::launch::async,
+                            [device, color, pixelFormat, archive, archivePath]() mutable {
+    auto vsLib = shaders::makeLibrary(device, shaders::makeGenericVertexSource(shaders::makeHash("fill")));
+    auto fsLib = shaders::makeLibrary(device, shaders::makeGenericFragmentSource(color, shaders::makeHash("fill")));
+    if (!vsLib || !fsLib) {
+      return WMT::Reference<WMT::RenderPipelineState>{};
+    }
+    auto vs = vsLib.newFunction("dxmt9_vs");
+    auto fs = fsLib.newFunction("dxmt9_fs");
+    WMTRenderPipelineInfo info{};
+    info.max_tessellation_factor = 1;
+    info.vertex_function = vs.handle;
+    info.fragment_function = fs.handle;
+    info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
+    info.colors[0].write_mask = WMTColorWriteMaskAll;
+    info.rasterization_enabled = true;
+    info.raster_sample_count = 1;
+    if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
+    WMT::Error err{};
+    auto pso = device.newRenderPipelineState(info, err);
+    if (pso && archive && *archive && archivePath) {
+      shaders::persistShaderArchive(*archive, *archivePath);
+    }
+    return pso;
+  });
+  auto shared = future.share();
+  fill.emplace(key, Entry{shared});
+  return shared;
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
+                                   const core::StretchRectDesc& stretch,
+                                   u32 pixelFormat,
+                                   WMT::Reference<WMT::BinaryArchive>* archive,
+                                   const std::string* archivePath) {
+  ShaderVariantKey key{};
+  key.hash = stretch.linear ? 1u : 0u;
+  key.textured = true;
+  key.linear = stretch.linear;
+  key.sampleCount = std::max(1u, stretch.destinationSampleCount);
+  key.colorFormats[0] = pixelFormat;
+  key.blend[0].pixelFormat = pixelFormat;
+  std::lock_guard lock(mutex);
+  if (auto it = this->stretch.find(key); it != this->stretch.end()) {
+    return it->second.future;
+  }
+  const u32 sampleCountVal = key.sampleCount;
+  auto future = std::async(std::launch::async,
+                            [device, sampleCountVal, pixelFormat, archive, archivePath]() mutable {
+    auto vsLib = shaders::makeLibrary(device, shaders::makeTexturedVertexSource(shaders::makeHash("stretch")));
+    auto fsLib = shaders::makeLibrary(device, shaders::makeTexturedFragmentSource(shaders::makeHash("stretch")));
+    if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
+    auto vs = vsLib.newFunction("dxmt9_vs");
+    auto fs = fsLib.newFunction("dxmt9_fs");
+    WMTRenderPipelineInfo info{};
+    info.max_tessellation_factor = 1;
+    info.vertex_function = vs.handle;
+    info.fragment_function = fs.handle;
+    info.raster_sample_count = sampleCountVal;
+    info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
+    info.colors[0].write_mask = WMTColorWriteMaskAll;
+    info.rasterization_enabled = true;
+    if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
+    WMT::Error err{};
+    auto pso = device.newRenderPipelineState(info, err);
+    if (pso && archive && *archive && archivePath) {
+      shaders::persistShaderArchive(*archive, *archivePath);
+    }
+    return pso;
+  });
+  auto shared = future.share();
+  this->stretch.emplace(key, Entry{shared});
+  return shared;
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>

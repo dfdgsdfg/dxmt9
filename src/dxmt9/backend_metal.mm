@@ -2522,107 +2522,18 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void encodeColorFill(WMT::CommandBuffer& commandBuffer, const ColorFillDesc& fill) {
-    auto* surface = findSurfaceUnlocked(fill.destination.value);
-    if (!surface || !surface->texture) {
-      return;
-    }
-    WMTRenderPassInfo passInfo{};
-    passInfo.colors[0].texture = surface->texture.handle;
-    passInfo.colors[0].load_action = fill.hasRect ? WMTLoadActionLoad : WMTLoadActionClear;
-    passInfo.colors[0].store_action = WMTStoreActionStore;
-    if (surface->resolveTexture) {
-      passInfo.colors[0].resolve_texture = surface->resolveTexture.handle;
-      passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
-    }
-    if (!fill.hasRect) {
-      passInfo.colors[0].clear_color = WMTClearColor{fill.color.r, fill.color.g,
-                                                     fill.color.b, fill.color.a};
-    }
-    auto encoder = commandBuffer.renderCommandEncoder(passInfo);
-    if (!encoder) {
-      return;
-    }
-    if (fill.hasRect) {
-      WMTScissorRect rect{};
-      rect.x = static_cast<uint64_t>(std::max(0, fill.rect.left));
-      rect.y = static_cast<uint64_t>(std::max(0, fill.rect.top));
-      rect.width = static_cast<uint64_t>(std::max(0, fill.rect.right - fill.rect.left));
-      rect.height = static_cast<uint64_t>(std::max(0, fill.rect.bottom - fill.rect.top));
-      encoder.setScissorRect(rect);
-      auto pipeline = pipelineForColorFill(fill.color,
-                        static_cast<u32>(toPixelFormat(surface->desc.format, limits_))).get();
-      if (pipeline) {
-        encoder.setRenderPipelineState(pipeline);
-        encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
-      }
-    }
-    encoder.endEncoding();
+    dxmt9::encoders::encodeColorFill(commandBuffer, pool_, pipelineCache_, wrappedDevice_,
+                                       limits_, shaderArchive_, shaderArchivePath_, fill);
   }
 
   void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer, const SurfaceCopyDesc& copy) {
-    auto* src = findSurfaceUnlocked(copy.source.value);
-    auto* dst = findSurfaceUnlocked(copy.destination.value);
-    if (!src || !dst || !src->texture || !dst->texture) {
-      return;
-    }
-    const uint32_t srcW = static_cast<uint32_t>(std::max(1, copy.sourceRect.right - copy.sourceRect.left));
-    const uint32_t srcH = static_cast<uint32_t>(std::max(1, copy.sourceRect.bottom - copy.sourceRect.top));
-    const uint32_t dstW = static_cast<uint32_t>(std::max(1, copy.destinationRect.right - copy.destinationRect.left));
-    const uint32_t dstH = static_cast<uint32_t>(std::max(1, copy.destinationRect.bottom - copy.destinationRect.top));
-    if (srcW == dstW && srcH == dstH) {
-      auto blit = commandBuffer.blitCommandEncoder();
-      if (!blit) return;
-      WMTOrigin srcOrigin{(uint64_t)copy.sourceRect.left, (uint64_t)copy.sourceRect.top, 0};
-      WMTSize srcSize{srcW, srcH, 1};
-      WMTOrigin dstOrigin{(uint64_t)copy.destinationRect.left, (uint64_t)copy.destinationRect.top, 0};
-      blit.copyFromTextureToTexture(WMT::Texture{src->texture.handle}, 0, copy.sourceLevel,
-                                    srcOrigin, srcSize,
-                                    WMT::Texture{dst->texture.handle}, 0, copy.destinationLevel,
-                                    dstOrigin);
-      blit.endEncoding();
-    } else {
-      encodeStretchRect(commandBuffer, {
-          .source = copy.source,
-          .destination = copy.destination,
-          .sourceRect = copy.sourceRect,
-          .destinationRect = copy.destinationRect,
-          .linear = true,
-          .sourceSampleCount = src->desc.multiSampleType == MultiSampleType::None ? 1u : sampleCount(src->desc.multiSampleType),
-          .destinationSampleCount = dst->desc.multiSampleType == MultiSampleType::None ? 1u : sampleCount(dst->desc.multiSampleType),
-      });
-    }
+    dxmt9::encoders::encodeSurfaceCopy(commandBuffer, pool_, pipelineCache_, wrappedDevice_,
+                                         limits_, shaderArchive_, shaderArchivePath_, copy);
   }
 
   void encodeStretchRect(WMT::CommandBuffer& commandBuffer, const StretchRectDesc& stretch) {
-    auto* src = findSurfaceUnlocked(stretch.source.value);
-    auto* dst = findSurfaceUnlocked(stretch.destination.value);
-    if (!src || !dst || !src->texture || !dst->texture) {
-      return;
-    }
-    {
-      WMTRenderPassInfo passInfo{};
-      passInfo.colors[0].texture = dst->texture.handle;
-      passInfo.colors[0].load_action = WMTLoadActionLoad;
-      passInfo.colors[0].store_action = WMTStoreActionStore;
-      if (dst->resolveTexture) {
-        passInfo.colors[0].resolve_texture = dst->resolveTexture.handle;
-        passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
-      }
-      auto encoder = commandBuffer.renderCommandEncoder(passInfo);
-      if (!encoder) return;
-      auto pipeline = pipelineForStretchRect(stretch,
-                        static_cast<u32>(toPixelFormat(dst->desc.format, limits_))).get();
-      if (!pipeline) {
-        encoder.endEncoding();
-        return;
-      }
-      encoder.setRenderPipelineState(pipeline);
-      encoder.setFragmentTexture(WMT::Texture{src->texture.handle}, 0);
-      auto sampler = makeSampler(stretch.linear);
-      if (sampler) encoder.setFragmentSamplerState(sampler, 0);
-      encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
-      encoder.endEncoding();
-    }
+    dxmt9::encoders::encodeStretchRect(commandBuffer, pool_, pipelineCache_, wrappedDevice_,
+                                         limits_, shaderArchive_, shaderArchivePath_, stretch);
   }
 
   void encodeReadback(WMT::CommandBuffer& commandBuffer, const ReadbackDesc& readback) {
@@ -2960,81 +2871,6 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
-  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineForColorFill(const ColorRGBA& color,
-                                                                                     u32 pixelFormat) {
-    ShaderVariantKey key;
-    key.hash = static_cast<u64>(std::bit_cast<u32>(color.r)) ^
-               (static_cast<u64>(std::bit_cast<u32>(color.g)) << 1) ^ pixelFormat;
-    key.colorFormats[0] = pixelFormat;
-    key.blend[0].pixelFormat = pixelFormat;
-    std::lock_guard lock(pipelineCache_.mutex);
-    if (auto it = pipelineCache_.fill.find(key); it != pipelineCache_.fill.end()) {
-      return it->second.future;
-    }
-    auto future = std::async(std::launch::async, [this, color, pixelFormat]() {
-      auto vsLib = makeLibrary(wrappedDevice_, makeGenericVertexSource(makeHash("fill")));
-      auto fsLib = makeLibrary(wrappedDevice_, makeGenericFragmentSource(color, makeHash("fill")));
-      if (!vsLib || !fsLib) {
-        return WMT::Reference<WMT::RenderPipelineState>{};
-      }
-      auto vs = vsLib.newFunction("dxmt9_vs");
-      auto fs = fsLib.newFunction("dxmt9_fs");
-      WMTRenderPipelineInfo info{};
-      info.max_tessellation_factor = 1;
-      info.vertex_function = vs.handle;
-      info.fragment_function = fs.handle;
-      info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
-      info.colors[0].write_mask = WMTColorWriteMaskAll;
-      info.rasterization_enabled = true;
-      info.raster_sample_count = 1;
-      if (*shaderArchive_) info.binary_archive_for_serialization = (*shaderArchive_).handle;
-      WMT::Error err{};
-      auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-      if (pso && *shaderArchive_) persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
-      return pso;
-    });
-    auto shared = future.share();
-    pipelineCache_.fill.emplace(key, PipelineCacheEntry{shared});
-    return shared;
-  }
-
-  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineForStretchRect(const StretchRectDesc& stretch,
-                                                                                       u32 pixelFormat) {
-    ShaderVariantKey key;
-    key.hash = stretch.linear ? 1u : 0u;
-    key.textured = true;
-    key.linear = stretch.linear;
-    key.sampleCount = std::max(1u, stretch.destinationSampleCount);
-    key.colorFormats[0] = pixelFormat;
-    key.blend[0].pixelFormat = pixelFormat;
-    std::lock_guard lock(pipelineCache_.mutex);
-    if (auto it = pipelineCache_.stretch.find(key); it != pipelineCache_.stretch.end()) {
-      return it->second.future;
-    }
-    auto future = std::async(std::launch::async, [this, stretch, pixelFormat]() {
-      auto vsLib = makeLibrary(wrappedDevice_, makeTexturedVertexSource(makeHash("stretch")));
-      auto fsLib = makeLibrary(wrappedDevice_, makeTexturedFragmentSource(makeHash("stretch")));
-      if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
-      auto vs = vsLib.newFunction("dxmt9_vs");
-      auto fs = fsLib.newFunction("dxmt9_fs");
-      WMTRenderPipelineInfo info{};
-      info.max_tessellation_factor = 1;
-      info.vertex_function = vs.handle;
-      info.fragment_function = fs.handle;
-      info.raster_sample_count = std::max(1u, stretch.destinationSampleCount);
-      info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
-      info.colors[0].write_mask = WMTColorWriteMaskAll;
-      info.rasterization_enabled = true;
-      if (*shaderArchive_) info.binary_archive_for_serialization = (*shaderArchive_).handle;
-      WMT::Error err{};
-      auto pso = wrappedDevice_.newRenderPipelineState(info, err);
-      if (pso && *shaderArchive_) persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
-      return pso;
-    });
-    auto shared = future.share();
-    pipelineCache_.stretch.emplace(key, PipelineCacheEntry{shared});
-    return shared;
-  }
 
   // pipelineForPresent moved to dxmt9::Presenter (C4); each Presenter caches
   // its own pipeline per (opaqueAlpha) variant using buildPresentPipeline.
