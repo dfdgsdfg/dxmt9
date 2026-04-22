@@ -101,6 +101,40 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
   return handle;
 }
 
+core::SurfaceHandle Pool::createSurface(WMT::Device device,
+                                          const core::BackendLimits& limits,
+                                          const core::SurfaceDesc& desc) {
+  const core::Handle handle{nextHandle++};
+  SurfaceRecord record;
+  record.desc = desc;
+  if (desc.pool != core::Pool::SystemMem && desc.pool != core::Pool::Scratch) {
+    const uint32_t sc = std::max(1u, core::sampleCount(desc.multiSampleType));
+    WMTTextureInfo info{};
+    info.type = convert::toTextureType(core::TextureType::TwoD,
+                                         desc.multiSampleType != core::MultiSampleType::None);
+    info.pixel_format = convert::toPixelFormat(desc.format, limits);
+    info.width = std::max(1u, desc.width);
+    info.height = std::max(1u, desc.height);
+    info.depth = 1;
+    info.mipmap_level_count = 1;
+    info.sample_count = sc;
+    info.array_length = 1;
+    info.options = convert::toResourceOptions(desc.pool, desc.usage);
+    info.usage = convert::toTextureUsage(desc);
+    record.texture = device.newTexture(info);
+    if (sc > 1) {
+      WMTTextureInfo resolveInfo = info;
+      resolveInfo.sample_count = 1;
+      resolveInfo.type = WMTTextureType2D;
+      resolveInfo.usage =
+          static_cast<WMTTextureUsage>(WMTTextureUsageShaderRead | WMTTextureUsageRenderTarget);
+      record.resolveTexture = device.newTexture(resolveInfo);
+    }
+  }
+  surfaces[handle.value] = std::move(record);
+  return handle;
+}
+
 bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount) {
   auto it = buffers.find(handleValue);
   if (it == buffers.end()) {

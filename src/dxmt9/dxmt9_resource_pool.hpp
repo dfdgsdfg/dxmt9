@@ -107,6 +107,13 @@ struct Pool {
   core::TextureHandle createTexture(WMT::Device device,
                                      const core::BackendLimits& limits,
                                      const core::TextureDesc& desc);
+
+  // Allocate a new surface record (render target / depth-stencil attachment).
+  // For MSAA surfaces (sampleCount > 1), also allocates a matching resolve
+  // texture.
+  core::SurfaceHandle createSurface(WMT::Device device,
+                                      const core::BackendLimits& limits,
+                                      const core::SurfaceDesc& desc);
 };
 
 }  // namespace dxmt9::resources

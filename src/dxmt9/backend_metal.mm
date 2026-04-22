@@ -967,33 +967,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   SurfaceHandle createSurface(const SurfaceDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    const Handle handle{pool_.nextHandle++};
-    SurfaceRecord record;
-    record.desc = desc;
-    if (desc.pool != Pool::SystemMem && desc.pool != Pool::Scratch) {
-      const uint32_t sc = std::max(1u, sampleCount(desc.multiSampleType));
-      WMTTextureInfo info{};
-      info.type = toTextureType(TextureType::TwoD, desc.multiSampleType != MultiSampleType::None);
-      info.pixel_format = toPixelFormat(desc.format, limits_);
-      info.width = std::max(1u, desc.width);
-      info.height = std::max(1u, desc.height);
-      info.depth = 1;
-      info.mipmap_level_count = 1;
-      info.sample_count = sc;
-      info.array_length = 1;
-      info.options = toResourceOptions(desc.pool, desc.usage);
-      info.usage = toTextureUsage(desc);
-      record.texture = wrappedDevice_.newTexture(info);
-      if (sc > 1) {
-        WMTTextureInfo resolveInfo = info;
-        resolveInfo.sample_count = 1;
-        resolveInfo.type = WMTTextureType2D;
-        resolveInfo.usage = static_cast<WMTTextureUsage>(WMTTextureUsageShaderRead | WMTTextureUsageRenderTarget);
-        record.resolveTexture = wrappedDevice_.newTexture(resolveInfo);
-      }
-    }
-    pool_.surfaces[handle.value] = std::move(record);
-    return handle;
+    return pool_.createSurface(wrappedDevice_, limits_, desc);
   }
 
   SurfaceHandle createSurfaceForTexture(TextureHandle textureHandle, u32 level, const SurfaceDesc& desc) override {
