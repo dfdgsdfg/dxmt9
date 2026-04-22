@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <span>
+#include <vector>
 
 namespace dxmt9::resources {
 
@@ -163,6 +165,125 @@ core::SurfaceHandle Pool::createSurfaceForTexture(core::TextureHandle textureHan
   }
   surfaces[handle.value] = std::move(record);
   return handle;
+}
+
+namespace {
+
+std::span<const std::uint8_t> normalizeUploadBytes(core::Format format, u32 width, u32 height,
+                                                     u32 pitch,
+                                                     std::span<const std::uint8_t> bytes,
+                                                     std::vector<std::uint8_t>& scratch) {
+  if (bytes.empty()) {
+    return bytes;
+  }
+  switch (format) {
+    case core::Format::X8R8G8B8:
+    case core::Format::X8B8G8R8: {
+      const std::size_t rowBytes = static_cast<std::size_t>(pitch);
+      const std::size_t expected = rowBytes * static_cast<std::size_t>(height);
+      if (expected == 0 || bytes.size() < expected) {
+        return bytes;
+      }
+      scratch.assign(bytes.begin(), bytes.begin() + expected);
+      for (u32 y = 0; y < height; ++y) {
+        std::uint8_t* row = scratch.data() + static_cast<std::size_t>(y) * rowBytes;
+        for (u32 x = 0; x < width; ++x) {
+          row[static_cast<std::size_t>(x) * 4 + 3] = 0xffu;
+        }
+      }
+      return scratch;
+    }
+    case core::Format::X1R5G5B5: {
+      const std::size_t rowBytes = static_cast<std::size_t>(pitch);
+      const std::size_t expected = rowBytes * static_cast<std::size_t>(height);
+      if (expected == 0 || bytes.size() < expected) {
+        return bytes;
+      }
+      scratch.assign(bytes.begin(), bytes.begin() + expected);
+      for (u32 y = 0; y < height; ++y) {
+        auto* row = reinterpret_cast<std::uint16_t*>(scratch.data() +
+                                                       static_cast<std::size_t>(y) * rowBytes);
+        for (u32 x = 0; x < width; ++x) {
+          row[x] |= 0x8000u;
+        }
+      }
+      return scratch;
+    }
+    default:
+      return bytes;
+  }
+}
+
+}  // namespace
+
+void Pool::uploadTextureLevel(WMT::Device device,
+                               WMT::CommandQueue queue,
+                               core::TextureHandle handle,
+                               u32 level,
+                               u32 width,
+                               u32 height,
+                               u32 pitch,
+                               const std::uint8_t* bytes,
+                               std::size_t byteCount) {
+  auto it = textures.find(handle.value);
+  if (it == textures.end() || !it->second.texture || byteCount == 0) {
+    return;
+  }
+
+  std::vector<std::uint8_t> scratch;
+  const auto normalized = normalizeUploadBytes(it->second.desc.format, width, height, pitch,
+                                                  {bytes, byteCount}, scratch);
+
+  WMT::Texture texture{it->second.texture.handle};
+  const u32 mipLevel = level;
+  const u32 mipWidth = std::max(1u, width);
+  const u32 mipHeight = std::max(1u, height);
+
+  if (!it->second.isPrivate) {
+    WMTOrigin origin{0, 0, 0};
+    WMTSize size{mipWidth, mipHeight, 1};
+    texture.replaceRegion(origin, size, mipLevel, 0, normalized.data(), pitch, 0);
+    return;
+  }
+
+  // Private-mode: allocate a shared staging texture, upload into it, then
+  // blit into the private destination on `queue`.
+  WMTTextureInfo stagingInfo{};
+  stagingInfo.type = WMTTextureType2D;
+  stagingInfo.pixel_format = texture.pixelFormat();
+  stagingInfo.width = mipWidth;
+  stagingInfo.height = mipHeight;
+  stagingInfo.depth = 1;
+  stagingInfo.mipmap_level_count = 1;
+  stagingInfo.sample_count = 1;
+  stagingInfo.array_length = 1;
+  stagingInfo.options = WMTResourceStorageModeShared;
+  stagingInfo.usage = WMTTextureUsageShaderRead;
+  auto stagingTexture = device.newTexture(stagingInfo);
+  if (!stagingTexture) {
+    return;
+  }
+  {
+    WMTOrigin origin{0, 0, 0};
+    WMTSize size{mipWidth, mipHeight, 1};
+    WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
+                                                       normalized.data(), pitch, 0);
+  }
+  auto commandBuffer = queue.commandBuffer();
+  if (!commandBuffer) {
+    return;
+  }
+  auto blit = commandBuffer.blitCommandEncoder();
+  if (!blit) {
+    return;
+  }
+  WMTOrigin origin{0, 0, 0};
+  WMTSize size{mipWidth, mipHeight, 1};
+  blit.copyFromTextureToTexture(WMT::Texture{stagingTexture.handle}, 0, 0,
+                                 origin, size, texture, 0, mipLevel, origin);
+  blit.endEncoding();
+  commandBuffer.commit();
+  commandBuffer.waitUntilCompleted();
 }
 
 void Pool::markBufferUse(core::Handle handle, u64 seqId) {

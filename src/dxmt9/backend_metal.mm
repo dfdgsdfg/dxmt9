@@ -964,108 +964,63 @@ class MetalBackendDevice final : public BackendDevice {
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
                           std::span<const u8> bytes) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    auto it = pool_.textures.find(handle.value);
-    if (it == pool_.textures.end() || !it->second.texture || bytes.empty()) {
-      return;
-    }
     if (shouldTraceTexture(handle)) {
-      u32 minAlpha = 255u;
-      u32 maxAlpha = 0u;
-      u64 nonZeroAlpha = 0u;
-      u64 nonZeroRgb = 0u;
-      if ((it->second.desc.format == Format::A8R8G8B8 || it->second.desc.format == Format::A8B8G8R8 ||
-           it->second.desc.format == Format::X8R8G8B8 || it->second.desc.format == Format::X8B8G8R8) &&
-          pitch >= width * 4u) {
-        for (u32 y = 0; y < height; ++y) {
-          const u8* row = bytes.data() + static_cast<size_t>(y) * pitch;
-          for (u32 x = 0; x < width; ++x) {
-            const u8 b = row[static_cast<size_t>(x) * 4u + 0u];
-            const u8 g = row[static_cast<size_t>(x) * 4u + 1u];
-            const u8 r = row[static_cast<size_t>(x) * 4u + 2u];
-            const u8 a = row[static_cast<size_t>(x) * 4u + 3u];
-            minAlpha = std::min<u32>(minAlpha, a);
-            maxAlpha = std::max<u32>(maxAlpha, a);
-            nonZeroAlpha += (a != 0u) ? 1u : 0u;
-            nonZeroRgb += (r != 0u || g != 0u || b != 0u) ? 1u : 0u;
-          }
-        }
-      }
-      std::ostringstream out;
-      out << "[dxmt9-texture] upload handle=0x" << std::hex << handle.value << std::dec
-          << " level=" << level
-          << " size=" << width << "x" << height
-          << " pitch=" << pitch
-          << " bytes=" << bytes.size()
-          << " alphaMin=" << minAlpha
-          << " alphaMax=" << maxAlpha
-          << " nonZeroAlpha=" << nonZeroAlpha
-          << " nonZeroRgb=" << nonZeroRgb
-          << " head=";
-      const size_t preview = std::min<size_t>(16, bytes.size());
-      for (size_t i = 0; i < preview; ++i) {
-        if (i) {
-          out << ',';
-        }
-        out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(bytes[i]) << std::dec;
-      }
-      emitTextureTraceLine(out.str());
+      emitUploadTrace(handle, level, width, height, pitch, bytes);
     }
-
-    std::vector<u8> normalizedStorage;
-    const auto normalizedBytes =
-        normalizeTextureUploadBytes(it->second.desc.format, width, height, pitch, bytes, normalizedStorage);
-
-    WMT::Texture texture{it->second.texture.handle};
-    const uint32_t mipLevel = level;
-    const uint32_t mipWidth = std::max(1u, width);
-    const uint32_t mipHeight = std::max(1u, height);
-
-    if (!it->second.isPrivate) {
-      WMTOrigin origin{0, 0, 0};
-      WMTSize size{mipWidth, mipHeight, 1};
-      texture.replaceRegion(origin, size, mipLevel, 0, normalizedBytes.data(), pitch, 0);
-    } else {
-      WMTTextureInfo stagingInfo{};
-      stagingInfo.type = WMTTextureType2D;
-      stagingInfo.pixel_format = texture.pixelFormat();
-      stagingInfo.width = mipWidth;
-      stagingInfo.height = mipHeight;
-      stagingInfo.depth = 1;
-      stagingInfo.mipmap_level_count = 1;
-      stagingInfo.sample_count = 1;
-      stagingInfo.array_length = 1;
-      stagingInfo.options = WMTResourceStorageModeShared;
-      stagingInfo.usage = WMTTextureUsageShaderRead;
-      auto stagingTexture = wrappedDevice_.newTexture(stagingInfo);
-      if (!stagingTexture) {
-        return;
-      }
-      {
-        WMTOrigin origin{0, 0, 0};
-        WMTSize size{mipWidth, mipHeight, 1};
-        WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
-                                                          normalizedBytes.data(), pitch, 0);
-      }
-      auto commandBuffer = bootstrapCommandBuffer(commandQueue_->raw());
-      if (!commandBuffer) {
-        return;
-      }
-      auto blit = commandBuffer.blitCommandEncoder();
-      if (!blit) {
-        return;
-      }
-      WMTOrigin origin{0, 0, 0};
-      WMTSize size{mipWidth, mipHeight, 1};
-      blit.copyFromTextureToTexture(WMT::Texture{stagingTexture.handle}, 0, 0,
-                                    origin, size, texture, 0, mipLevel, origin);
-      blit.endEncoding();
-      commandBuffer.commit();
-      commandBuffer.waitUntilCompleted();
-    }
-
+    pool_.uploadTextureLevel(wrappedDevice_, commandQueue_->raw(), handle, level,
+                              width, height, pitch, bytes.data(), bytes.size());
     if (level == 0 && shouldDumpGpuTexture(handle)) {
-      dumpTextureSnapshotUnlocked(handle, it->second.desc, it->second.texture.handle);
+      if (auto* rec = pool_.findTexture(handle.value); rec && rec->texture) {
+        dumpTextureSnapshotUnlocked(handle, rec->desc, rec->texture.handle);
+      }
     }
+  }
+
+  // Debug-only upload trace (kept on backend because it's wired to file-local
+  // shouldTraceTexture + emitTextureTraceLine sinks).
+  void emitUploadTrace(TextureHandle handle, u32 level, u32 width, u32 height,
+                        u32 pitch, std::span<const u8> bytes) {
+    u32 minAlpha = 255u;
+    u32 maxAlpha = 0u;
+    u64 nonZeroAlpha = 0u;
+    u64 nonZeroRgb = 0u;
+    auto* rec = pool_.findTexture(handle.value);
+    if (rec && (rec->desc.format == Format::A8R8G8B8 || rec->desc.format == Format::A8B8G8R8 ||
+                 rec->desc.format == Format::X8R8G8B8 || rec->desc.format == Format::X8B8G8R8) &&
+        pitch >= width * 4u) {
+      for (u32 y = 0; y < height; ++y) {
+        const u8* row = bytes.data() + static_cast<size_t>(y) * pitch;
+        for (u32 x = 0; x < width; ++x) {
+          const u8 b = row[static_cast<size_t>(x) * 4u + 0u];
+          const u8 g = row[static_cast<size_t>(x) * 4u + 1u];
+          const u8 r = row[static_cast<size_t>(x) * 4u + 2u];
+          const u8 a = row[static_cast<size_t>(x) * 4u + 3u];
+          minAlpha = std::min<u32>(minAlpha, a);
+          maxAlpha = std::max<u32>(maxAlpha, a);
+          nonZeroAlpha += (a != 0u) ? 1u : 0u;
+          nonZeroRgb += (r != 0u || g != 0u || b != 0u) ? 1u : 0u;
+        }
+      }
+    }
+    std::ostringstream out;
+    out << "[dxmt9-texture] upload handle=0x" << std::hex << handle.value << std::dec
+        << " level=" << level
+        << " size=" << width << "x" << height
+        << " pitch=" << pitch
+        << " bytes=" << bytes.size()
+        << " alphaMin=" << minAlpha
+        << " alphaMax=" << maxAlpha
+        << " nonZeroAlpha=" << nonZeroAlpha
+        << " nonZeroRgb=" << nonZeroRgb
+        << " head=";
+    const size_t preview = std::min<size_t>(16, bytes.size());
+    for (size_t i = 0; i < preview; ++i) {
+      if (i) {
+        out << ',';
+      }
+      out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(bytes[i]) << std::dec;
+    }
+    emitTextureTraceLine(out.str());
   }
 
   void submitDraw(const DrawDesc& desc) override {

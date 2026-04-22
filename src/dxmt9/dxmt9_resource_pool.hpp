@@ -122,6 +122,21 @@ struct Pool {
                                                 u32 level,
                                                 const core::SurfaceDesc& desc);
 
+  // Upload CPU-visible bytes into a texture mip level. For shared-mode
+  // textures this is a direct replaceRegion. For private-mode textures a
+  // staging texture is created, populated, and copied via a synchronous
+  // blit submitted on `queue`. Applies format-specific channel padding
+  // (X8R8G8B8 alpha fix-up etc.) via a scratch buffer.
+  void uploadTextureLevel(WMT::Device device,
+                           WMT::CommandQueue queue,
+                           core::TextureHandle handle,
+                           u32 level,
+                           u32 width,
+                           u32 height,
+                           u32 pitch,
+                           const std::uint8_t* bytes,
+                           std::size_t byteCount);
+
   // Stamp lastUsedSeqId on a record so the finish-thread GC respects the
   // in-flight watermark. No-ops on zero handle.
   void markBufferUse(core::Handle handle, u64 seqId);
