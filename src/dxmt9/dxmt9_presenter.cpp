@@ -1,7 +1,12 @@
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_queue.hpp"
+#include "dxmt9/dxmt9_device.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <sstream>
 
 namespace dxmt9 {
 
@@ -110,6 +115,117 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   result.encoded = true;
   presentimpl::traceEvent("scheduled", params.seqId, hwnd_);
   return result;
+}
+
+namespace {
+
+std::uint64_t forcedPresentTextureHandle() {
+  static const std::uint64_t value = [] {
+    const char* env = std::getenv("DXMT_FORCE_PRESENT_TEXTURE_HANDLE");
+    if (!env || env[0] == '\0') {
+      return 0ull;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 0);
+    if (end == env) {
+      return 0ull;
+    }
+    return parsed;
+  }();
+  return value;
+}
+
+}  // namespace
+
+bool encodePresent(WMT::CommandBuffer& commandBuffer,
+                   resources::Pool& pool,
+                   Device* upperDevice,
+                   const core::SwapDesc& present,
+                   core::Handle sourceHandle,
+                   std::uint64_t seqId) {
+  using namespace dxmt9::core::metalqueue;
+  presentimpl::traceEvent("begin", seqId, present.window.value);
+  if (queueTraceEnabled()) {
+    std::ostringstream out;
+    out << "[dxmt9-present] source"
+        << " seq=" << static_cast<unsigned long long>(seqId)
+        << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+        << " handle=0x" << std::hex << static_cast<unsigned long long>(sourceHandle.value) << std::dec;
+    emitQueueTraceLine(out.str());
+  }
+  auto* source = pool.findSurface(sourceHandle.value);
+  if (!source || !source->texture) {
+    presentimpl::traceEvent("missing-source", seqId, present.window.value);
+    return false;
+  }
+  obj_handle_t sourceTextureHandle =
+      source->resolveTexture ? source->resolveTexture.handle : source->texture.handle;
+  const std::uint64_t forcedTextureHandle = forcedPresentTextureHandle();
+  if (forcedTextureHandle != 0ull) {
+    if (auto* forced = pool.findTexture(forcedTextureHandle); forced && forced->texture) {
+      sourceTextureHandle = forced->texture.handle;
+      if (queueTraceEnabled()) {
+        std::ostringstream out;
+        out << "[dxmt9-present] force-texture"
+            << " seq=" << static_cast<unsigned long long>(seqId)
+            << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+            << " handle=0x" << std::hex << forcedTextureHandle << std::dec
+            << " size=" << forced->desc.width << "x" << forced->desc.height
+            << " fmt=" << static_cast<unsigned>(forced->desc.format);
+        emitQueueTraceLine(out.str());
+      }
+    } else if (queueTraceEnabled()) {
+      std::ostringstream out;
+      out << "[dxmt9-present] force-texture-missing"
+          << " seq=" << static_cast<unsigned long long>(seqId)
+          << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+          << " handle=0x" << std::hex << forcedTextureHandle << std::dec;
+      emitQueueTraceLine(out.str());
+    }
+  }
+  if (queueTraceEnabled()) {
+    std::ostringstream out;
+    out << "[dxmt9-present] source.info"
+        << " seq=" << static_cast<unsigned long long>(seqId)
+        << " hwnd=" << static_cast<unsigned long long>(present.window.value)
+        << " size=" << source->desc.width << "x" << source->desc.height
+        << " fmt=" << static_cast<unsigned>(source->desc.format)
+        << " sampleCount="
+        << (source->desc.multiSampleType == core::MultiSampleType::None
+                ? 1u
+                : core::sampleCount(source->desc.multiSampleType));
+    emitQueueTraceLine(out.str());
+  }
+
+  // The originating core::SwapChain owns the Presenter and passes it via
+  // SwapDesc. Missing presenter = no layer available (hwnd=0 or failed
+  // acquisition in SwapChain::ensurePresenter).
+  Presenter* presenter = present.presenter;
+  if (!presenter) {
+    presentimpl::traceEvent("missing-layer", seqId, present.window.value);
+    return false;
+  }
+
+  const bool opaqueAlpha = source->desc.format == core::Format::X8R8G8B8 ||
+                            source->desc.format == core::Format::X8B8G8R8;
+
+  Presenter::EncodeParams params{};
+  params.source = WMT::Texture{sourceTextureHandle};
+  params.width = present.width;
+  params.height = present.height;
+  params.displaySyncEnabled = present.displaySyncEnabled;
+  params.contentsScale = 1.0;
+  params.maxDrawableCount = upperDevice ? upperDevice->maxFrameLatency() : 3u;
+  params.opaqueAlpha = opaqueAlpha;
+  params.seqId = seqId;
+
+  const auto presentResult = presenter->encodeCommands(commandBuffer, params);
+  if (!presentResult.acquired) {
+    if (upperDevice) upperDevice->notifyPresentationStatus(true);
+    return false;
+  }
+  if (upperDevice) upperDevice->notifyPresentationStatus(false);
+  return presentResult.encoded;
 }
 
 }  // namespace dxmt9

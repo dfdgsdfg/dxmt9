@@ -9,6 +9,8 @@
 // "fatter" Presenter shape.
 
 #include "dxmt9_presenter_macdrv.hpp"
+#include "dxmt9_resource_pool.hpp"
+#include "dxmt9/core.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <cstdint>
@@ -16,6 +18,8 @@
 #include <string>
 
 namespace dxmt9 {
+
+class Device;
 
 class Presenter {
  public:
@@ -72,5 +76,21 @@ class Presenter {
   WMT::Reference<WMT::BinaryArchive>* archive_ = nullptr;
   const std::string* archivePath_ = nullptr;
 };
+
+// Orchestrates a present: resolves the source surface via `pool`, applies
+// the DXMT_FORCE_PRESENT_TEXTURE_HANDLE override (debug-only), builds
+// EncodeParams from `present`, calls Presenter::encodeCommands, and fires
+// upperDevice->notifyPresentationStatus based on the nextDrawable outcome.
+// Returns true if the presenter drew (caller may then set a
+// discard-after-present flag).
+//
+// Extracted out of MetalBackendDevice::encodePresent so that present policy
+// lives with the Presenter rather than the Renderer.
+bool encodePresent(WMT::CommandBuffer& commandBuffer,
+                   resources::Pool& pool,
+                   Device* upperDevice,
+                   const core::SwapDesc& present,
+                   core::Handle sourceHandle,
+                   std::uint64_t seqId);
 
 }  // namespace dxmt9

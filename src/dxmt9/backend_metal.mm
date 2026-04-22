@@ -181,21 +181,6 @@ u64 skippedTextureHandle() {
   return value;
 }
 
-u64 forcedPresentTextureHandle() {
-  static const u64 value = [] {
-    const char* env = std::getenv("DXMT_FORCE_PRESENT_TEXTURE_HANDLE");
-    if (!env || env[0] == '\0') {
-      return 0ull;
-    }
-    char* end = nullptr;
-    const auto parsed = std::strtoull(env, &end, 0);
-    if (end == env) {
-      return 0ull;
-    }
-    return static_cast<u64>(parsed);
-  }();
-  return value;
-}
 
 bool shouldTraceEncode(const DrawDesc& draw, u64 seqId) {
   const u64 seq = traceEncodeSeq();
@@ -2345,88 +2330,9 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void encodePresent(WMT::CommandBuffer& commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
-    dxmt9::presentimpl::traceEvent("begin", seqId, present.window.value);
-    if (queueTraceEnabled()) {
-      std::ostringstream out;
-      out << "[dxmt9-present] source"
-          << " seq=" << static_cast<unsigned long long>(seqId)
-          << " hwnd=" << static_cast<unsigned long long>(present.window.value)
-          << " handle=0x" << std::hex << static_cast<unsigned long long>(sourceHandle.value) << std::dec;
-      emitQueueTraceLine(out.str());
+    if (dxmt9::encodePresent(commandBuffer, pool_, upperDevice_, present, sourceHandle, seqId)) {
+      backBufferDiscardAfterPresent_ = true;
     }
-    auto* source = findSurfaceUnlocked(sourceHandle.value);
-    if (!source || !source->texture) {
-      dxmt9::presentimpl::traceEvent("missing-source", seqId, present.window.value);
-      return;
-    }
-    obj_handle_t sourceTextureHandle = source->resolveTexture ? source->resolveTexture.handle : source->texture.handle;
-    u64 forcedTextureHandle = forcedPresentTextureHandle();
-    if (forcedTextureHandle != 0ull) {
-      if (auto* forced = findTextureUnlocked(forcedTextureHandle); forced && forced->texture) {
-        sourceTextureHandle = forced->texture.handle;
-        if (queueTraceEnabled()) {
-          std::ostringstream out;
-          out << "[dxmt9-present] force-texture"
-              << " seq=" << static_cast<unsigned long long>(seqId)
-              << " hwnd=" << static_cast<unsigned long long>(present.window.value)
-              << " handle=0x" << std::hex << forcedTextureHandle << std::dec
-              << " size=" << forced->desc.width << "x" << forced->desc.height
-              << " fmt=" << static_cast<unsigned>(forced->desc.format);
-          emitQueueTraceLine(out.str());
-        }
-      } else if (queueTraceEnabled()) {
-        std::ostringstream out;
-        out << "[dxmt9-present] force-texture-missing"
-            << " seq=" << static_cast<unsigned long long>(seqId)
-            << " hwnd=" << static_cast<unsigned long long>(present.window.value)
-            << " handle=0x" << std::hex << forcedTextureHandle << std::dec;
-        emitQueueTraceLine(out.str());
-      }
-    }
-    if (queueTraceEnabled()) {
-      std::ostringstream out;
-      out << "[dxmt9-present] source.info"
-          << " seq=" << static_cast<unsigned long long>(seqId)
-          << " hwnd=" << static_cast<unsigned long long>(present.window.value)
-          << " size=" << source->desc.width << "x" << source->desc.height
-          << " fmt=" << static_cast<unsigned>(source->desc.format)
-          << " sampleCount="
-          << (source->desc.multiSampleType == MultiSampleType::None ? 1u : sampleCount(source->desc.multiSampleType));
-      emitQueueTraceLine(out.str());
-    }
-
-    // The originating core::SwapChain owns the Presenter and passes it via
-    // SwapDesc. Missing presenter = no layer available (hwnd=0 or failed
-    // acquisition in SwapChain::ensurePresenter).
-    dxmt9::Presenter* presenter = present.presenter;
-    if (!presenter) {
-      dxmt9::presentimpl::traceEvent("missing-layer", seqId, present.window.value);
-      return;
-    }
-
-    const bool opaqueAlpha =
-        source->desc.format == Format::X8R8G8B8 || source->desc.format == Format::X8B8G8R8;
-
-    dxmt9::Presenter::EncodeParams params{};
-    params.source = WMT::Texture{sourceTextureHandle};
-    params.width = present.width;
-    params.height = present.height;
-    params.displaySyncEnabled = present.displaySyncEnabled;
-    params.contentsScale = 1.0;
-    params.maxDrawableCount = upperDevice_ ? upperDevice_->maxFrameLatency() : 3u;
-    params.opaqueAlpha = opaqueAlpha;
-    params.seqId = seqId;
-
-    const auto presentResult = presenter->encodeCommands(commandBuffer, params);
-    if (!presentResult.acquired) {
-      if (upperDevice_) upperDevice_->notifyPresentationStatus(true);
-      return;
-    }
-    if (upperDevice_) upperDevice_->notifyPresentationStatus(false);
-    if (!presentResult.encoded) {
-      return;
-    }
-    backBufferDiscardAfterPresent_ = true;
   }
 
   void dumpTextureSnapshotUnlocked(Handle handle, const TextureDesc& desc,
