@@ -910,36 +910,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   SurfaceHandle createSurfaceForTexture(TextureHandle textureHandle, u32 level, const SurfaceDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    auto textureIt = pool_.textures.find(textureHandle.value);
-    if (textureIt == pool_.textures.end() || !textureIt->second.texture) {
-      return {};
-    }
-
-    const Handle handle{pool_.nextHandle++};
-    SurfaceRecord record;
-    record.desc = desc;
-    record.aliasTexture = textureHandle;
-    record.level = level;
-
-    {
-      WMT::Texture parentTexture{textureIt->second.texture.handle};
-      if (level == 0 && desc.width == textureIt->second.desc.width &&
-          desc.height == textureIt->second.desc.height) {
-        record.texture = WMT::Reference<WMT::Texture>(parentTexture);
-      } else {
-        WMTTextureSwizzleChannels swizzle{
-            WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
-            WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
-        uint64_t gpuId = 0;
-        auto view = parentTexture.newTextureView(
-            parentTexture.pixelFormat(), parentTexture.textureType(),
-            level, 1, 0, 1, swizzle, gpuId);
-        record.texture = view ? std::move(view) : WMT::Reference<WMT::Texture>(parentTexture);
-      }
-    }
-
-    pool_.surfaces[handle.value] = std::move(record);
-    return handle;
+    return pool_.createSurfaceForTexture(textureHandle, level, desc);
   }
 
   void destroyBuffer(BufferHandle handle) override {
@@ -1226,91 +1197,28 @@ class MetalBackendDevice final : public BackendDevice {
     }
   }
 
-  void markBufferUseUnlocked(Handle handle, u64 seqId) {
-    if (!handle) {
-      return;
-    }
-    if (auto* buffer = findBufferUnlocked(handle.value)) {
-      buffer->lastUsedSeqId = std::max(buffer->lastUsedSeqId, seqId);
-    }
+  // mark*ResourcesUnlocked helpers are now methods on pool_ (task 3).
+  // Backend uses inline aliases that inject the default seqId (nextSeqId_).
+  u64 seqIdForMark(u64 seqId) const {
+    return seqId == 0 ? commandQueue_->nextSeqId_ : seqId;
   }
-
-  void markTextureUseUnlocked(Handle handle, u64 seqId) {
-    if (!handle) {
-      return;
-    }
-    if (auto* texture = findTextureUnlocked(handle.value)) {
-      texture->lastUsedSeqId = std::max(texture->lastUsedSeqId, seqId);
-    }
-  }
-
-  void markSurfaceUseUnlocked(Handle handle, u64 seqId) {
-    if (!handle) {
-      return;
-    }
-    if (auto* surface = findSurfaceUnlocked(handle.value)) {
-      surface->lastUsedSeqId = std::max(surface->lastUsedSeqId, seqId);
-    }
-  }
-
   void markDrawResourcesUnlocked(const DrawDesc& desc, u64 seqId = 0) {
-    if (seqId == 0) {
-      seqId = commandQueue_->nextSeqId_;
-    }
-    markBufferUseUnlocked(desc.indexBuffer, seqId);
-    for (const auto& stream : desc.vertexDecl.streams) {
-      if (stream.buffer) {
-        markBufferUseUnlocked(stream.buffer->handle(), seqId);
-      }
-    }
-    for (const auto& texture : desc.textures) {
-      markTextureUseUnlocked(texture.handle, seqId);
-    }
-    for (const auto& rt : desc.rts.color) {
-      markSurfaceUseUnlocked(rt.handle, seqId);
-    }
-    markSurfaceUseUnlocked(desc.rts.depthStencil.handle, seqId);
+    pool_.markDrawResources(desc, seqIdForMark(seqId));
   }
-
   void markClearResourcesUnlocked(const ClearDesc& desc, u64 seqId = 0) {
-    if (seqId == 0) {
-      seqId = commandQueue_->nextSeqId_;
-    }
-    for (const auto& attachment : desc.colorAttachments) {
-      markSurfaceUseUnlocked(attachment.handle, seqId);
-    }
-    markSurfaceUseUnlocked(desc.depthStencil.handle, seqId);
+    pool_.markClearResources(desc, seqIdForMark(seqId));
   }
-
   void markSurfaceCopyResourcesUnlocked(const SurfaceCopyDesc& desc, u64 seqId = 0) {
-    if (seqId == 0) {
-      seqId = commandQueue_->nextSeqId_;
-    }
-    markSurfaceUseUnlocked(desc.source, seqId);
-    markSurfaceUseUnlocked(desc.destination, seqId);
+    pool_.markSurfaceCopyResources(desc, seqIdForMark(seqId));
   }
-
   void markStretchResourcesUnlocked(const StretchRectDesc& desc, u64 seqId = 0) {
-    if (seqId == 0) {
-      seqId = commandQueue_->nextSeqId_;
-    }
-    markSurfaceUseUnlocked(desc.source, seqId);
-    markSurfaceUseUnlocked(desc.destination, seqId);
+    pool_.markStretchResources(desc, seqIdForMark(seqId));
   }
-
   void markReadbackResourcesUnlocked(const ReadbackDesc& desc, u64 seqId = 0) {
-    if (seqId == 0) {
-      seqId = commandQueue_->nextSeqId_;
-    }
-    markSurfaceUseUnlocked(desc.source, seqId);
-    markSurfaceUseUnlocked(desc.destination, seqId);
+    pool_.markReadbackResources(desc, seqIdForMark(seqId));
   }
-
   void markColorFillResourcesUnlocked(const ColorFillDesc& desc, u64 seqId = 0) {
-    if (seqId == 0) {
-      seqId = commandQueue_->nextSeqId_;
-    }
-    markSurfaceUseUnlocked(desc.destination, seqId);
+    pool_.markColorFillResources(desc, seqIdForMark(seqId));
   }
 
   MetalCommandRecord makeDrawCommand(const DrawDesc& desc) {

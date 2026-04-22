@@ -114,6 +114,28 @@ struct Pool {
   core::SurfaceHandle createSurface(WMT::Device device,
                                       const core::BackendLimits& limits,
                                       const core::SurfaceDesc& desc);
+
+  // Create a surface record that aliases an existing texture's mip level.
+  // If the surface covers the full level-0 of the parent, it references the
+  // texture directly; otherwise a WMT texture view is created.
+  core::SurfaceHandle createSurfaceForTexture(core::TextureHandle textureHandle,
+                                                u32 level,
+                                                const core::SurfaceDesc& desc);
+
+  // Stamp lastUsedSeqId on a record so the finish-thread GC respects the
+  // in-flight watermark. No-ops on zero handle.
+  void markBufferUse(core::Handle handle, u64 seqId);
+  void markTextureUse(core::Handle handle, u64 seqId);
+  void markSurfaceUse(core::Handle handle, u64 seqId);
+
+  // Per-command-kind bulk marks. Walk the descriptor's resources and stamp
+  // their last-used watermark.
+  void markDrawResources(const core::DrawDesc& desc, u64 seqId);
+  void markClearResources(const core::ClearDesc& desc, u64 seqId);
+  void markSurfaceCopyResources(const core::SurfaceCopyDesc& desc, u64 seqId);
+  void markStretchResources(const core::StretchRectDesc& desc, u64 seqId);
+  void markReadbackResources(const core::ReadbackDesc& desc, u64 seqId);
+  void markColorFillResources(const core::ColorFillDesc& desc, u64 seqId);
 };
 
 }  // namespace dxmt9::resources

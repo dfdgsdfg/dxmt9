@@ -135,6 +135,99 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
   return handle;
 }
 
+core::SurfaceHandle Pool::createSurfaceForTexture(core::TextureHandle textureHandle,
+                                                    u32 level,
+                                                    const core::SurfaceDesc& desc) {
+  auto textureIt = textures.find(textureHandle.value);
+  if (textureIt == textures.end() || !textureIt->second.texture) {
+    return {};
+  }
+  const core::Handle handle{nextHandle++};
+  SurfaceRecord record;
+  record.desc = desc;
+  record.aliasTexture = textureHandle;
+  record.level = level;
+  WMT::Texture parentTexture{textureIt->second.texture.handle};
+  if (level == 0 && desc.width == textureIt->second.desc.width &&
+      desc.height == textureIt->second.desc.height) {
+    record.texture = WMT::Reference<WMT::Texture>(parentTexture);
+  } else {
+    WMTTextureSwizzleChannels swizzle{
+        WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+        WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
+    uint64_t gpuId = 0;
+    auto view = parentTexture.newTextureView(parentTexture.pixelFormat(),
+                                               parentTexture.textureType(),
+                                               level, 1, 0, 1, swizzle, gpuId);
+    record.texture = view ? std::move(view) : WMT::Reference<WMT::Texture>(parentTexture);
+  }
+  surfaces[handle.value] = std::move(record);
+  return handle;
+}
+
+void Pool::markBufferUse(core::Handle handle, u64 seqId) {
+  if (!handle) return;
+  if (auto* rec = findBuffer(handle.value)) {
+    rec->lastUsedSeqId = std::max(rec->lastUsedSeqId, seqId);
+  }
+}
+
+void Pool::markTextureUse(core::Handle handle, u64 seqId) {
+  if (!handle) return;
+  if (auto* rec = findTexture(handle.value)) {
+    rec->lastUsedSeqId = std::max(rec->lastUsedSeqId, seqId);
+  }
+}
+
+void Pool::markSurfaceUse(core::Handle handle, u64 seqId) {
+  if (!handle) return;
+  if (auto* rec = findSurface(handle.value)) {
+    rec->lastUsedSeqId = std::max(rec->lastUsedSeqId, seqId);
+  }
+}
+
+void Pool::markDrawResources(const core::DrawDesc& desc, u64 seqId) {
+  markBufferUse(desc.indexBuffer, seqId);
+  for (const auto& stream : desc.vertexDecl.streams) {
+    if (stream.buffer) {
+      markBufferUse(stream.buffer->handle(), seqId);
+    }
+  }
+  for (const auto& texture : desc.textures) {
+    markTextureUse(texture.handle, seqId);
+  }
+  for (const auto& rt : desc.rts.color) {
+    markSurfaceUse(rt.handle, seqId);
+  }
+  markSurfaceUse(desc.rts.depthStencil.handle, seqId);
+}
+
+void Pool::markClearResources(const core::ClearDesc& desc, u64 seqId) {
+  for (const auto& attachment : desc.colorAttachments) {
+    markSurfaceUse(attachment.handle, seqId);
+  }
+  markSurfaceUse(desc.depthStencil.handle, seqId);
+}
+
+void Pool::markSurfaceCopyResources(const core::SurfaceCopyDesc& desc, u64 seqId) {
+  markSurfaceUse(desc.source, seqId);
+  markSurfaceUse(desc.destination, seqId);
+}
+
+void Pool::markStretchResources(const core::StretchRectDesc& desc, u64 seqId) {
+  markSurfaceUse(desc.source, seqId);
+  markSurfaceUse(desc.destination, seqId);
+}
+
+void Pool::markReadbackResources(const core::ReadbackDesc& desc, u64 seqId) {
+  markSurfaceUse(desc.source, seqId);
+  markSurfaceUse(desc.destination, seqId);
+}
+
+void Pool::markColorFillResources(const core::ColorFillDesc& desc, u64 seqId) {
+  markSurfaceUse(desc.destination, seqId);
+}
+
 bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount) {
   auto it = buffers.find(handleValue);
   if (it == buffers.end()) {
