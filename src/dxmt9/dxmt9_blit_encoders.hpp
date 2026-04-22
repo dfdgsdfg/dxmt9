@@ -58,4 +58,10 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
                       const std::string* archivePath,
                       const core::ColorFillDesc& fill);
 
+// Render-pass with LoadActionClear that targets color attachment 0 (and its
+// resolve if present). Used for D3DClear-style non-scissored clears.
+void encodeClearPass(WMT::CommandBuffer& commandBuffer,
+                      resources::Pool& pool,
+                      const core::ClearDesc& clear);
+
 }  // namespace dxmt9::encoders

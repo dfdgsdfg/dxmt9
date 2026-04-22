@@ -2494,31 +2494,11 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void encodeClearPass(WMT::CommandBuffer& commandBuffer, const ClearDesc& clear) {
-    if (clear.colorAttachments[0].handle == Handle{} && clear.depthStencil.handle == Handle{}) {
-      return;
-    }
-    auto* surface = findSurfaceUnlocked(clear.colorAttachments[0].handle.value);
-    if (!surface || !surface->texture) {
-      return;
-    }
-    WMTRenderPassInfo passInfo{};
-    passInfo.colors[0].texture = surface->texture.handle;
-    passInfo.colors[0].load_action = WMTLoadActionClear;
-    passInfo.colors[0].store_action = WMTStoreActionStore;
-    if (surface->resolveTexture) {
-      passInfo.colors[0].resolve_texture = surface->resolveTexture.handle;
-      passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
-    }
-    passInfo.colors[0].clear_color = WMTClearColor{clear.color.r, clear.color.g,
-                                                   clear.color.b, clear.color.a};
-    auto encoder = commandBuffer.renderCommandEncoder(passInfo);
-    if (encoder) {
-      encoder.endEncoding();
-    }
+    dxmt9::encoders::encodeClearPass(commandBuffer, pool_, clear);
   }
 
   void encodeColorFillPass(WMT::CommandBuffer& commandBuffer, const ClearDesc& clear) {
-    encodeClearPass(commandBuffer, clear);
+    dxmt9::encoders::encodeClearPass(commandBuffer, pool_, clear);
   }
 
   void encodeColorFill(WMT::CommandBuffer& commandBuffer, const ColorFillDesc& fill) {

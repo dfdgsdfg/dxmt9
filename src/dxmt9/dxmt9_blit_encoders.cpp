@@ -187,4 +187,31 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
   encoder.endEncoding();
 }
 
+void encodeClearPass(WMT::CommandBuffer& commandBuffer,
+                      resources::Pool& pool,
+                      const core::ClearDesc& clear) {
+  if (clear.colorAttachments[0].handle == core::Handle{} &&
+      clear.depthStencil.handle == core::Handle{}) {
+    return;
+  }
+  auto* surface = pool.findSurface(clear.colorAttachments[0].handle.value);
+  if (!surface || !surface->texture) {
+    return;
+  }
+  WMTRenderPassInfo passInfo{};
+  passInfo.colors[0].texture = surface->texture.handle;
+  passInfo.colors[0].load_action = WMTLoadActionClear;
+  passInfo.colors[0].store_action = WMTStoreActionStore;
+  if (surface->resolveTexture) {
+    passInfo.colors[0].resolve_texture = surface->resolveTexture.handle;
+    passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
+  }
+  passInfo.colors[0].clear_color = WMTClearColor{clear.color.r, clear.color.g,
+                                                 clear.color.b, clear.color.a};
+  auto encoder = commandBuffer.renderCommandEncoder(passInfo);
+  if (encoder) {
+    encoder.endEncoding();
+  }
+}
+
 }  // namespace dxmt9::encoders
