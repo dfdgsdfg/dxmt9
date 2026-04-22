@@ -747,10 +747,12 @@ class MetalBackendDevice final : public BackendDevice {
         .resolveSurfaceFlags = [this](Handle handle) { return compatFlagsForSurfaceUnlocked(handle); },
     });
 
+    // encodeLoop stays on backend (owns encodeChunk/encodeDraw). finish +
+    // completion loops moved to CommandQueue (Step 3c).
     commandQueue_->startThreads(
         [this] { encodeLoop(); },
-        [this] { finishLoop(); },
-        [this] { completionWatcherLoop(); });
+        [q = commandQueue_, p = pool_, a = allocators_] { q->runFinishLoop(*p, *a); },
+        [q = commandQueue_] { q->runCompletionWatcherLoop(); });
     ready_ = true;
   }
 
@@ -767,11 +769,8 @@ class MetalBackendDevice final : public BackendDevice {
     purgeResourcesUnlocked();
   }
 
-  void completionWatcherLoop() {
-    while (commandQueue_->queueLifecycle_.processOnePendingCompletion(commandQueue_->stop_)) {
-      // continue until processOnePendingCompletion returns false (stop)
-    }
-  }
+  // completionWatcherLoop moved to CommandQueue::runCompletionWatcherLoop
+  // (Step 3c).
 
   // Observer setters + setMaxFrameLatency: no overrides here. Factory wires
   // observers directly on the upper dxmt9::Device in createDevice (task 3).
@@ -2192,19 +2191,7 @@ class MetalBackendDevice final : public BackendDevice {
     return pipelineCache_->depthStencilStateFor(wrappedDevice_, key);
   }
 
-  void finishLoop() {
-    @autoreleasepool {
-      while (true) {
-        std::unique_lock lock(commandQueue_->mutex_);
-        if (!commandQueue_->queueLifecycle_.runFinishIteration(lock, [this](u64) {
-              allocators_->reclaim(commandQueue_->completedSeqId_);
-              tryGarbageCollectUnlocked();
-            })) {
-          return;
-        }
-      }
-    }
-  }
+  // finishLoop moved to CommandQueue::runFinishLoop (Step 3c).
 
   void waitForSequenceUnlocked(u64 seqId, std::unique_lock<std::mutex>& lock) {
     commandQueue_->queueLifecycle_.waitForSequence(lock, seqId);

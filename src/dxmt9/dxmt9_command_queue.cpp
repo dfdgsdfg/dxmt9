@@ -1,5 +1,6 @@
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
+#include "dxmt9_ring_arena.hpp"
 
 #include <utility>
 
@@ -214,6 +215,24 @@ void CommandQueue::submitFlush(resources::Pool& pool) {
 core::HResult CommandQueue::waitForVBlank(resources::Pool& pool) {
   submitFlush(pool);
   return core::HResult{0};
+}
+
+void CommandQueue::runFinishLoop(resources::Pool& pool, scratch::FrameAllocators& allocators) {
+  while (true) {
+    std::unique_lock lock(mutex_);
+    if (!queueLifecycle_.runFinishIteration(lock, [this, &pool, &allocators](std::uint64_t) {
+          allocators.reclaim(completedSeqId_);
+          pool.reclaimCompleted(completedSeqId_);
+        })) {
+      return;
+    }
+  }
+}
+
+void CommandQueue::runCompletionWatcherLoop() {
+  while (queueLifecycle_.processOnePendingCompletion(stop_)) {
+    // continue until processOnePendingCompletion returns false (stop)
+  }
 }
 
 }  // namespace dxmt9

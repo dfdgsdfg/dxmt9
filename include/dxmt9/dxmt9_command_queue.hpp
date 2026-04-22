@@ -22,6 +22,7 @@
 namespace dxmt9 {
 
 namespace resources { struct Pool; }
+namespace scratch { struct FrameAllocators; }
 
 // Size of the chunk ring. Matches upstream dxmt's kCommandChunkCount.
 inline constexpr size_t kCommandChunkCount = 32;
@@ -74,6 +75,13 @@ class CommandQueue {
   void submitPresent(resources::Pool& pool, const core::SwapDesc& desc);
   void submitFlush(resources::Pool& pool);
   core::HResult waitForVBlank(resources::Pool& pool);
+
+  // Thread main-loop bodies. encodeLoop still lives on the backend (depends
+  // on encodeChunk + encodeDraw which Steps 3c-follow-up / 3d will migrate).
+  // finish + completion loops are thin wrappers over queueLifecycle_ and
+  // move here cleanly.
+  void runFinishLoop(resources::Pool& pool, scratch::FrameAllocators& allocators);
+  void runCompletionWatcherLoop();
 
   // Sequence counters + chunk-ring state. Guarded externally by the owning
   // backend's mutex (the binding into QueueLifecycleController takes raw
