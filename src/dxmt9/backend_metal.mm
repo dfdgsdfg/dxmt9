@@ -17,6 +17,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_d3d9_bytecode.hpp"
+#include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_pipeline_cache.hpp"
@@ -140,30 +141,8 @@ u64 textureTraceHandle() {
   return handle;
 }
 
-const char* shaderDumpDir() {
-  static const char* path = std::getenv("DXMT_DUMP_SHADER_DIR");
-  return path && path[0] != '\0' ? path : nullptr;
-}
-
-void maybeDumpShaderSource(const char* label, const std::string& source) {
-  const char* dir = shaderDumpDir();
-  if (!dir || !label) {
-    return;
-  }
-  std::error_code ec;
-  std::filesystem::create_directories(dir, ec);
-  const u64 hash = hashBytes(std::as_bytes(std::span(source)));
-  const auto path = std::filesystem::path(dir) /
-                    (std::string(label) + "-" + std::to_string(hash) + ".metal");
-  if (std::filesystem::exists(path, ec)) {
-    return;
-  }
-  std::ofstream out(path, std::ios::binary);
-  if (!out) {
-    return;
-  }
-  out.write(source.data(), static_cast<std::streamsize>(source.size()));
-}
+// shaderDumpDir + maybeDumpShaderSource moved to dxmt9_draw_shader.cpp
+// (file-private there). Only the makeDrawShaderSource dispatch calls them.
 
 bool shouldDumpGpuTexture(Handle handle) {
   const u64 wanted = gpuDumpTextureHandle();
@@ -666,7 +645,8 @@ using dxmt9::translator::makeTranslatedVertexSource;
 using dxmt9::translator::makeTranslatedFragmentSource;
 
 
-std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex);
+// makeDrawShaderSource moved to dxmt9_draw_shader.{hpp,cpp}
+using dxmt9::drawshader::makeDrawShaderSource;
 
 std::string makeShaderSourceFromRequestInternal(const WinemetalShaderCompileRequest& request) {
   DrawDesc desc;
@@ -715,41 +695,6 @@ std::string makeShaderSourceFromRequestInternal(const WinemetalShaderCompileRequ
   return {};
 }
 
-std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex) {
-  if (vertex) {
-    if (desc.vertexShader.kind == ShaderRef::Kind::Bytecode) {
-      auto source = makeTranslatedVertexSource(desc.vertexShader, desc);
-      maybeDumpShaderSource("translated-vs", source);
-      return source;
-    }
-    if (desc.vertexShader.kind == ShaderRef::Kind::FixedFunctionVertex && desc.vertexShader.vertexKey) {
-      auto source = makeFfpVertexSource(*desc.vertexShader.vertexKey, desc);
-      maybeDumpShaderSource("ffp-vs", source);
-      return source;
-    }
-    const u64 variantHash = desc.vertexShader.hash ^ desc.clipPlaneMask ^ desc.rts.color[0].sampleCount;
-    auto source = desc.textures[0].handle ? makeTexturedVertexSource(variantHash)
-                                          : makeGenericVertexSource(variantHash);
-    maybeDumpShaderSource("builtin-vs", source);
-    return source;
-  }
-
-  if (desc.pixelShader.kind == ShaderRef::Kind::Bytecode) {
-    auto source = makeTranslatedFragmentSource(desc.pixelShader, desc);
-    maybeDumpShaderSource("translated-fs", source);
-    return source;
-  }
-  if (desc.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel && desc.pixelShader.pixelKey) {
-    auto source = makeFfpPixelSource(*desc.pixelShader.pixelKey, desc);
-    maybeDumpShaderSource("ffp-fs", source);
-    return source;
-  }
-  const u64 variantHash = desc.pixelShader.hash ^ desc.clipPlaneMask ^ desc.rts.color[0].sampleCount;
-  auto source = desc.textures[0].handle ? makeTexturedFragmentSource(variantHash)
-                                        : makeGenericFragmentSource({1.0f, 1.0f, 1.0f, 1.0f}, variantHash);
-  maybeDumpShaderSource("builtin-fs", source);
-  return source;
-}
 
 ShaderVariantKey makeShaderVariantKey(const DrawDesc& desc, std::span<const u32> colorFormats,
                                       std::span<const BlendAttachmentKey> blendAttachments, u32 depthFormat,

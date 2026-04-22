@@ -8,6 +8,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_capture.cpp',
   'dxmt9_blit_encoders.cpp',
   'dxmt9_device.cpp',
+  'dxmt9_draw_shader.cpp',
   'dxmt9_ffp_shaders.cpp',
   'dxmt9_format_convert.cpp',
   'dxmt9_pipeline_cache.cpp',
