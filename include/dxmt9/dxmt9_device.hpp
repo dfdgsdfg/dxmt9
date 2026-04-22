@@ -11,7 +11,9 @@
 #include "core.hpp"
 #include "dxmt9_command_queue.hpp"
 
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace dxmt9 {
@@ -58,6 +60,28 @@ class Device {
   virtual void notifyPresentationStatus(bool /*occluded*/) {}
   virtual void setMaxFrameLatency(std::uint32_t /*latency*/) {}
   virtual std::uint32_t maxFrameLatency() const { return 3; }
+
+  // Resource lifecycle — previously on BackendDevice. Promoted so
+  // core::Device can talk to dxmt9::Device directly instead of going
+  // through the BackendDevice indirection. Default impls return empty
+  // handles for test paths (StubDxmt9Device).
+  virtual core::BufferHandle createBuffer(const core::BufferDesc&) { return {}; }
+  virtual core::TextureHandle createTexture(const core::TextureDesc&) { return {}; }
+  virtual core::SurfaceHandle createSurface(const core::SurfaceDesc&) { return {}; }
+  virtual core::SurfaceHandle createSurfaceForTexture(core::TextureHandle, std::uint32_t,
+                                                       const core::SurfaceDesc&) {
+    return {};
+  }
+  virtual void destroyBuffer(core::BufferHandle) {}
+  virtual void destroyTexture(core::TextureHandle) {}
+  virtual void destroySurface(core::SurfaceHandle) {}
+  virtual void* mapBuffer(core::BufferHandle, std::uint32_t /*flags*/) { return nullptr; }
+  virtual void unmapBuffer(core::BufferHandle) {}
+  virtual void uploadBufferData(core::BufferHandle, std::span<const std::uint8_t>) {}
+  virtual void uploadTextureLevel(core::TextureHandle, std::uint32_t /*level*/,
+                                    std::uint32_t /*width*/, std::uint32_t /*height*/,
+                                    std::uint32_t /*pitch*/,
+                                    std::span<const std::uint8_t> /*bytes*/) {}
 };
 
 struct DEVICE_DESC {

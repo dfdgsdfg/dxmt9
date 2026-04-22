@@ -2614,7 +2614,7 @@ HResult Device::checkDeviceState() const {
 }
 
 std::shared_ptr<Buffer> Device::createBuffer(const BufferDesc& desc) {
-  auto handle = backend_->createBuffer(desc);
+  auto handle = upperDevice_ ? upperDevice_->createBuffer(desc) : BufferHandle{};
   if (!handle) {
     handle = Handle{nextHandle_++};
   }
@@ -2624,7 +2624,7 @@ std::shared_ptr<Buffer> Device::createBuffer(const BufferDesc& desc) {
 }
 
 std::shared_ptr<Texture> Device::createTexture(const TextureDesc& desc) {
-  auto handle = backend_->createTexture(desc);
+  auto handle = upperDevice_ ? upperDevice_->createTexture(desc) : TextureHandle{};
   if (!handle) {
     handle = Handle{nextHandle_++};
   }
@@ -2634,7 +2634,7 @@ std::shared_ptr<Texture> Device::createTexture(const TextureDesc& desc) {
 }
 
 std::shared_ptr<Surface> Device::createSurface(const SurfaceDesc& desc) {
-  auto handle = backend_->createSurface(desc);
+  auto handle = upperDevice_ ? upperDevice_->createSurface(desc) : SurfaceHandle{};
   if (!handle) {
     handle = Handle{nextHandle_++};
   }

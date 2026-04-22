@@ -82,6 +82,56 @@ class DeviceImpl final : public Device {
   }
   std::uint32_t maxFrameLatency() const override { return maxFrameLatency_; }
 
+  // Resource lifecycle. Called directly from core::Device (and from
+  // MetalBackendDevice's BackendDevice overrides during the transition).
+  // The pool lives on *this; commandQueue_.mutex_ is the protecting mutex.
+  core::BufferHandle createBuffer(const core::BufferDesc& desc) override {
+    std::lock_guard lock(queue_.mutex_);
+    return pool_.createBuffer(wmt_device_, desc);
+  }
+  core::TextureHandle createTexture(const core::TextureDesc& desc) override {
+    std::lock_guard lock(queue_.mutex_);
+    return pool_.createTexture(wmt_device_, limits_, desc);
+  }
+  core::SurfaceHandle createSurface(const core::SurfaceDesc& desc) override {
+    std::lock_guard lock(queue_.mutex_);
+    return pool_.createSurface(wmt_device_, limits_, desc);
+  }
+  core::SurfaceHandle createSurfaceForTexture(core::TextureHandle handle, std::uint32_t level,
+                                                const core::SurfaceDesc& desc) override {
+    std::lock_guard lock(queue_.mutex_);
+    return pool_.createSurfaceForTexture(handle, level, desc);
+  }
+  void destroyBuffer(core::BufferHandle handle) override {
+    std::lock_guard lock(queue_.mutex_);
+    pool_.markDestroyAndGc(pool_.buffers, handle.value, queue_.completedSeqId_);
+  }
+  void destroyTexture(core::TextureHandle handle) override {
+    std::lock_guard lock(queue_.mutex_);
+    pool_.markDestroyAndGc(pool_.textures, handle.value, queue_.completedSeqId_);
+  }
+  void destroySurface(core::SurfaceHandle handle) override {
+    std::lock_guard lock(queue_.mutex_);
+    pool_.markDestroyAndGc(pool_.surfaces, handle.value, queue_.completedSeqId_);
+  }
+  void unmapBuffer(core::BufferHandle) override {}
+  void uploadBufferData(core::BufferHandle handle, std::span<const std::uint8_t> bytes) override {
+    std::lock_guard lock(queue_.mutex_);
+    pool_.uploadBufferData(handle.value, bytes.data(), bytes.size());
+  }
+  // mapBuffer + uploadTextureLevel stay on the backend: they need the
+  // wait-for-seq hook / texture trace sink resident on MetalBackendDevice.
+  // Forward through backend_ which inherits from BackendDevice and owns
+  // the concrete methods.
+  void* mapBuffer(core::BufferHandle handle, std::uint32_t flags) override {
+    return backend_ ? backend_->mapBuffer(handle, flags) : nullptr;
+  }
+  void uploadTextureLevel(core::TextureHandle handle, std::uint32_t level,
+                           std::uint32_t width, std::uint32_t height, std::uint32_t pitch,
+                           std::span<const std::uint8_t> bytes) override {
+    if (backend_) backend_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
+  }
+
   bool ready() const noexcept { return static_cast<bool>(backend_); }
 
  private:
