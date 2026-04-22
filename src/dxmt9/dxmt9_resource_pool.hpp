@@ -80,6 +80,23 @@ struct Pool {
     textures.clear();
     surfaces.clear();
   }
+
+  // Mark a record destroy-pending and immediately reclaim if the GPU has
+  // already passed its last-used watermark. Returns true if the record
+  // existed.
+  template <typename Map>
+  bool markDestroyAndGc(Map& map, u64 handleValue, u64 completedSeqId) {
+    auto it = map.find(handleValue);
+    if (it == map.end()) return false;
+    it->second.destroyPending = true;
+    reclaimCompleted(completedSeqId);
+    return true;
+  }
+
+  // Record a CPU-visible write to a buffer (updates shadow + mirrors to
+  // `contents` if the buffer is shared-mode). Returns true if the handle
+  // resolved. Caller holds the pool's mutex.
+  bool uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount);
 };
 
 }  // namespace dxmt9::resources

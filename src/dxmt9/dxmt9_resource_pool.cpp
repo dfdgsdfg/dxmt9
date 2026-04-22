@@ -2,6 +2,9 @@
 
 #include "dxmt9/assert.hpp"
 
+#include <algorithm>
+#include <cstring>
+
 namespace dxmt9::resources {
 
 BufferRecord* Pool::findBuffer(u64 handle) noexcept {
@@ -54,6 +57,20 @@ void Pool::reclaimCompleted(u64 completedSeqId) {
   gcMap(buffers, completedSeqId);
   gcMap(textures, completedSeqId);
   gcMap(surfaces, completedSeqId);
+}
+
+bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount) {
+  auto it = buffers.find(handleValue);
+  if (it == buffers.end()) {
+    return false;
+  }
+  it->second.shadow.assign(bytes, bytes + byteCount);
+  if (!it->second.buffer || byteCount == 0 || !it->second.contents) {
+    return true;
+  }
+  const std::size_t copySize = std::min(byteCount, static_cast<std::size_t>(it->second.desc.size));
+  std::memcpy(it->second.contents, bytes, copySize);
+  return true;
 }
 
 }  // namespace dxmt9::resources

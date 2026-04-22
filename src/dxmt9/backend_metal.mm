@@ -1062,26 +1062,17 @@ class MetalBackendDevice final : public BackendDevice {
 
   void destroyBuffer(BufferHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    if (auto it = pool_.buffers.find(handle.value); it != pool_.buffers.end()) {
-      it->second.destroyPending = true;
-      tryGarbageCollectUnlocked();
-    }
+    pool_.markDestroyAndGc(pool_.buffers, handle.value, commandQueue_->completedSeqId_);
   }
 
   void destroyTexture(TextureHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    if (auto it = pool_.textures.find(handle.value); it != pool_.textures.end()) {
-      it->second.destroyPending = true;
-      tryGarbageCollectUnlocked();
-    }
+    pool_.markDestroyAndGc(pool_.textures, handle.value, commandQueue_->completedSeqId_);
   }
 
   void destroySurface(SurfaceHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    if (auto it = pool_.surfaces.find(handle.value); it != pool_.surfaces.end()) {
-      it->second.destroyPending = true;
-      tryGarbageCollectUnlocked();
-    }
+    pool_.markDestroyAndGc(pool_.surfaces, handle.value, commandQueue_->completedSeqId_);
   }
 
   void* mapBuffer(BufferHandle handle, u32 flags) override {
@@ -1114,16 +1105,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    auto it = pool_.buffers.find(handle.value);
-    if (it == pool_.buffers.end()) {
-      return;
-    }
-    it->second.shadow.assign(bytes.begin(), bytes.end());
-    if (!it->second.buffer || bytes.empty() || !it->second.contents) {
-      return;
-    }
-    const size_t copySize = std::min(bytes.size(), static_cast<size_t>(it->second.desc.size));
-    std::memcpy(it->second.contents, bytes.data(), copySize);
+    pool_.uploadBufferData(handle.value, bytes.data(), bytes.size());
   }
 
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
