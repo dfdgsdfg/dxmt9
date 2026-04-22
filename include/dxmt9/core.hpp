@@ -1073,7 +1073,7 @@ class Buffer {
 
  private:
   std::weak_ptr<Device> owner_;
-  std::shared_ptr<BackendDevice> backend_;
+  std::shared_ptr<dxmt9::Device> backend_;
   BufferHandle handle_{};
   BufferDesc desc_{};
   std::vector<u8> storage_;
@@ -1113,7 +1113,7 @@ class Texture : public std::enable_shared_from_this<Texture> {
   };
 
   std::weak_ptr<Device> owner_;
-  std::shared_ptr<BackendDevice> backend_;
+  std::shared_ptr<dxmt9::Device> backend_;
   TextureHandle handle_{};
   TextureDesc desc_{};
   std::vector<LevelStorage> levels_;
@@ -1164,7 +1164,7 @@ class Surface : public std::enable_shared_from_this<Surface> {
 
  private:
   std::weak_ptr<Device> owner_;
-  std::shared_ptr<BackendDevice> backend_;
+  std::shared_ptr<dxmt9::Device> backend_;
   std::weak_ptr<Texture> textureContainer_;
   SurfaceHandle handle_{};
   SurfaceDesc desc_{};
@@ -1238,7 +1238,7 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   std::shared_ptr<Device> device() const noexcept { return owner_.lock(); }
   bool displaySyncEnabled() const noexcept;
   void resize(const PresentParameters& params);
-  HResult present(std::shared_ptr<BackendDevice> backend, const SwapDesc& desc);
+  HResult present(std::shared_ptr<dxmt9::Device> device, const SwapDesc& desc);
 
   // Per-window Presenter (WMT::MetalLayer-centric upper object). Owned by
   // this swap chain; nullptr on test paths where the upper dxmt9::Device
@@ -1272,7 +1272,11 @@ class Device : public std::enable_shared_from_this<Device> {
   const DeviceState& state() const noexcept { return state_; }
   DeviceState& mutableState() noexcept { return state_; }
   const PresentParameters& presentParameters() const noexcept { return presentParameters_; }
-  std::shared_ptr<BackendDevice> backend() const noexcept { return backend_; }
+  // Transitional accessor — returns the cached upper-device ptr, which
+  // exposes both resource-ops + submit/present now (via the dxmt9::Device
+  // interface promoted in Step 2a/2b). Name kept for back-compat; will be
+  // renamed to upperDevice() once all call sites migrate.
+  std::shared_ptr<dxmt9::Device> backend() const noexcept { return backend_; }
 
   std::shared_ptr<Buffer> createBuffer(const BufferDesc& desc);
   std::shared_ptr<Texture> createTexture(const TextureDesc& desc);
@@ -1387,7 +1391,7 @@ class Device : public std::enable_shared_from_this<Device> {
   AdapterInfo adapter_{};
   BackendLimits limits_{};
   DeviceCaps caps_{};
-  std::shared_ptr<BackendDevice> backend_;
+  std::shared_ptr<dxmt9::Device> backend_;
   std::shared_ptr<dxmt9::Device> upperDevice_{};
 
  public:

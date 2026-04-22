@@ -1856,7 +1856,7 @@ void DeviceState::reset() {
 Buffer::Buffer(std::shared_ptr<Device> owner, BufferHandle handle, BufferDesc desc)
     : owner_(std::move(owner)), handle_(handle), desc_(desc), storage_(static_cast<size_t>(desc.size)) {
   if (auto ownerPtr = owner_.lock()) {
-    backend_ = ownerPtr->backend();
+    backend_ = ownerPtr->upperDevice();
   }
 }
 
@@ -1903,7 +1903,7 @@ void Buffer::invalidate() {
 Texture::Texture(std::shared_ptr<Device> owner, TextureHandle handle, TextureDesc desc)
     : owner_(std::move(owner)), handle_(handle), desc_(desc) {
   if (auto ownerPtr = owner_.lock()) {
-    backend_ = ownerPtr->backend();
+    backend_ = ownerPtr->upperDevice();
   }
   const u32 bpp = bytesPerPixel(desc_.format);
   const u32 levels = std::max(1u, desc_.levels);
@@ -2063,7 +2063,7 @@ void Texture::invalidate() {
 Surface::Surface(std::shared_ptr<Device> owner, SurfaceHandle handle, SurfaceDesc desc)
     : owner_(std::move(owner)), handle_(handle), desc_(desc), containerKind_(ContainerKind::Device) {
   if (auto ownerPtr = owner_.lock()) {
-    backend_ = ownerPtr->backend();
+    backend_ = ownerPtr->upperDevice();
   }
   if (desc_.width != 0 && desc_.height != 0) {
     standalonePitch_ = bytesPerPixel(desc_.format) * desc_.width;
@@ -2076,7 +2076,7 @@ Surface::Surface(std::shared_ptr<Device> owner, SurfaceHandle handle, std::share
     : owner_(std::move(owner)), textureContainer_(std::move(texture)), handle_(handle), level_(level),
       containerKind_(ContainerKind::Texture) {
   if (auto ownerPtr = owner_.lock()) {
-    backend_ = ownerPtr->backend();
+    backend_ = ownerPtr->upperDevice();
   }
   if (auto tex = textureContainer_.lock()) {
     desc_.width = std::max(1u, tex->desc().width >> level_);
@@ -2560,9 +2560,9 @@ void SwapChain::resize(const PresentParameters& params) {
   }
 }
 
-HResult SwapChain::present(std::shared_ptr<BackendDevice> backend, const SwapDesc& desc) {
-  if (backend) {
-    backend->present(desc);
+HResult SwapChain::present(std::shared_ptr<dxmt9::Device> device, const SwapDesc& desc) {
+  if (device) {
+    device->present(desc);
   }
   return D3D_OK;
 }
@@ -2572,7 +2572,7 @@ Device::Device(AdapterInfo adapter, BackendLimits limits,
                std::shared_ptr<dxmt9::Device> upperDevice)
     : adapter_(std::move(adapter)), limits_(limits),
       caps_(makeDefaultCaps(limits_)),
-      backend_(upperDevice ? upperDevice->backend() : std::shared_ptr<BackendDevice>{}),
+      backend_(upperDevice),
       upperDevice_(std::move(upperDevice)),
       presentParameters_(normalizePresentParameters(adapter_, params)), behaviorFlags_(behaviorFlags) {
   state_.reset();
@@ -3943,6 +3943,9 @@ class StubDxmt9Device final : public dxmt9::Device {
   }
   HResult waitForVBlank(const SwapDesc& desc) override {
     return backend_ ? backend_->waitForVBlank(desc) : HResult{0};
+  }
+  bool readbackSurface(const ReadbackDesc& desc, ReadbackPixels& pixels) override {
+    return backend_ && backend_->readbackSurface(desc, pixels);
   }
 
  private:

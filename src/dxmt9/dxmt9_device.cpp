@@ -161,6 +161,9 @@ class DeviceImpl final : public Device {
   core::HResult waitForVBlank(const core::SwapDesc& desc) override {
     return backend_ ? backend_->waitForVBlank(desc) : core::HResult{0};
   }
+  bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
+    return backend_ && backend_->readbackSurface(desc, pixels);
+  }
 
   bool ready() const noexcept { return static_cast<bool>(backend_); }
 

@@ -97,6 +97,7 @@ class Device {
   virtual void present(const core::SwapDesc&) {}
   virtual void flush() {}
   virtual core::HResult waitForVBlank(const core::SwapDesc&) { return core::HResult{0}; }
+  virtual bool readbackSurface(const core::ReadbackDesc&, core::ReadbackPixels&) { return false; }
 };
 
 struct DEVICE_DESC {
