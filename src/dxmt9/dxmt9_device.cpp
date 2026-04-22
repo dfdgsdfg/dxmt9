@@ -132,6 +132,36 @@ class DeviceImpl final : public Device {
     if (backend_) backend_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
 
+  // Submit / present / flush — forward to backend while the encoder lives
+  // there. Step 3 will move these onto a RenderContext that DeviceImpl owns.
+  void submitDraw(const core::DrawDesc& desc) override {
+    if (backend_) backend_->submitDraw(desc);
+  }
+  void submitClear(const core::ClearDesc& desc) override {
+    if (backend_) backend_->submitClear(desc);
+  }
+  void submitSurfaceCopy(const core::SurfaceCopyDesc& desc) override {
+    if (backend_) backend_->submitSurfaceCopy(desc);
+  }
+  void submitStretchRect(const core::StretchRectDesc& desc) override {
+    if (backend_) backend_->submitStretchRect(desc);
+  }
+  void submitReadback(const core::ReadbackDesc& desc) override {
+    if (backend_) backend_->submitReadback(desc);
+  }
+  void submitColorFill(const core::ColorFillDesc& desc) override {
+    if (backend_) backend_->submitColorFill(desc);
+  }
+  void present(const core::SwapDesc& desc) override {
+    if (backend_) backend_->present(desc);
+  }
+  void flush() override {
+    if (backend_) backend_->flush();
+  }
+  core::HResult waitForVBlank(const core::SwapDesc& desc) override {
+    return backend_ ? backend_->waitForVBlank(desc) : core::HResult{0};
+  }
+
   bool ready() const noexcept { return static_cast<bool>(backend_); }
 
  private:

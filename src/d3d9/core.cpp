@@ -2590,7 +2590,7 @@ Device::Device(AdapterInfo adapter, BackendLimits limits,
 
 Device::~Device() {
   if (backend_) {
-    backend_->flush();
+    upperDevice_->flush();
   }
   completeUpTo(submittedSequenceId_);
   // SeqIdSafety / drain-before-teardown: pending work is drained before the
@@ -3178,7 +3178,7 @@ HResult Device::presentEx(const Rect* sourceRect, const Rect* destRect, Handle d
   auto desc = snapshotSwapDesc();
   submitPresentInternal(desc);
   if (backend_) {
-    backend_->flush();
+    upperDevice_->flush();
   }
   completeUpTo(submittedSequenceId_);
   ++presentCount_;
@@ -3210,7 +3210,7 @@ HResult Device::resetEx(const PresentParameters& params, const DisplayModeEx* fu
   deviceLost_ = false;
   presentOccluded_ = false;
   if (backend_) {
-    backend_->flush();
+    upperDevice_->flush();
   }
   completeUpTo(submittedSequenceId_);
   // Drain-before-teardown: Reset waits for queued work to drain before
@@ -3263,7 +3263,7 @@ HResult Device::waitForVBlank(size_t swapChainIndex) {
   if (backend_) {
     auto vblankDesc = makeSwapDesc(chain->params());
     vblankDesc.presenter = chain->presenter();
-    return backend_->waitForVBlank(vblankDesc);
+    return upperDevice_->waitForVBlank(vblankDesc);
   }
   return D3D_OK;
 }
@@ -3421,7 +3421,7 @@ void Device::submitClearInternal(const ClearDesc& desc) {
                   desc.color.a,
                   desc.depth,
                   desc.stencil);
-  backend_->submitClear(desc);
+  upperDevice_->submitClear(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
   // below the completed sequence.
@@ -3467,7 +3467,7 @@ void Device::submitDrawInternal(const DrawDesc& desc) {
                   stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
                   desc.clipPlaneMask);
   emitDrawTraceDump(submittedSequenceId_ + 1, desc, state_.indexBuffer);
-  backend_->submitDraw(desc);
+  upperDevice_->submitDraw(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
   // below the completed sequence.
@@ -3486,7 +3486,7 @@ void Device::submitPresentInternal(const SwapDesc& desc) {
                   static_cast<unsigned>(desc.format),
                   desc.windowed ? 1 : 0,
                   static_cast<unsigned>(desc.interval));
-  backend_->present(desc);
+  upperDevice_->present(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
   // below the completed sequence.
@@ -3559,7 +3559,7 @@ HResult Device::fillSurface(const std::shared_ptr<Surface>& surface, const Rect*
       backendDesc.hasRect = true;
     }
     backendDesc.color = color;
-    backend_->submitColorFill(backendDesc);
+    upperDevice_->submitColorFill(backendDesc);
   }
   surface->fillColor(rect, color);
   return D3D_OK;
@@ -3592,7 +3592,7 @@ HResult Device::stretchRect(const std::shared_ptr<Surface>& src, const Rect* src
     backendDesc.sourceRect = srcArea;
     backendDesc.destinationRect = dstArea;
     backendDesc.linear = linear;
-    backend_->submitStretchRect(backendDesc);
+    upperDevice_->submitStretchRect(backendDesc);
   }
 
   auto extractRegion = [&](const std::shared_ptr<Surface>& surface, const Rect& area) -> std::vector<u8> {
@@ -3677,7 +3677,7 @@ HResult Device::updateSurface(const std::shared_ptr<Surface>& src, const std::sh
     backendDesc.destination = dst->handle();
     backendDesc.sourceRect = {0, 0, static_cast<i32>(src->desc().width), static_cast<i32>(src->desc().height)};
     backendDesc.destinationRect = {0, 0, static_cast<i32>(dst->desc().width), static_cast<i32>(dst->desc().height)};
-    backend_->submitSurfaceCopy(backendDesc);
+    upperDevice_->submitSurfaceCopy(backendDesc);
   }
 
   auto srcRegion = src->lockRect(nullptr, 0);
@@ -3729,7 +3729,7 @@ HResult Device::updateTexture(const std::shared_ptr<Texture>& src, const std::sh
                                 static_cast<i32>(srcSurface->desc().height)};
       backendDesc.destinationRect = {0, 0, static_cast<i32>(dstSurface->desc().width),
                                      static_cast<i32>(dstSurface->desc().height)};
-      backend_->submitSurfaceCopy(backendDesc);
+      upperDevice_->submitSurfaceCopy(backendDesc);
     }
   }
   dst->copyFrom(*src);
@@ -3745,8 +3745,8 @@ HResult Device::getRenderTargetData(const std::shared_ptr<Surface>& src, const s
     backendDesc.source = src->handle();
     backendDesc.destination = dst->handle();
     backendDesc.sourceRect = {0, 0, static_cast<i32>(src->desc().width), static_cast<i32>(src->desc().height)};
-    backend_->submitReadback(backendDesc);
-    backend_->flush();
+    upperDevice_->submitReadback(backendDesc);
+    upperDevice_->flush();
     ReadbackPixels pixels;
     if (backend_->readbackSurface(backendDesc, pixels)) {
       auto dstRegion = dst->lockRect(nullptr, 0);
@@ -3876,6 +3876,73 @@ class StubDxmt9Device final : public dxmt9::Device {
   }
   void setMaxFrameLatency(std::uint32_t latency) override {
     if (backend_) backend_->setMaxFrameLatency(latency);
+  }
+
+  // Resource-ops + submit forwarding. Tests use mock backends as the source
+  // of truth — stub must delegate so tests keep working after the Step 2
+  // interface promotion moved primary callsites onto dxmt9::Device.
+  BufferHandle createBuffer(const BufferDesc& desc) override {
+    return backend_ ? backend_->createBuffer(desc) : BufferHandle{};
+  }
+  TextureHandle createTexture(const TextureDesc& desc) override {
+    return backend_ ? backend_->createTexture(desc) : TextureHandle{};
+  }
+  SurfaceHandle createSurface(const SurfaceDesc& desc) override {
+    return backend_ ? backend_->createSurface(desc) : SurfaceHandle{};
+  }
+  SurfaceHandle createSurfaceForTexture(TextureHandle handle, std::uint32_t level,
+                                          const SurfaceDesc& desc) override {
+    return backend_ ? backend_->createSurfaceForTexture(handle, level, desc) : SurfaceHandle{};
+  }
+  void destroyBuffer(BufferHandle handle) override {
+    if (backend_) backend_->destroyBuffer(handle);
+  }
+  void destroyTexture(TextureHandle handle) override {
+    if (backend_) backend_->destroyTexture(handle);
+  }
+  void destroySurface(SurfaceHandle handle) override {
+    if (backend_) backend_->destroySurface(handle);
+  }
+  void* mapBuffer(BufferHandle handle, std::uint32_t flags) override {
+    return backend_ ? backend_->mapBuffer(handle, flags) : nullptr;
+  }
+  void unmapBuffer(BufferHandle handle) override {
+    if (backend_) backend_->unmapBuffer(handle);
+  }
+  void uploadBufferData(BufferHandle handle, std::span<const std::uint8_t> bytes) override {
+    if (backend_) backend_->uploadBufferData(handle, bytes);
+  }
+  void uploadTextureLevel(TextureHandle handle, std::uint32_t level, std::uint32_t w,
+                            std::uint32_t h, std::uint32_t pitch,
+                            std::span<const std::uint8_t> bytes) override {
+    if (backend_) backend_->uploadTextureLevel(handle, level, w, h, pitch, bytes);
+  }
+  void submitDraw(const DrawDesc& desc) override {
+    if (backend_) backend_->submitDraw(desc);
+  }
+  void submitClear(const ClearDesc& desc) override {
+    if (backend_) backend_->submitClear(desc);
+  }
+  void submitSurfaceCopy(const SurfaceCopyDesc& desc) override {
+    if (backend_) backend_->submitSurfaceCopy(desc);
+  }
+  void submitStretchRect(const StretchRectDesc& desc) override {
+    if (backend_) backend_->submitStretchRect(desc);
+  }
+  void submitReadback(const ReadbackDesc& desc) override {
+    if (backend_) backend_->submitReadback(desc);
+  }
+  void submitColorFill(const ColorFillDesc& desc) override {
+    if (backend_) backend_->submitColorFill(desc);
+  }
+  void present(const SwapDesc& desc) override {
+    if (backend_) backend_->present(desc);
+  }
+  void flush() override {
+    if (backend_) backend_->flush();
+  }
+  HResult waitForVBlank(const SwapDesc& desc) override {
+    return backend_ ? backend_->waitForVBlank(desc) : HResult{0};
   }
 
  private:

@@ -82,6 +82,21 @@ class Device {
                                     std::uint32_t /*width*/, std::uint32_t /*height*/,
                                     std::uint32_t /*pitch*/,
                                     std::span<const std::uint8_t> /*bytes*/) {}
+
+  // Encode + submit commands. Previously on BackendDevice. Promoted here
+  // so core::Device can dispatch through the upper Device. DeviceImpl
+  // forwards to backend_ while the encoder still lives there; Step 3
+  // moves the encoder onto a RenderContext sibling and DeviceImpl
+  // implements these directly.
+  virtual void submitDraw(const core::DrawDesc&) {}
+  virtual void submitClear(const core::ClearDesc&) {}
+  virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
+  virtual void submitStretchRect(const core::StretchRectDesc&) {}
+  virtual void submitReadback(const core::ReadbackDesc&) {}
+  virtual void submitColorFill(const core::ColorFillDesc&) {}
+  virtual void present(const core::SwapDesc&) {}
+  virtual void flush() {}
+  virtual core::HResult waitForVBlank(const core::SwapDesc&) { return core::HResult{0}; }
 };
 
 struct DEVICE_DESC {
