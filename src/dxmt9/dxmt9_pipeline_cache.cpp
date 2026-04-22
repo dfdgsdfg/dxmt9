@@ -1,5 +1,6 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_draw_shader.hpp"
+#include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_shader_sources.hpp"
 
@@ -300,6 +301,37 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
     return pso;
   });
   return future.share();
+}
+
+ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
+                                       std::span<const u32> colorFormats,
+                                       std::span<const BlendAttachmentKey> blendAttachments,
+                                       u32 depthFormat,
+                                       u32 stencilFormat) {
+  ShaderVariantKey key{};
+  const auto layout = ffp::decodeFixedFunctionVertexLayout(desc);
+  const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(desc.vertexDecl);
+  key.hash = desc.vertexShader.hash ^ (desc.pixelShader.hash << 1) ^ desc.clipPlaneMask ^ depthFormat ^
+             (stencilFormat << 1) ^ (layoutHash << 1) ^ desc.vertexDecl.fvf;
+  key.textured = desc.textures[0].handle != core::Handle{};
+  const auto minFilterIt = desc.samplers[0].states.find(core::SAMP_MIN_FILTER);
+  const auto magFilterIt = desc.samplers[0].states.find(core::SAMP_MAG_FILTER);
+  key.linear = (minFilterIt != desc.samplers[0].states.end() && minFilterIt->second == 2u) ||
+               (magFilterIt != desc.samplers[0].states.end() && magFilterIt->second == 2u);
+  key.clipPlanes = desc.clipPlaneMask != 0;
+  key.alphaTest = desc.rs.values.contains(core::RS_ALPHA_TEST_ENABLE) &&
+                   desc.rs.values.at(core::RS_ALPHA_TEST_ENABLE) != 0;
+  key.alphaToCoverage = false;
+  key.sampleCount = std::max(1u, desc.rts.color[0].sampleCount);
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    key.colorFormats[i] = i < colorFormats.size() ? colorFormats[i] : 0u;
+    if (i < blendAttachments.size()) {
+      key.blend[i] = blendAttachments[i];
+    }
+  }
+  key.depthFormat = depthFormat;
+  key.stencilFormat = stencilFormat;
+  return key;
 }
 
 }  // namespace dxmt9::pipeline

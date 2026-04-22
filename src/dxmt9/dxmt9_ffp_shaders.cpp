@@ -441,6 +441,29 @@ u32 computeVertexDeclStride(const DrawDesc& desc) {
   return computedStride;
 }
 
+u64 hashVertexDeclaration(const VertexDeclSnapshot& decl) {
+  u64 hash = 1469598103934665603ull;
+  hash ^= decl.fvf;
+  hash *= 1099511628211ull;
+  hash ^= decl.streams[0].stride;
+  hash *= 1099511628211ull;
+  for (const auto& element : decl.elements) {
+    hash ^= element.stream;
+    hash *= 1099511628211ull;
+    hash ^= element.offset;
+    hash *= 1099511628211ull;
+    hash ^= element.type;
+    hash *= 1099511628211ull;
+    hash ^= element.method;
+    hash *= 1099511628211ull;
+    hash ^= element.usage;
+    hash *= 1099511628211ull;
+    hash ^= element.usageIndex;
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
 u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout) {
   u64 hash = 1469598103934665603ull;
   hash ^= layout.stride;

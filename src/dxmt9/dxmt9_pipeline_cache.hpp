@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <future>
 #include <mutex>
+#include <span>
 #include <string>
 #include <unordered_map>
 
@@ -163,5 +164,14 @@ std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath);
+
+// Compose a ShaderVariantKey from a DrawDesc + pre-resolved attachment
+// state. The layoutHash incorporates the FFP layout hash or, if not FFP,
+// a vertex-declaration hash.
+ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
+                                       std::span<const u32> colorFormats,
+                                       std::span<const BlendAttachmentKey> blendAttachments,
+                                       u32 depthFormat,
+                                       u32 stencilFormat);
 
 }  // namespace dxmt9::pipeline

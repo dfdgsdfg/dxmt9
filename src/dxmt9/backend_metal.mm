@@ -574,28 +574,7 @@ using dxmt9::ffp::computeVertexDeclStride;
 using dxmt9::ffp::hashVertexShaderInputLayout;
 using dxmt9::ffp::decodeFixedFunctionVertexLayout;
 
-u64 hashVertexDeclaration(const VertexDeclSnapshot& decl) {
-  u64 hash = 1469598103934665603ull;
-  hash ^= decl.fvf;
-  hash *= 1099511628211ull;
-  hash ^= decl.streams[0].stride;
-  hash *= 1099511628211ull;
-  for (const auto& element : decl.elements) {
-    hash ^= element.stream;
-    hash *= 1099511628211ull;
-    hash ^= element.offset;
-    hash *= 1099511628211ull;
-    hash ^= element.type;
-    hash *= 1099511628211ull;
-    hash ^= element.method;
-    hash *= 1099511628211ull;
-    hash ^= element.usage;
-    hash *= 1099511628211ull;
-    hash ^= element.usageIndex;
-    hash *= 1099511628211ull;
-  }
-  return hash;
-}
+using dxmt9::ffp::hashVertexDeclaration;
 
 u32 primitiveVertexCount(PrimitiveType type, u32 primitiveCount) {
   switch (type) {
@@ -696,33 +675,7 @@ std::string makeShaderSourceFromRequestInternal(const WinemetalShaderCompileRequ
 }
 
 
-ShaderVariantKey makeShaderVariantKey(const DrawDesc& desc, std::span<const u32> colorFormats,
-                                      std::span<const BlendAttachmentKey> blendAttachments, u32 depthFormat,
-                                      u32 stencilFormat) {
-  ShaderVariantKey key;
-  const auto layout = decodeFixedFunctionVertexLayout(desc);
-  const u64 layoutHash = layout ? layout->hash : hashVertexDeclaration(desc.vertexDecl);
-  key.hash = desc.vertexShader.hash ^ (desc.pixelShader.hash << 1) ^ desc.clipPlaneMask ^ depthFormat ^
-             (stencilFormat << 1) ^ (layoutHash << 1) ^ desc.vertexDecl.fvf;
-  key.textured = desc.textures[0].handle != Handle{};
-  const auto minFilterIt = desc.samplers[0].states.find(SAMP_MIN_FILTER);
-  const auto magFilterIt = desc.samplers[0].states.find(SAMP_MAG_FILTER);
-  key.linear = (minFilterIt != desc.samplers[0].states.end() && minFilterIt->second == 2u) ||
-               (magFilterIt != desc.samplers[0].states.end() && magFilterIt->second == 2u);
-  key.clipPlanes = desc.clipPlaneMask != 0;
-  key.alphaTest = desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) && desc.rs.values.at(RS_ALPHA_TEST_ENABLE) != 0;
-  key.alphaToCoverage = false;
-  key.sampleCount = std::max(1u, desc.rts.color[0].sampleCount);
-  for (size_t i = 0; i < kMaxRenderTargets; ++i) {
-    key.colorFormats[i] = i < colorFormats.size() ? colorFormats[i] : 0u;
-    if (i < blendAttachments.size()) {
-      key.blend[i] = blendAttachments[i];
-    }
-  }
-  key.depthFormat = depthFormat;
-  key.stencilFormat = stencilFormat;
-  return key;
-}
+using dxmt9::pipeline::makeShaderVariantKey;
 
 DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
   DepthStencilKey key;

@@ -85,6 +85,9 @@ struct VertexShaderInputLayout {
 
 u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout);
 
+// Hash a D3D9 vertex declaration for variant-keying.
+u64 hashVertexDeclaration(const core::VertexDeclSnapshot& decl);
+
 // Decode a DrawDesc's vertex declaration into a FixedFunctionVertexLayout.
 // Returns nullopt if the declaration doesn't describe a position attribute
 // recognizable as FFP (e.g., it's a programmable-pipeline decl).
