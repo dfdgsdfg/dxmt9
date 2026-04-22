@@ -15,6 +15,7 @@
 #include "dxmt9_queue.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_d3d9_bytecode.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
@@ -2625,29 +2626,7 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void encodeReadback(WMT::CommandBuffer& commandBuffer, const ReadbackDesc& readback) {
-    auto* src = findSurfaceUnlocked(readback.source.value);
-    auto* dst = findSurfaceUnlocked(readback.destination.value);
-    if (!src || !dst || !src->texture) {
-      return;
-    }
-    {
-      auto blit = commandBuffer.blitCommandEncoder();
-      if (!blit) return;
-      WMT::Texture sourceTexture{src->resolveTexture ? src->resolveTexture.handle : src->texture.handle};
-      const uint32_t w = static_cast<uint32_t>(std::max(1, readback.sourceRect.right - readback.sourceRect.left));
-      const uint32_t h = static_cast<uint32_t>(std::max(1, readback.sourceRect.bottom - readback.sourceRect.top));
-      if (!dst->texture) {
-        blit.endEncoding();
-        return;
-      }
-      WMTOrigin srcOrigin{(uint64_t)readback.sourceRect.left, (uint64_t)readback.sourceRect.top, 0};
-      WMTSize srcSize{w, h, 1};
-      WMTOrigin dstOrigin{0, 0, 0};
-      blit.copyFromTextureToTexture(sourceTexture, 0, readback.sourceLevel,
-                                    srcOrigin, srcSize,
-                                    WMT::Texture{dst->texture.handle}, 0, 0, dstOrigin);
-      blit.endEncoding();
-    }
+    dxmt9::encoders::encodeReadback(commandBuffer, pool_, readback);
   }
 
   void encodePresent(WMT::CommandBuffer& commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
