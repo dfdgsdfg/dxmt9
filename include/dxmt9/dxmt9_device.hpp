@@ -23,6 +23,12 @@ class Device {
   // The retained WMT Metal device.
   virtual WMT::Device wmtDevice() = 0;
 
+  // Metal shading language version selected for this device. Mirrors
+  // dxmt::Device::metalVersion(); determined at construction from the
+  // macOS version + device family. Consumers (shader translator, pipeline
+  // builders) use this to gate feature availability.
+  virtual WMTMetalVersion metalVersion() const { return WMTMetalVersionMax; }
+
   // The upper-runtime CommandQueue (owns the WMT::CommandQueue handle).
   // Matches dxmt::Device::queue() in public shape. Returns a null-valued
   // CommandQueue on test paths where no Metal device is available.

@@ -16,10 +16,23 @@ std::string resolveShaderCachePath() {
   return std::string(buf);
 }
 
+WMTMetalVersion selectMetalVersion(WMT::Device device) {
+  // Conservative default without an OS-version probe: Apple GPUs get
+  // Metal 3.2, everything else caps at 3.1 (matching dxmt's fallback for
+  // non-Apple-family devices where 3.2 features aren't available).
+  // A WMTGetOSVersion-gated refinement can replace this once that entry
+  // point is wired through winemetal.
+  if (device && device.supportsFamily(WMTGPUFamilyApple7)) {
+    return WMTMetal320;
+  }
+  return WMTMetal310;
+}
+
 class DeviceImpl final : public Device {
  public:
   explicit DeviceImpl(const DEVICE_DESC& desc)
       : wmt_device_(desc.device),
+        metalVersion_(selectMetalVersion(wmt_device_)),
         queue_(wmt_device_),
         limits_(desc.limits),
         shaderArchivePath_(resolveShaderCachePath()) {
@@ -41,6 +54,7 @@ class DeviceImpl final : public Device {
   }
 
   WMT::Device wmtDevice() override { return wmt_device_; }
+  WMTMetalVersion metalVersion() const override { return metalVersion_; }
   CommandQueue& queue() override { return queue_; }
   const core::BackendLimits& limits() const override { return limits_; }
   std::shared_ptr<core::BackendDevice> backend() override { return backend_; }
@@ -68,6 +82,7 @@ class DeviceImpl final : public Device {
 
  private:
   WMT::Reference<WMT::Device> wmt_device_;
+  WMTMetalVersion metalVersion_ = WMTMetalVersionMax;
   CommandQueue queue_;
   core::BackendLimits limits_{};
   std::string shaderArchivePath_{};
