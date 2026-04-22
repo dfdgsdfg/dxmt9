@@ -1,5 +1,8 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "backend_metal.hpp"
+#include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_resource_pool.hpp"
+#include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "../winemetal/Metal.hpp"
 
@@ -40,7 +43,8 @@ class DeviceImpl final : public Device {
       shaders::initShaderArchive(wmt_device_, shaderArchivePath_, shaderArchive_);
     }
     backend_ = core::makeMetalBackendDevice(limits_, wmt_device_, queue_,
-                                             shaderArchive_, shaderArchivePath_, *this);
+                                             shaderArchive_, shaderArchivePath_, *this,
+                                             pool_, pipelineCache_, allocators_);
   }
 
   ~DeviceImpl() override {
@@ -90,6 +94,12 @@ class DeviceImpl final : public Device {
   core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = 3;
+  // Pool / Cache / Allocators are owned here (Step 1 of dxmt-alignment).
+  // Declared before backend_ so they outlive it (backend destructs first
+  // because it holds pointers into these).
+  resources::Pool pool_{};
+  pipeline::Cache pipelineCache_{};
+  scratch::FrameAllocators allocators_{};
   // backend_ is declared last so it destructs first; see ~DeviceImpl().
   std::shared_ptr<core::BackendDevice> backend_;
 };

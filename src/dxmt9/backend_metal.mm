@@ -714,9 +714,13 @@ class MetalBackendDevice final : public BackendDevice {
                      dxmt9::CommandQueue& commandQueue,
                      WMT::Reference<WMT::BinaryArchive>& shaderArchive,
                      const std::string& shaderArchivePath,
-                     dxmt9::Device& upperDevice)
+                     dxmt9::Device& upperDevice,
+                     dxmt9::resources::Pool& pool,
+                     dxmt9::pipeline::Cache& pipelineCache,
+                     dxmt9::scratch::FrameAllocators& allocators)
       : limits_(limits), commandQueue_(&commandQueue), upperDevice_(&upperDevice),
-        shaderArchive_(&shaderArchive), shaderArchivePath_(&shaderArchivePath) {
+        shaderArchive_(&shaderArchive), shaderArchivePath_(&shaderArchivePath),
+        pool_(&pool), pipelineCache_(&pipelineCache), allocators_(&allocators) {
     wrappedDevice_ = std::move(wmtDevice);
     if (!wrappedDevice_ || !commandQueue_->valid()) {
       return;
@@ -883,12 +887,12 @@ class MetalBackendDevice final : public BackendDevice {
 
   BufferHandle createBuffer(const BufferDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    return pool_.createBuffer(wrappedDevice_, desc);
+    return pool_->createBuffer(wrappedDevice_, desc);
   }
 
   TextureHandle createTexture(const TextureDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    const auto handle = pool_.createTexture(wrappedDevice_, limits_, desc);
+    const auto handle = pool_->createTexture(wrappedDevice_, limits_, desc);
     if (shouldTraceTexture(handle)) {
       std::ostringstream out;
       out << "[dxmt9-texture] create handle=0x" << std::hex << handle.value << std::dec
@@ -905,33 +909,33 @@ class MetalBackendDevice final : public BackendDevice {
 
   SurfaceHandle createSurface(const SurfaceDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    return pool_.createSurface(wrappedDevice_, limits_, desc);
+    return pool_->createSurface(wrappedDevice_, limits_, desc);
   }
 
   SurfaceHandle createSurfaceForTexture(TextureHandle textureHandle, u32 level, const SurfaceDesc& desc) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    return pool_.createSurfaceForTexture(textureHandle, level, desc);
+    return pool_->createSurfaceForTexture(textureHandle, level, desc);
   }
 
   void destroyBuffer(BufferHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    pool_.markDestroyAndGc(pool_.buffers, handle.value, commandQueue_->completedSeqId_);
+    pool_->markDestroyAndGc(pool_->buffers, handle.value, commandQueue_->completedSeqId_);
   }
 
   void destroyTexture(TextureHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    pool_.markDestroyAndGc(pool_.textures, handle.value, commandQueue_->completedSeqId_);
+    pool_->markDestroyAndGc(pool_->textures, handle.value, commandQueue_->completedSeqId_);
   }
 
   void destroySurface(SurfaceHandle handle) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    pool_.markDestroyAndGc(pool_.surfaces, handle.value, commandQueue_->completedSeqId_);
+    pool_->markDestroyAndGc(pool_->surfaces, handle.value, commandQueue_->completedSeqId_);
   }
 
   void* mapBuffer(BufferHandle handle, u32 flags) override {
     std::unique_lock lock(commandQueue_->mutex_);
-    auto it = pool_.buffers.find(handle.value);
-    if (it == pool_.buffers.end()) {
+    auto it = pool_->buffers.find(handle.value);
+    if (it == pool_->buffers.end()) {
       return nullptr;
     }
     if ((flags & UsageDiscard) == 0 && (flags & UsageNoOverwrite) == 0 &&
@@ -958,7 +962,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) override {
     std::lock_guard lock(commandQueue_->mutex_);
-    pool_.uploadBufferData(handle.value, bytes.data(), bytes.size());
+    pool_->uploadBufferData(handle.value, bytes.data(), bytes.size());
   }
 
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
@@ -967,10 +971,10 @@ class MetalBackendDevice final : public BackendDevice {
     if (shouldTraceTexture(handle)) {
       emitUploadTrace(handle, level, width, height, pitch, bytes);
     }
-    pool_.uploadTextureLevel(wrappedDevice_, commandQueue_->raw(), handle, level,
+    pool_->uploadTextureLevel(wrappedDevice_, commandQueue_->raw(), handle, level,
                               width, height, pitch, bytes.data(), bytes.size());
     if (level == 0 && shouldDumpGpuTexture(handle)) {
-      if (auto* rec = pool_.findTexture(handle.value); rec && rec->texture) {
+      if (auto* rec = pool_->findTexture(handle.value); rec && rec->texture) {
         dumpTextureSnapshotUnlocked(handle, rec->desc, rec->texture.handle);
       }
     }
@@ -984,7 +988,7 @@ class MetalBackendDevice final : public BackendDevice {
     u32 maxAlpha = 0u;
     u64 nonZeroAlpha = 0u;
     u64 nonZeroRgb = 0u;
-    auto* rec = pool_.findTexture(handle.value);
+    auto* rec = pool_->findTexture(handle.value);
     if (rec && (rec->desc.format == Format::A8R8G8B8 || rec->desc.format == Format::A8B8G8R8 ||
                  rec->desc.format == Format::X8R8G8B8 || rec->desc.format == Format::X8B8G8R8) &&
         pitch >= width * 4u) {
@@ -1103,12 +1107,12 @@ class MetalBackendDevice final : public BackendDevice {
     return isFloatRenderTargetFormat(surface->desc.format) ? CompatFlagFp16 : 0u;
   }
 
-  BufferRecord* findBufferUnlocked(u64 handle) { return pool_.findBuffer(handle); }
-  const BufferRecord* findBufferUnlocked(u64 handle) const { return pool_.findBuffer(handle); }
-  TextureRecord* findTextureUnlocked(u64 handle) { return pool_.findTexture(handle); }
-  const TextureRecord* findTextureUnlocked(u64 handle) const { return pool_.findTexture(handle); }
-  SurfaceRecord* findSurfaceUnlocked(u64 handle) { return pool_.findSurface(handle); }
-  const SurfaceRecord* findSurfaceUnlocked(u64 handle) const { return pool_.findSurface(handle); }
+  BufferRecord* findBufferUnlocked(u64 handle) { return pool_->findBuffer(handle); }
+  const BufferRecord* findBufferUnlocked(u64 handle) const { return pool_->findBuffer(handle); }
+  TextureRecord* findTextureUnlocked(u64 handle) { return pool_->findTexture(handle); }
+  const TextureRecord* findTextureUnlocked(u64 handle) const { return pool_->findTexture(handle); }
+  SurfaceRecord* findSurfaceUnlocked(u64 handle) { return pool_->findSurface(handle); }
+  const SurfaceRecord* findSurfaceUnlocked(u64 handle) const { return pool_->findSurface(handle); }
 
   ChunkSlot& currentSlot() {
     // TLA+: RingSafety
@@ -1158,22 +1162,22 @@ class MetalBackendDevice final : public BackendDevice {
     return seqId == 0 ? commandQueue_->nextSeqId_ : seqId;
   }
   void markDrawResourcesUnlocked(const DrawDesc& desc, u64 seqId = 0) {
-    pool_.markDrawResources(desc, seqIdForMark(seqId));
+    pool_->markDrawResources(desc, seqIdForMark(seqId));
   }
   void markClearResourcesUnlocked(const ClearDesc& desc, u64 seqId = 0) {
-    pool_.markClearResources(desc, seqIdForMark(seqId));
+    pool_->markClearResources(desc, seqIdForMark(seqId));
   }
   void markSurfaceCopyResourcesUnlocked(const SurfaceCopyDesc& desc, u64 seqId = 0) {
-    pool_.markSurfaceCopyResources(desc, seqIdForMark(seqId));
+    pool_->markSurfaceCopyResources(desc, seqIdForMark(seqId));
   }
   void markStretchResourcesUnlocked(const StretchRectDesc& desc, u64 seqId = 0) {
-    pool_.markStretchResources(desc, seqIdForMark(seqId));
+    pool_->markStretchResources(desc, seqIdForMark(seqId));
   }
   void markReadbackResourcesUnlocked(const ReadbackDesc& desc, u64 seqId = 0) {
-    pool_.markReadbackResources(desc, seqIdForMark(seqId));
+    pool_->markReadbackResources(desc, seqIdForMark(seqId));
   }
   void markColorFillResourcesUnlocked(const ColorFillDesc& desc, u64 seqId = 0) {
-    pool_.markColorFillResources(desc, seqIdForMark(seqId));
+    pool_->markColorFillResources(desc, seqIdForMark(seqId));
   }
 
   MetalCommandRecord makeDrawCommand(const DrawDesc& desc) {
@@ -1228,7 +1232,7 @@ class MetalBackendDevice final : public BackendDevice {
                   return encodeChunk(slotIndex, slot);
                 },
                 [this](u64) {
-                  allocators_.reclaim(commandQueue_->completedSeqId_);
+                  allocators_->reclaim(commandQueue_->completedSeqId_);
                 })) {
           return;
         }
@@ -1486,7 +1490,7 @@ class MetalBackendDevice final : public BackendDevice {
       encoder.setDepthStencilState(depthState);
     }
     encoder.setRenderPipelineState(pipeline);
-    auto* uniforms = allocators_.argbuf.allocate<DrawUniforms>(seqId);
+    auto* uniforms = allocators_->argbuf.allocate<DrawUniforms>(seqId);
     DrawUniforms fallbackUniforms{};
     if (!uniforms) {
       uniforms = &fallbackUniforms;
@@ -2166,34 +2170,34 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void encodeClearPass(WMT::CommandBuffer& commandBuffer, const ClearDesc& clear) {
-    dxmt9::encoders::encodeClearPass(commandBuffer, pool_, clear);
+    dxmt9::encoders::encodeClearPass(commandBuffer, *pool_, clear);
   }
 
   void encodeColorFillPass(WMT::CommandBuffer& commandBuffer, const ClearDesc& clear) {
-    dxmt9::encoders::encodeClearPass(commandBuffer, pool_, clear);
+    dxmt9::encoders::encodeClearPass(commandBuffer, *pool_, clear);
   }
 
   void encodeColorFill(WMT::CommandBuffer& commandBuffer, const ColorFillDesc& fill) {
-    dxmt9::encoders::encodeColorFill(commandBuffer, pool_, pipelineCache_, wrappedDevice_,
+    dxmt9::encoders::encodeColorFill(commandBuffer, *pool_, *pipelineCache_, wrappedDevice_,
                                        limits_, shaderArchive_, shaderArchivePath_, fill);
   }
 
   void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer, const SurfaceCopyDesc& copy) {
-    dxmt9::encoders::encodeSurfaceCopy(commandBuffer, pool_, pipelineCache_, wrappedDevice_,
+    dxmt9::encoders::encodeSurfaceCopy(commandBuffer, *pool_, *pipelineCache_, wrappedDevice_,
                                          limits_, shaderArchive_, shaderArchivePath_, copy);
   }
 
   void encodeStretchRect(WMT::CommandBuffer& commandBuffer, const StretchRectDesc& stretch) {
-    dxmt9::encoders::encodeStretchRect(commandBuffer, pool_, pipelineCache_, wrappedDevice_,
+    dxmt9::encoders::encodeStretchRect(commandBuffer, *pool_, *pipelineCache_, wrappedDevice_,
                                          limits_, shaderArchive_, shaderArchivePath_, stretch);
   }
 
   void encodeReadback(WMT::CommandBuffer& commandBuffer, const ReadbackDesc& readback) {
-    dxmt9::encoders::encodeReadback(commandBuffer, pool_, readback);
+    dxmt9::encoders::encodeReadback(commandBuffer, *pool_, readback);
   }
 
   void encodePresent(WMT::CommandBuffer& commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
-    if (dxmt9::encodePresent(commandBuffer, pool_, upperDevice_, present, sourceHandle, seqId)) {
+    if (dxmt9::encodePresent(commandBuffer, *pool_, upperDevice_, present, sourceHandle, seqId)) {
       backBufferDiscardAfterPresent_ = true;
     }
   }
@@ -2201,7 +2205,7 @@ class MetalBackendDevice final : public BackendDevice {
   void dumpTextureSnapshotUnlocked(Handle handle, const TextureDesc& desc,
                                    obj_handle_t sourceTextureHandle) {
     if (!sourceTextureHandle || !shouldDumpGpuTexture(handle) ||
-        pool_.dumpedGpuTextures.contains(handle.value)) {
+        pool_->dumpedGpuTextures.contains(handle.value)) {
       return;
     }
     if (desc.levels == 0 || desc.width == 0 || desc.height == 0) return;
@@ -2213,7 +2217,7 @@ class MetalBackendDevice final : public BackendDevice {
       out << "[dxmt9-texture] gpu-dump skip handle=0x" << std::hex << handle.value << std::dec
           << " unsupported-format=" << static_cast<unsigned>(desc.format);
       emitTextureTraceLine(out.str());
-      pool_.dumpedGpuTextures.insert(handle.value);
+      pool_->dumpedGpuTextures.insert(handle.value);
       return;
     }
 
@@ -2277,7 +2281,7 @@ class MetalBackendDevice final : public BackendDevice {
         << " format=" << static_cast<unsigned>(desc.format)
         << " path=" << path << " wrote=" << (wrote ? 1 : 0);
     emitTextureTraceLine(out.str());
-    pool_.dumpedGpuTextures.insert(handle.value);
+    pool_->dumpedGpuTextures.insert(handle.value);
   }
 
   WMT::Reference<WMT::SamplerState> makeSampler(bool linear) {
@@ -2388,7 +2392,7 @@ class MetalBackendDevice final : public BackendDevice {
       }
     }
     const auto key = makeShaderVariantKey(draw, colorFormats, blendAttachments, depthFormat, stencilFormat);
-    return pipelineCache_.getOrBuildDrawPipeline(wrappedDevice_, key, draw,
+    return pipelineCache_->getOrBuildDrawPipeline(wrappedDevice_, key, draw,
                                                     shaderArchive_, shaderArchivePath_);
   }
 
@@ -2397,7 +2401,7 @@ class MetalBackendDevice final : public BackendDevice {
   // its own pipeline per (opaqueAlpha) variant using buildPresentPipeline.
 
   WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(const DepthStencilKey& key) {
-    return pipelineCache_.depthStencilStateFor(wrappedDevice_, key);
+    return pipelineCache_->depthStencilStateFor(wrappedDevice_, key);
   }
 
   void finishLoop() {
@@ -2405,7 +2409,7 @@ class MetalBackendDevice final : public BackendDevice {
       while (true) {
         std::unique_lock lock(commandQueue_->mutex_);
         if (!commandQueue_->queueLifecycle_.runFinishIteration(lock, [this](u64) {
-              allocators_.reclaim(commandQueue_->completedSeqId_);
+              allocators_->reclaim(commandQueue_->completedSeqId_);
               tryGarbageCollectUnlocked();
             })) {
           return;
@@ -2419,10 +2423,10 @@ class MetalBackendDevice final : public BackendDevice {
   }
 
   void tryGarbageCollectUnlocked() {
-    pool_.reclaimCompleted(commandQueue_->completedSeqId_);
+    pool_->reclaimCompleted(commandQueue_->completedSeqId_);
   }
 
-  void purgeResourcesUnlocked() { pool_.purgeAll(); }
+  void purgeResourcesUnlocked() { pool_->purgeAll(); }
 
   BackendLimits limits_{};
   WMT::Reference<WMT::Device> wrappedDevice_{};
@@ -2437,16 +2441,19 @@ class MetalBackendDevice final : public BackendDevice {
   // etc.) and must be joined before *this tears down.
   // Chunk-ring state + seqId counters + queueLifecycle + diagnostics moved
   // to dxmt9::CommandQueue (C1, C7a). Accessed via commandQueue_->.
-  // pool_.nextHandle, resource maps, and pool_.dumpedGpuTextures grouped into pool_ (C6).
+  // pool_->nextHandle, resource maps, and pool_->dumpedGpuTextures grouped into pool_ (C6).
   Handle currentBackBuffer_{};
   bool backBufferDiscardAfterPresent_ = false;
   // deviceLostObserver_/presentationStatusObserver_/maxFrameLatency_ moved
   // to dxmt9::Device (task 3). Accessed via upperDevice_->notify*/... or
   // upperDevice_->maxFrameLatency().
-  ResourcePool pool_{};
-  PipelineCache pipelineCache_{};
+  // Pool/Cache/Allocators owned by DeviceImpl (Step 1). Backend holds
+  // pointers and forwards operations. Lifetime-safe: DeviceImpl destroys
+  // the backend (which joins threads) before these objects destruct.
+  dxmt9::resources::Pool* pool_ = nullptr;
+  dxmt9::pipeline::Cache* pipelineCache_ = nullptr;
+  dxmt9::scratch::FrameAllocators* allocators_ = nullptr;
   // presenters_ map removed — Presenter ownership lives on core::SwapChain.
-  FrameAllocators allocators_{};
   // shaderArchive_/shaderArchivePath_ are owned by DeviceImpl (C2). We keep
   // pointers to those fields; lifetime-safe because DeviceImpl destroys the
   // backend (which joins threads) before the archive is released.
@@ -2469,9 +2476,13 @@ std::shared_ptr<BackendDevice> makeMetalBackendDevice(const BackendLimits& limit
                                                       dxmt9::CommandQueue& commandQueue,
                                                       WMT::Reference<WMT::BinaryArchive>& shaderArchive,
                                                       const std::string& shaderArchivePath,
-                                                      dxmt9::Device& upperDevice) {
-  auto backend = std::make_shared<MetalBackendDevice>(limits, std::move(wmtDevice), commandQueue,
-                                                       shaderArchive, shaderArchivePath, upperDevice);
+                                                      dxmt9::Device& upperDevice,
+                                                      dxmt9::resources::Pool& pool,
+                                                      dxmt9::pipeline::Cache& pipelineCache,
+                                                      dxmt9::scratch::FrameAllocators& allocators) {
+  auto backend = std::make_shared<MetalBackendDevice>(
+      limits, std::move(wmtDevice), commandQueue, shaderArchive, shaderArchivePath, upperDevice,
+      pool, pipelineCache, allocators);
   return backend->ready() ? std::static_pointer_cast<BackendDevice>(std::move(backend))
                           : std::shared_ptr<BackendDevice>{};
 }
