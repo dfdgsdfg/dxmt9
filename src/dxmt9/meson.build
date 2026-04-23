@@ -10,6 +10,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_debug_trace.cpp',
   'dxmt9_device.cpp',
   'dxmt9_draw_encoder.mm',
+  'dxmt9_draw_state.cpp',
   'dxmt9_draw_shader.cpp',
   'dxmt9_ffp_shaders.cpp',
   'dxmt9_format_convert.cpp',

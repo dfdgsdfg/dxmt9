@@ -20,6 +20,7 @@
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_shader.hpp"
+#include "dxmt9_draw_state.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_pipeline_cache.hpp"
@@ -324,32 +325,12 @@ using BufferRecord = dxmt9::resources::BufferRecord;
 using TextureRecord = dxmt9::resources::TextureRecord;
 using SurfaceRecord = dxmt9::resources::SurfaceRecord;
 
-struct DrawUniforms {
-  std::array<std::array<f32, 4>, kMaxVertexConstants> vsFloatConst{};
-  std::array<std::array<i32, 4>, kMaxIntegerConstants> vsIntConst{};
-  std::array<u32, kMaxBoolConstants> vsBoolConst{};
-  std::array<std::array<f32, 4>, 4> ffpWorldViewProj{};
-  std::array<std::array<std::array<f32, 4>, 4>, kMaxTextureStages> ffpTextureTransforms{};
-  std::array<std::array<f32, 4>, kMaxPixelConstants> psFloatConst{};
-  std::array<std::array<i32, 4>, kMaxIntegerConstants> psIntConst{};
-  std::array<u32, kMaxBoolConstants> psBoolConst{};
-  std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
-  std::array<f32, 2> halfPixelFixup{};
-  std::array<f32, 2> viewportOrigin{};
-  std::array<f32, 2> viewportSize{};
-  std::array<f32, 4> textureFactor{1.0f, 1.0f, 1.0f, 1.0f};
-  f32 alphaRef = 0.0f;
-  f32 fogStart = 1.0f;
-  f32 fogEnd = 1.0f;
-  f32 fogDensity = 1.0f;
-  u32 vertexStreamOffset = 0;
-  u32 vertexStreamStride = 0;
-  i32 vertexBaseIndex = 0;
-  u32 clipPlaneMask = 0;
-  u32 alphaTestEnable = 0;
-  u32 alphaTestFunc = static_cast<u32>(CompareFunc::Always);
-  u32 fogMode = static_cast<u32>(FogMode::None);
-};
+// DrawUniforms + buildDrawUniforms + makeDepthStencilKey moved to
+// dxmt9_draw_state.{hpp,cpp} (Step 3d-3). Aliased here so the rest of
+// this TU keeps the short names.
+using DrawUniforms = dxmt9::state::DrawUniforms;
+using dxmt9::state::buildDrawUniforms;
+using dxmt9::state::makeDepthStencilKey;
 
 // RingArena + FrameAllocators moved to dxmt9_ring_arena.hpp
 // (dxmt9::scratch:: namespace). Alias keeps short names here.
@@ -377,67 +358,7 @@ NSString* makeNSString(const std::string& text) {
 // makeShaderPrelude moved to dxmt9_shader_sources.{hpp,cpp}
 // (dxmt9::shaders:: namespace). Keeping a dead-code-to-be-removed marker:
 
-DrawUniforms buildDrawUniforms(const DrawDesc& desc) {
-  DrawUniforms uniforms;
-  uniforms.vsFloatConst = desc.vsConst.float4;
-  uniforms.vsIntConst = desc.vsConst.int4;
-  for (size_t i = 0; i < kMaxBoolConstants; ++i) {
-    uniforms.vsBoolConst[i] = desc.vsConst.bools[i] ? 1u : 0u;
-  }
-  for (size_t row = 0; row < 4; ++row) {
-    for (size_t col = 0; col < 4; ++col) {
-      uniforms.ffpWorldViewProj[row][col] = desc.worldViewProj.m[row * 4 + col];
-    }
-  }
-  for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
-    for (size_t row = 0; row < 4; ++row) {
-      for (size_t col = 0; col < 4; ++col) {
-        uniforms.ffpTextureTransforms[stage][row][col] = desc.textureTransforms[stage].m[row * 4 + col];
-      }
-    }
-  }
-  uniforms.psFloatConst = desc.psConst.float4;
-  uniforms.psIntConst = desc.psConst.int4;
-  for (size_t i = 0; i < kMaxBoolConstants; ++i) {
-    uniforms.psBoolConst[i] = desc.psConst.bools[i] ? 1u : 0u;
-  }
-  uniforms.halfPixelFixup = halfPixelFixup(desc.viewport.viewport);
-  uniforms.viewportOrigin = {static_cast<f32>(desc.viewport.viewport.x), static_cast<f32>(desc.viewport.viewport.y)};
-  uniforms.viewportSize = {static_cast<f32>(std::max(1u, desc.viewport.viewport.width)),
-                           static_cast<f32>(std::max(1u, desc.viewport.viewport.height))};
-  if (desc.rs.values.contains(RS_TEXTURE_FACTOR)) {
-    const u32 raw = desc.rs.values.at(RS_TEXTURE_FACTOR);
-    uniforms.textureFactor = {
-        static_cast<f32>((raw >> 16) & 0xffu) / 255.0f,
-        static_cast<f32>((raw >> 8) & 0xffu) / 255.0f,
-        static_cast<f32>(raw & 0xffu) / 255.0f,
-        static_cast<f32>((raw >> 24) & 0xffu) / 255.0f,
-    };
-  }
-  uniforms.vertexStreamOffset = desc.vertexDecl.streams[0].offset;
-  uniforms.vertexStreamStride = desc.vertexDecl.streams[0].stride;
-  uniforms.vertexBaseIndex = 0;
-  uniforms.clipPlaneMask = desc.clipPlaneMask;
-  uniforms.alphaTestEnable = !debugDisableAlphaTest() && desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) &&
-                             desc.rs.values.at(RS_ALPHA_TEST_ENABLE) != 0;
-  uniforms.alphaTestFunc = desc.rs.values.contains(RS_ALPHA_FUNC)
-                               ? desc.rs.values.at(RS_ALPHA_FUNC)
-                               : static_cast<u32>(CompareFunc::Always);
-  uniforms.fogMode = desc.rs.values.contains(RS_FOG_TABLE_MODE) ? desc.rs.values.at(RS_FOG_TABLE_MODE)
-                                                                 : static_cast<u32>(FogMode::None);
-  uniforms.alphaRef = desc.rs.values.contains(RS_ALPHA_REF) ? static_cast<f32>(desc.rs.values.at(RS_ALPHA_REF)) / 255.0f
-                                                             : 0.0f;
-  uniforms.fogStart = desc.rs.values.contains(RS_FOG_START) ? std::bit_cast<f32>(desc.rs.values.at(RS_FOG_START))
-                                                            : 1.0f;
-  uniforms.fogEnd = desc.rs.values.contains(RS_FOG_END) ? std::bit_cast<f32>(desc.rs.values.at(RS_FOG_END)) : 1.0f;
-  uniforms.fogDensity = desc.rs.values.contains(RS_FOG_DENSITY)
-                            ? std::bit_cast<f32>(desc.rs.values.at(RS_FOG_DENSITY))
-                            : 1.0f;
-  for (size_t i = 0; i < kMaxClipPlanes; ++i) {
-    uniforms.clipPlanes[i] = desc.clipPlanes[i];
-  }
-  return uniforms;
-}
+// buildDrawUniforms moved to dxmt9::state (Step 3d-3).
 
 // FVF / D3D-decl constants moved to dxmt9_ffp_shaders.hpp
 // (dxmt9::ffp:: namespace). Aliased into this TU below.
@@ -577,51 +498,7 @@ std::string makeShaderSourceFromRequestInternal(const WinemetalShaderCompileRequ
 
 using dxmt9::pipeline::makeShaderVariantKey;
 
-DepthStencilKey makeDepthStencilKey(const DrawDesc& desc) {
-  DepthStencilKey key;
-  if (debugForceVisibleDraw()) {
-    return key;
-  }
-  const auto it = desc.rs.values.find(RS_Z_ENABLE);
-  key.depthEnable = it != desc.rs.values.end() && it->second != 0;
-  const auto writeIt = desc.rs.values.find(RS_Z_WRITE_ENABLE);
-  key.depthWrite = writeIt != desc.rs.values.end() && writeIt->second != 0;
-  const auto funcIt = desc.rs.values.find(RS_Z_FUNC);
-  key.depthFunc = funcIt != desc.rs.values.end() ? funcIt->second : static_cast<u32>(CompareFunc::Always);
-  const auto stencilEnableIt = desc.rs.values.find(RS_STENCIL_ENABLE);
-  key.front.enabled = stencilEnableIt != desc.rs.values.end() && stencilEnableIt->second != 0;
-  const auto stencilFuncIt = desc.rs.values.find(RS_STENCIL_FUNC);
-  key.front.compareFunction = stencilFuncIt != desc.rs.values.end() ? stencilFuncIt->second
-                                                                    : static_cast<u32>(CompareFunc::Always);
-  const auto stencilFailIt = desc.rs.values.find(RS_STENCIL_FAIL);
-  key.front.failureOperation = stencilFailIt != desc.rs.values.end() ? stencilFailIt->second
-                                                                     : static_cast<u32>(StencilOp::Keep);
-  const auto stencilZFailIt = desc.rs.values.find(RS_STENCIL_ZFAIL);
-  key.front.depthFailureOperation = stencilZFailIt != desc.rs.values.end() ? stencilZFailIt->second
-                                                                           : static_cast<u32>(StencilOp::Keep);
-  const auto stencilPassIt = desc.rs.values.find(RS_STENCIL_PASS);
-  key.front.passOperation = stencilPassIt != desc.rs.values.end() ? stencilPassIt->second
-                                                                  : static_cast<u32>(StencilOp::Keep);
-  const auto stencilMaskIt = desc.rs.values.find(RS_STENCIL_MASK);
-  key.front.readMask = stencilMaskIt != desc.rs.values.end() ? stencilMaskIt->second : 0xffu;
-  const auto stencilWriteMaskIt = desc.rs.values.find(RS_STENCIL_WRITEMASK);
-  key.front.writeMask = stencilWriteMaskIt != desc.rs.values.end() ? stencilWriteMaskIt->second : 0xffu;
-  const auto ccwFuncIt = desc.rs.values.find(RS_STENCIL_CCW_FUNC);
-  key.back.compareFunction = ccwFuncIt != desc.rs.values.end() ? ccwFuncIt->second : key.front.compareFunction;
-  const auto ccwFailIt = desc.rs.values.find(RS_STENCIL_CCW_FAIL);
-  key.back.failureOperation = ccwFailIt != desc.rs.values.end() ? ccwFailIt->second : key.front.failureOperation;
-  const auto ccwZFailIt = desc.rs.values.find(RS_STENCIL_CCW_ZFAIL);
-  key.back.depthFailureOperation = ccwZFailIt != desc.rs.values.end() ? ccwZFailIt->second
-                                                                       : key.front.depthFailureOperation;
-  const auto ccwPassIt = desc.rs.values.find(RS_STENCIL_CCW_PASS);
-  key.back.passOperation = ccwPassIt != desc.rs.values.end() ? ccwPassIt->second : key.front.passOperation;
-  const auto ccwMaskIt = desc.rs.values.find(RS_STENCIL_CCW_MASK);
-  key.back.readMask = ccwMaskIt != desc.rs.values.end() ? ccwMaskIt->second : key.front.readMask;
-  const auto ccwWriteMaskIt = desc.rs.values.find(RS_STENCIL_CCW_WRITEMASK);
-  key.back.writeMask = ccwWriteMaskIt != desc.rs.values.end() ? ccwWriteMaskIt->second : key.front.writeMask;
-  key.back.enabled = key.front.enabled;
-  return key;
-}
+// makeDepthStencilKey moved to dxmt9::state (Step 3d-3).
 
 class MetalBackendDevice final : public BackendDevice {
  public:
