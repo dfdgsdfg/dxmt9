@@ -4,6 +4,7 @@
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_sources.hpp"
+#include "dxmt9_transfers.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <string>
@@ -119,17 +120,16 @@ class DeviceImpl final : public Device {
     std::lock_guard lock(queue_.mutex_);
     pool_.uploadBufferData(handle.value, bytes.data(), bytes.size());
   }
-  // mapBuffer + uploadTextureLevel stay on the backend: they need the
-  // wait-for-seq hook / texture trace sink resident on MetalBackendDevice.
-  // Forward through backend_ which inherits from BackendDevice and owns
-  // the concrete methods.
+  // mapBuffer + uploadTextureLevel call the free functions in
+  // dxmt9::transfers directly (Step 3e). Backend no longer participates.
   void* mapBuffer(core::BufferHandle handle, std::uint32_t flags) override {
-    return backend_ ? backend_->mapBuffer(handle, flags) : nullptr;
+    return transfers::mapBuffer(queue_, pool_, handle, flags);
   }
   void uploadTextureLevel(core::TextureHandle handle, std::uint32_t level,
                            std::uint32_t width, std::uint32_t height, std::uint32_t pitch,
                            std::span<const std::uint8_t> bytes) override {
-    if (backend_) backend_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
+    transfers::uploadTextureLevel(queue_, pool_, wmt_device_, handle, level,
+                                    width, height, pitch, bytes);
   }
 
   // Submit / present / flush — Step 3b: go directly through the owned
@@ -164,7 +164,7 @@ class DeviceImpl final : public Device {
     return queue_.waitForVBlank(pool_);
   }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
-    return backend_ && backend_->readbackSurface(desc, pixels);
+    return transfers::readbackSurface(queue_, pool_, wmt_device_, limits_, desc, pixels);
   }
 
   bool ready() const noexcept { return static_cast<bool>(backend_); }
