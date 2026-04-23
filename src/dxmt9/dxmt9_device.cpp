@@ -8,6 +8,7 @@
 #include "../winemetal/Metal.hpp"
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -47,19 +48,45 @@ class DeviceImpl final : public Device {
     }
     limits_.supportsDepth24Stencil8 = wmt_device_.supportsDepth24Stencil8();
 
-    // Metal-specific glue (encode thread + queueLifecycle binding +
-    // shader-archive persist) lives in MetalBackendDevice. Declared last
-    // so it destructs first — joining the encode/finish/completion
-    // threads before pool_/pipelineCache_/allocators_ tear down.
+    // Thin Metal-specific glue. Provides the per-chunk encode callback
+    // and the surface-compat hook.
     metalBackend_ = std::make_unique<MetalBackendDevice>(
         wmt_device_, limits_, queue_, pool_, pipelineCache_, allocators_,
         shaderArchive_, shaderArchivePath_, *this);
+
+    // Bind queueLifecycle_ to CommandQueue's own state + the compat hook.
+    queue_.bindSelfLifecycle(
+        [backend = metalBackend_.get()](core::Handle h) {
+          return backend->compatFlagsForSurface(h);
+        });
+
+    // Spawn the 3 worker threads. Encode loop supplies the chunk
+    // callback (with @autoreleasepool inside); finish/completion are
+    // pure C++ CommandQueue methods.
+    queue_.startThreads(
+        [this] {
+          queue_.runEncodeLoop(
+              [backend = metalBackend_.get()](std::size_t slotIndex,
+                                               const core::ChunkSlot& slot) {
+                return backend->encodeChunk(slotIndex, slot);
+              },
+              [this](std::uint64_t) {
+                allocators_.reclaim(queue_.completedSeqId_);
+              });
+        },
+        [this] { queue_.runFinishLoop(pool_, allocators_); },
+        [this] { queue_.runCompletionWatcherLoop(); });
+    ready_ = true;
   }
 
   ~DeviceImpl() override {
-    // metalBackend_ destructs first (declared last). Its dtor calls
-    // queue_.stopThreads() + persists the shader archive while pool /
-    // cache / allocators are still live.
+    // Join threads first — they reach into pool/cache/allocators/backend.
+    queue_.stopThreads();
+    // Persist the compiled-shader archive now that no encode is in flight.
+    if (shaderArchive_) {
+      std::lock_guard lock(queue_.mutex_);
+      shaders::persistShaderArchive(shaderArchive_, shaderArchivePath_);
+    }
     metalBackend_.reset();
     pool_.purgeAll();
   }
@@ -156,7 +183,7 @@ class DeviceImpl final : public Device {
     return transfers::readbackSurface(queue_, pool_, wmt_device_, limits_, desc, pixels);
   }
 
-  bool ready() const noexcept { return metalBackend_ && metalBackend_->valid(); }
+  bool ready() const noexcept { return ready_; }
 
  private:
   WMT::Reference<WMT::Device> wmt_device_;
@@ -168,15 +195,14 @@ class DeviceImpl final : public Device {
   core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = 3;
-  // Pool / Cache / Allocators are owned here. Declared after queue_ so
-  // metalBackend_'s dtor (which calls queue_.stopThreads()) runs before
-  // these tear down — the threads reach into them while running.
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
   scratch::FrameAllocators allocators_{};
-  // metalBackend_ is declared last so it destructs first. It holds raw
-  // pointers into the fields above and must not outlive them.
+  // metalBackend_ declared after the data it borrows — destructs first
+  // in reverse member order. The dtor explicitly calls queue_.stopThreads()
+  // before backend/pool teardown to avoid a race with worker threads.
   std::unique_ptr<MetalBackendDevice> metalBackend_;
+  bool ready_ = false;
 };
 
 }  // namespace

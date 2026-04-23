@@ -76,11 +76,21 @@ class CommandQueue {
   void submitFlush(resources::Pool& pool);
   core::HResult waitForVBlank(resources::Pool& pool);
 
-  // Finish + completion loops live here. The encode loop still runs on
-  // the backend because it needs @autoreleasepool for the ObjC-scoped
-  // Metal objects allocated per chunk — CommandQueue is pure C++.
+  // All three worker-thread bodies now live here. runEncodeLoop is pure
+  // C++ — the @autoreleasepool scoping is the caller's responsibility
+  // (wrap it inside the encodeChunk callback).
+  using EncodeChunkFn =
+      std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(
+          std::size_t slotIndex, const core::ChunkSlot& slot)>;
+  using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
+  void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
   void runFinishLoop(resources::Pool& pool, scratch::FrameAllocators& allocators);
   void runCompletionWatcherLoop();
+
+  // Wire queueLifecycle_ to own state + caller-supplied surface-flags
+  // hook. Called once by DeviceImpl during construction.
+  using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
+  void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
 
   // Sequence counters + chunk-ring state. Guarded externally by the owning
   // backend's mutex (the binding into QueueLifecycleController takes raw

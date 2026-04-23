@@ -217,6 +217,36 @@ core::HResult CommandQueue::waitForVBlank(resources::Pool& pool) {
   return core::HResult{0};
 }
 
+void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted) {
+  while (true) {
+    std::unique_lock lock(mutex_);
+    if (!queueLifecycle_.runEncodeIteration(lock, encodeChunk, onSubmitted)) {
+      return;
+    }
+  }
+}
+
+void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) {
+  queueLifecycle_.bindTrackedSubmissionState({
+      .writingSlot = &writingSlot_,
+      .writeIndex = &writeIndex_,
+      .nextSeqId = &nextSeqId_,
+      .readySlots = &readySlots_,
+      .completedSeqQueue = &completedSeqQueue_,
+      .inflightCount = &inflightCount_,
+      .completedSeqId = &completedSeqId_,
+      .lastCommittedSeqId = &lastCommittedSeqId_,
+      .slots = std::span<core::ChunkSlot>(slots_.data(), slots_.size()),
+      .mutex = &mutex_,
+      .writeCv = &writeCv_,
+      .encodeCv = &encodeCv_,
+      .finishCv = &finishCv_,
+      .stop = &stop_,
+      .submissionDiagnostics = &submissionDiagnostics_,
+      .resolveSurfaceFlags = std::move(resolveSurfaceFlags),
+  });
+}
+
 void CommandQueue::runFinishLoop(resources::Pool& pool, scratch::FrameAllocators& allocators) {
   while (true) {
     std::unique_lock lock(mutex_);

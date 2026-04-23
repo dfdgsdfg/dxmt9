@@ -1,19 +1,20 @@
 #pragma once
 
-// Thin Metal-specific glue owned by DeviceImpl. Hosts the encode-thread
-// main loop (with @autoreleasepool) and the compatFlagsForSurface hook
-// bound into queueLifecycle_. Does NOT inherit BackendDevice — that
-// abstract interface is reserved for test mocks.
-//
-// Construction contract: the caller (DeviceImpl) must outlive this
-// instance. All references/pointers captured here point into DeviceImpl
-// members; destructing MetalBackendDevice joins the worker threads
-// before DeviceImpl's siblings tear down.
+// Very thin encode glue. Owned by DeviceImpl. Provides:
+//   - encodeChunk callback (wraps @autoreleasepool + builds EncodeContext
+//     + forwards to dxmt9::encoders::encodeChunk)
+//   - compatFlagsForSurface hook for the queueLifecycle binding
+// Does NOT inherit BackendDevice; that abstract interface is test-only.
+// Does NOT own threads, queueLifecycle binding, or shader-archive persist —
+// those moved to CommandQueue and DeviceImpl.
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9_backend_types.hpp"
+#include "dxmt9_queue.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace dxmt9 {
@@ -36,16 +37,20 @@ class MetalBackendDevice {
                       WMT::Reference<WMT::BinaryArchive>& shaderArchive,
                       const std::string& shaderArchivePath,
                       Device& upperDevice);
-  ~MetalBackendDevice();
   MetalBackendDevice(const MetalBackendDevice&) = delete;
   MetalBackendDevice& operator=(const MetalBackendDevice&) = delete;
 
-  bool valid() const noexcept { return valid_; }
+  // Per-chunk encoder callback — wraps @autoreleasepool and calls
+  // dxmt9::encoders::encodeChunk with an EncodeContext assembled from
+  // our borrowed references. Supplied to CommandQueue::runEncodeLoop.
+  std::optional<core::metalqueue::QueueSubmissionRecord>
+  encodeChunk(std::size_t slotIndex, const core::ChunkSlot& slot);
 
- private:
-  void encodeLoop();
+  // Surface-format compat hook. Supplied to CommandQueue::bindSelfLifecycle
+  // as the queueLifecycle_.resolveSurfaceFlags callback.
   std::uint32_t compatFlagsForSurface(core::Handle handle) const;
 
+ private:
   WMT::Reference<WMT::Device> device_;
   const core::BackendLimits* limits_ = nullptr;
   CommandQueue* queue_ = nullptr;
@@ -55,7 +60,6 @@ class MetalBackendDevice {
   WMT::Reference<WMT::BinaryArchive>* shaderArchive_ = nullptr;
   const std::string* shaderArchivePath_ = nullptr;
   Device* upperDevice_ = nullptr;
-  bool valid_ = false;
 };
 
 }  // namespace dxmt9
