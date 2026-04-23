@@ -2,12 +2,13 @@ dxmt9_shader_service_core_srcs = files('dxmt9_shader_service.cpp')
 dxmt9_provider_service_abi_srcs = files('dxmt9_shader_service_exports.cpp')
 
 dxmt9_runtime_srcs = files(
+  'backend_metal.mm',
   'dxmt9_command_queue.cpp',
   'dxmt9_compat.cpp',
   'dxmt9_capture.cpp',
   'dxmt9_blit_encoders.cpp',
   'dxmt9_debug_trace.cpp',
-  'dxmt9_device.mm',
+  'dxmt9_device.cpp',
   'dxmt9_draw_encoder.mm',
   'dxmt9_draw_state.cpp',
   'dxmt9_draw_shader.cpp',

@@ -1,18 +1,13 @@
-#import <Foundation/Foundation.h>
-#import <Metal/Metal.h>
-
 #include "dxmt9/dxmt9_device.hpp"
-#include "dxmt9_debug_trace.hpp"
-#include "dxmt9_draw_encoder.hpp"
-#include "dxmt9_format_convert.hpp"
+#include "backend_metal.hpp"
 #include "dxmt9_pipeline_cache.hpp"
-#include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "dxmt9_transfers.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -52,44 +47,20 @@ class DeviceImpl final : public Device {
     }
     limits_.supportsDepth24Stencil8 = wmt_device_.supportsDepth24Stencil8();
 
-    // Previously MetalBackendDevice bound this and started the threads;
-    // DeviceImpl owns the lifecycle directly now (Step 3e).
-    queue_.queueLifecycle_.bindTrackedSubmissionState({
-        .writingSlot = &queue_.writingSlot_,
-        .writeIndex = &queue_.writeIndex_,
-        .nextSeqId = &queue_.nextSeqId_,
-        .readySlots = &queue_.readySlots_,
-        .completedSeqQueue = &queue_.completedSeqQueue_,
-        .inflightCount = &queue_.inflightCount_,
-        .completedSeqId = &queue_.completedSeqId_,
-        .lastCommittedSeqId = &queue_.lastCommittedSeqId_,
-        .slots = std::span<core::ChunkSlot>(queue_.slots_.data(), queue_.slots_.size()),
-        .mutex = &queue_.mutex_,
-        .writeCv = &queue_.writeCv_,
-        .encodeCv = &queue_.encodeCv_,
-        .finishCv = &queue_.finishCv_,
-        .stop = &queue_.stop_,
-        .submissionDiagnostics = &queue_.submissionDiagnostics_,
-        .resolveSurfaceFlags = [this](core::Handle handle) {
-          return compatFlagsForSurface(handle);
-        },
-    });
-
-    queue_.startThreads(
-        [this] { encodeLoop(); },
-        [this] { queue_.runFinishLoop(pool_, allocators_); },
-        [this] { queue_.runCompletionWatcherLoop(); });
-    ready_ = true;
+    // Metal-specific glue (encode thread + queueLifecycle binding +
+    // shader-archive persist) lives in MetalBackendDevice. Declared last
+    // so it destructs first — joining the encode/finish/completion
+    // threads before pool_/pipelineCache_/allocators_ tear down.
+    metalBackend_ = std::make_unique<MetalBackendDevice>(
+        wmt_device_, limits_, queue_, pool_, pipelineCache_, allocators_,
+        shaderArchive_, shaderArchivePath_, *this);
   }
 
   ~DeviceImpl() override {
-    // Stop threads before tearing down state that they reference (pool,
-    // allocators, shader archive). CommandQueue::stopThreads joins.
-    queue_.stopThreads();
-    if (shaderArchive_) {
-      std::lock_guard lock(queue_.mutex_);
-      shaders::persistShaderArchive(shaderArchive_, shaderArchivePath_);
-    }
+    // metalBackend_ destructs first (declared last). Its dtor calls
+    // queue_.stopThreads() + persists the shader archive while pool /
+    // cache / allocators are still live.
+    metalBackend_.reset();
     pool_.purgeAll();
   }
 
@@ -97,8 +68,8 @@ class DeviceImpl final : public Device {
   WMTMetalVersion metalVersion() const override { return metalVersion_; }
   CommandQueue& queue() override { return queue_; }
   const core::BackendLimits& limits() const override { return limits_; }
-  // backend() no longer surfaces a concrete MetalBackendDevice — tests
-  // that want polymorphic BackendDevice access go through StubDxmt9Device.
+  // backend() stays nullptr in production. Tests observe through
+  // StubDxmt9Device + MockBackendDevice.
   std::shared_ptr<core::BackendDevice> backend() override { return nullptr; }
   WMT::Reference<WMT::BinaryArchive>* shaderArchive() override { return &shaderArchive_; }
   const std::string* shaderArchivePath() override { return &shaderArchivePath_; }
@@ -120,8 +91,6 @@ class DeviceImpl final : public Device {
   }
   std::uint32_t maxFrameLatency() const override { return maxFrameLatency_; }
 
-  // Resource lifecycle. Pool lives on *this; queue_.mutex_ is the
-  // protecting mutex.
   core::BufferHandle createBuffer(const core::BufferDesc& desc) override {
     std::lock_guard lock(queue_.mutex_);
     return pool_.createBuffer(wmt_device_, desc);
@@ -187,49 +156,9 @@ class DeviceImpl final : public Device {
     return transfers::readbackSurface(queue_, pool_, wmt_device_, limits_, desc, pixels);
   }
 
-  bool ready() const noexcept { return ready_; }
+  bool ready() const noexcept { return metalBackend_ && metalBackend_->valid(); }
 
  private:
-  // Encode-thread main loop. Pulls chunks off the queue and encodes each via
-  // dxmt9::encoders::encodeChunk(ctx, ...). @autoreleasepool scopes the ObjC
-  // objects allocated per chunk; that's why this file is .mm.
-  void encodeLoop() {
-    @autoreleasepool {
-      while (true) {
-        std::unique_lock lock(queue_.mutex_);
-        if (!queue_.queueLifecycle_.runEncodeIteration(
-                lock,
-                [this](std::size_t slotIndex, const core::ChunkSlot& slot) {
-                  encoders::EncodeContext ctx{
-                      wmt_device_, limits_, pool_, pipelineCache_, allocators_,
-                      &shaderArchive_, &shaderArchivePath_, queue_, this,
-                  };
-                  return encoders::encodeChunk(ctx, slotIndex, slot);
-                },
-                [this](std::uint64_t) {
-                  allocators_.reclaim(queue_.completedSeqId_);
-                })) {
-          return;
-        }
-      }
-    }
-  }
-
-  // Surface-format compat bit query for the queueLifecycle binding's
-  // resolveSurfaceFlags hook. Previously MetalBackendDevice::compatFlagsForSurfaceUnlocked.
-  std::uint32_t compatFlagsForSurface(core::Handle handle) const {
-    if (!handle) {
-      return 0;
-    }
-    const auto* surface = pool_.findSurface(handle.value);
-    if (!surface) {
-      return 0;
-    }
-    return core::metalcompat::isFloatRenderTargetFormat(surface->desc.format)
-               ? static_cast<std::uint32_t>(core::metalcompat::CompatFlagBits::CompatFlagFp16)
-               : 0u;
-  }
-
   WMT::Reference<WMT::Device> wmt_device_;
   WMTMetalVersion metalVersion_ = WMTMetalVersionMax;
   CommandQueue queue_;
@@ -240,12 +169,14 @@ class DeviceImpl final : public Device {
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = 3;
   // Pool / Cache / Allocators are owned here. Declared after queue_ so
-  // queue_.stopThreads() in the dtor runs before they destruct (the threads
-  // reach into these structs while running).
+  // metalBackend_'s dtor (which calls queue_.stopThreads()) runs before
+  // these tear down — the threads reach into them while running.
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
   scratch::FrameAllocators allocators_{};
-  bool ready_ = false;
+  // metalBackend_ is declared last so it destructs first. It holds raw
+  // pointers into the fields above and must not outlive them.
+  std::unique_ptr<MetalBackendDevice> metalBackend_;
 };
 
 }  // namespace
