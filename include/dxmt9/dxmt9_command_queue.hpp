@@ -76,10 +76,9 @@ class CommandQueue {
   void submitFlush(resources::Pool& pool);
   core::HResult waitForVBlank(resources::Pool& pool);
 
-  // Thread main-loop bodies. encodeLoop still lives on the backend (depends
-  // on encodeChunk + encodeDraw which Steps 3c-follow-up / 3d will migrate).
-  // finish + completion loops are thin wrappers over queueLifecycle_ and
-  // move here cleanly.
+  // Finish + completion loops live here. The encode loop still runs on
+  // the backend because it needs @autoreleasepool for the ObjC-scoped
+  // Metal objects allocated per chunk — CommandQueue is pure C++.
   void runFinishLoop(resources::Pool& pool, scratch::FrameAllocators& allocators);
   void runCompletionWatcherLoop();
 

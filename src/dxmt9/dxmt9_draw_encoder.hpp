@@ -1,14 +1,15 @@
 #pragma once
 
-// Free-function draw encoder helpers — lifted from MetalBackendDevice
-// (Step 3d). encodeDraw itself still lives on the backend; this module
-// currently hosts makeSampler + beginRenderPass, which were the cleanest
-// extraction candidates. EncodeContext is pre-defined so the eventual
-// encodeDraw extraction just plugs in here.
+// Free-function draw encoder — lifted from MetalBackendDevice (Step 3d).
+// Hosts the EncodeContext bundle, makeSampler, beginRenderPass,
+// encodeDraw, and encodeChunk (3c-remainder).
 
 #include "../winemetal/Metal.hpp"
+#include "dxmt9_backend_types.hpp"
+#include "dxmt9_queue.hpp"
 #include "dxmt9/core.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -16,6 +17,7 @@
 namespace dxmt9 {
 
 class CommandQueue;
+class Device;
 
 namespace resources { struct Pool; }
 namespace pipeline { class Cache; }
@@ -36,6 +38,10 @@ struct EncodeContext {
   WMT::Reference<WMT::BinaryArchive>* shaderArchive;
   const std::string* shaderArchivePath;
   CommandQueue& queue;
+  // Owner of the observer callbacks triggered by encodePresent (notify
+  // device-lost + presentation-status). Points to DeviceImpl in production
+  // — nullable for test contexts.
+  Device* upperDevice = nullptr;
 };
 
 // Sampler factory helpers used by the draw encoder. Previously
@@ -64,6 +70,14 @@ void encodeDraw(EncodeContext& ctx,
                  WMT::RenderCommandEncoder& encoder,
                  const core::DrawDesc& draw,
                  std::uint64_t seqId);
+
+// Encode a single chunk's commands into a fresh WMT::CommandBuffer.
+// Returns a QueueSubmissionRecord that the finish loop commits; nullopt
+// on allocation failure. Previously MetalBackendDevice::encodeChunk.
+std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
+    EncodeContext& ctx,
+    std::size_t slotIndex,
+    const core::ChunkSlot& slot);
 
 }  // namespace encoders
 }  // namespace dxmt9

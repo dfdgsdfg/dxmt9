@@ -2,13 +2,16 @@
 #import <Metal/Metal.h>
 
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_blit_encoders.hpp"
 
 #include "dxmt9/dxmt9_command_queue.hpp"
+#include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_draw_state.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_presenter.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
@@ -96,6 +99,83 @@ using i32 = std::int32_t;
 using f32 = float;
 
 namespace {
+
+// Attachment key + hazard bloom used by encodeChunk to decide whether to
+// flush + restart the render pass between commands. Previously file-local
+// to backend_metal.mm.
+struct AttachmentKey {
+  std::array<u64, core::kMaxRenderTargets> colorHandles{};
+  u64 depthHandle = 0;
+  u32 sampleCount = 1;
+  friend bool operator==(const AttachmentKey&, const AttachmentKey&) = default;
+};
+
+u64 bloomMix64(u64 value, u64 salt) {
+  u64 x = value + salt + 0x9e3779b97f4a7c15ull;
+  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+  x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+  return x ^ (x >> 31);
+}
+
+struct HazardBloom {
+  std::array<u64, 2> bits{};
+  void add(u64 value) {
+    if (value == 0) return;
+    const u64 hash0 = bloomMix64(value, 0x4d595df4d0f33173ull);
+    const u64 hash1 = bloomMix64(value, 0x9e3779b97f4a7c15ull);
+    bits[0] |= 1ull << (hash0 & 63u);
+    bits[1] |= 1ull << (hash1 & 63u);
+  }
+  bool overlaps(const HazardBloom& other) const {
+    return ((bits[0] & other.bits[0]) != 0) || ((bits[1] & other.bits[1]) != 0);
+  }
+};
+
+HazardBloom makeAttachmentBloom(const core::RenderTargetSnapshot& rts) {
+  HazardBloom bloom;
+  for (const auto& attachment : rts.color) bloom.add(attachment.handle.value);
+  bloom.add(rts.depthStencil.handle.value);
+  return bloom;
+}
+
+HazardBloom makeAttachmentBloom(const core::ClearDesc& clear) {
+  HazardBloom bloom;
+  for (const auto& attachment : clear.colorAttachments) bloom.add(attachment.handle.value);
+  bloom.add(clear.depthStencil.handle.value);
+  return bloom;
+}
+
+HazardBloom makeDrawReadBloom(const core::DrawDesc& draw) {
+  HazardBloom bloom;
+  bloom.add(draw.indexBuffer.value);
+  for (const auto& stream : draw.vertexDecl.streams) {
+    if (stream.buffer) bloom.add(stream.buffer->handle().value);
+  }
+  for (const auto& texture : draw.textures) bloom.add(texture.handle.value);
+  return bloom;
+}
+
+AttachmentKey makeAttachmentKey(const core::RenderTargetSnapshot& rts) {
+  AttachmentKey key;
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    key.colorHandles[i] = rts.color[i].handle.value;
+    key.sampleCount = std::max(key.sampleCount, rts.color[i].sampleCount);
+  }
+  key.depthHandle = rts.depthStencil.handle.value;
+  key.sampleCount = std::max(key.sampleCount, rts.depthStencil.sampleCount);
+  return key;
+}
+
+AttachmentKey makeAttachmentKey(const core::ClearDesc& clear) {
+  AttachmentKey key;
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    key.colorHandles[i] = clear.colorAttachments[i].handle.value;
+    key.sampleCount = std::max(key.sampleCount, clear.colorAttachments[i].sampleCount);
+  }
+  key.depthHandle = clear.depthStencil.handle.value;
+  key.sampleCount = std::max(key.sampleCount, clear.depthStencil.sampleCount);
+  return key;
+}
 
 u32 primitiveVertexCount(core::PrimitiveType type, u32 primitiveCount) {
   switch (type) {
@@ -975,6 +1055,143 @@ void encodeDraw(EncodeContext& ctx,
     }
   }
   encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
+    EncodeContext& ctx,
+    std::size_t slotIndex,
+    const core::ChunkSlot& slot) {
+  if (!ctx.device || !ctx.queue.valid()) {
+    return std::nullopt;
+  }
+
+  auto ownedCommandBuffer = ctx.queue.newCommandBuffer();
+  if (!ownedCommandBuffer) {
+    return std::nullopt;
+  }
+  auto commandBuffer = ownedCommandBuffer;
+
+  WMT::Reference<WMT::RenderCommandEncoder> activeRenderEncoder{};
+  WMT::Reference<WMT::BlitCommandEncoder> activeBlitEncoder{};
+  AttachmentKey activeKey{};
+  HazardBloom activeWriteBloom{};
+  bool hasActiveRender = false;
+  std::optional<core::ClearDesc> pendingClear;
+
+  auto flushRender = [&] {
+    if (activeRenderEncoder) {
+      activeRenderEncoder.endEncoding();
+      activeRenderEncoder = {};
+      hasActiveRender = false;
+    }
+  };
+
+  auto flushBlit = [&] {
+    if (activeBlitEncoder) {
+      activeBlitEncoder.endEncoding();
+      activeBlitEncoder = {};
+    }
+  };
+
+  auto startRenderPass = [&](const core::DrawDesc& draw, const std::optional<core::ClearDesc>& clear) {
+    activeRenderEncoder = beginRenderPass(ctx, commandBuffer, draw, clear);
+    hasActiveRender = static_cast<bool>(activeRenderEncoder);
+    activeKey = makeAttachmentKey(draw.rts);
+    activeWriteBloom = makeAttachmentBloom(draw.rts);
+  };
+
+  auto flushPendingClear = [&] {
+    if (!pendingClear.has_value()) return;
+    dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, *pendingClear);
+    pendingClear.reset();
+  };
+
+  using Kind = core::MetalCommandRecord::Kind;
+  for (const auto& command : slot.commands) {
+    switch (command.kind) {
+      case Kind::Clear:
+        flushRender();
+        flushBlit();
+        if (command.clear.rects.empty()) {
+          pendingClear = command.clear;
+        } else {
+          dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, command.clear);
+        }
+        break;
+      case Kind::Draw: {
+        flushBlit();
+        const auto drawKey = makeAttachmentKey(command.draw.rts);
+        const auto drawReadBloom = makeDrawReadBloom(command.draw);
+        if (pendingClear.has_value()) {
+          const auto clearKey = makeAttachmentKey(*pendingClear);
+          const auto clearBloom = makeAttachmentBloom(*pendingClear);
+          if (clearKey == drawKey && !clearBloom.overlaps(drawReadBloom)) {
+            startRenderPass(command.draw, pendingClear);
+            pendingClear.reset();
+          } else {
+            flushPendingClear();
+            if (!hasActiveRender || activeKey != drawKey || activeWriteBloom.overlaps(drawReadBloom)) {
+              flushRender();
+              startRenderPass(command.draw, std::nullopt);
+            }
+          }
+        } else if (!hasActiveRender || activeKey != drawKey || activeWriteBloom.overlaps(drawReadBloom)) {
+          flushRender();
+          startRenderPass(command.draw, std::nullopt);
+        }
+        encodeDraw(ctx, commandBuffer, activeRenderEncoder, command.draw, slot.seqId);
+        break;
+      }
+      case Kind::SurfaceCopy:
+        flushPendingClear();
+        flushRender();
+        dxmt9::encoders::encodeSurfaceCopy(commandBuffer, ctx.pool, ctx.cache, ctx.device,
+                                           ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
+                                           command.surfaceCopy);
+        break;
+      case Kind::StretchRect:
+        flushPendingClear();
+        flushRender();
+        dxmt9::encoders::encodeStretchRect(commandBuffer, ctx.pool, ctx.cache, ctx.device,
+                                            ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
+                                            command.stretchRect);
+        break;
+      case Kind::Readback:
+        flushPendingClear();
+        flushRender();
+        dxmt9::encoders::encodeReadback(commandBuffer, ctx.pool, command.readback);
+        break;
+      case Kind::ColorFill:
+        flushPendingClear();
+        flushRender();
+        dxmt9::encoders::encodeColorFill(commandBuffer, ctx.pool, ctx.cache, ctx.device,
+                                          ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
+                                          command.colorFill);
+        break;
+      case Kind::Present:
+        flushPendingClear();
+        flushRender();
+        flushBlit();
+        if (dxmt9::encodePresent(commandBuffer, ctx.pool, ctx.upperDevice,
+                                  command.present, command.presentSource, slot.seqId)) {
+          ctx.queue.backBufferDiscardAfterPresent_ = true;
+        }
+        break;
+    }
+  }
+
+  flushPendingClear();
+  flushRender();
+  flushBlit();
+
+  const u64 seqId = slot.seqId;
+  core::metalqueue::QueueSubmissionRecord record;
+  record.commandBuffer = std::move(commandBuffer);
+  record.slotIndex = slotIndex;
+  record.seqId = seqId;
+  record.commands = std::span<const core::MetalCommandRecord>(slot.commands.data(), slot.commands.size());
+  record.context = "queue";
+  return record;
 }
 
 }  // namespace dxmt9::encoders
