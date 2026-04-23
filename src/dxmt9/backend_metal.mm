@@ -700,15 +700,9 @@ class MetalBackendDevice final : public BackendDevice {
     return record.shadow.empty() ? nullptr : record.shadow.data();
   }
 
-  void unmapBuffer(BufferHandle handle) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    (void)handle;
-  }
-
-  void uploadBufferData(BufferHandle handle, std::span<const u8> bytes) override {
-    std::lock_guard lock(commandQueue_->mutex_);
-    pool_->uploadBufferData(handle.value, bytes.data(), bytes.size());
-  }
+  // unmapBuffer + uploadBufferData overrides removed (Step 3e).
+  // DeviceImpl implements these directly against pool_; production never
+  // routes through MetalBackendDevice's BackendDevice overrides.
 
   void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
                           std::span<const u8> bytes) override {
