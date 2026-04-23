@@ -99,10 +99,6 @@ inline u64 textureTraceHandle() { return dxmt9::debug::traceTextureHandle(); }
 // shaderDumpDir + maybeDumpShaderSource moved to dxmt9_draw_shader.cpp
 // (file-private there). Only the makeDrawShaderSource dispatch calls them.
 
-bool shouldDumpGpuTexture(Handle handle) {
-  const u64 wanted = gpuDumpTextureHandle();
-  return wanted != 0ull && handle.value == wanted;
-}
 
 inline u64 traceEncodeSeq() { return dxmt9::debug::traceEncodeSeq(); }
 inline bool shouldTraceTexture(Handle handle) { return dxmt9::debug::shouldTraceTexture(handle); }
@@ -111,67 +107,8 @@ inline bool shouldTraceEncode(const DrawDesc& draw, u64 seqId) {
   return dxmt9::debug::shouldTraceEncode(draw, seqId);
 }
 
-std::span<const u8> normalizeTextureUploadBytes(Format format, u32 width, u32 height, u32 pitch,
-                                                std::span<const u8> bytes, std::vector<u8>& scratch) {
-  if (bytes.empty()) {
-    return bytes;
-  }
 
-  switch (format) {
-    case Format::X8R8G8B8:
-    case Format::X8B8G8R8: {
-      const size_t rowBytes = static_cast<size_t>(pitch);
-      const size_t expected = rowBytes * static_cast<size_t>(height);
-      if (expected == 0 || bytes.size() < expected) {
-        return bytes;
-      }
-      scratch.assign(bytes.begin(), bytes.begin() + expected);
-      for (u32 y = 0; y < height; ++y) {
-        u8* row = scratch.data() + static_cast<size_t>(y) * rowBytes;
-        for (u32 x = 0; x < width; ++x) {
-          row[static_cast<size_t>(x) * 4 + 3] = 0xffu;
-        }
-      }
-      return scratch;
-    }
-    case Format::X1R5G5B5: {
-      const size_t rowBytes = static_cast<size_t>(pitch);
-      const size_t expected = rowBytes * static_cast<size_t>(height);
-      if (expected == 0 || bytes.size() < expected) {
-        return bytes;
-      }
-      scratch.assign(bytes.begin(), bytes.begin() + expected);
-      for (u32 y = 0; y < height; ++y) {
-        auto* row = reinterpret_cast<u16*>(scratch.data() + static_cast<size_t>(y) * rowBytes);
-        for (u32 x = 0; x < width; ++x) {
-          row[x] |= 0x8000u;
-        }
-      }
-      return scratch;
-    }
-    default:
-      return bytes;
-  }
-}
 
-WMT::Reference<WMT::Device> bootstrapWrappedDevice() {
-  auto devices = WMT::CopyAllDevices();
-  if (!devices || devices.count() == 0) {
-    return {};
-  }
-  auto device = WMT::Device{devices.object(0)};
-  if (!device) {
-    return {};
-  }
-  return WMT::Reference<WMT::Device>(device);
-}
-
-WMT::Reference<WMT::CommandBuffer> bootstrapCommandBuffer(WMT::CommandQueue& queue) {
-  if (!queue) {
-    return {};
-  }
-  return queue.commandBuffer();
-}
 
 // makeHash + makeLibraryWMT + shader source helpers moved to
 // dxmt9_shader_sources.{hpp,cpp}; callers use dxmt9::shaders:: qualified.
@@ -202,85 +139,12 @@ using dxmt9::convert::toCullMode;
 using dxmt9::convert::toStencilOperation;
 using dxmt9::convert::toColorWriteMask;
 
-struct AttachmentKey {
-  std::array<u64, kMaxRenderTargets> colorHandles{};
-  u64 depthHandle = 0;
-  u32 sampleCount = 1;
 
-  friend bool operator==(const AttachmentKey&, const AttachmentKey&) = default;
-};
 
-struct AttachmentKeyHash {
-  size_t operator()(const AttachmentKey& key) const noexcept {
-    u64 hash = 1469598103934665603ull;
-    for (auto handle : key.colorHandles) {
-      hash ^= handle;
-      hash *= 1099511628211ull;
-    }
-    hash ^= key.depthHandle;
-    hash *= 1099511628211ull;
-    hash ^= key.sampleCount;
-    hash *= 1099511628211ull;
-    return static_cast<size_t>(hash);
-  }
-};
 
-u64 bloomMix64(u64 value, u64 salt) {
-  u64 x = value + salt + 0x9e3779b97f4a7c15ull;
-  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
-  x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
-  return x ^ (x >> 31);
-}
 
-struct HazardBloom {
-  std::array<u64, 2> bits{};
 
-  void add(u64 value) {
-    if (value == 0) {
-      return;
-    }
-    const u64 hash0 = bloomMix64(value, 0x4d595df4d0f33173ull);
-    const u64 hash1 = bloomMix64(value, 0x9e3779b97f4a7c15ull);
-    bits[0] |= 1ull << (hash0 & 63u);
-    bits[1] |= 1ull << (hash1 & 63u);
-  }
 
-  bool overlaps(const HazardBloom& other) const {
-    return ((bits[0] & other.bits[0]) != 0) || ((bits[1] & other.bits[1]) != 0);
-  }
-};
-
-HazardBloom makeAttachmentBloom(const RenderTargetSnapshot& rts) {
-  HazardBloom bloom;
-  for (const auto& attachment : rts.color) {
-    bloom.add(attachment.handle.value);
-  }
-  bloom.add(rts.depthStencil.handle.value);
-  return bloom;
-}
-
-HazardBloom makeAttachmentBloom(const ClearDesc& clear) {
-  HazardBloom bloom;
-  for (const auto& attachment : clear.colorAttachments) {
-    bloom.add(attachment.handle.value);
-  }
-  bloom.add(clear.depthStencil.handle.value);
-  return bloom;
-}
-
-HazardBloom makeDrawReadBloom(const DrawDesc& draw) {
-  HazardBloom bloom;
-  bloom.add(draw.indexBuffer.value);
-  for (const auto& stream : draw.vertexDecl.streams) {
-    if (stream.buffer) {
-      bloom.add(stream.buffer->handle().value);
-    }
-  }
-  for (const auto& texture : draw.textures) {
-    bloom.add(texture.handle.value);
-  }
-  return bloom;
-}
 
 // Pipeline-cache key types + Cache class moved to dxmt9_pipeline_cache.{hpp,cpp}
 // (dxmt9::pipeline:: namespace). Imported as aliases so the rest of this TU
@@ -296,27 +160,7 @@ using DepthStencilKeyHash = dxmt9::pipeline::DepthStencilKeyHash;
 using PipelineCacheEntry = dxmt9::pipeline::Entry;
 using PipelineCache = dxmt9::pipeline::Cache;
 
-AttachmentKey makeAttachmentKey(const RenderTargetSnapshot& rts) {
-  AttachmentKey key;
-  for (size_t i = 0; i < kMaxRenderTargets; ++i) {
-    key.colorHandles[i] = rts.color[i].handle.value;
-    key.sampleCount = std::max(key.sampleCount, rts.color[i].sampleCount);
-  }
-  key.depthHandle = rts.depthStencil.handle.value;
-  key.sampleCount = std::max(key.sampleCount, rts.depthStencil.sampleCount);
-  return key;
-}
 
-AttachmentKey makeAttachmentKey(const ClearDesc& clear) {
-  AttachmentKey key;
-  for (size_t i = 0; i < kMaxRenderTargets; ++i) {
-    key.colorHandles[i] = clear.colorAttachments[i].handle.value;
-    key.sampleCount = std::max(key.sampleCount, clear.colorAttachments[i].sampleCount);
-  }
-  key.depthHandle = clear.depthStencil.handle.value;
-  key.sampleCount = std::max(key.sampleCount, clear.depthStencil.sampleCount);
-  return key;
-}
 
 // Resource record types + Pool moved to dxmt9_resource_pool.{hpp,cpp}
 // (dxmt9::resources:: namespace). Aliased so the rest of this TU keeps
@@ -348,9 +192,6 @@ using ResourcePool = dxmt9::resources::Pool;
 // Per-frame bump-ring allocators used by the encode thread for transient
 using FrameAllocators = dxmt9::scratch::FrameAllocators;
 
-NSString* makeNSString(const std::string& text) {
-  return [[NSString alloc] initWithUTF8String:text.c_str()];
-}
 
 // D3DShaderStage / D3DDecodedInstruction / SpirvModule moved to
 // dxmt9_d3d9_bytecode.hpp (dxmt9::d3d9bc:: namespace). Aliased below.
@@ -397,31 +238,12 @@ using dxmt9::ffp::decodeFixedFunctionVertexLayout;
 
 using dxmt9::ffp::hashVertexDeclaration;
 
-u32 primitiveVertexCount(PrimitiveType type, u32 primitiveCount) {
-  switch (type) {
-    case PrimitiveType::PointList:
-      return primitiveCount;
-    case PrimitiveType::LineList:
-      return primitiveCount * 2u;
-    case PrimitiveType::LineStrip:
-      return primitiveCount + 1u;
-    case PrimitiveType::TriangleList:
-    case PrimitiveType::TriangleFan:
-      return primitiveCount * 3u;
-    case PrimitiveType::TriangleStrip:
-      return primitiveCount + 2u;
-  }
-  return primitiveCount * 3u;
-}
 
 // declTypeSize + fvfTexcoordSize moved to dxmt9_ffp_shaders.cpp (anonymous).
 
 // hashFixedFunctionLayout moved to dxmt9_ffp_shaders.cpp (anonymous).
 
 
-u32 indexElementSize(IndexType type) {
-  return type == IndexType::UInt32 ? 4u : 2u;
-}
 
 // D3DRegisterKind / D3DRegisterRef + kD3DSIO_* + kD3DSPR_* + kD3DSP_DCL_*
 // moved to dxmt9_d3d9_bytecode.hpp (dxmt9::d3d9bc:: namespace). Aliased below.
