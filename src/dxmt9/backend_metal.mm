@@ -17,6 +17,8 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_d3d9_bytecode.hpp"
+#include "dxmt9_debug_trace.hpp"
+#include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
@@ -82,64 +84,16 @@ using enum dxmt9::core::metalcompat::CompatFlagBits;
 constexpr size_t kRingSize = 32;
 constexpr size_t kMaxInflight = 3;
 
-bool debugForceVisibleDraw() {
-  static const bool enabled = dxmt9::util::getenvFlag("DXMT_DEBUG_FORCE_VISIBLE");
-  return enabled;
-}
-
-bool debugSkipAllDraws() {
-  static const bool enabled = dxmt9::util::getenvFlag("DXMT_SKIP_ALL_DRAWS");
-  return enabled;
-}
-
-bool debugDisableScissor() {
-  static const bool value = dxmt9::util::getenvFlag("DXMT_DISABLE_SCISSOR");
-  return value;
-}
-
-bool debugDisableAlphaTest() {
-  static const bool value = dxmt9::util::getenvFlag("DXMT_DISABLE_ALPHA_TEST");
-  return value;
-}
-
-bool debugForceExpandIndexed() {
-  static const bool value = dxmt9::util::getenvFlag("DXMT_FORCE_EXPAND_INDEXED");
-  return value;
-}
-
-
-int fixedFunctionTraceBudget() {
-  static const int budget = [] {
-    const auto env = dxmt9::util::getenvString("DXMT_TRACE_FVF");
-    if (env.empty()) {
-      return 0;
-    }
-    return std::max(0, std::atoi(env.c_str()));
-  }();
-  return budget;
-}
-
-u64 fixedFunctionTraceTextureHandle() {
-  static const u64 value = [] {
-    const char* env = std::getenv("DXMT_TRACE_FVF_TEX0");
-    if (!env || env[0] == '\0') {
-      return 0ull;
-    }
-    return static_cast<u64>(std::strtoull(env, nullptr, 0));
-  }();
-  return value;
-}
-
-u64 textureTraceHandle() {
-  static const u64 handle = [] {
-    const char* env = std::getenv("DXMT_TRACE_TEXTURE_HANDLE");
-    if (!env || env[0] == '\0') {
-      return 0ull;
-    }
-    return static_cast<u64>(std::strtoull(env, nullptr, 0));
-  }();
-  return handle;
-}
+// Env-gated debug knobs moved to dxmt9::debug (Step 3d). Thin aliases
+// keep the file-local call sites unchanged.
+inline bool debugForceVisibleDraw() { return dxmt9::debug::forceVisibleDraw(); }
+inline bool debugSkipAllDraws() { return dxmt9::debug::skipAllDraws(); }
+inline bool debugDisableScissor() { return dxmt9::debug::disableScissor(); }
+inline bool debugDisableAlphaTest() { return dxmt9::debug::disableAlphaTest(); }
+inline bool debugForceExpandIndexed() { return dxmt9::debug::forceExpandIndexed(); }
+inline int fixedFunctionTraceBudget() { return dxmt9::debug::fixedFunctionTraceBudget(); }
+inline u64 fixedFunctionTraceTextureHandle() { return dxmt9::debug::fixedFunctionTraceTextureHandle(); }
+inline u64 textureTraceHandle() { return dxmt9::debug::traceTextureHandle(); }
 
 // shaderDumpDir + maybeDumpShaderSource moved to dxmt9_draw_shader.cpp
 // (file-private there). Only the makeDrawShaderSource dispatch calls them.
@@ -149,50 +103,11 @@ bool shouldDumpGpuTexture(Handle handle) {
   return wanted != 0ull && handle.value == wanted;
 }
 
-u64 traceEncodeSeq() {
-  static const u64 value = [] {
-    const char* env = std::getenv("DXMT_TRACE_ENCODE_SEQ");
-    if (!env || env[0] == '\0') {
-      return 0ull;
-    }
-    return static_cast<u64>(std::strtoull(env, nullptr, 0));
-  }();
-  return value;
-}
-
-bool shouldTraceTexture(Handle handle) {
-  const u64 wanted = textureTraceHandle();
-  return wanted != 0ull && handle.value == wanted;
-}
-
-u64 skippedTextureHandle() {
-  static const u64 value = [] {
-    const char* env = std::getenv("DXMT_SKIP_TEXTURE_HANDLE");
-    if (!env || env[0] == '\0') {
-      return 0ull;
-    }
-    char* end = nullptr;
-    const auto parsed = std::strtoull(env, &end, 0);
-    if (end == env) {
-      return 0ull;
-    }
-    return static_cast<u64>(parsed);
-  }();
-  return value;
-}
-
-
-bool shouldTraceEncode(const DrawDesc& draw, u64 seqId) {
-  const u64 seq = traceEncodeSeq();
-  if (seq != 0ull && seqId == seq) {
-    return true;
-  }
-  const u64 wanted = textureTraceHandle();
-  if (wanted != 0ull && draw.textures[0].handle && draw.textures[0].handle.value == wanted) {
-    return true;
-  }
-  const u64 ffWanted = fixedFunctionTraceTextureHandle();
-  return ffWanted != 0ull && draw.textures[0].handle && draw.textures[0].handle.value == ffWanted;
+inline u64 traceEncodeSeq() { return dxmt9::debug::traceEncodeSeq(); }
+inline bool shouldTraceTexture(Handle handle) { return dxmt9::debug::shouldTraceTexture(handle); }
+inline u64 skippedTextureHandle() { return dxmt9::debug::skippedTextureHandle(); }
+inline bool shouldTraceEncode(const DrawDesc& draw, u64 seqId) {
+  return dxmt9::debug::shouldTraceEncode(draw, seqId);
 }
 
 std::span<const u8> normalizeTextureUploadBytes(Format format, u32 width, u32 height, u32 pitch,
@@ -1162,76 +1077,13 @@ class MetalBackendDevice final : public BackendDevice {
   WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(WMT::CommandBuffer& commandBuffer,
                                                              const DrawDesc& draw,
                                                              const std::optional<ClearDesc>& clear) {
-    auto* surface = findSurfaceUnlocked(draw.rts.color[0].handle.value);
-    if (!surface || !surface->texture) {
-      return {};
-    }
-    {
-      WMTRenderPassInfo passInfo{};
-      auto& attachment = passInfo.colors[0];
-      attachment.texture = surface->texture.handle;
-      const bool discardAfterPresent = !clear.has_value() && commandQueue_->backBufferDiscardAfterPresent_ &&
-                                       draw.rts.color[0].handle == commandQueue_->currentBackBuffer_;
-      attachment.load_action = clear.has_value() ? WMTLoadActionClear
-                                                  : (discardAfterPresent ? WMTLoadActionDontCare
-                                                                         : WMTLoadActionLoad);
-      attachment.store_action = WMTStoreActionStore;
-      if (surface->resolveTexture) {
-        attachment.resolve_texture = surface->resolveTexture.handle;
-        attachment.store_action = WMTStoreActionMultisampleResolve;
-      }
-      if (clear.has_value()) {
-        attachment.clear_color = WMTClearColor{clear->color.r, clear->color.g,
-                                               clear->color.b, clear->color.a};
-      }
-
-      if (auto* depthSurface = findSurfaceUnlocked(draw.rts.depthStencil.handle.value);
-          depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
-        if (formatHasDepthAspect(depthSurface->desc.format)) {
-          passInfo.depth.texture = depthSurface->texture.handle;
-          passInfo.depth.load_action = (clear.has_value() && clear->clearDepth)
-                                           ? WMTLoadActionClear : WMTLoadActionLoad;
-          passInfo.depth.store_action = WMTStoreActionStore;
-          if (clear.has_value()) {
-            passInfo.depth.clear_depth = clear->depth;
-          }
-        }
-        if (formatHasStencilAspect(depthSurface->desc.format)) {
-          passInfo.stencil.texture = depthSurface->texture.handle;
-          passInfo.stencil.load_action = (clear.has_value() && clear->clearStencil)
-                                             ? WMTLoadActionClear : WMTLoadActionLoad;
-          passInfo.stencil.store_action = WMTStoreActionStore;
-          if (clear.has_value()) {
-            passInfo.stencil.clear_stencil = clear->stencil;
-          }
-        }
-      }
-
-      auto encoder = commandBuffer.renderCommandEncoder(passInfo);
-      if (!encoder) {
-        return {};
-      }
-      if (discardAfterPresent) {
-        commandQueue_->backBufferDiscardAfterPresent_ = false;
-      }
-      const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
-      double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
-      double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
-      double viewportOriginX = 0.0;
-      double viewportOriginY = 0.0;
-      if (ffLayout && ffLayout->preTransformed) {
-        viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
-        viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
-      }
-      WMTViewport vp{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
-                     static_cast<double>(draw.viewport.viewport.minZ),
-                     static_cast<double>(draw.viewport.viewport.maxZ)};
-      encoder.setViewport(vp);
-      encoder.setRasterizerState(WMTTriangleFillModeFill, WMTCullModeNone,
-                                 WMTDepthClipModeClip, WMTWindingClockwise,
-                                 0.0f, 0.0f, 0.0f);
-      return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
-    }
+    // Body moved to dxmt9::encoders::beginRenderPass (Step 3d). Assemble
+    // the EncodeContext on the fly from backend state.
+    dxmt9::encoders::EncodeContext ctx{
+        wrappedDevice_, limits_, *pool_, *pipelineCache_, *allocators_,
+        shaderArchive_, shaderArchivePath_, *commandQueue_,
+    };
+    return dxmt9::encoders::beginRenderPass(ctx, commandBuffer, draw, clear);
   }
 
   void encodeDraw(WMT::CommandBuffer& commandBuffer, WMT::RenderCommandEncoder& encoder,
@@ -1763,7 +1615,7 @@ class MetalBackendDevice final : public BackendDevice {
         }
         encoder.setFragmentTexture(WMT::Texture{texture->texture.handle}, (uint8_t)stage);
       }
-      auto sampler = makeSampler(draw.samplers[stage]);
+      auto sampler = dxmt9::encoders::makeSampler(wrappedDevice_, draw.samplers[stage]);
       if (sampler) {
         encoder.setFragmentSamplerState(sampler, (uint8_t)stage);
       }
@@ -2072,64 +1924,8 @@ class MetalBackendDevice final : public BackendDevice {
     pool_->dumpedGpuTextures.insert(handle.value);
   }
 
-  WMT::Reference<WMT::SamplerState> makeSampler(bool linear) {
-    WMTSamplerInfo info{};
-    auto f = linear ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
-    info.min_filter = f;
-    info.mag_filter = f;
-    info.mip_filter = WMTSamplerMipFilterNotMipmapped;
-    info.s_address_mode = WMTSamplerAddressModeClampToEdge;
-    info.t_address_mode = WMTSamplerAddressModeClampToEdge;
-    info.r_address_mode = WMTSamplerAddressModeClampToEdge;
-    info.normalized_coords = true;
-    return wrappedDevice_.newSamplerState(info);
-  }
-
-  WMT::Reference<WMT::SamplerState> makeSampler(const SamplerSnapshot& snapshot) {
-    const auto minFilter = snapshot.states.contains(SAMP_MIN_FILTER) ? snapshot.states.at(SAMP_MIN_FILTER) : 0u;
-    const auto magFilter = snapshot.states.contains(SAMP_MAG_FILTER) ? snapshot.states.at(SAMP_MAG_FILTER) : 0u;
-    const auto mipFilter = snapshot.states.contains(SAMP_MIP_FILTER) ? snapshot.states.at(SAMP_MIP_FILTER) : 0u;
-    const auto addressU = snapshot.states.contains(SAMP_ADDRESS_U) ? snapshot.states.at(SAMP_ADDRESS_U) : 1u;
-    const auto addressV = snapshot.states.contains(SAMP_ADDRESS_V) ? snapshot.states.at(SAMP_ADDRESS_V) : 1u;
-    const auto addressW = snapshot.states.contains(SAMP_ADDRESS_W) ? snapshot.states.at(SAMP_ADDRESS_W) : 1u;
-    const auto borderColor = snapshot.states.contains(SAMP_BORDER_COLOR) ? snapshot.states.at(SAMP_BORDER_COLOR) : 0u;
-    auto resolveAddressMode = [](u32 value) -> WMTSamplerAddressMode {
-      switch (value) {
-        case 1u: return WMTSamplerAddressModeRepeat;
-        case 2u: return WMTSamplerAddressModeMirrorRepeat;
-        case 4u: return WMTSamplerAddressModeClampToBorderColor;
-        case 3u:
-        default: return WMTSamplerAddressModeClampToEdge;
-      }
-    };
-    auto resolveBorderColor = [](u32 value) -> WMTSamplerBorderColor {
-      switch (value) {
-        case 0x00000000u: return WMTSamplerBorderColorTransparentBlack;
-        case 0xff000000u: return WMTSamplerBorderColorOpaqueBlack;
-        case 0xffffffffu: return WMTSamplerBorderColorOpaqueWhite;
-        default: return (value >> 24) == 0u ? WMTSamplerBorderColorTransparentBlack : WMTSamplerBorderColorOpaqueBlack;
-      }
-    };
-
-    WMTSamplerInfo info{};
-    info.min_filter = minFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
-    info.mag_filter = magFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
-    switch (mipFilter) {
-      case 2u: info.mip_filter = WMTSamplerMipFilterLinear; break;
-      case 1u: info.mip_filter = WMTSamplerMipFilterNearest; break;
-      default: info.mip_filter = WMTSamplerMipFilterNotMipmapped; break;
-    }
-    info.s_address_mode = resolveAddressMode(addressU);
-    info.t_address_mode = resolveAddressMode(addressV);
-    info.r_address_mode = resolveAddressMode(addressW);
-    if (info.s_address_mode == WMTSamplerAddressModeClampToBorderColor ||
-        info.t_address_mode == WMTSamplerAddressModeClampToBorderColor ||
-        info.r_address_mode == WMTSamplerAddressModeClampToBorderColor) {
-      info.border_color = resolveBorderColor(borderColor);
-    }
-    info.normalized_coords = true;
-    return wrappedDevice_.newSamplerState(info);
-  }
+  // makeSampler overloads moved to dxmt9::encoders (Step 3d). encodeDraw
+  // calls dxmt9::encoders::makeSampler(wrappedDevice_, ...) directly.
 
   // pipelineForDraw + depthStencilStateFor moved to pipeline::Cache
   // (Step 3d). encodeDraw now calls pipelineCache_->getOrBuildDrawPipelineForDraw
