@@ -1061,6 +1061,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeContext& ctx,
     std::size_t slotIndex,
     const core::ChunkSlot& slot) {
+  @autoreleasepool {
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
@@ -1192,6 +1193,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   record.commands = std::span<const core::MetalCommandRecord>(slot.commands.data(), slot.commands.size());
   record.context = "queue";
   return record;
+  }  // @autoreleasepool
 }
 
 }  // namespace dxmt9::encoders
