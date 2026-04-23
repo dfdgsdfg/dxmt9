@@ -50,10 +50,20 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
 // buffer. Reads (and clears, on entry) ctx.queue.backBufferDiscardAfterPresent_
 // so the next draw to the same RT can choose DontCare over Load.
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
-    const EncodeContext& ctx,
+    EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
     const core::DrawDesc& draw,
     const std::optional<core::ClearDesc>& clear);
+
+// Main per-draw encoder. Previously MetalBackendDevice::encodeDraw.
+// Consumes ctx.allocators.argbuf for the transient DrawUniforms buffer,
+// ctx.cache for pipeline lookup, ctx.pool for resource reads, and
+// ctx.device for transient buffer allocation.
+void encodeDraw(EncodeContext& ctx,
+                 WMT::CommandBuffer& commandBuffer,
+                 WMT::RenderCommandEncoder& encoder,
+                 const core::DrawDesc& draw,
+                 std::uint64_t seqId);
 
 }  // namespace encoders
 }  // namespace dxmt9
