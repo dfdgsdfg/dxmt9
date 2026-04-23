@@ -363,4 +363,33 @@ bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::siz
   return true;
 }
 
+u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
+  if ((flags & core::UsageDiscard) != 0 || (flags & core::UsageNoOverwrite) != 0) {
+    return 0;
+  }
+  auto it = buffers.find(handle.value);
+  if (it == buffers.end()) {
+    return 0;
+  }
+  return it->second.lastUsedSeqId;
+}
+
+void* Pool::finalizeBufferMap(core::BufferHandle handle, u32 flags) {
+  auto it = buffers.find(handle.value);
+  if (it == buffers.end()) {
+    return nullptr;
+  }
+  auto& record = it->second;
+  if ((flags & core::UsageDiscard) != 0) {
+    std::fill(record.shadow.begin(), record.shadow.end(), 0);
+    if (record.contents) {
+      std::memset(record.contents, 0, record.shadow.size());
+    }
+  }
+  if (record.contents) {
+    return record.contents;
+  }
+  return record.shadow.empty() ? nullptr : record.shadow.data();
+}
+
 }  // namespace dxmt9::resources

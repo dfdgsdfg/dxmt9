@@ -15,6 +15,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_ffp_shaders.cpp',
   'dxmt9_format_convert.cpp',
   'dxmt9_pipeline_cache.cpp',
+  'dxmt9_resource_initializer.mm',
   'dxmt9_resource_pool.cpp',
   'dxmt9_shader_request.cpp',
   'dxmt9_shader_translator.cpp',
@@ -23,7 +24,6 @@ dxmt9_runtime_srcs = files(
   'dxmt9_presenter_macdrv.cpp',
   'dxmt9_queue.cpp',
   'dxmt9_shader_sources.cpp',
-  'dxmt9_transfers.mm',
 )
 
 dxmt9_runtime_internal_inc = include_directories('.', '..')

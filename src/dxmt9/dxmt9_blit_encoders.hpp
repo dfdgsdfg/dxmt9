@@ -65,3 +65,22 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
                       const core::ClearDesc& clear);
 
 }  // namespace dxmt9::encoders
+
+// Forward decl for readbackSurface.
+namespace dxmt9 { class CommandQueue; }
+
+namespace dxmt9::encoders {
+
+// Synchronous GetRenderTargetData-style readback. Creates a staging
+// texture, blits source → staging, then copies staging → staging buffer,
+// both on ephemeral command buffers awaited with waitUntilCompleted.
+// Populates `pixels.bytes` + `pixels.pitch`. Returns false if the source
+// surface is missing or the format has no CPU-readable layout.
+bool readbackSurface(CommandQueue& queue,
+                      resources::Pool& pool,
+                      WMT::Reference<WMT::Device> device,
+                      const core::BackendLimits& limits,
+                      const core::ReadbackDesc& desc,
+                      core::ReadbackPixels& pixels);
+
+}  // namespace dxmt9::encoders

@@ -1,10 +1,12 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "backend_metal.hpp"
+#include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_queue.hpp"
+#include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_sources.hpp"
-#include "dxmt9_transfers.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <memory>
@@ -47,6 +49,10 @@ class DeviceImpl final : public Device {
       return;
     }
     limits_.supportsDepth24Stencil8 = wmt_device_.supportsDepth24Stencil8();
+
+    // Upload service — holds refs into queue_/pool_/wmt_device_.
+    resourceInitializer_ = std::make_unique<resources::Initializer>(
+        queue_, pool_, wmt_device_);
 
     // Thin Metal-specific glue. Provides the per-chunk encode callback
     // and the surface-compat hook.
@@ -153,13 +159,21 @@ class DeviceImpl final : public Device {
     pool_.uploadBufferData(handle.value, bytes.data(), bytes.size());
   }
   void* mapBuffer(core::BufferHandle handle, std::uint32_t flags) override {
-    return transfers::mapBuffer(queue_, pool_, handle, flags);
+    // Split per target architecture: Pool provides storage/shadow
+    // access, CommandQueue provides the wait-for-sequence sync rule.
+    std::unique_lock lock(queue_.mutex_);
+    const std::uint64_t waitSeq = pool_.mapWaitSeqId(handle, flags);
+    if (waitSeq > queue_.completedSeqId_) {
+      queue_.queueLifecycle_.waitForSequence(lock, waitSeq);
+    }
+    return pool_.finalizeBufferMap(handle, flags);
   }
   void uploadTextureLevel(core::TextureHandle handle, std::uint32_t level,
                            std::uint32_t width, std::uint32_t height, std::uint32_t pitch,
                            std::span<const std::uint8_t> bytes) override {
-    transfers::uploadTextureLevel(queue_, pool_, wmt_device_, handle, level,
-                                    width, height, pitch, bytes);
+    if (resourceInitializer_) {
+      resourceInitializer_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
+    }
   }
 
   void submitDraw(const core::DrawDesc& desc) override { queue_.submitDraw(pool_, desc); }
@@ -180,7 +194,7 @@ class DeviceImpl final : public Device {
   void flush() override { queue_.submitFlush(pool_); }
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(pool_); }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
-    return transfers::readbackSurface(queue_, pool_, wmt_device_, limits_, desc, pixels);
+    return encoders::readbackSurface(queue_, pool_, wmt_device_, limits_, desc, pixels);
   }
 
   bool ready() const noexcept { return ready_; }
@@ -198,9 +212,11 @@ class DeviceImpl final : public Device {
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
   scratch::FrameAllocators allocators_{};
-  // metalBackend_ declared after the data it borrows — destructs first
-  // in reverse member order. The dtor explicitly calls queue_.stopThreads()
-  // before backend/pool teardown to avoid a race with worker threads.
+  // Services that borrow refs into the data above. Declared after the
+  // data so they destruct first in reverse member order; the dtor
+  // explicitly calls queue_.stopThreads() before teardown to avoid a
+  // race with worker threads.
+  std::unique_ptr<resources::Initializer> resourceInitializer_;
   std::unique_ptr<MetalBackendDevice> metalBackend_;
   bool ready_ = false;
 };

@@ -1,9 +1,12 @@
 #include "dxmt9_blit_encoders.hpp"
 
+#include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9_format_convert.hpp"
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <mutex>
 
 namespace dxmt9::encoders {
 
@@ -212,6 +215,104 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
   if (encoder) {
     encoder.endEncoding();
   }
+}
+
+bool readbackSurface(CommandQueue& queue,
+                      resources::Pool& pool,
+                      WMT::Reference<WMT::Device> device,
+                      const core::BackendLimits& limits,
+                      const core::ReadbackDesc& desc,
+                      core::ReadbackPixels& pixels) {
+  using u8 = std::uint8_t;
+  using u32 = std::uint32_t;
+  using i32 = std::int32_t;
+
+  WMT::Reference<WMT::Texture> sourceTexture;
+  core::Format format = core::Format::Unknown;
+  core::Rect sourceRect{};
+  u32 sourceLevel = desc.sourceLevel;
+  {
+    std::lock_guard lock(queue.mutex_);
+    auto* surface = pool.findSurface(desc.source.value);
+    if (!surface || !surface->texture) {
+      return false;
+    }
+    sourceTexture = surface->resolveTexture ? surface->resolveTexture : surface->texture;
+    format = surface->desc.format;
+    sourceRect = desc.sourceRect;
+    if (sourceRect.right <= sourceRect.left || sourceRect.bottom <= sourceRect.top) {
+      sourceRect.right = static_cast<i32>(surface->desc.width);
+      sourceRect.bottom = static_cast<i32>(surface->desc.height);
+    }
+  }
+
+  const u32 width = static_cast<u32>(std::max(1, sourceRect.right - sourceRect.left));
+  const u32 height = static_cast<u32>(std::max(1, sourceRect.bottom - sourceRect.top));
+  const u32 bpp = core::bytesPerPixel(format);
+  if (!sourceTexture || bpp == 0) {
+    return false;
+  }
+
+  WMTTextureInfo stagingInfo{};
+  stagingInfo.type = WMTTextureType2D;
+  stagingInfo.pixel_format = dxmt9::convert::toPixelFormat(format, limits);
+  stagingInfo.width = width;
+  stagingInfo.height = height;
+  stagingInfo.depth = 1;
+  stagingInfo.mipmap_level_count = 1;
+  stagingInfo.sample_count = 1;
+  stagingInfo.array_length = 1;
+  stagingInfo.options = WMTResourceStorageModeShared;
+  stagingInfo.usage = WMTTextureUsageShaderRead;
+  auto stagingTexture = device.newTexture(stagingInfo);
+  if (!stagingTexture) {
+    return false;
+  }
+
+  auto commandBuffer = queue.newCommandBuffer();
+  if (!commandBuffer) {
+    return false;
+  }
+  auto blit = commandBuffer.blitCommandEncoder();
+  if (!blit) {
+    return false;
+  }
+  WMTOrigin srcOrigin{(uint64_t)sourceRect.left, (uint64_t)sourceRect.top, 0};
+  WMTSize srcSize{width, height, 1};
+  WMTOrigin dstOrigin{0, 0, 0};
+  blit.copyFromTextureToTexture(WMT::Texture{sourceTexture.handle}, 0, sourceLevel,
+                                srcOrigin, srcSize,
+                                WMT::Texture{stagingTexture.handle}, 0, 0, dstOrigin);
+  blit.endEncoding();
+  commandBuffer.commit();
+  commandBuffer.waitUntilCompleted();
+
+  pixels.pitch = width * bpp;
+  pixels.bytes.resize(static_cast<std::size_t>(pixels.pitch) * height);
+  WMTBufferInfo bufInfo{};
+  bufInfo.length = static_cast<uint64_t>(pixels.pitch) * height;
+  bufInfo.options = WMTResourceStorageModeShared;
+  auto readbackBuf = device.newBuffer(bufInfo);
+  if (readbackBuf) {
+    auto cmdBuf2 = queue.newCommandBuffer();
+    if (cmdBuf2) {
+      auto blit2 = cmdBuf2.blitCommandEncoder();
+      if (blit2) {
+        WMTOrigin origin{0, 0, 0};
+        WMTSize size{width, height, 1};
+        blit2.copyFromTextureToBuffer(WMT::Texture{stagingTexture.handle}, 0, 0,
+                                      origin, size, WMT::Buffer{readbackBuf.handle},
+                                      0, pixels.pitch, 0);
+        blit2.endEncoding();
+      }
+      cmdBuf2.commit();
+      cmdBuf2.waitUntilCompleted();
+    }
+    if (bufInfo.memory.ptr) {
+      std::memcpy(pixels.bytes.data(), bufInfo.memory.ptr, pixels.bytes.size());
+    }
+  }
+  return true;
 }
 
 }  // namespace dxmt9::encoders

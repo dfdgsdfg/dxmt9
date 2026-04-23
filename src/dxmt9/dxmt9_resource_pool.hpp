@@ -98,6 +98,19 @@ struct Pool {
   // resolved. Caller holds the pool's mutex.
   bool uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount);
 
+  // Returns the seqId the CPU should wait on before this buffer is safe
+  // to CPU-map, given `flags`. Returns 0 if the caller may proceed
+  // immediately (UsageDiscard/UsageNoOverwrite, missing handle, or the
+  // buffer is idle). Pure storage-side query; does not consult queue
+  // state — the caller compares against completedSeqId_ to decide.
+  u64 mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept;
+
+  // Apply the map flags' side effects (UsageDiscard zero-fill) and
+  // return the CPU pointer for the buffer. Must be called AFTER any
+  // required wait has completed. Returns nullptr for missing handle
+  // or empty storage. Caller holds the pool's mutex.
+  void* finalizeBufferMap(core::BufferHandle handle, u32 flags);
+
   // Allocate a new buffer record (shared-mode WMT buffer + shadow).
   // Pool::Scratch / Pool::SystemMem skip the WMT allocation.
   core::BufferHandle createBuffer(WMT::Device device, const core::BufferDesc& desc);

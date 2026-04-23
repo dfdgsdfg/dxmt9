@@ -1,12 +1,11 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
-#include "dxmt9_transfers.hpp"
+#include "dxmt9_resource_initializer.hpp"
 
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_debug_trace.hpp"
-#include "dxmt9_format_convert.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
 
@@ -15,18 +14,15 @@
 #include <iomanip>
 #include <mutex>
 #include <sstream>
+#include <utility>
 #include <vector>
 
-namespace dxmt9::transfers {
+namespace dxmt9::resources {
 
 namespace {
 
-using core::BufferHandle;
 using core::Format;
 using core::Handle;
-using core::ReadbackDesc;
-using core::ReadbackPixels;
-using core::Rect;
 using core::TextureDesc;
 using core::TextureHandle;
 
@@ -39,14 +35,13 @@ using dxmt9::core::metalqueue::emitTextureTraceLine;
 using u8 = std::uint8_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
-using i32 = std::int32_t;
 
 bool shouldDumpGpuTexture(Handle handle) {
   const u64 wanted = gpuDumpTextureHandle();
   return wanted != 0ull && handle.value == wanted;
 }
 
-void emitUploadTrace(resources::Pool& pool, TextureHandle handle, u32 level,
+void emitUploadTrace(Pool& pool, TextureHandle handle, u32 level,
                       u32 width, u32 height, u32 pitch, std::span<const u8> bytes) {
   u32 minAlpha = 255u;
   u32 maxAlpha = 0u;
@@ -90,7 +85,7 @@ void emitUploadTrace(resources::Pool& pool, TextureHandle handle, u32 level,
 }
 
 void dumpTextureSnapshotUnlocked(CommandQueue& queue,
-                                   resources::Pool& pool,
+                                   Pool& pool,
                                    WMT::Reference<WMT::Device> device,
                                    Handle handle,
                                    const TextureDesc& desc,
@@ -179,146 +174,26 @@ void dumpTextureSnapshotUnlocked(CommandQueue& queue,
 
 }  // namespace
 
-void* mapBuffer(CommandQueue& queue,
-                 resources::Pool& pool,
-                 BufferHandle handle,
-                 u32 flags) {
-  std::unique_lock lock(queue.mutex_);
-  auto it = pool.buffers.find(handle.value);
-  if (it == pool.buffers.end()) {
-    return nullptr;
-  }
-  if ((flags & core::UsageDiscard) == 0 && (flags & core::UsageNoOverwrite) == 0 &&
-      it->second.lastUsedSeqId > queue.completedSeqId_) {
-    queue.queueLifecycle_.waitForSequence(lock, it->second.lastUsedSeqId);
-  }
-  auto& record = it->second;
-  if ((flags & core::UsageDiscard) != 0) {
-    std::fill(record.shadow.begin(), record.shadow.end(), 0);
-    if (record.contents) {
-      std::memset(record.contents, 0, record.shadow.size());
-    }
-  }
-  if (record.contents) {
-    return record.contents;
-  }
-  return record.shadow.empty() ? nullptr : record.shadow.data();
-}
+Initializer::Initializer(CommandQueue& queue, Pool& pool, WMT::Reference<WMT::Device> device)
+    : queue_(&queue), pool_(&pool), device_(std::move(device)) {}
 
-void uploadTextureLevel(CommandQueue& queue,
-                         resources::Pool& pool,
-                         WMT::Reference<WMT::Device> device,
-                         TextureHandle handle,
-                         u32 level,
-                         u32 width,
-                         u32 height,
-                         u32 pitch,
-                         std::span<const u8> bytes) {
-  std::lock_guard lock(queue.mutex_);
+void Initializer::uploadTextureLevel(core::TextureHandle handle,
+                                       std::uint32_t level,
+                                       std::uint32_t width,
+                                       std::uint32_t height,
+                                       std::uint32_t pitch,
+                                       std::span<const std::uint8_t> bytes) {
+  std::lock_guard lock(queue_->mutex_);
   if (debug::shouldTraceTexture(handle)) {
-    emitUploadTrace(pool, handle, level, width, height, pitch, bytes);
+    emitUploadTrace(*pool_, handle, level, width, height, pitch, bytes);
   }
-  pool.uploadTextureLevel(device, queue.raw(), handle, level,
-                          width, height, pitch, bytes.data(), bytes.size());
+  pool_->uploadTextureLevel(device_, queue_->raw(), handle, level,
+                             width, height, pitch, bytes.data(), bytes.size());
   if (level == 0 && shouldDumpGpuTexture(handle)) {
-    if (auto* rec = pool.findTexture(handle.value); rec && rec->texture) {
-      dumpTextureSnapshotUnlocked(queue, pool, device, handle, rec->desc, rec->texture.handle);
+    if (auto* rec = pool_->findTexture(handle.value); rec && rec->texture) {
+      dumpTextureSnapshotUnlocked(*queue_, *pool_, device_, handle, rec->desc, rec->texture.handle);
     }
   }
 }
 
-bool readbackSurface(CommandQueue& queue,
-                      resources::Pool& pool,
-                      WMT::Reference<WMT::Device> device,
-                      const core::BackendLimits& limits,
-                      const ReadbackDesc& desc,
-                      ReadbackPixels& pixels) {
-  WMT::Reference<WMT::Texture> sourceTexture;
-  Format format = Format::Unknown;
-  Rect sourceRect{};
-  u32 sourceLevel = desc.sourceLevel;
-  {
-    std::lock_guard lock(queue.mutex_);
-    auto* surface = pool.findSurface(desc.source.value);
-    if (!surface || !surface->texture) {
-      return false;
-    }
-    sourceTexture = surface->resolveTexture ? surface->resolveTexture : surface->texture;
-    format = surface->desc.format;
-    sourceRect = desc.sourceRect;
-    if (sourceRect.right <= sourceRect.left || sourceRect.bottom <= sourceRect.top) {
-      sourceRect.right = static_cast<i32>(surface->desc.width);
-      sourceRect.bottom = static_cast<i32>(surface->desc.height);
-    }
-  }
-
-  const u32 width = static_cast<u32>(std::max(1, sourceRect.right - sourceRect.left));
-  const u32 height = static_cast<u32>(std::max(1, sourceRect.bottom - sourceRect.top));
-  const u32 bpp = core::bytesPerPixel(format);
-  if (!sourceTexture || bpp == 0) {
-    return false;
-  }
-
-  WMTTextureInfo stagingInfo{};
-  stagingInfo.type = WMTTextureType2D;
-  stagingInfo.pixel_format = dxmt9::convert::toPixelFormat(format, limits);
-  stagingInfo.width = width;
-  stagingInfo.height = height;
-  stagingInfo.depth = 1;
-  stagingInfo.mipmap_level_count = 1;
-  stagingInfo.sample_count = 1;
-  stagingInfo.array_length = 1;
-  stagingInfo.options = WMTResourceStorageModeShared;
-  stagingInfo.usage = WMTTextureUsageShaderRead;
-  auto stagingTexture = device.newTexture(stagingInfo);
-  if (!stagingTexture) {
-    return false;
-  }
-
-  auto commandBuffer = queue.newCommandBuffer();
-  if (!commandBuffer) {
-    return false;
-  }
-  auto blit = commandBuffer.blitCommandEncoder();
-  if (!blit) {
-    return false;
-  }
-  WMTOrigin srcOrigin{(uint64_t)sourceRect.left, (uint64_t)sourceRect.top, 0};
-  WMTSize srcSize{width, height, 1};
-  WMTOrigin dstOrigin{0, 0, 0};
-  blit.copyFromTextureToTexture(WMT::Texture{sourceTexture.handle}, 0, sourceLevel,
-                                srcOrigin, srcSize,
-                                WMT::Texture{stagingTexture.handle}, 0, 0, dstOrigin);
-  blit.endEncoding();
-  commandBuffer.commit();
-  commandBuffer.waitUntilCompleted();
-
-  pixels.pitch = width * bpp;
-  pixels.bytes.resize(static_cast<std::size_t>(pixels.pitch) * height);
-  WMTBufferInfo bufInfo{};
-  bufInfo.length = static_cast<uint64_t>(pixels.pitch) * height;
-  bufInfo.options = WMTResourceStorageModeShared;
-  auto readbackBuf = device.newBuffer(bufInfo);
-  if (readbackBuf) {
-    auto cmdBuf2 = queue.newCommandBuffer();
-    if (cmdBuf2) {
-      auto blit2 = cmdBuf2.blitCommandEncoder();
-      if (blit2) {
-        WMTOrigin origin{0, 0, 0};
-        WMTSize size{width, height, 1};
-        blit2.copyFromTextureToBuffer(WMT::Texture{stagingTexture.handle}, 0, 0,
-                                      origin, size, WMT::Buffer{readbackBuf.handle},
-                                      0, pixels.pitch, 0);
-        blit2.endEncoding();
-      }
-      cmdBuf2.commit();
-      cmdBuf2.waitUntilCompleted();
-    }
-    if (bufInfo.memory.ptr) {
-      std::memcpy(pixels.bytes.data(), bufInfo.memory.ptr, pixels.bytes.size());
-    }
-  }
-  return true;
-}
-
-}  // namespace dxmt9::transfers
+}  // namespace dxmt9::resources
