@@ -2,11 +2,14 @@
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_resource_pool.hpp"
 #include "dxmt9_shader_sources.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <future>
 #include <utility>
 
@@ -20,6 +23,13 @@ inline u64 mix(u64 hash, u64 value) {
   hash ^= value;
   hash *= kFnvPrime;
   return hash;
+}
+
+// Mirror of backend_metal.mm's file-local debugForceVisibleDraw. Keeps this
+// translation unit self-contained so Cache doesn't depend on backend state.
+bool debugForceVisibleDraw() {
+  const char* env = std::getenv("DXMT9_DEBUG_FORCE_VISIBLE_DRAW");
+  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 }  // namespace
 
@@ -301,6 +311,74 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
     return pso;
   });
   return future.share();
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
+                                      const core::BackendLimits& limits,
+                                      resources::Pool& pool,
+                                      const core::DrawDesc& draw,
+                                      WMT::Reference<WMT::BinaryArchive>* archive,
+                                      const std::string* archivePath) {
+  auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
+    if (!handle) {
+      return 0;
+    }
+    if (auto* surface = pool.findSurface(handle.value); surface) {
+      return static_cast<u32>(dxmt9::convert::toPixelFormat(surface->desc.format, limits));
+    }
+    return 0;
+  };
+
+  std::array<u32, core::kMaxRenderTargets> colorFormats{};
+  std::array<BlendAttachmentKey, core::kMaxRenderTargets> blendAttachments{};
+  const auto& rs = draw.rs.values;
+  const bool blendEnabled = !debugForceVisibleDraw() &&
+                            rs.contains(core::RS_ALPHABLEND_ENABLE) &&
+                            rs.at(core::RS_ALPHABLEND_ENABLE) != 0;
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    colorFormats[i] = resolvePixelFormat(draw.rts.color[i].handle);
+    auto& blend = blendAttachments[i];
+    blend.pixelFormat = colorFormats[i];
+    blend.blendingEnabled = blendEnabled;
+    blend.rgbBlendOperation = rs.contains(core::RS_BLEND_OP)
+                                 ? rs.at(core::RS_BLEND_OP)
+                                 : static_cast<u32>(core::BlendOp::Add);
+    blend.alphaBlendOperation = rs.contains(core::RS_BLEND_OP_ALPHA)
+                                    ? rs.at(core::RS_BLEND_OP_ALPHA)
+                                    : blend.rgbBlendOperation;
+    blend.sourceRGBBlendFactor = rs.contains(core::RS_SRC_BLEND)
+                                     ? rs.at(core::RS_SRC_BLEND)
+                                     : static_cast<u32>(core::BlendFactor::One);
+    blend.destinationRGBBlendFactor = rs.contains(core::RS_DEST_BLEND)
+                                          ? rs.at(core::RS_DEST_BLEND)
+                                          : static_cast<u32>(core::BlendFactor::Zero);
+    blend.sourceAlphaBlendFactor = rs.contains(core::RS_SRC_BLEND_ALPHA)
+                                       ? rs.at(core::RS_SRC_BLEND_ALPHA)
+                                       : blend.sourceRGBBlendFactor;
+    blend.destinationAlphaBlendFactor = rs.contains(core::RS_DEST_BLEND_ALPHA)
+                                            ? rs.at(core::RS_DEST_BLEND_ALPHA)
+                                            : blend.destinationRGBBlendFactor;
+    blend.colorWriteMask = debugForceVisibleDraw()
+                               ? 0xfu
+                               : (rs.contains(core::RS_COLOR_WRITE_ENABLE)
+                                      ? rs.at(core::RS_COLOR_WRITE_ENABLE)
+                                      : 0xfu);
+  }
+  u32 depthFormat = 0;
+  u32 stencilFormat = 0;
+  if (draw.rts.depthStencil.handle) {
+    if (auto* surface = pool.findSurface(draw.rts.depthStencil.handle.value);
+        surface && surface->desc.depthStencil) {
+      const auto pixelFormat =
+          static_cast<u32>(dxmt9::convert::toPixelFormat(surface->desc.format, limits));
+      depthFormat = dxmt9::convert::formatHasDepthAspect(surface->desc.format) ? pixelFormat : 0u;
+      stencilFormat =
+          dxmt9::convert::formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
+    }
+  }
+  const auto key = makeShaderVariantKey(draw, colorFormats, blendAttachments, depthFormat, stencilFormat);
+  return getOrBuildDrawPipeline(device, key, draw, archive, archivePath);
 }
 
 ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,

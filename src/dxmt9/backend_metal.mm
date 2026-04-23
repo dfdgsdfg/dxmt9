@@ -1170,7 +1170,7 @@ class MetalBackendDevice final : public BackendDevice {
       WMTRenderPassInfo passInfo{};
       auto& attachment = passInfo.colors[0];
       attachment.texture = surface->texture.handle;
-      const bool discardAfterPresent = !clear.has_value() && backBufferDiscardAfterPresent_ &&
+      const bool discardAfterPresent = !clear.has_value() && commandQueue_->backBufferDiscardAfterPresent_ &&
                                        draw.rts.color[0].handle == commandQueue_->currentBackBuffer_;
       attachment.load_action = clear.has_value() ? WMTLoadActionClear
                                                   : (discardAfterPresent ? WMTLoadActionDontCare
@@ -1212,7 +1212,7 @@ class MetalBackendDevice final : public BackendDevice {
         return {};
       }
       if (discardAfterPresent) {
-        backBufferDiscardAfterPresent_ = false;
+        commandQueue_->backBufferDiscardAfterPresent_ = false;
       }
       const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
       double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
@@ -1254,7 +1254,8 @@ class MetalBackendDevice final : public BackendDevice {
       return;
     }
     const auto depthKey = makeDepthStencilKey(draw);
-    auto pipeline = pipelineForDraw(draw).get();
+    auto pipeline = pipelineCache_->getOrBuildDrawPipelineForDraw(
+        wrappedDevice_, limits_, *pool_, draw, shaderArchive_, shaderArchivePath_).get();
     if (!pipeline) {
       if (traceEncode) {
         std::ostringstream out;
@@ -1272,7 +1273,7 @@ class MetalBackendDevice final : public BackendDevice {
       }
       return;
     }
-    auto depthState = depthStencilStateFor(depthKey);
+    auto depthState = pipelineCache_->depthStencilStateFor(wrappedDevice_, depthKey);
     if (depthState) {
       encoder.setDepthStencilState(depthState);
     }
@@ -1985,7 +1986,7 @@ class MetalBackendDevice final : public BackendDevice {
 
   void encodePresent(WMT::CommandBuffer& commandBuffer, const SwapDesc& present, Handle sourceHandle, u64 seqId) {
     if (dxmt9::encodePresent(commandBuffer, *pool_, upperDevice_, present, sourceHandle, seqId)) {
-      backBufferDiscardAfterPresent_ = true;
+      commandQueue_->backBufferDiscardAfterPresent_ = true;
     }
   }
 
@@ -2130,66 +2131,12 @@ class MetalBackendDevice final : public BackendDevice {
     return wrappedDevice_.newSamplerState(info);
   }
 
-  std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineForDraw(const DrawDesc& draw) {
-    auto resolvePixelFormat = [this](Handle handle) -> u32 {
-      if (!handle) {
-        return 0;
-      }
-      if (auto* surface = findSurfaceUnlocked(handle.value); surface) {
-        return static_cast<u32>(toPixelFormat(surface->desc.format, limits_));
-      }
-      return 0;
-    };
-
-    std::array<u32, kMaxRenderTargets> colorFormats{};
-    std::array<BlendAttachmentKey, kMaxRenderTargets> blendAttachments{};
-    const auto& rs = draw.rs.values;
-    const bool blendEnabled =
-        !debugForceVisibleDraw() && rs.contains(RS_ALPHABLEND_ENABLE) && rs.at(RS_ALPHABLEND_ENABLE) != 0;
-    for (size_t i = 0; i < kMaxRenderTargets; ++i) {
-      colorFormats[i] = resolvePixelFormat(draw.rts.color[i].handle);
-      auto& blend = blendAttachments[i];
-      blend.pixelFormat = colorFormats[i];
-      blend.blendingEnabled = blendEnabled;
-      blend.rgbBlendOperation = rs.contains(RS_BLEND_OP) ? rs.at(RS_BLEND_OP) : static_cast<u32>(BlendOp::Add);
-      blend.alphaBlendOperation = rs.contains(RS_BLEND_OP_ALPHA)
-                                      ? rs.at(RS_BLEND_OP_ALPHA)
-                                      : blend.rgbBlendOperation;
-      blend.sourceRGBBlendFactor = rs.contains(RS_SRC_BLEND) ? rs.at(RS_SRC_BLEND)
-                                                              : static_cast<u32>(BlendFactor::One);
-      blend.destinationRGBBlendFactor = rs.contains(RS_DEST_BLEND) ? rs.at(RS_DEST_BLEND)
-                                                                   : static_cast<u32>(BlendFactor::Zero);
-      blend.sourceAlphaBlendFactor = rs.contains(RS_SRC_BLEND_ALPHA) ? rs.at(RS_SRC_BLEND_ALPHA)
-                                                                      : blend.sourceRGBBlendFactor;
-      blend.destinationAlphaBlendFactor = rs.contains(RS_DEST_BLEND_ALPHA)
-                                              ? rs.at(RS_DEST_BLEND_ALPHA)
-                                              : blend.destinationRGBBlendFactor;
-      blend.colorWriteMask = debugForceVisibleDraw()
-                                 ? 0xfu
-                                 : (rs.contains(RS_COLOR_WRITE_ENABLE) ? rs.at(RS_COLOR_WRITE_ENABLE) : 0xfu);
-    }
-    u32 depthFormat = 0;
-    u32 stencilFormat = 0;
-    if (draw.rts.depthStencil.handle) {
-      if (auto* surface = findSurfaceUnlocked(draw.rts.depthStencil.handle.value);
-          surface && surface->desc.depthStencil) {
-        const auto pixelFormat = static_cast<u32>(toPixelFormat(surface->desc.format, limits_));
-        depthFormat = formatHasDepthAspect(surface->desc.format) ? pixelFormat : 0u;
-        stencilFormat = formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
-      }
-    }
-    const auto key = makeShaderVariantKey(draw, colorFormats, blendAttachments, depthFormat, stencilFormat);
-    return pipelineCache_->getOrBuildDrawPipeline(wrappedDevice_, key, draw,
-                                                    shaderArchive_, shaderArchivePath_);
-  }
-
+  // pipelineForDraw + depthStencilStateFor moved to pipeline::Cache
+  // (Step 3d). encodeDraw now calls pipelineCache_->getOrBuildDrawPipelineForDraw
+  // and pipelineCache_->depthStencilStateFor directly.
 
   // pipelineForPresent moved to dxmt9::Presenter (C4); each Presenter caches
   // its own pipeline per (opaqueAlpha) variant using buildPresentPipeline.
-
-  WMT::Reference<WMT::DepthStencilState> depthStencilStateFor(const DepthStencilKey& key) {
-    return pipelineCache_->depthStencilStateFor(wrappedDevice_, key);
-  }
 
   // finishLoop moved to CommandQueue::runFinishLoop (Step 3c).
 
@@ -2217,9 +2164,8 @@ class MetalBackendDevice final : public BackendDevice {
   // Chunk-ring state + seqId counters + queueLifecycle + diagnostics moved
   // to dxmt9::CommandQueue (C1, C7a). Accessed via commandQueue_->.
   // pool_->nextHandle, resource maps, and pool_->dumpedGpuTextures grouped into pool_ (C6).
-  // currentBackBuffer_ moved to CommandQueue (Step 3b); accessed via
-  // commandQueue_->currentBackBuffer_.
-  bool backBufferDiscardAfterPresent_ = false;
+  // currentBackBuffer_ + backBufferDiscardAfterPresent_ moved to
+  // CommandQueue (Steps 3b/3d). Accessed via commandQueue_->.
   // deviceLostObserver_/presentationStatusObserver_/maxFrameLatency_ moved
   // to dxmt9::Device (task 3). Accessed via upperDevice_->notify*/... or
   // upperDevice_->maxFrameLatency().

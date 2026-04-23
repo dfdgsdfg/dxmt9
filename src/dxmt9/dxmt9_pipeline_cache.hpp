@@ -22,6 +22,8 @@
 #include <string>
 #include <unordered_map>
 
+namespace dxmt9 { namespace resources { struct Pool; } }
+
 namespace dxmt9::pipeline {
 
 using u32 = std::uint32_t;
@@ -147,6 +149,19 @@ class Cache {
                           const core::DrawDesc& draw,
                           WMT::Reference<WMT::BinaryArchive>* archive,
                           const std::string* archivePath);
+
+  // High-level entry point used by the encoder: resolves color/depth
+  // pixel formats from the pool's surfaces, assembles blend attachment
+  // keys from the draw's render-state values, composes a ShaderVariantKey,
+  // and delegates to getOrBuildDrawPipeline. Previously lived as
+  // pipelineForDraw on MetalBackendDevice (Step 3d).
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
+                                  const core::BackendLimits& limits,
+                                  resources::Pool& pool,
+                                  const core::DrawDesc& draw,
+                                  WMT::Reference<WMT::BinaryArchive>* archive,
+                                  const std::string* archivePath);
 
   std::mutex mutex{};
   PipelineMap draw{};

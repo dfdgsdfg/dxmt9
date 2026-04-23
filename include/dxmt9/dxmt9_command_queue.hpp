@@ -102,6 +102,10 @@ class CommandQueue {
   // the presentation source in submitPresent. Previously backend-resident.
   core::Handle currentBackBuffer_{};
 
+  // Set by encodePresent, consumed by the next draw to the same RT so the
+  // encoder can choose DontCare over Load. Tied to presentation lifecycle.
+  bool backBufferDiscardAfterPresent_ = false;
+
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
   core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};
 
