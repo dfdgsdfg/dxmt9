@@ -73,6 +73,15 @@ class CommandQueue {
                           std::uint32_t pitch,
                           std::span<const std::uint8_t> bytes);
 
+  // CPU map of a buffer. Orchestrates the Pool (storage/shadow access)
+  // and the queue's wait-for-sequence rule in one call. Returns the
+  // mapped pointer or nullptr on unknown handle / empty storage.
+  void* mapBuffer(core::BufferHandle handle, std::uint32_t flags);
+
+  // Synchronous GetRenderTargetData-style readback. Routes through the
+  // queue's device + limits; internally reuses encoders::readbackSurface.
+  bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels);
+
   // True if a WMT::CommandQueue was successfully allocated.
   bool valid() const noexcept { return static_cast<bool>(queue_); }
 

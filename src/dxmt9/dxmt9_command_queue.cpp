@@ -1,5 +1,6 @@
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_pipeline_cache.hpp"
@@ -139,6 +140,28 @@ void CommandQueue::uploadTextureLevel(core::TextureHandle handle,
   if (initializer_) {
     initializer_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
+}
+
+void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
+  if (!pool_) {
+    return nullptr;
+  }
+  // Split responsibility: Pool handles storage (shadow + discard fill);
+  // CommandQueue enforces the wait-for-sequence rule through
+  // queueLifecycle_.waitForSequence. Both live under mutex_.
+  std::unique_lock lock(mutex_);
+  const std::uint64_t waitSeq = pool_->mapWaitSeqId(handle, flags);
+  if (waitSeq > completedSeqId_) {
+    queueLifecycle_.waitForSequence(lock, waitSeq);
+  }
+  return pool_->finalizeBufferMap(handle, flags);
+}
+
+bool CommandQueue::readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) {
+  if (!pool_ || !limits_) {
+    return false;
+  }
+  return encoders::readbackSurface(*this, *pool_, device_, *limits_, desc, pixels);
 }
 
 WMT::Reference<WMT::CommandBuffer> CommandQueue::newCommandBuffer() {
