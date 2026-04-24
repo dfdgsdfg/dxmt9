@@ -40,25 +40,12 @@ namespace dxmt9 {
 
 class Device;
 class CommandQueue;
+class RuntimeServices;
 
 namespace encoders { struct EncodeContext; }
 namespace pipeline { class Cache; }
 namespace resources { struct Pool; class Initializer; }
 namespace shaders { class Archive; }
-
-// External services CommandQueue reads through. All refs must outlive
-// the queue (DeviceImpl guarantees this via member declaration order —
-// queue_ is declared last, destructs first).
-//
-// Everything else the queue needs (allocators, initializer, threads,
-// queueLifecycle) is queue-owned.
-struct CommandQueueDeps {
-  const core::BackendLimits& limits;
-  resources::Pool& pool;
-  pipeline::Cache& cache;
-  shaders::Archive& archive;
-  Device& upperDevice;
-};
 
 // Chunk-ring size + in-flight cap. Match upstream dxmt's kCommandChunkCount.
 inline constexpr size_t kCommandChunkCount = 32;
@@ -68,10 +55,13 @@ class CommandQueue {
  public:
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
   // constructs the ResourceInitializer, binds queueLifecycle_ to own
-  // state, and spawns the three worker threads. A null device or a
-  // queue-allocation failure leaves the object inert (valid() == false,
-  // threadsStarted_ == false) but still safely destructible.
-  CommandQueue(WMT::Device device, const CommandQueueDeps& deps);
+  // state, and spawns the three worker threads. Takes a narrow
+  // RuntimeServices facade owned by DeviceImpl — CommandQueue reads
+  // pool/cache/archive/upper-device through it and stashes pointers
+  // internally. A null device or queue-allocation failure leaves the
+  // object inert (valid() == false, threadsStarted_ == false) but
+  // still safely destructible.
+  CommandQueue(WMT::Device device, RuntimeServices& services);
 
   // Minimal ctor for StubDxmt9Device's null-device test path. Allocates
   // only the WMT::CommandQueue handle when the device is non-null; no
