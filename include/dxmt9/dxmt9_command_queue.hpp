@@ -1,13 +1,17 @@
 #pragma once
 
-// Upper-runtime CommandQueue — the execution service. Owns the
-// WMT::CommandQueue handle, the chunk ring state, the three worker
-// threads (encode/finish/completion), the queue-owned ResourceInitializer
-// for deferred texture uploads, and the queueLifecycle_ binding.
+// Upper-runtime CommandQueue — the execution service and a self-hosting
+// runtime node. Owns the WMT::CommandQueue handle, the chunk ring state,
+// the three worker threads (encode / finish / completion), the per-frame
+// scratch allocators, the queue-owned ResourceInitializer for deferred
+// texture uploads, the queueLifecycle_ binding, and the encode-context
+// assembly path that feeds encoders::encodeChunk.
 //
-// Dependencies are passed in via a CommandQueueServices bundle at
-// construction; the factory closure inside that bundle supplies the
-// EncodeContext the encode thread hands to dxmt9::encoders::encodeChunk.
+// Dependencies are passed in via a CommandQueueDeps bundle at
+// construction: just the external services CommandQueue reads through
+// (pool, cache, archive, upper Device, limits). The queue constructs
+// the EncodeContext per chunk from its own internal state plus these
+// borrowed refs.
 //
 // CommandQueue does NOT persist the shader archive (that's
 // dxmt9::shaders::Archive's dtor), does NOT expose mapBuffer/readback
@@ -18,6 +22,7 @@
 #include "../../src/dxmt9/dxmt9_backend_types.hpp"
 #include "../../src/dxmt9/dxmt9_queue.hpp"
 #include "../../src/dxmt9/dxmt9_hud.hpp"
+#include "../../src/dxmt9/dxmt9_ring_arena.hpp"
 
 #include <array>
 #include <condition_variable>
@@ -37,22 +42,22 @@ class Device;
 class CommandQueue;
 
 namespace encoders { struct EncodeContext; }
+namespace pipeline { class Cache; }
 namespace resources { struct Pool; class Initializer; }
-namespace scratch { struct FrameAllocators; }
+namespace shaders { class Archive; }
 
-// Dependencies CommandQueue borrows at construction. All references
-// must outlive the queue (DeviceImpl guarantees this via member
-// declaration order — queue_ is declared last, destructs first).
+// External services CommandQueue reads through. All refs must outlive
+// the queue (DeviceImpl guarantees this via member declaration order —
+// queue_ is declared last, destructs first).
 //
-// `encodeContextFactory` supplies the EncodeContext assembled from
-// DeviceImpl-owned objects (cache, archive, upper device). The queue
-// invokes it per chunk inside the encode thread; lifetime of captured
-// state is DeviceImpl's responsibility.
-struct CommandQueueServices {
+// Everything else the queue needs (allocators, initializer, threads,
+// queueLifecycle) is queue-owned.
+struct CommandQueueDeps {
   const core::BackendLimits& limits;
   resources::Pool& pool;
-  scratch::FrameAllocators& allocators;
-  std::function<encoders::EncodeContext(CommandQueue&)> encodeContextFactory;
+  pipeline::Cache& cache;
+  shaders::Archive& archive;
+  Device& upperDevice;
 };
 
 // Chunk-ring size + in-flight cap. Match upstream dxmt's kCommandChunkCount.
@@ -66,7 +71,7 @@ class CommandQueue {
   // state, and spawns the three worker threads. A null device or a
   // queue-allocation failure leaves the object inert (valid() == false,
   // threadsStarted_ == false) but still safely destructible.
-  CommandQueue(WMT::Device device, const CommandQueueServices& services);
+  CommandQueue(WMT::Device device, const CommandQueueDeps& deps);
 
   // Minimal ctor for StubDxmt9Device's null-device test path. Allocates
   // only the WMT::CommandQueue handle when the device is non-null; no
@@ -128,6 +133,11 @@ class CommandQueue {
   // The WMT::Device this queue was built on.
   WMT::Device device() const noexcept { return device_; }
 
+  // Access the queue-owned per-frame scratch allocators. Exposed for
+  // encoders::encodeChunk which places DrawUniforms on the argument
+  // bump ring.
+  scratch::FrameAllocators& allocators() noexcept { return allocators_; }
+
   // ─── Mostly-internal: worker-thread bodies + lifecycle binding ─────
   // Exposed so the services-ctor's own initialization can invoke them.
   // External callers should not use these.
@@ -136,7 +146,7 @@ class CommandQueue {
           std::size_t slotIndex, const core::ChunkSlot& slot)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
-  void runFinishLoop(resources::Pool& pool, scratch::FrameAllocators& allocators);
+  void runFinishLoop();
   void runCompletionWatcherLoop();
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
   void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
@@ -179,6 +189,11 @@ class CommandQueue {
   bool stop_ = true;
 
  private:
+  // Assemble the EncodeContext handed to encoders::encodeChunk. Uses
+  // queue-owned (device_, allocators_, *this) + borrowed services
+  // (cache_, archive_, upperDevice_, limits_, pool_).
+  encoders::EncodeContext makeEncodeContext();
+
   WMT::Device device_{};
   WMT::Reference<WMT::CommandQueue> queue_{};
   WMT::CommandQueue queueView_{};  // non-owning view of queue_
@@ -188,19 +203,20 @@ class CommandQueue {
   std::thread completionThread_{};
   bool threadsStarted_ = false;
 
-  // Deps that CommandQueue uses directly (not just pass-through to
-  // EncodeContext).
+  // Borrowed-from-DeviceImpl services, used by submit / compat / encode
+  // context assembly. Raw pointers; lifetime enforced by DeviceImpl's
+  // member declaration order (queue_ declared last ⇒ destructs first).
   const core::BackendLimits* limits_ = nullptr;
   resources::Pool* pool_ = nullptr;
-  scratch::FrameAllocators* allocators_ = nullptr;
+  pipeline::Cache* cache_ = nullptr;
+  shaders::Archive* archive_ = nullptr;
+  Device* upperDevice_ = nullptr;
 
-  // Factory supplied by DeviceImpl. Captures DeviceImpl-owned objects
-  // (cache, archive, upper device) and returns a fresh EncodeContext
-  // per chunk. Empty on the test-only ctor path.
-  std::function<encoders::EncodeContext(CommandQueue&)> encodeContextFactory_;
-
-  // ResourceInitializer owned by the queue. Constructed in the
-  // services-ctor; destroyed in ~CommandQueue after threads join.
+  // Queue-owned runtime node state: per-frame allocators + the
+  // ResourceInitializer upload service. Allocators are a direct member
+  // so they share the queue's lifetime (thread teardown happens first,
+  // then allocators destruct — the encode loop has stopped by then).
+  scratch::FrameAllocators allocators_{};
   std::unique_ptr<resources::Initializer> initializer_;
 };
 

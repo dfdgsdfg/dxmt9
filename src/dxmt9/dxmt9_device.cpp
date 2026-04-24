@@ -1,10 +1,8 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
-#include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
-#include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_archive.hpp"
 #include "../winemetal/Metal.hpp"
 
@@ -49,26 +47,18 @@ class DeviceImpl final : public Device {
         shaderArchive_(wmt_device_, resolveShaderCachePath()),
         pool_{},
         pipelineCache_{},
-        allocators_{},
-        queue_(wmt_device_, CommandQueueServices{
+        queue_(wmt_device_, CommandQueueDeps{
                                 .limits = limits_,
                                 .pool = pool_,
-                                .allocators = allocators_,
-                                .encodeContextFactory =
-                                    [this](CommandQueue& q) {
-                                      return encoders::EncodeContext{
-                                          wmt_device_, limits_, pool_,
-                                          pipelineCache_, allocators_,
-                                          &shaderArchive_.reference(),
-                                          &shaderArchive_.path(),
-                                          q, this,
-                                      };
-                                    },
+                                .cache = pipelineCache_,
+                                .archive = shaderArchive_,
+                                .upperDevice = *this,
                             }) {}
 
   // queue_ destructs first (last-declared) — joins worker threads and
-  // persists the shader archive while pool_/pipelineCache_/allocators_
-  // are still live. No explicit body needed.
+  // releases its own allocators/initializer while pool_ and
+  // pipelineCache_ are still live. shaderArchive_ persists last.
+  // No explicit body needed.
   ~DeviceImpl() override = default;
 
   WMT::Device wmtDevice() override { return wmt_device_; }
@@ -173,8 +163,9 @@ class DeviceImpl final : public Device {
 
  private:
   // Declaration order matters: queue_ is declared LAST so its destructor
-  // runs FIRST — joining worker threads and persisting the archive
-  // before pool_/pipelineCache_/allocators_ tear down.
+  // runs FIRST — joining worker threads and releasing queue-owned
+  // allocators/initializer before pool_/pipelineCache_ tear down.
+  // shaderArchive_'s dtor (persist to disk) runs after queue_.
   WMT::Reference<WMT::Device> wmt_device_;
   WMTMetalVersion metalVersion_ = WMTMetalVersionMax;
   core::BackendLimits limits_{};
@@ -184,7 +175,7 @@ class DeviceImpl final : public Device {
   std::uint32_t maxFrameLatency_ = 3;
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
-  scratch::FrameAllocators allocators_{};
+  // allocators moved into CommandQueue (queue-owned runtime node).
   CommandQueue queue_;
 };
 

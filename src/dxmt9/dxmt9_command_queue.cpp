@@ -1,6 +1,5 @@
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_device.hpp"
-#include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_pipeline_cache.hpp"
@@ -54,12 +53,13 @@ MetalCommandRecord makeColorFillCommand(const core::ColorFillDesc& desc) {
 
 }  // namespace
 
-CommandQueue::CommandQueue(WMT::Device device, const CommandQueueServices& services)
+CommandQueue::CommandQueue(WMT::Device device, const CommandQueueDeps& deps)
     : device_(device),
-      limits_(&services.limits),
-      pool_(&services.pool),
-      allocators_(&services.allocators),
-      encodeContextFactory_(services.encodeContextFactory) {
+      limits_(&deps.limits),
+      pool_(&deps.pool),
+      cache_(&deps.cache),
+      archive_(&deps.archive),
+      upperDevice_(&deps.upperDevice) {
   if (!device_) {
     return;
   }
@@ -69,7 +69,7 @@ CommandQueue::CommandQueue(WMT::Device device, const CommandQueueServices& servi
   }
   queueView_ = WMT::CommandQueue{queue_.handle};
 
-  initializer_ = std::make_unique<resources::Initializer>(*this, services.pool, device_);
+  initializer_ = std::make_unique<resources::Initializer>(*this, deps.pool, device_);
 
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat
   // hook. CommandQueue is its own lifecycle root.
@@ -89,13 +89,21 @@ CommandQueue::CommandQueue(WMT::Device device, const CommandQueueServices& servi
       [this] {
         runEncodeLoop(
             [this](std::size_t slotIndex, const core::ChunkSlot& slot) {
-              auto ctx = encodeContextFactory_(*this);
+              auto ctx = makeEncodeContext();
               return encoders::encodeChunk(ctx, slotIndex, slot);
             },
-            [this](std::uint64_t) { allocators_->reclaim(completedSeqId_); });
+            [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
       },
-      [this] { runFinishLoop(*pool_, *allocators_); },
+      [this] { runFinishLoop(); },
       [this] { runCompletionWatcherLoop(); });
+}
+
+encoders::EncodeContext CommandQueue::makeEncodeContext() {
+  return encoders::EncodeContext{
+      device_, *limits_, *pool_, *cache_, allocators_,
+      &archive_->reference(), &archive_->path(),
+      *this, upperDevice_,
+  };
 }
 
 CommandQueue::CommandQueue(WMT::Device device) : device_(device) {
@@ -324,12 +332,12 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
   });
 }
 
-void CommandQueue::runFinishLoop(resources::Pool& pool, scratch::FrameAllocators& allocators) {
+void CommandQueue::runFinishLoop() {
   while (true) {
     std::unique_lock lock(mutex_);
-    if (!queueLifecycle_.runFinishIteration(lock, [this, &pool, &allocators](std::uint64_t) {
-          allocators.reclaim(completedSeqId_);
-          pool.reclaimCompleted(completedSeqId_);
+    if (!queueLifecycle_.runFinishIteration(lock, [this](std::uint64_t) {
+          allocators_.reclaim(completedSeqId_);
+          pool_->reclaimCompleted(completedSeqId_);
         })) {
       return;
     }
