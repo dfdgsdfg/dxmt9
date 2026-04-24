@@ -16,6 +16,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_pipeline_cache.cpp',
   'dxmt9_resource_initializer.mm',
   'dxmt9_resource_pool.cpp',
+  'dxmt9_shader_archive.cpp',
   'dxmt9_shader_request.cpp',
   'dxmt9_shader_translator.cpp',
   'dxmt9_hud.mm',

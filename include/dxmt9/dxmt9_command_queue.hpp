@@ -1,9 +1,14 @@
 #pragma once
 
-// Upper-runtime CommandQueue — owns the WMT::CommandQueue handle + the chunk
-// ring state. Mirrors dxmt's class CommandQueue (dxmt/src/dxmt/dxmt_command_queue.hpp).
-// The worker threads (encode/finish/completion) still live on
-// MetalBackendDevice for now; they access queue state through this object.
+// Upper-runtime CommandQueue — owns the WMT::CommandQueue handle, the
+// chunk ring state, the encode/finish/completion worker threads, the
+// queue-owned ResourceInitializer (for deferred texture uploads), and
+// the queueLifecycle_ binding. Mirrors upstream dxmt's class CommandQueue
+// (dxmt/src/dxmt/dxmt_command_queue.hpp).
+//
+// Dependencies are passed in as a CommandQueueServices bundle at
+// construction. Archive persistence lives OUTSIDE CommandQueue — it's
+// handled by dxmt9::shaders::Archive's destructor (owned by DeviceImpl).
 
 #include "../../src/winemetal/Metal.hpp"
 #include "../../src/dxmt9/dxmt9_backend_types.hpp"
@@ -28,6 +33,18 @@ class Device;
 namespace resources { struct Pool; class Initializer; }
 namespace scratch { struct FrameAllocators; }
 namespace pipeline { class Cache; }
+namespace shaders { class Archive; }
+
+// Bundle of services CommandQueue borrows from DeviceImpl. All refs
+// must outlive the queue. Keeps the ctor signature narrow.
+struct CommandQueueServices {
+  const core::BackendLimits& limits;
+  resources::Pool& pool;
+  pipeline::Cache& cache;
+  scratch::FrameAllocators& allocators;
+  shaders::Archive& archive;  // referenced for EncodeContext; NOT persisted here
+  Device& upperDevice;
+};
 
 // Size of the chunk ring. Matches upstream dxmt's kCommandChunkCount.
 inline constexpr size_t kCommandChunkCount = 32;
@@ -43,14 +60,7 @@ class CommandQueue {
   // and spawn the three worker threads. If `device` is null or queue
   // allocation fails, leaves the object in a ready-to-destruct state
   // with valid() == false and threadsStarted_ == false.
-  CommandQueue(WMT::Device device,
-               const core::BackendLimits& limits,
-               resources::Pool& pool,
-               pipeline::Cache& cache,
-               scratch::FrameAllocators& allocators,
-               WMT::Reference<WMT::BinaryArchive>& shaderArchive,
-               const std::string& shaderArchivePath,
-               Device& upperDevice);
+  CommandQueue(WMT::Device device, const CommandQueueServices& services);
 
   // Minimal test-only constructor. Allocates just the WMT::CommandQueue
   // handle (if device is non-null) and leaves all other state empty —
@@ -58,6 +68,8 @@ class CommandQueue {
   // StubDxmt9Device on the null-device test path.
   explicit CommandQueue(WMT::Device device);
 
+  // Joins the worker threads if started. Archive persistence is NOT
+  // done here — shaders::Archive's own destructor handles that.
   ~CommandQueue();
   CommandQueue(const CommandQueue&) = delete;
   CommandQueue& operator=(const CommandQueue&) = delete;
@@ -198,14 +210,14 @@ class CommandQueue {
   std::thread completionThread_{};
   bool threadsStarted_ = false;
 
-  // Dependencies borrowed via start(). Non-owning pointers; DeviceImpl
-  // guarantees lifetime through the stop-then-destruct pattern.
+  // Dependencies borrowed via the ctor services bundle. Non-owning;
+  // DeviceImpl guarantees lifetime through member-declaration order
+  // (queue_ declared last, destructs first).
   const core::BackendLimits* limits_ = nullptr;
   resources::Pool* pool_ = nullptr;
   pipeline::Cache* cache_ = nullptr;
   scratch::FrameAllocators* allocators_ = nullptr;
-  WMT::Reference<WMT::BinaryArchive>* shaderArchive_ = nullptr;
-  const std::string* shaderArchivePath_ = nullptr;
+  shaders::Archive* archive_ = nullptr;  // read through for EncodeContext
   Device* upperDevice_ = nullptr;
 
   // ResourceInitializer owned by the queue (upload service). Constructed

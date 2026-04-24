@@ -7,7 +7,7 @@
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
-#include "dxmt9_shader_sources.hpp"
+#include "dxmt9_shader_archive.hpp"
 
 #include <utility>
 
@@ -54,22 +54,14 @@ MetalCommandRecord makeColorFillCommand(const core::ColorFillDesc& desc) {
 
 }  // namespace
 
-CommandQueue::CommandQueue(WMT::Device device,
-                             const core::BackendLimits& limits,
-                             resources::Pool& pool,
-                             pipeline::Cache& cache,
-                             scratch::FrameAllocators& allocators,
-                             WMT::Reference<WMT::BinaryArchive>& shaderArchive,
-                             const std::string& shaderArchivePath,
-                             Device& upperDevice)
+CommandQueue::CommandQueue(WMT::Device device, const CommandQueueServices& services)
     : device_(device),
-      limits_(&limits),
-      pool_(&pool),
-      cache_(&cache),
-      allocators_(&allocators),
-      shaderArchive_(&shaderArchive),
-      shaderArchivePath_(&shaderArchivePath),
-      upperDevice_(&upperDevice) {
+      limits_(&services.limits),
+      pool_(&services.pool),
+      cache_(&services.cache),
+      allocators_(&services.allocators),
+      archive_(&services.archive),
+      upperDevice_(&services.upperDevice) {
   if (!device_) {
     return;
   }
@@ -79,7 +71,7 @@ CommandQueue::CommandQueue(WMT::Device device,
   }
   queueView_ = WMT::CommandQueue{queue_.handle};
 
-  initializer_ = std::make_unique<resources::Initializer>(*this, pool, device_);
+  initializer_ = std::make_unique<resources::Initializer>(*this, services.pool, device_);
 
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat
   // hook. CommandQueue is its own lifecycle root.
@@ -101,7 +93,8 @@ CommandQueue::CommandQueue(WMT::Device device,
             [this](std::size_t slotIndex, const core::ChunkSlot& slot) {
               encoders::EncodeContext ctx{
                   device_, *limits_, *pool_, *cache_, *allocators_,
-                  shaderArchive_, shaderArchivePath_, *this, upperDevice_,
+                  &archive_->reference(), &archive_->path(),
+                  *this, upperDevice_,
               };
               return encoders::encodeChunk(ctx, slotIndex, slot);
             },
@@ -125,10 +118,7 @@ CommandQueue::~CommandQueue() {
   if (threadsStarted_) {
     stopThreads();
   }
-  if (shaderArchive_ && *shaderArchive_) {
-    std::lock_guard lock(mutex_);
-    shaders::persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
-  }
+  // Archive persist lives on dxmt9::shaders::Archive's dtor — not here.
 }
 
 void CommandQueue::uploadTextureLevel(core::TextureHandle handle,

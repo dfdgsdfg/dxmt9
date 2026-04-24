@@ -2,7 +2,7 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
-#include "dxmt9_shader_sources.hpp"
+#include "dxmt9_shader_archive.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <memory>
@@ -43,13 +43,18 @@ class DeviceImpl final : public Device {
       : wmt_device_(desc.device),
         metalVersion_(selectMetalVersion(wmt_device_)),
         limits_(finalizeLimits(desc.limits, wmt_device_)),
-        shaderArchivePath_(resolveShaderCachePath()),
-        shaderArchive_(shaders::initShaderArchive(wmt_device_, shaderArchivePath_)),
+        shaderArchive_(wmt_device_, resolveShaderCachePath()),
         pool_{},
         pipelineCache_{},
         allocators_{},
-        queue_(wmt_device_, limits_, pool_, pipelineCache_, allocators_,
-               shaderArchive_, shaderArchivePath_, *this) {}
+        queue_(wmt_device_, CommandQueueServices{
+                                .limits = limits_,
+                                .pool = pool_,
+                                .cache = pipelineCache_,
+                                .allocators = allocators_,
+                                .archive = shaderArchive_,
+                                .upperDevice = *this,
+                            }) {}
 
   // queue_ destructs first (last-declared) — joins worker threads and
   // persists the shader archive while pool_/pipelineCache_/allocators_
@@ -63,8 +68,8 @@ class DeviceImpl final : public Device {
   // backend() stays nullptr in production. Tests observe through
   // StubDxmt9Device + MockBackendDevice.
   std::shared_ptr<core::BackendDevice> backend() override { return nullptr; }
-  WMT::Reference<WMT::BinaryArchive>* shaderArchive() override { return &shaderArchive_; }
-  const std::string* shaderArchivePath() override { return &shaderArchivePath_; }
+  WMT::Reference<WMT::BinaryArchive>* shaderArchive() override { return &shaderArchive_.reference(); }
+  const std::string* shaderArchivePath() override { return &shaderArchive_.path(); }
 
   void setDeviceLostObserver(core::BackendDevice::DeviceLostObserver observer) override {
     deviceLostObserver_ = std::move(observer);
@@ -156,8 +161,7 @@ class DeviceImpl final : public Device {
   WMT::Reference<WMT::Device> wmt_device_;
   WMTMetalVersion metalVersion_ = WMTMetalVersionMax;
   core::BackendLimits limits_{};
-  std::string shaderArchivePath_{};
-  WMT::Reference<WMT::BinaryArchive> shaderArchive_{};
+  shaders::Archive shaderArchive_{};
   core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = 3;
