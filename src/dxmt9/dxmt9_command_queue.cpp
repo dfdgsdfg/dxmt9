@@ -58,10 +58,8 @@ CommandQueue::CommandQueue(WMT::Device device, const CommandQueueServices& servi
     : device_(device),
       limits_(&services.limits),
       pool_(&services.pool),
-      cache_(&services.cache),
       allocators_(&services.allocators),
-      archive_(&services.archive),
-      upperDevice_(&services.upperDevice) {
+      encodeContextFactory_(services.encodeContextFactory) {
   if (!device_) {
     return;
   }
@@ -91,11 +89,7 @@ CommandQueue::CommandQueue(WMT::Device device, const CommandQueueServices& servi
       [this] {
         runEncodeLoop(
             [this](std::size_t slotIndex, const core::ChunkSlot& slot) {
-              encoders::EncodeContext ctx{
-                  device_, *limits_, *pool_, *cache_, *allocators_,
-                  &archive_->reference(), &archive_->path(),
-                  *this, upperDevice_,
-              };
+              auto ctx = encodeContextFactory_(*this);
               return encoders::encodeChunk(ctx, slotIndex, slot);
             },
             [this](std::uint64_t) { allocators_->reclaim(completedSeqId_); });
@@ -138,28 +132,6 @@ CommandQueue::InitializerFlush CommandQueue::flushInitializerUploads() {
   }
   auto result = initializer_->flushToWait();
   return {result.event, result.value};
-}
-
-void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
-  if (!pool_) {
-    return nullptr;
-  }
-  // Split responsibility: Pool handles storage (shadow + discard fill);
-  // CommandQueue enforces the wait-for-sequence rule through
-  // queueLifecycle_.waitForSequence. Both live under mutex_.
-  std::unique_lock lock(mutex_);
-  const std::uint64_t waitSeq = pool_->mapWaitSeqId(handle, flags);
-  if (waitSeq > completedSeqId_) {
-    queueLifecycle_.waitForSequence(lock, waitSeq);
-  }
-  return pool_->finalizeBufferMap(handle, flags);
-}
-
-bool CommandQueue::readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) {
-  if (!pool_ || !limits_) {
-    return false;
-  }
-  return encoders::readbackSurface(*this, *pool_, device_, *limits_, desc, pixels);
 }
 
 WMT::Reference<WMT::CommandBuffer> CommandQueue::newCommandBuffer() {
