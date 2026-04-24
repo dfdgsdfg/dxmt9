@@ -1,10 +1,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
-#include "dxmt9_compat.hpp"
-#include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_queue.hpp"
-#include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_sources.hpp"
@@ -51,55 +48,20 @@ class DeviceImpl final : public Device {
     }
     limits_.supportsDepth24Stencil8 = wmt_device_.supportsDepth24Stencil8();
 
-    // Upload service — holds refs into queue_/pool_/wmt_device_.
-    resourceInitializer_ = std::make_unique<resources::Initializer>(
-        queue_, pool_, wmt_device_);
-
-    // Bind queueLifecycle_ to CommandQueue's own state + a pool-based
-    // surface-compat hook. No adapter needed — DeviceImpl owns the
-    // lambda assembly.
-    queue_.bindSelfLifecycle(
-        [this](core::Handle h) -> std::uint32_t {
-          if (!h) return 0;
-          auto* surface = pool_.findSurface(h.value);
-          if (!surface) return 0;
-          return core::metalcompat::isFloatRenderTargetFormat(surface->desc.format)
-              ? static_cast<std::uint32_t>(core::metalcompat::CompatFlagBits::CompatFlagFp16)
-              : 0u;
-        });
-
-    // Spawn the 3 worker threads. The encode thread runs
-    // CommandQueue::runEncodeLoop, which calls back into
-    // encoders::encodeChunk via the lambda; @autoreleasepool scoping
-    // lives inside encoders::encodeChunk itself. finish/completion are
-    // pure C++ CommandQueue methods.
-    queue_.startThreads(
-        [this] {
-          queue_.runEncodeLoop(
-              [this](std::size_t slotIndex, const core::ChunkSlot& slot) {
-                encoders::EncodeContext ctx{
-                    wmt_device_, limits_, pool_, pipelineCache_, allocators_,
-                    &shaderArchive_, &shaderArchivePath_, queue_, this,
-                };
-                return encoders::encodeChunk(ctx, slotIndex, slot);
-              },
-              [this](std::uint64_t) {
-                allocators_.reclaim(queue_.completedSeqId_);
-              });
-        },
-        [this] { queue_.runFinishLoop(pool_, allocators_); },
-        [this] { queue_.runCompletionWatcherLoop(); });
-    ready_ = true;
+    // Hand every queue-owned dependency to CommandQueue::start — from
+    // this point on the queue binds its own lifecycle, constructs the
+    // ResourceInitializer, and spawns the encode/finish/completion
+    // threads internally. DeviceImpl is a thin root from here.
+    queue_.start(limits_, pool_, pipelineCache_, allocators_,
+                 shaderArchive_, shaderArchivePath_, *this);
+    ready_ = queue_.started();
   }
 
   ~DeviceImpl() override {
-    // Join threads first — they reach into pool/cache/allocators.
-    queue_.stopThreads();
-    // Persist the compiled-shader archive now that no encode is in flight.
-    if (shaderArchive_) {
-      std::lock_guard lock(queue_.mutex_);
-      shaders::persistShaderArchive(shaderArchive_, shaderArchivePath_);
-    }
+    // queue_.stop() joins threads + persists the shader archive. Runs
+    // before pool_/pipelineCache_/allocators_ tear down so the threads
+    // never see half-destroyed state.
+    queue_.stop();
     pool_.purgeAll();
   }
 
@@ -177,9 +139,7 @@ class DeviceImpl final : public Device {
   void uploadTextureLevel(core::TextureHandle handle, std::uint32_t level,
                            std::uint32_t width, std::uint32_t height, std::uint32_t pitch,
                            std::span<const std::uint8_t> bytes) override {
-    if (resourceInitializer_) {
-      resourceInitializer_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
-    }
+    queue_.uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
 
   void submitDraw(const core::DrawDesc& desc) override { queue_.submitDraw(pool_, desc); }
@@ -218,11 +178,6 @@ class DeviceImpl final : public Device {
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
   scratch::FrameAllocators allocators_{};
-  // Services that borrow refs into the data above. Declared after the
-  // data so they destruct first in reverse member order; the dtor
-  // explicitly calls queue_.stopThreads() before teardown to avoid a
-  // race with worker threads.
-  std::unique_ptr<resources::Initializer> resourceInitializer_;
   bool ready_ = false;
 };
 

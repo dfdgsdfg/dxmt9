@@ -15,14 +15,19 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
+#include <string>
 #include <thread>
 
 namespace dxmt9 {
 
-namespace resources { struct Pool; }
+class Device;
+namespace resources { struct Pool; class Initializer; }
 namespace scratch { struct FrameAllocators; }
+namespace pipeline { class Cache; }
 
 // Size of the chunk ring. Matches upstream dxmt's kCommandChunkCount.
 inline constexpr size_t kCommandChunkCount = 32;
@@ -35,8 +40,33 @@ class CommandQueue {
  public:
   // Construct by creating a new WMT::CommandQueue on the given device.
   explicit CommandQueue(WMT::Device device);
+  ~CommandQueue();
   CommandQueue(const CommandQueue&) = delete;
   CommandQueue& operator=(const CommandQueue&) = delete;
+
+  // Primary lifecycle entry points. start() binds queueLifecycle_ to our
+  // own state, constructs the ResourceInitializer, and spawns the three
+  // worker threads. stop() joins the threads and persists the shader
+  // archive. DeviceImpl calls start() at the tail of its ctor and stop()
+  // at the head of its dtor — everything else is internal.
+  void start(const core::BackendLimits& limits,
+             resources::Pool& pool,
+             pipeline::Cache& cache,
+             scratch::FrameAllocators& allocators,
+             WMT::Reference<WMT::BinaryArchive>& shaderArchive,
+             const std::string& shaderArchivePath,
+             Device& upperDevice);
+  void stop();
+  bool started() const noexcept { return threadsStarted_; }
+
+  // Upload a texture level via the queue-owned ResourceInitializer.
+  // Thin forwarder; Pool + device refs come from start().
+  void uploadTextureLevel(core::TextureHandle handle,
+                          std::uint32_t level,
+                          std::uint32_t width,
+                          std::uint32_t height,
+                          std::uint32_t pitch,
+                          std::span<const std::uint8_t> bytes);
 
   // True if a WMT::CommandQueue was successfully allocated.
   bool valid() const noexcept { return static_cast<bool>(queue_); }
@@ -133,13 +163,28 @@ class CommandQueue {
   // Non-owning view exposed via raw() — kept in sync with queue_.
   WMT::CommandQueue queueView_{};
 
-  // Worker threads (C7c). Owned here so CommandQueue's dtor can deterministically
-  // join them; backend is responsible for signalling stop via stopThreads()
-  // while its own state is still valid.
+  // Worker threads. Owned here; joined in stop() + dtor. Destruction
+  // order inside CommandQueue::~CommandQueue guarantees threads are
+  // joined before the initializer pointer (which threads reach through)
+  // is destroyed.
   std::thread encodeThread_{};
   std::thread finishThread_{};
   std::thread completionThread_{};
   bool threadsStarted_ = false;
+
+  // Dependencies borrowed via start(). Non-owning pointers; DeviceImpl
+  // guarantees lifetime through the stop-then-destruct pattern.
+  const core::BackendLimits* limits_ = nullptr;
+  resources::Pool* pool_ = nullptr;
+  pipeline::Cache* cache_ = nullptr;
+  scratch::FrameAllocators* allocators_ = nullptr;
+  WMT::Reference<WMT::BinaryArchive>* shaderArchive_ = nullptr;
+  const std::string* shaderArchivePath_ = nullptr;
+  Device* upperDevice_ = nullptr;
+
+  // ResourceInitializer owned by the queue (upload service). Constructed
+  // in start(); destroyed in ~CommandQueue after threads have joined.
+  std::unique_ptr<resources::Initializer> initializer_;
 };
 
 }  // namespace dxmt9

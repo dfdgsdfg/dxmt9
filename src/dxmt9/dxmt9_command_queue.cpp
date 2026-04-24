@@ -1,6 +1,12 @@
 #include "dxmt9/dxmt9_command_queue.hpp"
+#include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_compat.hpp"
+#include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
+#include "dxmt9_shader_sources.hpp"
 
 #include <utility>
 
@@ -54,6 +60,79 @@ CommandQueue::CommandQueue(WMT::Device device) : device_(device) {
   queue_ = device_.newCommandQueue(0);
   if (queue_) {
     queueView_ = WMT::CommandQueue{queue_.handle};
+  }
+}
+
+CommandQueue::~CommandQueue() {
+  // Defensive: if DeviceImpl forgot to call stop(), do it here so the
+  // threads don't outlive initializer_ / borrowed pointers.
+  if (threadsStarted_) {
+    stop();
+  }
+}
+
+void CommandQueue::start(const core::BackendLimits& limits,
+                          resources::Pool& pool,
+                          pipeline::Cache& cache,
+                          scratch::FrameAllocators& allocators,
+                          WMT::Reference<WMT::BinaryArchive>& shaderArchive,
+                          const std::string& shaderArchivePath,
+                          Device& upperDevice) {
+  limits_ = &limits;
+  pool_ = &pool;
+  cache_ = &cache;
+  allocators_ = &allocators;
+  shaderArchive_ = &shaderArchive;
+  shaderArchivePath_ = &shaderArchivePath;
+  upperDevice_ = &upperDevice;
+  initializer_ = std::make_unique<resources::Initializer>(*this, pool, device_);
+
+  // Bind queueLifecycle_ to our own state + a pool-based surface-compat
+  // hook. No external adapter — CommandQueue is its own lifecycle root.
+  bindSelfLifecycle([this](core::Handle h) -> std::uint32_t {
+    if (!h) return 0;
+    auto* surface = pool_->findSurface(h.value);
+    if (!surface) return 0;
+    return core::metalcompat::isFloatRenderTargetFormat(surface->desc.format)
+        ? static_cast<std::uint32_t>(core::metalcompat::CompatFlagBits::CompatFlagFp16)
+        : 0u;
+  });
+
+  // Spawn the three worker threads. Encode lambda assembles the
+  // EncodeContext and calls encoders::encodeChunk; @autoreleasepool
+  // scoping lives inside encoders::encodeChunk.
+  startThreads(
+      [this] {
+        runEncodeLoop(
+            [this](std::size_t slotIndex, const core::ChunkSlot& slot) {
+              encoders::EncodeContext ctx{
+                  device_, *limits_, *pool_, *cache_, *allocators_,
+                  shaderArchive_, shaderArchivePath_, *this, upperDevice_,
+              };
+              return encoders::encodeChunk(ctx, slotIndex, slot);
+            },
+            [this](std::uint64_t) { allocators_->reclaim(completedSeqId_); });
+      },
+      [this] { runFinishLoop(*pool_, *allocators_); },
+      [this] { runCompletionWatcherLoop(); });
+}
+
+void CommandQueue::stop() {
+  stopThreads();
+  if (shaderArchive_ && *shaderArchive_) {
+    std::lock_guard lock(mutex_);
+    shaders::persistShaderArchive(*shaderArchive_, *shaderArchivePath_);
+  }
+}
+
+void CommandQueue::uploadTextureLevel(core::TextureHandle handle,
+                                        std::uint32_t level,
+                                        std::uint32_t width,
+                                        std::uint32_t height,
+                                        std::uint32_t pitch,
+                                        std::span<const std::uint8_t> bytes) {
+  if (initializer_) {
+    initializer_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
 }
 
