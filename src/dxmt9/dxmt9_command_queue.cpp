@@ -142,6 +142,14 @@ void CommandQueue::uploadTextureLevel(core::TextureHandle handle,
   }
 }
 
+CommandQueue::InitializerFlush CommandQueue::flushInitializerUploads() {
+  if (!initializer_) {
+    return {};
+  }
+  auto result = initializer_->flushToWait();
+  return {result.event, result.value};
+}
+
 void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   if (!pool_) {
     return nullptr;

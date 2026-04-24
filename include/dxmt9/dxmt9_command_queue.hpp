@@ -73,6 +73,18 @@ class CommandQueue {
                           std::uint32_t pitch,
                           std::span<const std::uint8_t> bytes);
 
+  // Flush deferred texture uploads accumulated by the queue-owned
+  // ResourceInitializer. Returns the SharedEvent + value the caller
+  // should wait on via CommandBuffer::encodeWaitForEvent. value==0
+  // means there is nothing to wait for (no deferred upload has ever
+  // been flushed). Called from encoders::encodeChunk at the head of
+  // each chunk's render command buffer.
+  struct InitializerFlush {
+    WMT::Event event{};
+    std::uint64_t value = 0;
+  };
+  InitializerFlush flushInitializerUploads();
+
   // CPU map of a buffer. Orchestrates the Pool (storage/shadow access)
   // and the queue's wait-for-sequence rule in one call. Returns the
   // mapped pointer or nullptr on unknown handle / empty storage.

@@ -1,18 +1,19 @@
 #pragma once
 
-// Resource upload service. Encapsulates the CPU→GPU staging path for
-// texture level uploads: acquires the queue mutex, emits an optional
-// debug trace, delegates the actual staging blit to Pool::uploadTextureLevel,
-// and drives the gpu-dump sidechannel when enabled.
-//
-// Previously dxmt9::transfers::uploadTextureLevel. Lives here so the
-// "upload" responsibility has a named owner rather than a misc bucket.
+// Resource upload service. Owns a WMT::SharedEvent to coordinate
+// deferred staging uploads with the render queue: callers enqueue
+// texture-level uploads (shared-mode bypasses the event; private-mode
+// queues a staging→private blit) and the encode thread flushes the
+// batch before each chunk via flushToWait(), which returns the
+// (event, value) pair for the render command buffer to wait on.
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9_resource_pool.hpp"
 
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace dxmt9 {
 
@@ -20,18 +21,15 @@ class CommandQueue;
 
 namespace resources {
 
-struct Pool;
-
 class Initializer {
  public:
   Initializer(CommandQueue& queue, Pool& pool, WMT::Reference<WMT::Device> device);
   Initializer(const Initializer&) = delete;
   Initializer& operator=(const Initializer&) = delete;
 
-  // Upload CPU-visible bytes into a texture mip level. Hot path: emits
-  // a debug trace if DXMT_TRACE_TEXTURE_HANDLE matches, calls Pool's
-  // staging path, and — for level 0 with DXMT_GPU_DUMP_TEXTURE_HANDLE
-  // set — snapshots the result to disk.
+  // Upload a texture level. Shared-mode textures get an immediate
+  // CPU-direct replaceRegion; private-mode textures get a staging
+  // upload queued for the next flushToWait() call.
   void uploadTextureLevel(core::TextureHandle handle,
                            std::uint32_t level,
                            std::uint32_t width,
@@ -39,10 +37,33 @@ class Initializer {
                            std::uint32_t pitch,
                            std::span<const std::uint8_t> bytes);
 
+  // Result of flushing any pending deferred uploads.
+  //   event: the SharedEvent that will be signaled by our command
+  //          buffer when the uploads finish on the GPU. Empty if the
+  //          queue was constructed on a null device.
+  //   value: the signal value produced by this flush (equal to our
+  //          monotonic counter after any new flush, or the last
+  //          previously-signaled value if no new work). 0 means no
+  //          flush has ever happened — the caller should skip the
+  //          wait-for-event encode.
+  struct FlushResult {
+    WMT::Event event{};
+    std::uint64_t value = 0;
+  };
+  FlushResult flushToWait();
+
  private:
+  FlushResult flushToWaitUnlocked();
+
   CommandQueue* queue_;
   Pool* pool_;
   WMT::Reference<WMT::Device> device_;
+
+  // Created lazily on first deferred upload (if device is non-null).
+  WMT::Reference<WMT::SharedEvent> event_;
+  std::uint64_t nextEventValue_ = 1;
+  std::uint64_t lastSignaledValue_ = 0;
+  std::vector<Pool::StagingCopy> pendingUploads_;
 };
 
 }  // namespace resources

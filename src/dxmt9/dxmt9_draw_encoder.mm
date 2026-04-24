@@ -1072,6 +1072,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   }
   auto commandBuffer = ownedCommandBuffer;
 
+  // Deferred-upload fence: flush any pending staging→private blits via
+  // the queue-owned ResourceInitializer, then wait for its SharedEvent
+  // signal at the head of this chunk's command buffer so textures are
+  // fully populated before any draw samples them.
+  const auto initializerFlush = ctx.queue.flushInitializerUploads();
+  if (initializerFlush.event && initializerFlush.value > 0) {
+    commandBuffer.encodeWaitForEvent(initializerFlush.event, initializerFlush.value);
+  }
+
   WMT::Reference<WMT::RenderCommandEncoder> activeRenderEncoder{};
   WMT::Reference<WMT::BlitCommandEncoder> activeBlitEncoder{};
   AttachmentKey activeKey{};

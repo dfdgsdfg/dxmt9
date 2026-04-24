@@ -216,6 +216,63 @@ std::span<const std::uint8_t> normalizeUploadBytes(core::Format format, u32 widt
 
 }  // namespace
 
+std::optional<Pool::StagingCopy>
+Pool::stageTextureUpload(WMT::Device device,
+                          core::TextureHandle handle,
+                          u32 level,
+                          u32 width,
+                          u32 height,
+                          u32 pitch,
+                          const std::uint8_t* bytes,
+                          std::size_t byteCount) {
+  auto it = textures.find(handle.value);
+  if (it == textures.end() || !it->second.texture || byteCount == 0) {
+    return std::nullopt;
+  }
+
+  std::vector<std::uint8_t> scratch;
+  const auto normalized = normalizeUploadBytes(it->second.desc.format, width, height, pitch,
+                                                  {bytes, byteCount}, scratch);
+
+  WMT::Texture texture{it->second.texture.handle};
+  const u32 mipLevel = level;
+  const u32 mipWidth = std::max(1u, width);
+  const u32 mipHeight = std::max(1u, height);
+
+  if (!it->second.isPrivate) {
+    // Shared-mode: CPU write straight to the destination; no blit.
+    WMTOrigin origin{0, 0, 0};
+    WMTSize size{mipWidth, mipHeight, 1};
+    texture.replaceRegion(origin, size, mipLevel, 0, normalized.data(), pitch, 0);
+    return std::nullopt;
+  }
+
+  // Private-mode: populate a shared staging texture; caller encodes the
+  // staging→private blit (batched with other deferred uploads).
+  WMTTextureInfo stagingInfo{};
+  stagingInfo.type = WMTTextureType2D;
+  stagingInfo.pixel_format = texture.pixelFormat();
+  stagingInfo.width = mipWidth;
+  stagingInfo.height = mipHeight;
+  stagingInfo.depth = 1;
+  stagingInfo.mipmap_level_count = 1;
+  stagingInfo.sample_count = 1;
+  stagingInfo.array_length = 1;
+  stagingInfo.options = WMTResourceStorageModeShared;
+  stagingInfo.usage = WMTTextureUsageShaderRead;
+  auto stagingTexture = device.newTexture(stagingInfo);
+  if (!stagingTexture) {
+    return std::nullopt;
+  }
+  {
+    WMTOrigin origin{0, 0, 0};
+    WMTSize size{mipWidth, mipHeight, 1};
+    WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
+                                                       normalized.data(), pitch, 0);
+  }
+  return StagingCopy{std::move(stagingTexture), texture, mipLevel, mipWidth, mipHeight};
+}
+
 void Pool::uploadTextureLevel(WMT::Device device,
                                WMT::CommandQueue queue,
                                core::TextureHandle handle,

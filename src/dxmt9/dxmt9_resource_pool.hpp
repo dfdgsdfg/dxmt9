@@ -13,6 +13,7 @@
 #include "../winemetal/Metal.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -149,6 +150,29 @@ struct Pool {
                            u32 pitch,
                            const std::uint8_t* bytes,
                            std::size_t byteCount);
+
+  // Deferred-upload variant. Handles shared-mode inline via replaceRegion
+  // (no command buffer work). For private-mode textures, allocates a
+  // staging texture + populates it from `bytes`, and returns a
+  // StagingCopy describing the blit that the caller must encode. The
+  // ResourceInitializer batches these across frames and commits them
+  // behind a single SharedEvent signal before the next render chunk.
+  struct StagingCopy {
+    WMT::Reference<WMT::Texture> stagingTexture;
+    WMT::Texture destTexture;
+    u32 mipLevel = 0;
+    u32 width = 0;
+    u32 height = 0;
+  };
+  std::optional<StagingCopy>
+  stageTextureUpload(WMT::Device device,
+                     core::TextureHandle handle,
+                     u32 level,
+                     u32 width,
+                     u32 height,
+                     u32 pitch,
+                     const std::uint8_t* bytes,
+                     std::size_t byteCount);
 
   // Stamp lastUsedSeqId on a record so the finish-thread GC respects the
   // in-flight watermark. No-ops on zero handle.

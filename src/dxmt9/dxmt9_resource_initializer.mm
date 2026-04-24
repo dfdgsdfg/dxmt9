@@ -175,7 +175,14 @@ void dumpTextureSnapshotUnlocked(CommandQueue& queue,
 }  // namespace
 
 Initializer::Initializer(CommandQueue& queue, Pool& pool, WMT::Reference<WMT::Device> device)
-    : queue_(&queue), pool_(&pool), device_(std::move(device)) {}
+    : queue_(&queue), pool_(&pool), device_(std::move(device)) {
+  // Allocate the SharedEvent eagerly when we have a real device. On the
+  // null-device test path event_ stays empty and flushToWait becomes a
+  // no-op.
+  if (device_) {
+    event_ = device_.newSharedEvent();
+  }
+}
 
 void Initializer::uploadTextureLevel(core::TextureHandle handle,
                                        std::uint32_t level,
@@ -187,13 +194,76 @@ void Initializer::uploadTextureLevel(core::TextureHandle handle,
   if (debug::shouldTraceTexture(handle)) {
     emitUploadTrace(*pool_, handle, level, width, height, pitch, bytes);
   }
-  pool_->uploadTextureLevel(device_, queue_->raw(), handle, level,
-                             width, height, pitch, bytes.data(), bytes.size());
+  // stageTextureUpload either does an immediate replaceRegion (shared
+  // mode, returns nullopt) or allocates+populates a staging texture
+  // (private mode, returns StagingCopy that we queue for flush).
+  auto staging = pool_->stageTextureUpload(device_, handle, level,
+                                             width, height, pitch,
+                                             bytes.data(), bytes.size());
+  if (staging) {
+    pendingUploads_.push_back(std::move(*staging));
+  }
+
+  // gpu-dump sidechannel: only meaningful after the destination is fully
+  // populated. Flush any pending deferred work synchronously so the
+  // snapshot sees the final GPU-side texture.
   if (level == 0 && shouldDumpGpuTexture(handle)) {
+    auto flushResult = flushToWaitUnlocked();
+    if (flushResult.event && flushResult.value > 0) {
+      // Wait synchronously (CPU-side) so the gpu-dump blit sees final data.
+      event_.waitUntilSignaledValue(flushResult.value, /*timeout-ms*/ 1000);
+    }
     if (auto* rec = pool_->findTexture(handle.value); rec && rec->texture) {
       dumpTextureSnapshotUnlocked(*queue_, *pool_, device_, handle, rec->desc, rec->texture.handle);
     }
   }
+}
+
+Initializer::FlushResult Initializer::flushToWait() {
+  std::lock_guard lock(queue_->mutex_);
+  return flushToWaitUnlocked();
+}
+
+Initializer::FlushResult Initializer::flushToWaitUnlocked() {
+  FlushResult result{};
+  if (event_) {
+    result.event = WMT::Event{event_.handle};
+  }
+  if (pendingUploads_.empty()) {
+    result.value = lastSignaledValue_;
+    return result;
+  }
+  // Encode all queued staging→private blits into one command buffer,
+  // signal the event, and commit WITHOUT waiting — the render chunk
+  // will wait via encodeWaitForEvent on its own command buffer.
+  auto commandBuffer = queue_->newCommandBuffer();
+  if (!commandBuffer) {
+    pendingUploads_.clear();
+    result.value = lastSignaledValue_;
+    return result;
+  }
+  auto blit = commandBuffer.blitCommandEncoder();
+  if (!blit) {
+    pendingUploads_.clear();
+    result.value = lastSignaledValue_;
+    return result;
+  }
+  for (const auto& u : pendingUploads_) {
+    WMTOrigin origin{0, 0, 0};
+    WMTSize size{u.width, u.height, 1};
+    blit.copyFromTextureToTexture(WMT::Texture{u.stagingTexture.handle}, 0, 0,
+                                    origin, size, u.destTexture, 0, u.mipLevel, origin);
+  }
+  blit.endEncoding();
+  const std::uint64_t value = nextEventValue_++;
+  if (event_) {
+    commandBuffer.encodeSignalEvent(WMT::Event{event_.handle}, value);
+  }
+  commandBuffer.commit();
+  lastSignaledValue_ = value;
+  pendingUploads_.clear();
+  result.value = value;
+  return result;
 }
 
 }  // namespace dxmt9::resources
