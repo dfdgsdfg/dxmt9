@@ -53,42 +53,35 @@ MetalCommandRecord makeColorFillCommand(const core::ColorFillDesc& desc) {
 
 }  // namespace
 
-CommandQueue::CommandQueue(WMT::Device device) : device_(device) {
+CommandQueue::CommandQueue(WMT::Device device,
+                             const core::BackendLimits& limits,
+                             resources::Pool& pool,
+                             pipeline::Cache& cache,
+                             scratch::FrameAllocators& allocators,
+                             WMT::Reference<WMT::BinaryArchive>& shaderArchive,
+                             const std::string& shaderArchivePath,
+                             Device& upperDevice)
+    : device_(device),
+      limits_(&limits),
+      pool_(&pool),
+      cache_(&cache),
+      allocators_(&allocators),
+      shaderArchive_(&shaderArchive),
+      shaderArchivePath_(&shaderArchivePath),
+      upperDevice_(&upperDevice) {
   if (!device_) {
     return;
   }
   queue_ = device_.newCommandQueue(0);
-  if (queue_) {
-    queueView_ = WMT::CommandQueue{queue_.handle};
+  if (!queue_) {
+    return;
   }
-}
+  queueView_ = WMT::CommandQueue{queue_.handle};
 
-CommandQueue::~CommandQueue() {
-  // Defensive: if DeviceImpl forgot to call stop(), do it here so the
-  // threads don't outlive initializer_ / borrowed pointers.
-  if (threadsStarted_) {
-    stop();
-  }
-}
-
-void CommandQueue::start(const core::BackendLimits& limits,
-                          resources::Pool& pool,
-                          pipeline::Cache& cache,
-                          scratch::FrameAllocators& allocators,
-                          WMT::Reference<WMT::BinaryArchive>& shaderArchive,
-                          const std::string& shaderArchivePath,
-                          Device& upperDevice) {
-  limits_ = &limits;
-  pool_ = &pool;
-  cache_ = &cache;
-  allocators_ = &allocators;
-  shaderArchive_ = &shaderArchive;
-  shaderArchivePath_ = &shaderArchivePath;
-  upperDevice_ = &upperDevice;
   initializer_ = std::make_unique<resources::Initializer>(*this, pool, device_);
 
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat
-  // hook. No external adapter — CommandQueue is its own lifecycle root.
+  // hook. CommandQueue is its own lifecycle root.
   bindSelfLifecycle([this](core::Handle h) -> std::uint32_t {
     if (!h) return 0;
     auto* surface = pool_->findSurface(h.value);
@@ -98,9 +91,9 @@ void CommandQueue::start(const core::BackendLimits& limits,
         : 0u;
   });
 
-  // Spawn the three worker threads. Encode lambda assembles the
-  // EncodeContext and calls encoders::encodeChunk; @autoreleasepool
-  // scoping lives inside encoders::encodeChunk.
+  // Spawn the three worker threads. Threads block on writeCv_ until the
+  // first submit; no race with DeviceImpl's still-completing ctor because
+  // submits can only happen after CreateDXMT9Device returns.
   startThreads(
       [this] {
         runEncodeLoop(
@@ -117,8 +110,20 @@ void CommandQueue::start(const core::BackendLimits& limits,
       [this] { runCompletionWatcherLoop(); });
 }
 
-void CommandQueue::stop() {
-  stopThreads();
+CommandQueue::CommandQueue(WMT::Device device) : device_(device) {
+  if (!device_) {
+    return;
+  }
+  queue_ = device_.newCommandQueue(0);
+  if (queue_) {
+    queueView_ = WMT::CommandQueue{queue_.handle};
+  }
+}
+
+CommandQueue::~CommandQueue() {
+  if (threadsStarted_) {
+    stopThreads();
+  }
   if (shaderArchive_ && *shaderArchive_) {
     std::lock_guard lock(mutex_);
     shaders::persistShaderArchive(*shaderArchive_, *shaderArchivePath_);

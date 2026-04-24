@@ -38,25 +38,30 @@ inline constexpr size_t kMaxInflight = 3;
 
 class CommandQueue {
  public:
-  // Construct by creating a new WMT::CommandQueue on the given device.
+  // All-in-one constructor: allocate the WMT::CommandQueue, bind
+  // queueLifecycle_ to own state, construct the ResourceInitializer,
+  // and spawn the three worker threads. If `device` is null or queue
+  // allocation fails, leaves the object in a ready-to-destruct state
+  // with valid() == false and threadsStarted_ == false.
+  CommandQueue(WMT::Device device,
+               const core::BackendLimits& limits,
+               resources::Pool& pool,
+               pipeline::Cache& cache,
+               scratch::FrameAllocators& allocators,
+               WMT::Reference<WMT::BinaryArchive>& shaderArchive,
+               const std::string& shaderArchivePath,
+               Device& upperDevice);
+
+  // Minimal test-only constructor. Allocates just the WMT::CommandQueue
+  // handle (if device is non-null) and leaves all other state empty —
+  // no threads, no initializer, no lifecycle binding. Used by
+  // StubDxmt9Device on the null-device test path.
   explicit CommandQueue(WMT::Device device);
+
   ~CommandQueue();
   CommandQueue(const CommandQueue&) = delete;
   CommandQueue& operator=(const CommandQueue&) = delete;
 
-  // Primary lifecycle entry points. start() binds queueLifecycle_ to our
-  // own state, constructs the ResourceInitializer, and spawns the three
-  // worker threads. stop() joins the threads and persists the shader
-  // archive. DeviceImpl calls start() at the tail of its ctor and stop()
-  // at the head of its dtor — everything else is internal.
-  void start(const core::BackendLimits& limits,
-             resources::Pool& pool,
-             pipeline::Cache& cache,
-             scratch::FrameAllocators& allocators,
-             WMT::Reference<WMT::BinaryArchive>& shaderArchive,
-             const std::string& shaderArchivePath,
-             Device& upperDevice);
-  void stop();
   bool started() const noexcept { return threadsStarted_; }
 
   // Upload a texture level via the queue-owned ResourceInitializer.

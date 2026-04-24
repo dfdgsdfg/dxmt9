@@ -44,6 +44,9 @@ WMT::Reference<WMT::Library> makeLibrary(WMT::Device& device, const std::string&
 void initShaderArchive(WMT::Device& device, const std::string& path,
                        WMT::Reference<WMT::BinaryArchive>& archiveOut);
 
+// Value-returning overload for in-place member initialization.
+WMT::Reference<WMT::BinaryArchive> initShaderArchive(WMT::Device device, const std::string& path);
+
 // Serialize the archive to disk. No-op if archive is empty or path is empty.
 void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path);
 

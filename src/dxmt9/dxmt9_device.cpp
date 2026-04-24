@@ -32,38 +32,31 @@ WMTMetalVersion selectMetalVersion(WMT::Device device) {
   return WMTMetal310;
 }
 
+core::BackendLimits finalizeLimits(core::BackendLimits base, WMT::Device device) {
+  if (device) {
+    base.supportsDepth24Stencil8 = device.supportsDepth24Stencil8();
+  }
+  return base;
+}
+
 class DeviceImpl final : public Device {
  public:
   explicit DeviceImpl(const DEVICE_DESC& desc)
       : wmt_device_(desc.device),
         metalVersion_(selectMetalVersion(wmt_device_)),
-        queue_(wmt_device_),
-        limits_(desc.limits),
-        shaderArchivePath_(resolveShaderCachePath()) {
-    if (wmt_device_) {
-      shaders::initShaderArchive(wmt_device_, shaderArchivePath_, shaderArchive_);
-    }
-    if (!wmt_device_ || !queue_.valid()) {
-      return;
-    }
-    limits_.supportsDepth24Stencil8 = wmt_device_.supportsDepth24Stencil8();
+        limits_(finalizeLimits(desc.limits, wmt_device_)),
+        shaderArchivePath_(resolveShaderCachePath()),
+        shaderArchive_(shaders::initShaderArchive(wmt_device_, shaderArchivePath_)),
+        pool_{},
+        pipelineCache_{},
+        allocators_{},
+        queue_(wmt_device_, limits_, pool_, pipelineCache_, allocators_,
+               shaderArchive_, shaderArchivePath_, *this) {}
 
-    // Hand every queue-owned dependency to CommandQueue::start — from
-    // this point on the queue binds its own lifecycle, constructs the
-    // ResourceInitializer, and spawns the encode/finish/completion
-    // threads internally. DeviceImpl is a thin root from here.
-    queue_.start(limits_, pool_, pipelineCache_, allocators_,
-                 shaderArchive_, shaderArchivePath_, *this);
-    ready_ = queue_.started();
-  }
-
-  ~DeviceImpl() override {
-    // queue_.stop() joins threads + persists the shader archive. Runs
-    // before pool_/pipelineCache_/allocators_ tear down so the threads
-    // never see half-destroyed state.
-    queue_.stop();
-    pool_.purgeAll();
-  }
+  // queue_ destructs first (last-declared) — joins worker threads and
+  // persists the shader archive while pool_/pipelineCache_/allocators_
+  // are still live. No explicit body needed.
+  ~DeviceImpl() override = default;
 
   WMT::Device wmtDevice() override { return wmt_device_; }
   WMTMetalVersion metalVersion() const override { return metalVersion_; }
@@ -163,12 +156,14 @@ class DeviceImpl final : public Device {
     return encoders::readbackSurface(queue_, pool_, wmt_device_, limits_, desc, pixels);
   }
 
-  bool ready() const noexcept { return ready_; }
+  bool ready() const noexcept { return queue_.started(); }
 
  private:
+  // Declaration order matters: queue_ is declared LAST so its destructor
+  // runs FIRST — joining worker threads and persisting the archive
+  // before pool_/pipelineCache_/allocators_ tear down.
   WMT::Reference<WMT::Device> wmt_device_;
   WMTMetalVersion metalVersion_ = WMTMetalVersionMax;
-  CommandQueue queue_;
   core::BackendLimits limits_{};
   std::string shaderArchivePath_{};
   WMT::Reference<WMT::BinaryArchive> shaderArchive_{};
@@ -178,7 +173,7 @@ class DeviceImpl final : public Device {
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
   scratch::FrameAllocators allocators_{};
-  bool ready_ = false;
+  CommandQueue queue_;
 };
 
 }  // namespace

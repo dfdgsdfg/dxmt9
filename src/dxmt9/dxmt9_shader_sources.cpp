@@ -79,9 +79,15 @@ WMT::Reference<WMT::Library> makeLibrary(WMT::Device& device, const std::string&
 
 void initShaderArchive(WMT::Device& device, const std::string& path,
                        WMT::Reference<WMT::BinaryArchive>& archiveOut) {
+  archiveOut = initShaderArchive(device, path);
+}
+
+WMT::Reference<WMT::BinaryArchive> initShaderArchive(WMT::Device device, const std::string& path) {
+  if (!device) {
+    return {};
+  }
   WMT::Error err{};
-  auto archive = device.newBinaryArchive(path.c_str(), err);
-  archiveOut = std::move(archive);
+  return device.newBinaryArchive(path.c_str(), err);
 }
 
 void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path) {
