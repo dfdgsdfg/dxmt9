@@ -46,6 +46,38 @@ capture_frame = 0
 reference_optional = true
 
 [[app]]
+name = "d9vk-d3d9-lock-matrix"
+source = "repo-local"
+license = "internal"
+binary = "experiments/apps/D9VKD3D9LockMatrix/d3d9-lock-matrix-x64.exe"
+launcher = "experiments/launchers/dx9_fast_sanity.sh"
+reference = "experiments/references/d9vk-d3d9-lock-matrix.png"
+features = ["fast-sanity", "vertex-buffer", "index-buffer", "texture-lock", "surface-lock", "lock-flags", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "d9vk-d3d9-lock-matrix"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "d9vk-d3d9-ffp-quirks"
+source = "repo-local"
+license = "internal"
+binary = "experiments/apps/D9VKD3D9FixedFunctionQuirks/d3d9-ffp-quirks-x64.exe"
+launcher = "experiments/launchers/dx9_fast_sanity.sh"
+reference = "experiments/references/d9vk-d3d9-ffp-quirks.png"
+features = ["fast-sanity", "fixed-function", "texture-stage-state", "quirks", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "d9vk-d3d9-ffp-quirks"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
 name = "d9vk-d3d9-triangle"
 source = "https://github.com/Joshua-Ashton/d9vk"
 license = "zlib"

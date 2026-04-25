@@ -7,6 +7,7 @@ repo_root=$(cd -- "$script_dir/.." && pwd)
 apps=(
   "d9vk-d3d9-clear"
   "d9vk-d3d9-buffer"
+  "d9vk-d3d9-lock-matrix"
   "d9vk-d3d9-triangle"
 )
 
@@ -144,6 +145,12 @@ binary_for_app() {
       ;;
     d9vk-d3d9-buffer)
       printf '%s/experiments/apps/D9VKD3D9Buffer/d3d9-buffer-%s.exe' "$repo_root" "$arch"
+      ;;
+    d9vk-d3d9-ffp-quirks)
+      printf '%s/experiments/apps/D9VKD3D9FixedFunctionQuirks/d3d9-ffp-quirks-%s.exe' "$repo_root" "$arch"
+      ;;
+    d9vk-d3d9-lock-matrix)
+      printf '%s/experiments/apps/D9VKD3D9LockMatrix/d3d9-lock-matrix-%s.exe' "$repo_root" "$arch"
       ;;
     d9vk-d3d9-triangle)
       printf '%s/experiments/apps/D9VKD3D9Triangle/d3d9-triangle-%s.exe' "$repo_root" "$arch"

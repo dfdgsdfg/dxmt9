@@ -12,6 +12,8 @@ fi
 apps=(
   "D9VKD3D9Clear:d3d9_clear.cpp:d3d9-clear"
   "D9VKD3D9Buffer:d3d9_buffer.cpp:d3d9-buffer"
+  "D9VKD3D9FixedFunctionQuirks:d3d9_fixed_function_quirks.cpp:d3d9-ffp-quirks"
+  "D9VKD3D9LockMatrix:d3d9_lock_matrix.cpp:d3d9-lock-matrix"
   "D9VKD3D9Triangle:d3d9_triangle.cpp:d3d9-triangle"
 )
 

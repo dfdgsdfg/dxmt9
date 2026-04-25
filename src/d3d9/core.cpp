@@ -2737,9 +2737,8 @@ f32 Device::getRenderStateFloat(u32 key, f32 defaultValue) const {
 }
 
 HResult Device::setTextureStageState(u32 stage, u32 key, u32 value) {
-  if (stage >= kMaxTextureStages) {
-    return D3DERR_INVALIDCALL;
-  }
+  stage = std::min<u32>(stage, kMaxTextureStages - 1);
+  key = std::min<u32>(key, kMaxTextureStageStates - 1);
   state_.textureStageStates[stage][key] = value;
   return D3D_OK;
 }
