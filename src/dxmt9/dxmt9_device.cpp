@@ -1,7 +1,4 @@
 #include "dxmt9/dxmt9_device.hpp"
-#include "dxmt9_pipeline_cache.hpp"
-#include "dxmt9_resource_pool.hpp"
-#include "dxmt9_shader_archive.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <memory>
@@ -12,12 +9,6 @@
 namespace dxmt9 {
 
 namespace {
-
-std::string resolveShaderCachePath() {
-  char buf[4096]{};
-  WMTGetShaderCachePath(buf, sizeof(buf));
-  return std::string(buf);
-}
 
 WMTMetalVersion selectMetalVersion(WMT::Device device) {
   // Conservative default without an OS-version probe: Apple GPUs get
@@ -42,15 +33,11 @@ class DeviceImpl final : public Device {
       : wmt_device_(desc.device),
         metalVersion_(selectMetalVersion(wmt_device_)),
         limits_(finalizeLimits(desc.limits, wmt_device_)),
-        shaderArchive_(wmt_device_, resolveShaderCachePath()),
-        pool_{},
-        pipelineCache_{},
         queue_(wmt_device_, *this) {}
 
-  // queue_ destructs first (last-declared) — joins worker threads and
-  // releases its own allocators/initializer while pool_ and
-  // pipelineCache_ are still live. shaderArchive_ persists last.
-  // No explicit body needed.
+  // queue_ destructs first (last-declared) — joins worker threads,
+  // then queue-owned pool/cache/archive destruct in member-reverse
+  // order (archive persists to disk last). No explicit body needed.
   ~DeviceImpl() override = default;
 
   WMT::Device wmtDevice() override { return wmt_device_; }
@@ -60,10 +47,14 @@ class DeviceImpl final : public Device {
   // backend() stays nullptr in production. Tests observe through
   // StubDxmt9Device + MockBackendDevice.
   std::shared_ptr<core::BackendDevice> backend() override { return nullptr; }
-  WMT::Reference<WMT::BinaryArchive>* shaderArchive() override { return &shaderArchive_.reference(); }
-  const std::string* shaderArchivePath() override { return &shaderArchive_.path(); }
-  resources::Pool* pool() override { return &pool_; }
-  pipeline::Cache* pipelineCache() override { return &pipelineCache_; }
+  WMT::Reference<WMT::BinaryArchive>* shaderArchive() override {
+    return &queue_.shaderArchive().reference();
+  }
+  const std::string* shaderArchivePath() override {
+    return &queue_.shaderArchive().path();
+  }
+  resources::Pool* pool() override { return &queue_.pool(); }
+  pipeline::Cache* pipelineCache() override { return &queue_.pipelineCache(); }
 
   void setDeviceLostObserver(core::BackendDevice::DeviceLostObserver observer) override {
     deviceLostObserver_ = std::move(observer);
@@ -84,37 +75,37 @@ class DeviceImpl final : public Device {
 
   core::BufferHandle createBuffer(const core::BufferDesc& desc) override {
     std::lock_guard lock(queue_.mutex_);
-    return pool_.createBuffer(wmt_device_, desc);
+    return queue_.pool().createBuffer(wmt_device_, desc);
   }
   core::TextureHandle createTexture(const core::TextureDesc& desc) override {
     std::lock_guard lock(queue_.mutex_);
-    return pool_.createTexture(wmt_device_, limits_, desc);
+    return queue_.pool().createTexture(wmt_device_, limits_, desc);
   }
   core::SurfaceHandle createSurface(const core::SurfaceDesc& desc) override {
     std::lock_guard lock(queue_.mutex_);
-    return pool_.createSurface(wmt_device_, limits_, desc);
+    return queue_.pool().createSurface(wmt_device_, limits_, desc);
   }
   core::SurfaceHandle createSurfaceForTexture(core::TextureHandle handle, std::uint32_t level,
                                                 const core::SurfaceDesc& desc) override {
     std::lock_guard lock(queue_.mutex_);
-    return pool_.createSurfaceForTexture(handle, level, desc);
+    return queue_.pool().createSurfaceForTexture(handle, level, desc);
   }
   void destroyBuffer(core::BufferHandle handle) override {
     std::lock_guard lock(queue_.mutex_);
-    pool_.markDestroyAndGc(pool_.buffers, handle.value, queue_.completedSeqId_);
+    queue_.pool().markDestroyAndGc(queue_.pool().buffers, handle.value, queue_.completedSeqId_);
   }
   void destroyTexture(core::TextureHandle handle) override {
     std::lock_guard lock(queue_.mutex_);
-    pool_.markDestroyAndGc(pool_.textures, handle.value, queue_.completedSeqId_);
+    queue_.pool().markDestroyAndGc(queue_.pool().textures, handle.value, queue_.completedSeqId_);
   }
   void destroySurface(core::SurfaceHandle handle) override {
     std::lock_guard lock(queue_.mutex_);
-    pool_.markDestroyAndGc(pool_.surfaces, handle.value, queue_.completedSeqId_);
+    queue_.pool().markDestroyAndGc(queue_.pool().surfaces, handle.value, queue_.completedSeqId_);
   }
   void unmapBuffer(core::BufferHandle) override {}
   void uploadBufferData(core::BufferHandle handle, std::span<const std::uint8_t> bytes) override {
     std::lock_guard lock(queue_.mutex_);
-    pool_.uploadBufferData(handle.value, bytes.data(), bytes.size());
+    queue_.pool().uploadBufferData(handle.value, bytes.data(), bytes.size());
   }
   void* mapBuffer(core::BufferHandle handle, std::uint32_t flags) override {
     return queue_.mapBuffer(handle, flags);
@@ -149,20 +140,15 @@ class DeviceImpl final : public Device {
   bool ready() const noexcept { return queue_.started(); }
 
  private:
-  // Declaration order matters: queue_ is declared LAST so its destructor
-  // runs FIRST — joining worker threads and releasing queue-owned
-  // allocators/initializer before pool_/pipelineCache_ tear down.
-  // shaderArchive_'s dtor (persist to disk) runs after queue_.
+  // Pool / pipeline cache / shader archive / allocators all live INSIDE
+  // CommandQueue (matches upstream dxmt). DeviceImpl forwards the
+  // virtual accessors above to queue_'s queue-owned members.
   WMT::Reference<WMT::Device> wmt_device_;
   WMTMetalVersion metalVersion_ = WMTMetalVersionMax;
   core::BackendLimits limits_{};
-  shaders::Archive shaderArchive_{};
   core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = 3;
-  resources::Pool pool_{};
-  pipeline::Cache pipelineCache_{};
-  // allocators moved into CommandQueue (queue-owned runtime node).
   CommandQueue queue_;
 };
 

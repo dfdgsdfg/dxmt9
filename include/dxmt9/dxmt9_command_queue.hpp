@@ -22,7 +22,10 @@
 #include "../../src/dxmt9/dxmt9_backend_types.hpp"
 #include "../../src/dxmt9/dxmt9_queue.hpp"
 #include "../../src/dxmt9/dxmt9_hud.hpp"
+#include "../../src/dxmt9/dxmt9_pipeline_cache.hpp"
+#include "../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../src/dxmt9/dxmt9_ring_arena.hpp"
+#include "../../src/dxmt9/dxmt9_shader_archive.hpp"
 
 #include <array>
 #include <condition_variable>
@@ -42,8 +45,7 @@ class Device;
 class CommandQueue;
 
 namespace encoders { struct EncodeContext; }
-namespace pipeline { class Cache; }
-namespace resources { struct Pool; class Initializer; }
+namespace resources { class Initializer; }
 
 // Chunk-ring size + in-flight cap. Match upstream dxmt's kCommandChunkCount.
 inline constexpr size_t kCommandChunkCount = 32;
@@ -133,6 +135,13 @@ class CommandQueue {
   // bump ring.
   scratch::FrameAllocators& allocators() noexcept { return allocators_; }
 
+  // Queue-owned resource registries. DeviceImpl forwards its public
+  // accessors to these — pool/pipeline-cache/shader-archive live here
+  // in upstream-dxmt style.
+  resources::Pool& pool() noexcept { return pool_; }
+  pipeline::Cache& pipelineCache() noexcept { return pipelineCache_; }
+  shaders::Archive& shaderArchive() noexcept { return shaderArchive_; }
+
   // ─── Mostly-internal: worker-thread bodies + lifecycle binding ─────
   // Exposed so the services-ctor's own initialization can invoke them.
   // External callers should not use these.
@@ -198,21 +207,23 @@ class CommandQueue {
   std::thread completionThread_{};
   bool threadsStarted_ = false;
 
-  // Borrowed-from-DeviceImpl services, used by submit / compat / encode
-  // context assembly. Raw pointers; lifetime enforced by DeviceImpl's
-  // member declaration order (queue_ declared last ⇒ destructs first).
+  // Snapshotted from upper Device at construction (small, immutable).
+  // upperDevice_ is the back-channel for notify callbacks invoked from
+  // the encode thread (presentation status, device lost).
   const core::BackendLimits* limits_ = nullptr;
-  resources::Pool* pool_ = nullptr;
-  pipeline::Cache* cache_ = nullptr;
-  WMT::Reference<WMT::BinaryArchive>* shaderArchive_ = nullptr;
-  const std::string* shaderArchivePath_ = nullptr;
   Device* upperDevice_ = nullptr;
 
-  // Queue-owned runtime node state: per-frame allocators + the
-  // ResourceInitializer upload service. Allocators are a direct member
-  // so they share the queue's lifetime (thread teardown happens first,
-  // then allocators destruct — the encode loop has stopped by then).
+  // Queue-owned runtime node state. Pool / cache / archive live HERE
+  // (matches upstream dxmt's CommandQueue), not on DeviceImpl. Order
+  // matters: pool_ must be constructed before initializer_ (which
+  // borrows it). All queue-owned state outlives the worker threads
+  // because threads are joined first (declaration-order: encodeThread_
+  // before pool_ — but stop() drains threads before the dtor reaches
+  // the pool members).
   scratch::FrameAllocators allocators_{};
+  resources::Pool pool_{};
+  pipeline::Cache pipelineCache_{};
+  shaders::Archive shaderArchive_{};
   std::unique_ptr<resources::Initializer> initializer_;
 };
 

@@ -53,15 +53,20 @@ MetalCommandRecord makeColorFillCommand(const core::ColorFillDesc& desc) {
 
 }  // namespace
 
+namespace {
+std::string resolveShaderCachePath() {
+  char buf[4096]{};
+  WMTGetShaderCachePath(buf, sizeof(buf));
+  return std::string(buf);
+}
+}  // namespace
+
 CommandQueue::CommandQueue(WMT::Device device, Device& upperDevice)
     : device_(device),
       limits_(&upperDevice.limits()),
-      pool_(upperDevice.pool()),
-      cache_(upperDevice.pipelineCache()),
-      shaderArchive_(upperDevice.shaderArchive()),
-      shaderArchivePath_(upperDevice.shaderArchivePath()),
-      upperDevice_(&upperDevice) {
-  if (!device_ || !pool_ || !cache_) {
+      upperDevice_(&upperDevice),
+      shaderArchive_(device, resolveShaderCachePath()) {
+  if (!device_) {
     return;
   }
   queue_ = device_.newCommandQueue(0);
@@ -70,13 +75,13 @@ CommandQueue::CommandQueue(WMT::Device device, Device& upperDevice)
   }
   queueView_ = WMT::CommandQueue{queue_.handle};
 
-  initializer_ = std::make_unique<resources::Initializer>(*this, *pool_, device_);
+  initializer_ = std::make_unique<resources::Initializer>(*this, pool_, device_);
 
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat
   // hook. CommandQueue is its own lifecycle root.
   bindSelfLifecycle([this](core::Handle h) -> std::uint32_t {
     if (!h) return 0;
-    auto* surface = pool_->findSurface(h.value);
+    auto* surface = pool_.findSurface(h.value);
     if (!surface) return 0;
     return core::metalcompat::isFloatRenderTargetFormat(surface->desc.format)
         ? static_cast<std::uint32_t>(core::metalcompat::CompatFlagBits::CompatFlagFp16)
@@ -101,8 +106,8 @@ CommandQueue::CommandQueue(WMT::Device device, Device& upperDevice)
 
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
   return encoders::EncodeContext{
-      device_, *limits_, *pool_, *cache_, allocators_,
-      shaderArchive_, shaderArchivePath_,
+      device_, *limits_, pool_, pipelineCache_, allocators_,
+      &shaderArchive_.reference(), &shaderArchive_.path(),
       *this, upperDevice_,
   };
 }
@@ -239,7 +244,7 @@ void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
   currentBackBuffer_ = desc.rts.color[0].handle;
-  pool_->markDrawResources(desc, seqIdForMark(*this, 0));
+  pool_.markDrawResources(desc, seqIdForMark(*this, 0));
 }
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
@@ -249,28 +254,28 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
   if (desc.colorAttachments[0].handle) {
     currentBackBuffer_ = desc.colorAttachments[0].handle;
   }
-  pool_->markClearResources(desc, seqIdForMark(*this, 0));
+  pool_.markClearResources(desc, seqIdForMark(*this, 0));
 }
 
 void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeSurfaceCopyCommand(desc));
-  pool_->markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
+  pool_.markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
 }
 
 void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeStretchRectCommand(desc));
-  pool_->markStretchResources(desc, seqIdForMark(*this, 0));
+  pool_.markStretchResources(desc, seqIdForMark(*this, 0));
 }
 
 void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {
   std::lock_guard lock(mutex_);
   // Readback is satisfied synchronously in CommandQueue::readbackSurface.
   // Still mark resources so NoUseAfterFree remains meaningful.
-  pool_->markReadbackResources(desc, seqIdForMark(*this, 0));
+  pool_.markReadbackResources(desc, seqIdForMark(*this, 0));
 }
 
 void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
@@ -278,7 +283,7 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeColorFillCommand(desc));
   currentBackBuffer_ = desc.destination;
-  pool_->markColorFillResources(desc, seqIdForMark(*this, 0));
+  pool_.markColorFillResources(desc, seqIdForMark(*this, 0));
 }
 
 void CommandQueue::submitPresent(const core::SwapDesc& desc) {
@@ -286,7 +291,7 @@ void CommandQueue::submitPresent(const core::SwapDesc& desc) {
   queueLifecycle_.presentAndCommit(
       lock, kMaxInflight, desc, currentBackBuffer_,
       [this](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(*this, *pool_, slot);
+        markSlotResourcesUnlocked(*this, pool_, slot);
       });
 }
 
@@ -294,7 +299,7 @@ void CommandQueue::submitFlush() {
   std::unique_lock lock(mutex_);
   queueLifecycle_.flushAndWait(
       lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(*this, *pool_, slot);
+        markSlotResourcesUnlocked(*this, pool_, slot);
       });
 }
 
@@ -306,15 +311,15 @@ core::HResult CommandQueue::waitForVBlank() {
 void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // Pool storage + queue's wait-for-sequence rule under one mutex.
   std::unique_lock lock(mutex_);
-  const std::uint64_t waitSeq = pool_->mapWaitSeqId(handle, flags);
+  const std::uint64_t waitSeq = pool_.mapWaitSeqId(handle, flags);
   if (waitSeq > completedSeqId_) {
     queueLifecycle_.waitForSequence(lock, waitSeq);
   }
-  return pool_->finalizeBufferMap(handle, flags);
+  return pool_.finalizeBufferMap(handle, flags);
 }
 
 bool CommandQueue::readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) {
-  return encoders::readbackSurface(*this, *pool_, device_, *limits_, desc, pixels);
+  return encoders::readbackSurface(*this, pool_, device_, *limits_, desc, pixels);
 }
 
 void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted) {
@@ -352,7 +357,7 @@ void CommandQueue::runFinishLoop() {
     std::unique_lock lock(mutex_);
     if (!queueLifecycle_.runFinishIteration(lock, [this](std::uint64_t) {
           allocators_.reclaim(completedSeqId_);
-          pool_->reclaimCompleted(completedSeqId_);
+          pool_.reclaimCompleted(completedSeqId_);
         })) {
       return;
     }
