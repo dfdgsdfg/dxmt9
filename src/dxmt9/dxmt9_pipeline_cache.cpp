@@ -135,6 +135,7 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
                                 u32 pixelFormat,
                                 WMT::Reference<WMT::BinaryArchive>* archive,
                                 const std::string* archivePath) {
+  (void)archivePath;
   ShaderVariantKey key{};
   // Hash includes color channels + format so matching fills share a pipeline.
   key.hash = static_cast<u64>(std::bit_cast<u32>(color.r)) ^
@@ -146,7 +147,7 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
     return it->second.future;
   }
   auto future = std::async(std::launch::async,
-                            [device, color, pixelFormat, archive, archivePath]() mutable {
+                            [device, color, pixelFormat, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeGenericVertexSource(shaders::makeHash("fill")));
     auto fsLib = shaders::makeLibrary(device, shaders::makeGenericFragmentSource(color, shaders::makeHash("fill")));
     if (!vsLib || !fsLib) {
@@ -165,9 +166,6 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
     auto pso = device.newRenderPipelineState(info, err);
-    if (pso && archive && *archive && archivePath) {
-      shaders::persistShaderArchive(*archive, *archivePath);
-    }
     return pso;
   });
   auto shared = future.share();
@@ -181,6 +179,7 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
                                    u32 pixelFormat,
                                    WMT::Reference<WMT::BinaryArchive>* archive,
                                    const std::string* archivePath) {
+  (void)archivePath;
   ShaderVariantKey key{};
   key.hash = stretch.linear ? 1u : 0u;
   key.textured = true;
@@ -194,7 +193,7 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
   }
   const u32 sampleCountVal = key.sampleCount;
   auto future = std::async(std::launch::async,
-                            [device, sampleCountVal, pixelFormat, archive, archivePath]() mutable {
+                            [device, sampleCountVal, pixelFormat, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeTexturedVertexSource(shaders::makeHash("stretch")));
     auto fsLib = shaders::makeLibrary(device, shaders::makeTexturedFragmentSource(shaders::makeHash("stretch")));
     if (!vsLib || !fsLib) return WMT::Reference<WMT::RenderPipelineState>{};
@@ -211,9 +210,6 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
     auto pso = device.newRenderPipelineState(info, err);
-    if (pso && archive && *archive && archivePath) {
-      shaders::persistShaderArchive(*archive, *archivePath);
-    }
     return pso;
   });
   auto shared = future.share();
@@ -227,12 +223,13 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
                                 const core::DrawDesc& draw,
                                 WMT::Reference<WMT::BinaryArchive>* archive,
                                 const std::string* archivePath) {
+  (void)archivePath;
   std::lock_guard lock(mutex);
   if (auto it = this->draw.find(key); it != this->draw.end()) {
     return it->second.future;
   }
   auto future = std::async(std::launch::async,
-                            [device, key, draw, archive, archivePath]() mutable {
+                            [device, key, draw, archive]() mutable {
     auto vsSource = drawshader::makeDrawShaderSource(draw, true);
     auto fsSource = drawshader::makeDrawShaderSource(draw, false);
     auto vsLib = shaders::makeLibrary(device, vsSource);
@@ -271,9 +268,6 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
     }
     WMT::Error err{};
     auto pso = device.newRenderPipelineState(info, err);
-    if (pso && archive && *archive && archivePath) {
-      shaders::persistShaderArchive(*archive, *archivePath);
-    }
     return pso;
   });
   auto shared = future.share();
@@ -285,8 +279,9 @@ std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath) {
+  (void)archivePath;
   auto future = std::async(std::launch::async,
-                            [device, opaqueAlpha, archive, archivePath]() mutable {
+                            [device, opaqueAlpha, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeTexturedVertexSource(shaders::makeHash("present")));
     auto fsLib = shaders::makeLibrary(device, shaders::makeTexturedFragmentSource(
                                           shaders::makeHash(opaqueAlpha ? "present-opaque" : "present"),
@@ -305,9 +300,6 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
     auto pso = device.newRenderPipelineState(info, err);
-    if (pso && archive && *archive && archivePath) {
-      shaders::persistShaderArchive(*archive, *archivePath);
-    }
     return pso;
   });
   return future.share();

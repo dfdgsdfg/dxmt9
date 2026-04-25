@@ -65,8 +65,8 @@ class RingArena {
     if (!canPlace(offset)) {
       offset = 0;
       if (!canPlace(offset)) {
-        // TLA+: RingSafety
-        DXMT_ASSERT(false && "ring arena exhausted");
+        // TLA+: RingSafety. Exhaustion is recoverable: callers that need
+        // transient upload memory fall back to one-shot Metal buffers.
         return nullptr;
       }
     }

@@ -134,18 +134,7 @@ extern "C" int32_t dxmt9c_swapchain_get_present_params(D9CSwapChain* s, D9CPrese
   out->windowed = params.windowed;
   out->enableAutoDepthStencil = params.enableAutoDepthStencil;
   out->autoDepthStencilFormat = fmtToD3D(params.autoDepthStencilFormat);
-  switch (params.presentationInterval) {
-    case dxmt9::core::PresentInterval::Immediate:
-      out->presentationInterval = 0;
-      break;
-    case dxmt9::core::PresentInterval::Two:
-      out->presentationInterval = 2;
-      break;
-    case dxmt9::core::PresentInterval::Default:
-    default:
-      out->presentationInterval = 1;
-      break;
-  }
+  out->presentationInterval = presentIntervalToD3D(params.presentationInterval);
   return dxmt9::core::D3D_OK;
 }
 

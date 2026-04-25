@@ -15,10 +15,10 @@ project(
 dxmt9_inc = include_directories('include')
 bridge_gen_inc = include_directories('.')
 
-# Code-gen for the PE↔ELF wine_unix_call bridge. Reads the device_c C ABI
+# Code-gen for the PE-to-unixlib wine_unix_call bridge. Reads the device_c C ABI
 # header + the winemetal unix schema and emits the per-op bridge tables.
 # The .generated.cpp files are consumed by the PE-side d3d9 forwarder
-# (client) and the ELF-side winemetal.so dispatch (server).
+# (client) and the unix-side winemetal.so dispatch (server).
 python3 = find_program('python3', required: true)
 device_c_unix_schema = custom_target(
   'dxmt9_device_c_unix_schema_codegen',
@@ -67,7 +67,7 @@ if host_machine.system() == 'darwin'
   endif
 elif host_machine.system() == 'windows'
   # Cross-build: produces the PE d3d9.dll + winemetal.dll thunk pair.
-  # Native dxmt9.so + winemetal.so (Mach-O) come from the darwin build.
+  # Native winemetal.so (Mach-O) comes from the darwin build.
   subdir('src/util')
   subdir('src/winemetal')
   subdir('src/d3d9')

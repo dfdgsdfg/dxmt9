@@ -46,6 +46,8 @@ uint32_t fmtToD3D(dxmt9::core::Format format);
 dxmt9::core::MultiSampleType msTypeFromD3D(uint32_t d3d);
 bool isSupportedD3DMultisample(uint32_t d3d);
 uint32_t msTypeToD3D(dxmt9::core::MultiSampleType ms);
+dxmt9::core::PresentInterval presentIntervalFromD3D(uint32_t d3d);
+uint32_t presentIntervalToD3D(dxmt9::core::PresentInterval interval);
 dxmt9::core::Pool poolFromD3D(uint32_t d3d);
 uint32_t poolToD3D(dxmt9::core::Pool pool);
 uint32_t textureTypeToResourceType(dxmt9::core::TextureType type);

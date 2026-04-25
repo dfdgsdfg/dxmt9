@@ -14,6 +14,8 @@
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/winemetal.h"
+#include "device_c_common.hpp"
+#include "../src/dxmt9/dxmt9_ring_arena.hpp"
 
 using namespace dxmt9::core;
 
@@ -500,6 +502,54 @@ void testHelpers() {
              std::span<const u8>(upload.data(), upload.size()), "texture upload conversion");
 
   check(hashString("dxmt9") != 0, "hashString should not be zero");
+}
+
+void testDeviceCPresentIntervalMapping() {
+  constexpr u32 kD3DPRESENT_INTERVAL_DEFAULT = 0x00000000u;
+  constexpr u32 kD3DPRESENT_INTERVAL_ONE = 0x00000001u;
+  constexpr u32 kD3DPRESENT_INTERVAL_TWO = 0x00000002u;
+  constexpr u32 kD3DPRESENT_INTERVAL_IMMEDIATE = 0x80000000u;
+
+  using dxmt9::d3d9::devicec::presentIntervalFromD3D;
+  using dxmt9::d3d9::devicec::presentIntervalToD3D;
+
+  checkEq(presentIntervalFromD3D(kD3DPRESENT_INTERVAL_DEFAULT), PresentInterval::Default,
+          "default present interval bridge");
+  checkEq(presentIntervalFromD3D(kD3DPRESENT_INTERVAL_ONE), PresentInterval::Default,
+          "one present interval bridge");
+  checkEq(presentIntervalFromD3D(kD3DPRESENT_INTERVAL_TWO), PresentInterval::Two,
+          "two present interval bridge");
+  checkEq(presentIntervalFromD3D(kD3DPRESENT_INTERVAL_IMMEDIATE), PresentInterval::Immediate,
+          "immediate present interval bridge");
+
+  checkEq(presentIntervalToD3D(PresentInterval::Immediate), kD3DPRESENT_INTERVAL_IMMEDIATE,
+          "immediate present interval bridge return");
+  checkEq(presentIntervalToD3D(PresentInterval::Default), kD3DPRESENT_INTERVAL_ONE,
+          "default present interval bridge return");
+  checkEq(presentIntervalToD3D(PresentInterval::Two), kD3DPRESENT_INTERVAL_TWO,
+          "two present interval bridge return");
+
+  D9CPresentParams cParams{};
+  cParams.presentationInterval = kD3DPRESENT_INTERVAL_IMMEDIATE;
+  checkEq(dxmt9::d3d9::devicec::ppFromC(cParams).presentationInterval, PresentInterval::Immediate,
+          "present params preserve immediate interval");
+}
+
+void testRingArenaExhaustionFallsBack() {
+  dxmt9::scratch::RingArena arena{64};
+
+  auto* first = arena.allocateBytes(48, 16, 1);
+  check(first != nullptr, "ring arena first allocation");
+  auto* second = arena.allocateBytes(32, 16, 2);
+  check(second == nullptr, "ring arena exhaustion returns null");
+
+  arena.reclaim(1);
+  auto* third = arena.allocateBytes(32, 16, 3);
+  check(third != nullptr, "ring arena reuses reclaimed storage");
+
+  arena.reclaim(3);
+  auto* fourth = arena.allocateBytes(64, 16, 4);
+  check(fourth != nullptr, "ring arena resets after full reclaim");
 }
 
 void testFfpKeys() {
@@ -1585,6 +1635,8 @@ int main() {
   try {
     testFormatAndCaps();
     testHelpers();
+    testDeviceCPresentIntervalMapping();
+    testRingArenaExhaustionFallsBack();
     testFfpKeys();
     testShaderThunk();
     testVisualDerivedFfpCoverage();

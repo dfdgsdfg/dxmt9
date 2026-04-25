@@ -523,12 +523,15 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             result["failures"].append({"type": "missing_capture"})
 
         if app.reference_path.exists() and actual_path.exists():
-            ssim = compute_ssim(actual_path, app.reference_path)
-            result["ssim"] = ssim
-            ssim_path.write_text(f"{ssim:.6f}\n")
             write_diff_image(actual_path, app.reference_path, diff_path)
-            if ssim < SSIM_THRESHOLD:
-                result["failures"].append({"type": "ssim", "value": ssim, "threshold": SSIM_THRESHOLD})
+            try:
+                ssim = compute_ssim(actual_path, app.reference_path)
+                result["ssim"] = ssim
+                ssim_path.write_text(f"{ssim:.6f}\n")
+                if ssim < SSIM_THRESHOLD:
+                    result["failures"].append({"type": "ssim", "value": ssim, "threshold": SSIM_THRESHOLD})
+            except ValueError as exc:
+                result["failures"].append({"type": "image_size_mismatch", "message": str(exc)})
         elif not app.reference_path.exists() and not app.reference_optional:
             result["failures"].append({"type": "missing_reference"})
 

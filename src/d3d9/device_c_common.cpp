@@ -107,6 +107,9 @@ constexpr uint32_t kD3DSIO_BREAKP = 96u;
 constexpr uint32_t kD3DSIO_PHASE = 0xfffdu;
 constexpr uint32_t kD3DSIO_COMMENT = 0xfffeu;
 constexpr uint32_t kD3DSIO_END = 0xffffu;
+constexpr uint32_t kD3DPRESENT_INTERVAL_ONE = 0x00000001u;
+constexpr uint32_t kD3DPRESENT_INTERVAL_TWO = 0x00000002u;
+constexpr uint32_t kD3DPRESENT_INTERVAL_IMMEDIATE = 0x80000000u;
 
 uint32_t shaderFixedOperandCount(uint32_t opcode, bool* known) {
   *known = true;
@@ -454,6 +457,28 @@ uint32_t msTypeToD3D(dxmt9::core::MultiSampleType ms) {
   }
 }
 
+dxmt9::core::PresentInterval presentIntervalFromD3D(uint32_t d3d) {
+  if (d3d == kD3DPRESENT_INTERVAL_IMMEDIATE) {
+    return dxmt9::core::PresentInterval::Immediate;
+  }
+  if (d3d >= kD3DPRESENT_INTERVAL_TWO) {
+    return dxmt9::core::PresentInterval::Two;
+  }
+  return dxmt9::core::PresentInterval::Default;
+}
+
+uint32_t presentIntervalToD3D(dxmt9::core::PresentInterval interval) {
+  switch (interval) {
+    case dxmt9::core::PresentInterval::Immediate:
+      return kD3DPRESENT_INTERVAL_IMMEDIATE;
+    case dxmt9::core::PresentInterval::Two:
+      return kD3DPRESENT_INTERVAL_TWO;
+    case dxmt9::core::PresentInterval::Default:
+    default:
+      return kD3DPRESENT_INTERVAL_ONE;
+  }
+}
+
 dxmt9::core::Pool poolFromD3D(uint32_t d3d) {
   using P = dxmt9::core::Pool;
   switch (d3d) {
@@ -509,13 +534,7 @@ dxmt9::core::PresentParameters ppFromC(const D9CPresentParams& c) {
   p.autoDepthStencilFormat = fmtFromD3D(c.autoDepthStencilFormat);
   p.multiSampleType = msTypeFromD3D(c.multiSampleType);
   p.deviceWindow = dxmt9::core::Handle{c.deviceWindow};
-  if (c.presentationInterval == 0) {
-    p.presentationInterval = dxmt9::core::PresentInterval::Immediate;
-  } else if (c.presentationInterval >= 2) {
-    p.presentationInterval = dxmt9::core::PresentInterval::Two;
-  } else {
-    p.presentationInterval = dxmt9::core::PresentInterval::Default;
-  }
+  p.presentationInterval = presentIntervalFromD3D(c.presentationInterval);
   p.discardSwapEffect = c.swapEffect != 2;
   return p;
 }

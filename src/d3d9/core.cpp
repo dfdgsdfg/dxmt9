@@ -3165,8 +3165,12 @@ HResult Device::presentEx(const Rect* sourceRect, const Rect* destRect, Handle d
     return D3DERR_DEVICELOST;
   }
   auto desc = snapshotSwapDesc();
+  const bool synchronizePresent = desc.displaySyncEnabled;
   submitPresentInternal(desc);
-  if (backend_) {
+  // Immediate presents must not synchronously wait for the Metal presenter:
+  // some windowed apps submit before their message pump has made a drawable
+  // available, and waiting here can deadlock that first frame.
+  if (backend_ && synchronizePresent) {
     upperDevice_->flush();
   }
   completeUpTo(submittedSequenceId_);
