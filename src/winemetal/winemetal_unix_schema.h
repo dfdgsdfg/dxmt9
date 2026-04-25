@@ -3,9 +3,8 @@
 /*
  * Native-service unix bridge schema (placeholder).
  *
- * winemetal.so no longer hosts the generated device_c bridge; the only
- * thunk surface it publishes is the WMT wrapper API implemented in
- * winemetal_private_api.mm and declared in winemetal.h. This header remains
- * as a compatibility stub in case downstream bridge-generation targets still
- * reference it; it intentionally declares nothing.
+ * The generated device_c bridge schema is extracted from
+ * include/dxmt9/device_c.h. This header is reserved for future native-only
+ * service declarations that should share the same PE↔unix generation path.
+ * It intentionally declares nothing today.
  */

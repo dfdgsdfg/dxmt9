@@ -23,6 +23,7 @@ if host_machine.system() == 'windows'
   winemetal_bridge_deps = []
   winemetal_bridge_c_args = []
   winemetal_bridge_cpp_args = []
+  winemetal_bridge_link_args = []
 
   if wine_builtin_dll
     if wine_build_path == '' and wine_install_path == ''
@@ -61,9 +62,15 @@ if host_machine.system() == 'windows'
       winebuild = join_paths(wine_install_path, 'bin/winebuild')
     endif
 
+    dxmt9_winebuild = winebuild
     winemetal_bridge_deps += [lib_winecrt0, lib_ntdll, lib_dbghelp]
     winemetal_bridge_c_args += ['-DDXMT9_WINE_BUILTIN_DLL=1']
     winemetal_bridge_cpp_args += ['-DDXMT9_WINE_BUILTIN_DLL=1']
+    # llvm-mingw's default C++ runtime can pull its own TLS anchors while
+    # winecrt0 provides the same builtin-module anchors.
+    winemetal_bridge_link_args += cpp.get_supported_link_arguments([
+      '-Wl,--allow-multiple-definition',
+    ])
   endif
 
   winemetal_dll = shared_library(
@@ -79,6 +86,7 @@ if host_machine.system() == 'windows'
     ],
     c_args: winemetal_bridge_c_args,
     cpp_args: winemetal_bridge_cpp_args,
+    link_args: winemetal_bridge_link_args,
     install: true,
     install_dir: winemetal_install_dir,
   )

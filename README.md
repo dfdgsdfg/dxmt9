@@ -166,6 +166,9 @@ export WINE_ROOT="/path/to/your/wine/runtime"
 cp build-win32-x64-builtin/src/win32/d3d9.dll \
   "$WINEPREFIX/drive_c/windows/system32/d3d9.dll"
 
+cp build-win32-x64-builtin/src/win32/d3d9.dll \
+  "$WINE_ROOT/lib/wine/x86_64-windows/d3d9.dll"
+
 cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
   "$WINE_ROOT/lib/wine/x86_64-windows/winemetal.dll"
 
@@ -178,13 +181,15 @@ cp "$HOME/llvm-mingw/x86_64-w64-mingw32/bin/libc++.dll" \
 cp "$HOME/llvm-mingw/x86_64-w64-mingw32/bin/libunwind.dll" \
   "$WINEPREFIX/drive_c/windows/system32/libunwind.dll"
 
-WINEDLLOVERRIDES="d3d9=n,b" \
+WINEDLLOVERRIDES="d3d9=b" \
   "$WINE_ROOT/bin/wine" game.exe
 ```
 
 What goes where:
 
-- `d3d9.dll` goes into the Wine prefix because applications load it directly.
+- `d3d9.dll` goes into Wine's `x86_64-windows` runtime directory for the verified
+  builtin path. Keeping a copy in the prefix `system32` is harmless and preserves
+  native-DLL fallback workflows, but `d3d9=b` resolves the runtime builtin copy.
 - `winemetal.dll` goes into Wine's `x86_64-windows` runtime directory as the builtin
   PE bridge for both the main D3D9 C ABI and the public shader ABI. It is not copied
   into `system32` on the verified builtin path.

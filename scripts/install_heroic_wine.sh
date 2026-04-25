@@ -13,7 +13,8 @@ Options:
   --prefix <path>         Target Wine prefix. Required.
   --wine-root <path>      Heroic Wine runtime root. Auto-detected when omitted.
   --pe-build-dir <path>   Directory containing d3d9.dll for
-                          <prefix>/system32.
+                          <prefix>/system32 and
+                          <wine-root>/lib/wine/x86_64-windows.
                           Default: <repo>/build-win32-x64-builtin/src/win32
   --runtime-pe-build-dir <path>
                           Directory containing builtin winemetal.dll for
@@ -39,6 +40,7 @@ This script installs the currently-built dxmt9 binaries into a Heroic Wine
 runtime and prefix:
   64-bit lane:
   - d3d9.dll      -> <prefix>/drive_c/windows/system32
+  - d3d9.dll      -> <wine-root>/lib/wine/x86_64-windows
   - winemetal.dll -> <wine-root>/lib/wine/x86_64-windows
   - winemetal.so  -> <wine-root>/lib/wine/x86_64-unix
   - libc++.dll    -> <prefix>/drive_c/windows/system32
@@ -46,6 +48,7 @@ runtime and prefix:
 
   Optional WoW64 32-bit lane:
   - d3d9.dll      -> <prefix>/drive_c/windows/syswow64
+  - d3d9.dll      -> <wine-root>/lib/wine/i386-windows
   - winemetal.dll -> <wine-root>/lib/wine/i386-windows
   - libc++.dll    -> <prefix>/drive_c/windows/syswow64
   - libunwind.dll -> <prefix>/drive_c/windows/syswow64
@@ -233,6 +236,7 @@ if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
 fi
 
 install_file "$pe_build_dir/d3d9.dll" "$system32_dir/d3d9.dll"
+install_file "$pe_build_dir/d3d9.dll" "$windows_runtime_dir/d3d9.dll"
 install_file "$runtime_pe_build_dir/winemetal.dll" "$windows_runtime_dir/winemetal.dll"
 install_file "$unix_build_dir/winemetal/unix/winemetal.so" "$unix_runtime_dir/winemetal.so"
 install_file "$mingw_bin_dir/libc++.dll" "$system32_dir/libc++.dll"
@@ -240,6 +244,7 @@ install_file "$mingw_bin_dir/libunwind.dll" "$system32_dir/libunwind.dll"
 
 if [[ -n "$wow64_pe_build_dir" ]]; then
   install_file "$wow64_pe_build_dir/d3d9.dll" "$syswow64_dir/d3d9.dll"
+  install_file "$wow64_pe_build_dir/d3d9.dll" "$i386_windows_runtime_dir/d3d9.dll"
   install_file "$wow64_mingw_bin_dir/libc++.dll" "$syswow64_dir/libc++.dll"
   install_file "$wow64_mingw_bin_dir/libunwind.dll" "$syswow64_dir/libunwind.dll"
 fi
@@ -264,5 +269,5 @@ Wine runtime:
   $wine_root
 
 Run with:
-  WINEPREFIX="$prefix" WINEDLLOVERRIDES="d3d9=n,b" "$wine_bin" game.exe
+  WINEPREFIX="$prefix" WINEDLLOVERRIDES="d3d9=b" "$wine_bin" game.exe
 EOF

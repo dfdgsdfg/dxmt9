@@ -22,6 +22,6 @@ option(
 option(
   'wine_builtin_dll',
   type: 'boolean',
-  value: false,
-  description: 'Build dxmt9.dll as a Wine builtin PE bridge when Wine toolchain assets are available.',
+  value: true,
+  description: 'Postprocess the PE d3d9.dll and winemetal.dll bridge pair as Wine builtin modules.',
 )
