@@ -1,14 +1,31 @@
 #include "dxmt9_presenter.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_device.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
 
 namespace dxmt9 {
+
+namespace {
+
+bool sameLayerProps(const WMTLayerProps& a, const WMTLayerProps& b) {
+  return a.device == b.device &&
+         a.contents_scale == b.contents_scale &&
+         a.drawable_width == b.drawable_width &&
+         a.drawable_height == b.drawable_height &&
+         a.opaque == b.opaque &&
+         a.display_sync_enabled == b.display_sync_enabled &&
+         a.framebuffer_only == b.framebuffer_only &&
+         a.pixel_format == b.pixel_format;
+}
+
+}  // namespace
 
 Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
                      WMT::Reference<WMT::BinaryArchive>* archive,
@@ -50,9 +67,20 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     props.drawable_height = std::max(1u, params.height);
     props.display_sync_enabled = params.displaySyncEnabled;
     props.contents_scale = params.contentsScale;
-    MetalLayer_setProps(layer_.handle, &props);
-    MetalLayer_setMaximumDrawableCount(layer_.handle,
-                                        std::clamp<uint32_t>(params.maxDrawableCount, 1u, 3u));
+    const auto maxDrawableCount = std::clamp<uint32_t>(params.maxDrawableCount, 1u, 3u);
+    if (!cachedLayerPropsValid_ ||
+        !sameLayerProps(cachedLayerProps_, props) ||
+        cachedMaxDrawableCount_ != maxDrawableCount) {
+      const auto propsStarted = std::chrono::steady_clock::now();
+      MetalLayer_setProps(layer_.handle, &props);
+      MetalLayer_setMaximumDrawableCount(layer_.handle, maxDrawableCount);
+      const auto propsElapsed = std::chrono::steady_clock::now() - propsStarted;
+      perf::countPresentSetPropsWait(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(propsElapsed).count()));
+      cachedLayerProps_ = props;
+      cachedMaxDrawableCount_ = maxDrawableCount;
+      cachedLayerPropsValid_ = true;
+    }
   }
 
   auto pipelineFuture = pipelineFor(params.opaqueAlpha);
@@ -78,7 +106,11 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   }
 
   presentimpl::traceEvent("nextDrawable.begin", params.seqId, hwnd_);
+  const auto acquireStarted = std::chrono::steady_clock::now();
   auto drawable = layer_.nextDrawable();
+  const auto acquireElapsed = std::chrono::steady_clock::now() - acquireStarted;
+  perf::countPresentAcquireWait(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(acquireElapsed).count()));
   if (!drawable) {
     presentimpl::traceEvent("nextDrawable.nil", params.seqId, hwnd_);
     return result;
@@ -154,6 +186,7 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   }
   auto* source = pool.findSurface(sourceHandle.value);
   if (!source || !source->texture) {
+    perf::countPresentSkipped();
     presentimpl::traceEvent("missing-source", seqId, present.window.value);
     return false;
   }
@@ -201,6 +234,7 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   // acquisition in SwapChain::ensurePresenter).
   Presenter* presenter = present.presenter;
   if (!presenter) {
+    perf::countPresentSkipped();
     presentimpl::traceEvent("missing-layer", seqId, present.window.value);
     return false;
   }
@@ -219,6 +253,11 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   params.seqId = seqId;
 
   const auto presentResult = presenter->encodeCommands(commandBuffer, params);
+  if (presentResult.encoded) {
+    perf::countPresentEncoded();
+  } else {
+    perf::countPresentSkipped();
+  }
   if (!presentResult.acquired) {
     if (present.notifyPresentationStatus) present.notifyPresentationStatus(true);
     return false;

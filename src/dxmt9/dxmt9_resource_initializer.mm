@@ -6,10 +6,12 @@
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_debug_trace.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iomanip>
 #include <mutex>
@@ -130,7 +132,11 @@ void dumpTextureSnapshotUnlocked(CommandQueue& queue,
                                 WMT::Texture{stagingTexture.handle}, 0, 0, origin);
   blit.endEncoding();
   commandBuffer.commit();
+  const auto dumpCopyStarted = std::chrono::steady_clock::now();
   commandBuffer.waitUntilCompleted();
+  const auto dumpCopyElapsed = std::chrono::steady_clock::now() - dumpCopyStarted;
+  perf::countSyncWait(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(dumpCopyElapsed).count()));
   {
     std::lock_guard lock(queue.mutex_);
     CommandBufferDiagnostics diagnostics;
@@ -144,6 +150,9 @@ void dumpTextureSnapshotUnlocked(CommandQueue& queue,
   bufInfo.length = bytes.size();
   bufInfo.options = WMTResourceStorageModeShared;
   auto readBuf = device.newBuffer(bufInfo);
+  if (readBuf) {
+    perf::countMetalBuffer(static_cast<std::size_t>(bufInfo.length));
+  }
   if (readBuf && bufInfo.memory.ptr) {
     auto cmdBuf2 = queue.newCommandBuffer();
     if (cmdBuf2) {
@@ -157,7 +166,11 @@ void dumpTextureSnapshotUnlocked(CommandQueue& queue,
         blit2.endEncoding();
       }
       cmdBuf2.commit();
+      const auto dumpReadStarted = std::chrono::steady_clock::now();
       cmdBuf2.waitUntilCompleted();
+      const auto dumpReadElapsed = std::chrono::steady_clock::now() - dumpReadStarted;
+      perf::countSyncWait(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(dumpReadElapsed).count()));
     }
     std::memcpy(bytes.data(), bufInfo.memory.ptr, bytes.size());
   }

@@ -2,8 +2,10 @@
 
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_perf_counters.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -285,7 +287,11 @@ bool readbackSurface(CommandQueue& queue,
                                 WMT::Texture{stagingTexture.handle}, 0, 0, dstOrigin);
   blit.endEncoding();
   commandBuffer.commit();
+  const auto copyStarted = std::chrono::steady_clock::now();
   commandBuffer.waitUntilCompleted();
+  const auto copyElapsed = std::chrono::steady_clock::now() - copyStarted;
+  perf::countSyncWait(
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(copyElapsed).count()));
 
   pixels.pitch = width * bpp;
   pixels.bytes.resize(static_cast<std::size_t>(pixels.pitch) * height);
@@ -293,6 +299,9 @@ bool readbackSurface(CommandQueue& queue,
   bufInfo.length = static_cast<uint64_t>(pixels.pitch) * height;
   bufInfo.options = WMTResourceStorageModeShared;
   auto readbackBuf = device.newBuffer(bufInfo);
+  if (readbackBuf) {
+    perf::countMetalBuffer(static_cast<std::size_t>(bufInfo.length));
+  }
   if (readbackBuf) {
     auto cmdBuf2 = queue.newCommandBuffer();
     if (cmdBuf2) {
@@ -306,7 +315,11 @@ bool readbackSurface(CommandQueue& queue,
         blit2.endEncoding();
       }
       cmdBuf2.commit();
+      const auto readStarted = std::chrono::steady_clock::now();
       cmdBuf2.waitUntilCompleted();
+      const auto readElapsed = std::chrono::steady_clock::now() - readStarted;
+      perf::countSyncWait(
+          static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(readElapsed).count()));
     }
     if (bufInfo.memory.ptr) {
       std::memcpy(pixels.bytes.data(), bufInfo.memory.ptr, pixels.bytes.size());

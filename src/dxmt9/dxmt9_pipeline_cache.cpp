@@ -2,6 +2,7 @@
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_shader_sources.hpp"
 
@@ -165,6 +166,7 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
     info.raster_sample_count = 1;
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
+    perf::countPipelineBuild();
     auto pso = device.newRenderPipelineState(info, err);
     return pso;
   });
@@ -209,6 +211,7 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
     info.rasterization_enabled = true;
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
+    perf::countPipelineBuild();
     auto pso = device.newRenderPipelineState(info, err);
     return pso;
   });
@@ -267,6 +270,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
       ca.write_mask = convert::toColorWriteMask(key.blend[i].colorWriteMask);
     }
     WMT::Error err{};
+    perf::countPipelineBuild();
     auto pso = device.newRenderPipelineState(info, err);
     return pso;
   });
@@ -299,6 +303,7 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
     info.rasterization_enabled = true;
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
+    perf::countPipelineBuild();
     auto pso = device.newRenderPipelineState(info, err);
     return pso;
   });

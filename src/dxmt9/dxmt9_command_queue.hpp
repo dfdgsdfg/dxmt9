@@ -28,6 +28,7 @@
 #include "dxmt9_shader_archive.hpp"
 
 #include <array>
+#include <cstddef>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -132,6 +133,18 @@ class CommandQueue {
   WMT::CommandQueue& raw() noexcept { return queueView_; }
   const WMT::CommandQueue& raw() const noexcept { return queueView_; }
 
+  struct TransientBufferSlice {
+    WMT::Buffer buffer{};
+    std::uint64_t offset = 0;
+    std::size_t size = 0;
+
+    explicit operator bool() const noexcept { return static_cast<bool>(buffer); }
+  };
+
+  TransientBufferSlice uploadTransientBuffer(std::span<const std::byte> bytes,
+                                             std::size_t alignment,
+                                             std::uint64_t seqId);
+
   // The WMT::Device this queue was built on.
   WMT::Device device() const noexcept { return device_; }
 
@@ -224,6 +237,28 @@ class CommandQueue {
   pipeline::Cache pipelineCache_{};
   shaders::Archive shaderArchive_{};
   std::unique_ptr<resources::Initializer> initializer_;
+
+  struct TransientBufferAllocation {
+    std::size_t offset = 0;
+    std::size_t size = 0;
+    std::uint64_t seqId = 0;
+  };
+
+  struct RetainedTransientBuffer {
+    WMT::Reference<WMT::Buffer> buffer{};
+    std::uint64_t seqId = 0;
+  };
+
+  void reclaimTransientBuffersUnlocked(std::uint64_t completedSeqId);
+  bool ensureTransientBufferUnlocked(std::size_t minimumCapacity);
+
+  std::mutex transientBufferMutex_{};
+  WMT::Reference<WMT::Buffer> transientBuffer_{};
+  std::byte* transientBufferContents_ = nullptr;
+  std::size_t transientBufferCapacity_ = 0;
+  std::size_t transientBufferCursor_ = 0;
+  std::deque<TransientBufferAllocation> transientBufferAllocations_{};
+  std::deque<RetainedTransientBuffer> retainedTransientBuffers_{};
 
  public:
   // Limits accessor — value member, not a borrowed pointer.

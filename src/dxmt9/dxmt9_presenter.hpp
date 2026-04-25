@@ -72,6 +72,9 @@ class Presenter {
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineAlpha_{};
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineOpaque_{};
   WMT::Reference<WMT::SamplerState> sampler_{};
+  WMTLayerProps cachedLayerProps_{};
+  uint32_t cachedMaxDrawableCount_ = 0;
+  bool cachedLayerPropsValid_ = false;
   // Borrowed from DeviceImpl; used by the async pipeline builder.
   WMT::Reference<WMT::BinaryArchive>* archive_ = nullptr;
   const std::string* archivePath_ = nullptr;

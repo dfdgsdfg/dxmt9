@@ -2,11 +2,13 @@
 
 #include "dxmt9_compat.hpp"
 #include "dxmt9_hud.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "../winemetal/Metal.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
 #include <cstdio>
+#include <chrono>
 #include <cstdlib>
 #include <sstream>
 
@@ -1036,7 +1038,14 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
   // Block until GPU completes — upstream dxmt's WaitForFinishThread pattern.
   if (pending.commandBuffer &&
       pending.commandBuffer.status() <= WMTCommandBufferStatusScheduled) {
+    const auto started = std::chrono::steady_clock::now();
     pending.commandBuffer.waitUntilCompleted();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    perf::countCompletionWait(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
+        pending.diagnostics.hasDraw,
+        pending.diagnostics.hasPresent,
+        pending.diagnostics.hasBlit);
   }
 
   const auto binding = submissionBinding_;

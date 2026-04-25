@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -380,21 +381,28 @@ void encodeDraw(EncodeContext& ctx,
   encoder.setRenderPipelineState(pipeline);
   auto* uniforms = ctx.allocators.argbuf.allocate<DrawUniforms>(seqId);
   DrawUniforms fallbackUniforms{};
-  if (!uniforms) {
-    uniforms = &fallbackUniforms;
-  }
-  *uniforms = buildDrawUniforms(draw);
-  WMTBufferInfo uniformInfo{};
-  uniformInfo.length = sizeof(DrawUniforms);
-  uniformInfo.options = WMTResourceStorageModeShared;
-  uniformInfo.memory.set((void *)uniforms);
-  auto transientUniformBuffer = ctx.device.newBuffer(uniformInfo);
-  if (!transientUniformBuffer) {
-    return;
-  }
-  encoder.setVertexBuffer(transientUniformBuffer, 0, 0);
-  encoder.setFragmentBuffer(transientUniformBuffer, 0, 0);
-  const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
+	  if (!uniforms) {
+	    uniforms = &fallbackUniforms;
+	  }
+	  *uniforms = buildDrawUniforms(draw);
+	  auto uploadTransientBuffer = [&](const void* data, std::size_t len, std::size_t alignment) {
+	    return ctx.queue.uploadTransientBuffer(
+	        std::span<const std::byte>(reinterpret_cast<const std::byte*>(data), len),
+	        alignment, seqId);
+	  };
+	  auto uploadUniforms = [&] {
+	    auto slice = uploadTransientBuffer(uniforms, sizeof(DrawUniforms), alignof(DrawUniforms));
+	    if (!slice) {
+	      return false;
+	    }
+	    encoder.setVertexBuffer(slice.buffer, slice.offset, 0);
+	    encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
+	    return true;
+	  };
+	  if (!uploadUniforms()) {
+	    return;
+	  }
+	  const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
   if (auto* surface = ctx.pool.findSurface(draw.rts.color[0].handle.value); surface && surface->texture) {
     double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
     double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
@@ -433,23 +441,21 @@ void encodeDraw(EncodeContext& ctx,
   const uint64_t vertexCount =
       static_cast<uint64_t>(std::max(1u, primitiveVertexCount(draw.primitiveType, primitiveCount)));
   const bool indexedDraw = draw.indexBuffer || !draw.userIndexData.empty();
-  WMT::Reference<WMT::Buffer> transientVertexBuffer;
+	  CommandQueue::TransientBufferSlice transientVertexBuffer;
   std::span<const u8> vertexBytes;
   WMT::Buffer vertexBuffer{};
   uint64_t vertexBufferOffset = 0;
-  auto makeTransientBuffer = [&](const void* data, std::size_t len) -> WMT::Reference<WMT::Buffer> {
-    WMTBufferInfo bi{};
-    bi.length = len;
-    bi.options = WMTResourceStorageModeShared;
-    bi.memory.set((void *)data);
-    return ctx.device.newBuffer(bi);
-  };
-  if (!draw.userVertexData.empty()) {
-    transientVertexBuffer = makeTransientBuffer(draw.userVertexData.data(),
-                                                 draw.userVertexData.size());
-    vertexBuffer = transientVertexBuffer;
-    vertexBufferOffset = draw.vertexDecl.streams[0].offset;
-    vertexBytes = draw.userVertexData;
+	  auto makeTransientBuffer = [&](const void* data, std::size_t len) {
+	    return uploadTransientBuffer(data, len, 16);
+	  };
+	  if (!draw.userVertexData.empty()) {
+	    transientVertexBuffer = makeTransientBuffer(draw.userVertexData.data(),
+	                                                 draw.userVertexData.size());
+	    if (transientVertexBuffer) {
+	      vertexBuffer = transientVertexBuffer.buffer;
+	      vertexBufferOffset = transientVertexBuffer.offset + draw.vertexDecl.streams[0].offset;
+	      vertexBytes = draw.userVertexData;
+	    }
   } else if (draw.vertexDecl.streams[0].buffer) {
     if (auto* buffer = ctx.pool.findBuffer(draw.vertexDecl.streams[0].buffer->handle().value);
         buffer && buffer->buffer) {
@@ -463,14 +469,16 @@ void encodeDraw(EncodeContext& ctx,
       }
     } else {
       const auto bytes = draw.vertexDecl.streams[0].buffer->bytes();
-      if (!bytes.empty()) {
-        transientVertexBuffer = makeTransientBuffer(bytes.data(), bytes.size());
-        vertexBuffer = transientVertexBuffer;
-        vertexBufferOffset = draw.vertexDecl.streams[0].offset;
-        vertexBytes = bytes;
-      }
-    }
-  }
+	      if (!bytes.empty()) {
+	        transientVertexBuffer = makeTransientBuffer(bytes.data(), bytes.size());
+	        if (transientVertexBuffer) {
+	          vertexBuffer = transientVertexBuffer.buffer;
+	          vertexBufferOffset = transientVertexBuffer.offset + draw.vertexDecl.streams[0].offset;
+	          vertexBytes = bytes;
+	        }
+	      }
+	    }
+	  }
   if (traceEncode && !ffLayout && !vertexBytes.empty() && !draw.vertexDecl.elements.empty()) {
     auto readF32 = [&](std::size_t absoluteOffset) {
       float value = 0.0f;
@@ -557,17 +565,10 @@ void encodeDraw(EncodeContext& ctx,
                                   static_cast<f32>(std::max(1u, targetSurface->desc.height))};
       }
     }
-    {
-      WMTBufferInfo bi{}; bi.length = sizeof(DrawUniforms);
-      bi.options = WMTResourceStorageModeShared; bi.memory.set((void *)uniforms);
-      transientUniformBuffer = ctx.device.newBuffer(bi);
-    }
-    if (!transientUniformBuffer) {
-      return;
-    }
-    encoder.setVertexBuffer(transientUniformBuffer, 0, 0);
-    encoder.setFragmentBuffer(transientUniformBuffer, 0, 0);
-    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
+	    if (!uploadUniforms()) {
+	      return;
+	    }
+	    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
 
     const u64 ffTraceTex0 = debug::fixedFunctionTraceTextureHandle();
     const bool forceTrace =
@@ -825,17 +826,10 @@ void encodeDraw(EncodeContext& ctx,
     } else {
       uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
     }
-    {
-      WMTBufferInfo bi{}; bi.length = sizeof(DrawUniforms);
-      bi.options = WMTResourceStorageModeShared; bi.memory.set((void *)uniforms);
-      transientUniformBuffer = ctx.device.newBuffer(bi);
-    }
-    if (!transientUniformBuffer) {
-      return;
-    }
-    encoder.setVertexBuffer(transientUniformBuffer, 0, 0);
-    encoder.setFragmentBuffer(transientUniformBuffer, 0, 0);
-    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
+	    if (!uploadUniforms()) {
+	      return;
+	    }
+	    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
   }
   for (std::size_t stage = 0; stage < kMaxTextureStages; ++stage) {
     if (!draw.textures[stage].handle) {
@@ -957,15 +951,9 @@ void encodeDraw(EncodeContext& ctx,
         std::memcpy(expandedVertices.data() + static_cast<std::size_t>(i) * stride,
                     vertexBytes.data() + sourceOffset, stride);
       }
-      {
-        WMTBufferInfo bi{};
-        bi.length = expandedVertices.size();
-        bi.options = WMTResourceStorageModeShared;
-        bi.memory.set((void *)expandedVertices.data());
-        transientVertexBuffer = ctx.device.newBuffer(bi);
-      }
-      if (transientVertexBuffer) {
-        encoder.setVertexBuffer(transientVertexBuffer, 0, 1);
+	      transientVertexBuffer = makeTransientBuffer(expandedVertices.data(), expandedVertices.size());
+	      if (transientVertexBuffer) {
+	        encoder.setVertexBuffer(transientVertexBuffer.buffer, transientVertexBuffer.offset, 1);
         if (ffLayout && ffLayout->preTransformed && vertexCount >= 6 && draw.textures[0].handle != Handle{}) {
           const bool traceExpanded = [] {
             const char* env = std::getenv("DXMT_TRACE_FVF_EXPANDED");
@@ -1002,18 +990,11 @@ void encodeDraw(EncodeContext& ctx,
         vertexBytes = std::span<const u8>(expandedVertices.data(), expandedVertices.size());
         uniforms->vertexStreamOffset = 0;
         uniforms->vertexBaseIndex = 0;
-        {
-          WMTBufferInfo bi{}; bi.length = sizeof(DrawUniforms);
-          bi.options = WMTResourceStorageModeShared; bi.memory.set((void *)uniforms);
-          transientUniformBuffer = ctx.device.newBuffer(bi);
-        }
-        if (!transientUniformBuffer) {
-          return;
-        }
-        encoder.setVertexBuffer(transientUniformBuffer, 0, 0);
-        encoder.setFragmentBuffer(transientUniformBuffer, 0, 0);
-        expandedIndexedDraw = true;
-      }
+	        if (!uploadUniforms()) {
+	          return;
+	        }
+	        expandedIndexedDraw = true;
+	      }
     }
     if (debug::forceExpandIndexed()) {
       std::ostringstream out;
@@ -1026,27 +1007,27 @@ void encodeDraw(EncodeContext& ctx,
       encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
       return;
     }
-    WMT::Reference<WMT::Buffer> transientIndexBuffer;
-    WMT::Buffer indexBuffer{};
-    uint64_t indexBufferOffset = static_cast<uint64_t>(draw.startIndex) * indexElementSize(draw.indexType);
-    if (!draw.userIndexData.empty()) {
-      WMTBufferInfo bi{}; bi.length = draw.userIndexData.size();
-      bi.options = WMTResourceStorageModeShared;
-      bi.memory.set((void *)draw.userIndexData.data());
-      transientIndexBuffer = ctx.device.newBuffer(bi);
-      indexBuffer = transientIndexBuffer;
-    } else {
-      auto* buffer = ctx.pool.findBuffer(draw.indexBuffer.value);
-      if (buffer && buffer->buffer) {
-        indexBuffer = WMT::Buffer{buffer->buffer.handle};
-      } else if (buffer && !buffer->shadow.empty()) {
-        WMTBufferInfo bi{}; bi.length = buffer->shadow.size();
-        bi.options = WMTResourceStorageModeShared;
-        bi.memory.set((void *)buffer->shadow.data());
-        transientIndexBuffer = ctx.device.newBuffer(bi);
-        indexBuffer = transientIndexBuffer;
-      }
-    }
+	    CommandQueue::TransientBufferSlice transientIndexBuffer;
+	    WMT::Buffer indexBuffer{};
+	    uint64_t indexBufferOffset = static_cast<uint64_t>(draw.startIndex) * indexElementSize(draw.indexType);
+	    if (!draw.userIndexData.empty()) {
+	      transientIndexBuffer = makeTransientBuffer(draw.userIndexData.data(), draw.userIndexData.size());
+	      if (transientIndexBuffer) {
+	        indexBuffer = transientIndexBuffer.buffer;
+	        indexBufferOffset += transientIndexBuffer.offset;
+	      }
+	    } else {
+	      auto* buffer = ctx.pool.findBuffer(draw.indexBuffer.value);
+	      if (buffer && buffer->buffer) {
+	        indexBuffer = WMT::Buffer{buffer->buffer.handle};
+	      } else if (buffer && !buffer->shadow.empty()) {
+	        transientIndexBuffer = makeTransientBuffer(buffer->shadow.data(), buffer->shadow.size());
+	        if (transientIndexBuffer) {
+	          indexBuffer = transientIndexBuffer.buffer;
+	          indexBufferOffset += transientIndexBuffer.offset;
+	        }
+	      }
+	    }
     if (indexBuffer) {
       encoder.drawIndexedPrimitives(primitiveType, toIndexType(draw.indexType),
                                     (uint64_t)vertexCount, indexBuffer, indexBufferOffset,

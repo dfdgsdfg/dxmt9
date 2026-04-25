@@ -601,6 +601,226 @@ std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const Spirv
   return layout;
 }
 
+bool isConstantRegisterKind(D3DRegisterKind kind) {
+  return kind == D3DRegisterKind::ConstFloat ||
+         kind == D3DRegisterKind::ConstInt ||
+         kind == D3DRegisterKind::ConstBool;
+}
+
+struct ConstantUsage {
+  bool mutableConstants = false;
+  bool hasFloat = false;
+  bool hasInt = false;
+  bool hasBool = false;
+  u32 floatCount = 0;
+  u32 intCount = 0;
+  u32 boolCount = 0;
+};
+
+bool opcodeWritesFirstOperand(u32 opcode) {
+  switch (opcode) {
+    case kD3DSIO_DEF:
+    case kD3DSIO_DEFI:
+    case kD3DSIO_DEFB:
+    case kD3DSIO_MOV:
+    case kD3DSIO_ADD:
+    case kD3DSIO_SUB:
+    case kD3DSIO_MUL:
+    case kD3DSIO_MAD:
+    case kD3DSIO_MIN:
+    case kD3DSIO_MAX:
+    case kD3DSIO_SLT:
+    case kD3DSIO_SGE:
+    case kD3DSIO_EXP:
+    case kD3DSIO_LOG:
+    case kD3DSIO_EXPP:
+    case kD3DSIO_LOGP:
+    case kD3DSIO_SINCOS:
+    case kD3DSIO_M4x4:
+    case kD3DSIO_M4x3:
+    case kD3DSIO_M3x4:
+    case kD3DSIO_M3x3:
+    case kD3DSIO_M3x2:
+    case kD3DSIO_RCP:
+    case kD3DSIO_RSQ:
+    case kD3DSIO_FRC:
+    case kD3DSIO_LRP:
+    case kD3DSIO_DP3:
+    case kD3DSIO_DP4:
+    case kD3DSIO_CND:
+    case kD3DSIO_CMP:
+    case kD3DSIO_DP2ADD:
+    case kD3DSIO_POW:
+    case kD3DSIO_CRS:
+    case kD3DSIO_SGN:
+    case kD3DSIO_ABS:
+    case kD3DSIO_NRM:
+    case kD3DSIO_TEX:
+    case kD3DSIO_DSX:
+    case kD3DSIO_DSY:
+    case kD3DSIO_TEXLDD:
+    case kD3DSIO_TEXLDL:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void noteConstantUsage(ConstantUsage& usage, D3DRegisterKind kind, u32 index) {
+  switch (kind) {
+    case D3DRegisterKind::ConstFloat:
+      usage.hasFloat = true;
+      usage.floatCount = std::max(usage.floatCount, index + 1u);
+      break;
+    case D3DRegisterKind::ConstInt:
+      usage.hasInt = true;
+      usage.intCount = std::max(usage.intCount, index + 1u);
+      break;
+    case D3DRegisterKind::ConstBool:
+      usage.hasBool = true;
+      usage.boolCount = std::max(usage.boolCount, index + 1u);
+      break;
+    default:
+      break;
+  }
+}
+
+u32 matrixConstantRows(u32 opcode) {
+  switch (opcode) {
+    case kD3DSIO_M4x4:
+    case kD3DSIO_M3x4:
+      return 4;
+    case kD3DSIO_M4x3:
+    case kD3DSIO_M3x3:
+      return 3;
+    case kD3DSIO_M3x2:
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+ConstantUsage collectConstantUsage(const SpirvModule& module) {
+  ConstantUsage usage;
+  for (const auto& instruction : module.instructions) {
+    if (instruction.operands.empty()) {
+      continue;
+    }
+
+    if (opcodeWritesFirstOperand(instruction.opcode)) {
+      const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+      if (isConstantRegisterKind(dst.kind)) {
+        usage.mutableConstants = true;
+        noteConstantUsage(usage, dst.kind, dst.index);
+      }
+    }
+
+    size_t sourceBegin = 1;
+    switch (instruction.opcode) {
+      case kD3DSIO_IF:
+      case kD3DSIO_LOOP:
+      case kD3DSIO_REP:
+      case kD3DSIO_BREAKP:
+        sourceBegin = 0;
+        break;
+      case kD3DSIO_DEF:
+      case kD3DSIO_DEFI:
+      case kD3DSIO_DEFB:
+      case kD3DSIO_DCL:
+      case kD3DSIO_LABEL:
+      case kD3DSIO_CALL:
+        sourceBegin = instruction.operands.size();
+        break;
+      default:
+        break;
+    }
+
+    for (size_t i = sourceBegin; i < instruction.operands.size(); ++i) {
+      const auto src = decodeRegisterRef(instruction.operands[i], module.stage);
+      noteConstantUsage(usage, src.kind, src.index);
+    }
+
+    const u32 rows = matrixConstantRows(instruction.opcode);
+    if (rows > 1 && instruction.operands.size() > 2) {
+      const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
+      if (base.kind == D3DRegisterKind::ConstFloat) {
+        noteConstantUsage(usage, base.kind, base.index + rows - 1u);
+      }
+    }
+  }
+  return usage;
+}
+
+bool shaderUsesPredicateRegisters(const SpirvModule& module) {
+  for (const auto& instruction : module.instructions) {
+    if (instruction.predicated) {
+      return true;
+    }
+    if (instruction.operands.empty()) {
+      continue;
+    }
+
+    size_t sourceBegin = 1;
+    if (instruction.opcode == kD3DSIO_SETP) {
+      if (decodeRegisterRef(instruction.operands[0], module.stage).kind == D3DRegisterKind::Predicate) {
+        return true;
+      }
+    }
+    switch (instruction.opcode) {
+      case kD3DSIO_IF:
+      case kD3DSIO_LOOP:
+      case kD3DSIO_REP:
+      case kD3DSIO_BREAKP:
+        sourceBegin = 0;
+        break;
+      case kD3DSIO_DEF:
+      case kD3DSIO_DEFI:
+      case kD3DSIO_DEFB:
+      case kD3DSIO_DCL:
+      case kD3DSIO_LABEL:
+      case kD3DSIO_CALL:
+        sourceBegin = instruction.operands.size();
+        break;
+      default:
+        break;
+    }
+    for (size_t i = sourceBegin; i < instruction.operands.size(); ++i) {
+      if (decodeRegisterRef(instruction.operands[i], module.stage).kind == D3DRegisterKind::Predicate) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void emitConstantBindings(std::ostringstream& out, bool vertexStage, const ConstantUsage& usage) {
+  const char* floatMember = vertexStage ? "vsFloatConst" : "psFloatConst";
+  const char* intMember = vertexStage ? "vsIntConst" : "psIntConst";
+  const char* boolMember = vertexStage ? "vsBoolConst" : "psBoolConst";
+
+  if (!usage.mutableConstants) {
+    out << "  constant float4* cFloat = uniforms." << floatMember << ";\n";
+    out << "  constant int4* cInt = uniforms." << intMember << ";\n";
+    out << "  constant uint* cBool = uniforms." << boolMember << ";\n";
+    return;
+  }
+
+  out << "  float4 cFloat[" << std::max(1u, usage.floatCount) << "];\n";
+  out << "  int4 cInt[" << std::max(1u, usage.intCount) << "];\n";
+  out << "  uint cBool[" << std::max(1u, usage.boolCount) << "];\n";
+  out << "  for (uint i = 0; i < " << usage.floatCount << "; ++i) { cFloat[i] = uniforms." << floatMember << "[i]; }\n";
+  out << "  for (uint i = 0; i < " << usage.intCount << "; ++i) { cInt[i] = uniforms." << intMember << "[i]; }\n";
+  out << "  for (uint i = 0; i < " << usage.boolCount << "; ++i) { cBool[i] = uniforms." << boolMember << "[i]; }\n";
+}
+
+void emitPredicateBindings(std::ostringstream& out, bool usesPredicateRegisters) {
+  if (!usesPredicateRegisters) {
+    return;
+  }
+  out << "  bool p[" << kMaxBoolConstants << "];\n";
+  out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { p[i] = false; }\n";
+}
+
 std::string readPixelInputExpression(u32 token, const std::string& pixelInputs) {
   const u32 type = decodeRegisterType(token);
   const u32 index = decodeRegisterIndex(token);
@@ -876,17 +1096,12 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         }
       }
     }
-    out << "  int a0 = 0;\n";
-    out << "  int aL = 0;\n";
-    out << "  float4 r[32];\n";
-    out << "  float4 cFloat[" << kMaxVertexConstants << "];\n";
-    out << "  int4 cInt[" << kMaxIntegerConstants << "];\n";
-    out << "  uint cBool[" << kMaxBoolConstants << "];\n";
-    out << "  bool p[" << kMaxBoolConstants << "];\n";
-    out << "  for (uint i = 0; i < " << kMaxVertexConstants << "; ++i) { cFloat[i] = uniforms.vsFloatConst[i]; }\n";
-    out << "  for (uint i = 0; i < " << kMaxIntegerConstants << "; ++i) { cInt[i] = uniforms.vsIntConst[i]; }\n";
-    out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { cBool[i] = uniforms.vsBoolConst[i]; }\n";
-    out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { p[i] = false; }\n";
+	    out << "  int a0 = 0;\n";
+	    out << "  int aL = 0;\n";
+	    out << "  float4 r[32];\n";
+	    const auto constantUsage = collectConstantUsage(module);
+	    emitConstantBindings(out, true, constantUsage);
+	    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
     size_t callDepth = 0;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
@@ -1499,17 +1714,12 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   out << "  float4 outPosition = float4(0.0f);\n";
   out << "  float outFogFactor = 1.0f;\n";
   out << "  float outPointSize = 1.0f;\n";
-  out << "  int a0 = 0;\n";
-  out << "  int aL = 0;\n";
-  out << "  float4 r[32];\n";
-  out << "  float4 cFloat[" << kMaxPixelConstants << "];\n";
-  out << "  int4 cInt[" << kMaxIntegerConstants << "];\n";
-  out << "  uint cBool[" << kMaxBoolConstants << "];\n";
-  out << "  bool p[" << kMaxBoolConstants << "];\n";
-  out << "  for (uint i = 0; i < " << kMaxPixelConstants << "; ++i) { cFloat[i] = uniforms.psFloatConst[i]; }\n";
-  out << "  for (uint i = 0; i < " << kMaxIntegerConstants << "; ++i) { cInt[i] = uniforms.psIntConst[i]; }\n";
-  out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { cBool[i] = uniforms.psBoolConst[i]; }\n";
-  out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { p[i] = false; }\n";
+	  out << "  int a0 = 0;\n";
+	  out << "  int aL = 0;\n";
+	  out << "  float4 r[32];\n";
+	  const auto constantUsage = collectConstantUsage(module);
+	  emitConstantBindings(out, false, constantUsage);
+	  emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
     size_t callDepth = 0;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {

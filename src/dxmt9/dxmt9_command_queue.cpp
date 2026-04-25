@@ -3,11 +3,15 @@
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 
 namespace dxmt9 {
@@ -58,6 +62,26 @@ std::string resolveShaderCachePath() {
   char buf[4096]{};
   WMTGetShaderCachePath(buf, sizeof(buf));
   return std::string(buf);
+}
+
+constexpr std::size_t kTransientBufferInitialCapacity = 8ull << 20;
+
+std::size_t alignUp(std::size_t value, std::size_t alignment) {
+  if (alignment <= 1) {
+    return value;
+  }
+  return (value + alignment - 1) & ~(alignment - 1);
+}
+
+std::size_t nextPowerOfTwo(std::size_t value) {
+  if (value <= 1) {
+    return 1;
+  }
+  --value;
+  for (std::size_t shift = 1; shift < sizeof(std::size_t) * 8; shift <<= 1) {
+    value |= value >> shift;
+  }
+  return value + 1;
 }
 
 }  // namespace
@@ -142,7 +166,132 @@ WMT::Reference<WMT::CommandBuffer> CommandQueue::newCommandBuffer() {
   if (!queue_) {
     return {};
   }
-  return queue_.commandBuffer();
+  auto commandBuffer = queue_.commandBuffer();
+  if (commandBuffer) {
+    perf::countCommandBuffer();
+  }
+  return commandBuffer;
+}
+
+void CommandQueue::reclaimTransientBuffersUnlocked(std::uint64_t completedSeqId) {
+  while (!transientBufferAllocations_.empty() &&
+         transientBufferAllocations_.front().seqId <= completedSeqId) {
+    transientBufferAllocations_.pop_front();
+  }
+  if (transientBufferAllocations_.empty()) {
+    transientBufferCursor_ = 0;
+  }
+
+  while (!retainedTransientBuffers_.empty() &&
+         retainedTransientBuffers_.front().seqId <= completedSeqId) {
+    retainedTransientBuffers_.pop_front();
+  }
+}
+
+bool CommandQueue::ensureTransientBufferUnlocked(std::size_t minimumCapacity) {
+  if (transientBuffer_) {
+    return transientBufferCapacity_ >= minimumCapacity && transientBufferContents_ != nullptr;
+  }
+
+  const std::size_t capacity =
+      nextPowerOfTwo(std::max(kTransientBufferInitialCapacity, minimumCapacity));
+  WMTBufferInfo info{};
+  info.length = capacity;
+  info.options = WMTResourceStorageModeShared;
+  auto buffer = device_.newBuffer(info);
+  if (!buffer || !info.memory.ptr) {
+    return false;
+  }
+
+  perf::countMetalBuffer(capacity);
+  transientBuffer_ = std::move(buffer);
+  transientBufferContents_ = static_cast<std::byte*>(info.memory.ptr);
+  transientBufferCapacity_ = capacity;
+  transientBufferCursor_ = 0;
+  return true;
+}
+
+CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
+    std::span<const std::byte> bytes,
+    std::size_t alignment,
+    std::uint64_t seqId) {
+  if (!device_ || bytes.empty()) {
+    return {};
+  }
+
+  std::uint64_t completedSeqId = 0;
+  {
+    std::lock_guard lock(mutex_);
+    completedSeqId = completedSeqId_;
+  }
+
+  std::lock_guard lock(transientBufferMutex_);
+  reclaimTransientBuffersUnlocked(completedSeqId);
+
+  auto uploadDedicated = [&]() -> TransientBufferSlice {
+    WMTBufferInfo info{};
+    info.length = bytes.size();
+    info.options = WMTResourceStorageModeShared;
+    info.memory.set((void*)bytes.data());
+    auto buffer = device_.newBuffer(info);
+    if (!buffer) {
+      return {};
+    }
+    perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+    retainedTransientBuffers_.push_back(RetainedTransientBuffer{
+        .buffer = std::move(buffer),
+        .seqId = seqId,
+    });
+    return TransientBufferSlice{
+        .buffer = WMT::Buffer{retainedTransientBuffers_.back().buffer.handle},
+        .offset = 0,
+        .size = bytes.size(),
+    };
+  };
+
+  alignment = std::max<std::size_t>(alignment, 1);
+  const std::size_t alignedSize = alignUp(bytes.size(), alignment);
+  if (!ensureTransientBufferUnlocked(alignedSize)) {
+    return uploadDedicated();
+  }
+
+  auto canPlace = [&](std::size_t offset) {
+    if (offset + alignedSize > transientBufferCapacity_) {
+      return false;
+    }
+    for (const auto& allocation : transientBufferAllocations_) {
+      const std::size_t begin = allocation.offset;
+      const std::size_t end = allocation.offset + allocation.size;
+      const std::size_t newBegin = offset;
+      const std::size_t newEnd = offset + alignedSize;
+      if (!(newEnd <= begin || newBegin >= end)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  std::size_t offset = alignUp(transientBufferCursor_, alignment);
+  if (!canPlace(offset)) {
+    offset = 0;
+    if (!canPlace(offset)) {
+      return uploadDedicated();
+    }
+  }
+
+  std::memcpy(transientBufferContents_ + offset, bytes.data(), bytes.size());
+  transientBufferAllocations_.push_back(TransientBufferAllocation{
+      .offset = offset,
+      .size = alignedSize,
+      .seqId = seqId,
+  });
+  transientBufferCursor_ = offset + alignedSize;
+
+  return TransientBufferSlice{
+      .buffer = WMT::Buffer{transientBuffer_.handle},
+      .offset = offset,
+      .size = bytes.size(),
+  };
 }
 
 void CommandQueue::startThreads(std::function<void()> encodeLoop,
@@ -193,8 +342,15 @@ std::uint64_t seqIdForMark(CommandQueue& q, std::uint64_t seqId) {
   return seqId == 0 ? q.nextSeqId_ : seqId;
 }
 
-void markSlotResourcesUnlocked(CommandQueue& q, resources::Pool& pool,
-                                const core::ChunkSlot& slot) {
+bool splitPresentChunk() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_SPLIT_PRESENT_CHUNK");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
   for (const auto& command : slot.commands) {
     switch (command.kind) {
       case core::MetalCommandRecord::Kind::Draw:
@@ -229,6 +385,7 @@ void markSlotResourcesUnlocked(CommandQueue& q, resources::Pool& pool,
 }  // namespace
 
 void CommandQueue::submitDraw(const core::DrawDesc& desc) {
+  perf::countSubmitDraw();
   std::unique_lock lock(mutex_);
   // TLA+: WineCommit
   ensureWritingSlotUnlocked(*this, lock);
@@ -238,6 +395,7 @@ void CommandQueue::submitDraw(const core::DrawDesc& desc) {
 }
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
+  perf::countSubmitClear();
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeClearCommand(desc));
@@ -255,6 +413,7 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
 }
 
 void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
+  perf::countSubmitStretch();
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeStretchRectCommand(desc));
@@ -277,20 +436,35 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
 }
 
 void CommandQueue::submitPresent(const core::SwapDesc& desc) {
+  perf::countSubmitPresent();
   std::unique_lock lock(mutex_);
+  if (splitPresentChunk()) {
+	    queueLifecycle_.commitCurrentChunk(
+	        lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
+	          markSlotResourcesUnlocked(pool_, slot);
+	        });
+    ensureWritingSlotUnlocked(*this, lock);
+    queueLifecycle_.appendPresentCommand(desc, currentBackBuffer_);
+	    queueLifecycle_.commitCurrentChunk(
+	        lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
+	          markSlotResourcesUnlocked(pool_, slot);
+	        });
+    return;
+  }
   queueLifecycle_.presentAndCommit(
-      lock, kMaxInflight, desc, currentBackBuffer_,
-      [this](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(*this, pool_, slot);
-      });
+	      lock, kMaxInflight, desc, currentBackBuffer_,
+	      [this](const core::ChunkSlot& slot) {
+	        markSlotResourcesUnlocked(pool_, slot);
+	      });
 }
 
 void CommandQueue::submitFlush() {
+  perf::countSubmitFlush();
   std::unique_lock lock(mutex_);
   queueLifecycle_.flushAndWait(
-      lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(*this, pool_, slot);
-      });
+	      lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
+	        markSlotResourcesUnlocked(pool_, slot);
+	      });
 }
 
 core::HResult CommandQueue::waitForVBlank() {

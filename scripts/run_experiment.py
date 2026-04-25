@@ -6,6 +6,7 @@ import atexit
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -28,10 +29,18 @@ DEFAULT_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "
 DEFAULT_UNIX_BUILD_DIR = REPO_ROOT / "build-x86_64-builtin" / "src"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
 DEFAULT_TEMP_PREFIX_ROOT = REPO_ROOT / "tmp" / "prefixes"
+DEFAULT_MINGW_BIN_DIR = Path.home() / "llvm-mingw" / "x86_64-w64-mingw32" / "bin"
+DEFAULT_WOW64_MINGW_BIN_DIR = Path.home() / "llvm-mingw" / "i686-w64-mingw32" / "bin"
 
 SSIM_THRESHOLD = 0.90
 BLACK_LUMA_THRESHOLD = 8.0
 BLACK_VARIANCE_THRESHOLD = 16.0
+FRAME_PATTERNS = (
+    re.compile(r"OK: .*finished at frame\s+(\d+)", re.IGNORECASE),
+    re.compile(r"OK: rendered frame\s+(\d+)", re.IGNORECASE),
+)
+PERF_COUNTER_PATTERN = re.compile(r"^\[dxmt9-perf\]\s+(.*)$")
+PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s]+)")
 
 
 @dataclass
@@ -324,6 +333,55 @@ def stage_dxmt9(
     run_command(cmd, cwd=REPO_ROOT)
 
 
+def stage_mingw_runtime(prefix: Path, mingw_bin_dir: Path, wow64_mingw_bin_dir: Path) -> None:
+    targets = (
+        (mingw_bin_dir / "libc++.dll", prefix / "drive_c/windows/system32/libc++.dll"),
+        (mingw_bin_dir / "libunwind.dll", prefix / "drive_c/windows/system32/libunwind.dll"),
+        (wow64_mingw_bin_dir / "libc++.dll", prefix / "drive_c/windows/syswow64/libc++.dll"),
+        (wow64_mingw_bin_dir / "libunwind.dll", prefix / "drive_c/windows/syswow64/libunwind.dll"),
+    )
+    for source, target in targets:
+        if not source.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        print(f"installed {source} -> {target}")
+
+
+def extract_frame_count(log_path: Path) -> int | None:
+    if not log_path.exists():
+        return None
+    max_frame = 0
+    for line in log_path.read_text(errors="replace").splitlines():
+        for pattern in FRAME_PATTERNS:
+            match = pattern.search(line)
+            if match:
+                max_frame = max(max_frame, int(match.group(1)))
+    return max_frame or None
+
+
+def parse_perf_counter_value(raw: str) -> int | float | str:
+    try:
+        if "." in raw or "e" in raw.lower():
+            return float(raw)
+        return int(raw, 10)
+    except ValueError:
+        return raw
+
+
+def extract_dxmt9_perf_counters(log_path: Path) -> dict[str, int | float | str]:
+    if not log_path.exists():
+        return {}
+    counters: dict[str, int | float | str] = {}
+    for line in log_path.read_text(errors="replace").splitlines():
+        match = PERF_COUNTER_PATTERN.match(line)
+        if not match:
+            continue
+        for key, value in PERF_COUNTER_VALUE_PATTERN.findall(match.group(1)):
+            counters[key] = parse_perf_counter_value(value)
+    return counters
+
+
 def terminate_process_group(process: subprocess.Popen[str] | None, sig: signal.Signals) -> None:
     if process is None or process.poll() is not None:
         return
@@ -378,6 +436,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     capture_error: str | None = None
     window_info: dict[str, Any] | None = None
     timed_out = False
+    process_started_at: float | None = None
+    process_finished_at: float | None = None
     previous_signal_handlers: dict[signal.Signals, Any] = {}
 
     def cleanup_temp_prefix() -> None:
@@ -410,9 +470,18 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             else DEFAULT_RUNTIME_PE_BUILD_DIR
         )
         unix_build_dir = Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR
+        mingw_bin_dir = Path(args.mingw_bin_dir).expanduser().resolve() if args.mingw_bin_dir else DEFAULT_MINGW_BIN_DIR
+        wow64_mingw_bin_dir = (
+            Path(args.wow64_mingw_bin_dir).expanduser().resolve()
+            if args.wow64_mingw_bin_dir
+            else DEFAULT_WOW64_MINGW_BIN_DIR
+        )
 
-        if not app.skip_stage:
+        skip_stage = app.skip_stage or args.skip_stage
+        if not skip_stage:
             stage_dxmt9(prefix, wine_root, pe_build_dir, runtime_pe_build_dir, unix_build_dir)
+        elif args.stage_mingw_runtime:
+            stage_mingw_runtime(prefix, mingw_bin_dir, wow64_mingw_bin_dir)
 
         env = os.environ.copy()
         env.update(
@@ -429,7 +498,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "DXMT_EXPERIMENT_LOG": str(log_path),
                 "DXMT_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
                 "DXMT_CAPTURE_FRAME": str(app.capture_frame),
-                "DXMT_EXPERIMENT_SKIP_STAGE": "1" if app.skip_stage else "",
+                "DXMT_EXPERIMENT_SKIP_STAGE": "1" if skip_stage else "",
             }
         )
         if app.wine_dll_overrides:
@@ -438,6 +507,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             env["DXMT_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
 
         with log_path.open("wb") as log_fp:
+            process_started_at = time.monotonic()
             process = subprocess.Popen(
                 ["bash", str(app.launcher_path)],
                 cwd=REPO_ROOT,
@@ -472,7 +542,18 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                     terminate_process_group(process, signal.SIGKILL)
                     process.wait(timeout=5)
             finally:
+                process_finished_at = time.monotonic()
                 log_fp.flush()
+
+        performance: dict[str, Any] = {}
+        if process_started_at is not None and process_finished_at is not None:
+            elapsed = max(0.0, process_finished_at - process_started_at)
+            performance["process_elapsed_sec"] = elapsed
+            frame_count = extract_frame_count(log_path)
+            if frame_count is not None:
+                performance["frames"] = frame_count
+                if elapsed > 0.0:
+                    performance["fps"] = frame_count / elapsed
 
         result: dict[str, Any] = {
             "name": app.name,
@@ -487,7 +568,11 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             "window_info": window_info,
             "failures": [],
             "timed_out": timed_out,
+            "performance": performance,
         }
+        dxmt9_perf_counters = extract_dxmt9_perf_counters(log_path)
+        if dxmt9_perf_counters:
+            result["dxmt9_perf_counters"] = dxmt9_perf_counters
 
         if actual_dump_path.exists():
             Image.open(actual_dump_path).save(actual_path)
@@ -594,6 +679,14 @@ def main() -> int:
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
     run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
     run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal.so")
+    run_parser.add_argument("--skip-stage", action="store_true", help="Do not stage dxmt9 into the Wine runtime/prefix")
+    run_parser.add_argument(
+        "--stage-mingw-runtime",
+        action="store_true",
+        help="With --skip-stage, only copy libc++/libunwind into the temp prefix",
+    )
+    run_parser.add_argument("--mingw-bin-dir", help="x86_64 llvm-mingw bin dir for runtime DLL staging")
+    run_parser.add_argument("--wow64-mingw-bin-dir", help="i686 llvm-mingw bin dir for runtime DLL staging")
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
     run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")

@@ -2,8 +2,10 @@
 
 #include "dxmt9/assert.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_perf_counters.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <span>
 #include <vector>
@@ -72,6 +74,9 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
     info.length = desc.size;
     info.options = WMTResourceStorageModeShared;
     record.buffer = device.newBuffer(info);
+    if (record.buffer) {
+      perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+    }
     record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
   }
   buffers[handle.value] = std::move(record);
@@ -330,6 +335,7 @@ void Pool::uploadTextureLevel(WMT::Device device,
   if (!commandBuffer) {
     return;
   }
+  perf::countCommandBuffer();
   auto blit = commandBuffer.blitCommandEncoder();
   if (!blit) {
     return;
@@ -340,7 +346,11 @@ void Pool::uploadTextureLevel(WMT::Device device,
                                  origin, size, texture, 0, mipLevel, origin);
   blit.endEncoding();
   commandBuffer.commit();
+  const auto started = std::chrono::steady_clock::now();
   commandBuffer.waitUntilCompleted();
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  perf::countSyncWait(
+      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
 }
 
 void Pool::markBufferUse(core::Handle handle, u64 seqId) {
