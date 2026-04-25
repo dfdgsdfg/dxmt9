@@ -3,7 +3,7 @@
 
 #include "dxmt9_resource_initializer.hpp"
 
-#include "dxmt9/dxmt9_command_queue.hpp"
+#include "dxmt9_command_queue.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_queue.hpp"

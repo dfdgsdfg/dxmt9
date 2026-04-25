@@ -1,7 +1,7 @@
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_queue.hpp"
-#include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_device.hpp"
 
 #include <algorithm>
 #include <cstdlib>

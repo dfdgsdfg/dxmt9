@@ -7,8 +7,8 @@
 // hold a shared_ptr to it. The Device owns the WMT Metal device, the command
 // queue, and the backend implementation (built around WMT wrappers).
 
-#include "../../src/winemetal/Metal.hpp"
-#include "core.hpp"
+#include "../winemetal/Metal.hpp"
+#include "dxmt9/core.hpp"
 #include "dxmt9_command_queue.hpp"
 
 #include <cstdint>

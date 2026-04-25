@@ -1,10 +1,17 @@
 #pragma once
 
 #include "dxmt9/core.hpp"
-#include "dxmt9/dxmt9_device.hpp"
 
 #include <atomic>
 #include <memory>
+
+namespace dxmt9 {
+// Upper-runtime Device — defined in src/dxmt9/dxmt9_device.hpp (runtime
+// internal header, intentionally not in the public include tree). Only
+// callers that construct a unique_ptr<Device> need the full type and
+// include the header themselves.
+class Device;
+}  // namespace dxmt9
 
 namespace dxmt9::com {
 

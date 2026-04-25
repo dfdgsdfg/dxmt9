@@ -18,14 +18,14 @@
 // dxmt9::shaders::Archive's dtor) and does NOT run under an
 // @autoreleasepool itself (the encode chunk scopes its own).
 
-#include "../../src/winemetal/Metal.hpp"
-#include "../../src/dxmt9/dxmt9_backend_types.hpp"
-#include "../../src/dxmt9/dxmt9_queue.hpp"
-#include "../../src/dxmt9/dxmt9_hud.hpp"
-#include "../../src/dxmt9/dxmt9_pipeline_cache.hpp"
-#include "../../src/dxmt9/dxmt9_resource_pool.hpp"
-#include "../../src/dxmt9/dxmt9_ring_arena.hpp"
-#include "../../src/dxmt9/dxmt9_shader_archive.hpp"
+#include "../winemetal/Metal.hpp"
+#include "dxmt9_backend_types.hpp"
+#include "dxmt9_queue.hpp"
+#include "dxmt9_hud.hpp"
+#include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_resource_pool.hpp"
+#include "dxmt9_ring_arena.hpp"
+#include "dxmt9_shader_archive.hpp"
 
 #include <array>
 #include <condition_variable>
@@ -148,7 +148,7 @@ class CommandQueue {
   shaders::Archive& shaderArchive() noexcept { return shaderArchive_; }
 
   // ─── Mostly-internal: worker-thread bodies + lifecycle binding ─────
-  // Exposed so the services-ctor's own initialization can invoke them.
+  // Exposed so CommandQueue's constructor can wire its own runtime loops.
   // External callers should not use these.
   using EncodeChunkFn =
       std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(

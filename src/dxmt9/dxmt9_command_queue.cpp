@@ -1,5 +1,5 @@
-#include "dxmt9/dxmt9_command_queue.hpp"
-#include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_command_queue.hpp"
+#include "dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"

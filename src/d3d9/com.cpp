@@ -1,5 +1,11 @@
 #include "dxmt9/com.hpp"
 
+// Full dxmt9::Device definition — needed because this TU implements the
+// Direct3DCreate9(unique_ptr<dxmt9::Device>) overloads that destruct the
+// passed-in unique_ptr. Reaches into src/dxmt9/ via the d3d9 layer's
+// internal include dirs ('.', '..') configured in src/d3d9/meson.build.
+#include "dxmt9/dxmt9_device.hpp"
+
 namespace dxmt9::com {
 
 namespace {

@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace dxmt9 {
-class Device;     // forward decl — defined in dxmt9/dxmt9_device.hpp
+class Device;     // forward decl — defined in src/dxmt9/dxmt9_device.hpp
 class Presenter;  // forward decl — defined in src/dxmt9/dxmt9_presenter.hpp
 }
 
@@ -1026,7 +1026,7 @@ std::string formatName(Format format);
 std::string backendFormatName(BackendPixelFormat format);
 // makeBackendDevice and makeSimBackendDevice have been retired. The upper
 // runtime creation path is dxmt9::CreateDXMT9Device() (see
-// include/dxmt9/dxmt9_device.hpp). Downstream consumers receive the
+// src/dxmt9/dxmt9_device.hpp). Downstream consumers receive the
 // std::shared_ptr<BackendDevice> via dxmt9::Device::backend().
 
 constexpr u32 sampleCount(MultiSampleType type) noexcept {

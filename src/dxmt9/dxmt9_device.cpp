@@ -1,4 +1,4 @@
-#include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_device.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <memory>
