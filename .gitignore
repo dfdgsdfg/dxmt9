@@ -1,11 +1,7 @@
+# meson build directories — wildcard catches every variant
+# (build/, build-win32-x64/, build-x86_64-builtin/, build-win-test/, …).
 build/
-build-win32/
-build-win32-x64/
-build-x86_64/
-build-win32-x64-builtin/
-build-win32-x86-builtin/
-build-x86_64-builtin/
-build-x86_64-unix/
+build-*/
 builddir/
 meson-logs/
 meson-private/
