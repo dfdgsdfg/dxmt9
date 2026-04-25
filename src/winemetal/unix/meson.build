@@ -58,12 +58,23 @@ dxmt9_winemetal_unix_module = shared_library(
   files(
     'winemetal_unix.cpp',
     'winemetal_private_api.mm',
-  ),
+    '../../dxmt9/dxmt9_provider_shader_handlers.cpp',
+    # shader_service::compile + the source-generation pipeline + the
+    # provider service ABI exports. Compiled directly into winemetal.so
+    # so the __wine_unix_call shader handlers can dispatch without
+    # pulling the GPU runtime (encoders / pipeline cache / presenter)
+    # into the unix-side .so. The same .cpp files also compile into
+    # dxmt9_runtime_lib for the native dylib path — separate binaries,
+    # no symbol collision.
+    '../../dxmt9/dxmt9_shader_service.cpp',
+    '../../dxmt9/dxmt9_shader_service_exports.cpp',
+  ) + dxmt9_shader_pipeline_srcs,
   name_prefix: '',
   name_suffix: 'so',
   include_directories: [
     dxmt9_inc,
     dxmt9_winemetal_internal_inc,
+    dxmt9_runtime_internal_inc,
     include_directories('../..'),
   ],
   dependencies: [

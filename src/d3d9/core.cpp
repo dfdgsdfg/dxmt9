@@ -1594,18 +1594,8 @@ SwapDesc makeSwapDesc(const PresentParameters& params) {
   return desc;
 }
 
-u64 hashBytes(std::span<const std::byte> bytes) {
-  u64 hash = kFnvOffset;
-  for (const auto byte : bytes) {
-    hash ^= static_cast<u64>(std::to_integer<unsigned char>(byte));
-    hash *= kFnvPrime;
-  }
-  return hash;
-}
-
-u64 hashString(std::string_view text) {
-  return hashBytes(std::as_bytes(std::span<const char>(text.data(), text.size())));
-}
+// hashBytes / hashString moved to src/util/util_hash.cpp so the ELF
+// winemetal.so unix module can link them without pulling d3d9 in.
 
 DeviceCaps makeDefaultCaps(const BackendLimits& limits) {
   constexpr u32 kCaps = 0x00000000u;

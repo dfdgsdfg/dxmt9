@@ -27,14 +27,22 @@ dxmt9_native_lib = shared_library(
     dxmt9_winemetal_internal_inc,
     include_directories('..'),
   ],
+  # link_whole the runtime + frontend libs — anchor srcs (dxmt9.cpp +
+  # provider_public_api.cpp) only reference a handful of provider exports,
+  # so a normal link would prune the runtime objects (CommandQueue,
+  # Presenter, CreateDXMT9Device, …). The test binaries link against the
+  # dylib for those symbols, so we force-load the static libs to keep
+  # them visible.
+  link_whole: [
+    dxmt9_frontend_bridge_lib,
+    dxmt9_frontend_core_lib,
+    dxmt9_frontend_provider_lib,
+    dxmt9_runtime_lib,
+    dxmt9_shader_service_core_lib,
+    dxmt9_provider_service_abi_lib,
+  ],
   dependencies: dxmt9_deps + [
     dxmt9_util_dep,
-    dxmt9_frontend_bridge_dep,
-    dxmt9_frontend_core_dep,
-    dxmt9_frontend_provider_dep,
-    dxmt9_runtime_dep,
-    dxmt9_shader_service_core_dep,
-    dxmt9_provider_service_abi_dep,
     dxmt9_winemetal_dep,
   ],
   install: false,
