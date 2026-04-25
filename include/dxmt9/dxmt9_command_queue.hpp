@@ -44,7 +44,6 @@ class CommandQueue;
 namespace encoders { struct EncodeContext; }
 namespace pipeline { class Cache; }
 namespace resources { struct Pool; class Initializer; }
-namespace shaders { class Archive; }
 
 // Chunk-ring size + in-flight cap. Match upstream dxmt's kCommandChunkCount.
 inline constexpr size_t kCommandChunkCount = 32;
@@ -54,17 +53,13 @@ class CommandQueue {
  public:
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
   // constructs the ResourceInitializer, binds queueLifecycle_ to own
-  // state, and spawns the three worker threads. The pool/cache/archive/
-  // upper-device/limits references are snapshotted as raw pointers —
-  // DeviceImpl guarantees they outlive the queue. A null device or
-  // queue-allocation failure leaves the object inert (valid() == false,
-  // threadsStarted_ == false) but still safely destructible.
-  CommandQueue(WMT::Device device,
-               resources::Pool& pool,
-               pipeline::Cache& cache,
-               shaders::Archive& archive,
-               Device& upperDevice,
-               const core::BackendLimits& limits);
+  // state, and spawns the three worker threads. Pool / pipeline cache /
+  // shader archive / limits are read through the upper Device at
+  // construction and snapshotted internally — DeviceImpl guarantees
+  // they outlive the queue. A null device or queue-allocation failure
+  // leaves the object inert (valid() == false, threadsStarted_ ==
+  // false) but still safely destructible.
+  CommandQueue(WMT::Device device, Device& upperDevice);
 
   // Minimal ctor for StubDxmt9Device's null-device test path. Allocates
   // only the WMT::CommandQueue handle when the device is non-null; no
@@ -209,7 +204,8 @@ class CommandQueue {
   const core::BackendLimits* limits_ = nullptr;
   resources::Pool* pool_ = nullptr;
   pipeline::Cache* cache_ = nullptr;
-  shaders::Archive* archive_ = nullptr;
+  WMT::Reference<WMT::BinaryArchive>* shaderArchive_ = nullptr;
+  const std::string* shaderArchivePath_ = nullptr;
   Device* upperDevice_ = nullptr;
 
   // Queue-owned runtime node state: per-frame allocators + the

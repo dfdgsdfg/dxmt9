@@ -7,7 +7,6 @@
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
-#include "dxmt9_shader_archive.hpp"
 
 #include <utility>
 
@@ -54,19 +53,15 @@ MetalCommandRecord makeColorFillCommand(const core::ColorFillDesc& desc) {
 
 }  // namespace
 
-CommandQueue::CommandQueue(WMT::Device device,
-                             resources::Pool& pool,
-                             pipeline::Cache& cache,
-                             shaders::Archive& archive,
-                             Device& upperDevice,
-                             const core::BackendLimits& limits)
+CommandQueue::CommandQueue(WMT::Device device, Device& upperDevice)
     : device_(device),
-      limits_(&limits),
-      pool_(&pool),
-      cache_(&cache),
-      archive_(&archive),
+      limits_(&upperDevice.limits()),
+      pool_(upperDevice.pool()),
+      cache_(upperDevice.pipelineCache()),
+      shaderArchive_(upperDevice.shaderArchive()),
+      shaderArchivePath_(upperDevice.shaderArchivePath()),
       upperDevice_(&upperDevice) {
-  if (!device_) {
+  if (!device_ || !pool_ || !cache_) {
     return;
   }
   queue_ = device_.newCommandQueue(0);
@@ -75,7 +70,7 @@ CommandQueue::CommandQueue(WMT::Device device,
   }
   queueView_ = WMT::CommandQueue{queue_.handle};
 
-  initializer_ = std::make_unique<resources::Initializer>(*this, pool, device_);
+  initializer_ = std::make_unique<resources::Initializer>(*this, *pool_, device_);
 
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat
   // hook. CommandQueue is its own lifecycle root.
@@ -107,7 +102,7 @@ CommandQueue::CommandQueue(WMT::Device device,
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
   return encoders::EncodeContext{
       device_, *limits_, *pool_, *cache_, allocators_,
-      &archive_->reference(), &archive_->path(),
+      shaderArchive_, shaderArchivePath_,
       *this, upperDevice_,
   };
 }

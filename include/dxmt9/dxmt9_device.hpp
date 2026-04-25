@@ -18,6 +18,9 @@
 
 namespace dxmt9 {
 
+namespace resources { struct Pool; }
+namespace pipeline { class Cache; }
+
 class Device {
  public:
   virtual ~Device() = default;
@@ -50,6 +53,13 @@ class Device {
   // paths (StubDxmt9Device) or when the archive was not initialized.
   virtual WMT::Reference<WMT::BinaryArchive>* shaderArchive() { return nullptr; }
   virtual const std::string* shaderArchivePath() { return nullptr; }
+
+  // Resource pool + pipeline cache accessors. CommandQueue reads these
+  // through the upper Device at construction so its ctor signature
+  // stays narrow. Default to nullptr for test paths (StubDxmt9Device)
+  // that don't construct a real CommandQueue.
+  virtual resources::Pool* pool() { return nullptr; }
+  virtual pipeline::Cache* pipelineCache() { return nullptr; }
 
   // Device-level observers and frame-latency governor. Previously on
   // BackendDevice; migrated up so the backend is a pure Renderer.

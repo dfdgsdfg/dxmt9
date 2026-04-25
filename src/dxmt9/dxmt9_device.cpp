@@ -45,7 +45,7 @@ class DeviceImpl final : public Device {
         shaderArchive_(wmt_device_, resolveShaderCachePath()),
         pool_{},
         pipelineCache_{},
-        queue_(wmt_device_, pool_, pipelineCache_, shaderArchive_, *this, limits_) {}
+        queue_(wmt_device_, *this) {}
 
   // queue_ destructs first (last-declared) — joins worker threads and
   // releases its own allocators/initializer while pool_ and
@@ -62,6 +62,8 @@ class DeviceImpl final : public Device {
   std::shared_ptr<core::BackendDevice> backend() override { return nullptr; }
   WMT::Reference<WMT::BinaryArchive>* shaderArchive() override { return &shaderArchive_.reference(); }
   const std::string* shaderArchivePath() override { return &shaderArchive_.path(); }
+  resources::Pool* pool() override { return &pool_; }
+  pipeline::Cache* pipelineCache() override { return &pipelineCache_; }
 
   void setDeviceLostObserver(core::BackendDevice::DeviceLostObserver observer) override {
     deviceLostObserver_ = std::move(observer);
