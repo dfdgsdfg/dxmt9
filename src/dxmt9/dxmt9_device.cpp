@@ -33,11 +33,16 @@ class DeviceImpl final : public Device {
       : wmt_device_(desc.device),
         metalVersion_(selectMetalVersion(wmt_device_)),
         limits_(finalizeLimits(desc.limits, wmt_device_)),
-        queue_(wmt_device_, *this) {}
+        queue_(wmt_device_) {
+    // attachUpperDevice copies limits_ INTO queue_ so the queue's
+    // makeEncodeContext sees the caller's customized BackendLimits
+    // (not just the device-cap defaults the queue computed in its ctor).
+    queue_.attachUpperDevice(*this);
+  }
 
   // queue_ destructs first (last-declared) — joins worker threads,
   // then queue-owned pool/cache/archive destruct in member-reverse
-  // order (archive persists to disk last). No explicit body needed.
+  // order (archive persists to disk last).
   ~DeviceImpl() override = default;
 
   WMT::Device wmtDevice() override { return wmt_device_; }

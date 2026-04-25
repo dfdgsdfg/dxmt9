@@ -59,12 +59,19 @@ std::string resolveShaderCachePath() {
   WMTGetShaderCachePath(buf, sizeof(buf));
   return std::string(buf);
 }
+
+core::BackendLimits computeLimits(WMT::Device device) {
+  core::BackendLimits limits{};
+  if (device) {
+    limits.supportsDepth24Stencil8 = device.supportsDepth24Stencil8();
+  }
+  return limits;
+}
 }  // namespace
 
-CommandQueue::CommandQueue(WMT::Device device, Device& upperDevice)
+CommandQueue::CommandQueue(WMT::Device device)
     : device_(device),
-      limits_(&upperDevice.limits()),
-      upperDevice_(&upperDevice),
+      limits_(computeLimits(device)),
       shaderArchive_(device, resolveShaderCachePath()) {
   if (!device_) {
     return;
@@ -104,22 +111,17 @@ CommandQueue::CommandQueue(WMT::Device device, Device& upperDevice)
       [this] { runCompletionWatcherLoop(); });
 }
 
+void CommandQueue::attachUpperDevice(Device& upperDevice) noexcept {
+  upperDevice_ = &upperDevice;
+  limits_ = upperDevice.limits();
+}
+
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
   return encoders::EncodeContext{
-      device_, *limits_, pool_, pipelineCache_, allocators_,
+      device_, limits_, pool_, pipelineCache_, allocators_,
       &shaderArchive_.reference(), &shaderArchive_.path(),
       *this, upperDevice_,
   };
-}
-
-CommandQueue::CommandQueue(WMT::Device device) : device_(device) {
-  if (!device_) {
-    return;
-  }
-  queue_ = device_.newCommandQueue(0);
-  if (queue_) {
-    queueView_ = WMT::CommandQueue{queue_.handle};
-  }
 }
 
 CommandQueue::~CommandQueue() {
@@ -319,7 +321,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
 }
 
 bool CommandQueue::readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) {
-  return encoders::readbackSurface(*this, pool_, device_, *limits_, desc, pixels);
+  return encoders::readbackSurface(*this, pool_, device_, limits_, desc, pixels);
 }
 
 void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted) {

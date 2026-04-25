@@ -54,19 +54,24 @@ inline constexpr size_t kMaxInflight = 3;
 class CommandQueue {
  public:
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
-  // constructs the ResourceInitializer, binds queueLifecycle_ to own
-  // state, and spawns the three worker threads. Pool / pipeline cache /
-  // shader archive / limits are read through the upper Device at
-  // construction and snapshotted internally — DeviceImpl guarantees
-  // they outlive the queue. A null device or queue-allocation failure
-  // leaves the object inert (valid() == false, threadsStarted_ ==
-  // false) but still safely destructible.
-  CommandQueue(WMT::Device device, Device& upperDevice);
-
-  // Minimal ctor for StubDxmt9Device's null-device test path. Allocates
-  // only the WMT::CommandQueue handle when the device is non-null; no
-  // threads, no initializer, no lifecycle binding.
+  // constructs the queue-owned pool / pipeline cache / shader archive /
+  // ResourceInitializer, binds queueLifecycle_ to own state, and spawns
+  // the three worker threads. Limits are computed internally from the
+  // device's caps. A null device or queue-allocation failure leaves the
+  // object inert (valid() == false, threadsStarted_ == false) but
+  // still safely destructible.
+  //
+  // The notify back-channel (presentation status / device lost) is
+  // wired post-construction via attachUpperDevice — DeviceImpl calls it
+  // from its own ctor body. The queue runs without an upper-Device
+  // attachment until then; encode threads block on writeCv_ until the
+  // first submit, which only happens after CreateDXMT9Device returns.
   explicit CommandQueue(WMT::Device device);
+
+  // Wire the notify back-channel + override device-derived limits with
+  // the caller's configured BackendLimits (DeviceImpl threads
+  // desc.limits this way). Called once from DeviceImpl's ctor body.
+  void attachUpperDevice(Device& upperDevice) noexcept;
 
   // Joins worker threads (if started). Archive persistence is not a
   // queue responsibility — it runs from shaders::Archive's dtor.
@@ -207,24 +212,25 @@ class CommandQueue {
   std::thread completionThread_{};
   bool threadsStarted_ = false;
 
-  // Snapshotted from upper Device at construction (small, immutable).
-  // upperDevice_ is the back-channel for notify callbacks invoked from
-  // the encode thread (presentation status, device lost).
-  const core::BackendLimits* limits_ = nullptr;
+  // Notify back-channel; nullable until DeviceImpl calls
+  // attachUpperDevice() from its ctor body.
   Device* upperDevice_ = nullptr;
 
-  // Queue-owned runtime node state. Pool / cache / archive live HERE
-  // (matches upstream dxmt's CommandQueue), not on DeviceImpl. Order
-  // matters: pool_ must be constructed before initializer_ (which
-  // borrows it). All queue-owned state outlives the worker threads
-  // because threads are joined first (declaration-order: encodeThread_
-  // before pool_ — but stop() drains threads before the dtor reaches
-  // the pool members).
+  // Queue-owned runtime node state. Pool / cache / archive / limits
+  // all live HERE (matches upstream dxmt's CommandQueue). Order matters:
+  // pool_ must be constructed before initializer_ (which borrows it).
+  // All queue-owned state outlives the worker threads because threads
+  // are joined first via stopThreads() in ~CommandQueue.
+  core::BackendLimits limits_{};
   scratch::FrameAllocators allocators_{};
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
   shaders::Archive shaderArchive_{};
   std::unique_ptr<resources::Initializer> initializer_;
+
+ public:
+  // Limits accessor — value member, not a borrowed pointer.
+  const core::BackendLimits& limits() const noexcept { return limits_; }
 };
 
 }  // namespace dxmt9
