@@ -60,18 +60,11 @@ std::string resolveShaderCachePath() {
   return std::string(buf);
 }
 
-core::BackendLimits computeLimits(WMT::Device device) {
-  core::BackendLimits limits{};
-  if (device) {
-    limits.supportsDepth24Stencil8 = device.supportsDepth24Stencil8();
-  }
-  return limits;
-}
 }  // namespace
 
-CommandQueue::CommandQueue(WMT::Device device)
+CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
     : device_(device),
-      limits_(computeLimits(device)),
+      limits_(limits),
       shaderArchive_(device, resolveShaderCachePath()) {
   if (!device_) {
     return;
@@ -111,16 +104,11 @@ CommandQueue::CommandQueue(WMT::Device device)
       [this] { runCompletionWatcherLoop(); });
 }
 
-void CommandQueue::attachUpperDevice(Device& upperDevice) noexcept {
-  upperDevice_ = &upperDevice;
-  limits_ = upperDevice.limits();
-}
-
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
   return encoders::EncodeContext{
       device_, limits_, pool_, pipelineCache_, allocators_,
       &shaderArchive_.reference(), &shaderArchive_.path(),
-      *this, upperDevice_,
+      *this,
   };
 }
 

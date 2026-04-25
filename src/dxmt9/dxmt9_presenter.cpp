@@ -139,7 +139,6 @@ std::uint64_t forcedPresentTextureHandle() {
 
 bool encodePresent(WMT::CommandBuffer& commandBuffer,
                    resources::Pool& pool,
-                   Device* upperDevice,
                    const core::SwapDesc& present,
                    core::Handle sourceHandle,
                    std::uint64_t seqId) {
@@ -215,16 +214,16 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   params.height = present.height;
   params.displaySyncEnabled = present.displaySyncEnabled;
   params.contentsScale = 1.0;
-  params.maxDrawableCount = upperDevice ? upperDevice->maxFrameLatency() : 3u;
+  params.maxDrawableCount = present.maxFrameLatency;
   params.opaqueAlpha = opaqueAlpha;
   params.seqId = seqId;
 
   const auto presentResult = presenter->encodeCommands(commandBuffer, params);
   if (!presentResult.acquired) {
-    if (upperDevice) upperDevice->notifyPresentationStatus(true);
+    if (present.notifyPresentationStatus) present.notifyPresentationStatus(true);
     return false;
   }
-  if (upperDevice) upperDevice->notifyPresentationStatus(false);
+  if (present.notifyPresentationStatus) present.notifyPresentationStatus(false);
   return presentResult.encoded;
 }
 

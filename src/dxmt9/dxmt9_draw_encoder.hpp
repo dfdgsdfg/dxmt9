@@ -38,10 +38,6 @@ struct EncodeContext {
   WMT::Reference<WMT::BinaryArchive>* shaderArchive;
   const std::string* shaderArchivePath;
   CommandQueue& queue;
-  // Owner of the observer callbacks triggered by encodePresent (notify
-  // device-lost + presentation-status). Points to DeviceImpl in production
-  // — nullable for test contexts.
-  Device* upperDevice = nullptr;
 };
 
 // Sampler factory helpers used by the draw encoder. Previously

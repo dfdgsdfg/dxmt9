@@ -1182,7 +1182,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         flushPendingClear();
         flushRender();
         flushBlit();
-        if (dxmt9::encodePresent(commandBuffer, ctx.pool, ctx.upperDevice,
+        if (dxmt9::encodePresent(commandBuffer, ctx.pool,
                                   command.present, command.presentSource, slot.seqId)) {
           ctx.queue.backBufferDiscardAfterPresent_ = true;
         }

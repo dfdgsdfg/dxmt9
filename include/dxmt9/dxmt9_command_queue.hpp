@@ -56,22 +56,22 @@ class CommandQueue {
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
   // constructs the queue-owned pool / pipeline cache / shader archive /
   // ResourceInitializer, binds queueLifecycle_ to own state, and spawns
-  // the three worker threads. Limits are computed internally from the
-  // device's caps. A null device or queue-allocation failure leaves the
-  // object inert (valid() == false, threadsStarted_ == false) but
-  // still safely destructible.
+  // the three worker threads. `limits` is the caller's final BackendLimits
+  // (DeviceImpl finalizes desc.limits against device caps before passing
+  // it in) and is stored verbatim — no post-construction back-channel.
+  // A null device or queue-allocation failure leaves the object inert
+  // (valid() == false, threadsStarted_ == false) but still safely
+  // destructible.
   //
-  // The notify back-channel (presentation status / device lost) is
-  // wired post-construction via attachUpperDevice — DeviceImpl calls it
-  // from its own ctor body. The queue runs without an upper-Device
-  // attachment until then; encode threads block on writeCv_ until the
-  // first submit, which only happens after CreateDXMT9Device returns.
-  explicit CommandQueue(WMT::Device device);
-
-  // Wire the notify back-channel + override device-derived limits with
-  // the caller's configured BackendLimits (DeviceImpl threads
-  // desc.limits this way). Called once from DeviceImpl's ctor body.
-  void attachUpperDevice(Device& upperDevice) noexcept;
+  // Presentation back-channels (maxFrameLatency + notifyPresentationStatus)
+  // ride on each core::SwapDesc — DeviceImpl::present() fills them per
+  // submission. The queue holds no Device* pointer.
+  //
+  // dxmt9-specific divergence from upstream's single-arg ctor: dxmt9's
+  // encoders consume BackendLimits in the encode path (depth24/sampleN
+  // policy, max texture size, etc.), so the queue snapshots it at
+  // construction. Upstream dxmt has no BackendLimits.
+  CommandQueue(WMT::Device device, core::BackendLimits limits);
 
   // Joins worker threads (if started). Archive persistence is not a
   // queue responsibility — it runs from shaders::Archive's dtor.
@@ -199,8 +199,9 @@ class CommandQueue {
 
  private:
   // Assemble the EncodeContext handed to encoders::encodeChunk. Uses
-  // queue-owned (device_, allocators_, *this) + borrowed services
-  // (cache_, archive_, upperDevice_, limits_, pool_).
+  // queue-owned state only (device_, limits_, allocators_, pool_,
+  // pipelineCache_, shaderArchive_, *this). No upper-Device pointer —
+  // presentation back-channels ride on SwapDesc per submission.
   encoders::EncodeContext makeEncodeContext();
 
   WMT::Device device_{};
@@ -211,10 +212,6 @@ class CommandQueue {
   std::thread finishThread_{};
   std::thread completionThread_{};
   bool threadsStarted_ = false;
-
-  // Notify back-channel; nullable until DeviceImpl calls
-  // attachUpperDevice() from its ctor body.
-  Device* upperDevice_ = nullptr;
 
   // Queue-owned runtime node state. Pool / cache / archive / limits
   // all live HERE (matches upstream dxmt's CommandQueue). Order matters:

@@ -658,6 +658,12 @@ struct SwapDesc {
   // Owned by the SwapChain this desc was built from; the backend uses this
   // to target the per-window Presenter without an hwnd-keyed registry.
   dxmt9::Presenter* presenter = nullptr;
+  // Per-present back-channels — DeviceImpl::present() fills these from its
+  // own observers + maxFrameLatency_ before forwarding to the queue. Lets
+  // the queue's encode thread drive presentation policy without holding a
+  // Device* pointer (matches upstream's queue self-containment).
+  u32 maxFrameLatency = 3;
+  std::function<void(bool)> notifyPresentationStatus{};
 };
 
 struct PresentParameters {

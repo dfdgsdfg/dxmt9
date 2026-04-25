@@ -33,12 +33,7 @@ class DeviceImpl final : public Device {
       : wmt_device_(desc.device),
         metalVersion_(selectMetalVersion(wmt_device_)),
         limits_(finalizeLimits(desc.limits, wmt_device_)),
-        queue_(wmt_device_) {
-    // attachUpperDevice copies limits_ INTO queue_ so the queue's
-    // makeEncodeContext sees the caller's customized BackendLimits
-    // (not just the device-cap defaults the queue computed in its ctor).
-    queue_.attachUpperDevice(*this);
-  }
+        queue_(wmt_device_, limits_) {}
 
   // queue_ destructs first (last-declared) — joins worker threads,
   // then queue-owned pool/cache/archive destruct in member-reverse
@@ -135,7 +130,18 @@ class DeviceImpl final : public Device {
   void submitColorFill(const core::ColorFillDesc& desc) override {
     queue_.submitColorFill(desc);
   }
-  void present(const core::SwapDesc& desc) override { queue_.submitPresent(desc); }
+  void present(const core::SwapDesc& desc) override {
+    // Inject the per-present back-channels the queue's encode thread
+    // would otherwise need a Device* to reach. Lifetime is safe: queue_
+    // is the last-declared member, so its dtor (which joins the encode
+    // thread) runs before `this` is destroyed.
+    core::SwapDesc augmented = desc;
+    augmented.maxFrameLatency = maxFrameLatency_;
+    augmented.notifyPresentationStatus = [this](bool occluded) {
+      notifyPresentationStatus(occluded);
+    };
+    queue_.submitPresent(augmented);
+  }
   void flush() override { queue_.submitFlush(); }
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {

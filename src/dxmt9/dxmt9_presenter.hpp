@@ -79,8 +79,9 @@ class Presenter {
 
 // Orchestrates a present: resolves the source surface via `pool`, applies
 // the DXMT_FORCE_PRESENT_TEXTURE_HANDLE override (debug-only), builds
-// EncodeParams from `present`, calls Presenter::encodeCommands, and fires
-// upperDevice->notifyPresentationStatus based on the nextDrawable outcome.
+// EncodeParams from `present` (using present.maxFrameLatency for the
+// drawable cap), calls Presenter::encodeCommands, and fires
+// present.notifyPresentationStatus based on the nextDrawable outcome.
 // Returns true if the presenter drew (caller may then set a
 // discard-after-present flag).
 //
@@ -88,7 +89,6 @@ class Presenter {
 // lives with the Presenter rather than the Renderer.
 bool encodePresent(WMT::CommandBuffer& commandBuffer,
                    resources::Pool& pool,
-                   Device* upperDevice,
                    const core::SwapDesc& present,
                    core::Handle sourceHandle,
                    std::uint64_t seqId);
