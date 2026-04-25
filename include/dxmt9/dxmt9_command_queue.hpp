@@ -1,22 +1,22 @@
 #pragma once
 
 // Upper-runtime CommandQueue — the execution service and a self-hosting
-// runtime node. Owns the WMT::CommandQueue handle, the chunk ring state,
-// the three worker threads (encode / finish / completion), the per-frame
-// scratch allocators, the queue-owned ResourceInitializer for deferred
-// texture uploads, the queueLifecycle_ binding, and the encode-context
-// assembly path that feeds encoders::encodeChunk.
+// runtime node. Owns the WMT::CommandQueue handle, the chunk ring
+// state, the three worker threads (encode / finish / completion), the
+// per-frame scratch allocators, the queue-owned ResourceInitializer
+// for deferred texture uploads, the queueLifecycle_ binding, the
+// queue-owned transfer paths (mapBuffer + readbackSurface), and the
+// encode-context assembly path that feeds encoders::encodeChunk.
 //
-// Dependencies are passed in via a CommandQueueDeps bundle at
-// construction: just the external services CommandQueue reads through
-// (pool, cache, archive, upper Device, limits). The queue constructs
-// the EncodeContext per chunk from its own internal state plus these
-// borrowed refs.
+// External services (pool, cache, archive, upper Device, limits) are
+// snapshotted at construction time as raw pointers; CommandQueue reads
+// through them on hot paths without virtual dispatch. DeviceImpl
+// guarantees lifetime via member declaration order — queue_ is
+// declared last and destructs first.
 //
 // CommandQueue does NOT persist the shader archive (that's
-// dxmt9::shaders::Archive's dtor), does NOT expose mapBuffer/readback
-// (those belong on the Device orchestration surface), and does NOT run
-// under an @autoreleasepool itself (the encode chunk wraps its own).
+// dxmt9::shaders::Archive's dtor) and does NOT run under an
+// @autoreleasepool itself (the encode chunk scopes its own).
 
 #include "../../src/winemetal/Metal.hpp"
 #include "../../src/dxmt9/dxmt9_backend_types.hpp"
@@ -40,7 +40,6 @@ namespace dxmt9 {
 
 class Device;
 class CommandQueue;
-class RuntimeServices;
 
 namespace encoders { struct EncodeContext; }
 namespace pipeline { class Cache; }
@@ -55,13 +54,17 @@ class CommandQueue {
  public:
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
   // constructs the ResourceInitializer, binds queueLifecycle_ to own
-  // state, and spawns the three worker threads. Takes a narrow
-  // RuntimeServices facade owned by DeviceImpl — CommandQueue reads
-  // pool/cache/archive/upper-device through it and stashes pointers
-  // internally. A null device or queue-allocation failure leaves the
-  // object inert (valid() == false, threadsStarted_ == false) but
-  // still safely destructible.
-  CommandQueue(WMT::Device device, RuntimeServices& services);
+  // state, and spawns the three worker threads. The pool/cache/archive/
+  // upper-device/limits references are snapshotted as raw pointers —
+  // DeviceImpl guarantees they outlive the queue. A null device or
+  // queue-allocation failure leaves the object inert (valid() == false,
+  // threadsStarted_ == false) but still safely destructible.
+  CommandQueue(WMT::Device device,
+               resources::Pool& pool,
+               pipeline::Cache& cache,
+               shaders::Archive& archive,
+               Device& upperDevice,
+               const core::BackendLimits& limits);
 
   // Minimal ctor for StubDxmt9Device's null-device test path. Allocates
   // only the WMT::CommandQueue handle when the device is non-null; no

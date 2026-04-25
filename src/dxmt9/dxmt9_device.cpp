@@ -1,7 +1,6 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_resource_pool.hpp"
-#include "dxmt9_runtime_services.hpp"
 #include "dxmt9_shader_archive.hpp"
 #include "../winemetal/Metal.hpp"
 
@@ -46,9 +45,7 @@ class DeviceImpl final : public Device {
         shaderArchive_(wmt_device_, resolveShaderCachePath()),
         pool_{},
         pipelineCache_{},
-        // runtimeServices_ relies on its NSDMI to capture refs to the
-        // members above (all already constructed by now).
-        queue_(wmt_device_, runtimeServices_) {}
+        queue_(wmt_device_, pool_, pipelineCache_, shaderArchive_, *this, limits_) {}
 
   // queue_ destructs first (last-declared) — joins worker threads and
   // releases its own allocators/initializer while pool_ and
@@ -164,9 +161,6 @@ class DeviceImpl final : public Device {
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
   // allocators moved into CommandQueue (queue-owned runtime node).
-  // runtimeServices_ is a view onto the fields above; declared before
-  // queue_ so queue_'s ctor sees a valid reference.
-  RuntimeServices runtimeServices_{pool_, pipelineCache_, shaderArchive_, *this, limits_};
   CommandQueue queue_;
 };
 
