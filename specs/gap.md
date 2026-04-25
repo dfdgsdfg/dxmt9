@@ -86,21 +86,22 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 
 ---
 
-## Win32 PE Layer (`d3d9.dll`)
+## Wine PE / `winemetal` Deployment Layer
+
+The spec now matches upstream DXMT's deployment shape:
+`d3d9.dll` imports `winemetal.dll`, and `winemetal.dll` dispatches to the
+paired Wine unix module `winemetal.so`. The older `dxmt9.dll` / `dxmt9.so`
+bridge naming is no longer part of the target spec.
 
 | Area | Status | Notes |
 |---|---|---|
 | C ABI bridge header `device_c.h` | ✅ | All factory / device / resource types |
-| `device_c.cpp` — C wrapper over C++ COM objects | ✅ | All `dxmt9c_*` exports |
-| `src/win32/entry.cpp` — `DllMain`, `Direct3DCreate9/9Ex` | ✅ | Stub `WinemetalApi` registered |
-| `src/win32/factory.cpp` — `IDirect3D9Ex` COM wrapper | ✅ | All factory + Ex methods |
-| `src/win32/device.cpp` — `IDirect3DDevice9Ex` + 12 resource wrappers | ✅ | All device + Ex methods |
-| llvm-mingw cross-build (`cross/x86_64-windows.ini`, `cross/aarch64-windows.ini`) | ✅ | x86_64 PE (primary; Wine64/Rosetta/GPTK) + ARM64 PE; both build with llvm-mingw ≥ 20260324 |
-| `d3d9.dll` as user-facing PE DLL | ✅ | Present |
-| `dxmt9.dll` as separate PE bridge | ✅ | Built in `build-win32-x64-builtin/src/win32/dxmt9.dll` |
-| `dxmt9.so` as Wine unix module | ✅ | Built in `build-x86_64-builtin/src/dxmt9.so`; links to Wine `winemac.so` + `ntdll.so` |
-| PE bridge ↔ unix module thunk mechanism | ✅ | Builtin PE/unix pair via Wine unixlib |
-| No direct Mach-O import from `d3d9.dll` | ✅ | `d3d9.dll` -> `dxmt9.dll` PE bridge -> Wine unixlib -> `dxmt9.so` |
+| Provider-side C ABI wrappers in `src/d3d9/` | ✅ | `dxmt9c_*` provider + bridge sources are present |
+| `winemetal.so` unix module | ✅ | `src/winemetal/unix/meson.build` builds `winemetal.so` and links Wine `winemac.so` / `ntdll.so` when configured |
+| `d3d9.dll` as user-facing PE DLL | ⚠️ | Source target exists in `src/win32/`; build/runtime validation still required |
+| `winemetal.dll` as shared Wine builtin PE bridge | ⚠️ | Source target exists in `src/winemetal/`; Wine builtin postprocess/runtime validation still required |
+| PE bridge ↔ unix module thunk mechanism | ⚠️ | Code-gen + bridge sources are present; needs end-to-end Wine smoke verification |
+| `dxmt9.dll` / `dxmt9.so` legacy bridge naming | ❌ | Removed from target spec; stale references should be treated as documentation drift |
 
 ---
 
@@ -230,7 +231,7 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 |---|---|
 | Core | complete |
 | Backend | complete |
-| Win32 PE (`d3d9.dll`) | complete |
+| Wine PE / `winemetal` deployment | partial |
 | Verification | complete |
 | Tests | complete |
 | D3D8 (`d3d8.dll`) | not started |
@@ -244,10 +245,9 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 
 | Priority | Work | Spec anchor |
 |---|---|---|
-| 1 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |
-| 2 | D3D8 shader handle table + declaration parser | R-D3D8-3.1, R-D3D8-4.1 |
-| 3 | D3D8 remaining device methods (state blocks, RT split, CopyRects) | R-D3D8-5.1, R-D3D8-6.1 |
-| 4 | D3D7 entry points + IDirectDraw7 + DDSurface7 classification | R-D3D7-1.1, R-D3D7-4.1 |
-| 5 | D3D7 IDirect3DDevice7 draw calls and state | R-D3D7-6.1 |
+| 1 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | core/wsi §6, §9 |
+| 2 | Run the Wine WSI smoke on the upstream-style deployment and promote the gap status if it passes | R-TEST-11.3 |
+| 3 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |
+| 4 | D3D8 shader handle table + declaration parser | R-D3D8-3.1, R-D3D8-4.1 |
+| 5 | D3D7 entry points + IDirectDraw7 + DDSurface7 classification | R-D3D7-1.1, R-D3D7-4.1 |
 | 6 | Benchmark harness + draw call throughput workload | R-BENCH-1.1, R-BENCH-2.2 |
-| 7 | First real experiment: DirectX SDK BasicHLSL sample | R-WILD-3.1 |

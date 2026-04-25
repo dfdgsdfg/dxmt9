@@ -14,7 +14,7 @@ Each experiment is a launcher script that:
 ```mermaid
 graph LR
     subgraph Launcher["experiments/launchers/<app>.sh"]
-        INJECT["Inject native backend\nor install d3d9.dll + dxmt9.dll + dxmt9.so"]
+        INJECT["Inject native backend\nor install d3d9.dll + winemetal.dll + winemetal.so"]
         RUN["Run app for N frames"]
         SHOT["Capture screenshot"]
         CMP["SSIM vs reference\n≥ 0.90 = pass"]
@@ -47,12 +47,15 @@ the experiment. `DXMT_LOG_LEVEL` controls runtime verbosity and
 `DXMT_LOG_PATH` stores per-executable dxmt9 logs for post-run analysis.
 
 For applications that require Wine, the launcher installs the PE/user-facing DLL,
-the PE bridge, and the unix module, then sets the Wine DLL override:
+the shared `winemetal` PE bridge/service DLL, and the unix module, then sets the
+Wine DLL override:
 
 ```sh
 cp build-win32-x64-builtin/src/win32/d3d9.dll "$WINEPREFIX/drive_c/windows/system32/d3d9.dll"
-cp build-win32-x64-builtin/src/win32/dxmt9.dll "<wine-root>/lib/wine/x86_64-windows/dxmt9.dll"
-cp build-x86_64-builtin/src/dxmt9.so "<wine-root>/lib/wine/x86_64-unix/dxmt9.so"
+cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
+  "<wine-root>/lib/wine/x86_64-windows/winemetal.dll"
+cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
+  "<wine-root>/lib/wine/x86_64-unix/winemetal.so"
 WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
 ```
 

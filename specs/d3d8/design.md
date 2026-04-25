@@ -307,15 +307,16 @@ src/d3d8/
 
 ## 9. PE Bridge Integration
 
-`d3d8.dll` follows the same two-DLL model as the existing D3D9 bridge:
+`d3d8.dll` follows the same upstream-DXMT-style `winemetal` bridge model as the
+D3D9 PE layer:
 
 ```
 d3d8.dll  (PE, user-facing)
-  └── imports dxmt9.dll
-        └── loads dxmt9.so (Wine unix module, Metal backend)
+  └── imports winemetal.dll
+        └── dispatches to winemetal.so (Wine unix module, Metal backend)
 ```
 
 `d3d8.dll` is built with the same `llvm-mingw` cross-compile setup used for
-`d3d9.dll`. It uses the same `dxmt9c_*` C ABI to reach the backend if needed,
-but in practice it only calls through `IDirect3D9` / `IDirect3DDevice9` COM
-interfaces that are already exposed by the D3D9 layer.
+`d3d9.dll`. It may use the same provider C ABI exposed through `winemetal.dll`
+if needed, but in practice it should delegate through the in-process
+`IDirect3D9` / `IDirect3DDevice9` COM interfaces exposed by the D3D9 layer.

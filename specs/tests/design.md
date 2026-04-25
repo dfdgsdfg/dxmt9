@@ -209,8 +209,8 @@ of the test suite: it is a cross-compiled Win32 PE executable that exercises
 the full presentation stack end-to-end under Wine, including:
 
 - `d3d9.dll` PE wrapper (COM entry points)
-- `dxmt9.dll` PE bridge (Wine-visible thunk layer)
-- `dxmt9.so` unix-side Metal backend
+- `winemetal.dll` PE bridge/service module (Wine-visible thunk layer)
+- `winemetal.so` unix-side Metal backend
 - Legacy `macdrv_get_cocoa_view` or Heroic `macdrv_functions` HWND→Cocoa resolution
 - `WineWindow -> contentView -> WineMetalView -> CAMetalLayer` fallback on Heroic Wine 11.5
 - Metal `nextDrawable` + `presentDrawable` on a real `CAMetalLayer`
@@ -219,8 +219,8 @@ the full presentation stack end-to-end under Wine, including:
 sequenceDiagram
     participant App as wsi_present_x64.exe
     participant D3D as d3d9.dll (PE)
-    participant Bridge as dxmt9.dll (PE bridge)
-    participant Unix as dxmt9.so
+    participant Bridge as winemetal.dll (PE bridge)
+    participant Unix as winemetal.so
     participant Wine as winemac.drv
 
     App->>D3D: Direct3DCreate9()
@@ -268,8 +268,10 @@ meson setup build-x86_64-builtin \
 meson compile -C build-x86_64-builtin
 
 cp build-win32-x64-builtin/src/win32/d3d9.dll ~/.wine/drive_c/windows/system32/d3d9.dll
-cp build-win32-x64-builtin/src/win32/dxmt9.dll <wine-root>/lib/wine/x86_64-windows/dxmt9.dll
-cp build-x86_64-builtin/src/dxmt9.so          <wine-root>/lib/wine/x86_64-unix/dxmt9.so
+cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
+  <wine-root>/lib/wine/x86_64-windows/winemetal.dll
+cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
+  <wine-root>/lib/wine/x86_64-unix/winemetal.so
 WINEDLLOVERRIDES="d3d9=n,b" wine tests/wsi_present/wsi_present_x64.exe
 ```
 

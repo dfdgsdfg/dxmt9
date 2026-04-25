@@ -287,17 +287,18 @@ src/d3d7/
 
 ## 9. PE Bridge Integration
 
-`ddraw.dll` follows the same three-binary model:
+`ddraw.dll` follows the same upstream-DXMT-style `winemetal` bridge model:
 
 ```
 ddraw.dll  (PE, user-facing, new)
-  └── imports dxmt9.dll
-        └── loads dxmt9.so (Wine unix module, Metal backend)
+  └── imports winemetal.dll
+        └── dispatches to winemetal.so (Wine unix module, Metal backend)
 ```
 
-`ddraw.dll` does not need to use the `dxmt9c_*` C ABI directly. It talks to the
-Metal backend exclusively through `IDirect3D9` / `IDirect3DDevice9` COM interfaces,
-which are already fully exposed by the existing D3D9 layer.
+`ddraw.dll` does not need to use the provider C ABI directly. It talks to the
+Metal backend through the in-process `IDirect3D9` / `IDirect3DDevice9` COM
+interfaces already exposed by the D3D9 layer, while `winemetal.dll` remains the
+only PE bridge to the unix-side Metal module.
 
 ---
 
