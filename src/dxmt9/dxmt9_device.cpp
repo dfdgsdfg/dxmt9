@@ -140,7 +140,8 @@ class DeviceImpl final : public Device {
     augmented.notifyPresentationStatus = [this](bool occluded) {
       notifyPresentationStatus(occluded);
     };
-    queue_.submitPresent(augmented);
+    const auto presentSeqId = queue_.submitPresent(augmented);
+    queue_.presentBoundary(presentSeqId, maxFrameLatency_);
   }
   void flush() override { queue_.submitFlush(); }
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }

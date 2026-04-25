@@ -335,7 +335,7 @@ core::ChunkSlot& currentSlotUnlocked(CommandQueue& q) {
 }
 
 void ensureWritingSlotUnlocked(CommandQueue& q, std::unique_lock<std::mutex>& lock) {
-  (void)q.queueLifecycle_.ensureWriterSlot(lock, kMaxInflight);
+  (void)q.queueLifecycle_.ensureWriterSlot(lock, kMaxQueuedChunks);
 }
 
 std::uint64_t seqIdForMark(CommandQueue& q, std::uint64_t seqId) {
@@ -435,36 +435,52 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   pool_.markColorFillResources(desc, seqIdForMark(*this, 0));
 }
 
-void CommandQueue::submitPresent(const core::SwapDesc& desc) {
+std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   perf::countSubmitPresent();
   std::unique_lock lock(mutex_);
   if (splitPresentChunk()) {
-	    queueLifecycle_.commitCurrentChunk(
-	        lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
-	          markSlotResourcesUnlocked(pool_, slot);
-	        });
+    queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+          markSlotResourcesUnlocked(pool_, slot);
+        });
     ensureWritingSlotUnlocked(*this, lock);
     queueLifecycle_.appendPresentCommand(desc, currentBackBuffer_);
-	    queueLifecycle_.commitCurrentChunk(
-	        lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
-	          markSlotResourcesUnlocked(pool_, slot);
-	        });
-    return;
+    queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+          markSlotResourcesUnlocked(pool_, slot);
+        });
+    return lastCommittedSeqId_;
   }
   queueLifecycle_.presentAndCommit(
-	      lock, kMaxInflight, desc, currentBackBuffer_,
-	      [this](const core::ChunkSlot& slot) {
-	        markSlotResourcesUnlocked(pool_, slot);
-	      });
+      lock, kMaxQueuedChunks, desc, currentBackBuffer_,
+      [this](const core::ChunkSlot& slot) {
+        markSlotResourcesUnlocked(pool_, slot);
+      });
+  return lastCommittedSeqId_;
+}
+
+void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency) {
+  if (presentSeqId == 0) {
+    return;
+  }
+  maxFrameLatency = std::clamp<std::uint32_t>(maxFrameLatency, 1u, 3u);
+  if (presentSeqId <= maxFrameLatency) {
+    return;
+  }
+  const std::uint64_t targetSeqId = presentSeqId - maxFrameLatency;
+  std::unique_lock lock(mutex_);
+  if (targetSeqId > completedSeqId_) {
+    queueLifecycle_.waitForSequence(lock, targetSeqId);
+  }
 }
 
 void CommandQueue::submitFlush() {
   perf::countSubmitFlush();
   std::unique_lock lock(mutex_);
   queueLifecycle_.flushAndWait(
-	      lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
-	        markSlotResourcesUnlocked(pool_, slot);
-	      });
+      lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+        markSlotResourcesUnlocked(pool_, slot);
+      });
 }
 
 core::HResult CommandQueue::waitForVBlank() {

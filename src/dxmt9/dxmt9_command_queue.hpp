@@ -48,9 +48,11 @@ class CommandQueue;
 namespace encoders { struct EncodeContext; }
 namespace resources { class Initializer; }
 
-// Chunk-ring size + in-flight cap. Match upstream dxmt's kCommandChunkCount.
+// Chunk-ring size + in-flight cap. Match upstream dxmt's kCommandChunkCount:
+// the ring may queue many chunks, while present frame-latency is enforced
+// separately by presentBoundary().
 inline constexpr size_t kCommandChunkCount = 32;
-inline constexpr size_t kMaxInflight = 3;
+inline constexpr size_t kMaxQueuedChunks = kCommandChunkCount - 1;
 
 class CommandQueue {
  public:
@@ -115,7 +117,8 @@ class CommandQueue {
   void submitStretchRect(const core::StretchRectDesc& desc);
   void submitReadback(const core::ReadbackDesc& desc);
   void submitColorFill(const core::ColorFillDesc& desc);
-  void submitPresent(const core::SwapDesc& desc);
+  std::uint64_t submitPresent(const core::SwapDesc& desc);
+  void presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency);
   void submitFlush();
   core::HResult waitForVBlank();
 

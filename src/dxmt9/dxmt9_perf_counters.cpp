@@ -35,6 +35,15 @@ struct Counters {
   std::atomic<std::uint64_t> syncWaits{0};
   std::atomic<std::uint64_t> syncWaitNs{0};
   std::atomic<std::uint64_t> syncWaitMaxNs{0};
+  std::atomic<std::uint64_t> queueWriterWaits{0};
+  std::atomic<std::uint64_t> queueWriterWaitNs{0};
+  std::atomic<std::uint64_t> queueWriterWaitMaxNs{0};
+  std::atomic<std::uint64_t> queueCommitWaits{0};
+  std::atomic<std::uint64_t> queueCommitWaitNs{0};
+  std::atomic<std::uint64_t> queueCommitWaitMaxNs{0};
+  std::atomic<std::uint64_t> queueSequenceWaits{0};
+  std::atomic<std::uint64_t> queueSequenceWaitNs{0};
+  std::atomic<std::uint64_t> queueSequenceWaitMaxNs{0};
   std::atomic<std::uint64_t> presentEncoded{0};
   std::atomic<std::uint64_t> presentSkipped{0};
   std::atomic<std::uint64_t> presentAcquireWaits{0};
@@ -76,6 +85,9 @@ void report() {
       "completion_blit_waits=%llu completion_blit_wait_ms=%.3f completion_blit_wait_max_ms=%.3f "
       "completion_other_waits=%llu completion_other_wait_ms=%.3f completion_other_wait_max_ms=%.3f "
       "sync_waits=%llu sync_wait_ms=%.3f sync_wait_max_ms=%.3f "
+      "queue_writer_waits=%llu queue_writer_wait_ms=%.3f queue_writer_wait_max_ms=%.3f "
+      "queue_commit_waits=%llu queue_commit_wait_ms=%.3f queue_commit_wait_max_ms=%.3f "
+      "queue_sequence_waits=%llu queue_sequence_wait_ms=%.3f queue_sequence_wait_max_ms=%.3f "
       "present_encoded=%llu present_skipped=%llu present_acquire_waits=%llu "
       "present_acquire_wait_ms=%.3f present_set_props_waits=%llu present_set_props_wait_ms=%.3f\n",
       static_cast<unsigned long long>(load(c.submitDraw)),
@@ -105,6 +117,15 @@ void report() {
       static_cast<unsigned long long>(load(c.syncWaits)),
       static_cast<double>(load(c.syncWaitNs)) / 1000000.0,
       static_cast<double>(load(c.syncWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.queueWriterWaits)),
+      static_cast<double>(load(c.queueWriterWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.queueWriterWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.queueCommitWaits)),
+      static_cast<double>(load(c.queueCommitWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.queueCommitWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.queueSequenceWaits)),
+      static_cast<double>(load(c.queueSequenceWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.queueSequenceWaitMaxNs)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentEncoded)),
       static_cast<unsigned long long>(load(c.presentSkipped)),
       static_cast<unsigned long long>(load(c.presentAcquireWaits)),
@@ -207,6 +228,24 @@ void countSyncWait(std::uint64_t nanoseconds) {
   add(counters().syncWaits);
   add(counters().syncWaitNs, nanoseconds);
   updateMax(counters().syncWaitMaxNs, nanoseconds);
+}
+
+void countQueueWriterWait(std::uint64_t nanoseconds) {
+  add(counters().queueWriterWaits);
+  add(counters().queueWriterWaitNs, nanoseconds);
+  updateMax(counters().queueWriterWaitMaxNs, nanoseconds);
+}
+
+void countQueueCommitWait(std::uint64_t nanoseconds) {
+  add(counters().queueCommitWaits);
+  add(counters().queueCommitWaitNs, nanoseconds);
+  updateMax(counters().queueCommitWaitMaxNs, nanoseconds);
+}
+
+void countQueueSequenceWait(std::uint64_t nanoseconds) {
+  add(counters().queueSequenceWaits);
+  add(counters().queueSequenceWaitNs, nanoseconds);
+  updateMax(counters().queueSequenceWaitMaxNs, nanoseconds);
 }
 
 void countPresentEncoded() {

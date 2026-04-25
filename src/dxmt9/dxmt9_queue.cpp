@@ -466,13 +466,21 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
   }
 
   auto& slots = submissionBinding_.slots;
-  if (slots[*writeIndex].state != ChunkSlot::State::Free || *inflightCount >= inflightLimit) {
+  const bool waitNeeded =
+      slots[*writeIndex].state != ChunkSlot::State::Free || *inflightCount >= inflightLimit;
+  if (waitNeeded) {
     observeWriterWait(*writeIndex, slots[*writeIndex].seqId, inflightLimit);
   }
+  const auto waitStarted = std::chrono::steady_clock::now();
   writeCv->wait(lock, [&] {
     return *stop || (slots[*writeIndex].state == ChunkSlot::State::Free &&
                      *inflightCount < inflightLimit);
   });
+  if (waitNeeded) {
+    const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
+    perf::countQueueWriterWait(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
+  }
   if (*stop) {
     return false;
   }
@@ -542,10 +550,17 @@ bool QueueLifecycleController::commitCurrentChunk(
     return false;
   }
 
-  if (*inflightCount >= inflightLimit) {
+  const bool waitNeeded = *inflightCount >= inflightLimit;
+  if (waitNeeded) {
     observeCommitWait(**writingSlot, slot.seqId, inflightLimit);
   }
+  const auto waitStarted = std::chrono::steady_clock::now();
   writeCv->wait(lock, [&] { return *stop || *inflightCount < inflightLimit; });
+  if (waitNeeded) {
+    const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
+    perf::countQueueCommitWait(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
+  }
   if (*stop) {
     return false;
   }
@@ -763,7 +778,14 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
   if (*completedSeqId < targetSeqId) {
     observeWaitForSequence(targetSeqId);
   }
+  const bool waitNeeded = *completedSeqId < targetSeqId;
+  const auto waitStarted = std::chrono::steady_clock::now();
   finishCv->wait(lock, [&] { return *stop || *completedSeqId >= targetSeqId; });
+  if (waitNeeded) {
+    const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
+    perf::countQueueSequenceWait(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
+  }
   if (!*stop) {
     observeWaitForSequence(targetSeqId);
   }

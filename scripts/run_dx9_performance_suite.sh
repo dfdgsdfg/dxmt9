@@ -216,8 +216,8 @@ lines = [
     f"- pass_count: `{payload['pass_count']}`",
     f"- fail_count: `{payload['fail_count']}`",
     "",
-    "| app | status | vanilla fps | dxmt9 fps | speedup | present ok/skip | dxmt9 cmdbuf | dxmt9 mtbuf | dxmt9 pso | completion ms | present completion ms | draw completion ms | blit completion ms | completion max ms | acquire ms | sync ms | vanilla sec | dxmt9 sec |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| app | status | vanilla fps | dxmt9 fps | speedup | present ok/skip | dxmt9 cmdbuf | dxmt9 mtbuf | dxmt9 pso | completion ms | present completion ms | draw completion ms | blit completion ms | completion max ms | acquire ms | writer wait ms | commit wait ms | sequence wait ms | sync ms | vanilla sec | dxmt9 sec |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
 ]
 for row in rows:
     vanilla = row["vanilla"]
@@ -241,15 +241,17 @@ for row in rows:
         f"`{fmt(dc.get('completion_draw_wait_ms'), 3)}` | "
         f"`{fmt(dc.get('completion_blit_wait_ms'), 3)}` | "
         f"`{fmt(dc.get('completion_wait_max_ms'), 3)}` | `{fmt(dc.get('present_acquire_wait_ms'), 3)}` | "
-        f"`{fmt(dc.get('sync_wait_ms'), 3)}` | `{fmt(ve)}` | `{fmt(de)}` |"
+        f"`{fmt(dc.get('queue_writer_wait_ms'), 3)}` | `{fmt(dc.get('queue_commit_wait_ms'), 3)}` | "
+        f"`{fmt(dc.get('queue_sequence_wait_ms'), 3)}` | `{fmt(dc.get('sync_wait_ms'), 3)}` | "
+        f"`{fmt(ve)}` | `{fmt(de)}` |"
     )
     if vanilla.get("status") != "pass":
         lines.append(
-            f"|  | vanilla_failures |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | `{json.dumps(vanilla.get('failures', []), sort_keys=True)}` |"
+            f"|  | vanilla_failures |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | `{json.dumps(vanilla.get('failures', []), sort_keys=True)}` |"
         )
     if dxmt9.get("status") != "pass":
         lines.append(
-            f"|  | dxmt9_failures |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | `{json.dumps(dxmt9.get('failures', []), sort_keys=True)}` |"
+            f"|  | dxmt9_failures |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | `{json.dumps(dxmt9.get('failures', []), sort_keys=True)}` |"
         )
 
 summary_md.write_text("\n".join(lines) + "\n")
