@@ -104,8 +104,8 @@ class CommandQueue {
   InitializerFlush flushInitializerUploads();
 
   // Submission / resource-marking surface. Each call acquires mutex_
-  // internally; Pool access goes through pool_ (cached from
-  // RuntimeServices at construction).
+  // internally; Pool access goes through pool_ (snapshotted at
+  // construction).
   void submitDraw(const core::DrawDesc& desc);
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
