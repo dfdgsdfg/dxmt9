@@ -30,7 +30,7 @@ FAIL: Direct3DCreate9Ex hr=0x8007000e (E_OUTOFMEMORY)
 - Host: macOS aarch64
 - Wine: Heroic Wine-11.6-DXMT (staging)
   `~/Library/Application Support/heroic/tools/wine/Wine-11.6-DXMT/`
-- WINEPREFIX: `~/.dxmt9-wineprefix`
+- WINEPREFIX: `<repo>/tmp/dxmt9-wineprefix`
 - App: `experiments/apps/D9VKD3D9Clear/d3d9-clear-x64.exe`
 - WINEDLLOVERRIDES: `d3d9,winemetal=n`
 - WINEDLLPATH: `$WINEPREFIX/dxmt9-unix`
@@ -111,8 +111,11 @@ ninja -C build-win32-x64-builtin
 
 ```sh
 HEROIC_WINE="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6-DXMT/Contents/Resources/wine/bin/wine"
-WP="$HOME/.dxmt9-wineprefix"
 DXMT9=/Users/dididi/workspaces/dxmt9
+# Wineprefix lives under the repo's tmp/ (gitignored) so it's
+# discoverable, deletable, and doesn't pollute $HOME.
+WP="$DXMT9/tmp/dxmt9-wineprefix"
+mkdir -p "$DXMT9/tmp"
 
 WINEPREFIX="$WP" "$HEROIC_WINE" wineboot --init
 
