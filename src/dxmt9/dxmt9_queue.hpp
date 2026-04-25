@@ -154,6 +154,7 @@ struct QueueSubmissionRecord {
   u64 seqId = 0;
   std::span<const MetalCommandRecord> commands;
   const char* context = "queue";
+  std::vector<std::function<void()>> postCommitCallbacks;
 };
 
 CommandBufferDiagnostics summarizeChunk(u64 seqId,

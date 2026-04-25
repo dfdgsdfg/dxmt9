@@ -102,6 +102,9 @@ class Direct3DSwapChain9Impl final : public IDirect3DSwapChain9, public RefCount
       return core::D3DERR_INVALIDCALL;
     }
     auto desc = makeSwapDesc(swapChain_->params());
+    if (auto backBuffer = swapChain_->backBuffer()) {
+      desc.sourceSurface = backBuffer->handle();
+    }
     desc.presenter = swapChain_->presenter();
     return swapChain_->present(device_->backend(), desc);
   }

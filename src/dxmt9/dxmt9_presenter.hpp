@@ -14,12 +14,17 @@
 #include "../winemetal/Metal.hpp"
 
 #include <cstdint>
+#include <condition_variable>
 #include <future>
+#include <mutex>
 #include <string>
+#include <thread>
 
 namespace dxmt9 {
 
 class Device;
+
+inline constexpr uint32_t kDefaultMetalDrawableCount = 3;
 
 class Presenter {
  public:
@@ -29,7 +34,8 @@ class Presenter {
     uint32_t height = 0;                 // drawable height
     bool displaySyncEnabled = true;      // vsync
     double contentsScale = 1.0;          // CAMetalLayer.contentsScale
-    uint32_t maxDrawableCount = 3;       // CAMetalLayer.maximumDrawableCount
+    double minimumPresentDuration = 0.0; // presentDrawableAfterMinimumDuration
+    uint32_t maxDrawableCount = kDefaultMetalDrawableCount;  // CAMetalLayer.maximumDrawableCount
     bool opaqueAlpha = false;            // X8R8G8B8/X8B8G8R8 → force alpha=1
     uint64_t seqId = 0;                  // for trace events
   };
@@ -55,12 +61,16 @@ class Presenter {
   WMT::MetalLayer layer() const noexcept { return layer_; }
 
   EncodeResult encodeCommands(WMT::CommandBuffer& commandBuffer, const EncodeParams& params);
+  void preAcquireNextDrawable(uint64_t seqId);
 
  private:
   // Return the pipeline future for the requested variant, kicking off the
   // build if this is the first request.
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>&
       pipelineFor(bool opaqueAlpha);
+  WMT::Reference<WMT::MetalDrawable> takePrefetchedDrawable();
+  void discardPrefetchedDrawable();
+  void runPreAcquireLoop();
 
   WMT::Device device_{};
   uint64_t hwnd_ = 0;
@@ -75,6 +85,15 @@ class Presenter {
   WMTLayerProps cachedLayerProps_{};
   uint32_t cachedMaxDrawableCount_ = 0;
   bool cachedLayerPropsValid_ = false;
+  std::mutex preAcquireMutex_{};
+  std::condition_variable preAcquireCv_{};
+  std::thread preAcquireThread_{};
+  WMT::Reference<WMT::MetalDrawable> prefetchedDrawable_{};
+  uint64_t preAcquireSeqId_ = 0;
+  uint64_t preAcquireGeneration_ = 0;
+  bool preAcquireStop_ = false;
+  bool preAcquireRequested_ = false;
+  bool preAcquireInFlight_ = false;
   // Borrowed from DeviceImpl; used by the async pipeline builder.
   WMT::Reference<WMT::BinaryArchive>* archive_ = nullptr;
   const std::string* archivePath_ = nullptr;
@@ -82,8 +101,7 @@ class Presenter {
 
 // Orchestrates a present: resolves the source surface via `pool`, applies
 // the DXMT_FORCE_PRESENT_TEXTURE_HANDLE override (debug-only), builds
-// EncodeParams from `present` (using present.maxFrameLatency for the
-// drawable cap), calls Presenter::encodeCommands, and fires
+// EncodeParams from `present`, calls Presenter::encodeCommands, and fires
 // present.notifyPresentationStatus based on the nextDrawable outcome.
 // Returns true if the presenter drew (caller may then set a
 // discard-after-present flag).

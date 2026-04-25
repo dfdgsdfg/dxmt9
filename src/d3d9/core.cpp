@@ -2567,7 +2567,11 @@ void SwapChain::resize(const PresentParameters& params) {
 
 HResult SwapChain::present(std::shared_ptr<dxmt9::Device> device, const SwapDesc& desc) {
   if (device) {
-    device->present(desc);
+    SwapDesc adjusted = desc;
+    if (backBuffer_) {
+      adjusted.sourceSurface = backBuffer_->handle();
+    }
+    device->present(adjusted);
   }
   return D3D_OK;
 }
@@ -2585,7 +2589,7 @@ Device::Device(AdapterInfo adapter, BackendLimits limits,
   const u32 height = std::max(1u, presentParameters_.backBufferHeight);
   state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
   deviceLost_ = false;
-  maximumFrameLatency_ = 3;
+  maximumFrameLatency_ = kDefaultFrameLatency;
   if (backend_) {
     backend_->setMaxFrameLatency(maximumFrameLatency_);
   }
@@ -2951,6 +2955,9 @@ SwapDesc Device::snapshotSwapDesc() const {
   desc.displaySyncEnabled = presentParameters_.presentationInterval != PresentInterval::Immediate;
   desc.multiSampleType = presentParameters_.multiSampleType;
   if (!swapChains_.empty()) {
+    if (auto backBuffer = swapChains_[0]->backBuffer()) {
+      desc.sourceSurface = backBuffer->handle();
+    }
     desc.presenter = swapChains_[0]->presenter();
   }
   return desc;
@@ -3265,7 +3272,10 @@ HResult Device::resetEx(const PresentParameters& params, const DisplayModeEx* fu
 }
 
 HResult Device::setMaximumFrameLatency(u32 latency) {
-  maximumFrameLatency_ = std::clamp(latency, 1u, 3u);
+  if (latency > kMaxFrameLatency) {
+    return D3DERR_INVALIDCALL;
+  }
+  maximumFrameLatency_ = latency == 0 ? kDefaultFrameLatency : latency;
   if (backend_) {
     backend_->setMaxFrameLatency(maximumFrameLatency_);
   }

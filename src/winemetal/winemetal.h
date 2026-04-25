@@ -1664,6 +1664,7 @@ WINEMETAL_API void DeveloperHUDProperties_remove(obj_handle_t obj, obj_handle_t 
 WINEMETAL_API obj_handle_t MetalDrawable_texture(obj_handle_t drawable);
 
 WINEMETAL_API obj_handle_t MetalLayer_nextDrawable(obj_handle_t layer);
+WINEMETAL_API obj_handle_t MetalLayer_nextDrawableRetained(obj_handle_t layer);
 
 WINEMETAL_API bool MTLDevice_supportsFXSpatialScaler(obj_handle_t device);
 

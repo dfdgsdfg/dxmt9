@@ -14,6 +14,47 @@ namespace dxmt9 {
 
 namespace {
 
+bool presentPreAcquireEnabled() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_PRESENT_PREACQUIRE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return value;
+}
+
+bool layerDisplaySyncEnabled() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_LAYER_DISPLAY_SYNC");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return value;
+}
+
+double presentRefreshHz() {
+  static const double value = [] {
+    const char* env = std::getenv("DXMT9_PRESENT_REFRESH_HZ");
+    if (!env || env[0] == '\0') {
+      return 60.0;
+    }
+    char* end = nullptr;
+    const double parsed = std::strtod(env, &end);
+    return end != env && parsed > 0.0 ? parsed : 60.0;
+  }();
+  return value;
+}
+
+double minimumPresentDuration(core::PresentInterval interval) {
+  switch (interval) {
+    case core::PresentInterval::Two:
+      return 2.0 / presentRefreshHz();
+    case core::PresentInterval::Default:
+      return 1.0 / presentRefreshHz();
+    case core::PresentInterval::Immediate:
+      return 0.0;
+  }
+  return 0.0;
+}
+
 bool sameLayerProps(const WMTLayerProps& a, const WMTLayerProps& b) {
   return a.device == b.device &&
          a.contents_scale == b.contents_scale &&
@@ -36,6 +77,17 @@ Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
       archive_(archive), archivePath_(archivePath) {}
 
 Presenter::~Presenter() {
+  {
+    std::lock_guard lock(preAcquireMutex_);
+    preAcquireStop_ = true;
+    preAcquireRequested_ = false;
+    ++preAcquireGeneration_;
+  }
+  preAcquireCv_.notify_all();
+  if (preAcquireThread_.joinable()) {
+    preAcquireThread_.join();
+  }
+  discardPrefetchedDrawable();
   presentimpl::releaseLayerAcquisition(acquisition_);
   layer_ = WMT::MetalLayer{};
 }
@@ -48,6 +100,79 @@ Presenter::pipelineFor(bool opaqueAlpha) {
                                             opaqueAlpha, archive_, archivePath_);
   }
   return slot;
+}
+
+WMT::Reference<WMT::MetalDrawable> Presenter::takePrefetchedDrawable() {
+  std::lock_guard lock(preAcquireMutex_);
+  WMT::Reference<WMT::MetalDrawable> drawable = std::move(prefetchedDrawable_);
+  return drawable;
+}
+
+void Presenter::discardPrefetchedDrawable() {
+  std::lock_guard lock(preAcquireMutex_);
+  prefetchedDrawable_ = nullptr;
+  ++preAcquireGeneration_;
+}
+
+void Presenter::preAcquireNextDrawable(uint64_t seqId) {
+  if (!presentPreAcquireEnabled() || !layer_) {
+    return;
+  }
+  {
+    std::lock_guard lock(preAcquireMutex_);
+    if (prefetchedDrawable_ || preAcquireRequested_ || preAcquireInFlight_ || preAcquireStop_) {
+      return;
+    }
+    if (!preAcquireThread_.joinable()) {
+      preAcquireThread_ = std::thread([this] { runPreAcquireLoop(); });
+    }
+    preAcquireSeqId_ = seqId;
+    preAcquireRequested_ = true;
+    perf::countPresentPreAcquireRequest();
+  }
+  preAcquireCv_.notify_one();
+}
+
+void Presenter::runPreAcquireLoop() {
+  while (true) {
+    uint64_t seqId = 0;
+    uint64_t generation = 0;
+    {
+      std::unique_lock lock(preAcquireMutex_);
+      preAcquireCv_.wait(lock, [this] {
+        return preAcquireStop_ || preAcquireRequested_;
+      });
+      if (preAcquireStop_) {
+        return;
+      }
+      seqId = preAcquireSeqId_;
+      generation = preAcquireGeneration_;
+      preAcquireRequested_ = false;
+      preAcquireInFlight_ = true;
+    }
+
+    presentimpl::traceEvent("preAcquire.begin", seqId, hwnd_);
+    const auto acquireStarted = std::chrono::steady_clock::now();
+    auto drawable = layer_.nextDrawableRetained();
+    const auto acquireElapsed = std::chrono::steady_clock::now() - acquireStarted;
+    perf::countPresentPreAcquireWait(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(acquireElapsed).count()));
+    if (!drawable) {
+      presentimpl::traceEvent("preAcquire.nil", seqId, hwnd_);
+    } else {
+      std::lock_guard lock(preAcquireMutex_);
+      if (!preAcquireStop_ && generation == preAcquireGeneration_ && !prefetchedDrawable_) {
+        prefetchedDrawable_ = std::move(drawable);
+        presentimpl::traceEvent("preAcquire.ok", seqId, hwnd_);
+      }
+    }
+
+    {
+      std::lock_guard lock(preAcquireMutex_);
+      preAcquireInFlight_ = false;
+    }
+    preAcquireCv_.notify_all();
+  }
 }
 
 Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuffer,
@@ -65,12 +190,15 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     props.framebuffer_only = false;
     props.drawable_width = std::max(1u, params.width);
     props.drawable_height = std::max(1u, params.height);
-    props.display_sync_enabled = params.displaySyncEnabled;
+    // Match upstream dxmt: keep CAMetalLayer out of present pacing by
+    // default, and let the D3D9/queue layer own latency boundaries.
+    props.display_sync_enabled = layerDisplaySyncEnabled() && params.displaySyncEnabled;
     props.contents_scale = params.contentsScale;
     const auto maxDrawableCount = std::clamp<uint32_t>(params.maxDrawableCount, 1u, 3u);
     if (!cachedLayerPropsValid_ ||
         !sameLayerProps(cachedLayerProps_, props) ||
         cachedMaxDrawableCount_ != maxDrawableCount) {
+      discardPrefetchedDrawable();
       const auto propsStarted = std::chrono::steady_clock::now();
       MetalLayer_setProps(layer_.handle, &props);
       MetalLayer_setMaximumDrawableCount(layer_.handle, maxDrawableCount);
@@ -107,7 +235,17 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
 
   presentimpl::traceEvent("nextDrawable.begin", params.seqId, hwnd_);
   const auto acquireStarted = std::chrono::steady_clock::now();
-  auto drawable = layer_.nextDrawable();
+  auto prefetchedDrawable = takePrefetchedDrawable();
+  WMT::MetalDrawable drawable{};
+  if (prefetchedDrawable) {
+    perf::countPresentPreAcquireHit();
+    drawable = WMT::MetalDrawable{prefetchedDrawable.handle};
+  } else {
+    if (presentPreAcquireEnabled()) {
+      perf::countPresentPreAcquireMiss();
+    }
+    drawable = layer_.nextDrawable();
+  }
   const auto acquireElapsed = std::chrono::steady_clock::now() - acquireStarted;
   perf::countPresentAcquireWait(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(acquireElapsed).count()));
@@ -142,7 +280,11 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   encoder.setScissorRect(WMTScissorRect{0, 0, static_cast<uint64_t>(width), static_cast<uint64_t>(height)});
   encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
   encoder.endEncoding();
-  commandBuffer.presentDrawable(drawable);
+  if (params.minimumPresentDuration > 0.0) {
+    commandBuffer.presentDrawableAfterMinimumDuration(drawable, params.minimumPresentDuration);
+  } else {
+    commandBuffer.presentDrawable(drawable);
+  }
 
   result.encoded = true;
   presentimpl::traceEvent("scheduled", params.seqId, hwnd_);
@@ -248,7 +390,11 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   params.height = present.height;
   params.displaySyncEnabled = present.displaySyncEnabled;
   params.contentsScale = 1.0;
-  params.maxDrawableCount = present.maxFrameLatency;
+  params.minimumPresentDuration =
+      !layerDisplaySyncEnabled() && present.displaySyncEnabled
+          ? minimumPresentDuration(present.interval)
+          : 0.0;
+  params.maxDrawableCount = kDefaultMetalDrawableCount;
   params.opaqueAlpha = opaqueAlpha;
   params.seqId = seqId;
 

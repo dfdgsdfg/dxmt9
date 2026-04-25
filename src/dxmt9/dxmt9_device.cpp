@@ -1,8 +1,13 @@
 #include "dxmt9_device.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -25,6 +30,53 @@ core::BackendLimits finalizeLimits(core::BackendLimits base, WMT::Device device)
     base.supportsDepth24Stencil8 = device.supportsDepth24Stencil8();
   }
   return base;
+}
+
+bool envFlag(const char* name) {
+  const char* value = std::getenv(name);
+  return value && value[0] != '\0' && value[0] != '0';
+}
+
+std::optional<std::uint32_t> envU32(const char* name) {
+  const char* value = std::getenv(name);
+  if (!value || value[0] == '\0') {
+    return std::nullopt;
+  }
+  char* end = nullptr;
+  const unsigned long parsed = std::strtoul(value, &end, 10);
+  if (end == value) {
+    return std::nullopt;
+  }
+  if (parsed > std::numeric_limits<std::uint32_t>::max()) {
+    return std::numeric_limits<std::uint32_t>::max();
+  }
+  return static_cast<std::uint32_t>(parsed);
+}
+
+std::uint32_t normalizeMaxFrameLatency(std::uint32_t latency) {
+  return latency == 0 ? core::kDefaultFrameLatency
+                      : std::min(latency, core::kMaxFrameLatency);
+}
+
+std::uint32_t effectiveMaxFrameLatency(std::uint32_t latency) {
+  static const std::optional<std::uint32_t> override = [] {
+    const auto value = envU32("DXMT9_MAX_FRAME_LATENCY");
+    if (!value) {
+      return std::optional<std::uint32_t>{};
+    }
+    return std::optional<std::uint32_t>{normalizeMaxFrameLatency(*value)};
+  }();
+  return override.value_or(normalizeMaxFrameLatency(latency));
+}
+
+bool disablePresentBoundary() {
+  static const bool disabled = envFlag("DXMT9_DISABLE_PRESENT_BOUNDARY");
+  return disabled;
+}
+
+bool forceSyncPresentBoundary() {
+  static const bool force = envFlag("DXMT9_FORCE_SYNC_PRESENT_BOUNDARY");
+  return force;
 }
 
 class DeviceImpl final : public Device {
@@ -69,7 +121,7 @@ class DeviceImpl final : public Device {
     if (presentationStatusObserver_) presentationStatusObserver_(occluded);
   }
   void setMaxFrameLatency(std::uint32_t latency) override {
-    maxFrameLatency_ = latency == 0 ? 1u : (latency > 3u ? 3u : latency);
+    maxFrameLatency_ = effectiveMaxFrameLatency(latency);
   }
   std::uint32_t maxFrameLatency() const override { return maxFrameLatency_; }
 
@@ -141,7 +193,17 @@ class DeviceImpl final : public Device {
       notifyPresentationStatus(occluded);
     };
     const auto presentSeqId = queue_.submitPresent(augmented);
-    queue_.presentBoundary(presentSeqId, maxFrameLatency_);
+    // Vsync/default presents are already synchronized by core::Device::presentEx()
+    // via flush(); keep the latency boundary for immediate presents only.
+    const bool shouldApplyBoundary =
+        !disablePresentBoundary() &&
+        (!augmented.displaySyncEnabled || forceSyncPresentBoundary());
+    if (shouldApplyBoundary) {
+      perf::countPresentBoundaryApplied();
+      queue_.presentBoundary(presentSeqId, maxFrameLatency_);
+    } else {
+      perf::countPresentBoundarySkipped();
+    }
   }
   void flush() override { queue_.submitFlush(); }
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }
@@ -161,7 +223,7 @@ class DeviceImpl final : public Device {
   core::BackendLimits limits_{};
   core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
-  std::uint32_t maxFrameLatency_ = 3;
+  std::uint32_t maxFrameLatency_ = core::kDefaultFrameLatency;
   CommandQueue queue_;
 };
 

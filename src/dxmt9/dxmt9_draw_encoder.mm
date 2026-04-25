@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iomanip>
 #include <optional>
 #include <sstream>
@@ -100,6 +101,22 @@ using i32 = std::int32_t;
 using f32 = float;
 
 namespace {
+
+bool splitPresentBeforeAcquireEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_SPLIT_PRESENT_ACQUIRE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+bool presentBoundaryAfterAcquireEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
 
 // Attachment key + hazard bloom used by encodeChunk to decide whether to
 // flush + restart the render pass between commands. Previously file-local
@@ -1047,11 +1064,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return std::nullopt;
   }
 
-  auto ownedCommandBuffer = ctx.queue.newCommandBuffer();
-  if (!ownedCommandBuffer) {
+  auto commandBuffer = ctx.queue.newCommandBuffer();
+  if (!commandBuffer) {
     return std::nullopt;
   }
-  auto commandBuffer = ownedCommandBuffer;
+  bool commandBufferHasWork = false;
 
   // Deferred-upload fence: flush any pending staging→private blits via
   // the queue-owned ResourceInitializer, then wait for its SharedEvent
@@ -1060,10 +1077,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   const auto initializerFlush = ctx.queue.flushInitializerUploads();
   if (initializerFlush.event && initializerFlush.value > 0) {
     commandBuffer.encodeWaitForEvent(initializerFlush.event, initializerFlush.value);
+    commandBufferHasWork = true;
   }
 
   WMT::Reference<WMT::RenderCommandEncoder> activeRenderEncoder{};
   WMT::Reference<WMT::BlitCommandEncoder> activeBlitEncoder{};
+  std::vector<std::function<void()>> postCommitCallbacks;
   AttachmentKey activeKey{};
   HazardBloom activeWriteBloom{};
   bool hasActiveRender = false;
@@ -1094,7 +1113,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   auto flushPendingClear = [&] {
     if (!pendingClear.has_value()) return;
     dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, *pendingClear);
+    commandBufferHasWork = true;
     pendingClear.reset();
+  };
+
+  auto splitBeforeBlockingPresent = [&] {
+    if (!splitPresentBeforeAcquireEnabled() || !commandBufferHasWork) {
+      return;
+    }
+    auto presentCommandBuffer = ctx.queue.newCommandBuffer();
+    if (!presentCommandBuffer) {
+      return;
+    }
+    commandBuffer.commit();
+    commandBuffer = std::move(presentCommandBuffer);
+    commandBufferHasWork = false;
   };
 
   using Kind = core::MetalCommandRecord::Kind;
@@ -1107,6 +1140,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           pendingClear = command.clear;
         } else {
           dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, command.clear);
+          commandBufferHasWork = true;
         }
         break;
       case Kind::Draw: {
@@ -1131,6 +1165,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           startRenderPass(command.draw, std::nullopt);
         }
         encodeDraw(ctx, commandBuffer, activeRenderEncoder, command.draw, slot.seqId);
+        commandBufferHasWork = true;
         break;
       }
       case Kind::SurfaceCopy:
@@ -1139,6 +1174,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         dxmt9::encoders::encodeSurfaceCopy(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                            ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                            command.surfaceCopy);
+        commandBufferHasWork = true;
         break;
       case Kind::StretchRect:
         flushPendingClear();
@@ -1146,11 +1182,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         dxmt9::encoders::encodeStretchRect(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                             ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                             command.stretchRect);
+        commandBufferHasWork = true;
         break;
       case Kind::Readback:
         flushPendingClear();
         flushRender();
         dxmt9::encoders::encodeReadback(commandBuffer, ctx.pool, command.readback);
+        commandBufferHasWork = true;
         break;
       case Kind::ColorFill:
         flushPendingClear();
@@ -1158,14 +1196,30 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         dxmt9::encoders::encodeColorFill(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                           ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                           command.colorFill);
+        commandBufferHasWork = true;
         break;
       case Kind::Present:
         flushPendingClear();
         flushRender();
         flushBlit();
-        if (dxmt9::encodePresent(commandBuffer, ctx.pool,
-                                  command.present, command.presentSource, slot.seqId)) {
+        splitBeforeBlockingPresent();
+        const bool noteAfterAcquire = presentBoundaryAfterAcquireEnabled();
+        if (!noteAfterAcquire) {
+          ctx.queue.notePresentDequeued(slot.seqId);
+        }
+        const bool presentEncoded = dxmt9::encodePresent(commandBuffer, ctx.pool,
+                                                          command.present, command.presentSource, slot.seqId);
+        if (noteAfterAcquire) {
+          ctx.queue.notePresentDequeued(slot.seqId);
+        }
+        if (presentEncoded) {
+          commandBufferHasWork = true;
           ctx.queue.backBufferDiscardAfterPresent_ = true;
+          if (auto* presenter = command.present.presenter) {
+            postCommitCallbacks.push_back([presenter, seqId = slot.seqId] {
+              presenter->preAcquireNextDrawable(seqId);
+            });
+          }
         }
         break;
     }
@@ -1182,6 +1236,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   record.seqId = seqId;
   record.commands = std::span<const core::MetalCommandRecord>(slot.commands.data(), slot.commands.size());
   record.context = "queue";
+  record.postCommitCallbacks = std::move(postCommitCallbacks);
   return record;
   }  // @autoreleasepool
 }

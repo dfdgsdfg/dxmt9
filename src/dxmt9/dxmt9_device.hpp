@@ -69,7 +69,7 @@ class Device {
   virtual void notifyDeviceLost(bool /*lost*/) {}
   virtual void notifyPresentationStatus(bool /*occluded*/) {}
   virtual void setMaxFrameLatency(std::uint32_t /*latency*/) {}
-  virtual std::uint32_t maxFrameLatency() const { return 3; }
+  virtual std::uint32_t maxFrameLatency() const { return core::kDefaultFrameLatency; }
 
   // Resource lifecycle — previously on BackendDevice. Promoted so
   // core::Device can talk to dxmt9::Device directly instead of going

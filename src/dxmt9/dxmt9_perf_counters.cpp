@@ -44,10 +44,22 @@ struct Counters {
   std::atomic<std::uint64_t> queueSequenceWaits{0};
   std::atomic<std::uint64_t> queueSequenceWaitNs{0};
   std::atomic<std::uint64_t> queueSequenceWaitMaxNs{0};
+  std::atomic<std::uint64_t> presentBoundaryApplied{0};
+  std::atomic<std::uint64_t> presentBoundarySkipped{0};
+  std::atomic<std::uint64_t> presentBoundaryWaits{0};
+  std::atomic<std::uint64_t> presentBoundaryWaitNs{0};
+  std::atomic<std::uint64_t> presentBoundaryWaitMaxNs{0};
   std::atomic<std::uint64_t> presentEncoded{0};
   std::atomic<std::uint64_t> presentSkipped{0};
   std::atomic<std::uint64_t> presentAcquireWaits{0};
   std::atomic<std::uint64_t> presentAcquireWaitNs{0};
+  std::atomic<std::uint64_t> presentAcquireWaitMaxNs{0};
+  std::atomic<std::uint64_t> presentAcquireSlowWaits{0};
+  std::atomic<std::uint64_t> presentPreAcquireRequests{0};
+  std::atomic<std::uint64_t> presentPreAcquireHits{0};
+  std::atomic<std::uint64_t> presentPreAcquireMisses{0};
+  std::atomic<std::uint64_t> presentPreAcquireWaitNs{0};
+  std::atomic<std::uint64_t> presentPreAcquireWaitMaxNs{0};
   std::atomic<std::uint64_t> presentSetPropsWaits{0};
   std::atomic<std::uint64_t> presentSetPropsWaitNs{0};
 };
@@ -88,8 +100,15 @@ void report() {
       "queue_writer_waits=%llu queue_writer_wait_ms=%.3f queue_writer_wait_max_ms=%.3f "
       "queue_commit_waits=%llu queue_commit_wait_ms=%.3f queue_commit_wait_max_ms=%.3f "
       "queue_sequence_waits=%llu queue_sequence_wait_ms=%.3f queue_sequence_wait_max_ms=%.3f "
+      "present_boundary_applied=%llu present_boundary_skipped=%llu "
+      "present_boundary_waits=%llu present_boundary_wait_ms=%.3f present_boundary_wait_max_ms=%.3f "
       "present_encoded=%llu present_skipped=%llu present_acquire_waits=%llu "
-      "present_acquire_wait_ms=%.3f present_set_props_waits=%llu present_set_props_wait_ms=%.3f\n",
+      "present_acquire_wait_ms=%.3f present_acquire_wait_max_ms=%.3f "
+      "present_acquire_slow_waits=%llu "
+      "present_preacquire_requests=%llu present_preacquire_hits=%llu "
+      "present_preacquire_misses=%llu present_preacquire_wait_ms=%.3f "
+      "present_preacquire_wait_max_ms=%.3f "
+      "present_set_props_waits=%llu present_set_props_wait_ms=%.3f\n",
       static_cast<unsigned long long>(load(c.submitDraw)),
       static_cast<unsigned long long>(load(c.submitClear)),
       static_cast<unsigned long long>(load(c.submitStretch)),
@@ -126,10 +145,22 @@ void report() {
       static_cast<unsigned long long>(load(c.queueSequenceWaits)),
       static_cast<double>(load(c.queueSequenceWaitNs)) / 1000000.0,
       static_cast<double>(load(c.queueSequenceWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.presentBoundaryApplied)),
+      static_cast<unsigned long long>(load(c.presentBoundarySkipped)),
+      static_cast<unsigned long long>(load(c.presentBoundaryWaits)),
+      static_cast<double>(load(c.presentBoundaryWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.presentBoundaryWaitMaxNs)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentEncoded)),
       static_cast<unsigned long long>(load(c.presentSkipped)),
       static_cast<unsigned long long>(load(c.presentAcquireWaits)),
       static_cast<double>(load(c.presentAcquireWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.presentAcquireWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.presentAcquireSlowWaits)),
+      static_cast<unsigned long long>(load(c.presentPreAcquireRequests)),
+      static_cast<unsigned long long>(load(c.presentPreAcquireHits)),
+      static_cast<unsigned long long>(load(c.presentPreAcquireMisses)),
+      static_cast<double>(load(c.presentPreAcquireWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.presentPreAcquireWaitMaxNs)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentSetPropsWaits)),
       static_cast<double>(load(c.presentSetPropsWaitNs)) / 1000000.0);
 }
@@ -248,6 +279,20 @@ void countQueueSequenceWait(std::uint64_t nanoseconds) {
   updateMax(counters().queueSequenceWaitMaxNs, nanoseconds);
 }
 
+void countPresentBoundaryApplied() {
+  add(counters().presentBoundaryApplied);
+}
+
+void countPresentBoundarySkipped() {
+  add(counters().presentBoundarySkipped);
+}
+
+void countPresentBoundaryWait(std::uint64_t nanoseconds) {
+  add(counters().presentBoundaryWaits);
+  add(counters().presentBoundaryWaitNs, nanoseconds);
+  updateMax(counters().presentBoundaryWaitMaxNs, nanoseconds);
+}
+
 void countPresentEncoded() {
   add(counters().presentEncoded);
 }
@@ -259,6 +304,27 @@ void countPresentSkipped() {
 void countPresentAcquireWait(std::uint64_t nanoseconds) {
   add(counters().presentAcquireWaits);
   add(counters().presentAcquireWaitNs, nanoseconds);
+  updateMax(counters().presentAcquireWaitMaxNs, nanoseconds);
+  if (nanoseconds >= 1000000ull) {
+    add(counters().presentAcquireSlowWaits);
+  }
+}
+
+void countPresentPreAcquireRequest() {
+  add(counters().presentPreAcquireRequests);
+}
+
+void countPresentPreAcquireHit() {
+  add(counters().presentPreAcquireHits);
+}
+
+void countPresentPreAcquireMiss() {
+  add(counters().presentPreAcquireMisses);
+}
+
+void countPresentPreAcquireWait(std::uint64_t nanoseconds) {
+  add(counters().presentPreAcquireWaitNs, nanoseconds);
+  updateMax(counters().presentPreAcquireWaitMaxNs, nanoseconds);
 }
 
 void countPresentSetPropsWait(std::uint64_t nanoseconds) {

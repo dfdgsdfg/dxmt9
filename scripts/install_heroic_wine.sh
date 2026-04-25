@@ -18,6 +18,7 @@ Options:
                           Default: <repo>/build-win32-x64-builtin/src/win32
   --runtime-pe-build-dir <path>
                           Directory containing builtin winemetal.dll for
+                          <prefix>/system32 and
                           <wine-root>/lib/wine/x86_64-windows.
                           Default: <repo>/build-win32-x64-builtin/src/winemetal
   --wow64-pe-build-dir <path>
@@ -25,6 +26,7 @@ Options:
                           for <prefix>/syswow64.
   --wow64-runtime-pe-build-dir <path>
                           Directory containing builtin 32-bit winemetal.dll for
+                          <prefix>/syswow64 and
                           <wine-root>/lib/wine/i386-windows.
                           Default: <repo>/build-win32-x86-builtin/src/winemetal
   --unix-build-dir <path> Directory containing winemetal.so.
@@ -41,6 +43,7 @@ runtime and prefix:
   64-bit lane:
   - d3d9.dll      -> <prefix>/drive_c/windows/system32
   - d3d9.dll      -> <wine-root>/lib/wine/x86_64-windows
+  - winemetal.dll -> <prefix>/drive_c/windows/system32
   - winemetal.dll -> <wine-root>/lib/wine/x86_64-windows
   - winemetal.so  -> <wine-root>/lib/wine/x86_64-unix
   - libc++.dll    -> <prefix>/drive_c/windows/system32
@@ -49,6 +52,7 @@ runtime and prefix:
   Optional WoW64 32-bit lane:
   - d3d9.dll      -> <prefix>/drive_c/windows/syswow64
   - d3d9.dll      -> <wine-root>/lib/wine/i386-windows
+  - winemetal.dll -> <prefix>/drive_c/windows/syswow64
   - winemetal.dll -> <wine-root>/lib/wine/i386-windows
   - libc++.dll    -> <prefix>/drive_c/windows/syswow64
   - libunwind.dll -> <prefix>/drive_c/windows/syswow64
@@ -111,6 +115,47 @@ install_file() {
   backup_if_needed "$target"
   cp -f "$source" "$target"
   printf 'installed %s -> %s\n' "$source" "$target"
+}
+
+ensure_meson_postprocess() {
+  local artifact build_root rel_target parent
+  artifact=$1
+
+  if [[ ! -f "$artifact" ]]; then
+    return 0
+  fi
+
+  build_root=$(dirname -- "$artifact")
+  while [[ "$build_root" != "/" ]]; do
+    if [[ -f "$build_root/build.ninja" ]]; then
+      break
+    fi
+    parent=$(dirname -- "$build_root")
+    if [[ "$parent" == "$build_root" ]]; then
+      break
+    fi
+    build_root=$parent
+  done
+
+  if [[ ! -f "$build_root/build.ninja" ]]; then
+    return 0
+  fi
+
+  rel_target=${artifact#"$build_root"/}.postproc
+  if [[ "$rel_target" == "$artifact.postproc" ]]; then
+    return 0
+  fi
+
+  if ! rg -q --fixed-strings "build $rel_target:" "$build_root/build.ninja"; then
+    return 0
+  fi
+
+  if ! command -v ninja >/dev/null 2>&1; then
+    printf 'error: ninja is required to run Meson postprocess target: %s\n' "$rel_target" >&2
+    exit 1
+  fi
+
+  ninja -C "$build_root" "$rel_target"
 }
 
 
@@ -235,8 +280,18 @@ if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
   fi
 fi
 
+ensure_meson_postprocess "$pe_build_dir/d3d9.dll"
+ensure_meson_postprocess "$runtime_pe_build_dir/winemetal.dll"
+if [[ -n "$wow64_pe_build_dir" ]]; then
+  ensure_meson_postprocess "$wow64_pe_build_dir/d3d9.dll"
+fi
+if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
+  ensure_meson_postprocess "$wow64_runtime_pe_build_dir/winemetal.dll"
+fi
+
 install_file "$pe_build_dir/d3d9.dll" "$system32_dir/d3d9.dll"
 install_file "$pe_build_dir/d3d9.dll" "$windows_runtime_dir/d3d9.dll"
+install_file "$runtime_pe_build_dir/winemetal.dll" "$system32_dir/winemetal.dll"
 install_file "$runtime_pe_build_dir/winemetal.dll" "$windows_runtime_dir/winemetal.dll"
 install_file "$unix_build_dir/winemetal/unix/winemetal.so" "$unix_runtime_dir/winemetal.so"
 install_file "$mingw_bin_dir/libc++.dll" "$system32_dir/libc++.dll"
@@ -250,6 +305,7 @@ if [[ -n "$wow64_pe_build_dir" ]]; then
 fi
 
 if [[ -n "$wow64_runtime_pe_build_dir" ]]; then
+  install_file "$wow64_runtime_pe_build_dir/winemetal.dll" "$syswow64_dir/winemetal.dll"
   install_file "$wow64_runtime_pe_build_dir/winemetal.dll" "$i386_windows_runtime_dir/winemetal.dll"
 fi
 

@@ -629,7 +629,14 @@ bool QueueLifecycleController::runEncodeIteration(
   lock.lock();
 
   if (submission.has_value()) {
+    auto postCommitCallbacks = std::move(submission->postCommitCallbacks);
     enqueueSubmission(*submission);
+    lock.unlock();
+    for (auto& callback : postCommitCallbacks) {
+      if (callback) {
+        callback();
+      }
+    }
   } else {
     completeInlineChunk(slotIndex, slotCopy.seqId);
     if (onInlineComplete) {

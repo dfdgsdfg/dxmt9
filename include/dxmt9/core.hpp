@@ -43,6 +43,8 @@ constexpr HRESULT S_PRESENT_OCCLUDED = static_cast<HRESULT>(0x08760878);
 
 inline constexpr u32 kMaxAdapters = 4;
 inline constexpr u32 kMaxRenderTargets = 4;
+inline constexpr u32 kDefaultFrameLatency = 3;
+inline constexpr u32 kMaxFrameLatency = 30;
 inline constexpr u32 kMaxStreams = 16;
 inline constexpr u32 kMaxTextures = 16;
 inline constexpr u32 kMaxSamplers = 16;
@@ -648,6 +650,10 @@ struct ClearDesc {
 
 struct SwapDesc {
   Handle window{};
+  // D3D9 present source is the swapchain backbuffer. The queue keeps a
+  // fallback heuristic for old test paths, but normal device/swapchain
+  // presents must fill this explicitly.
+  Handle sourceSurface{};
   u32 width = 0;
   u32 height = 0;
   Format format = Format::A8R8G8B8;
@@ -659,10 +665,9 @@ struct SwapDesc {
   // to target the per-window Presenter without an hwnd-keyed registry.
   dxmt9::Presenter* presenter = nullptr;
   // Per-present back-channels — DeviceImpl::present() fills these from its
-  // own observers + maxFrameLatency_ before forwarding to the queue. Lets
-  // the queue's encode thread drive presentation policy without holding a
-  // Device* pointer (matches upstream's queue self-containment).
-  u32 maxFrameLatency = 3;
+  // own observers + maxFrameLatency_ before forwarding to the queue. Frame
+  // latency is the app-facing pacing limit, not the Metal drawable count.
+  u32 maxFrameLatency = kDefaultFrameLatency;
   std::function<void(bool)> notifyPresentationStatus{};
 };
 
@@ -1434,7 +1439,7 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 submittedSequenceId_ = 0;
   u64 completedSequenceId_ = 0;
   u32 presentCount_ = 0;
-  u32 maximumFrameLatency_ = 3;
+  u32 maximumFrameLatency_ = kDefaultFrameLatency;
   bool inScene_ = false;
   bool deviceLost_ = false;
   bool presentOccluded_ = false;

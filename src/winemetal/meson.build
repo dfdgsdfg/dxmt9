@@ -108,7 +108,10 @@ if host_machine.system() == 'windows'
       'winemetal_builtin_postprocess',
       input: winemetal_dll,
       output: 'winemetal.dll.postproc',
-      command: [winebuild, '--builtin', '@INPUT@'],
+      command: [
+        'sh', '-c', '"$1" --builtin "$2" && touch "$3"',
+        'sh', winebuild, '@INPUT@', '@OUTPUT@',
+      ],
       depends: winemetal_dll,
       build_by_default: true,
     )

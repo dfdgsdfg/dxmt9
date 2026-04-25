@@ -38,7 +38,10 @@ if get_option('wine_builtin_dll')
     'd3d9_builtin_postprocess',
     input: d3d9_dll,
     output: 'd3d9.dll.postproc',
-    command: [dxmt9_winebuild, '--builtin', '@INPUT@'],
+    command: [
+      'sh', '-c', '"$1" --builtin "$2" && touch "$3"',
+      'sh', dxmt9_winebuild, '@INPUT@', '@OUTPUT@',
+    ],
     depends: d3d9_dll,
     build_by_default: true,
   )

@@ -475,11 +475,18 @@ extern "C" int32_t dxmt9c_device_stretch_rect(D9CDevice* d, D9CSurface* src, con
   if (!src || !dst) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  constexpr uint32_t kD3DTexfNone = 0;
+  constexpr uint32_t kD3DTexfPoint = 1;
+  constexpr uint32_t kD3DTexfLinear = 2;
+  if (filter != kD3DTexfNone && filter != kD3DTexfPoint && filter != kD3DTexfLinear) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   auto* srcRect =
       sr ? new dxmt9::core::Rect{sr->left, sr->top, sr->right, sr->bottom} : nullptr;
   auto* dstRect =
       dr ? new dxmt9::core::Rect{dr->left, dr->top, dr->right, dr->bottom} : nullptr;
-  const auto hr = d->iface->StretchRect(src->obj, srcRect, dst->obj, dstRect, filter != 1);
+  const auto hr = d->iface->StretchRect(src->obj, srcRect, dst->obj, dstRect,
+                                        filter == kD3DTexfLinear);
   delete srcRect;
   delete dstRect;
   return hr;

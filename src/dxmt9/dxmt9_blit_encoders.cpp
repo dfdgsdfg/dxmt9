@@ -28,6 +28,22 @@ WMT::Reference<WMT::SamplerState> makeLinearOrNearestSampler(WMT::Reference<WMT:
   return device.newSamplerState(info);
 }
 
+bool canCopyStretchRect(const resources::SurfaceRecord& src,
+                        const resources::SurfaceRecord& dst,
+                        const core::StretchRectDesc& stretch) {
+  const auto srcW = std::max(0, stretch.sourceRect.right - stretch.sourceRect.left);
+  const auto srcH = std::max(0, stretch.sourceRect.bottom - stretch.sourceRect.top);
+  const auto dstW = std::max(0, stretch.destinationRect.right - stretch.destinationRect.left);
+  const auto dstH = std::max(0, stretch.destinationRect.bottom - stretch.destinationRect.top);
+  return src.desc.format == dst.desc.format &&
+         srcW == dstW &&
+         srcH == dstH &&
+         stretch.sourceSampleCount == 1 &&
+         stretch.destinationSampleCount == 1 &&
+         !src.resolveTexture &&
+         !dst.resolveTexture;
+}
+
 }  // namespace
 
 void encodeReadback(WMT::CommandBuffer& commandBuffer,
@@ -70,6 +86,25 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
   auto* src = pool.findSurface(stretch.source.value);
   auto* dst = pool.findSurface(stretch.destination.value);
   if (!src || !dst || !src->texture || !dst->texture) {
+    return;
+  }
+  if (canCopyStretchRect(*src, *dst, stretch)) {
+    auto blit = commandBuffer.blitCommandEncoder();
+    if (!blit) return;
+    const auto width = static_cast<uint32_t>(
+        std::max(1, stretch.sourceRect.right - stretch.sourceRect.left));
+    const auto height = static_cast<uint32_t>(
+        std::max(1, stretch.sourceRect.bottom - stretch.sourceRect.top));
+    WMTOrigin srcOrigin{static_cast<uint64_t>(stretch.sourceRect.left),
+                         static_cast<uint64_t>(stretch.sourceRect.top), 0};
+    WMTSize srcSize{width, height, 1};
+    WMTOrigin dstOrigin{static_cast<uint64_t>(stretch.destinationRect.left),
+                         static_cast<uint64_t>(stretch.destinationRect.top), 0};
+    blit.copyFromTextureToTexture(WMT::Texture{src->texture.handle}, 0, src->level,
+                                   srcOrigin, srcSize,
+                                   WMT::Texture{dst->texture.handle}, 0, dst->level,
+                                   dstOrigin);
+    blit.endEncoding();
     return;
   }
   WMTRenderPassInfo passInfo{};

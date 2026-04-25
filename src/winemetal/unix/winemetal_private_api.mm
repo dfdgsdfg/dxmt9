@@ -319,6 +319,14 @@ extern "C" obj_handle_t MetalLayer_nextDrawable(obj_handle_t layer) {
   return (obj_handle_t)[(CAMetalLayer *)layer nextDrawable];
 }
 
+extern "C" obj_handle_t MetalLayer_nextDrawableRetained(obj_handle_t layer) {
+  if (!layer) {
+    return NULL_OBJECT_HANDLE;
+  }
+  id<CAMetalDrawable> drawable = [(CAMetalLayer *)layer nextDrawable];
+  return (obj_handle_t)[drawable retain];
+}
+
 extern "C" void MetalLayer_setProps(obj_handle_t layer, const struct WMTLayerProps *props) {
   if (!layer || !props) {
     return;

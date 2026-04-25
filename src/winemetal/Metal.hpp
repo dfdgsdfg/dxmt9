@@ -767,6 +767,11 @@ public:
     return MetalDrawable{MetalLayer_nextDrawable(handle)};
   };
 
+  Reference<MetalDrawable>
+  nextDrawableRetained() {
+    return Reference<MetalDrawable>{MetalLayer_nextDrawableRetained(handle)};
+  }
+
   void
   setProps(const WMTLayerProps &props) {
     MetalLayer_setProps(handle, &props);

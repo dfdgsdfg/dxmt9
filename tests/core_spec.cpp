@@ -401,7 +401,7 @@ struct RecordingBackend final : BackendDevice {
   std::vector<SwapDesc> presents;
   DeviceLostObserver deviceLostObserver;
   PresentationStatusObserver presentationStatusObserver;
-  u32 maxFrameLatency = 3;
+  u32 maxFrameLatency = kDefaultFrameLatency;
   std::vector<u32> maxFrameLatencyCalls;
   std::vector<SwapDesc> waitForVBlankCalls;
 
@@ -1242,6 +1242,7 @@ void testDeviceCoreFlow() {
   checkEq(backend->presents[0].height, 480u, "present height");
   checkEq(backend->presents[0].format, Format::A8R8G8B8, "present format");
   checkEq(backend->presents[0].multiSampleType, MultiSampleType::Four, "present sample type");
+  checkEq(backend->presents[0].sourceSurface, backBuffer->handle(), "present source backbuffer");
   check(backend->presents[0].displaySyncEnabled, "present sync");
 
   checkEq(device->getQueryData(occlusion, &occlusionCount, sizeof(occlusionCount), QUERY_GETDATA_FLUSH), S_OK,
@@ -1329,6 +1330,8 @@ void testDeviceCoreFlow() {
   checkEq(backend->presents.size(), size_t{2}, "present count after reset");
   checkEq(backend->presents[1].width, 800u, "present width after reset");
   checkEq(backend->presents[1].height, 600u, "present height after reset");
+  checkEq(backend->presents[1].sourceSurface, device->swapChain()->backBuffer()->handle(),
+          "present source after reset");
   check(!backend->presents[1].displaySyncEnabled, "immediate present after reset");
   checkEq(device->swapChain()->backBuffer()->desc().width, 800u, "swapchain width after reset");
   checkEq(device->swapChain()->backBuffer()->desc().height, 600u, "swapchain height after reset");
@@ -1539,12 +1542,15 @@ void testComWrappersEx() {
   check(queriedDevice != nullptr, "device ex query result");
   checkEq(queriedDevice->Release(), 1u, "device ex qi release");
   checkEq(device->GetMaximumFrameLatency(), 3u, "default max frame latency");
-  checkEq(device->SetMaximumFrameLatency(0), D3D_OK, "set frame latency clamp low");
-  checkEq(device->GetMaximumFrameLatency(), 1u, "clamped low frame latency");
-  checkEq(backend->maxFrameLatencyCalls.back(), 1u, "backend received low frame latency");
-  checkEq(device->SetMaximumFrameLatency(99), D3D_OK, "set frame latency clamp high");
-  checkEq(device->GetMaximumFrameLatency(), 3u, "clamped high frame latency");
-  checkEq(backend->maxFrameLatencyCalls.back(), 3u, "backend received high frame latency");
+  checkEq(device->SetMaximumFrameLatency(0), D3D_OK, "set frame latency default");
+  checkEq(device->GetMaximumFrameLatency(), 3u, "zero latency maps to default");
+  checkEq(backend->maxFrameLatencyCalls.back(), 3u, "backend received default frame latency");
+  checkEq(device->SetMaximumFrameLatency(30), D3D_OK, "set max valid frame latency");
+  checkEq(device->GetMaximumFrameLatency(), 30u, "stored max valid frame latency");
+  checkEq(backend->maxFrameLatencyCalls.back(), 30u, "backend received max valid frame latency");
+  checkEq(device->SetMaximumFrameLatency(31), D3DERR_INVALIDCALL, "reject invalid frame latency");
+  checkEq(device->GetMaximumFrameLatency(), 30u, "invalid frame latency leaves previous value");
+  checkEq(backend->maxFrameLatencyCalls.back(), 30u, "backend not updated for invalid frame latency");
 
   checkEq(device->CheckDeviceState(params.deviceWindow), D3D_OK, "initial device state");
   backend->triggerPresentationOccluded(true);

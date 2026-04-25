@@ -209,6 +209,18 @@ payload = {
 }
 summary_json.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
+columns = [
+    "app", "status", "vanilla fps", "dxmt9 fps", "speedup",
+    "present ok/skip", "boundary app/skip", "boundary wait ms",
+    "boundary max ms", "dxmt9 cmdbuf", "dxmt9 mtbuf", "dxmt9 pso",
+    "completion ms", "present completion ms", "draw completion ms",
+    "blit completion ms", "completion max ms", "acquire ms",
+    "acquire max ms", "acquire slow", "preacq hit/miss", "preacq ms",
+    "preacq max ms", "writer wait ms", "commit wait ms", "sequence wait ms",
+    "sync ms", "vanilla sec", "dxmt9 sec",
+]
+align = ["---", "---"] + ["---:"] * (len(columns) - 2)
+
 lines = [
     "# DX9 Performance Suite",
     "",
@@ -216,8 +228,8 @@ lines = [
     f"- pass_count: `{payload['pass_count']}`",
     f"- fail_count: `{payload['fail_count']}`",
     "",
-    "| app | status | vanilla fps | dxmt9 fps | speedup | present ok/skip | dxmt9 cmdbuf | dxmt9 mtbuf | dxmt9 pso | completion ms | present completion ms | draw completion ms | blit completion ms | completion max ms | acquire ms | writer wait ms | commit wait ms | sequence wait ms | sync ms | vanilla sec | dxmt9 sec |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| " + " | ".join(columns) + " |",
+    "| " + " | ".join(align) + " |",
 ]
 for row in rows:
     vanilla = row["vanilla"]
@@ -235,23 +247,37 @@ for row in rows:
     lines.append(
         f"| `{row['name']}` | `{row['status']}` | `{fmt(vf)}` | `{fmt(df)}` | `{fmt(speedup, 3)}` | "
         f"`{fmt_int(dc.get('present_encoded'))}/{fmt_int(dc.get('present_skipped'))}` | "
+        f"`{fmt_int(dc.get('present_boundary_applied'))}/{fmt_int(dc.get('present_boundary_skipped'))}` | "
+        f"`{fmt(dc.get('present_boundary_wait_ms'), 3)}` | "
+        f"`{fmt(dc.get('present_boundary_wait_max_ms'), 3)}` | "
         f"`{fmt_int(dc.get('command_buffers'))}` | `{fmt_int(dc.get('metal_buffers'))}` | "
         f"`{fmt_int(dc.get('pipeline_builds'))}` | `{fmt(dc.get('completion_wait_ms'), 3)}` | "
         f"`{fmt(dc.get('completion_present_wait_ms'), 3)}` | "
         f"`{fmt(dc.get('completion_draw_wait_ms'), 3)}` | "
         f"`{fmt(dc.get('completion_blit_wait_ms'), 3)}` | "
         f"`{fmt(dc.get('completion_wait_max_ms'), 3)}` | `{fmt(dc.get('present_acquire_wait_ms'), 3)}` | "
+        f"`{fmt(dc.get('present_acquire_wait_max_ms'), 3)}` | "
+        f"`{fmt_int(dc.get('present_acquire_slow_waits'))}` | "
+        f"`{fmt_int(dc.get('present_preacquire_hits'))}/{fmt_int(dc.get('present_preacquire_misses'))}` | "
+        f"`{fmt(dc.get('present_preacquire_wait_ms'), 3)}` | "
+        f"`{fmt(dc.get('present_preacquire_wait_max_ms'), 3)}` | "
         f"`{fmt(dc.get('queue_writer_wait_ms'), 3)}` | `{fmt(dc.get('queue_commit_wait_ms'), 3)}` | "
         f"`{fmt(dc.get('queue_sequence_wait_ms'), 3)}` | `{fmt(dc.get('sync_wait_ms'), 3)}` | "
         f"`{fmt(ve)}` | `{fmt(de)}` |"
     )
     if vanilla.get("status") != "pass":
+        cells = ["", "vanilla_failures"] + [""] * (len(columns) - 3) + [
+            f"`{json.dumps(vanilla.get('failures', []), sort_keys=True)}`"
+        ]
         lines.append(
-            f"|  | vanilla_failures |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | `{json.dumps(vanilla.get('failures', []), sort_keys=True)}` |"
+            "| " + " | ".join(cells) + " |"
         )
     if dxmt9.get("status") != "pass":
+        cells = ["", "dxmt9_failures"] + [""] * (len(columns) - 3) + [
+            f"`{json.dumps(dxmt9.get('failures', []), sort_keys=True)}`"
+        ]
         lines.append(
-            f"|  | dxmt9_failures |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  | `{json.dumps(dxmt9.get('failures', []), sort_keys=True)}` |"
+            "| " + " | ".join(cells) + " |"
         )
 
 summary_md.write_text("\n".join(lines) + "\n")

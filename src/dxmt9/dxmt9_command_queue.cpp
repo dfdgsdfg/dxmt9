@@ -10,6 +10,7 @@
 #include "dxmt9_ring_arena.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
@@ -350,6 +351,14 @@ bool splitPresentChunk() {
   return enabled;
 }
 
+bool presentBoundaryWaitsForCompletion() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PRESENT_BOUNDARY_COMPLETION");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
 void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
   for (const auto& command : slot.commands) {
     switch (command.kind) {
@@ -409,6 +418,7 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeSurfaceCopyCommand(desc));
+  currentBackBuffer_ = desc.destination;
   pool_.markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
 }
 
@@ -417,6 +427,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeStretchRectCommand(desc));
+  currentBackBuffer_ = desc.destination;
   pool_.markStretchResources(desc, seqIdForMark(*this, 0));
 }
 
@@ -438,13 +449,14 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   perf::countSubmitPresent();
   std::unique_lock lock(mutex_);
+  const core::Handle sourceHandle = desc.sourceSurface ? desc.sourceSurface : currentBackBuffer_;
   if (splitPresentChunk()) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
           markSlotResourcesUnlocked(pool_, slot);
         });
     ensureWritingSlotUnlocked(*this, lock);
-    queueLifecycle_.appendPresentCommand(desc, currentBackBuffer_);
+    queueLifecycle_.appendPresentCommand(desc, sourceHandle);
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
           markSlotResourcesUnlocked(pool_, slot);
@@ -452,7 +464,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     return lastCommittedSeqId_;
   }
   queueLifecycle_.presentAndCommit(
-      lock, kMaxQueuedChunks, desc, currentBackBuffer_,
+      lock, kMaxQueuedChunks, desc, sourceHandle,
       [this](const core::ChunkSlot& slot) {
         markSlotResourcesUnlocked(pool_, slot);
       });
@@ -463,15 +475,35 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
   if (presentSeqId == 0) {
     return;
   }
-  maxFrameLatency = std::clamp<std::uint32_t>(maxFrameLatency, 1u, 3u);
+  maxFrameLatency = std::clamp<std::uint32_t>(maxFrameLatency, 1u, kMaxQueuedChunks);
   if (presentSeqId <= maxFrameLatency) {
     return;
   }
   const std::uint64_t targetSeqId = presentSeqId - maxFrameLatency;
   std::unique_lock lock(mutex_);
-  if (targetSeqId > completedSeqId_) {
-    queueLifecycle_.waitForSequence(lock, targetSeqId);
+  const bool waitForCompletion = presentBoundaryWaitsForCompletion();
+  const auto reachedBoundary = [&] {
+    return waitForCompletion ? completedSeqId_ >= targetSeqId
+                             : presentDequeuedSeqId_ >= targetSeqId;
+  };
+  if (reachedBoundary()) {
+    return;
   }
+  const auto waitStarted = std::chrono::steady_clock::now();
+  if (waitForCompletion) {
+    finishCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
+  } else {
+    presentDequeuedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
+  }
+  const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
+  perf::countPresentBoundaryWait(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
+}
+
+void CommandQueue::notePresentDequeued(std::uint64_t seqId) {
+  std::lock_guard lock(mutex_);
+  presentDequeuedSeqId_ = std::max(presentDequeuedSeqId_, seqId);
+  presentDequeuedCv_.notify_all();
 }
 
 void CommandQueue::submitFlush() {

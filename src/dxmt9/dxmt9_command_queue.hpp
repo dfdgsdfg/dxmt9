@@ -173,6 +173,7 @@ class CommandQueue {
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
   void runFinishLoop();
   void runCompletionWatcherLoop();
+  void notePresentDequeued(std::uint64_t seqId);
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
   void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
   void startThreads(std::function<void()> encodeLoop,
@@ -187,6 +188,7 @@ class CommandQueue {
   std::uint64_t nextSeqId_ = 1;           // next seq to allocate
   std::uint64_t completedSeqId_ = 0;      // gpu-completed watermark
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
+  std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present
 
   std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
   std::optional<size_t> writingSlot_{};
@@ -194,10 +196,13 @@ class CommandQueue {
   size_t inflightCount_ = 0;
   std::deque<size_t> readySlots_{};
   std::deque<std::uint64_t> completedSeqQueue_{};
+  std::condition_variable presentDequeuedCv_{};
 
-  // Last destination handle for a color-write. Drives submitPresent's
-  // source selection; read by encoders::beginRenderPass to decide
-  // whether a post-present Discard load action is safe.
+  // Last destination handle for a color-write. submitPresent only uses
+  // this as a fallback when SwapDesc::sourceSurface is absent; normal
+  // D3D9 presents carry the swapchain backbuffer explicitly. Also read
+  // by encoders::beginRenderPass to decide whether a post-present
+  // Discard load action is safe.
   core::Handle currentBackBuffer_{};
   bool backBufferDiscardAfterPresent_ = false;
 
