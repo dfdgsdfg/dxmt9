@@ -20,7 +20,36 @@ dxmt9_frontend_bridge_srcs = files(
   'device_c_bridge_swapchain_query_stateblock.cpp',
 )
 
+dxmt9_pe_core_srcs = files(
+  'd3d9_pe_factory.cpp',
+  'd3d9_pe_device.cpp',
+)
+
+dxmt9_frontend_export_srcs = files(
+  'd3d9_pe_exports.cpp',
+  'd3d9_pe_validator.cpp',
+)
+
 dxmt9_d3d9_internal_inc = include_directories('.', '..')
+
+if host_machine.system() == 'windows'
+  cpp = meson.get_compiler('cpp')
+  dxguid_dep = cpp.find_library('dxguid', required: true)
+
+  dxmt9_pe_core_lib = static_library(
+    'dxmt9_pe_core',
+    dxmt9_pe_core_srcs,
+    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+    dependencies: [dxmt9_util_dep],
+    install: false,
+  )
+
+  dxmt9_pe_core_dep = declare_dependency(
+    link_with: dxmt9_pe_core_lib,
+    include_directories: [dxmt9_inc, dxmt9_d3d9_internal_inc],
+    dependencies: [dxmt9_util_dep],
+  )
+endif
 
 dxmt9_frontend_core_lib = static_library(
   'dxmt9_frontend_core',
@@ -76,3 +105,32 @@ dxmt9_frontend_dep = declare_dependency(
     dxmt9_frontend_provider_dep,
   ],
 )
+
+if host_machine.system() == 'windows'
+  # PE-side d3d9 forwarder — IDirect3D9/Device9 vtables that wrap the
+  # dxmt9c_* C bridge surface. The generated dxmt9_device_c_bridge_exports
+  # supplies the unix-call client; dxmt9_pe_core_dep supplies the COM glue.
+  dxmt9_d3d9_forwarder_lib = static_library(
+    'dxmt9_d3d9_forwarder',
+    dxmt9_frontend_export_srcs + [bridge_codegen[1]],
+    include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_d3d9_internal_inc],
+    dependencies: [
+      dxguid_dep,
+      dxmt9_util_dep,
+      dxmt9_pe_core_dep,
+      dxmt9_winemetal_import_dep,
+    ],
+    install: false,
+  )
+
+  dxmt9_d3d9_forwarder_dep = declare_dependency(
+    link_with: dxmt9_d3d9_forwarder_lib,
+    include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_d3d9_internal_inc],
+    dependencies: [
+      dxguid_dep,
+      dxmt9_util_dep,
+      dxmt9_pe_core_dep,
+      dxmt9_winemetal_import_dep,
+    ],
+  )
+endif

@@ -13,14 +13,65 @@ project(
 )
 
 dxmt9_inc = include_directories('include')
+bridge_gen_inc = include_directories('.')
 
-if host_machine.system() != 'darwin'
-  error('dxmt9 is darwin-only. The device_c client bridge and Windows PE cross-compile paths have been removed — the runtime is now built as a darwin-native library only.')
-endif
+# Code-gen for the PE↔ELF wine_unix_call bridge. Reads the device_c C ABI
+# header + the winemetal unix schema and emits the per-op bridge tables.
+# The .generated.cpp files are consumed by the PE-side d3d9 forwarder
+# (client) and the ELF-side winemetal.so dispatch (server).
+python3 = find_program('python3', required: true)
+device_c_unix_schema = custom_target(
+  'dxmt9_device_c_unix_schema_codegen',
+  input: files('include/dxmt9/device_c.h'),
+  output: 'dxmt9_device_c_unix_schema.generated.h',
+  command: [
+    python3,
+    files('scripts/extract_device_c_schema.py'),
+    '@INPUT@',
+    '@OUTPUT@',
+  ],
+)
 
-add_languages('objc', 'objcpp', native: false)
-subdir('include')
-subdir('src')
-if get_option('build_tests')
-  subdir('tests')
+bridge_codegen = custom_target(
+  'dxmt9_wine_bridge_codegen',
+  input: device_c_unix_schema,
+  output: [
+    'dxmt9_bridge_ops.generated.h',
+    'dxmt9_device_c_bridge_exports.generated.cpp',
+    'dxmt9_wine_unix_dispatch.generated.cpp',
+    'dxmt9_wine_unix_entries.generated.h',
+  ],
+  command: [
+    python3,
+    files('scripts/gen_wine_bridge.py'),
+    '--schema-header', files('src/winemetal/winemetal_unix_schema.h'),
+    '--schema-header', '@INPUT@',
+    '--ops-header', '@OUTPUT0@',
+    '--client-cpp', '@OUTPUT1@',
+    '--server-cpp', '@OUTPUT2@',
+    '--server-entries', '@OUTPUT3@',
+  ],
+  depend_files: files(
+    'src/winemetal/winemetal_unix_schema.h',
+    'scripts/gen_wine_bridge.py',
+    'scripts/extract_device_c_schema.py',
+  ),
+)
+
+if host_machine.system() == 'darwin'
+  add_languages('objc', 'objcpp', native: false)
+  subdir('include')
+  subdir('src')
+  if get_option('build_tests')
+    subdir('tests')
+  endif
+elif host_machine.system() == 'windows'
+  # Cross-build: produces the PE d3d9.dll + winemetal.dll thunk pair.
+  # Native dxmt9.so + winemetal.so (Mach-O) come from the darwin build.
+  subdir('src/util')
+  subdir('src/winemetal')
+  subdir('src/d3d9')
+  subdir('src/win32')
+else
+  error('dxmt9 supports darwin (native runtime) or windows-cross (PE shim) hosts only.')
 endif
