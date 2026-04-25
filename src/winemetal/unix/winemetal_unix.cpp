@@ -3,24 +3,52 @@
 #include "../../dxmt9/dxmt9_provider_shader_handlers.hpp"
 #include "../winemetal_thunks.hpp"
 
-// __wine_unix_call dispatch table — indexed by Dxmt9WinemetalCallId from
-// winemetal_thunks.hpp. The PE-side winemetal.dll passes its handle +
-// these IDs through __wine_unix_call; ntdll routes the call to the
-// matching slot here. WMT (Metal API C wrapper) functions still ship as
-// direct symbol exports from winemetal_private_api.mm and are resolved
-// via dlsym fallback in winemetal_bridge.cpp — the table below covers
-// only the marshaled call paths.
+// Forward-declarations for every thunk_<dxmt9c_*> + thunk_wow64_<dxmt9c_*>
+// produced by scripts/gen_wine_bridge.py. The macro expansion below pulls
+// in the same entries.h that the generated dispatch.cpp implements.
+#define DXMT9_BRIDGE_UNIX_ENTRY(thunk, wow64) \
+  extern "C" NTSTATUS thunk(void*); \
+  extern "C" NTSTATUS wow64(void*);
+#include "dxmt9_wine_unix_entries.generated.h"
+#undef DXMT9_BRIDGE_UNIX_ENTRY
+
+// Unified __wine_unix_call dispatch table for winemetal.so.
+//
+// Slots 0..DXMT9_WINEMETAL_CALL_SHADER_COUNT-1 are owned by the shader
+// service handlers (compile / source-size / source-copy / destroy).
+// Slots from DXMT9_WINEMETAL_BRIDGE_OP_BASE onward are populated by the
+// generated device_c bridge entries (one slot per dxmt9c_* function in
+// include/dxmt9/device_c.h, ordered by appearance — matches the
+// BridgeOpcode enum the PE-side client emits).
+//
+// PE→ELF flow:
+//   1. d3d9.dll exports Direct3DCreate9 → calls dxmt9c_factory_create()
+//   2. Generated client (dxmt9_device_c_bridge_exports.generated.cpp,
+//      lives in dxmt9_d3d9_forwarder.a inside d3d9.dll) packs Args_*
+//      and calls dxmt9_winemetal_unix_call(BridgeOpcode::xxx, &args).
+//   3. winemetal.dll's thunk forwards via __wine_unix_call to ntdll.
+//   4. ntdll routes to slot BridgeOpcode::xxx in this table.
+//   5. Generated server thunk (dxmt9_wine_unix_dispatch.generated.cpp)
+//      decodes Args_* and calls the native dxmt9c_* implementation
+//      (which in turn forwards to dxmt9p_* in src/d3d9/device_c_*.cpp).
 extern "C" DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_funcs[] = {
     [DXMT9_WINEMETAL_CALL_COMPILE_SHADER] = &dxmt9_winemetal_compile_shader_unix_call,
     [DXMT9_WINEMETAL_CALL_SHADER_SOURCE_SIZE] = &dxmt9_winemetal_shader_source_size_unix_call,
     [DXMT9_WINEMETAL_CALL_SHADER_SOURCE_COPY] = &dxmt9_winemetal_shader_source_copy_unix_call,
     [DXMT9_WINEMETAL_CALL_DESTROY_SHADER] = &dxmt9_winemetal_destroy_shader_unix_call,
+#define DXMT9_BRIDGE_UNIX_ENTRY(thunk, wow64) &thunk,
+#include "dxmt9_wine_unix_entries.generated.h"
+#undef DXMT9_BRIDGE_UNIX_ENTRY
 };
+
 extern "C" DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_wow64_funcs[] = {
     [DXMT9_WINEMETAL_CALL_COMPILE_SHADER] = &dxmt9_winemetal_compile_shader_unix_call,
     [DXMT9_WINEMETAL_CALL_SHADER_SOURCE_SIZE] = &dxmt9_winemetal_shader_source_size_unix_call,
     [DXMT9_WINEMETAL_CALL_SHADER_SOURCE_COPY] = &dxmt9_winemetal_shader_source_copy_unix_call,
     [DXMT9_WINEMETAL_CALL_DESTROY_SHADER] = &dxmt9_winemetal_destroy_shader_unix_call,
+#define DXMT9_BRIDGE_UNIX_ENTRY(thunk, wow64) &wow64,
+#include "dxmt9_wine_unix_entries.generated.h"
+#undef DXMT9_BRIDGE_UNIX_ENTRY
 };
 
 #endif

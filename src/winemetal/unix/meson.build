@@ -58,24 +58,43 @@ dxmt9_winemetal_unix_module = shared_library(
   files(
     'winemetal_unix.cpp',
     'winemetal_private_api.mm',
+    # Shader service unix-call handlers (slots 0..3 of the dispatch
+    # table). Not part of any reusable lib — restored from 96df4b5^
+    # specifically for the PE↔ELF bridge.
     '../../dxmt9/dxmt9_provider_shader_handlers.cpp',
-    # shader_service::compile + the source-generation pipeline + the
-    # provider service ABI exports. Compiled directly into winemetal.so
-    # so the __wine_unix_call shader handlers can dispatch without
-    # pulling the GPU runtime (encoders / pipeline cache / presenter)
-    # into the unix-side .so. The same .cpp files also compile into
-    # dxmt9_runtime_lib for the native dylib path — separate binaries,
-    # no symbol collision.
-    '../../dxmt9/dxmt9_shader_service.cpp',
-    '../../dxmt9/dxmt9_shader_service_exports.cpp',
-  ) + dxmt9_shader_pipeline_srcs,
+  ) + [
+    # Generated device_c bridge server thunks (one per dxmt9c_* function
+    # in include/dxmt9/device_c.h). Slots from
+    # DXMT9_WINEMETAL_BRIDGE_OP_BASE upward in __wine_unix_call_funcs[]
+    # delegate to these. The thunks decode the Args_* struct emitted by
+    # the PE-side client and call the native dxmt9c_* implementation.
+    bridge_codegen[2],  # dxmt9_wine_unix_dispatch.generated.cpp
+  ],
   name_prefix: '',
   name_suffix: 'so',
   include_directories: [
     dxmt9_inc,
+    bridge_gen_inc,
     dxmt9_winemetal_internal_inc,
     dxmt9_runtime_internal_inc,
     include_directories('../..'),
+  ],
+  # link_whole the full native runtime + frontend so the generated
+  # dxmt9c_* server thunks resolve their callees end-to-end:
+  #   dxmt9c_factory_create  (d3d9/device_c_bridge_factory.cpp)
+  #     → dxmt9p_factory_create  (d3d9/device_c_factory.cpp)
+  #       → core::Factory(...) using dxmt9::Device + CommandQueue
+  #         + Presenter from dxmt9_runtime_lib.
+  # Mirrors libdxmt9_native.dylib's link_whole set so winemetal.so is a
+  # self-contained .so replica of the native runtime, loadable as a
+  # Wine unix module.
+  link_whole: [
+    dxmt9_frontend_bridge_lib,
+    dxmt9_frontend_core_lib,
+    dxmt9_frontend_provider_lib,
+    dxmt9_runtime_lib,
+    dxmt9_shader_service_core_lib,
+    dxmt9_provider_service_abi_lib,
   ],
   dependencies: [
     dxmt9_util_dep,

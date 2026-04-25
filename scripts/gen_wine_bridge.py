@@ -222,11 +222,19 @@ def write_ops_header(path: pathlib.Path, protos: list[Proto]) -> None:
     lines.append("")
     lines.append('#include <stdint.h>')
     lines.append('#include "dxmt9/device_c.h"')
+    # Pulls in DXMT9_WINEMETAL_BRIDGE_OP_BASE — first slot consumed by the
+    # device_c bridge. Slots 0..BASE-1 are owned by the shader unix-call IDs
+    # in the same dispatch table; renumbering BridgeOpcode here keeps the
+    # two ID spaces from colliding when winemetal.so unifies them.
+    lines.append('#include "winemetal/winemetal_thunks.hpp"')
     lines.append("")
     lines.append("namespace dxmt9::bridge {")
     lines.append("enum class BridgeOpcode : unsigned int {")
-    for proto in protos:
-        lines.append(f"  {proto.name},")
+    for index, proto in enumerate(protos):
+        if index == 0:
+            lines.append(f"  {proto.name} = DXMT9_WINEMETAL_BRIDGE_OP_BASE,")
+        else:
+            lines.append(f"  {proto.name},")
     lines.append("};")
     lines.append("")
     for proto in protos:
@@ -317,7 +325,7 @@ def wow64_param_call_expr(param: Param, lines: list[str], post_lines: list[str])
 
 def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
     if proto.name == "dxmt9c_texture_lock_rect":
-        lines.append(f"NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
+        lines.append(f"extern \"C\" NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
         lines.append(
             f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
         )
@@ -340,7 +348,7 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
         return True
 
     if proto.name == "dxmt9c_surface_lock_rect":
-        lines.append(f"NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
+        lines.append(f"extern \"C\" NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
         lines.append(
             f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
         )
@@ -363,7 +371,7 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
         return True
 
     if proto.name == "dxmt9c_buffer_lock":
-        lines.append(f"NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
+        lines.append(f"extern \"C\" NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
         lines.append(
             f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
         )
@@ -396,7 +404,7 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append('#include "util/unixcall_marshal.hpp"')
     lines.append("")
     for proto in protos:
-        lines.append(f"NTSTATUS thunk_{proto.name}(void *opaque) {{")
+        lines.append(f"extern \"C\" NTSTATUS thunk_{proto.name}(void *opaque) {{")
         lines.append(f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args_{proto.name}>(opaque);")
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
         call_args = ", ".join(f"args->{param.name}" for param in proto.params)
@@ -409,7 +417,7 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
         lines.append("")
         if emit_custom_wow64_thunk(proto, lines):
             continue
-        lines.append(f"NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
+        lines.append(f"extern \"C\" NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
         lines.append(f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);")
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
         wow64_prelude: list[str] = []
