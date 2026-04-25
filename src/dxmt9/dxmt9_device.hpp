@@ -108,6 +108,11 @@ class Device {
   virtual void flush() {}
   virtual core::HResult waitForVBlank(const core::SwapDesc&) { return core::HResult{0}; }
   virtual bool readbackSurface(const core::ReadbackDesc&, core::ReadbackPixels&) { return false; }
+
+  // True for real GPU devices where render-target/depth contents can be
+  // recovered through readbackSurface(); false for recording/null test stubs
+  // that still need core's CPU shadow path for assertions.
+  virtual bool supportsGpuReadback() const { return false; }
 };
 
 struct DEVICE_DESC {

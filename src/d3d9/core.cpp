@@ -65,6 +65,21 @@ bool getenvFlag(const char* name) {
   return dxmt9::util::getenvFlag(name);
 }
 
+bool backendOwnsSurfaceContents(const SurfaceDesc& desc) {
+  return desc.renderTarget ||
+         desc.depthStencil ||
+         (desc.usage & (UsageRenderTarget | UsageDepthStencil)) != 0 ||
+         desc.multiSampleType != MultiSampleType::None;
+}
+
+bool backendOwnsTextureContents(const TextureDesc& desc) {
+  return (desc.usage & (UsageRenderTarget | UsageDepthStencil)) != 0;
+}
+
+bool canTrustGpuReadback(const std::shared_ptr<dxmt9::Device>& backend) {
+  return backend && backend->supportsGpuReadback();
+}
+
 bool renderTraceEnabled() {
   static const bool enabled = [] {
     return dxmt9::util::getenvFlag("DXMT_TRACE_RENDER");
@@ -3024,6 +3039,9 @@ HResult Device::clear(const ClearDesc& desc) {
       }
       for (auto& surface : surfaces_) {
         if (auto sp = surface.lock(); sp && sp->handle() == attachment.handle && sp->valid()) {
+          if (canTrustGpuReadback(backend_) && backendOwnsSurfaceContents(sp->desc())) {
+            continue;
+          }
           if (snapshot.rects.empty()) {
             sp->fillColor(nullptr, snapshot.color);
           } else {
@@ -3035,6 +3053,9 @@ HResult Device::clear(const ClearDesc& desc) {
       }
       for (auto& texture : textures_) {
         if (auto tp = texture.lock(); tp && tp->handle() == attachment.handle && tp->valid()) {
+          if (canTrustGpuReadback(backend_) && backendOwnsTextureContents(tp->desc())) {
+            continue;
+          }
           if (snapshot.rects.empty()) {
             tp->fillColor(nullptr, snapshot.color);
           } else {
@@ -3053,6 +3074,9 @@ HResult Device::clear(const ClearDesc& desc) {
         return;
       }
       const auto& surfaceDesc = surface->desc();
+      if (canTrustGpuReadback(backend_) && backendOwnsSurfaceContents(surfaceDesc)) {
+        return;
+      }
       if (!surfaceDesc.depthStencil) {
         return;
       }
@@ -3586,6 +3610,10 @@ HResult Device::stretchRect(const std::shared_ptr<Surface>& src, const Rect* src
     backendDesc.destinationRect = dstArea;
     backendDesc.linear = linear;
     upperDevice_->submitStretchRect(backendDesc);
+    if (canTrustGpuReadback(backend_) &&
+        (backendOwnsSurfaceContents(src->desc()) || backendOwnsSurfaceContents(dst->desc()))) {
+      return D3D_OK;
+    }
   }
 
   auto extractRegion = [&](const std::shared_ptr<Surface>& surface, const Rect& area) -> std::vector<u8> {

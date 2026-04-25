@@ -147,6 +147,7 @@ class DeviceImpl final : public Device {
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
     return queue_.readbackSurface(desc, pixels);
   }
+  bool supportsGpuReadback() const override { return true; }
 
   bool ready() const noexcept { return queue_.started(); }
 
