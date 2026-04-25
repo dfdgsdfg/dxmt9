@@ -100,18 +100,25 @@ class CommandQueue {
   };
   InitializerFlush flushInitializerUploads();
 
-  // Submission surface. Each call acquires mutex_ internally. Pool is
-  // passed in so GC resource-marking flows through the caller (keeps
-  // Pool ownership on DeviceImpl).
-  void submitDraw(resources::Pool& pool, const core::DrawDesc& desc);
-  void submitClear(resources::Pool& pool, const core::ClearDesc& desc);
-  void submitSurfaceCopy(resources::Pool& pool, const core::SurfaceCopyDesc& desc);
-  void submitStretchRect(resources::Pool& pool, const core::StretchRectDesc& desc);
-  void submitReadback(resources::Pool& pool, const core::ReadbackDesc& desc);
-  void submitColorFill(resources::Pool& pool, const core::ColorFillDesc& desc);
-  void submitPresent(resources::Pool& pool, const core::SwapDesc& desc);
-  void submitFlush(resources::Pool& pool);
-  core::HResult waitForVBlank(resources::Pool& pool);
+  // Submission / resource-marking surface. Each call acquires mutex_
+  // internally; Pool access goes through pool_ (cached from
+  // RuntimeServices at construction).
+  void submitDraw(const core::DrawDesc& desc);
+  void submitClear(const core::ClearDesc& desc);
+  void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
+  void submitStretchRect(const core::StretchRectDesc& desc);
+  void submitReadback(const core::ReadbackDesc& desc);
+  void submitColorFill(const core::ColorFillDesc& desc);
+  void submitPresent(const core::SwapDesc& desc);
+  void submitFlush();
+  core::HResult waitForVBlank();
+
+  // Queue-owned transfer paths. mapBuffer orchestrates Pool storage +
+  // queue's wait-for-sequence rule under one mutex acquisition;
+  // readbackSurface routes through encoders::readbackSurface using the
+  // queue's own device + limits + pool refs.
+  void* mapBuffer(core::BufferHandle handle, std::uint32_t flags);
+  bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels);
 
   // Command-buffer issuance. Callers that need a WMT::CommandBuffer
   // (encoders, transfers, readback) get an owning Reference via

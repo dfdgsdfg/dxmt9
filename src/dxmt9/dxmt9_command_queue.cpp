@@ -1,5 +1,6 @@
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_pipeline_cache.hpp"
@@ -233,74 +234,88 @@ void markSlotResourcesUnlocked(CommandQueue& q, resources::Pool& pool,
 
 }  // namespace
 
-void CommandQueue::submitDraw(resources::Pool& pool, const core::DrawDesc& desc) {
+void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   std::unique_lock lock(mutex_);
   // TLA+: WineCommit
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
   currentBackBuffer_ = desc.rts.color[0].handle;
-  pool.markDrawResources(desc, seqIdForMark(*this, 0));
+  pool_->markDrawResources(desc, seqIdForMark(*this, 0));
 }
 
-void CommandQueue::submitClear(resources::Pool& pool, const core::ClearDesc& desc) {
+void CommandQueue::submitClear(const core::ClearDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeClearCommand(desc));
   if (desc.colorAttachments[0].handle) {
     currentBackBuffer_ = desc.colorAttachments[0].handle;
   }
-  pool.markClearResources(desc, seqIdForMark(*this, 0));
+  pool_->markClearResources(desc, seqIdForMark(*this, 0));
 }
 
-void CommandQueue::submitSurfaceCopy(resources::Pool& pool, const core::SurfaceCopyDesc& desc) {
+void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeSurfaceCopyCommand(desc));
-  pool.markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
+  pool_->markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
 }
 
-void CommandQueue::submitStretchRect(resources::Pool& pool, const core::StretchRectDesc& desc) {
+void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeStretchRectCommand(desc));
-  pool.markStretchResources(desc, seqIdForMark(*this, 0));
+  pool_->markStretchResources(desc, seqIdForMark(*this, 0));
 }
 
-void CommandQueue::submitReadback(resources::Pool& pool, const core::ReadbackDesc& desc) {
+void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {
   std::lock_guard lock(mutex_);
-  // Readback is satisfied synchronously in dxmt9::Device::readbackSurface.
+  // Readback is satisfied synchronously in CommandQueue::readbackSurface.
   // Still mark resources so NoUseAfterFree remains meaningful.
-  pool.markReadbackResources(desc, seqIdForMark(*this, 0));
+  pool_->markReadbackResources(desc, seqIdForMark(*this, 0));
 }
 
-void CommandQueue::submitColorFill(resources::Pool& pool, const core::ColorFillDesc& desc) {
+void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeColorFillCommand(desc));
   currentBackBuffer_ = desc.destination;
-  pool.markColorFillResources(desc, seqIdForMark(*this, 0));
+  pool_->markColorFillResources(desc, seqIdForMark(*this, 0));
 }
 
-void CommandQueue::submitPresent(resources::Pool& pool, const core::SwapDesc& desc) {
+void CommandQueue::submitPresent(const core::SwapDesc& desc) {
   std::unique_lock lock(mutex_);
   queueLifecycle_.presentAndCommit(
       lock, kMaxInflight, desc, currentBackBuffer_,
-      [this, &pool](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(*this, pool, slot);
+      [this](const core::ChunkSlot& slot) {
+        markSlotResourcesUnlocked(*this, *pool_, slot);
       });
 }
 
-void CommandQueue::submitFlush(resources::Pool& pool) {
+void CommandQueue::submitFlush() {
   std::unique_lock lock(mutex_);
   queueLifecycle_.flushAndWait(
-      lock, kMaxInflight, [this, &pool](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(*this, pool, slot);
+      lock, kMaxInflight, [this](const core::ChunkSlot& slot) {
+        markSlotResourcesUnlocked(*this, *pool_, slot);
       });
 }
 
-core::HResult CommandQueue::waitForVBlank(resources::Pool& pool) {
-  submitFlush(pool);
+core::HResult CommandQueue::waitForVBlank() {
+  submitFlush();
   return core::HResult{0};
+}
+
+void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
+  // Pool storage + queue's wait-for-sequence rule under one mutex.
+  std::unique_lock lock(mutex_);
+  const std::uint64_t waitSeq = pool_->mapWaitSeqId(handle, flags);
+  if (waitSeq > completedSeqId_) {
+    queueLifecycle_.waitForSequence(lock, waitSeq);
+  }
+  return pool_->finalizeBufferMap(handle, flags);
+}
+
+bool CommandQueue::readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) {
+  return encoders::readbackSurface(*this, *pool_, device_, *limits_, desc, pixels);
 }
 
 void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted) {

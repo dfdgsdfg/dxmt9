@@ -1,7 +1,5 @@
 #include "dxmt9/dxmt9_device.hpp"
-#include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_pipeline_cache.hpp"
-#include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_runtime_services.hpp"
 #include "dxmt9_shader_archive.hpp"
@@ -120,14 +118,7 @@ class DeviceImpl final : public Device {
     pool_.uploadBufferData(handle.value, bytes.data(), bytes.size());
   }
   void* mapBuffer(core::BufferHandle handle, std::uint32_t flags) override {
-    // DeviceImpl orchestrates: Pool handles storage (shadow + discard
-    // fill), CommandQueue provides the wait-for-sequence sync rule.
-    std::unique_lock lock(queue_.mutex_);
-    const std::uint64_t waitSeq = pool_.mapWaitSeqId(handle, flags);
-    if (waitSeq > queue_.completedSeqId_) {
-      queue_.queueLifecycle_.waitForSequence(lock, waitSeq);
-    }
-    return pool_.finalizeBufferMap(handle, flags);
+    return queue_.mapBuffer(handle, flags);
   }
   void uploadTextureLevel(core::TextureHandle handle, std::uint32_t level,
                            std::uint32_t width, std::uint32_t height, std::uint32_t pitch,
@@ -135,25 +126,25 @@ class DeviceImpl final : public Device {
     queue_.uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
 
-  void submitDraw(const core::DrawDesc& desc) override { queue_.submitDraw(pool_, desc); }
-  void submitClear(const core::ClearDesc& desc) override { queue_.submitClear(pool_, desc); }
+  void submitDraw(const core::DrawDesc& desc) override { queue_.submitDraw(desc); }
+  void submitClear(const core::ClearDesc& desc) override { queue_.submitClear(desc); }
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc) override {
-    queue_.submitSurfaceCopy(pool_, desc);
+    queue_.submitSurfaceCopy(desc);
   }
   void submitStretchRect(const core::StretchRectDesc& desc) override {
-    queue_.submitStretchRect(pool_, desc);
+    queue_.submitStretchRect(desc);
   }
   void submitReadback(const core::ReadbackDesc& desc) override {
-    queue_.submitReadback(pool_, desc);
+    queue_.submitReadback(desc);
   }
   void submitColorFill(const core::ColorFillDesc& desc) override {
-    queue_.submitColorFill(pool_, desc);
+    queue_.submitColorFill(desc);
   }
-  void present(const core::SwapDesc& desc) override { queue_.submitPresent(pool_, desc); }
-  void flush() override { queue_.submitFlush(pool_); }
-  core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(pool_); }
+  void present(const core::SwapDesc& desc) override { queue_.submitPresent(desc); }
+  void flush() override { queue_.submitFlush(); }
+  core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
-    return encoders::readbackSurface(queue_, pool_, wmt_device_, limits_, desc, pixels);
+    return queue_.readbackSurface(desc, pixels);
   }
 
   bool ready() const noexcept { return queue_.started(); }
