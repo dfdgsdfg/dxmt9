@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "d3d9_pe.hpp"
 #include "util/com/com_private_data.hpp"
@@ -1218,6 +1219,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     ConstShadow psConstI_{};
     ConstShadow psConstB_{};
 
+    // Per-chunk resource retention set, one dedup'd container per kind.
+    // Populated by the PE-side Set{Texture,StreamSource,Indices,
+    // RenderTarget,DepthStencil} fast paths; serialized into
+    // D9CCommandChunk.handles[] at commit_chunk; cleared after a
+    // successful commit.
+    std::unordered_set<uint64_t> chunkHandlesByKind_[5]{};
+    std::vector<D9CChunkHandleEntry> chunkHandlesPayload_{};
+
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
 
@@ -1339,20 +1348,59 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
+    // Add a (kind, handle) to the per-chunk dedup'd retention set. Called
+    // from Set{Texture,StreamSource,Indices,RenderTarget,DepthStencil,
+    // VertexShader,PixelShader,VertexDeclaration} fast paths whenever a
+    // resource handle is bound. Cheap O(1) hash insert; serialization
+    // happens once per chunk at flush time.
+    void noteChunkHandle(uint32_t kind, uint64_t handle) {
+        if (!dxmt9PeDrawChunkEnabled() || handle == 0 || kind > 4) {
+            return;
+        }
+        chunkHandlesByKind_[kind].insert(handle);
+    }
+
     HRESULT flushPendingCommandChunk() {
         if (!dxmt9PeDrawChunkEnabled() || pendingCommandRecordCount_ == 0) {
             return S_OK;
         }
+        // Serialize the deduped retention set into a packed payload the
+        // server-side importer can iterate in one pass. Order isn't
+        // semantically meaningful — server treats the list as an
+        // unordered set of (kind, handle) pairs.
+        chunkHandlesPayload_.clear();
+        std::uint32_t totalHandles = 0;
+        for (uint32_t kind = 0; kind < 5; ++kind) {
+            totalHandles += static_cast<std::uint32_t>(chunkHandlesByKind_[kind].size());
+        }
+        chunkHandlesPayload_.reserve(totalHandles);
+        for (uint32_t kind = 0; kind < 5; ++kind) {
+            for (auto handle : chunkHandlesByKind_[kind]) {
+                chunkHandlesPayload_.push_back(D9CChunkHandleEntry{
+                    .kind = kind,
+                    .reserved = 0,
+                    .handle = handle,
+                });
+            }
+        }
+
         D9CCommandChunk chunk{};
         chunk.version = D9C_COMMAND_CHUNK_VERSION;
         chunk.recordCount = pendingCommandRecordCount_;
         chunk.recordBytes = static_cast<std::uint32_t>(pendingCommandBytes_.size());
         chunk.records = toWireHandle(pendingCommandBytes_.data());
+        chunk.handleCount = static_cast<std::uint32_t>(chunkHandlesPayload_.size());
+        chunk.handles = chunk.handleCount != 0
+                            ? toWireHandle(chunkHandlesPayload_.data())
+                            : D9CWireHandle{};
 
         const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
         if (SUCCEEDED(hr)) {
             pendingCommandBytes_.clear();
             pendingCommandRecordCount_ = 0;
+            for (auto& set : chunkHandlesByKind_) {
+                set.clear();
+            }
         }
         return hr;
     }
@@ -2122,6 +2170,10 @@ public:
                             this, (unsigned)idx, pSurf);
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
+        if (auto* raw = rawSurf(pSurf); raw != nullptr) {
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        }
         return hr32(dxmt9c_device_set_render_target(dev_, idx, rawSurf(pSurf)));
     }
 
@@ -2141,6 +2193,10 @@ public:
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
+        if (auto* raw = rawSurf(pSurf); raw != nullptr) {
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        }
         return hr32(dxmt9c_device_set_depth_stencil(dev_, rawSurf(pSurf)));
     }
 
@@ -2504,6 +2560,13 @@ public:
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
         setRef(textures_[stage], pTex);
+        // Phase 4: track every bound texture handle in the chunk
+        // retention set so the server-side importer can mark all of
+        // them at chunk seqId in one bulk pass.
+        if (auto* raw = rawTex(pTex); raw != nullptr) {
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                            reinterpret_cast<uint64_t>(raw));
+        }
         if (dxmt9PeStateShadowEnabled()) {
             pendingTextureMask_ |= 1u << stage;
             return S_OK;
@@ -2669,6 +2732,10 @@ public:
         setRef(streamSrc_[stream], pBuf);
         streamOff_[stream] = offset;
         streamStr_[stream] = stride;
+        if (auto* raw = rawVBuf(pBuf); raw != nullptr) {
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                            reinterpret_cast<uint64_t>(raw));
+        }
         if (dxmt9PeStateShadowEnabled()) {
             pendingStreamMask_ |= 1u << stream;
             return S_OK;
@@ -2709,6 +2776,10 @@ public:
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         setRef(indexBuf_, pIBuf);
+        if (auto* raw = rawIBuf(pIBuf); raw != nullptr) {
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                            reinterpret_cast<uint64_t>(raw));
+        }
         return hr32(dxmt9c_device_set_indices(dev_, rawIBuf(pIBuf)));
     }
     HRESULT STDMETHODCALLTYPE GetIndices(IDirect3DIndexBuffer9** ppIBuf) override {

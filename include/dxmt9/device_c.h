@@ -256,6 +256,28 @@ typedef struct D9CDrawIndexedPrimitiveUPPacket {
 
 #define D9C_COMMAND_CHUNK_VERSION 1u
 
+/* Per-chunk resource retention list. PE recorder accumulates the deduped
+ * set of resource handles touched by Set{Texture,StreamSource,Indices,
+ * RenderTarget,DepthStencil,VertexShader,PixelShader,VertexDeclaration}
+ * calls during chunk build, then serializes the entries into
+ * D9CCommandChunk.handles[] at commit time. Server-side importer reads
+ * the list to mark resource lifetimes against the chunk's seqId in ONE
+ * pass — replaces N×per-record markDrawResources walks once the
+ * importer is wired to skip per-record marking. */
+enum {
+    D9C_CHUNK_HANDLE_KIND_TEXTURE = 0,
+    D9C_CHUNK_HANDLE_KIND_SURFACE = 1,
+    D9C_CHUNK_HANDLE_KIND_BUFFER = 2,
+    D9C_CHUNK_HANDLE_KIND_SHADER = 3,
+    D9C_CHUNK_HANDLE_KIND_VERTEX_DECL = 4,
+};
+
+typedef struct D9CChunkHandleEntry {
+    uint32_t kind;
+    uint32_t reserved;
+    uint64_t handle;
+} D9CChunkHandleEntry;
+
 enum {
     D9C_COMMAND_RECORD_DRAW_PRIMITIVE = 1,
     D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE = 2,
