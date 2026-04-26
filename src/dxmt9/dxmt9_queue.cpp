@@ -1023,7 +1023,11 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     // No binding → just commit; the reference releases when `record` is
     // destroyed by the caller. Covers teardown paths that bypass the
     // finish-thread.
+    const auto commitStarted = std::chrono::steady_clock::now();
     record.commandBuffer.commit();
+    perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - commitStarted).count()));
     return;
   }
 
@@ -1037,7 +1041,11 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   // the completion-watcher thread via pendingCompletion_. That thread will
   // call waitUntilCompleted() — the upstream-dxmt finish-thread shape — then
   // push the seqId into completedSeqQueue and fire the transition callbacks.
+  const auto commitStarted = std::chrono::steady_clock::now();
   record.commandBuffer.commit();
+  perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - commitStarted).count()));
 
   {
     std::lock_guard lock(pendingCompletionMutex_);

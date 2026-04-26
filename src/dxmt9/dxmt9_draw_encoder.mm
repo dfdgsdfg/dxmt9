@@ -10,6 +10,7 @@
 #include "dxmt9_draw_state.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_queue.hpp"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -101,6 +103,26 @@ using i32 = std::int32_t;
 using f32 = float;
 
 namespace {
+
+class PerfScope {
+ public:
+  explicit PerfScope(void (*record)(std::uint64_t)) : record_(record) {}
+  ~PerfScope() {
+    if (!record_) {
+      return;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started_;
+    record_(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  }
+
+  PerfScope(const PerfScope&) = delete;
+  PerfScope& operator=(const PerfScope&) = delete;
+
+ private:
+  void (*record_)(std::uint64_t) = nullptr;
+  std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
+};
 
 bool splitPresentBeforeAcquireEnabled() {
   static const bool enabled = [] {
@@ -354,6 +376,7 @@ void encodeDraw(EncodeContext& ctx,
                  WMT::RenderCommandEncoder& encoder,
                  const DrawDesc& draw,
                  u64 seqId) {
+  PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
   if (debug::skipAllDraws()) {
     if (queueTraceEnabled()) {
@@ -1057,6 +1080,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     std::size_t slotIndex,
     const core::ChunkSlot& slot) {
   @autoreleasepool {
+  PerfScope scope(perf::countEncodeChunkCpuTime);
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
@@ -1122,7 +1146,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     if (!presentCommandBuffer) {
       return;
     }
+    const auto commitStarted = std::chrono::steady_clock::now();
     commandBuffer.commit();
+    perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - commitStarted).count()));
     commandBuffer = std::move(presentCommandBuffer);
     commandBufferHasWork = false;
   };

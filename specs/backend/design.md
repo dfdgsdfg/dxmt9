@@ -7,13 +7,15 @@
 ```mermaid
 graph TD
     subgraph PE["Win32 / PE side (Wine)"]
-        IFACE["BackendDevice interface\n(called by core)"]
-        THUNKS["winemetal thunks\n(Win32 → unix lib FFI)"]
+        CORE["D3D9 core\nDeviceState + COM objects"]
+        REC["PE CommandRecorder\nPOD CommandChunk builder"]
+        THUNKS["winemetal bridge ABI\ncommitChunk()\nresource ops\nframe-token waits"]
         SHADER_THUNK["shader compiler thunks\n(D3DBC → SPIR-V → MSL)"]
     end
 
     subgraph Unix["macOS / unix lib side"]
-        CQ["CommandQueue\n(32-slot ring, 3 threads)"]
+        IMPORT["Chunk importer\nvalidate + retain handles"]
+        CQ["CommandQueue\n(32-slot execution ring, 3 threads)"]
         AEC["ArgumentEncodingContext\n(encode thread)"]
         ALLOC["Ring allocators\n(argbuf, lambda, staging, copy-temp)"]
         PSO["PSOCache\n(MTLRenderPipelineState)\n+ DSS cache"]
@@ -23,8 +25,10 @@ graph TD
         RESALLOC["ResourceAllocator\n(MTLBuffer, MTLTexture)"]
     end
 
-    IFACE --> THUNKS
-    THUNKS --> CQ
+    CORE --> REC
+    REC -->|one bridge call per committed chunk| THUNKS
+    THUNKS --> IMPORT
+    IMPORT --> CQ
     THUNKS --> RESALLOC
     SHADER_THUNK --> TRANS
     TRANS --> SHAD
@@ -35,52 +39,178 @@ graph TD
     AEC --> PRES
 ```
 
+### 1.1 Upstream DXMT Alignment Target
+
+The backend target mirrors upstream DXMT's useful split: API calls record command
+work first, and Metal execution happens later on queue-owned encode/completion
+threads. dxmt9 differs only in the bridge payload format: D3D9 uses POD records
+instead of C++ lambda captures because records cross the Wine PE/unix boundary.
+
+```mermaid
+flowchart TD
+    subgraph DXMT["Upstream DXMT D3D11 shape"]
+        DXCtx["D3D11 immediate context\nEmitST / EmitOP"]
+        DXChunk["CommandChunk\nlambda command list"]
+        DXQueue["CommandQueue\nencode + finish threads"]
+        DXMetal["Metal wrapper calls"]
+        DXCtx --> DXChunk --> DXQueue --> DXMetal
+    end
+
+    subgraph DXMT9["dxmt9 target shape"]
+        D9Dev["D3D9 PE device\nDeviceState shadow"]
+        D9Chunk["PE CommandChunk\nPOD records + handles"]
+        D9Bridge["winemetal commitChunk()\none unix call"]
+        D9Import["unix importer\nvalidate + retain"]
+        D9Queue["CommandQueue\nencode + finish threads"]
+        D9Metal["Metal wrapper calls"]
+        D9Dev --> D9Chunk --> D9Bridge --> D9Import --> D9Queue --> D9Metal
+    end
+
+    subgraph NonGoal["Non-goal"]
+        SetCall["SetRenderState / SetTexture"] --> PerCall["per-call unix submit"]
+        DrawCall["DrawPrimitive"] --> PerCall
+    end
+```
+
+The alignment requirement is about ownership and timing, not source-level identity:
+
+- PE owns D3D API semantics, state shadowing, getters, state blocks, and command
+  packet construction.
+- The Wine bridge owns ABI marshalling only.
+- The unix importer owns packet validation and handle retention.
+- `CommandQueue` owns chunk execution, Metal command-buffer lifetime, completion,
+  and frame-latency token signaling.
+- `Presenter` owns drawable acquisition and `presentDrawable` encoding.
+
 ---
 
 ## 2. Command Queue
 
-The command queue is the central coordinator. It decouples the Wine thread (which
-calls the backend interface) from Metal encoding (which calls Metal API).
+The command queue is the central coordinator. It decouples PE-side D3D9 command
+recording from unix-side Metal encoding.
+
+There are two chunk forms:
+
+- **PE CommandChunk:** a POD command stream produced by the core without calling
+  Metal or ObjC APIs.
+- **Execution chunk:** the unix-side queue slot that owns retained handles,
+  imported records, transient allocator ranges, and the eventual Metal command
+  buffer.
 
 ```mermaid
 graph LR
-    subgraph Ring["32-slot CommandChunk ring"]
-        W["Write slot\n(Wine thread)"]
-        E["Encode slot\n(encode thread)"]
+    subgraph PE["PE side"]
+        WT["Application thread"]
+        REC["CommandRecorder\nappend POD records"]
+        PCHUNK["PE CommandChunk\nDraw/Clear/Present/etc."]
+    end
+
+    subgraph Bridge["Wine PE/unix bridge"]
+        COMMIT["commitChunk()\none unix call"]
+    end
+
+    subgraph Ring["Unix execution ring"]
+        I["Import slot\nretain handles"]
+        E["Encode slot\nencode thread"]
         G["GPU-running slot"]
-        F["Free slots"]
+        F["Free slot"]
     end
 
     subgraph Threads
-        WT["Wine thread\nwrites lambdas"]
-        ET["Encode thread\nreplays lambdas → MTLCommandBuffer"]
+        ET["Encode thread\nreplays records/closures → MTLCommandBuffer"]
         FT["Finish thread\nwaits GPU done → releases chunk"]
     end
 
-    WT -->|emit lambda| W
-    W -->|commit chunk| E
+    WT --> REC
+    REC --> PCHUNK
+    PCHUNK --> COMMIT
+    COMMIT --> I
+    I --> E
     ET -->|MTLCommandBuffer.commit| G
     G -->|GPU completion| FT
     FT -->|reset chunk| F
 ```
 
-**CommandChunk** holds:
-- A linked list of closures (lambdas) emitted by the Wine thread
+**PE CommandChunk** holds:
+- A compact command header array and POD payload arena
+- Opaque backend handles for buffers, textures, shaders, swap chains, and queries
+- No COM pointers, ObjC pointers, unix-side object pointers, or lambdas
+- Command-count and byte-size fields used to bound tail latency
+
+**Execution chunk** holds:
+- Imported command records or decoded closures owned by the unix side
 - Four ring sub-allocators: `staging` (CPU-visible readback), `copy_temp` (GPU private
   blit), `argbuf` (argument buffers), `lambda_store` (closure heap)
 - A sequence ID used to determine when in-flight resources can be released
+- Optional frame token metadata when the chunk contains a present
 
 **Submission flow:**
 
-1. Wine thread calls `submitDraw(DrawDesc)`.
-2. Backend emits a closure into the current chunk's lambda list. The closure captures
-   resource handles (not COM pointers) and all state from `DrawDesc`.
-3. On `present()` or when the chunk is full, the Wine thread commits the current chunk.
-4. The encode thread dequeues the chunk and replays all closures against
+1. D3D9 calls update PE-side state or append records to the current PE chunk.
+2. On `Present`, readback, query ordering, resource hazard, or chunk limit, the core
+   commits the PE chunk through `commitChunk()`.
+3. The unix importer validates the records, retains referenced backend handles, and
+   assigns a sequence ID. If the chunk contains a present, it also assigns a frame
+   token.
+4. The encode thread dequeues the execution chunk and replays records against
    `ArgumentEncodingContext`, producing Metal commands.
 5. The encode thread commits the `MTLCommandBuffer`.
-6. The finish thread waits for GPU completion and resets the chunk (releasing handles,
-   returning ring allocator memory).
+6. The finish thread waits for GPU completion, signals sequence/frame fences, releases
+   handles, and returns ring allocator memory.
+
+### 2.1 Bridge Granularity Target
+
+```mermaid
+flowchart LR
+    subgraph Bad["Non-goal"]
+        A1["DrawPrimitive"] --> A2["unix-call submitDraw"]
+        A3["SetTexture"] --> A4["unix-call setTexture"]
+        A5["SetRenderState"] --> A6["unix-call setRenderState"]
+    end
+
+    subgraph Good["Target"]
+        B1["Many Set* + Draw* calls"] --> B2["PE CommandChunk"]
+        B2 --> B3["single commitChunk unix-call"]
+        B3 --> B4["unix CommandQueue"]
+    end
+```
+
+The backend may keep narrow per-operation entry points for tests or bootstrap, but
+the default Wine runtime path is chunk submission. A design that sends every D3D9
+draw/state call through `WINE_UNIX_CALL` is non-compliant with this performance
+target.
+
+### 2.2 Chunk Lifecycle and Ownership
+
+```mermaid
+stateDiagram-v2
+    [*] --> PERecording : current PE chunk
+    PERecording --> PESealed : present / readback / query / size limit
+    PESealed --> Importing : commitChunk()
+    Importing --> Queued : validate records\nretain handles\nassign seqId
+    Queued --> QueuedPresent : contains PresentCommand\nassign frameToken
+    Queued --> Encoding : encode thread dequeues
+    QueuedPresent --> Encoding : encode thread dequeues
+    Encoding --> GPU : commandBuffer.commit()
+    GPU --> Completed : finish thread observes completion
+    Completed --> [*] : release handles\nreturn allocators\nsignal seq/frame fences
+
+    note right of PERecording
+        PE memory may be reused only
+        after commitChunk copies or
+        imports the records safely.
+    end note
+```
+
+Ownership rules:
+
+- The PE chunk owns its POD payload until `commitChunk()` returns.
+- The importer must copy or take ownership of every record and retained handle needed
+  after `commitChunk()` returns.
+- Execution chunks own backend handle references until completion.
+- Frame tokens exist only for chunks containing a present command.
+- Sequence IDs track all chunk completion; frame tokens track present-bearing chunk
+  completion.
 
 ---
 
@@ -227,24 +357,61 @@ graph TD
 
 ```mermaid
 sequenceDiagram
-    participant WT as Wine thread
+    participant App as Application thread
+    participant Rec as PE CommandRecorder
+    participant BR as winemetal bridge
     participant CQ as CommandQueue
     participant ET as Encode thread
+    participant FT as Finish thread
+    participant PR as Presenter
     participant CL as CAMetalLayer
     participant MTL as Metal
 
-    WT->>CQ: present(SwapDesc)
-    CQ->>CQ: emit blit closure into chunk\ncommit chunk
+    App->>Rec: Present()
+    Rec->>Rec: append PresentCommand\ncommit current chunk
+    Rec->>BR: commitChunk(chunk)
+    BR->>CQ: import chunk
+    CQ-->>BR: frameToken
+    BR-->>Rec: frameToken
+    Rec->>BR: waitFrameLatency(frameToken, maxLatency)
 
-    ET->>CL: nextDrawable (blocks on vsync if enabled)
+    ET->>PR: encode PresentCommand(frameToken)
+    PR->>CL: nextDrawable\n(blocks when drawable/vsync-limited)
     ET->>MTL: blitCommandEncoder: copy backbuffer → drawable.texture
     ET->>MTL: commandBuffer.presentDrawable(drawable)
     ET->>MTL: commandBuffer.commit()
+    FT->>CQ: signal frameToken\non command buffer completion
+    CQ-->>BR: latency wait satisfied
+    BR-->>App: Present returns
 ```
 
 The back buffer is a private `MTLTexture` owned by the swap chain. On present, it
 is copied to the `CAMetalLayer` drawable via a blit encoder. The drawable is obtained
 just before the blit — not before the frame — to minimize latency.
+
+### 8.1 Frame Latency Token
+
+Present pacing is based on a queue-owned frame token:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Recorded : PresentCommand appended
+    Recorded --> Submitted : commitChunk assigns frameToken
+    Submitted --> Encoding : encode thread dequeues chunk
+    Encoding --> Presented : presentDrawable encoded and committed
+    Presented --> Completed : finish thread observes command buffer completion
+    Completed --> [*] : frameLatencyFence signals frameToken
+
+    note right of Submitted
+        The application may wait for
+        frameToken - maxFrameLatency.
+    end note
+```
+
+The token is not the chunk dequeue ID and not the point where the encode thread starts
+work. It becomes signaled only after the Metal command buffer carrying the present has
+completed. This mirrors the useful part of upstream DXMT's `CommandQueue` frame
+latency fence while keeping drawable and layer ownership inside the presenter.
 
 ---
 

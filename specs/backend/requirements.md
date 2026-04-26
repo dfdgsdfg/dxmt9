@@ -1,8 +1,8 @@
 # Backend Requirements
 
-The backend receives `DrawDesc` / `ClearDesc` / `SwapDesc` from the core and is
-responsible for translating them into correct Metal commands. It knows nothing about
-D3D9 COM objects.
+The backend receives committed command chunks from the core and is responsible for
+translating their `DrawDesc` / `ClearDesc` / `SwapDesc` payloads into correct Metal
+commands. It knows nothing about D3D9 COM objects.
 
 ---
 
@@ -12,8 +12,8 @@ D3D9 COM objects.
 that are equivalent to what a conformant D3D9 implementation on the same geometry and
 state would produce, within the precision limits of the Metal backend GPU.
 
-**R-BACK-1.2** The results of `submitDraw()` must be visible in the render target
-before the next `present()` call on the same swap chain commits.
+**R-BACK-1.2** The results of a recorded draw command must be visible in the render
+target before the next present command on the same swap chain commits.
 
 **R-BACK-1.3** Draw calls must execute in submission order with respect to the same
 render target. A draw call must not read stale color or depth data written by a prior
@@ -51,6 +51,31 @@ to a mid-scene fill-rect clear.
 **R-BACK-2.6** A render target change (`SetRenderTarget`) during a scene must
 terminate the current `MTLRenderCommandEncoder` and begin a new one. The previous
 render target's store action must be `MTLStoreActionStore`.
+
+**R-BACK-2.7** The default Wine runtime path must submit work to the backend as
+committed command chunks. Per-draw or per-state backend entry points may exist for
+tests or bootstrap, but they must not be the hot path.
+
+**R-BACK-2.8** A committed command chunk must cross the Wine PE/unix boundary with
+one bridge operation. The backend must not require one `WINE_UNIX_CALL` per D3D9
+`Set*`, `Draw*`, or `Clear` call.
+
+**R-BACK-2.9** The unix-side importer must validate every command record before it
+is queued for encoding. Invalid record kinds, invalid payload sizes, stale handles,
+and malformed offsets must fail the chunk without dereferencing untrusted pointers.
+
+**R-BACK-2.10** The command queue must enforce bounded chunk capacity by command
+count and byte size. If the PE side submits a chunk larger than the negotiated
+limits, the backend must reject it rather than allowing unbounded encode latency.
+
+**R-BACK-2.11** The bridge ABI for committed chunks must remain POD and versioned.
+The unix-side importer may translate validated records into queue-internal closures
+or direct encoder operations, but C++ lambdas and process-local pointers must never
+cross the PE/unix boundary.
+
+**R-BACK-2.12** Present-bearing chunks must carry explicit present metadata through
+import, encoding, command-buffer commit, and completion. Non-present chunks advance
+the normal sequence timeline only; they must not allocate frame-latency tokens.
 
 ---
 
@@ -141,24 +166,46 @@ Metal object until all in-flight GPU commands that reference it have completed.
 
 ## 6. Presentation
 
-**R-BACK-6.1** `present()` must display the most recently rendered frame on the
-associated window. It must block until a drawable is available from `CAMetalLayer`
-when `D3DPRESENT_INTERVAL_ONE` (vsync) is requested.
+**R-BACK-6.1** A present command must display the most recently rendered frame on
+the associated window. When `D3DPRESENT_INTERVAL_ONE` (vsync) is requested, drawable
+availability and vsync pacing are handled by the presenter/encode path. The
+application-facing wait is governed by frame-latency tokens, not by synchronous
+drawable acquisition in the device object.
 
-**R-BACK-6.2** `present()` with `D3DPRESENT_INTERVAL_IMMEDIATE` must not wait for
-vsync. `CAMetalLayer.displaySyncEnabled` must be `NO` for this mode.
+**R-BACK-6.2** A present command with `D3DPRESENT_INTERVAL_IMMEDIATE` must not wait
+for vsync. `CAMetalLayer.displaySyncEnabled` must be `NO` for this mode.
 
 **R-BACK-6.3** After `present()` returns, the back buffer contents are undefined
 (consistent with `D3DSWAPEFFECT_DISCARD`). The next render pass targeting the back
 buffer must use `MTLLoadActionDontCare` or `MTLLoadActionClear`, not `MTLLoadActionLoad`.
 
+**R-BACK-6.4** A present-bearing command chunk must be assigned a monotonically
+increasing frame token when it is accepted by the backend queue.
+
+**R-BACK-6.5** Frame-latency waits must target queue/presenter completion of frame
+tokens. A frame token is complete only after the Metal command buffer carrying that
+present has completed.
+
+**R-BACK-6.6** Frame-latency waits must not be satisfied merely because the encode
+thread dequeued, began encoding, or committed the chunk. Encode progress and present
+completion are separate timelines.
+
+**R-BACK-6.7** `setMaxFrameLatency(n)` must configure how many present-bearing frame
+tokens may remain incomplete. The default is 4. The effective value must be clamped
+to the range accepted by the core requirements.
+
+**R-BACK-6.8** The presenter owns drawable acquisition, layer synchronization, and
+`presentDrawable` encoding. The command queue owns frame-token allocation and
+completion signaling. The device/core layer must not own presenter timing state.
+
 ---
 
 ## 7. Thread Safety
 
-**R-BACK-7.1** The backend interface (`submitDraw`, `submitClear`, `present`,
-`createBuffer`, etc.) must be safe to call from a single thread (the Wine/application
-thread). No concurrent calls from multiple threads are required.
+**R-BACK-7.1** The backend interface (`commitChunk`, resource create/destroy,
+map/unmap, shader compile, frame-token waits, etc.) must be safe to call from a
+single thread (the Wine/application thread). No concurrent calls from multiple
+threads are required.
 
 **R-BACK-7.2** Internal backend threads (encode thread, completion thread) must not
 be visible to or callable by the core.
@@ -182,6 +229,15 @@ interface.
 **R-BACK-8.3** All Metal object handles passed across the boundary must be opaque
 integer handles, not Objective-C object pointers.
 
+**R-BACK-8.4** The thunk mechanism must be used at chunk/resource granularity, not
+per D3D9 draw or state operation. The intended hot-path call shape is
+`commitChunk()` plus coarse resource lifecycle/map operations.
+
+**R-BACK-8.5** The Wine bridge must expose diagnostic counters for bridge calls and
+time spent in each bridge class. At minimum this includes chunk commits, resource
+create/destroy/map/unmap calls, frame-token waits, shader compiler calls, and any
+compatibility per-call draw/state fallback.
+
 ---
 
 ## 9. Surface Operations
@@ -202,8 +258,8 @@ not return until the data is CPU-readable.
 For full-surface fills, `MTLLoadActionClear` must be used. For partial fills, a
 scissored render pass or fragment shader fill must be used.
 
-**R-BACK-9.5** All surface operations must be emitted as lambdas into the command
-queue, except `submitReadback()` which must additionally commit the current chunk and
+**R-BACK-9.5** All surface operations must be recorded as command records in the
+current chunk, except readback which must additionally commit the current chunk and
 wait for completion before returning.
 
 ---

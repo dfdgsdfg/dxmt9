@@ -33,13 +33,15 @@ blit pass for scaled copies).
 ```mermaid
 sequenceDiagram
     participant Core
-    participant B as Backend
+    participant Rec as PE CommandRecorder
+    participant B as Unix Backend
     participant MTL as Metal
 
-    Core->>B: submitSurfaceCopy(CopyDesc)
-    Note over CopyDesc: src: CPU buffer handle + offset\ndst: MTLTexture handle\nregion: mip/slice/rect
+    Core->>Rec: record SurfaceCopy(CopyDesc)
+    Note over Core,Rec: src: CPU buffer handle + offset\ndst: MTLTexture handle\nregion: mip/slice/rect
 
-    B->>B: emit blit lambda into current chunk
+    Rec->>B: commitChunk() at ordering point
+    B->>B: import record and encode blit
 
     B->>MTL: [MTLBlitCommandEncoder\n  copyFromBuffer:srcBuf\n  sourceOffset:...\n  sourceBytesPerRow:...\n  sourceBytesPerImage:...\n  sourceSize:...\n  toTexture:dstTex\n  destinationSlice:...\n  destinationLevel:...\n  destinationOrigin:...]
 ```
@@ -87,15 +89,17 @@ render target.
 sequenceDiagram
     participant App
     participant Core
-    participant B as Backend
+    participant Rec as PE CommandRecorder
+    participant B as Unix Backend
     participant MTL as Metal
 
     App->>Core: GetRenderTargetData(rt, dest)
-    Core->>B: submitReadback(ReadbackDesc)
+    Core->>Rec: record Readback(ReadbackDesc)
 
-    B->>B: emit blit lambda:\ncopyFromTexture:toBuffer:
+    Rec->>B: commitChunk()
+    B->>B: import readback record
+    B->>MTL: encode copyFromTexture:toBuffer\ncommit command buffer
 
-    B->>B: CommitCurrentChunk()
     B->>B: waitForSeqId(issuedSeqId)
     Note over B: Blocks CPU until GPU done\n(staging buffer now has data)
 
@@ -206,11 +210,13 @@ the scissored region.
 
 ## 7. Interaction with the Command Queue
 
-All surface operations are emitted as lambdas into the current `CommandChunk`, just
-like draw calls. They do not require a separate submission path.
+All surface operations are recorded as POD command records into the current PE-side
+`CommandChunk`, just like draw calls. The unix-side importer may decode those records
+into closures or replay them directly during encoding. They do not require a separate
+per-operation bridge path.
 
 Exception: `GetRenderTargetData` is a synchronous readback. It must:
-1. Emit the blit lambda.
+1. Record the readback command.
 2. Immediately commit the current chunk.
 3. Block the Wine thread on `completedSeqId`.
 4. Return the staging data once the GPU is done.

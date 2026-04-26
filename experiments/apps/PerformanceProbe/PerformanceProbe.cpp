@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -34,6 +35,21 @@ struct Vertex {
     DWORD color;
 };
 
+struct TimingTotals {
+    std::int64_t windowTicks = 0;
+    std::int64_t deviceTicks = 0;
+    std::int64_t resourceTicks = 0;
+    std::int64_t renderFrameTicks = 0;
+    std::int64_t clearTicks = 0;
+    std::int64_t sceneTicks = 0;
+    std::int64_t drawLoopTicks = 0;
+    std::int64_t presentTicks = 0;
+    std::int64_t captureTicks = 0;
+    std::int64_t messageTicks = 0;
+    std::int64_t cleanupTicks = 0;
+    std::int64_t totalTicks = 0;
+};
+
 struct AppState {
     ProbeMode mode = ProbeMode::PresentOnly;
     const char* modeName = "present-only";
@@ -53,7 +69,39 @@ struct AppState {
     bool captureDone = false;
     bool quit = false;
     char capturePath[MAX_PATH]{};
+    LARGE_INTEGER qpcFrequency{};
+    TimingTotals timings{};
 };
+
+std::int64_t qpc_now() {
+    LARGE_INTEGER value{};
+    QueryPerformanceCounter(&value);
+    return value.QuadPart;
+}
+
+struct ScopedTicks {
+    explicit ScopedTicks(std::int64_t& ticks) : ticks(ticks), start(qpc_now()) {}
+    ~ScopedTicks() {
+        ticks += qpc_now() - start;
+    }
+
+    std::int64_t& ticks;
+    std::int64_t start = 0;
+};
+
+double ticks_to_ms(const AppState& app, std::int64_t ticks) {
+    if (app.qpcFrequency.QuadPart <= 0) {
+        return 0.0;
+    }
+    return static_cast<double>(ticks) * 1000.0 / static_cast<double>(app.qpcFrequency.QuadPart);
+}
+
+double per_frame_ms(const AppState& app, std::int64_t ticks) {
+    if (app.frame <= 0) {
+        return 0.0;
+    }
+    return ticks_to_ms(app, ticks) / static_cast<double>(app.frame);
+}
 
 template <typename T>
 void safe_release(T*& object) {
@@ -344,6 +392,7 @@ void maybe_capture_surface(AppState& app, int completed_frame, IDirect3DSurface9
     if (app.captureDone || app.captureFrame <= 0 || completed_frame != app.captureFrame || !source) {
         return;
     }
+    ScopedTicks capture_timer(app.timings.captureTicks);
 
     D3DSURFACE_DESC desc{};
     source->GetDesc(&desc);
@@ -376,6 +425,7 @@ void draw_probe_geometry(AppState& app) {
     if (!app.vertexBuffer || app.drawsPerFrame <= 0) {
         return;
     }
+    ScopedTicks draw_timer(app.timings.drawLoopTicks);
     app.device->SetFVF(kVertexFvf);
     app.device->SetStreamSource(0, app.vertexBuffer, 0, sizeof(Vertex));
     for (int i = 0; i < app.drawsPerFrame; ++i) {
@@ -389,6 +439,7 @@ void draw_probe_geometry(AppState& app) {
 }
 
 void render_frame(AppState& app) {
+    ScopedTicks render_timer(app.timings.renderFrameTicks);
     IDirect3DSurface9* target =
         app.mode == ProbeMode::OffscreenHeavy ? app.offscreenSurface : app.backBuffer;
     if (target && app.mode == ProbeMode::OffscreenHeavy) {
@@ -404,19 +455,26 @@ void render_frame(AppState& app) {
         12 + ((app.frame * 3) % 36),
         20 + ((app.frame * 5) % 48),
         32 + ((app.frame * 7) % 64));
-    app.device->Clear(0, nullptr, D3DCLEAR_TARGET, clear_color, 1.0f, 0);
-
-    if (FAILED(app.device->BeginScene())) {
-        std::fprintf(stderr, "FAIL: BeginScene\n");
-        app.quit = true;
-        return;
+    {
+        ScopedTicks clear_timer(app.timings.clearTicks);
+        app.device->Clear(0, nullptr, D3DCLEAR_TARGET, clear_color, 1.0f, 0);
     }
-    draw_probe_geometry(app);
-    app.device->EndScene();
+
+    {
+        ScopedTicks scene_timer(app.timings.sceneTicks);
+        if (FAILED(app.device->BeginScene())) {
+            std::fprintf(stderr, "FAIL: BeginScene\n");
+            app.quit = true;
+            return;
+        }
+        draw_probe_geometry(app);
+        app.device->EndScene();
+    }
 
     maybe_capture_surface(app, app.frame + 1, target);
 
     if (app.mode != ProbeMode::OffscreenHeavy) {
+        ScopedTicks present_timer(app.timings.presentTicks);
         HRESULT hr = app.device->Present(nullptr, nullptr, nullptr, nullptr);
         if (FAILED(hr)) {
             print_hresult("Present", hr);
@@ -451,6 +509,12 @@ void cleanup(AppState& app) {
 
 int main(int argc, char** argv) {
     AppState app{};
+    QueryPerformanceFrequency(&app.qpcFrequency);
+    const std::int64_t total_started = qpc_now();
+    auto cleanup_with_timing = [&] {
+        ScopedTicks cleanup_timer(app.timings.cleanupTicks);
+        cleanup(app);
+    };
     const char* mode_arg = argc > 1 ? argv[1] : std::getenv("DXMT9_PROBE_MODE");
     configure_mode(app, parse_mode(mode_arg));
     init_capture(app);
@@ -465,17 +529,26 @@ int main(int argc, char** argv) {
 
     trace_log("OK: PerformanceProbe startup mode=%s frames=%d draws=%d",
               app.modeName, app.exitFrame, app.drawsPerFrame);
-    if (!create_window(app)) {
-        cleanup(app);
-        return 1;
+    {
+        ScopedTicks timer(app.timings.windowTicks);
+        if (!create_window(app)) {
+            cleanup_with_timing();
+            return 1;
+        }
     }
-    if (!create_device(app)) {
-        cleanup(app);
-        return 1;
+    {
+        ScopedTicks timer(app.timings.deviceTicks);
+        if (!create_device(app)) {
+            cleanup_with_timing();
+            return 1;
+        }
     }
-    if (!create_resources(app)) {
-        cleanup(app);
-        return 1;
+    {
+        ScopedTicks timer(app.timings.resourceTicks);
+        if (!create_resources(app)) {
+            cleanup_with_timing();
+            return 1;
+        }
     }
     trace_log("OK: PerformanceProbe device ready");
 
@@ -485,22 +558,47 @@ int main(int argc, char** argv) {
         if (app.quit) {
             break;
         }
-        int messages_processed = 0;
-        while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
-            if (msg.message == WM_QUIT) {
-                app.quit = true;
-                break;
-            }
-            if (++messages_processed >= 32) {
-                break;
+        {
+            ScopedTicks message_timer(app.timings.messageTicks);
+            int messages_processed = 0;
+            while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageA(&msg);
+                if (msg.message == WM_QUIT) {
+                    app.quit = true;
+                    break;
+                }
+                if (++messages_processed >= 32) {
+                    break;
+                }
             }
         }
     }
 
     trace_log("OK: PerformanceProbe finished at frame %d", app.frame);
-    cleanup(app);
+    cleanup_with_timing();
+    app.timings.totalTicks = qpc_now() - total_started;
+    trace_log("[perf-probe] frames=%d draws_per_frame=%d total_ms=%.3f window_ms=%.3f "
+              "device_ms=%.3f resources_ms=%.3f render_frame_ms=%.3f "
+              "render_frame_avg_ms=%.3f clear_ms=%.3f scene_ms=%.3f "
+              "draw_loop_ms=%.3f draw_loop_avg_ms=%.3f present_ms=%.3f "
+              "present_avg_ms=%.3f capture_ms=%.3f message_ms=%.3f cleanup_ms=%.3f",
+              app.frame, app.drawsPerFrame,
+              ticks_to_ms(app, app.timings.totalTicks),
+              ticks_to_ms(app, app.timings.windowTicks),
+              ticks_to_ms(app, app.timings.deviceTicks),
+              ticks_to_ms(app, app.timings.resourceTicks),
+              ticks_to_ms(app, app.timings.renderFrameTicks),
+              per_frame_ms(app, app.timings.renderFrameTicks),
+              ticks_to_ms(app, app.timings.clearTicks),
+              ticks_to_ms(app, app.timings.sceneTicks),
+              ticks_to_ms(app, app.timings.drawLoopTicks),
+              per_frame_ms(app, app.timings.drawLoopTicks),
+              ticks_to_ms(app, app.timings.presentTicks),
+              per_frame_ms(app, app.timings.presentTicks),
+              ticks_to_ms(app, app.timings.captureTicks),
+              ticks_to_ms(app, app.timings.messageTicks),
+              ticks_to_ms(app, app.timings.cleanupTicks));
     if (g_trace) {
         std::fclose(g_trace);
         g_trace = nullptr;

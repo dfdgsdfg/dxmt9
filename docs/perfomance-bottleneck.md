@@ -8,32 +8,348 @@ Scope:
 - Main references: `~/workspaces/dxvk`, `~/workspaces/wine`, current repo experiment results under `experiments/output`.
 - This document keeps the current file spelling, `perfomance-bottleneck.md`, to match the existing path.
 
+## Bound Legend
+
+- CPU-bound: app thread, Wine PE thunking, D3D9 state validation, command recording, resource marking, encode-thread command generation, and CPU-side transient upload bookkeeping.
+- GPU/driver-bound: Metal command buffer execution, CAMetalLayer drawable acquisition, present scheduling, compositor pacing, and driver-side resource allocation.
+- Sync-bound: CPU waits caused by queue, drawable, frame-latency, or GPU-completion fences. These are CPU stalls whose root cause may be GPU/driver progress.
+
 ## Current dxmt9 Shape
 
 ```mermaid
 flowchart TD
-  App[D3D9 app] --> D3D9PE[PE d3d9.dll]
-  D3D9PE --> WinemetalPE[PE winemetal.dll]
-  WinemetalPE --> UnixCall[Wine unix-call bridge]
-  UnixCall --> WinemetalSO[winemetal.so]
-  WinemetalSO --> Core[dxmt9 core Device]
-  Core --> Backend[DeviceImpl backend]
-  Backend --> CQ[CommandQueue]
-  CQ --> ChunkRing[chunk ring]
-  ChunkRing --> EncodeThread[encode thread]
-  EncodeThread --> DrawEnc[draw/blit/present encoders]
-  DrawEnc --> Presenter[Presenter]
-  Presenter --> Layer[CAMetalLayer nextDrawable]
-  Layer --> MetalCB[Metal command buffer present]
-  MetalCB --> Finish[finish/completion threads]
-  EncodeThread --> Dequeued[presentDequeuedSeqId]
-  Backend --> Boundary[presentBoundary]
-  Dequeued --> Boundary
-  Finish --> Completed[completedSeqId]
-  Finish --> PresentCompleted[presentCompletedSeqId]
+  subgraph CPU["CPU-bound: app/API/queue/encode work"]
+    App[D3D9 app]
+    D3D9PE[PE d3d9.dll]
+    WinemetalPE[PE winemetal.dll]
+    UnixCall[Wine unix-call bridge]
+    WinemetalSO[winemetal.so]
+    Core[dxmt9 core Device]
+    Backend[DeviceImpl backend]
+    CQ[CommandQueue]
+    ChunkRing[chunk ring]
+    EncodeThread[encode thread]
+    DrawEnc[draw/blit/present encoders]
+    Dequeued[presentDequeuedSeqId]
+  end
+
+  subgraph GPUDriver["GPU/driver-bound: Metal + CAMetalLayer + compositor"]
+    Presenter[Presenter drawable acquisition]
+    Layer[CAMetalLayer nextDrawable]
+    MetalCB[Metal command buffer present/execute]
+  end
+
+  subgraph Sync["Sync-bound CPU waits"]
+    Finish[finish/completion threads waitUntilCompleted]
+    Boundary[presentBoundary wait]
+    Completed[completedSeqId]
+    PresentCompleted[presentCompletedSeqId]
+  end
+
+  App --> D3D9PE --> WinemetalPE --> UnixCall --> WinemetalSO --> Core --> Backend --> CQ --> ChunkRing --> EncodeThread --> DrawEnc
+  DrawEnc --> Presenter --> Layer --> MetalCB --> Finish
+  EncodeThread --> Dequeued --> Boundary
+  Backend --> Boundary
+  Finish --> Completed
+  Finish --> PresentCompleted
   Completed -. optional completion mode .-> Boundary
   PresentCompleted -. optional present-completion mode .-> Boundary
+
+  classDef cpu fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  classDef sync fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class App,D3D9PE,WinemetalPE,UnixCall,WinemetalSO,Core,Backend,CQ,ChunkRing,EncodeThread,DrawEnc,Dequeued cpu
+  class Presenter,Layer,MetalCB gpu
+  class Finish,Boundary,Completed,PresentCompleted sync
 ```
+
+### Current dxmt9 Sequence
+
+```mermaid
+sequenceDiagram
+  participant App as D3D9 app
+  participant Core as src/d3d9 core
+  participant Device as dxmt9::DeviceImpl
+  participant CQ as CommandQueue
+  participant QLC as QueueLifecycleController
+  participant Encode as encode thread
+  participant Presenter as Presenter
+  participant Metal as Metal command buffer
+  participant Complete as completion thread
+
+  Note over App,Encode: CPU-bound: D3D9 state, PE bridge, queue append, resource marking, chunk encode
+  Note over Presenter,Metal: GPU/driver-bound: drawable acquire, command execution, present/compositor pacing
+  Note over Device,Complete: Sync-bound: CPU waits on queue/dequeue/completion watermarks
+
+  App->>Core: Draw/DrawIndexed/Clear/StretchRect
+  Core->>Device: submitDraw/submitClear/submitStretchRect
+  Device->>CQ: submitDraw(...)
+  CQ->>QLC: ensureWriterSlot()
+  CQ->>QLC: append command into Writing chunk
+  CQ->>CQ: mark resources with nextSeqId
+  opt DXMT9_DRAW_CHUNK_COMMAND_LIMIT
+    CQ->>QLC: commitCurrentChunk()
+  end
+
+  App->>Core: Present()
+  Core->>Device: present(SwapDesc)
+  Device->>Device: inject maxFrameLatency + callback
+  Device->>CQ: submitPresent(...)
+  opt DXMT9_PRESENT_ASYNC_ACQUIRE
+    CQ->>Presenter: beginAcquireDrawable()
+  end
+  CQ->>QLC: append present + commit current chunk
+  QLC-->>Encode: ready slot
+  Encode->>QLC: dequeueReadySlot()
+  Encode->>Encode: encode draw/blit/present commands
+  Encode->>Presenter: encodePresent / acquire drawable if needed
+  Encode->>CQ: notePresentDequeued(seqId)
+  Encode->>Metal: commit command buffer
+  Complete->>Metal: waitUntilCompleted()
+  Complete->>QLC: completed seqId
+  Complete->>CQ: completedSeqId / presentCompletedSeqId
+  Device->>CQ: presentBoundary(presentSeqId, latency)
+  CQ-->>Device: wait until dequeued/completed target is reached
+```
+
+### Current dxmt9 Chunk State
+
+```mermaid
+stateDiagram-v2
+  [*] --> Free
+  Free --> Writing: ensureWriterSlot() / CPU
+  Writing --> Pending: commitCurrentChunk() / CPU
+  Pending --> Encoding: encode thread dequeues ready slot / CPU
+  Encoding --> GPU: Metal command buffer committed / GPU-driver
+  Encoding --> Free: inline empty/no-work completion
+  GPU --> Free: completion thread reclaims seqId / sync
+
+  note right of Writing
+    CPU-bound.
+    App thread appends draw/blit/present records.
+    Default present commits the current chunk.
+    Optional draw limit can commit earlier.
+  end note
+
+  note right of Encoding
+    CPU-bound unless it blocks on
+    drawable acquisition or driver allocation.
+  end note
+
+  note right of GPU
+    GPU/driver-bound work has been submitted.
+    Completion thread is CPU sync-bound while
+    waiting for Metal completion.
+    It updates completedSeqId.
+    present-bearing buffers also update
+    presentCompletedSeqId.
+  end note
+```
+
+### Current dxmt9 Buffering Strategy
+
+```mermaid
+flowchart TD
+  subgraph CPURecord["CPU-bound: app thread + queue recording"]
+    App[D3D9 app thread]
+    CoreState[D3D9 state + resource handles]
+    ChunkRing[32-slot CommandQueue chunk ring]
+    Writing[Writing slot]
+    Pending[Pending readySlots queue]
+    EncodeThread[encode thread]
+  end
+
+  subgraph Uploads["CPU/driver-bound: queue-owned upload paths"]
+    Initializer[ResourceInitializer deferred texture uploads]
+    Transient[Transient uniform upload slabs]
+    Dedicated[Dedicated fallback Metal buffers]
+  end
+
+  subgraph GPUDriver["GPU/driver-bound: command execution and present"]
+    CommandBuffer[Metal command buffer]
+    Drawable[CAMetalLayer drawable]
+    Present[commandBuffer presentDrawable]
+    Presenter[Presenter drawable cache/token path]
+  end
+
+  subgraph SyncWait["Sync-bound: CPU waits on progress tokens"]
+    Completion[completion thread waitUntilCompleted]
+    Completed[completedSeqId]
+    PresentCompleted[presentCompletedSeqId]
+    Boundary[presentBoundary]
+    Dequeued[presentDequeuedSeqId]
+    Cap[optional BackBufferCount + 1 cap]
+  end
+
+  App --> CoreState
+  CoreState --> ChunkRing
+  ChunkRing --> Writing
+  Writing --> Pending
+  Pending --> EncodeThread
+
+  Initializer --> EncodeThread
+  Transient --> EncodeThread
+  Dedicated --> EncodeThread
+
+  EncodeThread --> CommandBuffer
+  CommandBuffer --> Drawable
+  Drawable --> Present
+  CommandBuffer --> Completion
+  Completion --> Completed
+  Completion --> PresentCompleted
+
+  Present --> PreAcquire[post-commit preAcquireNextDrawable]
+  PreAcquire --> Presenter
+
+  Device[DeviceImpl present policy] --> Boundary
+  Completed -. optional completion boundary .-> Boundary
+  PresentCompleted -. optional present-completion boundary .-> Boundary
+  EncodeThread --> Dequeued
+  Dequeued --> Boundary
+
+  BackBuffers[Swapchain backbuffer count] --> Cap
+  MaxLatency[DXMT9_MAX_FRAME_LATENCY default 4] --> Cap
+  Cap --> Boundary
+
+  classDef cpu fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  classDef sync fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class App,CoreState,ChunkRing,Writing,Pending,EncodeThread,Device,BackBuffers,MaxLatency cpu
+  class Initializer,Transient,Dedicated,CommandBuffer,Drawable,Present,Presenter,PreAcquire gpu
+  class Completion,Completed,PresentCompleted,Boundary,Dequeued,Cap sync
+```
+
+Current buffering implications:
+
+- The chunk ring has 32 slots and an in-flight cap of 31 chunks.
+- Default present appends a present command to the current chunk and commits it; draw-only workloads can build very large chunks until a flush/readback/present boundary.
+- Transient draw-uniform data is queue-owned and slab-backed. The recent cleanup rotates retained transient slabs instead of allocating one Metal buffer per draw.
+- `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=<N>` is an opt-in guard against huge draw-only chunks. It is not a default because smaller chunks reduce sequence tail latency but increase command-buffer completion overhead.
+- Present pacing currently still lives at `DeviceImpl::present()` calling `CommandQueue::presentBoundary()` after submission. That is the largest remaining shape difference versus DXVK/Wine, where queue/presenter machinery owns more of the pacing rule.
+
+### Bound Classification
+
+| Region | Bound type | Main counters | Current interpretation |
+|---|---|---|---|
+| D3D9 API, PE bridge, `submitDraw()` | CPU-bound | `submit_draw`, process elapsed | High draw count stresses command recording and resource marking. |
+| Chunk append / writer slot | CPU sync-bound when saturated | `queue_writer_wait_ms` | Recent probes show this is not the primary limiter when it stays near zero. |
+| Chunk commit / ready-slot publish | CPU sync-bound when ring is full | `queue_commit_wait_ms` | Useful for detecting too many small chunks or GPU not freeing slots. |
+| Encode thread / draw encoders | CPU-bound with driver allocation edges | `command_buffers`, `metal_buffers`, `metal_buffer_bytes` | Large transient allocation volume can make CPU encode behave like driver-bound work. |
+| CAMetalLayer drawable acquire | GPU/driver/compositor-bound, observed as CPU wait | `present_acquire_wait_ms`, `present_token_wait_ms` | Dominates present-only workloads when compositor pacing stalls acquisition. |
+| Metal command buffer execution | GPU-bound, observed by completion thread | `completion_draw_wait_ms`, `completion_present_wait_ms`, `completion_wait_ms` | Grows when chunks are split too aggressively or GPU work is heavy. |
+| Frame/present boundary | CPU sync-bound | `present_boundary_wait_ms`, `queue_sequence_wait_ms` | Root cause can be encode backlog, GPU completion, or drawable pacing depending on selected boundary mode. |
+| Draw-only giant chunks | CPU encode tail plus sync wait | `queue_sequence_wait_ms`, `command_buffers` | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256` reduces tail latency but does not remove per-draw encode/upload cost. |
+
+### Bottleneck Re-evaluation
+
+```mermaid
+flowchart TD
+  Start[Current experiment set] --> PresentOnly[present-only: 240 presents, no draws]
+  Start --> OffscreenHeavy[offscreen-heavy: 122880 draws, no presents]
+  Start --> ManyDraw[many-draw: 61440 draws + 120 presents]
+
+  PresentOnly --> PWait[present_acquire + present_boundary dominate]
+  PWait --> PresentBound[Primary: GPU/driver/compositor pacing observed as CPU sync wait]
+
+  OffscreenHeavy --> ODefault[default: 3 command buffers, 8590ms sequence wait]
+  ODefault --> ChunkTail[Primary before split: huge chunk tail latency]
+  ChunkTail --> Flush256[draw chunk limit 256: 483 command buffers, 6.9ms sequence wait]
+  Flush256 --> RemainingGap[Still 6.53 fps vs Wine 10.51 fps]
+  RemainingGap --> CPUCost[Primary after split: CPU front-end/encode/upload cost not covered by wait counters]
+
+  ManyDraw --> Mixed[sequence wait improves slightly with split]
+  Mixed --> MixedBound[Mixed: present pacing + per-draw CPU cost; too many chunks add completion wait]
+
+  CPUCost --> Next[Next measurement target: per-draw CPU timing and encode/upload attribution]
+  PresentBound --> NextPresent[Next present target: queue-owned latency token, not encode-dequeue pacing]
+
+  classDef cpu fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  classDef sync fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  class CPUCost,Next cpu
+  class PresentBound gpu
+  class PWait,ODefault,ChunkTail,Flush256,Mixed,MixedBound,NextPresent sync
+```
+
+Current interpretation:
+
+- Present-only is a valid isolation of CAMetalLayer/compositor pacing. The measured dxmt9 loss is mostly sync-bound CPU time waiting on GPU/driver-present progress.
+- Offscreen-heavy proves present is not the only issue. After `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256`, the giant sequence wait is gone, Metal buffer churn is gone, and draw completion wait is only hundreds of ms; the remaining multi-second elapsed gap is therefore mostly CPU work not yet timed by counters.
+- Many-draw is the mixed case. Splitting chunks reduces sequence wait but increases draw-completion wait. That means chunk splitting is a tail-latency control, not a general performance fix.
+- The next bottleneck target should be reduced as CPU time: `submitDraw()` wall time, encode-thread `encodeChunk()` wall time, transient uniform upload time, command-buffer creation/commit time, and per-draw fixed-function state lowering.
+
+Instrumentation pass:
+
+- Added `PerformanceProbe` in-app `QueryPerformanceCounter` timings. The result JSON now includes `perf_probe_timings`.
+- Added dxmt9 CPU counters to the existing `[dxmt9-perf]` line. The result JSON now includes submit/encode/upload/command-buffer CPU time in `dxmt9_perf_counters`.
+- Smoke validation outputs:
+  - `experiments/output/dxmt9-perf-offscreen-heavy-instrumentation-smoke/result.json`
+  - `experiments/output/dxmt9-perf-many-draw-instrumentation-smoke/result.json`
+- Full reference outputs:
+  - `experiments/output/dxmt9-perf-offscreen-heavy-instrumentation-drawflush256/result.json`
+  - `experiments/output/dxmt9-perf-many-draw-instrumentation-default/result.json`
+
+| app | mode | process fps | process elapsed s | app total ms | render frame ms | draw loop ms | submitDraw CPU ms | encodeChunk CPU ms | encodeDraw CPU ms | transient upload CPU ms | sequence wait ms | completion wait ms |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| offscreen-heavy | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256` | 6.43 | 18.671 | 9425.730 | 8467.626 | 8431.020 | 4638.556 | 3664.204 | 3574.412 | 2968.533 | 7.081 | 279.998 |
+| many-draw | default | 8.01 | 14.973 | 5455.159 | 4419.008 | 3827.204 | 1899.229 | 2238.123 | 2166.603 | 1838.429 | 16.896 | 93.388 |
+
+Instrumentation interpretation:
+
+- The offscreen-heavy full run confirms the remaining gap is CPU front-end/encode/upload dominated after chunk tail latency is removed. `queue_sequence_wait_ms` is only 7.081 ms, while app draw loop is 8431.020 ms, `submitDraw()` CPU is 4638.556 ms, and transient upload CPU is 2968.533 ms.
+- The many-draw full run shows the same shape with present mixed in. Present acquire is only 12.054 ms in this run; the heavier costs are draw loop, submit, encode, and transient upload.
+- `process_elapsed_sec` remains much larger than in-app `total_ms`. This confirms the previous concern: process-level FPS is still useful for end-to-end comparison, but not for attributing the renderer hot path.
+- Short offscreen smoke runs below the catalogue `capture_frame=120` do not force readback/flush, so they validate parser wiring but not GPU encode behavior. Full offscreen runs must reach the capture/readback frame or explicitly flush.
+
+### Experiment Suitability
+
+```mermaid
+flowchart LR
+  Current[Current probes] --> Good[Good for bottleneck triage]
+  Current --> Weak[Weak for absolute FPS claims]
+
+  Good --> Isolation[present-only / no-present / mixed split]
+  Good --> Counters[dxmt9 perf counters map waits and resource churn]
+  Good --> AB[A/B knobs show directionality]
+
+  Weak --> ProcessElapsed[process elapsed includes startup, device creation, windowing, cleanup]
+  Weak --> NoWarmup[no warmup discard or steady-state window]
+  Weak --> Synthetic[Synthetic draw pattern: FVF XYZRHW, tiny triangles, no real material/state mix]
+  Weak --> Oracle[Wine builtin is a useful baseline, not a hardware/perf oracle]
+  Weak --> Load[macOS compositor and machine load add noise]
+
+  ProcessElapsed --> Improve[Add in-app QPC timers]
+  NoWarmup --> Improve
+  Synthetic --> Improve2[Add workload matrix]
+  Oracle --> Improve3[Compare medians and internal dxmt9 variants]
+  Load --> Improve4[Run repeated medians/p95 under controlled load]
+
+  classDef good fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef weak fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  classDef action fill:#e8ffe8,stroke:#3c8f3c,color:#0d2b0d
+  class Good,Isolation,Counters,AB good
+  class Weak,ProcessElapsed,NoWarmup,Synthetic,Oracle,Load weak
+  class Improve,Improve2,Improve3,Improve4 action
+```
+
+Suitability verdict:
+
+- The current experiments are appropriate for structural triage: they separate present pacing, no-present draw encoding, and mixed present+draw behavior.
+- They are still not sufficient for absolute performance claims. The reported FPS is `frames / process_elapsed_sec` from `scripts/run_experiment.py`, so it includes process startup, Wine prefix/runtime overhead, window creation, device/resource creation, render loop, teardown, and any final flush.
+- The new in-app and dxmt9 CPU counters now attribute the main renderer hot path, but the process-level metric remains useful only as an end-to-end number.
+- The Wine builtin lane is a practical compatibility/performance baseline, not an oracle proving what "CPU D3D9" should cost. Wined3D has its own command stream and backend acceleration.
+
+Implemented measurement changes:
+
+1. In-app `QueryPerformanceCounter` timing around window/device/resource creation, render frame, draw loop, Present, message pump, and cleanup.
+2. dxmt9 counters for `submitDraw()` CPU time, `encodeChunk()` CPU time, `encodeDraw()` CPU time, command-buffer creation/commit CPU time, and transient upload copy/allocation time.
+
+Remaining measurement changes:
+
+1. Report warmup-discarded steady-state FPS, median frame time, p95, and max, not only process elapsed FPS.
+2. Add fixed-function lowering sub-counters inside `encodeDraw()` to split pipeline lookup, uniform build, FVF decode, stream binding, and actual draw encoding.
+3. Add workload variants: clear-only no-present, single draw with many primitives, many draws with identical state, many draws with forced state changes, texture sampling, render-to-texture then present, and backbuffer count 1/2/3.
+4. Keep current probes as regression/triage tests, but do not use them alone to decide default performance policy.
 
 Important current behavior:
 
@@ -99,6 +415,8 @@ Migration steps:
 
 ## DXVK D3D9 Shape
 
+Detailed notes live in `docs/research/dxvk-d3d9.md`.
+
 ```mermaid
 flowchart TD
   App[D3D9 app] --> D3D9[D3D9SwapChainEx::Present]
@@ -130,6 +448,8 @@ Local reference points:
 - `~/workspaces/dxvk/src/dxvk/dxvk_presenter.cpp`
 
 ## Wine D3D9 Shape
+
+Detailed notes live in `docs/research/wine-d3d9.md`.
 
 ```mermaid
 flowchart TD

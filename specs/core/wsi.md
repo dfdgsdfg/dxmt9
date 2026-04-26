@@ -139,8 +139,8 @@ hosted by the paired Wine unix module:
 
 | Binary | Kind | Role |
 |---|---|---|
-| `d3d9.dll` | PE DLL | User-facing D3D9 COM exports (`Direct3DCreate9`, `Direct3DCreate9Ex`) |
-| `winemetal.dll` | Wine builtin PE DLL | Shared bridge/service DLL imported by `d3d9.dll`; initializes Wine unix-call dispatch and exposes the `winemetal`/provider C ABI |
+| `d3d9.dll` | PE DLL | User-facing D3D9 COM exports (`Direct3DCreate9`, `Direct3DCreate9Ex`), D3D9 state shadow, and hot-path command recording |
+| `winemetal.dll` | Wine builtin PE DLL | Shared bridge/service DLL imported by `d3d9.dll`; initializes Wine unix-call dispatch and exposes chunk/resource/frame-token ABI |
 | `winemetal.so` | Wine unix module | Native Mach-O module that hosts ObjC/Metal WSI, shader translation, provider/runtime handlers, and GPU execution |
 
 `d3d9.dll` imports `winemetal.dll` as a normal Windows dependency. `winemetal.dll`
@@ -152,8 +152,9 @@ were a Windows DLL.
 All window/layer functions (`get_view`, `create_layer`, `resize_layer`,
 `set_sync`, `destroy_layer`, `next_drawable`, `present_drawable`) live in
 `winemetal.so` using `macdrv_get_cocoa_view` + ObjC Metal APIs. The PE side owns
-only COM entry points, C ABI forwarding, opaque handles, and Wine-visible thunk
-entry points.
+COM entry points, D3D9 state tracking, POD command chunk construction, opaque
+handles, C ABI forwarding, and Wine-visible thunk entry points. It does not own ObjC
+or Metal objects.
 
 ---
 
@@ -195,15 +196,18 @@ On the common macOS Wine64 / Rosetta path:
 
 32-bit x86 is not the primary target. The architecture split is therefore:
 
-1. `d3d9.dll` handles COM entry points and user-visible D3D9 ABI.
-2. `winemetal.dll` handles plain-C forwarding and Wine unix-call dispatch.
-3. `winemetal.so` handles ObjC, Metal, `macdrv_get_cocoa_view`, and GPU execution.
+1. `d3d9.dll` handles COM entry points, user-visible D3D9 ABI, state shadowing, and
+   PE-side command recording.
+2. `winemetal.dll` handles plain-C chunk/resource/frame-token forwarding and Wine
+   unix-call dispatch.
+3. `winemetal.so` handles ObjC, Metal, `macdrv_get_cocoa_view`, command execution,
+   and GPU/presenter completion signaling.
 
 ### 9.1 Initialization Sequence
 
 `d3d9.dll`'s `DllMain(DLL_PROCESS_ATTACH)`:
 
-1. Initializes the D3D9-side wrapper state.
+1. Initializes the D3D9-side wrapper state and PE-side command recorder.
 2. Ensures `winemetal.dll` is loaded as its PE bridge/service dependency.
 3. Exports `Direct3DCreate9` / `Direct3DCreate9Ex`; each calls through the
    provider C ABI exposed by `winemetal.dll`
@@ -212,7 +216,8 @@ On the common macOS Wine64 / Rosetta path:
 `winemetal.dll` then:
 
 1. Runs Wine's unixlib initialization during process attach.
-2. Marshals `dxmt9c_*`, WSI, shader, and `winemetal` requests into `winemetal.so`.
+2. Marshals committed command chunks, coarse resource operations, WSI, shader, and
+   `winemetal` requests into `winemetal.so`.
 3. Never imports `winemetal.so` as a normal PE dependency; the handoff is through
    Wine's unix-call / unixlib path only.
 

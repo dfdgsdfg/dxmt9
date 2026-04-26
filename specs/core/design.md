@@ -111,39 +111,111 @@ DeviceState {
 }
 ```
 
-The state bag is read by the backend when processing draw calls. The backend treats
-the state bag as a snapshot taken at draw-call time.
+The state bag is read by the core when recording draw commands. The backend receives
+only value snapshots extracted from this bag; it never observes or mutates the live
+D3D9 state bag directly.
 
 ---
 
 ## 3. Core / Backend Boundary
 
-The core layer and the Metal backend communicate through a defined interface. The core
-knows nothing about Metal objects; the backend knows nothing about D3D9 COM.
+The core layer and the Metal backend communicate through a coarse command-stream
+interface. The core knows nothing about Metal objects; the backend knows nothing
+about D3D9 COM.
+
+The Wine PE/unix boundary is performance-sensitive. D3D9 hot-path calls must not
+cross it one call at a time. The core records draw, clear, surface, query, and
+present work into a PE-side command chunk. The chunk is committed to the unix-side
+backend as a single bridge operation when it is full or when ordering requires it.
 
 ```mermaid
 graph LR
-    subgraph Core["Core layer (this spec)"]
+    subgraph PE["PE side: d3d9.dll + winemetal.dll"]
         DEV["IDirect3DDevice9 impl"]
         STATE["DeviceState (shadow)"]
         RES["Resource COM wrappers"]
+        REC["D3D9 CommandRecorder\nPOD CommandChunk builder"]
+        BRIDGE["winemetal bridge ABI\ncommitChunk()\ncreate/destroy/map/unmap\nwaitFrameToken()"]
     end
 
-    subgraph IFace["Backend interface"]
-        CMD["BackendDevice\n• submitDraw(DrawDesc)\n• submitClear(ClearDesc)\n• present(SwapDesc)\n• createBuffer(desc) → handle\n• createTexture(desc) → handle\n• destroyBuffer(handle)\n• destroyTexture(handle)\n• mapBuffer(handle, flags) → ptr\n• unmapBuffer(handle)"]
-    end
-
-    subgraph Backend["Metal backend (backend/ spec)"]
-        MTL["CommandQueue\nPSO cache\nResource allocator"]
+    subgraph Unix["Unix side: winemetal.so"]
+        CQ["CommandQueue\nchunk import + encode thread"]
+        MTL["Metal backend\nPSO cache\nResource allocator\nPresenter"]
     end
 
     DEV -->|reads| STATE
-    DEV -->|calls| CMD
-    RES -->|holds handles via| CMD
-    CMD --> MTL
+    DEV -->|Set* updates| STATE
+    DEV -->|Draw/Clear/Present snapshots| REC
+    RES -->|holds opaque handles| DEV
+    REC -->|one unix-call per committed chunk| BRIDGE
+    BRIDGE --> CQ
+    CQ --> MTL
 ```
 
-**`DrawDesc`** — the snapshot passed to the backend for each draw call:
+The bridge may expose resource lifecycle and map/unmap operations separately because
+they are not per-draw hot-path calls. Draw/state submission itself is chunked.
+
+### 3.1 Hot-Path Recording Model
+
+```mermaid
+flowchart TD
+    A["Application calls SetRenderState / SetTexture / SetStreamSource"] --> B["Update DeviceState\nmark dirty bits"]
+    B --> C["No unix call"]
+
+    D["Application calls Draw*"] --> E["Snapshot only the state needed by this draw"]
+    E --> F["Append DrawCommand to PE CommandChunk"]
+    F --> G{Chunk full\nor explicit ordering point?}
+    G -->|No| H["Return to application"]
+    G -->|Yes| I["commitChunk(CommandChunk)\none PE to unix transition"]
+
+    J["Application calls Present / Query / Readback"] --> K["Append ordering command"]
+    K --> I
+```
+
+This model follows upstream DXMT's important property: API calls record work on the
+PE side, while backend execution and Metal calls happen later. dxmt9 must not depend
+on a unix transition for every `DrawPrimitive`, `DrawIndexedPrimitive`, or `Set*`
+call.
+
+### 3.2 D3D9 Recorder Invariants
+
+The recorder is a D3D9 state machine first and a batching optimization second. It
+must preserve immediate API semantics even though execution is deferred.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Clean : device created
+    Clean --> Dirty : Set* updates DeviceState
+    Dirty --> Dirty : more Set* calls
+    Dirty --> Recording : Draw* snapshots state
+    Clean --> Recording : Draw* with unchanged state
+    Recording --> Recording : append Draw/Clear/SurfaceOp
+    Dirty --> Sealed : Present / readback / query ordering
+    Recording --> Sealed : chunk full or ordering point
+    Sealed --> Submitted : commitChunk()
+    Submitted --> Clean : backend accepts chunk\nnew PE chunk begins
+
+    note right of Dirty
+        Get* and StateBlock read
+        the PE DeviceState, not
+        backend execution state.
+    end note
+```
+
+Required invariants:
+
+- Dirty bits are an optimization only; the `DeviceState` value is authoritative.
+- A recorded draw owns a complete value snapshot. Later `Set*` calls only affect later
+  draw records.
+- `DrawPrimitiveUP` / `DrawIndexedPrimitiveUP` copy caller memory into chunk-owned
+  payload or staging storage before returning.
+- Recorded chunks retain opaque backend handles, never COM objects.
+- `Present`, synchronous readback, event-query ordering, explicit flush, chunk size
+  limits, and non-representable lifetime hazards seal the current chunk.
+
+### 3.3 Draw and Chunk Payloads
+
+**`DrawDesc`** — the snapshot embedded in a draw command:
 
 ```
 DrawDesc {
@@ -172,6 +244,55 @@ DrawDesc {
 
 The core constructs `DrawDesc` from `DeviceState` immediately before the call. No
 D3D9 COM objects are referenced inside `DrawDesc` — only opaque backend handles.
+The snapshot must be complete enough that the backend can replay it after the D3D9
+method has returned.
+
+**`CommandChunk`** — the bridge payload committed to the backend:
+
+```
+CommandChunk {
+    uint64_t            chunkId
+    uint32_t            commandCount
+    uint32_t            byteSize
+    CommandRecord[]     records          // Draw, Clear, SurfaceOp, Present, Query
+    HandleRef[]         retainedHandles  // opaque backend handles referenced by records
+}
+```
+
+The chunk is a POD command stream. It must not contain COM interface pointers,
+Objective-C pointers, C++ lambdas, or process-local references that are invalid
+after crossing the Wine PE/unix boundary.
+
+### 3.4 Frame Pacing Ownership
+
+Frame latency is owned by the swap chain, presenter, and backend command queue. The
+device implementation initiates present, but it does not define the wait token.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Dev as DeviceImpl
+    participant Rec as PE CommandRecorder
+    participant CQ as Backend CommandQueue
+    participant FT as Finish thread
+    participant Pr as Presenter
+
+    App->>Dev: Present()
+    Dev->>Rec: emit PresentCommand
+    Rec->>CQ: commitChunk()
+    CQ-->>Dev: frameToken
+    Dev->>CQ: waitFrameLatency(frameToken, maxLatency)
+    CQ->>Pr: encode present for token
+    Pr->>Pr: acquire drawable and present
+    FT->>CQ: signal frameToken after command buffer completion
+    CQ-->>Dev: latency wait satisfied
+    Dev-->>App: Present returns
+```
+
+The wait is based on present-bearing command completion, not on whether the encode
+thread has merely dequeued or started a chunk. This keeps pacing attached to the
+queue/presenter timeline and prevents the front-end device object from becoming the
+owner of frame scheduling.
 
 ---
 

@@ -86,6 +86,26 @@ std::size_t nextPowerOfTwo(std::size_t value) {
   return value + 1;
 }
 
+class PerfScope {
+ public:
+  explicit PerfScope(void (*record)(std::uint64_t)) : record_(record) {}
+  ~PerfScope() {
+    if (!record_) {
+      return;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started_;
+    record_(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  }
+
+  PerfScope(const PerfScope&) = delete;
+  PerfScope& operator=(const PerfScope&) = delete;
+
+ private:
+  void (*record_)(std::uint64_t) = nullptr;
+  std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
+};
+
 }  // namespace
 
 CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
@@ -168,6 +188,7 @@ WMT::Reference<WMT::CommandBuffer> CommandQueue::newCommandBuffer() {
   if (!queue_) {
     return {};
   }
+  PerfScope scope(perf::countCommandBufferCreateCpuTime);
   auto commandBuffer = queue_.commandBuffer();
   if (commandBuffer) {
     perf::countCommandBuffer();
@@ -238,6 +259,14 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
   if (!device_ || bytes.empty()) {
     return {};
   }
+  const auto uploadStarted = std::chrono::steady_clock::now();
+  const auto recordUploadTime = [&] {
+    const auto elapsed = std::chrono::steady_clock::now() - uploadStarted;
+    perf::countTransientUploadCpuTime(
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
+        bytes.size());
+  };
 
   std::uint64_t completedSeqId = 0;
   {
@@ -255,6 +284,7 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
     info.memory.set((void*)bytes.data());
     auto buffer = device_.newBuffer(info);
     if (!buffer) {
+      recordUploadTime();
       return {};
     }
     perf::countMetalBuffer(static_cast<std::size_t>(info.length));
@@ -262,11 +292,13 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
         .buffer = std::move(buffer),
         .seqId = seqId,
     });
-    return TransientBufferSlice{
+    auto slice = TransientBufferSlice{
         .buffer = WMT::Buffer{retainedTransientBuffers_.back().buffer.handle},
         .offset = 0,
         .size = bytes.size(),
     };
+    recordUploadTime();
+    return slice;
   };
 
   alignment = std::max<std::size_t>(alignment, 1);
@@ -313,11 +345,13 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
   });
   transientBufferCursor_ = offset + alignedSize;
 
-  return TransientBufferSlice{
+  auto slice = TransientBufferSlice{
       .buffer = WMT::Buffer{transientBuffer_.handle},
       .offset = offset,
       .size = bytes.size(),
   };
+  recordUploadTime();
+  return slice;
 }
 
 void CommandQueue::startThreads(std::function<void()> encodeLoop,
@@ -489,6 +523,7 @@ void maybeCommitDrawChunkUnlocked(
 
 void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   perf::countSubmitDraw();
+  PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex_);
   // TLA+: WineCommit
   ensureWritingSlotUnlocked(*this, lock);

@@ -258,9 +258,10 @@ pDirtyRegion, dwFlags)` must present the swap chain. `pSourceRect`,
 `pDestRect`, `pDirtyRegion`, and `dwFlags` are hints and may be ignored; the
 full back buffer must always be presented.
 
-**R-CORE-10.11** `SetMaximumFrameLatency(MaxLatency)` must clamp the backend
-frame latency to `max(1, min(MaxLatency, 3))`.
-`GetMaximumFrameLatency()` must return the current value.
+**R-CORE-10.11** `SetMaximumFrameLatency(MaxLatency)` must accept values in the
+range `0..30`. A value of `0` selects the implementation default of `4`; values
+greater than `30` must return `D3DERR_INVALIDCALL`.
+`GetMaximumFrameLatency()` must return the current effective value.
 
 **R-CORE-10.12** `WaitForVBlank(SwapChainIndex)` must return `D3D_OK`. A
 best-effort vblank wait is acceptable; a busy-sleep no-op is not.
@@ -279,3 +280,70 @@ ignore `Priority`. Metal does not expose GPU thread priority.
 `CreateDepthStencilSurfaceEx()` must delegate to their non-Ex counterparts.
 The `pSharedHandle` output parameter must be set to `NULL` (shared surfaces are
 not supported).
+
+---
+
+## 11. Hot-Path Command Recording and Frame Pacing
+
+The core must follow the upstream DXMT performance shape: D3D API calls record work
+on the PE side, while unix-side Metal execution happens from committed command
+chunks.
+
+**R-CORE-11.1** D3D9 hot-path calls must not cross the Wine PE/unix boundary one
+call at a time. `Set*`, `Draw*`, `Clear`, and ordinary surface operations must be
+handled by PE-side state tracking and command recording.
+
+**R-CORE-11.2** `SetRenderState`, `SetTextureStageState`, `SetSamplerState`,
+`SetTexture`, `SetStreamSource`, `SetIndices`, `SetFVF`, `SetVertexDeclaration`,
+`SetVertexShader`, `SetPixelShader`, shader constant setters, transform setters,
+and render-target binding calls must update the core shadow state and dirty bits.
+They must not emit a backend bridge call solely because state changed.
+
+**R-CORE-11.3** Each draw command recorded by the core must contain a complete value
+snapshot of the state needed by that draw. Later state changes must not affect an
+already recorded draw.
+
+**R-CORE-11.4** Recorded command chunks must contain only POD command records and
+opaque backend handles. They must not contain D3D9 COM pointers, Objective-C object
+pointers, unix-side C++ object pointers, or lambdas.
+
+**R-CORE-11.5** The command recorder must commit the current chunk when any of the
+following occurs: `Present` / `PresentEx`, synchronous readback, event query
+ordering, explicit flush, chunk command-count limit, chunk byte-size limit, or a
+resource lifetime hazard that cannot be represented inside the current chunk.
+
+**R-CORE-11.6** Command-count and byte-size limits must be configurable and must
+have bounded defaults. The defaults must prevent unbounded draw-only chunks from
+creating multi-frame tail latency even when the application does not call `Present`.
+
+**R-CORE-11.7** `Present` / `PresentEx` must obtain a frame token from the backend
+queue or presenter for the committed present-bearing chunk. The core must not pace
+frames by waiting on an encode-dequeued sequence ID.
+
+**R-CORE-11.8** `SetMaximumFrameLatency(MaxLatency)` must configure the maximum
+number of present-bearing frame tokens that may remain incomplete. The wait target
+is GPU/presenter completion of an older frame token, not backend encode progress.
+
+**R-CORE-11.9** A `MaxLatency` value of 1 must mean the application can be at most
+one present-bearing frame ahead of queue/presenter completion. It must not force a
+full device drain after every draw or state call.
+
+**R-CORE-11.10** D3D9 getters and state blocks must read and write the PE-side
+shadow state. `GetRenderState`, `GetTexture`, `GetStreamSource`, and
+`IDirect3DStateBlock9::Capture/Apply` must not require a backend round trip solely
+to observe ordinary mutable state.
+
+**R-CORE-11.11** `DrawPrimitiveUP` and `DrawIndexedPrimitiveUP` must copy
+caller-owned vertex/index memory into recorder-owned chunk payload or staging memory
+before returning to the application. Recorded UP draws must never retain pointers to
+application memory.
+
+**R-CORE-11.12** Resource handles referenced by a recorded chunk must remain valid
+until the backend reports completion for that chunk. Application `Release()` calls may
+drop COM references, but they must not invalidate handles already captured by
+in-flight command records.
+
+**R-CORE-11.13** Developer builds must expose diagnostics that count PE/unix bridge
+operations by class: committed chunks, coarse resource operations, frame-token waits,
+and any compatibility per-call fallback. This is required so the hot path can be
+verified not to regress to one bridge call per D3D9 state or draw call.
