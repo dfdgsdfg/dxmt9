@@ -280,8 +280,8 @@ sequenceDiagram
     App->>Dev: Present()
     Dev->>Rec: emit PresentCommand
     Rec->>CQ: commitChunk()
-    CQ-->>Dev: frameToken
-    Dev->>CQ: waitFrameLatency(frameToken, maxLatency)
+    CQ->>CQ: allocate frameToken
+    CQ->>CQ: waitFrameLatency(frameToken, maxLatency)
     CQ->>Pr: encode present for token
     Pr->>Pr: acquire drawable and present
     FT->>CQ: signal frameToken after command buffer completion

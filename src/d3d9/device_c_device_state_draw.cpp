@@ -1,6 +1,86 @@
 #include "device_c_provider.hpp"
+#include "util/unixcall_marshal.hpp"
 
 using namespace dxmt9::d3d9::devicec;
+
+namespace {
+
+uint64_t wireHandleValue(const D9CWireHandle& handle) {
+  return static_cast<uint64_t>(handle.lo) | (static_cast<uint64_t>(handle.hi) << 32);
+}
+
+template <typename T>
+T* wireHandlePtr(const D9CWireHandle& handle) {
+  const uint64_t value = wireHandleValue(handle);
+  if (!value) {
+    return nullptr;
+  }
+  if (value <= 0xffffffffull) {
+    if (auto* decoded =
+            dxmt9::util::marshal::wow64::decodeHandle<T*>(static_cast<uint32_t>(value))) {
+      return decoded;
+    }
+  }
+  return reinterpret_cast<T*>(static_cast<uintptr_t>(value));
+}
+
+bool failed(int32_t hr) {
+  return hr < 0;
+}
+
+int32_t applyDrawPrimitivePacket(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
+  if (packet.renderStateCount > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+
+  for (uint32_t i = 0; i < packet.renderStateCount; ++i) {
+    const auto& state = packet.renderStates[i];
+    if (d->stateBlockRecording) {
+      d->stateBlockRenderStates.insert(state.state);
+    }
+    const int32_t hr = d->iface->SetRenderState(state.state, state.value);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+
+  for (uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
+    if ((packet.textureMask & (1u << stage)) == 0) {
+      continue;
+    }
+    auto texture = wireHandlePtr<D9CTexture>(packet.textures[stage]);
+    const int32_t hr = d->iface->SetTexture(stage, texture ? texture->obj : nullptr);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+
+  for (uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+    if ((packet.streamSourceMask & (1u << stream)) == 0) {
+      continue;
+    }
+    const auto& source = packet.streamSources[stream];
+    auto buffer = wireHandlePtr<D9CBuffer>(source.buffer);
+    const int32_t hr = d->iface->SetStreamSource(stream, buffer ? buffer->obj : nullptr,
+                                                 source.offset, source.stride);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+
+  if (packet.fvfValid) {
+    const int32_t hr = d->iface->SetFVF(packet.fvf);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+
+  return d->iface->DrawPrimitive(ptFromD3D(packet.primitiveType),
+                                 packet.primitiveCount,
+                                 packet.startVertex);
+}
+
+}  // namespace
 
 extern "C" void dxmt9c_device_addref(D9CDevice* d) {
   if (d) {
@@ -413,6 +493,29 @@ extern "C" D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice* d) {
 extern "C" int32_t dxmt9c_device_draw_primitive(D9CDevice* d, uint32_t type,
                                                 uint32_t startVertex, uint32_t count) {
   return d->iface->DrawPrimitive(ptFromD3D(type), count, startVertex);
+}
+
+extern "C" int32_t dxmt9c_device_draw_primitive_packet(D9CDevice* d,
+                                                       const D9CDrawPrimitivePacket* packet) {
+  if (!d || !packet) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  return applyDrawPrimitivePacket(d, *packet);
+}
+
+extern "C" int32_t dxmt9c_device_draw_primitive_chunk(D9CDevice* d,
+                                                      const D9CDrawPrimitivePacket* packets,
+                                                      uint32_t packetCount) {
+  if (!d || (!packets && packetCount != 0)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  for (uint32_t i = 0; i < packetCount; ++i) {
+    const int32_t hr = applyDrawPrimitivePacket(d, packets[i]);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+  return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_device_draw_indexed_primitive(D9CDevice* d, uint32_t type,

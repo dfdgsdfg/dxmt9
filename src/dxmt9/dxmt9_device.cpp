@@ -1,5 +1,4 @@
 #include "dxmt9_device.hpp"
-#include "dxmt9_perf_counters.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <algorithm>
@@ -32,11 +31,6 @@ core::BackendLimits finalizeLimits(core::BackendLimits base, WMT::Device device)
   return base;
 }
 
-bool envFlag(const char* name) {
-  const char* value = std::getenv(name);
-  return value && value[0] != '\0' && value[0] != '0';
-}
-
 std::optional<std::uint32_t> envU32(const char* name) {
   const char* value = std::getenv(name);
   if (!value || value[0] == '\0') {
@@ -67,29 +61,6 @@ std::uint32_t effectiveMaxFrameLatency(std::uint32_t latency) {
     return std::optional<std::uint32_t>{normalizeMaxFrameLatency(*value)};
   }();
   return override.value_or(normalizeMaxFrameLatency(latency));
-}
-
-bool disablePresentBoundary() {
-  static const bool disabled = envFlag("DXMT9_DISABLE_PRESENT_BOUNDARY");
-  return disabled;
-}
-
-bool forceSyncPresentBoundary() {
-  static const bool force = envFlag("DXMT9_FORCE_SYNC_PRESENT_BOUNDARY");
-  return force;
-}
-
-bool capFrameLatencyToBackBuffers() {
-  static const bool enabled = envFlag("DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS");
-  return enabled;
-}
-
-std::uint32_t backBufferLatencyCap(std::uint32_t backBufferCount) {
-  const std::uint32_t normalized = std::max(1u, backBufferCount);
-  if (normalized >= core::kMaxFrameLatency) {
-    return core::kMaxFrameLatency;
-  }
-  return normalized + 1u;
 }
 
 class DeviceImpl final : public Device {
@@ -205,22 +176,7 @@ class DeviceImpl final : public Device {
     augmented.notifyPresentationStatus = [this](bool occluded) {
       notifyPresentationStatus(occluded);
     };
-    const auto presentSeqId = queue_.submitPresent(augmented);
-    // Vsync/default presents are already synchronized by core::Device::presentEx()
-    // via flush(); keep the latency boundary for immediate presents only.
-    const std::uint32_t boundaryLatency =
-        capFrameLatencyToBackBuffers()
-            ? std::min(maxFrameLatency_, backBufferLatencyCap(augmented.backBufferCount))
-            : maxFrameLatency_;
-    const bool shouldApplyBoundary =
-        !disablePresentBoundary() &&
-        (!augmented.displaySyncEnabled || forceSyncPresentBoundary());
-    if (shouldApplyBoundary) {
-      perf::countPresentBoundaryApplied();
-      queue_.presentBoundary(presentSeqId, boundaryLatency);
-    } else {
-      perf::countPresentBoundarySkipped();
-    }
+    queue_.submitPresent(augmented);
   }
   void flush() override { queue_.submitFlush(); }
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }

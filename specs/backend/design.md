@@ -371,9 +371,10 @@ sequenceDiagram
     Rec->>Rec: append PresentCommand\ncommit current chunk
     Rec->>BR: commitChunk(chunk)
     BR->>CQ: import chunk
-    CQ-->>BR: frameToken
-    BR-->>Rec: frameToken
-    Rec->>BR: waitFrameLatency(frameToken, maxLatency)
+    CQ->>CQ: allocate frameToken
+    CQ->>CQ: waitFrameLatency(frameToken, maxLatency)
+    CQ-->>BR: present accepted after boundary policy
+    BR-->>Rec: Present returns
 
     ET->>PR: encode PresentCommand(frameToken)
     PR->>CL: nextDrawable\n(blocks when drawable/vsync-limited)

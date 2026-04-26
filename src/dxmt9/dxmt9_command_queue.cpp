@@ -444,6 +444,50 @@ bool presentBoundaryWaitsForPresentCompletion() {
   return enabled;
 }
 
+bool disablePresentBoundary() {
+  static const bool disabled = [] {
+    const char* env = std::getenv("DXMT9_DISABLE_PRESENT_BOUNDARY");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return disabled;
+}
+
+bool forceSyncPresentBoundary() {
+  static const bool force = [] {
+    const char* env = std::getenv("DXMT9_FORCE_SYNC_PRESENT_BOUNDARY");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return force;
+}
+
+bool capFrameLatencyToBackBuffers() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+std::uint32_t backBufferLatencyCap(std::uint32_t backBufferCount) {
+  const std::uint32_t normalized = std::max(1u, backBufferCount);
+  if (normalized >= core::kMaxFrameLatency) {
+    return core::kMaxFrameLatency;
+  }
+  return normalized + 1u;
+}
+
+std::uint32_t presentBoundaryLatency(const core::SwapDesc& desc) {
+  if (capFrameLatencyToBackBuffers()) {
+    return std::min(desc.maxFrameLatency, backBufferLatencyCap(desc.backBufferCount));
+  }
+  return desc.maxFrameLatency;
+}
+
+bool shouldApplyPresentBoundary(const core::SwapDesc& desc) {
+  return !disablePresentBoundary() &&
+         (!desc.displaySyncEnabled || forceSyncPresentBoundary());
+}
+
 bool acquirePresentOnSubmit() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PRESENT_ACQUIRE_ON_SUBMIT");
@@ -602,27 +646,39 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     queuedDesc.drawableTokenRequired = true;
   }
 
-  std::unique_lock lock(mutex_);
-  const core::Handle sourceHandle = queuedDesc.sourceSurface ? queuedDesc.sourceSurface : currentBackBuffer_;
-  if (splitPresentChunk()) {
-    queueLifecycle_.commitCurrentChunk(
-        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-          markSlotResourcesUnlocked(pool_, slot);
-        });
-    ensureWritingSlotUnlocked(*this, lock);
-    queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
-    queueLifecycle_.commitCurrentChunk(
-        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-          markSlotResourcesUnlocked(pool_, slot);
-        });
-    return lastCommittedSeqId_;
+  std::uint64_t presentSeqId = 0;
+  {
+    std::unique_lock lock(mutex_);
+    const core::Handle sourceHandle = queuedDesc.sourceSurface ? queuedDesc.sourceSurface : currentBackBuffer_;
+    if (splitPresentChunk()) {
+      queueLifecycle_.commitCurrentChunk(
+          lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+            markSlotResourcesUnlocked(pool_, slot);
+          });
+      ensureWritingSlotUnlocked(*this, lock);
+      queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
+      queueLifecycle_.commitCurrentChunk(
+          lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+            markSlotResourcesUnlocked(pool_, slot);
+          });
+      presentSeqId = lastCommittedSeqId_;
+    } else {
+      queueLifecycle_.presentAndCommit(
+          lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
+          [this](const core::ChunkSlot& slot) {
+            markSlotResourcesUnlocked(pool_, slot);
+          });
+      presentSeqId = lastCommittedSeqId_;
+    }
   }
-  queueLifecycle_.presentAndCommit(
-      lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
-      [this](const core::ChunkSlot& slot) {
-        markSlotResourcesUnlocked(pool_, slot);
-      });
-  return lastCommittedSeqId_;
+
+  if (shouldApplyPresentBoundary(queuedDesc)) {
+    perf::countPresentBoundaryApplied();
+    presentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
+  } else {
+    perf::countPresentBoundarySkipped();
+  }
+  return presentSeqId;
 }
 
 void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency) {

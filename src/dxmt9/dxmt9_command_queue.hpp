@@ -48,8 +48,8 @@ namespace encoders { struct EncodeContext; }
 namespace resources { class Initializer; }
 
 // Chunk-ring size + in-flight cap. Match upstream dxmt's kCommandChunkCount:
-// the ring may queue many chunks, while present frame-latency is enforced
-// separately by presentBoundary().
+// the ring may queue many chunks, while submitPresent() enforces present
+// frame-latency through queue-owned present tokens.
 inline constexpr size_t kCommandChunkCount = 32;
 inline constexpr size_t kMaxQueuedChunks = kCommandChunkCount - 1;
 

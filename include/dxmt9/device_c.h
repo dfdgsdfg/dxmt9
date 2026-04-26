@@ -187,6 +187,43 @@ typedef struct D9CVertexElement {
     uint8_t  type, method, usage, usageIndex;
 } D9CVertexElement;
 
+/* Fixed-width command packet fields. Handles are split into two uint32_t
+ * lanes so the packet layout is identical for 32-bit PE, WoW64, and 64-bit
+ * unix-side consumers. */
+#define D9C_DRAW_PACKET_MAX_RENDER_STATES 64
+#define D9C_DRAW_PACKET_MAX_TEXTURES 16
+#define D9C_DRAW_PACKET_MAX_STREAMS 16
+
+typedef struct D9CWireHandle {
+    uint32_t lo;
+    uint32_t hi;
+} D9CWireHandle;
+
+typedef struct D9CDrawPacketRenderState {
+    uint32_t state;
+    uint32_t value;
+} D9CDrawPacketRenderState;
+
+typedef struct D9CDrawPacketStreamSource {
+    D9CWireHandle buffer;
+    uint32_t offset;
+    uint32_t stride;
+} D9CDrawPacketStreamSource;
+
+typedef struct D9CDrawPrimitivePacket {
+    uint32_t renderStateCount;
+    D9CDrawPacketRenderState renderStates[D9C_DRAW_PACKET_MAX_RENDER_STATES];
+    uint32_t textureMask;
+    D9CWireHandle textures[D9C_DRAW_PACKET_MAX_TEXTURES];
+    uint32_t streamSourceMask;
+    D9CDrawPacketStreamSource streamSources[D9C_DRAW_PACKET_MAX_STREAMS];
+    uint32_t fvfValid;
+    uint32_t fvf;
+    uint32_t primitiveType;
+    uint32_t startVertex;
+    uint32_t primitiveCount;
+} D9CDrawPrimitivePacket;
+
 /* ── factory ─────────────────────────────────────────────────────────────── */
 
 D9CFactory* dxmt9c_factory_create(void);
@@ -305,6 +342,11 @@ D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice*);
 
 int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
                                        uint32_t startVertex, uint32_t count);
+int32_t  dxmt9c_device_draw_primitive_packet(D9CDevice*,
+                                              const D9CDrawPrimitivePacket*);
+int32_t  dxmt9c_device_draw_primitive_chunk(D9CDevice*,
+                                             const D9CDrawPrimitivePacket* packets,
+                                             uint32_t packetCount);
 int32_t  dxmt9c_device_draw_indexed_primitive(D9CDevice*, uint32_t type,
                                                int32_t baseVertex, uint32_t minVertex,
                                                uint32_t numVertices, uint32_t startIndex,

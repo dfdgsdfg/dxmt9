@@ -108,8 +108,8 @@ sequenceDiagram
   Complete->>Metal: waitUntilCompleted()
   Complete->>QLC: completed seqId
   Complete->>CQ: completedSeqId / presentCompletedSeqId
-  Device->>CQ: presentBoundary(presentSeqId, latency)
-  CQ-->>Device: wait until dequeued/completed target is reached
+  CQ->>CQ: presentBoundary(presentSeqId, latency)
+  CQ-->>Device: submitPresent returns after boundary policy
 ```
 
 ### Current dxmt9 Chunk State
@@ -225,7 +225,7 @@ Current buffering implications:
 - Default present appends a present command to the current chunk and commits it; draw-only workloads can build very large chunks until a flush/readback/present boundary.
 - Transient draw-uniform data is queue-owned and slab-backed. The recent cleanup rotates retained transient slabs instead of allocating one Metal buffer per draw.
 - `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=<N>` is an opt-in guard against huge draw-only chunks. It is not a default because smaller chunks reduce sequence tail latency but increase command-buffer completion overhead.
-- Present pacing currently still lives at `DeviceImpl::present()` calling `CommandQueue::presentBoundary()` after submission. That is the largest remaining shape difference versus DXVK/Wine, where queue/presenter machinery owns more of the pacing rule.
+- Present pacing now lives in `CommandQueue::submitPresent()`: `DeviceImpl::present()` injects max latency and presentation callback metadata, while the queue applies the frame-token boundary after accepting the present packet.
 
 ### Bound Classification
 
@@ -412,6 +412,7 @@ Migration steps:
 6. Do not default completion-token boundary yet. It is structurally closer to DXVK/Wine pacing, but the first BasicHLSL run is slower than the best async-only run.
 7. Implemented behind `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=1`: pass `SwapDesc::backBufferCount` from the D3D9 swapchain to the backend and cap the immediate-present boundary latency by `BackBufferCount + 1`.
 8. Do not default the cap alone yet. The cap reduces max waits and helps present completion, but current samples lose FPS unless paired with queued async acquire.
+9. Implemented: move the boundary decision from `DeviceImpl::present()` into `CommandQueue::submitPresent()`. This keeps frame-token ownership with the queue; `DeviceImpl` only supplies per-present public latency/callback metadata.
 
 ## DXVK D3D9 Shape
 
@@ -556,6 +557,69 @@ Interpretation:
 - The curve flattens around 256 commands. Going from 256 to 128 reduces sequence wait further, but draw completion wait doubles and FPS does not improve.
 - The many-draw workload improves only slightly because present boundaries already break work into smaller chunks. The increased draw completion wait means this should not become a default solely from micro-benchmark data.
 - Remaining gap versus vanilla Wine-DX9 is not explained by chunk tail latency alone. After the best chunk split, offscreen-heavy is still 0.62x of vanilla, so the next target is per-draw encode/upload cost rather than present pacing.
+
+PE recorder bridge experiment:
+
+- Harness: `DXMT9_PROBE_FRAMES=20 DXMT9_PROBE_DRAWS=64 DXMT_PERF_COUNTERS=1 scripts/run_experiment.py run dxmt9-perf-many-draw`.
+- Baseline output: `experiments/output/dxmt9-perf-many-draw-bridge-counter-smoke/result.json`.
+- Packet output: `experiments/output/dxmt9-perf-many-draw-draw-packet-queue-token-smoke/result.json`.
+- Chunk output: `experiments/output/dxmt9-perf-many-draw-draw-chunk-state-delta-smoke/result.json`.
+- `DXMT9_PE_STATE_SHADOW=1` is an opt-in PE-side shadow that defers `SetRenderState`, `SetTexture`, `SetStreamSource`, and `SetFVF`.
+- `DXMT9_PE_DRAW_CHUNK=1` is an opt-in prototype that records up to 64 `DrawPrimitive` packets on the PE side and submits them through one unix-call.
+- The shadow also performs PE-side state-delta suppression for identical hot-state values, so redundant state calls do not split a pending draw chunk.
+
+```mermaid
+flowchart TD
+  subgraph PE["PE side: d3d9.dll command recorder prototype"]
+    App[D3D9 app]
+    HotState[PE hot-state shadow\nRS / texture / stream / FVF]
+    DrawPacket[DrawPrimitive packet\nstate snapshot + draw args]
+    DrawChunk[PE draw chunk\nup to 64 packets]
+    Barrier[barriers\nClear / Present / Reset / non-hot state / resource / query]
+  end
+
+  subgraph Bridge["Wine bridge"]
+    PacketCall[dxmt9c_device_draw_primitive_packet]
+    ChunkCall[dxmt9c_device_draw_primitive_chunk]
+    UnixCall[one PE to unix transition]
+  end
+
+  subgraph Backend["unix side: existing dxmt9 execution"]
+    Provider[device_c provider\nreplay packet state + draw]
+    Core[dxmt9 core Device]
+    Queue[CommandQueue chunk ring]
+    Encode[encode thread]
+    Metal[Metal command buffer]
+  end
+
+  App --> HotState
+  App --> DrawPacket
+  HotState --> DrawPacket
+  DrawPacket --> DrawChunk
+  DrawPacket -. packet mode .-> PacketCall
+  DrawChunk -. chunk mode .-> ChunkCall
+  Barrier --> DrawChunk
+  PacketCall --> UnixCall
+  ChunkCall --> UnixCall
+  UnixCall --> Provider --> Core --> Queue --> Encode --> Metal
+```
+
+| mode | env | bridge total | bridge state | bridge draw | draw primitive | draw packet | draw chunk |
+|---|---|---:|---:|---:|---:|---:|---:|
+| baseline call-through | `DXMT_PERF_COUNTERS=1` | 1414 | 44 | 1280 | 1280 | 0 | 0 |
+| PE shadow + per-draw packet | `DXMT9_PE_STATE_SHADOW=1` | 1374 | 4 | 1280 | 1260 | 20 | 0 |
+| PE shadow + draw chunk | `DXMT9_PE_STATE_SHADOW=1 DXMT9_PE_DRAW_CHUNK=1` | 114 | 4 | 20 | 0 | 0 | 20 |
+
+Interpretation:
+
+- The bridge counter now proves the structural issue: the old path crossed PE/unix once per D3D9 draw plus hot state call.
+- PE shadow alone removes the explicit state bridge calls, but draw calls still cross one by one. This is useful for correctness staging but not enough for performance.
+- The chunk prototype matches the upstream DXMT direction more closely: 1280 app draws become 20 unix bridge calls for this 20-frame/64-draw workload.
+- The barrier-safe prototype keeps four `SetRenderState` bridge calls because hot state is flushed before `Clear` to preserve app-visible ordering. This is intentional; draw bridge pressure is still reduced from 1280 calls to 20 chunk calls.
+- Present frame-token boundary ownership is now queue-side: `CommandQueue::submitPresent()` accepts the present packet, allocates/uses the present sequence token, and applies the boundary policy before returning.
+- State-delta hashing is currently a simple equality check over the PE hot-state shadow, not a full pipeline-state hash.
+- This is not yet a default path. Current chunk barriers cover common state/resource/query/readback ordering points, but broader game coverage still needs indexed/UP draw packetization and stateblock/shadow invalidation tests.
+- The prototype reduces PE/unix bridge pressure only. Backend `submitDraw`, encode, and transient upload work still happen per draw after the provider replays the chunk, so further speedup needs backend-side compact command records and upload coalescing.
 
 Latency experiment results:
 

@@ -10,13 +10,18 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winternl.h>
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 
 #include "util/dynamic_symbol.hpp"
 #include "util/log/log.hpp"
 #include "dxmt9/wineunixlib.h"
+#include "dxmt9_bridge_ops.generated.h"
 
 namespace {
 
@@ -36,6 +41,45 @@ constexpr ULONG kMemoryWineUnixFuncs = 1000;
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
+enum class BridgeClass : std::size_t {
+  Factory,
+  Lifecycle,
+  State,
+  Draw,
+  Surface,
+  Present,
+  FrameWait,
+  Resource,
+  Shader,
+  Query,
+  StateBlock,
+  Other,
+  Count,
+};
+
+enum class BridgeDetail : std::size_t {
+  SetRenderState,
+  SetTexture,
+  SetStreamSource,
+  SetFVF,
+  DrawPrimitive,
+  DrawPrimitivePacket,
+  DrawPrimitiveChunk,
+  DrawIndexedPrimitive,
+  DrawPrimitiveUP,
+  DrawIndexedPrimitiveUP,
+  Present,
+  SwapchainPresent,
+  Clear,
+  ResourceCreate,
+  ResourceLock,
+  ResourceUnlock,
+  QueryGetData,
+  FrameWait,
+  ShaderCompile,
+  Count,
+};
+
 struct BridgeState {
   std::once_flag initialized;
   const WCHAR* module_name = nullptr;
@@ -52,11 +96,412 @@ struct BridgeState {
   NTSTATUS status = DXMT9_STATUS_NOT_SUPPORTED;
 };
 
+struct BridgePerfBucket {
+  std::atomic<std::uint64_t> calls{0};
+  std::atomic<std::uint64_t> ns{0};
+  std::atomic<std::uint64_t> maxNs{0};
+};
+
+struct BridgePerfCounters {
+  BridgePerfBucket total{};
+  std::array<BridgePerfBucket, static_cast<std::size_t>(BridgeClass::Count)> classes{};
+  std::array<BridgePerfBucket, static_cast<std::size_t>(BridgeDetail::Count)> details{};
+};
+
 BridgeState& winemetalUnixBridgeState() {
   static BridgeState state{};
   state.module_name = L"winemetal.so";
   state.allow_builtin_dispatcher_fallback = true;
   return state;
+}
+
+BridgePerfCounters& bridgePerfCounters() {
+  static BridgePerfCounters value{};
+  return value;
+}
+
+bool bridgePerfEnabledFlag() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT_PERF_COUNTERS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return value;
+}
+
+const char* bridgeClassName(BridgeClass klass) {
+  switch (klass) {
+  case BridgeClass::Factory: return "factory";
+  case BridgeClass::Lifecycle: return "lifecycle";
+  case BridgeClass::State: return "state";
+  case BridgeClass::Draw: return "draw";
+  case BridgeClass::Surface: return "surface";
+  case BridgeClass::Present: return "present";
+  case BridgeClass::FrameWait: return "frame_wait";
+  case BridgeClass::Resource: return "resource";
+  case BridgeClass::Shader: return "shader";
+  case BridgeClass::Query: return "query";
+  case BridgeClass::StateBlock: return "stateblock";
+  case BridgeClass::Other: return "other";
+  case BridgeClass::Count: break;
+  }
+  return "unknown";
+}
+
+const char* bridgeDetailName(BridgeDetail detail) {
+  switch (detail) {
+  case BridgeDetail::SetRenderState: return "set_render_state";
+  case BridgeDetail::SetTexture: return "set_texture";
+  case BridgeDetail::SetStreamSource: return "set_stream_source";
+  case BridgeDetail::SetFVF: return "set_fvf";
+  case BridgeDetail::DrawPrimitive: return "draw_primitive";
+  case BridgeDetail::DrawPrimitivePacket: return "draw_primitive_packet";
+  case BridgeDetail::DrawPrimitiveChunk: return "draw_primitive_chunk";
+  case BridgeDetail::DrawIndexedPrimitive: return "draw_indexed_primitive";
+  case BridgeDetail::DrawPrimitiveUP: return "draw_primitive_up";
+  case BridgeDetail::DrawIndexedPrimitiveUP: return "draw_indexed_primitive_up";
+  case BridgeDetail::Present: return "present_call";
+  case BridgeDetail::SwapchainPresent: return "swapchain_present";
+  case BridgeDetail::Clear: return "clear";
+  case BridgeDetail::ResourceCreate: return "resource_create";
+  case BridgeDetail::ResourceLock: return "resource_lock";
+  case BridgeDetail::ResourceUnlock: return "resource_unlock";
+  case BridgeDetail::QueryGetData: return "query_get_data";
+  case BridgeDetail::FrameWait: return "frame_wait_call";
+  case BridgeDetail::ShaderCompile: return "shader_compile";
+  case BridgeDetail::Count: break;
+  }
+  return "unknown";
+}
+
+void updateMax(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
+  auto current = counter.load(std::memory_order_relaxed);
+  while (current < value &&
+         !counter.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+  }
+}
+
+void addBridgePerf(BridgePerfBucket& bucket, std::uint64_t nanoseconds) {
+  bucket.calls.fetch_add(1, std::memory_order_relaxed);
+  bucket.ns.fetch_add(nanoseconds, std::memory_order_relaxed);
+  updateMax(bucket.maxNs, nanoseconds);
+}
+
+BridgeClass classifyBridgeClass(unsigned int code) {
+  if (code < DXMT9_WINEMETAL_BRIDGE_OP_BASE) {
+    return BridgeClass::Shader;
+  }
+
+  using dxmt9::bridge::BridgeOpcode;
+  switch (static_cast<BridgeOpcode>(code)) {
+  case BridgeOpcode::dxmt9c_factory_create:
+  case BridgeOpcode::dxmt9c_factory_addref:
+  case BridgeOpcode::dxmt9c_factory_release:
+  case BridgeOpcode::dxmt9c_factory_adapter_count:
+  case BridgeOpcode::dxmt9c_factory_get_adapter_identifier:
+  case BridgeOpcode::dxmt9c_factory_get_adapter_mode_count:
+  case BridgeOpcode::dxmt9c_factory_enum_adapter_modes:
+  case BridgeOpcode::dxmt9c_factory_get_adapter_display_mode:
+  case BridgeOpcode::dxmt9c_factory_get_adapter_monitor:
+  case BridgeOpcode::dxmt9c_factory_check_device_type:
+  case BridgeOpcode::dxmt9c_factory_check_device_format:
+  case BridgeOpcode::dxmt9c_factory_check_device_multisample:
+  case BridgeOpcode::dxmt9c_factory_get_caps:
+  case BridgeOpcode::dxmt9c_factory_get_adapter_luid:
+  case BridgeOpcode::dxmt9c_factory_create_device:
+    return BridgeClass::Factory;
+
+  case BridgeOpcode::dxmt9c_device_addref:
+  case BridgeOpcode::dxmt9c_device_release:
+  case BridgeOpcode::dxmt9c_device_get_caps:
+  case BridgeOpcode::dxmt9c_device_test_cooperative_level:
+  case BridgeOpcode::dxmt9c_device_check_device_state:
+  case BridgeOpcode::dxmt9c_device_reset:
+  case BridgeOpcode::dxmt9c_device_reset_ex:
+  case BridgeOpcode::dxmt9c_device_begin_scene:
+  case BridgeOpcode::dxmt9c_device_end_scene:
+  case BridgeOpcode::dxmt9c_device_check_device_multisample:
+    return BridgeClass::Lifecycle;
+
+  case BridgeOpcode::dxmt9c_device_set_viewport:
+  case BridgeOpcode::dxmt9c_device_get_viewport:
+  case BridgeOpcode::dxmt9c_device_set_scissor_rect:
+  case BridgeOpcode::dxmt9c_device_get_scissor_rect:
+  case BridgeOpcode::dxmt9c_device_set_transform:
+  case BridgeOpcode::dxmt9c_device_get_transform:
+  case BridgeOpcode::dxmt9c_device_set_material:
+  case BridgeOpcode::dxmt9c_device_get_material:
+  case BridgeOpcode::dxmt9c_device_set_light:
+  case BridgeOpcode::dxmt9c_device_light_enable:
+  case BridgeOpcode::dxmt9c_device_set_render_state:
+  case BridgeOpcode::dxmt9c_device_get_render_state:
+  case BridgeOpcode::dxmt9c_device_set_texture_stage_state:
+  case BridgeOpcode::dxmt9c_device_get_texture_stage_state:
+  case BridgeOpcode::dxmt9c_device_set_sampler_state:
+  case BridgeOpcode::dxmt9c_device_get_sampler_state:
+  case BridgeOpcode::dxmt9c_device_set_clip_plane:
+  case BridgeOpcode::dxmt9c_device_get_clip_plane:
+  case BridgeOpcode::dxmt9c_device_set_fvf:
+  case BridgeOpcode::dxmt9c_device_get_fvf:
+  case BridgeOpcode::dxmt9c_device_set_vertex_declaration:
+  case BridgeOpcode::dxmt9c_device_set_stream_source:
+  case BridgeOpcode::dxmt9c_device_set_stream_source_freq:
+  case BridgeOpcode::dxmt9c_device_set_indices:
+  case BridgeOpcode::dxmt9c_device_set_texture:
+  case BridgeOpcode::dxmt9c_device_set_vertex_shader:
+  case BridgeOpcode::dxmt9c_device_set_pixel_shader:
+  case BridgeOpcode::dxmt9c_device_set_vs_const_f:
+  case BridgeOpcode::dxmt9c_device_get_vs_const_f:
+  case BridgeOpcode::dxmt9c_device_set_ps_const_f:
+  case BridgeOpcode::dxmt9c_device_get_ps_const_f:
+  case BridgeOpcode::dxmt9c_device_set_vs_const_i:
+  case BridgeOpcode::dxmt9c_device_set_ps_const_i:
+  case BridgeOpcode::dxmt9c_device_set_vs_const_b:
+  case BridgeOpcode::dxmt9c_device_set_ps_const_b:
+  case BridgeOpcode::dxmt9c_device_set_render_target:
+  case BridgeOpcode::dxmt9c_device_get_render_target:
+  case BridgeOpcode::dxmt9c_device_set_depth_stencil:
+  case BridgeOpcode::dxmt9c_device_get_depth_stencil:
+    return BridgeClass::State;
+
+  case BridgeOpcode::dxmt9c_device_draw_primitive:
+  case BridgeOpcode::dxmt9c_device_draw_primitive_packet:
+  case BridgeOpcode::dxmt9c_device_draw_primitive_chunk:
+  case BridgeOpcode::dxmt9c_device_draw_indexed_primitive:
+  case BridgeOpcode::dxmt9c_device_draw_primitive_up:
+  case BridgeOpcode::dxmt9c_device_draw_indexed_primitive_up:
+    return BridgeClass::Draw;
+
+  case BridgeOpcode::dxmt9c_device_clear:
+  case BridgeOpcode::dxmt9c_device_update_surface:
+  case BridgeOpcode::dxmt9c_device_update_texture:
+  case BridgeOpcode::dxmt9c_device_stretch_rect:
+  case BridgeOpcode::dxmt9c_device_color_fill:
+  case BridgeOpcode::dxmt9c_device_get_render_target_data:
+    return BridgeClass::Surface;
+
+  case BridgeOpcode::dxmt9c_device_present:
+  case BridgeOpcode::dxmt9c_swapchain_present:
+  case BridgeOpcode::dxmt9c_device_get_swap_chain:
+  case BridgeOpcode::dxmt9c_device_get_swap_chain_count:
+  case BridgeOpcode::dxmt9c_device_create_additional_swap_chain:
+  case BridgeOpcode::dxmt9c_swapchain_addref:
+  case BridgeOpcode::dxmt9c_swapchain_release:
+  case BridgeOpcode::dxmt9c_swapchain_get_back_buffer:
+  case BridgeOpcode::dxmt9c_swapchain_get_depth_stencil:
+  case BridgeOpcode::dxmt9c_swapchain_get_present_params:
+    return BridgeClass::Present;
+
+  case BridgeOpcode::dxmt9c_device_set_maximum_frame_latency:
+  case BridgeOpcode::dxmt9c_device_get_maximum_frame_latency:
+  case BridgeOpcode::dxmt9c_device_wait_for_vblank:
+    return BridgeClass::FrameWait;
+
+  case BridgeOpcode::dxmt9c_device_create_texture:
+  case BridgeOpcode::dxmt9c_device_create_cube_texture:
+  case BridgeOpcode::dxmt9c_device_create_volume_texture:
+  case BridgeOpcode::dxmt9c_device_create_vertex_buffer:
+  case BridgeOpcode::dxmt9c_device_create_index_buffer:
+  case BridgeOpcode::dxmt9c_device_create_render_target:
+  case BridgeOpcode::dxmt9c_device_create_depth_stencil:
+  case BridgeOpcode::dxmt9c_device_create_offscreen_surface:
+  case BridgeOpcode::dxmt9c_texture_addref:
+  case BridgeOpcode::dxmt9c_texture_release:
+  case BridgeOpcode::dxmt9c_texture_lock_rect:
+  case BridgeOpcode::dxmt9c_texture_unlock_rect:
+  case BridgeOpcode::dxmt9c_texture_get_surface_level:
+  case BridgeOpcode::dxmt9c_texture_get_level_count:
+  case BridgeOpcode::dxmt9c_texture_get_level_desc:
+  case BridgeOpcode::dxmt9c_texture_generate_mip_sublevels:
+  case BridgeOpcode::dxmt9c_buffer_addref:
+  case BridgeOpcode::dxmt9c_buffer_release:
+  case BridgeOpcode::dxmt9c_buffer_lock:
+  case BridgeOpcode::dxmt9c_buffer_unlock:
+  case BridgeOpcode::dxmt9c_buffer_get_desc:
+  case BridgeOpcode::dxmt9c_surface_addref:
+  case BridgeOpcode::dxmt9c_surface_release:
+  case BridgeOpcode::dxmt9c_surface_lock_rect:
+  case BridgeOpcode::dxmt9c_surface_unlock_rect:
+  case BridgeOpcode::dxmt9c_surface_get_desc:
+  case BridgeOpcode::dxmt9c_surface_get_container_texture:
+    return BridgeClass::Resource;
+
+  case BridgeOpcode::dxmt9c_device_create_vertex_shader:
+  case BridgeOpcode::dxmt9c_device_create_pixel_shader:
+  case BridgeOpcode::dxmt9c_device_create_vertex_declaration:
+  case BridgeOpcode::dxmt9c_shader_addref:
+  case BridgeOpcode::dxmt9c_shader_release:
+  case BridgeOpcode::dxmt9c_shader_get_bytecode:
+  case BridgeOpcode::dxmt9c_vdecl_addref:
+  case BridgeOpcode::dxmt9c_vdecl_release:
+  case BridgeOpcode::dxmt9c_vdecl_get_declaration:
+    return BridgeClass::Shader;
+
+  case BridgeOpcode::dxmt9c_device_create_query:
+  case BridgeOpcode::dxmt9c_query_addref:
+  case BridgeOpcode::dxmt9c_query_release:
+  case BridgeOpcode::dxmt9c_query_issue:
+  case BridgeOpcode::dxmt9c_query_get_data:
+  case BridgeOpcode::dxmt9c_query_get_data_size:
+  case BridgeOpcode::dxmt9c_query_get_type:
+    return BridgeClass::Query;
+
+  case BridgeOpcode::dxmt9c_device_create_state_block:
+  case BridgeOpcode::dxmt9c_device_begin_state_block:
+  case BridgeOpcode::dxmt9c_device_end_state_block:
+  case BridgeOpcode::dxmt9c_stateblock_addref:
+  case BridgeOpcode::dxmt9c_stateblock_release:
+  case BridgeOpcode::dxmt9c_stateblock_capture:
+  case BridgeOpcode::dxmt9c_stateblock_apply:
+    return BridgeClass::StateBlock;
+  }
+  return BridgeClass::Other;
+}
+
+bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
+  if (code == DXMT9_WINEMETAL_CALL_COMPILE_SHADER) {
+    detail = BridgeDetail::ShaderCompile;
+    return true;
+  }
+  if (code < DXMT9_WINEMETAL_BRIDGE_OP_BASE) {
+    return false;
+  }
+
+  using dxmt9::bridge::BridgeOpcode;
+  switch (static_cast<BridgeOpcode>(code)) {
+  case BridgeOpcode::dxmt9c_device_set_render_state:
+    detail = BridgeDetail::SetRenderState;
+    return true;
+  case BridgeOpcode::dxmt9c_device_set_texture:
+    detail = BridgeDetail::SetTexture;
+    return true;
+  case BridgeOpcode::dxmt9c_device_set_stream_source:
+    detail = BridgeDetail::SetStreamSource;
+    return true;
+  case BridgeOpcode::dxmt9c_device_set_fvf:
+    detail = BridgeDetail::SetFVF;
+    return true;
+  case BridgeOpcode::dxmt9c_device_draw_primitive:
+    detail = BridgeDetail::DrawPrimitive;
+    return true;
+  case BridgeOpcode::dxmt9c_device_draw_primitive_packet:
+    detail = BridgeDetail::DrawPrimitivePacket;
+    return true;
+  case BridgeOpcode::dxmt9c_device_draw_primitive_chunk:
+    detail = BridgeDetail::DrawPrimitiveChunk;
+    return true;
+  case BridgeOpcode::dxmt9c_device_draw_indexed_primitive:
+    detail = BridgeDetail::DrawIndexedPrimitive;
+    return true;
+  case BridgeOpcode::dxmt9c_device_draw_primitive_up:
+    detail = BridgeDetail::DrawPrimitiveUP;
+    return true;
+  case BridgeOpcode::dxmt9c_device_draw_indexed_primitive_up:
+    detail = BridgeDetail::DrawIndexedPrimitiveUP;
+    return true;
+  case BridgeOpcode::dxmt9c_device_present:
+    detail = BridgeDetail::Present;
+    return true;
+  case BridgeOpcode::dxmt9c_swapchain_present:
+    detail = BridgeDetail::SwapchainPresent;
+    return true;
+  case BridgeOpcode::dxmt9c_device_clear:
+    detail = BridgeDetail::Clear;
+    return true;
+  case BridgeOpcode::dxmt9c_device_create_texture:
+  case BridgeOpcode::dxmt9c_device_create_cube_texture:
+  case BridgeOpcode::dxmt9c_device_create_volume_texture:
+  case BridgeOpcode::dxmt9c_device_create_vertex_buffer:
+  case BridgeOpcode::dxmt9c_device_create_index_buffer:
+  case BridgeOpcode::dxmt9c_device_create_render_target:
+  case BridgeOpcode::dxmt9c_device_create_depth_stencil:
+  case BridgeOpcode::dxmt9c_device_create_offscreen_surface:
+    detail = BridgeDetail::ResourceCreate;
+    return true;
+  case BridgeOpcode::dxmt9c_texture_lock_rect:
+  case BridgeOpcode::dxmt9c_buffer_lock:
+  case BridgeOpcode::dxmt9c_surface_lock_rect:
+    detail = BridgeDetail::ResourceLock;
+    return true;
+  case BridgeOpcode::dxmt9c_texture_unlock_rect:
+  case BridgeOpcode::dxmt9c_buffer_unlock:
+  case BridgeOpcode::dxmt9c_surface_unlock_rect:
+    detail = BridgeDetail::ResourceUnlock;
+    return true;
+  case BridgeOpcode::dxmt9c_query_get_data:
+    detail = BridgeDetail::QueryGetData;
+    return true;
+  case BridgeOpcode::dxmt9c_device_set_maximum_frame_latency:
+  case BridgeOpcode::dxmt9c_device_get_maximum_frame_latency:
+  case BridgeOpcode::dxmt9c_device_wait_for_vblank:
+    detail = BridgeDetail::FrameWait;
+    return true;
+  default:
+    return false;
+  }
+}
+
+void reportBridgePerfCounters() {
+  if (!bridgePerfEnabledFlag()) {
+    return;
+  }
+
+  const auto load = [](const std::atomic<std::uint64_t>& value) {
+    return value.load(std::memory_order_relaxed);
+  };
+  const auto printBucket = [&](const char* name, const BridgePerfBucket& bucket) {
+    std::fprintf(stderr,
+                 " bridge_%s=%llu bridge_%s_ms=%.3f bridge_%s_max_ms=%.3f",
+                 name,
+                 static_cast<unsigned long long>(load(bucket.calls)),
+                 name,
+                 static_cast<double>(load(bucket.ns)) / 1000000.0,
+                 name,
+                 static_cast<double>(load(bucket.maxNs)) / 1000000.0);
+  };
+
+  const BridgePerfCounters& counters = bridgePerfCounters();
+  std::fprintf(stderr,
+               "[dxmt9-bridge-perf] bridge_total=%llu bridge_total_ms=%.3f "
+               "bridge_total_max_ms=%.3f",
+               static_cast<unsigned long long>(load(counters.total.calls)),
+               static_cast<double>(load(counters.total.ns)) / 1000000.0,
+               static_cast<double>(load(counters.total.maxNs)) / 1000000.0);
+
+  for (std::size_t i = 0; i < static_cast<std::size_t>(BridgeClass::Count); ++i) {
+    printBucket(bridgeClassName(static_cast<BridgeClass>(i)), counters.classes[i]);
+  }
+  for (std::size_t i = 0; i < static_cast<std::size_t>(BridgeDetail::Count); ++i) {
+    printBucket(bridgeDetailName(static_cast<BridgeDetail>(i)), counters.details[i]);
+  }
+  std::fprintf(stderr, "\n");
+}
+
+void ensureBridgePerfRegistered() {
+  static const bool registered = [] {
+    if (bridgePerfEnabledFlag()) {
+      std::atexit(reportBridgePerfCounters);
+    }
+    return true;
+  }();
+  (void)registered;
+}
+
+void recordBridgePerf(unsigned int code, std::uint64_t nanoseconds) {
+  ensureBridgePerfRegistered();
+  if (!bridgePerfEnabledFlag()) {
+    return;
+  }
+
+  BridgePerfCounters& counters = bridgePerfCounters();
+  addBridgePerf(counters.total, nanoseconds);
+
+  const BridgeClass klass = classifyBridgeClass(code);
+  addBridgePerf(counters.classes[static_cast<std::size_t>(klass)], nanoseconds);
+
+  BridgeDetail detail = BridgeDetail::Count;
+  if (classifyBridgeDetail(code, detail)) {
+    addBridgePerf(counters.details[static_cast<std::size_t>(detail)], nanoseconds);
+  }
 }
 
 void bridgeDebugLog(const char* fmt, ...) {
@@ -176,7 +621,15 @@ extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void *args) {
                  static_cast<unsigned long long>(state.handle),
                  code,
                  reinterpret_cast<void*>(state.dispatcher));
+  const bool record_perf = bridgePerfEnabledFlag();
+  const auto start = record_perf ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
   const NTSTATUS call_status = state.dispatcher(state.handle, code, args);
+  if (record_perf) {
+    const auto end = std::chrono::steady_clock::now();
+    recordBridgePerf(code, static_cast<std::uint64_t>(
+                               std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()));
+  }
   if (call_status != DXMT9_STATUS_SUCCESS) {
     bridgeDebugLog("dxmt9_winemetal_unix_call: code=%u args=%p status=0x%08lx",
                    code,
