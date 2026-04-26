@@ -27,6 +27,13 @@ MODE_ENV = {
     "cap": {
         "DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS": "1",
     },
+    "preacquire": {
+        "DXMT9_PRESENT_PREACQUIRE": "1",
+    },
+    "preacquire-cap": {
+        "DXMT9_PRESENT_PREACQUIRE": "1",
+        "DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS": "1",
+    },
     "async-cap": {
         "DXMT9_PRESENT_ASYNC_ACQUIRE": "1",
         "DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS": "1",
@@ -52,6 +59,11 @@ COUNTER_FIELDS = [
     "present_async_acquire_wait_ms",
     "present_token_wait_ms",
     "present_token_wait_max_ms",
+    "present_preacquire_requests",
+    "present_preacquire_hits",
+    "present_preacquire_misses",
+    "present_preacquire_wait_ms",
+    "present_preacquire_wait_max_ms",
     "command_buffers",
     "completion_present_wait_ms",
     "queue_writer_wait_ms",
@@ -247,8 +259,8 @@ def write_markdown(path: Path, payload: dict[str, object]) -> None:
         f"- tag: `{payload['tag']}`",
         f"- runs_per_app_mode: `{payload['runs_per_app_mode']}`",
         "",
-        "| app | mode | pass | fps mean [min,max] | present encoded | fallbacks | boundary ms | acquire ms | token ms | command buffers |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| app | mode | pass | fps mean [min,max] | present encoded | fallbacks | boundary ms | acquire ms | token ms | pre hits | pre misses | pre wait ms | command buffers |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         assert isinstance(row, dict)
@@ -265,6 +277,9 @@ def write_markdown(path: Path, payload: dict[str, object]) -> None:
             f"`{fmt_summary(counters.get('present_boundary_wait_ms'), 3)}` | "
             f"`{fmt_summary(counters.get('present_acquire_wait_ms'), 3)}` | "
             f"`{fmt_summary(counters.get('present_token_wait_ms'), 3)}` | "
+            f"`{fmt_summary(counters.get('present_preacquire_hits'), 1)}` | "
+            f"`{fmt_summary(counters.get('present_preacquire_misses'), 1)}` | "
+            f"`{fmt_summary(counters.get('present_preacquire_wait_ms'), 3)}` | "
             f"`{fmt_summary(counters.get('command_buffers'), 1)}` |"
         )
     path.write_text("\n".join(lines) + "\n")

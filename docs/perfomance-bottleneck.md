@@ -248,16 +248,49 @@ Broader present policy A/B, 3 runs per app/mode:
 
 - Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-basichlsl --app dx-sdk-tutorial07 --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --app dxmt9-multitexture-terrain --tag 20260426-present-policy-broad-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-policy-broad-r3/summary.md`
-- Result: 54/54 runs passed. `dx-sdk-hdrformats` remains excluded from this batch because it previously looked hung and should be handled as a separate timeout/debug lane.
+- Result: 54/54 runs passed.
+- HDR follow-up: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-hdrformats --tag 20260426-hdrformats-present-policy-r3`
+- HDR output: `experiments/output/dx9-present-policy-ab/20260426-hdrformats-present-policy-r3/summary.md`
+- HDR result: 9/9 runs passed. The previous apparent hang did not reproduce under the explicit timeout/debug lane.
 
 | app | default fps | queued-token async fps | queued-token async + latency cap fps | best mode | async+cap vs default |
 |---|---:|---:|---:|---|---:|
 | BasicHLSL | 22.35 | 22.96 | 23.08 | async+cap | +3.3% |
 | Tutorial07 | 17.87 | 17.87 | 17.81 | async | -0.3% |
+| HDRFormats | 18.08 | 18.06 | 18.14 | async+cap | +0.3% |
 | DXUTSimpleSample | 17.56 | 17.20 | 17.30 | default | -1.5% |
 | Irrlicht ManagedLights | 17.31 | 17.87 | 18.13 | async+cap | +4.7% |
 | WaterRT | 18.19 | 18.14 | 18.14 | default | -0.3% |
 | MultiTextureTerrain | 18.37 | 18.21 | 18.45 | async+cap | +0.4% |
+
+Preacquire policy triage:
+
+- Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --tag 20260426-present-preacquire-triage-r3`
+- Output: `experiments/output/dx9-present-policy-ab/20260426-present-preacquire-triage-r3/summary.md`
+- Result: 36/36 runs passed. The first triage showed that the old preacquire path mostly missed because encode could race ahead while the prefetch thread was still in-flight.
+
+| app | default fps | preacquire fps | preacquire + latency cap fps | best mode | preacquire+cap vs default |
+|---|---:|---:|---:|---|---:|
+| BasicHLSL | 23.79 | 23.60 | 22.74 | default | -4.4% |
+| DXUTSimpleSample | 18.16 | 18.18 | 17.83 | preacquire | -1.8% |
+| Irrlicht ManagedLights | 18.17 | 17.90 | 18.29 | preacquire+cap | +0.6% |
+| WaterRT | 18.16 | 18.39 | 18.27 | preacquire | +0.6% |
+
+Preacquire in-flight wait follow-up:
+
+- Change: when `DXMT9_PRESENT_PREACQUIRE=1`, encode now waits for an already in-flight prefetch instead of immediately issuing a second `nextDrawable()`.
+- Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --tag 20260426-present-preacquire-wait-r3`
+- Output: `experiments/output/dx9-present-policy-ab/20260426-present-preacquire-wait-r3/summary.md`
+- Result: 18/18 runs passed.
+
+| app | mode | fps mean [min,max] | pre hits mean | pre misses mean | pre wait ms mean | note |
+|---|---|---:|---:|---:|---:|---|
+| BasicHLSL | default | 26.59 [25.76, 27.41] | 0.0 | 0.0 | 0.000 | current-load baseline |
+| BasicHLSL | preacquire | 22.98 [17.86, 27.48] | 237.7 | 2.3 | 423.819 | hit rate fixed, FPS regressed |
+| BasicHLSL | preacquire + latency cap | 25.65 [24.45, 26.33] | 238.7 | 1.3 | 417.418 | still below default |
+| DXUTSimpleSample | default | 18.04 [12.26, 21.01] | 0.0 | 0.0 | 0.000 | noisy baseline |
+| DXUTSimpleSample | preacquire | 20.64 [20.06, 21.01] | 179.0 | 1.0 | 50.782 | improved and stable |
+| DXUTSimpleSample | preacquire + latency cap | 12.25 [12.22, 12.27] | 179.0 | 1.0 | 60.929 | cap is harmful here |
 
 Current interpretation:
 
@@ -269,7 +302,8 @@ Current interpretation:
 - Split counters now show the important distinction: `present_async_acquire_wait_ms` measures the acquire thread's `nextDrawableRetained()`, while `present_token_wait_ms` measures encode-thread waiting for that token. In queued-token mode these are nearly equal, so overlap is still weak for immediate-present samples.
 - A queue-owned present-completion token now exists as an opt-in boundary source. It is structurally cleaner, but not yet the fastest measured default.
 - The DXVK-like `BackBufferCount + 1` cap is useful only as part of a combined present policy so far. Alone it lowers worst-case waits but costs FPS; combined with queued async it is the best opt-in result in the repeated BasicHLSL/Tutorial07 A/B.
-- The first two-app repeated A/B suggested `queued async + effective latency cap` as the strongest candidate policy, but the broader 6-app A/B weakens that conclusion: it helps BasicHLSL, Irrlicht, and slightly MultiTextureTerrain, is neutral for Tutorial07/WaterRT, and regresses DXUTSimpleSample.
+- The first two-app repeated A/B suggested `queued async + effective latency cap` as the strongest candidate policy, but the broader A/B weakens that conclusion: it helps BasicHLSL, Irrlicht, and slightly HDRFormats/MultiTextureTerrain, is neutral for Tutorial07/WaterRT, and regresses DXUTSimpleSample.
+- Waiting for an in-flight preacquire fixes the old preacquire hit/miss shape, but it is still not a default policy: it helps DXUTSimpleSample and hurts BasicHLSL under the same run shape. It remains useful as an opt-in diagnostic for "previous-frame acquire can overlap" workloads.
 - The present policy should stay opt-in for now. The next useful step is not flipping the default; it is either app-class gating or reducing `present_token_wait_ms` so async acquire overlaps real CPU/GPU work instead of shifting the wait to a later queue point.
 
 ## Open Questions

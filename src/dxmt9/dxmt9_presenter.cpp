@@ -231,8 +231,13 @@ std::shared_ptr<PresentDrawableToken> Presenter::beginAcquireDrawable(const Acqu
   return token;
 }
 
-WMT::Reference<WMT::MetalDrawable> Presenter::takePrefetchedDrawable() {
-  std::lock_guard lock(preAcquireMutex_);
+WMT::Reference<WMT::MetalDrawable> Presenter::takeOrWaitForPrefetchedDrawable() {
+  std::unique_lock lock(preAcquireMutex_);
+  if (!prefetchedDrawable_ && preAcquireInFlight_) {
+    preAcquireCv_.wait(lock, [this] {
+      return preAcquireStop_ || prefetchedDrawable_ || !preAcquireInFlight_;
+    });
+  }
   WMT::Reference<WMT::MetalDrawable> drawable = std::move(prefetchedDrawable_);
   return drawable;
 }
@@ -433,7 +438,7 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   }
   auto prefetchedDrawable = WMT::Reference<WMT::MetalDrawable>{};
   if (!drawable) {
-    prefetchedDrawable = takePrefetchedDrawable();
+    prefetchedDrawable = takeOrWaitForPrefetchedDrawable();
   }
   if (!drawable && prefetchedDrawable) {
     perf::countPresentPreAcquireHit();

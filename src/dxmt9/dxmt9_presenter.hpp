@@ -102,7 +102,7 @@ class Presenter {
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>&
       pipelineFor(bool opaqueAlpha);
   void configureLayer(const AcquireParams& params);
-  WMT::Reference<WMT::MetalDrawable> takePrefetchedDrawable();
+  WMT::Reference<WMT::MetalDrawable> takeOrWaitForPrefetchedDrawable();
   void discardPrefetchedDrawable();
   void finishAsyncAcquireToken();
   void runAsyncAcquireLoop();
