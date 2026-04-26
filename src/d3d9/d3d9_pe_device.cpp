@@ -2102,21 +2102,10 @@ public:
             pM->m[1][0], pM->m[1][1], pM->m[1][2], pM->m[1][3],
             pM->m[2][0], pM->m[2][1], pM->m[2][2], pM->m[2][3],
             pM->m[3][0], pM->m[3][1], pM->m[3][2], pM->m[3][3]);
-        // Chunk-recorder fast path: append a SET_TRANSFORM record into the
-        // current chunk and return — no PE↔unix round-trip until commit.
-        // Pending hot-state (renderState/texture/stream/fvf) MUST be drained
-        // first because the chunk replays records in append order: a Set*
-        // record after pending hot-state would observe stale baseline.
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordSetTransform record{};
-            record.header.type = D9C_COMMAND_RECORD_SET_TRANSFORM;
-            record.header.size = sizeof(record);
-            record.state = (uint32_t)state;
-            std::memcpy(&record.matrix, pM, sizeof(D9CMatrix));
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Per recorder design: Set* state setters are PE-shadow-only and
+        // belong in the next DrawRecord's snapshot, not as standalone
+        // backend records. DrawRecord doesn't yet carry transforms, so
+        // fall back to legacy unix-call until that extension lands.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         const HRESULT hr = hr32(dxmt9c_device_set_transform(dev_, (uint32_t)state,
@@ -2156,15 +2145,8 @@ public:
                             this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
         D9CViewport vp{ pVP->X, pVP->Y, pVP->Width, pVP->Height,
                         pVP->MinZ, pVP->MaxZ };
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordSetViewport record{};
-            record.header.type = D9C_COMMAND_RECORD_SET_VIEWPORT;
-            record.header.size = sizeof(record);
-            record.viewport = vp;
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Set* setter — PE-shadow-only per recorder design; falls back to
+        // legacy unix-call until DrawRecord carries the snapshot.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_viewport(dev_, &vp));
@@ -2185,15 +2167,7 @@ public:
         dxmt9DeviceDebugLog("device_set_scissor_rect device=%p rect=%ld,%ld-%ld,%ld",
                             this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
         D9CRect cr = toR(*pR);
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordSetScissorRect record{};
-            record.header.type = D9C_COMMAND_RECORD_SET_SCISSOR_RECT;
-            record.header.size = sizeof(record);
-            record.rect = cr;
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Set* setter — PE-shadow-only per recorder design.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_scissor_rect(dev_, &cr));
@@ -2211,15 +2185,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) override {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordSetMaterial record{};
-            record.header.type = D9C_COMMAND_RECORD_SET_MATERIAL;
-            record.header.size = sizeof(record);
-            std::memcpy(&record.material, pM, sizeof(D9CMaterial));
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Set* setter — PE-shadow-only per recorder design.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_material(dev_,
@@ -2250,16 +2216,7 @@ public:
         cl.attenuation1 = pL->Attenuation1;
         cl.attenuation2 = pL->Attenuation2;
         cl.theta = pL->Theta; cl.phi = pL->Phi;
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordSetLight record{};
-            record.header.type = D9C_COMMAND_RECORD_SET_LIGHT;
-            record.header.size = sizeof(record);
-            record.index = idx;
-            record.light = cl;
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Set* setter — PE-shadow-only per recorder design.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
@@ -2270,16 +2227,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) override {
         dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordLightEnable record{};
-            record.header.type = D9C_COMMAND_RECORD_LIGHT_ENABLE;
-            record.header.size = sizeof(record);
-            record.index = idx;
-            record.enable = en ? 1u : 0u;
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Set* setter — PE-shadow-only per recorder design.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));
@@ -2293,16 +2241,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetClipPlane(DWORD idx, const float* pPlane) override {
         dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
         if (!pPlane) return D3DERR_INVALIDCALL;
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordSetClipPlane record{};
-            record.header.type = D9C_COMMAND_RECORD_SET_CLIP_PLANE;
-            record.header.size = sizeof(record);
-            record.index = idx;
-            std::memcpy(record.plane, pPlane, sizeof(record.plane));
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Set* setter — PE-shadow-only per recorder design.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_clip_plane(dev_, idx, pPlane));
@@ -2392,17 +2331,7 @@ public:
                                                     DWORD value) override {
         dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordSetTextureStageState record{};
-            record.header.type = D9C_COMMAND_RECORD_SET_TEXTURE_STAGE_STATE;
-            record.header.size = sizeof(record);
-            record.stage = stage;
-            record.type = (uint32_t)type;
-            record.value = value;
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Set* setter — PE-shadow-only per recorder design.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_texture_stage_state(dev_, stage,
@@ -2420,17 +2349,7 @@ public:
                                                DWORD value) override {
         dxmt9DeviceDebugLog("device_set_sampler_state device=%p sampler=%u type=%u value=0x%x",
                             this, (unsigned)sampler, (unsigned)type, (unsigned)value);
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            D9CCommandRecordSetSamplerState record{};
-            record.header.type = D9C_COMMAND_RECORD_SET_SAMPLER_STATE;
-            record.header.size = sizeof(record);
-            record.sampler = sampler;
-            record.type = (uint32_t)type;
-            record.value = value;
-            return appendCommandRecord(&record, sizeof(record));
-        }
+        // Set* setter — PE-shadow-only per recorder design.
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_sampler_state(dev_, sampler,

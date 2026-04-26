@@ -261,25 +261,19 @@ enum {
     D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE = 2,
     D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP = 3,
     D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP = 4,
-    /* State-mutating records — appended to the chunk in API-call order
-     * by the PE recorder, applied in the same order by the server-side
-     * importer. Each one replaces a per-call dxmt9c_device_set_* unix
-     * call with an in-chunk POD, removing one PE↔unix round-trip per
-     * Set* invocation. */
-    D9C_COMMAND_RECORD_SET_TRANSFORM = 5,
-    D9C_COMMAND_RECORD_SET_TEXTURE_STAGE_STATE = 6,
-    D9C_COMMAND_RECORD_SET_SAMPLER_STATE = 7,
-    D9C_COMMAND_RECORD_SET_VIEWPORT = 8,
-    D9C_COMMAND_RECORD_SET_SCISSOR_RECT = 9,
-    D9C_COMMAND_RECORD_SET_CLIP_PLANE = 10,
-    D9C_COMMAND_RECORD_SET_MATERIAL = 11,
-    D9C_COMMAND_RECORD_SET_LIGHT = 12,
-    D9C_COMMAND_RECORD_LIGHT_ENABLE = 13,
-    /* Variable-size const-array uploads. Each appends `count*kElemSize`
+    /* Note: IDs 5..13 (per-call Set* setter-replay records) were removed
+     * — that shape violated the recorder design (Set* state setters must
+     * be PE-shadow-only and embedded into the next DrawRecord, not
+     * emitted as separate backend commands). PE side reverted to the
+     * legacy unix-call path for those setters until DrawRecord is
+     * extended to carry the full snapshot.
+     *
+     * Variable-size const-array uploads. Each appends `count*kElemSize`
      * bytes after the fixed header — float[count*4] for *F, int32[count*4]
-     * for *I, uint32[count] for *B. Avoids per-Set unix-call traffic that
-     * would otherwise blow up frame cost for shaders pushing dozens of
-     * constants per draw. */
+     * for *I, uint32[count] for *B. Currently emitted per Set*Constant*
+     * call; should evolve to dirty-range emission at draw/chunk-flush
+     * time per the redesign (PE shadow accumulates ranges, single record
+     * per (stage,type) at flush). Tracked as Phase 2 follow-up. */
     D9C_COMMAND_RECORD_SET_VS_CONST_F = 14,
     D9C_COMMAND_RECORD_SET_VS_CONST_I = 15,
     D9C_COMMAND_RECORD_SET_VS_CONST_B = 16,
@@ -314,64 +308,6 @@ typedef struct D9CCommandRecordDrawIndexedPrimitiveUP {
     D9CDrawIndexedPrimitiveUPPacket packet;
     /* Index and vertex bytes follow this fixed header at the packet offsets. */
 } D9CCommandRecordDrawIndexedPrimitiveUP;
-
-typedef struct D9CCommandRecordSetTransform {
-    D9CCommandRecordHeader header;
-    uint32_t state;       /* D3DTRANSFORMSTATETYPE */
-    uint32_t reserved;    /* keeps matrix on 8-byte boundary */
-    D9CMatrix matrix;
-} D9CCommandRecordSetTransform;
-
-typedef struct D9CCommandRecordSetTextureStageState {
-    D9CCommandRecordHeader header;
-    uint32_t stage;
-    uint32_t type;
-    uint32_t value;
-    uint32_t reserved;
-} D9CCommandRecordSetTextureStageState;
-
-typedef struct D9CCommandRecordSetSamplerState {
-    D9CCommandRecordHeader header;
-    uint32_t sampler;
-    uint32_t type;
-    uint32_t value;
-    uint32_t reserved;
-} D9CCommandRecordSetSamplerState;
-
-typedef struct D9CCommandRecordSetViewport {
-    D9CCommandRecordHeader header;
-    D9CViewport viewport;
-} D9CCommandRecordSetViewport;
-
-typedef struct D9CCommandRecordSetScissorRect {
-    D9CCommandRecordHeader header;
-    D9CRect rect;
-} D9CCommandRecordSetScissorRect;
-
-typedef struct D9CCommandRecordSetClipPlane {
-    D9CCommandRecordHeader header;
-    uint32_t index;
-    uint32_t reserved;
-    float plane[4];
-} D9CCommandRecordSetClipPlane;
-
-typedef struct D9CCommandRecordSetMaterial {
-    D9CCommandRecordHeader header;
-    D9CMaterial material;
-} D9CCommandRecordSetMaterial;
-
-typedef struct D9CCommandRecordSetLight {
-    D9CCommandRecordHeader header;
-    uint32_t index;
-    uint32_t reserved;
-    D9CLight light;
-} D9CCommandRecordSetLight;
-
-typedef struct D9CCommandRecordLightEnable {
-    D9CCommandRecordHeader header;
-    uint32_t index;
-    uint32_t enable;
-} D9CCommandRecordLightEnable;
 
 /* Variable-size header for const-array uploads. The element payload follows
  * immediately after this struct. `kind` selects which dxmt9c_device_set_*_const_*
