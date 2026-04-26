@@ -28,7 +28,7 @@ bool failed(int32_t hr) {
   return hr < 0;
 }
 
-int32_t applyDrawPrimitivePacket(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
+int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
   if (packet.renderStateCount > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
@@ -75,9 +75,98 @@ int32_t applyDrawPrimitivePacket(D9CDevice* d, const D9CDrawPrimitivePacket& pac
     }
   }
 
-  return d->iface->DrawPrimitive(ptFromD3D(packet.primitiveType),
-                                 packet.primitiveCount,
-                                 packet.startVertex);
+  return dxmt9::core::D3D_OK;
+}
+
+std::uint32_t primitiveVertexCount(std::uint32_t primitiveType, std::uint32_t primitiveCount) {
+  switch (primitiveType) {
+  case 1: return primitiveCount;       // D3DPT_POINTLIST
+  case 2: return primitiveCount * 2u;  // D3DPT_LINELIST
+  case 3: return primitiveCount + 1u;  // D3DPT_LINESTRIP
+  case 4: return primitiveCount * 3u;  // D3DPT_TRIANGLELIST
+  case 5: return primitiveCount + 2u;  // D3DPT_TRIANGLESTRIP
+  case 6: return primitiveCount + 2u;  // D3DPT_TRIANGLEFAN
+  default: return 0;
+  }
+}
+
+bool checkedMul(std::uint32_t a, std::uint32_t b, std::uint32_t& out) {
+  const std::uint64_t value = static_cast<std::uint64_t>(a) * b;
+  if (value > 0xffffffffull) {
+    return false;
+  }
+  out = static_cast<std::uint32_t>(value);
+  return true;
+}
+
+bool recordRangeValid(std::uint32_t recordSize, std::uint32_t offset, std::uint32_t bytes) {
+  return offset <= recordSize && bytes <= recordSize - offset;
+}
+
+// Direct core::Device dispatch — bypasses the COM iface (Direct3DDevice9Impl)
+// hop. The COM Draw* methods are 1-line forwarders to core::Device, so
+// dispatching one record at a time through them costs an extra virtual call
+// and an AddRef/Release-bearing path with no behavioral effect. The chunk
+// importer is hot — every D9CCommandRecord_DRAW_* takes this path — so
+// removing that hop is meaningful per-draw cost relief.
+int32_t applyDrawPrimitivePacket(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
+  const int32_t stateHr = applyDrawPacketState(d, packet);
+  if (failed(stateHr)) {
+    return stateHr;
+  }
+  return d->dev().drawPrimitive(ptFromD3D(packet.primitiveType),
+                                packet.primitiveCount,
+                                packet.startVertex);
+}
+
+int32_t applyDrawIndexedPrimitivePacket(D9CDevice* d,
+                                        const D9CDrawIndexedPrimitivePacket& packet) {
+  const int32_t stateHr = applyDrawPacketState(d, packet.state);
+  if (failed(stateHr)) {
+    return stateHr;
+  }
+  const auto& state = d->dev().state();
+  return d->dev().drawIndexedPrimitive(ptFromD3D(packet.state.primitiveType),
+                                       packet.primitiveCount, 0, packet.baseVertex,
+                                       packet.startIndex, state.indexType);
+}
+
+int32_t applyDrawPrimitiveUPPacket(D9CDevice* d,
+                                   const D9CDrawPrimitiveUPPacket& packet,
+                                   const dxmt9::core::u8* record,
+                                   std::uint32_t recordSize) {
+  const int32_t stateHr = applyDrawPacketState(d, packet.state);
+  if (failed(stateHr)) {
+    return stateHr;
+  }
+  if (!recordRangeValid(recordSize, packet.vertexDataOffset, packet.vertexDataSize)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  auto span = std::span<const dxmt9::core::u8>(record + packet.vertexDataOffset,
+                                               packet.vertexDataSize);
+  return d->dev().drawPrimitiveUP(ptFromD3D(packet.state.primitiveType),
+                                  packet.primitiveCount, span);
+}
+
+int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
+                                          const D9CDrawIndexedPrimitiveUPPacket& packet,
+                                          const dxmt9::core::u8* record,
+                                          std::uint32_t recordSize) {
+  const int32_t stateHr = applyDrawPacketState(d, packet.state);
+  if (failed(stateHr)) {
+    return stateHr;
+  }
+  if (!recordRangeValid(recordSize, packet.indexDataOffset, packet.indexDataSize) ||
+      !recordRangeValid(recordSize, packet.vertexDataOffset, packet.vertexDataSize)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  auto vertexSpan = std::span<const dxmt9::core::u8>(record + packet.vertexDataOffset,
+                                                     packet.vertexDataSize);
+  auto indexSpan = std::span<const dxmt9::core::u8>(record + packet.indexDataOffset,
+                                                    packet.indexDataSize);
+  return d->dev().drawIndexedPrimitiveUP(ptFromD3D(packet.state.primitiveType),
+                                         packet.primitiveCount, vertexSpan, indexSpan,
+                                         idxTypeFromD3D(packet.indexFormat));
 }
 
 }  // namespace
@@ -495,6 +584,87 @@ extern "C" int32_t dxmt9c_device_draw_primitive(D9CDevice* d, uint32_t type,
   return d->iface->DrawPrimitive(ptFromD3D(type), count, startVertex);
 }
 
+extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChunk* chunk) {
+  if (!d || !chunk || chunk->version != D9C_COMMAND_CHUNK_VERSION) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  if (chunk->recordBytes != 0 && !wireHandleValue(chunk->records)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+
+  const auto* records = wireHandlePtr<const dxmt9::core::u8>(chunk->records);
+  if (!records && chunk->recordBytes != 0) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+
+  std::uint32_t offset = 0;
+  std::uint32_t recordIndex = 0;
+  while (offset < chunk->recordBytes) {
+    if (chunk->recordBytes - offset < sizeof(D9CCommandRecordHeader)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+
+    D9CCommandRecordHeader header{};
+    std::memcpy(&header, records + offset, sizeof(header));
+    if (header.size < sizeof(D9CCommandRecordHeader) ||
+        header.size > chunk->recordBytes - offset) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+
+    const auto* record = records + offset;
+    int32_t hr = dxmt9::core::D3DERR_INVALIDCALL;
+    switch (header.type) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
+      if (header.size != sizeof(D9CCommandRecordDrawPrimitive)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordDrawPrimitive decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = applyDrawPrimitivePacket(d, decoded.packet);
+      break;
+    }
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
+      if (header.size != sizeof(D9CCommandRecordDrawIndexedPrimitive)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordDrawIndexedPrimitive decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = applyDrawIndexedPrimitivePacket(d, decoded.packet);
+      break;
+    }
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
+      if (header.size < sizeof(D9CCommandRecordDrawPrimitiveUP)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordDrawPrimitiveUP decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = applyDrawPrimitiveUPPacket(d, decoded.packet, record, header.size);
+      break;
+    }
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
+      if (header.size < sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = applyDrawIndexedPrimitiveUPPacket(d, decoded.packet, record, header.size);
+      break;
+    }
+    default:
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+
+    if (failed(hr)) {
+      return hr;
+    }
+    offset += header.size;
+    ++recordIndex;
+  }
+
+  return recordIndex == chunk->recordCount ? dxmt9::core::D3D_OK
+                                           : dxmt9::core::D3DERR_INVALIDCALL;
+}
+
 extern "C" int32_t dxmt9c_device_draw_primitive_packet(D9CDevice* d,
                                                        const D9CDrawPrimitivePacket* packet) {
   if (!d || !packet) {
@@ -532,7 +702,11 @@ extern "C" int32_t dxmt9c_device_draw_indexed_primitive(D9CDevice* d, uint32_t t
 extern "C" int32_t dxmt9c_device_draw_primitive_up(D9CDevice* d, uint32_t type,
                                                    uint32_t count, const void* data,
                                                    uint32_t stride) {
-  const size_t bytes = stride * (count + 2) * 3;
+  std::uint32_t bytes = 0;
+  if (!checkedMul(primitiveVertexCount(type, count), stride, bytes) ||
+      (bytes != 0 && !data)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   auto span = std::span<const dxmt9::core::u8>(
       reinterpret_cast<const dxmt9::core::u8*>(data), bytes);
   return d->iface->DrawPrimitiveUP(ptFromD3D(type), count, span);
@@ -544,9 +718,18 @@ extern "C" int32_t dxmt9c_device_draw_indexed_primitive_up(D9CDevice* d, uint32_
                                                            uint32_t idxFmt,
                                                            const void* vtxData,
                                                            uint32_t stride) {
-  const size_t vertexBytes = stride * (minV + numV);
+  if (minV > 0xffffffffu - numV) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  std::uint32_t vertexBytes = 0;
   const uint32_t indexSize = idxFmt == 102 ? 4 : 2;
-  const size_t indexBytes = indexSize * count * 3;
+  std::uint32_t indexBytes = 0;
+  if (!checkedMul(minV + numV, stride, vertexBytes) ||
+      !checkedMul(primitiveVertexCount(type, count), indexSize, indexBytes) ||
+      (indexBytes != 0 && !idxData) ||
+      (vertexBytes != 0 && !vtxData)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   auto vertexSpan = std::span<const dxmt9::core::u8>(
       reinterpret_cast<const dxmt9::core::u8*>(vtxData), vertexBytes);
   auto indexSpan = std::span<const dxmt9::core::u8>(
