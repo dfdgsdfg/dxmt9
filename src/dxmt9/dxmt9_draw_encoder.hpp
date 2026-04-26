@@ -6,6 +6,12 @@
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_backend_types.hpp"
+// Full CommandQueue type needed by EncodeContext::queue (reference) and
+// PreUploadedDrawData::{vertex,index} (CommandQueue::TransientBufferSlice
+// member). The previous forward decl of CommandQueue worked while only a
+// reference was used; the Phase 5-B PreUploadedDrawData struct holds the
+// nested type by value, requiring the complete definition.
+#include "dxmt9_command_queue.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9/core.hpp"
 
@@ -16,7 +22,6 @@
 
 namespace dxmt9 {
 
-class CommandQueue;
 class Device;
 
 namespace resources { struct Pool; }
@@ -57,6 +62,18 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     const core::DrawDesc& draw,
     const std::optional<core::ClearDesc>& clear);
 
+// Pre-uploaded transient slices for a single draw within a DrawRun
+// batch (Phase 5-B). When the Kind::DrawRun handler pre-batches all UP
+// vertex/index payloads for the run via
+// CommandQueue::uploadTransientBufferBatch, it hands the per-draw
+// resolved slices in via this struct so encodeDraw skips its own
+// per-draw makeTransientBuffer calls. Empty slices fall through to
+// the existing per-draw upload.
+struct PreUploadedDrawData {
+  CommandQueue::TransientBufferSlice vertex{};
+  CommandQueue::TransientBufferSlice index{};
+};
+
 // Main per-draw encoder. Previously MetalBackendDevice::encodeDraw.
 // Consumes ctx.allocators.argbuf for the transient DrawUniforms buffer,
 // ctx.cache for pipeline lookup, ctx.pool for resource reads, and
@@ -76,7 +93,8 @@ void encodeDraw(EncodeContext& ctx,
                  WMT::RenderCommandEncoder& encoder,
                  const core::DrawDesc& draw,
                  std::uint64_t seqId,
-                 bool skipBaseStateBind = false);
+                 bool skipBaseStateBind = false,
+                 const PreUploadedDrawData* preUploaded = nullptr);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

@@ -376,7 +376,8 @@ void encodeDraw(EncodeContext& ctx,
                  WMT::RenderCommandEncoder& encoder,
                  const DrawDesc& draw,
                  u64 seqId,
-                 bool skipBaseStateBind) {
+                 bool skipBaseStateBind,
+                 const PreUploadedDrawData* preUploaded) {
   PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
   if (debug::skipAllDraws()) {
@@ -495,8 +496,15 @@ void encodeDraw(EncodeContext& ctx,
 	    return uploadTransientBuffer(data, len, 16);
 	  };
 	  if (!draw.userVertexData.empty()) {
-	    transientVertexBuffer = makeTransientBuffer(draw.userVertexData.data(),
-	                                                 draw.userVertexData.size());
+	    // Phase 5-B: prefer pre-batched UP vertex slice when the
+	    // DrawRun handler did the bulk upload; otherwise fall back
+	    // to the per-draw upload.
+	    if (preUploaded && preUploaded->vertex) {
+	      transientVertexBuffer = preUploaded->vertex;
+	    } else {
+	      transientVertexBuffer = makeTransientBuffer(draw.userVertexData.data(),
+	                                                   draw.userVertexData.size());
+	    }
 	    if (transientVertexBuffer) {
 	      vertexBuffer = transientVertexBuffer.buffer;
 	      vertexBufferOffset = transientVertexBuffer.offset + draw.vertexDecl.streams[0].offset;
@@ -1060,7 +1068,13 @@ void encodeDraw(EncodeContext& ctx,
 	    WMT::Buffer indexBuffer{};
 	    uint64_t indexBufferOffset = static_cast<uint64_t>(draw.startIndex) * indexElementSize(draw.indexType);
 	    if (!draw.userIndexData.empty()) {
-	      transientIndexBuffer = makeTransientBuffer(draw.userIndexData.data(), draw.userIndexData.size());
+	      // Phase 5-B: prefer pre-batched UP index slice from DrawRun
+	      // bulk upload; fall back to per-draw upload otherwise.
+	      if (preUploaded && preUploaded->index) {
+	        transientIndexBuffer = preUploaded->index;
+	      } else {
+	        transientIndexBuffer = makeTransientBuffer(draw.userIndexData.data(), draw.userIndexData.size());
+	      }
 	      if (transientIndexBuffer) {
 	        indexBuffer = transientIndexBuffer.buffer;
 	        indexBufferOffset += transientIndexBuffer.offset;
@@ -1237,11 +1251,42 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // Phase 3-E: bind BaseDrawState ONCE on iter 0, then issue-only
         // path on iters 1..N — the Metal render encoder retains
         // pipeline / depth / viewport / scissor / cull / texture /
-        // sampler state across draw calls, so subsequent iterations
-        // need only the per-draw uniforms upload + UP payload + draw
-        // call work.
-        bool baseBound = false;
+        // sampler state across draw calls.
+        //
+        // Phase 5-B: pre-scan for UP vertex/index payloads + batch-
+        // upload them all in ONE uploadTransientBufferBatch call
+        // (single transientBufferMutex_ acquire, single completedSeqId
+        // snapshot, single reclaim pass for the whole run). Per-draw
+        // pre-resolved slices are handed to encodeDraw via
+        // PreUploadedDrawData.
+        //
+        // Layout of the batch payload vector (interleaved per draw):
+        //   [0]   = draw 0 vertex (empty if no UP)
+        //   [1]   = draw 0 index  (empty if no UP)
+        //   [2]   = draw 1 vertex
+        //   [3]   = draw 1 index
+        //   …
+        // Returned slices use the same indexing.
+        const std::size_t drawCount = command.drawRun.draws.size();
+        std::vector<std::span<const std::byte>> upPayloads;
+        upPayloads.reserve(drawCount * 2);
+        bool anyUpData = false;
         for (const auto& param : command.drawRun.draws) {
+          if (!param.userVertexData.empty()) anyUpData = true;
+          upPayloads.emplace_back(reinterpret_cast<const std::byte*>(param.userVertexData.data()),
+                                  param.userVertexData.size());
+          if (!param.userIndexData.empty()) anyUpData = true;
+          upPayloads.emplace_back(reinterpret_cast<const std::byte*>(param.userIndexData.data()),
+                                  param.userIndexData.size());
+        }
+        std::vector<CommandQueue::TransientBufferSlice> upSlices;
+        if (anyUpData) {
+          upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
+        }
+
+        bool baseBound = false;
+        for (std::size_t i = 0; i < drawCount; ++i) {
+          const auto& param = command.drawRun.draws[i];
           core::DrawDesc synthetic = base;
           synthetic.primitiveType = param.primitiveType;
           synthetic.primitiveCount = param.primitiveCount;
@@ -1251,8 +1296,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           synthetic.indexType = param.indexType;
           synthetic.userVertexData = param.userVertexData;
           synthetic.userIndexData = param.userIndexData;
+          PreUploadedDrawData preData{};
+          if (i * 2u + 1u < upSlices.size()) {
+            preData.vertex = upSlices[i * 2u];
+            preData.index = upSlices[i * 2u + 1u];
+          }
           encodeDraw(ctx, commandBuffer, activeRenderEncoder, synthetic, slot.seqId,
-                      /*skipBaseStateBind=*/baseBound);
+                      /*skipBaseStateBind=*/baseBound,
+                      anyUpData ? &preData : nullptr);
           baseBound = true;
         }
         commandBufferHasWork = true;
