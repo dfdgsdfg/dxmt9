@@ -105,6 +105,11 @@ class Device {
   virtual void submitDrawBatch(std::span<const core::DrawDesc> descs) {
     for (const auto& desc : descs) submitDraw(desc);
   }
+  // Bulk resource retention — chunk-importer-supplied handle set.
+  // Default no-op for stub backends (pool lifetime tracking is a
+  // production-only concern). DeviceImpl forwards to
+  // CommandQueue::markChunkResources.
+  virtual void markChunkResources(std::span<const core::ChunkHandleEntry> /*entries*/) {}
   // Compact draw-run ingress (BaseDrawState + N DrawParam). Default
   // expands to per-draw submitDraw so non-DeviceImpl backends keep
   // working unchanged. DeviceImpl overrides to forward straight to

@@ -1,5 +1,9 @@
 #include "device_c_provider.hpp"
 #include "util/unixcall_marshal.hpp"
+// Need the full dxmt9::Device type to call markChunkResources on the
+// upperDevice shared_ptr that the chunk importer's Phase 4-B path
+// hands the per-chunk retention list to.
+#include "dxmt9/dxmt9_device.hpp"
 
 using namespace dxmt9::d3d9::devicec;
 
@@ -642,6 +646,26 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   for (std::uint32_t i = 0; i < chunk->handleCount; ++i) {
     if (handles[i].kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
       return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+  }
+  // Bulk-mark every handle in chunk.handles[] against the queue's
+  // current chunk seqId in one shot. Per-record markDrawResources
+  // still fires inside submit{Draw,DrawRun} for now (additive — same
+  // resources get marked twice with the same seqId, which is a no-op
+  // for the mark*Use lastUsedSeqId compare). Once the importer is
+  // confirmed to provide complete coverage, per-record marking can be
+  // skipped for chunk-mode draws.
+  if (chunk->handleCount > 0) {
+    std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
+    coreEntries.reserve(chunk->handleCount);
+    for (std::uint32_t i = 0; i < chunk->handleCount; ++i) {
+      coreEntries.push_back(dxmt9::core::ChunkHandleEntry{
+          .kind = static_cast<dxmt9::core::ChunkHandleKind>(handles[i].kind),
+          .handle = dxmt9::core::Handle{handles[i].handle},
+      });
+    }
+    if (auto upper = d->dev().upperDevice()) {
+      upper->markChunkResources(coreEntries);
     }
   }
 

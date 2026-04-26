@@ -652,6 +652,23 @@ struct DrawParam {
   std::vector<u8> userIndexData;           // empty for non-UP / non-indexed
 };
 
+// Per-chunk resource retention entry. Mirrors the wire-format D9CChunk
+// HandleEntry but lives in dxmt9::core so the runtime can mark
+// resources without depending on the d3d9/device_c.h header. Kind tag
+// dispatches to the right pool table at bulk-mark time.
+enum class ChunkHandleKind : u32 {
+  Texture = 0,
+  Surface = 1,
+  Buffer  = 2,
+  Shader  = 3,
+  VertexDecl = 4,
+};
+
+struct ChunkHandleEntry {
+  ChunkHandleKind kind = ChunkHandleKind::Texture;
+  Handle handle{};
+};
+
 // Backend draw-run record: one BaseDrawState (the existing DrawDesc) +
 // N compact DrawParam entries. Replaces N separate
 // MetalCommandRecord::Kind::Draw records when the importer detects a

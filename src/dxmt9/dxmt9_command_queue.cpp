@@ -587,6 +587,34 @@ void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
+void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> entries) {
+  if (entries.empty()) {
+    return;
+  }
+  std::unique_lock lock(mutex_);
+  // Single seqId snapshot for the whole bulk-mark — the importer is
+  // about to emit Draw* records onto the same chunk, so all resources
+  // get pinned to the chunk's nextSeqId together.
+  const std::uint64_t seqId = seqIdForMark(*this, 0);
+  for (const auto& entry : entries) {
+    switch (entry.kind) {
+    case core::ChunkHandleKind::Texture:
+      pool_.markTextureUse(entry.handle, seqId);
+      break;
+    case core::ChunkHandleKind::Surface:
+      pool_.markSurfaceUse(entry.handle, seqId);
+      break;
+    case core::ChunkHandleKind::Buffer:
+      pool_.markBufferUse(entry.handle, seqId);
+      break;
+    case core::ChunkHandleKind::Shader:
+    case core::ChunkHandleKind::VertexDecl:
+      // No pool table for these yet — kinds reserved for future use.
+      break;
+    }
+  }
+}
+
 void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
   if (desc.draws.empty()) {
     return;

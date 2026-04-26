@@ -125,6 +125,13 @@ class CommandQueue {
   // submitDraw() calls when the importer detects a run of draws with no
   // state change between them.
   void submitDrawRun(core::DrawRunDesc desc);
+  // Bulk resource retention — chunk importer hands the deduped handle
+  // set from D9CCommandChunk.handles[] in one call. Single mutex
+  // acquire, dispatches per-kind to pool_.markBufferUse / markTextureUse
+  // / markSurfaceUse using the current chunk's nextSeqId. Replaces
+  // N×per-record markDrawResources walks once per-record marking is
+  // suppressed for chunk-mode draws.
+  void markChunkResources(std::span<const core::ChunkHandleEntry> entries);
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
   void submitStretchRect(const core::StretchRectDesc& desc);
