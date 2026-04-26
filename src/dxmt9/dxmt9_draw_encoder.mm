@@ -375,7 +375,8 @@ void encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
                  const DrawDesc& draw,
-                 u64 seqId) {
+                 u64 seqId,
+                 bool skipBaseStateBind) {
   PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
   if (debug::skipAllDraws()) {
@@ -394,31 +395,36 @@ void encodeDraw(EncodeContext& ctx,
     }
     return;
   }
-  const auto depthKey = makeDepthStencilKey(draw);
-  auto pipeline = ctx.cache.getOrBuildDrawPipelineForDraw(
-      ctx.device, ctx.limits, ctx.pool, draw, ctx.shaderArchive, ctx.shaderArchivePath).get();
-  if (!pipeline) {
-    if (traceEncode) {
-      std::ostringstream out;
-      out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
-          << " skipped reason=no-pipeline"
-          << " rt0=" << static_cast<unsigned long long>(draw.rts.color[0].handle.value)
-          << " ds=" << static_cast<unsigned long long>(draw.rts.depthStencil.handle.value)
-          << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
-          << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
-          << " alphaBlend="
-          << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
-          << " colorWrite="
-          << (draw.rs.values.contains(RS_COLOR_WRITE_ENABLE) ? draw.rs.values.at(RS_COLOR_WRITE_ENABLE) : 0xfu);
-      emitQueueTraceLine(out.str());
+  // Phase 3-E: pipeline lookup + depth state + setRenderPipelineState
+  // are BaseDrawState-only and survive across iterations of a
+  // Kind::DrawRun on the Metal render encoder. Skip on iter 2..N.
+  if (!skipBaseStateBind) {
+    const auto depthKey = makeDepthStencilKey(draw);
+    auto pipeline = ctx.cache.getOrBuildDrawPipelineForDraw(
+        ctx.device, ctx.limits, ctx.pool, draw, ctx.shaderArchive, ctx.shaderArchivePath).get();
+    if (!pipeline) {
+      if (traceEncode) {
+        std::ostringstream out;
+        out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
+            << " skipped reason=no-pipeline"
+            << " rt0=" << static_cast<unsigned long long>(draw.rts.color[0].handle.value)
+            << " ds=" << static_cast<unsigned long long>(draw.rts.depthStencil.handle.value)
+            << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
+            << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
+            << " alphaBlend="
+            << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
+            << " colorWrite="
+            << (draw.rs.values.contains(RS_COLOR_WRITE_ENABLE) ? draw.rs.values.at(RS_COLOR_WRITE_ENABLE) : 0xfu);
+        emitQueueTraceLine(out.str());
+      }
+      return;
     }
-    return;
+    auto depthState = ctx.cache.depthStencilStateFor(ctx.device, depthKey);
+    if (depthState) {
+      encoder.setDepthStencilState(depthState);
+    }
+    encoder.setRenderPipelineState(pipeline);
   }
-  auto depthState = ctx.cache.depthStencilStateFor(ctx.device, depthKey);
-  if (depthState) {
-    encoder.setDepthStencilState(depthState);
-  }
-  encoder.setRenderPipelineState(pipeline);
   auto* uniforms = ctx.allocators.argbuf.allocate<DrawUniforms>(seqId);
   DrawUniforms fallbackUniforms{};
 	  if (!uniforms) {
@@ -440,37 +446,40 @@ void encodeDraw(EncodeContext& ctx,
 	    return true;
 	  };
 	  const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
-  if (auto* surface = ctx.pool.findSurface(draw.rts.color[0].handle.value); surface && surface->texture) {
-    double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
-    double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
-    double viewportOriginX = 0.0;
-    double viewportOriginY = 0.0;
-    if (ffLayout && ffLayout->preTransformed) {
-      viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
-      viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
-    }
-    encoder.setViewport(WMTViewport{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
-                                    static_cast<double>(draw.viewport.viewport.minZ),
-                                    static_cast<double>(draw.viewport.viewport.maxZ)});
-    WMTScissorRect scissor{};
-    if (draw.viewport.scissorEnabled && !debug::disableScissor()) {
-      scissor.x = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.left));
-      scissor.y = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.top));
-      scissor.width = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.right - draw.viewport.scissor.left));
-      scissor.height =
-          static_cast<uint64_t>(std::max(0, draw.viewport.scissor.bottom - draw.viewport.scissor.top));
-    } else {
-      scissor.x = 0;
-      scissor.y = 0;
-      scissor.width = static_cast<uint64_t>(std::max(1u, surface->desc.width));
-      scissor.height = static_cast<uint64_t>(std::max(1u, surface->desc.height));
-    }
-    encoder.setScissorRect(scissor);
-    if (ffLayout && ffLayout->preTransformed) {
-      encoder.setCullMode(WMTCullModeNone);
-    } else {
-      encoder.setCullMode(static_cast<WMTCullMode>(toCullMode(
-          draw.rs.values.contains(RS_CULL_MODE) ? draw.rs.values.at(RS_CULL_MODE) : 1u)));
+  // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
+  if (!skipBaseStateBind) {
+    if (auto* surface = ctx.pool.findSurface(draw.rts.color[0].handle.value); surface && surface->texture) {
+      double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
+      double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
+      double viewportOriginX = 0.0;
+      double viewportOriginY = 0.0;
+      if (ffLayout && ffLayout->preTransformed) {
+        viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
+        viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
+      }
+      encoder.setViewport(WMTViewport{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
+                                      static_cast<double>(draw.viewport.viewport.minZ),
+                                      static_cast<double>(draw.viewport.viewport.maxZ)});
+      WMTScissorRect scissor{};
+      if (draw.viewport.scissorEnabled && !debug::disableScissor()) {
+        scissor.x = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.left));
+        scissor.y = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.top));
+        scissor.width = static_cast<uint64_t>(std::max(0, draw.viewport.scissor.right - draw.viewport.scissor.left));
+        scissor.height =
+            static_cast<uint64_t>(std::max(0, draw.viewport.scissor.bottom - draw.viewport.scissor.top));
+      } else {
+        scissor.x = 0;
+        scissor.y = 0;
+        scissor.width = static_cast<uint64_t>(std::max(1u, surface->desc.width));
+        scissor.height = static_cast<uint64_t>(std::max(1u, surface->desc.height));
+      }
+      encoder.setScissorRect(scissor);
+      if (ffLayout && ffLayout->preTransformed) {
+        encoder.setCullMode(WMTCullModeNone);
+      } else {
+        encoder.setCullMode(static_cast<WMTCullMode>(toCullMode(
+            draw.rs.values.contains(RS_CULL_MODE) ? draw.rs.values.at(RS_CULL_MODE) : 1u)));
+      }
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};
@@ -868,35 +877,38 @@ void encodeDraw(EncodeContext& ctx,
 	    }
 	    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
   }
-  for (std::size_t stage = 0; stage < kMaxTextureStages; ++stage) {
-    if (!draw.textures[stage].handle) {
-      continue;
-    }
-    if (const u64 skipped = debug::skippedTextureHandle();
-        skipped != 0ull && draw.textures[stage].handle.value == skipped) {
-      if (traceEncode || debug::shouldTraceTexture(draw.textures[stage].handle)) {
-        std::ostringstream out;
-        out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
-            << " tex" << stage << "=" << static_cast<unsigned long long>(draw.textures[stage].handle.value);
-        emitQueueTraceLine(out.str());
+  // Phase 3-E: texture / sampler binding is BaseDrawState-only.
+  if (!skipBaseStateBind) {
+    for (std::size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+      if (!draw.textures[stage].handle) {
+        continue;
       }
-      return;
-    }
-    if (auto* texture = ctx.pool.findTexture(draw.textures[stage].handle.value); texture && texture->texture) {
-      if (debug::shouldTraceTexture(draw.textures[stage].handle)) {
-        std::ostringstream out;
-        out << "[dxmt9-texture] bind stage=" << stage
-            << " handle=0x" << std::hex << draw.textures[stage].handle.value << std::dec
-            << " format=" << static_cast<unsigned>(texture->desc.format)
-            << " size=" << texture->desc.width << "x" << texture->desc.height
-            << " levels=" << texture->desc.levels;
-        emitTextureTraceLine(out.str());
+      if (const u64 skipped = debug::skippedTextureHandle();
+          skipped != 0ull && draw.textures[stage].handle.value == skipped) {
+        if (traceEncode || debug::shouldTraceTexture(draw.textures[stage].handle)) {
+          std::ostringstream out;
+          out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
+              << " tex" << stage << "=" << static_cast<unsigned long long>(draw.textures[stage].handle.value);
+          emitQueueTraceLine(out.str());
+        }
+        return;
       }
-      encoder.setFragmentTexture(WMT::Texture{texture->texture.handle}, (uint8_t)stage);
-    }
-    auto sampler = makeSampler(ctx.device, draw.samplers[stage]);
-    if (sampler) {
-      encoder.setFragmentSamplerState(sampler, (uint8_t)stage);
+      if (auto* texture = ctx.pool.findTexture(draw.textures[stage].handle.value); texture && texture->texture) {
+        if (debug::shouldTraceTexture(draw.textures[stage].handle)) {
+          std::ostringstream out;
+          out << "[dxmt9-texture] bind stage=" << stage
+              << " handle=0x" << std::hex << draw.textures[stage].handle.value << std::dec
+              << " format=" << static_cast<unsigned>(texture->desc.format)
+              << " size=" << texture->desc.width << "x" << texture->desc.height
+              << " levels=" << texture->desc.levels;
+          emitTextureTraceLine(out.str());
+        }
+        encoder.setFragmentTexture(WMT::Texture{texture->texture.handle}, (uint8_t)stage);
+      }
+      auto sampler = makeSampler(ctx.device, draw.samplers[stage]);
+      if (sampler) {
+        encoder.setFragmentSamplerState(sampler, (uint8_t)stage);
+      }
     }
   }
   const auto primitiveType = toPrimitiveType(draw.primitiveType);
@@ -1222,6 +1234,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           flushRender();
           startRenderPass(base, std::nullopt);
         }
+        // Phase 3-E: bind BaseDrawState ONCE on iter 0, then issue-only
+        // path on iters 1..N — the Metal render encoder retains
+        // pipeline / depth / viewport / scissor / cull / texture /
+        // sampler state across draw calls, so subsequent iterations
+        // need only the per-draw uniforms upload + UP payload + draw
+        // call work.
+        bool baseBound = false;
         for (const auto& param : command.drawRun.draws) {
           core::DrawDesc synthetic = base;
           synthetic.primitiveType = param.primitiveType;
@@ -1232,7 +1251,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           synthetic.indexType = param.indexType;
           synthetic.userVertexData = param.userVertexData;
           synthetic.userIndexData = param.userIndexData;
-          encodeDraw(ctx, commandBuffer, activeRenderEncoder, synthetic, slot.seqId);
+          encodeDraw(ctx, commandBuffer, activeRenderEncoder, synthetic, slot.seqId,
+                      /*skipBaseStateBind=*/baseBound);
+          baseBound = true;
         }
         commandBufferHasWork = true;
         break;

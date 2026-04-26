@@ -61,11 +61,22 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
 // Consumes ctx.allocators.argbuf for the transient DrawUniforms buffer,
 // ctx.cache for pipeline lookup, ctx.pool for resource reads, and
 // ctx.device for transient buffer allocation.
+//
+// `skipBaseStateBind` (Phase 3-E): when true, skip the BaseDrawState
+// binding work that doesn't change between draws sharing one
+// BackendDrawRunRecord — pipeline lookup, depth state, render
+// pipeline state, viewport / scissor / cull, texture / sampler
+// binding. Used by the Kind::DrawRun handler for iterations 2..N
+// after iteration 1 has already bound the base state into the Metal
+// render encoder. The per-draw issue path (DrawUniforms upload,
+// vertex/index prep, drawPrimitives/drawIndexedPrimitives) always
+// runs.
 void encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
                  const core::DrawDesc& draw,
-                 std::uint64_t seqId);
+                 std::uint64_t seqId,
+                 bool skipBaseStateBind = false);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt
