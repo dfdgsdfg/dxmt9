@@ -655,17 +655,53 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // for the mark*Use lastUsedSeqId compare). Once the importer is
   // confirmed to provide complete coverage, per-record marking can be
   // skipped for chunk-mode draws.
+  //
+  // The wire payload from PE carries the SERVER-SIDE D9C wrapper
+  // pointer (D9CTexture* / D9CBuffer* / D9CSurface*) cast to uint64,
+  // not the backend's core::Handle. Decode each pointer to its
+  // underlying core::*::handle() value before handing the entry list
+  // to CommandQueue::markChunkResources — otherwise pool.find{Texture,
+  // Surface,Buffer} on a wrapper-pointer-as-handle would never match
+  // and the bulk mark would silently be a no-op.
   if (chunk->handleCount > 0) {
     std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
     coreEntries.reserve(chunk->handleCount);
     for (std::uint32_t i = 0; i < chunk->handleCount; ++i) {
+      const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(handles[i].kind);
+      const auto wirePtr = static_cast<uintptr_t>(handles[i].handle);
+      if (wirePtr == 0) continue;
+      dxmt9::core::Handle resolved{};
+      switch (kind) {
+      case dxmt9::core::ChunkHandleKind::Texture: {
+        auto* wrapper = reinterpret_cast<D9CTexture*>(wirePtr);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case dxmt9::core::ChunkHandleKind::Surface: {
+        auto* wrapper = reinterpret_cast<D9CSurface*>(wirePtr);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case dxmt9::core::ChunkHandleKind::Buffer: {
+        auto* wrapper = reinterpret_cast<D9CBuffer*>(wirePtr);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case dxmt9::core::ChunkHandleKind::Shader:
+      case dxmt9::core::ChunkHandleKind::VertexDecl:
+        // No pool retention table for shaders / vertex decls — skip.
+        break;
+      }
+      if (resolved.value == 0) continue;
       coreEntries.push_back(dxmt9::core::ChunkHandleEntry{
-          .kind = static_cast<dxmt9::core::ChunkHandleKind>(handles[i].kind),
-          .handle = dxmt9::core::Handle{handles[i].handle},
+          .kind = kind,
+          .handle = resolved,
       });
     }
-    if (auto upper = d->dev().upperDevice()) {
-      upper->markChunkResources(coreEntries);
+    if (!coreEntries.empty()) {
+      if (auto upper = d->dev().upperDevice()) {
+        upper->markChunkResources(coreEntries);
+      }
     }
   }
 
