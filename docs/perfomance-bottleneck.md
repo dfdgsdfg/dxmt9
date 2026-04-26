@@ -45,6 +45,7 @@ Important current behavior:
 - `DXMT9_PRESENT_ASYNC_ACQUIRE=1` is experimental too. It is queue-owned, keeps command-buffer count stable, queues per-present drawable tokens, and serializes actual `nextDrawableRetained()` work to avoid retained-drawable hoarding.
 - `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION=1` is experimental. It makes `presentBoundary()` wait on a present-bearing command-buffer completion watermark instead of encode-thread present dequeue.
 - `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=1` is experimental. It applies the DXVK-like effective latency rule `min(appLatency, BackBufferCount + 1)` to the present boundary only.
+- `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=<N>` is experimental. It commits the current chunk from `submitDraw()` once the current chunk reaches `N` commands, reducing huge no-present chunk tail latency without changing the default path.
 - `DXMT9_DISABLE_PRESENT_BOUNDARY=1` improves elapsed time in BasicHLSL but does not encode all submitted presents, so it is not a safe fix.
 
 ## Target Present Path
@@ -183,6 +184,59 @@ Baseline performance, previous default latency 3:
 | BasicHLSL | 21.42 | 19.60 | 0.915 | 240/240 | 1107.726 | 1149.380 | 0.000 | 2 |
 | Tutorial07 | 17.01 | 15.19 | 0.894 | 180/180 | 835.299 | 948.997 | 0.000 | 2 |
 
+Performance probe split:
+
+- Harness: `bash scripts/run_dx9_performance_suite.sh --timeout 45 --app dxmt9-perf-present-only --app dxmt9-perf-offscreen-heavy --app dxmt9-perf-many-draw`
+- Latest follow-up output: `experiments/output/dx9-performance-suite/summary.md`
+- Probe source: `experiments/apps/PerformanceProbe/PerformanceProbe.cpp`
+
+Initial probe result before transient-upload cleanup:
+
+| app | vanilla fps | dxmt9 fps | speedup | present encoded | dxmt9 Metal buffers | dxmt9 Metal buffer bytes | sequence wait ms | boundary wait ms | acquire wait ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| present-only | 21.21 | 18.84 | 0.888 | 240 | 2 | 7.4 MB | 63.602 | 1673.659 | 1809.674 |
+| offscreen-heavy | 11.13 | 3.72 | 0.334 | 0 | 244839 | 2234.3 MB | 13914.131 | 0.000 | 0.000 |
+| many-draw | 10.06 | 8.22 | 0.817 | 120 | 12004 | 124.7 MB | 72.421 | 47.722 | 11.188 |
+
+Follow-up after rotating transient upload slabs and removing duplicate draw-uniform upload:
+
+| app | vanilla fps | dxmt9 fps | speedup | present encoded | dxmt9 Metal buffers | dxmt9 Metal buffer bytes | sequence wait ms | boundary wait ms | acquire wait ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| present-only | 21.21 | 18.84 | 0.888 | 240 | 2 | 7.4 MB | 63.602 | 1673.659 | 1809.674 |
+| offscreen-heavy | 10.51 | 4.48 | 0.427 | 0 | 135 | 1119.5 MB | 8590.868 | 0.000 | 0.000 |
+| many-draw | 11.21 | 8.24 | 0.736 | 120 | 4 | 15.8 MB | 14.886 | 0.000 | 13.939 |
+
+Interpretation:
+
+- `present-only` confirms a present/compositor pacing gap: dxmt9 is 0.888x and the waits are almost entirely present boundary + drawable acquire.
+- `offscreen-heavy` proves the larger gap is not only present. With zero presents and zero drawable acquire, dxmt9 is still 0.427x after cleanup.
+- The transient cleanup removed the pathological per-draw Metal buffer count in draw-heavy probes, but offscreen-heavy still allocates over 1 GB of transient uniform slabs and waits 8.6 s on sequence completion.
+- This points at chunk sizing and per-draw uniform upload volume: a no-present workload can accumulate a huge draw chunk before a forced readback/flush, so encode completion becomes the bottleneck.
+
+Automatic draw-chunk flush experiment:
+
+- Harness: direct `run_experiment.py` runs of `dxmt9-perf-offscreen-heavy` and `dxmt9-perf-many-draw` with `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=<N> DXMT_PERF_COUNTERS=1`.
+- The switch is opt-in. Default behavior remains the follow-up row above.
+
+| app | mode | fps | command buffers | Metal buffers | Metal buffer bytes | sequence wait ms | draw completion wait ms |
+|---|---|---:|---:|---:|---:|---:|---:|
+| offscreen-heavy | vanilla Wine-DX9 | 10.51 | n/a | n/a | n/a | n/a | n/a |
+| offscreen-heavy | default dxmt9 | 4.48 | 3 | 135 | 1067.6 MB | 8590.868 | 243.539 |
+| offscreen-heavy | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=2048` | 5.78 | 63 | 123 | 971.6 MB | 95.175 | 100.490 |
+| offscreen-heavy | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=512` | 6.43 | 243 | 3 | 11.6 MB | 11.177 | 162.399 |
+| offscreen-heavy | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256` | 6.53 | 483 | 3 | 11.6 MB | 6.909 | 283.141 |
+| offscreen-heavy | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=128` | 6.50 | 963 | 3 | 11.6 MB | 3.874 | 574.406 |
+| many-draw | vanilla Wine-DX9 | 11.21 | n/a | n/a | n/a | n/a | n/a |
+| many-draw | default dxmt9 | 8.24 | 125 | 4 | 15.1 MB | 14.886 | 0.664 |
+| many-draw | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256` | 8.45 | 365 | 4 | 15.1 MB | 5.158 | 152.897 |
+
+Interpretation:
+
+- The experiment confirms that huge draw chunks are a real tail-latency problem. Offscreen-heavy improves from 4.48 FPS to 6.53 FPS as sequence wait drops from 8590.868 ms to 6.909 ms.
+- The curve flattens around 256 commands. Going from 256 to 128 reduces sequence wait further, but draw completion wait doubles and FPS does not improve.
+- The many-draw workload improves only slightly because present boundaries already break work into smaller chunks. The increased draw completion wait means this should not become a default solely from micro-benchmark data.
+- Remaining gap versus vanilla Wine-DX9 is not explained by chunk tail latency alone. After the best chunk split, offscreen-heavy is still 0.62x of vanilla, so the next target is per-draw encode/upload cost rather than present pacing.
+
 Latency experiment results:
 
 | app | mode | fps | present encoded | boundary wait ms | acquire wait ms | writer wait ms |
@@ -295,7 +349,9 @@ Preacquire in-flight wait follow-up:
 Current interpretation:
 
 - The main measured bottleneck is present pacing: `present_acquire_wait_ms` plus `present_boundary_wait_ms`.
+- The probe split updates that statement: present pacing explains the immediate-present SDK samples, but no-present draw-heavy workloads expose a separate draw chunk / transient upload bottleneck.
 - The queue writer path is healthy in the default and latency-4 cases: `queue_writer_wait_ms=0`.
+- `queue_writer_wait_ms=0` does not mean the draw path is healthy. `offscreen-heavy` shows `queue_sequence_wait_ms` can dominate when a large draw chunk is forced to complete.
 - The no-boundary experiment is not structurally safe because submitted present count and encoded present count diverge.
 - The latency-4 experiment is the best safe result so far and is now the default: it keeps all presents encoded while improving fps.
 - Moving acquire out of the encode worker is directionally correct but not enough by itself. It must avoid command-buffer doubling, retained-drawable hoarding, fallback-to-blocking acquire, and long wait spikes.
@@ -305,6 +361,7 @@ Current interpretation:
 - The first two-app repeated A/B suggested `queued async + effective latency cap` as the strongest candidate policy, but the broader A/B weakens that conclusion: it helps BasicHLSL, Irrlicht, and slightly HDRFormats/MultiTextureTerrain, is neutral for Tutorial07/WaterRT, and regresses DXUTSimpleSample.
 - Waiting for an in-flight preacquire fixes the old preacquire hit/miss shape, but it is still not a default policy: it helps DXUTSimpleSample and hurts BasicHLSL under the same run shape. It remains useful as an opt-in diagnostic for "previous-frame acquire can overlap" workloads.
 - The present policy should stay opt-in for now. The next useful step is not flipping the default; it is either app-class gating or reducing `present_token_wait_ms` so async acquire overlaps real CPU/GPU work instead of shifting the wait to a later queue point.
+- The next draw-side target is automatic chunk flushing or compact per-draw uniform upload so no-present workloads do not build very large command chunks and transient uniform slabs.
 
 ## Open Questions
 

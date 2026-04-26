@@ -260,6 +260,7 @@ class CommandQueue {
 
   void reclaimTransientBuffersUnlocked(std::uint64_t completedSeqId);
   bool ensureTransientBufferUnlocked(std::size_t minimumCapacity);
+  bool rotateTransientBufferUnlocked(std::size_t minimumCapacity, std::uint64_t seqId);
 
   std::mutex transientBufferMutex_{};
   WMT::Reference<WMT::Buffer> transientBuffer_{};

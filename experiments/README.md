@@ -161,6 +161,18 @@ Current exploratory feature targets:
   - multi-sampler terrain material blend
   - intended as the second focused proxy for outdoor terrain/material bugs
   - builtin-oracle compare currently matches and can be used as a regression gate
+- `dxmt9-perf-present-only`
+  - repo-local DX9 micro-benchmark
+  - clear + immediate present, no draw stress
+  - intended to isolate present/compositor pacing against Wine builtin D3D9
+- `dxmt9-perf-offscreen-heavy`
+  - repo-local DX9 micro-benchmark
+  - many fixed-function draws into an offscreen render target, no per-frame present
+  - intended to isolate draw/encode throughput without CAMetalLayer pacing
+- `dxmt9-perf-many-draw`
+  - repo-local DX9 micro-benchmark
+  - many fixed-function draw calls followed by immediate present
+  - intended to expose whether draw-call submission or present pacing dominates
 
 Current exploratory commercial-oracle candidate:
 

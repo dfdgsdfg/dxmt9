@@ -199,6 +199,54 @@ run_timeout_sec = 45
 capture_frame = 120
 
 [[app]]
+name = "dxmt9-perf-present-only"
+source = "repo-local"
+license = "internal"
+binary = "experiments/apps/PerformanceProbe/PerformanceProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_present_only.sh"
+reference = "experiments/references/dxmt9-perf-present-only.png"
+features = ["performance", "present", "clear", "immediate"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 PresentOnly"
+capture_delay_sec = 2.0
+run_timeout_sec = 45
+capture_frame = 120
+reference_optional = true
+
+[[app]]
+name = "dxmt9-perf-offscreen-heavy"
+source = "repo-local"
+license = "internal"
+binary = "experiments/apps/PerformanceProbe/PerformanceProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_offscreen_heavy.sh"
+reference = "experiments/references/dxmt9-perf-offscreen-heavy.png"
+features = ["performance", "offscreen", "draw-heavy", "no-present"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 OffscreenHeavy"
+capture_delay_sec = 1.0
+run_timeout_sec = 45
+capture_frame = 120
+reference_optional = true
+
+[[app]]
+name = "dxmt9-perf-many-draw"
+source = "repo-local"
+license = "internal"
+binary = "experiments/apps/PerformanceProbe/PerformanceProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_many_draw.sh"
+reference = "experiments/references/dxmt9-perf-many-draw.png"
+features = ["performance", "draw-call", "fixed-function", "present"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 ManyDraw"
+capture_delay_sec = 2.0
+run_timeout_sec = 45
+capture_frame = 120
+reference_optional = true
+
+[[app]]
 name = "anno-1404-gold"
 source = "local-heroic"
 license = "commercial"

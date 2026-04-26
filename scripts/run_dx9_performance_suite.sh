@@ -12,6 +12,9 @@ apps=(
   "irrlicht-managed-lights"
   "dxmt9-water-rt"
   "dxmt9-multitexture-terrain"
+  "dxmt9-perf-present-only"
+  "dxmt9-perf-offscreen-heavy"
+  "dxmt9-perf-many-draw"
 )
 
 usage() {

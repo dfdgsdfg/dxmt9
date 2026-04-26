@@ -416,9 +416,6 @@ void encodeDraw(EncodeContext& ctx,
 	    encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
 	    return true;
 	  };
-	  if (!uploadUniforms()) {
-	    return;
-	  }
 	  const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
   if (auto* surface = ctx.pool.findSurface(draw.rts.color[0].handle.value); surface && surface->texture) {
     double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));

@@ -213,6 +213,24 @@ bool CommandQueue::ensureTransientBufferUnlocked(std::size_t minimumCapacity) {
   return true;
 }
 
+bool CommandQueue::rotateTransientBufferUnlocked(std::size_t minimumCapacity, std::uint64_t seqId) {
+  if (transientBuffer_) {
+    if (!transientBufferAllocations_.empty()) {
+      retainedTransientBuffers_.push_back(RetainedTransientBuffer{
+          .buffer = std::move(transientBuffer_),
+          .seqId = seqId,
+      });
+    } else {
+      transientBuffer_ = nullptr;
+    }
+  }
+  transientBufferContents_ = nullptr;
+  transientBufferCapacity_ = 0;
+  transientBufferCursor_ = 0;
+  transientBufferAllocations_.clear();
+  return ensureTransientBufferUnlocked(minimumCapacity);
+}
+
 CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
     std::span<const std::byte> bytes,
     std::size_t alignment,
@@ -277,7 +295,13 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
   if (!canPlace(offset)) {
     offset = 0;
     if (!canPlace(offset)) {
-      return uploadDedicated();
+      if (!rotateTransientBufferUnlocked(alignedSize, seqId)) {
+        return uploadDedicated();
+      }
+      offset = alignUp(transientBufferCursor_, alignment);
+      if (!canPlace(offset)) {
+        return uploadDedicated();
+      }
     }
   }
 
@@ -344,6 +368,22 @@ void ensureWritingSlotUnlocked(CommandQueue& q, std::unique_lock<std::mutex>& lo
 
 std::uint64_t seqIdForMark(CommandQueue& q, std::uint64_t seqId) {
   return seqId == 0 ? q.nextSeqId_ : seqId;
+}
+
+std::size_t drawChunkCommandLimit() {
+  static const std::size_t limit = [] {
+    const char* env = std::getenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT");
+    if (!env || env[0] == '\0') {
+      return std::size_t{0};
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    if (end == env || parsed == 0) {
+      return std::size_t{0};
+    }
+    return static_cast<std::size_t>(parsed);
+  }();
+  return limit;
 }
 
 bool splitPresentChunk() {
@@ -428,6 +468,23 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
   }
 }
 
+void maybeCommitDrawChunkUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock) {
+  const std::size_t limit = drawChunkCommandLimit();
+  if (limit == 0 || !q.writingSlot_) {
+    return;
+  }
+  if (currentSlotUnlocked(q).commands.size() < limit) {
+    return;
+  }
+  q.queueLifecycle_.commitCurrentChunk(
+      lock, kMaxQueuedChunks, [&pool](const core::ChunkSlot& slot) {
+        markSlotResourcesUnlocked(pool, slot);
+      });
+}
+
 }  // namespace
 
 void CommandQueue::submitDraw(const core::DrawDesc& desc) {
@@ -438,6 +495,7 @@ void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
   currentBackBuffer_ = desc.rts.color[0].handle;
   pool_.markDrawResources(desc, seqIdForMark(*this, 0));
+  maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
