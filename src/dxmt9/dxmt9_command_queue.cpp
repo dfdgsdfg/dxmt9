@@ -361,6 +361,110 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
   return slice;
 }
 
+std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBufferBatch(
+    std::span<const std::span<const std::byte>> payloads,
+    std::size_t alignment,
+    std::uint64_t seqId) {
+  std::vector<TransientBufferSlice> result;
+  if (!device_ || payloads.empty()) {
+    return result;
+  }
+  result.reserve(payloads.size());
+
+  const auto uploadStarted = std::chrono::steady_clock::now();
+  std::size_t totalBytes = 0;
+  for (const auto& p : payloads) totalBytes += p.size();
+
+  // Snapshot completedSeqId ONCE for the whole batch.
+  std::uint64_t completedSeqId = 0;
+  {
+    std::lock_guard lock(mutex_);
+    completedSeqId = completedSeqId_;
+  }
+
+  // Hold transientBufferMutex_ for the entire batch — single reclaim,
+  // single mutex acquire, no inter-call lock thrash.
+  std::lock_guard lock(transientBufferMutex_);
+  reclaimTransientBuffersUnlocked(completedSeqId);
+
+  alignment = std::max<std::size_t>(alignment, 1);
+
+  for (const auto& bytes : payloads) {
+    if (bytes.empty()) {
+      result.push_back(TransientBufferSlice{});
+      continue;
+    }
+    const std::size_t alignedSize = alignUp(bytes.size(), alignment);
+
+    // Try slab placement; fall through to dedicated buffer if the slab
+    // can't accommodate (rotation also tried).
+    auto canPlace = [&](std::size_t offset) {
+      if (offset + alignedSize > transientBufferCapacity_) return false;
+      for (const auto& a : transientBufferAllocations_) {
+        const std::size_t begin = a.offset;
+        const std::size_t end = a.offset + a.size;
+        const std::size_t newBegin = offset;
+        const std::size_t newEnd = offset + alignedSize;
+        if (!(newEnd <= begin || newBegin >= end)) return false;
+      }
+      return true;
+    };
+
+    auto uploadDedicated = [&]() -> TransientBufferSlice {
+      WMTBufferInfo info{};
+      info.length = bytes.size();
+      info.options = WMTResourceStorageModeShared;
+      info.memory.set((void*)bytes.data());
+      auto buffer = device_.newBuffer(info);
+      if (!buffer) return {};
+      perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+      retainedTransientBuffers_.push_back(RetainedTransientBuffer{
+          .buffer = std::move(buffer), .seqId = seqId});
+      return TransientBufferSlice{
+          .buffer = WMT::Buffer{retainedTransientBuffers_.back().buffer.handle},
+          .offset = 0,
+          .size = bytes.size(),
+      };
+    };
+
+    if (!ensureTransientBufferUnlocked(alignedSize)) {
+      result.push_back(uploadDedicated());
+      continue;
+    }
+    std::size_t offset = alignUp(transientBufferCursor_, alignment);
+    if (!canPlace(offset)) {
+      offset = 0;
+      if (!canPlace(offset)) {
+        if (!rotateTransientBufferUnlocked(alignedSize, seqId)) {
+          result.push_back(uploadDedicated());
+          continue;
+        }
+        offset = alignUp(transientBufferCursor_, alignment);
+        if (!canPlace(offset)) {
+          result.push_back(uploadDedicated());
+          continue;
+        }
+      }
+    }
+    std::memcpy(transientBufferContents_ + offset, bytes.data(), bytes.size());
+    transientBufferAllocations_.push_back(TransientBufferAllocation{
+        .offset = offset, .size = alignedSize, .seqId = seqId});
+    transientBufferCursor_ = offset + alignedSize;
+    result.push_back(TransientBufferSlice{
+        .buffer = WMT::Buffer{transientBuffer_.handle},
+        .offset = offset,
+        .size = bytes.size(),
+    });
+  }
+
+  const auto elapsed = std::chrono::steady_clock::now() - uploadStarted;
+  perf::countTransientUploadCpuTime(
+      static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
+      totalBytes);
+  return result;
+}
+
 void CommandQueue::startThreads(std::function<void()> encodeLoop,
                                  std::function<void()> finishLoop,
                                  std::function<void()> completionLoop) {

@@ -167,6 +167,18 @@ class CommandQueue {
   TransientBufferSlice uploadTransientBuffer(std::span<const std::byte> bytes,
                                              std::size_t alignment,
                                              std::uint64_t seqId);
+  // Batched transient upload — single transientBufferMutex_ acquire +
+  // single completedSeqId_ snapshot for N payloads. Returns one slice
+  // per input payload in order. Each payload still gets its own
+  // (offset, size) within the shared slab; the wins are amortized
+  // mutex traffic + amortized completedSeqId snapshot. Used by the
+  // encoder when processing a Kind::DrawRun (UP vertex/index data
+  // across N draws batched into one call). Returns empty vector if
+  // any allocation failed.
+  std::vector<TransientBufferSlice> uploadTransientBufferBatch(
+      std::span<const std::span<const std::byte>> payloads,
+      std::size_t alignment,
+      std::uint64_t seqId);
 
   // The WMT::Device this queue was built on.
   WMT::Device device() const noexcept { return device_; }
