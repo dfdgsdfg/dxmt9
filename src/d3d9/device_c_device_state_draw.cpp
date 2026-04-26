@@ -731,6 +731,68 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = dxmt9c_device_light_enable(d, decoded.index, decoded.enable);
       break;
     }
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B: {
+      if (header.size < sizeof(D9CCommandRecordSetConst)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetConst hdr{};
+      std::memcpy(&hdr, record, sizeof(hdr));
+      // Per-record-type element size; payload count is hdr.count*kElemSize
+      // (F/I are vec4-quad, B is single uint32).
+      std::size_t elemSize = 0;
+      switch (header.type) {
+      case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+      case D9C_COMMAND_RECORD_SET_PS_CONST_F: elemSize = sizeof(float) * 4; break;
+      case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+      case D9C_COMMAND_RECORD_SET_PS_CONST_I: elemSize = sizeof(int32_t) * 4; break;
+      case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+      case D9C_COMMAND_RECORD_SET_PS_CONST_B: elemSize = sizeof(uint32_t); break;
+      }
+      const std::uint64_t expectedPayload =
+          static_cast<std::uint64_t>(hdr.count) * elemSize;
+      if (header.size != sizeof(hdr) + expectedPayload) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      const auto* payload = record + sizeof(hdr);
+      switch (header.type) {
+      case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+        hr = dxmt9c_device_set_vs_const_f(d, hdr.start,
+                                          reinterpret_cast<const float*>(payload),
+                                          hdr.count);
+        break;
+      case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+        hr = dxmt9c_device_set_ps_const_f(d, hdr.start,
+                                          reinterpret_cast<const float*>(payload),
+                                          hdr.count);
+        break;
+      case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+        hr = dxmt9c_device_set_vs_const_i(d, hdr.start,
+                                          reinterpret_cast<const int32_t*>(payload),
+                                          hdr.count);
+        break;
+      case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+        hr = dxmt9c_device_set_ps_const_i(d, hdr.start,
+                                          reinterpret_cast<const int32_t*>(payload),
+                                          hdr.count);
+        break;
+      case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+        hr = dxmt9c_device_set_vs_const_b(d, hdr.start,
+                                          reinterpret_cast<const uint32_t*>(payload),
+                                          hdr.count);
+        break;
+      case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+        hr = dxmt9c_device_set_ps_const_b(d, hdr.start,
+                                          reinterpret_cast<const uint32_t*>(payload),
+                                          hdr.count);
+        break;
+      }
+      break;
+    }
     default:
       return dxmt9::core::D3DERR_INVALIDCALL;
     }

@@ -275,6 +275,17 @@ enum {
     D9C_COMMAND_RECORD_SET_MATERIAL = 11,
     D9C_COMMAND_RECORD_SET_LIGHT = 12,
     D9C_COMMAND_RECORD_LIGHT_ENABLE = 13,
+    /* Variable-size const-array uploads. Each appends `count*kElemSize`
+     * bytes after the fixed header — float[count*4] for *F, int32[count*4]
+     * for *I, uint32[count] for *B. Avoids per-Set unix-call traffic that
+     * would otherwise blow up frame cost for shaders pushing dozens of
+     * constants per draw. */
+    D9C_COMMAND_RECORD_SET_VS_CONST_F = 14,
+    D9C_COMMAND_RECORD_SET_VS_CONST_I = 15,
+    D9C_COMMAND_RECORD_SET_VS_CONST_B = 16,
+    D9C_COMMAND_RECORD_SET_PS_CONST_F = 17,
+    D9C_COMMAND_RECORD_SET_PS_CONST_I = 18,
+    D9C_COMMAND_RECORD_SET_PS_CONST_B = 19,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -361,6 +372,19 @@ typedef struct D9CCommandRecordLightEnable {
     uint32_t index;
     uint32_t enable;
 } D9CCommandRecordLightEnable;
+
+/* Variable-size header for const-array uploads. The element payload follows
+ * immediately after this struct. `kind` selects which dxmt9c_device_set_*_const_*
+ * to call; PE side encodes it as the matching D9C_COMMAND_RECORD_SET_*_CONST_*
+ * type so the decoder can validate header.size against count*kElemSize. */
+typedef struct D9CCommandRecordSetConst {
+    D9CCommandRecordHeader header;
+    uint32_t start;
+    uint32_t count;
+    /* For *_CONST_F: float[count*4]
+     * For *_CONST_I: int32[count*4]
+     * For *_CONST_B: uint32[count] */
+} D9CCommandRecordSetConst;
 
 typedef struct D9CCommandChunk {
     uint32_t version;

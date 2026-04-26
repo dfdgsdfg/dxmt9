@@ -1474,6 +1474,35 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return flushPendingHotState();
     }
 
+    // Variable-size const-array record append. The record is
+    // header + (start, count) + count * elemSize bytes of payload.
+    // Caller must supply the matching D9C_COMMAND_RECORD_SET_*_CONST_*
+    // type tag; decoder will validate header.size against count*elemSize.
+    HRESULT appendSetConstRecord(uint32_t recordType, UINT start, UINT count,
+                                 const void* data, std::size_t elemSize) {
+        const std::uint64_t payload64 = static_cast<std::uint64_t>(count) * elemSize;
+        if (payload64 > 0xffffffffull - sizeof(D9CCommandRecordSetConst)) {
+            return D3DERR_INVALIDCALL;
+        }
+        const std::uint32_t payloadBytes = static_cast<std::uint32_t>(payload64);
+        if (payloadBytes != 0 && !data) {
+            return D3DERR_INVALIDCALL;
+        }
+
+        D9CCommandRecordSetConst header{};
+        header.header.type = recordType;
+        header.header.size = static_cast<std::uint32_t>(sizeof(header) + payloadBytes);
+        header.start = start;
+        header.count = count;
+
+        std::vector<std::uint8_t> record(header.header.size);
+        std::memcpy(record.data(), &header, sizeof(header));
+        if (payloadBytes != 0) {
+            std::memcpy(record.data() + sizeof(header), data, payloadBytes);
+        }
+        return appendCommandRecord(record.data(), record.size());
+    }
+
     HRESULT flushPendingHotState() {
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) {
@@ -2564,6 +2593,12 @@ public:
                                                         UINT count) override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_VS_CONST_F,
+                                        start, count, pData, sizeof(float) * 4);
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_vs_const_f(dev_, start, pData, count));
@@ -2576,6 +2611,12 @@ public:
                                                         UINT count) override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_VS_CONST_I,
+                                        start, count, pData, sizeof(int32_t) * 4);
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_vs_const_i(dev_, start,
@@ -2589,6 +2630,12 @@ public:
                                                         UINT count) override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_VS_CONST_B,
+                                        start, count, pData, sizeof(uint32_t));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_vs_const_b(dev_, start,
@@ -2686,6 +2733,12 @@ public:
                                                        UINT count) override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_PS_CONST_F,
+                                        start, count, pData, sizeof(float) * 4);
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_ps_const_f(dev_, start, pData, count));
@@ -2698,6 +2751,12 @@ public:
                                                        UINT count) override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_PS_CONST_I,
+                                        start, count, pData, sizeof(int32_t) * 4);
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_ps_const_i(dev_, start,
@@ -2711,6 +2770,12 @@ public:
                                                        UINT count) override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_PS_CONST_B,
+                                        start, count, pData, sizeof(uint32_t));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_ps_const_b(dev_, start,
