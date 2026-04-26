@@ -99,6 +99,12 @@ class Device {
   // moves the encoder onto a RenderContext sibling and DeviceImpl
   // implements these directly.
   virtual void submitDraw(const core::DrawDesc&) {}
+  // Default fans out to per-draw submitDraw — backends that can amortize
+  // (DeviceImpl forwards to CommandQueue::submitDrawBatch) override this
+  // to hold the queue mutex once across the run.
+  virtual void submitDrawBatch(std::span<const core::DrawDesc> descs) {
+    for (const auto& desc : descs) submitDraw(desc);
+  }
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
   virtual void submitStretchRect(const core::StretchRectDesc&) {}

@@ -111,6 +111,13 @@ class CommandQueue {
   // internally; Pool access goes through pool_ (snapshotted at
   // construction).
   void submitDraw(const core::DrawDesc& desc);
+  // Batched draw ingress — pushes N draws into the current ChunkSlot under
+  // a single mutex acquire (vs N for the per-draw submitDraw). Used by the
+  // chunk importer when a run of D9C_COMMAND_RECORD_DRAW_* records carries
+  // no state-mutating records between them. Resource marking + chunk-limit
+  // check still fires per-draw; only the queue lock + writer-slot path
+  // costs are amortized.
+  void submitDrawBatch(std::span<const core::DrawDesc> descs);
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
   void submitStretchRect(const core::StretchRectDesc& desc);

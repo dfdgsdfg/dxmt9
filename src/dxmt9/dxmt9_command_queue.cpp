@@ -439,6 +439,9 @@ bool presentBoundaryWaitsForCompletion() {
 bool presentBoundaryWaitsForPresentCompletion() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION");
+    if (!env) {
+      return true;
+    }
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return enabled;
@@ -575,6 +578,30 @@ void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   currentBackBuffer_ = desc.rts.color[0].handle;
   pool_.markDrawResources(desc, seqIdForMark(*this, 0));
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+}
+
+void CommandQueue::submitDrawBatch(std::span<const core::DrawDesc> descs) {
+  if (descs.empty()) {
+    return;
+  }
+  for (std::size_t i = 0; i < descs.size(); ++i) {
+    perf::countSubmitDraw();
+  }
+  PerfScope scope(perf::countSubmitDrawCpuTime);
+  std::unique_lock lock(mutex_);
+  // Single mutex acquire amortized across N draws — the per-draw cost
+  // here is just makeDrawCommand + push_back + markDrawResources.
+  // ensureWritingSlotUnlocked + maybeCommitDrawChunkUnlocked may still
+  // close + reopen a chunk in the middle of the batch if the chunk-byte
+  // limit fires; that's intentional, otherwise a runaway batch would
+  // bypass the limit guard entirely.
+  for (const auto& desc : descs) {
+    ensureWritingSlotUnlocked(*this, lock);
+    currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
+    currentBackBuffer_ = desc.rts.color[0].handle;
+    pool_.markDrawResources(desc, seqIdForMark(*this, 0));
+    maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+  }
 }
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
