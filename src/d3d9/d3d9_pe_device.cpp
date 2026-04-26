@@ -1196,6 +1196,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::vector<std::uint8_t> pendingCommandBytes_{};
     UINT pendingCommandRecordCount_ = 0;
 
+    // Shader-constant shadow + dirty range per (stage, type). Per the
+    // recorder design, Set*ShaderConstant* updates the shadow + extends
+    // the dirty range; the chunk does not get a record per Set call.
+    // Just before each appended Draw record (and at chunk-flush) the
+    // dirty range for each (stage, type) is emitted as ONE
+    // D9C_COMMAND_RECORD_SET_*_CONST_* covering [start, end) — so a
+    // shader pushing 30 individual SetVsConstF calls between two draws
+    // costs 1 record (merged range), not 30.
+    struct ConstShadow {
+      std::vector<std::uint8_t> values; // raw bytes; size = (slotsTouched * elemSize)
+      uint32_t dirtyStart = 0;
+      uint32_t dirtyEnd = 0;             // [start, end), end > start ⇒ dirty
+      bool dirty() const { return dirtyEnd > dirtyStart; }
+      void clear() { dirtyStart = dirtyEnd = 0; }
+    };
+    ConstShadow vsConstF_{};
+    ConstShadow vsConstI_{};
+    ConstShadow vsConstB_{};
+    ConstShadow psConstF_{};
+    ConstShadow psConstI_{};
+    ConstShadow psConstB_{};
+
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
 
@@ -1358,6 +1380,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
+        // Drain any accumulated const dirty ranges into chunk records FIRST,
+        // so the chunk replays "consts → draw" in API order.
+        const HRESULT constHr = flushPendingConsts();
+        if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawPrimitive record{};
         record.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
         record.header.size = sizeof(record);
@@ -1373,6 +1399,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                              UINT numVertices,
                                              UINT startIndex,
                                              UINT count) {
+        const HRESULT constHr = flushPendingConsts();
+        if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawIndexedPrimitive record{};
         record.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
         record.header.size = sizeof(record);
@@ -1391,6 +1419,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                         UINT count,
                                         const void* data,
                                         UINT stride) {
+        const HRESULT constHr = flushPendingConsts();
+        if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawPrimitiveUP header{};
         header.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
         if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state)) {
@@ -1424,6 +1454,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                D3DFORMAT indexFormat,
                                                const void* vertexData,
                                                UINT stride) {
+        const HRESULT constHr = flushPendingConsts();
+        if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawIndexedPrimitiveUP header{};
         header.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
         if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state)) {
@@ -1467,6 +1499,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT flushPeRecorder() {
+        // Drain const dirty ranges first so they make it into the chunk
+        // before we commit it to the bridge; otherwise they'd carry
+        // across to the next chunk's first draw with stale ordering.
+        const HRESULT constHr = flushPendingConsts();
+        if (FAILED(constHr)) return constHr;
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) {
             return chunkHr;
@@ -1501,6 +1538,61 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             std::memcpy(record.data() + sizeof(header), data, payloadBytes);
         }
         return appendCommandRecord(record.data(), record.size());
+    }
+
+    // Update a const-shadow with new values + extend the dirty range.
+    // No record is appended yet — flushed at the next draw / chunk flush.
+    static void touchConstShadow(ConstShadow& shadow, UINT start, UINT count,
+                                 const void* data, std::size_t elemSize) {
+        const std::uint64_t needed64 = (static_cast<std::uint64_t>(start) + count) * elemSize;
+        if (needed64 > 0xffffffffull) {
+            return;  // out of range — falls through to legacy path elsewhere
+        }
+        const std::size_t needed = static_cast<std::size_t>(needed64);
+        if (shadow.values.size() < needed) {
+            shadow.values.resize(needed);
+        }
+        if (count > 0 && data) {
+            std::memcpy(shadow.values.data() + start * elemSize, data, count * elemSize);
+        }
+        const uint32_t end = start + count;
+        if (!shadow.dirty()) {
+            shadow.dirtyStart = start;
+            shadow.dirtyEnd = end;
+        } else {
+            shadow.dirtyStart = std::min<uint32_t>(shadow.dirtyStart, start);
+            shadow.dirtyEnd = std::max<uint32_t>(shadow.dirtyEnd, end);
+        }
+    }
+
+    // Emit one record covering the merged dirty range, then clear it.
+    HRESULT flushConstShadow(ConstShadow& shadow, uint32_t recordType, std::size_t elemSize) {
+        if (!shadow.dirty()) return S_OK;
+        const uint32_t start = shadow.dirtyStart;
+        const uint32_t count = shadow.dirtyEnd - shadow.dirtyStart;
+        const auto* data = shadow.values.data() + static_cast<std::size_t>(start) * elemSize;
+        const HRESULT hr = appendSetConstRecord(recordType, start, count, data, elemSize);
+        shadow.clear();
+        return hr;
+    }
+
+    // Drain all 6 const shadows. Called before each appended Draw record
+    // and at chunk flush so the chunk's record stream replays
+    // constants → draw in API order.
+    HRESULT flushPendingConsts() {
+        HRESULT hr = flushConstShadow(vsConstF_, D9C_COMMAND_RECORD_SET_VS_CONST_F, sizeof(float) * 4);
+        if (FAILED(hr)) return hr;
+        hr = flushConstShadow(vsConstI_, D9C_COMMAND_RECORD_SET_VS_CONST_I, sizeof(int32_t) * 4);
+        if (FAILED(hr)) return hr;
+        hr = flushConstShadow(vsConstB_, D9C_COMMAND_RECORD_SET_VS_CONST_B, sizeof(uint32_t));
+        if (FAILED(hr)) return hr;
+        hr = flushConstShadow(psConstF_, D9C_COMMAND_RECORD_SET_PS_CONST_F, sizeof(float) * 4);
+        if (FAILED(hr)) return hr;
+        hr = flushConstShadow(psConstI_, D9C_COMMAND_RECORD_SET_PS_CONST_I, sizeof(int32_t) * 4);
+        if (FAILED(hr)) return hr;
+        hr = flushConstShadow(psConstB_, D9C_COMMAND_RECORD_SET_PS_CONST_B, sizeof(uint32_t));
+        if (FAILED(hr)) return hr;
+        return S_OK;
     }
 
     HRESULT flushPendingHotState() {
@@ -2513,10 +2605,11 @@ public:
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_VS_CONST_F,
-                                        start, count, pData, sizeof(float) * 4);
+            // Shadow-only: defer the record until the next flushPendingConsts()
+            // (called before each draw record + at chunk commit). Merging
+            // dozens of overlapping/contiguous Set calls into one record.
+            touchConstShadow(vsConstF_, start, count, pData, sizeof(float) * 4);
+            return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
@@ -2531,10 +2624,8 @@ public:
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_VS_CONST_I,
-                                        start, count, pData, sizeof(int32_t) * 4);
+            touchConstShadow(vsConstI_, start, count, pData, sizeof(int32_t) * 4);
+            return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
@@ -2550,10 +2641,8 @@ public:
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_VS_CONST_B,
-                                        start, count, pData, sizeof(uint32_t));
+            touchConstShadow(vsConstB_, start, count, pData, sizeof(uint32_t));
+            return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
@@ -2653,10 +2742,8 @@ public:
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_PS_CONST_F,
-                                        start, count, pData, sizeof(float) * 4);
+            touchConstShadow(psConstF_, start, count, pData, sizeof(float) * 4);
+            return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
@@ -2671,10 +2758,8 @@ public:
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_PS_CONST_I,
-                                        start, count, pData, sizeof(int32_t) * 4);
+            touchConstShadow(psConstI_, start, count, pData, sizeof(int32_t) * 4);
+            return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
@@ -2690,10 +2775,8 @@ public:
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            return appendSetConstRecord(D9C_COMMAND_RECORD_SET_PS_CONST_B,
-                                        start, count, pData, sizeof(uint32_t));
+            touchConstShadow(psConstB_, start, count, pData, sizeof(uint32_t));
+            return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
