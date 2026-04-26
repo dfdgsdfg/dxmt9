@@ -650,6 +650,87 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = applyDrawIndexedPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
     }
+    case D9C_COMMAND_RECORD_SET_TRANSFORM: {
+      if (header.size != sizeof(D9CCommandRecordSetTransform)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetTransform decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_set_transform(d, decoded.state, &decoded.matrix);
+      break;
+    }
+    case D9C_COMMAND_RECORD_SET_TEXTURE_STAGE_STATE: {
+      if (header.size != sizeof(D9CCommandRecordSetTextureStageState)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetTextureStageState decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_set_texture_stage_state(d, decoded.stage, decoded.type, decoded.value);
+      break;
+    }
+    case D9C_COMMAND_RECORD_SET_SAMPLER_STATE: {
+      if (header.size != sizeof(D9CCommandRecordSetSamplerState)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetSamplerState decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_set_sampler_state(d, decoded.sampler, decoded.type, decoded.value);
+      break;
+    }
+    case D9C_COMMAND_RECORD_SET_VIEWPORT: {
+      if (header.size != sizeof(D9CCommandRecordSetViewport)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetViewport decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_set_viewport(d, &decoded.viewport);
+      break;
+    }
+    case D9C_COMMAND_RECORD_SET_SCISSOR_RECT: {
+      if (header.size != sizeof(D9CCommandRecordSetScissorRect)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetScissorRect decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_set_scissor_rect(d, &decoded.rect);
+      break;
+    }
+    case D9C_COMMAND_RECORD_SET_CLIP_PLANE: {
+      if (header.size != sizeof(D9CCommandRecordSetClipPlane)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetClipPlane decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_set_clip_plane(d, decoded.index, decoded.plane);
+      break;
+    }
+    case D9C_COMMAND_RECORD_SET_MATERIAL: {
+      if (header.size != sizeof(D9CCommandRecordSetMaterial)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetMaterial decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_set_material(d, &decoded.material);
+      break;
+    }
+    case D9C_COMMAND_RECORD_SET_LIGHT: {
+      if (header.size != sizeof(D9CCommandRecordSetLight)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordSetLight decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_set_light(d, decoded.index, &decoded.light);
+      break;
+    }
+    case D9C_COMMAND_RECORD_LIGHT_ENABLE: {
+      if (header.size != sizeof(D9CCommandRecordLightEnable)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordLightEnable decoded{};
+      std::memcpy(&decoded, record, sizeof(decoded));
+      hr = dxmt9c_device_light_enable(d, decoded.index, decoded.enable);
+      break;
+    }
     default:
       return dxmt9::core::D3DERR_INVALIDCALL;
     }

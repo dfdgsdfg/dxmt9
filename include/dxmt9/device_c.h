@@ -224,6 +224,153 @@ typedef struct D9CDrawPrimitivePacket {
     uint32_t primitiveCount;
 } D9CDrawPrimitivePacket;
 
+typedef struct D9CDrawIndexedPrimitivePacket {
+    D9CDrawPrimitivePacket state;
+    int32_t baseVertex;
+    uint32_t minVertex;
+    uint32_t numVertices;
+    uint32_t startIndex;
+    uint32_t primitiveCount;
+} D9CDrawIndexedPrimitivePacket;
+
+typedef struct D9CDrawPrimitiveUPPacket {
+    D9CDrawPrimitivePacket state;
+    uint32_t primitiveCount;
+    uint32_t stride;
+    uint32_t vertexDataOffset;
+    uint32_t vertexDataSize;
+} D9CDrawPrimitiveUPPacket;
+
+typedef struct D9CDrawIndexedPrimitiveUPPacket {
+    D9CDrawPrimitivePacket state;
+    uint32_t minVertex;
+    uint32_t numVertices;
+    uint32_t primitiveCount;
+    uint32_t indexFormat;
+    uint32_t stride;
+    uint32_t indexDataOffset;
+    uint32_t indexDataSize;
+    uint32_t vertexDataOffset;
+    uint32_t vertexDataSize;
+} D9CDrawIndexedPrimitiveUPPacket;
+
+#define D9C_COMMAND_CHUNK_VERSION 1u
+
+enum {
+    D9C_COMMAND_RECORD_DRAW_PRIMITIVE = 1,
+    D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE = 2,
+    D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP = 3,
+    D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP = 4,
+    /* State-mutating records — appended to the chunk in API-call order
+     * by the PE recorder, applied in the same order by the server-side
+     * importer. Each one replaces a per-call dxmt9c_device_set_* unix
+     * call with an in-chunk POD, removing one PE↔unix round-trip per
+     * Set* invocation. */
+    D9C_COMMAND_RECORD_SET_TRANSFORM = 5,
+    D9C_COMMAND_RECORD_SET_TEXTURE_STAGE_STATE = 6,
+    D9C_COMMAND_RECORD_SET_SAMPLER_STATE = 7,
+    D9C_COMMAND_RECORD_SET_VIEWPORT = 8,
+    D9C_COMMAND_RECORD_SET_SCISSOR_RECT = 9,
+    D9C_COMMAND_RECORD_SET_CLIP_PLANE = 10,
+    D9C_COMMAND_RECORD_SET_MATERIAL = 11,
+    D9C_COMMAND_RECORD_SET_LIGHT = 12,
+    D9C_COMMAND_RECORD_LIGHT_ENABLE = 13,
+};
+
+typedef struct D9CCommandRecordHeader {
+    uint32_t type;
+    uint32_t size;
+} D9CCommandRecordHeader;
+
+typedef struct D9CCommandRecordDrawPrimitive {
+    D9CCommandRecordHeader header;
+    D9CDrawPrimitivePacket packet;
+} D9CCommandRecordDrawPrimitive;
+
+typedef struct D9CCommandRecordDrawIndexedPrimitive {
+    D9CCommandRecordHeader header;
+    D9CDrawIndexedPrimitivePacket packet;
+} D9CCommandRecordDrawIndexedPrimitive;
+
+typedef struct D9CCommandRecordDrawPrimitiveUP {
+    D9CCommandRecordHeader header;
+    D9CDrawPrimitiveUPPacket packet;
+    /* Vertex bytes follow this fixed header at packet.vertexDataOffset. */
+} D9CCommandRecordDrawPrimitiveUP;
+
+typedef struct D9CCommandRecordDrawIndexedPrimitiveUP {
+    D9CCommandRecordHeader header;
+    D9CDrawIndexedPrimitiveUPPacket packet;
+    /* Index and vertex bytes follow this fixed header at the packet offsets. */
+} D9CCommandRecordDrawIndexedPrimitiveUP;
+
+typedef struct D9CCommandRecordSetTransform {
+    D9CCommandRecordHeader header;
+    uint32_t state;       /* D3DTRANSFORMSTATETYPE */
+    uint32_t reserved;    /* keeps matrix on 8-byte boundary */
+    D9CMatrix matrix;
+} D9CCommandRecordSetTransform;
+
+typedef struct D9CCommandRecordSetTextureStageState {
+    D9CCommandRecordHeader header;
+    uint32_t stage;
+    uint32_t type;
+    uint32_t value;
+    uint32_t reserved;
+} D9CCommandRecordSetTextureStageState;
+
+typedef struct D9CCommandRecordSetSamplerState {
+    D9CCommandRecordHeader header;
+    uint32_t sampler;
+    uint32_t type;
+    uint32_t value;
+    uint32_t reserved;
+} D9CCommandRecordSetSamplerState;
+
+typedef struct D9CCommandRecordSetViewport {
+    D9CCommandRecordHeader header;
+    D9CViewport viewport;
+} D9CCommandRecordSetViewport;
+
+typedef struct D9CCommandRecordSetScissorRect {
+    D9CCommandRecordHeader header;
+    D9CRect rect;
+} D9CCommandRecordSetScissorRect;
+
+typedef struct D9CCommandRecordSetClipPlane {
+    D9CCommandRecordHeader header;
+    uint32_t index;
+    uint32_t reserved;
+    float plane[4];
+} D9CCommandRecordSetClipPlane;
+
+typedef struct D9CCommandRecordSetMaterial {
+    D9CCommandRecordHeader header;
+    D9CMaterial material;
+} D9CCommandRecordSetMaterial;
+
+typedef struct D9CCommandRecordSetLight {
+    D9CCommandRecordHeader header;
+    uint32_t index;
+    uint32_t reserved;
+    D9CLight light;
+} D9CCommandRecordSetLight;
+
+typedef struct D9CCommandRecordLightEnable {
+    D9CCommandRecordHeader header;
+    uint32_t index;
+    uint32_t enable;
+} D9CCommandRecordLightEnable;
+
+typedef struct D9CCommandChunk {
+    uint32_t version;
+    uint32_t recordCount;
+    uint32_t recordBytes;
+    D9CWireHandle records;
+    uint32_t handleCount;
+    D9CWireHandle handles;
+} D9CCommandChunk;
+
 /* ── factory ─────────────────────────────────────────────────────────────── */
 
 D9CFactory* dxmt9c_factory_create(void);
@@ -342,6 +489,7 @@ D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice*);
 
 int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
                                        uint32_t startVertex, uint32_t count);
+int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
 int32_t  dxmt9c_device_draw_primitive_packet(D9CDevice*,
                                               const D9CDrawPrimitivePacket*);
 int32_t  dxmt9c_device_draw_primitive_chunk(D9CDevice*,

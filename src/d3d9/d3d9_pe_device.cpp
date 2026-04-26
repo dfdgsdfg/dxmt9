@@ -4,9 +4,11 @@
 #include <atomic>
 #include <array>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
+#include <vector>
 #include "d3d9_pe.hpp"
 #include "util/com/com_private_data.hpp"
 #include "util/config/config.hpp"
@@ -1165,7 +1167,8 @@ static D9CWireHandle toWireHandle(const void* handle) {
  * ========================================================================= */
 
 class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlush {
-    static constexpr UINT kMaxPendingDrawPackets = 64;
+    static constexpr UINT kMaxPendingCommandRecords = 64;
+    static constexpr size_t kMaxPendingCommandBytes = 256 * 1024;
 
     ULONG        refs_    = 1;
     D9CDevice*   dev_;
@@ -1190,8 +1193,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     DWORD pendingTextureMask_ = 0;
     DWORD pendingStreamMask_ = 0;
     bool pendingFvf_ = false;
-    std::array<D9CDrawPrimitivePacket, kMaxPendingDrawPackets> pendingDrawPackets_{};
-    UINT pendingDrawPacketCount_ = 0;
+    std::vector<std::uint8_t> pendingCommandBytes_{};
+    UINT pendingCommandRecordCount_ = 0;
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
@@ -1215,7 +1218,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     void clearPeStateTracking() {
         renderStateShadow_.clear();
         clearPendingHotState();
-        pendingDrawPacketCount_ = 0;
+        pendingCommandBytes_.clear();
+        pendingCommandRecordCount_ = 0;
         fvf_ = 0;
         std::memset(streamOff_, 0, sizeof(streamOff_));
         std::memset(streamStr_, 0, sizeof(streamStr_));
@@ -1292,21 +1296,178 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
-    HRESULT flushPendingDrawChunk() {
-        if (!dxmt9PeDrawChunkEnabled() || pendingDrawPacketCount_ == 0) {
+    static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount) {
+        switch (type) {
+        case D3DPT_POINTLIST: return primitiveCount;
+        case D3DPT_LINELIST: return primitiveCount * 2u;
+        case D3DPT_LINESTRIP: return primitiveCount + 1u;
+        case D3DPT_TRIANGLELIST: return primitiveCount * 3u;
+        case D3DPT_TRIANGLESTRIP:
+        case D3DPT_TRIANGLEFAN: return primitiveCount + 2u;
+        default: return 0;
+        }
+    }
+
+    static bool checkedByteCount(UINT count, UINT stride, std::uint32_t& bytes) {
+        const auto value = static_cast<std::uint64_t>(count) * stride;
+        if (value > 0xffffffffull) {
+            return false;
+        }
+        bytes = static_cast<std::uint32_t>(value);
+        return true;
+    }
+
+    HRESULT flushPendingCommandChunk() {
+        if (!dxmt9PeDrawChunkEnabled() || pendingCommandRecordCount_ == 0) {
             return S_OK;
         }
-        const HRESULT hr = hr32(dxmt9c_device_draw_primitive_chunk(dev_,
-                                                                   pendingDrawPackets_.data(),
-                                                                   pendingDrawPacketCount_));
+        D9CCommandChunk chunk{};
+        chunk.version = D9C_COMMAND_CHUNK_VERSION;
+        chunk.recordCount = pendingCommandRecordCount_;
+        chunk.recordBytes = static_cast<std::uint32_t>(pendingCommandBytes_.size());
+        chunk.records = toWireHandle(pendingCommandBytes_.data());
+
+        const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
         if (SUCCEEDED(hr)) {
-            pendingDrawPacketCount_ = 0;
+            pendingCommandBytes_.clear();
+            pendingCommandRecordCount_ = 0;
         }
         return hr;
     }
 
+    HRESULT appendCommandRecord(const void* data, size_t bytes) {
+        if (!dxmt9PeDrawChunkEnabled() || !data || bytes == 0 || bytes > 0xffffffffull) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (pendingCommandRecordCount_ != 0 &&
+            (pendingCommandRecordCount_ >= kMaxPendingCommandRecords ||
+             pendingCommandBytes_.size() + bytes > kMaxPendingCommandBytes)) {
+            const HRESULT flushHr = flushPendingCommandChunk();
+            if (FAILED(flushHr)) return flushHr;
+        }
+
+        const auto* raw = static_cast<const std::uint8_t*>(data);
+        pendingCommandBytes_.insert(pendingCommandBytes_.end(), raw, raw + bytes);
+        ++pendingCommandRecordCount_;
+
+        if (pendingCommandRecordCount_ >= kMaxPendingCommandRecords ||
+            pendingCommandBytes_.size() >= kMaxPendingCommandBytes) {
+            return flushPendingCommandChunk();
+        }
+        return S_OK;
+    }
+
+    HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
+        D9CCommandRecordDrawPrimitive record{};
+        record.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+        record.header.size = sizeof(record);
+        if (!buildDrawPrimitivePacket(type, startVertex, count, record.packet)) {
+            return D3DERR_INVALIDCALL;
+        }
+        return appendCommandRecord(&record, sizeof(record));
+    }
+
+    HRESULT appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
+                                             INT baseVertex,
+                                             UINT minVertex,
+                                             UINT numVertices,
+                                             UINT startIndex,
+                                             UINT count) {
+        D9CCommandRecordDrawIndexedPrimitive record{};
+        record.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+        record.header.size = sizeof(record);
+        if (!buildDrawPrimitivePacket(type, 0, count, record.packet.state)) {
+            return D3DERR_INVALIDCALL;
+        }
+        record.packet.baseVertex = baseVertex;
+        record.packet.minVertex = minVertex;
+        record.packet.numVertices = numVertices;
+        record.packet.startIndex = startIndex;
+        record.packet.primitiveCount = count;
+        return appendCommandRecord(&record, sizeof(record));
+    }
+
+    HRESULT appendDrawPrimitiveUPRecord(D3DPRIMITIVETYPE type,
+                                        UINT count,
+                                        const void* data,
+                                        UINT stride) {
+        D9CCommandRecordDrawPrimitiveUP header{};
+        header.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
+        if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state)) {
+            return D3DERR_INVALIDCALL;
+        }
+
+        std::uint32_t vertexBytes = 0;
+        if (!checkedByteCount(primitiveVertexCount(type, count), stride, vertexBytes) ||
+            (vertexBytes != 0 && !data)) {
+            return D3DERR_INVALIDCALL;
+        }
+        header.packet.primitiveCount = count;
+        header.packet.stride = stride;
+        header.packet.vertexDataOffset = sizeof(D9CCommandRecordDrawPrimitiveUP);
+        header.packet.vertexDataSize = vertexBytes;
+        header.header.size = sizeof(D9CCommandRecordDrawPrimitiveUP) + vertexBytes;
+
+        std::vector<std::uint8_t> record(header.header.size);
+        std::memcpy(record.data(), &header, sizeof(header));
+        if (vertexBytes != 0) {
+            std::memcpy(record.data() + header.packet.vertexDataOffset, data, vertexBytes);
+        }
+        return appendCommandRecord(record.data(), record.size());
+    }
+
+    HRESULT appendDrawIndexedPrimitiveUPRecord(D3DPRIMITIVETYPE type,
+                                               UINT minVertex,
+                                               UINT numVertices,
+                                               UINT count,
+                                               const void* indexData,
+                                               D3DFORMAT indexFormat,
+                                               const void* vertexData,
+                                               UINT stride) {
+        D9CCommandRecordDrawIndexedPrimitiveUP header{};
+        header.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+        if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state)) {
+            return D3DERR_INVALIDCALL;
+        }
+
+        const UINT indexSize = indexFormat == D3DFMT_INDEX32 ? 4u : 2u;
+        std::uint32_t indexBytes = 0;
+        std::uint32_t vertexBytes = 0;
+        if (minVertex > 0xffffffffu - numVertices) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (!checkedByteCount(primitiveVertexCount(type, count), indexSize, indexBytes) ||
+            !checkedByteCount(minVertex + numVertices, stride, vertexBytes) ||
+            (indexBytes != 0 && !indexData) ||
+            (vertexBytes != 0 && !vertexData)) {
+            return D3DERR_INVALIDCALL;
+        }
+
+        header.packet.minVertex = minVertex;
+        header.packet.numVertices = numVertices;
+        header.packet.primitiveCount = count;
+        header.packet.indexFormat = static_cast<std::uint32_t>(indexFormat);
+        header.packet.stride = stride;
+        header.packet.indexDataOffset = sizeof(D9CCommandRecordDrawIndexedPrimitiveUP);
+        header.packet.indexDataSize = indexBytes;
+        header.packet.vertexDataOffset = header.packet.indexDataOffset + indexBytes;
+        header.packet.vertexDataSize = vertexBytes;
+        header.header.size = sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) +
+                             indexBytes + vertexBytes;
+
+        std::vector<std::uint8_t> record(header.header.size);
+        std::memcpy(record.data(), &header, sizeof(header));
+        if (indexBytes != 0) {
+            std::memcpy(record.data() + header.packet.indexDataOffset, indexData, indexBytes);
+        }
+        if (vertexBytes != 0) {
+            std::memcpy(record.data() + header.packet.vertexDataOffset, vertexData, vertexBytes);
+        }
+        return appendCommandRecord(record.data(), record.size());
+    }
+
     HRESULT flushPeRecorder() {
-        const HRESULT chunkHr = flushPendingDrawChunk();
+        const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) {
             return chunkHr;
         }
@@ -1314,7 +1475,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT flushPendingHotState() {
-        const HRESULT chunkHr = flushPendingDrawChunk();
+        const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) {
             return chunkHr;
         }
@@ -1912,6 +2073,21 @@ public:
             pM->m[1][0], pM->m[1][1], pM->m[1][2], pM->m[1][3],
             pM->m[2][0], pM->m[2][1], pM->m[2][2], pM->m[2][3],
             pM->m[3][0], pM->m[3][1], pM->m[3][2], pM->m[3][3]);
+        // Chunk-recorder fast path: append a SET_TRANSFORM record into the
+        // current chunk and return — no PE↔unix round-trip until commit.
+        // Pending hot-state (renderState/texture/stream/fvf) MUST be drained
+        // first because the chunk replays records in append order: a Set*
+        // record after pending hot-state would observe stale baseline.
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordSetTransform record{};
+            record.header.type = D9C_COMMAND_RECORD_SET_TRANSFORM;
+            record.header.size = sizeof(record);
+            record.state = (uint32_t)state;
+            std::memcpy(&record.matrix, pM, sizeof(D9CMatrix));
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         const HRESULT hr = hr32(dxmt9c_device_set_transform(dev_, (uint32_t)state,
@@ -1951,6 +2127,15 @@ public:
                             this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
         D9CViewport vp{ pVP->X, pVP->Y, pVP->Width, pVP->Height,
                         pVP->MinZ, pVP->MaxZ };
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordSetViewport record{};
+            record.header.type = D9C_COMMAND_RECORD_SET_VIEWPORT;
+            record.header.size = sizeof(record);
+            record.viewport = vp;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_viewport(dev_, &vp));
@@ -1971,6 +2156,15 @@ public:
         dxmt9DeviceDebugLog("device_set_scissor_rect device=%p rect=%ld,%ld-%ld,%ld",
                             this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
         D9CRect cr = toR(*pR);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordSetScissorRect record{};
+            record.header.type = D9C_COMMAND_RECORD_SET_SCISSOR_RECT;
+            record.header.size = sizeof(record);
+            record.rect = cr;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_scissor_rect(dev_, &cr));
@@ -1988,6 +2182,15 @@ public:
     HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) override {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordSetMaterial record{};
+            record.header.type = D9C_COMMAND_RECORD_SET_MATERIAL;
+            record.header.size = sizeof(record);
+            std::memcpy(&record.material, pM, sizeof(D9CMaterial));
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_material(dev_,
@@ -2018,6 +2221,16 @@ public:
         cl.attenuation1 = pL->Attenuation1;
         cl.attenuation2 = pL->Attenuation2;
         cl.theta = pL->Theta; cl.phi = pL->Phi;
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordSetLight record{};
+            record.header.type = D9C_COMMAND_RECORD_SET_LIGHT;
+            record.header.size = sizeof(record);
+            record.index = idx;
+            record.light = cl;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
@@ -2028,6 +2241,16 @@ public:
     }
     HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) override {
         dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordLightEnable record{};
+            record.header.type = D9C_COMMAND_RECORD_LIGHT_ENABLE;
+            record.header.size = sizeof(record);
+            record.index = idx;
+            record.enable = en ? 1u : 0u;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));
@@ -2040,6 +2263,17 @@ public:
     /* ── clip planes ── */
     HRESULT STDMETHODCALLTYPE SetClipPlane(DWORD idx, const float* pPlane) override {
         dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
+        if (!pPlane) return D3DERR_INVALIDCALL;
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordSetClipPlane record{};
+            record.header.type = D9C_COMMAND_RECORD_SET_CLIP_PLANE;
+            record.header.size = sizeof(record);
+            record.index = idx;
+            std::memcpy(record.plane, pPlane, sizeof(record.plane));
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_clip_plane(dev_, idx, pPlane));
@@ -2066,7 +2300,7 @@ public:
         if (dxmt9PeStateShadowEnabled() && shadowedRenderStateEquals(stateKey, value)) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingDrawChunk();
+        const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
         if (dxmt9PeStateShadowEnabled()) {
             renderStateShadow_[stateKey] = value;
@@ -2129,6 +2363,17 @@ public:
                                                     DWORD value) override {
         dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordSetTextureStageState record{};
+            record.header.type = D9C_COMMAND_RECORD_SET_TEXTURE_STAGE_STATE;
+            record.header.size = sizeof(record);
+            record.stage = stage;
+            record.type = (uint32_t)type;
+            record.value = value;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_texture_stage_state(dev_, stage,
@@ -2146,6 +2391,17 @@ public:
                                                DWORD value) override {
         dxmt9DeviceDebugLog("device_set_sampler_state device=%p sampler=%u type=%u value=0x%x",
                             this, (unsigned)sampler, (unsigned)type, (unsigned)value);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            D9CCommandRecordSetSamplerState record{};
+            record.header.type = D9C_COMMAND_RECORD_SET_SAMPLER_STATE;
+            record.header.size = sizeof(record);
+            record.sampler = sampler;
+            record.type = (uint32_t)type;
+            record.value = value;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_sampler_state(dev_, sampler,
@@ -2205,7 +2461,7 @@ public:
         if (dxmt9PeStateShadowEnabled() && shadowedTextureEquals(stage, pTex)) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingDrawChunk();
+        const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
         setRef(textures_[stage], pTex);
         if (dxmt9PeStateShadowEnabled()) {
@@ -2231,7 +2487,7 @@ public:
         if (dxmt9PeStateShadowEnabled() && fvf_ == fvf) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingDrawChunk();
+        const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
         fvf_ = fvf;
         if (dxmt9PeStateShadowEnabled()) {
@@ -2353,7 +2609,7 @@ public:
         if (dxmt9PeStateShadowEnabled() && shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingDrawChunk();
+        const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
         setRef(streamSrc_[stream], pBuf);
         streamOff_[stream] = offset;
@@ -2471,20 +2727,13 @@ public:
                                              UINT count) override {
         dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
                             this, (unsigned)type, startVertex, count);
-        if (dxmt9PeDrawChunkEnabled()) {
-            D9CDrawPrimitivePacket packet{};
-            if (buildDrawPrimitivePacket(type, startVertex, count, packet)) {
-                if (pendingDrawPacketCount_ == kMaxPendingDrawPackets) {
-                    const HRESULT flushHr = flushPendingDrawChunk();
-                    if (FAILED(flushHr)) return flushHr;
-                }
-                pendingDrawPackets_[pendingDrawPacketCount_++] = packet;
+        if (dxmt9PeDrawChunkEnabled() &&
+            pendingRenderStates_.size() <= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT hr = appendDrawPrimitiveRecord(type, startVertex, count);
+            if (SUCCEEDED(hr)) {
                 clearPendingHotState();
-                if (pendingDrawPacketCount_ == kMaxPendingDrawPackets) {
-                    return flushPendingDrawChunk();
-                }
-                return S_OK;
             }
+            return hr;
         }
         if (dxmt9PeStateShadowEnabled() && hasPendingHotState()) {
             D9CDrawPrimitivePacket packet{};
@@ -2509,6 +2758,15 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
                             this, (unsigned)type, baseVertex, minVertex, numVertices,
                             startIndex, count);
+        if (dxmt9PeDrawChunkEnabled() &&
+            pendingRenderStates_.size() <= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT hr = appendDrawIndexedPrimitiveRecord(type, baseVertex, minVertex,
+                                                                numVertices, startIndex, count);
+            if (SUCCEEDED(hr)) {
+                clearPendingHotState();
+            }
+            return hr;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_draw_indexed_primitive(dev_, (uint32_t)type,
@@ -2520,6 +2778,14 @@ public:
                                                UINT stride) override {
         dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
                             this, (unsigned)type, count, pData, stride);
+        if (dxmt9PeDrawChunkEnabled() &&
+            pendingRenderStates_.size() <= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT hr = appendDrawPrimitiveUPRecord(type, count, pData, stride);
+            if (SUCCEEDED(hr)) {
+                clearPendingHotState();
+            }
+            return hr;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_draw_primitive_up(dev_, (uint32_t)type,
@@ -2536,6 +2802,16 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
                             this, (unsigned)type, minVertex, numVertices, count,
                             pIdxData, (unsigned)idxFmt, pVtxData, stride);
+        if (dxmt9PeDrawChunkEnabled() &&
+            pendingRenderStates_.size() <= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT hr = appendDrawIndexedPrimitiveUPRecord(type, minVertex, numVertices,
+                                                                  count, pIdxData, idxFmt,
+                                                                  pVtxData, stride);
+            if (SUCCEEDED(hr)) {
+                clearPendingHotState();
+            }
+            return hr;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_draw_indexed_primitive_up(dev_,
