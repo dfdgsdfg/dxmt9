@@ -9,6 +9,7 @@ namespace dxmt9::core {
 struct MetalCommandRecord {
   enum class Kind {
     Draw,
+    DrawRun,        // BaseDrawState + N DrawParam — see core::DrawRunDesc
     Clear,
     SurfaceCopy,
     StretchRect,
@@ -19,6 +20,7 @@ struct MetalCommandRecord {
 
   Kind kind = Kind::Draw;
   DrawDesc draw{};
+  DrawRunDesc drawRun{};
   ClearDesc clear{};
   SurfaceCopyDesc surfaceCopy{};
   StretchRectDesc stretchRect{};

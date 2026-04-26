@@ -105,6 +105,24 @@ class Device {
   virtual void submitDrawBatch(std::span<const core::DrawDesc> descs) {
     for (const auto& desc : descs) submitDraw(desc);
   }
+  // Compact draw-run ingress (BaseDrawState + N DrawParam). Default
+  // expands to per-draw submitDraw so non-DeviceImpl backends keep
+  // working unchanged. DeviceImpl overrides to forward straight to
+  // CommandQueue::submitDrawRun.
+  virtual void submitDrawRun(core::DrawRunDesc desc) {
+    for (const auto& param : desc.draws) {
+      core::DrawDesc synthetic = desc.base;
+      synthetic.primitiveType = param.primitiveType;
+      synthetic.primitiveCount = param.primitiveCount;
+      synthetic.startVertex = param.startVertex;
+      synthetic.baseVertexIndex = param.baseVertexIndex;
+      synthetic.startIndex = param.startIndex;
+      synthetic.indexType = param.indexType;
+      synthetic.userVertexData = param.userVertexData;
+      synthetic.userIndexData = param.userIndexData;
+      submitDraw(synthetic);
+    }
+  }
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
   virtual void submitStretchRect(const core::StretchRectDesc&) {}

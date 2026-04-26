@@ -156,6 +156,9 @@ class DeviceImpl final : public Device {
   void submitDrawBatch(std::span<const core::DrawDesc> descs) override {
     queue_.submitDrawBatch(descs);
   }
+  void submitDrawRun(core::DrawRunDesc desc) override {
+    queue_.submitDrawRun(std::move(desc));
+  }
   void submitClear(const core::ClearDesc& desc) override { queue_.submitClear(desc); }
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc) override {
     queue_.submitSurfaceCopy(desc);

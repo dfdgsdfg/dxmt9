@@ -118,6 +118,13 @@ class CommandQueue {
   // check still fires per-draw; only the queue lock + writer-slot path
   // costs are amortized.
   void submitDrawBatch(std::span<const core::DrawDesc> descs);
+  // Compact backend draw-run ingress — pushes one BackendDrawRunRecord
+  // (BaseDrawState + DrawParam[N]) into the current ChunkSlot under a
+  // single mutex acquire. The encoder binds state from desc.base ONCE,
+  // then loops emitting per-DrawParam Metal calls. Replaces N
+  // submitDraw() calls when the importer detects a run of draws with no
+  // state change between them.
+  void submitDrawRun(core::DrawRunDesc desc);
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
   void submitStretchRect(const core::StretchRectDesc& desc);

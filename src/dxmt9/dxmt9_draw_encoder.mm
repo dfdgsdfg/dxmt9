@@ -1193,6 +1193,50 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         commandBufferHasWork = true;
         break;
       }
+      case Kind::DrawRun: {
+        // Compact draw-run: state bound from base ONCE (render-pass +
+        // resource-binding decisions key off base.rts), then loop over
+        // per-DrawParam emits. First-cut implementation synthesizes a
+        // per-draw DrawDesc on the stack and reuses encodeDraw — gives
+        // the correct API surface and BackendRecord shape immediately;
+        // the per-draw resource-rebinding optimization on the encoder
+        // side follows as a separate step (Phase 3-E).
+        flushBlit();
+        const auto& base = command.drawRun.base;
+        const auto drawKey = makeAttachmentKey(base.rts);
+        const auto drawReadBloom = makeDrawReadBloom(base);
+        if (pendingClear.has_value()) {
+          const auto clearKey = makeAttachmentKey(*pendingClear);
+          const auto clearBloom = makeAttachmentBloom(*pendingClear);
+          if (clearKey == drawKey && !clearBloom.overlaps(drawReadBloom)) {
+            startRenderPass(base, pendingClear);
+            pendingClear.reset();
+          } else {
+            flushPendingClear();
+            if (!hasActiveRender || activeKey != drawKey || activeWriteBloom.overlaps(drawReadBloom)) {
+              flushRender();
+              startRenderPass(base, std::nullopt);
+            }
+          }
+        } else if (!hasActiveRender || activeKey != drawKey || activeWriteBloom.overlaps(drawReadBloom)) {
+          flushRender();
+          startRenderPass(base, std::nullopt);
+        }
+        for (const auto& param : command.drawRun.draws) {
+          core::DrawDesc synthetic = base;
+          synthetic.primitiveType = param.primitiveType;
+          synthetic.primitiveCount = param.primitiveCount;
+          synthetic.startVertex = param.startVertex;
+          synthetic.baseVertexIndex = param.baseVertexIndex;
+          synthetic.startIndex = param.startIndex;
+          synthetic.indexType = param.indexType;
+          synthetic.userVertexData = param.userVertexData;
+          synthetic.userIndexData = param.userIndexData;
+          encodeDraw(ctx, commandBuffer, activeRenderEncoder, synthetic, slot.seqId);
+        }
+        commandBufferHasWork = true;
+        break;
+      }
       case Kind::SurfaceCopy:
         flushPendingClear();
         flushRender();

@@ -637,6 +637,33 @@ struct DrawDesc {
   std::vector<u8> userIndexData;
 };
 
+// Per-draw parameters within a DrawRunDesc — only what differs between
+// draws sharing the same BaseDrawState (DrawDesc base). Encoder emits
+// one Metal draw call per DrawParam, reusing the bound state.
+struct DrawParam {
+  PrimitiveType primitiveType = PrimitiveType::TriangleList;
+  u32 primitiveCount = 0;
+  u32 startVertex = 0;
+  i32 baseVertexIndex = 0;
+  u32 startIndex = 0;
+  IndexType indexType = IndexType::UInt16;
+  bool indexed = false;                    // true → drawIndexedPrimitive
+  std::vector<u8> userVertexData;          // empty for non-UP draws
+  std::vector<u8> userIndexData;           // empty for non-UP / non-indexed
+};
+
+// Backend draw-run record: one BaseDrawState (the existing DrawDesc) +
+// N compact DrawParam entries. Replaces N separate
+// MetalCommandRecord::Kind::Draw records when the importer detects a
+// run of draws with no state change between them. Encoder binds state
+// once from `base`, then loops emitting per-draw calls — saves both
+// per-draw DrawDesc copies on the queue side and per-draw resource
+// rebinding on the encoder side.
+struct DrawRunDesc {
+  DrawDesc base{};                         // applied once at run start
+  std::vector<DrawParam> draws;            // per-draw args
+};
+
 struct ClearDesc {
   std::array<RenderTargetAttachment, kMaxRenderTargets> colorAttachments{};
   RenderTargetAttachment depthStencil{};

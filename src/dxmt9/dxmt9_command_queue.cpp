@@ -29,6 +29,13 @@ MetalCommandRecord makeDrawCommand(const core::DrawDesc& desc) {
   return op;
 }
 
+MetalCommandRecord makeDrawRunCommand(core::DrawRunDesc desc) {
+  MetalCommandRecord op;
+  op.kind = MetalCommandRecord::Kind::DrawRun;
+  op.drawRun = std::move(desc);
+  return op;
+}
+
 MetalCommandRecord makeClearCommand(const core::ClearDesc& desc) {
   MetalCommandRecord op;
   op.kind = MetalCommandRecord::Kind::Clear;
@@ -577,6 +584,42 @@ void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
   currentBackBuffer_ = desc.rts.color[0].handle;
   pool_.markDrawResources(desc, seqIdForMark(*this, 0));
+  maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+}
+
+void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
+  if (desc.draws.empty()) {
+    return;
+  }
+  // Count each per-draw param toward submit_draw so the perf counter
+  // remains comparable across submitDraw / submitDrawBatch / submitDrawRun
+  // ingress paths.
+  for (std::size_t i = 0; i < desc.draws.size(); ++i) {
+    perf::countSubmitDraw();
+  }
+  PerfScope scope(perf::countSubmitDrawCpuTime);
+  std::unique_lock lock(mutex_);
+  ensureWritingSlotUnlocked(*this, lock);
+  // Resource marking still needs to fire per-draw because resource
+  // lifetime tracking keys off (handle, seqId) — but the heavyweight
+  // BaseDrawState is referenced from one shared base. Build a cheap
+  // synthetic DrawDesc for marking: most fields come from base; only
+  // primitiveType / counts / UP payloads vary. This is the only
+  // O(N) DrawDesc work in the run.
+  for (const auto& param : desc.draws) {
+    core::DrawDesc syntheticForMark = desc.base;
+    syntheticForMark.primitiveType = param.primitiveType;
+    syntheticForMark.primitiveCount = param.primitiveCount;
+    syntheticForMark.startVertex = param.startVertex;
+    syntheticForMark.baseVertexIndex = param.baseVertexIndex;
+    syntheticForMark.startIndex = param.startIndex;
+    syntheticForMark.indexType = param.indexType;
+    syntheticForMark.userVertexData = param.userVertexData;
+    syntheticForMark.userIndexData = param.userIndexData;
+    pool_.markDrawResources(syntheticForMark, seqIdForMark(*this, 0));
+  }
+  currentBackBuffer_ = desc.base.rts.color[0].handle;
+  currentSlotUnlocked(*this).commands.push_back(makeDrawRunCommand(std::move(desc)));
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
