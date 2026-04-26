@@ -79,6 +79,19 @@ bool forceSyncPresentBoundary() {
   return force;
 }
 
+bool capFrameLatencyToBackBuffers() {
+  static const bool enabled = envFlag("DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS");
+  return enabled;
+}
+
+std::uint32_t backBufferLatencyCap(std::uint32_t backBufferCount) {
+  const std::uint32_t normalized = std::max(1u, backBufferCount);
+  if (normalized >= core::kMaxFrameLatency) {
+    return core::kMaxFrameLatency;
+  }
+  return normalized + 1u;
+}
+
 class DeviceImpl final : public Device {
  public:
   explicit DeviceImpl(const DEVICE_DESC& desc)
@@ -195,12 +208,16 @@ class DeviceImpl final : public Device {
     const auto presentSeqId = queue_.submitPresent(augmented);
     // Vsync/default presents are already synchronized by core::Device::presentEx()
     // via flush(); keep the latency boundary for immediate presents only.
+    const std::uint32_t boundaryLatency =
+        capFrameLatencyToBackBuffers()
+            ? std::min(maxFrameLatency_, backBufferLatencyCap(augmented.backBufferCount))
+            : maxFrameLatency_;
     const bool shouldApplyBoundary =
         !disablePresentBoundary() &&
         (!augmented.displaySyncEnabled || forceSyncPresentBoundary());
     if (shouldApplyBoundary) {
       perf::countPresentBoundaryApplied();
-      queue_.presentBoundary(presentSeqId, maxFrameLatency_);
+      queue_.presentBoundary(presentSeqId, boundaryLatency);
     } else {
       perf::countPresentBoundarySkipped();
     }

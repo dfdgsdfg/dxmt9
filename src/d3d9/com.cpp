@@ -6,6 +6,8 @@
 // internal include dirs ('.', '..') configured in src/d3d9/meson.build.
 #include "dxmt9/dxmt9_device.hpp"
 
+#include <algorithm>
+
 namespace dxmt9::com {
 
 namespace {
@@ -35,6 +37,7 @@ core::SwapDesc makeSwapDesc(const core::PresentParameters& params) {
   desc.format = params.backBufferFormat;
   desc.interval = params.presentationInterval;
   desc.windowed = params.windowed;
+  desc.backBufferCount = std::max(1u, params.backBufferCount);
   desc.displaySyncEnabled = params.presentationInterval != core::PresentInterval::Immediate;
   desc.multiSampleType = params.multiSampleType;
   return desc;

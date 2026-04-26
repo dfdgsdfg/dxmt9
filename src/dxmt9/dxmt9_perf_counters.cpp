@@ -55,6 +55,17 @@ struct Counters {
   std::atomic<std::uint64_t> presentAcquireWaitNs{0};
   std::atomic<std::uint64_t> presentAcquireWaitMaxNs{0};
   std::atomic<std::uint64_t> presentAcquireSlowWaits{0};
+  std::atomic<std::uint64_t> presentAsyncAcquireRequests{0};
+  std::atomic<std::uint64_t> presentAsyncAcquireIssued{0};
+  std::atomic<std::uint64_t> presentAsyncAcquireFallbacks{0};
+  std::atomic<std::uint64_t> presentAsyncAcquireWaits{0};
+  std::atomic<std::uint64_t> presentAsyncAcquireWaitNs{0};
+  std::atomic<std::uint64_t> presentAsyncAcquireWaitMaxNs{0};
+  std::atomic<std::uint64_t> presentAsyncAcquireSlowWaits{0};
+  std::atomic<std::uint64_t> presentTokenWaits{0};
+  std::atomic<std::uint64_t> presentTokenWaitNs{0};
+  std::atomic<std::uint64_t> presentTokenWaitMaxNs{0};
+  std::atomic<std::uint64_t> presentTokenSlowWaits{0};
   std::atomic<std::uint64_t> presentPreAcquireRequests{0};
   std::atomic<std::uint64_t> presentPreAcquireHits{0};
   std::atomic<std::uint64_t> presentPreAcquireMisses{0};
@@ -105,6 +116,12 @@ void report() {
       "present_encoded=%llu present_skipped=%llu present_acquire_waits=%llu "
       "present_acquire_wait_ms=%.3f present_acquire_wait_max_ms=%.3f "
       "present_acquire_slow_waits=%llu "
+      "present_async_acquire_requests=%llu present_async_acquire_issued=%llu "
+      "present_async_acquire_fallbacks=%llu "
+      "present_async_acquire_waits=%llu present_async_acquire_wait_ms=%.3f "
+      "present_async_acquire_wait_max_ms=%.3f present_async_acquire_slow_waits=%llu "
+      "present_token_waits=%llu present_token_wait_ms=%.3f "
+      "present_token_wait_max_ms=%.3f present_token_slow_waits=%llu "
       "present_preacquire_requests=%llu present_preacquire_hits=%llu "
       "present_preacquire_misses=%llu present_preacquire_wait_ms=%.3f "
       "present_preacquire_wait_max_ms=%.3f "
@@ -156,6 +173,17 @@ void report() {
       static_cast<double>(load(c.presentAcquireWaitNs)) / 1000000.0,
       static_cast<double>(load(c.presentAcquireWaitMaxNs)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentAcquireSlowWaits)),
+      static_cast<unsigned long long>(load(c.presentAsyncAcquireRequests)),
+      static_cast<unsigned long long>(load(c.presentAsyncAcquireIssued)),
+      static_cast<unsigned long long>(load(c.presentAsyncAcquireFallbacks)),
+      static_cast<unsigned long long>(load(c.presentAsyncAcquireWaits)),
+      static_cast<double>(load(c.presentAsyncAcquireWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.presentAsyncAcquireWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.presentAsyncAcquireSlowWaits)),
+      static_cast<unsigned long long>(load(c.presentTokenWaits)),
+      static_cast<double>(load(c.presentTokenWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.presentTokenWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.presentTokenSlowWaits)),
       static_cast<unsigned long long>(load(c.presentPreAcquireRequests)),
       static_cast<unsigned long long>(load(c.presentPreAcquireHits)),
       static_cast<unsigned long long>(load(c.presentPreAcquireMisses)),
@@ -307,6 +335,36 @@ void countPresentAcquireWait(std::uint64_t nanoseconds) {
   updateMax(counters().presentAcquireWaitMaxNs, nanoseconds);
   if (nanoseconds >= 1000000ull) {
     add(counters().presentAcquireSlowWaits);
+  }
+}
+
+void countPresentAsyncAcquireRequest() {
+  add(counters().presentAsyncAcquireRequests);
+}
+
+void countPresentAsyncAcquireIssued() {
+  add(counters().presentAsyncAcquireIssued);
+}
+
+void countPresentAsyncAcquireFallback() {
+  add(counters().presentAsyncAcquireFallbacks);
+}
+
+void countPresentAsyncAcquireWait(std::uint64_t nanoseconds) {
+  add(counters().presentAsyncAcquireWaits);
+  add(counters().presentAsyncAcquireWaitNs, nanoseconds);
+  updateMax(counters().presentAsyncAcquireWaitMaxNs, nanoseconds);
+  if (nanoseconds >= 1000000ull) {
+    add(counters().presentAsyncAcquireSlowWaits);
+  }
+}
+
+void countPresentTokenWait(std::uint64_t nanoseconds) {
+  add(counters().presentTokenWaits);
+  add(counters().presentTokenWaitNs, nanoseconds);
+  updateMax(counters().presentTokenWaitMaxNs, nanoseconds);
+  if (nanoseconds >= 1000000ull) {
+    add(counters().presentTokenSlowWaits);
   }
 }
 

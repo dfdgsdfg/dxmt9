@@ -8,11 +8,10 @@
 // queue-owned transfer paths (mapBuffer + readbackSurface), and the
 // encode-context assembly path that feeds encoders::encodeChunk.
 //
-// External services (pool, cache, archive, upper Device, limits) are
-// snapshotted at construction time as raw pointers; CommandQueue reads
-// through them on hot paths without virtual dispatch. DeviceImpl
-// guarantees lifetime via member declaration order — queue_ is
-// declared last and destructs first.
+// Pool, pipeline cache, shader archive, limits, frame scratch, and the
+// deferred ResourceInitializer are queue-owned. DeviceImpl only passes
+// the WMT device plus finalized limits and carries D3D9-facing policy
+// through per-submit descriptors.
 //
 // CommandQueue does NOT persist the shader archive (that's
 // dxmt9::shaders::Archive's dtor) and does NOT run under an
@@ -189,6 +188,7 @@ class CommandQueue {
   std::uint64_t completedSeqId_ = 0;      // gpu-completed watermark
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
   std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present
+  std::uint64_t presentCompletedSeqId_ = 0; // present-bearing command buffer completed
 
   std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
   std::optional<size_t> writingSlot_{};
@@ -216,6 +216,7 @@ class CommandQueue {
   std::condition_variable writeCv_{};
   std::condition_variable encodeCv_{};
   std::condition_variable finishCv_{};
+  std::condition_variable presentCompletedCv_{};
   bool stop_ = true;
 
  private:

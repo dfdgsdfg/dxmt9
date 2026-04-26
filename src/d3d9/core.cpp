@@ -1604,6 +1604,7 @@ SwapDesc makeSwapDesc(const PresentParameters& params) {
   desc.format = params.backBufferFormat;
   desc.interval = params.presentationInterval;
   desc.windowed = params.windowed;
+  desc.backBufferCount = std::max(1u, params.backBufferCount);
   desc.displaySyncEnabled = params.presentationInterval != PresentInterval::Immediate;
   desc.multiSampleType = params.multiSampleType;
   return desc;
@@ -2952,6 +2953,7 @@ SwapDesc Device::snapshotSwapDesc() const {
   desc.format = presentParameters_.backBufferFormat;
   desc.interval = presentParameters_.presentationInterval;
   desc.windowed = presentParameters_.windowed;
+  desc.backBufferCount = std::max(1u, presentParameters_.backBufferCount);
   desc.displaySyncEnabled = presentParameters_.presentationInterval != PresentInterval::Immediate;
   desc.multiSampleType = presentParameters_.multiSampleType;
   if (!swapChains_.empty()) {

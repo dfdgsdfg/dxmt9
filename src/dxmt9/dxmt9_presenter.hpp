@@ -15,10 +15,13 @@
 
 #include <cstdint>
 #include <condition_variable>
+#include <deque>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace dxmt9 {
 
@@ -26,8 +29,34 @@ class Device;
 
 inline constexpr uint32_t kDefaultMetalDrawableCount = 3;
 
+class PresentDrawableToken {
+ public:
+  PresentDrawableToken() = default;
+  explicit PresentDrawableToken(WMT::Reference<WMT::MetalDrawable> drawable)
+      : drawable_(std::move(drawable)), ready_(true) {}
+
+  void complete(WMT::Reference<WMT::MetalDrawable> drawable);
+  void fail();
+  WMT::MetalDrawable waitDrawable();
+
+ private:
+  mutable std::mutex mutex_{};
+  std::condition_variable cv_{};
+  WMT::Reference<WMT::MetalDrawable> drawable_{};
+  bool ready_ = false;
+};
+
 class Presenter {
  public:
+  struct AcquireParams {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    bool displaySyncEnabled = true;
+    double contentsScale = 1.0;
+    uint32_t maxDrawableCount = kDefaultMetalDrawableCount;
+    uint64_t seqId = 0;
+  };
+
   struct EncodeParams {
     WMT::Texture source;                 // backbuffer texture (resolve target for MSAA)
     uint32_t width = 0;                  // drawable width
@@ -38,6 +67,8 @@ class Presenter {
     uint32_t maxDrawableCount = kDefaultMetalDrawableCount;  // CAMetalLayer.maximumDrawableCount
     bool opaqueAlpha = false;            // X8R8G8B8/X8B8G8R8 → force alpha=1
     uint64_t seqId = 0;                  // for trace events
+    std::shared_ptr<PresentDrawableToken> drawableToken{};
+    bool drawableTokenRequired = false;
   };
 
   struct EncodeResult {
@@ -60,6 +91,8 @@ class Presenter {
   uint64_t hwnd() const noexcept { return hwnd_; }
   WMT::MetalLayer layer() const noexcept { return layer_; }
 
+  std::shared_ptr<PresentDrawableToken> acquireDrawable(const AcquireParams& params);
+  std::shared_ptr<PresentDrawableToken> beginAcquireDrawable(const AcquireParams& params);
   EncodeResult encodeCommands(WMT::CommandBuffer& commandBuffer, const EncodeParams& params);
   void preAcquireNextDrawable(uint64_t seqId);
 
@@ -68,8 +101,11 @@ class Presenter {
   // build if this is the first request.
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>&
       pipelineFor(bool opaqueAlpha);
+  void configureLayer(const AcquireParams& params);
   WMT::Reference<WMT::MetalDrawable> takePrefetchedDrawable();
   void discardPrefetchedDrawable();
+  void finishAsyncAcquireToken();
+  void runAsyncAcquireLoop();
   void runPreAcquireLoop();
 
   WMT::Device device_{};
@@ -82,6 +118,7 @@ class Presenter {
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineAlpha_{};
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>> pipelineOpaque_{};
   WMT::Reference<WMT::SamplerState> sampler_{};
+  std::mutex stateMutex_{};
   WMTLayerProps cachedLayerProps_{};
   uint32_t cachedMaxDrawableCount_ = 0;
   bool cachedLayerPropsValid_ = false;
@@ -94,6 +131,18 @@ class Presenter {
   bool preAcquireStop_ = false;
   bool preAcquireRequested_ = false;
   bool preAcquireInFlight_ = false;
+
+  struct AsyncAcquireRequest {
+    AcquireParams params{};
+    std::shared_ptr<PresentDrawableToken> token{};
+  };
+  std::mutex asyncAcquireMutex_{};
+  std::condition_variable asyncAcquireCv_{};
+  std::thread asyncAcquireThread_{};
+  std::deque<AsyncAcquireRequest> asyncAcquireRequests_{};
+  bool asyncAcquireDrawableHeld_ = false;
+  bool asyncAcquireStop_ = false;
+
   // Borrowed from DeviceImpl; used by the async pipeline builder.
   WMT::Reference<WMT::BinaryArchive>* archive_ = nullptr;
   const std::string* archivePath_ = nullptr;

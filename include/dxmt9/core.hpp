@@ -17,6 +17,7 @@
 namespace dxmt9 {
 class Device;     // forward decl — defined in src/dxmt9/dxmt9_device.hpp
 class Presenter;  // forward decl — defined in src/dxmt9/dxmt9_presenter.hpp
+class PresentDrawableToken;  // retained CAMetalDrawable for tokenized present experiments
 }
 
 namespace dxmt9::core {
@@ -43,7 +44,7 @@ constexpr HRESULT S_PRESENT_OCCLUDED = static_cast<HRESULT>(0x08760878);
 
 inline constexpr u32 kMaxAdapters = 4;
 inline constexpr u32 kMaxRenderTargets = 4;
-inline constexpr u32 kDefaultFrameLatency = 3;
+inline constexpr u32 kDefaultFrameLatency = 4;
 inline constexpr u32 kMaxFrameLatency = 30;
 inline constexpr u32 kMaxStreams = 16;
 inline constexpr u32 kMaxTextures = 16;
@@ -659,11 +660,18 @@ struct SwapDesc {
   Format format = Format::A8R8G8B8;
   PresentInterval interval = PresentInterval::Default;
   bool windowed = true;
+  u32 backBufferCount = 1;
   bool displaySyncEnabled = true;
   MultiSampleType multiSampleType = MultiSampleType::None;
   // Owned by the SwapChain this desc was built from; the backend uses this
   // to target the per-window Presenter without an hwnd-keyed registry.
   dxmt9::Presenter* presenter = nullptr;
+  // Optional token acquired before the present packet reaches the encode
+  // worker. This is intentionally experimental: it lets dxmt9 test a
+  // DXVK-like acquire-before-present shape without making CAMetalLayer
+  // acquisition part of the core D3D9 surface.
+  std::shared_ptr<dxmt9::PresentDrawableToken> drawableToken{};
+  bool drawableTokenRequired = false;
   // Per-present back-channels — DeviceImpl::present() fills these from its
   // own observers + maxFrameLatency_ before forwarding to the queue. Frame
   // latency is the app-facing pacing limit, not the Metal drawable count.

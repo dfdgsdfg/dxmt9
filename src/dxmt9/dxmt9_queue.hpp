@@ -336,12 +336,14 @@ class QueueLifecycleController {
     std::deque<u64>* completedSeqQueue = nullptr;
     size_t* inflightCount = nullptr;
     u64* completedSeqId = nullptr;
+    u64* presentCompletedSeqId = nullptr;
     u64* lastCommittedSeqId = nullptr;
     std::span<ChunkSlot> slots;
     std::mutex* mutex = nullptr;
     std::condition_variable* writeCv = nullptr;
     std::condition_variable* encodeCv = nullptr;
     std::condition_variable* finishCv = nullptr;
+    std::condition_variable* presentCompletedCv = nullptr;
     bool* stop = nullptr;
     metalhud::SubmissionDiagnosticsController* submissionDiagnostics = nullptr;
     std::function<u32(Handle)> resolveSurfaceFlags;

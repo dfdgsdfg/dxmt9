@@ -978,6 +978,7 @@ void testDeviceCoreFlow() {
   params.backBufferWidth = 640;
   params.backBufferHeight = 480;
   params.backBufferFormat = Format::A8R8G8B8;
+  params.backBufferCount = 2;
   params.windowed = true;
   params.presentationInterval = PresentInterval::Default;
   params.deviceWindow = Handle{99};
@@ -1241,6 +1242,7 @@ void testDeviceCoreFlow() {
   checkEq(backend->presents[0].width, 640u, "present width");
   checkEq(backend->presents[0].height, 480u, "present height");
   checkEq(backend->presents[0].format, Format::A8R8G8B8, "present format");
+  checkEq(backend->presents[0].backBufferCount, 2u, "present back buffer count");
   checkEq(backend->presents[0].multiSampleType, MultiSampleType::Four, "present sample type");
   checkEq(backend->presents[0].sourceSurface, backBuffer->handle(), "present source backbuffer");
   check(backend->presents[0].displaySyncEnabled, "present sync");
@@ -1541,10 +1543,10 @@ void testComWrappersEx() {
   auto* queriedDevice = static_cast<IDirect3DDevice9Ex*>(deviceUnknown);
   check(queriedDevice != nullptr, "device ex query result");
   checkEq(queriedDevice->Release(), 1u, "device ex qi release");
-  checkEq(device->GetMaximumFrameLatency(), 3u, "default max frame latency");
+  checkEq(device->GetMaximumFrameLatency(), 4u, "default max frame latency");
   checkEq(device->SetMaximumFrameLatency(0), D3D_OK, "set frame latency default");
-  checkEq(device->GetMaximumFrameLatency(), 3u, "zero latency maps to default");
-  checkEq(backend->maxFrameLatencyCalls.back(), 3u, "backend received default frame latency");
+  checkEq(device->GetMaximumFrameLatency(), 4u, "zero latency maps to default");
+  checkEq(backend->maxFrameLatencyCalls.back(), 4u, "backend received default frame latency");
   checkEq(device->SetMaximumFrameLatency(30), D3D_OK, "set max valid frame latency");
   checkEq(device->GetMaximumFrameLatency(), 30u, "stored max valid frame latency");
   checkEq(backend->maxFrameLatencyCalls.back(), 30u, "backend received max valid frame latency");

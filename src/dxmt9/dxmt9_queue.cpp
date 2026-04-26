@@ -1088,6 +1088,9 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
     std::lock_guard completionLock(*binding.mutex);
     const QueueControllerState before = makeBoundQueueState(binding);
     binding.completedSeqQueue->push_back(pending.seqId);
+    if (pending.diagnostics.hasPresent && binding.presentCompletedSeqId) {
+      *binding.presentCompletedSeqId = std::max(*binding.presentCompletedSeqId, pending.seqId);
+    }
     const QueueControllerState after = makeBoundQueueState(binding);
     observeTransition(QueueTransitionRecord{
         .before = before,
@@ -1097,6 +1100,9 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
     });
     if (binding.finishCv) {
       binding.finishCv->notify_all();
+    }
+    if (pending.diagnostics.hasPresent && binding.presentCompletedCv) {
+      binding.presentCompletedCv->notify_all();
     }
   }
   // pending.commandBuffer is released when `pending` goes out of scope.

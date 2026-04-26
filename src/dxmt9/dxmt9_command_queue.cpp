@@ -5,6 +5,7 @@
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_presenter.hpp"
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
@@ -317,6 +318,8 @@ void CommandQueue::stopThreads() {
     stop_ = true;
     encodeCv_.notify_all();
     finishCv_.notify_all();
+    presentCompletedCv_.notify_all();
+    presentDequeuedCv_.notify_all();
     writeCv_.notify_all();
   }
   queueLifecycle_.notifyPendingCompletionStop();
@@ -357,6 +360,40 @@ bool presentBoundaryWaitsForCompletion() {
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
   return enabled;
+}
+
+bool presentBoundaryWaitsForPresentCompletion() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool acquirePresentOnSubmit() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PRESENT_ACQUIRE_ON_SUBMIT");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+bool asyncAcquirePresentOnSubmit() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PRESENT_ASYNC_ACQUIRE");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
+  return Presenter::AcquireParams{
+      .width = desc.width,
+      .height = desc.height,
+      .displaySyncEnabled = desc.displaySyncEnabled,
+      .contentsScale = 1.0,
+      .maxDrawableCount = kDefaultMetalDrawableCount,
+  };
 }
 
 void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
@@ -448,15 +485,39 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
 
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   perf::countSubmitPresent();
+  core::SwapDesc queuedDesc = desc;
+  if (queuedDesc.presenter && asyncAcquirePresentOnSubmit()) {
+    perf::countPresentAsyncAcquireRequest();
+    queuedDesc.drawableToken =
+        queuedDesc.presenter->beginAcquireDrawable(makePresentAcquireParams(queuedDesc));
+    if (queuedDesc.drawableToken) {
+      perf::countPresentAsyncAcquireIssued();
+    } else {
+      perf::countPresentAsyncAcquireFallback();
+    }
+    queuedDesc.drawableTokenRequired = static_cast<bool>(queuedDesc.drawableToken);
+  } else if (queuedDesc.presenter && acquirePresentOnSubmit()) {
+    {
+      std::unique_lock lock(mutex_);
+      queueLifecycle_.commitCurrentChunk(
+          lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+            markSlotResourcesUnlocked(pool_, slot);
+          });
+    }
+    queuedDesc.drawableToken =
+        queuedDesc.presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
+    queuedDesc.drawableTokenRequired = true;
+  }
+
   std::unique_lock lock(mutex_);
-  const core::Handle sourceHandle = desc.sourceSurface ? desc.sourceSurface : currentBackBuffer_;
+  const core::Handle sourceHandle = queuedDesc.sourceSurface ? queuedDesc.sourceSurface : currentBackBuffer_;
   if (splitPresentChunk()) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
           markSlotResourcesUnlocked(pool_, slot);
         });
     ensureWritingSlotUnlocked(*this, lock);
-    queueLifecycle_.appendPresentCommand(desc, sourceHandle);
+    queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
           markSlotResourcesUnlocked(pool_, slot);
@@ -464,7 +525,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     return lastCommittedSeqId_;
   }
   queueLifecycle_.presentAndCommit(
-      lock, kMaxQueuedChunks, desc, sourceHandle,
+      lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
       [this](const core::ChunkSlot& slot) {
         markSlotResourcesUnlocked(pool_, slot);
       });
@@ -481,16 +542,24 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
   }
   const std::uint64_t targetSeqId = presentSeqId - maxFrameLatency;
   std::unique_lock lock(mutex_);
-  const bool waitForCompletion = presentBoundaryWaitsForCompletion();
+  const bool waitForPresentCompletion = presentBoundaryWaitsForPresentCompletion();
+  const bool waitForCompletion = !waitForPresentCompletion && presentBoundaryWaitsForCompletion();
   const auto reachedBoundary = [&] {
-    return waitForCompletion ? completedSeqId_ >= targetSeqId
-                             : presentDequeuedSeqId_ >= targetSeqId;
+    if (waitForPresentCompletion) {
+      return presentCompletedSeqId_ >= targetSeqId;
+    }
+    if (waitForCompletion) {
+      return completedSeqId_ >= targetSeqId;
+    }
+    return presentDequeuedSeqId_ >= targetSeqId;
   };
   if (reachedBoundary()) {
     return;
   }
   const auto waitStarted = std::chrono::steady_clock::now();
-  if (waitForCompletion) {
+  if (waitForPresentCompletion) {
+    presentCompletedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
+  } else if (waitForCompletion) {
     finishCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
   } else {
     presentDequeuedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
@@ -552,12 +621,14 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .completedSeqQueue = &completedSeqQueue_,
       .inflightCount = &inflightCount_,
       .completedSeqId = &completedSeqId_,
+      .presentCompletedSeqId = &presentCompletedSeqId_,
       .lastCommittedSeqId = &lastCommittedSeqId_,
       .slots = std::span<core::ChunkSlot>(slots_.data(), slots_.size()),
       .mutex = &mutex_,
       .writeCv = &writeCv_,
       .encodeCv = &encodeCv_,
       .finishCv = &finishCv_,
+      .presentCompletedCv = &presentCompletedCv_,
       .stop = &stop_,
       .submissionDiagnostics = &submissionDiagnostics_,
       .resolveSurfaceFlags = std::move(resolveSurfaceFlags),
