@@ -3134,6 +3134,33 @@ HResult Device::clear(const ClearDesc& desc) {
   return D3D_OK;
 }
 
+HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
+  if (draws.empty()) {
+    return D3D_OK;
+  }
+  // Snapshot full state once. The per-draw fields in `base` (primType,
+  // counts, UP payloads) are placeholders — the encoder synthesizes
+  // them per-DrawParam during the loop.
+  const auto& first = draws.front();
+  DrawDesc base = snapshotDrawDesc(first.primitiveType, first.primitiveCount,
+                                   first.startVertex, first.baseVertexIndex,
+                                   first.startIndex, first.indexType);
+  DrawRunDesc run;
+  run.base = std::move(base);
+  run.draws.assign(draws.begin(), draws.end());
+  upperDevice_->submitDrawRun(std::move(run));
+  // Each draw still advances the submitted-sequence cursor — encoder
+  // emits N Metal draw calls.
+  submittedSequenceId_ += static_cast<u64>(draws.size());
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+  if (activeOcclusionQuery_) {
+    for (const auto& d : draws) {
+      activeOcclusionCount_ += d.primitiveCount;
+    }
+  }
+  return D3D_OK;
+}
+
 HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount, u32 startVertex) {
   auto desc = snapshotDrawDesc(type, primitiveCount, startVertex, 0, 0, state_.indexType);
   submitDrawInternal(desc);

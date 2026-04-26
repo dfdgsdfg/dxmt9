@@ -1401,6 +1401,13 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
                                  std::span<const u8> vertexData, std::span<const u8> indexData,
                                  IndexType indexType);
+  // Compact draw-run: snapshots BaseDrawState ONCE from current state_,
+  // packages it with the supplied DrawParam[] into a DrawRunDesc, then
+  // hands the run to upperDevice_->submitDrawRun. Used by the chunk
+  // importer when N consecutive D9C_COMMAND_RECORD_DRAW_* records
+  // carry no state delta — saves N-1 snapshotDrawDesc calls + N-1
+  // queue-side DrawDesc copies.
+  HResult drawPrimitiveRun(std::span<const DrawParam> draws);
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;

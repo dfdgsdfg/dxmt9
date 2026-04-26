@@ -28,6 +28,36 @@ bool failed(int32_t hr) {
   return hr < 0;
 }
 
+// True when a draw packet carries no state delta — every state-mutating
+// field is empty/zero. Used by the chunk importer to recognize runs of
+// consecutive draws that all reference the same baseline state, so they
+// can be coalesced into a single drawPrimitiveRun call.
+bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) {
+  return p.renderStateCount == 0 && p.textureMask == 0 &&
+         p.streamSourceMask == 0 && p.fvfValid == 0;
+}
+
+// Translate an in-chunk packet into a DrawParam for a draw run. `indexed`
+// distinguishes DrawPrimitive (stream-only) from DrawIndexedPrimitive.
+dxmt9::core::DrawParam makeRunParam(const D9CDrawPrimitivePacket& p) {
+  dxmt9::core::DrawParam dp;
+  dp.indexed = false;
+  dp.primitiveType = ptFromD3D(p.primitiveType);
+  dp.primitiveCount = p.primitiveCount;
+  dp.startVertex = p.startVertex;
+  return dp;
+}
+
+dxmt9::core::DrawParam makeRunParam(const D9CDrawIndexedPrimitivePacket& p) {
+  dxmt9::core::DrawParam dp;
+  dp.indexed = true;
+  dp.primitiveType = ptFromD3D(p.state.primitiveType);
+  dp.primitiveCount = p.primitiveCount;
+  dp.baseVertexIndex = p.baseVertex;
+  dp.startIndex = p.startIndex;
+  return dp;
+}
+
 int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
   if (packet.renderStateCount > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
     return dxmt9::core::D3DERR_INVALIDCALL;
@@ -620,6 +650,41 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       D9CCommandRecordDrawPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      // Try to coalesce into a draw run: scan ahead for consecutive
+      // DRAW_PRIMITIVE records that also have empty state deltas, build
+      // one DrawParam vector, dispatch via drawPrimitiveRun (single
+      // snapshotDrawDesc + single submitDrawRun on the queue side).
+      // Falls through to per-record path if the run is just length-1.
+      if (packetHasNoStateDelta(decoded.packet)) {
+        std::vector<dxmt9::core::DrawParam> run;
+        run.push_back(makeRunParam(decoded.packet));
+        std::uint32_t scanOff = offset + header.size;
+        std::uint32_t scanIdx = recordIndex + 1;
+        while (scanOff < chunk->recordBytes) {
+          if (chunk->recordBytes - scanOff < sizeof(D9CCommandRecordHeader)) break;
+          D9CCommandRecordHeader nextHdr{};
+          std::memcpy(&nextHdr, records + scanOff, sizeof(nextHdr));
+          if (nextHdr.type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE) break;
+          if (nextHdr.size != sizeof(D9CCommandRecordDrawPrimitive)) break;
+          if (nextHdr.size > chunk->recordBytes - scanOff) break;
+          D9CCommandRecordDrawPrimitive nextDecoded{};
+          std::memcpy(&nextDecoded, records + scanOff, sizeof(nextDecoded));
+          if (!packetHasNoStateDelta(nextDecoded.packet)) break;
+          run.push_back(makeRunParam(nextDecoded.packet));
+          scanOff += nextHdr.size;
+          ++scanIdx;
+        }
+        if (run.size() >= 2) {
+          // applyDrawPacketState would be a no-op here (delta is empty),
+          // so skip directly to drawPrimitiveRun. Bypasses N-1
+          // applyDrawPrimitivePacket / snapshotDrawDesc calls.
+          hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
+          if (failed(hr)) return hr;
+          offset = scanOff;
+          recordIndex = scanIdx;
+          continue;
+        }
+      }
       hr = applyDrawPrimitivePacket(d, decoded.packet);
       break;
     }
@@ -629,6 +694,36 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       D9CCommandRecordDrawIndexedPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      // Same coalescing as DRAW_PRIMITIVE — separate run per indexed
+      // flag because DrawParam encodes that as a static field used by
+      // the encoder to dispatch drawIndexed vs draw.
+      if (packetHasNoStateDelta(decoded.packet.state)) {
+        std::vector<dxmt9::core::DrawParam> run;
+        run.push_back(makeRunParam(decoded.packet));
+        std::uint32_t scanOff = offset + header.size;
+        std::uint32_t scanIdx = recordIndex + 1;
+        while (scanOff < chunk->recordBytes) {
+          if (chunk->recordBytes - scanOff < sizeof(D9CCommandRecordHeader)) break;
+          D9CCommandRecordHeader nextHdr{};
+          std::memcpy(&nextHdr, records + scanOff, sizeof(nextHdr));
+          if (nextHdr.type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) break;
+          if (nextHdr.size != sizeof(D9CCommandRecordDrawIndexedPrimitive)) break;
+          if (nextHdr.size > chunk->recordBytes - scanOff) break;
+          D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
+          std::memcpy(&nextDecoded, records + scanOff, sizeof(nextDecoded));
+          if (!packetHasNoStateDelta(nextDecoded.packet.state)) break;
+          run.push_back(makeRunParam(nextDecoded.packet));
+          scanOff += nextHdr.size;
+          ++scanIdx;
+        }
+        if (run.size() >= 2) {
+          hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
+          if (failed(hr)) return hr;
+          offset = scanOff;
+          recordIndex = scanIdx;
+          continue;
+        }
+      }
       hr = applyDrawIndexedPrimitivePacket(d, decoded.packet);
       break;
     }
