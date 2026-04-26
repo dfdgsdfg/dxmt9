@@ -302,6 +302,11 @@ enum {
     D9C_COMMAND_RECORD_SET_PS_CONST_F = 17,
     D9C_COMMAND_RECORD_SET_PS_CONST_I = 18,
     D9C_COMMAND_RECORD_SET_PS_CONST_B = 19,
+    /* Standalone ordering ops — recorder design's "Clear / Present /
+     * Query / Surface" branch. Currently only Clear is wired; the
+     * others still bypass the chunk via per-call dxmt9c_device_*
+     * unix-calls (follow-up). */
+    D9C_COMMAND_RECORD_CLEAR = 20,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -343,6 +348,18 @@ typedef struct D9CCommandRecordSetConst {
      * For *_CONST_I: int32[count*4]
      * For *_CONST_B: uint32[count] */
 } D9CCommandRecordSetConst;
+
+/* Standalone clear record. Variable-size: rect array (D9CRect[count])
+ * follows the fixed header at rectOffset. count==0 → full-target clear. */
+typedef struct D9CCommandRecordClear {
+    D9CCommandRecordHeader header;
+    uint32_t flags;        /* D3DCLEAR_TARGET / DEPTH / STENCIL flags */
+    uint32_t colorARGB;
+    float    z;
+    uint32_t stencil;
+    uint32_t rectCount;
+    uint32_t rectOffset;   /* byte offset into this record (after header) */
+} D9CCommandRecordClear;
 
 typedef struct D9CCommandChunk {
     uint32_t version;

@@ -2231,6 +2231,35 @@ public:
         dxmt9DeviceDebugLog("device_clear device=%p count=%u flags=0x%x color=0x%08x z=%f stencil=%u",
                             this, (unsigned)count, (unsigned)flags, (unsigned)color, z,
                             (unsigned)stencil);
+        // Per recorder design: Clear is a standalone ordering record
+        // inside the chunk — drains pending hot state + const dirty
+        // ranges first so the chunk replays in API order, then
+        // appends a CLEAR record carrying flags + color + z + stencil
+        // + the optional rect array as a tail payload.
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+
+            const std::uint32_t rectBytes = static_cast<std::uint32_t>(count) * sizeof(D9CRect);
+            D9CCommandRecordClear header{};
+            header.header.type = D9C_COMMAND_RECORD_CLEAR;
+            header.header.size = static_cast<std::uint32_t>(sizeof(header) + rectBytes);
+            header.flags = (uint32_t)flags;
+            header.colorARGB = (uint32_t)color;
+            header.z = z;
+            header.stencil = (uint32_t)stencil;
+            header.rectCount = (uint32_t)count;
+            header.rectOffset = sizeof(header);
+
+            std::vector<std::uint8_t> record(header.header.size);
+            std::memcpy(record.data(), &header, sizeof(header));
+            if (rectBytes != 0 && pRects) {
+                std::memcpy(record.data() + header.rectOffset, pRects, rectBytes);
+            }
+            return appendCommandRecord(record.data(), record.size());
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_clear(dev_, count,

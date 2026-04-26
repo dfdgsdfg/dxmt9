@@ -823,6 +823,25 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = applyDrawIndexedPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
     }
+    case D9C_COMMAND_RECORD_CLEAR: {
+      if (header.size < sizeof(D9CCommandRecordClear)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordClear cl{};
+      std::memcpy(&cl, record, sizeof(cl));
+      const std::uint64_t expectedRectBytes =
+          static_cast<std::uint64_t>(cl.rectCount) * sizeof(D9CRect);
+      if (cl.rectOffset != sizeof(cl) ||
+          header.size != sizeof(cl) + expectedRectBytes) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      const auto* rects = cl.rectCount != 0
+                              ? reinterpret_cast<const D9CRect*>(record + cl.rectOffset)
+                              : nullptr;
+      hr = dxmt9c_device_clear(d, cl.rectCount, rects, cl.flags, cl.colorARGB,
+                                cl.z, cl.stencil);
+      break;
+    }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
     case D9C_COMMAND_RECORD_SET_VS_CONST_I:
     case D9C_COMMAND_RECORD_SET_VS_CONST_B:
