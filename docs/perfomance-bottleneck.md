@@ -230,6 +230,35 @@ Effective latency cap experiment, same-load follow-up:
 | Tutorial07 | queued-token async | 15.33 | 180/180 | 180/0 | 940.930 | 1150.781 | 1112.201 | 185 | Stable present count. |
 | Tutorial07 | queued-token async + latency cap | 16.33 | 180/180 | 180/0 | 664.172 | 704.405 | 671.604 | 185 | Best opt-in combo for Tutorial07 in this window. |
 
+Present policy repeated A/B, 3 runs per app/mode:
+
+- Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --tag 20260426-present-policy-r3`
+- Output: `experiments/output/dx9-present-policy-ab/20260426-present-policy-r3/summary.md`
+
+| app | mode | pass | fps mean [min,max] | present encoded mean | fallbacks mean | boundary wait ms mean | acquire wait ms mean | token wait ms mean | command buffers mean |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| BasicHLSL | default | 3/3 | 20.78 [19.55, 22.00] | 240.0 | 0.0 | 1065.418 | 1176.668 | 0.000 | 245.0 |
+| BasicHLSL | queued-token async | 3/3 | 21.50 [20.66, 21.92] | 240.0 | 0.0 | 1009.216 | 1184.615 | 1121.129 | 245.0 |
+| BasicHLSL | queued-token async + latency cap | 3/3 | 21.73 [21.58, 21.94] | 240.0 | 0.0 | 963.009 | 1108.349 | 1042.976 | 245.0 |
+| Tutorial07 | default | 3/3 | 15.58 [13.37, 16.76] | 180.0 | 0.0 | 901.246 | 1001.165 | 0.000 | 185.0 |
+| Tutorial07 | queued-token async | 3/3 | 15.87 [14.77, 16.68] | 180.0 | 0.0 | 573.846 | 682.392 | 638.290 | 185.0 |
+| Tutorial07 | queued-token async + latency cap | 3/3 | 16.41 [16.18, 16.65] | 180.0 | 0.0 | 853.892 | 971.094 | 931.594 | 185.0 |
+
+Broader present policy A/B, 3 runs per app/mode:
+
+- Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-basichlsl --app dx-sdk-tutorial07 --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --app dxmt9-multitexture-terrain --tag 20260426-present-policy-broad-r3`
+- Output: `experiments/output/dx9-present-policy-ab/20260426-present-policy-broad-r3/summary.md`
+- Result: 54/54 runs passed. `dx-sdk-hdrformats` remains excluded from this batch because it previously looked hung and should be handled as a separate timeout/debug lane.
+
+| app | default fps | queued-token async fps | queued-token async + latency cap fps | best mode | async+cap vs default |
+|---|---:|---:|---:|---|---:|
+| BasicHLSL | 22.35 | 22.96 | 23.08 | async+cap | +3.3% |
+| Tutorial07 | 17.87 | 17.87 | 17.81 | async | -0.3% |
+| DXUTSimpleSample | 17.56 | 17.20 | 17.30 | default | -1.5% |
+| Irrlicht ManagedLights | 17.31 | 17.87 | 18.13 | async+cap | +4.7% |
+| WaterRT | 18.19 | 18.14 | 18.14 | default | -0.3% |
+| MultiTextureTerrain | 18.37 | 18.21 | 18.45 | async+cap | +0.4% |
+
 Current interpretation:
 
 - The main measured bottleneck is present pacing: `present_acquire_wait_ms` plus `present_boundary_wait_ms`.
@@ -239,11 +268,12 @@ Current interpretation:
 - Moving acquire out of the encode worker is directionally correct but not enough by itself. It must avoid command-buffer doubling, retained-drawable hoarding, fallback-to-blocking acquire, and long wait spikes.
 - Split counters now show the important distinction: `present_async_acquire_wait_ms` measures the acquire thread's `nextDrawableRetained()`, while `present_token_wait_ms` measures encode-thread waiting for that token. In queued-token mode these are nearly equal, so overlap is still weak for immediate-present samples.
 - A queue-owned present-completion token now exists as an opt-in boundary source. It is structurally cleaner, but not yet the fastest measured default.
-- The DXVK-like `BackBufferCount + 1` cap is useful only as part of a combined present policy so far. Alone it lowers worst-case waits but costs FPS; combined with queued async it is the best opt-in result in the latest Tutorial07 run.
-- The likely next tuning target is deciding whether `queued async + effective latency cap` should graduate from experiment after broader performance-suite repetition.
+- The DXVK-like `BackBufferCount + 1` cap is useful only as part of a combined present policy so far. Alone it lowers worst-case waits but costs FPS; combined with queued async it is the best opt-in result in the repeated BasicHLSL/Tutorial07 A/B.
+- The first two-app repeated A/B suggested `queued async + effective latency cap` as the strongest candidate policy, but the broader 6-app A/B weakens that conclusion: it helps BasicHLSL, Irrlicht, and slightly MultiTextureTerrain, is neutral for Tutorial07/WaterRT, and regresses DXUTSimpleSample.
+- The present policy should stay opt-in for now. The next useful step is not flipping the default; it is either app-class gating or reducing `present_token_wait_ms` so async acquire overlaps real CPU/GPU work instead of shifting the wait to a later queue point.
 
 ## Open Questions
 
-- Should `queued async + effective latency cap` be tested across the full performance suite as a candidate optional/default policy?
+- Should `queued async + effective latency cap` be gated by swapchain/present workload shape instead of becoming a global default?
 - Should the cap be applied only when async drawable tokens are enabled, given that cap-alone lowered FPS in both samples?
 - Are the SSIM deltas in BasicHLSL and Tutorial07 expected from color/present-path differences, or do they indicate remaining rendering correctness work?
