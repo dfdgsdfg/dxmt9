@@ -1632,10 +1632,59 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         chunkHandlesByKind_[kind].insert(handle);
     }
 
+    // Phase 18: walk the FULL current binding shadow and add every
+    // non-null handle to chunkHandlesByKind_. Critical invariant for
+    // safe per-draw mark suppression: chunk.handles MUST be a superset
+    // of every resource handle referenced by every record in
+    // chunk.records. The Set* fast paths only note the handle when
+    // SetX is called *this chunk* — so a prior-chunk binding that's
+    // still in effect this chunk would otherwise miss retention. Since
+    // every Set* path flushes the chunk before mutating the shadow,
+    // the shadow at flush time is exactly the set of bindings that
+    // could be referenced by any draw record in this chunk.
+    void recordCurrentlyBoundHandles() {
+        for (auto* tex : textures_) {
+            if (auto* raw = rawTex(tex); raw != nullptr) {
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                reinterpret_cast<uint64_t>(raw));
+            }
+        }
+        for (auto* vb : streamSrc_) {
+            if (auto* raw = rawVBuf(vb); raw != nullptr) {
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                reinterpret_cast<uint64_t>(raw));
+            }
+        }
+        if (auto* raw = rawIBuf(indexBuf_); raw != nullptr) {
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                            reinterpret_cast<uint64_t>(raw));
+        }
+        for (auto* surf : rtSlots_) {
+            if (auto* raw = rawSurf(surf); raw != nullptr) {
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            }
+        }
+        if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        }
+        // VS/PS/Vdecl have no pool retention table on the server side
+        // (importer's markChunkResources skips SHADER / VERTEX_DECL
+        // kinds), so emitting them here would be inert. Leaving them
+        // out keeps the wire payload tight.
+    }
+
     HRESULT flushPendingCommandChunk() {
         if (!dxmt9PeDrawChunkEnabled() || pendingCommandRecordCount_ == 0) {
             return S_OK;
         }
+        // Phase 18: ensure chunk.handles ⊇ every handle a record may
+        // reference. Without this, prior-chunk bindings still in effect
+        // this chunk are missed by bulk retention — and per-draw
+        // markDrawResources is suppressed (Phase 14) — so a Released or
+        // GC'd resource could be UAF'd by the encoder.
+        recordCurrentlyBoundHandles();
         // Serialize the deduped retention set into a packed payload the
         // server-side importer can iterate in one pass. Order isn't
         // semantically meaningful — server treats the list as an
