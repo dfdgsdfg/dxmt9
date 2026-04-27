@@ -202,6 +202,8 @@ typedef struct D9CVertexElement {
  * exceed the cap. */
 #define D9C_DRAW_PACKET_MAX_TSS 64
 #define D9C_DRAW_PACKET_MAX_SAMPLER 64
+#define D9C_DRAW_PACKET_MAX_TRANSFORMS 16
+#define D9C_DRAW_PACKET_MAX_LIGHTS 8
 
 typedef struct D9CWireHandle {
     uint32_t lo;
@@ -228,6 +230,15 @@ typedef struct D9CDrawPacketSamplerState {
     uint32_t type;
     uint32_t value;
 } D9CDrawPacketSamplerState;
+
+/* Phase 12: SetTransform delta. Each entry is a state enum + 4×4
+ * matrix = 4+64 bytes. Per-frame typically a handful (View, Projection,
+ * a few World/Texture transforms), so 16 covers normal frames. */
+typedef struct D9CDrawPacketTransform {
+    uint32_t state;
+    uint32_t reserved;
+    D9CMatrix matrix;
+} D9CDrawPacketTransform;
 
 typedef struct D9CDrawPacketStreamSource {
     D9CWireHandle buffer;
@@ -282,6 +293,16 @@ typedef struct D9CDrawPrimitivePacket {
      * 6 planes × 4 floats = 96 bytes. */
     uint32_t clipPlaneMask;
     float clipPlanes[6 * 4];
+    /* Phase 12: SetTransform — variable-count of (state, matrix). */
+    uint32_t transformCount;
+    D9CDrawPacketTransform transforms[D9C_DRAW_PACKET_MAX_TRANSFORMS];
+    /* Phase 12: SetLight + LightEnable. lightSlotMask bit i ⇒ lights[i]
+     * is a fresh D9CLight for index i; lightEnableValidMask bit i ⇒
+     * lightEnableMask bit i carries the new enabled state for index i. */
+    uint32_t lightSlotMask;
+    D9CLight lights[D9C_DRAW_PACKET_MAX_LIGHTS];
+    uint32_t lightEnableValidMask;
+    uint32_t lightEnableMask;
     uint32_t primitiveType;
     uint32_t startVertex;
     uint32_t primitiveCount;

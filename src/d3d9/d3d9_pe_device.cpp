@@ -1229,6 +1229,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     D9CMaterial materialShadow_{};
     DWORD pendingClipPlaneMask_ = 0;
     float clipPlaneShadow_[6 * 4]{};
+    // Phase 12: Transform delta — keyed by D3DTRANSFORMSTATETYPE
+    // (variable enum range, so map keyed instead of fixed array).
+    std::unordered_map<uint32_t, D9CMatrix> pendingTransforms_{};
+    std::unordered_map<uint32_t, D9CMatrix> transformShadow_{};
+    // Phase 12: Light delta — bit i ⇒ lightShadow_[i] is fresh.
+    DWORD pendingLightSlotMask_ = 0;
+    D9CLight lightShadow_[D9C_DRAW_PACKET_MAX_LIGHTS]{};
+    // Phase 12: LightEnable delta. ValidMask = which slots have a fresh
+    // enable value this packet; pendingLightEnableMask_ holds the enable
+    // bit per slot. lightEnableShadow_ tracks the most recently set value
+    // per slot (for identity-no-op detection).
+    DWORD pendingLightEnableValidMask_ = 0;
+    DWORD pendingLightEnableMask_ = 0;
+    DWORD lightEnableShadow_ = 0;
     std::vector<std::uint8_t> pendingCommandBytes_{};
     UINT pendingCommandRecordCount_ = 0;
 
@@ -1301,7 +1315,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                pendingIb_ || pendingRtMask_ != 0 || pendingDs_ ||
                pendingViewport_ || pendingScissor_ ||
                !pendingTss_.empty() || !pendingSamplerStates_.empty() ||
-               pendingMaterial_ || pendingClipPlaneMask_ != 0;
+               pendingMaterial_ || pendingClipPlaneMask_ != 0 ||
+               !pendingTransforms_.empty() ||
+               pendingLightSlotMask_ != 0 ||
+               pendingLightEnableValidMask_ != 0;
     }
 
     void clearPendingHotState() {
@@ -1321,6 +1338,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         pendingSamplerStates_.clear();
         pendingMaterial_ = false;
         pendingClipPlaneMask_ = 0;
+        pendingTransforms_.clear();
+        pendingLightSlotMask_ = 0;
+        pendingLightEnableValidMask_ = 0;
+        pendingLightEnableMask_ = 0;
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
@@ -1432,6 +1453,33 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         packet.material = materialShadow_;
         packet.clipPlaneMask = pendingClipPlaneMask_;
         std::memcpy(packet.clipPlanes, clipPlaneShadow_, sizeof(packet.clipPlanes));
+        // Phase 12: Transform delta — drain pending map (per-frame typically
+        // a handful: View, Projection, a few World/Texture transforms).
+        // Cap check: > MAX_TRANSFORMS forces chunk seal upstream.
+        if (pendingTransforms_.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+            return false;
+        }
+        packet.transformCount = static_cast<uint32_t>(pendingTransforms_.size());
+        uint32_t txIdx = 0;
+        for (const auto& [state, matrix] : pendingTransforms_) {
+            packet.transforms[txIdx].state = state;
+            packet.transforms[txIdx].reserved = 0;
+            packet.transforms[txIdx].matrix = matrix;
+            ++txIdx;
+        }
+        // Phase 12: Light + LightEnable deltas. Light slot mask carries
+        // the per-slot full D9CLight payload (set bit ⇒ lights[slot] is
+        // semantically meaningful). LightEnable delta is two parallel
+        // masks: ValidMask says "this slot has a fresh enable" and
+        // LightEnableMask carries the new value.
+        packet.lightSlotMask = pendingLightSlotMask_;
+        for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
+            if ((pendingLightSlotMask_ & (1u << slot)) != 0) {
+                packet.lights[slot] = lightShadow_[slot];
+            }
+        }
+        packet.lightEnableValidMask = pendingLightEnableValidMask_;
+        packet.lightEnableMask = pendingLightEnableMask_;
         packet.primitiveType = static_cast<uint32_t>(type);
         packet.startVertex = startVertex;
         packet.primitiveCount = count;
@@ -2511,10 +2559,31 @@ public:
             pM->m[1][0], pM->m[1][1], pM->m[1][2], pM->m[1][3],
             pM->m[2][0], pM->m[2][1], pM->m[2][2], pM->m[2][3],
             pM->m[3][0], pM->m[3][1], pM->m[3][2], pM->m[3][3]);
-        // Per recorder design: Set* state setters are PE-shadow-only and
-        // belong in the next DrawRecord's snapshot, not as standalone
-        // backend records. DrawRecord doesn't yet carry transforms, so
-        // fall back to legacy unix-call until that extension lands.
+        // Phase 12: PE-shadow-only when chunk recorder is active. Pending
+        // transforms ride on the next draw packet's transforms[] array;
+        // server-side applyDrawPacketState dispatches set_transform per
+        // entry before the draw runs.
+        const D9CMatrix& wireM = *reinterpret_cast<const D9CMatrix*>(pM);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const auto shadowIt = transformShadow_.find((uint32_t)state);
+            const bool shadowMatches = shadowIt != transformShadow_.end() &&
+                std::memcmp(&shadowIt->second, &wireM, sizeof(D9CMatrix)) == 0;
+            const bool alreadyPending =
+                pendingTransforms_.find((uint32_t)state) != pendingTransforms_.end();
+            if (!alreadyPending && shadowMatches) {
+                return S_OK;            // identity no-op
+            }
+            // Cap: seal the chunk and start fresh if we'd overflow the
+            // packet's transforms[] array (16 entries).
+            if (!alreadyPending &&
+                pendingTransforms_.size() >= D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+                const HRESULT chunkHr = flushPendingCommandChunk();
+                if (FAILED(chunkHr)) return chunkHr;
+            }
+            pendingTransforms_[(uint32_t)state] = wireM;
+            transformShadow_[(uint32_t)state] = wireM;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         const HRESULT hr = hr32(dxmt9c_device_set_transform(dev_, (uint32_t)state,
@@ -2657,7 +2726,22 @@ public:
         cl.attenuation1 = pL->Attenuation1;
         cl.attenuation2 = pL->Attenuation2;
         cl.theta = pL->Theta; cl.phi = pL->Phi;
-        // Set* setter — PE-shadow-only per recorder design.
+        // Phase 12: PE-shadow-only when chunk recorder is active. Up to
+        // D9C_DRAW_PACKET_MAX_LIGHTS (8) light slots ride on a single
+        // packet via lightSlotMask + lights[8]. Out-of-range idx falls
+        // back to legacy unix-call (rare, and the backend may also
+        // refuse).
+        if (dxmt9PeDrawChunkEnabled() && idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
+            if ((pendingLightSlotMask_ & (1u << idx)) == 0 &&
+                std::memcmp(&lightShadow_[idx], &cl, sizeof(D9CLight)) == 0) {
+                return S_OK;            // identity no-op
+            }
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            lightShadow_[idx] = cl;
+            pendingLightSlotMask_ |= 1u << idx;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
@@ -2668,7 +2752,27 @@ public:
     }
     HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) override {
         dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
-        // Set* setter — PE-shadow-only per recorder design.
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled() && idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
+            const DWORD bit = 1u << idx;
+            const bool wantEnabled = en != 0;
+            const bool shadowEnabled = (lightEnableShadow_ & bit) != 0;
+            if ((pendingLightEnableValidMask_ & bit) == 0 &&
+                wantEnabled == shadowEnabled) {
+                return S_OK;            // identity no-op
+            }
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            pendingLightEnableValidMask_ |= bit;
+            if (wantEnabled) {
+                pendingLightEnableMask_ |= bit;
+                lightEnableShadow_ |= bit;
+            } else {
+                pendingLightEnableMask_ &= ~bit;
+                lightEnableShadow_ &= ~bit;
+            }
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));

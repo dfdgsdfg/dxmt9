@@ -43,7 +43,9 @@ bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) {
          p.vdeclValid == 0 && p.rtMask == 0 && p.dsValid == 0 &&
          p.viewportValid == 0 && p.scissorValid == 0 &&
          p.tssCount == 0 && p.samplerStateCount == 0 &&
-         p.materialValid == 0 && p.clipPlaneMask == 0;
+         p.materialValid == 0 && p.clipPlaneMask == 0 &&
+         p.transformCount == 0 && p.lightSlotMask == 0 &&
+         p.lightEnableValidMask == 0;
 }
 
 // Translate an in-chunk packet into a DrawParam for a draw run. `indexed`
@@ -187,6 +189,32 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
   for (uint32_t i = 0; i < 6; ++i) {
     if ((packet.clipPlaneMask & (1u << i)) == 0) continue;
     const int32_t hr = dxmt9c_device_set_clip_plane(d, i, &packet.clipPlanes[i * 4]);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: Transform delta — packet.transforms[0..transformCount).
+  if (packet.transformCount > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  for (uint32_t i = 0; i < packet.transformCount; ++i) {
+    const auto& e = packet.transforms[i];
+    const int32_t hr = dxmt9c_device_set_transform(d, e.state, &e.matrix);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: Light delta — one dispatch per set bit in lightSlotMask.
+  for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
+    if ((packet.lightSlotMask & (1u << i)) == 0) continue;
+    const int32_t hr = dxmt9c_device_set_light(d, i, &packet.lights[i]);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: LightEnable delta. ValidMask says which slots have a fresh
+  // value; lightEnableMask carries the new enabled bit per slot.
+  for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
+    if ((packet.lightEnableValidMask & (1u << i)) == 0) continue;
+    const uint32_t enabled = (packet.lightEnableMask & (1u << i)) ? 1u : 0u;
+    const int32_t hr = dxmt9c_device_light_enable(d, i, enabled);
     if (failed(hr)) return hr;
   }
 
