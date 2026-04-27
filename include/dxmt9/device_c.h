@@ -310,6 +310,7 @@ enum {
     D9C_COMMAND_RECORD_PRESENT = 21,
     D9C_COMMAND_RECORD_STRETCH_RECT = 22,
     D9C_COMMAND_RECORD_COLOR_FILL = 23,
+    D9C_COMMAND_RECORD_UPDATE_TEXTURE = 24,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -404,6 +405,12 @@ typedef struct D9CCommandRecordColorFill {
     uint32_t hasRect;
     D9CRect  rect;
 } D9CCommandRecordColorFill;
+
+typedef struct D9CCommandRecordUpdateTexture {
+    D9CCommandRecordHeader header;
+    uint64_t srcWire;        /* SERVER-SIDE D9CTexture* cast */
+    uint64_t dstWire;        /* SERVER-SIDE D9CTexture* cast */
+} D9CCommandRecordUpdateTexture;
 
 typedef struct D9CCommandChunk {
     uint32_t version;

@@ -880,6 +880,17 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = dxmt9c_device_color_fill(d, surf, rect, cf.colorARGB);
       break;
     }
+    case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
+      if (header.size != sizeof(D9CCommandRecordUpdateTexture)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordUpdateTexture ut{};
+      std::memcpy(&ut, record, sizeof(ut));
+      auto* srcTex = reinterpret_cast<D9CTexture*>(static_cast<uintptr_t>(ut.srcWire));
+      auto* dstTex = reinterpret_cast<D9CTexture*>(static_cast<uintptr_t>(ut.dstWire));
+      hr = dxmt9c_device_update_texture(d, srcTex, dstTex);
+      break;
+    }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
     case D9C_COMMAND_RECORD_SET_VS_CONST_I:
     case D9C_COMMAND_RECORD_SET_VS_CONST_B:

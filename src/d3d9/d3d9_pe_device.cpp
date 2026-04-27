@@ -2120,6 +2120,24 @@ public:
 
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
                                              IDirect3DBaseTexture9* dst) override {
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+            if (auto* raw = rawTex(src); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                reinterpret_cast<uint64_t>(raw));
+            if (auto* raw = rawTex(dst); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                reinterpret_cast<uint64_t>(raw));
+            D9CCommandRecordUpdateTexture record{};
+            record.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
+            record.header.size = sizeof(record);
+            record.srcWire = reinterpret_cast<uint64_t>(rawTex(src));
+            record.dstWire = reinterpret_cast<uint64_t>(rawTex(dst));
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_update_texture(dev_,
