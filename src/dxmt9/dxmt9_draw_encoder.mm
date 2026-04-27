@@ -371,15 +371,50 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
 }
 
+// Phase 13 step 2: per-draw view onto either the DrawDesc itself or a
+// caller-provided DrawParam override. Lets the Kind::DrawRun handler
+// avoid synthesizing one DrawDesc per iteration just to override 6
+// scalars + 2 byte vectors. Constructed once at encodeDraw entry; all
+// per-draw field reads inside the function go through this view.
+struct ParamView {
+  core::PrimitiveType primitiveType;
+  u32 primitiveCount;
+  u32 startVertex;
+  i32 baseVertexIndex;
+  u32 startIndex;
+  core::IndexType indexType;
+  std::span<const u8> userVertexData;
+  std::span<const u8> userIndexData;
+};
+
 void encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
                  const DrawDesc& draw,
                  u64 seqId,
                  bool skipBaseStateBind,
-                 const PreUploadedDrawData* preUploaded) {
+                 const PreUploadedDrawData* preUploaded,
+                 const core::DrawParam* paramOverride) {
   PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
+  const ParamView pv = paramOverride
+      ? ParamView{paramOverride->primitiveType,
+                  paramOverride->primitiveCount,
+                  paramOverride->startVertex,
+                  paramOverride->baseVertexIndex,
+                  paramOverride->startIndex,
+                  paramOverride->indexType,
+                  std::span<const u8>(paramOverride->userVertexData.data(),
+                                      paramOverride->userVertexData.size()),
+                  std::span<const u8>(paramOverride->userIndexData.data(),
+                                      paramOverride->userIndexData.size())}
+      : ParamView{draw.primitiveType, draw.primitiveCount,
+                  draw.startVertex, draw.baseVertexIndex,
+                  draw.startIndex, draw.indexType,
+                  std::span<const u8>(draw.userVertexData.data(),
+                                      draw.userVertexData.size()),
+                  std::span<const u8>(draw.userIndexData.data(),
+                                      draw.userIndexData.size())};
   if (debug::skipAllDraws()) {
     if (queueTraceEnabled()) {
       std::ostringstream out;
@@ -484,10 +519,10 @@ void encodeDraw(EncodeContext& ctx,
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};
-  const u32 primitiveCount = std::max<u32>(1, draw.primitiveCount);
+  const u32 primitiveCount = std::max<u32>(1, pv.primitiveCount);
   const uint64_t vertexCount =
-      static_cast<uint64_t>(std::max(1u, primitiveVertexCount(draw.primitiveType, primitiveCount)));
-  const bool indexedDraw = draw.indexBuffer || !draw.userIndexData.empty();
+      static_cast<uint64_t>(std::max(1u, primitiveVertexCount(pv.primitiveType, primitiveCount)));
+  const bool indexedDraw = draw.indexBuffer || !pv.userIndexData.empty();
 	  CommandQueue::TransientBufferSlice transientVertexBuffer;
   std::span<const u8> vertexBytes;
   WMT::Buffer vertexBuffer{};
@@ -495,20 +530,20 @@ void encodeDraw(EncodeContext& ctx,
 	  auto makeTransientBuffer = [&](const void* data, std::size_t len) {
 	    return uploadTransientBuffer(data, len, 16);
 	  };
-	  if (!draw.userVertexData.empty()) {
+	  if (!pv.userVertexData.empty()) {
 	    // Phase 5-B: prefer pre-batched UP vertex slice when the
 	    // DrawRun handler did the bulk upload; otherwise fall back
 	    // to the per-draw upload.
 	    if (preUploaded && preUploaded->vertex) {
 	      transientVertexBuffer = preUploaded->vertex;
 	    } else {
-	      transientVertexBuffer = makeTransientBuffer(draw.userVertexData.data(),
-	                                                   draw.userVertexData.size());
+	      transientVertexBuffer = makeTransientBuffer(pv.userVertexData.data(),
+	                                                   pv.userVertexData.size());
 	    }
 	    if (transientVertexBuffer) {
 	      vertexBuffer = transientVertexBuffer.buffer;
 	      vertexBufferOffset = transientVertexBuffer.offset + draw.vertexDecl.streams[0].offset;
-	      vertexBytes = draw.userVertexData;
+	      vertexBytes = pv.userVertexData;
 	    }
   } else if (draw.vertexDecl.streams[0].buffer) {
     if (auto* buffer = ctx.pool.findBuffer(draw.vertexDecl.streams[0].buffer->handle().value);
@@ -570,14 +605,14 @@ void encodeDraw(EncodeContext& ctx,
       const std::size_t streamBase = static_cast<std::size_t>(draw.vertexDecl.streams[0].offset);
       std::ostringstream trace;
       trace << "[dxmt9-encode-verts] seq=" << static_cast<unsigned long long>(seqId)
-            << " startVertex=" << draw.startVertex
-            << " baseVertex=" << draw.baseVertexIndex
+            << " startVertex=" << pv.startVertex
+            << " baseVertex=" << pv.baseVertexIndex
             << " stride=" << stride
             << " bytes=" << vertexBytes.size();
       const u32 tracedVertexCount = std::min<u32>(static_cast<u32>(vertexCount), 6u);
       for (u32 i = 0; i < tracedVertexCount; ++i) {
         const std::size_t base = streamBase +
-                            static_cast<std::size_t>(draw.startVertex + i) * stride;
+                            static_cast<std::size_t>(pv.startVertex + i) * stride;
         trace << " v" << i << "=("
               << readF32(base + *positionOffset + 0) << ","
               << readF32(base + *positionOffset + 4) << ","
@@ -606,11 +641,11 @@ void encodeDraw(EncodeContext& ctx,
     uniforms->vertexStreamStride =
         draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride;
     if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
-      vertexBufferOffset += static_cast<uint64_t>(draw.startVertex) *
+      vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
                             static_cast<uint64_t>(uniforms->vertexStreamStride);
       uniforms->vertexBaseIndex = 0;
     } else {
-      uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+      uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
     }
     if (ffLayout->preTransformed) {
       if (auto* targetSurface = ctx.pool.findSurface(draw.rts.color[0].handle.value); targetSurface) {
@@ -653,9 +688,9 @@ void encodeDraw(EncodeContext& ctx,
               << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
               << " ffLayout=1"
               << " preT=" << (ffLayout->preTransformed ? 1 : 0)
-              << " baseVertex=" << draw.baseVertexIndex
-              << " startIndex=" << draw.startIndex
-              << " primCount=" << draw.primitiveCount
+              << " baseVertex=" << pv.baseVertexIndex
+              << " startIndex=" << pv.startIndex
+              << " primCount=" << pv.primitiveCount
               << " stride=" << uniforms->vertexStreamStride
               << " viewport=(" << uniforms->viewportOrigin[0] << "," << uniforms->viewportOrigin[1]
               << " " << uniforms->viewportSize[0] << "x" << uniforms->viewportSize[1] << ")"
@@ -734,7 +769,7 @@ void encodeDraw(EncodeContext& ctx,
         const u32 tracedVertexCount = std::min<u32>(static_cast<u32>(vertexCount), 24u);
         for (u32 i = 0; i < tracedVertexCount; ++i) {
           const std::size_t base = static_cast<std::size_t>(draw.vertexDecl.streams[0].offset) +
-                              static_cast<std::size_t>(draw.baseVertexIndex + static_cast<int>(i)) * stride;
+                              static_cast<std::size_t>(pv.baseVertexIndex + static_cast<int>(i)) * stride;
           trace << " v" << i << "=("
                 << readF32(base + ffLayout->positionOffset + 0) << ","
                 << readF32(base + ffLayout->positionOffset + 4) << ","
@@ -762,20 +797,20 @@ void encodeDraw(EncodeContext& ctx,
           }
           if (!indexBytes.empty()) {
             trace << " idx=";
-            const std::size_t start = static_cast<std::size_t>(draw.startIndex) * indexElementSize(draw.indexType);
+            const std::size_t start = static_cast<std::size_t>(pv.startIndex) * indexElementSize(pv.indexType);
             const u32 tracedIndexCount =
                 std::min<u32>(primitiveCount * 3u, 36u);
             for (u32 i = 0; i < tracedIndexCount; ++i) {
               if (i) {
                 trace << ",";
               }
-              if (draw.indexType == IndexType::UInt16 &&
+              if (pv.indexType == IndexType::UInt16 &&
                   start + static_cast<std::size_t>(i + 1) * sizeof(u16) <= indexBytes.size()) {
                 u16 index = 0;
                 std::memcpy(&index, indexBytes.data() + start + static_cast<std::size_t>(i) * sizeof(u16),
                             sizeof(u16));
                 trace << index;
-              } else if (draw.indexType == IndexType::UInt32 &&
+              } else if (pv.indexType == IndexType::UInt32 &&
                          start + static_cast<std::size_t>(i + 1) * sizeof(u32) <= indexBytes.size()) {
                 u32 index = 0;
                 std::memcpy(&index, indexBytes.data() + start + static_cast<std::size_t>(i) * sizeof(u32),
@@ -790,14 +825,14 @@ void encodeDraw(EncodeContext& ctx,
             for (u32 i = 0; i < tracedRefs; ++i) {
               u32 vertexIndex = 0;
               bool haveIndex = false;
-              if (draw.indexType == IndexType::UInt16 &&
+              if (pv.indexType == IndexType::UInt16 &&
                   start + static_cast<std::size_t>(i + 1) * sizeof(u16) <= indexBytes.size()) {
                 u16 index = 0;
                 std::memcpy(&index, indexBytes.data() + start + static_cast<std::size_t>(i) * sizeof(u16),
                             sizeof(u16));
                 vertexIndex = static_cast<u32>(index);
                 haveIndex = true;
-              } else if (draw.indexType == IndexType::UInt32 &&
+              } else if (pv.indexType == IndexType::UInt32 &&
                          start + static_cast<std::size_t>(i + 1) * sizeof(u32) <= indexBytes.size()) {
                 std::memcpy(&vertexIndex, indexBytes.data() + start + static_cast<std::size_t>(i) * sizeof(u32),
                             sizeof(u32));
@@ -807,7 +842,7 @@ void encodeDraw(EncodeContext& ctx,
                 break;
               }
               const std::size_t refBase = static_cast<std::size_t>(draw.vertexDecl.streams[0].offset) +
-                                     static_cast<std::size_t>(draw.baseVertexIndex + static_cast<int>(vertexIndex)) *
+                                     static_cast<std::size_t>(pv.baseVertexIndex + static_cast<int>(vertexIndex)) *
                                          stride;
               trace << " r" << i << "#" << vertexIndex << "=("
                     << readF32(refBase + ffLayout->positionOffset + 0) << ","
@@ -851,9 +886,9 @@ void encodeDraw(EncodeContext& ctx,
       trace << "[dxmt9-ffp] seq=" << static_cast<unsigned long long>(seqId)
             << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
             << " ffLayout=" << (ffLayout ? 1 : 0)
-            << " baseVertex=" << draw.baseVertexIndex
-            << " startIndex=" << draw.startIndex
-            << " primCount=" << draw.primitiveCount
+            << " baseVertex=" << pv.baseVertexIndex
+            << " startIndex=" << pv.startIndex
+            << " primCount=" << pv.primitiveCount
             << " stride="
             << (ffLayout ? (draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride)
                          : computeVertexDeclStride(draw))
@@ -874,11 +909,11 @@ void encodeDraw(EncodeContext& ctx,
         ffLayout ? (draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride)
                  : computeVertexDeclStride(draw);
     if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
-      vertexBufferOffset += static_cast<uint64_t>(draw.startVertex) *
+      vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
                             static_cast<uint64_t>(uniforms->vertexStreamStride);
       uniforms->vertexBaseIndex = 0;
     } else {
-      uniforms->vertexBaseIndex = indexedDraw ? draw.baseVertexIndex : static_cast<i32>(draw.startVertex);
+      uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
     }
 	    if (!uploadUniforms()) {
 	      return;
@@ -919,7 +954,7 @@ void encodeDraw(EncodeContext& ctx,
       }
     }
   }
-  const auto primitiveType = toPrimitiveType(draw.primitiveType);
+  const auto primitiveType = toPrimitiveType(pv.primitiveType);
   bool expandedIndexedDraw = false;
   if (traceEncode) {
     std::ostringstream out;
@@ -929,8 +964,8 @@ void encodeDraw(EncodeContext& ctx,
         << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
         << " ffLayout=" << (ffLayout ? 1 : 0)
         << " indexed=" << (indexedDraw ? 1 : 0)
-        << " primType=" << static_cast<unsigned>(draw.primitiveType)
-        << " primCount=" << draw.primitiveCount
+        << " primType=" << static_cast<unsigned>(pv.primitiveType)
+        << " primCount=" << pv.primitiveCount
         << " vertexCount=" << static_cast<unsigned long long>(vertexCount)
         << " vertexStreamStride=" << uniforms->vertexStreamStride
         << " vertexBufferOffset=" << vertexBufferOffset
@@ -950,8 +985,8 @@ void encodeDraw(EncodeContext& ctx,
   }
   if (indexedDraw) {
     std::span<const u8> indexBytes;
-    if (!draw.userIndexData.empty()) {
-      indexBytes = draw.userIndexData;
+    if (!pv.userIndexData.empty()) {
+      indexBytes = pv.userIndexData;
     } else {
       auto* indexRecord = ctx.pool.findBuffer(draw.indexBuffer.value);
       if (indexRecord && !indexRecord->shadow.empty()) {
@@ -965,7 +1000,7 @@ void encodeDraw(EncodeContext& ctx,
                                                                                        : ffLayout->stride)
                                                        : computeVertexDeclStride(draw));
     const std::size_t streamBase = static_cast<std::size_t>(draw.vertexDecl.streams[0].offset);
-    const std::size_t firstIndexByte = static_cast<std::size_t>(draw.startIndex) * indexElementSize(draw.indexType);
+    const std::size_t firstIndexByte = static_cast<std::size_t>(pv.startIndex) * indexElementSize(pv.indexType);
     if (debug::forceExpandIndexed()) {
       std::ostringstream out;
       out << "[dxmt9-expanded-check] seq=" << static_cast<unsigned long long>(seqId)
@@ -974,23 +1009,23 @@ void encodeDraw(EncodeContext& ctx,
           << " vertexBytes=" << vertexBytes.size()
           << " indexBytes=" << indexBytes.size()
           << " stride=" << stride
-          << " startIndex=" << draw.startIndex
-          << " baseVertex=" << draw.baseVertexIndex;
+          << " startIndex=" << pv.startIndex
+          << " baseVertex=" << pv.baseVertexIndex;
       emitQueueTraceLine(out.str());
     }
     if (!vertexBytes.empty() && !indexBytes.empty() && stride != 0) {
       std::vector<u8> expandedVertices(static_cast<std::size_t>(vertexCount) * stride, 0);
       for (uint64_t i = 0; i < vertexCount; ++i) {
-        i32 vertexIndex = draw.baseVertexIndex;
+        i32 vertexIndex = pv.baseVertexIndex;
         bool haveIndex = false;
-        if (draw.indexType == IndexType::UInt16 &&
+        if (pv.indexType == IndexType::UInt16 &&
             firstIndexByte + static_cast<std::size_t>(i + 1) * sizeof(u16) <= indexBytes.size()) {
           u16 index = 0;
           std::memcpy(&index, indexBytes.data() + firstIndexByte + static_cast<std::size_t>(i) * sizeof(u16),
                       sizeof(u16));
           vertexIndex += static_cast<i32>(index);
           haveIndex = true;
-        } else if (draw.indexType == IndexType::UInt32 &&
+        } else if (pv.indexType == IndexType::UInt32 &&
                    firstIndexByte + static_cast<std::size_t>(i + 1) * sizeof(u32) <= indexBytes.size()) {
           u32 index = 0;
           std::memcpy(&index, indexBytes.data() + firstIndexByte + static_cast<std::size_t>(i) * sizeof(u32),
@@ -1066,14 +1101,14 @@ void encodeDraw(EncodeContext& ctx,
     }
 	    CommandQueue::TransientBufferSlice transientIndexBuffer;
 	    WMT::Buffer indexBuffer{};
-	    uint64_t indexBufferOffset = static_cast<uint64_t>(draw.startIndex) * indexElementSize(draw.indexType);
-	    if (!draw.userIndexData.empty()) {
+	    uint64_t indexBufferOffset = static_cast<uint64_t>(pv.startIndex) * indexElementSize(pv.indexType);
+	    if (!pv.userIndexData.empty()) {
 	      // Phase 5-B: prefer pre-batched UP index slice from DrawRun
 	      // bulk upload; fall back to per-draw upload otherwise.
 	      if (preUploaded && preUploaded->index) {
 	        transientIndexBuffer = preUploaded->index;
 	      } else {
-	        transientIndexBuffer = makeTransientBuffer(draw.userIndexData.data(), draw.userIndexData.size());
+	        transientIndexBuffer = makeTransientBuffer(pv.userIndexData.data(), pv.userIndexData.size());
 	      }
 	      if (transientIndexBuffer) {
 	        indexBuffer = transientIndexBuffer.buffer;
@@ -1092,7 +1127,7 @@ void encodeDraw(EncodeContext& ctx,
 	      }
 	    }
     if (indexBuffer) {
-      encoder.drawIndexedPrimitives(primitiveType, toIndexType(draw.indexType),
+      encoder.drawIndexedPrimitives(primitiveType, toIndexType(pv.indexType),
                                     (uint64_t)vertexCount, indexBuffer, indexBufferOffset,
                                     1, 0, 0);
       return;
@@ -1284,40 +1319,26 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
         }
 
-        // Phase 13: hoist the heavy DrawDesc copy out of the per-iter
-        // loop. `synthetic = base` clones the std::map<u32,u32>
-        // renderStates + 16-stage texture/sampler arrays + RT/DS
-        // bindings + transform/clip-plane arrays — that's the bulk
-        // of the per-DrawDesc heap traffic, and ALL of it is
-        // base-stable across a DrawRun. Per-iter the loop now only
-        // overrides the per-draw scalar fields + the UP byte vectors.
-        // Result: 1 DrawDesc copy (with map+arrays) per run instead of N.
-        core::DrawDesc synthetic = base;
+        // Phase 13 step 2: encodeDraw now takes a DrawParam override that
+        // shadows the 8 per-draw fields (primitiveType, primitiveCount,
+        // startVertex, baseVertexIndex, startIndex, indexType,
+        // userVertexData, userIndexData). All other state is read from
+        // `base` directly. The per-iter synthetic DrawDesc — and its
+        // map<u32,u32> renderStates + 16-stage arrays + RT/DS/transform
+        // copies — is gone entirely; the loop body is now a
+        // PreUploadedDrawData stack-pod plus one encodeDraw call.
         bool baseBound = false;
         for (std::size_t i = 0; i < drawCount; ++i) {
           const auto& param = command.drawRun.draws[i];
-          synthetic.primitiveType = param.primitiveType;
-          synthetic.primitiveCount = param.primitiveCount;
-          synthetic.startVertex = param.startVertex;
-          synthetic.baseVertexIndex = param.baseVertexIndex;
-          synthetic.startIndex = param.startIndex;
-          synthetic.indexType = param.indexType;
-          // UP payload assignment — vector::assign reuses capacity
-          // when possible. assign(begin, end) instead of operator=
-          // avoids the temporary that operator= would create from
-          // const lvalue.
-          synthetic.userVertexData.assign(param.userVertexData.begin(),
-                                          param.userVertexData.end());
-          synthetic.userIndexData.assign(param.userIndexData.begin(),
-                                         param.userIndexData.end());
           PreUploadedDrawData preData{};
           if (i * 2u + 1u < upSlices.size()) {
             preData.vertex = upSlices[i * 2u];
             preData.index = upSlices[i * 2u + 1u];
           }
-          encodeDraw(ctx, commandBuffer, activeRenderEncoder, synthetic, slot.seqId,
+          encodeDraw(ctx, commandBuffer, activeRenderEncoder, base, slot.seqId,
                       /*skipBaseStateBind=*/baseBound,
-                      anyUpData ? &preData : nullptr);
+                      anyUpData ? &preData : nullptr,
+                      &param);
           baseBound = true;
         }
         commandBufferHasWork = true;
