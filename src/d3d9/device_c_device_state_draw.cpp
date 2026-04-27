@@ -1029,6 +1029,19 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = dxmt9c_device_update_texture(d, srcTex, dstTex);
       break;
     }
+    case D9C_COMMAND_RECORD_UPDATE_SURFACE: {
+      if (header.size != sizeof(D9CCommandRecordUpdateSurface)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordUpdateSurface us{};
+      std::memcpy(&us, record, sizeof(us));
+      auto* srcSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(us.srcWire));
+      auto* dstSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(us.dstWire));
+      const auto* srcRect = us.hasSrcRect ? &us.srcRect : nullptr;
+      const auto* dstPoint = us.hasDstPoint ? &us.dstPoint : nullptr;
+      hr = dxmt9c_device_update_surface(d, srcSurf, srcRect, dstSurf, dstPoint);
+      break;
+    }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
     case D9C_COMMAND_RECORD_SET_VS_CONST_I:
     case D9C_COMMAND_RECORD_SET_VS_CONST_B:

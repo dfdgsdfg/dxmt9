@@ -400,6 +400,7 @@ enum {
     D9C_COMMAND_RECORD_STRETCH_RECT = 22,
     D9C_COMMAND_RECORD_COLOR_FILL = 23,
     D9C_COMMAND_RECORD_UPDATE_TEXTURE = 24,
+    D9C_COMMAND_RECORD_UPDATE_SURFACE = 25,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -500,6 +501,20 @@ typedef struct D9CCommandRecordUpdateTexture {
     uint64_t srcWire;        /* SERVER-SIDE D9CTexture* cast */
     uint64_t dstWire;        /* SERVER-SIDE D9CTexture* cast */
 } D9CCommandRecordUpdateTexture;
+
+/* Standalone surface-to-surface region copy. dstPoint encodes only an
+ * (x, y) offset on the destination — represented as a D9CRect with
+ * left/top set and right/bottom equal (importer reads only left/top).
+ * hasSrcRect / hasDstPoint mirror StretchRect's hasX flag pattern. */
+typedef struct D9CCommandRecordUpdateSurface {
+    D9CCommandRecordHeader header;
+    uint64_t srcWire;        /* SERVER-SIDE D9CSurface* cast */
+    uint64_t dstWire;        /* SERVER-SIDE D9CSurface* cast */
+    uint32_t hasSrcRect;
+    uint32_t hasDstPoint;
+    D9CRect  srcRect;
+    D9CRect  dstPoint;
+} D9CCommandRecordUpdateSurface;
 
 typedef struct D9CCommandChunk {
     uint32_t version;

@@ -2275,6 +2275,32 @@ public:
         if (srcRect) cs = toR(*srcRect);
         if (dstPt) { cd.left = dstPt->x; cd.top = dstPt->y;
                      cd.right = dstPt->x; cd.bottom = dstPt->y; }
+        // Phase 15: chunk-recorder fast path — UpdateSurface is fire-and-
+        // forget (no return data the PE caller waits on), so it rides as
+        // a chunk record. Both surfaces are bulk-retained against the
+        // chunk seqId to survive until the GPU consumes the copy.
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+            if (auto* raw = rawSurf(src); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            if (auto* raw = rawSurf(dst); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            D9CCommandRecordUpdateSurface record{};
+            record.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
+            record.header.size = sizeof(record);
+            record.srcWire = reinterpret_cast<uint64_t>(rawSurf(src));
+            record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
+            record.hasSrcRect = srcRect ? 1u : 0u;
+            record.hasDstPoint = dstPt ? 1u : 0u;
+            record.srcRect = cs;
+            record.dstPoint = cd;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_update_surface(dev_,
