@@ -687,8 +687,18 @@ void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
   currentBackBuffer_ = desc.rts.color[0].handle;
-  pool_.markDrawResources(desc, seqIdForMark(*this, 0));
+  // Phase 14: chunk-import path already pinned every resource via
+  // markChunkResources before iterating records — skip the redundant
+  // per-draw walk. Legacy non-chunk path keeps the per-draw mark.
+  if (!skipDrawResourceMarking_) {
+    pool_.markDrawResources(desc, seqIdForMark(*this, 0));
+  }
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+}
+
+void CommandQueue::setSkipDrawResourceMarking(bool skip) {
+  std::unique_lock lock(mutex_);
+  skipDrawResourceMarking_ = skip;
 }
 
 void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> entries) {
@@ -732,23 +742,16 @@ void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
   PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  // Resource marking still needs to fire per-draw because resource
-  // lifetime tracking keys off (handle, seqId) — but the heavyweight
-  // BaseDrawState is referenced from one shared base. Build a cheap
-  // synthetic DrawDesc for marking: most fields come from base; only
-  // primitiveType / counts / UP payloads vary. This is the only
-  // O(N) DrawDesc work in the run.
-  for (const auto& param : desc.draws) {
-    core::DrawDesc syntheticForMark = desc.base;
-    syntheticForMark.primitiveType = param.primitiveType;
-    syntheticForMark.primitiveCount = param.primitiveCount;
-    syntheticForMark.startVertex = param.startVertex;
-    syntheticForMark.baseVertexIndex = param.baseVertexIndex;
-    syntheticForMark.startIndex = param.startIndex;
-    syntheticForMark.indexType = param.indexType;
-    syntheticForMark.userVertexData = param.userVertexData;
-    syntheticForMark.userIndexData = param.userIndexData;
-    pool_.markDrawResources(syntheticForMark, seqIdForMark(*this, 0));
+  // Phase 14: chunk-import path already bulk-marked all resources; the
+  // per-draw markDrawResources walk is pure CPU waste in that mode.
+  // Legacy non-chunk path still needs the per-draw walk — but since the
+  // BaseDrawState is shared, mark it once with a single synthetic that
+  // shadows just enough to walk the resource set (textures + RT + DS +
+  // VBuffers + IB are all base-stable across a run). Per-draw fields
+  // (primitiveType / counts / UP payloads) don't carry handles; they
+  // only feed the encoder, not the resource walker.
+  if (!skipDrawResourceMarking_) {
+    pool_.markDrawResources(desc.base, seqIdForMark(*this, 0));
   }
   currentBackBuffer_ = desc.base.rts.color[0].handle;
   currentSlotUnlocked(*this).commands.push_back(makeDrawRunCommand(std::move(desc)));
@@ -774,7 +777,9 @@ void CommandQueue::submitDrawBatch(std::span<const core::DrawDesc> descs) {
     ensureWritingSlotUnlocked(*this, lock);
     currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
     currentBackBuffer_ = desc.rts.color[0].handle;
-    pool_.markDrawResources(desc, seqIdForMark(*this, 0));
+    if (!skipDrawResourceMarking_) {
+      pool_.markDrawResources(desc, seqIdForMark(*this, 0));
+    }
     maybeCommitDrawChunkUnlocked(*this, pool_, lock);
   }
 }

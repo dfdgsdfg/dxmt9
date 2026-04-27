@@ -162,6 +162,9 @@ class DeviceImpl final : public Device {
   void markChunkResources(std::span<const core::ChunkHandleEntry> entries) override {
     queue_.markChunkResources(entries);
   }
+  void setSkipDrawResourceMarking(bool skip) override {
+    queue_.setSkipDrawResourceMarking(skip);
+  }
   void submitClear(const core::ClearDesc& desc) override { queue_.submitClear(desc); }
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc) override {
     queue_.submitSurfaceCopy(desc);

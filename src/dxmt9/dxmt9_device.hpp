@@ -110,6 +110,10 @@ class Device {
   // production-only concern). DeviceImpl forwards to
   // CommandQueue::markChunkResources.
   virtual void markChunkResources(std::span<const core::ChunkHandleEntry> /*entries*/) {}
+  // Phase 14: chunk importer toggles per-draw markDrawResources off
+  // around the record-iteration block so bulk markChunkResources is the
+  // sole retention path. Stub backends ignore — they have no Pool.
+  virtual void setSkipDrawResourceMarking(bool /*skip*/) {}
   // Compact draw-run ingress (BaseDrawState + N DrawParam). Default
   // expands to per-draw submitDraw so non-DeviceImpl backends keep
   // working unchanged. DeviceImpl overrides to forward straight to

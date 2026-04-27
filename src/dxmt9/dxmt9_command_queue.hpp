@@ -132,6 +132,17 @@ class CommandQueue {
   // N×per-record markDrawResources walks once per-record marking is
   // suppressed for chunk-mode draws.
   void markChunkResources(std::span<const core::ChunkHandleEntry> entries);
+
+  // Phase 14: chunk importer toggles this around a chunk's record-iter
+  // block. While true, submit{Draw,DrawBatch,DrawRun} skip per-draw
+  // pool_.markDrawResources because chunk.handles[] bulk retention
+  // (markChunkResources) has already pinned every resource the chunk
+  // touches against the same chunk seqId. Without this guard, every
+  // chunk-mode draw double-marks the same (handle, seqId) pair —
+  // correct but pure CPU waste (lastUsedSeqId compare always returns
+  // the existing value). Default false → legacy non-chunk paths
+  // (DXMT9_PE_DRAW_CHUNK off) keep per-draw marking.
+  void setSkipDrawResourceMarking(bool skip);
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
   void submitStretchRect(const core::StretchRectDesc& desc);
@@ -238,6 +249,8 @@ class CommandQueue {
   // Discard load action is safe.
   core::Handle currentBackBuffer_{};
   bool backBufferDiscardAfterPresent_ = false;
+  // Phase 14: see setSkipDrawResourceMarking() doc.
+  bool skipDrawResourceMarking_ = false;
 
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
   core::metalhud::SubmissionDiagnosticsController submissionDiagnostics_{};

@@ -821,6 +821,28 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     }
   }
 
+  // Phase 14: bulk markChunkResources has already pinned every resource
+  // in this chunk against its seqId. Suppress the per-draw
+  // markDrawResources walk inside submit{Draw,DrawBatch,DrawRun} for
+  // the duration of this record-iter block — RAII guard ensures the
+  // flag is cleared even if a record returns early. The flag is only
+  // armed when chunk handles were actually present + at least one
+  // bulk-mark fired; chunks with no handles fall through to legacy
+  // per-draw marking (defensive, since the encoder still needs the
+  // resources pinned somehow).
+  struct ResetSkipDrawMarkGuard {
+    std::shared_ptr<dxmt9::Device> upper;
+    ~ResetSkipDrawMarkGuard() {
+      if (upper) upper->setSkipDrawResourceMarking(false);
+    }
+  } resetGuard{};
+  if (chunk->handleCount > 0) {
+    if (auto upper = d->dev().upperDevice()) {
+      upper->setSkipDrawResourceMarking(true);
+      resetGuard.upper = std::move(upper);
+    }
+  }
+
   std::uint32_t offset = 0;
   std::uint32_t recordIndex = 0;
   while (offset < chunk->recordBytes) {
