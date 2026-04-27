@@ -1906,6 +1906,35 @@ public:
                             dirty);
         D9CRect cs{}, cd{};
         if (src) cs = toR(*src); if (dst) cd = toR(*dst);
+        // Recorder-design Present: append a PRESENT record to the
+        // current chunk after draining hot state + const dirty ranges,
+        // then commit the chunk synchronously. The server-side
+        // importer dispatches dxmt9c_device_present after replaying
+        // every preceding draw / clear / state in the chunk — so
+        // ordering is preserved and Present serves as the natural
+        // chunk boundary. Dirty-region payload is dropped (the
+        // backend present path doesn't consume it).
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+
+            D9CCommandRecordPresent record{};
+            record.header.type = D9C_COMMAND_RECORD_PRESENT;
+            record.header.size = sizeof(record);
+            record.hwnd = (uint64_t)(uintptr_t)wnd;
+            record.flags = 0;
+            record.hasSrc = src ? 1u : 0u;
+            record.hasDst = dst ? 1u : 0u;
+            if (src) record.src = cs;
+            if (dst) record.dst = cd;
+            const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+            if (FAILED(appendHr)) return appendHr;
+            // Force-commit so Present runs at the bridge boundary even
+            // if the chunk is below the byte/record threshold.
+            return flushPendingCommandChunk();
+        }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_present(dev_,

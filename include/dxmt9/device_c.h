@@ -307,6 +307,7 @@ enum {
      * others still bypass the chunk via per-call dxmt9c_device_*
      * unix-calls (follow-up). */
     D9C_COMMAND_RECORD_CLEAR = 20,
+    D9C_COMMAND_RECORD_PRESENT = 21,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -360,6 +361,23 @@ typedef struct D9CCommandRecordClear {
     uint32_t rectCount;
     uint32_t rectOffset;   /* byte offset into this record (after header) */
 } D9CCommandRecordClear;
+
+/* Standalone present record. The PE Present(...) call drains pending
+ * state + const dirty ranges, appends this record, then commits the
+ * chunk synchronously — so the chunk's submission boundary IS the
+ * Present boundary. dirty-region payload is omitted (rarely consumed
+ * by the backend). The optional src/dst rects ride inline; hasX flags
+ * select whether the matching D9CRect is meaningful (zeroed otherwise). */
+typedef struct D9CCommandRecordPresent {
+    D9CCommandRecordHeader header;
+    uint64_t hwnd;
+    uint32_t flags;
+    uint32_t hasSrc;
+    uint32_t hasDst;
+    uint32_t reserved;
+    D9CRect  src;
+    D9CRect  dst;
+} D9CCommandRecordPresent;
 
 typedef struct D9CCommandChunk {
     uint32_t version;

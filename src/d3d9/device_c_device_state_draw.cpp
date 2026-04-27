@@ -842,6 +842,20 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
                                 cl.z, cl.stencil);
       break;
     }
+    case D9C_COMMAND_RECORD_PRESENT: {
+      if (header.size != sizeof(D9CCommandRecordPresent)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordPresent pr{};
+      std::memcpy(&pr, record, sizeof(pr));
+      const auto* srcRect = pr.hasSrc ? &pr.src : nullptr;
+      const auto* dstRect = pr.hasDst ? &pr.dst : nullptr;
+      // dirty-region payload was dropped at chunk-record time (PE
+      // doesn't ship it); pass nullptr.
+      hr = dxmt9c_device_present(d, srcRect, dstRect, pr.hwnd,
+                                  /*dirtyRegion=*/nullptr, pr.flags);
+      break;
+    }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
     case D9C_COMMAND_RECORD_SET_VS_CONST_I:
     case D9C_COMMAND_RECORD_SET_VS_CONST_B:
