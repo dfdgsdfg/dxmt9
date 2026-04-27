@@ -239,6 +239,12 @@ typedef struct D9CDrawPrimitivePacket {
     D9CWireHandle rtHandles[D9C_DRAW_PACKET_MAX_RENDER_TARGETS];
     uint32_t dsValid;
     D9CWireHandle dsHandle;
+    /* Phase 12: viewport / scissor deltas. SetViewport / SetScissorRect
+     * become PE-shadow-only; the next packet ships the snapshot. */
+    uint32_t viewportValid;
+    D9CViewport viewport;
+    uint32_t scissorValid;
+    D9CRect    scissor;
     uint32_t primitiveType;
     uint32_t startVertex;
     uint32_t primitiveCount;

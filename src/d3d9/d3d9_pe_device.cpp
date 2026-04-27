@@ -1209,6 +1209,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool pendingDs_ = false;
     IDirect3DSurface9* rtSlots_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
+    // Phase 12: viewport / scissor shadow + pending flags.
+    bool pendingViewport_ = false;
+    bool pendingScissor_ = false;
+    D9CViewport viewportShadow_{};
+    D9CRect scissorShadow_{};
     std::vector<std::uint8_t> pendingCommandBytes_{};
     UINT pendingCommandRecordCount_ = 0;
 
@@ -1278,7 +1283,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return !pendingRenderStates_.empty() || pendingTextureMask_ != 0 ||
                pendingStreamMask_ != 0 || pendingFvf_ ||
                pendingVs_ || pendingPs_ || pendingVdecl_ ||
-               pendingIb_ || pendingRtMask_ != 0 || pendingDs_;
+               pendingIb_ || pendingRtMask_ != 0 || pendingDs_ ||
+               pendingViewport_ || pendingScissor_;
     }
 
     void clearPendingHotState() {
@@ -1292,6 +1298,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         pendingIb_ = false;
         pendingRtMask_ = 0;
         pendingDs_ = false;
+        pendingViewport_ = false;
+        pendingScissor_ = false;
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
@@ -1366,6 +1374,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         packet.dsValid = pendingDs_ ? 1u : 0u;
         packet.dsHandle = toWireHandle(rawSurf(dsSurface_));
+        packet.viewportValid = pendingViewport_ ? 1u : 0u;
+        packet.viewport = viewportShadow_;
+        packet.scissorValid = pendingScissor_ ? 1u : 0u;
+        packet.scissor = scissorShadow_;
         packet.primitiveType = static_cast<uint32_t>(type);
         packet.startVertex = startVertex;
         packet.primitiveCount = count;
@@ -2488,8 +2500,20 @@ public:
                             this, pVP->X, pVP->Y, pVP->Width, pVP->Height, pVP->MinZ, pVP->MaxZ);
         D9CViewport vp{ pVP->X, pVP->Y, pVP->Width, pVP->Height,
                         pVP->MinZ, pVP->MaxZ };
-        // Set* setter — PE-shadow-only per recorder design; falls back to
-        // legacy unix-call until DrawRecord carries the snapshot.
+        // Phase 12: PE-shadow-only when chunk recorder is active. The
+        // packet built for the next draw carries viewportValid=1 + the
+        // shadow snapshot; server-side applyDrawPacketState dispatches
+        // dxmt9c_device_set_viewport before the draw runs.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (std::memcmp(&viewportShadow_, &vp, sizeof(vp)) == 0) {
+                return S_OK;            // identity no-op
+            }
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            viewportShadow_ = vp;
+            pendingViewport_ = true;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_viewport(dev_, &vp));
@@ -2510,7 +2534,17 @@ public:
         dxmt9DeviceDebugLog("device_set_scissor_rect device=%p rect=%ld,%ld-%ld,%ld",
                             this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
         D9CRect cr = toR(*pR);
-        // Set* setter — PE-shadow-only per recorder design.
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (std::memcmp(&scissorShadow_, &cr, sizeof(cr)) == 0) {
+                return S_OK;            // identity no-op
+            }
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            scissorShadow_ = cr;
+            pendingScissor_ = true;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_scissor_rect(dev_, &cr));

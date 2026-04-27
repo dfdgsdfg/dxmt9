@@ -40,7 +40,8 @@ bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) {
   return p.renderStateCount == 0 && p.textureMask == 0 &&
          p.streamSourceMask == 0 && p.fvfValid == 0 &&
          p.vsValid == 0 && p.psValid == 0 &&
-         p.vdeclValid == 0 && p.rtMask == 0 && p.dsValid == 0;
+         p.vdeclValid == 0 && p.rtMask == 0 && p.dsValid == 0 &&
+         p.viewportValid == 0 && p.scissorValid == 0;
 }
 
 // Translate an in-chunk packet into a DrawParam for a draw run. `indexed`
@@ -143,6 +144,16 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
   if (packet.dsValid) {
     auto* ds = wireHandlePtr<D9CSurface>(packet.dsHandle);
     const int32_t hr = dxmt9c_device_set_depth_stencil(d, ds);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: viewport / scissor deltas.
+  if (packet.viewportValid) {
+    const int32_t hr = dxmt9c_device_set_viewport(d, &packet.viewport);
+    if (failed(hr)) return hr;
+  }
+  if (packet.scissorValid) {
+    const int32_t hr = dxmt9c_device_set_scissor_rect(d, &packet.scissor);
     if (failed(hr)) return hr;
   }
 
