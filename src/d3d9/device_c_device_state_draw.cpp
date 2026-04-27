@@ -38,7 +38,8 @@ bool failed(int32_t hr) {
 // can be coalesced into a single drawPrimitiveRun call.
 bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) {
   return p.renderStateCount == 0 && p.textureMask == 0 &&
-         p.streamSourceMask == 0 && p.fvfValid == 0;
+         p.streamSourceMask == 0 && p.fvfValid == 0 &&
+         p.vsValid == 0 && p.psValid == 0;
 }
 
 // Translate an in-chunk packet into a DrawParam for a draw run. `indexed`
@@ -107,6 +108,19 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
     if (failed(hr)) {
       return hr;
     }
+  }
+
+  // Phase 12: shader-handle delta dispatch. Wire handles are server-side
+  // D9CShader* casts (rawVS/rawPS); decode + call dxmt9c_device_set_*_shader.
+  if (packet.vsValid) {
+    auto* vs = wireHandlePtr<D9CShader>(packet.vsHandle);
+    const int32_t hr = dxmt9c_device_set_vertex_shader(d, vs);
+    if (failed(hr)) return hr;
+  }
+  if (packet.psValid) {
+    auto* ps = wireHandlePtr<D9CShader>(packet.psHandle);
+    const int32_t hr = dxmt9c_device_set_pixel_shader(d, ps);
+    if (failed(hr)) return hr;
   }
 
   return dxmt9::core::D3D_OK;

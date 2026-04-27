@@ -219,6 +219,14 @@ typedef struct D9CDrawPrimitivePacket {
     D9CDrawPacketStreamSource streamSources[D9C_DRAW_PACKET_MAX_STREAMS];
     uint32_t fvfValid;
     uint32_t fvf;
+    /* Phase 12: shader handles ride on the draw packet so SetVertexShader /
+     * SetPixelShader can be PE-shadow-only — no per-Set unix-call. The
+     * vsValid / psValid flags are 1 iff the shader changed since the last
+     * draw packet (delta semantics like fvfValid). */
+    uint32_t vsValid;
+    D9CWireHandle vsHandle;
+    uint32_t psValid;
+    D9CWireHandle psHandle;
     uint32_t primitiveType;
     uint32_t startVertex;
     uint32_t primitiveCount;

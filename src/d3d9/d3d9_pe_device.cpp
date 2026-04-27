@@ -1194,6 +1194,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     DWORD pendingTextureMask_ = 0;
     DWORD pendingStreamMask_ = 0;
     bool pendingFvf_ = false;
+    // Phase 12: shader-handle delta flags. PE-side SetVS/SetPS update the
+    // shadow + set the matching pending bit; the next built draw packet
+    // ships vsValid=1 / psValid=1 with vs_/ps_ snapshot, then clears.
+    bool pendingVs_ = false;
+    bool pendingPs_ = false;
     std::vector<std::uint8_t> pendingCommandBytes_{};
     UINT pendingCommandRecordCount_ = 0;
 
@@ -1259,7 +1264,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     bool hasPendingHotState() const {
         return !pendingRenderStates_.empty() || pendingTextureMask_ != 0 ||
-               pendingStreamMask_ != 0 || pendingFvf_;
+               pendingStreamMask_ != 0 || pendingFvf_ ||
+               pendingVs_ || pendingPs_;
     }
 
     void clearPendingHotState() {
@@ -1267,6 +1273,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         pendingTextureMask_ = 0;
         pendingStreamMask_ = 0;
         pendingFvf_ = false;
+        pendingVs_ = false;
+        pendingPs_ = false;
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
@@ -1321,6 +1329,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
         packet.fvfValid = pendingFvf_ ? 1u : 0u;
         packet.fvf = fvf_;
+        // Phase 12: shader-handle delta. Server-side applyDrawPacketState
+        // dispatches dxmt9c_device_set_vertex_shader / set_pixel_shader
+        // when valid=1, mirroring the renderState/texture/stream pattern.
+        packet.vsValid = pendingVs_ ? 1u : 0u;
+        packet.vsHandle = toWireHandle(rawVS(vs_));
+        packet.psValid = pendingPs_ ? 1u : 0u;
+        packet.psHandle = toWireHandle(rawPS(ps_));
         packet.primitiveType = static_cast<uint32_t>(type);
         packet.startVertex = startVertex;
         packet.primitiveCount = count;
@@ -2772,6 +2787,18 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetVertexShader(IDirect3DVertexShader9* pVS) override {
         dxmt9DeviceDebugLog("device_set_vertex_shader device=%p shader=%p", this, pVS);
+        // Phase 12: PE-shadow-only when chunk recorder is active. The
+        // packet built for the next draw carries vsValid=1 + the vs_
+        // wire handle; server-side applyDrawPacketState dispatches the
+        // dxmt9c_device_set_vertex_shader call before the draw runs.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (vs_ == pVS) return S_OK;     // shadow no-op
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            setRef(vs_, pVS);
+            pendingVs_ = true;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         setRef(vs_, pVS);
@@ -2917,6 +2944,15 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) override {
         dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (ps_ == pPS) return S_OK;     // shadow no-op
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            setRef(ps_, pPS);
+            pendingPs_ = true;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         setRef(ps_, pPS);
