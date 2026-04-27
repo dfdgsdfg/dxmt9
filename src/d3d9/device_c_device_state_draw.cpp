@@ -856,6 +856,30 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
                                   /*dirtyRegion=*/nullptr, pr.flags);
       break;
     }
+    case D9C_COMMAND_RECORD_STRETCH_RECT: {
+      if (header.size != sizeof(D9CCommandRecordStretchRect)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordStretchRect sr{};
+      std::memcpy(&sr, record, sizeof(sr));
+      auto* srcSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(sr.srcWire));
+      auto* dstSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(sr.dstWire));
+      const auto* srcR = sr.hasSrcRect ? &sr.srcRect : nullptr;
+      const auto* dstR = sr.hasDstRect ? &sr.dstRect : nullptr;
+      hr = dxmt9c_device_stretch_rect(d, srcSurf, srcR, dstSurf, dstR, sr.filter);
+      break;
+    }
+    case D9C_COMMAND_RECORD_COLOR_FILL: {
+      if (header.size != sizeof(D9CCommandRecordColorFill)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordColorFill cf{};
+      std::memcpy(&cf, record, sizeof(cf));
+      auto* surf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(cf.surfaceWire));
+      const auto* rect = cf.hasRect ? &cf.rect : nullptr;
+      hr = dxmt9c_device_color_fill(d, surf, rect, cf.colorARGB);
+      break;
+    }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
     case D9C_COMMAND_RECORD_SET_VS_CONST_I:
     case D9C_COMMAND_RECORD_SET_VS_CONST_B:

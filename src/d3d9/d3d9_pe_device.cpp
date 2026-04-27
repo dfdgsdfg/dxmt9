@@ -2153,6 +2153,31 @@ public:
                             dstRect ? "<custom>" : "<full>");
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+            // Retain both surfaces against the chunk seqId so they
+            // survive until the GPU consumes the blit.
+            if (auto* raw = rawSurf(src); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            if (auto* raw = rawSurf(dst); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            D9CCommandRecordStretchRect record{};
+            record.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
+            record.header.size = sizeof(record);
+            record.srcWire = reinterpret_cast<uint64_t>(rawSurf(src));
+            record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
+            record.hasSrcRect = srcRect ? 1u : 0u;
+            record.hasDstRect = dstRect ? 1u : 0u;
+            record.filter = (uint32_t)filter;
+            if (srcRect) record.srcRect = cs;
+            if (dstRect) record.dstRect = cd;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_stretch_rect(dev_,
@@ -2167,6 +2192,23 @@ public:
         dxmt9DeviceDebugLog("device_color_fill device=%p surf=%p rect=%s color=0x%08x",
                             this, pSurf, pRect ? "<custom>" : "<full>", (unsigned)color);
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+            if (auto* raw = rawSurf(pSurf); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            D9CCommandRecordColorFill record{};
+            record.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
+            record.header.size = sizeof(record);
+            record.surfaceWire = reinterpret_cast<uint64_t>(rawSurf(pSurf));
+            record.colorARGB = (uint32_t)color;
+            record.hasRect = pRect ? 1u : 0u;
+            if (pRect) record.rect = cr;
+            return appendCommandRecord(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_color_fill(dev_, rawSurf(pSurf),

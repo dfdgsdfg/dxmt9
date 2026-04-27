@@ -308,6 +308,8 @@ enum {
      * unix-calls (follow-up). */
     D9C_COMMAND_RECORD_CLEAR = 20,
     D9C_COMMAND_RECORD_PRESENT = 21,
+    D9C_COMMAND_RECORD_STRETCH_RECT = 22,
+    D9C_COMMAND_RECORD_COLOR_FILL = 23,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -378,6 +380,30 @@ typedef struct D9CCommandRecordPresent {
     D9CRect  src;
     D9CRect  dst;
 } D9CCommandRecordPresent;
+
+/* Standalone surface ops. Surface pointers are SERVER-SIDE D9CSurface*
+ * cast to uint64 (importer decodes via wrapper->obj->handle() the same
+ * way as chunk.handles[]). Both rects ride inline; hasX flags select
+ * whether the matching D9CRect is meaningful. */
+typedef struct D9CCommandRecordStretchRect {
+    D9CCommandRecordHeader header;
+    uint64_t srcWire;
+    uint64_t dstWire;
+    uint32_t hasSrcRect;
+    uint32_t hasDstRect;
+    uint32_t filter;
+    uint32_t reserved;
+    D9CRect  srcRect;
+    D9CRect  dstRect;
+} D9CCommandRecordStretchRect;
+
+typedef struct D9CCommandRecordColorFill {
+    D9CCommandRecordHeader header;
+    uint64_t surfaceWire;
+    uint32_t colorARGB;
+    uint32_t hasRect;
+    D9CRect  rect;
+} D9CCommandRecordColorFill;
 
 typedef struct D9CCommandChunk {
     uint32_t version;
