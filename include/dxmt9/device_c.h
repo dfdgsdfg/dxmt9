@@ -193,6 +193,7 @@ typedef struct D9CVertexElement {
 #define D9C_DRAW_PACKET_MAX_RENDER_STATES 64
 #define D9C_DRAW_PACKET_MAX_TEXTURES 16
 #define D9C_DRAW_PACKET_MAX_STREAMS 16
+#define D9C_DRAW_PACKET_MAX_RENDER_TARGETS 4
 
 typedef struct D9CWireHandle {
     uint32_t lo;
@@ -227,6 +228,17 @@ typedef struct D9CDrawPrimitivePacket {
     D9CWireHandle vsHandle;
     uint32_t psValid;
     D9CWireHandle psHandle;
+    /* Phase 12: vertex declaration handle delta (alternative to fvf). */
+    uint32_t vdeclValid;
+    D9CWireHandle vdeclHandle;
+    /* Phase 12: render target / depth-stencil handle deltas.
+     * rtMask bit i set ⇒ rtHandles[i] is the new RT for slot i.
+     * dsValid==1 ⇒ dsHandle is the new depth-stencil surface (may be 0
+     * to detach). Each ride as a server-side D9CSurface* wire pointer. */
+    uint32_t rtMask;
+    D9CWireHandle rtHandles[D9C_DRAW_PACKET_MAX_RENDER_TARGETS];
+    uint32_t dsValid;
+    D9CWireHandle dsHandle;
     uint32_t primitiveType;
     uint32_t startVertex;
     uint32_t primitiveCount;
@@ -239,6 +251,11 @@ typedef struct D9CDrawIndexedPrimitivePacket {
     uint32_t numVertices;
     uint32_t startIndex;
     uint32_t primitiveCount;
+    /* Phase 12: index buffer handle delta. ibValid==1 ⇒ ibHandle is the
+     * new index buffer (D9CBuffer* wire); applied via
+     * dxmt9c_device_set_indices before drawIndexedPrimitive. */
+    uint32_t ibValid;
+    D9CWireHandle ibHandle;
 } D9CDrawIndexedPrimitivePacket;
 
 typedef struct D9CDrawPrimitiveUPPacket {

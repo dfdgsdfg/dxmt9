@@ -1199,6 +1199,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // ships vsValid=1 / psValid=1 with vs_/ps_ snapshot, then clears.
     bool pendingVs_ = false;
     bool pendingPs_ = false;
+    // Phase 12: vertex-decl handle delta (alternative to fvf).
+    bool pendingVdecl_ = false;
+    // Phase 12: index buffer handle delta (rides on indexed packets).
+    bool pendingIb_ = false;
+    // Phase 12: render-target / depth-stencil deltas. RT mask covers up to
+    // 4 slots; rt[0] storage is rt0_ (legacy), rt[1..3] in rtSlots_.
+    DWORD pendingRtMask_ = 0;
+    bool pendingDs_ = false;
+    IDirect3DSurface9* rtSlots_[4]{};
+    IDirect3DSurface9* dsSurface_ = nullptr;
     std::vector<std::uint8_t> pendingCommandBytes_{};
     UINT pendingCommandRecordCount_ = 0;
 
@@ -1249,6 +1259,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         for (auto& s : streamSrc_)  setRef(s, (IDirect3DVertexBuffer9*)nullptr);
         setRef(indexBuf_, (IDirect3DIndexBuffer9*)nullptr);
         setRef(vdecl_, (IDirect3DVertexDeclaration9*)nullptr);
+        for (auto& rt : rtSlots_)   setRef(rt, (IDirect3DSurface9*)nullptr);
+        setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
     }
 
     void clearPeStateTracking() {
@@ -1265,7 +1277,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool hasPendingHotState() const {
         return !pendingRenderStates_.empty() || pendingTextureMask_ != 0 ||
                pendingStreamMask_ != 0 || pendingFvf_ ||
-               pendingVs_ || pendingPs_;
+               pendingVs_ || pendingPs_ || pendingVdecl_ ||
+               pendingIb_ || pendingRtMask_ != 0 || pendingDs_;
     }
 
     void clearPendingHotState() {
@@ -1275,6 +1288,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         pendingFvf_ = false;
         pendingVs_ = false;
         pendingPs_ = false;
+        pendingVdecl_ = false;
+        pendingIb_ = false;
+        pendingRtMask_ = 0;
+        pendingDs_ = false;
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
@@ -1336,6 +1353,19 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         packet.vsHandle = toWireHandle(rawVS(vs_));
         packet.psValid = pendingPs_ ? 1u : 0u;
         packet.psHandle = toWireHandle(rawPS(ps_));
+        packet.vdeclValid = pendingVdecl_ ? 1u : 0u;
+        packet.vdeclHandle = toWireHandle(rawVD(vdecl_));
+        // RT delta — emit handle for every set bit. Slot 0 is rt0_ if
+        // ever populated; slots 1..3 are rtSlots_[i]. The legacy SetRT
+        // path doesn't populate rt0_ separately, so always use rtSlots_.
+        packet.rtMask = pendingRtMask_;
+        for (DWORD slot = 0; slot < 4; ++slot) {
+            packet.rtHandles[slot] = (pendingRtMask_ & (1u << slot))
+                                          ? toWireHandle(rawSurf(rtSlots_[slot]))
+                                          : D9CWireHandle{};
+        }
+        packet.dsValid = pendingDs_ ? 1u : 0u;
+        packet.dsHandle = toWireHandle(rawSurf(dsSurface_));
         packet.primitiveType = static_cast<uint32_t>(type);
         packet.startVertex = startVertex;
         packet.primitiveCount = count;
@@ -1475,6 +1505,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         record.packet.numVertices = numVertices;
         record.packet.startIndex = startIndex;
         record.packet.primitiveCount = count;
+        // Phase 12: index buffer delta. Server applies before
+        // dxmt9c_device_draw_indexed_primitive.
+        record.packet.ibValid = pendingIb_ ? 1u : 0u;
+        record.packet.ibHandle = toWireHandle(rawIBuf(indexBuf_));
+        pendingIb_ = false;
         return appendCommandRecord(&record, sizeof(record));
     }
 
@@ -2272,6 +2307,20 @@ public:
                                                IDirect3DSurface9* pSurf) override {
         dxmt9DeviceDebugLog("device_set_render_target device=%p idx=%u surf=%p",
                             this, (unsigned)idx, pSurf);
+        if (idx >= 4) return D3DERR_INVALIDCALL;
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (rtSlots_[idx] == pSurf) return S_OK;     // shadow no-op
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            setRef(rtSlots_[idx], pSurf);
+            pendingRtMask_ |= 1u << idx;
+            if (auto* raw = rawSurf(pSurf); raw != nullptr) {
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            }
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         if (auto* raw = rawSurf(pSurf); raw != nullptr) {
@@ -2295,6 +2344,19 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) override {
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (dsSurface_ == pSurf) return S_OK;     // shadow no-op
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            setRef(dsSurface_, pSurf);
+            pendingDs_ = true;
+            if (auto* raw = rawSurf(pSurf); raw != nullptr) {
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            }
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         if (auto* raw = rawSurf(pSurf); raw != nullptr) {
@@ -2763,6 +2825,15 @@ public:
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
             IDirect3DVertexDeclaration9* pVD) override {
         dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (vdecl_ == pVD) return S_OK;     // shadow no-op
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            setRef(vdecl_, pVD);
+            pendingVdecl_ = true;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         setRef(vdecl_, pVD);
@@ -2918,6 +2989,21 @@ public:
     /* ── indices ── */
     HRESULT STDMETHODCALLTYPE SetIndices(IDirect3DIndexBuffer9* pIBuf) override {
         dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
+        // Phase 12: PE-shadow-only when chunk recorder is active. The
+        // index buffer rides on D9CDrawIndexedPrimitivePacket via
+        // ibValid + ibHandle (only consumed by indexed draws).
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (indexBuf_ == pIBuf) return S_OK;     // shadow no-op
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            setRef(indexBuf_, pIBuf);
+            pendingIb_ = true;
+            if (auto* raw = rawIBuf(pIBuf); raw != nullptr) {
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                reinterpret_cast<uint64_t>(raw));
+            }
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         setRef(indexBuf_, pIBuf);

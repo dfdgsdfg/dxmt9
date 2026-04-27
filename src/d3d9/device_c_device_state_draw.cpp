@@ -39,7 +39,8 @@ bool failed(int32_t hr) {
 bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) {
   return p.renderStateCount == 0 && p.textureMask == 0 &&
          p.streamSourceMask == 0 && p.fvfValid == 0 &&
-         p.vsValid == 0 && p.psValid == 0;
+         p.vsValid == 0 && p.psValid == 0 &&
+         p.vdeclValid == 0 && p.rtMask == 0 && p.dsValid == 0;
 }
 
 // Translate an in-chunk packet into a DrawParam for a draw run. `indexed`
@@ -123,6 +124,28 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
     if (failed(hr)) return hr;
   }
 
+  // Phase 12: vertex-decl handle delta.
+  if (packet.vdeclValid) {
+    auto* vd = wireHandlePtr<D9CVertexDecl>(packet.vdeclHandle);
+    const int32_t hr = dxmt9c_device_set_vertex_declaration(d, vd);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: render-target deltas. One dispatch per set bit in rtMask.
+  for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+    if ((packet.rtMask & (1u << slot)) == 0) continue;
+    auto* rt = wireHandlePtr<D9CSurface>(packet.rtHandles[slot]);
+    const int32_t hr = dxmt9c_device_set_render_target(d, slot, rt);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: depth-stencil delta.
+  if (packet.dsValid) {
+    auto* ds = wireHandlePtr<D9CSurface>(packet.dsHandle);
+    const int32_t hr = dxmt9c_device_set_depth_stencil(d, ds);
+    if (failed(hr)) return hr;
+  }
+
   return dxmt9::core::D3D_OK;
 }
 
@@ -172,6 +195,13 @@ int32_t applyDrawIndexedPrimitivePacket(D9CDevice* d,
   const int32_t stateHr = applyDrawPacketState(d, packet.state);
   if (failed(stateHr)) {
     return stateHr;
+  }
+  // Phase 12: index buffer delta — applied AFTER applyDrawPacketState so
+  // it overrides any prior IB state, BEFORE the actual indexed draw.
+  if (packet.ibValid) {
+    auto* ib = wireHandlePtr<D9CBuffer>(packet.ibHandle);
+    const int32_t hr = dxmt9c_device_set_indices(d, ib);
+    if (failed(hr)) return hr;
   }
   const auto& state = d->dev().state();
   return d->dev().drawIndexedPrimitive(ptFromD3D(packet.state.primitiveType),
