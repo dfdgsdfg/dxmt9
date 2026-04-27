@@ -42,7 +42,8 @@ bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) {
          p.vsValid == 0 && p.psValid == 0 &&
          p.vdeclValid == 0 && p.rtMask == 0 && p.dsValid == 0 &&
          p.viewportValid == 0 && p.scissorValid == 0 &&
-         p.tssCount == 0 && p.samplerStateCount == 0;
+         p.tssCount == 0 && p.samplerStateCount == 0 &&
+         p.materialValid == 0 && p.clipPlaneMask == 0;
 }
 
 // Translate an in-chunk packet into a DrawParam for a draw run. `indexed`
@@ -171,6 +172,21 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
   for (uint32_t i = 0; i < packet.samplerStateCount; ++i) {
     const auto& e = packet.samplerStates[i];
     const int32_t hr = dxmt9c_device_set_sampler_state(d, e.sampler, e.type, e.value);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: material delta.
+  if (packet.materialValid) {
+    const int32_t hr = dxmt9c_device_set_material(d, &packet.material);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: clip-plane delta — one dispatch per set bit in
+  // clipPlaneMask. Each plane is 4 floats stored contiguously at
+  // clipPlanes[i*4..i*4+3].
+  for (uint32_t i = 0; i < 6; ++i) {
+    if ((packet.clipPlaneMask & (1u << i)) == 0) continue;
+    const int32_t hr = dxmt9c_device_set_clip_plane(d, i, &packet.clipPlanes[i * 4]);
     if (failed(hr)) return hr;
   }
 

@@ -1224,6 +1224,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // (sampler,type). Avoids re-emitting redundant Set calls.
     std::unordered_map<uint32_t, uint32_t> tssShadow_{};
     std::unordered_map<uint32_t, uint32_t> samplerStateShadow_{};
+    // Phase 12: Material + ClipPlane shadow.
+    bool pendingMaterial_ = false;
+    D9CMaterial materialShadow_{};
+    DWORD pendingClipPlaneMask_ = 0;
+    float clipPlaneShadow_[6 * 4]{};
     std::vector<std::uint8_t> pendingCommandBytes_{};
     UINT pendingCommandRecordCount_ = 0;
 
@@ -1295,7 +1300,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                pendingVs_ || pendingPs_ || pendingVdecl_ ||
                pendingIb_ || pendingRtMask_ != 0 || pendingDs_ ||
                pendingViewport_ || pendingScissor_ ||
-               !pendingTss_.empty() || !pendingSamplerStates_.empty();
+               !pendingTss_.empty() || !pendingSamplerStates_.empty() ||
+               pendingMaterial_ || pendingClipPlaneMask_ != 0;
     }
 
     void clearPendingHotState() {
@@ -1313,6 +1319,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         pendingScissor_ = false;
         pendingTss_.clear();
         pendingSamplerStates_.clear();
+        pendingMaterial_ = false;
+        pendingClipPlaneMask_ = 0;
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
@@ -1415,6 +1423,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             packet.samplerStates[ssIdx].value = value;
             ++ssIdx;
         }
+        // Phase 12: material + clip-plane deltas. Material rides as a
+        // single struct + valid flag; clip planes ride as a 6-bit mask
+        // + flat 6×4 float array (only set bits' slots are
+        // semantically meaningful, but the array is fixed-size so the
+        // packet layout stays simple).
+        packet.materialValid = pendingMaterial_ ? 1u : 0u;
+        packet.material = materialShadow_;
+        packet.clipPlaneMask = pendingClipPlaneMask_;
+        std::memcpy(packet.clipPlanes, clipPlaneShadow_, sizeof(packet.clipPlanes));
         packet.primitiveType = static_cast<uint32_t>(type);
         packet.startVertex = startVertex;
         packet.primitiveCount = count;
@@ -2599,7 +2616,17 @@ public:
     HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) override {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
-        // Set* setter — PE-shadow-only per recorder design.
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (std::memcmp(&materialShadow_, pM, sizeof(D9CMaterial)) == 0) {
+                return S_OK;            // identity no-op
+            }
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            std::memcpy(&materialShadow_, pM, sizeof(D9CMaterial));
+            pendingMaterial_ = true;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_material(dev_,
@@ -2655,7 +2682,20 @@ public:
     HRESULT STDMETHODCALLTYPE SetClipPlane(DWORD idx, const float* pPlane) override {
         dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
         if (!pPlane) return D3DERR_INVALIDCALL;
-        // Set* setter — PE-shadow-only per recorder design.
+        if (idx >= 6) return D3DERR_INVALIDCALL;
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            const std::size_t off = static_cast<std::size_t>(idx) * 4u;
+            if ((pendingClipPlaneMask_ & (1u << idx)) == 0 &&
+                std::memcmp(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4) == 0) {
+                return S_OK;            // identity no-op
+            }
+            const HRESULT chunkHr = flushPendingCommandChunk();
+            if (FAILED(chunkHr)) return chunkHr;
+            std::memcpy(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4);
+            pendingClipPlaneMask_ |= 1u << idx;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_clip_plane(dev_, idx, pPlane));

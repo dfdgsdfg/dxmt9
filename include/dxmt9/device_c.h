@@ -274,6 +274,14 @@ typedef struct D9CDrawPrimitivePacket {
     D9CDrawPacketTextureStageState tss[D9C_DRAW_PACKET_MAX_TSS];
     uint32_t samplerStateCount;
     D9CDrawPacketSamplerState samplerStates[D9C_DRAW_PACKET_MAX_SAMPLER];
+    /* Phase 12: SetMaterial — single fixed struct + valid flag. */
+    uint32_t materialValid;
+    D9CMaterial material;
+    /* Phase 12: SetClipPlane — bit i of clipPlaneMask set ⇒
+     * clipPlanes[i*4..i*4+3] is the new plane equation for index i.
+     * 6 planes × 4 floats = 96 bytes. */
+    uint32_t clipPlaneMask;
+    float clipPlanes[6 * 4];
     uint32_t primitiveType;
     uint32_t startVertex;
     uint32_t primitiveCount;
