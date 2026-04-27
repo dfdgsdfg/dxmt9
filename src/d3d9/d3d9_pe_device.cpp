@@ -1214,6 +1214,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool pendingScissor_ = false;
     D9CViewport viewportShadow_{};
     D9CRect scissorShadow_{};
+    // Phase 12: TSS + SamplerState delta buffers. Key = (stage<<16)|type
+    // for TSS, (sampler<<16)|type for SamplerState. Per-Set call updates
+    // the entry; the next built draw packet drains the map into the
+    // packet's tss[] / samplerStates[] arrays then clears.
+    std::unordered_map<uint32_t, uint32_t> pendingTss_{};
+    std::unordered_map<uint32_t, uint32_t> pendingSamplerStates_{};
+    // Identity-no-op shadow: last value sent for each (stage,type) /
+    // (sampler,type). Avoids re-emitting redundant Set calls.
+    std::unordered_map<uint32_t, uint32_t> tssShadow_{};
+    std::unordered_map<uint32_t, uint32_t> samplerStateShadow_{};
     std::vector<std::uint8_t> pendingCommandBytes_{};
     UINT pendingCommandRecordCount_ = 0;
 
@@ -1284,7 +1294,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                pendingStreamMask_ != 0 || pendingFvf_ ||
                pendingVs_ || pendingPs_ || pendingVdecl_ ||
                pendingIb_ || pendingRtMask_ != 0 || pendingDs_ ||
-               pendingViewport_ || pendingScissor_;
+               pendingViewport_ || pendingScissor_ ||
+               !pendingTss_.empty() || !pendingSamplerStates_.empty();
     }
 
     void clearPendingHotState() {
@@ -1300,6 +1311,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         pendingDs_ = false;
         pendingViewport_ = false;
         pendingScissor_ = false;
+        pendingTss_.clear();
+        pendingSamplerStates_.clear();
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
@@ -1378,6 +1391,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         packet.viewport = viewportShadow_;
         packet.scissorValid = pendingScissor_ ? 1u : 0u;
         packet.scissor = scissorShadow_;
+        // Phase 12: drain TSS / SamplerState pending maps into packet
+        // delta arrays. The cap check inside Set* already flushes the
+        // chunk if a single Set would push beyond the per-packet limit;
+        // here we just emit what's pending.
+        if (pendingTss_.size() > D9C_DRAW_PACKET_MAX_TSS ||
+            pendingSamplerStates_.size() > D9C_DRAW_PACKET_MAX_SAMPLER) {
+            return false;
+        }
+        packet.tssCount = static_cast<uint32_t>(pendingTss_.size());
+        uint32_t tssIdx = 0;
+        for (const auto& [key, value] : pendingTss_) {
+            packet.tss[tssIdx].stage = key >> 16;
+            packet.tss[tssIdx].type = key & 0xffff;
+            packet.tss[tssIdx].value = value;
+            ++tssIdx;
+        }
+        packet.samplerStateCount = static_cast<uint32_t>(pendingSamplerStates_.size());
+        uint32_t ssIdx = 0;
+        for (const auto& [key, value] : pendingSamplerStates_) {
+            packet.samplerStates[ssIdx].sampler = key >> 16;
+            packet.samplerStates[ssIdx].type = key & 0xffff;
+            packet.samplerStates[ssIdx].value = value;
+            ++ssIdx;
+        }
         packet.primitiveType = static_cast<uint32_t>(type);
         packet.startVertex = startVertex;
         packet.primitiveCount = count;
@@ -2708,7 +2745,25 @@ public:
                                                     DWORD value) override {
         dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
-        // Set* setter — PE-shadow-only per recorder design.
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            const uint32_t key = (stage << 16) | (uint32_t)type;
+            const auto shadowIt = tssShadow_.find(key);
+            if (shadowIt != tssShadow_.end() && shadowIt->second == value) {
+                return S_OK;            // identity no-op
+            }
+            // If accumulating one more would push past the per-packet
+            // cap, seal the current chunk first so the next packet can
+            // start with a fresh delta budget.
+            if (pendingTss_.find(key) == pendingTss_.end() &&
+                pendingTss_.size() >= D9C_DRAW_PACKET_MAX_TSS) {
+                const HRESULT chunkHr = flushPendingCommandChunk();
+                if (FAILED(chunkHr)) return chunkHr;
+            }
+            tssShadow_[key] = value;
+            pendingTss_[key] = value;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_texture_stage_state(dev_, stage,
@@ -2726,7 +2781,22 @@ public:
                                                DWORD value) override {
         dxmt9DeviceDebugLog("device_set_sampler_state device=%p sampler=%u type=%u value=0x%x",
                             this, (unsigned)sampler, (unsigned)type, (unsigned)value);
-        // Set* setter — PE-shadow-only per recorder design.
+        // Phase 12: PE-shadow-only when chunk recorder is active.
+        if (dxmt9PeDrawChunkEnabled()) {
+            const uint32_t key = (sampler << 16) | (uint32_t)type;
+            const auto shadowIt = samplerStateShadow_.find(key);
+            if (shadowIt != samplerStateShadow_.end() && shadowIt->second == value) {
+                return S_OK;            // identity no-op
+            }
+            if (pendingSamplerStates_.find(key) == pendingSamplerStates_.end() &&
+                pendingSamplerStates_.size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
+                const HRESULT chunkHr = flushPendingCommandChunk();
+                if (FAILED(chunkHr)) return chunkHr;
+            }
+            samplerStateShadow_[key] = value;
+            pendingSamplerStates_[key] = value;
+            return S_OK;
+        }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_sampler_state(dev_, sampler,

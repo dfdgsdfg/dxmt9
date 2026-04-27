@@ -41,7 +41,8 @@ bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) {
          p.streamSourceMask == 0 && p.fvfValid == 0 &&
          p.vsValid == 0 && p.psValid == 0 &&
          p.vdeclValid == 0 && p.rtMask == 0 && p.dsValid == 0 &&
-         p.viewportValid == 0 && p.scissorValid == 0;
+         p.viewportValid == 0 && p.scissorValid == 0 &&
+         p.tssCount == 0 && p.samplerStateCount == 0;
 }
 
 // Translate an in-chunk packet into a DrawParam for a draw run. `indexed`
@@ -154,6 +155,22 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
   }
   if (packet.scissorValid) {
     const int32_t hr = dxmt9c_device_set_scissor_rect(d, &packet.scissor);
+    if (failed(hr)) return hr;
+  }
+
+  // Phase 12: TSS / SamplerState delta dispatch.
+  if (packet.tssCount > D9C_DRAW_PACKET_MAX_TSS ||
+      packet.samplerStateCount > D9C_DRAW_PACKET_MAX_SAMPLER) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  for (uint32_t i = 0; i < packet.tssCount; ++i) {
+    const auto& e = packet.tss[i];
+    const int32_t hr = dxmt9c_device_set_texture_stage_state(d, e.stage, e.type, e.value);
+    if (failed(hr)) return hr;
+  }
+  for (uint32_t i = 0; i < packet.samplerStateCount; ++i) {
+    const auto& e = packet.samplerStates[i];
+    const int32_t hr = dxmt9c_device_set_sampler_state(d, e.sampler, e.type, e.value);
     if (failed(hr)) return hr;
   }
 

@@ -194,6 +194,14 @@ typedef struct D9CVertexElement {
 #define D9C_DRAW_PACKET_MAX_TEXTURES 16
 #define D9C_DRAW_PACKET_MAX_STREAMS 16
 #define D9C_DRAW_PACKET_MAX_RENDER_TARGETS 4
+/* Phase 12: per-draw delta caps for the per-stage / per-sampler scalar
+ * setter arrays. 64 covers the full TSS type space (~30) × stage 0 +
+ * a typical multi-stage frame's typical TSS churn; the actual upper
+ * bound (8 stages × 30 types = 240) would over-allocate the packet
+ * for the common case. PE side flushes the chunk if a Set call would
+ * exceed the cap. */
+#define D9C_DRAW_PACKET_MAX_TSS 64
+#define D9C_DRAW_PACKET_MAX_SAMPLER 64
 
 typedef struct D9CWireHandle {
     uint32_t lo;
@@ -204,6 +212,22 @@ typedef struct D9CDrawPacketRenderState {
     uint32_t state;
     uint32_t value;
 } D9CDrawPacketRenderState;
+
+/* Phase 12: per-stage TSS / per-sampler scalar deltas (mirrors the
+ * D9CDrawPacketRenderState shape). PE recorder accumulates dirty
+ * (stage,type)→value tuples; the next packet ships them and the
+ * server-side dispatcher applies via dxmt9c_device_set_*. */
+typedef struct D9CDrawPacketTextureStageState {
+    uint32_t stage;
+    uint32_t type;
+    uint32_t value;
+} D9CDrawPacketTextureStageState;
+
+typedef struct D9CDrawPacketSamplerState {
+    uint32_t sampler;
+    uint32_t type;
+    uint32_t value;
+} D9CDrawPacketSamplerState;
 
 typedef struct D9CDrawPacketStreamSource {
     D9CWireHandle buffer;
@@ -245,6 +269,11 @@ typedef struct D9CDrawPrimitivePacket {
     D9CViewport viewport;
     uint32_t scissorValid;
     D9CRect    scissor;
+    /* Phase 12: per-stage TSS + per-sampler scalar setter deltas. */
+    uint32_t tssCount;
+    D9CDrawPacketTextureStageState tss[D9C_DRAW_PACKET_MAX_TSS];
+    uint32_t samplerStateCount;
+    D9CDrawPacketSamplerState samplerStates[D9C_DRAW_PACKET_MAX_SAMPLER];
     uint32_t primitiveType;
     uint32_t startVertex;
     uint32_t primitiveCount;
