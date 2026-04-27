@@ -1284,18 +1284,32 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
         }
 
+        // Phase 13: hoist the heavy DrawDesc copy out of the per-iter
+        // loop. `synthetic = base` clones the std::map<u32,u32>
+        // renderStates + 16-stage texture/sampler arrays + RT/DS
+        // bindings + transform/clip-plane arrays — that's the bulk
+        // of the per-DrawDesc heap traffic, and ALL of it is
+        // base-stable across a DrawRun. Per-iter the loop now only
+        // overrides the per-draw scalar fields + the UP byte vectors.
+        // Result: 1 DrawDesc copy (with map+arrays) per run instead of N.
+        core::DrawDesc synthetic = base;
         bool baseBound = false;
         for (std::size_t i = 0; i < drawCount; ++i) {
           const auto& param = command.drawRun.draws[i];
-          core::DrawDesc synthetic = base;
           synthetic.primitiveType = param.primitiveType;
           synthetic.primitiveCount = param.primitiveCount;
           synthetic.startVertex = param.startVertex;
           synthetic.baseVertexIndex = param.baseVertexIndex;
           synthetic.startIndex = param.startIndex;
           synthetic.indexType = param.indexType;
-          synthetic.userVertexData = param.userVertexData;
-          synthetic.userIndexData = param.userIndexData;
+          // UP payload assignment — vector::assign reuses capacity
+          // when possible. assign(begin, end) instead of operator=
+          // avoids the temporary that operator= would create from
+          // const lvalue.
+          synthetic.userVertexData.assign(param.userVertexData.begin(),
+                                          param.userVertexData.end());
+          synthetic.userIndexData.assign(param.userIndexData.begin(),
+                                         param.userIndexData.end());
           PreUploadedDrawData preData{};
           if (i * 2u + 1u < upSlices.size()) {
             preData.vertex = upSlices[i * 2u];
