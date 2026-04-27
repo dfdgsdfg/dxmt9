@@ -39,6 +39,19 @@ static bool dxmt9PeDrawChunkEnabled() {
     return enabled;
 }
 
+// Phase 16: full-snapshot mode. When set, every draw packet emitted in
+// chunk-recorder mode carries the COMPLETE BaseDrawState snapshot (every
+// field marked valid + populated from the PE shadow), not just the
+// delta-since-last-packet. Wire size grows (typical packet jumps from
+// ~100B to ~1KB) but the importer becomes idempotent — every packet is
+// self-contained and can be replayed independently of prior packets.
+// Off (default) keeps the delta optimization that makes run-coalescing
+// detection cheap (packetHasNoStateDelta == "all valid bits zero").
+static bool dxmt9PeFullSnapshotEnabled() {
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_DRAW_FULL_SNAPSHOT");
+    return enabled;
+}
+
 static HRESULT setPrivateData(dxmt9::util::ComPrivateData& storage,
                               REFGUID guid,
                               const void* data,
@@ -1480,6 +1493,106 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         packet.lightEnableValidMask = pendingLightEnableValidMask_;
         packet.lightEnableMask = pendingLightEnableMask_;
+        // Phase 16: full-snapshot mode — override every delta field with
+        // the complete shadow snapshot. The importer applies whatever
+        // valid bits are set, so flipping every bit + populating from
+        // the existing PE shadow gives a self-contained packet without
+        // requiring any importer changes. We respect the per-array caps;
+        // a shadow that overflows (e.g. > 64 distinct render states)
+        // returns false to force the chunk to seal.
+        if (dxmt9PeFullSnapshotEnabled()) {
+            // Render states: drain the entire shadow map.
+            if (renderStateShadow_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+                return false;
+            }
+            packet.renderStateCount = 0;
+            for (const auto& [state, value] : renderStateShadow_) {
+                auto& entry = packet.renderStates[packet.renderStateCount++];
+                entry.state = state;
+                entry.value = value;
+            }
+            // Texture / RT / Stream — set mask bits for every populated slot.
+            packet.textureMask = 0;
+            for (DWORD stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
+                if (textures_[stage] != nullptr) {
+                    packet.textureMask |= 1u << stage;
+                    packet.textures[stage] = toWireHandle(rawTex(textures_[stage]));
+                }
+            }
+            packet.streamSourceMask = 0;
+            for (DWORD stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+                if (streamSrc_[stream] != nullptr) {
+                    packet.streamSourceMask |= 1u << stream;
+                    auto& s = packet.streamSources[stream];
+                    s.buffer = toWireHandle(rawVBuf(streamSrc_[stream]));
+                    s.offset = streamOff_[stream];
+                    s.stride = streamStr_[stream];
+                }
+            }
+            packet.rtMask = 0;
+            for (DWORD slot = 0; slot < 4; ++slot) {
+                if (rtSlots_[slot] != nullptr) {
+                    packet.rtMask |= 1u << slot;
+                    packet.rtHandles[slot] = toWireHandle(rawSurf(rtSlots_[slot]));
+                }
+            }
+            // Scalar valid bits: emit shadow contents unconditionally.
+            packet.fvfValid = 1u;
+            packet.fvf = fvf_;
+            packet.vsValid = 1u;
+            packet.vsHandle = toWireHandle(rawVS(vs_));
+            packet.psValid = 1u;
+            packet.psHandle = toWireHandle(rawPS(ps_));
+            packet.vdeclValid = 1u;
+            packet.vdeclHandle = toWireHandle(rawVD(vdecl_));
+            packet.dsValid = 1u;
+            packet.dsHandle = toWireHandle(rawSurf(dsSurface_));
+            packet.viewportValid = 1u;
+            packet.viewport = viewportShadow_;
+            packet.scissorValid = 1u;
+            packet.scissor = scissorShadow_;
+            // TSS / SamplerState — drain shadow maps fully.
+            if (tssShadow_.size() > D9C_DRAW_PACKET_MAX_TSS ||
+                samplerStateShadow_.size() > D9C_DRAW_PACKET_MAX_SAMPLER ||
+                transformShadow_.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+                return false;
+            }
+            packet.tssCount = 0;
+            for (const auto& [key, value] : tssShadow_) {
+                auto& e = packet.tss[packet.tssCount++];
+                e.stage = key >> 16;
+                e.type = key & 0xffff;
+                e.value = value;
+            }
+            packet.samplerStateCount = 0;
+            for (const auto& [key, value] : samplerStateShadow_) {
+                auto& e = packet.samplerStates[packet.samplerStateCount++];
+                e.sampler = key >> 16;
+                e.type = key & 0xffff;
+                e.value = value;
+            }
+            packet.materialValid = 1u;
+            packet.material = materialShadow_;
+            // Clip planes: emit every slot with mask = 0x3F (all 6).
+            packet.clipPlaneMask = 0x3Fu;
+            std::memcpy(packet.clipPlanes, clipPlaneShadow_,
+                        sizeof(packet.clipPlanes));
+            // Transforms: drain shadow.
+            packet.transformCount = 0;
+            for (const auto& [state, matrix] : transformShadow_) {
+                auto& t = packet.transforms[packet.transformCount++];
+                t.state = state;
+                t.reserved = 0;
+                t.matrix = matrix;
+            }
+            // Lights: emit every slot.
+            packet.lightSlotMask = (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
+            for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
+                packet.lights[i] = lightShadow_[i];
+            }
+            packet.lightEnableValidMask = (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
+            packet.lightEnableMask = lightEnableShadow_;
+        }
         packet.primitiveType = static_cast<uint32_t>(type);
         packet.startVertex = startVertex;
         packet.primitiveCount = count;
