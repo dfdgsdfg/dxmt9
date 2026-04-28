@@ -564,28 +564,31 @@ PE recorder bridge experiment:
 - Baseline output: `experiments/output/dxmt9-perf-many-draw-bridge-counter-smoke/result.json`.
 - Packet output: `experiments/output/dxmt9-perf-many-draw-draw-packet-queue-token-smoke/result.json`.
 - Chunk output: `experiments/output/dxmt9-perf-many-draw-draw-chunk-state-delta-smoke/result.json`.
-- `DXMT9_PE_STATE_SHADOW=1` is an opt-in PE-side shadow that defers `SetRenderState`, `SetTexture`, `SetStreamSource`, and `SetFVF`.
-- `DXMT9_PE_DRAW_CHUNK=1` is an opt-in prototype that records up to 64 `DrawPrimitive` packets on the PE side and submits them through one unix-call.
+- Generic chunk output: `experiments/output/dxmt9-perf-many-draw-generic-command-chunk-smoke/result.json`.
+- **DXMT9_PE_STATE_SHADOW** is now ON by default (Phase 22). The PE-side shadow defers every fixed-function `Set*` (RS / Texture / StreamSource / FVF / VS / PS / VDecl / RT / DS / Viewport / Scissor / TSS / Sampler / Material / ClipPlane / Transform / Light / LightEnable). Set `DXMT9_PE_STATE_SHADOW=0` only as a regression-detection escape hatch.
+- **DXMT9_PE_DRAW_CHUNK** is now ON by default (Phase 19). The recorder accumulates up to 64 records (configurable via `DXMT9_PE_CHUNK_MAX_RECORDS`) / 256 KB (`DXMT9_PE_CHUNK_MAX_BYTES`) and submits a versioned POD `D9CCommandChunk` through `commit_chunk`. Set `DXMT9_PE_DRAW_CHUNK=0` only for bisecting recorder-introduced bugs.
+- **DXMT9_PE_DRAW_FULL_SNAPSHOT=1** (Phase 16, default OFF) is a debug knob that forces every draw packet to carry the COMPLETE PE shadow as a self-contained snapshot, bypassing delta encoding. Costs ~10× wire bandwidth + disables run-coalescing; intended for stress testing and replay debugging.
 - The shadow also performs PE-side state-delta suppression for identical hot-state values, so redundant state calls do not split a pending draw chunk.
+- Per Phase 28, `Set*` never crosses PE/unix in default chunk mode. Pending hot state at a barrier (Clear / Present / surface op / readback) is encoded as a `D9C_COMMAND_RECORD_APPLY_STATE` chunk record, NOT as per-call `dxmt9c_device_set_*` unix-calls. The bridge counters for `set_render_state` / `set_texture` / `set_stream_source` / `set_fvf` should read 0 in the default path.
 
 ```mermaid
 flowchart TD
   subgraph PE["PE side: d3d9.dll command recorder prototype"]
     App[D3D9 app]
     HotState[PE hot-state shadow\nRS / texture / stream / FVF]
-    DrawPacket[DrawPrimitive packet\nstate snapshot + draw args]
-    DrawChunk[PE draw chunk\nup to 64 packets]
+    DrawPacket[Draw-family record\nstate snapshot + draw args\nindexed + UP payload copies]
+    DrawChunk[PE CommandChunk\nversion + POD records\nup to 64 records]
     Barrier[barriers\nClear / Present / Reset / non-hot state / resource / query]
   end
 
   subgraph Bridge["Wine bridge"]
     PacketCall[dxmt9c_device_draw_primitive_packet]
-    ChunkCall[dxmt9c_device_draw_primitive_chunk]
+    ChunkCall[dxmt9c_device_commit_chunk]
     UnixCall[one PE to unix transition]
   end
 
   subgraph Backend["unix side: existing dxmt9 execution"]
-    Provider[device_c provider\nreplay packet state + draw]
+    Provider[device_c provider\nvalidate/import records\nreplay state + draw]
     Core[dxmt9 core Device]
     Queue[CommandQueue chunk ring]
     Encode[encode thread]
@@ -604,21 +607,23 @@ flowchart TD
   UnixCall --> Provider --> Core --> Queue --> Encode --> Metal
 ```
 
-| mode | env | bridge total | bridge state | bridge draw | draw primitive | draw packet | draw chunk |
-|---|---|---:|---:|---:|---:|---:|---:|
-| baseline call-through | `DXMT_PERF_COUNTERS=1` | 1414 | 44 | 1280 | 1280 | 0 | 0 |
-| PE shadow + per-draw packet | `DXMT9_PE_STATE_SHADOW=1` | 1374 | 4 | 1280 | 1260 | 20 | 0 |
-| PE shadow + draw chunk | `DXMT9_PE_STATE_SHADOW=1 DXMT9_PE_DRAW_CHUNK=1` | 114 | 4 | 20 | 0 | 0 | 20 |
+| mode | env | bridge total | bridge state | bridge draw | draw primitive | draw packet | draw primitive chunk | commit chunk |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline call-through (legacy) | `DXMT9_PE_STATE_SHADOW=0 DXMT9_PE_DRAW_CHUNK=0` | 1414 | 44 | 1280 | 1280 | 0 | 0 | 0 |
+| PE shadow only (legacy chunk off) | `DXMT9_PE_DRAW_CHUNK=0` | 1374 | 4 | 1280 | 1260 | 20 | 0 | 0 |
+| Default (current production path) | _unset / both default ON_ | 114 | 4 | 20 | 0 | 0 | 0 | 20 |
+| Full snapshot stress mode | `DXMT9_PE_DRAW_FULL_SNAPSHOT=1` | 114 | 4 | 20 | 0 | 0 | 0 | 20 |
 
 Interpretation:
 
-- The bridge counter now proves the structural issue: the old path crossed PE/unix once per D3D9 draw plus hot state call.
-- PE shadow alone removes the explicit state bridge calls, but draw calls still cross one by one. This is useful for correctness staging but not enough for performance.
-- The chunk prototype matches the upstream DXMT direction more closely: 1280 app draws become 20 unix bridge calls for this 20-frame/64-draw workload.
+- The bridge counter proves the structural difference: the legacy baseline crossed PE/unix once per D3D9 draw plus once per hot state call.
+- PE shadow alone removes the explicit state bridge calls but keeps per-draw bridges. Useful for bisecting recorder-introduced bugs (DXMT9_PE_DRAW_CHUNK=0).
+- **Default production path** matches the upstream DXMT chunk model: 1280 app draws + 1280 hot state calls collapse to 20 `commit_chunk` unix bridges for this 20-frame/64-draw workload — a ~12× reduction in PE/unix transitions, with `set_render_state` / `set_texture` / `set_stream_source` / `set_fvf` bridge counters at 0.
+- Full snapshot mode shares the same bridge counter profile (still 20 commits) but emits ~10× more wire bytes per chunk and disables run-coalescing — only useful for debugging.
 - The barrier-safe prototype keeps four `SetRenderState` bridge calls because hot state is flushed before `Clear` to preserve app-visible ordering. This is intentional; draw bridge pressure is still reduced from 1280 calls to 20 chunk calls.
-- Present frame-token boundary ownership is now queue-side: `CommandQueue::submitPresent()` accepts the present packet, allocates/uses the present sequence token, and applies the boundary policy before returning.
+- Present frame-token boundary ownership is now queue-side: `CommandQueue::submitPresent()` accepts the present packet, allocates/uses the present sequence token, and applies the boundary policy before returning. The default wait target is now present-completion, not encode-dequeue.
 - State-delta hashing is currently a simple equality check over the PE hot-state shadow, not a full pipeline-state hash.
-- This is not yet a default path. Current chunk barriers cover common state/resource/query/readback ordering points, but broader game coverage still needs indexed/UP draw packetization and stateblock/shadow invalidation tests.
+- This is not yet a default path. Current chunk barriers cover common state/resource/query/readback ordering points, and the command chunk now covers `DrawPrimitive`, `DrawIndexedPrimitive`, `DrawPrimitiveUP`, and `DrawIndexedPrimitiveUP`; broader game coverage still needs stateblock/shadow invalidation and resource-lifetime hazard tests.
 - The prototype reduces PE/unix bridge pressure only. Backend `submitDraw`, encode, and transient upload work still happen per draw after the provider replays the chunk, so further speedup needs backend-side compact command records and upload coalescing.
 
 Latency experiment results:
@@ -740,7 +745,7 @@ Current interpretation:
 - The latency-4 experiment is the best safe result so far and is now the default: it keeps all presents encoded while improving fps.
 - Moving acquire out of the encode worker is directionally correct but not enough by itself. It must avoid command-buffer doubling, retained-drawable hoarding, fallback-to-blocking acquire, and long wait spikes.
 - Split counters now show the important distinction: `present_async_acquire_wait_ms` measures the acquire thread's `nextDrawableRetained()`, while `present_token_wait_ms` measures encode-thread waiting for that token. In queued-token mode these are nearly equal, so overlap is still weak for immediate-present samples.
-- A queue-owned present-completion token now exists as an opt-in boundary source. It is structurally cleaner, but not yet the fastest measured default.
+- A queue-owned present-completion token is now the default boundary source. This matches the spec/upstream ownership model; it still needs repeated performance A/B because earlier opt-in measurements were structurally cleaner but not always the fastest path.
 - The DXVK-like `BackBufferCount + 1` cap is useful only as part of a combined present policy so far. Alone it lowers worst-case waits but costs FPS; combined with queued async it is the best opt-in result in the repeated BasicHLSL/Tutorial07 A/B.
 - The first two-app repeated A/B suggested `queued async + effective latency cap` as the strongest candidate policy, but the broader A/B weakens that conclusion: it helps BasicHLSL, Irrlicht, and slightly HDRFormats/MultiTextureTerrain, is neutral for Tutorial07/WaterRT, and regresses DXUTSimpleSample.
 - Waiting for an in-flight preacquire fixes the old preacquire hit/miss shape, but it is still not a default policy: it helps DXUTSimpleSample and hurts BasicHLSL under the same run shape. It remains useful as an opt-in diagnostic for "previous-frame acquire can overlap" workloads.
