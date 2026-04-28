@@ -35,7 +35,20 @@ static bool dxmt9PeStateShadowEnabled() {
 }
 
 static bool dxmt9PeDrawChunkEnabled() {
-    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_DRAW_CHUNK");
+    // Phase 19: chunk recorder is now the DEFAULT path. The env var is
+    // a regression-detection escape hatch — set DXMT9_PE_DRAW_CHUNK=0
+    // to fall back to per-call bridge mode for bisecting issues.
+    // getenvFlag returns false for unset / empty / "0", true otherwise.
+    // We invert via DXMT9_PE_DRAW_CHUNK_DISABLE to match the explicit-
+    // opt-out semantic without breaking existing scripts that set
+    // DXMT9_PE_DRAW_CHUNK=1 (those keep working — getenvFlag still
+    // returns true).
+    static const bool enabled = []() {
+        const auto value = dxmt9::util::getenvString("DXMT9_PE_DRAW_CHUNK");
+        if (value.empty()) return true;            // default ON
+        if (value == "0") return false;            // explicit opt-out
+        return true;                               // any other value: ON
+    }();
     return enabled;
 }
 
