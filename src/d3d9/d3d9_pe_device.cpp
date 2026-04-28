@@ -105,6 +105,14 @@ static D9CRect toR(const RECT& r) {
 
 struct D3D9PeRecorderFlush {
     virtual HRESULT FlushPeRecorderForChild() = 0;
+    // Phase 20: child COM wrappers (Query, Surface, Buffer) that want to
+    // emit fire-and-forget records into the device's pending chunk go
+    // through these. Returns true from IsChunkRecorderEnabledForChild()
+    // when DXMT9_PE_DRAW_CHUNK is on; AppendRecordForChild forwards into
+    // the device's appendCommandRecord (same pre-flush + size cap
+    // handling as the device's own records).
+    virtual bool IsChunkRecorderEnabledForChild() const = 0;
+    virtual HRESULT AppendRecordForChild(const void* data, size_t bytes) = 0;
 
 protected:
     ~D3D9PeRecorderFlush() = default;
@@ -945,6 +953,19 @@ public:
     D3DQUERYTYPE STDMETHODCALLTYPE GetType()     override { return (D3DQUERYTYPE)dxmt9c_query_get_type(q_); }
     DWORD        STDMETHODCALLTYPE GetDataSize()  override { return dxmt9c_query_get_data_size(q_); }
     HRESULT STDMETHODCALLTYPE Issue(DWORD flags) override {
+        // Phase 20: Query::Issue (D3DISSUE_BEGIN / D3DISSUE_END) is
+        // fire-and-forget — server records it into the query object,
+        // PE caller doesn't wait. Chunk-record path keeps it ordered
+        // with surrounding draws within the same chunk; legacy path
+        // falls back to flush+bridge.
+        if (recorder_ && recorder_->IsChunkRecorderEnabledForChild()) {
+            D9CCommandRecordQueryIssue record{};
+            record.header.type = D9C_COMMAND_RECORD_QUERY_ISSUE;
+            record.header.size = sizeof(record);
+            record.queryWire = reinterpret_cast<uint64_t>(q_);
+            record.flags = static_cast<uint32_t>(flags);
+            return recorder_->AppendRecordForChild(&record, sizeof(record));
+        }
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_query_issue(q_, flags));
@@ -2051,6 +2072,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 public:
     HRESULT FlushPeRecorderForChild() override {
         return flushPeRecorder();
+    }
+    bool IsChunkRecorderEnabledForChild() const override {
+        return dxmt9PeDrawChunkEnabled();
+    }
+    HRESULT AppendRecordForChild(const void* data, size_t bytes) override {
+        return appendCommandRecord(data, bytes);
     }
 
     D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,

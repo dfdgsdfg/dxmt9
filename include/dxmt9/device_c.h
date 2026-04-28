@@ -401,6 +401,11 @@ enum {
     D9C_COMMAND_RECORD_COLOR_FILL = 23,
     D9C_COMMAND_RECORD_UPDATE_TEXTURE = 24,
     D9C_COMMAND_RECORD_UPDATE_SURFACE = 25,
+    /* Phase 20: Query::Issue (D3DISSUE_BEGIN / D3DISSUE_END). Fire-and-
+     * forget at PE level — server records the begin/end into the query
+     * object. Query::GetData stays on flush+bridge because it needs to
+     * synchronously return the recorded data to the caller. */
+    D9C_COMMAND_RECORD_QUERY_ISSUE = 26,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -515,6 +520,19 @@ typedef struct D9CCommandRecordUpdateSurface {
     D9CRect  srcRect;
     D9CRect  dstPoint;
 } D9CCommandRecordUpdateSurface;
+
+/* Standalone Query::Issue record. queryWire is the SERVER-SIDE D9CQuery*
+ * cast to uint64; importer round-trips back via reinterpret_cast.
+ * flags is the D3DISSUE_* value from the caller. Query objects aren't
+ * pool-tracked the same way as textures/buffers, so they don't ride on
+ * chunk.handles[]; the PE-side Query wrapper holds its own AddRef on
+ * the D9CQuery, keeping it alive across chunk lifetimes. */
+typedef struct D9CCommandRecordQueryIssue {
+    D9CCommandRecordHeader header;
+    uint64_t queryWire;
+    uint32_t flags;
+    uint32_t reserved;
+} D9CCommandRecordQueryIssue;
 
 typedef struct D9CCommandChunk {
     uint32_t version;

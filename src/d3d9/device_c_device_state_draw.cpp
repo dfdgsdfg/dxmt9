@@ -1042,6 +1042,16 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = dxmt9c_device_update_surface(d, srcSurf, srcRect, dstSurf, dstPoint);
       break;
     }
+    case D9C_COMMAND_RECORD_QUERY_ISSUE: {
+      if (header.size != sizeof(D9CCommandRecordQueryIssue)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordQueryIssue qi{};
+      std::memcpy(&qi, record, sizeof(qi));
+      auto* query = reinterpret_cast<D9CQuery*>(static_cast<uintptr_t>(qi.queryWire));
+      hr = dxmt9c_query_issue(query, qi.flags);
+      break;
+    }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
     case D9C_COMMAND_RECORD_SET_VS_CONST_I:
     case D9C_COMMAND_RECORD_SET_VS_CONST_B:
