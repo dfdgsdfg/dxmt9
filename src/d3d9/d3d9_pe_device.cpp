@@ -3049,12 +3049,19 @@ public:
             if (!alreadyPending && shadowMatches) {
                 return S_OK;            // identity no-op
             }
-            // Cap: seal the chunk and start fresh if we'd overflow the
-            // packet's transforms[] array (16 entries).
+            // Phase 34: cap-check uses chunkBarrierFlush, not bare
+            // flushPendingCommandChunk. The latter only seals existing
+            // records — pending hot state would remain DIRTY across
+            // the seal, leaving the next Draw* / barrier observing
+            // stale server state. chunkBarrierFlush encodes pending
+            // state as APPLY_STATE record(s) + clears the pending
+            // maps, so the new entry below starts with a fresh delta
+            // budget AND the server has already received the prior
+            // delta when the next chunk-record runs.
             if (!alreadyPending &&
                 pendingTransforms_.size() >= D9C_DRAW_PACKET_MAX_TRANSFORMS) {
-                const HRESULT chunkHr = flushPendingCommandChunk();
-                if (FAILED(chunkHr)) return chunkHr;
+                const HRESULT barrierHr = chunkBarrierFlush();
+                if (FAILED(barrierHr)) return barrierHr;
             }
             pendingTransforms_[(uint32_t)state] = wireM;
             transformShadow_[(uint32_t)state] = wireM;
@@ -3387,13 +3394,14 @@ public:
             if (shadowIt != tssShadow_.end() && shadowIt->second == value) {
                 return S_OK;            // identity no-op
             }
-            // If accumulating one more would push past the per-packet
-            // cap, seal the current chunk first so the next packet can
-            // start with a fresh delta budget.
+            // Phase 34: cap-check uses chunkBarrierFlush so pending
+            // state is encoded as APPLY_STATE record(s) + cleared
+            // before the new entry. Bare flushPendingCommandChunk
+            // would leave the pending TSS map dirty across the seal.
             if (pendingTss_.find(key) == pendingTss_.end() &&
                 pendingTss_.size() >= D9C_DRAW_PACKET_MAX_TSS) {
-                const HRESULT chunkHr = flushPendingCommandChunk();
-                if (FAILED(chunkHr)) return chunkHr;
+                const HRESULT barrierHr = chunkBarrierFlush();
+                if (FAILED(barrierHr)) return barrierHr;
             }
             tssShadow_[key] = value;
             pendingTss_[key] = value;
@@ -3423,10 +3431,12 @@ public:
             if (shadowIt != samplerStateShadow_.end() && shadowIt->second == value) {
                 return S_OK;            // identity no-op
             }
+            // Phase 34: cap-check uses chunkBarrierFlush — see Phase
+            // 31a / SetTextureStageState for the rationale.
             if (pendingSamplerStates_.find(key) == pendingSamplerStates_.end() &&
                 pendingSamplerStates_.size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
-                const HRESULT chunkHr = flushPendingCommandChunk();
-                if (FAILED(chunkHr)) return chunkHr;
+                const HRESULT barrierHr = chunkBarrierFlush();
+                if (FAILED(barrierHr)) return barrierHr;
             }
             samplerStateShadow_[key] = value;
             pendingSamplerStates_[key] = value;
