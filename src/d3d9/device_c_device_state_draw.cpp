@@ -747,12 +747,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  // Phase 4: validate the chunk's resource retention list. PE recorder
-  // populates handles[] with the deduped (kind, handle) set of every
-  // resource bound while building the chunk; importer can mark them all
-  // against the chunk seqId in one pass instead of N×per-record marks.
-  // For now this is a bounds + sanity check + optional trace; the
-  // pool-side bulk-mark integration is the Phase 4-B follow-up.
+  // Phase 4 / 18: validate the chunk's resource retention list. PE
+  // recorder populates handles[] with the deduped (kind, handle) set
+  // of every resource referenced by ANY record in this chunk
+  // (Phase 18 invariant: chunk.handles ⊇ packet.refs). Importer
+  // bulk-marks them all against the chunk seqId via
+  // markChunkResources, then sets skipDrawResourceMarking on the
+  // queue (Phase 14) so per-draw markDrawResources is suppressed
+  // for the duration of this chunk's record-iter block.
   const auto* handles = chunk->handleCount != 0
                             ? wireHandlePtr<const D9CChunkHandleEntry>(chunk->handles)
                             : nullptr;

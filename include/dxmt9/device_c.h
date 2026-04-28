@@ -401,10 +401,11 @@ enum {
      *
      * Variable-size const-array uploads. Each appends `count*kElemSize`
      * bytes after the fixed header — float[count*4] for *F, int32[count*4]
-     * for *I, uint32[count] for *B. Currently emitted per Set*Constant*
-     * call; should evolve to dirty-range emission at draw/chunk-flush
-     * time per the redesign (PE shadow accumulates ranges, single record
-     * per (stage,type) at flush). Tracked as Phase 2 follow-up. */
+     * for *I, uint32[count] for *B. PE shadow accumulates dirty ranges
+     * across Set*Constant* calls; flushPendingConsts() emits ONE record
+     * per (stage,type) covering the merged dirty range right before the
+     * next draw record (or at chunk seal). So a frame with 30 sequential
+     * SetVsConstF calls between two draws costs 1 record, not 30. */
     D9C_COMMAND_RECORD_SET_VS_CONST_F = 14,
     D9C_COMMAND_RECORD_SET_VS_CONST_I = 15,
     D9C_COMMAND_RECORD_SET_VS_CONST_B = 16,
@@ -412,9 +413,10 @@ enum {
     D9C_COMMAND_RECORD_SET_PS_CONST_I = 18,
     D9C_COMMAND_RECORD_SET_PS_CONST_B = 19,
     /* Standalone ordering ops — recorder design's "Clear / Present /
-     * Query / Surface" branch. Currently only Clear is wired; the
-     * others still bypass the chunk via per-call dxmt9c_device_*
-     * unix-calls (follow-up). */
+     * Query / Surface" branch. All fire-and-forget surface-shape ops
+     * are chunk-recorded; only sync-result calls (Lock-readback / Query
+     * GetData) remain on flush+bridge because they need to return data
+     * synchronously to the PE caller. */
     D9C_COMMAND_RECORD_CLEAR = 20,
     D9C_COMMAND_RECORD_PRESENT = 21,
     D9C_COMMAND_RECORD_STRETCH_RECT = 22,
