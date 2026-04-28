@@ -436,6 +436,16 @@ enum {
      * record (Present pattern), so the chunk-commit boundary IS the
      * readback boundary. */
     D9C_COMMAND_RECORD_READBACK = 27,
+    /* Phase 28: standalone state-delta record. Carries a
+     * D9CDrawPrimitivePacket whose draw fields (primitiveType /
+     * primitiveCount / startVertex) are unused — only the state-delta
+     * fields are meaningful. Emitted BEFORE chunk-barrier records
+     * (Clear / Present / surface ops / readback) when the PE recorder
+     * has pending hot state that the barrier needs applied server-
+     * side. Replaces the legacy "bridge-emit pending hot state"
+     * pattern that violated the chunk-mode invariant (Set* never
+     * crosses PE/unix in the default path). */
+    D9C_COMMAND_RECORD_APPLY_STATE = 28,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -575,6 +585,17 @@ typedef struct D9CCommandRecordReadback {
     uint64_t srcWire;        /* RT being read (D9CSurface*) */
     uint64_t dstWire;        /* CPU-mappable destination (D9CSurface*) */
 } D9CCommandRecordReadback;
+
+/* Standalone state-delta record. The packet's draw fields are unused
+ * (set to zero by chunkBarrierFlush); only state-delta fields apply.
+ * Importer dispatches applyDrawPacketState only — no draw call.
+ * Used to carry pending hot state into the chunk before a barrier
+ * record (Clear / surface op / readback) so the barrier observes the
+ * effective server state. */
+typedef struct D9CCommandRecordApplyState {
+    D9CCommandRecordHeader header;
+    D9CDrawPrimitivePacket packet;
+} D9CCommandRecordApplyState;
 
 typedef struct D9CCommandChunk {
     uint32_t version;

@@ -1942,9 +1942,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT flushPeRecorder() {
-        // Drain const dirty ranges first so they make it into the chunk
-        // before we commit it to the bridge; otherwise they'd carry
-        // across to the next chunk's first draw with stale ordering.
+        // Phase 28: mode-aware. Chunk mode drains pending state into the
+        // chunk via chunkBarrierFlush() (records, never bridge calls),
+        // then seals. Legacy mode keeps the bridge-emit pattern.
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
+            return flushPendingCommandChunk();
+        }
+        // Legacy fallback: drain consts as records, seal, bridge-emit
+        // hot state so the upcoming per-call bridge sees current
+        // server state.
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         const HRESULT chunkHr = flushPendingCommandChunk();
@@ -2035,6 +2043,43 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (FAILED(hr)) return hr;
         hr = flushConstShadow(psConstB_, D9C_COMMAND_RECORD_SET_PS_CONST_B, sizeof(uint32_t));
         if (FAILED(hr)) return hr;
+        return S_OK;
+    }
+
+    // Phase 28: chunk-mode barrier flush. Replaces flushPendingHotState's
+    // bridge-emit path with a chunk-record path that preserves the
+    // "Set* never crosses PE/unix in default chunk mode" invariant.
+    //
+    // Drains pending consts (existing per-record stream) THEN, if hot
+    // state is pending, packages the delta into a D9C_COMMAND_RECORD_
+    // APPLY_STATE record + appends to the chunk + clears the pending
+    // bits. Server importer dispatches APPLY_STATE via the same
+    // applyDrawPacketState() that draw records use, so the server
+    // shadow is updated before the upcoming barrier record runs.
+    //
+    // Caller still appends the actual barrier record afterwards;
+    // chunk-commit flushes everything in the recorded order.
+    HRESULT chunkBarrierFlush() {
+        const HRESULT constHr = flushPendingConsts();
+        if (FAILED(constHr)) return constHr;
+        if (!hasPendingHotState()) {
+            return S_OK;
+        }
+        D9CCommandRecordApplyState record{};
+        record.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+        record.header.size = sizeof(record);
+        // Reuse buildDrawPrimitivePacket for state population — the
+        // type/startVertex/count fields it sets are ignored by the
+        // APPLY_STATE dispatcher. If the build fails (cap overflow),
+        // fall back to chunk-seal and let the next chunk's first
+        // draw carry the state — this is the existing recovery path
+        // for over-cap state.
+        if (!buildDrawPrimitivePacket(D3DPT_POINTLIST, 0, 0, record.packet)) {
+            return flushPendingCommandChunk();
+        }
+        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        if (FAILED(appendHr)) return appendHr;
+        clearPendingHotState();
         return S_OK;
     }
 
@@ -2316,10 +2361,10 @@ public:
         // chunk boundary. Dirty-region payload is dropped (the
         // backend present path doesn't consume it).
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
+            // Phase 28: chunk-mode barrier — flush pending hot state
+            // + consts as records into the chunk, never as bridge calls.
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
 
             D9CCommandRecordPresent record{};
             record.header.type = D9C_COMMAND_RECORD_PRESENT;
@@ -2517,10 +2562,10 @@ public:
         // a chunk record. Both surfaces are bulk-retained against the
         // chunk seqId to survive until the GPU consumes the copy.
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
+            // Phase 28: chunk-mode barrier — flush pending hot state
+            // + consts as records into the chunk, never as bridge calls.
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
             if (auto* raw = rawSurf(src); raw)
                 noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
                                 reinterpret_cast<uint64_t>(raw));
@@ -2548,10 +2593,10 @@ public:
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
                                              IDirect3DBaseTexture9* dst) override {
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
+            // Phase 28: chunk-mode barrier — flush pending hot state
+            // + consts as records into the chunk, never as bridge calls.
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
             if (auto* raw = rawTex(src); raw)
                 noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
                                 reinterpret_cast<uint64_t>(raw));
@@ -2583,10 +2628,10 @@ public:
         // pattern); commit_chunk's per-record short-circuit propagates
         // the actual readback HRESULT back to PE.
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
+            // Phase 28: chunk-mode barrier — flush pending hot state
+            // + consts as records into the chunk, never as bridge calls.
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
             if (auto* raw = rawSurf(rt); raw)
                 noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
                                 reinterpret_cast<uint64_t>(raw));
@@ -2631,10 +2676,10 @@ public:
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
+            // Phase 28: chunk-mode barrier — flush pending hot state
+            // + consts as records into the chunk, never as bridge calls.
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
             // Retain both surfaces against the chunk seqId so they
             // survive until the GPU consumes the blit.
             if (auto* raw = rawSurf(src); raw)
@@ -2670,10 +2715,10 @@ public:
                             this, pSurf, pRect ? "<custom>" : "<full>", (unsigned)color);
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
+            // Phase 28: chunk-mode barrier — flush pending hot state
+            // + consts as records into the chunk, never as bridge calls.
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
             if (auto* raw = rawSurf(pSurf); raw)
                 noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
                                 reinterpret_cast<uint64_t>(raw));
@@ -2812,10 +2857,10 @@ public:
         // appends a CLEAR record carrying flags + color + z + stencil
         // + the optional rect array as a tail payload.
         if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT hotHr = flushPendingHotState();
-            if (FAILED(hotHr)) return hotHr;
-            const HRESULT constHr = flushPendingConsts();
-            if (FAILED(constHr)) return constHr;
+            // Phase 28: chunk-mode barrier — flush pending hot state
+            // + consts as records into the chunk, never as bridge calls.
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
 
             const std::uint32_t rectBytes = static_cast<std::uint32_t>(count) * sizeof(D9CRect);
             D9CCommandRecordClear header{};

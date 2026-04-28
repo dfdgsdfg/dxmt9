@@ -1069,6 +1069,17 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = dxmt9c_device_get_render_target_data(d, srcSurf, dstSurf);
       break;
     }
+    case D9C_COMMAND_RECORD_APPLY_STATE: {
+      if (header.size != sizeof(D9CCommandRecordApplyState)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordApplyState as{};
+      std::memcpy(&as, record, sizeof(as));
+      // Apply the state delta only; draw fields in the packet
+      // (primitiveType / primitiveCount / startVertex) are unused.
+      hr = applyDrawPacketState(d, as.packet);
+      break;
+    }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
     case D9C_COMMAND_RECORD_SET_VS_CONST_I:
     case D9C_COMMAND_RECORD_SET_VS_CONST_B:
