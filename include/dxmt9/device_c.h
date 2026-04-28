@@ -246,26 +246,37 @@ typedef struct D9CDrawPacketStreamSource {
     uint32_t stride;
 } D9CDrawPacketStreamSource;
 
-/* Canonical wire format: delta + PE shadow.
+/* Canonical wire format: delta + PE shadow → effective state via
+ * ordered server replay.
  *
- * Each *Valid / *Mask / *Count field carries the DELTA since the last
- * draw packet — only fields the PE recorder marked dirty are
- * semantically meaningful. The PE state shadow (default ON via Phase
- * 22) is the source of truth for any field a packet leaves zero;
- * server-side D9CDevice maintains the matching server shadow that the
- * importer mutates as it dispatches each packet's set bits.
+ * Each draw record's "effective state" — what the GPU will see when
+ * the draw issues — is the result of REPLAYING every preceding
+ * record's state delta in chunk order against a server-side shadow.
+ * A single packet does NOT carry a self-contained snapshot of the
+ * full BaseDrawState; the Valid / Mask / Count fields express only
+ * what changed since the last record. The PE recorder's own shadow
+ * (default ON via Phase 22) is the authoritative source of truth on
+ * the PE side, and the server's D9CDevice mirrors it via per-record
+ * applyDrawPacketState dispatch.
+ *
+ * Effective-state recipe at draw N:
+ *   server_shadow_after(N) = applyDeltas(server_shadow_after(N-1),
+ *                                         packet_N.delta)
+ * The encoder reads server_shadow_after(N) when issuing draw N.
  *
  * Run-coalescing (drawPrimitiveRun fast path) keys off "every Valid /
- * Mask / Count is zero" to detect consecutive draws that share state,
- * so the delta encoding is load-bearing for that optimization.
+ * Mask / Count is zero" — a delta-empty packet means the effective
+ * state is unchanged from the prior draw, so the encoder can reuse
+ * its already-bound state. The delta encoding is load-bearing for
+ * this optimization.
  *
- * The full-snapshot wire mode (DXMT9_PE_DRAW_FULL_SNAPSHOT=1, Phase
- * 16) overrides this contract: every field is forced valid +
- * populated from the PE shadow, making each packet self-contained at
- * the cost of wire bandwidth + disabled run-coalescing. Default OFF —
- * intended for stress testing, debugging out-of-order replay, or
- * environments where importer statelessness matters more than wire
- * efficiency. */
+ * Full-snapshot mode (DXMT9_PE_DRAW_FULL_SNAPSHOT=1, Phase 16) is a
+ * DEBUG / STRESS knob — not the canonical wire form. When set, every
+ * field is forced valid + populated from the PE shadow, making each
+ * packet self-contained at the cost of wire bandwidth + disabled
+ * run-coalescing. Use for: stress testing, debugging out-of-order
+ * replay, environments where importer statelessness matters more
+ * than wire efficiency. */
 typedef struct D9CDrawPrimitivePacket {
     uint32_t renderStateCount;
     D9CDrawPacketRenderState renderStates[D9C_DRAW_PACKET_MAX_RENDER_STATES];
@@ -423,10 +434,19 @@ enum {
     D9C_COMMAND_RECORD_COLOR_FILL = 23,
     D9C_COMMAND_RECORD_UPDATE_TEXTURE = 24,
     D9C_COMMAND_RECORD_UPDATE_SURFACE = 25,
-    /* Phase 20: Query::Issue (D3DISSUE_BEGIN / D3DISSUE_END). Fire-and-
-     * forget at PE level — server records the begin/end into the query
-     * object. Query::GetData stays on flush+bridge because it needs to
-     * synchronously return the recorded data to the caller. */
+    /* Phase 20: Query::Issue (D3DISSUE_BEGIN / D3DISSUE_END) is
+     * RECORDABLE — fire-and-forget at the PE level, ordering record
+     * inside the chunk. Server applies it via dxmt9c_query_issue
+     * during chunk replay.
+     *
+     * Query::GetData is NOT recordable — it's a SYNCHRONOUS READ
+     * BOUNDARY. The caller blocks on the result (S_OK / S_FALSE /
+     * D3DERR_*) and reads bytes back. Implementation flushes the
+     * pending recorder (so prior QUERY_ISSUE records are committed)
+     * then bridges via dxmt9c_query_get_data which synchronously
+     * inspects completedSeqId vs the query's recorded seqId. This
+     * isn't a deficiency — async recording would just defer the
+     * inevitable wait to a worse spot. */
     D9C_COMMAND_RECORD_QUERY_ISSUE = 26,
     /* Phase 24: GetRenderTargetData (RT → CPU-mappable surface). The PE
      * caller is synchronous — the call doesn't return until the data
