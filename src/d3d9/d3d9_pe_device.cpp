@@ -1181,8 +1181,33 @@ static D9CWireHandle toWireHandle(const void* handle) {
  * ========================================================================= */
 
 class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlush {
-    static constexpr UINT kMaxPendingCommandRecords = 64;
-    static constexpr size_t kMaxPendingCommandBytes = 256 * 1024;
+    // Phase 21: chunk-flush thresholds. Defaults match what the PE
+    // recorder has been tuned around since Phase 5 (64 records = a few
+    // dozen draws + their state setters; 256 KB ≈ one full vertex
+    // upload for a complex draw + headers). Both are env-overridable
+    // via DXMT9_PE_CHUNK_MAX_RECORDS / DXMT9_PE_CHUNK_MAX_BYTES; the
+    // helpers below cap the env values to prevent pathological inputs
+    // from blowing chunk-side allocations.
+    static constexpr UINT kDefaultMaxPendingCommandRecords = 64;
+    static constexpr size_t kDefaultMaxPendingCommandBytes = 256 * 1024;
+    static constexpr UINT kAbsoluteMaxPendingCommandRecords = 4096;
+    static constexpr size_t kAbsoluteMaxPendingCommandBytes = 16 * 1024 * 1024;
+    static UINT maxPendingCommandRecords() {
+        static const UINT cached = []() -> UINT {
+            const auto envValue = dxmt9::util::getenvU32("DXMT9_PE_CHUNK_MAX_RECORDS");
+            if (!envValue || *envValue == 0) return kDefaultMaxPendingCommandRecords;
+            return std::min<UINT>(*envValue, kAbsoluteMaxPendingCommandRecords);
+        }();
+        return cached;
+    }
+    static size_t maxPendingCommandBytes() {
+        static const size_t cached = []() -> size_t {
+            const auto envValue = dxmt9::util::getenvU64("DXMT9_PE_CHUNK_MAX_BYTES");
+            if (!envValue || *envValue == 0) return kDefaultMaxPendingCommandBytes;
+            return std::min<size_t>(*envValue, kAbsoluteMaxPendingCommandBytes);
+        }();
+        return cached;
+    }
 
     ULONG        refs_    = 1;
     D9CDevice*   dev_;
@@ -1731,8 +1756,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return D3DERR_INVALIDCALL;
         }
         if (pendingCommandRecordCount_ != 0 &&
-            (pendingCommandRecordCount_ >= kMaxPendingCommandRecords ||
-             pendingCommandBytes_.size() + bytes > kMaxPendingCommandBytes)) {
+            (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
+             pendingCommandBytes_.size() + bytes > maxPendingCommandBytes())) {
             const HRESULT flushHr = flushPendingCommandChunk();
             if (FAILED(flushHr)) return flushHr;
         }
@@ -1741,8 +1766,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         pendingCommandBytes_.insert(pendingCommandBytes_.end(), raw, raw + bytes);
         ++pendingCommandRecordCount_;
 
-        if (pendingCommandRecordCount_ >= kMaxPendingCommandRecords ||
-            pendingCommandBytes_.size() >= kMaxPendingCommandBytes) {
+        if (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
+            pendingCommandBytes_.size() >= maxPendingCommandBytes()) {
             return flushPendingCommandChunk();
         }
         return S_OK;
