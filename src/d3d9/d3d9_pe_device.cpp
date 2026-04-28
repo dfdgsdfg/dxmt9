@@ -3829,14 +3829,24 @@ public:
                                              UINT count) override {
         dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
                             this, (unsigned)type, startVertex, count);
-        if (dxmt9PeDrawChunkEnabled() &&
-            pendingRenderStates_.size() <= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        // Phase 32: chunk mode never falls through to per-call bridge.
+        // If pending state somehow exceeds packet cap (shouldn't happen
+        // post-Phase-31 cap-checks at every Set* fast path), drain via
+        // chunkBarrierFlush — which splits oversized collections into
+        // multiple APPLY_STATE records — then append the draw record.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+                const HRESULT barrierHr = chunkBarrierFlush();
+                if (FAILED(barrierHr)) return barrierHr;
+            }
             const HRESULT hr = appendDrawPrimitiveRecord(type, startVertex, count);
             if (SUCCEEDED(hr)) {
                 clearPendingHotState();
             }
             return hr;
         }
+        // Legacy fallback (DXMT9_PE_DRAW_CHUNK=0): packet-bridge first,
+        // then per-call bridge.
         if (dxmt9PeStateShadowEnabled() && hasPendingHotState()) {
             D9CDrawPrimitivePacket packet{};
             if (buildDrawPrimitivePacket(type, startVertex, count, packet)) {
@@ -3860,8 +3870,12 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
                             this, (unsigned)type, baseVertex, minVertex, numVertices,
                             startIndex, count);
-        if (dxmt9PeDrawChunkEnabled() &&
-            pendingRenderStates_.size() <= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        // Phase 32: chunk mode never falls through to per-call bridge.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+                const HRESULT barrierHr = chunkBarrierFlush();
+                if (FAILED(barrierHr)) return barrierHr;
+            }
             const HRESULT hr = appendDrawIndexedPrimitiveRecord(type, baseVertex, minVertex,
                                                                 numVertices, startIndex, count);
             if (SUCCEEDED(hr)) {
@@ -3880,8 +3894,12 @@ public:
                                                UINT stride) override {
         dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
                             this, (unsigned)type, count, pData, stride);
-        if (dxmt9PeDrawChunkEnabled() &&
-            pendingRenderStates_.size() <= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        // Phase 32: chunk mode never falls through to per-call bridge.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+                const HRESULT barrierHr = chunkBarrierFlush();
+                if (FAILED(barrierHr)) return barrierHr;
+            }
             const HRESULT hr = appendDrawPrimitiveUPRecord(type, count, pData, stride);
             if (SUCCEEDED(hr)) {
                 clearPendingHotState();
@@ -3904,8 +3922,12 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
                             this, (unsigned)type, minVertex, numVertices, count,
                             pIdxData, (unsigned)idxFmt, pVtxData, stride);
-        if (dxmt9PeDrawChunkEnabled() &&
-            pendingRenderStates_.size() <= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        // Phase 32: chunk mode never falls through to per-call bridge.
+        if (dxmt9PeDrawChunkEnabled()) {
+            if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+                const HRESULT barrierHr = chunkBarrierFlush();
+                if (FAILED(barrierHr)) return barrierHr;
+            }
             const HRESULT hr = appendDrawIndexedPrimitiveUPRecord(type, minVertex, numVertices,
                                                                   count, pIdxData, idxFmt,
                                                                   pVtxData, stride);
