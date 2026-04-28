@@ -10,6 +10,11 @@ wine_build_path = get_option('wine_build_path')
 wine_install_path = get_option('wine_install_path')
 
 if host_machine.system() == 'darwin'
+  cpp = meson.get_compiler('cpp')
+  dxmt9_winemetal_unix_common_link_args += cpp.get_supported_link_arguments([
+    '-Wl,-no_warn_duplicate_libraries',
+  ])
+
   c_args = get_option('c_args')
   if c_args.length() >= 2
     foreach i : range(c_args.length() - 1)

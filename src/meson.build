@@ -8,8 +8,13 @@ dxmt9_native_bridge_srcs = files(
 )
 
 dxmt9_deps = []
+dxmt9_native_link_args = []
 
 if host_machine.system() == 'darwin'
+  cpp = meson.get_compiler('cpp')
+  dxmt9_native_link_args += cpp.get_supported_link_arguments([
+    '-Wl,-no_warn_duplicate_libraries',
+  ])
   dxmt9_deps += dependency('appleframeworks', modules: [
     'AppKit',
     'Foundation',
@@ -45,6 +50,7 @@ dxmt9_native_lib = shared_library(
     dxmt9_util_dep,
     dxmt9_winemetal_dep,
   ],
+  link_args: dxmt9_native_link_args,
   install: false,
 )
 

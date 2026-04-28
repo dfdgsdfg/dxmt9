@@ -147,15 +147,15 @@ public:
 
     /* ── IUnknown ── */
 
-    ULONG STDMETHODCALLTYPE AddRef() override {
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override {
         return ++refs_;
     }
-    ULONG STDMETHODCALLTYPE Release() override {
+    ULONG STDMETHODCALLTYPE Release() noexcept override {
         ULONG r = --refs_;
         if (!r) delete this;
         return r;
     }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
         if (!ppv) return E_POINTER;
         if (IsEqualGUID(riid, IID_IUnknown)       ||
             IsEqualGUID(riid, IID_IDirect3D9)      ||
@@ -167,17 +167,17 @@ public:
 
     /* ── IDirect3D9 ── */
 
-    HRESULT STDMETHODCALLTYPE RegisterSoftwareDevice(void*) override {
+    HRESULT STDMETHODCALLTYPE RegisterSoftwareDevice(void*) noexcept override {
         return D3DERR_INVALIDCALL;
     }
 
-    UINT STDMETHODCALLTYPE GetAdapterCount() override {
+    UINT STDMETHODCALLTYPE GetAdapterCount() noexcept override {
         dxmt9FactoryDebugLog("GetAdapterCount");
         return dxmt9c_factory_adapter_count(f_);
     }
 
     HRESULT STDMETHODCALLTYPE GetAdapterIdentifier(UINT adapter, DWORD /*flags*/,
-                                                    D3DADAPTER_IDENTIFIER9* pId) override {
+                                                    D3DADAPTER_IDENTIFIER9* pId) noexcept override {
         if (!pId) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("GetAdapterIdentifier adapter=%u", adapter);
         D9CAdapterIdentifier ci{};
@@ -207,7 +207,7 @@ public:
     }
 
     UINT STDMETHODCALLTYPE GetAdapterModeCount(UINT adapter,
-                                                D3DFORMAT fmt) override {
+                                                D3DFORMAT fmt) noexcept override {
         dxmt9FactoryDebugLog("GetAdapterModeCount adapter=%u fmt=%u", adapter, (unsigned)fmt);
         return dxmt9c_factory_get_adapter_mode_count(f_, adapter,
                                                       (uint32_t)fmt);
@@ -215,7 +215,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE EnumAdapterModes(UINT adapter, D3DFORMAT fmt,
                                                 UINT mode,
-                                                D3DDISPLAYMODE* pMode) override {
+                                                D3DDISPLAYMODE* pMode) noexcept override {
         if (!pMode) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("EnumAdapterModes adapter=%u fmt=%u mode=%u", adapter, (unsigned)fmt, mode);
         uint32_t w, h, refresh, f;
@@ -231,7 +231,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE GetAdapterDisplayMode(UINT adapter,
-                                                     D3DDISPLAYMODE* pMode) override {
+                                                     D3DDISPLAYMODE* pMode) noexcept override {
         if (!pMode) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("GetAdapterDisplayMode adapter=%u", adapter);
         uint32_t w, h, refresh, f;
@@ -249,7 +249,7 @@ public:
     HRESULT STDMETHODCALLTYPE CheckDeviceType(UINT adapter, D3DDEVTYPE,
                                                D3DFORMAT adapterFmt,
                                                D3DFORMAT backFmt,
-                                               BOOL windowed) override {
+                                               BOOL windowed) noexcept override {
         dxmt9FactoryDebugLog("CheckDeviceType adapter=%u adapterFmt=%u backFmt=%u windowed=%u",
                              adapter, (unsigned)adapterFmt, (unsigned)backFmt, windowed ? 1u : 0u);
         const HRESULT hr = hr32(dxmt9c_factory_check_device_type(
@@ -264,7 +264,7 @@ public:
                                                  D3DFORMAT /*adapterFmt*/,
                                                  DWORD usage,
                                                  D3DRESOURCETYPE /*rtype*/,
-                                                 D3DFORMAT fmt) override {
+                                                 D3DFORMAT fmt) noexcept override {
         dxmt9FactoryDebugLog("CheckDeviceFormat adapter=%u fmt=%u usage=0x%x",
                              adapter, (unsigned)fmt, (unsigned)usage);
         const HRESULT hr = hr32(dxmt9c_factory_check_device_format(
@@ -278,7 +278,7 @@ public:
                                                           D3DFORMAT fmt,
                                                           BOOL windowed,
                                                           D3DMULTISAMPLE_TYPE msType,
-                                                          DWORD* pQuality) override {
+                                                          DWORD* pQuality) noexcept override {
         dxmt9FactoryDebugLog("CheckDeviceMultiSampleType adapter=%u fmt=%u windowed=%u msType=%u",
                              adapter, (unsigned)fmt, windowed ? 1u : 0u, (unsigned)msType);
         HRESULT hr = hr32(dxmt9c_factory_check_device_multisample(
@@ -292,21 +292,21 @@ public:
 
     HRESULT STDMETHODCALLTYPE CheckDepthStencilMatch(UINT, D3DDEVTYPE,
                                                       D3DFORMAT, D3DFORMAT,
-                                                      D3DFORMAT) override {
+                                                      D3DFORMAT) noexcept override {
         dxmt9FactoryDebugLog("CheckDepthStencilMatch -> hr=0x%08x", (unsigned)S_OK);
         return S_OK; /* all depth-stencil combinations accepted */
     }
 
     HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT, D3DDEVTYPE,
                                                            D3DFORMAT,
-                                                           D3DFORMAT) override {
+                                                           D3DFORMAT) noexcept override {
         dxmt9FactoryDebugLog("CheckDeviceFormatConversion -> hr=0x%08x",
                              (unsigned)D3DERR_NOTAVAILABLE);
         return D3DERR_NOTAVAILABLE;
     }
 
     HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT adapter, D3DDEVTYPE,
-                                             D3DCAPS9* pCaps) override {
+                                             D3DCAPS9* pCaps) noexcept override {
         if (!pCaps) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("GetDeviceCaps adapter=%u", adapter);
         D9CCaps cc{};
@@ -331,7 +331,7 @@ public:
         return hr;
     }
 
-    HMONITOR STDMETHODCALLTYPE GetAdapterMonitor(UINT adapter) override {
+    HMONITOR STDMETHODCALLTYPE GetAdapterMonitor(UINT adapter) noexcept override {
         dxmt9FactoryDebugLog("GetAdapterMonitor adapter=%u", adapter);
         return (HMONITOR)(uintptr_t)dxmt9c_factory_get_adapter_monitor(f_,
                                                                          adapter);
@@ -340,7 +340,7 @@ public:
     HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter, D3DDEVTYPE,
                                             HWND hwnd, DWORD behaviorFlags,
                                             D3DPRESENT_PARAMETERS* pPP,
-                                            IDirect3DDevice9** ppDevice) override {
+                                            IDirect3DDevice9** ppDevice) noexcept override {
         if (!pPP || !ppDevice) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("CreateDevice adapter=%u hwnd=%p behavior=0x%x windowed=%u size=%ux%u fmt=%u",
                              adapter, hwnd, (unsigned)behaviorFlags,
@@ -363,7 +363,7 @@ public:
     /* ── IDirect3D9Ex ── */
 
     UINT STDMETHODCALLTYPE GetAdapterModeCountEx(UINT adapter,
-                                                  const D3DDISPLAYMODEFILTER*) override {
+                                                  const D3DDISPLAYMODEFILTER*) noexcept override {
         dxmt9FactoryDebugLog("GetAdapterModeCountEx adapter=%u", adapter);
         return dxmt9c_factory_get_adapter_mode_count(f_, adapter,
                                                       (uint32_t)D3DFMT_X8R8G8B8);
@@ -372,7 +372,7 @@ public:
     HRESULT STDMETHODCALLTYPE EnumAdapterModesEx(UINT adapter,
                                                   const D3DDISPLAYMODEFILTER* pFilter,
                                                   UINT mode,
-                                                  D3DDISPLAYMODEEX* pMode) override {
+                                                  D3DDISPLAYMODEEX* pMode) noexcept override {
         if (!pMode) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("EnumAdapterModesEx adapter=%u mode=%u", adapter, mode);
         uint32_t fmt = pFilter ? (uint32_t)pFilter->Format : (uint32_t)D3DFMT_X8R8G8B8;
@@ -391,7 +391,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetAdapterDisplayModeEx(UINT adapter,
                                                        D3DDISPLAYMODEEX* pMode,
-                                                       D3DDISPLAYROTATION* pRot) override {
+                                                       D3DDISPLAYROTATION* pRot) noexcept override {
         uint32_t w, h, refresh, f;
         dxmt9FactoryDebugLog("GetAdapterDisplayModeEx adapter=%u", adapter);
         HRESULT hr = hr32(dxmt9c_factory_get_adapter_display_mode(
@@ -416,7 +416,7 @@ public:
                                               HWND hwnd, DWORD behaviorFlags,
                                               D3DPRESENT_PARAMETERS* pPP,
                                               D3DDISPLAYMODEEX* pFsMode,
-                                              IDirect3DDevice9Ex** ppDevice) override {
+                                              IDirect3DDevice9Ex** ppDevice) noexcept override {
         if (!pPP || !ppDevice) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("CreateDeviceEx adapter=%u hwnd=%p behavior=0x%x windowed=%u size=%ux%u fmt=%u fsMode=%d",
                              adapter, hwnd, (unsigned)behaviorFlags,
@@ -439,7 +439,7 @@ public:
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE GetAdapterLUID(UINT adapter, LUID* pLuid) override {
+    HRESULT STDMETHODCALLTYPE GetAdapterLUID(UINT adapter, LUID* pLuid) noexcept override {
         if (!pLuid) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("GetAdapterLUID adapter=%u", adapter);
         uint32_t lo; int32_t hi;
