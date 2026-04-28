@@ -30,7 +30,17 @@ static bool dxmt9LeakStateBlocksEnabled() {
 }
 
 static bool dxmt9PeStateShadowEnabled() {
-    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_STATE_SHADOW");
+    // Phase 22: PE state shadow is now the DEFAULT path. Set* fast paths
+    // shadow the value PE-side and embed it into the next draw packet
+    // instead of bridging per-call. Opt-out via DXMT9_PE_STATE_SHADOW=0
+    // for regression bisection. Same parsing convention as Phase 19's
+    // DXMT9_PE_DRAW_CHUNK flip.
+    static const bool enabled = []() {
+        const auto value = dxmt9::util::getenvString("DXMT9_PE_STATE_SHADOW");
+        if (value.empty()) return true;            // default ON
+        if (value == "0") return false;            // explicit opt-out
+        return true;
+    }();
     return enabled;
 }
 
