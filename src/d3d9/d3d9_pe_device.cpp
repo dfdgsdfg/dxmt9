@@ -2068,17 +2068,120 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         D9CCommandRecordApplyState record{};
         record.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
         record.header.size = sizeof(record);
-        // Reuse buildDrawPrimitivePacket for state population — the
-        // type/startVertex/count fields it sets are ignored by the
-        // APPLY_STATE dispatcher. If the build fails (cap overflow),
-        // fall back to chunk-seal and let the next chunk's first
-        // draw carry the state — this is the existing recovery path
-        // for over-cap state.
-        if (!buildDrawPrimitivePacket(D3DPT_POINTLIST, 0, 0, record.packet)) {
-            return flushPendingCommandChunk();
+        // Fast path: single APPLY_STATE record covers all pending
+        // state. After Phase 31 cap-checks at every Set* fast path,
+        // this is the only path that runs in practice.
+        if (buildDrawPrimitivePacket(D3DPT_POINTLIST, 0, 0, record.packet)) {
+            const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+            if (FAILED(appendHr)) return appendHr;
+            clearPendingHotState();
+            return S_OK;
         }
-        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
-        if (FAILED(appendHr)) return appendHr;
+        // Over-cap slow path: a Set* somewhere bypassed the cap check
+        // (regression). Drain pending oversized collections in batches
+        // of cap-size records. Critical safety property: every pending
+        // state bit MUST be represented in the chunk before the caller
+        // appends a barrier record. Sealing-and-deferring (the prior
+        // behavior) lets the barrier observe stale server state.
+        return drainOversizedPendingStateAsApplyStateRecords();
+    }
+
+    HRESULT drainOversizedPendingStateAsApplyStateRecords() {
+        // Drain the four cappable collections (renderStates, tss,
+        // samplerStates, transforms) in batches of cap-size. Each batch
+        // becomes one APPLY_STATE record carrying ONLY that collection's
+        // batch (other fields zero / unset). Server's applyDrawPacketState
+        // is idempotent for unset fields so empty validX/maskX are safe.
+        auto drainMap = [&](auto& pendingMap, auto cap, auto fillEntry,
+                            auto packetCountField) -> HRESULT {
+            while (!pendingMap.empty()) {
+                D9CCommandRecordApplyState rec{};
+                rec.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+                rec.header.size = sizeof(rec);
+                std::uint32_t n = 0;
+                while (!pendingMap.empty() && n < cap) {
+                    auto it = pendingMap.begin();
+                    fillEntry(rec.packet, n, it->first, it->second);
+                    ++n;
+                    pendingMap.erase(it);
+                }
+                packetCountField(rec.packet) = n;
+                const HRESULT hr = appendCommandRecord(&rec, sizeof(rec));
+                if (FAILED(hr)) return hr;
+            }
+            return S_OK;
+        };
+        if (auto hr = drainMap(pendingRenderStates_,
+                               (uint32_t)D9C_DRAW_PACKET_MAX_RENDER_STATES,
+                               [](D9CDrawPrimitivePacket& p, std::uint32_t i,
+                                  DWORD k, DWORD v) {
+                                   p.renderStates[i].state = k;
+                                   p.renderStates[i].value = v;
+                               },
+                               [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
+                                   return p.renderStateCount;
+                               });
+            FAILED(hr)) return hr;
+        if (auto hr = drainMap(pendingTss_,
+                               (uint32_t)D9C_DRAW_PACKET_MAX_TSS,
+                               [](D9CDrawPrimitivePacket& p, std::uint32_t i,
+                                  uint32_t k, uint32_t v) {
+                                   p.tss[i].stage = k >> 16;
+                                   p.tss[i].type = k & 0xffff;
+                                   p.tss[i].value = v;
+                               },
+                               [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
+                                   return p.tssCount;
+                               });
+            FAILED(hr)) return hr;
+        if (auto hr = drainMap(pendingSamplerStates_,
+                               (uint32_t)D9C_DRAW_PACKET_MAX_SAMPLER,
+                               [](D9CDrawPrimitivePacket& p, std::uint32_t i,
+                                  uint32_t k, uint32_t v) {
+                                   p.samplerStates[i].sampler = k >> 16;
+                                   p.samplerStates[i].type = k & 0xffff;
+                                   p.samplerStates[i].value = v;
+                               },
+                               [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
+                                   return p.samplerStateCount;
+                               });
+            FAILED(hr)) return hr;
+        if (auto hr = drainMap(pendingTransforms_,
+                               (uint32_t)D9C_DRAW_PACKET_MAX_TRANSFORMS,
+                               [](D9CDrawPrimitivePacket& p, std::uint32_t i,
+                                  uint32_t k, const D9CMatrix& v) {
+                                   p.transforms[i].state = k;
+                                   p.transforms[i].reserved = 0;
+                                   p.transforms[i].matrix = v;
+                               },
+                               [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
+                                   return p.transformCount;
+                               });
+            FAILED(hr)) return hr;
+        // Remaining scalar pending bits (texture / stream / vs / ps /
+        // vdecl / RT / DS / viewport / scissor / fvf / material / clip
+        // / lights / lightEnable) all fit in one packet. After draining
+        // the four cappable collections above, buildDrawPrimitivePacket
+        // succeeds.
+        if (!hasPendingHotState()) {
+            return S_OK;
+        }
+        D9CCommandRecordApplyState tail{};
+        tail.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+        tail.header.size = sizeof(tail);
+        if (!buildDrawPrimitivePacket(D3DPT_POINTLIST, 0, 0, tail.packet)) {
+            // Truly should never happen — the four cappable collections
+            // are now empty. Defensive: log + return failure rather than
+            // silently leaving pending state dirty (which would let the
+            // upcoming barrier observe stale server state).
+            dxmt9DeviceDebugLog(
+                "ERR: drainOversizedPendingStateAsApplyStateRecords could "
+                "not build tail APPLY_STATE — pending state lost. Caller "
+                "should treat as recorder failure.");
+            return D3DERR_INVALIDCALL;
+        }
+        const HRESULT hr = appendCommandRecord(&tail, sizeof(tail));
+        if (FAILED(hr)) return hr;
         clearPendingHotState();
         return S_OK;
     }
@@ -3187,6 +3290,18 @@ public:
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
         if (dxmt9PeStateShadowEnabled()) {
+            // Phase 31: cap check — if a NEW state would push the
+            // pending map past the per-packet cap, drain pending state
+            // into the chunk via chunkBarrierFlush() so the next packet
+            // starts with a fresh delta budget. Mirrors the TSS /
+            // SamplerState / Transform fast-path patterns and prevents
+            // the over-cap edge from leaking into the Draw fallback
+            // path (which would bridge-emit Set* calls).
+            if (pendingRenderStates_.find(stateKey) == pendingRenderStates_.end() &&
+                pendingRenderStates_.size() >= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+                const HRESULT barrierHr = chunkBarrierFlush();
+                if (FAILED(barrierHr)) return barrierHr;
+            }
             renderStateShadow_[stateKey] = value;
             pendingRenderStates_[stateKey] = value;
             return S_OK;
