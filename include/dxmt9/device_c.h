@@ -246,6 +246,26 @@ typedef struct D9CDrawPacketStreamSource {
     uint32_t stride;
 } D9CDrawPacketStreamSource;
 
+/* Canonical wire format: delta + PE shadow.
+ *
+ * Each *Valid / *Mask / *Count field carries the DELTA since the last
+ * draw packet — only fields the PE recorder marked dirty are
+ * semantically meaningful. The PE state shadow (default ON via Phase
+ * 22) is the source of truth for any field a packet leaves zero;
+ * server-side D9CDevice maintains the matching server shadow that the
+ * importer mutates as it dispatches each packet's set bits.
+ *
+ * Run-coalescing (drawPrimitiveRun fast path) keys off "every Valid /
+ * Mask / Count is zero" to detect consecutive draws that share state,
+ * so the delta encoding is load-bearing for that optimization.
+ *
+ * The full-snapshot wire mode (DXMT9_PE_DRAW_FULL_SNAPSHOT=1, Phase
+ * 16) overrides this contract: every field is forced valid +
+ * populated from the PE shadow, making each packet self-contained at
+ * the cost of wire bandwidth + disabled run-coalescing. Default OFF —
+ * intended for stress testing, debugging out-of-order replay, or
+ * environments where importer statelessness matters more than wire
+ * efficiency. */
 typedef struct D9CDrawPrimitivePacket {
     uint32_t renderStateCount;
     D9CDrawPacketRenderState renderStates[D9C_DRAW_PACKET_MAX_RENDER_STATES];
