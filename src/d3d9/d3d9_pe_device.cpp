@@ -2083,6 +2083,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return S_OK;
     }
 
+    // Phase 28: bridge-emit pending hot state via per-call setter unix-
+    // calls. LEGACY FALLBACK ONLY — chunk mode must not reach the
+    // bridge-emit branch below; chunkBarrierFlush() is the chunk-mode
+    // equivalent that emits an APPLY_STATE record into the chunk
+    // instead. Callers that follow up with a per-call bridge use
+    // flushPeRecorder() (which routes mode-aware: chunkBarrierFlush
+    // for chunk, this function for legacy).
     HRESULT flushPendingHotState() {
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) {
@@ -2090,6 +2097,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         if (!dxmt9PeStateShadowEnabled() || !hasPendingHotState()) {
             return S_OK;
+        }
+        // Defensive: log if anyone manages to enter the bridge-emit
+        // branch under chunk mode. Should never fire after Phase 28
+        // (every chunk-mode call site routes via chunkBarrierFlush or
+        // mode-aware flushPeRecorder); a hit means a regression slipped
+        // a Set* bridge call back into the chunk path.
+        if (dxmt9PeDrawChunkEnabled()) {
+            dxmt9DeviceDebugLog(
+                "WARN: flushPendingHotState bridge-emit reached in chunk "
+                "mode — Set* invariant violation. Caller bypassed "
+                "chunkBarrierFlush / flushPeRecorder.");
         }
 
         for (const auto& [state, value] : pendingRenderStates_) {
@@ -3193,7 +3211,10 @@ public:
     HRESULT STDMETHODCALLTYPE CreateStateBlock(D3DSTATEBLOCKTYPE type,
                                                 IDirect3DStateBlock9** ppSB) override {
         if (!ppSB) return D3DERR_INVALIDCALL;
-        const HRESULT flushHr = flushPendingHotState();
+        // Phase 28: state-block creation needs current server state.
+        // flushPeRecorder() routes through chunkBarrierFlush + chunk
+        // commit in chunk mode, bridge-emit in legacy mode.
+        const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_create_state_block device=%p type=%u", this, (unsigned)type);
         D9CStateBlock* sb = dxmt9c_device_create_state_block(dev_, (uint32_t)type);
@@ -3202,7 +3223,7 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE BeginStateBlock() override {
-        const HRESULT flushHr = flushPendingHotState();
+        const HRESULT flushHr = flushPeRecorder();   // Phase 28: mode-aware
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
         const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
@@ -3211,7 +3232,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** ppSB) override {
         if (!ppSB) return D3DERR_INVALIDCALL;
-        const HRESULT flushHr = flushPendingHotState();
+        const HRESULT flushHr = flushPeRecorder();   // Phase 28: mode-aware
         if (FAILED(flushHr)) return flushHr;
         *ppSB = nullptr;
         dxmt9DeviceDebugLog("device_end_state_block device=%p", this);
@@ -3561,7 +3582,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetStreamSourceFreq(UINT stream, UINT freq) override {
         dxmt9DeviceDebugLog("device_set_stream_source_freq device=%p stream=%u freq=0x%x",
                             this, stream, (unsigned)freq);
-        const HRESULT flushHr = flushPendingHotState();
+        const HRESULT flushHr = flushPeRecorder();   // Phase 28: mode-aware
         if (FAILED(flushHr)) return flushHr;
         streamFreq_[stream < 16 ? stream : 0] = freq;
         return hr32(dxmt9c_device_set_stream_source_freq(dev_, stream, freq));
