@@ -1052,6 +1052,21 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       hr = dxmt9c_query_issue(query, qi.flags);
       break;
     }
+    case D9C_COMMAND_RECORD_READBACK: {
+      if (header.size != sizeof(D9CCommandRecordReadback)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
+      D9CCommandRecordReadback rb{};
+      std::memcpy(&rb, record, sizeof(rb));
+      auto* srcSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(rb.srcWire));
+      auto* dstSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(rb.dstWire));
+      // Routes to the same backend path as the legacy bridge call —
+      // encodes the copy + waits for GPU completion + writes pixels
+      // into dst. HRESULT propagates back through commit_chunk's
+      // per-record short-circuit to the PE caller.
+      hr = dxmt9c_device_get_render_target_data(d, srcSurf, dstSurf);
+      break;
+    }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
     case D9C_COMMAND_RECORD_SET_VS_CONST_I:
     case D9C_COMMAND_RECORD_SET_VS_CONST_B:

@@ -426,6 +426,14 @@ enum {
      * object. Query::GetData stays on flush+bridge because it needs to
      * synchronously return the recorded data to the caller. */
     D9C_COMMAND_RECORD_QUERY_ISSUE = 26,
+    /* Phase 24: GetRenderTargetData (RT → CPU-mappable surface). The PE
+     * caller is synchronous — the call doesn't return until the data
+     * is in dst — but routing it through the chunk record stream keeps
+     * ordering atomic with surrounding draws/clears in the SAME chunk.
+     * PE-side commits the chunk synchronously after appending this
+     * record (Present pattern), so the chunk-commit boundary IS the
+     * readback boundary. */
+    D9C_COMMAND_RECORD_READBACK = 27,
 };
 
 typedef struct D9CCommandRecordHeader {
@@ -553,6 +561,18 @@ typedef struct D9CCommandRecordQueryIssue {
     uint32_t flags;
     uint32_t reserved;
 } D9CCommandRecordQueryIssue;
+
+/* Standalone readback record (RT surface → CPU-mappable destination).
+ * Both surfaces are SERVER-SIDE D9CSurface* casts; importer dispatches
+ * via dxmt9c_device_get_render_target_data, which internally encodes
+ * the copy + waits for GPU completion. The HRESULT propagates back
+ * through commit_chunk's per-record failure-short-circuit, so PE
+ * receives the readback's actual return code. */
+typedef struct D9CCommandRecordReadback {
+    D9CCommandRecordHeader header;
+    uint64_t srcWire;        /* RT being read (D9CSurface*) */
+    uint64_t dstWire;        /* CPU-mappable destination (D9CSurface*) */
+} D9CCommandRecordReadback;
 
 typedef struct D9CCommandChunk {
     uint32_t version;

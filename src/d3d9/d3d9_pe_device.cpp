@@ -2575,6 +2575,38 @@ public:
                                                    IDirect3DSurface9* dst) override {
         dxmt9DeviceDebugLog("device_get_render_target_data device=%p rt=%p dst=%p",
                             this, rt, dst);
+        // Phase 24: chunk-recorder path. The PE caller is synchronous —
+        // the call doesn't return until the data is in dst — but
+        // routing through the chunk record stream keeps ordering atomic
+        // with surrounding draws/clears in the SAME chunk. We append a
+        // READBACK record then commit the chunk synchronously (Present
+        // pattern); commit_chunk's per-record short-circuit propagates
+        // the actual readback HRESULT back to PE.
+        if (dxmt9PeDrawChunkEnabled()) {
+            const HRESULT hotHr = flushPendingHotState();
+            if (FAILED(hotHr)) return hotHr;
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+            if (auto* raw = rawSurf(rt); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            if (auto* raw = rawSurf(dst); raw)
+                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                reinterpret_cast<uint64_t>(raw));
+            D9CCommandRecordReadback record{};
+            record.header.type = D9C_COMMAND_RECORD_READBACK;
+            record.header.size = sizeof(record);
+            record.srcWire = reinterpret_cast<uint64_t>(rawSurf(rt));
+            record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
+            const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+            if (FAILED(appendHr)) return appendHr;
+            // Sync semantics: commit the chunk now and wait for
+            // completion. flushPendingCommandChunk routes through
+            // commit_chunk → server's record dispatcher → readback
+            // record handler → dxmt9c_device_get_render_target_data
+            // (which encodes + waits internally).
+            return flushPendingCommandChunk();
+        }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_get_render_target_data(dev_,
