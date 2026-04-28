@@ -52,8 +52,8 @@ flowchart TD
   Backend --> Boundary
   Finish --> Completed
   Finish --> PresentCompleted
-  Completed -. optional completion mode .-> Boundary
-  PresentCompleted -. optional present-completion mode .-> Boundary
+  Completed -. diagnostic completion mode .-> Boundary
+  PresentCompleted --> Boundary
 
   classDef cpu fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
   classDef gpu fill:#fff0d6,stroke:#b26b00,color:#2b1900
@@ -201,11 +201,11 @@ flowchart TD
   Present --> PreAcquire[post-commit preAcquireNextDrawable]
   PreAcquire --> Presenter
 
-  Device[DeviceImpl present policy] --> Boundary
-  Completed -. optional completion boundary .-> Boundary
-  PresentCompleted -. optional present-completion boundary .-> Boundary
+  CommandQueue[CommandQueue present policy] --> Boundary
+  Completed -. diagnostic completion boundary .-> Boundary
+  PresentCompleted --> Boundary
   EncodeThread --> Dequeued
-  Dequeued --> Boundary
+  Dequeued -. legacy dequeue boundary .-> Boundary
 
   BackBuffers[Swapchain backbuffer count] --> Cap
   MaxLatency[DXMT9_MAX_FRAME_LATENCY default 4] --> Cap
@@ -353,13 +353,13 @@ Remaining measurement changes:
 
 Important current behavior:
 
-- `DeviceImpl::present()` submits present, then applies immediate-present latency boundary unless disabled or vsync path already flushes.
+- `DeviceImpl::present()` supplies public D3D9 present metadata; `CommandQueue::submitPresent()` commits the present chunk and applies the immediate-present latency boundary unless disabled or vsync path already flushes.
 - `CommandQueue::presentBoundary()` waits for `presentSeqId - maxFrameLatency`.
 - Default `maxFrameLatency` is now `4`, adopted from the best safe experiment below.
 - `DXMT9_SPLIT_PRESENT_CHUNK=1` and `DXMT9_SPLIT_PRESENT_ACQUIRE=1` are experiments only. The existing split-present run was slower, so they are not defaults.
 - `DXMT9_PRESENT_ACQUIRE_ON_SUBMIT=1` is also experimental. It moves drawable acquisition out of the encode worker, but the first measurement is slower because it doubles command-buffer traffic.
 - `DXMT9_PRESENT_ASYNC_ACQUIRE=1` is experimental too. It is queue-owned, keeps command-buffer count stable, queues per-present drawable tokens, and serializes actual `nextDrawableRetained()` work to avoid retained-drawable hoarding.
-- `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION=1` is experimental. It makes `presentBoundary()` wait on a present-bearing command-buffer completion watermark instead of encode-thread present dequeue.
+- `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION` is ON by default. It makes `presentBoundary()` wait on a present-bearing command-buffer completion watermark instead of encode-thread present dequeue; set it to `0` only for regression comparison.
 - `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=1` is experimental. It applies the DXVK-like effective latency rule `min(appLatency, BackBufferCount + 1)` to the present boundary only.
 - `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=<N>` is experimental. It commits the current chunk from `submitDraw()` once the current chunk reaches `N` commands, reducing huge no-present chunk tail latency without changing the default path.
 - `DXMT9_DISABLE_PRESENT_BOUNDARY=1` improves elapsed time in BasicHLSL but does not encode all submitted presents, so it is not a safe fix.
@@ -371,8 +371,9 @@ The target is not to remove frame latency. The target is to stop using encode-th
 ```mermaid
 flowchart TD
   App[D3D9 Present] --> FlushDraw[flush/commit draw chunk]
-  FlushDraw --> Acquire[Presenter acquire drawable token]
-  Acquire --> PresentPacket[submit present packet with drawable token]
+  FlushDraw --> PresentPacket[submit present packet]
+  FlushDraw -. opt-in drawable token .-> Acquire[Presenter acquire drawable token]
+  Acquire -. token .-> PresentPacket
   PresentPacket --> PresentEncode[present encode path]
   PresentEncode --> MTLPresent[commandBuffer presentDrawable]
   MTLPresent --> Completion[completion watcher]
@@ -381,17 +382,19 @@ flowchart TD
   FrameFence --> LatencyWait
 
   subgraph CurrentStage[current implementation]
+    FlushDraw
+    PresentPacket
     PresentEncode
+    FrameFence
+    LatencyWait
   end
 
   subgraph ExperimentalStage[opt-in experiment]
-    FlushDraw
     Acquire
-    FrameFence
   end
 
-  subgraph RemainingWork[required redesign]
-    LatencyWait
+  subgraph RemainingWork[remaining tuning]
+    ReduceTokenWait[reduce token/acquire wait overlap loss]
   end
 ```
 
@@ -407,9 +410,9 @@ Migration steps:
 1. Do not default the existing naive split knobs. The split-present experiment increased command buffers and made Tutorial07 much slower.
 2. Implemented behind `DXMT9_PRESENT_ACQUIRE_ON_SUBMIT=1`: move `nextDrawable()` out of `Presenter::encodeCommands()` into a synchronous `Presenter::acquireDrawable()` token path.
 3. Implemented behind `DXMT9_PRESENT_ASYNC_ACQUIRE=1`: `CommandQueue::submitPresent()` starts drawable acquisition through a Presenter-owned acquire thread and passes a future-like token to the present packet. The current shape queues tokens for every present but allows only one retained/in-flight `nextDrawableRetained()` acquisition at a time, so the encode path no longer falls back to blocking `nextDrawable()`.
-4. Do not default either token path yet. Synchronous token acquire removes boundary wait but doubles command buffers. The first async implementation could produce high peak FPS but also produced fallback-heavy runs; the current queued-token version removes fallback/spikes but is not consistently faster than default latency 4.
-5. Implemented behind `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION=1`: add a queue-owned `presentCompletedSeqId_` watermark advanced by the completion watcher for present-bearing command buffers, and let `presentBoundary()` wait on that token.
-6. Do not default completion-token boundary yet. It is structurally closer to DXVK/Wine pacing, but the first BasicHLSL run is slower than the best async-only run.
+4. Do not default either drawable-token acquire path yet. Synchronous token acquire removes boundary wait but doubles command buffers. The queued async version removes fallback/spikes but is not consistently faster than default latency 4.
+5. Implemented as the default boundary source: add a queue-owned `presentCompletedSeqId_` watermark advanced by the completion watcher for present-bearing command buffers, and let `presentBoundary()` wait on that token.
+6. Keep the older completion/dequeue boundary modes only as regression diagnostics. The default pacing contract is now present-completion based.
 7. Implemented behind `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=1`: pass `SwapDesc::backBufferCount` from the D3D9 swapchain to the backend and cap the immediate-present boundary latency by `BackBufferCount + 1`.
 8. Do not default the cap alone yet. The cap reduces max waits and helps present completion, but current samples lose FPS unless paired with queued async acquire.
 9. Implemented: move the boundary decision from `DeviceImpl::present()` into `CommandQueue::submitPresent()`. This keeps frame-token ownership with the queue; `DeviceImpl` only supplies per-present public latency/callback metadata.
@@ -620,11 +623,11 @@ Interpretation:
 - PE shadow alone removes the explicit state bridge calls but keeps per-draw bridges. Useful for bisecting recorder-introduced bugs (DXMT9_PE_DRAW_CHUNK=0).
 - **Default production path** matches the upstream DXMT chunk model: 1280 app draws + 1280 hot state calls collapse to 20 `commit_chunk` unix bridges for this 20-frame/64-draw workload — a ~12× reduction in PE/unix transitions, with `set_render_state` / `set_texture` / `set_stream_source` / `set_fvf` bridge counters at 0.
 - Full snapshot mode shares the same bridge counter profile (still 20 commits) but emits ~10× more wire bytes per chunk and disables run-coalescing — only useful for debugging.
-- The barrier-safe prototype keeps four `SetRenderState` bridge calls because hot state is flushed before `Clear` to preserve app-visible ordering. This is intentional; draw bridge pressure is still reduced from 1280 calls to 20 chunk calls.
+- Barrier state is now chunk-recorded via `D9C_COMMAND_RECORD_APPLY_STATE`; hot `Set*` calls should not appear as PE/unix setter bridges in the default path.
 - Present frame-token boundary ownership is now queue-side: `CommandQueue::submitPresent()` accepts the present packet, allocates/uses the present sequence token, and applies the boundary policy before returning. The default wait target is now present-completion, not encode-dequeue.
 - State-delta hashing is currently a simple equality check over the PE hot-state shadow, not a full pipeline-state hash.
-- This is not yet a default path. Current chunk barriers cover common state/resource/query/readback ordering points, and the command chunk now covers `DrawPrimitive`, `DrawIndexedPrimitive`, `DrawPrimitiveUP`, and `DrawIndexedPrimitiveUP`; broader game coverage still needs stateblock/shadow invalidation and resource-lifetime hazard tests.
-- The prototype reduces PE/unix bridge pressure only. Backend `submitDraw`, encode, and transient upload work still happen per draw after the provider replays the chunk, so further speedup needs backend-side compact command records and upload coalescing.
+- This is now the default recorder path. Current chunk barriers cover common state/resource/query/readback ordering points, and the command chunk covers `DrawPrimitive`, `DrawIndexedPrimitive`, `DrawPrimitiveUP`, and `DrawIndexedPrimitiveUP`; broader game coverage still needs stateblock/shadow invalidation and resource-lifetime hazard tests.
+- The default path reduces PE/unix bridge pressure only. Backend `submitDraw`, encode, and transient upload work still happen per draw after the provider replays the chunk, so further speedup needs backend-side compact command records and upload coalescing.
 
 Latency experiment results:
 
@@ -745,11 +748,11 @@ Current interpretation:
 - The latency-4 experiment is the best safe result so far and is now the default: it keeps all presents encoded while improving fps.
 - Moving acquire out of the encode worker is directionally correct but not enough by itself. It must avoid command-buffer doubling, retained-drawable hoarding, fallback-to-blocking acquire, and long wait spikes.
 - Split counters now show the important distinction: `present_async_acquire_wait_ms` measures the acquire thread's `nextDrawableRetained()`, while `present_token_wait_ms` measures encode-thread waiting for that token. In queued-token mode these are nearly equal, so overlap is still weak for immediate-present samples.
-- A queue-owned present-completion token is now the default boundary source. This matches the spec/upstream ownership model; it still needs repeated performance A/B because earlier opt-in measurements were structurally cleaner but not always the fastest path.
+- A queue-owned present-completion token is now the default boundary source. This matches the spec/upstream ownership model; it still needs repeated performance A/B because it does not by itself solve drawable-acquire overlap.
 - The DXVK-like `BackBufferCount + 1` cap is useful only as part of a combined present policy so far. Alone it lowers worst-case waits but costs FPS; combined with queued async it is the best opt-in result in the repeated BasicHLSL/Tutorial07 A/B.
 - The first two-app repeated A/B suggested `queued async + effective latency cap` as the strongest candidate policy, but the broader A/B weakens that conclusion: it helps BasicHLSL, Irrlicht, and slightly HDRFormats/MultiTextureTerrain, is neutral for Tutorial07/WaterRT, and regresses DXUTSimpleSample.
 - Waiting for an in-flight preacquire fixes the old preacquire hit/miss shape, but it is still not a default policy: it helps DXUTSimpleSample and hurts BasicHLSL under the same run shape. It remains useful as an opt-in diagnostic for "previous-frame acquire can overlap" workloads.
-- The present policy should stay opt-in for now. The next useful step is not flipping the default; it is either app-class gating or reducing `present_token_wait_ms` so async acquire overlaps real CPU/GPU work instead of shifting the wait to a later queue point.
+- The optional drawable-acquire and latency-cap policies should stay opt-in for now. The next useful step is app-class gating or reducing `present_token_wait_ms` so async acquire overlaps real CPU/GPU work instead of shifting the wait to a later queue point.
 - The next draw-side target is automatic chunk flushing or compact per-draw uniform upload so no-present workloads do not build very large command chunks and transient uniform slabs.
 
 ## Open Questions

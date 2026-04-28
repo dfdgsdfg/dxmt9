@@ -162,7 +162,7 @@ flowchart TD
     A["Application calls SetRenderState / SetTexture / SetStreamSource"] --> B["Update DeviceState\nmark dirty bits"]
     B --> C["No unix call"]
 
-    D["Application calls Draw*"] --> E["Snapshot only the state needed by this draw"]
+    D["Application calls Draw*"] --> E["Record draw payload\nand dirty state delta"]
     E --> F["Append DrawCommand to PE CommandChunk"]
     F --> G{Chunk full\nor explicit ordering point?}
     G -->|No| H["Return to application"]
@@ -187,7 +187,7 @@ stateDiagram-v2
     [*] --> Clean : device created
     Clean --> Dirty : Set* updates DeviceState
     Dirty --> Dirty : more Set* calls
-    Dirty --> Recording : Draw* snapshots state
+    Dirty --> Recording : Draw* records state delta
     Clean --> Recording : Draw* with unchanged state
     Recording --> Recording : append Draw/Clear/SurfaceOp
     Dirty --> Sealed : Present / readback / query ordering
@@ -205,8 +205,12 @@ stateDiagram-v2
 Required invariants:
 
 - Dirty bits are an optimization only; the `DeviceState` value is authoritative.
-- A recorded draw owns a complete value snapshot. Later `Set*` calls only affect later
-  draw records.
+- A recorded draw owns a complete effective state after ordered replay of prior
+  state-delta records against the server-side shadow. The canonical wire packet may
+  carry only deltas; full self-contained snapshots are debug/stress mode.
+- Later `Set*` calls only affect later records. If a barrier command occurs while
+  state is dirty, the recorder must append an `APPLY_STATE` record before the
+  barrier.
 - `DrawPrimitiveUP` / `DrawIndexedPrimitiveUP` copy caller memory into chunk-owned
   payload or staging storage before returning.
 - Recorded chunks retain opaque backend handles, never COM objects.
@@ -215,7 +219,7 @@ Required invariants:
 
 ### 3.3 Draw and Chunk Payloads
 
-**`DrawDesc`** — the snapshot embedded in a draw command:
+**Conceptual `DrawDesc`** — the effective state the backend encodes for a draw:
 
 ```
 DrawDesc {
@@ -242,10 +246,13 @@ DrawDesc {
 }
 ```
 
-The core constructs `DrawDesc` from `DeviceState` immediately before the call. No
-D3D9 COM objects are referenced inside `DrawDesc` — only opaque backend handles.
-The snapshot must be complete enough that the backend can replay it after the D3D9
-method has returned.
+The PE wire format does not need to carry this full structure in every draw record.
+The canonical command stream carries a compact state delta plus draw payload; the
+unix importer applies those deltas in order to a server-side shadow. The resulting
+effective state is equivalent to the conceptual `DrawDesc` above before encoding.
+No D3D9 COM objects are referenced across the bridge — only opaque backend handles.
+`DXMT9_PE_DRAW_FULL_SNAPSHOT=1` may force self-contained draw packets, but that is a
+debug/stress mode because it increases wire size and disables cheap run coalescing.
 
 **`CommandChunk`** — the bridge payload committed to the backend:
 
@@ -281,18 +288,20 @@ sequenceDiagram
     Dev->>Rec: emit PresentCommand
     Rec->>CQ: commitChunk()
     CQ->>CQ: allocate frameToken
-    CQ->>CQ: waitFrameLatency(frameToken, maxLatency)
+    opt boundary policy applies
+        CQ->>CQ: wait for frameToken - maxLatency\nolder present completion
+    end
+    CQ-->>Dev: present accepted after boundary policy
+    Dev-->>App: Present returns
     CQ->>Pr: encode present for token
     Pr->>Pr: acquire drawable and present
     FT->>CQ: signal frameToken after command buffer completion
-    CQ-->>Dev: latency wait satisfied
-    Dev-->>App: Present returns
 ```
 
-The wait is based on present-bearing command completion, not on whether the encode
-thread has merely dequeued or started a chunk. This keeps pacing attached to the
-queue/presenter timeline and prevents the front-end device object from becoming the
-owner of frame scheduling.
+When the boundary policy applies, the wait is based on present-bearing command
+completion, not on whether the encode thread has merely dequeued or started a
+chunk. This keeps pacing attached to the queue/presenter timeline and prevents the
+front-end device object from becoming the owner of frame scheduling.
 
 ---
 

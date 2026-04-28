@@ -204,6 +204,10 @@ extern "C" int32_t dxmt9c_device_draw_primitive(D9CDevice* arg0, uint32_t type, 
   return dxmt9p_device_draw_primitive(arg0, type, startVertex, count);
 }
 
+extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* arg0, const D9CCommandChunk* chunk) {
+  return dxmt9p_device_commit_chunk(arg0, chunk);
+}
+
 extern "C" int32_t dxmt9c_device_draw_primitive_packet(D9CDevice* arg0, const D9CDrawPrimitivePacket* packet) {
   return dxmt9p_device_draw_primitive_packet(arg0, packet);
 }

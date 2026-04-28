@@ -62,6 +62,7 @@ enum class BridgeDetail : std::size_t {
   SetTexture,
   SetStreamSource,
   SetFVF,
+  CommitChunk,
   DrawPrimitive,
   DrawPrimitivePacket,
   DrawPrimitiveChunk,
@@ -153,6 +154,7 @@ const char* bridgeDetailName(BridgeDetail detail) {
   case BridgeDetail::SetTexture: return "set_texture";
   case BridgeDetail::SetStreamSource: return "set_stream_source";
   case BridgeDetail::SetFVF: return "set_fvf";
+  case BridgeDetail::CommitChunk: return "commit_chunk";
   case BridgeDetail::DrawPrimitive: return "draw_primitive";
   case BridgeDetail::DrawPrimitivePacket: return "draw_primitive_packet";
   case BridgeDetail::DrawPrimitiveChunk: return "draw_primitive_chunk";
@@ -263,6 +265,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_get_depth_stencil:
     return BridgeClass::State;
 
+  case BridgeOpcode::dxmt9c_device_commit_chunk:
   case BridgeOpcode::dxmt9c_device_draw_primitive:
   case BridgeOpcode::dxmt9c_device_draw_primitive_packet:
   case BridgeOpcode::dxmt9c_device_draw_primitive_chunk:
@@ -379,6 +382,9 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
     return true;
   case BridgeOpcode::dxmt9c_device_set_fvf:
     detail = BridgeDetail::SetFVF;
+    return true;
+  case BridgeOpcode::dxmt9c_device_commit_chunk:
+    detail = BridgeDetail::CommitChunk;
     return true;
   case BridgeOpcode::dxmt9c_device_draw_primitive:
     detail = BridgeDetail::DrawPrimitive;

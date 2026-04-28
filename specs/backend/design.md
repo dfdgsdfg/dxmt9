@@ -372,9 +372,12 @@ sequenceDiagram
     Rec->>BR: commitChunk(chunk)
     BR->>CQ: import chunk
     CQ->>CQ: allocate frameToken
-    CQ->>CQ: waitFrameLatency(frameToken, maxLatency)
+    opt boundary policy applies
+        CQ->>CQ: waitFrameLatency(frameToken, maxLatency)\nwaits for older present completion
+    end
     CQ-->>BR: present accepted after boundary policy
-    BR-->>Rec: Present returns
+    BR-->>Rec: commitChunk returns
+    Rec-->>App: Present returns
 
     ET->>PR: encode PresentCommand(frameToken)
     PR->>CL: nextDrawable\n(blocks when drawable/vsync-limited)
@@ -382,8 +385,6 @@ sequenceDiagram
     ET->>MTL: commandBuffer.presentDrawable(drawable)
     ET->>MTL: commandBuffer.commit()
     FT->>CQ: signal frameToken\non command buffer completion
-    CQ-->>BR: latency wait satisfied
-    BR-->>App: Present returns
 ```
 
 The back buffer is a private `MTLTexture` owned by the swap chain. On present, it
@@ -405,7 +406,8 @@ stateDiagram-v2
 
     note right of Submitted
         The application may wait for
-        frameToken - maxFrameLatency.
+        frameToken - maxFrameLatency
+        when the boundary policy applies.
     end note
 ```
 

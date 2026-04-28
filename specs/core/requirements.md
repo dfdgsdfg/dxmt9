@@ -299,9 +299,11 @@ handled by PE-side state tracking and command recording.
 and render-target binding calls must update the core shadow state and dirty bits.
 They must not emit a backend bridge call solely because state changed.
 
-**R-CORE-11.3** Each draw command recorded by the core must contain a complete value
-snapshot of the state needed by that draw. Later state changes must not affect an
-already recorded draw.
+**R-CORE-11.3** Each recorded draw must resolve to a complete effective state before
+encoding. The canonical bridge packet may carry only a state delta plus draw
+payload, but ordered replay against the server-side shadow must produce the same
+effective state the D3D9 device had at record time. Later state changes must not
+affect an already recorded draw.
 
 **R-CORE-11.4** Recorded command chunks must contain only POD command records and
 opaque backend handles. They must not contain D3D9 COM pointers, Objective-C object
