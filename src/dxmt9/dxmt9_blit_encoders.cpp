@@ -260,7 +260,6 @@ bool readbackSurface(CommandQueue& queue,
                       const core::BackendLimits& limits,
                       const core::ReadbackDesc& desc,
                       core::ReadbackPixels& pixels) {
-  using u8 = std::uint8_t;
   using u32 = std::uint32_t;
   using i32 = std::int32_t;
 

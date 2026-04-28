@@ -2666,7 +2666,7 @@ public:
                                                          DWORD msQual,
                                                          BOOL discard,
                                                          IDirect3DSurface9** ppS,
-                                                         HANDLE* psh) override {
+                                                         HANDLE* /*shared*/) override {
         if (!ppS) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface device=%p size=%ux%u fmt=%u ms=%u msQual=%u discard=%u",
                             this, w, h, (unsigned)fmt, (unsigned)ms, (unsigned)msQual, (unsigned)discard);

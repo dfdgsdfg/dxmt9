@@ -656,6 +656,15 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
           }
         }
         break;
+      case core::MetalCommandRecord::Kind::DrawRun:
+        // Phase 35: explicit no-op. DrawRun ingress (submitDrawRun) marks
+        // BaseDrawState resources ONCE at submit time (legacy mode) or
+        // relies on chunk.handles bulk retention (chunk import mode,
+        // Phase 14 + 18). This callback fires during commit-time slot
+        // marking — DrawRun resources are already pinned by either
+        // path, so re-walking per-DrawParam here would be redundant
+        // CPU work.
+        break;
     }
   }
 }
