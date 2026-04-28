@@ -62,6 +62,21 @@ static bool dxmt9PeDrawChunkEnabled() {
     return enabled;
 }
 
+// Phase 33: structural invariant — the DEFAULT chunk path (both
+// DXMT9_PE_DRAW_CHUNK and DXMT9_PE_STATE_SHADOW unset, both default ON)
+// has ZERO reachable code paths to dxmt9c_device_set_render_state /
+// set_texture / set_stream_source / set_fvf / set_vs / set_ps /
+// set_vertex_declaration / set_render_target / set_depth_stencil_surface
+// / set_viewport / set_scissor_rect / set_texture_stage_state /
+// set_sampler_state / set_material / set_clip_plane / set_transform /
+// set_light / light_enable / set_indices unix-calls. Every Set* fast
+// path is gated by `if (dxmt9PeStateShadowEnabled())` (early return)
+// or `if (dxmt9PeDrawChunkEnabled())` (early return). The remaining
+// hr32(dxmt9c_device_set_*) tail calls are reached only when the
+// matching env var is set to "0" (regression escape hatch). Audited
+// at Phase 33 commit; new Set*-style code MUST follow the same
+// pattern (chunk-mode early return → PE shadow update only).
+//
 // Phase 16: full-snapshot mode. When set, every draw packet emitted in
 // chunk-recorder mode carries the COMPLETE BaseDrawState snapshot (every
 // field marked valid + populated from the PE shadow), not just the
