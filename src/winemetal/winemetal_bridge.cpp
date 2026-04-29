@@ -14,9 +14,12 @@
 #include <atomic>
 #include <chrono>
 #include <cstdarg>
+#include <cwchar>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include "util/dynamic_symbol.hpp"
 #include "util/log/log.hpp"
@@ -36,8 +39,19 @@ using NtQueryVirtualMemoryFn = NTSTATUS (WINAPI *)(HANDLE process,
                                                    void *buffer,
                                                    SIZE_T size,
                                                    SIZE_T *result_size);
+using RtlDosPathNameToNtPathNameWithStatusFn = NTSTATUS (WINAPI *)(PCWSTR dos_name,
+                                                                    UNICODE_STRING *nt_name,
+                                                                    PWSTR *file_part,
+                                                                    void *curdir);
+using RtlFreeUnicodeStringFn = void (WINAPI *)(UNICODE_STRING *string);
 
-constexpr ULONG kMemoryWineUnixFuncs = 1000;
+constexpr ULONG kMemoryWineLoadUnixLib = 1000;
+constexpr ULONG kMemoryWineLoadUnixLibByName = 1002;
+
+enum class BridgeLocatorMode {
+  Builtin,
+  AppLocal,
+};
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -84,12 +98,15 @@ enum class BridgeDetail : std::size_t {
 struct BridgeState {
   std::once_flag initialized;
   const WCHAR* module_name = nullptr;
-  bool allow_builtin_dispatcher_fallback = false;
+  BridgeLocatorMode locator_mode = BridgeLocatorMode::AppLocal;
   HMODULE ntdll = nullptr;
   WineUnloadUnixLibFn unload_unix_lib = nullptr;
   WineUnixCallDispatcherVar dispatcher = nullptr;
   WineUnixCallDispatcherVar fallback_dispatcher = nullptr;
   WineInitUnixCallFn init_unix_call = nullptr;
+  NtQueryVirtualMemoryFn nt_query_virtual_memory = nullptr;
+  RtlDosPathNameToNtPathNameWithStatusFn rtl_dos_to_nt_path = nullptr;
+  RtlFreeUnicodeStringFn rtl_free_unicode_string = nullptr;
   unixlib_handle_t* unixlib_handle_ptr = nullptr;
   unixlib_module_t module = 0;
   unixlib_handle_t handle = 0;
@@ -112,7 +129,11 @@ struct BridgePerfCounters {
 BridgeState& winemetalUnixBridgeState() {
   static BridgeState state{};
   state.module_name = L"winemetal.so";
-  state.allow_builtin_dispatcher_fallback = true;
+#if defined(DXMT9_WINE_BUILTIN_DLL)
+  state.locator_mode = BridgeLocatorMode::Builtin;
+#else
+  state.locator_mode = BridgeLocatorMode::AppLocal;
+#endif
   return state;
 }
 
@@ -530,43 +551,174 @@ T resolveProc(HMODULE module, const char *name) {
 }
 
 NTSTATUS initializeDispatcherOnlyFallback(BridgeState& state) {
-  const auto dispatcher_export =
-      dxmt9::util::resolveModuleSymbol<void*>(reinterpret_cast<void*>(state.ntdll), "__wine_unix_call_dispatcher");
-  bridgeDebugLog("dispatcher-only fallback: export=%p", dispatcher_export);
-  if (!dispatcher_export) {
+  if (!state.dispatcher || !state.nt_query_virtual_memory) {
     return DXMT9_STATUS_NOT_SUPPORTED;
   }
 
-  state.fallback_dispatcher = *reinterpret_cast<WineUnixCallDispatcherVar *>(dispatcher_export);
-  bridgeDebugLog("dispatcher-only fallback: dispatcher=%p", reinterpret_cast<void*>(state.fallback_dispatcher));
-  if (!state.fallback_dispatcher) {
-    return DXMT9_STATUS_NOT_SUPPORTED;
-  }
-
-  const auto nt_query_virtual_memory =
-      dxmt9::util::resolveModuleSymbol<NtQueryVirtualMemoryFn>(reinterpret_cast<void*>(state.ntdll),
-                                                               "NtQueryVirtualMemory");
-  if (!nt_query_virtual_memory) {
-    return DXMT9_STATUS_NOT_SUPPORTED;
-  }
-
-  const NTSTATUS status = nt_query_virtual_memory(GetCurrentProcess(),
-                                                  reinterpret_cast<void *>(&__ImageBase),
-                                                  kMemoryWineUnixFuncs,
-                                                  &state.fallback_handle,
-                                                  sizeof(state.fallback_handle),
-                                                  nullptr);
-  bridgeDebugLog("dispatcher-only fallback: NtQueryVirtualMemory(1000) status=0x%08lx handle=0x%llx",
+  // PE callers use the base info class. Wine's 32-bit wow64 ntdll translates it
+  // to the host-side wow64 query and selects __wine_unix_call_wow64_funcs.
+  unixlib_handle_t handle = 0;
+  const NTSTATUS status = state.nt_query_virtual_memory(GetCurrentProcess(),
+                                                        reinterpret_cast<void *>(&__ImageBase),
+                                                        kMemoryWineLoadUnixLib,
+                                                        &handle,
+                                                        sizeof(handle),
+                                                        nullptr);
+  bridgeDebugLog("builtin unixlib lookup: info=%lu status=0x%08lx handle=0x%llx",
+                 static_cast<unsigned long>(kMemoryWineLoadUnixLib),
                  static_cast<unsigned long>(status),
-                 static_cast<unsigned long long>(state.fallback_handle));
-  if (status != DXMT9_STATUS_SUCCESS || !state.fallback_handle) {
-    return status;
+                 static_cast<unsigned long long>(handle));
+  if (status != DXMT9_STATUS_SUCCESS || !handle) {
+    return status == DXMT9_STATUS_SUCCESS ? DXMT9_STATUS_DLL_NOT_FOUND : status;
   }
 
-  state.handle = state.fallback_handle;
-  state.dispatcher = state.fallback_dispatcher;
+  state.handle = handle;
   state.module = 0;
   return DXMT9_STATUS_SUCCESS;
+}
+
+bool runtimeProviderFallbackAllowed() {
+  const char* env = std::getenv("DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK");
+  return env && env[0] != '\0' && env[0] != '0';
+}
+
+UNICODE_STRING makeUnicodeString(const std::wstring& value) {
+  UNICODE_STRING result{};
+  const auto bytes = value.size() * sizeof(WCHAR);
+  if (bytes > 0xfffc) {
+    return result;
+  }
+  result.Length = static_cast<USHORT>(bytes);
+  result.MaximumLength = static_cast<USHORT>(bytes + sizeof(WCHAR));
+  result.Buffer = const_cast<WCHAR*>(value.c_str());
+  return result;
+}
+
+std::wstring getEnvironmentString(const WCHAR* name) {
+  const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
+  if (!required) {
+    return {};
+  }
+  std::vector<WCHAR> buffer(required);
+  const DWORD length = GetEnvironmentVariableW(name, buffer.data(), required);
+  if (!length || length >= required) {
+    return {};
+  }
+  return std::wstring(buffer.data(), length);
+}
+
+std::wstring moduleSiblingPath(HMODULE module, const WCHAR* leaf) {
+  constexpr DWORD kBufferLength = 32768;
+  WCHAR buffer[kBufferLength] = {};
+  const DWORD length = GetModuleFileNameW(module, buffer, kBufferLength);
+  if (!length || length >= kBufferLength) {
+    return {};
+  }
+
+  std::wstring path(buffer, length);
+  const auto slash = path.find_last_of(L"\\/");
+  if (slash == std::wstring::npos) {
+    return leaf;
+  }
+  path.resize(slash + 1);
+  path += leaf;
+  return path;
+}
+
+NTSTATUS loadUnixlibByName(BridgeState& state, const UNICODE_STRING& name, const char* label) {
+  if (!state.dispatcher || !state.nt_query_virtual_memory) {
+    return DXMT9_STATUS_NOT_SUPPORTED;
+  }
+  if (!name.Buffer) {
+    return DXMT9_STATUS_INVALID_PARAMETER;
+  }
+
+  UINT64 result[2] = {};
+  const NTSTATUS status = state.nt_query_virtual_memory(GetCurrentProcess(),
+                                                        &name,
+                                                        kMemoryWineLoadUnixLibByName,
+                                                        result,
+                                                        sizeof(result),
+                                                        nullptr);
+  bridgeDebugLog("provider candidate[%s]: info=%lu name=%ls status=0x%08lx module=0x%llx handle=0x%llx",
+                 label,
+                 static_cast<unsigned long>(kMemoryWineLoadUnixLibByName),
+                 name.Buffer ? name.Buffer : L"(null)",
+                 static_cast<unsigned long>(status),
+                 static_cast<unsigned long long>(result[0]),
+                 static_cast<unsigned long long>(result[1]));
+  if (status != DXMT9_STATUS_SUCCESS || !result[1]) {
+    return status == DXMT9_STATUS_SUCCESS ? DXMT9_STATUS_DLL_NOT_FOUND : status;
+  }
+
+  state.module = static_cast<unixlib_module_t>(result[0]);
+  state.handle = static_cast<unixlib_handle_t>(result[1]);
+  return DXMT9_STATUS_SUCCESS;
+}
+
+NTSTATUS loadUnixlibExplicitPath(BridgeState& state, const std::wstring& path, const char* label) {
+  if (path.empty()) {
+    return DXMT9_STATUS_DLL_NOT_FOUND;
+  }
+
+  UNICODE_STRING nt_name{};
+  bool converted = false;
+  if (state.rtl_dos_to_nt_path) {
+    const NTSTATUS convert_status = state.rtl_dos_to_nt_path(path.c_str(), &nt_name, nullptr, nullptr);
+    bridgeDebugLog("provider candidate[%s]: path=%ls nt-convert-status=0x%08lx",
+                   label,
+                   path.c_str(),
+                   static_cast<unsigned long>(convert_status));
+    converted = convert_status == DXMT9_STATUS_SUCCESS;
+  }
+
+  if (!converted) {
+    nt_name = makeUnicodeString(path);
+  }
+
+  const NTSTATUS status = loadUnixlibByName(state, nt_name, label);
+  if (converted && state.rtl_free_unicode_string) {
+    state.rtl_free_unicode_string(&nt_name);
+  }
+  return status;
+}
+
+NTSTATUS loadAppLocalUnixlib(BridgeState& state) {
+  NTSTATUS last_status = DXMT9_STATUS_DLL_NOT_FOUND;
+
+  const std::wstring env_path = getEnvironmentString(L"DXMT9_WINEMETAL_SO");
+  if (!env_path.empty()) {
+    last_status = loadUnixlibExplicitPath(state, env_path, "env");
+    if (last_status == DXMT9_STATUS_SUCCESS) {
+      return last_status;
+    }
+  }
+
+  const std::wstring module_path =
+      moduleSiblingPath(reinterpret_cast<HMODULE>(&__ImageBase), L"winemetal.so");
+  last_status = loadUnixlibExplicitPath(state, module_path, "module-dir");
+  if (last_status == DXMT9_STATUS_SUCCESS) {
+    return last_status;
+  }
+
+  const std::wstring exe_path = moduleSiblingPath(nullptr, L"winemetal.so");
+  last_status = loadUnixlibExplicitPath(state, exe_path, "exe-dir");
+  if (last_status == DXMT9_STATUS_SUCCESS) {
+    return last_status;
+  }
+
+  if (runtimeProviderFallbackAllowed()) {
+    const std::wstring name = L"winemetal.so";
+    const UNICODE_STRING unixlib_name = makeUnicodeString(name);
+    last_status = loadUnixlibByName(state, unixlib_name, "runtime-by-name");
+    if (last_status == DXMT9_STATUS_SUCCESS) {
+      return last_status;
+    }
+  } else {
+    bridgeDebugLog("provider candidate[runtime-by-name]: skipped; DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK is not set");
+  }
+
+  return last_status;
 }
 
 void initializeBridgeState(BridgeState& state) {
@@ -589,19 +741,41 @@ void initializeBridgeState(BridgeState& state) {
   state.unixlib_handle_ptr = dxmt9::util::resolveModuleSymbol<unixlib_handle_t*>(
       reinterpret_cast<void*>(state.ntdll), "__wine_unixlib_handle");
   state.unload_unix_lib = resolveProc<WineUnloadUnixLibFn>(state.ntdll, "__wine_unload_unix_lib");
+  state.nt_query_virtual_memory = resolveProc<NtQueryVirtualMemoryFn>(state.ntdll, "NtQueryVirtualMemory");
+  state.rtl_dos_to_nt_path = resolveProc<RtlDosPathNameToNtPathNameWithStatusFn>(
+      state.ntdll, "RtlDosPathNameToNtPathName_U_WithStatus");
+  state.rtl_free_unicode_string = resolveProc<RtlFreeUnicodeStringFn>(state.ntdll, "RtlFreeUnicodeString");
 
-  if (state.allow_builtin_dispatcher_fallback) {
-    state.status = initializeDispatcherOnlyFallback(state);
-    bridgeDebugLog("initialize(%ls): final fallback status=0x%08lx handle=0x%llx dispatcher=%p",
-                   state.module_name,
-                   static_cast<unsigned long>(state.status),
-                   static_cast<unsigned long long>(state.handle),
-                   reinterpret_cast<void*>(state.dispatcher));
-  } else {
+  if (!state.dispatcher || !state.nt_query_virtual_memory) {
     state.status = DXMT9_STATUS_NOT_SUPPORTED;
-    bridgeDebugLog("initialize(%ls): no unixlib handle available and fallback disabled",
-                   state.module_name);
+    bridgeDebugLog("initialize(%ls): missing dispatcher=%p or NtQueryVirtualMemory=%p",
+                   state.module_name,
+                   reinterpret_cast<void*>(state.dispatcher),
+                   reinterpret_cast<void*>(state.nt_query_virtual_memory));
+    return;
   }
+
+  if (state.locator_mode == BridgeLocatorMode::Builtin) {
+    state.status = initializeDispatcherOnlyFallback(state);
+    if (state.status == DXMT9_STATUS_SUCCESS) {
+      bridgeDebugLog("initialize(%ls): builtin provider handle=0x%llx dispatcher=%p",
+                     state.module_name,
+                     static_cast<unsigned long long>(state.handle),
+                     reinterpret_cast<void*>(state.dispatcher));
+      return;
+    }
+    bridgeDebugLog("initialize(%ls): builtin lookup failed status=0x%08lx; trying app-local candidates",
+                   state.module_name,
+                   static_cast<unsigned long>(state.status));
+  }
+
+  state.status = loadAppLocalUnixlib(state);
+  bridgeDebugLog("initialize(%ls): final status=0x%08lx module=0x%llx handle=0x%llx dispatcher=%p",
+                 state.module_name,
+                 static_cast<unsigned long>(state.status),
+                 static_cast<unsigned long long>(state.module),
+                 static_cast<unsigned long long>(state.handle),
+                 reinterpret_cast<void*>(state.dispatcher));
 }
 
 void initializeWinemetalUnixBridge() {

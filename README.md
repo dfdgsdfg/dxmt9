@@ -52,7 +52,27 @@ export PATH="$HOME/llvm-mingw/bin:$PATH"
 
 ## Build
 
-### Native unix module root (`winemetal.so`)
+dxmt9 supports two deployment lanes:
+
+| Lane | Use case | PE DLLs | Unix provider |
+|---|---|---|---|
+| Wine runtime builtin | DXMT-style runtime integration | Wine-builtin `d3d9.dll` + `winemetal.dll` | runtime-installed `winemetal.so` |
+| Native app-local | DXVK-style per-application package | native PE `d3d9.dll` + `winemetal.dll` beside the game | app-local `winemetal.so` |
+
+Both lanes intentionally keep `winemetal.so` as a separate Wine unixlib
+provider. A `d3d9.dll`-only app-local package is not a supported artifact.
+
+Set common paths first:
+
+```sh
+export PATH="$HOME/llvm-mingw/bin:$PATH"
+export WINE_ROOT="/path/to/wine/runtime"
+```
+
+`WINE_ROOT` is the root that contains `bin/wine` or `bin/wine64` and
+`lib/wine/`.
+
+### Host Unit Build
 
 ```sh
 meson setup build
@@ -60,7 +80,9 @@ meson compile -C build
 meson test -C build
 ```
 
-Output: `build/src/winemetal/unix/winemetal.so`
+Output:
+
+- `build/src/winemetal/unix/winemetal.so`
 
 To use the Homebrew LLVM toolchain explicitly:
 
@@ -70,41 +92,101 @@ CXX=$(brew --prefix llvm)/bin/clang++ \
 meson setup build
 ```
 
-### Wine builtin PE bridge set (`d3d9.dll` + `winemetal.dll`)
-
-Requires llvm-mingw on PATH plus a Wine toolchain root that provides
-`winebuild`, `libwinecrt0.a`, `libntdll.a`, `libdbghelp.a`, `winemac.so`, and
-`ntdll.so`.
-
-```sh
-meson setup build-win32-x64-builtin \
-  --cross-file cross/x86_64-windows.ini \
-  -Dwine_builtin_dll=true \
-  -Dwine_install_path=/path/to/wine/toolchain
-meson compile -C build-win32-x64-builtin
-```
-
-Outputs:
-
-- `build-win32-x64-builtin/src/win32/d3d9.dll`
-- `build-win32-x64-builtin/src/winemetal/winemetal.dll`
-
-### x86_64 unix module for Wine64 / Rosetta (`winemetal.so`)
+### Shared x86_64 Unix Provider
 
 On Apple Silicon, current macOS Wine hosts run Wine64 as x86_64 under Rosetta 2.
-That includes GPTK, CrossOver, and vanilla Wine builds packaged for macOS.
-Build an x86_64 `winemetal.so` using a meson native file:
+That includes Heroic Wine, CrossOver, and vanilla Wine builds packaged for
+macOS. Build the unix provider against the target Wine runtime:
 
 ```sh
 meson setup build-x86_64-builtin \
   --native-file cross/x86_64-macos.ini \
-  -Dwine_install_path=/path/to/wine/toolchain
+  -Dwine_install_path="$WINE_ROOT"
 meson compile -C build-x86_64-builtin
 ```
 
 Output:
 
 - `build-x86_64-builtin/src/winemetal/unix/winemetal.so`
+
+### Lane 1: Wine Runtime Builtin
+
+The builtin lane requires a Wine toolchain/runtime root that provides
+`winebuild`, `libwinecrt0.a`, `libntdll.a`, `libdbghelp.a`, `winemac.so`, and
+`ntdll.so`.
+
+Build the 64-bit PE DLLs:
+
+```sh
+meson setup build-win32-x64-builtin \
+  --cross-file cross/x86_64-windows.ini \
+  -Dwine_builtin_dll=true \
+  -Dwine_install_path="$WINE_ROOT"
+meson compile -C build-win32-x64-builtin
+```
+
+Build the 32-bit WoW64 PE DLLs:
+
+```sh
+meson setup build-win32-x86-builtin \
+  --cross-file cross/i686-windows.ini \
+  -Dwine_builtin_dll=true \
+  -Dwine_install_path="$WINE_ROOT"
+meson compile -C build-win32-x86-builtin
+```
+
+Outputs:
+
+| Arch | D3D9 DLL | Bridge DLL |
+|---|---|---|
+| x64 | `build-win32-x64-builtin/src/win32/d3d9.dll` | `build-win32-x64-builtin/src/winemetal/winemetal.dll` |
+| x86 | `build-win32-x86-builtin/src/win32/d3d9.dll` | `build-win32-x86-builtin/src/winemetal/winemetal.dll` |
+
+### Lane 2: Native App-Local
+
+The app-local lane disables builtin post-processing. Native `d3d9.dll` does not
+statically import `winemetal.dll`; it loads the sibling bridge DLL from the
+application directory at runtime.
+
+Build the 64-bit app-local PE DLLs:
+
+```sh
+meson setup build-win32-x64 \
+  --cross-file cross/x86_64-windows.ini \
+  -Dwine_builtin_dll=false
+meson compile -C build-win32-x64
+```
+
+Build the 32-bit app-local PE DLLs:
+
+```sh
+meson setup build-win32-x86 \
+  --cross-file cross/i686-windows.ini \
+  -Dwine_builtin_dll=false
+meson compile -C build-win32-x86
+```
+
+Create a mixed x64/x86 app-local package:
+
+```sh
+python3 scripts/package_app_local.py --clean --output-dir dist/dxmt9-app-local
+```
+
+Package outputs:
+
+```text
+dist/dxmt9-app-local/
+  dxmt9-deploy.json
+  pe/x64/d3d9.dll
+  pe/x64/winemetal.dll
+  pe/x64/libc++.dll
+  pe/x64/libunwind.dll
+  pe/x86/d3d9.dll
+  pe/x86/winemetal.dll
+  pe/x86/libc++.dll
+  pe/x86/libunwind.dll
+  unix/x86_64-unix/winemetal.so
+```
 
 ---
 
@@ -115,32 +197,35 @@ Output:
 | Binary | Kind | Role |
 |---|---|---|
 | `d3d9.dll` | PE DLL | User-facing D3D9 entry points loaded by the app |
-| `winemetal.dll` | PE DLL | Internal PE bridge that dispatches `dxmt9c_*` and shader/provider calls into `winemetal.so` |
-| `winemetal.so` | Wine unix module | Single unixlib root that hosts generated `dxmt9c_*` dispatch plus provider/runtime + shader-service handlers |
+| `winemetal.dll` | PE DLL | PE bridge that dispatches `dxmt9c_*` and shader/provider calls into `winemetal.so` |
+| `winemetal.so` | Wine unixlib provider | Single unix-side root for generated dispatch, provider/runtime code, and shader-service handlers |
 
-`d3d9.dll` imports `winemetal.dll`. `winemetal.dll` dispatches into the single
-`winemetal.so` unixlib. The PE bridge must not import a Mach-O `.dylib`
-directly.
+The two lanes differ only in how those binaries are discovered:
+
+- Builtin: Wine loads builtin `d3d9.dll`; `d3d9.dll` imports builtin
+  `winemetal.dll`; `winemetal.dll` uses Wine builtin unixlib metadata to find
+  runtime-installed `winemetal.so`.
+- App-local: Wine's normal DLL search loads `d3d9.dll` next to the game;
+  `d3d9.dll` dynamically loads sibling `winemetal.dll`; `winemetal.dll` locates
+  `winemetal.so` from `DXMT9_WINEMETAL_SO`, its own directory, or the process
+  executable directory. Runtime provider fallback is disabled unless
+  `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK=1` is set.
+
+The PE bridge must not import a Mach-O `.dylib` or `.so` directly.
 
 ---
 
 ## Installing dxmt9
 
-### For users
-
-You need these files from a release or local build:
-
-- `d3d9.dll`
-- `winemetal.dll`
-- `winemetal.so`
-- `libc++.dll` and `libunwind.dll` from `llvm-mingw` if your Wine prefix does
-  not already have them
+Choose one lane per prefix/application. Do not mix builtin and app-local
+installations for the same game while debugging load-order issues.
 
 You also need a recent macOS Wine build with:
 
-- unixlib support
-- `winemac.drv`
-- a standard Wine runtime layout with `x86_64-windows` and `x86_64-unix`
+- unixlib support, including `MemoryWineLoadUnixLibByName` for app-local mode;
+- `winemac.drv`;
+- a standard Wine runtime layout with `x86_64-windows`, `i386-windows`, and
+  `x86_64-unix` when running both x64 and x86 games.
 
 Confirmed host:
 
@@ -156,45 +241,6 @@ Intended hosts that follow the same Wine runtime model:
 Known unsupported host:
 
 - GPTK 1.1 / Wine 7.7, which is too old for this unixlib bridge model
-
-Example install:
-
-```sh
-export WINEPREFIX="$HOME/.wine"
-export WINE_ROOT="/path/to/your/wine/runtime"
-
-cp build-win32-x64-builtin/src/win32/d3d9.dll \
-  "$WINEPREFIX/drive_c/windows/system32/d3d9.dll"
-
-cp build-win32-x64-builtin/src/win32/d3d9.dll \
-  "$WINE_ROOT/lib/wine/x86_64-windows/d3d9.dll"
-
-cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
-  "$WINE_ROOT/lib/wine/x86_64-windows/winemetal.dll"
-
-cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
-  "$WINE_ROOT/lib/wine/x86_64-unix/winemetal.so"
-
-# Required when the PE bridge was built with llvm-mingw's libc++ runtime
-cp "$HOME/llvm-mingw/x86_64-w64-mingw32/bin/libc++.dll" \
-  "$WINEPREFIX/drive_c/windows/system32/libc++.dll"
-cp "$HOME/llvm-mingw/x86_64-w64-mingw32/bin/libunwind.dll" \
-  "$WINEPREFIX/drive_c/windows/system32/libunwind.dll"
-
-WINEDLLOVERRIDES="d3d9=b" \
-  "$WINE_ROOT/bin/wine" game.exe
-```
-
-What goes where:
-
-- `d3d9.dll` goes into Wine's `x86_64-windows` runtime directory for the verified
-  builtin path. Keeping a copy in the prefix `system32` is harmless and preserves
-  native-DLL fallback workflows, but `d3d9=b` resolves the runtime builtin copy.
-- `winemetal.dll` goes into Wine's `x86_64-windows` runtime directory as the builtin
-  PE bridge for both the main D3D9 C ABI and the public shader ABI. It is not copied
-  into `system32` on the verified builtin path.
-- `winemetal.so` goes into Wine's `x86_64-unix` runtime directory because it is
-  the single unix-side service root paired with `winemetal.dll`.
 
 Typical `WINE_ROOT` examples:
 
@@ -212,45 +258,96 @@ Typical `WINEPREFIX` examples:
 - CrossOver:
   the bottle prefix path managed by CrossOver
 
-For Heroic's bundled Wine, the repo includes an installer helper that stages
-the files into the current Heroic runtime and a target prefix:
+### Install Lane 1: Wine Runtime Builtin
+
+For Heroic's bundled Wine, use the installer helper:
 
 ```sh
-bash scripts/install_heroic_wine.sh --prefix "/path/to/heroic/prefix"
+bash scripts/install_heroic_wine.sh \
+  --prefix "$WINEPREFIX" \
+  --wine-root "$WINE_ROOT"
 ```
 
-The script auto-detects the latest `Wine-*` runtime under Heroic, installs the
-latest plain Heroic Wine runtime by default, skips Heroic `*-DXMT` variants
-unless you pass `--wine-root`, installs `winemetal.dll` and `winemetal.so`,
-copies `libc++.dll` / `libunwind.dll`, and creates `.dxmt9-backup` copies
-before overwriting an existing file. This is the verified install path for
-Heroic Wine 11.6.
+The script installs x64 artifacts by default and automatically installs the
+WoW64 x86 lane when `build-win32-x86-builtin` exists. It creates one-time
+`.dxmt9-backup` copies before overwriting existing files.
 
-### For developers
+Manual install layout:
 
-Build the unix module and PE DLLs locally, then install them into the same
-locations as above:
+| Arch | Source | Destination |
+|---|---|---|
+| x64 | `build-win32-x64-builtin/src/win32/d3d9.dll` | `$WINE_ROOT/lib/wine/x86_64-windows/d3d9.dll` |
+| x64 | `build-win32-x64-builtin/src/winemetal/winemetal.dll` | `$WINE_ROOT/lib/wine/x86_64-windows/winemetal.dll` |
+| x64 | `~/llvm-mingw/x86_64-w64-mingw32/bin/libc++.dll` | `$WINEPREFIX/drive_c/windows/system32/libc++.dll` |
+| x64 | `~/llvm-mingw/x86_64-w64-mingw32/bin/libunwind.dll` | `$WINEPREFIX/drive_c/windows/system32/libunwind.dll` |
+| x86 | `build-win32-x86-builtin/src/win32/d3d9.dll` | `$WINE_ROOT/lib/wine/i386-windows/d3d9.dll` |
+| x86 | `build-win32-x86-builtin/src/winemetal/winemetal.dll` | `$WINE_ROOT/lib/wine/i386-windows/winemetal.dll` |
+| x86 | `~/llvm-mingw/i686-w64-mingw32/bin/libc++.dll` | `$WINEPREFIX/drive_c/windows/syswow64/libc++.dll` |
+| x86 | `~/llvm-mingw/i686-w64-mingw32/bin/libunwind.dll` | `$WINEPREFIX/drive_c/windows/syswow64/libunwind.dll` |
+| host | `build-x86_64-builtin/src/winemetal/unix/winemetal.so` | `$WINE_ROOT/lib/wine/x86_64-unix/winemetal.so` |
+
+The helper also mirrors the PE DLLs into prefix `system32` and `syswow64`
+because some launcher workflows inspect prefix DLLs before applying builtin
+overrides.
+
+Run with builtin override:
 
 ```sh
-meson setup build
-meson compile -C build
-
-meson setup build-x86_64-builtin \
-  --native-file cross/x86_64-macos.ini \
-  -Dwine_install_path=/path/to/wine/toolchain
-meson compile -C build-x86_64-builtin
-
-export PATH="$HOME/llvm-mingw/bin:$PATH"
-meson setup build-win32-x64-builtin \
-  --cross-file cross/x86_64-windows.ini \
-  -Dwine_builtin_dll=true \
-  -Dwine_install_path=/path/to/wine/toolchain
-meson compile -C build-win32-x64-builtin
+WINEPREFIX="$WINEPREFIX" \
+WINEDLLOVERRIDES="d3d9=b" \
+"$WINE_ROOT/bin/wine" game.exe
 ```
 
-If you are on Intel macOS and your Wine runtime is also x86_64, you can use the
-normal `build/src/winemetal/unix/winemetal.so` output directly instead of
-`build-x86_64-builtin/src/winemetal/unix/winemetal.so`.
+For 32-bit D3D9 games under Heroic, the game's config must also enable WoW64:
+
+```json
+{
+  "enableWoW64": true
+}
+```
+
+### Install Lane 2: Native App-Local
+
+Copy one PE architecture plus the host unix provider into the game executable
+directory.
+
+For a 64-bit game:
+
+```sh
+GAME_DIR="/path/to/game"
+cp dist/dxmt9-app-local/pe/x64/d3d9.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/pe/x64/winemetal.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/pe/x64/libc++.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/pe/x64/libunwind.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/unix/x86_64-unix/winemetal.so "$GAME_DIR/"
+```
+
+For a 32-bit game:
+
+```sh
+GAME_DIR="/path/to/game"
+cp dist/dxmt9-app-local/pe/x86/d3d9.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/pe/x86/winemetal.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/pe/x86/libc++.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/pe/x86/libunwind.dll "$GAME_DIR/"
+cp dist/dxmt9-app-local/unix/x86_64-unix/winemetal.so "$GAME_DIR/"
+```
+
+Run without forcing Wine's builtin D3D9:
+
+```sh
+WINEPREFIX="$WINEPREFIX" \
+"$WINE_ROOT/bin/wine" "$GAME_DIR/game.exe"
+```
+
+If the launcher needs an explicit override, use native-first:
+
+```sh
+WINEDLLOVERRIDES="d3d9=n,b"
+```
+
+Do not use `WINEDLLOVERRIDES="d3d9=b"` for app-local mode; it bypasses the
+`d3d9.dll` next to the game.
 
 ---
 
@@ -276,15 +373,17 @@ include/dxmt9/   Public headers (core.hpp, assert.hpp, winemetal.h, device_c.h)
 src/             Implementation (D3D9 frontend, Metal runtime, util, bridge layers)
   win32/         Win32 PE forwarding layer (`d3d9.dll`)
   winemetal/     Unified bridge stack (`winemetal.dll` + `winemetal.so`)
-cross/           Meson cross/native files for Wine x86_64 and Windows cross-builds
+cross/           Meson cross/native files for macOS unix and Windows PE builds
 tests/           Smoke tests and core spec tests
 specs/           Specifications and formal verification
   core/          D3D9 COM requirements and design
   backend/       Metal translation requirements and design
+  deploy/        Wine runtime and native app-local deployment specs
   verification/  TLA+ specs (CommandQueue, ResourceLifetime,
                  EncoderLifecycle, QuerySeqId) + .cfg model files
   gap.md         Spec–implementation gap tracker
-scripts/         verify_tla.sh, install_heroic_wine.sh, corpus tooling
+scripts/         install_heroic_wine.sh, package_app_local.py, verification
+                 and corpus tooling
 ```
 
 ---

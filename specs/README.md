@@ -27,6 +27,9 @@ specs/
 │   ├── requirements.md     Translation correctness, command encoding, PSO cache
 │   ├── design.md           Command queue, encoder lifecycle, resource allocation
 │   └── surface-ops.md      UpdateSurface, StretchRect, ColorFill, GetRenderTargetData
+├── deploy/                 Wine runtime and application-local packaging
+│   ├── requirements.md     Runtime install, app-local DLL override, provider lookup
+│   └── design.md           Artifact matrix, provider locator, packaging manifest
 ├── verification/           Formal verification (TLA+ model checking)
 │   ├── requirements.md     What must be formally proven and why
 │   ├── design.md           TLA+ approach, C++ binding, how to run TLC

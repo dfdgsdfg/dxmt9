@@ -107,6 +107,19 @@ dxmt9_frontend_dep = declare_dependency(
 )
 
 if host_machine.system() == 'windows'
+  dxmt9_d3d9_forwarder_deps = [
+    dxguid_dep,
+    dxmt9_util_dep,
+    dxmt9_pe_core_dep,
+  ]
+  dxmt9_d3d9_forwarder_cpp_args = []
+
+  if get_option('wine_builtin_dll')
+    dxmt9_d3d9_forwarder_deps += [dxmt9_winemetal_import_dep]
+  else
+    dxmt9_d3d9_forwarder_cpp_args += ['-DDXMT9_DYNAMIC_WINEMETAL_BRIDGE=1']
+  endif
+
   # PE-side d3d9 forwarder — IDirect3D9/Device9 vtables that wrap the
   # dxmt9c_* C bridge surface. The generated dxmt9_device_c_bridge_exports
   # supplies the unix-call client; dxmt9_pe_core_dep supplies the COM glue.
@@ -114,23 +127,14 @@ if host_machine.system() == 'windows'
     'dxmt9_d3d9_forwarder',
     dxmt9_frontend_export_srcs + [bridge_codegen[1]],
     include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_d3d9_internal_inc],
-    dependencies: [
-      dxguid_dep,
-      dxmt9_util_dep,
-      dxmt9_pe_core_dep,
-      dxmt9_winemetal_import_dep,
-    ],
+    dependencies: dxmt9_d3d9_forwarder_deps,
+    cpp_args: dxmt9_d3d9_forwarder_cpp_args,
     install: false,
   )
 
   dxmt9_d3d9_forwarder_dep = declare_dependency(
     link_with: dxmt9_d3d9_forwarder_lib,
     include_directories: [dxmt9_inc, bridge_gen_inc, dxmt9_d3d9_internal_inc],
-    dependencies: [
-      dxguid_dep,
-      dxmt9_util_dep,
-      dxmt9_pe_core_dep,
-      dxmt9_winemetal_import_dep,
-    ],
+    dependencies: dxmt9_d3d9_forwarder_deps,
   )
 endif
