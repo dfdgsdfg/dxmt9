@@ -212,6 +212,13 @@ enum class QueryType : u32 {
   TimestampFreq,
 };
 
+enum class StateBlockType : u32 {
+  Recorded = 0,
+  All = 1,
+  PixelState = 2,
+  VertexState = 3,
+};
+
 enum class Format : u32 {
   Unknown,
   A8R8G8B8,
@@ -1283,7 +1290,7 @@ class StateBlock : public std::enable_shared_from_this<StateBlock> {
     Delta,
   };
 
-  StateBlock() = default;
+  explicit StateBlock(StateBlockType type = StateBlockType::All) : type_(type) {}
 
   void capture(const DeviceState& state);
   void captureDelta(const DeviceState& before, const DeviceState& after);
@@ -1291,9 +1298,11 @@ class StateBlock : public std::enable_shared_from_this<StateBlock> {
                     const std::unordered_set<u32>& recordedRenderStates);
   void apply(Device& device) const;
   const DeviceState& snapshot() const noexcept { return snapshot_; }
+  StateBlockType type() const noexcept { return type_; }
 
  private:
   CaptureMode mode_ = CaptureMode::FullSnapshot;
+  StateBlockType type_ = StateBlockType::All;
   DeviceState snapshot_;
   DeviceState baseline_;
   std::unordered_set<u32> recordedRenderStates_{};
@@ -1359,7 +1368,7 @@ class Device : public std::enable_shared_from_this<Device> {
   std::shared_ptr<Texture> createTexture(const TextureDesc& desc);
   std::shared_ptr<Surface> createSurface(const SurfaceDesc& desc);
   std::shared_ptr<Query> createQuery(QueryType type);
-  std::shared_ptr<StateBlock> createStateBlock() const;
+  std::shared_ptr<StateBlock> createStateBlock(StateBlockType type = StateBlockType::All) const;
   std::shared_ptr<SwapChain> createAdditionalSwapChain(const PresentParameters& params);
   std::shared_ptr<SwapChain> swapChain(size_t index = 0) const;
   size_t swapChainCount() const noexcept { return swapChains_.size(); }

@@ -11,6 +11,21 @@
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
+static constexpr uint32_t kD9CDeviceTypeHal = 0u;
+
+static bool isSupportedDeviceType(D3DDEVTYPE type) {
+    return type == D3DDEVTYPE_HAL;
+}
+
+static D3DDEVTYPE fromCDeviceType(uint32_t type) {
+    switch (type) {
+    case 0: return D3DDEVTYPE_HAL;
+    case 1: return D3DDEVTYPE_REF;
+    case 2: return D3DDEVTYPE_NULLREF;
+    default: return (D3DDEVTYPE)type;
+    }
+}
+
 static void dxmt9FactoryDebugLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
@@ -49,10 +64,103 @@ static D9CDisplayModeEx toCdme(const D3DDISPLAYMODEEX& m) {
     return c;
 }
 
+static bool isValidDisplayModeFilter(const D3DDISPLAYMODEFILTER* filter) {
+    return !filter || filter->Size == sizeof(D3DDISPLAYMODEFILTER);
+}
+
+static bool filterAllowsProgressiveModes(const D3DDISPLAYMODEFILTER* filter) {
+    if (!filter) return true;
+    return filter->ScanLineOrdering == D3DSCANLINEORDERING_UNKNOWN ||
+           filter->ScanLineOrdering == D3DSCANLINEORDERING_PROGRESSIVE;
+}
+
+static bool filterMatchesAllFormats(const D3DDISPLAYMODEFILTER* filter) {
+    return !filter || filter->Format == D3DFMT_UNKNOWN;
+}
+
+static constexpr D3DFORMAT kDisplayModeFormats[] = {
+    D3DFMT_X8R8G8B8,
+    D3DFMT_A8R8G8B8,
+    D3DFMT_R5G6B5,
+    D3DFMT_X1R5G5B5,
+    D3DFMT_A1R5G5B5,
+    D3DFMT_A2R10G10B10,
+};
+
+static UINT getAdapterModeCountForFilter(D9CFactory* f, UINT adapter,
+                                          const D3DDISPLAYMODEFILTER* filter) {
+    if (!isValidDisplayModeFilter(filter) || !filterAllowsProgressiveModes(filter)) {
+        return 0;
+    }
+
+    if (!filterMatchesAllFormats(filter)) {
+        return dxmt9c_factory_get_adapter_mode_count(f, adapter, (uint32_t)filter->Format);
+    }
+
+    UINT count = 0;
+    for (D3DFORMAT format : kDisplayModeFormats) {
+        count += dxmt9c_factory_get_adapter_mode_count(f, adapter, (uint32_t)format);
+    }
+    return count;
+}
+
+static HRESULT enumAdapterModeForFormat(D9CFactory* f, UINT adapter, D3DFORMAT format,
+                                         UINT mode, D3DDISPLAYMODEEX* out) {
+    uint32_t w, h, refresh, fOut;
+    HRESULT hr = hr32(dxmt9c_factory_enum_adapter_modes(
+        f, adapter, (uint32_t)format, mode, &w, &h, &refresh, &fOut));
+    if (FAILED(hr)) return hr;
+
+    out->Size             = sizeof(D3DDISPLAYMODEEX);
+    out->Width            = w;
+    out->Height           = h;
+    out->RefreshRate      = refresh;
+    out->Format           = (D3DFORMAT)fOut;
+    out->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
+    return S_OK;
+}
+
+static HRESULT enumAdapterModeForFilter(D9CFactory* f, UINT adapter,
+                                         const D3DDISPLAYMODEFILTER* filter,
+                                         UINT mode, D3DDISPLAYMODEEX* out) {
+    if (!isValidDisplayModeFilter(filter) || !filterAllowsProgressiveModes(filter)) {
+        return D3DERR_INVALIDCALL;
+    }
+
+    if (!filterMatchesAllFormats(filter)) {
+        return enumAdapterModeForFormat(f, adapter, filter->Format, mode, out);
+    }
+
+    UINT remaining = mode;
+    for (D3DFORMAT format : kDisplayModeFormats) {
+        const UINT count = dxmt9c_factory_get_adapter_mode_count(f, adapter, (uint32_t)format);
+        if (remaining < count) {
+            return enumAdapterModeForFormat(f, adapter, format, remaining, out);
+        }
+        remaining -= count;
+    }
+    return D3DERR_INVALIDCALL;
+}
+
+static bool isValidCheckDeviceResourceType(D3DRESOURCETYPE rtype) {
+    switch (rtype) {
+    case D3DRTYPE_SURFACE:
+    case D3DRTYPE_TEXTURE:
+    case D3DRTYPE_CUBETEXTURE:
+    case D3DRTYPE_VOLUME:
+    case D3DRTYPE_VOLUMETEXTURE:
+    case D3DRTYPE_VERTEXBUFFER:
+    case D3DRTYPE_INDEXBUFFER:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* D3DCAPS9 ← D9CCaps */
 static void fillD3DCaps9(const D9CCaps& src, D3DCAPS9* out) {
     ZeroMemory(out, sizeof(*out));
-    out->DeviceType             = (D3DDEVTYPE)src.deviceType;
+    out->DeviceType             = fromCDeviceType(src.deviceType);
     out->AdapterOrdinal         = src.adapterOrdinal;
     out->Caps                   = src.caps;
     out->Caps2                  = src.caps2;
@@ -253,27 +361,47 @@ public:
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE CheckDeviceType(UINT adapter, D3DDEVTYPE,
+    HRESULT STDMETHODCALLTYPE CheckDeviceType(UINT adapter, D3DDEVTYPE deviceType,
                                                D3DFORMAT adapterFmt,
                                                D3DFORMAT backFmt,
                                                BOOL windowed) noexcept override {
-        dxmt9FactoryDebugLog("CheckDeviceType adapter=%u adapterFmt=%u backFmt=%u windowed=%u",
-                             adapter, (unsigned)adapterFmt, (unsigned)backFmt, windowed ? 1u : 0u);
+        dxmt9FactoryDebugLog("CheckDeviceType adapter=%u devType=%u adapterFmt=%u backFmt=%u windowed=%u",
+                             adapter, (unsigned)deviceType, (unsigned)adapterFmt, (unsigned)backFmt, windowed ? 1u : 0u);
+        if (!isSupportedDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CheckDeviceType -> unsupported devType=%u", (unsigned)deviceType);
+            return D3DERR_NOTAVAILABLE;
+        }
         const HRESULT hr = hr32(dxmt9c_factory_check_device_type(
-            f_, adapter, (uint32_t)D3DDEVTYPE_HAL,
+            f_, adapter, kD9CDeviceTypeHal,
             (uint32_t)adapterFmt, (uint32_t)backFmt,
             windowed ? 1u : 0u));
         dxmt9FactoryDebugLog("CheckDeviceType -> hr=0x%08x", (unsigned)hr);
         return hr;
     }
 
-    HRESULT STDMETHODCALLTYPE CheckDeviceFormat(UINT adapter, D3DDEVTYPE,
-                                                 D3DFORMAT /*adapterFmt*/,
+    HRESULT STDMETHODCALLTYPE CheckDeviceFormat(UINT adapter, D3DDEVTYPE deviceType,
+                                                 D3DFORMAT adapterFmt,
                                                  DWORD usage,
-                                                 D3DRESOURCETYPE /*rtype*/,
+                                                 D3DRESOURCETYPE rtype,
                                                  D3DFORMAT fmt) noexcept override {
-        dxmt9FactoryDebugLog("CheckDeviceFormat adapter=%u fmt=%u usage=0x%x",
-                             adapter, (unsigned)fmt, (unsigned)usage);
+        dxmt9FactoryDebugLog("CheckDeviceFormat adapter=%u devType=%u adapterFmt=%u rtype=%u fmt=%u usage=0x%x",
+                             adapter, (unsigned)deviceType, (unsigned)adapterFmt,
+                             (unsigned)rtype, (unsigned)fmt, (unsigned)usage);
+        if (!isSupportedDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CheckDeviceFormat -> unsupported devType=%u", (unsigned)deviceType);
+            return D3DERR_NOTAVAILABLE;
+        }
+        if (adapterFmt == D3DFMT_UNKNOWN || !isValidCheckDeviceResourceType(rtype)) {
+            dxmt9FactoryDebugLog("CheckDeviceFormat -> invalid adapterFmt/rtype");
+            return D3DERR_INVALIDCALL;
+        }
+        const HRESULT adapterHr = hr32(dxmt9c_factory_check_device_type(
+            f_, adapter, kD9CDeviceTypeHal, (uint32_t)adapterFmt,
+            (uint32_t)adapterFmt, 1u));
+        if (FAILED(adapterHr)) {
+            dxmt9FactoryDebugLog("CheckDeviceFormat -> adapter format hr=0x%08x", (unsigned)adapterHr);
+            return adapterHr;
+        }
         const HRESULT hr = hr32(dxmt9c_factory_check_device_format(
             f_, adapter, (uint32_t)fmt, usage));
         dxmt9FactoryDebugLog("CheckDeviceFormat -> hr=0x%08x", (unsigned)hr);
@@ -281,13 +409,18 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE CheckDeviceMultiSampleType(UINT adapter,
-                                                          D3DDEVTYPE,
+                                                          D3DDEVTYPE deviceType,
                                                           D3DFORMAT fmt,
                                                           BOOL windowed,
                                                           D3DMULTISAMPLE_TYPE msType,
                                                           DWORD* pQuality) noexcept override {
-        dxmt9FactoryDebugLog("CheckDeviceMultiSampleType adapter=%u fmt=%u windowed=%u msType=%u",
-                             adapter, (unsigned)fmt, windowed ? 1u : 0u, (unsigned)msType);
+        dxmt9FactoryDebugLog("CheckDeviceMultiSampleType adapter=%u devType=%u fmt=%u windowed=%u msType=%u",
+                             adapter, (unsigned)deviceType, (unsigned)fmt, windowed ? 1u : 0u, (unsigned)msType);
+        if (!isSupportedDeviceType(deviceType)) {
+            if (pQuality) *pQuality = 0u;
+            dxmt9FactoryDebugLog("CheckDeviceMultiSampleType -> unsupported devType=%u", (unsigned)deviceType);
+            return D3DERR_NOTAVAILABLE;
+        }
         HRESULT hr = hr32(dxmt9c_factory_check_device_multisample(
             f_, adapter, (uint32_t)fmt, (uint32_t)msType,
             windowed ? 1u : 0u));
@@ -297,29 +430,42 @@ public:
         return hr;
     }
 
-    HRESULT STDMETHODCALLTYPE CheckDepthStencilMatch(UINT, D3DDEVTYPE,
+    HRESULT STDMETHODCALLTYPE CheckDepthStencilMatch(UINT, D3DDEVTYPE deviceType,
                                                       D3DFORMAT, D3DFORMAT,
                                                       D3DFORMAT) noexcept override {
+        if (!isSupportedDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CheckDepthStencilMatch -> unsupported devType=%u", (unsigned)deviceType);
+            return D3DERR_NOTAVAILABLE;
+        }
         dxmt9FactoryDebugLog("CheckDepthStencilMatch -> hr=0x%08x", (unsigned)S_OK);
         return S_OK; /* all depth-stencil combinations accepted */
     }
 
-    HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT, D3DDEVTYPE,
+    HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT, D3DDEVTYPE deviceType,
                                                            D3DFORMAT,
                                                            D3DFORMAT) noexcept override {
+        if (!isSupportedDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CheckDeviceFormatConversion -> unsupported devType=%u", (unsigned)deviceType);
+            return D3DERR_NOTAVAILABLE;
+        }
         dxmt9FactoryDebugLog("CheckDeviceFormatConversion -> hr=0x%08x",
                              (unsigned)D3DERR_NOTAVAILABLE);
         return D3DERR_NOTAVAILABLE;
     }
 
-    HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT adapter, D3DDEVTYPE,
+    HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT adapter, D3DDEVTYPE deviceType,
                                              D3DCAPS9* pCaps) noexcept override {
         if (!pCaps) return D3DERR_INVALIDCALL;
-        dxmt9FactoryDebugLog("GetDeviceCaps adapter=%u", adapter);
+        dxmt9FactoryDebugLog("GetDeviceCaps adapter=%u devType=%u", adapter, (unsigned)deviceType);
+        if (!isSupportedDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("GetDeviceCaps -> unsupported devType=%u", (unsigned)deviceType);
+            return D3DERR_NOTAVAILABLE;
+        }
         D9CCaps cc{};
         HRESULT hr = hr32(dxmt9c_factory_get_caps(f_, adapter, &cc));
         if (SUCCEEDED(hr)) {
             fillD3DCaps9(cc, pCaps);
+            pCaps->DeviceType = deviceType;
             dxmt9FactoryDebugLog("GetDeviceCaps -> vs=0x%08x ps=0x%08x maxTex=%ux%u maxRT=%u maxLights=%u maxStreams=%u maxAniso=%u intervals=0x%x devCaps=0x%x rasterCaps=0x%x texCaps=0x%x textureOpCaps=0x%x",
                                  (unsigned)pCaps->VertexShaderVersion,
                                  (unsigned)pCaps->PixelShaderVersion,
@@ -344,16 +490,21 @@ public:
                                                                          adapter);
     }
 
-    HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter, D3DDEVTYPE,
+    HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter, D3DDEVTYPE deviceType,
                                             HWND hwnd, DWORD behaviorFlags,
                                             D3DPRESENT_PARAMETERS* pPP,
                                             IDirect3DDevice9** ppDevice) noexcept override {
+        if (ppDevice) *ppDevice = nullptr;
         if (!pPP || !ppDevice) return D3DERR_INVALIDCALL;
-        dxmt9FactoryDebugLog("CreateDevice adapter=%u hwnd=%p behavior=0x%x windowed=%u size=%ux%u fmt=%u",
-                             adapter, hwnd, (unsigned)behaviorFlags,
+        dxmt9FactoryDebugLog("CreateDevice adapter=%u devType=%u hwnd=%p behavior=0x%x windowed=%u size=%ux%u fmt=%u",
+                             adapter, (unsigned)deviceType, hwnd, (unsigned)behaviorFlags,
                              pPP->Windowed ? 1u : 0u,
                              (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
                              (unsigned)pPP->BackBufferFormat);
+        if (!isSupportedDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CreateDevice -> unsupported devType=%u", (unsigned)deviceType);
+            return D3DERR_NOTAVAILABLE;
+        }
         D9CPresentParams cpp = toCpp(*pPP);
         cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
         D9CDevice* dev = dxmt9c_factory_create_device(f_, adapter, &cpp,
@@ -362,7 +513,7 @@ public:
             dxmt9FactoryDebugLog("CreateDevice -> failed");
             return D3DERR_INVALIDCALL;
         }
-        *ppDevice = CreateDeviceImpl(dev, this, adapter, behaviorFlags, hwnd, extended_);
+        *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType, behaviorFlags, hwnd, extended_);
         dxmt9FactoryDebugLog("CreateDevice -> device=%p", *ppDevice);
         return S_OK;
     }
@@ -370,10 +521,14 @@ public:
     /* ── IDirect3D9Ex ── */
 
     UINT STDMETHODCALLTYPE GetAdapterModeCountEx(UINT adapter,
-                                                  const D3DDISPLAYMODEFILTER*) noexcept override {
-        dxmt9FactoryDebugLog("GetAdapterModeCountEx adapter=%u", adapter);
-        return dxmt9c_factory_get_adapter_mode_count(f_, adapter,
-                                                      (uint32_t)D3DFMT_X8R8G8B8);
+                                                  const D3DDISPLAYMODEFILTER* pFilter) noexcept override {
+        dxmt9FactoryDebugLog("GetAdapterModeCountEx adapter=%u filter=%p fmt=%u scan=%u",
+                             adapter, pFilter,
+                             pFilter ? (unsigned)pFilter->Format : (unsigned)D3DFMT_UNKNOWN,
+                             pFilter ? (unsigned)pFilter->ScanLineOrdering : (unsigned)D3DSCANLINEORDERING_UNKNOWN);
+        const UINT count = getAdapterModeCountForFilter(f_, adapter, pFilter);
+        dxmt9FactoryDebugLog("GetAdapterModeCountEx -> count=%u", count);
+        return count;
     }
 
     HRESULT STDMETHODCALLTYPE EnumAdapterModesEx(UINT adapter,
@@ -381,55 +536,60 @@ public:
                                                   UINT mode,
                                                   D3DDISPLAYMODEEX* pMode) noexcept override {
         if (!pMode) return D3DERR_INVALIDCALL;
-        dxmt9FactoryDebugLog("EnumAdapterModesEx adapter=%u mode=%u", adapter, mode);
-        uint32_t fmt = pFilter ? (uint32_t)pFilter->Format : (uint32_t)D3DFMT_X8R8G8B8;
-        uint32_t w, h, refresh, f;
-        HRESULT hr = hr32(dxmt9c_factory_enum_adapter_modes(
-            f_, adapter, fmt, mode, &w, &h, &refresh, &f));
-        if (FAILED(hr)) return hr;
-        pMode->Size            = sizeof(D3DDISPLAYMODEEX);
-        pMode->Width           = w;
-        pMode->Height          = h;
-        pMode->RefreshRate     = refresh;
-        pMode->Format          = (D3DFORMAT)f;
-        pMode->ScanLineOrdering= D3DSCANLINEORDERING_PROGRESSIVE;
-        return S_OK;
+        if (pMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
+        dxmt9FactoryDebugLog("EnumAdapterModesEx adapter=%u filter=%p fmt=%u scan=%u mode=%u",
+                             adapter, pFilter,
+                             pFilter ? (unsigned)pFilter->Format : (unsigned)D3DFMT_UNKNOWN,
+                             pFilter ? (unsigned)pFilter->ScanLineOrdering : (unsigned)D3DSCANLINEORDERING_UNKNOWN,
+                             mode);
+        const HRESULT hr = enumAdapterModeForFilter(f_, adapter, pFilter, mode, pMode);
+        dxmt9FactoryDebugLog("EnumAdapterModesEx -> hr=0x%08x", (unsigned)hr);
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE GetAdapterDisplayModeEx(UINT adapter,
                                                        D3DDISPLAYMODEEX* pMode,
                                                        D3DDISPLAYROTATION* pRot) noexcept override {
+        if (!pMode) return D3DERR_INVALIDCALL;
+        if (pMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
         uint32_t w, h, refresh, f;
         dxmt9FactoryDebugLog("GetAdapterDisplayModeEx adapter=%u", adapter);
         HRESULT hr = hr32(dxmt9c_factory_get_adapter_display_mode(
             f_, adapter, &w, &h, &refresh, &f));
         if (FAILED(hr)) return hr;
-        if (pMode) {
-            pMode->Size             = sizeof(D3DDISPLAYMODEEX);
-            pMode->Width            = w;
-            pMode->Height           = h;
-            pMode->RefreshRate      = refresh;
-            pMode->Format           = (D3DFORMAT)f;
-            pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
-            dxmt9FactoryDebugLog("GetAdapterDisplayModeEx -> %ux%u refresh=%u fmt=%u",
-                                 (unsigned)pMode->Width, (unsigned)pMode->Height,
-                                 (unsigned)pMode->RefreshRate, (unsigned)pMode->Format);
-        }
+        pMode->Size             = sizeof(D3DDISPLAYMODEEX);
+        pMode->Width            = w;
+        pMode->Height           = h;
+        pMode->RefreshRate      = refresh;
+        pMode->Format           = (D3DFORMAT)f;
+        pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
+        dxmt9FactoryDebugLog("GetAdapterDisplayModeEx -> %ux%u refresh=%u fmt=%u",
+                             (unsigned)pMode->Width, (unsigned)pMode->Height,
+                             (unsigned)pMode->RefreshRate, (unsigned)pMode->Format);
         if (pRot) *pRot = D3DDISPLAYROTATION_IDENTITY;
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE CreateDeviceEx(UINT adapter, D3DDEVTYPE,
+    HRESULT STDMETHODCALLTYPE CreateDeviceEx(UINT adapter, D3DDEVTYPE deviceType,
                                               HWND hwnd, DWORD behaviorFlags,
                                               D3DPRESENT_PARAMETERS* pPP,
                                               D3DDISPLAYMODEEX* pFsMode,
                                               IDirect3DDevice9Ex** ppDevice) noexcept override {
+        if (ppDevice) *ppDevice = nullptr;
         if (!pPP || !ppDevice) return D3DERR_INVALIDCALL;
-        dxmt9FactoryDebugLog("CreateDeviceEx adapter=%u hwnd=%p behavior=0x%x windowed=%u size=%ux%u fmt=%u fsMode=%d",
-                             adapter, hwnd, (unsigned)behaviorFlags,
+        dxmt9FactoryDebugLog("CreateDeviceEx adapter=%u devType=%u hwnd=%p behavior=0x%x windowed=%u size=%ux%u fmt=%u fsMode=%d",
+                             adapter, (unsigned)deviceType, hwnd, (unsigned)behaviorFlags,
                              pPP->Windowed ? 1u : 0u,
                              (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
                              (unsigned)pPP->BackBufferFormat, pFsMode ? 1 : 0);
+        if (!isSupportedDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CreateDeviceEx -> unsupported devType=%u", (unsigned)deviceType);
+            return D3DERR_NOTAVAILABLE;
+        }
+        if (pFsMode && pFsMode->Size != sizeof(D3DDISPLAYMODEEX)) {
+            dxmt9FactoryDebugLog("CreateDeviceEx -> invalid fullscreen mode size=%u", (unsigned)pFsMode->Size);
+            return D3DERR_INVALIDCALL;
+        }
         D9CPresentParams cpp = toCpp(*pPP);
         cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
         D9CDisplayModeEx cdme{};
@@ -441,7 +601,7 @@ public:
             dxmt9FactoryDebugLog("CreateDeviceEx -> failed");
             return D3DERR_INVALIDCALL;
         }
-        *ppDevice = CreateDeviceImpl(dev, this, adapter, behaviorFlags, hwnd, extended_);
+        *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType, behaviorFlags, hwnd, extended_);
         dxmt9FactoryDebugLog("CreateDeviceEx -> device=%p", *ppDevice);
         return S_OK;
     }

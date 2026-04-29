@@ -11,6 +11,7 @@ IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f);
 IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
                                      IDirect3D9Ex* pFactory,
                                      UINT adapter,
+                                     D3DDEVTYPE deviceType,
                                      DWORD behaviorFlags,
                                      HWND window,
                                      bool extended);

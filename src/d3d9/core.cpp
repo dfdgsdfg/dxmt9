@@ -2354,6 +2354,216 @@ void captureShaderConstantsDelta(ShaderConstantSnapshot<FloatCount>& snapshot,
   }
 }
 
+constexpr u32 kRsFillMode = 8;
+constexpr u32 kRsShadeMode = 9;
+constexpr u32 kRsLastPixel = 16;
+constexpr u32 kRsDitherEnable = 26;
+constexpr u32 kRsWrap0 = 128;
+constexpr u32 kRsWrap1 = 129;
+constexpr u32 kRsWrap2 = 130;
+constexpr u32 kRsWrap3 = 131;
+constexpr u32 kRsWrap4 = 132;
+constexpr u32 kRsWrap5 = 133;
+constexpr u32 kRsWrap6 = 134;
+constexpr u32 kRsWrap7 = 135;
+constexpr u32 kRsClipping = 136;
+constexpr u32 kRsColorVertex = 141;
+constexpr u32 kRsLocalViewer = 142;
+constexpr u32 kRsPointSize = 154;
+constexpr u32 kRsPointSizeMin = 155;
+constexpr u32 kRsPointScaleA = 158;
+constexpr u32 kRsPointScaleB = 159;
+constexpr u32 kRsPointScaleC = 160;
+constexpr u32 kRsMultisampleAntialias = 161;
+constexpr u32 kRsMultisampleMask = 162;
+constexpr u32 kRsPatchEdgeStyle = 163;
+constexpr u32 kRsPointSizeMax = 166;
+constexpr u32 kRsIndexedVertexBlendEnable = 167;
+constexpr u32 kRsTweenFactor = 170;
+constexpr u32 kRsPositionDegree = 172;
+constexpr u32 kRsNormalDegree = 173;
+constexpr u32 kRsSlopeScaleDepthBias = 175;
+constexpr u32 kRsAntialiasedLineEnable = 176;
+constexpr u32 kRsMinTessellationLevel = 178;
+constexpr u32 kRsMaxTessellationLevel = 179;
+constexpr u32 kRsAdaptiveTessX = 180;
+constexpr u32 kRsAdaptiveTessY = 181;
+constexpr u32 kRsAdaptiveTessZ = 182;
+constexpr u32 kRsAdaptiveTessW = 183;
+constexpr u32 kRsEnableAdaptiveTessellation = 184;
+constexpr u32 kRsTwoSidedStencilMode = 185;
+constexpr u32 kRsColorWriteEnable1 = 190;
+constexpr u32 kRsColorWriteEnable2 = 191;
+constexpr u32 kRsColorWriteEnable3 = 192;
+constexpr u32 kRsDepthBias = 195;
+constexpr u32 kRsWrap8 = 198;
+constexpr u32 kRsWrap9 = 199;
+constexpr u32 kRsWrap10 = 200;
+constexpr u32 kRsWrap11 = 201;
+constexpr u32 kRsWrap12 = 202;
+constexpr u32 kRsWrap13 = 203;
+constexpr u32 kRsWrap14 = 204;
+constexpr u32 kRsWrap15 = 205;
+
+constexpr auto kPixelStateRenderStates = std::to_array<u32>({
+    RS_ALPHABLEND_ENABLE,
+    RS_ALPHA_FUNC,
+    RS_ALPHA_REF,
+    RS_ALPHA_TEST_ENABLE,
+    kRsAntialiasedLineEnable,
+    RS_BLEND_FACTOR,
+    RS_BLEND_OP,
+    RS_BLEND_OP_ALPHA,
+    RS_STENCIL_CCW_FAIL,
+    RS_STENCIL_CCW_FUNC,
+    RS_STENCIL_CCW_PASS,
+    RS_STENCIL_CCW_ZFAIL,
+    RS_COLOR_WRITE_ENABLE,
+    kRsColorWriteEnable1,
+    kRsColorWriteEnable2,
+    kRsColorWriteEnable3,
+    kRsDepthBias,
+    RS_DEST_BLEND,
+    RS_DEST_BLEND_ALPHA,
+    kRsDitherEnable,
+    kRsFillMode,
+    RS_FOG_DENSITY,
+    RS_FOG_END,
+    RS_FOG_START,
+    kRsLastPixel,
+    RS_SCISSOR_TEST_ENABLE,
+    RS_SEPARATE_ALPHA_BLEND_ENABLE,
+    kRsShadeMode,
+    kRsSlopeScaleDepthBias,
+    RS_SRC_BLEND,
+    RS_SRC_BLEND_ALPHA,
+    RS_SRGB_WRITE_ENABLE,
+    RS_STENCIL_ENABLE,
+    RS_STENCIL_FAIL,
+    RS_STENCIL_FUNC,
+    RS_STENCIL_MASK,
+    RS_STENCIL_PASS,
+    RS_STENCIL_REF,
+    RS_STENCIL_WRITEMASK,
+    RS_STENCIL_ZFAIL,
+    RS_TEXTURE_FACTOR,
+    kRsTwoSidedStencilMode,
+    kRsWrap0,
+    kRsWrap1,
+    kRsWrap10,
+    kRsWrap11,
+    kRsWrap12,
+    kRsWrap13,
+    kRsWrap14,
+    kRsWrap15,
+    kRsWrap2,
+    kRsWrap3,
+    kRsWrap4,
+    kRsWrap5,
+    kRsWrap6,
+    kRsWrap7,
+    kRsWrap8,
+    kRsWrap9,
+    RS_Z_ENABLE,
+    RS_Z_FUNC,
+    RS_Z_WRITE_ENABLE,
+});
+
+constexpr auto kVertexStateRenderStates = std::to_array<u32>({
+    kRsAdaptiveTessW,
+    kRsAdaptiveTessX,
+    kRsAdaptiveTessY,
+    kRsAdaptiveTessZ,
+    RS_AMBIENT,
+    RS_AMBIENT_MATERIAL_SOURCE,
+    kRsClipping,
+    RS_CLIP_PLANE_ENABLE,
+    kRsColorVertex,
+    RS_CULL_MODE,
+    RS_DIFFUSE_MATERIAL_SOURCE,
+    RS_EMISSIVE_MATERIAL_SOURCE,
+    kRsEnableAdaptiveTessellation,
+    RS_FOG_COLOR,
+    RS_FOG_DENSITY,
+    RS_FOG_ENABLE,
+    RS_FOG_END,
+    RS_FOG_START,
+    RS_FOG_TABLE_MODE,
+    RS_FOG_FROM_VERTEX,
+    kRsIndexedVertexBlendEnable,
+    RS_LIGHTING,
+    kRsLocalViewer,
+    kRsMaxTessellationLevel,
+    kRsMinTessellationLevel,
+    kRsMultisampleAntialias,
+    kRsMultisampleMask,
+    kRsNormalDegree,
+    RS_NORMALIZE_NORMALS,
+    kRsPatchEdgeStyle,
+    kRsPointScaleA,
+    kRsPointScaleB,
+    kRsPointScaleC,
+    RS_POINT_SCALE_ENABLE,
+    kRsPointSize,
+    kRsPointSizeMax,
+    kRsPointSizeMin,
+    RS_POINT_SPRITE_ENABLE,
+    kRsPositionDegree,
+    RS_RANGE_FOG,
+    kRsShadeMode,
+    RS_SPECULAR_ENABLE,
+    RS_SPECULAR_MATERIAL_SOURCE,
+    kRsTweenFactor,
+    RS_VERTEX_BLEND,
+});
+
+template <size_t N>
+void copyRenderStates(DeviceState& dst, const DeviceState& src, const std::array<u32, N>& keys) {
+  for (u32 key : keys) {
+    const auto it = src.renderStates.find(key);
+    if (it != src.renderStates.end()) {
+      dst.renderStates[key] = it->second;
+    } else {
+      dst.renderStates.erase(key);
+    }
+  }
+}
+
+void syncRenderStateDerived(DeviceState& state) {
+  const auto scissorIt = state.renderStates.find(RS_SCISSOR_TEST_ENABLE);
+  state.scissorEnabled = scissorIt != state.renderStates.end() && scissorIt->second != 0;
+}
+
+void applyFullSnapshotState(DeviceState& dst, const DeviceState& src, StateBlockType type) {
+  switch (type) {
+    case StateBlockType::All:
+    case StateBlockType::Recorded: {
+      const bool inScene = dst.inScene;
+      dst = src;
+      dst.inScene = inScene;
+      return;
+    }
+    case StateBlockType::PixelState:
+      copyRenderStates(dst, src, kPixelStateRenderStates);
+      dst.textureStageStates = src.textureStageStates;
+      dst.samplerStates = src.samplerStates;
+      dst.pixelShader = src.pixelShader;
+      dst.psConst = src.psConst;
+      syncRenderStateDerived(dst);
+      return;
+    case StateBlockType::VertexState:
+      copyRenderStates(dst, src, kVertexStateRenderStates);
+      dst.vertexDecl = src.vertexDecl;
+      dst.fvf = src.fvf;
+      dst.vertexShader = src.vertexShader;
+      dst.vsConst = src.vsConst;
+      dst.lights = src.lights;
+      dst.lightEnabled = src.lightEnabled;
+      syncRenderStateDerived(dst);
+      return;
+  }
+}
+
 }  // namespace
 
 void StateBlock::capture(const DeviceState& state) {
@@ -2429,6 +2639,7 @@ void StateBlock::capture(const DeviceState& state) {
 
 void StateBlock::captureDelta(const DeviceState& before, const DeviceState& after) {
   mode_ = CaptureMode::Delta;
+  type_ = StateBlockType::Recorded;
   baseline_ = before;
   snapshot_ = after;
   recordedRenderStates_.clear();
@@ -2437,6 +2648,7 @@ void StateBlock::captureDelta(const DeviceState& before, const DeviceState& afte
 void StateBlock::captureDelta(const DeviceState& before, const DeviceState& after,
                               const std::unordered_set<u32>& recordedRenderStates) {
   mode_ = CaptureMode::Delta;
+  type_ = StateBlockType::Recorded;
   baseline_ = before;
   snapshot_ = after;
   recordedRenderStates_ = recordedRenderStates;
@@ -2445,9 +2657,7 @@ void StateBlock::captureDelta(const DeviceState& before, const DeviceState& afte
 void StateBlock::apply(Device& device) const {
   auto& state = device.mutableState();
   if (mode_ == CaptureMode::FullSnapshot) {
-    const bool inScene = state.inScene;
-    state = snapshot_;
-    state.inScene = inScene;
+    applyFullSnapshotState(state, snapshot_, type_);
     return;
   }
 
@@ -2466,6 +2676,7 @@ void StateBlock::apply(Device& device) const {
   } else {
     applyMapDelta(state.renderStates, baseline_.renderStates, snapshot_.renderStates);
   }
+  syncRenderStateDerived(state);
   for (size_t i = 0; i < state.textureStageStates.size(); ++i) {
     applyMapDelta(state.textureStageStates[i], baseline_.textureStageStates[i], snapshot_.textureStageStates[i]);
   }
@@ -2659,8 +2870,8 @@ std::shared_ptr<Query> Device::createQuery(QueryType type) {
   return query;
 }
 
-std::shared_ptr<StateBlock> Device::createStateBlock() const {
-  auto block = std::make_shared<StateBlock>();
+std::shared_ptr<StateBlock> Device::createStateBlock(StateBlockType type) const {
+  auto block = std::make_shared<StateBlock>(type);
   block->capture(state_);
   return block;
 }

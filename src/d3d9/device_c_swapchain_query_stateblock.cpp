@@ -2,6 +2,23 @@
 
 using namespace dxmt9::d3d9::devicec;
 
+namespace {
+
+std::optional<dxmt9::core::StateBlockType> stateBlockTypeFromD3D(uint32_t type) {
+  switch (type) {
+    case 1:
+      return dxmt9::core::StateBlockType::All;
+    case 2:
+      return dxmt9::core::StateBlockType::PixelState;
+    case 3:
+      return dxmt9::core::StateBlockType::VertexState;
+    default:
+      return std::nullopt;
+  }
+}
+
+}  // namespace
+
 extern "C" D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice* d, uint32_t idx) {
   auto* swapChain = d->iface->GetSwapChain(idx);
   if (!swapChain) {
@@ -42,8 +59,15 @@ extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* d, uint32_t type) {
   return new D9CQuery{query, d};
 }
 
-extern "C" D9CStateBlock* dxmt9c_device_create_state_block(D9CDevice* d, uint32_t) {
-  auto stateBlock = d->iface->CreateStateBlock();
+extern "C" D9CStateBlock* dxmt9c_device_create_state_block(D9CDevice* d, uint32_t type) {
+  if (!d || d->stateBlockRecording) {
+    return nullptr;
+  }
+  const auto stateBlockType = stateBlockTypeFromD3D(type);
+  if (!stateBlockType) {
+    return nullptr;
+  }
+  auto stateBlock = d->dev().createStateBlock(*stateBlockType);
   if (!stateBlock) {
     return nullptr;
   }
@@ -202,11 +226,17 @@ extern "C" uint32_t dxmt9c_stateblock_release(D9CStateBlock* s) {
 }
 
 extern "C" int32_t dxmt9c_stateblock_capture(D9CStateBlock* s) {
+  if (!s || !s->device || s->device->stateBlockRecording) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   s->obj->capture(s->device->dev().state());
   return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_stateblock_apply(D9CStateBlock* s) {
+  if (!s || !s->device || s->device->stateBlockRecording) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   s->obj->apply(s->device->dev());
   const auto& state = s->device->dev().state();
   const auto renderStateValue = [&](uint32_t key) -> uint32_t {

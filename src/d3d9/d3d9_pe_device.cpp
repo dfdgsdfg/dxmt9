@@ -99,8 +99,9 @@ static HRESULT setPrivateData(dxmt9::util::ComPrivateData& storage,
                               const void* self) {
     HRESULT hr = D3DERR_INVALIDCALL;
     if ((flags & D3DSPD_IUNKNOWN) != 0) {
-        const auto* ifacePtr = reinterpret_cast<IUnknown* const*>(data);
-        hr = ifacePtr ? storage.setInterface(guid, *ifacePtr) : D3DERR_INVALIDCALL;
+        if (data && size == sizeof(IUnknown*)) {
+            hr = storage.setInterface(guid, static_cast<const IUnknown*>(data));
+        }
     } else {
         hr = storage.setData(guid, size, data);
     }
@@ -116,8 +117,8 @@ static HRESULT getPrivateData(dxmt9::util::ComPrivateData& storage,
                               const char* label,
                               const void* self) {
     UINT localSize = size ? static_cast<UINT>(*size) : 0u;
-    HRESULT hr = storage.getData(guid, size ? &localSize : nullptr, data);
-    if (size) {
+    HRESULT hr = storage.getData(guid, &localSize, data);
+    if (size && hr != D3DERR_NOTFOUND) {
         *size = static_cast<DWORD>(localSize);
     }
     dxmt9DeviceDebugLog("%s_get_private_data this=%p data=%p size=%u -> hr=0x%08x",
@@ -1095,16 +1096,18 @@ public:
 
 /* ── SwapChain ────────────────────────────────────────────────────────────── */
 
-class D3D9SwapChainImpl final : public IDirect3DSwapChain9 {
+class D3D9SwapChainImpl final : public IDirect3DSwapChain9Ex {
     ULONG        refs_ = 1;
     D9CSwapChain* sc_;
     IDirect3DDevice9* device_;
     D3D9PeRecorderFlush* recorder_;
+    bool extended_ = false;
 public:
     D3D9SwapChainImpl(D9CSwapChain* sc,
                       IDirect3DDevice9* device,
-                      D3D9PeRecorderFlush* recorder = nullptr)
-        : sc_(sc), device_(device), recorder_(recorder) {
+                      D3D9PeRecorderFlush* recorder = nullptr,
+                      bool extended = false)
+        : sc_(sc), device_(device), recorder_(recorder), extended_(extended) {
         if (device_) device_->AddRef();
     }
     ~D3D9SwapChainImpl() {
@@ -1120,7 +1123,14 @@ public:
         if (!ppv) return E_POINTER;
         if (IsEqualGUID(riid, IID_IUnknown) ||
             IsEqualGUID(riid, IID_IDirect3DSwapChain9)) {
-            *ppv = this; AddRef(); return S_OK;
+            *ppv = static_cast<IDirect3DSwapChain9*>(this); AddRef(); return S_OK;
+        }
+        if (IsEqualGUID(riid, IID_IDirect3DSwapChain9Ex)) {
+            if (!extended_) {
+                *ppv = nullptr;
+                return E_NOINTERFACE;
+            }
+            *ppv = static_cast<IDirect3DSwapChain9Ex*>(this); AddRef(); return S_OK;
         }
         *ppv = nullptr; return E_NOINTERFACE;
     }
@@ -1204,6 +1214,35 @@ public:
         }
         return hr;
     }
+
+    HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* pLastPresentCount) noexcept override {
+        if (pLastPresentCount) *pLastPresentCount = 0u;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetPresentStats(D3DPRESENTSTATS* pPresentationStatistics) noexcept override {
+        if (pPresentationStatistics) {
+            memset(pPresentationStatistics, 0, sizeof(*pPresentationStatistics));
+        }
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetDisplayModeEx(D3DDISPLAYMODEEX* pMode,
+                                                D3DDISPLAYROTATION* pRotation) noexcept override {
+        if (!pMode) return D3DERR_INVALIDCALL;
+        if (pMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
+        D3DDISPLAYMODE mode{};
+        const HRESULT hr = GetDisplayMode(&mode);
+        if (FAILED(hr)) return hr;
+        pMode->Size = sizeof(D3DDISPLAYMODEEX);
+        pMode->Width = mode.Width;
+        pMode->Height = mode.Height;
+        pMode->RefreshRate = mode.RefreshRate;
+        pMode->Format = mode.Format;
+        pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
+        if (pRotation) *pRotation = D3DDISPLAYROTATION_IDENTITY;
+        return S_OK;
+    }
 };
 
 /* =========================================================================
@@ -1270,8 +1309,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     ULONG        refs_    = 1;
     D9CDevice*   dev_;
-    IDirect3D9Ex* factory_; /* borrowed, no AddRef — factory owns device */
+    IDirect3D9Ex* factory_;
     UINT         adapter_ = 0;
+    D3DDEVTYPE   deviceType_ = D3DDEVTYPE_HAL;
     DWORD        behaviorFlags_ = 0;
     bool         extended_ = false;
 
@@ -2286,23 +2326,26 @@ public:
     }
 
     D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
-                   UINT adapter, DWORD behaviorFlags, HWND window, bool extended)
+                   UINT adapter, D3DDEVTYPE deviceType, DWORD behaviorFlags,
+                   HWND window, bool extended)
         : dev_(dev), factory_(factory)
-        , adapter_(adapter), behaviorFlags_(behaviorFlags)
+        , adapter_(adapter), deviceType_(deviceType), behaviorFlags_(behaviorFlags)
         , extended_(extended)
         , creationWindow_(window) {
+        if (factory_) factory_->AddRef();
         for (UINT& freq : streamFreq_) {
             freq = 1;
         }
-        dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u behavior=0x%x window=%p extended=%u",
+        dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u devType=%u behavior=0x%x window=%p extended=%u",
                             this, static_cast<void*>(dev_), static_cast<void*>(factory_),
-                            adapter_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
+                            adapter_, (unsigned)deviceType_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
     }
 
     ~D3D9DeviceImpl() {
         (void)flushPeRecorder();
         releaseAllBound();
         dxmt9c_device_release(dev_);
+        if (factory_) factory_->Release();
     }
 
     /* ── IUnknown ── */
@@ -2364,6 +2407,7 @@ public:
         HRESULT hr = hr32(dxmt9c_device_get_caps(dev_, &cc));
         if (SUCCEEDED(hr)) {
             FillD3DCaps9(cc, pCaps);
+            pCaps->DeviceType = deviceType_;
             dxmt9DeviceDebugLog("device_get_caps -> vs=0x%08x ps=0x%08x maxTex=%ux%u maxRT=%u maxLights=%u maxStreams=%u maxAniso=%u intervals=0x%x devCaps=0x%x rasterCaps=0x%x texCaps=0x%x textureOpCaps=0x%x",
                                 (unsigned)pCaps->VertexShaderVersion,
                                 (unsigned)pCaps->PixelShaderVersion,
@@ -2411,7 +2455,7 @@ public:
             D3DDEVICE_CREATION_PARAMETERS* pParams) noexcept override {
         if (!pParams) return D3DERR_INVALIDCALL;
         pParams->AdapterOrdinal  = adapter_;
-        pParams->DeviceType      = D3DDEVTYPE_HAL;
+        pParams->DeviceType      = deviceType_;
         pParams->hFocusWindow    = creationWindow_;
         pParams->BehaviorFlags   = behaviorFlags_;
         return S_OK;
@@ -2449,7 +2493,7 @@ public:
         cpp.presentationInterval = pPP->PresentationInterval;
         D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
         if (!sc) return D3DERR_INVALIDCALL;
-        *ppSC = new D3D9SwapChainImpl(sc, this, this);
+        *ppSC = new D3D9SwapChainImpl(sc, this, this, extended_);
         return S_OK;
     }
 
@@ -2458,7 +2502,7 @@ public:
         if (!ppSC) return D3DERR_INVALIDCALL;
         D9CSwapChain* sc = dxmt9c_device_get_swap_chain(dev_, index);
         if (!sc) return D3DERR_INVALIDCALL;
-        *ppSC = new D3D9SwapChainImpl(sc, this, this);
+        *ppSC = new D3D9SwapChainImpl(sc, this, this, extended_);
         return S_OK;
     }
 
@@ -2547,7 +2591,7 @@ public:
             dxmt9c_swapchain_release(chain);
             return D3DERR_INVALIDCALL;
         }
-        auto* swapchain = new D3D9SwapChainImpl(chain, this, this);
+        auto* swapchain = new D3D9SwapChainImpl(chain, this, this, extended_);
         *ppS = new D3D9SurfaceImpl(s, this, static_cast<IDirect3DSwapChain9*>(swapchain), this);
         swapchain->Release();
         return S_OK;
@@ -4073,6 +4117,7 @@ public:
     HRESULT STDMETHODCALLTYPE ResetEx(D3DPRESENT_PARAMETERS* pPP,
                                        D3DDISPLAYMODEEX* pFsMode) noexcept override {
         if (!pPP) return D3DERR_INVALIDCALL;
+        if (pFsMode && pFsMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
         D9CPresentParams cpp{};
         cpp.backBufferWidth  = pPP->BackBufferWidth;
         cpp.backBufferHeight = pPP->BackBufferHeight;
@@ -4100,22 +4145,20 @@ public:
         return hr32(dxmt9c_device_reset_ex(dev_, &cpp, pFsMode ? &cdme : nullptr));
     }
 
-    HRESULT STDMETHODCALLTYPE GetDisplayModeEx(UINT /*sc*/,
+    HRESULT STDMETHODCALLTYPE GetDisplayModeEx(UINT sc,
                                                 D3DDISPLAYMODEEX* pMode,
                                                 D3DDISPLAYROTATION* pRot) noexcept override {
-        if (pMode) {
-            D3DDISPLAYMODE mode{};
-            if (SUCCEEDED(GetDisplayMode(0, &mode))) {
-                pMode->Size = sizeof(*pMode);
-                pMode->Width = mode.Width;
-                pMode->Height = mode.Height;
-                pMode->RefreshRate = mode.RefreshRate;
-                pMode->Format = mode.Format;
-                pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
-            } else {
-                memset(pMode, 0, sizeof(*pMode));
-            }
-        }
+        if (!pMode) return D3DERR_INVALIDCALL;
+        if (pMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
+        D3DDISPLAYMODE mode{};
+        const HRESULT hr = GetDisplayMode(sc, &mode);
+        if (FAILED(hr)) return hr;
+        pMode->Size = sizeof(D3DDISPLAYMODEEX);
+        pMode->Width = mode.Width;
+        pMode->Height = mode.Height;
+        pMode->RefreshRate = mode.RefreshRate;
+        pMode->Format = mode.Format;
+        pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
         if (pRot)  *pRot = D3DDISPLAYROTATION_IDENTITY;
         return S_OK;
     }
@@ -4126,7 +4169,9 @@ public:
  * ========================================================================= */
 
 IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev, IDirect3D9Ex* pFactory,
-                                     UINT adapter, DWORD behaviorFlags,
+                                     UINT adapter, D3DDEVTYPE deviceType,
+                                     DWORD behaviorFlags,
                                      HWND window, bool extended) {
-    return new D3D9DeviceImpl(dev, pFactory, adapter, behaviorFlags, window, extended);
+    return new D3D9DeviceImpl(dev, pFactory, adapter, deviceType,
+                              behaviorFlags, window, extended);
 }

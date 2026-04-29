@@ -1162,6 +1162,43 @@ void testDeviceCoreFlow() {
   checkEq(device->state().scissorRect.left, 16, "restored scissor left");
   checkEq(device->state().transforms.at(XFORM_VIEW).m[0], 2.0f, "restored transform");
 
+  auto pixelStateBlock = device->createStateBlock(StateBlockType::PixelState);
+  check(pixelStateBlock != nullptr, "pixel state block");
+  checkEq(device->setRenderState(RS_ALPHA_TEST_ENABLE, 0), D3D_OK, "mutate pixel alpha test");
+  checkEq(device->setRenderState(RS_LIGHTING, 0), D3D_OK, "mutate vertex lighting before pixel apply");
+  checkEq(device->setTextureStageState(0, TSS_COLOR_OP, static_cast<u32>(TextureOp::Disable)), D3D_OK,
+          "mutate pixel texture stage");
+  checkEq(device->setSamplerState(0, SAMP_MAX_ANISOTROPY, 1), D3D_OK, "mutate pixel sampler");
+  checkEq(device->setTexture(0, nullptr), D3D_OK, "mutate texture before pixel apply");
+  checkEq(device->setFVF(0x3344u), D3D_OK, "mutate fvf before pixel apply");
+  checkEq(device->applyStateBlock(*pixelStateBlock), D3D_OK, "apply pixel state block");
+  checkEq(device->getRenderState(RS_ALPHA_TEST_ENABLE), 1u, "pixel block restored alpha test");
+  checkEq(device->getRenderState(RS_LIGHTING), 0u, "pixel block left lighting alone");
+  checkEq(device->getTextureStageState(0, TSS_COLOR_OP), static_cast<u32>(TextureOp::SelectArg1),
+          "pixel block restored texture stage");
+  checkEq(device->getSamplerState(0, SAMP_MAX_ANISOTROPY), 4u, "pixel block restored sampler");
+  checkEq(device->state().textures[0], nullptr, "pixel block left texture binding alone");
+  checkEq(device->state().fvf, 0x3344u, "pixel block left fvf alone");
+
+  checkEq(device->applyStateBlock(*stateBlock), D3D_OK, "restore state before vertex block");
+  auto vertexStateBlock = device->createStateBlock(StateBlockType::VertexState);
+  check(vertexStateBlock != nullptr, "vertex state block");
+  checkEq(device->setRenderState(RS_LIGHTING, 0), D3D_OK, "mutate vertex lighting");
+  checkEq(device->setRenderState(RS_ALPHA_TEST_ENABLE, 0), D3D_OK, "mutate alpha before vertex apply");
+  checkEq(device->setTextureStageState(0, TSS_COLOR_OP, static_cast<u32>(TextureOp::Disable)), D3D_OK,
+          "mutate texture stage before vertex apply");
+  checkEq(device->setFVF(0x5566u), D3D_OK, "mutate fvf before vertex apply");
+  checkEq(device->setTexture(0, nullptr), D3D_OK, "mutate texture before vertex apply");
+  checkEq(device->applyStateBlock(*vertexStateBlock), D3D_OK, "apply vertex state block");
+  checkEq(device->getRenderState(RS_LIGHTING), 1u, "vertex block restored lighting");
+  checkEq(device->getRenderState(RS_ALPHA_TEST_ENABLE), 0u, "vertex block left alpha test alone");
+  checkEq(device->getTextureStageState(0, TSS_COLOR_OP), static_cast<u32>(TextureOp::Disable),
+          "vertex block left texture stage alone");
+  checkEq(device->state().fvf, 0x1122u, "vertex block restored fvf");
+  checkEq(device->state().textures[0], nullptr, "vertex block left texture binding alone");
+
+  checkEq(device->applyStateBlock(*stateBlock), D3D_OK, "restore state after typed blocks");
+
   std::array<u8, 4> vertexPayload{1, 2, 3, 4};
   checkEq(device->drawPrimitiveUP(PrimitiveType::TriangleList, 1,
                                   std::span<const u8>(vertexPayload.data(), vertexPayload.size())),
@@ -1543,6 +1580,25 @@ void testComWrappersEx() {
   auto* queriedDevice = static_cast<IDirect3DDevice9Ex*>(deviceUnknown);
   check(queriedDevice != nullptr, "device ex query result");
   checkEq(queriedDevice->Release(), 1u, "device ex qi release");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+    check(dxmt9c_device_create_state_block(&cDevice, 0) == nullptr, "reject invalid state block type");
+    auto* cStateBlock = dxmt9c_device_create_state_block(&cDevice, 1);
+    check(cStateBlock != nullptr, "create c state block");
+    checkEq(dxmt9c_device_begin_state_block(&cDevice), D3D_OK, "begin c state block");
+    check(dxmt9c_device_create_state_block(&cDevice, 1) == nullptr, "reject create state block while recording");
+    checkEq(dxmt9c_device_begin_state_block(&cDevice), D3DERR_INVALIDCALL, "reject nested state block recording");
+    checkEq(dxmt9c_stateblock_capture(cStateBlock), D3DERR_INVALIDCALL, "reject state block capture while recording");
+    checkEq(dxmt9c_stateblock_apply(cStateBlock), D3DERR_INVALIDCALL, "reject state block apply while recording");
+    D9CStateBlock* recordedStateBlock = nullptr;
+    checkEq(dxmt9c_device_end_state_block(&cDevice, &recordedStateBlock), D3D_OK, "end c state block");
+    check(recordedStateBlock != nullptr, "recorded c state block");
+    checkEq(dxmt9c_stateblock_release(recordedStateBlock), 0u, "release recorded c state block");
+    checkEq(dxmt9c_stateblock_release(cStateBlock), 0u, "release c state block");
+  }
+
   checkEq(device->GetMaximumFrameLatency(), 4u, "default max frame latency");
   checkEq(device->SetMaximumFrameLatency(0), D3D_OK, "set frame latency default");
   checkEq(device->GetMaximumFrameLatency(), 4u, "zero latency maps to default");
