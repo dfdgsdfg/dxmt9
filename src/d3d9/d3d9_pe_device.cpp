@@ -1273,6 +1273,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     IDirect3D9Ex* factory_; /* borrowed, no AddRef — factory owns device */
     UINT         adapter_ = 0;
     DWORD        behaviorFlags_ = 0;
+    bool         extended_ = false;
 
     /* bound resource tracking (AddRef'd) */
     IDirect3DBaseTexture9*     textures_[16]    = {};
@@ -2285,16 +2286,17 @@ public:
     }
 
     D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
-                   UINT adapter, DWORD behaviorFlags, HWND window)
+                   UINT adapter, DWORD behaviorFlags, HWND window, bool extended)
         : dev_(dev), factory_(factory)
         , adapter_(adapter), behaviorFlags_(behaviorFlags)
+        , extended_(extended)
         , creationWindow_(window) {
         for (UINT& freq : streamFreq_) {
             freq = 1;
         }
-        dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u behavior=0x%x window=%p",
+        dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u behavior=0x%x window=%p extended=%u",
                             this, static_cast<void*>(dev_), static_cast<void*>(factory_),
-                            adapter_, (unsigned)behaviorFlags_, window);
+                            adapter_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
     }
 
     ~D3D9DeviceImpl() {
@@ -2312,10 +2314,19 @@ public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
         if (!ppv) return E_POINTER;
         if (IsEqualGUID(riid, IID_IUnknown)          ||
-            IsEqualGUID(riid, IID_IDirect3DDevice9)  ||
-            IsEqualGUID(riid, IID_IDirect3DDevice9Ex)) {
-            *ppv = this;
+            IsEqualGUID(riid, IID_IDirect3DDevice9)) {
+            *ppv = static_cast<IDirect3DDevice9*>(this);
             dxmt9DeviceDebugLog("device_query_interface this=%p -> out=%p", this, *ppv);
+            AddRef();
+            return S_OK;
+        }
+        if (IsEqualGUID(riid, IID_IDirect3DDevice9Ex)) {
+            if (!extended_) {
+                *ppv = nullptr;
+                return E_NOINTERFACE;
+            }
+            *ppv = static_cast<IDirect3DDevice9Ex*>(this);
+            dxmt9DeviceDebugLog("device_query_interface_ex this=%p -> out=%p", this, *ppv);
             AddRef();
             return S_OK;
         }
@@ -4116,6 +4127,6 @@ public:
 
 IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev, IDirect3D9Ex* pFactory,
                                      UINT adapter, DWORD behaviorFlags,
-                                     HWND window) {
-    return new D3D9DeviceImpl(dev, pFactory, adapter, behaviorFlags, window);
+                                     HWND window, bool extended) {
+    return new D3D9DeviceImpl(dev, pFactory, adapter, behaviorFlags, window, extended);
 }

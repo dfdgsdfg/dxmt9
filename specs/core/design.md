@@ -58,6 +58,17 @@ when the COM reference count reaches zero. Device children hold a back-reference
 their owning device (incrementing its count), which is released in the child's
 destructor.
 
+Factory and device objects also carry an `extended` creation flag. The concrete
+implementation may share one class for base and Ex objects, but
+`QueryInterface()` must gate Ex interfaces on that flag:
+
+- `Direct3DCreate9()` creates `extended = false`; `IID_IDirect3D9Ex` and
+  `IID_IDirect3DDevice9Ex` queries fail with `E_NOINTERFACE`.
+- `Direct3DCreate9Ex()` creates `extended = true`; both the factory and devices
+  created from it expose their Ex interfaces.
+- `IDirect3D9Ex::CreateDevice()` still creates an Ex-capable device because the
+  capability follows the parent factory, not the specific creation method.
+
 ---
 
 ## 2. Device State Structure
@@ -114,6 +125,27 @@ DeviceState {
 The state bag is read by the core when recording draw commands. The backend receives
 only value snapshots extracted from this bag; it never observes or mutates the live
 D3D9 state bag directly.
+
+### 2.1 State Blocks
+
+State blocks are PE-side snapshots or deltas of `DeviceState`; capture and apply
+must not cross the Wine PE/unix boundary solely to observe mutable D3D9 state.
+
+`CreateStateBlock()` uses the requested `D3DSTATEBLOCKTYPE` to select a state
+mask:
+
+| Type | Captured state |
+|---|---|
+| `D3DSBT_ALL` | render, texture/sampler, transforms, lights/material, shaders, constants, stream/index bindings, viewport/scissor, render targets |
+| `D3DSBT_PIXELSTATE` | pixel-shader state, pixel constants, textures, sampler/TSS state, render states that affect raster/output/pixel processing |
+| `D3DSBT_VERTEXSTATE` | vertex-shader state, vertex constants, transforms, lights/material, FVF/declaration, stream/index bindings, render states that affect vertex processing |
+
+`BeginStateBlock()` records the delta between the base state and subsequent
+state-setting calls. While recording is active, nested `BeginStateBlock()` and
+existing state block `Capture()` / `Apply()` calls fail. The implementation must
+preserve the D3D9 quirks covered by Wine's `stateblock.c`, including the
+difference between `CreateStateBlock(D3DSBT_ALL)` snapshots and explicitly
+recorded state blocks.
 
 ---
 
@@ -332,6 +364,13 @@ stateDiagram-v2
 | SYSTEMMEM | No | Yes | Yes |
 | SCRATCH | No | Yes | Yes |
 
+Public COM refcounts are part of the compatibility surface. Backend handle
+retention for deferred command chunks is private and must not be visible through
+`AddRef()` / `Release()` probes. `Get*` calls that return COM interfaces add a
+public reference; state-setting calls follow D3D9's observed rules, including
+`SetVertexDeclaration()` not adding a public reference and FVF conversion using
+stable cached vertex declarations.
+
 ---
 
 ## 5. Fixed-Function Pipeline Key
@@ -457,8 +496,24 @@ classDiagram
 **Class layout:** `Direct3D9ExImpl` inherits `IDirect3D9Ex` (which inherits
 `IDirect3D9`) and delegates all base methods to the existing `Factory`
 implementation. `Direct3DDevice9ExImpl` inherits `IDirect3DDevice9Ex` and
-delegates all base methods to the existing `Direct3DDevice9Impl`. No existing
-code changes.
+delegates all base methods to the existing `Direct3DDevice9Impl`. Base-vs-Ex
+availability is controlled by the `extended` creation flag rather than by a
+separate backend implementation.
+
+The shared implementation is still split logically by `extended` mode. This is
+the Wine-compatible rule:
+
+```mermaid
+flowchart TD
+    A["Direct3DCreate9()"] --> B["Factory extended=false"]
+    C["Direct3DCreate9Ex()"] --> D["Factory extended=true"]
+    B --> E["CreateDevice()\nDevice extended=false"]
+    D --> F["CreateDevice()\nDevice extended=true"]
+    D --> G["CreateDeviceEx()\nDevice extended=true"]
+    E --> H["QI IDirect3DDevice9Ex\nE_NOINTERFACE"]
+    F --> I["QI IDirect3DDevice9Ex\nS_OK"]
+    G --> I
+```
 
 **Ex-only method mappings:**
 

@@ -69,8 +69,9 @@ Key points:
 
 ## 3. Oracle Generation
 
-Two oracle sources feed the test corpus. Neither is ever regenerated automatically —
-updating an oracle value requires code review.
+Shader and rendering oracle values feed the test corpus. API conformance tests use
+Wine's D3D9 tests as behavioural references. Neither category is regenerated
+automatically — updating an oracle value or expected HRESULT requires code review.
 
 ### 3a. vkd3d `shader_runner_d3d9` (SM2/SM3)
 
@@ -103,6 +104,7 @@ values verified against real D3D9 hardware. To port a test:
 | ps_1_1, ps_1_4 | Wine `visual.c` hardcoded colors |
 | Fixed-function lighting, fog, texop | `shader_runner_d3d9` or `visual.c` |
 | Half-pixel offset, winding order | Math derivation (exact) |
+| COM lifetime, D3D9Ex QI, reset, stateblock | Wine `device.c`, `d3d9ex.c`, `stateblock.c` expected HRESULT/refcount behaviour |
 
 ---
 
@@ -294,12 +296,87 @@ Wine.
 
 ---
 
-## 9. File Layout  <!-- section 9 follows WSI section 8 -->
+## 9. Wine D3D9 Conformance Harness
+
+The conformance harness is a set of small PE executables compiled with
+llvm-mingw and run under Wine. Unlike `dxmt9-core-spec`, these tests exercise
+the real exported `d3d9.dll` ABI, COM vtables, Wine DLL search behaviour, and
+the PE bridge path.
+
+```mermaid
+sequenceDiagram
+    participant Test as d3d9_conformance_*.exe
+    participant D3D as d3d9.dll
+    participant Bridge as winemetal.dll
+    participant Unix as winemetal.so
+
+    Test->>D3D: Direct3DCreate9 / Direct3DCreate9Ex
+    Test->>D3D: COM calls under test
+    D3D->>Bridge: coarse factory/device/resource calls
+    Bridge->>Unix: Wine unix-call
+    Unix-->>Bridge: HRESULTs / handles / present status
+    D3D-->>Test: HRESULTs, COM refs, returned interfaces
+```
+
+### Porting Rules
+
+- Keep each executable focused: `factory_ex`, `device_lifetime`,
+  `stateblock`, and `reset_lost` are separate test programs.
+- Copy only the minimal test logic needed from Wine; do not vendor whole Wine
+  source files.
+- Preserve expected HRESULTs, refcount probes, and comments explaining unusual
+  D3D9 quirks.
+- Add a provenance header near each ported test:
+
+```c
+/* [provenance]
+ * source: wine/dlls/d3d9/tests/d3d9ex.c:test_qi_base_to_ex
+ * upstream-commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ * oracle: Wine D3D9 test behaviour, validated against native D3D9
+ */
+```
+
+### Required Executables
+
+| Executable | Wine source anchors | Primary checks |
+|---|---|---|
+| `d3d9_factory_ex_x64.exe` | `d3d9ex.c` QI/display/LUID tests | base vs Ex QI, Ex-created normal devices, display-mode filters |
+| `d3d9_device_lifetime_x64.exe` | `device.c` refcount/private-data/scene tests | public COM refcounts, `Get*` AddRef, scene transitions, private data |
+| `d3d9_stateblock_x64.exe` | `stateblock.c` create/capture/apply tests | `D3DSBT_*` masks, recording invalid calls, apply/capture quirks |
+| `d3d9_reset_lost_x64.exe` | `device.c` / `d3d9ex.c` reset tests | base vs Ex cooperative-level behaviour, default-pool invalidation |
+
+The same source layout may also build x86 PE binaries when the configured Wine
+runtime supports WoW64.
+
+### Run
+
+```sh
+# App-local lane example.
+mkdir -p build/conformance-stage
+cp build-win32-x64/src/win32/d3d9.dll build/conformance-stage/
+cp build-win32-x64/src/winemetal/winemetal.dll build/conformance-stage/
+cp build-x86_64/src/winemetal/unix/winemetal.so build/conformance-stage/
+cp tests/d3d9_conformance/d3d9_*_x64.exe build/conformance-stage/
+(cd build/conformance-stage && wine d3d9_factory_ex_x64.exe)
+```
+
+For the builtin lane, install `d3d9.dll`, `winemetal.dll`, and `winemetal.so`
+with the deployment helper, then run the same PE executables with
+`WINEDLLOVERRIDES="d3d9=n,b"` as described in the deployment spec.
+
+---
+
+## 10. File Layout
 
 ```
 tests/
 ├── smoke.cpp                     Bootstrap sanity test
 ├── core_spec.cpp                 Core API tests
+├── d3d9_conformance/
+│   ├── factory_ex.cpp            Wine d3d9ex.c-derived factory/Ex checks
+│   ├── device_lifetime.cpp       Wine device.c-derived refcount/private-data/scene checks
+│   ├── stateblock.cpp            Wine stateblock.c-derived stateblock checks
+│   └── reset_lost.cpp            Wine device.c/d3d9ex.c-derived reset checks
 ├── wsi_present/
 │   ├── main.cpp                  WSI integration test source (R-TEST-11.1)
 │   ├── wsi_present.exe           Historical ARM64 PE smoke binary
@@ -351,7 +428,7 @@ full corpus.
 
 ---
 
-## 10. Provenance Block
+## 11. Provenance Block
 
 Every `.shader_test` file opens with a provenance block. The block is pure comments
 (`;` prefix) so the vkd3d parser ignores it.
@@ -404,7 +481,7 @@ are behind.
 
 ---
 
-## 11. Manifest
+## 12. Manifest
 
 `tests/shader_tests/MANIFEST.toml` is the machine-readable index of the corpus.
 Rows for upstream-sourced tests may also carry `upstream-commit` so the sync tool

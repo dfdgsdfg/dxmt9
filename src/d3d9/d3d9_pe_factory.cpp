@@ -135,10 +135,11 @@ static void fillD3DCaps9(const D9CCaps& src, D3DCAPS9* out) {
 class D3D9FactoryImpl final : public IDirect3D9Ex {
     ULONG       refs_ = 1;
     D9CFactory* f_;
+    bool        extended_ = false;
 
 public:
-    explicit D3D9FactoryImpl(D9CFactory* f) : f_(f) {
-        dxmt9FactoryDebugLog("ctor this=%p factory=%p", this, f_);
+    explicit D3D9FactoryImpl(D9CFactory* f, bool extended) : f_(f), extended_(extended) {
+        dxmt9FactoryDebugLog("ctor this=%p factory=%p extended=%u", this, f_, extended_ ? 1u : 0u);
     }
     ~D3D9FactoryImpl() {
         dxmt9FactoryDebugLog("dtor this=%p factory=%p", this, f_);
@@ -158,9 +159,15 @@ public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
         if (!ppv) return E_POINTER;
         if (IsEqualGUID(riid, IID_IUnknown)       ||
-            IsEqualGUID(riid, IID_IDirect3D9)      ||
-            IsEqualGUID(riid, IID_IDirect3D9Ex)) {
-            *ppv = this; AddRef(); return S_OK;
+            IsEqualGUID(riid, IID_IDirect3D9)) {
+            *ppv = static_cast<IDirect3D9*>(this); AddRef(); return S_OK;
+        }
+        if (IsEqualGUID(riid, IID_IDirect3D9Ex)) {
+            if (!extended_) {
+                *ppv = nullptr;
+                return E_NOINTERFACE;
+            }
+            *ppv = static_cast<IDirect3D9Ex*>(this); AddRef(); return S_OK;
         }
         *ppv = nullptr; return E_NOINTERFACE;
     }
@@ -355,7 +362,7 @@ public:
             dxmt9FactoryDebugLog("CreateDevice -> failed");
             return D3DERR_INVALIDCALL;
         }
-        *ppDevice = CreateDeviceImpl(dev, this, adapter, behaviorFlags, hwnd);
+        *ppDevice = CreateDeviceImpl(dev, this, adapter, behaviorFlags, hwnd, extended_);
         dxmt9FactoryDebugLog("CreateDevice -> device=%p", *ppDevice);
         return S_OK;
     }
@@ -434,7 +441,7 @@ public:
             dxmt9FactoryDebugLog("CreateDeviceEx -> failed");
             return D3DERR_INVALIDCALL;
         }
-        *ppDevice = CreateDeviceImpl(dev, this, adapter, behaviorFlags, hwnd);
+        *ppDevice = CreateDeviceImpl(dev, this, adapter, behaviorFlags, hwnd, extended_);
         dxmt9FactoryDebugLog("CreateDeviceEx -> device=%p", *ppDevice);
         return S_OK;
     }
@@ -452,12 +459,12 @@ public:
 /* ── factory constructors (called from entry.cpp) ────────────────────────── */
 
 IDirect3D9* CreateFactoryImpl(D9CFactory* f) {
-    auto* impl = new D3D9FactoryImpl(f);
+    auto* impl = new D3D9FactoryImpl(f, false);
     dxmt9FactoryDebugLog("CreateFactoryImpl impl=%p", impl);
     return impl;
 }
 IDirect3D9Ex* CreateFactoryExImpl(D9CFactory* f) {
-    auto* impl = new D3D9FactoryImpl(f);
+    auto* impl = new D3D9FactoryImpl(f, true);
     dxmt9FactoryDebugLog("CreateFactoryExImpl impl=%p", impl);
     return impl;
 }

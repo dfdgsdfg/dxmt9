@@ -12,5 +12,6 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
                                      IDirect3D9Ex* pFactory,
                                      UINT adapter,
                                      DWORD behaviorFlags,
-                                     HWND window);
+                                     HWND window,
+                                     bool extended);
 void FillD3DCaps9(const D9CCaps& src, D3DCAPS9* out);

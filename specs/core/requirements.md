@@ -26,6 +26,21 @@ and usage combinations the Metal backend can support. It must return
 **R-CORE-1.5** `IDirect3D9::CreateDevice()` must reject `D3DDEVTYPE_REF` and
 `D3DDEVTYPE_NULLREF`. Only `D3DDEVTYPE_HAL` is supported.
 
+**R-CORE-1.6** A factory created by `Direct3DCreate9()` must expose
+`IUnknown` and `IDirect3D9`, but `QueryInterface(IID_IDirect3D9Ex)` must fail
+with `E_NOINTERFACE` and set the output to `NULL`. A factory created by
+`Direct3DCreate9Ex()` must expose both `IDirect3D9` and `IDirect3D9Ex`.
+
+**R-CORE-1.7** Factory validation methods must respect the caller-provided
+`D3DDEVTYPE`, adapter format, back-buffer format, usage, and resource type. The
+implementation must not silently coerce unsupported device types to
+`D3DDEVTYPE_HAL` or ignore format parameters when reporting support.
+
+**R-CORE-1.8** Ex display-mode methods must validate structure sizes and filter
+fields according to D3D9Ex behaviour. `EnumAdapterModesEx()` must reject an
+invalid `D3DDISPLAYMODEEX::Size` and must not return modes that fail the
+provided `D3DDISPLAYMODEFILTER`.
+
 ---
 
 ## 2. Device Lifecycle
@@ -44,6 +59,12 @@ the implicit swap chain. Resources in `D3DPOOL_MANAGED`, `D3DPOOL_SYSTEMMEM`, an
 **R-CORE-2.4** The device must track a single active swap chain created from
 `D3DPRESENT_PARAMETERS` at `CreateDevice()` time. `CreateAdditionalSwapChain()` must
 be supported for windowed multi-window scenarios.
+
+**R-CORE-2.5** Device-lost and reset behaviour must distinguish base D3D9 from
+D3D9Ex. Base devices may report `D3DERR_DEVICELOST` /
+`D3DERR_DEVICENOTRESET` through `TestCooperativeLevel()`; Ex devices must keep
+`TestCooperativeLevel()` successful and surface window/device status through
+`CheckDeviceState()`.
 
 ---
 
@@ -75,6 +96,19 @@ submitted correctly.
 as documented for `D3DSBT_ALL`, `D3DSBT_PIXELSTATE`, and `D3DSBT_VERTEXSTATE`.
 `Apply()` must restore the captured state atomically from the application's viewpoint.
 
+**R-CORE-3.7** State block creation must honor the requested type:
+`D3DSBT_ALL`, `D3DSBT_PIXELSTATE`, and `D3DSBT_VERTEXSTATE` capture distinct
+D3D9 state subsets, and unsupported types must return `D3DERR_INVALIDCALL`.
+`CreateStateBlock(D3DSBT_ALL)` and a state block produced by
+`BeginStateBlock()` / `EndStateBlock()` must follow the D3D9 compatibility
+quirks validated by Wine's `dlls/d3d9/tests/stateblock.c` suite.
+
+**R-CORE-3.8** While the device is recording a state block, nested
+`BeginStateBlock()`, `IDirect3DStateBlock9::Capture()`, and
+`IDirect3DStateBlock9::Apply()` must fail with `D3DERR_INVALIDCALL`.
+`EndStateBlock()` without a matching active recording must also fail with
+`D3DERR_INVALIDCALL`.
+
 ---
 
 ## 4. Resource Lifetime and Ownership
@@ -105,6 +139,18 @@ texture samples.
 
 **R-CORE-4.7** `IDirect3DSurface9::GetContainer()` must return the owning texture when
 the surface is a mip level, and the device when it is a standalone render target.
+
+**R-CORE-4.8** Public COM reference counts must match D3D9 compatibility
+behaviour, not merely internal lifetime needs. `Get*` methods that return COM
+objects must add a public reference. State setters and generated helper objects
+must follow the observed D3D9/Wine rules, including the `SetVertexDeclaration()`
+no-public-AddRef behaviour and stable cached FVF-generated declarations.
+
+**R-CORE-4.9** Implicit swap-chain, back-buffer, depth-stencil, texture-level
+surface, and device-child lifetimes must match Wine's D3D9 reference-count
+tests. The implementation may hold private backend handles for deferred
+execution, but those private retains must not change application-visible COM
+reference counts.
 
 ---
 
@@ -280,6 +326,17 @@ ignore `Priority`. Metal does not expose GPU thread priority.
 `CreateDepthStencilSurfaceEx()` must delegate to their non-Ex counterparts.
 The `pSharedHandle` output parameter must be set to `NULL` (shared surfaces are
 not supported).
+
+**R-CORE-10.17** Ex interface exposure is inherited from the creating factory,
+matching Wine D3D9. A device created from a `Direct3DCreate9()` factory must
+return `E_NOINTERFACE` for `QueryInterface(IID_IDirect3DDevice9Ex)`. A device
+created from a `Direct3DCreate9Ex()` factory must expose
+`IDirect3DDevice9Ex`, even if it was created through the inherited
+`IDirect3D9::CreateDevice()` method.
+
+**R-CORE-10.18** D3D9Ex swap-chain exposure must follow the same rule:
+swap chains produced by an Ex-created device may expose
+`IDirect3DSwapChain9Ex`; swap chains produced by a base-created device must not.
 
 ---
 

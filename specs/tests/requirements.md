@@ -4,7 +4,7 @@ Tests are controlled programs that validate specific aspects of the translation 
 in isolation — before or independently of Wine integration.
 Each test has a defined input, an expected output, and a pass/fail criterion.
 
-Two complementary test sources are used:
+Three complementary upstream-derived test sources are used:
 
 **Primary — vkd3d `shader_runner`** (https://gitlab.winehq.org/wine/vkd3d, LGPL-2.1):
 Portable `.shader_test` files with inline `probe` assertions. Covers SM2/SM3
@@ -18,6 +18,13 @@ lighting, fog, alpha test, texture ops, and stateblock behaviour. Hardcoded expe
 D3DCOLOR values were verified against real D3D9 hardware. Used where
 `shader_runner_d3d9` does not reach: ps_1_x shaders and fixed-function
 corner cases. Tests are ported into dxmt9's own test format rather than run directly.
+
+**Compatibility — Wine `dlls/d3d9/tests/{device,d3d9ex,stateblock}.c`**
+(https://github.com/wine-mirror/wine, LGPL-2.1):
+API-level conformance tests for D3D9 COM object lifetime, base vs Ex
+`QueryInterface()` behaviour, state block rules, reset/lost-device semantics,
+adapter/display validation, and private data handling. These tests are ported
+into small PE executables that run under Wine against dxmt9's `d3d9.dll`.
 
 ---
 
@@ -145,8 +152,10 @@ and calls `Present()`. Pass criterion: the rendered color is readable via
 
 ## 7. Regression Scope
 
-**R-TEST-7.1** All tests must be runnable without Wine — as native macOS
-executables that drive the backend directly, without D3D9 COM layer involvement.
+**R-TEST-7.1** All native regression tests must be runnable without Wine — as
+native macOS executables that drive the backend directly, without D3D9 COM layer
+involvement. Wine-required integration/conformance tests are explicitly scoped
+to sections 11 and 12.
 
 **R-TEST-7.2** All tests must be deterministic. Non-determinism from async PSO
 compilation must be masked by running a warm-up pass before the measured draw.
@@ -355,3 +364,52 @@ without `winemac.drv` loaded), `CreateDevice` must still succeed and `Present`
 must not crash. The present is a no-op in this case (no visible output). This
 behaviour is validated by the existing `dxmt9-core-spec` test suite which
 exercises the present path with a null window handle.
+
+---
+
+## 12. Wine D3D9 Conformance Tests
+
+The Wine D3D9 conformance subset exercises application-visible COM and state
+machine behaviour through the real PE ABI. It is separate from native backend
+tests and requires Wine.
+
+**R-TEST-12.1** There must be cross-compiled Win32 PE conformance executables
+under `tests/d3d9_conformance/`. They must load `d3d9.dll` through Wine's normal
+DLL search path so the same binaries can be used against the app-local and Wine
+runtime builtin deployment lanes.
+
+**R-TEST-12.2** Each ported test must cite the Wine source file, function name,
+and upstream commit in a comment near the test body. The provenance must be
+machine-readable in the same style as shader corpus provenance.
+
+**R-TEST-12.3** The initial required subset from Wine `device.c` is:
+
+| Wine function / area | Required coverage |
+|---|---|
+| `test_refcount` and related object lifetime checks | public COM refcounts for device children, implicit swap chains, back buffers, texture-level surfaces, and `Get*` methods |
+| scene tests | `BeginScene()` / `EndScene()` success and invalid-call transitions |
+| display-mode and factory validation tests | adapter index, display format, device type, multisample, and mode enumeration return codes |
+| reset/lost-device tests | `Reset()`, default-pool invalidation, managed/systemmem survival, and cooperative-level transitions |
+| private-data tests | `SetPrivateData`, `GetPrivateData`, `FreePrivateData`, and `D3DSPD_IUNKNOWN` ownership |
+
+**R-TEST-12.4** The initial required subset from Wine `d3d9ex.c` is:
+
+| Wine function / area | Required coverage |
+|---|---|
+| base vs Ex `QueryInterface()` tests | `Direct3DCreate9()` objects reject Ex interfaces; `Direct3DCreate9Ex()` objects expose base and Ex interfaces |
+| Ex-created normal device | `IDirect3D9Ex::CreateDevice()` returns a device that can QI `IDirect3DDevice9Ex` |
+| adapter LUID/display-mode tests | `GetAdapterLUID`, `GetAdapterDisplayModeEx`, `EnumAdapterModesEx`, filter and size validation |
+| Ex reset/device-state tests | `ResetEx`, `CheckDeviceState`, Ex cooperative-level behaviour, and resource survival differences |
+
+**R-TEST-12.5** The initial required subset from Wine `stateblock.c` is:
+
+| Wine function / area | Required coverage |
+|---|---|
+| `CreateStateBlock(D3DSBT_ALL)` | exact captured state subset and documented D3D9 quirks |
+| `D3DSBT_VERTEXSTATE` / `D3DSBT_PIXELSTATE` | type-specific state masks |
+| `BeginStateBlock()` / `EndStateBlock()` | delta recording, nested-recording invalid calls, and no-active-recording invalid calls |
+| `Capture()` / `Apply()` | invalid calls while recording, restore ordering, render-target interactions, shaders/constants, and stream/index bindings |
+
+**R-TEST-12.6** These conformance tests are allowed to fail during test-first
+implementation, but any failing case must be listed in `specs/gap.md` with the
+corresponding Wine source anchor and implementation owner area.
