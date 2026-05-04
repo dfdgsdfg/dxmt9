@@ -7,7 +7,8 @@ description: "Retrospect the current session and capture reusable learnings into
 
 Review what was done in the current session, identify reusable patterns and pitfalls, and persist them into `agents/rules/` files so future sessions benefit.
 
-For what to record, how to write it, and what to skip → see [@agents/rules/documentation_memory.rules.md](../../agents/rules/documentation_memory.rules.md).
+For what to record, how to write it, and what to skip, see
+[documentation_memory.rules.md](../../rules/documentation_memory.rules.md).
 
 ## Workflow
 
@@ -52,11 +53,11 @@ Match each learning to an existing file. Prefer extending over creating new file
 
 ### Step 4: Write the Rule Update
 
-Follow the structure from `documentation_memory.rules.md`: Problem → Before/After code → Rules list.
+Follow the structure from `documentation_memory.rules.md`: Problem / code / rules.
 
 ### Step 5: Verify
 
-1. Read back the edited section — does it fit the surrounding context?
+1. Read back the edited section - does it fit the surrounding context?
 2. Is the section under ~30 lines?
 3. Does it state the "why"?
 
