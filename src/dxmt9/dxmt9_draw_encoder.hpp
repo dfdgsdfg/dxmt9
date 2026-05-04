@@ -47,8 +47,10 @@ struct EncodeContext {
 
 // Sampler factory helpers used by the draw encoder. Previously
 // MetalBackendDevice::makeSampler. Split into nearest/linear (the "bool
-// linear" variant) and a full SamplerSnapshot variant.
+// linear" variant), a pure SamplerSnapshot -> WMTSamplerInfo mapper, and the
+// full SamplerSnapshot variant that creates the Metal object.
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device, bool linear);
+WMTSamplerInfo makeSamplerInfo(const core::SamplerSnapshot& snapshot);
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
                                                 const core::SamplerSnapshot& snapshot);
 

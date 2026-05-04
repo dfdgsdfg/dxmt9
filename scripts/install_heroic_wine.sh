@@ -325,5 +325,5 @@ Wine runtime:
   $wine_root
 
 Run with:
-  WINEPREFIX="$prefix" WINEDLLOVERRIDES="d3d9=b" "$wine_bin" game.exe
+  WINEPREFIX="$prefix" WINEDLLOVERRIDES="d3d9,winemetal=n,b" "$wine_bin" game.exe
 EOF

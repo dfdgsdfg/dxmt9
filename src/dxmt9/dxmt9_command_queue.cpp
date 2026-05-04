@@ -68,6 +68,10 @@ MetalCommandRecord makeColorFillCommand(const core::ColorFillDesc& desc) {
 
 namespace {
 std::string resolveShaderCachePath() {
+  const char* disableArchive = std::getenv("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE");
+  if (disableArchive && disableArchive[0] != '\0' && std::strcmp(disableArchive, "0") != 0) {
+    return {};
+  }
   char buf[4096]{};
   WMTGetShaderCachePath(buf, sizeof(buf));
   return std::string(buf);

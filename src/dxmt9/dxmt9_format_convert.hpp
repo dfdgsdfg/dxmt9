@@ -18,6 +18,8 @@ using u64 = std::uint64_t;
 // Core format → WMT pixel format. Depth formats consult BackendLimits to pick
 // between Depth24Stencil8 / Depth32FloatStencil8 based on device support.
 WMTPixelFormat toPixelFormat(core::Format format, const core::BackendLimits& limits);
+WMTPixelFormat toPixelFormat(core::Format format, const core::BackendLimits& limits, bool srgb);
+WMTPixelFormat toSrgbPixelFormat(WMTPixelFormat format);
 
 bool formatHasStencilAspect(core::Format format);
 bool formatHasDepthAspect(core::Format format);

@@ -644,6 +644,15 @@ struct DrawDesc {
   std::vector<u8> userIndexData;
 };
 
+struct DrawCallArgs {
+  PrimitiveType primitiveType = PrimitiveType::TriangleList;
+  u32 primitiveCount = 0;
+  u32 startVertex = 0;
+  i32 baseVertexIndex = 0;
+  u32 startIndex = 0;
+  IndexType indexType = IndexType::UInt16;
+};
+
 // Per-draw parameters within a DrawRunDesc — only what differs between
 // draws sharing the same BaseDrawState (DrawDesc base). Encoder emits
 // one Metal draw call per DrawParam, reusing the bound state.
@@ -1085,6 +1094,7 @@ struct DeviceState;
 
 FfpVertexKey makeFfpVertexKey(const DeviceState& state);
 FfpPixelKey makeFfpPixelKey(const DeviceState& state);
+DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args);
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);
 std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::span<const u8> input);

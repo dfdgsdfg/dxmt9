@@ -5,6 +5,8 @@ endif
 dxmt9_winemetal_unix_runtime_subdir = host_machine.cpu_family() == 'x86_64' ? 'x86_64-unix' : host_machine.cpu_family() + '-unix'
 dxmt9_winemetal_unix_common_link_args = []
 dxmt9_winemetal_unix_override_options = {}
+dxmt9_winemetal_unix_build_rpath = '@loader_path/:@loader_path/../../'
+dxmt9_winemetal_unix_needs_install_name_fixup = false
 
 wine_build_path = get_option('wine_build_path')
 wine_install_path = get_option('wine_install_path')
@@ -33,20 +35,27 @@ if host_machine.system() == 'darwin'
     if not wine_build_path.startswith('/')
       wine_build_path = join_paths(meson.project_source_root(), wine_build_path)
     endif
+    wine_winemac_dir = join_paths(wine_build_path, 'dlls/winemac.drv')
+    wine_ntdll_dir = join_paths(wine_build_path, 'dlls/ntdll')
     dxmt9_winemetal_unix_common_link_args += [
-      join_paths(wine_build_path, 'dlls/winemac.drv/winemac.so'),
-      join_paths(wine_build_path, 'dlls/ntdll/ntdll.so'),
+      join_paths(wine_winemac_dir, 'winemac.so'),
+      join_paths(wine_ntdll_dir, 'ntdll.so'),
     ]
+    dxmt9_winemetal_unix_build_rpath = dxmt9_winemetal_unix_build_rpath + ':' + wine_winemac_dir + ':' + wine_ntdll_dir
     dxmt9_winemetal_unix_override_options = { 'b_asneeded' : false }
+    dxmt9_winemetal_unix_needs_install_name_fixup = true
   elif wine_install_path != ''
     if not wine_install_path.startswith('/')
       wine_install_path = join_paths(meson.project_source_root(), wine_install_path)
     endif
+    wine_unix_runtime_dir = join_paths(wine_install_path, 'lib/wine', dxmt9_winemetal_unix_runtime_subdir)
     dxmt9_winemetal_unix_common_link_args += [
-      join_paths(wine_install_path, 'lib/wine', dxmt9_winemetal_unix_runtime_subdir, 'winemac.so'),
-      join_paths(wine_install_path, 'lib/wine', dxmt9_winemetal_unix_runtime_subdir, 'ntdll.so'),
+      join_paths(wine_unix_runtime_dir, 'winemac.so'),
+      join_paths(wine_unix_runtime_dir, 'ntdll.so'),
     ]
+    dxmt9_winemetal_unix_build_rpath = dxmt9_winemetal_unix_build_rpath + ':' + wine_unix_runtime_dir
     dxmt9_winemetal_unix_override_options = { 'b_asneeded' : false }
+    dxmt9_winemetal_unix_needs_install_name_fixup = true
   endif
 endif
 
@@ -107,9 +116,23 @@ dxmt9_winemetal_unix_module = shared_library(
   ],
   cpp_args: ['-DWINE_UNIX_LIB=1'],
   link_args: ['-Wl,-install_name,@rpath/winemetal.so'] + dxmt9_winemetal_unix_common_link_args,
-  build_rpath: '@loader_path/:@loader_path/../../',
-  install_rpath: '',
+  build_rpath: dxmt9_winemetal_unix_build_rpath,
+  install_rpath: '@loader_path/',
   override_options: dxmt9_winemetal_unix_override_options,
   install: true,
   install_dir: dxmt9_winemetal_unix_install_dir,
 )
+
+if host_machine.system() == 'darwin' and dxmt9_winemetal_unix_needs_install_name_fixup
+  custom_target(
+    'winemetal_unix_install_name_fixup',
+    input: dxmt9_winemetal_unix_module,
+    output: 'winemetal_unix_install_name_fixup.stamp',
+    command: [
+      'sh', '-c',
+      'if otool -L "$1" | grep -Fq "winemac.so "; then install_name_tool -change winemac.so @rpath/winemac.so "$1"; fi; if otool -L "$1" | grep -Fq "ntdll.so "; then install_name_tool -change ntdll.so @rpath/ntdll.so "$1"; fi; touch "$2"',
+      'sh', '@INPUT@', '@OUTPUT@',
+    ],
+    build_by_default: true,
+  )
+endif

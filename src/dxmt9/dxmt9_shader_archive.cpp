@@ -7,6 +7,9 @@
 namespace dxmt9::shaders {
 
 Archive::Archive(WMT::Device device, std::string path) : path_(std::move(path)) {
+  if (path_.empty()) {
+    return;
+  }
   ref_ = initShaderArchive(device, path_);
 }
 

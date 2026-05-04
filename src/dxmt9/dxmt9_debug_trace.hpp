@@ -45,6 +45,11 @@ bool frontFaceCounterClockwise();
 // Env: DXMT_DEBUG_FLIP_VERTEX_Y.
 bool flipTranslatedVertexY();
 
+// Force translated pixel shaders to flip texture sample V for regression
+// bisects. Normal D3D texture coordinates are not globally flipped.
+// Env: DXMT_DEBUG_FORCE_PIXEL_V_FLIP.
+bool forcePixelVFlip();
+
 // Disable alpha-test programmatic emulation. Env: DXMT_DISABLE_ALPHA_TEST.
 bool disableAlphaTest();
 

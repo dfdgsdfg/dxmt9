@@ -72,15 +72,25 @@ flowchart TD
     end
 ```
 
-The alignment requirement is about ownership and timing, not source-level identity:
+The alignment requirement is about ownership and timing, not source-level identity.
+Upstream DXMT remains the architectural target shape even where dxmt9 uses a
+different record representation:
 
 - PE owns D3D API semantics, state shadowing, getters, state blocks, and command
   packet construction.
 - The Wine bridge owns ABI marshalling only.
-- The unix importer owns packet validation and handle retention.
-- `CommandQueue` owns chunk execution, Metal command-buffer lifetime, completion,
-  and frame-latency token signaling.
-- `Presenter` owns drawable acquisition and `presentDrawable` encoding.
+- The unix importer owns packet validation, POD record import, handle lookup, and
+  handle retention. It rejects malformed records before queue ownership begins.
+- `CommandQueue` owns execution chunk lifecycle, chunk scheduling, encode-thread and
+  finish-thread progression, Metal command-buffer lifetime, completion, sequence
+  fences, and frame-latency token allocation/signaling.
+- `Presenter` owns `CAMetalLayer` access, drawable acquisition, layer pacing, the
+  back-buffer-to-drawable copy, and `presentDrawable` encoding.
+
+No PE COM object, Objective-C object, process-local pointer, or per-call mutable
+scratch object participates in unix-side encode ownership. The backend consumes
+compact imported records and state structs; it does not reach back into the D3D9
+device object to interpret commands.
 
 ---
 
@@ -211,6 +221,48 @@ Ownership rules:
 - Frame tokens exist only for chunks containing a present command.
 - Sequence IDs track all chunk completion; frame tokens track present-bearing chunk
   completion.
+
+### 2.3 Data-Oriented Transform Boundaries
+
+The backend command path is a sequence of data transforms. Each stage owns explicit
+data and hands the next stage compact immutable records or queue-local state structs.
+This keeps the unix encoder deterministic and prevents hidden dependencies on PE COM
+objects or ad-hoc per-call state.
+
+```mermaid
+flowchart LR
+    PEState["PE DeviceState shadow\nD3D9 semantics"] --> REC["recordCommand()\ncompact POD records"]
+    REC --> POD["PE CommandChunk\nheaders + payload arena\nopaque handles"]
+    POD --> IMP["Importer\nvalidate, canonicalize,\nretain handles"]
+    IMP --> IR["ImportedChunk\nrecords + ImportedDrawState\nresource refs"]
+    IR --> REPLAY["Replay transform\nrecords + queue state\n→ encoder ops"]
+    REPLAY --> ENC["Encode transform\nencoder ops + caches\n→ Metal commands"]
+```
+
+Transform boundaries:
+
+- **Record:** PE code converts D3D9 API calls and device state into POD records. This
+  is the only stage allowed to inspect COM objects or D3D9-facing state blocks.
+- **Import:** unix code validates record headers, payload sizes, offsets, version
+  fields, and handle liveness, then retains backend resources into queue-owned
+  imported structs.
+- **Replay:** the encode thread consumes imported records plus queue-local state such
+  as the active encoder, deferred clears, hazard filters, and allocator cursors.
+- **Encode:** `ArgumentEncodingContext`, PSO/DSS/shader caches, and the presenter
+  convert replay decisions into Metal commands.
+
+Replay/encode helpers should be deterministic functions where possible:
+
+```
+nextEncoderState = replay(record, importedState, priorEncoderState)
+psoKey           = makePsoKey(importedDrawState)
+argLayout        = buildArgumentLayout(importedDrawState, resourceBindings)
+```
+
+Allowed inputs are immutable imported records, retained backend handles, explicit
+queue-local state structs, cache interfaces, and allocator cursors. Disallowed inputs
+are PE COM objects, PE `DeviceState` pointers, implicit globals that affect command
+semantics, and per-call scratch state not represented in the execution chunk.
 
 ---
 

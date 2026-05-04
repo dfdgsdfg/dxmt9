@@ -2,6 +2,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <iostream>
@@ -70,6 +71,19 @@ void checkContains(std::string_view haystack, std::string_view needle, std::stri
     out << message << " (missing '" << needle << "')";
     fail(out.str());
   }
+}
+
+void checkNotContains(std::string_view haystack, std::string_view needle, std::string_view message) {
+  if (haystack.find(needle) != std::string_view::npos) {
+    std::ostringstream out;
+    out << message << " (unexpected '" << needle << "')";
+    fail(out.str());
+  }
+}
+
+bool getenvFlag(const char* name) {
+  const char* value = std::getenv(name);
+  return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
 }
 
 std::string shaderSourceToString(dxmt9_u64 shaderHandle) {
@@ -144,6 +158,7 @@ constexpr u32 kD3DSPR_COLOROUT = 8u;
 constexpr u32 kD3DSPR_PREDICATE = 19u;
 constexpr u32 kFvfXyzrhw = 0x0004u;
 constexpr u32 kFvfTex1 = 0x0100u;
+constexpr u32 kTextureAddressClamp = 3u;
 constexpr u32 kTextureAddressBorder = 4u;
 constexpr u32 kD3DDeclUsagePosition = 0u;
 constexpr u32 kD3DDeclUsageTexcoord = 5u;
@@ -257,6 +272,22 @@ std::vector<u32> makePixelMrtBytecode() {
   words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
   words.push_back(kD3DSIO_END);
   return words;
+}
+
+std::vector<u32> makeTexturedPixelShaderBytecode(u32 samplerIndex = 0) {
+  // ps_2_0:
+  //   dcl t0.xy
+  //   dcl_2d sN
+  //   texld r0, t0, sN
+  //   mov oC0, r0
+  return {
+      0xffff0200u,
+      0x0200001fu, 0x80000000u, 0xb0030000u,
+      0x0200001fu, 0x90000000u, 0xa00f0800u | (samplerIndex & 0x7ffu),
+      0x03000042u, 0x800f0000u, 0xb0e40000u, 0xa0e40800u | (samplerIndex & 0x7ffu),
+      0x02000001u, 0x800f0800u, 0x80e40000u,
+      0x0000ffffu,
+  };
 }
 
 std::vector<u32> makeControlFlowBytecode() {
@@ -1626,6 +1657,98 @@ void testMetalSamplerBorderColorCoverage() {
 #endif
 }
 
+void testProgrammableTextureOrientationSmoke() {
+#if !defined(__APPLE__)
+  return;
+#else
+  BackendLimits limits{};
+  limits.maxTextureSize = 1024;
+  limits.maxColorAttachments = 4;
+  limits.maxAnisotropy = 16;
+  limits.supportsBgr10A2 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+
+  Factory factory(limits);
+  PresentParameters params{};
+  params.backBufferWidth = 8;
+  params.backBufferHeight = 8;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{4242};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "programmatic texture orientation device");
+  auto backBuffer = device->swapChain()->backBuffer();
+  auto readbackSurface = device->createSurface({8, 8, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
+  auto texture = device->createTexture({2, 2, 1, 1, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
+  check(backBuffer != nullptr, "programmatic texture orientation back buffer");
+  check(readbackSurface != nullptr, "programmatic texture orientation readback");
+  check(texture != nullptr, "programmatic texture orientation texture");
+
+  const auto redPixel = bgra(0x00, 0x00, 0xff, 0xff);
+  const auto greenPixel = bgra(0x00, 0xff, 0x00, 0xff);
+  const auto bluePixel = bgra(0xff, 0x00, 0x00, 0xff);
+  const auto whitePixel = bgra(0xff, 0xff, 0xff, 0xff);
+  auto upload = texture->lockRect(0, nullptr, UsageDiscard);
+  check(upload.data != nullptr, "programmatic texture orientation texture lock");
+  auto* uploadBytes = static_cast<u8*>(upload.data);
+  std::memcpy(uploadBytes + 0u * upload.pitch + 0u * 4u, redPixel.data(), redPixel.size());
+  std::memcpy(uploadBytes + 0u * upload.pitch + 1u * 4u, greenPixel.data(), greenPixel.size());
+  std::memcpy(uploadBytes + 1u * upload.pitch + 0u * 4u, bluePixel.data(), bluePixel.size());
+  std::memcpy(uploadBytes + 1u * upload.pitch + 1u * 4u, whitePixel.data(), whitePixel.size());
+  texture->unlockRect(0);
+
+  const auto pixelWords = makeTexturedPixelShaderBytecode(0);
+  ShaderRef pixelShader{};
+  pixelShader.kind = ShaderRef::Kind::Bytecode;
+  pixelShader.bytecode.bytes.assign(reinterpret_cast<const u8*>(pixelWords.data()),
+                                    reinterpret_cast<const u8*>(pixelWords.data() + pixelWords.size()));
+  pixelShader.bytecode.hash = hashBytes(std::as_bytes(std::span<const u32>(pixelWords.data(), pixelWords.size())));
+
+  checkEq(device->setRenderTarget(0, backBuffer), D3D_OK, "programmatic texture orientation render target");
+  checkEq(device->setViewport({0, 0, 8, 8, 0.0f, 1.0f}), D3D_OK, "programmatic texture orientation viewport");
+  checkEq(device->setFVF(kFvfXyzrhw | kFvfTex1), D3D_OK, "programmatic texture orientation fvf");
+  checkEq(device->setTexture(0, texture), D3D_OK, "programmatic texture orientation bind texture");
+  checkEq(device->setPixelShader(pixelShader), D3D_OK, "programmatic texture orientation pixel shader");
+  checkEq(device->setSamplerState(0, SAMP_MIN_FILTER, 1), D3D_OK, "programmatic texture orientation min filter");
+  checkEq(device->setSamplerState(0, SAMP_MAG_FILTER, 1), D3D_OK, "programmatic texture orientation mag filter");
+  checkEq(device->setSamplerState(0, SAMP_ADDRESS_U, kTextureAddressClamp), D3D_OK,
+          "programmatic texture orientation address u");
+  checkEq(device->setSamplerState(0, SAMP_ADDRESS_V, kTextureAddressClamp), D3D_OK,
+          "programmatic texture orientation address v");
+
+  ClearDesc clear{};
+  clear.clearColor = true;
+  clear.color = {0.0f, 0.0f, 0.0f, 1.0f};
+  clear.colorAttachments[0] = {backBuffer->handle(), backBuffer->level(), backBuffer->multiSampleCount()};
+  checkEq(device->clear(clear), D3D_OK, "programmatic texture orientation clear");
+
+  const std::array<ScreenSpaceTexturedVertex, 6> quad{
+      ScreenSpaceTexturedVertex{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertex{8.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+      ScreenSpaceTexturedVertex{0.0f, 8.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+      ScreenSpaceTexturedVertex{8.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+      ScreenSpaceTexturedVertex{8.0f, 8.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+      ScreenSpaceTexturedVertex{0.0f, 8.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+  };
+  const auto* quadBytes = reinterpret_cast<const u8*>(quad.data());
+  checkEq(device->drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                                  std::span<const u8>(quadBytes, sizeof(quad)), sizeof(ScreenSpaceTexturedVertex)),
+          D3D_OK, "programmatic texture orientation draw");
+  checkEq(device->getRenderTargetData(backBuffer, readbackSurface), D3D_OK,
+          "programmatic texture orientation readback");
+
+  auto region = readbackSurface->lockRect(nullptr, 0);
+  check(region.data != nullptr, "programmatic texture orientation lock");
+  checkEq(readPixel(region, 1, 1), redPixel, "programmatic texture orientation top-left");
+  checkEq(readPixel(region, 6, 1), greenPixel, "programmatic texture orientation top-right");
+  checkEq(readPixel(region, 1, 6), bluePixel, "programmatic texture orientation bottom-left");
+  checkEq(readPixel(region, 6, 6), whitePixel, "programmatic texture orientation bottom-right");
+  readbackSurface->unlockRect();
+#endif
+}
+
 void testComWrappers() {
   using namespace dxmt9::com;
 
@@ -1912,6 +2035,11 @@ void testPixelShaderSamplerRegisterTranslation() {
   checkContains(source, "texture2d<float> tex2 [[texture(2)]]", "pixel shader declares sampler texture slot");
   checkContains(source, "sampler samp2 [[sampler(2)]]", "pixel shader declares sampler state slot");
   checkContains(source, "tex2.sample(samp2", "pixel shader samples declared sampler register");
+  if (getenvFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP")) {
+    checkContains(source, "1.0f -", "pixel shader forced V flip source contract");
+  } else {
+    checkNotContains(source, "1.0f -", "pixel shader keeps D3D texture V coordinates by default");
+  }
 }
 
 void testPixelShaderInputSemanticTranslation() {
@@ -1935,6 +2063,11 @@ void testPixelShaderInputSemanticTranslation() {
   const auto source = dxmt9::translator::makeTranslatedFragmentSource(shader, desc);
   checkContains(source, "dxmt9_select_texcoord(in, 0u)", "ps_3_0 dcl_texcoord input maps to texcoord");
   checkContains(source, "tex2.sample(samp2", "ps_3_0 input semantic sample keeps sampler register");
+  if (getenvFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP")) {
+    checkContains(source, "1.0f -", "ps_3_0 forced V flip source contract");
+  } else {
+    checkNotContains(source, "1.0f -", "ps_3_0 keeps D3D texture V coordinates by default");
+  }
 }
 
 void testVertexShaderOutputSemanticTranslation() {
@@ -1974,12 +2107,25 @@ void testVertexShaderOutputSemanticTranslation() {
   checkContains(source, "outSecondaryColor = cFloat[1]", "vs_3_0 dcl_color1 o2 maps to secondary color");
   check(source.find("outTexcoord[1] = cFloat[1]") == std::string::npos,
         "vs_3_0 output mapping ignores raw o-register index for texcoord semantic");
+  if (getenvFlag("DXMT_DEBUG_FLIP_VERTEX_Y")) {
+    checkContains(source, "out.position.y = -out.position.y", "vertex shader forced Y flip source contract");
+  } else {
+    checkNotContains(source, "out.position.y = -out.position.y",
+                     "vertex shader keeps D3D clip Y by default");
+  }
 }
 
 }  // namespace
 
 int main() {
   try {
+    if (getenvFlag("DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY")) {
+      testPixelShaderSamplerRegisterTranslation();
+      testPixelShaderInputSemanticTranslation();
+      testVertexShaderOutputSemanticTranslation();
+      return EXIT_SUCCESS;
+    }
+
     testFormatAndCaps();
     testDepthStencilKeyDisablesDepthCompare();
     testHelpers();
@@ -1999,6 +2145,7 @@ int main() {
     testPixelShaderSamplerRegisterTranslation();
     testPixelShaderInputSemanticTranslation();
     testVertexShaderOutputSemanticTranslation();
+    testProgrammableTextureOrientationSmoke();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

@@ -1,4 +1,5 @@
 #include "device_c_provider.hpp"
+#include "device_c_record_utils.hpp"
 #include "util/unixcall_marshal.hpp"
 // Need the full dxmt9::Device type to call markChunkResources on the
 // upperDevice shared_ptr that the chunk importer's Phase 4-B path
@@ -34,43 +35,6 @@ T* wireHandlePtr(const D9CWireHandle& handle) {
 
 bool failed(int32_t hr) {
   return hr < 0;
-}
-
-// True when a draw packet carries no state delta — every state-mutating
-// field is empty/zero. Used by the chunk importer to recognize runs of
-// consecutive draws that all reference the same baseline state, so they
-// can be coalesced into a single drawPrimitiveRun call.
-bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) {
-  return p.renderStateCount == 0 && p.textureMask == 0 &&
-         p.streamSourceMask == 0 && p.fvfValid == 0 &&
-         p.vsValid == 0 && p.psValid == 0 &&
-         p.vdeclValid == 0 && p.rtMask == 0 && p.dsValid == 0 &&
-         p.viewportValid == 0 && p.scissorValid == 0 &&
-         p.tssCount == 0 && p.samplerStateCount == 0 &&
-         p.materialValid == 0 && p.clipPlaneMask == 0 &&
-         p.transformCount == 0 && p.lightSlotMask == 0 &&
-         p.lightEnableValidMask == 0;
-}
-
-// Translate an in-chunk packet into a DrawParam for a draw run. `indexed`
-// distinguishes DrawPrimitive (stream-only) from DrawIndexedPrimitive.
-dxmt9::core::DrawParam makeRunParam(const D9CDrawPrimitivePacket& p) {
-  dxmt9::core::DrawParam dp;
-  dp.indexed = false;
-  dp.primitiveType = ptFromD3D(p.primitiveType);
-  dp.primitiveCount = p.primitiveCount;
-  dp.startVertex = p.startVertex;
-  return dp;
-}
-
-dxmt9::core::DrawParam makeRunParam(const D9CDrawIndexedPrimitivePacket& p) {
-  dxmt9::core::DrawParam dp;
-  dp.indexed = true;
-  dp.primitiveType = ptFromD3D(p.state.primitiveType);
-  dp.primitiveCount = p.primitiveCount;
-  dp.baseVertexIndex = p.baseVertex;
-  dp.startIndex = p.startIndex;
-  return dp;
 }
 
 int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
@@ -853,27 +817,20 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     }
   }
 
+  const auto importedChunk =
+      makeImportedChunkView(records, chunk->recordBytes, chunk->recordCount);
   std::uint32_t offset = 0;
   std::uint32_t recordIndex = 0;
-  while (offset < chunk->recordBytes) {
-    if (chunk->recordBytes - offset < sizeof(D9CCommandRecordHeader)) {
+  while (auto recordView = nextImportedRecord(importedChunk, offset, recordIndex)) {
+    if (!recordView->valid()) {
       return dxmt9::core::D3DERR_INVALIDCALL;
     }
 
-    D9CCommandRecordHeader header{};
-    std::memcpy(&header, records + offset, sizeof(header));
-    if (header.size < sizeof(D9CCommandRecordHeader) ||
-        header.size > chunk->recordBytes - offset) {
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
-
-    const auto* record = records + offset;
+    const auto header = recordView->header;
+    const auto* record = recordView->record;
     int32_t hr = dxmt9::core::D3DERR_INVALIDCALL;
     switch (header.type) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
-      if (header.size != sizeof(D9CCommandRecordDrawPrimitive)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordDrawPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
       // Try to coalesce into a draw run: scan ahead for consecutive
@@ -881,108 +838,94 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       // one DrawParam vector, dispatch via drawPrimitiveRun (single
       // snapshotDrawDesc + single submitDrawRun on the queue side).
       // Falls through to per-record path if the run is just length-1.
-      if (packetHasNoStateDelta(decoded.packet)) {
+      const auto scan = scanImportedDrawRun(importedChunk, *recordView);
+      if (scan.replayAsRun()) {
         std::vector<dxmt9::core::DrawParam> run;
+        run.reserve(scan.recordCount);
         run.push_back(makeRunParam(decoded.packet));
-        std::uint32_t scanOff = offset + header.size;
-        std::uint32_t scanIdx = recordIndex + 1;
-        while (scanOff < chunk->recordBytes) {
-          if (chunk->recordBytes - scanOff < sizeof(D9CCommandRecordHeader)) break;
-          D9CCommandRecordHeader nextHdr{};
-          std::memcpy(&nextHdr, records + scanOff, sizeof(nextHdr));
-          if (nextHdr.type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE) break;
-          if (nextHdr.size != sizeof(D9CCommandRecordDrawPrimitive)) break;
-          if (nextHdr.size > chunk->recordBytes - scanOff) break;
+
+        std::uint32_t runOffset = recordView->nextOffset();
+        std::uint32_t runIndex = recordView->nextIndex();
+        while (runOffset < scan.endOffset) {
+          const auto nextRecord = nextImportedRecord(importedChunk, runOffset, runIndex);
+          if (!nextRecord || !nextRecord->valid()) {
+            return dxmt9::core::D3DERR_INVALIDCALL;
+          }
           D9CCommandRecordDrawPrimitive nextDecoded{};
-          std::memcpy(&nextDecoded, records + scanOff, sizeof(nextDecoded));
-          if (!packetHasNoStateDelta(nextDecoded.packet)) break;
+          std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
           run.push_back(makeRunParam(nextDecoded.packet));
-          scanOff += nextHdr.size;
-          ++scanIdx;
+          runOffset = nextRecord->nextOffset();
+          runIndex = nextRecord->nextIndex();
         }
-        if (run.size() >= 2) {
-          // applyDrawPacketState would be a no-op here (delta is empty),
-          // so skip directly to drawPrimitiveRun. Bypasses N-1
-          // applyDrawPrimitivePacket / snapshotDrawDesc calls.
-          hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
-          if (failed(hr)) return hr;
-          offset = scanOff;
-          recordIndex = scanIdx;
-          continue;
+        if (run.size() != scan.recordCount) {
+          return dxmt9::core::D3DERR_INVALIDCALL;
         }
+
+        // applyDrawPacketState would be a no-op here (delta is empty),
+        // so skip directly to drawPrimitiveRun. Bypasses N-1
+        // applyDrawPrimitivePacket / snapshotDrawDesc calls.
+        hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
+        if (failed(hr)) return hr;
+        offset = scan.endOffset;
+        recordIndex = scan.endIndex;
+        continue;
       }
       hr = applyDrawPrimitivePacket(d, decoded.packet);
       break;
     }
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
-      if (header.size != sizeof(D9CCommandRecordDrawIndexedPrimitive)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordDrawIndexedPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
       // Same coalescing as DRAW_PRIMITIVE — separate run per indexed
       // flag because DrawParam encodes that as a static field used by
       // the encoder to dispatch drawIndexed vs draw.
-      if (packetHasNoStateDelta(decoded.packet.state)) {
+      const auto scan = scanImportedDrawRun(importedChunk, *recordView);
+      if (scan.replayAsRun()) {
         std::vector<dxmt9::core::DrawParam> run;
+        run.reserve(scan.recordCount);
         run.push_back(makeRunParam(decoded.packet));
-        std::uint32_t scanOff = offset + header.size;
-        std::uint32_t scanIdx = recordIndex + 1;
-        while (scanOff < chunk->recordBytes) {
-          if (chunk->recordBytes - scanOff < sizeof(D9CCommandRecordHeader)) break;
-          D9CCommandRecordHeader nextHdr{};
-          std::memcpy(&nextHdr, records + scanOff, sizeof(nextHdr));
-          if (nextHdr.type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) break;
-          if (nextHdr.size != sizeof(D9CCommandRecordDrawIndexedPrimitive)) break;
-          if (nextHdr.size > chunk->recordBytes - scanOff) break;
+
+        std::uint32_t runOffset = recordView->nextOffset();
+        std::uint32_t runIndex = recordView->nextIndex();
+        while (runOffset < scan.endOffset) {
+          const auto nextRecord = nextImportedRecord(importedChunk, runOffset, runIndex);
+          if (!nextRecord || !nextRecord->valid()) {
+            return dxmt9::core::D3DERR_INVALIDCALL;
+          }
           D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
-          std::memcpy(&nextDecoded, records + scanOff, sizeof(nextDecoded));
-          if (!packetHasNoStateDelta(nextDecoded.packet.state)) break;
+          std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
           run.push_back(makeRunParam(nextDecoded.packet));
-          scanOff += nextHdr.size;
-          ++scanIdx;
+          runOffset = nextRecord->nextOffset();
+          runIndex = nextRecord->nextIndex();
         }
-        if (run.size() >= 2) {
-          hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
-          if (failed(hr)) return hr;
-          offset = scanOff;
-          recordIndex = scanIdx;
-          continue;
+        if (run.size() != scan.recordCount) {
+          return dxmt9::core::D3DERR_INVALIDCALL;
         }
+
+        hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
+        if (failed(hr)) return hr;
+        offset = scan.endOffset;
+        recordIndex = scan.endIndex;
+        continue;
       }
       hr = applyDrawIndexedPrimitivePacket(d, decoded.packet);
       break;
     }
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
-      if (header.size < sizeof(D9CCommandRecordDrawPrimitiveUP)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordDrawPrimitiveUP decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
       hr = applyDrawPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
     }
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
-      if (header.size < sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
       hr = applyDrawIndexedPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
     }
     case D9C_COMMAND_RECORD_CLEAR: {
-      if (header.size < sizeof(D9CCommandRecordClear)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordClear cl{};
       std::memcpy(&cl, record, sizeof(cl));
-      const std::uint64_t expectedRectBytes =
-          static_cast<std::uint64_t>(cl.rectCount) * sizeof(D9CRect);
-      if (cl.rectOffset != sizeof(cl) ||
-          header.size != sizeof(cl) + expectedRectBytes) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       const auto* rects = cl.rectCount != 0
                               ? reinterpret_cast<const D9CRect*>(record + cl.rectOffset)
                               : nullptr;
@@ -991,9 +934,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       break;
     }
     case D9C_COMMAND_RECORD_PRESENT: {
-      if (header.size != sizeof(D9CCommandRecordPresent)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordPresent pr{};
       std::memcpy(&pr, record, sizeof(pr));
       const auto* srcRect = pr.hasSrc ? &pr.src : nullptr;
@@ -1005,9 +945,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       break;
     }
     case D9C_COMMAND_RECORD_STRETCH_RECT: {
-      if (header.size != sizeof(D9CCommandRecordStretchRect)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordStretchRect sr{};
       std::memcpy(&sr, record, sizeof(sr));
       auto* srcSurf = wireValuePtr<D9CSurface>(sr.srcWire);
@@ -1018,9 +955,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       break;
     }
     case D9C_COMMAND_RECORD_COLOR_FILL: {
-      if (header.size != sizeof(D9CCommandRecordColorFill)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordColorFill cf{};
       std::memcpy(&cf, record, sizeof(cf));
       auto* surf = wireValuePtr<D9CSurface>(cf.surfaceWire);
@@ -1029,9 +963,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       break;
     }
     case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
-      if (header.size != sizeof(D9CCommandRecordUpdateTexture)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordUpdateTexture ut{};
       std::memcpy(&ut, record, sizeof(ut));
       auto* srcTex = wireValuePtr<D9CTexture>(ut.srcWire);
@@ -1040,9 +971,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       break;
     }
     case D9C_COMMAND_RECORD_UPDATE_SURFACE: {
-      if (header.size != sizeof(D9CCommandRecordUpdateSurface)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordUpdateSurface us{};
       std::memcpy(&us, record, sizeof(us));
       auto* srcSurf = wireValuePtr<D9CSurface>(us.srcWire);
@@ -1053,9 +981,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       break;
     }
     case D9C_COMMAND_RECORD_QUERY_ISSUE: {
-      if (header.size != sizeof(D9CCommandRecordQueryIssue)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordQueryIssue qi{};
       std::memcpy(&qi, record, sizeof(qi));
       auto* query = wireValuePtr<D9CQuery>(qi.queryWire);
@@ -1063,9 +988,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       break;
     }
     case D9C_COMMAND_RECORD_READBACK: {
-      if (header.size != sizeof(D9CCommandRecordReadback)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordReadback rb{};
       std::memcpy(&rb, record, sizeof(rb));
       auto* srcSurf = wireValuePtr<D9CSurface>(rb.srcWire);
@@ -1078,9 +1000,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       break;
     }
     case D9C_COMMAND_RECORD_APPLY_STATE: {
-      if (header.size != sizeof(D9CCommandRecordApplyState)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordApplyState as{};
       std::memcpy(&as, record, sizeof(as));
       // Apply the state delta only; draw fields in the packet
@@ -1094,27 +1013,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     case D9C_COMMAND_RECORD_SET_PS_CONST_F:
     case D9C_COMMAND_RECORD_SET_PS_CONST_I:
     case D9C_COMMAND_RECORD_SET_PS_CONST_B: {
-      if (header.size < sizeof(D9CCommandRecordSetConst)) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       D9CCommandRecordSetConst hdr{};
       std::memcpy(&hdr, record, sizeof(hdr));
-      // Per-record-type element size; payload count is hdr.count*kElemSize
-      // (F/I are vec4-quad, B is single uint32).
-      std::size_t elemSize = 0;
-      switch (header.type) {
-      case D9C_COMMAND_RECORD_SET_VS_CONST_F:
-      case D9C_COMMAND_RECORD_SET_PS_CONST_F: elemSize = sizeof(float) * 4; break;
-      case D9C_COMMAND_RECORD_SET_VS_CONST_I:
-      case D9C_COMMAND_RECORD_SET_PS_CONST_I: elemSize = sizeof(int32_t) * 4; break;
-      case D9C_COMMAND_RECORD_SET_VS_CONST_B:
-      case D9C_COMMAND_RECORD_SET_PS_CONST_B: elemSize = sizeof(uint32_t); break;
-      }
-      const std::uint64_t expectedPayload =
-          static_cast<std::uint64_t>(hdr.count) * elemSize;
-      if (header.size != sizeof(hdr) + expectedPayload) {
-        return dxmt9::core::D3DERR_INVALIDCALL;
-      }
       const auto* payload = record + sizeof(hdr);
       switch (header.type) {
       case D9C_COMMAND_RECORD_SET_VS_CONST_F:
@@ -1157,12 +1057,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     if (failed(hr)) {
       return hr;
     }
-    offset += header.size;
-    ++recordIndex;
+    offset = recordView->nextOffset();
+    recordIndex = recordView->nextIndex();
   }
 
-  return recordIndex == chunk->recordCount ? dxmt9::core::D3D_OK
-                                           : dxmt9::core::D3DERR_INVALIDCALL;
+  return importedChunkRecordCountMatches(importedChunk, recordIndex)
+             ? dxmt9::core::D3D_OK
+             : dxmt9::core::D3DERR_INVALIDCALL;
 }
 
 extern "C" int32_t dxmt9c_device_draw_primitive_packet(D9CDevice* d,

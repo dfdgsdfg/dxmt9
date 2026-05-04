@@ -77,6 +77,35 @@ cross the PE/unix boundary.
 import, encoding, command-buffer commit, and completion. Non-present chunks advance
 the normal sequence timeline only; they must not allocate frame-latency tokens.
 
+**R-BACK-2.13** The command queue must own execution chunk lifecycle after import:
+queue-slot assignment, encode-thread dispatch, command-buffer commit tracking,
+finish-thread completion, allocator reclamation, sequence signaling, and
+present-frame-token signaling.
+
+**R-BACK-2.14** The importer must be the only backend stage that accepts raw
+committed chunk bytes from the bridge. It must translate them into compact imported
+records and retained backend handle references before the command queue may execute
+the chunk.
+
+**R-BACK-2.15** Backend replay and encode code must consume imported records and
+explicit state structs (`ImportedDrawState`, encoder state, resource binding state,
+allocator cursors, cache keys, etc.). It must not consume PE COM objects, PE
+`DeviceState` pointers, Objective-C objects from the bridge payload, or ad-hoc
+per-call mutable state that is not owned by the execution chunk or queue.
+
+**R-BACK-2.16** Replay transforms that derive encoder decisions from imported
+records (pass merge/split, deferred clear application, hazard classification, PSO
+key construction, argument-buffer layout) must be deterministic for identical
+imported input records, retained resource metadata, and explicit queue-local state.
+Backend caches may affect latency, but must not change the encoded command
+semantics.
+
+**R-BACK-2.17** The backend ownership split must match the DXMT target shape:
+`CommandQueue` owns chunk execution, encode and finish threads, Metal command-buffer
+lifetime, sequence fences, and frame tokens; `Presenter` owns drawable acquisition
+and `presentDrawable` encoding; the importer owns validation and retention of POD
+records and backend handles.
+
 ---
 
 ## 3. Pipeline State Objects

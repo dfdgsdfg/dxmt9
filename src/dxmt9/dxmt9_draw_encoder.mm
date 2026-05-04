@@ -44,6 +44,7 @@ using core::SAMP_ADDRESS_V;
 using core::SAMP_ADDRESS_W;
 using core::SAMP_BORDER_COLOR;
 using core::SAMP_MAG_FILTER;
+using core::SAMP_MAX_ANISOTROPY;
 using core::SAMP_MIN_FILTER;
 using core::SAMP_MIP_FILTER;
 using core::kMaxSamplers;
@@ -262,6 +263,30 @@ std::size_t indexElementSize(IndexType type) {
   return type == IndexType::UInt16 ? 2u : 4u;
 }
 
+u32 samplerStateOr(const SamplerSnapshot& snapshot, u32 state, u32 fallback) {
+  const auto it = snapshot.states.find(state);
+  return it != snapshot.states.end() ? it->second : fallback;
+}
+
+WMTSamplerAddressMode resolveSamplerAddressMode(u32 value) {
+  switch (value) {
+    case 1u: return WMTSamplerAddressModeRepeat;
+    case 2u: return WMTSamplerAddressModeMirrorRepeat;
+    case 4u: return WMTSamplerAddressModeClampToBorderColor;
+    case 3u:
+    default: return WMTSamplerAddressModeClampToEdge;
+  }
+}
+
+WMTSamplerBorderColor resolveSamplerBorderColor(u32 value) {
+  switch (value) {
+    case 0x00000000u: return WMTSamplerBorderColorTransparentBlack;
+    case 0xff000000u: return WMTSamplerBorderColorOpaqueBlack;
+    case 0xffffffffu: return WMTSamplerBorderColorOpaqueWhite;
+    default: return (value >> 24) == 0u ? WMTSamplerBorderColorTransparentBlack : WMTSamplerBorderColorOpaqueBlack;
+  }
+}
+
 }  // namespace
 
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device, bool linear) {
@@ -277,33 +302,15 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
   return device.newSamplerState(info);
 }
 
-WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
-                                                const SamplerSnapshot& snapshot) {
-  const auto minFilter = snapshot.states.contains(SAMP_MIN_FILTER) ? snapshot.states.at(SAMP_MIN_FILTER) : 0u;
-  const auto magFilter = snapshot.states.contains(SAMP_MAG_FILTER) ? snapshot.states.at(SAMP_MAG_FILTER) : 0u;
-  const auto mipFilter = snapshot.states.contains(SAMP_MIP_FILTER) ? snapshot.states.at(SAMP_MIP_FILTER) : 0u;
-  const auto addressU = snapshot.states.contains(SAMP_ADDRESS_U) ? snapshot.states.at(SAMP_ADDRESS_U) : 1u;
-  const auto addressV = snapshot.states.contains(SAMP_ADDRESS_V) ? snapshot.states.at(SAMP_ADDRESS_V) : 1u;
-  const auto addressW = snapshot.states.contains(SAMP_ADDRESS_W) ? snapshot.states.at(SAMP_ADDRESS_W) : 1u;
-  const auto borderColor = snapshot.states.contains(SAMP_BORDER_COLOR) ? snapshot.states.at(SAMP_BORDER_COLOR) : 0u;
-  auto resolveAddressMode = [](u32 value) -> WMTSamplerAddressMode {
-    switch (value) {
-      case 1u: return WMTSamplerAddressModeRepeat;
-      case 2u: return WMTSamplerAddressModeMirrorRepeat;
-      case 4u: return WMTSamplerAddressModeClampToBorderColor;
-      case 3u:
-      default: return WMTSamplerAddressModeClampToEdge;
-    }
-  };
-  auto resolveBorderColor = [](u32 value) -> WMTSamplerBorderColor {
-    switch (value) {
-      case 0x00000000u: return WMTSamplerBorderColorTransparentBlack;
-      case 0xff000000u: return WMTSamplerBorderColorOpaqueBlack;
-      case 0xffffffffu: return WMTSamplerBorderColorOpaqueWhite;
-      default: return (value >> 24) == 0u ? WMTSamplerBorderColorTransparentBlack : WMTSamplerBorderColorOpaqueBlack;
-    }
-  };
-
+WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot) {
+  const auto minFilter = samplerStateOr(snapshot, SAMP_MIN_FILTER, 0u);
+  const auto magFilter = samplerStateOr(snapshot, SAMP_MAG_FILTER, 0u);
+  const auto mipFilter = samplerStateOr(snapshot, SAMP_MIP_FILTER, 0u);
+  const auto addressU = samplerStateOr(snapshot, SAMP_ADDRESS_U, 1u);
+  const auto addressV = samplerStateOr(snapshot, SAMP_ADDRESS_V, 1u);
+  const auto addressW = samplerStateOr(snapshot, SAMP_ADDRESS_W, 1u);
+  const auto borderColor = samplerStateOr(snapshot, SAMP_BORDER_COLOR, 0u);
+  const auto maxAnisotropy = samplerStateOr(snapshot, SAMP_MAX_ANISOTROPY, 0u);
   WMTSamplerInfo info{};
   info.min_filter = minFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
   info.mag_filter = magFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
@@ -312,15 +319,24 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
     case 1u: info.mip_filter = WMTSamplerMipFilterNearest; break;
     default: info.mip_filter = WMTSamplerMipFilterNotMipmapped; break;
   }
-  info.s_address_mode = resolveAddressMode(addressU);
-  info.t_address_mode = resolveAddressMode(addressV);
-  info.r_address_mode = resolveAddressMode(addressW);
+  info.s_address_mode = resolveSamplerAddressMode(addressU);
+  info.t_address_mode = resolveSamplerAddressMode(addressV);
+  info.r_address_mode = resolveSamplerAddressMode(addressW);
   if (info.s_address_mode == WMTSamplerAddressModeClampToBorderColor ||
       info.t_address_mode == WMTSamplerAddressModeClampToBorderColor ||
       info.r_address_mode == WMTSamplerAddressModeClampToBorderColor) {
-    info.border_color = resolveBorderColor(borderColor);
+    info.border_color = resolveSamplerBorderColor(borderColor);
   }
+  // WMTSamplerInfo has no LOD-bias field; preserve the existing zero-initialized
+  // LOD clamp descriptor values.
+  info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
+  return info;
+}
+
+WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
+                                                const SamplerSnapshot& snapshot) {
+  auto info = makeSamplerInfo(snapshot);
   return device.newSamplerState(info);
 }
 

@@ -25,6 +25,79 @@ d3d9_device_lifetime = executable(
   install: false,
 )
 
+d3d9_exports = executable(
+  'd3d9_exports_x64',
+  'exports.cpp',
+  install: false,
+)
+
+d3d9_auxiliary = executable(
+  'd3d9_auxiliary_x64',
+  'auxiliary.cpp',
+  install: false,
+)
+
+d3d9_queries = executable(
+  'd3d9_queries_x64',
+  'd3d9_queries_x64.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
+d3d9_resources = executable(
+  'd3d9_resources_x64',
+  'd3d9_resources_x64.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('gdi32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
+d3d9_device_misc = executable(
+  'd3d9_device_misc_x64',
+  'd3d9_device_misc_x64.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
+d3d9_stateblock = executable(
+  'd3d9_stateblock_x64',
+  'd3d9_stateblock_matrix_x64.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
+d3d9_reset_lost = executable(
+  'd3d9_reset_lost_x64',
+  'd3d9_reset_lost_x64.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
+d3d9_window_cursor = executable(
+  'd3d9_window_cursor_x64',
+  'd3d9_window_cursor_x64.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
 d3d9_conformance_runtime_targets = []
 
 mingw_runtime_triplet = ''
@@ -100,5 +173,17 @@ endif
 
 alias_target(
   'dxmt9-d3d9-conformance-runtime',
-  [d3d9_conformance, d3d9_device_lifetime] + d3d9_conformance_runtime_targets,
+  [
+    d3d9_conformance,
+    d3d9_device_lifetime,
+    d3d9_exports,
+    d3d9_auxiliary,
+    d3d9_queries,
+    d3d9_resources,
+    d3d9_device_misc,
+    d3d9_stateblock,
+    d3d9_reset_lost,
+    d3d9_window_cursor,
+  ]
+    + d3d9_conformance_runtime_targets,
 )

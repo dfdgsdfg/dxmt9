@@ -101,6 +101,34 @@ WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits) {
   }
 }
 
+WMTPixelFormat toSrgbPixelFormat(WMTPixelFormat format) {
+  switch (format) {
+    case WMTPixelFormatR8Unorm:
+      return WMTPixelFormatR8Unorm_sRGB;
+    case WMTPixelFormatRG8Unorm:
+      return WMTPixelFormatRG8Unorm_sRGB;
+    case WMTPixelFormatRGBA8Unorm:
+      return WMTPixelFormatRGBA8Unorm_sRGB;
+    case WMTPixelFormatBGRA8Unorm:
+      return WMTPixelFormatBGRA8Unorm_sRGB;
+    case WMTPixelFormatBGRX8Unorm:
+      return WMTPixelFormatBGRX8Unorm_sRGB;
+    case WMTPixelFormatBC1_RGBA:
+      return WMTPixelFormatBC1_RGBA_sRGB;
+    case WMTPixelFormatBC2_RGBA:
+      return WMTPixelFormatBC2_RGBA_sRGB;
+    case WMTPixelFormatBC3_RGBA:
+      return WMTPixelFormatBC3_RGBA_sRGB;
+    default:
+      return format;
+  }
+}
+
+WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits, bool srgb) {
+  const auto pixelFormat = toPixelFormat(format, limits);
+  return srgb ? toSrgbPixelFormat(pixelFormat) : pixelFormat;
+}
+
 bool formatHasStencilAspect(Format format) {
   switch (format) {
     case Format::D24S8:

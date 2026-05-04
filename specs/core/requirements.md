@@ -366,6 +366,14 @@ explicit `1.0f - v` coordinate transform to bisect texture-orientation bugs.
 This flag must be off by default, must not be required for correct rendering,
 and must remain independent from vertex clip-space Y debugging.
 
+**R-CORE-6.7** Programmable shader decode, validation/lowering, IR
+normalization, and Metal Shading Language generation must be deterministic,
+stateless functions over explicit bytecode, capability, fixed-function key, and
+translation-option inputs. They must not read mutable `DeviceState`, COM object
+identity, backend caches, or global debug state except through explicit
+parameters, and their outputs must be unit-testable as values: IR, MSL text,
+resource binding metadata, diagnostics, or errors.
+
 ---
 
 ## 7. Vertex Format
@@ -564,7 +572,9 @@ They must not emit a backend bridge call solely because state changed.
 encoding. The canonical bridge packet may carry only a state delta plus draw
 payload, but ordered replay against the server-side shadow must produce the same
 effective state the D3D9 device had at record time. Later state changes must not
-affect an already recorded draw.
+affect an already recorded draw. The recorded draw owns this effective state by
+record ordering and replay semantics; it is not required to contain a full
+self-contained state snapshot in the canonical packet.
 
 **R-CORE-11.4** Recorded command chunks must contain only POD command records and
 opaque backend handles. They must not contain D3D9 COM pointers, Objective-C object
@@ -610,3 +620,35 @@ in-flight command records.
 operations by class: committed chunks, coarse resource operations, frame-token waits,
 and any compatibility per-call fallback. This is required so the hot path can be
 verified not to regress to one bridge call per D3D9 state or draw call.
+
+**R-CORE-11.14** The D3D9 hot-path architecture must preserve the DXMT-shaped
+ownership boundary: PE `DeviceImpl` owns COM validation and the authoritative
+`DeviceState`; `CommandRecorder` / `CommandChunk` own POD packet construction;
+and the unix-side `CommandQueue` owns ordered import, backend shadow replay,
+Metal encoding, and presentation pacing. Data-oriented helper functions must not
+move those ownership responsibilities across the boundary.
+
+**R-CORE-11.15** `DeviceState` in the PE frontend remains the authoritative source
+for D3D9 mutable state. Backend shadows, dirty masks, packet-local normalized
+state, and cache keys are derived representations. They must be reconstructible
+from ordered PE state updates and draw packets, and must not become the source
+queried by D3D9 getters or state blocks.
+
+**R-CORE-11.16** State-delta normalization, draw packet normalization, fixed-
+function key construction, vertex declaration/FVF packet normalization, and
+barrier packet insertion must be implemented as deterministic stateless
+transforms wherever possible. Given explicit input values and options, these
+transforms must produce the same packets, derived keys, diagnostics, and errors
+without reading live COM objects, mutating `DeviceState`, issuing bridge calls,
+or depending on backend execution state.
+
+**R-CORE-11.17** Resource retention for a `CommandChunk` must be derived from the
+serialized packet data and inline payload metadata. The retention list may be
+cached for efficiency, but it must not carry independent semantics or require
+walking live D3D9 COM bindings after the packet stream is built.
+
+**R-CORE-11.18** Stateless shader and packet transforms must have unit-testable
+inputs and outputs. Tests must be able to exercise them with synthetic
+`DeviceState` values, draw arguments, shader bytecode, backend capability
+descriptors, and expected packet/IR/MSL/resource-reference outputs without
+creating a real D3D9 device, loading `winemetal.so`, or submitting work to Metal.

@@ -46,6 +46,11 @@ bool flipTranslatedVertexY() {
   return v;
 }
 
+bool forcePixelVFlip() {
+  static const bool v = util::getenvFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP");
+  return v;
+}
+
 bool disableAlphaTest() {
   static const bool v = util::getenvFlag("DXMT_DISABLE_ALPHA_TEST");
   return v;

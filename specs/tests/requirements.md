@@ -4,9 +4,16 @@ Tests are controlled programs that validate specific aspects of the translation 
 in isolation — before or independently of Wine integration.
 Each test has a defined input, an expected output, and a pass/fail criterion.
 
-Three complementary upstream-derived test sources are used:
+The primary confidence path for shader, state, and draw transformations is fast
+native unit testing of stateless data transforms. Runtime Metal/readback tests
+are still required, but are reserved for behaviour that source or descriptor
+inspection cannot prove: texture orientation after sampling, sampler
+filtering/addressing, depth writes/tests, MRT routing, alpha/fog/sRGB and other
+render-state interactions, synchronization, and WSI presentation.
 
-**Primary — vkd3d `shader_runner`** (https://gitlab.winehq.org/wine/vkd3d, LGPL-2.1):
+Three complementary upstream-derived runtime/oracle sources are used:
+
+**vkd3d `shader_runner`** (https://gitlab.winehq.org/wine/vkd3d, LGPL-2.1):
 Portable `.shader_test` files with inline `probe` assertions. Covers SM2/SM3
 programmable shaders. dxmt9 adds one backend (`shader_runner_dxmt9`); the same files
 run against `shader_runner_d3d9` on Windows to produce oracle values.
@@ -31,6 +38,46 @@ D3D9On12 stub compatibility, and D3D9Ex user-memory resources.
 These tests are ported into small PE executables that run under Wine against
 dxmt9's `d3d9.dll`. They are behavioural oracles, not a requirement to copy
 Wine's `dlls/d3d9` implementation structure.
+
+---
+
+## 0. Stateless Transform Unit Suites
+
+**R-TEST-0.1** dxmt9 must provide fast native unit suites for stateless
+transform functions. These tests must not require Metal, Wine, D3D9 COM, GPU
+readback, asynchronous backend scheduling, or wall-clock timing.
+
+**R-TEST-0.2** Shader translation unit tests must validate D3DBC decode,
+instruction classification, register semantics, source modifiers, write masks,
+relative addressing, semantic mapping, control-flow lowering, and generated
+MSL/IR text from plain bytecode inputs. These tests are the first-line coverage
+for opcode and source-contract regressions; runtime shader probes are reserved
+for behaviours that depend on GPU execution.
+
+**R-TEST-0.3** Core state and draw-builder unit tests must validate conversion
+from D3D9-visible state snapshots to immutable backend data: draw descriptors,
+stream/index bindings, render-target/depth attachments, viewport/depth ranges,
+clip planes, constants, textures, samplers, render states, texture-stage state,
+and fixed-function inputs.
+
+**R-TEST-0.4** Key/descriptor unit tests must validate deterministic generation
+of FFP shader keys, PSO keys, depth-stencil descriptors, blend/MRT descriptors,
+sampler descriptors, vertex layouts, color-write masks, sRGB state, and other
+cache inputs. Equivalent input state must produce equivalent keys; intentionally
+different D3D9 state must produce different keys where backend behaviour can
+change.
+
+**R-TEST-0.5** Runtime Metal/readback tests must not duplicate broad source or
+descriptor assertions already covered by R-TEST-0.1 through R-TEST-0.4. They
+must focus on behaviour that static inspection cannot prove: actual texture
+orientation, sampler filtering/addressing, depth/stencil results, MRT routing,
+alpha test, fog, color-write masks, sRGB conversion, synchronization, and WSI.
+
+**R-TEST-0.6** Tests must preserve DXMT-shaped ownership. Shader translator
+tests own bytecode-to-source transforms; core tests own state-to-draw-data
+transforms; backend tests own descriptor encoding, resource lifecycle, and
+GPU-visible behaviour; PE conformance tests own public D3D9 ABI, HRESULT,
+refcount, and state-machine compatibility.
 
 ---
 
@@ -85,7 +132,50 @@ D3DBC hex blobs (`[pixel shader d3dbc-hex]`) may be used.
 **R-TEST-1.5** Each opcode listed in R-TEST-1.3 that is not yet implemented in
 `translateSpirvToMsl()` must have a corresponding `.shader_test` file committed
 *before* the implementation. Tests are written first, failing, then the opcode is
-implemented until the test passes (test-first for each opcode).
+implemented until the relevant transform unit tests pass. If the opcode has
+GPU-visible behaviour that source or descriptor inspection cannot prove, a runtime
+probe must pass as well.
+
+**R-TEST-1.6** `shader_runner_dxmt9` must grow a dxmt9-local extended probe
+layer for tests that need explicit texture setup, vertex-shader geometry
+inspection, or render-state interaction beyond the portable vkd3d
+`.shader_test` syntax. The extension must remain isolated from vendored vkd3d
+test syntax so upstream corpus sync is not blocked by dxmt9-specific metadata.
+The extension complements, but does not replace, the stateless transform unit
+suites required by R-TEST-0.
+
+**R-TEST-1.7** The extended probe layer must provide a texture setup DSL. The
+minimum required coverage is:
+
+- 2x2 and 4x4 textures with named texel colors for orientation and addressing
+  probes;
+- explicit mip-level contents for `texldl` and LOD selection tests;
+- sampler state setup for address modes, min/mag/mip filters, and LOD bias;
+- `texld`, `texldl`, and dependent-read pixel shader paths;
+- actual pixel readback probes after the draw, not source-text inspection.
+
+**R-TEST-1.8** The extended probe layer must provide vertex-shader geometry
+probes. The minimum required coverage is:
+
+- `POSITION` output mapping and clip-space orientation;
+- `TEXCOORD` output mapping by semantic index, not raw output register index;
+- `COLOR` / secondary color output mapping;
+- viewport, half-pixel, and clip-space orientation interactions;
+- actual pixel readback or an equivalent rendered geometry mask that proves the
+  vertex output affected rasterization correctly.
+
+**R-TEST-1.9** The extended probe layer must provide render-state interaction
+probes. The minimum required coverage is alpha test, pixel shader `oDepth`, MRT
+color outputs, fog interaction, color-write masks, and sRGB write/sampling
+state. Each probe must combine shader output with the relevant D3D9 render state
+and verify the final framebuffer result through readback.
+
+**R-TEST-1.10** Extended texture, geometry, and render-state probes must converge
+on the same pass criterion: the backend renders into a deterministic target,
+performs real GPU readback, and compares expected pixels. Tests that only inspect
+generated shader source are allowed only for debug source-contract flags such as
+`DXMT_DEBUG_FORCE_PIXEL_V_FLIP` and `DXMT_DEBUG_FLIP_VERTEX_Y`, or in the
+stateless transform unit suites required by R-TEST-0.
 
 ---
 
@@ -546,5 +636,9 @@ blocks and reset/resource lifetime.
 manifest under `tests/d3d9_conformance/MANIFEST.toml`. Each entry must include
 the executable, local test function, Wine source anchor, upstream commit,
 required deployment lanes (`app-local`, `builtin`, or both), architecture
-targets (`x86`, `x64`), status, and owning implementation area. The manifest is
-the authoritative gap list for Wine-derived D3D9 API conformance.
+targets (`x86`, `x64`), status, owning implementation area, mapped R-TEST-12
+requirements, and explicit acceptance / DoD criteria. Entries for implemented
+local scaffolds must also name the source file that contains the test function.
+The manifest is the authoritative gap list for Wine-derived D3D9 API
+conformance and must be validated by the native manifest check before changes
+are accepted.

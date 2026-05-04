@@ -32,7 +32,46 @@ bool debugForceVisibleDraw() {
   const char* env = std::getenv("DXMT9_DEBUG_FORCE_VISIBLE_DRAW");
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
+
+u32 renderStateOr(const core::RenderStateSnapshot& rs, u32 key, u32 fallback) {
+  const auto it = rs.values.find(key);
+  return it != rs.values.end() ? it->second : fallback;
+}
 }  // namespace
+
+std::array<BlendAttachmentKey, core::kMaxRenderTargets>
+detail::makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDraw) {
+  std::array<BlendAttachmentKey, core::kMaxRenderTargets> blendAttachments{};
+  const auto& rs = draw.rs;
+  const bool blendEnabled =
+      !forceVisibleDraw && renderStateOr(rs, core::RS_ALPHABLEND_ENABLE, 0u) != 0;
+  const u32 rgbBlendOperation =
+      renderStateOr(rs, core::RS_BLEND_OP, static_cast<u32>(core::BlendOp::Add));
+  const u32 alphaBlendOperation =
+      renderStateOr(rs, core::RS_BLEND_OP_ALPHA, rgbBlendOperation);
+  const u32 sourceRGBBlendFactor =
+      renderStateOr(rs, core::RS_SRC_BLEND, static_cast<u32>(core::BlendFactor::One));
+  const u32 destinationRGBBlendFactor =
+      renderStateOr(rs, core::RS_DEST_BLEND, static_cast<u32>(core::BlendFactor::Zero));
+  const u32 sourceAlphaBlendFactor =
+      renderStateOr(rs, core::RS_SRC_BLEND_ALPHA, sourceRGBBlendFactor);
+  const u32 destinationAlphaBlendFactor =
+      renderStateOr(rs, core::RS_DEST_BLEND_ALPHA, destinationRGBBlendFactor);
+  const u32 colorWriteMask =
+      forceVisibleDraw ? 0xfu : renderStateOr(rs, core::RS_COLOR_WRITE_ENABLE, 0xfu);
+
+  for (auto& blend : blendAttachments) {
+    blend.blendingEnabled = blendEnabled;
+    blend.rgbBlendOperation = rgbBlendOperation;
+    blend.alphaBlendOperation = alphaBlendOperation;
+    blend.sourceRGBBlendFactor = sourceRGBBlendFactor;
+    blend.destinationRGBBlendFactor = destinationRGBBlendFactor;
+    blend.sourceAlphaBlendFactor = sourceAlphaBlendFactor;
+    blend.destinationAlphaBlendFactor = destinationAlphaBlendFactor;
+    blend.colorWriteMask = colorWriteMask;
+  }
+  return blendAttachments;
+}
 
 std::size_t BlendAttachmentKeyHash::operator()(const BlendAttachmentKey& key) const noexcept {
   u64 hash = kFnvOffset;
@@ -328,39 +367,10 @@ Cache::getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
   };
 
   std::array<u32, core::kMaxRenderTargets> colorFormats{};
-  std::array<BlendAttachmentKey, core::kMaxRenderTargets> blendAttachments{};
-  const auto& rs = draw.rs.values;
-  const bool blendEnabled = !debugForceVisibleDraw() &&
-                            rs.contains(core::RS_ALPHABLEND_ENABLE) &&
-                            rs.at(core::RS_ALPHABLEND_ENABLE) != 0;
+  auto blendAttachments = detail::makeBlendAttachmentKeys(draw, debugForceVisibleDraw());
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     colorFormats[i] = resolvePixelFormat(draw.rts.color[i].handle);
-    auto& blend = blendAttachments[i];
-    blend.pixelFormat = colorFormats[i];
-    blend.blendingEnabled = blendEnabled;
-    blend.rgbBlendOperation = rs.contains(core::RS_BLEND_OP)
-                                 ? rs.at(core::RS_BLEND_OP)
-                                 : static_cast<u32>(core::BlendOp::Add);
-    blend.alphaBlendOperation = rs.contains(core::RS_BLEND_OP_ALPHA)
-                                    ? rs.at(core::RS_BLEND_OP_ALPHA)
-                                    : blend.rgbBlendOperation;
-    blend.sourceRGBBlendFactor = rs.contains(core::RS_SRC_BLEND)
-                                     ? rs.at(core::RS_SRC_BLEND)
-                                     : static_cast<u32>(core::BlendFactor::One);
-    blend.destinationRGBBlendFactor = rs.contains(core::RS_DEST_BLEND)
-                                          ? rs.at(core::RS_DEST_BLEND)
-                                          : static_cast<u32>(core::BlendFactor::Zero);
-    blend.sourceAlphaBlendFactor = rs.contains(core::RS_SRC_BLEND_ALPHA)
-                                       ? rs.at(core::RS_SRC_BLEND_ALPHA)
-                                       : blend.sourceRGBBlendFactor;
-    blend.destinationAlphaBlendFactor = rs.contains(core::RS_DEST_BLEND_ALPHA)
-                                            ? rs.at(core::RS_DEST_BLEND_ALPHA)
-                                            : blend.destinationRGBBlendFactor;
-    blend.colorWriteMask = debugForceVisibleDraw()
-                               ? 0xfu
-                               : (rs.contains(core::RS_COLOR_WRITE_ENABLE)
-                                      ? rs.at(core::RS_COLOR_WRITE_ENABLE)
-                                      : 0xfu);
+    blendAttachments[i].pixelFormat = colorFormats[i];
   }
   u32 depthFormat = 0;
   u32 stencilFormat = 0;

@@ -1,0 +1,14 @@
+; [provenance]
+; source: dxmt9
+; oracle: math-derivation
+; oracle-date: 2026-05-04
+
+[pixel shader d3dbc-hex]
+ffff0200 05000051 a00f0000 3f800000 3f800000 3f800000 3f800000
+02000001 800f0800 a0e40000 0000ffff
+
+[test]
+clear rgba(0.25, 0.0, 0.5, 1.0)
+dxmt9-render-state color_write=green
+dxmt9-draw-solid-quad
+probe (32, 32) rgba(0.25, 1.0, 0.5, 1.0) 1

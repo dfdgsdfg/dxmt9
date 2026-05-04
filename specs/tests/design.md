@@ -2,6 +2,58 @@
 
 ---
 
+## 0. Unit-First Strategy and Ownership
+
+The test architecture follows DXMT-shaped ownership: each layer owns tests for
+the data it transforms, and runtime tests are used only where static inspection
+cannot prove the behaviour. Shader, state, and draw correctness should first be
+validated by fast native unit tests over stateless transforms.
+
+```mermaid
+flowchart LR
+    A["Inputs\nD3DBC, D3D9 state, draw call"] --> B["Stateless transform units"]
+    B --> C["Shader IR / MSL source"]
+    B --> D["DrawDesc / pipeline keys / bindings"]
+    B --> E["Viewport, depth, MRT, sampler descriptors"]
+
+    C --> F["Fast unit assertions"]
+    D --> F
+    E --> F
+
+    F --> G["Runtime probes only for GPU-visible behaviour"]
+    G --> H["orientation, sampler filtering,\ndepth, MRT, render-state interaction"]
+```
+
+Primary confidence comes from tests that instantiate plain data inputs and assert
+plain data outputs without Metal, Wine, COM, or asynchronous backend scheduling.
+These suites should cover:
+
+- D3DBC decode, token classification, register semantics, modifiers, masks, and
+  control-flow lowering.
+- Shader IR to MSL source generation for programmable and fixed-function paths.
+- D3D9 render, texture, sampler, transform, stream, index, shader, constant, and
+  render-target state snapshots to immutable draw descriptors.
+- Stateless key generation for FFP shaders, PSO, depth-stencil state, vertex
+  layouts, sampler descriptors, blend/MRT state, and color-write masks.
+- Viewport, half-pixel, depth-range, clip-plane, texture-coordinate, and
+  semantic-index mapping decisions.
+
+Runtime Metal/readback tests remain necessary, but only for behaviour that source
+or descriptor inspection cannot prove: texture orientation as sampled by the GPU,
+sampler filtering/addressing, depth writes/tests, MRT routing, alpha/fog/sRGB and
+other render-state interactions, synchronization, and WSI presentation.
+
+Ownership is therefore:
+
+| Owner | Primary tests | Runtime tests |
+|---|---|---|
+| Shader translator | D3DBC/IR/MSL stateless unit suites | Readback probes for sampling and shader/render-state interactions |
+| Core state and draw builder | State snapshot to draw descriptor/key unit suites | Native backend draw/readback smoke for behaviour coupling |
+| Metal backend | Descriptor encoding and resource lifecycle unit/sim tests | Metal readback, synchronization, WSI |
+| PE D3D9 layer | HRESULT/refcount/state-machine PE conformance | Wine-hosted ABI and window integration |
+
+---
+
 ## 1. Test Infrastructure: vkd3d shader_runner
 
 The test infrastructure is built on the **vkd3d `shader_runner`** framework. The
@@ -171,6 +223,129 @@ without depending on a Metal render/readback path:
 `DXMT_DEBUG_FORCE_PIXEL_V_FLIP=1`, and
 `dxmt9-core-spec-vertex-yflip-contract` sets `DXMT_DEBUG_FLIP_VERTEX_Y=1`.
 
+### 4.2 Extended Probe Layer
+
+The portable vkd3d `.shader_test` syntax remains the base corpus format.
+dxmt9-specific coverage that needs richer setup is expressed through a local
+extended probe layer owned by `shader_runner_dxmt9`. The extension is used for
+texture setup, vertex output geometry probes, and render-state interaction
+probes that cannot be represented cleanly in the shared upstream corpus.
+It is not the primary proof mechanism for shader/state/draw transforms; those
+belong in the stateless unit suites described in section 0.
+
+```mermaid
+flowchart TD
+    A["shader_runner_dxmt9 extension"] --> B["Texture Setup DSL"]
+    A --> C["VS Geometry Probe"]
+    A --> D["Render State Interaction Probe"]
+
+    B --> B1["2x2 / 4x4 texture"]
+    B --> B2["mip levels"]
+    B --> B3["sampler state"]
+    B --> B4["texld / texldl / dependent read"]
+
+    C --> C1["POSITION output"]
+    C --> C2["TEXCOORD output"]
+    C --> C3["COLOR output"]
+    C --> C4["viewport / clip-space orientation"]
+    C --> C5["half-pixel edge masks"]
+
+    D --> D1["alpha test"]
+    D --> D2["oDepth"]
+    D --> D3["MRT"]
+    D --> D4["fog / color write / sRGB"]
+
+    B --> E["actual pixel readback"]
+    C --> E
+    D --> E
+```
+
+The extension is declarative: test files describe resources, render states,
+shader bytecode or HLSL snippets, draw geometry, and expected probe pixels. The
+runner translates that into backend calls, renders into an offscreen target,
+performs readback, and compares the actual pixels. Generated shader source is
+not a pass criterion for these probes; source and descriptor expectations belong
+in fast transform unit tests. Extended probes are reserved for GPU-visible
+behaviour such as orientation, sampler filtering/addressing, depth, MRT routing,
+and combined render-state effects.
+
+Current implemented command subset:
+
+- `dxmt9-texture <id> <width> <height> A8R8G8B8 <texel...>` creates a named
+  A8R8G8B8 2D managed texture and uploads row-major named texels.
+- `dxmt9-sampler <stage> address_u=<mode> address_v=<mode>
+  min_filter=<filter> mag_filter=<filter> mip_filter=<filter>` applies sampler
+  state for the stage.
+- `dxmt9-bind-texture <stage> <id>` binds a named texture to a sampler stage.
+- `dxmt9-viewport <x> <y> <width> <height>` applies a viewport before the draw.
+- `dxmt9-draw-textured-quad` renders an XYZRHW textured quad over the 64x64
+  offscreen target and validates results through normal `probe` readback.
+- `dxmt9-draw-vs-color-triangle` renders a programmable vertex-shader triangle
+  with explicit POSITION and COLOR inputs and validates rasterized pixels.
+- `dxmt9-render-state color_write=<mask>` applies a color-write mask such as
+  `green`, `rgb`, or `rgba`.
+- `dxmt9-draw-solid-quad` renders a full-target XYZRHW quad for render-state
+  interaction probes.
+
+The first implemented runtime probes are:
+
+- `tests/shader_tests/texture/dxmt9_texture_2x2.shader_test` validates top-left
+  / top-right / bottom-left / bottom-right texture orientation through real
+  rendering.
+- `tests/shader_tests/vs_specific/dxmt9_vs_color_triangle.shader_test`
+  validates that programmable vertex POSITION and COLOR outputs affect
+  rasterization and framebuffer color.
+- `tests/shader_tests/viewport/dxmt9_viewport_vs_triangle.shader_test`
+  validates that a bounded viewport changes the rasterized geometry mask through
+  framebuffer readback.
+- `tests/shader_tests/render_state/dxmt9_color_write_mask.shader_test`
+  validates `RS_COLOR_WRITE_ENABLE` through framebuffer readback.
+- `tests/shader_tests/render_state/dxmt9_color_write_rgb_preserves_alpha.shader_test`
+  validates that RGB color-write masks update RGB channels while preserving the
+  cleared alpha channel.
+
+Mip-level contents, dependent reads, nonzero viewport origin, half-pixel
+geometry interactions, alpha/oDepth/MRT/fog/sRGB render-state probes remain
+future extension points. A first alpha-test reject runtime probe was attempted
+but is not deterministic enough in the current runner/backend path to serve as
+acceptance evidence.
+
+**Texture setup DSL:**
+
+```toml
+[[texture]]
+slot = 0
+size = [2, 2]
+format = "A8R8G8B8"
+mip0 = [
+  ["red", "green"],
+  ["blue", "white"],
+]
+
+[sampler.0]
+address_u = "clamp"
+address_v = "clamp"
+min_filter = "point"
+mag_filter = "point"
+mip_filter = "point"
+```
+
+The same schema may define 4x4 textures, additional mip levels, filter/address
+state, LOD bias, and dependent-read inputs. The first required shader paths are
+`texld`, `texldl`, and dependent `texld` where UVs are computed by a previous
+instruction.
+
+**VS geometry probes** render small geometry masks that prove vertex shader
+outputs were consumed correctly. Current runtime coverage includes `POSITION`,
+`COLOR`, and a bounded viewport mask. Required future probes cover `TEXCOORD`,
+secondary color, nonzero viewport origin, clip-space orientation, and half-pixel
+interactions.
+
+**Render-state interaction probes** combine shader output with D3D9 render
+state. Required probes cover alpha test, `oDepth`, MRT color outputs, fog,
+color-write masks, and sRGB write/sampling state. Every probe verifies the final
+framebuffer through readback.
+
 ---
 
 ## 5. Comparison Criteria
@@ -299,7 +474,7 @@ cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
   <wine-root>/lib/wine/x86_64-windows/winemetal.dll
 cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
   <wine-root>/lib/wine/x86_64-unix/winemetal.so
-WINEDLLOVERRIDES="d3d9=n,b" wine tests/wsi_present/wsi_present_x64.exe
+WINEDLLOVERRIDES="d3d9,winemetal=n,b" wine tests/wsi_present/wsi_present_x64.exe
 ```
 
 Requires a recent Wine64-capable build on macOS plus a Wine toolchain install
@@ -401,20 +576,30 @@ because these tests are PE executables, not `.shader_test` files.
 
 ```toml
 [[case]]
-executable = "d3d9_queries_x64.exe"
-function   = "test_query_support_probe"
-source     = "wine/dlls/d3d9/tests/device.c:test_query_support"
+executable = "dxmt9-d3d9-device-lifetime.exe"
+source_file = "device_lifetime.cpp"
+function   = "test_get_direct3d_addref"
+source     = "wine/dlls/d3d9/tests/device.c:test_refcount"
 upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
 lanes      = ["app-local", "builtin"]
 arches     = ["x64", "x86"]
-area       = "queries"
-status     = "failing"
+area       = "device-lifetime"
+owner      = "pe/com"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["GetDirect3D returns parent and AddRefs it"]
+status     = "scaffolded"
 ```
 
 The manifest must be updated with every added, renamed, split, skipped, or
 passing conformance case. A skipped case must record why it is not a dxmt9
 target, for example crash-only invalid-pointer behaviour or a Windows-only
 window-manager message sequence.
+
+`scripts/check_d3d9_conformance_manifest.sh` validates that every manifest entry
+has the required fields, valid lane / architecture / status values, R-TEST-12
+anchors, a 40-character Wine upstream commit, no duplicate executable/function
+pairs, and a local source/function match for scaffolded cases. It is wired into
+`meson test` as `dxmt9-d3d9-conformance-manifest-check`.
 
 ### Run
 
@@ -432,12 +617,16 @@ for dep in libc++.dll libunwind.dll; do
   fi
 done
 cp tests/d3d9_conformance/d3d9_*_x64.exe build/conformance-stage/
-(cd build/conformance-stage && wine d3d9_factory_ex_x64.exe)
+(cd build/conformance-stage && \
+  WINEDLLOVERRIDES="d3d9,winemetal=n,b" \
+  DXMT9_WINEMETAL_SO="$PWD/winemetal.so" \
+  DYLD_LIBRARY_PATH="<wine-root>/lib/wine/x86_64-unix${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+  wine d3d9_factory_ex_x64.exe)
 ```
 
 For the builtin lane, install `d3d9.dll`, `winemetal.dll`, and `winemetal.so`
 with the deployment helper, then run the same PE executables with
-`WINEDLLOVERRIDES="d3d9=n,b"` as described in the deployment spec.
+`WINEDLLOVERRIDES="d3d9,winemetal=n,b"` as described in the deployment spec.
 
 ---
 
@@ -453,14 +642,16 @@ tests/
 │   ├── factory_ex.cpp            Wine d3d9ex.c-derived factory/Ex checks
 │   ├── factory_validation.cpp    Wine directx.c/device.c validation checks
 │   ├── device_lifetime.cpp       Wine device.c-derived refcount/private-data/scene checks
-│   ├── queries.cpp               Wine device.c query support/data checks
-│   ├── resources.cpp             Wine device.c resource wrapper checks
-│   ├── stateblock.cpp            Wine stateblock.c-derived stateblock checks
+│   ├── d3d9_queries_x64.cpp      Wine device.c query support/data checks
+│   ├── d3d9_resources_x64.cpp    Wine device.c resource wrapper checks
+│   ├── d3d9_stateblock_matrix_x64.cpp
+│   │                              Wine stateblock.c-derived stateblock checks
 │   ├── present_params.cpp        Wine presentation parameter normalisation checks
 │   ├── shared_handle.cpp         Wine shared-handle and Ex user-memory checks
-│   ├── reset_lost.cpp            Wine device.c/d3d9ex.c-derived reset checks
-│   ├── window_cursor.cpp         Wine window/cursor ownership checks
-│   ├── device_misc.cpp           Wine device utility/creation-flag checks
+│   ├── d3d9_reset_lost_x64.cpp   Wine device.c/d3d9ex.c-derived reset checks
+│   ├── d3d9_window_cursor_x64.cpp
+│   │                              Wine window/cursor ownership checks
+│   ├── d3d9_device_misc_x64.cpp  Wine device utility/creation-flag checks
 │   └── auxiliary.cpp             Shader validator and D3D9On12 safe-stub checks
 ├── wsi_present/
 │   ├── main.cpp                  WSI integration test source (R-TEST-11.1)
@@ -494,6 +685,7 @@ tests/
 │   │   ├── lighting_directional.shader_test
 │   │   ├── fog_linear.shader_test
 │   │   └── ...
+│   ├── viewport/                 dxmt9-local viewport/readback probes
 │   └── visual_c/                 Ported from Wine visual.c (ps_1_x + FFP)
 │       ├── ps_1_4_test.shader_test     ; // derived from Wine: visual.c:ps_1_4_test
 │       ├── fog_test.shader_test        ; // derived from Wine: visual.c:fog_test

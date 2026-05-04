@@ -15,6 +15,34 @@ exp_require_var() {
   fi
 }
 
+exp_wine_unix_dir() {
+  local root=${DXMT_EXPERIMENT_WINE_ROOT:-}
+  if [[ -z "$root" ]]; then
+    return 0
+  fi
+
+  local arch
+  case "$(uname -m)" in
+    arm64|aarch64)
+      arch=aarch64-unix
+      ;;
+    x86_64)
+      arch=x86_64-unix
+      ;;
+    *)
+      arch="$(uname -m)-unix"
+      ;;
+  esac
+
+  if [[ -d "$root/lib/wine/$arch" ]]; then
+    printf '%s\n' "$root/lib/wine/$arch"
+  elif [[ -d "$root/lib/wine/x86_64-unix" ]]; then
+    printf '%s\n' "$root/lib/wine/x86_64-unix"
+  elif [[ -d "$root/lib/wine/aarch64-unix" ]]; then
+    printf '%s\n' "$root/lib/wine/aarch64-unix"
+  fi
+}
+
 exp_stage_dxmt9() {
   if [[ "${DXMT_EXPERIMENT_SKIP_STAGE:-}" == "1" ]]; then
     exp_log "skipping dxmt9 staging"
@@ -51,10 +79,20 @@ exp_run_wine_binary() {
 
   local binary=${1:-"$DXMT_EXPERIMENT_BINARY"}
   shift || true
-  local dll_overrides=${DXMT_EXPERIMENT_WINE_DLLOVERRIDES:-d3d9=n,b}
+  local dll_overrides=${DXMT_EXPERIMENT_WINE_DLLOVERRIDES:-d3d9,winemetal=n,b}
   local workdir=${DXMT_EXPERIMENT_WORKDIR:-$exp_repo_root}
   local log_dir
   log_dir=$(dirname -- "$DXMT_EXPERIMENT_LOG")
+  local wine_unix_dir
+  wine_unix_dir=$(exp_wine_unix_dir)
+  local dyld_library_path=${DYLD_LIBRARY_PATH:-}
+  if [[ -n "$wine_unix_dir" ]]; then
+    dyld_library_path="$wine_unix_dir${dyld_library_path:+:$dyld_library_path}"
+  fi
+  local winemetal_so=${DXMT9_WINEMETAL_SO:-}
+  if [[ -z "$winemetal_so" && -f "${DXMT_EXPERIMENT_UNIX_BUILD_DIR:-}/winemetal/unix/winemetal.so" ]]; then
+    winemetal_so="$DXMT_EXPERIMENT_UNIX_BUILD_DIR/winemetal/unix/winemetal.so"
+  fi
 
   exp_log "running $binary"
   if [[ -n "${DXMT_EXPERIMENT_CX_BOTTLE:-}" ]]; then
@@ -62,7 +100,9 @@ exp_run_wine_binary() {
       cd "$workdir"
       CX_ROOT="${DXMT_EXPERIMENT_WINE_ROOT:-}" \
       CX_BOTTLE="$DXMT_EXPERIMENT_CX_BOTTLE" \
+      DYLD_LIBRARY_PATH="$dyld_library_path" \
       DXMT_VALIDATE=1 \
+      DXMT9_WINEMETAL_SO="$winemetal_so" \
       DXMT_LOG_LEVEL="${DXMT_LOG_LEVEL:-debug}" \
       DXMT_LOG_PATH="$log_dir" \
       "$DXMT_EXPERIMENT_WINE_BIN" --bottle "$DXMT_EXPERIMENT_CX_BOTTLE" --wait-all --dll "$dll_overrides" "$binary" "$@"
@@ -72,7 +112,9 @@ exp_run_wine_binary() {
       cd "$workdir"
       WINEPREFIX="$DXMT_EXPERIMENT_PREFIX" \
       WINEDLLOVERRIDES="$dll_overrides" \
+      DYLD_LIBRARY_PATH="$dyld_library_path" \
       DXMT_VALIDATE=1 \
+      DXMT9_WINEMETAL_SO="$winemetal_so" \
       DXMT_LOG_LEVEL="${DXMT_LOG_LEVEL:-debug}" \
       DXMT_LOG_PATH="$log_dir" \
       "$DXMT_EXPERIMENT_WINE_BIN" "$binary" "$@"

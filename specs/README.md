@@ -22,6 +22,11 @@ These specs use three separate compatibility scopes:
   export tables, private data, and D3D9Ex edge cases match Windows-observed
   behaviour. Wine's D3D9 tests are used as a behavioural oracle; they are not an
   implementation-structure requirement.
+- **Data-oriented transform design**: DXMT-compatible ownership is preserved, but
+  shader, state, draw, format, and resource-retention conversion paths should be
+  explicit value-to-value transforms wherever possible. These transforms are the
+  primary unit-test target; runtime Metal/readback tests are reserved for
+  GPU-visible behaviour that source or descriptor inspection cannot prove.
 
 ---
 
@@ -60,7 +65,8 @@ specs/
 │       └── QuerySeqId.tla           D3D9 query seq-ID fence
 ├── tests/                  Controlled correctness tests (oracle-based, pixel-exact)
 │   ├── requirements.md     shader_runner corpus, Wine-derived D3D9 oracles, provenance, manifest
-│   └── design.md           shader_runner_dxmt9 backend, .shader_test format, MANIFEST.toml
+│   ├── design.md           shader_runner_dxmt9 backend, .shader_test format, MANIFEST.toml
+│   └── dod.md              Test-area DoD inventory, evidence, remaining gaps, next criteria
 ├── experiments/            Wild integration tests (real D3D9 applications, fuzzy pass criteria)
 │   ├── requirements.md     Catalogue, pass criteria, screenshot comparison
 │   └── design.md           Launcher injection, SSIM comparison, failure triage

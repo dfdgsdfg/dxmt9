@@ -3444,75 +3444,81 @@ SwapDesc Device::snapshotSwapDesc() const {
 
 DrawDesc Device::snapshotDrawDesc(PrimitiveType type, u32 primitiveCount, u32 startVertex,
                                   i32 baseVertexIndex, u32 startIndex, IndexType indexType) const {
+  return makeDrawDescFromState(state_, DrawCallArgs{type, primitiveCount, startVertex,
+                                                    baseVertexIndex, startIndex, indexType});
+}
+
+DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args) {
   DrawDesc desc;
-  desc.primitiveType = type == PrimitiveType::TriangleFan ? PrimitiveType::TriangleList : type;
-  desc.primitiveCount = primitiveCount;
-  desc.startVertex = startVertex;
-  desc.baseVertexIndex = baseVertexIndex;
-  desc.startIndex = startIndex;
-  desc.indexType = indexType;
-  desc.indexBuffer = state_.indexBuffer ? state_.indexBuffer->handle() : Handle{};
-  desc.vertexDecl = state_.vertexDecl;
+  desc.primitiveType =
+      args.primitiveType == PrimitiveType::TriangleFan ? PrimitiveType::TriangleList : args.primitiveType;
+  desc.primitiveCount = args.primitiveCount;
+  desc.startVertex = args.startVertex;
+  desc.baseVertexIndex = args.baseVertexIndex;
+  desc.startIndex = args.startIndex;
+  desc.indexType = args.indexType;
+  desc.indexBuffer = state.indexBuffer ? state.indexBuffer->handle() : Handle{};
+  desc.vertexDecl = state.vertexDecl;
   desc.vertexDecl.streams.fill({});
   for (size_t i = 0; i < kMaxStreams; ++i) {
-    desc.vertexDecl.streams[i].buffer = state_.streamBuffers[i];
-    desc.vertexDecl.streams[i].offset = state_.streamOffsets[i];
-    desc.vertexDecl.streams[i].stride = state_.streamStrides[i];
+    desc.vertexDecl.streams[i].buffer = state.streamBuffers[i];
+    desc.vertexDecl.streams[i].offset = state.streamOffsets[i];
+    desc.vertexDecl.streams[i].stride = state.streamStrides[i];
   }
-  desc.rs.values = state_.renderStates;
+  desc.rs.values = state.renderStates;
   for (size_t i = 0; i < kMaxTextures; ++i) {
-    desc.textures[i].handle = state_.textures[i] ? state_.textures[i]->handle() : Handle{};
+    desc.textures[i].handle = state.textures[i] ? state.textures[i]->handle() : Handle{};
     if (i < kMaxTextureStages) {
-      desc.textures[i].stageStates = state_.textureStageStates[i];
+      desc.textures[i].stageStates = state.textureStageStates[i];
     } else {
       desc.textures[i].stageStates.clear();
     }
   }
   for (size_t i = 0; i < kMaxSamplers; ++i) {
-    desc.samplers[i].states = state_.samplerStates[i];
+    desc.samplers[i].states = state.samplerStates[i];
   }
-  desc.rts.color = state_.renderTargets;
-  desc.rts.depthStencil = state_.depthStencil;
-  desc.viewport.viewport = state_.viewport;
-  desc.viewport.scissor = state_.scissorRect;
+  desc.rts.color = state.renderTargets;
+  desc.rts.depthStencil = state.depthStencil;
+  desc.viewport.viewport = state.viewport;
+  desc.viewport.scissor = state.scissorRect;
   desc.viewport.scissorEnabled =
-      state_.renderStates.contains(RS_SCISSOR_TEST_ENABLE) && state_.renderStates.at(RS_SCISSOR_TEST_ENABLE) != 0;
-  desc.clipPlaneMask = state_.renderStates.contains(RS_CLIP_PLANE_ENABLE)
-                           ? state_.renderStates.at(RS_CLIP_PLANE_ENABLE)
+      state.renderStates.contains(RS_SCISSOR_TEST_ENABLE) && state.renderStates.at(RS_SCISSOR_TEST_ENABLE) != 0;
+  desc.clipPlaneMask = state.renderStates.contains(RS_CLIP_PLANE_ENABLE)
+                           ? state.renderStates.at(RS_CLIP_PLANE_ENABLE)
                            : 0;
-  const Matrix4x4 world = lookupTransform(state_, XFORM_WORLD_BASE);
-  const Matrix4x4 view = lookupTransform(state_, XFORM_VIEW);
-  const Matrix4x4 proj = lookupTransform(state_, XFORM_PROJECTION);
+  const Matrix4x4 world = lookupTransform(state, XFORM_WORLD_BASE);
+  const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
+  const Matrix4x4 proj = lookupTransform(state, XFORM_PROJECTION);
   const Matrix4x4 worldViewProj = multiplyMatrix(multiplyMatrix(world, view), proj);
   desc.worldViewProj = worldViewProj;
   for (size_t i = 0; i < kMaxTextureStages; ++i) {
-    desc.textureTransforms[i] = lookupTransform(state_, XFORM_TEXTURE_BASE + static_cast<u32>(i));
+    desc.textureTransforms[i] = lookupTransform(state, XFORM_TEXTURE_BASE + static_cast<u32>(i));
   }
   for (size_t i = 0; i < kMaxClipPlanes; ++i) {
     if ((desc.clipPlaneMask & (1u << i)) != 0) {
-      desc.clipPlanes[i] = transformClipPlane(worldViewProj, state_.clipPlanes[i]);
+      desc.clipPlanes[i] = transformClipPlane(worldViewProj, state.clipPlanes[i]);
     } else {
       desc.clipPlanes[i] = {};
     }
   }
 
-  if (state_.vertexShader.kind == ShaderRef::Kind::Bytecode) {
-    desc.vertexShader = state_.vertexShader;
+  if (state.vertexShader.kind == ShaderRef::Kind::Bytecode) {
+    desc.vertexShader = state.vertexShader;
   } else {
     desc.vertexShader.kind = ShaderRef::Kind::FixedFunctionVertex;
-    desc.vertexShader.vertexKey = makeFfpVertexKey(state_);
+    desc.vertexShader.vertexKey = makeFfpVertexKey(state);
     desc.vertexShader.hash = desc.vertexShader.vertexKey->hash;
   }
-  if (state_.pixelShader.kind == ShaderRef::Kind::Bytecode) {
-    desc.pixelShader = state_.pixelShader;
+  if (state.pixelShader.kind == ShaderRef::Kind::Bytecode) {
+    desc.pixelShader = state.pixelShader;
   } else {
     desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
-    desc.pixelShader.pixelKey = makeFfpPixelKey(state_);
+    desc.pixelShader.pixelKey = makeFfpPixelKey(state);
     desc.pixelShader.hash = desc.pixelShader.pixelKey->hash;
   }
 
-  desc.vsConst = state_.vsConst;
-  desc.psConst = state_.psConst;
+  desc.vsConst = state.vsConst;
+  desc.psConst = state.psConst;
   return desc;
 }
 

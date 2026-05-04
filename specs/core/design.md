@@ -172,8 +172,9 @@ DeviceState {
 ```
 
 The state bag is read by the core when recording draw commands. The backend receives
-only value snapshots extracted from this bag; it never observes or mutates the live
-D3D9 state bag directly.
+only value records derived from this bag: full snapshots where needed, compact
+state deltas on the canonical hot path, and opaque backend handles. It never
+observes or mutates the live D3D9 state bag directly.
 
 ### 2.1 State Blocks
 
@@ -232,7 +233,7 @@ graph LR
 
     DEV -->|reads| STATE
     DEV -->|Set* updates| STATE
-    DEV -->|Draw/Clear/Present snapshots| REC
+    DEV -->|Draw/Clear/Present records| REC
     RES -->|holds opaque handles| DEV
     REC -->|one unix-call per committed chunk| BRIDGE
     BRIDGE --> CQ
@@ -263,6 +264,19 @@ This model follows upstream DXMT's important property: API calls record work on 
 PE side, while backend execution and Metal calls happen later. dxmt9 must not depend
 on a unix transition for every `DrawPrimitive`, `DrawIndexedPrimitive`, or `Set*`
 call.
+
+The ownership shape remains DXMT-like even when the implementation is highly
+data-oriented: `DeviceImpl` owns D3D9 COM validation and the authoritative
+`DeviceState`; `CommandRecorder` / `CommandChunk` own packet construction; and the
+unix-side `CommandQueue` owns ordered import, backend shadow replay, Metal encoding,
+and presentation pacing.
+
+```mermaid
+flowchart LR
+    DEV["DeviceImpl\nCOM + authoritative DeviceState"] --> REC["CommandRecorder\nstateless normalizers"]
+    REC --> CHUNK["CommandChunk\nPOD packets + derived retains"]
+    CHUNK --> CQ["CommandQueue\nordered replay + Metal encode"]
+```
 
 ### 3.2 D3D9 Recorder Invariants
 
@@ -298,6 +312,12 @@ Required invariants:
 - Later `Set*` calls only affect later records. If a barrier command occurs while
   state is dirty, the recorder must append an `APPLY_STATE` record before the
   barrier.
+- D3D9 state normalization, draw packet construction, shader decode/lowering/MSL
+  generation, and resource-retention extraction should be modeled as pure
+  data-transform functions wherever possible. Their inputs are explicit value
+  structs or packet spans; their outputs are normalized packets, shader IR/MSL,
+  derived handles, diagnostics, or errors. They must not observe live COM objects,
+  mutate `DeviceState`, or cross the PE/unix boundary as hidden side effects.
 - `DrawPrimitiveUP` / `DrawIndexedPrimitiveUP` copy caller memory into chunk-owned
   payload or staging storage before returning.
 - Recorded chunks retain opaque backend handles, never COM objects.
@@ -341,6 +361,22 @@ No D3D9 COM objects are referenced across the bridge — only opaque backend han
 `DXMT9_PE_DRAW_FULL_SNAPSHOT=1` may force self-contained draw packets, but that is a
 debug/stress mode because it increases wire size and disables cheap run coalescing.
 
+State and draw packet normalization are pure transforms over value data. A typical
+path is:
+
+```mermaid
+flowchart LR
+    S["DeviceState values\n+ dirty mask"] --> N["normalizeStateDelta()"]
+    D["Draw call args"] --> P["normalizeDrawPacket()"]
+    N --> R["CommandRecord stream"]
+    P --> R
+    R --> H["deriveRetainedHandles()"]
+```
+
+This keeps API ownership and packet semantics separate: `DeviceImpl` updates the
+authoritative state bag, while unit-testable normalizers decide how that state is
+represented in compact bridge records.
+
 **`CommandChunk`** — the bridge payload committed to the backend:
 
 ```
@@ -355,7 +391,9 @@ CommandChunk {
 
 The chunk is a POD command stream. It must not contain COM interface pointers,
 Objective-C pointers, C++ lambdas, or process-local references that are invalid
-after crossing the Wine PE/unix boundary.
+after crossing the Wine PE/unix boundary. `retainedHandles` is derived from the
+serialized command records and inline payloads, not maintained as an independent
+semantic source of truth.
 
 ### 3.4 Frame Pacing Ownership
 

@@ -1,0 +1,440 @@
+# Wine-derived D3D9 PE conformance manifest.
+#
+# Status values:
+# - scaffolded: local PE case exists, but no current Wine runtime result is recorded.
+# - todo: required R-TEST-12 coverage is not yet split into a PE case.
+# - passing/failing/skipped: last known Wine runtime result.
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_factory_validation_return_codes"
+source = "wine/dlls/d3d9/tests/device.c:test_display_modes,test_check_device_type,test_check_device_format,test_checkdevicemultisampletype"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "factory-validation"
+owner = "core/factory"
+requirements = ["R-TEST-12.3", "R-TEST-12.10"]
+acceptance = ["exact HRESULT parity", "quality-level out-parameter parity", "display format normalization"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_device_display_mode_adapter_format"
+source = "wine/dlls/d3d9/tests/device.c:test_display_mode"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "display-mode"
+owner = "core/factory"
+requirements = ["R-TEST-12.3", "R-TEST-12.10"]
+acceptance = ["device and swap-chain display modes expose Windows-compatible adapter formats"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_factory_base_vs_ex_qi"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:base-vs-ex QueryInterface tests"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex"
+owner = "pe/com"
+requirements = ["R-TEST-12.4"]
+acceptance = ["Direct3DCreate9 objects reject Ex interfaces"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_ex_created_normal_device_qi"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:Ex-created normal device QI tests"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex"
+owner = "pe/com"
+requirements = ["R-TEST-12.4"]
+acceptance = ["Direct3DCreate9Ex objects expose base interfaces and Ex-created devices expose Ex QI"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_display_mode_ex_size_filter_smoke"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:display mode Ex validation tests"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-display"
+owner = "core/factory"
+requirements = ["R-TEST-12.4"]
+acceptance = ["Ex display-mode structs validate Size and preserve filter shape"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_present_parameter_validation"
+source = "wine/dlls/d3d9/tests/device.c:test_swapchain_parameters"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "present-parameters"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.17"]
+acceptance = ["invalid swap effects, back-buffer counts, and intervals return exact HRESULTs", "successful creation exposes normalized present parameters"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_ex_create_reset_mode_validation"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_swapchain_parameters,test_reset_ex"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-reset"
+owner = "core/device"
+requirements = ["R-TEST-12.4", "R-TEST-12.17"]
+acceptance = ["CreateDeviceEx and ResetEx enforce fullscreen mode/back-buffer relation"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_scene_invalid_transitions"
+source = "wine/dlls/d3d9/tests/device.c:scene tests"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-lifetime"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["BeginScene and EndScene success/invalid-call transitions match Wine oracle", "Reset clears active scene state"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_stateblock_invalid_type_recording_invalid_calls"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["invalid stateblock types and recording-time invalid calls match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_private_data_iunknown_ownership_smoke"
+source = "wine/dlls/d3d9/tests/device.c:test_private_data"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "private-data"
+owner = "core/resources"
+requirements = ["R-TEST-12.3"]
+acceptance = ["D3DSPD_IUNKNOWN AddRef/Release ownership is object-pointer based"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_private_data_resource_wrappers"
+source = "wine/dlls/d3d9/tests/device.c:test_private_data"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-wrappers"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["private-data byte storage and missing-data size preservation work across resource wrappers"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_shared_handle_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_shared_handle"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "shared-handles"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.11"]
+acceptance = ["non-Ex shared-handle resource creation returns E_NOTIMPL without producing objects"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_ex_shared_handle_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_user_memory"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-user-memory"
+owner = "core/resources"
+requirements = ["R-TEST-12.11"]
+acceptance = ["Ex user-memory resource classes accept or reject caller memory with Wine-compatible HRESULTs"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance.c"
+function = "test_creation_failure_out_pointers"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_format_unknown"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-creation"
+owner = "core/resources"
+requirements = ["R-TEST-12.8", "R-TEST-12.13"]
+acceptance = ["creation failures return exact HRESULTs and clear or preserve out-pointers per Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-device-lifetime.exe"
+source_file = "device_lifetime.cpp"
+function = "test_get_direct3d_addref"
+source = "wine/dlls/d3d9/tests/device.c:test_refcount"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-lifetime"
+owner = "pe/com"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["GetDirect3D returns parent and AddRefs it"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-device-lifetime.exe"
+source_file = "device_lifetime.cpp"
+function = "test_resource_get_device_addref"
+source = "wine/dlls/d3d9/tests/device.c:test_refcount"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-lifetime"
+owner = "pe/com"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["resource GetDevice returns parent device and AddRefs it"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-device-lifetime.exe"
+source_file = "device_lifetime.cpp"
+function = "test_private_data_bytes"
+source = "wine/dlls/d3d9/tests/device.c:test_private_data"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "private-data"
+owner = "core/resources"
+requirements = ["R-TEST-12.3"]
+acceptance = ["resource private-data byte storage, size query, and not-found behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-device-lifetime.exe"
+source_file = "device_lifetime.cpp"
+function = "test_private_data_iunknown"
+source = "wine/dlls/d3d9/tests/device.c:test_private_data"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "private-data"
+owner = "core/resources"
+requirements = ["R-TEST-12.3"]
+acceptance = ["D3DSPD_IUNKNOWN size validation, AddRef, GetPrivateData, and FreePrivateData match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-device-lifetime.exe"
+source_file = "device_lifetime.cpp"
+function = "test_scene_transitions"
+source = "wine/dlls/d3d9/tests/device.c:scene tests"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-lifetime"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["BeginScene and EndScene invalid transitions match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_exports_x64.exe"
+source_file = "exports.cpp"
+function = "export_smoke_and_perf_noops"
+source = "wine/dlls/d3d9/d3d9.spec,wine/dlls/d3d9/d3d9_main.c"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "exports"
+owner = "pe/exports"
+requirements = ["R-TEST-12.9", "R-TEST-12.15"]
+acceptance = ["all required D3D9 exports are present", "D3DPERF and DebugSetMute safe calls return Wine-compatible no-op values"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_auxiliary_x64.exe"
+source_file = "auxiliary.cpp"
+function = "shader_validator_stub_behavior"
+source = "wine/dlls/d3d9/tests/device.c:test_shader_validator"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "auxiliary-exports"
+owner = "pe/exports"
+requirements = ["R-TEST-12.15"]
+acceptance = ["Direct3DShaderValidatorCreate9 object supports loader-safe QI/AddRef/Release/Begin/Instruction/End"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_auxiliary_x64.exe"
+source_file = "auxiliary.cpp"
+function = "d3d9on12_loader_safe_failure"
+source = "wine/dlls/d3d9/tests/device.c:test_d3d9on12"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9on12"
+owner = "pe/exports"
+requirements = ["R-TEST-12.16"]
+acceptance = ["Direct3DCreate9On12 is present and unsupported interop paths fail without touching backend state"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_queries_x64.exe"
+source_file = "d3d9_queries_x64.cpp"
+function = "query_support_probe"
+source = "wine/dlls/d3d9/tests/device.c:test_query_support"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "queries"
+owner = "core/queries"
+requirements = ["R-TEST-12.12"]
+acceptance = ["CreateQuery support probes, invalid query enums, and out-pointer preservation match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_queries_x64.exe"
+source_file = "d3d9_queries_x64.cpp"
+function = "occlusion_query_public_sizes"
+source = "wine/dlls/d3d9/tests/device.c:test_occlusion_query"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "queries"
+owner = "core/queries"
+requirements = ["R-TEST-12.12"]
+acceptance = ["GetDataSize, pre-issue data writes, short-buffer behavior, and flush handling match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_queries_x64.exe"
+source_file = "d3d9_queries_x64.cpp"
+function = "timestamp_query_public_sizes"
+source = "wine/dlls/d3d9/tests/device.c:test_timestamp_query"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "queries"
+owner = "core/queries"
+requirements = ["R-TEST-12.12"]
+acceptance = ["timestamp and timestamp-disjoint public data sizes and zeroing behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_resources_x64.exe"
+source_file = "d3d9_resources_x64.cpp"
+function = "resource_container_level_desc_and_locks"
+source = "wine/dlls/d3d9/tests/device.c:test_surface_get_container,test_volume_get_container,test_surface_blocks,test_volume_locking"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-wrappers"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["container, level-desc, invalid level, lock, block-compressed alignment, and double lock/unlock behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_resources_x64.exe"
+source_file = "d3d9_resources_x64.cpp"
+function = "resource_getdc_lod_autogen_mipmap"
+source = "wine/dlls/d3d9/tests/device.c:test_lod,test_getdc,test_mipmap_gen,test_filter,test_format_unknown"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-wrappers"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["GetDC/ReleaseDC, LOD, autogen mipmap, filter, and D3DFMT_UNKNOWN failures match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_stateblock_x64.exe"
+source_file = "d3d9_stateblock_matrix_x64.cpp"
+function = "stateblock_state_management_matrix"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["D3DSBT_ALL, D3DSBT_VERTEXSTATE, D3DSBT_PIXELSTATE, Capture, Apply, and reset/resource interactions match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_reset_lost_x64.exe"
+source_file = "d3d9_reset_lost_x64.cpp"
+function = "reset_lost_default_pool_rebinding"
+source = "wine/dlls/d3d9/tests/device.c:reset tests,wine/dlls/d3d9/tests/d3d9ex.c:reset tests"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "reset-lost"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.17"]
+acceptance = ["default-pool invalidation, managed/systemmem survival, render-target rebinding, and cooperative-level transitions match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_window_cursor_x64.exe"
+source_file = "d3d9_window_cursor_x64.cpp"
+function = "window_cursor_ownership"
+source = "wine/dlls/d3d9/tests/device.c:test_cursor,test_cursor_pos,test_cursor_clipping,test_wndproc,test_wndproc_windowed,test_window_style,test_device_window_reset,test_destroyed_window"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "window-cursor"
+owner = "pe/windowing"
+requirements = ["R-TEST-12.14"]
+acceptance = ["cursor API, clipping, device window ownership, wndproc transitions, style changes, and destroyed-window behavior match Wine oracle within documented host variance"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_device_misc_x64.exe"
+source_file = "d3d9_device_misc_x64.cpp"
+function = "device_utility_creation_flags"
+source = "wine/dlls/d3d9/tests/device.c:creation-flag and utility tests"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-misc"
+owner = "core/device"
+requirements = ["R-TEST-12.18"]
+acceptance = ["GetDirect3D(NULL), GetDeviceCaps(NULL), creation parameters, texture memory, eviction, ValidateDevice, raster status, dialog-box mode, and creation flags match Wine oracle"]
+status = "scaffolded"

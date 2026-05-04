@@ -2189,8 +2189,12 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       }
       return std::string("outTexcoord[") + std::to_string(index) + "]";
     };
-    auto sampleCoord = [](const std::string& coord) {
-      return "float2((" + coord + ").x, 1.0f - (" + coord + ").y)";
+    const bool forcePixelVFlip = ::dxmt9::debug::forcePixelVFlip();
+    auto sampleCoord = [forcePixelVFlip](const std::string& coord) {
+      if (forcePixelVFlip) {
+        return "float2((" + coord + ").x, 1.0f - (" + coord + ").y)";
+      }
+      return "(" + coord + ").xy";
     };
 
     if (instruction.opcode == kD3DSIO_LABEL) {
@@ -2699,5 +2703,40 @@ std::string makeTranslatedFragmentSource(const ::dxmt9::core::ShaderRef& shader,
                                           const ::dxmt9::core::DrawDesc& desc) {
   return detail_::makeTranslatedFragmentSource(shader, desc);
 }
+
+namespace test {
+
+::dxmt9::d3d9bc::SpirvModule decodeD3DBytecodeForTest(const ::dxmt9::core::ShaderRef& shader,
+                                                       bool vertex,
+                                                       const ::dxmt9::core::DrawDesc& desc) {
+  return detail_::translateD3DBytecodeToSpirv(shader, vertex, desc);
+}
+
+::dxmt9::d3d9bc::D3DRegisterRef decodeRegisterRefForTest(std::uint32_t token,
+                                                          ::dxmt9::d3d9bc::D3DShaderStage stage) {
+  return detail_::decodeRegisterRef(token, stage);
+}
+
+std::array<std::uint8_t, 4> decodeSwizzleForTest(std::uint32_t token) {
+  return detail_::decodeSwizzle(token);
+}
+
+std::uint32_t decodeSourceModifierForTest(std::uint32_t token) {
+  return detail_::decodeSourceModifier(token);
+}
+
+std::uint32_t decodeDestModifierForTest(std::uint32_t token) {
+  return detail_::decodeDestModifier(token);
+}
+
+std::uint32_t decodeWriteMaskForTest(std::uint32_t token) {
+  return detail_::decodeWriteMask(token);
+}
+
+bool tokenHasRelativeAddressingForTest(std::uint32_t token) {
+  return detail_::tokenHasRelativeAddressing(token);
+}
+
+}  // namespace test
 
 }  // namespace dxmt9::translator

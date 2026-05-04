@@ -9,9 +9,12 @@
 #include "dxmt9/device_c.h"
 #include "util/log/log.hpp"
 
+#include <atomic>
 #include <cstdarg>
 
 namespace {
+
+std::atomic<int> g_d3dperf_event_level{0};
 
 void dxmt9PeDebugLog(const char* fmt, ...) {
   va_list args;
@@ -59,4 +62,48 @@ extern "C" HRESULT WINAPI dxmt9_pe_create9_ex(UINT sdkVersion,
   *ppD3D = CreateFactoryExImpl(factory);
   dxmt9PeDebugLog("create9_ex: result=%p", *ppD3D);
   return *ppD3D ? S_OK : E_OUTOFMEMORY;
+}
+
+extern "C" IDirect3D9* WINAPI dxmt9_pe_create9_on12(UINT sdkVersion,
+                                                     void* d3d9On12Args,
+                                                     UINT d3d9On12ArgsCount) {
+  (void)d3d9On12Args;
+  (void)d3d9On12ArgsCount;
+
+  IDirect3D9Ex* d3d9 = nullptr;
+  const HRESULT hr = dxmt9_pe_create9_ex(sdkVersion, &d3d9);
+  if (FAILED(hr)) {
+    dxmt9PeDebugLog("create9_on12: create9_ex failed hr=0x%08x", static_cast<unsigned>(hr));
+    return nullptr;
+  }
+
+  return static_cast<IDirect3D9*>(d3d9);
+}
+
+extern "C" int WINAPI dxmt9_pe_perf_begin_event(D3DCOLOR, const WCHAR*) {
+  return g_d3dperf_event_level.fetch_add(1, std::memory_order_relaxed);
+}
+
+extern "C" int WINAPI dxmt9_pe_perf_end_event(void) {
+  return g_d3dperf_event_level.fetch_sub(1, std::memory_order_relaxed) - 1;
+}
+
+extern "C" DWORD WINAPI dxmt9_pe_perf_get_status(void) {
+  return 0;
+}
+
+extern "C" BOOL WINAPI dxmt9_pe_perf_query_repeat_frame(void) {
+  return FALSE;
+}
+
+extern "C" void WINAPI dxmt9_pe_perf_set_marker(D3DCOLOR, const WCHAR*) {
+}
+
+extern "C" void WINAPI dxmt9_pe_perf_set_options(DWORD) {
+}
+
+extern "C" void WINAPI dxmt9_pe_perf_set_region(D3DCOLOR, const WCHAR*) {
+}
+
+extern "C" void WINAPI dxmt9_pe_debug_set_mute(void) {
 }

@@ -83,6 +83,15 @@ struct ShaderVariantKeyHash {
   std::size_t operator()(const ShaderVariantKey& key) const noexcept;
 };
 
+namespace detail {
+
+// Render-state-only blend attachment key mapping. Pixel formats are resolved
+// by Cache::getOrBuildDrawPipelineForDraw after surface lookup.
+std::array<BlendAttachmentKey, core::kMaxRenderTargets>
+makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDraw = false);
+
+}  // namespace detail
+
 struct DepthStencilKey {
   bool depthEnable = false;
   bool depthWrite = false;
