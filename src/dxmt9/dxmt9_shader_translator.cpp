@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -35,6 +36,13 @@ using f32 = float;
 using i32 = std::int32_t;
 
 using ::dxmt9::shaders::makeShaderPrelude;
+
+constexpr u32 kD3DDeclUsagePosition = 0u;
+constexpr u32 kD3DDeclUsagePSize = 4u;
+constexpr u32 kD3DDeclUsageTexcoord = 5u;
+constexpr u32 kD3DDeclUsagePositionT = 9u;
+constexpr u32 kD3DDeclUsageColor = 10u;
+constexpr u32 kD3DDeclUsageFog = 11u;
 
 std::string formatFloatLiteral(f32 value) {
   std::ostringstream out;
@@ -268,6 +276,81 @@ std::string applySwizzle(const std::string& expr, const std::array<u8, 4>& swizz
   return out.str();
 }
 
+struct VertexOutputSemantic {
+  bool valid = false;
+  u32 usage = 0;
+  u32 usageIndex = 0;
+};
+
+using VertexOutputSemantics = std::array<VertexOutputSemantic, 16>;
+
+struct VertexOutputMapping {
+  enum class Target {
+    Position,
+    Texcoord,
+    Color,
+    SecondaryColor,
+    Fog,
+    PointSize,
+  };
+
+  Target target = Target::Texcoord;
+  u32 index = 0;
+};
+
+std::optional<VertexOutputMapping> vertexOutputMapping(const D3DRegisterRef& reg,
+                                                       const VertexOutputSemantics* semantics) {
+  if (!semantics || reg.kind != D3DRegisterKind::TexCoordOut || reg.index >= semantics->size()) {
+    return std::nullopt;
+  }
+  const auto& semantic = (*semantics)[reg.index];
+  if (!semantic.valid) {
+    return std::nullopt;
+  }
+
+  switch (semantic.usage) {
+    case kD3DDeclUsagePosition:
+    case kD3DDeclUsagePositionT:
+      return VertexOutputMapping{VertexOutputMapping::Target::Position, 0};
+    case kD3DDeclUsageTexcoord:
+      return VertexOutputMapping{VertexOutputMapping::Target::Texcoord, semantic.usageIndex};
+    case kD3DDeclUsageColor:
+      return VertexOutputMapping{semantic.usageIndex == 0u ? VertexOutputMapping::Target::Color
+                                                           : VertexOutputMapping::Target::SecondaryColor,
+                                 semantic.usageIndex};
+    case kD3DDeclUsageFog:
+      return VertexOutputMapping{VertexOutputMapping::Target::Fog, 0};
+    case kD3DDeclUsagePSize:
+      return VertexOutputMapping{VertexOutputMapping::Target::PointSize, 0};
+    default:
+      return VertexOutputMapping{VertexOutputMapping::Target::Texcoord, reg.index};
+  }
+}
+
+std::string readVertexOutputMapping(const VertexOutputMapping& mapping,
+                                    const std::string& outPosition,
+                                    const std::string& outColor,
+                                    const std::string& outSecondaryColor,
+                                    const std::string& outTexcoord,
+                                    const std::string& outFogFactor,
+                                    const std::string& outPointSize) {
+  switch (mapping.target) {
+    case VertexOutputMapping::Target::Position:
+      return outPosition;
+    case VertexOutputMapping::Target::Texcoord:
+      return outTexcoord + "[" + std::to_string(std::min<u32>(mapping.index, kMaxTextureStages - 1u)) + "]";
+    case VertexOutputMapping::Target::Color:
+      return outColor;
+    case VertexOutputMapping::Target::SecondaryColor:
+      return outSecondaryColor;
+    case VertexOutputMapping::Target::Fog:
+      return "float4(" + outFogFactor + ")";
+    case VertexOutputMapping::Target::PointSize:
+      return "float4(" + outPointSize + ")";
+  }
+  return "float4(0.0f)";
+}
+
 std::string opcodeName(u32 opcode) {
   switch (opcode) {
     case kD3DSIO_NOP:
@@ -478,7 +561,8 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
                                   const std::string& outFogFactor, const std::string& outPointSize,
                                   const std::string& tempPrefix, const std::string& constPrefix,
                                   const std::string& intPrefix, const std::string& boolPrefix,
-                                  const std::string& predicatePrefix) {
+                                  const std::string& predicatePrefix,
+                                  const VertexOutputSemantics* vertexOutputSemantics = nullptr) {
   (void)instruction;
   switch (reg.kind) {
     case D3DRegisterKind::Temp:
@@ -526,6 +610,12 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       }
       return "float4(0.0f)";
     case D3DRegisterKind::TexCoordOut:
+      if (vertexStage) {
+        if (auto mapped = vertexOutputMapping(reg, vertexOutputSemantics)) {
+          return readVertexOutputMapping(*mapped, outPosition, outColor, outSecondaryColor,
+                                         outTexcoord, outFogFactor, outPointSize);
+        }
+      }
       return outTexcoord + "[" + std::to_string(std::min<u32>(reg.index, kMaxTextureStages - 1u)) + "]";
     case D3DRegisterKind::ColorOut:
       if (!vertexStage) {
@@ -603,6 +693,30 @@ std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const Spirv
   }
   layout.hash = hashVertexShaderInputLayout(layout);
   return layout;
+}
+
+VertexOutputSemantics collectVertexOutputSemantics(const SpirvModule& module) {
+  VertexOutputSemantics semantics{};
+  if (module.stage != D3DShaderStage::Vertex || module.major < 3u) {
+    return semantics;
+  }
+
+  for (const auto& instruction : module.instructions) {
+    if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
+      continue;
+    }
+    const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
+    if (dst.kind != D3DRegisterKind::TexCoordOut || dst.index >= semantics.size()) {
+      continue;
+    }
+    const u32 semanticToken = instruction.operands[0];
+    semantics[dst.index] = VertexOutputSemantic{
+        .valid = true,
+        .usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT,
+        .usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT,
+    };
+  }
+  return semantics;
 }
 
 bool isConstantRegisterKind(D3DRegisterKind kind) {
@@ -1161,6 +1275,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   out << makeShaderPrelude(desc.clipPlaneMask != 0);
   if (vertex) {
     const auto inputLayout = decodeVertexShaderInputLayout(module, desc);
+    const auto outputSemantics = collectVertexOutputSemantics(module);
     const bool traceShaderInputs = [] {
       const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
       return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
@@ -1191,6 +1306,19 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         }
       } else {
         trace << " mapped=none";
+      }
+      trace << " outputs";
+      bool hasOutput = false;
+      for (size_t i = 0; i < outputSemantics.size(); ++i) {
+        const auto& semantic = outputSemantics[i];
+        if (!semantic.valid) {
+          continue;
+        }
+        hasOutput = true;
+        trace << " o" << i << "->usage" << semantic.usage << ":" << semantic.usageIndex;
+      }
+      if (!hasOutput) {
+        trace << "=none";
       }
       std::fprintf(stderr, "%s\n", trace.str().c_str());
       std::fflush(stderr);
@@ -1308,7 +1436,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         std::string expr = readOperandExpression(instruction, reg, "vin", "in", true,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord",
                                                  "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
-                                                 "p");
+                                                 "p", &outputSemantics);
         expr = applySwizzle(expr, decodeSwizzle(token));
         expr = applySourceModifier(std::move(expr), decodeSourceModifier(token));
         return expr;
@@ -1341,6 +1469,33 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
 	      }
 	      return std::string("outTexcoord[") + std::to_string(index) + "]";
 	    };
+      auto emitVertexOutputAssign = [&](const D3DRegisterRef& dst, const std::string& value, u32 mask) {
+        const auto mapped = vertexOutputMapping(dst, &outputSemantics);
+        if (!mapped) {
+          return false;
+        }
+        switch (mapped->target) {
+          case VertexOutputMapping::Target::Position:
+            emitMaskedAssign("outPosition", value, mask);
+            break;
+          case VertexOutputMapping::Target::Texcoord:
+            emitMaskedAssign(texcoordTarget(mapped->index), value, mask);
+            break;
+          case VertexOutputMapping::Target::Color:
+            emitMaskedAssign("outColor", value, mask);
+            break;
+          case VertexOutputMapping::Target::SecondaryColor:
+            emitMaskedAssign("outSecondaryColor", value, mask);
+            break;
+          case VertexOutputMapping::Target::Fog:
+            emitMaskedAssign("outFogFactor", value, mask, true);
+            break;
+          case VertexOutputMapping::Target::PointSize:
+            emitMaskedAssign("outPointSize", value, mask, true);
+            break;
+        }
+        return true;
+      };
 
       if (instruction.opcode == kD3DSIO_LABEL) {
         if (instruction.operands.empty()) {
@@ -1467,7 +1622,9 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
               }
               break;
             case D3DRegisterKind::TexCoordOut:
-              emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+              if (!emitVertexOutputAssign(dst, value, dstMask)) {
+                emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+              }
               break;
 	          case D3DRegisterKind::ColorOut:
 	            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
@@ -1740,7 +1897,9 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
               }
               break;
             case D3DRegisterKind::TexCoordOut:
-              emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+              if (!emitVertexOutputAssign(dst, value, dstMask)) {
+                emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+              }
               break;
 	          case D3DRegisterKind::ColorOut:
 	            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);

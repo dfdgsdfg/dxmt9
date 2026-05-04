@@ -122,6 +122,7 @@ constexpr u32 kD3DSIO_LOOP = 27u;
 constexpr u32 kD3DSIO_RET = 28u;
 constexpr u32 kD3DSIO_ENDLOOP = 29u;
 constexpr u32 kD3DSIO_LABEL = 30u;
+constexpr u32 kD3DSIO_DCL = 31u;
 constexpr u32 kD3DSIO_DEF = 81u;
 constexpr u32 kD3DSIO_SINCOS = 37u;
 constexpr u32 kD3DSIO_REP = 38u;
@@ -144,6 +145,9 @@ constexpr u32 kD3DSPR_PREDICATE = 19u;
 constexpr u32 kFvfXyzrhw = 0x0004u;
 constexpr u32 kFvfTex1 = 0x0100u;
 constexpr u32 kTextureAddressBorder = 4u;
+constexpr u32 kD3DDeclUsagePosition = 0u;
+constexpr u32 kD3DDeclUsageTexcoord = 5u;
+constexpr u32 kD3DDeclUsageColor = 10u;
 
 u32 encodeRegisterType(u32 regType) {
   return ((regType & 0x7u) << 28) | (((regType >> 3) & 0x3u) << 11);
@@ -165,6 +169,10 @@ u32 makeDstToken(u32 regType, u32 regIndex, u32 writeMask = 0xfu, u32 modifier =
 u32 makeSrcToken(u32 regType, u32 regIndex, u32 swizzle = 0xe4u, u32 modifier = 0u) {
   return (1u << 31) | encodeRegisterType(regType) | ((modifier & 0xfu) << 24) | ((swizzle & 0xffu) << 16) |
          (regIndex & 0x7ffu);
+}
+
+u32 makeDclSemanticToken(u32 usage, u32 usageIndex = 0u) {
+  return (1u << 31) | (usage & 0xfu) | ((usageIndex & 0xfu) << 16);
 }
 
 u32 makeLabelToken(u32 label) {
@@ -1929,6 +1937,45 @@ void testPixelShaderInputSemanticTranslation() {
   checkContains(source, "tex2.sample(samp2", "ps_3_0 input semantic sample keeps sampler register");
 }
 
+void testVertexShaderOutputSemanticTranslation() {
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(true, 3, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_DCL, 2));
+  words.push_back(makeDclSemanticToken(kD3DDeclUsagePosition, 0));
+  words.push_back(makeDstToken(kD3DSPR_TEXCRDOUT, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_DCL, 2));
+  words.push_back(makeDclSemanticToken(kD3DDeclUsageTexcoord, 0));
+  words.push_back(makeDstToken(kD3DSPR_TEXCRDOUT, 1));
+  words.push_back(makeInstructionToken(kD3DSIO_DCL, 2));
+  words.push_back(makeDclSemanticToken(kD3DDeclUsageColor, 1));
+  words.push_back(makeDstToken(kD3DSPR_TEXCRDOUT, 2));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEXCRDOUT, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEXCRDOUT, 1));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEXCRDOUT, 2));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
+  words.push_back(kD3DSIO_END);
+
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::Bytecode;
+  shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(words.data()),
+                               reinterpret_cast<const u8*>(words.data() + words.size()));
+  shader.bytecode.hash = hashBytes(std::as_bytes(std::span<const u32>(words.data(), words.size())));
+
+  DrawDesc desc{};
+  desc.vertexShader = shader;
+  const auto source = dxmt9::translator::makeTranslatedVertexSource(shader, desc);
+  checkContains(source, "outPosition = cFloat[0]", "vs_3_0 dcl_position o0 maps to Metal position");
+  checkContains(source, "outTexcoord[0] = cFloat[1]", "vs_3_0 dcl_texcoord0 o1 maps by semantic index");
+  checkContains(source, "outSecondaryColor = cFloat[1]", "vs_3_0 dcl_color1 o2 maps to secondary color");
+  check(source.find("outTexcoord[1] = cFloat[1]") == std::string::npos,
+        "vs_3_0 output mapping ignores raw o-register index for texcoord semantic");
+}
+
 }  // namespace
 
 int main() {
@@ -1951,6 +1998,7 @@ int main() {
     testPixelShaderDepthOutputTranslation();
     testPixelShaderSamplerRegisterTranslation();
     testPixelShaderInputSemanticTranslation();
+    testVertexShaderOutputSemanticTranslation();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;
