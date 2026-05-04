@@ -46,6 +46,7 @@ using core::SAMP_BORDER_COLOR;
 using core::SAMP_MAG_FILTER;
 using core::SAMP_MIN_FILTER;
 using core::SAMP_MIP_FILTER;
+using core::kMaxSamplers;
 using core::kMaxTextureStages;
 
 using core::CompareFunc;
@@ -138,6 +139,33 @@ bool presentBoundaryAfterAcquireEnabled() {
     return env && env[0] != '\0' && env[0] != '0';
   }();
   return enabled;
+}
+
+WMTWinding frontFaceWinding() {
+  return debug::frontFaceCounterClockwise() ? WMTWindingCounterClockwise : WMTWindingClockwise;
+}
+
+WMTCullMode applyDebugCullOverride(WMTCullMode cullMode) {
+  const char* env = std::getenv("DXMT_DEBUG_FORCE_CULL_MODE");
+  if (!env || env[0] == '\0') {
+    return cullMode;
+  }
+  if (std::strcmp(env, "none") == 0) {
+    return WMTCullModeNone;
+  }
+  if (std::strcmp(env, "front") == 0) {
+    return WMTCullModeFront;
+  }
+  if (std::strcmp(env, "back") == 0) {
+    return WMTCullModeBack;
+  }
+  return cullMode;
+}
+
+void setRasterizerCullMode(WMT::RenderCommandEncoder& encoder, WMTCullMode cullMode) {
+  cullMode = applyDebugCullOverride(cullMode);
+  encoder.setRasterizerState(WMTTriangleFillModeFill, cullMode, WMTDepthClipModeClip,
+                             frontFaceWinding(), 0.0f, 0.0f, 0.0f);
 }
 
 // Attachment key + hazard bloom used by encodeChunk to decide whether to
@@ -301,26 +329,33 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     WMT::CommandBuffer& commandBuffer,
     const DrawDesc& draw,
     const std::optional<ClearDesc>& clear) {
-  auto* surface = ctx.pool.findSurface(draw.rts.color[0].handle.value);
-  if (!surface || !surface->texture) {
+  auto* primarySurface = ctx.pool.findSurface(draw.rts.color[0].handle.value);
+  if (!primarySurface || !primarySurface->texture) {
     return {};
   }
   WMTRenderPassInfo passInfo{};
-  auto& attachment = passInfo.colors[0];
-  attachment.texture = surface->texture.handle;
   const bool discardAfterPresent = !clear.has_value() && ctx.queue.backBufferDiscardAfterPresent_ &&
                                    draw.rts.color[0].handle == ctx.queue.currentBackBuffer_;
-  attachment.load_action = clear.has_value() ? WMTLoadActionClear
-                                              : (discardAfterPresent ? WMTLoadActionDontCare
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    auto* surface = ctx.pool.findSurface(draw.rts.color[i].handle.value);
+    if (!surface || !surface->texture) {
+      continue;
+    }
+    auto& attachment = passInfo.colors[i];
+    attachment.texture = surface->texture.handle;
+    const bool discardAttachment = discardAfterPresent && i == 0;
+    attachment.load_action = clear.has_value() ? WMTLoadActionClear
+                                                : (discardAttachment ? WMTLoadActionDontCare
                                                                      : WMTLoadActionLoad);
-  attachment.store_action = WMTStoreActionStore;
-  if (surface->resolveTexture) {
-    attachment.resolve_texture = surface->resolveTexture.handle;
-    attachment.store_action = WMTStoreActionMultisampleResolve;
-  }
-  if (clear.has_value()) {
-    attachment.clear_color = WMTClearColor{clear->color.r, clear->color.g,
-                                           clear->color.b, clear->color.a};
+    attachment.store_action = WMTStoreActionStore;
+    if (surface->resolveTexture) {
+      attachment.resolve_texture = surface->resolveTexture.handle;
+      attachment.store_action = WMTStoreActionMultisampleResolve;
+    }
+    if (clear.has_value()) {
+      attachment.clear_color = WMTClearColor{clear->color.r, clear->color.g,
+                                             clear->color.b, clear->color.a};
+    }
   }
 
   if (auto* depthSurface = ctx.pool.findSurface(draw.rts.depthStencil.handle.value);
@@ -358,15 +393,15 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   double viewportOriginX = 0.0;
   double viewportOriginY = 0.0;
   if (ffLayout && ffLayout->preTransformed) {
-    viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
-    viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
+    viewportWidth = static_cast<double>(std::max(1u, primarySurface->desc.width));
+    viewportHeight = static_cast<double>(std::max(1u, primarySurface->desc.height));
   }
   WMTViewport vp{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
                  static_cast<double>(draw.viewport.viewport.minZ),
                  static_cast<double>(draw.viewport.viewport.maxZ)};
   encoder.setViewport(vp);
   encoder.setRasterizerState(WMTTriangleFillModeFill, WMTCullModeNone,
-                              WMTDepthClipModeClip, WMTWindingClockwise,
+                              WMTDepthClipModeClip, frontFaceWinding(),
                               0.0f, 0.0f, 0.0f);
   return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
 }
@@ -511,9 +546,11 @@ void encodeDraw(EncodeContext& ctx,
       }
       encoder.setScissorRect(scissor);
       if (ffLayout && ffLayout->preTransformed) {
-        encoder.setCullMode(WMTCullModeNone);
+        setRasterizerCullMode(encoder, WMTCullModeNone);
+      } else if (debug::disableCull()) {
+        setRasterizerCullMode(encoder, WMTCullModeNone);
       } else {
-        encoder.setCullMode(static_cast<WMTCullMode>(toCullMode(
+        setRasterizerCullMode(encoder, static_cast<WMTCullMode>(toCullMode(
             draw.rs.values.contains(RS_CULL_MODE) ? draw.rs.values.at(RS_CULL_MODE) : 1u)));
       }
     }
@@ -922,7 +959,7 @@ void encodeDraw(EncodeContext& ctx,
   }
   // Phase 3-E: texture / sampler binding is BaseDrawState-only.
   if (!skipBaseStateBind) {
-    for (std::size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+    for (std::size_t stage = 0; stage < kMaxSamplers; ++stage) {
       if (!draw.textures[stage].handle) {
         continue;
       }
@@ -957,12 +994,21 @@ void encodeDraw(EncodeContext& ctx,
   const auto primitiveType = toPrimitiveType(pv.primitiveType);
   bool expandedIndexedDraw = false;
   if (traceEncode) {
+    const u32 cullState = draw.rs.values.contains(RS_CULL_MODE)
+                              ? draw.rs.values.at(RS_CULL_MODE)
+                              : static_cast<u32>(core::CullMode::Ccw);
+    const bool preTransformed = ffLayout && ffLayout->preTransformed;
+    const auto requestedCullMode = (preTransformed || debug::disableCull())
+                                       ? WMTCullModeNone
+                                       : static_cast<WMTCullMode>(toCullMode(cullState));
+    const auto effectiveCullMode = applyDebugCullOverride(requestedCullMode);
     std::ostringstream out;
     out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
         << " draw rt0=" << static_cast<unsigned long long>(draw.rts.color[0].handle.value)
         << " ds=" << static_cast<unsigned long long>(draw.rts.depthStencil.handle.value)
         << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value)
         << " ffLayout=" << (ffLayout ? 1 : 0)
+        << " preT=" << (preTransformed ? 1 : 0)
         << " indexed=" << (indexedDraw ? 1 : 0)
         << " primType=" << static_cast<unsigned>(pv.primitiveType)
         << " primCount=" << pv.primitiveCount
@@ -976,6 +1022,9 @@ void encodeDraw(EncodeContext& ctx,
         << " zEnable=" << (draw.rs.values.contains(RS_Z_ENABLE) ? draw.rs.values.at(RS_Z_ENABLE) : 0u)
         << " zWrite=" << (draw.rs.values.contains(RS_Z_WRITE_ENABLE) ? draw.rs.values.at(RS_Z_WRITE_ENABLE) : 0u)
         << " zFunc=" << (draw.rs.values.contains(RS_Z_FUNC) ? draw.rs.values.at(RS_Z_FUNC) : 0u)
+        << " cullState=" << cullState
+        << " cullRequested=" << static_cast<unsigned>(requestedCullMode)
+        << " cullEffective=" << static_cast<unsigned>(effectiveCullMode)
         << " alphaBlend="
         << (draw.rs.values.contains(RS_ALPHABLEND_ENABLE) ? draw.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u)
         << " srcBlend=" << (draw.rs.values.contains(RS_SRC_BLEND) ? draw.rs.values.at(RS_SRC_BLEND) : 0u)

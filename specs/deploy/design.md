@@ -359,6 +359,7 @@ The root mixed-architecture package step should emit `dxmt9-deploy.json`:
   "version": "0.1.0",
   "bridge_abi_hash": "<hex>",
   "provider_schema": "dxmt9-winemetal-v1",
+  "d3d9_export_profile": "windows-d3d9-by-wine-tests",
   "has_wow64_unix_call_table": true,
   "min_wine_unixlib_feature": "MemoryWineLoadUnixLibByName",
   "variants": [
@@ -414,7 +415,11 @@ runtime destination paths.
 
 Every staged binary, including optional PE runtime dependency DLLs, must appear
 in `artifacts` with a checksum. The `pe_dependencies` list remains the compact
-copy list for final staging.
+copy list for final staging. The `d3d9_export_profile` field records the export
+table contract validated for the packaged `d3d9.dll`, including factory entries,
+`Direct3DShaderValidatorCreate9`, Windows D3D9-compatible `D3DPERF_*`,
+`DebugSetMute`, and loader-safe auxiliary stubs such as
+`Direct3DCreate9On12`.
 
 ---
 
@@ -473,6 +478,8 @@ have an empty `pe_dependencies` list and the loop copies nothing.
 Expected debug evidence:
 
 - Wine loaded `d3d9.dll` from the smoke executable directory.
+- The staged `d3d9.dll` export table matches the manifest's
+  `d3d9_export_profile`.
 - `d3d9.dll` loaded `winemetal.dll` from the `d3d9.dll` sibling absolute path.
 - `winemetal.dll` selected the app-local `winemetal.so` candidate.
 - `winemetal.so` resolved Wine runtime dependencies such as `winemac.so` and

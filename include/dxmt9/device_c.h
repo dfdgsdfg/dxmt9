@@ -650,6 +650,9 @@ int32_t  dxmt9c_factory_check_device_type(D9CFactory*, uint32_t adapter,
                                            uint32_t backFmt, uint32_t windowed);
 int32_t  dxmt9c_factory_check_device_format(D9CFactory*, uint32_t adapter,
                                              uint32_t fmt, uint32_t usage);
+int32_t  dxmt9c_factory_check_device_format2(D9CFactory*, uint32_t adapter,
+                                              uint32_t fmt, uint32_t usage,
+                                              uint32_t resourceType);
 int32_t  dxmt9c_factory_check_device_multisample(D9CFactory*, uint32_t adapter,
                                                   uint32_t fmt, uint32_t msType,
                                                   uint32_t windowed);
@@ -660,6 +663,10 @@ int32_t  dxmt9c_factory_get_adapter_luid(D9CFactory*, uint32_t adapter,
 D9CDevice* dxmt9c_factory_create_device(D9CFactory*, uint32_t adapter,
                                          const D9CPresentParams*, uint32_t behaviorFlags,
                                          const D9CDisplayModeEx* fullscreenMode);
+int32_t dxmt9c_factory_create_device2(D9CFactory*, uint32_t adapter,
+                                       const D9CPresentParams*, uint32_t behaviorFlags,
+                                       const D9CDisplayModeEx* fullscreenMode,
+                                       D9CDevice** outDevice);
 
 /* ── device ──────────────────────────────────────────────────────────────── */
 

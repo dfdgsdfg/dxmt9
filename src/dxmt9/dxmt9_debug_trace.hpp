@@ -16,12 +16,34 @@ using u64 = std::uint64_t;
 // rendering-bisect work. Env: DXMT_DEBUG_FORCE_VISIBLE.
 bool forceVisibleDraw();
 
+// Force translated vertex shaders to output a fullscreen triangle. This
+// separates vertex fetch/uniform issues from render-pass/pixel issues.
+// Env: DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX.
+bool forceFullscreenVertexShader();
+
+// Force translated fragment shaders to return magenta. This separates
+// pixel shader/texture sampling issues from pipeline/raster/present issues.
+// Env: DXMT_DEBUG_FORCE_FRAGMENT_COLOR.
+bool forceFragmentShaderColor();
+
 // Skip recording any draw command. Env: DXMT_SKIP_ALL_DRAWS.
 bool skipAllDraws();
 
 // Disable scissor rect — useful when debugging clipping issues.
 // Env: DXMT_DISABLE_SCISSOR.
 bool disableScissor();
+
+// Disable culling — useful when debugging winding/front-face issues.
+// Env: DXMT_DISABLE_CULL.
+bool disableCull();
+
+// Force Metal front-facing winding to counter-clockwise for cull debugging.
+// Env: DXMT_DEBUG_FRONT_FACE_CCW.
+bool frontFaceCounterClockwise();
+
+// Flip translated vertex shader clip-space Y for D3D/Metal coordinate bisect.
+// Env: DXMT_DEBUG_FLIP_VERTEX_Y.
+bool flipTranslatedVertexY();
 
 // Disable alpha-test programmatic emulation. Env: DXMT_DISABLE_ALPHA_TEST.
 bool disableAlphaTest();

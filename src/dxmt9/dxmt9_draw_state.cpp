@@ -113,9 +113,11 @@ pipeline::DepthStencilKey makeDepthStencilKey(const core::DrawDesc& desc) {
   const auto it = desc.rs.values.find(RS_Z_ENABLE);
   key.depthEnable = it != desc.rs.values.end() && it->second != 0;
   const auto writeIt = desc.rs.values.find(RS_Z_WRITE_ENABLE);
-  key.depthWrite = writeIt != desc.rs.values.end() && writeIt->second != 0;
+  key.depthWrite = key.depthEnable && writeIt != desc.rs.values.end() && writeIt->second != 0;
   const auto funcIt = desc.rs.values.find(RS_Z_FUNC);
-  key.depthFunc = funcIt != desc.rs.values.end() ? funcIt->second : static_cast<u32>(CompareFunc::Always);
+  key.depthFunc = key.depthEnable && funcIt != desc.rs.values.end()
+                      ? funcIt->second
+                      : static_cast<u32>(CompareFunc::Always);
   const auto stencilEnableIt = desc.rs.values.find(RS_STENCIL_ENABLE);
   key.front.enabled = stencilEnableIt != desc.rs.values.end() && stencilEnableIt->second != 0;
   const auto stencilFuncIt = desc.rs.values.find(RS_STENCIL_FUNC);

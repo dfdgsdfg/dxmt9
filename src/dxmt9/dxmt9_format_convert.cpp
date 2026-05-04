@@ -67,6 +67,20 @@ WMTPixelFormat toPixelFormat(Format format, const core::BackendLimits& limits) {
       return WMTPixelFormatRGBA8Snorm;
     case Format::V16U16:
       return WMTPixelFormatRG16Snorm;
+    case Format::DXT1:
+      return WMTPixelFormatBC1_RGBA;
+    case Format::DXT2:
+    case Format::DXT3:
+      return WMTPixelFormatBC2_RGBA;
+    case Format::DXT4:
+    case Format::DXT5:
+      return WMTPixelFormatBC3_RGBA;
+    case Format::ATI1:
+    case Format::BC4:
+      return WMTPixelFormatBC4_RUnorm;
+    case Format::ATI2:
+    case Format::BC5:
+      return WMTPixelFormatBC5_RGUnorm;
     case Format::D24S8:
     case Format::D24X8:
       if (limits.supportsDepth24Stencil8) {
@@ -220,8 +234,10 @@ WMTBlendFactor toBlendFactor(u32 value) {
 WMTCullMode toCullMode(u32 value) {
   switch (static_cast<CullMode>(value)) {
     case CullMode::None: return WMTCullModeNone;
-    case CullMode::Cw:   return WMTCullModeBack;
-    case CullMode::Ccw:  return WMTCullModeFront;
+    // The draw encoder sets front-facing winding to clockwise to match D3D9.
+    // Therefore D3DCULL_CW culls front faces and D3DCULL_CCW culls back faces.
+    case CullMode::Cw:   return WMTCullModeFront;
+    case CullMode::Ccw:  return WMTCullModeBack;
   }
   return WMTCullModeNone;
 }

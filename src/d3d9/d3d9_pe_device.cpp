@@ -17,6 +17,11 @@
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
+static D3DFORMAT exposeAdapterDisplayFormat(D3DFORMAT fmt) {
+    if (fmt == D3DFMT_A8R8G8B8) return D3DFMT_X8R8G8B8;
+    return fmt;
+}
+
 static void dxmt9DeviceDebugLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
@@ -90,6 +95,10 @@ static bool dxmt9PeFullSnapshotEnabled() {
     return enabled;
 }
 
+static bool isValidD3DStateBlockType(D3DSTATEBLOCKTYPE type) {
+    return type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE || type == D3DSBT_VERTEXSTATE;
+}
+
 static HRESULT setPrivateData(dxmt9::util::ComPrivateData& storage,
                               REFGUID guid,
                               const void* data,
@@ -136,6 +145,51 @@ static HRESULT freePrivateData(dxmt9::util::ComPrivateData& storage,
     return hr;
 }
 
+static HRESULT validateSharedHandleForTexture(bool extended,
+                                              HANDLE* sharedHandle,
+                                              D3DPOOL pool,
+                                              UINT levels,
+                                              bool allowSystemMemUserMemory) {
+    if (!sharedHandle) return S_OK;
+    if (!extended) return E_NOTIMPL;
+    if (pool == D3DPOOL_SYSTEMMEM) {
+        if (!allowSystemMemUserMemory || levels != 1) return D3DERR_INVALIDCALL;
+        return D3DERR_INVALIDCALL;
+    }
+    if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
+    return E_NOTIMPL;
+}
+
+static HRESULT validateSharedHandleForBuffer(bool extended,
+                                             HANDLE* sharedHandle,
+                                             D3DPOOL pool) {
+    if (!sharedHandle) return S_OK;
+    if (!extended) return E_NOTIMPL;
+    if (pool != D3DPOOL_DEFAULT) return D3DERR_NOTAVAILABLE;
+    return E_NOTIMPL;
+}
+
+static HRESULT validateSharedHandleForSurface(bool extended,
+                                              HANDLE* sharedHandle,
+                                              D3DPOOL pool,
+                                              bool allowSystemMemUserMemory) {
+    if (!sharedHandle) return S_OK;
+    if (!extended) return E_NOTIMPL;
+    if (pool == D3DPOOL_SYSTEMMEM) {
+        if (!allowSystemMemUserMemory) return D3DERR_INVALIDCALL;
+        return D3DERR_INVALIDCALL;
+    }
+    if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
+    return E_NOTIMPL;
+}
+
+static HRESULT validateSharedHandleForDefaultSurface(bool extended,
+                                                     HANDLE* sharedHandle) {
+    if (!sharedHandle) return S_OK;
+    if (!extended) return E_NOTIMPL;
+    return E_NOTIMPL;
+}
+
 static D9CRect toR(const RECT& r) {
     D9CRect c; c.left = r.left; c.top = r.top;
     c.right = r.right; c.bottom = r.bottom;
@@ -144,6 +198,7 @@ static D9CRect toR(const RECT& r) {
 
 struct D3D9PeRecorderFlush {
     virtual HRESULT FlushPeRecorderForChild() = 0;
+    virtual bool IsStateBlockRecordingForChild() const = 0;
     // Phase 20: child COM wrappers (Query, Surface, Buffer) that want to
     // emit fire-and-forget records into the device's pending chunk go
     // through these. Returns true from IsChunkRecorderEnabledForChild()
@@ -159,6 +214,10 @@ protected:
 
 static HRESULT flushChildRecorder(D3D9PeRecorderFlush* recorder) {
     return recorder ? recorder->FlushPeRecorderForChild() : S_OK;
+}
+
+static bool isChildStateBlockRecording(D3D9PeRecorderFlush* recorder) {
+    return recorder && recorder->IsStateBlockRecordingForChild();
 }
 
 /* =========================================================================
@@ -1078,6 +1137,9 @@ public:
     }
     HRESULT STDMETHODCALLTYPE Capture() noexcept override {
         dxmt9DeviceDebugLog("stateblock_capture sb=%p", this);
+        if (isChildStateBlockRecording(recorder_)) {
+            return D3DERR_INVALIDCALL;
+        }
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return flushHr;
         const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));
@@ -1086,6 +1148,9 @@ public:
     }
     HRESULT STDMETHODCALLTYPE Apply() noexcept override {
         dxmt9DeviceDebugLog("stateblock_apply sb=%p", this);
+        if (isChildStateBlockRecording(recorder_)) {
+            return D3DERR_INVALIDCALL;
+        }
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return flushHr;
         const HRESULT hr = hr32(dxmt9c_stateblock_apply(sb_));
@@ -1177,7 +1242,7 @@ public:
         p->Width = cpp.backBufferWidth;
         p->Height = cpp.backBufferHeight;
         p->RefreshRate = cpp.fullScreenRefreshRateHz;
-        p->Format = static_cast<D3DFORMAT>(cpp.backBufferFormat);
+        p->Format = exposeAdapterDisplayFormat(static_cast<D3DFORMAT>(cpp.backBufferFormat));
         dxmt9DeviceDebugLog("swapchain_get_display_mode -> %ux%u fmt=%u hz=%u",
                             p->Width, p->Height, (unsigned)p->Format, p->RefreshRate);
         return S_OK;
@@ -1314,6 +1379,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     D3DDEVTYPE   deviceType_ = D3DDEVTYPE_HAL;
     DWORD        behaviorFlags_ = 0;
     bool         extended_ = false;
+    bool         stateBlockRecording_ = false;
 
     /* bound resource tracking (AddRef'd) */
     IDirect3DBaseTexture9*     textures_[16]    = {};
@@ -1329,6 +1395,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     std::unordered_map<DWORD, DWORD> renderStateShadow_{};
     std::unordered_map<DWORD, DWORD> pendingRenderStates_{};
+    std::unordered_map<DWORD, DWORD> stateBlockRenderStateRestore_{};
     DWORD pendingTextureMask_ = 0;
     DWORD pendingStreamMask_ = 0;
     bool pendingFvf_ = false;
@@ -2318,6 +2385,9 @@ public:
     HRESULT FlushPeRecorderForChild() noexcept override {
         return flushPeRecorder();
     }
+    bool IsStateBlockRecordingForChild() const noexcept override {
+        return stateBlockRecording_;
+    }
     bool IsChunkRecorderEnabledForChild() const override {
         return dxmt9PeDrawChunkEnabled();
     }
@@ -2445,7 +2515,7 @@ public:
         pMode->Width = cpp.backBufferWidth;
         pMode->Height = cpp.backBufferHeight;
         pMode->RefreshRate = cpp.fullScreenRefreshRateHz;
-        pMode->Format = static_cast<D3DFORMAT>(cpp.backBufferFormat);
+        pMode->Format = exposeAdapterDisplayFormat(static_cast<D3DFORMAT>(cpp.backBufferFormat));
         dxmt9DeviceDebugLog("device_get_display_mode -> %ux%u fmt=%u hz=%u",
                             pMode->Width, pMode->Height, (unsigned)pMode->Format, pMode->RefreshRate);
         return S_OK;
@@ -2531,6 +2601,8 @@ public:
         if (FAILED(flushHr)) return flushHr;
         releaseAllBound();
         clearPeStateTracking();
+        stateBlockRecording_ = false;
+        stateBlockRenderStateRestore_.clear();
         return hr32(dxmt9c_device_reset(dev_, &cpp));
     }
 
@@ -2618,8 +2690,11 @@ public:
                                              DWORD usage, D3DFORMAT fmt,
                                              D3DPOOL pool,
                                              IDirect3DTexture9** ppTex,
-                                             HANDLE*) noexcept override {
+                                             HANDLE* psh) noexcept override {
         if (!ppTex) return D3DERR_INVALIDCALL;
+        *ppTex = nullptr;
+        const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, true);
+        if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_texture device=%p size=%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
                             this, w, h, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
         D9CTexture* t = dxmt9c_device_create_texture(dev_, w, h, levels,
@@ -2635,8 +2710,11 @@ public:
                                                    UINT levels, DWORD usage,
                                                    D3DFORMAT fmt, D3DPOOL pool,
                                                    IDirect3DVolumeTexture9** ppTex,
-                                                   HANDLE*) noexcept override {
+                                                   HANDLE* psh) noexcept override {
         if (!ppTex) return D3DERR_INVALIDCALL;
+        *ppTex = nullptr;
+        const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, false);
+        if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_volume_texture device=%p size=%ux%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
                             this, w, h, d, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
         D9CTexture* t = dxmt9c_device_create_volume_texture(dev_, w, h, d, levels,
@@ -2652,8 +2730,11 @@ public:
                                                  DWORD usage, D3DFORMAT fmt,
                                                  D3DPOOL pool,
                                                  IDirect3DCubeTexture9** ppTex,
-                                                 HANDLE*) noexcept override {
+                                                 HANDLE* psh) noexcept override {
         if (!ppTex) return D3DERR_INVALIDCALL;
+        *ppTex = nullptr;
+        const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, false);
+        if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_cube_texture device=%p size=%u levels=%u usage=0x%x fmt=%u pool=%u",
                             this, size, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
         D9CTexture* t = dxmt9c_device_create_cube_texture(dev_, size, levels,
@@ -2668,8 +2749,11 @@ public:
     HRESULT STDMETHODCALLTYPE CreateVertexBuffer(UINT len, DWORD usage,
                                                   DWORD fvf, D3DPOOL pool,
                                                   IDirect3DVertexBuffer9** ppBuf,
-                                                  HANDLE*) noexcept override {
+                                                  HANDLE* psh) noexcept override {
         if (!ppBuf) return D3DERR_INVALIDCALL;
+        *ppBuf = nullptr;
+        const HRESULT sharedHr = validateSharedHandleForBuffer(extended_, psh, pool);
+        if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_vertex_buffer device=%p len=%u usage=0x%x fvf=0x%x pool=%u",
                             this, len, (unsigned)usage, (unsigned)fvf, (unsigned)pool);
         D9CBuffer* b = dxmt9c_device_create_vertex_buffer(dev_, len, usage,
@@ -2683,8 +2767,11 @@ public:
     HRESULT STDMETHODCALLTYPE CreateIndexBuffer(UINT len, DWORD usage,
                                                  D3DFORMAT fmt, D3DPOOL pool,
                                                  IDirect3DIndexBuffer9** ppBuf,
-                                                 HANDLE*) noexcept override {
+                                                 HANDLE* psh) noexcept override {
         if (!ppBuf) return D3DERR_INVALIDCALL;
+        *ppBuf = nullptr;
+        const HRESULT sharedHr = validateSharedHandleForBuffer(extended_, psh, pool);
+        if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_index_buffer device=%p len=%u usage=0x%x fmt=%u pool=%u",
                             this, len, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
         D9CBuffer* b = dxmt9c_device_create_index_buffer(dev_, len, usage,
@@ -2702,6 +2789,9 @@ public:
                                                   IDirect3DSurface9** ppS,
                                                   HANDLE* psh) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
+        const HRESULT sharedHr = validateSharedHandleForDefaultSurface(extended_, psh);
+        if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_render_target device=%p size=%ux%u fmt=%u ms=%u msQual=%u lockable=%u",
                             this, w, h, (unsigned)fmt, (unsigned)ms, (unsigned)msQual, (unsigned)lockable);
         uint64_t sh = psh ? (uint64_t)(uintptr_t)*psh : 0;
@@ -2721,8 +2811,11 @@ public:
                                                          DWORD msQual,
                                                          BOOL discard,
                                                          IDirect3DSurface9** ppS,
-                                                         HANDLE* /*shared*/) noexcept override {
+                                                         HANDLE* psh) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
+        const HRESULT sharedHr = validateSharedHandleForDefaultSurface(extended_, psh);
+        if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface device=%p size=%ux%u fmt=%u ms=%u msQual=%u discard=%u",
                             this, w, h, (unsigned)fmt, (unsigned)ms, (unsigned)msQual, (unsigned)discard);
         uint64_t sh = 0;
@@ -2932,8 +3025,11 @@ public:
                                                            D3DFORMAT fmt,
                                                            D3DPOOL pool,
                                                            IDirect3DSurface9** ppS,
-                                                           HANDLE*) noexcept override {
+                                                           HANDLE* psh) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
+        const HRESULT sharedHr = validateSharedHandleForSurface(extended_, psh, pool, true);
+        if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_offscreen_surface device=%p size=%ux%u fmt=%u pool=%u",
                             this, w, h, (unsigned)fmt, (unsigned)pool);
         uint64_t sh = 0;
@@ -3360,6 +3456,18 @@ public:
                                               DWORD value) noexcept override {
         dxmt9DeviceDebugLog("device_set_render_state device=%p state=%u value=0x%x",
                             this, (unsigned)state, (unsigned)value);
+        if (stateBlockRecording_) {
+            const DWORD stateKey = static_cast<DWORD>(state);
+            if (stateBlockRenderStateRestore_.find(stateKey) == stateBlockRenderStateRestore_.end()) {
+                DWORD previous = dxmt9c_device_get_render_state(dev_, stateKey);
+                const auto shadowIt = renderStateShadow_.find(stateKey);
+                if (dxmt9PeStateShadowEnabled() && shadowIt != renderStateShadow_.end()) {
+                    previous = shadowIt->second;
+                }
+                stateBlockRenderStateRestore_[stateKey] = previous;
+            }
+            return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
+        }
         const DWORD stateKey = static_cast<DWORD>(state);
         if (dxmt9PeStateShadowEnabled() && shadowedRenderStateEquals(stateKey, value)) {
             return S_OK;
@@ -3403,6 +3511,9 @@ public:
     HRESULT STDMETHODCALLTYPE CreateStateBlock(D3DSTATEBLOCKTYPE type,
                                                 IDirect3DStateBlock9** ppSB) noexcept override {
         if (!ppSB) return D3DERR_INVALIDCALL;
+        if (!isValidD3DStateBlockType(type) || stateBlockRecording_) {
+            return D3DERR_INVALIDCALL;
+        }
         // Phase 28: state-block creation needs current server state.
         // flushPeRecorder() routes through chunkBarrierFlush + chunk
         // commit in chunk mode, bridge-emit in legacy mode.
@@ -3415,22 +3526,42 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE BeginStateBlock() noexcept override {
+        if (stateBlockRecording_) {
+            return D3DERR_INVALIDCALL;
+        }
         const HRESULT flushHr = flushPeRecorder();   // Phase 28: mode-aware
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
         const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
+        if (SUCCEEDED(hr)) {
+            stateBlockRecording_ = true;
+            stateBlockRenderStateRestore_.clear();
+        }
         dxmt9DeviceDebugLog("device_begin_state_block -> hr=0x%08x", (unsigned)hr);
         return hr;
     }
     HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** ppSB) noexcept override {
         if (!ppSB) return D3DERR_INVALIDCALL;
+        if (!stateBlockRecording_) {
+            return D3DERR_INVALIDCALL;
+        }
         const HRESULT flushHr = flushPeRecorder();   // Phase 28: mode-aware
         if (FAILED(flushHr)) return flushHr;
-        *ppSB = nullptr;
         dxmt9DeviceDebugLog("device_end_state_block device=%p", this);
         D9CStateBlock* sb = nullptr;
         HRESULT hr = hr32(dxmt9c_device_end_state_block(dev_, &sb));
-        if (SUCCEEDED(hr) && sb) *ppSB = new D3D9StateBlockImpl(sb, this, this);
+        if (SUCCEEDED(hr)) {
+            stateBlockRecording_ = false;
+            for (const auto& [state, value] : stateBlockRenderStateRestore_) {
+                (void)dxmt9c_device_set_render_state(dev_, state, value);
+                renderStateShadow_[state] = value;
+                pendingRenderStates_.erase(state);
+            }
+            stateBlockRenderStateRestore_.clear();
+            if (sb) {
+                *ppSB = new D3D9StateBlockImpl(sb, this, this);
+            }
+        }
         dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
                             (unsigned)hr, static_cast<void*>(sb), *ppSB);
         return hr;
@@ -4092,7 +4223,10 @@ public:
                                                     DWORD msQual, BOOL lockable,
                                                     IDirect3DSurface9** ppS,
                                                     HANDLE* psh,
-                                                    DWORD) noexcept override {
+                                                    DWORD usage) noexcept override {
+        if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
+        if (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) return D3DERR_INVALIDCALL;
         return CreateRenderTarget(w, h, fmt, ms, msQual, lockable, ppS, psh);
     }
     HRESULT STDMETHODCALLTYPE CreateOffscreenPlainSurfaceEx(UINT w, UINT h,
@@ -4100,7 +4234,10 @@ public:
                                                              D3DPOOL pool,
                                                              IDirect3DSurface9** ppS,
                                                              HANDLE* psh,
-                                                             DWORD) noexcept override {
+                                                             DWORD usage) noexcept override {
+        if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
+        if (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) return D3DERR_INVALIDCALL;
         return CreateOffscreenPlainSurface(w, h, fmt, pool, ppS, psh);
     }
     HRESULT STDMETHODCALLTYPE CreateDepthStencilSurfaceEx(UINT w, UINT h,
@@ -4110,7 +4247,10 @@ public:
                                                            BOOL discard,
                                                            IDirect3DSurface9** ppS,
                                                            HANDLE* psh,
-                                                           DWORD) noexcept override {
+                                                           DWORD usage) noexcept override {
+        if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
+        if (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)) return D3DERR_INVALIDCALL;
         return CreateDepthStencilSurface(w, h, fmt, ms, msQual, discard, ppS, psh);
     }
 
@@ -4118,6 +4258,11 @@ public:
                                        D3DDISPLAYMODEEX* pFsMode) noexcept override {
         if (!pPP) return D3DERR_INVALIDCALL;
         if (pFsMode && pFsMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
+        if (pPP->Windowed ? pFsMode != nullptr : pFsMode == nullptr) return D3DERR_INVALIDCALL;
+        if (pFsMode && (pFsMode->Width != pPP->BackBufferWidth
+                || pFsMode->Height != pPP->BackBufferHeight)) {
+            return D3DERR_INVALIDCALL;
+        }
         D9CPresentParams cpp{};
         cpp.backBufferWidth  = pPP->BackBufferWidth;
         cpp.backBufferHeight = pPP->BackBufferHeight;
@@ -4128,6 +4273,8 @@ public:
         cpp.swapEffect       = (uint32_t)pPP->SwapEffect;
         cpp.deviceWindow     = (uint64_t)(uintptr_t)pPP->hDeviceWindow;
         cpp.windowed         = pPP->Windowed ? 1u : 0u;
+        cpp.enableAutoDepthStencil = pPP->EnableAutoDepthStencil ? 1u : 0u;
+        cpp.autoDepthStencilFormat = (uint32_t)pPP->AutoDepthStencilFormat;
         cpp.flags            = pPP->Flags;
         cpp.fullScreenRefreshRateHz = pPP->FullScreen_RefreshRateInHz;
         cpp.presentationInterval = pPP->PresentationInterval;
@@ -4142,6 +4289,8 @@ public:
         if (FAILED(flushHr)) return flushHr;
         releaseAllBound();
         clearPeStateTracking();
+        stateBlockRecording_ = false;
+        stateBlockRenderStateRestore_.clear();
         return hr32(dxmt9c_device_reset_ex(dev_, &cpp, pFsMode ? &cdme : nullptr));
     }
 

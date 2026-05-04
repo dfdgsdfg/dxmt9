@@ -11,6 +11,16 @@ bool forceVisibleDraw() {
   return v;
 }
 
+bool forceFullscreenVertexShader() {
+  static const bool v = util::getenvFlag("DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX");
+  return v;
+}
+
+bool forceFragmentShaderColor() {
+  static const bool v = util::getenvFlag("DXMT_DEBUG_FORCE_FRAGMENT_COLOR");
+  return v;
+}
+
 bool skipAllDraws() {
   static const bool v = util::getenvFlag("DXMT_SKIP_ALL_DRAWS");
   return v;
@@ -18,6 +28,21 @@ bool skipAllDraws() {
 
 bool disableScissor() {
   static const bool v = util::getenvFlag("DXMT_DISABLE_SCISSOR");
+  return v;
+}
+
+bool disableCull() {
+  static const bool v = util::getenvFlag("DXMT_DISABLE_CULL");
+  return v;
+}
+
+bool frontFaceCounterClockwise() {
+  static const bool v = util::getenvFlag("DXMT_DEBUG_FRONT_FACE_CCW");
+  return v;
+}
+
+bool flipTranslatedVertexY() {
+  static const bool v = util::getenvFlag("DXMT_DEBUG_FLIP_VERTEX_Y");
   return v;
 }
 

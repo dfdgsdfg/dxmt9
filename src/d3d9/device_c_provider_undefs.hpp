@@ -11,10 +11,12 @@
 #undef dxmt9c_factory_get_adapter_monitor
 #undef dxmt9c_factory_check_device_type
 #undef dxmt9c_factory_check_device_format
+#undef dxmt9c_factory_check_device_format2
 #undef dxmt9c_factory_check_device_multisample
 #undef dxmt9c_factory_get_caps
 #undef dxmt9c_factory_get_adapter_luid
 #undef dxmt9c_factory_create_device
+#undef dxmt9c_factory_create_device2
 #undef dxmt9c_device_addref
 #undef dxmt9c_device_release
 #undef dxmt9c_device_get_caps

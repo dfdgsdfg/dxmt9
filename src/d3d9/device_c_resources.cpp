@@ -1,6 +1,45 @@
 #include "device_c_provider.hpp"
 
+#include <algorithm>
+
 using namespace dxmt9::d3d9::devicec;
+
+namespace {
+
+struct LockFootprint {
+  uint32_t rowBytes = 0;
+  uint32_t rows = 0;
+};
+
+LockFootprint lockFootprint(dxmt9::core::Format format,
+                            uint32_t width,
+                            uint32_t height,
+                            const D9CRect* rect) {
+  const uint32_t blockWidth = dxmt9::core::formatBlockWidth(format);
+  const uint32_t blockHeight = dxmt9::core::formatBlockHeight(format);
+  const uint32_t blockBytes = dxmt9::core::formatBlockBytes(format);
+  if (width == 0 || height == 0 || blockBytes == 0) {
+    return {};
+  }
+
+  const int32_t left = rect ? std::clamp(rect->left, 0, static_cast<int32_t>(width)) : 0;
+  const int32_t top = rect ? std::clamp(rect->top, 0, static_cast<int32_t>(height)) : 0;
+  const int32_t right =
+      rect ? std::clamp(rect->right, left, static_cast<int32_t>(width)) : static_cast<int32_t>(width);
+  const int32_t bottom =
+      rect ? std::clamp(rect->bottom, top, static_cast<int32_t>(height)) : static_cast<int32_t>(height);
+  const uint32_t rectWidth = static_cast<uint32_t>(std::max<int32_t>(0, right - left));
+  const uint32_t rectHeight = static_cast<uint32_t>(std::max<int32_t>(0, bottom - top));
+  if (rectWidth == 0 || rectHeight == 0) {
+    return {};
+  }
+
+  const uint32_t blocksX = (rectWidth + blockWidth - 1u) / blockWidth;
+  const uint32_t rows = (rectHeight + blockHeight - 1u) / blockHeight;
+  return {blocksX * blockBytes, rows};
+}
+
+}  // namespace
 
 extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, uint32_t h,
                                                     uint32_t levels, uint32_t usage,
@@ -186,21 +225,18 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
   delete rect;
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
+  if (!lock.data || lock.pitch == 0) {
+    dxmt9DebugLog("texture_lock_rect failed texture=%p level=%u pitch=%u bits=%p",
+                  static_cast<void*>(t), level, lock.pitch, lock.data);
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   if (lock.data && !pointerFits32Bit(lock.data)) {
     const auto& desc = t->obj->desc();
     const uint32_t levelWidth = std::max(1u, desc.width >> std::min(level, 31u));
     const uint32_t levelHeight = std::max(1u, desc.height >> std::min(level, 31u));
-    const uint32_t bpp = dxmt9::core::bytesPerPixel(desc.format);
-    const int32_t left = r ? std::clamp(r->left, 0, static_cast<int32_t>(levelWidth)) : 0;
-    const int32_t top = r ? std::clamp(r->top, 0, static_cast<int32_t>(levelHeight)) : 0;
-    const int32_t right =
-        r ? std::clamp(r->right, left, static_cast<int32_t>(levelWidth))
-          : static_cast<int32_t>(levelWidth);
-    const int32_t bottom =
-        r ? std::clamp(r->bottom, top, static_cast<int32_t>(levelHeight))
-          : static_cast<int32_t>(levelHeight);
-    const uint32_t rowBytes = static_cast<uint32_t>(std::max<int32_t>(0, right - left)) * bpp;
-    const uint32_t rows = static_cast<uint32_t>(std::max<int32_t>(0, bottom - top));
+    const auto footprint = lockFootprint(desc.format, levelWidth, levelHeight, r);
+    const uint32_t rowBytes = footprint.rowBytes;
+    const uint32_t rows = footprint.rows;
     const size_t shadowBytes = static_cast<size_t>(rowBytes) * rows;
     auto& shadow = t->wow64Locks[level];
     if (rowBytes == 0 || rows == 0) {
@@ -405,12 +441,18 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
   delete rect;
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
+  if (!lock.data || lock.pitch == 0) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   if (lock.data && !pointerFits32Bit(lock.data)) {
     const auto& desc = s->obj->desc();
-    const int32_t top = r ? r->top : 0;
-    const int32_t bottom = r ? r->bottom : static_cast<int32_t>(desc.height);
-    const uint32_t rows = bottom > top ? static_cast<uint32_t>(bottom - top) : 0u;
     const uint32_t rowBytes = static_cast<uint32_t>(std::abs(out->pitch));
+    const uint32_t rows = dxmt9::core::isCompressedFormat(desc.format)
+                              ? lockFootprint(desc.format, desc.width, desc.height, r).rows
+                              : static_cast<uint32_t>(std::max<int32_t>(
+                                    0, (r ? std::clamp(r->bottom, 0, static_cast<int32_t>(desc.height))
+                                          : static_cast<int32_t>(desc.height)) -
+                                           (r ? std::clamp(r->top, 0, static_cast<int32_t>(desc.height)) : 0)));
     const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(rowBytes);
     if (bytes != 0) {
       if (!s->wow64Lock.shadow || s->wow64Lock.shadow.size < bytes) {

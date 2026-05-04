@@ -737,9 +737,11 @@ struct PresentParameters {
   u32 backBufferCount = 1;
   bool windowed = true;
   PresentInterval presentationInterval = PresentInterval::Default;
+  u32 presentationIntervalRaw = 0;
   Handle deviceWindow{};
   bool enableAutoDepthStencil = false;
   Format autoDepthStencilFormat = Format::D24S8;
+  u32 swapEffect = 1;
   bool discardSwapEffect = true;
   MultiSampleType multiSampleType = MultiSampleType::None;
 };
@@ -1072,6 +1074,7 @@ const FormatInfo* findFormatInfo(Format format);
 FormatClass classifyFormat(Format format);
 BackendPixelFormat backendPixelFormat(Format format);
 bool formatSupportsUsage(Format format, u32 usage, const BackendLimits& limits);
+bool isCompressedFormat(Format format);
 u64 hashBytes(std::span<const std::byte> bytes);
 u64 hashString(std::string_view text);
 
@@ -1086,6 +1089,12 @@ FfpPixelKey makeFfpPixelKey(const DeviceState& state);
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);
 std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::span<const u8> input);
 u32 bytesPerPixel(Format format);
+u32 formatBlockWidth(Format format);
+u32 formatBlockHeight(Format format);
+u32 formatBlockBytes(Format format);
+u32 formatRowPitch(Format format, u32 width);
+u32 formatRowCount(Format format, u32 height);
+std::size_t formatByteSize(Format format, u32 width, u32 height);
 std::string formatName(Format format);
 std::string backendFormatName(BackendPixelFormat format);
 // makeBackendDevice and makeSimBackendDevice have been retired. The upper
@@ -1346,7 +1355,8 @@ class Device : public std::enable_shared_from_this<Device> {
  public:
   Device(AdapterInfo adapter, BackendLimits limits,
          PresentParameters params, u32 behaviorFlags,
-         std::shared_ptr<dxmt9::Device> upperDevice = {});
+         std::shared_ptr<dxmt9::Device> upperDevice = {},
+         bool extendedDevice = false);
   ~Device();
 
   Device(const Device&) = delete;
@@ -1423,10 +1433,11 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult drawPrimitive(PrimitiveType type, u32 primitiveCount, u32 startVertex = 0);
   HResult drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount, u32 startVertex,
                                i32 baseVertexIndex, u32 startIndex, IndexType indexType);
-  HResult drawPrimitiveUP(PrimitiveType type, u32 primitiveCount, std::span<const u8> vertexData);
+  HResult drawPrimitiveUP(PrimitiveType type, u32 primitiveCount, std::span<const u8> vertexData,
+                          u32 vertexStride = 0);
   HResult drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
                                  std::span<const u8> vertexData, std::span<const u8> indexData,
-                                 IndexType indexType);
+                                 IndexType indexType, u32 vertexStride = 0);
   // Compact draw-run: snapshots BaseDrawState ONCE from current state_,
   // packages it with the supplied DrawParam[] into a DrawRunDesc, then
   // hands the run to upperDevice_->submitDrawRun. Used by the chunk
@@ -1480,6 +1491,7 @@ class Device : public std::enable_shared_from_this<Device> {
   void submitPresentInternal(const SwapDesc& desc);
   void maybeCaptureExperimentFrame();
   void resetState();
+  HResult resetValidated(const PresentParameters& params);
 
   AdapterInfo adapter_{};
   BackendLimits limits_{};
@@ -1493,6 +1505,7 @@ class Device : public std::enable_shared_from_this<Device> {
  private:
   PresentParameters presentParameters_{};
   [[maybe_unused]] u32 behaviorFlags_ = 0;
+  bool extendedDevice_ = false;
   DeviceState state_{};
   std::vector<std::weak_ptr<Buffer>> buffers_;
   std::vector<std::weak_ptr<Texture>> textures_;
@@ -1544,10 +1557,16 @@ class Factory {
   HRESULT checkDeviceMultiSampleType(size_t adapterIndex, Format format, MultiSampleType type) const;
   std::shared_ptr<Device> createDevice(size_t adapterIndex, const PresentParameters& params,
                                        u32 behaviorFlags = 0);
+  std::shared_ptr<Device> createDeviceEx(size_t adapterIndex, const PresentParameters& params,
+                                         const DisplayModeEx* fullscreenMode = nullptr,
+                                         u32 behaviorFlags = 0);
 
   std::shared_ptr<dxmt9::Device> upperDevice() const noexcept { return device_; }
 
  private:
+  std::shared_ptr<Device> createDeviceValidated(size_t adapterIndex, const PresentParameters& params,
+                                                u32 behaviorFlags, bool extendedDevice);
+
   std::shared_ptr<dxmt9::Device> device_;
   BackendLimits limits_{};
   std::vector<AdapterInfo> adapters_;

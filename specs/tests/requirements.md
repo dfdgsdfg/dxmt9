@@ -19,12 +19,17 @@ D3DCOLOR values were verified against real D3D9 hardware. Used where
 `shader_runner_d3d9` does not reach: ps_1_x shaders and fixed-function
 corner cases. Tests are ported into dxmt9's own test format rather than run directly.
 
-**Compatibility — Wine `dlls/d3d9/tests/{device,d3d9ex,stateblock}.c`**
+**API compatibility oracle — Wine `dlls/d3d9/tests/{device,d3d9ex,stateblock}.c`**
 (https://github.com/wine-mirror/wine, LGPL-2.1):
-API-level conformance tests for D3D9 COM object lifetime, base vs Ex
-`QueryInterface()` behaviour, state block rules, reset/lost-device semantics,
-adapter/display validation, and private data handling. These tests are ported
-into small PE executables that run under Wine against dxmt9's `d3d9.dll`.
+API-level conformance tests that encode Windows D3D9-observed behaviour for D3D9
+COM object lifetime, base vs Ex `QueryInterface()` behaviour, state block rules,
+reset/lost-device semantics, adapter/display validation, presentation-parameter
+validation, shared-handle policy, PE export compatibility, HRESULT propagation,
+private data handling, format-conversion and multisample validation, and D3D9Ex
+user-memory resources.
+These tests are ported into small PE executables that run under Wine against
+dxmt9's `d3d9.dll`. They are behavioural oracles, not a requirement to copy
+Wine's `dlls/d3d9` implementation structure.
 
 ---
 
@@ -367,11 +372,11 @@ exercises the present path with a null window handle.
 
 ---
 
-## 12. Wine D3D9 Conformance Tests
+## 12. Wine-Derived D3D9 API Conformance Tests
 
-The Wine D3D9 conformance subset exercises application-visible COM and state
-machine behaviour through the real PE ABI. It is separate from native backend
-tests and requires Wine.
+The Wine-derived D3D9 conformance subset exercises Windows D3D9-compatible,
+application-visible COM and state-machine behaviour through the real PE ABI. It
+is separate from native backend tests and requires Wine as the host runtime.
 
 **R-TEST-12.1** There must be cross-compiled Win32 PE conformance executables
 under `tests/d3d9_conformance/`. They must load `d3d9.dll` through Wine's normal
@@ -388,9 +393,11 @@ machine-readable in the same style as shader corpus provenance.
 |---|---|
 | `test_refcount` and related object lifetime checks | public COM refcounts for device children, implicit swap chains, back buffers, texture-level surfaces, and `Get*` methods |
 | scene tests | `BeginScene()` / `EndScene()` success and invalid-call transitions |
-| display-mode and factory validation tests | adapter index, display format, device type, multisample, and mode enumeration return codes |
-| reset/lost-device tests | `Reset()`, default-pool invalidation, managed/systemmem survival, and cooperative-level transitions |
-| private-data tests | `SetPrivateData`, `GetPrivateData`, `FreePrivateData`, and `D3DSPD_IUNKNOWN` ownership |
+| display-mode and factory validation tests | adapter index, display format, valid-vs-invalid device type, multisample quality-level behaviour, invalid multisample enum handling, `CheckDeviceType`, `CheckDeviceFormat`, `CheckDeviceFormatConversion`, and mode enumeration return codes |
+| presentation-parameter tests | invalid `SwapEffect`, `BackBufferCount`, `D3DSWAPEFFECT_COPY` count, and `PresentationInterval` combinations |
+| reset/lost-device tests | `Reset()`, default-pool invalidation, managed/systemmem survival, reset clearing scene state, and cooperative-level transitions |
+| private-data tests | `SetPrivateData`, `GetPrivateData`, `FreePrivateData`, `D3DSPD_IUNKNOWN` ownership, failed-set preservation, missing GUID size preservation, and coverage for every resource wrapper |
+| shared-handle tests | non-Ex `E_NOTIMPL`, Ex pool/resource-class error codes, D3D9Ex user-memory texture/offscreen-surface success cases, lock pointer/pitch validation, and no silent ignore of non-null shared handles |
 
 **R-TEST-12.4** The initial required subset from Wine `d3d9ex.c` is:
 
@@ -399,7 +406,10 @@ machine-readable in the same style as shader corpus provenance.
 | base vs Ex `QueryInterface()` tests | `Direct3DCreate9()` objects reject Ex interfaces; `Direct3DCreate9Ex()` objects expose base and Ex interfaces |
 | Ex-created normal device | `IDirect3D9Ex::CreateDevice()` returns a device that can QI `IDirect3DDevice9Ex` |
 | adapter LUID/display-mode tests | `GetAdapterLUID`, `GetAdapterDisplayModeEx`, `EnumAdapterModesEx`, filter and size validation |
+| Ex create/reset validation tests | `CreateDeviceEx` and `ResetEx` fullscreen-mode size, windowed/fullscreen relation, and mode/back-buffer size matching |
 | Ex reset/device-state tests | `ResetEx`, `CheckDeviceState`, Ex cooperative-level behaviour, and resource survival differences |
+| Ex swap-chain tests | `IDirect3DSwapChain9Ex` exposure, `GetDisplayModeEx` size validation, `GetLastPresentCount`, and `GetPresentStatistics` zeroing behaviour |
+| `test_user_memory` | `D3DPOOL_SYSTEMMEM` user-memory texture and offscreen-surface success, `LockRect` pointer/pitch identity, and invalid level/pool/resource-class failures |
 
 **R-TEST-12.5** The initial required subset from Wine `stateblock.c` is:
 
@@ -408,8 +418,42 @@ machine-readable in the same style as shader corpus provenance.
 | `CreateStateBlock(D3DSBT_ALL)` | exact captured state subset and documented D3D9 quirks |
 | `D3DSBT_VERTEXSTATE` / `D3DSBT_PIXELSTATE` | type-specific state masks |
 | `BeginStateBlock()` / `EndStateBlock()` | delta recording, nested-recording invalid calls, and no-active-recording invalid calls |
-| `Capture()` / `Apply()` | invalid calls while recording, restore ordering, render-target interactions, shaders/constants, and stream/index bindings |
+| `Capture()` / `Apply()` | invalid calls while recording, restore ordering, derived-cache invalidation, render-target interactions, shaders/constants, textures, autogen-mipmap bits, and stream/index bindings |
 
 **R-TEST-12.6** These conformance tests are allowed to fail during test-first
 implementation, but any failing case must be listed in `specs/gap.md` with the
 corresponding Wine source anchor and implementation owner area.
+
+**R-TEST-12.7** The conformance subset must not require Windows access
+violations for invalid pointers. If Wine documents a crash-only invalid-pointer
+case, the dxmt9 test must either skip it or assert dxmt9's specified clean
+failure path from R-CORE-9.5.
+
+**R-TEST-12.8** Object creation tests must assert exact `HRESULT` propagation
+when validation or backend setup fails. A generic null object result is not
+sufficient unless the public COM method also returns the Windows
+D3D9-compatible failure code for that scenario.
+
+**R-TEST-12.9** A PE export smoke test must `LoadLibrary("d3d9.dll")` and
+`GetProcAddress()` every required D3D9 export used by Windows/Wine applications:
+`Direct3DCreate9`, `Direct3DCreate9Ex`, `Direct3DShaderValidatorCreate9`,
+`D3DPERF_BeginEvent`, `D3DPERF_EndEvent`, `D3DPERF_GetStatus`,
+`D3DPERF_QueryRepeatFrame`, `D3DPERF_SetMarker`, `D3DPERF_SetOptions`,
+`D3DPERF_SetRegion`, `DebugSetMute`, and loader-safe `Direct3DCreate9On12`.
+The test must also assert Windows D3D9-compatible no-op return behaviour for
+the `D3DPERF_*` functions that can be called safely.
+
+**R-TEST-12.10** Factory validation tests must cover Wine-test-observed Windows
+D3D9 edge cases that are easy to regress: identical
+`CheckDeviceFormatConversion()` source and destination formats return `D3D_OK`,
+unsupported conversions return `D3DERR_NOTAVAILABLE`, invalid multisample enum
+values return `D3DERR_INVALIDCALL`, `D3DMULTISAMPLE_NONE` reports one quality
+level, and unsupported but well-formed multisample requests preserve/write
+`pQualityLevels` according to the Wine-derived oracle.
+
+**R-TEST-12.11** D3D9Ex user-memory tests must be derived from Wine
+`dlls/d3d9/tests/d3d9ex.c:test_user_memory`. They must assert successful
+`D3DPOOL_SYSTEMMEM` `CreateTexture()` with exactly one mip level,
+`CreateOffscreenPlainSurface()` caller-memory creation, `LockRect()` pointer and
+pitch identity, and Windows D3D9-compatible failures for invalid levels,
+unsupported pools, cube/volume textures, and vertex/index buffers.

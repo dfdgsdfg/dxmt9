@@ -80,6 +80,7 @@ extern "C" int32_t dxmt9c_device_begin_state_block(D9CDevice* d) {
   }
   d->stateBlockBaseState = d->dev().state();
   d->stateBlockRenderStates.clear();
+  d->stateBlockRenderStateValues.clear();
   d->stateBlockRecording = true;
   return dxmt9::core::D3D_OK;
 }
@@ -96,10 +97,16 @@ extern "C" int32_t dxmt9c_device_end_state_block(D9CDevice* d, D9CStateBlock** o
   if (!d->stateBlockBaseState.has_value()) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  auto recordedState = *d->stateBlockBaseState;
+  for (const auto& [state, value] : d->stateBlockRenderStateValues) {
+    recordedState.renderStates[state] = value;
+  }
+
   auto stateBlock = std::make_shared<dxmt9::core::StateBlock>();
-  stateBlock->captureDelta(*d->stateBlockBaseState, d->dev().state(), d->stateBlockRenderStates);
+  stateBlock->captureDelta(*d->stateBlockBaseState, recordedState, d->stateBlockRenderStates);
   d->stateBlockBaseState.reset();
   d->stateBlockRenderStates.clear();
+  d->stateBlockRenderStateValues.clear();
   *out = new D9CStateBlock{stateBlock, d};
   return dxmt9::core::D3D_OK;
 }

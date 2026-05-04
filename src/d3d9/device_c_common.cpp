@@ -535,6 +535,8 @@ dxmt9::core::PresentParameters ppFromC(const D9CPresentParams& c) {
   p.multiSampleType = msTypeFromD3D(c.multiSampleType);
   p.deviceWindow = dxmt9::core::Handle{c.deviceWindow};
   p.presentationInterval = presentIntervalFromD3D(c.presentationInterval);
+  p.presentationIntervalRaw = c.presentationInterval;
+  p.swapEffect = c.swapEffect;
   p.discardSwapEffect = c.swapEffect != 2;
   return p;
 }

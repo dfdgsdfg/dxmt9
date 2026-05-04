@@ -1,7 +1,27 @@
 # Specifications
 
-This directory contains specifications for dxmt9 — a Wine/D3D9-to-Metal translation
-layer. Specs describe *what* the system must be and do, not how to build it.
+This directory contains specifications for dxmt9 — a Wine-hosted D3D9-to-Metal
+translation layer. Specs describe *what* the system must be and do, not how to
+build it.
+
+---
+
+## Terminology
+
+These specs use three separate compatibility scopes:
+
+- **DXMT-compatible architecture**: the implementation and deployment shape
+  follows upstream DXMT's split (`d3d9.dll` -> `winemetal.dll` ->
+  `winemetal.so`), bridge ABI style, and chunked command-submission model. This
+  does not mean copying Wine's `dlls/d3d9` or wined3d internal architecture.
+- **Wine runtime-compatible**: binaries load and run correctly inside Wine,
+  including builtin PE DLL handling, normal/native DLL search, unixlib provider
+  discovery, and target Wine runtime dependencies.
+- **Windows D3D9-compatible behaviour, validated by Wine D3D9 tests**:
+  public API results such as `HRESULT`s, refcounts, reset/lost-device state,
+  export tables, private data, and D3D9Ex edge cases match Windows-observed
+  behaviour. Wine's D3D9 tests are used as a behavioural oracle; they are not an
+  implementation-structure requirement.
 
 ---
 
@@ -10,7 +30,7 @@ layer. Specs describe *what* the system must be and do, not how to build it.
 ```
 specs/
 ├── gap.md                  Spec–implementation gap tracker (what is / isn't built yet)
-├── core/                   Wine-facing D3D9 layer
+├── core/                   D3D9 API frontend for Wine-hosted applications
 │   ├── requirements.md     D3D9 COM contracts, state machine rules, resource semantics
 │   ├── design.md           COM object model, device state, core/backend boundary
 │   ├── formats.md          D3DFMT → MTLPixelFormat mapping tables
@@ -39,7 +59,7 @@ specs/
 │       ├── EncoderLifecycle.tla     MTLCommandEncoder state machine
 │       └── QuerySeqId.tla           D3D9 query seq-ID fence
 ├── tests/                  Controlled correctness tests (oracle-based, pixel-exact)
-│   ├── requirements.md     shader_runner corpus, Wine visual.c ports, provenance, manifest
+│   ├── requirements.md     shader_runner corpus, Wine-derived D3D9 oracles, provenance, manifest
 │   └── design.md           shader_runner_dxmt9 backend, .shader_test format, MANIFEST.toml
 ├── experiments/            Wild integration tests (real D3D9 applications, fuzzy pass criteria)
 │   ├── requirements.md     Catalogue, pass criteria, screenshot comparison

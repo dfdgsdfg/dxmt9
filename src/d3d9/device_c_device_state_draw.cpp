@@ -14,8 +14,7 @@ uint64_t wireHandleValue(const D9CWireHandle& handle) {
 }
 
 template <typename T>
-T* wireHandlePtr(const D9CWireHandle& handle) {
-  const uint64_t value = wireHandleValue(handle);
+T* wireValuePtr(uint64_t value) {
   if (!value) {
     return nullptr;
   }
@@ -26,6 +25,11 @@ T* wireHandlePtr(const D9CWireHandle& handle) {
     }
   }
   return reinterpret_cast<T*>(static_cast<uintptr_t>(value));
+}
+
+template <typename T>
+T* wireHandlePtr(const D9CWireHandle& handle) {
+  return wireValuePtr<T>(wireHandleValue(handle));
 }
 
 bool failed(int32_t hr) {
@@ -78,6 +82,8 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
     const auto& state = packet.renderStates[i];
     if (d->stateBlockRecording) {
       d->stateBlockRenderStates.insert(state.state);
+      d->stateBlockRenderStateValues[state.state] = state.value;
+      continue;
     }
     const int32_t hr = d->iface->SetRenderState(state.state, state.value);
     if (failed(hr)) {
@@ -295,7 +301,7 @@ int32_t applyDrawPrimitiveUPPacket(D9CDevice* d,
   auto span = std::span<const dxmt9::core::u8>(record + packet.vertexDataOffset,
                                                packet.vertexDataSize);
   return d->dev().drawPrimitiveUP(ptFromD3D(packet.state.primitiveType),
-                                  packet.primitiveCount, span);
+                                  packet.primitiveCount, span, packet.stride);
 }
 
 int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
@@ -316,7 +322,7 @@ int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
                                                     packet.indexDataSize);
   return d->dev().drawIndexedPrimitiveUP(ptFromD3D(packet.state.primitiveType),
                                          packet.primitiveCount, vertexSpan, indexSpan,
-                                         idxTypeFromD3D(packet.indexFormat));
+                                         idxTypeFromD3D(packet.indexFormat), packet.stride);
 }
 
 }  // namespace
@@ -525,6 +531,8 @@ extern "C" int32_t dxmt9c_device_light_enable(D9CDevice* d, uint32_t i, uint32_t
 extern "C" int32_t dxmt9c_device_set_render_state(D9CDevice* d, uint32_t s, uint32_t v) {
   if (d && d->stateBlockRecording) {
     d->stateBlockRenderStates.insert(s);
+    d->stateBlockRenderStateValues[s] = v;
+    return dxmt9::core::D3D_OK;
   }
   return d->iface->SetRenderState(s, v);
 }
@@ -786,22 +794,22 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     coreEntries.reserve(chunk->handleCount);
     for (std::uint32_t i = 0; i < chunk->handleCount; ++i) {
       const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(handles[i].kind);
-      const auto wirePtr = static_cast<uintptr_t>(handles[i].handle);
+      const auto wirePtr = handles[i].handle;
       if (wirePtr == 0) continue;
       dxmt9::core::Handle resolved{};
       switch (kind) {
       case dxmt9::core::ChunkHandleKind::Texture: {
-        auto* wrapper = reinterpret_cast<D9CTexture*>(wirePtr);
+        auto* wrapper = wireValuePtr<D9CTexture>(wirePtr);
         if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
         break;
       }
       case dxmt9::core::ChunkHandleKind::Surface: {
-        auto* wrapper = reinterpret_cast<D9CSurface*>(wirePtr);
+        auto* wrapper = wireValuePtr<D9CSurface>(wirePtr);
         if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
         break;
       }
       case dxmt9::core::ChunkHandleKind::Buffer: {
-        auto* wrapper = reinterpret_cast<D9CBuffer*>(wirePtr);
+        auto* wrapper = wireValuePtr<D9CBuffer>(wirePtr);
         if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
         break;
       }
@@ -1002,8 +1010,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       D9CCommandRecordStretchRect sr{};
       std::memcpy(&sr, record, sizeof(sr));
-      auto* srcSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(sr.srcWire));
-      auto* dstSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(sr.dstWire));
+      auto* srcSurf = wireValuePtr<D9CSurface>(sr.srcWire);
+      auto* dstSurf = wireValuePtr<D9CSurface>(sr.dstWire);
       const auto* srcR = sr.hasSrcRect ? &sr.srcRect : nullptr;
       const auto* dstR = sr.hasDstRect ? &sr.dstRect : nullptr;
       hr = dxmt9c_device_stretch_rect(d, srcSurf, srcR, dstSurf, dstR, sr.filter);
@@ -1015,7 +1023,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       D9CCommandRecordColorFill cf{};
       std::memcpy(&cf, record, sizeof(cf));
-      auto* surf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(cf.surfaceWire));
+      auto* surf = wireValuePtr<D9CSurface>(cf.surfaceWire);
       const auto* rect = cf.hasRect ? &cf.rect : nullptr;
       hr = dxmt9c_device_color_fill(d, surf, rect, cf.colorARGB);
       break;
@@ -1026,8 +1034,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       D9CCommandRecordUpdateTexture ut{};
       std::memcpy(&ut, record, sizeof(ut));
-      auto* srcTex = reinterpret_cast<D9CTexture*>(static_cast<uintptr_t>(ut.srcWire));
-      auto* dstTex = reinterpret_cast<D9CTexture*>(static_cast<uintptr_t>(ut.dstWire));
+      auto* srcTex = wireValuePtr<D9CTexture>(ut.srcWire);
+      auto* dstTex = wireValuePtr<D9CTexture>(ut.dstWire);
       hr = dxmt9c_device_update_texture(d, srcTex, dstTex);
       break;
     }
@@ -1037,8 +1045,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       D9CCommandRecordUpdateSurface us{};
       std::memcpy(&us, record, sizeof(us));
-      auto* srcSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(us.srcWire));
-      auto* dstSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(us.dstWire));
+      auto* srcSurf = wireValuePtr<D9CSurface>(us.srcWire);
+      auto* dstSurf = wireValuePtr<D9CSurface>(us.dstWire);
       const auto* srcRect = us.hasSrcRect ? &us.srcRect : nullptr;
       const auto* dstPoint = us.hasDstPoint ? &us.dstPoint : nullptr;
       hr = dxmt9c_device_update_surface(d, srcSurf, srcRect, dstSurf, dstPoint);
@@ -1050,7 +1058,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       D9CCommandRecordQueryIssue qi{};
       std::memcpy(&qi, record, sizeof(qi));
-      auto* query = reinterpret_cast<D9CQuery*>(static_cast<uintptr_t>(qi.queryWire));
+      auto* query = wireValuePtr<D9CQuery>(qi.queryWire);
       hr = dxmt9c_query_issue(query, qi.flags);
       break;
     }
@@ -1060,8 +1068,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       D9CCommandRecordReadback rb{};
       std::memcpy(&rb, record, sizeof(rb));
-      auto* srcSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(rb.srcWire));
-      auto* dstSurf = reinterpret_cast<D9CSurface*>(static_cast<uintptr_t>(rb.dstWire));
+      auto* srcSurf = wireValuePtr<D9CSurface>(rb.srcWire);
+      auto* dstSurf = wireValuePtr<D9CSurface>(rb.dstWire);
       // Routes to the same backend path as the legacy bridge call —
       // encodes the copy + waits for GPU completion + writes pixels
       // into dst. HRESULT propagates back through commit_chunk's
@@ -1201,7 +1209,7 @@ extern "C" int32_t dxmt9c_device_draw_primitive_up(D9CDevice* d, uint32_t type,
   }
   auto span = std::span<const dxmt9::core::u8>(
       reinterpret_cast<const dxmt9::core::u8*>(data), bytes);
-  return d->iface->DrawPrimitiveUP(ptFromD3D(type), count, span);
+  return d->dev().drawPrimitiveUP(ptFromD3D(type), count, span, stride);
 }
 
 extern "C" int32_t dxmt9c_device_draw_indexed_primitive_up(D9CDevice* d, uint32_t type,
@@ -1227,7 +1235,7 @@ extern "C" int32_t dxmt9c_device_draw_indexed_primitive_up(D9CDevice* d, uint32_
   auto indexSpan = std::span<const dxmt9::core::u8>(
       reinterpret_cast<const dxmt9::core::u8*>(idxData), indexBytes);
   return d->iface->DrawIndexedPrimitiveUP(ptFromD3D(type), count, vertexSpan, indexSpan,
-                                          idxTypeFromD3D(idxFmt));
+                                          idxTypeFromD3D(idxFmt), stride);
 }
 
 extern "C" int32_t dxmt9c_device_update_surface(D9CDevice* d, D9CSurface* src,

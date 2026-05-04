@@ -160,6 +160,11 @@ ChunkObservation makeChunkObservation(const MetalCommandRecord& command,
           .kind = ChunkObservationKind::Draw,
           .compatFlags = compatFlagsForDraw(command.draw, resolveSurfaceFlags),
       };
+    case MetalCommandRecord::Kind::DrawRun:
+      return ChunkObservation{
+          .kind = ChunkObservationKind::Draw,
+          .compatFlags = compatFlagsForDraw(command.drawRun.base, resolveSurfaceFlags),
+      };
     case MetalCommandRecord::Kind::Clear:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,

@@ -43,23 +43,6 @@ core::SwapDesc makeSwapDesc(const core::PresentParameters& params) {
   return desc;
 }
 
-core::PresentParameters applyFullscreenMode(core::PresentParameters params, const core::DisplayModeEx* fullscreenMode) {
-  if (!fullscreenMode) {
-    return params;
-  }
-  params.windowed = false;
-  if (fullscreenMode->width != 0) {
-    params.backBufferWidth = fullscreenMode->width;
-  }
-  if (fullscreenMode->height != 0) {
-    params.backBufferHeight = fullscreenMode->height;
-  }
-  if (fullscreenMode->format != core::Format::Unknown) {
-    params.backBufferFormat = fullscreenMode->format;
-  }
-  return params;
-}
-
 core::DisplayModeEx makeDisplayModeEx(const core::DisplayMode& mode) {
   return {mode.width, mode.height, mode.refreshRate, mode.format, core::DisplayScanLineOrdering::Progressive};
 }
@@ -189,14 +172,17 @@ class Direct3DDevice9Impl final : public IDirect3DDevice9Ex, public RefCounted<D
                                          indexType);
   }
   core::HResult DrawPrimitiveUP(core::PrimitiveType type, u32 primitiveCount,
-                                std::span<const core::u8> vertexData) override {
-    return device_->drawPrimitiveUP(type, primitiveCount, vertexData);
+                                std::span<const core::u8> vertexData,
+                                u32 vertexStride) override {
+    return device_->drawPrimitiveUP(type, primitiveCount, vertexData, vertexStride);
   }
   core::HResult DrawIndexedPrimitiveUP(core::PrimitiveType type, u32 primitiveCount,
                                        std::span<const core::u8> vertexData,
                                        std::span<const core::u8> indexData,
-                                       core::IndexType indexType) override {
-    return device_->drawIndexedPrimitiveUP(type, primitiveCount, vertexData, indexData, indexType);
+                                       core::IndexType indexType,
+                                       u32 vertexStride) override {
+    return device_->drawIndexedPrimitiveUP(type, primitiveCount, vertexData, indexData,
+                                           indexType, vertexStride);
   }
   core::HResult SetRenderState(u32 key, u32 value) override { return device_->setRenderState(key, value); }
   u32 GetRenderState(u32 key) const override { return device_->getRenderState(key); }
@@ -496,8 +482,7 @@ class Direct3D9Impl final : public IDirect3D9Ex, public RefCounted<Direct3D9Impl
   IDirect3DDevice9Ex* CreateDeviceEx(size_t adapterIndex, const core::PresentParameters& params,
                                      const DisplayModeEx* fullscreenMode = nullptr,
                                      u32 behaviorFlags = 0) override {
-    auto adjusted = applyFullscreenMode(params, fullscreenMode);
-    auto device = factory_.createDevice(adapterIndex, adjusted, behaviorFlags);
+    auto device = factory_.createDeviceEx(adapterIndex, params, fullscreenMode, behaviorFlags);
     if (!device) {
       return nullptr;
     }

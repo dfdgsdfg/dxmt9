@@ -60,7 +60,6 @@ using REFCLSID = const CLSID&;
 
 #ifndef __IUnknown_INTERFACE_DEFINED__
 struct IUnknown {
-  virtual ~IUnknown() = default;
   virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) = 0;
   virtual ULONG STDMETHODCALLTYPE AddRef() = 0;
   virtual ULONG STDMETHODCALLTYPE Release() = 0;

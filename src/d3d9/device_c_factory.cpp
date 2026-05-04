@@ -5,6 +5,28 @@
 
 using namespace dxmt9::d3d9::devicec;
 
+namespace {
+
+uint32_t usageFromResourceType(uint32_t resourceType) {
+  using namespace dxmt9::core;
+  switch (resourceType) {
+    case 1:  // D3DRTYPE_SURFACE
+    case 2:  // D3DRTYPE_VOLUME
+    case 3:  // D3DRTYPE_TEXTURE
+    case 4:  // D3DRTYPE_VOLUMETEXTURE
+    case 5:  // D3DRTYPE_CUBETEXTURE
+      return UsageTexture;
+    case 6:  // D3DRTYPE_VERTEXBUFFER
+      return UsageVertexBuffer;
+    case 7:  // D3DRTYPE_INDEXBUFFER
+      return UsageIndexBuffer;
+    default:
+      return 0;
+  }
+}
+
+}  // namespace
+
 extern "C" D9CFactory* dxmt9c_factory_create(void) {
   dxmt9DebugLog("factory_create begin");
 
@@ -139,6 +161,13 @@ extern "C" int32_t dxmt9c_factory_check_device_format(D9CFactory* f, uint32_t ad
   return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt), usageFromD3D(usage));
 }
 
+extern "C" int32_t dxmt9c_factory_check_device_format2(D9CFactory* f, uint32_t adapter,
+                                                       uint32_t d3dFmt, uint32_t usage,
+                                                       uint32_t resourceType) {
+  return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt),
+                                     usageFromD3D(usage) | usageFromResourceType(resourceType));
+}
+
 extern "C" int32_t dxmt9c_factory_check_device_multisample(D9CFactory* f, uint32_t adapter,
                                                            uint32_t d3dFmt, uint32_t msType,
                                                            uint32_t windowed) {
@@ -186,8 +215,21 @@ extern "C" D9CDevice* dxmt9c_factory_create_device(D9CFactory* f, uint32_t adapt
                                                    const D9CPresentParams* pp,
                                                    uint32_t behaviorFlags,
                                                    const D9CDisplayModeEx* fullscreen) {
-  if (!pp) {
-    return nullptr;
+  D9CDevice* device = nullptr;
+  const int32_t hr = dxmt9c_factory_create_device2(f, adapter, pp, behaviorFlags, fullscreen, &device);
+  return hr == dxmt9::core::D3D_OK ? device : nullptr;
+}
+
+extern "C" int32_t dxmt9c_factory_create_device2(D9CFactory* f, uint32_t adapter,
+                                                 const D9CPresentParams* pp,
+                                                 uint32_t behaviorFlags,
+                                                 const D9CDisplayModeEx* fullscreen,
+                                                 D9CDevice** outDevice) {
+  if (outDevice) {
+    *outDevice = nullptr;
+  }
+  if (!f || !f->iface || !pp || !outDevice) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
   }
   dxmt9DebugLog(
       "factory_create_device begin adapter=%u windowed=%u size=%ux%u fmt=%u hwnd=%llu "
@@ -205,8 +247,9 @@ extern "C" D9CDevice* dxmt9c_factory_create_device(D9CFactory* f, uint32_t adapt
   }
   if (!dev) {
     dxmt9DebugLog("factory_create_device failed");
-    return nullptr;
+    return dxmt9::core::D3DERR_INVALIDCALL;
   }
   dxmt9DebugLog("factory_create_device ok iface=%p", static_cast<void*>(dev));
-  return new D9CDevice(dev);
+  *outDevice = new D9CDevice(dev);
+  return dxmt9::core::D3D_OK;
 }

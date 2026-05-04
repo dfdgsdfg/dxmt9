@@ -1,6 +1,7 @@
 #include "dxmt9_shader_translator.hpp"
 
 #include "dxmt9_d3d9_bytecode.hpp"
+#include "dxmt9_debug_trace.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "dxmt9/assert.hpp"
@@ -473,7 +474,7 @@ u32 fixedOperandCount(u32 opcode) {
 std::string readOperandExpression(const D3DDecodedInstruction& instruction, const D3DRegisterRef& reg,
                                   const std::string& vertexInputs, const std::string& pixelInputs,
                                   bool vertexStage, const std::string& outPosition, const std::string& outColor,
-                                  const std::string& outSecondaryColor, const std::string& outTexcoord0,
+                                  const std::string& outSecondaryColor, const std::string& outTexcoord,
                                   const std::string& outFogFactor, const std::string& outPointSize,
                                   const std::string& tempPrefix, const std::string& constPrefix,
                                   const std::string& intPrefix, const std::string& boolPrefix,
@@ -525,8 +526,11 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       }
       return "float4(0.0f)";
     case D3DRegisterKind::TexCoordOut:
-      return outTexcoord0;
+      return outTexcoord + "[" + std::to_string(std::min<u32>(reg.index, kMaxTextureStages - 1u)) + "]";
     case D3DRegisterKind::ColorOut:
+      if (!vertexStage) {
+        return outColor + "[" + std::to_string(std::min<u32>(reg.index, kMaxRenderTargets - 1u)) + "]";
+      }
       return outColor;
     case D3DRegisterKind::DepthOut:
       return "float4(0.0f)";
@@ -617,6 +621,14 @@ struct ConstantUsage {
   u32 boolCount = 0;
 };
 
+struct PixelInputSemantic {
+  bool valid = false;
+  u32 usage = 0;
+  u32 usageIndex = 0;
+};
+
+using PixelInputSemantics = std::array<PixelInputSemantic, 16>;
+
 bool opcodeWritesFirstOperand(u32 opcode) {
   switch (opcode) {
     case kD3DSIO_DEF:
@@ -663,6 +675,111 @@ bool opcodeWritesFirstOperand(u32 opcode) {
       return true;
     default:
       return false;
+  }
+}
+
+PixelInputSemantics collectPixelInputSemantics(const SpirvModule& module) {
+  PixelInputSemantics semantics{};
+  if (module.stage != D3DShaderStage::Pixel) {
+    return semantics;
+  }
+  for (const auto& instruction : module.instructions) {
+    if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
+      continue;
+    }
+    const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
+    if (dst.kind != D3DRegisterKind::Input || dst.index >= semantics.size()) {
+      continue;
+    }
+    const u32 semanticToken = instruction.operands[0];
+    semantics[dst.index] = PixelInputSemantic{
+        .valid = true,
+        .usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT,
+        .usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT,
+    };
+  }
+  return semantics;
+}
+
+u32 pixelColorOutputCount(const SpirvModule& module) {
+  if (module.stage != D3DShaderStage::Pixel) {
+    return 1u;
+  }
+  u32 count = 1u;
+  for (const auto& instruction : module.instructions) {
+    if (instruction.operands.empty() || !opcodeWritesFirstOperand(instruction.opcode)) {
+      continue;
+    }
+    const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+    if (dst.kind == D3DRegisterKind::ColorOut && dst.index < kMaxRenderTargets) {
+      count = std::max(count, dst.index + 1u);
+    }
+  }
+  return count;
+}
+
+bool pixelWritesDepth(const SpirvModule& module) {
+  if (module.stage != D3DShaderStage::Pixel) {
+    return false;
+  }
+  for (const auto& instruction : module.instructions) {
+    if (instruction.operands.empty() || !opcodeWritesFirstOperand(instruction.opcode)) {
+      continue;
+    }
+    const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+    if (dst.kind == D3DRegisterKind::DepthOut) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isTextureSampleOpcode(u32 opcode) {
+  return opcode == kD3DSIO_TEX ||
+         opcode == kD3DSIO_TEXLDD ||
+         opcode == kD3DSIO_TEXLDL;
+}
+
+u32 textureSamplerIndex(const D3DDecodedInstruction& instruction, D3DShaderStage stage) {
+  for (size_t i = 1; i < instruction.operands.size(); ++i) {
+    const auto reg = decodeRegisterRef(instruction.operands[i], stage);
+    if (reg.kind == D3DRegisterKind::Sampler) {
+      return std::min<u32>(reg.index, kMaxSamplers - 1u);
+    }
+  }
+  return 0u;
+}
+
+std::array<bool, kMaxSamplers> collectPixelSamplerUsage(const SpirvModule& module, const DrawDesc& desc) {
+  std::array<bool, kMaxSamplers> usage{};
+  if (module.stage != D3DShaderStage::Pixel) {
+    return usage;
+  }
+  for (const auto& instruction : module.instructions) {
+    if (isTextureSampleOpcode(instruction.opcode)) {
+      usage[textureSamplerIndex(instruction, module.stage)] = true;
+    }
+  }
+  if (!std::any_of(usage.begin(), usage.end(), [](bool used) { return used; }) &&
+      (module.usesTexture || desc.textures[0].handle != Handle{})) {
+    usage[0] = true;
+  }
+  return usage;
+}
+
+void emitFragmentTextureArguments(std::ostringstream& out,
+                                  const std::array<bool, kMaxSamplers>& samplerUsage) {
+  bool first = true;
+  for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
+    if (!samplerUsage[stage]) {
+      continue;
+    }
+    if (!first) {
+      out << ", ";
+    }
+    first = false;
+    out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], "
+        << "sampler samp" << stage << " [[sampler(" << stage << ")]]";
   }
 }
 
@@ -821,16 +938,57 @@ void emitPredicateBindings(std::ostringstream& out, bool usesPredicateRegisters)
   out << "  for (uint i = 0; i < " << kMaxBoolConstants << "; ++i) { p[i] = false; }\n";
 }
 
-std::string readPixelInputExpression(u32 token, const std::string& pixelInputs) {
+std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
+                                             const std::string& pixelInputs) {
+  switch (semantic.usage) {
+    case kD3DDeclUsagePosition:
+    case kD3DDeclUsagePositionT:
+      return pixelInputs + ".position";
+    case kD3DDeclUsagePSize:
+      return "float4(" + pixelInputs + ".pointSize)";
+    case kD3DDeclUsageTexcoord:
+      return "dxmt9_select_texcoord(" + pixelInputs + ", " + std::to_string(semantic.usageIndex) + "u)";
+    case kD3DDeclUsageColor:
+      if (semantic.usageIndex == 0) {
+        return "float4(" + pixelInputs + ".color)";
+      }
+      if (semantic.usageIndex == 1) {
+        return "float4(" + pixelInputs + ".secondaryColor)";
+      }
+      break;
+    case kD3DDeclUsageFog:
+      return "float4(" + pixelInputs + ".fogFactor)";
+    default:
+      break;
+  }
+  return "float4(0.0f)";
+}
+
+std::string readPixelInputFallbackExpression(u32 index, const std::string& pixelInputs) {
+  if (index == 0) {
+    return "float4(" + pixelInputs + ".color)";
+  }
+  if (index == 1) {
+    return "dxmt9_select_texcoord(" + pixelInputs + ", 0u)";
+  }
+  if (index == 2) {
+    return "float4(" + pixelInputs + ".secondaryColor)";
+  }
+  if (index == 3) {
+    return "float4(" + pixelInputs + ".fogFactor)";
+  }
+  return "float4(0.0f)";
+}
+
+std::string readPixelInputExpression(u32 token,
+                                     const std::string& pixelInputs,
+                                     const PixelInputSemantics& semantics) {
   const u32 type = decodeRegisterType(token);
   const u32 index = decodeRegisterIndex(token);
   switch (type) {
     case kD3DSPR_INPUT:
-      if (index == 0) {
-        return "float4(" + pixelInputs + ".color)";
-      }
-      if (index == 1) {
-        return "float4(" + pixelInputs + ".secondaryColor)";
+      if (index < semantics.size() && semantics[index].valid) {
+        return readPixelInputSemanticExpression(semantics[index], pixelInputs);
       }
       break;
     case kD3DSPR_ADDR:
@@ -850,19 +1008,7 @@ std::string readPixelInputExpression(u32 token, const std::string& pixelInputs) 
       break;
   }
 
-  if (index == 0) {
-    return "float4(" + pixelInputs + ".color)";
-  }
-  if (index == 1) {
-    return "dxmt9_select_texcoord(" + pixelInputs + ", 0u)";
-  }
-  if (index == 2) {
-    return "float4(" + pixelInputs + ".secondaryColor)";
-  }
-  if (index == 3) {
-    return "float4(" + pixelInputs + ".fogFactor)";
-  }
-  return "float4(0.0f)";
+  return readPixelInputFallbackExpression(index, pixelInputs);
 }
 
 struct FlowBlock {
@@ -1056,9 +1202,29 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     out << "  float4 outPosition = float4(dxmt9_positions[vid % 3], 0.0, 1.0);\n";
     out << "  float4 outColor = float4(1.0f);\n";
     out << "  float4 outSecondaryColor = float4(0.0f);\n";
-    out << "  float4 outTexcoord0 = float4(0.0f);\n";
+    out << "  float4 outTexcoord[" << kMaxTextureStages << "];\n";
+    out << "  for (uint i = 0; i < " << kMaxTextureStages
+        << "u; ++i) { outTexcoord[i] = float4(0.0f, 0.0f, 0.0f, 1.0f); }\n";
+    out << "  float4 ignoredTexcoord = float4(0.0f);\n";
     out << "  float outFogFactor = 1.0f;\n";
     out << "  float outPointSize = 1.0f;\n";
+    if (::dxmt9::debug::forceFullscreenVertexShader()) {
+      out << "  out.position = outPosition;\n";
+      out << "  out.color = outColor;\n";
+      out << "  out.secondaryColor = outSecondaryColor;\n";
+      for (size_t i = 0; i < kMaxTextureStages; ++i) {
+        out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
+      }
+      out << "  out.fogFactor = outFogFactor;\n";
+      out << "  out.pointSize = outPointSize;\n";
+      if (desc.clipPlaneMask != 0) {
+        out << "  for (uint i = 0; i < 6; ++i) { out.clipDistance[i] = 1.0f; }\n";
+      }
+      out << "  return out;\n";
+      out << "}\n";
+      out << "// decoded d3d hash " << module.hash << "\n";
+      return out.str();
+    }
     out << "  float4 vin[16];\n";
     out << "  for (uint i = 0; i < 16u; ++i) { vin[i] = float4(0.0f); }\n";
     out << "  vin[0] = float4(dxmt9_positions[vid % 3], 0.0f, 1.0f);\n";
@@ -1099,6 +1265,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
 	    out << "  int a0 = 0;\n";
 	    out << "  int aL = 0;\n";
 	    out << "  float4 r[32];\n";
+	    out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
 	    const auto constantUsage = collectConstantUsage(module);
 	    emitConstantBindings(out, true, constantUsage);
 	    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
@@ -1139,7 +1306,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         const auto token = instruction.operands[index];
         const auto reg = decodeRegisterRef(token, module.stage);
         std::string expr = readOperandExpression(instruction, reg, "vin", "in", true,
-                                                 "outPosition", "outColor", "outSecondaryColor", "outTexcoord0",
+                                                 "outPosition", "outColor", "outSecondaryColor", "outTexcoord",
                                                  "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
                                                  "p");
         expr = applySwizzle(expr, decodeSwizzle(token));
@@ -1147,11 +1314,11 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         return expr;
       };
 
-      auto emitMaskedAssign = [&](const std::string& target, const std::string& value, u32 mask, bool scalar = false) {
-        if (scalar) {
-          out << "  " << target << " = " << value << ".x;\n";
-          return;
-        }
+	    auto emitMaskedAssign = [&](const std::string& target, const std::string& value, u32 mask, bool scalar = false) {
+	      if (scalar) {
+	        out << "  " << target << " = " << value << ".x;\n";
+	        return;
+	      }
         const std::string finalValue = decodeDestModifier(instruction.operands.empty() ? 0u : instruction.operands[0]) ==
                                                1u
                                            ? "clamp(" + value + ", float4(0.0f), float4(1.0f))"
@@ -1159,9 +1326,21 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
         if (mask == 0xfu) {
           out << "  " << target << " = " << finalValue << ";\n";
         } else {
-          out << "  " << target << " = dxmt9_merge(" << target << ", " << finalValue << ", " << mask << "u);\n";
-        }
-      };
+	        out << "  " << target << " = dxmt9_merge(" << target << ", " << finalValue << ", " << mask << "u);\n";
+	      }
+	    };
+	    auto pixelColorTarget = [](u32 index) {
+	      if (index >= kMaxRenderTargets) {
+	        return std::string("ignoredColor");
+	      }
+	      return std::string("outColor[") + std::to_string(index) + "]";
+	    };
+	    auto texcoordTarget = [](u32 index) {
+	      if (index >= kMaxTextureStages) {
+	        return std::string("ignoredTexcoord");
+	      }
+	      return std::string("outTexcoord[") + std::to_string(index) + "]";
+	    };
 
       if (instruction.opcode == kD3DSIO_LABEL) {
         if (instruction.operands.empty()) {
@@ -1288,19 +1467,11 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
               }
               break;
             case D3DRegisterKind::TexCoordOut:
-              if (dst.index == 0) {
-                emitMaskedAssign("outTexcoord0", value, dstMask);
-              } else {
-                throw std::runtime_error("unsupported texcoord output register");
-              }
+              emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
               break;
-            case D3DRegisterKind::ColorOut:
-              if (dst.index == 0) {
-                emitMaskedAssign("outColor", value, dstMask);
-              } else {
-                throw std::runtime_error("unsupported color output register");
-              }
-              break;
+	          case D3DRegisterKind::ColorOut:
+	            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
+	            break;
             case D3DRegisterKind::ConstFloat:
               out << "  cFloat[" << dst.index << "] = " << value << ";\n";
               break;
@@ -1569,19 +1740,11 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
               }
               break;
             case D3DRegisterKind::TexCoordOut:
-              if (dst.index == 0) {
-                emitMaskedAssign("outTexcoord0", value, dstMask);
-              } else {
-                throw std::runtime_error("unsupported texcoord output register");
-              }
+              emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
               break;
-            case D3DRegisterKind::ColorOut:
-              if (dst.index == 0) {
-                emitMaskedAssign("outColor", value, dstMask);
-              } else {
-                throw std::runtime_error("unsupported color output register");
-              }
-              break;
+	          case D3DRegisterKind::ColorOut:
+	            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
+	            break;
             case D3DRegisterKind::DepthOut:
               throw std::runtime_error("depth output is not supported yet");
             default:
@@ -1660,11 +1823,13 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     }
 
     out << "  out.position = outPosition;\n";
+    if (::dxmt9::debug::flipTranslatedVertexY()) {
+      out << "  out.position.y = -out.position.y;\n";
+    }
     out << "  out.color = outColor;\n";
     out << "  out.secondaryColor = outSecondaryColor;\n";
-    out << "  out.texcoord0 = outTexcoord0;\n";
-    for (size_t i = 1; i < kMaxTextureStages; ++i) {
-      out << "  out.texcoord" << i << " = float4(0.0f, 0.0f, 0.0f, 1.0f);\n";
+    for (size_t i = 0; i < kMaxTextureStages; ++i) {
+      out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
     }
     out << "  out.fogFactor = outFogFactor;\n";
     out << "  out.pointSize = outPointSize;\n";
@@ -1682,7 +1847,9 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     return out.str();
   }
 
-  const bool textured = module.usesTexture || desc.textures[0].handle != Handle{};
+  const auto samplerUsage = collectPixelSamplerUsage(module, desc);
+  const auto pixelInputSemantics = collectPixelInputSemantics(module);
+  const bool textured = std::any_of(samplerUsage.begin(), samplerUsage.end(), [](bool used) { return used; });
   const bool traceShaderInputs = [] {
     const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
@@ -1701,22 +1868,89 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     std::fprintf(stderr, "%s\n", trace.str().c_str());
     std::fflush(stderr);
   }
+  const u32 colorOutputCount = pixelColorOutputCount(module);
+  const bool writesDepth = pixelWritesDepth(module);
+  const bool usesFragmentOutStruct = colorOutputCount > 1u || writesDepth;
+  if (usesFragmentOutStruct) {
+    out << "struct FSOut {\n";
+    for (u32 i = 0; i < colorOutputCount; ++i) {
+      out << "  float4 color" << i << " [[color(" << i << ")]];\n";
+    }
+    if (writesDepth) {
+      out << "  float depth [[depth(any)]];\n";
+    }
+    out << "};\n";
+  }
+
+  const char* fragmentReturnType = usesFragmentOutStruct ? "FSOut" : "float4";
   if (textured) {
-    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
-    out << "texture2d<float> tex0 [[texture(0)]], sampler samp0 [[sampler(0)]]) {\n";
+    out << "fragment " << fragmentReturnType
+        << " dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
+    emitFragmentTextureArguments(out, samplerUsage);
+    out << ") {\n";
   } else {
-    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
+    out << "fragment " << fragmentReturnType
+        << " dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
+  }
+  auto emitFragmentDebugReturn = [&](std::string_view valueExpr) {
+    if (usesFragmentOutStruct) {
+      out << "  FSOut result;\n";
+      for (u32 i = 0; i < colorOutputCount; ++i) {
+        out << "  result.color" << i << " = " << valueExpr << ";\n";
+      }
+      if (writesDepth) {
+        out << "  result.depth = in.position.z;\n";
+      }
+      out << "  return result;\n";
+    } else {
+      out << "  return " << valueExpr << ";\n";
+    }
+  };
+  if (::dxmt9::debug::forceFragmentShaderColor()) {
+    emitFragmentDebugReturn("float4(1.0f, 0.0f, 1.0f, 1.0f)");
+    out << "}\n";
+    out << "// decoded d3d hash " << module.hash << "\n";
+    return out.str();
+  }
+  if (const char* mode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE"); mode && mode[0] != '\0') {
+    if (std::strcmp(mode, "uv") == 0) {
+      emitFragmentDebugReturn("float4(fract(dxmt9_select_texcoord(in, 0u).xy), 0.0f, 1.0f)");
+    } else if (std::strcmp(mode, "uv_saturate") == 0) {
+      emitFragmentDebugReturn("float4(saturate(dxmt9_select_texcoord(in, 0u).xy), 0.0f, 1.0f)");
+    } else if (textured && std::strcmp(mode, "tex0_center") == 0) {
+      emitFragmentDebugReturn("tex0.sample(samp0, float2(0.5f, 0.5f))");
+    } else if (textured && std::strcmp(mode, "tex0_uv") == 0) {
+      emitFragmentDebugReturn("tex0.sample(samp0, dxmt9_select_texcoord(in, 0u).xy)");
+    } else if (textured && std::strcmp(mode, "tex0_uv_clamp") == 0) {
+      emitFragmentDebugReturn("tex0.sample(samp0, clamp(dxmt9_select_texcoord(in, 0u).xy, float2(0.0f), float2(1.0f)))");
+    } else if (textured && std::strcmp(mode, "tex0_uv_flip") == 0) {
+      emitFragmentDebugReturn("tex0.sample(samp0, float2(dxmt9_select_texcoord(in, 0u).x, 1.0f - dxmt9_select_texcoord(in, 0u).y))");
+    } else {
+      emitFragmentDebugReturn("float4(0.0f, 1.0f, 0.0f, 1.0f)");
+    }
+    out << "}\n";
+    out << "// decoded d3d hash " << module.hash << "\n";
+    return out.str();
   }
   out << "  float4 color = float4(1.0f);\n";
-  out << "  float4 outColor = float4(1.0f);\n";
+  out << "  float4 outColor[" << kMaxRenderTargets << "];\n";
+  for (u32 i = 0; i < kMaxRenderTargets; ++i) {
+    out << "  outColor[" << i << "] = float4(1.0f);\n";
+  }
+  out << "  float4 ignoredColor = float4(0.0f);\n";
   out << "  float4 outSecondaryColor = float4(0.0f);\n";
-  out << "  float4 outTexcoord0 = float4(0.0f);\n";
+  out << "  float4 outTexcoord[" << kMaxTextureStages << "];\n";
+  out << "  for (uint i = 0; i < " << kMaxTextureStages
+      << "u; ++i) { outTexcoord[i] = float4(0.0f, 0.0f, 0.0f, 1.0f); }\n";
+  out << "  float4 ignoredTexcoord = float4(0.0f);\n";
   out << "  float4 outPosition = float4(0.0f);\n";
+  out << "  float outDepth = in.position.z;\n";
   out << "  float outFogFactor = 1.0f;\n";
   out << "  float outPointSize = 1.0f;\n";
 	  out << "  int a0 = 0;\n";
 	  out << "  int aL = 0;\n";
 	  out << "  float4 r[32];\n";
+	  out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
 	  const auto constantUsage = collectConstantUsage(module);
 	  emitConstantBindings(out, false, constantUsage);
 	  emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
@@ -1758,10 +1992,10 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       const auto reg = decodeRegisterRef(token, module.stage);
       std::string expr;
       if (reg.kind == D3DRegisterKind::Input) {
-        expr = readPixelInputExpression(token, "in");
+        expr = readPixelInputExpression(token, "in", pixelInputSemantics);
       } else {
         expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
-                                     "outColor", "outSecondaryColor", "outTexcoord0", "outFogFactor",
+                                     "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
                                      "outPointSize", "r", "cFloat", "cInt", "cBool", "p");
       }
       expr = applySwizzle(expr, decodeSwizzle(token));
@@ -1783,6 +2017,21 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       } else {
         out << "  " << target << " = dxmt9_merge(" << target << ", " << finalValue << ", " << mask << "u);\n";
       }
+    };
+    auto pixelColorTarget = [](u32 index) {
+      if (index >= kMaxRenderTargets) {
+        return std::string("ignoredColor");
+      }
+      return std::string("outColor[") + std::to_string(index) + "]";
+    };
+    auto texcoordTarget = [](u32 index) {
+      if (index >= kMaxTextureStages) {
+        return std::string("ignoredTexcoord");
+      }
+      return std::string("outTexcoord[") + std::to_string(index) + "]";
+    };
+    auto sampleCoord = [](const std::string& coord) {
+      return "float2((" + coord + ").x, 1.0f - (" + coord + ").y)";
     };
 
     if (instruction.opcode == kD3DSIO_LABEL) {
@@ -1925,18 +2174,13 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
             emitMaskedAssign("r[" + std::to_string(dst.index) + "]", value, dstMask);
             break;
           case D3DRegisterKind::ColorOut:
-            if (dst.index == 0) {
-              emitMaskedAssign("outColor", value, dstMask);
-            } else {
-              throw std::runtime_error("unsupported color output register");
-            }
+            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
             break;
           case D3DRegisterKind::TexCoordOut:
-            if (dst.index == 0) {
-              emitMaskedAssign("outTexcoord0", value, dstMask);
-            } else {
-              throw std::runtime_error("unsupported texcoord output register");
-            }
+            emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+            break;
+          case D3DRegisterKind::DepthOut:
+            emitMaskedAssign("outDepth", value, dstMask, true);
             break;
           case D3DRegisterKind::ConstFloat:
             out << "  cFloat[" << dst.index << "] = " << value << ";\n";
@@ -2157,21 +2401,36 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
           case kD3DSIO_NRM:
             value = "float4(normalize((" + readSrc(1) + ").xyz), 0.0f)";
             break;
-          case kD3DSIO_TEX:
-            value = "tex0.sample(samp0, " + readSrc(1) + ".xy)";
-            break;
+	      case kD3DSIO_TEX:
+	            {
+	              const auto sampler = textureSamplerIndex(instruction, module.stage);
+	              const auto coord = readSrc(1);
+	              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+	                      sampleCoord(coord) + ")";
+	            }
+	            break;
           case kD3DSIO_DSX:
             value = "dfdx(" + readSrc(1) + ")";
             break;
           case kD3DSIO_DSY:
             value = "dfdy(" + readSrc(1) + ")";
             break;
-          case kD3DSIO_TEXLDD:
-            value = "tex0.sample(samp0, " + readSrc(1) + ".xy)";
-            break;
-          case kD3DSIO_TEXLDL:
-            value = "tex0.sample(samp0, " + readSrc(1) + ".xy, level(" + readSrc(1) + ".w))";
-            break;
+	          case kD3DSIO_TEXLDD:
+	            {
+	              const auto sampler = textureSamplerIndex(instruction, module.stage);
+	              const auto coord = readSrc(1);
+	              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+	                      sampleCoord(coord) + ")";
+	            }
+	            break;
+	          case kD3DSIO_TEXLDL:
+	            {
+	              const auto sampler = textureSamplerIndex(instruction, module.stage);
+	              const auto coord = readSrc(1);
+	              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+	                      sampleCoord(coord) + ", level(" + coord + ".w))";
+	            }
+	            break;
           default:
             throw std::runtime_error("unsupported arithmetic opcode");
         }
@@ -2183,18 +2442,13 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
             emitMaskedAssign("r[" + std::to_string(dst.index) + "]", value, dstMask);
             break;
           case D3DRegisterKind::ColorOut:
-            if (dst.index == 0) {
-              emitMaskedAssign("outColor", value, dstMask);
-            } else {
-              throw std::runtime_error("unsupported color output register");
-            }
+            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
             break;
           case D3DRegisterKind::TexCoordOut:
-            if (dst.index == 0) {
-              emitMaskedAssign("outTexcoord0", value, dstMask);
-            } else {
-              throw std::runtime_error("unsupported texcoord output register");
-            }
+            emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+            break;
+          case D3DRegisterKind::DepthOut:
+            emitMaskedAssign("outDepth", value, dstMask, true);
             break;
           case D3DRegisterKind::ConstFloat:
             out << "  cFloat[" << dst.index << "] = " << value << ";\n";
@@ -2230,8 +2484,8 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     if (callDepth != 0) {
       throw std::runtime_error("unbalanced D3D CALL/RET");
     }
-  out << "  color = outColor;\n";
-  out << "  if (uniforms.alphaTestEnable != 0u) {\n";
+	  out << "  color = outColor[0];\n";
+	  out << "  if (uniforms.alphaTestEnable != 0u) {\n";
   out << "    bool pass = true;\n";
   out << "    switch (uniforms.alphaTestFunc) {\n";
   out << "      case 2u: pass = color.a < uniforms.alphaRef; break;\n";
@@ -2244,11 +2498,23 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   out << "      default: pass = true; break;\n";
   out << "    }\n";
   out << "    if (!pass) {\n";
-  out << "      discard_fragment();\n";
-  out << "    }\n";
-  out << "  }\n";
-  out << "  return color;\n";
-  out << "}\n";
+	  out << "      discard_fragment();\n";
+	  out << "    }\n";
+		  out << "  }\n";
+		  out << "  outColor[0] = color;\n";
+		  if (usesFragmentOutStruct) {
+		    out << "  FSOut result;\n";
+		    for (u32 i = 0; i < colorOutputCount; ++i) {
+		      out << "  result.color" << i << " = outColor[" << i << "];\n";
+		    }
+		    if (writesDepth) {
+		      out << "  result.depth = outDepth;\n";
+		    }
+		    out << "  return result;\n";
+		  } else {
+	    out << "  return color;\n";
+	  }
+	  out << "}\n";
   out << "// decoded d3d hash " << module.hash << "\n";
   return out.str();
 }

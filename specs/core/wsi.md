@@ -139,7 +139,7 @@ hosted by the paired Wine unix module:
 
 | Binary | Kind | Role |
 |---|---|---|
-| `d3d9.dll` | PE DLL | User-facing D3D9 COM exports (`Direct3DCreate9`, `Direct3DCreate9Ex`), D3D9 state shadow, and hot-path command recording |
+| `d3d9.dll` | PE DLL | User-facing D3D9 COM exports (`Direct3DCreate9`, `Direct3DCreate9Ex`, `Direct3DShaderValidatorCreate9`, `D3DPERF_*`, `DebugSetMute`, loader-safe auxiliary stubs), D3D9 state shadow, and hot-path command recording |
 | `winemetal.dll` | Wine builtin PE DLL | Shared bridge/service DLL imported by `d3d9.dll`; initializes Wine unix-call dispatch and exposes chunk/resource/frame-token ABI |
 | `winemetal.so` | Wine unix module | Native Mach-O module that hosts ObjC/Metal WSI, shader translation, provider/runtime handlers, and GPU execution |
 
@@ -209,9 +209,11 @@ On the common macOS Wine64 / Rosetta path:
 
 1. Initializes the D3D9-side wrapper state and PE-side command recorder.
 2. Ensures `winemetal.dll` is loaded as its PE bridge/service dependency.
-3. Exports `Direct3DCreate9` / `Direct3DCreate9Ex`; each calls through the
-   provider C ABI exposed by `winemetal.dll`
-   for factory creation.
+3. Exports the Windows D3D9-compatible entry-point surface validated against
+   Wine/Windows export profiles. The factory exports call through the provider C
+   ABI exposed by `winemetal.dll`; auxiliary exports such as `D3DPERF_*`,
+   `DebugSetMute`, and unsupported loader-only entries remain PE-side no-op or
+   failure stubs.
 
 `winemetal.dll` then:
 

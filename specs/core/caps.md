@@ -159,3 +159,18 @@ the value returned by `[MTLDevice maxTextureSize]` at device init time.
 
 **R-CAPS-5** `NumSimultaneousRTs` must not exceed `[MTLDevice maxColorRenderTargets]`
 if that value is less than 4 (not expected on any supported Mac).
+
+**R-CAPS-6** `CheckDeviceFormatConversion()` must be consistent with the reported
+format table, but identical source and destination formats are always accepted
+with `D3D_OK` after adapter/device-type validation. Unsupported well-formed
+conversions return `D3DERR_NOTAVAILABLE`; they must not be reported as supported
+only because both individual formats are renderable or texturable.
+
+**R-CAPS-7** `CheckDeviceMultiSampleType()` must combine caps consistency with
+Windows D3D9-compatible front-end validation, using Wine D3D9 tests as the
+behavioural oracle. `D3DMULTISAMPLE_NONE` reports exactly one quality level.
+Invalid multisample enum values return `D3DERR_INVALIDCALL`; unsupported but
+well-formed sample counts return `D3DERR_NOTAVAILABLE` and handle
+`pQualityLevels` according to Wine-test-observed behaviour. Caps must not
+advertise a sample count that the backend cannot allocate for the requested
+format/windowed combination.

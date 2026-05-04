@@ -108,11 +108,13 @@ class IDirect3DDevice9 : public IUnknown {
                                               core::i32 baseVertexIndex, u32 startIndex,
                                               core::IndexType indexType) = 0;
   virtual core::HResult DrawPrimitiveUP(core::PrimitiveType type, u32 primitiveCount,
-                                        std::span<const core::u8> vertexData) = 0;
+                                        std::span<const core::u8> vertexData,
+                                        u32 vertexStride = 0) = 0;
   virtual core::HResult DrawIndexedPrimitiveUP(core::PrimitiveType type, u32 primitiveCount,
                                                std::span<const core::u8> vertexData,
                                                std::span<const core::u8> indexData,
-                                               core::IndexType indexType) = 0;
+                                               core::IndexType indexType,
+                                               u32 vertexStride = 0) = 0;
   virtual core::HResult SetRenderState(u32 key, u32 value) = 0;
   virtual u32 GetRenderState(u32 key) const = 0;
   virtual core::HResult SetRenderStateFloat(u32 key, float value) = 0;

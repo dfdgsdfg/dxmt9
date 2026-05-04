@@ -105,6 +105,11 @@ std::optional<u32> drawTraceTextureHandle() {
   return value;
 }
 
+u32 drawCullStateValue(const DrawDesc& desc) {
+  const auto it = desc.rs.values.find(RS_CULL_MODE);
+  return it != desc.rs.values.end() ? it->second : static_cast<u32>(CullMode::Ccw);
+}
+
 void emitRenderTrace(const char* fmt, ...) {
   if (!renderTraceEnabled()) {
     return;
@@ -253,6 +258,80 @@ std::optional<DrawTraceLayout> decodeDrawTraceLayout(const DrawDesc& desc) {
   return layout;
 }
 
+u32 inferStreamZeroStride(const VertexDeclSnapshot& vertexDecl) {
+  if (vertexDecl.streams[0].stride != 0) {
+    return vertexDecl.streams[0].stride;
+  }
+
+  if (!vertexDecl.elements.empty()) {
+    u32 stride = 0;
+    for (const auto& element : vertexDecl.elements) {
+      if (element.stream != 0) {
+        continue;
+      }
+      const u32 size = declTypeSize(element.type);
+      if (size != 0) {
+        stride = std::max(stride, static_cast<u32>(element.offset + size));
+      }
+    }
+    return stride;
+  }
+
+  const u32 fvf = vertexDecl.fvf;
+  const u32 position = fvf & kFvfPositionMask;
+  u32 stride = 0;
+  if (position == kFvfXyzrhw) {
+    stride = 16u;
+  } else if (position == kFvfXyz) {
+    stride = 12u;
+  } else {
+    return 0;
+  }
+  if ((fvf & kFvfNormal) != 0) {
+    stride += 12u;
+  }
+  if ((fvf & kFvfDiffuse) != 0) {
+    stride += 4u;
+  }
+  if ((fvf & kFvfSpecular) != 0) {
+    stride += 4u;
+  }
+  const u32 texCount = (fvf & kFvfTexCountMask) >> kFvfTexCountShift;
+  for (u32 i = 0; i < texCount; ++i) {
+    stride += fvfTexcoordSize(fvf, i) * 4u;
+  }
+  return stride;
+}
+
+std::vector<u8> decomposeTriangleFanVertices(std::span<const u8> vertices,
+                                             u32 primitiveCount,
+                                             u32 stride) {
+  if (primitiveCount == 0 || stride == 0) {
+    return {};
+  }
+
+  const u32 sourceVertexCount = primitiveCount + 2u;
+  const auto requiredBytes = static_cast<size_t>(sourceVertexCount) * stride;
+  if (vertices.size() < requiredBytes) {
+    return {};
+  }
+
+  std::vector<u8> out(static_cast<size_t>(primitiveCount) * 3u * stride);
+  auto appendVertex = [&](size_t& offset, u32 index) {
+    const auto sourceOffset = static_cast<size_t>(index) * stride;
+    std::memcpy(out.data() + offset, vertices.data() + sourceOffset, stride);
+    offset += stride;
+  };
+
+  size_t offset = 0;
+  for (u32 i = 1; i + 1u < sourceVertexCount; ++i) {
+    appendVertex(offset, 0);
+    appendVertex(offset, i);
+    appendVertex(offset, i + 1u);
+  }
+  return out;
+}
+
 void emitDrawTraceDump(u64 seqId, const DrawDesc& desc, const std::shared_ptr<Buffer>& indexBuffer) {
   const auto wanted = drawTraceTextureHandle();
   if (!wanted || desc.textures.empty() || !desc.textures[0].handle || desc.textures[0].handle.value != *wanted) {
@@ -305,7 +384,8 @@ void emitDrawTraceDump(u64 seqId, const DrawDesc& desc, const std::shared_ptr<Bu
       << " stride=" << desc.vertexDecl.streams[0].stride
       << " startIndex=" << desc.startIndex
       << " baseVertex=" << desc.baseVertexIndex
-      << " primCount=" << desc.primitiveCount;
+      << " primCount=" << desc.primitiveCount
+      << " rsCull=" << drawCullStateValue(desc);
   for (size_t i = 0; i < desc.vertexDecl.elements.size(); ++i) {
     const auto& e = desc.vertexDecl.elements[i];
     out << " e" << i << "=("
@@ -361,6 +441,18 @@ void emitDrawTraceDump(u64 seqId, const DrawDesc& desc, const std::shared_ptr<Bu
       << desc.worldViewProj.m[10] << "," << desc.worldViewProj.m[11] << ")"
       << " m3=(" << desc.worldViewProj.m[12] << "," << desc.worldViewProj.m[13] << ","
       << desc.worldViewProj.m[14] << "," << desc.worldViewProj.m[15] << ")";
+  const auto appendConst = [&](const char* label, const auto& snapshot, u32 index) {
+    if (index >= snapshot.float4.size()) {
+      return;
+    }
+    const auto& v = snapshot.float4[index];
+    out << " " << label << index << "=("
+        << v[0] << "," << v[1] << "," << v[2] << "," << v[3] << ")";
+  };
+  for (u32 i = 0; i < 5; ++i) {
+    appendConst("vsC", desc.vsConst, i);
+  }
+  appendConst("psC", desc.psConst, 0);
 
   const u32 tracedRefs = std::min<u32>(12u, std::max<u32>(1u, desc.primitiveCount * 3u));
   for (u32 i = 0; i < tracedRefs; ++i) {
@@ -619,7 +711,7 @@ bool isDepthFormat(Format format) {
   }
 }
 
-bool isCompressedFormat(Format format) {
+bool isCompressedFormatImpl(Format format) {
   switch (format) {
     case Format::DXT1:
     case Format::DXT2:
@@ -1066,12 +1158,11 @@ struct NullBackendDevice final : BackendDevice {
 };
 
 u32 pitchForFormat(Format format, u32 width) {
-  const u32 bpp = bytesPerPixel(format);
-  return bpp == 0 ? 0 : bpp * width;
+  return formatRowPitch(format, width);
 }
 
 [[maybe_unused]] bool isSupportedDataFormat(Format format) {
-  return bytesPerPixel(format) != 0 && !isCompressedFormat(format) && !isDepthFormat(format);
+  return bytesPerPixel(format) != 0 && !isCompressedFormatImpl(format) && !isDepthFormat(format);
 }
 
 void fillBuffer(std::vector<u8>& bytes, u32 pitch, u32 width, u32 height, Format format,
@@ -1323,6 +1414,58 @@ u32 bytesPerPixel(Format format) {
     return info->bytesPerPixel;
   }
   return 0;
+}
+
+bool isCompressedFormat(Format format) {
+  return isCompressedFormatImpl(format);
+}
+
+u32 formatBlockWidth(Format format) {
+  return isCompressedFormatImpl(format) ? 4u : 1u;
+}
+
+u32 formatBlockHeight(Format format) {
+  return isCompressedFormatImpl(format) ? 4u : 1u;
+}
+
+u32 formatBlockBytes(Format format) {
+  switch (format) {
+    case Format::DXT1:
+    case Format::ATI1:
+    case Format::BC4:
+      return 8;
+    case Format::DXT2:
+    case Format::DXT3:
+    case Format::DXT4:
+    case Format::DXT5:
+    case Format::ATI2:
+    case Format::BC5:
+      return 16;
+    default:
+      return bytesPerPixel(format);
+  }
+}
+
+u32 formatRowPitch(Format format, u32 width) {
+  const u32 blockBytes = formatBlockBytes(format);
+  if (width == 0 || blockBytes == 0) {
+    return 0;
+  }
+  const u32 blockWidth = formatBlockWidth(format);
+  const u32 blockColumns = (width + blockWidth - 1u) / blockWidth;
+  return blockColumns * blockBytes;
+}
+
+u32 formatRowCount(Format format, u32 height) {
+  if (height == 0 || formatBlockBytes(format) == 0) {
+    return 0;
+  }
+  const u32 blockHeight = formatBlockHeight(format);
+  return (height + blockHeight - 1u) / blockHeight;
+}
+
+std::size_t formatByteSize(Format format, u32 width, u32 height) {
+  return static_cast<std::size_t>(formatRowPitch(format, width)) * formatRowCount(format, height);
 }
 
 std::string formatName(Format format) {
@@ -1579,6 +1722,9 @@ PresentParameters normalizePresentParameters(const AdapterInfo& adapter, Present
   if (getenvFlag("DXMT_FORCE_WINDOWED")) {
     params.windowed = true;
   }
+  if (params.backBufferCount == 0) {
+    params.backBufferCount = 1;
+  }
   if (params.backBufferFormat == Format::Unknown) {
     params.backBufferFormat = adapter.displayMode.format;
   }
@@ -1592,6 +1738,95 @@ PresentParameters normalizePresentParameters(const AdapterInfo& adapter, Present
   } else {
     params.backBufferWidth = std::max(1u, params.backBufferWidth);
     params.backBufferHeight = std::max(1u, params.backBufferHeight);
+  }
+  return params;
+}
+
+constexpr u32 kD3dSwapEffectCopy = 3;
+constexpr u32 kD3dSwapEffectFlipex = 5;
+
+constexpr u32 kD3dPresentIntervalDefault = 0x00000000u;
+constexpr u32 kD3dPresentIntervalOne = 0x00000001u;
+constexpr u32 kD3dPresentIntervalTwo = 0x00000002u;
+constexpr u32 kD3dPresentIntervalThree = 0x00000004u;
+constexpr u32 kD3dPresentIntervalFour = 0x00000008u;
+constexpr u32 kD3dPresentIntervalImmediate = 0x80000000u;
+
+bool isValidPresentationInterval(PresentInterval interval) {
+  switch (interval) {
+    case PresentInterval::Immediate:
+    case PresentInterval::Default:
+    case PresentInterval::Two:
+      return true;
+  }
+  return false;
+}
+
+bool isValidPresentationIntervalRaw(u32 interval) {
+  switch (interval) {
+    case kD3dPresentIntervalDefault:
+    case kD3dPresentIntervalOne:
+    case kD3dPresentIntervalTwo:
+    case kD3dPresentIntervalThree:
+    case kD3dPresentIntervalFour:
+    case kD3dPresentIntervalImmediate:
+      return true;
+    default:
+      return false;
+  }
+}
+
+HResult validatePresentParameters(const PresentParameters& params, bool extended) {
+  const u32 maxSwapEffect = extended ? kD3dSwapEffectFlipex : kD3dSwapEffectCopy;
+  if (params.swapEffect == 0 || params.swapEffect > maxSwapEffect) {
+    return D3DERR_INVALIDCALL;
+  }
+
+  const u32 maxBackBufferCount = extended ? 30u : 3u;
+  if (params.backBufferCount > maxBackBufferCount) {
+    return D3DERR_INVALIDCALL;
+  }
+
+  if (params.swapEffect == kD3dSwapEffectCopy && params.backBufferCount > 1) {
+    return D3DERR_INVALIDCALL;
+  }
+
+  if (!isValidPresentationInterval(params.presentationInterval) ||
+      !isValidPresentationIntervalRaw(params.presentationIntervalRaw)) {
+    return D3DERR_INVALIDCALL;
+  }
+
+  return D3D_OK;
+}
+
+HResult validateFullscreenModeRelation(const PresentParameters& params,
+                                       const DisplayModeEx* fullscreenMode) {
+  if (!fullscreenMode) {
+    return D3D_OK;
+  }
+  if (params.windowed) {
+    return D3DERR_INVALIDCALL;
+  }
+  if (fullscreenMode->width != params.backBufferWidth ||
+      fullscreenMode->height != params.backBufferHeight) {
+    return D3DERR_INVALIDCALL;
+  }
+  return D3D_OK;
+}
+
+PresentParameters applyFullscreenMode(PresentParameters params, const DisplayModeEx* fullscreenMode) {
+  if (!fullscreenMode) {
+    return params;
+  }
+  params.windowed = false;
+  if (fullscreenMode->width != 0) {
+    params.backBufferWidth = fullscreenMode->width;
+  }
+  if (fullscreenMode->height != 0) {
+    params.backBufferHeight = fullscreenMode->height;
+  }
+  if (fullscreenMode->format != Format::Unknown) {
+    params.backBufferFormat = fullscreenMode->format;
   }
   return params;
 }
@@ -1911,15 +2146,14 @@ Texture::Texture(std::shared_ptr<Device> owner, TextureHandle handle, TextureDes
   if (auto ownerPtr = owner_.lock()) {
     backend_ = ownerPtr->upperDevice();
   }
-  const u32 bpp = bytesPerPixel(desc_.format);
   const u32 levels = std::max(1u, desc_.levels);
   levels_.resize(levels);
   for (u32 level = 0; level < levels; ++level) {
     LevelStorage storage;
     storage.width = std::max(1u, desc_.width >> level);
     storage.height = std::max(1u, desc_.height >> level);
-    storage.pitch = bpp * storage.width;
-    storage.bytes.resize(static_cast<size_t>(storage.pitch) * storage.height, 0);
+    storage.pitch = formatRowPitch(desc_.format, storage.width);
+    storage.bytes.resize(formatByteSize(desc_.format, storage.width, storage.height), 0);
     levels_[level] = std::move(storage);
   }
 }
@@ -1934,13 +2168,27 @@ LockedRegion Texture::lockRect(u32 level, const Rect* rect, u32 flags) {
   }
   LevelStorage& storage = levels_[level];
   if ((flags & UsageDiscard) != 0) {
-    storage.bytes.assign(static_cast<size_t>(storage.pitch) * storage.height, 0);
+    storage.bytes.assign(formatByteSize(desc_.format, storage.width, storage.height), 0);
   }
   locked_ = true;
-  const u32 bpp = bytesPerPixel(desc_.format);
+  if (storage.pitch == 0 || storage.bytes.empty()) {
+    return {};
+  }
   const u32 left = rect ? std::max(0, rect->left) : 0;
   const u32 top = rect ? std::max(0, rect->top) : 0;
-  return {storage.bytes.data() + static_cast<size_t>(top) * storage.pitch + static_cast<size_t>(left) * bpp,
+  if (isCompressedFormat(desc_.format)) {
+    const u32 blockWidth = formatBlockWidth(desc_.format);
+    const u32 blockHeight = formatBlockHeight(desc_.format);
+    const u32 blockBytes = formatBlockBytes(desc_.format);
+    const u32 blockX = std::min(left, storage.width - 1u) / blockWidth;
+    const u32 blockY = std::min(top, storage.height - 1u) / blockHeight;
+    return {storage.bytes.data() + static_cast<size_t>(blockY) * storage.pitch +
+                static_cast<size_t>(blockX) * blockBytes,
+            storage.pitch};
+  }
+  const u32 bpp = bytesPerPixel(desc_.format);
+  return {storage.bytes.data() + static_cast<size_t>(top) * storage.pitch +
+              static_cast<size_t>(left) * bpp,
           storage.pitch};
 }
 
@@ -2072,8 +2320,8 @@ Surface::Surface(std::shared_ptr<Device> owner, SurfaceHandle handle, SurfaceDes
     backend_ = ownerPtr->upperDevice();
   }
   if (desc_.width != 0 && desc_.height != 0) {
-    standalonePitch_ = bytesPerPixel(desc_.format) * desc_.width;
-    standaloneBytes_.resize(static_cast<size_t>(standalonePitch_) * desc_.height, 0);
+    standalonePitch_ = formatRowPitch(desc_.format, desc_.width);
+    standaloneBytes_.resize(formatByteSize(desc_.format, desc_.width, desc_.height), 0);
   }
 }
 
@@ -2110,12 +2358,25 @@ LockedRegion Surface::lockRect(const Rect* rect, u32 flags) {
     return {};
   }
   if ((flags & UsageDiscard) != 0) {
-    standaloneBytes_.assign(static_cast<size_t>(standalonePitch_) * desc_.height, 0);
+    standaloneBytes_.assign(formatByteSize(desc_.format, desc_.width, desc_.height), 0);
   }
   locked_ = true;
-  const u32 bpp = bytesPerPixel(desc_.format);
+  if (standalonePitch_ == 0 || standaloneBytes_.empty()) {
+    return {};
+  }
   const u32 left = rect ? std::max(0, rect->left) : 0;
   const u32 top = rect ? std::max(0, rect->top) : 0;
+  if (isCompressedFormat(desc_.format)) {
+    const u32 blockWidth = formatBlockWidth(desc_.format);
+    const u32 blockHeight = formatBlockHeight(desc_.format);
+    const u32 blockBytes = formatBlockBytes(desc_.format);
+    const u32 blockX = std::min(left, desc_.width - 1u) / blockWidth;
+    const u32 blockY = std::min(top, desc_.height - 1u) / blockHeight;
+    return {standaloneBytes_.data() + static_cast<size_t>(blockY) * standalonePitch_ +
+                static_cast<size_t>(blockX) * blockBytes,
+            standalonePitch_};
+  }
+  const u32 bpp = bytesPerPixel(desc_.format);
   return {standaloneBytes_.data() + static_cast<size_t>(top) * standalonePitch_ + static_cast<size_t>(left) * bpp,
           standalonePitch_};
 }
@@ -2790,12 +3051,14 @@ HResult SwapChain::present(std::shared_ptr<dxmt9::Device> device, const SwapDesc
 
 Device::Device(AdapterInfo adapter, BackendLimits limits,
                PresentParameters params, u32 behaviorFlags,
-               std::shared_ptr<dxmt9::Device> upperDevice)
+               std::shared_ptr<dxmt9::Device> upperDevice,
+               bool extendedDevice)
     : adapter_(std::move(adapter)), limits_(limits),
       caps_(makeDefaultCaps(limits_)),
       backend_(upperDevice),
       upperDevice_(std::move(upperDevice)),
-      presentParameters_(normalizePresentParameters(adapter_, params)), behaviorFlags_(behaviorFlags) {
+      presentParameters_(normalizePresentParameters(adapter_, params)), behaviorFlags_(behaviorFlags),
+      extendedDevice_(extendedDevice) {
   state_.reset();
   const u32 width = std::max(1u, presentParameters_.backBufferWidth);
   const u32 height = std::max(1u, presentParameters_.backBufferHeight);
@@ -2886,6 +3149,9 @@ HResult Device::applyStateBlock(const StateBlock& block) {
 }
 
 std::shared_ptr<SwapChain> Device::createAdditionalSwapChain(const PresentParameters& params) {
+  if (validatePresentParameters(params, extendedDevice_) != D3D_OK) {
+    return {};
+  }
   const auto normalized = normalizePresentParameters(adapter_, params);
   auto backBuffer = createSurface({std::max(1u, normalized.backBufferWidth),
                                    std::max(1u, normalized.backBufferHeight), normalized.backBufferFormat,
@@ -3388,17 +3654,34 @@ HResult Device::drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount, u32
   return D3D_OK;
 }
 
-HResult Device::drawPrimitiveUP(PrimitiveType type, u32 primitiveCount, std::span<const u8> vertexData) {
+HResult Device::drawPrimitiveUP(PrimitiveType type, u32 primitiveCount,
+                                std::span<const u8> vertexData, u32 vertexStride) {
   upVertexScratch_.assign(vertexData.begin(), vertexData.end());
   auto desc = snapshotDrawDesc(type, primitiveCount, 0, 0, 0, state_.indexType);
-  desc.userVertexData = upVertexScratch_;
+  // UP draws source stream 0 from caller memory, not the currently bound VB.
+  desc.vertexDecl.streams[0].buffer.reset();
+  desc.vertexDecl.streams[0].offset = 0;
+  if (vertexStride != 0) {
+    desc.vertexDecl.streams[0].stride = vertexStride;
+  }
+  if (type == PrimitiveType::TriangleFan) {
+    const u32 stride = vertexStride != 0 ? vertexStride : inferStreamZeroStride(desc.vertexDecl);
+    auto decomposed = decomposeTriangleFanVertices(vertexData, primitiveCount, stride);
+    if (primitiveCount != 0 && decomposed.empty()) {
+      return D3DERR_INVALIDCALL;
+    }
+    desc.primitiveType = PrimitiveType::TriangleList;
+    desc.userVertexData = std::move(decomposed);
+  } else {
+    desc.userVertexData = upVertexScratch_;
+  }
   submitDrawInternal(desc);
   return D3D_OK;
 }
 
 HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
                                        std::span<const u8> vertexData, std::span<const u8> indexData,
-                                       IndexType indexType) {
+                                       IndexType indexType, u32 vertexStride) {
   upVertexScratch_.assign(vertexData.begin(), vertexData.end());
   upIndexScratch_.assign(indexData.begin(), indexData.end());
   if (type == PrimitiveType::TriangleFan) {
@@ -3415,6 +3698,12 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
     type = PrimitiveType::TriangleList;
   }
   auto desc = snapshotDrawDesc(type, primitiveCount, 0, 0, 0, indexType);
+  // Indexed UP draws also source stream 0 from caller memory.
+  desc.vertexDecl.streams[0].buffer.reset();
+  desc.vertexDecl.streams[0].offset = 0;
+  if (vertexStride != 0) {
+    desc.vertexDecl.streams[0].stride = vertexStride;
+  }
   desc.userVertexData = upVertexScratch_;
   desc.userIndexData = upIndexScratch_;
   submitDrawInternal(desc);
@@ -3453,24 +3742,24 @@ HResult Device::presentEx(const Rect* sourceRect, const Rect* destRect, Handle d
 }
 
 HResult Device::reset(const PresentParameters& params) {
-  return resetEx(params, nullptr);
+  if (const auto hr = validatePresentParameters(params, false); hr != D3D_OK) {
+    return hr;
+  }
+  return resetValidated(params);
 }
 
 HResult Device::resetEx(const PresentParameters& params, const DisplayModeEx* fullscreenMode) {
-  auto adjusted = params;
-  if (fullscreenMode) {
-    adjusted.windowed = false;
-    if (fullscreenMode->width != 0) {
-      adjusted.backBufferWidth = fullscreenMode->width;
-    }
-    if (fullscreenMode->height != 0) {
-      adjusted.backBufferHeight = fullscreenMode->height;
-    }
-    if (fullscreenMode->format != Format::Unknown) {
-      adjusted.backBufferFormat = fullscreenMode->format;
-    }
+  if (const auto hr = validatePresentParameters(params, true); hr != D3D_OK) {
+    return hr;
   }
-  presentParameters_ = normalizePresentParameters(adapter_, adjusted);
+  if (const auto hr = validateFullscreenModeRelation(params, fullscreenMode); hr != D3D_OK) {
+    return hr;
+  }
+  return resetValidated(applyFullscreenMode(params, fullscreenMode));
+}
+
+HResult Device::resetValidated(const PresentParameters& params) {
+  presentParameters_ = normalizePresentParameters(adapter_, params);
   deviceLost_ = false;
   presentOccluded_ = false;
   if (backend_) {
@@ -3703,7 +3992,7 @@ void Device::submitDrawInternal(const DrawDesc& desc) {
     const auto it = desc.textures[stageIndex].stageStates.find(key);
     return it != desc.textures[stageIndex].stageStates.end() ? it->second : 0u;
   };
-  emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x",
+  emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x",
                   static_cast<unsigned long long>(submittedSequenceId_ + 1),
                   static_cast<unsigned>(desc.primitiveType),
                   desc.primitiveCount,
@@ -3720,6 +4009,7 @@ void Device::submitDrawInternal(const DrawDesc& desc) {
                   static_cast<unsigned long long>(hashStateState(state_)),
                   desc.vertexDecl.fvf,
                   desc.rs.values.contains(RS_LIGHTING) ? desc.rs.values.at(RS_LIGHTING) : 0u,
+                  drawCullStateValue(desc),
                   desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) ? desc.rs.values.at(RS_ALPHA_TEST_ENABLE) : 0u,
                   desc.rs.values.contains(RS_ALPHABLEND_ENABLE) ? desc.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u,
                   desc.rs.values.contains(RS_SRC_BLEND) ? desc.rs.values.at(RS_SRC_BLEND) : 0u,
@@ -4398,6 +4688,26 @@ HRESULT Factory::checkDeviceMultiSampleType(size_t adapterIndex, Format format, 
 
 std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const PresentParameters& params,
                                               u32 behaviorFlags) {
+  if (validatePresentParameters(params, false) != D3D_OK) {
+    return {};
+  }
+  return createDeviceValidated(adapterIndex, params, behaviorFlags, false);
+}
+
+std::shared_ptr<Device> Factory::createDeviceEx(size_t adapterIndex, const PresentParameters& params,
+                                                const DisplayModeEx* fullscreenMode,
+                                                u32 behaviorFlags) {
+  if (const auto hr = validatePresentParameters(params, true); hr != D3D_OK) {
+    return {};
+  }
+  if (const auto hr = validateFullscreenModeRelation(params, fullscreenMode); hr != D3D_OK) {
+    return {};
+  }
+  return createDeviceValidated(adapterIndex, applyFullscreenMode(params, fullscreenMode), behaviorFlags, true);
+}
+
+std::shared_ptr<Device> Factory::createDeviceValidated(size_t adapterIndex, const PresentParameters& params,
+                                                       u32 behaviorFlags, bool extendedDevice) {
   if (adapterIndex >= adapters_.size()) {
     return {};
   }
@@ -4419,7 +4729,7 @@ std::shared_ptr<Device> Factory::createDevice(size_t adapterIndex, const Present
     }
   }
   auto device = std::shared_ptr<Device>(
-      new Device(adapterInfo, limits_, normalized, behaviorFlags, device_));
+      new Device(adapterInfo, limits_, normalized, behaviorFlags, device_, extendedDevice));
   device->initializeDefaultSwapChain();
   if (device_) {
     std::weak_ptr<Device> weak = device;

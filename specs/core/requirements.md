@@ -1,8 +1,14 @@
 # Core Layer Requirements
 
-The core layer is the Wine-facing half of dxmt9. It exposes the D3D9 COM interface
-surface to applications running under Wine and is responsible for enforcing D3D9
-semantics before handing work to the Metal backend.
+The core layer is the D3D9 API frontend for applications running under Wine. It
+exposes the D3D9 COM interface surface and enforces Windows D3D9-compatible
+behaviour before handing work to the Metal backend.
+
+The implementation structure remains DXMT-compatible: PE frontend and
+`winemetal` bridge/provider split, chunked command submission, and Metal work on
+the unix side. Wine `dlls/d3d9/tests` are used as an oracle for public Windows
+D3D9 API behaviour; they do not require dxmt9 to copy Wine's `dlls/d3d9` or
+wined3d internal architecture.
 
 ---
 
@@ -36,10 +42,65 @@ with `E_NOINTERFACE` and set the output to `NULL`. A factory created by
 implementation must not silently coerce unsupported device types to
 `D3DDEVTYPE_HAL` or ignore format parameters when reporting support.
 
-**R-CORE-1.8** Ex display-mode methods must validate structure sizes and filter
-fields according to D3D9Ex behaviour. `EnumAdapterModesEx()` must reject an
-invalid `D3DDISPLAYMODEEX::Size` and must not return modes that fail the
+**R-CORE-1.8** Display-mode methods must expose Windows D3D9-compatible adapter
+mode formats, validated by Wine D3D9 tests: `D3DFMT_X8R8G8B8` and
+`D3DFMT_R5G6B5`. `D3DFMT_A8R8G8B8` is a required resource/back-buffer format,
+but it must not be reported as an adapter mode format. If the internal backend
+current mode or swap-chain back buffer uses `A8R8G8B8`,
+`GetAdapterDisplayMode()`, `GetAdapterDisplayModeEx()`,
+`IDirect3DDevice9::GetDisplayMode()`, and
+`IDirect3DSwapChain9::GetDisplayMode()` must report `X8R8G8B8`.
+
+**R-CORE-1.8.1** Ex display-mode methods must validate structure sizes and
+filter fields according to D3D9Ex behaviour. `EnumAdapterModesEx()` must reject
+an invalid `D3DDISPLAYMODEEX::Size` and must not return modes that fail the
 provided `D3DDISPLAYMODEFILTER`.
+
+**R-CORE-1.9** Factory validation return codes must match Windows D3D9-observed
+behaviour, using Wine D3D9 tests as the portable oracle:
+
+- invalid adapter index: `D3DERR_INVALIDCALL`;
+- valid but unavailable `D3DDEVTYPE` values such as `REF`, `NULLREF`, or `SW`:
+  `D3DERR_NOTAVAILABLE`;
+- invalid non-D3D9 `D3DDEVTYPE` enum values: `D3DERR_INVALIDCALL`;
+- fullscreen `CheckDeviceType()` display format other than `D3DFMT_X8R8G8B8`
+  or `D3DFMT_R5G6B5`: `D3DERR_NOTAVAILABLE`;
+- `CheckDeviceFormat()` adapter format must be one of `D3DFMT_X8R8G8B8`,
+  `D3DFMT_R5G6B5`, or `D3DFMT_X1R5G5B5`; `D3DFMT_UNKNOWN` returns
+  `D3DERR_INVALIDCALL`, other invalid non-zero formats return
+  `D3DERR_NOTAVAILABLE`;
+- unsupported `D3DRESOURCETYPE` values return `D3DERR_INVALIDCALL`.
+
+**R-CORE-1.10** `CheckDeviceFormat()` must first apply the D3D9 front-end
+validation above, then query backend capability for the requested
+`CheckFormat`, `Usage`, and resource type. It must map texture/surface/cube
+types, volume types, and vertex/index buffers as distinct resource classes, and
+must not answer only from the raw format.
+
+**R-CORE-1.11** `CheckDeviceMultiSampleType()` must preserve Windows
+D3D9-compatible front-end semantics, validated by Wine D3D9 tests, in addition
+to backend capability checks. Invalid adapter indices return
+`D3DERR_INVALIDCALL`; invalid multisample enum values return
+`D3DERR_INVALIDCALL`; `D3DMULTISAMPLE_NONE` succeeds for valid displayable
+formats and reports one quality level when `pQualityLevels` is non-null.
+Unsupported but well-formed multisample requests return `D3DERR_NOTAVAILABLE`
+and must follow the Wine-test-observed `pQualityLevels` write behaviour for that
+failure path.
+
+**R-CORE-1.12** `CheckDeviceFormatConversion()` must validate adapter and
+device type like the other factory checks. If source and destination formats
+are identical, it must return `D3D_OK`. Unsupported conversions return
+`D3DERR_NOTAVAILABLE`; invalid adapters return `D3DERR_INVALIDCALL`.
+
+**R-CORE-1.13** The PE `d3d9.dll` entry-point surface is part of Windows D3D9
+API compatibility. Both app-local and Wine-builtin variants must export the
+D3D9 factory entry points, `Direct3DShaderValidatorCreate9`, D3DPERF helpers
+observed in Wine/Windows export profiles (`D3DPERF_BeginEvent`,
+`D3DPERF_EndEvent`, `D3DPERF_GetStatus`,
+`D3DPERF_QueryRepeatFrame`, `D3DPERF_SetMarker`, `D3DPERF_SetOptions`,
+`D3DPERF_SetRegion`), `DebugSetMute`, and a loader-safe
+`Direct3DCreate9On12` stub. Unsupported auxiliary exports may be no-op stubs,
+but they must not be missing from the PE export table.
 
 ---
 
@@ -64,6 +125,38 @@ be supported for windowed multi-window scenarios.
 D3D9Ex. Base devices may report `D3DERR_DEVICELOST` /
 `D3DERR_DEVICENOTRESET` through `TestCooperativeLevel()`; Ex devices must keep
 `TestCooperativeLevel()` successful and surface window/device status through
+`CheckDeviceState()`.
+
+**R-CORE-2.6** `CreateDevice()`, `CreateDeviceEx()`, `Reset()`, and `ResetEx()`
+must validate `D3DPRESENT_PARAMETERS` using Windows D3D9-compatible rules
+validated by Wine D3D9 tests before creating or rebuilding the swap chain:
+
+- `SwapEffect` must be non-zero and no greater than `D3DSWAPEFFECT_COPY` for
+  base D3D9, or `D3DSWAPEFFECT_FLIPEX` for D3D9Ex;
+- `BackBufferCount == 0` is accepted and normalized to one buffer after
+  validation;
+- base D3D9 accepts at most three back buffers; D3D9Ex accepts at most thirty;
+- `D3DSWAPEFFECT_COPY` accepts at most one back buffer;
+- `PresentationInterval` must be `DEFAULT`, `ONE`, `TWO`, `THREE`, `FOUR`, or
+  `IMMEDIATE`.
+
+Invalid presentation parameters must fail with `D3DERR_INVALIDCALL`; allocation
+or backend failures must preserve their original `HRESULT`.
+
+**R-CORE-2.7** `ResetEx(pPresentationParameters, pFullscreenDisplayMode)` and
+`CreateDeviceEx(..., pFullscreenDisplayMode, ...)` must accept a fullscreen
+display mode if and only if `pPresentationParameters->Windowed == FALSE`. When
+provided, `D3DDISPLAYMODEEX::Size` must be valid and the mode width/height must
+match the back-buffer width/height. Mismatches return `D3DERR_INVALIDCALL`.
+
+**R-CORE-2.8** Successful `Reset()` / `ResetEx()` must restore Windows
+D3D9-compatible device state. Render target slot 0 becomes the implicit back
+buffer, higher render target slots become unbound, the depth-stencil binding
+follows the new auto-depth-stencil state, scene recording is cleared, and
+viewport/scissor state is reset to the new back-buffer dimensions. Failed
+base-device reset may place the device into `D3DERR_DEVICENOTRESET` /
+lost-device state; Ex reset failures must preserve Ex cooperative-level
+semantics and report status through
 `CheckDeviceState()`.
 
 ---
@@ -152,6 +245,33 @@ tests. The implementation may hold private backend handles for deferred
 execution, but those private retains must not change application-visible COM
 reference counts.
 
+**R-CORE-4.10** Private data behaviour must be implemented by one common helper
+used by surfaces, textures, cube textures, volume textures, volumes, vertex
+buffers, and index buffers. `D3DSPD_IUNKNOWN` requires `SizeOfData ==
+sizeof(IUnknown*)`; invalid sizes return `D3DERR_INVALIDCALL` and must not
+replace existing data. `GetPrivateData()` must return `D3DERR_MOREDATA` with
+the required size when the caller buffer is too small, AddRef stored
+`IUnknown` values on successful retrieval, and leave the caller's size value
+unchanged when the GUID is not found.
+
+**R-CORE-4.11** Shared-handle and user-memory parameters must follow Windows
+D3D9-compatible behaviour validated by Wine D3D9 tests even when resource
+sharing is not implemented. A non-null
+`pSharedHandle` on a device created from `Direct3DCreate9()` returns
+`E_NOTIMPL`. On Ex-capable devices, unsupported shared resources must fail with
+the Windows D3D9-compatible error for the resource class and pool rather than
+silently ignoring the handle.
+
+**R-CORE-4.12** D3D9Ex user-memory resources are supported only for the
+Wine-test-observed Windows D3D9 `D3DPOOL_SYSTEMMEM` cases. `CreateTexture()` with
+`pSharedHandle != NULL`, `D3DPOOL_SYSTEMMEM`, and exactly one mip level must
+bind the caller-supplied memory so `LockRect()` returns the same pointer and a
+Windows D3D9-compatible pitch. `CreateOffscreenPlainSurface()` with
+`D3DPOOL_SYSTEMMEM` and `pSharedHandle != NULL` follows the same ownership
+model. Invalid level counts, scratch pool, cube/volume textures, and
+vertex/index buffers must return the Windows D3D9-compatible
+`D3DERR_INVALIDCALL` or `D3DERR_NOTAVAILABLE` for that resource class.
+
 ---
 
 ## 5. Draw Calls
@@ -227,6 +347,13 @@ for D3D9's half-pixel offset convention.
 **R-CORE-7.3** Multi-stream vertex binding (up to the device-reported
 `MaxStreams` capability) must be supported.
 
+**R-CORE-7.4** FVF and vertex declaration interop must match the Wine
+`device.c` tests. Setting an FVF must create or reuse a stable generated vertex
+declaration for equivalent FVF layouts; `GetVertexDeclaration()` must return the
+same cached declaration object for repeated equivalent FVF conversions; switching
+between explicit declarations and FVF must preserve the public refcount
+behaviour observed by Wine.
+
 ---
 
 ## 8. Queries
@@ -238,6 +365,13 @@ has completed all prior commands.
 **R-CORE-8.2** `D3DQUERYTYPE_OCCLUSION` must be supported if the Metal device supports
 visibility result buffers. The returned sample count is an approximation and is
 permitted to be clamped to a boolean (non-zero = visible).
+
+**R-CORE-8.3** Query object validation must follow Windows D3D9-visible
+behaviour validated by Wine D3D9 tests. Invalid query types return
+`D3DERR_NOTAVAILABLE`; `GetDataSize()` must match the type-specific public size,
+including `sizeof(DWORD)` for occlusion and `sizeof(BOOL)` for
+timestamp-disjoint; unsupported or unavailable backend query data must not leak
+uninitialised memory to the caller.
 
 ---
 
@@ -253,6 +387,17 @@ return `D3DERR_INVALIDCALL`, not crash.
 **R-CORE-9.3** The device must never silently discard draw calls or state changes.
 Either the operation succeeds or it returns an error.
 
+**R-CORE-9.4** The PE/unix bridge ABI must preserve `HRESULT` failure causes.
+Object creation entry points must return a status and an out handle, or an
+equivalent structure, so validation, allocation, provider-load, and backend
+failures are not collapsed to a generic `NULL` object /
+`D3DERR_INVALIDCALL` result.
+
+**R-CORE-9.5** dxmt9 intentionally prefers clean failure over reproducing
+Windows access violations for invalid pointers. Wine tests that only validate a
+process crash on invalid input are not required conformance targets; documented
+optional pointers and observable HRESULT/refcount behaviour remain required.
+
 ---
 
 ## 10. IDirect3DDevice9Ex
@@ -267,8 +412,9 @@ all `IDirect3D9` methods; the existing factory implementation must be reused.
 
 **R-CORE-10.2** `IDirect3D9Ex::GetAdapterModeCountEx(Adapter, pFilter)` must
 return the count of display modes matching `pFilter`. If `pFilter` is `NULL`
-or `Format == D3DFMT_UNKNOWN`, all modes must be returned. The underlying mode
-list is the same as `EnumAdapterModes()`.
+or `Format == D3DFMT_UNKNOWN`, all supported D3D9 adapter mode formats must be
+returned. The underlying mode list is the same as `EnumAdapterModes()` and must
+not include `D3DFMT_A8R8G8B8`.
 
 **R-CORE-10.3** `IDirect3D9Ex::EnumAdapterModesEx(Adapter, pFilter, Mode, pMode)`
 must fill a `D3DDISPLAYMODEEX` for the matching mode.
@@ -285,9 +431,11 @@ It may be synthesised from the Metal device registry ID.
 **R-CORE-10.6** `IDirect3D9Ex::CreateDeviceEx()` must create an
 `IDirect3DDevice9Ex`. The additional `D3DDISPLAYMODEEX*` parameter overrides
 the fullscreen display mode; if `NULL`, behaviour is identical to `CreateDevice()`.
+Validation of the fullscreen mode follows R-CORE-2.7.
 
 **R-CORE-10.7** `IDirect3DDevice9Ex` inherits all `IDirect3DDevice9` methods.
-The existing device implementation must be reused without modification.
+The existing device implementation must be reused where behaviour is identical;
+Ex-only validation and status reporting remain explicit at the PE COM boundary.
 
 **R-CORE-10.8** `CheckDeviceState(hDestinationWindow)` must return `D3D_OK`
 while the device is operational, `S_PRESENT_OCCLUDED` when the window is
@@ -297,7 +445,8 @@ replaces `TestCooperativeLevel()` for Ex applications.
 **R-CORE-10.9** `ResetEx(pPresentationParameters, pFullscreenDisplayMode)` must
 behave identically to `Reset()` for `D3DPOOL_DEFAULT` invalidation and swap-chain
 rebuild. When `pFullscreenDisplayMode` is non-`NULL` it must be forwarded through
-`normalizePresentParameters()`.
+`normalizePresentParameters()` after the R-CORE-2.7 windowed/fullscreen and
+size/mode checks pass.
 
 **R-CORE-10.10** `PresentEx(pSourceRect, pDestRect, hDestWindowOverride,
 pDirtyRegion, dwFlags)` must present the swap chain. `pSourceRect`,
@@ -322,15 +471,19 @@ ignore `Priority`. Metal does not expose GPU thread priority.
 **R-CORE-10.15** `SetConvolutionMonoKernel()` and `ComposeRects()` must return
 `E_NOTIMPL`.
 
-**R-CORE-10.16** `CreateRenderTargetEx()`, `CreateOffscreenPlainSurfaceEx()`, and
-`CreateDepthStencilSurfaceEx()` must delegate to their non-Ex counterparts.
-The `pSharedHandle` output parameter must be set to `NULL` (shared surfaces are
-not supported).
+**R-CORE-10.16** `CreateRenderTargetEx()` and
+`CreateDepthStencilSurfaceEx()` must validate the Ex-only `Usage` argument
+before delegating. `Usage` must not contain `D3DUSAGE_RENDERTARGET` or
+`D3DUSAGE_DEPTHSTENCIL`; invalid usage returns `D3DERR_INVALIDCALL`.
+`CreateOffscreenPlainSurfaceEx()` may return `E_NOTIMPL` until implemented; if
+implemented, it must apply the same usage and shared-handle policy before
+delegating. `pSharedHandle` handling follows R-CORE-4.11.
 
 **R-CORE-10.17** Ex interface exposure is inherited from the creating factory,
-matching Wine D3D9. A device created from a `Direct3DCreate9()` factory must
-return `E_NOINTERFACE` for `QueryInterface(IID_IDirect3DDevice9Ex)`. A device
-created from a `Direct3DCreate9Ex()` factory must expose
+matching Windows D3D9 behaviour captured by Wine D3D9 tests. A device created
+from a `Direct3DCreate9()` factory must return `E_NOINTERFACE` for
+`QueryInterface(IID_IDirect3DDevice9Ex)`. A device created from a
+`Direct3DCreate9Ex()` factory must expose
 `IDirect3DDevice9Ex`, even if it was created through the inherited
 `IDirect3D9::CreateDevice()` method.
 

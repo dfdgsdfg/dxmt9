@@ -85,6 +85,7 @@ struct D9CDevice {
   bool stateBlockRecording = false;
   std::optional<dxmt9::core::DeviceState> stateBlockBaseState;
   std::unordered_set<uint32_t> stateBlockRenderStates;
+  std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
 
   explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {}
   ~D9CDevice() {

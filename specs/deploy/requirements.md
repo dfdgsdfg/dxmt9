@@ -66,9 +66,23 @@ must fall back to its previous D3D9 behavior.
   --builtin` post-processing;
 - a native PE variant suitable for application-local loading.
 
-**R-DEPLOY-2.2** The native PE `d3d9.dll` must export the normal D3D9 entry
-points used by applications, including `Direct3DCreate9`,
-`Direct3DCreate9Ex`, and `Direct3DShaderValidatorCreate9`.
+**R-DEPLOY-2.2** Both PE `d3d9.dll` variants must export a Windows
+D3D9-compatible entry-point surface, validated against Wine/Windows export
+profiles. The required exports include:
+
+- `Direct3DCreate9`, `Direct3DCreate9Ex`, and
+  `Direct3DShaderValidatorCreate9`;
+- `D3DPERF_BeginEvent`, `D3DPERF_EndEvent`, `D3DPERF_GetStatus`,
+  `D3DPERF_QueryRepeatFrame`, `D3DPERF_SetMarker`, `D3DPERF_SetOptions`,
+  and `D3DPERF_SetRegion`;
+- `DebugSetMute`;
+- a loader-safe `Direct3DCreate9On12` stub.
+
+If the selected import-library/export-table compatibility profile includes
+`PSGPError` or `PSGPSampleTexture`, those exports may be loader-safe stubs. A
+missing auxiliary export is a deployment failure because statically importing
+applications can fail during PE import resolution before `Direct3DCreate9` is
+called.
 
 **R-DEPLOY-2.3** The native PE `d3d9.dll` must not depend on Wine builtin module
 metadata. It must be loadable as an ordinary PE DLL from the application

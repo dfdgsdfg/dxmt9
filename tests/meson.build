@@ -1,8 +1,16 @@
+dxmt9_test_link_args = []
+if host_machine.system() == 'darwin'
+  dxmt9_test_link_args += meson.get_compiler('cpp').get_supported_link_arguments([
+    '-Wl,-no_warn_duplicate_libraries',
+  ])
+endif
+
 smoke = executable(
   'dxmt9-smoke',
   'smoke.cpp',
   include_directories: dxmt9_inc,
   dependencies: dxmt9_dep,
+  link_args: dxmt9_test_link_args,
 )
 
 test('dxmt9-smoke', smoke)
@@ -12,6 +20,7 @@ core_spec = executable(
   'core_spec.cpp',
   include_directories: dxmt9_inc,
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
 )
 
 test('dxmt9-core-spec', core_spec)
@@ -21,6 +30,7 @@ shader_runner = executable(
   'shader_runner_dxmt9.cpp',
   include_directories: dxmt9_inc,
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
 )
 
 if host_machine.system() == 'darwin'

@@ -69,6 +69,45 @@ implementation may share one class for base and Ex objects, but
 - `IDirect3D9Ex::CreateDevice()` still creates an Ex-capable device because the
   capability follows the parent factory, not the specific creation method.
 
+### 1.1 Factory Validation
+
+The factory front-end performs Windows D3D9-compatible argument validation,
+using Wine D3D9 tests as the behavioural oracle, before calling backend
+capability code:
+
+| Method | Front-end validation |
+|---|---|
+| `GetAdapterDisplayMode()` / `GetAdapterDisplayModeEx()` / `GetDisplayMode()` | Expose display modes as D3D9 adapter formats. If the internal backend or back-buffer mode is `A8R8G8B8`, report `X8R8G8B8` so apps do not reuse alpha formats as adapter formats. |
+| `GetAdapterModeCount()` / `EnumAdapterModes()` | Enumerate Windows D3D9-compatible adapter mode formats only: `X8R8G8B8` and `R5G6B5`. `A8R8G8B8` remains a resource/back-buffer format, not an adapter mode format. |
+| `CheckDeviceType()` | Reject invalid adapter indices with `D3DERR_INVALIDCALL`; reject valid but unavailable device types with `D3DERR_NOTAVAILABLE`; reject invalid non-D3D9 device-type enum values with `D3DERR_INVALIDCALL`; reject fullscreen display formats other than `X8R8G8B8` and `R5G6B5` with `D3DERR_NOTAVAILABLE`. |
+| `CheckDeviceFormat()` | Accept only adapter formats `X8R8G8B8`, `R5G6B5`, and `X1R5G5B5`; return `D3DERR_INVALIDCALL` for `UNKNOWN`, `D3DERR_NOTAVAILABLE` for other invalid non-zero adapter formats, and `D3DERR_INVALIDCALL` for unsupported resource types. |
+| `CheckDeviceMultiSampleType()` | Validate adapter and device-type enum before backend sample-count checks; invalid multisample enum values return `D3DERR_INVALIDCALL`; `D3DMULTISAMPLE_NONE` succeeds and reports one quality level; well-formed unsupported sample counts return `D3DERR_NOTAVAILABLE` and preserve/write `pQualityLevels` according to Wine-test-observed Windows D3D9 behaviour. |
+| `CheckDeviceFormatConversion()` | Validate adapter and device type before testing conversion support; identical source/destination formats return `D3D_OK`; unsupported well-formed conversions return `D3DERR_NOTAVAILABLE`. |
+| `CreateDevice()` / `CreateDeviceEx()` | Validate presentation parameters and return the exact creation failure `HRESULT` instead of collapsing failures to a null pointer. |
+
+The bridge-facing factory creation call should therefore be status-based:
+
+```c
+HRESULT dxmt9c_factory_create_device2(
+    D9CFactory *factory,
+    uint32_t adapter,
+    const D9CPresentParams *params,
+    uint32_t behavior_flags,
+    const D9CDisplayModeEx *fullscreen_mode,
+    D9CDevice **out_device);
+```
+
+Older pointer-returning helpers may remain as compatibility shims, but the PE
+COM implementation must use a path that preserves validation, provider-load,
+allocation, and backend HRESULTs.
+
+The PE `d3d9.dll` export table is also part of the factory-facing Windows D3D9
+compatibility surface. Besides `Direct3DCreate9`, `Direct3DCreate9Ex`, and
+`Direct3DShaderValidatorCreate9`, it must provide auxiliary exports observed in
+Wine/Windows D3D9 export profiles, such as `D3DPERF_*`, `DebugSetMute`, and
+loader-safe `Direct3DCreate9On12` stubs, so applications with static imports do
+not fail before reaching factory creation.
+
 ---
 
 ## 2. Device State Structure
@@ -146,6 +185,12 @@ existing state block `Capture()` / `Apply()` calls fail. The implementation must
 preserve the D3D9 quirks covered by Wine's `stateblock.c`, including the
 difference between `CreateStateBlock(D3DSBT_ALL)` snapshots and explicitly
 recorded state blocks.
+
+After `Apply()`, every derived cache that depends on stream bindings, index
+buffers, textures, autogen-mipmap bits, render targets, shaders, or FVF-derived
+declarations must be recomputed or marked dirty. Wine refreshes these side
+caches after applying a state block; dxmt9 must do the equivalent for recorder
+state and backend handle caches.
 
 ---
 
@@ -371,6 +416,47 @@ public reference; state-setting calls follow D3D9's observed rules, including
 `SetVertexDeclaration()` not adding a public reference and FVF conversion using
 stable cached vertex declarations.
 
+### 4.1 Private Data and Shared Handles
+
+All resource private-data methods use one helper equivalent to Wine's
+`d3d9_resource_*_private_data()` path. The helper stores raw blobs and
+`IUnknown` values, validates `D3DSPD_IUNKNOWN` size exactly, preserves existing
+entries on failed `SetPrivateData()`, AddRefs `IUnknown` values on successful
+`GetPrivateData()`, and leaves the caller's `SizeOfData` untouched when a GUID
+is not found.
+
+Shared-handle handling is validated at the PE COM boundary before backend
+resource creation. Non-Ex devices return `E_NOTIMPL` for non-null
+`pSharedHandle`. Ex devices may support Wine-test-observed Windows D3D9
+user-memory `D3DPOOL_SYSTEMMEM` texture/surface cases, but unsupported sharing
+must fail with the resource-class-specific Windows D3D9 error instead of
+silently ignoring the handle.
+
+| Resource path | Non-null `pSharedHandle` behaviour |
+|---|---|
+| Non-Ex resource creation | Return `E_NOTIMPL`; never create a resource while ignoring the handle. |
+| Ex `CreateTexture()` with `D3DPOOL_SYSTEMMEM`, exactly one mip level, and caller memory | Create a user-memory texture; `LockRect()` returns the caller pointer and pitch. |
+| Ex `CreateTexture()` with `D3DPOOL_SYSTEMMEM` and zero or multiple mip levels | Return `D3DERR_INVALIDCALL`. |
+| Ex `CreateOffscreenPlainSurface()` / `CreateOffscreenPlainSurfaceEx()` with `D3DPOOL_SYSTEMMEM` and caller memory | Create a user-memory surface; `LockRect()` returns the caller pointer and pitch. |
+| Ex vertex/index buffers with `D3DPOOL_SYSTEMMEM` and caller memory | Return Windows D3D9-compatible resource-class failure, currently `D3DERR_NOTAVAILABLE`. |
+| Ex cube textures, volume textures, `D3DPOOL_SCRATCH`, or unsupported pools with caller memory | Return `D3DERR_INVALIDCALL` unless the Wine-derived Windows D3D9 oracle documents a stricter resource-specific code. |
+| Ex default-pool cross-process sharing | Return `E_NOTIMPL` until real shared-handle interop exists. |
+
+### 4.2 Reset Rebinding
+
+`Reset()` / `ResetEx()` rebuild the default swap-chain attachments and restore
+Windows D3D9-visible bindings. Render target slot 0 is rebound to the new back
+buffer, render target slots above 0 are unbound, the auto depth-stencil binding
+follows the new presentation parameters, active scene recording is cleared, and
+viewport and scissor state are reset from the new back-buffer dimensions.
+
+On failed base `Reset()` calls, the device may remain in lost/not-reset state
+according to the Wine-test-observed Windows D3D9 failure. Ex reset failures are
+surfaced through `ResetEx()` and subsequent `CheckDeviceState()` rather than through
+`TestCooperativeLevel()`. Ex old back-buffer objects may survive as standalone
+COM objects while public references exist, but they are no longer bound to the
+device after a successful reset.
+
 ---
 
 ## 5. Fixed-Function Pipeline Key
@@ -501,7 +587,7 @@ availability is controlled by the `extended` creation flag rather than by a
 separate backend implementation.
 
 The shared implementation is still split logically by `extended` mode. This is
-the Wine-compatible rule:
+the Windows D3D9-compatible rule validated by Wine D3D9 tests:
 
 ```mermaid
 flowchart TD
@@ -520,7 +606,7 @@ flowchart TD
 | Ex method | Implementation |
 |---|---|
 | `CheckDeviceState()` | `deviceLost_` flag; adds `S_PRESENT_OCCLUDED` for minimised window |
-| `ResetEx()` | `reset()` + `normalizePresentParameters()` with `D3DDISPLAYMODEEX` |
+| `ResetEx()` | Validate `Windowed`/`D3DDISPLAYMODEEX` relation and back-buffer size match, then `reset()` + `normalizePresentParameters()` |
 | `PresentEx()` | `present()` — dirty-rect and rotation hints ignored |
 | `SetMaximumFrameLatency()` | `backend_->setMaxFrameLatency(n)` (new backend method) |
 | `GetMaximumFrameLatency()` | Returns `maxFrameLatency_` |
@@ -531,6 +617,10 @@ flowchart TD
 | `SetGPUThreadPriority()` | No-op, returns `D3D_OK` |
 | `SetConvolutionMonoKernel()` | `E_NOTIMPL` |
 | `ComposeRects()` | `E_NOTIMPL` |
-| `CreateRenderTargetEx()` | Delegates to `CreateRenderTarget()`; `*pSharedHandle = NULL` |
-| `CreateOffscreenPlainSurfaceEx()` | Delegates to `CreateOffscreenPlainSurface()`; `*pSharedHandle = NULL` |
-| `CreateDepthStencilSurfaceEx()` | Delegates to `CreateDepthStencilSurface()`; `*pSharedHandle = NULL` |
+| `CreateRenderTargetEx()` | Rejects invalid `Usage`, then follows shared-handle policy and delegates to `CreateRenderTarget()` |
+| `CreateOffscreenPlainSurfaceEx()` | Wine-test-observed Windows D3D9 user-memory/shared-handle policy from section 4.1; if the path is otherwise unsupported, return a validated Windows D3D9-compatible failure and never silently ignore `pSharedHandle` |
+| `CreateDepthStencilSurfaceEx()` | Rejects invalid `Usage`, then follows shared-handle policy and delegates to `CreateDepthStencilSurface()` |
+
+`IDirect3DSwapChain9Ex::GetLastPresentCount()` and `GetPresentStatistics()` may
+remain Windows D3D9-compatible stubs that return `D3D_OK` and zero their output
+when the pointer is non-null.

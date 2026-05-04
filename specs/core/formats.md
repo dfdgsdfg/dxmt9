@@ -146,17 +146,34 @@ sees the correct RGBA order without any extra instructions.
 
 ## 6. Format Capability Classification Rules
 
+Display-mode enumeration is separate from resource format support. `D3DFMT_A8R8G8B8`
+is required for textures, render targets, and back buffers, but D3D9 adapter mode
+enumeration must expose only `D3DFMT_X8R8G8B8` and `D3DFMT_R5G6B5`; an internal
+`A8R8G8B8` current mode or swap-chain back buffer is reported as `X8R8G8B8` by
+display-mode query methods.
+
 `CheckDeviceFormat(Adapter, DeviceType, AdapterFormat, Usage, RType, CheckFormat)`:
 
-1. If `CheckFormat` is in the Unsupported table → return `D3DERR_NOTAVAILABLE`.
-2. If `CheckFormat` is Required → return `D3D_OK` for all valid `Usage`/`RType`
+1. Apply Windows D3D9-compatible front-end validation, using Wine D3D9 tests as
+   the behavioural oracle, before consulting this table:
+   valid adapter formats are `D3DFMT_X8R8G8B8`, `D3DFMT_R5G6B5`, and
+   `D3DFMT_X1R5G5B5`; valid resource types are `SURFACE`, `TEXTURE`,
+   `CUBETEXTURE`, `VOLUME`, `VOLUMETEXTURE`, `VERTEXBUFFER`, and
+   `INDEXBUFFER`.
+2. If `CheckFormat` is in the Unsupported table → return `D3DERR_NOTAVAILABLE`.
+3. If `CheckFormat` is Required → return `D3D_OK` for all valid `Usage`/`RType`
    combinations, subject to the following restrictions:
    - Compressed formats + `RENDERTARGET` or `DEPTHSTENCIL` → `D3DERR_NOTAVAILABLE`
    - Depth formats + `RENDERTARGET` → `D3DERR_NOTAVAILABLE`
    - `D3DFMT_L8`, `D3DFMT_L16`, `D3DFMT_A8L8` + `RENDERTARGET` → `D3DERR_NOTAVAILABLE`
-3. If `CheckFormat` is Optional → query device capability at init and return
+4. If `CheckFormat` is Optional → query device capability at init and return
    accordingly.
-4. Any format not listed in this spec → `D3DERR_NOTAVAILABLE`.
+5. Any format not listed in this spec → `D3DERR_NOTAVAILABLE`.
+
+The format classifier must be centralised. FOURCC and pseudo-formats such as
+`D3DFMT_ATI1`, `D3DFMT_ATI2`, `D3DFMT_RESZ`, and `D3DFMT_NULL` must be
+explicitly classified; unsupported FOURCC values must not slip through as
+ordinary color formats.
 
 ---
 

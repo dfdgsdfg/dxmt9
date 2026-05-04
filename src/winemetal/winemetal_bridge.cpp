@@ -227,10 +227,12 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_factory_get_adapter_monitor:
   case BridgeOpcode::dxmt9c_factory_check_device_type:
   case BridgeOpcode::dxmt9c_factory_check_device_format:
+  case BridgeOpcode::dxmt9c_factory_check_device_format2:
   case BridgeOpcode::dxmt9c_factory_check_device_multisample:
   case BridgeOpcode::dxmt9c_factory_get_caps:
   case BridgeOpcode::dxmt9c_factory_get_adapter_luid:
   case BridgeOpcode::dxmt9c_factory_create_device:
+  case BridgeOpcode::dxmt9c_factory_create_device2:
     return BridgeClass::Factory;
 
   case BridgeOpcode::dxmt9c_device_addref:

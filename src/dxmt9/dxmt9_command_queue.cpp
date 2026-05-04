@@ -75,6 +75,14 @@ std::string resolveShaderCachePath() {
 
 constexpr std::size_t kTransientBufferInitialCapacity = 8ull << 20;
 
+bool forceDedicatedTransientUploads() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT_DEBUG_FORCE_TRANSIENT_DEDICATED");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return value;
+}
+
 std::size_t alignUp(std::size_t value, std::size_t alignment) {
   if (alignment <= 1) {
     return value;
@@ -309,6 +317,9 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
   };
 
   alignment = std::max<std::size_t>(alignment, 1);
+  if (forceDedicatedTransientUploads()) {
+    return uploadDedicated();
+  }
   const std::size_t alignedSize = alignUp(bytes.size(), alignment);
   if (!ensureTransientBufferUnlocked(alignedSize)) {
     return uploadDedicated();
@@ -426,6 +437,11 @@ std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBuf
           .size = bytes.size(),
       };
     };
+
+    if (forceDedicatedTransientUploads()) {
+      result.push_back(uploadDedicated());
+      continue;
+    }
 
     if (!ensureTransientBufferUnlocked(alignedSize)) {
       result.push_back(uploadDedicated());

@@ -296,12 +296,13 @@ Wine.
 
 ---
 
-## 9. Wine D3D9 Conformance Harness
+## 9. Wine-Derived D3D9 API Conformance Harness
 
 The conformance harness is a set of small PE executables compiled with
 llvm-mingw and run under Wine. Unlike `dxmt9-core-spec`, these tests exercise
 the real exported `d3d9.dll` ABI, COM vtables, Wine DLL search behaviour, and
-the PE bridge path.
+the PE bridge path. Wine's D3D9 tests supply the Windows D3D9 API behaviour
+oracle; dxmt9 still keeps the DXMT-compatible `winemetal` architecture.
 
 ```mermaid
 sequenceDiagram
@@ -326,13 +327,19 @@ sequenceDiagram
   source files.
 - Preserve expected HRESULTs, refcount probes, and comments explaining unusual
   D3D9 quirks.
+- Skip Wine cases whose only expected result is a Windows access violation on
+  invalid pointers; dxmt9 tests should assert the specified clean-failure path
+  instead.
+- For object creation failures, assert both the returned `HRESULT` and that the
+  out pointer remains `NULL` or unchanged according to the Windows
+  D3D9-compatible rule validated by the Wine-derived oracle.
 - Add a provenance header near each ported test:
 
 ```c
 /* [provenance]
  * source: wine/dlls/d3d9/tests/d3d9ex.c:test_qi_base_to_ex
  * upstream-commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
- * oracle: Wine D3D9 test behaviour, validated against native D3D9
+ * oracle: Windows D3D9 behaviour captured by Wine D3D9 tests
  */
 ```
 
@@ -340,10 +347,14 @@ sequenceDiagram
 
 | Executable | Wine source anchors | Primary checks |
 |---|---|---|
+| `d3d9_exports_x64.exe` | `d3d9.spec`, `d3d9_main.c` | export table compatibility, `D3DPERF_*` no-op return behaviour, loader-safe auxiliary stubs |
 | `d3d9_factory_ex_x64.exe` | `d3d9ex.c` QI/display/LUID tests | base vs Ex QI, Ex-created normal devices, display-mode filters |
+| `d3d9_factory_validation_x64.exe` | `directx.c`, `device.c:test_check_device_format`, display-mode tests | `CheckDeviceType`, `CheckDeviceFormat`, `CheckDeviceFormatConversion`, multisample quality-level writes, invalid enum/devtype return-code parity |
 | `d3d9_device_lifetime_x64.exe` | `device.c` refcount/private-data/scene tests | public COM refcounts, `Get*` AddRef, scene transitions, private data |
 | `d3d9_stateblock_x64.exe` | `stateblock.c` create/capture/apply tests | `D3DSBT_*` masks, recording invalid calls, apply/capture quirks |
-| `d3d9_reset_lost_x64.exe` | `device.c` / `d3d9ex.c` reset tests | base vs Ex cooperative-level behaviour, default-pool invalidation |
+| `d3d9_present_params_x64.exe` | `device.c` swapchain-desc validation, reset tests | invalid swap effects, back-buffer counts, intervals, and `CreateDeviceEx`/`ResetEx` fullscreen-mode matching |
+| `d3d9_shared_handle_x64.exe` | `device.c:test_shared_handle`, `d3d9ex.c:test_user_memory`, resource creation paths | non-Ex `E_NOTIMPL`, Ex pool/resource-class errors, user-memory lock pointer/pitch cases, and no silent handle ignore |
+| `d3d9_reset_lost_x64.exe` | `device.c` / `d3d9ex.c` reset tests | base vs Ex cooperative-level behaviour, default-pool invalidation, exact failure HRESULTs |
 
 The same source layout may also build x86 PE binaries when the configured Wine
 runtime supports WoW64.
@@ -356,6 +367,13 @@ mkdir -p build/conformance-stage
 cp build-win32-x64/src/win32/d3d9.dll build/conformance-stage/
 cp build-win32-x64/src/winemetal/winemetal.dll build/conformance-stage/
 cp build-x86_64/src/winemetal/unix/winemetal.so build/conformance-stage/
+# Copy every PE runtime dependency listed in the selected deploy manifest variant,
+# unless this is a statically linked app-local package with an empty dependency list.
+for dep in libc++.dll libunwind.dll; do
+  if [ -f "build-win32-x64/src/win32/$dep" ]; then
+    cp "build-win32-x64/src/win32/$dep" build/conformance-stage/
+  fi
+done
 cp tests/d3d9_conformance/d3d9_*_x64.exe build/conformance-stage/
 (cd build/conformance-stage && wine d3d9_factory_ex_x64.exe)
 ```

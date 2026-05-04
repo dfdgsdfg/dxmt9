@@ -481,10 +481,18 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     encoder.setFragmentSamplerState(sampler_, 0);
   }
 
-  const double width = std::max<uint32_t>(1u, params.width);
-  const double height = std::max<uint32_t>(1u, params.height);
+  const auto drawableWidth = drawableTex.width();
+  const auto drawableHeight = drawableTex.height();
+  const auto fallbackWidth =
+      static_cast<std::uint64_t>(std::max<uint32_t>(1u, params.width));
+  const auto fallbackHeight =
+      static_cast<std::uint64_t>(std::max<uint32_t>(1u, params.height));
+  const auto targetWidth = drawableWidth ? drawableWidth : fallbackWidth;
+  const auto targetHeight = drawableHeight ? drawableHeight : fallbackHeight;
+  const double width = static_cast<double>(targetWidth);
+  const double height = static_cast<double>(targetHeight);
   encoder.setViewport(WMTViewport{0.0, 0.0, width, height, 0.0, 1.0});
-  encoder.setScissorRect(WMTScissorRect{0, 0, static_cast<uint64_t>(width), static_cast<uint64_t>(height)});
+  encoder.setScissorRect(WMTScissorRect{0, 0, targetWidth, targetHeight});
   encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
   encoder.endEncoding();
   if (params.minimumPresentDuration > 0.0) {

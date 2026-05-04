@@ -44,6 +44,10 @@ extern "C" int32_t dxmt9c_factory_check_device_format(D9CFactory* arg0, uint32_t
   return dxmt9p_factory_check_device_format(arg0, adapter, fmt, usage);
 }
 
+extern "C" int32_t dxmt9c_factory_check_device_format2(D9CFactory* arg0, uint32_t adapter, uint32_t fmt, uint32_t usage, uint32_t resourceType) {
+  return dxmt9p_factory_check_device_format2(arg0, adapter, fmt, usage, resourceType);
+}
+
 extern "C" int32_t dxmt9c_factory_check_device_multisample(D9CFactory* arg0, uint32_t adapter, uint32_t fmt, uint32_t msType, uint32_t windowed) {
   return dxmt9p_factory_check_device_multisample(arg0, adapter, fmt, msType, windowed);
 }
@@ -58,4 +62,8 @@ extern "C" int32_t dxmt9c_factory_get_adapter_luid(D9CFactory* arg0, uint32_t ad
 
 extern "C" D9CDevice* dxmt9c_factory_create_device(D9CFactory* arg0, uint32_t adapter, const D9CPresentParams* arg2, uint32_t behaviorFlags, const D9CDisplayModeEx* fullscreenMode) {
   return dxmt9p_factory_create_device(arg0, adapter, arg2, behaviorFlags, fullscreenMode);
+}
+
+extern "C" int32_t dxmt9c_factory_create_device2(D9CFactory* arg0, uint32_t adapter, const D9CPresentParams* arg2, uint32_t behaviorFlags, const D9CDisplayModeEx* fullscreenMode, D9CDevice** outDevice) {
+  return dxmt9p_factory_create_device2(arg0, adapter, arg2, behaviorFlags, fullscreenMode, outDevice);
 }

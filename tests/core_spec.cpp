@@ -15,7 +15,10 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/winemetal.h"
 #include "device_c_common.hpp"
+#include "../src/dxmt9/dxmt9_format_convert.hpp"
+#include "../src/dxmt9/dxmt9_draw_state.hpp"
 #include "../src/dxmt9/dxmt9_ring_arena.hpp"
+#include "../src/dxmt9/dxmt9_shader_translator.hpp"
 
 using namespace dxmt9::core;
 
@@ -96,6 +99,15 @@ struct ScreenSpaceTexturedVertex {
   float v = 0.0f;
 };
 
+struct TextureUploadRecord {
+  TextureHandle handle{};
+  u32 level = 0;
+  u32 width = 0;
+  u32 height = 0;
+  u32 pitch = 0;
+  std::vector<u8> bytes;
+};
+
 constexpr u32 kD3DSIO_MOV = 1u;
 constexpr u32 kD3DSIO_ADD = 2u;
 constexpr u32 kD3DSIO_SLT = 12u;
@@ -126,6 +138,7 @@ constexpr u32 kD3DSPR_TEMP = 0u;
 constexpr u32 kD3DSPR_CONST = 2u;
 constexpr u32 kD3DSPR_ADDR = 3u;
 constexpr u32 kD3DSPR_RASTOUT = 4u;
+constexpr u32 kD3DSPR_TEXCRDOUT = 6u;
 constexpr u32 kD3DSPR_COLOROUT = 8u;
 constexpr u32 kD3DSPR_PREDICATE = 19u;
 constexpr u32 kFvfXyzrhw = 0x0004u;
@@ -174,6 +187,25 @@ std::vector<u32> makeVertexBytecode() {
   return words;
 }
 
+std::vector<u32> makeVertexTexcoordBytecode() {
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(true, 2, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_DEF, 5));
+  words.push_back(makeDstToken(kD3DSPR_CONST, 0));
+  words.push_back(std::bit_cast<u32>(1.0f));
+  words.push_back(std::bit_cast<u32>(2.0f));
+  words.push_back(std::bit_cast<u32>(3.0f));
+  words.push_back(std::bit_cast<u32>(4.0f));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_RASTOUT, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEXCRDOUT, 1));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(kD3DSIO_END);
+  return words;
+}
+
 std::vector<u32> makePixelBytecode() {
   std::vector<u32> words;
   words.push_back(makeVersionToken(false, 2, 0));
@@ -190,6 +222,31 @@ std::vector<u32> makePixelBytecode() {
   words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
   words.push_back(makeDstToken(kD3DSPR_COLOROUT, 0));
   words.push_back(makeSrcToken(kD3DSPR_TEMP, 0));
+  words.push_back(kD3DSIO_END);
+  return words;
+}
+
+std::vector<u32> makePixelMrtBytecode() {
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(false, 2, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_DEF, 5));
+  words.push_back(makeDstToken(kD3DSPR_CONST, 0));
+  words.push_back(std::bit_cast<u32>(1.0f));
+  words.push_back(std::bit_cast<u32>(0.0f));
+  words.push_back(std::bit_cast<u32>(0.0f));
+  words.push_back(std::bit_cast<u32>(1.0f));
+  words.push_back(makeInstructionToken(kD3DSIO_DEF, 5));
+  words.push_back(makeDstToken(kD3DSPR_CONST, 1));
+  words.push_back(std::bit_cast<u32>(0.0f));
+  words.push_back(std::bit_cast<u32>(1.0f));
+  words.push_back(std::bit_cast<u32>(0.0f));
+  words.push_back(std::bit_cast<u32>(1.0f));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_COLOROUT, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_COLOROUT, 1));
+  words.push_back(makeSrcToken(kD3DSPR_CONST, 1));
   words.push_back(kD3DSIO_END);
   return words;
 }
@@ -355,6 +412,11 @@ struct RecordingBackend final : BackendDevice {
     unmappedBuffers.push_back(handle);
   }
 
+  void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
+                          std::span<const u8> bytes) override {
+    textureUploads.push_back({handle, level, width, height, pitch, std::vector<u8>(bytes.begin(), bytes.end())});
+  }
+
   void submitDraw(const DrawDesc& desc) override {
     draws.push_back(desc);
   }
@@ -392,6 +454,7 @@ struct RecordingBackend final : BackendDevice {
   std::vector<SurfaceHandle> destroyedSurfaces;
   std::vector<std::pair<BufferHandle, u32>> mappedBuffers;
   std::vector<BufferHandle> unmappedBuffers;
+  std::vector<TextureUploadRecord> textureUploads;
   std::vector<DrawDesc> draws;
   std::vector<ClearDesc> clears;
   std::vector<SurfaceCopyDesc> surfaceCopies;
@@ -433,6 +496,16 @@ void testFormatAndCaps() {
   const auto* r8g8b8 = findFormatInfo(Format::R8G8B8);
   check(r8g8b8 != nullptr, "R8G8B8 format info missing");
   checkEq(r8g8b8->support, FormatClass::Unsupported, "R8G8B8 support class");
+
+  const auto* dxt1 = findFormatInfo(Format::DXT1);
+  check(dxt1 != nullptr, "DXT1 format info missing");
+  checkEq(dxt1->backendFormat, BackendPixelFormat::BC1_RGBA, "DXT1 backend format");
+  checkEq(dxmt9::convert::toPixelFormat(Format::DXT1, BackendLimits{}),
+          WMTPixelFormatBC1_RGBA, "DXT1 WMT format");
+  checkEq(dxmt9::convert::toCullMode(static_cast<u32>(CullMode::Cw)),
+          WMTCullModeFront, "D3DCULL_CW culls clockwise front faces");
+  checkEq(dxmt9::convert::toCullMode(static_cast<u32>(CullMode::Ccw)),
+          WMTCullModeBack, "D3DCULL_CCW culls counter-clockwise back faces");
 
   BackendLimits limits{};
   limits.maxTextureSize = 4096;
@@ -479,6 +552,26 @@ void testFormatAndCaps() {
           "4x MSAA support");
   checkEq(factory.checkDeviceMultiSampleType(0, Format::A8R8G8B8, MultiSampleType::Eight), D3DERR_NOTAVAILABLE,
           "8x MSAA support");
+}
+
+void testDepthStencilKeyDisablesDepthCompare() {
+  DrawDesc desc{};
+  desc.rs.values[RS_Z_ENABLE] = 0u;
+  desc.rs.values[RS_Z_WRITE_ENABLE] = 1u;
+  desc.rs.values[RS_Z_FUNC] = static_cast<u32>(CompareFunc::LessEqual);
+
+  auto key = dxmt9::state::makeDepthStencilKey(desc);
+  check(!key.depthEnable, "ZENABLE=0 disables depth");
+  check(!key.depthWrite, "ZENABLE=0 disables depth writes");
+  checkEq(key.depthFunc, static_cast<u32>(CompareFunc::Always),
+          "ZENABLE=0 maps depth compare to always");
+
+  desc.rs.values[RS_Z_ENABLE] = 1u;
+  key = dxmt9::state::makeDepthStencilKey(desc);
+  check(key.depthEnable, "ZENABLE=1 enables depth");
+  check(key.depthWrite, "ZENABLE=1 keeps depth writes");
+  checkEq(key.depthFunc, static_cast<u32>(CompareFunc::LessEqual),
+          "ZENABLE=1 preserves ZFUNC");
 }
 
 void testHelpers() {
@@ -612,9 +705,24 @@ void testShaderThunk() {
   checkContains(vertexSource, "vertex VSOut dxmt9_vs", "vertex shader source");
   checkContains(vertexSource, "def c0", "vertex shader decode comment");
   checkContains(vertexSource, "cFloat[0] = float4(1.0f, 2.0f, 3.0f, 4.0f)", "vertex shader constant define");
+  checkContains(vertexSource, "for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }",
+                "vertex shader temp initialization");
   checkContains(vertexSource, "outPosition = cFloat[0]", "vertex shader mov translation");
   checkContains(vertexSource, "clip_distance", "vertex shader clip distance");
   dxmt9_winemetal_destroy_shader(vertexHandle);
+
+  const auto vertexTexcoordWords = makeVertexTexcoordBytecode();
+  WinemetalShaderCompileRequest vertexTexcoordRequest{};
+  vertexTexcoordRequest.kind = WinemetalShaderKind_D3DBytecodeVertex;
+  vertexTexcoordRequest.bytecode = vertexTexcoordWords.data();
+  vertexTexcoordRequest.bytecodeSize = static_cast<dxmt9_u64>(vertexTexcoordWords.size() * sizeof(u32));
+  vertexTexcoordRequest.bytecodeHash = hashBytes(std::as_bytes(std::span(vertexTexcoordWords)));
+  const auto vertexTexcoordHandle = dxmt9_winemetal_compile_shader(&vertexTexcoordRequest);
+  check(vertexTexcoordHandle != 0, "vertex texcoord shader thunk");
+  const auto vertexTexcoordSource = shaderSourceToString(vertexTexcoordHandle);
+  checkContains(vertexTexcoordSource, "outTexcoord[1] = cFloat[0]", "vertex texcoord oT1 write");
+  checkContains(vertexTexcoordSource, "out.texcoord1 = outTexcoord[1]", "vertex texcoord oT1 output");
+  dxmt9_winemetal_destroy_shader(vertexTexcoordHandle);
 
   WinemetalShaderCompileRequest pixelRequest{};
   pixelRequest.kind = WinemetalShaderKind_D3DBytecodePixel;
@@ -629,10 +737,26 @@ void testShaderThunk() {
   const auto pixelSource = shaderSourceToString(pixelHandle);
   checkContains(pixelSource, "fragment float4 dxmt9_fs", "pixel shader source");
   checkContains(pixelSource, "def c0", "pixel shader decode comment");
+  checkContains(pixelSource, "for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }",
+                "pixel shader temp initialization");
   checkContains(pixelSource, "add r0, c0, c0", "pixel shader arithmetic comment");
   checkContains(pixelSource, "r[0] = (cFloat[0] + cFloat[0])", "pixel shader arithmetic translation");
   checkContains(pixelSource, "discard_fragment()", "pixel shader alpha test");
   dxmt9_winemetal_destroy_shader(pixelHandle);
+
+  const auto pixelMrtWords = makePixelMrtBytecode();
+  WinemetalShaderCompileRequest pixelMrtRequest{};
+  pixelMrtRequest.kind = WinemetalShaderKind_D3DBytecodePixel;
+  pixelMrtRequest.bytecode = pixelMrtWords.data();
+  pixelMrtRequest.bytecodeSize = static_cast<dxmt9_u64>(pixelMrtWords.size() * sizeof(u32));
+  pixelMrtRequest.bytecodeHash = hashBytes(std::as_bytes(std::span(pixelMrtWords)));
+  const auto pixelMrtHandle = dxmt9_winemetal_compile_shader(&pixelMrtRequest);
+  check(pixelMrtHandle != 0, "pixel mrt shader thunk");
+  const auto pixelMrtSource = shaderSourceToString(pixelMrtHandle);
+  checkContains(pixelMrtSource, "struct FSOut", "pixel mrt output struct");
+  checkContains(pixelMrtSource, "float4 color1 [[color(1)]]", "pixel mrt color1 output");
+  checkContains(pixelMrtSource, "outColor[1] = cFloat[1]", "pixel mrt color1 write");
+  dxmt9_winemetal_destroy_shader(pixelMrtHandle);
 
   DeviceState state;
   state.reset();
@@ -1007,6 +1131,8 @@ void testDeviceCoreFlow() {
   auto texture = device->createTexture({4, 4, 1, 2, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
   auto srcTexture = device->createTexture({2, 2, 1, 2, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
   auto dstTexture = device->createTexture({2, 2, 1, 2, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
+  auto dxt5Texture =
+      device->createTexture({1276, 164, 1, 1, Format::DXT5, TextureType::TwoD, Pool::Managed, UsageTexture});
   auto systemSurface = device->createSurface({2, 2, Format::A8R8G8B8, Pool::SystemMem, 0, false, false});
   auto scratchSurface = device->createSurface({2, 2, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
   auto copySurface = device->createSurface({2, 2, Format::A8R8G8B8, Pool::Default, 0, false, false});
@@ -1018,6 +1144,7 @@ void testDeviceCoreFlow() {
   check(texture != nullptr, "managed texture");
   check(srcTexture != nullptr, "source texture");
   check(dstTexture != nullptr, "destination texture");
+  check(dxt5Texture != nullptr, "dxt5 texture");
   check(systemSurface != nullptr, "systemmem surface");
   check(scratchSurface != nullptr, "scratch surface");
   check(copySurface != nullptr, "copy surface");
@@ -1059,6 +1186,21 @@ void testDeviceCoreFlow() {
   checkEq(device->updateTexture(srcTexture, dstTexture), D3D_OK, "update texture");
   checkBytes(dstTexture->levelBytes(0), srcTexture->levelBytes(0), "texture level 0 copy");
   checkBytes(dstTexture->levelBytes(1), srcTexture->levelBytes(1), "texture level 1 copy");
+
+  checkEq(formatRowPitch(Format::DXT5, 1276), 5104u, "dxt5 row pitch");
+  checkEq(formatRowCount(Format::DXT5, 164), 41u, "dxt5 row count");
+  checkEq(formatByteSize(Format::DXT5, 1276, 164), size_t{209264}, "dxt5 byte size");
+  auto dxt5Region = dxt5Texture->lockRect(0, nullptr, 0);
+  check(dxt5Region.data != nullptr, "dxt5 texture lock");
+  checkEq(dxt5Region.pitch, 5104u, "dxt5 texture pitch");
+  auto* dxt5Bytes = static_cast<u8*>(dxt5Region.data);
+  dxt5Bytes[0] = 0x11u;
+  dxt5Bytes[formatByteSize(Format::DXT5, 1276, 164) - 1u] = 0xeeu;
+  dxt5Texture->unlockRect(0);
+  check(!backend->textureUploads.empty(), "dxt5 texture upload");
+  const auto& dxt5Upload = backend->textureUploads.back();
+  checkEq(dxt5Upload.pitch, 5104u, "dxt5 upload pitch");
+  checkEq(dxt5Upload.bytes.size(), size_t{209264}, "dxt5 upload size");
 
   checkEq(device->fillSurface(systemSurface, nullptr, {0.0f, 0.0f, 1.0f, 1.0f}), D3D_OK, "systemmem fill");
   checkEq(device->fillSurface(scratchSurface, nullptr, {1.0f, 1.0f, 0.0f, 1.0f}), D3D_OK, "scratch fill");
@@ -1211,8 +1353,8 @@ void testDeviceCoreFlow() {
   checkEq(draw0.indexType, IndexType::UInt32, "draw0 index type");
   checkEq(draw0.vertexDecl.fvf, 0x1122u, "draw0 fvf");
   checkEq(draw0.vertexDecl.elements.size(), size_t{1}, "draw0 vertex decl size");
-  checkEq(draw0.vertexDecl.streams[0].buffer, dynamicBuffer, "draw0 stream buffer");
-  checkEq(draw0.vertexDecl.streams[0].offset, 8u, "draw0 stream offset");
+  checkEq(draw0.vertexDecl.streams[0].buffer, nullptr, "draw0 stream buffer");
+  checkEq(draw0.vertexDecl.streams[0].offset, 0u, "draw0 stream offset");
   checkEq(draw0.vertexDecl.streams[0].stride, 16u, "draw0 stream stride");
   checkEq(draw0.textures[0].handle, texture->handle(), "draw0 texture handle");
   checkEq(draw0.textures[0].stageStates.at(TSS_COLOR_OP), static_cast<u32>(TextureOp::SelectArg1),
@@ -1252,7 +1394,7 @@ void testDeviceCoreFlow() {
   checkEq(device->drawIndexedPrimitiveUP(PrimitiveType::TriangleFan, 2,
                                           std::span<const u8>(vertexPayload.data(), vertexPayload.size()),
                                           std::span<const u8>(fanIndexBytes.data(), fanIndexBytes.size()),
-                                          IndexType::UInt32),
+                                          IndexType::UInt32, 4),
           D3D_OK, "draw indexed primitive up");
   checkEq(backend->draws.size(), size_t{2}, "second draw count");
   const auto& draw1 = backend->draws[1];
@@ -1260,6 +1402,23 @@ void testDeviceCoreFlow() {
   checkEq(draw1.primitiveCount, 2u, "fan primitive count");
   checkEq(draw1.indexType, IndexType::UInt32, "fan draw index type");
   checkEq(draw1.userIndexData.size(), sizeof(u32) * 6u, "fan user index payload");
+  checkEq(draw1.vertexDecl.streams[0].buffer, nullptr, "fan up stream buffer");
+  checkEq(draw1.vertexDecl.streams[0].offset, 0u, "fan up stream offset");
+  checkEq(draw1.vertexDecl.streams[0].stride, 4u, "fan up stream stride");
+
+  std::array<u8, 4> fanVertexPayload{1, 2, 3, 4};
+  checkEq(device->drawPrimitiveUP(PrimitiveType::TriangleFan, 2,
+                                  std::span<const u8>(fanVertexPayload.data(), fanVertexPayload.size()), 1),
+          D3D_OK, "draw primitive up fan");
+  checkEq(backend->draws.size(), size_t{3}, "third draw count");
+  const auto& draw2 = backend->draws[2];
+  const std::array<u8, 6> expectedFanVertices{1, 2, 3, 1, 3, 4};
+  checkEq(draw2.primitiveType, PrimitiveType::TriangleList, "up fan decomposed to triangle list");
+  checkEq(draw2.primitiveCount, 2u, "up fan primitive count");
+  checkBytes(std::span<const u8>(draw2.userVertexData.data(), draw2.userVertexData.size()),
+             std::span<const u8>(expectedFanVertices.data(), expectedFanVertices.size()),
+             "up fan vertex payload");
+  checkEq(draw2.vertexDecl.streams[0].stride, 1u, "up fan stride");
 
   auto occlusion = device->createQuery(QueryType::Occlusion);
   auto timestamp = device->createQuery(QueryType::Timestamp);
@@ -1562,8 +1721,8 @@ void testComWrappersEx() {
 
   PresentParameters params{};
   params.windowed = false;
-  params.backBufferWidth = 0;
-  params.backBufferHeight = 0;
+  params.backBufferWidth = 1024;
+  params.backBufferHeight = 768;
   params.backBufferFormat = Format::Unknown;
   params.presentationInterval = PresentInterval::Default;
   params.deviceWindow = Handle{202};
@@ -1693,11 +1852,89 @@ void testFullscreenAndDeviceLost() {
   checkEq(device->swapChain()->backBuffer()->desc().height, 1080u, "fullscreen reset height");
 }
 
+void testPixelShaderDepthOutputTranslation() {
+  const std::array<u32, 41> bytecode = {
+      0xffff0300u, 0x0017fffeu, 0x42415443u, 0x0000001cu, 0x00000023u,
+      0xffff0300u, 0x00000000u, 0x00000000u, 0x00000120u, 0x0000001cu,
+      0x335f7370u, 0x4d00305fu, 0x6f726369u, 0x74666f73u, 0x29522820u,
+      0x44334420u, 0x53203958u, 0x65646168u, 0x6f432072u, 0x6c69706du,
+      0x39207265u, 0x2e35312eu, 0x2e393737u, 0x30303030u, 0xababab00u,
+      0x05000051u, 0xa00f0000u, 0x3f800000u, 0x00000000u, 0x00000000u,
+      0x00000000u, 0x02000001u, 0x802f0800u, 0xa0000000u, 0x02000001u,
+      0x802f0801u, 0xa0000000u, 0x02000001u, 0x902f0800u, 0xa0000000u,
+      0x0000ffffu,
+  };
+
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::Bytecode;
+  shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(bytecode.data()),
+                               reinterpret_cast<const u8*>(bytecode.data() + bytecode.size()));
+  shader.bytecode.hash = hashBytes(std::as_bytes(std::span<const u32>(bytecode.data(), bytecode.size())));
+
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  const auto source = dxmt9::translator::makeTranslatedFragmentSource(shader, desc);
+  check(source.find("float depth [[depth(any)]]") != std::string::npos,
+        "pixel shader oDepth emits Metal depth output");
+  check(source.find("outDepth =") != std::string::npos,
+        "pixel shader oDepth writes translated scalar depth");
+  check(source.find("result.depth = outDepth") != std::string::npos,
+        "pixel shader oDepth returns depth field");
+}
+
+void testPixelShaderSamplerRegisterTranslation() {
+  const std::array<u32, 15> bytecode = {
+      0xffff0200u,
+      0x0200001fu, 0x80000000u, 0xb0030000u,
+      0x0200001fu, 0x90000000u, 0xa00f0802u,
+      0x03000042u, 0x800f0000u, 0xb0e40000u, 0xa0e40802u,
+      0x02000001u, 0x800f0800u, 0x80e40000u,
+      0x0000ffffu,
+  };
+
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::Bytecode;
+  shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(bytecode.data()),
+                               reinterpret_cast<const u8*>(bytecode.data() + bytecode.size()));
+  shader.bytecode.hash = hashBytes(std::as_bytes(std::span<const u32>(bytecode.data(), bytecode.size())));
+
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  const auto source = dxmt9::translator::makeTranslatedFragmentSource(shader, desc);
+  checkContains(source, "texture2d<float> tex2 [[texture(2)]]", "pixel shader declares sampler texture slot");
+  checkContains(source, "sampler samp2 [[sampler(2)]]", "pixel shader declares sampler state slot");
+  checkContains(source, "tex2.sample(samp2", "pixel shader samples declared sampler register");
+}
+
+void testPixelShaderInputSemanticTranslation() {
+  const std::array<u32, 15> bytecode = {
+      0xffff0300u,
+      0x0200001fu, 0x80000005u, 0x90230000u,
+      0x0200001fu, 0x90000000u, 0xa00f0802u,
+      0x03000042u, 0x800f0000u, 0x90e40000u, 0xa0e40802u,
+      0x02000001u, 0x800f0800u, 0x80e40000u,
+      0x0000ffffu,
+  };
+
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::Bytecode;
+  shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(bytecode.data()),
+                               reinterpret_cast<const u8*>(bytecode.data() + bytecode.size()));
+  shader.bytecode.hash = hashBytes(std::as_bytes(std::span<const u32>(bytecode.data(), bytecode.size())));
+
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  const auto source = dxmt9::translator::makeTranslatedFragmentSource(shader, desc);
+  checkContains(source, "dxmt9_select_texcoord(in, 0u)", "ps_3_0 dcl_texcoord input maps to texcoord");
+  checkContains(source, "tex2.sample(samp2", "ps_3_0 input semantic sample keeps sampler register");
+}
+
 }  // namespace
 
 int main() {
   try {
     testFormatAndCaps();
+    testDepthStencilKeyDisablesDepthCompare();
     testHelpers();
     testDeviceCPresentIntervalMapping();
     testRingArenaExhaustionFallsBack();
@@ -1711,6 +1948,9 @@ int main() {
     testComWrappers();
     testComWrappersEx();
     testFullscreenAndDeviceLost();
+    testPixelShaderDepthOutputTranslation();
+    testPixelShaderSamplerRegisterTranslation();
+    testPixelShaderInputSemanticTranslation();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;
