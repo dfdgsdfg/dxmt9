@@ -25,8 +25,9 @@ API-level conformance tests that encode Windows D3D9-observed behaviour for D3D9
 COM object lifetime, base vs Ex `QueryInterface()` behaviour, state block rules,
 reset/lost-device semantics, adapter/display validation, presentation-parameter
 validation, shared-handle policy, PE export compatibility, HRESULT propagation,
-private data handling, format-conversion and multisample validation, and D3D9Ex
-user-memory resources.
+private data handling, format-conversion and multisample validation, queries,
+resource wrapper edge cases, window/cursor integration, auxiliary exports,
+D3D9On12 stub compatibility, and D3D9Ex user-memory resources.
 These tests are ported into small PE executables that run under Wine against
 dxmt9's `d3d9.dll`. They are behavioural oracles, not a requirement to copy
 Wine's `dlls/d3d9` implementation structure.
@@ -132,6 +133,21 @@ and pre-transformed vertices (`D3DFVF_XYZRHW`).
 
 **R-TEST-4.2** There must be a test verifying that a triangle at `z = 0.5` in clip
 space renders at the correct depth in the depth buffer.
+
+**R-TEST-4.3** There must be a programmable texture-orientation smoke test that
+creates a 2x2 texture with distinct top-left, top-right, bottom-left, and
+bottom-right colors, draws it through a `ps_2_0` `texld` path, performs
+`GetRenderTargetData()` readback, and verifies all four rendered quadrants. The
+test must fail if translated pixel shaders globally flip the V coordinate by
+default.
+
+**R-TEST-4.4** There must be native source-contract tests for the coordinate
+debug flags. With `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` unset, translated
+programmable pixel shader source must not contain the forced `1.0f - v` sample
+coordinate transform; with the flag set, the transform must be visible in the
+generated source. Separately, `DXMT_DEBUG_FLIP_VERTEX_Y` must only affect
+translated vertex shader source and must not be coupled to pixel shader
+sampling.
 
 ---
 
@@ -393,11 +409,15 @@ machine-readable in the same style as shader corpus provenance.
 |---|---|
 | `test_refcount` and related object lifetime checks | public COM refcounts for device children, implicit swap chains, back buffers, texture-level surfaces, and `Get*` methods |
 | scene tests | `BeginScene()` / `EndScene()` success and invalid-call transitions |
-| display-mode and factory validation tests | adapter index, display format, valid-vs-invalid device type, multisample quality-level behaviour, invalid multisample enum handling, `CheckDeviceType`, `CheckDeviceFormat`, `CheckDeviceFormatConversion`, and mode enumeration return codes |
-| presentation-parameter tests | invalid `SwapEffect`, `BackBufferCount`, `D3DSWAPEFFECT_COPY` count, and `PresentationInterval` combinations |
+| display-mode and factory validation tests | adapter index, display format, valid-vs-invalid device type, multisample quality-level behaviour, invalid multisample enum handling, `CheckDeviceType`, `CheckDeviceFormat`, `CheckDeviceFormatConversion`, mode enumeration return codes, and `GetAdapterDisplayMode()` alpha-format normalization |
+| presentation-parameter tests | invalid `SwapEffect`, `BackBufferCount`, `D3DSWAPEFFECT_COPY` count, `PresentationInterval` combinations, `BackBufferWidth/Height == 0` window-derived normalization, `BackBufferFormat == UNKNOWN` handling, and caller-visible `D3DPRESENT_PARAMETERS` mutation |
 | reset/lost-device tests | `Reset()`, default-pool invalidation, managed/systemmem survival, reset clearing scene state, and cooperative-level transitions |
 | private-data tests | `SetPrivateData`, `GetPrivateData`, `FreePrivateData`, `D3DSPD_IUNKNOWN` ownership, failed-set preservation, missing GUID size preservation, and coverage for every resource wrapper |
 | shared-handle tests | non-Ex `E_NOTIMPL`, Ex pool/resource-class error codes, D3D9Ex user-memory texture/offscreen-surface success cases, lock pointer/pitch validation, and no silent ignore of non-null shared handles |
+| query tests | `CreateQuery(type, NULL)` support probes, invalid query type return codes and out-pointer preservation, `GetDataSize()` values, pre-issue `GetData()` data writes, short-buffer handling, and occlusion/timestamp-disjoint public data sizes |
+| resource wrapper tests | texture/surface/volume `GetContainer()` and `GetLevelDesc()` behaviour, invalid level handling, `LockRect()` / `LockBox()` invalid rectangles, double lock/unlock cases, block-compressed alignment, `GetDC()` / `ReleaseDC()`, `SetLOD()` / `GetLOD()`, autogen mipmap filter/generation, and `D3DFMT_UNKNOWN` creation failures |
+| window and cursor tests | `SetCursorProperties()`, `SetCursorPosition()`, cursor clipping, device window reset, focus/device window message handling, fullscreen/windowed style changes, destroyed-window behaviour, and desktop-window creation |
+| auxiliary compatibility tests | `Direct3DShaderValidatorCreate9`, `D3DPERF_*`, `DebugSetMute`, and `Direct3DCreate9On12` loader-safe behaviour |
 
 **R-TEST-12.4** The initial required subset from Wine `d3d9ex.c` is:
 
@@ -410,6 +430,8 @@ machine-readable in the same style as shader corpus provenance.
 | Ex reset/device-state tests | `ResetEx`, `CheckDeviceState`, Ex cooperative-level behaviour, and resource survival differences |
 | Ex swap-chain tests | `IDirect3DSwapChain9Ex` exposure, `GetDisplayModeEx` size validation, `GetLastPresentCount`, and `GetPresentStatistics` zeroing behaviour |
 | `test_user_memory` | `D3DPOOL_SYSTEMMEM` user-memory texture and offscreen-surface success, `LockRect` pointer/pitch identity, and invalid level/pool/resource-class failures |
+| Ex window tests | `test_wndproc`, `test_wndproc_windowed`, `test_window_style`, desktop-window creation, and Ex-specific reset/window-message behaviour |
+| Ex resource and frame-latency tests | `test_format_unknown`, resource-access/sysmem draw cases, pinned buffers, `SetMaximumFrameLatency()` / `GetMaximumFrameLatency()` validation, and present-statistics stubs |
 
 **R-TEST-12.5** The initial required subset from Wine `stateblock.c` is:
 
@@ -418,7 +440,7 @@ machine-readable in the same style as shader corpus provenance.
 | `CreateStateBlock(D3DSBT_ALL)` | exact captured state subset and documented D3D9 quirks |
 | `D3DSBT_VERTEXSTATE` / `D3DSBT_PIXELSTATE` | type-specific state masks |
 | `BeginStateBlock()` / `EndStateBlock()` | delta recording, nested-recording invalid calls, and no-active-recording invalid calls |
-| `Capture()` / `Apply()` | invalid calls while recording, restore ordering, derived-cache invalidation, render-target interactions, shaders/constants, textures, autogen-mipmap bits, and stream/index bindings |
+| `Capture()` / `Apply()` | invalid calls while recording, restore ordering, derived-cache invalidation, render-target interactions, shaders/constants, lights, transforms, render states, texture stage states, sampler states, textures, autogen-mipmap bits, vertex declarations/FVF, and stream/index bindings |
 
 **R-TEST-12.6** These conformance tests are allowed to fail during test-first
 implementation, but any failing case must be listed in `specs/gap.md` with the
@@ -457,3 +479,72 @@ level, and unsupported but well-formed multisample requests preserve/write
 `CreateOffscreenPlainSurface()` caller-memory creation, `LockRect()` pointer and
 pitch identity, and Windows D3D9-compatible failures for invalid levels,
 unsupported pools, cube/volume textures, and vertex/index buffers.
+
+**R-TEST-12.12** Query conformance tests must be derived from Wine
+`dlls/d3d9/tests/device.c:test_query_support`, `test_occlusion_query`, and
+`test_timestamp_query`. They must cover support probing with
+`CreateQuery(type, NULL)`, invalid query enums, unchanged out pointers on
+creation failure, public `GetDataSize()` values, pre-issue `GetData()` writes,
+short-buffer writes without overrun, `D3DGETDATA_FLUSH`, and the
+timestamp-disjoint `BOOL` result size.
+
+**R-TEST-12.13** Resource wrapper conformance tests must be derived from Wine
+`device.c` resource tests including `test_surface_get_container`,
+`test_volume_get_container`, `test_lod`, `test_getdc`, `test_surface_blocks`,
+`test_volume_locking`, `test_mipmap_gen`, `test_filter`, and
+`test_format_unknown`. The dxmt9 ports must prioritise observable COM/HRESULT,
+pitch, pointer, and data-preservation behaviour over Wine's internal storage
+layout.
+
+**R-TEST-12.14** Window and cursor conformance tests must be derived from Wine
+`device.c` / `d3d9ex.c` tests covering `test_cursor`, `test_cursor_pos`,
+`test_cursor_clipping`, `test_wndproc`, `test_wndproc_windowed`,
+`test_window_style`, `test_device_window_reset`, `test_destroyed_window`, and
+desktop-window creation. Tests that depend on platform-specific window-manager
+messages may allow a narrow Wine-host variance, but must still assert stable
+D3D9 API return values and device/window ownership state.
+
+**R-TEST-12.15** Auxiliary export tests must cover more than symbol presence.
+`Direct3DShaderValidatorCreate9()` must be called and its returned validator
+must be exercised for loader-safe `QueryInterface`, `AddRef`, `Release`,
+`Begin`, `Instruction`, and `End` behaviour. `D3DPERF_*` and `DebugSetMute`
+must be callable no-op exports with Wine/Windows-compatible return values for
+safe inputs.
+
+**R-TEST-12.16** D3D9On12 compatibility tests must be derived from Wine
+`device.c:test_d3d9on12`. Because dxmt9 does not implement D3D12 interop, the
+required behaviour is loader-safe and query-safe failure: the export must be
+present, unsupported interface queries must return `E_NOINTERFACE` with a
+cleared output pointer, `GetD3D12Device(NULL)` must return `E_INVALIDARG` if the
+interface is exposed, and unwrap/return methods must fail without touching
+backend Metal state.
+
+**R-TEST-12.17** Presentation-parameter tests must assert caller-visible
+normalisation after successful `CreateDevice()`, `CreateDeviceEx()`, `Reset()`,
+and `ResetEx()`. Required cases include zero back-buffer dimensions, zero
+back-buffer count, unknown back-buffer format in windowed mode, fullscreen mode
+matching, and preservation of invalid input values on failure where the Wine
+oracle observes preservation.
+
+**R-TEST-12.18** Device utility and creation-flag tests must include Wine-derived
+coverage for `GetDirect3D(NULL)`, `GetDeviceCaps(NULL)`, `GetCreationParameters`,
+`GetAvailableTextureMem`, `EvictManagedResources`, `ValidateDevice`,
+`GetRasterStatus`, `SetDialogBoxMode`, `D3DCREATE_FPU_PRESERVE`,
+`D3DCREATE_MULTITHREADED`, and `D3DCREATE_NOWINDOWCHANGES`. Where Metal cannot
+provide a native equivalent, the test asserts the Windows D3D9-compatible stub
+or validation result rather than backend behaviour.
+
+**R-TEST-12.19** Stateblock conformance ports must use the Wine
+`stateblock.c:test_state_management` matrix as the coverage checklist. The
+minimum passing set includes render states, texture stage states, sampler
+states, transforms, material, lights, shader constants, vertex and pixel
+shaders, textures, render targets, stream sources, index buffers, vertex
+declarations, generated FVF declarations, and the interaction between state
+blocks and reset/resource lifetime.
+
+**R-TEST-12.20** The PE conformance suite must have its own machine-readable
+manifest under `tests/d3d9_conformance/MANIFEST.toml`. Each entry must include
+the executable, local test function, Wine source anchor, upstream commit,
+required deployment lanes (`app-local`, `builtin`, or both), architecture
+targets (`x86`, `x64`), status, and owning implementation area. The manifest is
+the authoritative gap list for Wine-derived D3D9 API conformance.

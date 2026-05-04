@@ -102,6 +102,23 @@ observed in Wine/Windows export profiles (`D3DPERF_BeginEvent`,
 `Direct3DCreate9On12` stub. Unsupported auxiliary exports may be no-op stubs,
 but they must not be missing from the PE export table.
 
+**R-CORE-1.14** `Direct3DShaderValidatorCreate9()` may be a non-validating
+stub, but it must return a stable, callable validator object. The validator's
+`QueryInterface()` must fail unsupported interfaces with `E_NOINTERFACE` and a
+cleared output pointer; `AddRef()` / `Release()` must be safe on the singleton;
+`Begin()`, `Instruction()`, and `End()` must be callable and return a
+Wine/Windows-compatible success or validation failure without dereferencing
+invalid optional state.
+
+**R-CORE-1.15** `Direct3DCreate9On12()` is required as a loader-compatibility
+entry point, not as a D3D12 interop implementation. With unsupported or disabled
+9On12 arguments it must return an ordinary Ex-capable D3D9 factory or a clean
+`NULL` factory result on initialization failure. If dxmt9 exposes
+`IDirect3DDevice9On12`, the interface must be query-safe: unsupported D3D12
+device queries return `E_NOINTERFACE` with a cleared output pointer, null output
+arguments return `E_INVALIDARG`, and unwrap/return methods fail without
+touching Metal backend state.
+
 ---
 
 ## 2. Device Lifecycle
@@ -138,7 +155,11 @@ validated by Wine D3D9 tests before creating or rebuilding the swap chain:
 - base D3D9 accepts at most three back buffers; D3D9Ex accepts at most thirty;
 - `D3DSWAPEFFECT_COPY` accepts at most one back buffer;
 - `PresentationInterval` must be `DEFAULT`, `ONE`, `TWO`, `THREE`, `FOUR`, or
-  `IMMEDIATE`.
+  `IMMEDIATE`;
+- successful creation/reset must write the normalized presentation parameters
+  back to the caller-visible `D3DPRESENT_PARAMETERS`, including derived
+  back-buffer width/height, normalized back-buffer count, and resolved
+  back-buffer format.
 
 Invalid presentation parameters must fail with `D3DERR_INVALIDCALL`; allocation
 or backend failures must preserve their original `HRESULT`.
@@ -332,6 +353,19 @@ function texture-and-lighting blending pipeline must be active. Its behavior mus
 governed by the texture stage state chain (`D3DTSS_COLOROP`, `D3DTSS_ALPHAOP`, and
 related arguments).
 
+**R-CORE-6.5** Translated programmable pixel shaders must preserve D3D texture
+coordinates by default. `texld` / `TEX` and related sampling instructions must
+not globally invert the V coordinate in the pixel shader. Texture orientation
+differences between D3D and Metal must be handled by resource upload/readback,
+surface addressing, and vertex/raster coordinate mapping rather than by a
+default pixel-shader V flip.
+
+**R-CORE-6.6** `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` is a diagnostic source-contract
+override only. When set, translated programmable pixel shaders may emit an
+explicit `1.0f - v` coordinate transform to bisect texture-orientation bugs.
+This flag must be off by default, must not be required for correct rendering,
+and must remain independent from vertex clip-space Y debugging.
+
 ---
 
 ## 7. Vertex Format
@@ -354,6 +388,12 @@ same cached declaration object for repeated equivalent FVF conversions; switchin
 between explicit declarations and FVF must preserve the public refcount
 behaviour observed by Wine.
 
+**R-CORE-7.5** Vertex clip-space Y correction is a vertex/raster contract, not a
+pixel texture-coordinate contract. The default programmable vertex-shader
+translation must not inject a global debug Y inversion. `DXMT_DEBUG_FLIP_VERTEX_Y`
+may force `out.position.y = -out.position.y` only as a diagnostic bisect path;
+it must be controlled separately from `DXMT_DEBUG_FORCE_PIXEL_V_FLIP`.
+
 ---
 
 ## 8. Queries
@@ -370,8 +410,12 @@ permitted to be clamped to a boolean (non-zero = visible).
 behaviour validated by Wine D3D9 tests. Invalid query types return
 `D3DERR_NOTAVAILABLE`; `GetDataSize()` must match the type-specific public size,
 including `sizeof(DWORD)` for occlusion and `sizeof(BOOL)` for
-timestamp-disjoint; unsupported or unavailable backend query data must not leak
-uninitialised memory to the caller.
+timestamp-disjoint; `CreateQuery(type, NULL)` must act as a support probe
+without returning an object; failed query creation must preserve the caller's
+out pointer when the Wine-derived oracle observes preservation; pre-issue
+`GetData()` and backend-unavailable query data must write deterministic
+Windows-compatible bytes for the requested public data range and must not
+overrun short caller buffers or leak uninitialised memory.
 
 ---
 
@@ -411,18 +455,25 @@ without changing existing semantics.
 all `IDirect3D9` methods; the existing factory implementation must be reused.
 
 **R-CORE-10.2** `IDirect3D9Ex::GetAdapterModeCountEx(Adapter, pFilter)` must
-return the count of display modes matching `pFilter`. If `pFilter` is `NULL`
-or `Format == D3DFMT_UNKNOWN`, all supported D3D9 adapter mode formats must be
-returned. The underlying mode list is the same as `EnumAdapterModes()` and must
-not include `D3DFMT_A8R8G8B8`.
+return the count of display modes matching `pFilter`. `pFilter` must be
+validated before use; if dxmt9 intentionally accepts a `NULL` filter as a clean
+extension, that behaviour must be documented and covered by a dxmt9-specific
+test rather than attributed to Wine. A `D3DFMT_UNKNOWN` filter format matches
+all supported D3D9 adapter mode formats. The underlying mode list is the same
+as `EnumAdapterModes()` and must not include `D3DFMT_A8R8G8B8`.
 
 **R-CORE-10.3** `IDirect3D9Ex::EnumAdapterModesEx(Adapter, pFilter, Mode, pMode)`
 must fill a `D3DDISPLAYMODEEX` for the matching mode.
-`D3DDISPLAYMODEEX::ScanLineOrdering` must be `D3DSCANLINEORDERING_PROGRESSIVE`.
+`D3DDISPLAYMODEEX::ScanLineOrdering` must report the mode's observable scanline
+ordering when known; otherwise it may report
+`D3DSCANLINEORDERING_PROGRESSIVE`. Tests must not require a hardcoded value
+when the host display reports a different valid ordering.
 
 **R-CORE-10.4** `IDirect3D9Ex::GetAdapterDisplayModeEx(Adapter, pMode, pRotation)`
 must return the current display mode as `D3DDISPLAYMODEEX`.
-`*pRotation` must be set to `D3DDISPLAYROTATION_IDENTITY`.
+When `pRotation` is non-null, `*pRotation` must reflect the host display
+rotation if available; otherwise it may report
+`D3DDISPLAYROTATION_IDENTITY`. A null `pRotation` is valid.
 
 **R-CORE-10.5** `IDirect3D9Ex::GetAdapterLUID(Adapter, pLUID)` must return a
 non-zero `LUID` that is stable for the adapter within the process lifetime.

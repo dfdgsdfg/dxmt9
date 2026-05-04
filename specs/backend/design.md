@@ -304,7 +304,7 @@ flowchart LR
     BC["D3DBC bytecode\n(SM 1.x / 2.0 / 3.0)"]
     FFP["FFPKey\n(VS or PS)"]
 
-    BC --> PRE["Preprocessing:\n1. Half-pixel offset injection (VS)\n2. Version token parse\n3. TRIANGLEFAN already gone (core)"]
+    BC --> PRE["Preprocessing:\n1. Half-pixel offset injection (VS)\n2. Version token parse\n3. TRIANGLEFAN already gone (core)\n4. Optional debug-only VS Y flip"]
     PRE --> VKD3D["vkd3d_shader_compile()\nsource: D3D_BYTECODE\ntarget: SPIRV_BINARY"]
     VKD3D --> SPIRVCROSS["spirv_cross::CompilerMSL\n→ MSL source string"]
     FFP --> FFGEN["FFP shader generator\n→ MSL source string directly"]
@@ -313,6 +313,11 @@ flowchart LR
     COMPILE --> DISKCACHE["Disk cache\nMTLBinaryArchive\nkey: SHA-1(bytecode + variant)"]
     DISKCACHE --> FN["id<MTLFunction>"]
 ```
+
+Pixel-shader texture sampling is intentionally absent from the normal
+coordinate-system preprocessing list. D3D texture coordinates are passed through
+to Metal sampling as D3D UVs; a global pixel V flip is only emitted when the
+diagnostic `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` source-contract path is enabled.
 
 **Shader variant keys** for programmable shaders:
 - Vertex: (bytecode_hash, input_layout_hash, rasterization_disabled)

@@ -131,7 +131,14 @@ include this correction.
 shader variants when required by the key. The pixel shader must execute
 `discard_fragment()` for failing fragments before any color output.
 
-**R-BACK-4.6** Clip planes enabled via `D3DRS_CLIPPLANEENABLE` must be emitted as
+**R-BACK-4.6** Programmable pixel-shader translation must not use a default
+texture-coordinate V flip to compensate for D3D/Metal coordinate differences.
+The generated MSL sampling path must preserve the D3D V coordinate unless the
+diagnostic `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` flag is enabled. This debug flag is
+not part of normal rendering correctness and must stay independent from
+`DXMT_DEBUG_FLIP_VERTEX_Y`.
+
+**R-BACK-4.7** Clip planes enabled via `D3DRS_CLIPPLANEENABLE` must be emitted as
 `[[clip_distance]]` outputs in the vertex shader. This is a Metal hardware feature
 that must not be emulated with fragment shader discards.
 

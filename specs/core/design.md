@@ -83,7 +83,7 @@ capability code:
 | `CheckDeviceFormat()` | Accept only adapter formats `X8R8G8B8`, `R5G6B5`, and `X1R5G5B5`; return `D3DERR_INVALIDCALL` for `UNKNOWN`, `D3DERR_NOTAVAILABLE` for other invalid non-zero adapter formats, and `D3DERR_INVALIDCALL` for unsupported resource types. |
 | `CheckDeviceMultiSampleType()` | Validate adapter and device-type enum before backend sample-count checks; invalid multisample enum values return `D3DERR_INVALIDCALL`; `D3DMULTISAMPLE_NONE` succeeds and reports one quality level; well-formed unsupported sample counts return `D3DERR_NOTAVAILABLE` and preserve/write `pQualityLevels` according to Wine-test-observed Windows D3D9 behaviour. |
 | `CheckDeviceFormatConversion()` | Validate adapter and device type before testing conversion support; identical source/destination formats return `D3D_OK`; unsupported well-formed conversions return `D3DERR_NOTAVAILABLE`. |
-| `CreateDevice()` / `CreateDeviceEx()` | Validate presentation parameters and return the exact creation failure `HRESULT` instead of collapsing failures to a null pointer. |
+| `CreateDevice()` / `CreateDeviceEx()` | Validate presentation parameters, normalize the caller-visible `D3DPRESENT_PARAMETERS` on success, and return the exact creation failure `HRESULT` instead of collapsing failures to a null pointer. |
 
 The bridge-facing factory creation call should therefore be status-based:
 
@@ -107,6 +107,16 @@ compatibility surface. Besides `Direct3DCreate9`, `Direct3DCreate9Ex`, and
 Wine/Windows D3D9 export profiles, such as `D3DPERF_*`, `DebugSetMute`, and
 loader-safe `Direct3DCreate9On12` stubs, so applications with static imports do
 not fail before reaching factory creation.
+
+Auxiliary exports are deliberately implemented on the PE side. They must not
+force `winemetal.so` provider loading, and their safe-call behaviour is covered
+by the Wine-derived conformance harness:
+
+| Export / interface | PE-side behaviour |
+|---|---|
+| `Direct3DShaderValidatorCreate9()` | Return a stable non-validating singleton with callable `QueryInterface`, `AddRef`, `Release`, `Begin`, `Instruction`, and `End` methods. |
+| `D3DPERF_*` / `DebugSetMute` | No-op compatibility helpers with Wine/Windows-compatible return values; no backend interaction. |
+| `Direct3DCreate9On12()` | Loader-safe entry point. It may create a normal Ex-capable D3D9 factory when 9On12 is disabled, but D3D12 interop interfaces remain query-safe stubs unless explicitly implemented. |
 
 ---
 
@@ -457,6 +467,25 @@ surfaced through `ResetEx()` and subsequent `CheckDeviceState()` rather than thr
 COM objects while public references exist, but they are no longer bound to the
 device after a successful reset.
 
+### 4.3 Resource Wrapper Conformance
+
+Resource wrapper behaviour is tested at the D3D9 COM boundary because many
+applications depend on exact wrapper semantics rather than only rendered output.
+The PE resource layer owns these rules:
+
+- `GetContainer()` / `GetLevelDesc()` must return Wine-test-observed
+  `HRESULT`s, AddRef behaviour, and out-pointer state for texture, cube,
+  volume, surface, and volume-level wrappers.
+- `LockRect()` / `LockBox()` validation must cover invalid rectangles, block
+  compressed alignment, nested lock/unlock calls, and caller-memory resources.
+- `GetDC()` / `ReleaseDC()` support is format- and pool-sensitive and must
+  preserve data visible through subsequent D3D9 locks or copies.
+- `SetLOD()` / `GetLOD()`, autogen mipmap filters, and `GenerateMipSubLevels()`
+  are part of the observable texture wrapper contract even when the backend
+  implements uploads lazily.
+- `D3DFMT_UNKNOWN` resource creation failures must return exact public
+  `HRESULT`s and must leave out pointers in the Wine-derived oracle state.
+
 ---
 
 ## 5. Fixed-Function Pipeline Key
@@ -519,6 +548,20 @@ metal_ndc.y = 1.0 − (y / vp.Height) * 2.0
 metal_ndc.z = z
 metal_ndc.w = 1.0 / rhw
 ```
+
+**Texture coordinate orientation:** programmable pixel shaders preserve D3D UVs.
+The translator must not add a default `v = 1.0 - v` transform around `texld`,
+`TEX`, `TEXLDB`, `TEXLDP`, `TEXLDD`, or `TEXLDL` sampling. If a texture appears
+vertically inverted, the bug belongs to resource upload/readback orientation,
+surface addressing, viewport/vertex mapping, or a caller's own shader math, not
+to a global pixel-shader fixup.
+
+Two debug-only bisect flags intentionally keep these contracts separate:
+
+| Flag | Scope | Default contract |
+|---|---|---|
+| `DXMT_DEBUG_FLIP_VERTEX_Y` | Translated vertex shader clip-space output | Off by default; may emit `out.position.y = -out.position.y` only for vertex/raster debugging. |
+| `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` | Translated pixel shader texture sampling | Off by default; may emit `1.0f - v` only to prove a regression is caused by an accidental pixel-sampler V inversion. |
 
 ---
 
@@ -613,6 +656,8 @@ flowchart TD
 | `WaitForVBlank()` | `CAMetalLayer` drawable wait or `CVDisplayLink` callback |
 | `CheckResourceResidency()` | Always `S_OK` — Metal manages residency |
 | `GetAdapterLUID()` | Synthesised from `MTLDevice.registryID` |
+| `GetAdapterDisplayModeEx()` / `EnumAdapterModesEx()` | Validate structure sizes and filters, report D3D9 adapter formats, and pass through host scanline ordering / rotation when available instead of hardcoding identity/progressive. |
+| `IDirect3DSwapChain9Ex::GetDisplayModeEx()` | Return the active swap-chain display mode with size validation and the same format normalization as base display-mode methods. |
 | `GetGPUThreadPriority()` | Always returns 0 |
 | `SetGPUThreadPriority()` | No-op, returns `D3D_OK` |
 | `SetConvolutionMonoKernel()` | `E_NOTIMPL` |

@@ -72,6 +72,7 @@ propagation, query validation, and lost-device/reset behaviour.
 | DSS cache: `DepthStencilKey` + `StencilFaceKey` | ✅ | metal |
 | FFP shader generator: `makeFfpVertexSource()` + `makeFfpPixelSource()` | ✅ | metal |
 | Half-pixel offset in VS | ✅ | metal |
+| Pixel shader texture V orientation contract | ✅ | default programmable `texld` path preserves D3D V; `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` is debug-only |
 | Alpha test `discard_fragment()` | ✅ | metal |
 | Clip plane `[[clip_distance]]` | ✅ | metal |
 | Argument buffer layout: `DrawUniforms` | ✅ | metal |
@@ -144,10 +145,10 @@ and Wine runtime runs.
 | Expanded `.shader_test` corpus (arithmetic, comparison, flow control, transcendental, matrix, source modifiers, texture, FFP sanity/alpha test) | ✅ | R-TEST-1.3, R-TEST-1.4 |
 | Provenance blocks on corpus files | ✅ | R-TEST-9.1 |
 | `MANIFEST.toml` + `check_manifest.sh` + `check_drift.sh` + `sync_corpus.sh` | ✅ | R-TEST-10.1–10.2, R-TEST-7.3 |
-| Native `core_spec` coverage for resource mapping / present-readback / clip planes / MSAA / Ex wrappers | ✅ | R-TEST-5.1–5.2, R-TEST-6.1 |
+| Native `core_spec` coverage for resource mapping / present-readback / clip planes / MSAA / Ex wrappers / programmable texture orientation | ✅ | R-TEST-4.3-R-TEST-4.4, R-TEST-5.1–5.2, R-TEST-6.1 |
 | Fixed-function `.shader_test` files | ✅ | `ffp/alpha_test.shader_test` and native fixed-function coverage |
 | Wine `visual.c` ports (ps_1_x, FFP) | ✅ | `testVisualDerivedFfpCoverage()` + `testVisualPortCoverage()` |
-| Wine `device.c` / `d3d9ex.c` / `stateblock.c` conformance subset | ❌ | R-TEST-12 now includes export smoke, factory validation, format conversion, multisample quality-level behaviour, D3D9Ex user-memory resources, present-parameter validation, `ResetEx` mode checks, shared-handle policy, private data across resource wrappers, and exact HRESULT propagation; PE conformance executables are not yet present |
+| Wine `device.c` / `d3d9ex.c` / `stateblock.c` conformance subset | ❌ | R-TEST-12 now covers export smoke, factory validation, queries, resources, window/cursor behaviour, shader validator, D3D9On12 safe stubs, D3D9Ex display/swap-chain cases, presentation-parameter normalization, shared handles/user memory, stateblock matrix coverage, and exact HRESULT/refcount propagation; PE conformance executables and manifest are not yet present |
 | Half-pixel offset exact-coverage test | ✅ | `testHelpers()` + `testRasterStateCoverage()` |
 | Winding / depth tests | ✅ | `testRasterStateCoverage()` |
 | Full upstream corpus sync | ✅ | `sync_corpus.sh` + provenance drift report |
@@ -254,11 +255,12 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 
 | Priority | Work | Spec anchor |
 |---|---|---|
-| 1 | Fix PE export surface and factory HRESULT parity, including `D3DPERF_*`, `CheckDeviceFormatConversion`, multisample quality levels, and device-type enum handling | R-CORE-1.9, R-CORE-1.11-R-CORE-1.13, R-TEST-12.9-R-TEST-12.10 |
-| 2 | Implement and verify D3D9Ex user-memory texture/offscreen-surface paths and shared-handle error policy | R-CORE-4.11-R-CORE-4.12, R-TEST-12.11 |
-| 3 | Port Wine-derived D3D9Ex QI conformance and finish Ex/display/swap-chain validation | R-CORE-1.6, R-CORE-10.17, R-CORE-10.18, R-TEST-12.4 |
-| 4 | Port Wine stateblock conformance and implement `D3DSBT_*` masks/recording invalid-call cases | R-CORE-3.7, R-CORE-3.8, R-TEST-12.5 |
-| 5 | Port Wine device lifetime/refcount, reset rebinding, query validation, and scene tests | R-CORE-2.8, R-CORE-4.8, R-CORE-4.9, R-CORE-8.3, R-TEST-12.3 |
-| 6 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | core/wsi §6, §9 |
-| 7 | Run the Wine WSI smoke on the upstream-style deployment and promote the gap status if it passes | R-TEST-11.3 |
-| 8 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |
+| 1 | Create `tests/d3d9_conformance/MANIFEST.toml` and scaffold focused PE executables for the expanded Wine-derived suite | R-TEST-12.1, R-TEST-12.20 |
+| 2 | Fix PE export surface and factory HRESULT parity, including `D3DPERF_*`, shader validator, D3D9On12 safe stubs, `CheckDeviceFormatConversion`, multisample quality levels, and device-type enum handling | R-CORE-1.9, R-CORE-1.11-R-CORE-1.15, R-TEST-12.9-R-TEST-12.10, R-TEST-12.15-R-TEST-12.16 |
+| 3 | Implement and verify D3D9Ex user-memory texture/offscreen-surface paths and shared-handle error policy | R-CORE-4.11-R-CORE-4.12, R-TEST-12.11 |
+| 4 | Port Wine-derived D3D9Ex QI conformance and finish Ex/display/swap-chain validation | R-CORE-1.6, R-CORE-10.2-R-CORE-10.4, R-CORE-10.17, R-CORE-10.18, R-TEST-12.4 |
+| 5 | Port Wine stateblock conformance and implement `D3DSBT_*` masks/recording invalid-call cases | R-CORE-3.7, R-CORE-3.8, R-TEST-12.5, R-TEST-12.19 |
+| 6 | Port Wine device lifetime/refcount, reset rebinding, query validation, resource wrapper, window/cursor, and scene tests | R-CORE-2.6, R-CORE-2.8, R-CORE-4.8-R-CORE-4.10, R-CORE-8.3, R-TEST-12.3, R-TEST-12.12-R-TEST-12.14, R-TEST-12.17-R-TEST-12.18 |
+| 7 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | core/wsi §6, §9 |
+| 8 | Run the Wine WSI smoke on the upstream-style deployment and promote the gap status if it passes | R-TEST-11.3 |
+| 9 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |

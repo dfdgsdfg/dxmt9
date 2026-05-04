@@ -103,7 +103,7 @@ values verified against real D3D9 hardware. To port a test:
 | SM2/SM3 arithmetic, texture, flow control | `shader_runner_d3d9` (Windows/WARP) |
 | ps_1_1, ps_1_4 | Wine `visual.c` hardcoded colors |
 | Fixed-function lighting, fog, texop | `shader_runner_d3d9` or `visual.c` |
-| Half-pixel offset, winding order | Math derivation (exact) |
+| Half-pixel offset, winding order, default pixel texture V orientation | Math derivation plus native readback smoke |
 | COM lifetime, D3D9Ex QI, reset, stateblock | Wine `device.c`, `d3d9ex.c`, `stateblock.c` expected HRESULT/refcount behaviour |
 
 ---
@@ -145,6 +145,31 @@ sequenceDiagram
 
 The backend creates a 64×64 RGBA8 render target for all tests. The draw quad
 generates UVs from `[0,1]×[0,1]` across the full target.
+
+### 4.1 Native Coordinate Source Contracts
+
+`dxmt9-core-spec` carries a small native coordinate suite that runs outside Wine
+and validates translator/source contracts that are easier to regress than to
+notice visually:
+
+- `testProgrammableTextureOrientationSmoke()` creates a 2x2 quadrant texture,
+  draws it through a programmable `ps_2_0` `texld` shader on an 8x8 target, and
+  reads the result back. The expected quadrants are top-left red, top-right
+  green, bottom-left blue, and bottom-right white. A default pixel-shader V flip
+  swaps the vertical quadrants and fails the test.
+- Pixel shader source-contract tests run both with and without
+  `DXMT_DEBUG_FORCE_PIXEL_V_FLIP`. The default source must preserve D3D texture
+  V, while the debug run must visibly emit the forced `1.0f - v` transform.
+- Vertex shader source-contract tests use `DXMT_DEBUG_FLIP_VERTEX_Y` separately
+  and assert that vertex clip-space Y debugging does not imply a pixel sampler
+  V flip.
+
+The debug-source variants run as separate Meson tests with
+`DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1` so they validate generated shader text
+without depending on a Metal render/readback path:
+`dxmt9-core-spec-pixel-vflip-contract` sets
+`DXMT_DEBUG_FORCE_PIXEL_V_FLIP=1`, and
+`dxmt9-core-spec-vertex-yflip-contract` sets `DXMT_DEBUG_FLIP_VERTEX_Y=1`.
 
 ---
 
@@ -321,8 +346,9 @@ sequenceDiagram
 
 ### Porting Rules
 
-- Keep each executable focused: `factory_ex`, `device_lifetime`,
-  `stateblock`, and `reset_lost` are separate test programs.
+- Keep each executable focused. Factory/Ex, resource wrappers, queries,
+  stateblock, reset/lost-device, window/cursor, and auxiliary-export coverage
+  are separate test programs so failures identify the implementation area.
 - Copy only the minimal test logic needed from Wine; do not vendor whole Wine
   source files.
 - Preserve expected HRESULTs, refcount probes, and comments explaining unusual
@@ -333,6 +359,9 @@ sequenceDiagram
 - For object creation failures, assert both the returned `HRESULT` and that the
   out pointer remains `NULL` or unchanged according to the Windows
   D3D9-compatible rule validated by the Wine-derived oracle.
+- Prefer one local test function per Wine source function. When a Wine function
+  is too broad, split it into named cases but preserve the Wine function anchor
+  in each case's provenance.
 - Add a provenance header near each ported test:
 
 ```c
@@ -351,13 +380,41 @@ sequenceDiagram
 | `d3d9_factory_ex_x64.exe` | `d3d9ex.c` QI/display/LUID tests | base vs Ex QI, Ex-created normal devices, display-mode filters |
 | `d3d9_factory_validation_x64.exe` | `directx.c`, `device.c:test_check_device_format`, display-mode tests | `CheckDeviceType`, `CheckDeviceFormat`, `CheckDeviceFormatConversion`, multisample quality-level writes, invalid enum/devtype return-code parity |
 | `d3d9_device_lifetime_x64.exe` | `device.c` refcount/private-data/scene tests | public COM refcounts, `Get*` AddRef, scene transitions, private data |
+| `d3d9_queries_x64.exe` | `device.c:test_query_support`, `test_occlusion_query`, `test_timestamp_query` | support probes, invalid query enums, `GetDataSize`, pre-issue data writes, short-buffer handling, flush behaviour |
+| `d3d9_resources_x64.exe` | `device.c` resource wrapper tests | `GetContainer`, `GetLevelDesc`, lock/unlock invalid cases, block-compressed alignment, `GetDC`, LOD, autogen mipmaps, `D3DFMT_UNKNOWN` |
 | `d3d9_stateblock_x64.exe` | `stateblock.c` create/capture/apply tests | `D3DSBT_*` masks, recording invalid calls, apply/capture quirks |
 | `d3d9_present_params_x64.exe` | `device.c` swapchain-desc validation, reset tests | invalid swap effects, back-buffer counts, intervals, and `CreateDeviceEx`/`ResetEx` fullscreen-mode matching |
 | `d3d9_shared_handle_x64.exe` | `device.c:test_shared_handle`, `d3d9ex.c:test_user_memory`, resource creation paths | non-Ex `E_NOTIMPL`, Ex pool/resource-class errors, user-memory lock pointer/pitch cases, and no silent handle ignore |
 | `d3d9_reset_lost_x64.exe` | `device.c` / `d3d9ex.c` reset tests | base vs Ex cooperative-level behaviour, default-pool invalidation, exact failure HRESULTs |
+| `d3d9_window_cursor_x64.exe` | `device.c` / `d3d9ex.c` window and cursor tests | cursor API return values, clipping, window ownership, wndproc transitions, fullscreen/windowed style changes, destroyed-window handling |
+| `d3d9_device_misc_x64.exe` | `device.c` creation-flag and utility tests | `GetDirect3D`, `GetCreationParameters`, `ValidateDevice`, raster status, dialog-box mode, FPU preserve, multithreaded and no-window-changes flags |
+| `d3d9_auxiliary_x64.exe` | `d3d9.spec`, `d3d9_main.c`, `device.c:test_shader_validator`, `test_d3d9on12` | shader-validator stub calls, `D3DPERF_*`, `DebugSetMute`, `Direct3DCreate9On12`, query-safe D3D9On12 failure |
 
 The same source layout may also build x86 PE binaries when the configured Wine
 runtime supports WoW64.
+
+### Conformance Manifest
+
+`tests/d3d9_conformance/MANIFEST.toml` is the source of truth for Wine-derived
+API conformance coverage. It is separate from the shader corpus manifest
+because these tests are PE executables, not `.shader_test` files.
+
+```toml
+[[case]]
+executable = "d3d9_queries_x64.exe"
+function   = "test_query_support_probe"
+source     = "wine/dlls/d3d9/tests/device.c:test_query_support"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes      = ["app-local", "builtin"]
+arches     = ["x64", "x86"]
+area       = "queries"
+status     = "failing"
+```
+
+The manifest must be updated with every added, renamed, split, skipped, or
+passing conformance case. A skipped case must record why it is not a dxmt9
+target, for example crash-only invalid-pointer behaviour or a Windows-only
+window-manager message sequence.
 
 ### Run
 
@@ -391,10 +448,20 @@ tests/
 ├── smoke.cpp                     Bootstrap sanity test
 ├── core_spec.cpp                 Core API tests
 ├── d3d9_conformance/
+│   ├── MANIFEST.toml             Wine-derived PE conformance case index
+│   ├── exports.cpp               D3D9 export-table and D3DPERF checks
 │   ├── factory_ex.cpp            Wine d3d9ex.c-derived factory/Ex checks
+│   ├── factory_validation.cpp    Wine directx.c/device.c validation checks
 │   ├── device_lifetime.cpp       Wine device.c-derived refcount/private-data/scene checks
+│   ├── queries.cpp               Wine device.c query support/data checks
+│   ├── resources.cpp             Wine device.c resource wrapper checks
 │   ├── stateblock.cpp            Wine stateblock.c-derived stateblock checks
-│   └── reset_lost.cpp            Wine device.c/d3d9ex.c-derived reset checks
+│   ├── present_params.cpp        Wine presentation parameter normalisation checks
+│   ├── shared_handle.cpp         Wine shared-handle and Ex user-memory checks
+│   ├── reset_lost.cpp            Wine device.c/d3d9ex.c-derived reset checks
+│   ├── window_cursor.cpp         Wine window/cursor ownership checks
+│   ├── device_misc.cpp           Wine device utility/creation-flag checks
+│   └── auxiliary.cpp             Shader validator and D3D9On12 safe-stub checks
 ├── wsi_present/
 │   ├── main.cpp                  WSI integration test source (R-TEST-11.1)
 │   ├── wsi_present.exe           Historical ARM64 PE smoke binary
