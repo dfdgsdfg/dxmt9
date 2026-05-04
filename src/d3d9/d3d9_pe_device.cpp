@@ -99,6 +99,10 @@ static bool isValidD3DStateBlockType(D3DSTATEBLOCKTYPE type) {
     return type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE || type == D3DSBT_VERTEXSTATE;
 }
 
+static bool isUnknownFormat(D3DFORMAT fmt) {
+    return fmt == D3DFMT_UNKNOWN;
+}
+
 static HRESULT setPrivateData(dxmt9::util::ComPrivateData& storage,
                               REFGUID guid,
                               const void* data,
@@ -177,7 +181,7 @@ static HRESULT validateSharedHandleForSurface(bool extended,
     if (!extended) return E_NOTIMPL;
     if (pool == D3DPOOL_SYSTEMMEM) {
         if (!allowSystemMemUserMemory) return D3DERR_INVALIDCALL;
-        return D3DERR_INVALIDCALL;
+        return S_OK;
     }
     if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
     return E_NOTIMPL;
@@ -605,6 +609,103 @@ public:
     HRESULT STDMETHODCALLTYPE AddDirtyRect(D3DCUBEMAP_FACES, const RECT*) noexcept override { return S_OK; }
 };
 
+/* ── Volume ───────────────────────────────────────────────────────────────── */
+
+class D3D9VolumeImpl final : public IDirect3DVolume9 {
+    ULONG refs_ = 1;
+    D9CTexture* t_;
+    IDirect3DDevice9* device_;
+    IUnknown* container_;
+    D3D9PeRecorderFlush* recorder_;
+    UINT level_;
+    dxmt9::util::ComPrivateData privateData_{};
+public:
+    D3D9VolumeImpl(D9CTexture* t,
+                   IDirect3DDevice9* device,
+                   IUnknown* container,
+                   D3D9PeRecorderFlush* recorder,
+                   UINT level)
+        : t_(t), device_(device), container_(container), recorder_(recorder), level_(level) {
+        if (t_) dxmt9c_texture_addref(t_);
+        if (device_) device_->AddRef();
+        if (container_) container_->AddRef();
+    }
+    ~D3D9VolumeImpl() {
+        if (t_) dxmt9c_texture_release(t_);
+        if (container_) container_->Release();
+        if (device_) device_->Release();
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
+    ULONG STDMETHODCALLTYPE Release() noexcept override {
+        ULONG r = --refs_;
+        if (!r) delete this;
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
+        if (!ppv) return E_POINTER;
+        if (IsEqualGUID(riid, IID_IUnknown) || IsEqualGUID(riid, IID_IDirect3DVolume9)) {
+            *ppv = this;
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
+        if (!pp) return D3DERR_INVALIDCALL;
+        if (!device_) {
+            *pp = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        device_->AddRef();
+        *pp = device_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, const void* data,
+                                             DWORD size, DWORD flags) noexcept override {
+        return setPrivateData(privateData_, guid, data, size, flags, "volume-level", this);
+    }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, void* data, DWORD* size) noexcept override {
+        return getPrivateData(privateData_, guid, data, size, "volume-level", this);
+    }
+    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
+        return freePrivateData(privateData_, guid, "volume-level", this);
+    }
+    HRESULT STDMETHODCALLTYPE GetContainer(REFIID riid, void** ppv) noexcept override {
+        if (!ppv) return E_POINTER;
+        if (!container_) {
+            *ppv = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        return container_->QueryInterface(riid, ppv);
+    }
+    HRESULT STDMETHODCALLTYPE GetDesc(D3DVOLUME_DESC* pD) noexcept override {
+        if (!pD) return D3DERR_INVALIDCALL;
+        D9CSurfaceDesc sd{};
+        const HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level_, &sd));
+        if (FAILED(hr)) return hr;
+        pD->Format = static_cast<D3DFORMAT>(sd.format);
+        pD->Type = D3DRTYPE_VOLUME;
+        pD->Usage = sd.usage;
+        pD->Pool = static_cast<D3DPOOL>(sd.pool);
+        pD->Width = sd.width;
+        pD->Height = sd.height;
+        pD->Depth = 1;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX*, const D3DBOX*, DWORD) noexcept override {
+        const HRESULT flushHr = flushChildRecorder(recorder_);
+        if (FAILED(flushHr)) return flushHr;
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE UnlockBox() noexcept override {
+        const HRESULT flushHr = flushChildRecorder(recorder_);
+        if (FAILED(flushHr)) return flushHr;
+        return E_NOTIMPL;
+    }
+};
+
 /* ── VolumeTexture ────────────────────────────────────────────────────────── */
 
 class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
@@ -681,7 +782,13 @@ public:
     HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT, D3DVOLUME_DESC* pD) noexcept override {
         if (pD) memset(pD, 0, sizeof(*pD)); return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE GetVolumeLevel(UINT, IDirect3DVolume9**) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetVolumeLevel(UINT level, IDirect3DVolume9** ppVolume) noexcept override {
+        if (!ppVolume) return D3DERR_INVALIDCALL;
+        *ppVolume = nullptr;
+        if (level >= dxmt9c_texture_get_level_count(t_)) return D3DERR_INVALIDCALL;
+        *ppVolume = new D3D9VolumeImpl(t_, device_, static_cast<IDirect3DBaseTexture9*>(this), recorder_, level);
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE LockBox(UINT, D3DLOCKED_BOX*, const D3DBOX*, DWORD) noexcept override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE UnlockBox(UINT) noexcept override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX*) noexcept override { return S_OK; }
@@ -2693,6 +2800,7 @@ public:
                                              HANDLE* psh) noexcept override {
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
+        if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, true);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_texture device=%p size=%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
@@ -2713,6 +2821,7 @@ public:
                                                    HANDLE* psh) noexcept override {
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
+        if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, false);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_volume_texture device=%p size=%ux%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
@@ -2733,6 +2842,7 @@ public:
                                                  HANDLE* psh) noexcept override {
         if (!ppTex) return D3DERR_INVALIDCALL;
         *ppTex = nullptr;
+        if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, false);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_cube_texture device=%p size=%u levels=%u usage=0x%x fmt=%u pool=%u",
@@ -2790,6 +2900,7 @@ public:
                                                   HANDLE* psh) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
+        if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForDefaultSurface(extended_, psh);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_render_target device=%p size=%ux%u fmt=%u ms=%u msQual=%u lockable=%u",
@@ -2814,6 +2925,7 @@ public:
                                                          HANDLE* psh) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
+        if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForDefaultSurface(extended_, psh);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface device=%p size=%ux%u fmt=%u ms=%u msQual=%u discard=%u",
@@ -3028,11 +3140,12 @@ public:
                                                            HANDLE* psh) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
+        if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForSurface(extended_, psh, pool, true);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_offscreen_surface device=%p size=%ux%u fmt=%u pool=%u",
                             this, w, h, (unsigned)fmt, (unsigned)pool);
-        uint64_t sh = 0;
+        uint64_t sh = psh ? (uint64_t)(uintptr_t)*psh : 0;
         D9CSurface* s = dxmt9c_device_create_offscreen_surface(dev_, w, h,
                                                                 (uint32_t)fmt,
                                                                 (uint32_t)pool, &sh);

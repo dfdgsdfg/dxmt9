@@ -160,12 +160,12 @@ extern "C" int32_t dxmt9c_swapchain_get_present_params(D9CSwapChain* s, D9CPrese
   out->backBufferFormat = fmtToD3D(params.backBufferFormat);
   out->backBufferCount = params.backBufferCount;
   out->multiSampleType = msTypeToD3D(params.multiSampleType);
-  out->swapEffect = params.discardSwapEffect ? 1u : 2u;
+  out->swapEffect = params.swapEffect;
   out->deviceWindow = params.deviceWindow.value;
   out->windowed = params.windowed;
   out->enableAutoDepthStencil = params.enableAutoDepthStencil;
   out->autoDepthStencilFormat = fmtToD3D(params.autoDepthStencilFormat);
-  out->presentationInterval = presentIntervalToD3D(params.presentationInterval);
+  out->presentationInterval = params.presentationIntervalRaw;
   return dxmt9::core::D3D_OK;
 }
 

@@ -13,6 +13,13 @@ static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
 static constexpr uint32_t kD9CDeviceTypeHal = 0u;
 
+static bool isKnownDeviceType(D3DDEVTYPE type) {
+    return type == D3DDEVTYPE_HAL ||
+           type == D3DDEVTYPE_REF ||
+           type == D3DDEVTYPE_SW ||
+           type == D3DDEVTYPE_NULLREF;
+}
+
 static bool isSupportedDeviceType(D3DDEVTYPE type) {
     return type == D3DDEVTYPE_HAL;
 }
@@ -29,6 +36,46 @@ static bool isValidCheckDeviceAdapterFormat(D3DFORMAT fmt) {
     return fmt == D3DFMT_X8R8G8B8 ||
            fmt == D3DFMT_R5G6B5 ||
            fmt == D3DFMT_X1R5G5B5;
+}
+
+static bool isKnownMultiSampleType(D3DMULTISAMPLE_TYPE type) {
+    return type >= D3DMULTISAMPLE_NONE && type <= D3DMULTISAMPLE_16_SAMPLES;
+}
+
+static bool isValidPresentationIntervalRaw(UINT interval) {
+    return interval == D3DPRESENT_INTERVAL_DEFAULT ||
+           interval == D3DPRESENT_INTERVAL_ONE ||
+           interval == D3DPRESENT_INTERVAL_TWO ||
+           interval == D3DPRESENT_INTERVAL_THREE ||
+           interval == D3DPRESENT_INTERVAL_FOUR ||
+           interval == D3DPRESENT_INTERVAL_IMMEDIATE;
+}
+
+static HRESULT validatePresentParametersD3D(const D3DPRESENT_PARAMETERS& pp,
+                                            bool extended) {
+    switch (pp.SwapEffect) {
+    case D3DSWAPEFFECT_DISCARD:
+    case D3DSWAPEFFECT_FLIP:
+    case D3DSWAPEFFECT_COPY:
+        break;
+    case D3DSWAPEFFECT_FLIPEX:
+        if (extended) break;
+        return D3DERR_INVALIDCALL;
+    default:
+        return D3DERR_INVALIDCALL;
+    }
+
+    const UINT maxBackBufferCount = extended ? 30u : 3u;
+    if (pp.BackBufferCount > maxBackBufferCount) {
+        return D3DERR_INVALIDCALL;
+    }
+    if (pp.SwapEffect == D3DSWAPEFFECT_COPY && pp.BackBufferCount > 1u) {
+        return D3DERR_INVALIDCALL;
+    }
+    if (!isValidPresentationIntervalRaw(pp.PresentationInterval)) {
+        return D3DERR_INVALIDCALL;
+    }
+    return D3D_OK;
 }
 
 static D3DDEVTYPE fromCDeviceType(uint32_t type) {
@@ -377,6 +424,7 @@ public:
                                                      D3DDISPLAYMODE* pMode) noexcept override {
         if (!pMode) return D3DERR_INVALIDCALL;
         dxmt9FactoryDebugLog("GetAdapterDisplayMode adapter=%u", adapter);
+        if (adapter >= dxmt9c_factory_adapter_count(f_)) return D3DERR_INVALIDCALL;
         uint32_t w, h, refresh, f;
         HRESULT hr = hr32(dxmt9c_factory_get_adapter_display_mode(
             f_, adapter, &w, &h, &refresh, &f));
@@ -397,6 +445,10 @@ public:
                              adapter, (unsigned)deviceType, (unsigned)adapterFmt, (unsigned)backFmt, windowed ? 1u : 0u);
         if (adapter >= dxmt9c_factory_adapter_count(f_)) {
             dxmt9FactoryDebugLog("CheckDeviceType -> invalid adapter=%u", adapter);
+            return D3DERR_INVALIDCALL;
+        }
+        if (!isKnownDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CheckDeviceType -> invalid devType=%u", (unsigned)deviceType);
             return D3DERR_INVALIDCALL;
         }
         if (!isSupportedDeviceType(deviceType)) {
@@ -425,6 +477,10 @@ public:
                              (unsigned)rtype, (unsigned)fmt, (unsigned)usage);
         if (adapter >= dxmt9c_factory_adapter_count(f_)) {
             dxmt9FactoryDebugLog("CheckDeviceFormat -> invalid adapter=%u", adapter);
+            return D3DERR_INVALIDCALL;
+        }
+        if (!isKnownDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CheckDeviceFormat -> invalid devType=%u", (unsigned)deviceType);
             return D3DERR_INVALIDCALL;
         }
         if (!isSupportedDeviceType(deviceType)) {
@@ -457,10 +513,23 @@ public:
                                                           DWORD* pQuality) noexcept override {
         dxmt9FactoryDebugLog("CheckDeviceMultiSampleType adapter=%u devType=%u fmt=%u windowed=%u msType=%u",
                              adapter, (unsigned)deviceType, (unsigned)fmt, windowed ? 1u : 0u, (unsigned)msType);
+        if (adapter >= dxmt9c_factory_adapter_count(f_)) {
+            dxmt9FactoryDebugLog("CheckDeviceMultiSampleType -> invalid adapter=%u", adapter);
+            return D3DERR_INVALIDCALL;
+        }
+        if (!isKnownDeviceType(deviceType)) {
+            dxmt9FactoryDebugLog("CheckDeviceMultiSampleType -> invalid devType=%u", (unsigned)deviceType);
+            return D3DERR_INVALIDCALL;
+        }
         if (!isSupportedDeviceType(deviceType)) {
             if (pQuality) *pQuality = 0u;
             dxmt9FactoryDebugLog("CheckDeviceMultiSampleType -> unsupported devType=%u", (unsigned)deviceType);
             return D3DERR_NOTAVAILABLE;
+        }
+        if (fmt == D3DFMT_UNKNOWN || !isKnownMultiSampleType(msType)) {
+            dxmt9FactoryDebugLog("CheckDeviceMultiSampleType -> invalid fmt/msType fmt=%u msType=%u",
+                                 (unsigned)fmt, (unsigned)msType);
+            return D3DERR_INVALIDCALL;
         }
         HRESULT hr = hr32(dxmt9c_factory_check_device_multisample(
             f_, adapter, (uint32_t)fmt, (uint32_t)msType,
@@ -542,9 +611,14 @@ public:
                              pPP->Windowed ? 1u : 0u,
                              (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
                              (unsigned)pPP->BackBufferFormat);
+        if (!isKnownDeviceType(deviceType)) return D3DERR_INVALIDCALL;
         if (!isSupportedDeviceType(deviceType)) {
             dxmt9FactoryDebugLog("CreateDevice -> unsupported devType=%u", (unsigned)deviceType);
             return D3DERR_NOTAVAILABLE;
+        }
+        if (const HRESULT validateHr = validatePresentParametersD3D(*pPP, false); FAILED(validateHr)) {
+            dxmt9FactoryDebugLog("CreateDevice -> invalid present parameters hr=0x%08x", (unsigned)validateHr);
+            return validateHr;
         }
         D9CPresentParams cpp = toCpp(*pPP);
         cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
@@ -633,9 +707,14 @@ public:
                              pPP->Windowed ? 1u : 0u,
                              (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
                              (unsigned)pPP->BackBufferFormat, pFsMode ? 1 : 0);
+        if (!isKnownDeviceType(deviceType)) return D3DERR_INVALIDCALL;
         if (!isSupportedDeviceType(deviceType)) {
             dxmt9FactoryDebugLog("CreateDeviceEx -> unsupported devType=%u", (unsigned)deviceType);
             return D3DERR_NOTAVAILABLE;
+        }
+        if (const HRESULT validateHr = validatePresentParametersD3D(*pPP, true); FAILED(validateHr)) {
+            dxmt9FactoryDebugLog("CreateDeviceEx -> invalid present parameters hr=0x%08x", (unsigned)validateHr);
+            return validateHr;
         }
         if (pFsMode && pFsMode->Size != sizeof(D3DDISPLAYMODEEX)) {
             dxmt9FactoryDebugLog("CreateDeviceEx -> invalid fullscreen mode size=%u", (unsigned)pFsMode->Size);
@@ -643,6 +722,10 @@ public:
         }
         if (pFsMode && pPP->Windowed) {
             dxmt9FactoryDebugLog("CreateDeviceEx -> fullscreen mode supplied for windowed params");
+            return D3DERR_INVALIDCALL;
+        }
+        if (!pPP->Windowed && !pFsMode) {
+            dxmt9FactoryDebugLog("CreateDeviceEx -> fullscreen params require fullscreen mode");
             return D3DERR_INVALIDCALL;
         }
         if (pFsMode &&
