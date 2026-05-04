@@ -264,6 +264,81 @@ queue-local state structs, cache interfaces, and allocator cursors. Disallowed i
 are PE COM objects, PE `DeviceState` pointers, implicit globals that affect command
 semantics, and per-call scratch state not represented in the execution chunk.
 
+### 2.4 CommandChunk Storage and Wire ABI
+
+`CommandChunk` is a data-oriented wire container, not an object graph. The PE side
+builds a fixed header plus contiguous sections:
+
+```
+CommandChunkWire {
+    ChunkHeader          header
+    CommandRecordHeader  records[header.recordCount]
+    uint8_t              payloadArena[header.payloadBytes]
+    HandleTableEntry     handleTable[header.handleCount]
+}
+```
+
+The record header array is fixed-width and cache-friendly so the importer can scan
+record kinds, sizes, offsets, and handle indices linearly before touching payloads.
+Payload bytes are stored in a single arena owned by the chunk. Variable-sized command
+data is addressed by `{payloadOffset, payloadSize}` pairs, never by pointers.
+
+Wire headers are POD structs with fixed integer fields:
+- `ChunkHeader`: magic, ABI version, header size, record count, payload byte count,
+  handle-table count, flags, and reserved fields that must be zero.
+- `CommandRecordHeader`: opcode, header size, payload offset, payload size,
+  first-handle index, handle count, alignment exponent or flags, and reserved fields
+  that must be zero.
+- Handle table entries are opaque integer backend handles plus kind tags where
+  needed for validation.
+
+The bridge ABI must define byte order, field sizes, alignment, and packing explicitly.
+All wire structs are naturally aligned to their fixed ABI alignment, and every
+payload starts at an offset aligned for the payload schema. Import rejects chunks when
+`sizeof`/`alignof` static assertions, negotiated header sizes, or runtime offset
+checks do not match the ABI contract.
+
+Version policy:
+- The importer accepts only compatible `ChunkHeader.abiVersion` values negotiated at
+  backend initialization.
+- Unknown opcodes in a compatible version are rejected for normal execution. They may
+  be skipped only when the record carries an explicit ignorable/diagnostic flag and
+  its payload bounds validate.
+- Reserved fields must be zero so future versions can extend the ABI without making
+  old importers silently reinterpret data.
+
+Handle and payload rules:
+- Records refer to resources through indices into the chunk handle table. The importer
+  validates index ranges, kind compatibility, liveness, and duplicate references before
+  retaining backend objects.
+- The handle table is immutable after the PE chunk is sealed. Imported records store
+  compact retained handle references or queue-local indices, not raw bridge handles
+  that require repeated lookup on the encode thread.
+- Payload arena ranges must satisfy `payloadOffset + payloadSize <= payloadBytes`
+  without integer overflow. Nested offsets inside a payload are relative to that
+  payload and must be bounds-checked before use.
+- Payload schemas must not contain process-local pointers, Objective-C object
+  references, COM pointers, vtables, virtual bases, `std::function`, C++ lambdas,
+  allocator-owned containers, or host-endian opaque blobs with implicit layout.
+
+Imported records preserve the same data-oriented shape: contiguous arrays for record
+headers/decoded structs, compact handle-reference arrays, and arena-backed variable
+payloads. Replay should walk these arrays linearly where possible; command-specific
+decode may canonicalize into queue-local POD structs but must not allocate one heap
+object per command.
+
+Hot-path allocation policy:
+- PE recording appends into pre-reserved chunk arrays and arenas. If capacity is
+  exhausted, the recorder seals and submits the chunk or grows only outside the draw
+  hot path.
+- Import may copy into a queue slot's preallocated storage or ring allocator ranges.
+  It must not allocate unbounded per-command heap memory for ordinary draw/state
+  records.
+- Encode and GPU-facing hot paths use queue/ring allocators for argument buffers,
+  staging, copy-temp, and any closure storage. Cache misses may allocate cache
+  objects, but steady-state replay of imported records must not allocate from the
+  system heap.
+
 ---
 
 ## 3. Encoder Lifecycle

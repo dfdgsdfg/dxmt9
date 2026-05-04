@@ -278,7 +278,29 @@ flowchart LR
     CHUNK --> CQ["CommandQueue\nordered replay + Metal encode"]
 ```
 
-### 3.2 D3D9 Recorder Invariants
+### 3.2 DXMT Concept Mapping and Intentional Divergence
+
+dxmt9 maps DXMT concepts to the D3D9 PE/unix split by preserving ownership and
+submission timing while changing the command representation. Upstream DXMT can use
+C++ command objects and lambda captures inside one native process; dxmt9 records
+versioned POD packets because command chunks cross the Wine PE/unix boundary.
+
+| Upstream DXMT shape | dxmt9 shape |
+|---|---|
+| Immediate context owns API state and validation | PE `DeviceImpl` owns COM validation, getters, state blocks, and the authoritative `DeviceState` |
+| Command recorder appends executable command objects | PE `CommandRecorder` appends POD records and inline payloads to a `CommandChunk` |
+| `CommandChunk` carries native command objects/lambdas | `CommandChunk` carries only bridge-stable records, scalar payloads, and opaque backend handles |
+| In-process backend calls can share native pointer types | The `winemetal` bridge ABI marshals chunk commits, coarse resource operations, map/unmap, and frame-token waits; no COM, Objective-C, unix C++ object pointer, or lambda crosses it |
+| `CommandQueue` owns deferred execution and Metal command-buffer completion | unix `CommandQueue` owns ordered import, backend shadow replay, Metal encoding, sequence fences, and present-bearing frame tokens |
+| Deferred resource safety is private to queue execution | Resource lifetime is pinned by handle-retention lists derived from serialized records; public COM refcounts and D3D9 bindings remain PE-side semantics |
+| Helper preparation may be embedded in command objects | State deltas, draw packets, shader lowering, format conversion, FFP keys, barriers, and retention scans are stateless value transforms wherever possible |
+
+The divergence is intentional: POD records make ABI versioning, validation,
+record replay, and unit tests explicit. They must not change the DXMT ownership
+model: PE code records D3D9 work, the bridge transports records, and the unix
+queue owns execution, fences, and frame pacing.
+
+### 3.3 D3D9 Recorder Invariants
 
 The recorder is a D3D9 state machine first and a batching optimization second. It
 must preserve immediate API semantics even though execution is deferred.
@@ -324,7 +346,7 @@ Required invariants:
 - `Present`, synchronous readback, event-query ordering, explicit flush, chunk size
   limits, and non-representable lifetime hazards seal the current chunk.
 
-### 3.3 Draw and Chunk Payloads
+### 3.4 Draw and Chunk Payloads
 
 **Conceptual `DrawDesc`** — the effective state the backend encodes for a draw:
 
@@ -395,7 +417,7 @@ after crossing the Wine PE/unix boundary. `retainedHandles` is derived from the
 serialized command records and inline payloads, not maintained as an independent
 semantic source of truth.
 
-### 3.4 Frame Pacing Ownership
+### 3.5 Frame Pacing Ownership
 
 Frame latency is owned by the swap chain, presenter, and backend command queue. The
 device implementation initiates present, but it does not define the wait token.

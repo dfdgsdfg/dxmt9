@@ -79,6 +79,21 @@ transforms; backend tests own descriptor encoding, resource lifecycle, and
 GPU-visible behaviour; PE conformance tests own public D3D9 ABI, HRESULT,
 refcount, and state-machine compatibility.
 
+**R-TEST-0.7** Runtime `shader_runner` probes complement, but do not replace,
+the stateless transform suites. A runtime probe may prove GPU-visible behaviour
+such as sampled orientation, filtering, render-state interaction, or readback
+results; it is not sufficient evidence for deterministic packet transforms,
+shader lowering contracts, draw descriptor construction, cache-key generation,
+or bridge/replay ordering. Those behaviours must have unit-level assertions over
+plain data or deterministic fake-backend observations.
+
+**R-TEST-0.8** Data-oriented transform tests must be deterministic and
+allocation-aware. For any packet importer, chunk replay planner, draw-run
+builder, bridge marshaler, or descriptor/key generator, the primary test must
+feed explicit input records and assert exact output packets, ordering,
+resource-reference sets, bridge operation counts, and allocation behaviour
+without relying on Metal execution, timing, or Wine window state.
+
 ---
 
 ## 1. Shader Translation Correctness
@@ -251,6 +266,43 @@ new data is visible to the subsequent draw.
 `Lock`/`Unlock` on a `D3DPOOL_MANAGED` texture is correctly uploaded and visible in
 a subsequent texture sample.
 
+**R-TEST-5.3** Imported chunk replay must have deterministic fake-backend or
+queue-observer tests that prove replay order independently of Metal. The
+observer must record every imported command kind, draw-run boundary, clear,
+copy/readback, present, and flush in submission order, then assert the exact
+sequence produced from a fixed input chunk.
+
+**R-TEST-5.4** Imported replay resource lifetime tests must prove seq-id
+pinning. A queue-facing observer or test snapshot API must record chunk seq IDs,
+the resources pinned for each seq ID, and the corresponding release/completion
+point. The pass criterion is that resources referenced by imported packets stay
+retained until the queue has completed the seq ID that last uses them.
+
+**R-TEST-5.5** Barrier and hazard ordering must be testable without GPU timing.
+The test backend or queue observer must record upload, render, readback,
+present, and hazard/barrier events in the order encoded by the replay path.
+Tests must assert that required barriers occur before dependent use and that
+readback/flush operations are not reordered across earlier writes.
+
+**R-TEST-5.6** Hot-path replay tests must include allocation checks for
+data-oriented paths. After any required setup or warm-up, importing and
+replaying a fixed chunk or packet sequence must not allocate from the general
+heap on the measured path, except for explicitly documented scratch growth that
+is bounded, amortized, and covered by a separate capacity test.
+
+**R-TEST-5.7** Wine bridge and C-ABI packet tests must assert bridge operation
+counts as part of acceptance. For fixed public calls or imported replay inputs,
+tests must record the number and order of bridge ops emitted across the PE to
+unix boundary, including batching expectations. A passing runtime result alone
+does not prove merge compatibility if the op stream regresses into per-state or
+per-draw chatty calls.
+
+**R-TEST-5.8** Deterministic packet transform coverage must exist for each
+imported command class before runtime-only evidence is accepted. The suite must
+cover valid packets, rejected malformed packets, truncation, variable-size
+payloads, resource references, draw-run coalescing, state deltas, hazard scopes,
+and preservation of command order after batching.
+
 ---
 
 ## 6. Presentation
@@ -275,6 +327,13 @@ compilation must be masked by running a warm-up pass before the measured draw.
 `tests/shader_tests/` and kept in sync with the upstream vkd3d corpus. New opcode
 tests added upstream that fall within the SM2/SM3 arithmetic and texture groups must
 be pulled in within one release cycle.
+
+**R-TEST-7.4** Tests that claim data-oriented or DXMT-merge compatibility must
+include explicit DoD evidence, not just green runtime probes. Required evidence
+is: stateless transform assertions, fake-backend or queue-observer replay
+traces, seq-id resource pinning checks, barrier/hazard order checks,
+allocation-free hot-path checks, and bridge-op count/order checks where the PE
+bridge is involved.
 
 ---
 

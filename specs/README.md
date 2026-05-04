@@ -8,7 +8,7 @@ build it.
 
 ## Terminology
 
-These specs use three separate compatibility scopes:
+These specs use separate compatibility and design scopes:
 
 - **DXMT-compatible architecture**: the implementation and deployment shape
   follows upstream DXMT's split (`d3d9.dll` -> `winemetal.dll` ->
@@ -27,6 +27,24 @@ These specs use three separate compatibility scopes:
   explicit value-to-value transforms wherever possible. These transforms are the
   primary unit-test target; runtime Metal/readback tests are reserved for
   GPU-visible behaviour that source or descriptor inspection cannot prove.
+
+## DXMT Concept Mapping
+
+dxmt9 follows upstream DXMT's ownership and command-submission shape, but not its
+in-process command-object representation. The PE side owns D3D9 semantics and
+records work; the unix side owns ordered import, Metal encoding, completion
+fences, and presentation pacing. The intentional divergence is that dxmt9 sends
+versioned POD records across the Wine PE/unix bridge instead of C++ command
+objects or lambda captures.
+
+| DXMT concept | dxmt9 concept |
+|---|---|
+| Immediate-context state shadow | PE `DeviceState`, the authoritative D3D9 state bag |
+| Command chunk builder | PE `CommandRecorder` producing POD `CommandChunk` records |
+| Command submission bridge | `winemetal` bridge ABI with chunk commit plus coarse resource and frame-token calls |
+| Queue-owned backend execution | unix `CommandQueue` importing records, replaying backend shadow state, encoding Metal work, and signaling fences/frame tokens |
+| Deferred resource safety | Opaque handle retention derived from chunk records; public COM lifetime stays PE-visible only |
+| Helper command preparation | Stateless value transforms for state, draw, shader, format, and retention normalization |
 
 ---
 

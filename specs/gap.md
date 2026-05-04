@@ -28,6 +28,7 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 | BeginScene / EndScene | ✅ | Nested-call validation |
 | StateBlock capture / restore | ⚠️ | Full-state copy exists; `D3DSBT_*` masks, recording invalid-call cases, derived-cache invalidation after `Apply`, and Windows D3D9 behaviours captured by Wine `stateblock.c` need conformance work |
 | Hot-path CommandChunk recording and data normalizers | ⚠️ | Chunk records, delta draw packets, `APPLY_STATE`, bulk retention, and draw-run paths exist. `makeDrawDescFromState()` covers state-to-draw pure transforms, and `device_c_record_utils` now covers record validation, `ImportedChunkView` / `ImportedRecordView`, chunk iteration, record-count validation, draw-run scans, replay-category classification, and resource-retention derivation with native tests. Remaining alignment is auditing barrier/hazard behaviour with a fake backend or queue instrumentation against R-CORE-11.14-R-CORE-11.18 |
+| DOD / DXMT ownership acceptance | ⚠️ | README concept mapping exists and the chunk wire path is data-oriented. Merge-readiness still needs explicit acceptance that PE state shadow, POD chunk construction, unix import, queue execution, presentation pacing, and deferred resource safety each have matching implementation owners and tests |
 | DrawPrimitive, DrawIndexedPrimitive, UP variants | ✅ | All four variants |
 | TriangleFan decomposition | ✅ | `decomposeTriangleFanIndices()` |
 | Half-pixel offset | ✅ | `halfPixelFixup()` |
@@ -89,7 +90,8 @@ propagation, query validation, and lost-device/reset behaviour.
 | Shader compilation thunk: `dxmt9_winemetal_compile_shader()` | ✅ | metal |
 | WSI: `macdrv_get_cocoa_view` dlsym + lazy `CAMetalLayer` attach on first present | ✅ | metal; `encodePresent` lazy-creates via `dispatch_sync` to main thread; no custom Wine fork required for the DLL override path |
 | `setMaxFrameLatency()` wired to `CAMetalLayer.maximumDrawableCount` | ✅ | metal |
-| Imported-record replay data boundaries | ⚠️ | `commit_chunk` validates records through `device_c_record_utils`, bulk-retains resources, and coalesces draw runs through `ImportedChunkView` / `ImportedRecordView` helpers. `chunk_record_spec` pins POD/layout invariants and `chunk_record_import_spec` pins fixed/variable record validation, multi-record iteration, record-count mismatch, truncated tail, draw-run boundary scans, run-param conversion, resource-retention derivation, and replay-category classification for draw/apply/barrier/readback records. Remaining audit is GPU-side barrier/hazard ordering with fake backend or queue instrumentation against R-BACK-2.14-R-BACK-2.17 |
+| Imported-record replay data boundaries | ⚠️ | `commit_chunk` validates records through `device_c_record_utils`, bulk-retains resources, and coalesces draw runs through `ImportedChunkView` / `ImportedRecordView` helpers. `chunk_record_spec` pins POD/layout invariants and `chunk_record_import_spec` pins fixed/variable record validation, multi-record iteration, record-count mismatch, truncated tail, draw-run boundary scans, run-param conversion, resource-retention derivation, and replay-category classification for draw/apply/barrier/readback records. Remaining audit is GPU-side barrier/hazard ordering with fake backend or queue instrumentation against R-BACK-2.14-R-BACK-2.27 |
+| Bridge op budget / hot-path batching | ❌ | R-BENCH-2.3-R-BENCH-2.5 now require bridge operation counts by class and acceptance that `Set*` / `Draw*` traffic does not regress to one PE/unix call per D3D9 operation |
 | **D3DBC → MSL translation**: SM2/SM3 arithmetic, texture, flow control (IF/ELSE/ENDIF, LOOP/ENDLOOP, REP/ENDREP, CALL/RET/LABEL), transcendental (SINCOS, LOG, EXP), comparison (SGE, SLT), matrix (M4x4, M4x3, M3x4, M3x3, M3x2), MOVA | ✅ | metal; R-BACK-4.1 |
 
 **The backend layer is functionally broad, but the newly specified
@@ -129,8 +131,14 @@ bridge naming is no longer part of the target spec.
 | `RingSafety` asserted with `// TLA+:` label | ✅ | `RingArena::allocateBytes()` + slot ring |
 | `EncodeSafety` asserted with `// TLA+:` label | ✅ | encode loop |
 | `WineCommit` action mapping comments | ✅ | `MetalBackendDevice` Wine-facing methods |
+| DOD wire-schema acceptance | ⚠️ | Existing chunk tests cover many POD/layout and import validation cases; R-VERIF-7.1 now tracks full wire-schema acceptance for size/alignment, command IDs, version constants, offsets, and variable-tail rules |
+| Queue observer / fake-backend verification | ❌ | R-VERIF-7.3 requires deterministic queue-facing evidence for chunk seq IDs, retained handles, replay categories, barrier/readback boundaries, and encoded command order without relying on Metal timing |
+| DXMT concept mapping acceptance | ⚠️ | README mapping exists; R-VERIF-7.4 requires explicit implementation-owner and test evidence for each hot-path concept before calling DXMT merge readiness complete |
 
-**The verification layer is complete.** All R-VERIF-1.x through R-VERIF-6.x satisfied.
+**The verification layer is partial for DXMT merge readiness.** Existing
+R-VERIF-1.x through R-VERIF-6.x evidence remains complete, while new R-VERIF-7.x
+acceptance tracks wire-schema, fake-backend/queue-observer, bridge-budget, and
+DXMT concept-mapping evidence.
 
 ---
 
@@ -202,6 +210,7 @@ No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
 |---|---|---|
 | `dxmt9-bench` harness | ❌ | R-BENCH-1.1 |
 | Draw call throughput workload | ❌ | R-BENCH-2.2 |
+| Bridge operation budget counters | ❌ | R-BENCH-2.3-R-BENCH-2.5, R-BENCH-5.3 |
 | PSO compile cold/warm workload | ❌ | R-BENCH-2.1 |
 | Reference stack baselines (wined3d, DXVK+MoltenVK) | ❌ | R-BENCH-3.1 |
 | `bench_compare.sh` regression script | ❌ | R-BENCH-4.3 |

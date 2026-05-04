@@ -32,6 +32,7 @@ correctness.
 | PSO compile — warm | ms to first frame | Disk cache (`MTLBinaryArchive`) hit rate |
 | Texture upload throughput | MB/s | `mapBuffer` + upload path |
 | Readback throughput | MB/s | `GetRenderTargetData` staging path |
+| Bridge op budget | bridge ops/frame and ops/draw | PE/unix hot-path batching stays DXMT-shaped |
 | Frame time — simple scene | ms/frame (P50, P95, P99) | End-to-end frame consistency |
 | Frame time — heavy scene | ms/frame (P50, P95, P99) | Under GPU load |
 
@@ -39,6 +40,22 @@ correctness.
 - 1,000 draws/frame, identical state (measures minimum overhead)
 - 1,000 draws/frame, alternating render state (measures PSO cache hit path)
 - 1,000 draws/frame, unique shader per draw (measures PSO cache miss path)
+
+**R-BENCH-2.3** Bridge operation budget must be measured for the same draw
+throughput scenarios, plus a mixed workload containing `Clear`, `Present`,
+`UpdateTexture`, `StretchRect`, and `GetRenderTargetData`. The report must break
+counts down by class: chunk commits, coarse resource/surface operations,
+frame-token waits, and compatibility per-call fallback.
+
+**R-BENCH-2.4** Hot-path acceptance for DXMT merge readiness is: D3D9 `Set*`,
+`Draw*`, and ordinary `Clear` traffic records into committed chunks, with no
+per-call PE/unix bridge operation except for documented synchronous readback,
+resource creation/destruction, or compatibility fallback paths.
+
+**R-BENCH-2.5** Benchmarks that exercise command chunks must report both the
+logical D3D9 operation count and the observed bridge operation count. This is the
+data-oriented acceptance signal that batching did not regress to one bridge call
+per state change or draw.
 
 ---
 
@@ -96,8 +113,18 @@ scripts/bench_compare.sh benchmarks/baselines/dxmt9.json benchmarks/results/late
     "draw_throughput_state_change": { "value":  920000, "unit": "draws/sec" },
     "pso_cold_first_frame":         { "value":     340, "unit": "ms" },
     "pso_warm_first_frame":         { "value":      12, "unit": "ms" },
+    "bridge_ops_per_1000_draws":    { "value":       1, "unit": "ops" },
     "frame_time_simple_p50":        { "value":    2.1,  "unit": "ms" },
     "frame_time_simple_p99":        { "value":    3.8,  "unit": "ms" }
+  },
+  "counters": {
+    "d3d9_ops":            1000,
+    "chunk_commits":       1,
+    "resource_ops":        0,
+    "surface_ops":         0,
+    "frame_waits":         0,
+    "compat_fallback_ops": 0,
+    "total_bridge_ops":    1
   }
 }
 ```
@@ -105,3 +132,8 @@ scripts/bench_compare.sh benchmarks/baselines/dxmt9.json benchmarks/results/late
 **R-BENCH-5.2** The `machine` field must identify the CPU/GPU class, not a
 specific device serial. Baselines are per-architecture class (Apple Silicon
 vs Intel Mac), not per individual machine.
+
+**R-BENCH-5.3** Bridge-op metrics must include a companion `counters` object with
+the raw class counts used to derive ratios. At minimum: `d3d9_ops`,
+`chunk_commits`, `resource_ops`, `surface_ops`, `frame_waits`,
+`compat_fallback_ops`, and `total_bridge_ops`.

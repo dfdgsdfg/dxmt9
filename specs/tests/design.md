@@ -42,6 +42,9 @@ Runtime Metal/readback tests remain necessary, but only for behaviour that sourc
 or descriptor inspection cannot prove: texture orientation as sampled by the GPU,
 sampler filtering/addressing, depth writes/tests, MRT routing, alpha/fog/sRGB and
 other render-state interactions, synchronization, and WSI presentation.
+`shader_runner_dxmt9` probes sit in this runtime category. They are valuable
+acceptance evidence for GPU-visible results, but they are not a substitute for
+stateless transform suites or deterministic replay instrumentation.
 
 Ownership is therefore:
 
@@ -51,6 +54,53 @@ Ownership is therefore:
 | Core state and draw builder | State snapshot to draw descriptor/key unit suites | Native backend draw/readback smoke for behaviour coupling |
 | Metal backend | Descriptor encoding and resource lifecycle unit/sim tests | Metal readback, synchronization, WSI |
 | PE D3D9 layer | HRESULT/refcount/state-machine PE conformance | Wine-hosted ABI and window integration |
+
+---
+
+## 0.1 Data-Oriented Replay and Bridge Evidence
+
+DXMT merge compatibility depends on the shape of the data path, not only on the
+final pixels. Tests for chunk import, replay planning, queue submission, and PE
+bridge dispatch therefore use deterministic observers in addition to runtime
+probes.
+
+```mermaid
+flowchart LR
+    A["PE calls / imported chunk records"] --> B["Packet importer"]
+    B --> C["Replay planner / draw-run builder"]
+    C --> D["Queue observer or fake backend"]
+    D --> E["Ordered event log"]
+    D --> F["Seq-id resource pin log"]
+    D --> G["Barrier / hazard log"]
+    D --> H["Bridge-op count log"]
+
+    E --> I["Native assertions"]
+    F --> I
+    G --> I
+    H --> I
+```
+
+The observer is intentionally plain-data oriented. It records command kind,
+packet index, draw-run grouping, resource handles, seq IDs, bridge operation
+names, and barrier/hazard events. It must not depend on Metal side effects,
+wall-clock sleeps, or real window presentation. Runtime `shader_runner` probes
+may then verify that selected packets produce expected pixels, but acceptance of
+the packet transform itself comes from the deterministic observer log.
+
+Required observer assertions:
+
+| Area | Evidence |
+|---|---|
+| Imported replay order | Exact command-kind sequence, including draw-run boundaries, clear/copy/readback/present, and flush points. |
+| Seq-id resource pinning | Resources retained for each imported seq ID and released only after the queue completes that seq ID. |
+| Barrier/hazard order | Upload, render, readback, present, and hazard/barrier events appear before dependent use and are not reordered by batching. |
+| Allocation-free hot path | A warmed fixed replay sequence performs zero general heap allocations, or only documented bounded scratch growth tested separately. |
+| Bridge-op counts | Public PE calls and imported replay inputs emit expected bridge operation names/counts/order, preserving batching. |
+| Packet transform coverage | Valid, malformed, truncated, variable-size, resource-bearing, state-delta, hazard-scope, and coalesced draw-run packets all have stateless expected-output cases. |
+
+Allocation checks should run after setup and capacity warm-up. If a path grows a
+scratch buffer by design, the test must split the first-growth case from the
+steady-state case and assert the maximum retained capacity or allocation count.
 
 ---
 

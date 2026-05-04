@@ -128,3 +128,36 @@ can assess coverage.
 include debug-mode assertions (`DXMT_ASSERT`) for every safety invariant
 in the corresponding TLA+ spec. The assertions must reference the TLA+
 invariant name in a comment.
+
+---
+
+## 7. Data-Oriented / DXMT Merge Acceptance
+
+Traceability: R-BACK-2.7-R-BACK-2.27, R-CORE-11.14-R-CORE-11.18,
+R-BENCH-2.3-R-BENCH-2.5
+
+**R-VERIF-7.1** Command chunk wire records must have a layout acceptance test
+that pins `sizeof`, `alignof`, command IDs, version constants, fixed header
+offsets, and every variable-tail length rule. Any intentional wire-schema change
+must update the acceptance evidence in the same change.
+
+**R-VERIF-7.2** Imported-record validation must be testable without Metal or
+Wine. Fake byte buffers must cover valid records, malformed sizes, truncated
+tails, unknown command IDs, record-count mismatches, and stale or null handles.
+
+**R-VERIF-7.3** Queue execution must expose a deterministic observer or
+fake-backend hook for tests. The hook must record chunk sequence IDs, retained
+resource handles, replay category, barrier/readback boundaries, and encoded
+command kind order without depending on sleeps, real GPU timing, or Metal side
+effects.
+
+**R-VERIF-7.4** DXMT concept mapping acceptance must be explicit: every hot-path
+owner in the README mapping has a corresponding implementation owner and test
+evidence. In particular, PE state shadow, POD chunk construction, unix import,
+queue-owned execution, presentation pacing, and deferred resource safety must not
+collapse into ad-hoc cross-boundary state.
+
+**R-VERIF-7.5** Bridge-operation budget evidence from benchmarks must be linked
+to verification results. A regression from chunked submission to per-state or
+per-draw bridge calls is a DXMT merge-readiness failure even if rendering output
+remains correct.

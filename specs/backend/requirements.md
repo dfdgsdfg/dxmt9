@@ -106,6 +106,57 @@ lifetime, sequence fences, and frame tokens; `Presenter` owns drawable acquisiti
 and `presentDrawable` encoding; the importer owns validation and retention of POD
 records and backend handles.
 
+**R-BACK-2.18** A committed `CommandChunk` wire image must be composed of contiguous
+POD storage: one fixed `ChunkHeader`, one fixed-width command record header array,
+one payload arena, and one opaque handle table. Records must address variable data by
+offset and size into the payload arena, not by process-local pointers.
+
+**R-BACK-2.19** Wire headers and imported record headers must use fixed-size integer
+fields with explicit ABI packing, alignment, and byte-order rules. The PE builder and
+unix importer must enforce static `sizeof`/`alignof` checks for every wire header and
+runtime checks for negotiated header sizes before any record payload is decoded.
+
+**R-BACK-2.20** The importer must validate every payload range with overflow-safe
+arithmetic. `payloadOffset + payloadSize` and all nested payload-relative ranges must
+remain within the chunk payload arena and satisfy the alignment required by that
+record schema.
+
+**R-BACK-2.21** Command record schemas must be POD and fixed-layout. Wire records and
+payloads must not contain COM pointers, Objective-C object pointers, unix-side object
+pointers, vtables, polymorphic objects, lambdas, `std::function`, allocator-owned
+containers, or any pointer that is meaningful only inside one process.
+
+**R-BACK-2.22** Resource references inside a committed chunk must use indices into
+the chunk handle table plus schema-defined kind information. The importer must reject
+out-of-range indices, kind mismatches, stale handles, and records whose declared
+handle ranges exceed the handle table before retaining any resource for execution.
+
+**R-BACK-2.23** Imported records must be stored in cache-friendly contiguous arrays or
+arena-backed POD storage owned by the execution chunk. The encode thread must be able
+to replay records by linear iteration without performing bridge-handle lookups or
+allocating one heap object per command.
+
+**R-BACK-2.24** The command chunk ABI must be versioned at the chunk header level.
+The importer must reject chunks with unsupported ABI versions. Unknown opcodes in a
+compatible version must be rejected unless the record is explicitly marked ignorable
+and its full payload and handle ranges validate without executing it.
+
+**R-BACK-2.25** Reserved fields in chunk headers, record headers, and fixed payload
+headers must be validated as zero on import. Non-zero reserved fields must reject the
+chunk so future ABI extensions are not silently misinterpreted by older importers.
+
+**R-BACK-2.26** PE-side recording must append ordinary draw/state commands into
+pre-reserved contiguous chunk storage. Exhausting command or payload capacity must
+seal/submit the current chunk or use a bounded slow path outside the steady-state draw
+hot path; it must not introduce per-command system heap allocation in normal
+recording.
+
+**R-BACK-2.27** Import, replay, and encode hot paths must use execution-slot storage
+or preallocated ring allocators for command records, retained handle references,
+argument buffers, staging, copy-temp, and closure storage. Cache misses may allocate
+cache objects, but steady-state CPU/GPU command replay must not allocate from the
+system heap.
+
 ---
 
 ## 3. Pipeline State Objects
