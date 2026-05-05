@@ -5,8 +5,6 @@
 #include <functional>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <span>
@@ -1262,9 +1260,9 @@ struct DrawParam {
   i32 baseVertexIndex = 0;
   u32 startIndex = 0;
   IndexType indexType = IndexType::UInt16;
-  bool indexed = false;                    // true → drawIndexedPrimitive
-  DrawPayloadRange userVertexRange{};      // DrawRunDesc::payloadArena slice, if present
-  DrawPayloadRange userIndexRange{};       // DrawRunDesc::payloadArena slice, if present
+  bool indexed = false;                    // true when using drawIndexedPrimitive
+  DrawPayloadRange userVertexRange{};      // DrawRunScratchStorage::payload slice, if present
+  DrawPayloadRange userIndexRange{};       // DrawRunScratchStorage::payload slice, if present
 };
 static_assert(std::is_trivially_copyable_v<DrawParam>,
               "DrawParam is hot-path draw metadata and must remain flat.");
@@ -1274,146 +1272,37 @@ struct DrawParamPayloadView {
   std::span<const u8> userIndexData{};
 };
 
-template <typename T, std::size_t InlineCapacity>
-class InlineVector {
-  static_assert(std::is_trivially_destructible_v<T>,
-                "InlineVector is for compact hot-path values only");
+constexpr std::size_t kDrawRunInlineParamCapacity = 4;
+constexpr std::size_t kDrawRunInlinePayloadCapacity = 512;
 
- public:
-  using value_type = T;
-  using iterator = T*;
-  using const_iterator = const T*;
-
-  InlineVector() = default;
-
-  InlineVector(std::initializer_list<T> values) {
-    *this = values;
-  }
-
-  InlineVector& operator=(std::initializer_list<T> values) {
-    clear();
-    insert(end(), values.begin(), values.end());
-    return *this;
-  }
-
-  bool empty() const noexcept { return size() == 0; }
-  std::size_t size() const noexcept { return heapMode_ ? heap_.size() : inlineSize_; }
-
-  T* data() noexcept { return heapMode_ ? heap_.data() : inline_.data(); }
-  const T* data() const noexcept { return heapMode_ ? heap_.data() : inline_.data(); }
-
-  iterator begin() noexcept { return data(); }
-  const_iterator begin() const noexcept { return data(); }
-  const_iterator cbegin() const noexcept { return begin(); }
-  iterator end() noexcept { return data() + size(); }
-  const_iterator end() const noexcept { return data() + size(); }
-  const_iterator cend() const noexcept { return end(); }
-
-  T& operator[](std::size_t index) noexcept { return data()[index]; }
-  const T& operator[](std::size_t index) const noexcept { return data()[index]; }
-
-  void clear() noexcept {
-    if (heapMode_) {
-      heap_.clear();
-    } else {
-      inlineSize_ = 0;
-    }
-  }
-
-  void reserve(std::size_t capacity) {
-    if (capacity <= InlineCapacity) {
-      return;
-    }
-    ensureHeap(capacity);
-  }
-
-  void push_back(const T& value) {
-    append(value);
-  }
-
-  void push_back(T&& value) {
-    append(std::move(value));
-  }
-
-  template <typename It>
-  void assign(It first, It last) {
-    clear();
-    insert(end(), first, last);
-  }
-
-  template <typename It>
-  iterator insert(const_iterator pos, It first, It last) {
-    const auto index = insertionIndex(pos);
-    const auto count = static_cast<std::size_t>(std::distance(first, last));
-    if (count == 0) {
-      return begin() + index;
-    }
-    if (heapMode_ || index != size() || size() + count > InlineCapacity) {
-      ensureHeap(size() + count);
-      const auto it = heap_.insert(heap_.begin() + static_cast<std::ptrdiff_t>(index), first, last);
-      return heap_.data() + std::distance(heap_.begin(), it);
-    }
-    for (; first != last; ++first) {
-      inline_[inlineSize_++] = *first;
-    }
-    return begin() + index;
-  }
-
-  iterator insert(const_iterator pos, std::initializer_list<T> values) {
-    return insert(pos, values.begin(), values.end());
-  }
-
- private:
-  template <typename U>
-  void append(U&& value) {
-    if (heapMode_) {
-      heap_.push_back(std::forward<U>(value));
-      return;
-    }
-    if (inlineSize_ < InlineCapacity) {
-      inline_[inlineSize_++] = std::forward<U>(value);
-      return;
-    }
-    ensureHeap(InlineCapacity == 0 ? 1 : InlineCapacity * 2);
-    heap_.push_back(std::forward<U>(value));
-  }
-
-  std::size_t insertionIndex(const_iterator pos) const noexcept {
-    if (empty()) {
-      return 0;
-    }
-    const auto first = begin();
-    const auto last = end();
-    if (pos <= first) {
-      return 0;
-    }
-    if (pos >= last) {
-      return size();
-    }
-    return static_cast<std::size_t>(pos - first);
-  }
-
-  void ensureHeap(std::size_t capacity) {
-    if (heapMode_) {
-      heap_.reserve(capacity);
-      return;
-    }
-    heap_.reserve(capacity);
-    for (std::size_t i = 0; i < inlineSize_; ++i) {
-      heap_.push_back(std::move(inline_[i]));
-    }
-    inlineSize_ = 0;
-    heapMode_ = true;
-  }
-
-  std::array<T, InlineCapacity> inline_{};
-  std::vector<T> heap_{};
-  std::size_t inlineSize_ = 0;
-  bool heapMode_ = false;
+struct DrawParamInlineStorage {
+  std::array<DrawParam, kDrawRunInlineParamCapacity> inlineData{};
+  std::vector<DrawParam> overflow;
+  std::size_t inlineSize = 0;
+  bool overflowMode = false;
 };
 
-using DrawParamList = InlineVector<DrawParam, 4>;
-using DrawPayloadArena = InlineVector<u8, 512>;
+struct DrawPayloadArenaStorage {
+  std::array<u8, kDrawRunInlinePayloadCapacity> inlineData{};
+  std::vector<u8> overflow;
+  std::size_t inlineSize = 0;
+  bool overflowMode = false;
+};
+
+struct DrawRunScratchStorage {
+  DrawParamInlineStorage draws{};
+  DrawPayloadArenaStorage payload{};
+};
+
+struct DrawRunView {
+  std::span<const DrawParam> draws{};
+  std::span<const u8> payloadArena{};
+};
+
+struct MutableDrawRunView {
+  std::span<DrawParam> draws{};
+  std::span<u8> payloadArena{};
+};
 
 // Per-chunk resource retention entry. Mirrors the wire-format D9CChunk
 // HandleEntry but lives in dxmt9::core so the runtime can mark
@@ -1440,8 +1329,7 @@ struct ChunkHandleEntry {
 // resource rebinding on the encoder side.
 struct DrawRunDesc {
   CanonicalDrawState state{};              // applied once at run start
-  DrawPayloadArena payloadArena;           // packed per-draw UP payload bytes
-  DrawParamList draws;                     // per-draw args
+  DrawRunScratchStorage scratch{};         // packed per-draw args + UP payload bytes
 };
 
 struct ClearDesc {
@@ -1853,8 +1741,35 @@ DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStat
 }  // namespace fixture
 
 CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args);
-bool packDrawParamPayload(DrawParam& param, DrawPayloadArena& payloadArena,
-                          DrawParamPayloadView payload);
+
+void drawRunClear(DrawRunDesc& run);
+void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payloadBytes);
+bool drawRunAppend(DrawRunDesc& run, DrawParam param,
+                   DrawParamPayloadView payload = {});
+DrawRunView drawRunView(const DrawRunDesc& run) noexcept;
+MutableDrawRunView drawRunMutableView(DrawRunDesc& run) noexcept;
+bool drawRunEmpty(const DrawRunDesc& run) noexcept;
+std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept;
+std::size_t drawRunPayloadSize(const DrawRunDesc& run) noexcept;
+std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept;
+std::span<DrawParam> drawRunMutableDraws(DrawRunDesc& run) noexcept;
+std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept;
+std::span<u8> drawRunMutablePayloadArena(DrawRunDesc& run) noexcept;
+std::span<const u8> drawRunPayloadBytes(const DrawRunDesc& run,
+                                        DrawPayloadRange range) noexcept;
+inline std::span<const u8> drawRunPayloadBytes(DrawPayloadRange range,
+                                               std::span<const u8> arena) noexcept {
+  const std::size_t offset = range.offset;
+  const std::size_t size = range.size;
+  if (size == 0) {
+    return {};
+  }
+  if (offset > arena.size() || size > arena.size() - offset) {
+    return {};
+  }
+  return arena.subspan(offset, size);
+}
+bool drawRunValidate(const DrawRunDesc& run) noexcept;
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);
 std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::span<const u8> input);

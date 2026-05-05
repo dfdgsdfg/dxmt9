@@ -687,12 +687,13 @@ void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> en
 }
 
 void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
-  if (desc.draws.empty()) {
+  const auto drawCount = core::drawRunDrawCount(desc);
+  if (drawCount == 0) {
     return;
   }
   // Count each per-draw param toward submit_draw so the perf counter
   // remains comparable with historical per-draw counters.
-  for (std::size_t i = 0; i < desc.draws.size(); ++i) {
+  for (std::size_t i = 0; i < drawCount; ++i) {
     perf::countSubmitDraw();
   }
   PerfScope scope(perf::countSubmitDrawCpuTime);

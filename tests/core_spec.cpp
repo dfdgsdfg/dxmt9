@@ -134,14 +134,14 @@ struct RecordedDraw {
   CanonicalDrawState state{};
   FlatDrawStateRecord hot{};
   DrawParam param{};
-  DrawPayloadArena payloadArena;
+  std::vector<u8> payloadArena;
 };
 
 struct RecordedDrawRun {
   CanonicalDrawState state{};
   FlatDrawStateRecord hot{};
-  DrawParamList draws;
-  DrawPayloadArena payloadArena;
+  std::vector<DrawParam> draws;
+  std::vector<u8> payloadArena;
 };
 
 std::span<const u8> payloadSlice(const RecordedDraw& draw, DrawPayloadRange range,
@@ -498,11 +498,13 @@ struct RecordingBackend final : BackendDevice {
   }
 
   void submitDrawRun(const DrawRunDesc& desc) override {
+    check(drawRunValidate(desc), "submitted draw run validates");
+    const auto view = drawRunView(desc);
     RecordedDrawRun run{};
     run.state = desc.state;
     run.hot = desc.state.hot;
-    run.draws = desc.draws;
-    run.payloadArena = desc.payloadArena;
+    run.draws.assign(view.draws.begin(), view.draws.end());
+    run.payloadArena.assign(view.payloadArena.begin(), view.payloadArena.end());
 
     for (const auto& param : run.draws) {
       RecordedDraw draw{};

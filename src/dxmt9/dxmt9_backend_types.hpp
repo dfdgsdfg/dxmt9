@@ -4,7 +4,6 @@
 #include "dxmt9/assert.hpp"
 
 #include <cstdint>
-#include <iterator>
 #include <limits>
 #include <span>
 #include <utility>
@@ -43,6 +42,7 @@ struct MetalCommandView {
   const DrawRunCommandRecord* drawRunRecord = nullptr;
   const CanonicalDrawState* drawState = nullptr;
   std::span<const DrawParam> drawParams{};
+  std::span<const u8> drawPayloadBytes{};
   const ClearDesc* clear = nullptr;
   const SurfaceCopyDesc* surfaceCopy = nullptr;
   const StretchRectDesc* stretchRect = nullptr;
@@ -50,6 +50,18 @@ struct MetalCommandView {
   const ColorFillDesc* colorFill = nullptr;
   const PresentCommandRecord* present = nullptr;
 };
+
+inline std::span<const u8> drawRunPayloadBytes(const MetalCommandView& command) noexcept {
+  return command.drawPayloadBytes;
+}
+
+inline std::size_t drawRunPayloadSize(const MetalCommandView& command) noexcept {
+  return command.drawPayloadBytes.size();
+}
+
+inline std::size_t drawRunDrawCount(const MetalCommandView& command) noexcept {
+  return command.drawParams.size();
+}
 
 struct ChunkSlot {
   enum class State { Free, Writing, Pending, Encoding, GPU };
@@ -95,11 +107,12 @@ struct ChunkSlot {
   }
 
   void appendDrawRun(DrawRunDesc drawRun) {
+    const auto view = drawRunView(drawRun);
     const auto stateIndex = static_cast<std::uint32_t>(drawStates.size());
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     const bool canUseSlotArena =
         drawPayloadArena.size() <= std::numeric_limits<std::uint32_t>::max() &&
-        drawRun.payloadArena.size() <=
+        drawRunPayloadSize(drawRun) <=
             static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) -
                 drawPayloadArena.size();
     DXMT_ASSERT(canUseSlotArena && "draw payload arena exceeded 32-bit range storage");
@@ -109,20 +122,20 @@ struct ChunkSlot {
 
     drawStates.push_back(std::move(drawRun.state));
 
-    if (!drawRun.payloadArena.empty()) {
+    const auto payloadBytes = view.payloadArena;
+    if (!payloadBytes.empty()) {
       const auto baseOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
-      drawPayloadArena.insert(drawPayloadArena.end(), drawRun.payloadArena.begin(),
-                              drawRun.payloadArena.end());
-      for (auto& param : drawRun.draws) {
+      drawPayloadArena.insert(drawPayloadArena.end(), payloadBytes.begin(), payloadBytes.end());
+      auto mutableDraws = drawRunMutableDraws(drawRun);
+      for (auto& param : mutableDraws) {
         if (!param.userVertexRange.empty()) param.userVertexRange.offset += baseOffset;
         if (!param.userIndexRange.empty()) param.userIndexRange.offset += baseOffset;
       }
     }
 
     commandHeaders.push_back({MetalCommandKind::DrawRun, static_cast<std::uint32_t>(drawRunRecords.size())});
-    drawParams.insert(drawParams.end(),
-                      std::make_move_iterator(drawRun.draws.begin()),
-                      std::make_move_iterator(drawRun.draws.end()));
+    const auto rebasedView = drawRunView(drawRun);
+    drawParams.insert(drawParams.end(), rebasedView.draws.begin(), rebasedView.draws.end());
     drawRunRecords.push_back(DrawRunCommandRecord{
         .stateIndex = stateIndex,
         .firstParam = firstParam,
@@ -178,6 +191,7 @@ struct ChunkSlot {
       if (payloadIndex < drawRunRecords.size()) {
         const auto& record = drawRunRecords[payloadIndex];
         view.drawRunRecord = &record;
+        view.drawPayloadBytes = std::span<const u8>(drawPayloadArena.data(), drawPayloadArena.size());
         if (record.stateIndex < drawStates.size()) {
           view.drawState = &drawStates[record.stateIndex];
         }

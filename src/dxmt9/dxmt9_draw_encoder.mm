@@ -513,23 +513,10 @@ struct ParamView {
   std::span<const u8> userIndexData;
 };
 
-std::span<const u8> payloadRangeBytes(core::DrawPayloadRange range,
-                                      std::span<const u8> arena) {
-  const std::size_t offset = range.offset;
-  const std::size_t size = range.size;
-  if (size == 0) {
-    return {};
-  }
-  if (offset > arena.size() || size > arena.size() - offset) {
-    return {};
-  }
-  return arena.subspan(offset, size);
-}
-
 std::span<const u8> drawParamVertexBytes(const core::DrawParam& param,
                                          std::span<const u8> arena) {
   if (!param.userVertexRange.empty()) {
-    return payloadRangeBytes(param.userVertexRange, arena);
+    return core::drawRunPayloadBytes(param.userVertexRange, arena);
   }
   return {};
 }
@@ -537,7 +524,7 @@ std::span<const u8> drawParamVertexBytes(const core::DrawParam& param,
 std::span<const u8> drawParamIndexBytes(const core::DrawParam& param,
                                         std::span<const u8> arena) {
   if (!param.userIndexRange.empty()) {
-    return payloadRangeBytes(param.userIndexRange, arena);
+    return core::drawRunPayloadBytes(param.userIndexRange, arena);
   }
   return {};
 }
@@ -1457,7 +1444,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       case Kind::DrawRun: {
-        if (!command.drawRunRecord || !command.drawState || command.drawParams.empty()) break;
+        if (!command.drawState || core::drawRunDrawCount(command) == 0) break;
         const auto& drawState = *command.drawState;
         const auto drawParams = command.drawParams;
         // Compact draw-run: state bound from base ONCE (render-pass +
@@ -1542,9 +1529,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         //   [3]   = draw 1 index
         //   …
         // Returned slices use the same indexing.
-        const std::size_t drawCount = drawParams.size();
-        const std::span<const u8> payloadArena(slot.drawPayloadArena.data(),
-                                               slot.drawPayloadArena.size());
+        const std::size_t drawCount = core::drawRunDrawCount(command);
+        const auto payloadArena = core::drawRunPayloadBytes(command);
         bool anyUpData = false;
         bool hasUpPayloadRanges = false;
         for (const auto& param : drawParams) {

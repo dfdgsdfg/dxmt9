@@ -104,18 +104,6 @@ DrawParam makeDrawParamForTest(const DrawDesc& desc) {
   return param;
 }
 
-std::span<const u8> payloadBytes(const DrawRunDesc& run, DrawPayloadRange range) {
-  if (range.empty()) {
-    return {};
-  }
-  const std::size_t offset = range.offset;
-  const std::size_t size = range.size;
-  if (offset > run.payloadArena.size() || size > run.payloadArena.size() - offset) {
-    return {};
-  }
-  return std::span<const u8>(run.payloadArena.data() + offset, size);
-}
-
 void testStateValueTableDirtyHashContract() {
   RenderStateTable a;
   RenderStateTable b;
@@ -422,9 +410,10 @@ void testFlatDrawStateKey() {
 
   DrawRunDesc run{};
   run.state = makeCanonicalDrawStateForTest(first);
-  DrawParam packedDrawParamB = drawParamB;
-  check(packDrawParamPayload(
-            packedDrawParamB, run.payloadArena,
+  check(drawRunAppend(run, drawParamA),
+        "test draw param A appends into run storage");
+  check(drawRunAppend(
+            run, drawParamB,
             DrawParamPayloadView{
                 .userVertexData = std::span<const u8>(drawParamBVertexData.data(),
                                                       drawParamBVertexData.size()),
@@ -432,7 +421,7 @@ void testFlatDrawStateKey() {
                                                      drawParamBIndexData.size()),
             }),
         "test draw param B payload packs into run arena");
-  run.draws = {drawParamA, packedDrawParamB};
+  check(drawRunValidate(run), "test draw run validates after append");
 
   const auto drawDescForParam = [&first, &run](const DrawParam& param) {
     DrawDesc desc = first;
@@ -442,8 +431,8 @@ void testFlatDrawStateKey() {
     desc.baseVertexIndex = param.baseVertexIndex;
     desc.startIndex = param.startIndex;
     desc.indexType = param.indexType;
-    const auto vertexBytes = payloadBytes(run, param.userVertexRange);
-    const auto indexBytes = payloadBytes(run, param.userIndexRange);
+    const auto vertexBytes = drawRunPayloadBytes(run, param.userVertexRange);
+    const auto indexBytes = drawRunPayloadBytes(run, param.userIndexRange);
     desc.userVertexData.assign(vertexBytes.begin(), vertexBytes.end());
     desc.userIndexData.assign(indexBytes.begin(), indexBytes.end());
     return desc;
@@ -498,20 +487,32 @@ void testFlatDrawStateKey() {
         "flat draw state view exposes shader/layout context");
   check(&run.state.view().debugSnapshot() == &run.state.debug,
         "flat draw state view exposes debug snapshot");
-  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[0])),
+  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(drawRunView(run).draws[0])),
           "draw-run key ignores first draw param fields");
-  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
+  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(drawRunView(run).draws[1])),
           "draw-run key ignores varying draw param fields and UP payloads");
   const FlatDrawStateKey storedRunKey = run.state.hot.key;
-  run.draws[1].primitiveCount = 11;
-  run.draws[1].startVertex = 64;
-  const auto mutateOffset = static_cast<u32>(run.payloadArena.size());
-  run.payloadArena.insert(run.payloadArena.end(), {0xaa, 0xbb, 0xcc, 0x10, 0x11});
-  run.draws[1].userVertexRange = {mutateOffset, 3};
-  run.draws[1].userIndexRange = {mutateOffset + 3u, 2};
+  DrawParam mutatedDrawParamB = drawParamB;
+  mutatedDrawParamB.primitiveCount = 11;
+  mutatedDrawParamB.startVertex = 64;
+  const std::array<u8, 3> mutatedDrawParamBVertexData{0xaa, 0xbb, 0xcc};
+  const std::array<u8, 2> mutatedDrawParamBIndexData{0x10, 0x11};
+  drawRunClear(run);
+  check(drawRunAppend(run, drawParamA),
+        "test draw param A re-appends into run storage");
+  check(drawRunAppend(
+            run, mutatedDrawParamB,
+            DrawParamPayloadView{
+                .userVertexData = std::span<const u8>(mutatedDrawParamBVertexData.data(),
+                                                      mutatedDrawParamBVertexData.size()),
+                .userIndexData = std::span<const u8>(mutatedDrawParamBIndexData.data(),
+                                                     mutatedDrawParamBIndexData.size()),
+            }),
+        "test mutated draw param B payload packs into run arena");
+  check(drawRunValidate(run), "mutated test draw run validates after append");
   checkEq(run.state.hot.key, storedRunKey,
           "draw-run key remains separate from mutable draw params");
-  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
+  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(drawRunView(run).draws[1])),
           "mutated draw params and UP payloads still do not alter the run key");
 
   auto payloadCanonical = makeCanonicalDrawStateForTest(withUserPayload);
@@ -522,20 +523,37 @@ void testFlatDrawStateKey() {
 
   DrawRunDesc packedRun{};
   packedRun.state = makeCanonicalDrawStateForTest(first);
-  packedRun.payloadArena = {0xde, 0xad, 0xbe, 0xef, 0x10, 0x11};
-  DrawParam packedParam = drawParamB;
-  packedParam.userVertexRange = {0, 4};
-  packedParam.userIndexRange = {4, 2};
-  packedRun.draws = {packedParam};
+  const std::array<u8, 4> packedRunVertexData{0xde, 0xad, 0xbe, 0xef};
+  const std::array<u8, 2> packedRunIndexData{0x10, 0x11};
+  check(drawRunAppend(
+            packedRun, drawParamB,
+            DrawParamPayloadView{
+                .userVertexData = std::span<const u8>(packedRunVertexData.data(),
+                                                      packedRunVertexData.size()),
+                .userIndexData = std::span<const u8>(packedRunIndexData.data(),
+                                                     packedRunIndexData.size()),
+            }),
+        "test packed draw-run payload appends into run storage");
+  check(drawRunValidate(packedRun), "packed draw-run validates after append");
   checkEq(packedRun.state.hot.key, firstKey,
           "draw-run payload arena does not disturb the base-state key");
-  checkEq(packedRun.draws[0].userVertexRange.offset, 0u,
+  checkEq(drawRunView(packedRun).draws[0].userVertexRange.offset, 0u,
           "draw-run stores vertex UP payload as an arena offset");
-  checkEq(packedRun.draws[0].userIndexRange.size, 2u,
+  checkEq(drawRunView(packedRun).draws[0].userIndexRange.size, 2u,
           "draw-run stores index UP payload as an arena size");
   const FlatDrawStateKey packedRunKey = packedRun.state.hot.key;
-  packedRun.payloadArena[0] = 0xaa;
-  packedRun.draws[0].userVertexRange.size = 3;
+  const std::array<u8, 3> smallerPackedRunVertexData{0xaa, 0xad, 0xbe};
+  drawRunClear(packedRun);
+  check(drawRunAppend(
+            packedRun, drawParamB,
+            DrawParamPayloadView{
+                .userVertexData = std::span<const u8>(smallerPackedRunVertexData.data(),
+                                                      smallerPackedRunVertexData.size()),
+                .userIndexData = std::span<const u8>(packedRunIndexData.data(),
+                                                     packedRunIndexData.size()),
+            }),
+        "test mutated packed draw-run payload appends into run storage");
+  check(drawRunValidate(packedRun), "mutated packed draw-run validates after append");
   checkEq(packedRun.state.hot.key, packedRunKey,
           "payload arena mutations remain separate from the draw-run key");
 
@@ -543,8 +561,8 @@ void testFlatDrawStateKey() {
   DrawRunDesc singleRun{};
   singleRun.state = makeCanonicalDrawStateForTest(withUserPayload);
   DrawParam singleParam = makeDrawParamForTest(withUserPayload);
-  check(packDrawParamPayload(
-            singleParam, singleRun.payloadArena,
+  check(drawRunAppend(
+            singleRun, singleParam,
             DrawParamPayloadView{
                 .userVertexData = std::span<const u8>(withUserPayload.userVertexData.data(),
                                                       withUserPayload.userVertexData.size()),
@@ -552,7 +570,7 @@ void testFlatDrawStateKey() {
                                                      withUserPayload.userIndexData.size()),
             }),
         "test single draw payload packs into run arena");
-  singleRun.draws = {singleParam};
+  check(drawRunValidate(singleRun), "single draw-run validates after append");
   slot.appendDrawRun(std::move(singleRun));
   const auto drawView = slot.commandAt(0);
   check(drawView.drawRunRecord != nullptr, "slot single-draw command exposes compact run record");
@@ -568,8 +586,17 @@ void testFlatDrawStateKey() {
   checkEq(slot.drawPayloadArena.size(), std::size_t{6},
           "slot draw payload arena owns single-draw UP bytes");
 
-  packedRun.payloadArena[0] = 0xde;
-  packedRun.draws[0].userVertexRange = {0, 4};
+  drawRunClear(packedRun);
+  check(drawRunAppend(
+            packedRun, drawParamB,
+            DrawParamPayloadView{
+                .userVertexData = std::span<const u8>(packedRunVertexData.data(),
+                                                      packedRunVertexData.size()),
+                .userIndexData = std::span<const u8>(packedRunIndexData.data(),
+                                                     packedRunIndexData.size()),
+            }),
+        "test packed draw-run payload re-appends before slot append");
+  check(drawRunValidate(packedRun), "packed draw-run validates before slot append");
   packedRun.state.debug.renderStateHash = 99ull;
   slot.appendDrawRun(std::move(packedRun));
   const auto runView = slot.commandAt(1);

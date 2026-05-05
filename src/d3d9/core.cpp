@@ -3726,33 +3726,223 @@ CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, con
   return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug)};
 }
 
-bool packDrawParamPayload(DrawParam& param, DrawPayloadArena& payloadArena,
+namespace {
+
+std::span<const DrawParam> drawParamStorageSpan(const DrawParamInlineStorage& storage) noexcept {
+  if (storage.overflowMode) {
+    return std::span<const DrawParam>(storage.overflow.data(), storage.overflow.size());
+  }
+  return std::span<const DrawParam>(storage.inlineData.data(), storage.inlineSize);
+}
+
+std::span<DrawParam> drawParamStorageMutableSpan(DrawParamInlineStorage& storage) noexcept {
+  if (storage.overflowMode) {
+    return std::span<DrawParam>(storage.overflow.data(), storage.overflow.size());
+  }
+  return std::span<DrawParam>(storage.inlineData.data(), storage.inlineSize);
+}
+
+std::span<const u8> drawPayloadStorageSpan(const DrawPayloadArenaStorage& storage) noexcept {
+  if (storage.overflowMode) {
+    return std::span<const u8>(storage.overflow.data(), storage.overflow.size());
+  }
+  return std::span<const u8>(storage.inlineData.data(), storage.inlineSize);
+}
+
+std::span<u8> drawPayloadStorageMutableSpan(DrawPayloadArenaStorage& storage) noexcept {
+  if (storage.overflowMode) {
+    return std::span<u8>(storage.overflow.data(), storage.overflow.size());
+  }
+  return std::span<u8>(storage.inlineData.data(), storage.inlineSize);
+}
+
+std::size_t drawParamStorageSize(const DrawParamInlineStorage& storage) noexcept {
+  return storage.overflowMode ? storage.overflow.size() : storage.inlineSize;
+}
+
+std::size_t drawPayloadStorageSize(const DrawPayloadArenaStorage& storage) noexcept {
+  return storage.overflowMode ? storage.overflow.size() : storage.inlineSize;
+}
+
+void reserveDrawParams(DrawParamInlineStorage& storage, std::size_t count) {
+  if (count <= kDrawRunInlineParamCapacity || storage.overflowMode) {
+    if (storage.overflowMode) storage.overflow.reserve(count);
+    return;
+  }
+  storage.overflow.reserve(count);
+  storage.overflow.insert(storage.overflow.end(), storage.inlineData.begin(),
+                          storage.inlineData.begin() + static_cast<std::ptrdiff_t>(storage.inlineSize));
+  storage.inlineSize = 0;
+  storage.overflowMode = true;
+}
+
+void reserveDrawPayload(DrawPayloadArenaStorage& storage, std::size_t bytes) {
+  if (bytes <= kDrawRunInlinePayloadCapacity || storage.overflowMode) {
+    if (storage.overflowMode) storage.overflow.reserve(bytes);
+    return;
+  }
+  storage.overflow.reserve(bytes);
+  storage.overflow.insert(storage.overflow.end(), storage.inlineData.begin(),
+                          storage.inlineData.begin() + static_cast<std::ptrdiff_t>(storage.inlineSize));
+  storage.inlineSize = 0;
+  storage.overflowMode = true;
+}
+
+void appendDrawParam(DrawParamInlineStorage& storage, DrawParam param) {
+  if (storage.overflowMode) {
+    storage.overflow.push_back(std::move(param));
+    return;
+  }
+  if (storage.inlineSize < kDrawRunInlineParamCapacity) {
+    storage.inlineData[storage.inlineSize++] = std::move(param);
+    return;
+  }
+  reserveDrawParams(storage, kDrawRunInlineParamCapacity + 1);
+  storage.overflow.push_back(std::move(param));
+}
+
+bool appendDrawPayload(DrawPayloadArenaStorage& storage, std::span<const u8> bytes,
+                       DrawPayloadRange& range) {
+  range = {};
+  if (bytes.empty()) {
+    return true;
+  }
+
+  constexpr auto kMaxRange = std::numeric_limits<u32>::max();
+  const auto currentSize = drawPayloadStorageSize(storage);
+  const std::uint64_t requiredSize =
+      static_cast<std::uint64_t>(currentSize) + static_cast<std::uint64_t>(bytes.size());
+  if (requiredSize > kMaxRange) {
+    return false;
+  }
+
+  range = DrawPayloadRange{
+      .offset = static_cast<u32>(currentSize),
+      .size = static_cast<u32>(bytes.size()),
+  };
+
+  if (storage.overflowMode) {
+    storage.overflow.insert(storage.overflow.end(), bytes.begin(), bytes.end());
+    return true;
+  }
+  if (currentSize + bytes.size() <= kDrawRunInlinePayloadCapacity) {
+    std::copy(bytes.begin(), bytes.end(), storage.inlineData.begin() +
+                                           static_cast<std::ptrdiff_t>(storage.inlineSize));
+    storage.inlineSize += bytes.size();
+    return true;
+  }
+  reserveDrawPayload(storage, static_cast<std::size_t>(requiredSize));
+  storage.overflow.insert(storage.overflow.end(), bytes.begin(), bytes.end());
+  return true;
+}
+
+bool packDrawParamPayload(DrawParam& param, DrawPayloadArenaStorage& payloadArena,
                           DrawParamPayloadView payload) {
   const auto vertexBytes = payload.userVertexData;
   const auto indexBytes = payload.userIndexData;
   constexpr auto kMaxRange = std::numeric_limits<u32>::max();
   const std::uint64_t requiredSize =
-      static_cast<std::uint64_t>(payloadArena.size()) +
+      static_cast<std::uint64_t>(drawPayloadStorageSize(payloadArena)) +
       static_cast<std::uint64_t>(vertexBytes.size()) +
       static_cast<std::uint64_t>(indexBytes.size());
   if (requiredSize > kMaxRange) {
     return false;
   }
 
-  const auto appendPayload = [&payloadArena](std::span<const u8> bytes) {
-    if (bytes.empty()) {
-      return DrawPayloadRange{};
-    }
-    const auto offset = static_cast<u32>(payloadArena.size());
-    payloadArena.insert(payloadArena.end(), bytes.begin(), bytes.end());
-    return DrawPayloadRange{
-        .offset = offset,
-        .size = static_cast<u32>(bytes.size()),
-    };
-  };
+  return appendDrawPayload(payloadArena, vertexBytes, param.userVertexRange) &&
+         appendDrawPayload(payloadArena, indexBytes, param.userIndexRange);
+}
 
-  param.userVertexRange = appendPayload(vertexBytes);
-  param.userIndexRange = appendPayload(indexBytes);
+bool drawPayloadRangeValid(std::size_t payloadSize, DrawPayloadRange range) noexcept {
+  return static_cast<std::uint64_t>(range.offset) + static_cast<std::uint64_t>(range.size) <=
+         static_cast<std::uint64_t>(payloadSize);
+}
+
+}  // namespace
+
+void drawRunClear(DrawRunDesc& run) {
+  if (run.scratch.draws.overflowMode) {
+    run.scratch.draws.overflow.clear();
+  } else {
+    run.scratch.draws.inlineSize = 0;
+  }
+  if (run.scratch.payload.overflowMode) {
+    run.scratch.payload.overflow.clear();
+  } else {
+    run.scratch.payload.inlineSize = 0;
+  }
+}
+
+void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payloadBytes) {
+  reserveDrawParams(run.scratch.draws, drawCount);
+  reserveDrawPayload(run.scratch.payload, payloadBytes);
+}
+
+bool drawRunAppend(DrawRunDesc& run, DrawParam param, DrawParamPayloadView payload) {
+  param.userVertexRange = {};
+  param.userIndexRange = {};
+  if (!packDrawParamPayload(param, run.scratch.payload, payload)) {
+    return false;
+  }
+  appendDrawParam(run.scratch.draws, std::move(param));
+  return true;
+}
+
+DrawRunView drawRunView(const DrawRunDesc& run) noexcept {
+  return DrawRunView{
+      .draws = drawParamStorageSpan(run.scratch.draws),
+      .payloadArena = drawPayloadStorageSpan(run.scratch.payload),
+  };
+}
+
+MutableDrawRunView drawRunMutableView(DrawRunDesc& run) noexcept {
+  return MutableDrawRunView{
+      .draws = drawParamStorageMutableSpan(run.scratch.draws),
+      .payloadArena = drawPayloadStorageMutableSpan(run.scratch.payload),
+  };
+}
+
+bool drawRunEmpty(const DrawRunDesc& run) noexcept {
+  return drawParamStorageSize(run.scratch.draws) == 0;
+}
+
+std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept {
+  return drawParamStorageSize(run.scratch.draws);
+}
+
+std::size_t drawRunPayloadSize(const DrawRunDesc& run) noexcept {
+  return drawPayloadStorageSize(run.scratch.payload);
+}
+
+std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept {
+  return drawParamStorageSpan(run.scratch.draws);
+}
+
+std::span<DrawParam> drawRunMutableDraws(DrawRunDesc& run) noexcept {
+  return drawParamStorageMutableSpan(run.scratch.draws);
+}
+
+std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept {
+  return drawPayloadStorageSpan(run.scratch.payload);
+}
+
+std::span<u8> drawRunMutablePayloadArena(DrawRunDesc& run) noexcept {
+  return drawPayloadStorageMutableSpan(run.scratch.payload);
+}
+
+std::span<const u8> drawRunPayloadBytes(const DrawRunDesc& run,
+                                        DrawPayloadRange range) noexcept {
+  return drawRunPayloadBytes(range, drawRunPayloadArena(run));
+}
+
+bool drawRunValidate(const DrawRunDesc& run) noexcept {
+  const auto payloadSize = drawRunPayloadSize(run);
+  for (const auto& param : drawRunDraws(run)) {
+    if (!drawPayloadRangeValid(payloadSize, param.userVertexRange) ||
+        !drawPayloadRangeValid(payloadSize, param.userIndexRange)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -3794,17 +3984,17 @@ DrawRunDesc makeDrawRunDescFromCanonical(CanonicalDrawState state,
       std::min<std::size_t>(firstPayload.userVertexData.size(), std::numeric_limits<u32>::max()));
   run.state.debug.userIndexBytes = static_cast<u32>(
       std::min<std::size_t>(firstPayload.userIndexData.size(), std::numeric_limits<u32>::max()));
-  run.draws.reserve(draws.size());
+  std::size_t payloadBytes = 0;
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    const auto payload = drawPayloadAt(payloads, i);
+    payloadBytes += payload.userVertexData.size() + payload.userIndexData.size();
+  }
+  drawRunReserve(run, draws.size(), payloadBytes);
 
   for (std::size_t i = 0; i < draws.size(); ++i) {
-    const auto& draw = draws[i];
-    DrawParam packed = draw;
-    packed.userVertexRange = {};
-    packed.userIndexRange = {};
-    if (!packDrawParamPayload(packed, run.payloadArena, drawPayloadAt(payloads, i))) {
+    if (!drawRunAppend(run, draws[i], drawPayloadAt(payloads, i))) {
       return {};
     }
-    run.draws.push_back(std::move(packed));
   }
   return run;
 }
@@ -4363,9 +4553,10 @@ void Device::submitClearInternal(const ClearDesc& desc) {
 }
 
 void Device::submitDrawRunInternal(DrawRunDesc desc) {
-  if (desc.draws.empty()) {
+  if (drawRunEmpty(desc)) {
     return;
   }
+  const auto draws = drawRunDraws(desc);
   const auto& hot = desc.state.hot;
   const auto& shader = desc.state.shaderLayout;
   const auto stageState = [&](size_t stageIndex, u32 key) -> u32 {
@@ -4377,8 +4568,8 @@ void Device::submitDrawRunInternal(DrawRunDesc desc) {
   const auto renderState = [&](u32 key, u32 fallback = 0u) -> u32 {
     return flatStateOr(hot.renderStates, key, fallback);
   };
-  for (size_t i = 0; i < desc.draws.size(); ++i) {
-    const auto& draw = desc.draws[i];
+  for (size_t i = 0; i < draws.size(); ++i) {
+    const auto& draw = draws[i];
     emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x indexed=%u",
                     static_cast<unsigned long long>(submittedSequenceId_ + 1 + i),
                     static_cast<unsigned>(draw.primitiveType),
@@ -4413,9 +4604,9 @@ void Device::submitDrawRunInternal(DrawRunDesc desc) {
                     draw.indexed ? 1u : 0u);
   }
 
-  const auto drawCount = static_cast<u64>(desc.draws.size());
+  const auto drawCount = static_cast<u64>(draws.size());
   if (activeOcclusionQuery_) {
-    for (const auto& draw : desc.draws) {
+    for (const auto& draw : draws) {
       activeOcclusionCount_ += draw.primitiveCount;
     }
   }

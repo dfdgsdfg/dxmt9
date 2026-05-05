@@ -60,8 +60,8 @@ enum class EventKind {
 struct RecordedDrawRun {
   CanonicalDrawState state{};
   FlatDrawStateRecord hot{};
-  DrawParamList draws;
-  DrawPayloadArena payloadArena;
+  std::vector<DrawParam> draws;
+  std::vector<u8> payloadArena;
 };
 
 struct RecordedEvent {
@@ -128,8 +128,10 @@ struct RecordingDxmt9Device final : dxmt9::Device {
     event.kind = EventKind::SubmitDraw;
     event.drawRun.state = std::move(desc.state);
     event.drawRun.hot = event.drawRun.state.hot;
-    event.drawRun.draws = std::move(desc.draws);
-    event.drawRun.payloadArena = std::move(desc.payloadArena);
+    const auto view = drawRunView(desc);
+    event.drawRun.draws.assign(view.draws.begin(), view.draws.end());
+    event.drawRun.payloadArena.assign(view.payloadArena.begin(),
+                                      view.payloadArena.end());
     events.push_back(std::move(event));
   }
 
