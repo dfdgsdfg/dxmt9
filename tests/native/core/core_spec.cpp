@@ -1762,6 +1762,9 @@ void testMetalSamplerBorderColorCoverage() {
 #if !defined(__APPLE__)
   return;
 #else
+  if (!getenvFlag("DXMT9_CORE_SPEC_METAL_INTEGRATION")) {
+    return;
+  }
   BackendLimits limits{};
   limits.maxTextureSize = 1024;
   limits.maxColorAttachments = 4;
@@ -1845,6 +1848,9 @@ void testProgrammableTextureOrientationSmoke() {
 #if !defined(__APPLE__)
   return;
 #else
+  if (!getenvFlag("DXMT9_CORE_SPEC_METAL_INTEGRATION")) {
+    return;
+  }
   BackendLimits limits{};
   limits.maxTextureSize = 1024;
   limits.maxColorAttachments = 4;

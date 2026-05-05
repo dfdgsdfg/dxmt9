@@ -180,6 +180,9 @@ test('dxmt9-shader-corpus-gaps', python3,
 test('dxmt9-d3d9-conformance-manifest-check', bash,
      args: [join_paths(meson.project_source_root(), 'scripts/check_d3d9_conformance_manifest.sh')],
      is_parallel: false)
+test('dxmt9-d3d9-conformance-status-report', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/d3d9_conformance_status.py')],
+     is_parallel: false)
 test('dxmt9-drift-report', bash, args: [join_paths(meson.project_source_root(), 'scripts/check_drift.sh')],
      is_parallel: false)
 test('dxmt9-corpus-sync-smoke', python3,

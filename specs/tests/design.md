@@ -694,6 +694,41 @@ commit, lane/architecture evidence consistency, no duplicate executable/function
 pairs, and a local source/function match for scaffolded cases. It is wired into `meson test` as
 `dxmt9-d3d9-conformance-manifest-check`.
 
+### Full-Support Promotion
+
+Wine-oracle conformance is supported only to the degree recorded by the
+manifest. A local PE executable, a scaffolded case, or a single passing lane is
+not full support. Full support means every declared case has passing evidence
+for every declared deployment lane and architecture.
+
+```mermaid
+flowchart TD
+    A["Wine behavioural oracle\nexternal, not vendored"] --> B["dxmt9 clean-room PE case"]
+    B --> C["MANIFEST.toml case\nsource_kind + license_scope + lanes + arches"]
+    C --> D["Run app-local/builtin\nx64 and x86/WoW64 as declared"]
+    D --> E{"Runtime evidence"}
+    E -->|no evidence| S["scaffolded\nrun first lane"]
+    E -->|failing lane| F["failing\nfix implementation"]
+    E -->|some passing lanes| P["partial\nexpand evidence matrix"]
+    E -->|all declared lanes pass| G["passing\nfull-support candidate"]
+    F --> D
+    S --> D
+    P --> D
+```
+
+`scripts/d3d9_conformance_status.py` reads the manifest and reports the current
+support state as text, Markdown, or Mermaid. The default Meson target
+`dxmt9-d3d9-conformance-status-report` is a parse/report smoke test. The
+release or merge-readiness gate is explicit:
+
+```sh
+scripts/d3d9_conformance_status.py --fail-if-full-support-missing
+```
+
+That command is expected to fail until all manifest entries are `passing`.
+Current status snapshots and failure groups belong in `specs/gap.md`; the
+manifest remains the source of truth.
+
 ### Run
 
 ```sh

@@ -467,11 +467,6 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
         lines.append(
             "  auto *client_chunk = dxmt9::util::marshal::wow64::decodePtr<const D9CCommandChunk *>(args->arg1);"
         )
-        lines.append(
-            "  dxmt9::d3d9::devicec::dxmt9DebugLog("
-            "\"commit_chunk wow64 thunk opaque=%p deviceToken=0x%08x chunk32=0x%08x clientChunk=%p\", "
-            "opaque, args->arg0, args->arg1, client_chunk);"
-        )
         lines.append("  if (!client_chunk) {")
         lines.append(
             "    args->ret = dxmt9c_device_commit_chunk("
@@ -480,13 +475,8 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
         lines.append("    return DXMT9_STATUS_SUCCESS;")
         lines.append("  }")
         lines.append("  D9CCommandChunk native_chunk = *client_chunk;")
-        lines.append(
-            "  dxmt9::d3d9::devicec::dxmt9DebugLog("
-            "\"commit_chunk wow64 chunk version=%u records=%u bytes=%u handleCount=%u recordsPtr=0x%08x%08x\", "
-            "native_chunk.version, native_chunk.recordCount, native_chunk.recordBytes, "
-            "native_chunk.handleCount, native_chunk.records.hi, native_chunk.records.lo);"
-        )
         lines.append("  std::vector<std::uint8_t> native_records;")
+        lines.append("  std::unique_ptr<dxmt9::d3d9::devicec::ScopedWow64NativePointerAllowance> native_records_allowance;")
         lines.append("  if (native_chunk.recordBytes != 0) {")
         lines.append("    constexpr std::uint32_t kMaxWow64CommitChunkBytes = 16u * 1024u * 1024u;")
         lines.append("    if (native_chunk.recordBytes > kMaxWow64CommitChunkBytes) {")
@@ -508,11 +498,8 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
         )
         lines.append("    native_records.resize(native_chunk.recordBytes);")
         lines.append("    std::memcpy(native_records.data(), client_records, native_records.size());")
-        lines.append(
-            "    dxmt9::d3d9::devicec::dxmt9DebugLog("
-            "\"commit_chunk wow64 copied bytes=%zu from=%p to=%p\", "
-            "native_records.size(), client_records, native_records.data());"
-        )
+        lines.append("    native_records_allowance = std::make_unique<dxmt9::d3d9::devicec::ScopedWow64NativePointerAllowance>(")
+        lines.append("        native_records.data(), native_records.size());")
         lines.append("    const auto native_record_ptr = reinterpret_cast<std::uintptr_t>(native_records.data());")
         lines.append("    native_chunk.records.lo = static_cast<std::uint32_t>(native_record_ptr & 0xffffffffull);")
         lines.append("    native_chunk.records.hi = static_cast<std::uint32_t>(native_record_ptr >> 32);")
@@ -520,10 +507,6 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
         lines.append(
             "  args->ret = dxmt9c_device_commit_chunk("
             "dxmt9::util::marshal::wow64::decodeHandle<D9CDevice*>(args->arg0), &native_chunk);"
-        )
-        lines.append(
-            "  dxmt9::d3d9::devicec::dxmt9DebugLog("
-            "\"commit_chunk wow64 return hr=0x%08x\", static_cast<std::uint32_t>(args->ret));"
         )
         lines.append("  return DXMT9_STATUS_SUCCESS;")
         lines.append("}")
@@ -546,18 +529,13 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append("")
     lines.append("#include <cstdint>")
     lines.append("#include <cstring>")
+    lines.append("#include <memory>")
     lines.append("#include <vector>")
     lines.append("")
     for proto in protos:
         lines.append(f"extern \"C\" NTSTATUS thunk_{proto.name}(void *opaque) {{")
         lines.append(f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args_{proto.name}>(opaque);")
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
-        if proto.name == "dxmt9c_device_commit_chunk":
-            lines.append(
-                "  dxmt9::d3d9::devicec::dxmt9DebugLog("
-                "\"commit_chunk native thunk opaque=%p arg0=%p arg1=%p\", "
-                "opaque, args->arg0, args->arg1);"
-            )
         call_args = ", ".join(f"args->{param.name}" for param in proto.params)
         if proto.return_type == "void":
             lines.append(f"  {proto.name}({call_args});")

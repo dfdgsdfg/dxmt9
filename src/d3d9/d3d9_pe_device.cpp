@@ -1923,6 +1923,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::vector<std::uint8_t> pendingCommandWireBlob_{};
     WireHandleEntryList chunkWireHandleScratch_{};
     WireHandleEntryList recordWireHandleScratch_{};
+    // Fire-and-forget records carry raw D9C handles. Keep those wrappers
+    // alive until the queued chunk commits or is explicitly discarded.
+    std::unordered_set<D9CSurface*> pendingCommandRetainedSurfaceSet_{};
+    std::vector<D9CSurface*> pendingCommandRetainedSurfaces_{};
+    std::unordered_set<D9CTexture*> pendingCommandRetainedTextureSet_{};
+    std::vector<D9CTexture*> pendingCommandRetainedTextures_{};
+
+    struct PendingCommandRetentions {
+        std::vector<D9CSurface*> surfaces;
+        std::vector<D9CTexture*> textures;
+    };
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
@@ -1945,16 +1956,84 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
     }
 
+    template<typename T>
+    static void eraseOne(std::vector<T*>& values, T* value) {
+        const auto it = std::find(values.begin(), values.end(), value);
+        if (it != values.end()) {
+            values.erase(it);
+        }
+    }
+
+    void retainPendingCommandSurface(D9CSurface* surface,
+                                     PendingCommandRetentions& acquired) {
+        if (!surface) {
+            return;
+        }
+        if (pendingCommandRetainedSurfaceSet_.insert(surface).second) {
+            dxmt9c_surface_addref(surface);
+            pendingCommandRetainedSurfaces_.push_back(surface);
+            acquired.surfaces.push_back(surface);
+        }
+    }
+
+    void retainPendingCommandTexture(D9CTexture* texture,
+                                     PendingCommandRetentions& acquired) {
+        if (!texture) {
+            return;
+        }
+        if (pendingCommandRetainedTextureSet_.insert(texture).second) {
+            dxmt9c_texture_addref(texture);
+            pendingCommandRetainedTextures_.push_back(texture);
+            acquired.textures.push_back(texture);
+        }
+    }
+
+    void rollbackPendingCommandRetentions(const PendingCommandRetentions& acquired) {
+        for (auto* surface : acquired.surfaces) {
+            pendingCommandRetainedSurfaceSet_.erase(surface);
+            eraseOne(pendingCommandRetainedSurfaces_, surface);
+            dxmt9c_surface_release(surface);
+        }
+        for (auto* texture : acquired.textures) {
+            pendingCommandRetainedTextureSet_.erase(texture);
+            eraseOne(pendingCommandRetainedTextures_, texture);
+            dxmt9c_texture_release(texture);
+        }
+    }
+
+    void releasePendingCommandRetentions() {
+        for (auto* surface : pendingCommandRetainedSurfaces_) {
+            dxmt9c_surface_release(surface);
+        }
+        pendingCommandRetainedSurfaces_.clear();
+        pendingCommandRetainedSurfaceSet_.clear();
+        for (auto* texture : pendingCommandRetainedTextures_) {
+            dxmt9c_texture_release(texture);
+        }
+        pendingCommandRetainedTextures_.clear();
+        pendingCommandRetainedTextureSet_.clear();
+    }
+
+    void clearPendingCommandChunk() {
+        pendingCommandBytes_.clear();
+        pendingCommandWireRecords_.clear();
+        pendingCommandWireBlob_.clear();
+        pendingCommandRecordCount_ = 0;
+        for (auto& set : chunkHandlesByKind_) {
+            set.clear();
+        }
+        chunkWireHandleScratch_.clear();
+        recordWireHandleScratch_.clear();
+        releasePendingCommandRetentions();
+    }
+
     void clearPeStateTracking() {
         renderStateShadow_.clear();
         tssShadow_.clear();
         samplerStateShadow_.clear();
         transformShadow_.clear();
         clearPendingHotState();
-        pendingCommandBytes_.clear();
-        pendingCommandWireRecords_.clear();
-        pendingCommandWireBlob_.clear();
-        pendingCommandRecordCount_ = 0;
+        clearPendingCommandChunk();
         fvf_ = 0;
         std::memset(streamOff_, 0, sizeof(streamOff_));
         std::memset(streamStr_, 0, sizeof(streamStr_));
@@ -2671,15 +2750,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
         const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
         if (SUCCEEDED(hr)) {
-            pendingCommandBytes_.clear();
-            pendingCommandWireRecords_.clear();
-            pendingCommandWireBlob_.clear();
-            pendingCommandRecordCount_ = 0;
-            for (auto& set : chunkHandlesByKind_) {
-                set.clear();
-            }
-            chunkWireHandleScratch_.clear();
-            recordWireHandleScratch_.clear();
+            clearPendingCommandChunk();
         }
         return hr;
     }
@@ -2734,6 +2805,37 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             type, bytes, [data, bytes](std::uint8_t* dst) {
                 std::memcpy(dst, data, bytes);
             });
+    }
+
+    HRESULT appendCommandRecordRetained(const void* data,
+                                        size_t bytes,
+                                        D9CSurface* surface0 = nullptr,
+                                        D9CSurface* surface1 = nullptr,
+                                        D9CTexture* texture0 = nullptr,
+                                        D9CTexture* texture1 = nullptr) {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        if (!data || bytes == 0 || bytes > 0xffffffffull) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (pendingCommandRecordCount_ != 0 &&
+            (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
+             pendingCommandBytes_.size() + bytes > maxPendingCommandBytes())) {
+            const HRESULT flushHr = flushPendingCommandChunk();
+            if (FAILED(flushHr)) return flushHr;
+        }
+
+        PendingCommandRetentions acquired{};
+        retainPendingCommandSurface(surface0, acquired);
+        retainPendingCommandSurface(surface1, acquired);
+        retainPendingCommandTexture(texture0, acquired);
+        retainPendingCommandTexture(texture1, acquired);
+
+        const UINT recordCountBefore = pendingCommandRecordCount_;
+        const HRESULT hr = appendCommandRecord(data, bytes);
+        if (FAILED(hr) && pendingCommandRecordCount_ == recordCountBefore) {
+            rollbackPendingCommandRetentions(acquired);
+        }
+        return hr;
     }
 
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
@@ -3168,6 +3270,7 @@ public:
 
     ~D3D9DeviceImpl() {
         (void)flushPeRecorder();
+        clearPendingCommandChunk();
         releaseAllBound();
         dxmt9c_device_release(dev_);
         if (factory_) factory_->Release();
@@ -3599,30 +3702,24 @@ public:
         if (srcRect) cs = toR(*srcRect);
         if (dstPt) { cd.left = dstPt->x; cd.top = dstPt->y;
                      cd.right = dstPt->x; cd.bottom = dstPt->y; }
-        // Phase 15: chunk-recorder fast path — UpdateSurface is fire-and-
-        // forget (no return data the PE caller waits on), so it rides as
-        // a chunk record. Both surfaces are bulk-retained against the
-        // chunk seqId to survive until the GPU consumes the copy.
+        // Fire-and-forget copy records stay queued until the normal chunk
+        // boundary. The raw D9C wrappers are AddRef'd by the pending chunk
+        // so callers may release their D3D9 wrappers immediately.
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        if (auto* raw = rawSurf(src); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
-        if (auto* raw = rawSurf(dst); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
+        auto* const srcRaw = rawSurf(src);
+        auto* const dstRaw = rawSurf(dst);
         D9CCommandRecordUpdateSurface record{};
         record.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
         record.header.size = sizeof(record);
-        record.srcWire = reinterpret_cast<uint64_t>(rawSurf(src));
-        record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
+        record.srcWire = reinterpret_cast<uint64_t>(srcRaw);
+        record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
         record.hasSrcRect = srcRect ? 1u : 0u;
         record.hasDstPoint = dstPt ? 1u : 0u;
         record.srcRect = cs;
         record.dstPoint = cd;
-        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
-        if (FAILED(appendHr)) return appendHr;
-        return flushPendingCommandChunk();
+        return appendCommandRecordRetained(&record, sizeof(record),
+                                           srcRaw, dstRaw);
     }
 
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
@@ -3630,20 +3727,15 @@ public:
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        if (auto* raw = rawTex(src); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                            reinterpret_cast<uint64_t>(raw));
-        if (auto* raw = rawTex(dst); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                            reinterpret_cast<uint64_t>(raw));
+        auto* const srcRaw = rawTex(src);
+        auto* const dstRaw = rawTex(dst);
         D9CCommandRecordUpdateTexture record{};
         record.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
         record.header.size = sizeof(record);
-        record.srcWire = reinterpret_cast<uint64_t>(rawTex(src));
-        record.dstWire = reinterpret_cast<uint64_t>(rawTex(dst));
-        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
-        if (FAILED(appendHr)) return appendHr;
-        return flushPendingCommandChunk();
+        record.srcWire = reinterpret_cast<uint64_t>(srcRaw);
+        record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
+        return appendCommandRecordRetained(&record, sizeof(record),
+                                           nullptr, nullptr, srcRaw, dstRaw);
     }
 
     HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* rt,
@@ -3660,18 +3752,15 @@ public:
         // the actual readback HRESULT back to PE.
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        if (auto* raw = rawSurf(rt); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
-        if (auto* raw = rawSurf(dst); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
+        auto* const rtRaw = rawSurf(rt);
+        auto* const dstRaw = rawSurf(dst);
         D9CCommandRecordReadback record{};
         record.header.type = D9C_COMMAND_RECORD_READBACK;
         record.header.size = sizeof(record);
-        record.srcWire = reinterpret_cast<uint64_t>(rawSurf(rt));
-        record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
-        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        record.srcWire = reinterpret_cast<uint64_t>(rtRaw);
+        record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
+        const HRESULT appendHr = appendCommandRecordRetained(&record, sizeof(record),
+                                                             rtRaw, dstRaw);
         if (FAILED(appendHr)) return appendHr;
         // Sync semantics: commit the chunk now and wait for completion.
         // flushPendingCommandChunk routes through commit_chunk -> server's
@@ -3699,27 +3788,20 @@ public:
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        // Retain both surfaces against the chunk seqId so they
-        // survive until the GPU consumes the blit.
-        if (auto* raw = rawSurf(src); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
-        if (auto* raw = rawSurf(dst); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
+        auto* const srcRaw = rawSurf(src);
+        auto* const dstRaw = rawSurf(dst);
         D9CCommandRecordStretchRect record{};
         record.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
         record.header.size = sizeof(record);
-        record.srcWire = reinterpret_cast<uint64_t>(rawSurf(src));
-        record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
+        record.srcWire = reinterpret_cast<uint64_t>(srcRaw);
+        record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
         record.hasSrcRect = srcRect ? 1u : 0u;
         record.hasDstRect = dstRect ? 1u : 0u;
         record.filter = (uint32_t)filter;
         if (srcRect) record.srcRect = cs;
         if (dstRect) record.dstRect = cd;
-        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
-        if (FAILED(appendHr)) return appendHr;
-        return flushPendingCommandChunk();
+        return appendCommandRecordRetained(&record, sizeof(record),
+                                           srcRaw, dstRaw);
     }
 
     HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9* pSurf,
@@ -3731,19 +3813,15 @@ public:
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        if (auto* raw = rawSurf(pSurf); raw)
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
+        auto* const surfRaw = rawSurf(pSurf);
         D9CCommandRecordColorFill record{};
         record.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
         record.header.size = sizeof(record);
-        record.surfaceWire = reinterpret_cast<uint64_t>(rawSurf(pSurf));
+        record.surfaceWire = reinterpret_cast<uint64_t>(surfRaw);
         record.colorARGB = (uint32_t)color;
         record.hasRect = pRect ? 1u : 0u;
         if (pRect) record.rect = cr;
-        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
-        if (FAILED(appendHr)) return appendHr;
-        return flushPendingCommandChunk();
+        return appendCommandRecordRetained(&record, sizeof(record), surfRaw);
     }
 
     HRESULT STDMETHODCALLTYPE CreateOffscreenPlainSurface(UINT w, UINT h,
@@ -4376,9 +4454,9 @@ public:
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
         setRef(textures_[stage], pTex);
-        // Phase 4: track every bound texture handle in the chunk
-        // retention set so the server-side importer can mark all of
-        // them at chunk seqId in one bulk pass.
+        // Keep the legacy append-time handle note for callers that still
+        // populate chunkHandlesByKind_; flush-time payload decoding now
+        // derives the actual per-record wire handle ranges.
         if (auto* raw = rawTex(pTex); raw != nullptr) {
             noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
                             reinterpret_cast<uint64_t>(raw));

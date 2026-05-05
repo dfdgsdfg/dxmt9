@@ -748,3 +748,11 @@ local scaffolds must also name the source file that contains the test function.
 The manifest is the authoritative gap list for Wine-oracle D3D9 API
 conformance and must be validated by the native manifest check before changes
 are accepted.
+
+**R-TEST-12.21** The PE conformance manifest must be queryable by a checked-in
+status-report tool. The tool must summarize status counts, group next actions
+by `scaffolded`, `failing`, `partial`, `passing`, `skipped`, and `todo`, expose
+a Mermaid output for roadmap reviews, and provide a nonzero full-support gate
+for release/merge readiness. The full-support gate must pass only when every
+manifest case is `passing`; it must not infer support from local scaffolds or
+partial lane evidence.

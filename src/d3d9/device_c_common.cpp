@@ -4,10 +4,12 @@
 #include "util/dynamic_symbol.hpp"
 #include "util/log/log.hpp"
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #if defined(__APPLE__)
@@ -22,6 +24,13 @@ namespace dxmt9::d3d9::devicec {
 namespace {
 
 thread_local uint32_t g_wow64ClientCallDepth = 0;
+
+struct Wow64NativePointerRange {
+  uintptr_t begin = 0;
+  uintptr_t end = 0;
+};
+
+thread_local std::vector<Wow64NativePointerRange> g_wow64NativePointerAllowances;
 
 const char* dxmt9ShaderDumpDir() {
   static const std::string path = dxmt9::util::getenvString("DXMT_DUMP_SHADER_BYTECODE_DIR");
@@ -795,6 +804,19 @@ bool requiresWow64PointerShadow() {
   return g_wow64ClientCallDepth != 0;
 }
 
+bool isWow64NativePointerAllowed(uint64_t value) {
+  if (value == 0 || value > static_cast<uint64_t>(UINTPTR_MAX)) {
+    return false;
+  }
+  const auto ptr = static_cast<uintptr_t>(value);
+  for (const auto& range : g_wow64NativePointerAllowances) {
+    if (ptr >= range.begin && ptr < range.end) {
+      return true;
+    }
+  }
+  return false;
+}
+
 ScopedWow64ClientCall::ScopedWow64ClientCall() {
   ++g_wow64ClientCallDepth;
 }
@@ -802,6 +824,37 @@ ScopedWow64ClientCall::ScopedWow64ClientCall() {
 ScopedWow64ClientCall::~ScopedWow64ClientCall() {
   if (g_wow64ClientCallDepth != 0) {
     --g_wow64ClientCallDepth;
+  }
+}
+
+ScopedWow64NativePointerAllowance::ScopedWow64NativePointerAllowance(const void* ptr, size_t size)
+: ptr_(ptr), size_(size) {
+  if (!ptr_ || size_ == 0) {
+    return;
+  }
+  const auto begin = reinterpret_cast<uintptr_t>(ptr_);
+  if (begin > UINTPTR_MAX - size_) {
+    ptr_ = nullptr;
+    size_ = 0;
+    return;
+  }
+  g_wow64NativePointerAllowances.push_back({begin, begin + size_});
+}
+
+ScopedWow64NativePointerAllowance::~ScopedWow64NativePointerAllowance() {
+  if (!ptr_ || size_ == 0) {
+    return;
+  }
+  const auto begin = reinterpret_cast<uintptr_t>(ptr_);
+  const auto end = begin + size_;
+  const auto it = std::find_if(
+      g_wow64NativePointerAllowances.rbegin(),
+      g_wow64NativePointerAllowances.rend(),
+      [begin, end](const Wow64NativePointerRange& range) {
+        return range.begin == begin && range.end == end;
+      });
+  if (it != g_wow64NativePointerAllowances.rend()) {
+    g_wow64NativePointerAllowances.erase(std::next(it).base());
   }
 }
 

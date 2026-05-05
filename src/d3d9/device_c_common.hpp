@@ -63,6 +63,7 @@ Low4GBAllocation allocateLow4GB(size_t size);
 void freeLow4GB(Low4GBAllocation alloc);
 void releaseShadowLock(ShadowLock& lock);
 bool requiresWow64PointerShadow();
+bool isWow64NativePointerAllowed(uint64_t value);
 
 class ScopedWow64ClientCall {
  public:
@@ -70,6 +71,18 @@ class ScopedWow64ClientCall {
   ~ScopedWow64ClientCall();
   ScopedWow64ClientCall(const ScopedWow64ClientCall&) = delete;
   ScopedWow64ClientCall& operator=(const ScopedWow64ClientCall&) = delete;
+};
+
+class ScopedWow64NativePointerAllowance {
+ public:
+  ScopedWow64NativePointerAllowance(const void* ptr, size_t size);
+  ~ScopedWow64NativePointerAllowance();
+  ScopedWow64NativePointerAllowance(const ScopedWow64NativePointerAllowance&) = delete;
+  ScopedWow64NativePointerAllowance& operator=(const ScopedWow64NativePointerAllowance&) = delete;
+
+ private:
+  const void* ptr_ = nullptr;
+  size_t size_ = 0;
 };
 
 uint32_t transformStateFromD3D(uint32_t state);
