@@ -606,7 +606,10 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
     const auto command = slot.commandAt(i);
     switch (command.kind) {
       case core::MetalCommandKind::Draw:
-        if (command.draw) pool.markDrawResources(*command.draw, slot.seqId);
+        if (command.drawState) pool.markDrawResources(command.drawState->hot, slot.seqId);
+        break;
+      case core::MetalCommandKind::DrawRun:
+        if (command.drawState) pool.markDrawResources(command.drawState->hot, slot.seqId);
         break;
       case core::MetalCommandKind::Clear:
         if (command.clear) pool.markClearResources(*command.clear, slot.seqId);
@@ -629,15 +632,6 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
             surface->lastUsedSeqId = std::max(surface->lastUsedSeqId, slot.seqId);
           }
         }
-        break;
-      case core::MetalCommandKind::DrawRun:
-        // Phase 35: explicit no-op. DrawRun ingress (submitDrawRun) marks
-        // BaseDrawState resources ONCE at submit time (legacy mode) or
-        // relies on chunk.handles bulk retention (chunk import mode,
-        // Phase 14 + 18). This callback fires during commit-time slot
-        // marking — DrawRun resources are already pinned by either
-        // path, so re-walking per-DrawParam here would be redundant
-        // CPU work.
         break;
     }
   }
@@ -727,14 +721,10 @@ void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
   ensureWritingSlotUnlocked(*this, lock);
   // Phase 14: chunk-import path already bulk-marked all resources; the
   // per-draw markDrawResources walk is pure CPU waste in that mode.
-  // Legacy non-chunk path still needs the per-draw walk — but since the
-  // BaseDrawState is shared, mark it once with a single synthetic that
-  // shadows just enough to walk the resource set (textures + RT + DS +
-  // VBuffers + IB are all base-stable across a run). Per-draw fields
-  // (primitiveType / counts / UP payloads) don't carry handles; they
-  // only feed the encoder, not the resource walker.
+  // Non-chunk paths still need a resource walk, but BaseDrawState is
+  // shared, so one hot-state mark covers textures, RT/DS, VBs, and IB.
   if (!skipDrawResourceMarking_) {
-    pool_.markDrawResources(desc.state.coldDesc, seqIdForMark(*this, 0));
+    pool_.markDrawResources(desc.state.hot, seqIdForMark(*this, 0));
   }
   currentBackBuffer_ = desc.state.hot.colorAttachments[0].handle;
   currentSlotUnlocked(*this).appendDrawRun(std::move(desc));

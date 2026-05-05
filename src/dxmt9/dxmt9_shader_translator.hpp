@@ -13,15 +13,22 @@
 #include <cstdint>
 #include <string>
 
+namespace dxmt9::drawshader {
+struct ShaderSourceContext;
+}
+
 namespace dxmt9::translator {
 
 // Translate a D3D9 vertex shader (decl-first bytecode) into a complete
-// standalone MSL source string. The DrawDesc supplies state context
-// (clip planes, texture declarations, etc.) needed to emit a specialised
-// vertex shader variant.
+// standalone MSL source string. ShaderSourceContext supplies the small
+// shader-relevant state slice needed to emit a specialised vertex variant.
+std::string makeTranslatedVertexSource(const core::ShaderRef& shader,
+                                       const drawshader::ShaderSourceContext& context);
 std::string makeTranslatedVertexSource(const core::ShaderRef& shader, const core::DrawDesc& desc);
 
 // Translate a D3D9 pixel shader into MSL source. Mirrors the vertex entry.
+std::string makeTranslatedFragmentSource(const core::ShaderRef& shader,
+                                         const drawshader::ShaderSourceContext& context);
 std::string makeTranslatedFragmentSource(const core::ShaderRef& shader, const core::DrawDesc& desc);
 
 namespace test {

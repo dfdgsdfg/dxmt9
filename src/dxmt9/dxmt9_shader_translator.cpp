@@ -1,4 +1,5 @@
 #include "dxmt9_shader_translator.hpp"
+#include "dxmt9_draw_shader.hpp"
 
 #include "dxmt9_d3d9_bytecode.hpp"
 #include "dxmt9_debug_trace.hpp"
@@ -34,6 +35,7 @@ using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 using f32 = float;
 using i32 = std::int32_t;
+using ShaderSourceContext = ::dxmt9::drawshader::ShaderSourceContext;
 
 using ::dxmt9::shaders::makeShaderPrelude;
 
@@ -652,13 +654,14 @@ u32 decodeLabelIndex(u32 token) {
   return token & 0x7ffu;
 }
 
-std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const SpirvModule& module, const DrawDesc& desc) {
+std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const SpirvModule& module,
+                                                                     const ShaderSourceContext& context) {
   if (module.stage != D3DShaderStage::Vertex) {
     return std::nullopt;
   }
 
   VertexShaderInputLayout layout;
-  layout.stride = computeVertexDeclStride(desc);
+  layout.stride = computeVertexDeclStride(context.vertexDecl);
   bool hasBinding = false;
   for (const auto& instruction : module.instructions) {
     if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
@@ -671,7 +674,7 @@ std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const Spirv
     }
     const u32 usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT;
     const u32 usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT;
-    for (const auto& element : desc.vertexDecl.elements) {
+    for (const auto& element : context.vertexDecl.elements) {
       if (element.stream != 0) {
         continue;
       }
@@ -864,7 +867,8 @@ u32 textureSamplerIndex(const D3DDecodedInstruction& instruction, D3DShaderStage
   return 0u;
 }
 
-std::array<bool, kMaxSamplers> collectPixelSamplerUsage(const SpirvModule& module, const DrawDesc& desc) {
+std::array<bool, kMaxSamplers> collectPixelSamplerUsage(const SpirvModule& module,
+                                                        const ShaderSourceContext& context) {
   std::array<bool, kMaxSamplers> usage{};
   if (module.stage != D3DShaderStage::Pixel) {
     return usage;
@@ -875,7 +879,7 @@ std::array<bool, kMaxSamplers> collectPixelSamplerUsage(const SpirvModule& modul
     }
   }
   if (!std::any_of(usage.begin(), usage.end(), [](bool used) { return used; }) &&
-      (module.usesTexture || desc.textures[0].handle != Handle{})) {
+      (module.usesTexture || context.textures[0])) {
     usage[0] = true;
   }
   return usage;
@@ -1130,7 +1134,9 @@ struct FlowBlock {
   bool sawElse = false;
 };
 
-SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader, bool vertex, const DrawDesc& desc) {
+SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
+                                        bool vertex,
+                                        const ShaderSourceContext& context) {
   SpirvModule module;
   const auto& bytes = shader.bytecode.bytes;
   if (bytes.size() % sizeof(u32) != 0) {
@@ -1138,8 +1144,8 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader, bool vertex, co
   }
 
   const u64 bytecodeHash = shader.bytecode.hash ? shader.bytecode.hash : hashBytes(std::as_bytes(std::span(bytes)));
-  module.hash = bytecodeHash ^ (vertex ? 0x5356505653455254ull : 0x5350465348454453ull) ^ desc.clipPlaneMask ^
-                (static_cast<u64>(desc.rts.color[0].sampleCount) << 32);
+  module.hash = bytecodeHash ^ (vertex ? 0x5356505653455254ull : 0x5350465348454453ull) ^
+                context.clipPlaneMask ^ (static_cast<u64>(context.sampleCount) << 32);
   module.words.reserve(bytes.size() / sizeof(u32));
   module.stage = vertex ? D3DShaderStage::Vertex : D3DShaderStage::Pixel;
 
@@ -1270,11 +1276,13 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader, bool vertex, co
   return module;
 }
 
-std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc, bool vertex) {
+std::string translateSpirvToMsl(const SpirvModule& module,
+                                const ShaderSourceContext& context,
+                                bool vertex) {
   std::ostringstream out;
-  out << makeShaderPrelude(desc.clipPlaneMask != 0);
+  out << makeShaderPrelude(context.clipPlaneMask != 0);
   if (vertex) {
-    const auto inputLayout = decodeVertexShaderInputLayout(module, desc);
+    const auto inputLayout = decodeVertexShaderInputLayout(module, context);
     const auto outputSemantics = collectVertexOutputSemantics(module);
     const bool traceShaderInputs = [] {
       const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
@@ -1345,7 +1353,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
       }
       out << "  out.fogFactor = outFogFactor;\n";
       out << "  out.pointSize = outPointSize;\n";
-      if (desc.clipPlaneMask != 0) {
+      if (context.clipPlaneMask != 0) {
         out << "  for (uint i = 0; i < 6; ++i) { out.clipDistance[i] = 1.0f; }\n";
       }
       out << "  return out;\n";
@@ -1993,7 +2001,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     out << "  out.fogFactor = outFogFactor;\n";
     out << "  out.pointSize = outPointSize;\n";
     out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
-    if (desc.clipPlaneMask != 0) {
+    if (context.clipPlaneMask != 0) {
       out << "  for (uint i = 0; i < 6; ++i) {\n";
       out << "    if ((uniforms.clipPlaneMask & (1u << i)) != 0u) {\n";
       out << "      out.clipDistance[i] = dot(uniforms.clipPlanes[i], out.position);\n";
@@ -2006,7 +2014,7 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
     return out.str();
   }
 
-  const auto samplerUsage = collectPixelSamplerUsage(module, desc);
+  const auto samplerUsage = collectPixelSamplerUsage(module, context);
   const auto pixelInputSemantics = collectPixelInputSemantics(module);
   const bool textured = std::any_of(samplerUsage.begin(), samplerUsage.end(), [](bool used) { return used; });
   const bool traceShaderInputs = [] {
@@ -2682,12 +2690,22 @@ std::string translateSpirvToMsl(const SpirvModule& module, const DrawDesc& desc,
   return out.str();
 }
 
+std::string makeTranslatedVertexSource(const ShaderRef& shader,
+                                       const ShaderSourceContext& context) {
+  return translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, true, context), context, true);
+}
+
+std::string makeTranslatedFragmentSource(const ShaderRef& shader,
+                                         const ShaderSourceContext& context) {
+  return translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, false, context), context, false);
+}
+
 std::string makeTranslatedVertexSource(const ShaderRef& shader, const DrawDesc& desc) {
-  return translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, true, desc), desc, true);
+  return makeTranslatedVertexSource(shader, ::dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
 std::string makeTranslatedFragmentSource(const ShaderRef& shader, const DrawDesc& desc) {
-  return translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, false, desc), desc, false);
+  return makeTranslatedFragmentSource(shader, ::dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
 }  // namespace dxmt9::translator::detail_
@@ -2695,8 +2713,18 @@ std::string makeTranslatedFragmentSource(const ShaderRef& shader, const DrawDesc
 namespace dxmt9::translator {
 
 std::string makeTranslatedVertexSource(const ::dxmt9::core::ShaderRef& shader,
+                                        const ::dxmt9::drawshader::ShaderSourceContext& context) {
+  return detail_::makeTranslatedVertexSource(shader, context);
+}
+
+std::string makeTranslatedVertexSource(const ::dxmt9::core::ShaderRef& shader,
                                         const ::dxmt9::core::DrawDesc& desc) {
   return detail_::makeTranslatedVertexSource(shader, desc);
+}
+
+std::string makeTranslatedFragmentSource(const ::dxmt9::core::ShaderRef& shader,
+                                          const ::dxmt9::drawshader::ShaderSourceContext& context) {
+  return detail_::makeTranslatedFragmentSource(shader, context);
 }
 
 std::string makeTranslatedFragmentSource(const ::dxmt9::core::ShaderRef& shader,
@@ -2709,7 +2737,8 @@ namespace test {
 ::dxmt9::d3d9bc::SpirvModule decodeD3DBytecodeForTest(const ::dxmt9::core::ShaderRef& shader,
                                                        bool vertex,
                                                        const ::dxmt9::core::DrawDesc& desc) {
-  return detail_::translateD3DBytecodeToSpirv(shader, vertex, desc);
+  return detail_::translateD3DBytecodeToSpirv(
+      shader, vertex, ::dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
 ::dxmt9::d3d9bc::D3DRegisterRef decodeRegisterRefForTest(std::uint32_t token,

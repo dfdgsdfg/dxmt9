@@ -92,8 +92,9 @@ void testBuildDrawUniformsViewportAndRenderStateValues() {
 
   const auto uniforms = dxmt9::state::buildDrawUniforms(desc);
   const auto hot = makeFlatDrawStateRecord(desc);
+  const auto shaderLayout = makeDrawShaderLayoutContext(desc);
   const auto flatUniforms =
-      dxmt9::state::buildDrawUniforms(FlatDrawStateView{.hot = &hot, .coldDesc = &desc});
+      dxmt9::state::buildDrawUniforms(FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout});
 
   checkNear(uniforms.halfPixelFixup[0], 1.0f / 320.0f, 1.0e-6f, "half-pixel X fixup");
   checkNear(uniforms.halfPixelFixup[1], 1.0f / 240.0f, 1.0e-6f, "half-pixel Y fixup");
@@ -146,7 +147,7 @@ void testDepthStencilKeyReflectsDepthAndStencilState() {
   const auto key = dxmt9::state::makeDepthStencilKey(desc);
   const auto hot = makeFlatDrawStateRecord(desc);
   const auto flatKey =
-      dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &hot, .coldDesc = &desc});
+      dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &hot});
 
   check(key.depthEnable, "depth enabled reflected");
   checkEq(flatKey, key, "flat depth-stencil helper matches DrawDesc compatibility wrapper");

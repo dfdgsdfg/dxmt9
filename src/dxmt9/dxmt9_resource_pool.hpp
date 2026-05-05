@@ -352,6 +352,7 @@ struct Pool {
   // Per-command-kind bulk marks. Walk the descriptor's resources and stamp
   // their last-used watermark.
   void markDrawResources(const core::DrawDesc& desc, u64 seqId);
+  void markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId);
   void markClearResources(const core::ClearDesc& desc, u64 seqId);
   void markSurfaceCopyResources(const core::SurfaceCopyDesc& desc, u64 seqId);
   void markStretchResources(const core::StretchRectDesc& desc, u64 seqId);

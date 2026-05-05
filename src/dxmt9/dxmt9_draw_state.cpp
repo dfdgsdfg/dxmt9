@@ -36,14 +36,13 @@ using core::RS_Z_FUNC;
 using core::RS_Z_WRITE_ENABLE;
 
 DrawUniforms buildDrawUniforms(core::FlatDrawStateView state) {
-  const auto& desc = state.desc();
   const auto& hot = *state.hot;
-  const auto* shader = state.hasShaderContext() ? &state.shaderContext() : nullptr;
-  const auto& vsConst = shader ? shader->vsConst : desc.vsConst;
-  const auto& psConst = shader ? shader->psConst : desc.psConst;
-  const auto& worldViewProj = shader ? shader->worldViewProj : desc.worldViewProj;
-  const auto& textureTransforms = shader ? shader->textureTransforms : desc.textureTransforms;
-  const auto& clipPlanes = shader ? shader->clipPlanes : desc.clipPlanes;
+  const auto& shader = state.shaderContext();
+  const auto& vsConst = shader.vsConst;
+  const auto& psConst = shader.psConst;
+  const auto& worldViewProj = shader.worldViewProj;
+  const auto& textureTransforms = shader.textureTransforms;
+  const auto& clipPlanes = shader.clipPlanes;
   const auto& rs = hot.renderStates;
   DrawUniforms uniforms;
   uniforms.vsFloatConst = vsConst.float4;
@@ -109,7 +108,8 @@ DrawUniforms buildDrawUniforms(core::FlatDrawStateView state) {
 
 DrawUniforms buildDrawUniforms(const core::DrawDesc& desc) {
   const auto hot = core::makeFlatDrawStateRecord(desc);
-  return buildDrawUniforms(core::FlatDrawStateView{.hot = &hot, .coldDesc = &desc});
+  const auto shaderLayout = core::makeDrawShaderLayoutContext(desc);
+  return buildDrawUniforms(core::FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout});
 }
 
 pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
@@ -150,7 +150,7 @@ pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
 
 pipeline::DepthStencilKey makeDepthStencilKey(const core::DrawDesc& desc) {
   const auto hot = core::makeFlatDrawStateRecord(desc);
-  return makeDepthStencilKey(core::FlatDrawStateView{.hot = &hot, .coldDesc = &desc});
+  return makeDepthStencilKey(core::FlatDrawStateView{.hot = &hot});
 }
 
 }  // namespace dxmt9::state

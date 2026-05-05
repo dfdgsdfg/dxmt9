@@ -407,6 +407,7 @@ inline constexpr u32 XFORM_WORLD_BASE = 1;
 inline constexpr u32 XFORM_VIEW = 100;
 inline constexpr u32 XFORM_PROJECTION = 101;
 inline constexpr u32 XFORM_TEXTURE_BASE = 200;
+inline constexpr u32 kMaxTransformSlots = XFORM_TEXTURE_BASE + kMaxTextureStages;
 
 inline constexpr u32 MAX_TEXTURE_STAGE_INDEX = 7;
 
@@ -833,6 +834,211 @@ using RenderStateTable = StateValueTable<kMaxStateSlots>;
 using TextureStageStateTable = StateValueTable<kMaxTextureStageStates>;
 using SamplerStateTable = StateValueTable<kMaxSamplerStates>;
 
+struct TransformTable {
+  struct Entry {
+    u32 first = 0;
+    Matrix4x4 second{};
+  };
+
+  struct ValueRef {
+    TransformTable* table = nullptr;
+    u32 key = 0;
+
+    ValueRef& operator=(const Matrix4x4& value) noexcept {
+      if (table) {
+        table->set(key, value);
+      }
+      return *this;
+    }
+
+    ValueRef& operator=(const ValueRef& value) noexcept {
+      return *this = static_cast<Matrix4x4>(value);
+    }
+
+    operator Matrix4x4() const noexcept {
+      return table ? table->valueOr(key, Matrix4x4{}) : Matrix4x4{};
+    }
+  };
+
+  std::array<Matrix4x4, kMaxTransformSlots> values{};
+  std::array<u64, (kMaxTransformSlots + 63u) / 64u> occupied{};
+  std::array<u64, (kMaxTransformSlots + 63u) / 64u> dirty{};
+  u32 count = 0;
+  u64 rollingHash = 0;
+
+  static constexpr bool validKey(u32 key) noexcept {
+    return key < kMaxTransformSlots;
+  }
+
+  static constexpr u64 bit(u32 key) noexcept {
+    return 1ull << (key % 64u);
+  }
+
+  static constexpr std::size_t word(u32 key) noexcept {
+    return key / 64u;
+  }
+
+  static u64 matrixHash(const Matrix4x4& matrix) noexcept {
+    u64 hash = 1469598103934665603ull;
+    for (f32 value : matrix.m) {
+      hash ^= static_cast<u64>(std::bit_cast<u32>(value));
+      hash *= 1099511628211ull;
+    }
+    return hash;
+  }
+
+  static u64 entryHash(u32 key, const Matrix4x4& value) noexcept {
+    u64 hash = 1469598103934665603ull;
+    hash ^= key;
+    hash *= 1099511628211ull;
+    hash ^= matrixHash(value);
+    hash *= 1099511628211ull;
+    return hash;
+  }
+
+  bool contains(u32 key) const noexcept {
+    return validKey(key) && (occupied[word(key)] & bit(key)) != 0;
+  }
+
+  bool empty() const noexcept {
+    return count == 0;
+  }
+
+  std::size_t size() const noexcept {
+    return count;
+  }
+
+  const Matrix4x4& at(u32 key) const noexcept {
+    return values[key];
+  }
+
+  Matrix4x4 valueOr(u32 key, const Matrix4x4& fallback) const noexcept {
+    return contains(key) ? values[key] : fallback;
+  }
+
+  ValueRef operator[](u32 key) noexcept {
+    return ValueRef{.table = this, .key = key};
+  }
+
+  Matrix4x4 operator[](u32 key) const noexcept {
+    return contains(key) ? values[key] : Matrix4x4{};
+  }
+
+  void set(u32 key, const Matrix4x4& value) noexcept {
+    if (!validKey(key)) {
+      return;
+    }
+    const auto mask = bit(key);
+    const auto slot = word(key);
+    if ((occupied[slot] & mask) != 0) {
+      if (values[key] == value) {
+        return;
+      }
+      rollingHash ^= entryHash(key, values[key]);
+    } else {
+      occupied[slot] |= mask;
+      ++count;
+    }
+    values[key] = value;
+    dirty[slot] |= mask;
+    rollingHash ^= entryHash(key, value);
+  }
+
+  void erase(u32 key) noexcept {
+    if (!contains(key)) {
+      return;
+    }
+    const auto mask = bit(key);
+    const auto slot = word(key);
+    rollingHash ^= entryHash(key, values[key]);
+    values[key] = {};
+    occupied[slot] &= ~mask;
+    dirty[slot] |= mask;
+    --count;
+  }
+
+  void clear() noexcept {
+    values = {};
+    occupied = {};
+    dirty = {};
+    count = 0;
+    rollingHash = 0;
+  }
+
+  void clearDirty() noexcept {
+    dirty = {};
+  }
+
+  class const_iterator {
+   public:
+    using value_type = Entry;
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::forward_iterator_tag;
+
+    const_iterator() = default;
+    const_iterator(const TransformTable* table, u32 index)
+        : table_(table), index_(index) {
+      advance();
+    }
+
+    value_type operator*() const noexcept {
+      return Entry{.first = index_, .second = table_->values[index_]};
+    }
+
+    const value_type* operator->() const noexcept {
+      cached_ = **this;
+      return &cached_;
+    }
+
+    const_iterator& operator++() noexcept {
+      ++index_;
+      advance();
+      return *this;
+    }
+
+    bool operator==(const const_iterator& other) const noexcept {
+      return table_ == other.table_ && index_ == other.index_;
+    }
+
+    bool operator!=(const const_iterator& other) const noexcept {
+      return !(*this == other);
+    }
+
+   private:
+    void advance() noexcept {
+      if (!table_) {
+        return;
+      }
+      while (index_ < kMaxTransformSlots && !table_->contains(index_)) {
+        ++index_;
+      }
+    }
+
+    const TransformTable* table_ = nullptr;
+    u32 index_ = kMaxTransformSlots;
+    mutable value_type cached_{};
+  };
+
+  const_iterator begin() const noexcept {
+    return const_iterator{this, 0};
+  }
+
+  const_iterator end() const noexcept {
+    return const_iterator{this, kMaxTransformSlots};
+  }
+
+  const_iterator find(u32 key) const noexcept {
+    return contains(key) ? const_iterator{this, key} : end();
+  }
+
+  friend bool operator==(const TransformTable& a, const TransformTable& b) noexcept {
+    return a.values == b.values &&
+           a.occupied == b.occupied &&
+           a.count == b.count &&
+           a.rollingHash == b.rollingHash;
+  }
+};
+
 struct FlatStateEntry {
   u32 state = 0;
   u32 value = 0;
@@ -1007,14 +1213,12 @@ struct FlatDrawStateView {
   const FlatDrawStateRecord* hot = nullptr;
   const DrawShaderLayoutContext* shaderLayout = nullptr;
   const DrawDebugSnapshot* debug = nullptr;
-  const DrawDesc* coldDesc = nullptr;
 
   constexpr const FlatDrawStateKey& key() const noexcept { return hot->key; }
   constexpr bool hasShaderContext() const noexcept { return shaderLayout != nullptr; }
   constexpr bool hasDebugSnapshot() const noexcept { return debug != nullptr; }
   constexpr const DrawShaderLayoutContext& shaderContext() const noexcept { return *shaderLayout; }
   constexpr const DrawDebugSnapshot& debugSnapshot() const noexcept { return *debug; }
-  constexpr const DrawDesc& desc() const noexcept { return *coldDesc; }
 };
 
 struct DrawPayloadRange {
@@ -1028,24 +1232,20 @@ struct CanonicalDrawState {
   FlatDrawStateRecord hot{};
   DrawShaderLayoutContext shaderLayout{};
   DrawDebugSnapshot debug{};
-  DrawDesc coldDesc{};
 
   CanonicalDrawState() = default;
   CanonicalDrawState(FlatDrawStateRecord hotState,
                      DrawShaderLayoutContext shaderLayoutState,
-                     DrawDebugSnapshot debugState,
-                     DrawDesc coldState)
+                     DrawDebugSnapshot debugState)
       : hot(std::move(hotState)),
         shaderLayout(std::move(shaderLayoutState)),
-        debug(std::move(debugState)),
-        coldDesc(std::move(coldState)) {}
+        debug(std::move(debugState)) {}
 
   constexpr FlatDrawStateView view() const noexcept {
     return FlatDrawStateView{
         .hot = &hot,
         .shaderLayout = &shaderLayout,
         .debug = &debug,
-        .coldDesc = &coldDesc,
     };
   }
 };
@@ -1088,7 +1288,7 @@ struct ChunkHandleEntry {
 // DrawParam entries. Replaces N separate
 // MetalCommandKind::Draw records when the importer detects a
 // run of draws with no state change between them. Encoder binds state
-// once from `state.hot` / `state.coldDesc`, then loops emitting per-draw calls — saves both
+// once from `state.hot`, then loops emitting per-draw calls — saves both
 // per-draw DrawDesc copies on the queue side and per-draw resource
 // rebinding on the encoder side.
 struct DrawRunDesc {
@@ -1541,7 +1741,7 @@ struct DeviceState {
   RenderStateTable renderStates;
   std::array<TextureStageStateTable, kMaxTextureStages> textureStageStates{};
   std::array<SamplerStateTable, kMaxSamplers> samplerStates{};
-  std::unordered_map<u32, Matrix4x4> transforms;
+  TransformTable transforms;
   std::array<Light, kMaxLights> lights{};
   std::array<bool, kMaxLights> lightEnabled{};
   Material material{};

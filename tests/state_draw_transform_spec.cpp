@@ -357,8 +357,12 @@ void testFlatDrawStateKey() {
           "direct state canonicalization copies fixed render-state table into hot storage");
   checkEq(directCanonical.shaderLayout.vertexDecl.fvf, first.vertexDecl.fvf,
           "direct state canonicalization carries shader/layout context separately");
-  check(directCanonical.coldDesc.userVertexData.empty(),
-        "direct state canonicalization keeps cold snapshot payload-free");
+  checkEq(directCanonical.hot.textures[0], texture0->handle(),
+          "direct state canonicalization carries resource handles in hot storage");
+  checkEq(directCanonical.debug.primitiveCount, 2u,
+          "direct state canonicalization records draw debug parameters separately");
+  checkEq(directCanonical.debug.userVertexBytes, 0u,
+          "direct state canonicalization keeps payload data out of canonical state");
   checkEq(firstKey, makeFlatDrawStateKey(sameStateDifferentDraw),
           "draw parameters do not disturb flat base draw state");
 
@@ -388,8 +392,8 @@ void testFlatDrawStateKey() {
   run.state = makeCanonicalDrawState(first);
   run.draws = {drawParamA, drawParamB};
 
-  const auto drawDescForParam = [&run](const DrawParam& param) {
-    DrawDesc desc = run.state.coldDesc;
+  const auto drawDescForParam = [&first](const DrawParam& param) {
+    DrawDesc desc = first;
     desc.primitiveType = param.primitiveType;
     desc.primitiveCount = param.primitiveCount;
     desc.startVertex = param.startVertex;
@@ -401,19 +405,15 @@ void testFlatDrawStateKey() {
     return desc;
   };
 
-  checkEq(run.state.hot.key, makeFlatDrawStateKey(run.state.coldDesc),
+  checkEq(run.state.hot.key, firstKey,
           "draw-run stores the flat base-state decision key in hot state");
-  check(run.state.coldDesc.userVertexData.empty(),
-        "canonical cold draw state strips vertex UP payload");
-  check(run.state.coldDesc.userIndexData.empty(),
-        "canonical cold draw state strips index UP payload");
-  checkEq(run.state.hot.key, makeFlatDrawStateRecord(run.state.coldDesc).key,
+  checkEq(run.state.hot.key, makeFlatDrawStateRecord(first).key,
           "flat draw state record exposes the canonical key");
-  checkEq(run.state.shaderLayout.vertexShader.hash, run.state.coldDesc.vertexShader.hash,
+  checkEq(run.state.shaderLayout.vertexShader.hash, first.vertexShader.hash,
           "canonical shader/layout context carries vertex shader identity");
-  checkEq(run.state.shaderLayout.pixelShader.hash, run.state.coldDesc.pixelShader.hash,
+  checkEq(run.state.shaderLayout.pixelShader.hash, first.pixelShader.hash,
           "canonical shader/layout context carries pixel shader identity");
-  checkEq(run.state.shaderLayout.vertexDecl.fvf, run.state.coldDesc.vertexDecl.fvf,
+  checkEq(run.state.shaderLayout.vertexDecl.fvf, first.vertexDecl.fvf,
           "canonical shader/layout context carries vertex layout");
   checkEq(run.state.debug.streamMask, run.state.hot.streamMask,
           "canonical debug snapshot records hot stream mask");
@@ -454,8 +454,6 @@ void testFlatDrawStateKey() {
         "flat draw state view exposes shader/layout context");
   check(&run.state.view().debugSnapshot() == &run.state.debug,
         "flat draw state view exposes debug snapshot");
-  check(&run.state.view().desc() == &run.state.coldDesc,
-        "flat draw state view exposes cold draw state");
   checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[0])),
           "draw-run key ignores first draw param fields");
   checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
@@ -475,10 +473,6 @@ void testFlatDrawStateKey() {
           "canonical debug snapshot keeps stripped vertex payload byte count");
   checkEq(payloadCanonical.debug.userIndexBytes, 2u,
           "canonical debug snapshot keeps stripped index payload byte count");
-  check(payloadCanonical.coldDesc.userVertexData.empty(),
-        "canonical cold desc strips vertex payload after debug capture");
-  check(payloadCanonical.coldDesc.userIndexData.empty(),
-        "canonical cold desc strips index payload after debug capture");
 
   DrawRunDesc packedRun{};
   packedRun.state = makeCanonicalDrawState(first);
@@ -518,10 +512,15 @@ void testFlatDrawStateKey() {
 
   packedRun.payloadArena[0] = 0xde;
   packedRun.draws[0].userVertexRange = {0, 4};
+  packedRun.state.debug.renderStateHash = 99ull;
   slot.appendDrawRun(std::move(packedRun));
   const auto runView = slot.commandAt(1);
   check(runView.drawRunRecord != nullptr, "slot draw-run command exposes compact run record");
   check(runView.drawState != nullptr, "slot draw-run indexes canonical draw state");
+  checkEq(runView.drawState->hot.key, packedRunKey,
+          "slot draw-run preserves the incoming canonical hot state");
+  checkEq(runView.drawState->debug.renderStateHash, 99ull,
+          "slot draw-run preserves the incoming debug snapshot without recomputing base state");
   checkEq(runView.drawParams.size(), std::size_t{1},
           "slot draw-run indexes shared draw param table");
   checkEq(runView.drawParams[0].userVertexRange.offset, 6u,

@@ -48,7 +48,7 @@ auto makeBlendKeys(const DrawDesc& desc) {
 auto makeFlatBlendKeys(const DrawDesc& desc) {
   const auto hot = makeFlatDrawStateRecord(desc);
   return dxmt9::pipeline::detail::makeBlendAttachmentKeys(
-      FlatDrawStateView{.hot = &hot, .coldDesc = &desc});
+      FlatDrawStateView{.hot = &hot});
 }
 
 auto makeVariantKey(const DrawDesc& desc) {
@@ -67,6 +67,7 @@ auto makeVariantKey(const DrawDesc& desc) {
 
 auto makeFlatVariantKey(const DrawDesc& desc) {
   const auto hot = makeFlatDrawStateRecord(desc);
+  const auto shaderLayout = makeDrawShaderLayoutContext(desc);
   std::array<u32, kMaxRenderTargets> colorFormats{};
   colorFormats[0] = WMTPixelFormatBGRA8Unorm;
   auto blend = makeFlatBlendKeys(desc);
@@ -74,7 +75,7 @@ auto makeFlatVariantKey(const DrawDesc& desc) {
     blend[i].pixelFormat = colorFormats[i];
   }
   return dxmt9::pipeline::makeShaderVariantKey(
-      FlatDrawStateView{.hot = &hot, .coldDesc = &desc},
+      FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout},
       std::span<const u32>(colorFormats),
       std::span<const dxmt9::pipeline::BlendAttachmentKey>(blend),
       0u,

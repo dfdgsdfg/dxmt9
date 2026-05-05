@@ -1,4 +1,5 @@
 #include "dxmt9_ffp_shaders.hpp"
+#include "dxmt9_draw_shader.hpp"
 #include "dxmt9_shader_sources.hpp"
 
 #include <algorithm>
@@ -170,9 +171,10 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
   return decodeFixedFunctionVertexLayout(desc.vertexDecl);
 }
 
-std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
+std::string makeFfpVertexSource(const FfpVertexKey& key,
+                                const drawshader::ShaderSourceContext& context) {
   std::ostringstream out;
-  const auto layout = decodeFixedFunctionVertexLayout(desc);
+  const auto layout = decodeFixedFunctionVertexLayout(context.vertexDecl);
   constexpr u32 kTciIndexMask = 0x0000ffffu;
   constexpr u32 kTciGenMask = 0xffff0000u;
   constexpr u32 kTciCameraSpacePosition = 0x00020000u;
@@ -286,7 +288,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
   out << "  if (" << (key.lightingEnabled ? "true" : "false") << ") {\n";
   out << "    out.color.rgb *= 1.0;\n";
   out << "  }\n";
-  if (key.clipPlaneMask != 0 || desc.clipPlaneMask != 0) {
+  if (key.clipPlaneMask != 0 || context.clipPlaneMask != 0) {
     out << "  for (uint i = 0; i < 6; ++i) {\n";
     out << "    if ((uniforms.clipPlaneMask & (1u << i)) != 0u) {\n";
       out << "      out.clipDistance[i] = dot(uniforms.clipPlanes[i], out.position);\n";
@@ -299,7 +301,8 @@ std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
   return out.str();
 }
 
-std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
+std::string makeFfpPixelSource(const FfpPixelKey& key,
+                               const drawshader::ShaderSourceContext& context) {
   std::ostringstream out;
   std::vector<size_t> activeStages;
   activeStages.reserve(kMaxTextureStages);
@@ -307,7 +310,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
     const bool stageEnabled =
         key.stages[stage].colorOp != static_cast<u32>(TextureOp::Disable) ||
         key.stages[stage].alphaOp != static_cast<u32>(TextureOp::Disable);
-    if (stageEnabled && desc.textures[stage].handle != Handle{}) {
+    if (stageEnabled && context.textures[stage]) {
       activeStages.push_back(stage);
     }
   }
@@ -324,7 +327,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
     const char* env = std::getenv("DXMT_DEBUG_FFP_ALPHA");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
-  out << shaders::makeShaderPrelude(desc.clipPlaneMask != 0);
+  out << shaders::makeShaderPrelude(context.clipPlaneMask != 0);
   if (textured) {
     out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
     for (size_t i = 0; i < activeStages.size(); ++i) {
@@ -379,7 +382,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
       if (!stageEnabled) {
         continue;
       }
-      const bool hasTexture = desc.textures[stage].handle != Handle{};
+      const bool hasTexture = context.textures[stage];
       const u32 coordIndex = stageKey.texCoordIndex & 0xffffu;
       if (hasTexture) {
         out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
@@ -429,6 +432,14 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
   out << "}\n";
   out << "// ffp pixel hash " << key.hash << "\n";
   return out.str();
+}
+
+std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
+  return makeFfpVertexSource(key, drawshader::makeShaderSourceContext(desc));
+}
+
+std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
+  return makeFfpPixelSource(key, drawshader::makeShaderSourceContext(desc));
 }
 
 u32 computeVertexDeclStride(const VertexDeclSnapshot& decl) {

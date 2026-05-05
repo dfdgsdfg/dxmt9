@@ -78,6 +78,7 @@ u64 skippedTextureHandle();
 
 // Returns true if `draw` should be traced (by seqId / tex0 match).
 bool shouldTraceEncode(const core::DrawDesc& draw, u64 seqId);
+bool shouldTraceEncode(const core::FlatDrawStateRecord& hot, u64 seqId);
 
 // Returns true if `handle` matches traceTextureHandle.
 bool shouldTraceTexture(core::Handle handle);

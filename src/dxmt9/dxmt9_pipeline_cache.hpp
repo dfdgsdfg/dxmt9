@@ -11,6 +11,7 @@
 // the depth/stencil state builder.
 
 #include "dxmt9/core.hpp"
+#include "dxmt9_draw_shader.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <array>
@@ -155,6 +156,13 @@ class Cache {
   // ShaderVariantKey (caller computes color-formats, blend, depth/stencil
   // formats, etc.). The closure invokes dxmt9::drawshader::makeDrawShaderSource
   // for VS+FS source generation.
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
+                          const ShaderVariantKey& key,
+                          drawshader::ShaderSourceContext shaderSource,
+                          WMT::Reference<WMT::BinaryArchive>* archive,
+                          const std::string* archivePath);
+
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
   getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
                           const ShaderVariantKey& key,

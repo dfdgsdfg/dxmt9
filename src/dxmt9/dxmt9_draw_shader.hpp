@@ -10,13 +10,34 @@
 
 #include "dxmt9/core.hpp"
 
+#include <array>
+#include <cstdint>
 #include <string>
 
 namespace dxmt9::drawshader {
 
+// Minimal shader-source inputs. This intentionally omits draw payload,
+// attachment handles, viewport state, and other encode-time data so pipeline
+// construction does not need a full DrawDesc on the hot path.
+struct ShaderSourceContext {
+  core::VertexDeclSnapshot vertexDecl{};
+  core::ShaderRef vertexShader{};
+  core::ShaderRef pixelShader{};
+  std::array<bool, core::kMaxTextures> textures{};
+  std::uint32_t sampleCount = 1;
+  std::uint32_t clipPlaneMask = 0;
+};
+
+ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext& layout,
+                                            const core::FlatDrawStateRecord& hot);
+ShaderSourceContext makeShaderSourceContext(const core::DrawDesc& desc);
+
 // Returns a complete MSL translation unit for either the vertex or pixel
-// shader corresponding to `desc`. Also writes the source to
+// shader corresponding to `context`. Also writes the source to
 // $DXMT_DUMP_SHADER_DIR/<label>-<hash>.metal if the env var is set.
+std::string makeDrawShaderSource(const ShaderSourceContext& context, bool vertex);
+
+// Compatibility wrapper for callers/tests that still provide DrawDesc.
 std::string makeDrawShaderSource(const core::DrawDesc& desc, bool vertex);
 
 }  // namespace dxmt9::drawshader

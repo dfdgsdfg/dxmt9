@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "d3d9_pe.hpp"
@@ -1514,6 +1513,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     static constexpr uint32_t kPeTextureStageStateSlots = 64;
     static constexpr uint32_t kPeSamplerSlots = 16;
     static constexpr uint32_t kPeSamplerStateSlots = 64;
+    static constexpr uint32_t kPeTransformTextureSlots = 8;
+    static constexpr uint32_t kPeTransformWorldSlots = 256;
+    static constexpr uint32_t kPeTransformTextureBaseSlot = 2;
+    static constexpr uint32_t kPeTransformWorldBaseSlot =
+        kPeTransformTextureBaseSlot + kPeTransformTextureSlots;
+    static constexpr uint32_t kPeTransformSlots =
+        kPeTransformWorldBaseSlot + kPeTransformWorldSlots;
 
     template<std::size_t Slots>
     struct FixedStateTable {
@@ -1655,6 +1661,135 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     };
 
+    struct FixedTransformTable {
+        std::array<D9CMatrix, kPeTransformSlots> values{};
+        std::array<uint64_t, (kPeTransformSlots + 63u) / 64u> occupied{};
+        uint32_t count = 0;
+
+        static constexpr bool validSlot(uint32_t slot) noexcept {
+            return slot < kPeTransformSlots;
+        }
+        static constexpr uint64_t bit(uint32_t slot) noexcept {
+            return 1ull << (slot & 63u);
+        }
+        static constexpr std::size_t word(uint32_t slot) noexcept {
+            return slot >> 6;
+        }
+        static bool slotForState(uint32_t state, uint32_t& slot) noexcept {
+            if (state == static_cast<uint32_t>(D3DTS_VIEW)) {
+                slot = 0;
+                return true;
+            }
+            if (state == static_cast<uint32_t>(D3DTS_PROJECTION)) {
+                slot = 1;
+                return true;
+            }
+            if (state >= static_cast<uint32_t>(D3DTS_TEXTURE0) &&
+                state <= static_cast<uint32_t>(D3DTS_TEXTURE7)) {
+                slot = kPeTransformTextureBaseSlot +
+                       (state - static_cast<uint32_t>(D3DTS_TEXTURE0));
+                return true;
+            }
+            if (state >= static_cast<uint32_t>(D3DTS_WORLD) &&
+                state < static_cast<uint32_t>(D3DTS_WORLD) + kPeTransformWorldSlots) {
+                slot = kPeTransformWorldBaseSlot +
+                       (state - static_cast<uint32_t>(D3DTS_WORLD));
+                return true;
+            }
+            return false;
+        }
+        static uint32_t stateForSlot(uint32_t slot) noexcept {
+            if (slot == 0) {
+                return static_cast<uint32_t>(D3DTS_VIEW);
+            }
+            if (slot == 1) {
+                return static_cast<uint32_t>(D3DTS_PROJECTION);
+            }
+            if (slot < kPeTransformWorldBaseSlot) {
+                return static_cast<uint32_t>(D3DTS_TEXTURE0) +
+                       (slot - kPeTransformTextureBaseSlot);
+            }
+            return static_cast<uint32_t>(D3DTS_WORLD) +
+                   (slot - kPeTransformWorldBaseSlot);
+        }
+        bool containsSlot(uint32_t slot) const noexcept {
+            return validSlot(slot) && (occupied[word(slot)] & bit(slot)) != 0;
+        }
+        bool contains(uint32_t state) const noexcept {
+            uint32_t slot = 0;
+            return slotForState(state, slot) && containsSlot(slot);
+        }
+        bool empty() const noexcept {
+            return count == 0;
+        }
+        uint32_t size() const noexcept {
+            return count;
+        }
+        bool get(uint32_t state, D9CMatrix& value) const noexcept {
+            uint32_t slot = 0;
+            if (!slotForState(state, slot) || !containsSlot(slot)) {
+                return false;
+            }
+            value = values[slot];
+            return true;
+        }
+        void set(uint32_t state, const D9CMatrix& value) noexcept {
+            uint32_t slot = 0;
+            if (!slotForState(state, slot)) {
+                return;
+            }
+            const auto w = word(slot);
+            const auto b = bit(slot);
+            if ((occupied[w] & b) == 0) {
+                occupied[w] |= b;
+                ++count;
+            }
+            values[slot] = value;
+        }
+        void erase(uint32_t state) noexcept {
+            uint32_t slot = 0;
+            if (!slotForState(state, slot) || !containsSlot(slot)) {
+                return;
+            }
+            occupied[word(slot)] &= ~bit(slot);
+            --count;
+        }
+        void clear() noexcept {
+            occupied = {};
+            count = 0;
+        }
+        template<typename Fn>
+        void forEach(Fn&& fn) const {
+            for (std::size_t w = 0; w < occupied.size(); ++w) {
+                uint64_t bits = occupied[w];
+                while (bits != 0) {
+                    const auto b = static_cast<uint32_t>(std::countr_zero(bits));
+                    const auto slot = static_cast<uint32_t>(w * 64u + b);
+                    if (slot < kPeTransformSlots) {
+                        fn(stateForSlot(slot), values[slot]);
+                    }
+                    bits &= bits - 1u;
+                }
+            }
+        }
+        bool popFirst(uint32_t& state, D9CMatrix& value) noexcept {
+            for (std::size_t w = 0; w < occupied.size(); ++w) {
+                uint64_t bits = occupied[w];
+                if (bits == 0) {
+                    continue;
+                }
+                const auto b = static_cast<uint32_t>(std::countr_zero(bits));
+                const auto slot = static_cast<uint32_t>(w * 64u + b);
+                state = stateForSlot(slot);
+                value = values[slot];
+                occupied[w] &= ~bit(slot);
+                --count;
+                return true;
+            }
+            return false;
+        }
+    };
+
     static uint32_t textureStageSlot(DWORD stage) noexcept {
         return std::min<uint32_t>(stage, kPeTextureStageSlots - 1u);
     }
@@ -1672,6 +1807,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     static bool samplerStateSlot(D3DSAMPLERSTATETYPE type, uint32_t& slot) noexcept {
         slot = static_cast<uint32_t>(type);
         return slot < kPeSamplerStateSlots;
+    }
+    static D9CMatrix identityTransformMatrix() noexcept {
+        D9CMatrix matrix{};
+        matrix.m[0] = 1.0f;
+        matrix.m[5] = 1.0f;
+        matrix.m[10] = 1.0f;
+        matrix.m[15] = 1.0f;
+        return matrix;
+    }
+    static bool matrixEquals(const D9CMatrix& a, const D9CMatrix& b) noexcept {
+        return std::memcmp(&a, &b, sizeof(D9CMatrix)) == 0;
     }
 
     ULONG        refs_    = 1;
@@ -1698,6 +1844,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     FixedStateTable<kPeRenderStateSlots> renderStateShadow_{};
     FixedStateTable<kPeRenderStateSlots> pendingRenderStates_{};
     FixedStateTable<kPeRenderStateSlots> stateBlockRenderStateRestore_{};
+    FixedTransformTable stateBlockTransformRestore_{};
     DWORD pendingTextureMask_ = 0;
     DWORD pendingStreamMask_ = 0;
     bool pendingFvf_ = false;
@@ -1734,10 +1881,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     D9CMaterial materialShadow_{};
     DWORD pendingClipPlaneMask_ = 0;
     float clipPlaneShadow_[6 * 4]{};
-    // Phase 12: Transform delta — keyed by D3DTRANSFORMSTATETYPE
-    // (variable enum range, so map keyed instead of fixed array).
-    std::unordered_map<uint32_t, D9CMatrix> pendingTransforms_{};
-    std::unordered_map<uint32_t, D9CMatrix> transformShadow_{};
+    // Phase 12: Transform delta — fixed D3D transform table. The shadow
+    // occupancy mask records states that have been touched; the pending
+    // table is the dirty mask drained into draw/apply packets.
+    FixedTransformTable pendingTransforms_{};
+    FixedTransformTable transformShadow_{};
     // Phase 12: Light delta — bit i ⇒ lightShadow_[i] is fresh.
     DWORD pendingLightSlotMask_ = 0;
     D9CLight lightShadow_[D9C_DRAW_PACKET_MAX_LIGHTS]{};
@@ -1807,6 +1955,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderStateShadow_.clear();
         tssShadow_.clear();
         samplerStateShadow_.clear();
+        transformShadow_.clear();
         clearPendingHotState();
         pendingCommandBytes_.clear();
         pendingCommandWireRecords_.clear();
@@ -1964,20 +2113,21 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         packet.material = materialShadow_;
         packet.clipPlaneMask = pendingClipPlaneMask_;
         std::memcpy(packet.clipPlanes, clipPlaneShadow_, sizeof(packet.clipPlanes));
-        // Phase 12: Transform delta — drain pending map (per-frame typically
-        // a handful: View, Projection, a few World/Texture transforms).
-        // Cap check: > MAX_TRANSFORMS forces chunk seal upstream.
+        // Phase 12: Transform delta — drain pending transform table
+        // (per-frame typically a handful: View, Projection, a few
+        // World/Texture transforms). Cap check: > MAX_TRANSFORMS forces
+        // chunk seal upstream.
         if (pendingTransforms_.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
             return false;
         }
         packet.transformCount = static_cast<uint32_t>(pendingTransforms_.size());
         uint32_t txIdx = 0;
-        for (const auto& [state, matrix] : pendingTransforms_) {
+        pendingTransforms_.forEach([&](uint32_t state, const D9CMatrix& matrix) {
             packet.transforms[txIdx].state = state;
             packet.transforms[txIdx].reserved = 0;
             packet.transforms[txIdx].matrix = matrix;
             ++txIdx;
-        }
+        });
         // Phase 12: Light + LightEnable deltas. Light slot mask carries
         // the per-slot full D9CLight payload (set bit ⇒ lights[slot] is
         // semantically meaningful). LightEnable delta is two parallel
@@ -2077,12 +2227,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                         sizeof(packet.clipPlanes));
             // Transforms: drain shadow.
             packet.transformCount = 0;
-            for (const auto& [state, matrix] : transformShadow_) {
+            transformShadow_.forEach([&](uint32_t state, const D9CMatrix& matrix) {
                 auto& t = packet.transforms[packet.transformCount++];
                 t.state = state;
                 t.reserved = 0;
                 t.matrix = matrix;
-            }
+            });
             // Lights: emit every slot.
             packet.lightSlotMask = (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
             for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
@@ -2820,25 +2970,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // becomes one APPLY_STATE record carrying ONLY that collection's
         // batch (other fields zero / unset). Server's applyDrawPacketState
         // is idempotent for unset fields so empty validX/maskX are safe.
-        auto drainMap = [&](auto& pendingMap, auto cap, auto fillEntry,
-                            auto packetCountField) -> HRESULT {
-            while (!pendingMap.empty()) {
-                D9CCommandRecordApplyState rec{};
-                rec.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
-                rec.header.size = sizeof(rec);
-                std::uint32_t n = 0;
-                while (!pendingMap.empty() && n < cap) {
-                    auto it = pendingMap.begin();
-                    fillEntry(rec.packet, n, it->first, it->second);
-                    ++n;
-                    pendingMap.erase(it);
-                }
-                packetCountField(rec.packet) = n;
-                const HRESULT hr = appendCommandRecord(&rec, sizeof(rec));
-                if (FAILED(hr)) return hr;
-            }
-            return S_OK;
-        };
         auto drainTable = [&](auto& pendingTable, auto cap, auto fillEntry,
                               auto packetCountField) -> HRESULT {
             while (!pendingTable.empty()) {
@@ -2848,6 +2979,25 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 std::uint32_t n = 0;
                 uint32_t key = 0;
                 uint32_t value = 0;
+                while (n < cap && pendingTable.popFirst(key, value)) {
+                    fillEntry(rec.packet, n, key, value);
+                    ++n;
+                }
+                packetCountField(rec.packet) = n;
+                const HRESULT hr = appendCommandRecord(&rec, sizeof(rec));
+                if (FAILED(hr)) return hr;
+            }
+            return S_OK;
+        };
+        auto drainTransformTable = [&](auto& pendingTable, auto cap, auto fillEntry,
+                                       auto packetCountField) -> HRESULT {
+            while (!pendingTable.empty()) {
+                D9CCommandRecordApplyState rec{};
+                rec.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+                rec.header.size = sizeof(rec);
+                std::uint32_t n = 0;
+                uint32_t key = 0;
+                D9CMatrix value{};
                 while (n < cap && pendingTable.popFirst(key, value)) {
                     fillEntry(rec.packet, n, key, value);
                     ++n;
@@ -2913,17 +3063,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                       return p.samplerStateCount;
                                   });
             FAILED(hr)) return hr;
-        if (auto hr = drainMap(pendingTransforms_,
-                               (uint32_t)D9C_DRAW_PACKET_MAX_TRANSFORMS,
-                               [](D9CDrawPrimitivePacket& p, std::uint32_t i,
-                                  uint32_t k, const D9CMatrix& v) {
-                                   p.transforms[i].state = k;
-                                   p.transforms[i].reserved = 0;
-                                   p.transforms[i].matrix = v;
-                               },
-                               [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
-                                   return p.transformCount;
-                               });
+        if (auto hr = drainTransformTable(pendingTransforms_,
+                                          (uint32_t)D9C_DRAW_PACKET_MAX_TRANSFORMS,
+                                          [](D9CDrawPrimitivePacket& p, std::uint32_t i,
+                                             uint32_t k, const D9CMatrix& v) {
+                                              p.transforms[i].state = k;
+                                              p.transforms[i].reserved = 0;
+                                              p.transforms[i].matrix = v;
+                                          },
+                                          [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
+                                              return p.transformCount;
+                                          });
             FAILED(hr)) return hr;
         // Remaining scalar pending bits (texture / stream / vs / ps /
         // vdecl / RT / DS / viewport / scissor / fvf / material / clip
@@ -3273,6 +3423,7 @@ public:
         clearPeStateTracking();
         stateBlockRecording_ = false;
         stateBlockRenderStateRestore_.clear();
+        stateBlockTransformRestore_.clear();
         return hr32(dxmt9c_device_reset(dev_, &cpp));
     }
 
@@ -3867,12 +4018,26 @@ public:
         // server-side applyDrawPacketState dispatches set_transform per
         // entry before the draw runs.
         const D9CMatrix& wireM = *reinterpret_cast<const D9CMatrix*>(pM);
+        const uint32_t stateKey = static_cast<uint32_t>(state);
+        if (stateBlockRecording_) {
+            if (!stateBlockTransformRestore_.contains(stateKey)) {
+                D9CMatrix previous = identityTransformMatrix();
+                (void)transformShadow_.get(stateKey, previous);
+                stateBlockTransformRestore_.set(stateKey, previous);
+            }
+            return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
+        }
         if (dxmt9PeDrawChunkEnabled()) {
-            const auto shadowIt = transformShadow_.find((uint32_t)state);
-            const bool shadowMatches = shadowIt != transformShadow_.end() &&
-                std::memcmp(&shadowIt->second, &wireM, sizeof(D9CMatrix)) == 0;
-            const bool alreadyPending =
-                pendingTransforms_.find((uint32_t)state) != pendingTransforms_.end();
+            uint32_t transformSlotIndex = 0;
+            if (!FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
+                const HRESULT flushHr = flushPeRecorder();
+                if (FAILED(flushHr)) return flushHr;
+                return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
+            }
+            D9CMatrix shadowMatrix{};
+            const bool shadowMatches = transformShadow_.get(stateKey, shadowMatrix) &&
+                                       matrixEquals(shadowMatrix, wireM);
+            const bool alreadyPending = pendingTransforms_.contains(stateKey);
             if (!alreadyPending && shadowMatches) {
                 return S_OK;            // identity no-op
             }
@@ -3890,13 +4055,13 @@ public:
                 const HRESULT barrierHr = chunkBarrierFlush();
                 if (FAILED(barrierHr)) return barrierHr;
             }
-            pendingTransforms_[(uint32_t)state] = wireM;
-            transformShadow_[(uint32_t)state] = wireM;
+            pendingTransforms_.set(stateKey, wireM);
+            transformShadow_.set(stateKey, wireM);
             return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();
         if (FAILED(flushHr)) return flushHr;
-        const HRESULT hr = hr32(dxmt9c_device_set_transform(dev_, (uint32_t)state,
+        const HRESULT hr = hr32(dxmt9c_device_set_transform(dev_, stateKey,
                     reinterpret_cast<const D9CMatrix*>(pM)));
         dxmt9DeviceDebugLog("device_set_transform -> hr=0x%08x", (unsigned)hr);
         return hr;
@@ -3905,7 +4070,21 @@ public:
                                             D3DMATRIX* pM) noexcept override {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_get_transform device=%p state=%u", this, (unsigned)state);
-        return hr32(dxmt9c_device_get_transform(dev_, (uint32_t)state,
+        const uint32_t stateKey = static_cast<uint32_t>(state);
+        if (dxmt9PeDrawChunkEnabled()) {
+            D9CMatrix wireM{};
+            if (transformShadow_.get(stateKey, wireM)) {
+                std::memcpy(pM, &wireM, sizeof(wireM));
+                return S_OK;
+            }
+            uint32_t transformSlotIndex = 0;
+            if (FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
+                wireM = identityTransformMatrix();
+                std::memcpy(pM, &wireM, sizeof(wireM));
+                return S_OK;
+            }
+        }
+        return hr32(dxmt9c_device_get_transform(dev_, stateKey,
                     reinterpret_cast<D9CMatrix*>(pM)));
     }
     HRESULT STDMETHODCALLTYPE MultiplyTransform(D3DTRANSFORMSTATETYPE state,
@@ -4213,6 +4392,7 @@ public:
         if (SUCCEEDED(hr)) {
             stateBlockRecording_ = true;
             stateBlockRenderStateRestore_.clear();
+            stateBlockTransformRestore_.clear();
         }
         dxmt9DeviceDebugLog("device_begin_state_block -> hr=0x%08x", (unsigned)hr);
         return hr;
@@ -4235,6 +4415,12 @@ public:
                 pendingRenderStates_.erase(state);
             });
             stateBlockRenderStateRestore_.clear();
+            stateBlockTransformRestore_.forEach([&](uint32_t state, const D9CMatrix& value) {
+                (void)dxmt9c_device_set_transform(dev_, state, &value);
+                transformShadow_.set(state, value);
+                pendingTransforms_.erase(state);
+            });
+            stateBlockTransformRestore_.clear();
             if (sb) {
                 *ppSB = new D3D9StateBlockImpl(sb, this, this);
             }
@@ -4978,6 +5164,7 @@ public:
         clearPeStateTracking();
         stateBlockRecording_ = false;
         stateBlockRenderStateRestore_.clear();
+        stateBlockTransformRestore_.clear();
         return hr32(dxmt9c_device_reset_ex(dev_, &cpp, pFsMode ? &cdme : nullptr));
     }
 

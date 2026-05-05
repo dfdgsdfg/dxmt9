@@ -65,7 +65,7 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
-    const core::DrawDesc& draw,
+    core::FlatDrawStateView drawState,
     const std::optional<core::ClearDesc>& clear);
 
 // Pre-uploaded transient slices for a single draw within a DrawRun
@@ -101,11 +101,10 @@ struct PreUploadedDrawData {
 // `paramOverride` (Phase 13 step 2): when non-null, the per-draw
 // fields (primitiveType, primitiveCount, startVertex, baseVertexIndex,
 // startIndex, indexType, user payload ranges/data) are read from the
-// override instead of `draw`. `paramPayloadArena` resolves arena-backed
-// ranges when present; vectors remain the fallback. All other fields
+// override. `paramPayloadArena` resolves arena-backed ranges when present;
+// vectors remain the fallback. All other fields
 // (RT/DS/VS/PS/VDecl/VBuffers/IB/viewport/scissor/render-state/transform)
-// still come from `drawState`, whose cold desc represents the run's base state
-// and whose hot record carries flat handles/state for cache decisions.
+// come from `drawState`'s hot record and shader layout.
 bool encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,

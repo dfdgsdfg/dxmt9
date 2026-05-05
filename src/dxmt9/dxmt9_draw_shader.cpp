@@ -4,6 +4,7 @@
 #include "dxmt9_shader_sources.hpp"
 #include "dxmt9_shader_translator.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -44,41 +45,73 @@ void maybeDumpShaderSource(const char* label, const std::string& source) {
 
 }  // namespace
 
-std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex) {
+ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layout,
+                                            const FlatDrawStateRecord& hot) {
+  ShaderSourceContext context{};
+  context.vertexDecl = layout.vertexDecl;
+  context.vertexShader = layout.vertexShader;
+  context.pixelShader = layout.pixelShader;
+  for (std::size_t i = 0; i < context.textures.size(); ++i) {
+    context.textures[i] = hot.textures[i] != Handle{};
+  }
+  context.sampleCount = std::max(1u, hot.colorAttachments[0].sampleCount);
+  context.clipPlaneMask = layout.clipPlaneMask;
+  return context;
+}
+
+ShaderSourceContext makeShaderSourceContext(const DrawDesc& desc) {
+  const auto layout = makeDrawShaderLayoutContext(desc);
+  ShaderSourceContext context{};
+  context.vertexDecl = layout.vertexDecl;
+  context.vertexShader = layout.vertexShader;
+  context.pixelShader = layout.pixelShader;
+  for (std::size_t i = 0; i < context.textures.size(); ++i) {
+    context.textures[i] = desc.textures[i].handle != Handle{};
+  }
+  context.sampleCount = std::max(1u, desc.rts.color[0].sampleCount);
+  context.clipPlaneMask = layout.clipPlaneMask;
+  return context;
+}
+
+std::string makeDrawShaderSource(const ShaderSourceContext& context, bool vertex) {
   if (vertex) {
-    if (desc.vertexShader.kind == ShaderRef::Kind::Bytecode) {
-      auto source = translator::makeTranslatedVertexSource(desc.vertexShader, desc);
+    if (context.vertexShader.kind == ShaderRef::Kind::Bytecode) {
+      auto source = translator::makeTranslatedVertexSource(context.vertexShader, context);
       maybeDumpShaderSource("translated-vs", source);
       return source;
     }
-    if (desc.vertexShader.kind == ShaderRef::Kind::FixedFunctionVertex && desc.vertexShader.vertexKey) {
-      auto source = ffp::makeFfpVertexSource(*desc.vertexShader.vertexKey, desc);
+    if (context.vertexShader.kind == ShaderRef::Kind::FixedFunctionVertex && context.vertexShader.vertexKey) {
+      auto source = ffp::makeFfpVertexSource(*context.vertexShader.vertexKey, context);
       maybeDumpShaderSource("ffp-vs", source);
       return source;
     }
-    const u64 variantHash = desc.vertexShader.hash ^ desc.clipPlaneMask ^ desc.rts.color[0].sampleCount;
-    auto source = desc.textures[0].handle ? shaders::makeTexturedVertexSource(variantHash)
-                                          : shaders::makeGenericVertexSource(variantHash);
+    const u64 variantHash = context.vertexShader.hash ^ context.clipPlaneMask ^ context.sampleCount;
+    auto source = context.textures[0] ? shaders::makeTexturedVertexSource(variantHash)
+                                      : shaders::makeGenericVertexSource(variantHash);
     maybeDumpShaderSource("builtin-vs", source);
     return source;
   }
 
-  if (desc.pixelShader.kind == ShaderRef::Kind::Bytecode) {
-    auto source = translator::makeTranslatedFragmentSource(desc.pixelShader, desc);
+  if (context.pixelShader.kind == ShaderRef::Kind::Bytecode) {
+    auto source = translator::makeTranslatedFragmentSource(context.pixelShader, context);
     maybeDumpShaderSource("translated-fs", source);
     return source;
   }
-  if (desc.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel && desc.pixelShader.pixelKey) {
-    auto source = ffp::makeFfpPixelSource(*desc.pixelShader.pixelKey, desc);
+  if (context.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel && context.pixelShader.pixelKey) {
+    auto source = ffp::makeFfpPixelSource(*context.pixelShader.pixelKey, context);
     maybeDumpShaderSource("ffp-fs", source);
     return source;
   }
-  const u64 variantHash = desc.pixelShader.hash ^ desc.clipPlaneMask ^ desc.rts.color[0].sampleCount;
-  auto source = desc.textures[0].handle ? shaders::makeTexturedFragmentSource(variantHash)
-                                        : shaders::makeGenericFragmentSource(ColorRGBA{1.0f, 1.0f, 1.0f, 1.0f},
-                                                                              variantHash);
+  const u64 variantHash = context.pixelShader.hash ^ context.clipPlaneMask ^ context.sampleCount;
+  auto source = context.textures[0] ? shaders::makeTexturedFragmentSource(variantHash)
+                                    : shaders::makeGenericFragmentSource(ColorRGBA{1.0f, 1.0f, 1.0f, 1.0f},
+                                                                          variantHash);
   maybeDumpShaderSource("builtin-fs", source);
   return source;
+}
+
+std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex) {
+  return makeDrawShaderSource(makeShaderSourceContext(desc), vertex);
 }
 
 }  // namespace dxmt9::drawshader

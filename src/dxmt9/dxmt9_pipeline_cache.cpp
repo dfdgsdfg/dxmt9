@@ -73,7 +73,7 @@ std::array<BlendAttachmentKey, core::kMaxRenderTargets>
 detail::makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDraw) {
   const auto hot = core::makeFlatDrawStateRecord(draw);
   return detail::makeBlendAttachmentKeys(
-      core::FlatDrawStateView{.hot = &hot, .coldDesc = &draw}, forceVisibleDraw);
+      core::FlatDrawStateView{.hot = &hot}, forceVisibleDraw);
 }
 
 std::size_t BlendAttachmentKeyHash::operator()(const BlendAttachmentKey& key) const noexcept {
@@ -265,7 +265,7 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
                                 const ShaderVariantKey& key,
-                                const core::DrawDesc& draw,
+                                drawshader::ShaderSourceContext shaderSource,
                                 WMT::Reference<WMT::BinaryArchive>* archive,
                                 const std::string* archivePath) {
   (void)archivePath;
@@ -274,9 +274,9 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
     return it->second.future;
   }
   auto future = std::async(std::launch::async,
-                            [device, key, draw, archive]() mutable {
-    auto vsSource = drawshader::makeDrawShaderSource(draw, true);
-    auto fsSource = drawshader::makeDrawShaderSource(draw, false);
+                            [device, key, shaderSource = std::move(shaderSource), archive]() mutable {
+    auto vsSource = drawshader::makeDrawShaderSource(shaderSource, true);
+    auto fsSource = drawshader::makeDrawShaderSource(shaderSource, false);
     auto vsLib = shaders::makeLibrary(device, vsSource);
     auto fsLib = shaders::makeLibrary(device, fsSource);
     if (!vsLib || !fsLib) {
@@ -319,6 +319,16 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
   auto shared = future.share();
   this->draw.emplace(key, Entry{shared});
   return shared;
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
+                                const ShaderVariantKey& key,
+                                const core::DrawDesc& draw,
+                                WMT::Reference<WMT::BinaryArchive>* archive,
+                                const std::string* archivePath) {
+  return getOrBuildDrawPipeline(
+      std::move(device), key, drawshader::makeShaderSourceContext(draw), archive, archivePath);
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
@@ -388,7 +398,9 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
     }
   }
   const auto key = makeShaderVariantKey(state, colorFormats, blendAttachments, depthFormat, stencilFormat);
-  return getOrBuildDrawPipeline(device, key, state.desc(), archive, archivePath);
+  drawshader::ShaderSourceContext shaderSource =
+      drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
+  return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
@@ -399,8 +411,10 @@ Cache::getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
                                       WMT::Reference<WMT::BinaryArchive>* archive,
                                       const std::string* archivePath) {
   const auto hot = core::makeFlatDrawStateRecord(draw);
+  const auto shaderLayout = core::makeDrawShaderLayoutContext(draw);
   return getOrBuildDrawPipelineForState(
-      device, limits, pool, core::FlatDrawStateView{.hot = &hot, .coldDesc = &draw},
+      device, limits, pool,
+      core::FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout},
       archive, archivePath);
 }
 
@@ -409,12 +423,11 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::span<const BlendAttachmentKey> blendAttachments,
                                        u32 depthFormat,
                                        u32 stencilFormat) {
-  const auto& desc = state.desc();
   const auto& hot = *state.hot;
-  const auto* shader = state.hasShaderContext() ? &state.shaderContext() : nullptr;
-  const auto& vertexDecl = shader ? shader->vertexDecl : desc.vertexDecl;
-  const auto& vertexShader = shader ? shader->vertexShader : desc.vertexShader;
-  const auto& pixelShader = shader ? shader->pixelShader : desc.pixelShader;
+  const auto& shader = state.shaderContext();
+  const auto& vertexDecl = shader.vertexDecl;
+  const auto& vertexShader = shader.vertexShader;
+  const auto& pixelShader = shader.pixelShader;
   ShaderVariantKey key{};
   const auto layout = ffp::decodeFixedFunctionVertexLayout(vertexDecl);
   const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(vertexDecl);
@@ -445,7 +458,8 @@ ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
                                        u32 depthFormat,
                                        u32 stencilFormat) {
   const auto hot = core::makeFlatDrawStateRecord(desc);
-  return makeShaderVariantKey(core::FlatDrawStateView{.hot = &hot, .coldDesc = &desc},
+  const auto shaderLayout = core::makeDrawShaderLayoutContext(desc);
+  return makeShaderVariantKey(core::FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout},
                               colorFormats, blendAttachments, depthFormat, stencilFormat);
 }
 

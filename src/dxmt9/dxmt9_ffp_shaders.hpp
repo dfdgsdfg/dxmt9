@@ -13,6 +13,10 @@
 #include <optional>
 #include <string>
 
+namespace dxmt9::drawshader {
+struct ShaderSourceContext;
+}
+
 namespace dxmt9::ffp {
 
 using u32 = std::uint32_t;
@@ -96,8 +100,14 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const c
 std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const core::DrawDesc& desc);
 
 // Generate Metal Shading Language source for the FFP vertex / pixel
-// shaders keyed by (key, DrawDesc). Outputs a complete standalone MSL
+// shaders keyed by (key, ShaderSourceContext). Outputs a complete standalone MSL
 // translation unit that can be passed to WMT::Device::newLibraryFromSource.
+std::string makeFfpVertexSource(const core::FfpVertexKey& key,
+                                const drawshader::ShaderSourceContext& context);
+std::string makeFfpPixelSource(const core::FfpPixelKey& key,
+                               const drawshader::ShaderSourceContext& context);
+
+// Compatibility wrappers for callers/tests that still provide DrawDesc.
 std::string makeFfpVertexSource(const core::FfpVertexKey& key, const core::DrawDesc& desc);
 std::string makeFfpPixelSource(const core::FfpPixelKey& key, const core::DrawDesc& desc);
 

@@ -80,10 +80,11 @@ u32 compatFlagsForSurface(const std::function<u32(Handle)>& resolveSurfaceFlags,
   return resolveSurfaceFlags(handle);
 }
 
-u32 compatFlagsForDraw(const DrawDesc& draw, const std::function<u32(Handle)>& resolveSurfaceFlags) {
+u32 compatFlagsForDraw(FlatDrawStateView draw, const std::function<u32(Handle)>& resolveSurfaceFlags) {
+  const auto& hot = *draw.hot;
   u32 flags = 0;
   u32 colorTargets = 0;
-  for (const auto& attachment : draw.rts.color) {
+  for (const auto& attachment : hot.colorAttachments) {
     if (!attachment.handle) {
       continue;
     }
@@ -96,26 +97,26 @@ u32 compatFlagsForDraw(const DrawDesc& draw, const std::function<u32(Handle)>& r
   if (colorTargets > 1) {
     flags |= CompatFlagMrt;
   }
-  if (draw.rts.depthStencil.handle && draw.rts.depthStencil.sampleCount > 1) {
+  if (hot.depthStencil.handle && hot.depthStencil.sampleCount > 1) {
     flags |= CompatFlagMsaa;
   }
-  if (const auto srgbIt = draw.rs.values.find(RS_SRGB_WRITE_ENABLE);
-      srgbIt != draw.rs.values.end() && srgbIt->second != 0) {
+  if (flatStateOr(hot.renderStates, RS_SRGB_WRITE_ENABLE, 0u) != 0) {
     flags |= CompatFlagSrgb;
   }
-  for (const auto& sampler : draw.samplers) {
-    if (const auto srgbIt = sampler.states.find(SAMP_SRGB_TEXTURE);
-        srgbIt != sampler.states.end() && srgbIt->second != 0) {
+  for (const auto& sampler : hot.samplerStates) {
+    if (flatStateOr(sampler, SAMP_SRGB_TEXTURE, 0u) != 0) {
       flags |= CompatFlagSrgb;
     }
   }
-  for (size_t stage = 0; stage < draw.textureTransforms.size(); ++stage) {
-    if (!draw.textures[stage].handle) {
-      continue;
-    }
-    if (!metalcompat::matrixIsIdentity(draw.textureTransforms[stage])) {
-      flags |= CompatFlagProjected;
-      break;
+  if (draw.hasShaderContext()) {
+    for (size_t stage = 0; stage < draw.shaderContext().textureTransforms.size(); ++stage) {
+      if (!hot.textures[stage]) {
+        continue;
+      }
+      if (!metalcompat::matrixIsIdentity(draw.shaderContext().textureTransforms[stage])) {
+        flags |= CompatFlagProjected;
+        break;
+      }
     }
   }
   return flags;
@@ -159,12 +160,16 @@ ChunkObservation makeChunkObservation(const MetalCommandView& command,
     case MetalCommandKind::Draw:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
-          .compatFlags = command.draw ? compatFlagsForDraw(*command.draw, resolveSurfaceFlags) : 0,
+          .compatFlags = command.drawState
+              ? compatFlagsForDraw(command.drawState->view(), resolveSurfaceFlags)
+              : 0,
       };
     case MetalCommandKind::DrawRun:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
-          .compatFlags = command.draw ? compatFlagsForDraw(*command.draw, resolveSurfaceFlags) : 0,
+          .compatFlags = command.drawState
+              ? compatFlagsForDraw(command.drawState->view(), resolveSurfaceFlags)
+              : 0,
       };
     case MetalCommandKind::Clear:
       return ChunkObservation{

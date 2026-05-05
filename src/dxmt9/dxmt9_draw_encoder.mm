@@ -201,10 +201,10 @@ struct HazardBloom {
   }
 };
 
-HazardBloom makeAttachmentBloom(const core::RenderTargetSnapshot& rts) {
+HazardBloom makeAttachmentBloom(const core::FlatDrawStateRecord& hot) {
   HazardBloom bloom;
-  for (const auto& attachment : rts.color) bloom.add(attachment.handle.value);
-  bloom.add(rts.depthStencil.handle.value);
+  for (const auto& attachment : hot.colorAttachments) bloom.add(attachment.handle.value);
+  bloom.add(hot.depthStencil.handle.value);
   return bloom;
 }
 
@@ -228,17 +228,6 @@ HazardBloom makeDrawReadBloom(core::FlatDrawStateView state) {
   }
   for (const auto& texture : hot.textures) bloom.add(texture.value);
   return bloom;
-}
-
-AttachmentKey makeAttachmentKey(const core::RenderTargetSnapshot& rts) {
-  AttachmentKey key;
-  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-    key.colorHandles[i] = rts.color[i].handle.value;
-    key.sampleCount = std::max(key.sampleCount, rts.color[i].sampleCount);
-  }
-  key.depthHandle = rts.depthStencil.handle.value;
-  key.sampleCount = std::max(key.sampleCount, rts.depthStencil.sampleCount);
-  return key;
 }
 
 AttachmentKey makeAttachmentKey(const core::FlatDrawStateRecord& hot) {
@@ -275,13 +264,13 @@ bool clearMatchesColorAttachment(const std::optional<ClearDesc>& clear,
 }
 
 bool clearMatchesDepthStencilAttachment(const std::optional<ClearDesc>& clear,
-                                        const DrawDesc& draw,
+                                        Handle attachment,
                                         bool clearStencil) {
-  if (!clear.has_value() || !draw.rts.depthStencil.handle) {
+  if (!clear.has_value() || !attachment) {
     return false;
   }
   const bool requested = clearStencil ? clear->clearStencil : clear->clearDepth;
-  return requested && clear->depthStencil.handle == draw.rts.depthStencil.handle;
+  return requested && clear->depthStencil.handle == attachment;
 }
 
 u32 primitiveVertexCount(core::PrimitiveType type, u32 primitiveCount) {
@@ -424,17 +413,18 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
-    const DrawDesc& draw,
+    core::FlatDrawStateView drawState,
     const std::optional<ClearDesc>& clear) {
-  auto* primarySurface = ctx.pool.findSurface(draw.rts.color[0].handle.value);
+  const auto& hot = *drawState.hot;
+  auto* primarySurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
   if (!primarySurface || !primarySurface->texture) {
     return {};
   }
   WMTRenderPassInfo passInfo{};
   const bool discardAfterPresent = !clear.has_value() && ctx.queue.backBufferDiscardAfterPresent_ &&
-                                   draw.rts.color[0].handle == ctx.queue.currentBackBuffer_;
+                                   hot.colorAttachments[0].handle == ctx.queue.currentBackBuffer_;
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-    auto* surface = ctx.pool.findSurface(draw.rts.color[i].handle.value);
+    auto* surface = ctx.pool.findSurface(hot.colorAttachments[i].handle.value);
     if (!surface || !surface->texture) {
       continue;
     }
@@ -442,7 +432,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     attachment.texture = surface->texture.handle;
     const bool discardAttachment = discardAfterPresent && i == 0;
     const bool clearAttachment =
-        clearMatchesColorAttachment(clear, i, draw.rts.color[i].handle);
+        clearMatchesColorAttachment(clear, i, hot.colorAttachments[i].handle);
     attachment.load_action = clearAttachment ? WMTLoadActionClear
                                              : (discardAttachment ? WMTLoadActionDontCare
                                                                   : WMTLoadActionLoad);
@@ -457,10 +447,10 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     }
   }
 
-  if (auto* depthSurface = ctx.pool.findSurface(draw.rts.depthStencil.handle.value);
+  if (auto* depthSurface = ctx.pool.findSurface(hot.depthStencil.handle.value);
       depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
-    const bool clearDepth = clearMatchesDepthStencilAttachment(clear, draw, false);
-    const bool clearStencil = clearMatchesDepthStencilAttachment(clear, draw, true);
+    const bool clearDepth = clearMatchesDepthStencilAttachment(clear, hot.depthStencil.handle, false);
+    const bool clearStencil = clearMatchesDepthStencilAttachment(clear, hot.depthStencil.handle, true);
     if (formatHasDepthAspect(depthSurface->desc.format)) {
       passInfo.depth.texture = depthSurface->texture.handle;
       passInfo.depth.load_action = clearDepth ? WMTLoadActionClear : WMTLoadActionLoad;
@@ -486,11 +476,13 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   if (discardAfterPresent) {
     ctx.queue.backBufferDiscardAfterPresent_ = false;
   }
-  const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
-  double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
-  double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
-  double viewportOriginX = static_cast<double>(draw.viewport.viewport.x);
-  double viewportOriginY = static_cast<double>(draw.viewport.viewport.y);
+  const auto ffLayout = drawState.hasShaderContext()
+      ? decodeFixedFunctionVertexLayout(drawState.shaderContext().vertexDecl)
+      : std::optional<dxmt9::ffp::FixedFunctionVertexLayout>{};
+  double viewportWidth = static_cast<double>(std::max(1u, hot.viewport.viewport.width));
+  double viewportHeight = static_cast<double>(std::max(1u, hot.viewport.viewport.height));
+  double viewportOriginX = static_cast<double>(hot.viewport.viewport.x);
+  double viewportOriginY = static_cast<double>(hot.viewport.viewport.y);
   if (ffLayout && ffLayout->preTransformed) {
     viewportOriginX = 0.0;
     viewportOriginY = 0.0;
@@ -498,8 +490,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     viewportHeight = static_cast<double>(std::max(1u, primarySurface->desc.height));
   }
   WMTViewport vp{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
-                 static_cast<double>(draw.viewport.viewport.minZ),
-                 static_cast<double>(draw.viewport.viewport.maxZ)};
+                 static_cast<double>(hot.viewport.viewport.minZ),
+                 static_cast<double>(hot.viewport.viewport.maxZ)};
   encoder.setViewport(vp);
   encoder.setRasterizerState(WMTTriangleFillModeFill, WMTCullModeNone,
                               WMTDepthClipModeClip, frontFaceWinding(),
@@ -563,10 +555,10 @@ bool encodeDraw(EncodeContext& ctx,
                  std::span<const u8> paramPayloadArena) {
   PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
-  const auto& draw = drawState.desc();
   const auto& hot = *drawState.hot;
-  const auto* shader = drawState.hasShaderContext() ? &drawState.shaderContext() : nullptr;
-  const auto& vertexDecl = shader ? shader->vertexDecl : draw.vertexDecl;
+  const auto& shader = drawState.shaderContext();
+  const auto& vertexDecl = shader.vertexDecl;
+  const auto* debug = drawState.hasDebugSnapshot() ? &drawState.debugSnapshot() : nullptr;
   const ParamView pv = paramOverride
       ? ParamView{paramOverride->primitiveType,
                   paramOverride->primitiveCount,
@@ -576,13 +568,14 @@ bool encodeDraw(EncodeContext& ctx,
                   paramOverride->indexType,
                   drawParamVertexBytes(*paramOverride, paramPayloadArena),
                   drawParamIndexBytes(*paramOverride, paramPayloadArena)}
-      : ParamView{draw.primitiveType, draw.primitiveCount,
-                  draw.startVertex, draw.baseVertexIndex,
-                  draw.startIndex, draw.indexType,
-                  std::span<const u8>(draw.userVertexData.data(),
-                                      draw.userVertexData.size()),
-                  std::span<const u8>(draw.userIndexData.data(),
-                                      draw.userIndexData.size())};
+      : ParamView{debug ? debug->primitiveType : core::PrimitiveType::TriangleList,
+                  debug ? debug->primitiveCount : 0u,
+                  debug ? debug->startVertex : 0u,
+                  debug ? debug->baseVertexIndex : 0,
+                  debug ? debug->startIndex : 0u,
+                  debug ? debug->indexType : IndexType::UInt16,
+                  {},
+                  {}};
   if (debug::skipAllDraws()) {
     if (queueTraceEnabled()) {
       std::ostringstream out;
@@ -592,7 +585,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     return false;
   }
-  const bool traceEncode = debug::shouldTraceEncode(draw, seqId);
+  const bool traceEncode = debug::shouldTraceEncode(hot, seqId);
   if (!encoder) {
     if (traceEncode) {
       emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-encoder");
@@ -1400,14 +1393,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
   };
 
-  auto startRenderPass = [&](const core::DrawDesc& draw, const std::optional<core::ClearDesc>& clear) {
+  auto startRenderPass = [&](core::FlatDrawStateView drawState,
+                             const std::optional<core::ClearDesc>& clear) {
     // TLA+: EncoderLifecycle / BeginRender(rt)
     // Callers split through None before opening a new render encoder.
     assertNoActiveEncoder();
-    activeRenderEncoder = beginRenderPass(ctx, commandBuffer, draw, clear);
+    activeRenderEncoder = beginRenderPass(ctx, commandBuffer, drawState, clear);
     hasActiveRender = static_cast<bool>(activeRenderEncoder);
-    activeKey = makeAttachmentKey(draw.rts);
-    activeWriteBloom = makeAttachmentBloom(draw.rts);
+    activeKey = makeAttachmentKey(*drawState.hot);
+    activeWriteBloom = makeAttachmentBloom(*drawState.hot);
     activeDrawStateKey.reset();
     assertEncoderLifecycleInvariant();
   };
@@ -1463,10 +1457,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       case Kind::Draw: {
-        if (!command.drawRecord || !command.drawState || !command.drawParam || !command.draw) break;
+        if (!command.drawRecord || !command.drawState || !command.drawParam) break;
         const auto& drawState = *command.drawState;
         const auto stateView = drawState.view();
-        const auto& draw = drawState.coldDesc;
         const auto& param = *command.drawParam;
         flushBlit();
         assertEncoderLifecycleInvariant();
@@ -1476,7 +1469,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           const auto clearKey = makeAttachmentKey(*pendingClear);
           const auto clearBloom = makeAttachmentBloom(*pendingClear);
           if (clearKey == drawKey && !clearBloom.overlaps(drawReadBloom)) {
-            startRenderPass(draw, pendingClear);
+            startRenderPass(stateView, pendingClear);
             pendingClear.reset();
           } else {
             flushPendingClear();
@@ -1494,7 +1487,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 DXMT_ASSERT(activeKey == drawKey);
               }
               flushRender();
-              startRenderPass(draw, std::nullopt);
+              startRenderPass(stateView, std::nullopt);
             } else {
               // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
               DXMT_ASSERT(hasActiveRender);
@@ -1517,7 +1510,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               DXMT_ASSERT(activeKey == drawKey);
             }
             flushRender();
-            startRenderPass(draw, std::nullopt);
+            startRenderPass(stateView, std::nullopt);
           } else {
             // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
             DXMT_ASSERT(hasActiveRender);
@@ -1548,14 +1541,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         flushBlit();
         assertEncoderLifecycleInvariant();
         const auto stateView = drawState.view();
-        const auto& base = drawState.coldDesc;
         const auto drawKey = makeAttachmentKey(drawState.hot);
         const auto drawReadBloom = makeDrawReadBloom(stateView);
         if (pendingClear.has_value()) {
           const auto clearKey = makeAttachmentKey(*pendingClear);
           const auto clearBloom = makeAttachmentBloom(*pendingClear);
           if (clearKey == drawKey && !clearBloom.overlaps(drawReadBloom)) {
-            startRenderPass(base, pendingClear);
+            startRenderPass(stateView, pendingClear);
             pendingClear.reset();
           } else {
             flushPendingClear();
@@ -1573,7 +1565,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 DXMT_ASSERT(activeKey == drawKey);
               }
               flushRender();
-              startRenderPass(base, std::nullopt);
+              startRenderPass(stateView, std::nullopt);
             } else {
               // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
               DXMT_ASSERT(hasActiveRender);
@@ -1596,7 +1588,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               DXMT_ASSERT(activeKey == drawKey);
             }
             flushRender();
-            startRenderPass(base, std::nullopt);
+            startRenderPass(stateView, std::nullopt);
           } else {
             // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
             DXMT_ASSERT(hasActiveRender);
@@ -1644,14 +1636,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
         }
 
-        // Phase 13 step 2: encodeDraw now takes a DrawParam override that
-        // shadows the 8 per-draw fields (primitiveType, primitiveCount,
-        // startVertex, baseVertexIndex, startIndex, indexType,
-        // user payload ranges/data). All other state is read from `base`
-        // directly. The per-iter synthetic DrawDesc — and its map<u32,u32>
-        // renderStates + 16-stage arrays + RT/DS/transform copies — is
-        // gone entirely; the loop body is now a PreUploadedDrawData
-        // stack-pod plus one encodeDraw call.
+        // encodeDraw receives the per-draw fields through DrawParam while
+        // all base state is read from the canonical hot/shader view.
         bool baseBound =
             activeDrawStateKey.has_value() && *activeDrawStateKey == drawState.hot.key;
         for (std::size_t i = 0; i < drawCount; ++i) {

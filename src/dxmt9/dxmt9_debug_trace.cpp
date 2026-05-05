@@ -122,16 +122,22 @@ u64 skippedTextureHandle() {
 }
 
 bool shouldTraceEncode(const core::DrawDesc& draw, u64 seqId) {
+  core::FlatDrawStateRecord hot{};
+  hot.textures[0] = draw.textures[0].handle;
+  return shouldTraceEncode(hot, seqId);
+}
+
+bool shouldTraceEncode(const core::FlatDrawStateRecord& hot, u64 seqId) {
   const u64 seq = traceEncodeSeq();
   if (seq != 0ull && seqId == seq) {
     return true;
   }
   const u64 wanted = traceTextureHandle();
-  if (wanted != 0ull && draw.textures[0].handle && draw.textures[0].handle.value == wanted) {
+  if (wanted != 0ull && hot.textures[0] && hot.textures[0].value == wanted) {
     return true;
   }
   const u64 ffWanted = fixedFunctionTraceTextureHandle();
-  return ffWanted != 0ull && draw.textures[0].handle && draw.textures[0].handle.value == ffWanted;
+  return ffWanted != 0ull && hot.textures[0] && hot.textures[0].value == ffWanted;
 }
 
 bool shouldTraceTexture(core::Handle handle) {

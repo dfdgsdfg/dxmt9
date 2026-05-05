@@ -522,6 +522,20 @@ void Pool::markDrawResources(const core::DrawDesc& desc, u64 seqId) {
   markSurfaceUse(desc.rts.depthStencil.handle, seqId);
 }
 
+void Pool::markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId) {
+  markBufferUse(hot.indexBuffer, seqId);
+  for (auto handle : hot.streamBuffers) {
+    markBufferUse(handle, seqId);
+  }
+  for (auto handle : hot.textures) {
+    markTextureUse(handle, seqId);
+  }
+  for (const auto& rt : hot.colorAttachments) {
+    markSurfaceUse(rt.handle, seqId);
+  }
+  markSurfaceUse(hot.depthStencil.handle, seqId);
+}
+
 void Pool::markClearResources(const core::ClearDesc& desc, u64 seqId) {
   if (desc.clearColor) {
     for (const auto& attachment : desc.colorAttachments) {

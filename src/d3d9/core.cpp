@@ -44,14 +44,27 @@ u64 hashTrivial(const T& value) {
   return hash;
 }
 
+u64 hashStateEntry(u32 key, u32 value) {
+  u64 hash = kFnvOffset;
+  hash = hashCombine(hash, key);
+  hash = hashCombine(hash, value);
+  return hash;
+}
+
+u64 hashStateDigest(std::size_t count, u64 rollingHash) {
+  u64 hash = hashCombine(kFnvOffset, static_cast<u64>(count));
+  hash = hashCombine(hash, rollingHash);
+  return hash;
+}
+
 template <typename StateValues>
 u64 hashStateValues(const StateValues& values) {
   u64 hash = hashCombine(kFnvOffset, static_cast<u64>(values.size()));
+  u64 rollingHash = 0;
   for (const auto& entry : values) {
-    const u64 entryHash = hashCombine(hashTrivial(entry.first), hashTrivial(entry.second));
-    hash ^= entryHash + 0x9e3779b97f4a7c15ull;
+    rollingHash ^= hashStateEntry(entry.first, entry.second);
   }
-  return hash;
+  return hashCombine(hash, rollingHash);
 }
 
 u64 hashStateMap(const std::unordered_map<u32, u32>& values) {
@@ -60,7 +73,7 @@ u64 hashStateMap(const std::unordered_map<u32, u32>& values) {
 
 template <std::size_t MaxEntries>
 u64 hashStateMap(const StateValueTable<MaxEntries>& values) {
-  return hashStateValues(values);
+  return hashStateDigest(values.size(), values.rollingHash);
 }
 
 template <std::size_t MaxEntries>
@@ -929,19 +942,20 @@ u64 hashMap(const StateValues& values) {
   return hash;
 }
 
+template <std::size_t MaxEntries>
+u64 hashMap(const StateValueTable<MaxEntries>& values) {
+  return hashStateDigest(values.size(), values.rollingHash);
+}
+
+u64 hashMap(const TransformTable& values) {
+  return hashStateDigest(values.size(), values.rollingHash);
+}
+
 u64 hashColor(const ColorRGBA& color) {
   return hashCombine(hashCombine(hashCombine(hashCombine(kFnvOffset, std::bit_cast<u32>(color.r)),
                                              std::bit_cast<u32>(color.g)),
                                  std::bit_cast<u32>(color.b)),
                       std::bit_cast<u32>(color.a));
-}
-
-u64 hashMatrix(const Matrix4x4& matrix) {
-  u64 hash = kFnvOffset;
-  for (auto value : matrix.m) {
-    hash = hashCombine(hash, std::bit_cast<u32>(value));
-  }
-  return hash;
 }
 
 Matrix4x4 identityMatrix() {
@@ -1048,8 +1062,8 @@ ClipPlane transformClipPlane(const Matrix4x4& transform, const ClipPlane& plane)
 }
 
 Matrix4x4 lookupTransform(const DeviceState& state, u32 key) {
-  if (auto it = state.transforms.find(key); it != state.transforms.end()) {
-    return it->second;
+  if (state.transforms.contains(key)) {
+    return state.transforms.at(key);
   }
   return identityMatrix();
 }
@@ -1178,9 +1192,7 @@ u64 hashShaderRef(const ShaderRef& ref) {
   for (const auto& sampler : state.samplerStates) {
     hash = hashCombine(hash, hashMap(sampler));
   }
-  for (const auto& transform : state.transforms) {
-    hash = hashCombine(hash, hashMatrix(transform.second));
-  }
+  hash = hashCombine(hash, hashMap(state.transforms));
   for (const auto& clipPlane : state.clipPlanes) {
     for (float value : clipPlane) {
       hash = hashCombine(hash, std::bit_cast<u32>(value));
@@ -2169,12 +2181,6 @@ void DeviceState::reset() {
     sampler.set(SAMP_BORDER_COLOR, 0);
   }
 
-  for (auto& transform : transforms) {
-    Matrix4x4 identity{};
-    identity.m = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
-                  0.0f, 0.0f, 0.0f, 1.0f};
-    transform.second = identity;
-  }
   material.diffuse = {1.0f, 1.0f, 1.0f, 1.0f};
 }
 
@@ -3402,7 +3408,7 @@ u32 Device::getSamplerState(u32 sampler, u32 key) const {
 }
 
 HResult Device::setTransform(u32 key, const Matrix4x4& matrix) {
-  state_.transforms[key] = matrix;
+  state_.transforms.set(key, matrix);
   return D3D_OK;
 }
 
@@ -3589,23 +3595,110 @@ DrawDesc Device::snapshotDrawDesc(PrimitiveType type, u32 primitiveCount, u32 st
                                                     baseVertexIndex, startIndex, indexType});
 }
 
+PrimitiveType canonicalPrimitiveType(PrimitiveType primitiveType) {
+  return primitiveType == PrimitiveType::TriangleFan ? PrimitiveType::TriangleList : primitiveType;
+}
+
+VertexDeclSnapshot makeVertexDeclSnapshotFromState(const DeviceState& state) {
+  VertexDeclSnapshot decl = state.vertexDecl;
+  decl.streams.fill({});
+  for (size_t i = 0; i < kMaxStreams; ++i) {
+    decl.streams[i].buffer = state.streamBuffers[i];
+    decl.streams[i].offset = state.streamOffsets[i];
+    decl.streams[i].stride = state.streamStrides[i];
+  }
+  return decl;
+}
+
+ViewportScissor makeViewportScissorFromState(const DeviceState& state) {
+  ViewportScissor viewport{};
+  viewport.viewport = state.viewport;
+  viewport.scissor = state.scissorRect;
+  viewport.scissorEnabled =
+      state.renderStates.contains(RS_SCISSOR_TEST_ENABLE) && state.renderStates.at(RS_SCISSOR_TEST_ENABLE) != 0;
+  return viewport;
+}
+
+u32 clipPlaneMaskFromState(const DeviceState& state) {
+  return state.renderStates.contains(RS_CLIP_PLANE_ENABLE)
+             ? state.renderStates.at(RS_CLIP_PLANE_ENABLE)
+             : 0u;
+}
+
+std::array<Matrix4x4, kMaxTextureStages> makeTextureTransformsFromState(const DeviceState& state) {
+  std::array<Matrix4x4, kMaxTextureStages> transforms{};
+  for (size_t i = 0; i < kMaxTextureStages; ++i) {
+    transforms[i] = lookupTransform(state, XFORM_TEXTURE_BASE + static_cast<u32>(i));
+  }
+  return transforms;
+}
+
+std::array<ClipPlane, kMaxClipPlanes> makeClipPlanesFromState(const DeviceState& state,
+                                                              u32 clipPlaneMask,
+                                                              const Matrix4x4& worldViewProj) {
+  std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
+  for (size_t i = 0; i < kMaxClipPlanes; ++i) {
+    if ((clipPlaneMask & (1u << i)) != 0) {
+      clipPlanes[i] = transformClipPlane(worldViewProj, state.clipPlanes[i]);
+    }
+  }
+  return clipPlanes;
+}
+
+Matrix4x4 makeWorldViewProjFromState(const DeviceState& state) {
+  const Matrix4x4 world = lookupTransform(state, XFORM_WORLD_BASE);
+  const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
+  const Matrix4x4 proj = lookupTransform(state, XFORM_PROJECTION);
+  return multiplyMatrix(multiplyMatrix(world, view), proj);
+}
+
+ShaderRef makeVertexShaderRefFromState(const DeviceState& state) {
+  if (state.vertexShader.kind == ShaderRef::Kind::Bytecode) {
+    return state.vertexShader;
+  }
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::FixedFunctionVertex;
+  shader.vertexKey = makeFfpVertexKey(state);
+  shader.hash = shader.vertexKey->hash;
+  return shader;
+}
+
+ShaderRef makePixelShaderRefFromState(const DeviceState& state) {
+  if (state.pixelShader.kind == ShaderRef::Kind::Bytecode) {
+    return state.pixelShader;
+  }
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  shader.pixelKey = makeFfpPixelKey(state);
+  shader.hash = shader.pixelKey->hash;
+  return shader;
+}
+
+DrawShaderLayoutContext makeDrawShaderLayoutContextFromState(const DeviceState& state) {
+  DrawShaderLayoutContext context{};
+  context.vertexDecl = makeVertexDeclSnapshotFromState(state);
+  context.vertexShader = makeVertexShaderRefFromState(state);
+  context.pixelShader = makePixelShaderRefFromState(state);
+  context.vsConst = state.vsConst;
+  context.psConst = state.psConst;
+  context.worldViewProj = makeWorldViewProjFromState(state);
+  context.textureTransforms = makeTextureTransformsFromState(state);
+  context.clipPlaneMask = clipPlaneMaskFromState(state);
+  context.clipPlanes = makeClipPlanesFromState(state, context.clipPlaneMask, context.worldViewProj);
+  return context;
+}
+
 DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args) {
   DrawDesc desc;
-  desc.primitiveType =
-      args.primitiveType == PrimitiveType::TriangleFan ? PrimitiveType::TriangleList : args.primitiveType;
+  const auto shaderLayout = makeDrawShaderLayoutContextFromState(state);
+  desc.primitiveType = canonicalPrimitiveType(args.primitiveType);
   desc.primitiveCount = args.primitiveCount;
   desc.startVertex = args.startVertex;
   desc.baseVertexIndex = args.baseVertexIndex;
   desc.startIndex = args.startIndex;
   desc.indexType = args.indexType;
   desc.indexBuffer = state.indexBuffer ? state.indexBuffer->handle() : Handle{};
-  desc.vertexDecl = state.vertexDecl;
-  desc.vertexDecl.streams.fill({});
-  for (size_t i = 0; i < kMaxStreams; ++i) {
-    desc.vertexDecl.streams[i].buffer = state.streamBuffers[i];
-    desc.vertexDecl.streams[i].offset = state.streamOffsets[i];
-    desc.vertexDecl.streams[i].stride = state.streamStrides[i];
-  }
+  desc.vertexDecl = shaderLayout.vertexDecl;
   desc.rs.values = state.renderStates.toMap();
   for (size_t i = 0; i < kMaxTextures; ++i) {
     desc.textures[i].handle = state.textures[i] ? state.textures[i]->handle() : Handle{};
@@ -3620,46 +3713,15 @@ DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& arg
   }
   desc.rts.color = state.renderTargets;
   desc.rts.depthStencil = state.depthStencil;
-  desc.viewport.viewport = state.viewport;
-  desc.viewport.scissor = state.scissorRect;
-  desc.viewport.scissorEnabled =
-      state.renderStates.contains(RS_SCISSOR_TEST_ENABLE) && state.renderStates.at(RS_SCISSOR_TEST_ENABLE) != 0;
-  desc.clipPlaneMask = state.renderStates.contains(RS_CLIP_PLANE_ENABLE)
-                           ? state.renderStates.at(RS_CLIP_PLANE_ENABLE)
-                           : 0;
-  const Matrix4x4 world = lookupTransform(state, XFORM_WORLD_BASE);
-  const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
-  const Matrix4x4 proj = lookupTransform(state, XFORM_PROJECTION);
-  const Matrix4x4 worldViewProj = multiplyMatrix(multiplyMatrix(world, view), proj);
-  desc.worldViewProj = worldViewProj;
-  for (size_t i = 0; i < kMaxTextureStages; ++i) {
-    desc.textureTransforms[i] = lookupTransform(state, XFORM_TEXTURE_BASE + static_cast<u32>(i));
-  }
-  for (size_t i = 0; i < kMaxClipPlanes; ++i) {
-    if ((desc.clipPlaneMask & (1u << i)) != 0) {
-      desc.clipPlanes[i] = transformClipPlane(worldViewProj, state.clipPlanes[i]);
-    } else {
-      desc.clipPlanes[i] = {};
-    }
-  }
-
-  if (state.vertexShader.kind == ShaderRef::Kind::Bytecode) {
-    desc.vertexShader = state.vertexShader;
-  } else {
-    desc.vertexShader.kind = ShaderRef::Kind::FixedFunctionVertex;
-    desc.vertexShader.vertexKey = makeFfpVertexKey(state);
-    desc.vertexShader.hash = desc.vertexShader.vertexKey->hash;
-  }
-  if (state.pixelShader.kind == ShaderRef::Kind::Bytecode) {
-    desc.pixelShader = state.pixelShader;
-  } else {
-    desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
-    desc.pixelShader.pixelKey = makeFfpPixelKey(state);
-    desc.pixelShader.hash = desc.pixelShader.pixelKey->hash;
-  }
-
-  desc.vsConst = state.vsConst;
-  desc.psConst = state.psConst;
+  desc.viewport = makeViewportScissorFromState(state);
+  desc.clipPlaneMask = shaderLayout.clipPlaneMask;
+  desc.worldViewProj = shaderLayout.worldViewProj;
+  desc.textureTransforms = shaderLayout.textureTransforms;
+  desc.clipPlanes = shaderLayout.clipPlanes;
+  desc.vertexShader = shaderLayout.vertexShader;
+  desc.pixelShader = shaderLayout.pixelShader;
+  desc.vsConst = shaderLayout.vsConst;
+  desc.psConst = shaderLayout.psConst;
   return desc;
 }
 
@@ -3756,7 +3818,9 @@ FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc) {
 
 namespace {
 
-FlatDrawStateKey makeFlatDrawStateKeyFromState(const DeviceState& state, const DrawDesc& desc) {
+FlatDrawStateKey makeFlatDrawStateKeyFromState(const DeviceState& state,
+                                               const DrawShaderLayoutContext& shaderLayout,
+                                               const ViewportScissor& viewport) {
   FlatDrawStateKey key{};
 
   for (size_t i = 0; i < kMaxStreams; ++i) {
@@ -3769,13 +3833,13 @@ FlatDrawStateKey makeFlatDrawStateKeyFromState(const DeviceState& state, const D
   }
 
   key.indexBuffer = state.indexBuffer ? state.indexBuffer->handle() : Handle{};
-  key.vertexElementCount = static_cast<u32>(desc.vertexDecl.elements.size());
-  key.fvf = desc.vertexDecl.fvf;
-  key.vertexDeclHash = hashVertexDeclElements(desc.vertexDecl);
-  key.vertexShaderKind = desc.vertexShader.kind;
-  key.pixelShaderKind = desc.pixelShader.kind;
-  key.vertexShaderHash = hashShaderRefSummary(desc.vertexShader);
-  key.pixelShaderHash = hashShaderRefSummary(desc.pixelShader);
+  key.vertexElementCount = static_cast<u32>(shaderLayout.vertexDecl.elements.size());
+  key.fvf = shaderLayout.vertexDecl.fvf;
+  key.vertexDeclHash = hashVertexDeclElements(shaderLayout.vertexDecl);
+  key.vertexShaderKind = shaderLayout.vertexShader.kind;
+  key.pixelShaderKind = shaderLayout.pixelShader.kind;
+  key.vertexShaderHash = hashShaderRefSummary(shaderLayout.vertexShader);
+  key.pixelShaderHash = hashShaderRefSummary(shaderLayout.pixelShader);
   key.vertexConstantsHash = hashTrivial(state.vsConst);
   key.pixelConstantsHash = hashTrivial(state.psConst);
 
@@ -3805,17 +3869,19 @@ FlatDrawStateKey makeFlatDrawStateKeyFromState(const DeviceState& state, const D
     }
   }
 
-  key.viewportHash = hashViewportScissor(desc.viewport);
-  key.worldViewProjHash = hashTrivial(desc.worldViewProj);
-  key.textureTransformsHash = hashTextureTransforms(desc.textureTransforms);
-  key.clipPlaneMask = desc.clipPlaneMask;
-  key.clipPlanesHash = hashClipPlanes(desc.clipPlanes);
+  key.viewportHash = hashViewportScissor(viewport);
+  key.worldViewProjHash = hashTrivial(shaderLayout.worldViewProj);
+  key.textureTransformsHash = hashTextureTransforms(shaderLayout.textureTransforms);
+  key.clipPlaneMask = shaderLayout.clipPlaneMask;
+  key.clipPlanesHash = hashClipPlanes(shaderLayout.clipPlanes);
   return key;
 }
 
-FlatDrawStateRecord makeFlatDrawStateRecordFromState(const DeviceState& state, const DrawDesc& desc) {
+FlatDrawStateRecord makeFlatDrawStateRecordFromState(const DeviceState& state,
+                                                     const DrawShaderLayoutContext& shaderLayout,
+                                                     const ViewportScissor& viewport) {
   FlatDrawStateRecord record{};
-  record.key = makeFlatDrawStateKeyFromState(state, desc);
+  record.key = makeFlatDrawStateKeyFromState(state, shaderLayout, viewport);
   record.streamBuffers = record.key.streamBuffers;
   record.streamOffsets = record.key.streamOffsets;
   record.streamStrides = record.key.streamStrides;
@@ -3835,7 +3901,7 @@ FlatDrawStateRecord makeFlatDrawStateRecordFromState(const DeviceState& state, c
   record.colorAttachments = record.key.colorAttachments;
   record.depthStencil = record.key.depthStencil;
   record.renderTargetMask = record.key.renderTargetMask;
-  record.viewport = desc.viewport;
+  record.viewport = viewport;
   record.vertexConstantsHash = record.key.vertexConstantsHash;
   record.pixelConstantsHash = record.key.pixelConstantsHash;
   record.worldViewProjHash = record.key.worldViewProjHash;
@@ -3884,6 +3950,25 @@ DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStat
   return snapshot;
 }
 
+DrawDebugSnapshot makeDrawDebugSnapshot(const DrawCallArgs& args, const FlatDrawStateRecord& hot) {
+  DrawDebugSnapshot snapshot{};
+  snapshot.primitiveType = canonicalPrimitiveType(args.primitiveType);
+  snapshot.primitiveCount = args.primitiveCount;
+  snapshot.startVertex = args.startVertex;
+  snapshot.baseVertexIndex = args.baseVertexIndex;
+  snapshot.startIndex = args.startIndex;
+  snapshot.indexType = args.indexType;
+  snapshot.streamMask = hot.streamMask;
+  snapshot.textureMask = hot.textureMask;
+  snapshot.samplerStateMask = hot.key.samplerStateMask;
+  snapshot.renderTargetMask = hot.renderTargetMask;
+  snapshot.renderStateHash = hot.key.renderStateHash;
+  snapshot.vertexDeclHash = hot.key.vertexDeclHash;
+  snapshot.vertexShaderHash = hot.key.vertexShaderHash;
+  snapshot.pixelShaderHash = hot.key.pixelShaderHash;
+  return snapshot;
+}
+
 DrawParam makeDrawParamFromDesc(const DrawDesc& desc) {
   DrawParam param{};
   param.primitiveType = desc.primitiveType;
@@ -3902,20 +3987,15 @@ CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc) {
   auto hot = makeFlatDrawStateRecord(desc);
   auto shaderLayout = makeDrawShaderLayoutContext(desc);
   auto debug = makeDrawDebugSnapshot(desc, hot);
-  DrawDesc state = desc;
-  state.userVertexData.clear();
-  state.userIndexData.clear();
-  return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug), std::move(state)};
+  return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug)};
 }
 
 CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args) {
-  DrawDesc cold = makeDrawDescFromState(state, args);
-  auto hot = makeFlatDrawStateRecordFromState(state, cold);
-  auto shaderLayout = makeDrawShaderLayoutContext(cold);
-  auto debug = makeDrawDebugSnapshot(cold, hot);
-  cold.userVertexData.clear();
-  cold.userIndexData.clear();
-  return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug), std::move(cold)};
+  auto shaderLayout = makeDrawShaderLayoutContextFromState(state);
+  const auto viewport = makeViewportScissorFromState(state);
+  auto hot = makeFlatDrawStateRecordFromState(state, shaderLayout, viewport);
+  auto debug = makeDrawDebugSnapshot(args, hot);
+  return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug)};
 }
 
 bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena) {

@@ -114,24 +114,11 @@ class Device {
   // around the record-iteration block so bulk markChunkResources is the
   // sole retention path. Stub backends ignore — they have no Pool.
   virtual void setSkipDrawResourceMarking(bool /*skip*/) {}
-  // Compact draw-run ingress (BaseDrawState + N DrawParam). Default
-  // expands to per-draw submitDraw so non-DeviceImpl backends keep
-  // working unchanged. DeviceImpl overrides to forward straight to
-  // CommandQueue::submitDrawRun.
-  virtual void submitDrawRun(core::DrawRunDesc desc) {
-    for (const auto& param : desc.draws) {
-      core::DrawDesc synthetic = desc.state.coldDesc;
-      synthetic.primitiveType = param.primitiveType;
-      synthetic.primitiveCount = param.primitiveCount;
-      synthetic.startVertex = param.startVertex;
-      synthetic.baseVertexIndex = param.baseVertexIndex;
-      synthetic.startIndex = param.startIndex;
-      synthetic.indexType = param.indexType;
-      synthetic.userVertexData = param.userVertexData;
-      synthetic.userIndexData = param.userIndexData;
-      submitDraw(synthetic);
-    }
-  }
+  // Compact draw-run ingress (BaseDrawState + N DrawParam). DeviceImpl
+  // forwards straight to CommandQueue::submitDrawRun. Stub backends may
+  // override this explicitly; the default stub has no canonical state
+  // expansion fallback.
+  virtual void submitDrawRun(core::DrawRunDesc) {}
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
   virtual void submitStretchRect(const core::StretchRectDesc&) {}

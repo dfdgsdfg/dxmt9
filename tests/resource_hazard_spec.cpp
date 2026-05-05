@@ -125,7 +125,23 @@ struct RecordingDxmt9Device final : dxmt9::Device {
 
   void submitDrawRun(DrawRunDesc desc) override {
     for (const auto& param : desc.draws) {
-      DrawDesc synthetic = desc.state.coldDesc;
+      DrawDesc synthetic{};
+      synthetic.indexBuffer = desc.state.hot.indexBuffer;
+      synthetic.vertexDecl = desc.state.shaderLayout.vertexDecl;
+      for (std::size_t i = 0; i < desc.state.hot.textures.size(); ++i) {
+        synthetic.textures[i].handle = desc.state.hot.textures[i];
+      }
+      synthetic.rts.color = desc.state.hot.colorAttachments;
+      synthetic.rts.depthStencil = desc.state.hot.depthStencil;
+      synthetic.viewport = desc.state.hot.viewport;
+      synthetic.vertexShader = desc.state.shaderLayout.vertexShader;
+      synthetic.pixelShader = desc.state.shaderLayout.pixelShader;
+      synthetic.vsConst = desc.state.shaderLayout.vsConst;
+      synthetic.psConst = desc.state.shaderLayout.psConst;
+      synthetic.worldViewProj = desc.state.shaderLayout.worldViewProj;
+      synthetic.textureTransforms = desc.state.shaderLayout.textureTransforms;
+      synthetic.clipPlaneMask = desc.state.shaderLayout.clipPlaneMask;
+      synthetic.clipPlanes = desc.state.shaderLayout.clipPlanes;
       synthetic.primitiveType = param.primitiveType;
       synthetic.primitiveCount = param.primitiveCount;
       synthetic.startVertex = param.startVertex;
