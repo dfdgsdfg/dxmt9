@@ -1,5 +1,6 @@
 #include "dxmt9_draw_state.hpp"
 #include "dxmt9_debug_trace.hpp"
+#include "dxmt9/assert.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -37,8 +38,8 @@ using core::RS_Z_WRITE_ENABLE;
 
 DrawUniforms buildDrawUniforms(core::FlatDrawStateView state) {
   const auto& hot = *state.hot;
-  const core::DrawUniformPayload fallbackUniforms{};
-  const auto& payload = state.hasUniformPayload() ? state.uniformPayload() : fallbackUniforms;
+  DXMT_ASSERT(state.hasUniformPayload());
+  const auto& payload = state.uniformPayload();
   const auto& vsConst = payload.vsConst;
   const auto& psConst = payload.psConst;
   const auto& worldViewProj = payload.worldViewProj;

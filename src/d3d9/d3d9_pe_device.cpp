@@ -2512,16 +2512,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
-    static void appendWireBlobBytes(std::vector<std::uint8_t>& wireBlob,
-                                    const void* data,
-                                    std::size_t bytes) {
-        if (bytes == 0) {
-            return;
-        }
-        const auto* first = static_cast<const std::uint8_t*>(data);
-        wireBlob.insert(wireBlob.end(), first, first + bytes);
-    }
-
     HRESULT flushPendingCommandChunk() {
         if (pendingCommandRecordCount_ == 0) {
             return S_OK;
@@ -2620,34 +2610,39 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (chunkWireHandleScratch_.size() != wireHandleCount) {
             return D3DERR_INVALIDCALL;
         }
+        if (sizeof(wireHeader) != wireHeader.recordTableOffset ||
+            wireHeader.recordTableOffset + recordTableBytes !=
+                wireHeader.handleTableOffset ||
+            wireHeader.handleTableOffset + handleTableBytes !=
+                wireHeader.payloadArenaOffset ||
+            wireHeader.payloadArenaOffset + payloadArenaSize != wireBlobSize) {
+            return D3DERR_INVALIDCALL;
+        }
 
         pendingCommandWireBlob_.clear();
-        pendingCommandWireBlob_.reserve(static_cast<std::size_t>(wireBlobSize));
-        appendWireBlobBytes(
-            pendingCommandWireBlob_, &wireHeader, sizeof(wireHeader));
-        if (pendingCommandWireBlob_.size() != wireHeader.recordTableOffset) {
-            return D3DERR_INVALIDCALL;
+        pendingCommandWireBlob_.resize(static_cast<std::size_t>(wireBlobSize));
+        auto* const wireBlob = pendingCommandWireBlob_.data();
+        std::memcpy(wireBlob, &wireHeader, sizeof(wireHeader));
+        if (recordTableBytes != 0) {
+            std::memcpy(
+                wireBlob + wireHeader.recordTableOffset,
+                pendingCommandWireRecords_.data(),
+                static_cast<std::size_t>(recordTableBytes));
         }
-        appendWireBlobBytes(
-            pendingCommandWireBlob_,
-            pendingCommandWireRecords_.data(),
-            static_cast<std::size_t>(recordTableBytes));
-        if (pendingCommandWireBlob_.size() != wireHeader.handleTableOffset) {
-            return D3DERR_INVALIDCALL;
+        if (handleTableBytes != 0) {
+            std::memcpy(
+                wireBlob + wireHeader.handleTableOffset,
+                chunkWireHandleScratch_.data(),
+                static_cast<std::size_t>(handleTableBytes));
         }
-        appendWireBlobBytes(
-            pendingCommandWireBlob_,
-            chunkWireHandleScratch_.data(),
-            static_cast<std::size_t>(handleTableBytes));
-        if (pendingCommandWireBlob_.size() != wireHeader.payloadArenaOffset) {
-            return D3DERR_INVALIDCALL;
-        }
-        appendWireBlobBytes(
-            pendingCommandWireBlob_,
-            pendingCommandBytes_.data(),
-            payloadArenaSize);
-        if (pendingCommandWireBlob_.size() != static_cast<std::size_t>(wireBlobSize)) {
-            return D3DERR_INVALIDCALL;
+        // The C ABI imports one contiguous DOD blob, while pendingCommandBytes_
+        // remains the canonical payload arena for retry if commit_chunk fails.
+        // Keep this copy explicit rather than moving/swapping the arena away.
+        if (payloadArenaSize != 0) {
+            std::memcpy(
+                wireBlob + wireHeader.payloadArenaOffset,
+                pendingCommandBytes_.data(),
+                payloadArenaSize);
         }
 
         D9CCommandChunk chunk{};

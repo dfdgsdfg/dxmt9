@@ -104,6 +104,31 @@ DrawParam makeDrawParamForTest(const DrawDesc& desc) {
   return param;
 }
 
+void testChunkSlotU32GuardBoundaries() {
+  const auto u32Max = detail::kChunkSlotU32Max;
+
+  check(detail::chunkSlotCanAppendU32IndexedElement(0),
+        "slot u32 guard accepts an empty indexed table");
+  check(detail::chunkSlotCanAppendU32IndexedElement(u32Max - 1u),
+        "slot u32 guard accepts the last appendable indexed table slot");
+  check(!detail::chunkSlotCanAppendU32IndexedElement(u32Max),
+        "slot u32 guard rejects an indexed table append past u32 range");
+
+  check(detail::chunkSlotCanAppendU32Range(0, u32Max),
+        "slot u32 range guard accepts the largest representable param count");
+  check(detail::chunkSlotCanAppendU32Range(u32Max, 0),
+        "slot u32 range guard accepts an empty range at the u32 boundary");
+  check(!detail::chunkSlotCanAppendU32Range(u32Max, 1),
+        "slot u32 range guard rejects range growth past u32 storage");
+  check(!detail::chunkSlotCanAppendU32Range(u32Max - 1u, 2),
+        "slot u32 range guard rejects overflowing appended param count");
+
+  if constexpr (sizeof(std::size_t) > sizeof(u32)) {
+    check(!detail::chunkSlotCanAppendU32Range(u32Max + 1u, 0),
+          "slot u32 range guard rejects pre-existing counts outside u32 storage");
+  }
+}
+
 void testStateValueTableDirtyHashContract() {
   RenderStateTable a;
   RenderStateTable b;
@@ -389,6 +414,7 @@ void testFlatDrawStateKey() {
   DrawDesc withUserPayload = first;
   withUserPayload.userVertexData = {0xde, 0xad, 0xbe, 0xef};
   withUserPayload.userIndexData = {0x01, 0x02};
+  const auto sharedUniformPayload = makeDrawUniformPayload(withUserPayload);
   checkEq(firstKey, makeFlatDrawStateKey(withUserPayload),
           "UP payload is excluded from flat base draw state");
 
@@ -560,6 +586,7 @@ void testFlatDrawStateKey() {
   ChunkSlot slot{};
   DrawRunDesc singleRun{};
   singleRun.state = makeCanonicalDrawStateForTest(withUserPayload);
+  drawRunSetUniformPayload(singleRun, sharedUniformPayload);
   DrawParam singleParam = makeDrawParamForTest(withUserPayload);
   check(drawRunAppend(
             singleRun, singleParam,
@@ -593,8 +620,14 @@ void testFlatDrawStateKey() {
         "slot single-draw payload span starts at the record offset");
   checkEq(slot.drawPayloadArena.size(), std::size_t{6},
           "slot draw payload arena owns single-draw UP bytes");
+  check(drawView.drawUniformPayload != nullptr,
+        "slot single-draw command resolves its uniform payload");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
+          "slot single-draw command stores one uniform payload");
+  const auto sharedUniformHandle = drawView.drawRunRecord->uniformHandle;
 
   drawRunClear(packedRun);
+  drawRunSetUniformPayload(packedRun, sharedUniformPayload);
   check(drawRunAppend(
             packedRun, drawParamB,
             DrawParamPayloadView{
@@ -631,9 +664,16 @@ void testFlatDrawStateKey() {
         "slot draw-run payload span starts at the record offset");
   checkEq(slot.drawPayloadArena.size(), std::size_t{12},
           "slot payload arena owns draw and draw-run bytes together");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
+          "slot draw-run interns an unchanged uniform payload");
+  checkEq(runView.drawRunRecord->uniformHandle, sharedUniformHandle,
+          "slot draw-run reuses the existing uniform payload handle");
 
   DrawRunDesc noPayloadRun{};
   noPayloadRun.state = makeCanonicalDrawStateForTest(first);
+  DrawUniformPayload changedUniformPayload = sharedUniformPayload;
+  changedUniformPayload.clipPlaneMask ^= 0x1u;
+  drawRunSetUniformPayload(noPayloadRun, changedUniformPayload);
   check(drawRunAppend(noPayloadRun, drawParamA),
         "test no-payload draw-run appends before slot append");
   check(drawRunValidate(noPayloadRun), "no-payload draw-run validates before slot append");
@@ -655,6 +695,14 @@ void testFlatDrawStateKey() {
         "slot no-payload draw-run leaves index payload range empty");
   checkEq(slot.drawPayloadArena.size(), std::size_t{12},
           "slot no-payload draw-run does not grow the payload arena");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+          "slot stores a new uniform payload when the payload changes");
+  check(!(noPayloadView.drawRunRecord->uniformHandle == sharedUniformHandle),
+        "slot no-payload draw-run uses a distinct uniform payload handle");
+  const auto refreshedDrawView = slot.commandAt(0);
+  const auto refreshedRunView = slot.commandAt(1);
+  check(refreshedDrawView.drawUniformPayload == refreshedRunView.drawUniformPayload,
+        "slot command views resolve interned uniform payloads to the same arena record");
 
   DrawDesc sameMapsDifferentInsertion = first;
   sameMapsDifferentInsertion.rs.values.clear();
@@ -699,6 +747,7 @@ void testFlatDrawStateKey() {
 }  // namespace
 
 int main() {
+  testChunkSlotU32GuardBoundaries();
   testStateValueTableDirtyHashContract();
   testStateDrawTransform();
   testConstantsAndShaderRefs();
