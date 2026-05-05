@@ -20,6 +20,9 @@ required_fields = {
     "executable",
     "function",
     "source",
+    "source_kind",
+    "license",
+    "license_scope",
     "upstream_commit",
     "lanes",
     "arches",
@@ -32,6 +35,8 @@ required_fields = {
 valid_lanes = {"app-local", "builtin"}
 valid_arches = {"x64", "x86"}
 valid_status = {"passing", "failing", "skipped", "scaffolded", "todo"}
+valid_source_kind = {"behavioral-oracle"}
+valid_license_scope = {"external-not-vendored"}
 requirement_re = re.compile(r"^R-TEST-12\.\d+$")
 
 if not manifest_path.is_file():
@@ -89,9 +94,18 @@ for index, case in enumerate(cases, 1):
         errors.append(f"case #{index}: acceptance must be a non-empty string list")
 
     source = case.get("source")
+    source_kind = case.get("source_kind")
+    license_value = case.get("license")
+    license_scope = case.get("license_scope")
     upstream_commit = case.get("upstream_commit")
     if not isinstance(source, str) or not source.startswith("wine/"):
         errors.append(f"case #{index}: source must be a wine/... anchor")
+    if source_kind not in valid_source_kind:
+        errors.append(f"case #{index}: source_kind must be {sorted(valid_source_kind)}")
+    if license_value != "LGPL-2.1-or-later":
+        errors.append(f"case #{index}: license must be 'LGPL-2.1-or-later'")
+    if license_scope not in valid_license_scope:
+        errors.append(f"case #{index}: license_scope must be {sorted(valid_license_scope)}")
     if not isinstance(upstream_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", upstream_commit):
         errors.append(f"case #{index}: upstream_commit must be a 40-character hex commit")
 

@@ -391,7 +391,7 @@ tests/           Regression and conformance suites
   native/        Fast native unit/spec tests by owner (core, shader, backend,
                  bridge, smoke)
   shader_runner/ shader_runner_dxmt9 plus manifest-driven .shader_test corpus
-  conformance/   Wine-derived PE D3D9 conformance tests
+  conformance/   Wine-oracle PE D3D9 conformance tests
   integration/   Wine/WSI end-to-end smoke tests
   fixtures/      Static test fixtures
 specs/           Specifications and formal verification

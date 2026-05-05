@@ -113,10 +113,12 @@ steady-state case and assert the maximum retained capacity or allocation count.
 
 ---
 
-## 1. Test Infrastructure: vkd3d shader_runner
+## 1. Test Infrastructure: dxmt9 Shader Runner
 
-The test infrastructure is built on the **vkd3d `shader_runner`** framework. The
-framework has two parts: a backend-agnostic runner and pluggable backends.
+The runtime shader test infrastructure is a dxmt9-native runner that accepts a
+documented `.shader_test` compatible subset inspired by vkd3d's corpus format.
+vkd3d remains a corpus/oracle reference; dxmt9 does not implement or link
+against vkd3d's runner ABI.
 
 ```mermaid
 graph TD
@@ -124,20 +126,21 @@ graph TD
         ST["tests/shader_runner/corpus/*.shader_test\n(portable test files)"]
     end
 
-    subgraph Runner["shader_runner (vkd3d)"]
+    subgraph Runner["shader_runner_dxmt9"]
         PARSE["Parse .shader_test\n— compile shader\n— set uniforms\n— issue draw quad\n— probe pixels"]
     end
 
-    subgraph Backends
+    subgraph References
         D3D9["shader_runner_d3d9\n(Windows oracle)"]
         VK["shader_runner_vulkan\n(Linux reference)"]
-        DXMT9["shader_runner_dxmt9\n(dxmt9 backend — new)"]
     end
 
+    DXMT9["dxmt9 backend\n(native macOS runtime)"]
+
     ST --> PARSE
-    PARSE --> D3D9
-    PARSE --> VK
     PARSE --> DXMT9
+    D3D9 -->|oracle values| ST
+    VK -->|reference only| ST
 ```
 
 `shader_runner_dxmt9` drives the dxmt9 `BackendDevice` interface directly — no Wine,
@@ -147,8 +150,9 @@ no D3D9 COM. It is a native macOS executable.
 
 ## 2. `.shader_test` File Format
 
-Each `.shader_test` file is a self-describing test case. The format is defined by
-vkd3d and documented in `tests/shader_runner.c`.
+Each `.shader_test` file is a self-describing test case. The dxmt9 subset is
+documented by the local runner and intentionally mirrors the portable parts of
+vkd3d's text format where that helps corpus review.
 
 ```
 [require]
@@ -180,9 +184,12 @@ Key points:
 
 ## 3. Oracle Generation
 
-Shader and rendering oracle values feed the test corpus. API conformance tests use
-Wine's D3D9 tests as behavioural references. Neither category is regenerated
-automatically — updating an oracle value or expected HRESULT requires code review.
+Shader and rendering oracle values feed the test corpus. API conformance tests
+use Wine's D3D9 tests as behavioural references. External projects provide
+oracles, corpus shape, and structure references; they are not implementation
+sources for MIT-owned dxmt9 files unless a separate license review explicitly
+approves the import. Neither category is regenerated automatically — updating
+an oracle value or expected HRESULT requires code review.
 
 ### 3a. vkd3d `shader_runner_d3d9` (SM2/SM3)
 
@@ -197,15 +204,26 @@ shader_runner_d3d9.exe tests/shader_runner/corpus/sincos.shader_test
 ### 3b. Wine `visual.c` (ps_1_x, FFP, corner cases)
 
 `dlls/d3d9/tests/visual.c` (Wine, LGPL-2.1) contains hardcoded expected D3DCOLOR
-values verified against real D3D9 hardware. To port a test:
+values verified against real D3D9 hardware. To create a dxmt9 clean-room test
+from this oracle:
 
 1. Locate the Wine test function (e.g., `fog_test`, `alpha_test`, `ps_1_4_test`)
-2. Extract the inline shader assembly string and expected `D3DCOLOR` values
-3. Convert `D3DCOLOR` (0xAARRGGBB) to float RGBA for the `probe` line:
+2. Identify the observable D3D9 setup, expected pixels, and tolerance.
+3. Re-express the setup using dxmt9-owned test data and control flow. Do not
+   copy Wine helper code, control flow, bulk tables, or inline shader strings
+   into MIT-owned tests.
+4. Convert expected `D3DCOLOR` values (0xAARRGGBB) to float RGBA for the
+   `probe` line when the colour is used only as an oracle value:
    ```
    D3DCOLOR 0xff804020  →  probe (x, y) rgba(0.502, 0.251, 0.125, 1.0) 2
    ```
-4. Add citation comment: `// derived from Wine: visual.c:<function_name>`
+5. Add citation comment: `// behavioral oracle: Wine visual.c:<function_name>`
+   and record `license = "LGPL-2.1-or-later"`,
+   `source_kind = "behavioral-oracle"`, and
+   `license_scope = "external-not-vendored"` in the manifest/provenance. If
+   exact Wine literals, shader assembly, or tables are copied, the file must be
+   segregated as a third-party fixture rather than treated as MIT-owned dxmt9
+   code.
 
 **Oracle sources by category:**
 
@@ -219,27 +237,19 @@ values verified against real D3D9 hardware. To port a test:
 
 ---
 
-## 4. `shader_runner_dxmt9` Backend
+## 4. `shader_runner_dxmt9` Runtime Harness
 
-The backend must implement the vkd3d `struct shader_runner_ops` interface:
-
-```c
-struct shader_runner_ops {
-    bool (*check_requirements)(struct shader_runner *, const struct shader_test_requirement *);
-    bool (*compile_shader)(struct shader_runner *, const struct shader_bytecode *, ...);
-    bool (*draw)(struct shader_runner *);
-    void (*probe_pixel)(struct shader_runner *, unsigned x, unsigned y,
-                        const struct vec4 *expected, unsigned tolerance);
-    void (*destroy)(struct shader_runner *);
-};
-```
+The harness owns a dxmt9-native parser/executor for the documented
+`.shader_test` compatible subset plus dxmt9-local extensions. It may consume
+tests whose shape was validated against vkd3d's corpus format, but it must not
+depend on vkd3d's `shader_runner_ops` C ABI or reuse vkd3d runner code.
 
 Internal flow:
 
 ```mermaid
 sequenceDiagram
-    participant R as shader_runner (framework)
-    participant B as shader_runner_dxmt9
+    participant R as shader_runner_dxmt9 parser
+    participant B as dxmt9 runtime harness
 
     R->>B: compile_shader(d3dbc bytecode, vs/ps)
     B->>B: dxmt9_winemetal_compile_shader() → ShaderBlob handle
@@ -284,7 +294,7 @@ without depending on a Metal render/readback path:
 
 ### 4.2 Extended Probe Layer
 
-The portable vkd3d `.shader_test` syntax remains the base corpus format.
+The dxmt9 `.shader_test` compatible subset remains the base corpus format.
 dxmt9-specific coverage that needs richer setup is expressed through a local
 extended probe layer owned by `shader_runner_dxmt9`. The extension is used for
 texture setup, vertex output geometry probes, and render-state interaction
@@ -562,7 +572,8 @@ The conformance harness is a set of small PE executables compiled with
 llvm-mingw and run under Wine. Unlike `dxmt9-core-spec`, these tests exercise
 the real exported `d3d9.dll` ABI, COM vtables, Wine DLL search behaviour, and
 the PE bridge path. Wine's D3D9 tests supply the Windows D3D9 API behaviour
-oracle; dxmt9 still keeps the DXMT-compatible `winemetal` architecture.
+oracle; dxmt9 still keeps the DXMT-compatible `winemetal` architecture and
+clean-room local test implementations.
 
 ```mermaid
 sequenceDiagram
@@ -584,24 +595,28 @@ sequenceDiagram
 - Keep each executable focused. Factory/Ex, resource wrappers, queries,
   stateblock, reset/lost-device, window/cursor, and auxiliary-export coverage
   are separate test programs so failures identify the implementation area.
-- Copy only the minimal test logic needed from Wine; do not vendor whole Wine
-  source files.
+- Re-express Wine-observed behaviour in local test code. Do not copy Wine
+  helper code, control flow, bulk tables, inline source blobs, or test harness
+  structure into MIT-owned dxmt9 tests.
 - Preserve expected HRESULTs, refcount probes, and comments explaining unusual
-  D3D9 quirks.
+  D3D9 quirks as behavioural oracle data with explicit provenance.
 - Skip Wine cases whose only expected result is a Windows access violation on
   invalid pointers; dxmt9 tests should assert the specified clean-failure path
   instead.
 - For object creation failures, assert both the returned `HRESULT` and that the
   out pointer remains `NULL` or unchanged according to the Windows
-  D3D9-compatible rule validated by the Wine-derived oracle.
-- Prefer one local test function per Wine source function. When a Wine function
-  is too broad, split it into named cases but preserve the Wine function anchor
-  in each case's provenance.
-- Add a provenance header near each ported test:
+  D3D9-compatible rule validated by the Wine behavioural oracle.
+- Prefer one local test function per Wine source function anchor. When a Wine
+  function is too broad, split it into named cases but preserve the Wine
+  function anchor in each case's provenance.
+- Add a provenance header near each clean-room conformance case:
 
 ```c
 /* [provenance]
  * source: wine/dlls/d3d9/tests/d3d9ex.c:test_qi_base_to_ex
+ * source_kind: behavioral-oracle
+ * license: LGPL-2.1-or-later
+ * license_scope: external-not-vendored
  * upstream-commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  * oracle: Windows D3D9 behaviour captured by Wine D3D9 tests
  */
@@ -630,7 +645,7 @@ runtime supports WoW64.
 
 ### Conformance Manifest
 
-`tests/conformance/d3d9/MANIFEST.toml` is the source of truth for Wine-derived
+`tests/conformance/d3d9/MANIFEST.toml` is the source of truth for Wine-oracle
 API conformance coverage. It is separate from the shader corpus manifest
 because these tests are PE executables, not `.shader_test` files.
 
@@ -640,6 +655,9 @@ executable = "dxmt9-d3d9-device-lifetime.exe"
 source_file = "device_lifetime.cpp"
 function   = "test_get_direct3d_addref"
 source     = "wine/dlls/d3d9/tests/device.c:test_refcount"
+source_kind = "behavioral-oracle"
+license    = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
 upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
 lanes      = ["app-local", "builtin"]
 arches     = ["x64", "x86"]
@@ -657,9 +675,10 @@ window-manager message sequence.
 
 `scripts/check_d3d9_conformance_manifest.sh` validates that every manifest entry
 has the required fields, valid lane / architecture / status values, R-TEST-12
-anchors, a 40-character Wine upstream commit, no duplicate executable/function
-pairs, and a local source/function match for scaffolded cases. It is wired into
-`meson test` as `dxmt9-d3d9-conformance-manifest-check`.
+anchors, `source_kind`, `license`, `license_scope`, a 40-character Wine upstream
+commit, no duplicate executable/function pairs, and a local source/function
+match for scaffolded cases. It is wired into `meson test` as
+`dxmt9-d3d9-conformance-manifest-check`.
 
 ### Run
 
@@ -764,7 +783,7 @@ Boundary ownership:
 | `tests/native/backend/` | Native macOS backend/data tests | descriptor keys, pipeline keys, resource hazard observations, DOD allocation evidence |
 | `tests/native/bridge/` | Native macOS packet/wire tests | chunk wire layout, import validation, draw-run grouping, handle/payload arena behaviour |
 | `tests/shader_runner/` | Native macOS runtime readback harness | `.shader_test` corpus, dxmt9-local extended probes, framebuffer readback evidence |
-| `tests/conformance/d3d9/` | Windows PE binaries under Wine | Wine-derived D3D9 ABI, HRESULT, COM lifetime, state-machine compatibility |
+| `tests/conformance/d3d9/` | Windows PE binaries under Wine | Wine-oracle D3D9 ABI, HRESULT, COM lifetime, state-machine compatibility |
 | `tests/integration/wsi_present/` | Wine + window system + Metal presentation | full WSI smoke, HWND-to-Metal-layer resolution, visible present path |
 | `tests/fixtures/` | Static test data | local fixtures only; no executable test ownership |
 
@@ -802,6 +821,9 @@ Every `.shader_test` file opens with a provenance block. The block is pure comme
 ```
 ; [provenance]
 ; source: vkd3d
+; source_kind: third-party-fixture
+; license: LGPL-2.1-or-later
+; license_scope: third-party-fixture
 ; upstream-url: https://gitlab.winehq.org/wine/vkd3d
 ; upstream-commit: 5a47802
 ; oracle: shader_runner_d3d9
@@ -815,11 +837,14 @@ shader model >= ps_2_0
 ...
 ```
 
-**Wine visual.c port:**
+**Wine visual.c behavioural oracle:**
 
 ```
 ; [provenance]
 ; source: wine/visual.c:fog_test
+; source_kind: behavioral-oracle
+; license: LGPL-2.1-or-later
+; license_scope: external-not-vendored
 ; upstream-url: https://github.com/wine-mirror/wine
 ; upstream-commit: d3a9f12
 ; oracle: real D3D9 hardware (recorded in Wine test history)
@@ -835,6 +860,9 @@ shader model >= ps_1_1
 ```
 ; [provenance]
 ; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
 ; oracle: math-derivation
 ; oracle-date: 2026-03-29
 ```
@@ -860,6 +888,9 @@ can keep provenance and manifest state aligned.
 [[test]]
 file    = "arithmetic/mad.shader_test"
 source  = "vkd3d"
+source_kind = "third-party-fixture"
+license = "LGPL-2.1-or-later"
+license_scope = "third-party-fixture"
 models  = ["ps_2_0", "vs_2_0", "ps_3_0", "vs_3_0"]
 opcodes = ["MAD"]
 status  = "passing"
@@ -867,6 +898,9 @@ status  = "passing"
 [[test]]
 file    = "flow_control/if_else.shader_test"
 source  = "vkd3d"
+source_kind = "third-party-fixture"
+license = "LGPL-2.1-or-later"
+license_scope = "third-party-fixture"
 models  = ["ps_2_0", "ps_3_0"]
 opcodes = ["IF", "ELSE", "ENDIF"]
 status  = "failing"          # implementation pending
@@ -874,6 +908,9 @@ status  = "failing"          # implementation pending
 [[test]]
 file    = "visual_c/fog_test.shader_test"
 source  = "wine/visual.c:fog_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
 models  = ["ps_1_1"]
 opcodes = ["TEX", "MUL", "ADD"]
 status  = "passing"

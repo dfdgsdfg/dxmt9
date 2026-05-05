@@ -551,7 +551,7 @@ flowchart TD
 The license policy is conservative by design:
 
 - MIT-compatible project code may incorporate DXMT MIT material with notices.
-- Wine-derived behavior is acceptable as an oracle; Wine implementation structure
+- Wine-oracle behavior is acceptable as an oracle; Wine implementation structure
   is not an architecture requirement.
 - DXVK/D9VK are useful references for structure and tradeoffs, but dxmt9 does
   not copy their code.

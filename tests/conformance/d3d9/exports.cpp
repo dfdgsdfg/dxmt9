@@ -1,7 +1,7 @@
 /*
  * Focused D3D9 PE export conformance checks.
  *
- * Wine provenance: distilled from Wine dlls/d3d9/d3d9.spec and
+ * Wine behavioral oracle: dlls/d3d9/d3d9.spec and
  * dlls/d3d9/d3d9_main.c at 6e073d28dee3af7f4c965daec94644e0f9f92727.
  */
 

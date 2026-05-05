@@ -50,6 +50,8 @@ class ExperimentApp:
     name: str
     source: str
     license: str
+    source_kind: str
+    license_scope: str
     binary: str
     launcher: str
     reference: str
@@ -68,10 +70,27 @@ class ExperimentApp:
 
     @classmethod
     def from_toml(cls, data: dict[str, Any]) -> "ExperimentApp":
+        valid_source_kind = {
+            "project-authored",
+            "third-party-fixture",
+            "structure-reference",
+            "external-application",
+        }
+        valid_license_scope = {"project-mit", "third-party-fixture", "external-not-vendored"}
+        source_kind = data["source_kind"]
+        license_scope = data["license_scope"]
+        if source_kind not in valid_source_kind:
+            raise ValueError(f"{data.get('name', '<unknown>')}: invalid source_kind {source_kind!r}")
+        if license_scope not in valid_license_scope:
+            raise ValueError(f"{data.get('name', '<unknown>')}: invalid license_scope {license_scope!r}")
+        if license_scope == "project-mit" and data["license"] != "mit":
+            raise ValueError(f"{data.get('name', '<unknown>')}: project-mit entries must use license = 'mit'")
         return cls(
             name=data["name"],
             source=data["source"],
             license=data["license"],
+            source_kind=source_kind,
+            license_scope=license_scope,
             binary=data["binary"],
             launcher=data["launcher"],
             reference=data["reference"],
@@ -693,6 +712,7 @@ def print_catalogue(apps: list[ExperimentApp]) -> None:
             f"{app.name:28} status={app.status:8} "
             f"binary={'yes' if app.binary_path.exists() else 'no ':3} "
             f"reference={'yes' if app.reference_path.exists() else 'no ':3} "
+            f"scope={app.license_scope:20} "
             f"features={','.join(app.features)}"
         )
 

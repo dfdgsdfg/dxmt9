@@ -427,7 +427,7 @@ behaviour validated by Wine D3D9 tests. Invalid query types return
 including `sizeof(DWORD)` for occlusion and `sizeof(BOOL)` for
 timestamp-disjoint; `CreateQuery(type, NULL)` must act as a support probe
 without returning an object; failed query creation must preserve the caller's
-out pointer when the Wine-derived oracle observes preservation; pre-issue
+out pointer when the Wine behavioural oracle observes preservation; pre-issue
 `GetData()` and backend-unavailable query data must write deterministic
 Windows-compatible bytes for the requested public data range and must not
 overrun short caller buffers or leak uninitialised memory.

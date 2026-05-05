@@ -1,5 +1,8 @@
 ; [provenance]
 ; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
 ; oracle: math-derivation
 ; oracle-date: 2026-05-05
 

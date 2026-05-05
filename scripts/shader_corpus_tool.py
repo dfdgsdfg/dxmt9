@@ -65,6 +65,9 @@ KEY_ORDER = (
     "file",
     "status",
     "source",
+    "source_kind",
+    "license",
+    "license_scope",
     "models",
     "opcodes",
     "oracle",
@@ -138,6 +141,9 @@ def build_provenance_block(fields: dict[str, str]) -> str:
             lines.append(f"; {key}: {value}")
 
     append_field("source", fields.get("source"))
+    append_field("source_kind", fields.get("source_kind"))
+    append_field("license", fields.get("license"))
+    append_field("license_scope", fields.get("license_scope"))
     append_field("upstream-url", fields.get("upstream-url"))
     append_field("upstream-commit", fields.get("upstream-commit"))
     append_field("oracle", fields.get("oracle"))
@@ -145,7 +151,18 @@ def build_provenance_block(fields: dict[str, str]) -> str:
     append_field("oracle-date", fields.get("oracle-date"))
 
     for key in sorted(fields):
-        if key in {"[provenance]", "source", "upstream-url", "upstream-commit", "oracle", "oracle-env", "oracle-date"}:
+        if key in {
+            "[provenance]",
+            "source",
+            "source_kind",
+            "license",
+            "license_scope",
+            "upstream-url",
+            "upstream-commit",
+            "oracle",
+            "oracle-env",
+            "oracle-date",
+        }:
             continue
         append_field(key, fields[key])
 
@@ -191,6 +208,15 @@ def load_corpus_manifest(manifest_path: Path) -> list[dict[str, Any]]:
 def update_manifest_entry(entry: dict[str, Any], upstream_commit: str, oracle_date: str) -> bool:
     changed = False
     if entry.get("source") == "vkd3d":
+        if entry.get("source_kind") != "third-party-fixture":
+            entry["source_kind"] = "third-party-fixture"
+            changed = True
+        if entry.get("license") != "LGPL-2.1-or-later":
+            entry["license"] = "LGPL-2.1-or-later"
+            changed = True
+        if entry.get("license_scope") != "third-party-fixture":
+            entry["license_scope"] = "third-party-fixture"
+            changed = True
         if entry.get("upstream-commit") != upstream_commit:
             entry["upstream-commit"] = upstream_commit
             changed = True
@@ -238,6 +264,9 @@ def sync_corpus(args: argparse.Namespace) -> int:
 
         merged_fields: dict[str, str] = {}
         merged_fields["source"] = "vkd3d"
+        merged_fields["source_kind"] = local_fields.get("source_kind", "third-party-fixture")
+        merged_fields["license"] = local_fields.get("license", "LGPL-2.1-or-later")
+        merged_fields["license_scope"] = local_fields.get("license_scope", "third-party-fixture")
         merged_fields["upstream-url"] = local_fields.get("upstream-url", upstream_url)
         merged_fields["upstream-commit"] = upstream_commit
         merged_fields["oracle"] = local_fields.get("oracle", DEFAULT_ORACLE)
@@ -245,7 +274,18 @@ def sync_corpus(args: argparse.Namespace) -> int:
         merged_fields["oracle-date"] = oracle_date
 
         for key, value in local_fields.items():
-            if key in {"[provenance]", "source", "upstream-url", "upstream-commit", "oracle", "oracle-env", "oracle-date"}:
+            if key in {
+                "[provenance]",
+                "source",
+                "source_kind",
+                "license",
+                "license_scope",
+                "upstream-url",
+                "upstream-commit",
+                "oracle",
+                "oracle-env",
+                "oracle-date",
+            }:
                 continue
             merged_fields[key] = value
 

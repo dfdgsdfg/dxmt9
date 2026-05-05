@@ -65,6 +65,13 @@ major feature group:
 least one catalogue entry must be identified that exercises it in a real
 rendering context.
 
+**R-WILD-3.3** Catalogue entries must distinguish project-owned fixtures from
+third-party fixtures and external local applications. An experiment artifact is
+not covered by the dxmt9 MIT grant unless its entry explicitly uses
+`license_scope = "project-mit"`. Third-party sources, SDK samples, permissive
+sample code, commercial applications, and reference screenshots must carry
+`license`, `source_kind`, and `license_scope` metadata.
+
 ---
 
 ## 4. Reference Screenshots
@@ -92,6 +99,8 @@ are forbidden.
 name        = "dx-sdk-basicherl"
 source      = "https://github.com/walbourn/directx-sdk-samples"
 license     = "ms-directx-sdk"
+source_kind = "third-party-fixture"
+license_scope = "third-party-fixture"
 binary      = "experiments/apps/BasicHLSL/BasicHLSL.exe"
 launcher    = "experiments/launchers/basicherl.sh"
 reference   = "experiments/references/basicherl.png"
@@ -102,6 +111,8 @@ status      = "untested"   # passing | failing | untested
 name        = "dx-sdk-tutorial07"
 source      = "https://github.com/walbourn/directx-sdk-samples"
 license     = "ms-directx-sdk"
+source_kind = "third-party-fixture"
+license_scope = "third-party-fixture"
 binary      = "experiments/apps/Tutorial07/Tutorial07.exe"
 launcher    = "experiments/launchers/tutorial07.sh"
 reference   = "experiments/references/tutorial07.png"
@@ -112,6 +123,8 @@ status      = "untested"
 name        = "dx-sdk-hdrformats"
 source      = "https://github.com/walbourn/directx-sdk-samples"
 license     = "ms-directx-sdk"
+source_kind = "third-party-fixture"
+license_scope = "third-party-fixture"
 binary      = "experiments/apps/HDRFormats/HDRFormats.exe"
 launcher    = "experiments/launchers/hdrformats.sh"
 reference   = "experiments/references/hdrformats.png"
@@ -122,6 +135,8 @@ status      = "untested"
 name        = "dxut-simplesample"
 source      = "https://github.com/walbourn/DXUT"
 license     = "mit"
+source_kind = "third-party-fixture"
+license_scope = "third-party-fixture"
 binary      = "experiments/apps/DXUTSimpleSample/SimpleSample.exe"
 launcher    = "experiments/launchers/dxut_simplesample.sh"
 reference   = "experiments/references/dxut_simplesample.png"
@@ -132,6 +147,8 @@ status      = "untested"
 name        = "irrlicht-managed-lights"
 source      = "https://github.com/zaki/irrlicht"
 license     = "zlib"
+source_kind = "third-party-fixture"
+license_scope = "third-party-fixture"
 binary      = "experiments/apps/irrlicht/20.ManagedLights"
 launcher    = "experiments/launchers/irrlicht_managed_lights.sh"
 reference   = "experiments/references/irrlicht_managed_lights.png"
@@ -141,3 +158,9 @@ status      = "untested"
 
 **R-WILD-5.2** The `status` field reflects the last known run result. A
 `failing` entry must have an open issue documenting the failure mode.
+
+**R-WILD-5.3** The manifest must include `source_kind`, `license`, and
+`license_scope` for every entry. Accepted `source_kind` values are
+`project-authored`, `third-party-fixture`, `structure-reference`, and
+`external-application`. Accepted `license_scope` values are `project-mit`,
+`third-party-fixture`, and `external-not-vendored`.

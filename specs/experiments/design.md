@@ -135,6 +135,20 @@ experiments/
     └── .gitkeep
 ```
 
+Each `CATALOGUE.toml` entry must carry license provenance:
+
+```toml
+source_kind = "third-party-fixture"       # project-authored | third-party-fixture | structure-reference | external-application
+license = "zlib"
+license_scope = "third-party-fixture"     # project-mit | third-party-fixture | external-not-vendored
+```
+
+`project-mit` entries are dxmt9-owned experiment fixtures. `third-party-fixture`
+entries keep their own license and notices and are not relicensed by dxmt9.
+`external-not-vendored` entries point at local commercial or otherwise external
+applications and may record screenshots or launch metadata only when their
+catalogue entry marks the external scope explicitly.
+
 ---
 
 ## 7. Current Verified Entries

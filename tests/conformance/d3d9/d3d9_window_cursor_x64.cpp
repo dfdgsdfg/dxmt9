@@ -1,7 +1,7 @@
 /*
  * Focused D3D9 window/cursor conformance scaffold.
  *
- * Wine provenance: distilled from Wine dlls/d3d9/tests/device.c at
+ * Wine behavioral oracle: dlls/d3d9/tests/device.c at
  * 6e073d28dee3af7f4c965daec94644e0f9f92727:
  * - test_cursor(), test_cursor_pos(), test_cursor_clipping()
  * - test_wndproc(), test_wndproc_windowed(), test_window_style()

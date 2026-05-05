@@ -1,7 +1,7 @@
 /*
  * Focused D3D9 query conformance scaffold.
  *
- * Wine provenance: distilled from Wine dlls/d3d9/tests/device.c at 6e073d2:
+ * Wine behavioral oracle: dlls/d3d9/tests/device.c at 6e073d2:
  * - test_query_support()
  * - test_occlusion_query()
  * - test_timestamp_query()

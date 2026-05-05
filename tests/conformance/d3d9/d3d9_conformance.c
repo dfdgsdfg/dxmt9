@@ -1,8 +1,10 @@
 /*
- * Focused D3D9 PE conformance harness derived from Wine:
- *   dlls/d3d9/tests/d3d9ex.c
- *   dlls/d3d9/tests/device.c
- *   dlls/d3d9/tests/stateblock.c
+ * Focused D3D9 PE conformance harness.
+ *
+ * Wine behavioral oracle:
+ * - dlls/d3d9/tests/d3d9ex.c
+ * - dlls/d3d9/tests/device.c
+ * - dlls/d3d9/tests/stateblock.c
  * Wine commit 6e073d28dee3af7f4c965daec94644e0f9f92727.
  *
  * This keeps the slice small and self-contained: factory/base-vs-Ex QI,

@@ -116,15 +116,17 @@ Data-oriented requirements:
 
 Wine D3D9 is a behavioral oracle, not an implementation structure requirement.
 
-When specs use Wine-derived behavior:
+When specs use Wine-oracle behavior:
 
 - Cite the Wine source file and test function when practical.
 - Record whether the target is Windows D3D9 API parity, Wine loader/runtime
   compatibility, or deployment behavior.
 - Keep Wine conformance manifests separate from native unit tests.
 - Do not copy Wine implementation structure into the architecture requirements.
-- Preserve license/provenance notes for imported tests, expected values, or
-  corpus material.
+- Preserve license/provenance notes for external fixtures, expected oracle
+  values, or corpus material. Imported third-party files must stay outside the
+  MIT-owned project-code scope unless their license is explicitly compatible and
+  notices are preserved.
 
 ## Tests and Verification
 

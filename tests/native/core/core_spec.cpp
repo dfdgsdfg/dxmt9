@@ -960,7 +960,7 @@ void testShaderThunk() {
 }
 
 void testVisualDerivedFfpCoverage() {
-  // derived from Wine: visual.c:lighting_test
+  // behavioral oracle: Wine visual.c:lighting_test
   DeviceState lightingState;
   lightingState.reset();
   lightingState.renderStates[RS_LIGHTING] = 1;
@@ -982,7 +982,7 @@ void testVisualDerivedFfpCoverage() {
   checkContains(lightingSource, "out.color.rgb *= 1.0", "lighting visual source");
   dxmt9_winemetal_destroy_shader(lightingHandle);
 
-  // derived from Wine: visual.c:fog_test
+  // behavioral oracle: Wine visual.c:fog_test
   DeviceState fogState;
   fogState.reset();
   fogState.renderStates[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Exp2);
@@ -1004,7 +1004,7 @@ void testVisualDerivedFfpCoverage() {
   checkContains(fogSource, "mix(fogColor, color, fog)", "fog visual blend");
   dxmt9_winemetal_destroy_shader(fogHandle);
 
-  // derived from Wine: visual.c:texture_transform_test
+  // behavioral oracle: Wine visual.c:texture_transform_test
   DeviceState transformState;
   transformState.reset();
   transformState.textureStageStates[0][TSS_TEXCOORD_INDEX] = 4;
@@ -1013,7 +1013,7 @@ void testVisualDerivedFfpCoverage() {
   checkEq(transformVertexKey.texCoordGen[0], 4u, "texture transform texcoord");
   checkEq(transformVertexKey.texTransformFlags[0], 7u, "texture transform flags");
 
-  // derived from Wine: visual.c:texop_test
+  // behavioral oracle: Wine visual.c:texop_test
   DeviceState texopState;
   texopState.reset();
   texopState.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::Add);
@@ -1034,7 +1034,7 @@ void testVisualDerivedFfpCoverage() {
   checkContains(texopSource, "case 7u: return saturate(arg1 + arg2);", "texop add source");
   dxmt9_winemetal_destroy_shader(texopHandle);
 
-  // derived from Wine: visual.c:fixed_function_varying_test
+  // behavioral oracle: Wine visual.c:fixed_function_varying_test
   DeviceState varyingState;
   varyingState.reset();
   varyingState.renderStates[RS_LIGHTING] = 1;
@@ -1052,7 +1052,7 @@ void testVisualDerivedFfpCoverage() {
 }
 
 void testVisualPortCoverage() {
-  // derived from Wine: visual.c:test_sanity
+  // behavioral oracle: Wine visual.c:test_sanity
   auto backend = std::make_shared<RecordingBackend>();
   BackendLimits limits{};
   limits.maxTextureSize = 4096;
@@ -1087,7 +1087,7 @@ void testVisualPortCoverage() {
              std::span<const u8>(sanityPixel.data(), sanityPixel.size()), "visual sanity pixel");
   probeSurface->unlockRect();
 
-  // derived from Wine: visual.c:alpha_test
+  // behavioral oracle: Wine visual.c:alpha_test
   DeviceState alphaState;
   alphaState.reset();
   alphaState.renderStates[RS_ALPHA_TEST_ENABLE] = 1;
@@ -1122,7 +1122,7 @@ void testVisualPortCoverage() {
   checkContains(alphaSource, "discard_fragment()", "alpha test visual source");
   dxmt9_winemetal_destroy_shader(alphaHandle);
 
-  // derived from Wine: visual.c:texbem_test
+  // behavioral oracle: Wine visual.c:texbem_test
   DeviceState texbemState;
   texbemState.reset();
   texbemState.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::BumpEnvMap);
@@ -1134,7 +1134,7 @@ void testVisualPortCoverage() {
   checkEq(texbemKey.stages[0].texCoordIndex, 1u, "texbem texcoord");
   check(texbemKey.hash != 0, "texbem hash");
 
-  // derived from Wine: visual.c:ps_1_4_test
+  // behavioral oracle: Wine visual.c:ps_1_4_test
   DeviceState ps14State;
   ps14State.reset();
   ps14State.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::AddSigned);
@@ -1144,7 +1144,7 @@ void testVisualPortCoverage() {
   check(ps14Key.hash != 0, "ps_1_4 hash");
   check(ps14Key != texbemKey, "ps_1_4 key differs from texbem");
 
-  // derived from Wine: visual.c:vshader_version_varying_test
+  // behavioral oracle: Wine visual.c:vshader_version_varying_test
   DeviceState baselineVertexState;
   baselineVertexState.reset();
   const auto baselineVertexKey = makeFfpVertexKey(baselineVertexState);

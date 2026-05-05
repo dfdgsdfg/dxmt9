@@ -1,7 +1,7 @@
 /*
  * Focused D3D9 resource wrapper conformance scaffold.
  *
- * Wine provenance: distilled from Wine dlls/d3d9/tests/device.c at 6e073d2:
+ * Wine behavioral oracle: dlls/d3d9/tests/device.c at 6e073d2:
  * - test_surface_get_container(), test_volume_get_container()
  * - test_surface_blocks(), test_volume_locking()
  * - test_lod(), test_getdc(), test_mipmap_gen(), test_format_unknown()

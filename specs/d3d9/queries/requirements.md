@@ -37,7 +37,7 @@ deterministic public data:
 - `D3DQUERYTYPE_TIMESTAMPFREQ`
 
 Driver-statistics query types that Metal cannot expose may return deterministic
-zero-compatible data or `D3DERR_NOTAVAILABLE`, matching the Wine-derived oracle
+zero-compatible data or `D3DERR_NOTAVAILABLE`, matching the Wine behavioural oracle
 for the type.
 
 ---
@@ -89,7 +89,7 @@ behavior:
 
 - `S_OK` means the result bytes, if any, are valid for the requested public range.
 - `S_FALSE` means the query is not yet complete.
-- `D3DERR_INVALIDCALL` is used for invalid parameters where the Wine-derived
+- `D3DERR_INVALIDCALL` is used for invalid parameters where the Wine-oracle
   oracle requires it.
 - `D3DERR_NOTAVAILABLE` is used when a query type or backend data path is not
   available.

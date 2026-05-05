@@ -117,7 +117,7 @@ not fail before reaching factory creation.
 
 Auxiliary exports are deliberately implemented on the PE side. They must not
 force `winemetal.so` provider loading, and their safe-call behaviour is covered
-by the Wine-derived conformance harness:
+by the Wine-oracle conformance harness:
 
 | Export / interface | PE-side behaviour |
 |---|---|
@@ -512,7 +512,7 @@ silently ignoring the handle.
 | Ex `CreateTexture()` with `D3DPOOL_SYSTEMMEM` and zero or multiple mip levels | Return `D3DERR_INVALIDCALL`. |
 | Ex `CreateOffscreenPlainSurface()` / `CreateOffscreenPlainSurfaceEx()` with `D3DPOOL_SYSTEMMEM` and caller memory | Create a user-memory surface; `LockRect()` returns the caller pointer and pitch. |
 | Ex vertex/index buffers with `D3DPOOL_SYSTEMMEM` and caller memory | Return Windows D3D9-compatible resource-class failure, currently `D3DERR_NOTAVAILABLE`. |
-| Ex cube textures, volume textures, `D3DPOOL_SCRATCH`, or unsupported pools with caller memory | Return `D3DERR_INVALIDCALL` unless the Wine-derived Windows D3D9 oracle documents a stricter resource-specific code. |
+| Ex cube textures, volume textures, `D3DPOOL_SCRATCH`, or unsupported pools with caller memory | Return `D3DERR_INVALIDCALL` unless the Wine behavioural oracle documents a stricter resource-specific code. |
 | Ex default-pool cross-process sharing | Return `E_NOTIMPL` until real shared-handle interop exists. |
 
 ### 4.2 Reset Rebinding
@@ -547,7 +547,7 @@ The PE resource layer owns these rules:
   are part of the observable texture wrapper contract even when the backend
   implements uploads lazily.
 - `D3DFMT_UNKNOWN` resource creation failures must return exact public
-  `HRESULT`s and must leave out pointers in the Wine-derived oracle state.
+  `HRESULT`s and must leave out pointers in the Wine behavioural oracle state.
 
 ---
 

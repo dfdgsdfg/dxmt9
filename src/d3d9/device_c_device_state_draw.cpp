@@ -26,6 +26,9 @@ T* wireValuePtr(uint64_t value) {
             dxmt9::util::marshal::wow64::decodeHandle<T*>(static_cast<uint32_t>(value))) {
       return decoded;
     }
+    if (requiresWow64PointerShadow()) {
+      return nullptr;
+    }
   }
   return reinterpret_cast<T*>(static_cast<uintptr_t>(value));
 }

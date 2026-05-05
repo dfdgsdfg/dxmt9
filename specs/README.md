@@ -94,7 +94,7 @@ specs/
 │       ├── EncoderLifecycle.tla     MTLCommandEncoder state machine
 │       └── QuerySeqId.tla           D3D9 query seq-ID fence
 ├── tests/                  Controlled correctness tests (oracle-based, pixel-exact)
-│   ├── requirements.md     shader_runner corpus, Wine-derived D3D9 oracles, provenance, manifest
+│   ├── requirements.md     shader_runner corpus, Wine-oracle D3D9 oracles, provenance, manifest
 │   └── design.md           shader_runner_dxmt9 backend, .shader_test format, MANIFEST.toml
 ├── experiments/            Wild integration tests (real D3D9 applications, fuzzy pass criteria)
 │   ├── requirements.md     Catalogue, pass criteria, screenshot comparison

@@ -1,7 +1,7 @@
 /*
  * Focused D3D9 device utility and creation-flag conformance scaffold.
  *
- * Wine provenance: distilled from Wine dlls/d3d9/tests/device.c and
+ * Wine behavioral oracle: dlls/d3d9/tests/device.c and
  * dlls/d3d9/device.c at 6e073d28dee3af7f4c965daec94644e0f9f92727.
  */
 

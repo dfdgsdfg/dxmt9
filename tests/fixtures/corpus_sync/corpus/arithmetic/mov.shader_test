@@ -1,5 +1,8 @@
 ; [provenance]
 ; source: vkd3d
+; source_kind: third-party-fixture
+; license: LGPL-2.1-or-later
+; license_scope: third-party-fixture
 ; upstream-url: https://gitlab.winehq.org/wine/vkd3d
 ; upstream-commit: 1111111
 ; oracle: shader_runner_d3d9

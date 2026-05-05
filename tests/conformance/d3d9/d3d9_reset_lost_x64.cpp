@@ -1,7 +1,7 @@
 /*
  * Focused D3D9 reset/lost-device conformance scaffold.
  *
- * Wine provenance: distilled from Wine dlls/d3d9/tests/device.c and
+ * Wine behavioral oracle: dlls/d3d9/tests/device.c and
  * dlls/d3d9/tests/d3d9ex.c at 6e073d28dee3af7f4c965daec94644e0f9f92727:
  * - test_reset(), test_lost_device(), test_reset_resources()
  * - test_reset_ex(), d3d9ex test_reset_resources()

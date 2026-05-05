@@ -1,7 +1,7 @@
 /*
  * Focused D3D9 auxiliary export conformance checks.
  *
- * Wine provenance: distilled from Wine dlls/d3d9/tests/device.c
+ * Wine behavioral oracle: dlls/d3d9/tests/device.c
  * test_shader_validator(), test_d3d9on12(), and dlls/d3d9/d3d9_main.c at
  * 6e073d28dee3af7f4c965daec94644e0f9f92727.
  */

@@ -1,7 +1,7 @@
 /*
  * D3D9 device/resource lifetime conformance checks.
  *
- * Wine provenance: distilled from Wine dlls/d3d9/tests/device.c at 6e073d2:
+ * Wine behavioral oracle: dlls/d3d9/tests/device.c at 6e073d2:
  * - test_refcount(): GetDirect3D and resource GetDevice AddRef expectations.
  * - test_scene(): BeginScene/EndScene invalid transition cases.
  * - test_private_data(): resource private-data, including D3DSPD_IUNKNOWN ownership.

@@ -65,6 +65,8 @@ def main() -> int:
         updated = read_text(target_file)
         if "upstream-commit: 2222222" not in updated:
             raise SystemExit("sync did not refresh the provenance commit")
+        if "source_kind: third-party-fixture" not in updated or "license_scope: third-party-fixture" not in updated:
+            raise SystemExit("sync did not preserve license provenance")
         if "rgba(0.0, 1.0, 0.0, 1.0)" not in updated:
             raise SystemExit("sync did not replace the shader body")
 
@@ -78,6 +80,10 @@ def main() -> int:
             raise SystemExit("manifest did not refresh upstream-commit")
         if vkd3d_entry.get("oracle-date") != "2026-03-29":
             raise SystemExit("manifest did not refresh oracle-date")
+        if vkd3d_entry.get("source_kind") != "third-party-fixture":
+            raise SystemExit("manifest did not preserve source_kind")
+        if vkd3d_entry.get("license_scope") != "third-party-fixture":
+            raise SystemExit("manifest did not preserve license_scope")
 
         drift = subprocess.run(
             [

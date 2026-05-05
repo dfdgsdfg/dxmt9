@@ -11,20 +11,28 @@ inspection cannot prove: texture orientation after sampling, sampler
 filtering/addressing, depth writes/tests, MRT routing, alpha/fog/sRGB and other
 render-state interactions, synchronization, and WSI presentation.
 
-Three complementary upstream-derived runtime/oracle sources are used:
+Three complementary external reference/oracle sources are used. They provide
+observable behaviour and corpus shape; they are not implementation sources for
+MIT-owned dxmt9 code unless a separate license review explicitly approves an
+import and the required notices are preserved.
 
 **vkd3d `shader_runner`** (https://gitlab.winehq.org/wine/vkd3d, LGPL-2.1):
-Portable `.shader_test` files with inline `probe` assertions. Covers SM2/SM3
-programmable shaders. dxmt9 adds one backend (`shader_runner_dxmt9`); the same files
-run against `shader_runner_d3d9` on Windows to produce oracle values.
+Portable `.shader_test` corpus shape with inline `probe` assertions. Covers
+SM2/SM3 programmable shaders. dxmt9 owns a native runner
+(`shader_runner_dxmt9`) that accepts a documented compatible subset plus
+dxmt9-local extensions. It does not need to implement vkd3d's C backend ABI or
+reuse vkd3d runner code. Reference values may be produced by running an
+equivalent portable test through `shader_runner_d3d9` on Windows.
 
 **Complementary — Wine `dlls/d3d9/tests/visual.c`**
 (https://github.com/wine-mirror/wine, LGPL-2.1):
 29,000-line rendering test suite covering ps_1_1 through ps_3_0, fixed-function
 lighting, fog, alpha test, texture ops, and stateblock behaviour. Hardcoded expected
 D3DCOLOR values were verified against real D3D9 hardware. Used where
-`shader_runner_d3d9` does not reach: ps_1_x shaders and fixed-function
-corner cases. Tests are ported into dxmt9's own test format rather than run directly.
+`shader_runner_d3d9` does not reach: ps_1_x shaders and fixed-function corner
+cases. Tests are re-expressed in dxmt9's own test format from observable
+behaviour and cited oracle values; Wine source code, control flow, helper
+structure, and bulk data tables are not copied into MIT-owned tests.
 
 **API compatibility oracle — Wine `dlls/d3d9/tests/{device,d3d9ex,stateblock}.c`**
 (https://github.com/wine-mirror/wine, LGPL-2.1):
@@ -35,9 +43,9 @@ validation, shared-handle policy, PE export compatibility, HRESULT propagation,
 private data handling, format-conversion and multisample validation, queries,
 resource wrapper edge cases, window/cursor integration, auxiliary exports,
 D3D9On12 stub compatibility, and D3D9Ex user-memory resources.
-These tests are ported into small PE executables that run under Wine against
-dxmt9's `d3d9.dll`. They are behavioural oracles, not a requirement to copy
-Wine's `dlls/d3d9` implementation structure.
+These behaviours are re-expressed as small PE executables that run under Wine
+against dxmt9's `d3d9.dll`. They are behavioural oracles, not a requirement to
+copy Wine's `dlls/d3d9` implementation or test harness structure.
 
 ---
 
@@ -104,14 +112,18 @@ and current evidence, remaining gaps, and next acceptance focus belong in
 
 ## 1. Shader Translation Correctness
 
-**R-TEST-1.1** dxmt9 must provide a `shader_runner_dxmt9` backend that implements the
-vkd3d `shader_runner` backend interface. It must accept the same `.shader_test` files
-as the existing `shader_runner_d3d9` and `shader_runner_vulkan` backends.
+**R-TEST-1.1** dxmt9 must provide a native `shader_runner_dxmt9` runtime
+readback harness. It must accept the dxmt9-documented `.shader_test` compatible
+subset and dxmt9-local extensions needed for texture setup, geometry probes,
+and render-state interactions. It must not depend on, embed, or require exact
+vkd3d `shader_runner_ops` ABI compatibility.
 
 **R-TEST-1.2** Oracle values for all `probe` assertions in `.shader_test` files must
-be produced by running the same file through `shader_runner_d3d9` on a Windows host
-with a conformant D3D9 device (hardware or WARP). Oracle values must never be derived
-from the dxmt9 backend itself.
+be produced by running an equivalent portable test through `shader_runner_d3d9`
+on a Windows host with a conformant D3D9 device (hardware or WARP), by a
+clean-room math derivation, or by a documented Wine visual/API behavioural
+oracle where the runner does not cover the feature. Oracle values must never be
+derived from the dxmt9 backend itself.
 
 **R-TEST-1.3** The `.shader_test` corpus must cover the following opcode groups for
 `ps_2_0`, `vs_2_0`, `ps_3_0`, and `vs_3_0`:
@@ -129,7 +141,8 @@ from the dxmt9 backend itself.
 | Source modifiers | negate, abs, swizzle, partial swizzle | One test per modifier |
 | Write masks | `.x`, `.xy`, `.xyz`, `.xw`, out-of-order | One test per case |
 
-**R-TEST-1.4** The `.shader_test` files must follow the vkd3d format:
+**R-TEST-1.4** The `.shader_test` files must follow dxmt9's documented
+compatible subset of the vkd3d text format:
 
 ```
 [require]
@@ -214,10 +227,12 @@ tests for ps_1_x) for each major fixed-function feature:
 - Alpha test: all eight compare functions
 - Texture coordinate generation: CAMERASPACENORMAL, SPHEREMAP, CAMERASPACEPOSITION
 
-**R-TEST-2.2** For ps_1_x coverage (where the vkd3d D3D9 backend skips below ps_2_0),
-oracle values must be taken from Wine `visual.c` hardcoded expected colors. Each
-ported test must cite the originating Wine test function name in a comment (see
-section 8).
+**R-TEST-2.2** For ps_1_x coverage (where the vkd3d D3D9 backend skips below
+ps_2_0), oracle values may be validated against Wine `visual.c` hardcoded
+expected colors. Each clean-room dxmt9 test must cite the originating Wine test
+function name and license/provenance scope in a comment or provenance block
+(see section 8). Exact Wine source snippets, control flow, and copied tables
+are not MIT-owned dxmt9 code.
 
 **R-TEST-2.3** Each fixed-function test must validate that the `FFPKey` correctly
 captures the relevant state: two setups that differ only in the tested feature must
@@ -329,10 +344,14 @@ to sections 11 and 12.
 **R-TEST-7.2** All tests must be deterministic. Non-determinism from async PSO
 compilation must be masked by running a warm-up pass before the measured draw.
 
-**R-TEST-7.3** The vkd3d `.shader_test` files used by dxmt9 must be tracked in
-`tests/shader_runner/corpus/` and kept in sync with the upstream vkd3d corpus. New opcode
-tests added upstream that fall within the SM2/SM3 arithmetic and texture groups must
-be pulled in within one release cycle.
+**R-TEST-7.3** The dxmt9 `.shader_test` corpus must be tracked in
+`tests/shader_runner/corpus/`. Upstream vkd3d files may be used as external
+corpus references or third-party fixtures only when the manifest records their
+license, source kind, license scope, and upstream commit. Clean-room dxmt9
+tests are preferred for MIT-owned coverage. New upstream opcode coverage that
+falls within the SM2/SM3 arithmetic and texture groups must be reviewed within
+one release cycle and either re-expressed locally or tracked as an explicitly
+licensed external fixture.
 
 **R-TEST-7.4** Tests that claim data-oriented or DXMT-merge compatibility must
 include explicit DoD evidence, not just green runtime probes. Required evidence
@@ -346,15 +365,18 @@ bridge is involved.
 ## 8. Wine visual.c Complementary Coverage
 
 Wine `dlls/d3d9/tests/visual.c` is the complementary oracle for areas outside
-`shader_runner`'s scope. It is not run directly; individual tests are ported into
-dxmt9's test suite.
+`shader_runner`'s scope. It is not run directly; individual behaviours are
+re-expressed as dxmt9-owned tests unless an explicitly licensed third-party
+fixture is approved.
 
-**R-TEST-8.1** Each test ported from `visual.c` must:
+**R-TEST-8.1** Each test validated against `visual.c` must:
 - Cite the originating Wine test function in a comment:
-  `// derived from Wine: visual.c:<function_name>`
-- Use the same hardcoded expected D3DCOLOR as the original test, converted to
-  float RGBA for `probe` assertions.
-- Preserve the original `max_diff` tolerance (typically 1–2 per channel).
+  `// behavioral oracle: Wine visual.c:<function_name>`
+- Re-express the scenario in dxmt9-owned test data and control flow.
+- Use oracle colours and tolerances only as expected observable results, with
+  provenance recorded. If exact Wine literals, shader assembly, or tables are
+  copied, the file must be marked as a third-party fixture with the LGPL scope
+  preserved, not as MIT-owned project code.
 
 **R-TEST-8.2** The following `visual.c` test functions must be ported:
 
@@ -388,11 +410,17 @@ leading comments so that the origin and trustworthiness of each oracle value can
 be audited without reading the test body.
 
 **R-TEST-9.1** Each `.shader_test` file must begin with a provenance block in the
-following format:
+following format. `source_kind` is one of `project-authored`,
+`behavioral-oracle`, `structure-reference`, `third-party-fixture`, or
+`implementation-source`. `license_scope` is one of `project-mit`,
+`third-party-fixture`, or `external-not-vendored`.
 
 ```
 ; [provenance]
 ; source: vkd3d
+; source_kind: third-party-fixture
+; license: LGPL-2.1-or-later
+; license_scope: third-party-fixture
 ; upstream-url: https://gitlab.winehq.org/wine/vkd3d
 ; upstream-commit: <git SHA of the vkd3d commit this file was taken from or last synced to>
 ; oracle: shader_runner_d3d9
@@ -400,11 +428,14 @@ following format:
 ; oracle-date: YYYY-MM-DD
 ```
 
-For tests ported from Wine `visual.c`:
+For tests validated against Wine `visual.c`:
 
 ```
 ; [provenance]
 ; source: wine/visual.c:<function_name>
+; source_kind: behavioral-oracle
+; license: LGPL-2.1-or-later
+; license_scope: external-not-vendored
 ; upstream-url: https://github.com/wine-mirror/wine
 ; upstream-commit: <git SHA>
 ; oracle: real D3D9 hardware (recorded in Wine test history)
@@ -416,6 +447,9 @@ For tests with math-derived oracle values:
 ```
 ; [provenance]
 ; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
 ; oracle: math-derivation
 ; oracle-date: YYYY-MM-DD
 ```
@@ -447,6 +481,9 @@ file in the corpus. Each entry must include:
 [[test]]
 file    = "arithmetic/mad.shader_test"
 source  = "vkd3d"                        # vkd3d | wine/visual.c | dxmt9
+source_kind = "third-party-fixture"       # project-authored | behavioral-oracle | structure-reference | third-party-fixture | implementation-source
+license = "LGPL-2.1-or-later"
+license_scope = "third-party-fixture"     # project-mit | third-party-fixture | external-not-vendored
 models  = ["ps_2_0", "ps_3_0"]           # shader models exercised
 opcodes = ["MAD"]                        # D3DBC opcodes under test
 status  = "passing"                      # passing | failing | skipped
@@ -543,9 +580,9 @@ exercises the present path with a null window handle.
 
 ---
 
-## 12. Wine-Derived D3D9 API Conformance Tests
+## 12. Wine-Oracle D3D9 API Conformance Tests
 
-The Wine-derived D3D9 conformance subset exercises Windows D3D9-compatible,
+The Wine-oracle D3D9 conformance subset exercises Windows D3D9-compatible,
 application-visible COM and state-machine behaviour through the real PE ABI. It
 is separate from native backend tests and requires Wine as the host runtime.
 
@@ -554,9 +591,13 @@ under `tests/conformance/d3d9/`. They must load `d3d9.dll` through Wine's normal
 DLL search path so the same binaries can be used against the app-local and Wine
 runtime builtin deployment lanes.
 
-**R-TEST-12.2** Each ported test must cite the Wine source file, function name,
-and upstream commit in a comment near the test body. The provenance must be
-machine-readable in the same style as shader corpus provenance.
+**R-TEST-12.2** Each clean-room conformance case must cite the Wine source file,
+function name, upstream commit, source kind, license, and license scope in a
+comment near the test body or manifest entry. The provenance must be
+machine-readable in the same style as shader corpus provenance. Copying Wine
+test harness code, helper structure, control flow, or bulk tables into
+MIT-owned dxmt9 tests is forbidden unless the file is explicitly segregated as a
+third-party LGPL fixture.
 
 **R-TEST-12.3** The initial required subset from Wine `device.c` is:
 
@@ -626,16 +667,16 @@ D3D9 edge cases that are easy to regress: identical
 unsupported conversions return `D3DERR_NOTAVAILABLE`, invalid multisample enum
 values return `D3DERR_INVALIDCALL`, `D3DMULTISAMPLE_NONE` reports one quality
 level, and unsupported but well-formed multisample requests preserve/write
-`pQualityLevels` according to the Wine-derived oracle.
+`pQualityLevels` according to the Wine behavioural oracle.
 
-**R-TEST-12.11** D3D9Ex user-memory tests must be derived from Wine
+**R-TEST-12.11** D3D9Ex user-memory tests must be validated against Wine
 `dlls/d3d9/tests/d3d9ex.c:test_user_memory`. They must assert successful
 `D3DPOOL_SYSTEMMEM` `CreateTexture()` with exactly one mip level,
 `CreateOffscreenPlainSurface()` caller-memory creation, `LockRect()` pointer and
 pitch identity, and Windows D3D9-compatible failures for invalid levels,
 unsupported pools, cube/volume textures, and vertex/index buffers.
 
-**R-TEST-12.12** Query conformance tests must be derived from Wine
+**R-TEST-12.12** Query conformance tests must be validated against Wine
 `dlls/d3d9/tests/device.c:test_query_support`, `test_occlusion_query`, and
 `test_timestamp_query`. They must cover support probing with
 `CreateQuery(type, NULL)`, invalid query enums, unchanged out pointers on
@@ -643,7 +684,7 @@ creation failure, public `GetDataSize()` values, pre-issue `GetData()` writes,
 short-buffer writes without overrun, `D3DGETDATA_FLUSH`, and the
 timestamp-disjoint `BOOL` result size.
 
-**R-TEST-12.13** Resource wrapper conformance tests must be derived from Wine
+**R-TEST-12.13** Resource wrapper conformance tests must be validated against Wine
 `device.c` resource tests including `test_surface_get_container`,
 `test_volume_get_container`, `test_lod`, `test_getdc`, `test_surface_blocks`,
 `test_volume_locking`, `test_mipmap_gen`, `test_filter`, and
@@ -651,7 +692,7 @@ timestamp-disjoint `BOOL` result size.
 pitch, pointer, and data-preservation behaviour over Wine's internal storage
 layout.
 
-**R-TEST-12.14** Window and cursor conformance tests must be derived from Wine
+**R-TEST-12.14** Window and cursor conformance tests must be validated against Wine
 `device.c` / `d3d9ex.c` tests covering `test_cursor`, `test_cursor_pos`,
 `test_cursor_clipping`, `test_wndproc`, `test_wndproc_windowed`,
 `test_window_style`, `test_device_window_reset`, `test_destroyed_window`, and
@@ -666,7 +707,7 @@ must be exercised for loader-safe `QueryInterface`, `AddRef`, `Release`,
 must be callable no-op exports with Wine/Windows-compatible return values for
 safe inputs.
 
-**R-TEST-12.16** D3D9On12 compatibility tests must be derived from Wine
+**R-TEST-12.16** D3D9On12 compatibility tests must be validated against Wine
 `device.c:test_d3d9on12`. Because dxmt9 does not implement D3D12 interop, the
 required behaviour is loader-safe and query-safe failure: the export must be
 present, unsupported interface queries must return `E_NOINTERFACE` with a
@@ -681,7 +722,7 @@ back-buffer count, unknown back-buffer format in windowed mode, fullscreen mode
 matching, and preservation of invalid input values on failure where the Wine
 oracle observes preservation.
 
-**R-TEST-12.18** Device utility and creation-flag tests must include Wine-derived
+**R-TEST-12.18** Device utility and creation-flag tests must include Wine-oracle
 coverage for `GetDirect3D(NULL)`, `GetDeviceCaps(NULL)`, `GetCreationParameters`,
 `GetAvailableTextureMem`, `EvictManagedResources`, `ValidateDevice`,
 `GetRasterStatus`, `SetDialogBoxMode`, `D3DCREATE_FPU_PRESERVE`,
@@ -704,6 +745,6 @@ required deployment lanes (`app-local`, `builtin`, or both), architecture
 targets (`x86`, `x64`), status, owning implementation area, mapped R-TEST-12
 requirements, and explicit acceptance / DoD criteria. Entries for implemented
 local scaffolds must also name the source file that contains the test function.
-The manifest is the authoritative gap list for Wine-derived D3D9 API
+The manifest is the authoritative gap list for Wine-oracle D3D9 API
 conformance and must be validated by the native manifest check before changes
 are accepted.
