@@ -25,13 +25,26 @@ xcode-select --install
 brew bundle
 ```
 
-This installs:
+This installs system and bootstrap tools:
 
 | Package | Purpose |
 |---|---|
 | `meson` + `ninja` | Build system |
-| `llvm` | C++20 / ObjC++ compiler |
-| `tla+-toolbox` (cask) | TLC model checker for formal verification |
+| `ripgrep` | Fast repository/script helper searches |
+| `mise` | Project tool runtime manager for `uv` |
+| `llvm` | C++20 / ObjC++ compiler and `clang-tidy` |
+| `clang-format` | Source formatter |
+| `temurin`, `tla+-toolbox` (casks) | Java runtime and TLC model checker for formal verification |
+| `msitools`, `winetricks` | Optional Wine experiment helpers |
+
+**Python via uv** (see `.mise.toml`, `.python-version`, and `pyproject.toml`):
+
+```sh
+mise trust
+mise install
+uv python install
+uv sync
+```
 
 **llvm-mingw** (required for the Win32 PE bridge DLLs):
 

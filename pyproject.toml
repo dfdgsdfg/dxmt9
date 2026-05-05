@@ -1,0 +1,11 @@
+[project]
+name = "dxmt9"
+version = "0.0.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "numpy",
+  "Pillow",
+]
+
+[tool.uv]
+package = false
