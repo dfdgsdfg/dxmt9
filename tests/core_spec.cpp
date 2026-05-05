@@ -17,6 +17,7 @@
 #include "dxmt9/winemetal.h"
 #include "device_c_common.hpp"
 #include "../src/dxmt9/dxmt9_format_convert.hpp"
+#include "../src/dxmt9/dxmt9_draw_shader.hpp"
 #include "../src/dxmt9/dxmt9_draw_state.hpp"
 #include "../src/dxmt9/dxmt9_ring_arena.hpp"
 #include "../src/dxmt9/dxmt9_shader_translator.hpp"
@@ -127,6 +128,33 @@ struct TextureSurfaceRecord {
   u32 subresource = 0;
   SurfaceDesc desc{};
 };
+
+struct RecordedDraw {
+  CanonicalDrawState state{};
+  FlatDrawStateRecord hot{};
+  DrawParam param{};
+  std::vector<u8> payloadArena;
+};
+
+struct RecordedDrawRun {
+  CanonicalDrawState state{};
+  FlatDrawStateRecord hot{};
+  std::vector<DrawParam> draws;
+  std::vector<u8> payloadArena;
+};
+
+std::span<const u8> payloadSlice(const RecordedDraw& draw, DrawPayloadRange range,
+                                 std::string_view message) {
+  if (range.empty()) {
+    return {};
+  }
+  const auto offset = static_cast<size_t>(range.offset);
+  const auto size = static_cast<size_t>(range.size);
+  if (offset > draw.payloadArena.size() || size > draw.payloadArena.size() - offset) {
+    fail(std::string(message));
+  }
+  return std::span<const u8>(draw.payloadArena.data() + offset, size);
+}
 
 constexpr u32 kD3DSIO_MOV = 1u;
 constexpr u32 kD3DSIO_ADD = 2u;
@@ -468,8 +496,23 @@ struct RecordingBackend final : BackendDevice {
     textureUploads.push_back({handle, level, width, height, pitch, std::vector<u8>(bytes.begin(), bytes.end())});
   }
 
-  void submitDraw(const DrawDesc& desc) override {
-    draws.push_back(desc);
+  void submitDrawRun(const DrawRunDesc& desc) override {
+    RecordedDrawRun run{};
+    run.state = desc.state;
+    run.hot = desc.state.hot;
+    run.draws = desc.draws;
+    run.payloadArena = desc.payloadArena;
+
+    for (const auto& param : run.draws) {
+      RecordedDraw draw{};
+      draw.state = run.state;
+      draw.hot = run.hot;
+      draw.param = param;
+      draw.payloadArena = run.payloadArena;
+      draws.push_back(std::move(draw));
+    }
+
+    drawRuns.push_back(std::move(run));
   }
 
   void submitClear(const ClearDesc& desc) override {
@@ -507,7 +550,8 @@ struct RecordingBackend final : BackendDevice {
   std::vector<std::pair<BufferHandle, u32>> mappedBuffers;
   std::vector<BufferHandle> unmappedBuffers;
   std::vector<TextureUploadRecord> textureUploads;
-  std::vector<DrawDesc> draws;
+  std::vector<RecordedDrawRun> drawRuns;
+  std::vector<RecordedDraw> draws;
   std::vector<ClearDesc> clears;
   std::vector<SurfaceCopyDesc> surfaceCopies;
   std::vector<StretchRectDesc> stretchRects;
@@ -612,14 +656,16 @@ void testDepthStencilKeyDisablesDepthCompare() {
   desc.rs.values[RS_Z_WRITE_ENABLE] = 1u;
   desc.rs.values[RS_Z_FUNC] = static_cast<u32>(CompareFunc::LessEqual);
 
-  auto key = dxmt9::state::makeDepthStencilKey(desc);
+  auto hot = makeFlatDrawStateRecord(desc);
+  auto key = dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &hot});
   check(!key.depthEnable, "ZENABLE=0 disables depth");
   check(!key.depthWrite, "ZENABLE=0 disables depth writes");
   checkEq(key.depthFunc, static_cast<u32>(CompareFunc::Always),
           "ZENABLE=0 maps depth compare to always");
 
   desc.rs.values[RS_Z_ENABLE] = 1u;
-  key = dxmt9::state::makeDepthStencilKey(desc);
+  hot = makeFlatDrawStateRecord(desc);
+  key = dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &hot});
   check(key.depthEnable, "ZENABLE=1 enables depth");
   check(key.depthWrite, "ZENABLE=1 keeps depth writes");
   checkEq(key.depthFunc, static_cast<u32>(CompareFunc::LessEqual),
@@ -1128,16 +1174,20 @@ void testRasterStateCoverage() {
   checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1), D3D_OK, "raster draw ccw");
   check(!backend->draws.empty(), "raster draw recorded");
   const auto& firstDraw = backend->draws.back();
-  checkEq(firstDraw.viewport.viewport.width, 16u, "raster draw viewport width");
-  checkEq(firstDraw.viewport.viewport.height, 16u, "raster draw viewport height");
-  checkEq(firstDraw.rs.values.at(RS_CULL_MODE), static_cast<u32>(CullMode::Ccw), "raster cull state ccw");
-  checkEq(firstDraw.rs.values.at(RS_Z_ENABLE), 1u, "raster depth enable state");
-  checkEq(firstDraw.rs.values.at(RS_Z_WRITE_ENABLE), 1u, "raster depth write state");
-  checkEq(firstDraw.rs.values.at(RS_Z_FUNC), static_cast<u32>(CompareFunc::LessEqual), "raster depth func state");
+  checkEq(firstDraw.hot.viewport.viewport.width, 16u, "raster draw viewport width");
+  checkEq(firstDraw.hot.viewport.viewport.height, 16u, "raster draw viewport height");
+  checkEq(flatStateOr(firstDraw.hot.renderStates, RS_CULL_MODE, 0u), static_cast<u32>(CullMode::Ccw),
+          "raster cull state ccw");
+  checkEq(flatStateOr(firstDraw.hot.renderStates, RS_Z_ENABLE, 0u), 1u, "raster depth enable state");
+  checkEq(flatStateOr(firstDraw.hot.renderStates, RS_Z_WRITE_ENABLE, 0u), 1u,
+          "raster depth write state");
+  checkEq(flatStateOr(firstDraw.hot.renderStates, RS_Z_FUNC, 0u), static_cast<u32>(CompareFunc::LessEqual),
+          "raster depth func state");
   checkEq(device->setRenderState(RS_CULL_MODE, static_cast<u32>(CullMode::Cw)), D3D_OK, "raster cull cw");
   checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1), D3D_OK, "raster draw cw");
   const auto& secondDraw = backend->draws.back();
-  checkEq(secondDraw.rs.values.at(RS_CULL_MODE), static_cast<u32>(CullMode::Cw), "raster cull state cw");
+  checkEq(flatStateOr(secondDraw.hot.renderStates, RS_CULL_MODE, 0u), static_cast<u32>(CullMode::Cw),
+          "raster cull state cw");
 }
 
 void testDeviceCoreFlow() {
@@ -1400,45 +1450,61 @@ void testDeviceCoreFlow() {
   checkEq(backend->draws.size(), size_t{1}, "first draw count");
 
   const auto& draw0 = backend->draws[0];
-  checkEq(draw0.primitiveType, PrimitiveType::TriangleList, "draw0 primitive type");
-  checkEq(draw0.indexBuffer, Handle{}, "draw0 non-indexed UP draw ignores bound index buffer");
-  checkEq(draw0.indexType, IndexType::UInt32, "draw0 index type");
-  checkEq(draw0.vertexDecl.fvf, 0x1122u, "draw0 fvf");
-  checkEq(draw0.vertexDecl.elements.size(), size_t{1}, "draw0 vertex decl size");
-  checkEq(draw0.vertexDecl.streams[0].buffer, nullptr, "draw0 stream buffer");
-  checkEq(draw0.vertexDecl.streams[0].offset, 0u, "draw0 stream offset");
-  checkEq(draw0.vertexDecl.streams[0].stride, 16u, "draw0 stream stride");
-  checkEq(draw0.textures[0].handle, texture->handle(), "draw0 texture handle");
-  checkEq(draw0.textures[0].stageStates.at(TSS_COLOR_OP), static_cast<u32>(TextureOp::SelectArg1),
+  checkEq(draw0.param.primitiveType, PrimitiveType::TriangleList, "draw0 primitive type");
+  check(!draw0.param.indexed, "draw0 non-indexed UP draw param");
+  checkEq(draw0.hot.indexBuffer, Handle{}, "draw0 non-indexed UP draw ignores bound index buffer");
+  checkEq(draw0.param.indexType, IndexType::UInt32, "draw0 index type");
+  checkEq(draw0.state.shaderLayout.vertexDecl.fvf, 0x1122u, "draw0 fvf");
+  checkEq(draw0.state.shaderLayout.vertexDecl.elements.size(), size_t{1}, "draw0 vertex decl size");
+  checkEq(draw0.hot.streamBuffers[0], Handle{}, "draw0 stream buffer");
+  checkEq(draw0.hot.streamOffsets[0], 0u, "draw0 stream offset");
+  checkEq(draw0.hot.streamStrides[0], 16u, "draw0 stream stride");
+  checkEq(draw0.hot.textures[0], texture->handle(), "draw0 texture handle");
+  checkEq(flatStateOr(draw0.hot.textureStageStates[0], TSS_COLOR_OP, 0u),
+          static_cast<u32>(TextureOp::SelectArg1),
           "draw0 color op");
-  checkEq(draw0.textures[0].stageStates.at(TSS_ALPHA_OP), static_cast<u32>(TextureOp::Modulate),
+  checkEq(flatStateOr(draw0.hot.textureStageStates[0], TSS_ALPHA_OP, 0u),
+          static_cast<u32>(TextureOp::Modulate),
           "draw0 alpha op");
-  checkEq(draw0.samplers[0].states.at(SAMP_MAX_ANISOTROPY), 4u, "draw0 max anisotropy");
-  checkEq(draw0.samplers[0].states.at(SAMP_MIN_FILTER), 2u, "draw0 min filter");
-  checkEq(draw0.samplers[0].states.at(SAMP_ADDRESS_U), kTextureAddressBorder, "draw0 address u");
-  checkEq(draw0.samplers[0].states.at(SAMP_ADDRESS_V), kTextureAddressBorder, "draw0 address v");
-  checkEq(draw0.samplers[0].states.at(SAMP_BORDER_COLOR), 0xffffffffu, "draw0 border color");
-  checkEq(draw0.rs.values.at(RS_LIGHTING), 1u, "draw0 lighting state");
-  checkEq(draw0.rs.values.at(RS_ALPHA_TEST_ENABLE), 1u, "draw0 alpha test state");
-  checkEq(draw0.clipPlaneMask, 1u, "draw0 clip plane mask");
-  checkNear(draw0.clipPlanes[0][0], 0.5f, 1.0e-6f, "draw0 clip plane x");
-  checkNear(draw0.clipPlanes[0][1], 0.0f, 1.0e-6f, "draw0 clip plane y");
-  checkNear(draw0.clipPlanes[0][2], 0.0f, 1.0e-6f, "draw0 clip plane z");
-  checkNear(draw0.clipPlanes[0][3], -1.0f, 1.0e-6f, "draw0 clip plane w");
-  checkEq(draw0.rts.color[0].handle, primaryChain->backBuffer()->handle(), "draw0 render target");
-  checkEq(draw0.rts.color[0].sampleCount, 4u, "draw0 render target sample count");
-  checkEq(draw0.rts.depthStencil.handle, primaryChain->depthStencilSurface()->handle(),
+  checkEq(flatStateOr(draw0.hot.samplerStates[0], SAMP_MAX_ANISOTROPY, 0u), 4u,
+          "draw0 max anisotropy");
+  checkEq(flatStateOr(draw0.hot.samplerStates[0], SAMP_MIN_FILTER, 0u), 2u, "draw0 min filter");
+  checkEq(flatStateOr(draw0.hot.samplerStates[0], SAMP_ADDRESS_U, 0u), kTextureAddressBorder,
+          "draw0 address u");
+  checkEq(flatStateOr(draw0.hot.samplerStates[0], SAMP_ADDRESS_V, 0u), kTextureAddressBorder,
+          "draw0 address v");
+  checkEq(flatStateOr(draw0.hot.samplerStates[0], SAMP_BORDER_COLOR, 0u), 0xffffffffu,
+          "draw0 border color");
+  checkEq(flatStateOr(draw0.hot.renderStates, RS_LIGHTING, 0u), 1u, "draw0 lighting state");
+  checkEq(flatStateOr(draw0.hot.renderStates, RS_ALPHA_TEST_ENABLE, 0u), 1u,
+          "draw0 alpha test state");
+  checkEq(draw0.state.shaderLayout.clipPlaneMask, 1u, "draw0 clip plane mask");
+  checkNear(draw0.state.shaderLayout.clipPlanes[0][0], 0.5f, 1.0e-6f, "draw0 clip plane x");
+  checkNear(draw0.state.shaderLayout.clipPlanes[0][1], 0.0f, 1.0e-6f, "draw0 clip plane y");
+  checkNear(draw0.state.shaderLayout.clipPlanes[0][2], 0.0f, 1.0e-6f, "draw0 clip plane z");
+  checkNear(draw0.state.shaderLayout.clipPlanes[0][3], -1.0f, 1.0e-6f, "draw0 clip plane w");
+  checkEq(draw0.hot.colorAttachments[0].handle, primaryChain->backBuffer()->handle(),
+          "draw0 render target");
+  checkEq(draw0.hot.colorAttachments[0].sampleCount, 4u, "draw0 render target sample count");
+  checkEq(draw0.hot.depthStencil.handle, primaryChain->depthStencilSurface()->handle(),
           "draw0 depth stencil target");
-  checkEq(draw0.viewport.viewport.width, 640u, "draw0 viewport width");
-  checkEq(draw0.viewport.scissorEnabled, false, "draw0 scissor enabled");
-  checkEq(draw0.viewport.scissor.left, 16, "draw0 scissor left");
-  check(draw0.vertexShader.kind == ShaderRef::Kind::FixedFunctionVertex, "draw0 vertex shader kind");
-  check(draw0.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel, "draw0 pixel shader kind");
-  check(draw0.vertexShader.vertexKey.has_value(), "draw0 vertex shader key");
-  check(draw0.pixelShader.pixelKey.has_value(), "draw0 pixel shader key");
-  check(draw0.vertexShader.vertexKey->lightingEnabled, "draw0 vertex key lighting");
-  check(draw0.pixelShader.pixelKey->alphaTestEnable, "draw0 pixel key alpha test");
-  checkEq(draw0.userVertexData.size(), vertexPayload.size(), "draw0 user vertex payload");
+  checkEq(draw0.hot.viewport.viewport.width, 640u, "draw0 viewport width");
+  checkEq(draw0.hot.viewport.scissorEnabled, false, "draw0 scissor enabled");
+  checkEq(draw0.hot.viewport.scissor.left, 16, "draw0 scissor left");
+  check(draw0.state.shaderLayout.vertexShader.kind == ShaderRef::Kind::FixedFunctionVertex,
+        "draw0 vertex shader kind");
+  check(draw0.state.shaderLayout.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel,
+        "draw0 pixel shader kind");
+  check(draw0.state.shaderLayout.vertexShader.vertexKey.has_value(), "draw0 vertex shader key");
+  check(draw0.state.shaderLayout.pixelShader.pixelKey.has_value(), "draw0 pixel shader key");
+  check(draw0.state.shaderLayout.vertexShader.vertexKey->lightingEnabled, "draw0 vertex key lighting");
+  check(draw0.state.shaderLayout.pixelShader.pixelKey->alphaTestEnable, "draw0 pixel key alpha test");
+  checkEq(draw0.param.userVertexRange.size, static_cast<u32>(vertexPayload.size()),
+          "draw0 user vertex payload size");
+  check(draw0.param.userVertexData.empty(), "draw0 user vertex payload stored in arena");
+  checkBytes(payloadSlice(draw0, draw0.param.userVertexRange, "draw0 user vertex payload range"),
+             std::span<const u8>(vertexPayload.data(), vertexPayload.size()),
+             "draw0 user vertex payload");
 
   std::array<u32, 4> fanIndices{0, 1, 2, 3};
   std::array<u8, sizeof(fanIndices)> fanIndexBytes{};
@@ -1450,13 +1516,22 @@ void testDeviceCoreFlow() {
           D3D_OK, "draw indexed primitive up");
   checkEq(backend->draws.size(), size_t{2}, "second draw count");
   const auto& draw1 = backend->draws[1];
-  checkEq(draw1.primitiveType, PrimitiveType::TriangleList, "fan decomposed to triangle list");
-  checkEq(draw1.primitiveCount, 2u, "fan primitive count");
-  checkEq(draw1.indexType, IndexType::UInt32, "fan draw index type");
-  checkEq(draw1.userIndexData.size(), sizeof(u32) * 6u, "fan user index payload");
-  checkEq(draw1.vertexDecl.streams[0].buffer, nullptr, "fan up stream buffer");
-  checkEq(draw1.vertexDecl.streams[0].offset, 0u, "fan up stream offset");
-  checkEq(draw1.vertexDecl.streams[0].stride, 4u, "fan up stream stride");
+  checkEq(draw1.param.primitiveType, PrimitiveType::TriangleList, "fan decomposed to triangle list");
+  checkEq(draw1.param.primitiveCount, 2u, "fan primitive count");
+  checkEq(draw1.param.indexType, IndexType::UInt32, "fan draw index type");
+  check(draw1.param.indexed, "fan draw indexed param");
+  checkEq(draw1.param.userIndexRange.size, static_cast<u32>(sizeof(u32) * 6u),
+          "fan user index payload size");
+  check(draw1.param.userIndexData.empty(), "fan user index payload stored in arena");
+  const std::array<u32, 6> expectedFanIndices{0, 1, 2, 0, 2, 3};
+  std::array<u8, sizeof(expectedFanIndices)> expectedFanIndexBytes{};
+  std::memcpy(expectedFanIndexBytes.data(), expectedFanIndices.data(), expectedFanIndexBytes.size());
+  checkBytes(payloadSlice(draw1, draw1.param.userIndexRange, "fan user index payload range"),
+             std::span<const u8>(expectedFanIndexBytes.data(), expectedFanIndexBytes.size()),
+             "fan user index payload");
+  checkEq(draw1.hot.streamBuffers[0], Handle{}, "fan up stream buffer");
+  checkEq(draw1.hot.streamOffsets[0], 0u, "fan up stream offset");
+  checkEq(draw1.hot.streamStrides[0], 4u, "fan up stream stride");
 
   std::array<u8, 4> fanVertexPayload{1, 2, 3, 4};
   checkEq(device->drawPrimitiveUP(PrimitiveType::TriangleFan, 2,
@@ -1465,12 +1540,15 @@ void testDeviceCoreFlow() {
   checkEq(backend->draws.size(), size_t{3}, "third draw count");
   const auto& draw2 = backend->draws[2];
   const std::array<u8, 6> expectedFanVertices{1, 2, 3, 1, 3, 4};
-  checkEq(draw2.primitiveType, PrimitiveType::TriangleList, "up fan decomposed to triangle list");
-  checkEq(draw2.primitiveCount, 2u, "up fan primitive count");
-  checkBytes(std::span<const u8>(draw2.userVertexData.data(), draw2.userVertexData.size()),
+  checkEq(draw2.param.primitiveType, PrimitiveType::TriangleList, "up fan decomposed to triangle list");
+  checkEq(draw2.param.primitiveCount, 2u, "up fan primitive count");
+  checkEq(draw2.param.userVertexRange.size, static_cast<u32>(expectedFanVertices.size()),
+          "up fan vertex payload size");
+  check(draw2.param.userVertexData.empty(), "up fan vertex payload stored in arena");
+  checkBytes(payloadSlice(draw2, draw2.param.userVertexRange, "up fan vertex payload range"),
              std::span<const u8>(expectedFanVertices.data(), expectedFanVertices.size()),
              "up fan vertex payload");
-  checkEq(draw2.vertexDecl.streams[0].stride, 1u, "up fan stride");
+  checkEq(draw2.hot.streamStrides[0], 1u, "up fan stride");
 
   auto occlusion = device->createQuery(QueryType::Occlusion);
   auto timestamp = device->createQuery(QueryType::Timestamp);
@@ -2114,7 +2192,8 @@ void testPixelShaderDepthOutputTranslation() {
 
   DrawDesc desc{};
   desc.pixelShader = shader;
-  const auto source = dxmt9::translator::makeTranslatedFragmentSource(shader, desc);
+  const auto source = dxmt9::translator::makeTranslatedFragmentSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
   check(source.find("float depth [[depth(any)]]") != std::string::npos,
         "pixel shader oDepth emits Metal depth output");
   check(source.find("outDepth =") != std::string::npos,
@@ -2141,7 +2220,8 @@ void testPixelShaderSamplerRegisterTranslation() {
 
   DrawDesc desc{};
   desc.pixelShader = shader;
-  const auto source = dxmt9::translator::makeTranslatedFragmentSource(shader, desc);
+  const auto source = dxmt9::translator::makeTranslatedFragmentSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
   checkContains(source, "texture2d<float> tex2 [[texture(2)]]", "pixel shader declares sampler texture slot");
   checkContains(source, "sampler samp2 [[sampler(2)]]", "pixel shader declares sampler state slot");
   checkContains(source, "tex2.sample(samp2", "pixel shader samples declared sampler register");
@@ -2170,7 +2250,8 @@ void testPixelShaderInputSemanticTranslation() {
 
   DrawDesc desc{};
   desc.pixelShader = shader;
-  const auto source = dxmt9::translator::makeTranslatedFragmentSource(shader, desc);
+  const auto source = dxmt9::translator::makeTranslatedFragmentSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
   checkContains(source, "dxmt9_select_texcoord(in, 0u)", "ps_3_0 dcl_texcoord input maps to texcoord");
   checkContains(source, "tex2.sample(samp2", "ps_3_0 input semantic sample keeps sampler register");
   if (getenvFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP")) {
@@ -2211,7 +2292,8 @@ void testVertexShaderOutputSemanticTranslation() {
 
   DrawDesc desc{};
   desc.vertexShader = shader;
-  const auto source = dxmt9::translator::makeTranslatedVertexSource(shader, desc);
+  const auto source = dxmt9::translator::makeTranslatedVertexSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
   checkContains(source, "outPosition = cFloat[0]", "vs_3_0 dcl_position o0 maps to Metal position");
   checkContains(source, "outTexcoord[0] = cFloat[1]", "vs_3_0 dcl_texcoord0 o1 maps by semantic index");
   checkContains(source, "outSecondaryColor = cFloat[1]", "vs_3_0 dcl_color1 o2 maps to secondary color");

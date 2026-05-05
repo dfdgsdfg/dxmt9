@@ -57,11 +57,18 @@ enum class EventKind {
   Flush,
 };
 
+struct RecordedDrawRun {
+  CanonicalDrawState state{};
+  FlatDrawStateRecord hot{};
+  std::vector<DrawParam> draws;
+  std::vector<u8> payloadArena;
+};
+
 struct RecordedEvent {
   EventKind kind = EventKind::Flush;
   bool skipDrawResourceMarking = false;
   std::vector<ChunkHandleEntry> chunkHandles;
-  DrawDesc draw;
+  RecordedDrawRun drawRun;
   ClearDesc clear;
   ReadbackDesc readback;
   SurfaceCopyDesc surfaceCopy;
@@ -117,38 +124,13 @@ struct RecordingDxmt9Device final : dxmt9::Device {
   }
 
   void submitDrawRun(DrawRunDesc desc) override {
-    for (const auto& param : desc.draws) {
-      DrawDesc synthetic{};
-      synthetic.indexBuffer = desc.state.hot.indexBuffer;
-      synthetic.vertexDecl = desc.state.shaderLayout.vertexDecl;
-      for (std::size_t i = 0; i < desc.state.hot.textures.size(); ++i) {
-        synthetic.textures[i].handle = desc.state.hot.textures[i];
-      }
-      synthetic.rts.color = desc.state.hot.colorAttachments;
-      synthetic.rts.depthStencil = desc.state.hot.depthStencil;
-      synthetic.viewport = desc.state.hot.viewport;
-      synthetic.vertexShader = desc.state.shaderLayout.vertexShader;
-      synthetic.pixelShader = desc.state.shaderLayout.pixelShader;
-      synthetic.vsConst = desc.state.shaderLayout.vsConst;
-      synthetic.psConst = desc.state.shaderLayout.psConst;
-      synthetic.worldViewProj = desc.state.shaderLayout.worldViewProj;
-      synthetic.textureTransforms = desc.state.shaderLayout.textureTransforms;
-      synthetic.clipPlaneMask = desc.state.shaderLayout.clipPlaneMask;
-      synthetic.clipPlanes = desc.state.shaderLayout.clipPlanes;
-      synthetic.primitiveType = param.primitiveType;
-      synthetic.primitiveCount = param.primitiveCount;
-      synthetic.startVertex = param.startVertex;
-      synthetic.baseVertexIndex = param.baseVertexIndex;
-      synthetic.startIndex = param.startIndex;
-      synthetic.indexType = param.indexType;
-      synthetic.userVertexData = param.userVertexData;
-      synthetic.userIndexData = param.userIndexData;
-
-      RecordedEvent event;
-      event.kind = EventKind::SubmitDraw;
-      event.draw = std::move(synthetic);
-      events.push_back(std::move(event));
-    }
+    RecordedEvent event;
+    event.kind = EventKind::SubmitDraw;
+    event.drawRun.state = std::move(desc.state);
+    event.drawRun.hot = event.drawRun.state.hot;
+    event.drawRun.draws = std::move(desc.draws);
+    event.drawRun.payloadArena = std::move(desc.payloadArena);
+    events.push_back(std::move(event));
   }
 
   void submitClear(const ClearDesc& desc) override {
@@ -453,12 +435,37 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
                               readbackTarget->handle()),
           "bulk retention includes readback target handle");
 
-    checkEq(recorder->events[2].draw.rts.color[0].handle.value,
+    const auto& firstDrawRun = recorder->events[2].drawRun;
+    checkEq(firstDrawRun.draws.size(), static_cast<std::size_t>(1),
+            "first draw run contains one imported draw param");
+    check(firstDrawRun.hot == firstDrawRun.state.hot,
+          "first draw run records canonical and flat hot state together");
+    checkEq(firstDrawRun.hot.colorAttachments[0].handle.value,
             renderTarget->handle().value, "first draw observes imported RT state");
-    check(recorder->events[2].draw.vertexDecl.streams[0].buffer == vertexBuffer,
-          "first draw observes imported stream state");
-    checkEq(recorder->events[4].draw.startVertex, 3u,
-            "second draw payload remains in record order");
+    checkEq(firstDrawRun.hot.streamBuffers[0].value, vertexBuffer->handle().value,
+            "first draw observes imported stream state");
+    checkEq(firstDrawRun.hot.streamOffsets[0], 0u,
+            "first draw observes imported stream offset");
+    checkEq(firstDrawRun.hot.streamStrides[0], 16u,
+            "first draw observes imported stream stride");
+    checkEq(firstDrawRun.draws[0].startVertex, 0u,
+            "first draw param keeps imported start vertex");
+    check(!firstDrawRun.draws[0].indexed,
+          "first draw param remains non-indexed");
+    check(firstDrawRun.payloadArena.empty(),
+          "first draw run has no UP payload arena");
+
+    const auto& secondDrawRun = recorder->events[4].drawRun;
+    checkEq(secondDrawRun.draws.size(), static_cast<std::size_t>(1),
+            "second draw run contains one imported draw param");
+    check(secondDrawRun.hot == secondDrawRun.state.hot,
+          "second draw run records canonical and flat hot state together");
+    checkEq(secondDrawRun.draws[0].startVertex, 3u,
+            "second draw param remains in record order");
+    checkEq(secondDrawRun.hot.colorAttachments[0].handle.value,
+            renderTarget->handle().value, "second draw observes imported RT state");
+    checkEq(secondDrawRun.hot.streamBuffers[0].value, vertexBuffer->handle().value,
+            "second draw observes imported stream state");
     checkEq(recorder->events[5].readback.source.value, renderTarget->handle().value,
             "readback source handle");
     checkEq(recorder->events[5].readback.destination.value,

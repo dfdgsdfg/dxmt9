@@ -1654,9 +1654,9 @@ class BackendDevice {
     (void)bytes;
   }
   // Test facade submission overrides. Production draw submission enters the
-  // dxmt9::Device/CommandQueue flat DrawRun path; BackendDevice keeps these
-  // no-op hooks for focused core tests that observe decoded descriptors.
-  virtual void submitDraw(const DrawDesc& desc) { (void)desc; }
+  // dxmt9::Device/CommandQueue flat DrawRun path; BackendDevice keeps a no-op
+  // DrawRun hook for focused core tests that observe the same flat payload.
+  virtual void submitDrawRun(const DrawRunDesc& desc) { (void)desc; }
   virtual void submitClear(const ClearDesc& desc) { (void)desc; }
   virtual void submitSurfaceCopy(const SurfaceCopyDesc& desc) { (void)desc; }
   virtual void submitStretchRect(const StretchRectDesc& desc) { (void)desc; }

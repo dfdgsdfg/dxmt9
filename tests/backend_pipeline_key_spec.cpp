@@ -41,41 +41,36 @@ void checkEq(const A& left, const B& right, std::string_view message) {
   }
 }
 
-auto makeBlendKeys(const DrawDesc& desc) {
-  return dxmt9::pipeline::detail::makeBlendAttachmentKeys(desc);
-}
+struct FlatDrawFixture {
+  FlatDrawStateRecord hot{};
+  DrawShaderLayoutContext shaderLayout{};
 
-auto makeFlatBlendKeys(const DrawDesc& desc) {
-  const auto hot = makeFlatDrawStateRecord(desc);
-  return dxmt9::pipeline::detail::makeBlendAttachmentKeys(
-      FlatDrawStateView{.hot = &hot});
-}
-
-auto makeVariantKey(const DrawDesc& desc) {
-  std::array<u32, kMaxRenderTargets> colorFormats{};
-  colorFormats[0] = WMTPixelFormatBGRA8Unorm;
-  auto blend = makeBlendKeys(desc);
-  for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
-    blend[i].pixelFormat = colorFormats[i];
+  FlatDrawStateView view() const {
+    return FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout};
   }
-  return dxmt9::pipeline::makeShaderVariantKey(desc,
-                                               std::span<const u32>(colorFormats),
-                                               std::span<const dxmt9::pipeline::BlendAttachmentKey>(blend),
-                                               0u,
-                                               0u);
+};
+
+FlatDrawFixture makeFlatDrawFixture(const DrawDesc& desc) {
+  return FlatDrawFixture{
+      .hot = makeFlatDrawStateRecord(desc),
+      .shaderLayout = makeDrawShaderLayoutContext(desc),
+  };
 }
 
-auto makeFlatVariantKey(const DrawDesc& desc) {
-  const auto hot = makeFlatDrawStateRecord(desc);
-  const auto shaderLayout = makeDrawShaderLayoutContext(desc);
+auto makeBlendKeys(const FlatDrawStateRecord& hot, bool forceVisibleDraw = false) {
+  return dxmt9::pipeline::detail::makeBlendAttachmentKeys(
+      FlatDrawStateView{.hot = &hot}, forceVisibleDraw);
+}
+
+auto makeVariantKey(const FlatDrawFixture& fixture) {
   std::array<u32, kMaxRenderTargets> colorFormats{};
   colorFormats[0] = WMTPixelFormatBGRA8Unorm;
-  auto blend = makeFlatBlendKeys(desc);
+  auto blend = makeBlendKeys(fixture.hot);
   for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
     blend[i].pixelFormat = colorFormats[i];
   }
   return dxmt9::pipeline::makeShaderVariantKey(
-      FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout},
+      fixture.view(),
       std::span<const u32>(colorFormats),
       std::span<const dxmt9::pipeline::BlendAttachmentKey>(blend),
       0u,
@@ -85,18 +80,18 @@ auto makeFlatVariantKey(const DrawDesc& desc) {
 void testAlphaBlendEnableAndDisable() {
   DrawDesc desc{};
 
-  auto keys = makeBlendKeys(desc);
+  auto keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   check(!keys[0].blendingEnabled, "absent alpha blend state disables blending");
 
   desc.rs.values[RS_ALPHABLEND_ENABLE] = 0u;
-  keys = makeBlendKeys(desc);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   check(!keys[0].blendingEnabled, "zero alpha blend state disables blending");
 
   desc.rs.values[RS_ALPHABLEND_ENABLE] = 1u;
-  keys = makeBlendKeys(desc);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   check(keys[0].blendingEnabled, "non-zero alpha blend state enables blending");
 
-  keys = dxmt9::pipeline::detail::makeBlendAttachmentKeys(desc, true);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot, true);
   check(!keys[0].blendingEnabled, "force-visible mode disables blending");
 }
 
@@ -104,7 +99,7 @@ void testBlendOperationFallbacks() {
   DrawDesc desc{};
   desc.rs.values[RS_BLEND_OP] = static_cast<u32>(BlendOp::Subtract);
 
-  auto keys = makeBlendKeys(desc);
+  auto keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   checkEq(keys[0].rgbBlendOperation,
           static_cast<u32>(BlendOp::Subtract),
           "RGB blend op reflects render state");
@@ -113,7 +108,7 @@ void testBlendOperationFallbacks() {
           "missing alpha blend op falls back to RGB blend op");
 
   desc.rs.values[RS_BLEND_OP_ALPHA] = static_cast<u32>(BlendOp::Max);
-  keys = makeBlendKeys(desc);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   checkEq(keys[0].rgbBlendOperation,
           static_cast<u32>(BlendOp::Subtract),
           "RGB blend op remains independent from alpha override");
@@ -127,7 +122,7 @@ void testBlendFactorFallbacks() {
   desc.rs.values[RS_SRC_BLEND] = static_cast<u32>(BlendFactor::SrcAlpha);
   desc.rs.values[RS_DEST_BLEND] = static_cast<u32>(BlendFactor::InvDestAlpha);
 
-  auto keys = makeBlendKeys(desc);
+  auto keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   checkEq(keys[0].sourceRGBBlendFactor,
           static_cast<u32>(BlendFactor::SrcAlpha),
           "source RGB blend factor reflects render state");
@@ -143,7 +138,7 @@ void testBlendFactorFallbacks() {
 
   desc.rs.values[RS_SRC_BLEND_ALPHA] = static_cast<u32>(BlendFactor::One);
   desc.rs.values[RS_DEST_BLEND_ALPHA] = static_cast<u32>(BlendFactor::Zero);
-  keys = makeBlendKeys(desc);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   checkEq(keys[0].sourceAlphaBlendFactor,
           static_cast<u32>(BlendFactor::One),
           "source alpha blend factor override is reflected");
@@ -154,7 +149,7 @@ void testBlendFactorFallbacks() {
 
 void testMrtColorWriteMaskDefaultAndOverride() {
   DrawDesc desc{};
-  auto keys = makeBlendKeys(desc);
+  auto keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
 
   for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
     checkEq(keys[i].colorWriteMask, 0xfu, "missing color write mask defaults to all channels");
@@ -162,12 +157,12 @@ void testMrtColorWriteMaskDefaultAndOverride() {
   }
 
   desc.rs.values[RS_COLOR_WRITE_ENABLE] = 0x5u;
-  keys = makeBlendKeys(desc);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
     checkEq(keys[i].colorWriteMask, 0x5u, "color write mask override applies to every MRT key");
   }
 
-  keys = dxmt9::pipeline::detail::makeBlendAttachmentKeys(desc, true);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot, true);
   for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
     checkEq(keys[i].colorWriteMask, 0xfu, "force-visible mode restores all-channel writes");
   }
@@ -178,14 +173,14 @@ void testShaderVariantKeyReflectsSamplerTextureAndFiltering() {
   desc.vertexShader.hash = 0x101u;
   desc.pixelShader.hash = 0x202u;
 
-  const auto untextured = makeVariantKey(desc);
+  const auto untextured = makeVariantKey(makeFlatDrawFixture(desc));
   check(!untextured.textured, "missing texture binding leaves variant untextured");
   check(!untextured.linear, "missing sampler filter state leaves variant nearest");
 
   desc.textures[0].handle = Handle{0x44u};
   desc.samplers[0].states[SAMP_MIN_FILTER] = 1u;
   desc.samplers[0].states[SAMP_MAG_FILTER] = 1u;
-  const auto nearest = makeVariantKey(desc);
+  const auto nearest = makeVariantKey(makeFlatDrawFixture(desc));
   check(nearest.textured, "texture binding marks variant textured");
   check(!nearest.linear, "nearest min/mag filters keep variant nearest");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(nearest) !=
@@ -193,7 +188,7 @@ void testShaderVariantKeyReflectsSamplerTextureAndFiltering() {
         "textured sampler key changes the PSO hash");
 
   desc.samplers[0].states[SAMP_MIN_FILTER] = 2u;
-  const auto linearMin = makeVariantKey(desc);
+  const auto linearMin = makeVariantKey(makeFlatDrawFixture(desc));
   check(linearMin.linear, "linear min filter marks variant linear");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(linearMin) !=
             dxmt9::pipeline::ShaderVariantKeyHash{}(nearest),
@@ -201,7 +196,7 @@ void testShaderVariantKeyReflectsSamplerTextureAndFiltering() {
 
   desc.samplers[0].states[SAMP_MIN_FILTER] = 1u;
   desc.samplers[0].states[SAMP_MAG_FILTER] = 2u;
-  const auto linearMag = makeVariantKey(desc);
+  const auto linearMag = makeVariantKey(makeFlatDrawFixture(desc));
   check(linearMag.linear, "linear mag filter marks variant linear");
 }
 
@@ -241,12 +236,12 @@ void testShaderVariantKeyHashRespondsToLayoutAndBlendState() {
   desc.vertexDecl.fvf =
       dxmt9::ffp::kFvfXyz | dxmt9::ffp::kFvfDiffuse | (1u << dxmt9::ffp::kFvfTexCountShift);
 
-  const auto base = makeVariantKey(desc);
+  const auto base = makeVariantKey(makeFlatDrawFixture(desc));
   const auto baseHash = dxmt9::pipeline::ShaderVariantKeyHash{}(base);
 
   DrawDesc layoutChanged = desc;
   layoutChanged.vertexDecl.fvf |= dxmt9::ffp::kFvfSpecular;
-  const auto layoutKey = makeVariantKey(layoutChanged);
+  const auto layoutKey = makeVariantKey(makeFlatDrawFixture(layoutChanged));
   check(layoutKey.hash != base.hash, "layout changes alter the shader variant layout hash");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(layoutKey) != baseHash,
         "layout changes alter the PSO key hash");
@@ -254,13 +249,13 @@ void testShaderVariantKeyHashRespondsToLayoutAndBlendState() {
   DrawDesc blendChanged = desc;
   blendChanged.rs.values[RS_ALPHABLEND_ENABLE] = 1u;
   blendChanged.rs.values[RS_COLOR_WRITE_ENABLE] = 0x7u;
-  const auto blendKey = makeVariantKey(blendChanged);
+  const auto blendKey = makeVariantKey(makeFlatDrawFixture(blendChanged));
   check(!(blendKey == base), "blend state changes alter the PSO key");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(blendKey) != baseHash,
         "blend state changes alter the PSO key hash");
 }
 
-void testFlatPipelineHelpersMatchDrawDescCompatibilityWrappers() {
+void testPipelineHelpersUseExplicitFlatInputs() {
   DrawDesc desc{};
   desc.vertexShader.hash = 0xabcdefu;
   desc.pixelShader.hash = 0x102030u;
@@ -277,10 +272,23 @@ void testFlatPipelineHelpersMatchDrawDescCompatibilityWrappers() {
   desc.clipPlaneMask = 0x3u;
   desc.rts.color[0].sampleCount = 4u;
 
-  checkEq(makeFlatBlendKeys(desc), makeBlendKeys(desc),
-          "flat blend helper matches DrawDesc test helper wrapper");
-  checkEq(makeFlatVariantKey(desc), makeVariantKey(desc),
-          "flat shader variant helper matches DrawDesc test helper wrapper");
+  const auto flat = makeFlatDrawFixture(desc);
+  const auto blend = makeBlendKeys(flat.hot);
+  const auto variant = makeVariantKey(flat);
+
+  check(blend[0].blendingEnabled, "flat blend helper reads alpha blend state");
+  checkEq(blend[0].sourceRGBBlendFactor,
+          static_cast<u32>(BlendFactor::SrcAlpha),
+          "flat blend helper reads source blend factor");
+  checkEq(blend[0].destinationRGBBlendFactor,
+          static_cast<u32>(BlendFactor::InvSrcAlpha),
+          "flat blend helper reads destination blend factor");
+  checkEq(blend[0].colorWriteMask, 0x7u, "flat blend helper reads color write mask");
+  check(variant.textured, "flat variant helper reads texture bindings");
+  check(variant.linear, "flat variant helper reads sampler filtering");
+  check(variant.clipPlanes, "flat variant helper reads clip plane mask");
+  check(variant.alphaTest, "flat variant helper reads alpha test state");
+  checkEq(variant.sampleCount, 4u, "flat variant helper reads render target sample count");
 }
 
 void testSrgbCompatiblePixelFormatConversion() {
@@ -320,7 +328,7 @@ int main() {
     testShaderVariantKeyReflectsSamplerTextureAndFiltering();
     testFvfLayoutHashIsDeterministicAndResponsive();
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();
-    testFlatPipelineHelpersMatchDrawDescCompatibilityWrappers();
+    testPipelineHelpersUseExplicitFlatInputs();
     testSrgbCompatiblePixelFormatConversion();
   } catch (const TestFailure& failure) {
     std::cerr << "backend_pipeline_key_spec failed: " << failure.what() << '\n';

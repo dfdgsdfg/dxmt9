@@ -2700,14 +2700,6 @@ std::string makeTranslatedFragmentSource(const ShaderRef& shader,
   return translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, false, context), context, false);
 }
 
-std::string makeTranslatedVertexSource(const ShaderRef& shader, const DrawDesc& desc) {
-  return makeTranslatedVertexSource(shader, ::dxmt9::drawshader::makeShaderSourceContext(desc));
-}
-
-std::string makeTranslatedFragmentSource(const ShaderRef& shader, const DrawDesc& desc) {
-  return makeTranslatedFragmentSource(shader, ::dxmt9::drawshader::makeShaderSourceContext(desc));
-}
-
 }  // namespace dxmt9::translator::detail_
 
 namespace dxmt9::translator {
@@ -2717,19 +2709,9 @@ std::string makeTranslatedVertexSource(const ::dxmt9::core::ShaderRef& shader,
   return detail_::makeTranslatedVertexSource(shader, context);
 }
 
-std::string makeTranslatedVertexSource(const ::dxmt9::core::ShaderRef& shader,
-                                        const ::dxmt9::core::DrawDesc& desc) {
-  return detail_::makeTranslatedVertexSource(shader, desc);
-}
-
 std::string makeTranslatedFragmentSource(const ::dxmt9::core::ShaderRef& shader,
                                           const ::dxmt9::drawshader::ShaderSourceContext& context) {
   return detail_::makeTranslatedFragmentSource(shader, context);
-}
-
-std::string makeTranslatedFragmentSource(const ::dxmt9::core::ShaderRef& shader,
-                                          const ::dxmt9::core::DrawDesc& desc) {
-  return detail_::makeTranslatedFragmentSource(shader, desc);
 }
 
 namespace test {

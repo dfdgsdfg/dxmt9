@@ -107,8 +107,4 @@ std::string makeFfpVertexSource(const core::FfpVertexKey& key,
 std::string makeFfpPixelSource(const core::FfpPixelKey& key,
                                const drawshader::ShaderSourceContext& context);
 
-// Test helper wrappers for focused unit tests that still build DrawDesc.
-std::string makeFfpVertexSource(const core::FfpVertexKey& key, const core::DrawDesc& desc);
-std::string makeFfpPixelSource(const core::FfpPixelKey& key, const core::DrawDesc& desc);
-
 }  // namespace dxmt9::ffp

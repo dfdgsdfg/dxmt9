@@ -1,5 +1,6 @@
 #include "dxmt9/core.hpp"
 #include "../src/dxmt9/dxmt9_d3d9_bytecode.hpp"
+#include "../src/dxmt9/dxmt9_draw_shader.hpp"
 #include "../src/dxmt9/dxmt9_shader_translator.hpp"
 
 #include <array>
@@ -186,14 +187,16 @@ std::string translatePixel(std::span<const u32> words) {
   const auto shader = makeShader(words);
   DrawDesc desc{};
   desc.pixelShader = shader;
-  return dxmt9::translator::makeTranslatedFragmentSource(shader, desc);
+  return dxmt9::translator::makeTranslatedFragmentSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
 std::string translateVertex(std::span<const u32> words) {
   const auto shader = makeShader(words);
   DrawDesc desc{};
   desc.vertexShader = shader;
-  return dxmt9::translator::makeTranslatedVertexSource(shader, desc);
+  return dxmt9::translator::makeTranslatedVertexSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
 std::vector<u32> makePs20TexturedBytecode(u32 samplerIndex) {

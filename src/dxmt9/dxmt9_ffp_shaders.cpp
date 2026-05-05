@@ -434,14 +434,6 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   return out.str();
 }
 
-std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
-  return makeFfpVertexSource(key, drawshader::makeShaderSourceContext(desc));
-}
-
-std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
-  return makeFfpPixelSource(key, drawshader::makeShaderSourceContext(desc));
-}
-
 u32 computeVertexDeclStride(const VertexDeclSnapshot& decl) {
   if (decl.streams[0].stride != 0) {
     return decl.streams[0].stride;

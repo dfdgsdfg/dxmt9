@@ -110,8 +110,4 @@ std::string makeDrawShaderSource(const ShaderSourceContext& context, bool vertex
   return source;
 }
 
-std::string makeDrawShaderSource(const DrawDesc& desc, bool vertex) {
-  return makeDrawShaderSource(makeShaderSourceContext(desc), vertex);
-}
-
 }  // namespace dxmt9::drawshader

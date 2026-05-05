@@ -19,21 +19,14 @@ namespace {
 using u8 = std::uint8_t;
 using u32 = std::uint32_t;
 
+using dxmt9::drawshader::ShaderSourceContext;
 using dxmt9::drawshader::makeDrawShaderSource;
 
 std::string makeShaderSourceFromRequestInternal(const WinemetalShaderCompileRequest& request) {
-  DrawDesc desc;
-  desc.rts.color[0].sampleCount = std::max<u32>(1u, request.sampleCount);
-  desc.clipPlaneMask = request.clipPlaneMask;
-  desc.textures[0].handle = request.textured ? Handle{1} : Handle{};
-  if (request.alphaTestEnable != 0) {
-    desc.rs.values[RS_ALPHA_TEST_ENABLE] = request.alphaTestEnable;
-    desc.rs.values[RS_ALPHA_FUNC] = request.alphaTestFunc;
-    desc.rs.values[RS_ALPHA_REF] = static_cast<u32>(std::clamp(request.alphaRef, 0.0f, 1.0f) * 255.0f + 0.5f);
-  }
-  if (request.fogMode != static_cast<u32>(FogMode::None)) {
-    desc.rs.values[RS_FOG_TABLE_MODE] = request.fogMode;
-  }
+  ShaderSourceContext context{};
+  context.sampleCount = std::max<u32>(1u, request.sampleCount);
+  context.clipPlaneMask = request.clipPlaneMask;
+  context.textures[0] = request.textured != 0;
 
   std::vector<u8> bytecode;
   if (request.bytecode && request.bytecodeSize > 0) {
@@ -43,27 +36,27 @@ std::string makeShaderSourceFromRequestInternal(const WinemetalShaderCompileRequ
 
   switch (request.kind) {
     case WinemetalShaderKind_D3DBytecodeVertex:
-      desc.vertexShader.kind = ShaderRef::Kind::Bytecode;
-      desc.vertexShader.bytecode.bytes = std::move(bytecode);
-      desc.vertexShader.bytecode.hash = request.bytecodeHash;
-      return makeDrawShaderSource(desc, true);
+      context.vertexShader.kind = ShaderRef::Kind::Bytecode;
+      context.vertexShader.bytecode.bytes = std::move(bytecode);
+      context.vertexShader.bytecode.hash = request.bytecodeHash;
+      return makeDrawShaderSource(context, true);
     case WinemetalShaderKind_D3DBytecodePixel:
-      desc.pixelShader.kind = ShaderRef::Kind::Bytecode;
-      desc.pixelShader.bytecode.bytes = std::move(bytecode);
-      desc.pixelShader.bytecode.hash = request.bytecodeHash;
-      return makeDrawShaderSource(desc, false);
+      context.pixelShader.kind = ShaderRef::Kind::Bytecode;
+      context.pixelShader.bytecode.bytes = std::move(bytecode);
+      context.pixelShader.bytecode.hash = request.bytecodeHash;
+      return makeDrawShaderSource(context, false);
     case WinemetalShaderKind_FfpVertex:
-      desc.vertexShader.kind = ShaderRef::Kind::FixedFunctionVertex;
+      context.vertexShader.kind = ShaderRef::Kind::FixedFunctionVertex;
       if (request.variantKey) {
-        desc.vertexShader.vertexKey = *reinterpret_cast<const FfpVertexKey*>(request.variantKey);
+        context.vertexShader.vertexKey = *reinterpret_cast<const FfpVertexKey*>(request.variantKey);
       }
-      return makeDrawShaderSource(desc, true);
+      return makeDrawShaderSource(context, true);
     case WinemetalShaderKind_FfpPixel:
-      desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+      context.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
       if (request.variantKey) {
-        desc.pixelShader.pixelKey = *reinterpret_cast<const FfpPixelKey*>(request.variantKey);
+        context.pixelShader.pixelKey = *reinterpret_cast<const FfpPixelKey*>(request.variantKey);
       }
-      return makeDrawShaderSource(desc, false);
+      return makeDrawShaderSource(context, false);
   }
   return {};
 }

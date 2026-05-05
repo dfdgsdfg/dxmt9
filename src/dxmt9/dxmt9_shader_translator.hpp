@@ -24,12 +24,10 @@ namespace dxmt9::translator {
 // shader-relevant state slice needed to emit a specialised vertex variant.
 std::string makeTranslatedVertexSource(const core::ShaderRef& shader,
                                        const drawshader::ShaderSourceContext& context);
-std::string makeTranslatedVertexSource(const core::ShaderRef& shader, const core::DrawDesc& desc);
 
 // Translate a D3D9 pixel shader into MSL source. Mirrors the vertex entry.
 std::string makeTranslatedFragmentSource(const core::ShaderRef& shader,
                                          const drawshader::ShaderSourceContext& context);
-std::string makeTranslatedFragmentSource(const core::ShaderRef& shader, const core::DrawDesc& desc);
 
 namespace test {
 

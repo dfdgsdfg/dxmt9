@@ -2,7 +2,7 @@
 
 // Per-draw uniform buffer + depth/stencil key builder. Previously lived
 // in backend_metal.mm's anonymous namespace. Pure data transforms over
-// the public DrawDesc — no dependency on backend state.
+// flat draw state — no dependency on backend state.
 
 #include "dxmt9/core.hpp"
 #include "dxmt9_pipeline_cache.hpp"
@@ -48,13 +48,7 @@ struct DrawUniforms {
 // Translate D3D9 flat draw state into the uniforms consumed by MSL.
 DrawUniforms buildDrawUniforms(core::FlatDrawStateView state);
 
-// Test helper wrapper for focused unit tests that still build DrawDesc.
-DrawUniforms buildDrawUniforms(const core::DrawDesc& desc);
-
 // Compose a depth/stencil cache key from flat render-state storage.
 pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state);
-
-// Test helper wrapper for focused unit tests that still build DrawDesc.
-pipeline::DepthStencilKey makeDepthStencilKey(const core::DrawDesc& desc);
 
 }  // namespace dxmt9::state

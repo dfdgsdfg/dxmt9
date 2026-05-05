@@ -971,7 +971,6 @@ struct NullBackendDevice final : BackendDevice {
 
   void destroyBuffer(BufferHandle) override {}
   void destroyTexture(TextureHandle) override {}
-  void submitDraw(const DrawDesc&) override {}
   void submitClear(const ClearDesc&) override {}
   void present(const SwapDesc&) override {}
 
@@ -3749,69 +3748,6 @@ bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena) {
   return true;
 }
 
-template <std::size_t MaxEntries>
-std::unordered_map<u32, u32> flatStateSetToMap(const FlatStateSet<MaxEntries>& set) {
-  std::unordered_map<u32, u32> out;
-  out.reserve(set.count);
-  for (u32 i = 0; i < set.count && i < MaxEntries; ++i) {
-    out.emplace(set.entries[i].state, set.entries[i].value);
-  }
-  return out;
-}
-
-std::span<const u8> payloadRangeBytes(DrawPayloadRange range, std::span<const u8> arena) {
-  const std::size_t offset = range.offset;
-  const std::size_t size = range.size;
-  if (size == 0 || offset > arena.size() || size > arena.size() - offset) {
-    return {};
-  }
-  return arena.subspan(offset, size);
-}
-
-DrawDesc makeDrawDescFromCanonicalDraw(const CanonicalDrawState& state,
-                                       const DrawParam& param,
-                                       std::span<const u8> payloadArena) {
-  DrawDesc desc{};
-  desc.primitiveType = param.primitiveType;
-  desc.primitiveCount = param.primitiveCount;
-  desc.startVertex = param.startVertex;
-  desc.baseVertexIndex = param.baseVertexIndex;
-  desc.startIndex = param.startIndex;
-  desc.indexBuffer = param.indexed ? state.hot.indexBuffer : Handle{};
-  desc.indexType = param.indexType;
-  desc.vertexDecl = state.shaderLayout.vertexDecl;
-  desc.vertexShader = state.shaderLayout.vertexShader;
-  desc.pixelShader = state.shaderLayout.pixelShader;
-  desc.vsConst = state.shaderLayout.vsConst;
-  desc.psConst = state.shaderLayout.psConst;
-  for (size_t i = 0; i < kMaxTextures; ++i) {
-    desc.textures[i].handle = state.hot.textures[i];
-    if (i < kMaxTextureStages) {
-      desc.textures[i].stageStates = flatStateSetToMap(state.hot.textureStageStates[i]);
-    }
-  }
-  for (size_t i = 0; i < kMaxSamplers; ++i) {
-    desc.samplers[i].states = flatStateSetToMap(state.hot.samplerStates[i]);
-  }
-  desc.rs.values = flatStateSetToMap(state.hot.renderStates);
-  desc.rts.color = state.hot.colorAttachments;
-  desc.rts.depthStencil = state.hot.depthStencil;
-  desc.viewport = state.hot.viewport;
-  desc.worldViewProj = state.shaderLayout.worldViewProj;
-  desc.textureTransforms = state.shaderLayout.textureTransforms;
-  desc.clipPlaneMask = state.shaderLayout.clipPlaneMask;
-  desc.clipPlanes = state.shaderLayout.clipPlanes;
-  const auto vertexBytes = !param.userVertexRange.empty()
-      ? payloadRangeBytes(param.userVertexRange, payloadArena)
-      : std::span<const u8>(param.userVertexData.data(), param.userVertexData.size());
-  const auto indexBytes = !param.userIndexRange.empty()
-      ? payloadRangeBytes(param.userIndexRange, payloadArena)
-      : std::span<const u8>(param.userIndexData.data(), param.userIndexData.size());
-  desc.userVertexData.assign(vertexBytes.begin(), vertexBytes.end());
-  desc.userIndexData.assign(indexBytes.begin(), indexBytes.end());
-  return desc;
-}
-
 DrawRunDesc makeDrawRunDescFromState(DeviceState baseState, std::span<const DrawParam> draws) {
   DrawRunDesc run{};
   if (draws.empty()) {
@@ -4844,11 +4780,7 @@ class StubDxmt9Device final : public dxmt9::Device {
     if (!backend_) {
       return;
     }
-    const auto payloadArena =
-        std::span<const u8>(desc.payloadArena.data(), desc.payloadArena.size());
-    for (const auto& draw : desc.draws) {
-      backend_->submitDraw(makeDrawDescFromCanonicalDraw(desc.state, draw, payloadArena));
-    }
+    backend_->submitDrawRun(desc);
   }
   void submitClear(const ClearDesc& desc) override {
     if (backend_) backend_->submitClear(desc);

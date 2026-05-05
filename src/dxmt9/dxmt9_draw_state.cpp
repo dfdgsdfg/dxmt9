@@ -106,12 +106,6 @@ DrawUniforms buildDrawUniforms(core::FlatDrawStateView state) {
   return uniforms;
 }
 
-DrawUniforms buildDrawUniforms(const core::DrawDesc& desc) {
-  const auto hot = core::makeFlatDrawStateRecord(desc);
-  const auto shaderLayout = core::makeDrawShaderLayoutContext(desc);
-  return buildDrawUniforms(core::FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout});
-}
-
 pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
   const auto& rs = state.hot->renderStates;
   pipeline::DepthStencilKey key;
@@ -146,11 +140,6 @@ pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
   key.back.writeMask = core::flatStateOr(rs, RS_STENCIL_CCW_WRITEMASK, key.front.writeMask);
   key.back.enabled = key.front.enabled;
   return key;
-}
-
-pipeline::DepthStencilKey makeDepthStencilKey(const core::DrawDesc& desc) {
-  const auto hot = core::makeFlatDrawStateRecord(desc);
-  return makeDepthStencilKey(core::FlatDrawStateView{.hot = &hot});
 }
 
 }  // namespace dxmt9::state

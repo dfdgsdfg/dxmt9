@@ -69,13 +69,6 @@ detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisible
   return blendAttachments;
 }
 
-std::array<BlendAttachmentKey, core::kMaxRenderTargets>
-detail::makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDraw) {
-  const auto hot = core::makeFlatDrawStateRecord(draw);
-  return detail::makeBlendAttachmentKeys(
-      core::FlatDrawStateView{.hot = &hot}, forceVisibleDraw);
-}
-
 std::size_t BlendAttachmentKeyHash::operator()(const BlendAttachmentKey& key) const noexcept {
   u64 hash = kFnvOffset;
   hash = mix(hash, static_cast<u64>(key.blendingEnabled));
@@ -322,16 +315,6 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
-Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
-                                const ShaderVariantKey& key,
-                                const core::DrawDesc& draw,
-                                WMT::Reference<WMT::BinaryArchive>* archive,
-                                const std::string* archivePath) {
-  return getOrBuildDrawPipeline(
-      std::move(device), key, drawshader::makeShaderSourceContext(draw), archive, archivePath);
-}
-
-std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
 buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath) {
@@ -403,21 +386,6 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
   return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
 }
 
-std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
-Cache::getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
-                                      const core::BackendLimits& limits,
-                                      resources::Pool& pool,
-                                      const core::DrawDesc& draw,
-                                      WMT::Reference<WMT::BinaryArchive>* archive,
-                                      const std::string* archivePath) {
-  const auto hot = core::makeFlatDrawStateRecord(draw);
-  const auto shaderLayout = core::makeDrawShaderLayoutContext(draw);
-  return getOrBuildDrawPipelineForState(
-      device, limits, pool,
-      core::FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout},
-      archive, archivePath);
-}
-
 ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::span<const u32> colorFormats,
                                        std::span<const BlendAttachmentKey> blendAttachments,
@@ -450,17 +418,6 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
   key.depthFormat = depthFormat;
   key.stencilFormat = stencilFormat;
   return key;
-}
-
-ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
-                                       std::span<const u32> colorFormats,
-                                       std::span<const BlendAttachmentKey> blendAttachments,
-                                       u32 depthFormat,
-                                       u32 stencilFormat) {
-  const auto hot = core::makeFlatDrawStateRecord(desc);
-  const auto shaderLayout = core::makeDrawShaderLayoutContext(desc);
-  return makeShaderVariantKey(core::FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout},
-                              colorFormats, blendAttachments, depthFormat, stencilFormat);
 }
 
 }  // namespace dxmt9::pipeline

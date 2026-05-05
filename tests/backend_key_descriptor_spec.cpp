@@ -60,7 +60,10 @@ void testBuildDrawUniformsCopiesShaderConstants() {
   desc.psConst.bools[4] = true;
   desc.psConst.bools[15] = false;
 
-  const auto uniforms = dxmt9::state::buildDrawUniforms(desc);
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto shaderLayout = makeDrawShaderLayoutContext(desc);
+  const auto uniforms =
+      dxmt9::state::buildDrawUniforms(FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout});
 
   checkEq(uniforms.vsFloatConst[3], desc.vsConst.float4[3], "VS float constants copied");
   checkEq(uniforms.vsIntConst[2], desc.vsConst.int4[2], "VS integer constants copied");
@@ -90,10 +93,9 @@ void testBuildDrawUniformsViewportAndRenderStateValues() {
   desc.rs.values[RS_FOG_END] = std::bit_cast<u32>(9.75f);
   desc.rs.values[RS_FOG_DENSITY] = std::bit_cast<u32>(0.125f);
 
-  const auto uniforms = dxmt9::state::buildDrawUniforms(desc);
   const auto hot = makeFlatDrawStateRecord(desc);
   const auto shaderLayout = makeDrawShaderLayoutContext(desc);
-  const auto flatUniforms =
+  const auto uniforms =
       dxmt9::state::buildDrawUniforms(FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout});
 
   checkNear(uniforms.halfPixelFixup[0], 1.0f / 320.0f, 1.0e-6f, "half-pixel X fixup");
@@ -117,14 +119,6 @@ void testBuildDrawUniformsViewportAndRenderStateValues() {
   checkEq(uniforms.vertexStreamOffset, 64u, "stream zero offset copied");
   checkEq(uniforms.vertexStreamStride, 28u, "stream zero stride copied");
   checkEq(uniforms.clipPlaneMask, 0x15u, "clip plane mask copied");
-  checkEq(flatUniforms.viewportOrigin, uniforms.viewportOrigin,
-          "flat uniform builder matches DrawDesc viewport origin wrapper");
-  checkEq(flatUniforms.vertexStreamOffset, uniforms.vertexStreamOffset,
-          "flat uniform builder matches DrawDesc stream offset wrapper");
-  checkEq(flatUniforms.alphaTestFunc, uniforms.alphaTestFunc,
-          "flat uniform builder matches DrawDesc render-state wrapper");
-  checkEq(flatUniforms.clipPlaneMask, uniforms.clipPlaneMask,
-          "flat uniform builder matches DrawDesc clip-plane wrapper");
 }
 
 void testDepthStencilKeyReflectsDepthAndStencilState() {
@@ -144,13 +138,11 @@ void testDepthStencilKeyReflectsDepthAndStencilState() {
   desc.rs.values[RS_STENCIL_CCW_ZFAIL] = static_cast<u32>(StencilOp::Invert);
   desc.rs.values[RS_STENCIL_CCW_PASS] = static_cast<u32>(StencilOp::Incr);
 
-  const auto key = dxmt9::state::makeDepthStencilKey(desc);
   const auto hot = makeFlatDrawStateRecord(desc);
-  const auto flatKey =
+  const auto key =
       dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &hot});
 
   check(key.depthEnable, "depth enabled reflected");
-  checkEq(flatKey, key, "flat depth-stencil helper matches DrawDesc test helper wrapper");
   check(key.depthWrite, "depth write reflected when depth is enabled");
   checkEq(key.depthFunc, static_cast<u32>(CompareFunc::LessEqual), "depth func reflected");
   check(key.front.enabled, "front stencil enabled reflected");
@@ -181,7 +173,8 @@ void testDepthStencilKeyDefaultsAndCcwFallback() {
   desc.rs.values[RS_STENCIL_MASK] = 0x55u;
   desc.rs.values[RS_STENCIL_WRITEMASK] = 0xaau;
 
-  const auto key = dxmt9::state::makeDepthStencilKey(desc);
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto key = dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &hot});
 
   check(!key.depthEnable, "disabled Z state disables depth");
   check(!key.depthWrite, "disabled Z state suppresses depth writes");
@@ -196,7 +189,8 @@ void testDepthStencilKeyDefaultsAndCcwFallback() {
   checkEq(key.back.writeMask, key.front.writeMask, "missing CCW write mask falls back to front");
 
   DrawDesc defaults{};
-  const auto defaultKey = dxmt9::state::makeDepthStencilKey(defaults);
+  const auto defaultHot = makeFlatDrawStateRecord(defaults);
+  const auto defaultKey = dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &defaultHot});
   check(!defaultKey.depthEnable, "absent Z enable defaults depth off");
   check(!defaultKey.depthWrite, "absent Z write defaults depth writes off");
   checkEq(defaultKey.depthFunc, static_cast<u32>(CompareFunc::Always), "absent Z func defaults to always");

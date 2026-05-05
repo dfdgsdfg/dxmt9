@@ -1,6 +1,6 @@
 #pragma once
 
-// Dispatches a DrawDesc to the appropriate MSL source generator:
+// Dispatches a ShaderSourceContext to the appropriate MSL source generator:
 //   - Translated D3D bytecode → dxmt9::translator
 //   - Fixed-function D3D9 pipeline → dxmt9::ffp
 //   - Minimal passthrough (no user shader) → dxmt9::shaders
@@ -30,14 +30,13 @@ struct ShaderSourceContext {
 
 ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext& layout,
                                             const core::FlatDrawStateRecord& hot);
+// Fixture bridge for tests and offline compile requests that still start from
+// a DrawDesc-shaped state fixture. Hot pipeline code uses the flat overload.
 ShaderSourceContext makeShaderSourceContext(const core::DrawDesc& desc);
 
 // Returns a complete MSL translation unit for either the vertex or pixel
 // shader corresponding to `context`. Also writes the source to
 // $DXMT_DUMP_SHADER_DIR/<label>-<hash>.metal if the env var is set.
 std::string makeDrawShaderSource(const ShaderSourceContext& context, bool vertex);
-
-// Test helper wrapper for focused unit tests that still build DrawDesc.
-std::string makeDrawShaderSource(const core::DrawDesc& desc, bool vertex);
 
 }  // namespace dxmt9::drawshader

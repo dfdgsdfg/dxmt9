@@ -87,12 +87,9 @@ struct ShaderVariantKeyHash {
 namespace detail {
 
 // Render-state-only blend attachment key mapping. Pixel formats are resolved
-// by Cache::getOrBuildDrawPipelineForDraw after surface lookup.
+// by Cache::getOrBuildDrawPipelineForState after surface lookup.
 std::array<BlendAttachmentKey, core::kMaxRenderTargets>
 makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisibleDraw = false);
-
-std::array<BlendAttachmentKey, core::kMaxRenderTargets>
-makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDraw = false);
 
 }  // namespace detail
 
@@ -163,16 +160,9 @@ class Cache {
                           WMT::Reference<WMT::BinaryArchive>* archive,
                           const std::string* archivePath);
 
-  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
-  getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
-                          const ShaderVariantKey& key,
-                          const core::DrawDesc& draw,
-                          WMT::Reference<WMT::BinaryArchive>* archive,
-                          const std::string* archivePath);
-
   // High-level entry point used by the encoder: resolves color/depth
   // pixel formats from the pool's surfaces, assembles blend attachment
-  // keys from the draw's render-state values, composes a ShaderVariantKey,
+  // keys from the flat render-state values, composes a ShaderVariantKey,
   // and delegates to getOrBuildDrawPipeline. Previously lived as
   // pipelineForDraw on MetalBackendDevice (Step 3d).
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
@@ -180,14 +170,6 @@ class Cache {
                                   const core::BackendLimits& limits,
                                   resources::Pool& pool,
                                   core::FlatDrawStateView state,
-                                  WMT::Reference<WMT::BinaryArchive>* archive,
-                                  const std::string* archivePath);
-
-  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
-  getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
-                                  const core::BackendLimits& limits,
-                                  resources::Pool& pool,
-                                  const core::DrawDesc& draw,
                                   WMT::Reference<WMT::BinaryArchive>* archive,
                                   const std::string* archivePath);
 
@@ -212,13 +194,6 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
 // state. The layoutHash incorporates the FFP layout hash or, if not FFP,
 // a vertex-declaration hash.
 ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
-                                       std::span<const u32> colorFormats,
-                                       std::span<const BlendAttachmentKey> blendAttachments,
-                                       u32 depthFormat,
-                                       u32 stencilFormat);
-
-// Test helper wrapper for focused unit tests that still build DrawDesc.
-ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
                                        std::span<const u32> colorFormats,
                                        std::span<const BlendAttachmentKey> blendAttachments,
                                        u32 depthFormat,
