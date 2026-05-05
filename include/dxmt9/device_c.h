@@ -376,6 +376,69 @@ typedef struct D9CDrawIndexedPrimitiveUPPacket {
 
 #define D9C_COMMAND_CHUNK_VERSION 1u
 
+/* Data-oriented command chunk wire shape. This is a parallel schema for the
+ * bridge recorder/importer groundwork and does not replace D9CCommandChunk's
+ * existing ABI. The blob layout is:
+ *
+ *   D9CCommandChunkWireHeader
+ *   D9CCommandChunkWireRecordHeader[recordCount]
+ *   D9CCommandChunkWireHandleEntry[handleCount]
+ *   payload arena bytes
+ *
+ * Offsets are byte offsets from the start of the chunk blob. Per-record
+ * payload ranges are byte offsets inside the payload arena. Per-record handle
+ * ranges index into the chunk-level handle table. Reserved fields must be
+ * written as zero by producers and validated as zero by consumers before
+ * execution. */
+#define D9C_COMMAND_CHUNK_WIRE_VERSION 1u
+#define D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE 48u
+#define D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE 32u
+#define D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE 24u
+#define D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE 0u
+#define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE 0u
+
+typedef struct D9CCommandChunkWireHeader {
+    uint32_t version;
+    uint32_t headerSize;
+    uint32_t recordHeaderSize;
+    uint32_t handleEntrySize;
+    uint32_t recordTableOffset;
+    uint32_t recordCount;
+    uint32_t handleTableOffset;
+    uint32_t handleCount;
+    uint32_t payloadArenaOffset;
+    uint32_t payloadArenaSize;
+    uint32_t reserved0;
+    uint32_t reserved1;
+} D9CCommandChunkWireHeader;
+
+typedef struct D9CCommandChunkWireRecordHeader {
+    uint32_t type;
+    uint32_t flags;
+    uint32_t payloadOffset;
+    uint32_t payloadSize;
+    uint32_t firstHandle;
+    uint32_t handleCount;
+    uint32_t reserved0;
+    uint32_t reserved1;
+} D9CCommandChunkWireRecordHeader;
+
+typedef struct D9CCommandChunkWireHandleEntry {
+    uint32_t kind;
+    uint32_t generation;
+    uint64_t opaqueHandle;
+    uint32_t reserved0;
+    uint32_t reserved1;
+} D9CCommandChunkWireHandleEntry;
+
+static inline int d9c_command_chunk_wire_payload_range_valid(
+    uint32_t payloadArenaSize,
+    uint32_t payloadOffset,
+    uint32_t payloadSize) {
+    return payloadOffset <= payloadArenaSize &&
+           payloadSize <= payloadArenaSize - payloadOffset;
+}
+
 /* Per-chunk resource retention list. PE recorder accumulates the deduped
  * set of resource handles touched by Set{Texture,StreamSource,Indices,
  * RenderTarget,DepthStencil,VertexShader,PixelShader,VertexDeclaration}

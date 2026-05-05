@@ -44,6 +44,19 @@ void checkTriviallyCopyable(std::string_view name) {
   }
 }
 
+template <typename T>
+void checkStandardLayout(std::string_view name) {
+  if constexpr (!std::is_standard_layout_v<T>) {
+    fail(std::string(name) + " must remain standard layout");
+  }
+}
+
+template <typename T>
+void checkPodWireShape(std::string_view name) {
+  checkTriviallyCopyable<T>(name);
+  checkStandardLayout<T>(name);
+}
+
 std::size_t expectedSetConstBytes(std::size_t elemSize, std::uint32_t count) {
   return sizeof(D9CCommandRecordSetConst) + elemSize * count;
 }
@@ -55,6 +68,9 @@ std::size_t expectedClearBytes(std::uint32_t rectCount) {
 void testWireRecordsStayPod() {
   checkTriviallyCopyable<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket");
   checkTriviallyCopyable<D9CDrawIndexedPrimitivePacket>("D9CDrawIndexedPrimitivePacket");
+  checkPodWireShape<D9CCommandChunkWireHeader>("D9CCommandChunkWireHeader");
+  checkPodWireShape<D9CCommandChunkWireRecordHeader>("D9CCommandChunkWireRecordHeader");
+  checkPodWireShape<D9CCommandChunkWireHandleEntry>("D9CCommandChunkWireHandleEntry");
   checkTriviallyCopyable<D9CCommandRecordHeader>("D9CCommandRecordHeader");
   checkTriviallyCopyable<D9CCommandRecordDrawPrimitive>("D9CCommandRecordDrawPrimitive");
   checkTriviallyCopyable<D9CCommandRecordDrawIndexedPrimitive>("D9CCommandRecordDrawIndexedPrimitive");
@@ -68,6 +84,7 @@ void testWireRecordsStayPod() {
 
 void testRecordHeaderLayout() {
   checkEq(D9C_COMMAND_CHUNK_VERSION, 1u, "command chunk ABI version");
+  checkEq(D9C_COMMAND_CHUNK_WIRE_VERSION, 1u, "DOD command chunk ABI version");
   checkEq(offsetof(D9CCommandRecordDrawPrimitive, header), std::size_t{0}, "draw primitive header offset");
   checkEq(offsetof(D9CCommandRecordDrawIndexedPrimitive, header), std::size_t{0}, "draw indexed header offset");
   checkEq(offsetof(D9CCommandRecordClear, header), std::size_t{0}, "clear header offset");
@@ -75,6 +92,74 @@ void testRecordHeaderLayout() {
   checkEq(offsetof(D9CCommandRecordApplyState, header), std::size_t{0}, "apply state header offset");
   check(sizeof(D9CCommandRecordHeader) <= sizeof(D9CCommandRecordDrawPrimitive),
         "fixed records contain the common header");
+}
+
+void testDodWireChunkLayout() {
+  checkEq(sizeof(D9CCommandChunkWireHeader),
+          static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE),
+          "DOD chunk header byte size");
+  checkEq(sizeof(D9CCommandChunkWireRecordHeader),
+          static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE),
+          "DOD record header byte size");
+  checkEq(sizeof(D9CCommandChunkWireHandleEntry),
+          static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE),
+          "DOD handle entry byte size");
+
+  checkEq(offsetof(D9CCommandChunkWireHeader, version), std::size_t{0},
+          "DOD chunk header version offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, recordTableOffset), std::size_t{16},
+          "DOD chunk header record table offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, handleTableOffset), std::size_t{24},
+          "DOD chunk header handle table offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, payloadArenaOffset), std::size_t{32},
+          "DOD chunk header payload arena offset");
+
+  checkEq(offsetof(D9CCommandChunkWireRecordHeader, payloadOffset), std::size_t{8},
+          "DOD record payload offset field offset");
+  checkEq(offsetof(D9CCommandChunkWireRecordHeader, payloadSize), std::size_t{12},
+          "DOD record payload size field offset");
+  checkEq(offsetof(D9CCommandChunkWireRecordHeader, firstHandle), std::size_t{16},
+          "DOD record first handle field offset");
+  checkEq(offsetof(D9CCommandChunkWireRecordHeader, handleCount), std::size_t{20},
+          "DOD record handle count field offset");
+
+  checkEq(offsetof(D9CCommandChunkWireHandleEntry, kind), std::size_t{0},
+          "DOD handle kind field offset");
+  checkEq(offsetof(D9CCommandChunkWireHandleEntry, generation), std::size_t{4},
+          "DOD handle generation field offset");
+  checkEq(offsetof(D9CCommandChunkWireHandleEntry, opaqueHandle), std::size_t{8},
+          "DOD opaque handle field offset");
+  checkEq(offsetof(D9CCommandChunkWireHandleEntry, reserved0), std::size_t{16},
+          "DOD handle reserved field offset");
+}
+
+void testDodWireDefaultsAndPayloadRanges() {
+  D9CCommandChunkWireHeader chunk{};
+  checkEq(chunk.reserved0, 0u, "DOD chunk reserved0 defaults to zero");
+  checkEq(chunk.reserved1, 0u, "DOD chunk reserved1 defaults to zero");
+
+  D9CCommandChunkWireRecordHeader record{};
+  checkEq(record.flags, D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
+          "DOD record flags default to none");
+  checkEq(record.reserved0, 0u, "DOD record reserved0 defaults to zero");
+  checkEq(record.reserved1, 0u, "DOD record reserved1 defaults to zero");
+
+  D9CCommandChunkWireHandleEntry handle{};
+  checkEq(handle.generation, D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+          "DOD handle generation defaults to none");
+  checkEq(handle.reserved0, 0u, "DOD handle reserved0 defaults to zero");
+  checkEq(handle.reserved1, 0u, "DOD handle reserved1 defaults to zero");
+
+  check(d9c_command_chunk_wire_payload_range_valid(16u, 0u, 16u),
+        "DOD payload helper accepts full arena");
+  check(d9c_command_chunk_wire_payload_range_valid(16u, 8u, 8u),
+        "DOD payload helper accepts tail range");
+  check(!d9c_command_chunk_wire_payload_range_valid(16u, 17u, 0u),
+        "DOD payload helper rejects offset past arena");
+  check(!d9c_command_chunk_wire_payload_range_valid(16u, 12u, 5u),
+        "DOD payload helper rejects range past arena");
+  check(!d9c_command_chunk_wire_payload_range_valid(0xffffffffu, 0xfffffff0u, 0x20u),
+        "DOD payload helper rejects overflowing range");
 }
 
 void testVariableRecordSizes() {
@@ -104,6 +189,11 @@ void testHandleKindCompatibility() {
           "shader handle kind wire value");
   checkEq(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, static_cast<std::uint32_t>(ChunkHandleKind::VertexDecl),
           "vertex declaration handle kind wire value");
+
+  D9CCommandChunkWireHandleEntry entry{};
+  entry.kind = D9C_CHUNK_HANDLE_KIND_SHADER;
+  checkEq(entry.kind, static_cast<std::uint32_t>(ChunkHandleKind::Shader),
+          "DOD handle entry uses legacy chunk handle kind mapping");
 }
 
 void testDrawPacketDeltaDefaults() {
@@ -127,6 +217,8 @@ int main() {
   try {
     testWireRecordsStayPod();
     testRecordHeaderLayout();
+    testDodWireChunkLayout();
+    testDodWireDefaultsAndPayloadRanges();
     testVariableRecordSizes();
     testHandleKindCompatibility();
     testDrawPacketDeltaDefaults();

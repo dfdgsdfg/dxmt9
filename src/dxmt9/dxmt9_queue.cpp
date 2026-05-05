@@ -153,40 +153,42 @@ u32 compatFlagsForPresent(const SwapDesc& present,
   return flags;
 }
 
-ChunkObservation makeChunkObservation(const MetalCommandRecord& command,
+ChunkObservation makeChunkObservation(const MetalCommandView& command,
                                       const std::function<u32(Handle)>& resolveSurfaceFlags) {
   switch (command.kind) {
-    case MetalCommandRecord::Kind::Draw:
+    case MetalCommandKind::Draw:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
-          .compatFlags = compatFlagsForDraw(command.draw, resolveSurfaceFlags),
+          .compatFlags = command.draw ? compatFlagsForDraw(*command.draw, resolveSurfaceFlags) : 0,
       };
-    case MetalCommandRecord::Kind::DrawRun:
+    case MetalCommandKind::DrawRun:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
-          .compatFlags = compatFlagsForDraw(command.drawRun.base, resolveSurfaceFlags),
+          .compatFlags = command.drawRun ? compatFlagsForDraw(command.drawRun->base, resolveSurfaceFlags) : 0,
       };
-    case MetalCommandRecord::Kind::Clear:
+    case MetalCommandKind::Clear:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
-          .compatFlags = compatFlagsForClear(command.clear, resolveSurfaceFlags),
+          .compatFlags = command.clear ? compatFlagsForClear(*command.clear, resolveSurfaceFlags) : 0,
       };
-    case MetalCommandRecord::Kind::SurfaceCopy:
-    case MetalCommandRecord::Kind::StretchRect:
-    case MetalCommandRecord::Kind::Readback:
+    case MetalCommandKind::SurfaceCopy:
+    case MetalCommandKind::StretchRect:
+    case MetalCommandKind::Readback:
       return ChunkObservation{
           .kind = ChunkObservationKind::Blit,
           .compatFlags = 0,
       };
-    case MetalCommandRecord::Kind::ColorFill:
+    case MetalCommandKind::ColorFill:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
           .compatFlags = 0,
       };
-    case MetalCommandRecord::Kind::Present:
+    case MetalCommandKind::Present:
       return ChunkObservation{
           .kind = ChunkObservationKind::Present,
-          .compatFlags = compatFlagsForPresent(command.present, command.presentSource, resolveSurfaceFlags),
+          .compatFlags = command.present
+              ? compatFlagsForPresent(command.present->present, command.present->presentSource, resolveSurfaceFlags)
+              : 0,
       };
   }
   return ChunkObservation{};
@@ -222,7 +224,7 @@ QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
         .index = i,
         .state = static_cast<QueueSlotState>(static_cast<int>(slot.state)),
         .seqId = slot.seqId,
-        .commandCount = slot.commands.size(),
+        .commandCount = slot.commandCount(),
     });
   }
   return makeQueueTraceSnapshot(traceState);
@@ -267,7 +269,7 @@ size_t slotCommandCountFor(const QueueControllerState& state,
   if (!slotIndex.has_value() || *slotIndex >= state.slots.size()) {
     return 0;
   }
-  return state.slots[*slotIndex].commands.size();
+  return state.slots[*slotIndex].commandCount();
 }
 
 bool writerCanProceed(const QueueControllerState& state,
@@ -352,22 +354,24 @@ CommandBufferDiagnostics summarizeChunk(u64 seqId,
 
 CommandBufferDiagnostics summarizeCommands(u64 seqId,
                                            size_t slotIndex,
-                                           std::span<const MetalCommandRecord> commands,
+                                           const ChunkSlot& slot,
                                            const std::function<u32(Handle)>& resolveSurfaceFlags) {
   std::vector<ChunkObservation> observations;
-  observations.reserve(commands.size());
-  for (const auto& command : commands) {
-    observations.push_back(makeChunkObservation(command, resolveSurfaceFlags));
+  observations.reserve(slot.commandCount());
+  for (std::size_t i = 0; i < slot.commandCount(); ++i) {
+    observations.push_back(makeChunkObservation(slot.commandAt(i), resolveSurfaceFlags));
   }
   return summarizeChunk(seqId, slotIndex, std::span<const ChunkObservation>(observations.data(), observations.size()));
 }
 
 CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
     u64 seqId,
-    size_t slotIndex,
-    std::span<const MetalCommandRecord> commands) const {
+    size_t slotIndex) const {
   const auto& resolveSurfaceFlags = submissionBinding_.resolveSurfaceFlags;
-  return summarizeCommands(seqId, slotIndex, commands, resolveSurfaceFlags);
+  if (slotIndex >= submissionBinding_.slots.size()) {
+    return CommandBufferDiagnostics{.seqId = seqId, .slotIndex = slotIndex};
+  }
+  return summarizeCommands(seqId, slotIndex, submissionBinding_.slots[slotIndex], resolveSurfaceFlags);
 }
 
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
@@ -495,7 +499,7 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
   acquireWriterSlot(*writeIndex, slots[*writeIndex].seqId, inflightLimit, [&] {
     slots[*writeIndex].state = ChunkSlot::State::Writing;
     slots[*writeIndex].seqId = 0;
-    slots[*writeIndex].commands.clear();
+    slots[*writeIndex].clearCommands();
     *writingSlot = *writeIndex;
   });
   return true;
@@ -551,7 +555,7 @@ bool QueueLifecycleController::commitCurrentChunk(
 
   auto& slots = submissionBinding_.slots;
   auto& slot = slots[**writingSlot];
-  if (slot.commands.empty()) {
+  if (slot.commandsEmpty()) {
     const size_t slotIndex = **writingSlot;
     commitEmpty(slotIndex, slot.seqId, [&] {
       slot.state = ChunkSlot::State::Free;
@@ -668,25 +672,20 @@ void QueueLifecycleController::appendPresentCommand(const SwapDesc& present, Han
   const size_t slotIndex = **writingSlot;
   auto& slot = submissionBinding_.slots[slotIndex];
   enqueuePresent(slotIndex, slot.seqId, present, sourceHandle, [&] {
-    MetalCommandRecord op;
-    op.kind = MetalCommandRecord::Kind::Present;
-    op.present = present;
-    op.presentSource = sourceHandle;
-    slot.commands.push_back(std::move(op));
+    slot.appendPresent(present, sourceHandle);
   });
 }
 
 void QueueLifecycleController::submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,
                                                   size_t slotIndex,
                                                   u64 seqId,
-                                                  std::span<const MetalCommandRecord> commands,
                                                   const char* context) {
   // TLA+: QueueLifecycleRefinement / EncodeSubmitToGpu.
   QueueSubmissionRecord record;
   record.commandBuffer = std::move(commandBuffer);
   record.slotIndex = slotIndex;
   record.seqId = seqId;
-  record.commands = commands;
+  record.diagnostics = summarizeSubmission(seqId, slotIndex);
   record.context = context;
   enqueueSubmission(record);
 }
@@ -707,7 +706,7 @@ void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) 
     }
     slot.state = ChunkSlot::State::Free;
     slot.seqId = 0;
-    slot.commands.clear();
+    slot.clearCommands();
     if (completedSeqQueue) {
       completedSeqQueue->push_back(seqId);
     }
@@ -795,7 +794,7 @@ void QueueLifecycleController::reclaimCompletedGpuSlots(u64 seqId) {
     }
     reclaimFree(slotIndex, seqId, [&] {
       slot.state = ChunkSlot::State::Free;
-      slot.commands.clear();
+      slot.clearCommands();
       slot.seqId = 0;
     });
     reclaimed = true;
@@ -1143,7 +1142,10 @@ void QueueLifecycleController::transition(QueueTransitionRecord record,
 }
 
 void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
-  const auto diagnostics = summarizeSubmission(record.seqId, record.slotIndex, record.commands);
+  CommandBufferDiagnostics diagnostics = record.diagnostics;
+  if (diagnostics.seqId == 0) {
+    diagnostics = summarizeSubmission(record.seqId, record.slotIndex);
+  }
 
   const auto beforeCommitState = currentState();
   if (record.slotIndex < submissionBinding_.slots.size()) {

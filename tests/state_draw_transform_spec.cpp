@@ -281,6 +281,88 @@ void testVertexDeclFvfAndStreamBindings() {
   checkEq(desc.vertexDecl.streams[4].stride, 56u, "decl stream 4 stride copied");
 }
 
+void testFlatDrawStateKey() {
+  DeviceState state;
+  state.reset();
+
+  const auto stream0 = makeBuffer(0x8100, 4096, UsageVertexBuffer);
+  const auto indexBuffer = makeBuffer(0x8200, 2048, UsageIndexBuffer);
+  const auto texture0 = makeTexture(0x8300, Format::A8R8G8B8);
+  const auto rt0 = makeSurface(0x8400, Format::A8R8G8B8, MultiSampleType::None, true, false);
+  const auto depth = makeSurface(0x8500, Format::D24S8, MultiSampleType::None, false, true);
+
+  state.streamBuffers[0] = stream0;
+  state.streamOffsets[0] = 16;
+  state.streamStrides[0] = 32;
+  state.indexBuffer = indexBuffer;
+  state.textures[0] = texture0;
+  state.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::Modulate);
+  state.samplerStates[0][SAMP_ADDRESS_U] = 1;
+  state.renderStates[RS_Z_ENABLE] = 1;
+  state.renderStates[RS_CULL_MODE] = static_cast<u32>(CullMode::Ccw);
+  state.renderTargets[0] = {rt0->handle(), rt0->level(), rt0->multiSampleCount()};
+  state.depthStencil = {depth->handle(), depth->level(), depth->multiSampleCount()};
+  state.vertexDecl.fvf = 0x120u;
+  state.vertexDecl.elements = {
+      VertexElement{0, 0, 2, 0, 0, 0},
+      VertexElement{0, 12, 3, 0, 5, 0},
+  };
+  state.vsConst.float4[0] = {1.0f, 2.0f, 3.0f, 4.0f};
+  state.transforms[XFORM_WORLD_BASE] = taggedMatrix(10.0f);
+
+  const DrawDesc first = makeDrawDescFromState(
+      state, {PrimitiveType::TriangleList, 2, 0, 0, 0, IndexType::UInt16});
+  const DrawDesc sameStateDifferentDraw = makeDrawDescFromState(
+      state, {PrimitiveType::LineList, 7, 33, -4, 19, IndexType::UInt32});
+
+  checkEq(makeFlatDrawStateKey(first), makeFlatDrawStateKey(first),
+          "identical draw state summaries compare equal");
+  checkEq(makeFlatDrawStateKey(first), makeFlatDrawStateKey(sameStateDifferentDraw),
+          "draw parameters do not disturb flat base draw state");
+
+  DrawDesc withUserPayload = first;
+  withUserPayload.userVertexData = {0xde, 0xad, 0xbe, 0xef};
+  withUserPayload.userIndexData = {0x01, 0x02};
+  checkEq(makeFlatDrawStateKey(first), makeFlatDrawStateKey(withUserPayload),
+          "user draw payload is excluded from flat base draw state");
+
+  DrawDesc sameMapsDifferentInsertion = first;
+  sameMapsDifferentInsertion.rs.values.clear();
+  sameMapsDifferentInsertion.rs.values[RS_SRC_BLEND] = static_cast<u32>(BlendFactor::One);
+  sameMapsDifferentInsertion.rs.values[RS_DEST_BLEND] = static_cast<u32>(BlendFactor::Zero);
+  DrawDesc sameMapsOriginalInsertion = first;
+  sameMapsOriginalInsertion.rs.values.clear();
+  sameMapsOriginalInsertion.rs.values[RS_DEST_BLEND] = static_cast<u32>(BlendFactor::Zero);
+  sameMapsOriginalInsertion.rs.values[RS_SRC_BLEND] = static_cast<u32>(BlendFactor::One);
+  checkEq(makeFlatDrawStateKey(sameMapsOriginalInsertion),
+          makeFlatDrawStateKey(sameMapsDifferentInsertion),
+          "flat base draw state map hashes are insertion-order independent");
+
+  DeviceState changedTexture = state;
+  changedTexture.textures[0] = makeTexture(0x8301, Format::A8R8G8B8);
+  check(!(makeFlatDrawStateKey(first) ==
+          makeFlatDrawStateKey(makeDrawDescFromState(changedTexture, {}))),
+        "texture handle changes flat base draw state");
+
+  DeviceState changedRenderState = state;
+  changedRenderState.renderStates[RS_CULL_MODE] = static_cast<u32>(CullMode::None);
+  check(!(makeFlatDrawStateKey(first) ==
+          makeFlatDrawStateKey(makeDrawDescFromState(changedRenderState, {}))),
+        "render-state changes flat base draw state");
+
+  DeviceState changedStream = state;
+  changedStream.streamStrides[0] = 48;
+  check(!(makeFlatDrawStateKey(first) ==
+          makeFlatDrawStateKey(makeDrawDescFromState(changedStream, {}))),
+        "stream binding changes flat base draw state");
+
+  DeviceState changedConstants = state;
+  changedConstants.vsConst.float4[0][2] = 99.0f;
+  check(!(makeFlatDrawStateKey(first) ==
+          makeFlatDrawStateKey(makeDrawDescFromState(changedConstants, {}))),
+        "shader constant changes flat base draw state");
+}
+
 }  // namespace
 
 int main() {
@@ -288,5 +370,6 @@ int main() {
   testConstantsAndShaderRefs();
   testResourceBindingsAndAttachments();
   testVertexDeclFvfAndStreamBindings();
+  testFlatDrawStateKey();
   return 0;
 }

@@ -152,7 +152,7 @@ struct QueueSubmissionRecord {
   WMT::Reference<WMT::CommandBuffer> commandBuffer{};
   size_t slotIndex = 0;
   u64 seqId = 0;
-  std::span<const MetalCommandRecord> commands;
+  CommandBufferDiagnostics diagnostics{};
   const char* context = "queue";
   std::vector<std::function<void()>> postCommitCallbacks;
 };
@@ -162,7 +162,7 @@ CommandBufferDiagnostics summarizeChunk(u64 seqId,
                                         std::span<const ChunkObservation> observations);
 CommandBufferDiagnostics summarizeCommands(u64 seqId,
                                           size_t slotIndex,
-                                          std::span<const MetalCommandRecord> commands,
+                                          const ChunkSlot& slot,
                                           const std::function<u32(Handle)>& resolveSurfaceFlags);
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state);
 
@@ -242,7 +242,7 @@ QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
         .index = i,
         .state = static_cast<QueueSlotState>(static_cast<int>(slot.state)),
         .seqId = slot.seqId,
-        .commandCount = slot.commands.size(),
+        .commandCount = slot.commandCount(),
     });
   }
   return makeQueueTraceSnapshot(state);
@@ -342,7 +342,7 @@ void traceQueueSlotsEvent(const char* event,
  *   stop                      -> *SubmissionBinding::stop
  *   slotState[s]              -> SubmissionBinding::slots[s].state
  *   slotSeqId[s]              -> SubmissionBinding::slots[s].seqId
- *   slotHasCommands[s]        -> !SubmissionBinding::slots[s].commands.empty()
+ *   slotHasCommands[s]        -> !SubmissionBinding::slots[s].commandsEmpty()
  *
  * TLA+: PresentFrameLatency
  *
@@ -408,7 +408,6 @@ class QueueLifecycleController {
   void submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,
                           size_t slotIndex,
                           u64 seqId,
-                          std::span<const MetalCommandRecord> commands,
                           const char* context = "queue");
   // TLA+: EncodeCompleteInline.
   void completeInlineChunk(size_t slotIndex, u64 seqId);
@@ -431,8 +430,7 @@ class QueueLifecycleController {
 #endif
   CommandBufferDiagnostics summarizeSubmission(
       u64 seqId,
-      size_t slotIndex,
-      std::span<const MetalCommandRecord> commands) const;
+      size_t slotIndex) const;
   void observeTransition(const QueueTransitionRecord& record) const;
   void enqueuePresent(size_t slotIndex,
                       u64 eventSeqId,

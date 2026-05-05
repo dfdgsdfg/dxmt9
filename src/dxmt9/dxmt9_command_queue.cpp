@@ -20,54 +20,6 @@
 namespace dxmt9 {
 
 namespace {
-
-using core::MetalCommandRecord;
-
-MetalCommandRecord makeDrawCommand(const core::DrawDesc& desc) {
-  MetalCommandRecord op;
-  op.kind = MetalCommandRecord::Kind::Draw;
-  op.draw = desc;
-  return op;
-}
-
-MetalCommandRecord makeDrawRunCommand(core::DrawRunDesc desc) {
-  MetalCommandRecord op;
-  op.kind = MetalCommandRecord::Kind::DrawRun;
-  op.drawRun = std::move(desc);
-  return op;
-}
-
-MetalCommandRecord makeClearCommand(const core::ClearDesc& desc) {
-  MetalCommandRecord op;
-  op.kind = MetalCommandRecord::Kind::Clear;
-  op.clear = desc;
-  return op;
-}
-
-MetalCommandRecord makeSurfaceCopyCommand(const core::SurfaceCopyDesc& desc) {
-  MetalCommandRecord op;
-  op.kind = MetalCommandRecord::Kind::SurfaceCopy;
-  op.surfaceCopy = desc;
-  return op;
-}
-
-MetalCommandRecord makeStretchRectCommand(const core::StretchRectDesc& desc) {
-  MetalCommandRecord op;
-  op.kind = MetalCommandRecord::Kind::StretchRect;
-  op.stretchRect = desc;
-  return op;
-}
-
-MetalCommandRecord makeColorFillCommand(const core::ColorFillDesc& desc) {
-  MetalCommandRecord op;
-  op.kind = MetalCommandRecord::Kind::ColorFill;
-  op.colorFill = desc;
-  return op;
-}
-
-}  // namespace
-
-namespace {
 std::string resolveShaderCachePath() {
   const char* disableArchive = std::getenv("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE");
   if (disableArchive && disableArchive[0] != '\0' && std::strcmp(disableArchive, "0") != 0) {
@@ -650,34 +602,35 @@ Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
 }
 
 void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
-  for (const auto& command : slot.commands) {
+  for (std::size_t i = 0; i < slot.commandCount(); ++i) {
+    const auto command = slot.commandAt(i);
     switch (command.kind) {
-      case core::MetalCommandRecord::Kind::Draw:
-        pool.markDrawResources(command.draw, slot.seqId);
+      case core::MetalCommandKind::Draw:
+        if (command.draw) pool.markDrawResources(*command.draw, slot.seqId);
         break;
-      case core::MetalCommandRecord::Kind::Clear:
-        pool.markClearResources(command.clear, slot.seqId);
+      case core::MetalCommandKind::Clear:
+        if (command.clear) pool.markClearResources(*command.clear, slot.seqId);
         break;
-      case core::MetalCommandRecord::Kind::SurfaceCopy:
-        pool.markSurfaceCopyResources(command.surfaceCopy, slot.seqId);
+      case core::MetalCommandKind::SurfaceCopy:
+        if (command.surfaceCopy) pool.markSurfaceCopyResources(*command.surfaceCopy, slot.seqId);
         break;
-      case core::MetalCommandRecord::Kind::StretchRect:
-        pool.markStretchResources(command.stretchRect, slot.seqId);
+      case core::MetalCommandKind::StretchRect:
+        if (command.stretchRect) pool.markStretchResources(*command.stretchRect, slot.seqId);
         break;
-      case core::MetalCommandRecord::Kind::Readback:
-        pool.markReadbackResources(command.readback, slot.seqId);
+      case core::MetalCommandKind::Readback:
+        if (command.readback) pool.markReadbackResources(*command.readback, slot.seqId);
         break;
-      case core::MetalCommandRecord::Kind::ColorFill:
-        pool.markColorFillResources(command.colorFill, slot.seqId);
+      case core::MetalCommandKind::ColorFill:
+        if (command.colorFill) pool.markColorFillResources(*command.colorFill, slot.seqId);
         break;
-      case core::MetalCommandRecord::Kind::Present:
-        if (command.presentSource) {
-          if (auto* surface = pool.findSurface(command.presentSource.value)) {
+      case core::MetalCommandKind::Present:
+        if (command.present && command.present->presentSource) {
+          if (auto* surface = pool.findSurface(command.present->presentSource.value)) {
             surface->lastUsedSeqId = std::max(surface->lastUsedSeqId, slot.seqId);
           }
         }
         break;
-      case core::MetalCommandRecord::Kind::DrawRun:
+      case core::MetalCommandKind::DrawRun:
         // Phase 35: explicit no-op. DrawRun ingress (submitDrawRun) marks
         // BaseDrawState resources ONCE at submit time (legacy mode) or
         // relies on chunk.handles bulk retention (chunk import mode,
@@ -698,7 +651,7 @@ void maybeCommitDrawChunkUnlocked(
   if (limit == 0 || !q.writingSlot_) {
     return;
   }
-  if (currentSlotUnlocked(q).commands.size() < limit) {
+  if (currentSlotUnlocked(q).commandCount() < limit) {
     return;
   }
   q.queueLifecycle_.commitCurrentChunk(
@@ -715,7 +668,7 @@ void CommandQueue::submitDraw(const core::DrawDesc& desc) {
   std::unique_lock lock(mutex_);
   // TLA+: WineCommit
   ensureWritingSlotUnlocked(*this, lock);
-  currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
+  currentSlotUnlocked(*this).appendDraw(desc);
   currentBackBuffer_ = desc.rts.color[0].handle;
   // Phase 14: chunk-import path already pinned every resource via
   // markChunkResources before iterating records — skip the redundant
@@ -784,7 +737,7 @@ void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
     pool_.markDrawResources(desc.base, seqIdForMark(*this, 0));
   }
   currentBackBuffer_ = desc.base.rts.color[0].handle;
-  currentSlotUnlocked(*this).commands.push_back(makeDrawRunCommand(std::move(desc)));
+  currentSlotUnlocked(*this).appendDrawRun(std::move(desc));
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
@@ -798,14 +751,14 @@ void CommandQueue::submitDrawBatch(std::span<const core::DrawDesc> descs) {
   PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex_);
   // Single mutex acquire amortized across N draws — the per-draw cost
-  // here is just makeDrawCommand + push_back + markDrawResources.
+  // here is just appendDraw + markDrawResources.
   // ensureWritingSlotUnlocked + maybeCommitDrawChunkUnlocked may still
   // close + reopen a chunk in the middle of the batch if the chunk-byte
   // limit fires; that's intentional, otherwise a runaway batch would
   // bypass the limit guard entirely.
   for (const auto& desc : descs) {
     ensureWritingSlotUnlocked(*this, lock);
-    currentSlotUnlocked(*this).commands.push_back(makeDrawCommand(desc));
+    currentSlotUnlocked(*this).appendDraw(desc);
     currentBackBuffer_ = desc.rts.color[0].handle;
     if (!skipDrawResourceMarking_) {
       pool_.markDrawResources(desc, seqIdForMark(*this, 0));
@@ -818,7 +771,7 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
   perf::countSubmitClear();
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  currentSlotUnlocked(*this).commands.push_back(makeClearCommand(desc));
+  currentSlotUnlocked(*this).appendClear(desc);
   if (desc.colorAttachments[0].handle) {
     currentBackBuffer_ = desc.colorAttachments[0].handle;
   }
@@ -828,7 +781,7 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
 void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  currentSlotUnlocked(*this).commands.push_back(makeSurfaceCopyCommand(desc));
+  currentSlotUnlocked(*this).appendSurfaceCopy(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
 }
@@ -837,7 +790,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   perf::countSubmitStretch();
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  currentSlotUnlocked(*this).commands.push_back(makeStretchRectCommand(desc));
+  currentSlotUnlocked(*this).appendStretchRect(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markStretchResources(desc, seqIdForMark(*this, 0));
 }
@@ -852,7 +805,7 @@ void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {
 void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  currentSlotUnlocked(*this).commands.push_back(makeColorFillCommand(desc));
+  currentSlotUnlocked(*this).appendColorFill(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markColorFillResources(desc, seqIdForMark(*this, 0));
 }

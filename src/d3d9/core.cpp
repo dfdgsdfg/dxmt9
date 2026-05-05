@@ -44,6 +44,54 @@ u64 hashTrivial(const T& value) {
   return hash;
 }
 
+u64 hashStateMap(const std::unordered_map<u32, u32>& values) {
+  u64 hash = hashCombine(kFnvOffset, static_cast<u64>(values.size()));
+  for (const auto& [key, value] : values) {
+    const u64 entryHash = hashCombine(hashTrivial(key), hashTrivial(value));
+    hash ^= entryHash + 0x9e3779b97f4a7c15ull;
+  }
+  return hash;
+}
+
+u64 hashVertexDeclElements(const VertexDeclSnapshot& decl) {
+  u64 hash = hashCombine(kFnvOffset, static_cast<u64>(decl.elements.size()));
+  hash = hashCombine(hash, decl.fvf);
+  for (const auto& element : decl.elements) {
+    hash = hashCombine(hash, hashTrivial(element));
+  }
+  return hash;
+}
+
+u64 hashShaderRefSummary(const ShaderRef& shader) {
+  u64 hash = hashCombine(kFnvOffset, static_cast<u64>(shader.kind));
+  hash = hashCombine(hash, shader.hash);
+  hash = hashCombine(hash, shader.bytecode.hash);
+  return hash;
+}
+
+u64 hashTextureTransforms(const std::array<Matrix4x4, kMaxTextureStages>& transforms) {
+  u64 hash = hashCombine(kFnvOffset, transforms.size());
+  for (const auto& transform : transforms) {
+    hash = hashCombine(hash, hashTrivial(transform));
+  }
+  return hash;
+}
+
+u64 hashClipPlanes(const std::array<ClipPlane, kMaxClipPlanes>& planes) {
+  u64 hash = hashCombine(kFnvOffset, planes.size());
+  for (const auto& plane : planes) {
+    hash = hashCombine(hash, hashTrivial(plane));
+  }
+  return hash;
+}
+
+u64 hashViewportScissor(const ViewportScissor& viewport) {
+  u64 hash = hashCombine(kFnvOffset, hashTrivial(viewport.viewport));
+  hash = hashCombine(hash, hashTrivial(viewport.scissor));
+  hash = hashCombine(hash, viewport.scissorEnabled ? 1u : 0u);
+  return hash;
+}
+
 u32 clampToByte(float value) {
   value = std::clamp(value, 0.0f, 1.0f);
   return static_cast<u32>(std::lround(value * 255.0f)) & 0xffu;
@@ -3565,6 +3613,65 @@ DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& arg
   desc.vsConst = state.vsConst;
   desc.psConst = state.psConst;
   return desc;
+}
+
+FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc) {
+  FlatDrawStateKey key{};
+
+  for (size_t i = 0; i < kMaxStreams; ++i) {
+    const auto& stream = desc.vertexDecl.streams[i];
+    key.streamBuffers[i] = stream.buffer ? stream.buffer->handle() : Handle{};
+    key.streamOffsets[i] = stream.offset;
+    key.streamStrides[i] = stream.stride;
+    if (key.streamBuffers[i]) {
+      key.streamMask |= 1u << i;
+    }
+  }
+
+  key.indexBuffer = desc.indexBuffer;
+  key.vertexElementCount = static_cast<u32>(desc.vertexDecl.elements.size());
+  key.fvf = desc.vertexDecl.fvf;
+  key.vertexDeclHash = hashVertexDeclElements(desc.vertexDecl);
+  key.vertexShaderKind = desc.vertexShader.kind;
+  key.pixelShaderKind = desc.pixelShader.kind;
+  key.vertexShaderHash = hashShaderRefSummary(desc.vertexShader);
+  key.pixelShaderHash = hashShaderRefSummary(desc.pixelShader);
+  key.vertexConstantsHash = hashTrivial(desc.vsConst);
+  key.pixelConstantsHash = hashTrivial(desc.psConst);
+
+  for (size_t i = 0; i < kMaxTextures; ++i) {
+    key.textures[i] = desc.textures[i].handle;
+    if (key.textures[i]) {
+      key.textureMask |= 1u << i;
+    }
+    if (i < kMaxTextureStages) {
+      key.textureStageStateHashes[i] = hashStateMap(desc.textures[i].stageStates);
+    }
+  }
+
+  for (size_t i = 0; i < kMaxSamplers; ++i) {
+    key.samplerStateHashes[i] = hashStateMap(desc.samplers[i].states);
+    if (!desc.samplers[i].states.empty()) {
+      key.samplerStateMask |= 1u << i;
+    }
+  }
+
+  key.renderStateHash = hashStateMap(desc.rs.values);
+  key.colorAttachments = desc.rts.color;
+  key.depthStencil = desc.rts.depthStencil;
+  for (size_t i = 0; i < kMaxRenderTargets; ++i) {
+    if (key.colorAttachments[i].handle) {
+      key.renderTargetMask |= 1u << i;
+    }
+  }
+
+  key.viewportHash = hashViewportScissor(desc.viewport);
+  key.worldViewProjHash = hashTrivial(desc.worldViewProj);
+  key.textureTransformsHash = hashTextureTransforms(desc.textureTransforms);
+  key.clipPlaneMask = desc.clipPlaneMask;
+  key.clipPlanesHash = hashClipPlanes(desc.clipPlanes);
+
+  return key;
 }
 
 HResult Device::clear(const ClearDesc& desc) {

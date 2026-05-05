@@ -653,6 +653,41 @@ struct DrawCallArgs {
   IndexType indexType = IndexType::UInt16;
 };
 
+struct FlatDrawStateKey {
+  std::array<Handle, kMaxStreams> streamBuffers{};
+  std::array<u32, kMaxStreams> streamOffsets{};
+  std::array<u32, kMaxStreams> streamStrides{};
+  u32 streamMask = 0;
+  Handle indexBuffer{};
+  u32 vertexElementCount = 0;
+  u32 fvf = 0;
+  u64 vertexDeclHash = 0;
+  ShaderRef::Kind vertexShaderKind = ShaderRef::Kind::None;
+  ShaderRef::Kind pixelShaderKind = ShaderRef::Kind::None;
+  u64 vertexShaderHash = 0;
+  u64 pixelShaderHash = 0;
+  u64 vertexConstantsHash = 0;
+  u64 pixelConstantsHash = 0;
+  std::array<Handle, kMaxTextures> textures{};
+  u32 textureMask = 0;
+  std::array<u64, kMaxTextureStages> textureStageStateHashes{};
+  std::array<u64, kMaxSamplers> samplerStateHashes{};
+  u32 samplerStateMask = 0;
+  u64 renderStateHash = 0;
+  std::array<RenderTargetAttachment, kMaxRenderTargets> colorAttachments{};
+  RenderTargetAttachment depthStencil{};
+  u32 renderTargetMask = 0;
+  u64 viewportHash = 0;
+  u64 worldViewProjHash = 0;
+  u64 textureTransformsHash = 0;
+  u32 clipPlaneMask = 0;
+  u64 clipPlanesHash = 0;
+
+  friend constexpr bool operator==(const FlatDrawStateKey&, const FlatDrawStateKey&) = default;
+};
+
+using FlatBaseDrawStateSummary = FlatDrawStateKey;
+
 // Per-draw parameters within a DrawRunDesc — only what differs between
 // draws sharing the same BaseDrawState (DrawDesc base). Encoder emits
 // one Metal draw call per DrawParam, reusing the bound state.
@@ -687,7 +722,7 @@ struct ChunkHandleEntry {
 
 // Backend draw-run record: one BaseDrawState (the existing DrawDesc) +
 // N compact DrawParam entries. Replaces N separate
-// MetalCommandRecord::Kind::Draw records when the importer detects a
+// MetalCommandKind::Draw records when the importer detects a
 // run of draws with no state change between them. Encoder binds state
 // once from `base`, then loops emitting per-draw calls — saves both
 // per-draw DrawDesc copies on the queue side and per-draw resource
@@ -1095,6 +1130,7 @@ struct DeviceState;
 FfpVertexKey makeFfpVertexKey(const DeviceState& state);
 FfpPixelKey makeFfpPixelKey(const DeviceState& state);
 DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args);
+FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc);
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);
 std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::span<const u8> input);

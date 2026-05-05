@@ -653,6 +653,18 @@ void testImportedChunkHandleAppendRejectsInvalidAndDuplicateHandles() {
   checkEq(entries.size(), static_cast<std::size_t>(1), "only one valid handle retained");
   check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_BUFFER, 0x7000u),
         "valid handle entry retained");
+
+  D9CCommandChunkWireHandleEntry wireEntry{};
+  wireEntry.kind = entries[0].kind;
+  wireEntry.opaqueHandle = entries[0].handle;
+  checkEq(wireEntry.kind, D9C_CHUNK_HANDLE_KIND_BUFFER,
+          "DOD wire handle entry preserves imported handle kind");
+  checkEq(wireEntry.opaqueHandle, 0x7000u,
+          "DOD wire handle entry preserves imported opaque handle");
+  checkEq(wireEntry.generation, D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+          "DOD wire handle generation defaults to none for imported legacy handles");
+  checkEq(wireEntry.reserved0, 0u, "DOD wire handle reserved0 defaults to zero");
+  checkEq(wireEntry.reserved1, 0u, "DOD wire handle reserved1 defaults to zero");
 }
 
 void testDrawRunHelpers() {

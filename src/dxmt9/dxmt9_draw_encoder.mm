@@ -1271,7 +1271,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
   // activeRT    := activeKey while activeRenderEncoder is live; NoRT otherwise.
   // hazardFlag  := activeWriteBloom.overlaps(next draw/read bloom), consumed immediately by a split.
-  // opCount     := progress through the slot.commands replay loop below.
+  // opCount     := progress through the slot commandHeaders replay loop below.
   // The current blit helpers open and end short-lived encoders internally, so
   // activeBlitEncoder is normally None but remains the local binding for a
   // future chunk-scoped blit encoder.
@@ -1352,32 +1352,37 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     commandBufferHasWork = false;
   };
 
-  using Kind = core::MetalCommandRecord::Kind;
-  for (std::size_t commandIndex = 0; commandIndex < slot.commands.size(); ++commandIndex) {
-    const auto& command = slot.commands[commandIndex];
+  using Kind = core::MetalCommandKind;
+  for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
+    const auto command = slot.commandAt(commandIndex);
     // TLA+: EncoderLifecycle / opCount observes command replay progress.
     switch (command.kind) {
-      case Kind::Clear:
+      case Kind::Clear: {
+        if (!command.clear) break;
+        const auto& clear = *command.clear;
         flushRender();
         flushBlit();
         flushPendingClear();
-        if (command.clear.rects.empty()) {
-          pendingClear = command.clear;
+        if (clear.rects.empty()) {
+          pendingClear = clear;
         } else {
-          dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, command.clear);
+          dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, clear);
           commandBufferHasWork = true;
         }
         break;
+      }
       case Kind::Draw: {
+        if (!command.draw) break;
+        const auto& draw = *command.draw;
         flushBlit();
         assertEncoderLifecycleInvariant();
-        const auto drawKey = makeAttachmentKey(command.draw.rts);
-        const auto drawReadBloom = makeDrawReadBloom(command.draw);
+        const auto drawKey = makeAttachmentKey(draw.rts);
+        const auto drawReadBloom = makeDrawReadBloom(draw);
         if (pendingClear.has_value()) {
           const auto clearKey = makeAttachmentKey(*pendingClear);
           const auto clearBloom = makeAttachmentBloom(*pendingClear);
           if (clearKey == drawKey && !clearBloom.overlaps(drawReadBloom)) {
-            startRenderPass(command.draw, pendingClear);
+            startRenderPass(draw, pendingClear);
             pendingClear.reset();
           } else {
             flushPendingClear();
@@ -1395,7 +1400,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 DXMT_ASSERT(activeKey == drawKey);
               }
               flushRender();
-              startRenderPass(command.draw, std::nullopt);
+              startRenderPass(draw, std::nullopt);
             } else {
               // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
               DXMT_ASSERT(hasActiveRender);
@@ -1418,7 +1423,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               DXMT_ASSERT(activeKey == drawKey);
             }
             flushRender();
-            startRenderPass(command.draw, std::nullopt);
+            startRenderPass(draw, std::nullopt);
           } else {
             // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
             DXMT_ASSERT(hasActiveRender);
@@ -1426,11 +1431,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             DXMT_ASSERT(!activeWriteBloom.overlaps(drawReadBloom));
           }
         }
-        encodeDraw(ctx, commandBuffer, activeRenderEncoder, command.draw, slot.seqId);
+        encodeDraw(ctx, commandBuffer, activeRenderEncoder, draw, slot.seqId);
         commandBufferHasWork = true;
         break;
       }
       case Kind::DrawRun: {
+        if (!command.drawRun) break;
+        const auto& drawRun = *command.drawRun;
         // Compact draw-run: state bound from base ONCE (render-pass +
         // resource-binding decisions key off base.rts), then loop over
         // per-DrawParam emits. First-cut implementation synthesizes a
@@ -1440,7 +1447,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // side follows as a separate step (Phase 3-E).
         flushBlit();
         assertEncoderLifecycleInvariant();
-        const auto& base = command.drawRun.base;
+        const auto& base = drawRun.base;
         const auto drawKey = makeAttachmentKey(base.rts);
         const auto drawReadBloom = makeDrawReadBloom(base);
         if (pendingClear.has_value()) {
@@ -1515,11 +1522,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         //   [3]   = draw 1 index
         //   …
         // Returned slices use the same indexing.
-        const std::size_t drawCount = command.drawRun.draws.size();
+        const std::size_t drawCount = drawRun.draws.size();
         std::vector<std::span<const std::byte>> upPayloads;
         upPayloads.reserve(drawCount * 2);
         bool anyUpData = false;
-        for (const auto& param : command.drawRun.draws) {
+        for (const auto& param : drawRun.draws) {
           if (!param.userVertexData.empty()) anyUpData = true;
           upPayloads.emplace_back(reinterpret_cast<const std::byte*>(param.userVertexData.data()),
                                   param.userVertexData.size());
@@ -1542,7 +1549,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // PreUploadedDrawData stack-pod plus one encodeDraw call.
         bool baseBound = false;
         for (std::size_t i = 0; i < drawCount; ++i) {
-          const auto& param = command.drawRun.draws[i];
+          const auto& param = drawRun.draws[i];
           PreUploadedDrawData preData{};
           if (i * 2u + 1u < upSlices.size()) {
             preData.vertex = upSlices[i * 2u];
@@ -1557,35 +1564,42 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         commandBufferHasWork = true;
         break;
       }
-      case Kind::SurfaceCopy:
+      case Kind::SurfaceCopy: {
+        if (!command.surfaceCopy) break;
         flushPendingClear();
         flushRender();
         assertHelperEncoderPrecondition();
         dxmt9::encoders::encodeSurfaceCopy(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                            ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
-                                           command.surfaceCopy);
+                                           *command.surfaceCopy);
         assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;
-      case Kind::StretchRect:
+      }
+      case Kind::StretchRect: {
+        if (!command.stretchRect) break;
         flushPendingClear();
         flushRender();
         assertHelperEncoderPrecondition();
         dxmt9::encoders::encodeStretchRect(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                             ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
-                                            command.stretchRect);
+                                            *command.stretchRect);
         assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;
-      case Kind::Readback:
+      }
+      case Kind::Readback: {
+        if (!command.readback) break;
         flushPendingClear();
         flushRender();
         assertHelperEncoderPrecondition();
-        dxmt9::encoders::encodeReadback(commandBuffer, ctx.pool, command.readback);
+        dxmt9::encoders::encodeReadback(commandBuffer, ctx.pool, *command.readback);
         assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;
-      case Kind::ColorFill:
+      }
+      case Kind::ColorFill: {
+        if (!command.colorFill) break;
         flushPendingClear();
         flushRender();
         // TLA+: EncoderLifecycle / BeginRender(rt)
@@ -1593,11 +1607,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         assertNoActiveEncoder();
         dxmt9::encoders::encodeColorFill(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                           ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
-                                          command.colorFill);
+                                          *command.colorFill);
         assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;
-      case Kind::Present:
+      }
+      case Kind::Present: {
+        if (!command.present) break;
+        const auto& present = command.present->present;
+        const auto presentSource = command.present->presentSource;
         flushPendingClear();
         flushRender();
         flushBlit();
@@ -1607,20 +1625,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           ctx.queue.notePresentDequeued(slot.seqId);
         }
         const bool presentEncoded = dxmt9::encodePresent(commandBuffer, ctx.pool,
-                                                          command.present, command.presentSource, slot.seqId);
+                                                          present, presentSource, slot.seqId);
         if (noteAfterAcquire) {
           ctx.queue.notePresentDequeued(slot.seqId);
         }
         if (presentEncoded) {
           commandBufferHasWork = true;
           ctx.queue.backBufferDiscardAfterPresent_ = true;
-          if (auto* presenter = command.present.presenter) {
+          if (auto* presenter = present.presenter) {
             postCommitCallbacks.push_back([presenter, seqId = slot.seqId] {
               presenter->preAcquireNextDrawable(seqId);
             });
           }
         }
         break;
+      }
     }
   }
 
@@ -1633,7 +1652,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   record.commandBuffer = std::move(commandBuffer);
   record.slotIndex = slotIndex;
   record.seqId = seqId;
-  record.commands = std::span<const core::MetalCommandRecord>(slot.commands.data(), slot.commands.size());
   record.context = "queue";
   record.postCommitCallbacks = std::move(postCommitCallbacks);
   return record;
