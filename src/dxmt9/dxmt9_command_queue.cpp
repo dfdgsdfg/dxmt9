@@ -606,7 +606,7 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
     const auto command = slot.commandAt(i);
     switch (command.kind) {
       case core::MetalCommandKind::DrawRun:
-        if (command.drawState) pool.markDrawResources(command.drawState->hot, slot.seqId);
+        if (command.drawState.hot) pool.markDrawResources(*command.drawState.hot, slot.seqId);
         break;
       case core::MetalCommandKind::Clear:
         if (command.clear) pool.markClearResources(*command.clear, slot.seqId);
@@ -684,31 +684,6 @@ void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> en
       break;
     }
   }
-}
-
-void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
-  const auto drawCount = core::drawRunDrawCount(desc);
-  if (drawCount == 0) {
-    return;
-  }
-  // Count each per-draw param toward submit_draw so the perf counter
-  // remains comparable with historical per-draw counters.
-  for (std::size_t i = 0; i < drawCount; ++i) {
-    perf::countSubmitDraw();
-  }
-  PerfScope scope(perf::countSubmitDrawCpuTime);
-  std::unique_lock lock(mutex_);
-  ensureWritingSlotUnlocked(*this, lock);
-  // Phase 14: chunk-import path already bulk-marked all resources; the
-  // per-draw markDrawResources walk is pure CPU waste in that mode.
-  // Non-chunk paths still need a resource walk, but BaseDrawState is
-  // shared, so one hot-state mark covers textures, RT/DS, VBs, and IB.
-  if (!skipDrawResourceMarking_) {
-    pool_.markDrawResources(desc.state.hot, seqIdForMark(*this, 0));
-  }
-  currentBackBuffer_ = desc.state.hot.colorAttachments[0].handle;
-  currentSlotUnlocked(*this).appendDrawRun(std::move(desc));
-  maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
 void CommandQueue::submitDrawRun(core::CanonicalDrawState state,

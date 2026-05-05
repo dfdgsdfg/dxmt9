@@ -12,7 +12,7 @@
 namespace dxmt9::core {
 
 enum class MetalCommandKind : std::uint8_t {
-  DrawRun,        // BaseDrawState + N DrawParam — see core::DrawRunDesc
+  DrawRun,        // Flat draw state SoA + N DrawParam
   Clear,
   SurfaceCopy,
   StretchRect,
@@ -48,7 +48,7 @@ struct MetalCommandHeader {
 struct MetalCommandView {
   MetalCommandKind kind = MetalCommandKind::DrawRun;
   const DrawRunCommandRecord* drawRunRecord = nullptr;
-  const CanonicalDrawState* drawState = nullptr;
+  FlatDrawStateView drawState{};
   const DrawUniformPayload* drawUniformPayload = nullptr;
   std::span<const DrawParam> drawParams{};
   std::span<const u8> drawPayloadBytes{};
@@ -76,6 +76,9 @@ namespace detail {
 
 inline constexpr std::size_t kChunkSlotU32Max =
     static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
+
+inline constexpr std::uint32_t kChunkSlotInvalidUniformIndex =
+    std::numeric_limits<std::uint32_t>::max();
 
 inline constexpr bool chunkSlotCanAppendU32IndexedElement(std::size_t currentCount) noexcept {
   return currentCount < kChunkSlotU32Max;
@@ -121,6 +124,23 @@ inline constexpr DrawUniformHandle chunkSlotUniformHandle(std::uint32_t index,
   };
 }
 
+inline std::size_t chunkSlotUniformLookupBucketCount(std::size_t payloadCount) noexcept {
+  std::size_t bucketCount = 8u;
+  const std::size_t target = payloadCount > kChunkSlotU32Max / 2u
+      ? kChunkSlotU32Max
+      : payloadCount * 2u;
+  while (bucketCount < target && bucketCount <= kChunkSlotU32Max / 2u) {
+    bucketCount *= 2u;
+  }
+  return bucketCount;
+}
+
+inline std::size_t chunkSlotUniformLookupBucket(u64 hash, std::size_t bucketCount) noexcept {
+  DXMT_ASSERT(bucketCount > 0 && "uniform lookup bucket table must not be empty");
+  const u64 mixedHash = hash ^ (hash >> 32u) ^ (hash >> 17u);
+  return static_cast<std::size_t>(mixedHash % bucketCount);
+}
+
 }  // namespace detail
 
 struct ChunkSlot {
@@ -133,8 +153,15 @@ struct ChunkSlot {
   // linearly and indexes into type-specific payload arrays. This avoids the
   // old fat record shape where every command carried every possible payload.
   std::vector<MetalCommandHeader> commandHeaders;
-  std::vector<CanonicalDrawState> drawStates;
+  std::vector<FlatDrawStateRecord> drawHotStates;
+  std::vector<DrawShaderLayoutContext> drawShaderLayouts;
+  std::vector<DrawDebugSnapshot> drawDebugSnapshots;
   std::vector<DrawUniformPayloadRecord> drawUniformPayloads;
+  // Slot-local hash chains for uniform interning; indices point into
+  // drawUniformPayloads.
+  std::vector<std::uint32_t> drawUniformPayloadLookupHeads;
+  std::vector<std::uint32_t> drawUniformPayloadLookupTails;
+  std::vector<std::uint32_t> drawUniformPayloadLookupNext;
   DrawUniformHandle lastUniformHandle{};
   std::vector<DrawParam> drawParams;
   std::vector<u8> drawPayloadArena;
@@ -156,8 +183,13 @@ struct ChunkSlot {
 
   void clearCommands() {
     commandHeaders.clear();
-    drawStates.clear();
+    drawHotStates.clear();
+    drawShaderLayouts.clear();
+    drawDebugSnapshots.clear();
     drawUniformPayloads.clear();
+    drawUniformPayloadLookupHeads.clear();
+    drawUniformPayloadLookupTails.clear();
+    drawUniformPayloadLookupNext.clear();
     lastUniformHandle = {};
     drawParams.clear();
     drawPayloadArena.clear();
@@ -195,6 +227,99 @@ struct ChunkSlot {
     return &record;
   }
 
+  bool drawStateStorageConsistent() const noexcept {
+    return drawHotStates.size() == drawShaderLayouts.size() &&
+           drawHotStates.size() == drawDebugSnapshots.size();
+  }
+
+  void reserveDrawStateStorage(std::size_t stateCount) {
+    drawHotStates.reserve(stateCount);
+    drawShaderLayouts.reserve(stateCount);
+    drawDebugSnapshots.reserve(stateCount);
+  }
+
+  std::uint32_t appendDrawState(CanonicalDrawState state) {
+    DXMT_ASSERT(drawStateStorageConsistent() && "draw state SoA arrays diverged");
+    const auto stateIndex = static_cast<std::uint32_t>(drawHotStates.size());
+    drawHotStates.push_back(std::move(state.hot));
+    drawShaderLayouts.push_back(std::move(state.shaderLayout));
+    drawDebugSnapshots.push_back(std::move(state.debug));
+    return stateIndex;
+  }
+
+  bool drawUniformPayloadLookupReady() const noexcept {
+    return !drawUniformPayloadLookupHeads.empty() &&
+           drawUniformPayloadLookupHeads.size() == drawUniformPayloadLookupTails.size() &&
+           drawUniformPayloadLookupNext.size() == drawUniformPayloads.size();
+  }
+
+  void linkDrawUniformPayloadLookupEntry(std::uint32_t uniformIndex) noexcept {
+    const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
+        drawUniformPayloads[uniformIndex].handle.hash, drawUniformPayloadLookupHeads.size());
+    const auto tailIndex = drawUniformPayloadLookupTails[bucketIndex];
+    if (tailIndex == detail::kChunkSlotInvalidUniformIndex) {
+      drawUniformPayloadLookupHeads[bucketIndex] = uniformIndex;
+    } else {
+      drawUniformPayloadLookupNext[tailIndex] = uniformIndex;
+    }
+    drawUniformPayloadLookupTails[bucketIndex] = uniformIndex;
+  }
+
+  void rebuildDrawUniformPayloadLookup(std::size_t bucketCount) {
+    if (drawUniformPayloads.empty()) {
+      drawUniformPayloadLookupHeads.clear();
+      drawUniformPayloadLookupTails.clear();
+      drawUniformPayloadLookupNext.clear();
+      return;
+    }
+
+    if (bucketCount < detail::chunkSlotUniformLookupBucketCount(drawUniformPayloads.size())) {
+      bucketCount = detail::chunkSlotUniformLookupBucketCount(drawUniformPayloads.size());
+    }
+
+    drawUniformPayloadLookupHeads.assign(bucketCount, detail::kChunkSlotInvalidUniformIndex);
+    drawUniformPayloadLookupTails.assign(bucketCount, detail::kChunkSlotInvalidUniformIndex);
+    drawUniformPayloadLookupNext.assign(drawUniformPayloads.size(),
+                                        detail::kChunkSlotInvalidUniformIndex);
+    for (std::size_t i = 0; i < drawUniformPayloads.size(); ++i) {
+      linkDrawUniformPayloadLookupEntry(static_cast<std::uint32_t>(i));
+    }
+  }
+
+  void reserveDrawUniformPayloadLookup(std::size_t payloadCount) {
+    if (payloadCount == 0) {
+      return;
+    }
+
+    drawUniformPayloadLookupNext.reserve(payloadCount);
+    auto bucketCount = detail::chunkSlotUniformLookupBucketCount(payloadCount);
+    if (bucketCount < drawUniformPayloadLookupHeads.size()) {
+      bucketCount = drawUniformPayloadLookupHeads.size();
+    }
+    if (drawUniformPayloadLookupHeads.size() < bucketCount ||
+        drawUniformPayloadLookupHeads.size() != drawUniformPayloadLookupTails.size() ||
+        drawUniformPayloadLookupNext.size() != drawUniformPayloads.size()) {
+      rebuildDrawUniformPayloadLookup(bucketCount);
+    }
+  }
+
+  void appendDrawUniformPayloadLookup(std::uint32_t uniformIndex) {
+    if (uniformIndex >= drawUniformPayloads.size()) {
+      return;
+    }
+
+    if (drawUniformPayloadLookupHeads.empty() ||
+        drawUniformPayloadLookupHeads.size() != drawUniformPayloadLookupTails.size() ||
+        drawUniformPayloadLookupNext.size() != uniformIndex) {
+      rebuildDrawUniformPayloadLookup(
+          detail::chunkSlotUniformLookupBucketCount(drawUniformPayloads.size()));
+      return;
+    }
+
+    drawUniformPayloadLookupNext.push_back(detail::kChunkSlotInvalidUniformIndex);
+    linkDrawUniformPayloadLookupEntry(uniformIndex);
+  }
+
   DrawUniformHandle findDrawUniformPayload(const DrawUniformPayload& payload,
                                            DrawUniformHandle candidate = {}) noexcept {
     if (const auto* record = drawUniformPayloadRecord(candidate)) {
@@ -207,6 +332,32 @@ struct ChunkSlot {
     if (const auto* record = drawUniformPayloadRecord(lastUniformHandle)) {
       if (record->handle.hash == payload.hash && record->payload == payload) {
         return record->handle;
+      }
+    }
+
+    if (drawUniformPayloadLookupReady()) {
+      const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
+          payload.hash, drawUniformPayloadLookupHeads.size());
+      auto uniformIndex = drawUniformPayloadLookupHeads[bucketIndex];
+      bool lookupIntact = true;
+      for (std::size_t visited = 0;
+           uniformIndex != detail::kChunkSlotInvalidUniformIndex &&
+           visited < drawUniformPayloads.size();
+           ++visited) {
+        if (uniformIndex >= drawUniformPayloads.size()) {
+          lookupIntact = false;
+          break;
+        }
+
+        const auto& record = drawUniformPayloads[uniformIndex];
+        if (record.handle.hash == payload.hash && record.payload == payload) {
+          lastUniformHandle = record.handle;
+          return record.handle;
+        }
+        uniformIndex = drawUniformPayloadLookupNext[uniformIndex];
+      }
+      if (lookupIntact && uniformIndex == detail::kChunkSlotInvalidUniformIndex) {
+        return {};
       }
     }
 
@@ -230,17 +381,20 @@ struct ChunkSlot {
 
     const auto uniformIndex = static_cast<std::uint32_t>(drawUniformPayloads.size());
     const auto uniformHandle = detail::chunkSlotUniformHandle(uniformIndex, payload.hash);
+    reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
     drawUniformPayloads.push_back(DrawUniformPayloadRecord{
         .handle = uniformHandle,
         .payload = payload,
     });
+    appendDrawUniformPayloadLookup(uniformIndex);
     lastUniformHandle = uniformHandle;
     return uniformHandle;
   }
 
   bool canAppendDrawRun(std::size_t drawCount, std::size_t payloadBytes,
                         bool needsUniformAppend) const noexcept {
-    return detail::chunkSlotCanAppendU32IndexedElement(drawStates.size()) &&
+    return drawStateStorageConsistent() &&
+           detail::chunkSlotCanAppendU32IndexedElement(drawHotStates.size()) &&
            (!needsUniformAppend ||
             detail::chunkSlotCanAppendU32IndexedElement(drawUniformPayloads.size())) &&
            detail::chunkSlotCanAppendU32Range(drawParams.size(), drawCount) &&
@@ -283,6 +437,16 @@ struct ChunkSlot {
       return;
     }
 
+    commandHeaders.reserve(commandHeaders.size() + 1u);
+    drawRunRecords.reserve(drawRunRecords.size() + 1u);
+    reserveDrawStateStorage(drawHotStates.size() + 1u);
+    drawParams.reserve(drawParams.size() + draws.size());
+    drawPayloadArena.reserve(drawPayloadArena.size() + payloadBytes);
+    if (needsUniformAppend) {
+      drawUniformPayloads.reserve(drawUniformPayloads.size() + 1u);
+      reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
+    }
+
     if (needsUniformAppend) {
       uniformHandle = appendDrawUniformPayload(uniformPayload);
       if (!uniformHandle.valid()) {
@@ -290,10 +454,9 @@ struct ChunkSlot {
       }
     }
 
-    const auto stateIndex = static_cast<std::uint32_t>(drawStates.size());
+    const auto stateIndex = appendDrawState(std::move(state));
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
-    drawStates.push_back(std::move(state));
 
     std::uint32_t recordPayloadSize = 0;
     auto appendPayloadBytes = [&](std::span<const u8> bytes) -> DrawPayloadRange {
@@ -323,61 +486,6 @@ struct ChunkSlot {
         .paramCount = static_cast<std::uint32_t>(draws.size()),
         .payloadOffset = payloadOffset,
         .payloadSize = recordPayloadSize,
-        .uniformHandle = uniformHandle,
-    });
-  }
-
-  void appendDrawRun(DrawRunDesc drawRun) {
-    const auto view = drawRunView(drawRun);
-    DXMT_ASSERT(view.uniforms != nullptr && "draw-run missing uniform payload view");
-    if (!view.uniforms) {
-      return;
-    }
-    const auto& uniformPayload = *view.uniforms;
-    DrawUniformHandle uniformHandle = findDrawUniformPayload(uniformPayload, view.uniformHandleCandidate);
-    const bool needsUniformAppend = !uniformHandle.valid();
-    std::uint32_t drawRunRecordIndex = 0;
-    if (!detail::chunkSlotTryMakeCommandPayloadIndex(commandHeaders.size(), drawRunRecords.size(),
-                                                     drawRunRecordIndex)) {
-      return;
-    }
-    const bool canUseSlotSoA = canAppendDrawRun(view.draws.size(), view.payloadArena.size(), needsUniformAppend);
-    DXMT_ASSERT(canUseSlotSoA && "draw-run SoA storage exceeded 32-bit range storage");
-    if (!canUseSlotSoA) {
-      return;
-    }
-
-    const auto stateIndex = static_cast<std::uint32_t>(drawStates.size());
-    const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
-    const bool canUseSlotArena =
-        detail::chunkSlotCanAppendU32Range(drawPayloadArena.size(), view.payloadArena.size());
-    DXMT_ASSERT(canUseSlotArena && "draw payload arena exceeded 32-bit range storage");
-    if (!canUseSlotArena) {
-      return;
-    }
-    const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
-    if (needsUniformAppend) {
-      uniformHandle = appendDrawUniformPayload(uniformPayload);
-      if (!uniformHandle.valid()) {
-        return;
-      }
-    }
-
-    drawStates.push_back(std::move(drawRun.state));
-
-    const auto payloadBytes = view.payloadArena;
-    if (!payloadBytes.empty()) {
-      drawPayloadArena.insert(drawPayloadArena.end(), payloadBytes.begin(), payloadBytes.end());
-    }
-
-    commandHeaders.push_back({MetalCommandKind::DrawRun, drawRunRecordIndex});
-    drawParams.insert(drawParams.end(), view.draws.begin(), view.draws.end());
-    drawRunRecords.push_back(DrawRunCommandRecord{
-        .stateIndex = stateIndex,
-        .firstParam = firstParam,
-        .paramCount = static_cast<std::uint32_t>(drawParams.size() - firstParam),
-        .payloadOffset = payloadOffset,
-        .payloadSize = static_cast<std::uint32_t>(payloadBytes.size()),
         .uniformHandle = uniformHandle,
     });
   }
@@ -427,11 +535,16 @@ struct ChunkSlot {
           view.drawPayloadBytes = std::span<const u8>(
               drawPayloadArena.data() + record.payloadOffset, record.payloadSize);
         }
-        if (record.stateIndex < drawStates.size()) {
-          view.drawState = &drawStates[record.stateIndex];
+        if (record.stateIndex < drawHotStates.size() &&
+            record.stateIndex < drawShaderLayouts.size() &&
+            record.stateIndex < drawDebugSnapshots.size()) {
+          view.drawState.hot = &drawHotStates[record.stateIndex];
+          view.drawState.shaderLayout = &drawShaderLayouts[record.stateIndex];
+          view.drawState.debug = &drawDebugSnapshots[record.stateIndex];
         }
         if (const auto* uniformRecord = drawUniformPayloadRecord(record.uniformHandle)) {
           view.drawUniformPayload = &uniformRecord->payload;
+          view.drawState.uniforms = &uniformRecord->payload;
         }
         if (record.firstParam <= drawParams.size() &&
             record.paramCount <= drawParams.size() - record.firstParam) {

@@ -104,11 +104,9 @@ class Device {
   // around the record-iteration block so bulk markChunkResources is the
   // sole retention path. Stub backends ignore — they have no Pool.
   virtual void setSkipDrawResourceMarking(bool /*skip*/) {}
-  // Compact draw-run ingress (BaseDrawState + N DrawParam). DeviceImpl
-  // forwards straight to CommandQueue::submitDrawRun. Stub backends may
-  // override this explicitly; the default stub has no canonical state
-  // expansion fallback.
-  virtual void submitDrawRun(core::DrawRunDesc) {}
+  // Immediate compact draw-run ingress (BaseDrawState + N DrawParam).
+  // Borrowed spans are valid for the call only; implementations must copy to
+  // their queue/storage before returning.
   virtual void submitDrawRun(core::CanonicalDrawState,
                              const core::DrawUniformPayload&,
                              std::span<const core::DrawParam>,

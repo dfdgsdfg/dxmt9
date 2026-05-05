@@ -3918,6 +3918,8 @@ bool drawPayloadRangeValid(std::size_t payloadSize, DrawPayloadRange range) noex
 
 }  // namespace
 
+namespace fixture {
+
 void drawRunClear(DrawRunDesc& run) {
   if (run.scratch_.draws.overflowMode) {
     run.scratch_.draws.overflow.clear();
@@ -3990,7 +3992,7 @@ std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept {
 
 std::span<const u8> drawRunPayloadBytes(const DrawRunDesc& run,
                                         DrawPayloadRange range) noexcept {
-  return drawRunPayloadBytes(range, drawRunPayloadArena(run));
+  return core::drawRunPayloadBytes(range, drawRunPayloadArena(run));
 }
 
 bool drawRunValidate(const DrawRunDesc& run) noexcept {
@@ -4003,6 +4005,8 @@ bool drawRunValidate(const DrawRunDesc& run) noexcept {
   }
   return true;
 }
+
+}  // namespace fixture
 
 DrawParamPayloadView drawPayloadAt(std::span<const DrawParamPayloadView> payloads,
                                    std::size_t index) {
@@ -4021,42 +4025,6 @@ bool drawRunUsesBoundIndexBuffer(std::span<const DrawParam> draws,
     }
   }
   return false;
-}
-
-DrawRunDesc makeDrawRunDescFromCanonical(CanonicalDrawState state,
-                                         const DrawUniformPayload& uniforms,
-                                         std::span<const DrawParam> draws,
-                                         std::span<const DrawParamPayloadView> payloads) {
-  DrawRunDesc run{};
-  if (draws.empty()) {
-    return run;
-  }
-
-  const auto& first = draws.front();
-  const auto firstPayload = drawPayloadAt(payloads, 0);
-  run.state = std::move(state);
-  drawRunSetUniformPayload(run, uniforms);
-  run.state.debug = makeDrawDebugSnapshot(
-      DrawCallArgs{first.primitiveType, first.primitiveCount, first.startVertex,
-                   first.baseVertexIndex, first.startIndex, first.indexType},
-      run.state.hot);
-  run.state.debug.userVertexBytes = static_cast<u32>(
-      std::min<std::size_t>(firstPayload.userVertexData.size(), std::numeric_limits<u32>::max()));
-  run.state.debug.userIndexBytes = static_cast<u32>(
-      std::min<std::size_t>(firstPayload.userIndexData.size(), std::numeric_limits<u32>::max()));
-  std::size_t payloadBytes = 0;
-  for (std::size_t i = 0; i < draws.size(); ++i) {
-    const auto payload = drawPayloadAt(payloads, i);
-    payloadBytes += payload.userVertexData.size() + payload.userIndexData.size();
-  }
-  drawRunReserve(run, draws.size(), payloadBytes);
-
-  for (std::size_t i = 0; i < draws.size(); ++i) {
-    if (!drawRunAppend(run, draws[i], drawPayloadAt(payloads, i))) {
-      return {};
-    }
-  }
-  return run;
 }
 
 void Device::submitDrawRunInternalFromState(DeviceState baseState,
@@ -4128,35 +4096,6 @@ void Device::submitDrawRunInternalFromCurrentState(
           cached.hot),
   };
   submitDrawRunInternal(std::move(state), cached.uniforms, draws, payloads);
-}
-
-DrawRunDesc Device::makeDrawRunDescFromCurrentState(
-    std::span<const DrawParam> draws,
-    std::span<const DrawParamPayloadView> payloads) {
-  if (draws.empty()) {
-    return {};
-  }
-  const auto& cached = cachedBaseDrawState(drawRunUsesBoundIndexBuffer(draws, payloads));
-  CanonicalDrawState state{
-      cached.hot,
-      cached.shaderLayout,
-      makeDrawDebugSnapshot(
-          DrawCallArgs{draws.front().primitiveType, draws.front().primitiveCount,
-                       draws.front().startVertex, draws.front().baseVertexIndex,
-                       draws.front().startIndex, draws.front().indexType},
-          cached.hot),
-  };
-  return makeDrawRunDescFromCanonical(std::move(state), cached.uniforms, draws, payloads);
-}
-
-DrawRunDesc Device::beginDrawRunFromCurrentState(DrawParam first, std::size_t drawCapacity,
-                                                 std::size_t payloadBytes) {
-  auto run = makeDrawRunDescFromCurrentState(std::span<const DrawParam>(&first, 1));
-  if (drawRunEmpty(run)) {
-    return {};
-  }
-  drawRunReserve(run, drawCapacity, payloadBytes);
-  return run;
 }
 
 HResult Device::clear(const ClearDesc& desc) {
@@ -4259,14 +4198,6 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
     return D3D_OK;
   }
   submitDrawRunInternalFromCurrentState(draws);
-  return D3D_OK;
-}
-
-HResult Device::submitDrawRun(DrawRunDesc desc) {
-  if (drawRunEmpty(desc)) {
-    return D3D_OK;
-  }
-  submitDrawRunInternal(std::move(desc));
   return D3D_OK;
 }
 
@@ -4738,73 +4669,6 @@ void Device::submitDrawRunInternal(CanonicalDrawState state,
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
 }
 
-void Device::submitDrawRunInternal(DrawRunDesc desc) {
-  if (drawRunEmpty(desc)) {
-    return;
-  }
-  const auto draws = drawRunDraws(desc);
-  const auto& hot = desc.state.hot;
-  if (renderTraceEnabled()) {
-    const auto& shader = desc.state.shaderLayout;
-    const auto stageState = [&](size_t stageIndex, u32 key) -> u32 {
-      if (stageIndex >= hot.textureStageStates.size()) {
-        return 0u;
-      }
-      return flatStateOr(hot.textureStageStates[stageIndex], key, 0u);
-    };
-    const auto renderState = [&](u32 key, u32 fallback = 0u) -> u32 {
-      return flatStateOr(hot.renderStates, key, fallback);
-    };
-    for (size_t i = 0; i < draws.size(); ++i) {
-      const auto& draw = draws[i];
-      emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x indexed=%u",
-                      static_cast<unsigned long long>(submittedSequenceId_ + 1 + i),
-                      static_cast<unsigned>(draw.primitiveType),
-                      draw.primitiveCount,
-                      draw.startVertex,
-                      draw.baseVertexIndex,
-                      draw.startIndex,
-                      static_cast<unsigned long long>(hot.colorAttachments[0].handle.value),
-                      static_cast<unsigned long long>(hot.depthStencil.handle.value),
-                      static_cast<unsigned long long>(hot.textures[0].value),
-                      static_cast<unsigned>(shader.vertexShader.kind),
-                      static_cast<unsigned>(shader.pixelShader.kind),
-                      static_cast<unsigned long long>(hashShaderRef(shader.vertexShader)),
-                      static_cast<unsigned long long>(hashShaderRef(shader.pixelShader)),
-                      static_cast<unsigned long long>(hot.key.renderStateHash),
-                      shader.vertexDecl.fvf,
-                      renderState(RS_LIGHTING),
-                      renderState(RS_CULL_MODE, static_cast<u32>(CullMode::Ccw)),
-                      renderState(RS_ALPHA_TEST_ENABLE),
-                      renderState(RS_ALPHABLEND_ENABLE),
-                      renderState(RS_SRC_BLEND),
-                      renderState(RS_DEST_BLEND),
-                      stageState(0, TSS_COLOR_OP),
-                      stageState(0, TSS_ALPHA_OP),
-                      stageState(0, TSS_TEXCOORD_INDEX),
-                      stageState(0, TSS_TEXTURE_TRANSFORM_FLAGS),
-                      stageState(1, TSS_COLOR_OP),
-                      stageState(1, TSS_ALPHA_OP),
-                      stageState(1, TSS_TEXCOORD_INDEX),
-                      stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
-                      hot.clipPlaneMask,
-                      draw.indexed ? 1u : 0u);
-    }
-  }
-
-  const auto drawCount = static_cast<u64>(draws.size());
-  if (activeOcclusionQuery_) {
-    for (const auto& draw : draws) {
-      activeOcclusionCount_ += draw.primitiveCount;
-    }
-  }
-  upperDevice_->submitDrawRun(std::move(desc));
-  submittedSequenceId_ += drawCount;
-  // SeqIdSafety: a submission can advance the current sequence, but never
-  // below the completed sequence.
-  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
-}
-
 void Device::submitPresentInternal(const SwapDesc& desc) {
   if (renderTraceEnabled()) {
     emitRenderTrace("present seq=%llu window=0x%llx size=%ux%u fmt=%u windowed=%d interval=%u",
@@ -5270,20 +5134,13 @@ class StubDxmt9Device final : public dxmt9::Device {
                             std::span<const std::uint8_t> bytes) override {
     if (backend_) backend_->uploadTextureLevel(handle, level, w, h, pitch, bytes);
   }
-  void submitDrawRun(DrawRunDesc desc) override {
-    if (!backend_) {
-      return;
-    }
-    backend_->submitDrawRun(desc);
-  }
   void submitDrawRun(CanonicalDrawState state, const DrawUniformPayload& uniforms,
                      std::span<const DrawParam> draws,
                      std::span<const DrawParamPayloadView> payloads) override {
     if (!backend_) {
       return;
     }
-    auto desc = makeDrawRunDescFromCanonical(std::move(state), uniforms, draws, payloads);
-    backend_->submitDrawRun(desc);
+    backend_->submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
   void submitClear(const ClearDesc& desc) override {
     if (backend_) backend_->submitClear(desc);

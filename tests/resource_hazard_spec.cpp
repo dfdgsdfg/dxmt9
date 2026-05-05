@@ -123,18 +123,6 @@ struct RecordingDxmt9Device final : dxmt9::Device {
     events.push_back(std::move(event));
   }
 
-  void submitDrawRun(DrawRunDesc desc) override {
-    RecordedEvent event;
-    event.kind = EventKind::SubmitDraw;
-    event.drawRun.state = std::move(desc.state);
-    event.drawRun.hot = event.drawRun.state.hot;
-    const auto view = drawRunView(desc);
-    event.drawRun.draws.assign(view.draws.begin(), view.draws.end());
-    event.drawRun.payloadArena.assign(view.payloadArena.begin(),
-                                      view.payloadArena.end());
-    events.push_back(std::move(event));
-  }
-
   void submitDrawRun(CanonicalDrawState state, const DrawUniformPayload&,
                      std::span<const DrawParam> draws,
                      std::span<const DrawParamPayloadView> payloads) override {

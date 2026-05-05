@@ -499,15 +499,33 @@ struct RecordingBackend final : BackendDevice {
     textureUploads.push_back({handle, level, width, height, pitch, std::vector<u8>(bytes.begin(), bytes.end())});
   }
 
-  void submitDrawRun(const DrawRunDesc& desc) override {
-    check(drawRunValidate(desc), "submitted draw run validates");
-    const auto view = drawRunView(desc);
+  void submitDrawRun(CanonicalDrawState state, const DrawUniformPayload& uniforms,
+                     std::span<const DrawParam> submittedDraws,
+                     std::span<const DrawParamPayloadView> payloads) override {
     RecordedDrawRun run{};
-    run.state = desc.state;
-    run.uniforms = view.uniforms ? *view.uniforms : DrawUniformPayload{};
-    run.hot = desc.state.hot;
-    run.draws.assign(view.draws.begin(), view.draws.end());
-    run.payloadArena.assign(view.payloadArena.begin(), view.payloadArena.end());
+    run.state = std::move(state);
+    run.uniforms = uniforms;
+    run.hot = run.state.hot;
+    run.draws.reserve(submittedDraws.size());
+
+    auto appendPayload = [&](std::span<const u8> bytes) -> DrawPayloadRange {
+      if (bytes.empty()) {
+        return {};
+      }
+      const auto offset = static_cast<u32>(run.payloadArena.size());
+      run.payloadArena.insert(run.payloadArena.end(), bytes.begin(), bytes.end());
+      return DrawPayloadRange{
+          .offset = offset,
+          .size = static_cast<u32>(bytes.size()),
+      };
+    };
+    for (std::size_t i = 0; i < submittedDraws.size(); ++i) {
+      DrawParam param = submittedDraws[i];
+      const DrawParamPayloadView payload = i < payloads.size() ? payloads[i] : DrawParamPayloadView{};
+      param.userVertexRange = appendPayload(payload.userVertexData);
+      param.userIndexRange = appendPayload(payload.userIndexData);
+      run.draws.push_back(param);
+    }
 
     for (const auto& param : run.draws) {
       RecordedDraw draw{};

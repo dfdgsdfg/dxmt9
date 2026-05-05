@@ -264,6 +264,75 @@ void testChunkSlotSimpleCommandSoAViews() {
         "slot clearCommands resets recent uniform handle");
 }
 
+void testChunkSlotDirectDrawRunUniformLookup() {
+  DrawDesc base{};
+  base.primitiveCount = 1;
+  const auto uniformA = makeDrawUniformPayload(base);
+  DrawDesc changed = base;
+  changed.clipPlaneMask = 1u;
+  const auto uniformB = makeDrawUniformPayload(changed);
+  check(!(uniformA == uniformB),
+        "test direct chunk-slot uniform payload variants differ");
+
+  DrawParam draw{};
+  draw.primitiveCount = 1;
+  const std::array<DrawParam, 1> draws{draw};
+  const std::array<u8, 4> vertexPayload{0x10, 0x20, 0x30, 0x40};
+  const std::array<DrawParamPayloadView, 1> payloads{
+      DrawParamPayloadView{
+          .userVertexData = std::span<const u8>(vertexPayload.data(), vertexPayload.size()),
+      },
+  };
+
+  ChunkSlot slot{};
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(base), uniformA,
+                     std::span<const DrawParam>(draws.data(), draws.size()),
+                     std::span<const DrawParamPayloadView>(payloads.data(), payloads.size()));
+  const auto firstView = slot.commandAt(0);
+  check(firstView.drawRunRecord != nullptr,
+        "slot direct draw-run stores the first uniform payload");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
+          "slot direct draw-run appends the first uniform payload");
+  const auto uniformAHandle = firstView.drawRunRecord->uniformHandle;
+  checkEq(slot.lastUniformHandle, uniformAHandle,
+          "slot direct draw-run records the first uniform as recent");
+
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(changed), uniformB,
+                     std::span<const DrawParam>(draws.data(), draws.size()),
+                     std::span<const DrawParamPayloadView>{});
+  const auto secondView = slot.commandAt(1);
+  check(secondView.drawRunRecord != nullptr,
+        "slot direct draw-run stores the changed uniform payload");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+          "slot direct draw-run appends a changed uniform payload");
+  const auto uniformBHandle = secondView.drawRunRecord->uniformHandle;
+  checkEq(slot.lastUniformHandle, uniformBHandle,
+          "slot direct draw-run records the changed uniform as recent");
+
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(base), uniformA,
+                     std::span<const DrawParam>(draws.data(), draws.size()),
+                     std::span<const DrawParamPayloadView>{});
+  const auto reusedView = slot.commandAt(2);
+  check(reusedView.drawRunRecord != nullptr,
+        "slot direct reused-uniform draw-run exposes compact run record");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+          "slot indexed uniform lookup reuses a non-recent direct payload");
+  checkEq(reusedView.drawRunRecord->uniformHandle, uniformAHandle,
+          "slot direct indexed uniform lookup returns the older payload handle");
+  checkEq(slot.lastUniformHandle, uniformAHandle,
+          "slot direct indexed uniform hit becomes the recent uniform handle");
+  checkEq(slot.drawUniformPayloadLookupNext.size(), slot.drawUniformPayloads.size(),
+          "slot direct uniform lookup tracks every interned payload");
+
+  slot.clearCommands();
+  check(slot.drawUniformPayloadLookupHeads.empty(),
+        "slot clearCommands resets uniform lookup heads");
+  check(slot.drawUniformPayloadLookupTails.empty(),
+        "slot clearCommands resets uniform lookup tails");
+  check(slot.drawUniformPayloadLookupNext.empty(),
+        "slot clearCommands resets uniform lookup links");
+}
+
 void testStateValueTableDirtyHashContract() {
   RenderStateTable a;
   RenderStateTable b;
@@ -719,27 +788,26 @@ void testFlatDrawStateKey() {
           "payload arena mutations remain separate from the draw-run key");
 
   ChunkSlot slot{};
-  DrawRunDesc singleRun{};
-  singleRun.state = makeCanonicalDrawStateForTest(withUserPayload);
-  drawRunSetUniformPayload(singleRun, sharedUniformPayload);
   DrawParam singleParam = makeDrawParamForTest(withUserPayload);
-  check(drawRunAppend(
-            singleRun, singleParam,
-            DrawParamPayloadView{
-                .userVertexData = std::span<const u8>(withUserPayload.userVertexData.data(),
-                                                      withUserPayload.userVertexData.size()),
-                .userIndexData = std::span<const u8>(withUserPayload.userIndexData.data(),
-                                                     withUserPayload.userIndexData.size()),
-            }),
-        "test single draw payload packs into run arena");
-  check(drawRunValidate(singleRun), "single draw-run validates after append");
-  slot.appendDrawRun(std::move(singleRun));
+  const DrawParamPayloadView singlePayload{
+      .userVertexData = std::span<const u8>(withUserPayload.userVertexData.data(),
+                                            withUserPayload.userVertexData.size()),
+      .userIndexData = std::span<const u8>(withUserPayload.userIndexData.data(),
+                                           withUserPayload.userIndexData.size()),
+  };
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(withUserPayload), sharedUniformPayload,
+                     std::span<const DrawParam>(&singleParam, 1),
+                     std::span<const DrawParamPayloadView>(&singlePayload, 1));
   const auto drawView = slot.commandAt(0);
   check(drawView.drawRunRecord != nullptr, "slot single-draw command exposes compact run record");
-  check(drawView.drawState != nullptr, "slot draw command indexes canonical draw state");
+  check(drawView.drawState.hot != nullptr, "slot draw command indexes hot draw state");
+  check(drawView.drawState.shaderLayout != nullptr,
+        "slot draw command indexes shader layout state");
+  check(drawView.drawState.debug != nullptr,
+        "slot draw command indexes debug state");
   checkEq(drawView.drawParams.size(), std::size_t{1},
           "slot single-draw command indexes draw param table");
-  checkEq(drawView.drawState->hot.key, firstKey,
+  checkEq(drawView.drawState.key(), firstKey,
           "slot draw state stores the canonical flat key");
   checkEq(drawView.drawParams[0].userVertexRange.offset, 0u,
           "slot draw payload stores vertex bytes at a record-local offset");
@@ -763,26 +831,24 @@ void testFlatDrawStateKey() {
   checkEq(slot.lastUniformHandle, sharedUniformHandle,
           "slot remembers recently appended uniform payload handle");
 
-  drawRunClear(packedRun);
-  drawRunSetUniformPayload(packedRun, sharedUniformPayload);
-  check(drawRunAppend(
-            packedRun, drawParamB,
-            DrawParamPayloadView{
-                .userVertexData = std::span<const u8>(packedRunVertexData.data(),
-                                                      packedRunVertexData.size()),
-                .userIndexData = std::span<const u8>(packedRunIndexData.data(),
-                                                     packedRunIndexData.size()),
-            }),
-        "test packed draw-run payload re-appends before slot append");
-  check(drawRunValidate(packedRun), "packed draw-run validates before slot append");
-  packedRun.state.debug.renderStateHash = 99ull;
-  slot.appendDrawRun(std::move(packedRun));
+  auto directPackedState = makeCanonicalDrawStateForTest(first);
+  directPackedState.debug.renderStateHash = 99ull;
+  const DrawParamPayloadView packedPayload{
+      .userVertexData = std::span<const u8>(packedRunVertexData.data(),
+                                            packedRunVertexData.size()),
+      .userIndexData = std::span<const u8>(packedRunIndexData.data(),
+                                           packedRunIndexData.size()),
+  };
+  slot.appendDrawRun(std::move(directPackedState), sharedUniformPayload,
+                     std::span<const DrawParam>(&drawParamB, 1),
+                     std::span<const DrawParamPayloadView>(&packedPayload, 1));
   const auto runView = slot.commandAt(1);
   check(runView.drawRunRecord != nullptr, "slot draw-run command exposes compact run record");
-  check(runView.drawState != nullptr, "slot draw-run indexes canonical draw state");
-  checkEq(runView.drawState->hot.key, packedRunKey,
+  check(runView.drawState.hot != nullptr, "slot draw-run indexes hot draw state");
+  check(runView.drawState.debug != nullptr, "slot draw-run indexes debug state");
+  checkEq(runView.drawState.key(), packedRunKey,
           "slot draw-run preserves the incoming canonical hot state");
-  checkEq(runView.drawState->debug.renderStateHash, 99ull,
+  checkEq(runView.drawState.debugSnapshot().renderStateHash, 99ull,
           "slot draw-run preserves the incoming debug snapshot without recomputing base state");
   checkEq(runView.drawParams.size(), std::size_t{1},
           "slot draw-run indexes shared draw param table");
@@ -808,16 +874,12 @@ void testFlatDrawStateKey() {
   checkEq(slot.lastUniformHandle, sharedUniformHandle,
           "slot uniform fast path keeps the recent matching handle");
 
-  DrawRunDesc noPayloadRun{};
-  noPayloadRun.state = makeCanonicalDrawStateForTest(first);
   DrawDesc changedUniformDesc = withUserPayload;
   changedUniformDesc.clipPlaneMask ^= 0x1u;
   const auto changedUniformPayload = makeDrawUniformPayload(changedUniformDesc);
-  drawRunSetUniformPayload(noPayloadRun, changedUniformPayload);
-  check(drawRunAppend(noPayloadRun, drawParamA),
-        "test no-payload draw-run appends before slot append");
-  check(drawRunValidate(noPayloadRun), "no-payload draw-run validates before slot append");
-  slot.appendDrawRun(std::move(noPayloadRun));
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(first), changedUniformPayload,
+                     std::span<const DrawParam>(&drawParamA, 1),
+                     std::span<const DrawParamPayloadView>{});
   const auto noPayloadView = slot.commandAt(2);
   check(noPayloadView.drawRunRecord != nullptr,
         "slot no-payload draw-run command exposes compact run record");
@@ -843,32 +905,22 @@ void testFlatDrawStateKey() {
   checkEq(slot.lastUniformHandle, changedUniformHandle,
           "slot remembers recently appended changed uniform payload handle");
 
-  DrawRunDesc reusedUniformRun{};
-  reusedUniformRun.state = makeCanonicalDrawStateForTest(first);
-  drawRunSetUniformPayload(reusedUniformRun, sharedUniformPayload);
-  check(drawRunAppend(reusedUniformRun, drawParamA),
-        "test reused-uniform draw-run appends before slot append");
-  check(drawRunValidate(reusedUniformRun),
-        "reused-uniform draw-run validates before slot append");
-  slot.appendDrawRun(std::move(reusedUniformRun));
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(first), sharedUniformPayload,
+                     std::span<const DrawParam>(&drawParamA, 1),
+                     std::span<const DrawParamPayloadView>{});
   const auto reusedUniformView = slot.commandAt(3);
   check(reusedUniformView.drawRunRecord != nullptr,
         "slot reused-uniform draw-run command exposes compact run record");
   checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
-          "slot linear uniform hit reuses an older payload handle");
+          "slot indexed uniform hit reuses an older payload handle");
   checkEq(reusedUniformView.drawRunRecord->uniformHandle, sharedUniformHandle,
           "slot reused-uniform draw-run uses the older interned handle");
   checkEq(slot.lastUniformHandle, sharedUniformHandle,
-          "slot records the uniform handle found by linear scan as most recent");
+          "slot records the uniform handle found by indexed lookup as most recent");
 
-  DrawRunDesc fastUniformRun{};
-  fastUniformRun.state = makeCanonicalDrawStateForTest(first);
-  drawRunSetUniformPayload(fastUniformRun, sharedUniformPayload);
-  check(drawRunAppend(fastUniformRun, drawParamA),
-        "test fast-uniform draw-run appends before slot append");
-  check(drawRunValidate(fastUniformRun),
-        "fast-uniform draw-run validates before slot append");
-  slot.appendDrawRun(std::move(fastUniformRun));
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(first), sharedUniformPayload,
+                     std::span<const DrawParam>(&drawParamA, 1),
+                     std::span<const DrawParamPayloadView>{});
   const auto fastUniformView = slot.commandAt(4);
   check(fastUniformView.drawRunRecord != nullptr,
         "slot fast-uniform draw-run command exposes compact run record");
@@ -929,6 +981,7 @@ void testFlatDrawStateKey() {
 int main() {
   testChunkSlotU32GuardBoundaries();
   testChunkSlotSimpleCommandSoAViews();
+  testChunkSlotDirectDrawRunUniformLookup();
   testStateValueTableDirtyHashContract();
   testStateDrawTransform();
   testConstantsAndShaderRefs();

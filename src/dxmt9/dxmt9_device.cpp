@@ -152,9 +152,6 @@ class DeviceImpl final : public Device {
     queue_.uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
 
-  void submitDrawRun(core::DrawRunDesc desc) override {
-    queue_.submitDrawRun(std::move(desc));
-  }
   void submitDrawRun(core::CanonicalDrawState state,
                      const core::DrawUniformPayload& uniforms,
                      std::span<const core::DrawParam> draws,

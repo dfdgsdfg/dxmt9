@@ -1443,9 +1443,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       case Kind::DrawRun: {
-        if (!command.drawState || !command.drawUniformPayload ||
+        if (!command.drawState.hot || !command.drawState.shaderLayout ||
+            !command.drawUniformPayload ||
             core::drawRunDrawCount(command) == 0) break;
-        const auto& drawState = *command.drawState;
+        auto stateView = command.drawState;
+        stateView.uniforms = command.drawUniformPayload;
+        const auto& hot = *stateView.hot;
         const auto drawParams = command.drawParams;
         // Compact draw-run: state bound from base ONCE (render-pass +
         // resource-binding decisions key off base.rts), then loop over
@@ -1454,9 +1457,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // Draw/DrawRun records on the same Metal render encoder.
         flushBlit();
         assertEncoderLifecycleInvariant();
-        auto stateView = drawState.view();
-        stateView.uniforms = command.drawUniformPayload;
-        const auto drawKey = makeAttachmentKey(drawState.hot);
+        const auto drawKey = makeAttachmentKey(hot);
         const auto drawReadBloom = makeDrawReadBloom(stateView);
         if (pendingClear.has_value()) {
           const auto clearKey = makeAttachmentKey(*pendingClear);
@@ -1562,7 +1563,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // encodeDraw receives the per-draw fields through DrawParam while
         // all base state is read from the canonical hot/shader view.
         bool baseBound =
-            activeDrawStateKey.has_value() && *activeDrawStateKey == drawState.hot.key;
+            activeDrawStateKey.has_value() && *activeDrawStateKey == hot.key;
         for (std::size_t i = 0; i < drawCount; ++i) {
           const auto& param = drawParams[i];
           PreUploadedDrawData preData{};
@@ -1576,7 +1577,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          &param,
                          recordPayloadArena)) {
             baseBound = true;
-            activeDrawStateKey = drawState.hot.key;
+            activeDrawStateKey = hot.key;
           }
         }
         commandBufferHasWork = true;

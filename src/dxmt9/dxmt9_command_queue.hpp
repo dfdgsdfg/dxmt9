@@ -110,11 +110,9 @@ class CommandQueue {
   // Submission / resource-marking surface. Each call acquires mutex_
   // internally; Pool access goes through pool_ (snapshotted at
   // construction).
-  // Compact backend draw-run ingress — pushes one BackendDrawRunRecord
-  // (BaseDrawState + DrawParam[N]) into the current ChunkSlot under a
-  // single mutex acquire. The encoder binds state from desc.state ONCE,
-  // then loops emitting per-DrawParam Metal calls.
-  void submitDrawRun(core::DrawRunDesc desc);
+  // Compact backend draw-run ingress — pushes one DrawRunCommandRecord
+  // (CanonicalDrawState + DrawParam[N]) into the current ChunkSlot under a
+  // single mutex acquire. Borrowed spans are copied before this call returns.
   void submitDrawRun(core::CanonicalDrawState state,
                      const core::DrawUniformPayload& uniforms,
                      std::span<const core::DrawParam> draws,

@@ -1244,9 +1244,9 @@ struct CanonicalDrawState {
   }
 };
 
-// Per-draw parameters within a DrawRunDesc: only what differs between
-// draws sharing the same canonical state. Encoder emits one Metal draw
-// call per DrawParam, reusing the bound state.
+// Per-draw parameters within an immediate draw-run submission: only what
+// differs between draws sharing the same canonical state. Encoder emits one
+// Metal draw call per DrawParam, reusing the bound state.
 struct DrawParam {
   PrimitiveType primitiveType = PrimitiveType::TriangleList;
   u32 primitiveCount = 0;
@@ -1269,7 +1269,7 @@ struct DrawParamPayloadView {
 namespace fixture {
 
 // Fixture/offline draw shape kept out of production draw submission. Runtime
-// code should use CanonicalDrawState + DrawRunDesc instead.
+// code should use CanonicalDrawState + DrawParam spans instead.
 struct DrawDesc {
   PrimitiveType primitiveType = PrimitiveType::TriangleList;
   u32 primitiveCount = 0;
@@ -1324,13 +1324,6 @@ struct DrawRunScratchStorage {
 
 }  // namespace detail
 
-struct DrawRunView {
-  std::span<const DrawParam> draws{};
-  std::span<const u8> payloadArena{};
-  const DrawUniformPayload* uniforms = nullptr;
-  DrawUniformHandle uniformHandleCandidate{};
-};
-
 // Per-chunk resource retention entry. Mirrors the wire-format D9CChunk
 // HandleEntry but lives in dxmt9::core so the runtime can mark
 // resources without depending on the d3d9/device_c.h header. Kind tag
@@ -1348,18 +1341,24 @@ struct ChunkHandleEntry {
   Handle handle{};
 };
 
-// Backend draw-run record: one canonical draw state plus N compact
-// DrawParam entries. Single draws are encoded as a run of one, and importer
-// coalescing extends that to N draws with no state change between them.
-// Encoder binds state once from `state.hot`, then loops emitting per-draw
-// calls - saves both per-draw full state copies on the queue side and per-draw
-// resource rebinding on the encoder side.
+namespace fixture {
+
+struct DrawRunView {
+  std::span<const DrawParam> draws{};
+  std::span<const u8> payloadArena{};
+  const DrawUniformPayload* uniforms = nullptr;
+  DrawUniformHandle uniformHandleCandidate{};
+};
+
+// Fixture/offline packed draw-run shape. Production submission uses
+// CanonicalDrawState + DrawParam spans directly; this type only exercises
+// packing/range helpers in tests.
 struct DrawRunDesc {
   CanonicalDrawState state{};              // applied once at run start
 
  private:
   detail::DrawRunScratchStorage scratch_{}; // packed per-draw args + UP payload bytes
-  const DrawUniformPayload* uniforms_ = nullptr; // borrowed until immediate queue append
+  const DrawUniformPayload* uniforms_ = nullptr; // borrowed by fixture packing helpers
   DrawUniformHandle uniformHandleCandidate_{};
 
   friend void drawRunClear(DrawRunDesc& run);
@@ -1375,6 +1374,8 @@ struct DrawRunDesc {
   friend std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept;
   friend std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept;
 };
+
+}  // namespace fixture
 
 struct ClearDesc {
   std::array<RenderTargetAttachment, kMaxRenderTargets> colorAttachments{};
@@ -1732,10 +1733,9 @@ class BackendDevice {
     (void)pitch;
     (void)bytes;
   }
-  // Test facade submission overrides. Production draw submission enters the
-  // dxmt9::Device/CommandQueue flat DrawRun path; BackendDevice keeps a no-op
-  // DrawRun hook for focused core tests that observe the same flat payload.
-  virtual void submitDrawRun(const DrawRunDesc& desc) { (void)desc; }
+  // Immediate draw-run submission. `draws`, `payloads`, and `uniforms` are
+  // borrowed for this call only; implementations must copy them into their own
+  // queue/storage before returning and must never retain the spans.
   virtual void submitDrawRun(CanonicalDrawState state, const DrawUniformPayload& uniforms,
                              std::span<const DrawParam> draws,
                              std::span<const DrawParamPayloadView> payloads) {
@@ -1791,10 +1791,6 @@ DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc& desc);
 DrawUniformPayload makeDrawUniformPayload(const DrawDesc& desc);
 DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStateRecord& hot);
 
-}  // namespace fixture
-
-CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args);
-
 void drawRunClear(DrawRunDesc& run);
 void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payloadBytes);
 bool drawRunAppend(DrawRunDesc& run, DrawParam param,
@@ -1811,6 +1807,12 @@ std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept;
 std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept;
 std::span<const u8> drawRunPayloadBytes(const DrawRunDesc& run,
                                         DrawPayloadRange range) noexcept;
+bool drawRunValidate(const DrawRunDesc& run) noexcept;
+
+}  // namespace fixture
+
+CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args);
+
 inline std::span<const u8> drawRunPayloadBytes(DrawPayloadRange range,
                                                std::span<const u8> arena) noexcept {
   const std::size_t offset = range.offset;
@@ -1823,7 +1825,6 @@ inline std::span<const u8> drawRunPayloadBytes(DrawPayloadRange range,
   }
   return arena.subspan(offset, size);
 }
-bool drawRunValidate(const DrawRunDesc& run) noexcept;
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);
 std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::span<const u8> input);
@@ -2182,16 +2183,11 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
                                  std::span<const u8> vertexData, std::span<const u8> indexData,
                                  IndexType indexType, u32 vertexStride = 0);
-  // Compact draw-run: snapshots BaseDrawState ONCE from current state_,
-  // packages it with the supplied DrawParam[] into a DrawRunDesc, then
-  // hands the run to upperDevice_->submitDrawRun. Used by the chunk
-  // importer when N consecutive D9C_COMMAND_RECORD_DRAW_* records
-  // carry no state delta — saves N-1 canonical state builds and keeps
-  // queue-side draw submission on the flat hot-state path.
-  DrawRunDesc beginDrawRunFromCurrentState(DrawParam first, std::size_t drawCapacity,
-                                           std::size_t payloadBytes = 0);
+  // Compact draw-run: snapshots BaseDrawState ONCE from current state_ and
+  // submits the supplied DrawParam span through the immediate flat path. Used
+  // by the chunk importer when N consecutive D9C_COMMAND_RECORD_DRAW_* records
+  // carry no state delta.
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
-  HResult submitDrawRun(DrawRunDesc desc);
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;
@@ -2242,7 +2238,6 @@ class Device : public std::enable_shared_from_this<Device> {
       DeviceState baseState,
       std::span<const DrawParam> draws,
       std::span<const DrawParamPayloadView> payloads = {});
-  void submitDrawRunInternal(DrawRunDesc desc);
   void submitPresentInternal(const SwapDesc& desc);
   void maybeCaptureExperimentFrame();
   void resetState();
@@ -2257,9 +2252,6 @@ class Device : public std::enable_shared_from_this<Device> {
   };
 
   void invalidateDrawStateCache() noexcept;
-  DrawRunDesc makeDrawRunDescFromCurrentState(
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads = {});
   const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
 
   AdapterInfo adapter_{};

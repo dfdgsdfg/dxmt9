@@ -6,6 +6,8 @@
 // hands the per-chunk retention list to.
 #include "dxmt9/dxmt9_device.hpp"
 
+#include <vector>
+
 using namespace dxmt9::d3d9::devicec;
 
 namespace {
@@ -827,13 +829,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       std::memcpy(&decoded, record, sizeof(decoded));
       // Try to coalesce into a draw run: scan ahead for consecutive
       // DRAW_PRIMITIVE records that also have empty state deltas, append
-      // scanned DrawParam records directly into one DrawRunDesc, then submit
-      // once (single canonical hot-state build + single queue submission).
+      // scanned DrawParam records into a flat span, then submit once (single
+      // canonical hot-state build + single queue submission).
       // Falls through to per-record path if the run is just length-1.
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
       if (scan.replayAsRun()) {
-        auto run = d->dev().beginDrawRunFromCurrentState(
-            makeRunParam(decoded.packet), scan.recordCount);
+        std::vector<dxmt9::core::DrawParam> runParams;
+        runParams.reserve(scan.recordCount);
+        runParams.push_back(makeRunParam(decoded.packet));
 
         std::uint32_t runIndex = recordView->nextIndex();
         while (runIndex < scan.endIndex) {
@@ -843,19 +846,17 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
           }
           D9CCommandRecordDrawPrimitive nextDecoded{};
           std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
-          if (!dxmt9::core::drawRunAppend(run, makeRunParam(nextDecoded.packet))) {
-            return dxmt9::core::D3DERR_INVALIDCALL;
-          }
+          runParams.push_back(makeRunParam(nextDecoded.packet));
           runIndex = nextRecord->nextIndex();
         }
-        if (dxmt9::core::drawRunDrawCount(run) != scan.recordCount) {
+        if (runParams.size() != scan.recordCount) {
           return dxmt9::core::D3DERR_INVALIDCALL;
         }
 
         // applyDrawPacketState would be a no-op here (delta is empty),
         // so skip directly to drawPrimitiveRun. Bypasses N-1
         // applyDrawPrimitivePacket / canonical-state builds.
-        hr = d->dev().submitDrawRun(std::move(run));
+        hr = d->dev().drawPrimitiveRun(runParams);
         if (failed(hr)) return hr;
         recordIndex = scan.endIndex;
         continue;
@@ -871,8 +872,9 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       // the encoder to dispatch drawIndexed vs draw.
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
       if (scan.replayAsRun()) {
-        auto run = d->dev().beginDrawRunFromCurrentState(
-            makeRunParam(decoded.packet), scan.recordCount);
+        std::vector<dxmt9::core::DrawParam> runParams;
+        runParams.reserve(scan.recordCount);
+        runParams.push_back(makeRunParam(decoded.packet));
 
         std::uint32_t runIndex = recordView->nextIndex();
         while (runIndex < scan.endIndex) {
@@ -882,16 +884,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
           }
           D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
           std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
-          if (!dxmt9::core::drawRunAppend(run, makeRunParam(nextDecoded.packet))) {
-            return dxmt9::core::D3DERR_INVALIDCALL;
-          }
+          runParams.push_back(makeRunParam(nextDecoded.packet));
           runIndex = nextRecord->nextIndex();
         }
-        if (dxmt9::core::drawRunDrawCount(run) != scan.recordCount) {
+        if (runParams.size() != scan.recordCount) {
           return dxmt9::core::D3DERR_INVALIDCALL;
         }
 
-        hr = d->dev().submitDrawRun(std::move(run));
+        hr = d->dev().drawPrimitiveRun(runParams);
         if (failed(hr)) return hr;
         recordIndex = scan.endIndex;
         continue;
