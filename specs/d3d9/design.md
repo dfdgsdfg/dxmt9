@@ -1,10 +1,17 @@
-# Core Layer Design
+# D3D9 Layer Design
+
+Detailed subtopic designs live in:
+
+- `caps/design.md` for concrete `D3DCAPS9` reported values.
+- `formats/design.md` for D3D9-to-Metal format mapping tables.
+- `queries/design.md` for deferred query sequencing and backend query records.
+- `wsi/design.md` for HWND-to-CAMetalLayer resolution and presentation lifecycle.
 
 ---
 
 ## 1. Object Model
 
-The core layer exposes the standard D3D9 COM hierarchy. Each COM object wraps an
+The D3D9 layer exposes the standard D3D9 COM hierarchy. Each COM object wraps an
 internal implementation object and bridges to the backend through a defined interface.
 
 ```mermaid
@@ -207,7 +214,7 @@ state and backend handle caches.
 
 ## 3. Core / Backend Boundary
 
-The core layer and the Metal backend communicate through a coarse command-stream
+The D3D9 layer and the Metal backend communicate through a coarse command-stream
 interface. The core knows nothing about Metal objects; the backend knows nothing
 about D3D9 COM.
 

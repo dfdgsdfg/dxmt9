@@ -25,7 +25,7 @@ are covered by unit tests and property-based tests.
 - Identify all agents and their actions.
 - Identify all safety invariants that must hold in every reachable state.
 - Identify all liveness properties that must hold under fair scheduling.
-- Trace each property back to a requirement ID in `core/` or `backend/`.
+- Trace each property back to a requirement ID in `d3d9/` or `backend/`.
 
 ---
 
@@ -97,7 +97,7 @@ is possible until the encoder is ended and a new one is opened.
 
 ## 5. Query Resolution
 
-Traceability: R-CORE-8.1, R-CORE-8.2, core/queries.md §2–3
+Traceability: R-CORE-8.1, R-CORE-8.2, d3d9/queries/design.md §2–3
 
 **R-VERIF-5.1** The formal spec must prove that a query is never
 transitioned to the Resolved state before `completedSeqId >= issuedSeqId`

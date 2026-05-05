@@ -505,6 +505,15 @@ public:
 
     D9CTexture* raw() const { return t_; }
 
+    bool subresourceIndex(D3DCUBEMAP_FACES face, UINT level, UINT& out) const {
+        const UINT mipCount = dxmt9c_texture_get_level_count(t_);
+        if (static_cast<UINT>(face) >= 6u || level >= mipCount) {
+            return false;
+        }
+        out = static_cast<UINT>(face) * mipCount + level;
+        return true;
+    }
+
     ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
     ULONG STDMETHODCALLTYPE Release() noexcept override {
         ULONG r = --refs_; if (!r) delete this; return r;
@@ -574,7 +583,12 @@ public:
         if (!ppS) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u",
                             this, static_cast<unsigned>(face), level);
-        UINT idx = (UINT)face * dxmt9c_texture_get_level_count(t_) + level;
+        UINT idx = 0;
+        if (!subresourceIndex(face, level, idx)) {
+            dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u -> invalid",
+                                this, static_cast<unsigned>(face), level);
+            return D3DERR_INVALIDCALL;
+        }
         D9CSurface* s = dxmt9c_texture_get_surface_level(t_, idx);
         if (!s) {
             dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u -> invalid",
@@ -592,7 +606,8 @@ public:
         if (!pLR) return D3DERR_INVALIDCALL;
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return flushHr;
-        UINT idx = (UINT)face * dxmt9c_texture_get_level_count(t_) + level;
+        UINT idx = 0;
+        if (!subresourceIndex(face, level, idx)) return D3DERR_INVALIDCALL;
         D9CLockedRect lr{}; D9CRect cr{};
         if (pRect) cr = toR(*pRect);
         HRESULT hr = hr32(dxmt9c_texture_lock_rect(t_, idx, &lr,
@@ -603,7 +618,8 @@ public:
     HRESULT STDMETHODCALLTYPE UnlockRect(D3DCUBEMAP_FACES face, UINT level) noexcept override {
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return flushHr;
-        UINT idx = (UINT)face * dxmt9c_texture_get_level_count(t_) + level;
+        UINT idx = 0;
+        if (!subresourceIndex(face, level, idx)) return D3DERR_INVALIDCALL;
         return hr32(dxmt9c_texture_unlock_rect(t_, idx));
     }
     HRESULT STDMETHODCALLTYPE AddDirtyRect(D3DCUBEMAP_FACES, const RECT*) noexcept override { return S_OK; }

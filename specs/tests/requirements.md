@@ -94,6 +94,12 @@ feed explicit input records and assert exact output packets, ordering,
 resource-reference sets, bridge operation counts, and allocation behaviour
 without relying on Metal execution, timing, or Wine window state.
 
+**R-TEST-0.9** Test evidence status must be tracked in `specs/gap.md`, not in a
+separate tests-only status inventory. Durable acceptance rules belong in this
+requirements document, implementation mechanics belong in `specs/tests/design.md`,
+and current evidence, remaining gaps, and next acceptance focus belong in
+`specs/gap.md`.
+
 ---
 
 ## 1. Shader Translation Correctness

@@ -7,7 +7,7 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 
 ---
 
-## Core Layer
+## D3D9 Layer
 
 | Area | Status | Evidence / notes |
 |---|---|---|
@@ -35,7 +35,7 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 | FfpVertexKey / FfpPixelKey generation | ✅ | `makeFfpVertexKey()`, `makeFfpPixelKey()` |
 | Shader bytecode storage + hash | ✅ | `ShaderBytecode`, FNV-1a hash cache |
 | Format table | ⚠️ | `formatTable()` exists; central explicit classification for all FOURCC/pseudo-formats such as `RESZ` and `NULL` still needs audit |
-| `makeDefaultCaps()` | ✅ | R-CAPS-1 through R-CAPS-5 |
+| `makeDefaultCaps()` | ✅ | R-CAPS-1 through R-CAPS-7 |
 | Buffer / Texture / Surface lifecycle | ⚠️ | Pool-based reset behavior exists; public COM refcount/lifetime, common private-data semantics, D3D9Ex user-memory texture/offscreen-surface success paths, and shared-handle/user-memory error codes need Wine-derived `device.c` / `d3d9ex.c` conformance coverage |
 | `UpdateSurface`, `UpdateTexture`, `StretchRect`, `ColorFill`, `GetRenderTargetData` | ✅ | Core-side logic |
 | Query: EVENT, OCCLUSION, TIMESTAMP, TIMESTAMPFREQ, TIMESTAMPDISJOINT | ⚠️ | `submittedSeqId_` / `completedSeqId_` waterline exists; invalid query type, exact `GetDataSize`, and Windows D3D9-visible zero-initialisation behaviour still need Wine-derived PE conformance coverage |
@@ -49,7 +49,7 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 | `IDirect3D9Ex` — `Direct3DCreate9Ex`, `GetAdapterModeCountEx`, `EnumAdapterModesEx`, `GetAdapterDisplayModeEx`, `GetAdapterLUID`, `CreateDeviceEx` | ⚠️ | Method surface exists; PE factory/device Ex QI is now gated by creation mode, while display-mode validation, `CreateDeviceEx` mode validation, exact HRESULT propagation, and Wine `d3d9ex.c` coverage remain pending |
 | `IDirect3DDevice9Ex` — `CheckDeviceState`, `ResetEx`, `PresentEx`, `SetMaximumFrameLatency`, `GetMaximumFrameLatency`, `WaitForVBlank`, `CheckResourceResidency`, `GetGPUThreadPriority`, `SetGPUThreadPriority`, `SetConvolutionMonoKernel`, `ComposeRects`, `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx`, `CreateDepthStencilSurfaceEx`, `GetDisplayModeEx` | ⚠️ | Method surface exists; device Ex QI is now gated by parent factory, while swap-chain Ex exposure, Ex usage/shared-handle validation, and reset/device-state behaviour need Wine `d3d9ex.c` coverage |
 
-**The core layer is functionally broad but no longer classified as complete.**
+**The D3D9 layer is functionally broad but no longer classified as complete.**
 The review of Wine's D3D9 tests is treated as a Windows D3D9 behavioural-oracle
 review. It added stricter conformance requirements for Ex exposure, PE
 auxiliary exports, state blocks, public COM refcounts, factory validation,
@@ -66,7 +66,7 @@ propagation, query validation, and lost-device/reset behaviour.
 | `BackendDevice` interface + sim backend | ✅ | sim |
 | `MTLDevice` init + `MTLCommandQueue` | ✅ | metal |
 | Command queue ring: 32 slots, `kMaxInflight=3`, Wine/encode/finish threads | ✅ | metal |
-| Ring allocators: `RingArena` for argbuf, lambdaStore, staging, copyTemp | ✅ | metal |
+| Ring allocators: `RingArena` for argbuf, replayStore, staging, copyTemp | ✅ | metal |
 | Clear-as-load-action folding | ✅ | metal |
 | Render-target change → encoder split | ✅ | metal |
 | Encoder merging with Bloom-filter hazard detection | ✅ | metal |
@@ -289,6 +289,6 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 | 5 | Port Wine-derived D3D9Ex QI conformance and finish Ex/display/swap-chain validation | R-CORE-1.6, R-CORE-10.2-R-CORE-10.4, R-CORE-10.17, R-CORE-10.18, R-TEST-12.4 |
 | 6 | Expand Wine stateblock conformance beyond the current compact scaffold and implement full `D3DSBT_*` masks/resource/reset interactions | R-CORE-3.7, R-CORE-3.8, R-TEST-12.5, R-TEST-12.19 |
 | 7 | Expand compact reset/window scaffolds if runtime evidence exposes missing Wine-visible edge cases, then promote device lifetime/refcount, query validation, resource wrapper, and scene scaffolds with runtime evidence | R-CORE-2.6, R-CORE-2.8, R-CORE-4.8-R-CORE-4.10, R-CORE-8.3, R-TEST-12.3, R-TEST-12.12-R-TEST-12.14, R-TEST-12.17-R-TEST-12.18 |
-| 8 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | core/wsi §6, §9 |
+| 8 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | d3d9/wsi §6, §9 |
 | 9 | Run the Wine WSI smoke on the upstream-style deployment and promote the gap status if it passes | R-TEST-11.3 |
 | 10 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |

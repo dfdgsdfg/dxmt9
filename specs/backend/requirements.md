@@ -35,8 +35,8 @@ through a bounded queue. The maximum number of frames the application thread can
 outrun the encode thread is a configurable limit (default: 3).
 
 **R-BACK-2.3** The encode thread must not allocate from the system heap during normal
-encoding. All per-frame memory (argument buffers, lambda storage, temporary staging)
-must be drawn from pre-allocated ring allocators.
+encoding. All per-frame memory (argument buffers, imported replay storage, temporary
+staging) must be drawn from pre-allocated ring allocators.
 
 **R-BACK-2.4** The encode thread must group draw calls sharing the same render
 targets into a single `MTLRenderCommandEncoder` where no hazard (write-after-read,
@@ -69,9 +69,9 @@ count and byte size. If the PE side submits a chunk larger than the negotiated
 limits, the backend must reject it rather than allowing unbounded encode latency.
 
 **R-BACK-2.11** The bridge ABI for committed chunks must remain POD and versioned.
-The unix-side importer may translate validated records into queue-internal closures
-or direct encoder operations, but C++ lambdas and process-local pointers must never
-cross the PE/unix boundary.
+The unix-side importer may translate validated records into queue-local replay
+actions or direct encoder operations, but C++ lambdas and process-local pointers
+must never cross the PE/unix boundary.
 
 **R-BACK-2.12** Present-bearing chunks must carry explicit present metadata through
 import, encoding, command-buffer commit, and completion. Non-present chunks advance
@@ -153,9 +153,9 @@ recording.
 
 **R-BACK-2.27** Import, replay, and encode hot paths must use execution-slot storage
 or preallocated ring allocators for command records, retained handle references,
-argument buffers, staging, copy-temp, and closure storage. Cache misses may allocate
-cache objects, but steady-state CPU/GPU command replay must not allocate from the
-system heap.
+argument buffers, staging, copy-temp, and imported replay storage. Cache misses may
+allocate cache objects, but steady-state CPU/GPU command replay must not allocate
+from the system heap.
 
 ---
 
@@ -283,7 +283,7 @@ to the range accepted by the core requirements.
 
 **R-BACK-6.8** The presenter owns drawable acquisition, layer synchronization, and
 `presentDrawable` encoding. The command queue owns frame-token allocation and
-completion signaling. The device/core layer must not own presenter timing state.
+completion signaling. The API/device layer must not own presenter timing state.
 
 ---
 
@@ -329,17 +329,23 @@ compatibility per-call draw/state fallback.
 
 ## 9. Surface Operations
 
+Detailed API contracts, validation rules, and bridge-recording policy are defined in
+[`surface-ops/requirements.md`](surface-ops/requirements.md). The backend design for
+Metal replay is defined in [`surface-ops/design.md`](surface-ops/design.md).
+
 **R-BACK-9.1** `submitSurfaceCopy()` (used by `UpdateSurface` and `UpdateTexture`)
 must correctly copy all specified mip levels and cube/array slices. Row pitch and
-slice pitch from the source must be respected exactly.
+slice pitch from the source must be respected exactly. The operation must cross the
+Wine PE/unix boundary as POD chunk records, not as per-copy bridge calls.
 
 **R-BACK-9.2** `submitStretchRect()` must produce correct results for both same-size
 (blit) and scaled (render pass) copies. The `MTLSamplerMinMagFilter` used for scaled
 copies must match the requested `D3DTEXTUREFILTERTYPE`.
 
 **R-BACK-9.3** `submitReadback()` (used by `GetRenderTargetData`) must block the
-calling thread until the GPU has written the result to the staging buffer. It must
-not return until the data is CPU-readable.
+calling thread until the GPU has written the result to the staging buffer and all
+prior writes to the source render target are visible. It must not return until the
+data is CPU-readable and copied to the D3D9 destination allocation.
 
 **R-BACK-9.4** `submitColorFill()` must produce a correctly filled surface region.
 For full-surface fills, `MTLLoadActionClear` must be used. For partial fills, a
@@ -348,6 +354,10 @@ scissored render pass or fragment shader fill must be used.
 **R-BACK-9.5** All surface operations must be recorded as command records in the
 current chunk, except readback which must additionally commit the current chunk and
 wait for completion before returning.
+
+**R-BACK-9.6** Surface operation command records must be fixed-layout POD records
+with handle-table references and payload offsets. They must not contain closures,
+lambdas, process-local pointers, COM object pointers, or Objective-C object pointers.
 
 ---
 

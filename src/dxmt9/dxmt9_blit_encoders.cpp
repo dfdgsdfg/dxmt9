@@ -230,24 +230,57 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
 void encodeClearPass(WMT::CommandBuffer& commandBuffer,
                       resources::Pool& pool,
                       const core::ClearDesc& clear) {
-  if (clear.colorAttachments[0].handle == core::Handle{} &&
-      clear.depthStencil.handle == core::Handle{}) {
-    return;
-  }
-  auto* surface = pool.findSurface(clear.colorAttachments[0].handle.value);
-  if (!surface || !surface->texture) {
+  const bool hasDepthStencilTarget =
+      (clear.clearDepth || clear.clearStencil) && clear.depthStencil.handle;
+  const bool hasColorTarget = clear.clearColor &&
+      std::any_of(clear.colorAttachments.begin(), clear.colorAttachments.end(),
+                  [](const auto& attachment) { return static_cast<bool>(attachment.handle); });
+  if (!hasColorTarget && !hasDepthStencilTarget) {
     return;
   }
   WMTRenderPassInfo passInfo{};
-  passInfo.colors[0].texture = surface->texture.handle;
-  passInfo.colors[0].load_action = WMTLoadActionClear;
-  passInfo.colors[0].store_action = WMTStoreActionStore;
-  if (surface->resolveTexture) {
-    passInfo.colors[0].resolve_texture = surface->resolveTexture.handle;
-    passInfo.colors[0].store_action = WMTStoreActionMultisampleResolve;
+  bool hasAttachment = false;
+  if (clear.clearColor) {
+    for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+      auto* surface = pool.findSurface(clear.colorAttachments[i].handle.value);
+      if (!surface || !surface->texture) {
+        continue;
+      }
+      auto& color = passInfo.colors[i];
+      color.texture = surface->texture.handle;
+      color.load_action = WMTLoadActionClear;
+      color.store_action = WMTStoreActionStore;
+      color.clear_color = WMTClearColor{clear.color.r, clear.color.g,
+                                        clear.color.b, clear.color.a};
+      if (surface->resolveTexture) {
+        color.resolve_texture = surface->resolveTexture.handle;
+        color.store_action = WMTStoreActionMultisampleResolve;
+      }
+      hasAttachment = true;
+    }
   }
-  passInfo.colors[0].clear_color = WMTClearColor{clear.color.r, clear.color.g,
-                                                 clear.color.b, clear.color.a};
+
+  auto* depthSurface = pool.findSurface(clear.depthStencil.handle.value);
+  if (depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
+    if (clear.clearDepth && dxmt9::convert::formatHasDepthAspect(depthSurface->desc.format)) {
+      passInfo.depth.texture = depthSurface->texture.handle;
+      passInfo.depth.load_action = WMTLoadActionClear;
+      passInfo.depth.store_action = WMTStoreActionStore;
+      passInfo.depth.clear_depth = clear.depth;
+      hasAttachment = true;
+    }
+    if (clear.clearStencil && dxmt9::convert::formatHasStencilAspect(depthSurface->desc.format)) {
+      passInfo.stencil.texture = depthSurface->texture.handle;
+      passInfo.stencil.load_action = WMTLoadActionClear;
+      passInfo.stencil.store_action = WMTStoreActionStore;
+      passInfo.stencil.clear_stencil = clear.stencil;
+      hasAttachment = true;
+    }
+  }
+
+  if (!hasAttachment) {
+    return;
+  }
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
   if (encoder) {
     encoder.endEncoding();

@@ -394,6 +394,7 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
             f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
         )
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
+        lines.append("  dxmt9::d3d9::devicec::ScopedWow64ClientCall wow64_client_call;")
         lines.append(
             "  auto *wow64_out = dxmt9::util::marshal::wow64::decodePtr<dxmt9::util::marshal::wow64::LockedRect32 *>(args->out);"
         )
@@ -417,6 +418,7 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
             f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
         )
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
+        lines.append("  dxmt9::d3d9::devicec::ScopedWow64ClientCall wow64_client_call;")
         lines.append(
             "  auto *wow64_out = dxmt9::util::marshal::wow64::decodePtr<dxmt9::util::marshal::wow64::LockedRect32 *>(args->arg1);"
         )
@@ -440,6 +442,7 @@ def emit_custom_wow64_thunk(proto: Proto, lines: list[str]) -> bool:
             f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
         )
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
+        lines.append("  dxmt9::d3d9::devicec::ScopedWow64ClientCall wow64_client_call;")
         lines.append("  void *native_data = nullptr;")
         lines.append(
             "  args->ret = dxmt9c_buffer_lock("
@@ -465,6 +468,7 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append('#include "dxmt9/device_c.h"')
     lines.append('#include "dxmt9/wineunixlib.h"')
     lines.append(f'#include "{ops_header_name}"')
+    lines.append('#include "d3d9/device_c_common.hpp"')
     lines.append('#include "util/unixcall_marshal.hpp"')
     lines.append("")
     for proto in protos:

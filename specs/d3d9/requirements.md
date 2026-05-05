@@ -1,6 +1,6 @@
-# Core Layer Requirements
+# D3D9 Layer Requirements
 
-The core layer is the D3D9 API frontend for applications running under Wine. It
+The D3D9 layer is the API frontend for applications running under Wine. It
 exposes the D3D9 COM interface surface and enforces Windows D3D9-compatible
 behaviour before handing work to the Metal backend.
 
@@ -9,6 +9,13 @@ The implementation structure remains DXMT-compatible: PE frontend and
 the unix side. Wine `dlls/d3d9/tests` are used as an oracle for public Windows
 D3D9 API behaviour; they do not require dxmt9 to copy Wine's `dlls/d3d9` or
 wined3d internal architecture.
+
+Detailed subtopic contracts live in:
+
+- `caps/requirements.md` for `D3DCAPS9` and capability consistency.
+- `formats/requirements.md` for `D3DFORMAT` classification and validation.
+- `queries/requirements.md` for `IDirect3DQuery9` behaviour and ordering.
+- `wsi/requirements.md` for HWND, swap-chain, presentation, and no-window WSI.
 
 ---
 

@@ -148,7 +148,7 @@ HazardDetected ==
  *
  * Modeled as an atomic End + BeginRender(newRT) to reflect that no intermediate
  * Idle state is visible to the command stream — the transition is internal to
- * the encode thread's lambda replay.
+ * queue-local command record replay.
  *)
 RenderTargetChange(newRT) ==
   /\ activeKind = "Render"

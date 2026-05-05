@@ -2146,15 +2146,17 @@ Texture::Texture(std::shared_ptr<Device> owner, TextureHandle handle, TextureDes
   if (auto ownerPtr = owner_.lock()) {
     backend_ = ownerPtr->upperDevice();
   }
-  const u32 levels = std::max(1u, desc_.levels);
-  levels_.resize(levels);
-  for (u32 level = 0; level < levels; ++level) {
+  const u32 mipLevels = levelCount();
+  const u32 faceCount = desc_.type == TextureType::Cube ? 6u : 1u;
+  levels_.resize(static_cast<size_t>(mipLevels) * faceCount);
+  for (u32 subresource = 0; subresource < levels_.size(); ++subresource) {
+    const u32 level = mipLevelForSubresource(subresource);
     LevelStorage storage;
     storage.width = std::max(1u, desc_.width >> level);
     storage.height = std::max(1u, desc_.height >> level);
     storage.pitch = formatRowPitch(desc_.format, storage.width);
     storage.bytes.resize(formatByteSize(desc_.format, storage.width, storage.height), 0);
-    levels_[level] = std::move(storage);
+    levels_[subresource] = std::move(storage);
   }
 }
 
@@ -2162,11 +2164,23 @@ Texture::~Texture() {
   invalidate();
 }
 
-LockedRegion Texture::lockRect(u32 level, const Rect* rect, u32 flags) {
-  if (!valid_ || level >= levels_.size()) {
+u32 Texture::levelCount() const noexcept {
+  return std::max(1u, desc_.levels);
+}
+
+u32 Texture::mipLevelForSubresource(u32 subresource) const noexcept {
+  const u32 mipLevels = levelCount();
+  if (desc_.type == TextureType::Cube && mipLevels != 0) {
+    return subresource % mipLevels;
+  }
+  return subresource;
+}
+
+LockedRegion Texture::lockRect(u32 subresource, const Rect* rect, u32 flags) {
+  if (!valid_ || subresource >= levels_.size()) {
     return {};
   }
-  LevelStorage& storage = levels_[level];
+  LevelStorage& storage = levels_[subresource];
   if ((flags & UsageDiscard) != 0) {
     storage.bytes.assign(formatByteSize(desc_.format, storage.width, storage.height), 0);
   }
@@ -2192,29 +2206,30 @@ LockedRegion Texture::lockRect(u32 level, const Rect* rect, u32 flags) {
           storage.pitch};
 }
 
-void Texture::unlockRect(u32 level) {
-  if (level < levels_.size()) {
-    levels_[level].dirty = true;
-    syncLevelToBackend(level);
+void Texture::unlockRect(u32 subresource) {
+  if (subresource < levels_.size()) {
+    levels_[subresource].dirty = true;
+    syncLevelToBackend(subresource);
   }
   locked_ = false;
 }
 
-std::shared_ptr<Surface> Texture::surfaceLevel(u32 level) {
-  if (level >= levels_.size()) {
+std::shared_ptr<Surface> Texture::surfaceLevel(u32 subresource) {
+  if (subresource >= levels_.size()) {
     return {};
   }
-  if (level < surfaces_.size()) {
-    if (auto surface = surfaces_[level].lock()) {
+  if (subresource < surfaces_.size()) {
+    if (auto surface = surfaces_[subresource].lock()) {
       return surface;
     }
   } else {
-    surfaces_.resize(level + 1);
+    surfaces_.resize(subresource + 1);
   }
   auto owner = owner_.lock();
   if (!owner) {
     return {};
   }
+  const u32 level = mipLevelForSubresource(subresource);
   SurfaceDesc surfaceDesc;
   surfaceDesc.width = std::max(1u, desc_.width >> level);
   surfaceDesc.height = std::max(1u, desc_.height >> level);
@@ -2223,23 +2238,23 @@ std::shared_ptr<Surface> Texture::surfaceLevel(u32 level) {
   surfaceDesc.usage = desc_.usage;
   surfaceDesc.renderTarget = (desc_.usage & UsageRenderTarget) != 0;
   surfaceDesc.depthStencil = (desc_.usage & UsageDepthStencil) != 0;
-  auto surfaceHandle = backend_ ? backend_->createSurfaceForTexture(handle_, level, surfaceDesc) : SurfaceHandle{};
+  auto surfaceHandle = backend_ ? backend_->createSurfaceForTexture(handle_, subresource, surfaceDesc) : SurfaceHandle{};
   if (!surfaceHandle && backend_) {
     surfaceHandle = backend_->createSurface(surfaceDesc);
   }
   if (!surfaceHandle) {
     surfaceHandle = Handle{owner->nextHandle_++};
   }
-  auto surface = std::make_shared<Surface>(owner, surfaceHandle, shared_from_this(), level);
-  surfaces_[level] = surface;
+  auto surface = std::make_shared<Surface>(owner, surfaceHandle, shared_from_this(), subresource);
+  surfaces_[subresource] = surface;
   return surface;
 }
 
-std::span<const u8> Texture::levelBytes(u32 level) const {
-  if (level >= levels_.size()) {
+std::span<const u8> Texture::levelBytes(u32 subresource) const {
+  if (subresource >= levels_.size()) {
     return {};
   }
-  const auto& storage = levels_[level];
+  const auto& storage = levels_[subresource];
   return std::span<const u8>(storage.bytes.data(), storage.bytes.size());
 }
 
@@ -2253,14 +2268,14 @@ void Texture::fillColor(const Rect* rect, ColorRGBA color) {
   syncLevelToBackend(0);
 }
 
-void Texture::fillColor(u32 level, const Rect* rect, ColorRGBA color) {
-  if (!valid_ || level >= levels_.size()) {
+void Texture::fillColor(u32 subresource, const Rect* rect, ColorRGBA color) {
+  if (!valid_ || subresource >= levels_.size()) {
     return;
   }
-  auto& storage = levels_[level];
+  auto& storage = levels_[subresource];
   fillBuffer(storage.bytes, storage.pitch, storage.width, storage.height, desc_.format, rect, color);
   storage.dirty = true;
-  syncLevelToBackend(level);
+  syncLevelToBackend(subresource);
 }
 
 void Texture::copyFrom(const Texture& src) {
@@ -2275,31 +2290,31 @@ void Texture::copyFrom(const Texture& src) {
   }
 }
 
-void Texture::syncLevelToBackend(u32 level) {
-  if (!valid_ || !backend_ || !handle_ || level >= levels_.size()) {
+void Texture::syncLevelToBackend(u32 subresource) {
+  if (!valid_ || !backend_ || !handle_ || subresource >= levels_.size()) {
     return;
   }
-  const auto& storage = levels_[level];
+  const auto& storage = levels_[subresource];
   if (storage.bytes.empty() || storage.width == 0 || storage.height == 0 || storage.pitch == 0) {
     return;
   }
   if (const auto wanted = textureDumpHandle(); wanted && *wanted == handle_.value) {
     const auto path = (std::filesystem::path(textureDumpDir()) /
-                       ("dxmt9_tex_" + std::to_string(handle_.value) + "_level_" +
-                        std::to_string(level) + ".bmp"))
+                       ("dxmt9_tex_" + std::to_string(handle_.value) + "_subresource_" +
+                        std::to_string(subresource) + ".bmp"))
                           .string();
     if (writeBmpScreenshot(path, desc_.format, storage.width, storage.height, storage.pitch,
                            std::span<const u8>(storage.bytes.data(), storage.bytes.size()))) {
-      emitRenderTrace("texture dump handle=0x%x level=%u path=%s format=%u size=%ux%u pitch=%u",
-                      handle_.value, level, path.c_str(), static_cast<unsigned>(desc_.format),
+      emitRenderTrace("texture dump handle=0x%x subresource=%u path=%s format=%u size=%ux%u pitch=%u",
+                      handle_.value, subresource, path.c_str(), static_cast<unsigned>(desc_.format),
                       storage.width, storage.height, storage.pitch);
     } else {
-      emitRenderTrace("texture dump handle=0x%x level=%u failed format=%u size=%ux%u pitch=%u",
-                      handle_.value, level, static_cast<unsigned>(desc_.format), storage.width,
+      emitRenderTrace("texture dump handle=0x%x subresource=%u failed format=%u size=%ux%u pitch=%u",
+                      handle_.value, subresource, static_cast<unsigned>(desc_.format), storage.width,
                       storage.height, storage.pitch);
     }
   }
-  backend_->uploadTextureLevel(handle_, level, storage.width, storage.height, storage.pitch,
+  backend_->uploadTextureLevel(handle_, subresource, storage.width, storage.height, storage.pitch,
                                std::span<const u8>(storage.bytes.data(), storage.bytes.size()));
 }
 
@@ -2333,8 +2348,9 @@ Surface::Surface(std::shared_ptr<Device> owner, SurfaceHandle handle, std::share
     backend_ = ownerPtr->upperDevice();
   }
   if (auto tex = textureContainer_.lock()) {
-    desc_.width = std::max(1u, tex->desc().width >> level_);
-    desc_.height = std::max(1u, tex->desc().height >> level_);
+    const u32 mipLevel = tex->mipLevelForSubresource(level_);
+    desc_.width = std::max(1u, tex->desc().width >> mipLevel);
+    desc_.height = std::max(1u, tex->desc().height >> mipLevel);
     desc_.format = tex->desc().format;
     desc_.pool = tex->desc().pool;
     desc_.usage = tex->desc().usage;
@@ -4290,8 +4306,8 @@ HResult Device::updateTexture(const std::shared_ptr<Texture>& src, const std::sh
       SurfaceCopyDesc backendDesc;
       backendDesc.source = srcSurface->handle();
       backendDesc.destination = dstSurface->handle();
-      backendDesc.sourceLevel = level;
-      backendDesc.destinationLevel = level;
+      backendDesc.sourceLevel = 0;
+      backendDesc.destinationLevel = 0;
       backendDesc.sourceRect = {0, 0, static_cast<i32>(srcSurface->desc().width),
                                 static_cast<i32>(srcSurface->desc().height)};
       backendDesc.destinationRect = {0, 0, static_cast<i32>(dstSurface->desc().width),

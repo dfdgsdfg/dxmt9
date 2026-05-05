@@ -1196,12 +1196,14 @@ class Texture : public std::enable_shared_from_this<Texture> {
   const TextureDesc& desc() const noexcept { return desc_; }
   bool valid() const noexcept { return valid_; }
   std::shared_ptr<Device> device() const noexcept { return owner_.lock(); }
-  u32 levelCount() const noexcept { return static_cast<u32>(levels_.size()); }
-  LockedRegion lockRect(u32 level, const Rect* rect, u32 flags);
-  void unlockRect(u32 level);
-  std::shared_ptr<Surface> surfaceLevel(u32 level);
-  std::span<const u8> levelBytes(u32 level) const;
-  void fillColor(u32 level, const Rect* rect, ColorRGBA color);
+  u32 levelCount() const noexcept;
+  u32 subresourceCount() const noexcept { return static_cast<u32>(levels_.size()); }
+  u32 mipLevelForSubresource(u32 subresource) const noexcept;
+  LockedRegion lockRect(u32 subresource, const Rect* rect, u32 flags);
+  void unlockRect(u32 subresource);
+  std::shared_ptr<Surface> surfaceLevel(u32 subresource);
+  std::span<const u8> levelBytes(u32 subresource) const;
+  void fillColor(u32 subresource, const Rect* rect, ColorRGBA color);
   void fillColor(const Rect* rect, ColorRGBA color);
   void copyFrom(const Texture& src);
   void invalidate();

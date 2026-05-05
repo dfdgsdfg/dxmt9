@@ -18,18 +18,20 @@ Root `specs/` is multi-topic. Each major concern lives in a topic folder:
 
 | Topic | Role |
 |------|------|
-| `specs/core/` | D3D9 COM/API behavior, state, resources, queries, WSI-facing core |
-| `specs/backend/` | Metal translation, command queue, encoder lifecycle, resources |
+| `specs/d3d9/` | D3D9 COM/API behavior, state, resources, queries, WSI-facing frontend |
+| `specs/d3d9/{caps,formats,queries,wsi}/` | D3D9 subtopic contracts and design tables |
+| `specs/backend/` | Shared Metal translation, command queue, encoder lifecycle, resources |
+| `specs/backend/surface-ops/` | Backend surface copy, fill, scale, and readback contracts |
 | `specs/deploy/` | Wine runtime and app-local packaging |
 | `specs/tests/` | Test corpus, Wine conformance, deterministic test design |
 | `specs/verification/` | TLA+ and implementation evidence |
 | `specs/benchmarks/` | Performance workloads, baselines, regression policy |
+| `specs/experiments/` | Wild integration experiments and fuzzy pass criteria |
 | `specs/d3d7/`, `specs/d3d8/` | Compatibility shim layers |
 | `specs/gap.md` | Current implementation/evidence gap tracker |
 
 Every topic should have `requirements.md` and `design.md` unless it is an
-intentional single-purpose support doc such as `specs/gap.md` or
-`specs/tests/dod.md`.
+intentional single-purpose support doc such as `specs/gap.md`.
 
 `specs/**/plan.md` is local-only and ignored. Do not commit implementation plans.
 Promote durable ordering constraints into `design.md`, and missing work into
@@ -41,12 +43,14 @@ Requirements are written as numbered contracts with stable IDs:
 
 | Area | Prefix |
 |------|--------|
-| Core D3D9 layer | `R-CORE-*` |
+| D3D9 frontend layer | `R-CORE-*` |
+| D3D9 caps / formats | `R-CAPS-*`, `R-FORMAT-*` |
 | Metal backend | `R-BACK-*` |
 | Tests and conformance | `R-TEST-*` |
 | Deployment | `R-DEPLOY-*` |
 | Verification / TLA+ | `R-VERIF-*` |
 | Benchmarks | `R-BENCH-*` |
+| Experiments | `R-WILD-*` |
 | D3D7 / D3D8 shims | `R-D3D7-*`, `R-D3D8-*` |
 
 Rules:

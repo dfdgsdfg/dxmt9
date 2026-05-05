@@ -1,13 +1,16 @@
 #include "dxmt9_resource_pool.hpp"
 
 #include "dxmt9/assert.hpp"
+#include "dxmt9_debug_trace.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_queue.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <span>
+#include <sstream>
 #include <vector>
 
 namespace dxmt9::resources {
@@ -43,6 +46,89 @@ const SurfaceRecord* Pool::findSurface(u64 handle) const noexcept {
 }
 
 namespace {
+struct TextureSubresource {
+  u32 mipLevel = 0;
+  u32 slice = 0;
+  bool valid = true;
+};
+
+TextureSubresource decodeTextureSubresource(const core::TextureDesc& desc, u32 subresource) {
+  const u32 mipLevels = std::max(1u, desc.levels);
+  if (desc.type == core::TextureType::Cube) {
+    const u32 slice = subresource / mipLevels;
+    if (slice >= 6u) {
+      return {.mipLevel = 0, .slice = 0, .valid = false};
+    }
+    return {.mipLevel = subresource % mipLevels, .slice = slice, .valid = true};
+  }
+  if (subresource >= mipLevels) {
+    return {.mipLevel = 0, .slice = 0, .valid = false};
+  }
+  return {.mipLevel = subresource, .slice = 0, .valid = true};
+}
+
+bool shouldTraceResourceHandle(core::Handle handle) {
+  return core::metalqueue::queueTraceEnabled() || dxmt9::debug::shouldTraceTexture(handle);
+}
+
+void traceTextureCreate(core::TextureHandle handle, const core::TextureDesc& desc,
+                        bool hasMetalTexture, bool isPrivate) {
+  if (!shouldTraceResourceHandle(handle)) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-resource] texture create handle=0x" << std::hex << handle.value
+      << std::dec << " size=" << desc.width << "x" << desc.height << "x" << desc.depth
+      << " levels=" << desc.levels
+      << " usage=0x" << std::hex << static_cast<u32>(desc.usage) << std::dec
+      << " fmt=" << static_cast<u32>(desc.format)
+      << " pool=" << static_cast<u32>(desc.pool)
+      << " type=" << static_cast<u32>(desc.type)
+      << " metal=" << (hasMetalTexture ? 1 : 0)
+      << " private=" << (isPrivate ? 1 : 0);
+  core::metalqueue::emitTextureTraceLine(out.str());
+}
+
+void traceSurfaceCreate(core::SurfaceHandle handle, const core::SurfaceDesc& desc,
+                        bool hasMetalTexture) {
+  if (!core::metalqueue::queueTraceEnabled()) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-resource] surface create handle=0x" << std::hex << handle.value
+      << std::dec << " size=" << desc.width << "x" << desc.height
+      << " usage=0x" << std::hex << static_cast<u32>(desc.usage) << std::dec
+      << " fmt=" << static_cast<u32>(desc.format)
+      << " pool=" << static_cast<u32>(desc.pool)
+      << " msaa=" << static_cast<u32>(desc.multiSampleType)
+      << " metal=" << (hasMetalTexture ? 1 : 0);
+  core::metalqueue::emitTextureTraceLine(out.str());
+}
+
+void traceSurfaceAlias(core::SurfaceHandle handle,
+                       core::TextureHandle texture,
+                       u32 subresource,
+                       TextureSubresource decoded,
+                       const core::SurfaceDesc& desc,
+                       bool usedParentTexture,
+                       bool hasMetalTexture) {
+  if (!shouldTraceResourceHandle(texture)) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-resource] surface alias handle=0x" << std::hex << handle.value
+      << " texture=0x" << texture.value << std::dec
+      << " subresource=" << subresource
+      << " mip=" << decoded.mipLevel
+      << " slice=" << decoded.slice
+      << " size=" << desc.width << "x" << desc.height
+      << " usage=0x" << std::hex << static_cast<u32>(desc.usage) << std::dec
+      << " fmt=" << static_cast<u32>(desc.format)
+      << " parent=" << (usedParentTexture ? 1 : 0)
+      << " metal=" << (hasMetalTexture ? 1 : 0);
+  core::metalqueue::emitTextureTraceLine(out.str());
+}
+
 template <typename Map>
 void gcMap(Map& map, u64 completedSeqId) {
   for (auto it = map.begin(); it != map.end();) {
@@ -105,6 +191,8 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     record.isPrivate = (info.options == WMTResourceStorageModePrivate);
   }
   textures[handle.value] = std::move(record);
+  const auto& stored = textures[handle.value];
+  traceTextureCreate(handle, desc, static_cast<bool>(stored.texture), stored.isPrivate);
   return handle;
 }
 
@@ -139,6 +227,8 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
     }
   }
   surfaces[handle.value] = std::move(record);
+  const auto& stored = surfaces[handle.value];
+  traceSurfaceCreate(handle, desc, static_cast<bool>(stored.texture));
   return handle;
 }
 
@@ -153,22 +243,41 @@ core::SurfaceHandle Pool::createSurfaceForTexture(core::TextureHandle textureHan
   SurfaceRecord record;
   record.desc = desc;
   record.aliasTexture = textureHandle;
-  record.level = level;
+  const auto subresource = decodeTextureSubresource(textureIt->second.desc, level);
+  if (!subresource.valid) {
+    return {};
+  }
+  record.level = 0;
+  record.slice = 0;
+  bool usedParentTexture = false;
   WMT::Texture parentTexture{textureIt->second.texture.handle};
-  if (level == 0 && desc.width == textureIt->second.desc.width &&
+  if (textureIt->second.desc.type != core::TextureType::Cube &&
+      subresource.mipLevel == 0 && desc.width == textureIt->second.desc.width &&
       desc.height == textureIt->second.desc.height) {
     record.texture = WMT::Reference<WMT::Texture>(parentTexture);
+    usedParentTexture = true;
   } else {
     WMTTextureSwizzleChannels swizzle{
         WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
         WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
     uint64_t gpuId = 0;
+    const auto viewType = textureIt->second.desc.type == core::TextureType::Cube
+                              ? WMTTextureType2D
+                              : parentTexture.textureType();
     auto view = parentTexture.newTextureView(parentTexture.pixelFormat(),
-                                               parentTexture.textureType(),
-                                               level, 1, 0, 1, swizzle, gpuId);
+                                               viewType,
+                                               subresource.mipLevel, 1,
+                                               subresource.slice, 1, swizzle, gpuId);
+    if (!view && textureIt->second.desc.type == core::TextureType::Cube) {
+      return {};
+    }
     record.texture = view ? std::move(view) : WMT::Reference<WMT::Texture>(parentTexture);
+    usedParentTexture = !view;
   }
   surfaces[handle.value] = std::move(record);
+  const auto& stored = surfaces[handle.value];
+  traceSurfaceAlias(handle, textureHandle, level, subresource, desc, usedParentTexture,
+                    static_cast<bool>(stored.texture));
   return handle;
 }
 
@@ -239,8 +348,13 @@ Pool::stageTextureUpload(WMT::Device device,
   const auto normalized = normalizeUploadBytes(it->second.desc.format, width, height, pitch,
                                                   {bytes, byteCount}, scratch);
 
+  const auto subresource = decodeTextureSubresource(it->second.desc, level);
+  if (!subresource.valid) {
+    return std::nullopt;
+  }
   WMT::Texture texture{it->second.texture.handle};
-  const u32 mipLevel = level;
+  const u32 mipLevel = subresource.mipLevel;
+  const u32 slice = subresource.slice;
   const u32 mipWidth = std::max(1u, width);
   const u32 mipHeight = std::max(1u, height);
 
@@ -248,7 +362,7 @@ Pool::stageTextureUpload(WMT::Device device,
     // Shared-mode: CPU write straight to the destination; no blit.
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, 1};
-    texture.replaceRegion(origin, size, mipLevel, 0, normalized.data(), pitch, 0);
+    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch, 0);
     return std::nullopt;
   }
 
@@ -275,7 +389,7 @@ Pool::stageTextureUpload(WMT::Device device,
     WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
                                                        normalized.data(), pitch, 0);
   }
-  return StagingCopy{std::move(stagingTexture), texture, mipLevel, mipWidth, mipHeight};
+  return StagingCopy{std::move(stagingTexture), texture, mipLevel, slice, mipWidth, mipHeight};
 }
 
 void Pool::uploadTextureLevel(WMT::Device device,
@@ -296,15 +410,20 @@ void Pool::uploadTextureLevel(WMT::Device device,
   const auto normalized = normalizeUploadBytes(it->second.desc.format, width, height, pitch,
                                                   {bytes, byteCount}, scratch);
 
+  const auto subresource = decodeTextureSubresource(it->second.desc, level);
+  if (!subresource.valid) {
+    return;
+  }
   WMT::Texture texture{it->second.texture.handle};
-  const u32 mipLevel = level;
+  const u32 mipLevel = subresource.mipLevel;
+  const u32 slice = subresource.slice;
   const u32 mipWidth = std::max(1u, width);
   const u32 mipHeight = std::max(1u, height);
 
   if (!it->second.isPrivate) {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, 1};
-    texture.replaceRegion(origin, size, mipLevel, 0, normalized.data(), pitch, 0);
+    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch, 0);
     return;
   }
 
@@ -343,7 +462,7 @@ void Pool::uploadTextureLevel(WMT::Device device,
   WMTOrigin origin{0, 0, 0};
   WMTSize size{mipWidth, mipHeight, 1};
   blit.copyFromTextureToTexture(WMT::Texture{stagingTexture.handle}, 0, 0,
-                                 origin, size, texture, 0, mipLevel, origin);
+                                 origin, size, texture, slice, mipLevel, origin);
   blit.endEncoding();
   commandBuffer.commit();
   const auto started = std::chrono::steady_clock::now();
@@ -391,10 +510,14 @@ void Pool::markDrawResources(const core::DrawDesc& desc, u64 seqId) {
 }
 
 void Pool::markClearResources(const core::ClearDesc& desc, u64 seqId) {
-  for (const auto& attachment : desc.colorAttachments) {
-    markSurfaceUse(attachment.handle, seqId);
+  if (desc.clearColor) {
+    for (const auto& attachment : desc.colorAttachments) {
+      markSurfaceUse(attachment.handle, seqId);
+    }
   }
-  markSurfaceUse(desc.depthStencil.handle, seqId);
+  if (desc.clearDepth || desc.clearStencil) {
+    markSurfaceUse(desc.depthStencil.handle, seqId);
+  }
 }
 
 void Pool::markSurfaceCopyResources(const core::SurfaceCopyDesc& desc, u64 seqId) {

@@ -209,8 +209,12 @@ HazardBloom makeAttachmentBloom(const core::RenderTargetSnapshot& rts) {
 
 HazardBloom makeAttachmentBloom(const core::ClearDesc& clear) {
   HazardBloom bloom;
-  for (const auto& attachment : clear.colorAttachments) bloom.add(attachment.handle.value);
-  bloom.add(clear.depthStencil.handle.value);
+  if (clear.clearColor) {
+    for (const auto& attachment : clear.colorAttachments) bloom.add(attachment.handle.value);
+  }
+  if (clear.clearDepth || clear.clearStencil) {
+    bloom.add(clear.depthStencil.handle.value);
+  }
   return bloom;
 }
 
@@ -237,13 +241,34 @@ AttachmentKey makeAttachmentKey(const core::RenderTargetSnapshot& rts) {
 
 AttachmentKey makeAttachmentKey(const core::ClearDesc& clear) {
   AttachmentKey key;
-  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-    key.colorHandles[i] = clear.colorAttachments[i].handle.value;
-    key.sampleCount = std::max(key.sampleCount, clear.colorAttachments[i].sampleCount);
+  if (clear.clearColor) {
+    for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+      key.colorHandles[i] = clear.colorAttachments[i].handle.value;
+      key.sampleCount = std::max(key.sampleCount, clear.colorAttachments[i].sampleCount);
+    }
   }
-  key.depthHandle = clear.depthStencil.handle.value;
-  key.sampleCount = std::max(key.sampleCount, clear.depthStencil.sampleCount);
+  if (clear.clearDepth || clear.clearStencil) {
+    key.depthHandle = clear.depthStencil.handle.value;
+    key.sampleCount = std::max(key.sampleCount, clear.depthStencil.sampleCount);
+  }
   return key;
+}
+
+bool clearMatchesColorAttachment(const std::optional<ClearDesc>& clear,
+                                 std::size_t index,
+                                 Handle attachment) {
+  return clear.has_value() && clear->clearColor && attachment &&
+         clear->colorAttachments[index].handle == attachment;
+}
+
+bool clearMatchesDepthStencilAttachment(const std::optional<ClearDesc>& clear,
+                                        const DrawDesc& draw,
+                                        bool clearStencil) {
+  if (!clear.has_value() || !draw.rts.depthStencil.handle) {
+    return false;
+  }
+  const bool requested = clearStencil ? clear->clearStencil : clear->clearDepth;
+  return requested && clear->depthStencil.handle == draw.rts.depthStencil.handle;
 }
 
 u32 primitiveVertexCount(core::PrimitiveType type, u32 primitiveCount) {
@@ -360,15 +385,17 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     auto& attachment = passInfo.colors[i];
     attachment.texture = surface->texture.handle;
     const bool discardAttachment = discardAfterPresent && i == 0;
-    attachment.load_action = clear.has_value() ? WMTLoadActionClear
-                                                : (discardAttachment ? WMTLoadActionDontCare
-                                                                     : WMTLoadActionLoad);
+    const bool clearAttachment =
+        clearMatchesColorAttachment(clear, i, draw.rts.color[i].handle);
+    attachment.load_action = clearAttachment ? WMTLoadActionClear
+                                             : (discardAttachment ? WMTLoadActionDontCare
+                                                                  : WMTLoadActionLoad);
     attachment.store_action = WMTStoreActionStore;
     if (surface->resolveTexture) {
       attachment.resolve_texture = surface->resolveTexture.handle;
       attachment.store_action = WMTStoreActionMultisampleResolve;
     }
-    if (clear.has_value()) {
+    if (clearAttachment) {
       attachment.clear_color = WMTClearColor{clear->color.r, clear->color.g,
                                              clear->color.b, clear->color.a};
     }
@@ -376,21 +403,21 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
 
   if (auto* depthSurface = ctx.pool.findSurface(draw.rts.depthStencil.handle.value);
       depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
+    const bool clearDepth = clearMatchesDepthStencilAttachment(clear, draw, false);
+    const bool clearStencil = clearMatchesDepthStencilAttachment(clear, draw, true);
     if (formatHasDepthAspect(depthSurface->desc.format)) {
       passInfo.depth.texture = depthSurface->texture.handle;
-      passInfo.depth.load_action = (clear.has_value() && clear->clearDepth)
-                                       ? WMTLoadActionClear : WMTLoadActionLoad;
+      passInfo.depth.load_action = clearDepth ? WMTLoadActionClear : WMTLoadActionLoad;
       passInfo.depth.store_action = WMTStoreActionStore;
-      if (clear.has_value()) {
+      if (clearDepth) {
         passInfo.depth.clear_depth = clear->depth;
       }
     }
     if (formatHasStencilAspect(depthSurface->desc.format)) {
       passInfo.stencil.texture = depthSurface->texture.handle;
-      passInfo.stencil.load_action = (clear.has_value() && clear->clearStencil)
-                                         ? WMTLoadActionClear : WMTLoadActionLoad;
+      passInfo.stencil.load_action = clearStencil ? WMTLoadActionClear : WMTLoadActionLoad;
       passInfo.stencil.store_action = WMTStoreActionStore;
-      if (clear.has_value()) {
+      if (clearStencil) {
         passInfo.stencil.clear_stencil = clear->stencil;
       }
     }
@@ -406,9 +433,11 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
   double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
   double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
-  double viewportOriginX = 0.0;
-  double viewportOriginY = 0.0;
+  double viewportOriginX = static_cast<double>(draw.viewport.viewport.x);
+  double viewportOriginY = static_cast<double>(draw.viewport.viewport.y);
   if (ffLayout && ffLayout->preTransformed) {
+    viewportOriginX = 0.0;
+    viewportOriginY = 0.0;
     viewportWidth = static_cast<double>(std::max(1u, primarySurface->desc.width));
     viewportHeight = static_cast<double>(std::max(1u, primarySurface->desc.height));
   }
@@ -538,9 +567,11 @@ void encodeDraw(EncodeContext& ctx,
     if (auto* surface = ctx.pool.findSurface(draw.rts.color[0].handle.value); surface && surface->texture) {
       double viewportWidth = static_cast<double>(std::max(1u, draw.viewport.viewport.width));
       double viewportHeight = static_cast<double>(std::max(1u, draw.viewport.viewport.height));
-      double viewportOriginX = 0.0;
-      double viewportOriginY = 0.0;
+      double viewportOriginX = static_cast<double>(draw.viewport.viewport.x);
+      double viewportOriginY = static_cast<double>(draw.viewport.viewport.y);
       if (ffLayout && ffLayout->preTransformed) {
+        viewportOriginX = 0.0;
+        viewportOriginY = 0.0;
         viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
         viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
       }
@@ -1287,6 +1318,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       case Kind::Clear:
         flushRender();
         flushBlit();
+        flushPendingClear();
         if (command.clear.rects.empty()) {
           pendingClear = command.clear;
         } else {

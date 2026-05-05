@@ -122,6 +122,12 @@ struct TextureUploadRecord {
   std::vector<u8> bytes;
 };
 
+struct TextureSurfaceRecord {
+  TextureHandle texture{};
+  u32 subresource = 0;
+  SurfaceDesc desc{};
+};
+
 constexpr u32 kD3DSIO_MOV = 1u;
 constexpr u32 kD3DSIO_ADD = 2u;
 constexpr u32 kD3DSIO_SLT = 12u;
@@ -430,6 +436,12 @@ struct RecordingBackend final : BackendDevice {
     return Handle{nextHandle++};
   }
 
+  SurfaceHandle createSurfaceForTexture(TextureHandle texture, u32 subresource,
+                                        const SurfaceDesc& desc) override {
+    textureSurfaces.push_back({texture, subresource, desc});
+    return Handle{nextHandle++};
+  }
+
   void destroyBuffer(BufferHandle handle) override {
     destroyedBuffers.push_back(handle);
   }
@@ -488,6 +500,7 @@ struct RecordingBackend final : BackendDevice {
   std::vector<BufferDesc> createdBuffers;
   std::vector<TextureDesc> createdTextures;
   std::vector<SurfaceDesc> createdSurfaces;
+  std::vector<TextureSurfaceRecord> textureSurfaces;
   std::vector<BufferHandle> destroyedBuffers;
   std::vector<TextureHandle> destroyedTextures;
   std::vector<SurfaceHandle> destroyedSurfaces;
@@ -1574,6 +1587,50 @@ void testDeviceCoreFlow() {
   checkEq(device->swapChain()->backBuffer()->desc().height, 600u, "swapchain height after reset");
 }
 
+void testCubeTextureSubresourceFlow() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory(BackendLimits{}, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 64;
+  params.backBufferHeight = 64;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{7};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "cube test device creation");
+
+  auto cube = device->createTexture(
+      {8, 8, 1, 3, Format::A8R8G8B8, TextureType::Cube, Pool::Managed, UsageTexture | UsageRenderTarget});
+  check(cube != nullptr, "cube texture creation");
+  checkEq(cube->levelCount(), 3u, "cube mip level count");
+  checkEq(cube->subresourceCount(), 18u, "cube subresource count");
+  checkEq(cube->mipLevelForSubresource(5), 2u, "cube packed subresource mip");
+
+  auto face1Mip2 = cube->surfaceLevel(5);
+  check(face1Mip2 != nullptr, "cube face mip surface");
+  checkEq(face1Mip2->desc().width, 2u, "cube face mip width");
+  checkEq(face1Mip2->desc().height, 2u, "cube face mip height");
+  check(!backend->textureSurfaces.empty(), "cube backend texture surface request");
+  checkEq(backend->textureSurfaces.back().subresource, 5u, "cube backend packed subresource");
+  checkEq(backend->textureSurfaces.back().desc.width, 2u, "cube backend mip width");
+  checkEq(backend->textureSurfaces.back().desc.height, 2u, "cube backend mip height");
+
+  face1Mip2->fillColor(nullptr, {1.0f, 1.0f, 0.0f, 1.0f});
+  const std::array<u8, 4> yellowPixel = bgra(0x00, 0xff, 0xff, 0xff);
+  checkBytes(std::span<const u8>(cube->levelBytes(5).data(), 4),
+             std::span<const u8>(yellowPixel.data(), yellowPixel.size()),
+             "cube face mip storage");
+  check(!backend->textureUploads.empty(), "cube texture upload");
+  const auto& upload = backend->textureUploads.back();
+  checkEq(upload.level, 5u, "cube upload packed subresource");
+  checkEq(upload.width, 2u, "cube upload width");
+  checkEq(upload.height, 2u, "cube upload height");
+
+  auto invalid = cube->surfaceLevel(cube->subresourceCount());
+  check(invalid == nullptr, "cube invalid subresource rejected");
+}
+
 void testMetalSamplerBorderColorCoverage() {
 #if !defined(__APPLE__)
   return;
@@ -1887,6 +1944,59 @@ void testComWrappersEx() {
     check(recordedStateBlock != nullptr, "recorded c state block");
     checkEq(dxmt9c_stateblock_release(recordedStateBlock), 0u, "release recorded c state block");
     checkEq(dxmt9c_stateblock_release(cStateBlock), 0u, "release c state block");
+
+    auto* dxt5Texture = dxmt9c_device_create_texture(
+        &cDevice, 16, 16, 1, 0, dxmt9::d3d9::devicec::fmtToD3D(Format::DXT5), 1);
+    check(dxt5Texture != nullptr, "create c dxt5 texture");
+    D9CLockedRect locked{};
+    D9CRect partialRect{4, 4, 12, 12};
+    checkEq(dxmt9c_texture_lock_rect(dxt5Texture, 0, &locked, &partialRect, 0), D3D_OK,
+            "lock c dxt5 partial rect");
+    check(locked.bits != nullptr, "c dxt5 partial lock bits");
+    checkEq(locked.pitch, static_cast<int32_t>(formatRowPitch(Format::DXT5, 16)),
+            "c dxt5 partial lock exposes level pitch");
+    auto* lockedBytes = static_cast<u8*>(locked.bits);
+    lockedBytes[0] = 0x7au;
+    lockedBytes[static_cast<size_t>(locked.pitch)] = 0x7bu;
+    checkEq(dxmt9c_texture_unlock_rect(dxt5Texture, 0), D3D_OK, "unlock c dxt5 partial rect");
+    const auto dxt5Bytes = dxt5Texture->obj->levelBytes(0);
+    checkEq(dxt5Bytes[80], static_cast<u8>(0x7a), "c dxt5 partial first block copied");
+    checkEq(dxt5Bytes[144], static_cast<u8>(0x7b), "c dxt5 partial second block copied");
+
+    auto* dxt5Surface = dxmt9c_texture_get_surface_level(dxt5Texture, 0);
+    check(dxt5Surface != nullptr, "create c dxt5 surface level");
+    D9CLockedRect surfaceLocked{};
+    checkEq(dxmt9c_surface_lock_rect(dxt5Surface, &surfaceLocked, &partialRect, 0), D3D_OK,
+            "lock c dxt5 surface partial rect");
+    check(surfaceLocked.bits != nullptr, "c dxt5 surface partial lock bits");
+    checkEq(surfaceLocked.pitch, static_cast<int32_t>(formatRowPitch(Format::DXT5, 16)),
+            "c dxt5 surface partial lock exposes level pitch");
+    auto* surfaceLockedBytes = static_cast<u8*>(surfaceLocked.bits);
+    surfaceLockedBytes[2] = 0x4au;
+    surfaceLockedBytes[static_cast<size_t>(surfaceLocked.pitch) + 2u] = 0x4bu;
+    checkEq(dxmt9c_surface_unlock_rect(dxt5Surface), D3D_OK, "unlock c dxt5 surface partial rect");
+    const auto dxt5SurfaceBytes = dxt5Texture->obj->levelBytes(0);
+    checkEq(dxt5SurfaceBytes[82], static_cast<u8>(0x4a), "c dxt5 surface partial first block copied");
+    checkEq(dxt5SurfaceBytes[146], static_cast<u8>(0x4b), "c dxt5 surface partial second block copied");
+    checkEq(dxmt9c_surface_release(dxt5Surface), 0u, "release c dxt5 surface level");
+    checkEq(dxmt9c_texture_release(dxt5Texture), 0u, "release c dxt5 texture");
+
+    constexpr uint32_t d3dLockDiscard = 0x00002000u;
+    auto* discardTexture = dxmt9c_device_create_texture(
+        &cDevice, 4, 4, 1, 0, dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8), 1);
+    check(discardTexture != nullptr, "create c discard texture");
+    D9CLockedRect discardLocked{};
+    checkEq(dxmt9c_texture_lock_rect(discardTexture, 0, &discardLocked, nullptr, 0), D3D_OK,
+            "lock c discard texture initial");
+    auto* discardBytes = static_cast<u8*>(discardLocked.bits);
+    discardBytes[0] = 0xabu;
+    checkEq(dxmt9c_texture_unlock_rect(discardTexture, 0), D3D_OK, "unlock c discard texture initial");
+    checkEq(dxmt9c_texture_lock_rect(discardTexture, 0, &discardLocked, nullptr, d3dLockDiscard), D3D_OK,
+            "lock c texture with d3d discard flag");
+    discardBytes = static_cast<u8*>(discardLocked.bits);
+    checkEq(discardBytes[0], static_cast<u8>(0x00), "d3d discard lock maps to core discard");
+    checkEq(dxmt9c_texture_unlock_rect(discardTexture, 0), D3D_OK, "unlock c discard texture");
+    checkEq(dxmt9c_texture_release(discardTexture), 0u, "release c discard texture");
   }
 
   checkEq(device->GetMaximumFrameLatency(), 4u, "default max frame latency");
@@ -2137,6 +2247,7 @@ int main() {
     testVisualPortCoverage();
     testRasterStateCoverage();
     testDeviceCoreFlow();
+    testCubeTextureSubresourceFlow();
     testMetalSamplerBorderColorCoverage();
     testComWrappers();
     testComWrappersEx();

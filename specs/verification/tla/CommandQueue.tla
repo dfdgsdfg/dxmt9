@@ -7,10 +7,10 @@
  *
  * Three concurrent agents:
  *
- *   WineThread   — fills CommandChunks with draw/blit lambdas; commits on
- *                  present() or when the chunk is full.
+ *   WineThread   — fills CommandChunks with POD draw/blit command records;
+ *                  commits on present() or when the chunk is full.
  *   EncodeThread — dequeues committed chunks in FIFO order; replays each
- *                  lambda against ArgumentEncodingContext; submits the
+ *                  command record against ArgumentEncodingContext; submits the
  *                  resulting MTLCommandBuffer to the GPU.
  *   FinishThread — waits for GPU completion signals; recycles chunk slots
  *                  back to Free; advances completedSeqId.

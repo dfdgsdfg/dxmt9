@@ -47,6 +47,7 @@ struct SurfaceRecord {
   WMT::Reference<WMT::Texture> resolveTexture;
   core::TextureHandle aliasTexture{};
   u32 level = 0;
+  u32 slice = 0;
   bool destroyPending = false;
   u64 lastUsedSeqId = 0;
 };
@@ -161,6 +162,7 @@ struct Pool {
     WMT::Reference<WMT::Texture> stagingTexture;
     WMT::Texture destTexture;
     u32 mipLevel = 0;
+    u32 slice = 0;
     u32 width = 0;
     u32 height = 0;
   };

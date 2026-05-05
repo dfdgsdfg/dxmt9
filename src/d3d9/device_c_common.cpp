@@ -21,6 +21,8 @@ namespace dxmt9::d3d9::devicec {
 
 namespace {
 
+thread_local uint32_t g_wow64ClientCallDepth = 0;
+
 const char* dxmt9ShaderDumpDir() {
   static const std::string path = dxmt9::util::getenvString("DXMT_DUMP_SHADER_BYTECODE_DIR");
   return path.empty() ? nullptr : path.c_str();
@@ -787,6 +789,20 @@ void freeLow4GB(Low4GBAllocation alloc) {
 void releaseShadowLock(ShadowLock& lock) {
   freeLow4GB(lock.shadow);
   lock = ShadowLock{};
+}
+
+bool requiresWow64PointerShadow() {
+  return g_wow64ClientCallDepth != 0;
+}
+
+ScopedWow64ClientCall::ScopedWow64ClientCall() {
+  ++g_wow64ClientCallDepth;
+}
+
+ScopedWow64ClientCall::~ScopedWow64ClientCall() {
+  if (g_wow64ClientCallDepth != 0) {
+    --g_wow64ClientCallDepth;
+  }
 }
 
 uint32_t transformStateFromD3D(uint32_t state) {

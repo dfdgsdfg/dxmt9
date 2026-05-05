@@ -11,17 +11,16 @@ checks that every invariant holds and every liveness property is satisfied.
 
 The verification layer sits alongside — not above — the English specs. Each
 TLA+ module is the formal counterpart of a section in `backend/design.md`
-or `core/queries.md`. They describe the same system; TLA+ is more precise
-and machine-checkable.
+or `d3d9/queries/design.md`. They describe the same system; TLA+ is more
+precise and machine-checkable.
 
-```
-English spec              Formal spec (TLA+)           C++ implementation
-─────────────────────     ──────────────────────────   ──────────────────────
-backend/design.md §2  ←→  tla/CommandQueue.tla     ←→  src/backend/command_queue.*
-backend/design.md §3  ←→  tla/EncoderLifecycle.tla ←→  src/backend/encoder.*
-backend/design.md §7  ←→  tla/ResourceLifetime.tla ←→  src/backend/resource.*
-core/queries.md §2–3  ←→  tla/QuerySeqId.tla       ←→  src/core/query.*
-```
+| English spec | Formal / deterministic evidence | C++ implementation |
+|---|---|---|
+| `backend/design.md` §2 | `tla/CommandQueue.tla` | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` |
+| `backend/design.md` §3 | `tla/EncoderLifecycle.tla` | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers |
+| `backend/design.md` §5 / §7 | `tla/ResourceLifetime.tla` | `src/dxmt9/dxmt9_resource_pool.*` |
+| `d3d9/queries/design.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
+| `backend/design.md` §2 and `tests/design.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
 
 ---
 

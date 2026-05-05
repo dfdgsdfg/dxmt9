@@ -265,7 +265,7 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{u.width, u.height, 1};
     blit.copyFromTextureToTexture(WMT::Texture{u.stagingTexture.handle}, 0, 0,
-                                    origin, size, u.destTexture, 0, u.mipLevel, origin);
+                                    origin, size, u.destTexture, u.slice, u.mipLevel, origin);
   }
   blit.endEncoding();
   const std::uint64_t value = nextEventValue_++;

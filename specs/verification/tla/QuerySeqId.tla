@@ -24,8 +24,8 @@
  * Requirement traceability:
  *   R-CORE-8.1  D3DQUERYTYPE_EVENT must be supported
  *   R-CORE-8.2  D3DQUERYTYPE_OCCLUSION must be supported
- *   core/queries.md §2  Sequence ID fence mechanism
- *   core/queries.md §3  EVENT query; deadlock-free flush+spin
+ *   d3d9/queries/design.md §2  Sequence ID fence mechanism
+ *   d3d9/queries/design.md §3  EVENT query; deadlock-free flush+spin
  *
  * Properties verified:
  *   Safety   — TypeOK, QueryResolutionSafety, SeqIdMonotone
@@ -241,7 +241,7 @@ QueriesEventuallyResolve ==
  * system eventually reaches a state where the query is Resolved.
  *
  * This follows from QueriesEventuallyResolve plus WF(FlushCommit).
- * Named explicitly to match the requirement in core/queries.md §3.
+ * Named explicitly to match the requirement in d3d9/queries/design.md §3.
  *)
 NoDeadlockOnFlushSpin ==
   \A q \in QueryIds :

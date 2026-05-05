@@ -17,7 +17,7 @@ graph TD
         IMPORT["Chunk importer\nvalidate + retain handles"]
         CQ["CommandQueue\n(32-slot execution ring, 3 threads)"]
         AEC["ArgumentEncodingContext\n(encode thread)"]
-        ALLOC["Ring allocators\n(argbuf, lambda, staging, copy-temp)"]
+        ALLOC["Ring allocators\n(argbuf, replay, staging, copy-temp)"]
         PSO["PSOCache\n(MTLRenderPipelineState)\n+ DSS cache"]
         SHAD["ShaderCache\n(compiled MSL → MTLLibrary)\nDisk: MTLBinaryArchive"]
         TRANS["Shader translator\nvkd3d-shader + SPIRV-Cross\nOR direct D3DBC→MSL"]
@@ -43,14 +43,14 @@ graph TD
 
 The backend target mirrors upstream DXMT's useful split: API calls record command
 work first, and Metal execution happens later on queue-owned encode/completion
-threads. dxmt9 differs only in the bridge payload format: D3D9 uses POD records
-instead of C++ lambda captures because records cross the Wine PE/unix boundary.
+threads. dxmt9 differs only in the bridge payload format: D3D9 command data crosses
+the Wine PE/unix boundary as POD records that import into queue-local replay actions.
 
 ```mermaid
 flowchart TD
     subgraph DXMT["Upstream DXMT D3D11 shape"]
         DXCtx["D3D11 immediate context\nEmitST / EmitOP"]
-        DXChunk["CommandChunk\nlambda command list"]
+        DXChunk["CommandChunk\ncommand list"]
         DXQueue["CommandQueue\nencode + finish threads"]
         DXMetal["Metal wrapper calls"]
         DXCtx --> DXChunk --> DXQueue --> DXMetal
@@ -127,7 +127,7 @@ graph LR
     end
 
     subgraph Threads
-        ET["Encode thread\nreplays records/closures → MTLCommandBuffer"]
+        ET["Encode thread\nreplays imported records → MTLCommandBuffer"]
         FT["Finish thread\nwaits GPU done → releases chunk"]
     end
 
@@ -148,9 +148,9 @@ graph LR
 - Command-count and byte-size fields used to bound tail latency
 
 **Execution chunk** holds:
-- Imported command records or decoded closures owned by the unix side
+- Imported command records and queue-local replay actions owned by the unix side
 - Four ring sub-allocators: `staging` (CPU-visible readback), `copy_temp` (GPU private
-  blit), `argbuf` (argument buffers), `lambda_store` (closure heap)
+  blit), `argbuf` (argument buffers), `replay_store` (imported replay storage)
 - A sequence ID used to determine when in-flight resources can be released
 - Optional frame token metadata when the chunk contains a present
 
@@ -335,7 +335,7 @@ Hot-path allocation policy:
   It must not allocate unbounded per-command heap memory for ordinary draw/state
   records.
 - Encode and GPU-facing hot paths use queue/ring allocators for argument buffers,
-  staging, copy-temp, and any closure storage. Cache misses may allocate cache
+  staging, copy-temp, and imported replay storage. Cache misses may allocate cache
   objects, but steady-state replay of imported records must not allocate from the
   system heap.
 
@@ -374,6 +374,11 @@ deferred clear is applied as `MTLLoadActionClear` rather than opening a separate
   expansion, point sprite expansion)
 
 Only one encoder may be active at a time. Switching kind requires `endEncoding`.
+
+Surface operation replay details are specified in
+[`surface-ops/design.md`](surface-ops/design.md). The command queue consumes imported
+POD records and emits blit, render-pass, resolve, and readback actions; surface
+operation data does not cross the bridge as closures or lambdas.
 
 ---
 

@@ -11,6 +11,20 @@ struct LockFootprint {
   uint32_t rows = 0;
 };
 
+constexpr uint32_t kD3DLockDiscard = 0x00002000u;
+constexpr uint32_t kD3DLockNoOverwrite = 0x00001000u;
+
+uint32_t lockFlagsToCore(uint32_t flags) {
+  uint32_t out = 0;
+  if ((flags & kD3DLockDiscard) != 0) {
+    out |= dxmt9::core::UsageDiscard;
+  }
+  if ((flags & kD3DLockNoOverwrite) != 0) {
+    out |= dxmt9::core::UsageNoOverwrite;
+  }
+  return out;
+}
+
 LockFootprint lockFootprint(dxmt9::core::Format format,
                             uint32_t width,
                             uint32_t height,
@@ -28,15 +42,17 @@ LockFootprint lockFootprint(dxmt9::core::Format format,
       rect ? std::clamp(rect->right, left, static_cast<int32_t>(width)) : static_cast<int32_t>(width);
   const int32_t bottom =
       rect ? std::clamp(rect->bottom, top, static_cast<int32_t>(height)) : static_cast<int32_t>(height);
-  const uint32_t rectWidth = static_cast<uint32_t>(std::max<int32_t>(0, right - left));
-  const uint32_t rectHeight = static_cast<uint32_t>(std::max<int32_t>(0, bottom - top));
-  if (rectWidth == 0 || rectHeight == 0) {
+  if (right == left || bottom == top) {
     return {};
   }
 
-  const uint32_t blocksX = (rectWidth + blockWidth - 1u) / blockWidth;
-  const uint32_t rows = (rectHeight + blockHeight - 1u) / blockHeight;
-  return {blocksX * blockBytes, rows};
+  const uint32_t blockLeft = static_cast<uint32_t>(left) / blockWidth;
+  const uint32_t blockTop = static_cast<uint32_t>(top) / blockHeight;
+  const uint32_t blockRight =
+      (static_cast<uint32_t>(right) + blockWidth - 1u) / blockWidth;
+  const uint32_t blockBottom =
+      (static_cast<uint32_t>(bottom) + blockHeight - 1u) / blockHeight;
+  return {(blockRight - blockLeft) * blockBytes, blockBottom - blockTop};
 }
 
 }  // namespace
@@ -221,7 +237,7 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
                   static_cast<void*>(t), level, flags);
   }
   auto* rect = r ? new dxmt9::core::Rect{r->left, r->top, r->right, r->bottom} : nullptr;
-  auto lock = t->obj->lockRect(level, rect, flags);
+  auto lock = t->obj->lockRect(level, rect, lockFlagsToCore(flags));
   delete rect;
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
@@ -230,14 +246,14 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
                   static_cast<void*>(t), level, lock.pitch, lock.data);
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  if (lock.data && !pointerFits32Bit(lock.data)) {
+  if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
     const auto& desc = t->obj->desc();
     const uint32_t levelWidth = std::max(1u, desc.width >> std::min(level, 31u));
     const uint32_t levelHeight = std::max(1u, desc.height >> std::min(level, 31u));
     const auto footprint = lockFootprint(desc.format, levelWidth, levelHeight, r);
     const uint32_t rowBytes = footprint.rowBytes;
     const uint32_t rows = footprint.rows;
-    const size_t shadowBytes = static_cast<size_t>(rowBytes) * rows;
+    const size_t shadowBytes = static_cast<size_t>(lock.pitch) * rows;
     auto& shadow = t->wow64Locks[level];
     if (rowBytes == 0 || rows == 0) {
       dxmt9DebugLog("texture_lock_rect shadow alloc failed texture=%p level=%u nativeBits=%p rowBytes=%u rows=%u",
@@ -264,13 +280,14 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
     auto* dst = static_cast<uint8_t*>(shadow.shadow.ptr);
     auto* src = static_cast<const uint8_t*>(shadow.nativePtr);
     for (uint32_t row = 0; row < rows; ++row) {
-      std::memcpy(dst + static_cast<size_t>(row) * rowBytes,
+      std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
                   src + static_cast<size_t>(row) * shadow.nativePitch, rowBytes);
     }
-    out->pitch = static_cast<int32_t>(rowBytes);
+    out->pitch = static_cast<int32_t>(shadow.nativePitch);
     out->bits = shadow.shadow.ptr;
-    dxmt9DebugLog("texture_lock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p rowBytes=%u rows=%u",
-                  static_cast<void*>(t), level, shadow.nativePtr, out->bits, rowBytes, rows);
+    dxmt9DebugLog("texture_lock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p pitch=%u rowBytes=%u rows=%u",
+                  static_cast<void*>(t), level, shadow.nativePtr, out->bits,
+                  shadow.nativePitch, rowBytes, rows);
   }
   dxmt9DebugLog("texture_lock_rect ok texture=%p level=%u pitch=%d bits=%p",
                 static_cast<void*>(t), level, out->pitch, out->bits);
@@ -284,7 +301,7 @@ extern "C" int32_t dxmt9c_texture_unlock_rect(D9CTexture* t, uint32_t level) {
     auto* src = static_cast<const uint8_t*>(shadow.shadow.ptr);
     for (uint32_t row = 0; row < shadow.rows; ++row) {
       std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
-                  src + static_cast<size_t>(row) * shadow.rowBytes, shadow.rowBytes);
+                  src + static_cast<size_t>(row) * shadow.nativePitch, shadow.rowBytes);
     }
     dxmt9DebugLog("texture_unlock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p rowBytes=%u rows=%u",
                   static_cast<void*>(t), level, shadow.nativePtr, shadow.shadow.ptr,
@@ -365,9 +382,9 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
   dxmt9DebugLog("buffer_lock begin buffer=%p offset=%u size=%u flags=0x%x",
                 static_cast<void*>(b), offset, size, flags);
   const uint32_t actualSize = size ? size : b->obj->desc().size;
-  auto lock = b->obj->lock(offset, actualSize, flags);
+  auto lock = b->obj->lock(offset, actualSize, lockFlagsToCore(flags));
   *data = lock.data;
-  if (lock.data && !pointerFits32Bit(lock.data)) {
+  if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
     if (!b->wow64Lock.shadow || b->wow64Lock.shadow.size < actualSize) {
       releaseShadowLock(b->wow64Lock);
       b->wow64Lock.shadow = allocateLow4GB(actualSize);
@@ -437,23 +454,27 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   auto* rect = r ? new dxmt9::core::Rect{r->left, r->top, r->right, r->bottom} : nullptr;
-  auto lock = s->obj->lockRect(rect, flags);
+  auto lock = s->obj->lockRect(rect, lockFlagsToCore(flags));
   delete rect;
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
   if (!lock.data || lock.pitch == 0) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  if (lock.data && !pointerFits32Bit(lock.data)) {
+  if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
     const auto& desc = s->obj->desc();
-    const uint32_t rowBytes = static_cast<uint32_t>(std::abs(out->pitch));
-    const uint32_t rows = dxmt9::core::isCompressedFormat(desc.format)
-                              ? lockFootprint(desc.format, desc.width, desc.height, r).rows
-                              : static_cast<uint32_t>(std::max<int32_t>(
-                                    0, (r ? std::clamp(r->bottom, 0, static_cast<int32_t>(desc.height))
-                                          : static_cast<int32_t>(desc.height)) -
-                                           (r ? std::clamp(r->top, 0, static_cast<int32_t>(desc.height)) : 0)));
-    const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(rowBytes);
+    const uint32_t nativePitch = static_cast<uint32_t>(std::abs(out->pitch));
+    uint32_t rowBytes = nativePitch;
+    uint32_t rows = static_cast<uint32_t>(std::max<int32_t>(
+        0, (r ? std::clamp(r->bottom, 0, static_cast<int32_t>(desc.height))
+              : static_cast<int32_t>(desc.height)) -
+               (r ? std::clamp(r->top, 0, static_cast<int32_t>(desc.height)) : 0)));
+    if (dxmt9::core::isCompressedFormat(desc.format)) {
+      const auto footprint = lockFootprint(desc.format, desc.width, desc.height, r);
+      rowBytes = footprint.rowBytes;
+      rows = footprint.rows;
+    }
+    const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(nativePitch);
     if (bytes != 0) {
       if (!s->wow64Lock.shadow || s->wow64Lock.shadow.size < bytes) {
         releaseShadowLock(s->wow64Lock);
@@ -464,13 +485,18 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
         return dxmt9::core::D3DERR_INVALIDCALL;
       }
       s->wow64Lock.nativePtr = lock.data;
-      s->wow64Lock.nativePitch = rowBytes;
+      s->wow64Lock.nativePitch = nativePitch;
       s->wow64Lock.rowBytes = rowBytes;
       s->wow64Lock.rows = rows;
-      std::memcpy(s->wow64Lock.shadow.ptr, lock.data, bytes);
+      auto* dst = static_cast<uint8_t*>(s->wow64Lock.shadow.ptr);
+      auto* src = static_cast<const uint8_t*>(lock.data);
+      for (uint32_t row = 0; row < rows; ++row) {
+        std::memcpy(dst + static_cast<size_t>(row) * nativePitch,
+                    src + static_cast<size_t>(row) * nativePitch, rowBytes);
+      }
       out->bits = s->wow64Lock.shadow.ptr;
-      dxmt9DebugLog("surface_lock_rect shadow surface=%p native=%p shadow=%p pitch=%u rows=%u bytes=%zu",
-                    static_cast<void*>(s), lock.data, out->bits, rowBytes, rows, bytes);
+      dxmt9DebugLog("surface_lock_rect shadow surface=%p native=%p shadow=%p pitch=%u rowBytes=%u rows=%u bytes=%zu",
+                    static_cast<void*>(s), lock.data, out->bits, nativePitch, rowBytes, rows, bytes);
     }
   }
   return dxmt9::core::D3D_OK;
@@ -479,11 +505,18 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
 extern "C" int32_t dxmt9c_surface_unlock_rect(D9CSurface* s) {
   if (s->wow64Lock.shadow) {
     const size_t bytes =
-        static_cast<size_t>(s->wow64Lock.rowBytes) * static_cast<size_t>(s->wow64Lock.rows);
+        static_cast<size_t>(s->wow64Lock.nativePitch) * static_cast<size_t>(s->wow64Lock.rows);
     if (bytes != 0) {
-      std::memcpy(s->wow64Lock.nativePtr, s->wow64Lock.shadow.ptr, bytes);
-      dxmt9DebugLog("surface_unlock_rect shadow surface=%p native=%p shadow=%p bytes=%zu",
-                    static_cast<void*>(s), s->wow64Lock.nativePtr, s->wow64Lock.shadow.ptr, bytes);
+      auto* dst = static_cast<uint8_t*>(s->wow64Lock.nativePtr);
+      auto* src = static_cast<const uint8_t*>(s->wow64Lock.shadow.ptr);
+      for (uint32_t row = 0; row < s->wow64Lock.rows; ++row) {
+        std::memcpy(dst + static_cast<size_t>(row) * s->wow64Lock.nativePitch,
+                    src + static_cast<size_t>(row) * s->wow64Lock.nativePitch,
+                    s->wow64Lock.rowBytes);
+      }
+      dxmt9DebugLog("surface_unlock_rect shadow surface=%p native=%p shadow=%p rowBytes=%u rows=%u bytes=%zu",
+                    static_cast<void*>(s), s->wow64Lock.nativePtr, s->wow64Lock.shadow.ptr,
+                    s->wow64Lock.rowBytes, s->wow64Lock.rows, bytes);
     }
     releaseShadowLock(s->wow64Lock);
   }

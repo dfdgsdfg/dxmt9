@@ -301,7 +301,7 @@ count before calling D3D9, using:
 | D3DPT_TRIANGLEFAN | vertexCount − 2 |
 
 `D3DPT_TRIANGLEFAN` is supported by D3D9 at the API level but decomposed to a
-triangle list by the existing core layer before submission to Metal.
+triangle list by the D3D9 layer before submission to Metal.
 
 ---
 
