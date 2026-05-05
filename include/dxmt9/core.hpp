@@ -5,6 +5,7 @@
 #include <functional>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -1273,6 +1274,147 @@ struct DrawParamPayloadView {
   std::span<const u8> userIndexData{};
 };
 
+template <typename T, std::size_t InlineCapacity>
+class InlineVector {
+  static_assert(std::is_trivially_destructible_v<T>,
+                "InlineVector is for compact hot-path values only");
+
+ public:
+  using value_type = T;
+  using iterator = T*;
+  using const_iterator = const T*;
+
+  InlineVector() = default;
+
+  InlineVector(std::initializer_list<T> values) {
+    *this = values;
+  }
+
+  InlineVector& operator=(std::initializer_list<T> values) {
+    clear();
+    insert(end(), values.begin(), values.end());
+    return *this;
+  }
+
+  bool empty() const noexcept { return size() == 0; }
+  std::size_t size() const noexcept { return heapMode_ ? heap_.size() : inlineSize_; }
+
+  T* data() noexcept { return heapMode_ ? heap_.data() : inline_.data(); }
+  const T* data() const noexcept { return heapMode_ ? heap_.data() : inline_.data(); }
+
+  iterator begin() noexcept { return data(); }
+  const_iterator begin() const noexcept { return data(); }
+  const_iterator cbegin() const noexcept { return begin(); }
+  iterator end() noexcept { return data() + size(); }
+  const_iterator end() const noexcept { return data() + size(); }
+  const_iterator cend() const noexcept { return end(); }
+
+  T& operator[](std::size_t index) noexcept { return data()[index]; }
+  const T& operator[](std::size_t index) const noexcept { return data()[index]; }
+
+  void clear() noexcept {
+    if (heapMode_) {
+      heap_.clear();
+    } else {
+      inlineSize_ = 0;
+    }
+  }
+
+  void reserve(std::size_t capacity) {
+    if (capacity <= InlineCapacity) {
+      return;
+    }
+    ensureHeap(capacity);
+  }
+
+  void push_back(const T& value) {
+    append(value);
+  }
+
+  void push_back(T&& value) {
+    append(std::move(value));
+  }
+
+  template <typename It>
+  void assign(It first, It last) {
+    clear();
+    insert(end(), first, last);
+  }
+
+  template <typename It>
+  iterator insert(const_iterator pos, It first, It last) {
+    const auto index = insertionIndex(pos);
+    const auto count = static_cast<std::size_t>(std::distance(first, last));
+    if (count == 0) {
+      return begin() + index;
+    }
+    if (heapMode_ || index != size() || size() + count > InlineCapacity) {
+      ensureHeap(size() + count);
+      const auto it = heap_.insert(heap_.begin() + static_cast<std::ptrdiff_t>(index), first, last);
+      return heap_.data() + std::distance(heap_.begin(), it);
+    }
+    for (; first != last; ++first) {
+      inline_[inlineSize_++] = *first;
+    }
+    return begin() + index;
+  }
+
+  iterator insert(const_iterator pos, std::initializer_list<T> values) {
+    return insert(pos, values.begin(), values.end());
+  }
+
+ private:
+  template <typename U>
+  void append(U&& value) {
+    if (heapMode_) {
+      heap_.push_back(std::forward<U>(value));
+      return;
+    }
+    if (inlineSize_ < InlineCapacity) {
+      inline_[inlineSize_++] = std::forward<U>(value);
+      return;
+    }
+    ensureHeap(InlineCapacity == 0 ? 1 : InlineCapacity * 2);
+    heap_.push_back(std::forward<U>(value));
+  }
+
+  std::size_t insertionIndex(const_iterator pos) const noexcept {
+    if (empty()) {
+      return 0;
+    }
+    const auto first = begin();
+    const auto last = end();
+    if (pos <= first) {
+      return 0;
+    }
+    if (pos >= last) {
+      return size();
+    }
+    return static_cast<std::size_t>(pos - first);
+  }
+
+  void ensureHeap(std::size_t capacity) {
+    if (heapMode_) {
+      heap_.reserve(capacity);
+      return;
+    }
+    heap_.reserve(capacity);
+    for (std::size_t i = 0; i < inlineSize_; ++i) {
+      heap_.push_back(std::move(inline_[i]));
+    }
+    inlineSize_ = 0;
+    heapMode_ = true;
+  }
+
+  std::array<T, InlineCapacity> inline_{};
+  std::vector<T> heap_{};
+  std::size_t inlineSize_ = 0;
+  bool heapMode_ = false;
+};
+
+using DrawParamList = InlineVector<DrawParam, 4>;
+using DrawPayloadArena = InlineVector<u8, 512>;
+
 // Per-chunk resource retention entry. Mirrors the wire-format D9CChunk
 // HandleEntry but lives in dxmt9::core so the runtime can mark
 // resources without depending on the d3d9/device_c.h header. Kind tag
@@ -1298,8 +1440,8 @@ struct ChunkHandleEntry {
 // resource rebinding on the encoder side.
 struct DrawRunDesc {
   CanonicalDrawState state{};              // applied once at run start
-  std::vector<u8> payloadArena;            // packed per-draw UP payload bytes
-  std::vector<DrawParam> draws;            // per-draw args
+  DrawPayloadArena payloadArena;           // packed per-draw UP payload bytes
+  DrawParamList draws;                     // per-draw args
 };
 
 struct ClearDesc {
@@ -1699,13 +1841,19 @@ struct DeviceState;
 
 FfpVertexKey makeFfpVertexKey(const DeviceState& state);
 FfpPixelKey makeFfpPixelKey(const DeviceState& state);
+
+namespace fixture {
+
 DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args);
 FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc);
 FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc);
 DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc& desc);
 DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStateRecord& hot);
+
+}  // namespace fixture
+
 CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args);
-bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena,
+bool packDrawParamPayload(DrawParam& param, DrawPayloadArena& payloadArena,
                           DrawParamPayloadView payload);
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);

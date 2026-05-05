@@ -12,6 +12,7 @@
 #include "../src/dxmt9/dxmt9_draw_state.hpp"
 
 using namespace dxmt9::core;
+using namespace dxmt9::core::fixture;
 
 namespace {
 

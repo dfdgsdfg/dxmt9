@@ -60,8 +60,8 @@ enum class EventKind {
 struct RecordedDrawRun {
   CanonicalDrawState state{};
   FlatDrawStateRecord hot{};
-  std::vector<DrawParam> draws;
-  std::vector<u8> payloadArena;
+  DrawParamList draws;
+  DrawPayloadArena payloadArena;
 };
 
 struct RecordedEvent {

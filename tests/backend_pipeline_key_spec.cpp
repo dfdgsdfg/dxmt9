@@ -15,6 +15,7 @@
 #include "../src/dxmt9/dxmt9_pipeline_cache.hpp"
 
 using namespace dxmt9::core;
+using namespace dxmt9::core::fixture;
 
 namespace {
 

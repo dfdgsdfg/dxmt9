@@ -60,7 +60,7 @@ ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layou
 }
 
 ShaderSourceContext makeShaderSourceContext(const DrawDesc& desc) {
-  const auto layout = makeDrawShaderLayoutContext(desc);
+  const auto layout = fixture::makeDrawShaderLayoutContext(desc);
   ShaderSourceContext context{};
   context.vertexDecl = layout.vertexDecl;
   context.vertexShader = layout.vertexShader;

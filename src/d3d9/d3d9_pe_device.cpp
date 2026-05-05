@@ -2522,6 +2522,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // duplicates across records are allowed so each header can point at
         // exactly the subset it needs without falling back to the full chunk
         // table.
+        struct RecordHandleRange {
+            std::uint32_t first = 0;
+            std::uint32_t count = 0;
+        };
+        std::vector<RecordHandleRange> recordHandleRanges;
+        recordHandleRanges.reserve(pendingCommandWireRecords_.size());
+        WireHandleEntryList scratchHandles;
         std::uint64_t wireHandleCount64 = 0;
         for (auto& record : pendingCommandWireRecords_) {
             WireHandleEntryList recordHandles;
@@ -2536,6 +2543,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 static_cast<std::uint32_t>(wireHandleCount64);
             record.handleCount =
                 static_cast<std::uint32_t>(recordHandles.size());
+            recordHandleRanges.push_back(RecordHandleRange{
+                .first = record.firstHandle,
+                .count = record.handleCount,
+            });
+            scratchHandles.insert(
+                scratchHandles.end(), recordHandles.begin(), recordHandles.end());
             wireHandleCount64 += recordHandles.size();
         }
         const auto wireHandleCount =
@@ -2582,10 +2595,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
              recordIndex < pendingCommandWireRecords_.size();
              ++recordIndex) {
             auto& wireRecord = pendingCommandWireRecords_[recordIndex];
-            WireHandleEntryList recordHandles;
-            if (!collectRecordWireHandles(wireRecord, recordHandles) ||
-                wireRecord.firstHandle != nextHandle ||
-                wireRecord.handleCount != recordHandles.size()) {
+            const auto& recordHandles = recordHandleRanges[recordIndex];
+            if (wireRecord.firstHandle != nextHandle ||
+                wireRecord.firstHandle != recordHandles.first ||
+                wireRecord.handleCount != recordHandles.count) {
                 return D3DERR_INVALIDCALL;
             }
 
@@ -2595,13 +2608,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 &wireRecord,
                 sizeof(wireRecord));
 
-            if (!recordHandles.empty()) {
+            if (recordHandles.count != 0) {
                 std::memcpy(
                     wireBlobData + wireHeader.handleTableOffset +
                         static_cast<std::uint64_t>(wireRecord.firstHandle) *
                             D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
-                    recordHandles.data(),
-                    recordHandles.size() * sizeof(recordHandles[0]));
+                    scratchHandles.data() + recordHandles.first,
+                    static_cast<std::size_t>(recordHandles.count) *
+                        sizeof(scratchHandles[0]));
             }
             nextHandle += wireRecord.handleCount;
         }

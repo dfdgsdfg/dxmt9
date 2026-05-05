@@ -1545,22 +1545,31 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const std::size_t drawCount = drawParams.size();
         const std::span<const u8> payloadArena(slot.drawPayloadArena.data(),
                                                slot.drawPayloadArena.size());
-        std::vector<std::span<const std::byte>> upPayloads;
-        upPayloads.reserve(drawCount * 2);
         bool anyUpData = false;
+        bool hasUpPayloadRanges = false;
         for (const auto& param : drawParams) {
-          const auto vertexBytes = drawParamVertexBytes(param, payloadArena);
-          if (!vertexBytes.empty()) anyUpData = true;
-          upPayloads.emplace_back(reinterpret_cast<const std::byte*>(vertexBytes.data()),
-                                  vertexBytes.size());
-          const auto indexBytes = drawParamIndexBytes(param, payloadArena);
-          if (!indexBytes.empty()) anyUpData = true;
-          upPayloads.emplace_back(reinterpret_cast<const std::byte*>(indexBytes.data()),
-                                  indexBytes.size());
+          if (!param.userVertexRange.empty() || !param.userIndexRange.empty()) {
+            hasUpPayloadRanges = true;
+            break;
+          }
         }
         std::vector<CommandQueue::TransientBufferSlice> upSlices;
-        if (anyUpData) {
-          upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
+        if (hasUpPayloadRanges) {
+          std::vector<std::span<const std::byte>> upPayloads;
+          upPayloads.reserve(drawCount * 2);
+          for (const auto& param : drawParams) {
+            const auto vertexBytes = drawParamVertexBytes(param, payloadArena);
+            if (!vertexBytes.empty()) anyUpData = true;
+            upPayloads.emplace_back(reinterpret_cast<const std::byte*>(vertexBytes.data()),
+                                    vertexBytes.size());
+            const auto indexBytes = drawParamIndexBytes(param, payloadArena);
+            if (!indexBytes.empty()) anyUpData = true;
+            upPayloads.emplace_back(reinterpret_cast<const std::byte*>(indexBytes.data()),
+                                    indexBytes.size());
+          }
+          if (anyUpData) {
+            upSlices = ctx.queue.uploadTransientBufferBatch(upPayloads, /*alignment=*/16, slot.seqId);
+          }
         }
 
         // encodeDraw receives the per-draw fields through DrawParam while

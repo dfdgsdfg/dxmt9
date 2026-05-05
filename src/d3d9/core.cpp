@@ -3429,6 +3429,8 @@ DrawShaderLayoutContext makeDrawShaderLayoutContextFromState(const DeviceState& 
   return context;
 }
 
+namespace fixture {
+
 DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args) {
   DrawDesc desc;
   const auto shaderLayout = makeDrawShaderLayoutContextFromState(state);
@@ -3557,6 +3559,8 @@ FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc) {
   return record;
 }
 
+}  // namespace fixture
+
 namespace {
 
 FlatDrawStateKey makeFlatDrawStateKeyFromState(const DeviceState& state,
@@ -3654,6 +3658,8 @@ FlatDrawStateRecord makeFlatDrawStateRecordFromState(const DeviceState& state,
 
 }  // namespace
 
+namespace fixture {
+
 DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc& desc) {
   DrawShaderLayoutContext context{};
   context.vertexDecl = desc.vertexDecl;
@@ -3691,6 +3697,8 @@ DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStat
   return snapshot;
 }
 
+}  // namespace fixture
+
 DrawDebugSnapshot makeDrawDebugSnapshot(const DrawCallArgs& args, const FlatDrawStateRecord& hot) {
   DrawDebugSnapshot snapshot{};
   snapshot.primitiveType = canonicalPrimitiveType(args.primitiveType);
@@ -3718,7 +3726,7 @@ CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, con
   return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug)};
 }
 
-bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena,
+bool packDrawParamPayload(DrawParam& param, DrawPayloadArena& payloadArena,
                           DrawParamPayloadView payload) {
   const auto vertexBytes = payload.userVertexData;
   const auto indexBytes = payload.userIndexData;

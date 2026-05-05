@@ -23,6 +23,7 @@
 #include "../src/dxmt9/dxmt9_shader_translator.hpp"
 
 using namespace dxmt9::core;
+using namespace dxmt9::core::fixture;
 
 namespace {
 
@@ -133,14 +134,14 @@ struct RecordedDraw {
   CanonicalDrawState state{};
   FlatDrawStateRecord hot{};
   DrawParam param{};
-  std::vector<u8> payloadArena;
+  DrawPayloadArena payloadArena;
 };
 
 struct RecordedDrawRun {
   CanonicalDrawState state{};
   FlatDrawStateRecord hot{};
-  std::vector<DrawParam> draws;
-  std::vector<u8> payloadArena;
+  DrawParamList draws;
+  DrawPayloadArena payloadArena;
 };
 
 std::span<const u8> payloadSlice(const RecordedDraw& draw, DrawPayloadRange range,
