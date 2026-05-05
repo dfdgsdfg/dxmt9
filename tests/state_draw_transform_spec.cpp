@@ -123,10 +123,145 @@ void testChunkSlotU32GuardBoundaries() {
   check(!detail::chunkSlotCanAppendU32Range(u32Max - 1u, 2),
         "slot u32 range guard rejects overflowing appended param count");
 
+  check(detail::chunkSlotCanAppendCommandPayload(0, 0),
+        "slot command payload guard accepts empty command and payload tables");
+  check(detail::chunkSlotCanAppendCommandPayload(u32Max - 1u, u32Max - 1u),
+        "slot command payload guard accepts last appendable command and payload slots");
+  check(!detail::chunkSlotCanAppendCommandPayload(u32Max, 0),
+        "slot command payload guard rejects command header append past u32 range");
+  check(!detail::chunkSlotCanAppendCommandPayload(0, u32Max),
+        "slot command payload guard rejects payload append past u32 range");
+
+  u32 payloadIndex = 0;
+  check(detail::chunkSlotTryMakeCommandPayloadIndex(3, 7, payloadIndex),
+        "slot command payload helper accepts in-range payload index");
+  checkEq(payloadIndex, 7u,
+          "slot command payload helper casts payload index after validating range");
+
   if constexpr (sizeof(std::size_t) > sizeof(u32)) {
     check(!detail::chunkSlotCanAppendU32Range(u32Max + 1u, 0),
           "slot u32 range guard rejects pre-existing counts outside u32 storage");
   }
+}
+
+void testChunkSlotSimpleCommandSoAViews() {
+  ChunkSlot slot{};
+
+  ClearDesc clear{};
+  clear.clearColor = true;
+  clear.color = {0.25f, 0.5f, 0.75f, 1.0f};
+  clear.rects.push_back(Rect{1, 2, 3, 4});
+  slot.appendClear(clear);
+
+  SurfaceCopyDesc surfaceCopy{};
+  surfaceCopy.source = Handle{0x1010};
+  surfaceCopy.destination = Handle{0x2020};
+  surfaceCopy.sourceRect = Rect{5, 6, 7, 8};
+  surfaceCopy.destinationRect = Rect{9, 10, 11, 12};
+  surfaceCopy.sourceLevel = 2;
+  surfaceCopy.destinationLevel = 3;
+  slot.appendSurfaceCopy(surfaceCopy);
+
+  StretchRectDesc stretchRect{};
+  stretchRect.source = Handle{0x3030};
+  stretchRect.destination = Handle{0x4040};
+  stretchRect.sourceRect = Rect{13, 14, 15, 16};
+  stretchRect.destinationRect = Rect{17, 18, 19, 20};
+  stretchRect.linear = true;
+  slot.appendStretchRect(stretchRect);
+
+  ReadbackDesc readback{};
+  readback.source = Handle{0x5050};
+  readback.destination = Handle{0x6060};
+  readback.sourceRect = Rect{21, 22, 23, 24};
+  readback.sourceLevel = 4;
+  slot.appendReadback(readback);
+
+  ColorFillDesc colorFill{};
+  colorFill.destination = Handle{0x7070};
+  colorFill.rect = Rect{25, 26, 27, 28};
+  colorFill.hasRect = true;
+  colorFill.color = {1.0f, 0.0f, 0.5f, 1.0f};
+  slot.appendColorFill(colorFill);
+
+  SwapDesc present{};
+  present.window = Handle{0x8080};
+  present.sourceSurface = Handle{0x9090};
+  present.width = 800;
+  present.height = 600;
+  present.interval = PresentInterval::Immediate;
+  slot.appendPresent(present, Handle{0xa0a0});
+
+  checkEq(slot.commandCount(), std::size_t{6},
+          "slot simple command appends produce one command header each");
+  checkEq(slot.clearRecords.size(), std::size_t{1},
+          "slot simple command append stores one clear payload");
+  checkEq(slot.surfaceCopyRecords.size(), std::size_t{1},
+          "slot simple command append stores one surface-copy payload");
+  checkEq(slot.stretchRectRecords.size(), std::size_t{1},
+          "slot simple command append stores one stretch-rect payload");
+  checkEq(slot.readbackRecords.size(), std::size_t{1},
+          "slot simple command append stores one readback payload");
+  checkEq(slot.colorFillRecords.size(), std::size_t{1},
+          "slot simple command append stores one color-fill payload");
+  checkEq(slot.presentRecords.size(), std::size_t{1},
+          "slot simple command append stores one present payload");
+
+  for (const auto& header : slot.commandHeaders) {
+    checkEq(header.payloadIndex, 0u,
+            "slot simple command header stores a u32 payload index");
+  }
+
+  const auto clearView = slot.commandAt(0);
+  checkEq(clearView.kind, MetalCommandKind::Clear, "slot clear view reports command kind");
+  check(clearView.clear != nullptr, "slot clear view resolves payload");
+  check(clearView.clear->clearColor, "slot clear payload preserves clear-color flag");
+  checkEq(clearView.clear->rects[0], Rect{1, 2, 3, 4},
+          "slot clear payload preserves rect data");
+
+  const auto surfaceCopyView = slot.commandAt(1);
+  checkEq(surfaceCopyView.kind, MetalCommandKind::SurfaceCopy,
+          "slot surface-copy view reports command kind");
+  check(surfaceCopyView.surfaceCopy != nullptr, "slot surface-copy view resolves payload");
+  checkEq(surfaceCopyView.surfaceCopy->source, Handle{0x1010},
+          "slot surface-copy payload preserves source handle");
+  checkEq(surfaceCopyView.surfaceCopy->destinationLevel, 3u,
+          "slot surface-copy payload preserves destination level");
+
+  const auto stretchRectView = slot.commandAt(2);
+  checkEq(stretchRectView.kind, MetalCommandKind::StretchRect,
+          "slot stretch-rect view reports command kind");
+  check(stretchRectView.stretchRect != nullptr, "slot stretch-rect view resolves payload");
+  check(stretchRectView.stretchRect->linear,
+        "slot stretch-rect payload preserves filter mode");
+
+  const auto readbackView = slot.commandAt(3);
+  checkEq(readbackView.kind, MetalCommandKind::Readback,
+          "slot readback view reports command kind");
+  check(readbackView.readback != nullptr, "slot readback view resolves payload");
+  checkEq(readbackView.readback->sourceLevel, 4u,
+          "slot readback payload preserves source level");
+
+  const auto colorFillView = slot.commandAt(4);
+  checkEq(colorFillView.kind, MetalCommandKind::ColorFill,
+          "slot color-fill view reports command kind");
+  check(colorFillView.colorFill != nullptr, "slot color-fill view resolves payload");
+  checkEq(colorFillView.colorFill->rect, Rect{25, 26, 27, 28},
+          "slot color-fill payload preserves rect");
+
+  const auto presentView = slot.commandAt(5);
+  checkEq(presentView.kind, MetalCommandKind::Present,
+          "slot present view reports command kind");
+  check(presentView.present != nullptr, "slot present view resolves payload");
+  checkEq(presentView.present->present.window, Handle{0x8080},
+          "slot present payload preserves present desc");
+  checkEq(presentView.present->presentSource, Handle{0xa0a0},
+          "slot present payload preserves explicit source");
+
+  slot.clearCommands();
+  check(slot.commandsEmpty(), "slot clearCommands removes command headers");
+  check(!slot.lastUniformHandle.valid(),
+        "slot clearCommands resets recent uniform handle");
 }
 
 void testStateValueTableDirtyHashContract() {
@@ -625,6 +760,8 @@ void testFlatDrawStateKey() {
   checkEq(slot.drawUniformPayloads.size(), std::size_t{1},
           "slot single-draw command stores one uniform payload");
   const auto sharedUniformHandle = drawView.drawRunRecord->uniformHandle;
+  checkEq(slot.lastUniformHandle, sharedUniformHandle,
+          "slot remembers recently appended uniform payload handle");
 
   drawRunClear(packedRun);
   drawRunSetUniformPayload(packedRun, sharedUniformPayload);
@@ -668,11 +805,14 @@ void testFlatDrawStateKey() {
           "slot draw-run interns an unchanged uniform payload");
   checkEq(runView.drawRunRecord->uniformHandle, sharedUniformHandle,
           "slot draw-run reuses the existing uniform payload handle");
+  checkEq(slot.lastUniformHandle, sharedUniformHandle,
+          "slot uniform fast path keeps the recent matching handle");
 
   DrawRunDesc noPayloadRun{};
   noPayloadRun.state = makeCanonicalDrawStateForTest(first);
-  DrawUniformPayload changedUniformPayload = sharedUniformPayload;
-  changedUniformPayload.clipPlaneMask ^= 0x1u;
+  DrawDesc changedUniformDesc = withUserPayload;
+  changedUniformDesc.clipPlaneMask ^= 0x1u;
+  const auto changedUniformPayload = makeDrawUniformPayload(changedUniformDesc);
   drawRunSetUniformPayload(noPayloadRun, changedUniformPayload);
   check(drawRunAppend(noPayloadRun, drawParamA),
         "test no-payload draw-run appends before slot append");
@@ -699,6 +839,46 @@ void testFlatDrawStateKey() {
           "slot stores a new uniform payload when the payload changes");
   check(!(noPayloadView.drawRunRecord->uniformHandle == sharedUniformHandle),
         "slot no-payload draw-run uses a distinct uniform payload handle");
+  const auto changedUniformHandle = noPayloadView.drawRunRecord->uniformHandle;
+  checkEq(slot.lastUniformHandle, changedUniformHandle,
+          "slot remembers recently appended changed uniform payload handle");
+
+  DrawRunDesc reusedUniformRun{};
+  reusedUniformRun.state = makeCanonicalDrawStateForTest(first);
+  drawRunSetUniformPayload(reusedUniformRun, sharedUniformPayload);
+  check(drawRunAppend(reusedUniformRun, drawParamA),
+        "test reused-uniform draw-run appends before slot append");
+  check(drawRunValidate(reusedUniformRun),
+        "reused-uniform draw-run validates before slot append");
+  slot.appendDrawRun(std::move(reusedUniformRun));
+  const auto reusedUniformView = slot.commandAt(3);
+  check(reusedUniformView.drawRunRecord != nullptr,
+        "slot reused-uniform draw-run command exposes compact run record");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+          "slot linear uniform hit reuses an older payload handle");
+  checkEq(reusedUniformView.drawRunRecord->uniformHandle, sharedUniformHandle,
+          "slot reused-uniform draw-run uses the older interned handle");
+  checkEq(slot.lastUniformHandle, sharedUniformHandle,
+          "slot records the uniform handle found by linear scan as most recent");
+
+  DrawRunDesc fastUniformRun{};
+  fastUniformRun.state = makeCanonicalDrawStateForTest(first);
+  drawRunSetUniformPayload(fastUniformRun, sharedUniformPayload);
+  check(drawRunAppend(fastUniformRun, drawParamA),
+        "test fast-uniform draw-run appends before slot append");
+  check(drawRunValidate(fastUniformRun),
+        "fast-uniform draw-run validates before slot append");
+  slot.appendDrawRun(std::move(fastUniformRun));
+  const auto fastUniformView = slot.commandAt(4);
+  check(fastUniformView.drawRunRecord != nullptr,
+        "slot fast-uniform draw-run command exposes compact run record");
+  checkEq(slot.drawUniformPayloads.size(), std::size_t{2},
+          "slot recent uniform hit does not append another payload");
+  checkEq(fastUniformView.drawRunRecord->uniformHandle, sharedUniformHandle,
+          "slot recent uniform hit reuses the most recent handle");
+  checkEq(slot.lastUniformHandle, sharedUniformHandle,
+          "slot preserves the most recent uniform handle after fast hit");
+
   const auto refreshedDrawView = slot.commandAt(0);
   const auto refreshedRunView = slot.commandAt(1);
   check(refreshedDrawView.drawUniformPayload == refreshedRunView.drawUniformPayload,
@@ -748,6 +928,7 @@ void testFlatDrawStateKey() {
 
 int main() {
   testChunkSlotU32GuardBoundaries();
+  testChunkSlotSimpleCommandSoAViews();
   testStateValueTableDirtyHashContract();
   testStateDrawTransform();
   testConstantsAndShaderRefs();

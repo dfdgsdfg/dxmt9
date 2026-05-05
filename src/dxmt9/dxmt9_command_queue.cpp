@@ -711,6 +711,27 @@ void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }
 
+void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
+                                 const core::DrawUniformPayload& uniforms,
+                                 std::span<const core::DrawParam> draws,
+                                 std::span<const core::DrawParamPayloadView> payloads) {
+  if (draws.empty()) {
+    return;
+  }
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    perf::countSubmitDraw();
+  }
+  PerfScope scope(perf::countSubmitDrawCpuTime);
+  std::unique_lock lock(mutex_);
+  ensureWritingSlotUnlocked(*this, lock);
+  if (!skipDrawResourceMarking_) {
+    pool_.markDrawResources(state.hot, seqIdForMark(*this, 0));
+  }
+  currentBackBuffer_ = state.hot.colorAttachments[0].handle;
+  currentSlotUnlocked(*this).appendDrawRun(std::move(state), uniforms, draws, payloads);
+  maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+}
+
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
   perf::countSubmitClear();
   std::unique_lock lock(mutex_);

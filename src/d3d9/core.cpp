@@ -18,6 +18,7 @@
 #include <numeric>
 #include <optional>
 #include <sstream>
+#include <type_traits>
 
 namespace dxmt9::core {
 
@@ -334,6 +335,44 @@ std::vector<u8> decomposeTriangleFanVertices(std::span<const u8> vertices,
     appendVertex(offset, i + 1u);
   }
   return out;
+}
+
+template <typename Index>
+bool writeTriangleFanIndexBytes(std::vector<u8>& out,
+                                std::span<const u8> indices,
+                                u32 primitiveCount) {
+  static_assert(std::is_same_v<Index, u16> || std::is_same_v<Index, u32>);
+  if (primitiveCount == 0) {
+    out.clear();
+    return true;
+  }
+
+  const auto sourceIndexCount = static_cast<size_t>(primitiveCount) + 2u;
+  const auto requiredBytes = sourceIndexCount * sizeof(Index);
+  if (indices.size() < requiredBytes) {
+    out.clear();
+    return false;
+  }
+
+  out.resize(static_cast<size_t>(primitiveCount) * 3u * sizeof(Index));
+  auto readIndex = [&](size_t index) {
+    Index value = 0;
+    std::memcpy(&value, indices.data() + index * sizeof(Index), sizeof(Index));
+    return value;
+  };
+  auto writeIndex = [&](size_t& offset, Index value) {
+    std::memcpy(out.data() + offset, &value, sizeof(Index));
+    offset += sizeof(Index);
+  };
+
+  const Index center = readIndex(0);
+  size_t offset = 0;
+  for (size_t i = 1; i + 1u < sourceIndexCount; ++i) {
+    writeIndex(offset, center);
+    writeIndex(offset, readIndex(i));
+    writeIndex(offset, readIndex(i + 1u));
+  }
+  return true;
 }
 
 u32 clampToBits(float value, u32 bits) {
@@ -3911,17 +3950,22 @@ DrawRunView drawRunView(const DrawRunDesc& run) noexcept {
   return DrawRunView{
       .draws = drawParamStorageSpan(run.scratch_.draws),
       .payloadArena = drawPayloadStorageSpan(run.scratch_.payload),
-      .uniforms = &run.uniforms_,
+      .uniforms = run.uniforms_,
+      .uniformHandleCandidate = run.uniformHandleCandidate_,
   };
 }
 
-void drawRunSetUniformPayload(DrawRunDesc& run, DrawUniformPayload payload) {
-  payload.hash = hashDrawUniformPayload(payload);
-  run.uniforms_ = std::move(payload);
+void drawRunSetUniformPayload(DrawRunDesc& run, const DrawUniformPayload& payload) noexcept {
+  run.uniforms_ = &payload;
+}
+
+void drawRunSetUniformHandleCandidate(DrawRunDesc& run, DrawUniformHandle handle) noexcept {
+  run.uniformHandleCandidate_ = handle;
 }
 
 const DrawUniformPayload& drawRunUniformPayload(const DrawRunDesc& run) noexcept {
-  return run.uniforms_;
+  DXMT_ASSERT(run.uniforms_ != nullptr && "draw-run missing uniform payload view");
+  return *run.uniforms_;
 }
 
 bool drawRunEmpty(const DrawRunDesc& run) noexcept {
@@ -3980,7 +4024,7 @@ bool drawRunUsesBoundIndexBuffer(std::span<const DrawParam> draws,
 }
 
 DrawRunDesc makeDrawRunDescFromCanonical(CanonicalDrawState state,
-                                         DrawUniformPayload uniforms,
+                                         const DrawUniformPayload& uniforms,
                                          std::span<const DrawParam> draws,
                                          std::span<const DrawParamPayloadView> payloads) {
   DrawRunDesc run{};
@@ -3991,7 +4035,7 @@ DrawRunDesc makeDrawRunDescFromCanonical(CanonicalDrawState state,
   const auto& first = draws.front();
   const auto firstPayload = drawPayloadAt(payloads, 0);
   run.state = std::move(state);
-  drawRunSetUniformPayload(run, std::move(uniforms));
+  drawRunSetUniformPayload(run, uniforms);
   run.state.debug = makeDrawDebugSnapshot(
       DrawCallArgs{first.primitiveType, first.primitiveCount, first.startVertex,
                    first.baseVertexIndex, first.startIndex, first.indexType},
@@ -4015,11 +4059,11 @@ DrawRunDesc makeDrawRunDescFromCanonical(CanonicalDrawState state,
   return run;
 }
 
-DrawRunDesc makeDrawRunDescFromState(DeviceState baseState,
-                                     std::span<const DrawParam> draws,
-                                     std::span<const DrawParamPayloadView> payloads = {}) {
+void Device::submitDrawRunInternalFromState(DeviceState baseState,
+                                            std::span<const DrawParam> draws,
+                                            std::span<const DrawParamPayloadView> payloads) {
   if (draws.empty()) {
-    return {};
+    return;
   }
   if (!drawRunUsesBoundIndexBuffer(draws, payloads)) {
     baseState.indexBuffer.reset();
@@ -4038,7 +4082,7 @@ DrawRunDesc makeDrawRunDescFromState(DeviceState baseState,
       std::move(shaderLayout),
       std::move(debug),
   };
-  return makeDrawRunDescFromCanonical(std::move(state), std::move(uniforms), draws, payloads);
+  submitDrawRunInternal(std::move(state), uniforms, draws, payloads);
 }
 
 void Device::invalidateDrawStateCache() noexcept {
@@ -4065,6 +4109,25 @@ const Device::CachedBaseDrawState& Device::cachedBaseDrawState(bool includeIndex
   cache.generation = drawStateGeneration_;
   cache.valid = true;
   return cache;
+}
+
+void Device::submitDrawRunInternalFromCurrentState(
+    std::span<const DrawParam> draws,
+    std::span<const DrawParamPayloadView> payloads) {
+  if (draws.empty()) {
+    return;
+  }
+  const auto& cached = cachedBaseDrawState(drawRunUsesBoundIndexBuffer(draws, payloads));
+  CanonicalDrawState state{
+      cached.hot,
+      cached.shaderLayout,
+      makeDrawDebugSnapshot(
+          DrawCallArgs{draws.front().primitiveType, draws.front().primitiveCount,
+                       draws.front().startVertex, draws.front().baseVertexIndex,
+                       draws.front().startIndex, draws.front().indexType},
+          cached.hot),
+  };
+  submitDrawRunInternal(std::move(state), cached.uniforms, draws, payloads);
 }
 
 DrawRunDesc Device::makeDrawRunDescFromCurrentState(
@@ -4195,7 +4258,7 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
   if (draws.empty()) {
     return D3D_OK;
   }
-  submitDrawRunInternal(makeDrawRunDescFromCurrentState(draws));
+  submitDrawRunInternalFromCurrentState(draws);
   return D3D_OK;
 }
 
@@ -4214,7 +4277,7 @@ HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount, u32 startV
   draw.startVertex = startVertex;
   draw.indexType = state_.indexType;
   draw.indexed = false;
-  submitDrawRunInternal(makeDrawRunDescFromCurrentState(std::span<const DrawParam>(&draw, 1)));
+  submitDrawRunInternalFromCurrentState(std::span<const DrawParam>(&draw, 1));
   if (state_.inScene) {
     // No-op; draw submission is immediate in the core harness.
   }
@@ -4231,7 +4294,7 @@ HResult Device::drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount, u32
   draw.startIndex = startIndex;
   draw.indexType = indexType;
   draw.indexed = true;
-  submitDrawRunInternal(makeDrawRunDescFromCurrentState(std::span<const DrawParam>(&draw, 1)));
+  submitDrawRunInternalFromCurrentState(std::span<const DrawParam>(&draw, 1));
   return D3D_OK;
 }
 
@@ -4259,17 +4322,17 @@ HResult Device::drawPrimitiveUP(PrimitiveType type, u32 primitiveCount,
     const DrawParamPayloadView payload{
         .userVertexData = std::span<const u8>(decomposed.data(), decomposed.size()),
     };
-    submitDrawRunInternal(makeDrawRunDescFromState(
+    submitDrawRunInternalFromState(
         drawState, std::span<const DrawParam>(&draw, 1),
-        std::span<const DrawParamPayloadView>(&payload, 1)));
+        std::span<const DrawParamPayloadView>(&payload, 1));
     return D3D_OK;
   } else {
     const DrawParamPayloadView payload{
         .userVertexData = std::span<const u8>(upVertexScratch_.data(), upVertexScratch_.size()),
     };
-    submitDrawRunInternal(makeDrawRunDescFromState(
+    submitDrawRunInternalFromState(
         drawState, std::span<const DrawParam>(&draw, 1),
-        std::span<const DrawParamPayloadView>(&payload, 1)));
+        std::span<const DrawParamPayloadView>(&payload, 1));
     return D3D_OK;
   }
 }
@@ -4278,19 +4341,17 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
                                        std::span<const u8> vertexData, std::span<const u8> indexData,
                                        IndexType indexType, u32 vertexStride) {
   upVertexScratch_.assign(vertexData.begin(), vertexData.end());
-  upIndexScratch_.assign(indexData.begin(), indexData.end());
   if (type == PrimitiveType::TriangleFan) {
-    std::vector<u32> indices;
-    indices.reserve(indexData.size() / sizeof(u32));
-    for (size_t i = 0; i + sizeof(u32) <= indexData.size(); i += sizeof(u32)) {
-      u32 value = 0;
-      std::memcpy(&value, indexData.data() + i, sizeof(u32));
-      indices.push_back(value);
+    const bool decomposed =
+        indexType == IndexType::UInt32
+            ? writeTriangleFanIndexBytes<u32>(upIndexScratch_, indexData, primitiveCount)
+            : writeTriangleFanIndexBytes<u16>(upIndexScratch_, indexData, primitiveCount);
+    if (!decomposed) {
+      return D3DERR_INVALIDCALL;
     }
-    const auto fan = decomposeTriangleFanIndices(indices);
-    upIndexScratch_.resize(fan.size() * sizeof(u32));
-    std::memcpy(upIndexScratch_.data(), fan.data(), upIndexScratch_.size());
     type = PrimitiveType::TriangleList;
+  } else {
+    upIndexScratch_.assign(indexData.begin(), indexData.end());
   }
   DeviceState drawState = state_;
   // Indexed UP draws also source stream 0 from caller memory.
@@ -4308,9 +4369,9 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
       .userVertexData = std::span<const u8>(upVertexScratch_.data(), upVertexScratch_.size()),
       .userIndexData = std::span<const u8>(upIndexScratch_.data(), upIndexScratch_.size()),
   };
-  submitDrawRunInternal(makeDrawRunDescFromState(
+  submitDrawRunInternalFromState(
       drawState, std::span<const DrawParam>(&draw, 1),
-      std::span<const DrawParamPayloadView>(&payload, 1)));
+      std::span<const DrawParamPayloadView>(&payload, 1));
   return D3D_OK;
 }
 
@@ -4596,6 +4657,84 @@ void Device::submitClearInternal(const ClearDesc& desc) {
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
   // below the completed sequence.
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+}
+
+void Device::submitDrawRunInternal(CanonicalDrawState state,
+                                   const DrawUniformPayload& uniforms,
+                                   std::span<const DrawParam> draws,
+                                   std::span<const DrawParamPayloadView> payloads) {
+  if (draws.empty()) {
+    return;
+  }
+  const auto firstPayload = drawPayloadAt(payloads, 0);
+  state.debug = makeDrawDebugSnapshot(
+      DrawCallArgs{draws.front().primitiveType, draws.front().primitiveCount,
+                   draws.front().startVertex, draws.front().baseVertexIndex,
+                   draws.front().startIndex, draws.front().indexType},
+      state.hot);
+  state.debug.userVertexBytes = static_cast<u32>(
+      std::min<std::size_t>(firstPayload.userVertexData.size(), std::numeric_limits<u32>::max()));
+  state.debug.userIndexBytes = static_cast<u32>(
+      std::min<std::size_t>(firstPayload.userIndexData.size(), std::numeric_limits<u32>::max()));
+
+  const auto& hot = state.hot;
+  if (renderTraceEnabled()) {
+    const auto& shader = state.shaderLayout;
+    const auto stageState = [&](size_t stageIndex, u32 key) -> u32 {
+      if (stageIndex >= hot.textureStageStates.size()) {
+        return 0u;
+      }
+      return flatStateOr(hot.textureStageStates[stageIndex], key, 0u);
+    };
+    const auto renderState = [&](u32 key, u32 fallback = 0u) -> u32 {
+      return flatStateOr(hot.renderStates, key, fallback);
+    };
+    for (size_t i = 0; i < draws.size(); ++i) {
+      const auto& draw = draws[i];
+      emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x indexed=%u",
+                      static_cast<unsigned long long>(submittedSequenceId_ + 1 + i),
+                      static_cast<unsigned>(draw.primitiveType),
+                      draw.primitiveCount,
+                      draw.startVertex,
+                      draw.baseVertexIndex,
+                      draw.startIndex,
+                      static_cast<unsigned long long>(hot.colorAttachments[0].handle.value),
+                      static_cast<unsigned long long>(hot.depthStencil.handle.value),
+                      static_cast<unsigned long long>(hot.textures[0].value),
+                      static_cast<unsigned>(shader.vertexShader.kind),
+                      static_cast<unsigned>(shader.pixelShader.kind),
+                      static_cast<unsigned long long>(hashShaderRef(shader.vertexShader)),
+                      static_cast<unsigned long long>(hashShaderRef(shader.pixelShader)),
+                      static_cast<unsigned long long>(hot.key.renderStateHash),
+                      shader.vertexDecl.fvf,
+                      renderState(RS_LIGHTING),
+                      renderState(RS_CULL_MODE, static_cast<u32>(CullMode::Ccw)),
+                      renderState(RS_ALPHA_TEST_ENABLE),
+                      renderState(RS_ALPHABLEND_ENABLE),
+                      renderState(RS_SRC_BLEND),
+                      renderState(RS_DEST_BLEND),
+                      stageState(0, TSS_COLOR_OP),
+                      stageState(0, TSS_ALPHA_OP),
+                      stageState(0, TSS_TEXCOORD_INDEX),
+                      stageState(0, TSS_TEXTURE_TRANSFORM_FLAGS),
+                      stageState(1, TSS_COLOR_OP),
+                      stageState(1, TSS_ALPHA_OP),
+                      stageState(1, TSS_TEXCOORD_INDEX),
+                      stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
+                      hot.clipPlaneMask,
+                      draw.indexed ? 1u : 0u);
+    }
+  }
+
+  const auto drawCount = static_cast<u64>(draws.size());
+  if (activeOcclusionQuery_) {
+    for (const auto& draw : draws) {
+      activeOcclusionCount_ += draw.primitiveCount;
+    }
+  }
+  upperDevice_->submitDrawRun(std::move(state), uniforms, draws, payloads);
+  submittedSequenceId_ += drawCount;
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
 }
 
@@ -5135,6 +5274,15 @@ class StubDxmt9Device final : public dxmt9::Device {
     if (!backend_) {
       return;
     }
+    backend_->submitDrawRun(desc);
+  }
+  void submitDrawRun(CanonicalDrawState state, const DrawUniformPayload& uniforms,
+                     std::span<const DrawParam> draws,
+                     std::span<const DrawParamPayloadView> payloads) override {
+    if (!backend_) {
+      return;
+    }
+    auto desc = makeDrawRunDescFromCanonical(std::move(state), uniforms, draws, payloads);
     backend_->submitDrawRun(desc);
   }
   void submitClear(const ClearDesc& desc) override {

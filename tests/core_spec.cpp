@@ -1558,6 +1558,29 @@ void testDeviceCoreFlow() {
              "up fan vertex payload");
   checkEq(draw2.hot.streamStrides[0], 1u, "up fan stride");
 
+  std::array<u16, 4> fanIndices16{7, 8, 9, 10};
+  std::array<u8, sizeof(fanIndices16)> fanIndexBytes16{};
+  std::memcpy(fanIndexBytes16.data(), fanIndices16.data(), fanIndexBytes16.size());
+  checkEq(device->drawIndexedPrimitiveUP(PrimitiveType::TriangleFan, 2,
+                                          std::span<const u8>(vertexPayload.data(), vertexPayload.size()),
+                                          std::span<const u8>(fanIndexBytes16.data(), fanIndexBytes16.size()),
+                                          IndexType::UInt16, 4),
+          D3D_OK, "draw indexed primitive up fan 16");
+  checkEq(backend->draws.size(), size_t{4}, "fourth draw count");
+  const auto& draw3 = backend->draws[3];
+  checkEq(draw3.param.primitiveType, PrimitiveType::TriangleList, "fan16 decomposed to triangle list");
+  checkEq(draw3.param.primitiveCount, 2u, "fan16 primitive count");
+  checkEq(draw3.param.indexType, IndexType::UInt16, "fan16 draw index type");
+  checkEq(draw3.param.userIndexRange.size, static_cast<u32>(sizeof(u16) * 6u),
+          "fan16 user index payload size");
+  const std::array<u16, 6> expectedFanIndices16{7, 8, 9, 7, 9, 10};
+  std::array<u8, sizeof(expectedFanIndices16)> expectedFanIndexBytes16{};
+  std::memcpy(expectedFanIndexBytes16.data(), expectedFanIndices16.data(),
+              expectedFanIndexBytes16.size());
+  checkBytes(payloadSlice(draw3, draw3.param.userIndexRange, "fan16 user index payload range"),
+             std::span<const u8>(expectedFanIndexBytes16.data(), expectedFanIndexBytes16.size()),
+             "fan16 user index payload");
+
   auto occlusion = device->createQuery(QueryType::Occlusion);
   auto timestamp = device->createQuery(QueryType::Timestamp);
   check(occlusion != nullptr, "occlusion query");

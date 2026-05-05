@@ -109,6 +109,10 @@ class Device {
   // override this explicitly; the default stub has no canonical state
   // expansion fallback.
   virtual void submitDrawRun(core::DrawRunDesc) {}
+  virtual void submitDrawRun(core::CanonicalDrawState,
+                             const core::DrawUniformPayload&,
+                             std::span<const core::DrawParam>,
+                             std::span<const core::DrawParamPayloadView>) {}
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}
   virtual void submitStretchRect(const core::StretchRectDesc&) {}

@@ -115,6 +115,10 @@ class CommandQueue {
   // single mutex acquire. The encoder binds state from desc.state ONCE,
   // then loops emitting per-DrawParam Metal calls.
   void submitDrawRun(core::DrawRunDesc desc);
+  void submitDrawRun(core::CanonicalDrawState state,
+                     const core::DrawUniformPayload& uniforms,
+                     std::span<const core::DrawParam> draws,
+                     std::span<const core::DrawParamPayloadView> payloads = {});
   // Bulk resource retention — chunk importer hands the deduped handle
   // set from D9CCommandChunk.handles[] in one call. Single mutex
   // acquire, dispatches per-kind to pool_.markBufferUse / markTextureUse

@@ -135,6 +135,36 @@ struct RecordingDxmt9Device final : dxmt9::Device {
     events.push_back(std::move(event));
   }
 
+  void submitDrawRun(CanonicalDrawState state, const DrawUniformPayload&,
+                     std::span<const DrawParam> draws,
+                     std::span<const DrawParamPayloadView> payloads) override {
+    RecordedEvent event;
+    event.kind = EventKind::SubmitDraw;
+    event.drawRun.state = std::move(state);
+    event.drawRun.hot = event.drawRun.state.hot;
+    event.drawRun.draws.reserve(draws.size());
+    auto appendPayload = [&](std::span<const u8> bytes) -> DrawPayloadRange {
+      if (bytes.empty()) {
+        return {};
+      }
+      const auto offset = static_cast<u32>(event.drawRun.payloadArena.size());
+      event.drawRun.payloadArena.insert(event.drawRun.payloadArena.end(),
+                                        bytes.begin(), bytes.end());
+      return DrawPayloadRange{
+          .offset = offset,
+          .size = static_cast<u32>(bytes.size()),
+      };
+    };
+    for (std::size_t i = 0; i < draws.size(); ++i) {
+      DrawParam param = draws[i];
+      const DrawParamPayloadView payload = i < payloads.size() ? payloads[i] : DrawParamPayloadView{};
+      param.userVertexRange = appendPayload(payload.userVertexData);
+      param.userIndexRange = appendPayload(payload.userIndexData);
+      event.drawRun.draws.push_back(param);
+    }
+    events.push_back(std::move(event));
+  }
+
   void submitClear(const ClearDesc& desc) override {
     RecordedEvent event;
     event.kind = EventKind::SubmitClear;

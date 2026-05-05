@@ -1328,6 +1328,7 @@ struct DrawRunView {
   std::span<const DrawParam> draws{};
   std::span<const u8> payloadArena{};
   const DrawUniformPayload* uniforms = nullptr;
+  DrawUniformHandle uniformHandleCandidate{};
 };
 
 // Per-chunk resource retention entry. Mirrors the wire-format D9CChunk
@@ -1358,11 +1359,13 @@ struct DrawRunDesc {
 
  private:
   detail::DrawRunScratchStorage scratch_{}; // packed per-draw args + UP payload bytes
-  DrawUniformPayload uniforms_{};            // cold uniform payload staged into the queue arena
+  const DrawUniformPayload* uniforms_ = nullptr; // borrowed until immediate queue append
+  DrawUniformHandle uniformHandleCandidate_{};
 
   friend void drawRunClear(DrawRunDesc& run);
   friend void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payloadBytes);
-  friend void drawRunSetUniformPayload(DrawRunDesc& run, DrawUniformPayload payload);
+  friend void drawRunSetUniformPayload(DrawRunDesc& run, const DrawUniformPayload& payload) noexcept;
+  friend void drawRunSetUniformHandleCandidate(DrawRunDesc& run, DrawUniformHandle handle) noexcept;
   friend bool drawRunAppend(DrawRunDesc& run, DrawParam param, DrawParamPayloadView payload);
   friend DrawRunView drawRunView(const DrawRunDesc& run) noexcept;
   friend const DrawUniformPayload& drawRunUniformPayload(const DrawRunDesc& run) noexcept;
@@ -1733,6 +1736,14 @@ class BackendDevice {
   // dxmt9::Device/CommandQueue flat DrawRun path; BackendDevice keeps a no-op
   // DrawRun hook for focused core tests that observe the same flat payload.
   virtual void submitDrawRun(const DrawRunDesc& desc) { (void)desc; }
+  virtual void submitDrawRun(CanonicalDrawState state, const DrawUniformPayload& uniforms,
+                             std::span<const DrawParam> draws,
+                             std::span<const DrawParamPayloadView> payloads) {
+    (void)state;
+    (void)uniforms;
+    (void)draws;
+    (void)payloads;
+  }
   virtual void submitClear(const ClearDesc& desc) { (void)desc; }
   virtual void submitSurfaceCopy(const SurfaceCopyDesc& desc) { (void)desc; }
   virtual void submitStretchRect(const StretchRectDesc& desc) { (void)desc; }
@@ -1789,7 +1800,9 @@ void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payload
 bool drawRunAppend(DrawRunDesc& run, DrawParam param,
                    DrawParamPayloadView payload = {});
 DrawRunView drawRunView(const DrawRunDesc& run) noexcept;
-void drawRunSetUniformPayload(DrawRunDesc& run, DrawUniformPayload payload);
+void drawRunSetUniformPayload(DrawRunDesc& run, const DrawUniformPayload& payload) noexcept;
+void drawRunSetUniformPayload(DrawRunDesc& run, DrawUniformPayload&& payload) = delete;
+void drawRunSetUniformHandleCandidate(DrawRunDesc& run, DrawUniformHandle handle) noexcept;
 const DrawUniformPayload& drawRunUniformPayload(const DrawRunDesc& run) noexcept;
 bool drawRunEmpty(const DrawRunDesc& run) noexcept;
 std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept;
@@ -2219,6 +2232,16 @@ class Device : public std::enable_shared_from_this<Device> {
   void registerSurface(const std::shared_ptr<Surface>& surface);
   void invalidateDefaultPoolResources();
   void submitClearInternal(const ClearDesc& desc);
+  void submitDrawRunInternal(CanonicalDrawState state, const DrawUniformPayload& uniforms,
+                             std::span<const DrawParam> draws,
+                             std::span<const DrawParamPayloadView> payloads = {});
+  void submitDrawRunInternalFromCurrentState(
+      std::span<const DrawParam> draws,
+      std::span<const DrawParamPayloadView> payloads = {});
+  void submitDrawRunInternalFromState(
+      DeviceState baseState,
+      std::span<const DrawParam> draws,
+      std::span<const DrawParamPayloadView> payloads = {});
   void submitDrawRunInternal(DrawRunDesc desc);
   void submitPresentInternal(const SwapDesc& desc);
   void maybeCaptureExperimentFrame();
