@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <unordered_set>
 #include <vector>
 #include "d3d9_pe.hpp"
@@ -1819,6 +1820,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     DWORD        behaviorFlags_ = 0;
     bool         extended_ = false;
     bool         stateBlockRecording_ = false;
+    std::recursive_mutex recorderMutex_{};
 
     /* bound resource tracking (AddRef'd) */
     IDirect3DBaseTexture9*     textures_[16]    = {};
@@ -2535,6 +2537,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT flushPendingCommandChunk() {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (pendingCommandRecordCount_ == 0) {
             return S_OK;
         }
@@ -2683,6 +2686,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     template<typename WriteFn>
     HRESULT appendCommandRecordDirect(uint32_t type, size_t bytes, WriteFn write) {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (bytes == 0 || bytes > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
         }
@@ -2966,6 +2970,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Caller still appends the actual barrier record afterwards;
     // chunk-commit flushes everything in the recorded order.
     HRESULT chunkBarrierFlush() {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         if (!hasPendingHotState()) {
@@ -3333,6 +3338,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pPP) noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (!pPP) return D3DERR_INVALIDCALL;
         D9CPresentParams cpp{};
         cpp.backBufferWidth  = pPP->BackBufferWidth;
@@ -3361,6 +3367,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
                                        HWND wnd, const RGNDATA* dirty) noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_present device=%p wnd=%p src=%s dst=%s dirty=%p",
                             this, wnd,
                             src ? "<custom>" : "<full>",
@@ -3583,6 +3590,7 @@ public:
                                              const RECT* srcRect,
                                              IDirect3DSurface9* dst,
                                              const POINT* dstPt) noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_update_surface device=%p src=%p dst=%p srcRect=%s dstPt=%s",
                             this, src, dst,
                             srcRect ? "<custom>" : "<full>",
@@ -3612,11 +3620,14 @@ public:
         record.hasDstPoint = dstPt ? 1u : 0u;
         record.srcRect = cs;
         record.dstPoint = cd;
-        return appendCommandRecord(&record, sizeof(record));
+        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        if (FAILED(appendHr)) return appendHr;
+        return flushPendingCommandChunk();
     }
 
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
                                              IDirect3DBaseTexture9* dst) noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
         if (auto* raw = rawTex(src); raw)
@@ -3630,11 +3641,14 @@ public:
         record.header.size = sizeof(record);
         record.srcWire = reinterpret_cast<uint64_t>(rawTex(src));
         record.dstWire = reinterpret_cast<uint64_t>(rawTex(dst));
-        return appendCommandRecord(&record, sizeof(record));
+        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        if (FAILED(appendHr)) return appendHr;
+        return flushPendingCommandChunk();
     }
 
     HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* rt,
                                                    IDirect3DSurface9* dst) noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_get_render_target_data device=%p rt=%p dst=%p",
                             this, rt, dst);
         // Phase 24: chunk-recorder path. The PE caller is synchronous —
@@ -3676,6 +3690,7 @@ public:
                                            IDirect3DSurface9* dst,
                                            const RECT* dstRect,
                                            D3DTEXTUREFILTERTYPE filter) noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_stretch_rect device=%p src=%p dst=%p filter=%u srcRect=%s dstRect=%s",
                             this, src, dst, (unsigned)filter,
                             srcRect ? "<custom>" : "<full>",
@@ -3702,12 +3717,15 @@ public:
         record.filter = (uint32_t)filter;
         if (srcRect) record.srcRect = cs;
         if (dstRect) record.dstRect = cd;
-        return appendCommandRecord(&record, sizeof(record));
+        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        if (FAILED(appendHr)) return appendHr;
+        return flushPendingCommandChunk();
     }
 
     HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9* pSurf,
                                          const RECT* pRect,
                                          D3DCOLOR color) noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_color_fill device=%p surf=%p rect=%s color=0x%08x",
                             this, pSurf, pRect ? "<custom>" : "<full>", (unsigned)color);
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
@@ -3723,7 +3741,9 @@ public:
         record.colorARGB = (uint32_t)color;
         record.hasRect = pRect ? 1u : 0u;
         if (pRect) record.rect = cr;
-        return appendCommandRecord(&record, sizeof(record));
+        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        if (FAILED(appendHr)) return appendHr;
+        return flushPendingCommandChunk();
     }
 
     HRESULT STDMETHODCALLTYPE CreateOffscreenPlainSurface(UINT w, UINT h,
@@ -3810,6 +3830,7 @@ public:
         return hr;
     }
     HRESULT STDMETHODCALLTYPE EndScene()   noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_end_scene device=%p", this);
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
@@ -3821,6 +3842,7 @@ public:
     HRESULT STDMETHODCALLTYPE Clear(DWORD count, const D3DRECT* pRects,
                                      DWORD flags, D3DCOLOR color,
                                      float z, DWORD stencil) noexcept override {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_clear device=%p count=%u flags=0x%x color=0x%08x z=%f stencil=%u",
                             this, (unsigned)count, (unsigned)flags, (unsigned)color, z,
                             (unsigned)stencil);

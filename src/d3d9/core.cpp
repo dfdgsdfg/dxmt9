@@ -4909,13 +4909,20 @@ HResult Device::updateSurface(const std::shared_ptr<Surface>& src, const std::sh
     return D3DERR_INVALIDCALL;
   }
 
-  const u32 bpp = bytesPerPixel(src->desc().format);
   const u32 width = std::min(src->desc().width, dst->desc().width);
   const u32 height = std::min(src->desc().height, dst->desc().height);
-  for (u32 y = 0; y < height; ++y) {
+  const u32 rowBytes = formatRowPitch(src->desc().format, width);
+  const u32 rows = formatRowCount(src->desc().format, height);
+  if (rowBytes == 0 || rows == 0 ||
+      srcRegion.pitch < rowBytes || dstRegion.pitch < rowBytes) {
+    src->unlockRect();
+    dst->unlockRect();
+    return D3DERR_INVALIDCALL;
+  }
+  for (u32 y = 0; y < rows; ++y) {
     std::memcpy(static_cast<u8*>(dstRegion.data) + static_cast<size_t>(y) * dstRegion.pitch,
                 static_cast<const u8*>(srcRegion.data) + static_cast<size_t>(y) * srcRegion.pitch,
-                static_cast<size_t>(width) * bpp);
+                rowBytes);
   }
   src->unlockRect();
   dst->unlockRect();

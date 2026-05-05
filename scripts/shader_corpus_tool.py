@@ -18,6 +18,41 @@ DEFAULT_VKD3D_URL = "https://gitlab.winehq.org/wine/vkd3d"
 DEFAULT_WINE_URL = "https://github.com/wine-mirror/wine"
 DEFAULT_ORACLE_ENV = "Windows 11 / WARP"
 DEFAULT_ORACLE = "shader_runner_d3d9"
+VALID_MODELS = {
+    "ffp",
+    "hlsl",
+    "ps_1_1",
+    "ps_1_2",
+    "ps_1_3",
+    "ps_1_4",
+    "ps_2_0",
+    "ps_3_0",
+    "vs_1_1",
+    "vs_2_0",
+    "vs_3_0",
+}
+VALID_OPCODES = {
+    "ABS", "ADD", "ALPHA_TEST", "BREAK", "BREAKC", "BREAKP", "CALL", "CALLNZ",
+    "CLEAR", "CMP", "CND", "CRS", "DCL", "DEF", "DEFB", "DEFI", "DP2ADD",
+    "DP3", "DP4", "DSX", "DSY", "ELSE", "ENDIF", "ENDLOOP", "ENDREP", "EXP",
+    "EXPP", "FRC", "HLSL", "IF", "IFC", "LABEL", "LOG", "LOGP", "LOOP",
+    "LRP", "M3x2", "M3x3", "M3x4", "M4x3", "M4x4", "MAD", "MAX", "MIN",
+    "MOV", "MOVA", "MUL", "NOP", "NRM", "POW", "PROBE", "RCP", "REP",
+    "RET", "RSQ", "SETP", "SGE", "SGN", "SINCOS", "SLT", "SUB", "TEX",
+    "TEXBEM", "TEXBEML", "TEXCOORD", "TEXDEPTH", "TEXDP3", "TEXDP3TEX",
+    "TEXKILL", "TEXLDD", "TEXLDL", "TEXM3x2DEPTH", "TEXM3x2PAD",
+    "TEXM3x2TEX", "TEXM3x3", "TEXM3x3DIFF", "TEXM3x3PAD",
+    "TEXM3x3SPEC", "TEXM3x3TEX", "TEXM3x3VSPEC", "TEXREG2AR",
+    "TEXREG2GB", "TEXREG2RGB",
+}
+REQUIRED_PROVENANCE_FIELDS = {
+    "source",
+    "source_kind",
+    "license",
+    "license_scope",
+    "oracle",
+    "oracle-date",
+}
 
 
 def repo_root() -> Path:
@@ -203,6 +238,71 @@ def localize_path(root: Path, relative: str) -> Path:
 
 def load_corpus_manifest(manifest_path: Path) -> list[dict[str, Any]]:
     return load_manifest(manifest_path)
+
+
+def list_field(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def manifest_gaps(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    manifest_path = Path(args.manifest).resolve() if args.manifest else default_manifest_path(root)
+    entries = load_corpus_manifest(manifest_path)
+
+    missing_metadata: list[str] = []
+    covered_models: set[str] = set()
+    covered_opcodes: set[str] = set()
+
+    for entry in entries:
+        relative = str(entry.get("file", "<missing>"))
+        models = list_field(entry.get("models"))
+        opcodes = list_field(entry.get("opcodes"))
+
+        if not models:
+            missing_metadata.append(f"{relative}: missing models")
+        if not opcodes:
+            missing_metadata.append(f"{relative}: missing opcodes")
+
+        unknown_models = sorted(model for model in models if model not in VALID_MODELS)
+        unknown_opcodes = sorted(opcode for opcode in opcodes if opcode not in VALID_OPCODES)
+        if unknown_models:
+            missing_metadata.append(f"{relative}: unknown models {', '.join(unknown_models)}")
+        if unknown_opcodes:
+            missing_metadata.append(f"{relative}: unknown opcodes {', '.join(unknown_opcodes)}")
+
+        missing_provenance = sorted(field for field in REQUIRED_PROVENANCE_FIELDS if not entry.get(field))
+        if missing_provenance:
+            missing_metadata.append(f"{relative}: missing provenance {', '.join(missing_provenance)}")
+
+        covered_models.update(models)
+        covered_opcodes.update(opcodes)
+
+    tracked_models = sorted(model for model in VALID_MODELS if model not in {"ffp", "hlsl"})
+    missing_models = sorted(model for model in tracked_models if model not in covered_models)
+    tracked_opcodes = sorted(opcode for opcode in VALID_OPCODES if opcode not in {"ALPHA_TEST", "CLEAR", "HLSL", "PROBE"})
+    missing_opcodes = sorted(opcode for opcode in tracked_opcodes if opcode not in covered_opcodes)
+
+    print("shader corpus gap report")
+    print(f"manifest: {manifest_path}")
+    print(f"entries: {len(entries)}")
+    print()
+    print(f"covered models ({len(covered_models)}): {', '.join(sorted(covered_models)) or '<none>'}")
+    print(f"missing models ({len(missing_models)}): {', '.join(missing_models) or '<none>'}")
+    print()
+    print(f"covered opcodes ({len(covered_opcodes)}): {', '.join(sorted(covered_opcodes)) or '<none>'}")
+    print(f"missing opcodes ({len(missing_opcodes)}): {', '.join(missing_opcodes) or '<none>'}")
+    print()
+
+    if missing_metadata:
+        print("metadata gaps:")
+        for item in missing_metadata:
+            print(f"  {item}")
+    else:
+        print("metadata gaps: none")
+
+    return 1 if args.fail_on_metadata_gaps and missing_metadata else 0
 
 
 def update_manifest_entry(entry: dict[str, Any], upstream_commit: str, oracle_date: str) -> bool:
@@ -423,6 +523,11 @@ def build_parser() -> argparse.ArgumentParser:
     drift.add_argument("--upstream-root")
     drift.add_argument("--upstream-commit")
 
+    gaps = subparsers.add_parser("gaps", help="report corpus model, opcode, and provenance gaps")
+    gaps.add_argument("--root", default=str(repo_root() / "tests" / "shader_runner" / "corpus"))
+    gaps.add_argument("--manifest")
+    gaps.add_argument("--fail-on-metadata-gaps", action="store_true")
+
     return parser
 
 
@@ -433,6 +538,8 @@ def main(argv: list[str]) -> int:
         return sync_corpus(args)
     if args.command == "drift":
         return drift_report(args)
+    if args.command == "gaps":
+        return manifest_gaps(args)
     raise AssertionError("unreachable")
 
 

@@ -5,7 +5,10 @@
 # Status values:
 # - scaffolded: local PE case exists, but no current Wine runtime result is recorded.
 # - todo: required R-TEST-12 coverage is not yet split into a PE case.
-# - passing/failing/skipped: last known Wine runtime result.
+# - partial: some lane/arch runtime evidence is recorded, but the declared matrix is incomplete.
+# - passing: all declared lane/arch combinations have passing runtime evidence.
+# - failing/skipped: last known Wine runtime result for at least one recorded lane/arch.
+# Runtime evidence is recorded with [[case.evidence]] lane/arch tables.
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -22,7 +25,14 @@ area = "factory-validation"
 owner = "core/factory"
 requirements = ["R-TEST-12.3", "R-TEST-12.10"]
 acceptance = ["exact HRESULT parity", "quality-level out-parameter parity", "display format normalization"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "failing"
+source = "specs/gap.md:170"
+summary = "First device-backed app-local run reached the provider with failures in the factory validation group."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -107,7 +117,14 @@ area = "present-parameters"
 owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.17"]
 acceptance = ["invalid swap effects, back-buffer counts, and intervals return exact HRESULTs", "successful creation exposes normalized present parameters"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "failing"
+source = "specs/gap.md:170"
+summary = "First device-backed app-local run reached the provider with failures in the present-parameter validation group."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -124,7 +141,14 @@ area = "d3d9ex-reset"
 owner = "core/device"
 requirements = ["R-TEST-12.4", "R-TEST-12.17"]
 acceptance = ["CreateDeviceEx and ResetEx enforce fullscreen mode/back-buffer relation"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "failing"
+source = "specs/gap.md:170"
+summary = "First device-backed app-local run reached the provider with failures in the Ex create/reset validation group."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -192,7 +216,14 @@ area = "resource-wrappers"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["private-data byte storage and missing-data size preservation work across resource wrappers"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "failing"
+source = "specs/gap.md:170"
+summary = "First device-backed app-local run reached the provider with failures in the private-data resource wrapper group."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -226,7 +257,14 @@ area = "d3d9ex-user-memory"
 owner = "core/resources"
 requirements = ["R-TEST-12.11"]
 acceptance = ["Ex user-memory resource classes accept or reject caller memory with Wine-compatible HRESULTs"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "failing"
+source = "specs/gap.md:170"
+summary = "First device-backed app-local run reached the provider with failures in the Ex shared-handle policy group."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -243,7 +281,14 @@ area = "resource-creation"
 owner = "core/resources"
 requirements = ["R-TEST-12.8", "R-TEST-12.13"]
 acceptance = ["creation failures return exact HRESULTs and clear or preserve out-pointers per Wine oracle"]
-status = "scaffolded"
+status = "failing"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "failing"
+source = "specs/gap.md:170"
+summary = "First device-backed app-local run reached the provider with failures in the creation-failure out-pointer group."
 
 [[case]]
 executable = "dxmt9-d3d9-device-lifetime.exe"
@@ -345,7 +390,14 @@ area = "exports"
 owner = "pe/exports"
 requirements = ["R-TEST-12.9", "R-TEST-12.15"]
 acceptance = ["all required D3D9 exports are present", "D3DPERF and DebugSetMute safe calls return Wine-compatible no-op values"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "passing"
+source = "specs/gap.md:170"
+summary = "Focused x64 app-local export runtime evidence passes; builtin and x86 evidence remain unrecorded."
 
 [[case]]
 executable = "d3d9_auxiliary_x64.exe"
@@ -362,7 +414,14 @@ area = "auxiliary-exports"
 owner = "pe/exports"
 requirements = ["R-TEST-12.15"]
 acceptance = ["Direct3DShaderValidatorCreate9 object supports loader-safe QI/AddRef/Release/Begin/Instruction/End"]
-status = "scaffolded"
+status = "partial"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "passing"
+source = "specs/gap.md:170"
+summary = "Focused x64 app-local auxiliary runtime evidence passes; builtin and x86 evidence remain unrecorded."
 
 [[case]]
 executable = "d3d9_auxiliary_x64.exe"

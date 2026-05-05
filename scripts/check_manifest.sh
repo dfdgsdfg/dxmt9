@@ -42,7 +42,7 @@ import tomllib
 from pathlib import Path
 
 manifest = Path(sys.argv[1])
-required = {"file", "status", "source", "source_kind", "license", "license_scope", "oracle", "oracle-date"}
+required = {"file", "status", "source", "source_kind", "license", "license_scope", "models", "opcodes", "oracle", "oracle-date"}
 valid_source_kind = {
     "project-authored",
     "behavioral-oracle",
@@ -51,6 +51,33 @@ valid_source_kind = {
     "implementation-source",
 }
 valid_license_scope = {"project-mit", "third-party-fixture", "external-not-vendored"}
+valid_models = {
+    "ffp",
+    "hlsl",
+    "ps_1_1",
+    "ps_1_2",
+    "ps_1_3",
+    "ps_1_4",
+    "ps_2_0",
+    "ps_3_0",
+    "vs_1_1",
+    "vs_2_0",
+    "vs_3_0",
+}
+valid_opcodes = {
+    "ABS", "ADD", "ALPHA_TEST", "BREAK", "BREAKC", "BREAKP", "CALL", "CALLNZ",
+    "CLEAR", "CMP", "CND", "CRS", "DCL", "DEF", "DEFB", "DEFI", "DP2ADD",
+    "DP3", "DP4", "DSX", "DSY", "ELSE", "ENDIF", "ENDLOOP", "ENDREP", "EXP",
+    "EXPP", "FRC", "HLSL", "IF", "IFC", "LABEL", "LOG", "LOGP", "LOOP",
+    "LRP", "M3x2", "M3x3", "M3x4", "M4x3", "M4x4", "MAD", "MAX", "MIN",
+    "MOV", "MOVA", "MUL", "NOP", "NRM", "POW", "PROBE", "RCP", "REP",
+    "RET", "RSQ", "SETP", "SGE", "SGN", "SINCOS", "SLT", "SUB", "TEX",
+    "TEXBEM", "TEXBEML", "TEXCOORD", "TEXDEPTH", "TEXDP3", "TEXDP3TEX",
+    "TEXKILL", "TEXLDD", "TEXLDL", "TEXM3x2DEPTH", "TEXM3x2PAD",
+    "TEXM3x2TEX", "TEXM3x3", "TEXM3x3DIFF", "TEXM3x3PAD",
+    "TEXM3x3SPEC", "TEXM3x3TEX", "TEXM3x3VSPEC", "TEXREG2AR",
+    "TEXREG2GB", "TEXREG2RGB",
+}
 
 data = tomllib.loads(manifest.read_text())
 errors: list[str] = []
@@ -64,6 +91,20 @@ for index, entry in enumerate(data.get("test", []), 1):
         errors.append(f"manifest test #{index}: invalid license_scope {entry.get('license_scope')!r}")
     if entry.get("license_scope") == "project-mit" and entry.get("license") != "MIT":
         errors.append(f"manifest test #{index}: project-mit entries must use license = \"MIT\"")
+    models = entry.get("models")
+    if not isinstance(models, list) or not models:
+        errors.append(f"manifest test #{index}: models must be a non-empty array")
+    else:
+        invalid = sorted(model for model in models if not isinstance(model, str) or model not in valid_models)
+        if invalid:
+            errors.append(f"manifest test #{index}: invalid models: {', '.join(map(repr, invalid))}")
+    opcodes = entry.get("opcodes")
+    if not isinstance(opcodes, list) or not opcodes:
+        errors.append(f"manifest test #{index}: opcodes must be a non-empty array")
+    else:
+        invalid = sorted(opcode for opcode in opcodes if not isinstance(opcode, str) or opcode not in valid_opcodes)
+        if invalid:
+            errors.append(f"manifest test #{index}: invalid opcodes: {', '.join(map(repr, invalid))}")
 
 if errors:
     for error in errors:

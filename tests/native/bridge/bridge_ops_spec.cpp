@@ -1,0 +1,92 @@
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+#include "dxmt9_bridge_ops.generated.h"
+
+namespace {
+
+struct TestFailure : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+[[noreturn]] void fail(std::string message) {
+  throw TestFailure(std::move(message));
+}
+
+void check(bool condition, std::string_view message) {
+  if (!condition) {
+    fail(std::string(message));
+  }
+}
+
+template <typename A, typename B>
+void checkEq(const A& left, const B& right, std::string_view message) {
+  if (!(left == right)) {
+    std::ostringstream out;
+    out << message << " (" << left << " vs " << right << ")";
+    fail(out.str());
+  }
+}
+
+unsigned int opcode(dxmt9::bridge::BridgeOpcode value) {
+  return static_cast<unsigned int>(value);
+}
+
+void testBridgeOpcodeCountMatchesEnumSpan() {
+  const auto first = opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_factory_create);
+  const auto last =
+      opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_vdecl_get_declaration);
+
+  checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
+          "device_c bridge starts after shader unix-call slots");
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 142u,
+          "generated bridge opcode count");
+  check(last >= first, "bridge opcode enum is monotonic");
+  checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,
+          "bridge opcode count matches enum span");
+}
+
+void testDodChunkBridgeOpsStaySingleCallShape() {
+  const auto first = opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_factory_create);
+  const auto count = dxmt9::bridge::kBridgeOpcodeCount;
+
+  const auto commitChunk =
+      opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_device_commit_chunk);
+  const auto drawChunk =
+      opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_device_draw_primitive_chunk);
+  const auto drawPacket =
+      opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_device_draw_primitive_packet);
+  const auto legacyDraw =
+      opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_device_draw_primitive);
+
+  check(commitChunk >= first && commitChunk < first + count,
+        "DOD commit chunk opcode is inside generated bridge range");
+  check(drawChunk >= first && drawChunk < first + count,
+        "DOD draw chunk opcode is inside generated bridge range");
+  checkEq(drawChunk, drawPacket + 1u,
+          "DOD draw chunk opcode remains adjacent to draw packet bridge op");
+  check(commitChunk != legacyDraw,
+        "DOD commit chunk remains distinct from legacy per-draw bridge op");
+}
+
+}  // namespace
+
+int main() {
+  try {
+    testBridgeOpcodeCountMatchesEnumSpan();
+    testDodChunkBridgeOpsStaySingleCallShape();
+  } catch (const TestFailure& e) {
+    std::cerr << "bridge_ops_spec failed: " << e.what() << '\n';
+    return EXIT_FAILURE;
+  } catch (const std::exception& e) {
+    std::cerr << "bridge_ops_spec unexpected exception: " << e.what() << '\n';
+    return EXIT_FAILURE;
+  }
+  std::cout << "bridge_ops_spec passed\n";
+  return EXIT_SUCCESS;
+}

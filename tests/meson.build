@@ -110,6 +110,21 @@ chunk_record_import_spec = executable(
 
 test('dxmt9-chunk-record-import-spec', chunk_record_import_spec)
 
+bridge_ops_spec = executable(
+  'dxmt9-bridge-ops-spec',
+  'native/bridge/bridge_ops_spec.cpp',
+  bridge_codegen[0],
+  include_directories: [
+    dxmt9_inc,
+    bridge_gen_inc,
+    include_directories('../src'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-bridge-ops-spec', bridge_ops_spec)
+
 resource_hazard_spec = executable(
   'dxmt9-resource-hazard-spec',
   'native/backend/resource_hazard_spec.cpp',
@@ -119,6 +134,22 @@ resource_hazard_spec = executable(
 )
 
 test('dxmt9-resource-hazard-spec', resource_hazard_spec)
+
+allocation_counter_spec = executable(
+  'dxmt9-allocation-counter-spec',
+  'native/backend/allocation_counter_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+assert_perf_counters = find_program(
+  join_paths(meson.project_source_root(), 'scripts', 'assert_perf_counters.py'),
+  required: true,
+)
+
+test('dxmt9-allocation-counter-spec', assert_perf_counters,
+     args: [allocation_counter_spec])
 
 shader_runner = executable(
   'shader_runner_dxmt9',
@@ -138,6 +169,13 @@ python3 = find_program('python3', required: true)
 verify_tla_script = join_paths(meson.project_source_root(), 'scripts', 'verify_tla.sh')
 test('dxmt9-verify-tla', bash, args: [verify_tla_script], is_parallel: false)
 test('dxmt9-manifest-check', bash, args: [join_paths(meson.project_source_root(), 'scripts/check_manifest.sh')],
+     is_parallel: false)
+test('dxmt9-shader-corpus-gaps', python3,
+     args: [
+       join_paths(meson.project_source_root(), 'scripts/shader_corpus_tool.py'),
+       'gaps',
+       '--fail-on-metadata-gaps',
+     ],
      is_parallel: false)
 test('dxmt9-d3d9-conformance-manifest-check', bash,
      args: [join_paths(meson.project_source_root(), 'scripts/check_d3d9_conformance_manifest.sh')],

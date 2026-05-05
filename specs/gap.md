@@ -92,7 +92,7 @@ propagation, query validation, and lost-device/reset behaviour.
 | WSI: `macdrv_get_cocoa_view` dlsym + lazy `CAMetalLayer` attach on first present | ✅ | metal; `encodePresent` lazy-creates via `dispatch_sync` to main thread; no custom Wine fork required for the DLL override path |
 | `setMaxFrameLatency()` wired to `CAMetalLayer.maximumDrawableCount` | ✅ | metal |
 | Imported-record replay data boundaries | ⚠️ | `commit_chunk` validates records through `device_c_record_utils`, bulk-retains resources, and coalesces draw runs through `ImportedChunkView` / `ImportedRecordView` helpers. `chunk_record_spec` pins POD/layout invariants and `chunk_record_import_spec` pins fixed/variable record validation, multi-record iteration, record-count mismatch, truncated tail, draw-run boundary scans, run-param conversion, resource-retention derivation, and replay-category classification for draw/apply/barrier/readback records. Remaining audit is GPU-side barrier/hazard ordering with fake backend or queue instrumentation against R-BACK-2.14-R-BACK-2.27 |
-| Bridge op budget / hot-path batching | ❌ | R-BENCH-2.3-R-BENCH-2.5 now require bridge operation counts by class and acceptance that `Set*` / `Draw*` traffic does not regress to one PE/unix call per D3D9 operation |
+| Bridge op budget / hot-path batching | ⚠️ | `dxmt9-bridge-ops-spec` now pins generated bridge opcode count/range and keeps DOD chunk bridge ops distinct from legacy per-draw calls. Runtime benchmark counters by workload class are still required for R-BENCH-2.3-R-BENCH-2.5 |
 | **D3DBC → MSL translation**: SM2/SM3 arithmetic, texture, flow control (IF/ELSE/ENDIF, LOOP/ENDLOOP, REP/ENDREP, CALL/RET/LABEL), transcendental (SINCOS, LOG, EXP), comparison (SGE, SLT), matrix (M4x4, M4x3, M3x4, M3x3, M3x2), MOVA | ✅ | metal; R-BACK-4.1 |
 
 **The backend layer is functionally broad, but the newly specified
@@ -163,11 +163,11 @@ suite are still open.
 | `shader_runner_dxmt9` extended probe layer | ⚠️ | dxmt9-local runtime probes now cover texture setup/readback, one VS geometry path, viewport-bounded rasterization, and two color-write render-state interactions: `texture/dxmt9_texture_2x2.shader_test`, `vs_specific/dxmt9_vs_color_triangle.shader_test`, `viewport/dxmt9_viewport_vs_triangle.shader_test`, `render_state/dxmt9_color_write_mask.shader_test`, and `render_state/dxmt9_color_write_rgb_preserves_alpha.shader_test`. Broader mip/dependent-read, nonzero-origin/half-pixel, alpha/oDepth/MRT/fog/sRGB coverage remains open |
 | Expanded `.shader_test` corpus (arithmetic, comparison, flow control, transcendental, matrix, source modifiers, texture, FFP sanity/alpha test) | ✅ | 23 passing shader tests including five dxmt9-local runtime extended probes |
 | Provenance blocks on corpus files | ✅ | R-TEST-9.1 |
-| `MANIFEST.toml` + `check_manifest.sh` + `check_drift.sh` + `sync_corpus.sh` | ✅ | R-TEST-10.1–10.2, R-TEST-7.3 |
+| `MANIFEST.toml` + `check_manifest.sh` + `check_drift.sh` + `sync_corpus.sh` | ✅ | R-TEST-10.1–10.2, R-TEST-7.3; corpus manifest now records `models`, `opcodes`, license provenance, and `shader_corpus_tool.py gaps` reports model/opcode coverage gaps |
 | Native `core_spec` coverage for resource mapping / present-readback / clip planes / MSAA / Ex wrappers / programmable texture orientation | ✅ | R-TEST-4.3-R-TEST-4.4, R-TEST-5.1–5.2, R-TEST-6.1 |
 | Fixed-function `.shader_test` files | ✅ | `ffp/alpha_test.shader_test` and native fixed-function coverage |
-| Wine `visual.c` ports (ps_1_x, FFP) | ✅ | `testVisualDerivedFfpCoverage()` + `testVisualPortCoverage()` |
-| Wine `device.c` / `d3d9ex.c` / `stateblock.c` conformance subset | ⚠️ | `tests/conformance/d3d9/MANIFEST.toml` lists 31 Wine-oracle PE conformance cases with DoD/acceptance criteria and `dxmt9-d3d9-conformance-manifest-check` validates the manifest. All 31 cases are now scaffolded, including export smoke, shader-validator, D3D9On12 loader-safe probes, query public API probes, resources, stateblock matrix, reset/lost, window/cursor, and device misc. Focused x64 app-local export/auxiliary runtime evidence passes. The first device-backed app-local run now reaches the provider with 328 checks, 26 failures, and 0 skips; failing groups are factory validation, present-parameter validation, Ex create/reset validation, private-data resource wrappers, Ex shared-handle policy, and creation-failure out pointers |
+| Wine `visual.c` oracle coverage (ps_1_x, FFP) | ✅ | native clean-room oracle coverage for lighting, fog, texture transform, texop, FFP varying, sanity, alpha, BEM, ps_1_4, and vs_1_1 source contracts |
+| Wine `device.c` / `d3d9ex.c` / `stateblock.c` conformance subset | ⚠️ | `tests/conformance/d3d9/MANIFEST.toml` lists 31 Wine-oracle PE conformance cases with DoD/acceptance criteria and `dxmt9-d3d9-conformance-manifest-check` validates lane/arch evidence. Current manifest status is 23 scaffolded, 6 failing, and 2 partial. Focused x64 app-local export/auxiliary runtime evidence passes. The first device-backed app-local run now reaches the provider with 328 checks, 26 failures, and 0 skips; failing groups are factory validation, present-parameter validation, Ex create/reset, private-data resource wrappers, Ex shared-handle policy, and creation-failure out pointers |
 | Half-pixel offset exact-coverage test | ✅ | `testHelpers()` + `testRasterStateCoverage()` |
 | Winding / depth tests | ✅ | `testRasterStateCoverage()` |
 | Full upstream corpus sync | ✅ | `sync_corpus.sh` + provenance drift report |
@@ -181,6 +181,8 @@ suite are still open.
 | Backend cache inputs are verified as deterministic value descriptors | ✅ | `backend_key_descriptor_spec` covers uniforms/depth-stencil/sampler descriptors; `backend_pipeline_key_spec` covers blend/MRT color-write key mapping, PSO hash responsiveness, sampler texture/filter flags, FVF layout hashing, and sRGB format mapping |
 | Chunk wire records have data-driven validation independent of replay side effects | ✅ | `device_c_record_utils` + `chunk_record_import_spec` validate fixed records, variable Clear/SetConst tails, invalid/truncated records, and draw-run parameter conversion |
 | Imported chunk replay has explicit boundary types and unit-testable replay decisions | ✅ | `ImportedChunkView` / `ImportedRecordView`, draw-run scan helpers, replay-category classification, resource-retention derivation, read/write hazard extraction, barrier/synchronous-read boundary decisions, and deterministic hazard-scope reset/continuation are split and tested without Metal |
+| Bridge-op count/order evidence exists for DOD bridge shape | ⚠️ | `dxmt9-bridge-ops-spec` pins the generated bridge opcode table and DOD chunk op placement. Workload-level runtime bridge-op counters still belong to benchmark acceptance |
+| Allocation/capacity evidence exists for DOD hot paths | ⚠️ | `dxmt9-dod-replay-observer-spec` pins warmed ChunkSlot capacity reuse and uniform interning; `dxmt9-allocation-counter-spec` verifies real perf-counter emission for Metal buffer allocation counts/bytes. A general heap allocation interposer for arbitrary hot paths remains future work |
 
 ---
 
@@ -215,7 +217,7 @@ and R-ARCH-6.* is still missing.
 |---|---|---|
 | `dxmt9-bench` harness | ❌ | R-BENCH-1.1 |
 | Draw call throughput workload | ❌ | R-BENCH-2.2 |
-| Bridge operation budget counters | ❌ | R-BENCH-2.3-R-BENCH-2.5, R-BENCH-5.3 |
+| Bridge operation budget counters | ⚠️ | `dxmt9-bridge-ops-spec` provides static opcode-budget evidence; workload-level runtime counters and benchmark JSON still required for R-BENCH-2.3-R-BENCH-2.5, R-BENCH-5.3 |
 | Architecture bottleneck/concurrency counter baselines | ❌ | R-ARCH-2.6-R-ARCH-2.7, R-ARCH-6.*, R-BENCH-2.6 |
 | PSO compile cold/warm workload | ❌ | R-BENCH-2.1 |
 | Reference stack baselines (wined3d, DXVK+MoltenVK) | ❌ | R-BENCH-3.1 |

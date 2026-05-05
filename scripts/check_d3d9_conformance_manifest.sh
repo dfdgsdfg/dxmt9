@@ -34,10 +34,12 @@ required_fields = {
 }
 valid_lanes = {"app-local", "builtin"}
 valid_arches = {"x64", "x86"}
-valid_status = {"passing", "failing", "skipped", "scaffolded", "todo"}
+valid_status = {"passing", "failing", "partial", "skipped", "scaffolded", "todo"}
+evidence_status = {"passing", "failing", "skipped"}
 valid_source_kind = {"behavioral-oracle"}
 valid_license_scope = {"external-not-vendored"}
 requirement_re = re.compile(r"^R-TEST-12\.\d+$")
+evidence_source_re = re.compile(r"^(?P<path>[^:]+):(?P<line>[1-9]\d*)$")
 
 if not manifest_path.is_file():
     raise SystemExit(f"manifest missing: {manifest_path}")
@@ -82,6 +84,76 @@ for index, case in enumerate(cases, 1):
     arches = case.get("arches")
     if not isinstance(arches, list) or not arches or any(arch not in valid_arches for arch in arches):
         errors.append(f"case #{index}: arches must be non-empty subset of {sorted(valid_arches)}")
+
+    evidence = case.get("evidence", [])
+    if not isinstance(evidence, list):
+        errors.append(f"case #{index}: evidence must be a list of tables")
+        evidence = []
+
+    evidence_keys: set[tuple[str, str]] = set()
+    evidence_statuses: set[str] = set()
+    for evidence_index, item in enumerate(evidence, 1):
+        if not isinstance(item, dict):
+            errors.append(f"case #{index} evidence #{evidence_index}: entry is not a table")
+            continue
+
+        item_lane = item.get("lane")
+        item_arch = item.get("arch")
+        item_status = item.get("status")
+        item_summary = item.get("summary")
+        item_source = item.get("source")
+
+        if item_lane not in valid_lanes:
+            errors.append(f"case #{index} evidence #{evidence_index}: invalid lane {item_lane!r}")
+        elif isinstance(lanes, list) and item_lane not in lanes:
+            errors.append(f"case #{index} evidence #{evidence_index}: lane {item_lane!r} not declared by case")
+
+        if item_arch not in valid_arches:
+            errors.append(f"case #{index} evidence #{evidence_index}: invalid arch {item_arch!r}")
+        elif isinstance(arches, list) and item_arch not in arches:
+            errors.append(f"case #{index} evidence #{evidence_index}: arch {item_arch!r} not declared by case")
+
+        if item_status not in evidence_status:
+            errors.append(f"case #{index} evidence #{evidence_index}: invalid status {item_status!r}")
+        else:
+            evidence_statuses.add(item_status)
+
+        if isinstance(item_lane, str) and isinstance(item_arch, str):
+            evidence_key = (item_lane, item_arch)
+            if evidence_key in evidence_keys:
+                errors.append(f"case #{index} evidence #{evidence_index}: duplicate lane/arch {evidence_key}")
+            evidence_keys.add(evidence_key)
+
+        if not isinstance(item_summary, str) or not item_summary:
+            errors.append(f"case #{index} evidence #{evidence_index}: summary must be a non-empty string")
+
+        if not isinstance(item_source, str):
+            errors.append(f"case #{index} evidence #{evidence_index}: source must be a path:line string")
+        else:
+            match = evidence_source_re.match(item_source)
+            if not match:
+                errors.append(f"case #{index} evidence #{evidence_index}: source must be a path:line string")
+            else:
+                evidence_path = repo_root / match.group("path")
+                if not evidence_path.is_file():
+                    errors.append(f"case #{index} evidence #{evidence_index}: evidence source does not exist: {item_source}")
+                elif int(match.group("line")) > len(evidence_path.read_text(encoding="utf-8").splitlines()):
+                    errors.append(f"case #{index} evidence #{evidence_index}: evidence source line is out of range: {item_source}")
+
+    if status in {"passing", "failing", "partial", "skipped"} and not evidence:
+        errors.append(f"case #{index}: status {status!r} requires lane/arch evidence")
+    if status == "scaffolded" and evidence:
+        errors.append(f"case #{index}: scaffolded status must not carry runtime evidence")
+    if status == "todo" and evidence:
+        errors.append(f"case #{index}: todo status must not carry runtime evidence")
+    if status == "failing" and "failing" not in evidence_statuses:
+        errors.append(f"case #{index}: failing status requires failing evidence")
+    if status == "partial" and "failing" in evidence_statuses:
+        errors.append(f"case #{index}: partial status cannot include failing evidence")
+    if status == "passing" and isinstance(lanes, list) and isinstance(arches, list):
+        expected_keys = {(lane, arch) for lane in lanes for arch in arches}
+        if evidence_keys != expected_keys or evidence_statuses != {"passing"}:
+            errors.append(f"case #{index}: passing status requires passing evidence for every declared lane/arch")
 
     requirements = case.get("requirements")
     if not isinstance(requirements, list) or not requirements:

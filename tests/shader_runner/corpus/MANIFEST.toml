@@ -1,20 +1,12 @@
 [[test]]
-file = "arithmetic/mov.shader_test"
-status = "passing"
-source = "dxmt9"
-source_kind = "project-authored"
-license = "MIT"
-license_scope = "project-mit"
-oracle = "math-derivation"
-oracle-date = "2026-03-29"
-
-[[test]]
 file = "arithmetic/add.shader_test"
 status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["ADD", "DEF", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-03-29"
 
@@ -25,7 +17,21 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["ABS", "DEF", "MAD", "MOV", "MUL", "NRM", "RCP", "RSQ", "SGN", "SUB"]
 oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "arithmetic/mov.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV"]
+oracle = "math-derivation"
 oracle-date = "2026-03-29"
 
 [[test]]
@@ -35,6 +41,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV", "SGE"]
 oracle = "math-derivation"
 oracle-date = "2026-03-29"
 
@@ -45,6 +53,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV", "SLT"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
@@ -55,6 +65,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["ALPHA_TEST"]
 oracle = "math-derivation"
 oracle-date = "2026-03-29"
 
@@ -65,6 +77,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["vs_3_0"]
+opcodes = ["CALL", "DEF", "ELSE", "ENDIF", "ENDLOOP", "ENDREP", "EXP", "IF", "LABEL", "LOG", "LOOP", "M3x2", "M4x3", "M4x4", "MOV", "MOVA", "REP", "RET", "SGE", "SINCOS", "SLT"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
@@ -75,6 +89,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["vs_3_0"]
+opcodes = ["CALL", "DEF", "ELSE", "ENDIF", "ENDLOOP", "ENDREP", "EXP", "IF", "LABEL", "LOG", "LOOP", "M3x2", "M4x3", "M4x4", "MOV", "MOVA", "REP", "RET", "SGE", "SINCOS", "SLT"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
@@ -85,6 +101,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["vs_3_0"]
+opcodes = ["DEF", "M3x3", "M3x4", "MOV"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
@@ -95,6 +113,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-04"
 
@@ -105,18 +125,10 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-04"
-
-[[test]]
-file = "source_modifiers/write_masks.shader_test"
-status = "passing"
-source = "dxmt9"
-source_kind = "project-authored"
-license = "MIT"
-license_scope = "project-mit"
-oracle = "source-inspection"
-oracle-date = "2026-03-29"
 
 [[test]]
 file = "source_modifiers/modifiers.shader_test"
@@ -125,16 +137,20 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
 [[test]]
-file = "texture/texldl.shader_test"
+file = "source_modifiers/write_masks.shader_test"
 status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["MOV"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
@@ -145,8 +161,22 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
 oracle = "math-derivation"
 oracle-date = "2026-05-04"
+
+[[test]]
+file = "texture/texldl.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["MOV", "TEXLDL"]
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
 
 [[test]]
 file = "texture/texture.shader_test"
@@ -155,16 +185,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
-oracle = "source-inspection"
-oracle-date = "2026-03-29"
-
-[[test]]
-file = "transcendental/transcendental.shader_test"
-status = "passing"
-source = "dxmt9"
-source_kind = "project-authored"
-license = "MIT"
-license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "DSX", "DSY", "MOV", "TEX", "TEXLDD"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
@@ -175,6 +197,20 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV", "POW"]
+oracle = "source-inspection"
+oracle-date = "2026-03-29"
+
+[[test]]
+file = "transcendental/transcendental.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0"]
+opcodes = ["CALL", "DEF", "ELSE", "ENDIF", "ENDLOOP", "ENDREP", "EXP", "IF", "LABEL", "LOG", "LOOP", "M3x2", "M4x3", "M4x4", "MOV", "MOVA", "REP", "RET", "SGE", "SINCOS", "SLT"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
@@ -185,6 +221,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["CMP", "CND", "CRS", "DEF", "DP3", "DP4", "MAX", "MIN", "MOV"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
@@ -195,6 +233,8 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-05"
 
@@ -205,17 +245,9 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["hlsl"]
+opcodes = ["CLEAR", "PROBE"]
 oracle = "math-derivation"
-oracle-date = "2026-03-29"
-
-[[test]]
-file = "vs_specific/setp.shader_test"
-status = "passing"
-source = "dxmt9"
-source_kind = "project-authored"
-license = "MIT"
-license_scope = "project-mit"
-oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
 [[test]]
@@ -225,5 +257,19 @@ source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-04"
+
+[[test]]
+file = "vs_specific/setp.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0"]
+opcodes = ["DEF", "SETP"]
+oracle = "source-inspection"
+oracle-date = "2026-03-29"

@@ -84,6 +84,8 @@ def main() -> int:
             raise SystemExit("manifest did not preserve source_kind")
         if vkd3d_entry.get("license_scope") != "third-party-fixture":
             raise SystemExit("manifest did not preserve license_scope")
+        if vkd3d_entry.get("models") != ["ps_2_0"] or vkd3d_entry.get("opcodes") != ["DEF", "MOV"]:
+            raise SystemExit("manifest did not preserve model/opcode metadata")
 
         drift = subprocess.run(
             [
@@ -105,6 +107,25 @@ def main() -> int:
         )
         if "all tracked vkd3d files are aligned" not in drift.stdout:
             raise SystemExit("drift report did not confirm alignment")
+
+        gaps = subprocess.run(
+            [
+                "python3",
+                str(root / "scripts" / "shader_corpus_tool.py"),
+                "gaps",
+                "--root",
+                str(corpus),
+                "--manifest",
+                str(manifest),
+                "--fail-on-metadata-gaps",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if "metadata gaps: none" not in gaps.stdout:
+            raise SystemExit("gap report did not confirm complete manifest metadata")
 
     return 0
 

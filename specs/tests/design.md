@@ -110,6 +110,10 @@ Required observer assertions:
 Allocation checks should run after setup and capacity warm-up. If a path grows a
 scratch buffer by design, the test must split the first-growth case from the
 steady-state case and assert the maximum retained capacity or allocation count.
+`dxmt9-dod-replay-observer-spec` covers warmed queue-slot capacity reuse for the
+draw-run SoA path, `dxmt9-bridge-ops-spec` pins the generated bridge opcode
+budget/placement for chunk submission, and `dxmt9-allocation-counter-spec`
+verifies that real allocation perf counters are emitted and machine-checkable.
 
 ---
 
@@ -651,33 +655,43 @@ because these tests are PE executables, not `.shader_test` files.
 
 ```toml
 [[case]]
-executable = "dxmt9-d3d9-device-lifetime.exe"
-source_file = "device_lifetime.cpp"
-function   = "test_get_direct3d_addref"
-source     = "wine/dlls/d3d9/tests/device.c:test_refcount"
+executable = "d3d9_exports_x64.exe"
+source_file = "exports.cpp"
+function   = "export_smoke_and_perf_noops"
+source     = "wine/dlls/d3d9/d3d9.spec,wine/dlls/d3d9/d3d9_main.c"
 source_kind = "behavioral-oracle"
 license    = "LGPL-2.1-or-later"
 license_scope = "external-not-vendored"
 upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
 lanes      = ["app-local", "builtin"]
 arches     = ["x64", "x86"]
-area       = "device-lifetime"
-owner      = "pe/com"
-requirements = ["R-TEST-12.3", "R-TEST-12.18"]
-acceptance = ["GetDirect3D returns parent and AddRefs it"]
-status     = "scaffolded"
+area       = "exports"
+owner      = "pe/exports"
+requirements = ["R-TEST-12.9", "R-TEST-12.15"]
+acceptance = ["all required D3D9 exports are present"]
+status     = "partial"
+
+[[case.evidence]]
+lane = "app-local"
+arch = "x64"
+status = "passing"
+source = "specs/gap.md:170"
+summary = "Focused x64 app-local runtime evidence passes; builtin and x86 evidence remain unrecorded."
 ```
 
 The manifest must be updated with every added, renamed, split, skipped, or
-passing conformance case. A skipped case must record why it is not a dxmt9
-target, for example crash-only invalid-pointer behaviour or a Windows-only
-window-manager message sequence.
+passing conformance case. `scaffolded` means no current Wine runtime evidence is
+recorded, `partial` means at least one lane/architecture has evidence but the
+declared matrix is incomplete, `failing` must name failing lane evidence, and
+`passing` requires passing evidence for every declared lane/architecture. A
+skipped case must record why it is not a dxmt9 target, for example crash-only
+invalid-pointer behaviour or a Windows-only window-manager message sequence.
 
 `scripts/check_d3d9_conformance_manifest.sh` validates that every manifest entry
 has the required fields, valid lane / architecture / status values, R-TEST-12
 anchors, `source_kind`, `license`, `license_scope`, a 40-character Wine upstream
-commit, no duplicate executable/function pairs, and a local source/function
-match for scaffolded cases. It is wired into `meson test` as
+commit, lane/architecture evidence consistency, no duplicate executable/function
+pairs, and a local source/function match for scaffolded cases. It is wired into `meson test` as
 `dxmt9-d3d9-conformance-manifest-check`.
 
 ### Run
