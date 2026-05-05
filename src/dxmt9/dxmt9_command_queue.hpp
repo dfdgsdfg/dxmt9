@@ -120,7 +120,7 @@ class CommandQueue {
   void submitDrawBatch(std::span<const core::DrawDesc> descs);
   // Compact backend draw-run ingress — pushes one BackendDrawRunRecord
   // (BaseDrawState + DrawParam[N]) into the current ChunkSlot under a
-  // single mutex acquire. The encoder binds state from desc.base ONCE,
+  // single mutex acquire. The encoder binds state from desc.state ONCE,
   // then loops emitting per-DrawParam Metal calls. Replaces N
   // submitDraw() calls when the importer detects a run of draws with no
   // state change between them.

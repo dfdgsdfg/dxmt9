@@ -394,6 +394,9 @@ typedef struct D9CDrawIndexedPrimitiveUPPacket {
 #define D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE 48u
 #define D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE 32u
 #define D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE 24u
+#define D9C_COMMAND_CHUNK_WIRE_PAYLOAD_SLICE_SIZE 8u
+#define D9C_COMMAND_CHUNK_WIRE_HANDLE_RANGE_SIZE 8u
+#define D9C_COMMAND_CHUNK_WIRE_RECORD_RANGES_SIZE 16u
 #define D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE 0u
 #define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE 0u
 
@@ -431,12 +434,106 @@ typedef struct D9CCommandChunkWireHandleEntry {
     uint32_t reserved1;
 } D9CCommandChunkWireHandleEntry;
 
+typedef struct D9CCommandChunkWirePayloadSlice {
+    uint32_t payloadOffset;
+    uint32_t payloadSize;
+} D9CCommandChunkWirePayloadSlice;
+
+typedef struct D9CCommandChunkWireHandleRange {
+    uint32_t firstHandle;
+    uint32_t handleCount;
+} D9CCommandChunkWireHandleRange;
+
+typedef struct D9CCommandChunkWireRecordRanges {
+    D9CCommandChunkWirePayloadSlice payload;
+    D9CCommandChunkWireHandleRange handles;
+} D9CCommandChunkWireRecordRanges;
+
 static inline int d9c_command_chunk_wire_payload_range_valid(
     uint32_t payloadArenaSize,
     uint32_t payloadOffset,
     uint32_t payloadSize) {
     return payloadOffset <= payloadArenaSize &&
            payloadSize <= payloadArenaSize - payloadOffset;
+}
+
+static inline int d9c_command_chunk_wire_handle_range_valid(
+    uint32_t handleTableCount,
+    uint32_t firstHandle,
+    uint32_t handleCount) {
+    return firstHandle <= handleTableCount &&
+           handleCount <= handleTableCount - firstHandle;
+}
+
+static inline D9CCommandChunkWirePayloadSlice
+d9c_command_chunk_wire_record_payload_slice(
+    const D9CCommandChunkWireRecordHeader* record) {
+    D9CCommandChunkWirePayloadSlice slice;
+    if (!record) {
+        slice.payloadOffset = 0u;
+        slice.payloadSize = 0u;
+        return slice;
+    }
+    slice.payloadOffset = record->payloadOffset;
+    slice.payloadSize = record->payloadSize;
+    return slice;
+}
+
+static inline D9CCommandChunkWireHandleRange
+d9c_command_chunk_wire_record_handle_range(
+    const D9CCommandChunkWireRecordHeader* record) {
+    D9CCommandChunkWireHandleRange range;
+    if (!record) {
+        range.firstHandle = 0u;
+        range.handleCount = 0u;
+        return range;
+    }
+    range.firstHandle = record->firstHandle;
+    range.handleCount = record->handleCount;
+    return range;
+}
+
+static inline D9CCommandChunkWireRecordRanges
+d9c_command_chunk_wire_record_ranges(
+    const D9CCommandChunkWireRecordHeader* record) {
+    D9CCommandChunkWireRecordRanges ranges;
+    ranges.payload = d9c_command_chunk_wire_record_payload_slice(record);
+    ranges.handles = d9c_command_chunk_wire_record_handle_range(record);
+    return ranges;
+}
+
+static inline int d9c_command_chunk_wire_record_ranges_valid(
+    uint32_t payloadArenaSize,
+    uint32_t handleTableCount,
+    const D9CCommandChunkWireRecordHeader* record) {
+    return record &&
+           d9c_command_chunk_wire_payload_range_valid(
+               payloadArenaSize, record->payloadOffset, record->payloadSize) &&
+           d9c_command_chunk_wire_handle_range_valid(
+               handleTableCount, record->firstHandle, record->handleCount);
+}
+
+static inline int d9c_command_chunk_wire_record_ranges_valid_for_chunk(
+    const D9CCommandChunkWireHeader* chunk,
+    const D9CCommandChunkWireRecordHeader* record) {
+    return chunk &&
+           d9c_command_chunk_wire_record_ranges_valid(
+               chunk->payloadArenaSize, chunk->handleCount, record);
+}
+
+static inline int d9c_command_chunk_wire_header_reserved_valid(
+    const D9CCommandChunkWireHeader* chunk) {
+    return chunk && chunk->reserved0 == 0u && chunk->reserved1 == 0u;
+}
+
+static inline int d9c_command_chunk_wire_record_reserved_valid(
+    const D9CCommandChunkWireRecordHeader* record) {
+    return record && record->reserved0 == 0u && record->reserved1 == 0u;
+}
+
+static inline int d9c_command_chunk_wire_handle_entry_reserved_valid(
+    const D9CCommandChunkWireHandleEntry* handle) {
+    return handle && handle->reserved0 == 0u && handle->reserved1 == 0u;
 }
 
 /* Per-chunk resource retention list. PE recorder accumulates the deduped

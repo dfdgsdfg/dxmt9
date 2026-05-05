@@ -124,7 +124,7 @@ struct RecordingDxmt9Device final : dxmt9::Device {
 
   void submitDrawRun(DrawRunDesc desc) override {
     for (const auto& param : desc.draws) {
-      DrawDesc synthetic = desc.base;
+      DrawDesc synthetic = desc.state.desc;
       synthetic.primitiveType = param.primitiveType;
       synthetic.primitiveCount = param.primitiveCount;
       synthetic.startVertex = param.startVertex;

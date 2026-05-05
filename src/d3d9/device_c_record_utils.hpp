@@ -62,6 +62,64 @@ struct ImportedRecordView {
   }
 };
 
+struct ImportedWireChunkView {
+  const D9CCommandChunkWireRecordHeader* records = nullptr;
+  std::uint32_t recordCount = 0;
+  const std::uint8_t* payloadArena = nullptr;
+  std::uint32_t payloadArenaSize = 0;
+  const D9CCommandChunkWireHandleEntry* handles = nullptr;
+  std::uint32_t handleCount = 0;
+
+  bool empty() const noexcept {
+    return recordCount == 0;
+  }
+};
+
+struct ImportedWireChunkStorage {
+  std::vector<D9CCommandChunkWireRecordHeader> records{};
+  std::vector<D9CCommandChunkWireHandleEntry> handles{};
+  const std::uint8_t* payloadArena = nullptr;
+  std::uint32_t payloadArenaSize = 0;
+
+  ImportedWireChunkView view() const noexcept {
+    return ImportedWireChunkView{
+        .records = records.empty() ? nullptr : records.data(),
+        .recordCount = static_cast<std::uint32_t>(records.size()),
+        .payloadArena = payloadArena,
+        .payloadArenaSize = payloadArenaSize,
+        .handles = handles.empty() ? nullptr : handles.data(),
+        .handleCount = static_cast<std::uint32_t>(handles.size()),
+    };
+  }
+};
+
+enum class ImportedWireChunkValidationStatus : std::uint8_t {
+  Valid,
+  MissingRecordTable,
+  MissingPayloadArena,
+  MissingHandleTable,
+  InvalidHandleEntry,
+  InvalidRecordHeader,
+  InvalidRecordRange,
+  InvalidRecord,
+};
+
+struct ImportedWireChunkValidation {
+  ImportedWireChunkView chunk{};
+  ImportedWireChunkValidationStatus status =
+      ImportedWireChunkValidationStatus::InvalidRecord;
+  std::uint32_t parsedRecordCount = 0;
+  std::uint32_t failedRecordIndex = 0;
+  std::uint32_t failedHandleIndex = 0;
+  D9CCommandChunkWireRecordHeader failedWireRecord{};
+  D9CCommandChunkWireHandleEntry failedHandle{};
+  ImportedRecordView failedRecord{};
+
+  bool valid() const noexcept {
+    return status == ImportedWireChunkValidationStatus::Valid;
+  }
+};
+
 enum class ImportedChunkValidationStatus : std::uint8_t {
   Valid,
   InvalidRecord,
@@ -180,15 +238,42 @@ ImportedChunkView makeImportedChunkView(
     std::uint32_t recordBytes,
     std::uint32_t recordCount) noexcept;
 
+ImportedChunkView makeImportedChunkView(
+    const D9CCommandChunk& chunk) noexcept;
+
+ImportedWireChunkView makeImportedWireChunkView(
+    const D9CCommandChunkWireRecordHeader* records,
+    std::uint32_t recordCount,
+    const std::uint8_t* payloadArena,
+    std::uint32_t payloadArenaSize,
+    const D9CCommandChunkWireHandleEntry* handles,
+    std::uint32_t handleCount) noexcept;
+
+ImportedWireChunkStorage normalizeImportedChunkViewToWire(
+    const ImportedChunkView& chunk,
+    const D9CChunkHandleEntry* handles = nullptr,
+    std::uint32_t handleCount = 0);
+
+ImportedWireChunkStorage normalizeImportedCommandChunkToWire(
+    const D9CCommandChunk& chunk);
+
 ImportedRecordView makeImportedRecordView(
     const ImportedChunkView& chunk,
     std::uint32_t offset,
     std::uint32_t index) noexcept;
 
+ImportedRecordView makeImportedRecordView(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex) noexcept;
+
 std::optional<ImportedRecordView> nextImportedRecord(
     const ImportedChunkView& chunk,
     std::uint32_t offset,
     std::uint32_t index) noexcept;
+
+std::optional<ImportedRecordView> nextImportedRecord(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex) noexcept;
 
 bool importedChunkRecordCountMatches(
     const ImportedChunkView& chunk,
@@ -197,8 +282,15 @@ bool importedChunkRecordCountMatches(
 ImportedChunkValidation validateImportedChunk(
     const ImportedChunkView& chunk) noexcept;
 
+ImportedWireChunkValidation validateImportedWireChunk(
+    const ImportedWireChunkView& chunk) noexcept;
+
 ImportedDrawRunScan scanImportedDrawRun(
     const ImportedChunkView& chunk,
+    const ImportedRecordView& firstRecord) noexcept;
+
+ImportedDrawRunScan scanImportedDrawRun(
+    const ImportedWireChunkView& chunk,
     const ImportedRecordView& firstRecord) noexcept;
 
 ImportedRecordReplayInfo replayInfoForCommandRecordType(std::uint32_t type) noexcept;

@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace dxmt9 {
@@ -91,22 +92,25 @@ struct PreUploadedDrawData {
 // vertex/index prep, drawPrimitives/drawIndexedPrimitives) always
 // runs.
 //
-// `paramOverride` (Phase 13 step 2): when non-null, the 8 per-draw
+// Returns true after a Metal draw call is emitted. Callers use this to
+// record that the FlatDrawStateKey is now live on the active render encoder.
+//
+// `paramOverride` (Phase 13 step 2): when non-null, the per-draw
 // fields (primitiveType, primitiveCount, startVertex, baseVertexIndex,
-// startIndex, indexType, userVertexData, userIndexData) are read from
-// the override instead of `draw`. All other fields (RT/DS/VS/PS/VDecl/
-// VBuffers/IB/viewport/scissor/render-state/transform/etc.) still come
-// from `draw`. Lets the Kind::DrawRun handler skip the synthetic
-// DrawDesc copy + per-iter scalar overrides + per-iter UP byte vector
-// assigns. `draw` then represents the run's base state once.
-void encodeDraw(EncodeContext& ctx,
+// startIndex, indexType, user payload ranges/data) are read from the
+// override instead of `draw`. `paramPayloadArena` resolves arena-backed
+// ranges when present; vectors remain the fallback. All other fields
+// (RT/DS/VS/PS/VDecl/VBuffers/IB/viewport/scissor/render-state/transform)
+// still come from `draw`, which represents the run's base state once.
+bool encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
                  const core::DrawDesc& draw,
                  std::uint64_t seqId,
                  bool skipBaseStateBind = false,
                  const PreUploadedDrawData* preUploaded = nullptr,
-                 const core::DrawParam* paramOverride = nullptr);
+                 const core::DrawParam* paramOverride = nullptr,
+                 std::span<const std::uint8_t> paramPayloadArena = {});
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

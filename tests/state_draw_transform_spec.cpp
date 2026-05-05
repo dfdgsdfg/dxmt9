@@ -314,17 +314,88 @@ void testFlatDrawStateKey() {
       state, {PrimitiveType::TriangleList, 2, 0, 0, 0, IndexType::UInt16});
   const DrawDesc sameStateDifferentDraw = makeDrawDescFromState(
       state, {PrimitiveType::LineList, 7, 33, -4, 19, IndexType::UInt32});
+  const FlatDrawStateKey firstKey = makeFlatDrawStateKey(first);
 
-  checkEq(makeFlatDrawStateKey(first), makeFlatDrawStateKey(first),
+  checkEq(firstKey, makeFlatDrawStateKey(first),
           "identical draw state summaries compare equal");
-  checkEq(makeFlatDrawStateKey(first), makeFlatDrawStateKey(sameStateDifferentDraw),
+  checkEq(firstKey, makeFlatDrawStateKey(sameStateDifferentDraw),
           "draw parameters do not disturb flat base draw state");
 
   DrawDesc withUserPayload = first;
   withUserPayload.userVertexData = {0xde, 0xad, 0xbe, 0xef};
   withUserPayload.userIndexData = {0x01, 0x02};
-  checkEq(makeFlatDrawStateKey(first), makeFlatDrawStateKey(withUserPayload),
-          "user draw payload is excluded from flat base draw state");
+  checkEq(firstKey, makeFlatDrawStateKey(withUserPayload),
+          "UP payload is excluded from flat base draw state");
+
+  DrawParam drawParamA{};
+  drawParamA.primitiveType = PrimitiveType::TriangleList;
+  drawParamA.primitiveCount = 2;
+  drawParamA.indexed = false;
+
+  DrawParam drawParamB{};
+  drawParamB.primitiveType = PrimitiveType::LineList;
+  drawParamB.primitiveCount = 7;
+  drawParamB.startVertex = 33;
+  drawParamB.baseVertexIndex = -4;
+  drawParamB.startIndex = 19;
+  drawParamB.indexType = IndexType::UInt32;
+  drawParamB.indexed = true;
+  drawParamB.userVertexData = {0xde, 0xad, 0xbe, 0xef};
+  drawParamB.userIndexData = {0x01, 0x02, 0x03, 0x04};
+
+  DrawRunDesc run{};
+  run.state = makeCanonicalDrawState(first);
+  run.draws = {drawParamA, drawParamB};
+
+  const auto drawDescForParam = [&run](const DrawParam& param) {
+    DrawDesc desc = run.state.desc;
+    desc.primitiveType = param.primitiveType;
+    desc.primitiveCount = param.primitiveCount;
+    desc.startVertex = param.startVertex;
+    desc.baseVertexIndex = param.baseVertexIndex;
+    desc.startIndex = param.startIndex;
+    desc.indexType = param.indexType;
+    desc.userVertexData = param.userVertexData;
+    desc.userIndexData = param.userIndexData;
+    return desc;
+  };
+
+  checkEq(run.state.key, makeFlatDrawStateKey(run.state.desc),
+          "draw-run stores the flat base-state decision key");
+  checkEq(run.state.key, makeFlatDrawStateKey(drawDescForParam(run.draws[0])),
+          "draw-run key ignores first draw param fields");
+  checkEq(run.state.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
+          "draw-run key ignores varying draw param fields and UP payloads");
+  const FlatDrawStateKey storedRunKey = run.state.key;
+  run.draws[1].primitiveCount = 11;
+  run.draws[1].startVertex = 64;
+  run.draws[1].userVertexData = {0xaa, 0xbb, 0xcc};
+  run.draws[1].userIndexData = {0x10, 0x11};
+  checkEq(run.state.key, storedRunKey,
+          "draw-run key remains separate from mutable draw params");
+  checkEq(run.state.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
+          "mutated draw params and UP payloads still do not alter the run key");
+
+  DrawRunDesc packedRun{};
+  packedRun.state = makeCanonicalDrawState(first);
+  packedRun.payloadArena = {0xde, 0xad, 0xbe, 0xef, 0x10, 0x11};
+  DrawParam packedParam = drawParamB;
+  packedParam.userVertexData.clear();
+  packedParam.userIndexData.clear();
+  packedParam.userVertexRange = {0, 4};
+  packedParam.userIndexRange = {4, 2};
+  packedRun.draws = {packedParam};
+  checkEq(packedRun.state.key, firstKey,
+          "draw-run payload arena does not disturb the base-state key");
+  checkEq(packedRun.draws[0].userVertexRange.offset, 0u,
+          "draw-run stores vertex UP payload as an arena offset");
+  checkEq(packedRun.draws[0].userIndexRange.size, 2u,
+          "draw-run stores index UP payload as an arena size");
+  const FlatDrawStateKey packedRunKey = packedRun.state.key;
+  packedRun.payloadArena[0] = 0xaa;
+  packedRun.draws[0].userVertexRange.size = 3;
+  checkEq(packedRun.state.key, packedRunKey,
+          "payload arena mutations remain separate from the draw-run key");
 
   DrawDesc sameMapsDifferentInsertion = first;
   sameMapsDifferentInsertion.rs.values.clear();
@@ -346,9 +417,12 @@ void testFlatDrawStateKey() {
 
   DeviceState changedRenderState = state;
   changedRenderState.renderStates[RS_CULL_MODE] = static_cast<u32>(CullMode::None);
-  check(!(makeFlatDrawStateKey(first) ==
-          makeFlatDrawStateKey(makeDrawDescFromState(changedRenderState, {}))),
+  DrawRunDesc changedRun{};
+  changedRun.state = makeCanonicalDrawState(makeDrawDescFromState(changedRenderState, {}));
+  check(!(firstKey == changedRun.state.key),
         "render-state changes flat base draw state");
+  check(!(run.state.key == changedRun.state.key),
+        "draw-run key changes when base state changes");
 
   DeviceState changedStream = state;
   changedStream.streamStrides[0] = 48;

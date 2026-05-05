@@ -734,9 +734,9 @@ void CommandQueue::submitDrawRun(core::DrawRunDesc desc) {
   // (primitiveType / counts / UP payloads) don't carry handles; they
   // only feed the encoder, not the resource walker.
   if (!skipDrawResourceMarking_) {
-    pool_.markDrawResources(desc.base, seqIdForMark(*this, 0));
+    pool_.markDrawResources(desc.state.desc, seqIdForMark(*this, 0));
   }
-  currentBackBuffer_ = desc.base.rts.color[0].handle;
+  currentBackBuffer_ = desc.state.desc.rts.color[0].handle;
   currentSlotUnlocked(*this).appendDrawRun(std::move(desc));
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);
 }

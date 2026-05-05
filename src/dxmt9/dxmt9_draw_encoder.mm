@@ -468,14 +468,44 @@ struct ParamView {
   std::span<const u8> userIndexData;
 };
 
-void encodeDraw(EncodeContext& ctx,
+std::span<const u8> payloadRangeBytes(core::DrawPayloadRange range,
+                                      std::span<const u8> arena) {
+  const std::size_t offset = range.offset;
+  const std::size_t size = range.size;
+  if (size == 0) {
+    return {};
+  }
+  if (offset > arena.size() || size > arena.size() - offset) {
+    return {};
+  }
+  return arena.subspan(offset, size);
+}
+
+std::span<const u8> drawParamVertexBytes(const core::DrawParam& param,
+                                         std::span<const u8> arena) {
+  if (!param.userVertexRange.empty()) {
+    return payloadRangeBytes(param.userVertexRange, arena);
+  }
+  return std::span<const u8>(param.userVertexData.data(), param.userVertexData.size());
+}
+
+std::span<const u8> drawParamIndexBytes(const core::DrawParam& param,
+                                        std::span<const u8> arena) {
+  if (!param.userIndexRange.empty()) {
+    return payloadRangeBytes(param.userIndexRange, arena);
+  }
+  return std::span<const u8>(param.userIndexData.data(), param.userIndexData.size());
+}
+
+bool encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
                  const DrawDesc& draw,
                  u64 seqId,
                  bool skipBaseStateBind,
                  const PreUploadedDrawData* preUploaded,
-                 const core::DrawParam* paramOverride) {
+                 const core::DrawParam* paramOverride,
+                 std::span<const u8> paramPayloadArena) {
   PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
   const ParamView pv = paramOverride
@@ -485,10 +515,8 @@ void encodeDraw(EncodeContext& ctx,
                   paramOverride->baseVertexIndex,
                   paramOverride->startIndex,
                   paramOverride->indexType,
-                  std::span<const u8>(paramOverride->userVertexData.data(),
-                                      paramOverride->userVertexData.size()),
-                  std::span<const u8>(paramOverride->userIndexData.data(),
-                                      paramOverride->userIndexData.size())}
+                  drawParamVertexBytes(*paramOverride, paramPayloadArena),
+                  drawParamIndexBytes(*paramOverride, paramPayloadArena)}
       : ParamView{draw.primitiveType, draw.primitiveCount,
                   draw.startVertex, draw.baseVertexIndex,
                   draw.startIndex, draw.indexType,
@@ -503,14 +531,14 @@ void encodeDraw(EncodeContext& ctx,
           << " tex0=" << static_cast<unsigned long long>(draw.textures[0].handle.value);
       emitQueueTraceLine(out.str());
     }
-    return;
+    return false;
   }
   const bool traceEncode = debug::shouldTraceEncode(draw, seqId);
   if (!encoder) {
     if (traceEncode) {
       emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-encoder");
     }
-    return;
+    return false;
   }
   // Phase 3-E: pipeline lookup + depth state + setRenderPipelineState
   // are BaseDrawState-only and survive across iterations of a
@@ -534,7 +562,7 @@ void encodeDraw(EncodeContext& ctx,
             << (draw.rs.values.contains(RS_COLOR_WRITE_ENABLE) ? draw.rs.values.at(RS_COLOR_WRITE_ENABLE) : 0xfu);
         emitQueueTraceLine(out.str());
       }
-      return;
+      return false;
     }
     auto depthState = ctx.cache.depthStencilStateFor(ctx.device, depthKey);
     if (depthState) {
@@ -720,7 +748,7 @@ void encodeDraw(EncodeContext& ctx,
       if (traceEncode) {
         emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-vertex-buffer");
       }
-      return;
+      return false;
     }
     uniforms->vertexStreamOffset = 0;
     uniforms->vertexStreamStride =
@@ -740,8 +768,8 @@ void encodeDraw(EncodeContext& ctx,
       }
     }
 	    if (!uploadUniforms()) {
-	      return;
-	    }
+		      return false;
+		    }
 	    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
 
     const u64 ffTraceTex0 = debug::fixedFunctionTraceTextureHandle();
@@ -1001,8 +1029,8 @@ void encodeDraw(EncodeContext& ctx,
       uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
     }
 	    if (!uploadUniforms()) {
-	      return;
-	    }
+		      return false;
+		    }
 	    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
   }
   // Phase 3-E: texture / sampler binding is BaseDrawState-only.
@@ -1019,7 +1047,7 @@ void encodeDraw(EncodeContext& ctx,
               << " tex" << stage << "=" << static_cast<unsigned long long>(draw.textures[stage].handle.value);
           emitQueueTraceLine(out.str());
         }
-        return;
+        return false;
       }
       if (auto* texture = ctx.pool.findTexture(draw.textures[stage].handle.value); texture && texture->texture) {
         if (debug::shouldTraceTexture(draw.textures[stage].handle)) {
@@ -1180,9 +1208,9 @@ void encodeDraw(EncodeContext& ctx,
         uniforms->vertexStreamOffset = 0;
         uniforms->vertexBaseIndex = 0;
 	        if (!uploadUniforms()) {
-	          return;
-	        }
-	        expandedIndexedDraw = true;
+		          return false;
+		        }
+		        expandedIndexedDraw = true;
 	      }
     }
     if (debug::forceExpandIndexed()) {
@@ -1194,7 +1222,7 @@ void encodeDraw(EncodeContext& ctx,
     }
     if (expandedIndexedDraw) {
       encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
-      return;
+      return true;
     }
 	    CommandQueue::TransientBufferSlice transientIndexBuffer;
 	    WMT::Buffer indexBuffer{};
@@ -1227,10 +1255,11 @@ void encodeDraw(EncodeContext& ctx,
       encoder.drawIndexedPrimitives(primitiveType, toIndexType(pv.indexType),
                                     (uint64_t)vertexCount, indexBuffer, indexBufferOffset,
                                     1, 0, 0);
-      return;
+      return true;
     }
   }
   encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
+  return true;
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
@@ -1265,6 +1294,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   AttachmentKey activeKey{};
   HazardBloom activeWriteBloom{};
   bool hasActiveRender = false;
+  std::optional<core::FlatDrawStateKey> activeDrawStateKey;
   std::optional<core::ClearDesc> pendingClear;
 
   // TLA+: EncoderLifecycle variable binding:
@@ -1295,6 +1325,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       activeRenderEncoder.endEncoding();
       activeRenderEncoder = {};
       hasActiveRender = false;
+      activeDrawStateKey.reset();
       assertEncoderLifecycleInvariant();
     }
   };
@@ -1318,6 +1349,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     hasActiveRender = static_cast<bool>(activeRenderEncoder);
     activeKey = makeAttachmentKey(draw.rts);
     activeWriteBloom = makeAttachmentBloom(draw.rts);
+    activeDrawStateKey.reset();
     assertEncoderLifecycleInvariant();
   };
 
@@ -1372,8 +1404,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       case Kind::Draw: {
-        if (!command.draw) break;
-        const auto& draw = *command.draw;
+        if (!command.drawRecord || !command.draw) break;
+        const auto& drawRecord = *command.drawRecord;
+        const auto& draw = drawRecord.state.desc;
         flushBlit();
         assertEncoderLifecycleInvariant();
         const auto drawKey = makeAttachmentKey(draw.rts);
@@ -1431,7 +1464,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             DXMT_ASSERT(!activeWriteBloom.overlaps(drawReadBloom));
           }
         }
-        encodeDraw(ctx, commandBuffer, activeRenderEncoder, draw, slot.seqId);
+        const bool skipBaseStateBind =
+            activeDrawStateKey.has_value() && *activeDrawStateKey == drawRecord.state.key;
+        const std::span<const u8> payloadArena(drawRecord.payloadArena.data(),
+                                               drawRecord.payloadArena.size());
+        if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, draw, slot.seqId,
+                       skipBaseStateBind, nullptr, &drawRecord.param, payloadArena)) {
+          activeDrawStateKey = drawRecord.state.key;
+        }
         commandBufferHasWork = true;
         break;
       }
@@ -1440,14 +1480,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const auto& drawRun = *command.drawRun;
         // Compact draw-run: state bound from base ONCE (render-pass +
         // resource-binding decisions key off base.rts), then loop over
-        // per-DrawParam emits. First-cut implementation synthesizes a
-        // per-draw DrawDesc on the stack and reuses encodeDraw — gives
-        // the correct API surface and BackendRecord shape immediately;
-        // the per-draw resource-rebinding optimization on the encoder
-        // side follows as a separate step (Phase 3-E).
+        // per-DrawParam emits. FlatDrawStateKey is the hot-path decision
+        // object for skipping base-state rebinding across compatible
+        // Draw/DrawRun records on the same Metal render encoder.
         flushBlit();
         assertEncoderLifecycleInvariant();
-        const auto& base = drawRun.base;
+        const auto& base = drawRun.state.desc;
         const auto drawKey = makeAttachmentKey(base.rts);
         const auto drawReadBloom = makeDrawReadBloom(base);
         if (pendingClear.has_value()) {
@@ -1523,16 +1561,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         //   …
         // Returned slices use the same indexing.
         const std::size_t drawCount = drawRun.draws.size();
+        const std::span<const u8> payloadArena(drawRun.payloadArena.data(),
+                                               drawRun.payloadArena.size());
         std::vector<std::span<const std::byte>> upPayloads;
         upPayloads.reserve(drawCount * 2);
         bool anyUpData = false;
         for (const auto& param : drawRun.draws) {
-          if (!param.userVertexData.empty()) anyUpData = true;
-          upPayloads.emplace_back(reinterpret_cast<const std::byte*>(param.userVertexData.data()),
-                                  param.userVertexData.size());
-          if (!param.userIndexData.empty()) anyUpData = true;
-          upPayloads.emplace_back(reinterpret_cast<const std::byte*>(param.userIndexData.data()),
-                                  param.userIndexData.size());
+          const auto vertexBytes = drawParamVertexBytes(param, payloadArena);
+          if (!vertexBytes.empty()) anyUpData = true;
+          upPayloads.emplace_back(reinterpret_cast<const std::byte*>(vertexBytes.data()),
+                                  vertexBytes.size());
+          const auto indexBytes = drawParamIndexBytes(param, payloadArena);
+          if (!indexBytes.empty()) anyUpData = true;
+          upPayloads.emplace_back(reinterpret_cast<const std::byte*>(indexBytes.data()),
+                                  indexBytes.size());
         }
         std::vector<CommandQueue::TransientBufferSlice> upSlices;
         if (anyUpData) {
@@ -1542,12 +1584,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // Phase 13 step 2: encodeDraw now takes a DrawParam override that
         // shadows the 8 per-draw fields (primitiveType, primitiveCount,
         // startVertex, baseVertexIndex, startIndex, indexType,
-        // userVertexData, userIndexData). All other state is read from
-        // `base` directly. The per-iter synthetic DrawDesc — and its
-        // map<u32,u32> renderStates + 16-stage arrays + RT/DS/transform
-        // copies — is gone entirely; the loop body is now a
-        // PreUploadedDrawData stack-pod plus one encodeDraw call.
-        bool baseBound = false;
+        // user payload ranges/data). All other state is read from `base`
+        // directly. The per-iter synthetic DrawDesc — and its map<u32,u32>
+        // renderStates + 16-stage arrays + RT/DS/transform copies — is
+        // gone entirely; the loop body is now a PreUploadedDrawData
+        // stack-pod plus one encodeDraw call.
+        bool baseBound =
+            activeDrawStateKey.has_value() && *activeDrawStateKey == drawRun.state.key;
         for (std::size_t i = 0; i < drawCount; ++i) {
           const auto& param = drawRun.draws[i];
           PreUploadedDrawData preData{};
@@ -1555,11 +1598,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             preData.vertex = upSlices[i * 2u];
             preData.index = upSlices[i * 2u + 1u];
           }
-          encodeDraw(ctx, commandBuffer, activeRenderEncoder, base, slot.seqId,
-                      /*skipBaseStateBind=*/baseBound,
-                      anyUpData ? &preData : nullptr,
-                      &param);
-          baseBound = true;
+          if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, base, slot.seqId,
+                         /*skipBaseStateBind=*/baseBound,
+                         anyUpData ? &preData : nullptr,
+                         &param,
+                         payloadArena)) {
+            baseBound = true;
+            activeDrawStateKey = drawRun.state.key;
+          }
         }
         commandBufferHasWork = true;
         break;

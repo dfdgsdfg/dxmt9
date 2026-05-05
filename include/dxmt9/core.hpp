@@ -688,9 +688,21 @@ struct FlatDrawStateKey {
 
 using FlatBaseDrawStateSummary = FlatDrawStateKey;
 
-// Per-draw parameters within a DrawRunDesc — only what differs between
-// draws sharing the same BaseDrawState (DrawDesc base). Encoder emits
-// one Metal draw call per DrawParam, reusing the bound state.
+struct DrawPayloadRange {
+  u32 offset = 0;
+  u32 size = 0;
+
+  constexpr bool empty() const noexcept { return size == 0; }
+};
+
+struct CanonicalDrawState {
+  DrawDesc desc{};
+  FlatDrawStateKey key{};
+};
+
+// Per-draw parameters within a DrawRunDesc: only what differs between
+// draws sharing the same canonical state. Encoder emits one Metal draw
+// call per DrawParam, reusing the bound state.
 struct DrawParam {
   PrimitiveType primitiveType = PrimitiveType::TriangleList;
   u32 primitiveCount = 0;
@@ -699,6 +711,8 @@ struct DrawParam {
   u32 startIndex = 0;
   IndexType indexType = IndexType::UInt16;
   bool indexed = false;                    // true → drawIndexedPrimitive
+  DrawPayloadRange userVertexRange{};      // DrawRunDesc::payloadArena slice, if present
+  DrawPayloadRange userIndexRange{};       // DrawRunDesc::payloadArena slice, if present
   std::vector<u8> userVertexData;          // empty for non-UP draws
   std::vector<u8> userIndexData;           // empty for non-UP / non-indexed
 };
@@ -720,15 +734,16 @@ struct ChunkHandleEntry {
   Handle handle{};
 };
 
-// Backend draw-run record: one BaseDrawState (the existing DrawDesc) +
-// N compact DrawParam entries. Replaces N separate
+// Backend draw-run record: one canonical draw state plus N compact
+// DrawParam entries. Replaces N separate
 // MetalCommandKind::Draw records when the importer detects a
 // run of draws with no state change between them. Encoder binds state
-// once from `base`, then loops emitting per-draw calls — saves both
+// once from `state.desc`, then loops emitting per-draw calls — saves both
 // per-draw DrawDesc copies on the queue side and per-draw resource
 // rebinding on the encoder side.
 struct DrawRunDesc {
-  DrawDesc base{};                         // applied once at run start
+  CanonicalDrawState state{};              // applied once at run start
+  std::vector<u8> payloadArena;            // packed per-draw UP payload bytes
   std::vector<DrawParam> draws;            // per-draw args
 };
 
@@ -1131,6 +1146,9 @@ FfpVertexKey makeFfpVertexKey(const DeviceState& state);
 FfpPixelKey makeFfpPixelKey(const DeviceState& state);
 DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args);
 FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc);
+DrawParam makeDrawParamFromDesc(const DrawDesc& desc);
+CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc);
+bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena);
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);
 std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::span<const u8> input);

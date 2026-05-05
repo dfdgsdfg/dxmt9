@@ -125,6 +125,12 @@ std::uint64_t wireHandleValue(const D9CWireHandle& handle) noexcept {
          (static_cast<std::uint64_t>(handle.hi) << 32);
 }
 
+template <typename T>
+const T* wireHandlePtr(const D9CWireHandle& handle) noexcept {
+  return reinterpret_cast<const T*>(
+      static_cast<std::uintptr_t>(wireHandleValue(handle)));
+}
+
 bool handleSetContains(
     const ImportedChunkHandleSet& handles,
     std::uint32_t kind,
@@ -216,6 +222,39 @@ void collectIndexedDrawPacketResourceHazards(
     appendImportedChunkHandle(hazards.reads, D9C_CHUNK_HANDLE_KIND_BUFFER,
                               wireHandleValue(packet.ibHandle));
   }
+}
+
+bool importedWireHandleEntryValid(
+    const D9CCommandChunkWireHandleEntry& handle) noexcept {
+  return handle.kind <= D9C_CHUNK_HANDLE_KIND_VERTEX_DECL &&
+         handle.generation == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE &&
+         d9c_command_chunk_wire_handle_entry_reserved_valid(&handle);
+}
+
+bool importedWireRecordHeaderValid(
+    const D9CCommandChunkWireRecordHeader& record) noexcept {
+  return record.flags == D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE &&
+         d9c_command_chunk_wire_record_reserved_valid(&record);
+}
+
+ImportedRecordView makeInvalidWireImportedRecordView(
+    const D9CCommandChunkWireRecordHeader& wireRecord,
+    std::uint32_t recordIndex,
+    D9CCommandRecordValidationStatus status) noexcept {
+  constexpr auto kHeaderSize = byteSize(sizeof(D9CCommandRecordHeader));
+  const D9CCommandRecordHeader legacyHeader{
+      .type = wireRecord.type,
+      .size = wireRecord.payloadSize,
+  };
+  const auto validation =
+      makeResult(legacyHeader, 0u, kHeaderSize, wireRecord.payloadSize, status);
+  return ImportedRecordView{
+      .record = nullptr,
+      .offset = wireRecord.payloadOffset,
+      .index = recordIndex,
+      .header = legacyHeader,
+      .validation = validation,
+  };
 }
 
 }  // namespace
@@ -319,6 +358,102 @@ ImportedChunkView makeImportedChunkView(
   };
 }
 
+ImportedChunkView makeImportedChunkView(
+    const D9CCommandChunk& chunk) noexcept {
+  const auto* records = chunk.recordBytes != 0
+                            ? wireHandlePtr<const std::uint8_t>(chunk.records)
+                            : nullptr;
+  return makeImportedChunkView(records, chunk.recordBytes, chunk.recordCount);
+}
+
+ImportedWireChunkView makeImportedWireChunkView(
+    const D9CCommandChunkWireRecordHeader* records,
+    std::uint32_t recordCount,
+    const std::uint8_t* payloadArena,
+    std::uint32_t payloadArenaSize,
+    const D9CCommandChunkWireHandleEntry* handles,
+    std::uint32_t handleCount) noexcept {
+  return ImportedWireChunkView{
+      .records = records,
+      .recordCount = recordCount,
+      .payloadArena = payloadArena,
+      .payloadArenaSize = payloadArenaSize,
+      .handles = handles,
+      .handleCount = handleCount,
+  };
+}
+
+ImportedWireChunkStorage normalizeImportedChunkViewToWire(
+    const ImportedChunkView& chunk,
+    const D9CChunkHandleEntry* handles,
+    std::uint32_t handleCount) {
+  ImportedWireChunkStorage result{
+      .payloadArena = chunk.records,
+      .payloadArenaSize = chunk.recordBytes,
+  };
+
+  if (handles && handleCount != 0) {
+    result.handles.reserve(handleCount);
+    for (std::uint32_t i = 0; i < handleCount; ++i) {
+      result.handles.push_back(D9CCommandChunkWireHandleEntry{
+          .kind = handles[i].kind,
+          .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+          .opaqueHandle = handles[i].handle,
+          .reserved0 = handles[i].reserved,
+          .reserved1 = 0u,
+      });
+    }
+  }
+
+  const auto wireHandleCount = static_cast<std::uint32_t>(result.handles.size());
+  result.records.reserve(chunk.recordCount);
+  std::uint32_t offset = 0u;
+  std::uint32_t index = 0u;
+  while (auto record = nextImportedRecord(chunk, offset, index)) {
+    if (!record->valid()) {
+      break;
+    }
+
+    D9CCommandChunkWireRecordHeader wireRecord{};
+    wireRecord.type = record->header.type;
+    wireRecord.flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE;
+    wireRecord.payloadOffset = record->offset;
+    wireRecord.payloadSize = record->header.size;
+    wireRecord.firstHandle = 0u;
+    wireRecord.handleCount = wireHandleCount;
+    if (!d9c_command_chunk_wire_record_ranges_valid(
+            result.payloadArenaSize, wireHandleCount, &wireRecord)) {
+      break;
+    }
+
+    result.records.push_back(wireRecord);
+    offset = record->nextOffset();
+    index = record->nextIndex();
+  }
+  return result;
+}
+
+ImportedWireChunkStorage normalizeImportedCommandChunkToWire(
+    const D9CCommandChunk& chunk) {
+  if (chunk.version != D9C_COMMAND_CHUNK_VERSION) {
+    return ImportedWireChunkStorage{};
+  }
+
+  const auto imported = makeImportedChunkView(chunk);
+  if (chunk.recordBytes != 0 && !imported.records) {
+    return ImportedWireChunkStorage{};
+  }
+
+  const auto* handles = chunk.handleCount != 0
+                            ? wireHandlePtr<const D9CChunkHandleEntry>(chunk.handles)
+                            : nullptr;
+  if (chunk.handleCount != 0 && !handles) {
+    return ImportedWireChunkStorage{};
+  }
+
+  return normalizeImportedChunkViewToWire(imported, handles, chunk.handleCount);
+}
+
 ImportedRecordView makeImportedRecordView(
     const ImportedChunkView& chunk,
     std::uint32_t offset,
@@ -337,6 +472,48 @@ ImportedRecordView makeImportedRecordView(
   };
 }
 
+ImportedRecordView makeImportedRecordView(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex) noexcept {
+  if (recordIndex >= chunk.recordCount || !chunk.records) {
+    return makeInvalidWireImportedRecordView(
+        D9CCommandChunkWireRecordHeader{}, recordIndex,
+        D9CCommandRecordValidationStatus::TruncatedHeader);
+  }
+
+  const auto& wireRecord = chunk.records[recordIndex];
+  if (!importedWireRecordHeaderValid(wireRecord)) {
+    return makeInvalidWireImportedRecordView(
+        wireRecord, recordIndex,
+        D9CCommandRecordValidationStatus::UnknownType);
+  }
+  if (!d9c_command_chunk_wire_record_ranges_valid(
+          chunk.payloadArenaSize, chunk.handleCount, &wireRecord) ||
+      (wireRecord.payloadSize != 0 && !chunk.payloadArena)) {
+    return makeInvalidWireImportedRecordView(
+        wireRecord, recordIndex,
+        D9CCommandRecordValidationStatus::TruncatedRecord);
+  }
+
+  const auto* record = wireRecord.payloadSize != 0
+                           ? chunk.payloadArena + wireRecord.payloadOffset
+                           : nullptr;
+  auto validation = validateCommandRecord(record, wireRecord.payloadSize);
+  if (validation.valid() && validation.header.size != wireRecord.payloadSize) {
+    validation =
+        makeResult(validation.header, wireRecord.payloadSize,
+                   validation.minimumSize, validation.expectedSize,
+                   D9CCommandRecordValidationStatus::SizeMismatch);
+  }
+  return ImportedRecordView{
+      .record = record,
+      .offset = wireRecord.payloadOffset,
+      .index = recordIndex,
+      .header = validation.header,
+      .validation = validation,
+  };
+}
+
 std::optional<ImportedRecordView> nextImportedRecord(
     const ImportedChunkView& chunk,
     std::uint32_t offset,
@@ -345,6 +522,15 @@ std::optional<ImportedRecordView> nextImportedRecord(
     return std::nullopt;
   }
   return makeImportedRecordView(chunk, offset, index);
+}
+
+std::optional<ImportedRecordView> nextImportedRecord(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex) noexcept {
+  if (recordIndex >= chunk.recordCount) {
+    return std::nullopt;
+  }
+  return makeImportedRecordView(chunk, recordIndex);
 }
 
 bool importedChunkRecordCountMatches(
@@ -382,6 +568,65 @@ ImportedChunkValidation validateImportedChunk(
   return result;
 }
 
+ImportedWireChunkValidation validateImportedWireChunk(
+    const ImportedWireChunkView& chunk) noexcept {
+  ImportedWireChunkValidation result{
+      .chunk = chunk,
+      .status = ImportedWireChunkValidationStatus::Valid,
+  };
+
+  if (chunk.recordCount != 0 && !chunk.records) {
+    result.status = ImportedWireChunkValidationStatus::MissingRecordTable;
+    return result;
+  }
+  if (chunk.payloadArenaSize != 0 && !chunk.payloadArena) {
+    result.status = ImportedWireChunkValidationStatus::MissingPayloadArena;
+    return result;
+  }
+  if (chunk.handleCount != 0 && !chunk.handles) {
+    result.status = ImportedWireChunkValidationStatus::MissingHandleTable;
+    return result;
+  }
+
+  for (std::uint32_t i = 0; i < chunk.handleCount; ++i) {
+    if (!importedWireHandleEntryValid(chunk.handles[i])) {
+      result.status = ImportedWireChunkValidationStatus::InvalidHandleEntry;
+      result.failedHandleIndex = i;
+      result.failedHandle = chunk.handles[i];
+      return result;
+    }
+  }
+
+  for (std::uint32_t i = 0; i < chunk.recordCount; ++i) {
+    const auto& wireRecord = chunk.records[i];
+    if (!importedWireRecordHeaderValid(wireRecord)) {
+      result.status = ImportedWireChunkValidationStatus::InvalidRecordHeader;
+      result.failedRecordIndex = i;
+      result.failedWireRecord = wireRecord;
+      return result;
+    }
+    if (!d9c_command_chunk_wire_record_ranges_valid(
+            chunk.payloadArenaSize, chunk.handleCount, &wireRecord)) {
+      result.status = ImportedWireChunkValidationStatus::InvalidRecordRange;
+      result.failedRecordIndex = i;
+      result.failedWireRecord = wireRecord;
+      return result;
+    }
+
+    const auto record = makeImportedRecordView(chunk, i);
+    if (!record.valid() || record.header.type != wireRecord.type) {
+      result.status = ImportedWireChunkValidationStatus::InvalidRecord;
+      result.failedRecordIndex = i;
+      result.failedWireRecord = wireRecord;
+      result.failedRecord = record;
+      return result;
+    }
+    result.parsedRecordCount = i + 1u;
+  }
+
+  return result;
+}
+
 ImportedDrawRunScan scanImportedDrawRun(
     const ImportedChunkView& chunk,
     const ImportedRecordView& firstRecord) noexcept {
@@ -415,6 +660,63 @@ ImportedDrawRunScan scanImportedDrawRun(
   scan.endOffset = firstRecord.nextOffset();
   scan.endIndex = firstRecord.nextIndex();
   while (auto record = nextImportedRecord(chunk, scan.endOffset, scan.endIndex)) {
+    if (!record->valid()) {
+      scan.stop = ImportedDrawRunScanStop::InvalidRecord;
+      scan.stopRecord = *record;
+      return scan;
+    }
+    if (record->header.type != scan.recordType) {
+      scan.stop = ImportedDrawRunScanStop::DifferentRecordType;
+      scan.stopRecord = *record;
+      return scan;
+    }
+    if (!importedDrawRecordHasNoStateDelta(*record)) {
+      scan.stop = ImportedDrawRunScanStop::StateDelta;
+      scan.stopRecord = *record;
+      return scan;
+    }
+    ++scan.recordCount;
+    scan.endOffset = record->nextOffset();
+    scan.endIndex = record->nextIndex();
+  }
+
+  scan.stop = ImportedDrawRunScanStop::EndOfChunk;
+  return scan;
+}
+
+ImportedDrawRunScan scanImportedDrawRun(
+    const ImportedWireChunkView& chunk,
+    const ImportedRecordView& firstRecord) noexcept {
+  ImportedDrawRunScan scan{
+      .firstRecord = firstRecord,
+      .endOffset = firstRecord.offset,
+      .endIndex = firstRecord.index,
+  };
+
+  if (!firstRecord.valid()) {
+    scan.stop = ImportedDrawRunScanStop::InvalidRecord;
+    scan.stopRecord = firstRecord;
+    return scan;
+  }
+
+  if (firstRecord.header.type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE &&
+      firstRecord.header.type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+    scan.stop = ImportedDrawRunScanStop::NotDrawRecord;
+    scan.stopRecord = firstRecord;
+    return scan;
+  }
+
+  scan.recordType = firstRecord.header.type;
+  if (!importedDrawRecordHasNoStateDelta(firstRecord)) {
+    scan.stop = ImportedDrawRunScanStop::FirstRecordHasStateDelta;
+    scan.stopRecord = firstRecord;
+    return scan;
+  }
+
+  scan.recordCount = 1u;
+  scan.endOffset = firstRecord.nextOffset();
+  scan.endIndex = firstRecord.nextIndex();
+  while (auto record = nextImportedRecord(chunk, scan.endIndex)) {
     if (!record->valid()) {
       scan.stop = ImportedDrawRunScanStop::InvalidRecord;
       scan.stopRecord = *record;

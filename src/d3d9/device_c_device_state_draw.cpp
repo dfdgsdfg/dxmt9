@@ -710,12 +710,27 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   if (!d || !chunk || chunk->version != D9C_COMMAND_CHUNK_VERSION) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  if (chunk->recordBytes != 0 && !wireHandleValue(chunk->records)) {
+  const auto* records = chunk->recordBytes != 0
+                            ? wireHandlePtr<const dxmt9::core::u8>(chunk->records)
+                            : nullptr;
+  if (!records && chunk->recordBytes != 0) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto* handles = chunk->handleCount != 0
+                            ? wireHandlePtr<const D9CChunkHandleEntry>(chunk->handles)
+                            : nullptr;
+  if (chunk->handleCount != 0 && !handles) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  const auto* records = wireHandlePtr<const dxmt9::core::u8>(chunk->records);
-  if (!records && chunk->recordBytes != 0) {
+  const auto legacyChunk =
+      makeImportedChunkView(records, chunk->recordBytes, chunk->recordCount);
+  const auto normalizedChunk =
+      normalizeImportedChunkViewToWire(legacyChunk, handles, chunk->handleCount);
+  const auto importedChunk = normalizedChunk.view();
+  const auto validation = validateImportedWireChunk(importedChunk);
+  if (!validation.valid() || importedChunk.recordCount != chunk->recordCount ||
+      importedChunk.handleCount != chunk->handleCount) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
@@ -727,17 +742,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // markChunkResources, then sets skipDrawResourceMarking on the
   // queue (Phase 14) so per-draw markDrawResources is suppressed
   // for the duration of this chunk's record-iter block.
-  const auto* handles = chunk->handleCount != 0
-                            ? wireHandlePtr<const D9CChunkHandleEntry>(chunk->handles)
-                            : nullptr;
-  if (chunk->handleCount != 0 && !handles) {
-    return dxmt9::core::D3DERR_INVALIDCALL;
-  }
-  for (std::uint32_t i = 0; i < chunk->handleCount; ++i) {
-    if (handles[i].kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
-  }
   // Bulk-mark every handle in chunk.handles[] against the queue's
   // current chunk seqId in one shot. Per-record markDrawResources
   // still fires inside submit{Draw,DrawRun} for now (additive — same
@@ -753,12 +757,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // to CommandQueue::markChunkResources — otherwise pool.find{Texture,
   // Surface,Buffer} on a wrapper-pointer-as-handle would never match
   // and the bulk mark would silently be a no-op.
-  if (chunk->handleCount > 0) {
+  if (importedChunk.handleCount > 0) {
     std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
-    coreEntries.reserve(chunk->handleCount);
-    for (std::uint32_t i = 0; i < chunk->handleCount; ++i) {
-      const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(handles[i].kind);
-      const auto wirePtr = handles[i].handle;
+    coreEntries.reserve(importedChunk.handleCount);
+    for (std::uint32_t i = 0; i < importedChunk.handleCount; ++i) {
+      const auto& handle = importedChunk.handles[i];
+      const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(handle.kind);
+      const auto wirePtr = handle.opaqueHandle;
       if (wirePtr == 0) continue;
       dxmt9::core::Handle resolved{};
       switch (kind) {
@@ -810,18 +815,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       if (upper) upper->setSkipDrawResourceMarking(false);
     }
   } resetGuard{};
-  if (chunk->handleCount > 0) {
+  if (importedChunk.handleCount > 0) {
     if (auto upper = d->dev().upperDevice()) {
       upper->setSkipDrawResourceMarking(true);
       resetGuard.upper = std::move(upper);
     }
   }
 
-  const auto importedChunk =
-      makeImportedChunkView(records, chunk->recordBytes, chunk->recordCount);
-  std::uint32_t offset = 0;
   std::uint32_t recordIndex = 0;
-  while (auto recordView = nextImportedRecord(importedChunk, offset, recordIndex)) {
+  while (auto recordView = nextImportedRecord(importedChunk, recordIndex)) {
     if (!recordView->valid()) {
       return dxmt9::core::D3DERR_INVALIDCALL;
     }
@@ -844,17 +846,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         run.reserve(scan.recordCount);
         run.push_back(makeRunParam(decoded.packet));
 
-        std::uint32_t runOffset = recordView->nextOffset();
         std::uint32_t runIndex = recordView->nextIndex();
-        while (runOffset < scan.endOffset) {
-          const auto nextRecord = nextImportedRecord(importedChunk, runOffset, runIndex);
+        while (runIndex < scan.endIndex) {
+          const auto nextRecord = nextImportedRecord(importedChunk, runIndex);
           if (!nextRecord || !nextRecord->valid()) {
             return dxmt9::core::D3DERR_INVALIDCALL;
           }
           D9CCommandRecordDrawPrimitive nextDecoded{};
           std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
           run.push_back(makeRunParam(nextDecoded.packet));
-          runOffset = nextRecord->nextOffset();
           runIndex = nextRecord->nextIndex();
         }
         if (run.size() != scan.recordCount) {
@@ -866,7 +866,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         // applyDrawPrimitivePacket / snapshotDrawDesc calls.
         hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
         if (failed(hr)) return hr;
-        offset = scan.endOffset;
         recordIndex = scan.endIndex;
         continue;
       }
@@ -885,17 +884,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         run.reserve(scan.recordCount);
         run.push_back(makeRunParam(decoded.packet));
 
-        std::uint32_t runOffset = recordView->nextOffset();
         std::uint32_t runIndex = recordView->nextIndex();
-        while (runOffset < scan.endOffset) {
-          const auto nextRecord = nextImportedRecord(importedChunk, runOffset, runIndex);
+        while (runIndex < scan.endIndex) {
+          const auto nextRecord = nextImportedRecord(importedChunk, runIndex);
           if (!nextRecord || !nextRecord->valid()) {
             return dxmt9::core::D3DERR_INVALIDCALL;
           }
           D9CCommandRecordDrawIndexedPrimitive nextDecoded{};
           std::memcpy(&nextDecoded, nextRecord->record, sizeof(nextDecoded));
           run.push_back(makeRunParam(nextDecoded.packet));
-          runOffset = nextRecord->nextOffset();
           runIndex = nextRecord->nextIndex();
         }
         if (run.size() != scan.recordCount) {
@@ -904,7 +901,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
 
         hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
         if (failed(hr)) return hr;
-        offset = scan.endOffset;
         recordIndex = scan.endIndex;
         continue;
       }
@@ -1057,11 +1053,10 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     if (failed(hr)) {
       return hr;
     }
-    offset = recordView->nextOffset();
     recordIndex = recordView->nextIndex();
   }
 
-  return importedChunkRecordCountMatches(importedChunk, recordIndex)
+  return recordIndex == importedChunk.recordCount
              ? dxmt9::core::D3D_OK
              : dxmt9::core::D3DERR_INVALIDCALL;
 }

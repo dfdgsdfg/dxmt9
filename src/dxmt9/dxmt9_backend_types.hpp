@@ -24,6 +24,12 @@ struct PresentCommandRecord {
   Handle presentSource{};
 };
 
+struct DrawCommandRecord {
+  CanonicalDrawState state{};
+  DrawParam param{};
+  std::vector<u8> payloadArena;
+};
+
 struct MetalCommandHeader {
   MetalCommandKind kind = MetalCommandKind::Draw;
   std::uint32_t payloadIndex = 0;
@@ -31,6 +37,7 @@ struct MetalCommandHeader {
 
 struct MetalCommandView {
   MetalCommandKind kind = MetalCommandKind::Draw;
+  const DrawCommandRecord* drawRecord = nullptr;
   const DrawDesc* draw = nullptr;
   const DrawRunDesc* drawRun = nullptr;
   const ClearDesc* clear = nullptr;
@@ -51,7 +58,7 @@ struct ChunkSlot {
   // linearly and indexes into type-specific payload arrays. This avoids the
   // old fat record shape where every command carried every possible payload.
   std::vector<MetalCommandHeader> commandHeaders;
-  std::vector<DrawDesc> drawRecords;
+  std::vector<DrawCommandRecord> drawRecords;
   std::vector<DrawRunDesc> drawRunRecords;
   std::vector<ClearDesc> clearRecords;
   std::vector<SurfaceCopyDesc> surfaceCopyRecords;
@@ -82,10 +89,18 @@ struct ChunkSlot {
 
   void appendDraw(const DrawDesc& draw) {
     commandHeaders.push_back({MetalCommandKind::Draw, static_cast<std::uint32_t>(drawRecords.size())});
-    drawRecords.push_back(draw);
+    DrawCommandRecord record{};
+    record.state = makeCanonicalDrawState(draw);
+    record.param = makeDrawParamFromDesc(draw);
+    if (!packDrawParamPayload(record.param, record.payloadArena)) {
+      record.payloadArena.clear();
+      record.param = makeDrawParamFromDesc(draw);
+    }
+    drawRecords.push_back(std::move(record));
   }
 
   void appendDrawRun(DrawRunDesc drawRun) {
+    drawRun.state.key = makeFlatDrawStateKey(drawRun.state.desc);
     commandHeaders.push_back({MetalCommandKind::DrawRun, static_cast<std::uint32_t>(drawRunRecords.size())});
     drawRunRecords.push_back(std::move(drawRun));
   }
@@ -135,7 +150,10 @@ struct ChunkSlot {
     MetalCommandView view{.kind = header.kind};
     switch (header.kind) {
     case MetalCommandKind::Draw:
-      if (payloadIndex < drawRecords.size()) view.draw = &drawRecords[payloadIndex];
+      if (payloadIndex < drawRecords.size()) {
+        view.drawRecord = &drawRecords[payloadIndex];
+        view.draw = &drawRecords[payloadIndex].state.desc;
+      }
       break;
     case MetalCommandKind::DrawRun:
       if (payloadIndex < drawRunRecords.size()) view.drawRun = &drawRunRecords[payloadIndex];

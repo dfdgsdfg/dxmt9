@@ -3674,6 +3674,61 @@ FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc) {
   return key;
 }
 
+DrawParam makeDrawParamFromDesc(const DrawDesc& desc) {
+  DrawParam param{};
+  param.primitiveType = desc.primitiveType;
+  param.primitiveCount = desc.primitiveCount;
+  param.startVertex = desc.startVertex;
+  param.baseVertexIndex = desc.baseVertexIndex;
+  param.startIndex = desc.startIndex;
+  param.indexType = desc.indexType;
+  param.indexed = desc.indexBuffer || !desc.userIndexData.empty();
+  param.userVertexData = desc.userVertexData;
+  param.userIndexData = desc.userIndexData;
+  return param;
+}
+
+CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc) {
+  DrawDesc state = desc;
+  state.userVertexData.clear();
+  state.userIndexData.clear();
+  return CanonicalDrawState{
+      .desc = std::move(state),
+      .key = makeFlatDrawStateKey(desc),
+  };
+}
+
+bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena) {
+  const auto vertexBytes = std::span<const u8>(param.userVertexData.data(), param.userVertexData.size());
+  const auto indexBytes = std::span<const u8>(param.userIndexData.data(), param.userIndexData.size());
+  constexpr auto kMaxRange = std::numeric_limits<u32>::max();
+  const std::uint64_t requiredSize =
+      static_cast<std::uint64_t>(payloadArena.size()) +
+      static_cast<std::uint64_t>(vertexBytes.size()) +
+      static_cast<std::uint64_t>(indexBytes.size());
+  if (requiredSize > kMaxRange) {
+    return false;
+  }
+
+  const auto appendPayload = [&payloadArena](std::span<const u8> bytes) {
+    if (bytes.empty()) {
+      return DrawPayloadRange{};
+    }
+    const auto offset = static_cast<u32>(payloadArena.size());
+    payloadArena.insert(payloadArena.end(), bytes.begin(), bytes.end());
+    return DrawPayloadRange{
+        .offset = offset,
+        .size = static_cast<u32>(bytes.size()),
+    };
+  };
+
+  param.userVertexRange = appendPayload(vertexBytes);
+  param.userIndexRange = appendPayload(indexBytes);
+  param.userVertexData.clear();
+  param.userIndexData.clear();
+  return true;
+}
+
 HResult Device::clear(const ClearDesc& desc) {
   auto snapshot = snapshotClearDesc(desc);
   if (snapshot.clearColor) {
@@ -3781,8 +3836,23 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
                                    first.startVertex, first.baseVertexIndex,
                                    first.startIndex, first.indexType);
   DrawRunDesc run;
-  run.base = std::move(base);
-  run.draws.assign(draws.begin(), draws.end());
+  run.state = makeCanonicalDrawState(base);
+  run.draws.reserve(draws.size());
+
+  bool packedPayloads = true;
+  for (const auto& draw : draws) {
+    DrawParam packed = draw;
+    if (!packDrawParamPayload(packed, run.payloadArena)) {
+      packedPayloads = false;
+      break;
+    }
+    run.draws.push_back(std::move(packed));
+  }
+  if (!packedPayloads) {
+    run.payloadArena.clear();
+    run.draws.assign(draws.begin(), draws.end());
+  }
+
   upperDevice_->submitDrawRun(std::move(run));
   // Each draw still advances the submitted-sequence cursor — encoder
   // emits N Metal draw calls.
