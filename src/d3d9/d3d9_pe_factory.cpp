@@ -24,6 +24,16 @@ static bool isSupportedDeviceType(D3DDEVTYPE type) {
     return type == D3DDEVTYPE_HAL;
 }
 
+static bool hasValidVertexProcessingFlags(DWORD behaviorFlags) {
+    const DWORD vertexProcessing =
+        behaviorFlags & (D3DCREATE_HARDWARE_VERTEXPROCESSING |
+                         D3DCREATE_MIXED_VERTEXPROCESSING |
+                         D3DCREATE_SOFTWARE_VERTEXPROCESSING);
+    return vertexProcessing == D3DCREATE_HARDWARE_VERTEXPROCESSING ||
+           vertexProcessing == D3DCREATE_MIXED_VERTEXPROCESSING ||
+           vertexProcessing == D3DCREATE_SOFTWARE_VERTEXPROCESSING;
+}
+
 static bool isSupportedFullscreenDisplayFormat(D3DFORMAT fmt) {
     return fmt == D3DFMT_X8R8G8B8 || fmt == D3DFMT_R5G6B5;
 }
@@ -612,6 +622,7 @@ public:
                              (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
                              (unsigned)pPP->BackBufferFormat);
         if (!isKnownDeviceType(deviceType)) return D3DERR_INVALIDCALL;
+        if (!hasValidVertexProcessingFlags(behaviorFlags)) return D3DERR_INVALIDCALL;
         if (!isSupportedDeviceType(deviceType)) {
             dxmt9FactoryDebugLog("CreateDevice -> unsupported devType=%u", (unsigned)deviceType);
             return D3DERR_NOTAVAILABLE;
@@ -621,7 +632,9 @@ public:
             return validateHr;
         }
         D9CPresentParams cpp = toCpp(*pPP);
-        cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
+        if (!cpp.deviceWindow) {
+            cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
+        }
         D9CDevice* dev = nullptr;
         const HRESULT hr = hr32(dxmt9c_factory_create_device2(f_, adapter, &cpp,
                                                               behaviorFlags, nullptr, &dev));
@@ -708,6 +721,7 @@ public:
                              (unsigned)pPP->BackBufferWidth, (unsigned)pPP->BackBufferHeight,
                              (unsigned)pPP->BackBufferFormat, pFsMode ? 1 : 0);
         if (!isKnownDeviceType(deviceType)) return D3DERR_INVALIDCALL;
+        if (!hasValidVertexProcessingFlags(behaviorFlags)) return D3DERR_INVALIDCALL;
         if (!isSupportedDeviceType(deviceType)) {
             dxmt9FactoryDebugLog("CreateDeviceEx -> unsupported devType=%u", (unsigned)deviceType);
             return D3DERR_NOTAVAILABLE;
@@ -736,7 +750,9 @@ public:
             return D3DERR_INVALIDCALL;
         }
         D9CPresentParams cpp = toCpp(*pPP);
-        cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
+        if (!cpp.deviceWindow) {
+            cpp.deviceWindow = (uint64_t)(uintptr_t)hwnd;
+        }
         D9CDisplayModeEx cdme{};
         if (pFsMode) cdme = toCdme(*pFsMode);
         D9CDevice* dev = nullptr;

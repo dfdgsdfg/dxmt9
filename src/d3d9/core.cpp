@@ -2377,8 +2377,8 @@ HRESULT Query::getData(void* output, size_t size, u32 flags, u64 completedSequen
     return S_OK;
   }
   if (type_ == QueryType::TimestampDisjoint) {
-    if (output && size >= sizeof(u64)) {
-      *static_cast<u64*>(output) = 0ull;
+    if (output && size >= sizeof(u32)) {
+      *static_cast<u32*>(output) = 0u;
     }
     return S_OK;
   }
@@ -2407,17 +2407,19 @@ HRESULT Query::getData(void* output, size_t size, u32 flags, u64 completedSequen
 
   const u64 value = resolvedValue_.value_or(0ull);
   if (type_ == QueryType::Occlusion) {
-    if (!output || size < sizeof(u32)) {
-      return D3DERR_INVALIDCALL;
+    if (!output || size == 0) {
+      return S_OK;
     }
-    *static_cast<u32*>(output) = static_cast<u32>(std::min<u64>(value, std::numeric_limits<u32>::max()));
+    if (size >= sizeof(u32)) {
+      *static_cast<u32*>(output) =
+          static_cast<u32>(std::min<u64>(value, std::numeric_limits<u32>::max()));
+    }
     return S_OK;
   }
   if (type_ == QueryType::Timestamp) {
-    if (!output || size < sizeof(u64)) {
-      return D3DERR_INVALIDCALL;
+    if (output && size >= sizeof(u64)) {
+      *static_cast<u64*>(output) = value;
     }
-    *static_cast<u64*>(output) = value;
     return S_OK;
   }
   return D3DERR_NOTAVAILABLE;
@@ -4518,9 +4520,13 @@ HResult Device::issueQuery(const std::shared_ptr<Query>& query, bool begin) {
 }
 
 HResult Device::getQueryData(const std::shared_ptr<Query>& query, void* output, size_t size,
-                             u32 flags) const {
+                             u32 flags) {
   if (!query) {
     return D3DERR_INVALIDCALL;
+  }
+  if ((flags & QUERY_GETDATA_FLUSH) != 0 && backend_) {
+    upperDevice_->flush();
+    completeUpTo(submittedSequenceId_);
   }
   // TLA+: QuerySeqId / SeqIdMonotone
   // The completed sequence never exceeds submitted query/draw work.

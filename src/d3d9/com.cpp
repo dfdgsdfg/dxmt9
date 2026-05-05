@@ -257,7 +257,7 @@ class Direct3DDevice9Impl final : public IDirect3DDevice9Ex, public RefCounted<D
     return device_->issueQuery(query, begin);
   }
   core::HResult GetQueryData(const std::shared_ptr<core::Query>& query, void* output, size_t size,
-                             u32 flags) const override {
+                             u32 flags) override {
     return device_->getQueryData(query, output, size, flags);
   }
   core::HResult FillSurface(const std::shared_ptr<core::Surface>& surface, const core::Rect* rect,

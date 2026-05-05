@@ -17,6 +17,23 @@ std::optional<dxmt9::core::StateBlockType> stateBlockTypeFromD3D(uint32_t type) 
   }
 }
 
+std::optional<dxmt9::core::QueryType> queryTypeFromD3D(uint32_t type) {
+  switch (type) {
+    case 8:
+      return dxmt9::core::QueryType::Event;
+    case 9:
+      return dxmt9::core::QueryType::Occlusion;
+    case 10:
+      return dxmt9::core::QueryType::Timestamp;
+    case 11:
+      return dxmt9::core::QueryType::TimestampDisjoint;
+    case 12:
+      return dxmt9::core::QueryType::TimestampFreq;
+    default:
+      return std::nullopt;
+  }
+}
+
 }  // namespace
 
 extern "C" D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice* d, uint32_t idx) {
@@ -44,15 +61,11 @@ extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* d
 }
 
 extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* d, uint32_t type) {
-  dxmt9::core::QueryType queryType;
-  switch (type) {
-    case 8: queryType = dxmt9::core::QueryType::Occlusion; break;
-    case 9: queryType = dxmt9::core::QueryType::Timestamp; break;
-    case 10: queryType = dxmt9::core::QueryType::TimestampDisjoint; break;
-    case 11: queryType = dxmt9::core::QueryType::TimestampFreq; break;
-    default: queryType = dxmt9::core::QueryType::Event; break;
+  const auto queryType = queryTypeFromD3D(type);
+  if (!queryType) {
+    return nullptr;
   }
-  auto query = d->iface->CreateQuery(queryType);
+  auto query = d->iface->CreateQuery(*queryType);
   if (!query) {
     return nullptr;
   }
@@ -197,9 +210,13 @@ extern "C" int32_t dxmt9c_query_get_data(D9CQuery* q, void* data, uint32_t size,
 extern "C" uint32_t dxmt9c_query_get_data_size(D9CQuery* q) {
   switch (q->obj->type()) {
     case dxmt9::core::QueryType::Occlusion:
+      return 4;
     case dxmt9::core::QueryType::Timestamp:
     case dxmt9::core::QueryType::TimestampFreq:
       return 8;
+    case dxmt9::core::QueryType::Event:
+    case dxmt9::core::QueryType::TimestampDisjoint:
+      return 4;
     default:
       return 0;
   }
@@ -207,12 +224,13 @@ extern "C" uint32_t dxmt9c_query_get_data_size(D9CQuery* q) {
 
 extern "C" uint32_t dxmt9c_query_get_type(D9CQuery* q) {
   switch (q->obj->type()) {
-    case dxmt9::core::QueryType::Occlusion: return 8;
-    case dxmt9::core::QueryType::Timestamp: return 9;
-    case dxmt9::core::QueryType::TimestampDisjoint: return 10;
-    case dxmt9::core::QueryType::TimestampFreq: return 11;
-    default: return 7;
+    case dxmt9::core::QueryType::Event: return 8;
+    case dxmt9::core::QueryType::Occlusion: return 9;
+    case dxmt9::core::QueryType::Timestamp: return 10;
+    case dxmt9::core::QueryType::TimestampDisjoint: return 11;
+    case dxmt9::core::QueryType::TimestampFreq: return 12;
   }
+  return 0;
 }
 
 extern "C" void dxmt9c_stateblock_addref(D9CStateBlock* s) {

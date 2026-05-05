@@ -2194,7 +2194,7 @@ class Device : public std::enable_shared_from_this<Device> {
 
   HResult issueQuery(const std::shared_ptr<Query>& query, bool begin);
   HResult getQueryData(const std::shared_ptr<Query>& query, void* output, size_t size,
-                       u32 flags) const;
+                       u32 flags);
   void completeUpTo(u64 sequenceId);
   u64 submittedSequenceId() const noexcept { return submittedSequenceId_; }
   u64 completedSequenceId() const noexcept { return completedSequenceId_; }

@@ -460,9 +460,17 @@ extern "C" int32_t dxmt9c_device_set_transform(D9CDevice* d, uint32_t state,
 }
 
 extern "C" int32_t dxmt9c_device_get_transform(D9CDevice* d, uint32_t state, D9CMatrix* m) {
-  (void)d;
-  (void)state;
-  (void)m;
+  if (!d || !m) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  dxmt9::core::Matrix4x4 identity{};
+  identity.m[0] = 1.0f;
+  identity.m[5] = 1.0f;
+  identity.m[10] = 1.0f;
+  identity.m[15] = 1.0f;
+  const auto key = transformStateFromD3D(state);
+  const auto matrix = d->dev().state().transforms.valueOr(key, identity);
+  std::memcpy(m->m, matrix.m.data(), sizeof(m->m));
   return dxmt9::core::D3D_OK;
 }
 

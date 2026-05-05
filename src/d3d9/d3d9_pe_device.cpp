@@ -164,9 +164,18 @@ static D9CRect toR(const RECT& r) {
     return c;
 }
 
+static D9CRect toR(const D3DBOX& b) {
+    D9CRect c; c.left = static_cast<int32_t>(b.Left); c.top = static_cast<int32_t>(b.Top);
+    c.right = static_cast<int32_t>(b.Right); c.bottom = static_cast<int32_t>(b.Bottom);
+    return c;
+}
+
 struct D3D9PeRecorderFlush {
     virtual HRESULT FlushPeRecorderForChild() = 0;
     virtual bool IsStateBlockRecordingForChild() const = 0;
+    virtual void InvalidateStateBlockShadowForChild() = 0;
+    virtual void AddDefaultPoolResourceRefForChild() = 0;
+    virtual void ReleaseDefaultPoolResourceRefForChild() = 0;
     // Phase 20: child COM wrappers (Query, Surface, Buffer) that want to
     // emit fire-and-forget records into the device's pending chunk go
     // through these. The chunk recorder is always enabled; AppendRecordForChild
@@ -187,6 +196,99 @@ static bool isChildStateBlockRecording(D3D9PeRecorderFlush* recorder) {
     return recorder && recorder->IsStateBlockRecordingForChild();
 }
 
+static HRESULT textureLevelDesc(D9CTexture* texture, UINT level, D9CSurfaceDesc* desc) {
+    if (!texture || !desc) return D3DERR_INVALIDCALL;
+    return hr32(dxmt9c_texture_get_level_desc(texture, level, desc));
+}
+
+static bool textureIsManaged(D9CTexture* texture) {
+    D9CSurfaceDesc desc{};
+    return SUCCEEDED(textureLevelDesc(texture, 0, &desc)) && desc.pool == D3DPOOL_MANAGED;
+}
+
+static DWORD setTextureLod(D9CTexture* texture, DWORD& lod, DWORD value) {
+    if (!textureIsManaged(texture)) {
+        return 0;
+    }
+    const DWORD previous = lod;
+    const DWORD levelCount = dxmt9c_texture_get_level_count(texture);
+    lod = std::min<DWORD>(value, levelCount > 0 ? levelCount - 1 : 0);
+    return previous;
+}
+
+static HRESULT setAutoGenFilter(D3DTEXTUREFILTERTYPE& filter, D3DTEXTUREFILTERTYPE value) {
+    if (value == D3DTEXF_NONE) {
+        return D3DERR_INVALIDCALL;
+    }
+    filter = value;
+    return S_OK;
+}
+
+static HRESULT lockTextureBox(D9CTexture* texture, UINT level, D3DLOCKED_BOX* locked,
+                              const D3DBOX* box, DWORD flags, D3D9PeRecorderFlush* recorder) {
+    if (!locked) return D3DERR_INVALIDCALL;
+    const HRESULT flushHr = flushChildRecorder(recorder);
+    if (FAILED(flushHr)) return flushHr;
+
+    D9CLockedRect lockedRect{};
+    D9CRect rect{};
+    if (box) rect = toR(*box);
+    const HRESULT hr = hr32(dxmt9c_texture_lock_rect(texture, level, &lockedRect,
+                                                     box ? &rect : nullptr, flags));
+    if (FAILED(hr)) return hr;
+
+    D9CSurfaceDesc desc{};
+    UINT height = 1;
+    if (box && box->Bottom > box->Top) {
+        height = box->Bottom - box->Top;
+    } else if (SUCCEEDED(textureLevelDesc(texture, level, &desc))) {
+        height = std::max<UINT>(1, desc.height);
+    }
+    locked->RowPitch = lockedRect.pitch;
+    locked->SlicePitch = lockedRect.pitch * static_cast<int>(height);
+    locked->pBits = lockedRect.bits;
+    return S_OK;
+}
+
+static HRESULT unlockTextureBox(D9CTexture* texture, UINT level, D3D9PeRecorderFlush* recorder) {
+    const HRESULT flushHr = flushChildRecorder(recorder);
+    if (FAILED(flushHr)) return flushHr;
+    return hr32(dxmt9c_texture_unlock_rect(texture, level));
+}
+
+static bool surfaceIsDefaultPool(D9CSurface* surface) {
+    if (!surface) return false;
+    D9CSurfaceDesc desc{};
+    return SUCCEEDED(hr32(dxmt9c_surface_get_desc(surface, &desc))) &&
+           desc.pool == D3DPOOL_DEFAULT;
+}
+
+static bool textureIsDefaultPool(D9CTexture* texture) {
+    if (!texture) return false;
+    D9CSurfaceDesc desc{};
+    return SUCCEEDED(textureLevelDesc(texture, 0, &desc)) &&
+           desc.pool == D3DPOOL_DEFAULT;
+}
+
+static bool bufferIsDefaultPool(D9CBuffer* buffer) {
+    if (!buffer) return false;
+    D9CBufferDesc desc{};
+    return SUCCEEDED(hr32(dxmt9c_buffer_get_desc(buffer, &desc))) &&
+           desc.pool == D3DPOOL_DEFAULT;
+}
+
+static void trackDefaultPoolResource(D3D9PeRecorderFlush* recorder, bool& tracked, bool shouldTrack) {
+    if (!recorder || !shouldTrack || tracked) return;
+    tracked = true;
+    recorder->AddDefaultPoolResourceRefForChild();
+}
+
+static void untrackDefaultPoolResource(D3D9PeRecorderFlush* recorder, bool& tracked) {
+    if (!recorder || !tracked) return;
+    tracked = false;
+    recorder->ReleaseDefaultPoolResourceRefForChild();
+}
+
 /* =========================================================================
  * Resource COM wrappers
  * Each wrapper holds a D9C* handle (owns one refcount) and exposes raw()
@@ -201,17 +303,24 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
     IDirect3DDevice9*   device_;
     IUnknown*           container_;
     D3D9PeRecorderFlush* recorder_;
+    HDC                 dc_ = nullptr;
+    bool                defaultPoolTracked_ = false;
     dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9SurfaceImpl(D9CSurface* s,
                     IDirect3DDevice9* device,
                     IUnknown* container,
-                    D3D9PeRecorderFlush* recorder = nullptr)
+                    D3D9PeRecorderFlush* recorder = nullptr,
+                    bool trackDefaultPool = true)
         : s_(s), device_(device), container_(container), recorder_(recorder) {
         if (device_) device_->AddRef();
         if (container_) container_->AddRef();
+        trackDefaultPoolResource(recorder_, defaultPoolTracked_,
+                                 trackDefaultPool && surfaceIsDefaultPool(s_));
     }
     ~D3D9SurfaceImpl() {
+        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+        if (dc_) DeleteDC(dc_);
         dxmt9c_surface_release(s_);
         if (container_) container_->Release();
         if (device_) device_->Release();
@@ -316,11 +425,19 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetDC(HDC* phdc) noexcept override {
         dxmt9DeviceDebugLog("surface_get_dc surface=%p phdc=%p", this, phdc);
-        return E_NOTIMPL;
+        if (!phdc) return D3DERR_INVALIDCALL;
+        if (dc_) return D3DERR_INVALIDCALL;
+        dc_ = CreateCompatibleDC(nullptr);
+        if (!dc_) return E_FAIL;
+        *phdc = dc_;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE ReleaseDC(HDC hdc) noexcept override {
         dxmt9DeviceDebugLog("surface_release_dc surface=%p hdc=%p", this, hdc);
-        return E_NOTIMPL;
+        if (!dc_ || hdc != dc_) return D3DERR_INVALIDCALL;
+        DeleteDC(dc_);
+        dc_ = nullptr;
+        return S_OK;
     }
 };
 
@@ -331,6 +448,9 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
     D9CTexture* t_;
     IDirect3DDevice9* device_;
     D3D9PeRecorderFlush* recorder_;
+    DWORD lod_ = 0;
+    D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
+    bool defaultPoolTracked_ = false;
     dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9TextureImpl(D9CTexture* t,
@@ -338,8 +458,10 @@ public:
                     D3D9PeRecorderFlush* recorder = nullptr)
         : t_(t), device_(device), recorder_(recorder) {
         if (device_) device_->AddRef();
+        trackDefaultPoolResource(recorder_, defaultPoolTracked_, textureIsDefaultPool(t_));
     }
     ~D3D9TextureImpl() {
+        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
         dxmt9c_texture_release(t_);
         if (device_) device_->Release();
     }
@@ -385,13 +507,15 @@ public:
     DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() noexcept override {}
     D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_TEXTURE; }
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return 0; }
+    DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override { return setTextureLod(t_, lod_, lod); }
+    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return textureIsManaged(t_) ? lod_ : 0; }
     DWORD STDMETHODCALLTYPE GetLevelCount() noexcept override {
         return dxmt9c_texture_get_level_count(t_);
     }
-    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE) noexcept override { return S_OK; }
-    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return D3DTEXF_LINEAR; }
+    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE filter) noexcept override {
+        return setAutoGenFilter(autoGenFilter_, filter);
+    }
+    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return autoGenFilter_; }
     void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return;
@@ -468,6 +592,9 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
     D9CTexture* t_;
     IDirect3DDevice9* device_;
     D3D9PeRecorderFlush* recorder_;
+    DWORD lod_ = 0;
+    D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
+    bool defaultPoolTracked_ = false;
     dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9CubeTextureImpl(D9CTexture* t,
@@ -475,8 +602,10 @@ public:
                         D3D9PeRecorderFlush* recorder = nullptr)
         : t_(t), device_(device), recorder_(recorder) {
         if (device_) device_->AddRef();
+        trackDefaultPoolResource(recorder_, defaultPoolTracked_, textureIsDefaultPool(t_));
     }
     ~D3D9CubeTextureImpl() {
+        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
         dxmt9c_texture_release(t_);
         if (device_) device_->Release();
     }
@@ -531,13 +660,15 @@ public:
     DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() noexcept override {}
     D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_CUBETEXTURE; }
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return 0; }
+    DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override { return setTextureLod(t_, lod_, lod); }
+    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return textureIsManaged(t_) ? lod_ : 0; }
     DWORD STDMETHODCALLTYPE GetLevelCount() noexcept override {
         return dxmt9c_texture_get_level_count(t_);
     }
-    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE) noexcept override { return S_OK; }
-    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return D3DTEXF_LINEAR; }
+    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE filter) noexcept override {
+        return setAutoGenFilter(autoGenFilter_, filter);
+    }
+    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return autoGenFilter_; }
     void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return;
@@ -613,6 +744,7 @@ class D3D9VolumeImpl final : public IDirect3DVolume9 {
     IUnknown* container_;
     D3D9PeRecorderFlush* recorder_;
     UINT level_;
+    bool defaultPoolTracked_ = false;
     dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9VolumeImpl(D9CTexture* t,
@@ -624,8 +756,10 @@ public:
         if (t_) dxmt9c_texture_addref(t_);
         if (device_) device_->AddRef();
         if (container_) container_->AddRef();
+        trackDefaultPoolResource(recorder_, defaultPoolTracked_, textureIsDefaultPool(t_));
     }
     ~D3D9VolumeImpl() {
+        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
         if (t_) dxmt9c_texture_release(t_);
         if (container_) container_->Release();
         if (device_) device_->Release();
@@ -689,15 +823,11 @@ public:
         pD->Depth = 1;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX*, const D3DBOX*, DWORD) noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return E_NOTIMPL;
+    HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX* locked, const D3DBOX* box, DWORD flags) noexcept override {
+        return lockTextureBox(t_, level_, locked, box, flags, recorder_);
     }
     HRESULT STDMETHODCALLTYPE UnlockBox() noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return E_NOTIMPL;
+        return unlockTextureBox(t_, level_, recorder_);
     }
 };
 
@@ -708,6 +838,9 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
     D9CTexture* t_;
     IDirect3DDevice9* device_;
     D3D9PeRecorderFlush* recorder_;
+    DWORD lod_ = 0;
+    D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
+    bool defaultPoolTracked_ = false;
     dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9VolumeTextureImpl(D9CTexture* t,
@@ -715,8 +848,10 @@ public:
                           D3D9PeRecorderFlush* recorder = nullptr)
         : t_(t), device_(device), recorder_(recorder) {
         if (device_) device_->AddRef();
+        trackDefaultPoolResource(recorder_, defaultPoolTracked_, textureIsDefaultPool(t_));
     }
     ~D3D9VolumeTextureImpl() {
+        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
         dxmt9c_texture_release(t_);
         if (device_) device_->Release();
     }
@@ -762,13 +897,15 @@ public:
     DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
     void  STDMETHODCALLTYPE PreLoad() noexcept override {}
     D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_VOLUMETEXTURE; }
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return 0; }
+    DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override { return setTextureLod(t_, lod_, lod); }
+    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return textureIsManaged(t_) ? lod_ : 0; }
     DWORD STDMETHODCALLTYPE GetLevelCount() noexcept override {
         return dxmt9c_texture_get_level_count(t_);
     }
-    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE) noexcept override { return S_OK; }
-    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return D3DTEXF_LINEAR; }
+    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE filter) noexcept override {
+        return setAutoGenFilter(autoGenFilter_, filter);
+    }
+    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return autoGenFilter_; }
     void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return;
@@ -795,8 +932,14 @@ public:
         *ppVolume = new D3D9VolumeImpl(t_, device_, static_cast<IDirect3DBaseTexture9*>(this), recorder_, level);
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE LockBox(UINT, D3DLOCKED_BOX*, const D3DBOX*, DWORD) noexcept override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE UnlockBox(UINT) noexcept override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE LockBox(UINT level, D3DLOCKED_BOX* locked, const D3DBOX* box, DWORD flags) noexcept override {
+        if (level >= dxmt9c_texture_get_level_count(t_)) return D3DERR_INVALIDCALL;
+        return lockTextureBox(t_, level, locked, box, flags, recorder_);
+    }
+    HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) noexcept override {
+        if (level >= dxmt9c_texture_get_level_count(t_)) return D3DERR_INVALIDCALL;
+        return unlockTextureBox(t_, level, recorder_);
+    }
     HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX*) noexcept override { return S_OK; }
 };
 
@@ -807,6 +950,7 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
     D9CBuffer* b_;
     IDirect3DDevice9* device_;
     D3D9PeRecorderFlush* recorder_;
+    bool defaultPoolTracked_ = false;
     dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9VertexBufferImpl(D9CBuffer* b,
@@ -814,8 +958,10 @@ public:
                          D3D9PeRecorderFlush* recorder = nullptr)
         : b_(b), device_(device), recorder_(recorder) {
         if (device_) device_->AddRef();
+        trackDefaultPoolResource(recorder_, defaultPoolTracked_, bufferIsDefaultPool(b_));
     }
     ~D3D9VertexBufferImpl() {
+        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
         dxmt9c_buffer_release(b_);
         if (device_) device_->Release();
     }
@@ -895,6 +1041,7 @@ class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
     D9CBuffer* b_;
     IDirect3DDevice9* device_;
     D3D9PeRecorderFlush* recorder_;
+    bool defaultPoolTracked_ = false;
     dxmt9::util::ComPrivateData privateData_{};
 public:
     D3D9IndexBufferImpl(D9CBuffer* b,
@@ -902,8 +1049,10 @@ public:
                         D3D9PeRecorderFlush* recorder = nullptr)
         : b_(b), device_(device), recorder_(recorder) {
         if (device_) device_->AddRef();
+        trackDefaultPoolResource(recorder_, defaultPoolTracked_, bufferIsDefaultPool(b_));
     }
     ~D3D9IndexBufferImpl() {
+        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
         dxmt9c_buffer_release(b_);
         if (device_) device_->Release();
     }
@@ -1267,6 +1416,9 @@ public:
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return flushHr;
         const HRESULT hr = hr32(dxmt9c_stateblock_apply(sb_));
+        if (SUCCEEDED(hr) && recorder_) {
+            recorder_->InvalidateStateBlockShadowForChild();
+        }
         dxmt9DeviceDebugLog("stateblock_apply -> hr=0x%08x", (unsigned)hr);
         return hr;
     }
@@ -1338,7 +1490,7 @@ public:
         dxmt9DeviceDebugLog("swapchain_get_back_buffer sc=%p idx=%u", this, idx);
         D9CSurface* s = dxmt9c_swapchain_get_back_buffer(sc_, idx, 0);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, device_, static_cast<IDirect3DSwapChain9*>(this), recorder_);
+        *ppS = new D3D9SurfaceImpl(s, device_, static_cast<IDirect3DSwapChain9*>(this), recorder_, false);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetRasterStatus(D3DRASTER_STATUS* p) noexcept override {
@@ -1819,6 +1971,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     D3DDEVTYPE   deviceType_ = D3DDEVTYPE_HAL;
     DWORD        behaviorFlags_ = 0;
     bool         extended_ = false;
+    bool         cursorSurfaceSet_ = false;
+    bool         cursorVisible_ = false;
+    bool         deviceNotReset_ = false;
+    uint32_t     defaultPoolResourceRefs_ = 0;
     bool         stateBlockRecording_ = false;
     std::recursive_mutex recorderMutex_{};
 
@@ -1833,6 +1989,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     IDirect3DIndexBuffer9*     indexBuf_        = nullptr;
     IDirect3DVertexDeclaration9* vdecl_         = nullptr;
     DWORD                      fvf_             = 0;
+    IDirect3DSurface9*         cachedBackBuffer0_ = nullptr;
 
     FixedStateTable<kPeRenderStateSlots> renderStateShadow_{};
     FixedStateTable<kPeRenderStateSlots> pendingRenderStates_{};
@@ -1954,6 +2111,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         setRef(vdecl_, (IDirect3DVertexDeclaration9*)nullptr);
         for (auto& rt : rtSlots_)   setRef(rt, (IDirect3DSurface9*)nullptr);
         setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
+        setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
     }
 
     template<typename T>
@@ -3245,6 +3403,19 @@ public:
     bool IsStateBlockRecordingForChild() const noexcept override {
         return stateBlockRecording_;
     }
+    void InvalidateStateBlockShadowForChild() noexcept override {
+        renderStateShadow_.clear();
+        transformShadow_.clear();
+        clearPendingHotState();
+    }
+    void AddDefaultPoolResourceRefForChild() noexcept override {
+        ++defaultPoolResourceRefs_;
+    }
+    void ReleaseDefaultPoolResourceRefForChild() noexcept override {
+        if (defaultPoolResourceRefs_ != 0) {
+            --defaultPoolResourceRefs_;
+        }
+    }
     bool IsChunkRecorderEnabledForChild() const override {
         return true;
     }
@@ -3308,6 +3479,10 @@ public:
 
     HRESULT STDMETHODCALLTYPE TestCooperativeLevel() noexcept override {
         dxmt9DeviceDebugLog("device_test_cooperative_level device=%p", this);
+        if (deviceNotReset_) {
+            dxmt9DeviceDebugLog("device_test_cooperative_level -> device not reset");
+            return D3DERR_DEVICENOTRESET;
+        }
         const HRESULT hr = hr32(dxmt9c_device_test_cooperative_level(dev_));
         dxmt9DeviceDebugLog("device_test_cooperative_level -> hr=0x%08x", (unsigned)hr);
         return hr;
@@ -3393,6 +3568,23 @@ public:
     HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT x, UINT y, IDirect3DSurface9* surface) noexcept override {
         dxmt9DeviceDebugLog("device_set_cursor_properties device=%p x=%u y=%u surface=%p",
                             this, x, y, surface);
+        if (!surface) {
+            return D3DERR_INVALIDCALL;
+        }
+        D3DSURFACE_DESC desc{};
+        const HRESULT hr = surface->GetDesc(&desc);
+        if (FAILED(hr)) {
+            return hr;
+        }
+        const auto isPowerOfTwo = [](UINT value) noexcept -> bool {
+            return value != 0 && (value & (value - 1u)) == 0;
+        };
+        if (desc.Format != D3DFMT_A8R8G8B8 ||
+            !isPowerOfTwo(desc.Width) ||
+            !isPowerOfTwo(desc.Height)) {
+            return D3DERR_INVALIDCALL;
+        }
+        cursorSurfaceSet_ = true;
         return S_OK;
     }
     void    STDMETHODCALLTYPE SetCursorPosition(int x, int y, DWORD flags) noexcept override {
@@ -3401,7 +3593,12 @@ public:
     }
     BOOL    STDMETHODCALLTYPE ShowCursor(BOOL show) noexcept override {
         dxmt9DeviceDebugLog("device_show_cursor device=%p show=%u", this, (unsigned)show);
-        return FALSE;
+        if (!cursorSurfaceSet_) {
+            return FALSE;
+        }
+        const BOOL previous = cursorVisible_ ? TRUE : FALSE;
+        cursorVisible_ = show ? true : false;
+        return previous;
     }
 
     /* ── swap chains ── */
@@ -3461,11 +3658,23 @@ public:
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         releaseAllBound();
+        if (defaultPoolResourceRefs_ != 0) {
+            clearPeStateTracking();
+            stateBlockRecording_ = false;
+            stateBlockRenderStateRestore_.clear();
+            stateBlockTransformRestore_.clear();
+            deviceNotReset_ = true;
+            return D3DERR_INVALIDCALL;
+        }
         clearPeStateTracking();
         stateBlockRecording_ = false;
         stateBlockRenderStateRestore_.clear();
         stateBlockTransformRestore_.clear();
-        return hr32(dxmt9c_device_reset(dev_, &cpp));
+        const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
+        if (SUCCEEDED(hr)) {
+            deviceNotReset_ = false;
+        }
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
@@ -3518,14 +3727,29 @@ public:
             dxmt9c_swapchain_release(chain);
             return D3DERR_INVALIDCALL;
         }
+        if (sc == 0 && idx == 0 && cachedBackBuffer0_) {
+            dxmt9c_surface_release(s);
+            dxmt9c_swapchain_release(chain);
+            cachedBackBuffer0_->AddRef();
+            *ppS = cachedBackBuffer0_;
+            return S_OK;
+        }
         auto* swapchain = new D3D9SwapChainImpl(chain, this, this, extended_);
-        *ppS = new D3D9SurfaceImpl(s, this, static_cast<IDirect3DSwapChain9*>(swapchain), this);
+        auto* surface = new D3D9SurfaceImpl(s, this, static_cast<IDirect3DSwapChain9*>(swapchain), this, false);
+        if (sc == 0 && idx == 0) {
+            setRef(cachedBackBuffer0_, static_cast<IDirect3DSurface9*>(surface));
+        }
+        *ppS = surface;
         swapchain->Release();
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE GetRasterStatus(UINT, D3DRASTER_STATUS* p) noexcept override {
-        if (p) memset(p, 0, sizeof(*p)); return S_OK;
+    HRESULT STDMETHODCALLTYPE GetRasterStatus(UINT swapChain, D3DRASTER_STATUS* p) noexcept override {
+        if (!p || swapChain != 0) {
+            return D3DERR_INVALIDCALL;
+        }
+        memset(p, 0, sizeof(*p));
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetDialogBoxMode(BOOL enableDialogs) noexcept override {
         dxmt9DeviceDebugLog("device_set_dialog_box_mode device=%p enable=%u", this, (unsigned)enableDialogs);
@@ -3856,6 +4080,9 @@ public:
         if (rtSlots_[idx] == pSurf) return S_OK;
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
+        if (idx == 0) {
+            setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
+        }
         setRef(rtSlots_[idx], pSurf);
         pendingRtMask_ |= 1u << idx;
         if (auto* raw = rawSurf(pSurf); raw != nullptr) {
@@ -3870,8 +4097,15 @@ public:
         if (!ppS) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u",
                             this, (unsigned)idx);
+        if (idx == 0 && cachedBackBuffer0_) {
+            cachedBackBuffer0_->AddRef();
+            *ppS = cachedBackBuffer0_;
+            dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> cached backbuffer=%p",
+                                this, (unsigned)idx, static_cast<void*>(*ppS));
+            return S_OK;
+        }
         D9CSurface* s = dxmt9c_device_get_render_target(dev_, idx);
-        *ppS = s ? new D3D9SurfaceImpl(s, this, nullptr, this) : nullptr;
+        *ppS = s ? new D3D9SurfaceImpl(s, this, nullptr, this, false) : nullptr;
         dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> surface=%p",
                             this, (unsigned)idx, ppS ? static_cast<void*>(*ppS) : nullptr);
         return s ? S_OK : D3DERR_NOTFOUND;
@@ -4017,12 +4251,6 @@ public:
         const uint32_t stateKey = static_cast<uint32_t>(state);
         D9CMatrix wireM{};
         if (transformShadow_.get(stateKey, wireM)) {
-            std::memcpy(pM, &wireM, sizeof(wireM));
-            return S_OK;
-        }
-        uint32_t transformSlotIndex = 0;
-        if (FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
-            wireM = identityTransformMatrix();
             std::memcpy(pM, &wireM, sizeof(wireM));
             return S_OK;
         }
@@ -4805,9 +5033,12 @@ public:
     /* ── query ── */
     HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE type,
                                            IDirect3DQuery9** ppQ) noexcept override {
-        if (!ppQ) { /* just checking support */ return S_OK; }
         D9CQuery* q = dxmt9c_device_create_query(dev_, (uint32_t)type);
         if (!q) return D3DERR_NOTAVAILABLE;
+        if (!ppQ) {
+            dxmt9c_query_release(q);
+            return S_OK;
+        }
         *ppQ = new D3D9QueryImpl(q, this, this);
         return S_OK;
     }

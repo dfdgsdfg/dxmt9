@@ -151,7 +151,7 @@ class IDirect3DDevice9 : public IUnknown {
   virtual core::HResult CheckDeviceMultiSampleType(core::Format format, core::MultiSampleType type) const = 0;
   virtual core::HResult IssueQuery(const std::shared_ptr<core::Query>& query, bool begin) = 0;
   virtual core::HResult GetQueryData(const std::shared_ptr<core::Query>& query, void* output, size_t size,
-                                     u32 flags) const = 0;
+                                     u32 flags) = 0;
   virtual core::HResult FillSurface(const std::shared_ptr<core::Surface>& surface, const core::Rect* rect,
                                     core::ColorRGBA color) = 0;
   virtual core::HResult StretchRect(const std::shared_ptr<core::Surface>& src, const core::Rect* srcRect,
