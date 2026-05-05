@@ -234,7 +234,7 @@ flowchart LR
     PEState["PE DeviceState shadow\nD3D9 semantics"] --> REC["recordCommand()\nCanonicalDrawState + DrawRunDesc\ncompact POD records"]
     REC --> POD["PE CommandChunk\nheaders + payload arena\nopaque handles"]
     POD --> IMP["Importer\nvalidate, canonicalize,\nretain handles"]
-    IMP --> IR["ImportedChunk\nrecords + FlatDrawStateView\nresource refs"]
+    IMP --> IR["ImportedChunk\nrecords + FlatDrawStateView\nuniform handle + resource refs"]
     IR --> REPLAY["Replay transform\nrecords + queue state\n→ encoder ops"]
     REPLAY --> ENC["Encode transform\nencoder ops + caches\n→ Metal commands"]
 ```
@@ -345,7 +345,7 @@ Hot-path allocation policy:
 
 ```mermaid
 flowchart TD
-    A["Backend receives draw run\n+ FlatDrawStateView"] --> B{Active encoder type\n== Render?}
+    A["Backend receives draw run\n+ FlatDrawStateView\n+ DrawUniformHandle"] --> B{Active encoder type\n== Render?}
     B -->|No| NEWPASS["End current encoder\nCreate new RenderEncoderData\nwith attachments from draw state RTs"]
     B -->|Yes| C{Same attachments\nas active encoder?}
     C -->|No| NEWPASS

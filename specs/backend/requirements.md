@@ -2,10 +2,10 @@
 
 The backend receives committed command chunks from the core and is responsible for
 translating their canonical draw state/run payloads (`CanonicalDrawState` plus
-`DrawRunDesc`, or imported `FlatDrawStateView` equivalents) and `ClearDesc` /
-`SwapDesc` payloads into correct Metal commands. It knows nothing about D3D9 COM
-objects. `fixture::DrawDesc` is a tests/offline helper only; it is not a production
-backend input contract.
+`DrawRunDesc` and `DrawUniformPayload`, or imported `FlatDrawStateView`
+equivalents) and `ClearDesc` / `SwapDesc` payloads into correct Metal commands.
+It knows nothing about D3D9 COM objects. `fixture::DrawDesc` is a tests/offline
+helper only; it is not a production backend input contract.
 
 ---
 
@@ -98,6 +98,12 @@ binding state, allocator cursors, cache keys, etc.). It must not consume PE COM
 objects, PE `DeviceState` pointers, Objective-C objects from the bridge payload,
 or ad-hoc per-call mutable state that is not owned by the execution chunk or
 queue.
+
+**R-BACK-2.17** Large draw-uniform payloads (shader constants, fixed-function
+matrices, texture transforms, and clip planes) must be stored outside hot draw
+state records and referenced by stable queue-local handles or spans. Hot
+PSO/resource decisions must use hashes and compact flat records, not full constant
+arrays.
 
 **R-BACK-2.16** Replay transforms that derive encoder decisions from imported
 records (pass merge/split, deferred clear application, hazard classification, PSO

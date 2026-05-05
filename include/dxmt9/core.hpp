@@ -1152,14 +1152,30 @@ struct DrawShaderLayoutContext {
   VertexDeclSnapshot vertexDecl{};
   ShaderRef vertexShader{};
   ShaderRef pixelShader{};
+  u32 clipPlaneMask = 0;
+
+  friend bool operator==(const DrawShaderLayoutContext&, const DrawShaderLayoutContext&) = default;
+};
+
+struct DrawUniformPayload {
   VertexShaderConstants vsConst{};
   PixelShaderConstants psConst{};
   Matrix4x4 worldViewProj{};
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
+  u64 hash = 0;
 
-  friend bool operator==(const DrawShaderLayoutContext&, const DrawShaderLayoutContext&) = default;
+  friend bool operator==(const DrawUniformPayload&, const DrawUniformPayload&) = default;
+};
+
+struct DrawUniformHandle {
+  u32 index = 0;
+  u32 generation = 0;
+  u64 hash = 0;
+
+  constexpr bool valid() const noexcept { return generation != 0; }
+  friend constexpr bool operator==(const DrawUniformHandle&, const DrawUniformHandle&) = default;
 };
 
 struct DrawDebugSnapshot {
@@ -1186,12 +1202,15 @@ struct DrawDebugSnapshot {
 struct FlatDrawStateView {
   const FlatDrawStateRecord* hot = nullptr;
   const DrawShaderLayoutContext* shaderLayout = nullptr;
+  const DrawUniformPayload* uniforms = nullptr;
   const DrawDebugSnapshot* debug = nullptr;
 
   constexpr const FlatDrawStateKey& key() const noexcept { return hot->key; }
   constexpr bool hasShaderContext() const noexcept { return shaderLayout != nullptr; }
+  constexpr bool hasUniformPayload() const noexcept { return uniforms != nullptr; }
   constexpr bool hasDebugSnapshot() const noexcept { return debug != nullptr; }
   constexpr const DrawShaderLayoutContext& shaderContext() const noexcept { return *shaderLayout; }
+  constexpr const DrawUniformPayload& uniformPayload() const noexcept { return *uniforms; }
   constexpr const DrawDebugSnapshot& debugSnapshot() const noexcept { return *debug; }
 };
 
@@ -1219,6 +1238,7 @@ struct CanonicalDrawState {
     return FlatDrawStateView{
         .hot = &hot,
         .shaderLayout = &shaderLayout,
+        .uniforms = nullptr,
         .debug = &debug,
     };
   }
@@ -1307,6 +1327,7 @@ struct DrawRunScratchStorage {
 struct DrawRunView {
   std::span<const DrawParam> draws{};
   std::span<const u8> payloadArena{};
+  const DrawUniformPayload* uniforms = nullptr;
 };
 
 // Per-chunk resource retention entry. Mirrors the wire-format D9CChunk
@@ -1337,11 +1358,14 @@ struct DrawRunDesc {
 
  private:
   detail::DrawRunScratchStorage scratch_{}; // packed per-draw args + UP payload bytes
+  DrawUniformPayload uniforms_{};            // cold uniform payload staged into the queue arena
 
   friend void drawRunClear(DrawRunDesc& run);
   friend void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payloadBytes);
+  friend void drawRunSetUniformPayload(DrawRunDesc& run, DrawUniformPayload payload);
   friend bool drawRunAppend(DrawRunDesc& run, DrawParam param, DrawParamPayloadView payload);
   friend DrawRunView drawRunView(const DrawRunDesc& run) noexcept;
+  friend const DrawUniformPayload& drawRunUniformPayload(const DrawRunDesc& run) noexcept;
   friend bool drawRunEmpty(const DrawRunDesc& run) noexcept;
   friend std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept;
   friend std::size_t drawRunPayloadSize(const DrawRunDesc& run) noexcept;
@@ -1753,6 +1777,7 @@ DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& arg
 FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc);
 FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc);
 DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc& desc);
+DrawUniformPayload makeDrawUniformPayload(const DrawDesc& desc);
 DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStateRecord& hot);
 
 }  // namespace fixture
@@ -1764,6 +1789,8 @@ void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payload
 bool drawRunAppend(DrawRunDesc& run, DrawParam param,
                    DrawParamPayloadView payload = {});
 DrawRunView drawRunView(const DrawRunDesc& run) noexcept;
+void drawRunSetUniformPayload(DrawRunDesc& run, DrawUniformPayload payload);
+const DrawUniformPayload& drawRunUniformPayload(const DrawRunDesc& run) noexcept;
 bool drawRunEmpty(const DrawRunDesc& run) noexcept;
 std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept;
 std::size_t drawRunPayloadSize(const DrawRunDesc& run) noexcept;
@@ -2148,7 +2175,10 @@ class Device : public std::enable_shared_from_this<Device> {
   // importer when N consecutive D9C_COMMAND_RECORD_DRAW_* records
   // carry no state delta — saves N-1 canonical state builds and keeps
   // queue-side draw submission on the flat hot-state path.
+  DrawRunDesc beginDrawRunFromCurrentState(DrawParam first, std::size_t drawCapacity,
+                                           std::size_t payloadBytes = 0);
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
+  HResult submitDrawRun(DrawRunDesc desc);
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;
@@ -2200,6 +2230,7 @@ class Device : public std::enable_shared_from_this<Device> {
     bool valid = false;
     FlatDrawStateRecord hot{};
     DrawShaderLayoutContext shaderLayout{};
+    DrawUniformPayload uniforms{};
   };
 
   void invalidateDrawStateCache() noexcept;

@@ -63,8 +63,10 @@ void testBuildDrawUniformsCopiesShaderConstants() {
 
   const auto hot = makeFlatDrawStateRecord(desc);
   const auto shaderLayout = makeDrawShaderLayoutContext(desc);
+  const auto uniformPayload = makeDrawUniformPayload(desc);
   const auto uniforms =
-      dxmt9::state::buildDrawUniforms(FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout});
+      dxmt9::state::buildDrawUniforms(
+          FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout, .uniforms = &uniformPayload});
 
   checkEq(uniforms.vsFloatConst[3], desc.vsConst.float4[3], "VS float constants copied");
   checkEq(uniforms.vsIntConst[2], desc.vsConst.int4[2], "VS integer constants copied");
@@ -96,8 +98,10 @@ void testBuildDrawUniformsViewportAndRenderStateValues() {
 
   const auto hot = makeFlatDrawStateRecord(desc);
   const auto shaderLayout = makeDrawShaderLayoutContext(desc);
+  const auto uniformPayload = makeDrawUniformPayload(desc);
   const auto uniforms =
-      dxmt9::state::buildDrawUniforms(FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout});
+      dxmt9::state::buildDrawUniforms(
+          FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout, .uniforms = &uniformPayload});
 
   checkNear(uniforms.halfPixelFixup[0], 1.0f / 320.0f, 1.0e-6f, "half-pixel X fixup");
   checkNear(uniforms.halfPixelFixup[1], 1.0f / 240.0f, 1.0e-6f, "half-pixel Y fixup");

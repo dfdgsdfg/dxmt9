@@ -90,10 +90,11 @@ may then verify that selected packets produce expected pixels, but acceptance of
 the packet transform itself comes from the deterministic observer log.
 
 Production backend tests must target the same inputs used by the runtime command
-path: `CanonicalDrawState` plus `DrawRunDesc`, or imported `FlatDrawStateView`
-views created by the packet importer. `fixture::DrawDesc` remains available only
-for tests/offline fixtures that need compact expected data; it must not be used
-as evidence that the production backend accepts `DrawDesc` directly.
+path: `CanonicalDrawState` plus `DrawRunDesc` and `DrawUniformPayload`, or
+imported `FlatDrawStateView` views created by the packet importer. `fixture::DrawDesc`
+remains available only for tests/offline fixtures that need compact expected data;
+it must not be used as evidence that the production backend accepts `DrawDesc`
+directly.
 
 Required observer assertions:
 

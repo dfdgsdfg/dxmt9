@@ -37,12 +37,13 @@ using core::RS_Z_WRITE_ENABLE;
 
 DrawUniforms buildDrawUniforms(core::FlatDrawStateView state) {
   const auto& hot = *state.hot;
-  const auto& shader = state.shaderContext();
-  const auto& vsConst = shader.vsConst;
-  const auto& psConst = shader.psConst;
-  const auto& worldViewProj = shader.worldViewProj;
-  const auto& textureTransforms = shader.textureTransforms;
-  const auto& clipPlanes = shader.clipPlanes;
+  const core::DrawUniformPayload fallbackUniforms{};
+  const auto& payload = state.hasUniformPayload() ? state.uniformPayload() : fallbackUniforms;
+  const auto& vsConst = payload.vsConst;
+  const auto& psConst = payload.psConst;
+  const auto& worldViewProj = payload.worldViewProj;
+  const auto& textureTransforms = payload.textureTransforms;
+  const auto& clipPlanes = payload.clipPlanes;
   const auto& rs = hot.renderStates;
   DrawUniforms uniforms;
   uniforms.vsFloatConst = vsConst.float4;

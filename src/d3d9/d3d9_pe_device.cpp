@@ -1482,6 +1482,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     static constexpr uint32_t kPeTransformSlots =
         kPeTransformWorldBaseSlot + kPeTransformWorldSlots;
 
+    struct RecordHandleRange {
+        std::uint32_t first = 0;
+        std::uint32_t count = 0;
+    };
+
+    using WireHandleEntryList = std::vector<D9CCommandChunkWireHandleEntry>;
+
     template<std::size_t Slots>
     struct FixedStateTable {
         std::array<uint32_t, Slots> values{};
@@ -1889,6 +1896,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // and cleared with the chunk.
     std::unordered_set<uint64_t> chunkHandlesByKind_[5]{};
     std::vector<std::uint8_t> pendingCommandWireBlob_{};
+    std::vector<RecordHandleRange> recordHandleRangesScratch_{};
+    WireHandleEntryList chunkWireHandleScratch_{};
+    WireHandleEntryList recordWireHandleScratch_{};
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
@@ -2237,8 +2247,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         chunkHandlesByKind_[kind].insert(handle);
     }
 
-    using WireHandleEntryList = std::vector<D9CCommandChunkWireHandleEntry>;
-
     static bool appendRecordWireHandle(WireHandleEntryList& handles,
                                        uint32_t kind,
                                        uint64_t handle) {
@@ -2504,6 +2512,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
+    static void appendWireBlobBytes(std::vector<std::uint8_t>& wireBlob,
+                                    const void* data,
+                                    std::size_t bytes) {
+        if (bytes == 0) {
+            return;
+        }
+        const auto* first = static_cast<const std::uint8_t*>(data);
+        wireBlob.insert(wireBlob.end(), first, first + bytes);
+    }
+
     HRESULT flushPendingCommandChunk() {
         if (pendingCommandRecordCount_ == 0) {
             return S_OK;
@@ -2522,34 +2540,32 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // duplicates across records are allowed so each header can point at
         // exactly the subset it needs without falling back to the full chunk
         // table.
-        struct RecordHandleRange {
-            std::uint32_t first = 0;
-            std::uint32_t count = 0;
-        };
-        std::vector<RecordHandleRange> recordHandleRanges;
-        recordHandleRanges.reserve(pendingCommandWireRecords_.size());
-        WireHandleEntryList scratchHandles;
+        recordHandleRangesScratch_.clear();
+        recordHandleRangesScratch_.reserve(pendingCommandWireRecords_.size());
+        chunkWireHandleScratch_.clear();
         std::uint64_t wireHandleCount64 = 0;
         for (auto& record : pendingCommandWireRecords_) {
-            WireHandleEntryList recordHandles;
-            if (!collectRecordWireHandles(record, recordHandles)) {
+            recordWireHandleScratch_.clear();
+            if (!collectRecordWireHandles(record, recordWireHandleScratch_)) {
                 return D3DERR_INVALIDCALL;
             }
             if (wireHandleCount64 >
-                static_cast<size_t>(0xffffffffull) - recordHandles.size()) {
+                0xffffffffull - recordWireHandleScratch_.size()) {
                 return D3DERR_INVALIDCALL;
             }
             record.firstHandle =
                 static_cast<std::uint32_t>(wireHandleCount64);
             record.handleCount =
-                static_cast<std::uint32_t>(recordHandles.size());
-            recordHandleRanges.push_back(RecordHandleRange{
+                static_cast<std::uint32_t>(recordWireHandleScratch_.size());
+            recordHandleRangesScratch_.push_back(RecordHandleRange{
                 .first = record.firstHandle,
                 .count = record.handleCount,
             });
-            scratchHandles.insert(
-                scratchHandles.end(), recordHandles.begin(), recordHandles.end());
-            wireHandleCount64 += recordHandles.size();
+            chunkWireHandleScratch_.insert(
+                chunkWireHandleScratch_.end(),
+                recordWireHandleScratch_.begin(),
+                recordWireHandleScratch_.end());
+            wireHandleCount64 += recordWireHandleScratch_.size();
         }
         const auto wireHandleCount =
             static_cast<std::uint32_t>(wireHandleCount64);
@@ -2572,8 +2588,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return D3DERR_INVALIDCALL;
         }
 
-        pendingCommandWireBlob_.assign(
-            static_cast<size_t>(wireBlobSize), std::uint8_t{0});
         D9CCommandChunkWireHeader wireHeader{};
         wireHeader.version = D9C_COMMAND_CHUNK_WIRE_VERSION;
         wireHeader.headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
@@ -2587,46 +2601,53 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         wireHeader.payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset);
         wireHeader.payloadArenaSize = payloadArenaSize;
 
-        auto* const wireBlobData = pendingCommandWireBlob_.data();
-        std::memcpy(wireBlobData, &wireHeader, sizeof(wireHeader));
-
         std::uint32_t nextHandle = 0;
         for (std::size_t recordIndex = 0;
              recordIndex < pendingCommandWireRecords_.size();
              ++recordIndex) {
             auto& wireRecord = pendingCommandWireRecords_[recordIndex];
-            const auto& recordHandles = recordHandleRanges[recordIndex];
+            const auto& recordHandles = recordHandleRangesScratch_[recordIndex];
             if (wireRecord.firstHandle != nextHandle ||
                 wireRecord.firstHandle != recordHandles.first ||
                 wireRecord.handleCount != recordHandles.count) {
                 return D3DERR_INVALIDCALL;
-            }
-
-            std::memcpy(
-                wireBlobData + wireHeader.recordTableOffset +
-                    recordIndex * D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
-                &wireRecord,
-                sizeof(wireRecord));
-
-            if (recordHandles.count != 0) {
-                std::memcpy(
-                    wireBlobData + wireHeader.handleTableOffset +
-                        static_cast<std::uint64_t>(wireRecord.firstHandle) *
-                            D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
-                    scratchHandles.data() + recordHandles.first,
-                    static_cast<std::size_t>(recordHandles.count) *
-                        sizeof(scratchHandles[0]));
             }
             nextHandle += wireRecord.handleCount;
         }
         if (nextHandle != wireHandleCount) {
             return D3DERR_INVALIDCALL;
         }
-        if (payloadArenaSize != 0) {
-            std::memcpy(
-                wireBlobData + wireHeader.payloadArenaOffset,
-                pendingCommandBytes_.data(),
-                payloadArenaSize);
+        if (chunkWireHandleScratch_.size() != wireHandleCount) {
+            return D3DERR_INVALIDCALL;
+        }
+
+        pendingCommandWireBlob_.clear();
+        pendingCommandWireBlob_.reserve(static_cast<std::size_t>(wireBlobSize));
+        appendWireBlobBytes(
+            pendingCommandWireBlob_, &wireHeader, sizeof(wireHeader));
+        if (pendingCommandWireBlob_.size() != wireHeader.recordTableOffset) {
+            return D3DERR_INVALIDCALL;
+        }
+        appendWireBlobBytes(
+            pendingCommandWireBlob_,
+            pendingCommandWireRecords_.data(),
+            static_cast<std::size_t>(recordTableBytes));
+        if (pendingCommandWireBlob_.size() != wireHeader.handleTableOffset) {
+            return D3DERR_INVALIDCALL;
+        }
+        appendWireBlobBytes(
+            pendingCommandWireBlob_,
+            chunkWireHandleScratch_.data(),
+            static_cast<std::size_t>(handleTableBytes));
+        if (pendingCommandWireBlob_.size() != wireHeader.payloadArenaOffset) {
+            return D3DERR_INVALIDCALL;
+        }
+        appendWireBlobBytes(
+            pendingCommandWireBlob_,
+            pendingCommandBytes_.data(),
+            payloadArenaSize);
+        if (pendingCommandWireBlob_.size() != static_cast<std::size_t>(wireBlobSize)) {
+            return D3DERR_INVALIDCALL;
         }
 
         D9CCommandChunk chunk{};
@@ -2646,6 +2667,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             for (auto& set : chunkHandlesByKind_) {
                 set.clear();
             }
+            recordHandleRangesScratch_.clear();
+            chunkWireHandleScratch_.clear();
+            recordWireHandleScratch_.clear();
         }
         return hr;
     }

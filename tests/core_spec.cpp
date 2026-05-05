@@ -132,6 +132,7 @@ struct TextureSurfaceRecord {
 
 struct RecordedDraw {
   CanonicalDrawState state{};
+  DrawUniformPayload uniforms{};
   FlatDrawStateRecord hot{};
   DrawParam param{};
   std::vector<u8> payloadArena;
@@ -139,6 +140,7 @@ struct RecordedDraw {
 
 struct RecordedDrawRun {
   CanonicalDrawState state{};
+  DrawUniformPayload uniforms{};
   FlatDrawStateRecord hot{};
   std::vector<DrawParam> draws;
   std::vector<u8> payloadArena;
@@ -502,6 +504,7 @@ struct RecordingBackend final : BackendDevice {
     const auto view = drawRunView(desc);
     RecordedDrawRun run{};
     run.state = desc.state;
+    run.uniforms = view.uniforms ? *view.uniforms : DrawUniformPayload{};
     run.hot = desc.state.hot;
     run.draws.assign(view.draws.begin(), view.draws.end());
     run.payloadArena.assign(view.payloadArena.begin(), view.payloadArena.end());
@@ -509,6 +512,7 @@ struct RecordingBackend final : BackendDevice {
     for (const auto& param : run.draws) {
       RecordedDraw draw{};
       draw.state = run.state;
+      draw.uniforms = run.uniforms;
       draw.hot = run.hot;
       draw.param = param;
       draw.payloadArena = run.payloadArena;
@@ -1481,11 +1485,11 @@ void testDeviceCoreFlow() {
   checkEq(flatStateOr(draw0.hot.renderStates, RS_LIGHTING, 0u), 1u, "draw0 lighting state");
   checkEq(flatStateOr(draw0.hot.renderStates, RS_ALPHA_TEST_ENABLE, 0u), 1u,
           "draw0 alpha test state");
-  checkEq(draw0.state.shaderLayout.clipPlaneMask, 1u, "draw0 clip plane mask");
-  checkNear(draw0.state.shaderLayout.clipPlanes[0][0], 0.5f, 1.0e-6f, "draw0 clip plane x");
-  checkNear(draw0.state.shaderLayout.clipPlanes[0][1], 0.0f, 1.0e-6f, "draw0 clip plane y");
-  checkNear(draw0.state.shaderLayout.clipPlanes[0][2], 0.0f, 1.0e-6f, "draw0 clip plane z");
-  checkNear(draw0.state.shaderLayout.clipPlanes[0][3], -1.0f, 1.0e-6f, "draw0 clip plane w");
+  checkEq(draw0.uniforms.clipPlaneMask, 1u, "draw0 clip plane mask");
+  checkNear(draw0.uniforms.clipPlanes[0][0], 0.5f, 1.0e-6f, "draw0 clip plane x");
+  checkNear(draw0.uniforms.clipPlanes[0][1], 0.0f, 1.0e-6f, "draw0 clip plane y");
+  checkNear(draw0.uniforms.clipPlanes[0][2], 0.0f, 1.0e-6f, "draw0 clip plane z");
+  checkNear(draw0.uniforms.clipPlanes[0][3], -1.0f, 1.0e-6f, "draw0 clip plane w");
   checkEq(draw0.hot.colorAttachments[0].handle, primaryChain->backBuffer()->handle(),
           "draw0 render target");
   checkEq(draw0.hot.colorAttachments[0].sampleCount, 4u, "draw0 render target sample count");

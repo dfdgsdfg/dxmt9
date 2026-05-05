@@ -108,12 +108,13 @@ u32 compatFlagsForDraw(FlatDrawStateView draw, const std::function<u32(Handle)>&
       flags |= CompatFlagSrgb;
     }
   }
-  if (draw.hasShaderContext()) {
-    for (size_t stage = 0; stage < draw.shaderContext().textureTransforms.size(); ++stage) {
+  if (draw.hasUniformPayload()) {
+    const auto& uniformPayload = draw.uniformPayload();
+    for (size_t stage = 0; stage < uniformPayload.textureTransforms.size(); ++stage) {
       if (!hot.textures[stage]) {
         continue;
       }
-      if (!metalcompat::matrixIsIdentity(draw.shaderContext().textureTransforms[stage])) {
+      if (!metalcompat::matrixIsIdentity(uniformPayload.textureTransforms[stage])) {
         flags |= CompatFlagProjected;
         break;
       }

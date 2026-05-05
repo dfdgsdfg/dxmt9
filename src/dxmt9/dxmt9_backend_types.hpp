@@ -32,6 +32,12 @@ struct DrawRunCommandRecord {
   std::uint32_t paramCount = 0;
   std::uint32_t payloadOffset = 0;
   std::uint32_t payloadSize = 0;
+  DrawUniformHandle uniformHandle{};
+};
+
+struct DrawUniformPayloadRecord {
+  DrawUniformHandle handle{};
+  DrawUniformPayload payload{};
 };
 
 struct MetalCommandHeader {
@@ -43,6 +49,7 @@ struct MetalCommandView {
   MetalCommandKind kind = MetalCommandKind::DrawRun;
   const DrawRunCommandRecord* drawRunRecord = nullptr;
   const CanonicalDrawState* drawState = nullptr;
+  const DrawUniformPayload* drawUniformPayload = nullptr;
   std::span<const DrawParam> drawParams{};
   std::span<const u8> drawPayloadBytes{};
   const ClearDesc* clear = nullptr;
@@ -76,6 +83,7 @@ struct ChunkSlot {
   // old fat record shape where every command carried every possible payload.
   std::vector<MetalCommandHeader> commandHeaders;
   std::vector<CanonicalDrawState> drawStates;
+  std::vector<DrawUniformPayloadRecord> drawUniformPayloads;
   std::vector<DrawParam> drawParams;
   std::vector<u8> drawPayloadArena;
   std::vector<DrawRunCommandRecord> drawRunRecords;
@@ -97,6 +105,7 @@ struct ChunkSlot {
   void clearCommands() {
     commandHeaders.clear();
     drawStates.clear();
+    drawUniformPayloads.clear();
     drawParams.clear();
     drawPayloadArena.clear();
     drawRunRecords.clear();
@@ -111,6 +120,7 @@ struct ChunkSlot {
   void appendDrawRun(DrawRunDesc drawRun) {
     const auto view = drawRunView(drawRun);
     const auto stateIndex = static_cast<std::uint32_t>(drawStates.size());
+    const auto uniformIndex = static_cast<std::uint32_t>(drawUniformPayloads.size());
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     const bool canUseSlotArena =
         drawPayloadArena.size() <= std::numeric_limits<std::uint32_t>::max() &&
@@ -122,8 +132,18 @@ struct ChunkSlot {
       return;
     }
     const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
+    const auto& uniformPayload = drawRunUniformPayload(drawRun);
+    const DrawUniformHandle uniformHandle{
+        .index = uniformIndex,
+        .generation = uniformIndex + 1u,
+        .hash = uniformPayload.hash,
+    };
 
     drawStates.push_back(std::move(drawRun.state));
+    drawUniformPayloads.push_back(DrawUniformPayloadRecord{
+        .handle = uniformHandle,
+        .payload = uniformPayload,
+    });
 
     const auto payloadBytes = view.payloadArena;
     if (!payloadBytes.empty()) {
@@ -138,6 +158,7 @@ struct ChunkSlot {
         .paramCount = static_cast<std::uint32_t>(drawParams.size() - firstParam),
         .payloadOffset = payloadOffset,
         .payloadSize = static_cast<std::uint32_t>(payloadBytes.size()),
+        .uniformHandle = uniformHandle,
     });
   }
 
@@ -197,6 +218,12 @@ struct ChunkSlot {
         }
         if (record.stateIndex < drawStates.size()) {
           view.drawState = &drawStates[record.stateIndex];
+        }
+        if (record.uniformHandle.index < drawUniformPayloads.size()) {
+          const auto& uniformRecord = drawUniformPayloads[record.uniformHandle.index];
+          if (uniformRecord.handle == record.uniformHandle) {
+            view.drawUniformPayload = &uniformRecord.payload;
+          }
         }
         if (record.firstParam <= drawParams.size() &&
             record.paramCount <= drawParams.size() - record.firstParam) {

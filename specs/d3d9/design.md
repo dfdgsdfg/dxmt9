@@ -361,7 +361,7 @@ a draw run:
 ```
 CanonicalDrawState {
     FlatDrawStateRecord       hot           // PSO, attachments, bindings, hashes
-    DrawShaderLayoutContext   shaderLayout  // shader refs, constants, vertex layout
+    DrawShaderLayoutContext   shaderLayout  // shader refs, clip variant, vertex layout
     DrawDebugSnapshot         debug         // cold diagnostics only
 }
 
@@ -369,6 +369,7 @@ DrawRunDesc {
     CanonicalDrawState state
     DrawParam          draws[]              // no TRIANGLEFAN; decomposed by core
     uint8_t            payloadArena[]       // UP vertex/index data ranges
+    DrawUniformPayload uniforms             // constants, matrices, clip planes
 }
 ```
 
@@ -376,9 +377,12 @@ The PE wire format does not need to carry this full structure in every draw
 record. The canonical command stream carries a compact state delta plus draw
 payload; the unix importer applies those deltas in order to a server-side shadow.
 The resulting effective state is exposed to the backend as `FlatDrawStateView`
-plus draw parameters before encoding. No D3D9 COM objects are referenced across
-the bridge - only opaque backend handles. `fixture::DrawDesc` is retained for
-tests/offline transforms only and is not a production backend input.
+plus draw parameters before encoding. The queue stores large uniform data in a
+draw-uniform payload arena and records `{index, generation, hash}` handles on
+draw-run records, so hot PSO/resource decisions do not carry full constant arrays.
+No D3D9 COM objects are referenced across the bridge - only opaque backend handles.
+`fixture::DrawDesc` is retained for tests/offline transforms only and is not a
+production backend input.
 `DXMT9_PE_DRAW_FULL_SNAPSHOT=1` may force self-contained draw packets, but that is a
 debug/stress mode because it increases wire size and disables cheap run coalescing.
 

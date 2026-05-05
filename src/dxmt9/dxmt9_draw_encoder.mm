@@ -1443,7 +1443,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       case Kind::DrawRun: {
-        if (!command.drawState || core::drawRunDrawCount(command) == 0) break;
+        if (!command.drawState || !command.drawUniformPayload ||
+            core::drawRunDrawCount(command) == 0) break;
         const auto& drawState = *command.drawState;
         const auto drawParams = command.drawParams;
         // Compact draw-run: state bound from base ONCE (render-pass +
@@ -1453,7 +1454,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // Draw/DrawRun records on the same Metal render encoder.
         flushBlit();
         assertEncoderLifecycleInvariant();
-        const auto stateView = drawState.view();
+        auto stateView = drawState.view();
+        stateView.uniforms = command.drawUniformPayload;
         const auto drawKey = makeAttachmentKey(drawState.hot);
         const auto drawReadBloom = makeDrawReadBloom(stateView);
         if (pendingClear.has_value()) {

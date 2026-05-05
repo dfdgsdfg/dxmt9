@@ -134,6 +134,16 @@ u64 hashClipPlanes(const std::array<ClipPlane, kMaxClipPlanes>& planes) {
   return hash;
 }
 
+u64 hashDrawUniformPayload(const DrawUniformPayload& payload) {
+  u64 hash = hashCombine(kFnvOffset, hashTrivial(payload.vsConst));
+  hash = hashCombine(hash, hashTrivial(payload.psConst));
+  hash = hashCombine(hash, hashTrivial(payload.worldViewProj));
+  hash = hashCombine(hash, hashTextureTransforms(payload.textureTransforms));
+  hash = hashCombine(hash, payload.clipPlaneMask);
+  hash = hashCombine(hash, hashClipPlanes(payload.clipPlanes));
+  return hash;
+}
+
 u64 hashViewportScissor(const ViewportScissor& viewport) {
   u64 hash = hashCombine(kFnvOffset, hashTrivial(viewport.viewport));
   hash = hashCombine(hash, hashTrivial(viewport.scissor));
@@ -3425,13 +3435,20 @@ DrawShaderLayoutContext makeDrawShaderLayoutContextFromState(const DeviceState& 
   context.vertexDecl = makeVertexDeclSnapshotFromState(state);
   context.vertexShader = makeVertexShaderRefFromState(state);
   context.pixelShader = makePixelShaderRefFromState(state);
-  context.vsConst = state.vsConst;
-  context.psConst = state.psConst;
-  context.worldViewProj = makeWorldViewProjFromState(state);
-  context.textureTransforms = makeTextureTransformsFromState(state);
   context.clipPlaneMask = clipPlaneMaskFromState(state);
-  context.clipPlanes = makeClipPlanesFromState(state, context.clipPlaneMask, context.worldViewProj);
   return context;
+}
+
+DrawUniformPayload makeDrawUniformPayloadFromState(const DeviceState& state, u32 clipPlaneMask) {
+  DrawUniformPayload payload{};
+  payload.vsConst = state.vsConst;
+  payload.psConst = state.psConst;
+  payload.worldViewProj = makeWorldViewProjFromState(state);
+  payload.textureTransforms = makeTextureTransformsFromState(state);
+  payload.clipPlaneMask = clipPlaneMask;
+  payload.clipPlanes = makeClipPlanesFromState(state, clipPlaneMask, payload.worldViewProj);
+  payload.hash = hashDrawUniformPayload(payload);
+  return payload;
 }
 
 namespace fixture {
@@ -3439,6 +3456,7 @@ namespace fixture {
 DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args) {
   DrawDesc desc;
   const auto shaderLayout = makeDrawShaderLayoutContextFromState(state);
+  const auto uniforms = makeDrawUniformPayloadFromState(state, shaderLayout.clipPlaneMask);
   desc.primitiveType = canonicalPrimitiveType(args.primitiveType);
   desc.primitiveCount = args.primitiveCount;
   desc.startVertex = args.startVertex;
@@ -3463,13 +3481,13 @@ DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& arg
   desc.rts.depthStencil = state.depthStencil;
   desc.viewport = makeViewportScissorFromState(state);
   desc.clipPlaneMask = shaderLayout.clipPlaneMask;
-  desc.worldViewProj = shaderLayout.worldViewProj;
-  desc.textureTransforms = shaderLayout.textureTransforms;
-  desc.clipPlanes = shaderLayout.clipPlanes;
+  desc.worldViewProj = uniforms.worldViewProj;
+  desc.textureTransforms = uniforms.textureTransforms;
+  desc.clipPlanes = uniforms.clipPlanes;
   desc.vertexShader = shaderLayout.vertexShader;
   desc.pixelShader = shaderLayout.pixelShader;
-  desc.vsConst = shaderLayout.vsConst;
-  desc.psConst = shaderLayout.psConst;
+  desc.vsConst = uniforms.vsConst;
+  desc.psConst = uniforms.psConst;
   return desc;
 }
 
@@ -3570,6 +3588,7 @@ namespace {
 
 FlatDrawStateKey makeFlatDrawStateKeyFromState(const DeviceState& state,
                                                const DrawShaderLayoutContext& shaderLayout,
+                                               const DrawUniformPayload& uniforms,
                                                const ViewportScissor& viewport) {
   FlatDrawStateKey key{};
 
@@ -3620,18 +3639,19 @@ FlatDrawStateKey makeFlatDrawStateKeyFromState(const DeviceState& state,
   }
 
   key.viewportHash = hashViewportScissor(viewport);
-  key.worldViewProjHash = hashTrivial(shaderLayout.worldViewProj);
-  key.textureTransformsHash = hashTextureTransforms(shaderLayout.textureTransforms);
+  key.worldViewProjHash = hashTrivial(uniforms.worldViewProj);
+  key.textureTransformsHash = hashTextureTransforms(uniforms.textureTransforms);
   key.clipPlaneMask = shaderLayout.clipPlaneMask;
-  key.clipPlanesHash = hashClipPlanes(shaderLayout.clipPlanes);
+  key.clipPlanesHash = hashClipPlanes(uniforms.clipPlanes);
   return key;
 }
 
 FlatDrawStateRecord makeFlatDrawStateRecordFromState(const DeviceState& state,
                                                      const DrawShaderLayoutContext& shaderLayout,
+                                                     const DrawUniformPayload& uniforms,
                                                      const ViewportScissor& viewport) {
   FlatDrawStateRecord record{};
-  record.key = makeFlatDrawStateKeyFromState(state, shaderLayout, viewport);
+  record.key = makeFlatDrawStateKeyFromState(state, shaderLayout, uniforms, viewport);
   record.streamBuffers = record.key.streamBuffers;
   record.streamOffsets = record.key.streamOffsets;
   record.streamStrides = record.key.streamStrides;
@@ -3670,13 +3690,20 @@ DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc& desc) {
   context.vertexDecl = desc.vertexDecl;
   context.vertexShader = desc.vertexShader;
   context.pixelShader = desc.pixelShader;
-  context.vsConst = desc.vsConst;
-  context.psConst = desc.psConst;
-  context.worldViewProj = desc.worldViewProj;
-  context.textureTransforms = desc.textureTransforms;
   context.clipPlaneMask = desc.clipPlaneMask;
-  context.clipPlanes = desc.clipPlanes;
   return context;
+}
+
+DrawUniformPayload makeDrawUniformPayload(const DrawDesc& desc) {
+  DrawUniformPayload payload{};
+  payload.vsConst = desc.vsConst;
+  payload.psConst = desc.psConst;
+  payload.worldViewProj = desc.worldViewProj;
+  payload.textureTransforms = desc.textureTransforms;
+  payload.clipPlaneMask = desc.clipPlaneMask;
+  payload.clipPlanes = desc.clipPlanes;
+  payload.hash = hashDrawUniformPayload(payload);
+  return payload;
 }
 
 DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStateRecord& hot) {
@@ -3725,8 +3752,9 @@ DrawDebugSnapshot makeDrawDebugSnapshot(const DrawCallArgs& args, const FlatDraw
 
 CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args) {
   auto shaderLayout = makeDrawShaderLayoutContextFromState(state);
+  auto uniforms = makeDrawUniformPayloadFromState(state, shaderLayout.clipPlaneMask);
   const auto viewport = makeViewportScissorFromState(state);
-  auto hot = makeFlatDrawStateRecordFromState(state, shaderLayout, viewport);
+  auto hot = makeFlatDrawStateRecordFromState(state, shaderLayout, uniforms, viewport);
   auto debug = makeDrawDebugSnapshot(args, hot);
   return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug)};
 }
@@ -3883,7 +3911,17 @@ DrawRunView drawRunView(const DrawRunDesc& run) noexcept {
   return DrawRunView{
       .draws = drawParamStorageSpan(run.scratch_.draws),
       .payloadArena = drawPayloadStorageSpan(run.scratch_.payload),
+      .uniforms = &run.uniforms_,
   };
+}
+
+void drawRunSetUniformPayload(DrawRunDesc& run, DrawUniformPayload payload) {
+  payload.hash = hashDrawUniformPayload(payload);
+  run.uniforms_ = std::move(payload);
+}
+
+const DrawUniformPayload& drawRunUniformPayload(const DrawRunDesc& run) noexcept {
+  return run.uniforms_;
 }
 
 bool drawRunEmpty(const DrawRunDesc& run) noexcept {
@@ -3942,6 +3980,7 @@ bool drawRunUsesBoundIndexBuffer(std::span<const DrawParam> draws,
 }
 
 DrawRunDesc makeDrawRunDescFromCanonical(CanonicalDrawState state,
+                                         DrawUniformPayload uniforms,
                                          std::span<const DrawParam> draws,
                                          std::span<const DrawParamPayloadView> payloads) {
   DrawRunDesc run{};
@@ -3952,6 +3991,7 @@ DrawRunDesc makeDrawRunDescFromCanonical(CanonicalDrawState state,
   const auto& first = draws.front();
   const auto firstPayload = drawPayloadAt(payloads, 0);
   run.state = std::move(state);
+  drawRunSetUniformPayload(run, std::move(uniforms));
   run.state.debug = makeDrawDebugSnapshot(
       DrawCallArgs{first.primitiveType, first.primitiveCount, first.startVertex,
                    first.baseVertexIndex, first.startIndex, first.indexType},
@@ -3984,11 +4024,21 @@ DrawRunDesc makeDrawRunDescFromState(DeviceState baseState,
   if (!drawRunUsesBoundIndexBuffer(draws, payloads)) {
     baseState.indexBuffer.reset();
   }
-  auto state = makeCanonicalDrawStateFromState(
-      baseState, DrawCallArgs{draws.front().primitiveType, draws.front().primitiveCount,
-                              draws.front().startVertex, draws.front().baseVertexIndex,
-                              draws.front().startIndex, draws.front().indexType});
-  return makeDrawRunDescFromCanonical(std::move(state), draws, payloads);
+  auto shaderLayout = makeDrawShaderLayoutContextFromState(baseState);
+  auto uniforms = makeDrawUniformPayloadFromState(baseState, shaderLayout.clipPlaneMask);
+  const auto viewport = makeViewportScissorFromState(baseState);
+  auto hot = makeFlatDrawStateRecordFromState(baseState, shaderLayout, uniforms, viewport);
+  auto debug = makeDrawDebugSnapshot(
+      DrawCallArgs{draws.front().primitiveType, draws.front().primitiveCount,
+                   draws.front().startVertex, draws.front().baseVertexIndex,
+                   draws.front().startIndex, draws.front().indexType},
+      hot);
+  CanonicalDrawState state{
+      std::move(hot),
+      std::move(shaderLayout),
+      std::move(debug),
+  };
+  return makeDrawRunDescFromCanonical(std::move(state), std::move(uniforms), draws, payloads);
 }
 
 void Device::invalidateDrawStateCache() noexcept {
@@ -4009,8 +4059,9 @@ const Device::CachedBaseDrawState& Device::cachedBaseDrawState(bool includeIndex
     baseState.indexBuffer.reset();
   }
   cache.shaderLayout = makeDrawShaderLayoutContextFromState(baseState);
+  cache.uniforms = makeDrawUniformPayloadFromState(baseState, cache.shaderLayout.clipPlaneMask);
   const auto viewport = makeViewportScissorFromState(baseState);
-  cache.hot = makeFlatDrawStateRecordFromState(baseState, cache.shaderLayout, viewport);
+  cache.hot = makeFlatDrawStateRecordFromState(baseState, cache.shaderLayout, cache.uniforms, viewport);
   cache.generation = drawStateGeneration_;
   cache.valid = true;
   return cache;
@@ -4032,7 +4083,17 @@ DrawRunDesc Device::makeDrawRunDescFromCurrentState(
                        draws.front().startIndex, draws.front().indexType},
           cached.hot),
   };
-  return makeDrawRunDescFromCanonical(std::move(state), draws, payloads);
+  return makeDrawRunDescFromCanonical(std::move(state), cached.uniforms, draws, payloads);
+}
+
+DrawRunDesc Device::beginDrawRunFromCurrentState(DrawParam first, std::size_t drawCapacity,
+                                                 std::size_t payloadBytes) {
+  auto run = makeDrawRunDescFromCurrentState(std::span<const DrawParam>(&first, 1));
+  if (drawRunEmpty(run)) {
+    return {};
+  }
+  drawRunReserve(run, drawCapacity, payloadBytes);
+  return run;
 }
 
 HResult Device::clear(const ClearDesc& desc) {
@@ -4135,6 +4196,14 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
     return D3D_OK;
   }
   submitDrawRunInternal(makeDrawRunDescFromCurrentState(draws));
+  return D3D_OK;
+}
+
+HResult Device::submitDrawRun(DrawRunDesc desc) {
+  if (drawRunEmpty(desc)) {
+    return D3D_OK;
+  }
+  submitDrawRunInternal(std::move(desc));
   return D3D_OK;
 }
 
