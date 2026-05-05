@@ -4,6 +4,7 @@
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_blit_encoders.hpp"
 
+#include "dxmt9/assert.hpp"
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_device.hpp"
 #include "dxmt9_debug_trace.hpp"
@@ -1266,26 +1267,65 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   bool hasActiveRender = false;
   std::optional<core::ClearDesc> pendingClear;
 
+  // TLA+: EncoderLifecycle variable binding:
+  // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
+  // activeRT    := activeKey while activeRenderEncoder is live; NoRT otherwise.
+  // hazardFlag  := activeWriteBloom.overlaps(next draw/read bloom), consumed immediately by a split.
+  // opCount     := progress through the slot.commands replay loop below.
+  // The current blit helpers open and end short-lived encoders internally, so
+  // activeBlitEncoder is normally None but remains the local binding for a
+  // future chunk-scoped blit encoder.
+  auto assertEncoderLifecycleInvariant = [&] {
+    DXMT_ASSERT(!(activeRenderEncoder && activeBlitEncoder));
+    DXMT_ASSERT(hasActiveRender == static_cast<bool>(activeRenderEncoder));
+  };
+
+  auto assertNoActiveEncoder = [&] {
+    assertEncoderLifecycleInvariant();
+    DXMT_ASSERT(!activeRenderEncoder);
+    DXMT_ASSERT(!activeBlitEncoder);
+    DXMT_ASSERT(!hasActiveRender);
+  };
+
   auto flushRender = [&] {
     if (activeRenderEncoder) {
+      // TLA+: EncoderLifecycle / EndEncoder(Render)
+      DXMT_ASSERT(hasActiveRender);
+      DXMT_ASSERT(!activeBlitEncoder);
       activeRenderEncoder.endEncoding();
       activeRenderEncoder = {};
       hasActiveRender = false;
+      assertEncoderLifecycleInvariant();
     }
   };
 
   auto flushBlit = [&] {
     if (activeBlitEncoder) {
+      // TLA+: EncoderLifecycle / EndEncoder(Blit)
+      DXMT_ASSERT(!activeRenderEncoder);
+      DXMT_ASSERT(!hasActiveRender);
       activeBlitEncoder.endEncoding();
       activeBlitEncoder = {};
+      assertEncoderLifecycleInvariant();
     }
   };
 
   auto startRenderPass = [&](const core::DrawDesc& draw, const std::optional<core::ClearDesc>& clear) {
+    // TLA+: EncoderLifecycle / BeginRender(rt)
+    // Callers split through None before opening a new render encoder.
+    assertNoActiveEncoder();
     activeRenderEncoder = beginRenderPass(ctx, commandBuffer, draw, clear);
     hasActiveRender = static_cast<bool>(activeRenderEncoder);
     activeKey = makeAttachmentKey(draw.rts);
     activeWriteBloom = makeAttachmentBloom(draw.rts);
+    assertEncoderLifecycleInvariant();
+  };
+
+  auto assertHelperEncoderPrecondition = [&] {
+    // TLA+: EncoderLifecycle / BeginBlit
+    // Blit-style helpers own any Metal encoder they open and end it before
+    // returning; encodeChunk must have ended its active encoder first.
+    assertNoActiveEncoder();
   };
 
   auto flushPendingClear = [&] {
@@ -1313,7 +1353,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   };
 
   using Kind = core::MetalCommandRecord::Kind;
-  for (const auto& command : slot.commands) {
+  for (std::size_t commandIndex = 0; commandIndex < slot.commands.size(); ++commandIndex) {
+    const auto& command = slot.commands[commandIndex];
+    // TLA+: EncoderLifecycle / opCount observes command replay progress.
     switch (command.kind) {
       case Kind::Clear:
         flushRender();
@@ -1328,6 +1370,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       case Kind::Draw: {
         flushBlit();
+        assertEncoderLifecycleInvariant();
         const auto drawKey = makeAttachmentKey(command.draw.rts);
         const auto drawReadBloom = makeDrawReadBloom(command.draw);
         if (pendingClear.has_value()) {
@@ -1338,14 +1381,50 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             pendingClear.reset();
           } else {
             flushPendingClear();
-            if (!hasActiveRender || activeKey != drawKey || activeWriteBloom.overlaps(drawReadBloom)) {
+            const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
+            const bool hazardDetected =
+                hasActiveRender && !renderTargetChanged && activeWriteBloom.overlaps(drawReadBloom);
+            if (!hasActiveRender || renderTargetChanged || hazardDetected) {
+              if (renderTargetChanged) {
+                // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
+                DXMT_ASSERT(hasActiveRender);
+              }
+              if (hazardDetected) {
+                // TLA+: EncoderLifecycle / HazardDetected
+                DXMT_ASSERT(hasActiveRender);
+                DXMT_ASSERT(activeKey == drawKey);
+              }
               flushRender();
               startRenderPass(command.draw, std::nullopt);
+            } else {
+              // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
+              DXMT_ASSERT(hasActiveRender);
+              DXMT_ASSERT(activeKey == drawKey);
+              DXMT_ASSERT(!activeWriteBloom.overlaps(drawReadBloom));
             }
           }
-        } else if (!hasActiveRender || activeKey != drawKey || activeWriteBloom.overlaps(drawReadBloom)) {
-          flushRender();
-          startRenderPass(command.draw, std::nullopt);
+        } else {
+          const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
+          const bool hazardDetected =
+              hasActiveRender && !renderTargetChanged && activeWriteBloom.overlaps(drawReadBloom);
+          if (!hasActiveRender || renderTargetChanged || hazardDetected) {
+            if (renderTargetChanged) {
+              // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
+              DXMT_ASSERT(hasActiveRender);
+            }
+            if (hazardDetected) {
+              // TLA+: EncoderLifecycle / HazardDetected
+              DXMT_ASSERT(hasActiveRender);
+              DXMT_ASSERT(activeKey == drawKey);
+            }
+            flushRender();
+            startRenderPass(command.draw, std::nullopt);
+          } else {
+            // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
+            DXMT_ASSERT(hasActiveRender);
+            DXMT_ASSERT(activeKey == drawKey);
+            DXMT_ASSERT(!activeWriteBloom.overlaps(drawReadBloom));
+          }
         }
         encodeDraw(ctx, commandBuffer, activeRenderEncoder, command.draw, slot.seqId);
         commandBufferHasWork = true;
@@ -1360,6 +1439,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // the per-draw resource-rebinding optimization on the encoder
         // side follows as a separate step (Phase 3-E).
         flushBlit();
+        assertEncoderLifecycleInvariant();
         const auto& base = command.drawRun.base;
         const auto drawKey = makeAttachmentKey(base.rts);
         const auto drawReadBloom = makeDrawReadBloom(base);
@@ -1371,14 +1451,50 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             pendingClear.reset();
           } else {
             flushPendingClear();
-            if (!hasActiveRender || activeKey != drawKey || activeWriteBloom.overlaps(drawReadBloom)) {
+            const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
+            const bool hazardDetected =
+                hasActiveRender && !renderTargetChanged && activeWriteBloom.overlaps(drawReadBloom);
+            if (!hasActiveRender || renderTargetChanged || hazardDetected) {
+              if (renderTargetChanged) {
+                // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
+                DXMT_ASSERT(hasActiveRender);
+              }
+              if (hazardDetected) {
+                // TLA+: EncoderLifecycle / HazardDetected
+                DXMT_ASSERT(hasActiveRender);
+                DXMT_ASSERT(activeKey == drawKey);
+              }
               flushRender();
               startRenderPass(base, std::nullopt);
+            } else {
+              // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
+              DXMT_ASSERT(hasActiveRender);
+              DXMT_ASSERT(activeKey == drawKey);
+              DXMT_ASSERT(!activeWriteBloom.overlaps(drawReadBloom));
             }
           }
-        } else if (!hasActiveRender || activeKey != drawKey || activeWriteBloom.overlaps(drawReadBloom)) {
-          flushRender();
-          startRenderPass(base, std::nullopt);
+        } else {
+          const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
+          const bool hazardDetected =
+              hasActiveRender && !renderTargetChanged && activeWriteBloom.overlaps(drawReadBloom);
+          if (!hasActiveRender || renderTargetChanged || hazardDetected) {
+            if (renderTargetChanged) {
+              // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
+              DXMT_ASSERT(hasActiveRender);
+            }
+            if (hazardDetected) {
+              // TLA+: EncoderLifecycle / HazardDetected
+              DXMT_ASSERT(hasActiveRender);
+              DXMT_ASSERT(activeKey == drawKey);
+            }
+            flushRender();
+            startRenderPass(base, std::nullopt);
+          } else {
+            // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
+            DXMT_ASSERT(hasActiveRender);
+            DXMT_ASSERT(activeKey == drawKey);
+            DXMT_ASSERT(!activeWriteBloom.overlaps(drawReadBloom));
+          }
         }
         // Phase 3-E: bind BaseDrawState ONCE on iter 0, then issue-only
         // path on iters 1..N — the Metal render encoder retains
@@ -1444,31 +1560,41 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       case Kind::SurfaceCopy:
         flushPendingClear();
         flushRender();
+        assertHelperEncoderPrecondition();
         dxmt9::encoders::encodeSurfaceCopy(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                            ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                            command.surfaceCopy);
+        assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;
       case Kind::StretchRect:
         flushPendingClear();
         flushRender();
+        assertHelperEncoderPrecondition();
         dxmt9::encoders::encodeStretchRect(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                             ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                             command.stretchRect);
+        assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;
       case Kind::Readback:
         flushPendingClear();
         flushRender();
+        assertHelperEncoderPrecondition();
         dxmt9::encoders::encodeReadback(commandBuffer, ctx.pool, command.readback);
+        assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;
       case Kind::ColorFill:
         flushPendingClear();
         flushRender();
+        // TLA+: EncoderLifecycle / BeginRender(rt)
+        // ColorFill owns a short-lived helper render encoder and ends it before returning.
+        assertNoActiveEncoder();
         dxmt9::encoders::encodeColorFill(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                           ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                           command.colorFill);
+        assertNoActiveEncoder();
         commandBufferHasWork = true;
         break;
       case Kind::Present:

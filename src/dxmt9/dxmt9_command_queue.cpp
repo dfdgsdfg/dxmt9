@@ -858,6 +858,7 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
 }
 
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
+  // TLA+: PresentFrameLatency / CommitPresent.
   perf::countSubmitPresent();
   core::SwapDesc queuedDesc = desc;
   if (queuedDesc.presenter && asyncAcquirePresentOnSubmit()) {
@@ -919,6 +920,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
 }
 
 void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency) {
+  // TLA+: PresentFrameLatency / BeginPresentWait + CommitPendingPresent.
   if (presentSeqId == 0) {
     return;
   }

@@ -326,6 +326,34 @@ void traceQueueSlotsEvent(const char* event,
                           std::span<const ChunkSlot> slots,
                           const char* extra = nullptr);
 
+/*
+ * TLA+: QueueLifecycleRefinement
+ *
+ * Variable mapping:
+ *   writingSlot               -> *SubmissionBinding::writingSlot
+ *   writeIndex                -> *SubmissionBinding::writeIndex
+ *   nextSeqId                 -> *SubmissionBinding::nextSeqId
+ *   readySlots                -> *SubmissionBinding::readySlots
+ *   completedSeqQueue         -> *SubmissionBinding::completedSeqQueue
+ *   pendingCompletion         -> pendingCompletion_
+ *   inflightCount             -> *SubmissionBinding::inflightCount
+ *   completedSeqId            -> *SubmissionBinding::completedSeqId
+ *   lastCommittedSeqId        -> *SubmissionBinding::lastCommittedSeqId
+ *   stop                      -> *SubmissionBinding::stop
+ *   slotState[s]              -> SubmissionBinding::slots[s].state
+ *   slotSeqId[s]              -> SubmissionBinding::slots[s].seqId
+ *   slotHasCommands[s]        -> !SubmissionBinding::slots[s].commands.empty()
+ *
+ * TLA+: PresentFrameLatency
+ *
+ * Variable mapping:
+ *   presentCompletedSeqId     -> *SubmissionBinding::presentCompletedSeqId
+ *   present completion queue  -> *SubmissionBinding::completedPresentSeqQueue
+ *
+ * Debug assertions in assertQueueLifecycleInvariants() and
+ * assertPendingCompletionInvariantsLocked() are the executable binding for
+ * the safety invariants in both modules.
+ */
 class QueueLifecycleController {
  public:
   struct SubmissionBinding {
@@ -351,34 +379,47 @@ class QueueLifecycleController {
   };
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
+  // TLA+: WriterAcquire, WriterWaitBegin, WriterWaitEnd.
   bool ensureWriterSlot(std::unique_lock<std::mutex>& lock, size_t inflightLimit);
+  // TLA+: Present enqueue + CommitPublish for a present-bearing chunk.
   void presentAndCommit(std::unique_lock<std::mutex>& lock,
                         size_t inflightLimit,
                         const SwapDesc& present,
                         Handle sourceHandle,
                         const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
+  // TLA+: CommitPublish followed by waitForSequence(lastCommittedSeqId).
   void flushAndWait(std::unique_lock<std::mutex>& lock,
                     size_t inflightLimit,
                     const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
+  // TLA+: CommitEmpty or CommitPublish.
   bool commitCurrentChunk(std::unique_lock<std::mutex>& lock,
                           size_t inflightLimit,
                           const std::function<void(const ChunkSlot&)>& onBeforePublish = {});
+  // TLA+: EncodeDequeue.
   bool dequeueReadySlot(std::unique_lock<std::mutex>& lock, size_t& slotIndex, ChunkSlot& slotCopy);
+  // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
   bool runEncodeIteration(
       std::unique_lock<std::mutex>& lock,
       const std::function<std::optional<QueueSubmissionRecord>(size_t, const ChunkSlot&)>& encodeFn,
       const std::function<void(u64)>& onInlineComplete = {});
+  // TLA+: present-bearing metadata append before CommitPublish.
   void appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
+  // TLA+: EncodeSubmitToGpu.
   void submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,
                           size_t slotIndex,
                           u64 seqId,
                           std::span<const MetalCommandRecord> commands,
                           const char* context = "queue");
+  // TLA+: EncodeCompleteInline.
   void completeInlineChunk(size_t slotIndex, u64 seqId);
+  // TLA+: FinishDequeue, and PresentComplete for eligible present seq IDs.
   bool drainCompletedSequence(std::unique_lock<std::mutex>& lock, u64& seqId);
+  // TLA+: FinishDequeue followed by ReclaimFree.
   bool runFinishIteration(std::unique_lock<std::mutex>& lock,
                           const std::function<void(u64)>& onAfterFinish = {});
+  // TLA+: ReclaimFree.
   void reclaimCompletedGpuSlots(u64 seqId);
+  // TLA+: BeginWaitForSequence / EndWaitForSequence.
   void waitForSequence(std::unique_lock<std::mutex>& lock, u64 targetSeqId);
 
  private:

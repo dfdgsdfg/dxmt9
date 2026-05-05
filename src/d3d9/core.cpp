@@ -2463,6 +2463,28 @@ Query::Query(QueryType type) : type_(type) {
   }
 }
 
+/*
+ * TLA+: QuerySeqId binding
+ *   QueryIds[q]       -> each core::Query instance.
+ *   qIssuedSeqId[q]  -> Query::issuedSequenceId_.
+ *   currentSeqId     -> Device::submittedSequenceId_ + 1 before assignment;
+ *                       the assigned seqId is submittedSequenceId_ after ++.
+ *   completedSeqId   -> Device::completedSequenceId_.
+ *   qState[q]        -> derived at GetData: unresolved while
+ *                       completedSeqId < qIssuedSeqId[q], resolved at the
+ *                       S_OK/data path once completedSeqId >= qIssuedSeqId[q].
+ *   pendingFlush     -> caller-side Query::GetData(FLUSH) recorder/bridge
+ *                       flush before this core query read observes the fence.
+ *
+ * Action mapping:
+ *   IssueQuery       -> Device::issueQuery() assigns the seqId; Query::end()
+ *                       stores it as qIssuedSeqId for D3DISSUE_END.
+ *   GetDataFlush    -> Query::getData() unresolved FLUSH branch returns
+ *                       S_FALSE after the synchronous flush boundary.
+ *   GetDataSOK      -> Query::getData() resolved branch guarded by
+ *                       completedSeqId >= qIssuedSeqId[q].
+ *   GPUComplete     -> Device::completeUpTo() advances completedSeqId.
+ */
 void Query::begin(u64 sequenceId) {
   active_ = true;
   issuedSequenceId_ = sequenceId;
@@ -2494,13 +2516,20 @@ HRESULT Query::getData(void* output, size_t size, u32 flags, u64 completedSequen
 
   if (completedSequenceId < issuedSequenceId_) {
     if ((flags & QUERY_GETDATA_FLUSH) != 0) {
+      // TLA+: QuerySeqId / GetDataFlush
+      // The FLUSH caller has committed pending query records before this
+      // read; the fence is still unresolved, so the poll reports S_FALSE.
+      // TLA+: QuerySeqId / NoDeadlockOnFlushSpin
+      // A repeated FLUSH spin observes progress through completedSequenceId.
       return S_FALSE;
     }
     return S_FALSE;
   }
 
-  // QueryResolutionSafety: a resolved query is only reported once the GPU has
-  // completed the chunk that issued it.
+  // TLA+: QuerySeqId / GetDataSOK
+  // TLA+: QuerySeqId / QueryResolutionSafety
+  // A resolved query is only reported once the GPU has completed the chunk
+  // that issued it.
   DXMT_ASSERT(completedSequenceId >= issuedSequenceId_);
 
   if (type_ == QueryType::Event) {
@@ -3916,9 +3945,13 @@ HResult Device::issueQuery(const std::shared_ptr<Query>& query, bool begin) {
   if (!query) {
     return D3DERR_INVALIDCALL;
   }
+  // TLA+: QuerySeqId / IssueQuery
+  // The command stream assigns the next seqId, and D3DISSUE_END records that
+  // seqId as qIssuedSeqId for the query fence.
   ++submittedSequenceId_;
-  // SeqIdSafety: queries advance the submission sequence but never allow the
-  // completed sequence to move ahead of it.
+  // TLA+: QuerySeqId / SeqIdMonotone
+  // Queries advance the submission sequence but never allow the completed
+  // sequence to move ahead of it.
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
   if (begin) {
     query->begin(submittedSequenceId_);
@@ -3943,12 +3976,16 @@ HResult Device::getQueryData(const std::shared_ptr<Query>& query, void* output, 
   if (!query) {
     return D3DERR_INVALIDCALL;
   }
-  // SeqIdSafety: the completed sequence never exceeds the submitted sequence.
+  // TLA+: QuerySeqId / SeqIdMonotone
+  // The completed sequence never exceeds submitted query/draw work.
   DXMT_ASSERT(completedSequenceId_ <= submittedSequenceId_);
   return query->getData(output, size, flags, completedSequenceId_);
 }
 
 void Device::completeUpTo(u64 sequenceId) {
+  // TLA+: QuerySeqId / SeqIdMonotone
+  // GPUComplete advances completedSeqId monotonically and keeps it bounded by
+  // the submitted sequence cursor.
   DXMT_ASSERT(sequenceId >= completedSequenceId_);
   completedSequenceId_ = std::max(completedSequenceId_, sequenceId);
   DXMT_ASSERT(completedSequenceId_ <= submittedSequenceId_);

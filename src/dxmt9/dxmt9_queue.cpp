@@ -458,6 +458,7 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
 
 bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lock,
                                                 size_t inflightLimit) {
+  // TLA+: QueueLifecycleRefinement / WriterAcquire.
   auto* writingSlot = submissionBinding_.writingSlot;
   auto* writeIndex = submissionBinding_.writeIndex;
   auto* inflightCount = submissionBinding_.inflightCount;
@@ -506,6 +507,7 @@ void QueueLifecycleController::presentAndCommit(
     const SwapDesc& present,
     Handle sourceHandle,
     const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+  // TLA+: PresentFrameLatency / CommitPresent.
   if (!ensureWriterSlot(lock, inflightLimit)) {
     return;
   }
@@ -517,6 +519,7 @@ void QueueLifecycleController::flushAndWait(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
     const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+  // TLA+: QueueLifecycleRefinement / CommitPublish then WaitForSequence.
   (void)commitCurrentChunk(lock, inflightLimit, onBeforePublish);
 
   auto* nextSeqId = submissionBinding_.nextSeqId;
@@ -528,6 +531,7 @@ bool QueueLifecycleController::commitCurrentChunk(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
     const std::function<void(const ChunkSlot&)>& onBeforePublish) {
+  // TLA+: QueueLifecycleRefinement / CommitEmpty or CommitPublish.
   auto* writingSlot = submissionBinding_.writingSlot;
   auto* writeIndex = submissionBinding_.writeIndex;
   auto* nextSeqId = submissionBinding_.nextSeqId;
@@ -595,6 +599,7 @@ bool QueueLifecycleController::commitCurrentChunk(
 bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lock,
                                                 size_t& slotIndex,
                                                 ChunkSlot& slotCopy) {
+  // TLA+: QueueLifecycleRefinement / EncodeDequeue.
   auto* readySlots = submissionBinding_.readySlots;
   auto* encodeCv = submissionBinding_.encodeCv;
   auto* stop = submissionBinding_.stop;
@@ -621,6 +626,7 @@ bool QueueLifecycleController::runEncodeIteration(
     std::unique_lock<std::mutex>& lock,
     const std::function<std::optional<QueueSubmissionRecord>(size_t, const ChunkSlot&)>& encodeFn,
     const std::function<void(u64)>& onInlineComplete) {
+  // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
   size_t slotIndex = 0;
   ChunkSlot slotCopy;
   if (!dequeueReadySlot(lock, slotIndex, slotCopy)) {
@@ -653,6 +659,7 @@ bool QueueLifecycleController::runEncodeIteration(
 }
 
 void QueueLifecycleController::appendPresentCommand(const SwapDesc& present, Handle sourceHandle) {
+  // TLA+: PresentFrameLatency / CommitPresent metadata lane.
   auto* writingSlot = submissionBinding_.writingSlot;
   if (!writingSlot || !writingSlot->has_value()) {
     return;
@@ -674,6 +681,7 @@ void QueueLifecycleController::submitEncodedChunk(WMT::Reference<WMT::CommandBuf
                                                   u64 seqId,
                                                   std::span<const MetalCommandRecord> commands,
                                                   const char* context) {
+  // TLA+: QueueLifecycleRefinement / EncodeSubmitToGpu.
   QueueSubmissionRecord record;
   record.commandBuffer = std::move(commandBuffer);
   record.slotIndex = slotIndex;
@@ -684,6 +692,7 @@ void QueueLifecycleController::submitEncodedChunk(WMT::Reference<WMT::CommandBuf
 }
 
 void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) {
+  // TLA+: QueueLifecycleRefinement / EncodeCompleteInline.
   if (slotIndex >= submissionBinding_.slots.size()) {
     return;
   }
@@ -713,6 +722,7 @@ void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) 
 
 bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mutex>& lock,
                                                       u64& seqId) {
+  // TLA+: QueueLifecycleRefinement / FinishDequeue.
   auto* completedSeqQueue = submissionBinding_.completedSeqQueue;
   auto* finishCv = submissionBinding_.finishCv;
   auto* stop = submissionBinding_.stop;
@@ -762,6 +772,7 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
 
 bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& lock,
                                                   const std::function<void(u64)>& onAfterFinish) {
+  // TLA+: FinishDequeue followed by ReclaimFree.
   u64 seqId = 0;
   if (!drainCompletedSequence(lock, seqId)) {
     return false;
@@ -774,6 +785,7 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
 }
 
 void QueueLifecycleController::reclaimCompletedGpuSlots(u64 seqId) {
+  // TLA+: QueueLifecycleRefinement / ReclaimFree.
   bool reclaimed = false;
   auto& slots = submissionBinding_.slots;
   for (size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
@@ -795,6 +807,7 @@ void QueueLifecycleController::reclaimCompletedGpuSlots(u64 seqId) {
 
 void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& lock,
                                                u64 targetSeqId) {
+  // TLA+: QueueLifecycleRefinement / BeginWaitForSequence + EndWaitForSequence.
   auto* completedSeqId = submissionBinding_.completedSeqId;
   auto* finishCv = submissionBinding_.finishCv;
   auto* stop = submissionBinding_.stop;

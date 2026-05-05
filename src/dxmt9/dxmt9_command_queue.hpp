@@ -224,7 +224,24 @@ class CommandQueue {
                     std::function<void()> completionLoop);
   void stopThreads();
 
-  // ─── Chunk-ring + sync state (public for QueueLifecycleController) ─
+  // --- TLA-backed chunk-ring + sync state ----------------------------
+  //
+  // TLA+: QueueLifecycleRefinement
+  //   nextSeqId_          -> nextSeqId
+  //   completedSeqId_     -> completedSeqId
+  //   lastCommittedSeqId_ -> lastCommittedSeqId
+  //   slots_              -> slotState / slotSeqId / slotHasCommands
+  //   writingSlot_        -> writingSlot
+  //   writeIndex_         -> writeIndex
+  //   inflightCount_      -> inflightCount
+  //   readySlots_         -> readySlots
+  //   completedSeqQueue_  -> completedSeqQueue
+  //
+  // TLA+: PresentFrameLatency
+  //   presentDequeuedSeqId_       -> encode progress diagnostic lane
+  //   completedPresentSeqQueue_   -> command-completed present tokens
+  //   presentCompletedSeqId_      -> presentCompletedSeqId
+  //
   // These are raw-pointer-bound into queueLifecycle_ via bindSelfLifecycle.
   // Callers that need to read completedSeqId_ (e.g., DeviceImpl's
   // mapBuffer wait rule) treat them as read-only data guarded by mutex_.
