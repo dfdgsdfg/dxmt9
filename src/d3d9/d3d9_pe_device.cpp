@@ -2650,8 +2650,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return hr;
     }
 
-    HRESULT appendCommandRecord(const void* data, size_t bytes) {
-        if (!data || bytes == 0 || bytes > 0xffffffffull) {
+    template<typename WriteFn>
+    HRESULT appendCommandRecordDirect(uint32_t type, size_t bytes, WriteFn write) {
+        if (bytes == 0 || bytes > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
         }
         if (pendingCommandRecordCount_ != 0 &&
@@ -2661,18 +2662,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             if (FAILED(flushHr)) return flushHr;
         }
 
-        const auto* raw = static_cast<const std::uint8_t*>(data);
         const auto payloadOffset = pendingCommandBytes_.size();
         if (payloadOffset > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
         }
-        pendingCommandBytes_.insert(pendingCommandBytes_.end(), raw, raw + bytes);
+        pendingCommandBytes_.resize(payloadOffset + bytes);
+        write(pendingCommandBytes_.data() + payloadOffset);
         D9CCommandChunkWireRecordHeader wireRecord{};
-        if (bytes >= sizeof(D9CCommandRecordHeader)) {
-            D9CCommandRecordHeader legacyHeader{};
-            std::memcpy(&legacyHeader, data, sizeof(legacyHeader));
-            wireRecord.type = legacyHeader.type;
-        }
+        wireRecord.type = type;
         wireRecord.flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE;
         wireRecord.payloadOffset = static_cast<std::uint32_t>(payloadOffset);
         wireRecord.payloadSize = static_cast<std::uint32_t>(bytes);
@@ -2686,6 +2683,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return flushPendingCommandChunk();
         }
         return S_OK;
+    }
+
+    HRESULT appendCommandRecord(const void* data, size_t bytes) {
+        if (!data) {
+            return D3DERR_INVALIDCALL;
+        }
+        uint32_t type = 0;
+        if (bytes >= sizeof(D9CCommandRecordHeader)) {
+            D9CCommandRecordHeader legacyHeader{};
+            std::memcpy(&legacyHeader, data, sizeof(legacyHeader));
+            type = legacyHeader.type;
+        }
+        return appendCommandRecordDirect(
+            type, bytes, [data, bytes](std::uint8_t* dst) {
+                std::memcpy(dst, data, bytes);
+            });
     }
 
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
@@ -2752,12 +2765,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         header.packet.vertexDataSize = vertexBytes;
         header.header.size = sizeof(D9CCommandRecordDrawPrimitiveUP) + vertexBytes;
 
-        std::vector<std::uint8_t> record(header.header.size);
-        std::memcpy(record.data(), &header, sizeof(header));
-        if (vertexBytes != 0) {
-            std::memcpy(record.data() + header.packet.vertexDataOffset, data, vertexBytes);
-        }
-        return appendCommandRecord(record.data(), record.size());
+        return appendCommandRecordDirect(
+            header.header.type, header.header.size,
+            [&header, data, vertexBytes](std::uint8_t* record) {
+                std::memcpy(record, &header, sizeof(header));
+                if (vertexBytes != 0) {
+                    std::memcpy(record + header.packet.vertexDataOffset, data, vertexBytes);
+                }
+            });
     }
 
     HRESULT appendDrawIndexedPrimitiveUPRecord(D3DPRIMITIVETYPE type,
@@ -2801,15 +2816,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         header.header.size = sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) +
                              indexBytes + vertexBytes;
 
-        std::vector<std::uint8_t> record(header.header.size);
-        std::memcpy(record.data(), &header, sizeof(header));
-        if (indexBytes != 0) {
-            std::memcpy(record.data() + header.packet.indexDataOffset, indexData, indexBytes);
-        }
-        if (vertexBytes != 0) {
-            std::memcpy(record.data() + header.packet.vertexDataOffset, vertexData, vertexBytes);
-        }
-        return appendCommandRecord(record.data(), record.size());
+        return appendCommandRecordDirect(
+            header.header.type, header.header.size,
+            [&header, indexData, indexBytes, vertexData, vertexBytes](std::uint8_t* record) {
+                std::memcpy(record, &header, sizeof(header));
+                if (indexBytes != 0) {
+                    std::memcpy(record + header.packet.indexDataOffset, indexData, indexBytes);
+                }
+                if (vertexBytes != 0) {
+                    std::memcpy(record + header.packet.vertexDataOffset, vertexData, vertexBytes);
+                }
+            });
     }
 
     HRESULT flushPeRecorder() {
@@ -2839,12 +2856,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         header.start = start;
         header.count = count;
 
-        std::vector<std::uint8_t> record(header.header.size);
-        std::memcpy(record.data(), &header, sizeof(header));
-        if (payloadBytes != 0) {
-            std::memcpy(record.data() + sizeof(header), data, payloadBytes);
-        }
-        return appendCommandRecord(record.data(), record.size());
+        return appendCommandRecordDirect(
+            header.header.type, header.header.size,
+            [&header, data, payloadBytes](std::uint8_t* record) {
+                std::memcpy(record, &header, sizeof(header));
+                if (payloadBytes != 0) {
+                    std::memcpy(record + sizeof(header), data, payloadBytes);
+                }
+            });
     }
 
     // Update a const-shadow with new values + extend the dirty range.
@@ -3790,12 +3809,14 @@ public:
         header.rectCount = (uint32_t)count;
         header.rectOffset = sizeof(header);
 
-        std::vector<std::uint8_t> record(header.header.size);
-        std::memcpy(record.data(), &header, sizeof(header));
-        if (rectBytes != 0 && pRects) {
-            std::memcpy(record.data() + header.rectOffset, pRects, rectBytes);
-        }
-        return appendCommandRecord(record.data(), record.size());
+        return appendCommandRecordDirect(
+            header.header.type, header.header.size,
+            [&header, pRects, rectBytes](std::uint8_t* record) {
+                std::memcpy(record, &header, sizeof(header));
+                if (rectBytes != 0 && pRects) {
+                    std::memcpy(record + header.rectOffset, pRects, rectBytes);
+                }
+            });
     }
 
     /* ── transforms ── */

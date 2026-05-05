@@ -231,10 +231,10 @@ objects or ad-hoc per-call state.
 
 ```mermaid
 flowchart LR
-    PEState["PE DeviceState shadow\nD3D9 semantics"] --> REC["recordCommand()\ncompact POD records"]
+    PEState["PE DeviceState shadow\nD3D9 semantics"] --> REC["recordCommand()\nCanonicalDrawState + DrawRunDesc\ncompact POD records"]
     REC --> POD["PE CommandChunk\nheaders + payload arena\nopaque handles"]
     POD --> IMP["Importer\nvalidate, canonicalize,\nretain handles"]
-    IMP --> IR["ImportedChunk\nrecords + ImportedDrawState\nresource refs"]
+    IMP --> IR["ImportedChunk\nrecords + FlatDrawStateView\nresource refs"]
     IR --> REPLAY["Replay transform\nrecords + queue state\n→ encoder ops"]
     REPLAY --> ENC["Encode transform\nencoder ops + caches\n→ Metal commands"]
 ```
@@ -255,8 +255,8 @@ Replay/encode helpers should be deterministic functions where possible:
 
 ```
 nextEncoderState = replay(record, importedState, priorEncoderState)
-psoKey           = makePsoKey(importedDrawState)
-argLayout        = buildArgumentLayout(importedDrawState, resourceBindings)
+psoKey           = makePsoKey(flatDrawStateView)
+argLayout        = buildArgumentLayout(flatDrawStateView, resourceBindings)
 ```
 
 Allowed inputs are immutable imported records, retained backend handles, explicit
@@ -345,8 +345,8 @@ Hot-path allocation policy:
 
 ```mermaid
 flowchart TD
-    A["Backend receives DrawDesc"] --> B{Active encoder type\n== Render?}
-    B -->|No| NEWPASS["End current encoder\nCreate new RenderEncoderData\nwith attachments from DrawDesc.rts"]
+    A["Backend receives draw run\n+ FlatDrawStateView"] --> B{Active encoder type\n== Render?}
+    B -->|No| NEWPASS["End current encoder\nCreate new RenderEncoderData\nwith attachments from draw state RTs"]
     B -->|Yes| C{Same attachments\nas active encoder?}
     C -->|No| NEWPASS
     C -->|Yes| D{Hazard check:\nBloom filter on\nbuf/tex read-write sets}
@@ -410,7 +410,7 @@ call pointing to the base of this buffer.
 
 ```mermaid
 graph TD
-    DD["DrawDesc"] --> KEY["PSO key extraction:\n• VS function (shader hash + variant)\n• FS function (shader hash + variant)\n• Vertex descriptor layout\n• RT pixel formats × 4\n• Blend state per attachment\n• Sample count\n• Alpha-to-coverage flag"]
+    DD["FlatDrawStateView"] --> KEY["PSO key extraction:\n• VS function (shader hash + variant)\n• FS function (shader hash + variant)\n• Vertex descriptor layout\n• RT pixel formats × 4\n• Blend state per attachment\n• Sample count\n• Alpha-to-coverage flag"]
     KEY --> LOOKUP{In PSO\ncache?}
     LOOKUP -->|Hit| USE["Use cached MTLRenderPipelineState"]
     LOOKUP -->|Miss| COMPILE["Compile async on thread pool\nMTLRenderPipelineDescriptor\n→ newRenderPipelineStateWithDescriptor"]

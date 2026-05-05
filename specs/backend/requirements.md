@@ -1,16 +1,21 @@
 # Backend Requirements
 
 The backend receives committed command chunks from the core and is responsible for
-translating their `DrawDesc` / `ClearDesc` / `SwapDesc` payloads into correct Metal
-commands. It knows nothing about D3D9 COM objects.
+translating their canonical draw state/run payloads (`CanonicalDrawState` plus
+`DrawRunDesc`, or imported `FlatDrawStateView` equivalents) and `ClearDesc` /
+`SwapDesc` payloads into correct Metal commands. It knows nothing about D3D9 COM
+objects. `fixture::DrawDesc` is a tests/offline helper only; it is not a production
+backend input contract.
 
 ---
 
 ## 1. Correctness of Translation
 
-**R-BACK-1.1** Every `DrawDesc` submitted by the core must produce rendering results
-that are equivalent to what a conformant D3D9 implementation on the same geometry and
-state would produce, within the precision limits of the Metal backend GPU.
+**R-BACK-1.1** Every production draw submitted by the core as
+`CanonicalDrawState` plus `DrawRunDesc`, or as an imported `FlatDrawStateView`
+equivalent, must produce rendering results that are equivalent to what a
+conformant D3D9 implementation on the same geometry and state would produce,
+within the precision limits of the Metal backend GPU.
 
 **R-BACK-1.2** The results of a recorded draw command must be visible in the render
 target before the next present command on the same swap chain commits.
@@ -88,10 +93,11 @@ records and retained backend handle references before the command queue may exec
 the chunk.
 
 **R-BACK-2.15** Backend replay and encode code must consume imported records and
-explicit state structs (`ImportedDrawState`, encoder state, resource binding state,
-allocator cursors, cache keys, etc.). It must not consume PE COM objects, PE
-`DeviceState` pointers, Objective-C objects from the bridge payload, or ad-hoc
-per-call mutable state that is not owned by the execution chunk or queue.
+explicit production state views (`FlatDrawStateView`, encoder state, resource
+binding state, allocator cursors, cache keys, etc.). It must not consume PE COM
+objects, PE `DeviceState` pointers, Objective-C objects from the bridge payload,
+or ad-hoc per-call mutable state that is not owned by the execution chunk or
+queue.
 
 **R-BACK-2.16** Replay transforms that derive encoder decisions from imported
 records (pass merge/split, deferred clear application, hazard classification, PSO
@@ -162,8 +168,9 @@ from the system heap.
 ## 3. Pipeline State Objects
 
 **R-BACK-3.1** The backend must cache compiled `MTLRenderPipelineState` objects.
-Two `DrawDesc`s that produce the same PSO key must receive the same
-`MTLRenderPipelineState` object without recompilation.
+Two production draw states (`CanonicalDrawState` / `FlatDrawStateView`) that
+produce the same PSO key must receive the same `MTLRenderPipelineState` object
+without recompilation.
 
 **R-BACK-3.2** PSO compilation must not block draw submission on the hot path after
 the cache is warm. The first draw call that requires a new PSO may stall; subsequent
@@ -363,9 +370,9 @@ lambdas, process-local pointers, COM object pointers, or Objective-C object poin
 
 ## 10. Clip Planes
 
-**R-BACK-10.1** When `DrawDesc.clipPlaneMask != 0`, the vertex shader must output
-`[[clip_distance]]` values. The number of active clip distances must equal the number
-of set bits in `clipPlaneMask` (maximum 6).
+**R-BACK-10.1** When the production draw state has `clipPlaneMask != 0`, the
+vertex shader must output `[[clip_distance]]` values. The number of active clip
+distances must equal the number of set bits in `clipPlaneMask` (maximum 6).
 
 **R-BACK-10.2** Clip plane uniforms (transformed to clip space by the core) must be
 passed to the vertex shader via the fixed-function uniform buffer or a dedicated

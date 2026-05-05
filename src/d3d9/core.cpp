@@ -3740,25 +3740,11 @@ std::span<const DrawParam> drawParamStorageSpan(const DrawParamInlineStorage& st
   return std::span<const DrawParam>(storage.inlineData.data(), storage.inlineSize);
 }
 
-std::span<DrawParam> drawParamStorageMutableSpan(DrawParamInlineStorage& storage) noexcept {
-  if (storage.overflowMode) {
-    return std::span<DrawParam>(storage.overflow.data(), storage.overflow.size());
-  }
-  return std::span<DrawParam>(storage.inlineData.data(), storage.inlineSize);
-}
-
 std::span<const u8> drawPayloadStorageSpan(const DrawPayloadArenaStorage& storage) noexcept {
   if (storage.overflowMode) {
     return std::span<const u8>(storage.overflow.data(), storage.overflow.size());
   }
   return std::span<const u8>(storage.inlineData.data(), storage.inlineSize);
-}
-
-std::span<u8> drawPayloadStorageMutableSpan(DrawPayloadArenaStorage& storage) noexcept {
-  if (storage.overflowMode) {
-    return std::span<u8>(storage.overflow.data(), storage.overflow.size());
-  }
-  return std::span<u8>(storage.inlineData.data(), storage.inlineSize);
 }
 
 std::size_t drawParamStorageSize(const DrawParamInlineStorage& storage) noexcept {
@@ -3900,13 +3886,6 @@ DrawRunView drawRunView(const DrawRunDesc& run) noexcept {
   };
 }
 
-MutableDrawRunView drawRunMutableView(DrawRunDesc& run) noexcept {
-  return MutableDrawRunView{
-      .draws = drawParamStorageMutableSpan(run.scratch_.draws),
-      .payloadArena = drawPayloadStorageMutableSpan(run.scratch_.payload),
-  };
-}
-
 bool drawRunEmpty(const DrawRunDesc& run) noexcept {
   return drawParamStorageSize(run.scratch_.draws) == 0;
 }
@@ -3923,16 +3902,8 @@ std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept {
   return drawParamStorageSpan(run.scratch_.draws);
 }
 
-std::span<DrawParam> drawRunMutableDraws(DrawRunDesc& run) noexcept {
-  return drawParamStorageMutableSpan(run.scratch_.draws);
-}
-
 std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept {
   return drawPayloadStorageSpan(run.scratch_.payload);
-}
-
-std::span<u8> drawRunMutablePayloadArena(DrawRunDesc& run) noexcept {
-  return drawPayloadStorageMutableSpan(run.scratch_.payload);
 }
 
 std::span<const u8> drawRunPayloadBytes(const DrawRunDesc& run,
@@ -4536,20 +4507,22 @@ void Device::invalidateDefaultPoolResources() {
 }
 
 void Device::submitClearInternal(const ClearDesc& desc) {
-  emitRenderTrace("clear seq=%llu color=%d depth=%d stencil=%d color0=0x%llx depthStencil=0x%llx rects=%zu rgba=(%.3f,%.3f,%.3f,%.3f) depthValue=%.3f stencilValue=%u",
-                  static_cast<unsigned long long>(submittedSequenceId_ + 1),
-                  desc.clearColor ? 1 : 0,
-                  desc.clearDepth ? 1 : 0,
-                  desc.clearStencil ? 1 : 0,
-                  static_cast<unsigned long long>(desc.colorAttachments[0].handle.value),
-                  static_cast<unsigned long long>(desc.depthStencil.handle.value),
-                  desc.rects.size(),
-                  desc.color.r,
-                  desc.color.g,
-                  desc.color.b,
-                  desc.color.a,
-                  desc.depth,
-                  desc.stencil);
+  if (renderTraceEnabled()) {
+    emitRenderTrace("clear seq=%llu color=%d depth=%d stencil=%d color0=0x%llx depthStencil=0x%llx rects=%zu rgba=(%.3f,%.3f,%.3f,%.3f) depthValue=%.3f stencilValue=%u",
+                    static_cast<unsigned long long>(submittedSequenceId_ + 1),
+                    desc.clearColor ? 1 : 0,
+                    desc.clearDepth ? 1 : 0,
+                    desc.clearStencil ? 1 : 0,
+                    static_cast<unsigned long long>(desc.colorAttachments[0].handle.value),
+                    static_cast<unsigned long long>(desc.depthStencil.handle.value),
+                    desc.rects.size(),
+                    desc.color.r,
+                    desc.color.g,
+                    desc.color.b,
+                    desc.color.a,
+                    desc.depth,
+                    desc.stencil);
+  }
   upperDevice_->submitClear(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
@@ -4625,14 +4598,16 @@ void Device::submitDrawRunInternal(DrawRunDesc desc) {
 }
 
 void Device::submitPresentInternal(const SwapDesc& desc) {
-  emitRenderTrace("present seq=%llu window=0x%llx size=%ux%u fmt=%u windowed=%d interval=%u",
-                  static_cast<unsigned long long>(submittedSequenceId_ + 1),
-                  static_cast<unsigned long long>(desc.window.value),
-                  desc.width,
-                  desc.height,
-                  static_cast<unsigned>(desc.format),
-                  desc.windowed ? 1 : 0,
-                  static_cast<unsigned>(desc.interval));
+  if (renderTraceEnabled()) {
+    emitRenderTrace("present seq=%llu window=0x%llx size=%ux%u fmt=%u windowed=%d interval=%u",
+                    static_cast<unsigned long long>(submittedSequenceId_ + 1),
+                    static_cast<unsigned long long>(desc.window.value),
+                    desc.width,
+                    desc.height,
+                    static_cast<unsigned>(desc.format),
+                    desc.windowed ? 1 : 0,
+                    static_cast<unsigned>(desc.interval));
+  }
   upperDevice_->present(desc);
   ++submittedSequenceId_;
   // SeqIdSafety: a submission can advance the current sequence, but never
@@ -4647,38 +4622,53 @@ void Device::maybeCaptureExperimentFrame() {
   if (presentCount_ < experimentCapture_.frame) {
     return;
   }
-  emitRenderTrace("capture frame=%u path=%s begin", presentCount_, experimentCapture_.path.c_str());
+  const bool trace = renderTraceEnabled();
+  if (trace) {
+    emitRenderTrace("capture frame=%u path=%s begin", presentCount_, experimentCapture_.path.c_str());
+  }
   auto chain = swapChain(0);
   if (!chain) {
-    emitRenderTrace("capture frame=%u aborted: no swap chain", presentCount_);
+    if (trace) {
+      emitRenderTrace("capture frame=%u aborted: no swap chain", presentCount_);
+    }
     return;
   }
   auto backBuffer = chain->backBuffer();
   if (!backBuffer || !backBuffer->valid()) {
-    emitRenderTrace("capture frame=%u aborted: invalid backbuffer", presentCount_);
+    if (trace) {
+      emitRenderTrace("capture frame=%u aborted: invalid backbuffer", presentCount_);
+    }
     return;
   }
   const auto& desc = backBuffer->desc();
   const u32 bpp = bytesPerPixel(desc.format);
   if (bpp == 0) {
-    emitRenderTrace("capture frame=%u aborted: unsupported format=%u", presentCount_, static_cast<unsigned>(desc.format));
+    if (trace) {
+      emitRenderTrace("capture frame=%u aborted: unsupported format=%u", presentCount_, static_cast<unsigned>(desc.format));
+    }
     return;
   }
   auto scratch = createSurface(
       {desc.width, desc.height, desc.format, Pool::Scratch, 0, false, false, MultiSampleType::None});
   if (!scratch) {
-    emitRenderTrace("capture frame=%u aborted: scratch alloc failed", presentCount_);
+    if (trace) {
+      emitRenderTrace("capture frame=%u aborted: scratch alloc failed", presentCount_);
+    }
     return;
   }
   const auto readbackHr = getRenderTargetData(backBuffer, scratch);
   if (readbackHr != D3D_OK) {
-    emitRenderTrace("capture frame=%u aborted: getRenderTargetData hr=0x%08x", presentCount_,
-                    static_cast<unsigned>(readbackHr));
+    if (trace) {
+      emitRenderTrace("capture frame=%u aborted: getRenderTargetData hr=0x%08x", presentCount_,
+                      static_cast<unsigned>(readbackHr));
+    }
     return;
   }
   auto region = scratch->lockRect(nullptr, 0);
   if (!region.data) {
-    emitRenderTrace("capture frame=%u aborted: lockRect failed", presentCount_);
+    if (trace) {
+      emitRenderTrace("capture frame=%u aborted: lockRect failed", presentCount_);
+    }
     return;
   }
   const size_t byteCount = static_cast<size_t>(region.pitch) * desc.height;
@@ -4688,9 +4678,13 @@ void Device::maybeCaptureExperimentFrame() {
   scratch->unlockRect();
   if (wrote) {
     experimentCapture_.captured = true;
-    emitRenderTrace("capture frame=%u wrote=%s", presentCount_, experimentCapture_.path.c_str());
+    if (trace) {
+      emitRenderTrace("capture frame=%u wrote=%s", presentCount_, experimentCapture_.path.c_str());
+    }
   } else {
-    emitRenderTrace("capture frame=%u aborted: writeBmp failed", presentCount_);
+    if (trace) {
+      emitRenderTrace("capture frame=%u aborted: writeBmp failed", presentCount_);
+    }
   }
 }
 

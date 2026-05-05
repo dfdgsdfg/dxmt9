@@ -1309,11 +1309,6 @@ struct DrawRunView {
   std::span<const u8> payloadArena{};
 };
 
-struct MutableDrawRunView {
-  std::span<DrawParam> draws{};
-  std::span<u8> payloadArena{};
-};
-
 // Per-chunk resource retention entry. Mirrors the wire-format D9CChunk
 // HandleEntry but lives in dxmt9::core so the runtime can mark
 // resources without depending on the d3d9/device_c.h header. Kind tag
@@ -1335,7 +1330,7 @@ struct ChunkHandleEntry {
 // DrawParam entries. Single draws are encoded as a run of one, and importer
 // coalescing extends that to N draws with no state change between them.
 // Encoder binds state once from `state.hot`, then loops emitting per-draw
-// calls — saves both per-draw DrawDesc copies on the queue side and per-draw
+// calls - saves both per-draw full state copies on the queue side and per-draw
 // resource rebinding on the encoder side.
 struct DrawRunDesc {
   CanonicalDrawState state{};              // applied once at run start
@@ -1347,14 +1342,11 @@ struct DrawRunDesc {
   friend void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payloadBytes);
   friend bool drawRunAppend(DrawRunDesc& run, DrawParam param, DrawParamPayloadView payload);
   friend DrawRunView drawRunView(const DrawRunDesc& run) noexcept;
-  friend MutableDrawRunView drawRunMutableView(DrawRunDesc& run) noexcept;
   friend bool drawRunEmpty(const DrawRunDesc& run) noexcept;
   friend std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept;
   friend std::size_t drawRunPayloadSize(const DrawRunDesc& run) noexcept;
   friend std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept;
-  friend std::span<DrawParam> drawRunMutableDraws(DrawRunDesc& run) noexcept;
   friend std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept;
-  friend std::span<u8> drawRunMutablePayloadArena(DrawRunDesc& run) noexcept;
 };
 
 struct ClearDesc {
@@ -1772,14 +1764,11 @@ void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payload
 bool drawRunAppend(DrawRunDesc& run, DrawParam param,
                    DrawParamPayloadView payload = {});
 DrawRunView drawRunView(const DrawRunDesc& run) noexcept;
-MutableDrawRunView drawRunMutableView(DrawRunDesc& run) noexcept;
 bool drawRunEmpty(const DrawRunDesc& run) noexcept;
 std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept;
 std::size_t drawRunPayloadSize(const DrawRunDesc& run) noexcept;
 std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept;
-std::span<DrawParam> drawRunMutableDraws(DrawRunDesc& run) noexcept;
 std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept;
-std::span<u8> drawRunMutablePayloadArena(DrawRunDesc& run) noexcept;
 std::span<const u8> drawRunPayloadBytes(const DrawRunDesc& run,
                                         DrawPayloadRange range) noexcept;
 inline std::span<const u8> drawRunPayloadBytes(DrawPayloadRange range,

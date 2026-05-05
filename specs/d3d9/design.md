@@ -355,38 +355,30 @@ Required invariants:
 
 ### 3.4 Draw and Chunk Payloads
 
-**Conceptual `DrawDesc`** — the effective state the backend encodes for a draw:
+**Canonical draw input** - the effective production data the backend encodes for
+a draw run:
 
 ```
-DrawDesc {
-    PrimitiveType       primitiveType       // no TRIANGLEFAN; decomposed by core
-    uint32_t            primitiveCount
-    uint32_t            startVertex
-    uint32_t            baseVertexIndex     // indexed draws
-    uint32_t            startIndex          // indexed draws
-    BufferHandle        indexBuffer         // null for non-indexed
-    IndexType           indexType           // 16-bit or 32-bit
+CanonicalDrawState {
+    FlatDrawStateRecord       hot           // PSO, attachments, bindings, hashes
+    DrawShaderLayoutContext   shaderLayout  // shader refs, constants, vertex layout
+    DrawDebugSnapshot         debug         // cold diagnostics only
+}
 
-    VertexDeclSnapshot  vertexDecl          // stream layouts + attribute semantics
-    ShaderRef           vs                  // bytecode handle OR FFPKeyVS
-    ShaderRef           ps                  // bytecode handle OR FFPKeyPS
-    ConstantSnapshot    vsConst
-    ConstantSnapshot    psConst
-
-    TextureBinding      textures[16]        // handle + stage states
-    SamplerSnapshot     samplers[16]
-
-    RenderStateSnapshot rs                  // states that affect PSO or encoder
-    RenderTargetSnapshot rts               // color + depth handles
-    ViewportScissor     viewport
+DrawRunDesc {
+    CanonicalDrawState state
+    DrawParam          draws[]              // no TRIANGLEFAN; decomposed by core
+    uint8_t            payloadArena[]       // UP vertex/index data ranges
 }
 ```
 
-The PE wire format does not need to carry this full structure in every draw record.
-The canonical command stream carries a compact state delta plus draw payload; the
-unix importer applies those deltas in order to a server-side shadow. The resulting
-effective state is equivalent to the conceptual `DrawDesc` above before encoding.
-No D3D9 COM objects are referenced across the bridge — only opaque backend handles.
+The PE wire format does not need to carry this full structure in every draw
+record. The canonical command stream carries a compact state delta plus draw
+payload; the unix importer applies those deltas in order to a server-side shadow.
+The resulting effective state is exposed to the backend as `FlatDrawStateView`
+plus draw parameters before encoding. No D3D9 COM objects are referenced across
+the bridge - only opaque backend handles. `fixture::DrawDesc` is retained for
+tests/offline transforms only and is not a production backend input.
 `DXMT9_PE_DRAW_FULL_SNAPSHOT=1` may force self-contained draw packets, but that is a
 debug/stress mode because it increases wire size and disables cheap run coalescing.
 

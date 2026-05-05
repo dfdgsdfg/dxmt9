@@ -13,7 +13,7 @@ validated by fast native unit tests over stateless transforms.
 flowchart LR
     A["Inputs\nD3DBC, D3D9 state, draw call"] --> B["Stateless transform units"]
     B --> C["Shader IR / MSL source"]
-    B --> D["DrawDesc / pipeline keys / bindings"]
+    B --> D["CanonicalDrawState / FlatDrawStateView\npipeline keys / bindings"]
     B --> E["Viewport, depth, MRT, sampler descriptors"]
 
     C --> F["Fast unit assertions"]
@@ -32,7 +32,9 @@ These suites should cover:
   control-flow lowering.
 - Shader IR to MSL source generation for programmable and fixed-function paths.
 - D3D9 render, texture, sampler, transform, stream, index, shader, constant, and
-  render-target state snapshots to immutable draw descriptors.
+  render-target state snapshots to immutable production draw inputs:
+  `CanonicalDrawState` plus `DrawRunDesc`, and imported `FlatDrawStateView`
+  equivalents.
 - Stateless key generation for FFP shaders, PSO, depth-stencil state, vertex
   layouts, sampler descriptors, blend/MRT state, and color-write masks.
 - Viewport, half-pixel, depth-range, clip-plane, texture-coordinate, and
@@ -51,7 +53,7 @@ Ownership is therefore:
 | Owner | Primary tests | Runtime tests |
 |---|---|---|
 | Shader translator | D3DBC/IR/MSL stateless unit suites | Readback probes for sampling and shader/render-state interactions |
-| Core state and draw builder | State snapshot to draw descriptor/key unit suites | Native backend draw/readback smoke for behaviour coupling |
+| Core state and draw builder | State snapshot to canonical draw state/run and key unit suites | Native backend draw/readback smoke for behaviour coupling |
 | Metal backend | Descriptor encoding and resource lifecycle unit/sim tests | Metal readback, synchronization, WSI |
 | PE D3D9 layer | HRESULT/refcount/state-machine PE conformance | Wine-hosted ABI and window integration |
 
@@ -86,6 +88,12 @@ names, and barrier/hazard events. It must not depend on Metal side effects,
 wall-clock sleeps, or real window presentation. Runtime `shader_runner` probes
 may then verify that selected packets produce expected pixels, but acceptance of
 the packet transform itself comes from the deterministic observer log.
+
+Production backend tests must target the same inputs used by the runtime command
+path: `CanonicalDrawState` plus `DrawRunDesc`, or imported `FlatDrawStateView`
+views created by the packet importer. `fixture::DrawDesc` remains available only
+for tests/offline fixtures that need compact expected data; it must not be used
+as evidence that the production backend accepts `DrawDesc` directly.
 
 Required observer assertions:
 
