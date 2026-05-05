@@ -35,7 +35,7 @@ namespace test {
 // Metal, Wine, GPU execution, or source-string assertions.
 d3d9bc::SpirvModule decodeD3DBytecodeForTest(const core::ShaderRef& shader,
                                              bool vertex,
-                                             const core::DrawDesc& desc);
+                                             const core::fixture::DrawDesc& desc);
 d3d9bc::D3DRegisterRef decodeRegisterRefForTest(std::uint32_t token,
                                                 d3d9bc::D3DShaderStage stage);
 std::array<std::uint8_t, 4> decodeSwizzleForTest(std::uint32_t token);

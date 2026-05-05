@@ -47,8 +47,8 @@ inline constexpr u32 kD3DDeclUsageColor = 10u;
 inline constexpr u32 kD3DDeclUsageFog = 11u;
 
 // Decoded vertex layout (per-element offsets into the single-stream buffer)
-// used by the FFP generator to emit attribute loads. Keyed by DrawDesc's
-// vertex declaration or FVF code.
+// used by the FFP generator to emit attribute loads. Keyed by a vertex
+// declaration snapshot or FVF code.
 struct FixedFunctionVertexLayout {
   bool valid = false;
   bool preTransformed = false;
@@ -69,7 +69,6 @@ u32 declTypeSize(u32 type);
 // Combined stride computation: returns the declared stream[0].stride if set,
 // otherwise the maximum (offset + size) over all elements on stream[0].
 u32 computeVertexDeclStride(const core::VertexDeclSnapshot& decl);
-u32 computeVertexDeclStride(const core::DrawDesc& desc);
 
 // Per-input-register binding for the translated programmable vertex path.
 struct VertexInputBinding {
@@ -93,11 +92,10 @@ u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout);
 // Hash a D3D9 vertex declaration for variant-keying.
 u64 hashVertexDeclaration(const core::VertexDeclSnapshot& decl);
 
-// Decode a DrawDesc's vertex declaration into a FixedFunctionVertexLayout.
+// Decode a vertex declaration into a FixedFunctionVertexLayout.
 // Returns nullopt if the declaration doesn't describe a position attribute
 // recognizable as FFP (e.g., it's a programmable-pipeline decl).
 std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const core::VertexDeclSnapshot& decl);
-std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const core::DrawDesc& desc);
 
 // Generate Metal Shading Language source for the FFP vertex / pixel
 // shaders keyed by (key, ShaderSourceContext). Outputs a complete standalone MSL

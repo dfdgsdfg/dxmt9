@@ -335,6 +335,7 @@ struct Pool {
   detail::HandleArena<BufferRecord, detail::ResourceHandleKind::Buffer> bufferArena_;
   detail::HandleArena<TextureRecord, detail::ResourceHandleKind::Texture> textureArena_;
   detail::HandleArena<SurfaceRecord, detail::ResourceHandleKind::Surface> surfaceArena_;
+  std::vector<u8> textureUploadScratch_;
 };
 
 }  // namespace dxmt9::resources

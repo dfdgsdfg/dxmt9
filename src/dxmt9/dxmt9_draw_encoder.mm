@@ -36,7 +36,6 @@
 namespace dxmt9::encoders {
 
 using core::ClearDesc;
-using core::DrawDesc;
 using core::Handle;
 using core::IndexType;
 using core::SamplerSnapshot;
@@ -1530,7 +1529,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         //   …
         // Returned slices use the same indexing.
         const std::size_t drawCount = core::drawRunDrawCount(command);
-        const auto payloadArena = core::drawRunPayloadBytes(command);
+        const auto recordPayloadArena = core::drawRunPayloadBytes(command);
         bool anyUpData = false;
         bool hasUpPayloadRanges = false;
         for (const auto& param : drawParams) {
@@ -1544,11 +1543,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           std::vector<std::span<const std::byte>> upPayloads;
           upPayloads.reserve(drawCount * 2);
           for (const auto& param : drawParams) {
-            const auto vertexBytes = drawParamVertexBytes(param, payloadArena);
+            const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
             if (!vertexBytes.empty()) anyUpData = true;
             upPayloads.emplace_back(reinterpret_cast<const std::byte*>(vertexBytes.data()),
                                     vertexBytes.size());
-            const auto indexBytes = drawParamIndexBytes(param, payloadArena);
+            const auto indexBytes = drawParamIndexBytes(param, recordPayloadArena);
             if (!indexBytes.empty()) anyUpData = true;
             upPayloads.emplace_back(reinterpret_cast<const std::byte*>(indexBytes.data()),
                                     indexBytes.size());
@@ -1573,7 +1572,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          /*skipBaseStateBind=*/baseBound,
                          anyUpData ? &preData : nullptr,
                          &param,
-                         payloadArena)) {
+                         recordPayloadArena)) {
             baseBound = true;
             activeDrawStateKey = drawState.hot.key;
           }

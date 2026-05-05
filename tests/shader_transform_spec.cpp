@@ -18,6 +18,7 @@
 #include <vector>
 
 using namespace dxmt9::core;
+using namespace dxmt9::core::fixture;
 
 namespace {
 

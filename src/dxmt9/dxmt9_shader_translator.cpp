@@ -2718,7 +2718,7 @@ namespace test {
 
 ::dxmt9::d3d9bc::SpirvModule decodeD3DBytecodeForTest(const ::dxmt9::core::ShaderRef& shader,
                                                        bool vertex,
-                                                       const ::dxmt9::core::DrawDesc& desc) {
+                                                       const ::dxmt9::core::fixture::DrawDesc& desc) {
   return detail_::translateD3DBytecodeToSpirv(
       shader, vertex, ::dxmt9::drawshader::makeShaderSourceContext(desc));
 }

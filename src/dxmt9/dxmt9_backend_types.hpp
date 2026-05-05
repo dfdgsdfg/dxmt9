@@ -30,6 +30,8 @@ struct DrawRunCommandRecord {
   std::uint32_t stateIndex = 0;
   std::uint32_t firstParam = 0;
   std::uint32_t paramCount = 0;
+  std::uint32_t payloadOffset = 0;
+  std::uint32_t payloadSize = 0;
 };
 
 struct MetalCommandHeader {
@@ -119,27 +121,23 @@ struct ChunkSlot {
     if (!canUseSlotArena) {
       return;
     }
+    const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
 
     drawStates.push_back(std::move(drawRun.state));
 
     const auto payloadBytes = view.payloadArena;
     if (!payloadBytes.empty()) {
-      const auto baseOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
       drawPayloadArena.insert(drawPayloadArena.end(), payloadBytes.begin(), payloadBytes.end());
-      auto mutableDraws = drawRunMutableDraws(drawRun);
-      for (auto& param : mutableDraws) {
-        if (!param.userVertexRange.empty()) param.userVertexRange.offset += baseOffset;
-        if (!param.userIndexRange.empty()) param.userIndexRange.offset += baseOffset;
-      }
     }
 
     commandHeaders.push_back({MetalCommandKind::DrawRun, static_cast<std::uint32_t>(drawRunRecords.size())});
-    const auto rebasedView = drawRunView(drawRun);
-    drawParams.insert(drawParams.end(), rebasedView.draws.begin(), rebasedView.draws.end());
+    drawParams.insert(drawParams.end(), view.draws.begin(), view.draws.end());
     drawRunRecords.push_back(DrawRunCommandRecord{
         .stateIndex = stateIndex,
         .firstParam = firstParam,
         .paramCount = static_cast<std::uint32_t>(drawParams.size() - firstParam),
+        .payloadOffset = payloadOffset,
+        .payloadSize = static_cast<std::uint32_t>(payloadBytes.size()),
     });
   }
 
@@ -191,7 +189,12 @@ struct ChunkSlot {
       if (payloadIndex < drawRunRecords.size()) {
         const auto& record = drawRunRecords[payloadIndex];
         view.drawRunRecord = &record;
-        view.drawPayloadBytes = std::span<const u8>(drawPayloadArena.data(), drawPayloadArena.size());
+        if (record.payloadSize > 0 &&
+            record.payloadOffset <= drawPayloadArena.size() &&
+            record.payloadSize <= drawPayloadArena.size() - record.payloadOffset) {
+          view.drawPayloadBytes = std::span<const u8>(
+              drawPayloadArena.data() + record.payloadOffset, record.payloadSize);
+        }
         if (record.stateIndex < drawStates.size()) {
           view.drawState = &drawStates[record.stateIndex];
         }

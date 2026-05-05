@@ -21,6 +21,11 @@
 
 namespace dxmt9::core {
 
+using detail::DrawParamInlineStorage;
+using detail::DrawPayloadArenaStorage;
+using detail::kDrawRunInlineParamCapacity;
+using detail::kDrawRunInlinePayloadCapacity;
+
 namespace {
 
 constexpr u64 kFnvOffset = 1469598103934665603ull;
@@ -3861,73 +3866,73 @@ bool drawPayloadRangeValid(std::size_t payloadSize, DrawPayloadRange range) noex
 }  // namespace
 
 void drawRunClear(DrawRunDesc& run) {
-  if (run.scratch.draws.overflowMode) {
-    run.scratch.draws.overflow.clear();
+  if (run.scratch_.draws.overflowMode) {
+    run.scratch_.draws.overflow.clear();
   } else {
-    run.scratch.draws.inlineSize = 0;
+    run.scratch_.draws.inlineSize = 0;
   }
-  if (run.scratch.payload.overflowMode) {
-    run.scratch.payload.overflow.clear();
+  if (run.scratch_.payload.overflowMode) {
+    run.scratch_.payload.overflow.clear();
   } else {
-    run.scratch.payload.inlineSize = 0;
+    run.scratch_.payload.inlineSize = 0;
   }
 }
 
 void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payloadBytes) {
-  reserveDrawParams(run.scratch.draws, drawCount);
-  reserveDrawPayload(run.scratch.payload, payloadBytes);
+  reserveDrawParams(run.scratch_.draws, drawCount);
+  reserveDrawPayload(run.scratch_.payload, payloadBytes);
 }
 
 bool drawRunAppend(DrawRunDesc& run, DrawParam param, DrawParamPayloadView payload) {
   param.userVertexRange = {};
   param.userIndexRange = {};
-  if (!packDrawParamPayload(param, run.scratch.payload, payload)) {
+  if (!packDrawParamPayload(param, run.scratch_.payload, payload)) {
     return false;
   }
-  appendDrawParam(run.scratch.draws, std::move(param));
+  appendDrawParam(run.scratch_.draws, std::move(param));
   return true;
 }
 
 DrawRunView drawRunView(const DrawRunDesc& run) noexcept {
   return DrawRunView{
-      .draws = drawParamStorageSpan(run.scratch.draws),
-      .payloadArena = drawPayloadStorageSpan(run.scratch.payload),
+      .draws = drawParamStorageSpan(run.scratch_.draws),
+      .payloadArena = drawPayloadStorageSpan(run.scratch_.payload),
   };
 }
 
 MutableDrawRunView drawRunMutableView(DrawRunDesc& run) noexcept {
   return MutableDrawRunView{
-      .draws = drawParamStorageMutableSpan(run.scratch.draws),
-      .payloadArena = drawPayloadStorageMutableSpan(run.scratch.payload),
+      .draws = drawParamStorageMutableSpan(run.scratch_.draws),
+      .payloadArena = drawPayloadStorageMutableSpan(run.scratch_.payload),
   };
 }
 
 bool drawRunEmpty(const DrawRunDesc& run) noexcept {
-  return drawParamStorageSize(run.scratch.draws) == 0;
+  return drawParamStorageSize(run.scratch_.draws) == 0;
 }
 
 std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept {
-  return drawParamStorageSize(run.scratch.draws);
+  return drawParamStorageSize(run.scratch_.draws);
 }
 
 std::size_t drawRunPayloadSize(const DrawRunDesc& run) noexcept {
-  return drawPayloadStorageSize(run.scratch.payload);
+  return drawPayloadStorageSize(run.scratch_.payload);
 }
 
 std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept {
-  return drawParamStorageSpan(run.scratch.draws);
+  return drawParamStorageSpan(run.scratch_.draws);
 }
 
 std::span<DrawParam> drawRunMutableDraws(DrawRunDesc& run) noexcept {
-  return drawParamStorageMutableSpan(run.scratch.draws);
+  return drawParamStorageMutableSpan(run.scratch_.draws);
 }
 
 std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept {
-  return drawPayloadStorageSpan(run.scratch.payload);
+  return drawPayloadStorageSpan(run.scratch_.payload);
 }
 
 std::span<u8> drawRunMutablePayloadArena(DrawRunDesc& run) noexcept {
-  return drawPayloadStorageMutableSpan(run.scratch.payload);
+  return drawPayloadStorageMutableSpan(run.scratch_.payload);
 }
 
 std::span<const u8> drawRunPayloadBytes(const DrawRunDesc& run,
@@ -4558,50 +4563,52 @@ void Device::submitDrawRunInternal(DrawRunDesc desc) {
   }
   const auto draws = drawRunDraws(desc);
   const auto& hot = desc.state.hot;
-  const auto& shader = desc.state.shaderLayout;
-  const auto stageState = [&](size_t stageIndex, u32 key) -> u32 {
-    if (stageIndex >= hot.textureStageStates.size()) {
-      return 0u;
+  if (renderTraceEnabled()) {
+    const auto& shader = desc.state.shaderLayout;
+    const auto stageState = [&](size_t stageIndex, u32 key) -> u32 {
+      if (stageIndex >= hot.textureStageStates.size()) {
+        return 0u;
+      }
+      return flatStateOr(hot.textureStageStates[stageIndex], key, 0u);
+    };
+    const auto renderState = [&](u32 key, u32 fallback = 0u) -> u32 {
+      return flatStateOr(hot.renderStates, key, fallback);
+    };
+    for (size_t i = 0; i < draws.size(); ++i) {
+      const auto& draw = draws[i];
+      emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x indexed=%u",
+                      static_cast<unsigned long long>(submittedSequenceId_ + 1 + i),
+                      static_cast<unsigned>(draw.primitiveType),
+                      draw.primitiveCount,
+                      draw.startVertex,
+                      draw.baseVertexIndex,
+                      draw.startIndex,
+                      static_cast<unsigned long long>(hot.colorAttachments[0].handle.value),
+                      static_cast<unsigned long long>(hot.depthStencil.handle.value),
+                      static_cast<unsigned long long>(hot.textures[0].value),
+                      static_cast<unsigned>(shader.vertexShader.kind),
+                      static_cast<unsigned>(shader.pixelShader.kind),
+                      static_cast<unsigned long long>(hashShaderRef(shader.vertexShader)),
+                      static_cast<unsigned long long>(hashShaderRef(shader.pixelShader)),
+                      static_cast<unsigned long long>(hot.key.renderStateHash),
+                      shader.vertexDecl.fvf,
+                      renderState(RS_LIGHTING),
+                      renderState(RS_CULL_MODE, static_cast<u32>(CullMode::Ccw)),
+                      renderState(RS_ALPHA_TEST_ENABLE),
+                      renderState(RS_ALPHABLEND_ENABLE),
+                      renderState(RS_SRC_BLEND),
+                      renderState(RS_DEST_BLEND),
+                      stageState(0, TSS_COLOR_OP),
+                      stageState(0, TSS_ALPHA_OP),
+                      stageState(0, TSS_TEXCOORD_INDEX),
+                      stageState(0, TSS_TEXTURE_TRANSFORM_FLAGS),
+                      stageState(1, TSS_COLOR_OP),
+                      stageState(1, TSS_ALPHA_OP),
+                      stageState(1, TSS_TEXCOORD_INDEX),
+                      stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
+                      hot.clipPlaneMask,
+                      draw.indexed ? 1u : 0u);
     }
-    return flatStateOr(hot.textureStageStates[stageIndex], key, 0u);
-  };
-  const auto renderState = [&](u32 key, u32 fallback = 0u) -> u32 {
-    return flatStateOr(hot.renderStates, key, fallback);
-  };
-  for (size_t i = 0; i < draws.size(); ++i) {
-    const auto& draw = draws[i];
-    emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x indexed=%u",
-                    static_cast<unsigned long long>(submittedSequenceId_ + 1 + i),
-                    static_cast<unsigned>(draw.primitiveType),
-                    draw.primitiveCount,
-                    draw.startVertex,
-                    draw.baseVertexIndex,
-                    draw.startIndex,
-                    static_cast<unsigned long long>(hot.colorAttachments[0].handle.value),
-                    static_cast<unsigned long long>(hot.depthStencil.handle.value),
-                    static_cast<unsigned long long>(hot.textures[0].value),
-                    static_cast<unsigned>(shader.vertexShader.kind),
-                    static_cast<unsigned>(shader.pixelShader.kind),
-                    static_cast<unsigned long long>(hashShaderRef(shader.vertexShader)),
-                    static_cast<unsigned long long>(hashShaderRef(shader.pixelShader)),
-                    static_cast<unsigned long long>(hot.key.renderStateHash),
-                    shader.vertexDecl.fvf,
-                    renderState(RS_LIGHTING),
-                    renderState(RS_CULL_MODE, static_cast<u32>(CullMode::Ccw)),
-                    renderState(RS_ALPHA_TEST_ENABLE),
-                    renderState(RS_ALPHABLEND_ENABLE),
-                    renderState(RS_SRC_BLEND),
-                    renderState(RS_DEST_BLEND),
-                    stageState(0, TSS_COLOR_OP),
-                    stageState(0, TSS_ALPHA_OP),
-                    stageState(0, TSS_TEXCOORD_INDEX),
-                    stageState(0, TSS_TEXTURE_TRANSFORM_FLAGS),
-                    stageState(1, TSS_COLOR_OP),
-                    stageState(1, TSS_ALPHA_OP),
-                    stageState(1, TSS_TEXCOORD_INDEX),
-                    stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
-                    hot.clipPlaneMask,
-                    draw.indexed ? 1u : 0u);
   }
 
   const auto drawCount = static_cast<u64>(draws.size());

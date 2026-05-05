@@ -121,12 +121,6 @@ u64 skippedTextureHandle() {
   return value;
 }
 
-bool shouldTraceEncode(const core::DrawDesc& draw, u64 seqId) {
-  core::FlatDrawStateRecord hot{};
-  hot.textures[0] = draw.textures[0].handle;
-  return shouldTraceEncode(hot, seqId);
-}
-
 bool shouldTraceEncode(const core::FlatDrawStateRecord& hot, u64 seqId) {
   const u64 seq = traceEncodeSeq();
   if (seq != 0ull && seqId == seq) {

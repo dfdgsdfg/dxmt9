@@ -357,9 +357,8 @@ Pool::stageTextureUpload(WMT::Device device,
     return std::nullopt;
   }
 
-  std::vector<std::uint8_t> scratch;
   const auto normalized = normalizeUploadBytes(record->desc.format, width, height, pitch,
-                                                  {bytes, byteCount}, scratch);
+                                                  {bytes, byteCount}, textureUploadScratch_);
 
   const auto subresource = decodeTextureSubresource(record->desc, level);
   if (!subresource.valid) {
@@ -419,9 +418,8 @@ void Pool::uploadTextureLevel(WMT::Device device,
     return;
   }
 
-  std::vector<std::uint8_t> scratch;
   const auto normalized = normalizeUploadBytes(record->desc.format, width, height, pitch,
-                                                  {bytes, byteCount}, scratch);
+                                                  {bytes, byteCount}, textureUploadScratch_);
 
   const auto subresource = decodeTextureSubresource(record->desc, level);
   if (!subresource.valid) {

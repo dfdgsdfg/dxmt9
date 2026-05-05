@@ -1078,32 +1078,6 @@ constexpr u32 flatStateOr(const FlatStateSet<MaxEntries>& set,
   return fallback;
 }
 
-struct DrawDesc {
-  PrimitiveType primitiveType = PrimitiveType::TriangleList;
-  u32 primitiveCount = 0;
-  u32 startVertex = 0;
-  i32 baseVertexIndex = 0;
-  u32 startIndex = 0;
-  Handle indexBuffer{};
-  IndexType indexType = IndexType::UInt16;
-  VertexDeclSnapshot vertexDecl{};
-  ShaderRef vertexShader{};
-  ShaderRef pixelShader{};
-  VertexShaderConstants vsConst{};
-  PixelShaderConstants psConst{};
-  std::array<TextureBinding, kMaxTextures> textures{};
-  std::array<SamplerSnapshot, kMaxSamplers> samplers{};
-  RenderStateSnapshot rs{};
-  RenderTargetSnapshot rts{};
-  ViewportScissor viewport{};
-  Matrix4x4 worldViewProj{};
-  std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
-  u32 clipPlaneMask = 0;
-  std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
-  std::vector<u8> userVertexData;
-  std::vector<u8> userIndexData;
-};
-
 struct DrawCallArgs {
   PrimitiveType primitiveType = PrimitiveType::TriangleList;
   u32 primitiveCount = 0;
@@ -1261,8 +1235,8 @@ struct DrawParam {
   u32 startIndex = 0;
   IndexType indexType = IndexType::UInt16;
   bool indexed = false;                    // true when using drawIndexedPrimitive
-  DrawPayloadRange userVertexRange{};      // DrawRunScratchStorage::payload slice, if present
-  DrawPayloadRange userIndexRange{};       // DrawRunScratchStorage::payload slice, if present
+  DrawPayloadRange userVertexRange{};      // draw-run payload slice, if present
+  DrawPayloadRange userIndexRange{};       // draw-run payload slice, if present
 };
 static_assert(std::is_trivially_copyable_v<DrawParam>,
               "DrawParam is hot-path draw metadata and must remain flat.");
@@ -1271,6 +1245,40 @@ struct DrawParamPayloadView {
   std::span<const u8> userVertexData{};
   std::span<const u8> userIndexData{};
 };
+
+namespace fixture {
+
+// Fixture/offline draw shape kept out of production draw submission. Runtime
+// code should use CanonicalDrawState + DrawRunDesc instead.
+struct DrawDesc {
+  PrimitiveType primitiveType = PrimitiveType::TriangleList;
+  u32 primitiveCount = 0;
+  u32 startVertex = 0;
+  i32 baseVertexIndex = 0;
+  u32 startIndex = 0;
+  Handle indexBuffer{};
+  IndexType indexType = IndexType::UInt16;
+  VertexDeclSnapshot vertexDecl{};
+  ShaderRef vertexShader{};
+  ShaderRef pixelShader{};
+  VertexShaderConstants vsConst{};
+  PixelShaderConstants psConst{};
+  std::array<TextureBinding, kMaxTextures> textures{};
+  std::array<SamplerSnapshot, kMaxSamplers> samplers{};
+  RenderStateSnapshot rs{};
+  RenderTargetSnapshot rts{};
+  ViewportScissor viewport{};
+  Matrix4x4 worldViewProj{};
+  std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
+  u32 clipPlaneMask = 0;
+  std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
+  std::vector<u8> userVertexData;
+  std::vector<u8> userIndexData;
+};
+
+}  // namespace fixture
+
+namespace detail {
 
 constexpr std::size_t kDrawRunInlineParamCapacity = 4;
 constexpr std::size_t kDrawRunInlinePayloadCapacity = 512;
@@ -1293,6 +1301,8 @@ struct DrawRunScratchStorage {
   DrawParamInlineStorage draws{};
   DrawPayloadArenaStorage payload{};
 };
+
+}  // namespace detail
 
 struct DrawRunView {
   std::span<const DrawParam> draws{};
@@ -1329,7 +1339,22 @@ struct ChunkHandleEntry {
 // resource rebinding on the encoder side.
 struct DrawRunDesc {
   CanonicalDrawState state{};              // applied once at run start
-  DrawRunScratchStorage scratch{};         // packed per-draw args + UP payload bytes
+
+ private:
+  detail::DrawRunScratchStorage scratch_{}; // packed per-draw args + UP payload bytes
+
+  friend void drawRunClear(DrawRunDesc& run);
+  friend void drawRunReserve(DrawRunDesc& run, std::size_t drawCount, std::size_t payloadBytes);
+  friend bool drawRunAppend(DrawRunDesc& run, DrawParam param, DrawParamPayloadView payload);
+  friend DrawRunView drawRunView(const DrawRunDesc& run) noexcept;
+  friend MutableDrawRunView drawRunMutableView(DrawRunDesc& run) noexcept;
+  friend bool drawRunEmpty(const DrawRunDesc& run) noexcept;
+  friend std::size_t drawRunDrawCount(const DrawRunDesc& run) noexcept;
+  friend std::size_t drawRunPayloadSize(const DrawRunDesc& run) noexcept;
+  friend std::span<const DrawParam> drawRunDraws(const DrawRunDesc& run) noexcept;
+  friend std::span<DrawParam> drawRunMutableDraws(DrawRunDesc& run) noexcept;
+  friend std::span<const u8> drawRunPayloadArena(const DrawRunDesc& run) noexcept;
+  friend std::span<u8> drawRunMutablePayloadArena(DrawRunDesc& run) noexcept;
 };
 
 struct ClearDesc {

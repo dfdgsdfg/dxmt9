@@ -12,8 +12,8 @@ namespace dxmt9::ffp {
 
 using namespace dxmt9::core;
 // The FVF / D3D-decl constants are already in this namespace (defined in the
-// header). The `using namespace dxmt9::core;` above brings in DrawDesc,
-// TextureOp, FogMode, Handle, and the kMax* constants.
+// header). The `using namespace dxmt9::core;` above brings in TextureOp,
+// FogMode, Handle, and the kMax* constants.
 
 u32 declTypeSize(u32 type) {
   switch (type) {
@@ -165,10 +165,6 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
   layout.stride = decl.streams[0].stride ? decl.streams[0].stride : offset;
   layout.hash = hashFixedFunctionLayout(layout);
   return layout;
-}
-
-std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const DrawDesc& desc) {
-  return decodeFixedFunctionVertexLayout(desc.vertexDecl);
 }
 
 std::string makeFfpVertexSource(const FfpVertexKey& key,
@@ -446,10 +442,6 @@ u32 computeVertexDeclStride(const VertexDeclSnapshot& decl) {
     computedStride = std::max(computedStride, static_cast<u32>(element.offset + declTypeSize(element.type)));
   }
   return computedStride;
-}
-
-u32 computeVertexDeclStride(const DrawDesc& desc) {
-  return computeVertexDeclStride(desc.vertexDecl);
 }
 
 u64 hashVertexDeclaration(const VertexDeclSnapshot& decl) {

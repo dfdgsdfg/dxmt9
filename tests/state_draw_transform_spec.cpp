@@ -580,9 +580,17 @@ void testFlatDrawStateKey() {
   checkEq(drawView.drawState->hot.key, firstKey,
           "slot draw state stores the canonical flat key");
   checkEq(drawView.drawParams[0].userVertexRange.offset, 0u,
-          "slot draw payload stores vertex bytes in slot arena");
+          "slot draw payload stores vertex bytes at a record-local offset");
   checkEq(drawView.drawParams[0].userIndexRange.offset, 4u,
-          "slot draw payload stores index bytes after vertex bytes");
+          "slot draw payload stores index bytes after vertex bytes in the record payload");
+  checkEq(drawView.drawRunRecord->payloadOffset, 0u,
+          "slot single-draw record starts at first payload arena byte");
+  checkEq(drawView.drawRunRecord->payloadSize, 6u,
+          "slot single-draw record stores its payload byte count");
+  checkEq(drawView.drawPayloadBytes.size(), std::size_t{6},
+          "slot single-draw view exposes a record-local payload span");
+  check(drawView.drawPayloadBytes.data() == slot.drawPayloadArena.data(),
+        "slot single-draw payload span starts at the record offset");
   checkEq(slot.drawPayloadArena.size(), std::size_t{6},
           "slot draw payload arena owns single-draw UP bytes");
 
@@ -608,12 +616,45 @@ void testFlatDrawStateKey() {
           "slot draw-run preserves the incoming debug snapshot without recomputing base state");
   checkEq(runView.drawParams.size(), std::size_t{1},
           "slot draw-run indexes shared draw param table");
-  checkEq(runView.drawParams[0].userVertexRange.offset, 6u,
-          "slot draw-run vertex payload range is rebased into slot arena");
-  checkEq(runView.drawParams[0].userIndexRange.offset, 10u,
-          "slot draw-run index payload range is rebased into slot arena");
+  checkEq(runView.drawParams[0].userVertexRange.offset, 0u,
+          "slot draw-run vertex payload range stays local to the record payload");
+  checkEq(runView.drawParams[0].userIndexRange.offset, 4u,
+          "slot draw-run index payload range stays local to the record payload");
+  checkEq(runView.drawRunRecord->payloadOffset, 6u,
+          "slot draw-run record points at its payload arena slice");
+  checkEq(runView.drawRunRecord->payloadSize, 6u,
+          "slot draw-run record stores its payload byte count");
+  checkEq(runView.drawPayloadBytes.size(), std::size_t{6},
+          "slot draw-run view exposes only its record payload span");
+  check(runView.drawPayloadBytes.data() ==
+            slot.drawPayloadArena.data() + runView.drawRunRecord->payloadOffset,
+        "slot draw-run payload span starts at the record offset");
   checkEq(slot.drawPayloadArena.size(), std::size_t{12},
           "slot payload arena owns draw and draw-run bytes together");
+
+  DrawRunDesc noPayloadRun{};
+  noPayloadRun.state = makeCanonicalDrawStateForTest(first);
+  check(drawRunAppend(noPayloadRun, drawParamA),
+        "test no-payload draw-run appends before slot append");
+  check(drawRunValidate(noPayloadRun), "no-payload draw-run validates before slot append");
+  slot.appendDrawRun(std::move(noPayloadRun));
+  const auto noPayloadView = slot.commandAt(2);
+  check(noPayloadView.drawRunRecord != nullptr,
+        "slot no-payload draw-run command exposes compact run record");
+  checkEq(noPayloadView.drawParams.size(), std::size_t{1},
+          "slot no-payload draw-run indexes its draw param");
+  checkEq(noPayloadView.drawRunRecord->payloadOffset, 12u,
+          "slot no-payload record keeps the current payload arena offset");
+  checkEq(noPayloadView.drawRunRecord->payloadSize, 0u,
+          "slot no-payload record stores an empty payload size");
+  check(noPayloadView.drawPayloadBytes.empty(),
+        "slot no-payload draw-run view exposes an empty payload span");
+  check(noPayloadView.drawParams[0].userVertexRange.empty(),
+        "slot no-payload draw-run leaves vertex payload range empty");
+  check(noPayloadView.drawParams[0].userIndexRange.empty(),
+        "slot no-payload draw-run leaves index payload range empty");
+  checkEq(slot.drawPayloadArena.size(), std::size_t{12},
+          "slot no-payload draw-run does not grow the payload arena");
 
   DrawDesc sameMapsDifferentInsertion = first;
   sameMapsDifferentInsertion.rs.values.clear();

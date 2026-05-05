@@ -206,8 +206,8 @@ void testFvfLayoutHashIsDeterministicAndResponsive() {
   desc.vertexDecl.fvf =
       dxmt9::ffp::kFvfXyzrhw | dxmt9::ffp::kFvfDiffuse | (1u << dxmt9::ffp::kFvfTexCountShift);
 
-  const auto layout = dxmt9::ffp::decodeFixedFunctionVertexLayout(desc);
-  const auto layoutAgain = dxmt9::ffp::decodeFixedFunctionVertexLayout(desc);
+  const auto layout = dxmt9::ffp::decodeFixedFunctionVertexLayout(desc.vertexDecl);
+  const auto layoutAgain = dxmt9::ffp::decodeFixedFunctionVertexLayout(desc.vertexDecl);
   check(layout.has_value(), "FVF layout decodes");
   check(layoutAgain.has_value(), "repeat FVF layout decodes");
   check(layout->valid, "FVF layout is valid");
@@ -223,7 +223,7 @@ void testFvfLayoutHashIsDeterministicAndResponsive() {
 
   DrawDesc withSpecular = desc;
   withSpecular.vertexDecl.fvf |= dxmt9::ffp::kFvfSpecular;
-  const auto specularLayout = dxmt9::ffp::decodeFixedFunctionVertexLayout(withSpecular);
+  const auto specularLayout = dxmt9::ffp::decodeFixedFunctionVertexLayout(withSpecular.vertexDecl);
   check(specularLayout.has_value(), "specular FVF layout decodes");
   checkEq(specularLayout->stride, 32u, "specular FVF increases stride");
   checkEq(specularLayout->texcoordOffset[0], 24u, "specular FVF shifts texcoord offset");

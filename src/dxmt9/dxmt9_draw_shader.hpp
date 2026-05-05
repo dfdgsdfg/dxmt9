@@ -32,7 +32,7 @@ ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext&
                                             const core::FlatDrawStateRecord& hot);
 // Fixture bridge for tests and offline compile requests that still start from
 // a DrawDesc-shaped state fixture. Hot pipeline code uses the flat overload.
-ShaderSourceContext makeShaderSourceContext(const core::DrawDesc& desc);
+ShaderSourceContext makeShaderSourceContext(const core::fixture::DrawDesc& desc);
 
 // Returns a complete MSL translation unit for either the vertex or pixel
 // shader corresponding to `context`. Also writes the source to
