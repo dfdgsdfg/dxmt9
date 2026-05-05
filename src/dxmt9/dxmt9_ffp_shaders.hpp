@@ -107,7 +107,7 @@ std::string makeFfpVertexSource(const core::FfpVertexKey& key,
 std::string makeFfpPixelSource(const core::FfpPixelKey& key,
                                const drawshader::ShaderSourceContext& context);
 
-// Compatibility wrappers for callers/tests that still provide DrawDesc.
+// Test helper wrappers for focused unit tests that still build DrawDesc.
 std::string makeFfpVertexSource(const core::FfpVertexKey& key, const core::DrawDesc& desc);
 std::string makeFfpPixelSource(const core::FfpPixelKey& key, const core::DrawDesc& desc);
 

@@ -49,8 +49,8 @@ report: P50, P95, P99, min, max, mean of per-iteration time
 ```
 for each iteration:
   begin_frame()
-  for i in 0..N_DRAWS:
-    submitDraw(desc[i])   ; desc varies by sub-workload
+  for each run in grouped_draw_runs:
+    submitDrawRun(run)    ; flat state + per-draw params vary by sub-workload
   flush()                 ; submit without GPU wait
   end_frame()
 timer measures: time from begin_frame to flush()

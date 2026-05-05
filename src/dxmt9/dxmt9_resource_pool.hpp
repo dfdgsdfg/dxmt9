@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -202,22 +201,10 @@ class HandleArena {
   std::vector<u32> freeList_;
 };
 
-template <typename Record>
-struct LegacyMapToken {
-  using mapped_type = Record;
-
-  void clear() noexcept {}
-};
-
 }  // namespace detail
 
 // Pool container. The typed arenas are the only production storage path.
-// The public legacy tokens remain temporarily so older destroy call sites can
-// select a record kind without exposing a direct unordered_map fallback.
 struct Pool {
-  detail::LegacyMapToken<BufferRecord> buffers;
-  detail::LegacyMapToken<TextureRecord> textures;
-  detail::LegacyMapToken<SurfaceRecord> surfaces;
   std::unordered_set<u64> dumpedGpuTextures;
 
   // Lookup helpers — return nullptr on miss. Caller is expected to hold the
@@ -234,32 +221,18 @@ struct Pool {
   // mutex. Preserves dxmt9's TLA+ NoUseAfterFree invariant.
   void reclaimCompleted(u64 completedSeqId);
 
+  // Mark a record destroy-pending and immediately reclaim if the GPU has
+  // already passed its last-used watermark. Returns true if the record
+  // existed.
+  bool markBufferDestroyAndGc(u64 handleValue, u64 completedSeqId);
+  bool markTextureDestroyAndGc(u64 handleValue, u64 completedSeqId);
+  bool markSurfaceDestroyAndGc(u64 handleValue, u64 completedSeqId);
+
   // Drop ALL records (teardown path; bypasses destroyPending / seq checks).
   void purgeAll() noexcept {
     bufferArena_.clear();
     textureArena_.clear();
     surfaceArena_.clear();
-    buffers.clear();
-    textures.clear();
-    surfaces.clear();
-  }
-
-  // Mark a record destroy-pending and immediately reclaim if the GPU has
-  // already passed its last-used watermark. Returns true if the record
-  // existed.
-  template <typename Map>
-  bool markDestroyAndGc(Map& map, u64 handleValue, u64 completedSeqId) {
-    (void)map;
-    using Record = typename std::remove_cv_t<Map>::mapped_type;
-    if constexpr (std::is_same_v<Record, BufferRecord>) {
-      return markBufferDestroyAndGc(handleValue, completedSeqId);
-    } else if constexpr (std::is_same_v<Record, TextureRecord>) {
-      return markTextureDestroyAndGc(handleValue, completedSeqId);
-    } else if constexpr (std::is_same_v<Record, SurfaceRecord>) {
-      return markSurfaceDestroyAndGc(handleValue, completedSeqId);
-    } else {
-      return false;
-    }
   }
 
   // Record a CPU-visible write to a buffer (updates shadow + mirrors to
@@ -351,7 +324,6 @@ struct Pool {
 
   // Per-command-kind bulk marks. Walk the descriptor's resources and stamp
   // their last-used watermark.
-  void markDrawResources(const core::DrawDesc& desc, u64 seqId);
   void markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId);
   void markClearResources(const core::ClearDesc& desc, u64 seqId);
   void markSurfaceCopyResources(const core::SurfaceCopyDesc& desc, u64 seqId);
@@ -360,10 +332,6 @@ struct Pool {
   void markColorFillResources(const core::ColorFillDesc& desc, u64 seqId);
 
  private:
-  bool markBufferDestroyAndGc(u64 handleValue, u64 completedSeqId);
-  bool markTextureDestroyAndGc(u64 handleValue, u64 completedSeqId);
-  bool markSurfaceDestroyAndGc(u64 handleValue, u64 completedSeqId);
-
   detail::HandleArena<BufferRecord, detail::ResourceHandleKind::Buffer> bufferArena_;
   detail::HandleArena<TextureRecord, detail::ResourceHandleKind::Texture> textureArena_;
   detail::HandleArena<SurfaceRecord, detail::ResourceHandleKind::Surface> surfaceArena_;

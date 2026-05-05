@@ -110,20 +110,10 @@ class CommandQueue {
   // Submission / resource-marking surface. Each call acquires mutex_
   // internally; Pool access goes through pool_ (snapshotted at
   // construction).
-  void submitDraw(const core::DrawDesc& desc);
-  // Batched draw ingress — pushes N draws into the current ChunkSlot under
-  // a single mutex acquire (vs N for the per-draw submitDraw). Used by the
-  // chunk importer when a run of D9C_COMMAND_RECORD_DRAW_* records carries
-  // no state-mutating records between them. Resource marking + chunk-limit
-  // check still fires per-draw; only the queue lock + writer-slot path
-  // costs are amortized.
-  void submitDrawBatch(std::span<const core::DrawDesc> descs);
   // Compact backend draw-run ingress — pushes one BackendDrawRunRecord
   // (BaseDrawState + DrawParam[N]) into the current ChunkSlot under a
   // single mutex acquire. The encoder binds state from desc.state ONCE,
-  // then loops emitting per-DrawParam Metal calls. Replaces N
-  // submitDraw() calls when the importer detects a run of draws with no
-  // state change between them.
+  // then loops emitting per-DrawParam Metal calls.
   void submitDrawRun(core::DrawRunDesc desc);
   // Bulk resource retention — chunk importer hands the deduped handle
   // set from D9CCommandChunk.handles[] in one call. Single mutex
@@ -134,14 +124,14 @@ class CommandQueue {
   void markChunkResources(std::span<const core::ChunkHandleEntry> entries);
 
   // Phase 14: chunk importer toggles this around a chunk's record-iter
-  // block. While true, submit{Draw,DrawBatch,DrawRun} skip per-draw
+  // block. While true, submitDrawRun skips per-draw
   // pool_.markDrawResources because chunk.handles[] bulk retention
   // (markChunkResources) has already pinned every resource the chunk
   // touches against the same chunk seqId. Without this guard, every
   // chunk-mode draw double-marks the same (handle, seqId) pair —
   // correct but pure CPU waste (lastUsedSeqId compare always returns
-  // the existing value). Default false → legacy non-chunk paths
-  // (DXMT9_PE_DRAW_CHUNK off) keep per-draw marking.
+  // the existing value). Default false keeps non-chunk test/core paths
+  // pinned by the run's hot resource set.
   void setSkipDrawResourceMarking(bool skip);
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);

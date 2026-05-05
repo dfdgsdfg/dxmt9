@@ -36,8 +36,6 @@ using dxmt9::d3d9::devicec::makeImportedWireRecordHandleView;
 using dxmt9::d3d9::devicec::makeRunParam;
 using dxmt9::d3d9::devicec::nextImportedRecord;
 using dxmt9::d3d9::devicec::nextImportedReplayHazardState;
-using dxmt9::d3d9::devicec::normalizeImportedChunkViewToWire;
-using dxmt9::d3d9::devicec::normalizeImportedCommandChunkToWire;
 using dxmt9::d3d9::devicec::packetHasNoStateDelta;
 using dxmt9::d3d9::devicec::replayInfoForCommandRecordType;
 using dxmt9::d3d9::devicec::replayInfoForImportedRecord;
@@ -136,17 +134,36 @@ D9CWireHandle wireHandle(std::uint64_t value) {
   };
 }
 
-D9CWireHandle pointerWireHandle(const void* ptr) {
-  return wireHandle(reinterpret_cast<std::uintptr_t>(ptr));
+D9CCommandChunkWireHandleEntry wireHandleEntry(
+    std::uint32_t kind,
+    std::uint64_t handle,
+    std::uint32_t reserved0 = 0u,
+    std::uint32_t generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+    std::uint32_t reserved1 = 0u) {
+  return D9CCommandChunkWireHandleEntry{
+      .kind = kind,
+      .generation = generation,
+      .opaqueHandle = handle,
+      .reserved0 = reserved0,
+      .reserved1 = reserved1,
+  };
 }
 
-D9CChunkHandleEntry chunkHandle(std::uint32_t kind,
-                                std::uint64_t handle,
-                                std::uint32_t reserved = 0u) {
-  return D9CChunkHandleEntry{
-      .kind = kind,
-      .reserved = reserved,
-      .handle = handle,
+D9CCommandChunkWireRecordHeader wireRecordHeader(
+    std::uint32_t type,
+    std::uint32_t payloadOffset,
+    std::uint32_t payloadSize,
+    std::uint32_t firstHandle = 0u,
+    std::uint32_t handleCount = 0u) {
+  return D9CCommandChunkWireRecordHeader{
+      .type = type,
+      .flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
+      .payloadOffset = payloadOffset,
+      .payloadSize = payloadSize,
+      .firstHandle = firstHandle,
+      .handleCount = handleCount,
+      .reserved0 = 0u,
+      .reserved1 = 0u,
   };
 }
 
@@ -331,7 +348,7 @@ void testImportedMultiRecordIteration() {
   checkEq(validation.parsedRecordCount, 2u, "valid imported chunk parses count");
 }
 
-void testLegacyChunkNormalizesToWireHeaders() {
+void testCommandChunkWireBlobRejectsLegacyRawRecordStream() {
   const auto present = makePresentRecord();
   const auto draw = makeDrawPrimitiveRecord(4u, 2u);
 
@@ -339,74 +356,19 @@ void testLegacyChunkNormalizesToWireHeaders() {
   appendRecord(bytes, present);
   appendRecord(bytes, draw);
 
-  std::vector<D9CChunkHandleEntry> handles{
-      chunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x1000u),
-      chunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER, 0x2000u),
-  };
+  const auto decoded = makeImportedWireChunkBlobView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()));
+  check(!decoded.valid(), "raw record stream is not accepted as a wire blob");
+  check(!decoded.wireHeaderCandidate(),
+        "raw record stream does not pass DOD wire header identity checks");
+  checkEq(static_cast<int>(decoded.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidChunkHeader),
+          "raw record stream fails as an invalid chunk header");
 
-  D9CCommandChunk command{};
-  command.version = D9C_COMMAND_CHUNK_VERSION;
-  command.recordCount = 2u;
-  command.recordBytes = static_cast<std::uint32_t>(bytes.size());
-  command.records = pointerWireHandle(bytes.data());
-  command.handleCount = static_cast<std::uint32_t>(handles.size());
-  command.handles = pointerWireHandle(handles.data());
-
-  auto normalized = normalizeImportedCommandChunkToWire(command);
-  const auto wire = normalized.view();
-  checkEq(wire.recordCount, 2u, "D9CCommandChunk normalizes record count");
-  checkEq(wire.payloadArenaSize, static_cast<std::uint32_t>(bytes.size()),
-          "D9CCommandChunk normalizes payload arena size");
-  check(wire.payloadArena == bytes.data(),
-        "D9CCommandChunk wire payload arena points at legacy records");
-  checkEq(wire.handleCount, 2u, "D9CCommandChunk normalizes handle count");
-
-  checkEq(wire.records[0].type,
-          static_cast<std::uint32_t>(D9C_COMMAND_RECORD_PRESENT),
-          "first normalized wire record type");
-  checkEq(wire.records[0].payloadOffset, 0u,
-          "first normalized wire record payload offset");
-  checkEq(wire.records[0].payloadSize,
-          static_cast<std::uint32_t>(sizeof(present)),
-          "first normalized wire record payload size");
-  checkEq(wire.records[0].firstHandle, 0u,
-          "first normalized wire record handle range starts at table");
-  checkEq(wire.records[0].handleCount, 2u,
-          "first normalized wire record sees legacy chunk handles");
-
-  checkEq(wire.records[1].type,
-          static_cast<std::uint32_t>(D9C_COMMAND_RECORD_DRAW_PRIMITIVE),
-          "second normalized wire record type");
-  checkEq(wire.records[1].payloadOffset,
-          static_cast<std::uint32_t>(sizeof(present)),
-          "second normalized wire record payload offset");
-  checkEq(wire.records[1].payloadSize,
-          static_cast<std::uint32_t>(sizeof(draw)),
-          "second normalized wire record payload size");
-  checkEq(wire.records[1].handleCount, 2u,
-          "second normalized wire record sees legacy chunk handles");
-
-  checkEq(wire.handles[0].kind, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-          "first normalized wire handle kind");
-  checkEq(wire.handles[0].opaqueHandle, 0x1000u,
-          "first normalized wire handle value");
-  checkEq(wire.handles[1].kind, D9C_CHUNK_HANDLE_KIND_BUFFER,
-          "second normalized wire handle kind");
-  checkEq(wire.handles[1].opaqueHandle, 0x2000u,
-          "second normalized wire handle value");
-
-  const auto validation = validateImportedWireChunk(wire);
-  check(validation.valid(), "normalized D9CCommandChunk wire view validates");
-  checkEq(validation.parsedRecordCount, 2u,
-          "normalized wire validation parses every record");
-
-  const auto imported = makeImportedChunkView(
-      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 2u);
-  const auto fromView =
-      normalizeImportedChunkViewToWire(imported, handles.data(),
-                                       static_cast<std::uint32_t>(handles.size()));
-  checkEq(fromView.view().recordCount, 2u,
-          "ImportedChunkView normalizes through the same wire path");
+  const auto empty = makeImportedWireChunkBlobView(nullptr, 0u);
+  checkEq(static_cast<int>(empty.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::MissingChunkHeader),
+          "empty command chunk blob is rejected before import");
 }
 
 void testImportedWireChunkRejectsMalformedPayloadRange() {
@@ -415,23 +377,34 @@ void testImportedWireChunkRejectsMalformedPayloadRange() {
   std::vector<std::uint8_t> bytes;
   appendRecord(bytes, present);
   appendRecord(bytes, draw);
-  const auto imported = makeImportedChunkView(
-      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 2u);
 
-  auto normalized = normalizeImportedChunkViewToWire(imported);
-  normalized.records[0].payloadOffset = static_cast<std::uint32_t>(bytes.size());
-  normalized.records[0].payloadSize = 1u;
+  const std::vector<D9CCommandChunkWireRecordHeader> validRecords{
+      wireRecordHeader(D9C_COMMAND_RECORD_PRESENT, 0u,
+                       static_cast<std::uint32_t>(sizeof(present))),
+      wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                       static_cast<std::uint32_t>(sizeof(present)),
+                       static_cast<std::uint32_t>(sizeof(draw))),
+  };
+  std::vector<D9CCommandChunkWireRecordHeader> records = validRecords;
+  records[0].payloadOffset = static_cast<std::uint32_t>(bytes.size());
+  records[0].payloadSize = 1u;
 
-  const auto validation = validateImportedWireChunk(normalized.view());
+  auto wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), nullptr, 0u);
+  const auto validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordRange),
           "wire payload range past arena is rejected");
   checkEq(validation.failedRecordIndex, 0u,
           "wire payload range reports failed record index");
 
-  normalized = normalizeImportedChunkViewToWire(imported);
-  normalized.records[0].payloadSize = static_cast<std::uint32_t>(bytes.size());
-  const auto oversizedValidation = validateImportedWireChunk(normalized.view());
+  records = validRecords;
+  records[0].payloadSize = static_cast<std::uint32_t>(bytes.size());
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), nullptr, 0u);
+  const auto oversizedValidation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(oversizedValidation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecord),
           "wire payload range spanning extra record bytes is rejected");
@@ -443,67 +416,94 @@ void testImportedWireChunkRejectsMalformedPayloadRange() {
 void testImportedWireChunkEnforcesHandleTableAndRanges() {
   const auto present = makePresentRecord();
   auto bytes = recordBytes(present);
-  const auto imported = makeImportedChunkView(
-      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 1u);
-  std::vector<D9CChunkHandleEntry> handles{
-      chunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x1000u),
-      chunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER, 0x2000u),
+  std::vector<D9CCommandChunkWireHandleEntry> handles{
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x1000u),
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, 0x2000u),
+  };
+  const std::vector<D9CCommandChunkWireRecordHeader> validRecords{
+      wireRecordHeader(D9C_COMMAND_RECORD_PRESENT, 0u,
+                       static_cast<std::uint32_t>(sizeof(present)), 0u,
+                       static_cast<std::uint32_t>(handles.size())),
   };
 
-  auto normalized =
-      normalizeImportedChunkViewToWire(imported, handles.data(),
-                                       static_cast<std::uint32_t>(handles.size()));
-  normalized.records[0].firstHandle = 2u;
-  normalized.records[0].handleCount = 1u;
-  auto validation = validateImportedWireChunk(normalized.view());
+  auto records = validRecords;
+  records[0].firstHandle = 2u;
+  records[0].handleCount = 1u;
+  auto wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
+  auto validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordRange),
           "wire handle range past table is rejected");
   checkEq(validation.failedRecordIndex, 0u,
           "wire handle range reports failed record index");
 
-  normalized = normalizeImportedChunkViewToWire(imported, handles.data(),
-                                                static_cast<std::uint32_t>(handles.size()));
-  normalized.records[0].flags = 1u;
-  validation = validateImportedWireChunk(normalized.view());
+  records = validRecords;
+  records[0].flags = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordHeader),
           "wire record header rejects unsupported flags");
 
-  normalized.records[0].flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE;
-  normalized.records[0].reserved1 = 1u;
-  validation = validateImportedWireChunk(normalized.view());
+  records[0].flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE;
+  records[0].reserved1 = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordHeader),
           "wire record header rejects nonzero reserved fields");
 
-  normalized = normalizeImportedChunkViewToWire(imported, handles.data(),
-                                                static_cast<std::uint32_t>(handles.size()));
-  normalized.handles[1].kind = D9C_CHUNK_HANDLE_KIND_VERTEX_DECL + 1u;
-  validation = validateImportedWireChunk(normalized.view());
+  records = validRecords;
+  handles[1].kind = D9C_CHUNK_HANDLE_KIND_VERTEX_DECL + 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           "wire handle table rejects unknown handle kind");
   checkEq(validation.failedHandleIndex, 1u,
           "wire handle table reports failed handle index");
 
-  normalized.handles[1].kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
-  normalized.handles[1].reserved0 = 1u;
-  validation = validateImportedWireChunk(normalized.view());
+  handles[1].kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
+  handles[1].reserved0 = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           "wire handle table rejects nonzero reserved fields");
 
-  normalized.handles[1].reserved0 = 0u;
-  normalized.handles[1].reserved1 = 1u;
-  validation = validateImportedWireChunk(normalized.view());
+  handles[1].reserved0 = 0u;
+  handles[1].reserved1 = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           "wire handle table rejects nonzero trailing reserved fields");
 
-  normalized.handles[1].reserved1 = 0u;
-  normalized.handles[1].generation = 1u;
-  validation = validateImportedWireChunk(normalized.view());
+  handles[1].reserved1 = 0u;
+  handles[1].generation = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           "wire handle table rejects unsupported handle generations");
@@ -613,10 +613,16 @@ void testImportedWireIterationBuildsLegacyRecordViews() {
   appendRecord(bytes, present);
   appendRecord(bytes, draw);
 
-  const auto imported = makeImportedChunkView(
-      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 2u);
-  const auto normalized = normalizeImportedChunkViewToWire(imported);
-  const auto wire = normalized.view();
+  std::vector<D9CCommandChunkWireRecordHeader> records{
+      wireRecordHeader(D9C_COMMAND_RECORD_PRESENT, 0u,
+                       static_cast<std::uint32_t>(sizeof(present))),
+      wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                       static_cast<std::uint32_t>(sizeof(present)),
+                       static_cast<std::uint32_t>(sizeof(draw))),
+  };
+  const auto wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), nullptr, 0u);
 
   const auto first = nextImportedRecord(wire, 0u);
   check(first.has_value(), "first wire imported record exists");
@@ -791,18 +797,6 @@ void testImportedWireBlobViewUsesHeaderTablesAndArena() {
   check(decoded.valid(), "wire blob decoder validates header tables and arena");
   checkEq(decoded.chunk.recordCount, 2u, "wire blob decoder exposes record table count");
   checkEq(decoded.chunk.handleCount, 2u, "wire blob decoder exposes handle table count");
-
-  D9CCommandChunk command{};
-  command.version = D9C_COMMAND_CHUNK_VERSION;
-  command.recordCount = 2u;
-  command.recordBytes = static_cast<std::uint32_t>(blob.size());
-  command.records = pointerWireHandle(blob.data());
-  command.handleCount = 2u;
-  const auto normalized = normalizeImportedCommandChunkToWire(command);
-  checkEq(normalized.view().recordCount, 2u,
-          "D9CCommandChunk can carry a DOD wire blob record table");
-  checkEq(normalized.view().handleCount, 2u,
-          "D9CCommandChunk can carry a DOD wire blob handle table");
 
   const auto first = nextImportedRecord(decoded.chunk, 0u);
   check(first.has_value(), "wire blob first record exists");
@@ -1249,7 +1243,7 @@ int main() {
     testSetConstTailValidation();
     testInvalidTruncatedAndUnknownRecords();
     testImportedMultiRecordIteration();
-    testLegacyChunkNormalizesToWireHeaders();
+    testCommandChunkWireBlobRejectsLegacyRawRecordStream();
     testImportedWireChunkRejectsMalformedPayloadRange();
     testImportedWireChunkEnforcesHandleTableAndRanges();
     testImportedWireRecordHandleRangesSelectSubsets();

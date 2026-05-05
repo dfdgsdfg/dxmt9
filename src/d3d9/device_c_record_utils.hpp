@@ -85,24 +85,6 @@ struct ImportedWireRecordHandleView {
   }
 };
 
-struct ImportedWireChunkStorage {
-  std::vector<D9CCommandChunkWireRecordHeader> records{};
-  std::vector<D9CCommandChunkWireHandleEntry> handles{};
-  const std::uint8_t* payloadArena = nullptr;
-  std::uint32_t payloadArenaSize = 0;
-
-  ImportedWireChunkView view() const noexcept {
-    return ImportedWireChunkView{
-        .records = records.empty() ? nullptr : records.data(),
-        .recordCount = static_cast<std::uint32_t>(records.size()),
-        .payloadArena = payloadArena,
-        .payloadArenaSize = payloadArenaSize,
-        .handles = handles.empty() ? nullptr : handles.data(),
-        .handleCount = static_cast<std::uint32_t>(handles.size()),
-    };
-  }
-};
-
 enum class ImportedWireChunkValidationStatus : std::uint8_t {
   Valid,
   MissingChunkHeader,
@@ -283,14 +265,6 @@ ImportedWireChunkView makeImportedWireChunkView(
 ImportedWireChunkBlobView makeImportedWireChunkBlobView(
     const std::uint8_t* blob,
     std::uint32_t blobSize) noexcept;
-
-ImportedWireChunkStorage normalizeImportedChunkViewToWire(
-    const ImportedChunkView& chunk,
-    const D9CChunkHandleEntry* handles = nullptr,
-    std::uint32_t handleCount = 0);
-
-ImportedWireChunkStorage normalizeImportedCommandChunkToWire(
-    const D9CCommandChunk& chunk);
 
 ImportedRecordView makeImportedRecordView(
     const ImportedChunkView& chunk,

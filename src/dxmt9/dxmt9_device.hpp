@@ -93,18 +93,8 @@ class Device {
                                     std::uint32_t /*pitch*/,
                                     std::span<const std::uint8_t> /*bytes*/) {}
 
-  // Encode + submit commands. Previously on BackendDevice. Promoted here
-  // so core::Device can dispatch through the upper Device. DeviceImpl
-  // forwards to backend_ while the encoder still lives there; Step 3
-  // moves the encoder onto a RenderContext sibling and DeviceImpl
-  // implements these directly.
-  virtual void submitDraw(const core::DrawDesc&) {}
-  // Default fans out to per-draw submitDraw — backends that can amortize
-  // (DeviceImpl forwards to CommandQueue::submitDrawBatch) override this
-  // to hold the queue mutex once across the run.
-  virtual void submitDrawBatch(std::span<const core::DrawDesc> descs) {
-    for (const auto& desc : descs) submitDraw(desc);
-  }
+  // Encode + submit commands. core::Device dispatches compact draw runs
+  // through the upper runtime; DeviceImpl forwards to CommandQueue.
   // Bulk resource retention — chunk-importer-supplied handle set.
   // Default no-op for stub backends (pool lifetime tracking is a
   // production-only concern). DeviceImpl forwards to

@@ -217,8 +217,7 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        u32 depthFormat,
                                        u32 stencilFormat);
 
-// Compatibility wrapper for tests / cold-path callers that still provide only
-// a DrawDesc.
+// Test helper wrapper for focused unit tests that still build DrawDesc.
 ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
                                        std::span<const u32> colorFormats,
                                        std::span<const BlendAttachmentKey> blendAttachments,

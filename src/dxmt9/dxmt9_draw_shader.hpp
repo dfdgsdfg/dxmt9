@@ -37,7 +37,7 @@ ShaderSourceContext makeShaderSourceContext(const core::DrawDesc& desc);
 // $DXMT_DUMP_SHADER_DIR/<label>-<hash>.metal if the env var is set.
 std::string makeDrawShaderSource(const ShaderSourceContext& context, bool vertex);
 
-// Compatibility wrapper for callers/tests that still provide DrawDesc.
+// Test helper wrapper for focused unit tests that still build DrawDesc.
 std::string makeDrawShaderSource(const core::DrawDesc& desc, bool vertex);
 
 }  // namespace dxmt9::drawshader

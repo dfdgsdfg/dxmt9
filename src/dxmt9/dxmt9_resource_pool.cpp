@@ -506,22 +506,6 @@ void Pool::markSurfaceUse(core::Handle handle, u64 seqId) {
   }
 }
 
-void Pool::markDrawResources(const core::DrawDesc& desc, u64 seqId) {
-  markBufferUse(desc.indexBuffer, seqId);
-  for (const auto& stream : desc.vertexDecl.streams) {
-    if (stream.buffer) {
-      markBufferUse(stream.buffer->handle(), seqId);
-    }
-  }
-  for (const auto& texture : desc.textures) {
-    markTextureUse(texture.handle, seqId);
-  }
-  for (const auto& rt : desc.rts.color) {
-    markSurfaceUse(rt.handle, seqId);
-  }
-  markSurfaceUse(desc.rts.depthStencil.handle, seqId);
-}
-
 void Pool::markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId) {
   markBufferUse(hot.indexBuffer, seqId);
   for (auto handle : hot.streamBuffers) {

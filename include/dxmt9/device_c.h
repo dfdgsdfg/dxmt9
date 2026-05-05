@@ -564,11 +564,9 @@ enum {
     D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP = 3,
     D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP = 4,
     /* Note: IDs 5..13 (per-call Set* setter-replay records) were removed
-     * — that shape violated the recorder design (Set* state setters must
-     * be PE-shadow-only and embedded into the next DrawRecord, not
-     * emitted as separate backend commands). PE side reverted to the
-     * legacy unix-call path for those setters until DrawRecord is
-     * extended to carry the full snapshot.
+     * — that shape violated the recorder design. Set* state setters are
+     * PE-shadow-only and travel through DrawRecord/APPLY_STATE deltas
+     * instead of being emitted as separate backend commands.
      *
      * Variable-size const-array uploads. Each appends `count*kElemSize`
      * bytes after the fixed header — float[count*4] for *F, int32[count*4]

@@ -278,9 +278,9 @@ void testFlatPipelineHelpersMatchDrawDescCompatibilityWrappers() {
   desc.rts.color[0].sampleCount = 4u;
 
   checkEq(makeFlatBlendKeys(desc), makeBlendKeys(desc),
-          "flat blend helper matches DrawDesc compatibility wrapper");
+          "flat blend helper matches DrawDesc test helper wrapper");
   checkEq(makeFlatVariantKey(desc), makeVariantKey(desc),
-          "flat shader variant helper matches DrawDesc compatibility wrapper");
+          "flat shader variant helper matches DrawDesc test helper wrapper");
 }
 
 void testSrgbCompatiblePixelFormatConversion() {

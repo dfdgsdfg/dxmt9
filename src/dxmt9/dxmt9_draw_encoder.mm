@@ -499,10 +499,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
 }
 
-// Phase 13 step 2: per-draw view onto either the DrawDesc itself or a
-// caller-provided DrawParam override. Lets the Kind::DrawRun handler
-// avoid synthesizing one DrawDesc per iteration just to override 6
-// scalars + 2 byte vectors. Constructed once at encodeDraw entry; all
+// Per-draw view from DrawParam. Constructed once at encodeDraw entry; all
 // per-draw field reads inside the function go through this view.
 struct ParamView {
   core::PrimitiveType primitiveType;
@@ -511,6 +508,7 @@ struct ParamView {
   i32 baseVertexIndex;
   u32 startIndex;
   core::IndexType indexType;
+  bool indexed;
   std::span<const u8> userVertexData;
   std::span<const u8> userIndexData;
 };
@@ -566,6 +564,7 @@ bool encodeDraw(EncodeContext& ctx,
                   paramOverride->baseVertexIndex,
                   paramOverride->startIndex,
                   paramOverride->indexType,
+                  paramOverride->indexed,
                   drawParamVertexBytes(*paramOverride, paramPayloadArena),
                   drawParamIndexBytes(*paramOverride, paramPayloadArena)}
       : ParamView{debug ? debug->primitiveType : core::PrimitiveType::TriangleList,
@@ -574,6 +573,7 @@ bool encodeDraw(EncodeContext& ctx,
                   debug ? debug->baseVertexIndex : 0,
                   debug ? debug->startIndex : 0u,
                   debug ? debug->indexType : IndexType::UInt16,
+                  false,
                   {},
                   {}};
   if (debug::skipAllDraws()) {
@@ -688,7 +688,7 @@ bool encodeDraw(EncodeContext& ctx,
   const u32 primitiveCount = std::max<u32>(1, pv.primitiveCount);
   const uint64_t vertexCount =
       static_cast<uint64_t>(std::max(1u, primitiveVertexCount(pv.primitiveType, primitiveCount)));
-  const bool indexedDraw = hot.indexBuffer || !pv.userIndexData.empty();
+  const bool indexedDraw = pv.indexed && (hot.indexBuffer || !pv.userIndexData.empty());
   CommandQueue::TransientBufferSlice transientVertexBuffer;
   std::span<const u8> vertexBytes;
   WMT::Buffer vertexBuffer{};

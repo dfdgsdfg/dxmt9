@@ -717,35 +717,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  ImportedWireChunkStorage normalizedChunk;
   ImportedWireChunkView importedChunk{};
   const auto wireBlob = makeImportedWireChunkBlobView(records, chunk->recordBytes);
-  if (wireBlob.wireHeaderCandidate()) {
-    if (!wireBlob.valid()) {
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
-    importedChunk = wireBlob.chunk;
-    if ((chunk->recordCount != 0 && importedChunk.recordCount != chunk->recordCount) ||
-        (chunk->handleCount != 0 && importedChunk.handleCount != chunk->handleCount)) {
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
-  } else {
-    const auto* handles = chunk->handleCount != 0
-                              ? wireHandlePtr<const D9CChunkHandleEntry>(chunk->handles)
-                              : nullptr;
-    if (chunk->handleCount != 0 && !handles) {
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
-
-    const auto legacyChunk =
-        makeImportedChunkView(records, chunk->recordBytes, chunk->recordCount);
-    normalizedChunk =
-        normalizeImportedChunkViewToWire(legacyChunk, handles, chunk->handleCount);
-    importedChunk = normalizedChunk.view();
-    if (importedChunk.recordCount != chunk->recordCount ||
-        importedChunk.handleCount != chunk->handleCount) {
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
+  if (!wireBlob.valid()) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  importedChunk = wireBlob.chunk;
+  if ((chunk->recordCount != 0 && importedChunk.recordCount != chunk->recordCount) ||
+      (chunk->handleCount != 0 && importedChunk.handleCount != chunk->handleCount)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
   const auto validation = validateImportedWireChunk(importedChunk);
@@ -754,8 +734,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   }
 
   // Phase 4 / 18: validate and retain only handles selected by record
-  // handle ranges. Legacy chunks normalize each record to the full table,
-  // while DOD chunks can provide narrower per-record subsets.
+  // handle ranges.
   //
   // The wire payload from PE carries the SERVER-SIDE D9C wrapper
   // pointer (D9CTexture* / D9CBuffer* / D9CSurface*) cast to uint64,
@@ -815,12 +794,11 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   }
 
   // Phase 14: bulk markChunkResources has already pinned every resource
-  // in this chunk against its seqId. Suppress the per-draw
-  // markDrawResources walk inside submit{Draw,DrawBatch,DrawRun} for
-  // the duration of this record-iter block — RAII guard ensures the
-  // flag is cleared even if a record returns early. The flag is only
-  // armed after at least one resource was bulk-marked; chunks with no
-  // retained pool resources fall through to legacy per-draw marking.
+  // in this chunk against its seqId. Suppress the submitDrawRun
+  // markDrawResources walk for the duration of this record-iter block;
+  // the RAII guard clears the flag even if a record returns early.
+  // Chunks with no retained pool resources keep the normal run-level
+  // hot-state marking path.
   struct ResetSkipDrawMarkGuard {
     std::shared_ptr<dxmt9::Device> upper;
     ~ResetSkipDrawMarkGuard() {
@@ -850,7 +828,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       // Try to coalesce into a draw run: scan ahead for consecutive
       // DRAW_PRIMITIVE records that also have empty state deltas, build
       // one DrawParam vector, dispatch via drawPrimitiveRun (single
-      // snapshotDrawDesc + single submitDrawRun on the queue side).
+      // canonical hot-state build + single submitDrawRun on the queue side).
       // Falls through to per-record path if the run is just length-1.
       const auto scan = scanImportedDrawRun(importedChunk, *recordView);
       if (scan.replayAsRun()) {
@@ -875,7 +853,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
 
         // applyDrawPacketState would be a no-op here (delta is empty),
         // so skip directly to drawPrimitiveRun. Bypasses N-1
-        // applyDrawPrimitivePacket / snapshotDrawDesc calls.
+        // applyDrawPrimitivePacket / canonical-state builds.
         hr = d->dev().drawPrimitiveRun(std::span<const dxmt9::core::DrawParam>(run));
         if (failed(hr)) return hr;
         recordIndex = scan.endIndex;

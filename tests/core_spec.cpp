@@ -1401,7 +1401,7 @@ void testDeviceCoreFlow() {
 
   const auto& draw0 = backend->draws[0];
   checkEq(draw0.primitiveType, PrimitiveType::TriangleList, "draw0 primitive type");
-  checkEq(draw0.indexBuffer, dynamicBuffer->handle(), "draw0 index buffer");
+  checkEq(draw0.indexBuffer, Handle{}, "draw0 non-indexed UP draw ignores bound index buffer");
   checkEq(draw0.indexType, IndexType::UInt32, "draw0 index type");
   checkEq(draw0.vertexDecl.fvf, 0x1122u, "draw0 fvf");
   checkEq(draw0.vertexDecl.elements.size(), size_t{1}, "draw0 vertex decl size");

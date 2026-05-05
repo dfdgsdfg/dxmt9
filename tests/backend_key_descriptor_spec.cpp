@@ -150,7 +150,7 @@ void testDepthStencilKeyReflectsDepthAndStencilState() {
       dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &hot});
 
   check(key.depthEnable, "depth enabled reflected");
-  checkEq(flatKey, key, "flat depth-stencil helper matches DrawDesc compatibility wrapper");
+  checkEq(flatKey, key, "flat depth-stencil helper matches DrawDesc test helper wrapper");
   check(key.depthWrite, "depth write reflected when depth is enabled");
   checkEq(key.depthFunc, static_cast<u32>(CompareFunc::LessEqual), "depth func reflected");
   check(key.front.enabled, "front stencil enabled reflected");

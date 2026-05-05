@@ -1653,9 +1653,9 @@ class BackendDevice {
     (void)pitch;
     (void)bytes;
   }
-  // Submission overrides: after Step 3b, production routes these through
-  // dxmt9::CommandQueue. BackendDevice versions default to no-op; only
-  // MockBackendDevice (test) overrides them to record calls.
+  // Test facade submission overrides. Production draw submission enters the
+  // dxmt9::Device/CommandQueue flat DrawRun path; BackendDevice keeps these
+  // no-op hooks for focused core tests that observe decoded descriptors.
   virtual void submitDraw(const DrawDesc& desc) { (void)desc; }
   virtual void submitClear(const ClearDesc& desc) { (void)desc; }
   virtual void submitSurfaceCopy(const SurfaceCopyDesc& desc) { (void)desc; }
@@ -2062,8 +2062,8 @@ class Device : public std::enable_shared_from_this<Device> {
   // packages it with the supplied DrawParam[] into a DrawRunDesc, then
   // hands the run to upperDevice_->submitDrawRun. Used by the chunk
   // importer when N consecutive D9C_COMMAND_RECORD_DRAW_* records
-  // carry no state delta — saves N-1 snapshotDrawDesc calls + N-1
-  // queue-side DrawDesc copies.
+  // carry no state delta — saves N-1 canonical state builds and keeps
+  // queue-side draw submission on the flat hot-state path.
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
   HResult present();
   HResult reset(const PresentParameters& params);
@@ -2077,8 +2077,6 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 completedSequenceId() const noexcept { return completedSequenceId_; }
   void initializeDefaultSwapChain();
 
-  DrawDesc snapshotDrawDesc(PrimitiveType type, u32 primitiveCount, u32 startVertex,
-                            i32 baseVertexIndex, u32 startIndex, IndexType indexType) const;
   ClearDesc snapshotClearDesc(const ClearDesc& desc) const;
   SwapDesc snapshotSwapDesc() const;
   std::shared_ptr<StateBlock> captureStateBlock() const;
@@ -2107,7 +2105,7 @@ class Device : public std::enable_shared_from_this<Device> {
   void registerSurface(const std::shared_ptr<Surface>& surface);
   void invalidateDefaultPoolResources();
   void submitClearInternal(const ClearDesc& desc);
-  void submitDrawInternal(const DrawDesc& desc);
+  void submitDrawRunInternal(DrawRunDesc desc);
   void submitPresentInternal(const SwapDesc& desc);
   void maybeCaptureExperimentFrame();
   void resetState();

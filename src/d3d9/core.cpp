@@ -192,16 +192,6 @@ std::string textureDumpDir() {
   return value;
 }
 
-std::optional<u32> drawTraceTextureHandle() {
-  static const auto value = parseEnvU32Auto("DXMT_TRACE_DRAW_TEX0");
-  return value;
-}
-
-u32 drawCullStateValue(const DrawDesc& desc) {
-  const auto it = desc.rs.values.find(RS_CULL_MODE);
-  return it != desc.rs.values.end() ? it->second : static_cast<u32>(CullMode::Ccw);
-}
-
 void emitRenderTrace(const char* fmt, ...) {
   if (!renderTraceEnabled()) {
     return;
@@ -226,11 +216,6 @@ constexpr u32 kDeclTypeFloat2 = 1u;
 constexpr u32 kDeclTypeFloat3 = 2u;
 constexpr u32 kDeclTypeFloat4 = 3u;
 constexpr u32 kDeclTypeD3DColor = 4u;
-constexpr u32 kDeclUsagePosition = 0u;
-constexpr u32 kDeclUsageTexcoord = 5u;
-constexpr u32 kDeclUsagePositionT = 9u;
-constexpr u32 kDeclUsageColor = 10u;
-
 u32 declTypeSize(u32 type) {
   switch (type) {
     case kDeclTypeFloat1:
@@ -260,94 +245,6 @@ u32 fvfTexcoordSize(u32 fvf, u32 index) {
     default:
       return 2;
   }
-}
-
-struct DrawTraceLayout {
-  bool valid = false;
-  bool preTransformed = false;
-  u32 positionComponents = 0;
-  u32 stride = 0;
-  u32 positionOffset = 0;
-  std::optional<u32> diffuseOffset;
-  std::optional<u32> tex0Offset;
-  std::optional<u32> tex1Offset;
-};
-
-std::optional<DrawTraceLayout> decodeDrawTraceLayout(const DrawDesc& desc) {
-  DrawTraceLayout layout;
-  if (!desc.vertexDecl.elements.empty()) {
-    u32 computedStride = 0;
-    for (const auto& element : desc.vertexDecl.elements) {
-      if (element.stream != 0) {
-        continue;
-      }
-      const u32 size = declTypeSize(element.type);
-      if (size != 0) {
-        computedStride = std::max(computedStride, static_cast<u32>(element.offset + size));
-      }
-      if (element.usage == kDeclUsagePositionT && element.usageIndex == 0 && element.type == kDeclTypeFloat4) {
-        layout.valid = true;
-        layout.preTransformed = true;
-        layout.positionComponents = 4;
-        layout.positionOffset = element.offset;
-      } else if (element.usage == kDeclUsagePosition && element.usageIndex == 0 &&
-                 (element.type == kDeclTypeFloat3 || element.type == kDeclTypeFloat4)) {
-        layout.valid = true;
-        layout.preTransformed = false;
-        layout.positionComponents = element.type == kDeclTypeFloat4 ? 4u : 3u;
-        layout.positionOffset = element.offset;
-      } else if (element.usage == kDeclUsageColor && element.usageIndex == 0 &&
-                 element.type == kDeclTypeD3DColor) {
-        layout.diffuseOffset = element.offset;
-      } else if (element.usage == kDeclUsageTexcoord && element.type == kDeclTypeFloat2) {
-        if (element.usageIndex == 0) {
-          layout.tex0Offset = element.offset;
-        } else if (element.usageIndex == 1) {
-          layout.tex1Offset = element.offset;
-        }
-      }
-    }
-    layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : computedStride;
-    return layout.valid ? std::optional<DrawTraceLayout>(layout) : std::nullopt;
-  }
-
-  const u32 fvf = desc.vertexDecl.fvf;
-  const u32 position = fvf & kFvfPositionMask;
-  if (position != kFvfXyzrhw && position != kFvfXyz) {
-    return std::nullopt;
-  }
-  layout.valid = true;
-  layout.preTransformed = position == kFvfXyzrhw;
-  layout.positionComponents = layout.preTransformed ? 4u : 3u;
-  layout.positionOffset = 0;
-  u32 offset = layout.preTransformed ? 16u : 12u;
-  if ((fvf & kFvfNormal) != 0) {
-    offset += 12u;
-  }
-  if ((fvf & kFvfDiffuse) != 0) {
-    layout.diffuseOffset = offset;
-    offset += 4;
-  }
-  if ((fvf & kFvfSpecular) != 0) {
-    offset += 4;
-  }
-  const u32 texCount = (fvf & kFvfTexCountMask) >> kFvfTexCountShift;
-  if (texCount > 0 && fvfTexcoordSize(fvf, 0) >= 2) {
-    layout.tex0Offset = offset;
-  }
-  if (texCount > 1) {
-    offset += fvfTexcoordSize(fvf, 0) * 4u;
-    if (fvfTexcoordSize(fvf, 1) >= 2) {
-      layout.tex1Offset = offset;
-    }
-  }
-  for (u32 i = 1; i < texCount; ++i) {
-    if (i > 1) {
-      offset += fvfTexcoordSize(fvf, i - 1) * 4u;
-    }
-  }
-  layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : offset;
-  return layout;
 }
 
 u32 inferStreamZeroStride(const VertexDeclSnapshot& vertexDecl) {
@@ -422,177 +319,6 @@ std::vector<u8> decomposeTriangleFanVertices(std::span<const u8> vertices,
     appendVertex(offset, i + 1u);
   }
   return out;
-}
-
-void emitDrawTraceDump(u64 seqId, const DrawDesc& desc, const std::shared_ptr<Buffer>& indexBuffer) {
-  const auto wanted = drawTraceTextureHandle();
-  if (!wanted || desc.textures.empty() || !desc.textures[0].handle || desc.textures[0].handle.value != *wanted) {
-    return;
-  }
-
-  std::span<const u8> vertexBytes;
-  if (!desc.userVertexData.empty()) {
-    vertexBytes = desc.userVertexData;
-  } else if (desc.vertexDecl.streams[0].buffer) {
-    vertexBytes = desc.vertexDecl.streams[0].buffer->bytes();
-  }
-
-  std::span<const u8> indexBytes;
-  if (!desc.userIndexData.empty()) {
-    indexBytes = desc.userIndexData;
-  } else if (indexBuffer) {
-    indexBytes = indexBuffer->bytes();
-  }
-
-  auto readIndex = [&](u32 logicalIndex) -> std::optional<u32> {
-    if (!desc.indexBuffer && desc.userIndexData.empty()) {
-      return logicalIndex;
-    }
-    const size_t base = static_cast<size_t>(desc.startIndex + logicalIndex) *
-                        (desc.indexType == IndexType::UInt32 ? sizeof(u32) : sizeof(u16));
-    if (desc.indexType == IndexType::UInt32) {
-      if (base + sizeof(u32) > indexBytes.size()) {
-        return std::nullopt;
-      }
-      u32 value = 0;
-      std::memcpy(&value, indexBytes.data() + base, sizeof(u32));
-      return value;
-    }
-    if (base + sizeof(u16) > indexBytes.size()) {
-      return std::nullopt;
-    }
-    u16 value = 0;
-    std::memcpy(&value, indexBytes.data() + base, sizeof(u16));
-    return static_cast<u32>(value);
-  };
-
-  const auto layout = decodeDrawTraceLayout(desc);
-  std::ostringstream out;
-  out << "[dxmt9-draw] seq=" << static_cast<unsigned long long>(seqId)
-      << " tex0=0x" << std::hex
-      << static_cast<unsigned long long>(desc.textures[0].handle.value) << std::dec
-      << " fvf=0x" << std::hex << desc.vertexDecl.fvf << std::dec
-      << " elems=" << desc.vertexDecl.elements.size()
-      << " stride=" << desc.vertexDecl.streams[0].stride
-      << " startIndex=" << desc.startIndex
-      << " baseVertex=" << desc.baseVertexIndex
-      << " primCount=" << desc.primitiveCount
-      << " rsCull=" << drawCullStateValue(desc);
-  for (size_t i = 0; i < desc.vertexDecl.elements.size(); ++i) {
-    const auto& e = desc.vertexDecl.elements[i];
-    out << " e" << i << "=("
-        << e.stream << "," << e.offset << "," << e.type << "," << e.usage << "," << e.usageIndex << ")";
-  }
-  if (!layout || vertexBytes.empty()) {
-    emitRenderTrace("%s vertexBytes=%zu layout=%s", out.str().c_str(), vertexBytes.size(),
-                    layout ? "ok" : "none");
-    return;
-  }
-
-  if (indexBytes.empty() && (desc.indexBuffer || indexBuffer)) {
-    emitRenderTrace("%s vertexBytes=%zu indexBytes=0 layoutStride=%u posOff=%u tex0=%d tex1=%d diffuse=%d",
-                    out.str().c_str(),
-                    vertexBytes.size(),
-                    layout->stride,
-                    layout->positionOffset,
-                    layout->tex0Offset ? static_cast<int>(*layout->tex0Offset) : -1,
-                    layout->tex1Offset ? static_cast<int>(*layout->tex1Offset) : -1,
-                    layout->diffuseOffset ? static_cast<int>(*layout->diffuseOffset) : -1);
-    return;
-  }
-
-  auto readF32 = [&](size_t absoluteOffset) -> float {
-    float value = 0.0f;
-    if (absoluteOffset + sizeof(float) <= vertexBytes.size()) {
-      std::memcpy(&value, vertexBytes.data() + absoluteOffset, sizeof(float));
-    }
-    return value;
-  };
-  auto readU32 = [&](size_t absoluteOffset) -> u32 {
-    u32 value = 0;
-    if (absoluteOffset + sizeof(u32) <= vertexBytes.size()) {
-      std::memcpy(&value, vertexBytes.data() + absoluteOffset, sizeof(u32));
-    }
-    return value;
-  };
-
-  out << " layoutStride=" << layout->stride
-      << " preT=" << static_cast<unsigned>(layout->preTransformed)
-      << " posComp=" << layout->positionComponents
-      << " posOff=" << layout->positionOffset
-      << " tex0Off=" << (layout->tex0Offset ? static_cast<int>(*layout->tex0Offset) : -1)
-      << " tex1Off=" << (layout->tex1Offset ? static_cast<int>(*layout->tex1Offset) : -1)
-      << " diffuseOff=" << (layout->diffuseOffset ? static_cast<int>(*layout->diffuseOffset) : -1)
-      << " vertexBytes=" << vertexBytes.size()
-      << " indexBytes=" << indexBytes.size()
-      << " m0=(" << desc.worldViewProj.m[0] << "," << desc.worldViewProj.m[1] << ","
-      << desc.worldViewProj.m[2] << "," << desc.worldViewProj.m[3] << ")"
-      << " m1=(" << desc.worldViewProj.m[4] << "," << desc.worldViewProj.m[5] << ","
-      << desc.worldViewProj.m[6] << "," << desc.worldViewProj.m[7] << ")"
-      << " m2=(" << desc.worldViewProj.m[8] << "," << desc.worldViewProj.m[9] << ","
-      << desc.worldViewProj.m[10] << "," << desc.worldViewProj.m[11] << ")"
-      << " m3=(" << desc.worldViewProj.m[12] << "," << desc.worldViewProj.m[13] << ","
-      << desc.worldViewProj.m[14] << "," << desc.worldViewProj.m[15] << ")";
-  const auto appendConst = [&](const char* label, const auto& snapshot, u32 index) {
-    if (index >= snapshot.float4.size()) {
-      return;
-    }
-    const auto& v = snapshot.float4[index];
-    out << " " << label << index << "=("
-        << v[0] << "," << v[1] << "," << v[2] << "," << v[3] << ")";
-  };
-  for (u32 i = 0; i < 5; ++i) {
-    appendConst("vsC", desc.vsConst, i);
-  }
-  appendConst("psC", desc.psConst, 0);
-
-  const u32 tracedRefs = std::min<u32>(12u, std::max<u32>(1u, desc.primitiveCount * 3u));
-  for (u32 i = 0; i < tracedRefs; ++i) {
-    const auto maybeIndex = readIndex(i);
-    if (!maybeIndex) {
-      break;
-    }
-    const size_t base = static_cast<size_t>(desc.vertexDecl.streams[0].offset) +
-                        static_cast<size_t>(desc.baseVertexIndex + static_cast<i32>(*maybeIndex)) * layout->stride;
-    const float px = readF32(base + layout->positionOffset + 0);
-    const float py = readF32(base + layout->positionOffset + 4);
-    const float pz = readF32(base + layout->positionOffset + 8);
-    const float pw = layout->positionComponents >= 4 ? readF32(base + layout->positionOffset + 12) : 1.0f;
-    out << " r" << i << "#" << *maybeIndex << "=("
-        << px << "," << py << "," << pz;
-    if (layout->positionComponents >= 4) {
-      out << "," << pw;
-    }
-    out << ")";
-    if (i == 0) {
-      const std::array<float, 4> pos4{px, py, pz, pw};
-      std::array<float, 4> clipRow{};
-      std::array<float, 4> clipCol{};
-      for (size_t row = 0; row < 4; ++row) {
-        for (size_t col = 0; col < 4; ++col) {
-          clipRow[row] += desc.worldViewProj.m[row * 4 + col] * pos4[col];
-          clipCol[row] += pos4[col] * desc.worldViewProj.m[col * 4 + row];
-        }
-      }
-      out << " clipRow=(" << clipRow[0] << "," << clipRow[1] << "," << clipRow[2] << "," << clipRow[3] << ")";
-      out << " clipCol=(" << clipCol[0] << "," << clipCol[1] << "," << clipCol[2] << "," << clipCol[3] << ")";
-    }
-    if (layout->tex0Offset) {
-      out << " uv0=("
-          << readF32(base + *layout->tex0Offset + 0) << ","
-          << readF32(base + *layout->tex0Offset + 4) << ")";
-    }
-    if (layout->tex1Offset) {
-      out << " uv1=("
-          << readF32(base + *layout->tex1Offset + 0) << ","
-          << readF32(base + *layout->tex1Offset + 4) << ")";
-    }
-    if (layout->diffuseOffset) {
-      out << " c=0x" << std::hex << readU32(base + *layout->diffuseOffset) << std::dec;
-    }
-  }
-
-  emitRenderTrace("%s", out.str().c_str());
 }
 
 u32 clampToBits(float value, u32 bits) {
@@ -3589,12 +3315,6 @@ SwapDesc Device::snapshotSwapDesc() const {
   return desc;
 }
 
-DrawDesc Device::snapshotDrawDesc(PrimitiveType type, u32 primitiveCount, u32 startVertex,
-                                  i32 baseVertexIndex, u32 startIndex, IndexType indexType) const {
-  return makeDrawDescFromState(state_, DrawCallArgs{type, primitiveCount, startVertex,
-                                                    baseVertexIndex, startIndex, indexType});
-}
-
 PrimitiveType canonicalPrimitiveType(PrimitiveType primitiveType) {
   return primitiveType == PrimitiveType::TriangleFan ? PrimitiveType::TriangleList : primitiveType;
 }
@@ -4029,6 +3749,112 @@ bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena) {
   return true;
 }
 
+template <std::size_t MaxEntries>
+std::unordered_map<u32, u32> flatStateSetToMap(const FlatStateSet<MaxEntries>& set) {
+  std::unordered_map<u32, u32> out;
+  out.reserve(set.count);
+  for (u32 i = 0; i < set.count && i < MaxEntries; ++i) {
+    out.emplace(set.entries[i].state, set.entries[i].value);
+  }
+  return out;
+}
+
+std::span<const u8> payloadRangeBytes(DrawPayloadRange range, std::span<const u8> arena) {
+  const std::size_t offset = range.offset;
+  const std::size_t size = range.size;
+  if (size == 0 || offset > arena.size() || size > arena.size() - offset) {
+    return {};
+  }
+  return arena.subspan(offset, size);
+}
+
+DrawDesc makeDrawDescFromCanonicalDraw(const CanonicalDrawState& state,
+                                       const DrawParam& param,
+                                       std::span<const u8> payloadArena) {
+  DrawDesc desc{};
+  desc.primitiveType = param.primitiveType;
+  desc.primitiveCount = param.primitiveCount;
+  desc.startVertex = param.startVertex;
+  desc.baseVertexIndex = param.baseVertexIndex;
+  desc.startIndex = param.startIndex;
+  desc.indexBuffer = param.indexed ? state.hot.indexBuffer : Handle{};
+  desc.indexType = param.indexType;
+  desc.vertexDecl = state.shaderLayout.vertexDecl;
+  desc.vertexShader = state.shaderLayout.vertexShader;
+  desc.pixelShader = state.shaderLayout.pixelShader;
+  desc.vsConst = state.shaderLayout.vsConst;
+  desc.psConst = state.shaderLayout.psConst;
+  for (size_t i = 0; i < kMaxTextures; ++i) {
+    desc.textures[i].handle = state.hot.textures[i];
+    if (i < kMaxTextureStages) {
+      desc.textures[i].stageStates = flatStateSetToMap(state.hot.textureStageStates[i]);
+    }
+  }
+  for (size_t i = 0; i < kMaxSamplers; ++i) {
+    desc.samplers[i].states = flatStateSetToMap(state.hot.samplerStates[i]);
+  }
+  desc.rs.values = flatStateSetToMap(state.hot.renderStates);
+  desc.rts.color = state.hot.colorAttachments;
+  desc.rts.depthStencil = state.hot.depthStencil;
+  desc.viewport = state.hot.viewport;
+  desc.worldViewProj = state.shaderLayout.worldViewProj;
+  desc.textureTransforms = state.shaderLayout.textureTransforms;
+  desc.clipPlaneMask = state.shaderLayout.clipPlaneMask;
+  desc.clipPlanes = state.shaderLayout.clipPlanes;
+  const auto vertexBytes = !param.userVertexRange.empty()
+      ? payloadRangeBytes(param.userVertexRange, payloadArena)
+      : std::span<const u8>(param.userVertexData.data(), param.userVertexData.size());
+  const auto indexBytes = !param.userIndexRange.empty()
+      ? payloadRangeBytes(param.userIndexRange, payloadArena)
+      : std::span<const u8>(param.userIndexData.data(), param.userIndexData.size());
+  desc.userVertexData.assign(vertexBytes.begin(), vertexBytes.end());
+  desc.userIndexData.assign(indexBytes.begin(), indexBytes.end());
+  return desc;
+}
+
+DrawRunDesc makeDrawRunDescFromState(DeviceState baseState, std::span<const DrawParam> draws) {
+  DrawRunDesc run{};
+  if (draws.empty()) {
+    return run;
+  }
+
+  bool usesBoundIndexBuffer = false;
+  for (const auto& draw : draws) {
+    if (draw.indexed && draw.userIndexData.empty() && draw.userIndexRange.empty()) {
+      usesBoundIndexBuffer = true;
+      break;
+    }
+  }
+  if (!usesBoundIndexBuffer) {
+    baseState.indexBuffer.reset();
+  }
+
+  const auto& first = draws.front();
+  run.state = makeCanonicalDrawStateFromState(
+      baseState, DrawCallArgs{first.primitiveType, first.primitiveCount, first.startVertex,
+                              first.baseVertexIndex, first.startIndex, first.indexType});
+  run.state.debug.userVertexBytes = static_cast<u32>(
+      std::min<std::size_t>(first.userVertexData.size(), std::numeric_limits<u32>::max()));
+  run.state.debug.userIndexBytes = static_cast<u32>(
+      std::min<std::size_t>(first.userIndexData.size(), std::numeric_limits<u32>::max()));
+  run.draws.reserve(draws.size());
+
+  bool packedPayloads = true;
+  for (const auto& draw : draws) {
+    DrawParam packed = draw;
+    if (!packDrawParamPayload(packed, run.payloadArena)) {
+      packedPayloads = false;
+      break;
+    }
+    run.draws.push_back(std::move(packed));
+  }
+  if (!packedPayloads) {
+    run.payloadArena.clear();
+    run.draws.assign(draws.begin(), draws.end());
+  }
+  return run;
+}
+
 HResult Device::clear(const ClearDesc& desc) {
   auto snapshot = snapshotClearDesc(desc);
   if (snapshot.clearColor) {
@@ -4128,45 +3954,18 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
   if (draws.empty()) {
     return D3D_OK;
   }
-  // Snapshot full state once. The per-draw fields in the canonical cold
-  // state are placeholders — the encoder synthesizes them per DrawParam.
-  const auto& first = draws.front();
-  DrawRunDesc run;
-  run.state = makeCanonicalDrawStateFromState(
-      state_, DrawCallArgs{first.primitiveType, first.primitiveCount, first.startVertex,
-                           first.baseVertexIndex, first.startIndex, first.indexType});
-  run.draws.reserve(draws.size());
-
-  bool packedPayloads = true;
-  for (const auto& draw : draws) {
-    DrawParam packed = draw;
-    if (!packDrawParamPayload(packed, run.payloadArena)) {
-      packedPayloads = false;
-      break;
-    }
-    run.draws.push_back(std::move(packed));
-  }
-  if (!packedPayloads) {
-    run.payloadArena.clear();
-    run.draws.assign(draws.begin(), draws.end());
-  }
-
-  upperDevice_->submitDrawRun(std::move(run));
-  // Each draw still advances the submitted-sequence cursor — encoder
-  // emits N Metal draw calls.
-  submittedSequenceId_ += static_cast<u64>(draws.size());
-  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
-  if (activeOcclusionQuery_) {
-    for (const auto& d : draws) {
-      activeOcclusionCount_ += d.primitiveCount;
-    }
-  }
+  submitDrawRunInternal(makeDrawRunDescFromState(state_, draws));
   return D3D_OK;
 }
 
 HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount, u32 startVertex) {
-  auto desc = snapshotDrawDesc(type, primitiveCount, startVertex, 0, 0, state_.indexType);
-  submitDrawInternal(desc);
+  DrawParam draw{};
+  draw.primitiveType = canonicalPrimitiveType(type);
+  draw.primitiveCount = primitiveCount;
+  draw.startVertex = startVertex;
+  draw.indexType = state_.indexType;
+  draw.indexed = false;
+  submitDrawRunInternal(makeDrawRunDescFromState(state_, std::span<const DrawParam>(&draw, 1)));
   if (state_.inScene) {
     // No-op; draw submission is immediate in the core harness.
   }
@@ -4175,33 +3974,44 @@ HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount, u32 startV
 
 HResult Device::drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount, u32 startVertex,
                                      i32 baseVertexIndex, u32 startIndex, IndexType indexType) {
-  auto desc = snapshotDrawDesc(type, primitiveCount, startVertex, baseVertexIndex, startIndex, indexType);
-  submitDrawInternal(desc);
+  DrawParam draw{};
+  draw.primitiveType = canonicalPrimitiveType(type);
+  draw.primitiveCount = primitiveCount;
+  draw.startVertex = startVertex;
+  draw.baseVertexIndex = baseVertexIndex;
+  draw.startIndex = startIndex;
+  draw.indexType = indexType;
+  draw.indexed = true;
+  submitDrawRunInternal(makeDrawRunDescFromState(state_, std::span<const DrawParam>(&draw, 1)));
   return D3D_OK;
 }
 
 HResult Device::drawPrimitiveUP(PrimitiveType type, u32 primitiveCount,
                                 std::span<const u8> vertexData, u32 vertexStride) {
   upVertexScratch_.assign(vertexData.begin(), vertexData.end());
-  auto desc = snapshotDrawDesc(type, primitiveCount, 0, 0, 0, state_.indexType);
+  DeviceState drawState = state_;
   // UP draws source stream 0 from caller memory, not the currently bound VB.
-  desc.vertexDecl.streams[0].buffer.reset();
-  desc.vertexDecl.streams[0].offset = 0;
+  drawState.streamBuffers[0].reset();
+  drawState.streamOffsets[0] = 0;
   if (vertexStride != 0) {
-    desc.vertexDecl.streams[0].stride = vertexStride;
+    drawState.streamStrides[0] = vertexStride;
   }
+  DrawParam draw{};
+  draw.primitiveType = canonicalPrimitiveType(type);
+  draw.primitiveCount = primitiveCount;
+  draw.indexType = state_.indexType;
+  draw.indexed = false;
   if (type == PrimitiveType::TriangleFan) {
-    const u32 stride = vertexStride != 0 ? vertexStride : inferStreamZeroStride(desc.vertexDecl);
+    const u32 stride = vertexStride != 0 ? vertexStride : inferStreamZeroStride(makeVertexDeclSnapshotFromState(drawState));
     auto decomposed = decomposeTriangleFanVertices(vertexData, primitiveCount, stride);
     if (primitiveCount != 0 && decomposed.empty()) {
       return D3DERR_INVALIDCALL;
     }
-    desc.primitiveType = PrimitiveType::TriangleList;
-    desc.userVertexData = std::move(decomposed);
+    draw.userVertexData = std::move(decomposed);
   } else {
-    desc.userVertexData = upVertexScratch_;
+    draw.userVertexData = upVertexScratch_;
   }
-  submitDrawInternal(desc);
+  submitDrawRunInternal(makeDrawRunDescFromState(drawState, std::span<const DrawParam>(&draw, 1)));
   return D3D_OK;
 }
 
@@ -4223,16 +4033,21 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
     std::memcpy(upIndexScratch_.data(), fan.data(), upIndexScratch_.size());
     type = PrimitiveType::TriangleList;
   }
-  auto desc = snapshotDrawDesc(type, primitiveCount, 0, 0, 0, indexType);
+  DeviceState drawState = state_;
   // Indexed UP draws also source stream 0 from caller memory.
-  desc.vertexDecl.streams[0].buffer.reset();
-  desc.vertexDecl.streams[0].offset = 0;
+  drawState.streamBuffers[0].reset();
+  drawState.streamOffsets[0] = 0;
   if (vertexStride != 0) {
-    desc.vertexDecl.streams[0].stride = vertexStride;
+    drawState.streamStrides[0] = vertexStride;
   }
-  desc.userVertexData = upVertexScratch_;
-  desc.userIndexData = upIndexScratch_;
-  submitDrawInternal(desc);
+  DrawParam draw{};
+  draw.primitiveType = canonicalPrimitiveType(type);
+  draw.primitiveCount = primitiveCount;
+  draw.indexType = indexType;
+  draw.indexed = true;
+  draw.userVertexData = upVertexScratch_;
+  draw.userIndexData = upIndexScratch_;
+  submitDrawRunInternal(makeDrawRunDescFromState(drawState, std::span<const DrawParam>(&draw, 1)));
   return D3D_OK;
 }
 
@@ -4518,54 +4333,68 @@ void Device::submitClearInternal(const ClearDesc& desc) {
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
 }
 
-void Device::submitDrawInternal(const DrawDesc& desc) {
+void Device::submitDrawRunInternal(DrawRunDesc desc) {
+  if (desc.draws.empty()) {
+    return;
+  }
+  const auto& hot = desc.state.hot;
+  const auto& shader = desc.state.shaderLayout;
   const auto stageState = [&](size_t stageIndex, u32 key) -> u32 {
-    if (stageIndex >= desc.textures.size()) {
+    if (stageIndex >= hot.textureStageStates.size()) {
       return 0u;
     }
-    const auto it = desc.textures[stageIndex].stageStates.find(key);
-    return it != desc.textures[stageIndex].stageStates.end() ? it->second : 0u;
+    return flatStateOr(hot.textureStageStates[stageIndex], key, 0u);
   };
-  emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x",
-                  static_cast<unsigned long long>(submittedSequenceId_ + 1),
-                  static_cast<unsigned>(desc.primitiveType),
-                  desc.primitiveCount,
-                  desc.startVertex,
-                  desc.baseVertexIndex,
-                  desc.startIndex,
-                  static_cast<unsigned long long>(desc.rts.color[0].handle.value),
-                  static_cast<unsigned long long>(desc.rts.depthStencil.handle.value),
-                  static_cast<unsigned long long>(desc.textures[0].handle.value),
-                  static_cast<unsigned>(desc.vertexShader.kind),
-                  static_cast<unsigned>(desc.pixelShader.kind),
-                  static_cast<unsigned long long>(hashShaderRef(desc.vertexShader)),
-                  static_cast<unsigned long long>(hashShaderRef(desc.pixelShader)),
-                  static_cast<unsigned long long>(hashStateState(state_)),
-                  desc.vertexDecl.fvf,
-                  desc.rs.values.contains(RS_LIGHTING) ? desc.rs.values.at(RS_LIGHTING) : 0u,
-                  drawCullStateValue(desc),
-                  desc.rs.values.contains(RS_ALPHA_TEST_ENABLE) ? desc.rs.values.at(RS_ALPHA_TEST_ENABLE) : 0u,
-                  desc.rs.values.contains(RS_ALPHABLEND_ENABLE) ? desc.rs.values.at(RS_ALPHABLEND_ENABLE) : 0u,
-                  desc.rs.values.contains(RS_SRC_BLEND) ? desc.rs.values.at(RS_SRC_BLEND) : 0u,
-                  desc.rs.values.contains(RS_DEST_BLEND) ? desc.rs.values.at(RS_DEST_BLEND) : 0u,
-                  stageState(0, TSS_COLOR_OP),
-                  stageState(0, TSS_ALPHA_OP),
-                  stageState(0, TSS_TEXCOORD_INDEX),
-                  stageState(0, TSS_TEXTURE_TRANSFORM_FLAGS),
-                  stageState(1, TSS_COLOR_OP),
-                  stageState(1, TSS_ALPHA_OP),
-                  stageState(1, TSS_TEXCOORD_INDEX),
-                  stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
-                  desc.clipPlaneMask);
-  emitDrawTraceDump(submittedSequenceId_ + 1, desc, state_.indexBuffer);
-  upperDevice_->submitDraw(desc);
-  ++submittedSequenceId_;
+  const auto renderState = [&](u32 key, u32 fallback = 0u) -> u32 {
+    return flatStateOr(hot.renderStates, key, fallback);
+  };
+  for (size_t i = 0; i < desc.draws.size(); ++i) {
+    const auto& draw = desc.draws[i];
+    emitRenderTrace("draw seq=%llu primType=%u primCount=%u startVertex=%u baseVertex=%d startIndex=%u rt0=0x%llx ds=0x%llx tex0=0x%llx vs=%u ps=%u vsHash=0x%llx psHash=0x%llx stateHash=0x%llx fvf=0x%x lighting=%u cull=%u alphaTest=%u alphaBlend=%u srcBlend=%u dstBlend=%u colorOp0=%u alphaOp0=%u tcIdx0=0x%x ttff0=0x%x colorOp1=%u alphaOp1=%u tcIdx1=0x%x ttff1=0x%x clipMask=0x%x indexed=%u",
+                    static_cast<unsigned long long>(submittedSequenceId_ + 1 + i),
+                    static_cast<unsigned>(draw.primitiveType),
+                    draw.primitiveCount,
+                    draw.startVertex,
+                    draw.baseVertexIndex,
+                    draw.startIndex,
+                    static_cast<unsigned long long>(hot.colorAttachments[0].handle.value),
+                    static_cast<unsigned long long>(hot.depthStencil.handle.value),
+                    static_cast<unsigned long long>(hot.textures[0].value),
+                    static_cast<unsigned>(shader.vertexShader.kind),
+                    static_cast<unsigned>(shader.pixelShader.kind),
+                    static_cast<unsigned long long>(hashShaderRef(shader.vertexShader)),
+                    static_cast<unsigned long long>(hashShaderRef(shader.pixelShader)),
+                    static_cast<unsigned long long>(hot.key.renderStateHash),
+                    shader.vertexDecl.fvf,
+                    renderState(RS_LIGHTING),
+                    renderState(RS_CULL_MODE, static_cast<u32>(CullMode::Ccw)),
+                    renderState(RS_ALPHA_TEST_ENABLE),
+                    renderState(RS_ALPHABLEND_ENABLE),
+                    renderState(RS_SRC_BLEND),
+                    renderState(RS_DEST_BLEND),
+                    stageState(0, TSS_COLOR_OP),
+                    stageState(0, TSS_ALPHA_OP),
+                    stageState(0, TSS_TEXCOORD_INDEX),
+                    stageState(0, TSS_TEXTURE_TRANSFORM_FLAGS),
+                    stageState(1, TSS_COLOR_OP),
+                    stageState(1, TSS_ALPHA_OP),
+                    stageState(1, TSS_TEXCOORD_INDEX),
+                    stageState(1, TSS_TEXTURE_TRANSFORM_FLAGS),
+                    hot.clipPlaneMask,
+                    draw.indexed ? 1u : 0u);
+  }
+
+  const auto drawCount = static_cast<u64>(desc.draws.size());
+  if (activeOcclusionQuery_) {
+    for (const auto& draw : desc.draws) {
+      activeOcclusionCount_ += draw.primitiveCount;
+    }
+  }
+  upperDevice_->submitDrawRun(std::move(desc));
+  submittedSequenceId_ += drawCount;
   // SeqIdSafety: a submission can advance the current sequence, but never
   // below the completed sequence.
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
-  if (activeOcclusionQuery_) {
-    activeOcclusionCount_ += desc.primitiveCount;
-  }
 }
 
 void Device::submitPresentInternal(const SwapDesc& desc) {
@@ -4974,8 +4803,7 @@ class StubDxmt9Device final : public dxmt9::Device {
   }
 
   // Resource-ops + submit forwarding. Tests use mock backends as the source
-  // of truth — stub must delegate so tests keep working after the Step 2
-  // interface promotion moved primary callsites onto dxmt9::Device.
+  // of truth, while production submission stays on dxmt9::Device.
   BufferHandle createBuffer(const BufferDesc& desc) override {
     return backend_ ? backend_->createBuffer(desc) : BufferHandle{};
   }
@@ -5012,8 +4840,15 @@ class StubDxmt9Device final : public dxmt9::Device {
                             std::span<const std::uint8_t> bytes) override {
     if (backend_) backend_->uploadTextureLevel(handle, level, w, h, pitch, bytes);
   }
-  void submitDraw(const DrawDesc& desc) override {
-    if (backend_) backend_->submitDraw(desc);
+  void submitDrawRun(DrawRunDesc desc) override {
+    if (!backend_) {
+      return;
+    }
+    const auto payloadArena =
+        std::span<const u8>(desc.payloadArena.data(), desc.payloadArena.size());
+    for (const auto& draw : desc.draws) {
+      backend_->submitDraw(makeDrawDescFromCanonicalDraw(desc.state, draw, payloadArena));
+    }
   }
   void submitClear(const ClearDesc& desc) override {
     if (backend_) backend_->submitClear(desc);

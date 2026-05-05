@@ -350,7 +350,7 @@ void testFlatDrawStateKey() {
   checkEq(firstKey, makeFlatDrawStateKey(first),
           "identical draw state summaries compare equal");
   checkEq(directCanonical.hot.key, firstKey,
-          "direct state canonicalization builds the same flat key without cold map round-trip");
+          "direct state canonicalization builds the same flat key from fixed state tables");
   checkEq(directCanonical.hot.renderStates.hash, firstKey.renderStateHash,
           "direct state canonicalization carries render-state hash in hot storage");
   checkEq(flatStateOr(directCanonical.hot.renderStates, RS_Z_ENABLE, 0u), 1u,

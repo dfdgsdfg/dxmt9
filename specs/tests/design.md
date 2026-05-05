@@ -236,7 +236,7 @@ sequenceDiagram
     B->>B: dxmt9_winemetal_compile_shader() → ShaderBlob handle
 
     R->>B: draw(uniforms, textures, quad)
-    B->>B: BackendDevice::submitDraw(DrawDesc{...})
+    B->>B: Device::submitDrawRun(DrawRunDesc{...})
     B->>B: BackendDevice::flush()
 
     R->>B: probe_pixel(x, y, expected, tolerance)

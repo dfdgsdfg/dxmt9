@@ -116,13 +116,6 @@ struct RecordingDxmt9Device final : dxmt9::Device {
     events.push_back(std::move(event));
   }
 
-  void submitDraw(const DrawDesc& desc) override {
-    RecordedEvent event;
-    event.kind = EventKind::SubmitDraw;
-    event.draw = desc;
-    events.push_back(std::move(event));
-  }
-
   void submitDrawRun(DrawRunDesc desc) override {
     for (const auto& param : desc.draws) {
       DrawDesc synthetic{};
@@ -150,7 +143,11 @@ struct RecordingDxmt9Device final : dxmt9::Device {
       synthetic.indexType = param.indexType;
       synthetic.userVertexData = param.userVertexData;
       synthetic.userIndexData = param.userIndexData;
-      submitDraw(synthetic);
+
+      RecordedEvent event;
+      event.kind = EventKind::SubmitDraw;
+      event.draw = std::move(synthetic);
+      events.push_back(std::move(event));
     }
   }
 
@@ -212,6 +209,67 @@ template <typename T>
 void appendRecord(std::vector<std::uint8_t>& bytes, const T& record) {
   const auto* begin = reinterpret_cast<const std::uint8_t*>(&record);
   bytes.insert(bytes.end(), begin, begin + sizeof(T));
+}
+
+template <typename T>
+void appendPod(std::vector<std::uint8_t>& bytes, const T& value) {
+  const auto* begin = reinterpret_cast<const std::uint8_t*>(&value);
+  bytes.insert(bytes.end(), begin, begin + sizeof(T));
+}
+
+D9CCommandChunkWireHandleEntry wireHandleEntry(std::uint32_t kind,
+                                               const void* ptr) {
+  return D9CCommandChunkWireHandleEntry{
+      .kind = kind,
+      .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+      .opaqueHandle = wireValueFromPtr(ptr),
+      .reserved0 = 0u,
+      .reserved1 = 0u,
+  };
+}
+
+D9CCommandChunkWireRecordHeader wireRecordHeader(std::uint32_t type,
+                                                 std::uint32_t payloadOffset,
+                                                 std::uint32_t payloadSize,
+                                                 std::uint32_t firstHandle,
+                                                 std::uint32_t handleCount) {
+  return D9CCommandChunkWireRecordHeader{
+      .type = type,
+      .flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
+      .payloadOffset = payloadOffset,
+      .payloadSize = payloadSize,
+      .firstHandle = firstHandle,
+      .handleCount = handleCount,
+      .reserved0 = 0u,
+      .reserved1 = 0u,
+  };
+}
+
+std::vector<std::uint8_t> makeWireChunkBlob(
+    std::span<const std::uint8_t> payload,
+    std::span<const D9CCommandChunkWireRecordHeader> records,
+    std::span<const D9CCommandChunkWireHandleEntry> handles) {
+  D9CCommandChunkWireHeader header{};
+  header.version = D9C_COMMAND_CHUNK_WIRE_VERSION;
+  header.headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
+  header.recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
+  header.handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
+  header.recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
+  header.recordCount = static_cast<std::uint32_t>(records.size());
+  header.handleTableOffset = header.recordTableOffset +
+      header.recordCount * D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
+  header.handleCount = static_cast<std::uint32_t>(handles.size());
+  header.payloadArenaOffset = header.handleTableOffset +
+      header.handleCount * D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
+  header.payloadArenaSize = static_cast<std::uint32_t>(payload.size());
+
+  std::vector<std::uint8_t> blob;
+  blob.reserve(header.payloadArenaOffset + header.payloadArenaSize);
+  appendPod(blob, header);
+  for (const auto& record : records) appendPod(blob, record);
+  for (const auto& handle : handles) appendPod(blob, handle);
+  blob.insert(blob.end(), payload.begin(), payload.end());
+  return blob;
 }
 
 D9CCommandRecordDrawPrimitive makeDrawRecord(D9CSurface* renderTarget,
@@ -318,25 +376,40 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
     D9CSurface readbackTargetWire(readbackTarget);
     D9CBuffer vertexBufferWire(vertexBuffer);
 
-    std::vector<std::uint8_t> bytes;
-    appendRecord(bytes, makeDrawRecord(&renderTargetWire, &vertexBufferWire, 0u));
-    appendRecord(bytes, makeColorClearRecord());
-    appendRecord(bytes, makeDrawRecord(&renderTargetWire, &vertexBufferWire, 3u));
-    appendRecord(bytes, makeReadbackRecord(&renderTargetWire, &readbackTargetWire));
+    const auto draw0 = makeDrawRecord(&renderTargetWire, &vertexBufferWire, 0u);
+    const auto clear = makeColorClearRecord();
+    const auto draw1 = makeDrawRecord(&renderTargetWire, &vertexBufferWire, 3u);
+    const auto readback = makeReadbackRecord(&renderTargetWire, &readbackTargetWire);
 
-    const D9CChunkHandleEntry handles[] = {
-        {D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, wireValueFromPtr(&renderTargetWire)},
-        {D9C_CHUNK_HANDLE_KIND_BUFFER, 0u, wireValueFromPtr(&vertexBufferWire)},
-        {D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, wireValueFromPtr(&readbackTargetWire)},
+    std::vector<std::uint8_t> bytes;
+    appendRecord(bytes, draw0);
+    appendRecord(bytes, clear);
+    appendRecord(bytes, draw1);
+    appendRecord(bytes, readback);
+
+    const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &readbackTargetWire),
     };
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, 0u, sizeof(draw0), 0u, 2u),
+        wireRecordHeader(D9C_COMMAND_RECORD_CLEAR, sizeof(draw0), sizeof(clear), 0u, 1u),
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                         sizeof(draw0) + sizeof(clear), sizeof(draw1), 0u, 2u),
+        wireRecordHeader(D9C_COMMAND_RECORD_READBACK,
+                         sizeof(draw0) + sizeof(clear) + sizeof(draw1),
+                         sizeof(readback), 0u, 3u),
+    };
+    const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
 
     D9CCommandChunk chunk{};
     chunk.version = D9C_COMMAND_CHUNK_VERSION;
-    chunk.recordCount = 4u;
-    chunk.recordBytes = static_cast<std::uint32_t>(bytes.size());
-    chunk.records = wireHandleFromPtr(bytes.data());
+    chunk.recordCount = static_cast<std::uint32_t>(records.size());
+    chunk.recordBytes = static_cast<std::uint32_t>(wireBlob.size());
+    chunk.records = wireHandleFromPtr(wireBlob.data());
     chunk.handleCount = static_cast<std::uint32_t>(std::size(handles));
-    chunk.handles = wireHandleFromPtr(handles);
+    chunk.handles = {};
 
     recorder->events.clear();
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
@@ -455,7 +528,7 @@ void testResourcePoolUsesArenaStorageOnly() {
         "resource pool rejects buffer handle as surface");
 
   resourcePool->markBufferUse(first, 7u);
-  check(resourcePool->markDestroyAndGc(resourcePool->buffers, first.value, 6u),
+  check(resourcePool->markBufferDestroyAndGc(first.value, 6u),
         "resource pool marks arena buffer destroy-pending");
   check(resourcePool->findBuffer(first.value) != nullptr,
         "resource pool keeps pending arena buffer until completed seq catches up");

@@ -35,53 +35,15 @@ static bool dxmt9LeakStateBlocksEnabled() {
     return enabled;
 }
 
-static bool dxmt9PeStateShadowEnabled() {
-    // Phase 22: PE state shadow is now the DEFAULT path. Set* fast paths
-    // shadow the value PE-side and embed it into the next draw packet
-    // instead of bridging per-call. Opt-out via DXMT9_PE_STATE_SHADOW=0
-    // for regression bisection. Same parsing convention as Phase 19's
-    // DXMT9_PE_DRAW_CHUNK flip.
-    static const bool enabled = []() {
-        const auto value = dxmt9::util::getenvString("DXMT9_PE_STATE_SHADOW");
-        if (value.empty()) return true;            // default ON
-        if (value == "0") return false;            // explicit opt-out
-        return true;
-    }();
-    return enabled;
-}
-
-static bool dxmt9PeDrawChunkEnabled() {
-    // Phase 19: chunk recorder is now the DEFAULT path. The env var is
-    // a regression-detection escape hatch — set DXMT9_PE_DRAW_CHUNK=0
-    // to fall back to per-call bridge mode for bisecting issues.
-    // getenvFlag returns false for unset / empty / "0", true otherwise.
-    // We invert via DXMT9_PE_DRAW_CHUNK_DISABLE to match the explicit-
-    // opt-out semantic without breaking existing scripts that set
-    // DXMT9_PE_DRAW_CHUNK=1 (those keep working — getenvFlag still
-    // returns true).
-    static const bool enabled = []() {
-        const auto value = dxmt9::util::getenvString("DXMT9_PE_DRAW_CHUNK");
-        if (value.empty()) return true;            // default ON
-        if (value == "0") return false;            // explicit opt-out
-        return true;                               // any other value: ON
-    }();
-    return enabled;
-}
-
-// Phase 33: structural invariant — the DEFAULT chunk path (both
-// DXMT9_PE_DRAW_CHUNK and DXMT9_PE_STATE_SHADOW unset, both default ON)
-// has ZERO reachable code paths to dxmt9c_device_set_render_state /
+// Structural invariant: the chunk recorder and PE state shadow are the
+// production path. Draw / Set* hot paths have no runtime env opt-out to
+// per-call bridge mode for dxmt9c_device_set_render_state /
 // set_texture / set_stream_source / set_fvf / set_vs / set_ps /
 // set_vertex_declaration / set_render_target / set_depth_stencil_surface
 // / set_viewport / set_scissor_rect / set_texture_stage_state /
 // set_sampler_state / set_material / set_clip_plane / set_transform /
-// set_light / light_enable / set_indices unix-calls. Every Set* fast
-// path is gated by `if (dxmt9PeStateShadowEnabled())` (early return)
-// or `if (dxmt9PeDrawChunkEnabled())` (early return). The remaining
-// hr32(dxmt9c_device_set_*) tail calls are reached only when the
-// matching env var is set to "0" (regression escape hatch). Audited
-// at Phase 33 commit; new Set*-style code MUST follow the same
-// pattern (chunk-mode early return → PE shadow update only).
+// set_light / light_enable / set_indices unix-calls. New Set*-style code
+// should update PE shadow state and encode it into command records.
 //
 // Phase 16: full-snapshot mode. When set, every draw packet emitted in
 // chunk-recorder mode carries the COMPLETE BaseDrawState snapshot (every
@@ -206,10 +168,9 @@ struct D3D9PeRecorderFlush {
     virtual bool IsStateBlockRecordingForChild() const = 0;
     // Phase 20: child COM wrappers (Query, Surface, Buffer) that want to
     // emit fire-and-forget records into the device's pending chunk go
-    // through these. Returns true from IsChunkRecorderEnabledForChild()
-    // when DXMT9_PE_DRAW_CHUNK is on; AppendRecordForChild forwards into
-    // the device's appendCommandRecord (same pre-flush + size cap
-    // handling as the device's own records).
+    // through these. The chunk recorder is always enabled; AppendRecordForChild
+    // forwards into the device's appendCommandRecord (same pre-flush + size
+    // cap handling as the device's own records).
     virtual bool IsChunkRecorderEnabledForChild() const = 0;
     virtual HRESULT AppendRecordForChild(const void* data, size_t bytes) = 0;
 
@@ -2272,7 +2233,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // still call them. Wire serialization now derives record ranges from
     // the payload arena at flush time.
     void noteChunkHandle(uint32_t kind, uint64_t handle) {
-        if (!dxmt9PeDrawChunkEnabled() || handle == 0 || kind > 4) {
+        if (handle == 0 || kind > 4) {
             return;
         }
         chunkHandlesByKind_[kind].insert(handle);
@@ -2546,7 +2507,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT flushPendingCommandChunk() {
-        if (!dxmt9PeDrawChunkEnabled() || pendingCommandRecordCount_ == 0) {
+        if (pendingCommandRecordCount_ == 0) {
             return S_OK;
         }
         if (pendingCommandWireRecords_.size() != pendingCommandRecordCount_) {
@@ -2658,7 +2619,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT appendCommandRecord(const void* data, size_t bytes) {
-        if (!dxmt9PeDrawChunkEnabled() || !data || bytes == 0 || bytes > 0xffffffffull) {
+        if (!data || bytes == 0 || bytes > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
         }
         if (pendingCommandRecordCount_ != 0 &&
@@ -2820,24 +2781,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     HRESULT flushPeRecorder() {
-        // Phase 28: mode-aware. Chunk mode drains pending state into the
-        // chunk via chunkBarrierFlush() (records, never bridge calls),
-        // then seals. Legacy mode keeps the bridge-emit pattern.
-        if (dxmt9PeDrawChunkEnabled()) {
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
-            return flushPendingCommandChunk();
-        }
-        // Legacy fallback: drain consts as records, seal, bridge-emit
-        // hot state so the upcoming per-call bridge sees current
-        // server state.
-        const HRESULT constHr = flushPendingConsts();
-        if (FAILED(constHr)) return constHr;
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) {
-            return chunkHr;
-        }
-        return flushPendingHotState();
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
+        return flushPendingCommandChunk();
     }
 
     // Variable-size const-array record append. The record is
@@ -3103,104 +3049,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return S_OK;
     }
 
-    // Phase 28: bridge-emit pending hot state via per-call setter unix-
-    // calls. LEGACY FALLBACK ONLY — chunk mode must not reach the
-    // bridge-emit branch below; chunkBarrierFlush() is the chunk-mode
-    // equivalent that emits an APPLY_STATE record into the chunk
-    // instead. Callers that follow up with a per-call bridge use
-    // flushPeRecorder() (which routes mode-aware: chunkBarrierFlush
-    // for chunk, this function for legacy).
-    HRESULT flushPendingHotState() {
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) {
-            return chunkHr;
-        }
-        if (!dxmt9PeStateShadowEnabled() || !hasPendingHotState()) {
-            return S_OK;
-        }
-        // Defensive: log if anyone manages to enter the bridge-emit
-        // branch under chunk mode. Should never fire after Phase 28
-        // (every chunk-mode call site routes via chunkBarrierFlush or
-        // mode-aware flushPeRecorder); a hit means a regression slipped
-        // a Set* bridge call back into the chunk path.
-        if (dxmt9PeDrawChunkEnabled()) {
-            dxmt9DeviceDebugLog(
-                "WARN: flushPendingHotState bridge-emit reached in chunk "
-                "mode — Set* invariant violation. Caller bypassed "
-                "chunkBarrierFlush / flushPeRecorder.");
-        }
-
-        HRESULT pendingHr = S_OK;
-        pendingRenderStates_.forEach([&](uint32_t state, uint32_t value) {
-            if (FAILED(pendingHr)) {
-                return;
-            }
-            pendingHr = hr32(dxmt9c_device_set_render_state(dev_, state, value));
-        });
-        if (FAILED(pendingHr)) {
-            return pendingHr;
-        }
-        pendingRenderStates_.clear();
-
-        pendingTss_.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
-            if (FAILED(pendingHr)) {
-                return;
-            }
-            pendingHr = hr32(dxmt9c_device_set_texture_stage_state(dev_, stage, state, value));
-        });
-        if (FAILED(pendingHr)) {
-            return pendingHr;
-        }
-        pendingTss_.clear();
-
-        pendingSamplerStates_.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
-            if (FAILED(pendingHr)) {
-                return;
-            }
-            pendingHr = hr32(dxmt9c_device_set_sampler_state(dev_, sampler, state, value));
-        });
-        if (FAILED(pendingHr)) {
-            return pendingHr;
-        }
-        pendingSamplerStates_.clear();
-
-        for (DWORD stage = 0; stage < 16; ++stage) {
-            if ((pendingTextureMask_ & (1u << stage)) == 0) {
-                continue;
-            }
-            const HRESULT hr = hr32(dxmt9c_device_set_texture(dev_, stage, rawTex(textures_[stage])));
-            if (FAILED(hr)) {
-                return hr;
-            }
-        }
-        pendingTextureMask_ = 0;
-
-        for (DWORD stream = 0; stream < 16; ++stream) {
-            if ((pendingStreamMask_ & (1u << stream)) == 0) {
-                continue;
-            }
-            const HRESULT hr = hr32(dxmt9c_device_set_stream_source(dev_,
-                                                                    stream,
-                                                                    rawVBuf(streamSrc_[stream]),
-                                                                    streamOff_[stream],
-                                                                    streamStr_[stream]));
-            if (FAILED(hr)) {
-                return hr;
-            }
-        }
-        pendingStreamMask_ = 0;
-
-        if (pendingFvf_) {
-            const HRESULT hr = hr32(dxmt9c_device_set_fvf(dev_, fvf_));
-            if (FAILED(hr)) {
-                return hr;
-            }
-            pendingFvf_ = false;
-        }
-
-        return S_OK;
-    }
-
 public:
     HRESULT FlushPeRecorderForChild() noexcept override {
         return flushPeRecorder();
@@ -3209,7 +3057,7 @@ public:
         return stateBlockRecording_;
     }
     bool IsChunkRecorderEnabledForChild() const override {
-        return dxmt9PeDrawChunkEnabled();
+        return true;
     }
     HRESULT AppendRecordForChild(const void* data, size_t bytes) noexcept override {
         return appendCommandRecord(data, bytes);
@@ -3444,32 +3292,23 @@ public:
         // ordering is preserved and Present serves as the natural
         // chunk boundary. Dirty-region payload is dropped (the
         // backend present path doesn't consume it).
-        if (dxmt9PeDrawChunkEnabled()) {
-            // Phase 28: chunk-mode barrier — flush pending hot state
-            // + consts as records into the chunk, never as bridge calls.
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
 
-            D9CCommandRecordPresent record{};
-            record.header.type = D9C_COMMAND_RECORD_PRESENT;
-            record.header.size = sizeof(record);
-            record.hwnd = (uint64_t)(uintptr_t)wnd;
-            record.flags = 0;
-            record.hasSrc = src ? 1u : 0u;
-            record.hasDst = dst ? 1u : 0u;
-            if (src) record.src = cs;
-            if (dst) record.dst = cd;
-            const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
-            if (FAILED(appendHr)) return appendHr;
-            // Force-commit so Present runs at the bridge boundary even
-            // if the chunk is below the byte/record threshold.
-            return flushPendingCommandChunk();
-        }
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_present(dev_,
-            src ? &cs : nullptr, dst ? &cd : nullptr,
-            (uint64_t)(uintptr_t)wnd, dirty, 0));
+        D9CCommandRecordPresent record{};
+        record.header.type = D9C_COMMAND_RECORD_PRESENT;
+        record.header.size = sizeof(record);
+        record.hwnd = (uint64_t)(uintptr_t)wnd;
+        record.flags = 0;
+        record.hasSrc = src ? 1u : 0u;
+        record.hasDst = dst ? 1u : 0u;
+        if (src) record.src = cs;
+        if (dst) record.dst = cd;
+        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        if (FAILED(appendHr)) return appendHr;
+        // Force-commit so Present runs at the bridge boundary even
+        // if the chunk is below the byte/record threshold.
+        return flushPendingCommandChunk();
     }
 
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT sc, UINT idx,
@@ -3671,59 +3510,42 @@ public:
         // forget (no return data the PE caller waits on), so it rides as
         // a chunk record. Both surfaces are bulk-retained against the
         // chunk seqId to survive until the GPU consumes the copy.
-        if (dxmt9PeDrawChunkEnabled()) {
-            // Phase 28: chunk-mode barrier — flush pending hot state
-            // + consts as records into the chunk, never as bridge calls.
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
-            if (auto* raw = rawSurf(src); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            if (auto* raw = rawSurf(dst); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            D9CCommandRecordUpdateSurface record{};
-            record.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
-            record.header.size = sizeof(record);
-            record.srcWire = reinterpret_cast<uint64_t>(rawSurf(src));
-            record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
-            record.hasSrcRect = srcRect ? 1u : 0u;
-            record.hasDstPoint = dstPt ? 1u : 0u;
-            record.srcRect = cs;
-            record.dstPoint = cd;
-            return appendCommandRecord(&record, sizeof(record));
-        }
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_update_surface(dev_,
-            rawSurf(src), srcRect ? &cs : nullptr,
-            rawSurf(dst), dstPt   ? &cd : nullptr));
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
+        if (auto* raw = rawSurf(src); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        if (auto* raw = rawSurf(dst); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        D9CCommandRecordUpdateSurface record{};
+        record.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
+        record.header.size = sizeof(record);
+        record.srcWire = reinterpret_cast<uint64_t>(rawSurf(src));
+        record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
+        record.hasSrcRect = srcRect ? 1u : 0u;
+        record.hasDstPoint = dstPt ? 1u : 0u;
+        record.srcRect = cs;
+        record.dstPoint = cd;
+        return appendCommandRecord(&record, sizeof(record));
     }
 
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
                                              IDirect3DBaseTexture9* dst) noexcept override {
-        if (dxmt9PeDrawChunkEnabled()) {
-            // Phase 28: chunk-mode barrier — flush pending hot state
-            // + consts as records into the chunk, never as bridge calls.
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
-            if (auto* raw = rawTex(src); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                reinterpret_cast<uint64_t>(raw));
-            if (auto* raw = rawTex(dst); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                reinterpret_cast<uint64_t>(raw));
-            D9CCommandRecordUpdateTexture record{};
-            record.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
-            record.header.size = sizeof(record);
-            record.srcWire = reinterpret_cast<uint64_t>(rawTex(src));
-            record.dstWire = reinterpret_cast<uint64_t>(rawTex(dst));
-            return appendCommandRecord(&record, sizeof(record));
-        }
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_update_texture(dev_,
-                    rawTex(src), rawTex(dst)));
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
+        if (auto* raw = rawTex(src); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                            reinterpret_cast<uint64_t>(raw));
+        if (auto* raw = rawTex(dst); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                            reinterpret_cast<uint64_t>(raw));
+        D9CCommandRecordUpdateTexture record{};
+        record.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
+        record.header.size = sizeof(record);
+        record.srcWire = reinterpret_cast<uint64_t>(rawTex(src));
+        record.dstWire = reinterpret_cast<uint64_t>(rawTex(dst));
+        return appendCommandRecord(&record, sizeof(record));
     }
 
     HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* rt,
@@ -3737,35 +3559,25 @@ public:
         // READBACK record then commit the chunk synchronously (Present
         // pattern); commit_chunk's per-record short-circuit propagates
         // the actual readback HRESULT back to PE.
-        if (dxmt9PeDrawChunkEnabled()) {
-            // Phase 28: chunk-mode barrier — flush pending hot state
-            // + consts as records into the chunk, never as bridge calls.
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
-            if (auto* raw = rawSurf(rt); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            if (auto* raw = rawSurf(dst); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            D9CCommandRecordReadback record{};
-            record.header.type = D9C_COMMAND_RECORD_READBACK;
-            record.header.size = sizeof(record);
-            record.srcWire = reinterpret_cast<uint64_t>(rawSurf(rt));
-            record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
-            const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
-            if (FAILED(appendHr)) return appendHr;
-            // Sync semantics: commit the chunk now and wait for
-            // completion. flushPendingCommandChunk routes through
-            // commit_chunk → server's record dispatcher → readback
-            // record handler → dxmt9c_device_get_render_target_data
-            // (which encodes + waits internally).
-            return flushPendingCommandChunk();
-        }
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_get_render_target_data(dev_,
-                    rawSurf(rt), rawSurf(dst)));
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
+        if (auto* raw = rawSurf(rt); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        if (auto* raw = rawSurf(dst); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        D9CCommandRecordReadback record{};
+        record.header.type = D9C_COMMAND_RECORD_READBACK;
+        record.header.size = sizeof(record);
+        record.srcWire = reinterpret_cast<uint64_t>(rawSurf(rt));
+        record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
+        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        if (FAILED(appendHr)) return appendHr;
+        // Sync semantics: commit the chunk now and wait for completion.
+        // flushPendingCommandChunk routes through commit_chunk -> server's
+        // record dispatcher -> readback record handler.
+        return flushPendingCommandChunk();
     }
 
     HRESULT STDMETHODCALLTYPE GetFrontBufferData(UINT sc, IDirect3DSurface9* surface) noexcept override {
@@ -3785,37 +3597,27 @@ public:
                             dstRect ? "<custom>" : "<full>");
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
-        if (dxmt9PeDrawChunkEnabled()) {
-            // Phase 28: chunk-mode barrier — flush pending hot state
-            // + consts as records into the chunk, never as bridge calls.
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
-            // Retain both surfaces against the chunk seqId so they
-            // survive until the GPU consumes the blit.
-            if (auto* raw = rawSurf(src); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            if (auto* raw = rawSurf(dst); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            D9CCommandRecordStretchRect record{};
-            record.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
-            record.header.size = sizeof(record);
-            record.srcWire = reinterpret_cast<uint64_t>(rawSurf(src));
-            record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
-            record.hasSrcRect = srcRect ? 1u : 0u;
-            record.hasDstRect = dstRect ? 1u : 0u;
-            record.filter = (uint32_t)filter;
-            if (srcRect) record.srcRect = cs;
-            if (dstRect) record.dstRect = cd;
-            return appendCommandRecord(&record, sizeof(record));
-        }
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_stretch_rect(dev_,
-            rawSurf(src), srcRect ? &cs : nullptr,
-            rawSurf(dst), dstRect ? &cd : nullptr,
-            (uint32_t)filter));
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
+        // Retain both surfaces against the chunk seqId so they
+        // survive until the GPU consumes the blit.
+        if (auto* raw = rawSurf(src); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        if (auto* raw = rawSurf(dst); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        D9CCommandRecordStretchRect record{};
+        record.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
+        record.header.size = sizeof(record);
+        record.srcWire = reinterpret_cast<uint64_t>(rawSurf(src));
+        record.dstWire = reinterpret_cast<uint64_t>(rawSurf(dst));
+        record.hasSrcRect = srcRect ? 1u : 0u;
+        record.hasDstRect = dstRect ? 1u : 0u;
+        record.filter = (uint32_t)filter;
+        if (srcRect) record.srcRect = cs;
+        if (dstRect) record.dstRect = cd;
+        return appendCommandRecord(&record, sizeof(record));
     }
 
     HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9* pSurf,
@@ -3824,27 +3626,19 @@ public:
         dxmt9DeviceDebugLog("device_color_fill device=%p surf=%p rect=%s color=0x%08x",
                             this, pSurf, pRect ? "<custom>" : "<full>", (unsigned)color);
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
-        if (dxmt9PeDrawChunkEnabled()) {
-            // Phase 28: chunk-mode barrier — flush pending hot state
-            // + consts as records into the chunk, never as bridge calls.
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
-            if (auto* raw = rawSurf(pSurf); raw)
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            D9CCommandRecordColorFill record{};
-            record.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
-            record.header.size = sizeof(record);
-            record.surfaceWire = reinterpret_cast<uint64_t>(rawSurf(pSurf));
-            record.colorARGB = (uint32_t)color;
-            record.hasRect = pRect ? 1u : 0u;
-            if (pRect) record.rect = cr;
-            return appendCommandRecord(&record, sizeof(record));
-        }
-        const HRESULT flushHr = flushPeRecorder();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_color_fill(dev_, rawSurf(pSurf),
-                    pRect ? &cr : nullptr, (uint32_t)color));
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
+        if (auto* raw = rawSurf(pSurf); raw)
+            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw));
+        D9CCommandRecordColorFill record{};
+        record.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
+        record.header.size = sizeof(record);
+        record.surfaceWire = reinterpret_cast<uint64_t>(rawSurf(pSurf));
+        record.colorARGB = (uint32_t)color;
+        record.hasRect = pRect ? 1u : 0u;
+        if (pRect) record.rect = cr;
+        return appendCommandRecord(&record, sizeof(record));
     }
 
     HRESULT STDMETHODCALLTYPE CreateOffscreenPlainSurface(UINT w, UINT h,
@@ -3876,26 +3670,16 @@ public:
         dxmt9DeviceDebugLog("device_set_render_target device=%p idx=%u surf=%p",
                             this, (unsigned)idx, pSurf);
         if (idx >= 4) return D3DERR_INVALIDCALL;
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (rtSlots_[idx] == pSurf) return S_OK;     // shadow no-op
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            setRef(rtSlots_[idx], pSurf);
-            pendingRtMask_ |= 1u << idx;
-            if (auto* raw = rawSurf(pSurf); raw != nullptr) {
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            }
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
+        if (rtSlots_[idx] == pSurf) return S_OK;
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
+        setRef(rtSlots_[idx], pSurf);
+        pendingRtMask_ |= 1u << idx;
         if (auto* raw = rawSurf(pSurf); raw != nullptr) {
             noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
                             reinterpret_cast<uint64_t>(raw));
         }
-        return hr32(dxmt9c_device_set_render_target(dev_, idx, rawSurf(pSurf)));
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetRenderTarget(DWORD idx,
@@ -3912,26 +3696,16 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override {
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (dsSurface_ == pSurf) return S_OK;     // shadow no-op
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            setRef(dsSurface_, pSurf);
-            pendingDs_ = true;
-            if (auto* raw = rawSurf(pSurf); raw != nullptr) {
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
-            }
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
+        if (dsSurface_ == pSurf) return S_OK;
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
+        setRef(dsSurface_, pSurf);
+        pendingDs_ = true;
         if (auto* raw = rawSurf(pSurf); raw != nullptr) {
             noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
                             reinterpret_cast<uint64_t>(raw));
         }
-        return hr32(dxmt9c_device_set_depth_stencil(dev_, rawSurf(pSurf)));
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetDepthStencilSurface(IDirect3DSurface9** ppS) noexcept override {
@@ -3970,35 +3744,26 @@ public:
         // ranges first so the chunk replays in API order, then
         // appends a CLEAR record carrying flags + color + z + stencil
         // + the optional rect array as a tail payload.
-        if (dxmt9PeDrawChunkEnabled()) {
-            // Phase 28: chunk-mode barrier — flush pending hot state
-            // + consts as records into the chunk, never as bridge calls.
-            const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
+        const HRESULT barrierHr = chunkBarrierFlush();
+        if (FAILED(barrierHr)) return barrierHr;
 
-            const std::uint32_t rectBytes = static_cast<std::uint32_t>(count) * sizeof(D9CRect);
-            D9CCommandRecordClear header{};
-            header.header.type = D9C_COMMAND_RECORD_CLEAR;
-            header.header.size = static_cast<std::uint32_t>(sizeof(header) + rectBytes);
-            header.flags = (uint32_t)flags;
-            header.colorARGB = (uint32_t)color;
-            header.z = z;
-            header.stencil = (uint32_t)stencil;
-            header.rectCount = (uint32_t)count;
-            header.rectOffset = sizeof(header);
+        const std::uint32_t rectBytes = static_cast<std::uint32_t>(count) * sizeof(D9CRect);
+        D9CCommandRecordClear header{};
+        header.header.type = D9C_COMMAND_RECORD_CLEAR;
+        header.header.size = static_cast<std::uint32_t>(sizeof(header) + rectBytes);
+        header.flags = (uint32_t)flags;
+        header.colorARGB = (uint32_t)color;
+        header.z = z;
+        header.stencil = (uint32_t)stencil;
+        header.rectCount = (uint32_t)count;
+        header.rectOffset = sizeof(header);
 
-            std::vector<std::uint8_t> record(header.header.size);
-            std::memcpy(record.data(), &header, sizeof(header));
-            if (rectBytes != 0 && pRects) {
-                std::memcpy(record.data() + header.rectOffset, pRects, rectBytes);
-            }
-            return appendCommandRecord(record.data(), record.size());
+        std::vector<std::uint8_t> record(header.header.size);
+        std::memcpy(record.data(), &header, sizeof(header));
+        if (rectBytes != 0 && pRects) {
+            std::memcpy(record.data() + header.rectOffset, pRects, rectBytes);
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_clear(dev_, count,
-            reinterpret_cast<const D9CRect*>(pRects),
-            flags, (uint32_t)color, z, stencil));
+        return appendCommandRecord(record.data(), record.size());
     }
 
     /* ── transforms ── */
@@ -4027,62 +3792,52 @@ public:
             }
             return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
         }
-        if (dxmt9PeDrawChunkEnabled()) {
-            uint32_t transformSlotIndex = 0;
-            if (!FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
-                const HRESULT flushHr = flushPeRecorder();
-                if (FAILED(flushHr)) return flushHr;
-                return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
-            }
-            D9CMatrix shadowMatrix{};
-            const bool shadowMatches = transformShadow_.get(stateKey, shadowMatrix) &&
-                                       matrixEquals(shadowMatrix, wireM);
-            const bool alreadyPending = pendingTransforms_.contains(stateKey);
-            if (!alreadyPending && shadowMatches) {
-                return S_OK;            // identity no-op
-            }
-            // Phase 34: cap-check uses chunkBarrierFlush, not bare
-            // flushPendingCommandChunk. The latter only seals existing
-            // records — pending hot state would remain DIRTY across
-            // the seal, leaving the next Draw* / barrier observing
-            // stale server state. chunkBarrierFlush encodes pending
-            // state as APPLY_STATE record(s) + clears the pending
-            // maps, so the new entry below starts with a fresh delta
-            // budget AND the server has already received the prior
-            // delta when the next chunk-record runs.
-            if (!alreadyPending &&
-                pendingTransforms_.size() >= D9C_DRAW_PACKET_MAX_TRANSFORMS) {
-                const HRESULT barrierHr = chunkBarrierFlush();
-                if (FAILED(barrierHr)) return barrierHr;
-            }
-            pendingTransforms_.set(stateKey, wireM);
-            transformShadow_.set(stateKey, wireM);
+        uint32_t transformSlotIndex = 0;
+        if (!FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
+            const HRESULT flushHr = flushPeRecorder();
+            if (FAILED(flushHr)) return flushHr;
+            return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
+        }
+        D9CMatrix shadowMatrix{};
+        const bool shadowMatches = transformShadow_.get(stateKey, shadowMatrix) &&
+                                   matrixEquals(shadowMatrix, wireM);
+        const bool alreadyPending = pendingTransforms_.contains(stateKey);
+        if (!alreadyPending && shadowMatches) {
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        const HRESULT hr = hr32(dxmt9c_device_set_transform(dev_, stateKey,
-                    reinterpret_cast<const D9CMatrix*>(pM)));
-        dxmt9DeviceDebugLog("device_set_transform -> hr=0x%08x", (unsigned)hr);
-        return hr;
+        // Phase 34: cap-check uses chunkBarrierFlush, not bare
+        // flushPendingCommandChunk. The latter only seals existing
+        // records — pending hot state would remain DIRTY across
+        // the seal, leaving the next Draw* / barrier observing
+        // stale server state. chunkBarrierFlush encodes pending
+        // state as APPLY_STATE record(s) + clears the pending
+        // maps, so the new entry below starts with a fresh delta
+        // budget AND the server has already received the prior
+        // delta when the next chunk-record runs.
+        if (!alreadyPending &&
+            pendingTransforms_.size() >= D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
+        }
+        pendingTransforms_.set(stateKey, wireM);
+        transformShadow_.set(stateKey, wireM);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTransform(D3DTRANSFORMSTATETYPE state,
                                             D3DMATRIX* pM) noexcept override {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_get_transform device=%p state=%u", this, (unsigned)state);
         const uint32_t stateKey = static_cast<uint32_t>(state);
-        if (dxmt9PeDrawChunkEnabled()) {
-            D9CMatrix wireM{};
-            if (transformShadow_.get(stateKey, wireM)) {
-                std::memcpy(pM, &wireM, sizeof(wireM));
-                return S_OK;
-            }
-            uint32_t transformSlotIndex = 0;
-            if (FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
-                wireM = identityTransformMatrix();
-                std::memcpy(pM, &wireM, sizeof(wireM));
-                return S_OK;
-            }
+        D9CMatrix wireM{};
+        if (transformShadow_.get(stateKey, wireM)) {
+            std::memcpy(pM, &wireM, sizeof(wireM));
+            return S_OK;
+        }
+        uint32_t transformSlotIndex = 0;
+        if (FixedTransformTable::slotForState(stateKey, transformSlotIndex)) {
+            wireM = identityTransformMatrix();
+            std::memcpy(pM, &wireM, sizeof(wireM));
+            return S_OK;
         }
         return hr32(dxmt9c_device_get_transform(dev_, stateKey,
                     reinterpret_cast<D9CMatrix*>(pM)));
@@ -4116,19 +3871,14 @@ public:
         // packet built for the next draw carries viewportValid=1 + the
         // shadow snapshot; server-side applyDrawPacketState dispatches
         // dxmt9c_device_set_viewport before the draw runs.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (std::memcmp(&viewportShadow_, &vp, sizeof(vp)) == 0) {
-                return S_OK;            // identity no-op
-            }
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            viewportShadow_ = vp;
-            pendingViewport_ = true;
+        if (std::memcmp(&viewportShadow_, &vp, sizeof(vp)) == 0) {
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_viewport(dev_, &vp));
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
+        viewportShadow_ = vp;
+        pendingViewport_ = true;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetViewport(D3DVIEWPORT9* pVP) noexcept override {
         if (!pVP) return D3DERR_INVALIDCALL;
@@ -4147,19 +3897,14 @@ public:
                             this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
         D9CRect cr = toR(*pR);
         // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (std::memcmp(&scissorShadow_, &cr, sizeof(cr)) == 0) {
-                return S_OK;            // identity no-op
-            }
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            scissorShadow_ = cr;
-            pendingScissor_ = true;
+        if (std::memcmp(&scissorShadow_, &cr, sizeof(cr)) == 0) {
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_scissor_rect(dev_, &cr));
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
+        scissorShadow_ = cr;
+        pendingScissor_ = true;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetScissorRect(RECT* pR) noexcept override {
         if (!pR) return D3DERR_INVALIDCALL;
@@ -4174,21 +3919,14 @@ public:
     HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) noexcept override {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (std::memcmp(&materialShadow_, pM, sizeof(D9CMaterial)) == 0) {
-                return S_OK;            // identity no-op
-            }
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            std::memcpy(&materialShadow_, pM, sizeof(D9CMaterial));
-            pendingMaterial_ = true;
+        if (std::memcmp(&materialShadow_, pM, sizeof(D9CMaterial)) == 0) {
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_material(dev_,
-                    reinterpret_cast<const D9CMaterial*>(pM)));
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
+        std::memcpy(&materialShadow_, pM, sizeof(D9CMaterial));
+        pendingMaterial_ = true;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetMaterial(D3DMATERIAL9* pM) noexcept override {
         if (!pM) return D3DERR_INVALIDCALL;
@@ -4220,10 +3958,10 @@ public:
         // packet via lightSlotMask + lights[8]. Out-of-range idx falls
         // back to legacy unix-call (rare, and the backend may also
         // refuse).
-        if (dxmt9PeDrawChunkEnabled() && idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
+        if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
             if ((pendingLightSlotMask_ & (1u << idx)) == 0 &&
                 std::memcmp(&lightShadow_[idx], &cl, sizeof(D9CLight)) == 0) {
-                return S_OK;            // identity no-op
+                return S_OK;
             }
             const HRESULT chunkHr = flushPendingCommandChunk();
             if (FAILED(chunkHr)) return chunkHr;
@@ -4231,7 +3969,7 @@ public:
             pendingLightSlotMask_ |= 1u << idx;
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
+        const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
     }
@@ -4242,13 +3980,13 @@ public:
     HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) noexcept override {
         dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
         // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled() && idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
+        if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
             const DWORD bit = 1u << idx;
             const bool wantEnabled = en != 0;
             const bool shadowEnabled = (lightEnableShadow_ & bit) != 0;
             if ((pendingLightEnableValidMask_ & bit) == 0 &&
                 wantEnabled == shadowEnabled) {
-                return S_OK;            // identity no-op
+                return S_OK;
             }
             const HRESULT chunkHr = flushPendingCommandChunk();
             if (FAILED(chunkHr)) return chunkHr;
@@ -4262,7 +4000,7 @@ public:
             }
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
+        const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));
     }
@@ -4276,22 +4014,16 @@ public:
         dxmt9DeviceDebugLog("device_set_clip_plane device=%p idx=%u plane=%p", this, (unsigned)idx, pPlane);
         if (!pPlane) return D3DERR_INVALIDCALL;
         if (idx >= 6) return D3DERR_INVALIDCALL;
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            const std::size_t off = static_cast<std::size_t>(idx) * 4u;
-            if ((pendingClipPlaneMask_ & (1u << idx)) == 0 &&
-                std::memcmp(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4) == 0) {
-                return S_OK;            // identity no-op
-            }
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            std::memcpy(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4);
-            pendingClipPlaneMask_ |= 1u << idx;
+        const std::size_t off = static_cast<std::size_t>(idx) * 4u;
+        if ((pendingClipPlaneMask_ & (1u << idx)) == 0 &&
+            std::memcmp(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4) == 0) {
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_clip_plane(dev_, idx, pPlane));
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
+        std::memcpy(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4);
+        pendingClipPlaneMask_ |= 1u << idx;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetClipPlane(DWORD idx, float* pPlane) noexcept override {
         dxmt9DeviceDebugLog("device_get_clip_plane device=%p idx=%u", this, (unsigned)idx);
@@ -4316,8 +4048,7 @@ public:
             if (!stateBlockRenderStateRestore_.contains(stateKey)) {
                 DWORD previous = dxmt9c_device_get_render_state(dev_, stateKey);
                 uint32_t shadowValue = 0;
-                if (dxmt9PeStateShadowEnabled() &&
-                    renderStateShadow_.get(stateKey, shadowValue)) {
+                if (renderStateShadow_.get(stateKey, shadowValue)) {
                     previous = shadowValue;
                 }
                 stateBlockRenderStateRestore_.set(stateKey, previous);
@@ -4325,39 +4056,30 @@ public:
             return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
         }
         const DWORD stateKey = static_cast<DWORD>(state);
-        if (dxmt9PeStateShadowEnabled() && shadowedRenderStateEquals(stateKey, value)) {
+        if (shadowedRenderStateEquals(stateKey, value)) {
             return S_OK;
         }
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
-        if (dxmt9PeStateShadowEnabled()) {
-            // Phase 31: cap check — if a NEW state would push the
-            // pending table past the per-packet cap, drain pending state
-            // into the chunk via chunkBarrierFlush() so the next packet
-            // starts with a fresh delta budget. Mirrors the TSS /
-            // SamplerState / Transform fast-path patterns and prevents
-            // the over-cap edge from leaking into the Draw fallback
-            // path (which would bridge-emit Set* calls).
-            if (!pendingRenderStates_.contains(stateKey) &&
-                pendingRenderStates_.size() >= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-                const HRESULT barrierHr = chunkBarrierFlush();
-                if (FAILED(barrierHr)) return barrierHr;
-            }
-            renderStateShadow_.set(stateKey, value);
-            pendingRenderStates_.set(stateKey, value);
-            return S_OK;
+        // Phase 31: cap check — if a NEW state would push the pending
+        // table past the per-packet cap, drain pending state into the chunk
+        // via chunkBarrierFlush() so the next packet starts fresh.
+        if (!pendingRenderStates_.contains(stateKey) &&
+            pendingRenderStates_.size() >= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
         }
-        return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
+        renderStateShadow_.set(stateKey, value);
+        pendingRenderStates_.set(stateKey, value);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetRenderState(D3DRENDERSTATETYPE state,
                                               DWORD* pValue) noexcept override {
         if (!pValue) return D3DERR_INVALIDCALL;
-        if (dxmt9PeStateShadowEnabled()) {
-            uint32_t shadowValue = 0;
-            if (renderStateShadow_.get(static_cast<DWORD>(state), shadowValue)) {
-                *pValue = shadowValue;
-                return S_OK;
-            }
+        uint32_t shadowValue = 0;
+        if (renderStateShadow_.get(static_cast<DWORD>(state), shadowValue)) {
+            *pValue = shadowValue;
+            return S_OK;
         }
         *pValue = dxmt9c_device_get_render_state(dev_, (uint32_t)state);
         return S_OK;
@@ -4370,9 +4092,8 @@ public:
         if (!isValidD3DStateBlockType(type) || stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
-        // Phase 28: state-block creation needs current server state.
-        // flushPeRecorder() routes through chunkBarrierFlush + chunk
-        // commit in chunk mode, bridge-emit in legacy mode.
+        // State-block creation needs current server state.
+        // flushPeRecorder() routes pending PE state through chunk records.
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_create_state_block device=%p type=%u", this, (unsigned)type);
@@ -4385,7 +4106,7 @@ public:
         if (stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
-        const HRESULT flushHr = flushPeRecorder();   // Phase 28: mode-aware
+        const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
         const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
@@ -4402,7 +4123,7 @@ public:
         if (!stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
-        const HRESULT flushHr = flushPeRecorder();   // Phase 28: mode-aware
+        const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_end_state_block device=%p", this);
         D9CStateBlock* sb = nullptr;
@@ -4436,32 +4157,23 @@ public:
                                                     DWORD value) noexcept override {
         dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            const uint32_t stageSlot = textureStageSlot(stage);
-            const uint32_t stateSlot = textureStageStateSlot(type);
-            uint32_t shadowValue = 0;
-            if (tssShadow_.get(stageSlot, stateSlot, shadowValue) &&
-                shadowValue == value) {
-                return S_OK;            // identity no-op
-            }
-            // Phase 34: cap-check uses chunkBarrierFlush so pending
-            // state is encoded as APPLY_STATE record(s) + cleared
-            // before the new entry. Bare flushPendingCommandChunk
-            // would leave the pending TSS table dirty across the seal.
-            if (!pendingTss_.contains(stageSlot, stateSlot) &&
-                pendingTss_.size() >= D9C_DRAW_PACKET_MAX_TSS) {
-                const HRESULT barrierHr = chunkBarrierFlush();
-                if (FAILED(barrierHr)) return barrierHr;
-            }
-            tssShadow_.set(stageSlot, stateSlot, value);
-            pendingTss_.set(stageSlot, stateSlot, value);
+        const uint32_t stageSlot = textureStageSlot(stage);
+        const uint32_t stateSlot = textureStageStateSlot(type);
+        uint32_t shadowValue = 0;
+        if (tssShadow_.get(stageSlot, stateSlot, shadowValue) &&
+            shadowValue == value) {
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_texture_stage_state(dev_, stage,
-                    (uint32_t)type, value));
+        // Phase 34: cap-check uses chunkBarrierFlush so pending state is
+        // encoded as APPLY_STATE record(s) + cleared before the new entry.
+        if (!pendingTss_.contains(stageSlot, stateSlot) &&
+            pendingTss_.size() >= D9C_DRAW_PACKET_MAX_TSS) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
+        }
+        tssShadow_.set(stageSlot, stateSlot, value);
+        pendingTss_.set(stageSlot, stateSlot, value);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTextureStageState(DWORD stage,
                                                     D3DTEXTURESTAGESTATETYPE type,
@@ -4475,36 +4187,28 @@ public:
                                                DWORD value) noexcept override {
         dxmt9DeviceDebugLog("device_set_sampler_state device=%p sampler=%u type=%u value=0x%x",
                             this, (unsigned)sampler, (unsigned)type, (unsigned)value);
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            uint32_t samplerIndex = 0;
-            if (!samplerSlot(sampler, samplerIndex)) {
-                return D3DERR_INVALIDCALL;
-            }
-            uint32_t stateSlot = 0;
-            if (!samplerStateSlot(type, stateSlot)) {
-                return S_OK;
-            }
-            uint32_t shadowValue = 0;
-            if (samplerStateShadow_.get(samplerIndex, stateSlot, shadowValue) &&
-                shadowValue == value) {
-                return S_OK;            // identity no-op
-            }
-            // Phase 34: cap-check uses chunkBarrierFlush — see Phase
-            // 31a / SetTextureStageState for the rationale.
-            if (!pendingSamplerStates_.contains(samplerIndex, stateSlot) &&
-                pendingSamplerStates_.size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
-                const HRESULT barrierHr = chunkBarrierFlush();
-                if (FAILED(barrierHr)) return barrierHr;
-            }
-            samplerStateShadow_.set(samplerIndex, stateSlot, value);
-            pendingSamplerStates_.set(samplerIndex, stateSlot, value);
+        uint32_t samplerIndex = 0;
+        if (!samplerSlot(sampler, samplerIndex)) {
+            return D3DERR_INVALIDCALL;
+        }
+        uint32_t stateSlot = 0;
+        if (!samplerStateSlot(type, stateSlot)) {
             return S_OK;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_sampler_state(dev_, sampler,
-                    (uint32_t)type, value));
+        uint32_t shadowValue = 0;
+        if (samplerStateShadow_.get(samplerIndex, stateSlot, shadowValue) &&
+            shadowValue == value) {
+            return S_OK;
+        }
+        // Phase 34: cap-check uses chunkBarrierFlush.
+        if (!pendingSamplerStates_.contains(samplerIndex, stateSlot) &&
+            pendingSamplerStates_.size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
+        }
+        samplerStateShadow_.set(samplerIndex, stateSlot, value);
+        pendingSamplerStates_.set(samplerIndex, stateSlot, value);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetSamplerState(DWORD sampler,
                                                D3DSAMPLERSTATETYPE type,
@@ -4557,7 +4261,7 @@ public:
         dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
                             this, (unsigned)stage, pTex);
         if (stage >= 16) return D3DERR_INVALIDCALL;
-        if (dxmt9PeStateShadowEnabled() && shadowedTextureEquals(stage, pTex)) {
+        if (shadowedTextureEquals(stage, pTex)) {
             return S_OK;
         }
         const HRESULT chunkHr = flushPendingCommandChunk();
@@ -4570,11 +4274,8 @@ public:
             noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
                             reinterpret_cast<uint64_t>(raw));
         }
-        if (dxmt9PeStateShadowEnabled()) {
-            pendingTextureMask_ |= 1u << stage;
-            return S_OK;
-        }
-        return hr32(dxmt9c_device_set_texture(dev_, stage, rawTex(pTex)));
+        pendingTextureMask_ |= 1u << stage;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTexture(DWORD stage,
                                           IDirect3DBaseTexture9** ppTex) noexcept override {
@@ -4590,25 +4291,19 @@ public:
     /* ── FVF / vertex declaration ── */
     HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override {
         dxmt9DeviceDebugLog("device_set_fvf device=%p fvf=0x%x", this, (unsigned)fvf);
-        if (dxmt9PeStateShadowEnabled() && fvf_ == fvf) {
+        if (fvf_ == fvf) {
             return S_OK;
         }
         const HRESULT chunkHr = flushPendingCommandChunk();
         if (FAILED(chunkHr)) return chunkHr;
         fvf_ = fvf;
-        if (dxmt9PeStateShadowEnabled()) {
-            pendingFvf_ = true;
-            return S_OK;
-        }
-        return hr32(dxmt9c_device_set_fvf(dev_, fvf));
+        pendingFvf_ = true;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetFVF(DWORD* pFVF) noexcept override {
         if (!pFVF) return D3DERR_INVALIDCALL;
-        if (dxmt9PeStateShadowEnabled()) {
-            *pFVF = fvf_;
-            return S_OK;
-        }
-        *pFVF = dxmt9c_device_get_fvf(dev_); return S_OK;
+        *pFVF = fvf_;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE CreateVertexDeclaration(
             const D3DVERTEXELEMENT9* pElems,
@@ -4633,19 +4328,12 @@ public:
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
             IDirect3DVertexDeclaration9* pVD) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (vdecl_ == pVD) return S_OK;     // shadow no-op
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            setRef(vdecl_, pVD);
-            pendingVdecl_ = true;
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
+        if (vdecl_ == pVD) return S_OK;
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
         setRef(vdecl_, pVD);
-        return hr32(dxmt9c_device_set_vertex_declaration(dev_, rawVD(pVD)));
+        pendingVdecl_ = true;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexDeclaration(
             IDirect3DVertexDeclaration9** ppVD) noexcept override {
@@ -4670,18 +4358,12 @@ public:
         // packet built for the next draw carries vsValid=1 + the vs_
         // wire handle; server-side applyDrawPacketState dispatches the
         // dxmt9c_device_set_vertex_shader call before the draw runs.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (vs_ == pVS) return S_OK;     // shadow no-op
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            setRef(vs_, pVS);
-            pendingVs_ = true;
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
+        if (vs_ == pVS) return S_OK;
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
         setRef(vs_, pVS);
-        return hr32(dxmt9c_device_set_vertex_shader(dev_, rawVS(pVS)));
+        pendingVs_ = true;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShader(IDirect3DVertexShader9** ppVS) noexcept override {
         if (!ppVS) return D3DERR_INVALIDCALL;
@@ -4691,16 +4373,10 @@ public:
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        if (dxmt9PeDrawChunkEnabled()) {
-            // Shadow-only: defer the record until the next flushPendingConsts()
-            // (called before each draw record + at chunk commit). Merging
-            // dozens of overlapping/contiguous Set calls into one record.
-            touchConstShadow(vsConstF_, start, count, pData, sizeof(float) * 4);
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_vs_const_f(dev_, start, pData, count));
+        // Shadow-only: defer the record until the next flushPendingConsts()
+        // (called before each draw record + at chunk commit).
+        touchConstShadow(vsConstF_, start, count, pData, sizeof(float) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start, float* pData,
                                                         UINT count) noexcept override {
@@ -4710,14 +4386,8 @@ public:
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        if (dxmt9PeDrawChunkEnabled()) {
-            touchConstShadow(vsConstI_, start, count, pData, sizeof(int32_t) * 4);
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_vs_const_i(dev_, start,
-                    reinterpret_cast<const int32_t*>(pData), count));
+        touchConstShadow(vsConstI_, start, count, pData, sizeof(int32_t) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantI(UINT start, INT* pData,
                                                         UINT count) noexcept override {
@@ -4727,14 +4397,8 @@ public:
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        if (dxmt9PeDrawChunkEnabled()) {
-            touchConstShadow(vsConstB_, start, count, pData, sizeof(uint32_t));
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_vs_const_b(dev_, start,
-                    reinterpret_cast<const uint32_t*>(pData), count));
+        touchConstShadow(vsConstB_, start, count, pData, sizeof(uint32_t));
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantB(UINT start, BOOL* pData,
                                                         UINT count) noexcept override {
@@ -4748,7 +4412,7 @@ public:
         dxmt9DeviceDebugLog("device_set_stream_source device=%p stream=%u buf=%p offset=%u stride=%u",
                             this, stream, pBuf, offset, stride);
         if (stream >= 16) return D3DERR_INVALIDCALL;
-        if (dxmt9PeStateShadowEnabled() && shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
+        if (shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
             return S_OK;
         }
         const HRESULT chunkHr = flushPendingCommandChunk();
@@ -4760,12 +4424,8 @@ public:
             noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
                             reinterpret_cast<uint64_t>(raw));
         }
-        if (dxmt9PeStateShadowEnabled()) {
-            pendingStreamMask_ |= 1u << stream;
-            return S_OK;
-        }
-        return hr32(dxmt9c_device_set_stream_source(dev_, stream,
-                    rawVBuf(pBuf), offset, stride));
+        pendingStreamMask_ |= 1u << stream;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetStreamSource(UINT stream,
                                                IDirect3DVertexBuffer9** ppBuf,
@@ -4781,7 +4441,7 @@ public:
     HRESULT STDMETHODCALLTYPE SetStreamSourceFreq(UINT stream, UINT freq) noexcept override {
         dxmt9DeviceDebugLog("device_set_stream_source_freq device=%p stream=%u freq=0x%x",
                             this, stream, (unsigned)freq);
-        const HRESULT flushHr = flushPeRecorder();   // Phase 28: mode-aware
+        const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
         streamFreq_[stream < 16 ? stream : 0] = freq;
         return hr32(dxmt9c_device_set_stream_source_freq(dev_, stream, freq));
@@ -4797,29 +4457,16 @@ public:
     /* ── indices ── */
     HRESULT STDMETHODCALLTYPE SetIndices(IDirect3DIndexBuffer9* pIBuf) noexcept override {
         dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
-        // Phase 12: PE-shadow-only when chunk recorder is active. The
-        // index buffer rides on D9CDrawIndexedPrimitivePacket via
-        // ibValid + ibHandle (only consumed by indexed draws).
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (indexBuf_ == pIBuf) return S_OK;     // shadow no-op
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            setRef(indexBuf_, pIBuf);
-            pendingIb_ = true;
-            if (auto* raw = rawIBuf(pIBuf); raw != nullptr) {
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
-                                reinterpret_cast<uint64_t>(raw));
-            }
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
+        if (indexBuf_ == pIBuf) return S_OK;
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
         setRef(indexBuf_, pIBuf);
+        pendingIb_ = true;
         if (auto* raw = rawIBuf(pIBuf); raw != nullptr) {
             noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
                             reinterpret_cast<uint64_t>(raw));
         }
-        return hr32(dxmt9c_device_set_indices(dev_, rawIBuf(pIBuf)));
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetIndices(IDirect3DIndexBuffer9** ppIBuf) noexcept override {
         if (!ppIBuf) return D3DERR_INVALIDCALL;
@@ -4838,19 +4485,12 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
-        // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (ps_ == pPS) return S_OK;     // shadow no-op
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
-            setRef(ps_, pPS);
-            pendingPs_ = true;
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
+        if (ps_ == pPS) return S_OK;
+        const HRESULT chunkHr = flushPendingCommandChunk();
+        if (FAILED(chunkHr)) return chunkHr;
         setRef(ps_, pPS);
-        return hr32(dxmt9c_device_set_pixel_shader(dev_, rawPS(pPS)));
+        pendingPs_ = true;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShader(IDirect3DPixelShader9** ppPS) noexcept override {
         if (!ppPS) return D3DERR_INVALIDCALL;
@@ -4860,13 +4500,8 @@ public:
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        if (dxmt9PeDrawChunkEnabled()) {
-            touchConstShadow(psConstF_, start, count, pData, sizeof(float) * 4);
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_ps_const_f(dev_, start, pData, count));
+        touchConstShadow(psConstF_, start, count, pData, sizeof(float) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantF(UINT start, float* pData,
                                                        UINT count) noexcept override {
@@ -4876,14 +4511,8 @@ public:
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        if (dxmt9PeDrawChunkEnabled()) {
-            touchConstShadow(psConstI_, start, count, pData, sizeof(int32_t) * 4);
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_ps_const_i(dev_, start,
-                    reinterpret_cast<const int32_t*>(pData), count));
+        touchConstShadow(psConstI_, start, count, pData, sizeof(int32_t) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantI(UINT start, INT* pData,
                                                        UINT count) noexcept override {
@@ -4893,14 +4522,8 @@ public:
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        if (dxmt9PeDrawChunkEnabled()) {
-            touchConstShadow(psConstB_, start, count, pData, sizeof(uint32_t));
-            return S_OK;
-        }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_set_ps_const_b(dev_, start,
-                    reinterpret_cast<const uint32_t*>(pData), count));
+        touchConstShadow(psConstB_, start, count, pData, sizeof(uint32_t));
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantB(UINT start, BOOL* pData,
                                                        UINT count) noexcept override {
@@ -4913,38 +4536,15 @@ public:
                                              UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
                             this, (unsigned)type, startVertex, count);
-        // Phase 32: chunk mode never falls through to per-call bridge.
-        // If pending state somehow exceeds packet cap (shouldn't happen
-        // post-Phase-31 cap-checks at every Set* fast path), drain via
-        // chunkBarrierFlush — which splits oversized collections into
-        // multiple APPLY_STATE records — then append the draw record.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-                const HRESULT barrierHr = chunkBarrierFlush();
-                if (FAILED(barrierHr)) return barrierHr;
-            }
-            const HRESULT hr = appendDrawPrimitiveRecord(type, startVertex, count);
-            if (SUCCEEDED(hr)) {
-                clearPendingHotState();
-            }
-            return hr;
+        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
         }
-        // Legacy fallback (DXMT9_PE_DRAW_CHUNK=0): packet-bridge first,
-        // then per-call bridge.
-        if (dxmt9PeStateShadowEnabled() && hasPendingHotState()) {
-            D9CDrawPrimitivePacket packet{};
-            if (buildDrawPrimitivePacket(type, startVertex, count, packet)) {
-                const HRESULT hr = hr32(dxmt9c_device_draw_primitive_packet(dev_, &packet));
-                if (SUCCEEDED(hr)) {
-                    clearPendingHotState();
-                }
-                return hr;
-            }
+        const HRESULT hr = appendDrawPrimitiveRecord(type, startVertex, count);
+        if (SUCCEEDED(hr)) {
+            clearPendingHotState();
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_draw_primitive(dev_, (uint32_t)type,
-                    startVertex, count));
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE type,
                                                     INT baseVertex,
@@ -4954,23 +4554,16 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
                             this, (unsigned)type, baseVertex, minVertex, numVertices,
                             startIndex, count);
-        // Phase 32: chunk mode never falls through to per-call bridge.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-                const HRESULT barrierHr = chunkBarrierFlush();
-                if (FAILED(barrierHr)) return barrierHr;
-            }
-            const HRESULT hr = appendDrawIndexedPrimitiveRecord(type, baseVertex, minVertex,
-                                                                numVertices, startIndex, count);
-            if (SUCCEEDED(hr)) {
-                clearPendingHotState();
-            }
-            return hr;
+        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_draw_indexed_primitive(dev_, (uint32_t)type,
-                    baseVertex, minVertex, numVertices, startIndex, count));
+        const HRESULT hr = appendDrawIndexedPrimitiveRecord(type, baseVertex, minVertex,
+                                                            numVertices, startIndex, count);
+        if (SUCCEEDED(hr)) {
+            clearPendingHotState();
+        }
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,
                                                UINT count,
@@ -4978,22 +4571,15 @@ public:
                                                UINT stride) noexcept override {
         dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
                             this, (unsigned)type, count, pData, stride);
-        // Phase 32: chunk mode never falls through to per-call bridge.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-                const HRESULT barrierHr = chunkBarrierFlush();
-                if (FAILED(barrierHr)) return barrierHr;
-            }
-            const HRESULT hr = appendDrawPrimitiveUPRecord(type, count, pData, stride);
-            if (SUCCEEDED(hr)) {
-                clearPendingHotState();
-            }
-            return hr;
+        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_draw_primitive_up(dev_, (uint32_t)type,
-                    count, pData, stride));
+        const HRESULT hr = appendDrawPrimitiveUPRecord(type, count, pData, stride);
+        if (SUCCEEDED(hr)) {
+            clearPendingHotState();
+        }
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,
                                                       UINT minVertex,
@@ -5006,25 +4592,17 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
                             this, (unsigned)type, minVertex, numVertices, count,
                             pIdxData, (unsigned)idxFmt, pVtxData, stride);
-        // Phase 32: chunk mode never falls through to per-call bridge.
-        if (dxmt9PeDrawChunkEnabled()) {
-            if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-                const HRESULT barrierHr = chunkBarrierFlush();
-                if (FAILED(barrierHr)) return barrierHr;
-            }
-            const HRESULT hr = appendDrawIndexedPrimitiveUPRecord(type, minVertex, numVertices,
-                                                                  count, pIdxData, idxFmt,
-                                                                  pVtxData, stride);
-            if (SUCCEEDED(hr)) {
-                clearPendingHotState();
-            }
-            return hr;
+        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            const HRESULT barrierHr = chunkBarrierFlush();
+            if (FAILED(barrierHr)) return barrierHr;
         }
-        const HRESULT flushHr = flushPendingHotState();
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_draw_indexed_primitive_up(dev_,
-                    (uint32_t)type, minVertex, numVertices, count,
-                    pIdxData, (uint32_t)idxFmt, pVtxData, stride));
+        const HRESULT hr = appendDrawIndexedPrimitiveUPRecord(type, minVertex, numVertices,
+                                                              count, pIdxData, idxFmt,
+                                                              pVtxData, stride);
+        if (SUCCEEDED(hr)) {
+            clearPendingHotState();
+        }
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE ProcessVertices(UINT, UINT, UINT,
                                                IDirect3DVertexBuffer9*,

@@ -128,15 +128,15 @@ class DeviceImpl final : public Device {
   }
   void destroyBuffer(core::BufferHandle handle) override {
     std::lock_guard lock(queue_.mutex_);
-    queue_.pool().markDestroyAndGc(queue_.pool().buffers, handle.value, queue_.completedSeqId_);
+    queue_.pool().markBufferDestroyAndGc(handle.value, queue_.completedSeqId_);
   }
   void destroyTexture(core::TextureHandle handle) override {
     std::lock_guard lock(queue_.mutex_);
-    queue_.pool().markDestroyAndGc(queue_.pool().textures, handle.value, queue_.completedSeqId_);
+    queue_.pool().markTextureDestroyAndGc(handle.value, queue_.completedSeqId_);
   }
   void destroySurface(core::SurfaceHandle handle) override {
     std::lock_guard lock(queue_.mutex_);
-    queue_.pool().markDestroyAndGc(queue_.pool().surfaces, handle.value, queue_.completedSeqId_);
+    queue_.pool().markSurfaceDestroyAndGc(handle.value, queue_.completedSeqId_);
   }
   void unmapBuffer(core::BufferHandle) override {}
   void uploadBufferData(core::BufferHandle handle, std::span<const std::uint8_t> bytes) override {
@@ -152,10 +152,6 @@ class DeviceImpl final : public Device {
     queue_.uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
 
-  void submitDraw(const core::DrawDesc& desc) override { queue_.submitDraw(desc); }
-  void submitDrawBatch(std::span<const core::DrawDesc> descs) override {
-    queue_.submitDrawBatch(descs);
-  }
   void submitDrawRun(core::DrawRunDesc desc) override {
     queue_.submitDrawRun(std::move(desc));
   }
