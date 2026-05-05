@@ -264,6 +264,21 @@ std::vector<u32> makePs30InputSemanticBytecode() {
   };
 }
 
+std::vector<u32> makePs20ColorInputBytecode(u32 inputIndex = 0) {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  return {
+      makeVersionToken(false, 2, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_INPUT, inputIndex),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, inputIndex),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makeVs30OutputSemanticBytecode() {
   using namespace dxmt9::d3d9bc;
   constexpr u32 kD3DDeclUsagePosition = 0u;
@@ -593,6 +608,20 @@ void testPs30InputSemanticTexcoordMapping() {
   checkContains(source, "tex2.sample(samp2", "ps_3_0 texture sample preserves sampler register mapping");
 }
 
+void testPs20ColorInputUsesLegacyInputMapping() {
+  const auto source = translatePixel(makePs20ColorInputBytecode());
+  checkContains(source, "outColor[0] = float4(in.color);",
+                "ps_2_0 v0 input maps to interpolated color");
+  checkNotContains(source, "outColor[0] = in.position;",
+                   "ps_2_0 v0 input must not be treated as fragment position");
+
+  const auto secondarySource = translatePixel(makePs20ColorInputBytecode(1));
+  checkContains(secondarySource, "outColor[0] = float4(in.secondaryColor);",
+                "ps_2_0 v1 input maps to interpolated secondary color");
+  checkNotContains(secondarySource, "dxmt9_select_texcoord(in, 0u)",
+                   "ps_2_0 v1 input must not be treated as texture coordinate zero");
+}
+
 void testVs30OutputSemanticMappingBySemanticIndex() {
   const auto source = translateVertex(makeVs30OutputSemanticBytecode());
   checkContains(source, "outPosition = cFloat[0]", "vs_3_0 position semantic maps to Metal position output");
@@ -740,6 +769,7 @@ int main() {
     testD3DBCDecodeAndClassificationFixtures();
     testPs20SamplerRegisterSlotMapping();
     testPs30InputSemanticTexcoordMapping();
+    testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();
     testDefaultNoPixelVFlipAndNoVertexYFlip();
     testPs30WriteMaskSwizzleAndSourceModifiers();

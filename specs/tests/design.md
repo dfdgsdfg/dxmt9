@@ -121,7 +121,7 @@ framework has two parts: a backend-agnostic runner and pluggable backends.
 ```mermaid
 graph TD
     subgraph Corpus["Test corpus"]
-        ST["tests/shader_tests/*.shader_test\n(portable test files)"]
+        ST["tests/shader_runner/corpus/*.shader_test\n(portable test files)"]
     end
 
     subgraph Runner["shader_runner (vkd3d)"]
@@ -190,7 +190,7 @@ Run the `.shader_test` file on a Windows host to produce reference probe values:
 
 ```sh
 # On Windows (hardware or WARP):
-shader_runner_d3d9.exe tests/shader_tests/sincos.shader_test
+shader_runner_d3d9.exe tests/shader_runner/corpus/sincos.shader_test
 # When a probe fails, the runner prints the actual value — copy it as the expected.
 ```
 
@@ -348,18 +348,18 @@ Current implemented command subset:
 
 The first implemented runtime probes are:
 
-- `tests/shader_tests/texture/dxmt9_texture_2x2.shader_test` validates top-left
+- `tests/shader_runner/corpus/texture/dxmt9_texture_2x2.shader_test` validates top-left
   / top-right / bottom-left / bottom-right texture orientation through real
   rendering.
-- `tests/shader_tests/vs_specific/dxmt9_vs_color_triangle.shader_test`
+- `tests/shader_runner/corpus/vs_specific/dxmt9_vs_color_triangle.shader_test`
   validates that programmable vertex POSITION and COLOR outputs affect
   rasterization and framebuffer color.
-- `tests/shader_tests/viewport/dxmt9_viewport_vs_triangle.shader_test`
+- `tests/shader_runner/corpus/viewport/dxmt9_viewport_vs_triangle.shader_test`
   validates that a bounded viewport changes the rasterized geometry mask through
   framebuffer readback.
-- `tests/shader_tests/render_state/dxmt9_color_write_mask.shader_test`
+- `tests/shader_runner/corpus/render_state/dxmt9_color_write_mask.shader_test`
   validates `RS_COLOR_WRITE_ENABLE` through framebuffer readback.
-- `tests/shader_tests/render_state/dxmt9_color_write_rgb_preserves_alpha.shader_test`
+- `tests/shader_runner/corpus/render_state/dxmt9_color_write_rgb_preserves_alpha.shader_test`
   validates that RGB color-write masks update RGB channels while preserving the
   cleared alpha channel.
 
@@ -427,7 +427,7 @@ Wine `visual.c` (`max_diff = 1` or `2` per channel).
 
 For each missing opcode in `translateSpirvToMsl()`:
 
-1. Write a `.shader_test` in `tests/shader_tests/<opcode>.shader_test`
+1. Write a `.shader_test` in `tests/shader_runner/corpus/<opcode>.shader_test`
 2. Run on `shader_runner_d3d9` (Windows) to generate oracle `probe` values
 3. Commit the `.shader_test` with the oracle values — test is now **failing** on dxmt9
 4. Implement the opcode in `translateSpirvToMsl()`
@@ -465,7 +465,7 @@ Each cell is one `.shader_test` (or `visual.c`-derived test). Updated as tests p
 
 ## 8. WSI Integration Test
 
-The WSI test (`tests/wsi_present/`) is architecturally distinct from the rest
+The WSI test (`tests/integration/wsi_present/`) is architecturally distinct from the rest
 of the test suite: it is a cross-compiled Win32 PE executable that exercises
 the full presentation stack end-to-end under Wine, including:
 
@@ -504,13 +504,14 @@ sequenceDiagram
 
 ```sh
 PATH=~/llvm-mingw/bin:$PATH
-x86_64-w64-mingw32-clang++ -o tests/wsi_present/wsi_present_x64.exe \
-    tests/wsi_present/main.cpp -ld3d9 -luser32 -lgdi32
+x86_64-w64-mingw32-clang++ -o build/wsi_present/wsi_present_x64.exe \
+    tests/integration/wsi_present/main.cpp -ld3d9 -luser32 -lgdi32
 ```
 
-The resulting `wsi_present_x64.exe` is checked in as a pre-built binary so the
-test can be run without a separate cross-compile step on the common
-Rosetta/Wine64 path.
+The resulting `wsi_present_x64.exe` is a generated build artifact. Source
+control should keep the test source and Meson/build rules, not PE binaries,
+unless a temporary compatibility artifact is explicitly documented during a
+layout migration.
 
 ### Run
 
@@ -533,7 +534,7 @@ cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
   <wine-root>/lib/wine/x86_64-windows/winemetal.dll
 cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
   <wine-root>/lib/wine/x86_64-unix/winemetal.so
-WINEDLLOVERRIDES="d3d9,winemetal=n,b" wine tests/wsi_present/wsi_present_x64.exe
+WINEDLLOVERRIDES="d3d9,winemetal=n,b" wine build/wsi_present/wsi_present_x64.exe
 ```
 
 Requires a recent Wine64-capable build on macOS plus a Wine toolchain install
@@ -629,7 +630,7 @@ runtime supports WoW64.
 
 ### Conformance Manifest
 
-`tests/d3d9_conformance/MANIFEST.toml` is the source of truth for Wine-derived
+`tests/conformance/d3d9/MANIFEST.toml` is the source of truth for Wine-derived
 API conformance coverage. It is separate from the shader corpus manifest
 because these tests are PE executables, not `.shader_test` files.
 
@@ -675,7 +676,7 @@ for dep in libc++.dll libunwind.dll; do
     cp "build-win32-x64/src/win32/$dep" build/conformance-stage/
   fi
 done
-cp tests/d3d9_conformance/d3d9_*_x64.exe build/conformance-stage/
+cp tests/conformance/d3d9/d3d9_*_x64.exe build/conformance-stage/
 (cd build/conformance-stage && \
   WINEDLLOVERRIDES="d3d9,winemetal=n,b" \
   DXMT9_WINEMETAL_SO="$PWD/winemetal.so" \
@@ -689,78 +690,106 @@ with the deployment helper, then run the same PE executables with
 
 ---
 
-## 10. File Layout
+## 10. File Layout and Ownership Boundaries
 
-```
+The `tests/` tree is organized by execution boundary and ownership, not by file
+extension. Native stateless suites, runtime shader probes, Wine PE conformance,
+and WSI integration must stay in separate directories so a green result in one
+boundary cannot be mistaken for coverage in another.
+
+Target layout:
+
+```text
 tests/
-├── smoke.cpp                     Bootstrap sanity test
-├── core_spec.cpp                 Core API tests
-├── d3d9_conformance/
-│   ├── MANIFEST.toml             Wine-derived PE conformance case index
-│   ├── exports.cpp               D3D9 export-table and D3DPERF checks
-│   ├── factory_ex.cpp            Wine d3d9ex.c-derived factory/Ex checks
-│   ├── factory_validation.cpp    Wine directx.c/device.c validation checks
-│   ├── device_lifetime.cpp       Wine device.c-derived refcount/private-data/scene checks
-│   ├── d3d9_queries_x64.cpp      Wine device.c query support/data checks
-│   ├── d3d9_resources_x64.cpp    Wine device.c resource wrapper checks
-│   ├── d3d9_stateblock_matrix_x64.cpp
-│   │                              Wine stateblock.c-derived stateblock checks
-│   ├── present_params.cpp        Wine presentation parameter normalisation checks
-│   ├── shared_handle.cpp         Wine shared-handle and Ex user-memory checks
-│   ├── d3d9_reset_lost_x64.cpp   Wine device.c/d3d9ex.c-derived reset checks
-│   ├── d3d9_window_cursor_x64.cpp
-│   │                              Wine window/cursor ownership checks
-│   ├── d3d9_device_misc_x64.cpp  Wine device utility/creation-flag checks
-│   └── auxiliary.cpp             Shader validator and D3D9On12 safe-stub checks
-├── wsi_present/
-│   ├── main.cpp                  WSI integration test source (R-TEST-11.1)
-│   ├── wsi_present.exe           Historical ARM64 PE smoke binary
-│   └── wsi_present_x64.exe       Pre-built x86_64 PE smoke binary (validated)
-├── shader_tests/
-│   ├── MANIFEST.toml             Machine-readable corpus index (R-TEST-10.1)
-│   ├── ...                       vkd3d-format .shader_test files (each with provenance block)
-│   ├── arithmetic/
-│   │   ├── mov.shader_test
-│   │   ├── mad.shader_test
-│   │   ├── dp3_dp4.shader_test
-│   │   └── ...
-│   ├── flow_control/
-│   │   ├── if_else.shader_test
-│   │   ├── rep_endrep.shader_test
-│   │   ├── loop.shader_test
-│   │   └── call_ret.shader_test
-│   ├── transcendental/
-│   │   ├── sincos.shader_test
-│   │   ├── log_exp.shader_test
-│   │   └── ...
-│   ├── texture/
-│   │   ├── tex_2d.shader_test
-│   │   ├── texldd.shader_test
-│   │   └── ...
-│   ├── matrix/
-│   │   ├── m4x4.shader_test
-│   │   └── ...
-│   ├── ffp/                      Fixed-function (shader_runner-based)
-│   │   ├── lighting_directional.shader_test
-│   │   ├── fog_linear.shader_test
-│   │   └── ...
-│   ├── viewport/                 dxmt9-local viewport/readback probes
-│   └── visual_c/                 Ported from Wine visual.c (ps_1_x + FFP)
-│       ├── ps_1_4_test.shader_test     ; // derived from Wine: visual.c:ps_1_4_test
-│       ├── fog_test.shader_test        ; // derived from Wine: visual.c:fog_test
-│       ├── alpha_test.shader_test      ; // derived from Wine: visual.c:alpha_test
-│       └── ...
-├── shader_runner_dxmt9.cpp       dxmt9 backend for shader_runner
+├── native/
+│   ├── smoke/
+│   │   └── smoke.cpp
+│   ├── core/
+│   │   ├── core_spec.cpp
+│   │   └── state_draw_transform_spec.cpp
+│   ├── shader/
+│   │   └── shader_transform_spec.cpp
+│   ├── backend/
+│   │   ├── backend_key_descriptor_spec.cpp
+│   │   ├── backend_pipeline_key_spec.cpp
+│   │   └── resource_hazard_spec.cpp
+│   └── bridge/
+│       ├── chunk_record_spec.cpp
+│       └── chunk_record_import_spec.cpp
+├── shader_runner/
+│   ├── shader_runner_dxmt9.cpp
+│   └── corpus/
+│       ├── MANIFEST.toml
+│       ├── arithmetic/
+│       ├── comparison/
+│       ├── ffp/
+│       ├── flow_control/
+│       ├── matrix/
+│       ├── render_state/
+│       ├── source_modifiers/
+│       ├── texture/
+│       ├── transcendental/
+│       ├── vector/
+│       ├── viewport/
+│       ├── visual_c/
+│       └── vs_specific/
+├── conformance/
+│   └── d3d9/
+│       ├── MANIFEST.toml
+│       ├── meson.build
+│       ├── exports.cpp
+│       ├── auxiliary.cpp
+│       ├── device_lifetime.cpp
+│       ├── d3d9_conformance.c
+│       ├── d3d9_device_misc_x64.cpp
+│       ├── d3d9_queries_x64.cpp
+│       ├── d3d9_reset_lost_x64.cpp
+│       ├── d3d9_resources_x64.cpp
+│       ├── d3d9_stateblock_matrix_x64.cpp
+│       └── d3d9_window_cursor_x64.cpp
+├── integration/
+│   └── wsi_present/
+│       └── main.cpp
+├── fixtures/
+│   └── corpus_sync/
 └── meson.build
-scripts/
-├── check_manifest.sh             Fails if MANIFEST.toml ↔ filesystem diverge
-├── check_drift.sh                Reports .shader_test files behind upstream commit
-└── sync_corpus.sh                Refreshes vkd3d-sourced files from a local checkout
 ```
 
-The `shader_runner_dxmt9` binary is built as a Meson test target and run with each
-`.shader_test` file as a separate test case. Each `meson test` invocation runs the
-full corpus.
+Boundary ownership:
+
+| Directory | Boundary | Evidence owned |
+|---|---|---|
+| `tests/native/core/` | Native macOS, no Wine, no D3D9 PE ABI | state snapshots, draw construction, source contracts, present-without-window fallback |
+| `tests/native/shader/` | Native macOS transform tests | D3DBC decode, IR/MSL generation, source-contract regressions |
+| `tests/native/backend/` | Native macOS backend/data tests | descriptor keys, pipeline keys, resource hazard observations, DOD allocation evidence |
+| `tests/native/bridge/` | Native macOS packet/wire tests | chunk wire layout, import validation, draw-run grouping, handle/payload arena behaviour |
+| `tests/shader_runner/` | Native macOS runtime readback harness | `.shader_test` corpus, dxmt9-local extended probes, framebuffer readback evidence |
+| `tests/conformance/d3d9/` | Windows PE binaries under Wine | Wine-derived D3D9 ABI, HRESULT, COM lifetime, state-machine compatibility |
+| `tests/integration/wsi_present/` | Wine + window system + Metal presentation | full WSI smoke, HWND-to-Metal-layer resolution, visible present path |
+| `tests/fixtures/` | Static test data | local fixtures only; no executable test ownership |
+
+Migration compatibility:
+
+| Current path | Target path |
+|---|---|
+| `tests/*_spec.cpp` | `tests/native/<owner>/*_spec.cpp` |
+| `tests/smoke.cpp` | `tests/native/smoke/smoke.cpp` |
+| `tests/shader_runner_dxmt9.cpp` | `tests/shader_runner/shader_runner_dxmt9.cpp` |
+| `tests/shader_tests/` | `tests/shader_runner/corpus/` |
+| `tests/d3d9_conformance/` | `tests/conformance/d3d9/` |
+| `tests/wsi_present/` | `tests/integration/wsi_present/` |
+| `tests/corpus_sync_smoke.py` | `tests/native/shader/corpus_sync_smoke.py` or `tests/shader_runner/corpus_sync_smoke.py` |
+
+Until the repository is physically migrated, Meson and helper scripts may accept
+the current paths as compatibility aliases. New tests should use the target
+layout unless they must modify an existing legacy file in place. Compatibility
+aliases must not create a second source of truth: each test, manifest, and corpus
+file has one canonical target owner.
+
+The `shader_runner_dxmt9` binary is built as a Meson test target and runs the
+manifest-driven corpus. Meson may execute the whole corpus as one target or split
+entries into individual test cases, but both modes must use the same
+`MANIFEST.toml` and provenance rules.
 
 ---
 
@@ -819,7 +848,7 @@ are behind.
 
 ## 12. Manifest
 
-`tests/shader_tests/MANIFEST.toml` is the machine-readable index of the corpus.
+`tests/shader_runner/corpus/MANIFEST.toml` is the machine-readable index of the corpus.
 Rows for upstream-sourced tests may also carry `upstream-commit` so the sync tool
 can keep provenance and manifest state aligned.
 
@@ -860,8 +889,8 @@ before the test suite:
 # scripts/check_manifest.sh
 # Fails if any .shader_test file is missing from MANIFEST.toml
 # or if MANIFEST.toml lists a file that does not exist.
-find tests/shader_tests -name "*.shader_test" | sort > /tmp/actual.txt
-tomlq -r '.test[].file' tests/shader_tests/MANIFEST.toml | sort > /tmp/manifest.txt
+find tests/shader_runner/corpus -name "*.shader_test" | sort > /tmp/actual.txt
+tomlq -r '.test[].file' tests/shader_runner/corpus/MANIFEST.toml | sort > /tmp/manifest.txt
 diff /tmp/actual.txt /tmp/manifest.txt
 ```
 

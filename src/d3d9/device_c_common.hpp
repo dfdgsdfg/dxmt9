@@ -33,6 +33,7 @@ struct ShadowLock {
   uint32_t nativePitch = 0;
   uint32_t rowBytes = 0;
   uint32_t rows = 0;
+  bool active = false;
   Low4GBAllocation shadow{};
 };
 
@@ -124,6 +125,7 @@ struct D9CTexture {
   D9CDevice* device;
   std::atomic<uint32_t> refs{1};
   std::unordered_map<uint32_t, dxmt9::d3d9::devicec::ShadowLock> wow64Locks;
+  std::unordered_set<uint32_t> lockedLevels;
 
   D9CTexture(std::shared_ptr<dxmt9::core::Texture> o, D9CDevice* d)
       : obj(std::move(o)), device(d) {}
@@ -141,11 +143,15 @@ struct D9CBuffer {
 struct D9CSurface {
   std::shared_ptr<dxmt9::core::Surface> obj;
   D9CTexture* ownerTex{nullptr};
+  uint32_t ownerLevel = 0;
   std::atomic<uint32_t> refs{1};
   dxmt9::d3d9::devicec::ShadowLock wow64Lock;
+  bool locked = false;
 
-  explicit D9CSurface(std::shared_ptr<dxmt9::core::Surface> o, D9CTexture* owner = nullptr)
-      : obj(std::move(o)), ownerTex(owner) {}
+  explicit D9CSurface(std::shared_ptr<dxmt9::core::Surface> o,
+                      D9CTexture* owner = nullptr,
+                      uint32_t level = 0)
+      : obj(std::move(o)), ownerTex(owner), ownerLevel(level) {}
 };
 
 struct D9CShader {

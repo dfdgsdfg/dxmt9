@@ -797,7 +797,7 @@ bool opcodeWritesFirstOperand(u32 opcode) {
 
 PixelInputSemantics collectPixelInputSemantics(const SpirvModule& module) {
   PixelInputSemantics semantics{};
-  if (module.stage != D3DShaderStage::Pixel) {
+  if (module.stage != D3DShaderStage::Pixel || module.major < 3u) {
     return semantics;
   }
   for (const auto& instruction : module.instructions) {
@@ -1087,9 +1087,6 @@ std::string readPixelInputFallbackExpression(u32 index, const std::string& pixel
     return "float4(" + pixelInputs + ".color)";
   }
   if (index == 1) {
-    return "dxmt9_select_texcoord(" + pixelInputs + ", 0u)";
-  }
-  if (index == 2) {
     return "float4(" + pixelInputs + ".secondaryColor)";
   }
   if (index == 3) {

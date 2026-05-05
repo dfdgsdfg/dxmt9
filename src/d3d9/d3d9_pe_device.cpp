@@ -427,6 +427,11 @@ public:
         if (!pLR) return D3DERR_INVALIDCALL;
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return flushHr;
+        dxmt9DeviceDebugLog("texture_lock_rect texture=%p level=%u flags=0x%x rect=%s",
+                            this,
+                            (unsigned)level,
+                            (unsigned)flags,
+                            pRect ? "<custom>" : "<full>");
         D9CLockedRect lr{}; D9CRect cr{};
         if (pRect) cr = toR(*pRect);
         HRESULT hr = hr32(dxmt9c_texture_lock_rect(t_, level, &lr,
@@ -434,13 +439,22 @@ public:
         if (SUCCEEDED(hr)) {
             pLR->Pitch = lr.pitch;
             pLR->pBits = lr.bits;
+            dxmt9DeviceDebugLog("texture_lock_rect -> pitch=%ld bits=%p",
+                                (long)pLR->Pitch, pLR->pBits);
+        } else {
+            dxmt9DeviceDebugLog("texture_lock_rect -> hr=0x%08x", (unsigned)hr);
         }
         return hr;
     }
     HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) noexcept override {
         const HRESULT flushHr = flushChildRecorder(recorder_);
         if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_texture_unlock_rect(t_, level));
+        dxmt9DeviceDebugLog("texture_unlock_rect texture=%p level=%u", this, (unsigned)level);
+        const HRESULT hr = hr32(dxmt9c_texture_unlock_rect(t_, level));
+        if (FAILED(hr)) {
+            dxmt9DeviceDebugLog("texture_unlock_rect -> hr=0x%08x", (unsigned)hr);
+        }
+        return hr;
     }
     HRESULT STDMETHODCALLTYPE AddDirtyRect(const RECT*) noexcept override { return S_OK; }
 };

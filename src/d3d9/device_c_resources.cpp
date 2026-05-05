@@ -55,6 +55,26 @@ LockFootprint lockFootprint(dxmt9::core::Format format,
   return {(blockRight - blockLeft) * blockBytes, blockBottom - blockTop};
 }
 
+void copyNativeToShadow(ShadowLock& shadow) {
+  auto* dst = static_cast<uint8_t*>(shadow.shadow.ptr);
+  auto* src = static_cast<const uint8_t*>(shadow.nativePtr);
+  for (uint32_t row = 0; row < shadow.rows; ++row) {
+    std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
+                src + static_cast<size_t>(row) * shadow.nativePitch,
+                shadow.rowBytes);
+  }
+}
+
+void copyShadowToNative(const ShadowLock& shadow) {
+  auto* dst = static_cast<uint8_t*>(shadow.nativePtr);
+  auto* src = static_cast<const uint8_t*>(shadow.shadow.ptr);
+  for (uint32_t row = 0; row < shadow.rows; ++row) {
+    std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
+                src + static_cast<size_t>(row) * shadow.nativePitch,
+                shadow.rowBytes);
+  }
+}
+
 }  // namespace
 
 extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, uint32_t h,
@@ -229,6 +249,13 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
   if (!out) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  if (t->lockedLevels.contains(level)) {
+    dxmt9DebugLog("texture_lock_rect rejected double-lock texture=%p level=%u",
+                  static_cast<void*>(t), level);
+    out->pitch = 0;
+    out->bits = nullptr;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   if (r) {
     dxmt9DebugLog("texture_lock_rect begin texture=%p level=%u flags=0x%x rect=(%d,%d)-(%d,%d)",
                   static_cast<void*>(t), level, flags, r->left, r->top, r->right, r->bottom);
@@ -277,37 +304,35 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
     shadow.nativePitch = lock.pitch;
     shadow.rowBytes = rowBytes;
     shadow.rows = rows;
-    auto* dst = static_cast<uint8_t*>(shadow.shadow.ptr);
-    auto* src = static_cast<const uint8_t*>(shadow.nativePtr);
-    for (uint32_t row = 0; row < rows; ++row) {
-      std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
-                  src + static_cast<size_t>(row) * shadow.nativePitch, rowBytes);
-    }
+    shadow.active = true;
+    copyNativeToShadow(shadow);
     out->pitch = static_cast<int32_t>(shadow.nativePitch);
     out->bits = shadow.shadow.ptr;
     dxmt9DebugLog("texture_lock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p pitch=%u rowBytes=%u rows=%u",
                   static_cast<void*>(t), level, shadow.nativePtr, out->bits,
                   shadow.nativePitch, rowBytes, rows);
   }
+  t->lockedLevels.insert(level);
   dxmt9DebugLog("texture_lock_rect ok texture=%p level=%u pitch=%d bits=%p",
                 static_cast<void*>(t), level, out->pitch, out->bits);
   return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_texture_unlock_rect(D9CTexture* t, uint32_t level) {
+  if (!t->lockedLevels.erase(level)) {
+    dxmt9DebugLog("texture_unlock_rect rejected not-locked texture=%p level=%u",
+                  static_cast<void*>(t), level);
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   if (auto it = t->wow64Locks.find(level); it != t->wow64Locks.end()) {
     auto& shadow = it->second;
-    auto* dst = static_cast<uint8_t*>(shadow.nativePtr);
-    auto* src = static_cast<const uint8_t*>(shadow.shadow.ptr);
-    for (uint32_t row = 0; row < shadow.rows; ++row) {
-      std::memcpy(dst + static_cast<size_t>(row) * shadow.nativePitch,
-                  src + static_cast<size_t>(row) * shadow.nativePitch, shadow.rowBytes);
+    if (shadow.active) {
+      copyShadowToNative(shadow);
+      shadow.active = false;
+      dxmt9DebugLog("texture_unlock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p rowBytes=%u rows=%u",
+                    static_cast<void*>(t), level, shadow.nativePtr, shadow.shadow.ptr,
+                    shadow.rowBytes, shadow.rows);
     }
-    dxmt9DebugLog("texture_unlock_rect shadow texture=%p level=%u nativeBits=%p shadowBits=%p rowBytes=%u rows=%u",
-                  static_cast<void*>(t), level, shadow.nativePtr, shadow.shadow.ptr,
-                  shadow.rowBytes, shadow.rows);
-    releaseShadowLock(shadow);
-    t->wow64Locks.erase(it);
   }
   dxmt9DebugLog("texture_unlock_rect texture=%p level=%u", static_cast<void*>(t), level);
   t->obj->unlockRect(level);
@@ -319,8 +344,7 @@ extern "C" D9CSurface* dxmt9c_texture_get_surface_level(D9CTexture* t, uint32_t 
   if (!surf) {
     return nullptr;
   }
-  auto* wrap = new D9CSurface{surf};
-  wrap->ownerTex = t;
+  auto* wrap = new D9CSurface{surf, t, level};
   t->refs.fetch_add(1);
   return wrap;
 }
@@ -453,12 +477,36 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
   if (!out) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  if (s->ownerTex) {
+    if (s->ownerTex->lockedLevels.contains(s->ownerLevel)) {
+      dxmt9DebugLog("surface_lock_rect rejected double-lock surface=%p ownerTexture=%p level=%u",
+                    static_cast<void*>(s), static_cast<void*>(s->ownerTex), s->ownerLevel);
+      out->pitch = 0;
+      out->bits = nullptr;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+  } else if (s->locked) {
+    dxmt9DebugLog("surface_lock_rect rejected double-lock surface=%p",
+                  static_cast<void*>(s));
+    out->pitch = 0;
+    out->bits = nullptr;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  if (r) {
+    dxmt9DebugLog("surface_lock_rect begin surface=%p flags=0x%x rect=(%d,%d)-(%d,%d)",
+                  static_cast<void*>(s), flags, r->left, r->top, r->right, r->bottom);
+  } else {
+    dxmt9DebugLog("surface_lock_rect begin surface=%p flags=0x%x rect=<full>",
+                  static_cast<void*>(s), flags);
+  }
   auto* rect = r ? new dxmt9::core::Rect{r->left, r->top, r->right, r->bottom} : nullptr;
   auto lock = s->obj->lockRect(rect, lockFlagsToCore(flags));
   delete rect;
   out->pitch = static_cast<int32_t>(lock.pitch);
   out->bits = lock.data;
   if (!lock.data || lock.pitch == 0) {
+    dxmt9DebugLog("surface_lock_rect failed surface=%p pitch=%u bits=%p",
+                  static_cast<void*>(s), lock.pitch, lock.data);
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
@@ -476,50 +524,68 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
     }
     const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(nativePitch);
     if (bytes != 0) {
-      if (!s->wow64Lock.shadow || s->wow64Lock.shadow.size < bytes) {
-        releaseShadowLock(s->wow64Lock);
-        s->wow64Lock.shadow = allocateLow4GB(bytes);
+      auto& shadow = s->ownerTex ? s->ownerTex->wow64Locks[s->ownerLevel] : s->wow64Lock;
+      if (!shadow.shadow || shadow.shadow.size < bytes) {
+        releaseShadowLock(shadow);
+        shadow.shadow = allocateLow4GB(bytes);
       }
-      if (!s->wow64Lock.shadow) {
+      if (!shadow.shadow) {
         out->bits = nullptr;
         return dxmt9::core::D3DERR_INVALIDCALL;
       }
-      s->wow64Lock.nativePtr = lock.data;
-      s->wow64Lock.nativePitch = nativePitch;
-      s->wow64Lock.rowBytes = rowBytes;
-      s->wow64Lock.rows = rows;
-      auto* dst = static_cast<uint8_t*>(s->wow64Lock.shadow.ptr);
-      auto* src = static_cast<const uint8_t*>(lock.data);
-      for (uint32_t row = 0; row < rows; ++row) {
-        std::memcpy(dst + static_cast<size_t>(row) * nativePitch,
-                    src + static_cast<size_t>(row) * nativePitch, rowBytes);
-      }
-      out->bits = s->wow64Lock.shadow.ptr;
+      shadow.nativePtr = lock.data;
+      shadow.nativePitch = nativePitch;
+      shadow.rowBytes = rowBytes;
+      shadow.rows = rows;
+      shadow.active = true;
+      copyNativeToShadow(shadow);
+      out->bits = shadow.shadow.ptr;
       dxmt9DebugLog("surface_lock_rect shadow surface=%p native=%p shadow=%p pitch=%u rowBytes=%u rows=%u bytes=%zu",
-                    static_cast<void*>(s), lock.data, out->bits, nativePitch, rowBytes, rows, bytes);
+                    static_cast<void*>(s), lock.data, out->bits, nativePitch,
+                    rowBytes, rows, bytes);
     }
   }
+  if (s->ownerTex) {
+    s->ownerTex->lockedLevels.insert(s->ownerLevel);
+  } else {
+    s->locked = true;
+  }
+  dxmt9DebugLog("surface_lock_rect ok surface=%p pitch=%d bits=%p",
+                static_cast<void*>(s), out->pitch, out->bits);
   return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_surface_unlock_rect(D9CSurface* s) {
-  if (s->wow64Lock.shadow) {
-    const size_t bytes =
-        static_cast<size_t>(s->wow64Lock.nativePitch) * static_cast<size_t>(s->wow64Lock.rows);
-    if (bytes != 0) {
-      auto* dst = static_cast<uint8_t*>(s->wow64Lock.nativePtr);
-      auto* src = static_cast<const uint8_t*>(s->wow64Lock.shadow.ptr);
-      for (uint32_t row = 0; row < s->wow64Lock.rows; ++row) {
-        std::memcpy(dst + static_cast<size_t>(row) * s->wow64Lock.nativePitch,
-                    src + static_cast<size_t>(row) * s->wow64Lock.nativePitch,
-                    s->wow64Lock.rowBytes);
-      }
-      dxmt9DebugLog("surface_unlock_rect shadow surface=%p native=%p shadow=%p rowBytes=%u rows=%u bytes=%zu",
-                    static_cast<void*>(s), s->wow64Lock.nativePtr, s->wow64Lock.shadow.ptr,
-                    s->wow64Lock.rowBytes, s->wow64Lock.rows, bytes);
+  if (s->ownerTex) {
+    if (!s->ownerTex->lockedLevels.erase(s->ownerLevel)) {
+      dxmt9DebugLog("surface_unlock_rect rejected not-locked surface=%p ownerTexture=%p level=%u",
+                    static_cast<void*>(s), static_cast<void*>(s->ownerTex), s->ownerLevel);
+      return dxmt9::core::D3DERR_INVALIDCALL;
     }
-    releaseShadowLock(s->wow64Lock);
+  } else if (!s->locked) {
+    dxmt9DebugLog("surface_unlock_rect rejected not-locked surface=%p",
+                  static_cast<void*>(s));
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  } else {
+    s->locked = false;
   }
+
+  auto* shadow = s->ownerTex ? [&]() -> ShadowLock* {
+    auto it = s->ownerTex->wow64Locks.find(s->ownerLevel);
+    return it != s->ownerTex->wow64Locks.end() ? &it->second : nullptr;
+  }() : &s->wow64Lock;
+  if (shadow && shadow->active) {
+    const size_t bytes =
+        static_cast<size_t>(shadow->nativePitch) * static_cast<size_t>(shadow->rows);
+    if (bytes != 0) {
+      copyShadowToNative(*shadow);
+      shadow->active = false;
+      dxmt9DebugLog("surface_unlock_rect shadow surface=%p native=%p shadow=%p rowBytes=%u rows=%u bytes=%zu",
+                    static_cast<void*>(s), shadow->nativePtr, shadow->shadow.ptr,
+                    shadow->rowBytes, shadow->rows, bytes);
+    }
+  }
+  dxmt9DebugLog("surface_unlock_rect surface=%p", static_cast<void*>(s));
   s->obj->unlockRect();
   return dxmt9::core::D3D_OK;
 }
