@@ -103,6 +103,19 @@ bool enabledFlag() {
   return value;
 }
 
+std::uint64_t periodicPresentInterval() {
+  static const std::uint64_t value = [] {
+    const char* env = std::getenv("DXMT_PERF_COUNTERS_PERIODIC_PRESENTS");
+    if (!env || env[0] == '\0' || env[0] == '0') {
+      return 0ull;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    return end != env ? parsed : 0ull;
+  }();
+  return value;
+}
+
 std::uint64_t load(const std::atomic<std::uint64_t>& value) {
   return value.load(std::memory_order_relaxed);
 }
@@ -392,7 +405,15 @@ void countPresentBoundaryWait(std::uint64_t nanoseconds) {
 }
 
 void countPresentEncoded() {
-  add(counters().presentEncoded);
+  if (!enabled()) {
+    return;
+  }
+  const auto value =
+      counters().presentEncoded.fetch_add(1, std::memory_order_relaxed) + 1;
+  const auto interval = periodicPresentInterval();
+  if (interval != 0 && value % interval == 0) {
+    report();
+  }
 }
 
 void countPresentSkipped() {

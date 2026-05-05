@@ -107,6 +107,19 @@ oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
 [[test]]
+file = "render_state/dxmt9_alpha_test_readback.shader_test"
+status = "failing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["ALPHA_TEST", "DEF", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-06"
+issue = "runtime alpha-test discard is generated but not applied in readback output"
+
+[[test]]
 file = "render_state/dxmt9_color_write_mask.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -153,6 +166,18 @@ models = ["ps_2_0"]
 opcodes = ["MOV"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
+
+[[test]]
+file = "texture/dxmt9_dependent_texture_read.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-06"
 
 [[test]]
 file = "texture/dxmt9_texture_2x2.shader_test"
@@ -225,6 +250,30 @@ models = ["ps_2_0"]
 opcodes = ["CMP", "CND", "CRS", "DEF", "DP3", "DP4", "MAX", "MIN", "MOV"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
+
+[[test]]
+file = "viewport/dxmt9_half_pixel_solid_rect.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-06"
+
+[[test]]
+file = "viewport/dxmt9_viewport_nonzero_origin.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-06"
 
 [[test]]
 file = "viewport/dxmt9_viewport_vs_triangle.shader_test"

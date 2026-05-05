@@ -539,14 +539,6 @@ bool disablePresentBoundary() {
   return disabled;
 }
 
-bool forceSyncPresentBoundary() {
-  static const bool force = [] {
-    const char* env = std::getenv("DXMT9_FORCE_SYNC_PRESENT_BOUNDARY");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return force;
-}
-
 bool capFrameLatencyToBackBuffers() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS");
@@ -570,9 +562,8 @@ std::uint32_t presentBoundaryLatency(const core::SwapDesc& desc) {
   return desc.maxFrameLatency;
 }
 
-bool shouldApplyPresentBoundary(const core::SwapDesc& desc) {
-  return !disablePresentBoundary() &&
-         (!desc.displaySyncEnabled || forceSyncPresentBoundary());
+bool shouldApplyPresentBoundary(const core::SwapDesc&) {
+  return !disablePresentBoundary();
 }
 
 bool acquirePresentOnSubmit() {

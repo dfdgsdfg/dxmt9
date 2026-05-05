@@ -43,9 +43,14 @@ inline u64 copyStringToEncodedBuffer(std::basic_string_view<CharT> source,
 namespace wow64 {
 
 struct HandleRegistry {
+  struct Entry {
+    uintptr_t value = 0;
+    uint32_t refs = 0;
+  };
+
   std::mutex mutex;
   uint32_t next = 1;
-  std::unordered_map<uint32_t, uintptr_t> values;
+  std::unordered_map<uint32_t, Entry> values;
 };
 
 inline HandleRegistry& registry() {
@@ -64,7 +69,7 @@ inline T decodeHandle(uint32_t token) {
   if (it == reg.values.end()) {
     return nullptr;
   }
-  return reinterpret_cast<T>(it->second);
+  return reinterpret_cast<T>(it->second.value);
 }
 
 template <typename T>
@@ -78,8 +83,43 @@ inline uint32_t encodeHandle(T value) {
   if (!token) {
     token = reg.next++;
   }
-  reg.values[token] = reinterpret_cast<uintptr_t>(value);
+  reg.values[token] = HandleRegistry::Entry{
+      reinterpret_cast<uintptr_t>(value), 1u};
   return token;
+}
+
+inline bool retainHandle(uint32_t token) {
+  if (!token) {
+    return false;
+  }
+  auto& reg = registry();
+  std::lock_guard<std::mutex> lock(reg.mutex);
+  const auto it = reg.values.find(token);
+  if (it == reg.values.end()) {
+    return false;
+  }
+  if (it->second.refs != UINT32_MAX) {
+    ++it->second.refs;
+  }
+  return true;
+}
+
+inline bool releaseHandle(uint32_t token) {
+  if (!token) {
+    return false;
+  }
+  auto& reg = registry();
+  std::lock_guard<std::mutex> lock(reg.mutex);
+  const auto it = reg.values.find(token);
+  if (it == reg.values.end()) {
+    return false;
+  }
+  if (it->second.refs > 1u) {
+    --it->second.refs;
+  } else {
+    reg.values.erase(it);
+  }
+  return true;
 }
 
 inline void eraseHandle(uint32_t token) {

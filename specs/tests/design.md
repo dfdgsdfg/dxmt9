@@ -365,23 +365,33 @@ The first implemented runtime probes are:
 - `tests/shader_runner/corpus/texture/dxmt9_texture_2x2.shader_test` validates top-left
   / top-right / bottom-left / bottom-right texture orientation through real
   rendering.
+- `tests/shader_runner/corpus/texture/dxmt9_dependent_texture_read.shader_test`
+  validates a dependent `texld` path where the first sample supplies UVs for a
+  second sample and the final result is checked by readback.
 - `tests/shader_runner/corpus/vs_specific/dxmt9_vs_color_triangle.shader_test`
   validates that programmable vertex POSITION and COLOR outputs affect
   rasterization and framebuffer color.
 - `tests/shader_runner/corpus/viewport/dxmt9_viewport_vs_triangle.shader_test`
   validates that a bounded viewport changes the rasterized geometry mask through
   framebuffer readback.
+- `tests/shader_runner/corpus/viewport/dxmt9_viewport_nonzero_origin.shader_test`
+  validates the same geometry mask with a nonzero viewport origin.
+- `tests/shader_runner/corpus/viewport/dxmt9_half_pixel_solid_rect.shader_test`
+  validates half-pixel edge coverage with a fractional XYZRHW rectangle.
 - `tests/shader_runner/corpus/render_state/dxmt9_color_write_mask.shader_test`
   validates `RS_COLOR_WRITE_ENABLE` through framebuffer readback.
 - `tests/shader_runner/corpus/render_state/dxmt9_color_write_rgb_preserves_alpha.shader_test`
   validates that RGB color-write masks update RGB channels while preserving the
   cleared alpha channel.
+- `tests/shader_runner/corpus/render_state/dxmt9_alpha_test_readback.shader_test`
+  is intentionally tracked as `status = "failing"` in the manifest: the
+  generated programmable pixel shader contains alpha-test discard code, but the
+  current readback output still shows the fragment surviving.
 
-Mip-level contents, dependent reads, nonzero viewport origin, half-pixel
-geometry interactions, alpha/oDepth/MRT/fog/sRGB render-state probes remain
-future extension points. A first alpha-test reject runtime probe was attempted
-but is not deterministic enough in the current runner/backend path to serve as
-acceptance evidence.
+Mip-level contents, 4x4/LOD texture variants, `oDepth`, MRT, fog, and sRGB
+render-state probes remain future extension points. Alpha-test readback has a
+checked-in failing probe and should move to `passing` only after the runtime
+discard behaviour is fixed.
 
 **Texture setup DSL:**
 
@@ -404,20 +414,21 @@ mip_filter = "point"
 ```
 
 The same schema may define 4x4 textures, additional mip levels, filter/address
-state, LOD bias, and dependent-read inputs. The first required shader paths are
-`texld`, `texldl`, and dependent `texld` where UVs are computed by a previous
-instruction.
+state, and LOD bias. Current runtime shader paths include `texld` and dependent
+`texld`; `texldl` remains source-contract coverage until a runtime LOD probe is
+added.
 
 **VS geometry probes** render small geometry masks that prove vertex shader
 outputs were consumed correctly. Current runtime coverage includes `POSITION`,
-`COLOR`, and a bounded viewport mask. Required future probes cover `TEXCOORD`,
-secondary color, nonzero viewport origin, clip-space orientation, and half-pixel
-interactions.
+`COLOR`, a bounded viewport mask, a nonzero viewport origin mask, and a
+half-pixel edge mask. Required future probes cover `TEXCOORD`, secondary color,
+and clip-space orientation.
 
 **Render-state interaction probes** combine shader output with D3D9 render
-state. Required probes cover alpha test, `oDepth`, MRT color outputs, fog,
-color-write masks, and sRGB write/sampling state. Every probe verifies the final
-framebuffer through readback.
+state. Passing runtime probes cover color-write masks. Alpha test is represented
+by a failing readback probe until the discard path is fixed. Required future
+probes cover `oDepth`, MRT color outputs, fog, and sRGB write/sampling state.
+Every probe verifies the final framebuffer through readback.
 
 ---
 
@@ -993,7 +1004,7 @@ DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/check_drift.sh
 
 ```sh
 # Opcodes with no passing test (coverage gap):
-tomlq -r '.test[] | select(.status != "passing") | .opcodes[]' MANIFEST.toml | sort -u
+python3 scripts/shader_corpus_tool.py gaps --fail-on-metadata-gaps
 
 # Tests behind upstream vkd3d HEAD:
 # (compare recorded provenance commits against the configured checkout)

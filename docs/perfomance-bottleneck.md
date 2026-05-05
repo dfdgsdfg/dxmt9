@@ -501,6 +501,38 @@ PE/Wine binding:
 - Fix added: PE `d3d9.dll` and PE `winemetal.dll` are staged into both the Wine runtime and the prefix `system32` / `syswow64` locations.
 - Verification: `BasicHLSL` now passes with `d3d9=b`; bridge fallback gets a valid unix-call handle.
 
+SFIV `-benchmark` after WoW64 handle fix:
+
+- The WoW64 handle fix made the SFIV benchmark reach the renderer path reliably enough for bottleneck triage.
+- The benchmark issues a `StretchRect` every frame, so present analysis must separate backbuffer/RT blit cost from the final swapchain present.
+- Removing the stateMutation-triggered flush eliminated one avoidable CPU-side queue drain before the per-frame blit/present path.
+- Removing the sync-present flush stopped forcing a full queue flush on present; the default path now relies on the queue-owned present boundary instead.
+- The remaining dominant stall is `completion_wait`, meaning the app thread is still gated by command-buffer completion rather than PE bridge overhead or explicit present flushes.
+- Planned counters: split `completion_wait` into draw / `StretchRect` / present command-buffer classes, count per-frame `StretchRect` packets, record command-buffer age at wait, and add queue-depth / pending-present watermarks.
+- Planned decision tree: if `StretchRect` completion dominates, optimize blit batching or fast paths; if present completion dominates, tune boundary/acquire policy; if draw completion dominates, continue backend command/upload compaction.
+
+```mermaid
+flowchart TD
+  Start[SFIV -benchmark after WoW64 handle fix] --> PerFrame[Per-frame StretchRect observed]
+  PerFrame --> RemovedState[Removed stateMutation flush]
+  RemovedState --> RemovedPresent[Removed sync present flush]
+  RemovedPresent --> QueueBoundary[Default: queue-owned present boundary]
+  QueueBoundary --> Remaining[Remaining bottleneck: completion_wait]
+
+  Remaining --> Counters[Add split completion counters]
+  Counters --> Blit{Which completion class dominates?}
+  Blit -->|StretchRect| StretchPath[Optimize blit fast path / batching]
+  Blit -->|Present| PresentPath[Tune boundary and acquire policy]
+  Blit -->|Draw| DrawPath[Compact backend draw/upload work]
+
+  classDef done fill:#e8ffe8,stroke:#3c8f3c,color:#0d2b0d
+  classDef wait fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
+  classDef next fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  class RemovedState,RemovedPresent,QueueBoundary done
+  class Remaining wait
+  class Counters,StretchPath,PresentPath,DrawPath next
+```
+
 Baseline performance, previous default latency 3:
 
 | app | vanilla fps | dxmt9 fps | speedup | present encoded | boundary wait ms | acquire wait ms | writer wait ms | PSO builds |

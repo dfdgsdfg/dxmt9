@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "dxmt9_bridge_ops.generated.h"
+#include "util/unixcall_marshal.hpp"
 
 namespace {
 
@@ -74,12 +75,34 @@ void testDodChunkBridgeOpsStaySingleCallShape() {
         "DOD commit chunk remains distinct from legacy per-draw bridge op");
 }
 
+void testWow64OpaqueHandleRegistryKeepsRetainedTokensAlive() {
+  int native = 42;
+  const auto token = dxmt9::util::marshal::wow64::encodeHandle(&native);
+  check(token != 0, "wow64 opaque handle token is allocated");
+  checkEq(dxmt9::util::marshal::wow64::decodeHandle<int*>(token), &native,
+          "wow64 opaque handle decodes to native pointer");
+
+  check(dxmt9::util::marshal::wow64::retainHandle(token),
+        "wow64 opaque handle token can be retained");
+  check(dxmt9::util::marshal::wow64::releaseHandle(token),
+        "first wow64 opaque handle release succeeds");
+  checkEq(dxmt9::util::marshal::wow64::decodeHandle<int*>(token), &native,
+          "retained wow64 opaque handle survives first release");
+
+  check(dxmt9::util::marshal::wow64::releaseHandle(token),
+        "final wow64 opaque handle release succeeds");
+  checkEq(dxmt9::util::marshal::wow64::decodeHandle<int*>(token),
+          static_cast<int*>(nullptr),
+          "wow64 opaque handle is erased after final release");
+}
+
 }  // namespace
 
 int main() {
   try {
     testBridgeOpcodeCountMatchesEnumSpan();
     testDodChunkBridgeOpsStaySingleCallShape();
+    testWow64OpaqueHandleRegistryKeepsRetainedTokensAlive();
   } catch (const TestFailure& e) {
     std::cerr << "bridge_ops_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

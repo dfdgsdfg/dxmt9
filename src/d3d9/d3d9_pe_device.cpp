@@ -11,6 +11,7 @@
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 #include "d3d9_pe.hpp"
 #include "util/com/com_private_data.hpp"
@@ -31,8 +32,25 @@ static void dxmt9DeviceDebugLog(const char* fmt, ...) {
     va_end(args);
 }
 
+static void dxmt9DeviceInfoLog(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-device", fmt, args);
+    va_end(args);
+}
+
 static bool dxmt9LeakStateBlocksEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT_LEAK_STATEBLOCKS");
+    return enabled;
+}
+
+static bool dxmt9PeRecorderStatsEnabled() {
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_STATS");
+    return enabled;
+}
+
+static bool dxmt9PeRecorderChunkLogEnabled() {
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_CHUNK_LOG");
     return enabled;
 }
 
@@ -1610,6 +1628,42 @@ static uint64_t d9cWireHandleValue(const D9CWireHandle& handle) {
            (static_cast<uint64_t>(handle.hi) << 32);
 }
 
+enum class PeRecorderFlushReason : std::uint32_t {
+    Explicit = 0,
+    CapacityPre,
+    CapacityPost,
+    Barrier,
+    Present,
+    Readback,
+    Reset,
+    StateBlock,
+    Child,
+    Destructor,
+    StateMutation,
+    Count,
+};
+
+static constexpr std::size_t kPeRecorderFlushReasonCount =
+    static_cast<std::size_t>(PeRecorderFlushReason::Count);
+
+static const char* peRecorderFlushReasonName(PeRecorderFlushReason reason) {
+    switch (reason) {
+    case PeRecorderFlushReason::Explicit: return "explicit";
+    case PeRecorderFlushReason::CapacityPre: return "capacity_pre";
+    case PeRecorderFlushReason::CapacityPost: return "capacity_post";
+    case PeRecorderFlushReason::Barrier: return "barrier";
+    case PeRecorderFlushReason::Present: return "present";
+    case PeRecorderFlushReason::Readback: return "readback";
+    case PeRecorderFlushReason::Reset: return "reset";
+    case PeRecorderFlushReason::StateBlock: return "stateblock";
+    case PeRecorderFlushReason::Child: return "child";
+    case PeRecorderFlushReason::Destructor: return "destructor";
+    case PeRecorderFlushReason::StateMutation: return "state_mutation";
+    case PeRecorderFlushReason::Count: break;
+    }
+    return "unknown";
+}
+
 /* =========================================================================
  * D3D9DeviceImpl — IDirect3DDevice9Ex
  * ========================================================================= */
@@ -1664,6 +1718,21 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         kPeTransformWorldBaseSlot + kPeTransformWorldSlots;
 
     using WireHandleEntryList = std::vector<D9CCommandChunkWireHandleEntry>;
+
+    struct PeRecorderStats {
+        std::uint64_t commitCount = 0;
+        std::uint64_t recordCountTotal = 0;
+        std::uint64_t recordCountMax = 0;
+        std::uint64_t payloadBytesTotal = 0;
+        std::uint64_t payloadBytesMax = 0;
+        std::uint64_t handleCountTotal = 0;
+        std::uint64_t handleCountMax = 0;
+        std::array<std::uint64_t, kPeRecorderFlushReasonCount> flushReasons{};
+        std::uint64_t drawPrimitiveUPCalls = 0;
+        std::uint64_t drawIndexedPrimitiveUPCalls = 0;
+        std::uint64_t upVertexBytes = 0;
+        std::uint64_t upIndexBytes = 0;
+    };
 
     template<std::size_t Slots>
     struct FixedStateTable {
@@ -2048,7 +2117,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     DWORD lightEnableShadow_ = 0;
     std::vector<std::uint8_t> pendingCommandBytes_{};
     std::vector<D9CCommandChunkWireRecordHeader> pendingCommandWireRecords_{};
+    std::vector<WireHandleEntryList> pendingCommandRecordExtraHandles_{};
     UINT pendingCommandRecordCount_ = 0;
+    PeRecorderStats peRecorderStats_{};
+    std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
 
     // Shader-constant shadow + dirty range per (stage, type). Per the
     // recorder design, Set*ShaderConstant* updates the shadow + extends
@@ -2086,10 +2158,19 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::vector<D9CSurface*> pendingCommandRetainedSurfaces_{};
     std::unordered_set<D9CTexture*> pendingCommandRetainedTextureSet_{};
     std::vector<D9CTexture*> pendingCommandRetainedTextures_{};
+    std::unordered_set<D9CBuffer*> pendingCommandRetainedBufferSet_{};
+    std::vector<D9CBuffer*> pendingCommandRetainedBuffers_{};
+    std::unordered_set<D9CShader*> pendingCommandRetainedShaderSet_{};
+    std::vector<D9CShader*> pendingCommandRetainedShaders_{};
+    std::unordered_set<D9CVertexDecl*> pendingCommandRetainedVdeclSet_{};
+    std::vector<D9CVertexDecl*> pendingCommandRetainedVdecls_{};
 
     struct PendingCommandRetentions {
         std::vector<D9CSurface*> surfaces;
         std::vector<D9CTexture*> textures;
+        std::vector<D9CBuffer*> buffers;
+        std::vector<D9CShader*> shaders;
+        std::vector<D9CVertexDecl*> vdecls;
     };
 
     /* present params copy for GetCreationParameters */
@@ -2146,6 +2227,73 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
+    void retainPendingCommandBuffer(D9CBuffer* buffer,
+                                    PendingCommandRetentions& acquired) {
+        if (!buffer) {
+            return;
+        }
+        if (pendingCommandRetainedBufferSet_.insert(buffer).second) {
+            dxmt9c_buffer_addref(buffer);
+            pendingCommandRetainedBuffers_.push_back(buffer);
+            acquired.buffers.push_back(buffer);
+        }
+    }
+
+    void retainPendingCommandShader(D9CShader* shader,
+                                    PendingCommandRetentions& acquired) {
+        if (!shader) {
+            return;
+        }
+        if (pendingCommandRetainedShaderSet_.insert(shader).second) {
+            dxmt9c_shader_addref(shader);
+            pendingCommandRetainedShaders_.push_back(shader);
+            acquired.shaders.push_back(shader);
+        }
+    }
+
+    void retainPendingCommandVdecl(D9CVertexDecl* vdecl,
+                                   PendingCommandRetentions& acquired) {
+        if (!vdecl) {
+            return;
+        }
+        if (pendingCommandRetainedVdeclSet_.insert(vdecl).second) {
+            dxmt9c_vdecl_addref(vdecl);
+            pendingCommandRetainedVdecls_.push_back(vdecl);
+            acquired.vdecls.push_back(vdecl);
+        }
+    }
+
+    void retainPendingCommandWireHandle(const D9CCommandChunkWireHandleEntry& handle,
+                                        PendingCommandRetentions& acquired) {
+        const auto ptr = static_cast<std::uintptr_t>(handle.opaqueHandle);
+        switch (handle.kind) {
+        case D9C_CHUNK_HANDLE_KIND_TEXTURE:
+            retainPendingCommandTexture(reinterpret_cast<D9CTexture*>(ptr), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_SURFACE:
+            retainPendingCommandSurface(reinterpret_cast<D9CSurface*>(ptr), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_BUFFER:
+            retainPendingCommandBuffer(reinterpret_cast<D9CBuffer*>(ptr), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_SHADER:
+            retainPendingCommandShader(reinterpret_cast<D9CShader*>(ptr), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+            retainPendingCommandVdecl(reinterpret_cast<D9CVertexDecl*>(ptr), acquired);
+            break;
+        default:
+            break;
+        }
+    }
+
+    void retainPendingCommandWireHandles(const WireHandleEntryList& handles,
+                                         PendingCommandRetentions& acquired) {
+        for (const auto& handle : handles) {
+            retainPendingCommandWireHandle(handle, acquired);
+        }
+    }
+
     void rollbackPendingCommandRetentions(const PendingCommandRetentions& acquired) {
         for (auto* surface : acquired.surfaces) {
             pendingCommandRetainedSurfaceSet_.erase(surface);
@@ -2156,6 +2304,21 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             pendingCommandRetainedTextureSet_.erase(texture);
             eraseOne(pendingCommandRetainedTextures_, texture);
             dxmt9c_texture_release(texture);
+        }
+        for (auto* buffer : acquired.buffers) {
+            pendingCommandRetainedBufferSet_.erase(buffer);
+            eraseOne(pendingCommandRetainedBuffers_, buffer);
+            dxmt9c_buffer_release(buffer);
+        }
+        for (auto* shader : acquired.shaders) {
+            pendingCommandRetainedShaderSet_.erase(shader);
+            eraseOne(pendingCommandRetainedShaders_, shader);
+            dxmt9c_shader_release(shader);
+        }
+        for (auto* vdecl : acquired.vdecls) {
+            pendingCommandRetainedVdeclSet_.erase(vdecl);
+            eraseOne(pendingCommandRetainedVdecls_, vdecl);
+            dxmt9c_vdecl_release(vdecl);
         }
     }
 
@@ -2170,11 +2333,27 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         pendingCommandRetainedTextures_.clear();
         pendingCommandRetainedTextureSet_.clear();
+        for (auto* buffer : pendingCommandRetainedBuffers_) {
+            dxmt9c_buffer_release(buffer);
+        }
+        pendingCommandRetainedBuffers_.clear();
+        pendingCommandRetainedBufferSet_.clear();
+        for (auto* shader : pendingCommandRetainedShaders_) {
+            dxmt9c_shader_release(shader);
+        }
+        pendingCommandRetainedShaders_.clear();
+        pendingCommandRetainedShaderSet_.clear();
+        for (auto* vdecl : pendingCommandRetainedVdecls_) {
+            dxmt9c_vdecl_release(vdecl);
+        }
+        pendingCommandRetainedVdecls_.clear();
+        pendingCommandRetainedVdeclSet_.clear();
     }
 
     void clearPendingCommandChunk() {
         pendingCommandBytes_.clear();
         pendingCommandWireRecords_.clear();
+        pendingCommandRecordExtraHandles_.clear();
         pendingCommandWireBlob_.clear();
         pendingCommandRecordCount_ = 0;
         for (auto& set : chunkHandlesByKind_) {
@@ -2578,10 +2757,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
-    // Draw records consume the effective server state, not only the
-    // handles present in their delta packet. Set* fast paths flush the
-    // current chunk before mutating these shadows, so the flush-time
-    // bindings are a conservative per-draw retention subset.
+    template<typename T>
+    static T* wireHandleAsPtr(const D9CWireHandle& handle) {
+        return reinterpret_cast<T*>(
+            static_cast<std::uintptr_t>(d9cWireHandleValue(handle)));
+    }
+
+    // Draw records consume the effective server state, not only the handles
+    // present in their delta packet. Capture these at append time so coarser
+    // chunks can survive later Set* mutations and wrapper releases.
     bool appendCurrentlyBoundDrawHandles(WireHandleEntryList& handles) {
         for (auto* tex : textures_) {
             if (auto* raw = rawTex(tex); raw != nullptr) {
@@ -2649,18 +2833,79 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
-    bool collectRecordWireHandles(const D9CCommandChunkWireRecordHeader& wireRecord,
-                                  WireHandleEntryList& handles) {
+    bool pendingCommandPayload(const D9CCommandChunkWireRecordHeader& wireRecord,
+                               const std::uint8_t*& payload) const {
+        if (pendingCommandBytes_.size() > 0xffffffffull) {
+            return false;
+        }
         const auto payloadArenaSize =
-            static_cast<uint32_t>(pendingCommandBytes_.size());
+            static_cast<std::uint32_t>(pendingCommandBytes_.size());
         if (!d9c_command_chunk_wire_payload_range_valid(
                 payloadArenaSize, wireRecord.payloadOffset,
                 wireRecord.payloadSize)) {
             return false;
         }
-        const auto* payload = wireRecord.payloadSize == 0
+        payload = wireRecord.payloadSize == 0
             ? nullptr
             : pendingCommandBytes_.data() + wireRecord.payloadOffset;
+        return true;
+    }
+
+    void retainDrawPacketPayloadObjects(const D9CDrawPrimitivePacket& packet,
+                                        PendingCommandRetentions& acquired) {
+        for (uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
+            if ((packet.textureMask & (1u << stage)) != 0) {
+                retainPendingCommandTexture(
+                    wireHandleAsPtr<D9CTexture>(packet.textures[stage]), acquired);
+            }
+        }
+        for (uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+            if ((packet.streamSourceMask & (1u << stream)) != 0) {
+                retainPendingCommandBuffer(
+                    wireHandleAsPtr<D9CBuffer>(packet.streamSources[stream].buffer),
+                    acquired);
+            }
+        }
+        for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+            if ((packet.rtMask & (1u << slot)) != 0) {
+                retainPendingCommandSurface(
+                    wireHandleAsPtr<D9CSurface>(packet.rtHandles[slot]), acquired);
+            }
+        }
+        if (packet.dsValid != 0) {
+            retainPendingCommandSurface(
+                wireHandleAsPtr<D9CSurface>(packet.dsHandle), acquired);
+        }
+        if (packet.vsValid != 0) {
+            retainPendingCommandShader(
+                wireHandleAsPtr<D9CShader>(packet.vsHandle), acquired);
+        }
+        if (packet.psValid != 0) {
+            retainPendingCommandShader(
+                wireHandleAsPtr<D9CShader>(packet.psHandle), acquired);
+        }
+        if (packet.vdeclValid != 0) {
+            retainPendingCommandVdecl(
+                wireHandleAsPtr<D9CVertexDecl>(packet.vdeclHandle), acquired);
+        }
+    }
+
+    void retainIndexedDrawPacketPayloadObjects(
+        const D9CDrawIndexedPrimitivePacket& packet,
+        PendingCommandRetentions& acquired) {
+        retainDrawPacketPayloadObjects(packet.state, acquired);
+        if (packet.ibValid != 0) {
+            retainPendingCommandBuffer(
+                wireHandleAsPtr<D9CBuffer>(packet.ibHandle), acquired);
+        }
+    }
+
+    bool retainRecordPayloadObjects(const D9CCommandChunkWireRecordHeader& wireRecord,
+                                    PendingCommandRetentions& acquired) {
+        const std::uint8_t* payload = nullptr;
+        if (!pendingCommandPayload(wireRecord, payload)) {
+            return false;
+        }
 
         switch (wireRecord.type) {
         case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
@@ -2669,8 +2914,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             D9CCommandRecordDrawPrimitive decoded{};
             std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet, handles) &&
-                   appendCurrentlyBoundDrawHandles(handles);
+            retainDrawPacketPayloadObjects(decoded.packet, acquired);
+            return true;
         }
         case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitive)) {
@@ -2678,8 +2923,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             D9CCommandRecordDrawIndexedPrimitive decoded{};
             std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendIndexedDrawPacketWireHandles(decoded.packet, handles) &&
-                   appendCurrentlyBoundDrawHandles(handles);
+            retainIndexedDrawPacketPayloadObjects(decoded.packet, acquired);
+            return true;
         }
         case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitiveUP)) {
@@ -2687,8 +2932,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             D9CCommandRecordDrawPrimitiveUP decoded{};
             std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet.state, handles) &&
-                   appendCurrentlyBoundDrawHandles(handles);
+            retainDrawPacketPayloadObjects(decoded.packet.state, acquired);
+            return true;
         }
         case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)) {
@@ -2696,8 +2941,130 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
             std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet.state, handles) &&
-                   appendCurrentlyBoundDrawHandles(handles);
+            retainDrawPacketPayloadObjects(decoded.packet.state, acquired);
+            return true;
+        }
+        case D9C_COMMAND_RECORD_APPLY_STATE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordApplyState)) {
+                return false;
+            }
+            D9CCommandRecordApplyState decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            retainDrawPacketPayloadObjects(decoded.packet, acquired);
+            return true;
+        }
+        case D9C_COMMAND_RECORD_STRETCH_RECT: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordStretchRect)) {
+                return false;
+            }
+            D9CCommandRecordStretchRect decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            retainPendingCommandSurface(
+                reinterpret_cast<D9CSurface*>(
+                    static_cast<std::uintptr_t>(decoded.srcWire)), acquired);
+            retainPendingCommandSurface(
+                reinterpret_cast<D9CSurface*>(
+                    static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
+            return true;
+        }
+        case D9C_COMMAND_RECORD_COLOR_FILL: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordColorFill)) {
+                return false;
+            }
+            D9CCommandRecordColorFill decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            retainPendingCommandSurface(
+                reinterpret_cast<D9CSurface*>(
+                    static_cast<std::uintptr_t>(decoded.surfaceWire)), acquired);
+            return true;
+        }
+        case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateTexture)) {
+                return false;
+            }
+            D9CCommandRecordUpdateTexture decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            retainPendingCommandTexture(
+                reinterpret_cast<D9CTexture*>(
+                    static_cast<std::uintptr_t>(decoded.srcWire)), acquired);
+            retainPendingCommandTexture(
+                reinterpret_cast<D9CTexture*>(
+                    static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
+            return true;
+        }
+        case D9C_COMMAND_RECORD_UPDATE_SURFACE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateSurface)) {
+                return false;
+            }
+            D9CCommandRecordUpdateSurface decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            retainPendingCommandSurface(
+                reinterpret_cast<D9CSurface*>(
+                    static_cast<std::uintptr_t>(decoded.srcWire)), acquired);
+            retainPendingCommandSurface(
+                reinterpret_cast<D9CSurface*>(
+                    static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
+            return true;
+        }
+        case D9C_COMMAND_RECORD_READBACK: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordReadback)) {
+                return false;
+            }
+            D9CCommandRecordReadback decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            retainPendingCommandSurface(
+                reinterpret_cast<D9CSurface*>(
+                    static_cast<std::uintptr_t>(decoded.srcWire)), acquired);
+            retainPendingCommandSurface(
+                reinterpret_cast<D9CSurface*>(
+                    static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
+            return true;
+        }
+        default:
+            return true;
+        }
+    }
+
+    bool collectRecordPayloadWireHandles(
+        const D9CCommandChunkWireRecordHeader& wireRecord,
+        WireHandleEntryList& handles) {
+        const std::uint8_t* payload = nullptr;
+        if (!pendingCommandPayload(wireRecord, payload)) {
+            return false;
+        }
+
+        switch (wireRecord.type) {
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitive)) {
+                return false;
+            }
+            D9CCommandRecordDrawPrimitive decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendDrawPacketWireHandles(decoded.packet, handles);
+        }
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitive)) {
+                return false;
+            }
+            D9CCommandRecordDrawIndexedPrimitive decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendIndexedDrawPacketWireHandles(decoded.packet, handles);
+        }
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitiveUP)) {
+                return false;
+            }
+            D9CCommandRecordDrawPrimitiveUP decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendDrawPacketWireHandles(decoded.packet.state, handles);
+        }
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)) {
+                return false;
+            }
+            D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendDrawPacketWireHandles(decoded.packet.state, handles);
         }
         case D9C_COMMAND_RECORD_APPLY_STATE: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordApplyState)) {
@@ -2706,14 +3073,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             D9CCommandRecordApplyState decoded{};
             std::memcpy(&decoded, payload, sizeof(decoded));
             return appendDrawPacketWireHandles(decoded.packet, handles);
-        }
-        case D9C_COMMAND_RECORD_CLEAR: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordClear)) {
-                return false;
-            }
-            D9CCommandRecordClear decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendCurrentlyBoundClearHandles(handles, decoded.flags);
         }
         case D9C_COMMAND_RECORD_STRETCH_RECT: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordStretchRect)) {
@@ -2773,12 +3132,165 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
-    HRESULT flushPendingCommandChunk() {
+    bool collectAppendTimeExtraWireHandles(
+        const D9CCommandChunkWireRecordHeader& wireRecord,
+        WireHandleEntryList& handles) {
+        switch (wireRecord.type) {
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+            return appendCurrentlyBoundDrawHandles(handles);
+        case D9C_COMMAND_RECORD_CLEAR: {
+            const std::uint8_t* payload = nullptr;
+            if (!pendingCommandPayload(wireRecord, payload) ||
+                wireRecord.payloadSize < sizeof(D9CCommandRecordClear)) {
+                return false;
+            }
+            D9CCommandRecordClear decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendCurrentlyBoundClearHandles(handles, decoded.flags);
+        }
+        default:
+            return true;
+        }
+    }
+
+    bool appendPendingRecordExtraWireHandles(std::size_t recordIndex,
+                                             WireHandleEntryList& handles) {
+        if (recordIndex >= pendingCommandRecordExtraHandles_.size()) {
+            return false;
+        }
+        for (const auto& handle : pendingCommandRecordExtraHandles_[recordIndex]) {
+            if (!appendRecordWireHandle(handles, handle.kind, handle.opaqueHandle)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool collectRecordWireHandles(std::size_t recordIndex,
+                                  const D9CCommandChunkWireRecordHeader& wireRecord,
+                                  WireHandleEntryList& handles) {
+        return collectRecordPayloadWireHandles(wireRecord, handles) &&
+               appendPendingRecordExtraWireHandles(recordIndex, handles);
+    }
+
+    void recordPeChunkCommit(PeRecorderFlushReason reason,
+                             std::uint32_t recordCount,
+                             std::uint32_t payloadBytes,
+                             std::uint32_t handleCount,
+                             std::uint32_t wireBytes) {
+        ++peRecorderStats_.commitCount;
+        peRecorderStats_.recordCountTotal += recordCount;
+        peRecorderStats_.recordCountMax =
+            std::max<std::uint64_t>(peRecorderStats_.recordCountMax, recordCount);
+        peRecorderStats_.payloadBytesTotal += payloadBytes;
+        peRecorderStats_.payloadBytesMax =
+            std::max<std::uint64_t>(peRecorderStats_.payloadBytesMax, payloadBytes);
+        peRecorderStats_.handleCountTotal += handleCount;
+        peRecorderStats_.handleCountMax =
+            std::max<std::uint64_t>(peRecorderStats_.handleCountMax, handleCount);
+        const auto reasonIndex = static_cast<std::size_t>(reason);
+        if (reasonIndex < peRecorderStats_.flushReasons.size()) {
+            ++peRecorderStats_.flushReasons[reasonIndex];
+        }
+        if (dxmt9PeRecorderChunkLogEnabled()) {
+            dxmt9DeviceInfoLog(
+                "pe_recorder_chunk device=%p reason=%s commitCount=%llu "
+                "recordCount=%u payloadBytes=%u handleCount=%u wireBytes=%u",
+                this, peRecorderFlushReasonName(reason),
+                static_cast<unsigned long long>(peRecorderStats_.commitCount),
+                recordCount, payloadBytes, handleCount, wireBytes);
+        }
+    }
+
+    void logPeRecorderStats(const char* event, bool force = false) {
+        if (!dxmt9PeRecorderStatsEnabled()) {
+            return;
+        }
+        if (!force &&
+            peRecorderStatsLastLoggedCommitCount_ == peRecorderStats_.commitCount) {
+            return;
+        }
+        peRecorderStatsLastLoggedCommitCount_ = peRecorderStats_.commitCount;
+        dxmt9DeviceInfoLog(
+            "pe_recorder_stats event=%s device=%p commitCount=%llu "
+            "recordCountTotal=%llu recordCountMax=%llu "
+            "payloadBytesTotal=%llu payloadBytesMax=%llu "
+            "handleCountTotal=%llu handleCountMax=%llu "
+            "flushReasons{explicit=%llu capacityPre=%llu capacityPost=%llu "
+            "barrier=%llu present=%llu readback=%llu reset=%llu "
+            "stateblock=%llu child=%llu destructor=%llu stateMutation=%llu} "
+            "up{drawPrimitiveUPCalls=%llu drawIndexedPrimitiveUPCalls=%llu "
+            "vertexBytes=%llu indexBytes=%llu}",
+            event ? event : "unknown", this,
+            static_cast<unsigned long long>(peRecorderStats_.commitCount),
+            static_cast<unsigned long long>(peRecorderStats_.recordCountTotal),
+            static_cast<unsigned long long>(peRecorderStats_.recordCountMax),
+            static_cast<unsigned long long>(peRecorderStats_.payloadBytesTotal),
+            static_cast<unsigned long long>(peRecorderStats_.payloadBytesMax),
+            static_cast<unsigned long long>(peRecorderStats_.handleCountTotal),
+            static_cast<unsigned long long>(peRecorderStats_.handleCountMax),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::Explicit)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::CapacityPre)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::CapacityPost)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::Barrier)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::Present)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::Readback)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::Reset)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::StateBlock)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::Child)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::Destructor)]),
+            static_cast<unsigned long long>(
+                peRecorderStats_.flushReasons[
+                    static_cast<std::size_t>(PeRecorderFlushReason::StateMutation)]),
+            static_cast<unsigned long long>(peRecorderStats_.drawPrimitiveUPCalls),
+            static_cast<unsigned long long>(peRecorderStats_.drawIndexedPrimitiveUPCalls),
+            static_cast<unsigned long long>(peRecorderStats_.upVertexBytes),
+            static_cast<unsigned long long>(peRecorderStats_.upIndexBytes));
+    }
+
+    void recordDrawPrimitiveUPCopy(std::uint32_t vertexBytes) {
+        ++peRecorderStats_.drawPrimitiveUPCalls;
+        peRecorderStats_.upVertexBytes += vertexBytes;
+    }
+
+    void recordDrawIndexedPrimitiveUPCopy(std::uint32_t vertexBytes,
+                                          std::uint32_t indexBytes) {
+        ++peRecorderStats_.drawIndexedPrimitiveUPCalls;
+        peRecorderStats_.upVertexBytes += vertexBytes;
+        peRecorderStats_.upIndexBytes += indexBytes;
+    }
+
+    HRESULT flushPendingCommandChunk(
+        PeRecorderFlushReason reason = PeRecorderFlushReason::Explicit) {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (pendingCommandRecordCount_ == 0) {
             return S_OK;
         }
-        if (pendingCommandWireRecords_.size() != pendingCommandRecordCount_) {
+        if (pendingCommandWireRecords_.size() != pendingCommandRecordCount_ ||
+            pendingCommandRecordExtraHandles_.size() != pendingCommandRecordCount_) {
             return D3DERR_INVALIDCALL;
         }
         const auto wireRecordCount =
@@ -2794,9 +3306,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // table.
         chunkWireHandleScratch_.clear();
         std::uint64_t wireHandleCount64 = 0;
-        for (auto& record : pendingCommandWireRecords_) {
+        for (std::size_t recordIndex = 0;
+             recordIndex < pendingCommandWireRecords_.size();
+             ++recordIndex) {
+            auto& record = pendingCommandWireRecords_[recordIndex];
             recordWireHandleScratch_.clear();
-            if (!collectRecordWireHandles(record, recordWireHandleScratch_)) {
+            if (!collectRecordWireHandles(recordIndex, record,
+                                          recordWireHandleScratch_)) {
                 return D3DERR_INVALIDCALL;
             }
             if (wireHandleCount64 >
@@ -2908,6 +3424,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
         const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
         if (SUCCEEDED(hr)) {
+            recordPeChunkCommit(
+                reason, wireRecordCount, payloadArenaSize, wireHandleCount,
+                static_cast<std::uint32_t>(pendingCommandWireBlob_.size()));
             clearPendingCommandChunk();
         }
         return hr;
@@ -2922,7 +3441,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (pendingCommandRecordCount_ != 0 &&
             (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
              pendingCommandBytes_.size() + bytes > maxPendingCommandBytes())) {
-            const HRESULT flushHr = flushPendingCommandChunk();
+            const HRESULT flushHr =
+                flushPendingCommandChunk(PeRecorderFlushReason::CapacityPre);
             if (FAILED(flushHr)) return flushHr;
         }
 
@@ -2939,12 +3459,24 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         wireRecord.payloadSize = static_cast<std::uint32_t>(bytes);
         wireRecord.firstHandle = 0;
         wireRecord.handleCount = 0;
+
+        PendingCommandRetentions acquired{};
+        WireHandleEntryList extraHandles{};
+        if (!retainRecordPayloadObjects(wireRecord, acquired) ||
+            !collectAppendTimeExtraWireHandles(wireRecord, extraHandles)) {
+            rollbackPendingCommandRetentions(acquired);
+            pendingCommandBytes_.resize(payloadOffset);
+            return D3DERR_INVALIDCALL;
+        }
+        retainPendingCommandWireHandles(extraHandles, acquired);
+
         pendingCommandWireRecords_.push_back(wireRecord);
+        pendingCommandRecordExtraHandles_.push_back(std::move(extraHandles));
         ++pendingCommandRecordCount_;
 
         if (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
             pendingCommandBytes_.size() >= maxPendingCommandBytes()) {
-            return flushPendingCommandChunk();
+            return flushPendingCommandChunk(PeRecorderFlushReason::CapacityPost);
         }
         return S_OK;
     }
@@ -2978,7 +3510,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (pendingCommandRecordCount_ != 0 &&
             (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
              pendingCommandBytes_.size() + bytes > maxPendingCommandBytes())) {
-            const HRESULT flushHr = flushPendingCommandChunk();
+            const HRESULT flushHr =
+                flushPendingCommandChunk(PeRecorderFlushReason::CapacityPre);
             if (FAILED(flushHr)) return flushHr;
         }
 
@@ -3060,7 +3593,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         header.packet.vertexDataSize = vertexBytes;
         header.header.size = sizeof(D9CCommandRecordDrawPrimitiveUP) + vertexBytes;
 
-        return appendCommandRecordDirect(
+        const HRESULT hr = appendCommandRecordDirect(
             header.header.type, header.header.size,
             [&header, data, vertexBytes](std::uint8_t* record) {
                 std::memcpy(record, &header, sizeof(header));
@@ -3068,6 +3601,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     std::memcpy(record + header.packet.vertexDataOffset, data, vertexBytes);
                 }
             });
+        if (SUCCEEDED(hr)) {
+            recordDrawPrimitiveUPCopy(vertexBytes);
+        }
+        return hr;
     }
 
     HRESULT appendDrawIndexedPrimitiveUPRecord(D3DPRIMITIVETYPE type,
@@ -3111,7 +3648,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         header.header.size = sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) +
                              indexBytes + vertexBytes;
 
-        return appendCommandRecordDirect(
+        const HRESULT hr = appendCommandRecordDirect(
             header.header.type, header.header.size,
             [&header, indexData, indexBytes, vertexData, vertexBytes](std::uint8_t* record) {
                 std::memcpy(record, &header, sizeof(header));
@@ -3122,12 +3659,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     std::memcpy(record + header.packet.vertexDataOffset, vertexData, vertexBytes);
                 }
             });
+        if (SUCCEEDED(hr)) {
+            recordDrawIndexedPrimitiveUPCopy(vertexBytes, indexBytes);
+        }
+        return hr;
     }
 
-    HRESULT flushPeRecorder() {
+    HRESULT flushPeRecorder(
+        PeRecorderFlushReason reason = PeRecorderFlushReason::Barrier) {
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        return flushPendingCommandChunk();
+        return flushPendingCommandChunk(reason);
     }
 
     // Variable-size const-array record append. The record is
@@ -3398,7 +3940,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
 public:
     HRESULT FlushPeRecorderForChild() noexcept override {
-        return flushPeRecorder();
+        return flushPeRecorder(PeRecorderFlushReason::Child);
     }
     bool IsStateBlockRecordingForChild() const noexcept override {
         return stateBlockRecording_;
@@ -3440,7 +3982,8 @@ public:
     }
 
     ~D3D9DeviceImpl() {
-        (void)flushPeRecorder();
+        (void)flushPeRecorder(PeRecorderFlushReason::Destructor);
+        logPeRecorderStats("destructor", true);
         clearPendingCommandChunk();
         releaseAllBound();
         dxmt9c_device_release(dev_);
@@ -3655,7 +4198,7 @@ public:
         cpp.flags            = pPP->Flags;
         cpp.fullScreenRefreshRateHz = pPP->FullScreen_RefreshRateInHz;
         cpp.presentationInterval = pPP->PresentationInterval;
-        const HRESULT flushHr = flushPeRecorder();
+        const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::Reset);
         if (FAILED(flushHr)) return flushHr;
         releaseAllBound();
         if (defaultPoolResourceRefs_ != 0) {
@@ -3711,7 +4254,11 @@ public:
         if (FAILED(appendHr)) return appendHr;
         // Force-commit so Present runs at the bridge boundary even
         // if the chunk is below the byte/record threshold.
-        return flushPendingCommandChunk();
+        const HRESULT flushHr = flushPendingCommandChunk(PeRecorderFlushReason::Present);
+        if (SUCCEEDED(flushHr)) {
+            logPeRecorderStats("present");
+        }
+        return flushHr;
     }
 
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT sc, UINT idx,
@@ -3989,7 +4536,7 @@ public:
         // Sync semantics: commit the chunk now and wait for completion.
         // flushPendingCommandChunk routes through commit_chunk -> server's
         // record dispatcher -> readback record handler.
-        return flushPendingCommandChunk();
+        return flushPendingCommandChunk(PeRecorderFlushReason::Readback);
     }
 
     HRESULT STDMETHODCALLTYPE GetFrontBufferData(UINT sc, IDirect3DSurface9* surface) noexcept override {
@@ -4078,8 +4625,6 @@ public:
                             this, (unsigned)idx, pSurf);
         if (idx >= 4) return D3DERR_INVALIDCALL;
         if (rtSlots_[idx] == pSurf) return S_OK;
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         if (idx == 0) {
             setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
         }
@@ -4114,8 +4659,6 @@ public:
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override {
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
         if (dsSurface_ == pSurf) return S_OK;
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         setRef(dsSurface_, pSurf);
         pendingDs_ = true;
         if (auto* raw = rawSurf(pSurf); raw != nullptr) {
@@ -4289,8 +4832,6 @@ public:
         if (std::memcmp(&viewportShadow_, &vp, sizeof(vp)) == 0) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         viewportShadow_ = vp;
         pendingViewport_ = true;
         return S_OK;
@@ -4315,8 +4856,6 @@ public:
         if (std::memcmp(&scissorShadow_, &cr, sizeof(cr)) == 0) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         scissorShadow_ = cr;
         pendingScissor_ = true;
         return S_OK;
@@ -4337,8 +4876,6 @@ public:
         if (std::memcmp(&materialShadow_, pM, sizeof(D9CMaterial)) == 0) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         std::memcpy(&materialShadow_, pM, sizeof(D9CMaterial));
         pendingMaterial_ = true;
         return S_OK;
@@ -4378,8 +4915,6 @@ public:
                 std::memcmp(&lightShadow_[idx], &cl, sizeof(D9CLight)) == 0) {
                 return S_OK;
             }
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
             lightShadow_[idx] = cl;
             pendingLightSlotMask_ |= 1u << idx;
             return S_OK;
@@ -4403,8 +4938,6 @@ public:
                 wantEnabled == shadowEnabled) {
                 return S_OK;
             }
-            const HRESULT chunkHr = flushPendingCommandChunk();
-            if (FAILED(chunkHr)) return chunkHr;
             pendingLightEnableValidMask_ |= bit;
             if (wantEnabled) {
                 pendingLightEnableMask_ |= bit;
@@ -4434,8 +4967,6 @@ public:
             std::memcmp(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4) == 0) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         std::memcpy(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4);
         pendingClipPlaneMask_ |= 1u << idx;
         return S_OK;
@@ -4474,8 +5005,6 @@ public:
         if (shadowedRenderStateEquals(stateKey, value)) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         // Phase 31: cap check — if a NEW state would push the pending
         // table past the per-packet cap, drain pending state into the chunk
         // via chunkBarrierFlush() so the next packet starts fresh.
@@ -4509,7 +5038,7 @@ public:
         }
         // State-block creation needs current server state.
         // flushPeRecorder() routes pending PE state through chunk records.
-        const HRESULT flushHr = flushPeRecorder();
+        const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::StateBlock);
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_create_state_block device=%p type=%u", this, (unsigned)type);
         D9CStateBlock* sb = dxmt9c_device_create_state_block(dev_, (uint32_t)type);
@@ -4521,7 +5050,7 @@ public:
         if (stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
-        const HRESULT flushHr = flushPeRecorder();
+        const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::StateBlock);
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_begin_state_block device=%p", this);
         const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
@@ -4538,7 +5067,7 @@ public:
         if (!stateBlockRecording_) {
             return D3DERR_INVALIDCALL;
         }
-        const HRESULT flushHr = flushPeRecorder();
+        const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::StateBlock);
         if (FAILED(flushHr)) return flushHr;
         dxmt9DeviceDebugLog("device_end_state_block device=%p", this);
         D9CStateBlock* sb = nullptr;
@@ -4679,8 +5208,6 @@ public:
         if (shadowedTextureEquals(stage, pTex)) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         setRef(textures_[stage], pTex);
         // Keep the legacy append-time handle note for callers that still
         // populate chunkHandlesByKind_; flush-time payload decoding now
@@ -4709,8 +5236,6 @@ public:
         if (fvf_ == fvf) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         fvf_ = fvf;
         pendingFvf_ = true;
         return S_OK;
@@ -4744,8 +5269,6 @@ public:
             IDirect3DVertexDeclaration9* pVD) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
         if (vdecl_ == pVD) return S_OK;
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         setRef(vdecl_, pVD);
         pendingVdecl_ = true;
         return S_OK;
@@ -4774,8 +5297,6 @@ public:
         // wire handle; server-side applyDrawPacketState dispatches the
         // dxmt9c_device_set_vertex_shader call before the draw runs.
         if (vs_ == pVS) return S_OK;
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         setRef(vs_, pVS);
         pendingVs_ = true;
         return S_OK;
@@ -4830,8 +5351,6 @@ public:
         if (shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
             return S_OK;
         }
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         setRef(streamSrc_[stream], pBuf);
         streamOff_[stream] = offset;
         streamStr_[stream] = stride;
@@ -4873,8 +5392,6 @@ public:
     HRESULT STDMETHODCALLTYPE SetIndices(IDirect3DIndexBuffer9* pIBuf) noexcept override {
         dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
         if (indexBuf_ == pIBuf) return S_OK;
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         setRef(indexBuf_, pIBuf);
         pendingIb_ = true;
         if (auto* raw = rawIBuf(pIBuf); raw != nullptr) {
@@ -4901,8 +5418,6 @@ public:
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
         if (ps_ == pPS) return S_OK;
-        const HRESULT chunkHr = flushPendingCommandChunk();
-        if (FAILED(chunkHr)) return chunkHr;
         setRef(ps_, pPS);
         pendingPs_ = true;
         return S_OK;
@@ -5056,11 +5571,15 @@ public:
                                          DWORD flags) noexcept override {
         D9CRect cs{}, cd{};
         if (src) cs = toR(*src); if (dst) cd = toR(*dst);
-        const HRESULT flushHr = flushPeRecorder();
+        const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::Present);
         if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_device_present(dev_,
+        const HRESULT hr = hr32(dxmt9c_device_present(dev_,
             src ? &cs : nullptr, dst ? &cd : nullptr,
             (uint64_t)(uintptr_t)wnd, dirty, flags));
+        if (SUCCEEDED(hr)) {
+            logPeRecorderStats("present_ex");
+        }
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE GetGPUThreadPriority(INT* p) noexcept override { if (p) *p = 0; return S_OK; }
@@ -5154,7 +5673,7 @@ public:
             cdme.format = (uint32_t)pFsMode->Format;
             cdme.scanLineOrdering = (uint32_t)pFsMode->ScanLineOrdering;
         }
-        const HRESULT flushHr = flushPeRecorder();
+        const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::Reset);
         if (FAILED(flushHr)) return flushHr;
         releaseAllBound();
         clearPeStateTracking();

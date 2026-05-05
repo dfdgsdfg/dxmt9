@@ -151,6 +151,8 @@ assert_perf_counters = find_program(
 test('dxmt9-allocation-counter-spec', assert_perf_counters,
      args: [allocation_counter_spec])
 
+python3 = find_program('python3', required: true)
+
 shader_runner = executable(
   'shader_runner_dxmt9',
   'shader_runner/shader_runner_dxmt9.cpp',
@@ -160,12 +162,55 @@ shader_runner = executable(
 )
 
 if host_machine.system() == 'darwin'
-  shader_manifest = join_paths(meson.project_source_root(), 'tests/shader_runner/corpus/MANIFEST.toml')
-  test('dxmt9-shader-corpus', shader_runner, args: ['--manifest', shader_manifest], is_parallel: false)
+  shader_corpus_root = join_paths(meson.project_source_root(), 'tests/shader_runner/corpus')
+  shader_manifest = join_paths(shader_corpus_root, 'MANIFEST.toml')
+  shader_corpus_env = environment()
+  shader_wine_unix_runtime_subdir = host_machine.cpu_family() == 'x86_64' ? 'x86_64-unix' : host_machine.cpu_family() + '-unix'
+  shader_c_args = get_option('c_args')
+  if shader_c_args.length() >= 2
+    foreach i : range(shader_c_args.length() - 1)
+      if shader_c_args[i] == '-arch'
+        shader_arch_name = shader_c_args[i + 1]
+        if shader_arch_name == 'x86_64'
+          shader_wine_unix_runtime_subdir = 'x86_64-unix'
+        elif shader_arch_name == 'arm64'
+          shader_wine_unix_runtime_subdir = 'aarch64-unix'
+        endif
+      endif
+    endforeach
+  endif
+  shader_wine_install_path = get_option('wine_install_path')
+  if shader_wine_install_path != ''
+    if not shader_wine_install_path.startswith('/')
+      shader_wine_install_path = join_paths(meson.project_source_root(), shader_wine_install_path)
+    endif
+    shader_corpus_env.prepend(
+      'DYLD_LIBRARY_PATH',
+      join_paths(shader_wine_install_path, 'lib/wine', shader_wine_unix_runtime_subdir),
+      separator: ':')
+  endif
+  # shader_runner_dxmt9 accepts individual .shader_test files; shard the
+  # manifest so Meson applies timeout per case instead of to the full corpus.
+  shader_corpus_files = run_command(
+    python3,
+    '-c',
+    'import sys, tomllib; from pathlib import Path; data=tomllib.loads(Path(sys.argv[1]).read_text()); print("|".join(entry["file"] for entry in data.get("test", []) if entry.get("status") == "passing"))',
+    shader_manifest,
+    check: true,
+  ).stdout().strip().split('|')
+
+  foreach shader_corpus_file : shader_corpus_files
+    shader_corpus_test_name = 'dxmt9-shader-corpus-' + shader_corpus_file.replace('/', '-').replace('.shader_test', '')
+    test(shader_corpus_test_name, shader_runner,
+         args: [join_paths(shader_corpus_root, shader_corpus_file)],
+         env: shader_corpus_env,
+         is_parallel: false,
+         suite: ['shader-corpus'],
+         timeout: 60)
+  endforeach
 endif
 
 bash = find_program('bash', required: true)
-python3 = find_program('python3', required: true)
 verify_tla_script = join_paths(meson.project_source_root(), 'scripts', 'verify_tla.sh')
 test('dxmt9-verify-tla', bash, args: [verify_tla_script], is_parallel: false)
 test('dxmt9-manifest-check', bash, args: [join_paths(meson.project_source_root(), 'scripts/check_manifest.sh')],

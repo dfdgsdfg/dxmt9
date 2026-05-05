@@ -51,6 +51,7 @@ valid_source_kind = {
     "implementation-source",
 }
 valid_license_scope = {"project-mit", "third-party-fixture", "external-not-vendored"}
+valid_status = {"passing", "failing", "skipped"}
 valid_models = {
     "ffp",
     "hlsl",
@@ -91,6 +92,8 @@ for index, entry in enumerate(data.get("test", []), 1):
         errors.append(f"manifest test #{index}: invalid license_scope {entry.get('license_scope')!r}")
     if entry.get("license_scope") == "project-mit" and entry.get("license") != "MIT":
         errors.append(f"manifest test #{index}: project-mit entries must use license = \"MIT\"")
+    if entry.get("status") not in valid_status:
+        errors.append(f"manifest test #{index}: invalid status {entry.get('status')!r}")
     models = entry.get("models")
     if not isinstance(models, list) or not models:
         errors.append(f"manifest test #{index}: models must be a non-empty array")

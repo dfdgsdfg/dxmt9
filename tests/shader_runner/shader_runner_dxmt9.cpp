@@ -63,6 +63,13 @@ struct TextureBind {
   u32 textureId = 0;
 };
 
+struct SolidRectDraw {
+  float left = 0.0f;
+  float top = 0.0f;
+  float right = 0.0f;
+  float bottom = 0.0f;
+};
+
 struct CorpusTest {
   std::string path;
   std::optional<ShaderSection> vertexShader;
@@ -72,6 +79,7 @@ struct CorpusTest {
   std::vector<TextureSetup> textureSetups;
   std::vector<SamplerSetup> samplerSetups;
   std::vector<TextureBind> textureBinds;
+  std::vector<SolidRectDraw> solidRectDraws;
   std::optional<ColorRGBA> clearColor;
   std::optional<Viewport> viewport;
   bool drawQuad = false;
@@ -291,6 +299,22 @@ std::optional<TextureBind> parseDxmt9BindTexture(std::string_view line) {
   return bind;
 }
 
+std::optional<SolidRectDraw> parseDxmt9SolidRect(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  SolidRectDraw rect;
+  if (!(stream >> command) || command != "dxmt9-draw-solid-rect") {
+    return std::nullopt;
+  }
+  if (!(stream >> rect.left >> rect.top >> rect.right >> rect.bottom)) {
+    fail("invalid dxmt9-draw-solid-rect command");
+  }
+  if (!(rect.left < rect.right) || !(rect.top < rect.bottom)) {
+    fail("dxmt9-draw-solid-rect requires increasing coordinates");
+  }
+  return rect;
+}
+
 u32 parseColorWriteMask(std::string_view text) {
   const auto token = normalizeToken(text);
   if (token == "red" || token == "r") {
@@ -494,6 +518,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
 
   if (line == "dxmt9-draw-solid-quad") {
     test.drawDxmt9SolidQuad = true;
+    return;
+  }
+
+  if (auto solidRect = parseDxmt9SolidRect(line)) {
+    test.solidRectDraws.push_back(*solidRect);
     return;
   }
 
@@ -814,26 +843,29 @@ void drawDxmt9TexturedQuad(Device& device, u32 width, u32 height) {
   }
 }
 
-void drawDxmt9SolidQuad(Device& device, u32 width, u32 height) {
+void drawDxmt9SolidRect(Device& device, const SolidRectDraw& rect) {
   if (device.setFVF(kFvfXyzrhw) != D3D_OK) {
     fail("dxmt9 solid quad FVF setup failed");
   }
 
-  const float w = static_cast<float>(width);
-  const float h = static_cast<float>(height);
   const std::array<ScreenSpaceVertex, 6> quad{
-      ScreenSpaceVertex{0.0f, 0.0f, 0.0f, 1.0f},
-      ScreenSpaceVertex{w, 0.0f, 0.0f, 1.0f},
-      ScreenSpaceVertex{0.0f, h, 0.0f, 1.0f},
-      ScreenSpaceVertex{w, 0.0f, 0.0f, 1.0f},
-      ScreenSpaceVertex{w, h, 0.0f, 1.0f},
-      ScreenSpaceVertex{0.0f, h, 0.0f, 1.0f},
+      ScreenSpaceVertex{rect.left, rect.top, 0.0f, 1.0f},
+      ScreenSpaceVertex{rect.right, rect.top, 0.0f, 1.0f},
+      ScreenSpaceVertex{rect.left, rect.bottom, 0.0f, 1.0f},
+      ScreenSpaceVertex{rect.right, rect.top, 0.0f, 1.0f},
+      ScreenSpaceVertex{rect.right, rect.bottom, 0.0f, 1.0f},
+      ScreenSpaceVertex{rect.left, rect.bottom, 0.0f, 1.0f},
   };
   const auto* bytes = reinterpret_cast<const u8*>(quad.data());
   if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
                              sizeof(ScreenSpaceVertex)) != D3D_OK) {
     fail("dxmt9 solid quad draw failed");
   }
+}
+
+void drawDxmt9SolidQuad(Device& device, u32 width, u32 height) {
+  drawDxmt9SolidRect(
+      device, SolidRectDraw{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)});
 }
 
 void drawDxmt9VsColorTriangle(Device& device) {
@@ -895,6 +927,16 @@ void runCorpusFile(const std::string& path) {
     expectContains(source, expectation.needle, path);
   }
 
+  const bool needsRuntime = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
+                            test.drawDxmt9TexturedQuad || test.drawDxmt9SolidQuad ||
+                            test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty() ||
+                            !test.textureSetups.empty() || !test.samplerSetups.empty() ||
+                            !test.textureBinds.empty() || test.viewport.has_value() ||
+                            test.colorWriteMask.has_value() || test.alphaTestEnable;
+  if (!needsRuntime) {
+    return;
+  }
+
   BackendLimits limits{};
   limits.maxTextureSize = 4096;
   limits.maxColorAttachments = 4;
@@ -909,7 +951,7 @@ void runCorpusFile(const std::string& path) {
   params.backBufferFormat = Format::A8R8G8B8;
   params.windowed = true;
   params.presentationInterval = PresentInterval::Immediate;
-  params.deviceWindow = Handle{1};
+  params.deviceWindow = Handle{0};
 
   auto device = factory.createDevice(0, params);
   if (!device) {
@@ -959,7 +1001,7 @@ void runCorpusFile(const std::string& path) {
 
   const bool needsClear = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
                           test.drawDxmt9TexturedQuad || test.drawDxmt9SolidQuad ||
-                          test.drawDxmt9VsColorTriangle;
+                          test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty();
   if (needsClear) {
     const auto clearColor = test.clearColor.value_or(ColorRGBA{0.0f, 0.0f, 0.0f, 1.0f});
     ClearDesc clear{};
@@ -998,6 +1040,16 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9SolidQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  for (const auto& solidRect : test.solidRectDraws) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9SolidRect(*device, solidRect);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }

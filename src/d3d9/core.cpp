@@ -173,6 +173,14 @@ bool getenvFlag(const char* name) {
   return dxmt9::util::getenvFlag(name);
 }
 
+bool syncPresentFlushEnabled() {
+  static const bool enabled = [] {
+    const auto value = getenvString("DXMT9_SYNC_PRESENT_FLUSH");
+    return !value.empty() && value != "0";
+  }();
+  return enabled;
+}
+
 bool backendOwnsSurfaceContents(const SurfaceDesc& desc) {
   return desc.renderTarget ||
          desc.depthStencil ||
@@ -4328,7 +4336,7 @@ HResult Device::presentEx(const Rect* sourceRect, const Rect* destRect, Handle d
   // Immediate presents must not synchronously wait for the Metal presenter:
   // some windowed apps submit before their message pump has made a drawable
   // available, and waiting here can deadlock that first frame.
-  if (backend_ && synchronizePresent) {
+  if (backend_ && synchronizePresent && syncPresentFlushEnabled()) {
     upperDevice_->flush();
   }
   completeUpTo(submittedSequenceId_);

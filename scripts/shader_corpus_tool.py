@@ -45,6 +45,7 @@ VALID_OPCODES = {
     "TEXM3x3SPEC", "TEXM3x3TEX", "TEXM3x3VSPEC", "TEXREG2AR",
     "TEXREG2GB", "TEXREG2RGB",
 }
+VALID_STATUSES = {"passing", "failing", "skipped"}
 REQUIRED_PROVENANCE_FIELDS = {
     "source",
     "source_kind",
@@ -254,16 +255,23 @@ def manifest_gaps(args: argparse.Namespace) -> int:
     missing_metadata: list[str] = []
     covered_models: set[str] = set()
     covered_opcodes: set[str] = set()
+    covered_model_opcodes: set[tuple[str, str]] = set()
+    status_counts: dict[str, int] = {}
+    non_passing: list[str] = []
 
     for entry in entries:
         relative = str(entry.get("file", "<missing>"))
         models = list_field(entry.get("models"))
         opcodes = list_field(entry.get("opcodes"))
+        status = str(entry.get("status", ""))
+        status_counts[status] = status_counts.get(status, 0) + 1
 
         if not models:
             missing_metadata.append(f"{relative}: missing models")
         if not opcodes:
             missing_metadata.append(f"{relative}: missing opcodes")
+        if status not in VALID_STATUSES:
+            missing_metadata.append(f"{relative}: invalid status {status!r}")
 
         unknown_models = sorted(model for model in models if model not in VALID_MODELS)
         unknown_opcodes = sorted(opcode for opcode in opcodes if opcode not in VALID_OPCODES)
@@ -276,24 +284,57 @@ def manifest_gaps(args: argparse.Namespace) -> int:
         if missing_provenance:
             missing_metadata.append(f"{relative}: missing provenance {', '.join(missing_provenance)}")
 
-        covered_models.update(models)
-        covered_opcodes.update(opcodes)
+        if status == "passing":
+            covered_models.update(models)
+            covered_opcodes.update(opcodes)
+            covered_model_opcodes.update((model, opcode) for model in models for opcode in opcodes)
+        else:
+            non_passing.append(f"{relative}: {status or '<missing>'}")
 
     tracked_models = sorted(model for model in VALID_MODELS if model not in {"ffp", "hlsl"})
     missing_models = sorted(model for model in tracked_models if model not in covered_models)
     tracked_opcodes = sorted(opcode for opcode in VALID_OPCODES if opcode not in {"ALPHA_TEST", "CLEAR", "HLSL", "PROBE"})
     missing_opcodes = sorted(opcode for opcode in tracked_opcodes if opcode not in covered_opcodes)
+    total_matrix_pairs = len(tracked_models) * len(tracked_opcodes)
+    covered_matrix_pairs = sum(
+        1 for model in tracked_models for opcode in tracked_opcodes if (model, opcode) in covered_model_opcodes
+    )
+    missing_opcodes_by_model = {
+        model: [opcode for opcode in tracked_opcodes if (model, opcode) not in covered_model_opcodes]
+        for model in tracked_models
+    }
 
     print("shader corpus gap report")
     print(f"manifest: {manifest_path}")
     print(f"entries: {len(entries)}")
+    print("status counts: " + ", ".join(f"{status}={status_counts[status]}" for status in sorted(status_counts)))
     print()
-    print(f"covered models ({len(covered_models)}): {', '.join(sorted(covered_models)) or '<none>'}")
+    print(f"covered passing models ({len(covered_models)}): {', '.join(sorted(covered_models)) or '<none>'}")
     print(f"missing models ({len(missing_models)}): {', '.join(missing_models) or '<none>'}")
     print()
-    print(f"covered opcodes ({len(covered_opcodes)}): {', '.join(sorted(covered_opcodes)) or '<none>'}")
+    print(f"covered passing opcodes ({len(covered_opcodes)}): {', '.join(sorted(covered_opcodes)) or '<none>'}")
     print(f"missing opcodes ({len(missing_opcodes)}): {', '.join(missing_opcodes) or '<none>'}")
     print()
+    print(f"covered model/opcode pairs ({covered_matrix_pairs}/{total_matrix_pairs})")
+    print("missing opcodes by model:")
+    printed_model_gap = False
+    for model in tracked_models:
+        missing_for_model = missing_opcodes_by_model[model]
+        if not missing_for_model:
+            continue
+        printed_model_gap = True
+        if len(missing_for_model) == len(tracked_opcodes):
+            print(f"  {model} ({len(missing_for_model)}): <all tracked opcodes>")
+        else:
+            print(f"  {model} ({len(missing_for_model)}): {', '.join(missing_for_model)}")
+    if not printed_model_gap:
+        print("  <none>")
+    print()
+    if non_passing:
+        print("non-passing tests:")
+        for item in non_passing:
+            print(f"  {item}")
+        print()
 
     if missing_metadata:
         print("metadata gaps:")

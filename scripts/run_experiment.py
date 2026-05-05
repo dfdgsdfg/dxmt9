@@ -41,8 +41,9 @@ FRAME_PATTERNS = (
 )
 PERF_COUNTER_PATTERN = re.compile(r"^\[dxmt9-perf\]\s+(.*)$")
 BRIDGE_COUNTER_PATTERN = re.compile(r"^\[dxmt9-bridge-perf\]\s+(.*)$")
+PE_RECORDER_COUNTER_PATTERN = re.compile(r"^\[dxmt9-device\]\s+(?:[A-Za-z]+:\s+)?pe_recorder_stats\s+(.*)$")
 PERF_PROBE_PATTERN = re.compile(r"^\[perf-probe\]\s+(.*)$")
-PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s]+)")
+PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s}]+)")
 
 
 @dataclass
@@ -416,6 +417,19 @@ def extract_dxmt9_bridge_counters(log_path: Path) -> dict[str, int | float | str
     return counters
 
 
+def extract_dxmt9_pe_recorder_counters(log_path: Path) -> dict[str, int | float | str]:
+    if not log_path.exists():
+        return {}
+    counters: dict[str, int | float | str] = {}
+    for line in log_path.read_text(errors="replace").splitlines():
+        match = PE_RECORDER_COUNTER_PATTERN.match(line)
+        if not match:
+            continue
+        for key, value in PERF_COUNTER_VALUE_PATTERN.findall(match.group(1)):
+            counters[key] = parse_perf_counter_value(value)
+    return counters
+
+
 def extract_perf_probe_timings(log_path: Path) -> dict[str, int | float | str]:
     if not log_path.exists():
         return {}
@@ -623,6 +637,9 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         dxmt9_bridge_counters = extract_dxmt9_bridge_counters(log_path)
         if dxmt9_bridge_counters:
             result["dxmt9_bridge_counters"] = dxmt9_bridge_counters
+        dxmt9_pe_recorder_counters = extract_dxmt9_pe_recorder_counters(log_path)
+        if dxmt9_pe_recorder_counters:
+            result["dxmt9_pe_recorder_counters"] = dxmt9_pe_recorder_counters
         perf_probe_timings = extract_perf_probe_timings(log_path)
         if perf_probe_timings:
             result["perf_probe_timings"] = perf_probe_timings

@@ -6,7 +6,10 @@
 // hands the per-chunk retention list to.
 #include "dxmt9/dxmt9_device.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 using namespace dxmt9::d3d9::devicec;
@@ -46,6 +49,85 @@ bool failed(int32_t hr) {
   return hr < 0;
 }
 
+void recordStateBlockRenderState(D9CDevice* d, uint32_t state, uint32_t value) {
+  d->stateBlockRenderStates.insert(state);
+  d->stateBlockRenderStateValues[state] = value;
+}
+
+dxmt9::core::Matrix4x4 matrixFromC(const D9CMatrix& m) {
+  dxmt9::core::Matrix4x4 matrix;
+  std::memcpy(matrix.m.data(), m.m, 16 * sizeof(float));
+  return matrix;
+}
+
+dxmt9::core::Viewport viewportFromC(const D9CViewport& vp) {
+  return {vp.x, vp.y, vp.width, vp.height, vp.minZ, vp.maxZ};
+}
+
+bool viewportValid(const dxmt9::core::Viewport& viewport) {
+  return viewport.width != 0 && viewport.height != 0 &&
+         std::isfinite(viewport.minZ) && std::isfinite(viewport.maxZ) &&
+         viewport.minZ >= 0.0f && viewport.maxZ <= 1.0f &&
+         viewport.minZ <= viewport.maxZ;
+}
+
+dxmt9::core::Rect rectFromC(const D9CRect& r) {
+  return {r.left, r.top, r.right, r.bottom};
+}
+
+dxmt9::core::Material materialFromC(const D9CMaterial& m) {
+  dxmt9::core::Material material;
+  std::memcpy(&material.diffuse, &m.diffuse, sizeof(dxmt9::core::ColorRGBA));
+  std::memcpy(&material.ambient, &m.ambient, sizeof(dxmt9::core::ColorRGBA));
+  std::memcpy(&material.specular, &m.specular, sizeof(dxmt9::core::ColorRGBA));
+  std::memcpy(&material.emissive, &m.emissive, sizeof(dxmt9::core::ColorRGBA));
+  material.power = m.power;
+  return material;
+}
+
+dxmt9::core::Light lightFromC(const D9CLight& l) {
+  dxmt9::core::Light light;
+  light.type = static_cast<dxmt9::core::LightType>(l.type);
+  std::memcpy(&light.diffuse, &l.diffuse, sizeof(dxmt9::core::ColorRGBA));
+  std::memcpy(&light.specular, &l.specular, sizeof(dxmt9::core::ColorRGBA));
+  std::memcpy(&light.ambient, &l.ambient, sizeof(dxmt9::core::ColorRGBA));
+  std::memcpy(light.position.data(), l.position, 3 * sizeof(float));
+  std::memcpy(light.direction.data(), l.direction, 3 * sizeof(float));
+  light.range = l.range;
+  light.falloff = l.falloff;
+  light.attenuation0 = l.attenuation0;
+  light.attenuation1 = l.attenuation1;
+  light.attenuation2 = l.attenuation2;
+  light.theta = l.theta;
+  light.phi = l.phi;
+  return light;
+}
+
+dxmt9::core::RenderTargetAttachment attachmentFromSurface(
+    const std::shared_ptr<dxmt9::core::Surface>& surface) {
+  return surface ? dxmt9::core::RenderTargetAttachment{
+                       surface->handle(), surface->level(), surface->multiSampleCount()}
+                 : dxmt9::core::RenderTargetAttachment{};
+}
+
+int32_t validateDrawPacketStateDelta(const D9CDrawPrimitivePacket& packet) {
+  if (packet.renderStateCount > D9C_DRAW_PACKET_MAX_RENDER_STATES ||
+      packet.tssCount > D9C_DRAW_PACKET_MAX_TSS ||
+      packet.samplerStateCount > D9C_DRAW_PACKET_MAX_SAMPLER ||
+      packet.transformCount > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  for (uint32_t i = 0; i < packet.samplerStateCount; ++i) {
+    if (packet.samplerStates[i].sampler >= dxmt9::core::kMaxSamplers) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+  }
+  if (packet.viewportValid && !viewportValid(viewportFromC(packet.viewport))) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  return dxmt9::core::D3D_OK;
+}
+
 int32_t commitChunkFail(const char* reason,
                         std::uint32_t index = 0xffffffffu,
                         std::uint32_t type = 0,
@@ -55,7 +137,7 @@ int32_t commitChunkFail(const char* reason,
   return hr;
 }
 
-int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
+int32_t applyDrawPacketStateViaIface(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
   if (packet.renderStateCount > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
@@ -63,8 +145,7 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
   for (uint32_t i = 0; i < packet.renderStateCount; ++i) {
     const auto& state = packet.renderStates[i];
     if (d->stateBlockRecording) {
-      d->stateBlockRenderStates.insert(state.state);
-      d->stateBlockRenderStateValues[state.state] = state.value;
+      recordStateBlockRenderState(d, state.state, state.value);
       continue;
     }
     const int32_t hr = d->iface->SetRenderState(state.state, state.value);
@@ -207,6 +288,150 @@ int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet)
   }
 
   return dxmt9::core::D3D_OK;
+}
+
+// Normal chunk replay path: apply the packet's flat delta directly to the
+// core DeviceState and invalidate derived draw-state caches once. The iface
+// replay above remains only for state-block recording semantics.
+int32_t applyDrawPacketStateDirect(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
+  const int32_t validationHr = validateDrawPacketStateDelta(packet);
+  if (failed(validationHr)) {
+    return validationHr;
+  }
+
+  auto& state = d->dev().mutableState();
+
+  for (uint32_t i = 0; i < packet.renderStateCount; ++i) {
+    const auto& entry = packet.renderStates[i];
+    state.renderStates.set(entry.state, entry.value);
+    if (entry.state == dxmt9::core::RS_SCISSOR_TEST_ENABLE) {
+      state.scissorEnabled = entry.value != 0;
+    }
+  }
+
+  for (uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
+    if ((packet.textureMask & (1u << stage)) == 0) {
+      continue;
+    }
+    auto* texture = wireHandlePtr<D9CTexture>(packet.textures[stage]);
+    state.textures[stage] = texture ? texture->obj : nullptr;
+  }
+
+  for (uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+    if ((packet.streamSourceMask & (1u << stream)) == 0) {
+      continue;
+    }
+    const auto& source = packet.streamSources[stream];
+    auto* buffer = wireHandlePtr<D9CBuffer>(source.buffer);
+    state.streamBuffers[stream] = buffer ? buffer->obj : nullptr;
+    state.streamOffsets[stream] = source.offset;
+    state.streamStrides[stream] = source.stride;
+  }
+
+  if (packet.fvfValid) {
+    state.fvf = packet.fvf;
+    state.vertexDecl.fvf = packet.fvf;
+    state.vertexDecl.elements.clear();
+  }
+
+  if (packet.vsValid) {
+    auto* vs = wireHandlePtr<D9CShader>(packet.vsHandle);
+    state.vertexShader = vs ? vs->ref : dxmt9::core::ShaderRef{};
+  }
+  if (packet.psValid) {
+    auto* ps = wireHandlePtr<D9CShader>(packet.psHandle);
+    state.pixelShader = ps ? ps->ref : dxmt9::core::ShaderRef{};
+  }
+
+  if (packet.vdeclValid) {
+    auto* vd = wireHandlePtr<D9CVertexDecl>(packet.vdeclHandle);
+    if (vd) {
+      state.vertexDecl.elements = vd->elements;
+    } else {
+      state.vertexDecl.elements.clear();
+    }
+    state.vertexDecl.fvf = state.fvf;
+  }
+
+  for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+    if ((packet.rtMask & (1u << slot)) == 0) {
+      continue;
+    }
+    auto* rt = wireHandlePtr<D9CSurface>(packet.rtHandles[slot]);
+    const auto surface = rt ? rt->obj : nullptr;
+    state.renderTargets[slot] = attachmentFromSurface(surface);
+    if (slot == 0 && surface) {
+      const auto& desc = surface->desc();
+      state.viewport = {0, 0, std::max(1u, desc.width), std::max(1u, desc.height),
+                        0.0f, 1.0f};
+    }
+  }
+
+  if (packet.dsValid) {
+    auto* ds = wireHandlePtr<D9CSurface>(packet.dsHandle);
+    state.depthStencil = attachmentFromSurface(ds ? ds->obj : nullptr);
+  }
+
+  if (packet.viewportValid) {
+    state.viewport = viewportFromC(packet.viewport);
+  }
+  if (packet.scissorValid) {
+    state.scissorRect = rectFromC(packet.scissor);
+  }
+
+  for (uint32_t i = 0; i < packet.tssCount; ++i) {
+    const auto& e = packet.tss[i];
+    const uint32_t stage = std::min(e.stage, dxmt9::core::kMaxTextureStages - 1);
+    const uint32_t key = std::min(e.type, dxmt9::core::kMaxTextureStageStates - 1);
+    state.textureStageStates[stage].set(key, e.value);
+  }
+  for (uint32_t i = 0; i < packet.samplerStateCount; ++i) {
+    const auto& e = packet.samplerStates[i];
+    state.samplerStates[e.sampler].set(e.type, e.value);
+  }
+
+  if (packet.materialValid) {
+    state.material = materialFromC(packet.material);
+  }
+
+  for (uint32_t i = 0; i < dxmt9::core::kMaxClipPlanes; ++i) {
+    if ((packet.clipPlaneMask & (1u << i)) == 0) {
+      continue;
+    }
+    state.clipPlanes[i] = {packet.clipPlanes[i * 4 + 0],
+                           packet.clipPlanes[i * 4 + 1],
+                           packet.clipPlanes[i * 4 + 2],
+                           packet.clipPlanes[i * 4 + 3]};
+  }
+
+  for (uint32_t i = 0; i < packet.transformCount; ++i) {
+    const auto& e = packet.transforms[i];
+    state.transforms.set(transformStateFromD3D(e.state), matrixFromC(e.matrix));
+  }
+
+  for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
+    if ((packet.lightSlotMask & (1u << i)) == 0) {
+      continue;
+    }
+    state.lights[i] = lightFromC(packet.lights[i]);
+  }
+  for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
+    if ((packet.lightEnableValidMask & (1u << i)) == 0) {
+      continue;
+    }
+    const bool enabled = (packet.lightEnableMask & (1u << i)) != 0;
+    state.lightEnabled[i] = enabled;
+    state.lights[i].enabled = enabled;
+  }
+
+  return dxmt9::core::D3D_OK;
+}
+
+int32_t applyDrawPacketState(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
+  if (d->stateBlockRecording) {
+    return applyDrawPacketStateViaIface(d, packet);
+  }
+  return applyDrawPacketStateDirect(d, packet);
 }
 
 std::uint32_t primitiveVertexCount(std::uint32_t primitiveType, std::uint32_t primitiveCount) {
@@ -1183,12 +1408,15 @@ extern "C" int32_t dxmt9c_device_stretch_rect(D9CDevice* d, D9CSurface* src, con
                                               D9CSurface* dst, const D9CRect* dr,
                                               uint32_t filter) {
   if (!src || !dst) {
+    dxmt9DebugLog("device_stretch_rect invalid wrapper src=%p dst=%p",
+                  static_cast<void*>(src), static_cast<void*>(dst));
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   constexpr uint32_t kD3DTexfNone = 0;
   constexpr uint32_t kD3DTexfPoint = 1;
   constexpr uint32_t kD3DTexfLinear = 2;
   if (filter != kD3DTexfNone && filter != kD3DTexfPoint && filter != kD3DTexfLinear) {
+    dxmt9DebugLog("device_stretch_rect invalid filter=%u", filter);
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   auto* srcRect =
@@ -1197,6 +1425,30 @@ extern "C" int32_t dxmt9c_device_stretch_rect(D9CDevice* d, D9CSurface* src, con
       dr ? new dxmt9::core::Rect{dr->left, dr->top, dr->right, dr->bottom} : nullptr;
   const auto hr = d->iface->StretchRect(src->obj, srcRect, dst->obj, dstRect,
                                         filter == kD3DTexfLinear);
+  if (failed(hr)) {
+    const auto* srcObj = src->obj.get();
+    const auto* dstObj = dst->obj.get();
+    const bool srcValid = srcObj && srcObj->valid();
+    const bool dstValid = dstObj && dstObj->valid();
+    const auto srcDesc = srcObj ? srcObj->desc() : dxmt9::core::SurfaceDesc{};
+    const auto dstDesc = dstObj ? dstObj->desc() : dxmt9::core::SurfaceDesc{};
+    dxmt9DebugLog(
+        "device_stretch_rect failed hr=0x%08x src=%p srcObj=%p srcValid=%u "
+        "srcHandle=0x%llx srcFmt=%u srcUsage=0x%x srcPool=%u srcRT=%u srcDS=%u srcSize=%ux%u "
+        "dst=%p dstObj=%p dstValid=%u dstHandle=0x%llx dstFmt=%u dstUsage=0x%x dstPool=%u "
+        "dstRT=%u dstDS=%u dstSize=%ux%u filter=%u",
+        static_cast<std::uint32_t>(hr),
+        static_cast<void*>(src), static_cast<const void*>(srcObj), srcValid ? 1u : 0u,
+        static_cast<unsigned long long>(srcObj ? srcObj->handle().value : 0ull),
+        static_cast<unsigned>(srcDesc.format), srcDesc.usage,
+        static_cast<unsigned>(srcDesc.pool), srcDesc.renderTarget ? 1u : 0u,
+        srcDesc.depthStencil ? 1u : 0u, srcDesc.width, srcDesc.height,
+        static_cast<void*>(dst), static_cast<const void*>(dstObj), dstValid ? 1u : 0u,
+        static_cast<unsigned long long>(dstObj ? dstObj->handle().value : 0ull),
+        static_cast<unsigned>(dstDesc.format), dstDesc.usage,
+        static_cast<unsigned>(dstDesc.pool), dstDesc.renderTarget ? 1u : 0u,
+        dstDesc.depthStencil ? 1u : 0u, dstDesc.width, dstDesc.height, filter);
+  }
   delete srcRect;
   delete dstRect;
   return hr;

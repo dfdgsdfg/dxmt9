@@ -563,8 +563,10 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
         else:
             lines.append(f"  args->ret = {call_expr};")
         lines.extend(wow64_post)
+        if proto.name.endswith("_addref") and proto.params and is_opaque_handle_pointer(proto.params[0].type_info):
+            lines.append(f"  dxmt9::util::marshal::wow64::retainHandle(args->{proto.params[0].name});")
         if proto.name.endswith("_release") and proto.params and is_opaque_handle_pointer(proto.params[0].type_info):
-            lines.append(f"  dxmt9::util::marshal::wow64::eraseHandle(args->{proto.params[0].name});")
+            lines.append(f"  dxmt9::util::marshal::wow64::releaseHandle(args->{proto.params[0].name});")
         lines.append("  return DXMT9_STATUS_SUCCESS;")
         lines.append("}")
         lines.append("")
