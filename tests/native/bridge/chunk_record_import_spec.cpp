@@ -127,6 +127,163 @@ D9CCommandRecordDrawPrimitive makeDrawPrimitiveRecord(
   return draw;
 }
 
+D9CCommandRecordDrawIndexedPrimitive makeDrawIndexedPrimitiveRecord(
+    std::uint32_t startIndex,
+    std::uint32_t primitiveCount,
+    bool hasStateDelta = false) {
+  D9CCommandRecordDrawIndexedPrimitive draw{};
+  draw.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+  draw.header.size = sizeof(draw);
+  draw.packet.state.primitiveType = 4u;
+  draw.packet.startIndex = startIndex;
+  draw.packet.primitiveCount = primitiveCount;
+  draw.packet.numVertices = primitiveCount * 3u;
+  if (hasStateDelta) {
+    draw.packet.state.renderStateCount = 1u;
+    draw.packet.state.renderStates[0].state = 7u;
+    draw.packet.state.renderStates[0].value = 9u;
+  }
+  return draw;
+}
+
+D9CCommandRecordDrawPrimitiveUP makeDrawPrimitiveUPRecord(
+    std::uint32_t vertexBytes = 48u) {
+  D9CCommandRecordDrawPrimitiveUP draw{};
+  draw.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
+  draw.header.size = static_cast<std::uint32_t>(
+      sizeof(D9CCommandRecordDrawPrimitiveUP) + vertexBytes);
+  draw.packet.state.primitiveType = 4u;
+  draw.packet.primitiveCount = 1u;
+  draw.packet.stride = 16u;
+  draw.packet.vertexDataOffset =
+      static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawPrimitiveUP));
+  draw.packet.vertexDataSize = vertexBytes;
+  return draw;
+}
+
+D9CCommandRecordDrawIndexedPrimitiveUP makeDrawIndexedPrimitiveUPRecord(
+    std::uint32_t indexBytes = 6u,
+    std::uint32_t vertexBytes = 48u) {
+  D9CCommandRecordDrawIndexedPrimitiveUP draw{};
+  draw.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+  draw.header.size = static_cast<std::uint32_t>(
+      sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) + indexBytes + vertexBytes);
+  draw.packet.state.primitiveType = 4u;
+  draw.packet.minVertex = 0u;
+  draw.packet.numVertices = 3u;
+  draw.packet.primitiveCount = 1u;
+  draw.packet.indexFormat = 101u;
+  draw.packet.stride = 16u;
+  draw.packet.indexDataOffset =
+      static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawIndexedPrimitiveUP));
+  draw.packet.indexDataSize = indexBytes;
+  draw.packet.vertexDataOffset = draw.packet.indexDataOffset + indexBytes;
+  draw.packet.vertexDataSize = vertexBytes;
+  return draw;
+}
+
+D9CCommandRecordSetConst makeSetConstRecord(
+    std::uint32_t type,
+    std::uint32_t count,
+    std::uint32_t elementSize) {
+  D9CCommandRecordSetConst setConst{};
+  setConst.header.type = type;
+  setConst.header.size = static_cast<std::uint32_t>(
+      sizeof(D9CCommandRecordSetConst) +
+      static_cast<std::uint64_t>(count) * elementSize);
+  setConst.start = 2u;
+  setConst.count = count;
+  return setConst;
+}
+
+D9CCommandRecordClear makeClearRecord(std::uint32_t rectCount = 0u) {
+  D9CCommandRecordClear clear{};
+  clear.header.type = D9C_COMMAND_RECORD_CLEAR;
+  clear.header.size = static_cast<std::uint32_t>(
+      sizeof(D9CCommandRecordClear) + sizeof(D9CRect) * rectCount);
+  clear.flags = 1u;
+  clear.colorARGB = 0xff00ff00u;
+  clear.z = 1.0f;
+  clear.rectCount = rectCount;
+  clear.rectOffset = sizeof(D9CCommandRecordClear);
+  return clear;
+}
+
+D9CCommandRecordStretchRect makeStretchRectRecord() {
+  D9CCommandRecordStretchRect stretch{};
+  stretch.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
+  stretch.header.size = sizeof(stretch);
+  stretch.srcWire = 0x4000u;
+  stretch.dstWire = 0x4008u;
+  stretch.hasSrcRect = 1u;
+  stretch.hasDstRect = 1u;
+  stretch.filter = 1u;
+  stretch.srcRect = D9CRect{0, 0, 4, 4};
+  stretch.dstRect = D9CRect{1, 1, 5, 5};
+  return stretch;
+}
+
+D9CCommandRecordColorFill makeColorFillRecord() {
+  D9CCommandRecordColorFill color{};
+  color.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
+  color.header.size = sizeof(color);
+  color.surfaceWire = 0x4100u;
+  color.colorARGB = 0xff0000ffu;
+  color.hasRect = 1u;
+  color.rect = D9CRect{0, 0, 8, 8};
+  return color;
+}
+
+D9CCommandRecordUpdateTexture makeUpdateTextureRecord() {
+  D9CCommandRecordUpdateTexture update{};
+  update.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
+  update.header.size = sizeof(update);
+  update.srcWire = 0x5000u;
+  update.dstWire = 0x5008u;
+  return update;
+}
+
+D9CCommandRecordUpdateSurface makeUpdateSurfaceRecord() {
+  D9CCommandRecordUpdateSurface update{};
+  update.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
+  update.header.size = sizeof(update);
+  update.srcWire = 0x5100u;
+  update.dstWire = 0x5108u;
+  update.hasSrcRect = 1u;
+  update.hasDstPoint = 1u;
+  update.srcRect = D9CRect{0, 0, 16, 16};
+  update.dstPoint = D9CRect{2, 3, 2, 3};
+  return update;
+}
+
+D9CCommandRecordQueryIssue makeQueryIssueRecord() {
+  D9CCommandRecordQueryIssue query{};
+  query.header.type = D9C_COMMAND_RECORD_QUERY_ISSUE;
+  query.header.size = sizeof(query);
+  query.queryWire = 0x5200u;
+  query.flags = 1u;
+  return query;
+}
+
+D9CCommandRecordReadback makeReadbackRecord() {
+  D9CCommandRecordReadback readback{};
+  readback.header.type = D9C_COMMAND_RECORD_READBACK;
+  readback.header.size = sizeof(readback);
+  readback.srcWire = 0x6000u;
+  readback.dstWire = 0x6008u;
+  return readback;
+}
+
+D9CCommandRecordApplyState makeApplyStateRecord() {
+  D9CCommandRecordApplyState apply{};
+  apply.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+  apply.header.size = sizeof(apply);
+  apply.packet.renderStateCount = 1u;
+  apply.packet.renderStates[0].state = 7u;
+  apply.packet.renderStates[0].value = 9u;
+  return apply;
+}
+
 D9CWireHandle wireHandle(std::uint64_t value) {
   return D9CWireHandle{
       .lo = static_cast<std::uint32_t>(value),
@@ -205,6 +362,213 @@ void checkStatus(const std::vector<std::uint8_t>& bytes,
   checkEq(static_cast<int>(validation.status), static_cast<int>(expected), message);
 }
 
+template <typename T>
+std::vector<std::uint8_t> declaredRecordBytes(const T& record) {
+  return recordBytes(record, record.header.size);
+}
+
+void checkValidRecordBytes(const std::vector<std::uint8_t>& bytes,
+                           std::uint32_t expectedType,
+                           std::uint32_t expectedMinimumSize,
+                           std::uint64_t expectedSize,
+                           std::string_view message) {
+  const auto validation = validateCommandRecord(
+      bytes.empty() ? nullptr : bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()));
+  check(validation.valid(), message);
+  checkEq(validation.header.type, expectedType, std::string(message) + " type");
+  checkEq(validation.minimumSize, expectedMinimumSize,
+          std::string(message) + " minimum size");
+  checkEq(validation.expectedSize, expectedSize,
+          std::string(message) + " expected size");
+}
+
+template <typename T>
+void checkExactRecordSizeMatrix(const T& validRecord,
+                                std::string_view name) {
+  checkValidRecordBytes(
+      recordBytes(validRecord),
+      validRecord.header.type,
+      static_cast<std::uint32_t>(sizeof(T)),
+      sizeof(T),
+      std::string(name) + " exact record validates");
+
+  auto tooSmall = validRecord;
+  tooSmall.header.size = static_cast<std::uint32_t>(sizeof(T) - 1u);
+  checkStatus(recordBytes(tooSmall, tooSmall.header.size),
+              D9CCommandRecordValidationStatus::SizeTooSmall,
+              std::string(name) + " rejects undersized record");
+
+  auto trailing = validRecord;
+  trailing.header.size = static_cast<std::uint32_t>(sizeof(T) + 4u);
+  checkStatus(recordBytes(trailing, trailing.header.size),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              std::string(name) + " rejects trailing bytes");
+
+  auto truncated = validRecord;
+  truncated.header.size = static_cast<std::uint32_t>(sizeof(T) + 4u);
+  checkStatus(recordBytes(truncated, sizeof(T)),
+              D9CCommandRecordValidationStatus::TruncatedRecord,
+              std::string(name) + " rejects unavailable declared bytes");
+}
+
+void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
+                           std::uint32_t type,
+                           std::string_view name) {
+  std::vector<D9CCommandChunkWireHandleEntry> handles{
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, 0x7000u),
+  };
+  std::vector<D9CCommandChunkWireRecordHeader> records{
+      wireRecordHeader(type, 0u, static_cast<std::uint32_t>(payload.size()),
+                       0u, 1u),
+  };
+
+  auto wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      handles.data(), static_cast<std::uint32_t>(handles.size()));
+  auto validation = validateImportedWireChunk(wire);
+  check(validation.valid(), std::string(name) + " validates through wire view");
+  checkEq(validation.parsedRecordCount, 1u,
+          std::string(name) + " wire validation parses one record");
+
+  records[0] = wireRecordHeader(type, static_cast<std::uint32_t>(payload.size()),
+                                1u, 0u, 1u);
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      handles.data(), static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordRange),
+          std::string(name) + " rejects payload range past arena");
+
+  auto oversizedPayload = payload;
+  oversizedPayload.push_back(0u);
+  records[0] = wireRecordHeader(type, 0u,
+                                static_cast<std::uint32_t>(oversizedPayload.size()),
+                                0u, 1u);
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      oversizedPayload.data(), static_cast<std::uint32_t>(oversizedPayload.size()),
+      handles.data(), static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecord),
+          std::string(name) + " rejects payload size larger than record size");
+  checkEq(static_cast<int>(validation.failedRecord.validation.status),
+          static_cast<int>(D9CCommandRecordValidationStatus::SizeMismatch),
+          std::string(name) + " reports record size mismatch");
+
+  records[0] = wireRecordHeader(D9C_COMMAND_RECORD_PRESENT, 0u,
+                                static_cast<std::uint32_t>(payload.size()),
+                                0u, 1u);
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      handles.data(), static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecord),
+          std::string(name) + " rejects wire type/payload type mismatch");
+  checkEq(validation.failedRecord.header.type, type,
+          std::string(name) + " mismatch preserves decoded payload type");
+
+  records[0] = wireRecordHeader(type, 0u,
+                                static_cast<std::uint32_t>(payload.size()),
+                                0u, 1u);
+  records[0].reserved0 = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      handles.data(), static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordHeader),
+          std::string(name) + " rejects nonzero wire record reserved fields");
+
+  records[0].reserved0 = 0u;
+  records[0].flags = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      handles.data(), static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordHeader),
+          std::string(name) + " rejects unsupported wire record flags");
+
+  records[0] = wireRecordHeader(type, 0u,
+                                static_cast<std::uint32_t>(payload.size()),
+                                1u, 1u);
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      handles.data(), static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordRange),
+          std::string(name) + " rejects handle range past table");
+
+  records[0] = wireRecordHeader(type, 0u,
+                                static_cast<std::uint32_t>(payload.size()),
+                                0u, 1u);
+  auto badHandles = handles;
+  badHandles[0].kind = D9C_CHUNK_HANDLE_KIND_VERTEX_DECL + 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
+          std::string(name) + " rejects invalid wire handle kind");
+
+  badHandles = handles;
+  badHandles[0].reserved1 = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
+          std::string(name) + " rejects wire handle reserved fields");
+
+  badHandles = handles;
+  badHandles[0].generation = 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
+          std::string(name) + " rejects wire handle generations");
+}
+
+void checkWireAcceptsRecordBytes(const std::vector<std::uint8_t>& payload,
+                                 std::uint32_t type,
+                                 std::string_view name) {
+  std::vector<D9CCommandChunkWireRecordHeader> records{
+      wireRecordHeader(type, 0u, static_cast<std::uint32_t>(payload.size())),
+  };
+  const auto wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()), nullptr, 0u);
+  const auto validation = validateImportedWireChunk(wire);
+  check(validation.valid(), std::string(name) + " validates as DOD wire record");
+  checkEq(validation.parsedRecordCount, 1u,
+          std::string(name) + " wire parse count");
+
+  const auto record = nextImportedRecord(wire, 0u);
+  check(record.has_value(), std::string(name) + " imports from wire view");
+  check(record->valid(), std::string(name) + " imported record validates");
+  checkEq(record->header.type, type, std::string(name) + " imported type");
+  checkEq(record->header.size, static_cast<std::uint32_t>(payload.size()),
+          std::string(name) + " imported size");
+}
+
 void testFixedRecordValidation() {
   D9CCommandRecordPresent present{};
   present.header.type = D9C_COMMAND_RECORD_PRESENT;
@@ -275,6 +639,190 @@ void testSetConstTailValidation() {
   checkStatus(recordBytes(setConst, setConst.header.size),
               D9CCommandRecordValidationStatus::SizeMismatch,
               "set const rejects truncated logical tail");
+}
+
+void testAllCommandIdsValidateWithExpectedRecordShapes() {
+  const auto draw = makeDrawPrimitiveRecord(0u, 1u);
+  checkValidRecordBytes(recordBytes(draw), D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                        sizeof(draw), sizeof(draw),
+                        "DRAW_PRIMITIVE record");
+
+  const auto indexed = makeDrawIndexedPrimitiveRecord(0u, 1u);
+  checkValidRecordBytes(recordBytes(indexed),
+                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+                        sizeof(indexed), sizeof(indexed),
+                        "DRAW_INDEXED_PRIMITIVE record");
+
+  const auto drawUp = makeDrawPrimitiveUPRecord(64u);
+  checkValidRecordBytes(declaredRecordBytes(drawUp),
+                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+                        sizeof(D9CCommandRecordDrawPrimitiveUP),
+                        drawUp.header.size,
+                        "DRAW_PRIMITIVE_UP record");
+
+  const auto indexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  checkValidRecordBytes(declaredRecordBytes(indexedUp),
+                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+                        sizeof(D9CCommandRecordDrawIndexedPrimitiveUP),
+                        indexedUp.header.size,
+                        "DRAW_INDEXED_PRIMITIVE_UP record");
+
+  const auto vsFloat = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_VS_CONST_F, 2u, sizeof(float) * 4u);
+  checkValidRecordBytes(declaredRecordBytes(vsFloat),
+                        D9C_COMMAND_RECORD_SET_VS_CONST_F,
+                        sizeof(D9CCommandRecordSetConst),
+                        vsFloat.header.size,
+                        "SET_VS_CONST_F record");
+
+  const auto vsInt = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_VS_CONST_I, 2u, sizeof(std::int32_t) * 4u);
+  checkValidRecordBytes(declaredRecordBytes(vsInt),
+                        D9C_COMMAND_RECORD_SET_VS_CONST_I,
+                        sizeof(D9CCommandRecordSetConst),
+                        vsInt.header.size,
+                        "SET_VS_CONST_I record");
+
+  const auto vsBool = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_VS_CONST_B, 3u, sizeof(std::uint32_t));
+  checkValidRecordBytes(declaredRecordBytes(vsBool),
+                        D9C_COMMAND_RECORD_SET_VS_CONST_B,
+                        sizeof(D9CCommandRecordSetConst),
+                        vsBool.header.size,
+                        "SET_VS_CONST_B record");
+
+  const auto psFloat = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_PS_CONST_F, 2u, sizeof(float) * 4u);
+  checkValidRecordBytes(declaredRecordBytes(psFloat),
+                        D9C_COMMAND_RECORD_SET_PS_CONST_F,
+                        sizeof(D9CCommandRecordSetConst),
+                        psFloat.header.size,
+                        "SET_PS_CONST_F record");
+
+  const auto psInt = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_PS_CONST_I, 2u, sizeof(std::int32_t) * 4u);
+  checkValidRecordBytes(declaredRecordBytes(psInt),
+                        D9C_COMMAND_RECORD_SET_PS_CONST_I,
+                        sizeof(D9CCommandRecordSetConst),
+                        psInt.header.size,
+                        "SET_PS_CONST_I record");
+
+  const auto psBool = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_PS_CONST_B, 3u, sizeof(std::uint32_t));
+  checkValidRecordBytes(declaredRecordBytes(psBool),
+                        D9C_COMMAND_RECORD_SET_PS_CONST_B,
+                        sizeof(D9CCommandRecordSetConst),
+                        psBool.header.size,
+                        "SET_PS_CONST_B record");
+
+  const auto clear = makeClearRecord(2u);
+  checkValidRecordBytes(declaredRecordBytes(clear), D9C_COMMAND_RECORD_CLEAR,
+                        sizeof(D9CCommandRecordClear), clear.header.size,
+                        "CLEAR record");
+
+  const auto present = makePresentRecord();
+  checkValidRecordBytes(recordBytes(present), D9C_COMMAND_RECORD_PRESENT,
+                        sizeof(present), sizeof(present),
+                        "PRESENT record");
+
+  const auto stretch = makeStretchRectRecord();
+  checkValidRecordBytes(recordBytes(stretch), D9C_COMMAND_RECORD_STRETCH_RECT,
+                        sizeof(stretch), sizeof(stretch),
+                        "STRETCH_RECT record");
+
+  const auto color = makeColorFillRecord();
+  checkValidRecordBytes(recordBytes(color), D9C_COMMAND_RECORD_COLOR_FILL,
+                        sizeof(color), sizeof(color),
+                        "COLOR_FILL record");
+
+  const auto updateTexture = makeUpdateTextureRecord();
+  checkValidRecordBytes(recordBytes(updateTexture),
+                        D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+                        sizeof(updateTexture), sizeof(updateTexture),
+                        "UPDATE_TEXTURE record");
+
+  const auto updateSurface = makeUpdateSurfaceRecord();
+  checkValidRecordBytes(recordBytes(updateSurface),
+                        D9C_COMMAND_RECORD_UPDATE_SURFACE,
+                        sizeof(updateSurface), sizeof(updateSurface),
+                        "UPDATE_SURFACE record");
+
+  const auto query = makeQueryIssueRecord();
+  checkValidRecordBytes(recordBytes(query), D9C_COMMAND_RECORD_QUERY_ISSUE,
+                        sizeof(query), sizeof(query),
+                        "QUERY_ISSUE record");
+
+  const auto readback = makeReadbackRecord();
+  checkValidRecordBytes(recordBytes(readback), D9C_COMMAND_RECORD_READBACK,
+                        sizeof(readback), sizeof(readback),
+                        "READBACK record");
+
+  const auto apply = makeApplyStateRecord();
+  checkValidRecordBytes(recordBytes(apply), D9C_COMMAND_RECORD_APPLY_STATE,
+                        sizeof(apply), sizeof(apply),
+                        "APPLY_STATE record");
+}
+
+void testDrawUpValidationMatrix() {
+  auto drawUp = makeDrawPrimitiveUPRecord(64u);
+  checkValidRecordBytes(declaredRecordBytes(drawUp),
+                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+                        sizeof(D9CCommandRecordDrawPrimitiveUP),
+                        drawUp.header.size,
+                        "draw primitive UP with vertex tail");
+
+  drawUp = makeDrawPrimitiveUPRecord(0u);
+  checkValidRecordBytes(recordBytes(drawUp),
+                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+                        sizeof(D9CCommandRecordDrawPrimitiveUP),
+                        sizeof(D9CCommandRecordDrawPrimitiveUP),
+                        "draw primitive UP minimum record");
+
+  auto tooSmallDrawUp = drawUp;
+  tooSmallDrawUp.header.size =
+      static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawPrimitiveUP) - 1u);
+  checkStatus(recordBytes(tooSmallDrawUp, tooSmallDrawUp.header.size),
+              D9CCommandRecordValidationStatus::SizeTooSmall,
+              "draw primitive UP rejects undersized fixed header");
+
+  auto truncatedDrawUp = makeDrawPrimitiveUPRecord(64u);
+  checkStatus(recordBytes(truncatedDrawUp, truncatedDrawUp.header.size - 1u),
+              D9CCommandRecordValidationStatus::TruncatedRecord,
+              "draw primitive UP rejects unavailable declared tail");
+
+  auto indexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  checkValidRecordBytes(declaredRecordBytes(indexedUp),
+                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+                        sizeof(D9CCommandRecordDrawIndexedPrimitiveUP),
+                        indexedUp.header.size,
+                        "draw indexed primitive UP with index and vertex tails");
+
+  indexedUp = makeDrawIndexedPrimitiveUPRecord(0u, 0u);
+  checkValidRecordBytes(recordBytes(indexedUp),
+                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+                        sizeof(D9CCommandRecordDrawIndexedPrimitiveUP),
+                        sizeof(D9CCommandRecordDrawIndexedPrimitiveUP),
+                        "draw indexed primitive UP minimum record");
+
+  auto tooSmallIndexedUp = indexedUp;
+  tooSmallIndexedUp.header.size = static_cast<std::uint32_t>(
+      sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) - 1u);
+  checkStatus(recordBytes(tooSmallIndexedUp, tooSmallIndexedUp.header.size),
+              D9CCommandRecordValidationStatus::SizeTooSmall,
+              "draw indexed primitive UP rejects undersized fixed header");
+
+  auto truncatedIndexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  checkStatus(recordBytes(truncatedIndexedUp, truncatedIndexedUp.header.size - 1u),
+              D9CCommandRecordValidationStatus::TruncatedRecord,
+              "draw indexed primitive UP rejects unavailable declared tail");
+}
+
+void testSurfaceQueryRecordValidationMatrix() {
+  checkExactRecordSizeMatrix(makeQueryIssueRecord(), "QUERY_ISSUE");
+  checkExactRecordSizeMatrix(makeColorFillRecord(), "COLOR_FILL");
+  checkExactRecordSizeMatrix(makeUpdateSurfaceRecord(), "UPDATE_SURFACE");
+  checkExactRecordSizeMatrix(makeUpdateTextureRecord(), "UPDATE_TEXTURE");
+  checkExactRecordSizeMatrix(makeStretchRectRecord(), "STRETCH_RECT");
 }
 
 void testInvalidTruncatedAndUnknownRecords() {
@@ -651,6 +1199,138 @@ void testImportedWireIterationBuildsLegacyRecordViews() {
 
   const auto end = nextImportedRecord(wire, second->nextIndex());
   check(!end.has_value(), "wire imported record iteration stops at record count");
+}
+
+void testImportedWireAcceptsAllCommandIds() {
+  const auto draw = makeDrawPrimitiveRecord(0u, 1u);
+  checkWireAcceptsRecordBytes(recordBytes(draw),
+                              D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                              "DRAW_PRIMITIVE");
+
+  const auto indexed = makeDrawIndexedPrimitiveRecord(0u, 1u);
+  checkWireAcceptsRecordBytes(recordBytes(indexed),
+                              D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+                              "DRAW_INDEXED_PRIMITIVE");
+
+  const auto drawUp = makeDrawPrimitiveUPRecord(64u);
+  checkWireAcceptsRecordBytes(declaredRecordBytes(drawUp),
+                              D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+                              "DRAW_PRIMITIVE_UP");
+
+  const auto indexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  checkWireAcceptsRecordBytes(declaredRecordBytes(indexedUp),
+                              D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+                              "DRAW_INDEXED_PRIMITIVE_UP");
+
+  const auto vsFloat = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_VS_CONST_F, 2u, sizeof(float) * 4u);
+  checkWireAcceptsRecordBytes(declaredRecordBytes(vsFloat),
+                              D9C_COMMAND_RECORD_SET_VS_CONST_F,
+                              "SET_VS_CONST_F");
+
+  const auto vsInt = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_VS_CONST_I, 2u, sizeof(std::int32_t) * 4u);
+  checkWireAcceptsRecordBytes(declaredRecordBytes(vsInt),
+                              D9C_COMMAND_RECORD_SET_VS_CONST_I,
+                              "SET_VS_CONST_I");
+
+  const auto vsBool = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_VS_CONST_B, 3u, sizeof(std::uint32_t));
+  checkWireAcceptsRecordBytes(declaredRecordBytes(vsBool),
+                              D9C_COMMAND_RECORD_SET_VS_CONST_B,
+                              "SET_VS_CONST_B");
+
+  const auto psFloat = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_PS_CONST_F, 2u, sizeof(float) * 4u);
+  checkWireAcceptsRecordBytes(declaredRecordBytes(psFloat),
+                              D9C_COMMAND_RECORD_SET_PS_CONST_F,
+                              "SET_PS_CONST_F");
+
+  const auto psInt = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_PS_CONST_I, 2u, sizeof(std::int32_t) * 4u);
+  checkWireAcceptsRecordBytes(declaredRecordBytes(psInt),
+                              D9C_COMMAND_RECORD_SET_PS_CONST_I,
+                              "SET_PS_CONST_I");
+
+  const auto psBool = makeSetConstRecord(
+      D9C_COMMAND_RECORD_SET_PS_CONST_B, 3u, sizeof(std::uint32_t));
+  checkWireAcceptsRecordBytes(declaredRecordBytes(psBool),
+                              D9C_COMMAND_RECORD_SET_PS_CONST_B,
+                              "SET_PS_CONST_B");
+
+  const auto clear = makeClearRecord(2u);
+  checkWireAcceptsRecordBytes(declaredRecordBytes(clear), D9C_COMMAND_RECORD_CLEAR,
+                              "CLEAR");
+
+  const auto present = makePresentRecord();
+  checkWireAcceptsRecordBytes(recordBytes(present), D9C_COMMAND_RECORD_PRESENT,
+                              "PRESENT");
+
+  const auto stretch = makeStretchRectRecord();
+  checkWireAcceptsRecordBytes(recordBytes(stretch),
+                              D9C_COMMAND_RECORD_STRETCH_RECT,
+                              "STRETCH_RECT");
+
+  const auto color = makeColorFillRecord();
+  checkWireAcceptsRecordBytes(recordBytes(color), D9C_COMMAND_RECORD_COLOR_FILL,
+                              "COLOR_FILL");
+
+  const auto updateTexture = makeUpdateTextureRecord();
+  checkWireAcceptsRecordBytes(recordBytes(updateTexture),
+                              D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+                              "UPDATE_TEXTURE");
+
+  const auto updateSurface = makeUpdateSurfaceRecord();
+  checkWireAcceptsRecordBytes(recordBytes(updateSurface),
+                              D9C_COMMAND_RECORD_UPDATE_SURFACE,
+                              "UPDATE_SURFACE");
+
+  const auto query = makeQueryIssueRecord();
+  checkWireAcceptsRecordBytes(recordBytes(query), D9C_COMMAND_RECORD_QUERY_ISSUE,
+                              "QUERY_ISSUE");
+
+  const auto readback = makeReadbackRecord();
+  checkWireAcceptsRecordBytes(recordBytes(readback), D9C_COMMAND_RECORD_READBACK,
+                              "READBACK");
+
+  const auto apply = makeApplyStateRecord();
+  checkWireAcceptsRecordBytes(recordBytes(apply), D9C_COMMAND_RECORD_APPLY_STATE,
+                              "APPLY_STATE");
+}
+
+void testImportedWireSpecialRecordValidationMatrix() {
+  const auto drawUp = makeDrawPrimitiveUPRecord(64u);
+  checkWireRecordMatrix(declaredRecordBytes(drawUp),
+                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+                        "DRAW_PRIMITIVE_UP");
+
+  const auto indexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  checkWireRecordMatrix(declaredRecordBytes(indexedUp),
+                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+                        "DRAW_INDEXED_PRIMITIVE_UP");
+
+  const auto query = makeQueryIssueRecord();
+  checkWireRecordMatrix(recordBytes(query), D9C_COMMAND_RECORD_QUERY_ISSUE,
+                        "QUERY_ISSUE");
+
+  const auto color = makeColorFillRecord();
+  checkWireRecordMatrix(recordBytes(color), D9C_COMMAND_RECORD_COLOR_FILL,
+                        "COLOR_FILL");
+
+  const auto updateSurface = makeUpdateSurfaceRecord();
+  checkWireRecordMatrix(recordBytes(updateSurface),
+                        D9C_COMMAND_RECORD_UPDATE_SURFACE,
+                        "UPDATE_SURFACE");
+
+  const auto updateTexture = makeUpdateTextureRecord();
+  checkWireRecordMatrix(recordBytes(updateTexture),
+                        D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+                        "UPDATE_TEXTURE");
+
+  const auto stretch = makeStretchRectRecord();
+  checkWireRecordMatrix(recordBytes(stretch),
+                        D9C_COMMAND_RECORD_STRETCH_RECT,
+                        "STRETCH_RECT");
 }
 
 void testImportedWireDrawRunScansRecordTableOrder() {
@@ -1241,6 +1921,9 @@ int main() {
     testFixedRecordValidation();
     testClearRectTailValidation();
     testSetConstTailValidation();
+    testAllCommandIdsValidateWithExpectedRecordShapes();
+    testDrawUpValidationMatrix();
+    testSurfaceQueryRecordValidationMatrix();
     testInvalidTruncatedAndUnknownRecords();
     testImportedMultiRecordIteration();
     testCommandChunkWireBlobRejectsLegacyRawRecordStream();
@@ -1248,6 +1931,8 @@ int main() {
     testImportedWireChunkEnforcesHandleTableAndRanges();
     testImportedWireRecordHandleRangesSelectSubsets();
     testImportedWireIterationBuildsLegacyRecordViews();
+    testImportedWireAcceptsAllCommandIds();
+    testImportedWireSpecialRecordValidationMatrix();
     testImportedWireDrawRunScansRecordTableOrder();
     testImportedWireBlobViewUsesHeaderTablesAndArena();
     testImportedRecordCountMismatch();

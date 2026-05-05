@@ -412,6 +412,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetSurfaceLevel(UINT level,
                                                IDirect3DSurface9** ppS) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
         dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u", this, level);
         D9CSurface* s = dxmt9c_texture_get_surface_level(t_, level);
         if (!s) {
@@ -557,6 +558,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetCubeMapSurface(D3DCUBEMAP_FACES face, UINT level,
                                                  IDirect3DSurface9** ppS) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
         dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u",
                             this, static_cast<unsigned>(face), level);
         UINT idx = 0;
@@ -771,8 +773,19 @@ public:
         if (FAILED(flushHr)) return;
         dxmt9c_texture_generate_mip_sublevels(t_);
     }
-    HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT, D3DVOLUME_DESC* pD) noexcept override {
-        if (pD) memset(pD, 0, sizeof(*pD)); return S_OK;
+    HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level, D3DVOLUME_DESC* pD) noexcept override {
+        if (!pD) return D3DERR_INVALIDCALL;
+        D9CSurfaceDesc sd{};
+        const HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
+        if (FAILED(hr)) return hr;
+        pD->Format = static_cast<D3DFORMAT>(sd.format);
+        pD->Type = D3DRTYPE_VOLUME;
+        pD->Usage = sd.usage;
+        pD->Pool = static_cast<D3DPOOL>(sd.pool);
+        pD->Width = sd.width;
+        pD->Height = sd.height;
+        pD->Depth = 1;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVolumeLevel(UINT level, IDirect3DVolume9** ppVolume) noexcept override {
         if (!ppVolume) return D3DERR_INVALIDCALL;
@@ -1320,6 +1333,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT idx, D3DBACKBUFFER_TYPE,
                                              IDirect3DSurface9** ppS) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
         dxmt9DeviceDebugLog("swapchain_get_back_buffer sc=%p idx=%u", this, idx);
         D9CSurface* s = dxmt9c_swapchain_get_back_buffer(sc_, idx, 0);
         if (!s) return D3DERR_INVALIDCALL;
@@ -1495,11 +1509,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         kPeTransformTextureBaseSlot + kPeTransformTextureSlots;
     static constexpr uint32_t kPeTransformSlots =
         kPeTransformWorldBaseSlot + kPeTransformWorldSlots;
-
-    struct RecordHandleRange {
-        std::uint32_t first = 0;
-        std::uint32_t count = 0;
-    };
 
     using WireHandleEntryList = std::vector<D9CCommandChunkWireHandleEntry>;
 
@@ -1910,7 +1919,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // and cleared with the chunk.
     std::unordered_set<uint64_t> chunkHandlesByKind_[5]{};
     std::vector<std::uint8_t> pendingCommandWireBlob_{};
-    std::vector<RecordHandleRange> recordHandleRangesScratch_{};
     WireHandleEntryList chunkWireHandleScratch_{};
     WireHandleEntryList recordWireHandleScratch_{};
 
@@ -2544,8 +2552,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // duplicates across records are allowed so each header can point at
         // exactly the subset it needs without falling back to the full chunk
         // table.
-        recordHandleRangesScratch_.clear();
-        recordHandleRangesScratch_.reserve(pendingCommandWireRecords_.size());
         chunkWireHandleScratch_.clear();
         std::uint64_t wireHandleCount64 = 0;
         for (auto& record : pendingCommandWireRecords_) {
@@ -2561,10 +2567,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 static_cast<std::uint32_t>(wireHandleCount64);
             record.handleCount =
                 static_cast<std::uint32_t>(recordWireHandleScratch_.size());
-            recordHandleRangesScratch_.push_back(RecordHandleRange{
-                .first = record.firstHandle,
-                .count = record.handleCount,
-            });
             chunkWireHandleScratch_.insert(
                 chunkWireHandleScratch_.end(),
                 recordWireHandleScratch_.begin(),
@@ -2610,10 +2612,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
              recordIndex < pendingCommandWireRecords_.size();
              ++recordIndex) {
             auto& wireRecord = pendingCommandWireRecords_[recordIndex];
-            const auto& recordHandles = recordHandleRangesScratch_[recordIndex];
-            if (wireRecord.firstHandle != nextHandle ||
-                wireRecord.firstHandle != recordHandles.first ||
-                wireRecord.handleCount != recordHandles.count) {
+            if (wireRecord.firstHandle != nextHandle) {
                 return D3DERR_INVALIDCALL;
             }
             nextHandle += wireRecord.handleCount;
@@ -2676,7 +2675,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             for (auto& set : chunkHandlesByKind_) {
                 set.clear();
             }
-            recordHandleRangesScratch_.clear();
             chunkWireHandleScratch_.clear();
             recordWireHandleScratch_.clear();
         }
@@ -3303,6 +3301,7 @@ public:
     HRESULT STDMETHODCALLTYPE CreateAdditionalSwapChain(
             D3DPRESENT_PARAMETERS* pPP, IDirect3DSwapChain9** ppSC) noexcept override {
         if (!pPP || !ppSC) return D3DERR_INVALIDCALL;
+        *ppSC = nullptr;
         D9CPresentParams cpp{};
         // minimal fill
         cpp.backBufferWidth  = pPP->BackBufferWidth;
@@ -3322,6 +3321,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetSwapChain(UINT index,
                                             IDirect3DSwapChain9** ppSC) noexcept override {
         if (!ppSC) return D3DERR_INVALIDCALL;
+        *ppSC = nullptr;
         D9CSwapChain* sc = dxmt9c_device_get_swap_chain(dev_, index);
         if (!sc) return D3DERR_INVALIDCALL;
         *ppSC = new D3D9SwapChainImpl(sc, this, this, extended_);
@@ -3399,6 +3399,7 @@ public:
                                              D3DBACKBUFFER_TYPE,
                                              IDirect3DSurface9** ppS) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        *ppS = nullptr;
         dxmt9DeviceDebugLog("device_get_back_buffer device=%p sc=%u idx=%u", this, sc, idx);
         D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, sc);
         if (!chain) return D3DERR_INVALIDCALL;

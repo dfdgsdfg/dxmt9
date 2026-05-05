@@ -57,6 +57,14 @@ void checkPodWireShape(std::string_view name) {
   checkStandardLayout<T>(name);
 }
 
+template <typename T>
+void checkSizeAlign(std::string_view name,
+                    std::size_t expectedSize,
+                    std::size_t expectedAlign) {
+  checkEq(sizeof(T), expectedSize, std::string(name) + " byte size");
+  checkEq(alignof(T), expectedAlign, std::string(name) + " alignment");
+}
+
 std::size_t expectedSetConstBytes(std::size_t elemSize, std::uint32_t count) {
   return sizeof(D9CCommandRecordSetConst) + elemSize * count;
 }
@@ -66,66 +74,350 @@ std::size_t expectedClearBytes(std::uint32_t rectCount) {
 }
 
 void testWireRecordsStayPod() {
-  checkTriviallyCopyable<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket");
-  checkTriviallyCopyable<D9CDrawIndexedPrimitivePacket>("D9CDrawIndexedPrimitivePacket");
+  checkPodWireShape<D9CWireHandle>("D9CWireHandle");
+  checkPodWireShape<D9CDrawPacketRenderState>("D9CDrawPacketRenderState");
+  checkPodWireShape<D9CDrawPacketTextureStageState>("D9CDrawPacketTextureStageState");
+  checkPodWireShape<D9CDrawPacketSamplerState>("D9CDrawPacketSamplerState");
+  checkPodWireShape<D9CDrawPacketTransform>("D9CDrawPacketTransform");
+  checkPodWireShape<D9CDrawPacketStreamSource>("D9CDrawPacketStreamSource");
+  checkPodWireShape<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket");
+  checkPodWireShape<D9CDrawIndexedPrimitivePacket>("D9CDrawIndexedPrimitivePacket");
+  checkPodWireShape<D9CDrawPrimitiveUPPacket>("D9CDrawPrimitiveUPPacket");
+  checkPodWireShape<D9CDrawIndexedPrimitiveUPPacket>("D9CDrawIndexedPrimitiveUPPacket");
   checkPodWireShape<D9CCommandChunkWireHeader>("D9CCommandChunkWireHeader");
   checkPodWireShape<D9CCommandChunkWireRecordHeader>("D9CCommandChunkWireRecordHeader");
   checkPodWireShape<D9CCommandChunkWireHandleEntry>("D9CCommandChunkWireHandleEntry");
   checkPodWireShape<D9CCommandChunkWirePayloadSlice>("D9CCommandChunkWirePayloadSlice");
   checkPodWireShape<D9CCommandChunkWireHandleRange>("D9CCommandChunkWireHandleRange");
   checkPodWireShape<D9CCommandChunkWireRecordRanges>("D9CCommandChunkWireRecordRanges");
-  checkTriviallyCopyable<D9CCommandRecordHeader>("D9CCommandRecordHeader");
-  checkTriviallyCopyable<D9CCommandRecordDrawPrimitive>("D9CCommandRecordDrawPrimitive");
-  checkTriviallyCopyable<D9CCommandRecordDrawIndexedPrimitive>("D9CCommandRecordDrawIndexedPrimitive");
-  checkTriviallyCopyable<D9CCommandRecordSetConst>("D9CCommandRecordSetConst");
-  checkTriviallyCopyable<D9CCommandRecordClear>("D9CCommandRecordClear");
-  checkTriviallyCopyable<D9CCommandRecordPresent>("D9CCommandRecordPresent");
-  checkTriviallyCopyable<D9CCommandRecordApplyState>("D9CCommandRecordApplyState");
-  checkTriviallyCopyable<D9CCommandChunk>("D9CCommandChunk");
-  checkTriviallyCopyable<D9CChunkHandleEntry>("D9CChunkHandleEntry");
+  checkPodWireShape<D9CCommandRecordHeader>("D9CCommandRecordHeader");
+  checkPodWireShape<D9CCommandRecordDrawPrimitive>("D9CCommandRecordDrawPrimitive");
+  checkPodWireShape<D9CCommandRecordDrawIndexedPrimitive>("D9CCommandRecordDrawIndexedPrimitive");
+  checkPodWireShape<D9CCommandRecordDrawPrimitiveUP>("D9CCommandRecordDrawPrimitiveUP");
+  checkPodWireShape<D9CCommandRecordDrawIndexedPrimitiveUP>("D9CCommandRecordDrawIndexedPrimitiveUP");
+  checkPodWireShape<D9CCommandRecordSetConst>("D9CCommandRecordSetConst");
+  checkPodWireShape<D9CCommandRecordClear>("D9CCommandRecordClear");
+  checkPodWireShape<D9CCommandRecordPresent>("D9CCommandRecordPresent");
+  checkPodWireShape<D9CCommandRecordStretchRect>("D9CCommandRecordStretchRect");
+  checkPodWireShape<D9CCommandRecordColorFill>("D9CCommandRecordColorFill");
+  checkPodWireShape<D9CCommandRecordUpdateTexture>("D9CCommandRecordUpdateTexture");
+  checkPodWireShape<D9CCommandRecordUpdateSurface>("D9CCommandRecordUpdateSurface");
+  checkPodWireShape<D9CCommandRecordQueryIssue>("D9CCommandRecordQueryIssue");
+  checkPodWireShape<D9CCommandRecordReadback>("D9CCommandRecordReadback");
+  checkPodWireShape<D9CCommandRecordApplyState>("D9CCommandRecordApplyState");
+  checkPodWireShape<D9CCommandChunk>("D9CCommandChunk");
+  checkPodWireShape<D9CChunkHandleEntry>("D9CChunkHandleEntry");
+}
+
+void testCommandRecordIds() {
+  checkEq(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, 1, "draw primitive command ID");
+  checkEq(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, 2,
+          "draw indexed primitive command ID");
+  checkEq(D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP, 3,
+          "draw primitive UP command ID");
+  checkEq(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP, 4,
+          "draw indexed primitive UP command ID");
+  checkEq(D9C_COMMAND_RECORD_SET_VS_CONST_F, 14, "VS const F command ID");
+  checkEq(D9C_COMMAND_RECORD_SET_VS_CONST_I, 15, "VS const I command ID");
+  checkEq(D9C_COMMAND_RECORD_SET_VS_CONST_B, 16, "VS const B command ID");
+  checkEq(D9C_COMMAND_RECORD_SET_PS_CONST_F, 17, "PS const F command ID");
+  checkEq(D9C_COMMAND_RECORD_SET_PS_CONST_I, 18, "PS const I command ID");
+  checkEq(D9C_COMMAND_RECORD_SET_PS_CONST_B, 19, "PS const B command ID");
+  checkEq(D9C_COMMAND_RECORD_CLEAR, 20, "clear command ID");
+  checkEq(D9C_COMMAND_RECORD_PRESENT, 21, "present command ID");
+  checkEq(D9C_COMMAND_RECORD_STRETCH_RECT, 22, "stretch rect command ID");
+  checkEq(D9C_COMMAND_RECORD_COLOR_FILL, 23, "color fill command ID");
+  checkEq(D9C_COMMAND_RECORD_UPDATE_TEXTURE, 24, "update texture command ID");
+  checkEq(D9C_COMMAND_RECORD_UPDATE_SURFACE, 25, "update surface command ID");
+  checkEq(D9C_COMMAND_RECORD_QUERY_ISSUE, 26, "query issue command ID");
+  checkEq(D9C_COMMAND_RECORD_READBACK, 27, "readback command ID");
+  checkEq(D9C_COMMAND_RECORD_APPLY_STATE, 28, "apply state command ID");
 }
 
 void testRecordHeaderLayout() {
   checkEq(D9C_COMMAND_CHUNK_VERSION, 1u, "command chunk ABI version");
   checkEq(D9C_COMMAND_CHUNK_WIRE_VERSION, 1u, "DOD command chunk ABI version");
+  checkSizeAlign<D9CCommandRecordHeader>("D9CCommandRecordHeader", 8u, 4u);
+  checkEq(offsetof(D9CCommandRecordHeader, type), std::size_t{0},
+          "record header type offset");
+  checkEq(offsetof(D9CCommandRecordHeader, size), std::size_t{4},
+          "record header size offset");
+
+  checkSizeAlign<D9CWireHandle>("D9CWireHandle", 8u, 4u);
+  checkEq(offsetof(D9CWireHandle, lo), std::size_t{0}, "wire handle low offset");
+  checkEq(offsetof(D9CWireHandle, hi), std::size_t{4}, "wire handle high offset");
+
   checkEq(offsetof(D9CCommandRecordDrawPrimitive, header), std::size_t{0}, "draw primitive header offset");
+  checkEq(offsetof(D9CCommandRecordDrawPrimitive, packet), std::size_t{8},
+          "draw primitive packet offset");
   checkEq(offsetof(D9CCommandRecordDrawIndexedPrimitive, header), std::size_t{0}, "draw indexed header offset");
+  checkEq(offsetof(D9CCommandRecordDrawIndexedPrimitive, packet), std::size_t{8},
+          "draw indexed packet offset");
+  checkEq(offsetof(D9CCommandRecordDrawPrimitiveUP, header), std::size_t{0},
+          "draw primitive UP header offset");
+  checkEq(offsetof(D9CCommandRecordDrawPrimitiveUP, packet), std::size_t{8},
+          "draw primitive UP packet offset");
+  checkEq(offsetof(D9CCommandRecordDrawIndexedPrimitiveUP, header), std::size_t{0},
+          "draw indexed primitive UP header offset");
+  checkEq(offsetof(D9CCommandRecordDrawIndexedPrimitiveUP, packet), std::size_t{8},
+          "draw indexed primitive UP packet offset");
   checkEq(offsetof(D9CCommandRecordClear, header), std::size_t{0}, "clear header offset");
   checkEq(offsetof(D9CCommandRecordPresent, header), std::size_t{0}, "present header offset");
+  checkEq(offsetof(D9CCommandRecordStretchRect, header), std::size_t{0},
+          "stretch rect header offset");
+  checkEq(offsetof(D9CCommandRecordColorFill, header), std::size_t{0},
+          "color fill header offset");
+  checkEq(offsetof(D9CCommandRecordUpdateTexture, header), std::size_t{0},
+          "update texture header offset");
+  checkEq(offsetof(D9CCommandRecordUpdateSurface, header), std::size_t{0},
+          "update surface header offset");
+  checkEq(offsetof(D9CCommandRecordQueryIssue, header), std::size_t{0},
+          "query issue header offset");
+  checkEq(offsetof(D9CCommandRecordReadback, header), std::size_t{0},
+          "readback header offset");
   checkEq(offsetof(D9CCommandRecordApplyState, header), std::size_t{0}, "apply state header offset");
   check(sizeof(D9CCommandRecordHeader) <= sizeof(D9CCommandRecordDrawPrimitive),
         "fixed records contain the common header");
+}
+
+void testDrawPacketLayouts() {
+  checkSizeAlign<D9CDrawPacketRenderState>("D9CDrawPacketRenderState", 8u, 4u);
+  checkSizeAlign<D9CDrawPacketTextureStageState>(
+      "D9CDrawPacketTextureStageState", 12u, 4u);
+  checkSizeAlign<D9CDrawPacketSamplerState>("D9CDrawPacketSamplerState", 12u, 4u);
+  checkSizeAlign<D9CDrawPacketTransform>("D9CDrawPacketTransform", 72u, 4u);
+  checkSizeAlign<D9CDrawPacketStreamSource>("D9CDrawPacketStreamSource", 16u, 4u);
+
+  checkSizeAlign<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket", 4776u, 4u);
+  checkEq(offsetof(D9CDrawPrimitivePacket, renderStateCount), std::size_t{0},
+          "draw packet render-state count offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, textureMask), std::size_t{516},
+          "draw packet texture mask offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, streamSourceMask), std::size_t{648},
+          "draw packet stream-source mask offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, fvfValid), std::size_t{908},
+          "draw packet FVF valid offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, vsValid), std::size_t{916},
+          "draw packet VS valid offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, psValid), std::size_t{928},
+          "draw packet PS valid offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, vdeclValid), std::size_t{940},
+          "draw packet vertex declaration valid offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, rtMask), std::size_t{952},
+          "draw packet render-target mask offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, dsValid), std::size_t{988},
+          "draw packet depth-stencil valid offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, viewportValid), std::size_t{1000},
+          "draw packet viewport valid offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, scissorValid), std::size_t{1028},
+          "draw packet scissor valid offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, tssCount), std::size_t{1048},
+          "draw packet texture-stage-state count offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, samplerStateCount), std::size_t{1820},
+          "draw packet sampler-state count offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, materialValid), std::size_t{2592},
+          "draw packet material valid offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, clipPlaneMask), std::size_t{2664},
+          "draw packet clip-plane mask offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, transformCount), std::size_t{2764},
+          "draw packet transform count offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, lightSlotMask), std::size_t{3920},
+          "draw packet light slot mask offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, primitiveType), std::size_t{4764},
+          "draw packet primitive type offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, startVertex), std::size_t{4768},
+          "draw packet start vertex offset");
+  checkEq(offsetof(D9CDrawPrimitivePacket, primitiveCount), std::size_t{4772},
+          "draw packet primitive count offset");
+
+  checkSizeAlign<D9CDrawIndexedPrimitivePacket>(
+      "D9CDrawIndexedPrimitivePacket", 4808u, 4u);
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, state), std::size_t{0},
+          "indexed draw state offset");
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, baseVertex), std::size_t{4776},
+          "indexed draw base vertex offset");
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, primitiveCount), std::size_t{4792},
+          "indexed draw primitive count offset");
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibValid), std::size_t{4796},
+          "indexed draw IB valid offset");
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibHandle), std::size_t{4800},
+          "indexed draw IB handle offset");
+
+  checkSizeAlign<D9CDrawPrimitiveUPPacket>("D9CDrawPrimitiveUPPacket", 4792u, 4u);
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, primitiveCount), std::size_t{4776},
+          "draw primitive UP count offset");
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, stride), std::size_t{4780},
+          "draw primitive UP stride offset");
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataOffset), std::size_t{4784},
+          "draw primitive UP vertex data offset field");
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataSize), std::size_t{4788},
+          "draw primitive UP vertex data size field");
+
+  checkSizeAlign<D9CDrawIndexedPrimitiveUPPacket>(
+      "D9CDrawIndexedPrimitiveUPPacket", 4812u, 4u);
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, minVertex), std::size_t{4776},
+          "indexed UP min vertex offset");
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, numVertices), std::size_t{4780},
+          "indexed UP vertex count offset");
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, primitiveCount), std::size_t{4784},
+          "indexed UP primitive count offset");
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexFormat), std::size_t{4788},
+          "indexed UP index format offset");
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexDataOffset), std::size_t{4796},
+          "indexed UP index data offset field");
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, vertexDataOffset), std::size_t{4804},
+          "indexed UP vertex data offset field");
+}
+
+void testCommandRecordLayouts() {
+  checkSizeAlign<D9CCommandRecordDrawPrimitive>(
+      "D9CCommandRecordDrawPrimitive", 4784u, 4u);
+  checkSizeAlign<D9CCommandRecordDrawIndexedPrimitive>(
+      "D9CCommandRecordDrawIndexedPrimitive", 4816u, 4u);
+  checkSizeAlign<D9CCommandRecordDrawPrimitiveUP>(
+      "D9CCommandRecordDrawPrimitiveUP", 4800u, 4u);
+  checkSizeAlign<D9CCommandRecordDrawIndexedPrimitiveUP>(
+      "D9CCommandRecordDrawIndexedPrimitiveUP", 4820u, 4u);
+  checkSizeAlign<D9CCommandRecordSetConst>("D9CCommandRecordSetConst", 16u, 4u);
+  checkSizeAlign<D9CCommandRecordClear>("D9CCommandRecordClear", 32u, 4u);
+  checkSizeAlign<D9CCommandRecordPresent>(
+      "D9CCommandRecordPresent", 64u, alignof(std::uint64_t));
+  checkSizeAlign<D9CCommandRecordStretchRect>(
+      "D9CCommandRecordStretchRect", 72u, alignof(std::uint64_t));
+  checkSizeAlign<D9CCommandRecordColorFill>(
+      "D9CCommandRecordColorFill", 40u, alignof(std::uint64_t));
+  checkSizeAlign<D9CCommandRecordUpdateTexture>(
+      "D9CCommandRecordUpdateTexture", 24u, alignof(std::uint64_t));
+  checkSizeAlign<D9CCommandRecordUpdateSurface>(
+      "D9CCommandRecordUpdateSurface", 64u, alignof(std::uint64_t));
+  checkSizeAlign<D9CCommandRecordQueryIssue>(
+      "D9CCommandRecordQueryIssue", 24u, alignof(std::uint64_t));
+  checkSizeAlign<D9CCommandRecordReadback>(
+      "D9CCommandRecordReadback", 24u, alignof(std::uint64_t));
+  checkSizeAlign<D9CCommandRecordApplyState>("D9CCommandRecordApplyState", 4784u, 4u);
+  checkSizeAlign<D9CCommandChunk>("D9CCommandChunk", 32u, 4u);
+  checkSizeAlign<D9CChunkHandleEntry>(
+      "D9CChunkHandleEntry", 16u, alignof(std::uint64_t));
+
+  checkEq(offsetof(D9CCommandRecordSetConst, start), std::size_t{8},
+          "set const start offset");
+  checkEq(offsetof(D9CCommandRecordSetConst, count), std::size_t{12},
+          "set const count offset");
+  checkEq(offsetof(D9CCommandRecordClear, flags), std::size_t{8},
+          "clear flags offset");
+  checkEq(offsetof(D9CCommandRecordClear, rectCount), std::size_t{24},
+          "clear rect count offset");
+  checkEq(offsetof(D9CCommandRecordClear, rectOffset), std::size_t{28},
+          "clear rect offset field");
+  checkEq(offsetof(D9CCommandRecordPresent, hwnd), std::size_t{8},
+          "present hwnd offset");
+  checkEq(offsetof(D9CCommandRecordPresent, src), std::size_t{32},
+          "present src rect offset");
+  checkEq(offsetof(D9CCommandRecordPresent, dst), std::size_t{48},
+          "present dst rect offset");
+  checkEq(offsetof(D9CCommandRecordStretchRect, srcWire), std::size_t{8},
+          "stretch rect source wire offset");
+  checkEq(offsetof(D9CCommandRecordStretchRect, dstWire), std::size_t{16},
+          "stretch rect destination wire offset");
+  checkEq(offsetof(D9CCommandRecordStretchRect, hasSrcRect), std::size_t{24},
+          "stretch rect source flag offset");
+  checkEq(offsetof(D9CCommandRecordStretchRect, filter), std::size_t{32},
+          "stretch rect filter offset");
+  checkEq(offsetof(D9CCommandRecordStretchRect, srcRect), std::size_t{40},
+          "stretch rect source rect offset");
+  checkEq(offsetof(D9CCommandRecordStretchRect, dstRect), std::size_t{56},
+          "stretch rect destination rect offset");
+  checkEq(offsetof(D9CCommandRecordColorFill, surfaceWire), std::size_t{8},
+          "color fill surface wire offset");
+  checkEq(offsetof(D9CCommandRecordColorFill, rect), std::size_t{24},
+          "color fill rect offset");
+  checkEq(offsetof(D9CCommandRecordUpdateTexture, srcWire), std::size_t{8},
+          "update texture source wire offset");
+  checkEq(offsetof(D9CCommandRecordUpdateTexture, dstWire), std::size_t{16},
+          "update texture destination wire offset");
+  checkEq(offsetof(D9CCommandRecordUpdateSurface, srcWire), std::size_t{8},
+          "update surface source wire offset");
+  checkEq(offsetof(D9CCommandRecordUpdateSurface, hasSrcRect), std::size_t{24},
+          "update surface source rect flag offset");
+  checkEq(offsetof(D9CCommandRecordUpdateSurface, srcRect), std::size_t{32},
+          "update surface source rect offset");
+  checkEq(offsetof(D9CCommandRecordUpdateSurface, dstPoint), std::size_t{48},
+          "update surface destination point offset");
+  checkEq(offsetof(D9CCommandRecordQueryIssue, queryWire), std::size_t{8},
+          "query issue query wire offset");
+  checkEq(offsetof(D9CCommandRecordQueryIssue, flags), std::size_t{16},
+          "query issue flags offset");
+  checkEq(offsetof(D9CCommandRecordReadback, srcWire), std::size_t{8},
+          "readback source wire offset");
+  checkEq(offsetof(D9CCommandRecordApplyState, packet), std::size_t{8},
+          "apply state packet offset");
+  checkEq(offsetof(D9CCommandChunk, records), std::size_t{12},
+          "legacy chunk record handle offset");
+  checkEq(offsetof(D9CCommandChunk, handles), std::size_t{24},
+          "legacy chunk handle-list handle offset");
 }
 
 void testDodWireChunkLayout() {
   checkEq(sizeof(D9CCommandChunkWireHeader),
           static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE),
           "DOD chunk header byte size");
+  checkEq(alignof(D9CCommandChunkWireHeader), std::size_t{4},
+          "DOD chunk header alignment");
   checkEq(sizeof(D9CCommandChunkWireRecordHeader),
           static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE),
           "DOD record header byte size");
+  checkEq(alignof(D9CCommandChunkWireRecordHeader), std::size_t{4},
+          "DOD record header alignment");
   checkEq(sizeof(D9CCommandChunkWireHandleEntry),
           static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE),
           "DOD handle entry byte size");
+  checkEq(alignof(D9CCommandChunkWireHandleEntry), alignof(std::uint64_t),
+          "DOD handle entry alignment");
   checkEq(sizeof(D9CCommandChunkWirePayloadSlice),
           static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_PAYLOAD_SLICE_SIZE),
           "DOD payload slice byte size");
+  checkEq(alignof(D9CCommandChunkWirePayloadSlice), std::size_t{4},
+          "DOD payload slice alignment");
   checkEq(sizeof(D9CCommandChunkWireHandleRange),
           static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_HANDLE_RANGE_SIZE),
           "DOD handle range byte size");
+  checkEq(alignof(D9CCommandChunkWireHandleRange), std::size_t{4},
+          "DOD handle range alignment");
   checkEq(sizeof(D9CCommandChunkWireRecordRanges),
           static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_RECORD_RANGES_SIZE),
           "DOD record ranges byte size");
+  checkEq(alignof(D9CCommandChunkWireRecordRanges), std::size_t{4},
+          "DOD record ranges alignment");
 
   checkEq(offsetof(D9CCommandChunkWireHeader, version), std::size_t{0},
           "DOD chunk header version offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, headerSize), std::size_t{4},
+          "DOD chunk header size offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, recordHeaderSize), std::size_t{8},
+          "DOD chunk record header size offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, handleEntrySize), std::size_t{12},
+          "DOD chunk handle entry size offset");
   checkEq(offsetof(D9CCommandChunkWireHeader, recordTableOffset), std::size_t{16},
           "DOD chunk header record table offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, recordCount), std::size_t{20},
+          "DOD chunk record count offset");
   checkEq(offsetof(D9CCommandChunkWireHeader, handleTableOffset), std::size_t{24},
           "DOD chunk header handle table offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, handleCount), std::size_t{28},
+          "DOD chunk handle count offset");
   checkEq(offsetof(D9CCommandChunkWireHeader, payloadArenaOffset), std::size_t{32},
           "DOD chunk header payload arena offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, payloadArenaSize), std::size_t{36},
+          "DOD chunk payload arena size offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, reserved0), std::size_t{40},
+          "DOD chunk reserved0 offset");
+  checkEq(offsetof(D9CCommandChunkWireHeader, reserved1), std::size_t{44},
+          "DOD chunk reserved1 offset");
 
+  checkEq(offsetof(D9CCommandChunkWireRecordHeader, type), std::size_t{0},
+          "DOD record type field offset");
+  checkEq(offsetof(D9CCommandChunkWireRecordHeader, flags), std::size_t{4},
+          "DOD record flags field offset");
   checkEq(offsetof(D9CCommandChunkWireRecordHeader, payloadOffset), std::size_t{8},
           "DOD record payload offset field offset");
   checkEq(offsetof(D9CCommandChunkWireRecordHeader, payloadSize), std::size_t{12},
@@ -134,6 +426,10 @@ void testDodWireChunkLayout() {
           "DOD record first handle field offset");
   checkEq(offsetof(D9CCommandChunkWireRecordHeader, handleCount), std::size_t{20},
           "DOD record handle count field offset");
+  checkEq(offsetof(D9CCommandChunkWireRecordHeader, reserved0), std::size_t{24},
+          "DOD record reserved0 offset");
+  checkEq(offsetof(D9CCommandChunkWireRecordHeader, reserved1), std::size_t{28},
+          "DOD record reserved1 offset");
 
   checkEq(offsetof(D9CCommandChunkWireHandleEntry, kind), std::size_t{0},
           "DOD handle kind field offset");
@@ -353,7 +649,10 @@ void testDrawPacketDeltaDefaults() {
 int main() {
   try {
     testWireRecordsStayPod();
+    testCommandRecordIds();
     testRecordHeaderLayout();
+    testDrawPacketLayouts();
+    testCommandRecordLayouts();
     testDodWireChunkLayout();
     testDodWireDefaultsAndPayloadRanges();
     testDodWireHandleRangesAndRecordRanges();

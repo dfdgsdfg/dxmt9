@@ -40,6 +40,16 @@ state_draw_transform_spec = executable(
 
 test('dxmt9-state-draw-transform-spec', state_draw_transform_spec)
 
+dod_state_format_spec = executable(
+  'dxmt9-dod-state-format-spec',
+  'native/core/dod_state_format_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-dod-state-format-spec', dod_state_format_spec)
+
 shader_transform_spec = executable(
   'dxmt9-shader-transform-spec',
   'native/shader/shader_transform_spec.cpp',
@@ -69,6 +79,16 @@ backend_pipeline_key_spec = executable(
 )
 
 test('dxmt9-backend-pipeline-key-spec', backend_pipeline_key_spec)
+
+dod_replay_observer_spec = executable(
+  'dxmt9-dod-replay-observer-spec',
+  'native/backend/dod_replay_observer_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-dod-replay-observer-spec', dod_replay_observer_spec)
 
 chunk_record_spec = executable(
   'dxmt9-chunk-record-spec',

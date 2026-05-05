@@ -55,6 +55,15 @@ LockFootprint lockFootprint(dxmt9::core::Format format,
   return {(blockRight - blockLeft) * blockBytes, blockBottom - blockTop};
 }
 
+bool invalidCompressedTextureDimensions(dxmt9::core::Format format, uint32_t width, uint32_t height) {
+  if (!dxmt9::core::isCompressedFormat(format)) {
+    return false;
+  }
+  return width == 0 || height == 0 ||
+         (width % dxmt9::core::formatBlockWidth(format)) != 0 ||
+         (height % dxmt9::core::formatBlockHeight(format)) != 0;
+}
+
 void copyNativeToShadow(ShadowLock& shadow) {
   auto* dst = static_cast<uint8_t*>(shadow.shadow.ptr);
   auto* src = static_cast<const uint8_t*>(shadow.nativePtr);
@@ -91,6 +100,11 @@ extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, ui
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::TwoD;
+  if (invalidCompressedTextureDimensions(desc.format, desc.width, desc.height)) {
+    dxmt9DebugLog("device_create_texture rejected compressed alignment size=%ux%u fmt=%u(%s)",
+                  w, h, fmt, dxmt9::core::formatName(desc.format).c_str());
+    return nullptr;
+  }
   auto tex = d->iface->CreateTexture(desc);
   if (!tex) {
     dxmt9DebugLog("device_create_texture failed device=%p", static_cast<void*>(d));
@@ -112,6 +126,9 @@ extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t 
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::Cube;
+  if (invalidCompressedTextureDimensions(desc.format, desc.width, desc.height)) {
+    return nullptr;
+  }
   auto tex = d->iface->CreateTexture(desc);
   if (!tex) {
     return nullptr;
@@ -132,6 +149,9 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::Volume;
+  if (invalidCompressedTextureDimensions(desc.format, desc.width, desc.height)) {
+    return nullptr;
+  }
   auto tex = d->iface->CreateTexture(desc);
   if (!tex) {
     return nullptr;
@@ -358,8 +378,13 @@ extern "C" int32_t dxmt9c_texture_get_level_desc(D9CTexture* t, uint32_t level,
   if (!out) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  auto& desc = t->obj->desc();
   std::memset(out, 0, sizeof(*out));
+  if (level >= t->obj->levelCount()) {
+    dxmt9DebugLog("texture_get_level_desc rejected texture=%p level=%u levelCount=%u",
+                  static_cast<void*>(t), level, t->obj->levelCount());
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  auto& desc = t->obj->desc();
   const uint32_t shift = std::min<uint32_t>(level, 31);
   out->format = fmtToD3D(desc.format);
   out->resourceType = textureTypeToResourceType(desc.type);
