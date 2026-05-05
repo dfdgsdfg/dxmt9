@@ -18,6 +18,7 @@ Root `specs/` is multi-topic. Each major concern lives in a topic folder:
 
 | Topic | Role |
 |------|------|
+| `specs/archicture/` | Project-wide architecture, DOD, provenance, and DXMT merge readiness |
 | `specs/d3d9/` | D3D9 COM/API behavior, state, resources, queries, WSI-facing frontend |
 | `specs/d3d9/{caps,formats,queries,wsi}/` | D3D9 subtopic contracts and design tables |
 | `specs/backend/` | Shared Metal translation, command queue, encoder lifecycle, resources |
@@ -43,6 +44,7 @@ Requirements are written as numbered contracts with stable IDs:
 
 | Area | Prefix |
 |------|--------|
+| Whole-project architecture | `R-ARCH-*` |
 | D3D9 frontend layer | `R-CORE-*` |
 | D3D9 caps / formats | `R-CAPS-*`, `R-FORMAT-*` |
 | Metal backend | `R-BACK-*` |

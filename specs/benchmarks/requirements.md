@@ -57,6 +57,13 @@ logical D3D9 operation count and the observed bridge operation count. This is th
 data-oriented acceptance signal that batching did not regress to one bridge call
 per state change or draw.
 
+**R-BENCH-2.6** The architecture bottleneck report must include counters or
+derived metrics for CPU submission time, bridge operations, chunk commits,
+payload bytes, allocation or capacity growth after warm-up, uniform interning
+hit/miss, encode CPU time, pipeline builds, queue writer/ring back-pressure
+waits, synchronous waits, readback throughput, and present acquire/boundary/token
+waits.
+
 ---
 
 ## 3. Reference Stacks

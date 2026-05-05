@@ -31,8 +31,8 @@ are covered by unit tests and property-based tests.
 
 ## 2. Command Queue
 
-Traceability: R-BACK-2.1, R-BACK-2.2, R-BACK-2.12, R-BACK-2.13,
-R-BACK-6.4-R-BACK-6.8
+Traceability: R-ARCH-6.1-R-ARCH-6.7, R-BACK-2.1, R-BACK-2.2,
+R-BACK-2.12, R-BACK-2.13, R-BACK-6.4-R-BACK-6.8
 
 **R-VERIF-2.1** The formal spec must prove that the ring buffer never
 allows the Wine thread's write index to overwrite a slot that is still

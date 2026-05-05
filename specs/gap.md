@@ -28,7 +28,7 @@ Legend: ✅ implemented · ⚠️ partial · ❌ not started
 | BeginScene / EndScene | ✅ | Nested-call validation |
 | StateBlock capture / restore | ⚠️ | Full-state copy exists; `D3DSBT_*` masks, recording invalid-call cases, derived-cache invalidation after `Apply`, and Windows D3D9 behaviours captured by Wine `stateblock.c` need conformance work |
 | Hot-path CommandChunk recording and data normalizers | ⚠️ | Chunk records, delta draw packets, `APPLY_STATE`, bulk retention, and draw-run paths exist. `makeCanonicalDrawStateFromState()` / draw-run helpers cover production state-to-flat-draw transforms, while `makeDrawDescFromState()` is fixture/offline coverage only. `device_c_record_utils` now covers record validation, `ImportedChunkView` / `ImportedRecordView`, chunk iteration, record-count validation, draw-run scans, replay-category classification, and resource-retention derivation with native tests. Remaining alignment is auditing barrier/hazard behaviour with a fake backend or queue instrumentation against R-CORE-11.14-R-CORE-11.18 |
-| DOD / DXMT ownership acceptance | ⚠️ | README concept mapping exists and the chunk wire path is data-oriented. Merge-readiness still needs explicit acceptance that PE state shadow, POD chunk construction, unix import, queue execution, presentation pacing, and deferred resource safety each have matching implementation owners and tests |
+| DOD / DXMT ownership acceptance (`R-ARCH-1.*`, `R-ARCH-2.*`, `R-ARCH-5.*`) | ⚠️ | `specs/archicture/` now owns the whole-project architecture contract and the chunk wire path is data-oriented. Merge-readiness still needs explicit acceptance that PE state shadow, POD chunk construction, unix import, queue execution, presentation pacing, and deferred resource safety each have matching implementation owners and tests |
 | DrawPrimitive, DrawIndexedPrimitive, UP variants | ✅ | All four variants |
 | TriangleFan decomposition | ✅ | `decomposeTriangleFanIndices()` |
 | Half-pixel offset | ✅ | `halfPixelFixup()` |
@@ -66,6 +66,7 @@ propagation, query validation, and lost-device/reset behaviour.
 | `BackendDevice` interface + sim backend | ✅ | sim |
 | `MTLDevice` init + `MTLCommandQueue` | ✅ | metal |
 | Command queue ring: 32 slots, `kMaxQueuedChunks=31`, Wine/encode/finish threads | ✅ | metal; present frame-latency tokens enforce frame pacing separately |
+| Architecture concurrency model (`R-ARCH-6.*`) | ⚠️ | Queue, encoder, resource lifetime, present latency, and query sequence safety have TLA+ coverage and implementation assertions, but end-to-end observer evidence for fire-and-forget submission classes, ring back-pressure, explicit wait classes, and sidecar worker publication still needs an integrated acceptance pass |
 | Ring allocators: `RingArena` for argbuf, replayStore, staging, copyTemp | ✅ | metal |
 | Clear-as-load-action folding | ✅ | metal |
 | Render-target change → encoder split | ✅ | metal |
@@ -206,13 +207,16 @@ described by R-WILD-1.2.
 
 ## Benchmarks Layer
 
-No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started.
+No benchmarks exist yet. All R-BENCH-1.x through R-BENCH-5.x are not started,
+and the architecture bottleneck/concurrency evidence for R-ARCH-2.6-R-ARCH-2.7
+and R-ARCH-6.* is still missing.
 
 | Area | Status | Spec |
 |---|---|---|
 | `dxmt9-bench` harness | ❌ | R-BENCH-1.1 |
 | Draw call throughput workload | ❌ | R-BENCH-2.2 |
 | Bridge operation budget counters | ❌ | R-BENCH-2.3-R-BENCH-2.5, R-BENCH-5.3 |
+| Architecture bottleneck/concurrency counter baselines | ❌ | R-ARCH-2.6-R-ARCH-2.7, R-ARCH-6.*, R-BENCH-2.6 |
 | PSO compile cold/warm workload | ❌ | R-BENCH-2.1 |
 | Reference stack baselines (wined3d, DXVK+MoltenVK) | ❌ | R-BENCH-3.1 |
 | `bench_compare.sh` regression script | ❌ | R-BENCH-4.3 |

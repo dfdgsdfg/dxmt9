@@ -60,6 +60,9 @@ the common execution layer for commands produced by those API layers.
 ```
 specs/
 ├── gap.md                  Spec–implementation gap tracker (what is / isn't built yet)
+├── archicture/             Project-wide architecture, DOD, provenance, merge readiness
+│   ├── requirements.md     DXMT ownership, DOD, license/provenance, boundary contracts
+│   └── design.md           CPU/GPU data flow, render/concurrency, bottleneck diagrams
 ├── d3d9/                   D3D9 API frontend for Wine-hosted applications
 │   ├── requirements.md     D3D9 COM contracts, state machine rules, resource semantics
 │   ├── design.md           COM object model, device state, D3D9/backend boundary
