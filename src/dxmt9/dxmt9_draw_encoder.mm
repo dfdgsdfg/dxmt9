@@ -359,8 +359,10 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot) {
       info.r_address_mode == WMTSamplerAddressModeClampToBorderColor) {
     info.border_color = resolveSamplerBorderColor(borderColor);
   }
-  // WMTSamplerInfo has no LOD-bias field; preserve the existing zero-initialized
-  // LOD clamp descriptor values.
+  // Keep explicit texldl / mip-filter sampling from being clamped to level 0.
+  // LOD bias is still intentionally ignored because WMTSamplerInfo has no
+  // separate bias field.
+  info.lod_max_clamp = 1e9f;
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
   return info;
@@ -397,6 +399,7 @@ WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>
       info.r_address_mode == WMTSamplerAddressModeClampToBorderColor) {
     info.border_color = resolveSamplerBorderColor(borderColor);
   }
+  info.lod_max_clamp = 1e9f;
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
   return info;

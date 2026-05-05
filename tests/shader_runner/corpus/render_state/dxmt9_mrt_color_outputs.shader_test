@@ -1,0 +1,19 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: math-derivation
+; oracle-date: 2026-05-06
+
+[pixel shader d3dbc-hex]
+ffff0300 05000051 a00f0000 3f800000 00000000 00000000 3f800000
+05000051 a00f0001 00000000 3f800000 00000000 3f800000 02000001
+800f0800 a0e40000 02000001 800f0801 a0e40001 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-target 1 A8R8G8B8
+dxmt9-draw-solid-quad
+probe-rt 0 (32, 32) rgba(1.0, 0.0, 0.0, 1.0) 1
+probe-rt 1 (32, 32) rgba(0.0, 1.0, 0.0, 1.0) 1

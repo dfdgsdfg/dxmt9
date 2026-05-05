@@ -346,10 +346,16 @@ Current implemented command subset:
 
 - `dxmt9-texture <id> <width> <height> A8R8G8B8 <texel...>` creates a named
   A8R8G8B8 2D managed texture and uploads row-major named texels.
+- `dxmt9-texture-mip <id> <level> <width> <height> A8R8G8B8 <texel...>` adds
+  an explicit mip level for a named texture; dimensions must match the level-0
+  mip chain.
 - `dxmt9-sampler <stage> address_u=<mode> address_v=<mode>
   min_filter=<filter> mag_filter=<filter> mip_filter=<filter>` applies sampler
   state for the stage.
 - `dxmt9-bind-texture <stage> <id>` binds a named texture to a sampler stage.
+- `dxmt9-render-target <slot> A8R8G8B8` creates and binds an extra 64x64 render
+  target for MRT probes.
+- `probe-rt <slot> (x, y) rgba(...) N` reads a specific render target slot.
 - `dxmt9-viewport <x> <y> <width> <height>` applies a viewport before the draw.
 - `dxmt9-draw-textured-quad` renders an XYZRHW textured quad over the 64x64
   offscreen target and validates results through normal `probe` readback.
@@ -368,6 +374,9 @@ The first implemented runtime probes are:
 - `tests/shader_runner/corpus/texture/dxmt9_dependent_texture_read.shader_test`
   validates a dependent `texld` path where the first sample supplies UVs for a
   second sample and the final result is checked by readback.
+- `tests/shader_runner/corpus/texture/dxmt9_mip_texldl_readback.shader_test`
+  validates explicit mip-level sampling through `texldl` and framebuffer
+  readback.
 - `tests/shader_runner/corpus/vs_specific/dxmt9_vs_color_triangle.shader_test`
   validates that programmable vertex POSITION and COLOR outputs affect
   rasterization and framebuffer color.
@@ -383,15 +392,17 @@ The first implemented runtime probes are:
 - `tests/shader_runner/corpus/render_state/dxmt9_color_write_rgb_preserves_alpha.shader_test`
   validates that RGB color-write masks update RGB channels while preserving the
   cleared alpha channel.
+- `tests/shader_runner/corpus/render_state/dxmt9_mrt_color_outputs.shader_test`
+  validates programmable `oC0` / `oC1` color routing into separate render
+  targets through per-RT readback.
 - `tests/shader_runner/corpus/render_state/dxmt9_alpha_test_readback.shader_test`
   is intentionally tracked as `status = "failing"` in the manifest: the
   generated programmable pixel shader contains alpha-test discard code, but the
   current readback output still shows the fragment surviving.
 
-Mip-level contents, 4x4/LOD texture variants, `oDepth`, MRT, fog, and sRGB
-render-state probes remain future extension points. Alpha-test readback has a
-checked-in failing probe and should move to `passing` only after the runtime
-discard behaviour is fixed.
+`oDepth`, fog, and sRGB render-state probes remain future extension points.
+Alpha-test readback has a checked-in failing probe and should move to `passing`
+only after the runtime discard behaviour is fixed.
 
 **Texture setup DSL:**
 
@@ -414,9 +425,8 @@ mip_filter = "point"
 ```
 
 The same schema may define 4x4 textures, additional mip levels, filter/address
-state, and LOD bias. Current runtime shader paths include `texld` and dependent
-`texld`; `texldl` remains source-contract coverage until a runtime LOD probe is
-added.
+state, and LOD bias. Current runtime shader paths include `texld`, dependent
+`texld`, and explicit `texldl` mip readback.
 
 **VS geometry probes** render small geometry masks that prove vertex shader
 outputs were consumed correctly. Current runtime coverage includes `POSITION`,
@@ -427,8 +437,9 @@ and clip-space orientation.
 **Render-state interaction probes** combine shader output with D3D9 render
 state. Passing runtime probes cover color-write masks. Alpha test is represented
 by a failing readback probe until the discard path is fixed. Required future
-probes cover `oDepth`, MRT color outputs, fog, and sRGB write/sampling state.
-Every probe verifies the final framebuffer through readback.
+probes cover `oDepth`, fog, and sRGB write/sampling state. MRT color output
+routing is covered by per-target readback. Every probe verifies the final
+framebuffer through readback.
 
 ---
 
@@ -1005,6 +1016,9 @@ DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/check_drift.sh
 ```sh
 # Opcodes with no passing test (coverage gap):
 python3 scripts/shader_corpus_tool.py gaps --fail-on-metadata-gaps
+
+# Per-file Meson corpus shards use the same status filter:
+python3 scripts/shader_corpus_tool.py list-files --status passing
 
 # Tests behind upstream vkd3d HEAD:
 # (compare recorded provenance commits against the configured checkout)

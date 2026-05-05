@@ -11,6 +11,9 @@ struct Counters {
   std::atomic<std::uint64_t> submitDraw{0};
   std::atomic<std::uint64_t> submitClear{0};
   std::atomic<std::uint64_t> submitStretch{0};
+  std::atomic<std::uint64_t> stretchBlitCopy{0};
+  std::atomic<std::uint64_t> stretchRenderPass{0};
+  std::atomic<std::uint64_t> stretchFullscreen{0};
   std::atomic<std::uint64_t> submitPresent{0};
   std::atomic<std::uint64_t> submitFlush{0};
   std::atomic<std::uint64_t> commandBuffers{0};
@@ -44,6 +47,21 @@ struct Counters {
   std::atomic<std::uint64_t> completionBlitWaits{0};
   std::atomic<std::uint64_t> completionBlitWaitNs{0};
   std::atomic<std::uint64_t> completionBlitWaitMaxNs{0};
+  std::atomic<std::uint64_t> completionPresentOnlyWaits{0};
+  std::atomic<std::uint64_t> completionPresentOnlyWaitNs{0};
+  std::atomic<std::uint64_t> completionPresentOnlyWaitMaxNs{0};
+  std::atomic<std::uint64_t> completionDrawPresentWaits{0};
+  std::atomic<std::uint64_t> completionDrawPresentWaitNs{0};
+  std::atomic<std::uint64_t> completionDrawPresentWaitMaxNs{0};
+  std::atomic<std::uint64_t> completionDrawStretchWaits{0};
+  std::atomic<std::uint64_t> completionDrawStretchWaitNs{0};
+  std::atomic<std::uint64_t> completionDrawStretchWaitMaxNs{0};
+  std::atomic<std::uint64_t> completionStretchWaits{0};
+  std::atomic<std::uint64_t> completionStretchWaitNs{0};
+  std::atomic<std::uint64_t> completionStretchWaitMaxNs{0};
+  std::atomic<std::uint64_t> completionBlitOnlyWaits{0};
+  std::atomic<std::uint64_t> completionBlitOnlyWaitNs{0};
+  std::atomic<std::uint64_t> completionBlitOnlyWaitMaxNs{0};
   std::atomic<std::uint64_t> completionOtherWaits{0};
   std::atomic<std::uint64_t> completionOtherWaitNs{0};
   std::atomic<std::uint64_t> completionOtherWaitMaxNs{0};
@@ -66,6 +84,14 @@ struct Counters {
   std::atomic<std::uint64_t> presentBoundaryWaitMaxNs{0};
   std::atomic<std::uint64_t> presentEncoded{0};
   std::atomic<std::uint64_t> presentSkipped{0};
+  std::atomic<std::uint64_t> presentFullscreen{0};
+  std::atomic<std::uint64_t> presentPass{0};
+  std::atomic<std::uint64_t> presentPassSrcWidth{0};
+  std::atomic<std::uint64_t> presentPassSrcHeight{0};
+  std::atomic<std::uint64_t> presentPassDstWidth{0};
+  std::atomic<std::uint64_t> presentPassDstHeight{0};
+  std::atomic<std::uint64_t> presentPassDstMaxWidth{0};
+  std::atomic<std::uint64_t> presentPassDstMaxHeight{0};
   std::atomic<std::uint64_t> presentAcquireWaits{0};
   std::atomic<std::uint64_t> presentAcquireWaitNs{0};
   std::atomic<std::uint64_t> presentAcquireWaitMaxNs{0};
@@ -128,6 +154,7 @@ void report() {
   std::fprintf(
       stderr,
       "[dxmt9-perf] submit_draw=%llu submit_clear=%llu submit_stretch=%llu "
+      "stretch_copy=%llu stretch_pass=%llu stretch_full=%llu "
       "submit_present=%llu submit_flush=%llu command_buffers=%llu "
       "metal_buffers=%llu metal_buffer_bytes=%llu pipeline_builds=%llu "
       "submit_draw_cpu_ms=%.3f submit_draw_cpu_max_ms=%.3f "
@@ -141,6 +168,11 @@ void report() {
       "completion_present_waits=%llu completion_present_wait_ms=%.3f completion_present_wait_max_ms=%.3f "
       "completion_draw_waits=%llu completion_draw_wait_ms=%.3f completion_draw_wait_max_ms=%.3f "
       "completion_blit_waits=%llu completion_blit_wait_ms=%.3f completion_blit_wait_max_ms=%.3f "
+      "completion_present_only_waits=%llu completion_present_only_wait_ms=%.3f completion_present_only_wait_max_ms=%.3f "
+      "completion_draw_present_waits=%llu completion_draw_present_wait_ms=%.3f completion_draw_present_wait_max_ms=%.3f "
+      "completion_draw_stretch_waits=%llu completion_draw_stretch_wait_ms=%.3f completion_draw_stretch_wait_max_ms=%.3f "
+      "completion_stretch_waits=%llu completion_stretch_wait_ms=%.3f completion_stretch_wait_max_ms=%.3f "
+      "completion_blit_only_waits=%llu completion_blit_only_wait_ms=%.3f completion_blit_only_wait_max_ms=%.3f "
       "completion_other_waits=%llu completion_other_wait_ms=%.3f completion_other_wait_max_ms=%.3f "
       "sync_waits=%llu sync_wait_ms=%.3f sync_wait_max_ms=%.3f "
       "queue_writer_waits=%llu queue_writer_wait_ms=%.3f queue_writer_wait_max_ms=%.3f "
@@ -148,7 +180,9 @@ void report() {
       "queue_sequence_waits=%llu queue_sequence_wait_ms=%.3f queue_sequence_wait_max_ms=%.3f "
       "present_boundary_applied=%llu present_boundary_skipped=%llu "
       "present_boundary_waits=%llu present_boundary_wait_ms=%.3f present_boundary_wait_max_ms=%.3f "
-      "present_encoded=%llu present_skipped=%llu present_acquire_waits=%llu "
+      "present_encoded=%llu present_skipped=%llu present_full=%llu "
+      "present_pass=%llu present_src=%llux%llu present_dst=%llux%llu "
+      "present_dst_max=%llux%llu present_acquire_waits=%llu "
       "present_acquire_wait_ms=%.3f present_acquire_wait_max_ms=%.3f "
       "present_acquire_slow_waits=%llu "
       "present_async_acquire_requests=%llu present_async_acquire_issued=%llu "
@@ -164,6 +198,9 @@ void report() {
       static_cast<unsigned long long>(load(c.submitDraw)),
       static_cast<unsigned long long>(load(c.submitClear)),
       static_cast<unsigned long long>(load(c.submitStretch)),
+      static_cast<unsigned long long>(load(c.stretchBlitCopy)),
+      static_cast<unsigned long long>(load(c.stretchRenderPass)),
+      static_cast<unsigned long long>(load(c.stretchFullscreen)),
       static_cast<unsigned long long>(load(c.submitPresent)),
       static_cast<unsigned long long>(load(c.submitFlush)),
       static_cast<unsigned long long>(load(c.commandBuffers)),
@@ -197,6 +234,21 @@ void report() {
       static_cast<unsigned long long>(load(c.completionBlitWaits)),
       static_cast<double>(load(c.completionBlitWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionBlitWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.completionPresentOnlyWaits)),
+      static_cast<double>(load(c.completionPresentOnlyWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionPresentOnlyWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.completionDrawPresentWaits)),
+      static_cast<double>(load(c.completionDrawPresentWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionDrawPresentWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.completionDrawStretchWaits)),
+      static_cast<double>(load(c.completionDrawStretchWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionDrawStretchWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.completionStretchWaits)),
+      static_cast<double>(load(c.completionStretchWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionStretchWaitMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.completionBlitOnlyWaits)),
+      static_cast<double>(load(c.completionBlitOnlyWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionBlitOnlyWaitMaxNs)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionOtherWaits)),
       static_cast<double>(load(c.completionOtherWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionOtherWaitMaxNs)) / 1000000.0,
@@ -219,6 +271,14 @@ void report() {
       static_cast<double>(load(c.presentBoundaryWaitMaxNs)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentEncoded)),
       static_cast<unsigned long long>(load(c.presentSkipped)),
+      static_cast<unsigned long long>(load(c.presentFullscreen)),
+      static_cast<unsigned long long>(load(c.presentPass)),
+      static_cast<unsigned long long>(load(c.presentPassSrcWidth)),
+      static_cast<unsigned long long>(load(c.presentPassSrcHeight)),
+      static_cast<unsigned long long>(load(c.presentPassDstWidth)),
+      static_cast<unsigned long long>(load(c.presentPassDstHeight)),
+      static_cast<unsigned long long>(load(c.presentPassDstMaxWidth)),
+      static_cast<unsigned long long>(load(c.presentPassDstMaxHeight)),
       static_cast<unsigned long long>(load(c.presentAcquireWaits)),
       static_cast<double>(load(c.presentAcquireWaitNs)) / 1000000.0,
       static_cast<double>(load(c.presentAcquireWaitMaxNs)) / 1000000.0,
@@ -270,6 +330,13 @@ void updateMax(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
   }
 }
 
+void store(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
+  if (!enabled()) {
+    return;
+  }
+  counter.store(value, std::memory_order_relaxed);
+}
+
 }  // namespace
 
 bool enabled() {
@@ -287,6 +354,18 @@ void countSubmitClear() {
 
 void countSubmitStretch() {
   add(counters().submitStretch);
+}
+
+void countStretchBlitCopy() {
+  add(counters().stretchBlitCopy);
+}
+
+void countStretchRenderPass() {
+  add(counters().stretchRenderPass);
+}
+
+void countStretchFullscreen() {
+  add(counters().stretchFullscreen);
 }
 
 void countSubmitPresent() {
@@ -343,26 +422,59 @@ void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds) {
   updateMax(counters().commandBufferCommitCpuMaxNs, nanoseconds);
 }
 
-void countCompletionWait(std::uint64_t nanoseconds, bool hasDraw, bool hasPresent, bool hasBlit) {
+void countCompletionWait(std::uint64_t nanoseconds,
+                         bool hasDraw,
+                         bool hasPresent,
+                         bool hasBlit,
+                         bool hasStretchRect) {
   add(counters().completionWaits);
   add(counters().completionWaitNs, nanoseconds);
   updateMax(counters().completionWaitMaxNs, nanoseconds);
+  auto addWaitBucket = [nanoseconds](std::atomic<std::uint64_t>& waits,
+                                     std::atomic<std::uint64_t>& waitNs,
+                                     std::atomic<std::uint64_t>& maxNs) {
+    add(waits);
+    add(waitNs, nanoseconds);
+    updateMax(maxNs, nanoseconds);
+  };
   if (hasPresent) {
-    add(counters().completionPresentWaits);
-    add(counters().completionPresentWaitNs, nanoseconds);
-    updateMax(counters().completionPresentWaitMaxNs, nanoseconds);
+    addWaitBucket(counters().completionPresentWaits,
+                  counters().completionPresentWaitNs,
+                  counters().completionPresentWaitMaxNs);
   } else if (hasDraw) {
-    add(counters().completionDrawWaits);
-    add(counters().completionDrawWaitNs, nanoseconds);
-    updateMax(counters().completionDrawWaitMaxNs, nanoseconds);
+    addWaitBucket(counters().completionDrawWaits,
+                  counters().completionDrawWaitNs,
+                  counters().completionDrawWaitMaxNs);
   } else if (hasBlit) {
-    add(counters().completionBlitWaits);
-    add(counters().completionBlitWaitNs, nanoseconds);
-    updateMax(counters().completionBlitWaitMaxNs, nanoseconds);
+    addWaitBucket(counters().completionBlitWaits,
+                  counters().completionBlitWaitNs,
+                  counters().completionBlitWaitMaxNs);
   } else {
-    add(counters().completionOtherWaits);
-    add(counters().completionOtherWaitNs, nanoseconds);
-    updateMax(counters().completionOtherWaitMaxNs, nanoseconds);
+    addWaitBucket(counters().completionOtherWaits,
+                  counters().completionOtherWaitNs,
+                  counters().completionOtherWaitMaxNs);
+  }
+
+  if (hasPresent && !hasDraw && !hasBlit && !hasStretchRect) {
+    addWaitBucket(counters().completionPresentOnlyWaits,
+                  counters().completionPresentOnlyWaitNs,
+                  counters().completionPresentOnlyWaitMaxNs);
+  } else if (hasPresent && hasDraw) {
+    addWaitBucket(counters().completionDrawPresentWaits,
+                  counters().completionDrawPresentWaitNs,
+                  counters().completionDrawPresentWaitMaxNs);
+  } else if (!hasPresent && hasDraw && hasStretchRect) {
+    addWaitBucket(counters().completionDrawStretchWaits,
+                  counters().completionDrawStretchWaitNs,
+                  counters().completionDrawStretchWaitMaxNs);
+  } else if (!hasPresent && !hasDraw && hasStretchRect) {
+    addWaitBucket(counters().completionStretchWaits,
+                  counters().completionStretchWaitNs,
+                  counters().completionStretchWaitMaxNs);
+  } else if (!hasPresent && hasBlit && !hasStretchRect) {
+    addWaitBucket(counters().completionBlitOnlyWaits,
+                  counters().completionBlitOnlyWaitNs,
+                  counters().completionBlitOnlyWaitMaxNs);
   }
 }
 
@@ -418,6 +530,26 @@ void countPresentEncoded() {
 
 void countPresentSkipped() {
   add(counters().presentSkipped);
+}
+
+void countPresentFullscreen() {
+  add(counters().presentFullscreen);
+}
+
+void countPresentPass(std::uint32_t sourceWidth,
+                      std::uint32_t sourceHeight,
+                      std::uint64_t targetWidth,
+                      std::uint64_t targetHeight) {
+  if (!enabled()) {
+    return;
+  }
+  add(counters().presentPass);
+  store(counters().presentPassSrcWidth, sourceWidth);
+  store(counters().presentPassSrcHeight, sourceHeight);
+  store(counters().presentPassDstWidth, targetWidth);
+  store(counters().presentPassDstHeight, targetHeight);
+  updateMax(counters().presentPassDstMaxWidth, targetWidth);
+  updateMax(counters().presentPassDstMaxHeight, targetHeight);
 }
 
 void countPresentAcquireWait(std::uint64_t nanoseconds) {

@@ -500,6 +500,23 @@ void testChunkSlotReplayObserverAndQueueSummarySeeSameCategories() {
   check(diagnostics.hasDraw, "queue diagnostics see draw-class work");
   check(diagnostics.hasBlit, "queue diagnostics see blit-class work");
   check(diagnostics.hasPresent, "queue diagnostics see present-class work");
+  check(!diagnostics.hasStretchRect,
+        "queue diagnostics do not infer stretch work from generic blit work");
+
+  const std::array<metalqueue::ChunkObservation, 1> stretchObservations{{
+      metalqueue::ChunkObservation{
+          .kind = metalqueue::ChunkObservationKind::StretchRect,
+          .compatFlags = 0u,
+      },
+  }};
+  const auto stretchDiagnostics =
+      metalqueue::summarizeChunk(43u, 4u, std::span<const metalqueue::ChunkObservation>(
+                                             stretchObservations.data(),
+                                             stretchObservations.size()));
+  check(stretchDiagnostics.hasBlit,
+        "queue diagnostics keep stretch-rect in the blit-class bucket");
+  check(stretchDiagnostics.hasStretchRect,
+        "queue diagnostics expose stretch-rect work for completion wait splits");
 
   const u32 expectedFlags =
       metalcompat::CompatFlagFp16 | metalcompat::CompatFlagMrt |

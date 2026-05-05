@@ -495,6 +495,7 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   encoder.setScissorRect(WMTScissorRect{0, 0, targetWidth, targetHeight});
   encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
   encoder.endEncoding();
+  perf::countPresentPass(params.width, params.height, targetWidth, targetHeight);
   if (params.minimumPresentDuration > 0.0) {
     commandBuffer.presentDrawableAfterMinimumDuration(drawable, params.minimumPresentDuration);
   } else {
@@ -546,6 +547,9 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
     perf::countPresentSkipped();
     presentimpl::traceEvent("missing-source", seqId, present.window.value);
     return false;
+  }
+  if (!present.windowed) {
+    perf::countPresentFullscreen();
   }
   obj_handle_t sourceTextureHandle =
       source->resolveTexture ? source->resolveTexture.handle : source->texture.handle;

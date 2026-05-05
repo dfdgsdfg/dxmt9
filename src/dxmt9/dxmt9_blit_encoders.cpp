@@ -44,6 +44,14 @@ bool canCopyStretchRect(const resources::SurfaceRecord& src,
          !dst.resolveTexture;
 }
 
+bool isFullscreenStretch(const resources::SurfaceRecord& dst,
+                         const core::StretchRectDesc& stretch) {
+  return stretch.destinationRect.left == 0 &&
+         stretch.destinationRect.top == 0 &&
+         stretch.destinationRect.right == static_cast<int32_t>(dst.desc.width) &&
+         stretch.destinationRect.bottom == static_cast<int32_t>(dst.desc.height);
+}
+
 }  // namespace
 
 void encodeReadback(WMT::CommandBuffer& commandBuffer,
@@ -88,6 +96,7 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
   if (!src || !dst || !src->texture || !dst->texture) {
     return;
   }
+  const bool fullscreenStretch = isFullscreenStretch(*dst, stretch);
   if (canCopyStretchRect(*src, *dst, stretch)) {
     auto blit = commandBuffer.blitCommandEncoder();
     if (!blit) return;
@@ -105,6 +114,10 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
                                    WMT::Texture{dst->texture.handle}, 0, dst->level,
                                    dstOrigin);
     blit.endEncoding();
+    perf::countStretchBlitCopy();
+    if (fullscreenStretch) {
+      perf::countStretchFullscreen();
+    }
     return;
   }
   WMTRenderPassInfo passInfo{};
@@ -130,6 +143,10 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
   if (sampler) encoder.setFragmentSamplerState(sampler, 0);
   encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
   encoder.endEncoding();
+  perf::countStretchRenderPass();
+  if (fullscreenStretch) {
+    perf::countStretchFullscreen();
+  }
 }
 
 void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer,

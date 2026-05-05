@@ -507,9 +507,32 @@ SFIV `-benchmark` after WoW64 handle fix:
 - The benchmark issues a `StretchRect` every frame, so present analysis must separate backbuffer/RT blit cost from the final swapchain present.
 - Removing the stateMutation-triggered flush eliminated one avoidable CPU-side queue drain before the per-frame blit/present path.
 - Removing the sync-present flush stopped forcing a full queue flush on present; the default path now relies on the queue-owned present boundary instead.
-- The remaining dominant stall is `completion_wait`, meaning the app thread is still gated by command-buffer completion rather than PE bridge overhead or explicit present flushes.
-- Planned counters: split `completion_wait` into draw / `StretchRect` / present command-buffer classes, count per-frame `StretchRect` packets, record command-buffer age at wait, and add queue-depth / pending-present watermarks.
-- Planned decision tree: if `StretchRect` completion dominates, optimize blit batching or fast paths; if present completion dominates, tune boundary/acquire policy; if draw completion dominates, continue backend command/upload compaction.
+- Latest sample: `experiments/output/sfiv-benchmark-counters-20260506-081950`, 75 s timeout, `DXMT9_PE_CHUNK_MAX_RECORDS=256`.
+- `StretchRect` is not the remaining GPU bottleneck in this sample: `stretch_copy=719`, `stretch_pass=0`, `stretch_full=719`.
+- The final present is a full-screen render pass every frame: `present_pass=720`, `present_src=1280x720`, `present_dst=1280x720`.
+- The remaining dominant completion stall is still the combined frame command buffer: `completion_draw_present_wait_ms=59840.106`, while `completion_stretch_wait_ms=0.000`.
+- Drawable acquire is also large in the same sample: `present_acquire_wait_ms=58187.489`. This points at present/acquire pacing or the full frame command-buffer composition rather than StretchRect render-pass cost.
+- Follow-up split-present sample: `experiments/output/sfiv-benchmark-split-present-20260506-083114`. Present-only completion is cheap (`completion_present_only_wait_ms=70.402`), while the draw+StretchRect chunk dominates.
+- Follow-up split-stretch+present sample: `experiments/output/sfiv-benchmark-split-stretch-present-20260506-083604`. Isolated StretchRect completion is cheap (`completion_stretch_wait_ms=40.831`), isolated present completion is cheap (`completion_present_only_wait_ms=125.609`), and draw completion dominates (`completion_draw_wait_ms=41138.643`).
+- This means the slow SFIV animation is primarily draw/GPU completion, not the full-screen StretchRect copy or the present pass. Flicker is likely a pacing/stutter symptom on top of low frame rate unless a separate visual correctness trace proves otherwise.
+
+Latest counter sample:
+
+| metric | value | interpretation |
+|---|---:|---|
+| `stretch_copy` | 719 | Same-size full-screen StretchRect uses the blit-copy fast path. |
+| `stretch_pass` | 0 | No StretchRect render-pass work observed. |
+| `present_pass` | 720 | Present still draws a full-screen textured triangle every frame. |
+| `completion_draw_present_wait_ms` | 59840.106 | Completion waits are on command buffers containing draw + present work. |
+| `completion_stretch_wait_ms` | 0.000 | StretchRect is not isolated as a waiting command buffer. |
+| `present_acquire_wait_ms` | 58187.489 | Drawable acquisition/backpressure is comparable to completion wait. |
+
+Split diagnostics:
+
+| mode | path | key result | conclusion |
+|---|---|---|---|
+| `DXMT9_SPLIT_PRESENT_CHUNK=1` | `experiments/output/sfiv-benchmark-split-present-20260506-083114` | `completion_present_only_wait_ms=70.402`, draw+StretchRect chunk still large | Present-only pass is not the main stall. |
+| `DXMT9_SPLIT_STRETCH_CHUNK=1 DXMT9_SPLIT_PRESENT_CHUNK=1` | `experiments/output/sfiv-benchmark-split-stretch-present-20260506-083604` | `completion_draw_wait_ms=41138.643`, `completion_stretch_wait_ms=40.831`, `completion_present_only_wait_ms=125.609` | Draw command buffers dominate the frame time. |
 
 ```mermaid
 flowchart TD
@@ -517,20 +540,23 @@ flowchart TD
   PerFrame --> RemovedState[Removed stateMutation flush]
   RemovedState --> RemovedPresent[Removed sync present flush]
   RemovedPresent --> QueueBoundary[Default: queue-owned present boundary]
-  QueueBoundary --> Remaining[Remaining bottleneck: completion_wait]
-
-  Remaining --> Counters[Add split completion counters]
-  Counters --> Blit{Which completion class dominates?}
-  Blit -->|StretchRect| StretchPath[Optimize blit fast path / batching]
-  Blit -->|Present| PresentPath[Tune boundary and acquire policy]
-  Blit -->|Draw| DrawPath[Compact backend draw/upload work]
+  QueueBoundary --> Counters[Split stretch/present/completion counters]
+  Counters --> Stretch{StretchRect path?}
+  Stretch -->|stretch_copy high\nstretch_pass zero| StretchDone[StretchRect is fast-path copy]
+  Stretch --> FrameCB[Frame command buffer\nhas draw + present]
+  FrameCB --> Wait[completion_draw_present_wait dominates]
+  FrameCB --> Acquire[present_acquire_wait comparable]
+  Wait --> Split[Split present and StretchRect diagnostics]
+  Acquire --> Split
+  Split --> DrawHot[Draw completion dominates]
+  DrawHot --> Next[Next: inspect draw encoder GPU work\nshader/pipeline/state/upload/pass count]
 
   classDef done fill:#e8ffe8,stroke:#3c8f3c,color:#0d2b0d
   classDef wait fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef next fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
-  class RemovedState,RemovedPresent,QueueBoundary done
-  class Remaining wait
-  class Counters,StretchPath,PresentPath,DrawPath next
+  class RemovedState,RemovedPresent,QueueBoundary,StretchDone done
+  class Wait,Acquire,DrawHot wait
+  class Counters,Split,Next next
 ```
 
 Baseline performance, previous default latency 3:

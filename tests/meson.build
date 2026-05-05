@@ -1,8 +1,33 @@
 dxmt9_test_link_args = []
+dxmt9_native_test_env = environment()
 if host_machine.system() == 'darwin'
   dxmt9_test_link_args += meson.get_compiler('cpp').get_supported_link_arguments([
     '-Wl,-no_warn_duplicate_libraries',
   ])
+  dxmt9_wine_unix_runtime_subdir = host_machine.cpu_family() == 'x86_64' ? 'x86_64-unix' : host_machine.cpu_family() + '-unix'
+  dxmt9_c_args = get_option('c_args')
+  if dxmt9_c_args.length() >= 2
+    foreach i : range(dxmt9_c_args.length() - 1)
+      if dxmt9_c_args[i] == '-arch'
+        dxmt9_arch_name = dxmt9_c_args[i + 1]
+        if dxmt9_arch_name == 'x86_64'
+          dxmt9_wine_unix_runtime_subdir = 'x86_64-unix'
+        elif dxmt9_arch_name == 'arm64'
+          dxmt9_wine_unix_runtime_subdir = 'aarch64-unix'
+        endif
+      endif
+    endforeach
+  endif
+  dxmt9_wine_install_path = get_option('wine_install_path')
+  if dxmt9_wine_install_path != ''
+    if not dxmt9_wine_install_path.startswith('/')
+      dxmt9_wine_install_path = join_paths(meson.project_source_root(), dxmt9_wine_install_path)
+    endif
+    dxmt9_native_test_env.prepend(
+      'DYLD_LIBRARY_PATH',
+      join_paths(dxmt9_wine_install_path, 'lib/wine', dxmt9_wine_unix_runtime_subdir),
+      separator: ':')
+  endif
 endif
 
 smoke = executable(
@@ -68,7 +93,8 @@ backend_key_descriptor_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-backend-key-descriptor-spec', backend_key_descriptor_spec)
+test('dxmt9-backend-key-descriptor-spec', backend_key_descriptor_spec,
+     env: dxmt9_native_test_env)
 
 backend_pipeline_key_spec = executable(
   'dxmt9-backend-pipeline-key-spec',
@@ -164,46 +190,28 @@ shader_runner = executable(
 if host_machine.system() == 'darwin'
   shader_corpus_root = join_paths(meson.project_source_root(), 'tests/shader_runner/corpus')
   shader_manifest = join_paths(shader_corpus_root, 'MANIFEST.toml')
-  shader_corpus_env = environment()
-  shader_wine_unix_runtime_subdir = host_machine.cpu_family() == 'x86_64' ? 'x86_64-unix' : host_machine.cpu_family() + '-unix'
-  shader_c_args = get_option('c_args')
-  if shader_c_args.length() >= 2
-    foreach i : range(shader_c_args.length() - 1)
-      if shader_c_args[i] == '-arch'
-        shader_arch_name = shader_c_args[i + 1]
-        if shader_arch_name == 'x86_64'
-          shader_wine_unix_runtime_subdir = 'x86_64-unix'
-        elif shader_arch_name == 'arm64'
-          shader_wine_unix_runtime_subdir = 'aarch64-unix'
-        endif
-      endif
-    endforeach
-  endif
-  shader_wine_install_path = get_option('wine_install_path')
-  if shader_wine_install_path != ''
-    if not shader_wine_install_path.startswith('/')
-      shader_wine_install_path = join_paths(meson.project_source_root(), shader_wine_install_path)
-    endif
-    shader_corpus_env.prepend(
-      'DYLD_LIBRARY_PATH',
-      join_paths(shader_wine_install_path, 'lib/wine', shader_wine_unix_runtime_subdir),
-      separator: ':')
-  endif
   # shader_runner_dxmt9 accepts individual .shader_test files; shard the
   # manifest so Meson applies timeout per case instead of to the full corpus.
+  shader_corpus_tool = join_paths(meson.project_source_root(), 'scripts/shader_corpus_tool.py')
   shader_corpus_files = run_command(
     python3,
-    '-c',
-    'import sys, tomllib; from pathlib import Path; data=tomllib.loads(Path(sys.argv[1]).read_text()); print("|".join(entry["file"] for entry in data.get("test", []) if entry.get("status") == "passing"))',
+    shader_corpus_tool,
+    'list-files',
+    '--manifest',
     shader_manifest,
+    '--status',
+    'passing',
     check: true,
-  ).stdout().strip().split('|')
+  ).stdout().strip().split('\n')
 
   foreach shader_corpus_file : shader_corpus_files
+    if shader_corpus_file == ''
+      continue
+    endif
     shader_corpus_test_name = 'dxmt9-shader-corpus-' + shader_corpus_file.replace('/', '-').replace('.shader_test', '')
     test(shader_corpus_test_name, shader_runner,
          args: [join_paths(shader_corpus_root, shader_corpus_file)],
-         env: shader_corpus_env,
+         env: dxmt9_native_test_env,
          is_parallel: false,
          suite: ['shader-corpus'],
          timeout: 60)

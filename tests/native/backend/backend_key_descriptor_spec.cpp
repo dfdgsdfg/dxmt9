@@ -223,7 +223,7 @@ void testSamplerInfoDefaultsAreDeterministic() {
   checkEq(info.border_color, WMTSamplerBorderColorTransparentBlack, "missing border color defaults transparent black");
   checkEq(info.max_anisotroy, 0u, "missing max anisotropy preserves descriptor zero default");
   checkEq(info.lod_min_clamp, 0.0f, "sampler descriptor min LOD clamp default");
-  checkEq(info.lod_max_clamp, 0.0f, "sampler descriptor max LOD clamp default");
+  checkEq(info.lod_max_clamp, 1e9f, "sampler descriptor max LOD clamp allows explicit mip sampling");
   check(info.normalized_coords, "sampler coordinates are normalized");
   check(!info.lod_average, "LOD averaging remains disabled");
   check(!info.support_argument_buffers, "argument-buffer support remains disabled");
@@ -257,7 +257,7 @@ void testSamplerInfoReflectsSamplerSnapshot() {
   checkEq(info.border_color, WMTSamplerBorderColorOpaqueWhite, "opaque white border color maps deterministically");
   checkEq(info.max_anisotroy, 8u, "max anisotropy maps into WMTSamplerInfo");
   checkEq(info.lod_min_clamp, 0.0f, "LOD bias is clamped out of the sampler descriptor min clamp");
-  checkEq(info.lod_max_clamp, 0.0f, "LOD bias is clamped out of the sampler descriptor max clamp");
+  checkEq(info.lod_max_clamp, 1e9f, "LOD max clamp allows explicit mip sampling");
   check(info.normalized_coords, "snapshot sampler coordinates are normalized");
   checkEq(flatInfo.min_filter, info.min_filter,
           "flat sampler helper matches snapshot min filter mapping");

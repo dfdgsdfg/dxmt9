@@ -54,6 +54,89 @@ REQUIRED_PROVENANCE_FIELDS = {
     "oracle",
     "oracle-date",
 }
+D3DBC_OPCODE_NAMES = {
+    0: "NOP",
+    1: "MOV",
+    2: "ADD",
+    3: "SUB",
+    4: "MAD",
+    5: "MUL",
+    6: "RCP",
+    7: "RSQ",
+    8: "DP3",
+    9: "DP4",
+    10: "MIN",
+    11: "MAX",
+    12: "SLT",
+    13: "SGE",
+    14: "EXP",
+    15: "LOG",
+    18: "LRP",
+    19: "FRC",
+    20: "M4x4",
+    21: "M4x3",
+    22: "M3x4",
+    23: "M3x3",
+    24: "M3x2",
+    25: "CALL",
+    26: "CALLNZ",
+    27: "LOOP",
+    28: "RET",
+    29: "ENDLOOP",
+    30: "LABEL",
+    31: "DCL",
+    32: "POW",
+    33: "CRS",
+    34: "SGN",
+    35: "ABS",
+    36: "NRM",
+    37: "SINCOS",
+    38: "REP",
+    39: "ENDREP",
+    40: "IF",
+    41: "IFC",
+    42: "ELSE",
+    43: "ENDIF",
+    44: "BREAK",
+    45: "BREAKC",
+    46: "MOVA",
+    47: "DEFB",
+    48: "DEFI",
+    64: "TEXCOORD",
+    65: "TEXKILL",
+    66: "TEX",
+    67: "TEXBEM",
+    68: "TEXBEML",
+    69: "TEXREG2AR",
+    70: "TEXREG2GB",
+    71: "TEXM3x2PAD",
+    72: "TEXM3x2TEX",
+    73: "TEXM3x3PAD",
+    74: "TEXM3x3TEX",
+    75: "TEXM3x3DIFF",
+    76: "TEXM3x3SPEC",
+    77: "TEXM3x3VSPEC",
+    78: "EXPP",
+    79: "LOGP",
+    80: "CND",
+    81: "DEF",
+    82: "TEXREG2RGB",
+    83: "TEXDP3TEX",
+    84: "TEXM3x2DEPTH",
+    85: "TEXDP3",
+    86: "TEXM3x3",
+    87: "TEXDEPTH",
+    88: "CMP",
+    90: "DP2ADD",
+    91: "DSX",
+    92: "DSY",
+    93: "TEXLDD",
+    94: "SETP",
+    95: "TEXLDL",
+    96: "BREAKP",
+}
+D3DBC_COMMENT_OPCODE = 0xFFFE
+D3DBC_END_OPCODE = 0xFFFF
 
 
 def repo_root() -> Path:
@@ -247,6 +330,104 @@ def list_field(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+def d3dbc_model_from_version(token: int) -> str | None:
+    shader_type = (token >> 16) & 0xFFFF
+    major = (token >> 8) & 0xFF
+    minor = token & 0xFF
+    if shader_type == 0xFFFF:
+        return f"ps_{major}_{minor}"
+    if shader_type == 0xFFFE:
+        return f"vs_{major}_{minor}"
+    return None
+
+
+def decode_d3dbc_model_opcodes(words: list[int]) -> tuple[str | None, set[str]]:
+    if not words:
+        return None, set()
+
+    model = d3dbc_model_from_version(words[0])
+    if model is None:
+        return None, set()
+
+    opcodes: set[str] = set()
+    index = 1
+    while index < len(words):
+        token = words[index]
+        opcode_value = token & 0xFFFF
+        if opcode_value == D3DBC_END_OPCODE:
+            break
+        if opcode_value == D3DBC_COMMENT_OPCODE:
+            index += 1 + ((token >> 16) & 0x7FFF)
+            continue
+
+        opcode_name = D3DBC_OPCODE_NAMES.get(opcode_value)
+        if opcode_name in VALID_OPCODES:
+            opcodes.add(opcode_name)
+
+        length = (token >> 24) & 0xF
+        index += 1 + length
+
+    return model, opcodes
+
+
+def parse_d3dbc_hex_blocks(text: str) -> list[list[int]]:
+    blocks: list[list[int]] = []
+    current_words: list[int] | None = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("["):
+            if current_words is not None:
+                blocks.append(current_words)
+                current_words = None
+            if line in {"[pixel shader d3dbc-hex]", "[vertex shader d3dbc-hex]"}:
+                current_words = []
+            continue
+        if current_words is None or not line or line.startswith(";"):
+            continue
+        for word in line.split():
+            try:
+                current_words.append(int(word, 16))
+            except ValueError:
+                current_words = None
+                break
+
+    if current_words is not None:
+        blocks.append(current_words)
+
+    return blocks
+
+
+def manifest_model_opcode_pairs(root: Path, relative: str, models: list[str], opcodes: list[str]) -> set[tuple[str, str]]:
+    path = localize_path(root, relative)
+    decoded_pairs: set[tuple[str, str]] = set()
+    if path.exists():
+        for block in parse_d3dbc_hex_blocks(read_text(path)):
+            model, block_opcodes = decode_d3dbc_model_opcodes(block)
+            if model is None:
+                continue
+            decoded_pairs.update((model, opcode) for opcode in block_opcodes)
+
+    if decoded_pairs:
+        return decoded_pairs
+
+    if len(models) == 1:
+        return {(models[0], opcode) for opcode in opcodes}
+
+    return set()
+
+
+def manifest_list_files(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    manifest_path = Path(args.manifest).resolve() if args.manifest else default_manifest_path(root)
+    entries = load_corpus_manifest(manifest_path)
+    for entry in entries:
+        if args.status and entry.get("status") != args.status:
+            continue
+        print(entry["file"])
+    return 0
+
+
 def manifest_gaps(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     manifest_path = Path(args.manifest).resolve() if args.manifest else default_manifest_path(root)
@@ -285,9 +466,10 @@ def manifest_gaps(args: argparse.Namespace) -> int:
             missing_metadata.append(f"{relative}: missing provenance {', '.join(missing_provenance)}")
 
         if status == "passing":
-            covered_models.update(models)
-            covered_opcodes.update(opcodes)
-            covered_model_opcodes.update((model, opcode) for model in models for opcode in opcodes)
+            model_opcode_pairs = manifest_model_opcode_pairs(root, relative, models, opcodes)
+            covered_model_opcodes.update(model_opcode_pairs)
+            covered_models.update(model for model, _ in model_opcode_pairs)
+            covered_opcodes.update(opcode for _, opcode in model_opcode_pairs)
         else:
             non_passing.append(f"{relative}: {status or '<missing>'}")
 
@@ -315,7 +497,18 @@ def manifest_gaps(args: argparse.Namespace) -> int:
     print(f"covered passing opcodes ({len(covered_opcodes)}): {', '.join(sorted(covered_opcodes)) or '<none>'}")
     print(f"missing opcodes ({len(missing_opcodes)}): {', '.join(missing_opcodes) or '<none>'}")
     print()
-    print(f"covered model/opcode pairs ({covered_matrix_pairs}/{total_matrix_pairs})")
+    print(f"covered model x opcode pairs ({covered_matrix_pairs}/{total_matrix_pairs})")
+    print("covered opcodes by model:")
+    printed_model_coverage = False
+    for model in tracked_models:
+        covered_for_model = [opcode for opcode in tracked_opcodes if (model, opcode) in covered_model_opcodes]
+        if not covered_for_model:
+            continue
+        printed_model_coverage = True
+        print(f"  {model} ({len(covered_for_model)}): {', '.join(covered_for_model)}")
+    if not printed_model_coverage:
+        print("  <none>")
+    print()
     print("missing opcodes by model:")
     printed_model_gap = False
     for model in tracked_models:
@@ -564,6 +757,11 @@ def build_parser() -> argparse.ArgumentParser:
     drift.add_argument("--upstream-root")
     drift.add_argument("--upstream-commit")
 
+    list_files = subparsers.add_parser("list-files", help="list corpus files from the manifest")
+    list_files.add_argument("--root", default=str(repo_root() / "tests" / "shader_runner" / "corpus"))
+    list_files.add_argument("--manifest")
+    list_files.add_argument("--status", choices=sorted(VALID_STATUSES))
+
     gaps = subparsers.add_parser("gaps", help="report corpus model, opcode, and provenance gaps")
     gaps.add_argument("--root", default=str(repo_root() / "tests" / "shader_runner" / "corpus"))
     gaps.add_argument("--manifest")
@@ -579,6 +777,8 @@ def main(argv: list[str]) -> int:
         return sync_corpus(args)
     if args.command == "drift":
         return drift_report(args)
+    if args.command == "list-files":
+        return manifest_list_files(args)
     if args.command == "gaps":
         return manifest_gaps(args)
     raise AssertionError("unreachable")

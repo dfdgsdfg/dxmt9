@@ -144,6 +144,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-04"
 
 [[test]]
+file = "render_state/dxmt9_mrt_color_outputs.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DEF", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-06"
+
+[[test]]
 file = "source_modifiers/modifiers.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -176,6 +188,18 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ps_2_0"]
 opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-06"
+
+[[test]]
+file = "texture/dxmt9_mip_texldl_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "DEF", "MOV", "TEXLDL"]
 oracle = "math-derivation"
 oracle-date = "2026-05-06"
 

@@ -512,6 +512,14 @@ bool splitPresentChunk() {
   return enabled;
 }
 
+bool splitStretchChunk() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_SPLIT_STRETCH_CHUNK");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
 bool presentBoundaryWaitsForCompletion() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PRESENT_BOUNDARY_COMPLETION");
@@ -720,10 +728,22 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
 void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   perf::countSubmitStretch();
   std::unique_lock lock(mutex_);
+  if (splitStretchChunk()) {
+    queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+          markSlotResourcesUnlocked(pool_, slot);
+        });
+  }
   ensureWritingSlotUnlocked(*this, lock);
   currentSlotUnlocked(*this).appendStretchRect(desc);
   currentBackBuffer_ = desc.destination;
   pool_.markStretchResources(desc, seqIdForMark(*this, 0));
+  if (splitStretchChunk()) {
+    queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+          markSlotResourcesUnlocked(pool_, slot);
+        });
+  }
 }
 
 void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {

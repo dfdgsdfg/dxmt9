@@ -29,6 +29,7 @@ struct CommandBufferDiagnostics {
   bool hasDraw = false;
   bool hasPresent = false;
   bool hasBlit = false;
+  bool hasStretchRect = false;
   u32 frame = 0;
   u32 compatFlags = 0;
 };
@@ -67,6 +68,7 @@ struct ChunkSummaryInput {
   bool hasDraw = false;
   bool hasPresent = false;
   bool hasBlit = false;
+  bool hasStretchRect = false;
   u32 frame = 0;
   u32 compatFlags = 0;
 };
@@ -74,6 +76,7 @@ struct ChunkSummaryInput {
 enum class ChunkObservationKind {
   Draw,
   Blit,
+  StretchRect,
   Present,
 };
 

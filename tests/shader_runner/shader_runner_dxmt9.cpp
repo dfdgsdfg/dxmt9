@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <unordered_map>
 #include <optional>
 #include <span>
@@ -39,18 +40,23 @@ struct SourceExpectation {
 };
 
 struct ProbeExpectation {
+  u32 target = 0;
   u32 x = 0;
   u32 y = 0;
   std::array<u8, 4> expected{};
   u32 tolerance = 0;
 };
 
-struct TextureSetup {
-  u32 id = 0;
+struct TextureLevelSetup {
   u32 width = 0;
   u32 height = 0;
-  Format format = Format::A8R8G8B8;
   std::vector<std::array<u8, 4>> texels;
+};
+
+struct TextureSetup {
+  u32 id = 0;
+  Format format = Format::A8R8G8B8;
+  std::vector<TextureLevelSetup> levels;
 };
 
 struct SamplerSetup {
@@ -61,6 +67,11 @@ struct SamplerSetup {
 struct TextureBind {
   u32 stage = 0;
   u32 textureId = 0;
+};
+
+struct RenderTargetSetup {
+  u32 slot = 0;
+  Format format = Format::A8R8G8B8;
 };
 
 struct SolidRectDraw {
@@ -79,6 +90,7 @@ struct CorpusTest {
   std::vector<TextureSetup> textureSetups;
   std::vector<SamplerSetup> samplerSetups;
   std::vector<TextureBind> textureBinds;
+  std::vector<RenderTargetSetup> renderTargetSetups;
   std::vector<SolidRectDraw> solidRectDraws;
   std::optional<ColorRGBA> clearColor;
   std::optional<Viewport> viewport;
@@ -190,6 +202,14 @@ std::array<u8, 4> parseNamedColor(std::string_view text) {
   fail("unsupported dxmt9 texture color name");
 }
 
+Format parseDxmt9Format(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "a8r8g8b8") {
+    return Format::A8R8G8B8;
+  }
+  fail("unsupported dxmt9 format");
+}
+
 u32 parseAddressMode(std::string_view text) {
   const auto token = normalizeToken(text);
   if (token == "wrap") {
@@ -232,23 +252,72 @@ std::optional<TextureSetup> parseDxmt9Texture(std::string_view line) {
   if (!(stream >> command) || command != "dxmt9-texture") {
     return std::nullopt;
   }
-  if (!(stream >> texture.id >> texture.width >> texture.height >> format)) {
+  TextureLevelSetup level;
+  if (!(stream >> texture.id >> level.width >> level.height >> format)) {
     fail("invalid dxmt9-texture command");
   }
-  if (normalizeToken(format) != "a8r8g8b8") {
-    fail("dxmt9-texture currently supports only A8R8G8B8");
-  }
-  if (texture.width == 0 || texture.height == 0) {
+  texture.format = parseDxmt9Format(format);
+  if (level.width == 0 || level.height == 0) {
     fail("dxmt9-texture requires non-zero dimensions");
   }
   std::string color;
   while (stream >> color) {
-    texture.texels.push_back(parseNamedColor(color));
+    level.texels.push_back(parseNamedColor(color));
   }
-  if (texture.texels.size() != static_cast<size_t>(texture.width) * texture.height) {
+  if (level.texels.size() != static_cast<size_t>(level.width) * level.height) {
     fail("dxmt9-texture texel count does not match dimensions");
   }
+  texture.levels.push_back(std::move(level));
   return texture;
+}
+
+bool parseDxmt9TextureMip(CorpusTest& test, std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  u32 textureId = 0;
+  u32 levelIndex = 0;
+  std::string format;
+  TextureLevelSetup level;
+  if (!(stream >> command) || command != "dxmt9-texture-mip") {
+    return false;
+  }
+  if (!(stream >> textureId >> levelIndex >> level.width >> level.height >> format)) {
+    fail("invalid dxmt9-texture-mip command");
+  }
+  const auto parsedFormat = parseDxmt9Format(format);
+  if (level.width == 0 || level.height == 0) {
+    fail("dxmt9-texture-mip requires non-zero dimensions");
+  }
+  std::string color;
+  while (stream >> color) {
+    level.texels.push_back(parseNamedColor(color));
+  }
+  if (level.texels.size() != static_cast<size_t>(level.width) * level.height) {
+    fail("dxmt9-texture-mip texel count does not match dimensions");
+  }
+
+  auto existing = std::find_if(test.textureSetups.begin(), test.textureSetups.end(),
+                               [textureId](const TextureSetup& setup) {
+                                 return setup.id == textureId;
+                               });
+  if (existing == test.textureSetups.end()) {
+    TextureSetup setup;
+    setup.id = textureId;
+    setup.format = parsedFormat;
+    test.textureSetups.push_back(std::move(setup));
+    existing = std::prev(test.textureSetups.end());
+  } else if (existing->format != parsedFormat) {
+    fail("dxmt9-texture-mip format mismatch");
+  }
+
+  if (existing->levels.size() <= levelIndex) {
+    existing->levels.resize(static_cast<size_t>(levelIndex) + 1u);
+  }
+  if (existing->levels[levelIndex].width != 0 || existing->levels[levelIndex].height != 0) {
+    fail("duplicate dxmt9-texture-mip level");
+  }
+  existing->levels[levelIndex] = std::move(level);
+  return true;
 }
 
 std::optional<SamplerSetup> parseDxmt9Sampler(std::string_view line) {
@@ -297,6 +366,21 @@ std::optional<TextureBind> parseDxmt9BindTexture(std::string_view line) {
     fail("invalid dxmt9-bind-texture command");
   }
   return bind;
+}
+
+std::optional<RenderTargetSetup> parseDxmt9RenderTarget(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  std::string format;
+  RenderTargetSetup target;
+  if (!(stream >> command) || command != "dxmt9-render-target") {
+    return std::nullopt;
+  }
+  if (!(stream >> target.slot >> format)) {
+    fail("invalid dxmt9-render-target command");
+  }
+  target.format = parseDxmt9Format(format);
+  return target;
 }
 
 std::optional<SolidRectDraw> parseDxmt9SolidRect(std::string_view line) {
@@ -463,6 +547,24 @@ std::optional<ProbeExpectation> parseProbe(std::string_view line) {
   return probe;
 }
 
+std::optional<ProbeExpectation> parseRenderTargetProbe(std::string_view line) {
+  ProbeExpectation probe;
+  float r = 0.0f;
+  float g = 0.0f;
+  float b = 0.0f;
+  float a = 0.0f;
+  unsigned tolerance = 0;
+  if (std::sscanf(std::string(line).c_str(), "probe-rt %u (%u, %u) rgba(%f , %f , %f , %f) %u",
+                  &probe.target, &probe.x, &probe.y, &r, &g, &b, &a, &tolerance) != 8 &&
+      std::sscanf(std::string(line).c_str(), "probe-rt %u (%u, %u) rgba(%f,%f,%f,%f) %u",
+                  &probe.target, &probe.x, &probe.y, &r, &g, &b, &a, &tolerance) != 8) {
+    return std::nullopt;
+  }
+  probe.expected = toBGRA({r, g, b, a});
+  probe.tolerance = tolerance;
+  return probe;
+}
+
 std::optional<ColorRGBA> parseClear(std::string_view line) {
   float r = 0.0f;
   float g = 0.0f;
@@ -546,8 +648,17 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (auto probe = parseRenderTargetProbe(line)) {
+    test.probes.push_back(*probe);
+    return;
+  }
+
   if (auto texture = parseDxmt9Texture(line)) {
     test.textureSetups.push_back(std::move(*texture));
+    return;
+  }
+
+  if (parseDxmt9TextureMip(test, line)) {
     return;
   }
 
@@ -558,6 +669,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
 
   if (auto bind = parseDxmt9BindTexture(line)) {
     test.textureBinds.push_back(*bind);
+    return;
+  }
+
+  if (auto target = parseDxmt9RenderTarget(line)) {
+    test.renderTargetSetups.push_back(*target);
     return;
   }
 
@@ -770,30 +886,46 @@ ShaderRef makeShaderRef(const ShaderSection& section) {
 std::vector<std::shared_ptr<Texture>> createDxmt9Textures(Device& device, const CorpusTest& test) {
   std::vector<std::shared_ptr<Texture>> textures;
   for (const auto& setup : test.textureSetups) {
+    if (setup.levels.empty() || setup.levels[0].width == 0 || setup.levels[0].height == 0) {
+      fail("dxmt9 texture requires level 0");
+    }
     if (setup.id >= textures.size()) {
       textures.resize(static_cast<size_t>(setup.id) + 1u);
     }
 
+    const auto& base = setup.levels[0];
     auto texture =
-        device.createTexture({setup.width, setup.height, 1, 1, setup.format, TextureType::TwoD, Pool::Managed,
-                              UsageTexture});
+        device.createTexture({base.width, base.height, 1, static_cast<u32>(setup.levels.size()), setup.format,
+                              TextureType::TwoD, Pool::Managed, UsageTexture});
     if (!texture) {
       fail("failed to create dxmt9 texture");
     }
 
-    auto upload = texture->lockRect(0, nullptr, UsageDiscard);
-    if (!upload.data) {
-      fail("failed to lock dxmt9 texture");
-    }
-    auto* bytes = static_cast<u8*>(upload.data);
-    for (u32 y = 0; y < setup.height; ++y) {
-      for (u32 x = 0; x < setup.width; ++x) {
-        const auto& texel = setup.texels[static_cast<size_t>(y) * setup.width + x];
-        std::memcpy(bytes + static_cast<size_t>(y) * upload.pitch + static_cast<size_t>(x) * texel.size(),
-                    texel.data(), texel.size());
+    for (u32 levelIndex = 0; levelIndex < setup.levels.size(); ++levelIndex) {
+      const auto& level = setup.levels[levelIndex];
+      if (level.width == 0 || level.height == 0) {
+        fail("dxmt9 texture mip level missing");
       }
+      const u32 expectedWidth = std::max(1u, base.width >> levelIndex);
+      const u32 expectedHeight = std::max(1u, base.height >> levelIndex);
+      if (level.width != expectedWidth || level.height != expectedHeight) {
+        fail("dxmt9 texture mip level dimensions do not match base texture");
+      }
+
+      auto upload = texture->lockRect(levelIndex, nullptr, UsageDiscard);
+      if (!upload.data) {
+        fail("failed to lock dxmt9 texture");
+      }
+      auto* bytes = static_cast<u8*>(upload.data);
+      for (u32 y = 0; y < level.height; ++y) {
+        for (u32 x = 0; x < level.width; ++x) {
+          const auto& texel = level.texels[static_cast<size_t>(y) * level.width + x];
+          std::memcpy(bytes + static_cast<size_t>(y) * upload.pitch + static_cast<size_t>(x) * texel.size(),
+                      texel.data(), texel.size());
+        }
+      }
+      texture->unlockRect(levelIndex);
     }
-    texture->unlockRect(0);
     textures[setup.id] = std::move(texture);
   }
   return textures;
@@ -931,7 +1063,8 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9TexturedQuad || test.drawDxmt9SolidQuad ||
                             test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty() ||
                             !test.textureSetups.empty() || !test.samplerSetups.empty() ||
-                            !test.textureBinds.empty() || test.viewport.has_value() ||
+                            !test.textureBinds.empty() || !test.renderTargetSetups.empty() ||
+                            test.viewport.has_value() ||
                             test.colorWriteMask.has_value() || test.alphaTestEnable;
   if (!needsRuntime) {
     return;
@@ -965,13 +1098,33 @@ void runCorpusFile(const std::string& path) {
     fail("missing back buffer");
   }
 
-  auto probeSurface = device->createSurface({64, 64, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
-  if (!probeSurface) {
-    fail("failed to create readback surface");
-  }
-
   device->setViewport({0, 0, 64, 64, 0.0f, 1.0f});
-  device->setRenderTarget(0, backBuffer);
+  std::array<std::shared_ptr<Surface>, kMaxRenderTargets> renderTargets{};
+  renderTargets[0] = backBuffer;
+  if (device->setRenderTarget(0, backBuffer) != D3D_OK) {
+    fail("dxmt9 render target setup failed");
+  }
+  for (const auto& target : test.renderTargetSetups) {
+    if (target.slot >= renderTargets.size()) {
+      fail("dxmt9-render-target slot out of range");
+    }
+    if (target.slot == 0) {
+      renderTargets[0] = backBuffer;
+      continue;
+    }
+    if (renderTargets[target.slot]) {
+      fail("duplicate dxmt9-render-target slot");
+    }
+    auto surface = device->createSurface(
+        {params.backBufferWidth, params.backBufferHeight, target.format, Pool::Default, UsageRenderTarget, true, false});
+    if (!surface) {
+      fail("failed to create dxmt9 render target");
+    }
+    if (device->setRenderTarget(target.slot, surface) != D3D_OK) {
+      fail("dxmt9 render target setup failed");
+    }
+    renderTargets[target.slot] = std::move(surface);
+  }
   if (test.viewport) {
     if (device->setViewport(*test.viewport) != D3D_OK) {
       fail("dxmt9 viewport setup failed");
@@ -1001,13 +1154,20 @@ void runCorpusFile(const std::string& path) {
 
   const bool needsClear = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
                           test.drawDxmt9TexturedQuad || test.drawDxmt9SolidQuad ||
-                          test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty();
+                          test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty() ||
+                          !test.renderTargetSetups.empty();
   if (needsClear) {
     const auto clearColor = test.clearColor.value_or(ColorRGBA{0.0f, 0.0f, 0.0f, 1.0f});
     ClearDesc clear{};
     clear.clearColor = true;
     clear.color = clearColor;
-    clear.colorAttachments[0] = {backBuffer->handle(), backBuffer->level(), backBuffer->multiSampleCount()};
+    for (size_t i = 0; i < renderTargets.size(); ++i) {
+      if (!renderTargets[i]) {
+        continue;
+      }
+      clear.colorAttachments[i] = {renderTargets[i]->handle(), renderTargets[i]->level(),
+                                   renderTargets[i]->multiSampleCount()};
+    }
     if (device->clear(clear) != D3D_OK) {
       fail("clear failed");
     }
@@ -1066,29 +1226,51 @@ void runCorpusFile(const std::string& path) {
   }
 
   if (!test.probes.empty()) {
-    if (device->getRenderTargetData(backBuffer, probeSurface) != D3D_OK) {
-      fail("getRenderTargetData failed");
-    }
-    auto region = probeSurface->lockRect(nullptr, 0);
-    if (!region.data) {
-      fail("failed to lock readback surface");
-    }
-    const auto* pixels = static_cast<const u8*>(region.data);
+    std::array<std::shared_ptr<Surface>, kMaxRenderTargets> probeSurfaces{};
+    std::array<std::vector<u8>, kMaxRenderTargets> probePixels{};
+    std::array<u32, kMaxRenderTargets> probePitches{};
     for (const auto& probe : test.probes) {
-      const size_t offset = static_cast<size_t>(probe.y) * region.pitch + static_cast<size_t>(probe.x) * 4;
+      if (probe.x >= params.backBufferWidth || probe.y >= params.backBufferHeight) {
+        fail("probe coordinate out of range");
+      }
+      if (probe.target >= renderTargets.size() || !renderTargets[probe.target]) {
+        fail("probe references an unbound render target");
+      }
+      if (!probeSurfaces[probe.target]) {
+        probeSurfaces[probe.target] = device->createSurface(
+            {params.backBufferWidth, params.backBufferHeight, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
+        if (!probeSurfaces[probe.target]) {
+          fail("failed to create readback surface");
+        }
+        if (device->getRenderTargetData(renderTargets[probe.target], probeSurfaces[probe.target]) != D3D_OK) {
+          fail("getRenderTargetData failed");
+        }
+        auto region = probeSurfaces[probe.target]->lockRect(nullptr, 0);
+        if (!region.data) {
+          fail("failed to lock readback surface");
+        }
+        probePitches[probe.target] = region.pitch;
+        const auto byteCount =
+            static_cast<size_t>(region.pitch) * static_cast<size_t>(params.backBufferHeight);
+        const auto* bytes = static_cast<const u8*>(region.data);
+        probePixels[probe.target].assign(bytes, bytes + byteCount);
+        probeSurfaces[probe.target]->unlockRect();
+      }
+      const auto& pixels = probePixels[probe.target];
+      const size_t offset =
+          static_cast<size_t>(probe.y) * probePitches[probe.target] + static_cast<size_t>(probe.x) * 4;
       const std::array<u8, 4> actual{pixels[offset + 0], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]};
       for (size_t i = 0; i < actual.size(); ++i) {
         const int diff = std::abs(static_cast<int>(actual[i]) - static_cast<int>(probe.expected[i]));
         if (static_cast<u32>(diff) > probe.tolerance) {
           std::ostringstream out;
-          out << path << ": probe (" << probe.x << ", " << probe.y << ") channel " << i
+          out << path << ": probe rt" << probe.target << " (" << probe.x << ", " << probe.y << ") channel " << i
               << " expected " << static_cast<unsigned>(probe.expected[i]) << " got "
               << static_cast<unsigned>(actual[i]) << " tolerance " << probe.tolerance;
           fail(out.str());
         }
       }
     }
-    probeSurface->unlockRect();
   }
 }
 

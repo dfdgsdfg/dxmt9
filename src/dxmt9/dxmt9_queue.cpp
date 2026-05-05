@@ -171,10 +171,14 @@ ChunkObservation makeChunkObservation(const MetalCommandView& command,
           .compatFlags = command.clear ? compatFlagsForClear(*command.clear, resolveSurfaceFlags) : 0,
       };
     case MetalCommandKind::SurfaceCopy:
-    case MetalCommandKind::StretchRect:
     case MetalCommandKind::Readback:
       return ChunkObservation{
           .kind = ChunkObservationKind::Blit,
+          .compatFlags = 0,
+      };
+    case MetalCommandKind::StretchRect:
+      return ChunkObservation{
+          .kind = ChunkObservationKind::StretchRect,
           .compatFlags = 0,
       };
     case MetalCommandKind::ColorFill:
@@ -322,6 +326,7 @@ CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input) {
   diagnostics.hasDraw = input.hasDraw;
   diagnostics.hasPresent = input.hasPresent;
   diagnostics.hasBlit = input.hasBlit;
+  diagnostics.hasStretchRect = input.hasStretchRect;
   diagnostics.frame = input.frame;
   diagnostics.compatFlags = input.compatFlags;
   return diagnostics;
@@ -341,6 +346,10 @@ CommandBufferDiagnostics summarizeChunk(u64 seqId,
         break;
       case ChunkObservationKind::Blit:
         input.hasBlit = true;
+        break;
+      case ChunkObservationKind::StretchRect:
+        input.hasBlit = true;
+        input.hasStretchRect = true;
         break;
       case ChunkObservationKind::Present:
         input.hasPresent = true;
@@ -1233,7 +1242,8 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
         static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
         pending.diagnostics.hasDraw,
         pending.diagnostics.hasPresent,
-        pending.diagnostics.hasBlit);
+        pending.diagnostics.hasBlit,
+        pending.diagnostics.hasStretchRect);
   }
 
   const auto binding = submissionBinding_;
@@ -1607,7 +1617,7 @@ bool CompletionTracker::inspect(obj_handle_t commandBuffer,
   const WMTCommandBufferStatus status = wrapped.status();
   if (queueTraceEnabled()) {
     dxmt9::util::logf(dxmt9::util::LogLevel::Debug, "dxmt9-metal",
-                      "%s seq=%llu slot=%zu frame=%u status=%s draw=%d present=%d blit=%d",
+                      "%s seq=%llu slot=%zu frame=%u status=%s draw=%d present=%d blit=%d stretch=%d",
                       context,
                       static_cast<unsigned long long>(diagnostics.seqId),
                       diagnostics.slotIndex,
@@ -1615,7 +1625,8 @@ bool CompletionTracker::inspect(obj_handle_t commandBuffer,
                       commandBufferStatusName(status).c_str(),
                       diagnostics.hasDraw ? 1 : 0,
                       diagnostics.hasPresent ? 1 : 0,
-                      diagnostics.hasBlit ? 1 : 0);
+                      diagnostics.hasBlit ? 1 : 0,
+                      diagnostics.hasStretchRect ? 1 : 0);
   }
 
   if (status == WMTCommandBufferStatusError) {
