@@ -240,6 +240,7 @@ class CommandQueue {
   size_t inflightCount_ = 0;
   std::deque<size_t> readySlots_{};
   std::deque<std::uint64_t> completedSeqQueue_{};
+  std::deque<std::uint64_t> completedPresentSeqQueue_{};
   std::condition_variable presentDequeuedCv_{};
 
   // Last destination handle for a color-write. submitPresent only uses

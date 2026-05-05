@@ -17,8 +17,10 @@ precise and machine-checkable.
 | English spec | Formal / deterministic evidence | C++ implementation |
 |---|---|---|
 | `backend/design.md` §2 | `tla/CommandQueue.tla` | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` |
+| `backend/design.md` §2 / §2.2 | `tla/QueueLifecycleRefinement.tla` | `QueueLifecycleController` in `src/dxmt9/dxmt9_queue.*` |
 | `backend/design.md` §3 | `tla/EncoderLifecycle.tla` | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers |
 | `backend/design.md` §5 / §7 | `tla/ResourceLifetime.tla` | `src/dxmt9/dxmt9_resource_pool.*` |
+| `backend/design.md` §8 / §8.1 | `tla/PresentFrameLatency.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` |
 | `d3d9/queries/design.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
 | `backend/design.md` §2 and `tests/design.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
 
@@ -33,6 +35,10 @@ specs/verification/
 └── tla/
     ├── CommandQueue.tla   3-thread ring buffer
     ├── CommandQueue.cfg   TLC model parameters
+    ├── QueueLifecycleRefinement.tla  QueueLifecycleController staging/refinement
+    ├── QueueLifecycleRefinement.cfg
+    ├── PresentFrameLatency.tla  Present token and frame-latency gating
+    ├── PresentFrameLatency.cfg
     ├── ResourceLifetime.tla  Deferred GPU resource destruction
     ├── ResourceLifetime.cfg
     ├── EncoderLifecycle.tla  MTLCommandEncoder state machine
@@ -133,6 +139,11 @@ exercise all structural behaviors while keeping the state space tractable.
 | CommandQueue | `RING_SIZE` | 4 | 32 |
 | CommandQueue | `MAX_INFLIGHT` | 2 | 3 |
 | CommandQueue | `MAX_SEQID` | 6 | unbounded |
+| QueueLifecycleRefinement | `RING_SIZE` | 3 | 32 |
+| QueueLifecycleRefinement | `MAX_INFLIGHT` | 2 | `kMaxQueuedChunks` back-pressure limit |
+| QueueLifecycleRefinement | `MAX_SEQID` | 4 | unbounded |
+| PresentFrameLatency | `MAX_SEQID` | 5 | unbounded |
+| PresentFrameLatency | `MAX_FRAME_LATENCY` | 2 | `SetMaximumFrameLatency()` / backend latency cap |
 | ResourceLifetime | `Resources` | `{r1,r2,r3}` | dynamic |
 | ResourceLifetime | `MAX_SEQID` | 5 | unbounded |
 | EncoderLifecycle | `RenderTargets` | `{rt1,rt2}` | dynamic |
@@ -175,8 +186,11 @@ TLC checks this by verifying `CQ!Spec` is satisfied whenever `ImplSpec`
 steps occur. This is the strongest form of binding short of a full proof
 in a proof assistant (Lean 4, Coq).
 
-Concrete refinement specs are deferred until each subsystem's C++ class
-interface is stable.
+Concrete refinement specs should be added once the implementation state is
+stable enough to name. `QueueLifecycleRefinement.tla` is the first such model:
+it binds the queue's abstract lifecycle to `QueueLifecycleController` staging
+fields (`readySlots`, `pendingCompletion`, `completedSeqQueue`, inline
+completion, empty commits, and `waitForSequence`).
 
 ---
 

@@ -31,7 +31,8 @@ are covered by unit tests and property-based tests.
 
 ## 2. Command Queue
 
-Traceability: R-BACK-2.1, R-BACK-2.2
+Traceability: R-BACK-2.1, R-BACK-2.2, R-BACK-2.12, R-BACK-2.13,
+R-BACK-6.4-R-BACK-6.8
 
 **R-VERIF-2.1** The formal spec must prove that the ring buffer never
 allows the Wine thread's write index to overwrite a slot that is still
@@ -51,6 +52,30 @@ the Free state (no permanent stall).
 **R-VERIF-2.5** The formal spec must prove that once the Wine thread stops
 committing, all in-flight work eventually drains and the queue reaches
 quiescence.
+
+**R-VERIF-2.6** The formal spec must include a concrete queue lifecycle model
+for `QueueLifecycleController` that exposes `readySlots`, `pendingCompletion`,
+`completedSeqQueue`, inline completion, empty commit, `lastCommittedSeqId`,
+`waitForSequence`, and shutdown wakeups.
+
+**R-VERIF-2.7** The concrete queue lifecycle model must prove that `readySlots`
+contains only Pending slots, `pendingCompletion` contains only GPU-submitted
+slots, `completedSeqQueue` entries never exceed `lastCommittedSeqId`, and the
+implementation-level slot transitions refine the abstract queue lifecycle.
+
+**R-VERIF-2.8** The concrete queue lifecycle model must prove that
+`waitForSequence(target)` cannot return before `completedSeqId >= target`
+unless queue shutdown has been requested.
+
+**R-VERIF-2.9** The formal spec must model present-bearing chunks separately
+from non-present chunks. Present completion must not advance ahead of normal
+command-buffer completion, i.e. `presentCompletedSeqId <= completedSeqId` in
+every reachable state.
+
+**R-VERIF-2.10** The formal spec must prove that queue-owned frame-latency
+tokens bound accepted but incomplete present-bearing chunks by the configured
+maximum frame latency, and that an application present wait cannot return while
+the gate remains full unless shutdown has been requested.
 
 ---
 

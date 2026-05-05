@@ -1,4 +1,5 @@
 #include "dxmt9_command_queue.hpp"
+#include "dxmt9/assert.hpp"
 #include "dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
@@ -950,6 +951,10 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
     presentDequeuedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
   }
   const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
+  // TLA+: PresentFrameLatency / AppWaitReturnSafe
+  DXMT_ASSERT(stop_ || reachedBoundary());
+  // TLA+: PresentFrameLatency / PresentCompletionSafety
+  DXMT_ASSERT(presentCompletedSeqId_ <= completedSeqId_);
   perf::countPresentBoundaryWait(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
 }
@@ -1004,6 +1009,7 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .nextSeqId = &nextSeqId_,
       .readySlots = &readySlots_,
       .completedSeqQueue = &completedSeqQueue_,
+      .completedPresentSeqQueue = &completedPresentSeqQueue_,
       .inflightCount = &inflightCount_,
       .completedSeqId = &completedSeqId_,
       .presentCompletedSeqId = &presentCompletedSeqId_,

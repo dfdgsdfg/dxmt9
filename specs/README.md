@@ -85,6 +85,8 @@ specs/
 │   ├── design.md           TLA+ approach, C++ binding, how to run TLC
 │   └── tla/                TLA+ modules (checked with TLC model checker)
 │       ├── CommandQueue.tla         3-thread ring buffer
+│       ├── QueueLifecycleRefinement.tla  QueueLifecycleController staging/refinement
+│       ├── PresentFrameLatency.tla  Present token and frame-latency gate
 │       ├── ResourceLifetime.tla     Deferred GPU resource destruction
 │       ├── EncoderLifecycle.tla     MTLCommandEncoder state machine
 │       └── QuerySeqId.tla           D3D9 query seq-ID fence

@@ -65,7 +65,7 @@ propagation, query validation, and lost-device/reset behaviour.
 |---|---|---|
 | `BackendDevice` interface + sim backend | ✅ | sim |
 | `MTLDevice` init + `MTLCommandQueue` | ✅ | metal |
-| Command queue ring: 32 slots, `kMaxInflight=3`, Wine/encode/finish threads | ✅ | metal |
+| Command queue ring: 32 slots, `kMaxQueuedChunks=31`, Wine/encode/finish threads | ✅ | metal; present frame-latency tokens enforce frame pacing separately |
 | Ring allocators: `RingArena` for argbuf, replayStore, staging, copyTemp | ✅ | metal |
 | Clear-as-load-action folding | ✅ | metal |
 | Render-target change → encoder split | ✅ | metal |
@@ -80,7 +80,7 @@ propagation, query validation, and lost-device/reset behaviour.
 | Argument buffer layout: `DrawUniforms` | ✅ | metal |
 | `MTLBuffer` / `MTLTexture` allocation | ✅ | metal |
 | `mapBuffer` DISCARD / NOOVERWRITE / plain | ✅ | metal |
-| Deferred destroy: `destroyPending` + `tryGarbageCollectUnlocked()` | ✅ | metal |
+| Deferred destroy: `destroyPending` + `Pool::reclaimCompleted()` | ✅ | metal |
 | Back buffer `DontCare` after present | ✅ | metal |
 | `CAMetalLayer` swap chain, `nextDrawable`, blit, vsync | ✅ | metal |
 | Encode + finish threads | ✅ | metal |
@@ -122,15 +122,17 @@ bridge naming is no longer part of the target spec.
 
 | Area | Status | Evidence |
 |---|---|---|
-| TLA+ specs: CommandQueue, ResourceLifetime, EncoderLifecycle, QuerySeqId | ✅ | |
-| All four specs model-checked by TLC — zero errors | ✅ | TLC 2.19; 100 / 57 / 17,241 / 52,522 distinct states |
-| `SeqIdSafety` asserted with `// TLA+:` label | ✅ | `reclaimCompletedSlotsUnlocked()` |
+| TLA+ specs: CommandQueue, QueueLifecycleRefinement, PresentFrameLatency, ResourceLifetime, EncoderLifecycle, QuerySeqId | ✅ | |
+| All six specs model-checked by TLC — zero errors | ✅ | TLC 2.19 distinct states: CommandQueue 100, EncoderLifecycle 57, PresentFrameLatency 2,822, QuerySeqId 17,241, QueueLifecycleRefinement 12,584, ResourceLifetime 52,522 |
+| `QueueLifecycleRefinement` concrete queue lifecycle model checked and asserted | ✅ | `QueueLifecycleController` debug invariants cover `readySlots`, `pendingCompletion`, `completedSeqQueue`, inline completion, empty commit, `waitForSequence`, and shutdown paths |
+| `PresentFrameLatency` present-token model checked and asserted | ✅ | `completedPresentSeqQueue_` advances `presentCompletedSeqId` only after `completedSeqId`; `presentBoundary()` asserts `MAX_FRAME_LATENCY` wait return safety |
+| `SeqIdSafety` asserted with `// TLA+:` label | ✅ | `Device` submitted/completed sequence guards and queue completion watermarks |
 | `QueryResolutionSafety` asserted | ✅ | `Query::getData()` |
-| `BoundedInflight` asserted | ✅ | sim + metal `commitCurrentChunkUnlocked()` |
-| `NoUseAfterFree` asserted with `// TLA+:` label | ✅ | `tryGarbageCollectUnlocked()` |
+| `BoundedInflight` asserted | ✅ | sim + metal `QueueLifecycleController::commitCurrentChunk()` |
+| `NoUseAfterFree` asserted with `// TLA+:` label | ✅ | `Pool::reclaimCompleted()` |
 | `RingSafety` asserted with `// TLA+:` label | ✅ | `RingArena::allocateBytes()` + slot ring |
 | `EncodeSafety` asserted with `// TLA+:` label | ✅ | encode loop |
-| `WineCommit` action mapping comments | ✅ | `MetalBackendDevice` Wine-facing methods |
+| `WineCommit` action mapping comments | ✅ | `QueueLifecycleController::commitCurrentChunk()` and `CommandQueue::submit*()` paths |
 | DOD wire-schema acceptance | ⚠️ | Existing chunk tests cover many POD/layout and import validation cases; R-VERIF-7.1 now tracks full wire-schema acceptance for size/alignment, command IDs, version constants, offsets, and variable-tail rules |
 | Queue observer / fake-backend verification | ❌ | R-VERIF-7.3 requires deterministic queue-facing evidence for chunk seq IDs, retained handles, replay categories, barrier/readback boundaries, and encoded command order without relying on Metal timing |
 | DXMT concept mapping acceptance | ⚠️ | README mapping exists; R-VERIF-7.4 requires explicit implementation-owner and test evidence for each hot-path concept before calling DXMT merge readiness complete |

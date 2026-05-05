@@ -1,5 +1,6 @@
 #include "dxmt9_queue.hpp"
 
+#include "dxmt9/assert.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_perf_counters.hpp"
@@ -689,18 +690,15 @@ void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) 
 
   auto& slot = submissionBinding_.slots[slotIndex];
   auto* completedSeqId = submissionBinding_.completedSeqId;
-  auto* inflightCount = submissionBinding_.inflightCount;
   auto* completedSeqQueue = submissionBinding_.completedSeqQueue;
   finishInline(slotIndex, seqId, [&] {
+    // TLA+: QueueLifecycleRefinement / EncodeCompleteInline.
+    if (completedSeqId && completedSeqQueue) {
+      DXMT_ASSERT(seqId == *completedSeqId + completedSeqQueue->size() + 1);
+    }
     slot.state = ChunkSlot::State::Free;
-    slot.seqId = seqId;
+    slot.seqId = 0;
     slot.commands.clear();
-    if (inflightCount && *inflightCount > 0) {
-      --(*inflightCount);
-    }
-    if (completedSeqId) {
-      *completedSeqId = std::max(*completedSeqId, seqId);
-    }
     if (completedSeqQueue) {
       completedSeqQueue->push_back(seqId);
     }
@@ -730,11 +728,24 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
   }
 
   seqId = completedSeqQueue->front();
+  // TLA+: QueueLifecycleRefinement / FinishDequeue.
+  DXMT_ASSERT(seqId == *completedSeqId + 1);
   finishDequeue(seqId, [&] {
     completedSeqQueue->pop_front();
     *completedSeqId = std::max(*completedSeqId, seqId);
     if (*inflightCount > 0) {
       --(*inflightCount);
+    }
+    auto* completedPresentSeqQueue = submissionBinding_.completedPresentSeqQueue;
+    auto* presentCompletedSeqId = submissionBinding_.presentCompletedSeqId;
+    if (completedPresentSeqQueue && presentCompletedSeqId) {
+      while (!completedPresentSeqQueue->empty() &&
+             completedPresentSeqQueue->front() <= *completedSeqId) {
+        *presentCompletedSeqId = std::max(*presentCompletedSeqId, completedPresentSeqQueue->front());
+        completedPresentSeqQueue->pop_front();
+      }
+      // TLA+: PresentFrameLatency / PresentCompletionSafety.
+      DXMT_ASSERT(*presentCompletedSeqId <= *completedSeqId);
     }
   });
   if (submissionBinding_.finishCv) {
@@ -742,6 +753,9 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
   }
   if (submissionBinding_.writeCv) {
     submissionBinding_.writeCv->notify_all();
+  }
+  if (submissionBinding_.presentCompletedCv) {
+    submissionBinding_.presentCompletedCv->notify_all();
   }
   return true;
 }
@@ -793,6 +807,8 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
   const bool waitNeeded = *completedSeqId < targetSeqId;
   const auto waitStarted = std::chrono::steady_clock::now();
   finishCv->wait(lock, [&] { return *stop || *completedSeqId >= targetSeqId; });
+  // TLA+: QueueLifecycleRefinement / WaitForSequenceSafety.
+  DXMT_ASSERT(*stop || *completedSeqId >= targetSeqId);
   if (waitNeeded) {
     const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
     perf::countQueueSequenceWait(static_cast<std::uint64_t>(
@@ -991,6 +1007,113 @@ QueueControllerState QueueLifecycleController::currentState() const {
   return makeBoundQueueState(submissionBinding_);
 }
 
+#ifndef NDEBUG
+void QueueLifecycleController::assertQueueLifecycleInvariants(size_t inflightLimit) const {
+  const auto& binding = submissionBinding_;
+  const auto slots = binding.slots;
+  if (slots.empty()) {
+    return;
+  }
+
+  const u64 completedSeqId = binding.completedSeqId ? *binding.completedSeqId : 0;
+  const u64 lastCommittedSeqId = binding.lastCommittedSeqId ? *binding.lastCommittedSeqId : 0;
+  DXMT_ASSERT(completedSeqId <= lastCommittedSeqId);
+
+  if (binding.writeIndex) {
+    DXMT_ASSERT(*binding.writeIndex < slots.size());
+  }
+  if (binding.writingSlot && binding.writingSlot->has_value()) {
+    DXMT_ASSERT(**binding.writingSlot < slots.size());
+    DXMT_ASSERT(slots[**binding.writingSlot].state == ChunkSlot::State::Writing);
+  }
+
+  size_t abstractInflight = 0;
+  for (const auto& slot : slots) {
+    switch (slot.state) {
+      case ChunkSlot::State::Free:
+        DXMT_ASSERT(slot.seqId == 0);
+        break;
+      case ChunkSlot::State::Writing:
+        DXMT_ASSERT(slot.seqId == 0);
+        break;
+      case ChunkSlot::State::Pending:
+      case ChunkSlot::State::Encoding:
+        DXMT_ASSERT(slot.seqId > 0);
+        DXMT_ASSERT(slot.seqId <= lastCommittedSeqId);
+        ++abstractInflight;
+        break;
+      case ChunkSlot::State::GPU:
+        DXMT_ASSERT(slot.seqId > 0);
+        DXMT_ASSERT(slot.seqId <= lastCommittedSeqId);
+        if (slot.seqId > completedSeqId) {
+          ++abstractInflight;
+        }
+        break;
+    }
+  }
+
+  const size_t effectiveInflightLimit = inflightLimit != 0 ? inflightLimit : slots.size();
+  if (binding.inflightCount) {
+    DXMT_ASSERT(*binding.inflightCount <= effectiveInflightLimit);
+    DXMT_ASSERT(abstractInflight <= *binding.inflightCount);
+  }
+
+  if (binding.readySlots) {
+    for (size_t i = 0; i < binding.readySlots->size(); ++i) {
+      const size_t slotIndex = (*binding.readySlots)[i];
+      DXMT_ASSERT(slotIndex < slots.size());
+      DXMT_ASSERT(slots[slotIndex].state == ChunkSlot::State::Pending);
+      for (size_t j = i + 1; j < binding.readySlots->size(); ++j) {
+        DXMT_ASSERT(slotIndex != (*binding.readySlots)[j]);
+      }
+    }
+  }
+
+  if (binding.completedSeqQueue) {
+    u64 expectedSeqId = completedSeqId + 1;
+    for (const u64 seqId : *binding.completedSeqQueue) {
+      DXMT_ASSERT(seqId == expectedSeqId);
+      DXMT_ASSERT(seqId <= lastCommittedSeqId);
+      ++expectedSeqId;
+    }
+  }
+
+  if (binding.completedPresentSeqQueue) {
+    u64 previousSeqId = completedSeqId;
+    for (const u64 seqId : *binding.completedPresentSeqQueue) {
+      DXMT_ASSERT(seqId > completedSeqId);
+      DXMT_ASSERT(seqId > previousSeqId);
+      DXMT_ASSERT(seqId <= lastCommittedSeqId);
+      previousSeqId = seqId;
+    }
+  }
+
+  if (binding.presentCompletedSeqId) {
+    DXMT_ASSERT(*binding.presentCompletedSeqId <= completedSeqId);
+  }
+}
+
+void QueueLifecycleController::assertPendingCompletionInvariantsLocked() const {
+  const auto& binding = submissionBinding_;
+  const auto slots = binding.slots;
+  if (slots.empty()) {
+    return;
+  }
+
+  const u64 lastCommittedSeqId = binding.lastCommittedSeqId ? *binding.lastCommittedSeqId : 0;
+  u64 previousSeqId = 0;
+  for (const auto& pending : pendingCompletion_) {
+    DXMT_ASSERT(pending.slotIndex < slots.size());
+    DXMT_ASSERT(slots[pending.slotIndex].state == ChunkSlot::State::GPU);
+    DXMT_ASSERT(slots[pending.slotIndex].seqId == pending.seqId);
+    DXMT_ASSERT(pending.seqId > 0);
+    DXMT_ASSERT(pending.seqId <= lastCommittedSeqId);
+    DXMT_ASSERT(previousSeqId == 0 || pending.seqId > previousSeqId);
+    previousSeqId = pending.seqId;
+  }
+}
+#endif
+
 void QueueLifecycleController::transition(QueueTransitionRecord record,
                                           const std::function<void()>& mutate) {
   const auto before = currentState();
@@ -1000,6 +1123,9 @@ void QueueLifecycleController::transition(QueueTransitionRecord record,
   const auto after = currentState();
   record.before = before;
   record.after = after;
+#ifndef NDEBUG
+  assertQueueLifecycleInvariants(record.inflightLimit);
+#endif
   observeTransition(record);
 }
 
@@ -1011,6 +1137,9 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     submissionBinding_.slots[record.slotIndex].state = ChunkSlot::State::GPU;
   }
   const auto afterCommitState = currentState();
+#ifndef NDEBUG
+  assertQueueLifecycleInvariants();
+#endif
 
   observeTransition(QueueTransitionRecord{
       .before = beforeCommitState,
@@ -1061,6 +1190,9 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.slotIndex = record.slotIndex;
     pending.seqId = record.seqId;
     pendingCompletion_.push_back(std::move(pending));
+#ifndef NDEBUG
+    assertPendingCompletionInvariantsLocked();
+#endif
   }
   pendingCompletionCv_.notify_all();
 }
@@ -1100,11 +1232,17 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
   if (binding.mutex && binding.completedSeqQueue) {
     std::lock_guard completionLock(*binding.mutex);
     const QueueControllerState before = makeBoundQueueState(binding);
+    // TLA+: QueueLifecycleRefinement / GpuComplete.
+    DXMT_ASSERT(pending.seqId == (binding.completedSeqId ? *binding.completedSeqId : 0) +
+                                   binding.completedSeqQueue->size() + 1);
     binding.completedSeqQueue->push_back(pending.seqId);
-    if (pending.diagnostics.hasPresent && binding.presentCompletedSeqId) {
-      *binding.presentCompletedSeqId = std::max(*binding.presentCompletedSeqId, pending.seqId);
+    if (pending.diagnostics.hasPresent && binding.completedPresentSeqQueue) {
+      binding.completedPresentSeqQueue->push_back(pending.seqId);
     }
     const QueueControllerState after = makeBoundQueueState(binding);
+#ifndef NDEBUG
+    assertQueueLifecycleInvariants();
+#endif
     observeTransition(QueueTransitionRecord{
         .before = before,
         .after = after,
@@ -1113,9 +1251,6 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
     });
     if (binding.finishCv) {
       binding.finishCv->notify_all();
-    }
-    if (pending.diagnostics.hasPresent && binding.presentCompletedCv) {
-      binding.presentCompletedCv->notify_all();
     }
   }
   // pending.commandBuffer is released when `pending` goes out of scope.

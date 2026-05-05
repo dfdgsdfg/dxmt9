@@ -334,6 +334,7 @@ class QueueLifecycleController {
     u64* nextSeqId = nullptr;
     std::deque<size_t>* readySlots = nullptr;
     std::deque<u64>* completedSeqQueue = nullptr;
+    std::deque<u64>* completedPresentSeqQueue = nullptr;
     size_t* inflightCount = nullptr;
     u64* completedSeqId = nullptr;
     u64* presentCompletedSeqId = nullptr;
@@ -383,6 +384,10 @@ class QueueLifecycleController {
  private:
   QueueControllerState currentState() const;
   QueueLifecycleEvent classifyTransition(const QueueTransitionRecord& record) const;
+#ifndef NDEBUG
+  void assertQueueLifecycleInvariants(size_t inflightLimit = 0) const;
+  void assertPendingCompletionInvariantsLocked() const;
+#endif
   CommandBufferDiagnostics summarizeSubmission(
       u64 seqId,
       size_t slotIndex,
