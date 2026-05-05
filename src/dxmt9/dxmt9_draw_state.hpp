@@ -45,10 +45,18 @@ struct DrawUniforms {
   u32 fogMode = static_cast<u32>(core::FogMode::None);
 };
 
-// Translate D3D9 DrawDesc state into the uniforms consumed by MSL.
+// Translate D3D9 flat draw state into the uniforms consumed by MSL.
+DrawUniforms buildDrawUniforms(core::FlatDrawStateView state);
+
+// Compatibility wrapper for tests / cold-path callers that still provide only
+// a DrawDesc.
 DrawUniforms buildDrawUniforms(const core::DrawDesc& desc);
 
-// Compose a depth/stencil cache key from a DrawDesc's render-state map.
+// Compose a depth/stencil cache key from flat render-state storage.
+pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state);
+
+// Compatibility wrapper for tests / cold-path callers that still provide only
+// a DrawDesc.
 pipeline::DepthStencilKey makeDepthStencilKey(const core::DrawDesc& desc);
 
 }  // namespace dxmt9::state

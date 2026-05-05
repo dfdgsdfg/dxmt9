@@ -91,6 +91,9 @@ void testBuildDrawUniformsViewportAndRenderStateValues() {
   desc.rs.values[RS_FOG_DENSITY] = std::bit_cast<u32>(0.125f);
 
   const auto uniforms = dxmt9::state::buildDrawUniforms(desc);
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto flatUniforms =
+      dxmt9::state::buildDrawUniforms(FlatDrawStateView{.hot = &hot, .coldDesc = &desc});
 
   checkNear(uniforms.halfPixelFixup[0], 1.0f / 320.0f, 1.0e-6f, "half-pixel X fixup");
   checkNear(uniforms.halfPixelFixup[1], 1.0f / 240.0f, 1.0e-6f, "half-pixel Y fixup");
@@ -113,6 +116,14 @@ void testBuildDrawUniformsViewportAndRenderStateValues() {
   checkEq(uniforms.vertexStreamOffset, 64u, "stream zero offset copied");
   checkEq(uniforms.vertexStreamStride, 28u, "stream zero stride copied");
   checkEq(uniforms.clipPlaneMask, 0x15u, "clip plane mask copied");
+  checkEq(flatUniforms.viewportOrigin, uniforms.viewportOrigin,
+          "flat uniform builder matches DrawDesc viewport origin wrapper");
+  checkEq(flatUniforms.vertexStreamOffset, uniforms.vertexStreamOffset,
+          "flat uniform builder matches DrawDesc stream offset wrapper");
+  checkEq(flatUniforms.alphaTestFunc, uniforms.alphaTestFunc,
+          "flat uniform builder matches DrawDesc render-state wrapper");
+  checkEq(flatUniforms.clipPlaneMask, uniforms.clipPlaneMask,
+          "flat uniform builder matches DrawDesc clip-plane wrapper");
 }
 
 void testDepthStencilKeyReflectsDepthAndStencilState() {
@@ -133,8 +144,12 @@ void testDepthStencilKeyReflectsDepthAndStencilState() {
   desc.rs.values[RS_STENCIL_CCW_PASS] = static_cast<u32>(StencilOp::Incr);
 
   const auto key = dxmt9::state::makeDepthStencilKey(desc);
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto flatKey =
+      dxmt9::state::makeDepthStencilKey(FlatDrawStateView{.hot = &hot, .coldDesc = &desc});
 
   check(key.depthEnable, "depth enabled reflected");
+  checkEq(flatKey, key, "flat depth-stencil helper matches DrawDesc compatibility wrapper");
   check(key.depthWrite, "depth write reflected when depth is enabled");
   checkEq(key.depthFunc, static_cast<u32>(CompareFunc::LessEqual), "depth func reflected");
   check(key.front.enabled, "front stencil enabled reflected");
@@ -227,6 +242,10 @@ void testSamplerInfoReflectsSamplerSnapshot() {
   snapshot.states[SAMP_MIPMAP_LOD_BIAS] = std::bit_cast<u32>(2.5f);
 
   const auto info = dxmt9::encoders::makeSamplerInfo(snapshot);
+  DrawDesc desc{};
+  desc.samplers[0] = snapshot;
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto flatInfo = dxmt9::encoders::makeSamplerInfo(hot.samplerStates[0]);
 
   checkEq(info.min_filter, WMTSamplerMinMagFilterLinear, "linear min filter maps to Metal linear");
   checkEq(info.mag_filter, WMTSamplerMinMagFilterNearest, "point mag filter maps to Metal nearest");
@@ -240,6 +259,18 @@ void testSamplerInfoReflectsSamplerSnapshot() {
   checkEq(info.lod_min_clamp, 0.0f, "LOD bias is clamped out of the sampler descriptor min clamp");
   checkEq(info.lod_max_clamp, 0.0f, "LOD bias is clamped out of the sampler descriptor max clamp");
   check(info.normalized_coords, "snapshot sampler coordinates are normalized");
+  checkEq(flatInfo.min_filter, info.min_filter,
+          "flat sampler helper matches snapshot min filter mapping");
+  checkEq(flatInfo.mag_filter, info.mag_filter,
+          "flat sampler helper matches snapshot mag filter mapping");
+  checkEq(flatInfo.mip_filter, info.mip_filter,
+          "flat sampler helper matches snapshot mip filter mapping");
+  checkEq(flatInfo.s_address_mode, info.s_address_mode,
+          "flat sampler helper matches snapshot address U mapping");
+  checkEq(flatInfo.r_address_mode, info.r_address_mode,
+          "flat sampler helper matches snapshot address W mapping");
+  checkEq(flatInfo.border_color, info.border_color,
+          "flat sampler helper matches snapshot border color mapping");
 }
 
 void testSamplerInfoBorderColorFallbacks() {

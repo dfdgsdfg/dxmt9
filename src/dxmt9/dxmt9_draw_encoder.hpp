@@ -52,8 +52,11 @@ struct EncodeContext {
 // full SamplerSnapshot variant that creates the Metal object.
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device, bool linear);
 WMTSamplerInfo makeSamplerInfo(const core::SamplerSnapshot& snapshot);
+WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>& states);
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
                                                 const core::SamplerSnapshot& snapshot);
+WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
+                                                const core::FlatStateSet<core::kMaxSamplerStates>& states);
 
 // Render-pass setup. Builds a WMTRenderPassInfo from the current draw
 // target + optional clear, then begins the encoder on the given command
@@ -101,11 +104,12 @@ struct PreUploadedDrawData {
 // override instead of `draw`. `paramPayloadArena` resolves arena-backed
 // ranges when present; vectors remain the fallback. All other fields
 // (RT/DS/VS/PS/VDecl/VBuffers/IB/viewport/scissor/render-state/transform)
-// still come from `draw`, which represents the run's base state once.
+// still come from `drawState`, whose cold desc represents the run's base state
+// and whose hot record carries flat handles/state for cache decisions.
 bool encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
-                 const core::DrawDesc& draw,
+                 core::FlatDrawStateView drawState,
                  std::uint64_t seqId,
                  bool skipBaseStateBind = false,
                  const PreUploadedDrawData* preUploaded = nullptr,

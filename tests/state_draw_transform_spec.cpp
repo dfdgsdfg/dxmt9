@@ -349,7 +349,7 @@ void testFlatDrawStateKey() {
   run.draws = {drawParamA, drawParamB};
 
   const auto drawDescForParam = [&run](const DrawParam& param) {
-    DrawDesc desc = run.state.desc;
+    DrawDesc desc = run.state.coldDesc;
     desc.primitiveType = param.primitiveType;
     desc.primitiveCount = param.primitiveCount;
     desc.startVertex = param.startVertex;
@@ -361,20 +361,57 @@ void testFlatDrawStateKey() {
     return desc;
   };
 
-  checkEq(run.state.key, makeFlatDrawStateKey(run.state.desc),
-          "draw-run stores the flat base-state decision key");
-  checkEq(run.state.key, makeFlatDrawStateKey(drawDescForParam(run.draws[0])),
+  checkEq(run.state.hot.key, makeFlatDrawStateKey(run.state.coldDesc),
+          "draw-run stores the flat base-state decision key in hot state");
+  check(run.state.coldDesc.userVertexData.empty(),
+        "canonical cold draw state strips vertex UP payload");
+  check(run.state.coldDesc.userIndexData.empty(),
+        "canonical cold draw state strips index UP payload");
+  checkEq(run.state.hot.key, makeFlatDrawStateRecord(run.state.coldDesc).key,
+          "flat draw state record exposes the canonical key");
+  checkEq(run.state.hot.streamBuffers[0], stream0->handle(),
+          "flat draw state record exposes hot stream buffer handles");
+  checkEq(run.state.hot.streamOffsets[0], 16u,
+          "flat draw state record exposes hot stream offsets");
+  checkEq(run.state.hot.streamStrides[0], 32u,
+          "flat draw state record exposes hot stream strides");
+  checkEq(run.state.hot.textures[0], texture0->handle(),
+          "flat draw state record exposes hot texture handles");
+  checkEq(flatStateOr(run.state.hot.renderStates, RS_Z_ENABLE, 0u), 1u,
+          "flat draw state record stores render states in fixed hot storage");
+  checkEq(run.state.hot.renderStates.hash, run.state.hot.key.renderStateHash,
+          "flat render-state storage carries the canonical hash");
+  checkEq(flatStateOr(run.state.hot.textureStageStates[0], TSS_COLOR_OP, 0u),
+          static_cast<u32>(TextureOp::Modulate),
+          "flat draw state record stores TSS in fixed hot storage");
+  checkEq(run.state.hot.textureStageStates[0].hash,
+          run.state.hot.key.textureStageStateHashes[0],
+          "flat TSS storage carries the canonical hash");
+  checkEq(flatStateOr(run.state.hot.samplerStates[0], SAMP_ADDRESS_U, 0u), 1u,
+          "flat draw state record stores sampler states in fixed hot storage");
+  checkEq(run.state.hot.samplerStates[0].hash,
+          run.state.hot.key.samplerStateHashes[0],
+          "flat sampler storage carries the canonical hash");
+  checkEq(run.state.hot.colorAttachments[0].handle, rt0->handle(),
+          "flat draw state record exposes hot color attachments");
+  checkEq(run.state.hot.depthStencil.handle, depth->handle(),
+          "flat draw state record exposes hot depth attachment");
+  checkEq(run.state.view().key(), run.state.hot.key,
+          "flat draw state view exposes hot flat key");
+  check(&run.state.view().desc() == &run.state.coldDesc,
+        "flat draw state view exposes cold draw state");
+  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[0])),
           "draw-run key ignores first draw param fields");
-  checkEq(run.state.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
+  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
           "draw-run key ignores varying draw param fields and UP payloads");
-  const FlatDrawStateKey storedRunKey = run.state.key;
+  const FlatDrawStateKey storedRunKey = run.state.hot.key;
   run.draws[1].primitiveCount = 11;
   run.draws[1].startVertex = 64;
   run.draws[1].userVertexData = {0xaa, 0xbb, 0xcc};
   run.draws[1].userIndexData = {0x10, 0x11};
-  checkEq(run.state.key, storedRunKey,
+  checkEq(run.state.hot.key, storedRunKey,
           "draw-run key remains separate from mutable draw params");
-  checkEq(run.state.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
+  checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
           "mutated draw params and UP payloads still do not alter the run key");
 
   DrawRunDesc packedRun{};
@@ -386,16 +423,16 @@ void testFlatDrawStateKey() {
   packedParam.userVertexRange = {0, 4};
   packedParam.userIndexRange = {4, 2};
   packedRun.draws = {packedParam};
-  checkEq(packedRun.state.key, firstKey,
+  checkEq(packedRun.state.hot.key, firstKey,
           "draw-run payload arena does not disturb the base-state key");
   checkEq(packedRun.draws[0].userVertexRange.offset, 0u,
           "draw-run stores vertex UP payload as an arena offset");
   checkEq(packedRun.draws[0].userIndexRange.size, 2u,
           "draw-run stores index UP payload as an arena size");
-  const FlatDrawStateKey packedRunKey = packedRun.state.key;
+  const FlatDrawStateKey packedRunKey = packedRun.state.hot.key;
   packedRun.payloadArena[0] = 0xaa;
   packedRun.draws[0].userVertexRange.size = 3;
-  checkEq(packedRun.state.key, packedRunKey,
+  checkEq(packedRun.state.hot.key, packedRunKey,
           "payload arena mutations remain separate from the draw-run key");
 
   ChunkSlot slot{};
@@ -404,7 +441,7 @@ void testFlatDrawStateKey() {
   check(drawView.drawRecord != nullptr, "slot draw command exposes compact draw record");
   check(drawView.drawState != nullptr, "slot draw command indexes canonical draw state");
   check(drawView.drawParam != nullptr, "slot draw command indexes draw param table");
-  checkEq(drawView.drawState->key, firstKey,
+  checkEq(drawView.drawState->hot.key, firstKey,
           "slot draw state stores the canonical flat key");
   checkEq(drawView.drawParam->userVertexRange.offset, 0u,
           "slot draw payload stores vertex bytes in slot arena");
@@ -450,9 +487,9 @@ void testFlatDrawStateKey() {
   changedRenderState.renderStates[RS_CULL_MODE] = static_cast<u32>(CullMode::None);
   DrawRunDesc changedRun{};
   changedRun.state = makeCanonicalDrawState(makeDrawDescFromState(changedRenderState, {}));
-  check(!(firstKey == changedRun.state.key),
+  check(!(firstKey == changedRun.state.hot.key),
         "render-state changes flat base draw state");
-  check(!(run.state.key == changedRun.state.key),
+  check(!(run.state.hot.key == changedRun.state.hot.key),
         "draw-run key changes when base state changes");
 
   DeviceState changedStream = state;

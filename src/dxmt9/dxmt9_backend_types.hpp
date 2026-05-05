@@ -121,7 +121,7 @@ struct ChunkSlot {
   }
 
   void appendDrawRun(DrawRunDesc drawRun) {
-    drawRun.state.key = makeFlatDrawStateKey(drawRun.state.desc);
+    drawRun.state.hot = makeFlatDrawStateRecord(drawRun.state.coldDesc);
     const auto stateIndex = static_cast<std::uint32_t>(drawStates.size());
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     drawStates.push_back(std::move(drawRun.state));
@@ -229,7 +229,7 @@ struct ChunkSlot {
         view.drawRecord = &record;
         if (record.stateIndex < drawStates.size()) {
           view.drawState = &drawStates[record.stateIndex];
-          view.draw = &view.drawState->desc;
+          view.draw = &view.drawState->coldDesc;
         }
         if (record.paramIndex < drawParams.size()) {
           view.drawParam = &drawParams[record.paramIndex];
@@ -242,7 +242,7 @@ struct ChunkSlot {
         view.drawRunRecord = &record;
         if (record.stateIndex < drawStates.size()) {
           view.drawState = &drawStates[record.stateIndex];
-          view.draw = &view.drawState->desc;
+          view.draw = &view.drawState->coldDesc;
         }
         if (record.firstParam <= drawParams.size() &&
             record.paramCount <= drawParams.size() - record.firstParam) {

@@ -1467,6 +1467,13 @@ static D9CWireHandle toWireHandle(const void* handle) {
  * ========================================================================= */
 
 class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlush {
+    static_assert(sizeof(D9CCommandChunkWireHeader) ==
+                  D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE);
+    static_assert(sizeof(D9CCommandChunkWireRecordHeader) ==
+                  D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE);
+    static_assert(sizeof(D9CCommandChunkWireHandleEntry) ==
+                  D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE);
+
     // Phase 21: chunk-flush thresholds. Defaults match what the PE
     // recorder has been tuned around since Phase 5 (64 records = a few
     // dozen draws + their state setters; 256 KB ≈ one full vertex
@@ -1572,6 +1579,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     DWORD pendingLightEnableMask_ = 0;
     DWORD lightEnableShadow_ = 0;
     std::vector<std::uint8_t> pendingCommandBytes_{};
+    std::vector<D9CCommandChunkWireRecordHeader> pendingCommandWireRecords_{};
     UINT pendingCommandRecordCount_ = 0;
 
     // Shader-constant shadow + dirty range per (stage, type). Per the
@@ -1599,10 +1607,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Per-chunk resource retention set, one dedup'd container per kind.
     // Populated by the PE-side Set{Texture,StreamSource,Indices,
     // RenderTarget,DepthStencil} fast paths; serialized into
-    // D9CCommandChunk.handles[] at commit_chunk; cleared after a
-    // successful commit.
+    // the DOD wire blob at commit_chunk; cleared after a successful
+    // commit.
     std::unordered_set<uint64_t> chunkHandlesByKind_[5]{};
-    std::vector<D9CChunkHandleEntry> chunkHandlesPayload_{};
+    std::vector<D9CCommandChunkWireHandleEntry> chunkHandlesPayload_{};
+    std::vector<std::uint8_t> pendingCommandWireBlob_{};
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
@@ -1629,6 +1638,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         renderStateShadow_.clear();
         clearPendingHotState();
         pendingCommandBytes_.clear();
+        pendingCommandWireRecords_.clear();
+        pendingCommandWireBlob_.clear();
+        chunkHandlesPayload_.clear();
         pendingCommandRecordCount_ = 0;
         fvf_ = 0;
         std::memset(streamOff_, 0, sizeof(streamOff_));
@@ -1949,9 +1961,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     // Phase 18: walk the FULL current binding shadow and add every
     // non-null handle to chunkHandlesByKind_. Critical invariant for
-    // safe per-draw mark suppression: chunk.handles MUST be a superset
-    // of every resource handle referenced by every record in
-    // chunk.records. The Set* fast paths only note the handle when
+    // safe per-draw mark suppression: the wire handle table MUST be a
+    // superset of every resource handle referenced by every record in
+    // the chunk payload arena. The Set* fast paths only note the handle when
     // SetX is called *this chunk* — so a prior-chunk binding that's
     // still in effect this chunk would otherwise miss retention. Since
     // every Set* path flushes the chunk before mutating the shadow,
@@ -1994,7 +2006,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!dxmt9PeDrawChunkEnabled() || pendingCommandRecordCount_ == 0) {
             return S_OK;
         }
-        // Phase 18: ensure chunk.handles ⊇ every handle a record may
+        if (pendingCommandWireRecords_.size() != pendingCommandRecordCount_) {
+            return D3DERR_INVALIDCALL;
+        }
+        // Phase 18: ensure wire handle table ⊇ every handle a record may
         // reference. Without this, prior-chunk bindings still in effect
         // this chunk are missed by bulk retention — and per-draw
         // markDrawResources is suppressed (Phase 14) — so a Released or
@@ -2005,34 +2020,103 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // semantically meaningful — server treats the list as an
         // unordered set of (kind, handle) pairs.
         chunkHandlesPayload_.clear();
-        std::uint32_t totalHandles = 0;
+        std::uint64_t totalHandles = 0;
         for (uint32_t kind = 0; kind < 5; ++kind) {
-            totalHandles += static_cast<std::uint32_t>(chunkHandlesByKind_[kind].size());
+            totalHandles += static_cast<std::uint64_t>(chunkHandlesByKind_[kind].size());
+            if (totalHandles > 0xffffffffull) {
+                return D3DERR_INVALIDCALL;
+            }
         }
-        chunkHandlesPayload_.reserve(totalHandles);
+        chunkHandlesPayload_.reserve(static_cast<size_t>(totalHandles));
         for (uint32_t kind = 0; kind < 5; ++kind) {
             for (auto handle : chunkHandlesByKind_[kind]) {
-                chunkHandlesPayload_.push_back(D9CChunkHandleEntry{
+                chunkHandlesPayload_.push_back(D9CCommandChunkWireHandleEntry{
                     .kind = kind,
-                    .reserved = 0,
-                    .handle = handle,
+                    .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+                    .opaqueHandle = handle,
+                    .reserved0 = 0,
+                    .reserved1 = 0,
                 });
             }
+        }
+        const auto wireRecordCount =
+            static_cast<std::uint32_t>(pendingCommandWireRecords_.size());
+        const auto wireHandleCount =
+            static_cast<std::uint32_t>(chunkHandlesPayload_.size());
+        const auto payloadArenaSize =
+            static_cast<std::uint32_t>(pendingCommandBytes_.size());
+        for (auto& record : pendingCommandWireRecords_) {
+            record.firstHandle = 0;
+            record.handleCount = wireHandleCount;
+        }
+
+        const auto recordTableBytes =
+            static_cast<std::uint64_t>(wireRecordCount) *
+            D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
+        const auto handleTableBytes =
+            static_cast<std::uint64_t>(wireHandleCount) *
+            D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
+        const auto payloadArenaOffset =
+            static_cast<std::uint64_t>(D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE) +
+            recordTableBytes + handleTableBytes;
+        const auto wireBlobSize =
+            payloadArenaOffset + static_cast<std::uint64_t>(payloadArenaSize);
+        if (recordTableBytes > 0xffffffffull ||
+            handleTableBytes > 0xffffffffull ||
+            payloadArenaOffset > 0xffffffffull ||
+            wireBlobSize > 0xffffffffull) {
+            return D3DERR_INVALIDCALL;
+        }
+
+        pendingCommandWireBlob_.assign(
+            static_cast<size_t>(wireBlobSize), std::uint8_t{0});
+        D9CCommandChunkWireHeader wireHeader{};
+        wireHeader.version = D9C_COMMAND_CHUNK_WIRE_VERSION;
+        wireHeader.headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
+        wireHeader.recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
+        wireHeader.handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
+        wireHeader.recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
+        wireHeader.recordCount = wireRecordCount;
+        wireHeader.handleTableOffset =
+            wireHeader.recordTableOffset + static_cast<std::uint32_t>(recordTableBytes);
+        wireHeader.handleCount = wireHandleCount;
+        wireHeader.payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset);
+        wireHeader.payloadArenaSize = payloadArenaSize;
+
+        std::memcpy(pendingCommandWireBlob_.data(), &wireHeader, sizeof(wireHeader));
+        if (recordTableBytes != 0) {
+            std::memcpy(
+                pendingCommandWireBlob_.data() + wireHeader.recordTableOffset,
+                pendingCommandWireRecords_.data(),
+                static_cast<size_t>(recordTableBytes));
+        }
+        if (handleTableBytes != 0) {
+            std::memcpy(
+                pendingCommandWireBlob_.data() + wireHeader.handleTableOffset,
+                chunkHandlesPayload_.data(),
+                static_cast<size_t>(handleTableBytes));
+        }
+        if (payloadArenaSize != 0) {
+            std::memcpy(
+                pendingCommandWireBlob_.data() + wireHeader.payloadArenaOffset,
+                pendingCommandBytes_.data(),
+                payloadArenaSize);
         }
 
         D9CCommandChunk chunk{};
         chunk.version = D9C_COMMAND_CHUNK_VERSION;
-        chunk.recordCount = pendingCommandRecordCount_;
-        chunk.recordBytes = static_cast<std::uint32_t>(pendingCommandBytes_.size());
-        chunk.records = toWireHandle(pendingCommandBytes_.data());
-        chunk.handleCount = static_cast<std::uint32_t>(chunkHandlesPayload_.size());
-        chunk.handles = chunk.handleCount != 0
-                            ? toWireHandle(chunkHandlesPayload_.data())
-                            : D9CWireHandle{};
+        chunk.recordCount = wireRecordCount;
+        chunk.recordBytes = static_cast<std::uint32_t>(pendingCommandWireBlob_.size());
+        chunk.records = toWireHandle(pendingCommandWireBlob_.data());
+        chunk.handleCount = wireHandleCount;
+        chunk.handles = D9CWireHandle{};
 
         const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
         if (SUCCEEDED(hr)) {
             pendingCommandBytes_.clear();
+            pendingCommandWireRecords_.clear();
+            pendingCommandWireBlob_.clear();
+            chunkHandlesPayload_.clear();
             pendingCommandRecordCount_ = 0;
             for (auto& set : chunkHandlesByKind_) {
                 set.clear();
@@ -2053,7 +2137,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
 
         const auto* raw = static_cast<const std::uint8_t*>(data);
+        const auto payloadOffset = pendingCommandBytes_.size();
+        if (payloadOffset > 0xffffffffull) {
+            return D3DERR_INVALIDCALL;
+        }
         pendingCommandBytes_.insert(pendingCommandBytes_.end(), raw, raw + bytes);
+        D9CCommandChunkWireRecordHeader wireRecord{};
+        if (bytes >= sizeof(D9CCommandRecordHeader)) {
+            D9CCommandRecordHeader legacyHeader{};
+            std::memcpy(&legacyHeader, data, sizeof(legacyHeader));
+            wireRecord.type = legacyHeader.type;
+        }
+        wireRecord.flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE;
+        wireRecord.payloadOffset = static_cast<std::uint32_t>(payloadOffset);
+        wireRecord.payloadSize = static_cast<std::uint32_t>(bytes);
+        wireRecord.firstHandle = 0;
+        wireRecord.handleCount = 0;
+        pendingCommandWireRecords_.push_back(wireRecord);
         ++pendingCommandRecordCount_;
 
         if (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||

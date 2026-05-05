@@ -120,7 +120,7 @@ class Device {
   // CommandQueue::submitDrawRun.
   virtual void submitDrawRun(core::DrawRunDesc desc) {
     for (const auto& param : desc.draws) {
-      core::DrawDesc synthetic = desc.state.desc;
+      core::DrawDesc synthetic = desc.state.coldDesc;
       synthetic.primitiveType = param.primitiveType;
       synthetic.primitiveCount = param.primitiveCount;
       synthetic.startVertex = param.startVertex;

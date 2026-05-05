@@ -45,6 +45,12 @@ auto makeBlendKeys(const DrawDesc& desc) {
   return dxmt9::pipeline::detail::makeBlendAttachmentKeys(desc);
 }
 
+auto makeFlatBlendKeys(const DrawDesc& desc) {
+  const auto hot = makeFlatDrawStateRecord(desc);
+  return dxmt9::pipeline::detail::makeBlendAttachmentKeys(
+      FlatDrawStateView{.hot = &hot, .coldDesc = &desc});
+}
+
 auto makeVariantKey(const DrawDesc& desc) {
   std::array<u32, kMaxRenderTargets> colorFormats{};
   colorFormats[0] = WMTPixelFormatBGRA8Unorm;
@@ -57,6 +63,22 @@ auto makeVariantKey(const DrawDesc& desc) {
                                                std::span<const dxmt9::pipeline::BlendAttachmentKey>(blend),
                                                0u,
                                                0u);
+}
+
+auto makeFlatVariantKey(const DrawDesc& desc) {
+  const auto hot = makeFlatDrawStateRecord(desc);
+  std::array<u32, kMaxRenderTargets> colorFormats{};
+  colorFormats[0] = WMTPixelFormatBGRA8Unorm;
+  auto blend = makeFlatBlendKeys(desc);
+  for (std::size_t i = 0; i < kMaxRenderTargets; ++i) {
+    blend[i].pixelFormat = colorFormats[i];
+  }
+  return dxmt9::pipeline::makeShaderVariantKey(
+      FlatDrawStateView{.hot = &hot, .coldDesc = &desc},
+      std::span<const u32>(colorFormats),
+      std::span<const dxmt9::pipeline::BlendAttachmentKey>(blend),
+      0u,
+      0u);
 }
 
 void testAlphaBlendEnableAndDisable() {
@@ -237,6 +259,29 @@ void testShaderVariantKeyHashRespondsToLayoutAndBlendState() {
         "blend state changes alter the PSO key hash");
 }
 
+void testFlatPipelineHelpersMatchDrawDescCompatibilityWrappers() {
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0xabcdefu;
+  desc.pixelShader.hash = 0x102030u;
+  desc.vertexDecl.fvf =
+      dxmt9::ffp::kFvfXyz | dxmt9::ffp::kFvfDiffuse | (1u << dxmt9::ffp::kFvfTexCountShift);
+  desc.textures[0].handle = Handle{0x1200u};
+  desc.samplers[0].states[SAMP_MIN_FILTER] = 2u;
+  desc.samplers[0].states[SAMP_MAG_FILTER] = 1u;
+  desc.rs.values[RS_ALPHABLEND_ENABLE] = 1u;
+  desc.rs.values[RS_SRC_BLEND] = static_cast<u32>(BlendFactor::SrcAlpha);
+  desc.rs.values[RS_DEST_BLEND] = static_cast<u32>(BlendFactor::InvSrcAlpha);
+  desc.rs.values[RS_COLOR_WRITE_ENABLE] = 0x7u;
+  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  desc.clipPlaneMask = 0x3u;
+  desc.rts.color[0].sampleCount = 4u;
+
+  checkEq(makeFlatBlendKeys(desc), makeBlendKeys(desc),
+          "flat blend helper matches DrawDesc compatibility wrapper");
+  checkEq(makeFlatVariantKey(desc), makeVariantKey(desc),
+          "flat shader variant helper matches DrawDesc compatibility wrapper");
+}
+
 void testSrgbCompatiblePixelFormatConversion() {
   BackendLimits limits{};
 
@@ -274,6 +319,7 @@ int main() {
     testShaderVariantKeyReflectsSamplerTextureAndFiltering();
     testFvfLayoutHashIsDeterministicAndResponsive();
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();
+    testFlatPipelineHelpersMatchDrawDescCompatibilityWrappers();
     testSrgbCompatiblePixelFormatConversion();
   } catch (const TestFailure& failure) {
     std::cerr << "backend_pipeline_key_spec failed: " << failure.what() << '\n';

@@ -88,6 +88,9 @@ namespace detail {
 // Render-state-only blend attachment key mapping. Pixel formats are resolved
 // by Cache::getOrBuildDrawPipelineForDraw after surface lookup.
 std::array<BlendAttachmentKey, core::kMaxRenderTargets>
+makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisibleDraw = false);
+
+std::array<BlendAttachmentKey, core::kMaxRenderTargets>
 makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDraw = false);
 
 }  // namespace detail
@@ -165,6 +168,14 @@ class Cache {
   // and delegates to getOrBuildDrawPipeline. Previously lived as
   // pipelineForDraw on MetalBackendDevice (Step 3d).
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
+                                  const core::BackendLimits& limits,
+                                  resources::Pool& pool,
+                                  core::FlatDrawStateView state,
+                                  WMT::Reference<WMT::BinaryArchive>* archive,
+                                  const std::string* archivePath);
+
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
   getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
                                   const core::BackendLimits& limits,
                                   resources::Pool& pool,
@@ -189,9 +200,17 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
                      WMT::Reference<WMT::BinaryArchive>* archive,
                      const std::string* archivePath);
 
-// Compose a ShaderVariantKey from a DrawDesc + pre-resolved attachment
+// Compose a ShaderVariantKey from a flat draw state view + pre-resolved attachment
 // state. The layoutHash incorporates the FFP layout hash or, if not FFP,
 // a vertex-declaration hash.
+ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
+                                       std::span<const u32> colorFormats,
+                                       std::span<const BlendAttachmentKey> blendAttachments,
+                                       u32 depthFormat,
+                                       u32 stencilFormat);
+
+// Compatibility wrapper for tests / cold-path callers that still provide only
+// a DrawDesc.
 ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
                                        std::span<const u32> colorFormats,
                                        std::span<const BlendAttachmentKey> blendAttachments,

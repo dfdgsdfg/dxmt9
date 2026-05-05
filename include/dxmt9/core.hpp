@@ -612,11 +612,52 @@ struct ViewportScissor {
   Viewport viewport{};
   Rect scissor{};
   bool scissorEnabled = false;
+
+  friend constexpr bool operator==(const ViewportScissor&, const ViewportScissor&) = default;
 };
 
 struct RenderStateSnapshot {
   std::unordered_map<u32, u32> values;
 };
+
+struct FlatStateEntry {
+  u32 state = 0;
+  u32 value = 0;
+
+  friend constexpr bool operator==(const FlatStateEntry&, const FlatStateEntry&) = default;
+};
+
+template <std::size_t MaxEntries>
+struct FlatStateSet {
+  std::array<FlatStateEntry, MaxEntries> entries{};
+  std::array<u64, (MaxEntries + 63u) / 64u> occupied{};
+  u32 count = 0;
+  u64 hash = 0;
+  bool overflow = false;
+
+  friend constexpr bool operator==(const FlatStateSet&, const FlatStateSet&) = default;
+};
+
+template <std::size_t MaxEntries>
+constexpr const FlatStateEntry* findFlatState(const FlatStateSet<MaxEntries>& set,
+                                              u32 state) noexcept {
+  for (u32 i = 0; i < set.count && i < MaxEntries; ++i) {
+    if (set.entries[i].state == state) {
+      return &set.entries[i];
+    }
+  }
+  return nullptr;
+}
+
+template <std::size_t MaxEntries>
+constexpr u32 flatStateOr(const FlatStateSet<MaxEntries>& set,
+                          u32 state,
+                          u32 fallback) noexcept {
+  if (const auto* entry = findFlatState(set, state)) {
+    return entry->value;
+  }
+  return fallback;
+}
 
 struct DrawDesc {
   PrimitiveType primitiveType = PrimitiveType::TriangleList;
@@ -688,6 +729,40 @@ struct FlatDrawStateKey {
 
 using FlatBaseDrawStateSummary = FlatDrawStateKey;
 
+struct FlatDrawStateRecord {
+  FlatDrawStateKey key{};
+  std::array<Handle, kMaxStreams> streamBuffers{};
+  std::array<u32, kMaxStreams> streamOffsets{};
+  std::array<u32, kMaxStreams> streamStrides{};
+  u32 streamMask = 0;
+  Handle indexBuffer{};
+  std::array<Handle, kMaxTextures> textures{};
+  u32 textureMask = 0;
+  FlatStateSet<kMaxStateSlots> renderStates{};
+  std::array<FlatStateSet<kMaxTextureStageStates>, kMaxTextureStages> textureStageStates{};
+  std::array<FlatStateSet<kMaxSamplerStates>, kMaxSamplers> samplerStates{};
+  std::array<RenderTargetAttachment, kMaxRenderTargets> colorAttachments{};
+  RenderTargetAttachment depthStencil{};
+  u32 renderTargetMask = 0;
+  ViewportScissor viewport{};
+  u64 vertexConstantsHash = 0;
+  u64 pixelConstantsHash = 0;
+  u64 worldViewProjHash = 0;
+  u64 textureTransformsHash = 0;
+  u32 clipPlaneMask = 0;
+  u64 clipPlanesHash = 0;
+
+  friend constexpr bool operator==(const FlatDrawStateRecord&, const FlatDrawStateRecord&) = default;
+};
+
+struct FlatDrawStateView {
+  const FlatDrawStateRecord* hot = nullptr;
+  const DrawDesc* coldDesc = nullptr;
+
+  constexpr const FlatDrawStateKey& key() const noexcept { return hot->key; }
+  constexpr const DrawDesc& desc() const noexcept { return *coldDesc; }
+};
+
 struct DrawPayloadRange {
   u32 offset = 0;
   u32 size = 0;
@@ -696,8 +771,16 @@ struct DrawPayloadRange {
 };
 
 struct CanonicalDrawState {
-  DrawDesc desc{};
-  FlatDrawStateKey key{};
+  FlatDrawStateRecord hot{};
+  DrawDesc coldDesc{};
+
+  CanonicalDrawState() = default;
+  CanonicalDrawState(FlatDrawStateRecord hotState, DrawDesc coldState)
+      : hot(std::move(hotState)), coldDesc(std::move(coldState)) {}
+
+  constexpr FlatDrawStateView view() const noexcept {
+    return FlatDrawStateView{.hot = &hot, .coldDesc = &coldDesc};
+  }
 };
 
 // Per-draw parameters within a DrawRunDesc: only what differs between
@@ -738,7 +821,7 @@ struct ChunkHandleEntry {
 // DrawParam entries. Replaces N separate
 // MetalCommandKind::Draw records when the importer detects a
 // run of draws with no state change between them. Encoder binds state
-// once from `state.desc`, then loops emitting per-draw calls — saves both
+// once from `state.hot` / `state.coldDesc`, then loops emitting per-draw calls — saves both
 // per-draw DrawDesc copies on the queue side and per-draw resource
 // rebinding on the encoder side.
 struct DrawRunDesc {
@@ -1146,6 +1229,7 @@ FfpVertexKey makeFfpVertexKey(const DeviceState& state);
 FfpPixelKey makeFfpPixelKey(const DeviceState& state);
 DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args);
 FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc);
+FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc);
 DrawParam makeDrawParamFromDesc(const DrawDesc& desc);
 CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc);
 bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena);

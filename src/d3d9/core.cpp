@@ -53,6 +53,27 @@ u64 hashStateMap(const std::unordered_map<u32, u32>& values) {
   return hash;
 }
 
+template <std::size_t MaxEntries>
+FlatStateSet<MaxEntries> makeFlatStateSet(const std::unordered_map<u32, u32>& values) {
+  FlatStateSet<MaxEntries> set{};
+  set.hash = hashStateMap(values);
+  set.overflow = values.size() > MaxEntries;
+  for (const auto& [state, value] : values) {
+    if (set.count >= MaxEntries) {
+      continue;
+    }
+    set.entries[set.count++] = FlatStateEntry{.state = state, .value = value};
+  }
+  std::sort(set.entries.begin(), set.entries.begin() + set.count,
+            [](const FlatStateEntry& a, const FlatStateEntry& b) {
+              return a.state < b.state;
+            });
+  for (u32 i = 0; i < set.count; ++i) {
+    set.occupied[i / 64u] |= 1ull << (i % 64u);
+  }
+  return set;
+}
+
 u64 hashVertexDeclElements(const VertexDeclSnapshot& decl) {
   u64 hash = hashCombine(kFnvOffset, static_cast<u64>(decl.elements.size()));
   hash = hashCombine(hash, decl.fvf);
@@ -3674,6 +3695,38 @@ FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc) {
   return key;
 }
 
+FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc) {
+  FlatDrawStateRecord record{};
+  record.key = makeFlatDrawStateKey(desc);
+  record.streamBuffers = record.key.streamBuffers;
+  record.streamOffsets = record.key.streamOffsets;
+  record.streamStrides = record.key.streamStrides;
+  record.streamMask = record.key.streamMask;
+  record.indexBuffer = record.key.indexBuffer;
+  record.textures = record.key.textures;
+  record.textureMask = record.key.textureMask;
+  record.renderStates = makeFlatStateSet<kMaxStateSlots>(desc.rs.values);
+  for (size_t i = 0; i < kMaxTextureStages; ++i) {
+    record.textureStageStates[i] =
+        makeFlatStateSet<kMaxTextureStageStates>(desc.textures[i].stageStates);
+  }
+  for (size_t i = 0; i < kMaxSamplers; ++i) {
+    record.samplerStates[i] =
+        makeFlatStateSet<kMaxSamplerStates>(desc.samplers[i].states);
+  }
+  record.colorAttachments = record.key.colorAttachments;
+  record.depthStencil = record.key.depthStencil;
+  record.renderTargetMask = record.key.renderTargetMask;
+  record.viewport = desc.viewport;
+  record.vertexConstantsHash = record.key.vertexConstantsHash;
+  record.pixelConstantsHash = record.key.pixelConstantsHash;
+  record.worldViewProjHash = record.key.worldViewProjHash;
+  record.textureTransformsHash = record.key.textureTransformsHash;
+  record.clipPlaneMask = record.key.clipPlaneMask;
+  record.clipPlanesHash = record.key.clipPlanesHash;
+  return record;
+}
+
 DrawParam makeDrawParamFromDesc(const DrawDesc& desc) {
   DrawParam param{};
   param.primitiveType = desc.primitiveType;
@@ -3692,10 +3745,7 @@ CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc) {
   DrawDesc state = desc;
   state.userVertexData.clear();
   state.userIndexData.clear();
-  return CanonicalDrawState{
-      .desc = std::move(state),
-      .key = makeFlatDrawStateKey(desc),
-  };
+  return CanonicalDrawState{makeFlatDrawStateRecord(desc), std::move(state)};
 }
 
 bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena) {

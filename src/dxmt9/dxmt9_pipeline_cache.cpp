@@ -33,32 +33,28 @@ bool debugForceVisibleDraw() {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
-u32 renderStateOr(const core::RenderStateSnapshot& rs, u32 key, u32 fallback) {
-  const auto it = rs.values.find(key);
-  return it != rs.values.end() ? it->second : fallback;
-}
 }  // namespace
 
 std::array<BlendAttachmentKey, core::kMaxRenderTargets>
-detail::makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDraw) {
+detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisibleDraw) {
   std::array<BlendAttachmentKey, core::kMaxRenderTargets> blendAttachments{};
-  const auto& rs = draw.rs;
+  const auto& rs = state.hot->renderStates;
   const bool blendEnabled =
-      !forceVisibleDraw && renderStateOr(rs, core::RS_ALPHABLEND_ENABLE, 0u) != 0;
+      !forceVisibleDraw && core::flatStateOr(rs, core::RS_ALPHABLEND_ENABLE, 0u) != 0;
   const u32 rgbBlendOperation =
-      renderStateOr(rs, core::RS_BLEND_OP, static_cast<u32>(core::BlendOp::Add));
+      core::flatStateOr(rs, core::RS_BLEND_OP, static_cast<u32>(core::BlendOp::Add));
   const u32 alphaBlendOperation =
-      renderStateOr(rs, core::RS_BLEND_OP_ALPHA, rgbBlendOperation);
+      core::flatStateOr(rs, core::RS_BLEND_OP_ALPHA, rgbBlendOperation);
   const u32 sourceRGBBlendFactor =
-      renderStateOr(rs, core::RS_SRC_BLEND, static_cast<u32>(core::BlendFactor::One));
+      core::flatStateOr(rs, core::RS_SRC_BLEND, static_cast<u32>(core::BlendFactor::One));
   const u32 destinationRGBBlendFactor =
-      renderStateOr(rs, core::RS_DEST_BLEND, static_cast<u32>(core::BlendFactor::Zero));
+      core::flatStateOr(rs, core::RS_DEST_BLEND, static_cast<u32>(core::BlendFactor::Zero));
   const u32 sourceAlphaBlendFactor =
-      renderStateOr(rs, core::RS_SRC_BLEND_ALPHA, sourceRGBBlendFactor);
+      core::flatStateOr(rs, core::RS_SRC_BLEND_ALPHA, sourceRGBBlendFactor);
   const u32 destinationAlphaBlendFactor =
-      renderStateOr(rs, core::RS_DEST_BLEND_ALPHA, destinationRGBBlendFactor);
+      core::flatStateOr(rs, core::RS_DEST_BLEND_ALPHA, destinationRGBBlendFactor);
   const u32 colorWriteMask =
-      forceVisibleDraw ? 0xfu : renderStateOr(rs, core::RS_COLOR_WRITE_ENABLE, 0xfu);
+      forceVisibleDraw ? 0xfu : core::flatStateOr(rs, core::RS_COLOR_WRITE_ENABLE, 0xfu);
 
   for (auto& blend : blendAttachments) {
     blend.blendingEnabled = blendEnabled;
@@ -71,6 +67,13 @@ detail::makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDra
     blend.colorWriteMask = colorWriteMask;
   }
   return blendAttachments;
+}
+
+std::array<BlendAttachmentKey, core::kMaxRenderTargets>
+detail::makeBlendAttachmentKeys(const core::DrawDesc& draw, bool forceVisibleDraw) {
+  const auto hot = core::makeFlatDrawStateRecord(draw);
+  return detail::makeBlendAttachmentKeys(
+      core::FlatDrawStateView{.hot = &hot, .coldDesc = &draw}, forceVisibleDraw);
 }
 
 std::size_t BlendAttachmentKeyHash::operator()(const BlendAttachmentKey& key) const noexcept {
@@ -350,10 +353,10 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
-Cache::getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
+Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       const core::BackendLimits& limits,
                                       resources::Pool& pool,
-                                      const core::DrawDesc& draw,
+                                      core::FlatDrawStateView state,
                                       WMT::Reference<WMT::BinaryArchive>* archive,
                                       const std::string* archivePath) {
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
@@ -367,15 +370,15 @@ Cache::getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
   };
 
   std::array<u32, core::kMaxRenderTargets> colorFormats{};
-  auto blendAttachments = detail::makeBlendAttachmentKeys(draw, debugForceVisibleDraw());
+  auto blendAttachments = detail::makeBlendAttachmentKeys(state, debugForceVisibleDraw());
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-    colorFormats[i] = resolvePixelFormat(draw.rts.color[i].handle);
+    colorFormats[i] = resolvePixelFormat(state.hot->colorAttachments[i].handle);
     blendAttachments[i].pixelFormat = colorFormats[i];
   }
   u32 depthFormat = 0;
   u32 stencilFormat = 0;
-  if (draw.rts.depthStencil.handle) {
-    if (auto* surface = pool.findSurface(draw.rts.depthStencil.handle.value);
+  if (state.hot->depthStencil.handle) {
+    if (auto* surface = pool.findSurface(state.hot->depthStencil.handle.value);
         surface && surface->desc.depthStencil) {
       const auto pixelFormat =
           static_cast<u32>(dxmt9::convert::toPixelFormat(surface->desc.format, limits));
@@ -384,30 +387,43 @@ Cache::getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
           dxmt9::convert::formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
     }
   }
-  const auto key = makeShaderVariantKey(draw, colorFormats, blendAttachments, depthFormat, stencilFormat);
-  return getOrBuildDrawPipeline(device, key, draw, archive, archivePath);
+  const auto key = makeShaderVariantKey(state, colorFormats, blendAttachments, depthFormat, stencilFormat);
+  return getOrBuildDrawPipeline(device, key, state.desc(), archive, archivePath);
 }
 
-ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::getOrBuildDrawPipelineForDraw(WMT::Reference<WMT::Device> device,
+                                      const core::BackendLimits& limits,
+                                      resources::Pool& pool,
+                                      const core::DrawDesc& draw,
+                                      WMT::Reference<WMT::BinaryArchive>* archive,
+                                      const std::string* archivePath) {
+  const auto hot = core::makeFlatDrawStateRecord(draw);
+  return getOrBuildDrawPipelineForState(
+      device, limits, pool, core::FlatDrawStateView{.hot = &hot, .coldDesc = &draw},
+      archive, archivePath);
+}
+
+ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::span<const u32> colorFormats,
                                        std::span<const BlendAttachmentKey> blendAttachments,
                                        u32 depthFormat,
                                        u32 stencilFormat) {
+  const auto& desc = state.desc();
+  const auto& hot = *state.hot;
   ShaderVariantKey key{};
   const auto layout = ffp::decodeFixedFunctionVertexLayout(desc);
   const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(desc.vertexDecl);
-  key.hash = desc.vertexShader.hash ^ (desc.pixelShader.hash << 1) ^ desc.clipPlaneMask ^ depthFormat ^
+  key.hash = desc.vertexShader.hash ^ (desc.pixelShader.hash << 1) ^ hot.clipPlaneMask ^ depthFormat ^
              (stencilFormat << 1) ^ (layoutHash << 1) ^ desc.vertexDecl.fvf;
-  key.textured = desc.textures[0].handle != core::Handle{};
-  const auto minFilterIt = desc.samplers[0].states.find(core::SAMP_MIN_FILTER);
-  const auto magFilterIt = desc.samplers[0].states.find(core::SAMP_MAG_FILTER);
-  key.linear = (minFilterIt != desc.samplers[0].states.end() && minFilterIt->second == 2u) ||
-               (magFilterIt != desc.samplers[0].states.end() && magFilterIt->second == 2u);
-  key.clipPlanes = desc.clipPlaneMask != 0;
-  key.alphaTest = desc.rs.values.contains(core::RS_ALPHA_TEST_ENABLE) &&
-                   desc.rs.values.at(core::RS_ALPHA_TEST_ENABLE) != 0;
+  key.textured = hot.textures[0] != core::Handle{};
+  key.linear =
+      core::flatStateOr(hot.samplerStates[0], core::SAMP_MIN_FILTER, 0u) == 2u ||
+      core::flatStateOr(hot.samplerStates[0], core::SAMP_MAG_FILTER, 0u) == 2u;
+  key.clipPlanes = hot.clipPlaneMask != 0;
+  key.alphaTest = core::flatStateOr(hot.renderStates, core::RS_ALPHA_TEST_ENABLE, 0u) != 0;
   key.alphaToCoverage = false;
-  key.sampleCount = std::max(1u, desc.rts.color[0].sampleCount);
+  key.sampleCount = std::max(1u, hot.colorAttachments[0].sampleCount);
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     key.colorFormats[i] = i < colorFormats.size() ? colorFormats[i] : 0u;
     if (i < blendAttachments.size()) {
@@ -417,6 +433,16 @@ ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
   key.depthFormat = depthFormat;
   key.stencilFormat = stencilFormat;
   return key;
+}
+
+ShaderVariantKey makeShaderVariantKey(const core::DrawDesc& desc,
+                                       std::span<const u32> colorFormats,
+                                       std::span<const BlendAttachmentKey> blendAttachments,
+                                       u32 depthFormat,
+                                       u32 stencilFormat) {
+  const auto hot = core::makeFlatDrawStateRecord(desc);
+  return makeShaderVariantKey(core::FlatDrawStateView{.hot = &hot, .coldDesc = &desc},
+                              colorFormats, blendAttachments, depthFormat, stencilFormat);
 }
 
 }  // namespace dxmt9::pipeline
