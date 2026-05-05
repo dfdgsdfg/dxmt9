@@ -27,6 +27,42 @@ constexpr std::uint32_t byteSize(std::size_t size) noexcept {
   return static_cast<std::uint32_t>(size);
 }
 
+bool byteRangeValid(
+    std::uint32_t bufferSize,
+    std::uint32_t offset,
+    std::uint32_t byteCount) noexcept {
+  return offset <= bufferSize && byteCount <= bufferSize - offset;
+}
+
+bool tableRangeValid(
+    std::uint32_t bufferSize,
+    std::uint32_t offset,
+    std::uint32_t count,
+    std::uint32_t entrySize,
+    std::uint32_t* byteCount = nullptr) noexcept {
+  const auto bytes =
+      static_cast<std::uint64_t>(count) * static_cast<std::uint64_t>(entrySize);
+  if (bytes > 0xffffffffull) {
+    return false;
+  }
+  const auto bytes32 = static_cast<std::uint32_t>(bytes);
+  if (byteCount) {
+    *byteCount = bytes32;
+  }
+  return byteRangeValid(bufferSize, offset, bytes32);
+}
+
+bool sectionAligned(
+    const std::uint8_t* blob,
+    std::uint32_t offset,
+    std::size_t alignment) noexcept {
+  if (alignment <= 1u) {
+    return true;
+  }
+  const auto address = reinterpret_cast<std::uintptr_t>(blob + offset);
+  return (address % alignment) == 0u;
+}
+
 constexpr std::array<RecordLayout, 19> kRecordLayouts{{
     {D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
      byteSize(sizeof(D9CCommandRecordDrawPrimitive)), RecordSizeMode::Exact},
@@ -383,6 +419,75 @@ ImportedWireChunkView makeImportedWireChunkView(
   };
 }
 
+ImportedWireChunkBlobView makeImportedWireChunkBlobView(
+    const std::uint8_t* blob,
+    std::uint32_t blobSize) noexcept {
+  ImportedWireChunkBlobView result{};
+  if (!blob || blobSize < sizeof(D9CCommandChunkWireHeader)) {
+    result.status = ImportedWireChunkValidationStatus::MissingChunkHeader;
+    return result;
+  }
+
+  std::memcpy(&result.header, blob, sizeof(result.header));
+  result.headerPresent = true;
+  const auto& header = result.header;
+
+  if (header.version != D9C_COMMAND_CHUNK_WIRE_VERSION ||
+      header.headerSize != D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE ||
+      header.recordHeaderSize != D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE ||
+      header.handleEntrySize != D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE ||
+      !d9c_command_chunk_wire_header_reserved_valid(&header) ||
+      !byteRangeValid(blobSize, 0u, header.headerSize)) {
+    result.status = ImportedWireChunkValidationStatus::InvalidChunkHeader;
+    return result;
+  }
+
+  std::uint32_t recordTableBytes = 0u;
+  std::uint32_t handleTableBytes = 0u;
+  if (!tableRangeValid(blobSize, header.recordTableOffset, header.recordCount,
+                       header.recordHeaderSize, &recordTableBytes) ||
+      !tableRangeValid(blobSize, header.handleTableOffset, header.handleCount,
+                       header.handleEntrySize, &handleTableBytes) ||
+      !byteRangeValid(blobSize, header.payloadArenaOffset,
+                      header.payloadArenaSize)) {
+    result.status = ImportedWireChunkValidationStatus::InvalidChunkRange;
+    return result;
+  }
+
+  if ((recordTableBytes != 0u &&
+       (header.recordTableOffset < header.headerSize ||
+        !sectionAligned(blob, header.recordTableOffset,
+                        alignof(D9CCommandChunkWireRecordHeader)))) ||
+      (handleTableBytes != 0u &&
+       (header.handleTableOffset < header.headerSize ||
+        !sectionAligned(blob, header.handleTableOffset,
+                        alignof(D9CCommandChunkWireHandleEntry)))) ||
+      (header.payloadArenaSize != 0u &&
+       header.payloadArenaOffset < header.headerSize)) {
+    result.status = ImportedWireChunkValidationStatus::InvalidChunkRange;
+    return result;
+  }
+
+  const auto* records = header.recordCount != 0u
+                            ? reinterpret_cast<const D9CCommandChunkWireRecordHeader*>(
+                                  blob + header.recordTableOffset)
+                            : nullptr;
+  const auto* handles = header.handleCount != 0u
+                            ? reinterpret_cast<const D9CCommandChunkWireHandleEntry*>(
+                                  blob + header.handleTableOffset)
+                            : nullptr;
+  const auto* payloadArena = header.payloadArenaSize != 0u
+                                 ? blob + header.payloadArenaOffset
+                                 : nullptr;
+
+  result.chunk = makeImportedWireChunkView(
+      records, header.recordCount, payloadArena, header.payloadArenaSize,
+      handles, header.handleCount);
+  const auto validation = validateImportedWireChunk(result.chunk);
+  result.status = validation.status;
+  return result;
+}
+
 ImportedWireChunkStorage normalizeImportedChunkViewToWire(
     const ImportedChunkView& chunk,
     const D9CChunkHandleEntry* handles,
@@ -442,6 +547,28 @@ ImportedWireChunkStorage normalizeImportedCommandChunkToWire(
   const auto imported = makeImportedChunkView(chunk);
   if (chunk.recordBytes != 0 && !imported.records) {
     return ImportedWireChunkStorage{};
+  }
+
+  const auto wireBlob =
+      makeImportedWireChunkBlobView(imported.records, imported.recordBytes);
+  if (wireBlob.wireHeaderCandidate()) {
+    if (!wireBlob.valid()) {
+      return ImportedWireChunkStorage{};
+    }
+
+    ImportedWireChunkStorage result{
+        .payloadArena = wireBlob.chunk.payloadArena,
+        .payloadArenaSize = wireBlob.chunk.payloadArenaSize,
+    };
+    if (wireBlob.chunk.recordCount != 0u) {
+      result.records.assign(wireBlob.chunk.records,
+                            wireBlob.chunk.records + wireBlob.chunk.recordCount);
+    }
+    if (wireBlob.chunk.handleCount != 0u) {
+      result.handles.assign(wireBlob.chunk.handles,
+                            wireBlob.chunk.handles + wireBlob.chunk.handleCount);
+    }
+    return result;
   }
 
   const auto* handles = chunk.handleCount != 0
@@ -531,6 +658,69 @@ std::optional<ImportedRecordView> nextImportedRecord(
     return std::nullopt;
   }
   return makeImportedRecordView(chunk, recordIndex);
+}
+
+ImportedWireRecordHandleView makeImportedWireRecordHandleView(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex) noexcept {
+  if (recordIndex >= chunk.recordCount || !chunk.records) {
+    return ImportedWireRecordHandleView{};
+  }
+
+  const auto& record = chunk.records[recordIndex];
+  if (!d9c_command_chunk_wire_handle_range_valid(
+          chunk.handleCount, record.firstHandle, record.handleCount) ||
+      (record.handleCount != 0u && !chunk.handles)) {
+    return ImportedWireRecordHandleView{};
+  }
+
+  return ImportedWireRecordHandleView{
+      .handles = record.handleCount != 0u
+                     ? chunk.handles + record.firstHandle
+                     : nullptr,
+      .firstHandle = record.firstHandle,
+      .handleCount = record.handleCount,
+  };
+}
+
+bool collectImportedWireRecordHandles(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex,
+    ImportedChunkHandleSet& handles) {
+  if (recordIndex >= chunk.recordCount || !chunk.records) {
+    return false;
+  }
+
+  const auto& record = chunk.records[recordIndex];
+  const auto view = makeImportedWireRecordHandleView(chunk, recordIndex);
+  if (view.handleCount != record.handleCount ||
+      view.firstHandle != record.firstHandle ||
+      (view.handleCount != 0u && !view.handles)) {
+    return false;
+  }
+
+  for (std::uint32_t i = 0; i < view.handleCount; ++i) {
+    const auto& handle = view.handles[i];
+    if (!importedWireHandleEntryValid(handle)) {
+      return false;
+    }
+    appendImportedChunkHandle(handles, handle.kind, handle.opaqueHandle);
+  }
+  return true;
+}
+
+bool collectImportedWireChunkHandles(
+    const ImportedWireChunkView& chunk,
+    ImportedChunkHandleSet& handles) {
+  if (chunk.recordCount != 0u && !chunk.records) {
+    return false;
+  }
+  for (std::uint32_t i = 0; i < chunk.recordCount; ++i) {
+    if (!collectImportedWireRecordHandles(chunk, i, handles)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool importedChunkRecordCountMatches(

@@ -164,7 +164,7 @@ ChunkObservation makeChunkObservation(const MetalCommandView& command,
     case MetalCommandKind::DrawRun:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
-          .compatFlags = command.drawRun ? compatFlagsForDraw(command.drawRun->state.desc, resolveSurfaceFlags) : 0,
+          .compatFlags = command.draw ? compatFlagsForDraw(*command.draw, resolveSurfaceFlags) : 0,
       };
     case MetalCommandKind::Clear:
       return ChunkObservation{

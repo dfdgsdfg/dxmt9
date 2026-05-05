@@ -1,4 +1,5 @@
 #include "dxmt9/core.hpp"
+#include "../src/dxmt9/dxmt9_backend_types.hpp"
 
 #include <array>
 #include <cmath>
@@ -396,6 +397,36 @@ void testFlatDrawStateKey() {
   packedRun.draws[0].userVertexRange.size = 3;
   checkEq(packedRun.state.key, packedRunKey,
           "payload arena mutations remain separate from the draw-run key");
+
+  ChunkSlot slot{};
+  slot.appendDraw(withUserPayload);
+  const auto drawView = slot.commandAt(0);
+  check(drawView.drawRecord != nullptr, "slot draw command exposes compact draw record");
+  check(drawView.drawState != nullptr, "slot draw command indexes canonical draw state");
+  check(drawView.drawParam != nullptr, "slot draw command indexes draw param table");
+  checkEq(drawView.drawState->key, firstKey,
+          "slot draw state stores the canonical flat key");
+  checkEq(drawView.drawParam->userVertexRange.offset, 0u,
+          "slot draw payload stores vertex bytes in slot arena");
+  checkEq(drawView.drawParam->userIndexRange.offset, 4u,
+          "slot draw payload stores index bytes after vertex bytes");
+  checkEq(slot.drawPayloadArena.size(), std::size_t{6},
+          "slot draw payload arena owns single-draw UP bytes");
+
+  packedRun.payloadArena[0] = 0xde;
+  packedRun.draws[0].userVertexRange = {0, 4};
+  slot.appendDrawRun(std::move(packedRun));
+  const auto runView = slot.commandAt(1);
+  check(runView.drawRunRecord != nullptr, "slot draw-run command exposes compact run record");
+  check(runView.drawState != nullptr, "slot draw-run indexes canonical draw state");
+  checkEq(runView.drawParams.size(), std::size_t{1},
+          "slot draw-run indexes shared draw param table");
+  checkEq(runView.drawParams[0].userVertexRange.offset, 6u,
+          "slot draw-run vertex payload range is rebased into slot arena");
+  checkEq(runView.drawParams[0].userIndexRange.offset, 10u,
+          "slot draw-run index payload range is rebased into slot arena");
+  checkEq(slot.drawPayloadArena.size(), std::size_t{12},
+          "slot payload arena owns draw and draw-run bytes together");
 
   DrawDesc sameMapsDifferentInsertion = first;
   sameMapsDifferentInsertion.rs.values.clear();

@@ -1404,9 +1404,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       case Kind::Draw: {
-        if (!command.drawRecord || !command.draw) break;
-        const auto& drawRecord = *command.drawRecord;
-        const auto& draw = drawRecord.state.desc;
+        if (!command.drawRecord || !command.drawState || !command.drawParam || !command.draw) break;
+        const auto& drawState = *command.drawState;
+        const auto& draw = drawState.desc;
+        const auto& param = *command.drawParam;
         flushBlit();
         assertEncoderLifecycleInvariant();
         const auto drawKey = makeAttachmentKey(draw.rts);
@@ -1465,19 +1466,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           }
         }
         const bool skipBaseStateBind =
-            activeDrawStateKey.has_value() && *activeDrawStateKey == drawRecord.state.key;
-        const std::span<const u8> payloadArena(drawRecord.payloadArena.data(),
-                                               drawRecord.payloadArena.size());
+            activeDrawStateKey.has_value() && *activeDrawStateKey == drawState.key;
+        const std::span<const u8> payloadArena(slot.drawPayloadArena.data(),
+                                               slot.drawPayloadArena.size());
         if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, draw, slot.seqId,
-                       skipBaseStateBind, nullptr, &drawRecord.param, payloadArena)) {
-          activeDrawStateKey = drawRecord.state.key;
+                       skipBaseStateBind, nullptr, &param, payloadArena)) {
+          activeDrawStateKey = drawState.key;
         }
         commandBufferHasWork = true;
         break;
       }
       case Kind::DrawRun: {
-        if (!command.drawRun) break;
-        const auto& drawRun = *command.drawRun;
+        if (!command.drawRunRecord || !command.drawState || command.drawParams.empty()) break;
+        const auto& drawState = *command.drawState;
+        const auto drawParams = command.drawParams;
         // Compact draw-run: state bound from base ONCE (render-pass +
         // resource-binding decisions key off base.rts), then loop over
         // per-DrawParam emits. FlatDrawStateKey is the hot-path decision
@@ -1485,7 +1487,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // Draw/DrawRun records on the same Metal render encoder.
         flushBlit();
         assertEncoderLifecycleInvariant();
-        const auto& base = drawRun.state.desc;
+        const auto& base = drawState.desc;
         const auto drawKey = makeAttachmentKey(base.rts);
         const auto drawReadBloom = makeDrawReadBloom(base);
         if (pendingClear.has_value()) {
@@ -1560,13 +1562,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         //   [3]   = draw 1 index
         //   …
         // Returned slices use the same indexing.
-        const std::size_t drawCount = drawRun.draws.size();
-        const std::span<const u8> payloadArena(drawRun.payloadArena.data(),
-                                               drawRun.payloadArena.size());
+        const std::size_t drawCount = drawParams.size();
+        const std::span<const u8> payloadArena(slot.drawPayloadArena.data(),
+                                               slot.drawPayloadArena.size());
         std::vector<std::span<const std::byte>> upPayloads;
         upPayloads.reserve(drawCount * 2);
         bool anyUpData = false;
-        for (const auto& param : drawRun.draws) {
+        for (const auto& param : drawParams) {
           const auto vertexBytes = drawParamVertexBytes(param, payloadArena);
           if (!vertexBytes.empty()) anyUpData = true;
           upPayloads.emplace_back(reinterpret_cast<const std::byte*>(vertexBytes.data()),
@@ -1590,9 +1592,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // gone entirely; the loop body is now a PreUploadedDrawData
         // stack-pod plus one encodeDraw call.
         bool baseBound =
-            activeDrawStateKey.has_value() && *activeDrawStateKey == drawRun.state.key;
+            activeDrawStateKey.has_value() && *activeDrawStateKey == drawState.key;
         for (std::size_t i = 0; i < drawCount; ++i) {
-          const auto& param = drawRun.draws[i];
+          const auto& param = drawParams[i];
           PreUploadedDrawData preData{};
           if (i * 2u + 1u < upSlices.size()) {
             preData.vertex = upSlices[i * 2u];
@@ -1604,7 +1606,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          &param,
                          payloadArena)) {
             baseBound = true;
-            activeDrawStateKey = drawRun.state.key;
+            activeDrawStateKey = drawState.key;
           }
         }
         commandBufferHasWork = true;

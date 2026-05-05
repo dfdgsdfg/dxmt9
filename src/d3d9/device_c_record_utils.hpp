@@ -75,6 +75,16 @@ struct ImportedWireChunkView {
   }
 };
 
+struct ImportedWireRecordHandleView {
+  const D9CCommandChunkWireHandleEntry* handles = nullptr;
+  std::uint32_t firstHandle = 0;
+  std::uint32_t handleCount = 0;
+
+  bool empty() const noexcept {
+    return handleCount == 0;
+  }
+};
+
 struct ImportedWireChunkStorage {
   std::vector<D9CCommandChunkWireRecordHeader> records{};
   std::vector<D9CCommandChunkWireHandleEntry> handles{};
@@ -95,6 +105,9 @@ struct ImportedWireChunkStorage {
 
 enum class ImportedWireChunkValidationStatus : std::uint8_t {
   Valid,
+  MissingChunkHeader,
+  InvalidChunkHeader,
+  InvalidChunkRange,
   MissingRecordTable,
   MissingPayloadArena,
   MissingHandleTable,
@@ -102,6 +115,24 @@ enum class ImportedWireChunkValidationStatus : std::uint8_t {
   InvalidRecordHeader,
   InvalidRecordRange,
   InvalidRecord,
+};
+
+struct ImportedWireChunkBlobView {
+  D9CCommandChunkWireHeader header{};
+  ImportedWireChunkView chunk{};
+  ImportedWireChunkValidationStatus status =
+      ImportedWireChunkValidationStatus::MissingChunkHeader;
+  bool headerPresent = false;
+
+  bool valid() const noexcept {
+    return status == ImportedWireChunkValidationStatus::Valid;
+  }
+
+  bool wireHeaderCandidate() const noexcept {
+    return headerPresent &&
+           header.version == D9C_COMMAND_CHUNK_WIRE_VERSION &&
+           header.headerSize == D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
+  }
 };
 
 struct ImportedWireChunkValidation {
@@ -249,6 +280,10 @@ ImportedWireChunkView makeImportedWireChunkView(
     const D9CCommandChunkWireHandleEntry* handles,
     std::uint32_t handleCount) noexcept;
 
+ImportedWireChunkBlobView makeImportedWireChunkBlobView(
+    const std::uint8_t* blob,
+    std::uint32_t blobSize) noexcept;
+
 ImportedWireChunkStorage normalizeImportedChunkViewToWire(
     const ImportedChunkView& chunk,
     const D9CChunkHandleEntry* handles = nullptr,
@@ -274,6 +309,19 @@ std::optional<ImportedRecordView> nextImportedRecord(
 std::optional<ImportedRecordView> nextImportedRecord(
     const ImportedWireChunkView& chunk,
     std::uint32_t recordIndex) noexcept;
+
+ImportedWireRecordHandleView makeImportedWireRecordHandleView(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex) noexcept;
+
+bool collectImportedWireRecordHandles(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex,
+    ImportedChunkHandleSet& handles);
+
+bool collectImportedWireChunkHandles(
+    const ImportedWireChunkView& chunk,
+    ImportedChunkHandleSet& handles);
 
 bool importedChunkRecordCountMatches(
     const ImportedChunkView& chunk,

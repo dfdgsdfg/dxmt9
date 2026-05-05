@@ -716,39 +716,46 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   if (!records && chunk->recordBytes != 0) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  const auto* handles = chunk->handleCount != 0
-                            ? wireHandlePtr<const D9CChunkHandleEntry>(chunk->handles)
-                            : nullptr;
-  if (chunk->handleCount != 0 && !handles) {
-    return dxmt9::core::D3DERR_INVALIDCALL;
+
+  ImportedWireChunkStorage normalizedChunk;
+  ImportedWireChunkView importedChunk{};
+  const auto wireBlob = makeImportedWireChunkBlobView(records, chunk->recordBytes);
+  if (wireBlob.wireHeaderCandidate()) {
+    if (!wireBlob.valid()) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    importedChunk = wireBlob.chunk;
+    if ((chunk->recordCount != 0 && importedChunk.recordCount != chunk->recordCount) ||
+        (chunk->handleCount != 0 && importedChunk.handleCount != chunk->handleCount)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+  } else {
+    const auto* handles = chunk->handleCount != 0
+                              ? wireHandlePtr<const D9CChunkHandleEntry>(chunk->handles)
+                              : nullptr;
+    if (chunk->handleCount != 0 && !handles) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+
+    const auto legacyChunk =
+        makeImportedChunkView(records, chunk->recordBytes, chunk->recordCount);
+    normalizedChunk =
+        normalizeImportedChunkViewToWire(legacyChunk, handles, chunk->handleCount);
+    importedChunk = normalizedChunk.view();
+    if (importedChunk.recordCount != chunk->recordCount ||
+        importedChunk.handleCount != chunk->handleCount) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
   }
 
-  const auto legacyChunk =
-      makeImportedChunkView(records, chunk->recordBytes, chunk->recordCount);
-  const auto normalizedChunk =
-      normalizeImportedChunkViewToWire(legacyChunk, handles, chunk->handleCount);
-  const auto importedChunk = normalizedChunk.view();
   const auto validation = validateImportedWireChunk(importedChunk);
-  if (!validation.valid() || importedChunk.recordCount != chunk->recordCount ||
-      importedChunk.handleCount != chunk->handleCount) {
+  if (!validation.valid()) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  // Phase 4 / 18: validate the chunk's resource retention list. PE
-  // recorder populates handles[] with the deduped (kind, handle) set
-  // of every resource referenced by ANY record in this chunk
-  // (Phase 18 invariant: chunk.handles ⊇ packet.refs). Importer
-  // bulk-marks them all against the chunk seqId via
-  // markChunkResources, then sets skipDrawResourceMarking on the
-  // queue (Phase 14) so per-draw markDrawResources is suppressed
-  // for the duration of this chunk's record-iter block.
-  // Bulk-mark every handle in chunk.handles[] against the queue's
-  // current chunk seqId in one shot. Per-record markDrawResources
-  // still fires inside submit{Draw,DrawRun} for now (additive — same
-  // resources get marked twice with the same seqId, which is a no-op
-  // for the mark*Use lastUsedSeqId compare). Once the importer is
-  // confirmed to provide complete coverage, per-record marking can be
-  // skipped for chunk-mode draws.
+  // Phase 4 / 18: validate and retain only handles selected by record
+  // handle ranges. Legacy chunks normalize each record to the full table,
+  // while DOD chunks can provide narrower per-record subsets.
   //
   // The wire payload from PE carries the SERVER-SIDE D9C wrapper
   // pointer (D9CTexture* / D9CBuffer* / D9CSurface*) cast to uint64,
@@ -757,13 +764,19 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // to CommandQueue::markChunkResources — otherwise pool.find{Texture,
   // Surface,Buffer} on a wrapper-pointer-as-handle would never match
   // and the bulk mark would silently be a no-op.
+  bool didBulkMarkResources = false;
   if (importedChunk.handleCount > 0) {
+    ImportedChunkHandleSet retainedWireHandles;
+    if (!collectImportedWireChunkHandles(importedChunk, retainedWireHandles)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    const auto retainedEntries = makeImportedChunkHandleEntries(retainedWireHandles);
+
     std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
-    coreEntries.reserve(importedChunk.handleCount);
-    for (std::uint32_t i = 0; i < importedChunk.handleCount; ++i) {
-      const auto& handle = importedChunk.handles[i];
+    coreEntries.reserve(retainedEntries.size());
+    for (const auto& handle : retainedEntries) {
       const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(handle.kind);
-      const auto wirePtr = handle.opaqueHandle;
+      const auto wirePtr = handle.handle;
       if (wirePtr == 0) continue;
       dxmt9::core::Handle resolved{};
       switch (kind) {
@@ -796,6 +809,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     if (!coreEntries.empty()) {
       if (auto upper = d->dev().upperDevice()) {
         upper->markChunkResources(coreEntries);
+        didBulkMarkResources = true;
       }
     }
   }
@@ -805,17 +819,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // markDrawResources walk inside submit{Draw,DrawBatch,DrawRun} for
   // the duration of this record-iter block — RAII guard ensures the
   // flag is cleared even if a record returns early. The flag is only
-  // armed when chunk handles were actually present + at least one
-  // bulk-mark fired; chunks with no handles fall through to legacy
-  // per-draw marking (defensive, since the encoder still needs the
-  // resources pinned somehow).
+  // armed after at least one resource was bulk-marked; chunks with no
+  // retained pool resources fall through to legacy per-draw marking.
   struct ResetSkipDrawMarkGuard {
     std::shared_ptr<dxmt9::Device> upper;
     ~ResetSkipDrawMarkGuard() {
       if (upper) upper->setSkipDrawResourceMarking(false);
     }
   } resetGuard{};
-  if (importedChunk.handleCount > 0) {
+  if (didBulkMarkResources) {
     if (auto upper = d->dev().upperDevice()) {
       upper->setSkipDrawResourceMarking(true);
       resetGuard.upper = std::move(upper);
