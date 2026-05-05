@@ -605,9 +605,6 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
     const auto command = slot.commandAt(i);
     switch (command.kind) {
-      case core::MetalCommandKind::Draw:
-        if (command.drawState) pool.markDrawResources(command.drawState->hot, slot.seqId);
-        break;
       case core::MetalCommandKind::DrawRun:
         if (command.drawState) pool.markDrawResources(command.drawState->hot, slot.seqId);
         break;

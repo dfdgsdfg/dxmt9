@@ -1501,7 +1501,7 @@ void testDeviceCoreFlow() {
   check(draw0.state.shaderLayout.pixelShader.pixelKey->alphaTestEnable, "draw0 pixel key alpha test");
   checkEq(draw0.param.userVertexRange.size, static_cast<u32>(vertexPayload.size()),
           "draw0 user vertex payload size");
-  check(draw0.param.userVertexData.empty(), "draw0 user vertex payload stored in arena");
+  check(draw0.param.userIndexRange.empty(), "draw0 has no user index payload");
   checkBytes(payloadSlice(draw0, draw0.param.userVertexRange, "draw0 user vertex payload range"),
              std::span<const u8>(vertexPayload.data(), vertexPayload.size()),
              "draw0 user vertex payload");
@@ -1520,9 +1520,10 @@ void testDeviceCoreFlow() {
   checkEq(draw1.param.primitiveCount, 2u, "fan primitive count");
   checkEq(draw1.param.indexType, IndexType::UInt32, "fan draw index type");
   check(draw1.param.indexed, "fan draw indexed param");
+  checkEq(draw1.param.userVertexRange.size, static_cast<u32>(vertexPayload.size()),
+          "fan user vertex payload size");
   checkEq(draw1.param.userIndexRange.size, static_cast<u32>(sizeof(u32) * 6u),
           "fan user index payload size");
-  check(draw1.param.userIndexData.empty(), "fan user index payload stored in arena");
   const std::array<u32, 6> expectedFanIndices{0, 1, 2, 0, 2, 3};
   std::array<u8, sizeof(expectedFanIndices)> expectedFanIndexBytes{};
   std::memcpy(expectedFanIndexBytes.data(), expectedFanIndices.data(), expectedFanIndexBytes.size());
@@ -1544,7 +1545,7 @@ void testDeviceCoreFlow() {
   checkEq(draw2.param.primitiveCount, 2u, "up fan primitive count");
   checkEq(draw2.param.userVertexRange.size, static_cast<u32>(expectedFanVertices.size()),
           "up fan vertex payload size");
-  check(draw2.param.userVertexData.empty(), "up fan vertex payload stored in arena");
+  check(draw2.param.userIndexRange.empty(), "up fan has no user index payload");
   checkBytes(payloadSlice(draw2, draw2.param.userVertexRange, "up fan vertex payload range"),
              std::span<const u8>(expectedFanVertices.data(), expectedFanVertices.size()),
              "up fan vertex payload");

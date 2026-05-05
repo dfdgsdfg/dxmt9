@@ -3017,6 +3017,7 @@ std::shared_ptr<StateBlock> Device::captureStateBlock() const {
 
 HResult Device::applyStateBlock(const StateBlock& block) {
   block.apply(*this);
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3059,6 +3060,7 @@ void Device::initializeDefaultSwapChain() {
                                        : RenderTargetAttachment{};
   state_.depthStencil = depth ? RenderTargetAttachment{depth->handle(), 0, depth->multiSampleCount()}
                               : RenderTargetAttachment{};
+  invalidateDrawStateCache();
 }
 
 std::shared_ptr<SwapChain> Device::swapChain(size_t index) const {
@@ -3073,11 +3075,13 @@ HResult Device::setRenderState(u32 key, u32 value) {
   if (key == RS_SCISSOR_TEST_ENABLE) {
     state_.scissorEnabled = value != 0;
   }
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
 HResult Device::setRenderStateFloat(u32 key, f32 value) {
   state_.renderStates.set(key, std::bit_cast<u32>(value));
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3099,6 +3103,7 @@ HResult Device::setTextureStageState(u32 stage, u32 key, u32 value) {
   stage = std::min<u32>(stage, kMaxTextureStages - 1);
   key = std::min<u32>(key, kMaxTextureStageStates - 1);
   state_.textureStageStates[stage].set(key, value);
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3118,6 +3123,7 @@ HResult Device::setSamplerState(u32 sampler, u32 key, u32 value) {
     return D3DERR_INVALIDCALL;
   }
   state_.samplerStates[sampler].set(key, value);
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3134,6 +3140,7 @@ u32 Device::getSamplerState(u32 sampler, u32 key) const {
 
 HResult Device::setTransform(u32 key, const Matrix4x4& matrix) {
   state_.transforms.set(key, matrix);
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3142,6 +3149,7 @@ HResult Device::setLight(u32 index, const Light& light) {
     return D3DERR_INVALIDCALL;
   }
   state_.lights[index] = light;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3151,11 +3159,13 @@ HResult Device::lightEnable(u32 index, bool enable) {
   }
   state_.lightEnabled[index] = enable;
   state_.lights[index].enabled = enable;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
 HResult Device::setMaterial(const Material& material) {
   state_.material = material;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3164,6 +3174,7 @@ HResult Device::setTexture(u32 stage, std::shared_ptr<Texture> texture) {
     return D3DERR_INVALIDCALL;
   }
   state_.textures[stage] = std::move(texture);
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3174,12 +3185,14 @@ HResult Device::setStreamSource(u32 stream, std::shared_ptr<Buffer> buffer, u32 
   state_.streamBuffers[stream] = std::move(buffer);
   state_.streamOffsets[stream] = offset;
   state_.streamStrides[stream] = stride;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
 HResult Device::setIndices(std::shared_ptr<Buffer> buffer, IndexType indexType) {
   state_.indexBuffer = std::move(buffer);
   state_.indexType = indexType;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3187,12 +3200,14 @@ HResult Device::setFVF(u32 fvf) {
   state_.fvf = fvf;
   state_.vertexDecl.fvf = fvf;
   state_.vertexDecl.elements.clear();
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
 HResult Device::setVertexDeclaration(std::vector<VertexElement> elements) {
   state_.vertexDecl.elements = std::move(elements);
   state_.vertexDecl.fvf = state_.fvf;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3201,6 +3216,7 @@ HResult Device::setVertexShader(const ShaderRef& shader) {
   if (state_.vertexShader.hash == 0) {
     state_.vertexShader.hash = hashShaderRef(state_.vertexShader);
   }
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3209,6 +3225,7 @@ HResult Device::setPixelShader(const ShaderRef& shader) {
   if (state_.pixelShader.hash == 0) {
     state_.pixelShader.hash = hashShaderRef(state_.pixelShader);
   }
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3217,6 +3234,7 @@ HResult Device::setClipPlane(u32 index, const ClipPlane& plane) {
     return D3DERR_INVALIDCALL;
   }
   state_.clipPlanes[index] = plane;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3227,11 +3245,13 @@ HResult Device::setViewport(const Viewport& viewport) {
     return D3DERR_INVALIDCALL;
   }
   state_.viewport = viewport;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
 HResult Device::setScissorRect(const Rect& rect) {
   state_.scissorRect = rect;
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3246,6 +3266,7 @@ HResult Device::setRenderTarget(u32 index, std::shared_ptr<Surface> surface) {
     const auto& desc = surface->desc();
     state_.viewport = {0, 0, std::max(1u, desc.width), std::max(1u, desc.height), 0.0f, 1.0f};
   }
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3253,6 +3274,7 @@ HResult Device::setDepthStencilSurface(std::shared_ptr<Surface> surface) {
   state_.depthStencil = surface ? RenderTargetAttachment{surface->handle(), surface->level(),
                                                          surface->multiSampleCount()}
                                 : RenderTargetAttachment{};
+  invalidateDrawStateCache();
   return D3D_OK;
 }
 
@@ -3688,27 +3710,6 @@ DrawDebugSnapshot makeDrawDebugSnapshot(const DrawCallArgs& args, const FlatDraw
   return snapshot;
 }
 
-DrawParam makeDrawParamFromDesc(const DrawDesc& desc) {
-  DrawParam param{};
-  param.primitiveType = desc.primitiveType;
-  param.primitiveCount = desc.primitiveCount;
-  param.startVertex = desc.startVertex;
-  param.baseVertexIndex = desc.baseVertexIndex;
-  param.startIndex = desc.startIndex;
-  param.indexType = desc.indexType;
-  param.indexed = desc.indexBuffer || !desc.userIndexData.empty();
-  param.userVertexData = desc.userVertexData;
-  param.userIndexData = desc.userIndexData;
-  return param;
-}
-
-CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc) {
-  auto hot = makeFlatDrawStateRecord(desc);
-  auto shaderLayout = makeDrawShaderLayoutContext(desc);
-  auto debug = makeDrawDebugSnapshot(desc, hot);
-  return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug)};
-}
-
 CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args) {
   auto shaderLayout = makeDrawShaderLayoutContextFromState(state);
   const auto viewport = makeViewportScissorFromState(state);
@@ -3717,9 +3718,10 @@ CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, con
   return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug)};
 }
 
-bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena) {
-  const auto vertexBytes = std::span<const u8>(param.userVertexData.data(), param.userVertexData.size());
-  const auto indexBytes = std::span<const u8>(param.userIndexData.data(), param.userIndexData.size());
+bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena,
+                          DrawParamPayloadView payload) {
+  const auto vertexBytes = payload.userVertexData;
+  const auto indexBytes = payload.userIndexData;
   constexpr auto kMaxRange = std::numeric_limits<u32>::max();
   const std::uint64_t requiredSize =
       static_cast<std::uint64_t>(payloadArena.size()) +
@@ -3743,52 +3745,120 @@ bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena) {
 
   param.userVertexRange = appendPayload(vertexBytes);
   param.userIndexRange = appendPayload(indexBytes);
-  param.userVertexData.clear();
-  param.userIndexData.clear();
   return true;
 }
 
-DrawRunDesc makeDrawRunDescFromState(DeviceState baseState, std::span<const DrawParam> draws) {
+DrawParamPayloadView drawPayloadAt(std::span<const DrawParamPayloadView> payloads,
+                                   std::size_t index) {
+  if (index < payloads.size()) {
+    return payloads[index];
+  }
+  return {};
+}
+
+bool drawRunUsesBoundIndexBuffer(std::span<const DrawParam> draws,
+                                 std::span<const DrawParamPayloadView> payloads) {
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    const auto& draw = draws[i];
+    if (draw.indexed && drawPayloadAt(payloads, i).userIndexData.empty()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+DrawRunDesc makeDrawRunDescFromCanonical(CanonicalDrawState state,
+                                         std::span<const DrawParam> draws,
+                                         std::span<const DrawParamPayloadView> payloads) {
   DrawRunDesc run{};
   if (draws.empty()) {
     return run;
   }
 
-  bool usesBoundIndexBuffer = false;
-  for (const auto& draw : draws) {
-    if (draw.indexed && draw.userIndexData.empty() && draw.userIndexRange.empty()) {
-      usesBoundIndexBuffer = true;
-      break;
-    }
-  }
-  if (!usesBoundIndexBuffer) {
-    baseState.indexBuffer.reset();
-  }
-
   const auto& first = draws.front();
-  run.state = makeCanonicalDrawStateFromState(
-      baseState, DrawCallArgs{first.primitiveType, first.primitiveCount, first.startVertex,
-                              first.baseVertexIndex, first.startIndex, first.indexType});
+  const auto firstPayload = drawPayloadAt(payloads, 0);
+  run.state = std::move(state);
+  run.state.debug = makeDrawDebugSnapshot(
+      DrawCallArgs{first.primitiveType, first.primitiveCount, first.startVertex,
+                   first.baseVertexIndex, first.startIndex, first.indexType},
+      run.state.hot);
   run.state.debug.userVertexBytes = static_cast<u32>(
-      std::min<std::size_t>(first.userVertexData.size(), std::numeric_limits<u32>::max()));
+      std::min<std::size_t>(firstPayload.userVertexData.size(), std::numeric_limits<u32>::max()));
   run.state.debug.userIndexBytes = static_cast<u32>(
-      std::min<std::size_t>(first.userIndexData.size(), std::numeric_limits<u32>::max()));
+      std::min<std::size_t>(firstPayload.userIndexData.size(), std::numeric_limits<u32>::max()));
   run.draws.reserve(draws.size());
 
-  bool packedPayloads = true;
-  for (const auto& draw : draws) {
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    const auto& draw = draws[i];
     DrawParam packed = draw;
-    if (!packDrawParamPayload(packed, run.payloadArena)) {
-      packedPayloads = false;
-      break;
+    packed.userVertexRange = {};
+    packed.userIndexRange = {};
+    if (!packDrawParamPayload(packed, run.payloadArena, drawPayloadAt(payloads, i))) {
+      return {};
     }
     run.draws.push_back(std::move(packed));
   }
-  if (!packedPayloads) {
-    run.payloadArena.clear();
-    run.draws.assign(draws.begin(), draws.end());
-  }
   return run;
+}
+
+DrawRunDesc makeDrawRunDescFromState(DeviceState baseState,
+                                     std::span<const DrawParam> draws,
+                                     std::span<const DrawParamPayloadView> payloads = {}) {
+  if (draws.empty()) {
+    return {};
+  }
+  if (!drawRunUsesBoundIndexBuffer(draws, payloads)) {
+    baseState.indexBuffer.reset();
+  }
+  auto state = makeCanonicalDrawStateFromState(
+      baseState, DrawCallArgs{draws.front().primitiveType, draws.front().primitiveCount,
+                              draws.front().startVertex, draws.front().baseVertexIndex,
+                              draws.front().startIndex, draws.front().indexType});
+  return makeDrawRunDescFromCanonical(std::move(state), draws, payloads);
+}
+
+void Device::invalidateDrawStateCache() noexcept {
+  ++drawStateGeneration_;
+  if (drawStateGeneration_ == 0) {
+    drawStateGeneration_ = 1;
+  }
+}
+
+const Device::CachedBaseDrawState& Device::cachedBaseDrawState(bool includeIndexBuffer) {
+  auto& cache = includeIndexBuffer ? drawStateCacheWithIndex_ : drawStateCacheNoIndex_;
+  if (cache.valid && cache.generation == drawStateGeneration_) {
+    return cache;
+  }
+
+  DeviceState baseState = state_;
+  if (!includeIndexBuffer) {
+    baseState.indexBuffer.reset();
+  }
+  cache.shaderLayout = makeDrawShaderLayoutContextFromState(baseState);
+  const auto viewport = makeViewportScissorFromState(baseState);
+  cache.hot = makeFlatDrawStateRecordFromState(baseState, cache.shaderLayout, viewport);
+  cache.generation = drawStateGeneration_;
+  cache.valid = true;
+  return cache;
+}
+
+DrawRunDesc Device::makeDrawRunDescFromCurrentState(
+    std::span<const DrawParam> draws,
+    std::span<const DrawParamPayloadView> payloads) {
+  if (draws.empty()) {
+    return {};
+  }
+  const auto& cached = cachedBaseDrawState(drawRunUsesBoundIndexBuffer(draws, payloads));
+  CanonicalDrawState state{
+      cached.hot,
+      cached.shaderLayout,
+      makeDrawDebugSnapshot(
+          DrawCallArgs{draws.front().primitiveType, draws.front().primitiveCount,
+                       draws.front().startVertex, draws.front().baseVertexIndex,
+                       draws.front().startIndex, draws.front().indexType},
+          cached.hot),
+  };
+  return makeDrawRunDescFromCanonical(std::move(state), draws, payloads);
 }
 
 HResult Device::clear(const ClearDesc& desc) {
@@ -3890,7 +3960,7 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
   if (draws.empty()) {
     return D3D_OK;
   }
-  submitDrawRunInternal(makeDrawRunDescFromState(state_, draws));
+  submitDrawRunInternal(makeDrawRunDescFromCurrentState(draws));
   return D3D_OK;
 }
 
@@ -3901,7 +3971,7 @@ HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount, u32 startV
   draw.startVertex = startVertex;
   draw.indexType = state_.indexType;
   draw.indexed = false;
-  submitDrawRunInternal(makeDrawRunDescFromState(state_, std::span<const DrawParam>(&draw, 1)));
+  submitDrawRunInternal(makeDrawRunDescFromCurrentState(std::span<const DrawParam>(&draw, 1)));
   if (state_.inScene) {
     // No-op; draw submission is immediate in the core harness.
   }
@@ -3918,7 +3988,7 @@ HResult Device::drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount, u32
   draw.startIndex = startIndex;
   draw.indexType = indexType;
   draw.indexed = true;
-  submitDrawRunInternal(makeDrawRunDescFromState(state_, std::span<const DrawParam>(&draw, 1)));
+  submitDrawRunInternal(makeDrawRunDescFromCurrentState(std::span<const DrawParam>(&draw, 1)));
   return D3D_OK;
 }
 
@@ -3943,12 +4013,22 @@ HResult Device::drawPrimitiveUP(PrimitiveType type, u32 primitiveCount,
     if (primitiveCount != 0 && decomposed.empty()) {
       return D3DERR_INVALIDCALL;
     }
-    draw.userVertexData = std::move(decomposed);
+    const DrawParamPayloadView payload{
+        .userVertexData = std::span<const u8>(decomposed.data(), decomposed.size()),
+    };
+    submitDrawRunInternal(makeDrawRunDescFromState(
+        drawState, std::span<const DrawParam>(&draw, 1),
+        std::span<const DrawParamPayloadView>(&payload, 1)));
+    return D3D_OK;
   } else {
-    draw.userVertexData = upVertexScratch_;
+    const DrawParamPayloadView payload{
+        .userVertexData = std::span<const u8>(upVertexScratch_.data(), upVertexScratch_.size()),
+    };
+    submitDrawRunInternal(makeDrawRunDescFromState(
+        drawState, std::span<const DrawParam>(&draw, 1),
+        std::span<const DrawParamPayloadView>(&payload, 1)));
+    return D3D_OK;
   }
-  submitDrawRunInternal(makeDrawRunDescFromState(drawState, std::span<const DrawParam>(&draw, 1)));
-  return D3D_OK;
 }
 
 HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
@@ -3981,9 +4061,13 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
   draw.primitiveCount = primitiveCount;
   draw.indexType = indexType;
   draw.indexed = true;
-  draw.userVertexData = upVertexScratch_;
-  draw.userIndexData = upIndexScratch_;
-  submitDrawRunInternal(makeDrawRunDescFromState(drawState, std::span<const DrawParam>(&draw, 1)));
+  const DrawParamPayloadView payload{
+      .userVertexData = std::span<const u8>(upVertexScratch_.data(), upVertexScratch_.size()),
+      .userIndexData = std::span<const u8>(upIndexScratch_.data(), upIndexScratch_.size()),
+  };
+  submitDrawRunInternal(makeDrawRunDescFromState(
+      drawState, std::span<const DrawParam>(&draw, 1),
+      std::span<const DrawParamPayloadView>(&payload, 1)));
   return D3D_OK;
 }
 
@@ -4067,6 +4151,7 @@ HResult Device::resetValidated(const PresentParameters& params) {
                                                        primary->depthStencilSurface()->multiSampleCount()}
                               : RenderTargetAttachment{};
   }
+  invalidateDrawStateCache();
   submittedSequenceId_ = 0;
   completedSequenceId_ = 0;
   presentCount_ = 0;
@@ -4638,6 +4723,7 @@ HResult Device::getRenderTargetData(const std::shared_ptr<Surface>& src, const s
 
 void Device::resetState() {
   state_.reset();
+  invalidateDrawStateCache();
 }
 
 FfpVertexKey makeFfpVertexKey(const DeviceState& state) {

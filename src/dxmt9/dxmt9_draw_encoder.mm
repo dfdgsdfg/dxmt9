@@ -531,7 +531,7 @@ std::span<const u8> drawParamVertexBytes(const core::DrawParam& param,
   if (!param.userVertexRange.empty()) {
     return payloadRangeBytes(param.userVertexRange, arena);
   }
-  return std::span<const u8>(param.userVertexData.data(), param.userVertexData.size());
+  return {};
 }
 
 std::span<const u8> drawParamIndexBytes(const core::DrawParam& param,
@@ -539,7 +539,7 @@ std::span<const u8> drawParamIndexBytes(const core::DrawParam& param,
   if (!param.userIndexRange.empty()) {
     return payloadRangeBytes(param.userIndexRange, arena);
   }
-  return std::span<const u8>(param.userIndexData.data(), param.userIndexData.size());
+  return {};
 }
 
 bool encodeDraw(EncodeContext& ctx,
@@ -1454,79 +1454,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, clear);
           commandBufferHasWork = true;
         }
-        break;
-      }
-      case Kind::Draw: {
-        if (!command.drawRecord || !command.drawState || !command.drawParam) break;
-        const auto& drawState = *command.drawState;
-        const auto stateView = drawState.view();
-        const auto& param = *command.drawParam;
-        flushBlit();
-        assertEncoderLifecycleInvariant();
-        const auto drawKey = makeAttachmentKey(drawState.hot);
-        const auto drawReadBloom = makeDrawReadBloom(stateView);
-        if (pendingClear.has_value()) {
-          const auto clearKey = makeAttachmentKey(*pendingClear);
-          const auto clearBloom = makeAttachmentBloom(*pendingClear);
-          if (clearKey == drawKey && !clearBloom.overlaps(drawReadBloom)) {
-            startRenderPass(stateView, pendingClear);
-            pendingClear.reset();
-          } else {
-            flushPendingClear();
-            const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
-            const bool hazardDetected =
-                hasActiveRender && !renderTargetChanged && activeWriteBloom.overlaps(drawReadBloom);
-            if (!hasActiveRender || renderTargetChanged || hazardDetected) {
-              if (renderTargetChanged) {
-                // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
-                DXMT_ASSERT(hasActiveRender);
-              }
-              if (hazardDetected) {
-                // TLA+: EncoderLifecycle / HazardDetected
-                DXMT_ASSERT(hasActiveRender);
-                DXMT_ASSERT(activeKey == drawKey);
-              }
-              flushRender();
-              startRenderPass(stateView, std::nullopt);
-            } else {
-              // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
-              DXMT_ASSERT(hasActiveRender);
-              DXMT_ASSERT(activeKey == drawKey);
-              DXMT_ASSERT(!activeWriteBloom.overlaps(drawReadBloom));
-            }
-          }
-        } else {
-          const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
-          const bool hazardDetected =
-              hasActiveRender && !renderTargetChanged && activeWriteBloom.overlaps(drawReadBloom);
-          if (!hasActiveRender || renderTargetChanged || hazardDetected) {
-            if (renderTargetChanged) {
-              // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
-              DXMT_ASSERT(hasActiveRender);
-            }
-            if (hazardDetected) {
-              // TLA+: EncoderLifecycle / HazardDetected
-              DXMT_ASSERT(hasActiveRender);
-              DXMT_ASSERT(activeKey == drawKey);
-            }
-            flushRender();
-            startRenderPass(stateView, std::nullopt);
-          } else {
-            // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
-            DXMT_ASSERT(hasActiveRender);
-            DXMT_ASSERT(activeKey == drawKey);
-            DXMT_ASSERT(!activeWriteBloom.overlaps(drawReadBloom));
-          }
-        }
-        const bool skipBaseStateBind =
-            activeDrawStateKey.has_value() && *activeDrawStateKey == drawState.hot.key;
-        const std::span<const u8> payloadArena(slot.drawPayloadArena.data(),
-                                               slot.drawPayloadArena.size());
-        if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, stateView, slot.seqId,
-                       skipBaseStateBind, nullptr, &param, payloadArena)) {
-          activeDrawStateKey = drawState.hot.key;
-        }
-        commandBufferHasWork = true;
         break;
       }
       case Kind::DrawRun: {

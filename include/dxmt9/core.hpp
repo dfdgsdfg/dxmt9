@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -1263,8 +1264,13 @@ struct DrawParam {
   bool indexed = false;                    // true → drawIndexedPrimitive
   DrawPayloadRange userVertexRange{};      // DrawRunDesc::payloadArena slice, if present
   DrawPayloadRange userIndexRange{};       // DrawRunDesc::payloadArena slice, if present
-  std::vector<u8> userVertexData;          // empty for non-UP draws
-  std::vector<u8> userIndexData;           // empty for non-UP / non-indexed
+};
+static_assert(std::is_trivially_copyable_v<DrawParam>,
+              "DrawParam is hot-path draw metadata and must remain flat.");
+
+struct DrawParamPayloadView {
+  std::span<const u8> userVertexData{};
+  std::span<const u8> userIndexData{};
 };
 
 // Per-chunk resource retention entry. Mirrors the wire-format D9CChunk
@@ -1285,12 +1291,11 @@ struct ChunkHandleEntry {
 };
 
 // Backend draw-run record: one canonical draw state plus N compact
-// DrawParam entries. Replaces N separate
-// MetalCommandKind::Draw records when the importer detects a
-// run of draws with no state change between them. Encoder binds state
-// once from `state.hot`, then loops emitting per-draw calls — saves both
-// per-draw DrawDesc copies on the queue side and per-draw resource
-// rebinding on the encoder side.
+// DrawParam entries. Single draws are encoded as a run of one, and importer
+// coalescing extends that to N draws with no state change between them.
+// Encoder binds state once from `state.hot`, then loops emitting per-draw
+// calls — saves both per-draw DrawDesc copies on the queue side and per-draw
+// resource rebinding on the encoder side.
 struct DrawRunDesc {
   CanonicalDrawState state{};              // applied once at run start
   std::vector<u8> payloadArena;            // packed per-draw UP payload bytes
@@ -1699,10 +1704,9 @@ FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc);
 FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc);
 DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc& desc);
 DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStateRecord& hot);
-DrawParam makeDrawParamFromDesc(const DrawDesc& desc);
-CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc);
 CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args);
-bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena);
+bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena,
+                          DrawParamPayloadView payload);
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);
 std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height, std::span<const u8> input);
@@ -1986,7 +1990,10 @@ class Device : public std::enable_shared_from_this<Device> {
   const BackendLimits& limits() const noexcept { return limits_; }
   const DeviceCaps& caps() const noexcept { return caps_; }
   const DeviceState& state() const noexcept { return state_; }
-  DeviceState& mutableState() noexcept { return state_; }
+  DeviceState& mutableState() noexcept {
+    invalidateDrawStateCache();
+    return state_;
+  }
   const PresentParameters& presentParameters() const noexcept { return presentParameters_; }
   // Transitional accessor — returns the cached upper-device ptr, which
   // exposes both resource-ops + submit/present now (via the dxmt9::Device
@@ -2111,6 +2118,19 @@ class Device : public std::enable_shared_from_this<Device> {
   void resetState();
   HResult resetValidated(const PresentParameters& params);
 
+  struct CachedBaseDrawState {
+    u64 generation = 0;
+    bool valid = false;
+    FlatDrawStateRecord hot{};
+    DrawShaderLayoutContext shaderLayout{};
+  };
+
+  void invalidateDrawStateCache() noexcept;
+  DrawRunDesc makeDrawRunDescFromCurrentState(
+      std::span<const DrawParam> draws,
+      std::span<const DrawParamPayloadView> payloads = {});
+  const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
+
   AdapterInfo adapter_{};
   BackendLimits limits_{};
   DeviceCaps caps_{};
@@ -2125,6 +2145,9 @@ class Device : public std::enable_shared_from_this<Device> {
   [[maybe_unused]] u32 behaviorFlags_ = 0;
   bool extendedDevice_ = false;
   DeviceState state_{};
+  u64 drawStateGeneration_ = 1;
+  CachedBaseDrawState drawStateCacheWithIndex_{};
+  CachedBaseDrawState drawStateCacheNoIndex_{};
   std::vector<std::weak_ptr<Buffer>> buffers_;
   std::vector<std::weak_ptr<Texture>> textures_;
   std::vector<std::weak_ptr<Surface>> surfaces_;

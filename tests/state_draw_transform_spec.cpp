@@ -84,6 +84,37 @@ ShaderRef makeBytecodeShader(u64 hash, std::vector<u8> bytes) {
   return shader;
 }
 
+CanonicalDrawState makeCanonicalDrawStateForTest(const DrawDesc& desc) {
+  auto hot = makeFlatDrawStateRecord(desc);
+  auto shaderLayout = makeDrawShaderLayoutContext(desc);
+  auto debug = makeDrawDebugSnapshot(desc, hot);
+  return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug)};
+}
+
+DrawParam makeDrawParamForTest(const DrawDesc& desc) {
+  DrawParam param{};
+  param.primitiveType = desc.primitiveType;
+  param.primitiveCount = desc.primitiveCount;
+  param.startVertex = desc.startVertex;
+  param.baseVertexIndex = desc.baseVertexIndex;
+  param.startIndex = desc.startIndex;
+  param.indexType = desc.indexType;
+  param.indexed = desc.indexBuffer || !desc.userIndexData.empty();
+  return param;
+}
+
+std::span<const u8> payloadBytes(const DrawRunDesc& run, DrawPayloadRange range) {
+  if (range.empty()) {
+    return {};
+  }
+  const std::size_t offset = range.offset;
+  const std::size_t size = range.size;
+  if (offset > run.payloadArena.size() || size > run.payloadArena.size() - offset) {
+    return {};
+  }
+  return std::span<const u8>(run.payloadArena.data() + offset, size);
+}
+
 void testStateValueTableDirtyHashContract() {
   RenderStateTable a;
   RenderStateTable b;
@@ -385,14 +416,24 @@ void testFlatDrawStateKey() {
   drawParamB.startIndex = 19;
   drawParamB.indexType = IndexType::UInt32;
   drawParamB.indexed = true;
-  drawParamB.userVertexData = {0xde, 0xad, 0xbe, 0xef};
-  drawParamB.userIndexData = {0x01, 0x02, 0x03, 0x04};
+  const std::vector<u8> drawParamBVertexData{0xde, 0xad, 0xbe, 0xef};
+  const std::vector<u8> drawParamBIndexData{0x01, 0x02, 0x03, 0x04};
 
   DrawRunDesc run{};
-  run.state = makeCanonicalDrawState(first);
-  run.draws = {drawParamA, drawParamB};
+  run.state = makeCanonicalDrawStateForTest(first);
+  DrawParam packedDrawParamB = drawParamB;
+  check(packDrawParamPayload(
+            packedDrawParamB, run.payloadArena,
+            DrawParamPayloadView{
+                .userVertexData = std::span<const u8>(drawParamBVertexData.data(),
+                                                      drawParamBVertexData.size()),
+                .userIndexData = std::span<const u8>(drawParamBIndexData.data(),
+                                                     drawParamBIndexData.size()),
+            }),
+        "test draw param B payload packs into run arena");
+  run.draws = {drawParamA, packedDrawParamB};
 
-  const auto drawDescForParam = [&first](const DrawParam& param) {
+  const auto drawDescForParam = [&first, &run](const DrawParam& param) {
     DrawDesc desc = first;
     desc.primitiveType = param.primitiveType;
     desc.primitiveCount = param.primitiveCount;
@@ -400,8 +441,10 @@ void testFlatDrawStateKey() {
     desc.baseVertexIndex = param.baseVertexIndex;
     desc.startIndex = param.startIndex;
     desc.indexType = param.indexType;
-    desc.userVertexData = param.userVertexData;
-    desc.userIndexData = param.userIndexData;
+    const auto vertexBytes = payloadBytes(run, param.userVertexRange);
+    const auto indexBytes = payloadBytes(run, param.userIndexRange);
+    desc.userVertexData.assign(vertexBytes.begin(), vertexBytes.end());
+    desc.userIndexData.assign(indexBytes.begin(), indexBytes.end());
     return desc;
   };
 
@@ -461,25 +504,25 @@ void testFlatDrawStateKey() {
   const FlatDrawStateKey storedRunKey = run.state.hot.key;
   run.draws[1].primitiveCount = 11;
   run.draws[1].startVertex = 64;
-  run.draws[1].userVertexData = {0xaa, 0xbb, 0xcc};
-  run.draws[1].userIndexData = {0x10, 0x11};
+  const auto mutateOffset = static_cast<u32>(run.payloadArena.size());
+  run.payloadArena.insert(run.payloadArena.end(), {0xaa, 0xbb, 0xcc, 0x10, 0x11});
+  run.draws[1].userVertexRange = {mutateOffset, 3};
+  run.draws[1].userIndexRange = {mutateOffset + 3u, 2};
   checkEq(run.state.hot.key, storedRunKey,
           "draw-run key remains separate from mutable draw params");
   checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
           "mutated draw params and UP payloads still do not alter the run key");
 
-  auto payloadCanonical = makeCanonicalDrawState(withUserPayload);
+  auto payloadCanonical = makeCanonicalDrawStateForTest(withUserPayload);
   checkEq(payloadCanonical.debug.userVertexBytes, 4u,
           "canonical debug snapshot keeps stripped vertex payload byte count");
   checkEq(payloadCanonical.debug.userIndexBytes, 2u,
           "canonical debug snapshot keeps stripped index payload byte count");
 
   DrawRunDesc packedRun{};
-  packedRun.state = makeCanonicalDrawState(first);
+  packedRun.state = makeCanonicalDrawStateForTest(first);
   packedRun.payloadArena = {0xde, 0xad, 0xbe, 0xef, 0x10, 0x11};
   DrawParam packedParam = drawParamB;
-  packedParam.userVertexData.clear();
-  packedParam.userIndexData.clear();
   packedParam.userVertexRange = {0, 4};
   packedParam.userIndexRange = {4, 2};
   packedRun.draws = {packedParam};
@@ -496,16 +539,30 @@ void testFlatDrawStateKey() {
           "payload arena mutations remain separate from the draw-run key");
 
   ChunkSlot slot{};
-  slot.appendDraw(withUserPayload);
+  DrawRunDesc singleRun{};
+  singleRun.state = makeCanonicalDrawStateForTest(withUserPayload);
+  DrawParam singleParam = makeDrawParamForTest(withUserPayload);
+  check(packDrawParamPayload(
+            singleParam, singleRun.payloadArena,
+            DrawParamPayloadView{
+                .userVertexData = std::span<const u8>(withUserPayload.userVertexData.data(),
+                                                      withUserPayload.userVertexData.size()),
+                .userIndexData = std::span<const u8>(withUserPayload.userIndexData.data(),
+                                                     withUserPayload.userIndexData.size()),
+            }),
+        "test single draw payload packs into run arena");
+  singleRun.draws = {singleParam};
+  slot.appendDrawRun(std::move(singleRun));
   const auto drawView = slot.commandAt(0);
-  check(drawView.drawRecord != nullptr, "slot draw command exposes compact draw record");
+  check(drawView.drawRunRecord != nullptr, "slot single-draw command exposes compact run record");
   check(drawView.drawState != nullptr, "slot draw command indexes canonical draw state");
-  check(drawView.drawParam != nullptr, "slot draw command indexes draw param table");
+  checkEq(drawView.drawParams.size(), std::size_t{1},
+          "slot single-draw command indexes draw param table");
   checkEq(drawView.drawState->hot.key, firstKey,
           "slot draw state stores the canonical flat key");
-  checkEq(drawView.drawParam->userVertexRange.offset, 0u,
+  checkEq(drawView.drawParams[0].userVertexRange.offset, 0u,
           "slot draw payload stores vertex bytes in slot arena");
-  checkEq(drawView.drawParam->userIndexRange.offset, 4u,
+  checkEq(drawView.drawParams[0].userIndexRange.offset, 4u,
           "slot draw payload stores index bytes after vertex bytes");
   checkEq(slot.drawPayloadArena.size(), std::size_t{6},
           "slot draw payload arena owns single-draw UP bytes");
@@ -551,7 +608,7 @@ void testFlatDrawStateKey() {
   DeviceState changedRenderState = state;
   changedRenderState.renderStates[RS_CULL_MODE] = static_cast<u32>(CullMode::None);
   DrawRunDesc changedRun{};
-  changedRun.state = makeCanonicalDrawState(makeDrawDescFromState(changedRenderState, {}));
+  changedRun.state = makeCanonicalDrawStateForTest(makeDrawDescFromState(changedRenderState, {}));
   check(!(firstKey == changedRun.state.hot.key),
         "render-state changes flat base draw state");
   check(!(run.state.hot.key == changedRun.state.hot.key),

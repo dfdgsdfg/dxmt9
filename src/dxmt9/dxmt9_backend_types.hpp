@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9/core.hpp"
+#include "dxmt9/assert.hpp"
 
 #include <cstdint>
 #include <iterator>
@@ -12,7 +13,6 @@
 namespace dxmt9::core {
 
 enum class MetalCommandKind : std::uint8_t {
-  Draw,
   DrawRun,        // BaseDrawState + N DrawParam — see core::DrawRunDesc
   Clear,
   SurfaceCopy,
@@ -27,11 +27,6 @@ struct PresentCommandRecord {
   Handle presentSource{};
 };
 
-struct DrawCommandRecord {
-  std::uint32_t stateIndex = 0;
-  std::uint32_t paramIndex = 0;
-};
-
 struct DrawRunCommandRecord {
   std::uint32_t stateIndex = 0;
   std::uint32_t firstParam = 0;
@@ -39,16 +34,14 @@ struct DrawRunCommandRecord {
 };
 
 struct MetalCommandHeader {
-  MetalCommandKind kind = MetalCommandKind::Draw;
+  MetalCommandKind kind = MetalCommandKind::DrawRun;
   std::uint32_t payloadIndex = 0;
 };
 
 struct MetalCommandView {
-  MetalCommandKind kind = MetalCommandKind::Draw;
-  const DrawCommandRecord* drawRecord = nullptr;
+  MetalCommandKind kind = MetalCommandKind::DrawRun;
   const DrawRunCommandRecord* drawRunRecord = nullptr;
   const CanonicalDrawState* drawState = nullptr;
-  const DrawParam* drawParam = nullptr;
   std::span<const DrawParam> drawParams{};
   const ClearDesc* clear = nullptr;
   const SurfaceCopyDesc* surfaceCopy = nullptr;
@@ -71,7 +64,6 @@ struct ChunkSlot {
   std::vector<CanonicalDrawState> drawStates;
   std::vector<DrawParam> drawParams;
   std::vector<u8> drawPayloadArena;
-  std::vector<DrawCommandRecord> drawRecords;
   std::vector<DrawRunCommandRecord> drawRunRecords;
   std::vector<ClearDesc> clearRecords;
   std::vector<SurfaceCopyDesc> surfaceCopyRecords;
@@ -93,7 +85,6 @@ struct ChunkSlot {
     drawStates.clear();
     drawParams.clear();
     drawPayloadArena.clear();
-    drawRecords.clear();
     drawRunRecords.clear();
     clearRecords.clear();
     surfaceCopyRecords.clear();
@@ -103,66 +94,28 @@ struct ChunkSlot {
     presentRecords.clear();
   }
 
-  void appendDraw(const DrawDesc& draw) {
-    commandHeaders.push_back({MetalCommandKind::Draw, static_cast<std::uint32_t>(drawRecords.size())});
-    const auto stateIndex = static_cast<std::uint32_t>(drawStates.size());
-    const auto paramIndex = static_cast<std::uint32_t>(drawParams.size());
-    drawStates.push_back(makeCanonicalDrawState(draw));
-    DrawParam param = makeDrawParamFromDesc(draw);
-    if (!packDrawParamPayload(param, drawPayloadArena)) {
-      param = makeDrawParamFromDesc(draw);
-    }
-    drawParams.push_back(std::move(param));
-    drawRecords.push_back(DrawCommandRecord{
-        .stateIndex = stateIndex,
-        .paramIndex = paramIndex,
-    });
-  }
-
   void appendDrawRun(DrawRunDesc drawRun) {
     const auto stateIndex = static_cast<std::uint32_t>(drawStates.size());
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
-    drawStates.push_back(std::move(drawRun.state));
-
     const bool canUseSlotArena =
         drawPayloadArena.size() <= std::numeric_limits<std::uint32_t>::max() &&
         drawRun.payloadArena.size() <=
             static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) -
                 drawPayloadArena.size();
-    if (canUseSlotArena && !drawRun.payloadArena.empty()) {
+    DXMT_ASSERT(canUseSlotArena && "draw payload arena exceeded 32-bit range storage");
+    if (!canUseSlotArena) {
+      return;
+    }
+
+    drawStates.push_back(std::move(drawRun.state));
+
+    if (!drawRun.payloadArena.empty()) {
       const auto baseOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
       drawPayloadArena.insert(drawPayloadArena.end(), drawRun.payloadArena.begin(),
                               drawRun.payloadArena.end());
       for (auto& param : drawRun.draws) {
         if (!param.userVertexRange.empty()) param.userVertexRange.offset += baseOffset;
         if (!param.userIndexRange.empty()) param.userIndexRange.offset += baseOffset;
-      }
-    } else if (!drawRun.payloadArena.empty()) {
-      for (auto& param : drawRun.draws) {
-        const auto materializePayload = [&drawRun](DrawPayloadRange range) {
-          std::vector<u8> bytes;
-          const std::size_t offset = range.offset;
-          const std::size_t size = range.size;
-          if (size == 0 || offset > drawRun.payloadArena.size() ||
-              size > drawRun.payloadArena.size() - offset) {
-            return bytes;
-          }
-          bytes.insert(bytes.end(), drawRun.payloadArena.begin() + offset,
-                       drawRun.payloadArena.begin() + offset + size);
-          return bytes;
-        };
-        if (!param.userVertexRange.empty()) {
-          param.userVertexData = materializePayload(param.userVertexRange);
-          param.userVertexRange = {};
-        }
-        if (!param.userIndexRange.empty()) {
-          param.userIndexData = materializePayload(param.userIndexRange);
-          param.userIndexRange = {};
-        }
-        if (!packDrawParamPayload(param, drawPayloadArena)) {
-          param.userVertexRange = {};
-          param.userIndexRange = {};
-        }
       }
     }
 
@@ -221,18 +174,6 @@ struct ChunkSlot {
     const std::size_t payloadIndex = header.payloadIndex;
     MetalCommandView view{.kind = header.kind};
     switch (header.kind) {
-    case MetalCommandKind::Draw:
-      if (payloadIndex < drawRecords.size()) {
-        const auto& record = drawRecords[payloadIndex];
-        view.drawRecord = &record;
-        if (record.stateIndex < drawStates.size()) {
-          view.drawState = &drawStates[record.stateIndex];
-        }
-        if (record.paramIndex < drawParams.size()) {
-          view.drawParam = &drawParams[record.paramIndex];
-        }
-      }
-      break;
     case MetalCommandKind::DrawRun:
       if (payloadIndex < drawRunRecords.size()) {
         const auto& record = drawRunRecords[payloadIndex];

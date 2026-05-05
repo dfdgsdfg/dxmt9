@@ -157,13 +157,6 @@ u32 compatFlagsForPresent(const SwapDesc& present,
 ChunkObservation makeChunkObservation(const MetalCommandView& command,
                                       const std::function<u32(Handle)>& resolveSurfaceFlags) {
   switch (command.kind) {
-    case MetalCommandKind::Draw:
-      return ChunkObservation{
-          .kind = ChunkObservationKind::Draw,
-          .compatFlags = command.drawState
-              ? compatFlagsForDraw(command.drawState->view(), resolveSurfaceFlags)
-              : 0,
-      };
     case MetalCommandKind::DrawRun:
       return ChunkObservation{
           .kind = ChunkObservationKind::Draw,
