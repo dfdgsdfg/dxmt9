@@ -16,11 +16,11 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/winemetal.h"
 #include "device_c_common.hpp"
-#include "../src/dxmt9/dxmt9_format_convert.hpp"
-#include "../src/dxmt9/dxmt9_draw_shader.hpp"
-#include "../src/dxmt9/dxmt9_draw_state.hpp"
-#include "../src/dxmt9/dxmt9_ring_arena.hpp"
-#include "../src/dxmt9/dxmt9_shader_translator.hpp"
+#include "../../../src/dxmt9/dxmt9_format_convert.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_shader.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_state.hpp"
+#include "../../../src/dxmt9/dxmt9_ring_arena.hpp"
+#include "../../../src/dxmt9/dxmt9_shader_translator.hpp"
 
 using namespace dxmt9::core;
 using namespace dxmt9::core::fixture;

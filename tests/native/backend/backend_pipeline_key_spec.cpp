@@ -10,9 +10,9 @@
 #include <utility>
 
 #include "dxmt9/core.hpp"
-#include "../src/dxmt9/dxmt9_ffp_shaders.hpp"
-#include "../src/dxmt9/dxmt9_format_convert.hpp"
-#include "../src/dxmt9/dxmt9_pipeline_cache.hpp"
+#include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
+#include "../../../src/dxmt9/dxmt9_format_convert.hpp"
+#include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
 
 using namespace dxmt9::core;
 using namespace dxmt9::core::fixture;

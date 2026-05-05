@@ -1,7 +1,7 @@
 #include "dxmt9/core.hpp"
-#include "../src/dxmt9/dxmt9_d3d9_bytecode.hpp"
-#include "../src/dxmt9/dxmt9_draw_shader.hpp"
-#include "../src/dxmt9/dxmt9_shader_translator.hpp"
+#include "../../../src/dxmt9/dxmt9_d3d9_bytecode.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_shader.hpp"
+#include "../../../src/dxmt9/dxmt9_shader_translator.hpp"
 
 #include <array>
 #include <cstdlib>

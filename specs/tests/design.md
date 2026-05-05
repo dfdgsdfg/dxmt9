@@ -768,7 +768,7 @@ Boundary ownership:
 | `tests/integration/wsi_present/` | Wine + window system + Metal presentation | full WSI smoke, HWND-to-Metal-layer resolution, visible present path |
 | `tests/fixtures/` | Static test data | local fixtures only; no executable test ownership |
 
-Migration compatibility:
+Legacy path mapping:
 
 | Current path | Target path |
 |---|---|
@@ -778,13 +778,12 @@ Migration compatibility:
 | `tests/shader_tests/` | `tests/shader_runner/corpus/` |
 | `tests/d3d9_conformance/` | `tests/conformance/d3d9/` |
 | `tests/wsi_present/` | `tests/integration/wsi_present/` |
-| `tests/corpus_sync_smoke.py` | `tests/native/shader/corpus_sync_smoke.py` or `tests/shader_runner/corpus_sync_smoke.py` |
+| `tests/corpus_sync_smoke.py` | `tests/shader_runner/corpus_sync_smoke.py` |
 
-Until the repository is physically migrated, Meson and helper scripts may accept
-the current paths as compatibility aliases. New tests should use the target
-layout unless they must modify an existing legacy file in place. Compatibility
-aliases must not create a second source of truth: each test, manifest, and corpus
-file has one canonical target owner.
+Meson and helper scripts use the target layout as canonical. Temporary aliases
+may be accepted only during a staged migration and must not create a second
+source of truth: each test, manifest, and corpus file has one canonical target
+owner.
 
 The `shader_runner_dxmt9` binary is built as a Meson test target and runs the
 manifest-driven corpus. Meson may execute the whole corpus as one target or split

@@ -8,8 +8,8 @@
 #include <string_view>
 
 #include "dxmt9/core.hpp"
-#include "../src/dxmt9/dxmt9_draw_encoder.hpp"
-#include "../src/dxmt9/dxmt9_draw_state.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_state.hpp"
 
 using namespace dxmt9::core;
 using namespace dxmt9::core::fixture;

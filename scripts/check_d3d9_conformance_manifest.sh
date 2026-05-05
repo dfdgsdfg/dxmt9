@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-manifest="$repo_root/tests/d3d9_conformance/MANIFEST.toml"
+manifest="$repo_root/tests/conformance/d3d9/MANIFEST.toml"
 
 python3 - "$repo_root" "$manifest" <<'PY'
 from __future__ import annotations
@@ -100,7 +100,7 @@ for index, case in enumerate(cases, 1):
         if not isinstance(source_file, str):
             errors.append(f"case #{index}: source_file must be a string")
             continue
-        local_path = repo_root / "tests" / "d3d9_conformance" / source_file
+        local_path = repo_root / "tests" / "conformance" / "d3d9" / source_file
         if not local_path.is_file():
             errors.append(f"case #{index}: source_file does not exist: {source_file}")
             continue

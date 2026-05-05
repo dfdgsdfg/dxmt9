@@ -2,7 +2,7 @@
 name = "dxmt9-wsi-present-local"
 source = "repo-local"
 license = "internal"
-binary = "tests/wsi_present/wsi_present_x64.exe"
+binary = "build/wsi_present/wsi_present_x64.exe"
 launcher = "experiments/launchers/wsi_present_local.sh"
 reference = "experiments/references/dxmt9-wsi-present-local.png"
 features = ["present", "wsi", "windowed", "wine-builtin"]

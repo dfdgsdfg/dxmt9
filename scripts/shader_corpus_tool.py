@@ -368,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     sync = subparsers.add_parser("sync", help="sync vkd3d-sourced corpus files from upstream")
-    sync.add_argument("--root", default=str(repo_root() / "tests" / "shader_tests"))
+    sync.add_argument("--root", default=str(repo_root() / "tests" / "shader_runner" / "corpus"))
     sync.add_argument("--manifest")
     sync.add_argument("--upstream-root")
     sync.add_argument("--upstream-commit")
@@ -378,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--quiet", action="store_true")
 
     drift = subparsers.add_parser("drift", help="report provenance drift against an upstream checkout")
-    drift.add_argument("--root", default=str(repo_root() / "tests" / "shader_tests"))
+    drift.add_argument("--root", default=str(repo_root() / "tests" / "shader_runner" / "corpus"))
     drift.add_argument("--manifest")
     drift.add_argument("--upstream-root")
     drift.add_argument("--upstream-commit")

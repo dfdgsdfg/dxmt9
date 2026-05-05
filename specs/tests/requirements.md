@@ -330,7 +330,7 @@ to sections 11 and 12.
 compilation must be masked by running a warm-up pass before the measured draw.
 
 **R-TEST-7.3** The vkd3d `.shader_test` files used by dxmt9 must be tracked in
-`tests/shader_tests/` and kept in sync with the upstream vkd3d corpus. New opcode
+`tests/shader_runner/corpus/` and kept in sync with the upstream vkd3d corpus. New opcode
 tests added upstream that fall within the SM2/SM3 arithmetic and texture groups must
 be pulled in within one release cycle.
 
@@ -440,7 +440,7 @@ The `oracle` field must never read `shader_runner_dxmt9`.
 A machine-readable manifest tracks every test file in the corpus, enabling coverage
 reports, upstream sync checks, and gap analysis without running the tests.
 
-**R-TEST-10.1** `tests/shader_tests/MANIFEST.toml` must list every `.shader_test`
+**R-TEST-10.1** `tests/shader_runner/corpus/MANIFEST.toml` must list every `.shader_test`
 file in the corpus. Each entry must include:
 
 ```toml
@@ -477,7 +477,7 @@ It is the only test category that **requires Wine** and **cannot run as a native
 macOS executable** — it is therefore separate from the R-TEST-7.1 scope.
 
 **R-TEST-11.1** There must be a cross-compiled Win32 PE test executable
-(`tests/wsi_present/wsi_present_x64.exe`) that:
+(`build/wsi_present/wsi_present_x64.exe`) that:
 
 1. Creates a Win32 window via `CreateWindow`.
 2. Calls `Direct3DCreate9` (routed through our `d3d9.dll`).
@@ -531,7 +531,7 @@ cp build-win32-x64-builtin/src/winemetal/winemetal.dll \
   <wine-root>/lib/wine/x86_64-windows/winemetal.dll
 cp build-x86_64-builtin/src/winemetal/unix/winemetal.so \
   <wine-root>/lib/wine/x86_64-unix/winemetal.so
-WINEDLLOVERRIDES="d3d9=n,b" wine tests/wsi_present/wsi_present_x64.exe
+WINEDLLOVERRIDES="d3d9=n,b" wine build/wsi_present/wsi_present_x64.exe
 ```
 
 **R-TEST-11.6** When neither the legacy `macdrv_get_cocoa_view` export nor the
@@ -550,7 +550,7 @@ application-visible COM and state-machine behaviour through the real PE ABI. It
 is separate from native backend tests and requires Wine as the host runtime.
 
 **R-TEST-12.1** There must be cross-compiled Win32 PE conformance executables
-under `tests/d3d9_conformance/`. They must load `d3d9.dll` through Wine's normal
+under `tests/conformance/d3d9/`. They must load `d3d9.dll` through Wine's normal
 DLL search path so the same binaries can be used against the app-local and Wine
 runtime builtin deployment lanes.
 
@@ -698,7 +698,7 @@ declarations, generated FVF declarations, and the interaction between state
 blocks and reset/resource lifetime.
 
 **R-TEST-12.20** The PE conformance suite must have its own machine-readable
-manifest under `tests/d3d9_conformance/MANIFEST.toml`. Each entry must include
+manifest under `tests/conformance/d3d9/MANIFEST.toml`. Each entry must include
 the executable, local test function, Wine source anchor, upstream commit,
 required deployment lanes (`app-local`, `builtin`, or both), architecture
 targets (`x86`, `x64`), status, owning implementation area, mapped R-TEST-12

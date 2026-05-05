@@ -1,11 +1,11 @@
-/* tests/wsi_present/main.cpp
+/* tests/integration/wsi_present/main.cpp
  *
  * Minimal Win32 + D3D9 smoke test for the WSI path.
  * Cross-compile:
  *   PATH=~/llvm-mingw/bin:$PATH
- *   x86_64-w64-mingw32-clang++ -o wsi_present_x64.exe main.cpp -ld3d9 -luser32 -lgdi32
+ *   x86_64-w64-mingw32-clang++ -o build/wsi_present/wsi_present_x64.exe tests/integration/wsi_present/main.cpp -ld3d9 -luser32 -lgdi32
  * Run:
- *   wine64 wsi_present_x64.exe
+ *   wine64 build/wsi_present/wsi_present_x64.exe
  *
  * Expected: window appears, cycles red/green/blue for 3 seconds, exits 0.
  * Any crash or blank black window (no colour) indicates a WSI failure.

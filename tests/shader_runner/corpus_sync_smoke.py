@@ -12,7 +12,7 @@ import tomllib
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[2]
 
 
 def read_text(path: Path) -> str:

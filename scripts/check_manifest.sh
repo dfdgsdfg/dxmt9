@@ -3,8 +3,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-manifest="$repo_root/tests/shader_tests/MANIFEST.toml"
-tests_dir="$repo_root/tests/shader_tests"
+manifest="$repo_root/tests/shader_runner/corpus/MANIFEST.toml"
+tests_dir="$repo_root/tests/shader_runner/corpus"
 
 if [[ ! -f "$manifest" ]]; then
   echo "manifest missing: $manifest" >&2
@@ -15,7 +15,7 @@ actual_files=()
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
   actual_files+=("$file")
-done < <(find "$tests_dir" -name '*.shader_test' -type f | sed "s#^$repo_root/tests/shader_tests/##" | sort)
+done < <(find "$tests_dir" -name '*.shader_test' -type f | sed "s#^$repo_root/tests/shader_runner/corpus/##" | sort)
 
 manifest_files=()
 while IFS= read -r file; do

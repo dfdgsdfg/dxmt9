@@ -73,7 +73,7 @@ elif host_machine.system() == 'windows'
   subdir('src/d3d9')
   subdir('src/win32')
   if get_option('build_tests')
-    subdir('tests/d3d9_conformance')
+    subdir('tests/conformance/d3d9')
   endif
 else
   error('dxmt9 supports darwin (native runtime) or windows-cross (PE shim) hosts only.')

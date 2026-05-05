@@ -1,7 +1,7 @@
 # PE Conformance Runtime Evidence
 
 This note records runtime evidence for the Wine-derived D3D9 PE conformance
-suite. It is intentionally separate from `tests/d3d9_conformance/MANIFEST.toml`:
+suite. It is intentionally separate from `tests/conformance/d3d9/MANIFEST.toml`:
 the manifest has one status field per case, while runtime evidence can differ by
 lane, architecture, Wine runtime, and staged artifact set.
 
@@ -9,7 +9,7 @@ lane, architecture, Wine runtime, and staged artifact set.
 
 Artifacts:
 
-- PE tests: `build-win32-x64/tests/d3d9_conformance/`
+- PE tests: `build-win32-x64/tests/conformance/d3d9/`
 - Unix provider: `build-x86_64-builtin/src/winemetal/unix/winemetal.so`
 - Wine runtime: Heroic Wine 11.6
 - Prefix: `tmp/pe-conformance-prefix-app-local-x64`
@@ -52,7 +52,7 @@ Conclusion:
 
 Artifacts:
 
-- PE tests: `build-win32-x64/tests/d3d9_conformance/`
+- PE tests: `build-win32-x64/tests/conformance/d3d9/`
 - PE `d3d9.dll`: `build-win32-x64/src/win32/d3d9.dll`
 - PE `winemetal.dll`: `build-win32-x64/src/winemetal/winemetal.dll`
 - Unix provider: `build-x86_64-builtin/src/winemetal/unix/winemetal.so`

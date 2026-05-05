@@ -18,7 +18,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/dxmt9_device.hpp"
-#include "../src/dxmt9/dxmt9_resource_pool.hpp"
+#include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 
 namespace {
 

@@ -387,7 +387,13 @@ src/             Implementation (D3D9 frontend, Metal runtime, util, bridge laye
   win32/         Win32 PE forwarding layer (`d3d9.dll`)
   winemetal/     Unified bridge stack (`winemetal.dll` + `winemetal.so`)
 cross/           Meson cross/native files for macOS unix and Windows PE builds
-tests/           Smoke tests and core spec tests
+tests/           Regression and conformance suites
+  native/        Fast native unit/spec tests by owner (core, shader, backend,
+                 bridge, smoke)
+  shader_runner/ shader_runner_dxmt9 plus manifest-driven .shader_test corpus
+  conformance/   Wine-derived PE D3D9 conformance tests
+  integration/   Wine/WSI end-to-end smoke tests
+  fixtures/      Static test fixtures
 specs/           Specifications and formal verification
   core/          D3D9 COM requirements and design
   backend/       Metal translation requirements and design
