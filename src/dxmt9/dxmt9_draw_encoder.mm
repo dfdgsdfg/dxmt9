@@ -565,6 +565,8 @@ bool encodeDraw(EncodeContext& ctx,
   (void)commandBuffer;
   const auto& draw = drawState.desc();
   const auto& hot = *drawState.hot;
+  const auto* shader = drawState.hasShaderContext() ? &drawState.shaderContext() : nullptr;
+  const auto& vertexDecl = shader ? shader->vertexDecl : draw.vertexDecl;
   const ParamView pv = paramOverride
       ? ParamView{paramOverride->primitiveType,
                   paramOverride->primitiveCount,
@@ -613,7 +615,7 @@ bool encodeDraw(EncodeContext& ctx,
             << " rt0=" << static_cast<unsigned long long>(hot.colorAttachments[0].handle.value)
             << " ds=" << static_cast<unsigned long long>(hot.depthStencil.handle.value)
             << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value)
-            << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
+            << " fvf=0x" << std::hex << vertexDecl.fvf << std::dec
             << " alphaBlend="
             << core::flatStateOr(hot.renderStates, RS_ALPHABLEND_ENABLE, 0u)
             << " colorWrite="
@@ -648,7 +650,7 @@ bool encodeDraw(EncodeContext& ctx,
     encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
     return true;
   };
-  const auto ffLayout = decodeFixedFunctionVertexLayout(draw);
+  const auto ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
   // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
   if (!skipBaseStateBind) {
     if (auto* surface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value); surface && surface->texture) {
@@ -727,8 +729,8 @@ bool encodeDraw(EncodeContext& ctx,
         vertexBytes = std::span<const u8>(static_cast<const u8*>(buffer->contents),
                                           static_cast<std::size_t>(buffer->desc.size));
       }
-    } else if (draw.vertexDecl.streams[0].buffer) {
-      const auto bytes = draw.vertexDecl.streams[0].buffer->bytes();
+    } else if (vertexDecl.streams[0].buffer) {
+      const auto bytes = vertexDecl.streams[0].buffer->bytes();
       if (!bytes.empty()) {
         transientVertexBuffer = makeTransientBuffer(bytes.data(), bytes.size());
         if (transientVertexBuffer) {
@@ -739,7 +741,7 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
   }
-  if (traceEncode && !ffLayout && !vertexBytes.empty() && !draw.vertexDecl.elements.empty()) {
+  if (traceEncode && !ffLayout && !vertexBytes.empty() && !vertexDecl.elements.empty()) {
     auto readF32 = [&](std::size_t absoluteOffset) {
       float value = 0.0f;
       if (absoluteOffset + sizeof(float) <= vertexBytes.size()) {
@@ -758,7 +760,7 @@ bool encodeDraw(EncodeContext& ctx,
     std::optional<u32> positionOffset;
     std::optional<u32> colorOffset;
     std::optional<u32> texcoord0Offset;
-    for (const auto& element : draw.vertexDecl.elements) {
+    for (const auto& element : vertexDecl.elements) {
       if (!positionOffset && element.usage == kD3DDeclUsagePosition && element.usageIndex == 0 &&
           element.type == kD3DDeclTypeFloat4) {
         positionOffset = element.offset;
@@ -772,7 +774,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
 
     if (positionOffset && texcoord0Offset) {
-      const std::size_t stride = static_cast<std::size_t>(computeVertexDeclStride(draw));
+      const std::size_t stride = static_cast<std::size_t>(computeVertexDeclStride(vertexDecl));
       const std::size_t streamBase = static_cast<std::size_t>(hot.streamOffsets[0]);
       std::ostringstream trace;
       trace << "[dxmt9-encode-verts] seq=" << static_cast<unsigned long long>(seqId)
@@ -810,7 +812,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     uniforms->vertexStreamOffset = 0;
     uniforms->vertexStreamStride =
-        draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride;
+        vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride;
     if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
       vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
                             static_cast<uint64_t>(uniforms->vertexStreamStride);
@@ -854,7 +856,7 @@ bool encodeDraw(EncodeContext& ctx,
           return core::flatStateOr(hot.textureStageStates[stageIndex], key, fallback);
         };
         trace << "[dxmt9-ffp] seq=" << static_cast<unsigned long long>(seqId)
-              << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
+              << " fvf=0x" << std::hex << vertexDecl.fvf << std::dec
               << " ffLayout=1"
               << " preT=" << (ffLayout->preTransformed ? 1 : 0)
               << " baseVertex=" << pv.baseVertexIndex
@@ -894,7 +896,7 @@ bool encodeDraw(EncodeContext& ctx,
               << " alphaOp1=" << stageStateValueAt(1, TSS_ALPHA_OP, static_cast<u32>(TextureOp::Disable))
               << " alphaArg11=" << stageStateValueAt(1, TSS_ALPHA_ARG1, 0u)
               << " alphaArg21=" << stageStateValueAt(1, TSS_ALPHA_ARG2, 0u)
-              << " elems=" << draw.vertexDecl.elements.size()
+              << " elems=" << vertexDecl.elements.size()
               << " tfactor=0x"
               << std::hex
               << core::flatStateOr(hot.renderStates, RS_TEXTURE_FACTOR, 0u)
@@ -908,8 +910,8 @@ bool encodeDraw(EncodeContext& ctx,
               << uniforms->ffpTextureTransforms[0][2][2] << "," << uniforms->ffpTextureTransforms[0][2][3] << ";"
               << uniforms->ffpTextureTransforms[0][3][0] << "," << uniforms->ffpTextureTransforms[0][3][1] << ","
               << uniforms->ffpTextureTransforms[0][3][2] << "," << uniforms->ffpTextureTransforms[0][3][3] << "]";
-        for (std::size_t i = 0; i < draw.vertexDecl.elements.size(); ++i) {
-          const auto& e = draw.vertexDecl.elements[i];
+        for (std::size_t i = 0; i < vertexDecl.elements.size(); ++i) {
+          const auto& e = vertexDecl.elements[i];
           trace << " e" << i << "={s=" << e.stream
                 << ",off=" << e.offset
                 << ",type=" << e.type
@@ -1054,17 +1056,17 @@ bool encodeDraw(EncodeContext& ctx,
     if (forceTrace) {
       std::ostringstream trace;
       trace << "[dxmt9-ffp] seq=" << static_cast<unsigned long long>(seqId)
-            << " fvf=0x" << std::hex << draw.vertexDecl.fvf << std::dec
+            << " fvf=0x" << std::hex << vertexDecl.fvf << std::dec
             << " ffLayout=" << (ffLayout ? 1 : 0)
             << " baseVertex=" << pv.baseVertexIndex
             << " startIndex=" << pv.startIndex
             << " primCount=" << pv.primitiveCount
             << " stride="
-            << (ffLayout ? (draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride)
-                         : computeVertexDeclStride(draw))
-            << " elems=" << draw.vertexDecl.elements.size();
-      for (std::size_t i = 0; i < draw.vertexDecl.elements.size(); ++i) {
-        const auto& e = draw.vertexDecl.elements[i];
+            << (ffLayout ? (vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride)
+                         : computeVertexDeclStride(vertexDecl))
+            << " elems=" << vertexDecl.elements.size();
+      for (std::size_t i = 0; i < vertexDecl.elements.size(); ++i) {
+        const auto& e = vertexDecl.elements[i];
         trace << " e" << i << "={s=" << e.stream
               << ",off=" << e.offset
               << ",type=" << e.type
@@ -1076,8 +1078,8 @@ bool encodeDraw(EncodeContext& ctx,
     }
     uniforms->vertexStreamOffset = 0;
     uniforms->vertexStreamStride =
-        ffLayout ? (draw.vertexDecl.streams[0].stride ? draw.vertexDecl.streams[0].stride : ffLayout->stride)
-                 : computeVertexDeclStride(draw);
+        ffLayout ? (vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride)
+                 : computeVertexDeclStride(vertexDecl);
     if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
       vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
                             static_cast<uint64_t>(uniforms->vertexStreamStride);
@@ -1180,7 +1182,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     const std::size_t stride = static_cast<std::size_t>(
         ffLayout ? (uniforms->vertexStreamStride ? uniforms->vertexStreamStride : ffLayout->stride)
-                 : computeVertexDeclStride(draw));
+                 : computeVertexDeclStride(vertexDecl));
     const std::size_t streamBase = static_cast<std::size_t>(hot.streamOffsets[0]);
     const std::size_t firstIndexByte = static_cast<std::size_t>(pv.startIndex) * indexElementSize(pv.indexType);
     if (debug::forceExpandIndexed()) {

@@ -2,7 +2,9 @@
  * All methods delegate to the dxmt9c_* C API from dxmt9/device_c.h. */
 
 #include <atomic>
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
@@ -1462,6 +1464,11 @@ static D9CWireHandle toWireHandle(const void* handle) {
     };
 }
 
+static uint64_t d9cWireHandleValue(const D9CWireHandle& handle) {
+    return static_cast<uint64_t>(handle.lo) |
+           (static_cast<uint64_t>(handle.hi) << 32);
+}
+
 /* =========================================================================
  * D3D9DeviceImpl — IDirect3DDevice9Ex
  * ========================================================================= */
@@ -1502,6 +1509,171 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return cached;
     }
 
+    static constexpr uint32_t kPeRenderStateSlots = 256;
+    static constexpr uint32_t kPeTextureStageSlots = 8;
+    static constexpr uint32_t kPeTextureStageStateSlots = 64;
+    static constexpr uint32_t kPeSamplerSlots = 16;
+    static constexpr uint32_t kPeSamplerStateSlots = 64;
+
+    template<std::size_t Slots>
+    struct FixedStateTable {
+        std::array<uint32_t, Slots> values{};
+        std::array<uint64_t, (Slots + 63u) / 64u> occupied{};
+        uint32_t count = 0;
+
+        static constexpr bool valid(uint32_t slot) noexcept {
+            return slot < Slots;
+        }
+        static constexpr uint64_t bit(uint32_t slot) noexcept {
+            return 1ull << (slot & 63u);
+        }
+        static constexpr std::size_t word(uint32_t slot) noexcept {
+            return slot >> 6;
+        }
+        bool contains(uint32_t slot) const noexcept {
+            return valid(slot) && (occupied[word(slot)] & bit(slot)) != 0;
+        }
+        bool empty() const noexcept {
+            return count == 0;
+        }
+        uint32_t size() const noexcept {
+            return count;
+        }
+        bool get(uint32_t slot, uint32_t& value) const noexcept {
+            if (!contains(slot)) {
+                return false;
+            }
+            value = values[slot];
+            return true;
+        }
+        void set(uint32_t slot, uint32_t value) noexcept {
+            if (!valid(slot)) {
+                return;
+            }
+            const auto w = word(slot);
+            const auto b = bit(slot);
+            if ((occupied[w] & b) == 0) {
+                occupied[w] |= b;
+                ++count;
+            }
+            values[slot] = value;
+        }
+        void erase(uint32_t slot) noexcept {
+            if (!contains(slot)) {
+                return;
+            }
+            occupied[word(slot)] &= ~bit(slot);
+            --count;
+        }
+        void clear() noexcept {
+            occupied = {};
+            count = 0;
+        }
+        template<typename Fn>
+        void forEach(Fn&& fn) const {
+            for (std::size_t w = 0; w < occupied.size(); ++w) {
+                uint64_t bits = occupied[w];
+                while (bits != 0) {
+                    const auto b = static_cast<uint32_t>(std::countr_zero(bits));
+                    const auto slot = static_cast<uint32_t>(w * 64u + b);
+                    if (slot < Slots) {
+                        fn(slot, values[slot]);
+                    }
+                    bits &= bits - 1u;
+                }
+            }
+        }
+        bool popFirst(uint32_t& slot, uint32_t& value) noexcept {
+            for (std::size_t w = 0; w < occupied.size(); ++w) {
+                uint64_t bits = occupied[w];
+                if (bits == 0) {
+                    continue;
+                }
+                const auto b = static_cast<uint32_t>(std::countr_zero(bits));
+                slot = static_cast<uint32_t>(w * 64u + b);
+                value = values[slot];
+                occupied[w] &= ~bit(slot);
+                --count;
+                return true;
+            }
+            return false;
+        }
+    };
+
+    template<std::size_t Rows, std::size_t Slots>
+    struct FixedStateMatrix {
+        std::array<FixedStateTable<Slots>, Rows> rows{};
+        uint32_t count = 0;
+
+        static constexpr bool valid(uint32_t row, uint32_t slot) noexcept {
+            return row < Rows && slot < Slots;
+        }
+        bool contains(uint32_t row, uint32_t slot) const noexcept {
+            return valid(row, slot) && rows[row].contains(slot);
+        }
+        bool empty() const noexcept {
+            return count == 0;
+        }
+        uint32_t size() const noexcept {
+            return count;
+        }
+        bool get(uint32_t row, uint32_t slot, uint32_t& value) const noexcept {
+            return valid(row, slot) && rows[row].get(slot, value);
+        }
+        void set(uint32_t row, uint32_t slot, uint32_t value) noexcept {
+            if (!valid(row, slot)) {
+                return;
+            }
+            if (!rows[row].contains(slot)) {
+                ++count;
+            }
+            rows[row].set(slot, value);
+        }
+        void clear() noexcept {
+            for (auto& row : rows) {
+                row.clear();
+            }
+            count = 0;
+        }
+        template<typename Fn>
+        void forEach(Fn&& fn) const {
+            for (uint32_t row = 0; row < Rows; ++row) {
+                rows[row].forEach([&](uint32_t slot, uint32_t value) {
+                    fn(row, slot, value);
+                });
+            }
+        }
+        bool popFirst(uint32_t& row, uint32_t& slot, uint32_t& value) noexcept {
+            for (uint32_t r = 0; r < Rows; ++r) {
+                if (rows[r].popFirst(slot, value)) {
+                    row = r;
+                    --count;
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+
+    static uint32_t textureStageSlot(DWORD stage) noexcept {
+        return std::min<uint32_t>(stage, kPeTextureStageSlots - 1u);
+    }
+    static uint32_t textureStageStateSlot(D3DTEXTURESTAGESTATETYPE type) noexcept {
+        return std::min<uint32_t>(static_cast<uint32_t>(type),
+                                  kPeTextureStageStateSlots - 1u);
+    }
+    static bool samplerSlot(DWORD sampler, uint32_t& slot) noexcept {
+        if (sampler >= kPeSamplerSlots) {
+            return false;
+        }
+        slot = sampler;
+        return true;
+    }
+    static bool samplerStateSlot(D3DSAMPLERSTATETYPE type, uint32_t& slot) noexcept {
+        slot = static_cast<uint32_t>(type);
+        return slot < kPeSamplerStateSlots;
+    }
+
     ULONG        refs_    = 1;
     D9CDevice*   dev_;
     IDirect3D9Ex* factory_;
@@ -1523,9 +1695,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     IDirect3DVertexDeclaration9* vdecl_         = nullptr;
     DWORD                      fvf_             = 0;
 
-    std::unordered_map<DWORD, DWORD> renderStateShadow_{};
-    std::unordered_map<DWORD, DWORD> pendingRenderStates_{};
-    std::unordered_map<DWORD, DWORD> stateBlockRenderStateRestore_{};
+    FixedStateTable<kPeRenderStateSlots> renderStateShadow_{};
+    FixedStateTable<kPeRenderStateSlots> pendingRenderStates_{};
+    FixedStateTable<kPeRenderStateSlots> stateBlockRenderStateRestore_{};
     DWORD pendingTextureMask_ = 0;
     DWORD pendingStreamMask_ = 0;
     bool pendingFvf_ = false;
@@ -1549,16 +1721,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool pendingScissor_ = false;
     D9CViewport viewportShadow_{};
     D9CRect scissorShadow_{};
-    // Phase 12: TSS + SamplerState delta buffers. Key = (stage<<16)|type
-    // for TSS, (sampler<<16)|type for SamplerState. Per-Set call updates
-    // the entry; the next built draw packet drains the map into the
-    // packet's tss[] / samplerStates[] arrays then clears.
-    std::unordered_map<uint32_t, uint32_t> pendingTss_{};
-    std::unordered_map<uint32_t, uint32_t> pendingSamplerStates_{};
-    // Identity-no-op shadow: last value sent for each (stage,type) /
-    // (sampler,type). Avoids re-emitting redundant Set calls.
-    std::unordered_map<uint32_t, uint32_t> tssShadow_{};
-    std::unordered_map<uint32_t, uint32_t> samplerStateShadow_{};
+    // Phase 12: TSS + SamplerState deltas. These are fixed row x state
+    // tables with occupancy masks; pending tables are the dirty masks
+    // drained into the next draw/apply packet.
+    FixedStateMatrix<kPeTextureStageSlots, kPeTextureStageStateSlots> pendingTss_{};
+    FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> pendingSamplerStates_{};
+    // Identity-no-op shadow: last value sent for each row/state tuple.
+    FixedStateMatrix<kPeTextureStageSlots, kPeTextureStageStateSlots> tssShadow_{};
+    FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> samplerStateShadow_{};
     // Phase 12: Material + ClipPlane shadow.
     bool pendingMaterial_ = false;
     D9CMaterial materialShadow_{};
@@ -1604,11 +1774,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     ConstShadow psConstI_{};
     ConstShadow psConstB_{};
 
-    // Per-chunk resource retention set, one dedup'd container per kind.
-    // Populated by the PE-side Set{Texture,StreamSource,Indices,
-    // RenderTarget,DepthStencil} fast paths; serialized into
-    // the DOD wire blob at commit_chunk; cleared after a successful
-    // commit.
+    // Legacy append-time retention notes, one dedup'd container per kind.
+    // The DOD wire blob now gets per-record ranges from flush-time payload
+    // decoding; these sets are kept for existing noteChunkHandle callers
+    // and cleared with the chunk.
     std::unordered_set<uint64_t> chunkHandlesByKind_[5]{};
     std::vector<D9CCommandChunkWireHandleEntry> chunkHandlesPayload_{};
     std::vector<std::uint8_t> pendingCommandWireBlob_{};
@@ -1636,6 +1805,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     void clearPeStateTracking() {
         renderStateShadow_.clear();
+        tssShadow_.clear();
+        samplerStateShadow_.clear();
         clearPendingHotState();
         pendingCommandBytes_.clear();
         pendingCommandWireRecords_.clear();
@@ -1685,8 +1856,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
-        const auto it = renderStateShadow_.find(state);
-        return it != renderStateShadow_.end() && it->second == value;
+        uint32_t shadowValue = 0;
+        return renderStateShadow_.get(state, shadowValue) && shadowValue == value;
     }
 
     bool shadowedTextureEquals(DWORD stage, IDirect3DBaseTexture9* texture) const {
@@ -1710,11 +1881,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
 
         packet = D9CDrawPrimitivePacket{};
-        for (const auto& [state, value] : pendingRenderStates_) {
+        pendingRenderStates_.forEach([&](uint32_t state, uint32_t value) {
             auto& entry = packet.renderStates[packet.renderStateCount++];
             entry.state = state;
             entry.value = value;
-        }
+        });
 
         packet.textureMask = pendingTextureMask_;
         for (DWORD stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
@@ -1760,7 +1931,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         packet.viewport = viewportShadow_;
         packet.scissorValid = pendingScissor_ ? 1u : 0u;
         packet.scissor = scissorShadow_;
-        // Phase 12: drain TSS / SamplerState pending maps into packet
+        // Phase 12: drain TSS / SamplerState pending tables into packet
         // delta arrays. The cap check inside Set* already flushes the
         // chunk if a single Set would push beyond the per-packet limit;
         // here we just emit what's pending.
@@ -1770,20 +1941,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         packet.tssCount = static_cast<uint32_t>(pendingTss_.size());
         uint32_t tssIdx = 0;
-        for (const auto& [key, value] : pendingTss_) {
-            packet.tss[tssIdx].stage = key >> 16;
-            packet.tss[tssIdx].type = key & 0xffff;
+        pendingTss_.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
+            packet.tss[tssIdx].stage = stage;
+            packet.tss[tssIdx].type = state;
             packet.tss[tssIdx].value = value;
             ++tssIdx;
-        }
+        });
         packet.samplerStateCount = static_cast<uint32_t>(pendingSamplerStates_.size());
         uint32_t ssIdx = 0;
-        for (const auto& [key, value] : pendingSamplerStates_) {
-            packet.samplerStates[ssIdx].sampler = key >> 16;
-            packet.samplerStates[ssIdx].type = key & 0xffff;
+        pendingSamplerStates_.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
+            packet.samplerStates[ssIdx].sampler = sampler;
+            packet.samplerStates[ssIdx].type = state;
             packet.samplerStates[ssIdx].value = value;
             ++ssIdx;
-        }
+        });
         // Phase 12: material + clip-plane deltas. Material rides as a
         // single struct + valid flag; clip planes ride as a 6-bit mask
         // + flat 6×4 float array (only set bits' slots are
@@ -1828,16 +1999,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // a shadow that overflows (e.g. > 64 distinct render states)
         // returns false to force the chunk to seal.
         if (dxmt9PeFullSnapshotEnabled()) {
-            // Render states: drain the entire shadow map.
+            // Render states: drain the entire shadow table.
             if (renderStateShadow_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
                 return false;
             }
             packet.renderStateCount = 0;
-            for (const auto& [state, value] : renderStateShadow_) {
+            renderStateShadow_.forEach([&](uint32_t state, uint32_t value) {
                 auto& entry = packet.renderStates[packet.renderStateCount++];
                 entry.state = state;
                 entry.value = value;
-            }
+            });
             // Texture / RT / Stream — set mask bits for every populated slot.
             packet.textureMask = 0;
             for (DWORD stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
@@ -1878,26 +2049,26 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             packet.viewport = viewportShadow_;
             packet.scissorValid = 1u;
             packet.scissor = scissorShadow_;
-            // TSS / SamplerState — drain shadow maps fully.
+            // TSS / SamplerState — drain shadow tables fully.
             if (tssShadow_.size() > D9C_DRAW_PACKET_MAX_TSS ||
                 samplerStateShadow_.size() > D9C_DRAW_PACKET_MAX_SAMPLER ||
                 transformShadow_.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
                 return false;
             }
             packet.tssCount = 0;
-            for (const auto& [key, value] : tssShadow_) {
+            tssShadow_.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
                 auto& e = packet.tss[packet.tssCount++];
-                e.stage = key >> 16;
-                e.type = key & 0xffff;
+                e.stage = stage;
+                e.type = state;
                 e.value = value;
-            }
+            });
             packet.samplerStateCount = 0;
-            for (const auto& [key, value] : samplerStateShadow_) {
+            samplerStateShadow_.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
                 auto& e = packet.samplerStates[packet.samplerStateCount++];
-                e.sampler = key >> 16;
-                e.type = key & 0xffff;
+                e.sampler = sampler;
+                e.type = state;
                 e.value = value;
-            }
+            });
             packet.materialValid = 1u;
             packet.material = materialShadow_;
             // Clip planes: emit every slot with mask = 0x3F (all 6).
@@ -1947,11 +2118,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
-    // Add a (kind, handle) to the per-chunk dedup'd retention set. Called
-    // from Set{Texture,StreamSource,Indices,RenderTarget,DepthStencil,
-    // VertexShader,PixelShader,VertexDeclaration} fast paths whenever a
-    // resource handle is bound. Cheap O(1) hash insert; serialization
-    // happens once per chunk at flush time.
+    // Preserve existing append-time handle notes for code paths that
+    // still call them. Wire serialization now derives record ranges from
+    // the payload arena at flush time.
     void noteChunkHandle(uint32_t kind, uint64_t handle) {
         if (!dxmt9PeDrawChunkEnabled() || handle == 0 || kind > 4) {
             return;
@@ -1959,47 +2128,271 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         chunkHandlesByKind_[kind].insert(handle);
     }
 
-    // Phase 18: walk the FULL current binding shadow and add every
-    // non-null handle to chunkHandlesByKind_. Critical invariant for
-    // safe per-draw mark suppression: the wire handle table MUST be a
-    // superset of every resource handle referenced by every record in
-    // the chunk payload arena. The Set* fast paths only note the handle when
-    // SetX is called *this chunk* — so a prior-chunk binding that's
-    // still in effect this chunk would otherwise miss retention. Since
-    // every Set* path flushes the chunk before mutating the shadow,
-    // the shadow at flush time is exactly the set of bindings that
-    // could be referenced by any draw record in this chunk.
-    void recordCurrentlyBoundHandles() {
+    using WireHandleEntryList = std::vector<D9CCommandChunkWireHandleEntry>;
+
+    static bool appendRecordWireHandle(WireHandleEntryList& handles,
+                                       uint32_t kind,
+                                       uint64_t handle) {
+        if (handle == 0) {
+            return true;
+        }
+        if (kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
+            return false;
+        }
+        for (const auto& existing : handles) {
+            if (existing.kind == kind && existing.opaqueHandle == handle) {
+                return true;
+            }
+        }
+        handles.push_back(D9CCommandChunkWireHandleEntry{
+            .kind = kind,
+            .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+            .opaqueHandle = handle,
+            .reserved0 = 0,
+            .reserved1 = 0,
+        });
+        return true;
+    }
+
+    static bool appendDrawPacketWireHandles(const D9CDrawPrimitivePacket& packet,
+                                            WireHandleEntryList& handles) {
+        for (uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
+            if ((packet.textureMask & (1u << stage)) != 0 &&
+                !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                        d9cWireHandleValue(packet.textures[stage]))) {
+                return false;
+            }
+        }
+        for (uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+            if ((packet.streamSourceMask & (1u << stream)) != 0 &&
+                !appendRecordWireHandle(
+                    handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                    d9cWireHandleValue(packet.streamSources[stream].buffer))) {
+                return false;
+            }
+        }
+        for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+            if ((packet.rtMask & (1u << slot)) != 0 &&
+                !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                        d9cWireHandleValue(packet.rtHandles[slot]))) {
+                return false;
+            }
+        }
+        if (packet.dsValid != 0 &&
+            !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                    d9cWireHandleValue(packet.dsHandle))) {
+            return false;
+        }
+        return true;
+    }
+
+    static bool appendIndexedDrawPacketWireHandles(
+        const D9CDrawIndexedPrimitivePacket& packet,
+        WireHandleEntryList& handles) {
+        if (!appendDrawPacketWireHandles(packet.state, handles)) {
+            return false;
+        }
+        if (packet.ibValid != 0 &&
+            !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                    d9cWireHandleValue(packet.ibHandle))) {
+            return false;
+        }
+        return true;
+    }
+
+    // Draw records consume the effective server state, not only the
+    // handles present in their delta packet. Set* fast paths flush the
+    // current chunk before mutating these shadows, so the flush-time
+    // bindings are a conservative per-draw retention subset.
+    bool appendCurrentlyBoundDrawHandles(WireHandleEntryList& handles) {
         for (auto* tex : textures_) {
             if (auto* raw = rawTex(tex); raw != nullptr) {
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                reinterpret_cast<uint64_t>(raw));
+                if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                            reinterpret_cast<uint64_t>(raw))) {
+                    return false;
+                }
             }
         }
         for (auto* vb : streamSrc_) {
             if (auto* raw = rawVBuf(vb); raw != nullptr) {
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
-                                reinterpret_cast<uint64_t>(raw));
+                if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                            reinterpret_cast<uint64_t>(raw))) {
+                    return false;
+                }
             }
         }
         if (auto* raw = rawIBuf(indexBuf_); raw != nullptr) {
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
-                            reinterpret_cast<uint64_t>(raw));
+            if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                        reinterpret_cast<uint64_t>(raw))) {
+                return false;
+            }
         }
         for (auto* surf : rtSlots_) {
             if (auto* raw = rawSurf(surf); raw != nullptr) {
-                noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                reinterpret_cast<uint64_t>(raw));
+                if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                            reinterpret_cast<uint64_t>(raw))) {
+                    return false;
+                }
             }
         }
         if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
+            if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                        reinterpret_cast<uint64_t>(raw))) {
+                return false;
+            }
         }
         // VS/PS/Vdecl have no pool retention table on the server side
         // (importer's markChunkResources skips SHADER / VERTEX_DECL
         // kinds), so emitting them here would be inert. Leaving them
         // out keeps the wire payload tight.
+        return true;
+    }
+
+    bool appendCurrentlyBoundClearHandles(WireHandleEntryList& handles,
+                                          uint32_t flags) {
+        if ((flags & D3DCLEAR_TARGET) != 0) {
+            for (auto* surf : rtSlots_) {
+                if (auto* raw = rawSurf(surf); raw != nullptr) {
+                    if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                                reinterpret_cast<uint64_t>(raw))) {
+                        return false;
+                    }
+                }
+            }
+        }
+        if ((flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)) != 0) {
+            if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
+                if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                            reinterpret_cast<uint64_t>(raw))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool collectRecordWireHandles(const D9CCommandChunkWireRecordHeader& wireRecord,
+                                  WireHandleEntryList& handles) {
+        const auto payloadArenaSize =
+            static_cast<uint32_t>(pendingCommandBytes_.size());
+        if (!d9c_command_chunk_wire_payload_range_valid(
+                payloadArenaSize, wireRecord.payloadOffset,
+                wireRecord.payloadSize)) {
+            return false;
+        }
+        const auto* payload = wireRecord.payloadSize == 0
+            ? nullptr
+            : pendingCommandBytes_.data() + wireRecord.payloadOffset;
+
+        switch (wireRecord.type) {
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitive)) {
+                return false;
+            }
+            D9CCommandRecordDrawPrimitive decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendDrawPacketWireHandles(decoded.packet, handles) &&
+                   appendCurrentlyBoundDrawHandles(handles);
+        }
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitive)) {
+                return false;
+            }
+            D9CCommandRecordDrawIndexedPrimitive decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendIndexedDrawPacketWireHandles(decoded.packet, handles) &&
+                   appendCurrentlyBoundDrawHandles(handles);
+        }
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitiveUP)) {
+                return false;
+            }
+            D9CCommandRecordDrawPrimitiveUP decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendDrawPacketWireHandles(decoded.packet.state, handles) &&
+                   appendCurrentlyBoundDrawHandles(handles);
+        }
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)) {
+                return false;
+            }
+            D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendDrawPacketWireHandles(decoded.packet.state, handles) &&
+                   appendCurrentlyBoundDrawHandles(handles);
+        }
+        case D9C_COMMAND_RECORD_APPLY_STATE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordApplyState)) {
+                return false;
+            }
+            D9CCommandRecordApplyState decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendDrawPacketWireHandles(decoded.packet, handles);
+        }
+        case D9C_COMMAND_RECORD_CLEAR: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordClear)) {
+                return false;
+            }
+            D9CCommandRecordClear decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendCurrentlyBoundClearHandles(handles, decoded.flags);
+        }
+        case D9C_COMMAND_RECORD_STRETCH_RECT: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordStretchRect)) {
+                return false;
+            }
+            D9CCommandRecordStretchRect decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                          decoded.srcWire) &&
+                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                          decoded.dstWire);
+        }
+        case D9C_COMMAND_RECORD_COLOR_FILL: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordColorFill)) {
+                return false;
+            }
+            D9CCommandRecordColorFill decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                          decoded.surfaceWire);
+        }
+        case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateTexture)) {
+                return false;
+            }
+            D9CCommandRecordUpdateTexture decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                          decoded.srcWire) &&
+                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                          decoded.dstWire);
+        }
+        case D9C_COMMAND_RECORD_UPDATE_SURFACE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateSurface)) {
+                return false;
+            }
+            D9CCommandRecordUpdateSurface decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                          decoded.srcWire) &&
+                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                          decoded.dstWire);
+        }
+        case D9C_COMMAND_RECORD_READBACK: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordReadback)) {
+                return false;
+            }
+            D9CCommandRecordReadback decoded{};
+            std::memcpy(&decoded, payload, sizeof(decoded));
+            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                          decoded.srcWire) &&
+                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                          decoded.dstWire);
+        }
+        default:
+            return true;
+        }
     }
 
     HRESULT flushPendingCommandChunk() {
@@ -2009,46 +2402,35 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (pendingCommandWireRecords_.size() != pendingCommandRecordCount_) {
             return D3DERR_INVALIDCALL;
         }
-        // Phase 18: ensure wire handle table ⊇ every handle a record may
-        // reference. Without this, prior-chunk bindings still in effect
-        // this chunk are missed by bulk retention — and per-draw
-        // markDrawResources is suppressed (Phase 14) — so a Released or
-        // GC'd resource could be UAF'd by the encoder.
-        recordCurrentlyBoundHandles();
-        // Serialize the deduped retention set into a packed payload the
-        // server-side importer can iterate in one pass. Order isn't
-        // semantically meaningful — server treats the list as an
-        // unordered set of (kind, handle) pairs.
-        chunkHandlesPayload_.clear();
-        std::uint64_t totalHandles = 0;
-        for (uint32_t kind = 0; kind < 5; ++kind) {
-            totalHandles += static_cast<std::uint64_t>(chunkHandlesByKind_[kind].size());
-            if (totalHandles > 0xffffffffull) {
-                return D3DERR_INVALIDCALL;
-            }
-        }
-        chunkHandlesPayload_.reserve(static_cast<size_t>(totalHandles));
-        for (uint32_t kind = 0; kind < 5; ++kind) {
-            for (auto handle : chunkHandlesByKind_[kind]) {
-                chunkHandlesPayload_.push_back(D9CCommandChunkWireHandleEntry{
-                    .kind = kind,
-                    .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
-                    .opaqueHandle = handle,
-                    .reserved0 = 0,
-                    .reserved1 = 0,
-                });
-            }
-        }
         const auto wireRecordCount =
             static_cast<std::uint32_t>(pendingCommandWireRecords_.size());
-        const auto wireHandleCount =
-            static_cast<std::uint32_t>(chunkHandlesPayload_.size());
         const auto payloadArenaSize =
             static_cast<std::uint32_t>(pendingCommandBytes_.size());
+
+        // Build per-record contiguous handle ranges. Entries are deduped
+        // within a record; duplicates across records are allowed so each
+        // header can point at exactly the subset it needs without falling
+        // back to the full chunk table.
+        chunkHandlesPayload_.clear();
         for (auto& record : pendingCommandWireRecords_) {
-            record.firstHandle = 0;
-            record.handleCount = wireHandleCount;
+            WireHandleEntryList recordHandles;
+            if (!collectRecordWireHandles(record, recordHandles)) {
+                return D3DERR_INVALIDCALL;
+            }
+            if (chunkHandlesPayload_.size() >
+                static_cast<size_t>(0xffffffffull) - recordHandles.size()) {
+                return D3DERR_INVALIDCALL;
+            }
+            record.firstHandle =
+                static_cast<std::uint32_t>(chunkHandlesPayload_.size());
+            record.handleCount =
+                static_cast<std::uint32_t>(recordHandles.size());
+            chunkHandlesPayload_.insert(chunkHandlesPayload_.end(),
+                                        recordHandles.begin(),
+                                        recordHandles.end());
         }
+        const auto wireHandleCount =
+            static_cast<std::uint32_t>(chunkHandlesPayload_.size());
 
         const auto recordTableBytes =
             static_cast<std::uint64_t>(wireRecordCount) *
@@ -2457,40 +2839,79 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             return S_OK;
         };
-        if (auto hr = drainMap(pendingRenderStates_,
-                               (uint32_t)D9C_DRAW_PACKET_MAX_RENDER_STATES,
-                               [](D9CDrawPrimitivePacket& p, std::uint32_t i,
-                                  DWORD k, DWORD v) {
-                                   p.renderStates[i].state = k;
-                                   p.renderStates[i].value = v;
-                               },
-                               [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
-                                   return p.renderStateCount;
-                               });
+        auto drainTable = [&](auto& pendingTable, auto cap, auto fillEntry,
+                              auto packetCountField) -> HRESULT {
+            while (!pendingTable.empty()) {
+                D9CCommandRecordApplyState rec{};
+                rec.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+                rec.header.size = sizeof(rec);
+                std::uint32_t n = 0;
+                uint32_t key = 0;
+                uint32_t value = 0;
+                while (n < cap && pendingTable.popFirst(key, value)) {
+                    fillEntry(rec.packet, n, key, value);
+                    ++n;
+                }
+                packetCountField(rec.packet) = n;
+                const HRESULT hr = appendCommandRecord(&rec, sizeof(rec));
+                if (FAILED(hr)) return hr;
+            }
+            return S_OK;
+        };
+        auto drainMatrix = [&](auto& pendingMatrix, auto cap, auto fillEntry,
+                               auto packetCountField) -> HRESULT {
+            while (!pendingMatrix.empty()) {
+                D9CCommandRecordApplyState rec{};
+                rec.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+                rec.header.size = sizeof(rec);
+                std::uint32_t n = 0;
+                uint32_t row = 0;
+                uint32_t key = 0;
+                uint32_t value = 0;
+                while (n < cap && pendingMatrix.popFirst(row, key, value)) {
+                    fillEntry(rec.packet, n, row, key, value);
+                    ++n;
+                }
+                packetCountField(rec.packet) = n;
+                const HRESULT hr = appendCommandRecord(&rec, sizeof(rec));
+                if (FAILED(hr)) return hr;
+            }
+            return S_OK;
+        };
+        if (auto hr = drainTable(pendingRenderStates_,
+                                 (uint32_t)D9C_DRAW_PACKET_MAX_RENDER_STATES,
+                                 [](D9CDrawPrimitivePacket& p, std::uint32_t i,
+                                    uint32_t k, uint32_t v) {
+                                     p.renderStates[i].state = k;
+                                     p.renderStates[i].value = v;
+                                 },
+                                 [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
+                                     return p.renderStateCount;
+                                 });
             FAILED(hr)) return hr;
-        if (auto hr = drainMap(pendingTss_,
-                               (uint32_t)D9C_DRAW_PACKET_MAX_TSS,
-                               [](D9CDrawPrimitivePacket& p, std::uint32_t i,
-                                  uint32_t k, uint32_t v) {
-                                   p.tss[i].stage = k >> 16;
-                                   p.tss[i].type = k & 0xffff;
-                                   p.tss[i].value = v;
-                               },
-                               [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
-                                   return p.tssCount;
-                               });
+        if (auto hr = drainMatrix(pendingTss_,
+                                  (uint32_t)D9C_DRAW_PACKET_MAX_TSS,
+                                  [](D9CDrawPrimitivePacket& p, std::uint32_t i,
+                                     uint32_t row, uint32_t k, uint32_t v) {
+                                      p.tss[i].stage = row;
+                                      p.tss[i].type = k;
+                                      p.tss[i].value = v;
+                                  },
+                                  [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
+                                      return p.tssCount;
+                                  });
             FAILED(hr)) return hr;
-        if (auto hr = drainMap(pendingSamplerStates_,
-                               (uint32_t)D9C_DRAW_PACKET_MAX_SAMPLER,
-                               [](D9CDrawPrimitivePacket& p, std::uint32_t i,
-                                  uint32_t k, uint32_t v) {
-                                   p.samplerStates[i].sampler = k >> 16;
-                                   p.samplerStates[i].type = k & 0xffff;
-                                   p.samplerStates[i].value = v;
-                               },
-                               [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
-                                   return p.samplerStateCount;
-                               });
+        if (auto hr = drainMatrix(pendingSamplerStates_,
+                                  (uint32_t)D9C_DRAW_PACKET_MAX_SAMPLER,
+                                  [](D9CDrawPrimitivePacket& p, std::uint32_t i,
+                                     uint32_t row, uint32_t k, uint32_t v) {
+                                      p.samplerStates[i].sampler = row;
+                                      p.samplerStates[i].type = k;
+                                      p.samplerStates[i].value = v;
+                                  },
+                                  [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
+                                      return p.samplerStateCount;
+                                  });
             FAILED(hr)) return hr;
         if (auto hr = drainMap(pendingTransforms_,
                                (uint32_t)D9C_DRAW_PACKET_MAX_TRANSFORMS,
@@ -2559,13 +2980,39 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 "chunkBarrierFlush / flushPeRecorder.");
         }
 
-        for (const auto& [state, value] : pendingRenderStates_) {
-            const HRESULT hr = hr32(dxmt9c_device_set_render_state(dev_, state, value));
-            if (FAILED(hr)) {
-                return hr;
+        HRESULT pendingHr = S_OK;
+        pendingRenderStates_.forEach([&](uint32_t state, uint32_t value) {
+            if (FAILED(pendingHr)) {
+                return;
             }
+            pendingHr = hr32(dxmt9c_device_set_render_state(dev_, state, value));
+        });
+        if (FAILED(pendingHr)) {
+            return pendingHr;
         }
         pendingRenderStates_.clear();
+
+        pendingTss_.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
+            if (FAILED(pendingHr)) {
+                return;
+            }
+            pendingHr = hr32(dxmt9c_device_set_texture_stage_state(dev_, stage, state, value));
+        });
+        if (FAILED(pendingHr)) {
+            return pendingHr;
+        }
+        pendingTss_.clear();
+
+        pendingSamplerStates_.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
+            if (FAILED(pendingHr)) {
+                return;
+            }
+            pendingHr = hr32(dxmt9c_device_set_sampler_state(dev_, sampler, state, value));
+        });
+        if (FAILED(pendingHr)) {
+            return pendingHr;
+        }
+        pendingSamplerStates_.clear();
 
         for (DWORD stage = 0; stage < 16; ++stage) {
             if ((pendingTextureMask_ & (1u << stage)) == 0) {
@@ -3687,13 +4134,14 @@ public:
                             this, (unsigned)state, (unsigned)value);
         if (stateBlockRecording_) {
             const DWORD stateKey = static_cast<DWORD>(state);
-            if (stateBlockRenderStateRestore_.find(stateKey) == stateBlockRenderStateRestore_.end()) {
+            if (!stateBlockRenderStateRestore_.contains(stateKey)) {
                 DWORD previous = dxmt9c_device_get_render_state(dev_, stateKey);
-                const auto shadowIt = renderStateShadow_.find(stateKey);
-                if (dxmt9PeStateShadowEnabled() && shadowIt != renderStateShadow_.end()) {
-                    previous = shadowIt->second;
+                uint32_t shadowValue = 0;
+                if (dxmt9PeStateShadowEnabled() &&
+                    renderStateShadow_.get(stateKey, shadowValue)) {
+                    previous = shadowValue;
                 }
-                stateBlockRenderStateRestore_[stateKey] = previous;
+                stateBlockRenderStateRestore_.set(stateKey, previous);
             }
             return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
         }
@@ -3705,19 +4153,19 @@ public:
         if (FAILED(chunkHr)) return chunkHr;
         if (dxmt9PeStateShadowEnabled()) {
             // Phase 31: cap check — if a NEW state would push the
-            // pending map past the per-packet cap, drain pending state
+            // pending table past the per-packet cap, drain pending state
             // into the chunk via chunkBarrierFlush() so the next packet
             // starts with a fresh delta budget. Mirrors the TSS /
             // SamplerState / Transform fast-path patterns and prevents
             // the over-cap edge from leaking into the Draw fallback
             // path (which would bridge-emit Set* calls).
-            if (pendingRenderStates_.find(stateKey) == pendingRenderStates_.end() &&
+            if (!pendingRenderStates_.contains(stateKey) &&
                 pendingRenderStates_.size() >= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
                 const HRESULT barrierHr = chunkBarrierFlush();
                 if (FAILED(barrierHr)) return barrierHr;
             }
-            renderStateShadow_[stateKey] = value;
-            pendingRenderStates_[stateKey] = value;
+            renderStateShadow_.set(stateKey, value);
+            pendingRenderStates_.set(stateKey, value);
             return S_OK;
         }
         return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
@@ -3726,9 +4174,9 @@ public:
                                               DWORD* pValue) noexcept override {
         if (!pValue) return D3DERR_INVALIDCALL;
         if (dxmt9PeStateShadowEnabled()) {
-            const auto it = renderStateShadow_.find(static_cast<DWORD>(state));
-            if (it != renderStateShadow_.end()) {
-                *pValue = it->second;
+            uint32_t shadowValue = 0;
+            if (renderStateShadow_.get(static_cast<DWORD>(state), shadowValue)) {
+                *pValue = shadowValue;
                 return S_OK;
             }
         }
@@ -3781,11 +4229,11 @@ public:
         HRESULT hr = hr32(dxmt9c_device_end_state_block(dev_, &sb));
         if (SUCCEEDED(hr)) {
             stateBlockRecording_ = false;
-            for (const auto& [state, value] : stateBlockRenderStateRestore_) {
+            stateBlockRenderStateRestore_.forEach([&](uint32_t state, uint32_t value) {
                 (void)dxmt9c_device_set_render_state(dev_, state, value);
-                renderStateShadow_[state] = value;
+                renderStateShadow_.set(state, value);
                 pendingRenderStates_.erase(state);
-            }
+            });
             stateBlockRenderStateRestore_.clear();
             if (sb) {
                 *ppSB = new D3D9StateBlockImpl(sb, this, this);
@@ -3804,22 +4252,24 @@ public:
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
         // Phase 12: PE-shadow-only when chunk recorder is active.
         if (dxmt9PeDrawChunkEnabled()) {
-            const uint32_t key = (stage << 16) | (uint32_t)type;
-            const auto shadowIt = tssShadow_.find(key);
-            if (shadowIt != tssShadow_.end() && shadowIt->second == value) {
+            const uint32_t stageSlot = textureStageSlot(stage);
+            const uint32_t stateSlot = textureStageStateSlot(type);
+            uint32_t shadowValue = 0;
+            if (tssShadow_.get(stageSlot, stateSlot, shadowValue) &&
+                shadowValue == value) {
                 return S_OK;            // identity no-op
             }
             // Phase 34: cap-check uses chunkBarrierFlush so pending
             // state is encoded as APPLY_STATE record(s) + cleared
             // before the new entry. Bare flushPendingCommandChunk
-            // would leave the pending TSS map dirty across the seal.
-            if (pendingTss_.find(key) == pendingTss_.end() &&
+            // would leave the pending TSS table dirty across the seal.
+            if (!pendingTss_.contains(stageSlot, stateSlot) &&
                 pendingTss_.size() >= D9C_DRAW_PACKET_MAX_TSS) {
                 const HRESULT barrierHr = chunkBarrierFlush();
                 if (FAILED(barrierHr)) return barrierHr;
             }
-            tssShadow_[key] = value;
-            pendingTss_[key] = value;
+            tssShadow_.set(stageSlot, stateSlot, value);
+            pendingTss_.set(stageSlot, stateSlot, value);
             return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();
@@ -3841,20 +4291,28 @@ public:
                             this, (unsigned)sampler, (unsigned)type, (unsigned)value);
         // Phase 12: PE-shadow-only when chunk recorder is active.
         if (dxmt9PeDrawChunkEnabled()) {
-            const uint32_t key = (sampler << 16) | (uint32_t)type;
-            const auto shadowIt = samplerStateShadow_.find(key);
-            if (shadowIt != samplerStateShadow_.end() && shadowIt->second == value) {
+            uint32_t samplerIndex = 0;
+            if (!samplerSlot(sampler, samplerIndex)) {
+                return D3DERR_INVALIDCALL;
+            }
+            uint32_t stateSlot = 0;
+            if (!samplerStateSlot(type, stateSlot)) {
+                return S_OK;
+            }
+            uint32_t shadowValue = 0;
+            if (samplerStateShadow_.get(samplerIndex, stateSlot, shadowValue) &&
+                shadowValue == value) {
                 return S_OK;            // identity no-op
             }
             // Phase 34: cap-check uses chunkBarrierFlush — see Phase
             // 31a / SetTextureStageState for the rationale.
-            if (pendingSamplerStates_.find(key) == pendingSamplerStates_.end() &&
+            if (!pendingSamplerStates_.contains(samplerIndex, stateSlot) &&
                 pendingSamplerStates_.size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
                 const HRESULT barrierHr = chunkBarrierFlush();
                 if (FAILED(barrierHr)) return barrierHr;
             }
-            samplerStateShadow_[key] = value;
-            pendingSamplerStates_[key] = value;
+            samplerStateShadow_.set(samplerIndex, stateSlot, value);
+            pendingSamplerStates_.set(samplerIndex, stateSlot, value);
             return S_OK;
         }
         const HRESULT flushHr = flushPendingHotState();

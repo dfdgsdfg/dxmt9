@@ -411,11 +411,15 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        u32 stencilFormat) {
   const auto& desc = state.desc();
   const auto& hot = *state.hot;
+  const auto* shader = state.hasShaderContext() ? &state.shaderContext() : nullptr;
+  const auto& vertexDecl = shader ? shader->vertexDecl : desc.vertexDecl;
+  const auto& vertexShader = shader ? shader->vertexShader : desc.vertexShader;
+  const auto& pixelShader = shader ? shader->pixelShader : desc.pixelShader;
   ShaderVariantKey key{};
-  const auto layout = ffp::decodeFixedFunctionVertexLayout(desc);
-  const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(desc.vertexDecl);
-  key.hash = desc.vertexShader.hash ^ (desc.pixelShader.hash << 1) ^ hot.clipPlaneMask ^ depthFormat ^
-             (stencilFormat << 1) ^ (layoutHash << 1) ^ desc.vertexDecl.fvf;
+  const auto layout = ffp::decodeFixedFunctionVertexLayout(vertexDecl);
+  const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(vertexDecl);
+  key.hash = vertexShader.hash ^ (pixelShader.hash << 1) ^ hot.clipPlaneMask ^ depthFormat ^
+             (stencilFormat << 1) ^ (layoutHash << 1) ^ vertexDecl.fvf;
   key.textured = hot.textures[0] != core::Handle{};
   key.linear =
       core::flatStateOr(hot.samplerStates[0], core::SAMP_MIN_FILTER, 0u) == 2u ||

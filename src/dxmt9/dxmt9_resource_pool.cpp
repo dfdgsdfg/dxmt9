@@ -16,33 +16,27 @@
 namespace dxmt9::resources {
 
 BufferRecord* Pool::findBuffer(u64 handle) noexcept {
-  auto it = buffers.find(handle);
-  return it == buffers.end() ? nullptr : &it->second;
+  return bufferArena_.find(handle);
 }
 
 const BufferRecord* Pool::findBuffer(u64 handle) const noexcept {
-  auto it = buffers.find(handle);
-  return it == buffers.end() ? nullptr : &it->second;
+  return bufferArena_.find(handle);
 }
 
 TextureRecord* Pool::findTexture(u64 handle) noexcept {
-  auto it = textures.find(handle);
-  return it == textures.end() ? nullptr : &it->second;
+  return textureArena_.find(handle);
 }
 
 const TextureRecord* Pool::findTexture(u64 handle) const noexcept {
-  auto it = textures.find(handle);
-  return it == textures.end() ? nullptr : &it->second;
+  return textureArena_.find(handle);
 }
 
 SurfaceRecord* Pool::findSurface(u64 handle) noexcept {
-  auto it = surfaces.find(handle);
-  return it == surfaces.end() ? nullptr : &it->second;
+  return surfaceArena_.find(handle);
 }
 
 const SurfaceRecord* Pool::findSurface(u64 handle) const noexcept {
-  auto it = surfaces.find(handle);
-  return it == surfaces.end() ? nullptr : &it->second;
+  return surfaceArena_.find(handle);
 }
 
 namespace {
@@ -129,29 +123,52 @@ void traceSurfaceAlias(core::SurfaceHandle handle,
   core::metalqueue::emitTextureTraceLine(out.str());
 }
 
-template <typename Map>
-void gcMap(Map& map, u64 completedSeqId) {
-  for (auto it = map.begin(); it != map.end();) {
-    auto& record = it->second;
-    if (record.destroyPending && record.lastUsedSeqId <= completedSeqId) {
-      // TLA+: NoUseAfterFree
-      DXMT_ASSERT(record.lastUsedSeqId <= completedSeqId);
-      it = map.erase(it);
-    } else {
-      ++it;
-    }
-  }
+template <typename Arena>
+void gcArena(Arena& arena, u64 completedSeqId) {
+  arena.reclaimCompleted(completedSeqId, [completedSeqId](const auto& record) {
+    // TLA+: NoUseAfterFree
+    DXMT_ASSERT(record.lastUsedSeqId <= completedSeqId);
+  });
 }
 }  // namespace
 
 void Pool::reclaimCompleted(u64 completedSeqId) {
-  gcMap(buffers, completedSeqId);
-  gcMap(textures, completedSeqId);
-  gcMap(surfaces, completedSeqId);
+  gcArena(bufferArena_, completedSeqId);
+  gcArena(textureArena_, completedSeqId);
+  gcArena(surfaceArena_, completedSeqId);
+}
+
+bool Pool::markBufferDestroyAndGc(u64 handleValue, u64 completedSeqId) {
+  auto* record = bufferArena_.find(handleValue);
+  if (!record) {
+    return false;
+  }
+  record->destroyPending = true;
+  reclaimCompleted(completedSeqId);
+  return true;
+}
+
+bool Pool::markTextureDestroyAndGc(u64 handleValue, u64 completedSeqId) {
+  auto* record = textureArena_.find(handleValue);
+  if (!record) {
+    return false;
+  }
+  record->destroyPending = true;
+  reclaimCompleted(completedSeqId);
+  return true;
+}
+
+bool Pool::markSurfaceDestroyAndGc(u64 handleValue, u64 completedSeqId) {
+  auto* record = surfaceArena_.find(handleValue);
+  if (!record) {
+    return false;
+  }
+  record->destroyPending = true;
+  reclaimCompleted(completedSeqId);
+  return true;
 }
 
 core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc& desc) {
-  const core::Handle handle{nextHandle++};
   BufferRecord record;
   record.desc = desc;
   record.shadow.resize(static_cast<std::size_t>(desc.size));
@@ -165,14 +182,12 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
     }
     record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
   }
-  buffers[handle.value] = std::move(record);
-  return handle;
+  return bufferArena_.insert(std::move(record));
 }
 
 core::TextureHandle Pool::createTexture(WMT::Device device,
                                           const core::BackendLimits& limits,
                                           const core::TextureDesc& desc) {
-  const core::Handle handle{nextHandle++};
   TextureRecord record;
   record.desc = desc;
   if (desc.pool != core::Pool::SystemMem && desc.pool != core::Pool::Scratch) {
@@ -190,16 +205,15 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     record.texture = device.newTexture(info);
     record.isPrivate = (info.options == WMTResourceStorageModePrivate);
   }
-  textures[handle.value] = std::move(record);
-  const auto& stored = textures[handle.value];
-  traceTextureCreate(handle, desc, static_cast<bool>(stored.texture), stored.isPrivate);
+  const auto handle = textureArena_.insert(std::move(record));
+  const auto* stored = textureArena_.find(handle.value);
+  traceTextureCreate(handle, desc, stored && stored->texture, stored ? stored->isPrivate : false);
   return handle;
 }
 
 core::SurfaceHandle Pool::createSurface(WMT::Device device,
                                           const core::BackendLimits& limits,
                                           const core::SurfaceDesc& desc) {
-  const core::Handle handle{nextHandle++};
   SurfaceRecord record;
   record.desc = desc;
   if (desc.pool != core::Pool::SystemMem && desc.pool != core::Pool::Scratch) {
@@ -226,34 +240,33 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
       record.resolveTexture = device.newTexture(resolveInfo);
     }
   }
-  surfaces[handle.value] = std::move(record);
-  const auto& stored = surfaces[handle.value];
-  traceSurfaceCreate(handle, desc, static_cast<bool>(stored.texture));
+  const auto handle = surfaceArena_.insert(std::move(record));
+  const auto* stored = surfaceArena_.find(handle.value);
+  traceSurfaceCreate(handle, desc, stored && stored->texture);
   return handle;
 }
 
 core::SurfaceHandle Pool::createSurfaceForTexture(core::TextureHandle textureHandle,
                                                     u32 level,
                                                     const core::SurfaceDesc& desc) {
-  auto textureIt = textures.find(textureHandle.value);
-  if (textureIt == textures.end() || !textureIt->second.texture) {
+  auto* textureRecord = findTexture(textureHandle.value);
+  if (!textureRecord || !textureRecord->texture) {
     return {};
   }
-  const core::Handle handle{nextHandle++};
   SurfaceRecord record;
   record.desc = desc;
   record.aliasTexture = textureHandle;
-  const auto subresource = decodeTextureSubresource(textureIt->second.desc, level);
+  const auto subresource = decodeTextureSubresource(textureRecord->desc, level);
   if (!subresource.valid) {
     return {};
   }
   record.level = 0;
   record.slice = 0;
   bool usedParentTexture = false;
-  WMT::Texture parentTexture{textureIt->second.texture.handle};
-  if (textureIt->second.desc.type != core::TextureType::Cube &&
-      subresource.mipLevel == 0 && desc.width == textureIt->second.desc.width &&
-      desc.height == textureIt->second.desc.height) {
+  WMT::Texture parentTexture{textureRecord->texture.handle};
+  if (textureRecord->desc.type != core::TextureType::Cube &&
+      subresource.mipLevel == 0 && desc.width == textureRecord->desc.width &&
+      desc.height == textureRecord->desc.height) {
     record.texture = WMT::Reference<WMT::Texture>(parentTexture);
     usedParentTexture = true;
   } else {
@@ -261,23 +274,23 @@ core::SurfaceHandle Pool::createSurfaceForTexture(core::TextureHandle textureHan
         WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
         WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
     uint64_t gpuId = 0;
-    const auto viewType = textureIt->second.desc.type == core::TextureType::Cube
+    const auto viewType = textureRecord->desc.type == core::TextureType::Cube
                               ? WMTTextureType2D
                               : parentTexture.textureType();
     auto view = parentTexture.newTextureView(parentTexture.pixelFormat(),
                                                viewType,
                                                subresource.mipLevel, 1,
                                                subresource.slice, 1, swizzle, gpuId);
-    if (!view && textureIt->second.desc.type == core::TextureType::Cube) {
+    if (!view && textureRecord->desc.type == core::TextureType::Cube) {
       return {};
     }
     record.texture = view ? std::move(view) : WMT::Reference<WMT::Texture>(parentTexture);
     usedParentTexture = !view;
   }
-  surfaces[handle.value] = std::move(record);
-  const auto& stored = surfaces[handle.value];
+  const auto handle = surfaceArena_.insert(std::move(record));
+  const auto* stored = surfaceArena_.find(handle.value);
   traceSurfaceAlias(handle, textureHandle, level, subresource, desc, usedParentTexture,
-                    static_cast<bool>(stored.texture));
+                    stored && stored->texture);
   return handle;
 }
 
@@ -339,26 +352,26 @@ Pool::stageTextureUpload(WMT::Device device,
                           u32 pitch,
                           const std::uint8_t* bytes,
                           std::size_t byteCount) {
-  auto it = textures.find(handle.value);
-  if (it == textures.end() || !it->second.texture || byteCount == 0) {
+  auto* record = findTexture(handle.value);
+  if (!record || !record->texture || byteCount == 0) {
     return std::nullopt;
   }
 
   std::vector<std::uint8_t> scratch;
-  const auto normalized = normalizeUploadBytes(it->second.desc.format, width, height, pitch,
+  const auto normalized = normalizeUploadBytes(record->desc.format, width, height, pitch,
                                                   {bytes, byteCount}, scratch);
 
-  const auto subresource = decodeTextureSubresource(it->second.desc, level);
+  const auto subresource = decodeTextureSubresource(record->desc, level);
   if (!subresource.valid) {
     return std::nullopt;
   }
-  WMT::Texture texture{it->second.texture.handle};
+  WMT::Texture texture{record->texture.handle};
   const u32 mipLevel = subresource.mipLevel;
   const u32 slice = subresource.slice;
   const u32 mipWidth = std::max(1u, width);
   const u32 mipHeight = std::max(1u, height);
 
-  if (!it->second.isPrivate) {
+  if (!record->isPrivate) {
     // Shared-mode: CPU write straight to the destination; no blit.
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, 1};
@@ -401,26 +414,26 @@ void Pool::uploadTextureLevel(WMT::Device device,
                                u32 pitch,
                                const std::uint8_t* bytes,
                                std::size_t byteCount) {
-  auto it = textures.find(handle.value);
-  if (it == textures.end() || !it->second.texture || byteCount == 0) {
+  auto* record = findTexture(handle.value);
+  if (!record || !record->texture || byteCount == 0) {
     return;
   }
 
   std::vector<std::uint8_t> scratch;
-  const auto normalized = normalizeUploadBytes(it->second.desc.format, width, height, pitch,
+  const auto normalized = normalizeUploadBytes(record->desc.format, width, height, pitch,
                                                   {bytes, byteCount}, scratch);
 
-  const auto subresource = decodeTextureSubresource(it->second.desc, level);
+  const auto subresource = decodeTextureSubresource(record->desc, level);
   if (!subresource.valid) {
     return;
   }
-  WMT::Texture texture{it->second.texture.handle};
+  WMT::Texture texture{record->texture.handle};
   const u32 mipLevel = subresource.mipLevel;
   const u32 slice = subresource.slice;
   const u32 mipWidth = std::max(1u, width);
   const u32 mipHeight = std::max(1u, height);
 
-  if (!it->second.isPrivate) {
+  if (!record->isPrivate) {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, 1};
     texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch, 0);
@@ -540,16 +553,16 @@ void Pool::markColorFillResources(const core::ColorFillDesc& desc, u64 seqId) {
 }
 
 bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount) {
-  auto it = buffers.find(handleValue);
-  if (it == buffers.end()) {
+  auto* record = findBuffer(handleValue);
+  if (!record) {
     return false;
   }
-  it->second.shadow.assign(bytes, bytes + byteCount);
-  if (!it->second.buffer || byteCount == 0 || !it->second.contents) {
+  record->shadow.assign(bytes, bytes + byteCount);
+  if (!record->buffer || byteCount == 0 || !record->contents) {
     return true;
   }
-  const std::size_t copySize = std::min(byteCount, static_cast<std::size_t>(it->second.desc.size));
-  std::memcpy(it->second.contents, bytes, copySize);
+  const std::size_t copySize = std::min(byteCount, static_cast<std::size_t>(record->desc.size));
+  std::memcpy(record->contents, bytes, copySize);
   return true;
 }
 
@@ -557,29 +570,28 @@ u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
   if ((flags & core::UsageDiscard) != 0 || (flags & core::UsageNoOverwrite) != 0) {
     return 0;
   }
-  auto it = buffers.find(handle.value);
-  if (it == buffers.end()) {
+  auto* record = findBuffer(handle.value);
+  if (!record) {
     return 0;
   }
-  return it->second.lastUsedSeqId;
+  return record->lastUsedSeqId;
 }
 
 void* Pool::finalizeBufferMap(core::BufferHandle handle, u32 flags) {
-  auto it = buffers.find(handle.value);
-  if (it == buffers.end()) {
+  auto* record = findBuffer(handle.value);
+  if (!record) {
     return nullptr;
   }
-  auto& record = it->second;
   if ((flags & core::UsageDiscard) != 0) {
-    std::fill(record.shadow.begin(), record.shadow.end(), 0);
-    if (record.contents) {
-      std::memset(record.contents, 0, record.shadow.size());
+    std::fill(record->shadow.begin(), record->shadow.end(), 0);
+    if (record->contents) {
+      std::memset(record->contents, 0, record->shadow.size());
     }
   }
-  if (record.contents) {
-    return record.contents;
+  if (record->contents) {
+    return record->contents;
   }
-  return record.shadow.empty() ? nullptr : record.shadow.data();
+  return record->shadow.empty() ? nullptr : record->shadow.data();
 }
 
 }  // namespace dxmt9::resources

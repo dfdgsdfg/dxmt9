@@ -18,6 +18,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/dxmt9_device.hpp"
+#include "../src/dxmt9/dxmt9_resource_pool.hpp"
 
 namespace {
 
@@ -379,11 +380,96 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
   checkEq(d3d->Release(), 0u, "release recording d3d factory");
 }
 
+struct ArenaTestRecord {
+  bool destroyPending = false;
+  std::uint64_t lastUsedSeqId = 0;
+};
+
+void testResourcePoolArenaRejectsStaleHandles() {
+  using BufferArena =
+      dxmt9::resources::detail::HandleArena<ArenaTestRecord,
+                                            dxmt9::resources::detail::ResourceHandleKind::Buffer>;
+  using TextureArena =
+      dxmt9::resources::detail::HandleArena<ArenaTestRecord,
+                                            dxmt9::resources::detail::ResourceHandleKind::Texture>;
+
+  BufferArena buffers;
+  TextureArena textures;
+
+  const auto first = buffers.insert(ArenaTestRecord{});
+  check(static_cast<bool>(first), "resource arena allocates first buffer handle");
+  check(buffers.find(first.value) != nullptr, "resource arena finds live buffer");
+  check(textures.find(first.value) == nullptr,
+        "resource arena kind tag prevents cross-kind lookup");
+
+  auto* firstRecord = buffers.find(first.value);
+  check(firstRecord != nullptr, "resource arena returns first record");
+  firstRecord->destroyPending = true;
+  buffers.reclaimCompleted(0u, [](const ArenaTestRecord& record) {
+    check(record.destroyPending, "resource arena visits pending record before reclaim");
+  });
+  check(buffers.find(first.value) == nullptr,
+        "resource arena rejects reclaimed stale buffer handle");
+
+  const auto second = buffers.insert(ArenaTestRecord{});
+  check(static_cast<bool>(second), "resource arena allocates recycled buffer handle");
+  check(first.value != second.value,
+        "resource arena bumps generation when reusing a handle index");
+  check(buffers.find(first.value) == nullptr,
+        "resource arena keeps stale generation invalid after reuse");
+  check(buffers.find(second.value) != nullptr,
+        "resource arena finds current generation buffer");
+}
+
+void testResourcePoolUsesArenaStorageOnly() {
+  auto* resourcePool = new dxmt9::resources::Pool;
+
+  const auto first = resourcePool->createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE},
+      BufferDesc{
+          .size = 16u,
+          .pool = Pool::SystemMem,
+      });
+  check(static_cast<bool>(first), "resource pool allocates arena buffer handle");
+  check(resourcePool->findBuffer(first.value) != nullptr,
+        "resource pool finds arena buffer");
+  check(resourcePool->findTexture(first.value) == nullptr,
+        "resource pool rejects buffer handle as texture");
+  check(resourcePool->findSurface(first.value) == nullptr,
+        "resource pool rejects buffer handle as surface");
+
+  resourcePool->markBufferUse(first, 7u);
+  check(resourcePool->markDestroyAndGc(resourcePool->buffers, first.value, 6u),
+        "resource pool marks arena buffer destroy-pending");
+  check(resourcePool->findBuffer(first.value) != nullptr,
+        "resource pool keeps pending arena buffer until completed seq catches up");
+
+  resourcePool->reclaimCompleted(7u);
+  check(resourcePool->findBuffer(first.value) == nullptr,
+        "resource pool rejects stale arena buffer after reclaim");
+
+  const auto second = resourcePool->createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE},
+      BufferDesc{
+          .size = 16u,
+          .pool = Pool::SystemMem,
+      });
+  check(static_cast<bool>(second), "resource pool allocates recycled arena buffer");
+  check(first.value != second.value,
+        "resource pool bumps generation for recycled buffer slot");
+  check(resourcePool->findBuffer(first.value) == nullptr,
+        "resource pool stale generation remains invalid after slot reuse");
+  check(resourcePool->findBuffer(second.value) != nullptr,
+        "resource pool finds current recycled buffer handle");
+}
+
 }  // namespace
 
 int main() {
   try {
     testImportedChunkBulkRetentionAndBarrierOrdering();
+    testResourcePoolArenaRejectsStaleHandles();
+    testResourcePoolUsesArenaStorageOnly();
   } catch (const TestFailure& e) {
     std::cerr << "resource_hazard_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

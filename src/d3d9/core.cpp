@@ -44,25 +44,35 @@ u64 hashTrivial(const T& value) {
   return hash;
 }
 
-u64 hashStateMap(const std::unordered_map<u32, u32>& values) {
+template <typename StateValues>
+u64 hashStateValues(const StateValues& values) {
   u64 hash = hashCombine(kFnvOffset, static_cast<u64>(values.size()));
-  for (const auto& [key, value] : values) {
-    const u64 entryHash = hashCombine(hashTrivial(key), hashTrivial(value));
+  for (const auto& entry : values) {
+    const u64 entryHash = hashCombine(hashTrivial(entry.first), hashTrivial(entry.second));
     hash ^= entryHash + 0x9e3779b97f4a7c15ull;
   }
   return hash;
 }
 
+u64 hashStateMap(const std::unordered_map<u32, u32>& values) {
+  return hashStateValues(values);
+}
+
 template <std::size_t MaxEntries>
-FlatStateSet<MaxEntries> makeFlatStateSet(const std::unordered_map<u32, u32>& values) {
+u64 hashStateMap(const StateValueTable<MaxEntries>& values) {
+  return hashStateValues(values);
+}
+
+template <std::size_t MaxEntries>
+FlatStateSet<MaxEntries> makeFlatStateSet(const auto& values) {
   FlatStateSet<MaxEntries> set{};
   set.hash = hashStateMap(values);
   set.overflow = values.size() > MaxEntries;
-  for (const auto& [state, value] : values) {
+  for (const auto& entry : values) {
     if (set.count >= MaxEntries) {
       continue;
     }
-    set.entries[set.count++] = FlatStateEntry{.state = state, .value = value};
+    set.entries[set.count++] = FlatStateEntry{.state = entry.first, .value = entry.second};
   }
   std::sort(set.entries.begin(), set.entries.begin() + set.count,
             [](const FlatStateEntry& a, const FlatStateEntry& b) {
@@ -903,9 +913,14 @@ const std::vector<FormatEntry>& formatEntries() {
   return entries;
 }
 
-u64 hashMap(const std::unordered_map<u32, u32>& values) {
+template <typename StateValues>
+u64 hashMap(const StateValues& values) {
   u64 hash = kFnvOffset;
-  std::vector<std::pair<u32, u32>> sorted(values.begin(), values.end());
+  std::vector<std::pair<u32, u32>> sorted;
+  sorted.reserve(values.size());
+  for (const auto& entry : values) {
+    sorted.emplace_back(entry.first, entry.second);
+  }
   std::sort(sorted.begin(), sorted.end(), [](auto& a, auto& b) { return a.first < b.first; });
   for (const auto& [key, value] : sorted) {
     hash = hashCombine(hash, key);
@@ -2075,83 +2090,83 @@ void DeviceState::reset() {
   depthStencil = {};
   inScene = false;
 
-  renderStates[RS_LIGHTING] = 1;
-  renderStates[RS_SPECULAR_ENABLE] = 0;
-  renderStates[RS_NORMALIZE_NORMALS] = 0;
-  renderStates[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::None);
-  renderStates[RS_FOG_FROM_VERTEX] = 1;
-  renderStates[RS_RANGE_FOG] = 0;
-  renderStates[RS_ALPHA_TEST_ENABLE] = 0;
-  renderStates[RS_ALPHA_FUNC] = static_cast<u32>(CompareFunc::Always);
-  renderStates[RS_ALPHA_REF] = 0;
-  renderStates[RS_FOG_ENABLE] = 0;
-  renderStates[RS_FOG_COLOR] = 0;
-  renderStates[RS_FOG_START] = std::bit_cast<u32>(1.0f);
-  renderStates[RS_FOG_END] = std::bit_cast<u32>(1.0f);
-  renderStates[RS_FOG_DENSITY] = std::bit_cast<u32>(1.0f);
-  renderStates[RS_AMBIENT] = 0;
-  renderStates[RS_DIFFUSE_MATERIAL_SOURCE] = 1;
-  renderStates[RS_SPECULAR_MATERIAL_SOURCE] = 2;
-  renderStates[RS_AMBIENT_MATERIAL_SOURCE] = 0;
-  renderStates[RS_EMISSIVE_MATERIAL_SOURCE] = 0;
-  renderStates[RS_VERTEX_BLEND] = 0;
-  renderStates[RS_CLIP_PLANE_ENABLE] = 0;
-  renderStates[RS_POINT_SPRITE_ENABLE] = 0;
-  renderStates[RS_POINT_SCALE_ENABLE] = 0;
-  renderStates[RS_CULL_MODE] = static_cast<u32>(CullMode::Ccw);
-  renderStates[RS_Z_WRITE_ENABLE] = 1;
-  renderStates[RS_Z_FUNC] = static_cast<u32>(CompareFunc::LessEqual);
-  renderStates[RS_SRC_BLEND] = static_cast<u32>(BlendFactor::One);
-  renderStates[RS_DEST_BLEND] = static_cast<u32>(BlendFactor::Zero);
-  renderStates[RS_BLEND_OP] = static_cast<u32>(BlendOp::Add);
-  renderStates[RS_COLOR_WRITE_ENABLE] = 0xf;
-  renderStates[RS_Z_ENABLE] = 1;
-  renderStates[RS_ALPHABLEND_ENABLE] = 0;
-  renderStates[RS_BLEND_FACTOR] = 0xffffffffu;
-  renderStates[RS_SEPARATE_ALPHA_BLEND_ENABLE] = 0;
-  renderStates[RS_SRC_BLEND_ALPHA] = static_cast<u32>(BlendFactor::One);
-  renderStates[RS_DEST_BLEND_ALPHA] = static_cast<u32>(BlendFactor::Zero);
-  renderStates[RS_BLEND_OP_ALPHA] = static_cast<u32>(BlendOp::Add);
-  renderStates[RS_STENCIL_ENABLE] = 0;
-  renderStates[RS_STENCIL_FUNC] = static_cast<u32>(CompareFunc::Always);
-  renderStates[RS_STENCIL_FAIL] = static_cast<u32>(StencilOp::Keep);
-  renderStates[RS_STENCIL_ZFAIL] = static_cast<u32>(StencilOp::Keep);
-  renderStates[RS_STENCIL_PASS] = static_cast<u32>(StencilOp::Keep);
-  renderStates[RS_STENCIL_REF] = 0;
-  renderStates[RS_STENCIL_MASK] = 0xffu;
-  renderStates[RS_STENCIL_WRITEMASK] = 0xffu;
-  renderStates[RS_STENCIL_CCW_FUNC] = static_cast<u32>(CompareFunc::Always);
-  renderStates[RS_STENCIL_CCW_FAIL] = static_cast<u32>(StencilOp::Keep);
-  renderStates[RS_STENCIL_CCW_ZFAIL] = static_cast<u32>(StencilOp::Keep);
-  renderStates[RS_STENCIL_CCW_PASS] = static_cast<u32>(StencilOp::Keep);
-  renderStates[RS_STENCIL_CCW_REF] = 0;
-  renderStates[RS_STENCIL_CCW_MASK] = 0xffu;
-  renderStates[RS_STENCIL_CCW_WRITEMASK] = 0xffu;
+  renderStates.set(RS_LIGHTING, 1);
+  renderStates.set(RS_SPECULAR_ENABLE, 0);
+  renderStates.set(RS_NORMALIZE_NORMALS, 0);
+  renderStates.set(RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::None));
+  renderStates.set(RS_FOG_FROM_VERTEX, 1);
+  renderStates.set(RS_RANGE_FOG, 0);
+  renderStates.set(RS_ALPHA_TEST_ENABLE, 0);
+  renderStates.set(RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always));
+  renderStates.set(RS_ALPHA_REF, 0);
+  renderStates.set(RS_FOG_ENABLE, 0);
+  renderStates.set(RS_FOG_COLOR, 0);
+  renderStates.set(RS_FOG_START, std::bit_cast<u32>(1.0f));
+  renderStates.set(RS_FOG_END, std::bit_cast<u32>(1.0f));
+  renderStates.set(RS_FOG_DENSITY, std::bit_cast<u32>(1.0f));
+  renderStates.set(RS_AMBIENT, 0);
+  renderStates.set(RS_DIFFUSE_MATERIAL_SOURCE, 1);
+  renderStates.set(RS_SPECULAR_MATERIAL_SOURCE, 2);
+  renderStates.set(RS_AMBIENT_MATERIAL_SOURCE, 0);
+  renderStates.set(RS_EMISSIVE_MATERIAL_SOURCE, 0);
+  renderStates.set(RS_VERTEX_BLEND, 0);
+  renderStates.set(RS_CLIP_PLANE_ENABLE, 0);
+  renderStates.set(RS_POINT_SPRITE_ENABLE, 0);
+  renderStates.set(RS_POINT_SCALE_ENABLE, 0);
+  renderStates.set(RS_CULL_MODE, static_cast<u32>(CullMode::Ccw));
+  renderStates.set(RS_Z_WRITE_ENABLE, 1);
+  renderStates.set(RS_Z_FUNC, static_cast<u32>(CompareFunc::LessEqual));
+  renderStates.set(RS_SRC_BLEND, static_cast<u32>(BlendFactor::One));
+  renderStates.set(RS_DEST_BLEND, static_cast<u32>(BlendFactor::Zero));
+  renderStates.set(RS_BLEND_OP, static_cast<u32>(BlendOp::Add));
+  renderStates.set(RS_COLOR_WRITE_ENABLE, 0xf);
+  renderStates.set(RS_Z_ENABLE, 1);
+  renderStates.set(RS_ALPHABLEND_ENABLE, 0);
+  renderStates.set(RS_BLEND_FACTOR, 0xffffffffu);
+  renderStates.set(RS_SEPARATE_ALPHA_BLEND_ENABLE, 0);
+  renderStates.set(RS_SRC_BLEND_ALPHA, static_cast<u32>(BlendFactor::One));
+  renderStates.set(RS_DEST_BLEND_ALPHA, static_cast<u32>(BlendFactor::Zero));
+  renderStates.set(RS_BLEND_OP_ALPHA, static_cast<u32>(BlendOp::Add));
+  renderStates.set(RS_STENCIL_ENABLE, 0);
+  renderStates.set(RS_STENCIL_FUNC, static_cast<u32>(CompareFunc::Always));
+  renderStates.set(RS_STENCIL_FAIL, static_cast<u32>(StencilOp::Keep));
+  renderStates.set(RS_STENCIL_ZFAIL, static_cast<u32>(StencilOp::Keep));
+  renderStates.set(RS_STENCIL_PASS, static_cast<u32>(StencilOp::Keep));
+  renderStates.set(RS_STENCIL_REF, 0);
+  renderStates.set(RS_STENCIL_MASK, 0xffu);
+  renderStates.set(RS_STENCIL_WRITEMASK, 0xffu);
+  renderStates.set(RS_STENCIL_CCW_FUNC, static_cast<u32>(CompareFunc::Always));
+  renderStates.set(RS_STENCIL_CCW_FAIL, static_cast<u32>(StencilOp::Keep));
+  renderStates.set(RS_STENCIL_CCW_ZFAIL, static_cast<u32>(StencilOp::Keep));
+  renderStates.set(RS_STENCIL_CCW_PASS, static_cast<u32>(StencilOp::Keep));
+  renderStates.set(RS_STENCIL_CCW_REF, 0);
+  renderStates.set(RS_STENCIL_CCW_MASK, 0xffu);
+  renderStates.set(RS_STENCIL_CCW_WRITEMASK, 0xffu);
 
   for (size_t stageIndex = 0; stageIndex < textureStageStates.size(); ++stageIndex) {
     auto& stage = textureStageStates[stageIndex];
-    stage[TSS_COLOR_OP] = static_cast<u32>(stageIndex == 0 ? TextureOp::Modulate : TextureOp::Disable);
-    stage[TSS_COLOR_ARG1] = 2;  // D3DTA_TEXTURE
-    stage[TSS_COLOR_ARG2] = 1;  // D3DTA_CURRENT
-    stage[TSS_ALPHA_OP] = static_cast<u32>(stageIndex == 0 ? TextureOp::SelectArg1 : TextureOp::Disable);
-    stage[TSS_ALPHA_ARG1] = 2;  // D3DTA_TEXTURE
-    stage[TSS_ALPHA_ARG2] = 1;  // D3DTA_CURRENT
-    stage[TSS_RESULT_ARG] = 1;  // D3DTA_CURRENT
-    stage[TSS_TEXCOORD_INDEX] = static_cast<u32>(stageIndex);
-    stage[TSS_TEXTURE_TRANSFORM_FLAGS] = 0;
-    stage[TSS_TEXTURE_TYPE] = 0;
+    stage.set(TSS_COLOR_OP, static_cast<u32>(stageIndex == 0 ? TextureOp::Modulate : TextureOp::Disable));
+    stage.set(TSS_COLOR_ARG1, 2);  // D3DTA_TEXTURE
+    stage.set(TSS_COLOR_ARG2, 1);  // D3DTA_CURRENT
+    stage.set(TSS_ALPHA_OP, static_cast<u32>(stageIndex == 0 ? TextureOp::SelectArg1 : TextureOp::Disable));
+    stage.set(TSS_ALPHA_ARG1, 2);  // D3DTA_TEXTURE
+    stage.set(TSS_ALPHA_ARG2, 1);  // D3DTA_CURRENT
+    stage.set(TSS_RESULT_ARG, 1);  // D3DTA_CURRENT
+    stage.set(TSS_TEXCOORD_INDEX, static_cast<u32>(stageIndex));
+    stage.set(TSS_TEXTURE_TRANSFORM_FLAGS, 0);
+    stage.set(TSS_TEXTURE_TYPE, 0);
   }
 
   for (auto& sampler : samplerStates) {
-    sampler[SAMP_MIN_FILTER] = 1;
-    sampler[SAMP_MAG_FILTER] = 1;
-    sampler[SAMP_MIP_FILTER] = 0;
-    sampler[SAMP_ADDRESS_U] = 1;
-    sampler[SAMP_ADDRESS_V] = 1;
-    sampler[SAMP_ADDRESS_W] = 1;
-    sampler[SAMP_MAX_ANISOTROPY] = 1;
-    sampler[SAMP_MIPMAP_LOD_BIAS] = 0;
-    sampler[SAMP_BORDER_COLOR] = 0;
+    sampler.set(SAMP_MIN_FILTER, 1);
+    sampler.set(SAMP_MAG_FILTER, 1);
+    sampler.set(SAMP_MIP_FILTER, 0);
+    sampler.set(SAMP_ADDRESS_U, 1);
+    sampler.set(SAMP_ADDRESS_V, 1);
+    sampler.set(SAMP_ADDRESS_W, 1);
+    sampler.set(SAMP_MAX_ANISOTROPY, 1);
+    sampler.set(SAMP_MIPMAP_LOD_BIAS, 0);
+    sampler.set(SAMP_BORDER_COLOR, 0);
   }
 
   for (auto& transform : transforms) {
@@ -2625,45 +2640,57 @@ HRESULT Query::getData(void* output, size_t size, u32 flags, u64 completedSequen
 
 namespace {
 
-template <typename K, typename V>
-void applyMapDelta(std::unordered_map<K, V>& dst,
-                   const std::unordered_map<K, V>& before,
-                   const std::unordered_map<K, V>& after) {
-  for (const auto& [key, value] : after) {
+template <typename Map, typename Key, typename Value>
+void setMapValue(Map& dst, const Key& key, const Value& value) {
+  dst[key] = value;
+}
+
+template <std::size_t MaxEntries>
+void setMapValue(StateValueTable<MaxEntries>& dst, u32 key, u32 value) {
+  dst.set(key, value);
+}
+
+template <typename Map>
+void applyMapDelta(Map& dst, const Map& before, const Map& after) {
+  for (const auto& entry : after) {
+    const auto key = entry.first;
+    const auto& value = entry.second;
     const auto beforeIt = before.find(key);
     if (beforeIt == before.end() || beforeIt->second != value) {
-      dst[key] = value;
+      setMapValue(dst, key, value);
     }
   }
-  for (const auto& [key, _] : before) {
+  for (const auto& entry : before) {
+    const auto key = entry.first;
     if (!after.contains(key)) {
       dst.erase(key);
     }
   }
 }
 
-template <typename K, typename V>
-void captureMapDelta(std::unordered_map<K, V>& snapshot,
-                     const std::unordered_map<K, V>& before,
-                     const std::unordered_map<K, V>& recorded,
-                     const std::unordered_map<K, V>& current) {
-  for (const auto& [key, value] : recorded) {
+template <typename Map>
+void captureMapDelta(Map& snapshot, const Map& before, const Map& recorded, const Map& current) {
+  for (const auto& entry : recorded) {
+    const auto key = entry.first;
+    const auto& value = entry.second;
     const auto beforeIt = before.find(key);
     if (beforeIt == before.end() || beforeIt->second != value) {
       const auto currentIt = current.find(key);
       if (currentIt != current.end()) {
-        snapshot[key] = currentIt->second;
+        setMapValue(snapshot, key, currentIt->second);
       } else {
         snapshot.erase(key);
       }
     }
   }
-  for (const auto& [key, value] : before) {
+  for (const auto& entry : before) {
+    const auto key = entry.first;
+    const auto& value = entry.second;
     if (!recorded.contains(key)) {
       const auto currentIt = current.find(key);
       if (currentIt == current.end() || currentIt->second != value) {
         if (currentIt != current.end()) {
-          snapshot[key] = currentIt->second;
+          setMapValue(snapshot, key, currentIt->second);
         } else {
           snapshot.erase(key);
         }
@@ -2897,7 +2924,7 @@ void copyRenderStates(DeviceState& dst, const DeviceState& src, const std::array
   for (u32 key : keys) {
     const auto it = src.renderStates.find(key);
     if (it != src.renderStates.end()) {
-      dst.renderStates[key] = it->second;
+      dst.renderStates.set(key, it->second);
     } else {
       dst.renderStates.erase(key);
     }
@@ -2957,7 +2984,7 @@ void StateBlock::capture(const DeviceState& state) {
     for (u32 key : recordedRenderStates_) {
       const auto currentIt = state.renderStates.find(key);
       if (currentIt != state.renderStates.end()) {
-        snapshot_.renderStates[key] = currentIt->second;
+        snapshot_.renderStates.set(key, currentIt->second);
       } else {
         snapshot_.renderStates.erase(key);
       }
@@ -3043,7 +3070,7 @@ void StateBlock::apply(Device& device) const {
     for (u32 key : recordedRenderStates_) {
       const auto snapshotIt = snapshot_.renderStates.find(key);
       if (snapshotIt != snapshot_.renderStates.end()) {
-        state.renderStates[key] = snapshotIt->second;
+        state.renderStates.set(key, snapshotIt->second);
       } else {
         state.renderStates.erase(key);
       }
@@ -3311,7 +3338,7 @@ std::shared_ptr<SwapChain> Device::swapChain(size_t index) const {
 }
 
 HResult Device::setRenderState(u32 key, u32 value) {
-  state_.renderStates[key] = value;
+  state_.renderStates.set(key, value);
   if (key == RS_SCISSOR_TEST_ENABLE) {
     state_.scissorEnabled = value != 0;
   }
@@ -3319,7 +3346,7 @@ HResult Device::setRenderState(u32 key, u32 value) {
 }
 
 HResult Device::setRenderStateFloat(u32 key, f32 value) {
-  state_.renderStates[key] = std::bit_cast<u32>(value);
+  state_.renderStates.set(key, std::bit_cast<u32>(value));
   return D3D_OK;
 }
 
@@ -3340,7 +3367,7 @@ f32 Device::getRenderStateFloat(u32 key, f32 defaultValue) const {
 HResult Device::setTextureStageState(u32 stage, u32 key, u32 value) {
   stage = std::min<u32>(stage, kMaxTextureStages - 1);
   key = std::min<u32>(key, kMaxTextureStageStates - 1);
-  state_.textureStageStates[stage][key] = value;
+  state_.textureStageStates[stage].set(key, value);
   return D3D_OK;
 }
 
@@ -3359,7 +3386,7 @@ HResult Device::setSamplerState(u32 sampler, u32 key, u32 value) {
   if (sampler >= kMaxSamplers) {
     return D3DERR_INVALIDCALL;
   }
-  state_.samplerStates[sampler][key] = value;
+  state_.samplerStates[sampler].set(key, value);
   return D3D_OK;
 }
 
@@ -3579,17 +3606,17 @@ DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& arg
     desc.vertexDecl.streams[i].offset = state.streamOffsets[i];
     desc.vertexDecl.streams[i].stride = state.streamStrides[i];
   }
-  desc.rs.values = state.renderStates;
+  desc.rs.values = state.renderStates.toMap();
   for (size_t i = 0; i < kMaxTextures; ++i) {
     desc.textures[i].handle = state.textures[i] ? state.textures[i]->handle() : Handle{};
     if (i < kMaxTextureStages) {
-      desc.textures[i].stageStates = state.textureStageStates[i];
+      desc.textures[i].stageStates = state.textureStageStates[i].toMap();
     } else {
       desc.textures[i].stageStates.clear();
     }
   }
   for (size_t i = 0; i < kMaxSamplers; ++i) {
-    desc.samplers[i].states = state.samplerStates[i];
+    desc.samplers[i].states = state.samplerStates[i].toMap();
   }
   desc.rts.color = state.renderTargets;
   desc.rts.depthStencil = state.depthStencil;
@@ -3727,6 +3754,136 @@ FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc) {
   return record;
 }
 
+namespace {
+
+FlatDrawStateKey makeFlatDrawStateKeyFromState(const DeviceState& state, const DrawDesc& desc) {
+  FlatDrawStateKey key{};
+
+  for (size_t i = 0; i < kMaxStreams; ++i) {
+    key.streamBuffers[i] = state.streamBuffers[i] ? state.streamBuffers[i]->handle() : Handle{};
+    key.streamOffsets[i] = state.streamOffsets[i];
+    key.streamStrides[i] = state.streamStrides[i];
+    if (key.streamBuffers[i]) {
+      key.streamMask |= 1u << i;
+    }
+  }
+
+  key.indexBuffer = state.indexBuffer ? state.indexBuffer->handle() : Handle{};
+  key.vertexElementCount = static_cast<u32>(desc.vertexDecl.elements.size());
+  key.fvf = desc.vertexDecl.fvf;
+  key.vertexDeclHash = hashVertexDeclElements(desc.vertexDecl);
+  key.vertexShaderKind = desc.vertexShader.kind;
+  key.pixelShaderKind = desc.pixelShader.kind;
+  key.vertexShaderHash = hashShaderRefSummary(desc.vertexShader);
+  key.pixelShaderHash = hashShaderRefSummary(desc.pixelShader);
+  key.vertexConstantsHash = hashTrivial(state.vsConst);
+  key.pixelConstantsHash = hashTrivial(state.psConst);
+
+  for (size_t i = 0; i < kMaxTextures; ++i) {
+    key.textures[i] = state.textures[i] ? state.textures[i]->handle() : Handle{};
+    if (key.textures[i]) {
+      key.textureMask |= 1u << i;
+    }
+    if (i < kMaxTextureStages) {
+      key.textureStageStateHashes[i] = hashStateMap(state.textureStageStates[i]);
+    }
+  }
+
+  for (size_t i = 0; i < kMaxSamplers; ++i) {
+    key.samplerStateHashes[i] = hashStateMap(state.samplerStates[i]);
+    if (!state.samplerStates[i].empty()) {
+      key.samplerStateMask |= 1u << i;
+    }
+  }
+
+  key.renderStateHash = hashStateMap(state.renderStates);
+  key.colorAttachments = state.renderTargets;
+  key.depthStencil = state.depthStencil;
+  for (size_t i = 0; i < kMaxRenderTargets; ++i) {
+    if (key.colorAttachments[i].handle) {
+      key.renderTargetMask |= 1u << i;
+    }
+  }
+
+  key.viewportHash = hashViewportScissor(desc.viewport);
+  key.worldViewProjHash = hashTrivial(desc.worldViewProj);
+  key.textureTransformsHash = hashTextureTransforms(desc.textureTransforms);
+  key.clipPlaneMask = desc.clipPlaneMask;
+  key.clipPlanesHash = hashClipPlanes(desc.clipPlanes);
+  return key;
+}
+
+FlatDrawStateRecord makeFlatDrawStateRecordFromState(const DeviceState& state, const DrawDesc& desc) {
+  FlatDrawStateRecord record{};
+  record.key = makeFlatDrawStateKeyFromState(state, desc);
+  record.streamBuffers = record.key.streamBuffers;
+  record.streamOffsets = record.key.streamOffsets;
+  record.streamStrides = record.key.streamStrides;
+  record.streamMask = record.key.streamMask;
+  record.indexBuffer = record.key.indexBuffer;
+  record.textures = record.key.textures;
+  record.textureMask = record.key.textureMask;
+  record.renderStates = makeFlatStateSet<kMaxStateSlots>(state.renderStates);
+  for (size_t i = 0; i < kMaxTextureStages; ++i) {
+    record.textureStageStates[i] =
+        makeFlatStateSet<kMaxTextureStageStates>(state.textureStageStates[i]);
+  }
+  for (size_t i = 0; i < kMaxSamplers; ++i) {
+    record.samplerStates[i] =
+        makeFlatStateSet<kMaxSamplerStates>(state.samplerStates[i]);
+  }
+  record.colorAttachments = record.key.colorAttachments;
+  record.depthStencil = record.key.depthStencil;
+  record.renderTargetMask = record.key.renderTargetMask;
+  record.viewport = desc.viewport;
+  record.vertexConstantsHash = record.key.vertexConstantsHash;
+  record.pixelConstantsHash = record.key.pixelConstantsHash;
+  record.worldViewProjHash = record.key.worldViewProjHash;
+  record.textureTransformsHash = record.key.textureTransformsHash;
+  record.clipPlaneMask = record.key.clipPlaneMask;
+  record.clipPlanesHash = record.key.clipPlanesHash;
+  return record;
+}
+
+}  // namespace
+
+DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc& desc) {
+  DrawShaderLayoutContext context{};
+  context.vertexDecl = desc.vertexDecl;
+  context.vertexShader = desc.vertexShader;
+  context.pixelShader = desc.pixelShader;
+  context.vsConst = desc.vsConst;
+  context.psConst = desc.psConst;
+  context.worldViewProj = desc.worldViewProj;
+  context.textureTransforms = desc.textureTransforms;
+  context.clipPlaneMask = desc.clipPlaneMask;
+  context.clipPlanes = desc.clipPlanes;
+  return context;
+}
+
+DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStateRecord& hot) {
+  DrawDebugSnapshot snapshot{};
+  snapshot.primitiveType = desc.primitiveType;
+  snapshot.primitiveCount = desc.primitiveCount;
+  snapshot.startVertex = desc.startVertex;
+  snapshot.baseVertexIndex = desc.baseVertexIndex;
+  snapshot.startIndex = desc.startIndex;
+  snapshot.indexType = desc.indexType;
+  snapshot.userVertexBytes = static_cast<u32>(
+      std::min<std::size_t>(desc.userVertexData.size(), std::numeric_limits<u32>::max()));
+  snapshot.userIndexBytes = static_cast<u32>(
+      std::min<std::size_t>(desc.userIndexData.size(), std::numeric_limits<u32>::max()));
+  snapshot.streamMask = hot.streamMask;
+  snapshot.textureMask = hot.textureMask;
+  snapshot.samplerStateMask = hot.key.samplerStateMask;
+  snapshot.renderTargetMask = hot.renderTargetMask;
+  snapshot.renderStateHash = hot.key.renderStateHash;
+  snapshot.vertexDeclHash = hot.key.vertexDeclHash;
+  snapshot.vertexShaderHash = hot.key.vertexShaderHash;
+  snapshot.pixelShaderHash = hot.key.pixelShaderHash;
+  return snapshot;
+}
+
 DrawParam makeDrawParamFromDesc(const DrawDesc& desc) {
   DrawParam param{};
   param.primitiveType = desc.primitiveType;
@@ -3742,10 +3899,23 @@ DrawParam makeDrawParamFromDesc(const DrawDesc& desc) {
 }
 
 CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc) {
+  auto hot = makeFlatDrawStateRecord(desc);
+  auto shaderLayout = makeDrawShaderLayoutContext(desc);
+  auto debug = makeDrawDebugSnapshot(desc, hot);
   DrawDesc state = desc;
   state.userVertexData.clear();
   state.userIndexData.clear();
-  return CanonicalDrawState{makeFlatDrawStateRecord(desc), std::move(state)};
+  return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug), std::move(state)};
+}
+
+CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args) {
+  DrawDesc cold = makeDrawDescFromState(state, args);
+  auto hot = makeFlatDrawStateRecordFromState(state, cold);
+  auto shaderLayout = makeDrawShaderLayoutContext(cold);
+  auto debug = makeDrawDebugSnapshot(cold, hot);
+  cold.userVertexData.clear();
+  cold.userIndexData.clear();
+  return CanonicalDrawState{std::move(hot), std::move(shaderLayout), std::move(debug), std::move(cold)};
 }
 
 bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena) {
@@ -3878,15 +4048,13 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
   if (draws.empty()) {
     return D3D_OK;
   }
-  // Snapshot full state once. The per-draw fields in `base` (primType,
-  // counts, UP payloads) are placeholders — the encoder synthesizes
-  // them per-DrawParam during the loop.
+  // Snapshot full state once. The per-draw fields in the canonical cold
+  // state are placeholders — the encoder synthesizes them per DrawParam.
   const auto& first = draws.front();
-  DrawDesc base = snapshotDrawDesc(first.primitiveType, first.primitiveCount,
-                                   first.startVertex, first.baseVertexIndex,
-                                   first.startIndex, first.indexType);
   DrawRunDesc run;
-  run.state = makeCanonicalDrawState(base);
+  run.state = makeCanonicalDrawStateFromState(
+      state_, DrawCallArgs{first.primitiveType, first.primitiveCount, first.startVertex,
+                           first.baseVertexIndex, first.startIndex, first.indexType});
   run.draws.reserve(draws.size());
 
   bool packedPayloads = true;

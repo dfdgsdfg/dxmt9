@@ -84,6 +84,34 @@ ShaderRef makeBytecodeShader(u64 hash, std::vector<u8> bytes) {
   return shader;
 }
 
+void testStateValueTableDirtyHashContract() {
+  RenderStateTable a;
+  RenderStateTable b;
+
+  a.set(RS_Z_ENABLE, 1u);
+  b.set(RS_Z_ENABLE, 1u);
+  const u64 firstHash = a.rollingHash;
+  checkEq(a, b, "state value table equality ignores dirty metadata");
+  check((a.dirty[RenderStateTable::word(RS_Z_ENABLE)] & RenderStateTable::bit(RS_Z_ENABLE)) != 0,
+        "state value table marks dirty bit on insert");
+
+  a.clearDirty();
+  checkEq(a, b, "state value table remains equal after clearing dirty metadata");
+  a.set(RS_Z_ENABLE, 1u);
+  checkEq(a.rollingHash, firstHash, "state value table hash is stable for redundant set");
+  check(a.dirty[RenderStateTable::word(RS_Z_ENABLE)] == 0u,
+        "state value table redundant set does not mark dirty");
+
+  a.set(RS_Z_ENABLE, 0u);
+  check(a.rollingHash != firstHash, "state value table hash changes on value update");
+  check((a.dirty[RenderStateTable::word(RS_Z_ENABLE)] & RenderStateTable::bit(RS_Z_ENABLE)) != 0,
+        "state value table marks dirty bit on value update");
+
+  a.erase(RS_Z_ENABLE);
+  check(!a.contains(RS_Z_ENABLE), "state value table erase clears occupancy");
+  checkEq(a.size(), std::size_t{0}, "state value table erase updates count");
+}
+
 void testStateDrawTransform() {
   DeviceState state;
   state.reset();
@@ -316,9 +344,21 @@ void testFlatDrawStateKey() {
   const DrawDesc sameStateDifferentDraw = makeDrawDescFromState(
       state, {PrimitiveType::LineList, 7, 33, -4, 19, IndexType::UInt32});
   const FlatDrawStateKey firstKey = makeFlatDrawStateKey(first);
+  auto directCanonical = makeCanonicalDrawStateFromState(
+      state, {PrimitiveType::TriangleList, 2, 0, 0, 0, IndexType::UInt16});
 
   checkEq(firstKey, makeFlatDrawStateKey(first),
           "identical draw state summaries compare equal");
+  checkEq(directCanonical.hot.key, firstKey,
+          "direct state canonicalization builds the same flat key without cold map round-trip");
+  checkEq(directCanonical.hot.renderStates.hash, firstKey.renderStateHash,
+          "direct state canonicalization carries render-state hash in hot storage");
+  checkEq(flatStateOr(directCanonical.hot.renderStates, RS_Z_ENABLE, 0u), 1u,
+          "direct state canonicalization copies fixed render-state table into hot storage");
+  checkEq(directCanonical.shaderLayout.vertexDecl.fvf, first.vertexDecl.fvf,
+          "direct state canonicalization carries shader/layout context separately");
+  check(directCanonical.coldDesc.userVertexData.empty(),
+        "direct state canonicalization keeps cold snapshot payload-free");
   checkEq(firstKey, makeFlatDrawStateKey(sameStateDifferentDraw),
           "draw parameters do not disturb flat base draw state");
 
@@ -369,6 +409,18 @@ void testFlatDrawStateKey() {
         "canonical cold draw state strips index UP payload");
   checkEq(run.state.hot.key, makeFlatDrawStateRecord(run.state.coldDesc).key,
           "flat draw state record exposes the canonical key");
+  checkEq(run.state.shaderLayout.vertexShader.hash, run.state.coldDesc.vertexShader.hash,
+          "canonical shader/layout context carries vertex shader identity");
+  checkEq(run.state.shaderLayout.pixelShader.hash, run.state.coldDesc.pixelShader.hash,
+          "canonical shader/layout context carries pixel shader identity");
+  checkEq(run.state.shaderLayout.vertexDecl.fvf, run.state.coldDesc.vertexDecl.fvf,
+          "canonical shader/layout context carries vertex layout");
+  checkEq(run.state.debug.streamMask, run.state.hot.streamMask,
+          "canonical debug snapshot records hot stream mask");
+  checkEq(run.state.debug.textureMask, run.state.hot.textureMask,
+          "canonical debug snapshot records hot texture mask");
+  checkEq(run.state.debug.renderStateHash, run.state.hot.key.renderStateHash,
+          "canonical debug snapshot records hot render-state hash");
   checkEq(run.state.hot.streamBuffers[0], stream0->handle(),
           "flat draw state record exposes hot stream buffer handles");
   checkEq(run.state.hot.streamOffsets[0], 16u,
@@ -398,6 +450,10 @@ void testFlatDrawStateKey() {
           "flat draw state record exposes hot depth attachment");
   checkEq(run.state.view().key(), run.state.hot.key,
           "flat draw state view exposes hot flat key");
+  check(&run.state.view().shaderContext() == &run.state.shaderLayout,
+        "flat draw state view exposes shader/layout context");
+  check(&run.state.view().debugSnapshot() == &run.state.debug,
+        "flat draw state view exposes debug snapshot");
   check(&run.state.view().desc() == &run.state.coldDesc,
         "flat draw state view exposes cold draw state");
   checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[0])),
@@ -413,6 +469,16 @@ void testFlatDrawStateKey() {
           "draw-run key remains separate from mutable draw params");
   checkEq(run.state.hot.key, makeFlatDrawStateKey(drawDescForParam(run.draws[1])),
           "mutated draw params and UP payloads still do not alter the run key");
+
+  auto payloadCanonical = makeCanonicalDrawState(withUserPayload);
+  checkEq(payloadCanonical.debug.userVertexBytes, 4u,
+          "canonical debug snapshot keeps stripped vertex payload byte count");
+  checkEq(payloadCanonical.debug.userIndexBytes, 2u,
+          "canonical debug snapshot keeps stripped index payload byte count");
+  check(payloadCanonical.coldDesc.userVertexData.empty(),
+        "canonical cold desc strips vertex payload after debug capture");
+  check(payloadCanonical.coldDesc.userIndexData.empty(),
+        "canonical cold desc strips index payload after debug capture");
 
   DrawRunDesc packedRun{};
   packedRun.state = makeCanonicalDrawState(first);
@@ -508,6 +574,7 @@ void testFlatDrawStateKey() {
 }  // namespace
 
 int main() {
+  testStateValueTableDirtyHashContract();
   testStateDrawTransform();
   testConstantsAndShaderRefs();
   testResourceBindingsAndAttachments();

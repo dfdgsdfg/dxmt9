@@ -5,6 +5,7 @@
 #include <functional>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <span>
@@ -620,6 +621,218 @@ struct RenderStateSnapshot {
   std::unordered_map<u32, u32> values;
 };
 
+template <std::size_t MaxEntries>
+struct StateValueTable {
+  struct Entry {
+    u32 first = 0;
+    u32 second = 0;
+  };
+
+  struct ValueRef {
+    StateValueTable* table = nullptr;
+    u32 key = 0;
+
+    constexpr operator u32() const noexcept {
+      return table ? table->at(key) : 0u;
+    }
+
+    constexpr ValueRef& operator=(u32 value) noexcept {
+      if (table) {
+        table->set(key, value);
+      }
+      return *this;
+    }
+
+    constexpr ValueRef& operator=(const ValueRef& value) noexcept {
+      return *this = static_cast<u32>(value);
+    }
+  };
+
+  std::array<u32, MaxEntries> values{};
+  std::array<u64, (MaxEntries + 63u) / 64u> occupied{};
+  std::array<u64, (MaxEntries + 63u) / 64u> dirty{};
+  u32 count = 0;
+  u64 rollingHash = 0;
+
+  static constexpr bool validKey(u32 key) noexcept {
+    return key < MaxEntries;
+  }
+
+  static constexpr u64 entryHash(u32 key, u32 value) noexcept {
+    u64 hash = 1469598103934665603ull;
+    hash ^= key;
+    hash *= 1099511628211ull;
+    hash ^= value;
+    hash *= 1099511628211ull;
+    return hash;
+  }
+
+  static constexpr u64 bit(u32 key) noexcept {
+    return 1ull << (key % 64u);
+  }
+
+  static constexpr std::size_t word(u32 key) noexcept {
+    return key / 64u;
+  }
+
+  constexpr bool contains(u32 key) const noexcept {
+    return validKey(key) && (occupied[word(key)] & bit(key)) != 0;
+  }
+
+  constexpr bool empty() const noexcept {
+    return count == 0;
+  }
+
+  constexpr std::size_t size() const noexcept {
+    return count;
+  }
+
+  constexpr u32 at(u32 key) const noexcept {
+    return contains(key) ? values[key] : 0u;
+  }
+
+  constexpr u32 valueOr(u32 key, u32 fallback = 0u) const noexcept {
+    return contains(key) ? values[key] : fallback;
+  }
+
+  constexpr ValueRef operator[](u32 key) noexcept {
+    return ValueRef{.table = this, .key = key};
+  }
+
+  constexpr u32 operator[](u32 key) const noexcept {
+    return at(key);
+  }
+
+  constexpr void set(u32 key, u32 value) noexcept {
+    if (!validKey(key)) {
+      return;
+    }
+    const auto mask = bit(key);
+    const auto slot = word(key);
+    if ((occupied[slot] & mask) != 0) {
+      if (values[key] == value) {
+        return;
+      }
+      rollingHash ^= entryHash(key, values[key]);
+    } else {
+      occupied[slot] |= mask;
+      ++count;
+    }
+    values[key] = value;
+    dirty[slot] |= mask;
+    rollingHash ^= entryHash(key, value);
+  }
+
+  constexpr void erase(u32 key) noexcept {
+    if (!contains(key)) {
+      return;
+    }
+    const auto mask = bit(key);
+    const auto slot = word(key);
+    rollingHash ^= entryHash(key, values[key]);
+    values[key] = 0;
+    occupied[slot] &= ~mask;
+    dirty[slot] |= mask;
+    --count;
+  }
+
+  constexpr void clear() noexcept {
+    values = {};
+    occupied = {};
+    dirty = {};
+    count = 0;
+    rollingHash = 0;
+  }
+
+  constexpr void clearDirty() noexcept {
+    dirty = {};
+  }
+
+  std::unordered_map<u32, u32> toMap() const {
+    std::unordered_map<u32, u32> out;
+    out.reserve(count);
+    for (u32 key = 0; key < MaxEntries; ++key) {
+      if (contains(key)) {
+        out.emplace(key, values[key]);
+      }
+    }
+    return out;
+  }
+
+  class const_iterator {
+   public:
+    using value_type = Entry;
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::forward_iterator_tag;
+
+    constexpr const_iterator() = default;
+    constexpr const_iterator(const StateValueTable* table, u32 index)
+        : table_(table), index_(index) {
+      advance();
+    }
+
+    constexpr value_type operator*() const noexcept {
+      return Entry{.first = index_, .second = table_->values[index_]};
+    }
+
+    constexpr const value_type* operator->() const noexcept {
+      cached_ = **this;
+      return &cached_;
+    }
+
+    constexpr const_iterator& operator++() noexcept {
+      ++index_;
+      advance();
+      return *this;
+    }
+
+    constexpr bool operator==(const const_iterator& other) const noexcept {
+      return table_ == other.table_ && index_ == other.index_;
+    }
+
+    constexpr bool operator!=(const const_iterator& other) const noexcept {
+      return !(*this == other);
+    }
+
+   private:
+    constexpr void advance() noexcept {
+      if (!table_) {
+        return;
+      }
+      while (index_ < MaxEntries && !table_->contains(index_)) {
+        ++index_;
+      }
+    }
+
+    const StateValueTable* table_ = nullptr;
+    u32 index_ = MaxEntries;
+    mutable value_type cached_{};
+  };
+
+  constexpr const_iterator begin() const noexcept {
+    return const_iterator{this, 0};
+  }
+
+  constexpr const_iterator end() const noexcept {
+    return const_iterator{this, static_cast<u32>(MaxEntries)};
+  }
+
+  constexpr const_iterator find(u32 key) const noexcept {
+    return contains(key) ? const_iterator{this, key} : end();
+  }
+
+  friend constexpr bool operator==(const StateValueTable& a, const StateValueTable& b) noexcept {
+    return a.values == b.values &&
+           a.occupied == b.occupied &&
+           a.count == b.count &&
+           a.rollingHash == b.rollingHash;
+  }
+};
+
+using RenderStateTable = StateValueTable<kMaxStateSlots>;
+using TextureStageStateTable = StateValueTable<kMaxTextureStageStates>;
+using SamplerStateTable = StateValueTable<kMaxSamplerStates>;
+
 struct FlatStateEntry {
   u32 state = 0;
   u32 value = 0;
@@ -755,11 +968,52 @@ struct FlatDrawStateRecord {
   friend constexpr bool operator==(const FlatDrawStateRecord&, const FlatDrawStateRecord&) = default;
 };
 
+struct DrawShaderLayoutContext {
+  VertexDeclSnapshot vertexDecl{};
+  ShaderRef vertexShader{};
+  ShaderRef pixelShader{};
+  VertexShaderConstants vsConst{};
+  PixelShaderConstants psConst{};
+  Matrix4x4 worldViewProj{};
+  std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
+  u32 clipPlaneMask = 0;
+  std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
+
+  friend bool operator==(const DrawShaderLayoutContext&, const DrawShaderLayoutContext&) = default;
+};
+
+struct DrawDebugSnapshot {
+  PrimitiveType primitiveType = PrimitiveType::TriangleList;
+  u32 primitiveCount = 0;
+  u32 startVertex = 0;
+  i32 baseVertexIndex = 0;
+  u32 startIndex = 0;
+  IndexType indexType = IndexType::UInt16;
+  u32 userVertexBytes = 0;
+  u32 userIndexBytes = 0;
+  u32 streamMask = 0;
+  u32 textureMask = 0;
+  u32 samplerStateMask = 0;
+  u32 renderTargetMask = 0;
+  u64 renderStateHash = 0;
+  u64 vertexDeclHash = 0;
+  u64 vertexShaderHash = 0;
+  u64 pixelShaderHash = 0;
+
+  friend constexpr bool operator==(const DrawDebugSnapshot&, const DrawDebugSnapshot&) = default;
+};
+
 struct FlatDrawStateView {
   const FlatDrawStateRecord* hot = nullptr;
+  const DrawShaderLayoutContext* shaderLayout = nullptr;
+  const DrawDebugSnapshot* debug = nullptr;
   const DrawDesc* coldDesc = nullptr;
 
   constexpr const FlatDrawStateKey& key() const noexcept { return hot->key; }
+  constexpr bool hasShaderContext() const noexcept { return shaderLayout != nullptr; }
+  constexpr bool hasDebugSnapshot() const noexcept { return debug != nullptr; }
+  constexpr const DrawShaderLayoutContext& shaderContext() const noexcept { return *shaderLayout; }
+  constexpr const DrawDebugSnapshot& debugSnapshot() const noexcept { return *debug; }
   constexpr const DrawDesc& desc() const noexcept { return *coldDesc; }
 };
 
@@ -772,14 +1026,27 @@ struct DrawPayloadRange {
 
 struct CanonicalDrawState {
   FlatDrawStateRecord hot{};
+  DrawShaderLayoutContext shaderLayout{};
+  DrawDebugSnapshot debug{};
   DrawDesc coldDesc{};
 
   CanonicalDrawState() = default;
-  CanonicalDrawState(FlatDrawStateRecord hotState, DrawDesc coldState)
-      : hot(std::move(hotState)), coldDesc(std::move(coldState)) {}
+  CanonicalDrawState(FlatDrawStateRecord hotState,
+                     DrawShaderLayoutContext shaderLayoutState,
+                     DrawDebugSnapshot debugState,
+                     DrawDesc coldState)
+      : hot(std::move(hotState)),
+        shaderLayout(std::move(shaderLayoutState)),
+        debug(std::move(debugState)),
+        coldDesc(std::move(coldState)) {}
 
   constexpr FlatDrawStateView view() const noexcept {
-    return FlatDrawStateView{.hot = &hot, .coldDesc = &coldDesc};
+    return FlatDrawStateView{
+        .hot = &hot,
+        .shaderLayout = &shaderLayout,
+        .debug = &debug,
+        .coldDesc = &coldDesc,
+    };
   }
 };
 
@@ -1230,8 +1497,11 @@ FfpPixelKey makeFfpPixelKey(const DeviceState& state);
 DrawDesc makeDrawDescFromState(const DeviceState& state, const DrawCallArgs& args);
 FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc& desc);
 FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc& desc);
+DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc& desc);
+DrawDebugSnapshot makeDrawDebugSnapshot(const DrawDesc& desc, const FlatDrawStateRecord& hot);
 DrawParam makeDrawParamFromDesc(const DrawDesc& desc);
 CanonicalDrawState makeCanonicalDrawState(const DrawDesc& desc);
+CanonicalDrawState makeCanonicalDrawStateFromState(const DeviceState& state, const DrawCallArgs& args);
 bool packDrawParamPayload(DrawParam& param, std::vector<u8>& payloadArena);
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices);
@@ -1268,9 +1538,9 @@ struct DeviceState {
   Viewport viewport{};
   Rect scissorRect{};
   bool scissorEnabled = false;
-  std::unordered_map<u32, u32> renderStates;
-  std::array<std::unordered_map<u32, u32>, kMaxTextureStages> textureStageStates{};
-  std::array<std::unordered_map<u32, u32>, kMaxSamplers> samplerStates{};
+  RenderStateTable renderStates;
+  std::array<TextureStageStateTable, kMaxTextureStages> textureStageStates{};
+  std::array<SamplerStateTable, kMaxSamplers> samplerStates{};
   std::unordered_map<u32, Matrix4x4> transforms;
   std::array<Light, kMaxLights> lights{};
   std::array<bool, kMaxLights> lightEnabled{};

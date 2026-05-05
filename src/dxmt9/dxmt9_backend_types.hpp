@@ -122,6 +122,8 @@ struct ChunkSlot {
 
   void appendDrawRun(DrawRunDesc drawRun) {
     drawRun.state.hot = makeFlatDrawStateRecord(drawRun.state.coldDesc);
+    drawRun.state.shaderLayout = makeDrawShaderLayoutContext(drawRun.state.coldDesc);
+    drawRun.state.debug = makeDrawDebugSnapshot(drawRun.state.coldDesc, drawRun.state.hot);
     const auto stateIndex = static_cast<std::uint32_t>(drawStates.size());
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     drawStates.push_back(std::move(drawRun.state));

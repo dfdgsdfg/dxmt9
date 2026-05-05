@@ -38,30 +38,36 @@ using core::RS_Z_WRITE_ENABLE;
 DrawUniforms buildDrawUniforms(core::FlatDrawStateView state) {
   const auto& desc = state.desc();
   const auto& hot = *state.hot;
+  const auto* shader = state.hasShaderContext() ? &state.shaderContext() : nullptr;
+  const auto& vsConst = shader ? shader->vsConst : desc.vsConst;
+  const auto& psConst = shader ? shader->psConst : desc.psConst;
+  const auto& worldViewProj = shader ? shader->worldViewProj : desc.worldViewProj;
+  const auto& textureTransforms = shader ? shader->textureTransforms : desc.textureTransforms;
+  const auto& clipPlanes = shader ? shader->clipPlanes : desc.clipPlanes;
   const auto& rs = hot.renderStates;
   DrawUniforms uniforms;
-  uniforms.vsFloatConst = desc.vsConst.float4;
-  uniforms.vsIntConst = desc.vsConst.int4;
+  uniforms.vsFloatConst = vsConst.float4;
+  uniforms.vsIntConst = vsConst.int4;
   for (std::size_t i = 0; i < core::kMaxBoolConstants; ++i) {
-    uniforms.vsBoolConst[i] = desc.vsConst.bools[i] ? 1u : 0u;
+    uniforms.vsBoolConst[i] = vsConst.bools[i] ? 1u : 0u;
   }
   for (std::size_t row = 0; row < 4; ++row) {
     for (std::size_t col = 0; col < 4; ++col) {
-      uniforms.ffpWorldViewProj[row][col] = desc.worldViewProj.m[row * 4 + col];
+      uniforms.ffpWorldViewProj[row][col] = worldViewProj.m[row * 4 + col];
     }
   }
   for (std::size_t stage = 0; stage < core::kMaxTextureStages; ++stage) {
     for (std::size_t row = 0; row < 4; ++row) {
       for (std::size_t col = 0; col < 4; ++col) {
         uniforms.ffpTextureTransforms[stage][row][col] =
-            desc.textureTransforms[stage].m[row * 4 + col];
+            textureTransforms[stage].m[row * 4 + col];
       }
     }
   }
-  uniforms.psFloatConst = desc.psConst.float4;
-  uniforms.psIntConst = desc.psConst.int4;
+  uniforms.psFloatConst = psConst.float4;
+  uniforms.psIntConst = psConst.int4;
   for (std::size_t i = 0; i < core::kMaxBoolConstants; ++i) {
-    uniforms.psBoolConst[i] = desc.psConst.bools[i] ? 1u : 0u;
+    uniforms.psBoolConst[i] = psConst.bools[i] ? 1u : 0u;
   }
   uniforms.halfPixelFixup = core::halfPixelFixup(hot.viewport.viewport);
   uniforms.viewportOrigin = {static_cast<f32>(hot.viewport.viewport.x),
@@ -96,7 +102,7 @@ DrawUniforms buildDrawUniforms(core::FlatDrawStateView state) {
   uniforms.fogDensity =
       std::bit_cast<f32>(core::flatStateOr(rs, RS_FOG_DENSITY, std::bit_cast<u32>(1.0f)));
   for (std::size_t i = 0; i < core::kMaxClipPlanes; ++i) {
-    uniforms.clipPlanes[i] = desc.clipPlanes[i];
+    uniforms.clipPlanes[i] = clipPlanes[i];
   }
   return uniforms;
 }

@@ -74,11 +74,11 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
 
 }  // namespace
 
-std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const DrawDesc& desc) {
+std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const VertexDeclSnapshot& decl) {
   FixedFunctionVertexLayout layout;
-  if (!desc.vertexDecl.elements.empty()) {
+  if (!decl.elements.empty()) {
     u32 computedStride = 0;
-    for (const auto& element : desc.vertexDecl.elements) {
+    for (const auto& element : decl.elements) {
       if (element.stream != 0) {
         continue;
       }
@@ -109,7 +109,7 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
         layout.texcoordOffset[element.usageIndex] = element.offset;
       }
     }
-    layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : computedStride;
+    layout.stride = decl.streams[0].stride ? decl.streams[0].stride : computedStride;
     if (layout.valid) {
       layout.hash = hashFixedFunctionLayout(layout);
       return layout;
@@ -117,7 +117,7 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
     return std::nullopt;
   }
 
-  const u32 fvf = desc.vertexDecl.fvf;
+  const u32 fvf = decl.fvf;
   const u32 position = fvf & kFvfPositionMask;
   if (position != kFvfXyzrhw && position != kFvfXyz) {
     return std::nullopt;
@@ -161,9 +161,13 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const D
     offset += fvfTexcoordSize(fvf, i) * 4u;
   }
 
-  layout.stride = desc.vertexDecl.streams[0].stride ? desc.vertexDecl.streams[0].stride : offset;
+  layout.stride = decl.streams[0].stride ? decl.streams[0].stride : offset;
   layout.hash = hashFixedFunctionLayout(layout);
   return layout;
+}
+
+std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const DrawDesc& desc) {
+  return decodeFixedFunctionVertexLayout(desc.vertexDecl);
 }
 
 std::string makeFfpVertexSource(const FfpVertexKey& key, const DrawDesc& desc) {
@@ -427,18 +431,22 @@ std::string makeFfpPixelSource(const FfpPixelKey& key, const DrawDesc& desc) {
   return out.str();
 }
 
-u32 computeVertexDeclStride(const DrawDesc& desc) {
-  if (desc.vertexDecl.streams[0].stride != 0) {
-    return desc.vertexDecl.streams[0].stride;
+u32 computeVertexDeclStride(const VertexDeclSnapshot& decl) {
+  if (decl.streams[0].stride != 0) {
+    return decl.streams[0].stride;
   }
   u32 computedStride = 0;
-  for (const auto& element : desc.vertexDecl.elements) {
+  for (const auto& element : decl.elements) {
     if (element.stream != 0) {
       continue;
     }
     computedStride = std::max(computedStride, static_cast<u32>(element.offset + declTypeSize(element.type)));
   }
   return computedStride;
+}
+
+u32 computeVertexDeclStride(const DrawDesc& desc) {
+  return computeVertexDeclStride(desc.vertexDecl);
 }
 
 u64 hashVertexDeclaration(const VertexDeclSnapshot& decl) {

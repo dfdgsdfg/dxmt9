@@ -12,10 +12,13 @@
 #include "dxmt9/core.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
-#include <unordered_map>
+#include <type_traits>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace dxmt9::resources {
@@ -52,15 +55,170 @@ struct SurfaceRecord {
   u64 lastUsedSeqId = 0;
 };
 
-// Pool container. Members are public so existing callers can manipulate the
-// maps directly; the find* / reclaim helpers below are the preferred access
-// pattern for new code.
+namespace detail {
+
+enum class ResourceHandleKind : u64 {
+  Buffer = 1,
+  Texture = 2,
+  Surface = 3,
+};
+
+template <typename Record, ResourceHandleKind Kind>
+class HandleArena {
+ public:
+  using RecordType = Record;
+
+  core::Handle insert(Record&& record) {
+    u32 index = 0;
+    if (!freeList_.empty()) {
+      index = freeList_.back();
+      freeList_.pop_back();
+    } else {
+      if (slots_.size() >= static_cast<std::size_t>(std::numeric_limits<u32>::max())) {
+        return {};
+      }
+      index = static_cast<u32>(slots_.size());
+      slots_.push_back({});
+    }
+
+    auto& slot = slots_[index];
+    if (slot.generation == 0) {
+      slot.generation = 1;
+    }
+    slot.record.emplace(std::move(record));
+    return core::Handle{encode(index, slot.generation)};
+  }
+
+  Record* find(u64 handleValue) noexcept {
+    const auto decoded = decode(handleValue);
+    if (!decoded) {
+      return nullptr;
+    }
+    auto& [index, generation] = *decoded;
+    if (index >= slots_.size()) {
+      return nullptr;
+    }
+    auto& slot = slots_[index];
+    if (!slot.record || slot.generation != generation) {
+      return nullptr;
+    }
+    return &*slot.record;
+  }
+
+  const Record* find(u64 handleValue) const noexcept {
+    const auto decoded = decode(handleValue);
+    if (!decoded) {
+      return nullptr;
+    }
+    auto& [index, generation] = *decoded;
+    if (index >= slots_.size()) {
+      return nullptr;
+    }
+    const auto& slot = slots_[index];
+    if (!slot.record || slot.generation != generation) {
+      return nullptr;
+    }
+    return &*slot.record;
+  }
+
+  template <typename BeforeErase>
+  void reclaimCompleted(u64 completedSeqId, BeforeErase&& beforeErase) {
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+      auto& slot = slots_[i];
+      if (!slot.record) {
+        continue;
+      }
+      auto& record = *slot.record;
+      if (record.destroyPending && record.lastUsedSeqId <= completedSeqId) {
+        beforeErase(record);
+        releaseSlot(static_cast<u32>(i));
+      }
+    }
+  }
+
+  void clear() noexcept {
+    slots_.clear();
+    freeList_.clear();
+  }
+
+ private:
+  struct DecodedHandle {
+    u32 index = 0;
+    u32 generation = 0;
+  };
+
+  struct Slot {
+    std::optional<Record> record;
+    u32 generation = 1;
+  };
+
+  static constexpr u32 kIndexBits = 32;
+  static constexpr u32 kGenerationBits = 24;
+  static constexpr u32 kKindBits = 8;
+  static constexpr u32 kGenerationShift = kIndexBits;
+  static constexpr u32 kKindShift = kIndexBits + kGenerationBits;
+  static constexpr u64 kIndexMask = (u64{1} << kIndexBits) - 1u;
+  static constexpr u64 kGenerationMask = (u64{1} << kGenerationBits) - 1u;
+  static constexpr u64 kKindMask = (u64{1} << kKindBits) - 1u;
+
+  static u64 encode(u32 index, u32 generation) noexcept {
+    return (static_cast<u64>(Kind) << kKindShift) |
+           ((static_cast<u64>(generation) & kGenerationMask) << kGenerationShift) |
+           (static_cast<u64>(index) & kIndexMask);
+  }
+
+  static std::optional<DecodedHandle> decode(u64 handleValue) noexcept {
+    if (handleValue == 0) {
+      return std::nullopt;
+    }
+    const u64 kind = (handleValue >> kKindShift) & kKindMask;
+    if (kind != static_cast<u64>(Kind)) {
+      return std::nullopt;
+    }
+    const u32 generation =
+        static_cast<u32>((handleValue >> kGenerationShift) & kGenerationMask);
+    if (generation == 0) {
+      return std::nullopt;
+    }
+    return DecodedHandle{
+        .index = static_cast<u32>(handleValue & kIndexMask),
+        .generation = generation,
+    };
+  }
+
+  static u32 nextGeneration(u32 generation) noexcept {
+    generation = (generation + 1u) & static_cast<u32>(kGenerationMask);
+    return generation == 0 ? 1u : generation;
+  }
+
+  void releaseSlot(u32 index) noexcept {
+    auto& slot = slots_[index];
+    slot.record.reset();
+    slot.generation = nextGeneration(slot.generation);
+    freeList_.push_back(index);
+  }
+
+  std::vector<Slot> slots_;
+  std::vector<u32> freeList_;
+};
+
+template <typename Record>
+struct LegacyMapToken {
+  using mapped_type = Record;
+
+  void clear() noexcept {}
+};
+
+}  // namespace detail
+
+// Pool container. The typed arenas are the only production storage path.
+// The public legacy tokens remain temporarily so older destroy call sites can
+// select a record kind without exposing a direct unordered_map fallback.
 struct Pool {
-  std::unordered_map<u64, BufferRecord> buffers;
-  std::unordered_map<u64, TextureRecord> textures;
-  std::unordered_map<u64, SurfaceRecord> surfaces;
+  detail::LegacyMapToken<BufferRecord> buffers;
+  detail::LegacyMapToken<TextureRecord> textures;
+  detail::LegacyMapToken<SurfaceRecord> surfaces;
   std::unordered_set<u64> dumpedGpuTextures;
-  u64 nextHandle = 1;
 
   // Lookup helpers — return nullptr on miss. Caller is expected to hold the
   // protecting mutex (currently commandQueue_->mutex_).
@@ -78,6 +236,9 @@ struct Pool {
 
   // Drop ALL records (teardown path; bypasses destroyPending / seq checks).
   void purgeAll() noexcept {
+    bufferArena_.clear();
+    textureArena_.clear();
+    surfaceArena_.clear();
     buffers.clear();
     textures.clear();
     surfaces.clear();
@@ -88,11 +249,17 @@ struct Pool {
   // existed.
   template <typename Map>
   bool markDestroyAndGc(Map& map, u64 handleValue, u64 completedSeqId) {
-    auto it = map.find(handleValue);
-    if (it == map.end()) return false;
-    it->second.destroyPending = true;
-    reclaimCompleted(completedSeqId);
-    return true;
+    (void)map;
+    using Record = typename std::remove_cv_t<Map>::mapped_type;
+    if constexpr (std::is_same_v<Record, BufferRecord>) {
+      return markBufferDestroyAndGc(handleValue, completedSeqId);
+    } else if constexpr (std::is_same_v<Record, TextureRecord>) {
+      return markTextureDestroyAndGc(handleValue, completedSeqId);
+    } else if constexpr (std::is_same_v<Record, SurfaceRecord>) {
+      return markSurfaceDestroyAndGc(handleValue, completedSeqId);
+    } else {
+      return false;
+    }
   }
 
   // Record a CPU-visible write to a buffer (updates shadow + mirrors to
@@ -190,6 +357,15 @@ struct Pool {
   void markStretchResources(const core::StretchRectDesc& desc, u64 seqId);
   void markReadbackResources(const core::ReadbackDesc& desc, u64 seqId);
   void markColorFillResources(const core::ColorFillDesc& desc, u64 seqId);
+
+ private:
+  bool markBufferDestroyAndGc(u64 handleValue, u64 completedSeqId);
+  bool markTextureDestroyAndGc(u64 handleValue, u64 completedSeqId);
+  bool markSurfaceDestroyAndGc(u64 handleValue, u64 completedSeqId);
+
+  detail::HandleArena<BufferRecord, detail::ResourceHandleKind::Buffer> bufferArena_;
+  detail::HandleArena<TextureRecord, detail::ResourceHandleKind::Texture> textureArena_;
+  detail::HandleArena<SurfaceRecord, detail::ResourceHandleKind::Surface> surfaceArena_;
 };
 
 }  // namespace dxmt9::resources

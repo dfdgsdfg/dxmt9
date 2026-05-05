@@ -64,6 +64,7 @@ u32 declTypeSize(u32 type);
 
 // Combined stride computation: returns the declared stream[0].stride if set,
 // otherwise the maximum (offset + size) over all elements on stream[0].
+u32 computeVertexDeclStride(const core::VertexDeclSnapshot& decl);
 u32 computeVertexDeclStride(const core::DrawDesc& desc);
 
 // Per-input-register binding for the translated programmable vertex path.
@@ -91,6 +92,7 @@ u64 hashVertexDeclaration(const core::VertexDeclSnapshot& decl);
 // Decode a DrawDesc's vertex declaration into a FixedFunctionVertexLayout.
 // Returns nullopt if the declaration doesn't describe a position attribute
 // recognizable as FFP (e.g., it's a programmable-pipeline decl).
+std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const core::VertexDeclSnapshot& decl);
 std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const core::DrawDesc& desc);
 
 // Generate Metal Shading Language source for the FFP vertex / pixel
