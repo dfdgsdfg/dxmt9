@@ -219,6 +219,46 @@ flowchart TD
   class Completion,Completed,PresentCompleted,Boundary,Dequeued,Cap sync
 ```
 
+## Draw-Path Probe DoD
+
+Post-SFIV split diagnostics indicate draw completion dominates, so the draw path must be measurable before changing behavior.
+
+- [x] Render pass and split counters distinguish normal pass reuse from forced splits.
+- [x] Pipeline cache hit/miss counters expose state churn and shader variant pressure.
+- [x] Draw call and triangle counters quantify per-frame draw-path volume.
+- [x] Bind churn counters track vertex/index buffers, textures, samplers, and render targets.
+- [x] Shader/compat wait buckets separate shader variant, compatibility flags, and related completion waits.
+- [x] Indexed draw counters distinguish direct indexed draws from diagnostic expansion.
+- [x] Hazard probe counters distinguish exact overlap from legacy Bloom overlap and Bloom false positives.
+- [x] Present source counters identify selected source validity, source size, destination size, handle, texture, format, and sample count.
+- [ ] Async/preacquire policy is intentionally postponed until direct draw, exact hazard, and present-source signals are clean.
+
+```mermaid
+flowchart LR
+  DrawRun[DrawRun records] --> Encoder[draw encoder]
+  Encoder --> Pass[render pass begin/end]
+  Encoder --> Pipeline[pipeline cache lookup]
+  Encoder --> Bind[Metal bind calls]
+  Encoder --> Issue[Metal draw issue]
+
+  Pass --> Split[split reason counters]
+  Pipeline --> HitMiss[pipeline hit/miss/build]
+  Bind --> BindCounters[texture/sampler/vb/ib/uniform/pso counters]
+  Issue --> Volume[draw/primitive/triangle/UP-byte counters]
+  Issue --> ShaderBucket[VS/PS/variant bucket]
+
+  ShaderBucket --> QueueDiag[chunk diagnostics]
+  QueueDiag --> Completion[completion wait buckets]
+  Completion --> Compat[compat flag wait ms]
+```
+
+Current draw/hazard/present findings:
+
+- Default indexed draws stay direct: the production path issues Metal indexed draws against the bound or UP index buffer. `DXMT_FORCE_EXPAND_INDEXED=1` is an opt-in diagnostic/compatibility lane that expands indexed geometry into a transient non-indexed stream; it should not be used as a default performance fix.
+- Exact hazard tracking replaces Bloom-based split decisions. Bloom overlap and Bloom false-positive counters are useful diagnostics, but render-pass split decisions must be driven by exact handle overlap so false positives do not create avoidable encoder churn.
+- SFIV present source selection is not currently suspect. The source counter lane reports a valid 1280x720 source, matching `present_src=1280x720` and `present_dst=1280x720` in the SFIV samples.
+- Async acquire, preacquire, and latency-cap tuning should stay opt-in and paused for this investigation until draw completion and exact-hazard split counts explain the dominant stalls without relying on present-policy changes.
+
 Current buffering implications:
 
 - The chunk ring has 32 slots and an in-flight cap of 31 chunks.
@@ -359,9 +399,11 @@ Important current behavior:
 - `DXMT9_SPLIT_PRESENT_CHUNK=1` and `DXMT9_SPLIT_PRESENT_ACQUIRE=1` are experiments only. The existing split-present run was slower, so they are not defaults.
 - `DXMT9_PRESENT_ACQUIRE_ON_SUBMIT=1` is also experimental. It moves drawable acquisition out of the encode worker, but the first measurement is slower because it doubles command-buffer traffic.
 - `DXMT9_PRESENT_ASYNC_ACQUIRE=1` is experimental too. It is queue-owned, keeps command-buffer count stable, queues per-present drawable tokens, and serializes actual `nextDrawableRetained()` work to avoid retained-drawable hoarding.
+- `DXMT9_PRESENT_ASYNC_ACQUIRE=1`, `DXMT9_PRESENT_ACQUIRE_ON_SUBMIT=1`, and `DXMT9_PRESENT_PREACQUIRE=1` are postponed as default candidates for this investigation until draw completion and exact hazard split counters are clean.
 - `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION` is ON by default. It makes `presentBoundary()` wait on a present-bearing command-buffer completion watermark instead of encode-thread present dequeue; set it to `0` only for regression comparison.
 - `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=1` is experimental. It applies the DXVK-like effective latency rule `min(appLatency, BackBufferCount + 1)` to the present boundary only.
 - `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=<N>` is experimental. It commits the current chunk from `submitDraw()` once the current chunk reaches `N` commands, reducing huge no-present chunk tail latency without changing the default path.
+- `DXMT_FORCE_EXPAND_INDEXED=1` is experimental/diagnostic. The default draw path remains direct indexed draw; expansion is only for isolating index/vertex fetch correctness or compatibility.
 - `DXMT9_DISABLE_PRESENT_BOUNDARY=1` improves elapsed time in BasicHLSL but does not encode all submitted presents, so it is not a safe fix.
 
 ## Target Present Path
@@ -510,6 +552,7 @@ SFIV `-benchmark` after WoW64 handle fix:
 - Latest sample: `experiments/output/sfiv-benchmark-counters-20260506-081950`, 75 s timeout, `DXMT9_PE_CHUNK_MAX_RECORDS=256`.
 - `StretchRect` is not the remaining GPU bottleneck in this sample: `stretch_copy=719`, `stretch_pass=0`, `stretch_full=719`.
 - The final present is a full-screen render pass every frame: `present_pass=720`, `present_src=1280x720`, `present_dst=1280x720`.
+- Present source counters show a valid source selection for the same sample: the selected source is 1280x720, so the current evidence does not point at a missing, invalid-sized, or wrong backbuffer source.
 - The remaining dominant completion stall is still the combined frame command buffer: `completion_draw_present_wait_ms=59840.106`, while `completion_stretch_wait_ms=0.000`.
 - Drawable acquire is also large in the same sample: `present_acquire_wait_ms=58187.489`. This points at present/acquire pacing or the full frame command-buffer composition rather than StretchRect render-pass cost.
 - Follow-up split-present sample: `experiments/output/sfiv-benchmark-split-present-20260506-083114`. Present-only completion is cheap (`completion_present_only_wait_ms=70.402`), while the draw+StretchRect chunk dominates.
@@ -523,6 +566,7 @@ Latest counter sample:
 | `stretch_copy` | 719 | Same-size full-screen StretchRect uses the blit-copy fast path. |
 | `stretch_pass` | 0 | No StretchRect render-pass work observed. |
 | `present_pass` | 720 | Present still draws a full-screen textured triangle every frame. |
+| `present_source_valid` / `present_source_size` | valid / 1280x720 | Present source selection is valid in the SFIV sample. |
 | `completion_draw_present_wait_ms` | 59840.106 | Completion waits are on command buffers containing draw + present work. |
 | `completion_stretch_wait_ms` | 0.000 | StretchRect is not isolated as a waiting command buffer. |
 | `present_acquire_wait_ms` | 58187.489 | Drawable acquisition/backpressure is comparable to completion wait. |
@@ -811,6 +855,7 @@ Current interpretation:
 - The first two-app repeated A/B suggested `queued async + effective latency cap` as the strongest candidate policy, but the broader A/B weakens that conclusion: it helps BasicHLSL, Irrlicht, and slightly HDRFormats/MultiTextureTerrain, is neutral for Tutorial07/WaterRT, and regresses DXUTSimpleSample.
 - Waiting for an in-flight preacquire fixes the old preacquire hit/miss shape, but it is still not a default policy: it helps DXUTSimpleSample and hurts BasicHLSL under the same run shape. It remains useful as an opt-in diagnostic for "previous-frame acquire can overlap" workloads.
 - The optional drawable-acquire and latency-cap policies should stay opt-in for now. The next useful step is app-class gating or reducing `present_token_wait_ms` so async acquire overlaps real CPU/GPU work instead of shifting the wait to a later queue point.
+- For the current SFIV draw/hazard/present investigation, async acquire and preacquire are explicitly postponed until direct indexed draws, exact hazard splits, and present-source validity counters are clean.
 - The next draw-side target is automatic chunk flushing or compact per-draw uniform upload so no-present workloads do not build very large command chunks and transient uniform slabs.
 
 ## Open Questions

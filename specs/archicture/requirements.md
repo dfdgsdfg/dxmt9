@@ -99,7 +99,7 @@ PE COM objects to interpret already-submitted work.
 
 **R-ARCH-3.5** GPU-visible execution must preserve D3D9 ordering requirements
 while still allowing DXMT-style batching: render-pass merging, deferred clears,
-hazard-driven encoder splits, pipeline/depth/argument cache reuse, and
+exact-hazard-driven encoder splits, pipeline/depth/argument cache reuse, and
 asynchronous command-buffer completion.
 
 ---

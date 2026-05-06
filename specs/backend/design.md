@@ -349,7 +349,7 @@ flowchart TD
     B -->|No| NEWPASS["End current encoder\nCreate new RenderEncoderData\nwith attachments from draw state RTs"]
     B -->|Yes| C{Same attachments\nas active encoder?}
     C -->|No| NEWPASS
-    C -->|Yes| D{Hazard check:\nBloom filter on\nbuf/tex read-write sets}
+    C -->|Yes| D{Hazard check:\nexact buf/tex\nread-write handle sets}
     D -->|Conflict| BARRIER["Insert barrier\nor split encoder"]
     D -->|Clean| MERGE["Continue same encoder"]
     NEWPASS --> ENCODE
@@ -528,6 +528,13 @@ The back buffer is a private `MTLTexture` owned by the swap chain. On present, i
 is copied to the `CAMetalLayer` drawable via a blit encoder. The drawable is obtained
 just before the blit — not before the frame — to minimize latency.
 
+Present instrumentation must identify which source was selected before drawable
+work starts. The counter set records explicit/current-backbuffer selection, source
+validity, source handle/texture, source size, format, sample count, pass source
+size, and destination size. Current SFIV investigation notes expect the valid
+1280x720 source lane to stay clean before async acquire or preacquire policies are
+retuned.
+
 ### 8.1 Frame Latency Token
 
 Present pacing is based on a queue-owned frame token:
@@ -558,17 +565,18 @@ latency fence while keeping drawable and layer ownership inside the presenter.
 ## 9. Dependency Tracking
 
 Consecutive encoders may have data dependencies. The backend tracks resource access
-per encoder using partitioned Bloom filters on buffer and texture handles.
+per encoder with exact buffer/texture handle sets derived from imported record
+hazards and current draw bindings.
 
 For each encoder transition, the backend checks:
-- `new_read ∩ prev_write` — read-after-write: must synchronize
-- `new_write ∩ prev_write` — write-after-write: must synchronize
-- `new_write ∩ prev_read` — write-after-read: must synchronize
+- `new_read ∩ prev_write` - read-after-write: must synchronize
+- `new_write ∩ prev_write` - write-after-write: must synchronize
+- `new_write ∩ prev_read` - write-after-read: must synchronize
 
-If the filter indicates a possible conflict (Bloom may have false positives), a Metal
-resource barrier or encoder split is emitted. False positives result in unnecessary
-barriers (safe); false negatives are prevented by the over-approximation property of
-the Bloom filter.
+If an exact set intersection exists, a Metal resource barrier or encoder split is
+emitted. Bloom/probabilistic overlap checks may remain as counters to measure what
+the old approximation would have done, but they must not decide default pass splits
+because false positives create avoidable render-pass churn.
 
 ---
 

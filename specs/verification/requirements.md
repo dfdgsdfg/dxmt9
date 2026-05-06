@@ -114,9 +114,9 @@ before opening a different kind.
 render target is always a valid non-null render target whenever the encoder
 is in the Render state.
 
-**R-VERIF-4.4** The formal spec must prove that when a hazard is detected
-(Bloom filter conflict), no further draw merging into the existing encoder
-is possible until the encoder is ended and a new one is opened.
+**R-VERIF-4.4** The formal spec must prove that when an exact read/write resource
+hazard is detected, no further draw merging into the existing encoder is possible
+until the encoder is ended and a new one is opened.
 
 ---
 

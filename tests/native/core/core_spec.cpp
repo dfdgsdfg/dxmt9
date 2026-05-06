@@ -1215,6 +1215,107 @@ void testRasterStateCoverage() {
           "raster cull state cw");
 }
 
+void testIndexedDrawPolicyContracts() {
+  auto backend = std::make_shared<RecordingBackend>();
+  BackendLimits limits{};
+  limits.maxTextureSize = 8192;
+  limits.maxColorAttachments = 4;
+
+  Factory factory(limits, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 64;
+  params.backBufferHeight = 64;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{1001};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "indexed policy device creation");
+
+  auto vertexBuffer = device->createBuffer({64, Pool::Default, UsageVertexBuffer});
+  auto indexBuffer = device->createBuffer({64, Pool::Default, UsageIndexBuffer});
+  check(vertexBuffer != nullptr, "indexed policy vertex buffer");
+  check(indexBuffer != nullptr, "indexed policy index buffer");
+
+  checkEq(device->setStreamSource(0, vertexBuffer, 4, 16), D3D_OK,
+          "indexed policy stream source");
+  checkEq(device->setIndices(indexBuffer, IndexType::UInt32), D3D_OK,
+          "indexed policy bound index buffer");
+
+  checkEq(device->drawIndexedPrimitive(PrimitiveType::TriangleList, 2, 5, -2, 3,
+                                       IndexType::UInt32),
+          D3D_OK, "indexed policy bound indexed draw");
+  checkEq(backend->draws.size(), size_t{1}, "indexed policy bound draw count");
+  const auto& boundIndexed = backend->draws[0];
+  check(boundIndexed.param.indexed, "bound indexed draw remains indexed");
+  checkEq(boundIndexed.param.primitiveType, PrimitiveType::TriangleList,
+          "bound indexed primitive type");
+  checkEq(boundIndexed.param.primitiveCount, 2u, "bound indexed primitive count");
+  checkEq(boundIndexed.param.startVertex, 5u, "bound indexed start vertex");
+  checkEq(boundIndexed.param.baseVertexIndex, -2, "bound indexed base vertex");
+  checkEq(boundIndexed.param.startIndex, 3u, "bound indexed start index");
+  checkEq(boundIndexed.param.indexType, IndexType::UInt32,
+          "bound indexed draw keeps requested index type");
+  checkEq(boundIndexed.hot.indexBuffer, indexBuffer->handle(),
+          "bound indexed draw keeps index buffer in base state");
+  checkEq(boundIndexed.hot.streamBuffers[0], vertexBuffer->handle(),
+          "bound indexed draw keeps stream buffer in base state");
+  checkEq(boundIndexed.hot.streamOffsets[0], 4u,
+          "bound indexed draw keeps stream offset");
+  checkEq(boundIndexed.hot.streamStrides[0], 16u,
+          "bound indexed draw keeps stream stride");
+  check(boundIndexed.param.userIndexRange.empty(),
+        "bound indexed draw does not carry user index payload");
+
+  checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1, 7), D3D_OK,
+          "indexed policy non-indexed draw");
+  checkEq(backend->draws.size(), size_t{2}, "indexed policy non-indexed draw count");
+  const auto& nonIndexed = backend->draws[1];
+  check(!nonIndexed.param.indexed, "non-indexed draw param remains non-indexed");
+  checkEq(nonIndexed.hot.indexBuffer, Handle{},
+          "non-indexed draw strips bound index buffer from base state");
+  checkEq(nonIndexed.param.startVertex, 7u, "non-indexed draw keeps start vertex");
+  check(nonIndexed.param.userIndexRange.empty(),
+        "non-indexed draw does not carry user index payload");
+
+  const std::array<u8, 24> upVertices{
+      0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+      0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+      0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+  };
+  const std::array<u16, 3> upIndices{2, 1, 0};
+  std::array<u8, sizeof(upIndices)> upIndexBytes{};
+  std::memcpy(upIndexBytes.data(), upIndices.data(), upIndexBytes.size());
+
+  checkEq(device->drawIndexedPrimitiveUP(
+              PrimitiveType::TriangleList, 1,
+              std::span<const u8>(upVertices.data(), upVertices.size()),
+              std::span<const u8>(upIndexBytes.data(), upIndexBytes.size()),
+              IndexType::UInt16, 8),
+          D3D_OK, "indexed policy indexed UP draw");
+  checkEq(backend->draws.size(), size_t{3}, "indexed policy indexed UP draw count");
+  const auto& indexedUp = backend->draws[2];
+  check(indexedUp.param.indexed, "indexed UP draw remains indexed");
+  checkEq(indexedUp.param.indexType, IndexType::UInt16,
+          "indexed UP draw keeps user index type");
+  checkEq(indexedUp.hot.indexBuffer, Handle{},
+          "indexed UP draw strips bound index buffer from base state");
+  checkEq(indexedUp.hot.streamBuffers[0], Handle{},
+          "indexed UP draw strips bound stream buffer from base state");
+  checkEq(indexedUp.hot.streamOffsets[0], 0u,
+          "indexed UP draw uses caller vertex data from offset zero");
+  checkEq(indexedUp.hot.streamStrides[0], 8u,
+          "indexed UP draw keeps caller vertex stride");
+  checkEq(indexedUp.param.userVertexRange.size, static_cast<u32>(upVertices.size()),
+          "indexed UP draw carries caller vertex payload");
+  checkEq(indexedUp.param.userIndexRange.size, static_cast<u32>(upIndexBytes.size()),
+          "indexed UP draw carries caller index payload");
+  checkBytes(payloadSlice(indexedUp, indexedUp.param.userIndexRange,
+                          "indexed UP user index payload range"),
+             std::span<const u8>(upIndexBytes.data(), upIndexBytes.size()),
+             "indexed UP draw preserves user index payload");
+}
+
 void testDeviceCoreFlow() {
   auto backend = std::make_shared<RecordingBackend>();
   BackendLimits limits{};
@@ -2383,6 +2484,7 @@ int main() {
     testVisualDerivedFfpCoverage();
     testVisualPortCoverage();
     testRasterStateCoverage();
+    testIndexedDrawPolicyContracts();
     testDeviceCoreFlow();
     testCubeTextureSubresourceFlow();
     testMetalSamplerBorderColorCoverage();

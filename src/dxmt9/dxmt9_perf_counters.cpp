@@ -20,6 +20,66 @@ struct Counters {
   std::atomic<std::uint64_t> metalBuffers{0};
   std::atomic<std::uint64_t> metalBufferBytes{0};
   std::atomic<std::uint64_t> pipelineBuilds{0};
+  std::atomic<std::uint64_t> pipelineHitDraw{0};
+  std::atomic<std::uint64_t> pipelineHitFill{0};
+  std::atomic<std::uint64_t> pipelineHitStretch{0};
+  std::atomic<std::uint64_t> pipelineMissDraw{0};
+  std::atomic<std::uint64_t> pipelineMissFill{0};
+  std::atomic<std::uint64_t> pipelineMissStretch{0};
+  std::atomic<std::uint64_t> pipelineBuildDraw{0};
+  std::atomic<std::uint64_t> pipelineBuildFill{0};
+  std::atomic<std::uint64_t> pipelineBuildStretch{0};
+  std::atomic<std::uint64_t> pipelineBuildPresent{0};
+  std::atomic<std::uint64_t> renderPassBegin{0};
+  std::atomic<std::uint64_t> renderPassEnd{0};
+  std::atomic<std::uint64_t> renderSplitFinal{0};
+  std::atomic<std::uint64_t> renderSplitRenderTargetChange{0};
+  std::atomic<std::uint64_t> renderSplitHazard{0};
+  std::atomic<std::uint64_t> renderSplitClearBarrier{0};
+  std::atomic<std::uint64_t> renderSplitSurfaceCopy{0};
+  std::atomic<std::uint64_t> renderSplitStretchRect{0};
+  std::atomic<std::uint64_t> renderSplitReadback{0};
+  std::atomic<std::uint64_t> renderSplitColorFill{0};
+  std::atomic<std::uint64_t> renderSplitPresent{0};
+  std::atomic<std::uint64_t> renderSplitPresentAcquire{0};
+  std::atomic<std::uint64_t> hazardProbeComparisons{0};
+  std::atomic<std::uint64_t> hazardBloomOverlaps{0};
+  std::atomic<std::uint64_t> hazardExactOverlaps{0};
+  std::atomic<std::uint64_t> hazardBloomFalsePositive{0};
+  std::atomic<std::uint64_t> drawCalls{0};
+  std::atomic<std::uint64_t> drawIndexedCalls{0};
+  std::atomic<std::uint64_t> drawExpandedIndexedCalls{0};
+  std::atomic<std::uint64_t> drawPrimitiveCount{0};
+  std::atomic<std::uint64_t> drawTriangleEstimate{0};
+  std::atomic<std::uint64_t> drawVertexCount{0};
+  std::atomic<std::uint64_t> drawUpVertexBytes{0};
+  std::atomic<std::uint64_t> drawUpIndexBytes{0};
+  std::atomic<std::uint64_t> bindTexture{0};
+  std::atomic<std::uint64_t> bindSampler{0};
+  std::atomic<std::uint64_t> bindVertexBuffer{0};
+  std::atomic<std::uint64_t> bindIndexBuffer{0};
+  std::atomic<std::uint64_t> bindUniformBuffer{0};
+  std::atomic<std::uint64_t> bindPipeline{0};
+  std::atomic<std::uint64_t> bindDepthState{0};
+  std::atomic<std::uint64_t> bindViewport{0};
+  std::atomic<std::uint64_t> bindScissor{0};
+  std::atomic<std::uint64_t> bindRasterizer{0};
+  std::atomic<std::uint64_t> drawShaderBucketSamples{0};
+  std::atomic<std::uint64_t> drawShaderBucketChanges{0};
+  std::atomic<std::uint64_t> lastVertexShaderHash{0};
+  std::atomic<std::uint64_t> lastPixelShaderHash{0};
+  std::atomic<std::uint64_t> lastShaderVariantHash{0};
+  std::atomic<std::uint64_t> completionCompatFp16WaitNs{0};
+  std::atomic<std::uint64_t> completionCompatMrtWaitNs{0};
+  std::atomic<std::uint64_t> completionCompatSrgbWaitNs{0};
+  std::atomic<std::uint64_t> completionCompatProjectedWaitNs{0};
+  std::atomic<std::uint64_t> completionCompatMsaaWaitNs{0};
+  std::atomic<std::uint64_t> completionCompatQueryWaitNs{0};
+  std::atomic<std::uint64_t> completionShaderBucketSamples{0};
+  std::atomic<std::uint64_t> completionShaderBucketChanges{0};
+  std::atomic<std::uint64_t> completionLastVertexShaderHash{0};
+  std::atomic<std::uint64_t> completionLastPixelShaderHash{0};
+  std::atomic<std::uint64_t> completionLastShaderVariantHash{0};
   std::atomic<std::uint64_t> submitDrawCpuNs{0};
   std::atomic<std::uint64_t> submitDrawCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeChunkCalls{0};
@@ -85,6 +145,21 @@ struct Counters {
   std::atomic<std::uint64_t> presentEncoded{0};
   std::atomic<std::uint64_t> presentSkipped{0};
   std::atomic<std::uint64_t> presentFullscreen{0};
+  std::atomic<std::uint64_t> presentSourceSelections{0};
+  std::atomic<std::uint64_t> presentSourceExplicit{0};
+  std::atomic<std::uint64_t> presentSourceCurrentBackBuffer{0};
+  std::atomic<std::uint64_t> presentSourceChecks{0};
+  std::atomic<std::uint64_t> presentSourceValid{0};
+  std::atomic<std::uint64_t> presentSourceMissingSurface{0};
+  std::atomic<std::uint64_t> presentSourceMissingTexture{0};
+  std::atomic<std::uint64_t> presentSourceResolve{0};
+  std::atomic<std::uint64_t> presentSourceInvalidSize{0};
+  std::atomic<std::uint64_t> presentSourceWidth{0};
+  std::atomic<std::uint64_t> presentSourceHeight{0};
+  std::atomic<std::uint64_t> presentSourceFormat{0};
+  std::atomic<std::uint64_t> presentSourceSampleCount{0};
+  std::atomic<std::uint64_t> presentSourceHandle{0};
+  std::atomic<std::uint64_t> presentSourceTextureHandle{0};
   std::atomic<std::uint64_t> presentPass{0};
   std::atomic<std::uint64_t> presentPassSrcWidth{0};
   std::atomic<std::uint64_t> presentPassSrcHeight{0};
@@ -146,6 +221,85 @@ std::uint64_t load(const std::atomic<std::uint64_t>& value) {
   return value.load(std::memory_order_relaxed);
 }
 
+std::uint64_t triangleEstimate(std::uint32_t primitiveType, std::uint32_t primitiveCount) {
+  switch (primitiveType) {
+    case 0:  // PointList
+    case 1:  // LineList
+    case 2:  // LineStrip
+      return 0;
+    default:
+      return primitiveCount;
+  }
+}
+
+std::atomic<std::uint64_t>& pipelineHitCounter(Counters& c, PipelineKind kind) {
+  switch (kind) {
+    case PipelineKind::Draw:
+      return c.pipelineHitDraw;
+    case PipelineKind::Fill:
+      return c.pipelineHitFill;
+    case PipelineKind::Stretch:
+      return c.pipelineHitStretch;
+    case PipelineKind::Present:
+      return c.pipelineHitDraw;
+  }
+  return c.pipelineHitDraw;
+}
+
+std::atomic<std::uint64_t>& pipelineMissCounter(Counters& c, PipelineKind kind) {
+  switch (kind) {
+    case PipelineKind::Draw:
+      return c.pipelineMissDraw;
+    case PipelineKind::Fill:
+      return c.pipelineMissFill;
+    case PipelineKind::Stretch:
+      return c.pipelineMissStretch;
+    case PipelineKind::Present:
+      return c.pipelineMissDraw;
+  }
+  return c.pipelineMissDraw;
+}
+
+std::atomic<std::uint64_t>& pipelineBuildCounter(Counters& c, PipelineKind kind) {
+  switch (kind) {
+    case PipelineKind::Draw:
+      return c.pipelineBuildDraw;
+    case PipelineKind::Fill:
+      return c.pipelineBuildFill;
+    case PipelineKind::Stretch:
+      return c.pipelineBuildStretch;
+    case PipelineKind::Present:
+      return c.pipelineBuildPresent;
+  }
+  return c.pipelineBuildDraw;
+}
+
+std::atomic<std::uint64_t>& splitReasonCounter(Counters& c, EncoderSplitReason reason) {
+  switch (reason) {
+    case EncoderSplitReason::Final:
+      return c.renderSplitFinal;
+    case EncoderSplitReason::RenderTargetChange:
+      return c.renderSplitRenderTargetChange;
+    case EncoderSplitReason::Hazard:
+      return c.renderSplitHazard;
+    case EncoderSplitReason::ClearBarrier:
+      return c.renderSplitClearBarrier;
+    case EncoderSplitReason::SurfaceCopy:
+      return c.renderSplitSurfaceCopy;
+    case EncoderSplitReason::StretchRect:
+      return c.renderSplitStretchRect;
+    case EncoderSplitReason::Readback:
+      return c.renderSplitReadback;
+    case EncoderSplitReason::ColorFill:
+      return c.renderSplitColorFill;
+    case EncoderSplitReason::Present:
+      return c.renderSplitPresent;
+    case EncoderSplitReason::PresentAcquire:
+      return c.renderSplitPresentAcquire;
+  }
+  return c.renderSplitFinal;
+}
+
 void report() {
   if (!enabledFlag()) {
     return;
@@ -157,6 +311,25 @@ void report() {
       "stretch_copy=%llu stretch_pass=%llu stretch_full=%llu "
       "submit_present=%llu submit_flush=%llu command_buffers=%llu "
       "metal_buffers=%llu metal_buffer_bytes=%llu pipeline_builds=%llu "
+      "pipeline_hit_draw=%llu pipeline_hit_fill=%llu pipeline_hit_stretch=%llu "
+      "pipeline_miss_draw=%llu pipeline_miss_fill=%llu pipeline_miss_stretch=%llu "
+      "pipeline_build_draw=%llu pipeline_build_fill=%llu pipeline_build_stretch=%llu pipeline_build_present=%llu "
+      "render_pass_begin=%llu render_pass_end=%llu "
+      "render_split_final=%llu render_split_rt_change=%llu render_split_hazard=%llu "
+      "render_split_clear=%llu render_split_surface_copy=%llu render_split_stretch=%llu "
+      "render_split_readback=%llu render_split_color_fill=%llu render_split_present=%llu render_split_present_acquire=%llu "
+      "hazard_probe=%llu hazard_bloom=%llu hazard_exact=%llu hazard_bloom_false_positive=%llu "
+      "draw_calls=%llu draw_indexed=%llu draw_expanded_indexed=%llu "
+      "draw_primitives=%llu draw_triangles=%llu draw_vertices=%llu "
+      "draw_up_vertex_bytes=%llu draw_up_index_bytes=%llu "
+      "bind_texture=%llu bind_sampler=%llu bind_vertex_buffer=%llu bind_index_buffer=%llu "
+      "bind_uniform_buffer=%llu bind_pipeline=%llu bind_depth_state=%llu bind_viewport=%llu bind_scissor=%llu bind_rasterizer=%llu "
+      "draw_shader_bucket_samples=%llu draw_shader_bucket_changes=%llu "
+      "last_vs=0x%llx last_ps=0x%llx last_variant=0x%llx "
+      "completion_compat_fp16_ms=%.3f completion_compat_mrt_ms=%.3f completion_compat_srgb_ms=%.3f "
+      "completion_compat_projected_ms=%.3f completion_compat_msaa_ms=%.3f completion_compat_query_ms=%.3f "
+      "completion_shader_bucket_samples=%llu completion_shader_bucket_changes=%llu "
+      "completion_last_vs=0x%llx completion_last_ps=0x%llx completion_last_variant=0x%llx "
       "submit_draw_cpu_ms=%.3f submit_draw_cpu_max_ms=%.3f "
       "encode_chunk_calls=%llu encode_chunk_cpu_ms=%.3f encode_chunk_cpu_max_ms=%.3f "
       "encode_draw_cpu_ms=%.3f encode_draw_cpu_max_ms=%.3f "
@@ -181,6 +354,11 @@ void report() {
       "present_boundary_applied=%llu present_boundary_skipped=%llu "
       "present_boundary_waits=%llu present_boundary_wait_ms=%.3f present_boundary_wait_max_ms=%.3f "
       "present_encoded=%llu present_skipped=%llu present_full=%llu "
+      "present_source_selections=%llu present_source_explicit=%llu present_source_current_backbuffer=%llu "
+      "present_source_checks=%llu present_source_valid=%llu present_source_missing_surface=%llu "
+      "present_source_missing_texture=%llu present_source_resolve=%llu present_source_invalid_size=%llu "
+      "present_source_handle=0x%llx present_source_texture=0x%llx "
+      "present_source_size=%llux%llu present_source_fmt=%llu present_source_samples=%llu "
       "present_pass=%llu present_src=%llux%llu present_dst=%llux%llu "
       "present_dst_max=%llux%llu present_acquire_waits=%llu "
       "present_acquire_wait_ms=%.3f present_acquire_wait_max_ms=%.3f "
@@ -207,6 +385,66 @@ void report() {
       static_cast<unsigned long long>(load(c.metalBuffers)),
       static_cast<unsigned long long>(load(c.metalBufferBytes)),
       static_cast<unsigned long long>(load(c.pipelineBuilds)),
+      static_cast<unsigned long long>(load(c.pipelineHitDraw)),
+      static_cast<unsigned long long>(load(c.pipelineHitFill)),
+      static_cast<unsigned long long>(load(c.pipelineHitStretch)),
+      static_cast<unsigned long long>(load(c.pipelineMissDraw)),
+      static_cast<unsigned long long>(load(c.pipelineMissFill)),
+      static_cast<unsigned long long>(load(c.pipelineMissStretch)),
+      static_cast<unsigned long long>(load(c.pipelineBuildDraw)),
+      static_cast<unsigned long long>(load(c.pipelineBuildFill)),
+      static_cast<unsigned long long>(load(c.pipelineBuildStretch)),
+      static_cast<unsigned long long>(load(c.pipelineBuildPresent)),
+      static_cast<unsigned long long>(load(c.renderPassBegin)),
+      static_cast<unsigned long long>(load(c.renderPassEnd)),
+      static_cast<unsigned long long>(load(c.renderSplitFinal)),
+      static_cast<unsigned long long>(load(c.renderSplitRenderTargetChange)),
+      static_cast<unsigned long long>(load(c.renderSplitHazard)),
+      static_cast<unsigned long long>(load(c.renderSplitClearBarrier)),
+      static_cast<unsigned long long>(load(c.renderSplitSurfaceCopy)),
+      static_cast<unsigned long long>(load(c.renderSplitStretchRect)),
+      static_cast<unsigned long long>(load(c.renderSplitReadback)),
+      static_cast<unsigned long long>(load(c.renderSplitColorFill)),
+      static_cast<unsigned long long>(load(c.renderSplitPresent)),
+      static_cast<unsigned long long>(load(c.renderSplitPresentAcquire)),
+      static_cast<unsigned long long>(load(c.hazardProbeComparisons)),
+      static_cast<unsigned long long>(load(c.hazardBloomOverlaps)),
+      static_cast<unsigned long long>(load(c.hazardExactOverlaps)),
+      static_cast<unsigned long long>(load(c.hazardBloomFalsePositive)),
+      static_cast<unsigned long long>(load(c.drawCalls)),
+      static_cast<unsigned long long>(load(c.drawIndexedCalls)),
+      static_cast<unsigned long long>(load(c.drawExpandedIndexedCalls)),
+      static_cast<unsigned long long>(load(c.drawPrimitiveCount)),
+      static_cast<unsigned long long>(load(c.drawTriangleEstimate)),
+      static_cast<unsigned long long>(load(c.drawVertexCount)),
+      static_cast<unsigned long long>(load(c.drawUpVertexBytes)),
+      static_cast<unsigned long long>(load(c.drawUpIndexBytes)),
+      static_cast<unsigned long long>(load(c.bindTexture)),
+      static_cast<unsigned long long>(load(c.bindSampler)),
+      static_cast<unsigned long long>(load(c.bindVertexBuffer)),
+      static_cast<unsigned long long>(load(c.bindIndexBuffer)),
+      static_cast<unsigned long long>(load(c.bindUniformBuffer)),
+      static_cast<unsigned long long>(load(c.bindPipeline)),
+      static_cast<unsigned long long>(load(c.bindDepthState)),
+      static_cast<unsigned long long>(load(c.bindViewport)),
+      static_cast<unsigned long long>(load(c.bindScissor)),
+      static_cast<unsigned long long>(load(c.bindRasterizer)),
+      static_cast<unsigned long long>(load(c.drawShaderBucketSamples)),
+      static_cast<unsigned long long>(load(c.drawShaderBucketChanges)),
+      static_cast<unsigned long long>(load(c.lastVertexShaderHash)),
+      static_cast<unsigned long long>(load(c.lastPixelShaderHash)),
+      static_cast<unsigned long long>(load(c.lastShaderVariantHash)),
+      static_cast<double>(load(c.completionCompatFp16WaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionCompatMrtWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionCompatSrgbWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionCompatProjectedWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionCompatMsaaWaitNs)) / 1000000.0,
+      static_cast<double>(load(c.completionCompatQueryWaitNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.completionShaderBucketSamples)),
+      static_cast<unsigned long long>(load(c.completionShaderBucketChanges)),
+      static_cast<unsigned long long>(load(c.completionLastVertexShaderHash)),
+      static_cast<unsigned long long>(load(c.completionLastPixelShaderHash)),
+      static_cast<unsigned long long>(load(c.completionLastShaderVariantHash)),
       static_cast<double>(load(c.submitDrawCpuNs)) / 1000000.0,
       static_cast<double>(load(c.submitDrawCpuMaxNs)) / 1000000.0,
       static_cast<unsigned long long>(load(c.encodeChunkCalls)),
@@ -272,6 +510,21 @@ void report() {
       static_cast<unsigned long long>(load(c.presentEncoded)),
       static_cast<unsigned long long>(load(c.presentSkipped)),
       static_cast<unsigned long long>(load(c.presentFullscreen)),
+      static_cast<unsigned long long>(load(c.presentSourceSelections)),
+      static_cast<unsigned long long>(load(c.presentSourceExplicit)),
+      static_cast<unsigned long long>(load(c.presentSourceCurrentBackBuffer)),
+      static_cast<unsigned long long>(load(c.presentSourceChecks)),
+      static_cast<unsigned long long>(load(c.presentSourceValid)),
+      static_cast<unsigned long long>(load(c.presentSourceMissingSurface)),
+      static_cast<unsigned long long>(load(c.presentSourceMissingTexture)),
+      static_cast<unsigned long long>(load(c.presentSourceResolve)),
+      static_cast<unsigned long long>(load(c.presentSourceInvalidSize)),
+      static_cast<unsigned long long>(load(c.presentSourceHandle)),
+      static_cast<unsigned long long>(load(c.presentSourceTextureHandle)),
+      static_cast<unsigned long long>(load(c.presentSourceWidth)),
+      static_cast<unsigned long long>(load(c.presentSourceHeight)),
+      static_cast<unsigned long long>(load(c.presentSourceFormat)),
+      static_cast<unsigned long long>(load(c.presentSourceSampleCount)),
       static_cast<unsigned long long>(load(c.presentPass)),
       static_cast<unsigned long long>(load(c.presentPassSrcWidth)),
       static_cast<unsigned long long>(load(c.presentPassSrcHeight)),
@@ -389,6 +642,103 @@ void countPipelineBuild() {
   add(counters().pipelineBuilds);
 }
 
+void countPipelineCacheHit(PipelineKind kind) {
+  add(pipelineHitCounter(counters(), kind));
+}
+
+void countPipelineCacheMiss(PipelineKind kind) {
+  add(pipelineMissCounter(counters(), kind));
+}
+
+void countPipelineBuild(PipelineKind kind) {
+  countPipelineBuild();
+  add(pipelineBuildCounter(counters(), kind));
+}
+
+void countRenderPassBegin() {
+  add(counters().renderPassBegin);
+}
+
+void countRenderPassEnd(EncoderSplitReason reason) {
+  add(counters().renderPassEnd);
+  add(splitReasonCounter(counters(), reason));
+}
+
+void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
+  add(counters().hazardProbeComparisons);
+  if (bloomOverlap) {
+    add(counters().hazardBloomOverlaps);
+  }
+  if (exactOverlap) {
+    add(counters().hazardExactOverlaps);
+  }
+  if (bloomOverlap && !exactOverlap) {
+    add(counters().hazardBloomFalsePositive);
+  }
+}
+
+void countDrawCall(std::uint32_t primitiveType,
+                   std::uint32_t primitiveCount,
+                   std::uint64_t vertexCount,
+                   bool indexed,
+                   bool expandedIndexed,
+                   std::size_t userVertexBytes,
+                   std::size_t userIndexBytes) {
+  add(counters().drawCalls);
+  if (indexed) {
+    add(counters().drawIndexedCalls);
+  }
+  if (expandedIndexed) {
+    add(counters().drawExpandedIndexedCalls);
+  }
+  add(counters().drawPrimitiveCount, primitiveCount);
+  add(counters().drawTriangleEstimate, triangleEstimate(primitiveType, primitiveCount));
+  add(counters().drawVertexCount, vertexCount);
+  add(counters().drawUpVertexBytes, static_cast<std::uint64_t>(userVertexBytes));
+  add(counters().drawUpIndexBytes, static_cast<std::uint64_t>(userIndexBytes));
+}
+
+void countBaseStateBind(std::uint32_t textureBinds,
+                        std::uint32_t samplerBinds,
+                        std::uint32_t vertexBufferBinds,
+                        std::uint32_t indexBufferBinds,
+                        std::uint32_t uniformBufferBinds,
+                        std::uint32_t pipelineBinds,
+                        std::uint32_t depthStateBinds,
+                        std::uint32_t viewportBinds,
+                        std::uint32_t scissorBinds,
+                        std::uint32_t rasterizerBinds) {
+  add(counters().bindTexture, textureBinds);
+  add(counters().bindSampler, samplerBinds);
+  add(counters().bindVertexBuffer, vertexBufferBinds);
+  add(counters().bindIndexBuffer, indexBufferBinds);
+  add(counters().bindUniformBuffer, uniformBufferBinds);
+  add(counters().bindPipeline, pipelineBinds);
+  add(counters().bindDepthState, depthStateBinds);
+  add(counters().bindViewport, viewportBinds);
+  add(counters().bindScissor, scissorBinds);
+  add(counters().bindRasterizer, rasterizerBinds);
+}
+
+void countDrawShaderBucket(std::uint64_t vertexShaderHash,
+                           std::uint64_t pixelShaderHash,
+                           std::uint64_t variantHash) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  add(c.drawShaderBucketSamples);
+  const bool changed = load(c.lastVertexShaderHash) != vertexShaderHash ||
+                       load(c.lastPixelShaderHash) != pixelShaderHash ||
+                       load(c.lastShaderVariantHash) != variantHash;
+  if (changed) {
+    add(c.drawShaderBucketChanges);
+  }
+  store(c.lastVertexShaderHash, vertexShaderHash);
+  store(c.lastPixelShaderHash, pixelShaderHash);
+  store(c.lastShaderVariantHash, variantHash);
+}
+
 void countSubmitDrawCpuTime(std::uint64_t nanoseconds) {
   add(counters().submitDrawCpuNs, nanoseconds);
   updateMax(counters().submitDrawCpuMaxNs, nanoseconds);
@@ -426,7 +776,11 @@ void countCompletionWait(std::uint64_t nanoseconds,
                          bool hasDraw,
                          bool hasPresent,
                          bool hasBlit,
-                         bool hasStretchRect) {
+                         bool hasStretchRect,
+                         std::uint32_t compatFlags,
+                         std::uint64_t vertexShaderHash,
+                         std::uint64_t pixelShaderHash,
+                         std::uint64_t shaderVariantHash) {
   add(counters().completionWaits);
   add(counters().completionWaitNs, nanoseconds);
   updateMax(counters().completionWaitMaxNs, nanoseconds);
@@ -475,6 +829,33 @@ void countCompletionWait(std::uint64_t nanoseconds,
     addWaitBucket(counters().completionBlitOnlyWaits,
                   counters().completionBlitOnlyWaitNs,
                   counters().completionBlitOnlyWaitMaxNs);
+  }
+
+  constexpr std::uint32_t fp16 = 1u << 0;
+  constexpr std::uint32_t mrt = 1u << 1;
+  constexpr std::uint32_t srgb = 1u << 2;
+  constexpr std::uint32_t projected = 1u << 3;
+  constexpr std::uint32_t msaa = 1u << 4;
+  constexpr std::uint32_t query = 1u << 5;
+  if ((compatFlags & fp16) != 0) add(counters().completionCompatFp16WaitNs, nanoseconds);
+  if ((compatFlags & mrt) != 0) add(counters().completionCompatMrtWaitNs, nanoseconds);
+  if ((compatFlags & srgb) != 0) add(counters().completionCompatSrgbWaitNs, nanoseconds);
+  if ((compatFlags & projected) != 0) add(counters().completionCompatProjectedWaitNs, nanoseconds);
+  if ((compatFlags & msaa) != 0) add(counters().completionCompatMsaaWaitNs, nanoseconds);
+  if ((compatFlags & query) != 0) add(counters().completionCompatQueryWaitNs, nanoseconds);
+
+  if (vertexShaderHash != 0 || pixelShaderHash != 0 || shaderVariantHash != 0) {
+    auto& c = counters();
+    add(c.completionShaderBucketSamples);
+    const bool changed = load(c.completionLastVertexShaderHash) != vertexShaderHash ||
+                         load(c.completionLastPixelShaderHash) != pixelShaderHash ||
+                         load(c.completionLastShaderVariantHash) != shaderVariantHash;
+    if (changed) {
+      add(c.completionShaderBucketChanges);
+    }
+    store(c.completionLastVertexShaderHash, vertexShaderHash);
+    store(c.completionLastPixelShaderHash, pixelShaderHash);
+    store(c.completionLastShaderVariantHash, shaderVariantHash);
   }
 }
 
@@ -534,6 +915,51 @@ void countPresentSkipped() {
 
 void countPresentFullscreen() {
   add(counters().presentFullscreen);
+}
+
+void countPresentSourceSelection(bool explicitSource, bool isCurrentBackBuffer) {
+  add(counters().presentSourceSelections);
+  if (explicitSource) {
+    add(counters().presentSourceExplicit);
+  }
+  if (isCurrentBackBuffer) {
+    add(counters().presentSourceCurrentBackBuffer);
+  }
+}
+
+void countPresentSourceResolved(bool hasSurface,
+                                bool hasTexture,
+                                bool hasResolveTexture,
+                                bool invalidSize,
+                                std::uint32_t width,
+                                std::uint32_t height,
+                                std::uint32_t format,
+                                std::uint32_t sampleCount,
+                                std::uint64_t sourceHandle,
+                                std::uint64_t textureHandle) {
+  if (!enabled()) {
+    return;
+  }
+  add(counters().presentSourceChecks);
+  if (!hasSurface) {
+    add(counters().presentSourceMissingSurface);
+  } else if (!hasTexture) {
+    add(counters().presentSourceMissingTexture);
+  } else {
+    add(counters().presentSourceValid);
+  }
+  if (hasResolveTexture) {
+    add(counters().presentSourceResolve);
+  }
+  if (invalidSize) {
+    add(counters().presentSourceInvalidSize);
+  }
+  store(counters().presentSourceWidth, width);
+  store(counters().presentSourceHeight, height);
+  store(counters().presentSourceFormat, format);
+  store(counters().presentSourceSampleCount, sampleCount);
+  store(counters().presentSourceHandle, sourceHandle);
+  store(counters().presentSourceTextureHandle, textureHandle);
 }
 
 void countPresentPass(std::uint32_t sourceWidth,

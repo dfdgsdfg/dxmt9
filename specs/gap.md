@@ -70,7 +70,7 @@ propagation, query validation, and lost-device/reset behaviour.
 | Ring allocators: `RingArena` for argbuf, replayStore, staging, copyTemp | ✅ | metal |
 | Clear-as-load-action folding | ✅ | metal |
 | Render-target change → encoder split | ✅ | metal |
-| Encoder merging with Bloom-filter hazard detection | ✅ | metal |
+| Encoder merging with exact hazard tracking | ✅ | metal; Bloom overlap remains diagnostic only for false-positive measurement |
 | PSO cache: `ShaderVariantKey`, async compile, `MTLBinaryArchive` disk cache | ✅ | metal |
 | DSS cache: `DepthStencilKey` + `StencilFaceKey` | ✅ | metal |
 | FFP shader generator: `makeFfpVertexSource()` + `makeFfpPixelSource()` | ✅ | metal |
@@ -180,7 +180,7 @@ suite are still open.
 | Core draw data is built by pure state-to-value helpers | ✅ | `makeCanonicalDrawStateFromState()` plus draw-run helpers build production `CanonicalDrawState` / `DrawRunDesc` data, and large constants/matrices/clip planes now flow through `DrawUniformPayload` handles instead of hot draw-state records; `makeDrawDescFromState()` remains fixture/offline only. `state_draw_transform_spec` covers draw args, constants, shader refs, resource bindings, stream/index bindings, vertex decl/FVF, RT/DS attachments, viewport/scissor, render/sampler/TSS, FFP keys, transforms, and clip planes |
 | Backend cache inputs are verified as deterministic value descriptors | ✅ | `backend_key_descriptor_spec` covers uniforms/depth-stencil/sampler descriptors; `backend_pipeline_key_spec` covers blend/MRT color-write key mapping, PSO hash responsiveness, sampler texture/filter flags, FVF layout hashing, and sRGB format mapping |
 | Chunk wire records have data-driven validation independent of replay side effects | ✅ | `device_c_record_utils` + `chunk_record_import_spec` validate fixed records, variable Clear/SetConst tails, invalid/truncated records, and draw-run parameter conversion |
-| Imported chunk replay has explicit boundary types and unit-testable replay decisions | ✅ | `ImportedChunkView` / `ImportedRecordView`, draw-run scan helpers, replay-category classification, resource-retention derivation, read/write hazard extraction, barrier/synchronous-read boundary decisions, and deterministic hazard-scope reset/continuation are split and tested without Metal |
+| Imported chunk replay has explicit boundary types and unit-testable replay decisions | ✅ | `ImportedChunkView` / `ImportedRecordView`, draw-run scan helpers, replay-category classification, resource-retention derivation, exact read/write hazard extraction, barrier/synchronous-read boundary decisions, and deterministic hazard-scope reset/continuation are split and tested without Metal |
 | Bridge-op count/order evidence exists for DOD bridge shape | ⚠️ | `dxmt9-bridge-ops-spec` pins the generated bridge opcode table and DOD chunk op placement. Workload-level runtime bridge-op counters still belong to benchmark acceptance |
 | Allocation/capacity evidence exists for DOD hot paths | ⚠️ | `dxmt9-dod-replay-observer-spec` pins warmed ChunkSlot capacity reuse and uniform interning; `dxmt9-allocation-counter-spec` verifies real perf-counter emission for Metal buffer allocation counts/bytes. A general heap allocation interposer for arbitrary hot paths remains future work |
 

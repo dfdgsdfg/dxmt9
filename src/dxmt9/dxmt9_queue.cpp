@@ -123,6 +123,20 @@ u32 compatFlagsForDraw(FlatDrawStateView draw, const std::function<u32(Handle)>&
   return flags;
 }
 
+u64 shaderVariantHashForDraw(FlatDrawStateView draw) {
+  if (!draw.hot || !draw.hasShaderContext()) {
+    return 0;
+  }
+  const auto& hot = *draw.hot;
+  const auto& shader = draw.shaderContext();
+  u64 hash = shader.vertexShader.hash ^ (shader.pixelShader.hash << 1) ^
+             (hot.key.vertexDeclHash << 2) ^ hot.key.renderStateHash ^
+             (hot.textureMask << 3) ^ (hot.renderTargetMask << 4);
+  hash ^= hot.vertexConstantsHash << 1;
+  hash ^= hot.pixelConstantsHash << 2;
+  return hash;
+}
+
 u32 compatFlagsForClear(const ClearDesc& clear, const std::function<u32(Handle)>& resolveSurfaceFlags) {
   u32 flags = 0;
   u32 colorTargets = 0;
@@ -164,6 +178,13 @@ ChunkObservation makeChunkObservation(const MetalCommandView& command,
           .compatFlags = command.drawState.hot
               ? compatFlagsForDraw(command.drawState, resolveSurfaceFlags)
               : 0,
+          .vertexShaderHash = command.drawState.hasShaderContext()
+              ? command.drawState.shaderContext().vertexShader.hash
+              : 0,
+          .pixelShaderHash = command.drawState.hasShaderContext()
+              ? command.drawState.shaderContext().pixelShader.hash
+              : 0,
+          .shaderVariantHash = shaderVariantHashForDraw(command.drawState),
       };
     case MetalCommandKind::Clear:
       return ChunkObservation{
@@ -329,6 +350,9 @@ CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input) {
   diagnostics.hasStretchRect = input.hasStretchRect;
   diagnostics.frame = input.frame;
   diagnostics.compatFlags = input.compatFlags;
+  diagnostics.vertexShaderHash = input.vertexShaderHash;
+  diagnostics.pixelShaderHash = input.pixelShaderHash;
+  diagnostics.shaderVariantHash = input.shaderVariantHash;
   return diagnostics;
 }
 
@@ -343,6 +367,9 @@ CommandBufferDiagnostics summarizeChunk(u64 seqId,
       case ChunkObservationKind::Draw:
         input.hasDraw = true;
         input.compatFlags |= observation.compatFlags;
+        input.vertexShaderHash = observation.vertexShaderHash;
+        input.pixelShaderHash = observation.pixelShaderHash;
+        input.shaderVariantHash = observation.shaderVariantHash;
         break;
       case ChunkObservationKind::Blit:
         input.hasBlit = true;
@@ -1243,7 +1270,11 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
         pending.diagnostics.hasDraw,
         pending.diagnostics.hasPresent,
         pending.diagnostics.hasBlit,
-        pending.diagnostics.hasStretchRect);
+        pending.diagnostics.hasStretchRect,
+        pending.diagnostics.compatFlags,
+        pending.diagnostics.vertexShaderHash,
+        pending.diagnostics.pixelShaderHash,
+        pending.diagnostics.shaderVariantHash);
   }
 
   const auto binding = submissionBinding_;

@@ -292,6 +292,28 @@ D9CCommandRecordDrawPrimitive makeDrawRecord(D9CSurface* renderTarget,
   return draw;
 }
 
+D9CCommandRecordDrawIndexedPrimitive makeIndexedDrawRecord(
+    D9CSurface* renderTarget,
+    D9CBuffer* vertexBuffer,
+    D9CBuffer* indexBuffer) {
+  D9CCommandRecordDrawIndexedPrimitive draw{};
+  draw.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+  draw.header.size = sizeof(draw);
+  draw.packet.state.primitiveType = 4u;
+  draw.packet.state.rtMask = 0x1u;
+  draw.packet.state.rtHandles[0] = wireHandleFromPtr(renderTarget);
+  draw.packet.state.streamSourceMask = 0x1u;
+  draw.packet.state.streamSources[0].buffer = wireHandleFromPtr(vertexBuffer);
+  draw.packet.state.streamSources[0].offset = 12u;
+  draw.packet.state.streamSources[0].stride = 16u;
+  draw.packet.baseVertex = -2;
+  draw.packet.startIndex = 5u;
+  draw.packet.primitiveCount = 2u;
+  draw.packet.ibValid = 1u;
+  draw.packet.ibHandle = wireHandleFromPtr(indexBuffer);
+  return draw;
+}
+
 D9CCommandRecordClear makeColorClearRecord() {
   D9CCommandRecordClear clear{};
   clear.header.type = D9C_COMMAND_RECORD_CLEAR;
@@ -496,6 +518,146 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
   checkEq(d3d->Release(), 0u, "release recording d3d factory");
 }
 
+void testImportedIndexedDrawPreservesBoundIndexPolicy() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create indexed recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{88};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create indexed recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+
+    auto renderTarget = device->CreateSurface(SurfaceDesc{
+        .width = 16u,
+        .height = 16u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    auto vertexBuffer = device->CreateBuffer(BufferDesc{
+        .size = 96u,
+        .pool = Pool::Default,
+        .usage = UsageVertexBuffer,
+    });
+    auto indexBuffer = device->CreateBuffer(BufferDesc{
+        .size = 32u,
+        .pool = Pool::Default,
+        .usage = UsageIndexBuffer,
+    });
+    check(renderTarget != nullptr, "indexed test render target");
+    check(vertexBuffer != nullptr, "indexed test vertex buffer");
+    check(indexBuffer != nullptr, "indexed test index buffer");
+
+    D9CSurface renderTargetWire(renderTarget);
+    D9CBuffer vertexBufferWire(vertexBuffer);
+    D9CBuffer indexBufferWire(indexBuffer);
+
+    const auto draw = makeIndexedDrawRecord(
+        &renderTargetWire, &vertexBufferWire, &indexBufferWire);
+
+    std::vector<std::uint8_t> bytes;
+    appendRecord(bytes, draw);
+
+    const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &indexBufferWire),
+    };
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, 0u,
+                         sizeof(draw), 0u, 3u),
+    };
+    const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
+
+    D9CCommandChunk chunk{};
+    chunk.version = D9C_COMMAND_CHUNK_VERSION;
+    chunk.recordCount = static_cast<std::uint32_t>(records.size());
+    chunk.recordBytes = static_cast<std::uint32_t>(wireBlob.size());
+    chunk.records = wireHandleFromPtr(wireBlob.data());
+    chunk.handleCount = static_cast<std::uint32_t>(std::size(handles));
+    chunk.handles = {};
+
+    recorder->events.clear();
+    checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
+            "commit imported indexed draw chunk");
+
+    checkEq(recorder->events.size(), static_cast<std::size_t>(4),
+            "imported indexed draw event count");
+    checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
+                   "indexed bulk retention happens first");
+    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                   "indexed replay enables bulk-retention skip");
+    check(recorder->events[1].skipDrawResourceMarking,
+          "indexed replay bulk-retention skip enabled");
+    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+                   "indexed draw is submitted after retention");
+    checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
+                   "indexed replay resets bulk-retention skip");
+    check(!recorder->events[3].skipDrawResourceMarking,
+          "indexed replay bulk-retention skip disabled");
+
+    const auto& retained = recorder->events[0].chunkHandles;
+    checkEq(retained.size(), static_cast<std::size_t>(3),
+            "indexed bulk retention resolves every imported wrapper handle");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              renderTarget->handle()),
+          "indexed retention includes render target handle");
+    check(containsChunkHandle(retained, ChunkHandleKind::Buffer,
+                              vertexBuffer->handle()),
+          "indexed retention includes vertex buffer handle");
+    check(containsChunkHandle(retained, ChunkHandleKind::Buffer,
+                              indexBuffer->handle()),
+          "indexed retention includes index buffer handle");
+
+    const auto& drawRun = recorder->events[2].drawRun;
+    checkEq(drawRun.draws.size(), static_cast<std::size_t>(1),
+            "indexed imported draw run contains one draw param");
+    check(drawRun.hot == drawRun.state.hot,
+          "indexed imported draw records canonical and flat hot state together");
+    checkEq(drawRun.hot.colorAttachments[0].handle.value,
+            renderTarget->handle().value, "indexed draw observes imported RT state");
+    checkEq(drawRun.hot.streamBuffers[0].value, vertexBuffer->handle().value,
+            "indexed draw observes imported stream state");
+    checkEq(drawRun.hot.streamOffsets[0], 12u,
+            "indexed draw observes imported stream offset");
+    checkEq(drawRun.hot.streamStrides[0], 16u,
+            "indexed draw observes imported stream stride");
+    checkEq(drawRun.hot.indexBuffer.value, indexBuffer->handle().value,
+            "indexed draw keeps imported index buffer in hot state");
+    check(drawRun.draws[0].primitiveType == PrimitiveType::TriangleList,
+          "indexed draw maps imported primitive type");
+    checkEq(drawRun.draws[0].primitiveCount, 2u,
+            "indexed draw keeps imported primitive count");
+    check(drawRun.draws[0].indexed,
+          "indexed draw param remains indexed");
+    checkEq(drawRun.draws[0].baseVertexIndex, -2,
+            "indexed draw keeps imported base vertex");
+    checkEq(drawRun.draws[0].startIndex, 5u,
+            "indexed draw keeps imported start index");
+    check(drawRun.draws[0].userIndexRange.empty(),
+          "indexed draw uses bound index buffer, not user index payload");
+    check(drawRun.payloadArena.empty(),
+          "indexed draw run has no UP payload arena");
+  }
+
+  checkEq(device->Release(), 0u, "release indexed recording d3d device");
+  checkEq(d3d->Release(), 0u, "release indexed recording d3d factory");
+}
+
 struct ArenaTestRecord {
   bool destroyPending = false;
   std::uint64_t lastUsedSeqId = 0;
@@ -584,6 +746,7 @@ void testResourcePoolUsesArenaStorageOnly() {
 int main() {
   try {
     testImportedChunkBulkRetentionAndBarrierOrdering();
+    testImportedIndexedDrawPreservesBoundIndexPolicy();
     testResourcePoolArenaRejectsStaleHandles();
     testResourcePoolUsesArenaStorageOnly();
   } catch (const TestFailure& e) {

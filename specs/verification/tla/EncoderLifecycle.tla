@@ -15,8 +15,8 @@
  *   (3) SetRenderTarget() during a scene terminates the current Render encoder
  *       and begins a new one.
  *   (4) A Render encoder may be extended (merged) across consecutive draw calls
- *       when the render target attachments are identical AND no read/write hazard
- *       exists (Bloom filter check — approximated here as a boolean flag).
+ *       when the render target attachments are identical AND exact read/write
+ *       hazard tracking reports no conflict (approximated here as a boolean flag).
  *
  * Requirement traceability:
  *   R-BACK-2.4  Merge draw calls sharing render targets (no unnecessary split)
@@ -42,7 +42,7 @@ EncoderKinds == {"None", "Render", "Blit", "Compute"}
 VARIABLES
   activeKind,    \* EncoderKinds — currently active encoder type
   activeRT,      \* RenderTargets ∪ {NoRT} — current render target (NoRT if not Render)
-  hazardFlag,    \* BOOLEAN — simulates Bloom filter detecting a read/write conflict
+  hazardFlag,    \* BOOLEAN -- simulates exact hazard tracking detecting a read/write conflict
   opCount        \* Nat — model-checking op counter
 
 NoRT == "NoRT"   \* sentinel: no render target active
@@ -118,22 +118,22 @@ BeginCompute ==
  * Permitted only when:
  *   - encoder kind is Render, AND
  *   - same render target as the active encoder, AND
- *   - Bloom filter indicates no read/write hazard (hazardFlag = FALSE).
+ *   - exact hazard tracking indicates no read/write hazard (hazardFlag = FALSE).
  * R-BACK-2.4: merging must be considered; splitting is correct but unnecessary.
  *)
 MergeRenderDraw(rt) ==
   /\ activeKind = "Render"
   /\ activeRT   = rt          \* same attachment
-  /\ ~hazardFlag              \* Bloom filter: no detected conflict
+  /\ ~hazardFlag              \* exact hazard tracking: no detected conflict
   /\ opCount < MAX_OPS
   /\ opCount' = opCount + 1
   /\ UNCHANGED <<activeKind, activeRT, hazardFlag>>
 
 (*
  * HazardDetected
- * Bloom filter signals a potential read/write conflict.
+ * Exact hazard tracking signals a read/write conflict.
  * Forces a split: the current Render encoder must be ended before the next draw.
- * (False positives are allowed; false negatives are not.)
+ * Bloom false positives are diagnostic-only and are not modeled as split causes.
  *)
 HazardDetected ==
   /\ activeKind = "Render"

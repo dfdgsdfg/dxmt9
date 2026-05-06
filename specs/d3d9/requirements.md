@@ -336,6 +336,12 @@ permitted to stall the CPU until GPU completion.
 **R-CORE-5.9** `ColorFill()` must fill a render target surface or plain surface with
 a solid color. Partial-rectangle fills must be supported.
 
+**R-CORE-5.10** Ordinary `DrawIndexedPrimitive` calls must remain indexed through the
+default production path and use the active index buffer or copied UP index payload.
+Expansion into a non-indexed transient vertex stream is permitted only for explicit
+diagnostics under `DXMT_FORCE_EXPAND_INDEXED=1` or required primitive conversion
+such as `D3DPT_TRIANGLEFAN` decomposition.
+
 ---
 
 ## 6. Shaders

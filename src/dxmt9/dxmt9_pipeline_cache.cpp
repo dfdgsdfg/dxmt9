@@ -180,8 +180,10 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
   key.blend[0].pixelFormat = pixelFormat;
   std::lock_guard lock(mutex);
   if (auto it = fill.find(key); it != fill.end()) {
+    perf::countPipelineCacheHit(perf::PipelineKind::Fill);
     return it->second.future;
   }
+  perf::countPipelineCacheMiss(perf::PipelineKind::Fill);
   auto future = std::async(std::launch::async,
                             [device, color, pixelFormat, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeGenericVertexSource(shaders::makeHash("fill")));
@@ -201,7 +203,7 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
     info.raster_sample_count = 1;
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
-    perf::countPipelineBuild();
+    perf::countPipelineBuild(perf::PipelineKind::Fill);
     auto pso = device.newRenderPipelineState(info, err);
     return pso;
   });
@@ -226,8 +228,10 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
   key.blend[0].pixelFormat = pixelFormat;
   std::lock_guard lock(mutex);
   if (auto it = this->stretch.find(key); it != this->stretch.end()) {
+    perf::countPipelineCacheHit(perf::PipelineKind::Stretch);
     return it->second.future;
   }
+  perf::countPipelineCacheMiss(perf::PipelineKind::Stretch);
   const u32 sampleCountVal = key.sampleCount;
   auto future = std::async(std::launch::async,
                             [device, sampleCountVal, pixelFormat, archive]() mutable {
@@ -246,7 +250,7 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
     info.rasterization_enabled = true;
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
-    perf::countPipelineBuild();
+    perf::countPipelineBuild(perf::PipelineKind::Stretch);
     auto pso = device.newRenderPipelineState(info, err);
     return pso;
   });
@@ -264,8 +268,10 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
   (void)archivePath;
   std::lock_guard lock(mutex);
   if (auto it = this->draw.find(key); it != this->draw.end()) {
+    perf::countPipelineCacheHit(perf::PipelineKind::Draw);
     return it->second.future;
   }
+  perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
   auto future = std::async(std::launch::async,
                             [device, key, shaderSource = std::move(shaderSource), archive]() mutable {
     auto vsSource = drawshader::makeDrawShaderSource(shaderSource, true);
@@ -305,7 +311,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
       ca.write_mask = convert::toColorWriteMask(key.blend[i].colorWriteMask);
     }
     WMT::Error err{};
-    perf::countPipelineBuild();
+    perf::countPipelineBuild(perf::PipelineKind::Draw);
     auto pso = device.newRenderPipelineState(info, err);
     return pso;
   });
@@ -338,7 +344,7 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
     info.rasterization_enabled = true;
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
-    perf::countPipelineBuild();
+    perf::countPipelineBuild(perf::PipelineKind::Present);
     auto pso = device.newRenderPipelineState(info, err);
     return pso;
   });

@@ -543,7 +543,32 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
     emitQueueTraceLine(out.str());
   }
   auto* source = pool.findSurface(sourceHandle.value);
-  if (!source || !source->texture) {
+  if (!source) {
+    perf::countPresentSourceResolved(false, false, false, true, 0, 0, 0, 0,
+                                     sourceHandle.value, 0);
+    perf::countPresentSkipped();
+    presentimpl::traceEvent("missing-source", seqId, present.window.value);
+    return false;
+  }
+  obj_handle_t sourceTextureHandle =
+      source->texture
+          ? (source->resolveTexture ? source->resolveTexture.handle : source->texture.handle)
+          : 0;
+  if (!source->texture) {
+    const std::uint32_t sampleCount =
+        source->desc.multiSampleType == core::MultiSampleType::None
+            ? 1u
+            : core::sampleCount(source->desc.multiSampleType);
+    perf::countPresentSourceResolved(true,
+                                     false,
+                                     static_cast<bool>(source->resolveTexture),
+                                     true,
+                                     source->desc.width,
+                                     source->desc.height,
+                                     static_cast<std::uint32_t>(source->desc.format),
+                                     sampleCount,
+                                     sourceHandle.value,
+                                     0);
     perf::countPresentSkipped();
     presentimpl::traceEvent("missing-source", seqId, present.window.value);
     return false;
@@ -551,8 +576,6 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   if (!present.windowed) {
     perf::countPresentFullscreen();
   }
-  obj_handle_t sourceTextureHandle =
-      source->resolveTexture ? source->resolveTexture.handle : source->texture.handle;
   const std::uint64_t forcedTextureHandle = forcedPresentTextureHandle();
   if (forcedTextureHandle != 0ull) {
     if (auto* forced = pool.findTexture(forcedTextureHandle); forced && forced->texture) {
@@ -589,6 +612,21 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
                 : core::sampleCount(source->desc.multiSampleType));
     emitQueueTraceLine(out.str());
   }
+  const std::uint32_t sourceSampleCount =
+      source->desc.multiSampleType == core::MultiSampleType::None
+          ? 1u
+          : core::sampleCount(source->desc.multiSampleType);
+  perf::countPresentSourceResolved(true,
+                                   true,
+                                   static_cast<bool>(source->resolveTexture),
+                                   source->desc.width == 0 || source->desc.height == 0 ||
+                                       sourceTextureHandle == 0,
+                                   source->desc.width,
+                                   source->desc.height,
+                                   static_cast<std::uint32_t>(source->desc.format),
+                                   sourceSampleCount,
+                                   sourceHandle.value,
+                                   sourceTextureHandle);
 
   // The originating core::SwapChain owns the Presenter and passes it via
   // SwapDesc. Missing presenter = no layer available (hwnd=0 or failed

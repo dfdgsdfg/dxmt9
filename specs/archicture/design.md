@@ -205,7 +205,7 @@ sequenceDiagram
 GPU-bound design rules:
 
 - Pass merge/split decisions consume `FlatDrawStateView`, attachment keys, and
-  hazard blooms, not PE state.
+  exact hazard read/write handle sets, not PE state or Bloom false positives.
 - Pipeline and depth decisions consume compact flat keys and shader/layout
   context.
 - Uniform payloads are interned in slot-local storage and referenced by handles
@@ -431,7 +431,7 @@ flowchart LR
     QS -. counters .-> C3["capacity growth\nuniform intern hit/miss\nUP bytes"]
     ENC -. counters .-> C4["encodeDrawCpuNs\nencodeChunkCpuNs\npipelineBuild\nencoder splits"]
     GPU -. counters .-> C5["frame P50/P95/P99\nGPU command-buffer time\nreadback stalls"]
-    PRES -. counters .-> C6["present acquire wait\nboundary wait\ntoken wait"]
+    PRES -. counters .-> C6["present acquire wait\nboundary wait\ntoken wait\nsource valid/size"]
 ```
 
 | Stage | Expected bottleneck when | Bound | Existing or required evidence | First response |
@@ -440,11 +440,11 @@ flowchart LR
 | Wire blob build/import | bridge payload bytes or validation work grows with draw count instead of chunk count | CPU/boundary | bridge ops/frame, chunk commits, record count, payload bytes, import validation timing | keep chunk granularity; optimize direct section writes only after payload bytes dominate |
 | Queue slot append | warm frames still grow vectors or copy large UP/uniform payloads per draw | CPU memory bandwidth | capacity-growth counters, UP bytes/frame, uniform intern hit/miss | reserve slot arrays, intern repeated uniform payloads, stage UP data through arenas |
 | Queue mutex and ring pressure | writer waits or commit waits rise while GPU is not saturated | CPU/concurrency | queue writer wait, commit wait, slot occupancy, chunk count | adjust chunk flush policy and ring depth before adding new cross-thread paths |
-| Encoder pass decisions | render-target changes, hazards, or clears split encoders too often | CPU/GPU | encoder split count, render-pass count, encode chunk CPU time | improve hazard classification and clear/load-action folding |
+| Encoder pass decisions | render-target changes, exact hazards, or clears split encoders too often | CPU/GPU | encoder split count, render-pass count, exact hazard/Bloom false-positive counters, encode chunk CPU time | keep exact hazard classification as the split source and fold clears/load actions |
 | Pipeline/depth/shader cache | cold or state-alternating workloads rebuild PSO/DSS entries | CPU/stutter | `pipelineBuild`, cold/warm first-frame benchmark, cache hit/miss | stabilize flat keys, use `MTLBinaryArchive`, prewarm common variants |
 | Resource upload/readback | texture streaming or readbacks force staging pressure or CPU waits | CPU/GPU sync | transient upload CPU time, sync wait, readback MB/s | use ring staging and batch copies; keep `GetRenderTargetData` as an explicit synchronous boundary |
 | GPU shader/fill/bandwidth | command submission is cheap but GPU frame time dominates | GPU | GPU command-buffer time, frame P50/P95/P99, Metal capture | optimize render-pass merging, avoid redundant blits, then tune shader/format paths |
-| Present/drawable pacing | frame token or drawable acquisition waits dominate frame time | display/WSI | present acquire wait, boundary wait, token wait, pre-acquire hit/miss | tune drawable pre-acquire and frame-latency policy without weakening D3D9 ordering |
+| Present/drawable pacing | frame token or drawable acquisition waits dominate frame time after present source is valid | display/WSI | present source valid/size, present acquire wait, boundary wait, token wait, pre-acquire hit/miss | tune drawable pre-acquire and frame-latency policy only after draw/hazard signals are clean |
 
 The highest-risk architecture regressions are still CPU-side: per-call bridge
 fallback, per-draw heap growth after warm-up, and rebuilding large state payloads

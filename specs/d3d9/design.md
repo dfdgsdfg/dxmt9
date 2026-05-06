@@ -386,6 +386,12 @@ production backend input.
 `DXMT9_PE_DRAW_FULL_SNAPSHOT=1` may force self-contained draw packets, but that is a
 debug/stress mode because it increases wire size and disables cheap run coalescing.
 
+Ordinary `DrawIndexedPrimitive` records remain indexed through the default
+production path. The backend should issue direct indexed draws using the bound
+index buffer or UP index payload; expanding indexed geometry into a transient
+non-indexed vertex stream is an opt-in diagnostic path under
+`DXMT_FORCE_EXPAND_INDEXED=1`, not a default draw policy.
+
 State and draw packet normalization are pure transforms over value data. A typical
 path is:
 
@@ -580,6 +586,9 @@ behavior. The key must not contain any pointers or handles — only scalar state
 
 `D3DPT_TRIANGLEFAN` must be decomposed in the core before submission to the backend.
 The backend never sees `D3DPT_TRIANGLEFAN`.
+
+This primitive conversion is separate from the ordinary indexed-draw policy above:
+indexed triangle-list/triangle-strip draws stay direct indexed draws by default.
 
 For fan `[v0, v1, v2, …, vN]` (primitive count = N−1):
 - Non-indexed: copy vertices into a temporary triangle list buffer.

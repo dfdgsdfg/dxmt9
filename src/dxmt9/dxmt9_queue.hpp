@@ -32,6 +32,9 @@ struct CommandBufferDiagnostics {
   bool hasStretchRect = false;
   u32 frame = 0;
   u32 compatFlags = 0;
+  u64 vertexShaderHash = 0;
+  u64 pixelShaderHash = 0;
+  u64 shaderVariantHash = 0;
 };
 
 enum class QueueSlotState {
@@ -71,6 +74,9 @@ struct ChunkSummaryInput {
   bool hasStretchRect = false;
   u32 frame = 0;
   u32 compatFlags = 0;
+  u64 vertexShaderHash = 0;
+  u64 pixelShaderHash = 0;
+  u64 shaderVariantHash = 0;
 };
 
 enum class ChunkObservationKind {
@@ -83,6 +89,9 @@ enum class ChunkObservationKind {
 struct ChunkObservation {
   ChunkObservationKind kind = ChunkObservationKind::Draw;
   u32 compatFlags = 0;
+  u64 vertexShaderHash = 0;
+  u64 pixelShaderHash = 0;
+  u64 shaderVariantHash = 0;
 };
 
 struct QueueTraceState {

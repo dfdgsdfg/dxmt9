@@ -44,9 +44,10 @@ encoding. All per-frame memory (argument buffers, imported replay storage, tempo
 staging) must be drawn from pre-allocated ring allocators.
 
 **R-BACK-2.4** The encode thread must group draw calls sharing the same render
-targets into a single `MTLRenderCommandEncoder` where no hazard (write-after-read,
-write-after-write) exists between them. Splitting into multiple encoders is correct
-but unnecessary — the requirement is that merging must be considered.
+targets into a single `MTLRenderCommandEncoder` where exact retained-resource
+hazard tracking shows no read-after-write, write-after-write, or write-after-read
+conflict between them. Splitting into multiple encoders is correct but unnecessary
+when exact tracking is clean; the requirement is that merging must be considered.
 
 **R-BACK-2.5** A `Clear()` issued before any draw call on a render target must be
 expressed as `MTLLoadActionClear` on the render pass descriptor, not as a separate
@@ -168,6 +169,11 @@ or preallocated ring allocators for command records, retained handle references,
 argument buffers, staging, copy-temp, and imported replay storage. Cache misses may
 allocate cache objects, but steady-state CPU/GPU command replay must not allocate
 from the system heap.
+
+**R-BACK-2.28** Encoder split decisions for resource hazards must be based on exact
+read/write handle-set overlap. Probabilistic Bloom overlap checks may remain only as
+diagnostic counters for false-positive detection; Bloom false positives must not
+force a render-pass split in the default path.
 
 ---
 
@@ -297,6 +303,12 @@ to the range accepted by the core requirements.
 **R-BACK-6.8** The presenter owns drawable acquisition, layer synchronization, and
 `presentDrawable` encoding. The command queue owns frame-token allocation and
 completion signaling. The API/device layer must not own presenter timing state.
+
+**R-BACK-6.9** Present diagnostics must expose the selected source validity, source
+handle/texture identity, source size, format, sample count, render-pass source size,
+and destination size. These counters must make a valid 1280x720 SFIV source
+distinguishable from missing source, missing texture, resolve, or invalid-size
+present failures before present-policy tuning is considered.
 
 ---
 
