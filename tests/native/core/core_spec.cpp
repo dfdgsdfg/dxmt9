@@ -2072,6 +2072,7 @@ void testComWrappers() {
   check(device != nullptr, "wrapper device create");
   check(device->coreDevice().swapChain() != nullptr, "wrapper core device swap chain");
   checkEq(device->GetDeviceCaps().maxTextureWidth, 16384u, "wrapper caps");
+  checkEq(device->GetDeviceCaps().declTypes, 0x000003ffu, "wrapper vertex declaration type caps");
   checkEq(device->TestCooperativeLevel(), D3D_OK, "wrapper cooperative level");
   checkEq(device->GetSwapChainCount(), size_t{1}, "wrapper swap chain count");
   auto* primarySwapChain = device->GetSwapChain();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9_backend_types.hpp"
+#include "dxmt9_capture.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <cstdint>
@@ -162,6 +163,8 @@ struct QueueSubmissionRecord {
   // finish-thread processing). Matches dxmt's CommandChunk::attached_cmdbuf
   // ownership model.
   WMT::Reference<WMT::CommandBuffer> commandBuffer{};
+  WMT::Device metalCaptureDevice{};
+  std::optional<metalcapture::MetalCaptureRequest> metalCapture{};
   size_t slotIndex = 0;
   u64 seqId = 0;
   CommandBufferDiagnostics diagnostics{};

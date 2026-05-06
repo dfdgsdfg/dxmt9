@@ -874,6 +874,11 @@ void CommandQueue::notePresentDequeued(std::uint64_t seqId) {
   presentDequeuedCv_.notify_all();
 }
 
+std::optional<core::metalcapture::MetalCaptureRequest>
+CommandQueue::metalCaptureForPresentChunk(std::uint64_t seqId) {
+  return metalCapture_.maybeCapturePresentChunk(seqId);
+}
+
 void CommandQueue::submitFlush() {
   perf::countSubmitFlush();
   std::unique_lock lock(mutex_);

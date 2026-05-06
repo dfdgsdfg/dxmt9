@@ -83,6 +83,42 @@ extern "C" obj_handle_t WMTCopyAllDevices() {
   return (obj_handle_t)MTLCopyAllDevices();
 }
 
+extern "C" obj_handle_t MTLCaptureManager_sharedCaptureManager() {
+  return (obj_handle_t)[MTLCaptureManager sharedCaptureManager];
+}
+
+extern "C" bool MTLCaptureManager_startCapture(obj_handle_t mgr, struct WMTCaptureInfo *info) {
+  if (!mgr || !info) {
+    return false;
+  }
+  @autoreleasepool {
+    MTLCaptureDescriptor *desc = [[MTLCaptureDescriptor alloc] init];
+    desc.destination = (MTLCaptureDestination)info->destination;
+    desc.captureObject = (id)info->capture_object;
+
+    const char *path = static_cast<const char *>(info->output_url.ptr);
+    NSString *pathString = path && path[0] != '\0'
+        ? [[NSString alloc] initWithCString:path encoding:NSUTF8StringEncoding]
+        : nil;
+    if (pathString) {
+      desc.outputURL = [NSURL fileURLWithPath:pathString];
+    }
+
+    NSError *error = nil;
+    const bool started = [(MTLCaptureManager *)mgr startCaptureWithDescriptor:desc error:&error];
+    [pathString release];
+    [desc release];
+    return started;
+  }
+}
+
+extern "C" void MTLCaptureManager_stopCapture(obj_handle_t mgr) {
+  if (!mgr) {
+    return;
+  }
+  [(MTLCaptureManager *)mgr stopCapture];
+}
+
 extern "C" obj_handle_t MacdrvMetalDevice_create() {
   auto *macdrv_functions = resolveMacdrvSymbol<macdrv_functions_t *>("macdrv_functions");
   auto pfn_create_metal_device = macdrv_functions

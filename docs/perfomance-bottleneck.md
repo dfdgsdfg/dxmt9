@@ -731,6 +731,13 @@ Interpretation:
 - This is now the default recorder path. Current chunk barriers cover common state/resource/query/readback ordering points, and the command chunk covers `DrawPrimitive`, `DrawIndexedPrimitive`, `DrawPrimitiveUP`, and `DrawIndexedPrimitiveUP`; broader game coverage still needs stateblock/shadow invalidation and resource-lifetime hazard tests.
 - The default path reduces PE/unix bridge pressure only. Backend `submitDraw`, encode, and transient upload work still happen per draw after the provider replays the chunk, so further speedup needs backend-side compact command records and upload coalescing.
 
+SFIV geometry corruption diagnostics:
+
+- Set `DXMT9_TRACE_DRAW_GEOMETRY=1` to emit one `[dxmt9-geometry]` line per issued Metal draw; set it to `N > 1` to sample every Nth issued draw. `DXMT9_TRACE_DRAW_GEOMETRY_LIMIT=N` caps emitted lines. `DXMT_TRACE_FILE=/path/to/log` mirrors the same lines to a file.
+- Geometry trace fields include `seq`, `api`, `metal`, `source` (`direct` / `up` / `expanded`), `shaderPath` (`vs` / `ffp`), `baseVertex`, `startVertex`, `startIndex`, `indexType`, `stream0Offset`, `stream0Stride`, effective uniform stream offset/stride, `declHash`, `fvf`, VS/PS hashes, UP byte counts, and a compact vertex declaration element list.
+- Backend `DrawParam` currently does not carry the D3D9 `MinVertexIndex` / `NumVertices` hint fields to `dxmt9_draw_encoder.mm`; the geometry trace prints `minVertex=na numVertices=na` until those fields are preserved in the command path.
+- With `DXMT_PERF_COUNTERS=1`, the final `[dxmt9-perf]` line now includes aggregate geometry buckets: FFP vs VS, indexed index16/index32, direct/UP/expanded, non-zero base vertex/start index/stream0 offset, and last observed stream0 stride / vertex-decl hash.
+
 Latency experiment results:
 
 | app | mode | fps | present encoded | boundary wait ms | acquire wait ms | writer wait ms |

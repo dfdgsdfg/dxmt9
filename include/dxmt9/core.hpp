@@ -1601,7 +1601,7 @@ struct DeviceCaps {
   u32 vertexProcessingCaps = 0x0000013b;
   u32 devCaps = 0;
   u32 devCaps2 = 0;
-  u32 declTypes = 0x0000030f;
+  u32 declTypes = 0x000003ff;
   u32 stretchRectFilterCaps = 0;
   f32 maxPointSize = 64.0f;
   u32 masterAdapterOrdinal = 0;

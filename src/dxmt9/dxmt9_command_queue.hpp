@@ -19,6 +19,7 @@
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_backend_types.hpp"
+#include "dxmt9_capture.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_pipeline_cache.hpp"
@@ -209,6 +210,8 @@ class CommandQueue {
   void runFinishLoop();
   void runCompletionWatcherLoop();
   void notePresentDequeued(std::uint64_t seqId);
+  std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureForPresentChunk(
+      std::uint64_t seqId);
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
   void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
   void startThreads(std::function<void()> encodeLoop,
@@ -302,6 +305,7 @@ class CommandQueue {
   pipeline::Cache pipelineCache_{};
   shaders::Archive shaderArchive_{};
   std::unique_ptr<resources::Initializer> initializer_;
+  core::metalcapture::MetalCaptureController metalCapture_{};
 
   struct TransientBufferAllocation {
     std::size_t offset = 0;

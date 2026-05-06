@@ -314,6 +314,22 @@ D9CCommandRecordDrawIndexedPrimitive makeIndexedDrawRecord(
   return draw;
 }
 
+D9CCommandRecordDrawIndexedPrimitive makeIndexedParamOnlyDrawRecord(
+    std::uint32_t primitiveType,
+    std::uint32_t primitiveCount,
+    int32_t baseVertex,
+    std::uint32_t startIndex) {
+  D9CCommandRecordDrawIndexedPrimitive draw{};
+  draw.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+  draw.header.size = sizeof(draw);
+  draw.packet.state.primitiveType = primitiveType;
+  draw.packet.primitiveCount = primitiveCount;
+  draw.packet.baseVertex = baseVertex;
+  draw.packet.startIndex = startIndex;
+  draw.packet.numVertices = primitiveCount * 3u;
+  return draw;
+}
+
 D9CCommandRecordClear makeColorClearRecord() {
   D9CCommandRecordClear clear{};
   clear.header.type = D9C_COMMAND_RECORD_CLEAR;
@@ -658,6 +674,233 @@ void testImportedIndexedDrawPreservesBoundIndexPolicy() {
   checkEq(d3d->Release(), 0u, "release indexed recording d3d factory");
 }
 
+void testDeviceCSetIndicesInfersIndex32Format() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create set-indices recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{91};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create set-indices recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+    auto indexBuffer = device->CreateBuffer(BufferDesc{
+        .size = 64u,
+        .pool = Pool::Default,
+        .usage = UsageIndexBuffer,
+    });
+    check(indexBuffer != nullptr, "set-indices index buffer");
+
+    D9CBuffer indexBufferWire(indexBuffer);
+    indexBufferWire.desc.format = 102u;
+    checkEq(dxmt9c_device_set_indices(&cDevice, &indexBufferWire), D3D_OK,
+            "set-indices accepts INDEX32 buffer");
+    check(device->coreDevice().state().indexBuffer == indexBuffer,
+          "set-indices binds INDEX32 buffer");
+    check(device->coreDevice().state().indexType == IndexType::UInt32,
+          "set-indices infers UInt32 from D3DFMT_INDEX32 wire desc");
+  }
+
+  checkEq(device->Release(), 0u, "release set-indices recording d3d device");
+  checkEq(d3d->Release(), 0u, "release set-indices recording d3d factory");
+}
+
+void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create indexed run recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{89};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create indexed run recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+
+    auto renderTarget = device->CreateSurface(SurfaceDesc{
+        .width = 16u,
+        .height = 16u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    auto vertexBuffer = device->CreateBuffer(BufferDesc{
+        .size = 256u,
+        .pool = Pool::Default,
+        .usage = UsageVertexBuffer,
+    });
+    auto indexBuffer = device->CreateBuffer(BufferDesc{
+        .size = 128u,
+        .pool = Pool::Default,
+        .usage = UsageIndexBuffer,
+    });
+    check(renderTarget != nullptr, "indexed run render target");
+    check(vertexBuffer != nullptr, "indexed run vertex buffer");
+    check(indexBuffer != nullptr, "indexed run index buffer");
+
+    D9CSurface renderTargetWire(renderTarget);
+    D9CBuffer vertexBufferWire(vertexBuffer);
+    D9CBuffer indexBufferWire(indexBuffer);
+    D9CVertexDecl vertexDeclWire;
+    vertexDeclWire.elements = {
+        VertexElement{0, 0, 2, 0, 0, 0},
+        VertexElement{0, 12, 4, 0, 10, 0},
+        VertexElement{0, 16, 3, 0, 5, 0},
+    };
+
+    auto statefulDraw = makeIndexedDrawRecord(
+        &renderTargetWire, &vertexBufferWire, &indexBufferWire);
+    statefulDraw.packet.state.streamSources[0].offset = 36u;
+    statefulDraw.packet.state.streamSources[0].stride = 28u;
+    statefulDraw.packet.state.fvfValid = 1u;
+    statefulDraw.packet.state.fvf = 0x11223344u;
+    statefulDraw.packet.state.vdeclValid = 1u;
+    statefulDraw.packet.state.vdeclHandle = wireHandleFromPtr(&vertexDeclWire);
+    statefulDraw.packet.baseVertex = -1;
+    statefulDraw.packet.startIndex = 3u;
+    statefulDraw.packet.primitiveCount = 1u;
+
+    const auto runDraw0 =
+        makeIndexedParamOnlyDrawRecord(4u, 2u, -4, 9u);
+    const auto runDraw1 =
+        makeIndexedParamOnlyDrawRecord(4u, 3u, 5, 15u);
+
+    std::vector<std::uint8_t> bytes;
+    appendRecord(bytes, statefulDraw);
+    appendRecord(bytes, runDraw0);
+    appendRecord(bytes, runDraw1);
+
+    const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &indexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, &vertexDeclWire),
+    };
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, 0u,
+                         sizeof(statefulDraw), 0u, 4u),
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+                         sizeof(statefulDraw), sizeof(runDraw0), 0u, 0u),
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+                         sizeof(statefulDraw) + sizeof(runDraw0),
+                         sizeof(runDraw1), 0u, 0u),
+    };
+    const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
+
+    D9CCommandChunk chunk{};
+    chunk.version = D9C_COMMAND_CHUNK_VERSION;
+    chunk.recordCount = static_cast<std::uint32_t>(records.size());
+    chunk.recordBytes = static_cast<std::uint32_t>(wireBlob.size());
+    chunk.records = wireHandleFromPtr(wireBlob.data());
+    chunk.handleCount = static_cast<std::uint32_t>(std::size(handles));
+    chunk.handles = {};
+
+    recorder->events.clear();
+    checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
+            "commit imported indexed draw-run chunk");
+
+    checkEq(recorder->events.size(), static_cast<std::size_t>(5),
+            "indexed draw-run import event count");
+    checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
+                   "indexed draw-run bulk retention happens first");
+    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                   "indexed draw-run replay enables bulk-retention skip");
+    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+                   "stateful indexed draw replays before param-only run");
+    checkEventKind(recorder->events, 3u, EventKind::SubmitDraw,
+                   "param-only indexed records coalesce into one draw run");
+    checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
+                   "indexed draw-run replay resets bulk-retention skip");
+
+    const auto& retained = recorder->events[0].chunkHandles;
+    checkEq(retained.size(), static_cast<std::size_t>(3),
+            "indexed draw-run bulk retention skips vertex-decl-only pool handles");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              renderTarget->handle()),
+          "indexed draw-run retention includes render target");
+    check(containsChunkHandle(retained, ChunkHandleKind::Buffer,
+                              vertexBuffer->handle()),
+          "indexed draw-run retention includes vertex buffer");
+    check(containsChunkHandle(retained, ChunkHandleKind::Buffer,
+                              indexBuffer->handle()),
+          "indexed draw-run retention includes index buffer");
+
+    const auto& first = recorder->events[2].drawRun;
+    checkEq(first.draws.size(), static_cast<std::size_t>(1),
+            "stateful indexed import stays a single draw");
+    checkEq(first.hot.streamBuffers[0].value, vertexBuffer->handle().value,
+            "stateful indexed import binds stream buffer");
+    checkEq(first.hot.streamOffsets[0], 36u,
+            "stateful indexed import applies stream source offset");
+    checkEq(first.hot.streamStrides[0], 28u,
+            "stateful indexed import applies stream source stride");
+    checkEq(first.hot.indexBuffer.value, indexBuffer->handle().value,
+            "stateful indexed import binds index buffer");
+    check(first.state.shaderLayout.vertexDecl.elements == vertexDeclWire.elements,
+          "stateful indexed import snapshots vertex declaration elements");
+    checkEq(first.state.shaderLayout.vertexDecl.streams[0].offset, 36u,
+            "stateful indexed import snapshots vertex decl stream offset");
+    checkEq(first.state.shaderLayout.vertexDecl.streams[0].stride, 28u,
+            "stateful indexed import snapshots vertex decl stream stride");
+
+    const auto& run = recorder->events[3].drawRun;
+    checkEq(run.draws.size(), static_cast<std::size_t>(2),
+            "param-only imported indexed records submit as one draw run");
+    check(run.hot == run.state.hot,
+          "coalesced indexed draw run records canonical and flat hot state together");
+    checkEq(run.hot.streamBuffers[0].value, vertexBuffer->handle().value,
+            "coalesced indexed run inherits stream buffer");
+    checkEq(run.hot.streamOffsets[0], 36u,
+            "coalesced indexed run inherits stream source offset");
+    checkEq(run.hot.streamStrides[0], 28u,
+            "coalesced indexed run inherits stream source stride");
+    checkEq(run.hot.indexBuffer.value, indexBuffer->handle().value,
+            "coalesced indexed run inherits index buffer");
+    check(run.state.shaderLayout.vertexDecl.elements == vertexDeclWire.elements,
+          "coalesced indexed run inherits vertex declaration snapshot");
+    check(run.draws[0].indexed, "first coalesced draw remains indexed");
+    check(run.draws[1].indexed, "second coalesced draw remains indexed");
+    checkEq(run.draws[0].primitiveCount, 2u,
+            "first coalesced draw keeps primitive count");
+    checkEq(run.draws[0].baseVertexIndex, -4,
+            "first coalesced draw keeps base vertex");
+    checkEq(run.draws[0].startIndex, 9u,
+            "first coalesced draw keeps start index");
+    checkEq(run.draws[1].primitiveCount, 3u,
+            "second coalesced draw keeps primitive count");
+    checkEq(run.draws[1].baseVertexIndex, 5,
+            "second coalesced draw keeps base vertex");
+    checkEq(run.draws[1].startIndex, 15u,
+            "second coalesced draw keeps start index");
+    check(run.payloadArena.empty(),
+          "coalesced indexed run uses bound buffers, not UP payloads");
+  }
+
+  checkEq(device->Release(), 0u, "release indexed run recording d3d device");
+  checkEq(d3d->Release(), 0u, "release indexed run recording d3d factory");
+}
+
 struct ArenaTestRecord {
   bool destroyPending = false;
   std::uint64_t lastUsedSeqId = 0;
@@ -747,6 +990,8 @@ int main() {
   try {
     testImportedChunkBulkRetentionAndBarrierOrdering();
     testImportedIndexedDrawPreservesBoundIndexPolicy();
+    testDeviceCSetIndicesInfersIndex32Format();
+    testImportedIndexedDrawRunCoalescesParamOnlyPackets();
     testResourcePoolArenaRejectsStaleHandles();
     testResourcePoolUsesArenaStorageOnly();
   } catch (const TestFailure& e) {

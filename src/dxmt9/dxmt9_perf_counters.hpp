@@ -64,6 +64,17 @@ void countBaseStateBind(std::uint32_t textureBinds,
 void countDrawShaderBucket(std::uint64_t vertexShaderHash,
                            std::uint64_t pixelShaderHash,
                            std::uint64_t variantHash);
+void countDrawGeometryDiagnostics(bool fixedFunctionPath,
+                                  bool indexed,
+                                  bool index32,
+                                  bool direct,
+                                  bool up,
+                                  bool expanded,
+                                  bool nonZeroBaseVertex,
+                                  bool nonZeroStartIndex,
+                                  bool nonZeroStream0Offset,
+                                  std::uint32_t stream0Stride,
+                                  std::uint64_t vertexDeclHash);
 void countSubmitDrawCpuTime(std::uint64_t nanoseconds);
 void countEncodeChunkCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawCpuTime(std::uint64_t nanoseconds);

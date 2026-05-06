@@ -1604,6 +1604,73 @@ void testDrawRunScanBoundary() {
   checkEq(afterBoundary->index, 3u, "draw-run scan does not consume trailing draw");
 }
 
+void testIndexedDrawRunScanPreservesPerRecordParams() {
+  auto firstDraw = makeDrawIndexedPrimitiveRecord(2u, 3u);
+  firstDraw.packet.state.primitiveType = 5u;
+  firstDraw.packet.baseVertex = -4;
+  firstDraw.packet.minVertex = 10u;
+  firstDraw.packet.numVertices = 99u;
+
+  auto secondDraw = makeDrawIndexedPrimitiveRecord(17u, 5u);
+  secondDraw.packet.state.primitiveType = 5u;
+  secondDraw.packet.baseVertex = 6;
+  secondDraw.packet.minVertex = 1u;
+  secondDraw.packet.numVertices = 12u;
+
+  auto statefulBoundary = makeDrawIndexedPrimitiveRecord(21u, 1u, true);
+  statefulBoundary.packet.baseVertex = -1;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, secondDraw);
+  appendRecord(bytes, statefulBoundary);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 3u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "indexed draw-run scan first record exists");
+  check(first->valid(), "indexed draw-run scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(scan.replayAsRun(), "indexed draw-run scan identifies a replayable run");
+  checkEq(scan.recordType,
+          static_cast<std::uint32_t>(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE),
+          "indexed draw-run scan records indexed type");
+  checkEq(scan.recordCount, 2u,
+          "indexed draw-run scan stops before stateful indexed draw");
+  checkEq(scan.endIndex, 2u, "indexed draw-run scan end index");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
+          "indexed draw-run scan reports state-delta boundary");
+
+  const auto firstParam = makeRunParam(firstDraw.packet);
+  const auto secondParam = makeRunParam(secondDraw.packet);
+  check(firstParam.indexed, "first indexed scan param remains indexed");
+  check(secondParam.indexed, "second indexed scan param remains indexed");
+  check(firstParam.primitiveType == dxmt9::core::PrimitiveType::TriangleStrip,
+        "first indexed scan param maps primitive type");
+  checkEq(firstParam.primitiveCount, 3u,
+          "first indexed scan param keeps primitive count");
+  checkEq(firstParam.baseVertexIndex, -4,
+          "first indexed scan param keeps negative base vertex");
+  checkEq(firstParam.startIndex, 2u,
+          "first indexed scan param keeps start index");
+  checkEq(secondParam.primitiveCount, 5u,
+          "second indexed scan param keeps primitive count");
+  checkEq(secondParam.baseVertexIndex, 6,
+          "second indexed scan param keeps positive base vertex");
+  checkEq(secondParam.startIndex, 17u,
+          "second indexed scan param keeps independent start index");
+  checkEq(firstParam.startVertex, 0u,
+          "indexed scan param leaves start vertex out of direct/expanded policy data");
+
+  const auto boundary =
+      nextImportedRecord(chunk, scan.stopRecord.offset, scan.stopRecord.index);
+  check(boundary.has_value(), "indexed stateful boundary record remains reachable");
+  checkEq(boundary->index, 2u,
+          "indexed draw-run scan does not consume stateful boundary");
+}
+
 void testImportedRecordReplayInfoClassifiesOrderingBoundaries() {
   const auto draw = replayInfoForCommandRecordType(D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   checkEq(static_cast<int>(draw.category), static_cast<int>(ImportedRecordReplayCategory::Draw),
@@ -1938,6 +2005,7 @@ int main() {
     testImportedRecordCountMismatch();
     testImportedTruncatedTail();
     testDrawRunScanBoundary();
+    testIndexedDrawRunScanPreservesPerRecordParams();
     testImportedRecordReplayInfoClassifiesOrderingBoundaries();
     testResourceRetentionDerivationFromDrawRecords();
     testResourceRetentionDerivationFromSurfaceAndReadbackRecords();

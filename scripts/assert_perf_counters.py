@@ -42,6 +42,20 @@ def main() -> int:
     expected = {
         "metal_buffers": "2",
         "metal_buffer_bytes": "768",
+        "draw_geometry_samples": "1",
+        "draw_geometry_ffp": "1",
+        "draw_geometry_vs": "0",
+        "draw_geometry_indexed": "1",
+        "draw_geometry_index16": "1",
+        "draw_geometry_index32": "0",
+        "draw_geometry_direct": "0",
+        "draw_geometry_up": "1",
+        "draw_geometry_expanded": "0",
+        "draw_geometry_nonzero_base_vertex": "1",
+        "draw_geometry_nonzero_start_index": "1",
+        "draw_geometry_nonzero_stream0_offset": "1",
+        "draw_geometry_last_stream0_stride": "32",
+        "draw_geometry_last_decl_hash": "0x1234",
     }
     for key, value in expected.items():
         actual = counters.get(key)

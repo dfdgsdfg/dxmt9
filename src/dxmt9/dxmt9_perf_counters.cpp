@@ -69,6 +69,20 @@ struct Counters {
   std::atomic<std::uint64_t> lastVertexShaderHash{0};
   std::atomic<std::uint64_t> lastPixelShaderHash{0};
   std::atomic<std::uint64_t> lastShaderVariantHash{0};
+  std::atomic<std::uint64_t> drawGeometrySamples{0};
+  std::atomic<std::uint64_t> drawGeometryFfp{0};
+  std::atomic<std::uint64_t> drawGeometryVs{0};
+  std::atomic<std::uint64_t> drawGeometryIndexed{0};
+  std::atomic<std::uint64_t> drawGeometryIndex16{0};
+  std::atomic<std::uint64_t> drawGeometryIndex32{0};
+  std::atomic<std::uint64_t> drawGeometryDirect{0};
+  std::atomic<std::uint64_t> drawGeometryUp{0};
+  std::atomic<std::uint64_t> drawGeometryExpanded{0};
+  std::atomic<std::uint64_t> drawGeometryNonZeroBaseVertex{0};
+  std::atomic<std::uint64_t> drawGeometryNonZeroStartIndex{0};
+  std::atomic<std::uint64_t> drawGeometryNonZeroStream0Offset{0};
+  std::atomic<std::uint64_t> drawGeometryLastStream0Stride{0};
+  std::atomic<std::uint64_t> drawGeometryLastVertexDeclHash{0};
   std::atomic<std::uint64_t> completionCompatFp16WaitNs{0};
   std::atomic<std::uint64_t> completionCompatMrtWaitNs{0};
   std::atomic<std::uint64_t> completionCompatSrgbWaitNs{0};
@@ -326,6 +340,12 @@ void report() {
       "bind_uniform_buffer=%llu bind_pipeline=%llu bind_depth_state=%llu bind_viewport=%llu bind_scissor=%llu bind_rasterizer=%llu "
       "draw_shader_bucket_samples=%llu draw_shader_bucket_changes=%llu "
       "last_vs=0x%llx last_ps=0x%llx last_variant=0x%llx "
+      "draw_geometry_samples=%llu draw_geometry_ffp=%llu draw_geometry_vs=%llu "
+      "draw_geometry_indexed=%llu draw_geometry_index16=%llu draw_geometry_index32=%llu "
+      "draw_geometry_direct=%llu draw_geometry_up=%llu draw_geometry_expanded=%llu "
+      "draw_geometry_nonzero_base_vertex=%llu draw_geometry_nonzero_start_index=%llu "
+      "draw_geometry_nonzero_stream0_offset=%llu draw_geometry_last_stream0_stride=%llu "
+      "draw_geometry_last_decl_hash=0x%llx "
       "completion_compat_fp16_ms=%.3f completion_compat_mrt_ms=%.3f completion_compat_srgb_ms=%.3f "
       "completion_compat_projected_ms=%.3f completion_compat_msaa_ms=%.3f completion_compat_query_ms=%.3f "
       "completion_shader_bucket_samples=%llu completion_shader_bucket_changes=%llu "
@@ -434,6 +454,20 @@ void report() {
       static_cast<unsigned long long>(load(c.lastVertexShaderHash)),
       static_cast<unsigned long long>(load(c.lastPixelShaderHash)),
       static_cast<unsigned long long>(load(c.lastShaderVariantHash)),
+      static_cast<unsigned long long>(load(c.drawGeometrySamples)),
+      static_cast<unsigned long long>(load(c.drawGeometryFfp)),
+      static_cast<unsigned long long>(load(c.drawGeometryVs)),
+      static_cast<unsigned long long>(load(c.drawGeometryIndexed)),
+      static_cast<unsigned long long>(load(c.drawGeometryIndex16)),
+      static_cast<unsigned long long>(load(c.drawGeometryIndex32)),
+      static_cast<unsigned long long>(load(c.drawGeometryDirect)),
+      static_cast<unsigned long long>(load(c.drawGeometryUp)),
+      static_cast<unsigned long long>(load(c.drawGeometryExpanded)),
+      static_cast<unsigned long long>(load(c.drawGeometryNonZeroBaseVertex)),
+      static_cast<unsigned long long>(load(c.drawGeometryNonZeroStartIndex)),
+      static_cast<unsigned long long>(load(c.drawGeometryNonZeroStream0Offset)),
+      static_cast<unsigned long long>(load(c.drawGeometryLastStream0Stride)),
+      static_cast<unsigned long long>(load(c.drawGeometryLastVertexDeclHash)),
       static_cast<double>(load(c.completionCompatFp16WaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionCompatMrtWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionCompatSrgbWaitNs)) / 1000000.0,
@@ -737,6 +771,49 @@ void countDrawShaderBucket(std::uint64_t vertexShaderHash,
   store(c.lastVertexShaderHash, vertexShaderHash);
   store(c.lastPixelShaderHash, pixelShaderHash);
   store(c.lastShaderVariantHash, variantHash);
+}
+
+void countDrawGeometryDiagnostics(bool fixedFunctionPath,
+                                  bool indexed,
+                                  bool index32,
+                                  bool direct,
+                                  bool up,
+                                  bool expanded,
+                                  bool nonZeroBaseVertex,
+                                  bool nonZeroStartIndex,
+                                  bool nonZeroStream0Offset,
+                                  std::uint32_t stream0Stride,
+                                  std::uint64_t vertexDeclHash) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  add(c.drawGeometrySamples);
+  add(fixedFunctionPath ? c.drawGeometryFfp : c.drawGeometryVs);
+  if (indexed) {
+    add(c.drawGeometryIndexed);
+    add(index32 ? c.drawGeometryIndex32 : c.drawGeometryIndex16);
+  }
+  if (direct) {
+    add(c.drawGeometryDirect);
+  }
+  if (up) {
+    add(c.drawGeometryUp);
+  }
+  if (expanded) {
+    add(c.drawGeometryExpanded);
+  }
+  if (nonZeroBaseVertex) {
+    add(c.drawGeometryNonZeroBaseVertex);
+  }
+  if (nonZeroStartIndex) {
+    add(c.drawGeometryNonZeroStartIndex);
+  }
+  if (nonZeroStream0Offset) {
+    add(c.drawGeometryNonZeroStream0Offset);
+  }
+  store(c.drawGeometryLastStream0Stride, stream0Stride);
+  store(c.drawGeometryLastVertexDeclHash, vertexDeclHash);
 }
 
 void countSubmitDrawCpuTime(std::uint64_t nanoseconds) {

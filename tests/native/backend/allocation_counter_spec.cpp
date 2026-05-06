@@ -25,6 +25,18 @@ int main() {
     requirePerfCountersEnabled();
     dxmt9::perf::countMetalBuffer(256);
     dxmt9::perf::countMetalBuffer(512);
+    dxmt9::perf::countDrawGeometryDiagnostics(
+        true,   // fixed-function path
+        true,   // indexed
+        false,  // UInt16 index buffer
+        false,  // not direct
+        true,   // UP payload
+        false,  // not expanded
+        true,   // non-zero base vertex
+        true,   // non-zero start index
+        true,   // non-zero stream0 offset
+        32,
+        0x1234);
   } catch (const TestFailure& e) {
     std::cerr << "allocation_counter_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

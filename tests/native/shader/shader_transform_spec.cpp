@@ -200,6 +200,19 @@ std::string translateVertex(std::span<const u32> words) {
       shader, dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
+std::string translateVertex(std::span<const u32> words, std::vector<VertexElement> elements,
+                            std::array<u32, kMaxStreams> strides = {}) {
+  const auto shader = makeShader(words);
+  DrawDesc desc{};
+  desc.vertexShader = shader;
+  desc.vertexDecl.elements = std::move(elements);
+  for (size_t i = 0; i < strides.size(); ++i) {
+    desc.vertexDecl.streams[i].stride = strides[i];
+  }
+  return dxmt9::translator::makeTranslatedVertexSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
+}
+
 std::vector<u32> makePs20TexturedBytecode(u32 samplerIndex) {
   using namespace dxmt9::d3d9bc;
   return {
@@ -304,6 +317,42 @@ std::vector<u32> makeVs30OutputSemanticBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_TEXCRDOUT, 2),
       makeSrcToken(kD3DSPR_CONST, 2),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makeVs30InputSemanticBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageBlendWeight = 1u;
+  constexpr u32 kD3DDeclUsageBlendIndices = 2u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+  return {
+      makeVersionToken(true, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageBlendWeight, 0u),
+      makeDstToken(kD3DSPR_INPUT, 1),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageBlendIndices, 0u),
+      makeDstToken(kD3DSPR_INPUT, 2),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 0u),
+      makeDstToken(kD3DSPR_INPUT, 3),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 1),
+      makeSrcToken(kD3DSPR_INPUT, 2),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 2),
+      makeSrcToken(kD3DSPR_INPUT, 3),
       kD3DSIO_END,
   };
 }
@@ -632,6 +681,42 @@ void testVs30OutputSemanticMappingBySemanticIndex() {
                    "vs_3_0 texcoord semantic does not fall back to raw output register index");
 }
 
+void testVs30VertexDeclarationTypeLoads() {
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclTypeUByte4 = 5u;
+  constexpr u32 kD3DDeclTypeShort4N = 10u;
+  constexpr u32 kD3DDeclTypeFloat16_2 = 15u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageBlendWeight = 1u;
+  constexpr u32 kD3DDeclUsageBlendIndices = 2u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  const auto source = translateVertex(
+      makeVs30InputSemanticBytecode(),
+      {
+          VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+          VertexElement{0, 12, kD3DDeclTypeShort4N, kD3DDeclMethodDefault, kD3DDeclUsageBlendWeight, 0},
+          VertexElement{0, 20, kD3DDeclTypeUByte4, kD3DDeclMethodDefault, kD3DDeclUsageBlendIndices, 0},
+          VertexElement{0, 24, kD3DDeclTypeFloat16_2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+      },
+      [] {
+        std::array<u32, kMaxStreams> strides{};
+        strides[0] = 28u;
+        return strides;
+      }());
+
+  checkContains(source, "dxmt9_load_f32x3(stream0, base + 0u)", "POSITION float3 input loads from stream");
+  checkContains(source, "dxmt9_load_i16x4_snorm(stream0, base + 12u)",
+                "SHORT4N blend weights are normalized instead of left zero");
+  checkContains(source, "dxmt9_load_u8x4(stream0, base + 20u)",
+                "UBYTE4 blend indices are loaded instead of left zero");
+  checkContains(source, "dxmt9_load_f16x2(stream0, base + 24u)",
+                "FLOAT16_2 texcoord is loaded instead of left zero");
+  checkContains(source, "const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : 28u",
+                "declared stream stride participates in shader input fetch");
+}
+
 void testDefaultNoPixelVFlipAndNoVertexYFlip() {
   const auto pixelSource = translatePixel(makePs20TexturedBytecode(0));
   const auto vertexSource = translateVertex(makeVs30OutputSemanticBytecode());
@@ -771,6 +856,7 @@ int main() {
     testPs30InputSemanticTexcoordMapping();
     testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();
+    testVs30VertexDeclarationTypeLoads();
     testDefaultNoPixelVFlipAndNoVertexYFlip();
     testPs30WriteMaskSwizzleAndSourceModifiers();
     testPs30IfElseFlowControlTranslation();

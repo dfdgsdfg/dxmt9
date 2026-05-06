@@ -507,7 +507,7 @@ DeviceCaps makeDefaultCaps(const BackendLimits &limits) {
   constexpr u32 kDestBlendCaps = 0x000027ffu;
   constexpr u32 kTextureOpCaps = 0x03feffffu;
   constexpr u32 kVertexProcessingCaps = 0x0000013bu;
-  constexpr u32 kDeclTypes = 0x0000030fu;
+  constexpr u32 kDeclTypes = 0x000003ffu;
   constexpr u32 kFvfCaps = 0x00100008u;
   constexpr u32 kLineCaps = 0x0000001fu;
   constexpr u32 kDevCaps = 0x0019aff0u;

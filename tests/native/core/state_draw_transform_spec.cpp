@@ -559,6 +559,168 @@ void testVertexDeclFvfAndStreamBindings() {
   checkEq(desc.vertexDecl.streams[4].stride, 56u, "decl stream 4 stride copied");
 }
 
+void testVertexDeclSnapshotSurvivesLaterStateMutation() {
+  DeviceState state;
+  state.reset();
+
+  const auto stream0 = makeBuffer(0x1200, 4096, UsageVertexBuffer);
+  const auto stream1 = makeBuffer(0x1210, 4096, UsageVertexBuffer);
+
+  state.fvf = 0x44556677u;
+  state.vertexDecl.fvf = state.fvf;
+  state.vertexDecl.elements = {
+      VertexElement{0, 0, 2, 0, 0, 0},
+      VertexElement{0, 12, 4, 0, 10, 0},
+      VertexElement{1, 0, 3, 0, 5, 0},
+  };
+  state.streamBuffers[0] = stream0;
+  state.streamOffsets[0] = 32u;
+  state.streamStrides[0] = 24u;
+  state.streamBuffers[1] = stream1;
+  state.streamOffsets[1] = 96u;
+  state.streamStrides[1] = 16u;
+
+  const DrawDesc desc = makeDrawDescFromState(state, {});
+  const auto canonical = makeCanonicalDrawStateForTest(desc);
+
+  state.fvf = 0u;
+  state.vertexDecl.fvf = 0u;
+  state.vertexDecl.elements.clear();
+  state.streamBuffers[0].reset();
+  state.streamOffsets[0] = 0u;
+  state.streamStrides[0] = 0u;
+  state.streamBuffers[1].reset();
+  state.streamOffsets[1] = 0u;
+  state.streamStrides[1] = 0u;
+
+  checkEq(desc.vertexDecl.fvf, 0x44556677u,
+          "draw desc keeps vertex decl FVF snapshot");
+  checkEq(desc.vertexDecl.elements.size(), std::size_t{3},
+          "draw desc keeps vertex declaration element snapshot");
+  checkEq(desc.vertexDecl.streams[0].buffer, stream0,
+          "draw desc keeps stream 0 buffer snapshot");
+  checkEq(desc.vertexDecl.streams[0].offset, 32u,
+          "draw desc keeps stream 0 offset snapshot");
+  checkEq(desc.vertexDecl.streams[0].stride, 24u,
+          "draw desc keeps stream 0 stride snapshot");
+  checkEq(desc.vertexDecl.streams[1].buffer, stream1,
+          "draw desc keeps stream 1 buffer snapshot");
+  checkEq(desc.vertexDecl.streams[1].offset, 96u,
+          "draw desc keeps stream 1 offset snapshot");
+  checkEq(desc.vertexDecl.streams[1].stride, 16u,
+          "draw desc keeps stream 1 stride snapshot");
+  checkEq(canonical.shaderLayout.vertexDecl, desc.vertexDecl,
+          "canonical shader layout owns the same immutable vertex decl snapshot");
+  checkEq(canonical.hot.streamBuffers[0], stream0->handle(),
+          "canonical hot state keeps stream 0 handle snapshot");
+  checkEq(canonical.hot.streamOffsets[0], 32u,
+          "canonical hot state keeps stream 0 offset snapshot");
+  checkEq(canonical.hot.streamStrides[0], 24u,
+          "canonical hot state keeps stream 0 stride snapshot");
+}
+
+void testIndexedDrawRunPolicyDataContract() {
+  DeviceState state;
+  state.reset();
+
+  const auto stream0 = makeBuffer(0x9100, 4096, UsageVertexBuffer);
+  const auto indexBuffer = makeBuffer(0x9200, 2048, UsageIndexBuffer);
+  state.streamBuffers[0] = stream0;
+  state.streamOffsets[0] = 44u;
+  state.streamStrides[0] = 28u;
+  state.indexBuffer = indexBuffer;
+  state.vertexDecl.elements = {
+      VertexElement{0, 0, 2, 0, 0, 0},
+      VertexElement{0, 12, 4, 0, 10, 0},
+      VertexElement{0, 16, 3, 0, 5, 0},
+  };
+
+  const DrawCallArgs args{
+      PrimitiveType::TriangleList, 7u, 123u, -5, 11u, IndexType::UInt16};
+  const DrawDesc desc = makeDrawDescFromState(state, args);
+  DrawParam param = makeDrawParamForTest(desc);
+  DrawRunDesc run{};
+  run.state = makeCanonicalDrawStateForTest(desc);
+
+  check(drawRunAppend(run, param), "indexed draw-run param appends");
+  check(drawRunValidate(run), "indexed draw-run validates");
+
+  const auto view = drawRunView(run);
+  checkEq(view.draws.size(), std::size_t{1},
+          "indexed draw-run exposes one param");
+  check(view.draws[0].indexed,
+        "indexed draw-run keeps the direct-indexed policy bit");
+  checkEq(view.draws[0].primitiveCount, 7u,
+          "indexed draw-run keeps primitive count");
+  checkEq(view.draws[0].startVertex, 123u,
+          "indexed draw-run keeps D3D start vertex for debug/direct callers");
+  checkEq(view.draws[0].baseVertexIndex, -5,
+          "indexed draw-run keeps base vertex for direct and expanded policies");
+  checkEq(view.draws[0].startIndex, 11u,
+          "indexed draw-run keeps start index for direct and expanded policies");
+  checkEq(view.draws[0].indexType, IndexType::UInt16,
+          "indexed draw-run keeps index type");
+  check(view.draws[0].userVertexRange.empty(),
+        "bound indexed draw-run has no UP vertex payload");
+  check(view.draws[0].userIndexRange.empty(),
+        "bound indexed draw-run has no UP index payload");
+  checkEq(run.state.hot.indexBuffer, indexBuffer->handle(),
+          "direct indexed policy keeps the bound index buffer in hot state");
+  checkEq(run.state.hot.streamBuffers[0], stream0->handle(),
+          "expanded indexed policy keeps source stream buffer in hot state");
+  checkEq(run.state.hot.streamOffsets[0], 44u,
+          "expanded indexed policy keeps stream byte offset");
+  checkEq(run.state.hot.streamStrides[0], 28u,
+          "expanded indexed policy keeps stream stride");
+  checkEq(run.state.shaderLayout.vertexDecl.elements, desc.vertexDecl.elements,
+          "expanded indexed policy keeps vertex declaration layout");
+
+  DrawDesc upDesc = desc;
+  upDesc.indexBuffer = {};
+  upDesc.vertexDecl.streams[0].buffer.reset();
+  upDesc.vertexDecl.streams[0].offset = 0u;
+  upDesc.vertexDecl.streams[0].stride = 28u;
+  upDesc.userVertexData = {0x10, 0x11, 0x12, 0x13, 0x14};
+  upDesc.userIndexData = {0x02, 0x00, 0x01, 0x00};
+  DrawParam upParam = makeDrawParamForTest(upDesc);
+  DrawRunDesc upRun{};
+  upRun.state = makeCanonicalDrawStateForTest(upDesc);
+  const DrawParamPayloadView upPayload{
+      .userVertexData = std::span<const u8>(upDesc.userVertexData.data(),
+                                            upDesc.userVertexData.size()),
+      .userIndexData = std::span<const u8>(upDesc.userIndexData.data(),
+                                           upDesc.userIndexData.size()),
+  };
+  check(drawRunAppend(upRun, upParam, upPayload),
+        "indexed UP draw-run param appends");
+  check(drawRunValidate(upRun), "indexed UP draw-run validates");
+
+  const auto upView = drawRunView(upRun);
+  check(upView.draws[0].indexed,
+        "indexed UP draw-run keeps indexed policy bit");
+  checkEq(upView.draws[0].baseVertexIndex, -5,
+          "indexed UP draw-run keeps base vertex");
+  checkEq(upView.draws[0].startIndex, 11u,
+          "indexed UP draw-run keeps start index");
+  checkEq(upRun.state.hot.indexBuffer, Handle{},
+          "indexed UP draw-run does not depend on bound index buffer");
+  checkEq(upRun.state.hot.streamBuffers[0], Handle{},
+          "indexed UP draw-run does not depend on bound stream buffer");
+  checkEq(upRun.state.hot.streamOffsets[0], 0u,
+          "indexed UP draw-run uses record-local vertex data from zero");
+  checkEq(upRun.state.hot.streamStrides[0], 28u,
+          "indexed UP draw-run keeps caller stride");
+  checkEq(upView.draws[0].userVertexRange.size,
+          static_cast<u32>(upDesc.userVertexData.size()),
+          "indexed UP draw-run stores vertex payload range");
+  checkEq(upView.draws[0].userIndexRange.size,
+          static_cast<u32>(upDesc.userIndexData.size()),
+          "indexed UP draw-run stores index payload range");
+  checkEq(drawRunPayloadSize(upRun),
+          upDesc.userVertexData.size() + upDesc.userIndexData.size(),
+          "indexed UP draw-run packs both payloads");
+}
+
 void testFlatDrawStateKey() {
   DeviceState state;
   state.reset();
@@ -987,6 +1149,8 @@ int main() {
   testConstantsAndShaderRefs();
   testResourceBindingsAndAttachments();
   testVertexDeclFvfAndStreamBindings();
+  testVertexDeclSnapshotSurvivesLaterStateMutation();
+  testIndexedDrawRunPolicyDataContract();
   testFlatDrawStateKey();
   return 0;
 }

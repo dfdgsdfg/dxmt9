@@ -1202,16 +1202,30 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     return;
   }
 
-  const auto binding = submissionBinding_;
-  if (!binding.mutex || !binding.completedSeqQueue) {
-    // No binding → just commit; the reference releases when `record` is
-    // destroyed by the caller. Covers teardown paths that bypass the
-    // finish-thread.
+  auto commitCommandBuffer = [&] {
+    bool captureStarted = false;
+    if (record.metalCapture.has_value()) {
+      captureStarted = metalcapture::startMetalCapture(record.metalCaptureDevice,
+                                                       *record.metalCapture);
+    }
+
     const auto commitStarted = std::chrono::steady_clock::now();
     record.commandBuffer.commit();
     perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - commitStarted).count()));
+
+    if (captureStarted) {
+      metalcapture::stopMetalCapture(*record.metalCapture);
+    }
+  };
+
+  const auto binding = submissionBinding_;
+  if (!binding.mutex || !binding.completedSeqQueue) {
+    // No binding → just commit; the reference releases when `record` is
+    // destroyed by the caller. Covers teardown paths that bypass the
+    // finish-thread.
+    commitCommandBuffer();
     return;
   }
 
@@ -1225,11 +1239,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   // the completion-watcher thread via pendingCompletion_. That thread will
   // call waitUntilCompleted() — the upstream-dxmt finish-thread shape — then
   // push the seqId into completedSeqQueue and fire the transition callbacks.
-  const auto commitStarted = std::chrono::steady_clock::now();
-  record.commandBuffer.commit();
-  perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now() - commitStarted).count()));
+  commitCommandBuffer();
 
   {
     std::lock_guard lock(pendingCompletionMutex_);

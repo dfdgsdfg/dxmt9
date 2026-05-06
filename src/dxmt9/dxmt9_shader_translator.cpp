@@ -1390,6 +1390,46 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           case kD3DDeclTypeD3DColor:
             out << "  vin[" << i << "] = dxmt9_load_d3dcolor(stream0, base + " << binding.offset << "u);\n";
             break;
+          case kD3DDeclTypeUByte4:
+            out << "  vin[" << i << "] = dxmt9_load_u8x4(stream0, base + " << binding.offset << "u);\n";
+            break;
+          case kD3DDeclTypeShort2:
+            out << "  vin[" << i << "] = float4(dxmt9_load_i16x2(stream0, base + " << binding.offset
+                << "u), 0.0f, 1.0f);\n";
+            break;
+          case kD3DDeclTypeShort4:
+            out << "  vin[" << i << "] = dxmt9_load_i16x4(stream0, base + " << binding.offset << "u);\n";
+            break;
+          case kD3DDeclTypeUByte4N:
+            out << "  vin[" << i << "] = dxmt9_load_u8x4_unorm(stream0, base + " << binding.offset << "u);\n";
+            break;
+          case kD3DDeclTypeShort2N:
+            out << "  vin[" << i << "] = float4(dxmt9_load_i16x2_snorm(stream0, base + " << binding.offset
+                << "u), 0.0f, 1.0f);\n";
+            break;
+          case kD3DDeclTypeShort4N:
+            out << "  vin[" << i << "] = dxmt9_load_i16x4_snorm(stream0, base + " << binding.offset << "u);\n";
+            break;
+          case kD3DDeclTypeUShort2N:
+            out << "  vin[" << i << "] = float4(dxmt9_load_u16x2_unorm(stream0, base + " << binding.offset
+                << "u), 0.0f, 1.0f);\n";
+            break;
+          case kD3DDeclTypeUShort4N:
+            out << "  vin[" << i << "] = dxmt9_load_u16x4_unorm(stream0, base + " << binding.offset << "u);\n";
+            break;
+          case kD3DDeclTypeUDec3:
+            out << "  vin[" << i << "] = dxmt9_load_udec3(stream0, base + " << binding.offset << "u);\n";
+            break;
+          case kD3DDeclTypeDec3N:
+            out << "  vin[" << i << "] = dxmt9_load_dec3n(stream0, base + " << binding.offset << "u);\n";
+            break;
+          case kD3DDeclTypeFloat16_2:
+            out << "  vin[" << i << "] = float4(dxmt9_load_f16x2(stream0, base + " << binding.offset
+                << "u), 0.0f, 1.0f);\n";
+            break;
+          case kD3DDeclTypeFloat16_4:
+            out << "  vin[" << i << "] = dxmt9_load_f16x4(stream0, base + " << binding.offset << "u);\n";
+            break;
           default:
             break;
         }

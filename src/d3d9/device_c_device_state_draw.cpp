@@ -821,7 +821,7 @@ extern "C" int32_t dxmt9c_device_set_stream_source_freq(D9CDevice* d, uint32_t s
 
 extern "C" int32_t dxmt9c_device_set_indices(D9CDevice* d, D9CBuffer* buf) {
   auto buffer = buf ? buf->obj : nullptr;
-  return d->iface->SetIndices(buffer);
+  return d->iface->SetIndices(buffer, buf ? idxTypeFromD3D(buf->desc.format) : dxmt9::core::IndexType::UInt16);
 }
 
 extern "C" int32_t dxmt9c_device_set_texture(D9CDevice* d, uint32_t stage, D9CTexture* tex) {

@@ -26,7 +26,20 @@ u32 declTypeSize(u32 type) {
     case kD3DDeclTypeFloat4:
       return 16;
     case kD3DDeclTypeD3DColor:
+    case kD3DDeclTypeUByte4:
+    case kD3DDeclTypeUByte4N:
+    case kD3DDeclTypeShort2:
+    case kD3DDeclTypeShort2N:
+    case kD3DDeclTypeUShort2N:
+    case kD3DDeclTypeUDec3:
+    case kD3DDeclTypeDec3N:
+    case kD3DDeclTypeFloat16_2:
       return 4;
+    case kD3DDeclTypeShort4:
+    case kD3DDeclTypeShort4N:
+    case kD3DDeclTypeUShort4N:
+    case kD3DDeclTypeFloat16_4:
+      return 8;
     default:
       return 0;
   }

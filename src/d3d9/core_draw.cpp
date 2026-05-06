@@ -181,6 +181,18 @@ constexpr u32 kDeclTypeFloat2 = 1u;
 constexpr u32 kDeclTypeFloat3 = 2u;
 constexpr u32 kDeclTypeFloat4 = 3u;
 constexpr u32 kDeclTypeD3DColor = 4u;
+constexpr u32 kDeclTypeUByte4 = 5u;
+constexpr u32 kDeclTypeShort2 = 6u;
+constexpr u32 kDeclTypeShort4 = 7u;
+constexpr u32 kDeclTypeUByte4N = 8u;
+constexpr u32 kDeclTypeShort2N = 9u;
+constexpr u32 kDeclTypeShort4N = 10u;
+constexpr u32 kDeclTypeUShort2N = 11u;
+constexpr u32 kDeclTypeUShort4N = 12u;
+constexpr u32 kDeclTypeUDec3 = 13u;
+constexpr u32 kDeclTypeDec3N = 14u;
+constexpr u32 kDeclTypeFloat16_2 = 15u;
+constexpr u32 kDeclTypeFloat16_4 = 16u;
 u32 declTypeSize(u32 type) {
   switch (type) {
   case kDeclTypeFloat1:
@@ -192,7 +204,20 @@ u32 declTypeSize(u32 type) {
   case kDeclTypeFloat4:
     return 16;
   case kDeclTypeD3DColor:
+  case kDeclTypeUByte4:
+  case kDeclTypeUByte4N:
+  case kDeclTypeShort2:
+  case kDeclTypeShort2N:
+  case kDeclTypeUShort2N:
+  case kDeclTypeUDec3:
+  case kDeclTypeDec3N:
+  case kDeclTypeFloat16_2:
     return 4;
+  case kDeclTypeShort4:
+  case kDeclTypeShort4N:
+  case kDeclTypeUShort4N:
+  case kDeclTypeFloat16_4:
+    return 8;
   default:
     return 0;
   }
