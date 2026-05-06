@@ -528,40 +528,46 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Draw records consume the effective server state, not only the handles
     // present in their delta packet. Capture these at append time so coarser
     // chunks can survive later Set* mutations and wrapper releases.
-    bool appendCurrentlyBoundDrawHandles(WireHandleEntryList& handles) {
+    bool appendCurrentlyBoundDrawHandles(WireHandleEntryList& handles,
+                                         std::size_t firstHandle) {
         for (auto* tex : textures_) {
             if (auto* raw = rawTex(tex); raw != nullptr) {
-                if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                            reinterpret_cast<uint64_t>(raw))) {
+                if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
+                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                        reinterpret_cast<uint64_t>(raw))) {
                     return false;
                 }
             }
         }
         for (auto* vb : streamSrc_) {
             if (auto* raw = rawVBuf(vb); raw != nullptr) {
-                if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
-                                            reinterpret_cast<uint64_t>(raw))) {
+                if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
+                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                        reinterpret_cast<uint64_t>(raw))) {
                     return false;
                 }
             }
         }
         if (auto* raw = rawIBuf(indexBuf_); raw != nullptr) {
-            if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
-                                        reinterpret_cast<uint64_t>(raw))) {
+            if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
+                    handles, firstHandle, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                    reinterpret_cast<uint64_t>(raw))) {
                 return false;
             }
         }
         for (auto* surf : rtSlots_) {
             if (auto* raw = rawSurf(surf); raw != nullptr) {
-                if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                            reinterpret_cast<uint64_t>(raw))) {
+                if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
+                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                        reinterpret_cast<uint64_t>(raw))) {
                     return false;
                 }
             }
         }
         if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
-            if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                        reinterpret_cast<uint64_t>(raw))) {
+            if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
+                    handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                    reinterpret_cast<uint64_t>(raw))) {
                 return false;
             }
         }
@@ -573,12 +579,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     bool appendCurrentlyBoundClearHandles(WireHandleEntryList& handles,
+                                          std::size_t firstHandle,
                                           uint32_t flags) {
         if ((flags & D3DCLEAR_TARGET) != 0) {
             for (auto* surf : rtSlots_) {
                 if (auto* raw = rawSurf(surf); raw != nullptr) {
-                    if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                                reinterpret_cast<uint64_t>(raw))) {
+                    if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
+                            handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                            reinterpret_cast<uint64_t>(raw))) {
                         return false;
                     }
                 }
@@ -586,8 +594,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         if ((flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)) != 0) {
             if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
-                if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                            reinterpret_cast<uint64_t>(raw))) {
+                if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
+                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                        reinterpret_cast<uint64_t>(raw))) {
                     return false;
                 }
             }
@@ -598,20 +607,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool collectAppendTimeExtraWireHandles(
         const D9CCommandChunkWireRecordHeader& wireRecord,
         const std::uint8_t* payload,
-        WireHandleEntryList& handles) {
+        WireHandleEntryList& handles,
+        std::size_t firstHandle) {
         switch (wireRecord.type) {
         case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
         case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
         case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
         case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
-            return appendCurrentlyBoundDrawHandles(handles);
+            return appendCurrentlyBoundDrawHandles(handles, firstHandle);
         case D9C_COMMAND_RECORD_CLEAR: {
             if (!payload || wireRecord.payloadSize < sizeof(D9CCommandRecordClear)) {
                 return false;
             }
             D9CCommandRecordClear decoded{};
             std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendCurrentlyBoundClearHandles(handles, decoded.flags);
+            return appendCurrentlyBoundClearHandles(
+                handles, firstHandle, decoded.flags);
         }
         default:
             return true;
@@ -751,9 +762,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             std::forward<WriteFn>(write),
             [this](const D9CCommandChunkWireRecordHeader& wireRecord,
                    const std::uint8_t* payload,
-                   WireHandleEntryList& extraHandles) {
+                   WireHandleEntryList& extraHandles,
+                   std::size_t firstHandle) {
                 return collectAppendTimeExtraWireHandles(
-                    wireRecord, payload, extraHandles);
+                    wireRecord, payload, extraHandles, firstHandle);
             },
             [this](PeRecorderFlushReason flushReason) {
                 return flushPendingCommandChunk(flushReason);
@@ -989,7 +1001,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const uint32_t count = shadow.dirtyEnd - shadow.dirtyStart;
         const auto* data = shadow.values.data() + static_cast<std::size_t>(start) * elemSize;
         const HRESULT hr = appendSetConstRecord(recordType, start, count, data, elemSize);
-        shadow.clear();
+        if (SUCCEEDED(hr)) {
+            shadow.clear();
+        }
         return hr;
     }
 
@@ -2369,7 +2383,14 @@ public:
                                                     D3DTEXTURESTAGESTATETYPE type,
                                                     DWORD* pValue) noexcept override {
         if (!pValue) return D3DERR_INVALIDCALL;
-        *pValue = dxmt9c_device_get_texture_stage_state(dev_, stage, (uint32_t)type);
+        const uint32_t stageSlot = textureStageSlot(stage);
+        const uint32_t stateSlot = textureStageStateSlot(type);
+        uint32_t shadowValue = 0;
+        if (peState_.tssShadow.get(stageSlot, stateSlot, shadowValue)) {
+            *pValue = shadowValue;
+            return S_OK;
+        }
+        *pValue = dxmt9c_device_get_texture_stage_state(dev_, stageSlot, stateSlot);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetSamplerState(DWORD sampler,

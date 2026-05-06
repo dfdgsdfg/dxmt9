@@ -139,7 +139,8 @@ chunk_record_import_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-chunk-record-import-spec', chunk_record_import_spec)
+test('dxmt9-chunk-record-import-spec', chunk_record_import_spec,
+     env: dxmt9_native_test_env)
 
 bridge_ops_spec = executable(
   'dxmt9-bridge-ops-spec',

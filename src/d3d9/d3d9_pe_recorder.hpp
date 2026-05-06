@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -167,8 +168,9 @@ struct D3D9PePendingCommandRetainer {
         }
     }
 
-    void retainWireHandles(const D3D9PeWireHandleEntryList& handles,
-                           Acquired& acquired) {
+    void retainWireHandles(
+        std::span<const D9CCommandChunkWireHandleEntry> handles,
+        Acquired& acquired) {
         for (const auto& handle : handles) {
             retainWireHandle(handle, acquired);
         }
@@ -264,7 +266,7 @@ struct PendingCommandChunk {
     std::uint32_t recordCount = 0;
 
     std::vector<std::uint8_t> wireBlob{};
-    D3D9PeWireHandleEntryList chunkHandleScratch{};
+    D3D9PeWireHandleEntryList handleArena{};
     D3D9PePendingCommandRetainer retainer{};
 
     bool empty() const noexcept {
@@ -276,7 +278,7 @@ struct PendingCommandChunk {
         wireRecords.clear();
         wireBlob.clear();
         recordCount = 0;
-        chunkHandleScratch.clear();
+        handleArena.clear();
         retainer.clear();
     }
 };
@@ -334,13 +336,25 @@ public:
     static bool appendRecordWireHandle(WireHandleEntryList& handles,
                                        std::uint32_t kind,
                                        std::uint64_t handle) {
+        return appendRecordWireHandleFrom(handles, 0u, kind, handle);
+    }
+
+    static bool appendRecordWireHandleFrom(WireHandleEntryList& handles,
+                                           std::size_t firstHandle,
+                                           std::uint32_t kind,
+                                           std::uint64_t handle) {
         if (handle == 0) {
             return true;
         }
         if (kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
             return false;
         }
-        for (const auto& existing : handles) {
+        if (firstHandle > handles.size()) {
+            return false;
+        }
+        for (auto it = handles.begin() + static_cast<std::ptrdiff_t>(firstHandle);
+             it != handles.end(); ++it) {
+            const auto& existing = *it;
             if (existing.kind == kind && existing.opaqueHandle == handle) {
                 return true;
             }
@@ -357,32 +371,36 @@ public:
 
     static bool appendDrawPacketWireHandles(
         const D9CDrawPrimitivePacket& packet,
-        WireHandleEntryList& handles) {
+        WireHandleEntryList& handles,
+        std::size_t firstHandle = 0u) {
         for (std::uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
             if ((packet.textureMask & (1u << stage)) != 0 &&
-                !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                        d9cWireHandleValue(packet.textures[stage]))) {
+                !appendRecordWireHandleFrom(handles, firstHandle,
+                                            D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                            d9cWireHandleValue(packet.textures[stage]))) {
                 return false;
             }
         }
         for (std::uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
             if ((packet.streamSourceMask & (1u << stream)) != 0 &&
-                !appendRecordWireHandle(
-                    handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                !appendRecordWireHandleFrom(
+                    handles, firstHandle, D9C_CHUNK_HANDLE_KIND_BUFFER,
                     d9cWireHandleValue(packet.streamSources[stream].buffer))) {
                 return false;
             }
         }
         for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
             if ((packet.rtMask & (1u << slot)) != 0 &&
-                !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                        d9cWireHandleValue(packet.rtHandles[slot]))) {
+                !appendRecordWireHandleFrom(handles, firstHandle,
+                                            D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                            d9cWireHandleValue(packet.rtHandles[slot]))) {
                 return false;
             }
         }
         if (packet.dsValid != 0 &&
-            !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                    d9cWireHandleValue(packet.dsHandle))) {
+            !appendRecordWireHandleFrom(handles, firstHandle,
+                                        D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                        d9cWireHandleValue(packet.dsHandle))) {
             return false;
         }
         return true;
@@ -390,13 +408,15 @@ public:
 
     static bool appendIndexedDrawPacketWireHandles(
         const D9CDrawIndexedPrimitivePacket& packet,
-        WireHandleEntryList& handles) {
-        if (!appendDrawPacketWireHandles(packet.state, handles)) {
+        WireHandleEntryList& handles,
+        std::size_t firstHandle = 0u) {
+        if (!appendDrawPacketWireHandles(packet.state, handles, firstHandle)) {
             return false;
         }
         if (packet.ibValid != 0 &&
-            !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
-                                    d9cWireHandleValue(packet.ibHandle))) {
+            !appendRecordWireHandleFrom(handles, firstHandle,
+                                        D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                        d9cWireHandleValue(packet.ibHandle))) {
             return false;
         }
         return true;
@@ -415,11 +435,11 @@ public:
             static_cast<std::uint32_t>(chunk_.wireRecords.size());
         const auto payloadArenaSize =
             static_cast<std::uint32_t>(chunk_.payloadArena.size());
-        if (chunk_.chunkHandleScratch.size() > 0xffffffffull) {
+        if (chunk_.handleArena.size() > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
         }
         const auto wireHandleCount =
-            static_cast<std::uint32_t>(chunk_.chunkHandleScratch.size());
+            static_cast<std::uint32_t>(chunk_.handleArena.size());
 
         const auto recordTableBytes =
             static_cast<std::uint64_t>(wireRecordCount) *
@@ -462,7 +482,7 @@ public:
             nextHandle += wireRecord.handleCount;
         }
         if (nextHandle != wireHandleCount ||
-            chunk_.chunkHandleScratch.size() != wireHandleCount) {
+            chunk_.handleArena.size() != wireHandleCount) {
             return D3DERR_INVALIDCALL;
         }
         if (sizeof(wireHeader) != wireHeader.recordTableOffset ||
@@ -487,7 +507,7 @@ public:
         if (handleTableBytes != 0) {
             std::memcpy(
                 wireBlob + wireHeader.handleTableOffset,
-                chunk_.chunkHandleScratch.data(),
+                chunk_.handleArena.data(),
                 static_cast<std::size_t>(handleTableBytes));
         }
         if (payloadArenaSize != 0) {
@@ -551,33 +571,40 @@ public:
         wireRecord.handleCount = 0;
 
         D3D9PePendingCommandRetainer::Acquired acquired{};
-        WireHandleEntryList recordHandles{};
+        const auto firstHandle = chunk_.handleArena.size();
         const auto* payload = wireRecord.payloadSize == 0
             ? nullptr
             : chunk_.payloadArena.data() + wireRecord.payloadOffset;
+        const auto rollback = [&]() {
+            chunk_.retainer.rollback(acquired);
+            chunk_.handleArena.resize(firstHandle);
+            chunk_.payloadArena.resize(payloadOffset);
+        };
         if (!retainRecordPayloadObjects(wireRecord, acquired) ||
-            !collectRecordPayloadWireHandles(wireRecord, recordHandles) ||
-            !appendExtraHandles(wireRecord, payload, recordHandles)) {
-            chunk_.retainer.rollback(acquired);
-            chunk_.payloadArena.resize(payloadOffset);
+            !collectRecordPayloadWireHandles(
+                wireRecord, chunk_.handleArena, firstHandle) ||
+            !appendExtraHandles(
+                wireRecord, payload, chunk_.handleArena, firstHandle)) {
+            rollback();
             return D3DERR_INVALIDCALL;
         }
-        chunk_.retainer.retainWireHandles(recordHandles, acquired);
-        if (chunk_.chunkHandleScratch.size() >
-            0xffffffffull - recordHandles.size()) {
-            chunk_.retainer.rollback(acquired);
-            chunk_.payloadArena.resize(payloadOffset);
+        if (chunk_.handleArena.size() > 0xffffffffull) {
+            rollback();
             return D3DERR_INVALIDCALL;
         }
+        const auto handleCount = chunk_.handleArena.size() - firstHandle;
+        const auto* handleData = handleCount == 0
+            ? nullptr
+            : chunk_.handleArena.data() + firstHandle;
+        chunk_.retainer.retainWireHandles(
+            std::span<const D9CCommandChunkWireHandleEntry>(handleData, handleCount),
+            acquired);
         wireRecord.firstHandle =
-            static_cast<std::uint32_t>(chunk_.chunkHandleScratch.size());
+            static_cast<std::uint32_t>(firstHandle);
         wireRecord.handleCount =
-            static_cast<std::uint32_t>(recordHandles.size());
+            static_cast<std::uint32_t>(handleCount);
 
         chunk_.wireRecords.push_back(wireRecord);
-        chunk_.chunkHandleScratch.insert(chunk_.chunkHandleScratch.end(),
-                                         recordHandles.begin(),
-                                         recordHandles.end());
         ++chunk_.recordCount;
 
         if (chunk_.recordCount >= maxRecords ||
@@ -797,7 +824,8 @@ private:
 
     bool collectRecordPayloadWireHandles(
         const D9CCommandChunkWireRecordHeader& wireRecord,
-        WireHandleEntryList& handles) const {
+        WireHandleEntryList& handles,
+        std::size_t firstHandle) const {
         const std::uint8_t* recordPayload = nullptr;
         if (!payload(wireRecord, recordPayload)) {
             return false;
@@ -810,7 +838,7 @@ private:
             }
             D9CCommandRecordDrawPrimitive decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet, handles);
+            return appendDrawPacketWireHandles(decoded.packet, handles, firstHandle);
         }
         case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitive)) {
@@ -818,7 +846,8 @@ private:
             }
             D9CCommandRecordDrawIndexedPrimitive decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendIndexedDrawPacketWireHandles(decoded.packet, handles);
+            return appendIndexedDrawPacketWireHandles(
+                decoded.packet, handles, firstHandle);
         }
         case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitiveUP)) {
@@ -826,7 +855,8 @@ private:
             }
             D9CCommandRecordDrawPrimitiveUP decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet.state, handles);
+            return appendDrawPacketWireHandles(
+                decoded.packet.state, handles, firstHandle);
         }
         case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)) {
@@ -834,7 +864,8 @@ private:
             }
             D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet.state, handles);
+            return appendDrawPacketWireHandles(
+                decoded.packet.state, handles, firstHandle);
         }
         case D9C_COMMAND_RECORD_APPLY_STATE: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordApplyState)) {
@@ -842,7 +873,7 @@ private:
             }
             D9CCommandRecordApplyState decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet, handles);
+            return appendDrawPacketWireHandles(decoded.packet, handles, firstHandle);
         }
         case D9C_COMMAND_RECORD_STRETCH_RECT: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordStretchRect)) {
@@ -850,10 +881,12 @@ private:
             }
             D9CCommandRecordStretchRect decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.srcWire) &&
-                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.dstWire);
+            return appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                       decoded.srcWire) &&
+                   appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                       decoded.dstWire);
         }
         case D9C_COMMAND_RECORD_COLOR_FILL: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordColorFill)) {
@@ -861,8 +894,9 @@ private:
             }
             D9CCommandRecordColorFill decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.surfaceWire);
+            return appendRecordWireHandleFrom(
+                handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                decoded.surfaceWire);
         }
         case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateTexture)) {
@@ -870,10 +904,12 @@ private:
             }
             D9CCommandRecordUpdateTexture decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                          decoded.srcWire) &&
-                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                          decoded.dstWire);
+            return appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                       decoded.srcWire) &&
+                   appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                       decoded.dstWire);
         }
         case D9C_COMMAND_RECORD_UPDATE_SURFACE: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateSurface)) {
@@ -881,10 +917,12 @@ private:
             }
             D9CCommandRecordUpdateSurface decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.srcWire) &&
-                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.dstWire);
+            return appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                       decoded.srcWire) &&
+                   appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                       decoded.dstWire);
         }
         case D9C_COMMAND_RECORD_READBACK: {
             if (wireRecord.payloadSize < sizeof(D9CCommandRecordReadback)) {
@@ -892,10 +930,12 @@ private:
             }
             D9CCommandRecordReadback decoded{};
             std::memcpy(&decoded, recordPayload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.srcWire) &&
-                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.dstWire);
+            return appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                       decoded.srcWire) &&
+                   appendRecordWireHandleFrom(
+                       handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                       decoded.dstWire);
         }
         default:
             return true;
