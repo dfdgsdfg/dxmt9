@@ -1,6 +1,12 @@
 dxmt9_frontend_core_srcs = files(
   'com.cpp',
   'core.cpp',
+  'core_draw.cpp',
+  'core_factory.cpp',
+  'core_format.cpp',
+  'core_present.cpp',
+  'core_resources.cpp',
+  'core_state.cpp',
 )
 
 dxmt9_frontend_provider_srcs = files(
@@ -24,6 +30,7 @@ dxmt9_frontend_bridge_srcs = files(
 dxmt9_pe_core_srcs = files(
   'd3d9_pe_factory.cpp',
   'd3d9_pe_device.cpp',
+  'd3d9_pe_device_child.cpp',
 )
 
 dxmt9_frontend_export_srcs = files(

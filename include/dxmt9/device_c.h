@@ -536,14 +536,11 @@ static inline int d9c_command_chunk_wire_handle_entry_reserved_valid(
     return handle && handle->reserved0 == 0u && handle->reserved1 == 0u;
 }
 
-/* Per-chunk resource retention list. PE recorder accumulates the deduped
- * set of resource handles touched by Set{Texture,StreamSource,Indices,
- * RenderTarget,DepthStencil,VertexShader,PixelShader,VertexDeclaration}
- * calls during chunk build, then serializes the entries into
- * D9CCommandChunk.handles[] at commit time. Server-side importer reads
- * the list to mark resource lifetimes against the chunk's seqId in ONE
- * pass — replaces N×per-record markDrawResources walks once the
- * importer is wired to skip per-record marking. */
+/* Per-record resource handle ranges. PE recorder derives handles from each
+ * command payload plus append-time effective state dependencies, appends them
+ * to the chunk handle table, then stores firstHandle / handleCount in the
+ * corresponding wire record. Server-side importer uses those ranges to mark
+ * resource lifetimes without rescanning unrelated records. */
 enum {
     D9C_CHUNK_HANDLE_KIND_TEXTURE = 0,
     D9C_CHUNK_HANDLE_KIND_SURFACE = 1,

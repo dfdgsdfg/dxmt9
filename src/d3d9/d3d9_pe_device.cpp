@@ -1,20 +1,17 @@
-/* src/d3d9/d3d9_pe_device.cpp — PE-side IDirect3DDevice9Ex and resource COM wrappers.
+/* src/d3d9/d3d9_pe_device.cpp — PE-side IDirect3DDevice9Ex and recorder glue.
  * All methods delegate to the dxmt9c_* C API from dxmt9/device_c.h. */
 
-#include <atomic>
 #include <algorithm>
-#include <array>
-#include <bit>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <unordered_set>
 #include <utility>
-#include <vector>
 #include "d3d9_pe.hpp"
-#include "util/com/com_private_data.hpp"
+#include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_recorder.hpp"
+#include "d3d9_pe_state_shadow.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -37,11 +34,6 @@ static void dxmt9DeviceInfoLog(const char* fmt, ...) {
     va_start(args, fmt);
     dxmt9::util::vlogf(dxmt9::util::LogLevel::Info, "dxmt9-device", fmt, args);
     va_end(args);
-}
-
-static bool dxmt9LeakStateBlocksEnabled() {
-    static const bool enabled = dxmt9::util::getenvFlag("DXMT_LEAK_STATEBLOCKS");
-    return enabled;
 }
 
 static bool dxmt9PeRecorderStatsEnabled() {
@@ -83,52 +75,6 @@ static bool isValidD3DStateBlockType(D3DSTATEBLOCKTYPE type) {
 
 static bool isUnknownFormat(D3DFORMAT fmt) {
     return fmt == D3DFMT_UNKNOWN;
-}
-
-static HRESULT setPrivateData(dxmt9::util::ComPrivateData& storage,
-                              REFGUID guid,
-                              const void* data,
-                              DWORD size,
-                              DWORD flags,
-                              const char* label,
-                              const void* self) {
-    HRESULT hr = D3DERR_INVALIDCALL;
-    if ((flags & D3DSPD_IUNKNOWN) != 0) {
-        if (data && size == sizeof(IUnknown*)) {
-            hr = storage.setInterface(guid, static_cast<const IUnknown*>(data));
-        }
-    } else {
-        hr = storage.setData(guid, size, data);
-    }
-    dxmt9DeviceDebugLog("%s_set_private_data this=%p size=%u flags=0x%x -> hr=0x%08x",
-                        label, self, (unsigned)size, (unsigned)flags, (unsigned)hr);
-    return hr;
-}
-
-static HRESULT getPrivateData(dxmt9::util::ComPrivateData& storage,
-                              REFGUID guid,
-                              void* data,
-                              DWORD* size,
-                              const char* label,
-                              const void* self) {
-    UINT localSize = size ? static_cast<UINT>(*size) : 0u;
-    HRESULT hr = storage.getData(guid, &localSize, data);
-    if (size && hr != D3DERR_NOTFOUND) {
-        *size = static_cast<DWORD>(localSize);
-    }
-    dxmt9DeviceDebugLog("%s_get_private_data this=%p data=%p size=%u -> hr=0x%08x",
-                        label, self, data, size ? (unsigned)*size : 0u, (unsigned)hr);
-    return hr;
-}
-
-static HRESULT freePrivateData(dxmt9::util::ComPrivateData& storage,
-                               REFGUID guid,
-                               const char* label,
-                               const void* self) {
-    HRESULT hr = storage.removeData(guid);
-    dxmt9DeviceDebugLog("%s_free_private_data this=%p -> hr=0x%08x",
-                        label, self, (unsigned)hr);
-    return hr;
 }
 
 static HRESULT validateSharedHandleForTexture(bool extended,
@@ -182,1487 +128,17 @@ static D9CRect toR(const RECT& r) {
     return c;
 }
 
-static D9CRect toR(const D3DBOX& b) {
-    D9CRect c; c.left = static_cast<int32_t>(b.Left); c.top = static_cast<int32_t>(b.Top);
-    c.right = static_cast<int32_t>(b.Right); c.bottom = static_cast<int32_t>(b.Bottom);
-    return c;
-}
-
-struct D3D9PeRecorderFlush {
-    virtual HRESULT FlushPeRecorderForChild() = 0;
-    virtual bool IsStateBlockRecordingForChild() const = 0;
-    virtual void InvalidateStateBlockShadowForChild() = 0;
-    virtual void AddDefaultPoolResourceRefForChild() = 0;
-    virtual void ReleaseDefaultPoolResourceRefForChild() = 0;
-    // Phase 20: child COM wrappers (Query, Surface, Buffer) that want to
-    // emit fire-and-forget records into the device's pending chunk go
-    // through these. The chunk recorder is always enabled; AppendRecordForChild
-    // forwards into the device's appendCommandRecord (same pre-flush + size
-    // cap handling as the device's own records).
-    virtual bool IsChunkRecorderEnabledForChild() const = 0;
-    virtual HRESULT AppendRecordForChild(const void* data, size_t bytes) = 0;
-
-protected:
-    ~D3D9PeRecorderFlush() = default;
-};
-
-static HRESULT flushChildRecorder(D3D9PeRecorderFlush* recorder) {
-    return recorder ? recorder->FlushPeRecorderForChild() : S_OK;
-}
-
-static bool isChildStateBlockRecording(D3D9PeRecorderFlush* recorder) {
-    return recorder && recorder->IsStateBlockRecordingForChild();
-}
-
-static HRESULT textureLevelDesc(D9CTexture* texture, UINT level, D9CSurfaceDesc* desc) {
-    if (!texture || !desc) return D3DERR_INVALIDCALL;
-    return hr32(dxmt9c_texture_get_level_desc(texture, level, desc));
-}
-
-static bool textureIsManaged(D9CTexture* texture) {
-    D9CSurfaceDesc desc{};
-    return SUCCEEDED(textureLevelDesc(texture, 0, &desc)) && desc.pool == D3DPOOL_MANAGED;
-}
-
-static DWORD setTextureLod(D9CTexture* texture, DWORD& lod, DWORD value) {
-    if (!textureIsManaged(texture)) {
-        return 0;
-    }
-    const DWORD previous = lod;
-    const DWORD levelCount = dxmt9c_texture_get_level_count(texture);
-    lod = std::min<DWORD>(value, levelCount > 0 ? levelCount - 1 : 0);
-    return previous;
-}
-
-static HRESULT setAutoGenFilter(D3DTEXTUREFILTERTYPE& filter, D3DTEXTUREFILTERTYPE value) {
-    if (value == D3DTEXF_NONE) {
-        return D3DERR_INVALIDCALL;
-    }
-    filter = value;
-    return S_OK;
-}
-
-static HRESULT lockTextureBox(D9CTexture* texture, UINT level, D3DLOCKED_BOX* locked,
-                              const D3DBOX* box, DWORD flags, D3D9PeRecorderFlush* recorder) {
-    if (!locked) return D3DERR_INVALIDCALL;
-    const HRESULT flushHr = flushChildRecorder(recorder);
-    if (FAILED(flushHr)) return flushHr;
-
-    D9CLockedRect lockedRect{};
-    D9CRect rect{};
-    if (box) rect = toR(*box);
-    const HRESULT hr = hr32(dxmt9c_texture_lock_rect(texture, level, &lockedRect,
-                                                     box ? &rect : nullptr, flags));
-    if (FAILED(hr)) return hr;
-
-    D9CSurfaceDesc desc{};
-    UINT height = 1;
-    if (box && box->Bottom > box->Top) {
-        height = box->Bottom - box->Top;
-    } else if (SUCCEEDED(textureLevelDesc(texture, level, &desc))) {
-        height = std::max<UINT>(1, desc.height);
-    }
-    locked->RowPitch = lockedRect.pitch;
-    locked->SlicePitch = lockedRect.pitch * static_cast<int>(height);
-    locked->pBits = lockedRect.bits;
-    return S_OK;
-}
-
-static HRESULT unlockTextureBox(D9CTexture* texture, UINT level, D3D9PeRecorderFlush* recorder) {
-    const HRESULT flushHr = flushChildRecorder(recorder);
-    if (FAILED(flushHr)) return flushHr;
-    return hr32(dxmt9c_texture_unlock_rect(texture, level));
-}
-
-static bool surfaceIsDefaultPool(D9CSurface* surface) {
-    if (!surface) return false;
-    D9CSurfaceDesc desc{};
-    return SUCCEEDED(hr32(dxmt9c_surface_get_desc(surface, &desc))) &&
-           desc.pool == D3DPOOL_DEFAULT;
-}
-
-static bool textureIsDefaultPool(D9CTexture* texture) {
-    if (!texture) return false;
-    D9CSurfaceDesc desc{};
-    return SUCCEEDED(textureLevelDesc(texture, 0, &desc)) &&
-           desc.pool == D3DPOOL_DEFAULT;
-}
-
-static bool bufferIsDefaultPool(D9CBuffer* buffer) {
-    if (!buffer) return false;
-    D9CBufferDesc desc{};
-    return SUCCEEDED(hr32(dxmt9c_buffer_get_desc(buffer, &desc))) &&
-           desc.pool == D3DPOOL_DEFAULT;
-}
-
-static void trackDefaultPoolResource(D3D9PeRecorderFlush* recorder, bool& tracked, bool shouldTrack) {
-    if (!recorder || !shouldTrack || tracked) return;
-    tracked = true;
-    recorder->AddDefaultPoolResourceRefForChild();
-}
-
-static void untrackDefaultPoolResource(D3D9PeRecorderFlush* recorder, bool& tracked) {
-    if (!recorder || !tracked) return;
-    tracked = false;
-    recorder->ReleaseDefaultPoolResourceRefForChild();
-}
-
-/* =========================================================================
- * Resource COM wrappers
- * Each wrapper holds a D9C* handle (owns one refcount) and exposes raw()
- * for the device to extract the handle when binding the resource.
- * ========================================================================= */
-
-/* ── Surface ──────────────────────────────────────────────────────────────── */
-
-class D3D9SurfaceImpl final : public IDirect3DSurface9 {
-    ULONG               refs_ = 1;
-    D9CSurface*         s_;
-    IDirect3DDevice9*   device_;
-    IUnknown*           container_;
-    D3D9PeRecorderFlush* recorder_;
-    HDC                 dc_ = nullptr;
-    bool                defaultPoolTracked_ = false;
-    dxmt9::util::ComPrivateData privateData_{};
-public:
-    D3D9SurfaceImpl(D9CSurface* s,
-                    IDirect3DDevice9* device,
-                    IUnknown* container,
-                    D3D9PeRecorderFlush* recorder = nullptr,
-                    bool trackDefaultPool = true)
-        : s_(s), device_(device), container_(container), recorder_(recorder) {
-        if (device_) device_->AddRef();
-        if (container_) container_->AddRef();
-        trackDefaultPoolResource(recorder_, defaultPoolTracked_,
-                                 trackDefaultPool && surfaceIsDefaultPool(s_));
-    }
-    ~D3D9SurfaceImpl() {
-        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
-        if (dc_) DeleteDC(dc_);
-        dxmt9c_surface_release(s_);
-        if (container_) container_->Release();
-        if (device_) device_->Release();
-    }
-
-    D9CSurface* raw() const { return s_; }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown)          ||
-            IsEqualGUID(riid, IID_IDirect3DResource9)||
-            IsEqualGUID(riid, IID_IDirect3DSurface9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            dxmt9DeviceDebugLog("surface_get_device this=%p -> invalid (device=null)", this);
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        dxmt9DeviceDebugLog("surface_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) noexcept override {
-        return setPrivateData(privateData_, guid, data, size, flags, "surface", this);
-    }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) noexcept override {
-        return getPrivateData(privateData_, guid, data, size, "surface", this);
-    }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
-        return freePrivateData(privateData_, guid, "surface", this);
-    }
-    DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
-    void  STDMETHODCALLTYPE PreLoad() noexcept override {}
-    D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_SURFACE; }
-    HRESULT STDMETHODCALLTYPE GetContainer(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (!container_) { *ppv = nullptr; return D3DERR_INVALIDCALL; }
-        return container_->QueryInterface(riid, ppv);
-    }
-    HRESULT STDMETHODCALLTYPE GetDesc(D3DSURFACE_DESC* pD) noexcept override {
-        if (!pD) return D3DERR_INVALIDCALL;
-        D9CSurfaceDesc sd{};
-        HRESULT hr = hr32(dxmt9c_surface_get_desc(s_, &sd));
-        if (SUCCEEDED(hr)) {
-            pD->Format = (D3DFORMAT)sd.format; pD->Type = (D3DRESOURCETYPE)sd.resourceType;
-            pD->Usage  = sd.usage;             pD->Pool = (D3DPOOL)sd.pool;
-            pD->MultiSampleType    = (D3DMULTISAMPLE_TYPE)sd.multiSampleType;
-            pD->MultiSampleQuality = sd.multiSampleQuality;
-            pD->Width  = sd.width;             pD->Height = sd.height;
-            dxmt9DeviceDebugLog("surface_get_desc this=%p fmt=%u usage=0x%x pool=%u msaa=%u/%u size=%ux%u",
-                                this,
-                                (unsigned)pD->Format,
-                                (unsigned)pD->Usage,
-                                (unsigned)pD->Pool,
-                                (unsigned)pD->MultiSampleType,
-                                (unsigned)pD->MultiSampleQuality,
-                                (unsigned)pD->Width,
-                                (unsigned)pD->Height);
-        } else {
-            dxmt9DeviceDebugLog("surface_get_desc this=%p -> hr=0x%08x", this, (unsigned)hr);
-        }
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT* pLR, const RECT* pRect,
-                                        DWORD flags) noexcept override {
-        if (!pLR) return D3DERR_INVALIDCALL;
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        dxmt9DeviceDebugLog("surface_lock_rect surface=%p flags=0x%x rect=%s",
-                            this,
-                            (unsigned)flags,
-                            pRect ? "<custom>" : "<full>");
-        D9CLockedRect lr{}; D9CRect cr{};
-        if (pRect) cr = toR(*pRect);
-        HRESULT hr = hr32(dxmt9c_surface_lock_rect(s_, &lr,
-                          pRect ? &cr : nullptr, flags));
-        if (SUCCEEDED(hr)) {
-            pLR->Pitch = lr.pitch; pLR->pBits = lr.bits;
-            dxmt9DeviceDebugLog("surface_lock_rect -> pitch=%ld bits=%p",
-                                (long)pLR->Pitch, pLR->pBits);
-        } else {
-            dxmt9DeviceDebugLog("surface_lock_rect -> hr=0x%08x", (unsigned)hr);
-        }
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE UnlockRect() noexcept override {
-        dxmt9DeviceDebugLog("surface_unlock_rect surface=%p", this);
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_surface_unlock_rect(s_));
-    }
-    HRESULT STDMETHODCALLTYPE GetDC(HDC* phdc) noexcept override {
-        dxmt9DeviceDebugLog("surface_get_dc surface=%p phdc=%p", this, phdc);
-        if (!phdc) return D3DERR_INVALIDCALL;
-        if (dc_) return D3DERR_INVALIDCALL;
-        dc_ = CreateCompatibleDC(nullptr);
-        if (!dc_) return E_FAIL;
-        *phdc = dc_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE ReleaseDC(HDC hdc) noexcept override {
-        dxmt9DeviceDebugLog("surface_release_dc surface=%p hdc=%p", this, hdc);
-        if (!dc_ || hdc != dc_) return D3DERR_INVALIDCALL;
-        DeleteDC(dc_);
-        dc_ = nullptr;
-        return S_OK;
-    }
-};
-
-/* ── Texture2D ────────────────────────────────────────────────────────────── */
-
-class D3D9TextureImpl final : public IDirect3DTexture9 {
-    ULONG       refs_ = 1;
-    D9CTexture* t_;
-    IDirect3DDevice9* device_;
-    D3D9PeRecorderFlush* recorder_;
-    DWORD lod_ = 0;
-    D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
-    bool defaultPoolTracked_ = false;
-    dxmt9::util::ComPrivateData privateData_{};
-public:
-    D3D9TextureImpl(D9CTexture* t,
-                    IDirect3DDevice9* device,
-                    D3D9PeRecorderFlush* recorder = nullptr)
-        : t_(t), device_(device), recorder_(recorder) {
-        if (device_) device_->AddRef();
-        trackDefaultPoolResource(recorder_, defaultPoolTracked_, textureIsDefaultPool(t_));
-    }
-    ~D3D9TextureImpl() {
-        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
-        dxmt9c_texture_release(t_);
-        if (device_) device_->Release();
-    }
-
-    D9CTexture* raw() const { return t_; }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown)              ||
-            IsEqualGUID(riid, IID_IDirect3DResource9)    ||
-            IsEqualGUID(riid, IID_IDirect3DBaseTexture9) ||
-            IsEqualGUID(riid, IID_IDirect3DTexture9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            dxmt9DeviceDebugLog("texture_get_device this=%p -> invalid (device=null)", this);
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        dxmt9DeviceDebugLog("texture_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) noexcept override {
-        return setPrivateData(privateData_, guid, data, size, flags, "texture", this);
-    }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) noexcept override {
-        return getPrivateData(privateData_, guid, data, size, "texture", this);
-    }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
-        return freePrivateData(privateData_, guid, "texture", this);
-    }
-    DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
-    void  STDMETHODCALLTYPE PreLoad() noexcept override {}
-    D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_TEXTURE; }
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override { return setTextureLod(t_, lod_, lod); }
-    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return textureIsManaged(t_) ? lod_ : 0; }
-    DWORD STDMETHODCALLTYPE GetLevelCount() noexcept override {
-        return dxmt9c_texture_get_level_count(t_);
-    }
-    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE filter) noexcept override {
-        return setAutoGenFilter(autoGenFilter_, filter);
-    }
-    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return autoGenFilter_; }
-    void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return;
-        dxmt9c_texture_generate_mip_sublevels(t_);
-    }
-    HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level, D3DSURFACE_DESC* pD) noexcept override {
-        if (!pD) return D3DERR_INVALIDCALL;
-        D9CSurfaceDesc sd{};
-        HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
-        if (SUCCEEDED(hr)) {
-            pD->Format = (D3DFORMAT)sd.format; pD->Type = D3DRTYPE_TEXTURE;
-            pD->Usage  = sd.usage;             pD->Pool = (D3DPOOL)sd.pool;
-            pD->MultiSampleType    = (D3DMULTISAMPLE_TYPE)sd.multiSampleType;
-            pD->MultiSampleQuality = sd.multiSampleQuality;
-            pD->Width = sd.width; pD->Height = sd.height;
-        }
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE GetSurfaceLevel(UINT level,
-                                               IDirect3DSurface9** ppS) noexcept override {
-        if (!ppS) return D3DERR_INVALIDCALL;
-        *ppS = nullptr;
-        dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u", this, level);
-        D9CSurface* s = dxmt9c_texture_get_surface_level(t_, level);
-        if (!s) {
-            dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u -> invalid", this, level);
-            return D3DERR_INVALIDCALL;
-        }
-        *ppS = new D3D9SurfaceImpl(s, device_, static_cast<IDirect3DBaseTexture9*>(this), recorder_);
-        dxmt9DeviceDebugLog("texture_get_surface_level this=%p level=%u -> surface=%p", this, level, *ppS);
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE LockRect(UINT level, D3DLOCKED_RECT* pLR,
-                                        const RECT* pRect, DWORD flags) noexcept override {
-        if (!pLR) return D3DERR_INVALIDCALL;
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        dxmt9DeviceDebugLog("texture_lock_rect texture=%p level=%u flags=0x%x rect=%s",
-                            this,
-                            (unsigned)level,
-                            (unsigned)flags,
-                            pRect ? "<custom>" : "<full>");
-        D9CLockedRect lr{}; D9CRect cr{};
-        if (pRect) cr = toR(*pRect);
-        HRESULT hr = hr32(dxmt9c_texture_lock_rect(t_, level, &lr,
-                          pRect ? &cr : nullptr, flags));
-        if (SUCCEEDED(hr)) {
-            pLR->Pitch = lr.pitch;
-            pLR->pBits = lr.bits;
-            dxmt9DeviceDebugLog("texture_lock_rect -> pitch=%ld bits=%p",
-                                (long)pLR->Pitch, pLR->pBits);
-        } else {
-            dxmt9DeviceDebugLog("texture_lock_rect -> hr=0x%08x", (unsigned)hr);
-        }
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        dxmt9DeviceDebugLog("texture_unlock_rect texture=%p level=%u", this, (unsigned)level);
-        const HRESULT hr = hr32(dxmt9c_texture_unlock_rect(t_, level));
-        if (FAILED(hr)) {
-            dxmt9DeviceDebugLog("texture_unlock_rect -> hr=0x%08x", (unsigned)hr);
-        }
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE AddDirtyRect(const RECT*) noexcept override { return S_OK; }
-};
-
-/* ── CubeTexture ──────────────────────────────────────────────────────────── */
-
-class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
-    ULONG       refs_ = 1;
-    D9CTexture* t_;
-    IDirect3DDevice9* device_;
-    D3D9PeRecorderFlush* recorder_;
-    DWORD lod_ = 0;
-    D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
-    bool defaultPoolTracked_ = false;
-    dxmt9::util::ComPrivateData privateData_{};
-public:
-    D3D9CubeTextureImpl(D9CTexture* t,
-                        IDirect3DDevice9* device,
-                        D3D9PeRecorderFlush* recorder = nullptr)
-        : t_(t), device_(device), recorder_(recorder) {
-        if (device_) device_->AddRef();
-        trackDefaultPoolResource(recorder_, defaultPoolTracked_, textureIsDefaultPool(t_));
-    }
-    ~D3D9CubeTextureImpl() {
-        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
-        dxmt9c_texture_release(t_);
-        if (device_) device_->Release();
-    }
-
-    D9CTexture* raw() const { return t_; }
-
-    bool subresourceIndex(D3DCUBEMAP_FACES face, UINT level, UINT& out) const {
-        const UINT mipCount = dxmt9c_texture_get_level_count(t_);
-        if (static_cast<UINT>(face) >= 6u || level >= mipCount) {
-            return false;
-        }
-        out = static_cast<UINT>(face) * mipCount + level;
-        return true;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown)               ||
-            IsEqualGUID(riid, IID_IDirect3DResource9)     ||
-            IsEqualGUID(riid, IID_IDirect3DBaseTexture9)  ||
-            IsEqualGUID(riid, IID_IDirect3DCubeTexture9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            dxmt9DeviceDebugLog("swapchain_get_device this=%p -> invalid (device=null)", this);
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        dxmt9DeviceDebugLog("swapchain_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) noexcept override {
-        return setPrivateData(privateData_, guid, data, size, flags, "cube", this);
-    }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) noexcept override {
-        return getPrivateData(privateData_, guid, data, size, "cube", this);
-    }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
-        return freePrivateData(privateData_, guid, "cube", this);
-    }
-    DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
-    void  STDMETHODCALLTYPE PreLoad() noexcept override {}
-    D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_CUBETEXTURE; }
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override { return setTextureLod(t_, lod_, lod); }
-    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return textureIsManaged(t_) ? lod_ : 0; }
-    DWORD STDMETHODCALLTYPE GetLevelCount() noexcept override {
-        return dxmt9c_texture_get_level_count(t_);
-    }
-    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE filter) noexcept override {
-        return setAutoGenFilter(autoGenFilter_, filter);
-    }
-    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return autoGenFilter_; }
-    void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return;
-        dxmt9c_texture_generate_mip_sublevels(t_);
-    }
-    HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level, D3DSURFACE_DESC* pD) noexcept override {
-        if (!pD) return D3DERR_INVALIDCALL;
-        D9CSurfaceDesc sd{};
-        HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
-        if (SUCCEEDED(hr)) {
-            pD->Format = (D3DFORMAT)sd.format; pD->Type = D3DRTYPE_CUBETEXTURE;
-            pD->Usage  = sd.usage;             pD->Pool = (D3DPOOL)sd.pool;
-            pD->MultiSampleType    = (D3DMULTISAMPLE_TYPE)sd.multiSampleType;
-            pD->MultiSampleQuality = sd.multiSampleQuality;
-            pD->Width = sd.width; pD->Height = sd.height;
-        }
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE GetCubeMapSurface(D3DCUBEMAP_FACES face, UINT level,
-                                                 IDirect3DSurface9** ppS) noexcept override {
-        if (!ppS) return D3DERR_INVALIDCALL;
-        *ppS = nullptr;
-        dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u",
-                            this, static_cast<unsigned>(face), level);
-        UINT idx = 0;
-        if (!subresourceIndex(face, level, idx)) {
-            dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u -> invalid",
-                                this, static_cast<unsigned>(face), level);
-            return D3DERR_INVALIDCALL;
-        }
-        D9CSurface* s = dxmt9c_texture_get_surface_level(t_, idx);
-        if (!s) {
-            dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u -> invalid",
-                                this, static_cast<unsigned>(face), level);
-            return D3DERR_INVALIDCALL;
-        }
-        *ppS = new D3D9SurfaceImpl(s, device_, static_cast<IDirect3DBaseTexture9*>(this), recorder_);
-        dxmt9DeviceDebugLog("cube_get_surface_level this=%p face=%u level=%u -> surface=%p",
-                            this, static_cast<unsigned>(face), level, *ppS);
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE LockRect(D3DCUBEMAP_FACES face, UINT level,
-                                        D3DLOCKED_RECT* pLR, const RECT* pRect,
-                                        DWORD flags) noexcept override {
-        if (!pLR) return D3DERR_INVALIDCALL;
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        UINT idx = 0;
-        if (!subresourceIndex(face, level, idx)) return D3DERR_INVALIDCALL;
-        D9CLockedRect lr{}; D9CRect cr{};
-        if (pRect) cr = toR(*pRect);
-        HRESULT hr = hr32(dxmt9c_texture_lock_rect(t_, idx, &lr,
-                          pRect ? &cr : nullptr, flags));
-        if (SUCCEEDED(hr)) { pLR->Pitch = lr.pitch; pLR->pBits = lr.bits; }
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE UnlockRect(D3DCUBEMAP_FACES face, UINT level) noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        UINT idx = 0;
-        if (!subresourceIndex(face, level, idx)) return D3DERR_INVALIDCALL;
-        return hr32(dxmt9c_texture_unlock_rect(t_, idx));
-    }
-    HRESULT STDMETHODCALLTYPE AddDirtyRect(D3DCUBEMAP_FACES, const RECT*) noexcept override { return S_OK; }
-};
-
-/* ── Volume ───────────────────────────────────────────────────────────────── */
-
-class D3D9VolumeImpl final : public IDirect3DVolume9 {
-    ULONG refs_ = 1;
-    D9CTexture* t_;
-    IDirect3DDevice9* device_;
-    IUnknown* container_;
-    D3D9PeRecorderFlush* recorder_;
-    UINT level_;
-    bool defaultPoolTracked_ = false;
-    dxmt9::util::ComPrivateData privateData_{};
-public:
-    D3D9VolumeImpl(D9CTexture* t,
-                   IDirect3DDevice9* device,
-                   IUnknown* container,
-                   D3D9PeRecorderFlush* recorder,
-                   UINT level)
-        : t_(t), device_(device), container_(container), recorder_(recorder), level_(level) {
-        if (t_) dxmt9c_texture_addref(t_);
-        if (device_) device_->AddRef();
-        if (container_) container_->AddRef();
-        trackDefaultPoolResource(recorder_, defaultPoolTracked_, textureIsDefaultPool(t_));
-    }
-    ~D3D9VolumeImpl() {
-        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
-        if (t_) dxmt9c_texture_release(t_);
-        if (container_) container_->Release();
-        if (device_) device_->Release();
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_;
-        if (!r) delete this;
-        return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown) || IsEqualGUID(riid, IID_IDirect3DVolume9)) {
-            *ppv = this;
-            AddRef();
-            return S_OK;
-        }
-        *ppv = nullptr;
-        return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, const void* data,
-                                             DWORD size, DWORD flags) noexcept override {
-        return setPrivateData(privateData_, guid, data, size, flags, "volume-level", this);
-    }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, void* data, DWORD* size) noexcept override {
-        return getPrivateData(privateData_, guid, data, size, "volume-level", this);
-    }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
-        return freePrivateData(privateData_, guid, "volume-level", this);
-    }
-    HRESULT STDMETHODCALLTYPE GetContainer(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (!container_) {
-            *ppv = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        return container_->QueryInterface(riid, ppv);
-    }
-    HRESULT STDMETHODCALLTYPE GetDesc(D3DVOLUME_DESC* pD) noexcept override {
-        if (!pD) return D3DERR_INVALIDCALL;
-        D9CSurfaceDesc sd{};
-        const HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level_, &sd));
-        if (FAILED(hr)) return hr;
-        pD->Format = static_cast<D3DFORMAT>(sd.format);
-        pD->Type = D3DRTYPE_VOLUME;
-        pD->Usage = sd.usage;
-        pD->Pool = static_cast<D3DPOOL>(sd.pool);
-        pD->Width = sd.width;
-        pD->Height = sd.height;
-        pD->Depth = 1;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX* locked, const D3DBOX* box, DWORD flags) noexcept override {
-        return lockTextureBox(t_, level_, locked, box, flags, recorder_);
-    }
-    HRESULT STDMETHODCALLTYPE UnlockBox() noexcept override {
-        return unlockTextureBox(t_, level_, recorder_);
-    }
-};
-
-/* ── VolumeTexture ────────────────────────────────────────────────────────── */
-
-class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
-    ULONG       refs_ = 1;
-    D9CTexture* t_;
-    IDirect3DDevice9* device_;
-    D3D9PeRecorderFlush* recorder_;
-    DWORD lod_ = 0;
-    D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
-    bool defaultPoolTracked_ = false;
-    dxmt9::util::ComPrivateData privateData_{};
-public:
-    D3D9VolumeTextureImpl(D9CTexture* t,
-                          IDirect3DDevice9* device,
-                          D3D9PeRecorderFlush* recorder = nullptr)
-        : t_(t), device_(device), recorder_(recorder) {
-        if (device_) device_->AddRef();
-        trackDefaultPoolResource(recorder_, defaultPoolTracked_, textureIsDefaultPool(t_));
-    }
-    ~D3D9VolumeTextureImpl() {
-        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
-        dxmt9c_texture_release(t_);
-        if (device_) device_->Release();
-    }
-
-    D9CTexture* raw() const { return t_; }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown)                ||
-            IsEqualGUID(riid, IID_IDirect3DResource9)      ||
-            IsEqualGUID(riid, IID_IDirect3DBaseTexture9)   ||
-            IsEqualGUID(riid, IID_IDirect3DVolumeTexture9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            dxmt9DeviceDebugLog("stateblock_get_device this=%p -> invalid (device=null)", this);
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        dxmt9DeviceDebugLog("stateblock_get_device this=%p -> device=%p", this, static_cast<void*>(device_));
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) noexcept override {
-        return setPrivateData(privateData_, guid, data, size, flags, "volume", this);
-    }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) noexcept override {
-        return getPrivateData(privateData_, guid, data, size, "volume", this);
-    }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
-        return freePrivateData(privateData_, guid, "volume", this);
-    }
-    DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
-    void  STDMETHODCALLTYPE PreLoad() noexcept override {}
-    D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_VOLUMETEXTURE; }
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override { return setTextureLod(t_, lod_, lod); }
-    DWORD STDMETHODCALLTYPE GetLOD()      noexcept override { return textureIsManaged(t_) ? lod_ : 0; }
-    DWORD STDMETHODCALLTYPE GetLevelCount() noexcept override {
-        return dxmt9c_texture_get_level_count(t_);
-    }
-    HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE filter) noexcept override {
-        return setAutoGenFilter(autoGenFilter_, filter);
-    }
-    D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() noexcept override { return autoGenFilter_; }
-    void STDMETHODCALLTYPE GenerateMipSubLevels() noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return;
-        dxmt9c_texture_generate_mip_sublevels(t_);
-    }
-    HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level, D3DVOLUME_DESC* pD) noexcept override {
-        if (!pD) return D3DERR_INVALIDCALL;
-        D9CSurfaceDesc sd{};
-        const HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
-        if (FAILED(hr)) return hr;
-        pD->Format = static_cast<D3DFORMAT>(sd.format);
-        pD->Type = D3DRTYPE_VOLUME;
-        pD->Usage = sd.usage;
-        pD->Pool = static_cast<D3DPOOL>(sd.pool);
-        pD->Width = sd.width;
-        pD->Height = sd.height;
-        pD->Depth = 1;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetVolumeLevel(UINT level, IDirect3DVolume9** ppVolume) noexcept override {
-        if (!ppVolume) return D3DERR_INVALIDCALL;
-        *ppVolume = nullptr;
-        if (level >= dxmt9c_texture_get_level_count(t_)) return D3DERR_INVALIDCALL;
-        *ppVolume = new D3D9VolumeImpl(t_, device_, static_cast<IDirect3DBaseTexture9*>(this), recorder_, level);
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE LockBox(UINT level, D3DLOCKED_BOX* locked, const D3DBOX* box, DWORD flags) noexcept override {
-        if (level >= dxmt9c_texture_get_level_count(t_)) return D3DERR_INVALIDCALL;
-        return lockTextureBox(t_, level, locked, box, flags, recorder_);
-    }
-    HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) noexcept override {
-        if (level >= dxmt9c_texture_get_level_count(t_)) return D3DERR_INVALIDCALL;
-        return unlockTextureBox(t_, level, recorder_);
-    }
-    HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX*) noexcept override { return S_OK; }
-};
-
-/* ── VertexBuffer ─────────────────────────────────────────────────────────── */
-
-class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
-    ULONG      refs_ = 1;
-    D9CBuffer* b_;
-    IDirect3DDevice9* device_;
-    D3D9PeRecorderFlush* recorder_;
-    bool defaultPoolTracked_ = false;
-    dxmt9::util::ComPrivateData privateData_{};
-public:
-    D3D9VertexBufferImpl(D9CBuffer* b,
-                         IDirect3DDevice9* device,
-                         D3D9PeRecorderFlush* recorder = nullptr)
-        : b_(b), device_(device), recorder_(recorder) {
-        if (device_) device_->AddRef();
-        trackDefaultPoolResource(recorder_, defaultPoolTracked_, bufferIsDefaultPool(b_));
-    }
-    ~D3D9VertexBufferImpl() {
-        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
-        dxmt9c_buffer_release(b_);
-        if (device_) device_->Release();
-    }
-
-    D9CBuffer* raw() const { return b_; }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown)              ||
-            IsEqualGUID(riid, IID_IDirect3DResource9)    ||
-            IsEqualGUID(riid, IID_IDirect3DVertexBuffer9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) noexcept override {
-        return setPrivateData(privateData_, guid, data, size, flags, "vb", this);
-    }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) noexcept override {
-        return getPrivateData(privateData_, guid, data, size, "vb", this);
-    }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
-        return freePrivateData(privateData_, guid, "vb", this);
-    }
-    DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
-    void  STDMETHODCALLTYPE PreLoad() noexcept override {}
-    D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_VERTEXBUFFER; }
-    HRESULT STDMETHODCALLTYPE Lock(UINT off, UINT size, void** pp, DWORD flags) noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_buffer_lock(b_, off, size, pp, flags));
-    }
-    HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_buffer_unlock(b_));
-    }
-    HRESULT STDMETHODCALLTYPE GetDesc(D3DVERTEXBUFFER_DESC* pDesc) noexcept override {
-        if (!pDesc) return D3DERR_INVALIDCALL;
-        D9CBufferDesc desc{};
-        const HRESULT hr = hr32(dxmt9c_buffer_get_desc(b_, &desc));
-        if (FAILED(hr)) {
-            dxmt9DeviceDebugLog("vb_get_desc vb=%p -> hr=0x%08x", this, (unsigned)hr);
-            return hr;
-        }
-        pDesc->Format = D3DFMT_VERTEXDATA;
-        pDesc->Type = D3DRTYPE_VERTEXBUFFER;
-        pDesc->Usage = desc.usage;
-        pDesc->Pool = static_cast<D3DPOOL>(desc.pool);
-        pDesc->Size = desc.size;
-        pDesc->FVF = desc.fvf;
-        dxmt9DeviceDebugLog("vb_get_desc vb=%p -> size=%u usage=0x%x pool=%u fvf=0x%x",
-                            this, desc.size, desc.usage, desc.pool, desc.fvf);
-        return S_OK;
-    }
-};
-
-/* ── IndexBuffer ──────────────────────────────────────────────────────────── */
-
-class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
-    ULONG      refs_ = 1;
-    D9CBuffer* b_;
-    IDirect3DDevice9* device_;
-    D3D9PeRecorderFlush* recorder_;
-    bool defaultPoolTracked_ = false;
-    dxmt9::util::ComPrivateData privateData_{};
-public:
-    D3D9IndexBufferImpl(D9CBuffer* b,
-                        IDirect3DDevice9* device,
-                        D3D9PeRecorderFlush* recorder = nullptr)
-        : b_(b), device_(device), recorder_(recorder) {
-        if (device_) device_->AddRef();
-        trackDefaultPoolResource(recorder_, defaultPoolTracked_, bufferIsDefaultPool(b_));
-    }
-    ~D3D9IndexBufferImpl() {
-        untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
-        dxmt9c_buffer_release(b_);
-        if (device_) device_->Release();
-    }
-
-    D9CBuffer* raw() const { return b_; }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown)             ||
-            IsEqualGUID(riid, IID_IDirect3DResource9)   ||
-            IsEqualGUID(riid, IID_IDirect3DIndexBuffer9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid,const void* data,DWORD size,DWORD flags) noexcept override {
-        return setPrivateData(privateData_, guid, data, size, flags, "ib", this);
-    }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid,void* data,DWORD* size) noexcept override {
-        return getPrivateData(privateData_, guid, data, size, "ib", this);
-    }
-    HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
-        return freePrivateData(privateData_, guid, "ib", this);
-    }
-    DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-    DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
-    void  STDMETHODCALLTYPE PreLoad() noexcept override {}
-    D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override { return D3DRTYPE_INDEXBUFFER; }
-    HRESULT STDMETHODCALLTYPE Lock(UINT off, UINT size, void** pp, DWORD flags) noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_buffer_lock(b_, off, size, pp, flags));
-    }
-    HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_buffer_unlock(b_));
-    }
-    HRESULT STDMETHODCALLTYPE GetDesc(D3DINDEXBUFFER_DESC* pDesc) noexcept override {
-        if (!pDesc) return D3DERR_INVALIDCALL;
-        D9CBufferDesc desc{};
-        const HRESULT hr = hr32(dxmt9c_buffer_get_desc(b_, &desc));
-        if (FAILED(hr)) {
-            dxmt9DeviceDebugLog("ib_get_desc ib=%p -> hr=0x%08x", this, (unsigned)hr);
-            return hr;
-        }
-        pDesc->Format = static_cast<D3DFORMAT>(desc.format);
-        pDesc->Type = D3DRTYPE_INDEXBUFFER;
-        pDesc->Usage = desc.usage;
-        pDesc->Pool = static_cast<D3DPOOL>(desc.pool);
-        pDesc->Size = desc.size;
-        dxmt9DeviceDebugLog("ib_get_desc ib=%p -> size=%u usage=0x%x pool=%u fmt=%u",
-                            this, desc.size, desc.usage, desc.pool, desc.format);
-        return S_OK;
-    }
-};
-
-/* ── VertexShader ─────────────────────────────────────────────────────────── */
-
-class D3D9VertexShaderImpl final : public IDirect3DVertexShader9 {
-    ULONG      refs_ = 1;
-    D9CShader* s_;
-    IDirect3DDevice9* device_;
-public:
-    D3D9VertexShaderImpl(D9CShader* s, IDirect3DDevice9* device) : s_(s), device_(device) {
-        if (device_) device_->AddRef();
-    }
-    ~D3D9VertexShaderImpl() {
-        dxmt9c_shader_release(s_);
-        if (device_) device_->Release();
-    }
-
-    D9CShader* raw() const { return s_; }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown) ||
-            IsEqualGUID(riid, IID_IDirect3DVertexShader9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetFunction(void* pData, UINT* pSize) noexcept override {
-        if (!pSize) return D3DERR_INVALIDCALL;
-        return hr32(dxmt9c_shader_get_bytecode(s_, pData, pSize));
-    }
-};
-
-/* ── PixelShader ──────────────────────────────────────────────────────────── */
-
-class D3D9PixelShaderImpl final : public IDirect3DPixelShader9 {
-    ULONG      refs_ = 1;
-    D9CShader* s_;
-    IDirect3DDevice9* device_;
-public:
-    D3D9PixelShaderImpl(D9CShader* s, IDirect3DDevice9* device) : s_(s), device_(device) {
-        if (device_) device_->AddRef();
-    }
-    ~D3D9PixelShaderImpl() {
-        dxmt9c_shader_release(s_);
-        if (device_) device_->Release();
-    }
-
-    D9CShader* raw() const { return s_; }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown) ||
-            IsEqualGUID(riid, IID_IDirect3DPixelShader9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetFunction(void* pData, UINT* pSize) noexcept override {
-        if (!pSize) return D3DERR_INVALIDCALL;
-        return hr32(dxmt9c_shader_get_bytecode(s_, pData, pSize));
-    }
-};
-
-/* ── VertexDeclaration ────────────────────────────────────────────────────── */
-
-class D3D9VertexDeclImpl final : public IDirect3DVertexDeclaration9 {
-    ULONG          refs_ = 1;
-    D9CVertexDecl* d_;
-    IDirect3DDevice9* device_;
-public:
-    D3D9VertexDeclImpl(D9CVertexDecl* d, IDirect3DDevice9* device) : d_(d), device_(device) {
-        if (device_) device_->AddRef();
-    }
-    ~D3D9VertexDeclImpl() {
-        dxmt9c_vdecl_release(d_);
-        if (device_) device_->Release();
-    }
-
-    D9CVertexDecl* raw() const { return d_; }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown) ||
-            IsEqualGUID(riid, IID_IDirect3DVertexDeclaration9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetDeclaration(D3DVERTEXELEMENT9* pE,
-                                              UINT* pCount) noexcept override {
-        if (!pCount) return D3DERR_INVALIDCALL;
-        D9CVertexElement tmp[64]{};
-        HRESULT hr = hr32(dxmt9c_vdecl_get_declaration(d_, tmp, pCount));
-        if (SUCCEEDED(hr) && pE) {
-            for (UINT i = 0; i < *pCount; ++i) {
-                pE[i].Stream = tmp[i].stream; pE[i].Offset = tmp[i].offset;
-                pE[i].Type   = tmp[i].type;   pE[i].Method = tmp[i].method;
-                pE[i].Usage  = tmp[i].usage;  pE[i].UsageIndex = tmp[i].usageIndex;
-            }
-        }
-        return hr;
-    }
-};
-
-/* ── Query ────────────────────────────────────────────────────────────────── */
-
-class D3D9QueryImpl final : public IDirect3DQuery9 {
-    ULONG    refs_ = 1;
-    D9CQuery* q_;
-    IDirect3DDevice9* device_;
-    D3D9PeRecorderFlush* recorder_;
-public:
-    D3D9QueryImpl(D9CQuery* q,
-                  IDirect3DDevice9* device,
-                  D3D9PeRecorderFlush* recorder = nullptr)
-        : q_(q), device_(device), recorder_(recorder) {
-        if (device_) device_->AddRef();
-    }
-    ~D3D9QueryImpl() {
-        dxmt9c_query_release(q_);
-        if (device_) device_->Release();
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown) ||
-            IsEqualGUID(riid, IID_IDirect3DQuery9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    D3DQUERYTYPE STDMETHODCALLTYPE GetType()     noexcept override { return (D3DQUERYTYPE)dxmt9c_query_get_type(q_); }
-    DWORD        STDMETHODCALLTYPE GetDataSize()  noexcept override { return dxmt9c_query_get_data_size(q_); }
-    HRESULT STDMETHODCALLTYPE Issue(DWORD flags) noexcept override {
-        // Phase 20: Query::Issue (D3DISSUE_BEGIN / D3DISSUE_END) is
-        // fire-and-forget — server records it into the query object,
-        // PE caller doesn't wait. Chunk-record path keeps it ordered
-        // with surrounding draws within the same chunk; legacy path
-        // falls back to flush+bridge.
-        if (recorder_ && recorder_->IsChunkRecorderEnabledForChild()) {
-            D9CCommandRecordQueryIssue record{};
-            record.header.type = D9C_COMMAND_RECORD_QUERY_ISSUE;
-            record.header.size = sizeof(record);
-            record.queryWire = reinterpret_cast<uint64_t>(q_);
-            record.flags = static_cast<uint32_t>(flags);
-            return recorder_->AppendRecordForChild(&record, sizeof(record));
-        }
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_query_issue(q_, flags));
-    }
-    HRESULT STDMETHODCALLTYPE GetData(void* pData, DWORD size, DWORD flags) noexcept override {
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_query_get_data(q_, pData, size, flags));
-    }
-};
-
-/* ── StateBlock ───────────────────────────────────────────────────────────── */
-
-class D3D9StateBlockImpl final : public IDirect3DStateBlock9 {
-    std::atomic<ULONG> refs_{1};
-    D9CStateBlock* sb_;
-    IDirect3DDevice9* device_;
-    D3D9PeRecorderFlush* recorder_;
-public:
-    D3D9StateBlockImpl(D9CStateBlock* sb,
-                       IDirect3DDevice9* device,
-                       D3D9PeRecorderFlush* recorder = nullptr)
-        : sb_(sb), device_(device), recorder_(recorder) {
-        if (device_) device_->AddRef();
-        dxmt9DeviceDebugLog("stateblock_ctor this=%p sb=%p device=%p refs=%u",
-                            this, static_cast<void*>(sb_), static_cast<void*>(device_),
-                            (unsigned)refs_.load());
-    }
-    ~D3D9StateBlockImpl() {
-        dxmt9DeviceDebugLog("stateblock_dtor this=%p sb=%p device=%p leak=%u",
-                            this, static_cast<void*>(sb_), static_cast<void*>(device_),
-                            dxmt9LeakStateBlocksEnabled() ? 1u : 0u);
-        if (sb_ && !dxmt9LeakStateBlocksEnabled()) {
-            dxmt9c_stateblock_release(sb_);
-        }
-        sb_ = nullptr;
-        if (device_) device_->Release();
-        device_ = nullptr;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override {
-        const ULONG refs = refs_.fetch_add(1) + 1;
-        dxmt9DeviceDebugLog("stateblock_addref this=%p sb=%p refs=%u",
-                            this, static_cast<void*>(sb_), (unsigned)refs);
-        return refs;
-    }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        const ULONG refs = refs_.fetch_sub(1) - 1;
-        dxmt9DeviceDebugLog("stateblock_release this=%p sb=%p refs=%u",
-                            this, static_cast<void*>(sb_), (unsigned)refs);
-        if (!refs) delete this;
-        return refs;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown) ||
-            IsEqualGUID(riid, IID_IDirect3DStateBlock9)) {
-            *ppv = this; AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE Capture() noexcept override {
-        dxmt9DeviceDebugLog("stateblock_capture sb=%p", this);
-        if (isChildStateBlockRecording(recorder_)) {
-            return D3DERR_INVALIDCALL;
-        }
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));
-        dxmt9DeviceDebugLog("stateblock_capture -> hr=0x%08x", (unsigned)hr);
-        return hr;
-    }
-    HRESULT STDMETHODCALLTYPE Apply() noexcept override {
-        dxmt9DeviceDebugLog("stateblock_apply sb=%p", this);
-        if (isChildStateBlockRecording(recorder_)) {
-            return D3DERR_INVALIDCALL;
-        }
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        const HRESULT hr = hr32(dxmt9c_stateblock_apply(sb_));
-        if (SUCCEEDED(hr) && recorder_) {
-            recorder_->InvalidateStateBlockShadowForChild();
-        }
-        dxmt9DeviceDebugLog("stateblock_apply -> hr=0x%08x", (unsigned)hr);
-        return hr;
-    }
-};
-
-/* ── SwapChain ────────────────────────────────────────────────────────────── */
-
-class D3D9SwapChainImpl final : public IDirect3DSwapChain9Ex {
-    ULONG        refs_ = 1;
-    D9CSwapChain* sc_;
-    IDirect3DDevice9* device_;
-    D3D9PeRecorderFlush* recorder_;
-    bool extended_ = false;
-public:
-    D3D9SwapChainImpl(D9CSwapChain* sc,
-                      IDirect3DDevice9* device,
-                      D3D9PeRecorderFlush* recorder = nullptr,
-                      bool extended = false)
-        : sc_(sc), device_(device), recorder_(recorder), extended_(extended) {
-        if (device_) device_->AddRef();
-    }
-    ~D3D9SwapChainImpl() {
-        dxmt9c_swapchain_release(sc_);
-        if (device_) device_->Release();
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
-    ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override {
-        if (!ppv) return E_POINTER;
-        if (IsEqualGUID(riid, IID_IUnknown) ||
-            IsEqualGUID(riid, IID_IDirect3DSwapChain9)) {
-            *ppv = static_cast<IDirect3DSwapChain9*>(this); AddRef(); return S_OK;
-        }
-        if (IsEqualGUID(riid, IID_IDirect3DSwapChain9Ex)) {
-            if (!extended_) {
-                *ppv = nullptr;
-                return E_NOINTERFACE;
-            }
-            *ppv = static_cast<IDirect3DSwapChain9Ex*>(this); AddRef(); return S_OK;
-        }
-        *ppv = nullptr; return E_NOINTERFACE;
-    }
-    HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
-                                       HWND wnd, const RGNDATA* dirty,
-                                       DWORD flags) noexcept override {
-        dxmt9DeviceDebugLog("swapchain_present sc=%p wnd=%p flags=0x%x src=%s dst=%s dirty=%p",
-                            this, wnd, (unsigned)flags,
-                            src ? "<custom>" : "<full>",
-                            dst ? "<custom>" : "<full>",
-                            dirty);
-        D9CRect cs{}, cd{};
-        if (src) cs = toR(*src); if (dst) cd = toR(*dst);
-        const HRESULT flushHr = flushChildRecorder(recorder_);
-        if (FAILED(flushHr)) return flushHr;
-        return hr32(dxmt9c_swapchain_present(sc_,
-            src ? &cs : nullptr, dst ? &cd : nullptr,
-            (uint64_t)(uintptr_t)wnd, dirty, flags));
-    }
-    HRESULT STDMETHODCALLTYPE GetFrontBufferData(IDirect3DSurface9*) noexcept override {
-        return D3DERR_INVALIDCALL;
-    }
-    HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT idx, D3DBACKBUFFER_TYPE,
-                                             IDirect3DSurface9** ppS) noexcept override {
-        if (!ppS) return D3DERR_INVALIDCALL;
-        *ppS = nullptr;
-        dxmt9DeviceDebugLog("swapchain_get_back_buffer sc=%p idx=%u", this, idx);
-        D9CSurface* s = dxmt9c_swapchain_get_back_buffer(sc_, idx, 0);
-        if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, device_, static_cast<IDirect3DSwapChain9*>(this), recorder_, false);
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetRasterStatus(D3DRASTER_STATUS* p) noexcept override {
-        if (p) memset(p, 0, sizeof(*p)); return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetDisplayMode(D3DDISPLAYMODE* p) noexcept override {
-        if (!p) return D3DERR_INVALIDCALL;
-        dxmt9DeviceDebugLog("swapchain_get_display_mode sc=%p", this);
-        D9CPresentParams cpp{};
-        const HRESULT hr = hr32(dxmt9c_swapchain_get_present_params(sc_, &cpp));
-        if (FAILED(hr)) {
-            dxmt9DeviceDebugLog("swapchain_get_display_mode -> hr=0x%08x", (unsigned)hr);
-            return hr;
-        }
-        p->Width = cpp.backBufferWidth;
-        p->Height = cpp.backBufferHeight;
-        p->RefreshRate = cpp.fullScreenRefreshRateHz;
-        p->Format = exposeAdapterDisplayFormat(static_cast<D3DFORMAT>(cpp.backBufferFormat));
-        dxmt9DeviceDebugLog("swapchain_get_display_mode -> %ux%u fmt=%u hz=%u",
-                            p->Width, p->Height, (unsigned)p->Format, p->RefreshRate);
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** pp) noexcept override {
-        if (!pp) return D3DERR_INVALIDCALL;
-        if (!device_) {
-            *pp = nullptr;
-            return D3DERR_INVALIDCALL;
-        }
-        device_->AddRef();
-        *pp = device_;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetPresentParameters(D3DPRESENT_PARAMETERS* pPP) noexcept override {
-        if (!pPP) return D3DERR_INVALIDCALL;
-        D9CPresentParams cpp{};
-        HRESULT hr = hr32(dxmt9c_swapchain_get_present_params(sc_, &cpp));
-        if (SUCCEEDED(hr)) {
-            pPP->BackBufferWidth        = cpp.backBufferWidth;
-            pPP->BackBufferHeight       = cpp.backBufferHeight;
-            pPP->BackBufferFormat       = (D3DFORMAT)cpp.backBufferFormat;
-            pPP->BackBufferCount        = cpp.backBufferCount;
-            pPP->MultiSampleType        = (D3DMULTISAMPLE_TYPE)cpp.multiSampleType;
-            pPP->MultiSampleQuality     = cpp.multiSampleQuality;
-            pPP->SwapEffect             = (D3DSWAPEFFECT)cpp.swapEffect;
-            pPP->hDeviceWindow          = (HWND)(uintptr_t)cpp.deviceWindow;
-            pPP->Windowed               = cpp.windowed ? TRUE : FALSE;
-            pPP->EnableAutoDepthStencil = cpp.enableAutoDepthStencil ? TRUE : FALSE;
-            pPP->AutoDepthStencilFormat = (D3DFORMAT)cpp.autoDepthStencilFormat;
-            pPP->Flags                  = cpp.flags;
-            pPP->FullScreen_RefreshRateInHz = cpp.fullScreenRefreshRateHz;
-            pPP->PresentationInterval   = cpp.presentationInterval;
-        }
-        return hr;
-    }
-
-    HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* pLastPresentCount) noexcept override {
-        if (pLastPresentCount) *pLastPresentCount = 0u;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE GetPresentStats(D3DPRESENTSTATS* pPresentationStatistics) noexcept override {
-        if (pPresentationStatistics) {
-            memset(pPresentationStatistics, 0, sizeof(*pPresentationStatistics));
-        }
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE GetDisplayModeEx(D3DDISPLAYMODEEX* pMode,
-                                                D3DDISPLAYROTATION* pRotation) noexcept override {
-        if (!pMode) return D3DERR_INVALIDCALL;
-        if (pMode->Size != sizeof(D3DDISPLAYMODEEX)) return D3DERR_INVALIDCALL;
-        D3DDISPLAYMODE mode{};
-        const HRESULT hr = GetDisplayMode(&mode);
-        if (FAILED(hr)) return hr;
-        pMode->Size = sizeof(D3DDISPLAYMODEEX);
-        pMode->Width = mode.Width;
-        pMode->Height = mode.Height;
-        pMode->RefreshRate = mode.RefreshRate;
-        pMode->Format = mode.Format;
-        pMode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
-        if (pRotation) *pRotation = D3DDISPLAYROTATION_IDENTITY;
-        return S_OK;
-    }
-};
-
 /* =========================================================================
  * Raw-handle extractors — safe because only our device creates these objects.
  * ========================================================================= */
 
-static D9CSurface*   rawSurf(IDirect3DSurface9* p)          { return p ? static_cast<D3D9SurfaceImpl*>(p)->raw()     : nullptr; }
-static D9CBuffer*    rawVBuf(IDirect3DVertexBuffer9* p)      { return p ? static_cast<D3D9VertexBufferImpl*>(p)->raw() : nullptr; }
-static D9CBuffer*    rawIBuf(IDirect3DIndexBuffer9* p)       { return p ? static_cast<D3D9IndexBufferImpl*>(p)->raw()  : nullptr; }
-static D9CShader*    rawVS(IDirect3DVertexShader9* p)        { return p ? static_cast<D3D9VertexShaderImpl*>(p)->raw() : nullptr; }
-static D9CShader*    rawPS(IDirect3DPixelShader9* p)         { return p ? static_cast<D3D9PixelShaderImpl*>(p)->raw()  : nullptr; }
-static D9CVertexDecl* rawVD(IDirect3DVertexDeclaration9* p)  { return p ? static_cast<D3D9VertexDeclImpl*>(p)->raw()  : nullptr; }
-
-static D9CTexture* rawTex(IDirect3DBaseTexture9* p) {
-    if (!p) return nullptr;
-    switch (p->GetType()) {
-    case D3DRTYPE_TEXTURE:       return static_cast<D3D9TextureImpl*>(p)->raw();
-    case D3DRTYPE_CUBETEXTURE:   return static_cast<D3D9CubeTextureImpl*>(p)->raw();
-    case D3DRTYPE_VOLUMETEXTURE: return static_cast<D3D9VolumeTextureImpl*>(p)->raw();
-    default: return nullptr;
-    }
-}
-
-static D9CWireHandle toWireHandle(const void* handle) {
-    const auto value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(handle));
-    return D9CWireHandle{
-        static_cast<uint32_t>(value & 0xffffffffull),
-        static_cast<uint32_t>(value >> 32),
-    };
-}
-
-static uint64_t d9cWireHandleValue(const D9CWireHandle& handle) {
-    return static_cast<uint64_t>(handle.lo) |
-           (static_cast<uint64_t>(handle.hi) << 32);
-}
-
-enum class PeRecorderFlushReason : std::uint32_t {
-    Explicit = 0,
-    CapacityPre,
-    CapacityPost,
-    Barrier,
-    Present,
-    Readback,
-    Reset,
-    StateBlock,
-    Child,
-    Destructor,
-    StateMutation,
-    Count,
-};
-
-static constexpr std::size_t kPeRecorderFlushReasonCount =
-    static_cast<std::size_t>(PeRecorderFlushReason::Count);
-
-static const char* peRecorderFlushReasonName(PeRecorderFlushReason reason) {
-    switch (reason) {
-    case PeRecorderFlushReason::Explicit: return "explicit";
-    case PeRecorderFlushReason::CapacityPre: return "capacity_pre";
-    case PeRecorderFlushReason::CapacityPost: return "capacity_post";
-    case PeRecorderFlushReason::Barrier: return "barrier";
-    case PeRecorderFlushReason::Present: return "present";
-    case PeRecorderFlushReason::Readback: return "readback";
-    case PeRecorderFlushReason::Reset: return "reset";
-    case PeRecorderFlushReason::StateBlock: return "stateblock";
-    case PeRecorderFlushReason::Child: return "child";
-    case PeRecorderFlushReason::Destructor: return "destructor";
-    case PeRecorderFlushReason::StateMutation: return "state_mutation";
-    case PeRecorderFlushReason::Count: break;
-    }
-    return "unknown";
-}
+static D9CSurface*   rawSurf(IDirect3DSurface9* p)          { return D3D9PeRawSurface(p); }
+static D9CBuffer*    rawVBuf(IDirect3DVertexBuffer9* p)     { return D3D9PeRawVertexBuffer(p); }
+static D9CBuffer*    rawIBuf(IDirect3DIndexBuffer9* p)      { return D3D9PeRawIndexBuffer(p); }
+static D9CShader*    rawVS(IDirect3DVertexShader9* p)       { return D3D9PeRawVertexShader(p); }
+static D9CShader*    rawPS(IDirect3DPixelShader9* p)        { return D3D9PeRawPixelShader(p); }
+static D9CVertexDecl* rawVD(IDirect3DVertexDeclaration9* p) { return D3D9PeRawVertexDecl(p); }
+static D9CTexture*   rawTex(IDirect3DBaseTexture9* p)       { return D3D9PeRawTexture(p); }
 
 /* =========================================================================
  * D3D9DeviceImpl — IDirect3DDevice9Ex
@@ -1704,334 +180,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return cached;
     }
 
-    static constexpr uint32_t kPeRenderStateSlots = 256;
-    static constexpr uint32_t kPeTextureStageSlots = 8;
-    static constexpr uint32_t kPeTextureStageStateSlots = 64;
-    static constexpr uint32_t kPeSamplerSlots = 16;
-    static constexpr uint32_t kPeSamplerStateSlots = 64;
-    static constexpr uint32_t kPeTransformTextureSlots = 8;
-    static constexpr uint32_t kPeTransformWorldSlots = 256;
-    static constexpr uint32_t kPeTransformTextureBaseSlot = 2;
-    static constexpr uint32_t kPeTransformWorldBaseSlot =
-        kPeTransformTextureBaseSlot + kPeTransformTextureSlots;
-    static constexpr uint32_t kPeTransformSlots =
-        kPeTransformWorldBaseSlot + kPeTransformWorldSlots;
-
-    using WireHandleEntryList = std::vector<D9CCommandChunkWireHandleEntry>;
-
-    struct PeRecorderStats {
-        std::uint64_t commitCount = 0;
-        std::uint64_t recordCountTotal = 0;
-        std::uint64_t recordCountMax = 0;
-        std::uint64_t payloadBytesTotal = 0;
-        std::uint64_t payloadBytesMax = 0;
-        std::uint64_t handleCountTotal = 0;
-        std::uint64_t handleCountMax = 0;
-        std::array<std::uint64_t, kPeRecorderFlushReasonCount> flushReasons{};
-        std::uint64_t drawPrimitiveUPCalls = 0;
-        std::uint64_t drawIndexedPrimitiveUPCalls = 0;
-        std::uint64_t upVertexBytes = 0;
-        std::uint64_t upIndexBytes = 0;
-    };
-
-    template<std::size_t Slots>
-    struct FixedStateTable {
-        std::array<uint32_t, Slots> values{};
-        std::array<uint64_t, (Slots + 63u) / 64u> occupied{};
-        uint32_t count = 0;
-
-        static constexpr bool valid(uint32_t slot) noexcept {
-            return slot < Slots;
-        }
-        static constexpr uint64_t bit(uint32_t slot) noexcept {
-            return 1ull << (slot & 63u);
-        }
-        static constexpr std::size_t word(uint32_t slot) noexcept {
-            return slot >> 6;
-        }
-        bool contains(uint32_t slot) const noexcept {
-            return valid(slot) && (occupied[word(slot)] & bit(slot)) != 0;
-        }
-        bool empty() const noexcept {
-            return count == 0;
-        }
-        uint32_t size() const noexcept {
-            return count;
-        }
-        bool get(uint32_t slot, uint32_t& value) const noexcept {
-            if (!contains(slot)) {
-                return false;
-            }
-            value = values[slot];
-            return true;
-        }
-        void set(uint32_t slot, uint32_t value) noexcept {
-            if (!valid(slot)) {
-                return;
-            }
-            const auto w = word(slot);
-            const auto b = bit(slot);
-            if ((occupied[w] & b) == 0) {
-                occupied[w] |= b;
-                ++count;
-            }
-            values[slot] = value;
-        }
-        void erase(uint32_t slot) noexcept {
-            if (!contains(slot)) {
-                return;
-            }
-            occupied[word(slot)] &= ~bit(slot);
-            --count;
-        }
-        void clear() noexcept {
-            occupied = {};
-            count = 0;
-        }
-        template<typename Fn>
-        void forEach(Fn&& fn) const {
-            for (std::size_t w = 0; w < occupied.size(); ++w) {
-                uint64_t bits = occupied[w];
-                while (bits != 0) {
-                    const auto b = static_cast<uint32_t>(std::countr_zero(bits));
-                    const auto slot = static_cast<uint32_t>(w * 64u + b);
-                    if (slot < Slots) {
-                        fn(slot, values[slot]);
-                    }
-                    bits &= bits - 1u;
-                }
-            }
-        }
-        bool popFirst(uint32_t& slot, uint32_t& value) noexcept {
-            for (std::size_t w = 0; w < occupied.size(); ++w) {
-                uint64_t bits = occupied[w];
-                if (bits == 0) {
-                    continue;
-                }
-                const auto b = static_cast<uint32_t>(std::countr_zero(bits));
-                slot = static_cast<uint32_t>(w * 64u + b);
-                value = values[slot];
-                occupied[w] &= ~bit(slot);
-                --count;
-                return true;
-            }
-            return false;
-        }
-    };
-
-    template<std::size_t Rows, std::size_t Slots>
-    struct FixedStateMatrix {
-        std::array<FixedStateTable<Slots>, Rows> rows{};
-        uint32_t count = 0;
-
-        static constexpr bool valid(uint32_t row, uint32_t slot) noexcept {
-            return row < Rows && slot < Slots;
-        }
-        bool contains(uint32_t row, uint32_t slot) const noexcept {
-            return valid(row, slot) && rows[row].contains(slot);
-        }
-        bool empty() const noexcept {
-            return count == 0;
-        }
-        uint32_t size() const noexcept {
-            return count;
-        }
-        bool get(uint32_t row, uint32_t slot, uint32_t& value) const noexcept {
-            return valid(row, slot) && rows[row].get(slot, value);
-        }
-        void set(uint32_t row, uint32_t slot, uint32_t value) noexcept {
-            if (!valid(row, slot)) {
-                return;
-            }
-            if (!rows[row].contains(slot)) {
-                ++count;
-            }
-            rows[row].set(slot, value);
-        }
-        void clear() noexcept {
-            for (auto& row : rows) {
-                row.clear();
-            }
-            count = 0;
-        }
-        template<typename Fn>
-        void forEach(Fn&& fn) const {
-            for (uint32_t row = 0; row < Rows; ++row) {
-                rows[row].forEach([&](uint32_t slot, uint32_t value) {
-                    fn(row, slot, value);
-                });
-            }
-        }
-        bool popFirst(uint32_t& row, uint32_t& slot, uint32_t& value) noexcept {
-            for (uint32_t r = 0; r < Rows; ++r) {
-                if (rows[r].popFirst(slot, value)) {
-                    row = r;
-                    --count;
-                    return true;
-                }
-            }
-            return false;
-        }
-    };
-
-    struct FixedTransformTable {
-        std::array<D9CMatrix, kPeTransformSlots> values{};
-        std::array<uint64_t, (kPeTransformSlots + 63u) / 64u> occupied{};
-        uint32_t count = 0;
-
-        static constexpr bool validSlot(uint32_t slot) noexcept {
-            return slot < kPeTransformSlots;
-        }
-        static constexpr uint64_t bit(uint32_t slot) noexcept {
-            return 1ull << (slot & 63u);
-        }
-        static constexpr std::size_t word(uint32_t slot) noexcept {
-            return slot >> 6;
-        }
-        static bool slotForState(uint32_t state, uint32_t& slot) noexcept {
-            if (state == static_cast<uint32_t>(D3DTS_VIEW)) {
-                slot = 0;
-                return true;
-            }
-            if (state == static_cast<uint32_t>(D3DTS_PROJECTION)) {
-                slot = 1;
-                return true;
-            }
-            if (state >= static_cast<uint32_t>(D3DTS_TEXTURE0) &&
-                state <= static_cast<uint32_t>(D3DTS_TEXTURE7)) {
-                slot = kPeTransformTextureBaseSlot +
-                       (state - static_cast<uint32_t>(D3DTS_TEXTURE0));
-                return true;
-            }
-            if (state >= static_cast<uint32_t>(D3DTS_WORLD) &&
-                state < static_cast<uint32_t>(D3DTS_WORLD) + kPeTransformWorldSlots) {
-                slot = kPeTransformWorldBaseSlot +
-                       (state - static_cast<uint32_t>(D3DTS_WORLD));
-                return true;
-            }
-            return false;
-        }
-        static uint32_t stateForSlot(uint32_t slot) noexcept {
-            if (slot == 0) {
-                return static_cast<uint32_t>(D3DTS_VIEW);
-            }
-            if (slot == 1) {
-                return static_cast<uint32_t>(D3DTS_PROJECTION);
-            }
-            if (slot < kPeTransformWorldBaseSlot) {
-                return static_cast<uint32_t>(D3DTS_TEXTURE0) +
-                       (slot - kPeTransformTextureBaseSlot);
-            }
-            return static_cast<uint32_t>(D3DTS_WORLD) +
-                   (slot - kPeTransformWorldBaseSlot);
-        }
-        bool containsSlot(uint32_t slot) const noexcept {
-            return validSlot(slot) && (occupied[word(slot)] & bit(slot)) != 0;
-        }
-        bool contains(uint32_t state) const noexcept {
-            uint32_t slot = 0;
-            return slotForState(state, slot) && containsSlot(slot);
-        }
-        bool empty() const noexcept {
-            return count == 0;
-        }
-        uint32_t size() const noexcept {
-            return count;
-        }
-        bool get(uint32_t state, D9CMatrix& value) const noexcept {
-            uint32_t slot = 0;
-            if (!slotForState(state, slot) || !containsSlot(slot)) {
-                return false;
-            }
-            value = values[slot];
-            return true;
-        }
-        void set(uint32_t state, const D9CMatrix& value) noexcept {
-            uint32_t slot = 0;
-            if (!slotForState(state, slot)) {
-                return;
-            }
-            const auto w = word(slot);
-            const auto b = bit(slot);
-            if ((occupied[w] & b) == 0) {
-                occupied[w] |= b;
-                ++count;
-            }
-            values[slot] = value;
-        }
-        void erase(uint32_t state) noexcept {
-            uint32_t slot = 0;
-            if (!slotForState(state, slot) || !containsSlot(slot)) {
-                return;
-            }
-            occupied[word(slot)] &= ~bit(slot);
-            --count;
-        }
-        void clear() noexcept {
-            occupied = {};
-            count = 0;
-        }
-        template<typename Fn>
-        void forEach(Fn&& fn) const {
-            for (std::size_t w = 0; w < occupied.size(); ++w) {
-                uint64_t bits = occupied[w];
-                while (bits != 0) {
-                    const auto b = static_cast<uint32_t>(std::countr_zero(bits));
-                    const auto slot = static_cast<uint32_t>(w * 64u + b);
-                    if (slot < kPeTransformSlots) {
-                        fn(stateForSlot(slot), values[slot]);
-                    }
-                    bits &= bits - 1u;
-                }
-            }
-        }
-        bool popFirst(uint32_t& state, D9CMatrix& value) noexcept {
-            for (std::size_t w = 0; w < occupied.size(); ++w) {
-                uint64_t bits = occupied[w];
-                if (bits == 0) {
-                    continue;
-                }
-                const auto b = static_cast<uint32_t>(std::countr_zero(bits));
-                const auto slot = static_cast<uint32_t>(w * 64u + b);
-                state = stateForSlot(slot);
-                value = values[slot];
-                occupied[w] &= ~bit(slot);
-                --count;
-                return true;
-            }
-            return false;
-        }
-    };
-
-    static uint32_t textureStageSlot(DWORD stage) noexcept {
-        return std::min<uint32_t>(stage, kPeTextureStageSlots - 1u);
-    }
-    static uint32_t textureStageStateSlot(D3DTEXTURESTAGESTATETYPE type) noexcept {
-        return std::min<uint32_t>(static_cast<uint32_t>(type),
-                                  kPeTextureStageStateSlots - 1u);
-    }
-    static bool samplerSlot(DWORD sampler, uint32_t& slot) noexcept {
-        if (sampler >= kPeSamplerSlots) {
-            return false;
-        }
-        slot = sampler;
-        return true;
-    }
-    static bool samplerStateSlot(D3DSAMPLERSTATETYPE type, uint32_t& slot) noexcept {
-        slot = static_cast<uint32_t>(type);
-        return slot < kPeSamplerStateSlots;
-    }
-    static D9CMatrix identityTransformMatrix() noexcept {
-        D9CMatrix matrix{};
-        matrix.m[0] = 1.0f;
-        matrix.m[5] = 1.0f;
-        matrix.m[10] = 1.0f;
-        matrix.m[15] = 1.0f;
-        return matrix;
-    }
-    static bool matrixEquals(const D9CMatrix& a, const D9CMatrix& b) noexcept {
-        return std::memcmp(&a, &b, sizeof(D9CMatrix)) == 0;
-    }
+    using WireHandleEntryList = D3D9PeWireHandleEntryList;
 
     ULONG        refs_    = 1;
     D9CDevice*   dev_;
@@ -2060,118 +209,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     DWORD                      fvf_             = 0;
     IDirect3DSurface9*         cachedBackBuffer0_ = nullptr;
 
-    FixedStateTable<kPeRenderStateSlots> renderStateShadow_{};
-    FixedStateTable<kPeRenderStateSlots> pendingRenderStates_{};
-    FixedStateTable<kPeRenderStateSlots> stateBlockRenderStateRestore_{};
-    FixedTransformTable stateBlockTransformRestore_{};
-    DWORD pendingTextureMask_ = 0;
-    DWORD pendingStreamMask_ = 0;
-    bool pendingFvf_ = false;
-    // Phase 12: shader-handle delta flags. PE-side SetVS/SetPS update the
-    // shadow + set the matching pending bit; the next built draw packet
-    // ships vsValid=1 / psValid=1 with vs_/ps_ snapshot, then clears.
-    bool pendingVs_ = false;
-    bool pendingPs_ = false;
-    // Phase 12: vertex-decl handle delta (alternative to fvf).
-    bool pendingVdecl_ = false;
-    // Phase 12: index buffer handle delta (rides on indexed packets).
-    bool pendingIb_ = false;
-    // Phase 12: render-target / depth-stencil deltas. RT mask covers up to
-    // 4 slots; rt[0] storage is rt0_ (legacy), rt[1..3] in rtSlots_.
-    DWORD pendingRtMask_ = 0;
-    bool pendingDs_ = false;
+    PeHotStateShadow peState_{};
+    PeConstShadowBlock peConsts_{};
     IDirect3DSurface9* rtSlots_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
-    // Phase 12: viewport / scissor shadow + pending flags.
-    bool pendingViewport_ = false;
-    bool pendingScissor_ = false;
-    D9CViewport viewportShadow_{};
-    D9CRect scissorShadow_{};
-    // Phase 12: TSS + SamplerState deltas. These are fixed row x state
-    // tables with occupancy masks; pending tables are the dirty masks
-    // drained into the next draw/apply packet.
-    FixedStateMatrix<kPeTextureStageSlots, kPeTextureStageStateSlots> pendingTss_{};
-    FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> pendingSamplerStates_{};
-    // Identity-no-op shadow: last value sent for each row/state tuple.
-    FixedStateMatrix<kPeTextureStageSlots, kPeTextureStageStateSlots> tssShadow_{};
-    FixedStateMatrix<kPeSamplerSlots, kPeSamplerStateSlots> samplerStateShadow_{};
-    // Phase 12: Material + ClipPlane shadow.
-    bool pendingMaterial_ = false;
-    D9CMaterial materialShadow_{};
-    DWORD pendingClipPlaneMask_ = 0;
-    float clipPlaneShadow_[6 * 4]{};
-    // Phase 12: Transform delta — fixed D3D transform table. The shadow
-    // occupancy mask records states that have been touched; the pending
-    // table is the dirty mask drained into draw/apply packets.
-    FixedTransformTable pendingTransforms_{};
-    FixedTransformTable transformShadow_{};
-    // Phase 12: Light delta — bit i ⇒ lightShadow_[i] is fresh.
-    DWORD pendingLightSlotMask_ = 0;
-    D9CLight lightShadow_[D9C_DRAW_PACKET_MAX_LIGHTS]{};
-    // Phase 12: LightEnable delta. ValidMask = which slots have a fresh
-    // enable value this packet; pendingLightEnableMask_ holds the enable
-    // bit per slot. lightEnableShadow_ tracks the most recently set value
-    // per slot (for identity-no-op detection).
-    DWORD pendingLightEnableValidMask_ = 0;
-    DWORD pendingLightEnableMask_ = 0;
-    DWORD lightEnableShadow_ = 0;
-    std::vector<std::uint8_t> pendingCommandBytes_{};
-    std::vector<D9CCommandChunkWireRecordHeader> pendingCommandWireRecords_{};
-    std::vector<WireHandleEntryList> pendingCommandRecordExtraHandles_{};
-    UINT pendingCommandRecordCount_ = 0;
+    PeCommandChunkBuilder commandChunk_{};
     PeRecorderStats peRecorderStats_{};
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
-
-    // Shader-constant shadow + dirty range per (stage, type). Per the
-    // recorder design, Set*ShaderConstant* updates the shadow + extends
-    // the dirty range; the chunk does not get a record per Set call.
-    // Just before each appended Draw record (and at chunk-flush) the
-    // dirty range for each (stage, type) is emitted as ONE
-    // D9C_COMMAND_RECORD_SET_*_CONST_* covering [start, end) — so a
-    // shader pushing 30 individual SetVsConstF calls between two draws
-    // costs 1 record (merged range), not 30.
-    struct ConstShadow {
-      std::vector<std::uint8_t> values; // raw bytes; size = (slotsTouched * elemSize)
-      uint32_t dirtyStart = 0;
-      uint32_t dirtyEnd = 0;             // [start, end), end > start ⇒ dirty
-      bool dirty() const { return dirtyEnd > dirtyStart; }
-      void clear() { dirtyStart = dirtyEnd = 0; }
-    };
-    ConstShadow vsConstF_{};
-    ConstShadow vsConstI_{};
-    ConstShadow vsConstB_{};
-    ConstShadow psConstF_{};
-    ConstShadow psConstI_{};
-    ConstShadow psConstB_{};
-
-    // Legacy append-time retention notes, one dedup'd container per kind.
-    // The DOD wire blob now gets per-record ranges from flush-time payload
-    // decoding; these sets are kept for existing noteChunkHandle callers
-    // and cleared with the chunk.
-    std::unordered_set<uint64_t> chunkHandlesByKind_[5]{};
-    std::vector<std::uint8_t> pendingCommandWireBlob_{};
-    WireHandleEntryList chunkWireHandleScratch_{};
-    WireHandleEntryList recordWireHandleScratch_{};
-    // Fire-and-forget records carry raw D9C handles. Keep those wrappers
-    // alive until the queued chunk commits or is explicitly discarded.
-    std::unordered_set<D9CSurface*> pendingCommandRetainedSurfaceSet_{};
-    std::vector<D9CSurface*> pendingCommandRetainedSurfaces_{};
-    std::unordered_set<D9CTexture*> pendingCommandRetainedTextureSet_{};
-    std::vector<D9CTexture*> pendingCommandRetainedTextures_{};
-    std::unordered_set<D9CBuffer*> pendingCommandRetainedBufferSet_{};
-    std::vector<D9CBuffer*> pendingCommandRetainedBuffers_{};
-    std::unordered_set<D9CShader*> pendingCommandRetainedShaderSet_{};
-    std::vector<D9CShader*> pendingCommandRetainedShaders_{};
-    std::unordered_set<D9CVertexDecl*> pendingCommandRetainedVdeclSet_{};
-    std::vector<D9CVertexDecl*> pendingCommandRetainedVdecls_{};
-
-    struct PendingCommandRetentions {
-        std::vector<D9CSurface*> surfaces;
-        std::vector<D9CTexture*> textures;
-        std::vector<D9CBuffer*> buffers;
-        std::vector<D9CShader*> shaders;
-        std::vector<D9CVertexDecl*> vdecls;
-    };
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
@@ -2195,181 +239,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
     }
 
-    template<typename T>
-    static void eraseOne(std::vector<T*>& values, T* value) {
-        const auto it = std::find(values.begin(), values.end(), value);
-        if (it != values.end()) {
-            values.erase(it);
-        }
-    }
-
-    void retainPendingCommandSurface(D9CSurface* surface,
-                                     PendingCommandRetentions& acquired) {
-        if (!surface) {
-            return;
-        }
-        if (pendingCommandRetainedSurfaceSet_.insert(surface).second) {
-            dxmt9c_surface_addref(surface);
-            pendingCommandRetainedSurfaces_.push_back(surface);
-            acquired.surfaces.push_back(surface);
-        }
-    }
-
-    void retainPendingCommandTexture(D9CTexture* texture,
-                                     PendingCommandRetentions& acquired) {
-        if (!texture) {
-            return;
-        }
-        if (pendingCommandRetainedTextureSet_.insert(texture).second) {
-            dxmt9c_texture_addref(texture);
-            pendingCommandRetainedTextures_.push_back(texture);
-            acquired.textures.push_back(texture);
-        }
-    }
-
-    void retainPendingCommandBuffer(D9CBuffer* buffer,
-                                    PendingCommandRetentions& acquired) {
-        if (!buffer) {
-            return;
-        }
-        if (pendingCommandRetainedBufferSet_.insert(buffer).second) {
-            dxmt9c_buffer_addref(buffer);
-            pendingCommandRetainedBuffers_.push_back(buffer);
-            acquired.buffers.push_back(buffer);
-        }
-    }
-
-    void retainPendingCommandShader(D9CShader* shader,
-                                    PendingCommandRetentions& acquired) {
-        if (!shader) {
-            return;
-        }
-        if (pendingCommandRetainedShaderSet_.insert(shader).second) {
-            dxmt9c_shader_addref(shader);
-            pendingCommandRetainedShaders_.push_back(shader);
-            acquired.shaders.push_back(shader);
-        }
-    }
-
-    void retainPendingCommandVdecl(D9CVertexDecl* vdecl,
-                                   PendingCommandRetentions& acquired) {
-        if (!vdecl) {
-            return;
-        }
-        if (pendingCommandRetainedVdeclSet_.insert(vdecl).second) {
-            dxmt9c_vdecl_addref(vdecl);
-            pendingCommandRetainedVdecls_.push_back(vdecl);
-            acquired.vdecls.push_back(vdecl);
-        }
-    }
-
-    void retainPendingCommandWireHandle(const D9CCommandChunkWireHandleEntry& handle,
-                                        PendingCommandRetentions& acquired) {
-        const auto ptr = static_cast<std::uintptr_t>(handle.opaqueHandle);
-        switch (handle.kind) {
-        case D9C_CHUNK_HANDLE_KIND_TEXTURE:
-            retainPendingCommandTexture(reinterpret_cast<D9CTexture*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_SURFACE:
-            retainPendingCommandSurface(reinterpret_cast<D9CSurface*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_BUFFER:
-            retainPendingCommandBuffer(reinterpret_cast<D9CBuffer*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_SHADER:
-            retainPendingCommandShader(reinterpret_cast<D9CShader*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
-            retainPendingCommandVdecl(reinterpret_cast<D9CVertexDecl*>(ptr), acquired);
-            break;
-        default:
-            break;
-        }
-    }
-
-    void retainPendingCommandWireHandles(const WireHandleEntryList& handles,
-                                         PendingCommandRetentions& acquired) {
-        for (const auto& handle : handles) {
-            retainPendingCommandWireHandle(handle, acquired);
-        }
-    }
-
-    void rollbackPendingCommandRetentions(const PendingCommandRetentions& acquired) {
-        for (auto* surface : acquired.surfaces) {
-            pendingCommandRetainedSurfaceSet_.erase(surface);
-            eraseOne(pendingCommandRetainedSurfaces_, surface);
-            dxmt9c_surface_release(surface);
-        }
-        for (auto* texture : acquired.textures) {
-            pendingCommandRetainedTextureSet_.erase(texture);
-            eraseOne(pendingCommandRetainedTextures_, texture);
-            dxmt9c_texture_release(texture);
-        }
-        for (auto* buffer : acquired.buffers) {
-            pendingCommandRetainedBufferSet_.erase(buffer);
-            eraseOne(pendingCommandRetainedBuffers_, buffer);
-            dxmt9c_buffer_release(buffer);
-        }
-        for (auto* shader : acquired.shaders) {
-            pendingCommandRetainedShaderSet_.erase(shader);
-            eraseOne(pendingCommandRetainedShaders_, shader);
-            dxmt9c_shader_release(shader);
-        }
-        for (auto* vdecl : acquired.vdecls) {
-            pendingCommandRetainedVdeclSet_.erase(vdecl);
-            eraseOne(pendingCommandRetainedVdecls_, vdecl);
-            dxmt9c_vdecl_release(vdecl);
-        }
-    }
-
-    void releasePendingCommandRetentions() {
-        for (auto* surface : pendingCommandRetainedSurfaces_) {
-            dxmt9c_surface_release(surface);
-        }
-        pendingCommandRetainedSurfaces_.clear();
-        pendingCommandRetainedSurfaceSet_.clear();
-        for (auto* texture : pendingCommandRetainedTextures_) {
-            dxmt9c_texture_release(texture);
-        }
-        pendingCommandRetainedTextures_.clear();
-        pendingCommandRetainedTextureSet_.clear();
-        for (auto* buffer : pendingCommandRetainedBuffers_) {
-            dxmt9c_buffer_release(buffer);
-        }
-        pendingCommandRetainedBuffers_.clear();
-        pendingCommandRetainedBufferSet_.clear();
-        for (auto* shader : pendingCommandRetainedShaders_) {
-            dxmt9c_shader_release(shader);
-        }
-        pendingCommandRetainedShaders_.clear();
-        pendingCommandRetainedShaderSet_.clear();
-        for (auto* vdecl : pendingCommandRetainedVdecls_) {
-            dxmt9c_vdecl_release(vdecl);
-        }
-        pendingCommandRetainedVdecls_.clear();
-        pendingCommandRetainedVdeclSet_.clear();
-    }
-
     void clearPendingCommandChunk() {
-        pendingCommandBytes_.clear();
-        pendingCommandWireRecords_.clear();
-        pendingCommandRecordExtraHandles_.clear();
-        pendingCommandWireBlob_.clear();
-        pendingCommandRecordCount_ = 0;
-        for (auto& set : chunkHandlesByKind_) {
-            set.clear();
-        }
-        chunkWireHandleScratch_.clear();
-        recordWireHandleScratch_.clear();
-        releasePendingCommandRetentions();
+        commandChunk_.clear();
     }
 
     void clearPeStateTracking() {
-        renderStateShadow_.clear();
-        tssShadow_.clear();
-        samplerStateShadow_.clear();
-        transformShadow_.clear();
-        clearPendingHotState();
+        peState_.clearServerShadowTables();
+        peState_.clearPendingHotState();
+        peConsts_.reset();
         clearPendingCommandChunk();
         fvf_ = 0;
         std::memset(streamOff_, 0, sizeof(streamOff_));
@@ -2378,44 +255,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     bool hasPendingHotState() const {
-        return !pendingRenderStates_.empty() || pendingTextureMask_ != 0 ||
-               pendingStreamMask_ != 0 || pendingFvf_ ||
-               pendingVs_ || pendingPs_ || pendingVdecl_ ||
-               pendingIb_ || pendingRtMask_ != 0 || pendingDs_ ||
-               pendingViewport_ || pendingScissor_ ||
-               !pendingTss_.empty() || !pendingSamplerStates_.empty() ||
-               pendingMaterial_ || pendingClipPlaneMask_ != 0 ||
-               !pendingTransforms_.empty() ||
-               pendingLightSlotMask_ != 0 ||
-               pendingLightEnableValidMask_ != 0;
+        return peState_.hasPendingHotState();
     }
 
     void clearPendingHotState() {
-        pendingRenderStates_.clear();
-        pendingTextureMask_ = 0;
-        pendingStreamMask_ = 0;
-        pendingFvf_ = false;
-        pendingVs_ = false;
-        pendingPs_ = false;
-        pendingVdecl_ = false;
-        pendingIb_ = false;
-        pendingRtMask_ = 0;
-        pendingDs_ = false;
-        pendingViewport_ = false;
-        pendingScissor_ = false;
-        pendingTss_.clear();
-        pendingSamplerStates_.clear();
-        pendingMaterial_ = false;
-        pendingClipPlaneMask_ = 0;
-        pendingTransforms_.clear();
-        pendingLightSlotMask_ = 0;
-        pendingLightEnableValidMask_ = 0;
-        pendingLightEnableMask_ = 0;
+        peState_.clearPendingHotState();
     }
 
     bool shadowedRenderStateEquals(DWORD state, DWORD value) const {
-        uint32_t shadowValue = 0;
-        return renderStateShadow_.get(state, shadowValue) && shadowValue == value;
+        return peState_.renderStateEquals(state, value);
     }
 
     bool shadowedTextureEquals(DWORD stage, IDirect3DBaseTexture9* texture) const {
@@ -2434,27 +282,27 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                   UINT startVertex,
                                   UINT count,
                                   D9CDrawPrimitivePacket& packet) const {
-        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             return false;
         }
 
         packet = D9CDrawPrimitivePacket{};
-        pendingRenderStates_.forEach([&](uint32_t state, uint32_t value) {
+        peState_.pendingRenderStates.forEach([&](uint32_t state, uint32_t value) {
             auto& entry = packet.renderStates[packet.renderStateCount++];
             entry.state = state;
             entry.value = value;
         });
 
-        packet.textureMask = pendingTextureMask_;
+        packet.textureMask = peState_.pendingTextureMask;
         for (DWORD stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
-            if ((pendingTextureMask_ & (1u << stage)) != 0) {
+            if ((peState_.pendingTextureMask & (1u << stage)) != 0) {
                 packet.textures[stage] = toWireHandle(rawTex(textures_[stage]));
             }
         }
 
-        packet.streamSourceMask = pendingStreamMask_;
+        packet.streamSourceMask = peState_.pendingStreamMask;
         for (DWORD stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
-            if ((pendingStreamMask_ & (1u << stream)) == 0) {
+            if ((peState_.pendingStreamMask & (1u << stream)) == 0) {
                 continue;
             }
             auto& source = packet.streamSources[stream];
@@ -2463,51 +311,51 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             source.stride = streamStr_[stream];
         }
 
-        packet.fvfValid = pendingFvf_ ? 1u : 0u;
+        packet.fvfValid = peState_.pendingFvf ? 1u : 0u;
         packet.fvf = fvf_;
         // Phase 12: shader-handle delta. Server-side applyDrawPacketState
         // dispatches dxmt9c_device_set_vertex_shader / set_pixel_shader
         // when valid=1, mirroring the renderState/texture/stream pattern.
-        packet.vsValid = pendingVs_ ? 1u : 0u;
+        packet.vsValid = peState_.pendingVs ? 1u : 0u;
         packet.vsHandle = toWireHandle(rawVS(vs_));
-        packet.psValid = pendingPs_ ? 1u : 0u;
+        packet.psValid = peState_.pendingPs ? 1u : 0u;
         packet.psHandle = toWireHandle(rawPS(ps_));
-        packet.vdeclValid = pendingVdecl_ ? 1u : 0u;
+        packet.vdeclValid = peState_.pendingVdecl ? 1u : 0u;
         packet.vdeclHandle = toWireHandle(rawVD(vdecl_));
         // RT delta — emit handle for every set bit. Slot 0 is rt0_ if
         // ever populated; slots 1..3 are rtSlots_[i]. The legacy SetRT
         // path doesn't populate rt0_ separately, so always use rtSlots_.
-        packet.rtMask = pendingRtMask_;
+        packet.rtMask = peState_.pendingRtMask;
         for (DWORD slot = 0; slot < 4; ++slot) {
-            packet.rtHandles[slot] = (pendingRtMask_ & (1u << slot))
+            packet.rtHandles[slot] = (peState_.pendingRtMask & (1u << slot))
                                           ? toWireHandle(rawSurf(rtSlots_[slot]))
                                           : D9CWireHandle{};
         }
-        packet.dsValid = pendingDs_ ? 1u : 0u;
+        packet.dsValid = peState_.pendingDs ? 1u : 0u;
         packet.dsHandle = toWireHandle(rawSurf(dsSurface_));
-        packet.viewportValid = pendingViewport_ ? 1u : 0u;
-        packet.viewport = viewportShadow_;
-        packet.scissorValid = pendingScissor_ ? 1u : 0u;
-        packet.scissor = scissorShadow_;
+        packet.viewportValid = peState_.pendingViewport ? 1u : 0u;
+        packet.viewport = peState_.viewportShadow;
+        packet.scissorValid = peState_.pendingScissor ? 1u : 0u;
+        packet.scissor = peState_.scissorShadow;
         // Phase 12: drain TSS / SamplerState pending tables into packet
         // delta arrays. The cap check inside Set* already flushes the
         // chunk if a single Set would push beyond the per-packet limit;
         // here we just emit what's pending.
-        if (pendingTss_.size() > D9C_DRAW_PACKET_MAX_TSS ||
-            pendingSamplerStates_.size() > D9C_DRAW_PACKET_MAX_SAMPLER) {
+        if (peState_.pendingTss.size() > D9C_DRAW_PACKET_MAX_TSS ||
+            peState_.pendingSamplerStates.size() > D9C_DRAW_PACKET_MAX_SAMPLER) {
             return false;
         }
-        packet.tssCount = static_cast<uint32_t>(pendingTss_.size());
+        packet.tssCount = static_cast<uint32_t>(peState_.pendingTss.size());
         uint32_t tssIdx = 0;
-        pendingTss_.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
+        peState_.pendingTss.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
             packet.tss[tssIdx].stage = stage;
             packet.tss[tssIdx].type = state;
             packet.tss[tssIdx].value = value;
             ++tssIdx;
         });
-        packet.samplerStateCount = static_cast<uint32_t>(pendingSamplerStates_.size());
+        packet.samplerStateCount = static_cast<uint32_t>(peState_.pendingSamplerStates.size());
         uint32_t ssIdx = 0;
-        pendingSamplerStates_.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
+        peState_.pendingSamplerStates.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
             packet.samplerStates[ssIdx].sampler = sampler;
             packet.samplerStates[ssIdx].type = state;
             packet.samplerStates[ssIdx].value = value;
@@ -2518,20 +366,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // + flat 6×4 float array (only set bits' slots are
         // semantically meaningful, but the array is fixed-size so the
         // packet layout stays simple).
-        packet.materialValid = pendingMaterial_ ? 1u : 0u;
-        packet.material = materialShadow_;
-        packet.clipPlaneMask = pendingClipPlaneMask_;
-        std::memcpy(packet.clipPlanes, clipPlaneShadow_, sizeof(packet.clipPlanes));
+        packet.materialValid = peState_.pendingMaterial ? 1u : 0u;
+        packet.material = peState_.materialShadow;
+        packet.clipPlaneMask = peState_.pendingClipPlaneMask;
+        std::memcpy(packet.clipPlanes, peState_.clipPlaneShadow, sizeof(packet.clipPlanes));
         // Phase 12: Transform delta — drain pending transform table
         // (per-frame typically a handful: View, Projection, a few
         // World/Texture transforms). Cap check: > MAX_TRANSFORMS forces
         // chunk seal upstream.
-        if (pendingTransforms_.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+        if (peState_.pendingTransforms.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
             return false;
         }
-        packet.transformCount = static_cast<uint32_t>(pendingTransforms_.size());
+        packet.transformCount = static_cast<uint32_t>(peState_.pendingTransforms.size());
         uint32_t txIdx = 0;
-        pendingTransforms_.forEach([&](uint32_t state, const D9CMatrix& matrix) {
+        peState_.pendingTransforms.forEach([&](uint32_t state, const D9CMatrix& matrix) {
             packet.transforms[txIdx].state = state;
             packet.transforms[txIdx].reserved = 0;
             packet.transforms[txIdx].matrix = matrix;
@@ -2542,14 +390,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // semantically meaningful). LightEnable delta is two parallel
         // masks: ValidMask says "this slot has a fresh enable" and
         // LightEnableMask carries the new value.
-        packet.lightSlotMask = pendingLightSlotMask_;
+        packet.lightSlotMask = peState_.pendingLightSlotMask;
         for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
-            if ((pendingLightSlotMask_ & (1u << slot)) != 0) {
-                packet.lights[slot] = lightShadow_[slot];
+            if ((peState_.pendingLightSlotMask & (1u << slot)) != 0) {
+                packet.lights[slot] = peState_.lightShadow[slot];
             }
         }
-        packet.lightEnableValidMask = pendingLightEnableValidMask_;
-        packet.lightEnableMask = pendingLightEnableMask_;
+        packet.lightEnableValidMask = peState_.pendingLightEnableValidMask;
+        packet.lightEnableMask = peState_.pendingLightEnableMask;
         // Phase 16: full-snapshot mode — override every delta field with
         // the complete shadow snapshot. The importer applies whatever
         // valid bits are set, so flipping every bit + populating from
@@ -2559,11 +407,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // returns false to force the chunk to seal.
         if (dxmt9PeFullSnapshotEnabled()) {
             // Render states: drain the entire shadow table.
-            if (renderStateShadow_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+            if (peState_.renderStateShadow.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
                 return false;
             }
             packet.renderStateCount = 0;
-            renderStateShadow_.forEach([&](uint32_t state, uint32_t value) {
+            peState_.renderStateShadow.forEach([&](uint32_t state, uint32_t value) {
                 auto& entry = packet.renderStates[packet.renderStateCount++];
                 entry.state = state;
                 entry.value = value;
@@ -2605,38 +453,38 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             packet.dsValid = 1u;
             packet.dsHandle = toWireHandle(rawSurf(dsSurface_));
             packet.viewportValid = 1u;
-            packet.viewport = viewportShadow_;
+            packet.viewport = peState_.viewportShadow;
             packet.scissorValid = 1u;
-            packet.scissor = scissorShadow_;
+            packet.scissor = peState_.scissorShadow;
             // TSS / SamplerState — drain shadow tables fully.
-            if (tssShadow_.size() > D9C_DRAW_PACKET_MAX_TSS ||
-                samplerStateShadow_.size() > D9C_DRAW_PACKET_MAX_SAMPLER ||
-                transformShadow_.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+            if (peState_.tssShadow.size() > D9C_DRAW_PACKET_MAX_TSS ||
+                peState_.samplerStateShadow.size() > D9C_DRAW_PACKET_MAX_SAMPLER ||
+                peState_.transformShadow.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
                 return false;
             }
             packet.tssCount = 0;
-            tssShadow_.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
+            peState_.tssShadow.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
                 auto& e = packet.tss[packet.tssCount++];
                 e.stage = stage;
                 e.type = state;
                 e.value = value;
             });
             packet.samplerStateCount = 0;
-            samplerStateShadow_.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
+            peState_.samplerStateShadow.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
                 auto& e = packet.samplerStates[packet.samplerStateCount++];
                 e.sampler = sampler;
                 e.type = state;
                 e.value = value;
             });
             packet.materialValid = 1u;
-            packet.material = materialShadow_;
+            packet.material = peState_.materialShadow;
             // Clip planes: emit every slot with mask = 0x3F (all 6).
             packet.clipPlaneMask = 0x3Fu;
-            std::memcpy(packet.clipPlanes, clipPlaneShadow_,
+            std::memcpy(packet.clipPlanes, peState_.clipPlaneShadow,
                         sizeof(packet.clipPlanes));
             // Transforms: drain shadow.
             packet.transformCount = 0;
-            transformShadow_.forEach([&](uint32_t state, const D9CMatrix& matrix) {
+            peState_.transformShadow.forEach([&](uint32_t state, const D9CMatrix& matrix) {
                 auto& t = packet.transforms[packet.transformCount++];
                 t.state = state;
                 t.reserved = 0;
@@ -2645,10 +493,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             // Lights: emit every slot.
             packet.lightSlotMask = (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
             for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
-                packet.lights[i] = lightShadow_[i];
+                packet.lights[i] = peState_.lightShadow[i];
             }
             packet.lightEnableValidMask = (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
-            packet.lightEnableMask = lightEnableShadow_;
+            packet.lightEnableMask = peState_.lightEnableShadow;
         }
         packet.primitiveType = static_cast<uint32_t>(type);
         packet.startVertex = startVertex;
@@ -2677,99 +525,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
-    // Preserve existing append-time handle notes for code paths that
-    // still call them. Wire serialization now derives record ranges from
-    // the payload arena at flush time.
-    void noteChunkHandle(uint32_t kind, uint64_t handle) {
-        if (handle == 0 || kind > 4) {
-            return;
-        }
-        chunkHandlesByKind_[kind].insert(handle);
-    }
-
-    static bool appendRecordWireHandle(WireHandleEntryList& handles,
-                                       uint32_t kind,
-                                       uint64_t handle) {
-        if (handle == 0) {
-            return true;
-        }
-        if (kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
-            return false;
-        }
-        for (const auto& existing : handles) {
-            if (existing.kind == kind && existing.opaqueHandle == handle) {
-                return true;
-            }
-        }
-        handles.push_back(D9CCommandChunkWireHandleEntry{
-            .kind = kind,
-            .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
-            .opaqueHandle = handle,
-            .reserved0 = 0,
-            .reserved1 = 0,
-        });
-        return true;
-    }
-
-    static bool appendDrawPacketWireHandles(const D9CDrawPrimitivePacket& packet,
-                                            WireHandleEntryList& handles) {
-        for (uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
-            if ((packet.textureMask & (1u << stage)) != 0 &&
-                !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                        d9cWireHandleValue(packet.textures[stage]))) {
-                return false;
-            }
-        }
-        for (uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
-            if ((packet.streamSourceMask & (1u << stream)) != 0 &&
-                !appendRecordWireHandle(
-                    handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
-                    d9cWireHandleValue(packet.streamSources[stream].buffer))) {
-                return false;
-            }
-        }
-        for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-            if ((packet.rtMask & (1u << slot)) != 0 &&
-                !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                        d9cWireHandleValue(packet.rtHandles[slot]))) {
-                return false;
-            }
-        }
-        if (packet.dsValid != 0 &&
-            !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                    d9cWireHandleValue(packet.dsHandle))) {
-            return false;
-        }
-        return true;
-    }
-
-    static bool appendIndexedDrawPacketWireHandles(
-        const D9CDrawIndexedPrimitivePacket& packet,
-        WireHandleEntryList& handles) {
-        if (!appendDrawPacketWireHandles(packet.state, handles)) {
-            return false;
-        }
-        if (packet.ibValid != 0 &&
-            !appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
-                                    d9cWireHandleValue(packet.ibHandle))) {
-            return false;
-        }
-        return true;
-    }
-
-    template<typename T>
-    static T* wireHandleAsPtr(const D9CWireHandle& handle) {
-        return reinterpret_cast<T*>(
-            static_cast<std::uintptr_t>(d9cWireHandleValue(handle)));
-    }
-
     // Draw records consume the effective server state, not only the handles
     // present in their delta packet. Capture these at append time so coarser
     // chunks can survive later Set* mutations and wrapper releases.
     bool appendCurrentlyBoundDrawHandles(WireHandleEntryList& handles) {
         for (auto* tex : textures_) {
             if (auto* raw = rawTex(tex); raw != nullptr) {
-                if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
                                             reinterpret_cast<uint64_t>(raw))) {
                     return false;
                 }
@@ -2777,28 +539,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         for (auto* vb : streamSrc_) {
             if (auto* raw = rawVBuf(vb); raw != nullptr) {
-                if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
                                             reinterpret_cast<uint64_t>(raw))) {
                     return false;
                 }
             }
         }
         if (auto* raw = rawIBuf(indexBuf_); raw != nullptr) {
-            if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
+            if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER,
                                         reinterpret_cast<uint64_t>(raw))) {
                 return false;
             }
         }
         for (auto* surf : rtSlots_) {
             if (auto* raw = rawSurf(surf); raw != nullptr) {
-                if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
                                             reinterpret_cast<uint64_t>(raw))) {
                     return false;
                 }
             }
         }
         if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
-            if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+            if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
                                         reinterpret_cast<uint64_t>(raw))) {
                 return false;
             }
@@ -2815,7 +577,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if ((flags & D3DCLEAR_TARGET) != 0) {
             for (auto* surf : rtSlots_) {
                 if (auto* raw = rawSurf(surf); raw != nullptr) {
-                    if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                    if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
                                                 reinterpret_cast<uint64_t>(raw))) {
                         return false;
                     }
@@ -2824,7 +586,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         if ((flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)) != 0) {
             if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
-                if (!appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                if (!PeCommandChunkBuilder::appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
                                             reinterpret_cast<uint64_t>(raw))) {
                     return false;
                 }
@@ -2833,307 +595,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return true;
     }
 
-    bool pendingCommandPayload(const D9CCommandChunkWireRecordHeader& wireRecord,
-                               const std::uint8_t*& payload) const {
-        if (pendingCommandBytes_.size() > 0xffffffffull) {
-            return false;
-        }
-        const auto payloadArenaSize =
-            static_cast<std::uint32_t>(pendingCommandBytes_.size());
-        if (!d9c_command_chunk_wire_payload_range_valid(
-                payloadArenaSize, wireRecord.payloadOffset,
-                wireRecord.payloadSize)) {
-            return false;
-        }
-        payload = wireRecord.payloadSize == 0
-            ? nullptr
-            : pendingCommandBytes_.data() + wireRecord.payloadOffset;
-        return true;
-    }
-
-    void retainDrawPacketPayloadObjects(const D9CDrawPrimitivePacket& packet,
-                                        PendingCommandRetentions& acquired) {
-        for (uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
-            if ((packet.textureMask & (1u << stage)) != 0) {
-                retainPendingCommandTexture(
-                    wireHandleAsPtr<D9CTexture>(packet.textures[stage]), acquired);
-            }
-        }
-        for (uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
-            if ((packet.streamSourceMask & (1u << stream)) != 0) {
-                retainPendingCommandBuffer(
-                    wireHandleAsPtr<D9CBuffer>(packet.streamSources[stream].buffer),
-                    acquired);
-            }
-        }
-        for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-            if ((packet.rtMask & (1u << slot)) != 0) {
-                retainPendingCommandSurface(
-                    wireHandleAsPtr<D9CSurface>(packet.rtHandles[slot]), acquired);
-            }
-        }
-        if (packet.dsValid != 0) {
-            retainPendingCommandSurface(
-                wireHandleAsPtr<D9CSurface>(packet.dsHandle), acquired);
-        }
-        if (packet.vsValid != 0) {
-            retainPendingCommandShader(
-                wireHandleAsPtr<D9CShader>(packet.vsHandle), acquired);
-        }
-        if (packet.psValid != 0) {
-            retainPendingCommandShader(
-                wireHandleAsPtr<D9CShader>(packet.psHandle), acquired);
-        }
-        if (packet.vdeclValid != 0) {
-            retainPendingCommandVdecl(
-                wireHandleAsPtr<D9CVertexDecl>(packet.vdeclHandle), acquired);
-        }
-    }
-
-    void retainIndexedDrawPacketPayloadObjects(
-        const D9CDrawIndexedPrimitivePacket& packet,
-        PendingCommandRetentions& acquired) {
-        retainDrawPacketPayloadObjects(packet.state, acquired);
-        if (packet.ibValid != 0) {
-            retainPendingCommandBuffer(
-                wireHandleAsPtr<D9CBuffer>(packet.ibHandle), acquired);
-        }
-    }
-
-    bool retainRecordPayloadObjects(const D9CCommandChunkWireRecordHeader& wireRecord,
-                                    PendingCommandRetentions& acquired) {
-        const std::uint8_t* payload = nullptr;
-        if (!pendingCommandPayload(wireRecord, payload)) {
-            return false;
-        }
-
-        switch (wireRecord.type) {
-        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitive)) {
-                return false;
-            }
-            D9CCommandRecordDrawPrimitive decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainDrawPacketPayloadObjects(decoded.packet, acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitive)) {
-                return false;
-            }
-            D9CCommandRecordDrawIndexedPrimitive decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainIndexedDrawPacketPayloadObjects(decoded.packet, acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitiveUP)) {
-                return false;
-            }
-            D9CCommandRecordDrawPrimitiveUP decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainDrawPacketPayloadObjects(decoded.packet.state, acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)) {
-                return false;
-            }
-            D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainDrawPacketPayloadObjects(decoded.packet.state, acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_APPLY_STATE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordApplyState)) {
-                return false;
-            }
-            D9CCommandRecordApplyState decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainDrawPacketPayloadObjects(decoded.packet, acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_STRETCH_RECT: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordStretchRect)) {
-                return false;
-            }
-            D9CCommandRecordStretchRect decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainPendingCommandSurface(
-                reinterpret_cast<D9CSurface*>(
-                    static_cast<std::uintptr_t>(decoded.srcWire)), acquired);
-            retainPendingCommandSurface(
-                reinterpret_cast<D9CSurface*>(
-                    static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_COLOR_FILL: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordColorFill)) {
-                return false;
-            }
-            D9CCommandRecordColorFill decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainPendingCommandSurface(
-                reinterpret_cast<D9CSurface*>(
-                    static_cast<std::uintptr_t>(decoded.surfaceWire)), acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateTexture)) {
-                return false;
-            }
-            D9CCommandRecordUpdateTexture decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainPendingCommandTexture(
-                reinterpret_cast<D9CTexture*>(
-                    static_cast<std::uintptr_t>(decoded.srcWire)), acquired);
-            retainPendingCommandTexture(
-                reinterpret_cast<D9CTexture*>(
-                    static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_UPDATE_SURFACE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateSurface)) {
-                return false;
-            }
-            D9CCommandRecordUpdateSurface decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainPendingCommandSurface(
-                reinterpret_cast<D9CSurface*>(
-                    static_cast<std::uintptr_t>(decoded.srcWire)), acquired);
-            retainPendingCommandSurface(
-                reinterpret_cast<D9CSurface*>(
-                    static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
-            return true;
-        }
-        case D9C_COMMAND_RECORD_READBACK: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordReadback)) {
-                return false;
-            }
-            D9CCommandRecordReadback decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            retainPendingCommandSurface(
-                reinterpret_cast<D9CSurface*>(
-                    static_cast<std::uintptr_t>(decoded.srcWire)), acquired);
-            retainPendingCommandSurface(
-                reinterpret_cast<D9CSurface*>(
-                    static_cast<std::uintptr_t>(decoded.dstWire)), acquired);
-            return true;
-        }
-        default:
-            return true;
-        }
-    }
-
-    bool collectRecordPayloadWireHandles(
-        const D9CCommandChunkWireRecordHeader& wireRecord,
-        WireHandleEntryList& handles) {
-        const std::uint8_t* payload = nullptr;
-        if (!pendingCommandPayload(wireRecord, payload)) {
-            return false;
-        }
-
-        switch (wireRecord.type) {
-        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitive)) {
-                return false;
-            }
-            D9CCommandRecordDrawPrimitive decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet, handles);
-        }
-        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitive)) {
-                return false;
-            }
-            D9CCommandRecordDrawIndexedPrimitive decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendIndexedDrawPacketWireHandles(decoded.packet, handles);
-        }
-        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawPrimitiveUP)) {
-                return false;
-            }
-            D9CCommandRecordDrawPrimitiveUP decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet.state, handles);
-        }
-        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)) {
-                return false;
-            }
-            D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet.state, handles);
-        }
-        case D9C_COMMAND_RECORD_APPLY_STATE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordApplyState)) {
-                return false;
-            }
-            D9CCommandRecordApplyState decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendDrawPacketWireHandles(decoded.packet, handles);
-        }
-        case D9C_COMMAND_RECORD_STRETCH_RECT: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordStretchRect)) {
-                return false;
-            }
-            D9CCommandRecordStretchRect decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.srcWire) &&
-                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.dstWire);
-        }
-        case D9C_COMMAND_RECORD_COLOR_FILL: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordColorFill)) {
-                return false;
-            }
-            D9CCommandRecordColorFill decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.surfaceWire);
-        }
-        case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateTexture)) {
-                return false;
-            }
-            D9CCommandRecordUpdateTexture decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                          decoded.srcWire) &&
-                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                                          decoded.dstWire);
-        }
-        case D9C_COMMAND_RECORD_UPDATE_SURFACE: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordUpdateSurface)) {
-                return false;
-            }
-            D9CCommandRecordUpdateSurface decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.srcWire) &&
-                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.dstWire);
-        }
-        case D9C_COMMAND_RECORD_READBACK: {
-            if (wireRecord.payloadSize < sizeof(D9CCommandRecordReadback)) {
-                return false;
-            }
-            D9CCommandRecordReadback decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.srcWire) &&
-                   appendRecordWireHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          decoded.dstWire);
-        }
-        default:
-            return true;
-        }
-    }
-
     bool collectAppendTimeExtraWireHandles(
         const D9CCommandChunkWireRecordHeader& wireRecord,
+        const std::uint8_t* payload,
         WireHandleEntryList& handles) {
         switch (wireRecord.type) {
         case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
@@ -3142,9 +606,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
             return appendCurrentlyBoundDrawHandles(handles);
         case D9C_COMMAND_RECORD_CLEAR: {
-            const std::uint8_t* payload = nullptr;
-            if (!pendingCommandPayload(wireRecord, payload) ||
-                wireRecord.payloadSize < sizeof(D9CCommandRecordClear)) {
+            if (!payload || wireRecord.payloadSize < sizeof(D9CCommandRecordClear)) {
                 return false;
             }
             D9CCommandRecordClear decoded{};
@@ -3154,26 +616,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         default:
             return true;
         }
-    }
-
-    bool appendPendingRecordExtraWireHandles(std::size_t recordIndex,
-                                             WireHandleEntryList& handles) {
-        if (recordIndex >= pendingCommandRecordExtraHandles_.size()) {
-            return false;
-        }
-        for (const auto& handle : pendingCommandRecordExtraHandles_[recordIndex]) {
-            if (!appendRecordWireHandle(handles, handle.kind, handle.opaqueHandle)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    bool collectRecordWireHandles(std::size_t recordIndex,
-                                  const D9CCommandChunkWireRecordHeader& wireRecord,
-                                  WireHandleEntryList& handles) {
-        return collectRecordPayloadWireHandles(wireRecord, handles) &&
-               appendPendingRecordExtraWireHandles(recordIndex, handles);
     }
 
     void recordPeChunkCommit(PeRecorderFlushReason reason,
@@ -3286,199 +728,36 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     HRESULT flushPendingCommandChunk(
         PeRecorderFlushReason reason = PeRecorderFlushReason::Explicit) {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        if (pendingCommandRecordCount_ == 0) {
-            return S_OK;
-        }
-        if (pendingCommandWireRecords_.size() != pendingCommandRecordCount_ ||
-            pendingCommandRecordExtraHandles_.size() != pendingCommandRecordCount_) {
-            return D3DERR_INVALIDCALL;
-        }
-        const auto wireRecordCount =
-            static_cast<std::uint32_t>(pendingCommandWireRecords_.size());
-        const auto payloadArenaSize =
-            static_cast<std::uint32_t>(pendingCommandBytes_.size());
-
-        // Count per-record contiguous handle ranges first so the final
-        // wire blob can be sized exactly, then write every table directly
-        // into its final offset below. Entries are deduped within a record;
-        // duplicates across records are allowed so each header can point at
-        // exactly the subset it needs without falling back to the full chunk
-        // table.
-        chunkWireHandleScratch_.clear();
-        std::uint64_t wireHandleCount64 = 0;
-        for (std::size_t recordIndex = 0;
-             recordIndex < pendingCommandWireRecords_.size();
-             ++recordIndex) {
-            auto& record = pendingCommandWireRecords_[recordIndex];
-            recordWireHandleScratch_.clear();
-            if (!collectRecordWireHandles(recordIndex, record,
-                                          recordWireHandleScratch_)) {
-                return D3DERR_INVALIDCALL;
-            }
-            if (wireHandleCount64 >
-                0xffffffffull - recordWireHandleScratch_.size()) {
-                return D3DERR_INVALIDCALL;
-            }
-            record.firstHandle =
-                static_cast<std::uint32_t>(wireHandleCount64);
-            record.handleCount =
-                static_cast<std::uint32_t>(recordWireHandleScratch_.size());
-            chunkWireHandleScratch_.insert(
-                chunkWireHandleScratch_.end(),
-                recordWireHandleScratch_.begin(),
-                recordWireHandleScratch_.end());
-            wireHandleCount64 += recordWireHandleScratch_.size();
-        }
-        const auto wireHandleCount =
-            static_cast<std::uint32_t>(wireHandleCount64);
-
-        const auto recordTableBytes =
-            static_cast<std::uint64_t>(wireRecordCount) *
-            D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
-        const auto handleTableBytes =
-            static_cast<std::uint64_t>(wireHandleCount) *
-            D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
-        const auto payloadArenaOffset =
-            static_cast<std::uint64_t>(D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE) +
-            recordTableBytes + handleTableBytes;
-        const auto wireBlobSize =
-            payloadArenaOffset + static_cast<std::uint64_t>(payloadArenaSize);
-        if (recordTableBytes > 0xffffffffull ||
-            handleTableBytes > 0xffffffffull ||
-            payloadArenaOffset > 0xffffffffull ||
-            wireBlobSize > 0xffffffffull) {
-            return D3DERR_INVALIDCALL;
-        }
-
-        D9CCommandChunkWireHeader wireHeader{};
-        wireHeader.version = D9C_COMMAND_CHUNK_WIRE_VERSION;
-        wireHeader.headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
-        wireHeader.recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
-        wireHeader.handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
-        wireHeader.recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
-        wireHeader.recordCount = wireRecordCount;
-        wireHeader.handleTableOffset =
-            wireHeader.recordTableOffset + static_cast<std::uint32_t>(recordTableBytes);
-        wireHeader.handleCount = wireHandleCount;
-        wireHeader.payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset);
-        wireHeader.payloadArenaSize = payloadArenaSize;
-
-        std::uint32_t nextHandle = 0;
-        for (std::size_t recordIndex = 0;
-             recordIndex < pendingCommandWireRecords_.size();
-             ++recordIndex) {
-            auto& wireRecord = pendingCommandWireRecords_[recordIndex];
-            if (wireRecord.firstHandle != nextHandle) {
-                return D3DERR_INVALIDCALL;
-            }
-            nextHandle += wireRecord.handleCount;
-        }
-        if (nextHandle != wireHandleCount) {
-            return D3DERR_INVALIDCALL;
-        }
-        if (chunkWireHandleScratch_.size() != wireHandleCount) {
-            return D3DERR_INVALIDCALL;
-        }
-        if (sizeof(wireHeader) != wireHeader.recordTableOffset ||
-            wireHeader.recordTableOffset + recordTableBytes !=
-                wireHeader.handleTableOffset ||
-            wireHeader.handleTableOffset + handleTableBytes !=
-                wireHeader.payloadArenaOffset ||
-            wireHeader.payloadArenaOffset + payloadArenaSize != wireBlobSize) {
-            return D3DERR_INVALIDCALL;
-        }
-
-        pendingCommandWireBlob_.clear();
-        pendingCommandWireBlob_.resize(static_cast<std::size_t>(wireBlobSize));
-        auto* const wireBlob = pendingCommandWireBlob_.data();
-        std::memcpy(wireBlob, &wireHeader, sizeof(wireHeader));
-        if (recordTableBytes != 0) {
-            std::memcpy(
-                wireBlob + wireHeader.recordTableOffset,
-                pendingCommandWireRecords_.data(),
-                static_cast<std::size_t>(recordTableBytes));
-        }
-        if (handleTableBytes != 0) {
-            std::memcpy(
-                wireBlob + wireHeader.handleTableOffset,
-                chunkWireHandleScratch_.data(),
-                static_cast<std::size_t>(handleTableBytes));
-        }
-        // The C ABI imports one contiguous DOD blob, while pendingCommandBytes_
-        // remains the canonical payload arena for retry if commit_chunk fails.
-        // Keep this copy explicit rather than moving/swapping the arena away.
-        if (payloadArenaSize != 0) {
-            std::memcpy(
-                wireBlob + wireHeader.payloadArenaOffset,
-                pendingCommandBytes_.data(),
-                payloadArenaSize);
-        }
-
-        D9CCommandChunk chunk{};
-        chunk.version = D9C_COMMAND_CHUNK_VERSION;
-        chunk.recordCount = wireRecordCount;
-        chunk.recordBytes = static_cast<std::uint32_t>(pendingCommandWireBlob_.size());
-        chunk.records = toWireHandle(pendingCommandWireBlob_.data());
-        chunk.handleCount = wireHandleCount;
-        chunk.handles = D9CWireHandle{};
-
-        const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
-        if (SUCCEEDED(hr)) {
-            recordPeChunkCommit(
-                reason, wireRecordCount, payloadArenaSize, wireHandleCount,
-                static_cast<std::uint32_t>(pendingCommandWireBlob_.size()));
-            clearPendingCommandChunk();
-        }
-        return hr;
+        return commandChunk_.flush(
+            reason,
+            [this](PeRecorderFlushReason commitReason,
+                   const D9CCommandChunk& chunk,
+                   const PeCommandChunkCommitInfo& info) {
+                const HRESULT hr = hr32(dxmt9c_device_commit_chunk(dev_, &chunk));
+                if (SUCCEEDED(hr)) {
+                    recordPeChunkCommit(commitReason, info.recordCount,
+                                        info.payloadBytes, info.handleCount,
+                                        info.wireBytes);
+                }
+                return hr;
+            });
     }
 
     template<typename WriteFn>
     HRESULT appendCommandRecordDirect(uint32_t type, size_t bytes, WriteFn write) {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        if (bytes == 0 || bytes > 0xffffffffull) {
-            return D3DERR_INVALIDCALL;
-        }
-        if (pendingCommandRecordCount_ != 0 &&
-            (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
-             pendingCommandBytes_.size() + bytes > maxPendingCommandBytes())) {
-            const HRESULT flushHr =
-                flushPendingCommandChunk(PeRecorderFlushReason::CapacityPre);
-            if (FAILED(flushHr)) return flushHr;
-        }
-
-        const auto payloadOffset = pendingCommandBytes_.size();
-        if (payloadOffset > 0xffffffffull) {
-            return D3DERR_INVALIDCALL;
-        }
-        pendingCommandBytes_.resize(payloadOffset + bytes);
-        write(pendingCommandBytes_.data() + payloadOffset);
-        D9CCommandChunkWireRecordHeader wireRecord{};
-        wireRecord.type = type;
-        wireRecord.flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE;
-        wireRecord.payloadOffset = static_cast<std::uint32_t>(payloadOffset);
-        wireRecord.payloadSize = static_cast<std::uint32_t>(bytes);
-        wireRecord.firstHandle = 0;
-        wireRecord.handleCount = 0;
-
-        PendingCommandRetentions acquired{};
-        WireHandleEntryList extraHandles{};
-        if (!retainRecordPayloadObjects(wireRecord, acquired) ||
-            !collectAppendTimeExtraWireHandles(wireRecord, extraHandles)) {
-            rollbackPendingCommandRetentions(acquired);
-            pendingCommandBytes_.resize(payloadOffset);
-            return D3DERR_INVALIDCALL;
-        }
-        retainPendingCommandWireHandles(extraHandles, acquired);
-
-        pendingCommandWireRecords_.push_back(wireRecord);
-        pendingCommandRecordExtraHandles_.push_back(std::move(extraHandles));
-        ++pendingCommandRecordCount_;
-
-        if (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
-            pendingCommandBytes_.size() >= maxPendingCommandBytes()) {
-            return flushPendingCommandChunk(PeRecorderFlushReason::CapacityPost);
-        }
-        return S_OK;
+        return commandChunk_.appendRecordDirect(
+            type, bytes, maxPendingCommandRecords(), maxPendingCommandBytes(),
+            std::forward<WriteFn>(write),
+            [this](const D9CCommandChunkWireRecordHeader& wireRecord,
+                   const std::uint8_t* payload,
+                   WireHandleEntryList& extraHandles) {
+                return collectAppendTimeExtraWireHandles(
+                    wireRecord, payload, extraHandles);
+            },
+            [this](PeRecorderFlushReason flushReason) {
+                return flushPendingCommandChunk(flushReason);
+            });
     }
 
     HRESULT appendCommandRecord(const void* data, size_t bytes) {
@@ -3507,24 +786,24 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!data || bytes == 0 || bytes > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
         }
-        if (pendingCommandRecordCount_ != 0 &&
-            (pendingCommandRecordCount_ >= maxPendingCommandRecords() ||
-             pendingCommandBytes_.size() + bytes > maxPendingCommandBytes())) {
+        if (commandChunk_.shouldFlushBeforeAppend(
+                bytes, maxPendingCommandRecords(), maxPendingCommandBytes())) {
             const HRESULT flushHr =
                 flushPendingCommandChunk(PeRecorderFlushReason::CapacityPre);
             if (FAILED(flushHr)) return flushHr;
         }
 
-        PendingCommandRetentions acquired{};
-        retainPendingCommandSurface(surface0, acquired);
-        retainPendingCommandSurface(surface1, acquired);
-        retainPendingCommandTexture(texture0, acquired);
-        retainPendingCommandTexture(texture1, acquired);
+        D3D9PePendingCommandRetainer::Acquired acquired{};
+        auto& retainer = commandChunk_.retainer();
+        retainer.retainSurface(surface0, acquired);
+        retainer.retainSurface(surface1, acquired);
+        retainer.retainTexture(texture0, acquired);
+        retainer.retainTexture(texture1, acquired);
 
-        const UINT recordCountBefore = pendingCommandRecordCount_;
+        const auto recordCountBefore = commandChunk_.recordCount();
         const HRESULT hr = appendCommandRecord(data, bytes);
-        if (FAILED(hr) && pendingCommandRecordCount_ == recordCountBefore) {
-            rollbackPendingCommandRetentions(acquired);
+        if (FAILED(hr) && commandChunk_.recordCount() == recordCountBefore) {
+            retainer.rollback(acquired);
         }
         return hr;
     }
@@ -3564,9 +843,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         record.packet.primitiveCount = count;
         // Phase 12: index buffer delta. Server applies before
         // dxmt9c_device_draw_indexed_primitive.
-        record.packet.ibValid = pendingIb_ ? 1u : 0u;
+        record.packet.ibValid = peState_.pendingIb ? 1u : 0u;
         record.packet.ibHandle = toWireHandle(rawIBuf(indexBuf_));
-        pendingIb_ = false;
+        peState_.pendingIb = false;
         return appendCommandRecord(&record, sizeof(record));
     }
 
@@ -3703,31 +982,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             });
     }
 
-    // Update a const-shadow with new values + extend the dirty range.
-    // No record is appended yet — flushed at the next draw / chunk flush.
-    static void touchConstShadow(ConstShadow& shadow, UINT start, UINT count,
-                                 const void* data, std::size_t elemSize) {
-        const std::uint64_t needed64 = (static_cast<std::uint64_t>(start) + count) * elemSize;
-        if (needed64 > 0xffffffffull) {
-            return;  // out of range — falls through to legacy path elsewhere
-        }
-        const std::size_t needed = static_cast<std::size_t>(needed64);
-        if (shadow.values.size() < needed) {
-            shadow.values.resize(needed);
-        }
-        if (count > 0 && data) {
-            std::memcpy(shadow.values.data() + start * elemSize, data, count * elemSize);
-        }
-        const uint32_t end = start + count;
-        if (!shadow.dirty()) {
-            shadow.dirtyStart = start;
-            shadow.dirtyEnd = end;
-        } else {
-            shadow.dirtyStart = std::min<uint32_t>(shadow.dirtyStart, start);
-            shadow.dirtyEnd = std::max<uint32_t>(shadow.dirtyEnd, end);
-        }
-    }
-
     // Emit one record covering the merged dirty range, then clear it.
     HRESULT flushConstShadow(ConstShadow& shadow, uint32_t recordType, std::size_t elemSize) {
         if (!shadow.dirty()) return S_OK;
@@ -3743,17 +997,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // and at chunk flush so the chunk's record stream replays
     // constants → draw in API order.
     HRESULT flushPendingConsts() {
-        HRESULT hr = flushConstShadow(vsConstF_, D9C_COMMAND_RECORD_SET_VS_CONST_F, sizeof(float) * 4);
+        HRESULT hr = flushConstShadow(peConsts_.vsConstF, D9C_COMMAND_RECORD_SET_VS_CONST_F, sizeof(float) * 4);
         if (FAILED(hr)) return hr;
-        hr = flushConstShadow(vsConstI_, D9C_COMMAND_RECORD_SET_VS_CONST_I, sizeof(int32_t) * 4);
+        hr = flushConstShadow(peConsts_.vsConstI, D9C_COMMAND_RECORD_SET_VS_CONST_I, sizeof(int32_t) * 4);
         if (FAILED(hr)) return hr;
-        hr = flushConstShadow(vsConstB_, D9C_COMMAND_RECORD_SET_VS_CONST_B, sizeof(uint32_t));
+        hr = flushConstShadow(peConsts_.vsConstB, D9C_COMMAND_RECORD_SET_VS_CONST_B, sizeof(uint32_t));
         if (FAILED(hr)) return hr;
-        hr = flushConstShadow(psConstF_, D9C_COMMAND_RECORD_SET_PS_CONST_F, sizeof(float) * 4);
+        hr = flushConstShadow(peConsts_.psConstF, D9C_COMMAND_RECORD_SET_PS_CONST_F, sizeof(float) * 4);
         if (FAILED(hr)) return hr;
-        hr = flushConstShadow(psConstI_, D9C_COMMAND_RECORD_SET_PS_CONST_I, sizeof(int32_t) * 4);
+        hr = flushConstShadow(peConsts_.psConstI, D9C_COMMAND_RECORD_SET_PS_CONST_I, sizeof(int32_t) * 4);
         if (FAILED(hr)) return hr;
-        hr = flushConstShadow(psConstB_, D9C_COMMAND_RECORD_SET_PS_CONST_B, sizeof(uint32_t));
+        hr = flushConstShadow(peConsts_.psConstB, D9C_COMMAND_RECORD_SET_PS_CONST_B, sizeof(uint32_t));
         if (FAILED(hr)) return hr;
         return S_OK;
     }
@@ -3863,7 +1117,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             return S_OK;
         };
-        if (auto hr = drainTable(pendingRenderStates_,
+        if (auto hr = drainTable(peState_.pendingRenderStates,
                                  (uint32_t)D9C_DRAW_PACKET_MAX_RENDER_STATES,
                                  [](D9CDrawPrimitivePacket& p, std::uint32_t i,
                                     uint32_t k, uint32_t v) {
@@ -3874,7 +1128,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                      return p.renderStateCount;
                                  });
             FAILED(hr)) return hr;
-        if (auto hr = drainMatrix(pendingTss_,
+        if (auto hr = drainMatrix(peState_.pendingTss,
                                   (uint32_t)D9C_DRAW_PACKET_MAX_TSS,
                                   [](D9CDrawPrimitivePacket& p, std::uint32_t i,
                                      uint32_t row, uint32_t k, uint32_t v) {
@@ -3886,7 +1140,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                       return p.tssCount;
                                   });
             FAILED(hr)) return hr;
-        if (auto hr = drainMatrix(pendingSamplerStates_,
+        if (auto hr = drainMatrix(peState_.pendingSamplerStates,
                                   (uint32_t)D9C_DRAW_PACKET_MAX_SAMPLER,
                                   [](D9CDrawPrimitivePacket& p, std::uint32_t i,
                                      uint32_t row, uint32_t k, uint32_t v) {
@@ -3898,7 +1152,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                       return p.samplerStateCount;
                                   });
             FAILED(hr)) return hr;
-        if (auto hr = drainTransformTable(pendingTransforms_,
+        if (auto hr = drainTransformTable(peState_.pendingTransforms,
                                           (uint32_t)D9C_DRAW_PACKET_MAX_TRANSFORMS,
                                           [](D9CDrawPrimitivePacket& p, std::uint32_t i,
                                              uint32_t k, const D9CMatrix& v) {
@@ -3946,8 +1200,8 @@ public:
         return stateBlockRecording_;
     }
     void InvalidateStateBlockShadowForChild() noexcept override {
-        renderStateShadow_.clear();
-        transformShadow_.clear();
+        peState_.renderStateShadow.clear();
+        peState_.transformShadow.clear();
         clearPendingHotState();
     }
     void AddDefaultPoolResourceRefForChild() noexcept override {
@@ -4162,7 +1416,7 @@ public:
         cpp.presentationInterval = pPP->PresentationInterval;
         D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
         if (!sc) return D3DERR_INVALIDCALL;
-        *ppSC = new D3D9SwapChainImpl(sc, this, this, extended_);
+        *ppSC = CreatePeSwapChain(sc, this, this, extended_);
         return S_OK;
     }
 
@@ -4172,7 +1426,7 @@ public:
         *ppSC = nullptr;
         D9CSwapChain* sc = dxmt9c_device_get_swap_chain(dev_, index);
         if (!sc) return D3DERR_INVALIDCALL;
-        *ppSC = new D3D9SwapChainImpl(sc, this, this, extended_);
+        *ppSC = CreatePeSwapChain(sc, this, this, extended_);
         return S_OK;
     }
 
@@ -4204,15 +1458,15 @@ public:
         if (defaultPoolResourceRefs_ != 0) {
             clearPeStateTracking();
             stateBlockRecording_ = false;
-            stateBlockRenderStateRestore_.clear();
-            stateBlockTransformRestore_.clear();
+            peState_.stateBlockRenderStateRestore.clear();
+            peState_.stateBlockTransformRestore.clear();
             deviceNotReset_ = true;
             return D3DERR_INVALIDCALL;
         }
         clearPeStateTracking();
         stateBlockRecording_ = false;
-        stateBlockRenderStateRestore_.clear();
-        stateBlockTransformRestore_.clear();
+        peState_.stateBlockRenderStateRestore.clear();
+        peState_.stateBlockTransformRestore.clear();
         const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
         if (SUCCEEDED(hr)) {
             deviceNotReset_ = false;
@@ -4281,8 +1535,8 @@ public:
             *ppS = cachedBackBuffer0_;
             return S_OK;
         }
-        auto* swapchain = new D3D9SwapChainImpl(chain, this, this, extended_);
-        auto* surface = new D3D9SurfaceImpl(s, this, static_cast<IDirect3DSwapChain9*>(swapchain), this, false);
+        auto* swapchain = CreatePeSwapChain(chain, this, this, extended_);
+        auto* surface = CreatePeSurface(s, this, static_cast<IDirect3DSwapChain9*>(swapchain), this, false);
         if (sc == 0 && idx == 0) {
             setRef(cachedBackBuffer0_, static_cast<IDirect3DSurface9*>(surface));
         }
@@ -4328,7 +1582,7 @@ public:
                                                       usage, (uint32_t)fmt,
                                                       (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
-        *ppTex = new D3D9TextureImpl(t, this, this);
+        *ppTex = CreatePeTexture(t, this, this);
         dxmt9DeviceDebugLog("device_create_texture -> texture=%p", *ppTex);
         return S_OK;
     }
@@ -4349,7 +1603,7 @@ public:
                                                              usage, (uint32_t)fmt,
                                                              (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
-        *ppTex = new D3D9VolumeTextureImpl(t, this, this);
+        *ppTex = CreatePeVolumeTexture(t, this, this);
         dxmt9DeviceDebugLog("device_create_volume_texture -> texture=%p", *ppTex);
         return S_OK;
     }
@@ -4370,7 +1624,7 @@ public:
                                                            usage, (uint32_t)fmt,
                                                            (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
-        *ppTex = new D3D9CubeTextureImpl(t, this, this);
+        *ppTex = CreatePeCubeTexture(t, this, this);
         dxmt9DeviceDebugLog("device_create_cube_texture -> texture=%p", *ppTex);
         return S_OK;
     }
@@ -4388,7 +1642,7 @@ public:
         D9CBuffer* b = dxmt9c_device_create_vertex_buffer(dev_, len, usage,
                                                            fvf, (uint32_t)pool);
         if (!b) return D3DERR_INVALIDCALL;
-        *ppBuf = new D3D9VertexBufferImpl(b, this, this);
+        *ppBuf = CreatePeVertexBuffer(b, this, this);
         dxmt9DeviceDebugLog("device_create_vertex_buffer -> buffer=%p", *ppBuf);
         return S_OK;
     }
@@ -4407,7 +1661,7 @@ public:
                                                           (uint32_t)fmt,
                                                           (uint32_t)pool);
         if (!b) return D3DERR_INVALIDCALL;
-        *ppBuf = new D3D9IndexBufferImpl(b, this, this);
+        *ppBuf = CreatePeIndexBuffer(b, this, this);
         dxmt9DeviceDebugLog("device_create_index_buffer -> buffer=%p", *ppBuf);
         return S_OK;
     }
@@ -4430,7 +1684,7 @@ public:
                                                             (uint32_t)ms, msQual,
                                                             lockable ? 1u : 0u, &sh);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, this, nullptr, this);
+        *ppS = CreatePeSurface(s, this, nullptr, this);
         dxmt9DeviceDebugLog("device_create_render_target -> surface=%p", *ppS);
         return S_OK;
     }
@@ -4455,7 +1709,7 @@ public:
                                                             (uint32_t)ms, msQual,
                                                             discard ? 1u : 0u, &sh);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, this, nullptr, this);
+        *ppS = CreatePeSurface(s, this, nullptr, this);
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface -> surface=%p", *ppS);
         return S_OK;
     }
@@ -4612,7 +1866,7 @@ public:
                                                                 (uint32_t)fmt,
                                                                 (uint32_t)pool, &sh);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = new D3D9SurfaceImpl(s, this, nullptr, this);
+        *ppS = CreatePeSurface(s, this, nullptr, this);
         dxmt9DeviceDebugLog("device_create_offscreen_surface -> surface=%p", *ppS);
         return S_OK;
     }
@@ -4629,11 +1883,7 @@ public:
             setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
         }
         setRef(rtSlots_[idx], pSurf);
-        pendingRtMask_ |= 1u << idx;
-        if (auto* raw = rawSurf(pSurf); raw != nullptr) {
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
-        }
+        peState_.pendingRtMask |= 1u << idx;
         return S_OK;
     }
 
@@ -4650,7 +1900,7 @@ public:
             return S_OK;
         }
         D9CSurface* s = dxmt9c_device_get_render_target(dev_, idx);
-        *ppS = s ? new D3D9SurfaceImpl(s, this, nullptr, this, false) : nullptr;
+        *ppS = s ? CreatePeSurface(s, this, nullptr, this, false) : nullptr;
         dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> surface=%p",
                             this, (unsigned)idx, ppS ? static_cast<void*>(*ppS) : nullptr);
         return s ? S_OK : D3DERR_NOTFOUND;
@@ -4660,18 +1910,14 @@ public:
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
         if (dsSurface_ == pSurf) return S_OK;
         setRef(dsSurface_, pSurf);
-        pendingDs_ = true;
-        if (auto* raw = rawSurf(pSurf); raw != nullptr) {
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw));
-        }
+        peState_.pendingDs = true;
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetDepthStencilSurface(IDirect3DSurface9** ppS) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
         D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
-        *ppS = s ? new D3D9SurfaceImpl(s, this, nullptr, this) : nullptr;
+        *ppS = s ? CreatePeSurface(s, this, nullptr, this) : nullptr;
         dxmt9DeviceDebugLog("device_get_depth_stencil_surface device=%p -> surface=%p",
                             this, ppS ? static_cast<void*>(*ppS) : nullptr);
         return s ? S_OK : S_FALSE;
@@ -4749,10 +1995,10 @@ public:
         const D9CMatrix& wireM = *reinterpret_cast<const D9CMatrix*>(pM);
         const uint32_t stateKey = static_cast<uint32_t>(state);
         if (stateBlockRecording_) {
-            if (!stateBlockTransformRestore_.contains(stateKey)) {
+            if (!peState_.stateBlockTransformRestore.contains(stateKey)) {
                 D9CMatrix previous = identityTransformMatrix();
-                (void)transformShadow_.get(stateKey, previous);
-                stateBlockTransformRestore_.set(stateKey, previous);
+                (void)peState_.transformShadow.get(stateKey, previous);
+                peState_.stateBlockTransformRestore.set(stateKey, previous);
             }
             return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
         }
@@ -4763,9 +2009,9 @@ public:
             return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
         }
         D9CMatrix shadowMatrix{};
-        const bool shadowMatches = transformShadow_.get(stateKey, shadowMatrix) &&
+        const bool shadowMatches = peState_.transformShadow.get(stateKey, shadowMatrix) &&
                                    matrixEquals(shadowMatrix, wireM);
-        const bool alreadyPending = pendingTransforms_.contains(stateKey);
+        const bool alreadyPending = peState_.pendingTransforms.contains(stateKey);
         if (!alreadyPending && shadowMatches) {
             return S_OK;
         }
@@ -4779,12 +2025,12 @@ public:
         // budget AND the server has already received the prior
         // delta when the next chunk-record runs.
         if (!alreadyPending &&
-            pendingTransforms_.size() >= D9C_DRAW_PACKET_MAX_TRANSFORMS) {
+            peState_.pendingTransforms.size() >= D9C_DRAW_PACKET_MAX_TRANSFORMS) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        pendingTransforms_.set(stateKey, wireM);
-        transformShadow_.set(stateKey, wireM);
+        peState_.pendingTransforms.set(stateKey, wireM);
+        peState_.transformShadow.set(stateKey, wireM);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTransform(D3DTRANSFORMSTATETYPE state,
@@ -4793,7 +2039,7 @@ public:
         dxmt9DeviceDebugLog("device_get_transform device=%p state=%u", this, (unsigned)state);
         const uint32_t stateKey = static_cast<uint32_t>(state);
         D9CMatrix wireM{};
-        if (transformShadow_.get(stateKey, wireM)) {
+        if (peState_.transformShadow.get(stateKey, wireM)) {
             std::memcpy(pM, &wireM, sizeof(wireM));
             return S_OK;
         }
@@ -4829,11 +2075,11 @@ public:
         // packet built for the next draw carries viewportValid=1 + the
         // shadow snapshot; server-side applyDrawPacketState dispatches
         // dxmt9c_device_set_viewport before the draw runs.
-        if (std::memcmp(&viewportShadow_, &vp, sizeof(vp)) == 0) {
+        if (std::memcmp(&peState_.viewportShadow, &vp, sizeof(vp)) == 0) {
             return S_OK;
         }
-        viewportShadow_ = vp;
-        pendingViewport_ = true;
+        peState_.viewportShadow = vp;
+        peState_.pendingViewport = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetViewport(D3DVIEWPORT9* pVP) noexcept override {
@@ -4853,11 +2099,11 @@ public:
                             this, (long)pR->left, (long)pR->top, (long)pR->right, (long)pR->bottom);
         D9CRect cr = toR(*pR);
         // Phase 12: PE-shadow-only when chunk recorder is active.
-        if (std::memcmp(&scissorShadow_, &cr, sizeof(cr)) == 0) {
+        if (std::memcmp(&peState_.scissorShadow, &cr, sizeof(cr)) == 0) {
             return S_OK;
         }
-        scissorShadow_ = cr;
-        pendingScissor_ = true;
+        peState_.scissorShadow = cr;
+        peState_.pendingScissor = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetScissorRect(RECT* pR) noexcept override {
@@ -4873,11 +2119,11 @@ public:
     HRESULT STDMETHODCALLTYPE SetMaterial(const D3DMATERIAL9* pM) noexcept override {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_set_material device=%p", this);
-        if (std::memcmp(&materialShadow_, pM, sizeof(D9CMaterial)) == 0) {
+        if (std::memcmp(&peState_.materialShadow, pM, sizeof(D9CMaterial)) == 0) {
             return S_OK;
         }
-        std::memcpy(&materialShadow_, pM, sizeof(D9CMaterial));
-        pendingMaterial_ = true;
+        std::memcpy(&peState_.materialShadow, pM, sizeof(D9CMaterial));
+        peState_.pendingMaterial = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetMaterial(D3DMATERIAL9* pM) noexcept override {
@@ -4911,12 +2157,12 @@ public:
         // back to legacy unix-call (rare, and the backend may also
         // refuse).
         if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
-            if ((pendingLightSlotMask_ & (1u << idx)) == 0 &&
-                std::memcmp(&lightShadow_[idx], &cl, sizeof(D9CLight)) == 0) {
+            if ((peState_.pendingLightSlotMask & (1u << idx)) == 0 &&
+                std::memcmp(&peState_.lightShadow[idx], &cl, sizeof(D9CLight)) == 0) {
                 return S_OK;
             }
-            lightShadow_[idx] = cl;
-            pendingLightSlotMask_ |= 1u << idx;
+            peState_.lightShadow[idx] = cl;
+            peState_.pendingLightSlotMask |= 1u << idx;
             return S_OK;
         }
         const HRESULT flushHr = flushPeRecorder();
@@ -4933,18 +2179,18 @@ public:
         if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
             const DWORD bit = 1u << idx;
             const bool wantEnabled = en != 0;
-            const bool shadowEnabled = (lightEnableShadow_ & bit) != 0;
-            if ((pendingLightEnableValidMask_ & bit) == 0 &&
+            const bool shadowEnabled = (peState_.lightEnableShadow & bit) != 0;
+            if ((peState_.pendingLightEnableValidMask & bit) == 0 &&
                 wantEnabled == shadowEnabled) {
                 return S_OK;
             }
-            pendingLightEnableValidMask_ |= bit;
+            peState_.pendingLightEnableValidMask |= bit;
             if (wantEnabled) {
-                pendingLightEnableMask_ |= bit;
-                lightEnableShadow_ |= bit;
+                peState_.pendingLightEnableMask |= bit;
+                peState_.lightEnableShadow |= bit;
             } else {
-                pendingLightEnableMask_ &= ~bit;
-                lightEnableShadow_ &= ~bit;
+                peState_.pendingLightEnableMask &= ~bit;
+                peState_.lightEnableShadow &= ~bit;
             }
             return S_OK;
         }
@@ -4963,12 +2209,12 @@ public:
         if (!pPlane) return D3DERR_INVALIDCALL;
         if (idx >= 6) return D3DERR_INVALIDCALL;
         const std::size_t off = static_cast<std::size_t>(idx) * 4u;
-        if ((pendingClipPlaneMask_ & (1u << idx)) == 0 &&
-            std::memcmp(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4) == 0) {
+        if ((peState_.pendingClipPlaneMask & (1u << idx)) == 0 &&
+            std::memcmp(&peState_.clipPlaneShadow[off], pPlane, sizeof(float) * 4) == 0) {
             return S_OK;
         }
-        std::memcpy(&clipPlaneShadow_[off], pPlane, sizeof(float) * 4);
-        pendingClipPlaneMask_ |= 1u << idx;
+        std::memcpy(&peState_.clipPlaneShadow[off], pPlane, sizeof(float) * 4);
+        peState_.pendingClipPlaneMask |= 1u << idx;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetClipPlane(DWORD idx, float* pPlane) noexcept override {
@@ -4991,13 +2237,13 @@ public:
                             this, (unsigned)state, (unsigned)value);
         if (stateBlockRecording_) {
             const DWORD stateKey = static_cast<DWORD>(state);
-            if (!stateBlockRenderStateRestore_.contains(stateKey)) {
+            if (!peState_.stateBlockRenderStateRestore.contains(stateKey)) {
                 DWORD previous = dxmt9c_device_get_render_state(dev_, stateKey);
                 uint32_t shadowValue = 0;
-                if (renderStateShadow_.get(stateKey, shadowValue)) {
+                if (peState_.renderStateShadow.get(stateKey, shadowValue)) {
                     previous = shadowValue;
                 }
-                stateBlockRenderStateRestore_.set(stateKey, previous);
+                peState_.stateBlockRenderStateRestore.set(stateKey, previous);
             }
             return hr32(dxmt9c_device_set_render_state(dev_, (uint32_t)state, value));
         }
@@ -5008,20 +2254,20 @@ public:
         // Phase 31: cap check — if a NEW state would push the pending
         // table past the per-packet cap, drain pending state into the chunk
         // via chunkBarrierFlush() so the next packet starts fresh.
-        if (!pendingRenderStates_.contains(stateKey) &&
-            pendingRenderStates_.size() >= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (!peState_.pendingRenderStates.contains(stateKey) &&
+            peState_.pendingRenderStates.size() >= D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        renderStateShadow_.set(stateKey, value);
-        pendingRenderStates_.set(stateKey, value);
+        peState_.renderStateShadow.set(stateKey, value);
+        peState_.pendingRenderStates.set(stateKey, value);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetRenderState(D3DRENDERSTATETYPE state,
                                               DWORD* pValue) noexcept override {
         if (!pValue) return D3DERR_INVALIDCALL;
         uint32_t shadowValue = 0;
-        if (renderStateShadow_.get(static_cast<DWORD>(state), shadowValue)) {
+        if (peState_.renderStateShadow.get(static_cast<DWORD>(state), shadowValue)) {
             *pValue = shadowValue;
             return S_OK;
         }
@@ -5043,7 +2289,7 @@ public:
         dxmt9DeviceDebugLog("device_create_state_block device=%p type=%u", this, (unsigned)type);
         D9CStateBlock* sb = dxmt9c_device_create_state_block(dev_, (uint32_t)type);
         if (!sb) return D3DERR_INVALIDCALL;
-        *ppSB = new D3D9StateBlockImpl(sb, this, this);
+        *ppSB = CreatePeStateBlock(sb, this, this);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE BeginStateBlock() noexcept override {
@@ -5056,8 +2302,8 @@ public:
         const HRESULT hr = hr32(dxmt9c_device_begin_state_block(dev_));
         if (SUCCEEDED(hr)) {
             stateBlockRecording_ = true;
-            stateBlockRenderStateRestore_.clear();
-            stateBlockTransformRestore_.clear();
+            peState_.stateBlockRenderStateRestore.clear();
+            peState_.stateBlockTransformRestore.clear();
         }
         dxmt9DeviceDebugLog("device_begin_state_block -> hr=0x%08x", (unsigned)hr);
         return hr;
@@ -5074,20 +2320,20 @@ public:
         HRESULT hr = hr32(dxmt9c_device_end_state_block(dev_, &sb));
         if (SUCCEEDED(hr)) {
             stateBlockRecording_ = false;
-            stateBlockRenderStateRestore_.forEach([&](uint32_t state, uint32_t value) {
+            peState_.stateBlockRenderStateRestore.forEach([&](uint32_t state, uint32_t value) {
                 (void)dxmt9c_device_set_render_state(dev_, state, value);
-                renderStateShadow_.set(state, value);
-                pendingRenderStates_.erase(state);
+                peState_.renderStateShadow.set(state, value);
+                peState_.pendingRenderStates.erase(state);
             });
-            stateBlockRenderStateRestore_.clear();
-            stateBlockTransformRestore_.forEach([&](uint32_t state, const D9CMatrix& value) {
+            peState_.stateBlockRenderStateRestore.clear();
+            peState_.stateBlockTransformRestore.forEach([&](uint32_t state, const D9CMatrix& value) {
                 (void)dxmt9c_device_set_transform(dev_, state, &value);
-                transformShadow_.set(state, value);
-                pendingTransforms_.erase(state);
+                peState_.transformShadow.set(state, value);
+                peState_.pendingTransforms.erase(state);
             });
-            stateBlockTransformRestore_.clear();
+            peState_.stateBlockTransformRestore.clear();
             if (sb) {
-                *ppSB = new D3D9StateBlockImpl(sb, this, this);
+                *ppSB = CreatePeStateBlock(sb, this, this);
             }
         }
         dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
@@ -5104,19 +2350,19 @@ public:
         const uint32_t stageSlot = textureStageSlot(stage);
         const uint32_t stateSlot = textureStageStateSlot(type);
         uint32_t shadowValue = 0;
-        if (tssShadow_.get(stageSlot, stateSlot, shadowValue) &&
+        if (peState_.tssShadow.get(stageSlot, stateSlot, shadowValue) &&
             shadowValue == value) {
             return S_OK;
         }
         // Phase 34: cap-check uses chunkBarrierFlush so pending state is
         // encoded as APPLY_STATE record(s) + cleared before the new entry.
-        if (!pendingTss_.contains(stageSlot, stateSlot) &&
-            pendingTss_.size() >= D9C_DRAW_PACKET_MAX_TSS) {
+        if (!peState_.pendingTss.contains(stageSlot, stateSlot) &&
+            peState_.pendingTss.size() >= D9C_DRAW_PACKET_MAX_TSS) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        tssShadow_.set(stageSlot, stateSlot, value);
-        pendingTss_.set(stageSlot, stateSlot, value);
+        peState_.tssShadow.set(stageSlot, stateSlot, value);
+        peState_.pendingTss.set(stageSlot, stateSlot, value);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTextureStageState(DWORD stage,
@@ -5140,18 +2386,18 @@ public:
             return S_OK;
         }
         uint32_t shadowValue = 0;
-        if (samplerStateShadow_.get(samplerIndex, stateSlot, shadowValue) &&
+        if (peState_.samplerStateShadow.get(samplerIndex, stateSlot, shadowValue) &&
             shadowValue == value) {
             return S_OK;
         }
         // Phase 34: cap-check uses chunkBarrierFlush.
-        if (!pendingSamplerStates_.contains(samplerIndex, stateSlot) &&
-            pendingSamplerStates_.size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
+        if (!peState_.pendingSamplerStates.contains(samplerIndex, stateSlot) &&
+            peState_.pendingSamplerStates.size() >= D9C_DRAW_PACKET_MAX_SAMPLER) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
-        samplerStateShadow_.set(samplerIndex, stateSlot, value);
-        pendingSamplerStates_.set(samplerIndex, stateSlot, value);
+        peState_.samplerStateShadow.set(samplerIndex, stateSlot, value);
+        peState_.pendingSamplerStates.set(samplerIndex, stateSlot, value);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetSamplerState(DWORD sampler,
@@ -5209,14 +2455,7 @@ public:
             return S_OK;
         }
         setRef(textures_[stage], pTex);
-        // Keep the legacy append-time handle note for callers that still
-        // populate chunkHandlesByKind_; flush-time payload decoding now
-        // derives the actual per-record wire handle ranges.
-        if (auto* raw = rawTex(pTex); raw != nullptr) {
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                            reinterpret_cast<uint64_t>(raw));
-        }
-        pendingTextureMask_ |= 1u << stage;
+        peState_.pendingTextureMask |= 1u << stage;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTexture(DWORD stage,
@@ -5237,7 +2476,7 @@ public:
             return S_OK;
         }
         fvf_ = fvf;
-        pendingFvf_ = true;
+        peState_.pendingFvf = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetFVF(DWORD* pFVF) noexcept override {
@@ -5262,7 +2501,7 @@ public:
         }
         D9CVertexDecl* d = dxmt9c_device_create_vertex_declaration(dev_, tmp);
         if (!d) return D3DERR_INVALIDCALL;
-        *ppVD = new D3D9VertexDeclImpl(d, this);
+        *ppVD = CreatePeVertexDecl(d, this);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
@@ -5270,7 +2509,7 @@ public:
         dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
         if (vdecl_ == pVD) return S_OK;
         setRef(vdecl_, pVD);
-        pendingVdecl_ = true;
+        peState_.pendingVdecl = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexDeclaration(
@@ -5287,7 +2526,7 @@ public:
         dxmt9DeviceDebugLog("device_create_vertex_shader device=%p code=%p", this, pFn);
         D9CShader* s = dxmt9c_device_create_vertex_shader(dev_, reinterpret_cast<const uint32_t*>(pFn));
         if (!s) return D3DERR_INVALIDCALL;
-        *ppVS = new D3D9VertexShaderImpl(s, this);
+        *ppVS = CreatePeVertexShader(s, this);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShader(IDirect3DVertexShader9* pVS) noexcept override {
@@ -5298,7 +2537,7 @@ public:
         // dxmt9c_device_set_vertex_shader call before the draw runs.
         if (vs_ == pVS) return S_OK;
         setRef(vs_, pVS);
-        pendingVs_ = true;
+        peState_.pendingVs = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShader(IDirect3DVertexShader9** ppVS) noexcept override {
@@ -5311,7 +2550,7 @@ public:
                             this, start, count, pData);
         // Shadow-only: defer the record until the next flushPendingConsts()
         // (called before each draw record + at chunk commit).
-        touchConstShadow(vsConstF_, start, count, pData, sizeof(float) * 4);
+        touchConstShadow(peConsts_.vsConstF, start, count, pData, sizeof(float) * 4);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start, float* pData,
@@ -5322,7 +2561,7 @@ public:
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        touchConstShadow(vsConstI_, start, count, pData, sizeof(int32_t) * 4);
+        touchConstShadow(peConsts_.vsConstI, start, count, pData, sizeof(int32_t) * 4);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantI(UINT start, INT* pData,
@@ -5333,7 +2572,7 @@ public:
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        touchConstShadow(vsConstB_, start, count, pData, sizeof(uint32_t));
+        touchConstShadow(peConsts_.vsConstB, start, count, pData, sizeof(uint32_t));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantB(UINT start, BOOL* pData,
@@ -5354,11 +2593,7 @@ public:
         setRef(streamSrc_[stream], pBuf);
         streamOff_[stream] = offset;
         streamStr_[stream] = stride;
-        if (auto* raw = rawVBuf(pBuf); raw != nullptr) {
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
-                            reinterpret_cast<uint64_t>(raw));
-        }
-        pendingStreamMask_ |= 1u << stream;
+        peState_.pendingStreamMask |= 1u << stream;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetStreamSource(UINT stream,
@@ -5393,11 +2628,7 @@ public:
         dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
         if (indexBuf_ == pIBuf) return S_OK;
         setRef(indexBuf_, pIBuf);
-        pendingIb_ = true;
-        if (auto* raw = rawIBuf(pIBuf); raw != nullptr) {
-            noteChunkHandle(D9C_CHUNK_HANDLE_KIND_BUFFER,
-                            reinterpret_cast<uint64_t>(raw));
-        }
+        peState_.pendingIb = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetIndices(IDirect3DIndexBuffer9** ppIBuf) noexcept override {
@@ -5412,14 +2643,14 @@ public:
         dxmt9DeviceDebugLog("device_create_pixel_shader device=%p code=%p", this, pFn);
         D9CShader* s = dxmt9c_device_create_pixel_shader(dev_, reinterpret_cast<const uint32_t*>(pFn));
         if (!s) return D3DERR_INVALIDCALL;
-        *ppPS = new D3D9PixelShaderImpl(s, this);
+        *ppPS = CreatePePixelShader(s, this);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pPS) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
         if (ps_ == pPS) return S_OK;
         setRef(ps_, pPS);
-        pendingPs_ = true;
+        peState_.pendingPs = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShader(IDirect3DPixelShader9** ppPS) noexcept override {
@@ -5430,7 +2661,7 @@ public:
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        touchConstShadow(psConstF_, start, count, pData, sizeof(float) * 4);
+        touchConstShadow(peConsts_.psConstF, start, count, pData, sizeof(float) * 4);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantF(UINT start, float* pData,
@@ -5441,7 +2672,7 @@ public:
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        touchConstShadow(psConstI_, start, count, pData, sizeof(int32_t) * 4);
+        touchConstShadow(peConsts_.psConstI, start, count, pData, sizeof(int32_t) * 4);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantI(UINT start, INT* pData,
@@ -5452,7 +2683,7 @@ public:
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
-        touchConstShadow(psConstB_, start, count, pData, sizeof(uint32_t));
+        touchConstShadow(peConsts_.psConstB, start, count, pData, sizeof(uint32_t));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantB(UINT start, BOOL* pData,
@@ -5466,7 +2697,7 @@ public:
                                              UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
                             this, (unsigned)type, startVertex, count);
-        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
@@ -5484,7 +2715,7 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
                             this, (unsigned)type, baseVertex, minVertex, numVertices,
                             startIndex, count);
-        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
@@ -5501,7 +2732,7 @@ public:
                                                UINT stride) noexcept override {
         dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
                             this, (unsigned)type, count, pData, stride);
-        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
@@ -5522,7 +2753,7 @@ public:
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
                             this, (unsigned)type, minVertex, numVertices, count,
                             pIdxData, (unsigned)idxFmt, pVtxData, stride);
-        if (pendingRenderStates_.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
+        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return barrierHr;
         }
@@ -5554,7 +2785,7 @@ public:
             dxmt9c_query_release(q);
             return S_OK;
         }
-        *ppQ = new D3D9QueryImpl(q, this, this);
+        *ppQ = CreatePeQuery(q, this, this);
         return S_OK;
     }
 
@@ -5678,8 +2909,8 @@ public:
         releaseAllBound();
         clearPeStateTracking();
         stateBlockRecording_ = false;
-        stateBlockRenderStateRestore_.clear();
-        stateBlockTransformRestore_.clear();
+        peState_.stateBlockRenderStateRestore.clear();
+        peState_.stateBlockTransformRestore.clear();
         return hr32(dxmt9c_device_reset_ex(dev_, &cpp, pFsMode ? &cdme : nullptr));
     }
 

@@ -1,5 +1,6 @@
 dxmt9_test_link_args = []
 dxmt9_native_test_env = environment()
+dxmt9_native_test_env_vars = []
 if host_machine.system() == 'darwin'
   dxmt9_test_link_args += meson.get_compiler('cpp').get_supported_link_arguments([
     '-Wl,-no_warn_duplicate_libraries',
@@ -23,10 +24,12 @@ if host_machine.system() == 'darwin'
     if not dxmt9_wine_install_path.startswith('/')
       dxmt9_wine_install_path = join_paths(meson.project_source_root(), dxmt9_wine_install_path)
     endif
+    dxmt9_wine_unix_runtime_path = join_paths(dxmt9_wine_install_path, 'lib/wine', dxmt9_wine_unix_runtime_subdir)
     dxmt9_native_test_env.prepend(
       'DYLD_LIBRARY_PATH',
-      join_paths(dxmt9_wine_install_path, 'lib/wine', dxmt9_wine_unix_runtime_subdir),
+      dxmt9_wine_unix_runtime_path,
       separator: ':')
+    dxmt9_native_test_env_vars += 'DYLD_LIBRARY_PATH=' + dxmt9_wine_unix_runtime_path
   endif
 endif
 
@@ -49,11 +52,11 @@ core_spec = executable(
 )
 
 test('dxmt9-core-spec', core_spec,
-     env: ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 test('dxmt9-core-spec-pixel-vflip-contract', core_spec,
-     env: ['DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1', 'DXMT_DEBUG_FORCE_PIXEL_V_FLIP=1'])
+     env: dxmt9_native_test_env_vars + ['DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1', 'DXMT_DEBUG_FORCE_PIXEL_V_FLIP=1'])
 test('dxmt9-core-spec-vertex-yflip-contract', core_spec,
-     env: ['DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1', 'DXMT_DEBUG_FLIP_VERTEX_Y=1'])
+     env: dxmt9_native_test_env_vars + ['DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1', 'DXMT_DEBUG_FLIP_VERTEX_Y=1'])
 
 state_draw_transform_spec = executable(
   'dxmt9-state-draw-transform-spec',
@@ -63,7 +66,8 @@ state_draw_transform_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-state-draw-transform-spec', state_draw_transform_spec)
+test('dxmt9-state-draw-transform-spec', state_draw_transform_spec,
+     env: dxmt9_native_test_env_vars)
 
 dod_state_format_spec = executable(
   'dxmt9-dod-state-format-spec',
@@ -73,7 +77,8 @@ dod_state_format_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-dod-state-format-spec', dod_state_format_spec)
+test('dxmt9-dod-state-format-spec', dod_state_format_spec,
+     env: dxmt9_native_test_env_vars)
 
 shader_transform_spec = executable(
   'dxmt9-shader-transform-spec',
