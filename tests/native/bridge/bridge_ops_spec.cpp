@@ -96,6 +96,24 @@ void testWow64OpaqueHandleRegistryKeepsRetainedTokensAlive() {
           "wow64 opaque handle is erased after final release");
 }
 
+void testBridgeAbiHashIsNonZeroAndStable() {
+  // Codegen guarantees a non-zero hash (FNV-1a + non-empty schema). The
+  // static_assert in the generated header would already fire at compile
+  // time, but assert at runtime as well so a regression in the python
+  // codegen that emits a literal 0 is caught by this spec target rather
+  // than only by a downstream link-time error.
+  check(dxmt9::bridge::kBridgeAbiHash != 0u,
+        "kBridgeAbiHash must be non-zero");
+
+  // Slot 4 is the reserved fixed-position ABI-hash slot; bridge ops must
+  // start at slot 5. If either drifts, the PE-side DllMain handshake
+  // and the unix-side dispatch table get out of sync.
+  checkEq(static_cast<unsigned int>(DXMT9_WINEMETAL_CALL_ABI_HASH), 4u,
+          "ABI-hash slot is reserved at fixed index 4");
+  checkEq(static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE), 5u,
+          "bridge ops start at slot 5 (after shader+abi-hash)");
+}
+
 }  // namespace
 
 int main() {
@@ -103,6 +121,7 @@ int main() {
     testBridgeOpcodeCountMatchesEnumSpan();
     testDodChunkBridgeOpsStaySingleCallShape();
     testWow64OpaqueHandleRegistryKeepsRetainedTokensAlive();
+    testBridgeAbiHashIsNonZeroAndStable();
   } catch (const TestFailure& e) {
     std::cerr << "bridge_ops_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

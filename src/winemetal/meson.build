@@ -114,7 +114,8 @@ if host_machine.system() == 'windows'
 
   winemetal_dll = shared_library(
     'winemetal',
-    files('main.c', 'winemetal_thunks.cpp', 'winemetal_bridge.cpp'),
+    files('main.c', 'winemetal_thunks.cpp', 'winemetal_bridge.cpp',
+          'winemetal_abi_check.cpp'),
     name_prefix: '',
     name_suffix: 'dll',
     vs_module_defs: files('winemetal.def')[0],

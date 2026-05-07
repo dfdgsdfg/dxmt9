@@ -72,6 +72,11 @@ dxmt9_winemetal_unix_module = shared_library(
   files(
     'winemetal_unix.cpp',
     'winemetal_private_api.mm',
+    # ABI-hash handshake handler (slot 4 of the dispatch table). Returns
+    # the codegen-time dxmt9::bridge::kBridgeAbiHash for the PE-side
+    # DllMain to compare; refuses-to-load on mismatch. Reserved at fixed
+    # positional index so it does not drift with dxmt9c_* schema changes.
+    'winemetal_abi_hash.cpp',
     # Shader service unix-call handlers (slots 0..3 of the dispatch
     # table). Not part of any reusable lib — restored from 96df4b5^
     # specifically for the PE↔ELF bridge.

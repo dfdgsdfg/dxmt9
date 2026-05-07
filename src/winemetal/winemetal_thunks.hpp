@@ -16,19 +16,35 @@ extern "C" {
 // (BridgeOpcode in dxmt9_bridge_ops.generated.h) are renumbered to start
 // at DXMT9_WINEMETAL_BRIDGE_OP_BASE so the two ID spaces don't collide
 // in the same table.
+//
+// Slot DXMT9_WINEMETAL_CALL_ABI_HASH (= SHADER_COUNT, immediately after the
+// shader handlers and immediately before the generated device_c bridge
+// entries) is reserved at a fixed positional index so it does not drift
+// when dxmt9c_* prototypes are added or removed. Its handler returns the
+// unix-side dxmt9::bridge::kBridgeAbiHash so the PE-side DllMain can
+// detect a winemetal.dll/winemetal.so version skew at load time.
 enum dxmt9_winemetal_call_id {
   DXMT9_WINEMETAL_CALL_COMPILE_SHADER = 0,
   DXMT9_WINEMETAL_CALL_SHADER_SOURCE_SIZE = 1,
   DXMT9_WINEMETAL_CALL_SHADER_SOURCE_COPY = 2,
   DXMT9_WINEMETAL_CALL_DESTROY_SHADER = 3,
   DXMT9_WINEMETAL_CALL_SHADER_COUNT = 4,
+  DXMT9_WINEMETAL_CALL_ABI_HASH = 4,
+  DXMT9_WINEMETAL_CALL_RESERVED_COUNT = 5,
 };
 
 // First slot consumed by the generated device_c bridge entries — read by
-// gen_wine_bridge.py when writing dxmt9_bridge_ops.generated.h. Must
-// match the count of explicit shader IDs above so the unified table
-// indexes correctly.
-#define DXMT9_WINEMETAL_BRIDGE_OP_BASE DXMT9_WINEMETAL_CALL_SHADER_COUNT
+// gen_wine_bridge.py when writing dxmt9_bridge_ops.generated.h. Equals
+// the count of explicit shader IDs (4) plus the reserved ABI-hash slot
+// (1) so the unified __wine_unix_call dispatch table indexes correctly.
+#define DXMT9_WINEMETAL_BRIDGE_OP_BASE DXMT9_WINEMETAL_CALL_RESERVED_COUNT
+
+// Layout for the params struct passed to slot DXMT9_WINEMETAL_CALL_ABI_HASH.
+// Pointer-free POD so the same struct works for native, PE→ELF, and wow64
+// dispatch paths without translation.
+typedef struct Dxmt9WinemetalAbiHashParams {
+  uint64_t hash;
+} Dxmt9WinemetalAbiHashParams;
 
 typedef struct Dxmt9WinemetalCompileShaderParams {
   uint64_t bytecode_ptr;
