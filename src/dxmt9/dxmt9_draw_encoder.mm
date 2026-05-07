@@ -875,6 +875,7 @@ bool encodeDraw(EncodeContext& ctx,
   // are BaseDrawState-only and survive across iterations of a
   // Kind::DrawRun on the Metal render encoder. Skip on iter 2..N.
   if (!skipBaseStateBind) {
+    PerfScope pipelineLookupScope(perf::countEncodeDrawPipelineLookupCpuTime);
     const auto depthKey = makeDepthStencilKey(drawState);
     auto pipeline = ctx.cache.getOrBuildDrawPipelineForState(
         ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
@@ -904,12 +905,16 @@ bool encodeDraw(EncodeContext& ctx,
     encoder.setRenderPipelineState(pipeline);
     countPipelineBind();
   }
-  auto* uniforms = ctx.allocators.argbuf.allocate<DrawUniforms>(seqId);
+  DrawUniforms* uniforms = nullptr;
   DrawUniforms fallbackUniforms{};
-  if (!uniforms) {
-    uniforms = &fallbackUniforms;
+  {
+    PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
+    uniforms = ctx.allocators.argbuf.allocate<DrawUniforms>(seqId);
+    if (!uniforms) {
+      uniforms = &fallbackUniforms;
+    }
+    *uniforms = buildDrawUniforms(drawState);
   }
-  *uniforms = buildDrawUniforms(drawState);
   auto uploadTransientBuffer = [&](const void* data, std::size_t len, std::size_t alignment) {
     return ctx.queue.uploadTransientBuffer(
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(data), len),
@@ -925,10 +930,16 @@ bool encodeDraw(EncodeContext& ctx,
     countUniformBufferBinds(2);
     return true;
   };
-  const auto ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
-  const bool fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
+  std::optional<dxmt9::ffp::FixedFunctionVertexLayout> ffLayout;
+  bool fixedFunctionPath = false;
+  {
+    PerfScope fvfDecodeScope(perf::countEncodeDrawFvfDecodeCpuTime);
+    ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
+    fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
+  }
   // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
   if (!skipBaseStateBind) {
+    PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
     if (auto* surface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value); surface && surface->texture) {
       double viewportWidth = static_cast<double>(std::max(1u, hot.viewport.viewport.width));
       double viewportHeight = static_cast<double>(std::max(1u, hot.viewport.viewport.height));
@@ -981,40 +992,43 @@ bool encodeDraw(EncodeContext& ctx,
   auto makeTransientBuffer = [&](const void* data, std::size_t len) {
     return uploadTransientBuffer(data, len, 16);
   };
-  if (!pv.userVertexData.empty()) {
-    // Phase 5-B: prefer pre-batched UP vertex slice when the
-    // DrawRun handler did the bulk upload; otherwise fall back
-    // to the per-draw upload.
-    if (preUploaded && preUploaded->vertex) {
-      transientVertexBuffer = preUploaded->vertex;
-    } else {
-      transientVertexBuffer = makeTransientBuffer(pv.userVertexData.data(),
-                                                 pv.userVertexData.size());
-    }
-    if (transientVertexBuffer) {
-      vertexBuffer = transientVertexBuffer.buffer;
-      vertexBufferOffset = transientVertexBuffer.offset + hot.streamOffsets[0];
-      vertexBytes = pv.userVertexData;
-    }
-  } else if (hot.streamBuffers[0]) {
-    if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[0].value);
-        buffer && buffer->buffer) {
-      vertexBuffer = WMT::Buffer{buffer->buffer.handle};
-      vertexBufferOffset = hot.streamOffsets[0];
-      if (!buffer->shadow.empty()) {
-        vertexBytes = buffer->shadow;
-      } else if (buffer->contents) {
-        vertexBytes = std::span<const u8>(static_cast<const u8*>(buffer->contents),
-                                          static_cast<std::size_t>(buffer->desc.size));
+  {
+    PerfScope fvfDecodeBytesScope(perf::countEncodeDrawFvfDecodeCpuTime);
+    if (!pv.userVertexData.empty()) {
+      // Phase 5-B: prefer pre-batched UP vertex slice when the
+      // DrawRun handler did the bulk upload; otherwise fall back
+      // to the per-draw upload.
+      if (preUploaded && preUploaded->vertex) {
+        transientVertexBuffer = preUploaded->vertex;
+      } else {
+        transientVertexBuffer = makeTransientBuffer(pv.userVertexData.data(),
+                                                   pv.userVertexData.size());
       }
-    } else if (vertexDecl.streams[0].buffer) {
-      const auto bytes = vertexDecl.streams[0].buffer->bytes();
-      if (!bytes.empty()) {
-        transientVertexBuffer = makeTransientBuffer(bytes.data(), bytes.size());
-        if (transientVertexBuffer) {
-          vertexBuffer = transientVertexBuffer.buffer;
-          vertexBufferOffset = transientVertexBuffer.offset + hot.streamOffsets[0];
-          vertexBytes = bytes;
+      if (transientVertexBuffer) {
+        vertexBuffer = transientVertexBuffer.buffer;
+        vertexBufferOffset = transientVertexBuffer.offset + hot.streamOffsets[0];
+        vertexBytes = pv.userVertexData;
+      }
+    } else if (hot.streamBuffers[0]) {
+      if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[0].value);
+          buffer && buffer->buffer) {
+        vertexBuffer = WMT::Buffer{buffer->buffer.handle};
+        vertexBufferOffset = hot.streamOffsets[0];
+        if (!buffer->shadow.empty()) {
+          vertexBytes = buffer->shadow;
+        } else if (buffer->contents) {
+          vertexBytes = std::span<const u8>(static_cast<const u8*>(buffer->contents),
+                                            static_cast<std::size_t>(buffer->desc.size));
+        }
+      } else if (vertexDecl.streams[0].buffer) {
+        const auto bytes = vertexDecl.streams[0].buffer->bytes();
+        if (!bytes.empty()) {
+          transientVertexBuffer = makeTransientBuffer(bytes.data(), bytes.size());
+          if (transientVertexBuffer) {
+            vertexBuffer = transientVertexBuffer.buffer;
+            vertexBufferOffset = transientVertexBuffer.offset + hot.streamOffsets[0];
+            vertexBytes = bytes;
+          }
         }
       }
     }
@@ -1088,28 +1102,34 @@ bool encodeDraw(EncodeContext& ctx,
       }
       return false;
     }
-    uniforms->vertexStreamOffset = 0;
-    uniforms->vertexStreamStride =
-        vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride;
-    if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
-      vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
-                            static_cast<uint64_t>(uniforms->vertexStreamStride);
-      uniforms->vertexBaseIndex = 0;
-    } else {
-      uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
-    }
-    if (ffLayout->preTransformed) {
-      if (auto* targetSurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value); targetSurface) {
-        uniforms->viewportOrigin = {0.0f, 0.0f};
-        uniforms->viewportSize = {static_cast<f32>(std::max(1u, targetSurface->desc.width)),
-                                  static_cast<f32>(std::max(1u, targetSurface->desc.height))};
+    {
+      PerfScope uniformBuildFfScope(perf::countEncodeDrawUniformBuildCpuTime);
+      uniforms->vertexStreamOffset = 0;
+      uniforms->vertexStreamStride =
+          vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride;
+      if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
+        vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
+                              static_cast<uint64_t>(uniforms->vertexStreamStride);
+        uniforms->vertexBaseIndex = 0;
+      } else {
+        uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
+      }
+      if (ffLayout->preTransformed) {
+        if (auto* targetSurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value); targetSurface) {
+          uniforms->viewportOrigin = {0.0f, 0.0f};
+          uniforms->viewportSize = {static_cast<f32>(std::max(1u, targetSurface->desc.width)),
+                                    static_cast<f32>(std::max(1u, targetSurface->desc.height))};
+        }
       }
     }
-    if (!uploadUniforms()) {
-      return false;
+    {
+      PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime);
+      if (!uploadUniforms()) {
+        return false;
+      }
+      encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
+      countVertexBufferBind();
     }
-    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
-    countVertexBufferBind();
 
     const u64 ffTraceTex0 = debug::fixedFunctionTraceTextureHandle();
     const bool forceTrace =
@@ -1355,25 +1375,32 @@ bool encodeDraw(EncodeContext& ctx,
       }
       emitQueueTraceLine(trace.str());
     }
-    uniforms->vertexStreamOffset = 0;
-    uniforms->vertexStreamStride =
-        ffLayout ? (vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride)
-                 : computeVertexDeclStride(vertexDecl);
-    if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
-      vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
-                            static_cast<uint64_t>(uniforms->vertexStreamStride);
-      uniforms->vertexBaseIndex = 0;
-    } else {
-      uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
+    {
+      PerfScope uniformBuildVsScope(perf::countEncodeDrawUniformBuildCpuTime);
+      uniforms->vertexStreamOffset = 0;
+      uniforms->vertexStreamStride =
+          ffLayout ? (vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride)
+                   : computeVertexDeclStride(vertexDecl);
+      if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
+        vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
+                              static_cast<uint64_t>(uniforms->vertexStreamStride);
+        uniforms->vertexBaseIndex = 0;
+      } else {
+        uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
+      }
     }
-    if (!uploadUniforms()) {
-      return false;
+    {
+      PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
+      if (!uploadUniforms()) {
+        return false;
+      }
+      encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
+      countVertexBufferBind();
     }
-    encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
-    countVertexBufferBind();
   }
   // Phase 3-E: texture / sampler binding is BaseDrawState-only.
   if (!skipBaseStateBind) {
+    PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
     for (std::size_t stage = 0; stage < kMaxSamplers; ++stage) {
       const auto textureHandle = hot.textures[stage];
       if (!textureHandle) {
@@ -1452,6 +1479,7 @@ bool encodeDraw(EncodeContext& ctx,
   if (indexedDraw) {
     const bool forceExpandIndexed = debug::forceExpandIndexed();
     if (forceExpandIndexed) {
+      PerfScope fvfDecodeExpandedScope(perf::countEncodeDrawFvfDecodeCpuTime);
       std::span<const u8> indexBytes;
       if (!pv.userIndexData.empty()) {
         indexBytes = pv.userIndexData;
@@ -1590,38 +1618,46 @@ bool encodeDraw(EncodeContext& ctx,
                      true,
                      pv.userVertexData.size(),
                      pv.userIndexData.size());
-      encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
+      {
+        PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+        encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
+      }
       return true;
     }
     CommandQueue::TransientBufferSlice transientIndexBuffer;
     WMT::Buffer indexBuffer{};
     uint64_t indexBufferOffset = static_cast<uint64_t>(pv.startIndex) * indexElementSize(pv.indexType);
-    if (!pv.userIndexData.empty()) {
-      // Phase 5-B: prefer pre-batched UP index slice from DrawRun
-      // bulk upload; fall back to per-draw upload otherwise.
-      if (preUploaded && preUploaded->index) {
-        transientIndexBuffer = preUploaded->index;
-      } else {
-        transientIndexBuffer = makeTransientBuffer(pv.userIndexData.data(), pv.userIndexData.size());
-      }
-      if (transientIndexBuffer) {
-        indexBuffer = transientIndexBuffer.buffer;
-        indexBufferOffset += transientIndexBuffer.offset;
-      }
-    } else {
-      auto* buffer = ctx.pool.findBuffer(hot.indexBuffer.value);
-      if (buffer && buffer->buffer) {
-        indexBuffer = WMT::Buffer{buffer->buffer.handle};
-      } else if (buffer && !buffer->shadow.empty()) {
-        transientIndexBuffer = makeTransientBuffer(buffer->shadow.data(), buffer->shadow.size());
+    {
+      PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
+      if (!pv.userIndexData.empty()) {
+        // Phase 5-B: prefer pre-batched UP index slice from DrawRun
+        // bulk upload; fall back to per-draw upload otherwise.
+        if (preUploaded && preUploaded->index) {
+          transientIndexBuffer = preUploaded->index;
+        } else {
+          transientIndexBuffer = makeTransientBuffer(pv.userIndexData.data(), pv.userIndexData.size());
+        }
         if (transientIndexBuffer) {
           indexBuffer = transientIndexBuffer.buffer;
           indexBufferOffset += transientIndexBuffer.offset;
         }
+      } else {
+        auto* buffer = ctx.pool.findBuffer(hot.indexBuffer.value);
+        if (buffer && buffer->buffer) {
+          indexBuffer = WMT::Buffer{buffer->buffer.handle};
+        } else if (buffer && !buffer->shadow.empty()) {
+          transientIndexBuffer = makeTransientBuffer(buffer->shadow.data(), buffer->shadow.size());
+          if (transientIndexBuffer) {
+            indexBuffer = transientIndexBuffer.buffer;
+            indexBufferOffset += transientIndexBuffer.offset;
+          }
+        }
+      }
+      if (indexBuffer) {
+        countIndexBufferBind();
       }
     }
     if (indexBuffer) {
-      countIndexBufferBind();
       const bool upDraw = !pv.userVertexData.empty() || !pv.userIndexData.empty();
       recordDrawGeometryDiagnostics(drawState,
                                     pv,
@@ -1643,9 +1679,12 @@ bool encodeDraw(EncodeContext& ctx,
                      false,
                      pv.userVertexData.size(),
                      pv.userIndexData.size());
-      encoder.drawIndexedPrimitives(primitiveType, toIndexType(pv.indexType),
-                                    (uint64_t)vertexCount, indexBuffer, indexBufferOffset,
-                                    1, 0, 0);
+      {
+        PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+        encoder.drawIndexedPrimitives(primitiveType, toIndexType(pv.indexType),
+                                      (uint64_t)vertexCount, indexBuffer, indexBufferOffset,
+                                      1, 0, 0);
+      }
       return true;
     }
   }
@@ -1670,7 +1709,10 @@ bool encodeDraw(EncodeContext& ctx,
                  false,
                  pv.userVertexData.size(),
                  pv.userIndexData.size());
-  encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
+  {
+    PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
+    encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
+  }
   return true;
 }
 

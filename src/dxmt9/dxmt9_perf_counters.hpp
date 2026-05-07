@@ -78,6 +78,11 @@ void countDrawGeometryDiagnostics(bool fixedFunctionPath,
 void countSubmitDrawCpuTime(std::uint64_t nanoseconds);
 void countEncodeChunkCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPipelineLookupCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawUniformBuildCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawFvfDecodeCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds);
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes);
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);

@@ -101,6 +101,16 @@ struct Counters {
   std::atomic<std::uint64_t> encodeChunkCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawPipelineLookupCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPipelineLookupCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawUniformBuildCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawUniformBuildCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawFvfDecodeCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawFvfDecodeCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeDrawIssueCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawIssueCpuMaxNs{0};
   std::atomic<std::uint64_t> transientUploadCalls{0};
   std::atomic<std::uint64_t> transientUploadBytes{0};
   std::atomic<std::uint64_t> transientUploadCpuNs{0};
@@ -353,6 +363,11 @@ void report() {
       "submit_draw_cpu_ms=%.3f submit_draw_cpu_max_ms=%.3f "
       "encode_chunk_calls=%llu encode_chunk_cpu_ms=%.3f encode_chunk_cpu_max_ms=%.3f "
       "encode_draw_cpu_ms=%.3f encode_draw_cpu_max_ms=%.3f "
+      "encode_draw_pipeline_lookup_cpu_ms=%.3f encode_draw_pipeline_lookup_cpu_max_ms=%.3f "
+      "encode_draw_uniform_build_cpu_ms=%.3f encode_draw_uniform_build_cpu_max_ms=%.3f "
+      "encode_draw_fvf_decode_cpu_ms=%.3f encode_draw_fvf_decode_cpu_max_ms=%.3f "
+      "encode_draw_stream_bind_cpu_ms=%.3f encode_draw_stream_bind_cpu_max_ms=%.3f "
+      "encode_draw_issue_cpu_ms=%.3f encode_draw_issue_cpu_max_ms=%.3f "
       "transient_upload_calls=%llu transient_upload_bytes=%llu "
       "transient_upload_cpu_ms=%.3f transient_upload_cpu_max_ms=%.3f "
       "command_buffer_create_cpu_ms=%.3f command_buffer_create_cpu_max_ms=%.3f "
@@ -486,6 +501,16 @@ void report() {
       static_cast<double>(load(c.encodeChunkCpuMaxNs)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawCpuNs)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawCpuMaxNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawPipelineLookupCpuNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawPipelineLookupCpuMaxNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawUniformBuildCpuNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawUniformBuildCpuMaxNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawFvfDecodeCpuNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawFvfDecodeCpuMaxNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawStreamBindCpuNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawStreamBindCpuMaxNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawIssueCpuNs)) / 1000000.0,
+      static_cast<double>(load(c.encodeDrawIssueCpuMaxNs)) / 1000000.0,
       static_cast<unsigned long long>(load(c.transientUploadCalls)),
       static_cast<unsigned long long>(load(c.transientUploadBytes)),
       static_cast<double>(load(c.transientUploadCpuNs)) / 1000000.0,
@@ -830,6 +855,31 @@ void countEncodeChunkCpuTime(std::uint64_t nanoseconds) {
 void countEncodeDrawCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawCpuNs, nanoseconds);
   updateMax(counters().encodeDrawCpuMaxNs, nanoseconds);
+}
+
+void countEncodeDrawPipelineLookupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPipelineLookupCpuNs, nanoseconds);
+  updateMax(counters().encodeDrawPipelineLookupCpuMaxNs, nanoseconds);
+}
+
+void countEncodeDrawUniformBuildCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawUniformBuildCpuNs, nanoseconds);
+  updateMax(counters().encodeDrawUniformBuildCpuMaxNs, nanoseconds);
+}
+
+void countEncodeDrawFvfDecodeCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawFvfDecodeCpuNs, nanoseconds);
+  updateMax(counters().encodeDrawFvfDecodeCpuMaxNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindCpuNs, nanoseconds);
+  updateMax(counters().encodeDrawStreamBindCpuMaxNs, nanoseconds);
+}
+
+void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawIssueCpuNs, nanoseconds);
+  updateMax(counters().encodeDrawIssueCpuMaxNs, nanoseconds);
 }
 
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes) {

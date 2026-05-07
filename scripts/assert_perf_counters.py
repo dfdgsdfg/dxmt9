@@ -62,6 +62,25 @@ def main() -> int:
         if actual != value:
             return fail(f"expected {key}={value}, got {actual!r}")
 
+    # encodeDraw() sub-phase CPU timers must always be emitted so that downstream
+    # parsers can consume them; the allocation-counter spec exercises no real
+    # encodeDraw path, so these are presence-only checks (exact ms is non-deterministic).
+    sub_phase_keys = (
+        "encode_draw_pipeline_lookup_cpu_ms",
+        "encode_draw_pipeline_lookup_cpu_max_ms",
+        "encode_draw_uniform_build_cpu_ms",
+        "encode_draw_uniform_build_cpu_max_ms",
+        "encode_draw_fvf_decode_cpu_ms",
+        "encode_draw_fvf_decode_cpu_max_ms",
+        "encode_draw_stream_bind_cpu_ms",
+        "encode_draw_stream_bind_cpu_max_ms",
+        "encode_draw_issue_cpu_ms",
+        "encode_draw_issue_cpu_max_ms",
+    )
+    for key in sub_phase_keys:
+        if key not in counters:
+            return fail(f"expected key {key} present in [dxmt9-perf] line")
+
     sys.stdout.write(result.stdout)
     return 0
 
