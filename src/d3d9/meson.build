@@ -31,7 +31,10 @@ dxmt9_frontend_bridge_srcs = files(
 dxmt9_pe_core_srcs = files(
   'd3d9_pe_factory.cpp',
   'd3d9_pe_device.cpp',
-  'd3d9_pe_device_child.cpp',
+  'd3d9_pe_device_child_buffer.cpp',
+  'd3d9_pe_device_child_misc.cpp',
+  'd3d9_pe_device_child_shader.cpp',
+  'd3d9_pe_device_child_surface.cpp',
 )
 
 dxmt9_frontend_export_srcs = files(
