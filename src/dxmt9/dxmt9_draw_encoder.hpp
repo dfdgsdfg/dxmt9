@@ -75,25 +75,14 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
 // resolved slices in via this struct so encodeDraw skips its own
 // per-draw makeTransientBuffer calls. Empty slices fall through to
 // the existing per-draw upload.
-//
-// `uniforms` carries the per-draw DrawUniforms slot inside a chunk-
-// wide reserved slab built by CommandQueue::reserveTransientBuffer.
-// `uniformsContents` points to writable memory inside the slab so
-// encodeDraw composes the DrawUniforms struct directly into the
-// upload buffer (no extra memcpy through the argbuf scratch ring).
-// When `uniformsContents` is non-null, encodeDraw uses the slab; when
-// null, it falls back to the per-draw uploadTransientBuffer path.
 struct PreUploadedDrawData {
   CommandQueue::TransientBufferSlice vertex{};
   CommandQueue::TransientBufferSlice index{};
-  CommandQueue::TransientBufferSlice uniforms{};
-  std::byte* uniformsContents = nullptr;
 };
 
 // Main per-draw encoder. Previously MetalBackendDevice::encodeDraw.
-// Consumes ctx.allocators.argbuf for the transient DrawUniforms buffer,
-// ctx.cache for pipeline lookup, ctx.pool for resource reads, and
-// ctx.device for transient buffer allocation.
+// Consumes ctx.cache for pipeline lookup, ctx.pool for resource reads,
+// and ctx.queue for transient buffer slabs (per-frequency UBOs).
 //
 // `skipBaseStateBind` (Phase 3-E): when true, skip the BaseDrawState
 // binding work that doesn't change between draws sharing one
@@ -101,9 +90,9 @@ struct PreUploadedDrawData {
 // pipeline state, viewport / scissor / cull, texture / sampler
 // binding. Used by the Kind::DrawRun handler for iterations 2..N
 // after iteration 1 has already bound the base state into the Metal
-// render encoder. The per-draw issue path (DrawUniforms upload,
-// vertex/index prep, drawPrimitives/drawIndexedPrimitives) always
-// runs.
+// render encoder. The per-draw issue path (per-frequency UBO bind on
+// dirty, DrawVolatile push via setVertexBytes, vertex/index prep,
+// drawPrimitives/drawIndexedPrimitives) always runs.
 //
 // Returns true after a Metal draw call is emitted. Callers use this to
 // record that the FlatDrawStateKey is now live on the active render encoder.
@@ -115,6 +104,13 @@ struct PreUploadedDrawData {
 // vectors remain the fallback. All other fields
 // (RT/DS/VS/PS/VDecl/VBuffers/IB/viewport/scissor/render-state/transform)
 // come from `drawState`'s hot record and shader layout.
+//
+// `dirtyMaskInOut` (R-BACK-12): per-render-encoder uniform dirty bitmask.
+// Bits gate the per-frequency UBO sub-allocation + bind sequence;
+// encodeDraw reads, binds, and clears matching bits. Caller passes a
+// pointer that lives across all draws on one Metal render encoder and
+// resets it to all-dirty when a fresh encoder opens (R-BACK-12.12).
+// nullptr is treated as "every draw rebinds everything".
 bool encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
@@ -123,7 +119,8 @@ bool encodeDraw(EncodeContext& ctx,
                  bool skipBaseStateBind = false,
                  const PreUploadedDrawData* preUploaded = nullptr,
                  const core::DrawParam* paramOverride = nullptr,
-                 std::span<const std::uint8_t> paramPayloadArena = {});
+                 std::span<const std::uint8_t> paramPayloadArena = {},
+                 std::uint16_t* dirtyMaskInOut = nullptr);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

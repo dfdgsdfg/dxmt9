@@ -93,8 +93,16 @@ using dxmt9::core::metalqueue::emitQueueTraceLine;
 using dxmt9::core::metalqueue::emitTextureTraceLine;
 using dxmt9::core::metalqueue::queueTraceEnabled;
 
-using dxmt9::state::DrawUniforms;
-using dxmt9::state::buildDrawUniforms;
+using dxmt9::state::DrawVolatile;
+using dxmt9::state::FfpPsConsts;
+using dxmt9::state::FfpVsConsts;
+using dxmt9::state::PsConsts;
+using dxmt9::state::VsConsts;
+using dxmt9::state::buildDrawVolatile;
+using dxmt9::state::buildFfpPsConsts;
+using dxmt9::state::buildFfpVsConsts;
+using dxmt9::state::buildPsConsts;
+using dxmt9::state::buildVsConsts;
 using dxmt9::state::makeDepthStencilKey;
 
 using u8 = std::uint8_t;
@@ -165,6 +173,42 @@ void countScissorBind() {
 void countRasterizerBind() {
   perf::countBaseStateBind(0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
 }
+
+// Stand-in for the upcoming dxmt9_uniform_dirty.hpp DirtyState (C1).
+// The integrator replaces this with the real type from
+// `dxmt9_uniform_dirty.hpp` once C1 lands. encodeChunk owns one
+// instance per chunk and treats every category as dirty whenever a
+// fresh render encoder opens (R-BACK-12.12).
+struct LocalDirtyState {
+  enum Bit : std::uint16_t {
+    VsF = 1u << 0,
+    VsI = 1u << 1,
+    VsB = 1u << 2,
+    PsF = 1u << 3,
+    PsI = 1u << 4,
+    PsB = 1u << 5,
+    FfpVsTransforms = 1u << 6,
+    FfpVsClip = 1u << 7,
+    FfpVsViewport = 1u << 8,
+    FfpPsFog = 1u << 9,
+    FfpPsAlpha = 1u << 10,
+    FfpPsTexFactor = 1u << 11,
+    All = 0x0fffu,
+    VsAny = VsF | VsI | VsB,
+    PsAny = PsF | PsI | PsB,
+    FfpVsAny = FfpVsTransforms | FfpVsClip | FfpVsViewport,
+    FfpPsAny = FfpPsFog | FfpPsAlpha | FfpPsTexFactor,
+  };
+  std::uint16_t mask = All;
+
+  bool isDirty(std::uint16_t bits) const noexcept {
+    return (mask & bits) != 0u;
+  }
+  void clearBits(std::uint16_t bits) noexcept {
+    mask = static_cast<std::uint16_t>(mask & ~bits);
+  }
+  void markAllDirty() noexcept { mask = All; }
+};
 
 bool splitPresentBeforeAcquireEnabled() {
   static const bool enabled = [] {
@@ -829,7 +873,8 @@ bool encodeDraw(EncodeContext& ctx,
                  bool skipBaseStateBind,
                  const PreUploadedDrawData* preUploaded,
                  const core::DrawParam* paramOverride,
-                 std::span<const u8> paramPayloadArena) {
+                 std::span<const u8> paramPayloadArena,
+                 std::uint16_t* dirtyMaskInOut) {
   PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
   const auto& hot = *drawState.hot;
@@ -905,47 +950,71 @@ bool encodeDraw(EncodeContext& ctx,
     encoder.setRenderPipelineState(pipeline);
     countPipelineBind();
   }
-  // Per-draw DrawUniforms storage. When the DrawRun handler reserves a
-  // chunk-wide slab via reserveTransientBuffer, write directly into the
-  // slab (skip both the argbuf scratch and the per-draw memcpy through
-  // uploadTransientBuffer). When no slab is provided (single-draw
-  // commands, or slab reservation failed), fall back to the original
-  // argbuf-scratch + per-draw uploadTransientBuffer path.
-  const bool haveUniformSlab =
-      preUploaded && preUploaded->uniformsContents && preUploaded->uniforms;
-  DrawUniforms fallbackUniforms{};
-  DrawUniforms* uniforms = nullptr;
-  {
-    PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
-    if (haveUniformSlab) {
-      uniforms = reinterpret_cast<DrawUniforms*>(preUploaded->uniformsContents);
-    } else {
-      uniforms = ctx.allocators.argbuf.allocate<DrawUniforms>(seqId);
-      if (!uniforms) {
-        uniforms = &fallbackUniforms;
-      }
-    }
-    *uniforms = buildDrawUniforms(drawState);
-  }
   auto uploadTransientBuffer = [&](const void* data, std::size_t len, std::size_t alignment) {
     return ctx.queue.uploadTransientBuffer(
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(data), len),
         alignment, seqId);
   };
-  auto uploadUniforms = [&] {
-    CommandQueue::TransientBufferSlice slice;
-    if (haveUniformSlab) {
-      slice = preUploaded->uniforms;
-    } else {
-      slice = uploadTransientBuffer(uniforms, sizeof(DrawUniforms), alignof(DrawUniforms));
+  // Per-frequency UBO bind sequence (R-BACK-12.5/12.8). Each category
+  // sub-allocates from the existing transient slab pool, builds its
+  // struct via the A2 transform, binds to its slot, and clears the
+  // dirty bit. Stale (non-dirty) categories rely on the previous
+  // draw's sticky binding on the same Metal render encoder.
+  std::uint16_t scratchDirty = LocalDirtyState::All;
+  std::uint16_t* dirtyPtr = dirtyMaskInOut ? dirtyMaskInOut : &scratchDirty;
+  {
+    PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
+    if ((*dirtyPtr & LocalDirtyState::VsAny) != 0u) {
+      VsConsts vs = buildVsConsts(drawState);
+      auto slice = uploadTransientBuffer(&vs, sizeof(VsConsts), alignof(VsConsts));
+      if (slice) {
+        encoder.setVertexBuffer(slice.buffer, slice.offset, 0);
+        countUniformBufferBinds(1);
+        *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::VsAny);
+      }
     }
-    if (!slice) {
-      return false;
+    if ((*dirtyPtr & LocalDirtyState::PsAny) != 0u) {
+      PsConsts ps = buildPsConsts(drawState);
+      auto slice = uploadTransientBuffer(&ps, sizeof(PsConsts), alignof(PsConsts));
+      if (slice) {
+        encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
+        countUniformBufferBinds(1);
+        *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::PsAny);
+      }
     }
-    encoder.setVertexBuffer(slice.buffer, slice.offset, 0);
-    encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
-    countUniformBufferBinds(2);
-    return true;
+    if ((*dirtyPtr & LocalDirtyState::FfpPsAny) != 0u) {
+      FfpPsConsts ffpPs = buildFfpPsConsts(drawState);
+      auto slice = uploadTransientBuffer(&ffpPs, sizeof(FfpPsConsts), alignof(FfpPsConsts));
+      if (slice) {
+        encoder.setFragmentBuffer(slice.buffer, slice.offset, 3);
+        countUniformBufferBinds(1);
+        *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::FfpPsAny);
+      }
+    }
+  }
+  // FfpVsConsts: every VS shader (FFP or otherwise) declares
+  // [[buffer(3)]] FfpVsConsts because halfPixelFixup, clipPlanes, and
+  // viewport metadata live there. Build the host copy lazily; the
+  // FFP preTransformed path overrides viewportOrigin/Size below before
+  // upload+bind via bindFfpVsIfDirty.
+  std::optional<FfpVsConsts> ffpVs;
+  auto ensureFfpVs = [&] {
+    if (!ffpVs) ffpVs = buildFfpVsConsts(drawState);
+    return &*ffpVs;
+  };
+  bool ffpVsBound = false;
+  auto bindFfpVsIfDirty = [&] {
+    if (ffpVsBound || (*dirtyPtr & LocalDirtyState::FfpVsAny) == 0u) {
+      return;
+    }
+    auto* host = ensureFfpVs();
+    auto slice = uploadTransientBuffer(host, sizeof(FfpVsConsts), alignof(FfpVsConsts));
+    if (slice) {
+      encoder.setVertexBuffer(slice.buffer, slice.offset, 3);
+      countUniformBufferBinds(1);
+      *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::FfpVsAny);
+      ffpVsBound = true;
+    }
   };
   std::optional<dxmt9::ffp::FixedFunctionVertexLayout> ffLayout;
   bool fixedFunctionPath = false;
@@ -954,6 +1023,20 @@ bool encodeDraw(EncodeContext& ctx,
     ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
     fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
   }
+  // Apply FFP preTransformed viewport override to the FfpVs host copy
+  // before any bindFfpVsIfDirty call uploads it (R-BACK-12.5). Once
+  // bound, every VS shader sees the same buffer at slot 3.
+  if (ffLayout && ffLayout->preTransformed) {
+    if (auto* targetSurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
+        targetSurface) {
+      auto* host = ensureFfpVs();
+      host->viewportOrigin = {0.0f, 0.0f};
+      host->viewportSize = {static_cast<f32>(std::max(1u, targetSurface->desc.width)),
+                            static_cast<f32>(std::max(1u, targetSurface->desc.height))};
+      *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr | LocalDirtyState::FfpVsViewport);
+    }
+  }
+  bindFfpVsIfDirty();
   // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
   if (!skipBaseStateBind) {
     PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
@@ -1112,6 +1195,11 @@ bool encodeDraw(EncodeContext& ctx,
       emitQueueTraceLine(trace.str());
     }
   }
+  // DrawVolatile field state — derived per draw and pushed via
+  // setVertexBytes(slot=5) right before drawPrimitives.
+  u32 drawVertexStreamOffset = 0;
+  u32 drawVertexStreamStride = 0;
+  i32 drawVertexBaseIndex = 0;
   if (ffLayout) {
     if (!vertexBuffer) {
       if (traceEncode) {
@@ -1121,29 +1209,19 @@ bool encodeDraw(EncodeContext& ctx,
     }
     {
       PerfScope uniformBuildFfScope(perf::countEncodeDrawUniformBuildCpuTime);
-      uniforms->vertexStreamOffset = 0;
-      uniforms->vertexStreamStride =
+      drawVertexStreamOffset = 0;
+      drawVertexStreamStride =
           vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride;
-      if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
+      if (!indexedDraw && drawVertexStreamStride != 0u) {
         vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
-                              static_cast<uint64_t>(uniforms->vertexStreamStride);
-        uniforms->vertexBaseIndex = 0;
+                              static_cast<uint64_t>(drawVertexStreamStride);
+        drawVertexBaseIndex = 0;
       } else {
-        uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
-      }
-      if (ffLayout->preTransformed) {
-        if (auto* targetSurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value); targetSurface) {
-          uniforms->viewportOrigin = {0.0f, 0.0f};
-          uniforms->viewportSize = {static_cast<f32>(std::max(1u, targetSurface->desc.width)),
-                                    static_cast<f32>(std::max(1u, targetSurface->desc.height))};
-        }
+        drawVertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
       }
     }
     {
       PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime);
-      if (!uploadUniforms()) {
-        return false;
-      }
       encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
       countVertexBufferBind();
     }
@@ -1178,9 +1256,9 @@ bool encodeDraw(EncodeContext& ctx,
               << " baseVertex=" << pv.baseVertexIndex
               << " startIndex=" << pv.startIndex
               << " primCount=" << pv.primitiveCount
-              << " stride=" << uniforms->vertexStreamStride
-              << " viewport=(" << uniforms->viewportOrigin[0] << "," << uniforms->viewportOrigin[1]
-              << " " << uniforms->viewportSize[0] << "x" << uniforms->viewportSize[1] << ")"
+              << " stride=" << drawVertexStreamStride
+              << " viewport=(" << ensureFfpVs()->viewportOrigin[0] << "," << ensureFfpVs()->viewportOrigin[1]
+              << " " << ensureFfpVs()->viewportSize[0] << "x" << ensureFfpVs()->viewportSize[1] << ")"
               << " zEnable=" << core::flatStateOr(hot.renderStates, RS_Z_ENABLE, 0u)
               << " zFunc=" << core::flatStateOr(hot.renderStates, RS_Z_FUNC, 0u)
               << " alphaTest="
@@ -1217,15 +1295,16 @@ bool encodeDraw(EncodeContext& ctx,
               << std::hex
               << core::flatStateOr(hot.renderStates, RS_TEXTURE_FACTOR, 0u)
               << std::dec;
+        const auto& texM0 = ensureFfpVs()->ffpTextureTransforms[0];
         trace << " texM0=["
-              << uniforms->ffpTextureTransforms[0][0][0] << "," << uniforms->ffpTextureTransforms[0][0][1] << ","
-              << uniforms->ffpTextureTransforms[0][0][2] << "," << uniforms->ffpTextureTransforms[0][0][3] << ";"
-              << uniforms->ffpTextureTransforms[0][1][0] << "," << uniforms->ffpTextureTransforms[0][1][1] << ","
-              << uniforms->ffpTextureTransforms[0][1][2] << "," << uniforms->ffpTextureTransforms[0][1][3] << ";"
-              << uniforms->ffpTextureTransforms[0][2][0] << "," << uniforms->ffpTextureTransforms[0][2][1] << ","
-              << uniforms->ffpTextureTransforms[0][2][2] << "," << uniforms->ffpTextureTransforms[0][2][3] << ";"
-              << uniforms->ffpTextureTransforms[0][3][0] << "," << uniforms->ffpTextureTransforms[0][3][1] << ","
-              << uniforms->ffpTextureTransforms[0][3][2] << "," << uniforms->ffpTextureTransforms[0][3][3] << "]";
+              << texM0[0][0] << "," << texM0[0][1] << ","
+              << texM0[0][2] << "," << texM0[0][3] << ";"
+              << texM0[1][0] << "," << texM0[1][1] << ","
+              << texM0[1][2] << "," << texM0[1][3] << ";"
+              << texM0[2][0] << "," << texM0[2][1] << ","
+              << texM0[2][2] << "," << texM0[2][3] << ";"
+              << texM0[3][0] << "," << texM0[3][1] << ","
+              << texM0[3][2] << "," << texM0[3][3] << "]";
         for (std::size_t i = 0; i < vertexDecl.elements.size(); ++i) {
           const auto& e = vertexDecl.elements[i];
           trace << " e" << i << "={s=" << e.stream
@@ -1252,7 +1331,7 @@ bool encodeDraw(EncodeContext& ctx,
         };
 
         const std::size_t stride = static_cast<std::size_t>(
-            uniforms->vertexStreamStride ? uniforms->vertexStreamStride : ffLayout->stride);
+            drawVertexStreamStride ? drawVertexStreamStride : ffLayout->stride);
         const u32 tracedVertexCount = std::min<u32>(static_cast<u32>(vertexCount), 24u);
         for (u32 i = 0; i < tracedVertexCount; ++i) {
           const std::size_t base = static_cast<std::size_t>(hot.streamOffsets[0]) +
@@ -1394,23 +1473,20 @@ bool encodeDraw(EncodeContext& ctx,
     }
     {
       PerfScope uniformBuildVsScope(perf::countEncodeDrawUniformBuildCpuTime);
-      uniforms->vertexStreamOffset = 0;
-      uniforms->vertexStreamStride =
+      drawVertexStreamOffset = 0;
+      drawVertexStreamStride =
           ffLayout ? (vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride)
                    : computeVertexDeclStride(vertexDecl);
-      if (!indexedDraw && uniforms->vertexStreamStride != 0u) {
+      if (!indexedDraw && drawVertexStreamStride != 0u) {
         vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
-                              static_cast<uint64_t>(uniforms->vertexStreamStride);
-        uniforms->vertexBaseIndex = 0;
+                              static_cast<uint64_t>(drawVertexStreamStride);
+        drawVertexBaseIndex = 0;
       } else {
-        uniforms->vertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
+        drawVertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
       }
     }
     {
       PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
-      if (!uploadUniforms()) {
-        return false;
-      }
       encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
       countVertexBufferBind();
     }
@@ -1474,10 +1550,10 @@ bool encodeDraw(EncodeContext& ctx,
         << " primType=" << static_cast<unsigned>(pv.primitiveType)
         << " primCount=" << pv.primitiveCount
         << " vertexCount=" << static_cast<unsigned long long>(vertexCount)
-        << " vertexStreamStride=" << uniforms->vertexStreamStride
+        << " vertexStreamStride=" << drawVertexStreamStride
         << " vertexBufferOffset=" << vertexBufferOffset
-        << " vertexStreamOffset=" << uniforms->vertexStreamOffset
-        << " vertexBaseIndex=" << uniforms->vertexBaseIndex
+        << " vertexStreamOffset=" << drawVertexStreamOffset
+        << " vertexBaseIndex=" << drawVertexBaseIndex
         << " colorWrite="
         << core::flatStateOr(hot.renderStates, RS_COLOR_WRITE_ENABLE, 0xfu)
         << " zEnable=" << core::flatStateOr(hot.renderStates, RS_Z_ENABLE, 0u)
@@ -1510,7 +1586,7 @@ bool encodeDraw(EncodeContext& ctx,
         }
       }
       const std::size_t stride = static_cast<std::size_t>(
-          ffLayout ? (uniforms->vertexStreamStride ? uniforms->vertexStreamStride : ffLayout->stride)
+          ffLayout ? (drawVertexStreamStride ? drawVertexStreamStride : ffLayout->stride)
                    : computeVertexDeclStride(vertexDecl));
       const std::size_t streamBase = static_cast<std::size_t>(hot.streamOffsets[0]);
       const std::size_t firstIndexByte =
@@ -1599,11 +1675,8 @@ bool encodeDraw(EncodeContext& ctx,
             }
           }
           vertexBytes = std::span<const u8>(expandedVertices.data(), expandedVertices.size());
-          uniforms->vertexStreamOffset = 0;
-          uniforms->vertexBaseIndex = 0;
-          if (!uploadUniforms()) {
-            return false;
-          }
+          drawVertexStreamOffset = 0;
+          drawVertexBaseIndex = 0;
           expandedIndexedDraw = true;
         }
       }
@@ -1614,14 +1687,19 @@ bool encodeDraw(EncodeContext& ctx,
                   << " expanded=" << (expandedIndexedDraw ? 1 : 0);
       emitQueueTraceLine(resultTrace.str());
     }
+    auto pushDrawVolatile = [&] {
+      const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
+                                                  drawVertexStreamStride);
+      encoder.setVertexBytes(&vol, sizeof(DrawVolatile), 5);
+    };
     if (expandedIndexedDraw) {
       recordDrawGeometryDiagnostics(drawState,
                                     pv,
                                     seqId,
                                     vertexCount,
                                     transientVertexBuffer.offset,
-                                    uniforms->vertexStreamOffset,
-                                    uniforms->vertexStreamStride,
+                                    drawVertexStreamOffset,
+                                    drawVertexStreamStride,
                                     true,
                                     false,
                                     !pv.userVertexData.empty() || !pv.userIndexData.empty(),
@@ -1635,6 +1713,7 @@ bool encodeDraw(EncodeContext& ctx,
                      true,
                      pv.userVertexData.size(),
                      pv.userIndexData.size());
+      pushDrawVolatile();
       {
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
         encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
@@ -1681,8 +1760,8 @@ bool encodeDraw(EncodeContext& ctx,
                                     seqId,
                                     vertexCount,
                                     vertexBufferOffset,
-                                    uniforms->vertexStreamOffset,
-                                    uniforms->vertexStreamStride,
+                                    drawVertexStreamOffset,
+                                    drawVertexStreamStride,
                                     true,
                                     !upDraw,
                                     upDraw,
@@ -1696,6 +1775,7 @@ bool encodeDraw(EncodeContext& ctx,
                      false,
                      pv.userVertexData.size(),
                      pv.userIndexData.size());
+      pushDrawVolatile();
       {
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
         encoder.drawIndexedPrimitives(primitiveType, toIndexType(pv.indexType),
@@ -1711,8 +1791,8 @@ bool encodeDraw(EncodeContext& ctx,
                                 seqId,
                                 vertexCount,
                                 vertexBufferOffset,
-                                uniforms->vertexStreamOffset,
-                                uniforms->vertexStreamStride,
+                                drawVertexStreamOffset,
+                                drawVertexStreamStride,
                                 false,
                                 !upDraw,
                                 upDraw,
@@ -1727,6 +1807,9 @@ bool encodeDraw(EncodeContext& ctx,
                  pv.userVertexData.size(),
                  pv.userIndexData.size());
   {
+    const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
+                                                drawVertexStreamStride);
+    encoder.setVertexBytes(&vol, sizeof(DrawVolatile), 5);
     PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
     encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
   }
@@ -1768,6 +1851,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   bool hasActiveRender = false;
   std::optional<core::FlatDrawStateKey> activeDrawStateKey;
   std::optional<core::ClearDesc> pendingClear;
+  // Per-render-encoder uniform dirty bitmask (R-BACK-12.12). Reset to
+  // all-dirty whenever a fresh Metal render encoder opens; encodeDraw
+  // reads + clears bits as it sub-allocates and binds per-frequency
+  // UBOs. Stand-in for C1's `dxmt9::DirtyState` until that header lands.
+  std::uint16_t uniformDirty = LocalDirtyState::All;
 
   // TLA+: EncoderLifecycle variable binding:
   // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
@@ -1824,6 +1912,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     activeKey = makeAttachmentKey(*drawState.hot);
     activeWriteHazard = makeAttachmentHazard(*drawState.hot);
     activeDrawStateKey.reset();
+    // R-BACK-12.12: a fresh Metal render encoder loses any prior
+    // sticky bindings — every uniform category must rebind on the
+    // first draw of the new encoder.
+    uniformDirty = LocalDirtyState::All;
     assertEncoderLifecycleInvariant();
   };
 
@@ -2009,26 +2101,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           }
         }
 
-        // Coalesce per-draw DrawUniforms uploads: reserve a single
-        // chunk-wide transient slab sized for `drawCount` DrawUniforms
-        // structs, hand each draw a writable slice + base pointer so
-        // encodeDraw composes the uniforms struct directly into the
-        // slab. Replaces N per-draw uploadTransientBuffer calls (one
-        // mutex acquire + completedSeqId snapshot + reclaim each) with
-        // ONE reservation. The slab lives until slot.seqId completes,
-        // identical lifetime to the existing per-draw allocations.
-        const std::size_t uniformAlignment =
-            std::max<std::size_t>(alignof(DrawUniforms), 16);
-        const std::size_t uniformStride =
-            (sizeof(DrawUniforms) + uniformAlignment - 1) & ~(uniformAlignment - 1);
-        CommandQueue::TransientBufferReservation uniformSlab{};
-        if (drawCount > 0) {
-          uniformSlab = ctx.queue.reserveTransientBuffer(
-              uniformStride * drawCount, uniformAlignment, slot.seqId);
-        }
-
         // encodeDraw receives the per-draw fields through DrawParam while
         // all base state is read from the canonical hot/shader view.
+        // The legacy chunk-wide DrawUniforms slab is gone — uniform
+        // payload is now split per-frequency and bound on dirty inside
+        // encodeDraw (R-BACK-12.5/12.8). DrawVolatile is pushed via
+        // setVertexBytes per draw; no slab traffic.
         bool baseBound =
             activeDrawStateKey.has_value() && *activeDrawStateKey == hot.key;
         for (std::size_t i = 0; i < drawCount; ++i) {
@@ -2038,21 +2116,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             preData.vertex = upSlices[i * 2u];
             preData.index = upSlices[i * 2u + 1u];
           }
-          if (uniformSlab) {
-            const std::size_t drawOffset = i * uniformStride;
-            preData.uniforms = CommandQueue::TransientBufferSlice{
-                .buffer = uniformSlab.slice.buffer,
-                .offset = uniformSlab.slice.offset + drawOffset,
-                .size = sizeof(DrawUniforms),
-            };
-            preData.uniformsContents = uniformSlab.contents + drawOffset;
-          }
-          const bool hasPreData = anyUpData || uniformSlab;
           if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, stateView, slot.seqId,
                          /*skipBaseStateBind=*/baseBound,
-                         hasPreData ? &preData : nullptr,
+                         anyUpData ? &preData : nullptr,
                          &param,
-                         recordPayloadArena)) {
+                         recordPayloadArena,
+                         &uniformDirty)) {
             baseBound = true;
             activeDrawStateKey = hot.key;
           }
