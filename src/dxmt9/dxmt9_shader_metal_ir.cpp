@@ -1,50 +1,44 @@
 #include "dxmt9_shader_translator.hpp"
-#include "dxmt9_draw_shader.hpp"
 
 #include "dxmt9_d3d9_bytecode.hpp"
 #include "dxmt9_debug_trace.hpp"
+#include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
+#include "dxmt9_shader_decoder.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "dxmt9/assert.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
 #include <vector>
 
-// Pull the sibling namespaces into an intermediate namespace so the
-// translator's own inner scope doesn't shadow `dxmt9::`. All translator
-// code lives in `dxmt9::translator::detail_`; the two public functions
-// are re-exported via thin wrappers at the end.
+// D3D9 SpirvModule → Metal Shading Language source emission. Consumes the
+// decoded bytecode produced by dxmt9_shader_decoder.cpp and emits a complete
+// MSL translation unit. Owns the public translator entry points
+// (makeTranslatedVertexSource/makeTranslatedFragmentSource) and the
+// translator::test seam.
+
 namespace dxmt9::translator::detail_ {
 
 using namespace ::dxmt9::core;
 using namespace ::dxmt9::d3d9bc;
 using namespace ::dxmt9::ffp;
-using u8 = std::uint8_t;
-using u32 = std::uint32_t;
-using u64 = std::uint64_t;
 using f32 = float;
-using i32 = std::int32_t;
-using ShaderSourceContext = ::dxmt9::drawshader::ShaderSourceContext;
 
 using ::dxmt9::shaders::makeShaderPrelude;
 
-constexpr u32 kD3DDeclUsagePosition = 0u;
-constexpr u32 kD3DDeclUsagePSize = 4u;
-constexpr u32 kD3DDeclUsageTexcoord = 5u;
-constexpr u32 kD3DDeclUsagePositionT = 9u;
-constexpr u32 kD3DDeclUsageColor = 10u;
-constexpr u32 kD3DDeclUsageFog = 11u;
+namespace {
 
 std::string formatFloatLiteral(f32 value) {
   std::ostringstream out;
@@ -97,76 +91,6 @@ std::string componentName(u32 component) {
     default:
       return "w";
   }
-}
-
-std::array<u8, 4> decodeSwizzle(u32 token) {
-  return {static_cast<u8>((token >> 16) & 0x3u), static_cast<u8>((token >> 18) & 0x3u),
-          static_cast<u8>((token >> 20) & 0x3u), static_cast<u8>((token >> 22) & 0x3u)};
-}
-
-u32 decodeRegisterType(u32 token) {
-  return ((token >> 28) & 0x7u) | (((token >> 11) & 0x3u) << 3);
-}
-
-u32 decodeRegisterIndex(u32 token) {
-  return token & 0x7ffu;
-}
-
-u32 decodeSourceModifier(u32 token) {
-  return (token >> 24) & 0xfu;
-}
-
-u32 decodeDestModifier(u32 token) {
-  return (token >> 20) & 0xfu;
-}
-
-u32 decodeWriteMask(u32 token) {
-  return (token >> 16) & 0xfu;
-}
-
-bool tokenHasRelativeAddressing(u32 token) {
-  return ((token >> 13) & 0x1u) != 0;
-}
-
-D3DRegisterKind decodeRegisterKind(u32 type, D3DShaderStage stage) {
-  switch (type) {
-    case kD3DSPR_TEMP:
-      return D3DRegisterKind::Temp;
-    case kD3DSPR_INPUT:
-      return D3DRegisterKind::Input;
-    case kD3DSPR_CONST:
-      return D3DRegisterKind::ConstFloat;
-    case kD3DSPR_ADDR:
-      return stage == D3DShaderStage::Vertex ? D3DRegisterKind::Address : D3DRegisterKind::Input;
-    case kD3DSPR_RASTOUT:
-      return D3DRegisterKind::RastOut;
-    case kD3DSPR_ATTROUT:
-      return D3DRegisterKind::AttrOut;
-    case kD3DSPR_TEXCRDOUT:
-      return D3DRegisterKind::TexCoordOut;
-    case kD3DSPR_CONSTINT:
-      return D3DRegisterKind::ConstInt;
-    case kD3DSPR_COLOROUT:
-      return D3DRegisterKind::ColorOut;
-    case kD3DSPR_DEPTHOUT:
-      return D3DRegisterKind::DepthOut;
-    case kD3DSPR_SAMPLER:
-      return D3DRegisterKind::Sampler;
-    case kD3DSPR_CONSTBOOL:
-      return D3DRegisterKind::ConstBool;
-    case kD3DSPR_LOOP:
-      return D3DRegisterKind::Loop;
-    case kD3DSPR_MISCTYPE:
-      return D3DRegisterKind::MiscType;
-    case kD3DSPR_PREDICATE:
-      return D3DRegisterKind::Predicate;
-    default:
-      return D3DRegisterKind::Unknown;
-  }
-}
-
-D3DRegisterRef decodeRegisterRef(u32 token, D3DShaderStage stage) {
-  return {decodeRegisterKind(decodeRegisterType(token), stage), decodeRegisterIndex(token)};
 }
 
 std::string registerName(const D3DRegisterRef& reg, D3DShaderStage stage, bool dest = false) {
@@ -278,57 +202,6 @@ std::string applySwizzle(const std::string& expr, const std::array<u8, 4>& swizz
   return out.str();
 }
 
-struct VertexOutputSemantic {
-  bool valid = false;
-  u32 usage = 0;
-  u32 usageIndex = 0;
-};
-
-using VertexOutputSemantics = std::array<VertexOutputSemantic, 16>;
-
-struct VertexOutputMapping {
-  enum class Target {
-    Position,
-    Texcoord,
-    Color,
-    SecondaryColor,
-    Fog,
-    PointSize,
-  };
-
-  Target target = Target::Texcoord;
-  u32 index = 0;
-};
-
-std::optional<VertexOutputMapping> vertexOutputMapping(const D3DRegisterRef& reg,
-                                                       const VertexOutputSemantics* semantics) {
-  if (!semantics || reg.kind != D3DRegisterKind::TexCoordOut || reg.index >= semantics->size()) {
-    return std::nullopt;
-  }
-  const auto& semantic = (*semantics)[reg.index];
-  if (!semantic.valid) {
-    return std::nullopt;
-  }
-
-  switch (semantic.usage) {
-    case kD3DDeclUsagePosition:
-    case kD3DDeclUsagePositionT:
-      return VertexOutputMapping{VertexOutputMapping::Target::Position, 0};
-    case kD3DDeclUsageTexcoord:
-      return VertexOutputMapping{VertexOutputMapping::Target::Texcoord, semantic.usageIndex};
-    case kD3DDeclUsageColor:
-      return VertexOutputMapping{semantic.usageIndex == 0u ? VertexOutputMapping::Target::Color
-                                                           : VertexOutputMapping::Target::SecondaryColor,
-                                 semantic.usageIndex};
-    case kD3DDeclUsageFog:
-      return VertexOutputMapping{VertexOutputMapping::Target::Fog, 0};
-    case kD3DDeclUsagePSize:
-      return VertexOutputMapping{VertexOutputMapping::Target::PointSize, 0};
-    default:
-      return VertexOutputMapping{VertexOutputMapping::Target::Texcoord, reg.index};
-  }
-}
-
 std::string readVertexOutputMapping(const VertexOutputMapping& mapping,
                                     const std::string& outPosition,
                                     const std::string& outColor,
@@ -351,209 +224,6 @@ std::string readVertexOutputMapping(const VertexOutputMapping& mapping,
       return "float4(" + outPointSize + ")";
   }
   return "float4(0.0f)";
-}
-
-std::string opcodeName(u32 opcode) {
-  switch (opcode) {
-    case kD3DSIO_NOP:
-      return "nop";
-    case kD3DSIO_MOV:
-      return "mov";
-    case kD3DSIO_ADD:
-      return "add";
-    case kD3DSIO_SUB:
-      return "sub";
-    case kD3DSIO_MAD:
-      return "mad";
-    case kD3DSIO_MUL:
-      return "mul";
-    case kD3DSIO_RCP:
-      return "rcp";
-    case kD3DSIO_RSQ:
-      return "rsq";
-    case kD3DSIO_DP3:
-      return "dp3";
-    case kD3DSIO_DP4:
-      return "dp4";
-    case kD3DSIO_MIN:
-      return "min";
-    case kD3DSIO_MAX:
-      return "max";
-    case kD3DSIO_SLT:
-      return "slt";
-    case kD3DSIO_SGE:
-      return "sge";
-    case kD3DSIO_EXP:
-      return "exp";
-    case kD3DSIO_LOG:
-      return "log";
-    case kD3DSIO_M4x4:
-      return "m4x4";
-    case kD3DSIO_M4x3:
-      return "m4x3";
-    case kD3DSIO_M3x4:
-      return "m3x4";
-    case kD3DSIO_M3x3:
-      return "m3x3";
-    case kD3DSIO_M3x2:
-      return "m3x2";
-    case kD3DSIO_CALL:
-      return "call";
-    case kD3DSIO_LRP:
-      return "lrp";
-    case kD3DSIO_FRC:
-      return "frc";
-    case kD3DSIO_SINCOS:
-      return "sincos";
-    case kD3DSIO_REP:
-      return "rep";
-    case kD3DSIO_ENDREP:
-      return "endrep";
-    case kD3DSIO_IF:
-      return "if";
-    case kD3DSIO_ELSE:
-      return "else";
-    case kD3DSIO_ENDIF:
-      return "endif";
-    case kD3DSIO_BREAK:
-      return "break";
-    case kD3DSIO_RET:
-      return "ret";
-    case kD3DSIO_LOOP:
-      return "loop";
-    case kD3DSIO_ENDLOOP:
-      return "endloop";
-    case kD3DSIO_LABEL:
-      return "label";
-    case kD3DSIO_DCL:
-      return "dcl";
-    case kD3DSIO_DEFB:
-      return "defb";
-    case kD3DSIO_DEFI:
-      return "defi";
-    case kD3DSIO_POW:
-      return "pow";
-    case kD3DSIO_CRS:
-      return "crs";
-    case kD3DSIO_SGN:
-      return "sgn";
-    case kD3DSIO_ABS:
-      return "abs";
-    case kD3DSIO_NRM:
-      return "nrm";
-    case kD3DSIO_CND:
-      return "cnd";
-    case kD3DSIO_DEF:
-      return "def";
-    case kD3DSIO_TEX:
-      return "tex";
-    case kD3DSIO_TEXDEPTH:
-      return "texdepth";
-    case kD3DSIO_CMP:
-      return "cmp";
-    case kD3DSIO_BEM:
-      return "bem";
-    case kD3DSIO_DP2ADD:
-      return "dp2add";
-    case kD3DSIO_DSX:
-      return "dsx";
-    case kD3DSIO_DSY:
-      return "dsy";
-    case kD3DSIO_TEXLDD:
-      return "texldd";
-    case kD3DSIO_SETP:
-      return "setp";
-    case kD3DSIO_TEXLDL:
-      return "texldl";
-    case kD3DSIO_BREAKP:
-      return "breakp";
-    case kD3DSIO_MOVA:
-      return "mova";
-    case kD3DSIO_EXPP:
-      return "expp";
-    case kD3DSIO_LOGP:
-      return "logp";
-    case kD3DSIO_PHASE:
-      return "phase";
-    case kD3DSIO_COMMENT:
-      return "comment";
-    case kD3DSIO_END:
-      return "end";
-    default:
-      return "opcode_" + std::to_string(opcode);
-  }
-}
-
-u32 fixedOperandCount(u32 opcode) {
-  switch (opcode) {
-    case kD3DSIO_NOP:
-    case kD3DSIO_PHASE:
-      return 0;
-    case kD3DSIO_ELSE:
-    case kD3DSIO_ENDIF:
-    case kD3DSIO_ENDLOOP:
-    case kD3DSIO_ENDREP:
-    case kD3DSIO_RET:
-    case kD3DSIO_BREAK:
-      return 0;
-    case kD3DSIO_MOV:
-    case kD3DSIO_DEFB:
-    case kD3DSIO_RCP:
-    case kD3DSIO_RSQ:
-    case kD3DSIO_FRC:
-    case kD3DSIO_DSX:
-    case kD3DSIO_DSY:
-    case kD3DSIO_SETP:
-    case kD3DSIO_BREAKP:
-    case kD3DSIO_MOVA:
-    case kD3DSIO_LOG:
-    case kD3DSIO_LOGP:
-    case kD3DSIO_EXP:
-    case kD3DSIO_EXPP:
-    case kD3DSIO_SGN:
-    case kD3DSIO_ABS:
-    case kD3DSIO_NRM:
-      return 2;
-    case kD3DSIO_LABEL:
-    case kD3DSIO_CALL:
-    case kD3DSIO_IF:
-    case kD3DSIO_LOOP:
-    case kD3DSIO_REP:
-      return 1;
-    case kD3DSIO_ADD:
-    case kD3DSIO_SUB:
-    case kD3DSIO_MUL:
-    case kD3DSIO_DP3:
-    case kD3DSIO_DP4:
-    case kD3DSIO_MIN:
-    case kD3DSIO_MAX:
-    case kD3DSIO_POW:
-    case kD3DSIO_CRS:
-    case kD3DSIO_TEXLDD:
-    case kD3DSIO_TEXLDL:
-    case kD3DSIO_SLT:
-    case kD3DSIO_SGE:
-    case kD3DSIO_M4x4:
-    case kD3DSIO_M4x3:
-    case kD3DSIO_M3x4:
-    case kD3DSIO_M3x3:
-    case kD3DSIO_M3x2:
-      return 3;
-    case kD3DSIO_MAD:
-    case kD3DSIO_LRP:
-    case kD3DSIO_CND:
-    case kD3DSIO_CMP:
-    case kD3DSIO_DP2ADD:
-      return 4;
-    case kD3DSIO_DEF:
-    case kD3DSIO_DEFI:
-      return 5;
-    case kD3DSIO_COMMENT:
-    case kD3DSIO_END:
-      return 0;
-    default:
-      throw std::runtime_error("unsupported SM1.x opcode");
-  }
 }
 
 std::string readOperandExpression(const D3DDecodedInstruction& instruction, const D3DRegisterRef& reg,
@@ -648,384 +318,6 @@ std::string decodeOperandToken(const u32 token, D3DShaderStage stage, bool desti
   }
   D3DRegisterRef reg = decodeRegisterRef(token, stage);
   return registerName(reg, stage, destination);
-}
-
-u32 decodeLabelIndex(u32 token) {
-  return token & 0x7ffu;
-}
-
-std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const SpirvModule& module,
-                                                                     const ShaderSourceContext& context) {
-  if (module.stage != D3DShaderStage::Vertex) {
-    return std::nullopt;
-  }
-
-  VertexShaderInputLayout layout;
-  layout.stride = computeVertexDeclStride(context.vertexDecl);
-  bool hasBinding = false;
-  for (const auto& instruction : module.instructions) {
-    if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
-      continue;
-    }
-    const u32 semanticToken = instruction.operands[0];
-    const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
-    if (dst.kind != D3DRegisterKind::Input || dst.index >= layout.inputs.size()) {
-      continue;
-    }
-    const u32 usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT;
-    const u32 usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT;
-    for (const auto& element : context.vertexDecl.elements) {
-      if (element.stream != 0) {
-        continue;
-      }
-      if (element.usage == usage && element.usageIndex == usageIndex) {
-        layout.inputs[dst.index] = VertexInputBinding{
-            .valid = true,
-            .offset = element.offset,
-            .type = element.type,
-            .usage = usage,
-            .usageIndex = usageIndex,
-        };
-        hasBinding = true;
-        break;
-      }
-    }
-  }
-  if (!hasBinding) {
-    return std::nullopt;
-  }
-  layout.hash = hashVertexShaderInputLayout(layout);
-  return layout;
-}
-
-VertexOutputSemantics collectVertexOutputSemantics(const SpirvModule& module) {
-  VertexOutputSemantics semantics{};
-  if (module.stage != D3DShaderStage::Vertex || module.major < 3u) {
-    return semantics;
-  }
-
-  for (const auto& instruction : module.instructions) {
-    if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
-      continue;
-    }
-    const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
-    if (dst.kind != D3DRegisterKind::TexCoordOut || dst.index >= semantics.size()) {
-      continue;
-    }
-    const u32 semanticToken = instruction.operands[0];
-    semantics[dst.index] = VertexOutputSemantic{
-        .valid = true,
-        .usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT,
-        .usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT,
-    };
-  }
-  return semantics;
-}
-
-bool isConstantRegisterKind(D3DRegisterKind kind) {
-  return kind == D3DRegisterKind::ConstFloat ||
-         kind == D3DRegisterKind::ConstInt ||
-         kind == D3DRegisterKind::ConstBool;
-}
-
-struct ConstantUsage {
-  bool mutableConstants = false;
-  bool hasFloat = false;
-  bool hasInt = false;
-  bool hasBool = false;
-  u32 floatCount = 0;
-  u32 intCount = 0;
-  u32 boolCount = 0;
-};
-
-struct PixelInputSemantic {
-  bool valid = false;
-  u32 usage = 0;
-  u32 usageIndex = 0;
-};
-
-using PixelInputSemantics = std::array<PixelInputSemantic, 16>;
-
-bool opcodeWritesFirstOperand(u32 opcode) {
-  switch (opcode) {
-    case kD3DSIO_DEF:
-    case kD3DSIO_DEFI:
-    case kD3DSIO_DEFB:
-    case kD3DSIO_MOV:
-    case kD3DSIO_ADD:
-    case kD3DSIO_SUB:
-    case kD3DSIO_MUL:
-    case kD3DSIO_MAD:
-    case kD3DSIO_MIN:
-    case kD3DSIO_MAX:
-    case kD3DSIO_SLT:
-    case kD3DSIO_SGE:
-    case kD3DSIO_EXP:
-    case kD3DSIO_LOG:
-    case kD3DSIO_EXPP:
-    case kD3DSIO_LOGP:
-    case kD3DSIO_SINCOS:
-    case kD3DSIO_M4x4:
-    case kD3DSIO_M4x3:
-    case kD3DSIO_M3x4:
-    case kD3DSIO_M3x3:
-    case kD3DSIO_M3x2:
-    case kD3DSIO_RCP:
-    case kD3DSIO_RSQ:
-    case kD3DSIO_FRC:
-    case kD3DSIO_LRP:
-    case kD3DSIO_DP3:
-    case kD3DSIO_DP4:
-    case kD3DSIO_CND:
-    case kD3DSIO_CMP:
-    case kD3DSIO_DP2ADD:
-    case kD3DSIO_POW:
-    case kD3DSIO_CRS:
-    case kD3DSIO_SGN:
-    case kD3DSIO_ABS:
-    case kD3DSIO_NRM:
-    case kD3DSIO_TEX:
-    case kD3DSIO_DSX:
-    case kD3DSIO_DSY:
-    case kD3DSIO_TEXLDD:
-    case kD3DSIO_TEXLDL:
-      return true;
-    default:
-      return false;
-  }
-}
-
-PixelInputSemantics collectPixelInputSemantics(const SpirvModule& module) {
-  PixelInputSemantics semantics{};
-  if (module.stage != D3DShaderStage::Pixel || module.major < 3u) {
-    return semantics;
-  }
-  for (const auto& instruction : module.instructions) {
-    if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
-      continue;
-    }
-    const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
-    if (dst.kind != D3DRegisterKind::Input || dst.index >= semantics.size()) {
-      continue;
-    }
-    const u32 semanticToken = instruction.operands[0];
-    semantics[dst.index] = PixelInputSemantic{
-        .valid = true,
-        .usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT,
-        .usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT,
-    };
-  }
-  return semantics;
-}
-
-u32 pixelColorOutputCount(const SpirvModule& module) {
-  if (module.stage != D3DShaderStage::Pixel) {
-    return 1u;
-  }
-  u32 count = 1u;
-  for (const auto& instruction : module.instructions) {
-    if (instruction.operands.empty() || !opcodeWritesFirstOperand(instruction.opcode)) {
-      continue;
-    }
-    const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
-    if (dst.kind == D3DRegisterKind::ColorOut && dst.index < kMaxRenderTargets) {
-      count = std::max(count, dst.index + 1u);
-    }
-  }
-  return count;
-}
-
-bool pixelWritesDepth(const SpirvModule& module) {
-  if (module.stage != D3DShaderStage::Pixel) {
-    return false;
-  }
-  for (const auto& instruction : module.instructions) {
-    if (instruction.operands.empty() || !opcodeWritesFirstOperand(instruction.opcode)) {
-      continue;
-    }
-    const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
-    if (dst.kind == D3DRegisterKind::DepthOut) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool isTextureSampleOpcode(u32 opcode) {
-  return opcode == kD3DSIO_TEX ||
-         opcode == kD3DSIO_TEXLDD ||
-         opcode == kD3DSIO_TEXLDL;
-}
-
-u32 textureSamplerIndex(const D3DDecodedInstruction& instruction, D3DShaderStage stage) {
-  for (size_t i = 1; i < instruction.operands.size(); ++i) {
-    const auto reg = decodeRegisterRef(instruction.operands[i], stage);
-    if (reg.kind == D3DRegisterKind::Sampler) {
-      return std::min<u32>(reg.index, kMaxSamplers - 1u);
-    }
-  }
-  return 0u;
-}
-
-std::array<bool, kMaxSamplers> collectPixelSamplerUsage(const SpirvModule& module,
-                                                        const ShaderSourceContext& context) {
-  std::array<bool, kMaxSamplers> usage{};
-  if (module.stage != D3DShaderStage::Pixel) {
-    return usage;
-  }
-  for (const auto& instruction : module.instructions) {
-    if (isTextureSampleOpcode(instruction.opcode)) {
-      usage[textureSamplerIndex(instruction, module.stage)] = true;
-    }
-  }
-  if (!std::any_of(usage.begin(), usage.end(), [](bool used) { return used; }) &&
-      (module.usesTexture || context.textures[0])) {
-    usage[0] = true;
-  }
-  return usage;
-}
-
-void emitFragmentTextureArguments(std::ostringstream& out,
-                                  const std::array<bool, kMaxSamplers>& samplerUsage) {
-  bool first = true;
-  for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
-    if (!samplerUsage[stage]) {
-      continue;
-    }
-    if (!first) {
-      out << ", ";
-    }
-    first = false;
-    out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], "
-        << "sampler samp" << stage << " [[sampler(" << stage << ")]]";
-  }
-}
-
-void noteConstantUsage(ConstantUsage& usage, D3DRegisterKind kind, u32 index) {
-  switch (kind) {
-    case D3DRegisterKind::ConstFloat:
-      usage.hasFloat = true;
-      usage.floatCount = std::max(usage.floatCount, index + 1u);
-      break;
-    case D3DRegisterKind::ConstInt:
-      usage.hasInt = true;
-      usage.intCount = std::max(usage.intCount, index + 1u);
-      break;
-    case D3DRegisterKind::ConstBool:
-      usage.hasBool = true;
-      usage.boolCount = std::max(usage.boolCount, index + 1u);
-      break;
-    default:
-      break;
-  }
-}
-
-u32 matrixConstantRows(u32 opcode) {
-  switch (opcode) {
-    case kD3DSIO_M4x4:
-    case kD3DSIO_M3x4:
-      return 4;
-    case kD3DSIO_M4x3:
-    case kD3DSIO_M3x3:
-      return 3;
-    case kD3DSIO_M3x2:
-      return 2;
-    default:
-      return 1;
-  }
-}
-
-ConstantUsage collectConstantUsage(const SpirvModule& module) {
-  ConstantUsage usage;
-  for (const auto& instruction : module.instructions) {
-    if (instruction.operands.empty()) {
-      continue;
-    }
-
-    if (opcodeWritesFirstOperand(instruction.opcode)) {
-      const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
-      if (isConstantRegisterKind(dst.kind)) {
-        usage.mutableConstants = true;
-        noteConstantUsage(usage, dst.kind, dst.index);
-      }
-    }
-
-    size_t sourceBegin = 1;
-    switch (instruction.opcode) {
-      case kD3DSIO_IF:
-      case kD3DSIO_LOOP:
-      case kD3DSIO_REP:
-      case kD3DSIO_BREAKP:
-        sourceBegin = 0;
-        break;
-      case kD3DSIO_DEF:
-      case kD3DSIO_DEFI:
-      case kD3DSIO_DEFB:
-      case kD3DSIO_DCL:
-      case kD3DSIO_LABEL:
-      case kD3DSIO_CALL:
-        sourceBegin = instruction.operands.size();
-        break;
-      default:
-        break;
-    }
-
-    for (size_t i = sourceBegin; i < instruction.operands.size(); ++i) {
-      const auto src = decodeRegisterRef(instruction.operands[i], module.stage);
-      noteConstantUsage(usage, src.kind, src.index);
-    }
-
-    const u32 rows = matrixConstantRows(instruction.opcode);
-    if (rows > 1 && instruction.operands.size() > 2) {
-      const auto base = decodeRegisterRef(instruction.operands[2], module.stage);
-      if (base.kind == D3DRegisterKind::ConstFloat) {
-        noteConstantUsage(usage, base.kind, base.index + rows - 1u);
-      }
-    }
-  }
-  return usage;
-}
-
-bool shaderUsesPredicateRegisters(const SpirvModule& module) {
-  for (const auto& instruction : module.instructions) {
-    if (instruction.predicated) {
-      return true;
-    }
-    if (instruction.operands.empty()) {
-      continue;
-    }
-
-    size_t sourceBegin = 1;
-    if (instruction.opcode == kD3DSIO_SETP) {
-      if (decodeRegisterRef(instruction.operands[0], module.stage).kind == D3DRegisterKind::Predicate) {
-        return true;
-      }
-    }
-    switch (instruction.opcode) {
-      case kD3DSIO_IF:
-      case kD3DSIO_LOOP:
-      case kD3DSIO_REP:
-      case kD3DSIO_BREAKP:
-        sourceBegin = 0;
-        break;
-      case kD3DSIO_DEF:
-      case kD3DSIO_DEFI:
-      case kD3DSIO_DEFB:
-      case kD3DSIO_DCL:
-      case kD3DSIO_LABEL:
-      case kD3DSIO_CALL:
-        sourceBegin = instruction.operands.size();
-        break;
-      default:
-        break;
-    }
-    for (size_t i = sourceBegin; i < instruction.operands.size(); ++i) {
-      if (decodeRegisterRef(instruction.operands[i], module.stage).kind == D3DRegisterKind::Predicate) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 void emitConstantBindings(std::ostringstream& out, bool vertexStage, const ConstantUsage& usage) {
@@ -1126,151 +418,20 @@ std::string readPixelInputExpression(u32 token,
   return readPixelInputFallbackExpression(index, pixelInputs);
 }
 
-struct FlowBlock {
-  u32 opcode = 0;
-  bool sawElse = false;
-};
-
-SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
-                                        bool vertex,
-                                        const ShaderSourceContext& context) {
-  SpirvModule module;
-  const auto& bytes = shader.bytecode.bytes;
-  if (bytes.size() % sizeof(u32) != 0) {
-    throw std::runtime_error("D3D bytecode size is not DWORD aligned");
-  }
-
-  const u64 bytecodeHash = shader.bytecode.hash ? shader.bytecode.hash : hashBytes(std::as_bytes(std::span(bytes)));
-  module.hash = bytecodeHash ^ (vertex ? 0x5356505653455254ull : 0x5350465348454453ull) ^
-                context.clipPlaneMask ^ (static_cast<u64>(context.sampleCount) << 32);
-  module.words.reserve(bytes.size() / sizeof(u32));
-  module.stage = vertex ? D3DShaderStage::Vertex : D3DShaderStage::Pixel;
-
-  auto readWord = [&](size_t offset) {
-    u32 word = 0;
-    std::memcpy(&word, bytes.data() + offset, sizeof(u32));
-    return word;
-  };
-
-  if (bytes.empty()) {
-    throw std::runtime_error("empty D3D bytecode");
-  }
-
-  const u32 versionToken = readWord(0);
-  module.words.push_back(versionToken);
-  const u32 shaderType = versionToken >> 16;
-  if (shaderType == 0xfffeu) {
-    module.stage = D3DShaderStage::Vertex;
-  } else if (shaderType == 0xffffu) {
-    module.stage = D3DShaderStage::Pixel;
-  } else {
-    throw std::runtime_error("invalid D3D shader version token");
-  }
-  module.major = (versionToken >> 8) & 0xffu;
-  module.minor = versionToken & 0xffu;
-  if (module.major < 2 || module.major > 3) {
-    throw std::runtime_error("only SM 2.x and 3.x bytecode is supported");
-  }
-
-  size_t offset = sizeof(u32);
-  while (offset < bytes.size()) {
-    const u32 token = readWord(offset);
-    module.words.push_back(token);
-    offset += sizeof(u32);
-
-    const u32 opcode = token & 0xffffu;
-    if (opcode == kD3DSIO_END) {
-      break;
-    }
-    if (opcode == kD3DSIO_COMMENT) {
-      const u32 commentWords = (token >> 16) & 0x7fffu;
-      const size_t commentBytes = static_cast<size_t>(commentWords) * sizeof(u32);
-      if (offset + commentBytes > bytes.size()) {
-        throw std::runtime_error("truncated D3D comment token");
-      }
-      offset += commentBytes;
+void emitFragmentTextureArguments(std::ostringstream& out,
+                                  const std::array<bool, kMaxSamplers>& samplerUsage) {
+  bool first = true;
+  for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
+    if (!samplerUsage[stage]) {
       continue;
     }
-    if (opcode == kD3DSIO_PHASE) {
-      continue;
+    if (!first) {
+      out << ", ";
     }
-
-    u32 operandCount = 0;
-    try {
-      operandCount = fixedOperandCount(opcode);
-    } catch (const std::runtime_error&) {
-      operandCount = (token >> 24) & 0xfu;
-      if (operandCount == 0) {
-        switch (opcode) {
-          case kD3DSIO_NOP:
-          case kD3DSIO_ELSE:
-          case kD3DSIO_ENDIF:
-          case kD3DSIO_ENDLOOP:
-          case kD3DSIO_ENDREP:
-          case kD3DSIO_RET:
-          case kD3DSIO_BREAK:
-          case kD3DSIO_PHASE:
-          case kD3DSIO_COMMENT:
-          case kD3DSIO_END:
-            break;
-          default: {
-            std::ostringstream message;
-            message << "missing D3D operand count"
-                    << " opcode=" << opcodeName(opcode)
-                    << " token=0x" << std::hex << token
-                    << " offset=0x" << offset - sizeof(u32);
-            if (!module.instructions.empty()) {
-              const auto& previous = module.instructions.back();
-              message << " prevOpcode=" << opcodeName(previous.opcode)
-                      << " prevTokenCount=" << std::dec << previous.operands.size()
-                      << " prevOperands=[";
-              for (size_t i = 0; i < previous.operands.size(); ++i) {
-                if (i != 0) {
-                  message << ",";
-                }
-                message << "0x" << std::hex << previous.operands[i];
-              }
-              message << "]";
-            }
-            const size_t rawCount = module.words.size();
-            const size_t rawStart = rawCount > 8 ? rawCount - 8 : 0;
-            message << " rawWords=[";
-            for (size_t i = rawStart; i < rawCount; ++i) {
-              if (i != rawStart) {
-                message << ",";
-              }
-              message << "0x" << std::hex << module.words[i];
-            }
-            message << "]";
-            throw std::runtime_error(message.str());
-          }
-        }
-      }
-    }
-    const size_t operandBytes = static_cast<size_t>(operandCount) * sizeof(u32);
-    if (offset + operandBytes > bytes.size()) {
-      throw std::runtime_error("truncated D3D instruction");
-    }
-
-    D3DDecodedInstruction instruction;
-    instruction.opcode = opcode;
-    instruction.controls = (token >> 16) & 0xffu;
-    instruction.predicated = ((token >> 28) & 0x1u) != 0;
-    instruction.operands.reserve(operandCount);
-    for (u32 i = 0; i < operandCount; ++i) {
-      instruction.operands.push_back(readWord(offset + static_cast<size_t>(i) * sizeof(u32)));
-      module.words.push_back(instruction.operands.back());
-    }
-    if (opcode == kD3DSIO_TEX || opcode == kD3DSIO_TEXLDD || opcode == kD3DSIO_TEXLDL || opcode == kD3DSIO_TEXDEPTH ||
-        opcode == kD3DSIO_TEXDP3 || opcode == kD3DSIO_TEXDP3TEX || opcode == kD3DSIO_TEXM3x2DEPTH ||
-        opcode == kD3DSIO_TEXM3x3 || opcode == kD3DSIO_TEXREG2RGB || opcode == kD3DSIO_BEM) {
-      module.usesTexture = true;
-    }
-    module.instructions.push_back(std::move(instruction));
-    offset += operandBytes;
+    first = false;
+    out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], "
+        << "sampler samp" << stage << " [[sampler(" << stage << ")]]";
   }
-
-  return module;
 }
 
 std::string translateSpirvToMsl(const SpirvModule& module,
@@ -2726,6 +1887,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   out << "// decoded d3d hash " << module.hash << "\n";
   return out.str();
 }
+
+}  // namespace
 
 std::string makeTranslatedVertexSource(const ShaderRef& shader,
                                        const ShaderSourceContext& context) {

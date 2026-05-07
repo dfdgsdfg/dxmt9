@@ -8,11 +8,12 @@ dxmt9_provider_service_abi_srcs = files('dxmt9_shader_service_exports.cpp')
 # winemetal.so resolves shader_service::compile without dragging the GPU
 # runtime in.
 dxmt9_shader_pipeline_srcs = files(
-  'dxmt9_shader_request.cpp',
-  'dxmt9_shader_sources.cpp',
-  'dxmt9_shader_translator.cpp',
   'dxmt9_draw_shader.cpp',
   'dxmt9_ffp_shaders.cpp',
+  'dxmt9_shader_decoder.cpp',
+  'dxmt9_shader_metal_ir.cpp',
+  'dxmt9_shader_request.cpp',
+  'dxmt9_shader_sources.cpp',
 )
 
 dxmt9_runtime_srcs = files(
