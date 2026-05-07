@@ -205,6 +205,18 @@ depth write, depth func, front/back stencil ops and masks).
 on a background thread; the encode thread blocks on first use if compilation is not
 yet complete.
 
+**R-BACK-3.7** The PSO cache must be load-warmable from the on-disk
+`MTLBinaryArchive` at device creation. Cache load must populate
+`MTLRenderPipelineState` lookups for every (shader hash, variant) pair present
+in the archive before the first draw is encoded. Load failures (missing file,
+schema mismatch, unsupported GPU family) must fall back to fresh-compile
+behavior without blocking device creation.
+
+**R-BACK-3.8** Prewarm scope must be configurable: full archive load on device
+init (default for shipping builds), lazy on first draw (default for dev), or
+disabled (debug). The selected mode must be observable via a counter and the
+chosen archive path/identity must be visible in present diagnostics.
+
 ---
 
 ## 4. Shader Translation
@@ -241,6 +253,14 @@ not part of normal rendering correctness and must stay independent from
 `[[clip_distance]]` outputs in the vertex shader. This is a Metal hardware feature
 that must not be emulated with fragment shader discards.
 
+**R-BACK-4.8** The shader compile path must persist every produced
+`MTLLibrary` / `MTLFunction` to a process-shared on-disk
+`MTLBinaryArchive`, keyed by SHA-1 of the input bytecode plus variant key.
+Subsequent process starts must load from this archive before any compile
+attempt; archive misses fall through to compile and write back. The archive
+identity (file path, version) must be cross-process consistent so multiple
+dxmt9 instances can warm each other's caches.
+
 ---
 
 ## 5. Resource Allocation
@@ -267,6 +287,43 @@ the GPU has completed all commands that read from the buffer before returning.
 
 **R-BACK-5.6** `destroyBuffer()` and `destroyTexture()` must not free the underlying
 Metal object until all in-flight GPU commands that reference it have completed.
+
+**R-BACK-5.7** D3D9 pool / usage combinations must map to Metal storage modes
+according to the following contract. The mapping must be selected at resource
+create time, must not change for the resource's lifetime, and must be
+identical between buffers and textures of the same pool/usage class.
+
+| D3D9 pool | D3D9 usage | Apple Silicon (unified memory) | Intel/AMD (discrete-style) |
+|---|---|---|---|
+| `D3DPOOL_DEFAULT` | none / `RENDERTARGET` / `DEPTHSTENCIL` | `MTLStorageModePrivate` | `MTLStorageModePrivate` |
+| `D3DPOOL_DEFAULT` | `D3DUSAGE_DYNAMIC` | `MTLStorageModeShared` (rename ring) | `MTLStorageModeShared` (rename ring) |
+| `D3DPOOL_MANAGED` | any | `MTLStorageModeShared` (no staging copy) | `MTLStorageModeManaged` (with staging) |
+| `D3DPOOL_SYSTEMMEM` | any | host malloc + `MTLStorageModeShared` upload buffer | host malloc + staging |
+| `D3DPOOL_SCRATCH` | any | host malloc only (never reaches GPU) | host malloc only |
+
+Unified-memory detection must use `MTLDevice.hasUnifiedMemory`. The intent is
+that on Apple Silicon, `MANAGED` pool resources do **not** require a separate
+private-storage copy and CPU↔GPU upload — both sides see the same backing.
+
+**R-BACK-5.8** `D3DUSAGE_DYNAMIC` buffer rename (on `D3DLOCK_DISCARD`) must
+draw from a per-frame ring of `MTLStorageModeShared` allocations. A rename
+that finds no free allocation in the ring must fall back to a fresh
+`newBufferWithLength:options:` rather than blocking on prior GPU completion.
+
+**R-BACK-5.9** Many small textures (sub-`64 KB` allocation footprint, e.g.
+D3D9 lightmaps, decals, glyph atlases, particle sprites) must be backed by a
+shared `MTLHeap` of appropriate storage mode rather than individual
+`newTextureWithDescriptor:`. Heap residency tracking is per-heap, not
+per-texture; per-texture residency calls on heap-backed textures must be
+elided. Textures larger than the heap-eligibility threshold or with usage
+flags incompatible with heap allocation (e.g., specific `framebufferOnly`
+combinations) fall through to direct allocation.
+
+**R-BACK-5.10** `MTLHeap` capacity must grow geometrically with a configurable
+ceiling. Heap exhaustion must trigger allocation of a new heap rather than
+falling back to direct allocation, so subsequent residency cost stays bounded.
+Heap reclamation is deferred until all heap-backed textures are freed (same
+DXMT-style sequence-ID gate as direct allocations).
 
 ---
 
@@ -413,3 +470,77 @@ count. A draw call to a 4× MSAA render target must use a PSO compiled with
 
 **R-BACK-11.3** `GetRenderTargetData` on a multisample render target must resolve to
 the single-sample texture first, then read back from the resolve texture.
+
+---
+
+## 13. Tile-Shader FFP (Apple Silicon Fast Path)
+
+These requirements define an Apple-Silicon-specific accelerated path for D3D9
+fixed-function fragment effects. They never replace the portable FFP fragment
+path; they are an opt-in fast path selected per-frame based on GPU capability
+and render-pass shape.
+
+**R-BACK-13.1** On GPU families that support programmable blending and tile
+shaders (`MTLGPUFamilyApple3` and later), the backend may emit FFP fog,
+alpha-test, and alpha-to-coverage as tile-stage code instead of executing
+them as fragment-stage `discard_fragment()` / fragment-stage scalar ops. The
+choice between portable and tile-shader paths must be made per render-pass
+descriptor, not per draw, so a pass cannot mix the two.
+
+**R-BACK-13.2** Tile-shader FFP must produce results bit-identical to the
+portable fragment path within the precision limits already permitted by
+`R-BACK-1.1`. Where Metal's tile stage cannot reproduce a D3D9 corner case
+(extreme alpha-test reference values, specific fog non-linear modes), the
+selector must fall back to the portable path for that pass, not produce a
+different result.
+
+**R-BACK-13.3** The PSO key must include a tile-FFP-mode bit. Two draws with
+the same FFP key but different tile-mode selection must compile separate
+pipeline states. Tile-mode flips inside a pass are not permitted; they
+require a render-pass split.
+
+**R-BACK-13.4** Pass selection must be observable via counters
+(`tileFfpPassCount`, `portableFfpPassCount`, `tileFfpFallbackCount`) so the
+ratio of accelerated vs portable passes is measurable per workload. A
+fallback (R-BACK-13.2) increments `tileFfpFallbackCount` and must record the
+reason class (precision, unsupported state, GPU family).
+
+**R-BACK-13.5** Tile-shader FFP must remain disabled on GPU families without
+programmable blending support and on any non-Apple-Silicon configuration. The
+spec does not require tile-shader FFP to be available; conformance evidence
+is for the portable path only.
+
+**R-BACK-13.6** Tile-shader FFP source must be a separate generator, not a
+post-hoc transform of the portable FFP MSL. The two paths share the
+`FFPKeyPS` value but produce distinct MSL, distinct `MTLFunction` handles,
+and distinct cache entries.
+
+---
+
+## 14. Resource Heap Pooling
+
+Beyond the per-resource `MTLHeap` rule in `R-BACK-5.9`, this section pins the
+contract for D3D9 small-resource heap allocation policy.
+
+**R-BACK-14.1** The backend must maintain at least three independent heap
+families: private-storage textures (`D3DPOOL_DEFAULT` non-RT non-DS small
+textures), shared-storage textures (`MANAGED` / `SYSTEMMEM` small textures on
+unified memory), and shared-storage buffers (vertex/index buffers below the
+direct-allocation threshold). Heap families must not be cross-allocated;
+storage mode and usage flags must be compatible across all heap members.
+
+**R-BACK-14.2** Heap eligibility thresholds must be configurable but must
+default to values that capture D3D9's typical small-texture working set:
+allocation footprint ≤ 64 KB and a usage class compatible with heap
+allocation. Render targets, depth buffers, and dynamic-rename buffers must
+always allocate directly, regardless of size.
+
+**R-BACK-14.3** Heap capacity, allocation count, and eviction count must be
+exposed as counters per family. A per-workload baseline must show heap
+allocation absorbs the expected fraction of total `MTLTexture` /
+`MTLBuffer` creates; a regression to direct allocation is observable.
+
+**R-BACK-14.4** Heap-backed resource destruction must observe the same
+deferred-destroy sequence-ID gate as direct allocations
+(`R-BACK-5.6` / `R-BACK-7.3`). Heap reclamation cannot occur while any
+heap-backed resource is referenced by an in-flight chunk.

@@ -34,9 +34,10 @@ Root `specs/` is multi-topic. Each major concern lives in a topic folder:
 Every topic should have `requirements.md` and `design.md` unless it is an
 intentional single-purpose support doc such as `specs/gap.md`.
 
-`specs/**/plan.md` is local-only and ignored. Do not commit implementation plans.
-Promote durable ordering constraints into `design.md`, and missing work into
-`specs/gap.md`.
+`specs/**/plan.md` and `*.plan.md` files are local-only and gitignored. Do not
+commit implementation plans. Promote durable ordering constraints into
+`design.md`, missing work into `specs/gap.md`. Plan structure rules live in
+[Implementation Plans](#implementation-plans) below.
 
 ## Requirement IDs
 
@@ -181,6 +182,102 @@ Do not hide TODOs in `requirements.md` or `design.md`. Long-lived missing work
 belongs in `specs/gap.md`; session-local sequencing belongs in ignored `plan.md`
 or a scratchpad.
 
+## Implementation Plans
+
+Plans stage execution for spec-driven work. They are local-only (gitignored) so
+they can be regenerated, restructured, or thrown away without polluting the
+durable spec history. Their job is to maximize parallel agent dispatch and make
+file/state conflicts visible upfront.
+
+### Naming and Location
+
+| Pattern | Use when |
+|---------|----------|
+| `specs/<topic>/plan.md` | Plan belongs to a single topic with `requirements.md` + `design.md` (e.g., `specs/backend/draw-uniforms/plan.md`, `specs/verification/plan.md`). |
+| `specs/<scope>.plan.md` | Plan is a cross-cutting refactor or staging that does not fit a single topic (e.g., `specs/round2-module-splits.plan.md`). |
+
+Both patterns are matched by `.gitignore`. Do not invent a third naming.
+
+### Required Sections
+
+A plan must contain enough for a fresh agent (no session context) to dispatch
+parallel work safely. Every plan needs the following, in this order:
+
+1. **Goal + Architecture** — one paragraph stating what is built and the
+   high-level approach. Link to the spec's `requirements.md` / `design.md` if
+   one exists; the plan does not restate them.
+2. **Task DAG** — a Mermaid `flowchart` (or `graph TD`) that shows every task,
+   its dependencies, and the parallel batches/waves. Use class colours per
+   batch so a reader can see the parallel groups at a glance.
+3. **File / resource matrix** — either a Mermaid graph showing which files each
+   task touches, or a table marking `W` (write) and `r` (read) per file. The
+   matrix must prove that no two tasks in the same parallel batch share a `W`.
+4. **Per-task scaffolds** — for each task: files affected (create / modify /
+   delete / keep frozen), bucket or routing heuristic where relevant,
+   step-by-step actions with exact commands or code, verification commands
+   (build, focused test target, TLA if applicable), and a commit message.
+5. **Verification gates** — per-batch or final acceptance criteria stating
+   which builds must pass, which tests must run, and which performance or
+   conformance numbers must hold.
+6. **Anti-goals / Out of scope** — explicit list of things the plan must not
+   do. Prevents scope creep when an agent is dispatched without conversational
+   context.
+
+Optional sections that improve large or risky plans:
+
+- **Open issues** — coordination decisions that must be resolved before
+  dispatch (e.g., counter-symbol header location, ordering of merges).
+- **Sync points** — table of `(trigger event → doc/spec edit)` pairs so
+  `gap.md`, `design.md`, and cross-references stay in step as tracks land.
+- **Parallelization protocol** — exact dispatch / merge / cherry-pick sequence
+  when worktree-based parallel execution is the recommended path.
+
+### Plan vs. Design vs. Gap
+
+| Doc | Holds | Lifetime |
+|-----|-------|----------|
+| `plan.md` | Execution staging, task DAG, file conflict matrix, batch gates | Single round of work; discarded after merge |
+| `design.md` | Durable ownership, ordering, ABI, failure behavior | Permanent |
+| `requirements.md` | Numbered contracts with stable IDs | Permanent |
+| `gap.md` | Implementation/evidence shortfalls | Active until closed |
+
+If a plan discovers a durable rule (e.g., "PE side never resolves Metal buffer
+slot indices"), promote that line into `design.md` before the plan is
+discarded. If it discovers missing evidence, add a `gap.md` row. The plan
+itself stays local.
+
+### Mermaid Conventions for Plans
+
+- Use `flowchart TD` (top-down) for task DAGs; `graph LR` only when a strict
+  pipeline reads better left-to-right.
+- Apply `classDef` per batch or wave with distinct fill colours so parallel
+  groups are visually obvious. Example pattern from
+  `specs/backend/draw-uniforms/plan.md`:
+  ```
+  classDef batch1 fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  class A1,A2,A3 batch1
+  ```
+- Node labels should name the file(s) the task writes, not just the task
+  number, so the file-conflict claim is checkable from the diagram alone.
+- For merge / sync flows, `sequenceDiagram` is appropriate.
+
+### Plan Authoring Workflow
+
+1. Read the topic's `requirements.md` and `design.md` first; the plan exists
+   only to stage their implementation.
+2. Decompose into tasks small enough that one agent can finish each in a
+   single dispatch (≤ a few files, ≤ a few hours of agent time).
+3. Build the file/resource matrix before drawing the DAG — the matrix is what
+   tells you which tasks can actually run in parallel.
+4. For each task, write the verification command verbatim; agents should not
+   have to invent test target names.
+5. Run focused builds / tests on the plan's own scaffolding (`git diff
+   --check`, link-only Mermaid render check) before dispatching agents.
+
+The `superpowers:writing-plans` skill is the long-form authoring guide; this
+section is the dxmt9-specific override for naming, location, and required
+sections.
+
 ## Research Notes
 
 Use `researches/{target}.researches.md` only for substantial findings that inform
@@ -206,7 +303,10 @@ Once a finding becomes a hard rule, move the rule into `requirements.md` or
 
 ## Anti-Patterns
 
-- Committing `plan.md`.
+- Committing `plan.md` or `*.plan.md`.
+- Plans without a Mermaid task DAG (parallelism becomes invisible).
+- Plans without a file-conflict matrix (parallel batches become unsafe).
+- Plans that restate `requirements.md` or `design.md` instead of linking.
 - Adding a requirement without an ID.
 - Adding a design choice without an owner.
 - Treating Wine source structure as mandatory architecture.

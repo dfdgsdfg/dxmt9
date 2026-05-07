@@ -188,3 +188,27 @@ interns, or translates the data into owned queue storage.
 debug-mode assertions, deterministic observer tests, or benchmark counters.
 Sleeps, wall-clock timing assumptions, and GPU timing alone are not sufficient
 proof of ordering, progress, or lifetime safety.
+
+**R-ARCH-6.8** Pacing axes must be independent. The architecture must expose at
+least three separately advancing progress signals:
+
+- `completedSeqId` — advanced by every command-buffer completion; consumed by
+  query resolution, readback waits, and resource reclaim;
+- `presentCompletedSeqId` (frame token) — advanced only by present-bearing
+  command-buffer completion; consumed by frame-latency gates;
+- ring-slot occupancy — bounded by chunk admission; consumed by queue writer
+  back-pressure.
+
+A wait on any one of these signals must not block progress on the other two
+beyond the formal ordering invariant `presentCompletedSeqId ≤ completedSeqId`.
+In particular, a stalled `GetData(... D3DGETDATA_FLUSH)`, `GetRenderTargetData`,
+or any other seqId-driven wait must not delay present admission, present
+completion, or frame-token advance; a frame-latency gate must not delay query
+resolution or resource reclaim.
+
+**R-ARCH-6.9** Pacing independence must be observable. The architecture must
+expose counters for the spread between `completedSeqId` and
+`presentCompletedSeqId`, the maximum ring-slot occupancy under load, and the
+wait time attributed to each signal separately. Cross-axis blocking is a
+regression and must be detectable from these counters without timing-based
+heuristics.

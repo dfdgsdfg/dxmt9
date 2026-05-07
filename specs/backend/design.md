@@ -434,6 +434,37 @@ The `MTLDepthStencilState` cache is separate and keyed by the DSS key (depth +
 stencil compare/write state). DSS creation is cheap; the cache prevents redundant
 object allocation.
 
+### 5.1 Cache Prewarm From `MTLBinaryArchive`
+
+Prewarming populates PSO and shader-function caches at device init by
+deserializing entries already present in the on-disk `MTLBinaryArchive`,
+before the first encoded draw. This eliminates first-run stutter when an app
+revisits previously seen pipeline states.
+
+```mermaid
+flowchart LR
+    INIT["Device::init"] --> MODE{"prewarm mode"}
+    MODE -->|"shipping"| FULL["full archive load:\nenumerate archive entries\n→ instantiate PSO + DSS\n→ populate caches"]
+    MODE -->|"dev"| LAZY["lazy: do not load;\ncompile-on-first-miss with\non-disk archive serving as input"]
+    MODE -->|"debug-disabled"| OFF["never read archive"]
+    FULL --> READY["caches ready before first draw"]
+    LAZY --> READY
+    OFF --> READY
+
+    READY --> ENC["encode-thread draw"]
+    ENC --> MISS{"PSO cache miss?"}
+    MISS -->|"hit"| USE["setRenderPipelineState"]
+    MISS -->|"miss"| CMP["compile + write back to archive"]
+    CMP --> USE
+```
+
+Mode selection (`R-BACK-3.8`) is a runtime config. Counters expose
+`prewarmEntriesLoaded`, `prewarmLoadNs`, `prewarmFailureClass`,
+`coldCompileCountAfterWarm`. The archive identity (path + version stamp) is
+included in present diagnostics so support reports can confirm prewarm hit
+the expected file. Failure to load the archive is non-fatal: the cache stays
+empty and the path falls through to compile-and-write.
+
 ---
 
 ## 6. Shader Translation
@@ -460,10 +491,26 @@ diagnostic `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` source-contract path is enabled.
 
 **Shader variant keys** for programmable shaders:
 - Vertex: (bytecode_hash, input_layout_hash, rasterization_disabled)
-- Pixel: (bytecode_hash, alpha_test_enable, alpha_test_func, fog_mode, clip_planes_mask)
+- Pixel: (bytecode_hash, alpha_test_enable, alpha_test_func, fog_mode, clip_planes_mask, tile_ffp_mode)
 
 Two draws with the same bytecode but different variant keys require separate
-compiled `MTLFunction` objects.
+compiled `MTLFunction` objects. The `tile_ffp_mode` bit is set when the
+fragment program is targeted at the tile-shader FFP path (§13); it forces a
+distinct `MTLFunction` from the portable variant of the same bytecode.
+
+### 6.1 Cross-Process Binary Archive
+
+The `MTLBinaryArchive` (`R-BACK-4.8`) is shared across dxmt9 instances:
+
+- Path: `${cache_root}/dxmt9-shaders.metallib-archive` per device family.
+- Identity: SHA-1 over (bytecode | variant key | dxmt9 archive ABI version).
+- Concurrency: file locking on write; readers tolerate stale archives.
+- Cross-process: a second instance reading from the archive populated by the
+  first must hit cached entries. Archive is portable across user sessions and
+  app instances (not bound to a process ID).
+- Versioning: the dxmt9 archive ABI version is bumped when emitter output
+  changes; mismatched versions are treated as misses and the archive is
+  rewritten over time.
 
 ---
 
@@ -494,6 +541,81 @@ graph TD
 3. On first draw that samples the texture, a blit encoder copies the dirty region
    from the CPU-accessible buffer to the private `MTLTexture`.
 4. The blit is fenced so the render encoder that follows reads the updated data.
+
+### 7.1 Pool / Usage → Storage Mode Matrix
+
+The mapping in `R-BACK-5.7` is reproduced here as a single-page reference.
+The matrix differs between unified-memory devices (Apple Silicon: M1/M2/M3,
+all hasUnifiedMemory) and discrete-style devices (Intel/AMD on Mac).
+
+```mermaid
+flowchart TD
+    R["createBuffer / createTexture\n(pool, usage)"] --> CHK{"pool"}
+    CHK -->|"DEFAULT + RT/DS"| PRIV["MTLStorageModePrivate\n(both unified + discrete)"]
+    CHK -->|"DEFAULT + DYNAMIC"| RING["MTLStorageModeShared\n+ rename ring (§7.2)"]
+    CHK -->|"DEFAULT (other)"| PRIV
+    CHK -->|"MANAGED"| UM{"hasUnifiedMemory?"}
+    UM -->|"yes (Apple Silicon)"| SHA["MTLStorageModeShared\nNO staging copy"]
+    UM -->|"no"| MGD["MTLStorageModeManaged\n+ staging copy"]
+    CHK -->|"SYSTEMMEM"| HOST["host malloc + Shared upload buffer"]
+    CHK -->|"SCRATCH"| MAL["host malloc only\nnever reaches GPU"]
+```
+
+Apple Silicon's unified memory makes the `MANAGED` staging copy redundant —
+both CPU and GPU view the same bytes. Detection uses `MTLDevice.hasUnifiedMemory`
+at device init; the per-resource path branches once at create time and never
+re-checks. On discrete-style Mac (legacy Intel iGPU + AMD dGPU) the path
+preserves the conventional staging copy.
+
+### 7.2 `D3DUSAGE_DYNAMIC` Rename Ring
+
+Per `R-BACK-5.8`, dynamic buffers do not block on GPU completion when
+`D3DLOCK_DISCARD` rotates allocations:
+
+```mermaid
+flowchart LR
+    LD["D3DLOCK_DISCARD"] --> POOL{"free ring slot?"}
+    POOL -->|"yes"| ROT["rotate to next allocation\nno wait"]
+    POOL -->|"no"| FRESH["allocate fresh MTLBuffer\nappend to ring"]
+    ROT --> WR["caller writes new data"]
+    FRESH --> WR
+    WR --> SUB["submit draw referencing new alloc"]
+    SUB --> COMPLETE["GPU completes;\nseqId advances\nfreed alloc returns to ring tail"]
+```
+
+The ring is per-buffer-handle, not global, to keep rename cost local.
+Capacity grows on demand and never shrinks during a session.
+
+### 7.3 `MTLHeap` Small-Resource Pooling
+
+Per `R-BACK-5.9` / §14, small textures and small non-dynamic buffers allocate
+from `MTLHeap` instances rather than direct `newBufferWithLength` /
+`newTextureWithDescriptor`.
+
+```mermaid
+flowchart TD
+    REQ["createTexture(desc)"] --> SIZE{"footprint ≤ heapThreshold\n+ usage compatible?"}
+    SIZE -->|"no"| DIRECT["direct allocation\n(unchanged path)"]
+    SIZE -->|"yes"| FAM["select heap family\nby (storage mode, usage class)"]
+    FAM --> CAP{"family has capacity?"}
+    CAP -->|"yes"| ALLOC["heap.makeTexture(desc)"]
+    CAP -->|"no"| GROW["allocate new heap\n(geometric growth, capped)"]
+    GROW --> ALLOC
+    ALLOC --> RES["mark resident\nat heap level once"]
+    RES --> RET["return texture handle"]
+```
+
+Heap families (`R-BACK-14.1`):
+
+| Family | Storage mode | Members |
+|---|---|---|
+| `priv-tex` | `MTLStorageModePrivate` | `D3DPOOL_DEFAULT` non-RT non-DS small textures |
+| `shared-tex-um` | `MTLStorageModeShared` (unified memory only) | `MANAGED` / `SYSTEMMEM` small textures on Apple Silicon |
+| `shared-buf` | `MTLStorageModeShared` | non-dynamic vertex/index/constant buffers below threshold |
+
+Render targets, depth buffers, and dynamic-rename buffers stay on direct
+allocation. Heap residency tracking elides per-texture residency calls
+because the heap is the residency unit.
 
 ---
 
@@ -735,3 +857,171 @@ When the render pass closes (`endEncoding`):
 
 Must resolve first (if not already resolved), then read back `resolveTex` via staging
 buffer. The application cannot directly access the multisample texture data.
+
+---
+
+## 13. Tile-Shader FFP (Apple Silicon Fast Path)
+
+The tile-shader FFP path runs D3D9 fixed-function fragment effects (fog,
+alpha test, alpha-to-coverage) at the Metal **tile stage** instead of the
+fragment stage on `MTLGPUFamilyApple3+`. Tile-stage execution lives in
+on-chip tile memory and has no fragment-shader dispatch cost; for FFP-heavy
+D3D9 frames this collapses two passes (fragment fog + framebuffer write)
+into one tile pass.
+
+### 13.1 Selection Flow
+
+```mermaid
+flowchart TD
+    PASS["render-pass desc built\n(attachments, FFPKeyPS, GPU family)"] --> CAP{"GPU family\n≥ Apple3?"}
+    CAP -->|"no"| PORT["portable fragment FFP\n(unchanged path)"]
+    CAP -->|"yes"| KEY{"FFPKeyPS uses\ntile-eligible state?\n(fog, alpha-test, A2C only)"}
+    KEY -->|"no"| PORT
+    KEY -->|"yes"| PRECISION{"reference values\nin tile-precision range?"}
+    PRECISION -->|"no"| FALLBACK["fallback:\nportable path\nincrement tileFfpFallbackCount(reason)"]
+    PRECISION -->|"yes"| TILE["tile-shader FFP path"]
+    TILE --> CMP["select MSL with\ntile_ffp_mode=1 variant"]
+    PORT --> CMP_P["select MSL with\ntile_ffp_mode=0 variant"]
+    CMP --> ENC["encoder uses\nMTLTileRenderPipelineState"]
+    CMP_P --> ENC2["encoder uses\nMTLRenderPipelineState (fragment)"]
+```
+
+Selection is per-render-pass (`R-BACK-13.1`). A pass that begins as tile-FFP
+cannot mid-pass switch to portable; mismatched draws within the pass force
+either a pass split or a fall-through to portable for the whole pass.
+
+### 13.2 MSL Generation
+
+Two distinct generators emit two distinct MSL sources from the same
+`FFPKeyPS`:
+
+| Path | Generator | Output | Pipeline state |
+|---|---|---|---|
+| Portable | `makeFfpPixelSource()` | fragment function | `MTLRenderPipelineState` |
+| Tile | `makeFfpTilePixelSource()` (new) | tile function | `MTLTileRenderPipelineState` |
+
+The tile generator emits programmable-blending tile code that reads
+attachment color directly (Apple-Silicon-only feature) instead of writing
+through `out.color = ...`. This avoids round-tripping through tile memory.
+
+PSO key includes `tile_ffp_mode` bit (`R-BACK-13.3`); the same `FFPKeyPS`
+produces two compiled function pairs, one in each cache.
+
+### 13.3 Conformance Boundary
+
+Tile-shader FFP must produce results bit-identical to the portable path
+(`R-BACK-13.2`). Where Metal's tile stage cannot match D3D9 corner cases:
+
+| Corner | Reason class | Fallback action |
+|---|---|---|
+| Alpha-test reference outside `[0, 255]` integer range | `precision` | mark pass portable |
+| Fog mode with non-linear scale at high z | `precision` | mark pass portable |
+| Programmable blend interaction with PS-emitted alpha-to-coverage | `unsupported_state` | mark pass portable |
+| Non-Apple-Silicon device | `gpu_family` | always portable, no counter increment |
+
+Conformance evidence (`R-BACK-13.5`) is taken from the portable path only;
+the tile path is judged equivalent by bit-identity to portable per
+`R-BACK-13.2`. Conformance regressions in the tile path manifest as
+visible-pixel differences under shader-runner readback tests, which keep
+running both paths and require equality.
+
+### 13.4 Counters
+
+| Counter | Meaning |
+|---|---|
+| `tileFfpPassCount` | render passes encoded via tile path |
+| `portableFfpPassCount` | render passes encoded via portable path |
+| `tileFfpFallbackCount` | passes that started tile-eligible but fell back |
+| `tileFfpFallbackByReason{precision \| unsupported_state \| gpu_family}` | fallback breakdown |
+| `tileFfpPassMs` / `portableFfpPassMs` | encoding time per path (sanity check) |
+
+A regression to the portable path on an Apple Silicon device is observable
+as a drop in `tileFfpPassCount` ratio without a corresponding
+`tileFfpFallbackCount` increase (i.e., the selector skipped tile path for an
+unaccounted reason).
+
+---
+
+## 14. Resource Heap Pooling Design
+
+Backs the `MTLHeap` requirements in §7.3, `R-BACK-5.9`, `R-BACK-5.10`, and
+§14 of `requirements.md`. The goal is to reduce per-resource residency and
+allocation overhead for D3D9's small-texture working set (lightmaps, decals,
+glyph atlases, particle sprites — typically ≤ 64 KB each, hundreds to
+thousands per frame).
+
+### 14.1 Heap Family Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Available: createHeap(family, storageMode, capacity)
+    Available --> Filling: makeBuffer / makeTexture from heap
+    Filling --> Filling: more allocations within capacity
+    Filling --> Full: capacity reached
+    Full --> Growing: new heap created (geometric growth)
+    Growing --> Filling: subsequent allocations target new heap
+    Filling --> Reclaiming: all members destroyed,\ncompletedSeqId ≥ lastUsedSeqId
+    Full --> Reclaiming: same condition
+    Reclaiming --> [*]: heap released
+```
+
+Geometric growth (`R-BACK-5.10`) caps total heap memory by capping the total
+heap count rather than per-heap size. Heaps grow doubling up to a soft
+ceiling (`heapMaxBytesPerFamily`); past the ceiling, new heaps allocate at
+the ceiling size.
+
+### 14.2 Allocation Path
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant Be as Backend createTexture
+    participant H as Heap manager
+    participant MTL as Metal
+
+    App->>Be: createTexture(W, H, fmt, pool=DEFAULT)
+    Be->>Be: estimate footprint(desc)
+    alt footprint > threshold OR ineligible usage
+        Be->>MTL: newTextureWithDescriptor (direct)
+        MTL-->>Be: MTLTexture
+    else footprint ≤ threshold AND eligible
+        Be->>H: alloc(family=priv-tex, desc)
+        alt heap has capacity
+            H->>MTL: heap.makeTexture(desc)
+        else no capacity
+            H->>MTL: newHeapWithDescriptor (grow)
+            MTL-->>H: new MTLHeap
+            H->>MTL: heap.makeTexture(desc)
+        end
+        MTL-->>H: MTLTexture (heap-backed)
+        H-->>Be: MTLTexture + heap-backed flag
+    end
+    Be-->>App: texture handle
+```
+
+### 14.3 Residency
+
+Direct allocations call `useResource:usage:` per resource per encoder
+(when needed). Heap-backed allocations call `useHeap:` once per heap per
+encoder. For frames with hundreds of small textures, this collapses
+hundreds of `useResource:` calls into a handful of `useHeap:` calls.
+
+The encoder maintains a per-encoder `usedHeaps` set; `useHeap:` is issued
+the first time any member of that heap is bound, and per-resource residency
+calls on heap members are elided.
+
+### 14.4 Counters
+
+| Counter | Meaning |
+|---|---|
+| `heap.{family}.heapCount` | live heap instances for the family |
+| `heap.{family}.bytesAllocated` | total backing storage |
+| `heap.{family}.allocCount` | resources allocated from this family |
+| `heap.{family}.directFallbackCount` | eligible-by-size resources that took direct path due to a usage-flag mismatch |
+| `useHeapPerEncoder` | average count per encoder (target: small) |
+| `useResourcePerEncoder` | average count per encoder (target: dropping after heap adoption) |
+
+A regression manifests as `useResourcePerEncoder` rising on workloads
+previously dominated by heap allocation, or
+`heap.{family}.directFallbackCount` spiking when an eligibility heuristic
+becomes overly conservative.

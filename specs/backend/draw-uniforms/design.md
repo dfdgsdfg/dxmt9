@@ -387,3 +387,121 @@ covered by `dxmt9-verify-tla`.
 | ⚠️ Shader generator must route every `uniforms.X` reference to the matching category | mechanical change; covered by layout spec test |
 | ⚠️ One-time PSO / shader binary cache rebuild on adoption | accepted contract change; cache keys already shader-hash-aware |
 | ❌ Tests in `backend_key_descriptor_spec` and `state_draw_transform_spec` reference the unified `DrawUniforms` layout | explicit update required as part of adoption |
+
+---
+
+## 11. Stage 2 — Argument-Buffer Hybrid (Apple Silicon)
+
+Stage 2 layers an Apple-Silicon-only argument-buffer path on top of the
+Stage 1 per-frequency UBO contract above. It is described by
+`R-BACK-12.22` through `R-BACK-12.26`. Stage 1 must remain the default and
+the conformance reference; Stage 2 is opt-in based on capability and
+benchmark.
+
+### 11.1 Layout transition
+
+```mermaid
+flowchart LR
+    subgraph S1["Stage 1 — direct slot binding (default, all devices)"]
+        S1V0["slot 0 vert: VsConsts"]
+        S1V3["slot 3 vert: FfpVsConsts"]
+        S1V5["slot 5 vert: DrawVolatile (setVertexBytes)"]
+        S1V1["slot 1 vert: stream0"]
+        S1F0["slot 0 frag: PsConsts"]
+        S1F3["slot 3 frag: FfpPsConsts"]
+        S1Tex["frag tex/sampler 0..7: direct"]
+    end
+    subgraph S2["Stage 2 — argbuf hybrid (Apple3+, Tier 2)"]
+        S2Arg["slot 30 vert/frag:\nargument buffer\n• vsConstsOffset\n• ffpVsOffset\n• psConstsOffset\n• ffpPsOffset\n• tex/sampler descriptors"]
+        S2V5["slot 5 vert: DrawVolatile\n(setVertexBytes, unchanged)"]
+        S2V1["slot 1 vert: stream0\n(direct, unchanged)"]
+    end
+    S1V0 -. moved into argbuf .-> S2Arg
+    S1V3 -. moved into argbuf .-> S2Arg
+    S1F0 -. moved into argbuf .-> S2Arg
+    S1F3 -. moved into argbuf .-> S2Arg
+    S1Tex -. moved into argbuf .-> S2Arg
+```
+
+The vertex-stream and `DrawVolatile` paths are intentionally untouched.
+Vertex streams are too large to live in argbufs; `DrawVolatile` already
+uses `setVertexBytes` (Metal inline data) which is the equivalent of
+push constants and beats argbuf for ≤16 B per-draw data.
+
+### 11.2 Per-encoder argbuf shape
+
+```
+ArgumentBuffer (one per render-pass encoder, MTLStorageModeShared):
+┌────────────────────────────────────────────────┐
+│ vsConstsOffset  → embedded VsConsts            │
+│ ffpVsOffset     → embedded FfpVsConsts         │
+│ psConstsOffset  → embedded PsConsts            │
+│ ffpPsOffset     → embedded FfpPsConsts         │
+│ texSlots[0..7]  → MTLResourceID (texture)      │
+│ samplerSlots[0..7] → MTLResourceID (sampler)   │
+└────────────────────────────────────────────────┘
+                       ↑
+          setVertexBuffer(slot=30, offset)
+          setFragmentBuffer(slot=30, offset)
+          (each emitted once per encoder)
+```
+
+Tier-2 argument buffers store sampler/texture handles directly as
+`MTLResourceID`. The encoder writes them into the argbuf at encoder open
+and only updates them when a binding changes; this matches the dirty mask
+already maintained in Stage 1.
+
+### 11.3 Selection sequence
+
+```mermaid
+sequenceDiagram
+    participant Be as Backend encode
+    participant Cap as Capability gate
+    participant Argbuf as Per-encoder argbuf
+    participant Enc as Metal encoder
+
+    Be->>Cap: argbufTier2 + Apple3+ + pass-compatible?
+    alt all yes
+        Cap-->>Be: enable Stage 2
+        Be->>Argbuf: allocate from per-encoder ring
+        Be->>Argbuf: write all dirty stable regions + tex/sampler descriptors
+        Be->>Enc: setVertexBuffer(slot=30, offset)
+        Be->>Enc: setFragmentBuffer(slot=30, offset)
+        loop per draw
+            Be->>Argbuf: rewrite only dirty sub-regions
+            Be->>Enc: setVertexBytes(slot=5, DrawVolatile)
+            Be->>Enc: drawIndexed(...)
+        end
+    else any no
+        Cap-->>Be: Stage 1 fallback
+        Note over Be,Enc: per-encoder Stage 1 binding (slot 0/3/5)
+    end
+```
+
+### 11.4 Why this is not just "single argbuf" (DXMT shape)
+
+DXMT bundles vertex stream tables, all per-stage constants, and per-draw
+arguments into one giant argbuf at slot 30. dxmt9's hybrid keeps
+**volatile per-draw data on `setVertexBytes`** (push-constant shape) and
+**vertex streams on direct binding**, because:
+
+- per-draw `DrawVolatile` (16 B) is faster as inline data than as an
+  argbuf offset rewrite — Metal optimizes `setVertexBytes` aggressively;
+- vertex streams are too big to round-trip through argbuf write; direct
+  bind is a no-op when unchanged;
+- D3D9 lacks DXBC argbuf reflection metadata, so packaging streams the
+  way DXMT does adds work for no gain.
+
+The hybrid keeps Stage 1's per-frequency dirty model and only consolidates
+the **stable** regions into argbuf storage.
+
+### 11.5 Trade-offs (Stage 2)
+
+| | |
+|---|---|
+| ✅ One bind per encoder for stable state | replaces 4–6 `setBufferOffset` calls per encoder |
+| ✅ `useResource:`/`useHeap:` reduction | argbuf binds resources collectively |
+| ✅ Dirty-mask reuse | Stage 2 inherits Stage 1's category granularity |
+| ⚠️ Argbuf encode cost on first dirty | mitigated by per-encoder amortization |
+| ⚠️ Capability split: behavior identical, code diverges | conformance enforced via shader-runner equality |
+| ❌ Disabled on non-Apple-Silicon | acceptable; Stage 1 stays the floor |

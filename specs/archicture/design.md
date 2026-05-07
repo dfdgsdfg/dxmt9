@@ -411,6 +411,47 @@ sequenceDiagram
 - Sidecar parallelism such as pipeline compilation must publish results through
   thread-safe caches and must not reorder already accepted D3D9 work.
 
+### 6.5 Pacing Independence
+
+The three progress signals — `completedSeqId`, `presentCompletedSeqId` (frame
+token), and ring-slot occupancy — advance independently. The only ordering
+invariant relating them is `presentCompletedSeqId ≤ completedSeqId`, which
+ensures a present token never advances ahead of the underlying command buffer's
+completion. Beyond that invariant, the three are decoupled.
+
+```mermaid
+flowchart TD
+    subgraph Sig["Progress signals (independent advance)"]
+        C["completedSeqId\n(every command buffer)"]
+        P["presentCompletedSeqId\n(present-bearing buffers only)"]
+        R["ring-slot occupancy\n(chunk admission)"]
+    end
+    subgraph Cons["Consumers"]
+        Q["query GetData / readback\n→ waits on completedSeqId"]
+        FL["frame-latency gate\n→ waits on presentCompletedSeqId"]
+        BP["queue writer back-pressure\n→ waits on free ring slot"]
+    end
+    C --> Q
+    P --> FL
+    R --> BP
+    C -. invariant: P ≤ C .-> P
+```
+
+| Wait kind | Consumes | Must NOT block |
+|---|---|---|
+| `GetData(D3DGETDATA_FLUSH)` / `GetRenderTargetData` / readback drain | `completedSeqId` | present admission, present completion, frame-token advance |
+| Frame-latency gate (`SetMaximumFrameLatency`) | `presentCompletedSeqId` | query resolution, readback completion, resource reclaim |
+| Queue writer back-pressure | ring-slot occupancy | encode-thread or finish-thread progress on older slots |
+
+Cross-axis blocking is a regression. Counters in §7 expose the spread between
+the signals so that an unintended coupling (for example, a GPU stall in a
+non-present command buffer that delays present-bearing completion) becomes
+visible without wall-clock heuristics. Formal evidence: `QuerySeqId.tla` and
+`PresentFrameLatency.tla` model the seqId and frame-token timelines as
+separate variables sharing only the ordering invariant; reachable states
+include "query waiter holds while present advances" and "present waiter holds
+while seqId advances" without livelock.
+
 ---
 
 ## 7. Expected Performance Bottlenecks
@@ -432,6 +473,7 @@ flowchart LR
     ENC -. counters .-> C4["encodeDrawCpuNs\nencodeChunkCpuNs\npipelineBuild\nencoder splits"]
     GPU -. counters .-> C5["frame P50/P95/P99\nGPU command-buffer time\nreadback stalls"]
     PRES -. counters .-> C6["present acquire wait\nboundary wait\ntoken wait\nsource valid/size"]
+    CPU -. pacing .-> C7["seqVsPresentSpread\n(completedSeqId − presentCompletedSeqId)\nseqIdWaitNs / presentTokenWaitNs / ringSlotWaitNs\nper-axis (independent)"]
 ```
 
 | Stage | Expected bottleneck when | Bound | Existing or required evidence | First response |
@@ -445,6 +487,7 @@ flowchart LR
 | Resource upload/readback | texture streaming or readbacks force staging pressure or CPU waits | CPU/GPU sync | transient upload CPU time, sync wait, readback MB/s | use ring staging and batch copies; keep `GetRenderTargetData` as an explicit synchronous boundary |
 | GPU shader/fill/bandwidth | command submission is cheap but GPU frame time dominates | GPU | GPU command-buffer time, frame P50/P95/P99, Metal capture | optimize render-pass merging, avoid redundant blits, then tune shader/format paths |
 | Present/drawable pacing | frame token or drawable acquisition waits dominate frame time after present source is valid | display/WSI | present source valid/size, present acquire wait, boundary wait, token wait, pre-acquire hit/miss | tune drawable pre-acquire and frame-latency policy only after draw/hazard signals are clean |
+| Pacing-axis coupling | a wait on one progress signal blocks progress on another beyond the `presentCompletedSeqId ≤ completedSeqId` invariant | CPU/sync regression | `seqVsPresentSpread`, per-axis wait counters (`seqIdWaitNs`, `presentTokenWaitNs`, `ringSlotWaitNs`), TLA+ liveness checks in `QuerySeqId.tla` / `PresentFrameLatency.tla` | trace the offending waiter; restore independent advance per `R-ARCH-6.8`/`6.9` before tuning ring depth or frame-latency policy |
 
 The highest-risk architecture regressions are still CPU-side: per-call bridge
 fallback, per-draw heap growth after warm-up, and rebuilding large state payloads

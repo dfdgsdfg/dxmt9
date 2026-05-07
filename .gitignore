@@ -28,6 +28,7 @@ experiments/apps/**/*.trace.txt
 *.log
 **/__pycache__
 specs/**/plan.md
+*.plan.md
 .codex
 .claude
 .gemini

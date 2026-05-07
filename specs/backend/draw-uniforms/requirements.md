@@ -226,14 +226,86 @@ existing `transient_upload_*` keys.
 
 ---
 
-## 7. Out-of-Scope Constraints
+## 7. Argument-Buffer Hybrid (Stage 2, Apple Silicon Fast Path)
+
+Stage 1 (R-BACK-12.1–12.21) defines the per-frequency UBO + setVertexBytes
+contract. Stage 2 layers an Apple-Silicon-only argument-buffer hybrid on
+top: stable per-frame UBO contents (textures, samplers, FFP transforms that
+do not change inside a `DrawRun`) move into a per-encoder argument buffer
+addressable by GPU pointer, while `DrawVolatile` and frequently-dirty
+slots remain on direct slot bindings.
+
+This is opt-in and never replaces Stage 1. Devices without GPU family
+support, or workloads where the hybrid loses, must continue running the
+Stage 1 contract.
+
+### 7.1 Capability gate (`R-BACK-12.22`)
+
+The hybrid path is enabled only when **all** of the following hold:
+
+- `MTLDevice.argumentBuffersSupport ≥ MTLArgumentBuffersTier2`,
+- the GPU family is `MTLGPUFamilyApple3` or later,
+- the encoder's render-pass descriptor is compatible with argument-buffer
+  binding (no exotic store-action restrictions).
+
+When the gate fails for any draw in a pass, the entire pass falls back to
+Stage 1. Mid-pass switching between Stage 1 and Stage 2 is not permitted.
+
+### 7.2 Hybrid layout (`R-BACK-12.23`)
+
+The encoder must split the Stage-1 binding map as follows when Stage 2 is
+active:
+
+| Stage 1 slot | Stage 2 location | Reason |
+|---|---|---|
+| `VsConsts` (slot 0 vertex) | argbuf at offset `vsConstsOffset` | run-stable shader constants, dirty rarely, GPU-pointer cheap |
+| `PsConsts` (slot 0 fragment) | argbuf at offset `psConstsOffset` | same reasoning |
+| `FfpVsConsts` (slot 3 vertex) | argbuf at offset `ffpVsOffset` | per-frame stable for FFP-heavy frames |
+| `FfpPsConsts` (slot 3 fragment) | argbuf at offset `ffpPsOffset` | same |
+| Texture / sampler bindings | argbuf at sampler/texture offsets | Tier 2 packs them into the argbuf naturally |
+| `DrawVolatile` (slot 5 vertex) | **unchanged**, `setVertexBytes` | per-draw, push-constant-shaped |
+| Vertex stream (slot 1) | **unchanged**, direct buffer bind | per-draw, large |
+
+Argbuf binding is once per encoder via `setVertexBuffer:offset:atIndex:` and
+`setFragmentBuffer:offset:atIndex:` at slot N (slot reserved for argbuf,
+e.g., 30 mirroring DXMT). Per-draw work updates only the offsets of dirty
+sub-regions, not full re-encodes.
+
+### 7.3 Dirty-mask reuse (`R-BACK-12.24`)
+
+The Stage 1 dirty mask (`R-BACK-12.8`) drives Stage 2 sub-region writes.
+A dirty bit on `VS_F` causes a write to the argbuf's `vsConstsOffset`
+region only; the rest of the argbuf is untouched. The same bit semantics
+apply, so adopting Stage 2 does not introduce new dirty categories.
+
+### 7.4 Selection counters (`R-BACK-12.25`)
+
+The encoder must expose per-encoder counters indicating which path was
+selected:
+
+- `argbufHybridEncoderCount` — encoders that ran Stage 2.
+- `stage1EncoderCount` — encoders that ran Stage 1 only.
+- `argbufHybridFallbackCount` — encoders that started Stage 2 and fell
+  back during the pass (must remain zero in steady state given the
+  per-pass commit rule).
+- `argbufHybridBytesPerEncoder` / `stage1BytesPerEncoder` — uploaded byte
+  totals so a regression in Stage 2's expected savings is observable.
+
+### 7.5 Conformance and regressions (`R-BACK-12.26`)
+
+Stage 2 must produce results bit-identical to Stage 1 for every draw on
+the same input state. The shader-runner readback corpus is the oracle and
+must be re-run with Stage 2 enabled and disabled. A pass-level regression
+disables Stage 2 for the failing variant, never weakens the conformance
+target.
+
+---
+
+## 8. Out-of-Scope Constraints
 
 The following are explicitly not required by this spec; capture them in
 follow-up specs if adopted:
 
-- Argument-buffer consolidation (DXMT-style packed argbuf at a single slot).
-- `MTLHeap`-resident stable structs referenced via 64-bit GPU pointer
-  through a Tier-2 argbuf.
 - Range-heap coalescing of sparse shader-constant updates (Wine GLSL
   pattern). The simpler `maxChanged*` counter must be the implementation
   unless a workload demonstrates fragmentation that the simpler counter
@@ -241,6 +313,8 @@ follow-up specs if adopted:
 - Compile-time field-to-offset parameter binding (Wine vkd3d-shader
   pattern). The dxmt9 shader generator owns source emission directly, so
   the equivalent is the category routing in `dxmt9_shader_translator.cpp`.
+- Indirect command buffers (Metal ICB) for stable draw patterns. D3D9 has
+  enough state churn that pattern detection is rarely worthwhile.
 
 These exclusions apply unless and until a measured workload shows the
 simpler model insufficient.
