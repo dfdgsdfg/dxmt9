@@ -713,7 +713,8 @@ void testVs30VertexDeclarationTypeLoads() {
                 "UBYTE4 blend indices are loaded instead of left zero");
   checkContains(source, "dxmt9_load_f16x2(stream0, base + 24u)",
                 "FLOAT16_2 texcoord is loaded instead of left zero");
-  checkContains(source, "const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : 28u",
+  checkContains(source,
+                "const uint stride = drawVolatile.vertexStreamStride != 0u ? drawVolatile.vertexStreamStride : 28u",
                 "declared stream stride participates in shader input fetch");
 }
 
