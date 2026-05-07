@@ -111,12 +111,12 @@ struct PreUploadedDrawData {
 // (RT/DS/VS/PS/VDecl/VBuffers/IB/viewport/scissor/render-state/transform)
 // come from `drawState`'s hot record and shader layout.
 //
-// `dirtyMaskInOut` (R-BACK-12): per-render-encoder uniform dirty bitmask.
-// Bits gate the per-frequency UBO sub-allocation + bind sequence;
-// encodeDraw reads, binds, and clears matching bits. Caller passes a
-// pointer that lives across all draws on one Metal render encoder and
-// resets it to all-dirty when a fresh encoder opens (R-BACK-12.12).
-// nullptr is treated as "every draw rebinds everything".
+// `dirty` (R-BACK-12): per-render-encoder uniform dirty state. Bits gate
+// the per-frequency UBO sub-allocation + bind sequence; encodeDraw
+// reads, binds, and clears matching bits. Caller passes a pointer that
+// lives across all draws on one Metal render encoder and calls
+// markAllDirty(...) when a fresh encoder opens (R-BACK-12.12). nullptr
+// is treated as "every draw rebinds everything".
 bool encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
@@ -126,7 +126,7 @@ bool encodeDraw(EncodeContext& ctx,
                  const PreUploadedDrawData* preUploaded = nullptr,
                  const core::DrawParam* paramOverride = nullptr,
                  std::span<const std::uint8_t> paramPayloadArena = {},
-                 std::uint16_t* dirtyMaskInOut = nullptr);
+                 uniform::DirtyState* dirty = nullptr);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

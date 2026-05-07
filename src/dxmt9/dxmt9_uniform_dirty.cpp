@@ -54,12 +54,20 @@ void clearBit(DirtyState& state, DirtyBit bit) {
   state.mask &= static_cast<std::uint16_t>(~static_cast<std::uint16_t>(bit));
 }
 
+void clearBits(DirtyState& state, std::uint16_t mask) {
+  state.mask = static_cast<std::uint16_t>(state.mask & ~mask);
+}
+
 void setBit(DirtyState& state, DirtyBit bit) {
   state.mask |= static_cast<std::uint16_t>(bit);
 }
 
 bool isDirty(const DirtyState& state, DirtyBit bit) {
   return (state.mask & static_cast<std::uint16_t>(bit)) != 0;
+}
+
+bool anyDirty(const DirtyState& state, std::uint16_t mask) {
+  return (state.mask & mask) != 0;
 }
 
 void applyConstantSetVsF(DirtyState& state, std::uint32_t startReg, std::uint32_t count) {
