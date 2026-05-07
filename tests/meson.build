@@ -102,6 +102,28 @@ state_draw_transform_spec = executable(
 test('dxmt9-state-draw-transform-spec', state_draw_transform_spec,
      env: dxmt9_native_test_env_vars)
 
+draw_uniforms_layout_spec = executable(
+  'dxmt9-draw-uniforms-layout-spec',
+  'native/core/draw_uniforms_layout_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-draw-uniforms-layout-spec', draw_uniforms_layout_spec,
+     env: dxmt9_native_test_env_vars)
+
+draw_uniforms_dirty_spec = executable(
+  'dxmt9-draw-uniforms-dirty-spec',
+  'native/core/draw_uniforms_dirty_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-draw-uniforms-dirty-spec', draw_uniforms_dirty_spec,
+     env: dxmt9_native_test_env_vars)
+
 dod_state_format_spec = executable(
   'dxmt9-dod-state-format-spec',
   'native/core/dod_state_format_spec.cpp',
