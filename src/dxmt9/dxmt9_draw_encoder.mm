@@ -174,42 +174,6 @@ void countRasterizerBind() {
   perf::countBaseStateBind(0, 0, 0, 0, 0, 0, 0, 0, 0, 1);
 }
 
-// Stand-in for the upcoming dxmt9_uniform_dirty.hpp DirtyState (C1).
-// The integrator replaces this with the real type from
-// `dxmt9_uniform_dirty.hpp` once C1 lands. encodeChunk owns one
-// instance per chunk and treats every category as dirty whenever a
-// fresh render encoder opens (R-BACK-12.12).
-struct LocalDirtyState {
-  enum Bit : std::uint16_t {
-    VsF = 1u << 0,
-    VsI = 1u << 1,
-    VsB = 1u << 2,
-    PsF = 1u << 3,
-    PsI = 1u << 4,
-    PsB = 1u << 5,
-    FfpVsTransforms = 1u << 6,
-    FfpVsClip = 1u << 7,
-    FfpVsViewport = 1u << 8,
-    FfpPsFog = 1u << 9,
-    FfpPsAlpha = 1u << 10,
-    FfpPsTexFactor = 1u << 11,
-    All = 0x0fffu,
-    VsAny = VsF | VsI | VsB,
-    PsAny = PsF | PsI | PsB,
-    FfpVsAny = FfpVsTransforms | FfpVsClip | FfpVsViewport,
-    FfpPsAny = FfpPsFog | FfpPsAlpha | FfpPsTexFactor,
-  };
-  std::uint16_t mask = All;
-
-  bool isDirty(std::uint16_t bits) const noexcept {
-    return (mask & bits) != 0u;
-  }
-  void clearBits(std::uint16_t bits) noexcept {
-    mask = static_cast<std::uint16_t>(mask & ~bits);
-  }
-  void markAllDirty() noexcept { mask = All; }
-};
-
 bool splitPresentBeforeAcquireEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_SPLIT_PRESENT_ACQUIRE");
@@ -874,7 +838,7 @@ bool encodeDraw(EncodeContext& ctx,
                  const PreUploadedDrawData* preUploaded,
                  const core::DrawParam* paramOverride,
                  std::span<const u8> paramPayloadArena,
-                 std::uint16_t* dirtyMaskInOut) {
+                 uniform::DirtyState* dirty) {
   PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
   const auto& hot = *drawState.hot;
@@ -960,38 +924,39 @@ bool encodeDraw(EncodeContext& ctx,
   // struct via the A2 transform, binds to its slot, and clears the
   // dirty bit. Stale (non-dirty) categories rely on the previous
   // draw's sticky binding on the same Metal render encoder.
-  std::uint16_t scratchDirty = LocalDirtyState::All;
-  std::uint16_t* dirtyPtr = dirtyMaskInOut ? dirtyMaskInOut : &scratchDirty;
+  uniform::DirtyState scratchDirty;
+  uniform::markAllDirty(scratchDirty);
+  uniform::DirtyState* dirtyPtr = dirty ? dirty : &scratchDirty;
   {
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
-    if ((*dirtyPtr & LocalDirtyState::VsAny) != 0u) {
+    if (uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
       VsConsts vs = buildVsConsts(drawState);
       auto slice = uploadTransientBuffer(&vs, sizeof(VsConsts), alignof(VsConsts));
       if (slice) {
         encoder.setVertexBuffer(slice.buffer, slice.offset, 0);
         countUniformBufferBinds(1);
         perf::countUniformVsConsts(sizeof(VsConsts));
-        *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::VsAny);
+        uniform::clearBits(*dirtyPtr, uniform::kVsAny);
       }
     }
-    if ((*dirtyPtr & LocalDirtyState::PsAny) != 0u) {
+    if (uniform::anyDirty(*dirtyPtr, uniform::kPsAny)) {
       PsConsts ps = buildPsConsts(drawState);
       auto slice = uploadTransientBuffer(&ps, sizeof(PsConsts), alignof(PsConsts));
       if (slice) {
         encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
         countUniformBufferBinds(1);
         perf::countUniformPsConsts(sizeof(PsConsts));
-        *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::PsAny);
+        uniform::clearBits(*dirtyPtr, uniform::kPsAny);
       }
     }
-    if ((*dirtyPtr & LocalDirtyState::FfpPsAny) != 0u) {
+    if (uniform::anyDirty(*dirtyPtr, uniform::kFfpPsAny)) {
       FfpPsConsts ffpPs = buildFfpPsConsts(drawState);
       auto slice = uploadTransientBuffer(&ffpPs, sizeof(FfpPsConsts), alignof(FfpPsConsts));
       if (slice) {
         encoder.setFragmentBuffer(slice.buffer, slice.offset, 3);
         countUniformBufferBinds(1);
         perf::countUniformFfpPs(sizeof(FfpPsConsts));
-        *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::FfpPsAny);
+        uniform::clearBits(*dirtyPtr, uniform::kFfpPsAny);
       }
     }
   }
@@ -1007,7 +972,7 @@ bool encodeDraw(EncodeContext& ctx,
   };
   bool ffpVsBound = false;
   auto bindFfpVsIfDirty = [&] {
-    if (ffpVsBound || (*dirtyPtr & LocalDirtyState::FfpVsAny) == 0u) {
+    if (ffpVsBound || !uniform::anyDirty(*dirtyPtr, uniform::kFfpVsAny)) {
       return;
     }
     auto* host = ensureFfpVs();
@@ -1016,7 +981,7 @@ bool encodeDraw(EncodeContext& ctx,
       encoder.setVertexBuffer(slice.buffer, slice.offset, 3);
       countUniformBufferBinds(1);
       perf::countUniformFfpVs(sizeof(FfpVsConsts));
-      *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::FfpVsAny);
+      uniform::clearBits(*dirtyPtr, uniform::kFfpVsAny);
       ffpVsBound = true;
     }
   };
@@ -1043,7 +1008,7 @@ bool encodeDraw(EncodeContext& ctx,
       if (host->viewportOrigin != wantOrigin || host->viewportSize != wantSize) {
         host->viewportOrigin = wantOrigin;
         host->viewportSize = wantSize;
-        *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr | LocalDirtyState::FfpVsViewport);
+        uniform::setBit(*dirtyPtr, uniform::DirtyBit::FfpVsViewport);
       }
     }
   }
@@ -1864,11 +1829,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   bool hasActiveRender = false;
   std::optional<core::FlatDrawStateKey> activeDrawStateKey;
   std::optional<core::ClearDesc> pendingClear;
-  // Per-render-encoder uniform dirty bitmask (R-BACK-12.12). Reset to
-  // all-dirty whenever a fresh Metal render encoder opens; encodeDraw
-  // reads + clears bits as it sub-allocates and binds per-frequency
-  // UBOs. Stand-in for C1's `dxmt9::DirtyState` until that header lands.
-  std::uint16_t uniformDirty = LocalDirtyState::All;
+  // Per-render-encoder uniform dirty state (R-BACK-12.12). Seeded from
+  // ctx.dirty so bits accumulated by the chunk-record importer since
+  // the last encode flow into the first draw of this chunk; the
+  // startRenderPass lambda calls markAllDirty whenever a fresh Metal
+  // render encoder opens (sticky bindings are lost on encoder
+  // boundary). encodeDraw reads + clears bits as it sub-allocates and
+  // binds per-frequency UBOs.
+  uniform::DirtyState uniformDirty = ctx.dirty;
 
   // TLA+: EncoderLifecycle variable binding:
   // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
@@ -1928,7 +1896,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // R-BACK-12.12: a fresh Metal render encoder loses any prior
     // sticky bindings — every uniform category must rebind on the
     // first draw of the new encoder.
-    uniformDirty = LocalDirtyState::All;
+    uniform::markAllDirty(uniformDirty);
     assertEncoderLifecycleInvariant();
   };
 

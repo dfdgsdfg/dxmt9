@@ -49,11 +49,34 @@ struct DirtyState {
   std::uint16_t maxChangedPsB = 0;
 };
 
+// Composite per-frequency masks. The encoder consumes the per-frequency
+// UBOs as a unit (one sub-allocation, one bind, one clear), so it
+// checks/clears all bits in a category in one shot. Defining these once
+// here keeps the call sites readable and matches the C2 mental model.
+inline constexpr std::uint16_t kVsAny =
+    static_cast<std::uint16_t>(DirtyBit::VsF) |
+    static_cast<std::uint16_t>(DirtyBit::VsI) |
+    static_cast<std::uint16_t>(DirtyBit::VsB);
+inline constexpr std::uint16_t kPsAny =
+    static_cast<std::uint16_t>(DirtyBit::PsF) |
+    static_cast<std::uint16_t>(DirtyBit::PsI) |
+    static_cast<std::uint16_t>(DirtyBit::PsB);
+inline constexpr std::uint16_t kFfpVsAny =
+    static_cast<std::uint16_t>(DirtyBit::FfpVsTransforms) |
+    static_cast<std::uint16_t>(DirtyBit::FfpVsClip) |
+    static_cast<std::uint16_t>(DirtyBit::FfpVsViewport);
+inline constexpr std::uint16_t kFfpPsAny =
+    static_cast<std::uint16_t>(DirtyBit::FfpPsFog) |
+    static_cast<std::uint16_t>(DirtyBit::FfpPsAlpha) |
+    static_cast<std::uint16_t>(DirtyBit::FfpPsTexFactor);
+
 // Bit-level helpers — pure value transforms.
 void markAllDirty(DirtyState& state);
 void clearBit(DirtyState& state, DirtyBit bit);
+void clearBits(DirtyState& state, std::uint16_t mask);
 void setBit(DirtyState& state, DirtyBit bit);
 bool isDirty(const DirtyState& state, DirtyBit bit);
+bool anyDirty(const DirtyState& state, std::uint16_t mask);
 
 // Per-record apply helpers. The chunk-record importer calls these as
 // it processes records; each ORs in the matching DirtyBit and (for
