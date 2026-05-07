@@ -16,36 +16,8 @@ using u32 = std::uint32_t;
 using i32 = std::int32_t;
 using f32 = float;
 
-// Layout consumed by the generated draw shaders. Must match the
-// declarations in dxmt9::shaders / dxmt9::drawshader shader source.
-struct DrawUniforms {
-  std::array<std::array<f32, 4>, core::kMaxVertexConstants> vsFloatConst{};
-  std::array<std::array<i32, 4>, core::kMaxIntegerConstants> vsIntConst{};
-  std::array<u32, core::kMaxBoolConstants> vsBoolConst{};
-  std::array<std::array<f32, 4>, 4> ffpWorldViewProj{};
-  std::array<std::array<std::array<f32, 4>, 4>, core::kMaxTextureStages> ffpTextureTransforms{};
-  std::array<std::array<f32, 4>, core::kMaxPixelConstants> psFloatConst{};
-  std::array<std::array<i32, 4>, core::kMaxIntegerConstants> psIntConst{};
-  std::array<u32, core::kMaxBoolConstants> psBoolConst{};
-  std::array<core::ClipPlane, core::kMaxClipPlanes> clipPlanes{};
-  std::array<f32, 2> halfPixelFixup{};
-  std::array<f32, 2> viewportOrigin{};
-  std::array<f32, 2> viewportSize{};
-  std::array<f32, 4> textureFactor{1.0f, 1.0f, 1.0f, 1.0f};
-  f32 alphaRef = 0.0f;
-  f32 fogStart = 1.0f;
-  f32 fogEnd = 1.0f;
-  f32 fogDensity = 1.0f;
-  u32 vertexStreamOffset = 0;
-  u32 vertexStreamStride = 0;
-  i32 vertexBaseIndex = 0;
-  u32 clipPlaneMask = 0;
-  u32 alphaTestEnable = 0;
-  u32 alphaTestFunc = static_cast<u32>(core::CompareFunc::Always);
-  u32 fogMode = static_cast<u32>(core::FogMode::None);
-};
-
-// Per-stage split of DrawUniforms. VS-only constants. Sized so MSL
+// Per-frequency draw uniforms split by stage and update cadence (see
+// specs/backend/draw-uniforms). VS-only constants. Sized so MSL
 // `float4`/`int4`/`uint` arrays match the host layout byte-for-byte.
 struct VsConsts {
   std::array<std::array<f32, 4>, core::kMaxVertexConstants> vsFloatConst{};
@@ -99,12 +71,8 @@ struct DrawVolatile {
 static_assert(sizeof(DrawVolatile) == 16,
               "DrawVolatile layout must match MSL prelude declaration");
 
-// Translate D3D9 flat draw state into the uniforms consumed by MSL.
-DrawUniforms buildDrawUniforms(core::FlatDrawStateView state);
-
 // Per-stage transforms producing the split structs above. Pure value
-// transforms over flat draw state — same field-to-category mapping as
-// buildDrawUniforms; later tasks switch encoders over to these.
+// transforms over flat draw state.
 VsConsts buildVsConsts(core::FlatDrawStateView state);
 PsConsts buildPsConsts(core::FlatDrawStateView state);
 FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state);
