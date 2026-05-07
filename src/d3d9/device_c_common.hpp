@@ -1,5 +1,15 @@
 #pragma once
 
+// Public surface shared by the three implementation TUs that replaced
+// device_c_common.cpp:
+//   - device_c_marshal.cpp       (WoW64 / native pointer marshaling +
+//                                 dxmt9DebugLog definition)
+//   - device_c_shader_dump.cpp   (D3D9 shader bytecode debug dump)
+//   - device_c_format_utils.cpp  (D3D <-> core enum/struct translation,
+//                                 transformStateFromD3D, setShaderFloatConst)
+// The header itself is intentionally not split — all three areas share the
+// devicec namespace and the D9C* wrapper structs declared below.
+
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
