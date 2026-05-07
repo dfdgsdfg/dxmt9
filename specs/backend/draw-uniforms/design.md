@@ -505,3 +505,45 @@ the **stable** regions into argbuf storage.
 | ⚠️ Argbuf encode cost on first dirty | mitigated by per-encoder amortization |
 | ⚠️ Capability split: behavior identical, code diverges | conformance enforced via shader-runner equality |
 | ❌ Disabled on non-Apple-Silicon | acceptable; Stage 1 stays the floor |
+
+---
+
+## 12. Metal Encoder API Cost Notes
+
+A common concern is that Stage 1 issues more `setBuffer*` calls per draw
+than DXMT's single-argbuf model. The actual per-call cost on Apple Silicon
+makes the gap small. These figures are reasoned from Metal behavior and
+WWDC guidance; they are not guarantees and must be confirmed by benchmarks.
+
+| Metal API call | Internal action | Estimated cost |
+|---|---|---|
+| `setVertexBuffer:offset:atIndex:` | slot write + dirty + residency insert | ~30–50 ns |
+| `setVertexBufferOffset:atIndex:` | offset write + dirty (same buffer) | ~10–15 ns |
+| `setVertexBytes:length:atIndex:` (≤ 64 B) | inline immediate data into cmd stream | ~10–20 ns |
+| `setVertexBytes:length:atIndex:` (≤ 4 KB) | encoder scratch ring memcpy | ~30–100 ns |
+| `setVertexBuffer` for an argbuf at slot 30 | one buffer bind + per-resource `useResource:` (or one `useHeap:`) | ~50 ns + N × 50 ns |
+
+Per-draw cost (state-stable run, dirty mask gating):
+
+| Path | Per draw |
+|---|---|
+| Stage 1 (no dirty bit set) | ~15 ns (`setVertexBytes` for `DrawVolatile` only) + draw |
+| Stage 1 (one category dirty) | ~25 ns (one `setBufferOffset` + `setVertexBytes`) + draw |
+| Stage 2 / DXMT argbuf (state stable) | ~12 ns (`setVertexBufferOffset` to next region) + draw |
+
+The "extra calls" of Stage 1 are mostly `setBufferOffset`, which is the
+cheapest Metal binding API. `DrawVolatile` via `setVertexBytes` (16 B) hits
+Metal's immediate-data path, which has no buffer indirection at all and is
+typically faster than an argbuf offset rewrite.
+
+Where Stage 2 wins is **the GPU-side command processor**. Each Stage 1 dirty
+slot becomes one binding entry in the AGX command stream; argbuf collapses
+those into one indirect pointer load. On extreme draw rates (≥ 10k draws/
+frame), the command processor can saturate, and Stage 2 measurably helps.
+D3D9 workloads rarely reach that range, which is why Stage 1 is the floor
+and Stage 2 is opt-in.
+
+Implication: the Stage 1 → Stage 2 upgrade is a **GPU-side win on heavy
+frames**, not a CPU API call-count win. Profile against
+`encoder.commandProcessorBoundHint` / `encoderCpuNs` rather than
+`encoderApiCallCount` when judging Stage 2 adoption.

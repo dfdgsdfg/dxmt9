@@ -707,6 +707,97 @@ emitted. Bloom/probabilistic overlap checks may remain as counters to measure wh
 the old approximation would have done, but they must not decide default pass splits
 because false positives create avoidable render-pass churn.
 
+### 9.1 Exact vs Bloom — Why Exact Is the Default
+
+DXMT uses Bloom filters (`PartitionedBloomFilter64<16>` × {buf,tex} × {r,w})
+for hazard tracking. dxmt9 uses exact handle sets. This is a deliberate
+divergence with a measurable cost/benefit balance, written down here so a
+future reader does not relitigate it without the underlying numbers.
+
+```mermaid
+flowchart LR
+    subgraph BLOOM["Pure Bloom (DXMT)"]
+        BCheck["O(1) hash check"]
+        BFP["false positives → unnecessary splits"]
+        BFP -->|"on TBDR"| BFlush["each spurious split = tile flush\n~10–200μs"]
+        BCheck -->|"~k hash ops"| BFast["per-check cost: low"]
+    end
+    subgraph EXACT["Pure exact (dxmt9 default)"]
+        ECheck["O(n) set membership"]
+        EZero["zero false positives"]
+        EZero -->|"on TBDR"| ENoFlush["no spurious tile flushes"]
+        ECheck -->|"n = 5–20 typical"| EFast["per-check cost: 5–50ns ≈ negligible"]
+    end
+    subgraph HYBRID["Bloom-pre-filter + exact (option, allowed by R-BACK-2.28)"]
+        HBloom["Bloom 'definitely no'\n→ skip exact"]
+        HExact["Bloom 'maybe' → exact"]
+        HBloom --> HFast["common case: O(1)"]
+        HExact --> HCorrect["uncommon case: exact ground truth"]
+    end
+```
+
+| Axis | Pure Bloom | Pure exact (current) | Hybrid (Bloom→exact) |
+|---|---|---|---|
+| Per-check CPU | O(k) hash ops | O(n), n ≈ 5–20 typical → 5–50ns | O(k) common, O(n) rare |
+| Memory per encoder | ~32 B fixed | grows with handle count | ~32 B + handle set |
+| False-positive splits | yes (workload-dependent) | never | never (Bloom only filters "definitely no") |
+| TBDR cost from FP | 0.05–4 ms/frame typical | 0 | 0 |
+| Debuggability | "split happened, unknown reason" | "split caused by handle X" | "split caused by handle X" |
+| Determinism | hash-function-dependent | yes | yes |
+| Counter signal value | split count is noisy | split count = clean regression signal | split count = clean regression signal |
+
+The decision rests on three observations:
+
+1. **n is small in D3D9 workloads.** Encoders typically accumulate 5–20
+   resource handles. O(n) membership at that scale is 5–50ns per check —
+   negligible compared to the 10–200μs cost of one spurious tile flush
+   on Apple Silicon TBDR. The CPU "saving" Bloom offers is small and the
+   GPU cost it can introduce is not.
+
+2. **"Encoder split count" is a regression signal.** §7 of `archicture/design.md`
+   declares it. Bloom false positives turn that signal into noise. The whole
+   architecture leans on clean signals to detect drift; weakening this one
+   propagates uncertainty into benchmark interpretation.
+
+3. **Debugging.** When an encoder splits, the question "why" must be
+   answerable from the recorded state. Exact sets answer it; Bloom does not.
+
+### 9.2 Bloom as Diagnostic and Optional Pre-Filter
+
+`R-BACK-2.28` allows Bloom in two roles:
+
+- **Diagnostic counter** (always permitted): maintain a Bloom in parallel
+  with the exact set; record `bloomFalsePositiveCount` whenever the Bloom
+  signaled "maybe" but the exact check found no overlap. This produces
+  empirical FP-rate data without affecting split decisions.
+- **Pre-filter** (permitted, not currently implemented): a "definitely no"
+  Bloom result short-circuits the exact membership lookup. A "maybe" result
+  falls through to exact. Splits are still decided by exact; Bloom never
+  forces one. This preserves the current contract while collapsing the
+  common-case CPU cost to O(1).
+
+The pre-filter is a benchmark-driven addition. It is not in the current
+implementation because the exact membership cost has not been shown to be
+hot. If profiling on a real workload puts membership lookups in the top
+encode-thread costs, the pre-filter becomes the next step. Until then it is
+implementation complexity (two synchronized data structures, bimodal
+latency) without a measured win.
+
+### 9.3 What We Lose by Not Going Pure Bloom
+
+For completeness, the costs we accept by sticking with exact:
+
+- Encoder memory grows with handle count rather than staying bounded at
+  ~32 B. For typical D3D9 encoders this is a few hundred bytes, not pages.
+- The membership lookup is O(n) rather than O(k). At n ≤ 20 this is below
+  measurement noise on the encode thread; at hypothetical n ≥ 200 it would
+  start to matter, and the §9.2 pre-filter becomes the response.
+
+These costs are accepted because the corresponding wins (zero FP, clean
+regression signal, debuggability, determinism) are visible in everyday
+operation, while the costs are bounded by the small-n regime D3D9 actually
+exhibits.
+
 ---
 
 ## 10. Fixed-Function Lighting Constants Layout
