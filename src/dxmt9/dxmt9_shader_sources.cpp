@@ -102,36 +102,8 @@ std::string makeShaderPrelude(bool withClipDistances) {
   using namespace dxmt9::core;
   std::ostringstream out;
   out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct DrawUniforms {\n";
-  out << "  float4 vsFloatConst[" << kMaxVertexConstants << "];\n";
-  out << "  int4 vsIntConst[" << kMaxIntegerConstants << "];\n";
-  out << "  uint vsBoolConst[" << kMaxBoolConstants << "];\n";
-  out << "  float4 ffpWorldViewProj[4];\n";
-  out << "  float4 ffpTextureTransforms[" << kMaxTextureStages << "][4];\n";
-  out << "  float4 psFloatConst[" << kMaxPixelConstants << "];\n";
-  out << "  int4 psIntConst[" << kMaxIntegerConstants << "];\n";
-  out << "  uint psBoolConst[" << kMaxBoolConstants << "];\n";
-  out << "  float4 clipPlanes[6];\n";
-  out << "  float2 halfPixelFixup;\n";
-  out << "  float2 viewportOrigin;\n";
-  out << "  float2 viewportSize;\n";
-  out << "  float4 textureFactor;\n";
-  out << "  float alphaRef;\n";
-  out << "  float fogStart;\n";
-  out << "  float fogEnd;\n";
-  out << "  float fogDensity;\n";
-  out << "  uint vertexStreamOffset;\n";
-  out << "  uint vertexStreamStride;\n";
-  out << "  int vertexBaseIndex;\n";
-  out << "  uint clipPlaneMask;\n";
-  out << "  uint alphaTestEnable;\n";
-  out << "  uint alphaTestFunc;\n";
-  out << "  uint fogMode;\n";
-  out << "};\n";
-  // New per-category uniform structs. Layouts are routed by stage and update
-  // cadence: see specs/backend/draw-uniforms. The legacy DrawUniforms struct
-  // above stays defined while the encoder still binds it; the translated draw
-  // shaders below reference these category structs instead.
+  // Per-category uniform structs. Layouts are routed by stage and update
+  // cadence: see specs/backend/draw-uniforms.
   out << "struct VsConsts {\n";
   out << "  float4 vsFloatConst[" << kMaxVertexConstants << "];\n";
   out << "  int4 vsIntConst[" << kMaxIntegerConstants << "];\n";

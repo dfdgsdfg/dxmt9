@@ -47,7 +47,7 @@ void checkNear(float left, float right, float epsilon, std::string_view message)
   }
 }
 
-void testBuildDrawUniformsCopiesShaderConstants() {
+void testBuildPerStageConstsCopiesShaderConstants() {
   DrawDesc desc{};
   desc.vsConst.float4[3] = {1.0f, 2.0f, 3.0f, 4.0f};
   desc.vsConst.int4[2] = {-1, 0, 1, 2};
@@ -64,24 +64,25 @@ void testBuildDrawUniformsCopiesShaderConstants() {
   const auto hot = makeFlatDrawStateRecord(desc);
   const auto shaderLayout = makeDrawShaderLayoutContext(desc);
   const auto uniformPayload = makeDrawUniformPayload(desc);
-  const auto uniforms =
-      dxmt9::state::buildDrawUniforms(
-          FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout, .uniforms = &uniformPayload});
+  const FlatDrawStateView view{
+      .hot = &hot, .shaderLayout = &shaderLayout, .uniforms = &uniformPayload};
+  const auto vsConsts = dxmt9::state::buildVsConsts(view);
+  const auto psConsts = dxmt9::state::buildPsConsts(view);
 
-  checkEq(uniforms.vsFloatConst[3], desc.vsConst.float4[3], "VS float constants copied");
-  checkEq(uniforms.vsIntConst[2], desc.vsConst.int4[2], "VS integer constants copied");
-  checkEq(uniforms.psFloatConst[7], desc.psConst.float4[7], "PS float constants copied");
-  checkEq(uniforms.psIntConst[5], desc.psConst.int4[5], "PS integer constants copied");
+  checkEq(vsConsts.vsFloatConst[3], desc.vsConst.float4[3], "VS float constants copied");
+  checkEq(vsConsts.vsIntConst[2], desc.vsConst.int4[2], "VS integer constants copied");
+  checkEq(psConsts.psFloatConst[7], desc.psConst.float4[7], "PS float constants copied");
+  checkEq(psConsts.psIntConst[5], desc.psConst.int4[5], "PS integer constants copied");
 
-  checkEq(uniforms.vsBoolConst[0], 1u, "VS true bool constant converted to u32 one");
-  checkEq(uniforms.vsBoolConst[1], 0u, "VS false bool constant converted to u32 zero");
-  checkEq(uniforms.vsBoolConst[15], 1u, "VS high bool constant converted to u32 one");
-  checkEq(uniforms.psBoolConst[0], 0u, "PS false bool constant converted to u32 zero");
-  checkEq(uniforms.psBoolConst[4], 1u, "PS true bool constant converted to u32 one");
-  checkEq(uniforms.psBoolConst[15], 0u, "PS high bool constant converted to u32 zero");
+  checkEq(vsConsts.vsBoolConst[0], 1u, "VS true bool constant converted to u32 one");
+  checkEq(vsConsts.vsBoolConst[1], 0u, "VS false bool constant converted to u32 zero");
+  checkEq(vsConsts.vsBoolConst[15], 1u, "VS high bool constant converted to u32 one");
+  checkEq(psConsts.psBoolConst[0], 0u, "PS false bool constant converted to u32 zero");
+  checkEq(psConsts.psBoolConst[4], 1u, "PS true bool constant converted to u32 one");
+  checkEq(psConsts.psBoolConst[15], 0u, "PS high bool constant converted to u32 zero");
 }
 
-void testBuildDrawUniformsViewportAndRenderStateValues() {
+void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   DrawDesc desc{};
   desc.viewport.viewport = Viewport{12, 34, 320, 240, 0.25f, 0.75f};
   desc.vertexDecl.streams[0].offset = 64;
@@ -99,31 +100,34 @@ void testBuildDrawUniformsViewportAndRenderStateValues() {
   const auto hot = makeFlatDrawStateRecord(desc);
   const auto shaderLayout = makeDrawShaderLayoutContext(desc);
   const auto uniformPayload = makeDrawUniformPayload(desc);
-  const auto uniforms =
-      dxmt9::state::buildDrawUniforms(
-          FlatDrawStateView{.hot = &hot, .shaderLayout = &shaderLayout, .uniforms = &uniformPayload});
+  const FlatDrawStateView view{
+      .hot = &hot, .shaderLayout = &shaderLayout, .uniforms = &uniformPayload};
+  const auto ffpVs = dxmt9::state::buildFfpVsConsts(view);
+  const auto ffpPs = dxmt9::state::buildFfpPsConsts(view);
+  const auto volatileConsts = dxmt9::state::buildDrawVolatile(
+      /*vertexBaseIndex=*/0, hot.streamOffsets[0], hot.streamStrides[0]);
 
-  checkNear(uniforms.halfPixelFixup[0], 1.0f / 320.0f, 1.0e-6f, "half-pixel X fixup");
-  checkNear(uniforms.halfPixelFixup[1], 1.0f / 240.0f, 1.0e-6f, "half-pixel Y fixup");
-  checkEq(uniforms.viewportOrigin[0], 12.0f, "viewport origin X copied");
-  checkEq(uniforms.viewportOrigin[1], 34.0f, "viewport origin Y copied");
-  checkEq(uniforms.viewportSize[0], 320.0f, "viewport width copied");
-  checkEq(uniforms.viewportSize[1], 240.0f, "viewport height copied");
+  checkNear(ffpVs.halfPixelFixup[0], 1.0f / 320.0f, 1.0e-6f, "half-pixel X fixup");
+  checkNear(ffpVs.halfPixelFixup[1], 1.0f / 240.0f, 1.0e-6f, "half-pixel Y fixup");
+  checkEq(ffpVs.viewportOrigin[0], 12.0f, "viewport origin X copied");
+  checkEq(ffpVs.viewportOrigin[1], 34.0f, "viewport origin Y copied");
+  checkEq(ffpVs.viewportSize[0], 320.0f, "viewport width copied");
+  checkEq(ffpVs.viewportSize[1], 240.0f, "viewport height copied");
 
-  checkNear(uniforms.textureFactor[0], 0x40 / 255.0f, 1.0e-6f, "texture factor red extracted");
-  checkNear(uniforms.textureFactor[1], 0x20 / 255.0f, 1.0e-6f, "texture factor green extracted");
-  checkNear(uniforms.textureFactor[2], 0x10 / 255.0f, 1.0e-6f, "texture factor blue extracted");
-  checkNear(uniforms.textureFactor[3], 0x80 / 255.0f, 1.0e-6f, "texture factor alpha extracted");
-  checkNear(uniforms.alphaRef, 128.0f / 255.0f, 1.0e-6f, "alpha ref normalized");
-  checkEq(uniforms.alphaTestEnable, 1u, "alpha test enable reflected");
-  checkEq(uniforms.alphaTestFunc, static_cast<u32>(CompareFunc::GreaterEqual), "alpha test func reflected");
-  checkEq(uniforms.fogMode, static_cast<u32>(FogMode::Exp2), "fog mode reflected");
-  checkEq(uniforms.fogStart, 2.5f, "fog start bit-cast from render state");
-  checkEq(uniforms.fogEnd, 9.75f, "fog end bit-cast from render state");
-  checkEq(uniforms.fogDensity, 0.125f, "fog density bit-cast from render state");
-  checkEq(uniforms.vertexStreamOffset, 64u, "stream zero offset copied");
-  checkEq(uniforms.vertexStreamStride, 28u, "stream zero stride copied");
-  checkEq(uniforms.clipPlaneMask, 0x15u, "clip plane mask copied");
+  checkNear(ffpPs.textureFactor[0], 0x40 / 255.0f, 1.0e-6f, "texture factor red extracted");
+  checkNear(ffpPs.textureFactor[1], 0x20 / 255.0f, 1.0e-6f, "texture factor green extracted");
+  checkNear(ffpPs.textureFactor[2], 0x10 / 255.0f, 1.0e-6f, "texture factor blue extracted");
+  checkNear(ffpPs.textureFactor[3], 0x80 / 255.0f, 1.0e-6f, "texture factor alpha extracted");
+  checkNear(ffpPs.alphaRef, 128.0f / 255.0f, 1.0e-6f, "alpha ref normalized");
+  checkEq(ffpPs.alphaTestEnable, 1u, "alpha test enable reflected");
+  checkEq(ffpPs.alphaTestFunc, static_cast<u32>(CompareFunc::GreaterEqual), "alpha test func reflected");
+  checkEq(ffpPs.fogMode, static_cast<u32>(FogMode::Exp2), "fog mode reflected");
+  checkEq(ffpPs.fogStart, 2.5f, "fog start bit-cast from render state");
+  checkEq(ffpPs.fogEnd, 9.75f, "fog end bit-cast from render state");
+  checkEq(ffpPs.fogDensity, 0.125f, "fog density bit-cast from render state");
+  checkEq(volatileConsts.vertexStreamOffset, 64u, "stream zero offset copied");
+  checkEq(volatileConsts.vertexStreamStride, 28u, "stream zero stride copied");
+  checkEq(ffpVs.clipPlaneMask, 0x15u, "clip plane mask copied");
 }
 
 void testDepthStencilKeyReflectsDepthAndStencilState() {
@@ -295,8 +299,8 @@ void testSamplerInfoBorderColorFallbacks() {
 
 int main() {
   try {
-    testBuildDrawUniformsCopiesShaderConstants();
-    testBuildDrawUniformsViewportAndRenderStateValues();
+    testBuildPerStageConstsCopiesShaderConstants();
+    testBuildFfpAndVolatileViewportAndRenderStateValues();
     testDepthStencilKeyReflectsDepthAndStencilState();
     testDepthStencilKeyDefaultsAndCcwFallback();
     testSamplerInfoDefaultsAreDeterministic();

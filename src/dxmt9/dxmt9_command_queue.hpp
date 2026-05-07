@@ -191,13 +191,9 @@ class CommandQueue {
   // writable pointer the caller fills in directly. Lifetime tracking
   // is identical to uploadTransientBuffer/uploadTransientBufferBatch:
   // the slab is retained against `seqId` and reclaimed on the finish
-  // path once the chunk's command buffer completes. Used by the
-  // Kind::DrawRun handler to batch N per-draw DrawUniforms writes into
-  // a single allocation: each draw's `DrawUniforms` is composed
-  // directly at `contents + i * stride` and bound at
-  // `slice.buffer, slice.offset + i * stride`. Returns a reservation
-  // with `contents == nullptr` on failure (caller falls back to
-  // per-draw uploadTransientBuffer).
+  // path once the chunk's command buffer completes. Returns a
+  // reservation with `contents == nullptr` on failure (caller falls
+  // back to per-draw uploadTransientBuffer).
   struct TransientBufferReservation {
     TransientBufferSlice slice{};
     std::byte* contents = nullptr;
@@ -214,8 +210,8 @@ class CommandQueue {
   WMT::Device device() const noexcept { return device_; }
 
   // Access the queue-owned per-frame scratch allocators. Exposed for
-  // encoders::encodeChunk which places DrawUniforms on the argument
-  // bump ring.
+  // encoders::encodeChunk which places per-draw bindings on the
+  // argument bump ring.
   scratch::FrameAllocators& allocators() noexcept { return allocators_; }
 
   // Queue-owned resource registries. DeviceImpl forwards its public
