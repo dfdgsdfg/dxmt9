@@ -438,6 +438,114 @@ std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBuf
   return result;
 }
 
+CommandQueue::TransientBufferReservation CommandQueue::reserveTransientBuffer(
+    std::size_t size,
+    std::size_t alignment,
+    std::uint64_t seqId) {
+  TransientBufferReservation reservation{};
+  if (!device_ || size == 0) {
+    return reservation;
+  }
+  const auto uploadStarted = std::chrono::steady_clock::now();
+  const auto recordUploadTime = [&] {
+    const auto elapsed = std::chrono::steady_clock::now() - uploadStarted;
+    perf::countTransientUploadCpuTime(
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
+        size);
+  };
+
+  std::uint64_t completedSeqId = 0;
+  {
+    std::lock_guard lock(mutex_);
+    completedSeqId = completedSeqId_;
+  }
+
+  std::lock_guard lock(transientBufferMutex_);
+  reclaimTransientBuffersUnlocked(completedSeqId);
+
+  alignment = std::max<std::size_t>(alignment, 1);
+  const std::size_t alignedSize = alignUp(size, alignment);
+
+  auto reserveDedicated = [&]() -> TransientBufferReservation {
+    WMTBufferInfo info{};
+    info.length = size;
+    info.options = WMTResourceStorageModeShared;
+    auto buffer = device_.newBuffer(info);
+    if (!buffer || !info.memory.ptr) {
+      recordUploadTime();
+      return {};
+    }
+    perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+    retainedTransientBuffers_.push_back(RetainedTransientBuffer{
+        .buffer = std::move(buffer),
+        .seqId = seqId,
+    });
+    TransientBufferReservation r{};
+    r.slice = TransientBufferSlice{
+        .buffer = WMT::Buffer{retainedTransientBuffers_.back().buffer.handle},
+        .offset = 0,
+        .size = size,
+    };
+    r.contents = static_cast<std::byte*>(info.memory.ptr);
+    recordUploadTime();
+    return r;
+  };
+
+  if (forceDedicatedTransientUploads()) {
+    return reserveDedicated();
+  }
+  if (!ensureTransientBufferUnlocked(alignedSize)) {
+    return reserveDedicated();
+  }
+
+  auto canPlace = [&](std::size_t offset) {
+    if (offset + alignedSize > transientBufferCapacity_) {
+      return false;
+    }
+    for (const auto& a : transientBufferAllocations_) {
+      const std::size_t begin = a.offset;
+      const std::size_t end = a.offset + a.size;
+      const std::size_t newBegin = offset;
+      const std::size_t newEnd = offset + alignedSize;
+      if (!(newEnd <= begin || newBegin >= end)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  std::size_t offset = alignUp(transientBufferCursor_, alignment);
+  if (!canPlace(offset)) {
+    offset = 0;
+    if (!canPlace(offset)) {
+      if (!rotateTransientBufferUnlocked(alignedSize, seqId)) {
+        return reserveDedicated();
+      }
+      offset = alignUp(transientBufferCursor_, alignment);
+      if (!canPlace(offset)) {
+        return reserveDedicated();
+      }
+    }
+  }
+
+  transientBufferAllocations_.push_back(TransientBufferAllocation{
+      .offset = offset,
+      .size = alignedSize,
+      .seqId = seqId,
+  });
+  transientBufferCursor_ = offset + alignedSize;
+
+  reservation.slice = TransientBufferSlice{
+      .buffer = WMT::Buffer{transientBuffer_.handle},
+      .offset = offset,
+      .size = size,
+  };
+  reservation.contents = transientBufferContents_ + offset;
+  recordUploadTime();
+  return reservation;
+}
+
 void CommandQueue::startThreads(std::function<void()> encodeLoop,
                                  std::function<void()> finishLoop,
                                  std::function<void()> completionLoop) {

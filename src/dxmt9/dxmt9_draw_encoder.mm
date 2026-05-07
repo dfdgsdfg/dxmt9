@@ -905,13 +905,25 @@ bool encodeDraw(EncodeContext& ctx,
     encoder.setRenderPipelineState(pipeline);
     countPipelineBind();
   }
-  DrawUniforms* uniforms = nullptr;
+  // Per-draw DrawUniforms storage. When the DrawRun handler reserves a
+  // chunk-wide slab via reserveTransientBuffer, write directly into the
+  // slab (skip both the argbuf scratch and the per-draw memcpy through
+  // uploadTransientBuffer). When no slab is provided (single-draw
+  // commands, or slab reservation failed), fall back to the original
+  // argbuf-scratch + per-draw uploadTransientBuffer path.
+  const bool haveUniformSlab =
+      preUploaded && preUploaded->uniformsContents && preUploaded->uniforms;
   DrawUniforms fallbackUniforms{};
+  DrawUniforms* uniforms = nullptr;
   {
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
-    uniforms = ctx.allocators.argbuf.allocate<DrawUniforms>(seqId);
-    if (!uniforms) {
-      uniforms = &fallbackUniforms;
+    if (haveUniformSlab) {
+      uniforms = reinterpret_cast<DrawUniforms*>(preUploaded->uniformsContents);
+    } else {
+      uniforms = ctx.allocators.argbuf.allocate<DrawUniforms>(seqId);
+      if (!uniforms) {
+        uniforms = &fallbackUniforms;
+      }
     }
     *uniforms = buildDrawUniforms(drawState);
   }
@@ -921,7 +933,12 @@ bool encodeDraw(EncodeContext& ctx,
         alignment, seqId);
   };
   auto uploadUniforms = [&] {
-    auto slice = uploadTransientBuffer(uniforms, sizeof(DrawUniforms), alignof(DrawUniforms));
+    CommandQueue::TransientBufferSlice slice;
+    if (haveUniformSlab) {
+      slice = preUploaded->uniforms;
+    } else {
+      slice = uploadTransientBuffer(uniforms, sizeof(DrawUniforms), alignof(DrawUniforms));
+    }
     if (!slice) {
       return false;
     }
@@ -1992,6 +2009,24 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           }
         }
 
+        // Coalesce per-draw DrawUniforms uploads: reserve a single
+        // chunk-wide transient slab sized for `drawCount` DrawUniforms
+        // structs, hand each draw a writable slice + base pointer so
+        // encodeDraw composes the uniforms struct directly into the
+        // slab. Replaces N per-draw uploadTransientBuffer calls (one
+        // mutex acquire + completedSeqId snapshot + reclaim each) with
+        // ONE reservation. The slab lives until slot.seqId completes,
+        // identical lifetime to the existing per-draw allocations.
+        const std::size_t uniformAlignment =
+            std::max<std::size_t>(alignof(DrawUniforms), 16);
+        const std::size_t uniformStride =
+            (sizeof(DrawUniforms) + uniformAlignment - 1) & ~(uniformAlignment - 1);
+        CommandQueue::TransientBufferReservation uniformSlab{};
+        if (drawCount > 0) {
+          uniformSlab = ctx.queue.reserveTransientBuffer(
+              uniformStride * drawCount, uniformAlignment, slot.seqId);
+        }
+
         // encodeDraw receives the per-draw fields through DrawParam while
         // all base state is read from the canonical hot/shader view.
         bool baseBound =
@@ -2003,9 +2038,19 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             preData.vertex = upSlices[i * 2u];
             preData.index = upSlices[i * 2u + 1u];
           }
+          if (uniformSlab) {
+            const std::size_t drawOffset = i * uniformStride;
+            preData.uniforms = CommandQueue::TransientBufferSlice{
+                .buffer = uniformSlab.slice.buffer,
+                .offset = uniformSlab.slice.offset + drawOffset,
+                .size = sizeof(DrawUniforms),
+            };
+            preData.uniformsContents = uniformSlab.contents + drawOffset;
+          }
+          const bool hasPreData = anyUpData || uniformSlab;
           if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, stateView, slot.seqId,
                          /*skipBaseStateBind=*/baseBound,
-                         anyUpData ? &preData : nullptr,
+                         hasPreData ? &preData : nullptr,
                          &param,
                          recordPayloadArena)) {
             baseBound = true;

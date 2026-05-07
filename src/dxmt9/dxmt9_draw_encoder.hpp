@@ -75,9 +75,19 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
 // resolved slices in via this struct so encodeDraw skips its own
 // per-draw makeTransientBuffer calls. Empty slices fall through to
 // the existing per-draw upload.
+//
+// `uniforms` carries the per-draw DrawUniforms slot inside a chunk-
+// wide reserved slab built by CommandQueue::reserveTransientBuffer.
+// `uniformsContents` points to writable memory inside the slab so
+// encodeDraw composes the DrawUniforms struct directly into the
+// upload buffer (no extra memcpy through the argbuf scratch ring).
+// When `uniformsContents` is non-null, encodeDraw uses the slab; when
+// null, it falls back to the per-draw uploadTransientBuffer path.
 struct PreUploadedDrawData {
   CommandQueue::TransientBufferSlice vertex{};
   CommandQueue::TransientBufferSlice index{};
+  CommandQueue::TransientBufferSlice uniforms{};
+  std::byte* uniformsContents = nullptr;
 };
 
 // Main per-draw encoder. Previously MetalBackendDevice::encodeDraw.
