@@ -1127,6 +1127,11 @@ extern "C" void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder,
       [enc setFragmentBytes:(const void *)b->bytes.ptr length:(NSUInteger)b->length atIndex:b->index];
       break;
     }
+    case WMTRenderCommandSetVertexBytes: {
+      const struct wmtcmd_render_setbytes *b = (const struct wmtcmd_render_setbytes *)next;
+      [enc setVertexBytes:(const void *)b->bytes.ptr length:(NSUInteger)b->length atIndex:b->index];
+      break;
+    }
     case WMTRenderCommandSetFragmentTexture: {
       const struct wmtcmd_render_settexture *b = (const struct wmtcmd_render_settexture *)next;
       [enc setFragmentTexture:(id<MTLTexture>)b->texture atIndex:b->index];

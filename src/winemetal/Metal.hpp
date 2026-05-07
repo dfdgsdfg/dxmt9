@@ -493,6 +493,17 @@ public:
   }
 
   void
+  setVertexBytes(const void *buf, uint64_t length, uint8_t index) {
+    struct wmtcmd_render_setbytes cmd;
+    cmd.type = WMTRenderCommandSetVertexBytes;
+    cmd.next.set(nullptr);
+    cmd.bytes.set((void *)buf);
+    cmd.length = length;
+    cmd.index = index;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
   setViewport(WMTViewport viewport) {
     struct wmtcmd_render_setviewports cmd;
     cmd.type = WMTRenderCommandSetViewports;
