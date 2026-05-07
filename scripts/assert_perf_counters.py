@@ -56,6 +56,15 @@ def main() -> int:
         "draw_geometry_nonzero_stream0_offset": "1",
         "draw_geometry_last_stream0_stride": "32",
         "draw_geometry_last_decl_hash": "0x1234",
+        "uniform_vs_consts_calls": "0",
+        "uniform_vs_consts_bytes": "0",
+        "uniform_ps_consts_calls": "0",
+        "uniform_ps_consts_bytes": "0",
+        "uniform_ffp_vs_calls": "0",
+        "uniform_ffp_vs_bytes": "0",
+        "uniform_ffp_ps_calls": "0",
+        "uniform_ffp_ps_bytes": "0",
+        "uniform_volatile_pushes": "0",
     }
     for key, value in expected.items():
         actual = counters.get(key)
