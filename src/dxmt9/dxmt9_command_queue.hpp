@@ -26,6 +26,7 @@
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_archive.hpp"
+#include "dxmt9_uniform_dirty.hpp"
 
 #include <array>
 #include <cstddef>
@@ -355,9 +356,44 @@ class CommandQueue {
   std::deque<TransientBufferAllocation> transientBufferAllocations_{};
   std::deque<RetainedTransientBuffer> retainedTransientBuffers_{};
 
+  // C1 chunk-record-import dirty accumulator. The d3d9 chunk-record
+  // dispatcher (device_c_device_state_draw.cpp commit_chunk) calls
+  // applyDirty* below as it processes records; makeEncodeContext()
+  // snapshots and resets this field into the freshly-built
+  // EncodeContext::dirty so C2 (encoder consumption) reads exactly the
+  // bits accumulated since the last encode call. Guarded by
+  // dirtyMutex_ — the chunk dispatcher and the encode worker can
+  // race during steady-state operation.
+  std::mutex dirtyMutex_{};
+  uniform::DirtyState pendingDirty_{};
+
  public:
   // Limits accessor — value member, not a borrowed pointer.
   const core::BackendLimits& limits() const noexcept { return limits_; }
+
+  // C1 dirty-marking surface — used by the chunk-record import path in
+  // device_c_device_state_draw.cpp. Each method ORs the matching bit
+  // and bumps the high-water counter (for the constant-set variants).
+  // Mutex-guarded so the importer thread can call these concurrently
+  // with the encode worker draining pendingDirty_ via makeEncodeContext.
+  void applyDirtyConstantSetVsF(std::uint32_t startReg, std::uint32_t count);
+  void applyDirtyConstantSetVsI(std::uint32_t startReg, std::uint32_t count);
+  void applyDirtyConstantSetVsB(std::uint32_t startReg, std::uint32_t count);
+  void applyDirtyConstantSetPsF(std::uint32_t startReg, std::uint32_t count);
+  void applyDirtyConstantSetPsI(std::uint32_t startReg, std::uint32_t count);
+  void applyDirtyConstantSetPsB(std::uint32_t startReg, std::uint32_t count);
+  void applyDirtyTransformChange();
+  void applyDirtyClipPlaneChange();
+  void applyDirtyViewportChange();
+  void applyDirtyRenderStateFog();
+  void applyDirtyRenderStateAlpha();
+  void applyDirtyRenderStateTexFactor();
+
+  // Snapshot + reset pendingDirty_. Called by makeEncodeContext (and
+  // tests) to atomically move the accumulated dirty state into a new
+  // encoder. Public so the d2 unit tests can drive end-to-end coverage
+  // without reaching into private state.
+  uniform::DirtyState consumePendingDirty();
 };
 
 }  // namespace dxmt9

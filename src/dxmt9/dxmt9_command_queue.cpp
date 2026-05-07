@@ -123,11 +123,85 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
 }
 
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
+  // Snapshot + reset the chunk-import dirty accumulator. The dirty
+  // bits and high-water counters move to the freshly-built
+  // EncodeContext; the queue's pendingDirty_ resets to all-clean so the
+  // next chunk's records start fresh. C2 still calls markAllDirty(...)
+  // at encoder init per R-BACK-12.12 to fold in the implicit
+  // "everything could have changed since last encode" semantic.
   return encoders::EncodeContext{
       device_, limits_, pool_, pipelineCache_, allocators_,
       &shaderArchive_.reference(), &shaderArchive_.path(),
       *this,
+      consumePendingDirty(),
   };
+}
+
+uniform::DirtyState CommandQueue::consumePendingDirty() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::DirtyState snapshot = pendingDirty_;
+  pendingDirty_ = uniform::DirtyState{};
+  return snapshot;
+}
+
+void CommandQueue::applyDirtyConstantSetVsF(std::uint32_t startReg, std::uint32_t count) {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyConstantSetVsF(pendingDirty_, startReg, count);
+}
+
+void CommandQueue::applyDirtyConstantSetVsI(std::uint32_t startReg, std::uint32_t count) {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyConstantSetVsI(pendingDirty_, startReg, count);
+}
+
+void CommandQueue::applyDirtyConstantSetVsB(std::uint32_t startReg, std::uint32_t count) {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyConstantSetVsB(pendingDirty_, startReg, count);
+}
+
+void CommandQueue::applyDirtyConstantSetPsF(std::uint32_t startReg, std::uint32_t count) {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyConstantSetPsF(pendingDirty_, startReg, count);
+}
+
+void CommandQueue::applyDirtyConstantSetPsI(std::uint32_t startReg, std::uint32_t count) {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyConstantSetPsI(pendingDirty_, startReg, count);
+}
+
+void CommandQueue::applyDirtyConstantSetPsB(std::uint32_t startReg, std::uint32_t count) {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyConstantSetPsB(pendingDirty_, startReg, count);
+}
+
+void CommandQueue::applyDirtyTransformChange() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyTransformChange(pendingDirty_);
+}
+
+void CommandQueue::applyDirtyClipPlaneChange() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyClipPlaneChange(pendingDirty_);
+}
+
+void CommandQueue::applyDirtyViewportChange() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyViewportChange(pendingDirty_);
+}
+
+void CommandQueue::applyDirtyRenderStateFog() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyRenderStateFog(pendingDirty_);
+}
+
+void CommandQueue::applyDirtyRenderStateAlpha() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyRenderStateAlpha(pendingDirty_);
+}
+
+void CommandQueue::applyDirtyRenderStateTexFactor() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyRenderStateTexFactor(pendingDirty_);
 }
 
 CommandQueue::~CommandQueue() {
