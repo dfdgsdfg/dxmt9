@@ -203,27 +203,31 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
         shader << "  out.texcoord" << stage << " = dxmt9_texcoord" << stage << ";\n";
       } else {
         shader << "  out.texcoord" << stage << " = float4(dxmt9_apply_texture_transform(dxmt9_texcoord" << stage
-               << ", uniforms, " << stage << "u, " << key.texTransformFlags[stage]
+               << ", ffpVs, " << stage << "u, " << key.texTransformFlags[stage]
                << "u), dxmt9_texcoord" << stage << ".zw);\n";
       }
     }
   };
   out << shaders::makeShaderPrelude(key.clipPlaneMask != 0);
   if (layout && layout->preTransformed) {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
-           "device const uchar* stream0 [[buffer(1)]]) {\n";
+    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], "
+           "constant VsConsts& vsConsts [[buffer(0)]], "
+           "device const uchar* stream0 [[buffer(1)]], "
+           "constant FfpVsConsts& ffpVs [[buffer(3)]], "
+           "constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    out << "  (void)vsConsts;\n";
     out << "  VSOut out;\n";
-    out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
+    out << "  const uint stride = drawVolatile.vertexStreamStride != 0u ? drawVolatile.vertexStreamStride : "
         << layout->stride << "u;\n";
-    out << "  const int vertexIndex = max(0, int(vid) + uniforms.vertexBaseIndex);\n";
-    out << "  const uint base = uniforms.vertexStreamOffset + uint(vertexIndex) * stride;\n";
+    out << "  const int vertexIndex = max(0, int(vid) + drawVolatile.vertexBaseIndex);\n";
+    out << "  const uint base = drawVolatile.vertexStreamOffset + uint(vertexIndex) * stride;\n";
     out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
     out << "  float clipW = fabs(inPosition.w) > 1.0e-8f ? (1.0f / inPosition.w) : 1.0f;\n";
-    out << "  float2 viewportSize = max(uniforms.viewportSize, float2(1.0f));\n";
-    out << "  float2 ndc = float2(((inPosition.x - uniforms.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
-    out << "                     1.0f - ((inPosition.y - uniforms.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
+    out << "  float2 viewportSize = max(ffpVs.viewportSize, float2(1.0f));\n";
+    out << "  float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
+    out << "                     1.0f - ((inPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
     out << "  out.position = float4(ndc * clipW, inPosition.z * clipW, clipW);\n";
-    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
+    out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (layout->hasDiffuse) {
       out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
     } else {
@@ -234,13 +238,17 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.fogFactor = 1.0;\n";
     out << "  out.pointSize = 1.0;\n";
   } else if (layout) {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
-           "device const uchar* stream0 [[buffer(1)]]) {\n";
+    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], "
+           "constant VsConsts& vsConsts [[buffer(0)]], "
+           "device const uchar* stream0 [[buffer(1)]], "
+           "constant FfpVsConsts& ffpVs [[buffer(3)]], "
+           "constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    out << "  (void)vsConsts;\n";
     out << "  VSOut out;\n";
-    out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
+    out << "  const uint stride = drawVolatile.vertexStreamStride != 0u ? drawVolatile.vertexStreamStride : "
         << layout->stride << "u;\n";
-    out << "  const int vertexIndex = max(0, int(vid) + uniforms.vertexBaseIndex);\n";
-    out << "  const uint base = uniforms.vertexStreamOffset + uint(vertexIndex) * stride;\n";
+    out << "  const int vertexIndex = max(0, int(vid) + drawVolatile.vertexBaseIndex);\n";
+    out << "  const uint base = drawVolatile.vertexStreamOffset + uint(vertexIndex) * stride;\n";
     if (layout->positionComponents == 4) {
       out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
     } else {
@@ -248,28 +256,28 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
           << "u), 1.0f);\n";
     }
     out << "  float4 clip;\n";
-    out << "  bool identityWvp = all(uniforms.ffpWorldViewProj[0] == float4(1.0, 0.0, 0.0, 0.0)) &&\n";
-    out << "                     all(uniforms.ffpWorldViewProj[1] == float4(0.0, 1.0, 0.0, 0.0)) &&\n";
-    out << "                     all(uniforms.ffpWorldViewProj[2] == float4(0.0, 0.0, 1.0, 0.0)) &&\n";
-    out << "                     all(uniforms.ffpWorldViewProj[3] == float4(0.0, 0.0, 0.0, 1.0));\n";
+    out << "  bool identityWvp = all(ffpVs.ffpWorldViewProj[0] == float4(1.0, 0.0, 0.0, 0.0)) &&\n";
+    out << "                     all(ffpVs.ffpWorldViewProj[1] == float4(0.0, 1.0, 0.0, 0.0)) &&\n";
+    out << "                     all(ffpVs.ffpWorldViewProj[2] == float4(0.0, 0.0, 1.0, 0.0)) &&\n";
+    out << "                     all(ffpVs.ffpWorldViewProj[3] == float4(0.0, 0.0, 0.0, 1.0));\n";
     out << "  bool pixelSpacePosition = identityWvp && (fabs(inPosition.x) > 2.0f || fabs(inPosition.y) > 2.0f);\n";
     out << "  if (pixelSpacePosition) {\n";
-    out << "    float2 viewportSize = max(uniforms.viewportSize, float2(1.0f));\n";
-    out << "    float2 ndc = float2(((inPosition.x - uniforms.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
-    out << "                       1.0f - ((inPosition.y - uniforms.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
+    out << "    float2 viewportSize = max(ffpVs.viewportSize, float2(1.0f));\n";
+    out << "    float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
+    out << "                       1.0f - ((inPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
     out << "    clip = float4(ndc, inPosition.z, 1.0f);\n";
     out << "  } else {\n";
-    out << "    clip.x = dot(float4(uniforms.ffpWorldViewProj[0].x, uniforms.ffpWorldViewProj[1].x,\n";
-    out << "                           uniforms.ffpWorldViewProj[2].x, uniforms.ffpWorldViewProj[3].x), inPosition);\n";
-    out << "    clip.y = dot(float4(uniforms.ffpWorldViewProj[0].y, uniforms.ffpWorldViewProj[1].y,\n";
-    out << "                           uniforms.ffpWorldViewProj[2].y, uniforms.ffpWorldViewProj[3].y), inPosition);\n";
-    out << "    clip.z = dot(float4(uniforms.ffpWorldViewProj[0].z, uniforms.ffpWorldViewProj[1].z,\n";
-    out << "                           uniforms.ffpWorldViewProj[2].z, uniforms.ffpWorldViewProj[3].z), inPosition);\n";
-    out << "    clip.w = dot(float4(uniforms.ffpWorldViewProj[0].w, uniforms.ffpWorldViewProj[1].w,\n";
-    out << "                           uniforms.ffpWorldViewProj[2].w, uniforms.ffpWorldViewProj[3].w), inPosition);\n";
+    out << "    clip.x = dot(float4(ffpVs.ffpWorldViewProj[0].x, ffpVs.ffpWorldViewProj[1].x,\n";
+    out << "                           ffpVs.ffpWorldViewProj[2].x, ffpVs.ffpWorldViewProj[3].x), inPosition);\n";
+    out << "    clip.y = dot(float4(ffpVs.ffpWorldViewProj[0].y, ffpVs.ffpWorldViewProj[1].y,\n";
+    out << "                           ffpVs.ffpWorldViewProj[2].y, ffpVs.ffpWorldViewProj[3].y), inPosition);\n";
+    out << "    clip.z = dot(float4(ffpVs.ffpWorldViewProj[0].z, ffpVs.ffpWorldViewProj[1].z,\n";
+    out << "                           ffpVs.ffpWorldViewProj[2].z, ffpVs.ffpWorldViewProj[3].z), inPosition);\n";
+    out << "    clip.w = dot(float4(ffpVs.ffpWorldViewProj[0].w, ffpVs.ffpWorldViewProj[1].w,\n";
+    out << "                           ffpVs.ffpWorldViewProj[2].w, ffpVs.ffpWorldViewProj[3].w), inPosition);\n";
     out << "  }\n";
     out << "  out.position = clip;\n";
-    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
+    out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (layout->hasDiffuse) {
       out << "  out.color = dxmt9_load_d3dcolor(stream0, base + " << layout->diffuseOffset << "u);\n";
     } else {
@@ -280,11 +288,15 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.fogFactor = 1.0;\n";
     out << "  out.pointSize = 1.0;\n";
   } else {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
+    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], "
+           "constant VsConsts& vsConsts [[buffer(0)]], "
+           "constant FfpVsConsts& ffpVs [[buffer(3)]], "
+           "constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    out << "  (void)vsConsts; (void)drawVolatile;\n";
     out << "  VSOut out;\n";
     out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
     out << "  out.position = float4(p[vid % 3], 0.0, 1.0);\n";
-    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
+    out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     out << "  out.color = float4(1.0);\n";
     out << "  out.secondaryColor = float4(0.0);\n";
     out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
@@ -299,8 +311,8 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
   out << "  }\n";
   if (key.clipPlaneMask != 0 || context.clipPlaneMask != 0) {
     out << "  for (uint i = 0; i < 6; ++i) {\n";
-    out << "    if ((uniforms.clipPlaneMask & (1u << i)) != 0u) {\n";
-      out << "      out.clipDistance[i] = dot(uniforms.clipPlanes[i], out.position);\n";
+    out << "    if ((ffpVs.clipPlaneMask & (1u << i)) != 0u) {\n";
+      out << "      out.clipDistance[i] = dot(ffpVs.clipPlanes[i], out.position);\n";
     out << "    }\n";
     out << "  }\n";
   }
@@ -338,7 +350,9 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   }();
   out << shaders::makeShaderPrelude(context.clipPlaneMask != 0);
   if (textured) {
-    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
+    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+           "constant PsConsts& psConsts [[buffer(0)]], "
+           "constant FfpPsConsts& ffpPs [[buffer(3)]], ";
     for (size_t i = 0; i < activeStages.size(); ++i) {
       const size_t stage = activeStages[i];
       if (i != 0) {
@@ -348,14 +362,18 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
           << " [[sampler(" << stage << ")]]";
     }
     out << ") {\n";
+    out << "  (void)psConsts;\n";
   } else {
-    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
+    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+           "constant PsConsts& psConsts [[buffer(0)]], "
+           "constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+    out << "  (void)psConsts;\n";
   }
   out << "  float4 color = in.color;\n";
   out << "  float4 current = color;\n";
   out << "  float4 diffuse = in.color;\n";
   out << "  float4 specular = in.secondaryColor;\n";
-  out << "  float4 tfactor = uniforms.textureFactor;\n";
+  out << "  float4 tfactor = ffpPs.textureFactor;\n";
   out << "  float4 temp = float4(0.0);\n";
   if (textured) {
     if (debugFfpUv) {
@@ -420,13 +438,13 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   }
   if (key.alphaTestEnable) {
     out << "  bool pass = true;\n";
-    out << "  switch (uniforms.alphaTestFunc) {\n";
-    out << "    case 2u: pass = color.a < uniforms.alphaRef; break;\n";
-    out << "    case 3u: pass = color.a == uniforms.alphaRef; break;\n";
-    out << "    case 4u: pass = color.a <= uniforms.alphaRef; break;\n";
-    out << "    case 5u: pass = color.a > uniforms.alphaRef; break;\n";
-    out << "    case 6u: pass = color.a != uniforms.alphaRef; break;\n";
-    out << "    case 7u: pass = color.a >= uniforms.alphaRef; break;\n";
+    out << "  switch (ffpPs.alphaTestFunc) {\n";
+    out << "    case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
+    out << "    case 3u: pass = color.a == ffpPs.alphaRef; break;\n";
+    out << "    case 4u: pass = color.a <= ffpPs.alphaRef; break;\n";
+    out << "    case 5u: pass = color.a > ffpPs.alphaRef; break;\n";
+    out << "    case 6u: pass = color.a != ffpPs.alphaRef; break;\n";
+    out << "    case 7u: pass = color.a >= ffpPs.alphaRef; break;\n";
     out << "    case 8u: pass = true; break;\n";
     out << "    default: pass = true; break;\n";
     out << "  }\n";
