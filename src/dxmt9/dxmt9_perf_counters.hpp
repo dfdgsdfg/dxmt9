@@ -79,6 +79,11 @@ void countSubmitDrawCpuTime(std::uint64_t nanoseconds);
 void countEncodeChunkCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawCpuTime(std::uint64_t nanoseconds);
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes);
+void countUniformVsConsts(std::size_t bytes);
+void countUniformPsConsts(std::size_t bytes);
+void countUniformFfpVs(std::size_t bytes);
+void countUniformFfpPs(std::size_t bytes);
+void countUniformVolatilePush();
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);
 void countCompletionWait(std::uint64_t nanoseconds,

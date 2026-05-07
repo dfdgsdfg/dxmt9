@@ -105,6 +105,15 @@ struct Counters {
   std::atomic<std::uint64_t> transientUploadBytes{0};
   std::atomic<std::uint64_t> transientUploadCpuNs{0};
   std::atomic<std::uint64_t> transientUploadCpuMaxNs{0};
+  std::atomic<std::uint64_t> uniformVsConstsCalls{0};
+  std::atomic<std::uint64_t> uniformVsConstsBytes{0};
+  std::atomic<std::uint64_t> uniformPsConstsCalls{0};
+  std::atomic<std::uint64_t> uniformPsConstsBytes{0};
+  std::atomic<std::uint64_t> uniformFfpVsCalls{0};
+  std::atomic<std::uint64_t> uniformFfpVsBytes{0};
+  std::atomic<std::uint64_t> uniformFfpPsCalls{0};
+  std::atomic<std::uint64_t> uniformFfpPsBytes{0};
+  std::atomic<std::uint64_t> uniformVolatilePushes{0};
   std::atomic<std::uint64_t> commandBufferCreateCpuNs{0};
   std::atomic<std::uint64_t> commandBufferCreateCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuNs{0};
@@ -355,6 +364,11 @@ void report() {
       "encode_draw_cpu_ms=%.3f encode_draw_cpu_max_ms=%.3f "
       "transient_upload_calls=%llu transient_upload_bytes=%llu "
       "transient_upload_cpu_ms=%.3f transient_upload_cpu_max_ms=%.3f "
+      "uniform_vs_consts_calls=%llu uniform_vs_consts_bytes=%llu "
+      "uniform_ps_consts_calls=%llu uniform_ps_consts_bytes=%llu "
+      "uniform_ffp_vs_calls=%llu uniform_ffp_vs_bytes=%llu "
+      "uniform_ffp_ps_calls=%llu uniform_ffp_ps_bytes=%llu "
+      "uniform_volatile_pushes=%llu "
       "command_buffer_create_cpu_ms=%.3f command_buffer_create_cpu_max_ms=%.3f "
       "command_buffer_commit_cpu_ms=%.3f command_buffer_commit_cpu_max_ms=%.3f "
       "completion_waits=%llu completion_wait_ms=%.3f completion_wait_max_ms=%.3f "
@@ -490,6 +504,15 @@ void report() {
       static_cast<unsigned long long>(load(c.transientUploadBytes)),
       static_cast<double>(load(c.transientUploadCpuNs)) / 1000000.0,
       static_cast<double>(load(c.transientUploadCpuMaxNs)) / 1000000.0,
+      static_cast<unsigned long long>(load(c.uniformVsConstsCalls)),
+      static_cast<unsigned long long>(load(c.uniformVsConstsBytes)),
+      static_cast<unsigned long long>(load(c.uniformPsConstsCalls)),
+      static_cast<unsigned long long>(load(c.uniformPsConstsBytes)),
+      static_cast<unsigned long long>(load(c.uniformFfpVsCalls)),
+      static_cast<unsigned long long>(load(c.uniformFfpVsBytes)),
+      static_cast<unsigned long long>(load(c.uniformFfpPsCalls)),
+      static_cast<unsigned long long>(load(c.uniformFfpPsBytes)),
+      static_cast<unsigned long long>(load(c.uniformVolatilePushes)),
       static_cast<double>(load(c.commandBufferCreateCpuNs)) / 1000000.0,
       static_cast<double>(load(c.commandBufferCreateCpuMaxNs)) / 1000000.0,
       static_cast<double>(load(c.commandBufferCommitCpuNs)) / 1000000.0,
@@ -837,6 +860,30 @@ void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes) {
   add(counters().transientUploadBytes, static_cast<std::uint64_t>(bytes));
   add(counters().transientUploadCpuNs, nanoseconds);
   updateMax(counters().transientUploadCpuMaxNs, nanoseconds);
+}
+
+void countUniformVsConsts(std::size_t bytes) {
+  add(counters().uniformVsConstsCalls);
+  add(counters().uniformVsConstsBytes, static_cast<std::uint64_t>(bytes));
+}
+
+void countUniformPsConsts(std::size_t bytes) {
+  add(counters().uniformPsConstsCalls);
+  add(counters().uniformPsConstsBytes, static_cast<std::uint64_t>(bytes));
+}
+
+void countUniformFfpVs(std::size_t bytes) {
+  add(counters().uniformFfpVsCalls);
+  add(counters().uniformFfpVsBytes, static_cast<std::uint64_t>(bytes));
+}
+
+void countUniformFfpPs(std::size_t bytes) {
+  add(counters().uniformFfpPsCalls);
+  add(counters().uniformFfpPsBytes, static_cast<std::uint64_t>(bytes));
+}
+
+void countUniformVolatilePush() {
+  add(counters().uniformVolatilePushes);
 }
 
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds) {
