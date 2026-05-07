@@ -387,6 +387,15 @@ historical 9 KB `DrawUniforms` slab into per-stage and per-frequency UBOs
 `DrawVolatile` push, gated by a backend-owned dirty bitmask derived during
 chunk-record import.
 
+Render-pass `MTLLoadAction` / `MTLStoreAction` selection (TBDR tile
+preservation policy) is specified in
+[`render-pass-actions/design.md`](render-pass-actions/design.md). The encoder
+maintains a per-CommandQueue "touched" attachment-handle set so first-use
+color attachments DontCare-load, and runs an in-chunk look-ahead at
+`flushRender` time to DontCare-store depth/stencil and color attachments
+that are about to be cleared or overwritten. `R-BACK-2.6` is amended in
+that spec to allow conditional `MTLStoreActionDontCare` on RT change.
+
 ---
 
 ## 4. Argument Buffer Binding

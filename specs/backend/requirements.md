@@ -56,7 +56,13 @@ to a mid-scene fill-rect clear.
 
 **R-BACK-2.6** A render target change (`SetRenderTarget`) during a scene must
 terminate the current `MTLRenderCommandEncoder` and begin a new one. The previous
-render target's store action must be `MTLStoreActionStore`.
+render target's store action defaults to `MTLStoreActionStore` and may be relaxed
+to `MTLStoreActionDontCare` only when the live-out proofs in
+`R-BACK-15.7` / `R-BACK-15.8` apply, the safety invariants in
+`specs/backend/render-pass-actions/requirements.md` section 5 are satisfied, and
+the application contract for the resource (lock, present source, MSAA resolve)
+does not require preservation. The encoder-split clause is unchanged: a render
+target change always terminates the current encoder and begins a new one.
 
 **R-BACK-2.7** The default Wine runtime path must submit work to the backend as
 committed command chunks. Per-draw or per-state backend entry points may exist for
