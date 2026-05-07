@@ -108,6 +108,98 @@ DrawUniforms buildDrawUniforms(core::FlatDrawStateView state) {
   return uniforms;
 }
 
+VsConsts buildVsConsts(core::FlatDrawStateView state) {
+  DXMT_ASSERT(state.hasUniformPayload());
+  const auto& vsConst = state.uniformPayload().vsConst;
+  VsConsts out;
+  out.vsFloatConst = vsConst.float4;
+  out.vsIntConst = vsConst.int4;
+  for (std::size_t i = 0; i < core::kMaxBoolConstants; ++i) {
+    out.vsBoolConst[i] = vsConst.bools[i] ? 1u : 0u;
+  }
+  return out;
+}
+
+PsConsts buildPsConsts(core::FlatDrawStateView state) {
+  DXMT_ASSERT(state.hasUniformPayload());
+  const auto& psConst = state.uniformPayload().psConst;
+  PsConsts out;
+  out.psFloatConst = psConst.float4;
+  out.psIntConst = psConst.int4;
+  for (std::size_t i = 0; i < core::kMaxBoolConstants; ++i) {
+    out.psBoolConst[i] = psConst.bools[i] ? 1u : 0u;
+  }
+  return out;
+}
+
+FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
+  const auto& hot = *state.hot;
+  DXMT_ASSERT(state.hasUniformPayload());
+  const auto& payload = state.uniformPayload();
+  FfpVsConsts out;
+  for (std::size_t row = 0; row < 4; ++row) {
+    for (std::size_t col = 0; col < 4; ++col) {
+      out.ffpWorldViewProj[row][col] = payload.worldViewProj.m[row * 4 + col];
+    }
+  }
+  for (std::size_t stage = 0; stage < core::kMaxTextureStages; ++stage) {
+    for (std::size_t row = 0; row < 4; ++row) {
+      for (std::size_t col = 0; col < 4; ++col) {
+        out.ffpTextureTransforms[stage][row][col] =
+            payload.textureTransforms[stage].m[row * 4 + col];
+      }
+    }
+  }
+  for (std::size_t i = 0; i < core::kMaxClipPlanes; ++i) {
+    out.clipPlanes[i] = payload.clipPlanes[i];
+  }
+  out.halfPixelFixup = core::halfPixelFixup(hot.viewport.viewport);
+  out.viewportOrigin = {static_cast<f32>(hot.viewport.viewport.x),
+                        static_cast<f32>(hot.viewport.viewport.y)};
+  out.viewportSize = {static_cast<f32>(std::max(1u, hot.viewport.viewport.width)),
+                      static_cast<f32>(std::max(1u, hot.viewport.viewport.height))};
+  out.clipPlaneMask = hot.clipPlaneMask;
+  return out;
+}
+
+FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
+  const auto& rs = state.hot->renderStates;
+  FfpPsConsts out;
+  if (const auto* textureFactor = core::findFlatState(rs, RS_TEXTURE_FACTOR)) {
+    const u32 raw = textureFactor->value;
+    out.textureFactor = {
+        static_cast<f32>((raw >> 16) & 0xffu) / 255.0f,
+        static_cast<f32>((raw >> 8) & 0xffu) / 255.0f,
+        static_cast<f32>(raw & 0xffu) / 255.0f,
+        static_cast<f32>((raw >> 24) & 0xffu) / 255.0f,
+    };
+  }
+  out.alphaTestEnable = !debug::disableAlphaTest() &&
+                        core::flatStateOr(rs, RS_ALPHA_TEST_ENABLE, 0u) != 0;
+  out.alphaTestFunc =
+      core::flatStateOr(rs, RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always));
+  out.fogMode =
+      core::flatStateOr(rs, RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::None));
+  out.alphaRef =
+      static_cast<f32>(core::flatStateOr(rs, RS_ALPHA_REF, 0u)) / 255.0f;
+  out.fogStart =
+      std::bit_cast<f32>(core::flatStateOr(rs, RS_FOG_START, std::bit_cast<u32>(1.0f)));
+  out.fogEnd =
+      std::bit_cast<f32>(core::flatStateOr(rs, RS_FOG_END, std::bit_cast<u32>(1.0f)));
+  out.fogDensity =
+      std::bit_cast<f32>(core::flatStateOr(rs, RS_FOG_DENSITY, std::bit_cast<u32>(1.0f)));
+  return out;
+}
+
+DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
+                               u32 vertexStreamStride) {
+  DrawVolatile out;
+  out.vertexBaseIndex = vertexBaseIndex;
+  out.vertexStreamOffset = vertexStreamOffset;
+  out.vertexStreamStride = vertexStreamStride;
+  return out;
+}
+
 pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
   const auto& rs = state.hot->renderStates;
   pipeline::DepthStencilKey key;
