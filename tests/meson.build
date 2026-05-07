@@ -43,19 +43,52 @@ smoke = executable(
 
 test('dxmt9-smoke', smoke)
 
-core_spec = executable(
-  'dxmt9-core-spec',
-  'native/core/core_spec.cpp',
+core_device_flow_spec = executable(
+  'dxmt9-core-device-flow-spec',
+  'native/core/core_device_flow_spec.cpp',
   include_directories: dxmt9_inc,
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-core-spec', core_spec,
+test('dxmt9-core-device-flow-spec', core_device_flow_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
-test('dxmt9-core-spec-pixel-vflip-contract', core_spec,
+
+core_ffp_state_key_spec = executable(
+  'dxmt9-core-ffp-state-key-spec',
+  'native/core/core_ffp_state_key_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-ffp-state-key-spec', core_ffp_state_key_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
+core_format_caps_spec = executable(
+  'dxmt9-core-format-caps-spec',
+  'native/core/core_format_caps_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-format-caps-spec', core_format_caps_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
+core_shader_translator_spec = executable(
+  'dxmt9-core-shader-translator-spec',
+  'native/core/core_shader_translator_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-shader-translator-spec', core_shader_translator_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+test('dxmt9-core-shader-translator-spec-pixel-vflip-contract', core_shader_translator_spec,
      env: dxmt9_native_test_env_vars + ['DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1', 'DXMT_DEBUG_FORCE_PIXEL_V_FLIP=1'])
-test('dxmt9-core-spec-vertex-yflip-contract', core_spec,
+test('dxmt9-core-shader-translator-spec-vertex-yflip-contract', core_shader_translator_spec,
      env: dxmt9_native_test_env_vars + ['DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1', 'DXMT_DEBUG_FLIP_VERTEX_Y=1'])
 
 state_draw_transform_spec = executable(
