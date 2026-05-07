@@ -4,6 +4,7 @@ dxmt9_frontend_core_srcs = files(
   'core_draw.cpp',
   'core_factory.cpp',
   'core_format.cpp',
+  'core_format_utils.cpp',
   'core_present.cpp',
   'core_resources.cpp',
   'core_state.cpp',
