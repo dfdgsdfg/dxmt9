@@ -341,6 +341,38 @@ Instrumentation interpretation:
 - `process_elapsed_sec` remains much larger than in-app `total_ms`. This confirms the previous concern: process-level FPS is still useful for end-to-end comparison, but not for attributing the renderer hot path.
 - Short offscreen smoke runs below the catalogue `capture_frame=120` do not force readback/flush, so they validate parser wiring but not GPU encode behavior. Full offscreen runs must reach the capture/readback frame or explicitly flush.
 
+### Per-frequency draw-uniform split landed (2026-05-07)
+
+R-BACK-12 (specs/backend/draw-uniforms/) implemented across A1–D2 batched agents:
+
+| Stage | Change | Result |
+|---|---|---|
+| A1 | `setVertexBytes` bridge | wmtcmd dispatch test green |
+| A2 | 5 host structs + MSL prelude | sizeof 4416/3904/700/44/16 |
+| B1 | Shader translator field routing | 3 SEGV-failing corpus tests now green |
+| C1 | Backend `DirtyMask` derivation | importer ORs bits during chunk-record apply |
+| C2 | Encoder per-stage bind + `setVertexBytes` push | per-draw slab traffic 9080 B → 16 B |
+| C3 | `uniform_*` perf counters | 9 new keys |
+| D1 | Layout asserts | 5 sizeof + 25 offsetof + 30 substring asserts |
+| D2 | Dirty unit test | 6 test blocks per `R-BACK-12.8`–`12.12` |
+| Sticky FFP fix | only mark `FfpVsViewport` dirty when value changes | `ffp_vs_bytes` 86 MB → 90 KB |
+
+Measured offscreen-heavy@256 vs prior baseline (post `46b234d` slab coalescing):
+
+| metric | baseline | per-frequency split | Δ |
+|---|---:|---:|---:|
+| `process_fps` (median, 5 warm reps) | 8.92 | 8.74 | within noise |
+| `process_fps` (best) | 9.11 | 8.93 | within noise |
+| `uniform_build_cpu_ms` | 380 | 15.2 | −96% |
+| `transient_upload_bytes` | ~1.1 GB | 1.17 MB | −99.9% |
+| `ffp_vs_bytes` per run | n/a | 90 KB | sticky |
+| `uniform_volatile_pushes` | n/a | 122,880 | matches drawCount |
+| `mean_luma` / `variance` | 64.864 / 2147.166 | 64.864 / 2147.166 | pixel-identical |
+
+The shared-memory write wall (~3 GB/s effective) identified earlier is removed
+for state-stable runs. The fps gap to vanilla Wine D3D9 is now bounded by
+encode-thread CPU work and present pacing, not uniform-write bandwidth.
+
 ### encodeDraw sub-counter split + per-chunk DrawUniforms slab (2026-05-07)
 
 Two follow-up changes landed against `dxmt9-perf-offscreen-heavy` with `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256`:
