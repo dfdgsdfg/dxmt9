@@ -13,6 +13,7 @@
 // nested type by value, requiring the complete definition.
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_queue.hpp"
+#include "dxmt9_uniform_dirty.hpp"
 #include "dxmt9/core.hpp"
 
 #include <array>
@@ -44,6 +45,11 @@ struct EncodeContext {
   WMT::Reference<WMT::BinaryArchive>* shaderArchive;
   const std::string* shaderArchivePath;
   CommandQueue& queue;
+  // Per-encoder draw-uniforms dirty state (R-BACK-12.8..12.12). Default
+  // construction = all clean; C2 (encoder consumption) calls
+  // markAllDirty(dirty) at encoder init and clears bits as it issues
+  // sub-allocations / binds. C1 sets the bits as records arrive.
+  uniform::DirtyState dirty{};
 };
 
 // Sampler factory helpers used by the draw encoder. Previously

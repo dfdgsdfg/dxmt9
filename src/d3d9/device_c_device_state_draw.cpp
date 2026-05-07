@@ -16,6 +16,66 @@ using namespace dxmt9::d3d9::devicec;
 
 namespace {
 
+// C1 helper: route per-record dirty marking through the dxmt9
+// CommandQueue's pendingDirty_ accumulator. Returns nullptr on test /
+// stub paths where no upperDevice exists; callers no-op in that case.
+dxmt9::CommandQueue* findDirtyQueue(D9CDevice* d) {
+  if (!d) return nullptr;
+  auto upper = d->dev().upperDevice();
+  if (!upper) return nullptr;
+  return &upper->queue();
+}
+
+// C1 helper: D3D9 render-state IDs that affect each FFP PS uniform
+// sub-block. Centralized so commit_chunk's APPLY_STATE handler and
+// the per-call SetRenderState dispatcher (if it ever wires direct
+// dirty-marking) stay in sync.
+bool isFogRenderState(uint32_t state) {
+  return state == dxmt9::core::RS_FOG_ENABLE ||
+         state == dxmt9::core::RS_FOG_COLOR ||
+         state == dxmt9::core::RS_FOG_TABLE_MODE ||
+         state == dxmt9::core::RS_FOG_START ||
+         state == dxmt9::core::RS_FOG_END ||
+         state == dxmt9::core::RS_FOG_DENSITY ||
+         state == dxmt9::core::RS_FOG_FROM_VERTEX;
+}
+
+bool isAlphaRenderState(uint32_t state) {
+  return state == dxmt9::core::RS_ALPHA_TEST_ENABLE ||
+         state == dxmt9::core::RS_ALPHA_FUNC ||
+         state == dxmt9::core::RS_ALPHA_REF;
+}
+
+// C1 helper: scan a draw-packet state delta and OR matching dirty bits
+// onto the queue's pendingDirty_. Used by APPLY_STATE record
+// dispatch AND by every DRAW_* record (which folds a state delta in
+// front of its draw call via applyDrawPacketState). Safe to call when
+// q is nullptr (no-op for stub / test paths).
+void markDirtyFromDrawPacketState(dxmt9::CommandQueue* q,
+                                  const D9CDrawPrimitivePacket& packet) {
+  if (!q) return;
+  for (uint32_t i = 0; i < packet.renderStateCount; ++i) {
+    const auto& entry = packet.renderStates[i];
+    if (isFogRenderState(entry.state)) q->applyDirtyRenderStateFog();
+    if (isAlphaRenderState(entry.state)) q->applyDirtyRenderStateAlpha();
+    if (entry.state == dxmt9::core::RS_TEXTURE_FACTOR) {
+      q->applyDirtyRenderStateTexFactor();
+    }
+  }
+  if (packet.transformCount > 0) q->applyDirtyTransformChange();
+  // Light slot/enable + material deltas share the FFP VS uniform
+  // block with transforms (design.md §10 — lights[8] sits next to
+  // worldViewMatrix); folded into the transforms-bit so the FFP VS
+  // uniform block re-uploads.
+  if (packet.lightSlotMask != 0 ||
+      packet.lightEnableValidMask != 0 ||
+      packet.materialValid) {
+    q->applyDirtyTransformChange();
+  }
+  if (packet.clipPlaneMask != 0) q->applyDirtyClipPlaneChange();
+  if (packet.viewportValid) q->applyDirtyViewportChange();
+}
+
 uint64_t wireHandleValue(const D9CWireHandle& handle) {
   return static_cast<uint64_t>(handle.lo) | (static_cast<uint64_t>(handle.hi) << 32);
 }
@@ -1079,6 +1139,10 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
       D9CCommandRecordDrawPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      // C1: every DRAW_* packet folds a state delta in front of its
+      // draw via applyDrawPacketState; mark the matching dirty bits so
+      // C2 sees the same categories the canonical state changed.
+      markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet);
       // Try to coalesce into a draw run: scan ahead for consecutive
       // DRAW_PRIMITIVE records that also have empty state deltas, append
       // scanned DrawParam records into a flat span, then submit once (single
@@ -1119,6 +1183,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
       D9CCommandRecordDrawIndexedPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
       // Same coalescing as DRAW_PRIMITIVE — separate run per indexed
       // flag because DrawParam encodes that as a static field used by
       // the encoder to dispatch drawIndexed vs draw.
@@ -1154,12 +1219,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
       D9CCommandRecordDrawPrimitiveUP decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
       hr = applyDrawPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
     }
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
       D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
       hr = applyDrawIndexedPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
     }
@@ -1245,6 +1312,10 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       // Apply the state delta only; draw fields in the packet
       // (primitiveType / primitiveCount / startVertex) are unused.
       hr = applyDrawPacketState(d, as.packet);
+      // C1 dirty tracking: APPLY_STATE bundles RS / transform / clip /
+      // viewport / light / material deltas. False-dirty is safe per
+      // task spec; the alternative (missing-dirty) is a correctness bug.
+      markDirtyFromDrawPacketState(findDirtyQueue(d), as.packet);
       break;
     }
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
@@ -1256,36 +1327,43 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       D9CCommandRecordSetConst hdr{};
       std::memcpy(&hdr, record, sizeof(hdr));
       const auto* payload = record + sizeof(hdr);
+      auto* q = findDirtyQueue(d);
       switch (header.type) {
       case D9C_COMMAND_RECORD_SET_VS_CONST_F:
         hr = dxmt9c_device_set_vs_const_f(d, hdr.start,
                                           reinterpret_cast<const float*>(payload),
                                           hdr.count);
+        if (q) q->applyDirtyConstantSetVsF(hdr.start, hdr.count);
         break;
       case D9C_COMMAND_RECORD_SET_PS_CONST_F:
         hr = dxmt9c_device_set_ps_const_f(d, hdr.start,
                                           reinterpret_cast<const float*>(payload),
                                           hdr.count);
+        if (q) q->applyDirtyConstantSetPsF(hdr.start, hdr.count);
         break;
       case D9C_COMMAND_RECORD_SET_VS_CONST_I:
         hr = dxmt9c_device_set_vs_const_i(d, hdr.start,
                                           reinterpret_cast<const int32_t*>(payload),
                                           hdr.count);
+        if (q) q->applyDirtyConstantSetVsI(hdr.start, hdr.count);
         break;
       case D9C_COMMAND_RECORD_SET_PS_CONST_I:
         hr = dxmt9c_device_set_ps_const_i(d, hdr.start,
                                           reinterpret_cast<const int32_t*>(payload),
                                           hdr.count);
+        if (q) q->applyDirtyConstantSetPsI(hdr.start, hdr.count);
         break;
       case D9C_COMMAND_RECORD_SET_VS_CONST_B:
         hr = dxmt9c_device_set_vs_const_b(d, hdr.start,
                                           reinterpret_cast<const uint32_t*>(payload),
                                           hdr.count);
+        if (q) q->applyDirtyConstantSetVsB(hdr.start, hdr.count);
         break;
       case D9C_COMMAND_RECORD_SET_PS_CONST_B:
         hr = dxmt9c_device_set_ps_const_b(d, hdr.start,
                                           reinterpret_cast<const uint32_t*>(payload),
                                           hdr.count);
+        if (q) q->applyDirtyConstantSetPsB(hdr.start, hdr.count);
         break;
       }
       break;
