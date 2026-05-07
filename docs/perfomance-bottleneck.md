@@ -341,6 +341,53 @@ Instrumentation interpretation:
 - `process_elapsed_sec` remains much larger than in-app `total_ms`. This confirms the previous concern: process-level FPS is still useful for end-to-end comparison, but not for attributing the renderer hot path.
 - Short offscreen smoke runs below the catalogue `capture_frame=120` do not force readback/flush, so they validate parser wiring but not GPU encode behavior. Full offscreen runs must reach the capture/readback frame or explicitly flush.
 
+### encodeDraw sub-counter split + per-chunk DrawUniforms slab (2026-05-07)
+
+Two follow-up changes landed against `dxmt9-perf-offscreen-heavy` with `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=256`:
+
+- `744883d` splits `encode_draw_cpu_ms` into five sub-buckets — `pipeline_lookup`, `uniform_build`, `fvf_decode`, `stream_bind`, `issue` — so the dominant phase inside `encodeDraw()` is now visible per-run.
+- `46b234d` reserves one chunk-wide transient slab (`CommandQueue::reserveTransientBuffer`) sized for `drawCount * sizeof(DrawUniforms)` and lets `encodeDraw()` write the per-draw `DrawUniforms` directly into the slab. Replaces N per-draw `uploadTransientBuffer` calls with one reservation, matching the existing slab lifetime path.
+
+| metric | doc baseline (offscreen-heavy@256) | after slab coalescing | delta |
+|---|---:|---:|---:|
+| `process_fps` | 6.43 | 8.92 | +39% |
+| `draw_loop_ms` | 8431.0 | 2941.6 | −65% |
+| `transient_upload_calls` | 122,880 | 2,281 | −53.9× |
+| `transient_upload_cpu_ms` | 2968.5 | 6.8 | −99.8% |
+| `command_buffers` | 483 | 12 | unchanged from default-512 case |
+| `mean_luma` / `variance` | n/a | 64.864 / 2147.166 | byte-identical to pre-change |
+
+After the slab landed, the new sub-counters identify the next dominant phase inside `encodeDraw()`:
+
+| sub-phase | cpu ms | share |
+|---|---:|---:|
+| `uniform_build` | 360.7 | 67.5% |
+| `stream_bind` | 33.2 | 6.2% |
+| `issue` | 30.8 | 5.8% |
+| `fvf_decode` | 16.2 | 3.0% |
+| `pipeline_lookup` | 4.7 | 0.9% |
+
+`DrawUniforms` is ~9 KB (vsFloatConst 4096 B + psFloatConst 3584 B + matrices/clip/etc. ~1400 B). At 122,880 draws that is 1.1 GB written per run, matching the observed `transient_upload_bytes`. Within a `Kind::DrawRun` handler iteration, `stateView` is invariant across all per-draw iterations, so `buildDrawUniforms(stateView)` produces an identical 9 KB struct for every draw; only ~24 B of post-build mutations (`vertexStreamOffset`, `vertexStreamStride`, `vertexBaseIndex`, plus FF-preTransformed viewport) actually vary per draw.
+
+#### Build-Once-Per-Run experiment (rejected)
+
+Hoisting `buildDrawUniforms(stateView)` out of `encodeDraw()` and memcpy-ing the cached struct per draw was tested. Three repeated runs each, same workload:
+
+| variant | fps mean | fps range | `uniform_build_cpu_ms` mean |
+|---|---:|---:|---:|
+| baseline (slab coalescing only) | 8.92 | [8.76, 9.11] | 380 |
+| Build-Once-Per-Run | 8.46 | [8.29, 8.57] | 322 |
+
+The change saves ~58 ms (15%) of `uniform_build` cost but regresses end-to-end FPS by ~5%. Slab writes still dominate: 9 KB × 122,880 draws to `MTLStorageModeShared` memory at the observed ~3 GB/s effective rate is ~310 ms, which matches the post-change `uniform_build_cpu_ms` of 322 ms. The build compute inside `buildDrawUniforms()` is therefore a smaller fraction than initially estimated, and the extra indirection through `preUploaded->runUniforms` adds a hot-loop penalty larger than the saved compute. Change is rejected.
+
+#### Wall identified: shared-memory write bandwidth
+
+The remaining `uniform_build_cpu_ms` is dominated by writes into the chunk-wide slab, not by the build compute. Reducing the per-draw write volume therefore needs the slab payload itself to shrink, not the build computation. This rules out compute-side caching as a default and points the next round at:
+
+- **Stable/Volatile uniform split** — bind the ~9056 B run-stable payload (`vs/psFloatConst`, transforms, clip planes, fog/alpha/textureFactor) once when state changes and reserve a small ~24 B per-draw slab for the volatile fields. Requires shader-side support for two uniform buffers; under investigation.
+- **Run-coalesced slab slot** — when consecutive draws within a run produce identical final `DrawUniforms` (including the post-build patches), bind the same slab offset for all of them and skip the per-draw memcpy. Workload-dependent; safe shader-no-op fallback.
+- **Output-cache by `payload.hash`** — extend the existing `DrawUniformPayload` interning to cache the built `DrawUniforms` struct keyed by `payload.hash` plus the small hot-state fields used. Helpful when adjacent runs share state.
+
 ### Experiment Suitability
 
 ```mermaid
@@ -387,7 +434,7 @@ Implemented measurement changes:
 Remaining measurement changes:
 
 1. Report warmup-discarded steady-state FPS, median frame time, p95, and max, not only process elapsed FPS.
-2. Add fixed-function lowering sub-counters inside `encodeDraw()` to split pipeline lookup, uniform build, FVF decode, stream binding, and actual draw encoding.
+2. ~~Add fixed-function lowering sub-counters inside `encodeDraw()` to split pipeline lookup, uniform build, FVF decode, stream binding, and actual draw encoding.~~ Done in `744883d`; see "encodeDraw sub-counter split" above.
 3. Add workload variants: clear-only no-present, single draw with many primitives, many draws with identical state, many draws with forced state changes, texture sampling, render-to-texture then present, and backbuffer count 1/2/3.
 4. Keep current probes as regression/triage tests, but do not use them alone to decide default performance policy.
 

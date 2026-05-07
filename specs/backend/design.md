@@ -380,6 +380,13 @@ Surface operation replay details are specified in
 POD records and emits blit, render-pass, resolve, and readback actions; surface
 operation data does not cross the bridge as closures or lambdas.
 
+Per-frequency draw-uniform layout details are specified in
+[`draw-uniforms/design.md`](draw-uniforms/design.md). The encoder splits the
+historical 9 KB `DrawUniforms` slab into per-stage and per-frequency UBOs
+(`VsConsts`, `PsConsts`, `FfpVsConsts`, `FfpPsConsts`) plus an inline 16 B
+`DrawVolatile` push, gated by a backend-owned dirty bitmask derived during
+chunk-record import.
+
 ---
 
 ## 4. Argument Buffer Binding

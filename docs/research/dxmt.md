@@ -410,6 +410,124 @@ sequenceDiagram
 
 ---
 
+## Uniform Binding and Per-Frequency State
+
+Date: 2026-05-07
+
+Scope: how DXMT lays out Metal `[[buffer(N)]]` slots and feeds D3D11 constant buffers / SRVs / draw arguments. Captured to inform dxmt9's DrawUniforms split (see `docs/perfomance-bottleneck.md`). DXMT targets D3D11, so it has no FFP path, but its Metal binding policy is directly applicable.
+
+### Metal Buffer Slot Map
+
+```mermaid
+flowchart LR
+  subgraph Slots["Metal [[buffer(N)]] slots per encoder"]
+    direction TB
+    S16["slot 16\nVertex buffers\n(VS / GS / tess)"]
+    S27["slot 27\nConstant buffer table\n(tess hull)"]
+    S28["slot 28\nConstant buffer table\n(tess domain / mesh)"]
+    S29["slot 29\nConstant buffer table\n(VS / PS / compute)"]
+    S30["slot 30\nResource argbuf\n(samplers + SRVs + UAVs)"]
+  end
+
+  subgraph Argbuf["Per-encoder argument buffer"]
+    direction TB
+    Cb["cb table region\n14 slots × 8 B GPU pointer\nper stage"]
+    Res["resource region\nencoded sampler / SRV / UAV qwords\nat StructurePtrOffset"]
+    Draw["DXMT_DRAW_ARGUMENTS region\n~16 B per draw"]
+  end
+
+  S29 -. setBufferOffset .-> Cb
+  S30 -. setBufferOffset .-> Res
+  Draw -. consumed by draw shader .-> Res
+
+  classDef slot fill:#eaf4ff,stroke:#2f6fad,color:#0b2239
+  classDef region fill:#fff0d6,stroke:#b26b00,color:#2b1900
+  class S16,S27,S28,S29,S30 slot
+  class Cb,Res,Draw region
+```
+
+| Index | Resource | Stages | Notes |
+|---:|---|---|---|
+| 16 | Vertex buffers | vertex / geometry / tess | `dxmt_context.cpp:94-100` |
+| 27 | Constant buffer table | tess hull | `dxmt_context.cpp:173-201` |
+| 28 | Constant buffer table | tess domain / mesh | same |
+| 29 | Constant buffer table | vertex / pixel / compute | same |
+| 30 | Resource argument buffer (samplers + SRVs + UAVs) | per-stage | `dxmt_context.cpp:362-390` |
+
+### Per-Encoder Argument Buffer
+
+DXMT does **not** call `setVertexBuffer`/`setFragmentBuffer` per `b0..b13` individually. It allocates one large argument buffer per render-pass encoder, packs all constant buffers (as 64-bit GPU addresses) and resources (as encoded sampler/texture/buffer descriptors), and binds it once at slot 29 (constants) / 30 (resources) using `setVertexBufferOffset` / `setFragmentBufferOffset` style commands.
+
+Per draw, DXMT updates only the offsets that point into this argument buffer. Per-encoder allocation is via `PreAllocateArgumentBuffer(...)` (`d3d11_context_impl.cpp:3250`); each constant buffer becomes a 64-bit GPU pointer at `argbuf + StructurePtrOffset`.
+
+References:
+- `dxmt_context.cpp:160-164` — encoded GPU pointer write.
+- `dxmt_context.cpp:258-358` — sampler/SRV/UAV → argbuf qword sequence.
+- `dxmt_context.hpp:784` — `slot = 14 * stage + SM50BindingSlot` mapping.
+
+### Per-Draw Arguments
+
+Per-draw fields go into a separate argument-buffer region as a `DXMT_DRAW_ARGUMENTS` / `DXMT_DRAW_INDEXED_ARGUMENTS` struct (`d3d11_context_impl.cpp:564-577`). Fields:
+
+- `StartVertex`, `VertexCount`, `InstanceCount`, `StartInstance`, `BaseVertex`.
+
+Allocated once per draw via `PreAllocateArgumentBuffer(sizeof(DXMT_DRAW_ARGUMENTS), 32)` (`d3d11_context_impl.cpp:1405-1409`). The shader reads from a known offset in the argument buffer; the encoder writes the small struct inline.
+
+DXMT does **not** use `setVertexBytes` / `setFragmentBytes`. All per-draw data flows through the same per-encoder argument buffer with offset updates.
+
+### Dirty Tracking at Cbuffer-Set Granularity
+
+```mermaid
+sequenceDiagram
+  participant App as D3D11 app
+  participant Stage as ShaderStage (per VS/PS/CS)
+  participant Argbuf as Per-encoder argbuf
+  participant Enc as Metal encoder
+
+  App->>Stage: VSSetConstantBuffers(slot, N, buffers)
+  Stage->>Stage: dirty_cbuffer = true
+
+  App->>Stage: PSSetShaderResources(slot, N, srvs)
+  Stage->>Stage: dirty_srv = true
+
+  App->>Stage: Draw(vertexCount, startVertex)
+  Stage->>Argbuf: PreAllocateArgumentBuffer(sizeof(DXMT_DRAW_ARGUMENTS), 32)
+  Note over Argbuf: write StartVertex / VertexCount / BaseVertex inline
+
+  alt dirty_cbuffer
+    Stage->>Argbuf: encode 14 cb slots → GPU pointers (8 B each)
+    Stage->>Enc: setVertexBufferOffset(index=29, offset)
+    Stage->>Stage: ConstantBuffers.clear_dirty()
+  end
+  alt dirty_srv or dirty_sampler
+    Stage->>Argbuf: encode samplers / textures / buffers as qwords
+    Stage->>Enc: setVertexBufferOffset(index=30, offset)
+    Stage->>Stage: clear dirty flags
+  end
+
+  Stage->>Enc: drawPrimitives(...)
+```
+
+Constant buffers / samplers / SRVs are only re-encoded when the corresponding `dirty_cbuffer` / `dirty_sampler` / `dirty_srv` flag is set on the `ShaderStage` (`d3d11_context_impl.cpp:3241-3244`). The flag is set on `*Set*` API calls and cleared after the per-draw encode (`ShaderStage.ConstantBuffers.clear_dirty()`, line 3254). Granularity is per-stage and per-binding-kind (cb / sampler / srv); DXMT does not track sub-cbuffer dirty regions.
+
+### Shader Codegen
+
+The DXBC→AIR translator emits two literal binding indices into Metal shader source (`airconv/dxbc_converter.cpp:1252-1255`):
+
+- `ConstanttBufferTableBindIndex` = 29 if any cbuffer is referenced.
+- `ArgumentBufferBindIndex` = 30 if any sampler/SRV/UAV is referenced.
+
+The encoder side reads these from `MTL_SHADER_REFLECTION` to dispatch the matching `setBufferOffset` calls.
+
+### dxmt9 Adoption Points
+
+- **Adopt per-encoder argument buffer** for per-frequency uniforms, not per-draw allocations. dxmt9 already does this for the DrawUniforms slab via `reserveTransientBuffer`; the same pool can host VS_F / PS_F / FFP_VS / FFP_PS sub-allocations once they are split.
+- **Move per-draw values to a tiny inline struct.** DXMT's `DXMT_DRAW_ARGUMENTS` (16 B) at a known argbuf offset is the equivalent of a Metal "draw arguments" push. `setVertexBytes` (Metal inline data path) is the simpler shape on the dxmt9 side because dxmt9 has no SM5+ argbuf reflector pipeline yet.
+- **Dirty-flag at cbuffer / category granularity.** DXMT's `dirty_cbuffer` flag per stage is the same shape as Wine's `constant_update_mask` bits and DXVK's per-stage `dirty` bool. dxmt9's PE shadow already centralizes the `Set*` calls; adding 8 dirty bits and gating uploads is a small step.
+- **Defer argument-buffer adoption.** Going to a packed argbuf in slot 30 is a larger refactor than the per-frequency UBO split. Capture as a follow-up after Stable/Volatile is in place.
+
+---
+
 ## Sources
 
 - Official repository: https://github.com/3Shain/dxmt
