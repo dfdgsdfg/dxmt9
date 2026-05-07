@@ -2084,10 +2084,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
         // encodeDraw receives the per-draw fields through DrawParam while
         // all base state is read from the canonical hot/shader view.
-        // The legacy chunk-wide DrawUniforms slab is gone — uniform
-        // payload is now split per-frequency and bound on dirty inside
-        // encodeDraw (R-BACK-12.5/12.8). DrawVolatile is pushed via
-        // setVertexBytes per draw; no slab traffic.
+        // Per-frequency UBOs (VsConsts/PsConsts/FfpVsConsts/FfpPsConsts)
+        // bind only on dirty (R-BACK-12.5/12.8); DrawVolatile is pushed
+        // via setVertexBytes per draw with no slab traffic.
         bool baseBound =
             activeDrawStateKey.has_value() && *activeDrawStateKey == hot.key;
         for (std::size_t i = 0; i < drawCount; ++i) {
