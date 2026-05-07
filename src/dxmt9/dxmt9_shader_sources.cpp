@@ -128,6 +128,10 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  uint alphaTestFunc;\n";
   out << "  uint fogMode;\n";
   out << "};\n";
+  // New per-category uniform structs. Layouts are routed by stage and update
+  // cadence: see specs/backend/draw-uniforms. The legacy DrawUniforms struct
+  // above stays defined while the encoder still binds it; the translated draw
+  // shaders below reference these category structs instead.
   out << "struct VsConsts {\n";
   out << "  float4 vsFloatConst[" << kMaxVertexConstants << "];\n";
   out << "  int4 vsIntConst[" << kMaxIntegerConstants << "];\n";

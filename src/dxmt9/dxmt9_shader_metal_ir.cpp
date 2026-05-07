@@ -321,23 +321,29 @@ std::string decodeOperandToken(const u32 token, D3DShaderStage stage, bool desti
 }
 
 void emitConstantBindings(std::ostringstream& out, bool vertexStage, const ConstantUsage& usage) {
+  // Constant pointers route to the per-stage category buffer (VsConsts at slot 0
+  // for vertex, PsConsts at slot 0 for fragment). See specs/backend/draw-uniforms.
+  const char* container = vertexStage ? "vsConsts" : "psConsts";
   const char* floatMember = vertexStage ? "vsFloatConst" : "psFloatConst";
   const char* intMember = vertexStage ? "vsIntConst" : "psIntConst";
   const char* boolMember = vertexStage ? "vsBoolConst" : "psBoolConst";
 
   if (!usage.mutableConstants) {
-    out << "  constant float4* cFloat = uniforms." << floatMember << ";\n";
-    out << "  constant int4* cInt = uniforms." << intMember << ";\n";
-    out << "  constant uint* cBool = uniforms." << boolMember << ";\n";
+    out << "  constant float4* cFloat = " << container << "." << floatMember << ";\n";
+    out << "  constant int4* cInt = " << container << "." << intMember << ";\n";
+    out << "  constant uint* cBool = " << container << "." << boolMember << ";\n";
     return;
   }
 
   out << "  float4 cFloat[" << std::max(1u, usage.floatCount) << "];\n";
   out << "  int4 cInt[" << std::max(1u, usage.intCount) << "];\n";
   out << "  uint cBool[" << std::max(1u, usage.boolCount) << "];\n";
-  out << "  for (uint i = 0; i < " << usage.floatCount << "; ++i) { cFloat[i] = uniforms." << floatMember << "[i]; }\n";
-  out << "  for (uint i = 0; i < " << usage.intCount << "; ++i) { cInt[i] = uniforms." << intMember << "[i]; }\n";
-  out << "  for (uint i = 0; i < " << usage.boolCount << "; ++i) { cBool[i] = uniforms." << boolMember << "[i]; }\n";
+  out << "  for (uint i = 0; i < " << usage.floatCount << "; ++i) { cFloat[i] = " << container << "."
+      << floatMember << "[i]; }\n";
+  out << "  for (uint i = 0; i < " << usage.intCount << "; ++i) { cInt[i] = " << container << "." << intMember
+      << "[i]; }\n";
+  out << "  for (uint i = 0; i < " << usage.boolCount << "; ++i) { cBool[i] = " << container << "." << boolMember
+      << "[i]; }\n";
 }
 
 void emitPredicateBindings(std::ostringstream& out, bool usesPredicateRegisters) {
@@ -489,8 +495,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       std::fprintf(stderr, "%s\n", trace.str().c_str());
       std::fflush(stderr);
     }
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], constant DrawUniforms& uniforms [[buffer(0)]], "
-           "device const uchar* stream0 [[buffer(1)]]) {\n";
+    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]],\n";
+    out << "                     constant VsConsts& vsConsts [[buffer(0)]],\n";
+    out << "                     device const uchar* stream0 [[buffer(1)]],\n";
+    out << "                     constant FfpVsConsts& ffpVs [[buffer(3)]],\n";
+    out << "                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
     out << "  VSOut out;\n";
     out << "  float2 dxmt9_positions[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
     out << "  float4 outPosition = float4(dxmt9_positions[vid % 3], 0.0, 1.0);\n";
@@ -523,10 +532,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "  for (uint i = 0; i < 16u; ++i) { vin[i] = float4(0.0f); }\n";
     out << "  vin[0] = float4(dxmt9_positions[vid % 3], 0.0f, 1.0f);\n";
     if (inputLayout) {
-      out << "  const uint stride = uniforms.vertexStreamStride != 0u ? uniforms.vertexStreamStride : "
+      out << "  const uint stride = drawVolatile.vertexStreamStride != 0u ? drawVolatile.vertexStreamStride : "
           << inputLayout->stride << "u;\n";
-      out << "  const int vertexIndex = max(0, int(vid) + uniforms.vertexBaseIndex);\n";
-      out << "  const uint base = uniforms.vertexStreamOffset + uint(vertexIndex) * stride;\n";
+      out << "  const int vertexIndex = max(0, int(vid) + drawVolatile.vertexBaseIndex);\n";
+      out << "  const uint base = drawVolatile.vertexStreamOffset + uint(vertexIndex) * stride;\n";
       for (size_t i = 0; i < inputLayout->inputs.size(); ++i) {
         const auto& binding = inputLayout->inputs[i];
         if (!binding.valid) {
@@ -1198,11 +1207,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
     out << "  out.fogFactor = outFogFactor;\n";
     out << "  out.pointSize = outPointSize;\n";
-    out << "  out.position.xy += uniforms.halfPixelFixup * out.position.w;\n";
+    out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (context.clipPlaneMask != 0) {
       out << "  for (uint i = 0; i < 6; ++i) {\n";
-      out << "    if ((uniforms.clipPlaneMask & (1u << i)) != 0u) {\n";
-      out << "      out.clipDistance[i] = dot(uniforms.clipPlanes[i], out.position);\n";
+      out << "    if ((ffpVs.clipPlaneMask & (1u << i)) != 0u) {\n";
+      out << "      out.clipDistance[i] = dot(ffpVs.clipPlanes[i], out.position);\n";
       out << "    }\n";
       out << "  }\n";
     }
@@ -1250,12 +1259,16 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   const char* fragmentReturnType = usesFragmentOutStruct ? "FSOut" : "float4";
   if (textured) {
     out << "fragment " << fragmentReturnType
-        << " dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]], ";
+        << " dxmt9_fs(VSOut in [[stage_in]],\n";
+    out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
+    out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
     emitFragmentTextureArguments(out, samplerUsage);
     out << ") {\n";
   } else {
     out << "fragment " << fragmentReturnType
-        << " dxmt9_fs(VSOut in [[stage_in]], constant DrawUniforms& uniforms [[buffer(0)]]) {\n";
+        << " dxmt9_fs(VSOut in [[stage_in]],\n";
+    out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
+    out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
   }
   auto emitFragmentDebugReturn = [&](std::string_view valueExpr) {
     if (usesFragmentOutStruct) {
@@ -1854,15 +1867,15 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       throw std::runtime_error("unbalanced D3D CALL/RET");
     }
 	  out << "  color = outColor[0];\n";
-	  out << "  if (uniforms.alphaTestEnable != 0u) {\n";
+	  out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
   out << "    bool pass = true;\n";
-  out << "    switch (uniforms.alphaTestFunc) {\n";
-  out << "      case 2u: pass = color.a < uniforms.alphaRef; break;\n";
-  out << "      case 3u: pass = color.a == uniforms.alphaRef; break;\n";
-  out << "      case 4u: pass = color.a <= uniforms.alphaRef; break;\n";
-  out << "      case 5u: pass = color.a > uniforms.alphaRef; break;\n";
-  out << "      case 6u: pass = color.a != uniforms.alphaRef; break;\n";
-  out << "      case 7u: pass = color.a >= uniforms.alphaRef; break;\n";
+  out << "    switch (ffpPs.alphaTestFunc) {\n";
+  out << "      case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
+  out << "      case 3u: pass = color.a == ffpPs.alphaRef; break;\n";
+  out << "      case 4u: pass = color.a <= ffpPs.alphaRef; break;\n";
+  out << "      case 5u: pass = color.a > ffpPs.alphaRef; break;\n";
+  out << "      case 6u: pass = color.a != ffpPs.alphaRef; break;\n";
+  out << "      case 7u: pass = color.a >= ffpPs.alphaRef; break;\n";
   out << "      case 8u: pass = true; break;\n";
   out << "      default: pass = true; break;\n";
   out << "    }\n";
