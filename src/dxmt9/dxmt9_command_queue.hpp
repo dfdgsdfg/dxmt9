@@ -184,6 +184,31 @@ class CommandQueue {
       std::size_t alignment,
       std::uint64_t seqId);
 
+  // Reserved slab for arena-style writes — single transientBufferMutex_
+  // acquire reserves `size` bytes of contiguous transient memory and
+  // returns both a binding-side slice (buffer + offset + size) and a
+  // writable pointer the caller fills in directly. Lifetime tracking
+  // is identical to uploadTransientBuffer/uploadTransientBufferBatch:
+  // the slab is retained against `seqId` and reclaimed on the finish
+  // path once the chunk's command buffer completes. Used by the
+  // Kind::DrawRun handler to batch N per-draw DrawUniforms writes into
+  // a single allocation: each draw's `DrawUniforms` is composed
+  // directly at `contents + i * stride` and bound at
+  // `slice.buffer, slice.offset + i * stride`. Returns a reservation
+  // with `contents == nullptr` on failure (caller falls back to
+  // per-draw uploadTransientBuffer).
+  struct TransientBufferReservation {
+    TransientBufferSlice slice{};
+    std::byte* contents = nullptr;
+
+    explicit operator bool() const noexcept {
+      return contents != nullptr && static_cast<bool>(slice);
+    }
+  };
+  TransientBufferReservation reserveTransientBuffer(std::size_t size,
+                                                    std::size_t alignment,
+                                                    std::uint64_t seqId);
+
   // The WMT::Device this queue was built on.
   WMT::Device device() const noexcept { return device_; }
 
