@@ -87,6 +87,10 @@ dxmt9_winemetal_unix_module = shared_library(
     # DXMT9_WINEMETAL_BRIDGE_OP_BASE upward in __wine_unix_call_funcs[]
     # delegate to these. The thunks decode the Args_* struct emitted by
     # the PE-side client and call the native dxmt9c_* implementation.
+    bridge_codegen[0],  # dxmt9_bridge_ops.generated.h — order-only dep so
+                        # winemetal_abi_hash.cpp and any other source that
+                        # transitively #includes the generated header waits
+                        # for codegen before compiling.
     bridge_codegen[2],  # dxmt9_wine_unix_dispatch.generated.cpp
   ],
   name_prefix: '',

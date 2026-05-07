@@ -115,7 +115,11 @@ if host_machine.system() == 'windows'
   winemetal_dll = shared_library(
     'winemetal',
     files('main.c', 'winemetal_thunks.cpp', 'winemetal_bridge.cpp',
-          'winemetal_abi_check.cpp'),
+          'winemetal_abi_check.cpp') + [
+      bridge_codegen[0],  # dxmt9_bridge_ops.generated.h — order-only dep so
+                          # winemetal_abi_check.cpp (which #includes the
+                          # generated kBridgeAbiHash) waits for codegen.
+    ],
     name_prefix: '',
     name_suffix: 'dll',
     vs_module_defs: files('winemetal.def')[0],
