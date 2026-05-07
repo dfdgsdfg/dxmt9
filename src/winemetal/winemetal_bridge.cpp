@@ -10,16 +10,24 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winternl.h>
-#include <array>
-#include <atomic>
-#include <chrono>
 #include <cstdarg>
+#include <cstdint>
 #include <cwchar>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <string>
 #include <vector>
+
+#ifndef DXMT9_BRIDGE_PERF_COUNTERS
+#define DXMT9_BRIDGE_PERF_COUNTERS 1
+#endif
+
+#if DXMT9_BRIDGE_PERF_COUNTERS
+#include <array>
+#include <atomic>
+#include <chrono>
+#endif
 
 #include "util/dynamic_symbol.hpp"
 #include "util/log/log.hpp"
@@ -55,6 +63,7 @@ enum class BridgeLocatorMode {
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
+#if DXMT9_BRIDGE_PERF_COUNTERS
 enum class BridgeClass : std::size_t {
   Factory,
   Lifecycle,
@@ -94,6 +103,7 @@ enum class BridgeDetail : std::size_t {
   ShaderCompile,
   Count,
 };
+#endif  // DXMT9_BRIDGE_PERF_COUNTERS
 
 struct BridgeState {
   std::once_flag initialized;
@@ -114,6 +124,7 @@ struct BridgeState {
   NTSTATUS status = DXMT9_STATUS_NOT_SUPPORTED;
 };
 
+#if DXMT9_BRIDGE_PERF_COUNTERS
 struct BridgePerfBucket {
   std::atomic<std::uint64_t> calls{0};
   std::atomic<std::uint64_t> ns{0};
@@ -125,6 +136,7 @@ struct BridgePerfCounters {
   std::array<BridgePerfBucket, static_cast<std::size_t>(BridgeClass::Count)> classes{};
   std::array<BridgePerfBucket, static_cast<std::size_t>(BridgeDetail::Count)> details{};
 };
+#endif  // DXMT9_BRIDGE_PERF_COUNTERS
 
 BridgeState& winemetalUnixBridgeState() {
   static BridgeState state{};
@@ -137,6 +149,7 @@ BridgeState& winemetalUnixBridgeState() {
   return state;
 }
 
+#if DXMT9_BRIDGE_PERF_COUNTERS
 BridgePerfCounters& bridgePerfCounters() {
   static BridgePerfCounters value{};
   return value;
@@ -532,6 +545,7 @@ void recordBridgePerf(unsigned int code, std::uint64_t nanoseconds) {
     addBridgePerf(counters.details[static_cast<std::size_t>(detail)], nanoseconds);
   }
 }
+#endif  // DXMT9_BRIDGE_PERF_COUNTERS
 
 void bridgeDebugLog(const char* fmt, ...) {
   va_list args;
@@ -803,6 +817,7 @@ extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void *args) {
                  static_cast<unsigned long long>(state.handle),
                  code,
                  reinterpret_cast<void*>(state.dispatcher));
+#if DXMT9_BRIDGE_PERF_COUNTERS
   const bool record_perf = bridgePerfEnabledFlag();
   const auto start = record_perf ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
@@ -812,6 +827,9 @@ extern "C" NTSTATUS dxmt9_winemetal_unix_call(unsigned int code, void *args) {
     recordBridgePerf(code, static_cast<std::uint64_t>(
                                std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()));
   }
+#else
+  const NTSTATUS call_status = state.dispatcher(state.handle, code, args);
+#endif  // DXMT9_BRIDGE_PERF_COUNTERS
   if (call_status != DXMT9_STATUS_SUCCESS) {
     bridgeDebugLog("dxmt9_winemetal_unix_call: code=%u args=%p status=0x%08lx",
                    code,

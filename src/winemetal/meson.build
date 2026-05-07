@@ -27,6 +27,12 @@ if host_machine.system() == 'windows'
   winemetal_bridge_cpp_args = []
   winemetal_bridge_link_args = []
 
+  if get_option('dxmt9_bridge_perf_counters')
+    winemetal_bridge_cpp_args += ['-DDXMT9_BRIDGE_PERF_COUNTERS=1']
+  else
+    winemetal_bridge_cpp_args += ['-DDXMT9_BRIDGE_PERF_COUNTERS=0']
+  endif
+
   if wine_builtin_dll
     if wine_build_path == '' and wine_install_path == ''
       error('wine_builtin_dll=true requires -Dwine_build_path or -Dwine_install_path')

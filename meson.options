@@ -25,3 +25,10 @@ option(
   value: true,
   description: 'Postprocess the PE d3d9.dll and winemetal.dll bridge pair as Wine builtin modules.',
 )
+
+option(
+  'dxmt9_bridge_perf_counters',
+  type: 'boolean',
+  value: true,
+  description: 'Compile bridge dispatch with perf-counter instrumentation. Disable for release-tuned builds.',
+)
