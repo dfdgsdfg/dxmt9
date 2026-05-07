@@ -1102,6 +1102,7 @@ enum WMTRenderCommandType : uint16_t {
   WMTRenderCommandSetObjectBufferOffset,
   WMTRenderCommandSetFragmentTexture,
   WMTRenderCommandSetFragmentBytes,
+  WMTRenderCommandSetVertexBytes,
   WMTRenderCommandSetRasterizerState,
   WMTRenderCommandSetViewports,
   WMTRenderCommandSetScissorRects,

@@ -190,6 +190,23 @@ bridge_ops_spec = executable(
 
 test('dxmt9-bridge-ops-spec', bridge_ops_spec)
 
+# Stand-alone PE-side bridge test: links no provider, instead overriding
+# the unix-call thunk so we can observe the wmtcmd struct that the
+# RenderCommandEncoder wrappers in Metal.hpp produce. Keeps the
+# setVertexBytes / setFragmentBytes discriminators honest without needing
+# a live Metal device.
+wmt_setbytes_dispatch_spec = executable(
+  'dxmt9-wmt-setbytes-dispatch-spec',
+  'native/bridge/wmt_setbytes_dispatch_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../src'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-wmt-setbytes-dispatch-spec', wmt_setbytes_dispatch_spec)
+
 resource_hazard_spec = executable(
   'dxmt9-resource-hazard-spec',
   'native/backend/resource_hazard_spec.cpp',
