@@ -970,6 +970,7 @@ bool encodeDraw(EncodeContext& ctx,
       if (slice) {
         encoder.setVertexBuffer(slice.buffer, slice.offset, 0);
         countUniformBufferBinds(1);
+        perf::countUniformVsConsts(sizeof(VsConsts));
         *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::VsAny);
       }
     }
@@ -979,6 +980,7 @@ bool encodeDraw(EncodeContext& ctx,
       if (slice) {
         encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
         countUniformBufferBinds(1);
+        perf::countUniformPsConsts(sizeof(PsConsts));
         *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::PsAny);
       }
     }
@@ -988,6 +990,7 @@ bool encodeDraw(EncodeContext& ctx,
       if (slice) {
         encoder.setFragmentBuffer(slice.buffer, slice.offset, 3);
         countUniformBufferBinds(1);
+        perf::countUniformFfpPs(sizeof(FfpPsConsts));
         *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::FfpPsAny);
       }
     }
@@ -1012,6 +1015,7 @@ bool encodeDraw(EncodeContext& ctx,
     if (slice) {
       encoder.setVertexBuffer(slice.buffer, slice.offset, 3);
       countUniformBufferBinds(1);
+      perf::countUniformFfpVs(sizeof(FfpVsConsts));
       *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr & ~LocalDirtyState::FfpVsAny);
       ffpVsBound = true;
     }
@@ -1024,16 +1028,23 @@ bool encodeDraw(EncodeContext& ctx,
     fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
   }
   // Apply FFP preTransformed viewport override to the FfpVs host copy
-  // before any bindFfpVsIfDirty call uploads it (R-BACK-12.5). Once
-  // bound, every VS shader sees the same buffer at slot 3.
+  // before any bindFfpVsIfDirty call uploads it (R-BACK-12.5). The
+  // override values come from run-stable sources (ffLayout +
+  // targetSurface->desc); only mark dirty when the host copy actually
+  // differs to avoid re-uploading the slab every draw.
   if (ffLayout && ffLayout->preTransformed) {
     if (auto* targetSurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
         targetSurface) {
       auto* host = ensureFfpVs();
-      host->viewportOrigin = {0.0f, 0.0f};
-      host->viewportSize = {static_cast<f32>(std::max(1u, targetSurface->desc.width)),
-                            static_cast<f32>(std::max(1u, targetSurface->desc.height))};
-      *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr | LocalDirtyState::FfpVsViewport);
+      const std::array<f32, 2> wantOrigin{0.0f, 0.0f};
+      const std::array<f32, 2> wantSize{
+          static_cast<f32>(std::max(1u, targetSurface->desc.width)),
+          static_cast<f32>(std::max(1u, targetSurface->desc.height))};
+      if (host->viewportOrigin != wantOrigin || host->viewportSize != wantSize) {
+        host->viewportOrigin = wantOrigin;
+        host->viewportSize = wantSize;
+        *dirtyPtr = static_cast<std::uint16_t>(*dirtyPtr | LocalDirtyState::FfpVsViewport);
+      }
     }
   }
   bindFfpVsIfDirty();
@@ -1691,6 +1702,7 @@ bool encodeDraw(EncodeContext& ctx,
       const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
                                                   drawVertexStreamStride);
       encoder.setVertexBytes(&vol, sizeof(DrawVolatile), 5);
+      perf::countUniformVolatilePush();
     };
     if (expandedIndexedDraw) {
       recordDrawGeometryDiagnostics(drawState,
@@ -1810,6 +1822,7 @@ bool encodeDraw(EncodeContext& ctx,
     const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
                                                 drawVertexStreamStride);
     encoder.setVertexBytes(&vol, sizeof(DrawVolatile), 5);
+    perf::countUniformVolatilePush();
     PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
     encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
   }
