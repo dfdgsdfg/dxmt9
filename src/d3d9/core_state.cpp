@@ -497,6 +497,14 @@ constexpr auto kVertexStateRenderStates = std::to_array<u32>({
     RS_VERTEX_BLEND,
 });
 
+// Wine oracle: dlls/wined3d/stateblock.c vertex_states_texture[] (lines 254-258).
+// D3DSBT_VERTEXSTATE captures these per-stage TSS keys; pixel TSS is the
+// superset, so the PixelState branch keeps its whole-table copy.
+constexpr auto kVertexStateTextureStageStates = std::to_array<u32>({
+    TSS_TEXCOORD_INDEX,
+    TSS_TEXTURE_TRANSFORM_FLAGS,
+});
+
 template <size_t N>
 void copyRenderStates(DeviceState &dst, const DeviceState &src,
                       const std::array<u32, N> &keys) {
@@ -506,6 +514,23 @@ void copyRenderStates(DeviceState &dst, const DeviceState &src,
       dst.renderStates.set(key, it->second);
     } else {
       dst.renderStates.erase(key);
+    }
+  }
+}
+
+template <size_t N>
+void copyTextureStageStateSlice(
+    std::array<TextureStageStateTable, kMaxTextureStages> &dst,
+    const std::array<TextureStageStateTable, kMaxTextureStages> &src,
+    const std::array<u32, N> &keys) {
+  for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+    for (u32 key : keys) {
+      const auto it = src[stage].find(key);
+      if (it != src[stage].end()) {
+        dst[stage].set(key, it->second);
+      } else {
+        dst[stage].erase(key);
+      }
     }
   }
 }
@@ -536,6 +561,8 @@ void applyFullSnapshotState(DeviceState &dst, const DeviceState &src,
     return;
   case StateBlockType::VertexState:
     copyRenderStates(dst, src, kVertexStateRenderStates);
+    copyTextureStageStateSlice(dst.textureStageStates, src.textureStageStates,
+                               kVertexStateTextureStageStates);
     dst.vertexDecl = src.vertexDecl;
     dst.fvf = src.fvf;
     dst.vertexShader = src.vertexShader;
