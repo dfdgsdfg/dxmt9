@@ -239,6 +239,17 @@ resource_hazard_spec = executable(
 
 test('dxmt9-resource-hazard-spec', resource_hazard_spec)
 
+render_pass_actions_spec = executable(
+  'dxmt9-render-pass-actions-spec',
+  'native/backend/render_pass_actions_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-render-pass-actions-spec', render_pass_actions_spec,
+     env: dxmt9_native_test_env_vars)
+
 metalcapture_spec = executable(
   'dxmt9-metalcapture-spec',
   'native/backend/metalcapture_spec.cpp',
