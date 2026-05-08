@@ -89,6 +89,17 @@ void countUniformPsConsts(std::size_t bytes);
 void countUniformFfpVs(std::size_t bytes);
 void countUniformFfpPs(std::size_t bytes);
 void countUniformVolatilePush();
+// Render-pass load/store action histograms (R-BACK-15.10/15.11).
+// `action` is the raw WMTLoadAction / WMTStoreAction enum value. Callers
+// cast `static_cast<std::uint32_t>(load_action)`; we keep the API decoupled
+// from winemetal.h so dxmt9_perf_counters.hpp stays lightweight.
+void countRenderPassLoadActionColor(std::uint32_t action);
+void countRenderPassLoadActionDepth(std::uint32_t action);
+void countRenderPassLoadActionStencil(std::uint32_t action);
+void countRenderPassStoreActionColor(std::uint32_t action);
+void countRenderPassStoreActionDepth(std::uint32_t action);
+void countRenderPassStoreActionStencil(std::uint32_t action);
+void countRenderPassTilePreservationBytes(std::uint64_t bytes);
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);
 void countCompletionWait(std::uint64_t nanoseconds,

@@ -124,6 +124,23 @@ struct Counters {
   std::atomic<std::uint64_t> uniformFfpPsCalls{0};
   std::atomic<std::uint64_t> uniformFfpPsBytes{0};
   std::atomic<std::uint64_t> uniformVolatilePushes{0};
+  std::atomic<std::uint64_t> renderPassLoadActionLoad{0};
+  std::atomic<std::uint64_t> renderPassLoadActionClear{0};
+  std::atomic<std::uint64_t> renderPassLoadActionDontCare{0};
+  std::atomic<std::uint64_t> renderPassLoadActionDepthLoad{0};
+  std::atomic<std::uint64_t> renderPassLoadActionDepthClear{0};
+  std::atomic<std::uint64_t> renderPassLoadActionDepthDontCare{0};
+  std::atomic<std::uint64_t> renderPassLoadActionStencilLoad{0};
+  std::atomic<std::uint64_t> renderPassLoadActionStencilClear{0};
+  std::atomic<std::uint64_t> renderPassLoadActionStencilDontCare{0};
+  std::atomic<std::uint64_t> renderPassStoreActionStore{0};
+  std::atomic<std::uint64_t> renderPassStoreActionDontCare{0};
+  std::atomic<std::uint64_t> renderPassStoreActionResolve{0};
+  std::atomic<std::uint64_t> renderPassStoreActionDepthStore{0};
+  std::atomic<std::uint64_t> renderPassStoreActionDepthDontCare{0};
+  std::atomic<std::uint64_t> renderPassStoreActionStencilStore{0};
+  std::atomic<std::uint64_t> renderPassStoreActionStencilDontCare{0};
+  std::atomic<std::uint64_t> renderPassTilePreservationBytes{0};
   std::atomic<std::uint64_t> commandBufferCreateCpuNs{0};
   std::atomic<std::uint64_t> commandBufferCreateCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuNs{0};
@@ -384,6 +401,13 @@ void report() {
       "uniform_ffp_vs_calls=%llu uniform_ffp_vs_bytes=%llu "
       "uniform_ffp_ps_calls=%llu uniform_ffp_ps_bytes=%llu "
       "uniform_volatile_pushes=%llu "
+      "render_pass_load_action_load=%llu render_pass_load_action_clear=%llu render_pass_load_action_dontcare=%llu "
+      "render_pass_load_action_depth_load=%llu render_pass_load_action_depth_clear=%llu render_pass_load_action_depth_dontcare=%llu "
+      "render_pass_load_action_stencil_load=%llu render_pass_load_action_stencil_clear=%llu render_pass_load_action_stencil_dontcare=%llu "
+      "render_pass_store_action_store=%llu render_pass_store_action_dontcare=%llu render_pass_store_action_resolve=%llu "
+      "render_pass_store_action_depth_store=%llu render_pass_store_action_depth_dontcare=%llu "
+      "render_pass_store_action_stencil_store=%llu render_pass_store_action_stencil_dontcare=%llu "
+      "render_pass_tile_preservation_bytes=%llu "
       "command_buffer_create_cpu_ms=%.3f command_buffer_create_cpu_max_ms=%.3f "
       "command_buffer_commit_cpu_ms=%.3f command_buffer_commit_cpu_max_ms=%.3f "
       "completion_waits=%llu completion_wait_ms=%.3f completion_wait_max_ms=%.3f "
@@ -538,6 +562,23 @@ void report() {
       static_cast<unsigned long long>(load(c.uniformFfpPsCalls)),
       static_cast<unsigned long long>(load(c.uniformFfpPsBytes)),
       static_cast<unsigned long long>(load(c.uniformVolatilePushes)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionLoad)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionClear)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionDontCare)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionDepthLoad)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionDepthClear)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionDepthDontCare)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionStencilLoad)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionStencilClear)),
+      static_cast<unsigned long long>(load(c.renderPassLoadActionStencilDontCare)),
+      static_cast<unsigned long long>(load(c.renderPassStoreActionStore)),
+      static_cast<unsigned long long>(load(c.renderPassStoreActionDontCare)),
+      static_cast<unsigned long long>(load(c.renderPassStoreActionResolve)),
+      static_cast<unsigned long long>(load(c.renderPassStoreActionDepthStore)),
+      static_cast<unsigned long long>(load(c.renderPassStoreActionDepthDontCare)),
+      static_cast<unsigned long long>(load(c.renderPassStoreActionStencilStore)),
+      static_cast<unsigned long long>(load(c.renderPassStoreActionStencilDontCare)),
+      static_cast<unsigned long long>(load(c.renderPassTilePreservationBytes)),
       static_cast<double>(load(c.commandBufferCreateCpuNs)) / 1000000.0,
       static_cast<double>(load(c.commandBufferCreateCpuMaxNs)) / 1000000.0,
       static_cast<double>(load(c.commandBufferCommitCpuNs)) / 1000000.0,
@@ -934,6 +975,77 @@ void countUniformFfpPs(std::size_t bytes) {
 
 void countUniformVolatilePush() {
   add(counters().uniformVolatilePushes);
+}
+
+// WMTLoadAction: DontCare=0, Load=1, Clear=2 (winemetal.h).
+void countRenderPassLoadActionColor(std::uint32_t action) {
+  auto& c = counters();
+  switch (action) {
+    case 0: add(c.renderPassLoadActionDontCare); break;
+    case 1: add(c.renderPassLoadActionLoad); break;
+    case 2: add(c.renderPassLoadActionClear); break;
+    default: break;
+  }
+}
+
+void countRenderPassLoadActionDepth(std::uint32_t action) {
+  auto& c = counters();
+  switch (action) {
+    case 0: add(c.renderPassLoadActionDepthDontCare); break;
+    case 1: add(c.renderPassLoadActionDepthLoad); break;
+    case 2: add(c.renderPassLoadActionDepthClear); break;
+    default: break;
+  }
+}
+
+void countRenderPassLoadActionStencil(std::uint32_t action) {
+  auto& c = counters();
+  switch (action) {
+    case 0: add(c.renderPassLoadActionStencilDontCare); break;
+    case 1: add(c.renderPassLoadActionStencilLoad); break;
+    case 2: add(c.renderPassLoadActionStencilClear); break;
+    default: break;
+  }
+}
+
+// WMTStoreAction: DontCare=0, Store=1, MultisampleResolve=2,
+// StoreAndMultisampleResolve=3 (winemetal.h). The combined value bumps both
+// store and resolve buckets so each attachment contributes the actions it
+// actually performs.
+void countRenderPassStoreActionColor(std::uint32_t action) {
+  auto& c = counters();
+  switch (action) {
+    case 0: add(c.renderPassStoreActionDontCare); break;
+    case 1: add(c.renderPassStoreActionStore); break;
+    case 2: add(c.renderPassStoreActionResolve); break;
+    case 3:
+      add(c.renderPassStoreActionStore);
+      add(c.renderPassStoreActionResolve);
+      break;
+    default: break;
+  }
+}
+
+void countRenderPassStoreActionDepth(std::uint32_t action) {
+  auto& c = counters();
+  switch (action) {
+    case 0: add(c.renderPassStoreActionDepthDontCare); break;
+    case 1: add(c.renderPassStoreActionDepthStore); break;
+    default: break;
+  }
+}
+
+void countRenderPassStoreActionStencil(std::uint32_t action) {
+  auto& c = counters();
+  switch (action) {
+    case 0: add(c.renderPassStoreActionStencilDontCare); break;
+    case 1: add(c.renderPassStoreActionStencilStore); break;
+    default: break;
+  }
+}
+
+void countRenderPassTilePreservationBytes(std::uint64_t bytes) {
+  add(counters().renderPassTilePreservationBytes, bytes);
 }
 
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds) {
