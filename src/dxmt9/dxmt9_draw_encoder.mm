@@ -670,9 +670,16 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     const bool discardAttachment = discardAfterPresent && i == 0;
     const bool clearAttachment =
         clearMatchesColorAttachment(clear, i, hot.colorAttachments[i].handle);
-    attachment.load_action = clearAttachment ? WMTLoadActionClear
-                                             : (discardAttachment ? WMTLoadActionDontCare
-                                                                  : WMTLoadActionLoad);
+    // R-BACK-15.4: first-use of a color RT (handle not yet in the
+    // queue-local touched set) may DontCare-load. Precedence:
+    // Clear > post-present DontCare > first-use DontCare > Load.
+    const bool firstUseAttachment =
+        !clearAttachment && !discardAttachment &&
+        !ctx.queue.isColorHandleTouched(hot.colorAttachments[i].handle);
+    attachment.load_action = clearAttachment       ? WMTLoadActionClear
+                           : discardAttachment     ? WMTLoadActionDontCare
+                           : firstUseAttachment    ? WMTLoadActionDontCare
+                                                   : WMTLoadActionLoad;
     attachment.store_action = WMTStoreActionStore;
     if (surface->resolveTexture) {
       attachment.resolve_texture = surface->resolveTexture.handle;
@@ -2007,6 +2014,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   bool hasActiveRender = false;
   std::optional<core::FlatDrawStateKey> activeDrawStateKey;
   std::optional<core::ClearDesc> pendingClear;
+  // R-BACK-15.4: color attachment handles bound on the active render
+  // encoder. Captured in startRenderPass; flushRender marks each one
+  // touched on the queue so the next pass on the same handle uses
+  // Load (R-BACK-15.4 says "first use" only).
+  std::array<core::Handle, core::kMaxRenderTargets> activeColorHandles{};
   // Per-render-encoder uniform dirty state (R-BACK-12.12). Seeded from
   // ctx.dirty so bits accumulated by the chunk-record importer since
   // the last encode flow into the first draw of this chunk; the
@@ -2043,6 +2055,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       DXMT_ASSERT(!activeBlitEncoder);
       activeRenderEncoder.endEncoding();
       perf::countRenderPassEnd(reason);
+      // R-BACK-15.4: color attachments stored on this pass become "touched"
+      // on the queue so the next pass on the same handle Loads instead of
+      // DontCare-loads. Color store_action is currently always Store or
+      // MultisampleResolve (R-BACK-15.8 color DontCare-store not yet
+      // implemented), so every active color handle qualifies.
+      for (auto& handle : activeColorHandles) {
+        if (handle) {
+          ctx.queue.markColorHandleTouched(handle);
+          handle = core::Handle{};
+        }
+      }
       activeRenderEncoder = {};
       hasActiveRender = false;
       activeDrawStateKey.reset();
@@ -2076,6 +2099,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     activeKey = makeAttachmentKey(*drawState.hot);
     activeWriteHazard = makeAttachmentHazard(*drawState.hot);
     activeDrawStateKey.reset();
+    // R-BACK-15.4: capture color attachment handles so flushRender can
+    // mark them touched on the queue once the encoder closes.
+    for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+      activeColorHandles[i] = drawState.hot->colorAttachments[i].handle;
+    }
     // R-BACK-12.12: a fresh Metal render encoder loses any prior
     // sticky bindings — every uniform category must rebind on the
     // first draw of the new encoder.
@@ -2297,6 +2325,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         flushPendingClear();
         flushRender(perf::EncoderSplitReason::SurfaceCopy);
         assertHelperEncoderPrecondition();
+        // R-BACK-15.5: destination handle's contents are overwritten;
+        // the next render pass on it qualifies as first-use again.
+        ctx.queue.invalidateColorHandle(command.surfaceCopy->destination);
         dxmt9::encoders::encodeSurfaceCopy(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                            ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                            *command.surfaceCopy);
@@ -2309,6 +2340,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         flushPendingClear();
         flushRender(perf::EncoderSplitReason::StretchRect);
         assertHelperEncoderPrecondition();
+        // R-BACK-15.5
+        ctx.queue.invalidateColorHandle(command.stretchRect->destination);
         dxmt9::encoders::encodeStretchRect(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                             ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                             *command.stretchRect);
@@ -2321,6 +2354,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         flushPendingClear();
         flushRender(perf::EncoderSplitReason::Readback);
         assertHelperEncoderPrecondition();
+        // R-BACK-15.5: destination receives content; source is unaffected
+        ctx.queue.invalidateColorHandle(command.readback->destination);
         dxmt9::encoders::encodeReadback(commandBuffer, ctx.pool, *command.readback);
         assertNoActiveEncoder();
         commandBufferHasWork = true;
@@ -2333,6 +2368,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         // TLA+: EncoderLifecycle / BeginRender(rt)
         // ColorFill owns a short-lived helper render encoder and ends it before returning.
         assertNoActiveEncoder();
+        // R-BACK-15.5
+        ctx.queue.invalidateColorHandle(command.colorFill->destination);
         dxmt9::encoders::encodeColorFill(commandBuffer, ctx.pool, ctx.cache, ctx.device,
                                           ctx.limits, ctx.shaderArchive, ctx.shaderArchivePath,
                                           *command.colorFill);
