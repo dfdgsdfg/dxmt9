@@ -179,13 +179,15 @@ void testDefaultsLoadAndStore() {
   checkEq(applyColorStorePolicy(in), WMTStoreActionStore,
           "R-BACK-15.2 default color store is Store");
 
-  // Depth side: with no further records on the depth handle, the
-  // look-ahead must answer "no proof" → defensive Store (false).
+  // Depth side: with no further records on the depth handle and no
+  // Present in the rest of the chunk, the H1 end-of-chunk fall-through
+  // (R-BACK-15.7 broadening) lets the look-ahead prove the depth is
+  // dead within this chunk → DontCare-store is safe (returns true).
   ChunkSlot slot;
   Handle depth{0xD000u};
   appendDrawRunWithDepth(slot, depth);
-  check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
-        "R-BACK-15.2 default depth store is Store when no proof exists");
+  check(dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
+        "R-BACK-15.7 end-of-chunk with no Present allows DontCare-store");
 }
 
 void testClearPrecedesDontCare() {
@@ -230,12 +232,17 @@ void testDepthDontCareStoreOnNextClear() {
         "R-BACK-15.7 next-op-is-clear on depth handle → DontCare-store");
 
   // A clear that targets a DIFFERENT depth handle must NOT trigger the
-  // shortcut — the original handle is still live-out.
+  // simple-form shortcut by itself. Append a Present so the H1
+  // end-of-chunk fall-through stays defensive (otherwise depthA would
+  // be deemed dead within the chunk and DontCare would be allowed via
+  // R-BACK-15.7's broadening — a separate proof, not the next-op
+  // shortcut under test here).
   ChunkSlot otherSlot;
   Handle depthA{0xDA00u};
   Handle depthB{0xDB00u};
   appendDrawRunWithDepth(otherSlot, depthA);
   appendClearOnDepth(otherSlot, depthB);
+  appendPresent(otherSlot, depthA);
   check(!dxmt9::encoders::nextDepthOperationIsClear(otherSlot, 0u, depthA),
         "R-BACK-15.7 unrelated-handle clear does not satisfy the proof");
 
@@ -297,48 +304,140 @@ void testDepthForcedStoreOnNextRead() {
   check(!dxmt9::encoders::nextDepthOperationIsClear(fillSlot, 0u, depth),
         "R-BACK-15.15 color fill into depth handle forces Store");
 
-  // R-BACK-15.13 defensive Store on Present: the slot still has live-out
-  // potential for the surface, so the look-ahead must return false.
+  // R-BACK-15.13 defensive Store on Present at end-of-chunk: the slot
+  // ends with a Present and no later Clear on the depth handle, so the
+  // H1 end-of-chunk fall-through (R-BACK-15.7 broadening) must remain
+  // defensive — a Present implies the frame may persist depth state
+  // across the chunk boundary.
   ChunkSlot presentSlot;
   appendDrawRunWithDepth(presentSlot, depth);
   appendPresent(presentSlot, depth);
-  appendClearOnDepth(presentSlot, depth);
   check(!dxmt9::encoders::nextDepthOperationIsClear(presentSlot, 0u, depth),
-        "R-BACK-15.13 present in slot forces defensive Store");
+        "R-BACK-15.13 present at end of slot forces defensive Store");
+}
+
+void testDepthShadowMapSampleForcesStore() {
+  // H1 extension: when a later DrawRun samples the depth handle as a
+  // texture (depth-as-shadow-map), the depth surface is live-out and
+  // its tile contents must be preserved. The look-ahead walks the
+  // active texture bindings (textureMask / textures[]) and bails to
+  // defensive Store on any match.
+  ChunkSlot slot;
+  Handle depth{0xD0BAu};
+  appendDrawRunWithDepth(slot, depth);
+  // Append a second DrawRun whose depthStencil is a different handle
+  // but whose texture stage 0 binds the depth handle.
+  Handle otherDepth{0xD0BBu};
+  FlatDrawStateRecord hot{};
+  hot.depthStencil.handle = otherDepth;
+  hot.textures[0] = depth;
+  hot.textureMask = 0x1u;
+  const auto stateIndex = static_cast<std::uint32_t>(slot.drawHotStates.size());
+  slot.drawHotStates.push_back(hot);
+  slot.drawShaderLayouts.push_back(DrawShaderLayoutContext{});
+  slot.drawDebugSnapshots.push_back(DrawDebugSnapshot{});
+  const auto recordIndex =
+      static_cast<std::uint32_t>(slot.drawRunRecords.size());
+  slot.drawRunRecords.push_back(DrawRunCommandRecord{
+      .stateIndex = stateIndex,
+      .firstParam = 0u,
+      .paramCount = 0u,
+      .payloadOffset = 0u,
+      .payloadSize = 0u,
+      .uniformHandle = {},
+  });
+  slot.commandHeaders.push_back(MetalCommandHeader{
+      .kind = MetalCommandKind::DrawRun,
+      .payloadIndex = recordIndex,
+  });
+  appendClearOnDepth(slot, depth);  // would otherwise allow DontCare
+  check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
+        "H1 depth-as-shadow-map sample forces defensive Store");
+
+  // Inactive texture slots (mask bit clear) must NOT trip the proof —
+  // the binding array can hold stale handles for slots the draw never
+  // touches; only active slots count.
+  ChunkSlot maskedSlot;
+  appendDrawRunWithDepth(maskedSlot, depth);
+  FlatDrawStateRecord stale{};
+  stale.depthStencil.handle = otherDepth;
+  stale.textures[0] = depth;     // stale binding...
+  stale.textureMask = 0x0u;      // ...but no active slots.
+  const auto staleStateIndex =
+      static_cast<std::uint32_t>(maskedSlot.drawHotStates.size());
+  maskedSlot.drawHotStates.push_back(stale);
+  maskedSlot.drawShaderLayouts.push_back(DrawShaderLayoutContext{});
+  maskedSlot.drawDebugSnapshots.push_back(DrawDebugSnapshot{});
+  const auto staleRecordIndex =
+      static_cast<std::uint32_t>(maskedSlot.drawRunRecords.size());
+  maskedSlot.drawRunRecords.push_back(DrawRunCommandRecord{
+      .stateIndex = staleStateIndex,
+      .firstParam = 0u,
+      .paramCount = 0u,
+      .payloadOffset = 0u,
+      .payloadSize = 0u,
+      .uniformHandle = {},
+  });
+  maskedSlot.commandHeaders.push_back(MetalCommandHeader{
+      .kind = MetalCommandKind::DrawRun,
+      .payloadIndex = staleRecordIndex,
+  });
+  appendClearOnDepth(maskedSlot, depth);
+  check(dxmt9::encoders::nextDepthOperationIsClear(maskedSlot, 0u, depth),
+        "H1 inactive texture slot does not force Store");
 }
 
 void testNoCrossChunkLookahead() {
-  // R-BACK-15.9: the look-ahead never crosses the chunk boundary. A
-  // DrawRun whose slot ends with no further records on the depth handle
-  // must Store, even if a *later* chunk clears the handle (we have no
-  // visibility into that and must not assume).
+  // R-BACK-15.9 still applies: the look-ahead never crosses the chunk
+  // boundary. H1 (R-BACK-15.7 broadening) refines the end-of-chunk
+  // answer based on whether a Present was seen — Present means defer
+  // to defensive Store; no Present means the depth is dead within the
+  // chunk so DontCare-store is safe.
+
+  // No Present, no further records: depth is dead within the chunk →
+  // DontCare-store allowed (was defensive Store before H1).
   ChunkSlot slot;
   Handle depth{0xD009u};
   appendDrawRunWithDepth(slot, depth);
-  // Slot ends here — no clear, no copy, no read.
-  check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
-        "R-BACK-15.9 end-of-slot with no proof must Store");
+  // Slot ends here — no clear, no copy, no read, no present.
+  check(dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
+        "R-BACK-15.7 end-of-slot with no Present allows DontCare-store");
 
-  // Even with one totally unrelated record (different handle), the
-  // encoder still has no proof for our depth handle and must Store.
+  // No Present, only unrelated records: same fall-through outcome —
+  // the depth handle never reappears, so DontCare-store is safe.
   ChunkSlot mixedSlot;
   Handle depthA{0xDA09u};
   Handle depthB{0xDB09u};
   appendDrawRunWithDepth(mixedSlot, depthA);
   appendDrawRunWithDepth(mixedSlot, depthB);  // unrelated handle
-  // No clear on depthA anywhere — slot ends without proof.
-  check(!dxmt9::encoders::nextDepthOperationIsClear(mixedSlot, 0u, depthA),
-        "R-BACK-15.9 slot end with only unrelated records must Store");
+  check(dxmt9::encoders::nextDepthOperationIsClear(mixedSlot, 0u, depthA),
+        "R-BACK-15.7 end-of-slot with only unrelated records allows DontCare");
 
-  // The look-ahead's `startCommandIndex` parameter is also exclusive —
-  // if the only matching clear is at-or-before the start index, we must
-  // not look backward and must report no proof.
+  // The look-ahead's `startCommandIndex` parameter is exclusive — if
+  // the only matching clear is at-or-before the start index, the walk
+  // sees no further depth records but also no Present, so the H1
+  // fall-through still allows DontCare-store. The point of the test is
+  // that we do not look backward to find the clear; the proof here
+  // comes from R-BACK-15.7 broadening, not the simple-form shortcut.
   ChunkSlot backwardSlot;
   Handle depthC{0xDC09u};
   appendClearOnDepth(backwardSlot, depthC);
   appendDrawRunWithDepth(backwardSlot, depthC);
-  check(!dxmt9::encoders::nextDepthOperationIsClear(backwardSlot, 1u, depthC),
+  check(dxmt9::encoders::nextDepthOperationIsClear(backwardSlot, 1u, depthC),
         "R-BACK-15.9 look-ahead does not see records before start index");
+
+  // H1 defensive case: Present in middle of slot → end-of-chunk
+  // fall-through must still Store, even though the depth handle never
+  // reappears after the start index. The frame may persist depth
+  // across the chunk boundary.
+  ChunkSlot presentInMiddle;
+  Handle depthD{0xDD09u};
+  Handle otherSurface{0xDE09u};
+  appendDrawRunWithDepth(presentInMiddle, depthD);
+  appendPresent(presentInMiddle, otherSurface);
+  // Slot ends — depthD never reappears, but Present was seen.
+  check(!dxmt9::encoders::nextDepthOperationIsClear(presentInMiddle, 0u, depthD),
+        "R-BACK-15.13 Present in slot forces end-of-chunk Store");
 }
 
 void testCounterEmission() {
@@ -385,6 +484,7 @@ int main() {
     testClearPrecedesDontCare();
     testDepthDontCareStoreOnNextClear();
     testDepthForcedStoreOnNextRead();
+    testDepthShadowMapSampleForcesStore();
     testNoCrossChunkLookahead();
     testCounterEmission();
   } catch (const TestFailure& e) {
