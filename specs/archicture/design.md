@@ -448,9 +448,13 @@ the signals so that an unintended coupling (for example, a GPU stall in a
 non-present command buffer that delays present-bearing completion) becomes
 visible without wall-clock heuristics. Formal evidence: `QuerySeqId.tla` and
 `PresentFrameLatency.tla` model the seqId and frame-token timelines as
-separate variables sharing only the ordering invariant; reachable states
-include "query waiter holds while present advances" and "present waiter holds
-while seqId advances" without livelock.
+separate variables sharing only the ordering invariant. The composite model
+`ConcurrentProgressSignals.tla` (added 2026-05-09) directly proves the three
+independence liveness properties — `NoQueryWaitBlocksPresent`,
+`NoFrameLatencyBlocksQuery`, and `NoRingPressureBlocksPresentCompletion` —
+under fairness on all six action families, with the `PacingOrdering`
+invariant `presentCompletedSeqId ≤ completedSeqId` as the only relation
+between the timelines.
 
 ---
 
@@ -487,7 +491,7 @@ flowchart LR
 | Resource upload/readback | texture streaming or readbacks force staging pressure or CPU waits | CPU/GPU sync | transient upload CPU time, sync wait, readback MB/s | use ring staging and batch copies; keep `GetRenderTargetData` as an explicit synchronous boundary |
 | GPU shader/fill/bandwidth | command submission is cheap but GPU frame time dominates | GPU | GPU command-buffer time, frame P50/P95/P99, Metal capture | optimize render-pass merging, avoid redundant blits, then tune shader/format paths |
 | Present/drawable pacing | frame token or drawable acquisition waits dominate frame time after present source is valid | display/WSI | present source valid/size, present acquire wait, boundary wait, token wait, pre-acquire hit/miss | tune drawable pre-acquire and frame-latency policy only after draw/hazard signals are clean |
-| Pacing-axis coupling | a wait on one progress signal blocks progress on another beyond the `presentCompletedSeqId ≤ completedSeqId` invariant | CPU/sync regression | `seqVsPresentSpread`, per-axis wait counters (`seqIdWaitNs`, `presentTokenWaitNs`, `ringSlotWaitNs`), TLA+ liveness checks in `QuerySeqId.tla` / `PresentFrameLatency.tla` | trace the offending waiter; restore independent advance per `R-ARCH-6.8`/`6.9` before tuning ring depth or frame-latency policy |
+| Pacing-axis coupling | a wait on one progress signal blocks progress on another beyond the `presentCompletedSeqId ≤ completedSeqId` invariant | CPU/sync regression | `seqVsPresentSpread`, per-axis wait counters (`seqIdWaitNs`, `presentTokenWaitNs`, `ringSlotWaitNs`), TLA+ liveness checks in `ConcurrentProgressSignals.tla` (composite), `QuerySeqId.tla` / `PresentFrameLatency.tla` (per-axis) | trace the offending waiter; restore independent advance per `R-ARCH-6.8`/`6.9` before tuning ring depth or frame-latency policy |
 
 The highest-risk architecture regressions are still CPU-side: per-call bridge
 fallback, per-draw heap growth after warm-up, and rebuilding large state payloads
@@ -612,7 +616,7 @@ The license policy is conservative by design:
 | `R-ARCH-3.*` boundaries | `dxmt9-chunk-record-import-spec`, resource hazard spec, TLA+ queue/resource models |
 | `R-ARCH-4.*` provenance | specs review, conformance manifest provenance, license review before imports |
 | `R-ARCH-5.*` verification | `specs/verification/`, `specs/tests/`, `specs/benchmarks/`, `specs/gap.md` |
-| `R-ARCH-6.*` concurrency | `CommandQueue.tla`, `QueueLifecycleRefinement.tla`, `PresentFrameLatency.tla`, `ResourceLifetime.tla`, `EncoderLifecycle.tla`, `QuerySeqId.tla`, queue observer tests, wait/perf counters |
+| `R-ARCH-6.*` concurrency | `CommandQueue.tla`, `QueueLifecycleRefinement.tla`, `PresentFrameLatency.tla`, `ResourceLifetime.tla`, `EncoderLifecycle.tla` (exact handle sets + Bloom-as-diagnostic-only invariants), `QuerySeqId.tla`, `ConcurrentProgressSignals.tla` (pacing independence liveness), queue observer tests, wait/perf counters |
 
 Current known partial evidence remains tracked in `specs/gap.md`, especially the
 DOD / DXMT ownership acceptance row.

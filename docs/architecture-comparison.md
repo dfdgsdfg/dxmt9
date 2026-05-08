@@ -358,12 +358,17 @@ flowchart LR
   (`R-ARCH-6.9`); the only relation between the two seqId timelines is the
   ordering invariant `presentCompletedSeqId ≤ completedSeqId`.
 - maps cleanly onto separate TLA+ models (`PresentFrameLatency.tla`,
-  `QuerySeqId.tla`, `CommandQueue.tla`), each modelling one progress signal.
+  `QuerySeqId.tla`, `CommandQueue.tla`), each modelling one progress signal,
+  **plus the composite `ConcurrentProgressSignals.tla` which directly proves
+  the three independence liveness properties** (`NoQueryWaitBlocksPresent`,
+  `NoFrameLatencyBlocksQuery`, `NoRingPressureBlocksPresentCompletion`).
+  Independence is **formally verified**, not just stated.
 
 **Cons**
 - three tunables (ring depth, max frame latency, back-buffer count) with
   cross-effects. Performance tuning has more knobs.
-- larger formal verification surface — three liveness properties to maintain.
+- larger formal verification surface — three liveness properties to maintain
+  in the composite model on top of the per-axis safety invariants.
 
 **Trade-off shape**
 Wine's single counter is the simplest correct model and works because Wine
