@@ -542,11 +542,90 @@ WMT::Reference<WMT::SamplerState> makeSampler(
   return device.newSamplerState(info);
 }
 
+namespace {
+
+// R-BACK-15.7 / spec section 4.2: depth/stencil DontCare-store look-ahead.
+// Walks the remaining records in the current chunk starting from
+// `startCommandIndex + 1` and returns true when the very next record that
+// touches `depthHandle` is a Clear of that handle. Any prior live read or
+// surface op on the handle (Readback / SurfaceCopy / StretchRect /
+// ColorFill source-or-dest, or a DrawRun that re-binds the handle as
+// depth target) flips the proof to defensive Store.
+//
+// Returning false on end-of-slot keeps R-BACK-15.9: no cross-chunk
+// look-ahead. The walk is read-only; encodeChunk still processes the
+// records normally afterward.
+bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
+                               std::size_t startCommandIndex,
+                               core::Handle depthHandle) {
+  if (!depthHandle) {
+    return false;
+  }
+  using Kind = core::MetalCommandKind;
+  for (std::size_t i = startCommandIndex + 1; i < slot.commandCount(); ++i) {
+    const auto next = slot.commandAt(i);
+    switch (next.kind) {
+      case Kind::Clear:
+        if (next.clear && next.clear->depthStencil.handle == depthHandle) {
+          // R-BACK-15.7: the next op on this depth handle is a clear,
+          // so storing tile contents would be wasted bandwidth.
+          return true;
+        }
+        break;
+      case Kind::DrawRun:
+        if (next.drawState.hot &&
+            next.drawState.hot->depthStencil.handle == depthHandle) {
+          // Depth is read by a subsequent draw — must Store.
+          return false;
+        }
+        break;
+      case Kind::SurfaceCopy:
+        if (next.surfaceCopy &&
+            (next.surfaceCopy->source == depthHandle ||
+             next.surfaceCopy->destination == depthHandle)) {
+          return false;
+        }
+        break;
+      case Kind::StretchRect:
+        if (next.stretchRect &&
+            (next.stretchRect->source == depthHandle ||
+             next.stretchRect->destination == depthHandle)) {
+          return false;
+        }
+        break;
+      case Kind::Readback:
+        // R-BACK-15.15: host-visible read of the depth surface must not
+        // be served from a DontCare-stored tile.
+        if (next.readback &&
+            (next.readback->source == depthHandle ||
+             next.readback->destination == depthHandle)) {
+          return false;
+        }
+        break;
+      case Kind::ColorFill:
+        if (next.colorFill && next.colorFill->destination == depthHandle) {
+          return false;
+        }
+        break;
+      case Kind::Present:
+        // A present in this chunk means the handle could still be live;
+        // be defensive (R-BACK-15.13).
+        return false;
+    }
+  }
+  // R-BACK-15.9: no cross-chunk look-ahead — defensive Store.
+  return false;
+}
+
+}  // namespace
+
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
     core::FlatDrawStateView drawState,
-    const std::optional<ClearDesc>& clear) {
+    const std::optional<ClearDesc>& clear,
+    const core::ChunkSlot* lookaheadSlot,
+    std::size_t lookaheadStartIndex) {
   const auto& hot = *drawState.hot;
   auto* primarySurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
   if (!primarySurface || !primarySurface->texture) {
@@ -583,10 +662,23 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
       depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
     const bool clearDepth = clearMatchesDepthStencilAttachment(clear, hot.depthStencil.handle, false);
     const bool clearStencil = clearMatchesDepthStencilAttachment(clear, hot.depthStencil.handle, true);
+    // R-BACK-15.7 simple form (specs/backend/render-pass-actions/design.md
+    // section 4.2): in-chunk look-ahead — if the very next op on this
+    // depth handle is a Clear, the about-to-be-stored tile contents are
+    // immediately discarded, so we can DontCare-store. R-BACK-15.14:
+    // never DontCare an MSAA depth target with an attached resolve.
+    const bool hasResolveTarget = static_cast<bool>(depthSurface->resolveTexture);
+    const bool depthDontCareStore =
+        lookaheadSlot != nullptr &&
+        hot.depthStencil.handle &&
+        !hasResolveTarget &&
+        nextDepthOperationIsClear(*lookaheadSlot, lookaheadStartIndex,
+                                  hot.depthStencil.handle);
     if (formatHasDepthAspect(depthSurface->desc.format)) {
       passInfo.depth.texture = depthSurface->texture.handle;
       passInfo.depth.load_action = clearDepth ? WMTLoadActionClear : WMTLoadActionLoad;
-      passInfo.depth.store_action = WMTStoreActionStore;
+      passInfo.depth.store_action =
+          depthDontCareStore ? WMTStoreActionDontCare : WMTStoreActionStore;
       if (clearDepth) {
         passInfo.depth.clear_depth = clear->depth;
       }
@@ -594,9 +686,69 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     if (formatHasStencilAspect(depthSurface->desc.format)) {
       passInfo.stencil.texture = depthSurface->texture.handle;
       passInfo.stencil.load_action = clearStencil ? WMTLoadActionClear : WMTLoadActionLoad;
-      passInfo.stencil.store_action = WMTStoreActionStore;
+      // The simple-form shortcut clears the entire depth/stencil surface
+      // on the next op, so stencil tile contents are equally discardable.
+      passInfo.stencil.store_action =
+          depthDontCareStore ? WMTStoreActionDontCare : WMTStoreActionStore;
       if (clearStencil) {
         passInfo.stencil.clear_stencil = clear->stencil;
+      }
+    }
+  }
+
+  // R-BACK-15.10/15.11/15.12: emit per-attachment load/store action
+  // histograms + tile-preservation byte estimates so scripts/
+  // assert_perf_counters.py and the SFIV smoke can see the policy
+  // outcome. Counted before encoder open so the counters land even when
+  // the encoder fails to open below.
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    auto* surface = ctx.pool.findSurface(hot.colorAttachments[i].handle.value);
+    if (!surface || !surface->texture) continue;
+    const auto& att = passInfo.colors[i];
+    perf::countRenderPassLoadActionColor(static_cast<std::uint32_t>(att.load_action));
+    perf::countRenderPassStoreActionColor(static_cast<std::uint32_t>(att.store_action));
+    const std::uint64_t pixelBytes =
+        static_cast<std::uint64_t>(surface->desc.width) *
+        static_cast<std::uint64_t>(surface->desc.height) *
+        static_cast<std::uint64_t>(core::bytesPerPixel(surface->desc.format));
+    if (att.load_action == WMTLoadActionLoad) {
+      perf::countRenderPassTilePreservationBytes(pixelBytes);
+    }
+    if (att.store_action == WMTStoreActionStore ||
+        att.store_action == WMTStoreActionMultisampleResolve) {
+      perf::countRenderPassTilePreservationBytes(pixelBytes);
+    }
+  }
+  if (auto* depthSurface = ctx.pool.findSurface(hot.depthStencil.handle.value);
+      depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
+    const std::uint64_t depthPixelBytes =
+        static_cast<std::uint64_t>(depthSurface->desc.width) *
+        static_cast<std::uint64_t>(depthSurface->desc.height) *
+        static_cast<std::uint64_t>(core::bytesPerPixel(depthSurface->desc.format));
+    if (formatHasDepthAspect(depthSurface->desc.format)) {
+      perf::countRenderPassLoadActionDepth(
+          static_cast<std::uint32_t>(passInfo.depth.load_action));
+      perf::countRenderPassStoreActionDepth(
+          static_cast<std::uint32_t>(passInfo.depth.store_action));
+      if (passInfo.depth.load_action == WMTLoadActionLoad) {
+        perf::countRenderPassTilePreservationBytes(depthPixelBytes);
+      }
+      if (passInfo.depth.store_action == WMTStoreActionStore ||
+          passInfo.depth.store_action == WMTStoreActionMultisampleResolve) {
+        perf::countRenderPassTilePreservationBytes(depthPixelBytes);
+      }
+    }
+    if (formatHasStencilAspect(depthSurface->desc.format)) {
+      perf::countRenderPassLoadActionStencil(
+          static_cast<std::uint32_t>(passInfo.stencil.load_action));
+      perf::countRenderPassStoreActionStencil(
+          static_cast<std::uint32_t>(passInfo.stencil.store_action));
+      if (passInfo.stencil.load_action == WMTLoadActionLoad) {
+        perf::countRenderPassTilePreservationBytes(depthPixelBytes);
+      }
+      if (passInfo.stencil.store_action == WMTStoreActionStore ||
+          passInfo.stencil.store_action == WMTStoreActionMultisampleResolve) {
+        perf::countRenderPassTilePreservationBytes(depthPixelBytes);
       }
     }
   }
@@ -1884,11 +2036,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   };
 
   auto startRenderPass = [&](core::FlatDrawStateView drawState,
-                             const std::optional<core::ClearDesc>& clear) {
+                             const std::optional<core::ClearDesc>& clear,
+                             std::size_t lookaheadStartIndex) {
     // TLA+: EncoderLifecycle / BeginRender(rt)
     // Callers split through None before opening a new render encoder.
+    // R-BACK-15.7: pass the slot + current command index so beginRenderPass
+    // can run the depth/stencil DontCare-store look-ahead over the
+    // remaining records.
     assertNoActiveEncoder();
-    activeRenderEncoder = beginRenderPass(ctx, commandBuffer, drawState, clear);
+    activeRenderEncoder = beginRenderPass(ctx, commandBuffer, drawState, clear,
+                                          &slot, lookaheadStartIndex);
     hasActiveRender = static_cast<bool>(activeRenderEncoder);
     activeKey = makeAttachmentKey(*drawState.hot);
     activeWriteHazard = makeAttachmentHazard(*drawState.hot);
@@ -1977,7 +2134,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           const auto clearKey = makeAttachmentKey(*pendingClear);
           const auto clearHazard = makeAttachmentHazard(*pendingClear);
           if (clearKey == drawKey && !clearHazard.exactOverlaps(drawReadHazard)) {
-            startRenderPass(stateView, pendingClear);
+            startRenderPass(stateView, pendingClear, commandIndex);
             pendingClear.reset();
           } else {
             flushPendingClear();
@@ -1999,7 +2156,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                   : (hazardDetected ? perf::EncoderSplitReason::Hazard
                                     : perf::EncoderSplitReason::ClearBarrier);
               flushRender(splitReason);
-              startRenderPass(stateView, std::nullopt);
+              startRenderPass(stateView, std::nullopt, commandIndex);
             } else {
               // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
               DXMT_ASSERT(hasActiveRender);
@@ -2026,7 +2183,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 : (hazardDetected ? perf::EncoderSplitReason::Hazard
                                   : perf::EncoderSplitReason::Final);
             flushRender(splitReason);
-            startRenderPass(stateView, std::nullopt);
+            startRenderPass(stateView, std::nullopt, commandIndex);
           } else {
             // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
             DXMT_ASSERT(hasActiveRender);
