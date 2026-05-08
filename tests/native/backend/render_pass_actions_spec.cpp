@@ -35,6 +35,7 @@
 #include <string_view>
 
 #include "dxmt9/core.hpp"
+#include "../../../src/dxmt9/dxmt9_command_queue.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 #include "../../../src/winemetal/winemetal.h"
@@ -341,6 +342,66 @@ void testNoCrossChunkLookahead() {
         "R-BACK-15.9 look-ahead does not see records before start index");
 }
 
+void testTouchedSet() {
+  // R-BACK-15.4 / 15.5 / 15.6: minimal CommandQueue API exercise.
+  // Inert queue (null WMT::Device) — no threads, no Metal — but the
+  // touched-set methods are pure container ops and run fine in this
+  // mode. H4 will add the integration test that drives the encoder.
+  dxmt9::core::BackendLimits limits{};
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+
+  // Empty set: nothing is touched.
+  Handle a{0xC0A0u};
+  Handle b{0xC0B0u};
+  check(!queue.isColorHandleTouched(a),
+        "R-BACK-15.4 untouched handle reports false");
+  check(!queue.isColorHandleTouched(Handle{0}),
+        "R-BACK-15.4 zero handle is never touched");
+
+  // Mark + isTouched.
+  queue.markColorHandleTouched(a);
+  check(queue.isColorHandleTouched(a),
+        "R-BACK-15.6 marked handle reports true");
+  check(!queue.isColorHandleTouched(b),
+        "R-BACK-15.6 unrelated handle stays untouched");
+
+  // Idempotent mark — set semantics; no growth on re-insert.
+  queue.markColorHandleTouched(a);
+  check(queue.isColorHandleTouched(a),
+        "R-BACK-15.6 mark is idempotent");
+
+  // Zero handle is a no-op on every entry-point.
+  queue.markColorHandleTouched(Handle{0});
+  check(!queue.isColorHandleTouched(Handle{0}),
+        "R-BACK-15.6 mark on zero handle is a no-op");
+
+  // Invalidate removes only the targeted handle.
+  queue.markColorHandleTouched(b);
+  check(queue.isColorHandleTouched(b),
+        "R-BACK-15.6 second mark recorded");
+  queue.invalidateColorHandle(a);
+  check(!queue.isColorHandleTouched(a),
+        "R-BACK-15.5 invalidate removes target handle");
+  check(queue.isColorHandleTouched(b),
+        "R-BACK-15.5 invalidate is scoped to target handle");
+
+  // Invalidate of an absent handle is a no-op (no throw, b survives).
+  queue.invalidateColorHandle(a);
+  check(queue.isColorHandleTouched(b),
+        "R-BACK-15.5 invalidate on absent handle is harmless");
+  queue.invalidateColorHandle(Handle{0});
+  check(queue.isColorHandleTouched(b),
+        "R-BACK-15.5 invalidate on zero handle is a no-op");
+
+  // clearAll wipes every entry.
+  queue.markColorHandleTouched(a);
+  queue.clearAllTouchedColorHandles();
+  check(!queue.isColorHandleTouched(a),
+        "R-BACK-15.4 clearAll wipes a");
+  check(!queue.isColorHandleTouched(b),
+        "R-BACK-15.4 clearAll wipes b");
+}
+
 void testCounterEmission() {
   // R-BACK-15.10/15.11/15.12: the perf counter API is the validation
   // surface for this spec. We cannot read counter sums back from outside
@@ -386,6 +447,7 @@ int main() {
     testDepthDontCareStoreOnNextClear();
     testDepthForcedStoreOnNextRead();
     testNoCrossChunkLookahead();
+    testTouchedSet();
     testCounterEmission();
   } catch (const TestFailure& e) {
     std::cerr << "render_pass_actions_spec failed: " << e.what() << '\n';

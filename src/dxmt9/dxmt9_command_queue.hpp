@@ -40,6 +40,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 namespace dxmt9 {
 
@@ -221,6 +222,20 @@ class CommandQueue {
   pipeline::Cache& pipelineCache() noexcept { return pipelineCache_; }
   shaders::Archive& shaderArchive() noexcept { return shaderArchive_; }
 
+  // R-BACK-15.4 / 15.5 / 15.6: touched color attachment set API. The
+  // encoder's beginRenderPass calls isColorHandleTouched on each color
+  // attachment to decide whether the first load action can be DontCare
+  // (R-BACK-15.4); endEncoding marks each stored attachment via
+  // markColorHandleTouched (R-BACK-15.6); surface-ops that overwrite the
+  // handle call invalidateColorHandle (R-BACK-15.5).
+  // clearAllTouchedColorHandles is reserved for queue resets / device
+  // loss recovery. All four are invoked from the encoder thread only —
+  // no mutex needed, matching currentBackBuffer_'s access pattern.
+  bool isColorHandleTouched(core::Handle handle) const;
+  void markColorHandleTouched(core::Handle handle);
+  void invalidateColorHandle(core::Handle handle);
+  void clearAllTouchedColorHandles();
+
   // ─── Mostly-internal: worker-thread bodies + lifecycle binding ─────
   // Exposed so CommandQueue's constructor can wire its own runtime loops.
   // External callers should not use these.
@@ -284,6 +299,14 @@ class CommandQueue {
   // Discard load action is safe.
   core::Handle currentBackBuffer_{};
   bool backBufferDiscardAfterPresent_ = false;
+  // R-BACK-15.4 / 15.6: queue-local set of color attachment handles that
+  // were stored (StoreActionStore or MultisampleResolve) at least once in
+  // this queue's lifetime. Encoder consults this on beginRenderPass to
+  // decide whether the first load action can be DontCare. Invalidated by
+  // surface ops that overwrite the handle (R-BACK-15.5). Sole reader/
+  // writer is the encoder thread, so no separate mutex is needed (mirrors
+  // currentBackBuffer_ access pattern).
+  std::unordered_set<std::uint64_t> touchedColorHandles_{};
   // Phase 14: see setSkipDrawResourceMarking() doc.
   bool skipDrawResourceMarking_ = false;
 

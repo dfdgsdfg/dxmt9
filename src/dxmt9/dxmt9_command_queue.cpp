@@ -204,6 +204,28 @@ void CommandQueue::applyDirtyRenderStateTexFactor() {
   uniform::applyRenderStateTexFactor(pendingDirty_);
 }
 
+// R-BACK-15.4 / 15.5 / 15.6: touched color attachment set. Single-thread
+// access (encoder thread); no mutex. Null/zero handles are no-ops on
+// every entry-point so callers don't have to guard.
+bool CommandQueue::isColorHandleTouched(core::Handle handle) const {
+  if (!handle) return false;
+  return touchedColorHandles_.find(handle.value) != touchedColorHandles_.end();
+}
+
+void CommandQueue::markColorHandleTouched(core::Handle handle) {
+  if (!handle) return;
+  touchedColorHandles_.insert(handle.value);
+}
+
+void CommandQueue::invalidateColorHandle(core::Handle handle) {
+  if (!handle) return;
+  touchedColorHandles_.erase(handle.value);
+}
+
+void CommandQueue::clearAllTouchedColorHandles() {
+  touchedColorHandles_.clear();
+}
+
 CommandQueue::~CommandQueue() {
   if (threadsStarted_) {
     stopThreads();
