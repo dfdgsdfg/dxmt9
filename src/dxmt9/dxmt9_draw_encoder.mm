@@ -544,16 +544,23 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 
 // R-BACK-15.7 / spec section 4.2: depth/stencil DontCare-store look-ahead.
 // Walks the remaining records in the current chunk starting from
-// `startCommandIndex + 1` and returns true when the very next record that
-// touches `depthHandle` is a Clear of that handle. Any prior live read or
-// surface op on the handle (Readback / SurfaceCopy / StretchRect /
-// ColorFill source-or-dest, or a DrawRun that re-binds the handle as
-// depth target) flips the proof to defensive Store.
+// `startCommandIndex + 1` and returns true when one of two proofs holds:
 //
-// Returning false on end-of-slot keeps R-BACK-15.9: no cross-chunk
-// look-ahead. The walk is read-only; encodeChunk still processes the
-// records normally afterward. Public so the G4 render-pass-actions
-// fixture can exercise the contract without a Metal device.
+//   1. The next record that touches `depthHandle` is a Clear of that
+//      handle (the original G3 simple-form shortcut).
+//   2. The depth handle never reappears in the rest of the chunk AND
+//      no Present was seen during the walk (H1 broadening, R-BACK-15.7
+//      end-of-chunk fall-through). R-BACK-15.9 still applies — no
+//      cross-chunk look-ahead — but within the current chunk the depth
+//      is provably dead, so DontCare-store is safe.
+//
+// Any prior live read or surface op on the handle (Readback /
+// SurfaceCopy / StretchRect / ColorFill source-or-dest, a DrawRun that
+// re-binds the handle as depth target, or a DrawRun that samples it as
+// a shadow-map texture) flips the proof to defensive Store.
+//
+// Public so the G4 render-pass-actions fixture can exercise the
+// contract without a Metal device.
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
                                std::size_t startCommandIndex,
                                core::Handle depthHandle) {
@@ -561,6 +568,7 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
     return false;
   }
   using Kind = core::MetalCommandKind;
+  bool sawPresent = false;
   for (std::size_t i = startCommandIndex + 1; i < slot.commandCount(); ++i) {
     const auto next = slot.commandAt(i);
     switch (next.kind) {
@@ -572,10 +580,23 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
         }
         break;
       case Kind::DrawRun:
-        if (next.drawState.hot &&
-            next.drawState.hot->depthStencil.handle == depthHandle) {
-          // Depth is read by a subsequent draw — must Store.
-          return false;
+        if (next.drawState.hot) {
+          if (next.drawState.hot->depthStencil.handle == depthHandle) {
+            // Depth is read by a subsequent draw — must Store.
+            return false;
+          }
+          // R-BACK-15.7 extension: depth-as-shadow-map sample. Walk the
+          // active texture bindings and bail if any matches the depth
+          // handle (the depth surface is sampled as a texture by this
+          // later draw, so its tile contents must be preserved).
+          const auto& textures = next.drawState.hot->textures;
+          const std::uint32_t mask = next.drawState.hot->textureMask;
+          for (std::size_t s = 0; s < textures.size(); ++s) {
+            if ((mask & (1u << s)) == 0) continue;
+            if (textures[s] == depthHandle) {
+              return false;
+            }
+          }
         }
         break;
       case Kind::SurfaceCopy:
@@ -607,13 +628,21 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
         }
         break;
       case Kind::Present:
-        // A present in this chunk means the handle could still be live;
-        // be defensive (R-BACK-15.13).
-        return false;
+        // R-BACK-15.13: a Present in this chunk implies the frame may
+        // persist depth state across the chunk boundary. Don't return
+        // early — a later Clear on the same handle still wins (it
+        // proves the tile contents are about to be discarded), but if
+        // we fall through to end-of-chunk we must Store defensively.
+        sawPresent = true;
+        break;
     }
   }
-  // R-BACK-15.9: no cross-chunk look-ahead — defensive Store.
-  return false;
+  // R-BACK-15.7 end-of-chunk fall-through: depth handle never
+  // reappeared in the rest of the chunk. If no Present was seen the
+  // depth is dead within this chunk and R-BACK-15.9 (no cross-chunk
+  // look-ahead) leaves no future use to consider — DontCare-store is
+  // safe. If a Present was seen, fall back to defensive Store.
+  return !sawPresent;
 }
 
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
