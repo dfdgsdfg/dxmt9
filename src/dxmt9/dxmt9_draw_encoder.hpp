@@ -68,11 +68,19 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
 // target + optional clear, then begins the encoder on the given command
 // buffer. Reads (and clears, on entry) ctx.queue.backBufferDiscardAfterPresent_
 // so the next draw to the same RT can choose DontCare over Load.
+//
+// `lookaheadSlot` + `lookaheadStartIndex` (R-BACK-15.7 simple form): when
+// non-null, the encoder runs the depth/stencil DontCare-store look-ahead
+// described in specs/backend/render-pass-actions/design.md section 4.2.
+// Pass nullptr to keep the legacy unconditional-Store behavior (e.g. for
+// callers that don't have access to the imported chunk records).
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
     core::FlatDrawStateView drawState,
-    const std::optional<core::ClearDesc>& clear);
+    const std::optional<core::ClearDesc>& clear,
+    const core::ChunkSlot* lookaheadSlot = nullptr,
+    std::size_t lookaheadStartIndex = 0);
 
 // Pre-uploaded transient slices for a single draw within a DrawRun
 // batch (Phase 5-B). When the Kind::DrawRun handler pre-batches all UP
