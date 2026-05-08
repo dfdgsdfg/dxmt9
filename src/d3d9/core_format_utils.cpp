@@ -249,6 +249,14 @@ u32 pitchForFormat(Format format, u32 width) {
   return formatRowPitch(format, width);
 }
 
+// Note: the dxmt9FormatPair_* capability helpers used by the PE-side
+// IDirect3D9 factory are defined inline in core_format_utils.hpp so that
+// translation units which include <d3d9.h> (and thus already have the
+// D3DERR_* macros installed) can consume them without dragging in
+// dxmt9/core.hpp, whose `constexpr HRESULT D3DERR_*` declarations clash
+// with those macros. See the header for the implementation and the Wine
+// behavioural-oracle references.
+
 bool writeBmpScreenshot(const std::string &path, Format format, u32 width,
                         u32 height, u32 pitch, std::span<const u8> bytes) {
   return dxmt9::util::writeBmp(path, format, width, height, pitch, bytes);

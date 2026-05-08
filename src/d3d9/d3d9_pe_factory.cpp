@@ -5,6 +5,15 @@
 #include <cstdlib>
 #include <cstring>
 #include "d3d9_pe.hpp"
+
+// Pull in only the inline capability-pair helpers from core_format_utils.hpp.
+// The header's lower section depends on dxmt9/core.hpp which redefines the
+// D3DERR_* HRESULT constants as `constexpr HRESULT` — that clashes with the
+// preprocessor macro forms installed by `<d3d9.h>` already pulled in via
+// d3d9_pe.hpp above. The DXMT9_FORMAT_UTILS_INLINE_HELPERS_ONLY guard skips
+// that legacy section.
+#define DXMT9_FORMAT_UTILS_INLINE_HELPERS_ONLY 1
+#include "core_format_utils.hpp"
 #include "util/log/log.hpp"
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -509,8 +518,26 @@ public:
             dxmt9FactoryDebugLog("CheckDeviceFormat -> invalid rtype=%u", (unsigned)rtype);
             return D3DERR_INVALIDCALL;
         }
-        const HRESULT hr = hr32(dxmt9c_factory_check_device_format2(
+        /* Wine `dlls/d3d9/tests/device.c::test_check_device_format` (~line
+         * 12634): VERTEXBUFFER / INDEXBUFFER return D3DERR_INVALIDCALL
+         * regardless of usage flags. Wine itself marks these todo_wine, but
+         * the expected Windows behaviour is the INVALIDCALL we set here. */
+        if (rtype == D3DRTYPE_VERTEXBUFFER || rtype == D3DRTYPE_INDEXBUFFER) {
+            dxmt9FactoryDebugLog("CheckDeviceFormat -> VB/IB rtype rejected rtype=%u",
+                                 (unsigned)rtype);
+            return D3DERR_INVALIDCALL;
+        }
+        HRESULT hr = hr32(dxmt9c_factory_check_device_format2(
             f_, adapter, (uint32_t)fmt, usage, (uint32_t)rtype));
+        /* D3DUSAGE_AUTOGENMIPMAP is informational: when the underlying
+         * format is otherwise supported but we cannot drive HW mipmap
+         * autogen, return D3DOK_NOAUTOGEN (a SUCCESS code) so the app
+         * knows to fall back to manual mipmap generation. dxmt9 currently
+         * has no autogen path, so any successful AUTOGENMIPMAP query is
+         * downgraded. See Wine test_check_device_format autogen loop. */
+        if (SUCCEEDED(hr) && (usage & D3DUSAGE_AUTOGENMIPMAP)) {
+            hr = D3DOK_NOAUTOGEN;
+        }
         dxmt9FactoryDebugLog("CheckDeviceFormat -> hr=0x%08x", (unsigned)hr);
         return hr;
     }
@@ -551,26 +578,38 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE CheckDepthStencilMatch(UINT, D3DDEVTYPE deviceType,
-                                                      D3DFORMAT, D3DFORMAT,
-                                                      D3DFORMAT) noexcept override {
+                                                      D3DFORMAT adapterFmt,
+                                                      D3DFORMAT rtFmt,
+                                                      D3DFORMAT dsFmt) noexcept override {
         if (!isSupportedDeviceType(deviceType)) {
             dxmt9FactoryDebugLog("CheckDepthStencilMatch -> unsupported devType=%u", (unsigned)deviceType);
             return D3DERR_NOTAVAILABLE;
         }
-        dxmt9FactoryDebugLog("CheckDepthStencilMatch -> hr=0x%08x", (unsigned)S_OK);
-        return S_OK; /* all depth-stencil combinations accepted */
+        /* Real bit-depth match (Wine `depth_stencil_match` in
+         * `dlls/wined3d/directx.c`). 32-bit RTs pair with D24S8/D24X8/D32,
+         * 16-bit RTs pair with D16, anything else is rejected. */
+        const bool ok = dxmt9::core::dxmt9FormatPair_isDepthStencilCompatible(
+            (uint32_t)adapterFmt, (uint32_t)rtFmt, (uint32_t)dsFmt);
+        const HRESULT hr = ok ? S_OK : D3DERR_NOTAVAILABLE;
+        dxmt9FactoryDebugLog("CheckDepthStencilMatch adapterFmt=%u rtFmt=%u dsFmt=%u -> hr=0x%08x",
+                             (unsigned)adapterFmt, (unsigned)rtFmt,
+                             (unsigned)dsFmt, (unsigned)hr);
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT, D3DDEVTYPE deviceType,
-                                                           D3DFORMAT,
-                                                           D3DFORMAT) noexcept override {
+                                                           D3DFORMAT srcFmt,
+                                                           D3DFORMAT dstFmt) noexcept override {
         if (!isSupportedDeviceType(deviceType)) {
             dxmt9FactoryDebugLog("CheckDeviceFormatConversion -> unsupported devType=%u", (unsigned)deviceType);
             return D3DERR_NOTAVAILABLE;
         }
-        dxmt9FactoryDebugLog("CheckDeviceFormatConversion -> hr=0x%08x",
-                             (unsigned)D3DERR_NOTAVAILABLE);
-        return D3DERR_NOTAVAILABLE;
+        const bool ok = dxmt9::core::dxmt9FormatPair_canConvert(
+            (uint32_t)srcFmt, (uint32_t)dstFmt);
+        const HRESULT hr = ok ? D3D_OK : D3DERR_NOTAVAILABLE;
+        dxmt9FactoryDebugLog("CheckDeviceFormatConversion src=%u dst=%u -> hr=0x%08x",
+                             (unsigned)srcFmt, (unsigned)dstFmt, (unsigned)hr);
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT adapter, D3DDEVTYPE deviceType,
