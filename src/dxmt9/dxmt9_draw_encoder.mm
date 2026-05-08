@@ -542,8 +542,6 @@ WMT::Reference<WMT::SamplerState> makeSampler(
   return device.newSamplerState(info);
 }
 
-namespace {
-
 // R-BACK-15.7 / spec section 4.2: depth/stencil DontCare-store look-ahead.
 // Walks the remaining records in the current chunk starting from
 // `startCommandIndex + 1` and returns true when the very next record that
@@ -554,7 +552,8 @@ namespace {
 //
 // Returning false on end-of-slot keeps R-BACK-15.9: no cross-chunk
 // look-ahead. The walk is read-only; encodeChunk still processes the
-// records normally afterward.
+// records normally afterward. Public so the G4 render-pass-actions
+// fixture can exercise the contract without a Metal device.
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
                                std::size_t startCommandIndex,
                                core::Handle depthHandle) {
@@ -616,8 +615,6 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
   // R-BACK-15.9: no cross-chunk look-ahead — defensive Store.
   return false;
 }
-
-}  // namespace
 
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
