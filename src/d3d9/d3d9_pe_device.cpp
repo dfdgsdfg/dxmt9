@@ -77,6 +77,17 @@ static bool isUnknownFormat(D3DFORMAT fmt) {
     return fmt == D3DFMT_UNKNOWN;
 }
 
+// T4 (D3D9Ex shared-handle, SYSTEMMEM partial): for SYSTEMMEM textures
+// the test_user_memory oracle (Wine d3d9ex tests) requires that
+//   - 0 levels (auto-mip)            -> D3DERR_INVALIDCALL
+//   - levels > 1                     -> D3DERR_INVALIDCALL
+//   - SCRATCH pool                   -> D3DERR_INVALIDCALL
+//   - SYSTEMMEM, levels == 1         -> S_OK; user pointer aliased
+// allowSystemMemUserMemory is false for cube/volume textures since the
+// partial scope only covers 2D textures and offscreen plain surfaces.
+// The width/height == 1x1 narrowing for 2D textures is enforced at the
+// call site (validate* doesn't see W/H). DEFAULT-pool sharing remains
+// E_NOTIMPL until the IOSurface / MTLSharedTexture bridge lands.
 static HRESULT validateSharedHandleForTexture(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
@@ -85,13 +96,16 @@ static HRESULT validateSharedHandleForTexture(bool extended,
     if (!sharedHandle) return S_OK;
     if (!extended) return E_NOTIMPL;
     if (pool == D3DPOOL_SYSTEMMEM) {
-        if (!allowSystemMemUserMemory || levels != 1) return D3DERR_INVALIDCALL;
-        return D3DERR_INVALIDCALL;
+        if (!allowSystemMemUserMemory) return D3DERR_INVALIDCALL;
+        if (levels != 1) return D3DERR_INVALIDCALL;
+        return S_OK;
     }
     if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
     return E_NOTIMPL;
 }
 
+// T4: per Wine test_user_memory (~line 793-798), VB/IB with pSharedHandle
+// and SYSTEMMEM (or any non-DEFAULT pool) must return D3DERR_NOTAVAILABLE.
 static HRESULT validateSharedHandleForBuffer(bool extended,
                                              HANDLE* sharedHandle,
                                              D3DPOOL pool) {
@@ -101,6 +115,11 @@ static HRESULT validateSharedHandleForBuffer(bool extended,
     return E_NOTIMPL;
 }
 
+// T4: per Wine test_user_memory (~line 800-830), offscreen plain surface
+// with pSharedHandle:
+//   - SYSTEMMEM           -> S_OK; user pointer aliased
+//   - SCRATCH             -> D3DERR_INVALIDCALL
+//   - DEFAULT (E_NOTIMPL) -> partial scope, see validateSharedHandleForDefaultSurface
 static HRESULT validateSharedHandleForSurface(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
@@ -111,6 +130,7 @@ static HRESULT validateSharedHandleForSurface(bool extended,
         if (!allowSystemMemUserMemory) return D3DERR_INVALIDCALL;
         return S_OK;
     }
+    if (pool == D3DPOOL_SCRATCH) return D3DERR_INVALIDCALL;
     if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
     return E_NOTIMPL;
 }
@@ -126,6 +146,48 @@ static D9CRect toR(const RECT& r) {
     D9CRect c; c.left = r.left; c.top = r.top;
     c.right = r.right; c.bottom = r.bottom;
     return c;
+}
+
+// T4 (D3D9Ex shared-handle, SYSTEMMEM partial): format byte size for the
+// formats the SYSTEMMEM user-memory paths actually exercise. The PE side
+// is intentionally walled off from dxmt9::core helpers — keeping a tiny
+// table here avoids dragging core_format into the PE TU. Returns 0 for
+// unknown/unsupported formats; the caller must fall through to the
+// normal create path on 0.
+static uint32_t userMemoryBytesPerPixel(D3DFORMAT fmt) {
+    switch (fmt) {
+        case D3DFMT_A8R8G8B8:
+        case D3DFMT_X8R8G8B8:
+        case D3DFMT_A8B8G8R8:
+        case D3DFMT_X8B8G8R8:
+        case D3DFMT_A2R10G10B10:
+        case D3DFMT_A2B10G10R10:
+        case D3DFMT_G16R16:
+        case D3DFMT_D32:
+        case D3DFMT_D24S8:
+        case D3DFMT_D24X8:
+            return 4;
+        case D3DFMT_R8G8B8:
+            return 3;
+        case D3DFMT_R5G6B5:
+        case D3DFMT_X1R5G5B5:
+        case D3DFMT_A1R5G5B5:
+        case D3DFMT_A4R4G4B4:
+        case D3DFMT_X4R4G4B4:
+        case D3DFMT_A8L8:
+        case D3DFMT_L16:
+        case D3DFMT_D16:
+        case D3DFMT_D15S1:
+            return 2;
+        case D3DFMT_A8:
+        case D3DFMT_L8:
+        case D3DFMT_R3G3B2:
+        case D3DFMT_A4L4:
+        case D3DFMT_P8:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 /* =========================================================================
@@ -237,6 +299,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         for (auto& rt : rtSlots_)   setRef(rt, (IDirect3DSurface9*)nullptr);
         setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
         setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
+        // T2 device-lost: explicitly nullify the device's primary RT slot
+        // and depth-stencil on the C side so no stale Metal surface handle
+        // survives a Reset(). The PE shadow's pendingRtMask/pendingDs is
+        // cleared via clearPendingHotState() in clearPeStateTracking, but
+        // the server-side core::Device state must also lose the prior
+        // attachment references — invalidateDefaultPoolResources() clears
+        // the resource itself but not the bound-slot pointer.
+        if (dev_) {
+            dxmt9c_device_set_render_target(dev_, 0, nullptr);
+            dxmt9c_device_set_depth_stencil(dev_, nullptr);
+        }
     }
 
     void clearPendingCommandChunk() {
@@ -1484,6 +1557,18 @@ public:
         const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
         if (SUCCEEDED(hr)) {
             deviceNotReset_ = false;
+            // T2: per Wine d3d9_device_Reset, viewport and scissor must
+            // be set to {0, 0, BackBufferWidth, BackBufferHeight, 0, 1}
+            // after a successful Reset. The core::Device already sets
+            // its server-side viewport in resetValidated() — mirror it
+            // into the PE shadow so the next draw packet carries fresh
+            // viewport/scissor instead of stale pre-reset values.
+            const uint32_t w = std::max<uint32_t>(1u, cpp.backBufferWidth);
+            const uint32_t h = std::max<uint32_t>(1u, cpp.backBufferHeight);
+            peState_.viewportShadow = D9CViewport{0, 0, w, h, 0.0f, 1.0f};
+            peState_.scissorShadow  = D9CRect{0, 0, (int32_t)w, (int32_t)h};
+            peState_.pendingViewport = false;
+            peState_.pendingScissor  = false;
         }
         return hr;
     }
@@ -1491,6 +1576,9 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src, const RECT* dst,
                                        HWND wnd, const RGNDATA* dirty) noexcept override {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        // T2 device-lost gate: render-path methods must early-return
+        // D3DERR_DEVICELOST while the device awaits Reset.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_present device=%p wnd=%p src=%s dst=%s dirty=%p",
                             this, wnd,
                             src ? "<custom>" : "<full>",
@@ -1590,13 +1678,30 @@ public:
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForTexture(extended_, psh, pool, levels, true);
         if (FAILED(sharedHr)) return sharedHr;
-        dxmt9DeviceDebugLog("device_create_texture device=%p size=%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
-                            this, w, h, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
+        // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): SYSTEMMEM 1-mip
+        // 2D texture with pSharedHandle aliases caller-supplied memory.
+        // Wine d3d9ex test_user_memory line 769-778 accepts arbitrary
+        // widths/heights for this path; the only constraint is single
+        // mip level (validateSharedHandleForTexture already enforced).
+        // bytesPerPixel == 0 means "format we cannot alias" — reject.
+        const bool useUserMemory =
+            extended_ && psh && pool == D3DPOOL_SYSTEMMEM && levels == 1;
+        void* userPtr = nullptr;
+        int32_t userPitch = 0;
+        if (useUserMemory) {
+            const uint32_t bpp = userMemoryBytesPerPixel(fmt);
+            if (bpp == 0) return D3DERR_INVALIDCALL;
+            userPtr = *psh;
+            userPitch = static_cast<int32_t>(bpp * w);
+        }
+        dxmt9DeviceDebugLog("device_create_texture device=%p size=%ux%u levels=%u usage=0x%x fmt=%u pool=%u user=%p",
+                            this, w, h, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool,
+                            userPtr);
         D9CTexture* t = dxmt9c_device_create_texture(dev_, w, h, levels,
                                                       usage, (uint32_t)fmt,
                                                       (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
-        *ppTex = CreatePeTexture(t, this, this);
+        *ppTex = CreatePeTexture(t, this, this, userPtr, userPitch);
         dxmt9DeviceDebugLog("device_create_texture -> texture=%p", *ppTex);
         return S_OK;
     }
@@ -1873,14 +1978,28 @@ public:
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForSurface(extended_, psh, pool, true);
         if (FAILED(sharedHr)) return sharedHr;
-        dxmt9DeviceDebugLog("device_create_offscreen_surface device=%p size=%ux%u fmt=%u pool=%u",
-                            this, w, h, (unsigned)fmt, (unsigned)pool);
+        // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): SYSTEMMEM
+        // offscreen surfaces accept arbitrary W/H per Wine's
+        // test_user_memory (~line 800). The user pointer becomes the
+        // entire surface storage; pitch == bpp * width.
+        const bool useUserMemory =
+            extended_ && psh && pool == D3DPOOL_SYSTEMMEM;
+        void* userPtr = nullptr;
+        int32_t userPitch = 0;
+        if (useUserMemory) {
+            const uint32_t bpp = userMemoryBytesPerPixel(fmt);
+            if (bpp == 0) return D3DERR_INVALIDCALL;
+            userPtr = *psh;
+            userPitch = static_cast<int32_t>(bpp * w);
+        }
+        dxmt9DeviceDebugLog("device_create_offscreen_surface device=%p size=%ux%u fmt=%u pool=%u user=%p",
+                            this, w, h, (unsigned)fmt, (unsigned)pool, userPtr);
         uint64_t sh = psh ? (uint64_t)(uintptr_t)*psh : 0;
         D9CSurface* s = dxmt9c_device_create_offscreen_surface(dev_, w, h,
                                                                 (uint32_t)fmt,
                                                                 (uint32_t)pool, &sh);
         if (!s) return D3DERR_INVALIDCALL;
-        *ppS = CreatePeSurface(s, this, nullptr, this);
+        *ppS = CreatePeSurface(s, this, nullptr, this, true, userPtr, userPitch);
         dxmt9DeviceDebugLog("device_create_offscreen_surface -> surface=%p", *ppS);
         return S_OK;
     }
@@ -1939,6 +2058,8 @@ public:
 
     /* ── scene ── */
     HRESULT STDMETHODCALLTYPE BeginScene() noexcept override {
+        // T2 device-lost gate.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_begin_scene device=%p", this);
         const HRESULT hr = hr32(dxmt9c_device_begin_scene(dev_));
         dxmt9DeviceDebugLog("device_begin_scene -> hr=0x%08x", (unsigned)hr);
@@ -1946,6 +2067,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE EndScene()   noexcept override {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        // T2 device-lost gate.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_end_scene device=%p", this);
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
@@ -1958,6 +2081,8 @@ public:
                                      DWORD flags, D3DCOLOR color,
                                      float z, DWORD stencil) noexcept override {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        // T2 device-lost gate.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_clear device=%p count=%u flags=0x%x color=0x%08x z=%f stencil=%u",
                             this, (unsigned)count, (unsigned)flags, (unsigned)color, z,
                             (unsigned)stencil);
@@ -2716,6 +2841,8 @@ public:
     HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE type,
                                              UINT startVertex,
                                              UINT count) noexcept override {
+        // T2 device-lost gate.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
                             this, (unsigned)type, startVertex, count);
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
@@ -2733,6 +2860,8 @@ public:
                                                     UINT minVertex, UINT numVertices,
                                                     UINT startIndex,
                                                     UINT count) noexcept override {
+        // T2 device-lost gate.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
                             this, (unsigned)type, baseVertex, minVertex, numVertices,
                             startIndex, count);
@@ -2751,6 +2880,8 @@ public:
                                                UINT count,
                                                const void* pData,
                                                UINT stride) noexcept override {
+        // T2 device-lost gate.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
                             this, (unsigned)type, count, pData, stride);
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
@@ -2771,6 +2902,8 @@ public:
                                                       D3DFORMAT idxFmt,
                                                       const void* pVtxData,
                                                       UINT stride) noexcept override {
+        // T2 device-lost gate.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
                             this, (unsigned)type, minVertex, numVertices, count,
                             pIdxData, (unsigned)idxFmt, pVtxData, stride);
@@ -2790,6 +2923,10 @@ public:
                                                IDirect3DVertexBuffer9*,
                                                IDirect3DVertexDeclaration9*,
                                                DWORD) noexcept override {
+        // T2 device-lost gate. ProcessVertices isn't implemented yet, but
+        // when the device is lost it must return D3DERR_DEVICELOST before
+        // the unimplemented INVALIDCALL fallback.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         dxmt9DeviceDebugLog("device_process_vertices device=%p", this);
         return D3DERR_INVALIDCALL;
     }
@@ -2821,6 +2958,8 @@ public:
     HRESULT STDMETHODCALLTYPE PresentEx(const RECT* src, const RECT* dst,
                                          HWND wnd, const RGNDATA* dirty,
                                          DWORD flags) noexcept override {
+        // T2 device-lost gate.
+        if (deviceNotReset_) return D3DERR_DEVICELOST;
         D9CRect cs{}, cd{};
         if (src) cs = toR(*src); if (dst) cd = toR(*dst);
         const HRESULT flushHr = flushPeRecorder(PeRecorderFlushReason::Present);
@@ -2932,7 +3071,19 @@ public:
         stateBlockRecording_ = false;
         peState_.stateBlockRenderStateRestore.clear();
         peState_.stateBlockTransformRestore.clear();
-        return hr32(dxmt9c_device_reset_ex(dev_, &cpp, pFsMode ? &cdme : nullptr));
+        const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
+            pFsMode ? &cdme : nullptr));
+        if (SUCCEEDED(hr)) {
+            deviceNotReset_ = false;
+            // T2: same viewport/scissor reset semantics as Reset().
+            const uint32_t w = std::max<uint32_t>(1u, cpp.backBufferWidth);
+            const uint32_t h = std::max<uint32_t>(1u, cpp.backBufferHeight);
+            peState_.viewportShadow = D9CViewport{0, 0, w, h, 0.0f, 1.0f};
+            peState_.scissorShadow  = D9CRect{0, 0, (int32_t)w, (int32_t)h};
+            peState_.pendingViewport = false;
+            peState_.pendingScissor  = false;
+        }
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE GetDisplayModeEx(UINT sc,

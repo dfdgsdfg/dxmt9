@@ -17,14 +17,24 @@ protected:
   ~D3D9PeRecorderFlush() = default;
 };
 
+// T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when userMemory is non-null
+// the wrapper aliases the caller-supplied buffer in LockRect and skips the
+// staging path. userMemoryPitch is the row pitch the wrapper should report
+// (0 means "unused"). This is only used for SYSTEMMEM 2D-texture and
+// offscreen-plain-surface creation paths; all other call sites keep the
+// defaults and behave exactly as before.
 IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
                                    IDirect3DDevice9 *device,
                                    IUnknown *container,
                                    D3D9PeRecorderFlush *recorder = nullptr,
-                                   bool trackDefaultPool = true);
+                                   bool trackDefaultPool = true,
+                                   void *userMemory = nullptr,
+                                   int32_t userMemoryPitch = 0);
 IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
                                    IDirect3DDevice9 *device,
-                                   D3D9PeRecorderFlush *recorder = nullptr);
+                                   D3D9PeRecorderFlush *recorder = nullptr,
+                                   void *userMemory = nullptr,
+                                   int32_t userMemoryPitch = 0);
 IDirect3DVolumeTexture9 *
 CreatePeVolumeTexture(D9CTexture *texture, IDirect3DDevice9 *device,
                       D3D9PeRecorderFlush *recorder = nullptr);

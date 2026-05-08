@@ -203,13 +203,21 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   D3D9PeRecorderFlush *recorder_;
   HDC dc_ = nullptr;
   bool defaultPoolTracked_ = false;
+  // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when non-null this
+  // surface aliases caller-owned memory; LockRect short-circuits the
+  // bridge path and returns userMemory_ + userMemoryPitch_ directly.
+  void *userMemory_ = nullptr;
+  int32_t userMemoryPitch_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
   D3D9SurfaceImpl(D9CSurface *s, IDirect3DDevice9 *device, IUnknown *container,
                   D3D9PeRecorderFlush *recorder = nullptr,
-                  bool trackDefaultPool = true)
-      : s_(s), device_(device), container_(container), recorder_(recorder) {
+                  bool trackDefaultPool = true,
+                  void *userMemory = nullptr,
+                  int32_t userMemoryPitch = 0)
+      : s_(s), device_(device), container_(container), recorder_(recorder),
+        userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
     if (device_)
       device_->AddRef();
     if (container_)
@@ -325,6 +333,19 @@ public:
                                      DWORD flags) noexcept override {
     if (!pLR)
       return D3DERR_INVALIDCALL;
+    // T4: if this surface aliases caller-owned memory (SYSTEMMEM
+    // shared-handle path), short-circuit the bridge. The caller's
+    // pointer is the lock target; pRect is ignored (Wine reports the
+    // base pBits + format pitch even for partial rects in the
+    // user-memory path, see test_user_memory).
+    if (userMemory_) {
+      pLR->Pitch = userMemoryPitch_;
+      pLR->pBits = userMemory_;
+      dxmt9DeviceDebugLog(
+          "surface_lock_rect (user-memory) surface=%p pitch=%d bits=%p", this,
+          userMemoryPitch_, userMemory_);
+      return S_OK;
+    }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
@@ -348,6 +369,11 @@ public:
   }
   HRESULT STDMETHODCALLTYPE UnlockRect() noexcept override {
     dxmt9DeviceDebugLog("surface_unlock_rect surface=%p", this);
+    // T4: user-memory aliasing has no GPU staging to flush; treat the
+    // lock as a pure CPU op so unlock is a no-op success.
+    if (userMemory_) {
+      return S_OK;
+    }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
@@ -386,12 +412,21 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
+  // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when non-null this
+  // texture aliases caller-owned memory; LockRect (level 0) returns the
+  // user pointer directly. Only level 0 is supported here because the
+  // partial scope restricts SYSTEMMEM-shared textures to levels == 1.
+  void *userMemory_ = nullptr;
+  int32_t userMemoryPitch_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
   D3D9TextureImpl(D9CTexture *t, IDirect3DDevice9 *device,
-                  D3D9PeRecorderFlush *recorder = nullptr)
-      : t_(t), device_(device), recorder_(recorder) {
+                  D3D9PeRecorderFlush *recorder = nullptr,
+                  void *userMemory = nullptr,
+                  int32_t userMemoryPitch = 0)
+      : t_(t), device_(device), recorder_(recorder),
+        userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
     if (device_)
       device_->AddRef();
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
@@ -528,6 +563,17 @@ public:
                                      DWORD flags) noexcept override {
     if (!pLR)
       return D3DERR_INVALIDCALL;
+    // T4: user-memory aliasing path (SYSTEMMEM shared-handle). The
+    // partial scope only creates level-1 textures, so level == 0 is the
+    // only valid lock target.
+    if (userMemory_ && level == 0) {
+      pLR->Pitch = userMemoryPitch_;
+      pLR->pBits = userMemory_;
+      dxmt9DeviceDebugLog(
+          "texture_lock_rect (user-memory) texture=%p pitch=%d bits=%p", this,
+          userMemoryPitch_, userMemory_);
+      return S_OK;
+    }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
@@ -551,6 +597,10 @@ public:
     return hr;
   }
   HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) noexcept override {
+    // T4: user-memory aliasing has no staging copy to flush.
+    if (userMemory_ && level == 0) {
+      return S_OK;
+    }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
@@ -1051,15 +1101,20 @@ IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
                                    IDirect3DDevice9 *device,
                                    IUnknown *container,
                                    D3D9PeRecorderFlush *recorder,
-                                   bool trackDefaultPool) {
+                                   bool trackDefaultPool,
+                                   void *userMemory,
+                                   int32_t userMemoryPitch) {
   return new D3D9SurfaceImpl(surface, device, container, recorder,
-                             trackDefaultPool);
+                             trackDefaultPool, userMemory, userMemoryPitch);
 }
 
 IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,
                                    IDirect3DDevice9 *device,
-                                   D3D9PeRecorderFlush *recorder) {
-  return new D3D9TextureImpl(texture, device, recorder);
+                                   D3D9PeRecorderFlush *recorder,
+                                   void *userMemory,
+                                   int32_t userMemoryPitch) {
+  return new D3D9TextureImpl(texture, device, recorder, userMemory,
+                             userMemoryPitch);
 }
 
 IDirect3DVolumeTexture9 *CreatePeVolumeTexture(D9CTexture *texture,
