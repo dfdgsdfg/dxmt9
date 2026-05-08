@@ -65,6 +65,23 @@ def main() -> int:
         "uniform_ffp_ps_calls": "0",
         "uniform_ffp_ps_bytes": "0",
         "uniform_volatile_pushes": "0",
+        "render_pass_load_action_load": "0",
+        "render_pass_load_action_clear": "0",
+        "render_pass_load_action_dontcare": "0",
+        "render_pass_load_action_depth_load": "0",
+        "render_pass_load_action_depth_clear": "0",
+        "render_pass_load_action_depth_dontcare": "0",
+        "render_pass_load_action_stencil_load": "0",
+        "render_pass_load_action_stencil_clear": "0",
+        "render_pass_load_action_stencil_dontcare": "0",
+        "render_pass_store_action_store": "0",
+        "render_pass_store_action_dontcare": "0",
+        "render_pass_store_action_resolve": "0",
+        "render_pass_store_action_depth_store": "0",
+        "render_pass_store_action_depth_dontcare": "0",
+        "render_pass_store_action_stencil_store": "0",
+        "render_pass_store_action_stencil_dontcare": "0",
+        "render_pass_tile_preservation_bytes": "0",
     }
     for key, value in expected.items():
         actual = counters.get(key)
