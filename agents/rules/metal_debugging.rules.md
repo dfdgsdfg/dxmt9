@@ -82,9 +82,9 @@ dxmt9 emits `os_signpost` intervals on three boundaries (M3,
 
 | Interval | Site | What it covers |
 |---|---|---|
-| `frame` | `dxmt9_draw_encoder.mm:~2245` | one Present to the next |
-| `commit` | `dxmt9_queue.cpp:~1090` | command-buffer `commit()` call |
-| `draw` | `dxmt9_draw_encoder.mm:~835` | per-draw encode |
+| `frame` | `dxmt9_draw_encoder.mm:~2290` | one Present to the next |
+| `commit` | `dxmt9_queue.cpp:~1095` | command-buffer `commit()` call |
+| `draw` | `dxmt9_draw_encoder.mm:~837` | per-draw encode |
 
 Subsystem: `com.dxmt9.translator`, category: `metal`.
 
