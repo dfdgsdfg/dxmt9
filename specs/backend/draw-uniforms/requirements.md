@@ -271,6 +271,15 @@ Argbuf binding is once per encoder via `setVertexBuffer:offset:atIndex:` and
 e.g., 30 mirroring DXMT). Per-draw work updates only the offsets of dirty
 sub-regions, not full re-encodes.
 
+The argument buffer storage itself is sub-allocated from the same per-frame
+transient ring used for Stage 1 UBOs (`CommandQueue::reserveTransientBuffer`,
+`R-BACK-2.27`); a dedicated per-encoder allocation is acceptable but must
+inherit the same seqId-based reclaim policy. `MTLResourceID` entries inside
+the argbuf are owned by the argbuf encode step, not by the contained
+textures; if a heap-backed texture is destroyed while an argbuf still
+references its `MTLResourceID`, the destroy is deferred per `R-BACK-7.3`
+and the argbuf's transient lifetime guarantees no use-after-free.
+
 ### 7.3 Dirty-mask reuse (`R-BACK-12.24`)
 
 The Stage 1 dirty mask (`R-BACK-12.8`) drives Stage 2 sub-region writes.

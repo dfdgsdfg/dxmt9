@@ -570,17 +570,59 @@ distinct `MTLFunction` from the portable variant of the same bytecode.
 
 ### 6.1 Cross-Process Binary Archive
 
-The `MTLBinaryArchive` (`R-BACK-4.8`) is shared across dxmt9 instances:
+The `MTLBinaryArchive` (`R-BACK-4.8`) is shared across dxmt9 instances.
 
-- Path: `${cache_root}/dxmt9-shaders.metallib-archive` per device family.
-- Identity: SHA-1 over (bytecode | variant key | dxmt9 archive ABI version).
-- Concurrency: file locking on write; readers tolerate stale archives.
-- Cross-process: a second instance reading from the archive populated by the
-  first must hit cached entries. Archive is portable across user sessions and
-  app instances (not bound to a process ID).
-- Versioning: the dxmt9 archive ABI version is bumped when emitter output
-  changes; mismatched versions are treated as misses and the archive is
-  rewritten over time.
+**Path & identity**
+- Path: `${cache_root}/dxmt9-shaders-v${ABI}.${gpu_family}.metallib-archive`.
+  The ABI version and GPU family are baked into the filename so a version or
+  device-family mismatch never reads from a stale archive — they read from a
+  separate file or no file at all.
+- `${cache_root}` resolution order: `$DXMT9_CACHE_DIR`, then
+  `$XDG_CACHE_HOME/dxmt9`, then `${HOME}/Library/Caches/dxmt9`.
+- Entry key: SHA-1 over (bytecode | variant key | dxmt9 archive ABI version).
+
+**Concurrency model (POSIX `flock`)**
+- Writers acquire `LOCK_EX` on the archive file before `serializeToURL:`.
+- Readers acquire `LOCK_SH` while loading; if the lock is unavailable for
+  more than a short timeout (e.g., 100 ms), the loader treats the archive
+  as unreadable and falls through to compile-and-write per `R-BACK-3.7`.
+- A reader that holds `LOCK_SH` will see a consistent snapshot — Metal's
+  archive serialization writes the whole file atomically via a temp file
+  and rename, so partial reads are not possible.
+
+**Versioning rule**
+- The dxmt9 archive ABI version is bumped whenever any of these change:
+  the MSL emitter output, the variant-key encoding, the
+  `MTLBinaryArchive` schema, or the FFP key bit layout.
+- A version bump produces a new archive filename; the old archive is left
+  on disk and reclaimed by the per-version retention policy (default: keep
+  the two most recent ABI versions, delete older).
+- A device that bumps to a new ABI starts with an empty archive and warms
+  it from compile fall-throughs.
+
+**Failure modes**
+| Failure | Detection | Action |
+|---|---|---|
+| File missing | `[NSURL checkResourceIsReachable]` | start with empty archive; not an error |
+| File present, wrong magic / corrupt | `MTLBinaryArchive` initializer returns `nil` with `NSError` | log `prewarmFailureClass = "corrupt"`, rename file to `*.corrupt`, start empty |
+| File present, schema mismatch (Metal version drift) | initializer returns `nil` with version error | log `prewarmFailureClass = "schema"`, rename to `*.outdated`, start empty |
+| File present, GPU family mismatch | filename includes family; cannot happen by construction | n/a |
+| Lock unavailable beyond timeout | `flock` returns `EWOULDBLOCK` | log `prewarmFailureClass = "lock_busy"`, fall through to compile-only |
+| Mid-write crash by another process | Metal's atomic rename leaves either old or new file intact | next reader sees a valid archive (old or new), no recovery needed |
+| Disk full on write | `serializeToURL:` returns error | log; archive grows on next successful write attempt |
+
+A failure is non-fatal under all conditions — the runtime path always falls
+through to compile-and-write. Counters distinguish failure classes so
+support reports identify which path took the slow start.
+
+**Configuration**
+- Prewarm mode (`R-BACK-3.8`) is selected by build flag and runtime override:
+  - default for shipping builds (release): `full`.
+  - default for dev builds (`-Ddev_build=true`): `lazy`.
+  - debug runtime: `disabled` via env var `DXMT9_PREWARM=off`.
+- Counters: `prewarmEntriesLoaded`, `prewarmLoadNs`, `prewarmFailureClass`,
+  `coldCompileCountAfterWarm`, `archiveBytes`. Present diagnostics expose
+  the resolved archive path and the prewarm mode.
 
 ---
 
@@ -606,11 +648,32 @@ graph TD
 ```
 
 **Texture upload path (MANAGED / SYSTEMMEM → GPU):**
-1. Application `Lock()`s the texture surface and writes pixel data.
+
+The path bifurcates on `MTLDevice.hasUnifiedMemory` per `R-BACK-5.7`:
+
+*Unified-memory devices (Apple Silicon, `hasUnifiedMemory == YES`)*:
+1. Application `Lock()`s the texture surface and writes pixel data into the
+   `MTLStorageModeShared` backing.
+2. `Unlock()` marks the surface "uploaded" — no staging copy and no blit are
+   needed. CPU-written bytes are GPU-visible immediately because both sides
+   share the same physical memory.
+3. The next render encoder that samples the texture sees the updated data.
+   No fence is required for visibility (Metal's encoder ordering is enough);
+   a fence is only required if the texture is concurrently written and read
+   across encoders, which is not the upload case.
+
+*Discrete-style devices (Intel iGPU / AMD dGPU on Mac, `hasUnifiedMemory == NO`)*:
+1. Application `Lock()`s the texture surface and writes pixel data into the
+   CPU-accessible (`MTLStorageModeManaged`) backing.
 2. `Unlock()` marks the surface dirty.
-3. On first draw that samples the texture, a blit encoder copies the dirty region
-   from the CPU-accessible buffer to the private `MTLTexture`.
-4. The blit is fenced so the render encoder that follows reads the updated data.
+3. On first draw that samples the texture, a blit encoder copies the dirty
+   region from the managed staging buffer to the private `MTLTexture`.
+4. The blit is fenced so the render encoder that follows reads the updated
+   data.
+
+Counter `managedTextureUploadBlitCount` advances only on the discrete path;
+on Apple Silicon it must remain 0 across a workload's lifetime. A non-zero
+value on a `hasUnifiedMemory` device is a regression of `R-BACK-5.7`.
 
 ### 7.1 Pool / Usage → Storage Mode Matrix
 
@@ -1093,13 +1156,112 @@ running both paths and require equality.
 | `tileFfpPassCount` | render passes encoded via tile path |
 | `portableFfpPassCount` | render passes encoded via portable path |
 | `tileFfpFallbackCount` | passes that started tile-eligible but fell back |
-| `tileFfpFallbackByReason{precision \| unsupported_state \| gpu_family}` | fallback breakdown |
+| `tileFfpFallbackByReason{precision \| unsupported_state \| gpu_family \| mid_pass_ineligible}` | fallback breakdown |
+| `tileFfpMidPassResplitCount` | passes split because a draw mid-pass became ineligible |
 | `tileFfpPassMs` / `portableFfpPassMs` | encoding time per path (sanity check) |
 
 A regression to the portable path on an Apple Silicon device is observable
 as a drop in `tileFfpPassCount` ratio without a corresponding
 `tileFfpFallbackCount` increase (i.e., the selector skipped tile path for an
 unaccounted reason).
+
+### 13.5 Metal API Model
+
+The tile-shader FFP path uses Metal's tile-render pipeline, which is a
+distinct compile target from the standard render pipeline.
+
+```mermaid
+flowchart LR
+    SRC["makeFfpTilePixelSource(FFPKeyPS)\n→ MSL with kernel function\nusing imageblock + threadgroup"]
+    SRC --> LIB["[device newLibraryWithSource:]"]
+    LIB --> FN["id<MTLFunction> (tile kernel)"]
+    FN --> DESC["MTLTileRenderPipelineDescriptor\n• tileFunction = FN\n• threadgroupSizeMatchesTileSize = YES\n• colorAttachments[i].pixelFormat"]
+    DESC --> CMP["[device newRenderPipelineStateWithTileDescriptor:]"]
+    CMP --> TPS["MTLRenderPipelineState (tile variant)\n— shares interface with fragment PSO\nbut compiled separately"]
+```
+
+Pipeline state objects:
+
+| Object | Used by | Notes |
+|---|---|---|
+| `MTLRenderPipelineState` (fragment variant) | `setRenderPipelineState:` | the portable path; unchanged |
+| `MTLRenderPipelineState` (tile variant) | `setRenderPipelineState:` then `dispatchThreadsPerTile:` | encoded via the tile descriptor; produces the same opaque type but compiled with `newRenderPipelineStateWithTileDescriptor:` |
+| `MTLTileRenderPipelineDescriptor` | compile-time only | dxmt9 holds it briefly during compile, never at draw time |
+
+Both variants are cached in the same `MTLRenderPipelineState` cache (§5),
+keyed by the PSO key including `tile_ffp_mode` (`R-BACK-3.3`). Variant
+selection happens at draw encode time via the bit in the key.
+
+The MSL emitter (`makeFfpTilePixelSource`) writes a tile kernel that:
+
+- declares an `imageblock<TileColor>` to read attachment color directly
+  (Apple Silicon programmable-blending).
+- expresses fog blend / alpha-test / A2C as an arithmetic + conditional
+  pass over the imageblock value before write-back.
+- does **not** call `discard_fragment()`; alpha-test rejection becomes a
+  blend-with-prior-color of the rejected fragment (alpha-test on tile is
+  semantically equivalent to discarding pre-blend).
+
+### 13.6 Mid-Pass Eligibility Policy
+
+`R-BACK-13.1` says tile vs portable is decided per render-pass. But pass
+boundaries are decided by RT changes / explicit hazards — within one pass
+a state mutation can change FFP eligibility (e.g., an alpha-test reference
+flips from in-range to out-of-range, or a non-tile-supported fog mode is
+selected mid-pass).
+
+```mermaid
+flowchart TD
+    OPEN["pass opens with first draw\n→ selector chooses tile vs portable"] --> ENC["encoder open;\npipeline = chosen variant"]
+    ENC --> NEXT{"next draw"}
+    NEXT -->|"FFP key still tile-eligible"| ENC
+    NEXT -->|"FFP key becomes ineligible"| FORK{"current path?"}
+    FORK -->|"portable already"| ENC
+    FORK -->|"tile"| SPLIT["end encoder + open new encoder\n(portable variant)\nincrement tileFfpMidPassResplitCount"]
+    SPLIT --> ENC
+```
+
+Rules:
+
+- A pass opened on the **portable** path stays portable even if subsequent
+  draws would have been tile-eligible. Promoting mid-pass is not allowed
+  because the portable encoder cannot retroactively become a tile encoder.
+- A pass opened on the **tile** path that hits an ineligible draw must end
+  the current encoder and start a new portable encoder. This is an
+  encoder split, counted in `tileFfpMidPassResplitCount`. The split is
+  treated as an exact-hazard split for `R-BACK-2.28` purposes (counter
+  signal stays clean — false-positive splits remain forbidden).
+- `tileFfpFallbackByReason{mid_pass_ineligible}` advances on the same
+  event for the by-reason breakdown.
+
+### 13.7 Floating-Point Precision Boundary
+
+`R-BACK-13.2` requires "bit-identical to the portable fragment path." This
+is achievable only when both paths use the same arithmetic precision.
+
+Precision rules:
+
+- Both paths emit MSL with `float` (32-bit IEEE 754) for fog, alpha-test,
+  and A2C arithmetic — never `half`. Apple's MSL compiler may demote to
+  `half` on TBDR by default for fragment shaders; the dxmt9 emitter
+  **explicitly types the affected variables as `float`** to prevent the
+  demotion.
+- The tile-stage emitter additionally uses `imageblock<TileColor>` with
+  `TileColor` defined as `float4` (not `half4`) for color attachments
+  whose pixel format is wider than 8-bit-per-channel. For 8-bit
+  attachments (`A8R8G8B8` etc.) `half4` is acceptable because the
+  attachment quantization already discards precision below `half`.
+- Fog blends are computed in linear space; sRGB attachments are decoded
+  before the blend and re-encoded after, identically on both paths.
+- A precision divergence that breaks bit-identity (e.g., a float
+  rounding-mode quirk on a specific GPU family) must be encoded as a
+  conformance test failure → `tileFfpFallbackByReason{precision}`
+  increment + the affected pass falls back. The portable path remains
+  the authoritative oracle.
+
+A future Metal version that adds full programmable-blending precision
+parity may relax these rules; until then, dxmt9's tile path opts into
+`float` precision unconditionally for FFP arithmetic.
 
 ---
 
@@ -1179,8 +1341,63 @@ calls on heap members are elided.
 | `heap.{family}.bytesAllocated` | total backing storage |
 | `heap.{family}.allocCount` | resources allocated from this family |
 | `heap.{family}.directFallbackCount` | eligible-by-size resources that took direct path due to a usage-flag mismatch |
+| `heap.{family}.fragmentationFailureCount` | `heap.makeTexture` returned nil despite heap not being "full" by accounting |
+| `heap.{family}.compactionCount` | how many times a heap was retired and freed because all members were destroyed |
 | `useHeapPerEncoder` | average count per encoder (target: small) |
 | `useResourcePerEncoder` | average count per encoder (target: dropping after heap adoption) |
+
+### 14.5 Fragmentation Policy
+
+A `MTLHeap` is a contiguous backing region; allocations and frees create
+holes. Even when `usedSize < currentAllocatedSize`, a fresh
+`heap.makeTexture(desc)` can return `nil` because the largest free hole is
+smaller than the requested footprint.
+
+```mermaid
+flowchart TD
+    REQ["heap.alloc(family, desc)"] --> TRY{"heap.makeTexture()"}
+    TRY -->|"non-nil"| OK["return heap-backed texture"]
+    TRY -->|"nil & heap usedSize < cap"| FRAG["fragmentation:\nlargest free hole < desc footprint"]
+    FRAG --> NEXT{"another heap in family\nwith capacity?"}
+    NEXT -->|"yes, try next"| TRY
+    NEXT -->|"no"| GROW["allocate new heap (geometric)"]
+    GROW --> ASSIGN["new alloc targets fresh heap"]
+    TRY -->|"nil & heap full by accounting"| GROW
+```
+
+Rules:
+
+- **No mid-heap compaction.** Metal does not expose a heap-compact API and
+  resources cannot be relocated once allocated. Fragmentation is absorbed
+  by adding a new heap to the family, never by moving existing allocations.
+- **Failed allocation walks the family.** If the first heap returns nil,
+  the next eligible heap in the family is tried before allocating a new
+  heap. A bookkeeping `usedSize` per heap is a hint, not a hard predictor
+  of `makeTexture` success — always probe.
+- **`fragmentationFailureCount` advances** when `heap.makeTexture` returns
+  nil but `usedSize < currentAllocatedSize`. Sustained growth indicates the
+  family's allocation pattern produces too many holes; tune the threshold
+  or add a per-family eviction policy as a follow-up.
+- **Compaction by retirement** is the only reclaim mechanism. When all
+  members of a heap are destroyed and `completedSeqId ≥ lastUsedSeqId` for
+  the heap (`R-BACK-14.4`), the heap is released. Subsequent allocations
+  do not re-target the released heap; they go to a remaining heap or grow
+  a new one. `compactionCount` advances per release.
+
+### 14.6 Allocation Failure Beyond Family Growth
+
+If creating a new heap (`newHeapWithDescriptor:`) itself fails — typically
+out-of-memory at the device level — the heap manager falls through to
+direct allocation (`R-BACK-5.9`'s "fall through to direct allocation"
+clause). This is recorded as `heap.{family}.directFallbackCount` and
+`heap.{family}.heapAllocFailureCount`. Subsequent allocations retry heap
+allocation; the manager does not give up after one failure because the
+underlying memory pressure may be transient.
+
+If direct allocation also fails, the backend returns
+`D3DERR_OUTOFVIDEOMEMORY` to the D3D9 caller per the existing
+out-of-memory contract. There is no "swap to system memory" fallback —
+that is the D3D9 application's responsibility via pool selection.
 
 A regression manifests as `useResourcePerEncoder` rising on workloads
 previously dominated by heap allocation, or
