@@ -18,3 +18,7 @@ under `tests/meson.build`.
   `dxmt9-verify-tla`).
 - `assert_perf_counters.py` — fails when expected perf counter keys are
   missing from a run JSON; intended to extend draw-uniforms coverage.
+- `audit_perf_counter_table.py` — text-based audit detecting fields added to
+  the `Counters` struct that are never referenced from `kCounterTable`,
+  preventing silent-miss regressions in `[dxmt9-perf]` output (test
+  `dxmt9-perf-counter-table-audit`).
