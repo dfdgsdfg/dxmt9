@@ -341,6 +341,58 @@ Instrumentation interpretation:
 - `process_elapsed_sec` remains much larger than in-app `total_ms`. This confirms the previous concern: process-level FPS is still useful for end-to-end comparison, but not for attributing the renderer hot path.
 - Short offscreen smoke runs below the catalogue `capture_frame=120` do not force readback/flush, so they validate parser wiring but not GPU encode behavior. Full offscreen runs must reach the capture/readback frame or explicitly flush.
 
+### Submission grain bottleneck identified (G axis, 2026-05-10)
+
+`docs/sfiv-benchmark-measurement.md` records a 175.8s / 2343-frame
+SFIV benchmark run after the M-cycle (M1-M7) measurement infrastructure
+landed. The data exposes a bottleneck the per-counter line cannot
+attribute by name: **encode CPU time and GPU wall time are roughly
+equal at the frame budget**, neither hides the other.
+
+| Counter | mean | p99 | implication |
+|---|---:|---:|---|
+| `encode_chunk_cpu_ms` | 68.91 | 132.26 | encode work per frame |
+| `completion_wait_ms` | 69.01 | 130.39 | CPU thread waits on GPU |
+| `command_buffers / frame` | 1 | 1 | single CB carries all work |
+| frame budget at 13.25 fps | 75.5 | — | CPU and GPU each ≈ frame budget |
+
+The single command buffer per chunk is the structural reason CPU
+encode and GPU execute do not pipeline across frames. While they
+roughly overlap **within** a frame, the next frame's encode cannot
+begin until the previous chunk's commit has acquired the next drawable.
+
+This is the **G-axis** bottleneck described in
+`docs/architecture-comparison.md §G`. It is **not** a tuning question
+solvable by `DXMT9_DRAW_CHUNK_COMMAND_LIMIT`: shrinking the chunk
+multiplies the queue's seqId / ring / completion overhead instead of
+reducing it. The fix is to keep one chunk = one seqId but allow the
+encode thread to commit **N MTLCommandBuffers chained** for that
+single seqId.
+
+R-BACK-2.29..2.32 (proposed in `specs/backend/requirements.md` §2)
+state the contract:
+
+- a single chunk's GPU work may span 1+ MTLCommandBuffers chained on
+  the same MTLCommandQueue,
+- present metadata attaches to the **last** sub-CB only,
+- split decisions are deterministic with respect to record content
+  and queue-local state (R-BACK-2.16 carryover),
+- resource reclaim and `completedSeqId` advance only when the chain's
+  last sub-CB completes.
+
+**Expected effect**: SFIV 13fps → projected 18-22fps (GPU lead time
+hidden under encode time). Confirmation requires an A/B experiment
+that varies mid-chunk commit frequency and measures
+`gpu_command_buffer_time_*_ms` (newly per-frame in 2026-05-10) against
+`completion_wait_ms`.
+
+The G-axis target does **not** mean adopting DXMT's full structure.
+The lock-free MPMC queue, per-call thunk, and lambda capture in DXMT
+are coupled to its own chunk-recording model and would lose dxmt9's
+A/B/C/F-axis advantages if applied wholesale (see
+`docs/architecture-comparison.md §G "Why dxmt9 should NOT adopt DXMT's
+full G-axis model"`).
+
 ### Per-frequency draw-uniform split landed (2026-05-07)
 
 R-BACK-12 (specs/backend/draw-uniforms/) implemented across A1–D2 batched agents:

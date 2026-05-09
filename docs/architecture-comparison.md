@@ -33,6 +33,7 @@ flowchart TB
         d_d["D. Frontend: D7+D8+D9 unified"]
         d_e["E. Binding: per-frequency UBO + setBytes"]
         d_f["F. Pacing: seqId + frame token + ring"]
+        d_g["G. Submission grain: 1 chunk = 1 CB (target: 1:N)"]
     end
     subgraph DXMT["DXMT (D3D11)"]
         x_a["A. Boundary: per Metal call thunk"]
@@ -41,6 +42,7 @@ flowchart TB
         x_d["D. Frontend: D3D10 shim → D3D11"]
         x_e["E. Binding: single per-encoder argbuf"]
         x_f["F. Pacing: CpuFence per chunk"]
+        x_g["G. Submission grain: 1 chunk = N CB (slot chain)"]
     end
     subgraph DXVK["DXVK D3D9"]
         v_a["A. Boundary: none (in-process)"]
@@ -49,6 +51,7 @@ flowchart TB
         v_d["D. Frontend: D3D9-only"]
         v_e["E. Binding: multi-UBO + push constants"]
         v_f["F. Pacing: frameLatencySignal capped"]
+        v_g["G. Submission grain: 5-15 CBs per frame"]
     end
     subgraph Wine["Wine D3D9"]
         w_a["A. Boundary: none (thin d3d9.dll)"]
@@ -57,6 +60,7 @@ flowchart TB
         w_d["D. Frontend: thin shim → fat wined3d"]
         w_e["E. Binding: 8 push-const categories"]
         w_f["F. Pacing: pending_presents counter"]
+        w_g["G. Submission grain: backend-decided (per-state)"]
     end
 ```
 
@@ -382,6 +386,77 @@ the spec only stated the ordering invariant.
 
 ---
 
+## G. Submission Grain (Per-Chunk Command-Buffer Count)
+
+This axis was **implicit / not surfaced** in earlier revisions of this
+document. The SFIV measurement (2026-05-10, see
+`docs/perfomance-bottleneck.md`) made it visible as a **standalone
+bottleneck independent of the F axis pacing decisions**.
+
+| Project | Per-frame CBs | Producer ↔ consumer queue | Notes |
+|---|---|---|---|
+| **dxmt9 (current)** | 1 | encode-thread single-producer; `splitBeforeBlockingPresent()` is the lone exception | implicit invariant; not stated in R-BACK-2 |
+| **dxmt9 (target)** | 1-N (mid-chunk split) | unchanged single-producer; sub-CB chain shares one seqId | R-BACK-2.29..2.32 (proposed) |
+| DXMT | N per logical batch (submission slot chain) | **lock-free MPMC** ring across emit / encode / finish threads | one CpuFence per slot covers the chain |
+| DXVK | 5-15 per frame at semantic boundaries | single-producer / single-consumer (CSThread) | each `vkQueueSubmit` carries one VkCommandBuffer |
+| Wine | backend-decided (per-state-change-ish) | one opcode per D3D9 call | wined3d does not chunk |
+
+```mermaid
+flowchart LR
+    subgraph dxmt9_now["dxmt9 today"]
+        c1["chunk N records"] --> c2["1 newCommandBuffer()"] --> c3["encode all"] --> c4["1 commit()"] --> c5["GPU run"]
+    end
+    subgraph dxmt9_tgt["dxmt9 target"]
+        t1["chunk N records"] --> t2["sub-CB 1: encode K records, commit()"]
+        t2 --> t3["sub-CB 2: encode K records, commit()"]
+        t3 --> t4["sub-CB 3 ... commit()"]
+        t4 --> t5["seqId advances on last sub-CB completion"]
+    end
+```
+
+### Why dxmt9 needs to move on this axis
+
+Single-CB-per-chunk forces encode CPU and GPU execute time to add to
+the frame budget rather than overlap. SFIV measurement: encode 69 ms
+mean, GPU 69 ms mean, frame budget 75 ms — each ≈ frame budget, neither
+hides the other. Mid-chunk commit lets the GPU start work while the
+encode thread is still building later sub-CBs in the same chunk,
+collapsing GPU lead time.
+
+This is decoupled from F-axis pacing: 3-axis pacing (seqId / frame
+token / ring slot) already permits one seqId to span N sub-CBs as long
+as the seqId advances only when the chain's last CB completes. The
+present-frame-token axis only advances on the present-bearing sub-CB
+(the chain's tail per R-BACK-2.30), so frame pacing is unchanged.
+
+### Why dxmt9 should NOT adopt DXMT's full G-axis model
+
+DXMT's lock-free MPMC ring is enabled by the per-call thunk (axis A) and
+the lambda capture (axis B) — producers can write a lambda into the
+ring without touching the consumer. dxmt9's chunk POD model is
+single-producer-only by construction (the encode thread owns the chunk
+record stream after import), so a lock-free MPMC pattern would have
+no producers to coordinate. **Adopt DXMT's submission slot chain
+shape, keep dxmt9's single-producer queue model.**
+
+### dxmt9's chosen position
+
+| Element | dxmt9 keeps | dxmt9 borrows from DXMT |
+|---|---|---|
+| Wire format | chunk POD (R-BACK-2.18) | — |
+| Storage shape | SoA data (R-BACK-2.21) | — |
+| Submission grain | — | 1 chunk → N sub-CB chain |
+| Fence model | one seqId per chunk (R-BACK-2.13) | seqId advances on last sub-CB |
+| Queue model | single-producer encode thread | — |
+
+The result is **partial DXMT adoption** — the submission grain alone,
+not the per-call thunk or lambda capture or lock-free MPMC. See
+R-BACK-2.29..2.32 in `specs/backend/requirements.md` for the contract
+and `docs/research/dxmt.md` for the source-of-truth on DXMT's
+submission slot mechanics.
+
+---
+
 ## Summary Table
 
 | Axis | dxmt9 | DXMT | DXVK | Wine |
@@ -392,6 +467,7 @@ the spec only stated the ordering invariant.
 | D. Frontend | **D7+D8+D9 unified** | D10→D11 shim | D9-only | thin → wined3d |
 | E. Binding | **per-frequency + push** | single argbuf | multi-UBO + push | 8 categories |
 | F. Pacing | **3 axes** | CpuFence | frameLatencySignal | counter |
+| G. Submission grain | 1 CB → **target 1-N** | **N (slot chain)** | 5-15 CBs/frame | backend-decided |
 
 Bold cells are dxmt9's choices. Each is a deliberate divergence justified by
 D3D9 workload characteristics (small/many Metal calls, FFP, frequent
@@ -409,6 +485,7 @@ needle for users:
 | D. Frontend | **Low** | code organization; no hot-path effect |
 | E. Binding | **Medium-to-High** | per-draw upload bytes on memory-BW-bound titles |
 | F. Pacing | **Medium** | stutter / spike control on query-heavy titles |
+| G. Submission grain | **High** | hides GPU lead time under CPU encode; SFIV 13fps → projected ~20fps after split |
 
 Axis B is unusual: the storage shape itself is roughly perf-neutral vs the
 lambda alternative, but it is the form that makes the high-impact axes
@@ -432,6 +509,7 @@ title exhibits any of:
 | single shader, single render target, simple FFP | unified argbuf would be simpler than per-frequency |
 | query/readback usage near zero | three-axis pacing is over-engineered |
 | D7/D8 usage near zero | D9-only frontend (DXVK shape) would be cleaner |
+| `encode_chunk_cpu_ms` and `completion_wait_ms` persistently equal at frame budget | single-CB-per-chunk is the bottleneck; G-axis multi-CB target is mandatory (SFIV 2026-05-10 measurement falsifies the implicit "1 chunk = 1 CB" choice) |
 
 These are all observable. The benchmark and counter design in
 `specs/archicture/design.md` §7 already enumerates the relevant signals

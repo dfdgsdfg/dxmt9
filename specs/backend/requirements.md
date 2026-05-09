@@ -181,6 +181,37 @@ read/write handle-set overlap. Probabilistic Bloom overlap checks may remain onl
 diagnostic counters for false-positive detection; Bloom false positives must not
 force a render-pass split in the default path.
 
+**R-BACK-2.29** A single committed `CommandChunk` may produce one or more
+`MTLCommandBuffer` instances chained in submission order on the same
+`MTLCommandQueue`. The chunk's `seqId` covers the entire chain, and
+`completedSeqId` advances only after the **final** `MTLCommandBuffer` in the
+chain reaches the Metal Completed state. Sub-`MTLCommandBuffer` boundaries are
+encode-thread implementation detail and must not be visible to the PE side, the
+importer, the resource pool, or the present pacing path.
+
+**R-BACK-2.30** When a present-bearing chunk is split into a chain of
+`MTLCommandBuffer` instances under `R-BACK-2.29`, present metadata (drawable
+acquisition, `presentDrawable` encoding, frame-token signaling) must attach to
+the **last** `MTLCommandBuffer` of the chain only. Earlier sub-buffers must not
+acquire a drawable, must not encode `presentDrawable`, and must not advance the
+present-frame-token. Their completion contributes to chunk progress only
+through the chain's final fence.
+
+**R-BACK-2.31** Mid-chunk `MTLCommandBuffer` split decisions must be
+deterministic with respect to imported record content, retained handle
+metadata, and explicit queue-local state. Split policies based on wallclock
+time, GPU progress feedback, or other non-deterministic signals are forbidden.
+The encode thread must produce the same chain shape for identical chunk inputs
+(R-BACK-2.16 extension).
+
+**R-BACK-2.32** Resource reclaim, transient slab rotation, deferred destruction
+gating, and any operation keyed off `completedSeqId` must continue to fire only
+when a chunk's `seqId` reaches the completed state per `R-BACK-2.29`. No
+backend stage may reclaim or invalidate resources based on the completion of
+an intermediate sub-`MTLCommandBuffer`. Sub-buffer completion order on the GPU
+is guaranteed by Metal's same-queue in-order submission and must not be
+re-derived by the queue tracker.
+
 ---
 
 ## 3. Pipeline State Objects

@@ -23,6 +23,20 @@
  *   R-BACK-2.2  Bounded queue; Wine thread outrun limit = MAX_INFLIGHT (default 3)
  *   R-BACK-2.3  Encode thread must not allocate on hot path (not modeled here)
  *
+ * Future extension (G axis, R-BACK-2.29..2.32, gap.md row dated 2026-05-10):
+ *   The current model assumes a chunk's encode produces exactly one
+ *   MTLCommandBuffer per chunk (one EncodeStep -> one cmdbuf.commit). Once
+ *   mid-chunk sub-CB chains land per R-BACK-2.29, this model needs:
+ *     - a sub-CB count per slot,
+ *     - EncodeStep replaced by EncodeOpenSubCB / EncodeCommitSubCB transitions,
+ *     - FinishStep advancing completedSeqId only when the chain's last sub-CB
+ *       is observed completed (Metal in-order guarantee makes this trivial:
+ *       last sub-CB completion implies all prior sub-CBs completed),
+ *     - a new safety invariant: present-bearing slots route present metadata
+ *       to the chain's last sub-CB only (R-BACK-2.30).
+ *   The seqId / inflight / ring invariants are unchanged; the chain is opaque
+ *   to back-pressure because seqId still maps 1:1 to chunks.
+ *
  * Properties verified:
  *   Safety   — TypeOK, SeqIdSafety, BoundedInflight, RingSafety, EncodeSafety
  *   Liveness — PendingEventuallyFree, EventuallyDrained

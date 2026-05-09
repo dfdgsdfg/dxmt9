@@ -198,6 +198,52 @@ graph LR
     C0 --- AB
 ```
 
+### Submission Slot Model (G axis)
+
+DXMT does NOT enforce a 1 chunk = 1 `MTLCommandBuffer` mapping. Each
+chunk encodes into a **chain of MTLCommandBuffers** committed against
+the same `MTLCommandQueue`:
+
+- The encode thread opens a CB, encodes a sub-range of the chunk's
+  records, calls `commit()`, opens the next CB, and continues.
+- All sub-CBs share the chunk's single `CpuFence` / completion signal —
+  the fence advances only when the **final** sub-CB completes on the GPU.
+- Resource lifetime (Rc captured by lambdas) is tied to the fence, so
+  reclaim happens after the entire chain completes — sub-CB granularity
+  is invisible to the resource owner.
+
+This decouples **encode CPU time** from **GPU lead time**. While the
+encode thread builds sub-CB N+1, sub-CB N is already running on the
+GPU. The CPU never has to wait for the whole chunk's encode work to
+finish before the GPU starts.
+
+The queue itself is a **lock-free MPMC ring**: producers (the application
+thread emitting via `EmitOP/EmitST`) and consumers (encode + finish
+threads) coordinate via atomic head/tail indices and per-slot atomic
+state words rather than a mutex. With 32 slots and `MAX_INFLIGHT=3` the
+contention envelope is bounded; the lock-free path matters when bursts
+arrive.
+
+### dxmt9 Adoption Points (G axis)
+
+Adoption by dxmt9 should be **partial, not wholesale**:
+
+- Adopt the sub-CB chain pattern (one chunk → N MTLCommandBuffers,
+  single seqId, fence advances on last sub-CB).
+- Keep dxmt9's POD chunk wire format (R-BACK-2.18) — DXMT's lambda
+  capture model is incompatible with the PE/unix Wine boundary.
+- Keep dxmt9's exact-set hazard tracking (R-BACK-2.28) — DXMT's
+  Bloom-filter false positives force unnecessary splits, which is
+  worse on Apple Silicon TBDR than on D3D11's resource workload.
+- The lock-free MPMC queue is an **aspirational** target — dxmt9's
+  current ring uses fine-grained mutexes per slot. A measurement-led
+  conversion is appropriate once mutex contention shows up in the
+  perf counters.
+
+See `docs/architecture-comparison.md §G` for the full axis breakdown
+and `specs/backend/requirements.md` R-BACK-2.29..2.32 for the dxmt9
+contract.
+
 ---
 
 ## Encoder Merging and Dependency Tracking

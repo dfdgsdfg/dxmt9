@@ -222,6 +222,67 @@ Ownership rules:
 - Sequence IDs track all chunk completion; frame tokens track present-bearing chunk
   completion.
 
+### 2.2.1 Sub-CommandBuffer Chain (G axis target)
+
+`R-BACK-2.29` permits a single execution chunk to commit through a chain
+of `MTLCommandBuffer` instances on the same `MTLCommandQueue`. The
+chunk's `seqId` covers the chain; `completedSeqId` advances only when
+the **last** sub-CB reaches Completed.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Encoding : encode thread dequeues chunk
+    Encoding --> SubCBOpen : encode N records
+    SubCBOpen --> SubCBCommit : split policy fires
+    SubCBCommit --> SubCBOpen : open next sub-CB on same queue
+    SubCBCommit --> EncodingPresent : on present record (last sub-CB)
+    EncodingPresent --> ChainTailCommit : encode presentDrawable + commit()
+    ChainTailCommit --> ChainGPU : driver runs all sub-CBs in order
+    ChainGPU --> ChainCompleted : finish thread observes last sub-CB completion
+    ChainCompleted --> [*] : advance seqId / frameToken / reclaim
+```
+
+Split policy rules (R-BACK-2.31 deterministic):
+
+- A split decision must read only imported record fields, retained
+  handle metadata, and queue-local state captured at chunk admit time.
+- Candidate triggers (any may be chosen, mixing is allowed if the
+  composite predicate is still deterministic):
+  - **per-N records** — every N records since the last commit, where
+    N is a fixed encode-thread constant or env-driven knob.
+  - **per-render-pass** — commit at every `flushRender` whose split
+    reason is not `Final`.
+  - **per-X bytes** — commit when total encoded byte count crosses a
+    threshold (requires byte accounting in encode thread).
+- Wallclock-time-based or GPU-feedback-based triggers are forbidden.
+  They violate R-BACK-2.16 / R-BACK-2.31 determinism.
+
+Present and chain-tail rule (R-BACK-2.30):
+
+- The present-bearing record's encoder must be the **last** sub-CB.
+  Any preceding sub-CB must not call `presentDrawable`, must not
+  acquire a drawable, and must not advance the present-frame-token.
+- `splitBeforeBlockingPresent()` (existing path) becomes a special
+  case of mid-chunk split — the policy that always closes a sub-CB
+  immediately before the present encoder opens. Other split policies
+  fire earlier in the chunk.
+
+Reclaim rule (R-BACK-2.32):
+
+- All chunk-owned resources (transient slabs, retained handles, arg
+  buffers) remain pinned until the chain's last sub-CB completes.
+- Sub-CB GPU completion order is guaranteed by Metal's same-queue
+  in-order submission. The queue tracker must not re-derive ordering
+  per sub-CB.
+
+Failure mode:
+
+- A sub-CB that fails (`WMTCommandBufferStatusError`) marks the entire
+  chunk failed. The chain's tail still must run completion handlers so
+  the present token does not stall. The error is reported via the
+  `gpu_command_buffer_errors` counter (M5) at the failure site, not
+  per-sub-CB.
+
 ### 2.3 Data-Oriented Transform Boundaries
 
 The backend command path is a sequence of data transforms. Each stage owns explicit

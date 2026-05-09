@@ -155,6 +155,34 @@ Backend-specific behavior:
 - Make discard/rotate semantics part of present execution, not a side effect of the next draw.
 - Prefer a single present queue lifecycle owner. Wine's D3D9 layer forwards policy; Wined3D owns command-stream present and max-frame-latency enforcement.
 
+## Submission Grain (G axis)
+
+Wine's wined3d does **not** chunk D3D9 calls into batches. Each app-side
+D3D9 call is forwarded directly to the CS thread as an individual
+opcode, and the CS thread replays them one-at-a-time against the
+backend (GL or Vulkan). The backend opens and commits GL command lists
+/ Vulkan command buffers at points it chooses.
+
+| Axis | Wine wined3d | dxmt9 (current) |
+|---|---|---|
+| App→CS boundary | one opcode per D3D9 call | one chunk per ~hundreds of D3D9 calls |
+| CBs per frame | backend-defined | 1 (per chunk) |
+| Submission queue model | single-producer / single-consumer | same |
+| Pacing | `pending_presents` counter | 3-axis (seqId / frame token / ring) |
+
+### dxmt9 Adoption Points (G axis)
+
+The Wine model is **not the model dxmt9 follows for submission grain** —
+forwarding per-call is exactly what R-BACK-2.7 / R-BACK-2.8 avoid.
+For the G axis dxmt9 looks to DXVK's mid-batch CB split (see
+`docs/research/dxvk-d3d9.md`) and DXMT's submission slot chain
+(see `docs/research/dxmt.md`).
+
+What dxmt9 takes from Wine on this axis is **pacing-only**: wait when
+too far ahead, not after every present (`docs/architecture-comparison.md
+§F`). The submission grain itself is decided by encode-thread policy,
+not by per-call opcode shape.
+
 ## Uniform Binding and Per-Frequency State
 
 Date: 2026-05-07

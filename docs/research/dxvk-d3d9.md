@@ -167,6 +167,42 @@ Latency is bounded by a frame-id signal rather than by forcing full completion o
 - Apply the DXVK-like cap `min(maxFrameLatency, BackBufferCount + 1)` only as a latency-bound rule, not as a forced synchronous flush.
 - Avoid defaulting present splitting unless command-buffer overhead is proven lower than the wait it removes.
 
+## Submission Grain (G axis)
+
+DXVK's CSThread emits **multiple Vulkan command buffers per logical
+frame** at semantic boundaries — render-pass changes that cross
+sub-pass topology, present, large state churn. A typical D3D9 frame
+under DXVK lands ~5-15 `vkQueueSubmit` calls, each carrying a separate
+`VkCommandBuffer`.
+
+This is structurally different from dxmt9's current `1 chunk = 1
+MTLCommandBuffer` shape:
+
+| Axis | DXVK | dxmt9 (current) | dxmt9 (target, R-BACK-2.29) |
+|---|---|---|---|
+| CBs per frame | 5-15 | 1 | 1-N (mid-chunk split) |
+| Submission queue model | single producer (D3D9 device) → single consumer (CSThread) → driver | single producer (encode thread) → driver | unchanged single producer; sub-CB chain |
+| Fence per CB | one per submit | one per chunk | one per chunk (chain shares the fence) |
+
+DXVK does **not** use a lock-free MPMC queue between D3D9 and CSThread —
+it is a single-producer / single-consumer ring. The lock-free MPMC
+pattern in this comparison is DXMT's territory (see
+`docs/research/dxmt.md`).
+
+### dxmt9 Adoption Points (G axis)
+
+- Adopt **mid-chunk command-buffer split**. Trigger candidates: a
+  fixed N records per sub-CB (deterministic, R-BACK-2.16), or a
+  per-render-pass quantum, or per-X bytes encoded.
+- Keep dxmt9's chunk POD wire format (R-BACK-2.18) — the split is
+  encode-side only, the PE/unix bridge sees one chunk.
+- The CSThread → driver in DXVK is the analogue of dxmt9's encode
+  thread → `MTLCommandQueue`. dxmt9 should preserve the encode-thread
+  ownership model (`R-BACK-2.13`) and fold sub-CB chain admission
+  into the existing tracker.
+
+See `docs/architecture-comparison.md §G` for the full axis breakdown.
+
 ## Uniform Binding and Per-Frequency State
 
 Date: 2026-05-07
