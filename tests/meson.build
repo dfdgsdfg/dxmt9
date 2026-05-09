@@ -392,6 +392,9 @@ test('dxmt9-d3d9-conformance-status-report', python3,
      is_parallel: false)
 test('dxmt9-drift-report', bash, args: [join_paths(meson.project_source_root(), 'scripts/check_drift.sh')],
      is_parallel: false)
+test('dxmt9-perf-counter-table-audit', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/audit_perf_counter_table.py')],
+     is_parallel: false)
 test('dxmt9-corpus-sync-smoke', python3,
      args: [join_paths(meson.project_source_root(), 'tests/shader_runner/corpus_sync_smoke.py')],
      is_parallel: false)

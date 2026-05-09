@@ -6,6 +6,8 @@
 #include "device_c_provider.hpp"
 #include "device_c_record_utils.hpp"
 #include "util/unixcall_marshal.hpp"
+
+#include "../dxmt9/dxmt9_perf_counters.hpp"
 // Need the full dxmt9::Device type to call markChunkResources on the
 // upperDevice shared_ptr that the chunk importer's Phase 4-B path
 // hands the per-chunk retention list to.
@@ -267,6 +269,8 @@ int32_t commitChunkFail(const char* reason,
                         int32_t hr = dxmt9::core::D3DERR_INVALIDCALL) {
   dxmt9DebugLog("commit_chunk fail reason=%s index=%u type=%u hr=0x%08x",
                 reason, index, type, static_cast<std::uint32_t>(hr));
+  // R-BACK-2.10: every commit_chunk reject path funnels through here.
+  dxmt9::perf::countChunkReject();
   return hr;
 }
 
@@ -1007,9 +1011,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     recordIndex = recordView->nextIndex();
   }
 
-  return recordIndex == importedChunk.recordCount
-             ? dxmt9::core::D3D_OK
-             : commitChunkFail("truncated-records", recordIndex, importedChunk.recordCount);
+  if (recordIndex != importedChunk.recordCount) {
+    return commitChunkFail("truncated-records", recordIndex, importedChunk.recordCount);
+  }
+  // R-BACK-2.10: chunk fully validated + replayed. Bumping admit at the
+  // single success point keeps reject + admit symmetric.
+  dxmt9::perf::countChunkAdmit();
+  return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_device_draw_primitive_packet(D9CDevice* d,
