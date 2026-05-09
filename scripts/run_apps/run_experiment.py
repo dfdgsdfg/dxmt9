@@ -68,6 +68,12 @@ class ExperimentApp:
     skip_stage: bool = False
     wine_dll_overrides: str | None = None
     cx_bottle: str | None = None
+    # Optional probe-level expected-range gate. Each entry maps a counter
+    # key (matching kCounterTable in src/dxmt9/dxmt9_perf_counters.cpp) to
+    # an inclusive {min, max} range. Either bound may be omitted. Absent
+    # counters are treated as 0 so min-bound checks still fire on a
+    # regression to zero.
+    expected_counters: dict[str, dict[str, float]] | None = None
 
     @classmethod
     def from_toml(cls, data: dict[str, Any]) -> "ExperimentApp":
@@ -109,6 +115,33 @@ class ExperimentApp:
             cx_bottle=data.get("cx_bottle"),
         )
 
+    def attach_expected_counters(self, raw: dict[str, Any] | None) -> None:
+        if not raw:
+            self.expected_counters = None
+            return
+        cleaned: dict[str, dict[str, float]] = {}
+        for key, bounds in raw.items():
+            if not isinstance(bounds, dict):
+                raise ValueError(
+                    f"{self.name}: expected_counters[{key!r}] must be a table with min/max"
+                )
+            extracted: dict[str, float] = {}
+            if "min" in bounds:
+                extracted["min"] = float(bounds["min"])
+            if "max" in bounds:
+                extracted["max"] = float(bounds["max"])
+            unknown = set(bounds.keys()) - {"min", "max"}
+            if unknown:
+                raise ValueError(
+                    f"{self.name}: expected_counters[{key!r}] has unknown keys {sorted(unknown)!r}"
+                )
+            if not extracted:
+                raise ValueError(
+                    f"{self.name}: expected_counters[{key!r}] must specify at least one of min/max"
+                )
+            cleaned[key] = extracted
+        self.expected_counters = cleaned or None
+
     @property
     def binary_path(self) -> Path:
         return REPO_ROOT / self.binary
@@ -124,7 +157,21 @@ class ExperimentApp:
 
 def load_catalogue(path: Path) -> list[ExperimentApp]:
     data = tomllib.loads(path.read_text())
-    return [ExperimentApp.from_toml(item) for item in data.get("app", [])]
+    apps = [ExperimentApp.from_toml(item) for item in data.get("app", [])]
+    # Optional sidecar table: [apps.<name>.expected_counters]. Matches by
+    # `name`. Apps without a sidecar entry keep expected_counters=None and
+    # bypass the gate entirely.
+    sidecar = data.get("apps", {}) or {}
+    if not isinstance(sidecar, dict):
+        raise ValueError("[apps] must be a table keyed by app name")
+    by_name = {app.name: app for app in apps}
+    for app_name, app_cfg in sidecar.items():
+        if app_name not in by_name:
+            raise ValueError(f"[apps.{app_name}]: no matching [[app]] entry with name={app_name!r}")
+        if not isinstance(app_cfg, dict):
+            raise ValueError(f"[apps.{app_name}] must be a table")
+        by_name[app_name].attach_expected_counters(app_cfg.get("expected_counters"))
+    return apps
 
 
 def detect_heroic_wine_root() -> Path | None:
@@ -443,6 +490,48 @@ def extract_perf_probe_timings(log_path: Path) -> dict[str, int | float | str]:
     return timings
 
 
+def evaluate_counter_ranges(
+    expected: dict[str, dict[str, float]] | None,
+    counters: dict[str, int | float | str],
+) -> list[dict[str, Any]]:
+    """Compare counters against per-app expected ranges.
+
+    Returns a list of violation records. Counters absent from `counters`
+    are treated as 0; this lets a `min` bound flag a regression to zero
+    even when the counter was never emitted (e.g. a probe that stopped
+    issuing draws). Non-numeric counter values are skipped so that string
+    values cannot crash the gate.
+    """
+    if not expected:
+        return []
+    violations: list[dict[str, Any]] = []
+    for key, bounds in expected.items():
+        raw = counters.get(key, 0)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            # Skip non-numeric counters; record as a violation so the gap
+            # is visible rather than silently passing.
+            violations.append({
+                "key": key,
+                "expected": dict(bounds),
+                "actual": raw,
+                "reason": "non_numeric",
+            })
+            continue
+        actual = float(raw)
+        out_of_range = False
+        if "min" in bounds and actual < bounds["min"]:
+            out_of_range = True
+        if "max" in bounds and actual > bounds["max"]:
+            out_of_range = True
+        if out_of_range:
+            violations.append({
+                "key": key,
+                "expected": dict(bounds),
+                "actual": raw,
+            })
+    return violations
+
+
 def terminate_process_group(process: subprocess.Popen[str] | None, sig: signal.Signals) -> None:
     if process is None or process.poll() is not None:
         return
@@ -634,6 +723,17 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         dxmt9_perf_counters = extract_dxmt9_perf_counters(log_path)
         if dxmt9_perf_counters:
             result["dxmt9_perf_counters"] = dxmt9_perf_counters
+        counter_violations = evaluate_counter_ranges(app.expected_counters, dxmt9_perf_counters)
+        if counter_violations:
+            result["counter_violations"] = counter_violations
+            result["failures"].append({
+                "type": "counter_out_of_range",
+                "violations": counter_violations,
+            })
+            print(
+                f"experiment {app.name} failed: {len(counter_violations)} counter range violations",
+                file=sys.stderr,
+            )
         dxmt9_bridge_counters = extract_dxmt9_bridge_counters(log_path)
         if dxmt9_bridge_counters:
             result["dxmt9_bridge_counters"] = dxmt9_bridge_counters

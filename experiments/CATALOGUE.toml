@@ -388,6 +388,35 @@ capture_frame = 0
 reference_optional = true
 allow_timeout = true
 
+[apps.dxmt9-perf-ffp-only.expected_counters]
+# At least 100 draws total, with at least one FFP VS+PS uniform call
+# (i.e. the FFP shader path actually ran). The HLSL VS uniform path must
+# stay at 0 because this probe is FFP-only by construction.
+draw_calls = { min = 100 }
+uniform_ffp_vs_calls = { min = 1 }
+uniform_ffp_ps_calls = { min = 1 }
+uniform_vs_consts_calls = { max = 0 }
+
+[apps.dxmt9-perf-multi-rt.expected_counters]
+# At least 50 draws total. The probe rotates through 4 color render
+# targets and clears each, so the aggregate color-load-action-clear
+# counter must be at least 2 (a regression to a single RT or no
+# pass-rotation collapses this to 0/1).
+draw_calls = { min = 50 }
+render_pass_load_action_clear = { min = 2 }
+
+[apps.dxmt9-perf-depth-heavy.expected_counters]
+# At least 50 draws total and at least one DontCare depth-store event,
+# i.e. a shadow-map style pass that discards the depth buffer at the end.
+draw_calls = { min = 50 }
+render_pass_store_action_depth_dontcare = { min = 1 }
+
+[apps.dxmt9-perf-skeletal.expected_counters]
+# At least 50 draws total with several volatile uniform pushes
+# (skeletal animation reuploads bone palettes per draw).
+draw_calls = { min = 50 }
+uniform_volatile_pushes = { min = 1 }
+
 [[app]]
 name = "street-fighter-iv-benchmark-crossover-oracle"
 source = "local-external"

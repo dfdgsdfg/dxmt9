@@ -11,15 +11,20 @@
 namespace dxmt9::perf {
 namespace {
 
-// 64-sample sliding ring of nanosecond samples used to compute P50/P95/P99 in
-// the shutdown report. Lock-free: writers race only on `head_` (atomic
+// 256-sample sliding ring of nanosecond samples used to compute P50/P95/P99
+// in the shutdown report. Lock-free: writers race only on `head_` (atomic
 // fetch_add, relaxed) and on the slot store (relaxed). Two threads racing for
 // the same slot may overwrite each other's sample, but at the per-draw rate
 // the steady-state percentile estimate is unaffected. Reading is one-shot at
 // process exit, so a coarse snapshot via relaxed loads is acceptable.
+//
+// Capacity 256 keeps the per-counter footprint small (~2 KiB of atomics) and
+// pushes P99 rank from 63/64 to 253/256, where a single late outlier no longer
+// shifts the published percentile by a full bucket. Sort cost at shutdown is
+// O(N log N) on N=256 — irrelevant against the rest of the report.
 class PercentileRing {
  public:
-  static constexpr std::size_t kCapacity = 64;
+  static constexpr std::size_t kCapacity = 256;
 
   void record(std::uint64_t nanoseconds) {
     const auto slot =
@@ -45,8 +50,8 @@ class PercentileRing {
   }
 
   // p in [0.0, 1.0]. Returns 0 when the ring is empty. Uses nearest-rank
-  // (ceil) over the sorted snapshot, which is stable for small N (<=64) and
-  // matches what runbook scripts expect.
+  // (ceil) over the sorted snapshot, stable for the kCapacity range used here
+  // and matching what runbook scripts expect.
   std::uint64_t percentile(double p) const {
     const auto sorted = snapshot();
     if (sorted.empty()) {

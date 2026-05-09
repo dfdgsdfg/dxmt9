@@ -47,7 +47,7 @@ MODE_ENV = {
 
 DEFAULT_APPS = ["dx-sdk-basichlsl", "dx-sdk-tutorial07"]
 DEFAULT_MODES = ["default", "async", "async-cap"]
-COUNTER_FIELDS = [
+PRESENT_COUNTER_FIELDS = [
     "present_encoded",
     "present_skipped",
     "present_async_acquire_issued",
@@ -69,6 +69,50 @@ COUNTER_FIELDS = [
     "queue_writer_wait_ms",
     "queue_commit_wait_ms",
 ]
+
+# Backend counter fields surfaced in summary.json for cross-policy diff.
+# Sourced from kCounterTable: R-BACK-12 (uniform_*), R-BACK-15
+# (render_pass_*), R-BACK-2.10 (chunk_*), R-BACK-2.27 (ring_arena_*).
+# Mode-to-mode delta on these fields is what reveals whether an upstream
+# encoder change leaked into the present-policy A/B run.
+BACKEND_COUNTER_FIELDS = [
+    "uniform_vs_consts_calls",
+    "uniform_vs_consts_bytes",
+    "uniform_ps_consts_calls",
+    "uniform_ps_consts_bytes",
+    "uniform_ffp_vs_calls",
+    "uniform_ffp_vs_bytes",
+    "uniform_ffp_ps_calls",
+    "uniform_ffp_ps_bytes",
+    "uniform_volatile_pushes",
+    "render_pass_load_action_load",
+    "render_pass_load_action_clear",
+    "render_pass_load_action_dontcare",
+    "render_pass_load_action_depth_load",
+    "render_pass_load_action_depth_clear",
+    "render_pass_load_action_depth_dontcare",
+    "render_pass_load_action_stencil_load",
+    "render_pass_load_action_stencil_clear",
+    "render_pass_load_action_stencil_dontcare",
+    "render_pass_store_action_store",
+    "render_pass_store_action_dontcare",
+    "render_pass_store_action_resolve",
+    "render_pass_store_action_depth_store",
+    "render_pass_store_action_depth_dontcare",
+    "render_pass_store_action_stencil_store",
+    "render_pass_store_action_stencil_dontcare",
+    "render_pass_tile_preservation_bytes",
+    "chunk_admit",
+    "chunk_reject",
+    "ring_arena_heap_fallback_count",
+    "ring_arena_heap_fallback_bytes",
+    "ring_arena_heap_fallback_argbuf",
+    "ring_arena_heap_fallback_lambda",
+    "ring_arena_heap_fallback_staging",
+    "ring_arena_heap_fallback_copytemp",
+]
+
+COUNTER_FIELDS = PRESENT_COUNTER_FIELDS + BACKEND_COUNTER_FIELDS
 
 
 def parse_args() -> argparse.Namespace:
@@ -358,6 +402,58 @@ def write_markdown(path: Path, payload: dict[str, object]) -> None:
             f"`{fmt_summary(counters.get('present_preacquire_wait_ms'), 3)}` | "
             f"`{fmt_summary(counters.get('command_buffers'), 1)}` |"
         )
+    backend_groups: list[tuple[str, list[tuple[str, str, int]]]] = [
+        (
+            "Uniform pushes (R-BACK-12)",
+            [
+                ("uniform_vs_consts_calls", "vs.calls", 0),
+                ("uniform_ps_consts_calls", "ps.calls", 0),
+                ("uniform_ffp_vs_calls", "ffp.vs.calls", 0),
+                ("uniform_ffp_ps_calls", "ffp.ps.calls", 0),
+                ("uniform_volatile_pushes", "volatile", 0),
+            ],
+        ),
+        (
+            "Render-pass actions (R-BACK-15)",
+            [
+                ("render_pass_load_action_load", "color.load", 0),
+                ("render_pass_load_action_dontcare", "color.dontcare", 0),
+                ("render_pass_store_action_store", "color.store", 0),
+                ("render_pass_store_action_dontcare", "color.dontcare.s", 0),
+                ("render_pass_store_action_depth_dontcare", "depth.dontcare.s", 0),
+                ("render_pass_tile_preservation_bytes", "tile.bytes", 0),
+            ],
+        ),
+        (
+            "Bridge / arena (R-BACK-2.10/2.27)",
+            [
+                ("chunk_admit", "chunk.admit", 0),
+                ("chunk_reject", "chunk.reject", 0),
+                ("ring_arena_heap_fallback_count", "heap.fb.count", 0),
+                ("ring_arena_heap_fallback_bytes", "heap.fb.bytes", 0),
+            ],
+        ),
+    ]
+    for title, fields in backend_groups:
+        lines.append("")
+        lines.append(f"## Backend metrics — {title}")
+        lines.append("")
+        header = "| app | mode | " + " | ".join(label for _, label, _ in fields) + " |"
+        sep = "|---|---|" + "|".join(["---:"] * len(fields)) + "|"
+        lines.append(header)
+        lines.append(sep)
+        for row in rows:
+            assert isinstance(row, dict)
+            counters = (
+                row.get("counters") if isinstance(row.get("counters"), dict) else {}
+            )
+            assert isinstance(counters, dict)
+            cells = " | ".join(
+                f"`{fmt_summary(counters.get(key), digits)}`"
+                for key, _, digits in fields
+            )
+            lines.append(f"| `{row.get('app')}` | `{row.get('mode')}` | {cells} |")
+
     if violations:
         lines.append("")
         lines.append(
