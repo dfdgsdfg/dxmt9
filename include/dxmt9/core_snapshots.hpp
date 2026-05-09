@@ -14,7 +14,6 @@
 #include <span>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -146,17 +145,6 @@ struct StateValueTable {
 
   constexpr void clearDirty() noexcept {
     dirty = {};
-  }
-
-  std::unordered_map<u32, u32> toMap() const {
-    std::unordered_map<u32, u32> out;
-    out.reserve(count);
-    for (u32 key = 0; key < MaxEntries; ++key) {
-      if (contains(key)) {
-        out.emplace(key, values[key]);
-      }
-    }
-    return out;
   }
 
   class const_iterator {
