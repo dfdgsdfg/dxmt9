@@ -186,6 +186,39 @@ chunk_record_spec = executable(
 
 test('dxmt9-chunk-record-spec', chunk_record_spec)
 
+chunk_record_validation_spec = executable(
+  'dxmt9-chunk-record-validation-spec',
+  'native/bridge/chunk_record_validation_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-chunk-record-validation-spec', chunk_record_validation_spec,
+     env: dxmt9_native_test_env)
+
+chunk_record_hazard_spec = executable(
+  'dxmt9-chunk-record-hazard-spec',
+  'native/bridge/chunk_record_hazard_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-chunk-record-hazard-spec', chunk_record_hazard_spec,
+     env: dxmt9_native_test_env)
+
+chunk_record_replay_spec = executable(
+  'dxmt9-chunk-record-replay-spec',
+  'native/bridge/chunk_record_replay_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-chunk-record-replay-spec', chunk_record_replay_spec,
+     env: dxmt9_native_test_env)
+
 chunk_record_import_spec = executable(
   'dxmt9-chunk-record-import-spec',
   'native/bridge/chunk_record_import_spec.cpp',
