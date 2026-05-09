@@ -2,6 +2,7 @@
 #import <Metal/Metal.h>
 
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_draw_encoder_internal.hpp"
 #include "dxmt9_blit_encoders.hpp"
 
 #include "dxmt9/assert.hpp"
@@ -227,100 +228,6 @@ struct AttachmentKey {
   u32 sampleCount = 1;
   friend bool operator==(const AttachmentKey&, const AttachmentKey&) = default;
 };
-
-u64 bloomMix64(u64 value, u64 salt) {
-  u64 x = value + salt + 0x9e3779b97f4a7c15ull;
-  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
-  x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
-  return x ^ (x >> 31);
-}
-
-struct HazardBloom {
-  std::array<u64, 2> bits{};
-  void add(u64 value) {
-    if (value == 0) return;
-    const u64 hash0 = bloomMix64(value, 0x4d595df4d0f33173ull);
-    const u64 hash1 = bloomMix64(value, 0x9e3779b97f4a7c15ull);
-    bits[0] |= 1ull << (hash0 & 63u);
-    bits[1] |= 1ull << (hash1 & 63u);
-  }
-  bool overlaps(const HazardBloom& other) const {
-    return ((bits[0] & other.bits[0]) != 0) || ((bits[1] & other.bits[1]) != 0);
-  }
-};
-
-struct HazardHandles {
-  static constexpr std::size_t kCapacity =
-      1u + core::kMaxRenderTargets + core::kMaxStreams + core::kMaxTextureStages;
-  std::array<u64, kCapacity> handles{};
-  std::size_t count = 0;
-
-  void add(u64 value) {
-    if (value == 0) return;
-    for (std::size_t i = 0; i < count; ++i) {
-      if (handles[i] == value) return;
-    }
-    if (count < handles.size()) {
-      handles[count++] = value;
-    }
-  }
-
-  bool overlaps(const HazardHandles& other) const {
-    for (std::size_t i = 0; i < count; ++i) {
-      for (std::size_t j = 0; j < other.count; ++j) {
-        if (handles[i] == other.handles[j]) return true;
-      }
-    }
-    return false;
-  }
-};
-
-struct HazardProbe {
-  HazardBloom bloom;
-  HazardHandles exact;
-
-  void add(u64 value) {
-    bloom.add(value);
-    exact.add(value);
-  }
-
-  bool bloomOverlaps(const HazardProbe& other) const {
-    return bloom.overlaps(other.bloom);
-  }
-
-  bool exactOverlaps(const HazardProbe& other) const {
-    return exact.overlaps(other.exact);
-  }
-};
-
-HazardProbe makeAttachmentHazard(const core::FlatDrawStateRecord& hot) {
-  HazardProbe hazard;
-  for (const auto& attachment : hot.colorAttachments) hazard.add(attachment.handle.value);
-  hazard.add(hot.depthStencil.handle.value);
-  return hazard;
-}
-
-HazardProbe makeAttachmentHazard(const core::ClearDesc& clear) {
-  HazardProbe hazard;
-  if (clear.clearColor) {
-    for (const auto& attachment : clear.colorAttachments) hazard.add(attachment.handle.value);
-  }
-  if (clear.clearDepth || clear.clearStencil) {
-    hazard.add(clear.depthStencil.handle.value);
-  }
-  return hazard;
-}
-
-HazardProbe makeDrawReadHazard(core::FlatDrawStateView state) {
-  HazardProbe hazard;
-  const auto& hot = *state.hot;
-  hazard.add(hot.indexBuffer.value);
-  for (const auto& handle : hot.streamBuffers) {
-    hazard.add(handle.value);
-  }
-  for (const auto& texture : hot.textures) hazard.add(texture.value);
-  return hazard;
-}
 
 AttachmentKey makeAttachmentKey(const core::FlatDrawStateRecord& hot) {
   AttachmentKey key;
@@ -834,20 +741,6 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
 }
 
-// Per-draw view from DrawParam. Constructed once at encodeDraw entry; all
-// per-draw field reads inside the function go through this view.
-struct ParamView {
-  core::PrimitiveType primitiveType;
-  u32 primitiveCount;
-  u32 startVertex;
-  i32 baseVertexIndex;
-  u32 startIndex;
-  core::IndexType indexType;
-  bool indexed;
-  std::span<const u8> userVertexData;
-  std::span<const u8> userIndexData;
-};
-
 std::span<const u8> drawParamVertexBytes(const core::DrawParam& param,
                                          std::span<const u8> arena) {
   if (!param.userVertexRange.empty()) {
@@ -864,169 +757,11 @@ std::span<const u8> drawParamIndexBytes(const core::DrawParam& param,
   return {};
 }
 
-std::uint64_t drawGeometryTraceInterval() {
-  static const std::uint64_t value = [] {
-    const char* env = std::getenv("DXMT9_TRACE_DRAW_GEOMETRY");
-    if (!env || env[0] == '\0' || env[0] == '0') {
-      return 0ull;
-    }
-    char* end = nullptr;
-    const auto parsed = std::strtoull(env, &end, 10);
-    if (end != env && parsed > 1ull) {
-      return parsed;
-    }
-    return 1ull;
-  }();
-  return value;
-}
-
-std::uint64_t drawGeometryTraceLimit() {
-  static const std::uint64_t value = [] {
-    const char* env = std::getenv("DXMT9_TRACE_DRAW_GEOMETRY_LIMIT");
-    if (!env || env[0] == '\0' || env[0] == '0') {
-      return 0ull;
-    }
-    char* end = nullptr;
-    const auto parsed = std::strtoull(env, &end, 10);
-    return end != env ? parsed : 0ull;
-  }();
-  return value;
-}
-
-std::optional<std::uint64_t> nextDrawGeometryTraceSample() {
-  const auto interval = drawGeometryTraceInterval();
-  if (interval == 0ull) {
-    return std::nullopt;
-  }
-  static std::atomic<std::uint64_t> drawCounter{0};
-  static std::atomic<std::uint64_t> emittedCounter{0};
-  const auto drawNo = drawCounter.fetch_add(1, std::memory_order_relaxed) + 1ull;
-  if (interval > 1ull && (drawNo % interval) != 0ull) {
-    return std::nullopt;
-  }
-  const auto limit = drawGeometryTraceLimit();
-  if (limit != 0ull &&
-      emittedCounter.fetch_add(1, std::memory_order_relaxed) >= limit) {
-    return std::nullopt;
-  }
-  return drawNo;
-}
-
-const char* indexTypeName(IndexType type) {
-  return type == IndexType::UInt32 ? "u32" : "u16";
-}
-
-const char* drawGeometrySourceName(bool direct, bool up, bool expanded) {
-  if (expanded) {
-    return "expanded";
-  }
-  if (up) {
-    return "up";
-  }
-  return direct ? "direct" : "unknown";
-}
-
-const char* metalDrawMethodName(bool indexed, bool expanded) {
-  if (indexed && !expanded) {
-    return "drawIndexedPrimitives";
-  }
-  return "drawPrimitives";
-}
-
 bool drawUsesFixedFunctionPath(core::FlatDrawStateView drawState, bool hasFfpLayout) {
   if (!drawState.hasShaderContext()) {
     return hasFfpLayout;
   }
   return drawState.shaderContext().vertexShader.kind == core::ShaderRef::Kind::FixedFunctionVertex;
-}
-
-void appendVertexDeclSummary(std::ostringstream& out,
-                             const core::VertexDeclSnapshot& vertexDecl) {
-  out << " elems=" << vertexDecl.elements.size()
-      << " decl=[";
-  for (std::size_t i = 0; i < vertexDecl.elements.size(); ++i) {
-    if (i) {
-      out << ';';
-    }
-    const auto& e = vertexDecl.elements[i];
-    out << "{s=" << e.stream
-        << ",off=" << e.offset
-        << ",type=" << e.type
-        << ",method=" << e.method
-        << ",usage=" << e.usage
-        << ",idx=" << e.usageIndex
-        << "}";
-  }
-  out << "]";
-}
-
-void recordDrawGeometryDiagnostics(core::FlatDrawStateView drawState,
-                                   const ParamView& pv,
-                                   u64 seqId,
-                                   u64 vertexCount,
-                                   u64 vertexBufferOffset,
-                                   u32 vertexStreamOffset,
-                                   u32 vertexStreamStride,
-                                   bool indexed,
-                                   bool direct,
-                                   bool up,
-                                   bool expanded,
-                                   bool fixedFunctionPath) {
-  const auto& hot = *drawState.hot;
-  const auto& vertexDecl = drawState.shaderContext().vertexDecl;
-  perf::countDrawGeometryDiagnostics(fixedFunctionPath,
-                                     indexed,
-                                     pv.indexType == IndexType::UInt32,
-                                     direct,
-                                     up,
-                                     expanded,
-                                     pv.baseVertexIndex != 0,
-                                     pv.startIndex != 0u,
-                                     hot.streamOffsets[0] != 0u,
-                                     hot.streamStrides[0],
-                                     hot.key.vertexDeclHash);
-
-  const auto sample = nextDrawGeometryTraceSample();
-  if (!sample) {
-    return;
-  }
-
-  std::ostringstream out;
-  out << "[dxmt9-geometry] sample=" << static_cast<unsigned long long>(*sample)
-      << " seq=" << static_cast<unsigned long long>(seqId)
-      << " api="
-      << (indexed ? (up ? "DrawIndexedPrimitiveUP" : "DrawIndexedPrimitive")
-                  : (up ? "DrawPrimitiveUP" : "DrawPrimitive"))
-      << " metal=" << metalDrawMethodName(indexed, expanded)
-      << " source=" << drawGeometrySourceName(direct, up, expanded)
-      << " shaderPath=" << (fixedFunctionPath ? "ffp" : "vs")
-      << " indexed=" << (indexed ? 1 : 0)
-      << " baseVertex=" << pv.baseVertexIndex
-      << " startVertex=" << pv.startVertex
-      << " startIndex=" << pv.startIndex
-      << " indexType=" << indexTypeName(pv.indexType)
-      << " minVertex=na numVertices=na"
-      << " primType=" << static_cast<unsigned>(pv.primitiveType)
-      << " primCount=" << pv.primitiveCount
-      << " vertexCount=" << static_cast<unsigned long long>(vertexCount)
-      << " stream0Handle=0x" << std::hex
-      << static_cast<unsigned long long>(hot.streamBuffers[0].value)
-      << " stream0Offset=" << std::dec << hot.streamOffsets[0]
-      << " stream0Stride=" << hot.streamStrides[0]
-      << " vertexBufferOffset=" << static_cast<unsigned long long>(vertexBufferOffset)
-      << " uniformStreamOffset=" << vertexStreamOffset
-      << " uniformStreamStride=" << vertexStreamStride
-      << " declHash=0x" << std::hex << hot.key.vertexDeclHash
-      << " fvf=0x" << vertexDecl.fvf << std::dec
-      << " vsHash=0x" << std::hex
-      << static_cast<unsigned long long>(drawState.shaderContext().vertexShader.hash)
-      << " psHash=0x"
-      << static_cast<unsigned long long>(drawState.shaderContext().pixelShader.hash)
-      << std::dec
-      << " userVertexBytes=" << pv.userVertexData.size()
-      << " userIndexBytes=" << pv.userIndexData.size();
-  appendVertexDeclSummary(out, vertexDecl);
-  emitQueueTraceLine(out.str());
 }
 
 bool encodeDraw(EncodeContext& ctx,
