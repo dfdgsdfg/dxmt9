@@ -125,6 +125,17 @@ void countUniformPsConsts(std::size_t bytes);
 void countUniformFfpVs(std::size_t bytes);
 void countUniformFfpPs(std::size_t bytes);
 void countUniformVolatilePush();
+// R-BACK-5.7. Bumps only on the discrete (non-unified-memory) blit path.
+void countManagedTextureUploadBlit(std::uint64_t bytes);
+// R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming counters.
+void countPrewarmEntriesLoaded(std::uint64_t entries);
+void countPrewarmLoadCpuTime(std::uint64_t nanoseconds);
+void countPrewarmFailureCorrupt();
+void countPrewarmFailureSchema();
+void countPrewarmFailureLockBusy();
+void countPrewarmFailureMissing();
+void countColdCompileAfterWarm();
+void countArchiveBytes(std::uint64_t bytes);
 // Render-pass load/store action histograms (R-BACK-15.10/15.11).
 // `action` is the raw WMTLoadAction / WMTStoreAction enum value. Callers
 // cast `static_cast<std::uint32_t>(load_action)`; we keep the API decoupled

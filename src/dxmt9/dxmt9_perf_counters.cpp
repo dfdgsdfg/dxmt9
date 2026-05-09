@@ -221,6 +221,20 @@ struct Counters {
   std::atomic<std::uint64_t> uniformFfpPsCalls{0};
   std::atomic<std::uint64_t> uniformFfpPsBytes{0};
   std::atomic<std::uint64_t> uniformVolatilePushes{0};
+  // R-BACK-5.7: managed-texture upload blit counter. Apple Silicon
+  // (hasUnifiedMemory) must keep this at 0; non-zero indicates the
+  // staging-copy fallback was hit when it should not have been.
+  std::atomic<std::uint64_t> managedTextureUploadBlitCount{0};
+  std::atomic<std::uint64_t> managedTextureUploadBlitBytes{0};
+  // R-BACK-3.7 / 3.8 / 4.8: binary-archive prewarming counters.
+  std::atomic<std::uint64_t> prewarmEntriesLoaded{0};
+  std::atomic<std::uint64_t> prewarmLoadCpuNs{0};
+  std::atomic<std::uint64_t> prewarmFailureCorrupt{0};
+  std::atomic<std::uint64_t> prewarmFailureSchema{0};
+  std::atomic<std::uint64_t> prewarmFailureLockBusy{0};
+  std::atomic<std::uint64_t> prewarmFailureMissing{0};
+  std::atomic<std::uint64_t> coldCompileCountAfterWarm{0};
+  std::atomic<std::uint64_t> archiveBytes{0};
   std::atomic<std::uint64_t> renderPassLoadActionLoad{0};
   std::atomic<std::uint64_t> renderPassLoadActionClear{0};
   std::atomic<std::uint64_t> renderPassLoadActionDontCare{0};
@@ -510,7 +524,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 337> kCounterTable = {{
+constexpr std::array<CounterEntry, 348> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -671,6 +685,16 @@ constexpr std::array<CounterEntry, 337> kCounterTable = {{
     {"uniform_ffp_ps_calls", CounterEntry::Kind::UnsignedCount, &Counters::uniformFfpPsCalls, nullptr, nullptr, 0.0},
     {"uniform_ffp_ps_bytes", CounterEntry::Kind::UnsignedCount, &Counters::uniformFfpPsBytes, nullptr, nullptr, 0.0},
     {"uniform_volatile_pushes", CounterEntry::Kind::UnsignedCount, &Counters::uniformVolatilePushes, nullptr, nullptr, 0.0},
+    {"managed_texture_upload_blit_count", CounterEntry::Kind::UnsignedCount, &Counters::managedTextureUploadBlitCount, nullptr, nullptr, 0.0},
+    {"managed_texture_upload_blit_bytes", CounterEntry::Kind::UnsignedCount, &Counters::managedTextureUploadBlitBytes, nullptr, nullptr, 0.0},
+    {"prewarm_entries_loaded", CounterEntry::Kind::UnsignedCount, &Counters::prewarmEntriesLoaded, nullptr, nullptr, 0.0},
+    {"prewarm_load_cpu_ns", CounterEntry::Kind::UnsignedCount, &Counters::prewarmLoadCpuNs, nullptr, nullptr, 0.0},
+    {"prewarm_failure_corrupt", CounterEntry::Kind::UnsignedCount, &Counters::prewarmFailureCorrupt, nullptr, nullptr, 0.0},
+    {"prewarm_failure_schema", CounterEntry::Kind::UnsignedCount, &Counters::prewarmFailureSchema, nullptr, nullptr, 0.0},
+    {"prewarm_failure_lock_busy", CounterEntry::Kind::UnsignedCount, &Counters::prewarmFailureLockBusy, nullptr, nullptr, 0.0},
+    {"prewarm_failure_missing", CounterEntry::Kind::UnsignedCount, &Counters::prewarmFailureMissing, nullptr, nullptr, 0.0},
+    {"cold_compile_count_after_warm", CounterEntry::Kind::UnsignedCount, &Counters::coldCompileCountAfterWarm, nullptr, nullptr, 0.0},
+    {"archive_bytes", CounterEntry::Kind::UnsignedCount, &Counters::archiveBytes, nullptr, nullptr, 0.0},
     {"render_pass_load_action_load", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionLoad, nullptr, nullptr, 0.0},
     {"render_pass_load_action_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionClear, nullptr, nullptr, 0.0},
     {"render_pass_load_action_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionDontCare, nullptr, nullptr, 0.0},
@@ -1246,6 +1270,40 @@ void countUniformFfpPs(std::size_t bytes) {
 
 void countUniformVolatilePush() {
   add(counters().uniformVolatilePushes);
+}
+
+// R-BACK-5.7. Increment only on the discrete path (no hasUnifiedMemory).
+// Apple Silicon must never call this. Bytes argument is the staging-copy
+// size so a regression's volume is observable, not just its frequency.
+void countManagedTextureUploadBlit(std::uint64_t bytes) {
+  add(counters().managedTextureUploadBlitCount);
+  add(counters().managedTextureUploadBlitBytes, bytes);
+}
+
+// R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming + cross-process.
+void countPrewarmEntriesLoaded(std::uint64_t entries) {
+  add(counters().prewarmEntriesLoaded, entries);
+}
+void countPrewarmLoadCpuTime(std::uint64_t nanoseconds) {
+  add(counters().prewarmLoadCpuNs, nanoseconds);
+}
+void countPrewarmFailureCorrupt() {
+  add(counters().prewarmFailureCorrupt);
+}
+void countPrewarmFailureSchema() {
+  add(counters().prewarmFailureSchema);
+}
+void countPrewarmFailureLockBusy() {
+  add(counters().prewarmFailureLockBusy);
+}
+void countPrewarmFailureMissing() {
+  add(counters().prewarmFailureMissing);
+}
+void countColdCompileAfterWarm() {
+  add(counters().coldCompileCountAfterWarm);
+}
+void countArchiveBytes(std::uint64_t bytes) {
+  counters().archiveBytes.store(bytes, std::memory_order_relaxed);
 }
 
 // WMTLoadAction: DontCare=0, Load=1, Clear=2 (winemetal.h).
