@@ -1,6 +1,7 @@
 dxmt9_frontend_core_srcs = files(
   'com.cpp',
   'core.cpp',
+  'core_buffer.cpp',
   'core_draw.cpp',
   'core_factory.cpp',
   'core_format.cpp',
@@ -8,6 +9,8 @@ dxmt9_frontend_core_srcs = files(
   'core_present.cpp',
   'core_resources.cpp',
   'core_state.cpp',
+  'core_surface.cpp',
+  'core_texture.cpp',
 )
 
 dxmt9_frontend_provider_srcs = files(

@@ -1,6 +1,7 @@
 #include "../dxmt9/dxmt9_presenter.hpp"
 #include "core_format_utils.hpp"
 #include "core_private.hpp"
+#include "core_resources_internal.hpp"
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
@@ -10,8 +11,8 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstring>
-#include <filesystem>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -21,7 +22,13 @@ namespace dxmt9::core {
 
 // Split from core.cpp; keep this unit private to the D3D9 frontend. Pure
 // pixel-format helpers (pitch math, packed-format encoders, BMP screenshot,
-// fill/copy helpers) live in core_format_utils.cpp.
+// fill/copy helpers) live in core_format_utils.cpp. Per-class resource
+// implementations were further split into core_buffer.cpp, core_texture.cpp,
+// and core_surface.cpp; this file now hosts the small Query and SwapChain
+// classes plus the cross-cutting Device::* clear/query/sequence/swap-chain
+// helpers, together with the file-local env/trace helpers shared with the
+// per-class units (declared in core_resources_internal.hpp).
+
 namespace {
 
 std::optional<u32> parseEnvU32Auto(const char *name) {
@@ -31,6 +38,10 @@ std::optional<u32> parseEnvU32Auto(const char *name) {
 std::string getenvString(const char *name) {
   return dxmt9::util::getenvString(name);
 }
+
+} // namespace
+
+namespace detail {
 
 bool backendOwnsSurfaceContents(const SurfaceDesc &desc) {
   return desc.renderTarget || desc.depthStencil ||
@@ -76,409 +87,7 @@ void emitRenderTrace(const char *fmt, ...) {
   va_end(args);
 }
 
-} // namespace
-
-std::vector<u8> convertTextureUpload(Format format, u32 width, u32 height,
-                                     std::span<const u8> input) {
-  const u32 bpp = bytesPerPixel(format);
-  if (bpp == 0) {
-    return {};
-  }
-  std::vector<u8> output(static_cast<size_t>(width) * height * bpp);
-  const u32 srcPitch = pitchForFormat(format, width);
-  if (input.size() < output.size()) {
-    return {};
-  }
-  if (!copyPixels(output, srcPitch, width, height, format,
-                  std::vector<u8>(input.begin(), input.end()), srcPitch, width,
-                  height, format)) {
-    // Fall back to a raw copy when the format is not color-decodable.
-    std::copy_n(input.begin(), std::min(output.size(), input.size()),
-                output.begin());
-  }
-  return output;
-}
-
-Buffer::Buffer(std::shared_ptr<Device> owner, BufferHandle handle,
-               BufferDesc desc)
-    : owner_(std::move(owner)), handle_(handle), desc_(desc),
-      storage_(static_cast<size_t>(desc.size)) {
-  if (auto ownerPtr = owner_.lock()) {
-    backend_ = ownerPtr->upperDevice();
-  }
-}
-
-Buffer::~Buffer() { invalidate(); }
-
-LockedRegion Buffer::lock(u64 offset, u64 size, u32 flags) {
-  if (!valid_) {
-    return {};
-  }
-  if ((flags & UsageDiscard) != 0 && (desc_.usage & UsageDynamic) != 0) {
-    storage_.assign(static_cast<size_t>(std::max<u64>(size, desc_.size)), 0);
-    offset = 0;
-  } else if (storage_.size() < offset + size) {
-    storage_.resize(static_cast<size_t>(offset + size));
-  }
-  if (backend_ && handle_) {
-    backend_->mapBuffer(handle_, flags);
-  }
-  locked_ = true;
-  return {storage_.data() + offset, static_cast<u32>(size)};
-}
-
-void Buffer::unlock() {
-  if (backend_ && handle_) {
-    backend_->uploadBufferData(handle_, storage_);
-    backend_->unmapBuffer(handle_);
-  }
-  locked_ = false;
-}
-
-void Buffer::invalidate() {
-  if (!valid_) {
-    return;
-  }
-  valid_ = false;
-  if (backend_ && handle_) {
-    backend_->destroyBuffer(handle_);
-  }
-  handle_ = {};
-}
-
-Texture::Texture(std::shared_ptr<Device> owner, TextureHandle handle,
-                 TextureDesc desc)
-    : owner_(std::move(owner)), handle_(handle), desc_(desc) {
-  if (auto ownerPtr = owner_.lock()) {
-    backend_ = ownerPtr->upperDevice();
-  }
-  const u32 mipLevels = levelCount();
-  const u32 faceCount = desc_.type == TextureType::Cube ? 6u : 1u;
-  levels_.resize(static_cast<size_t>(mipLevels) * faceCount);
-  for (u32 subresource = 0; subresource < levels_.size(); ++subresource) {
-    const u32 level = mipLevelForSubresource(subresource);
-    LevelStorage storage;
-    storage.width = std::max(1u, desc_.width >> level);
-    storage.height = std::max(1u, desc_.height >> level);
-    storage.pitch = formatRowPitch(desc_.format, storage.width);
-    storage.bytes.resize(
-        formatByteSize(desc_.format, storage.width, storage.height), 0);
-    levels_[subresource] = std::move(storage);
-  }
-}
-
-Texture::~Texture() { invalidate(); }
-
-u32 Texture::levelCount() const noexcept { return std::max(1u, desc_.levels); }
-
-u32 Texture::mipLevelForSubresource(u32 subresource) const noexcept {
-  const u32 mipLevels = levelCount();
-  if (desc_.type == TextureType::Cube && mipLevels != 0) {
-    return subresource % mipLevels;
-  }
-  return subresource;
-}
-
-LockedRegion Texture::lockRect(u32 subresource, const Rect *rect, u32 flags) {
-  if (!valid_ || subresource >= levels_.size()) {
-    return {};
-  }
-  LevelStorage &storage = levels_[subresource];
-  if ((flags & UsageDiscard) != 0) {
-    storage.bytes.assign(
-        formatByteSize(desc_.format, storage.width, storage.height), 0);
-  }
-  locked_ = true;
-  if (storage.pitch == 0 || storage.bytes.empty()) {
-    return {};
-  }
-  const u32 left = rect ? std::max(0, rect->left) : 0;
-  const u32 top = rect ? std::max(0, rect->top) : 0;
-  if (isCompressedFormat(desc_.format)) {
-    const u32 blockWidth = formatBlockWidth(desc_.format);
-    const u32 blockHeight = formatBlockHeight(desc_.format);
-    const u32 blockBytes = formatBlockBytes(desc_.format);
-    const u32 blockX = std::min(left, storage.width - 1u) / blockWidth;
-    const u32 blockY = std::min(top, storage.height - 1u) / blockHeight;
-    return {storage.bytes.data() + static_cast<size_t>(blockY) * storage.pitch +
-                static_cast<size_t>(blockX) * blockBytes,
-            storage.pitch};
-  }
-  const u32 bpp = bytesPerPixel(desc_.format);
-  return {storage.bytes.data() + static_cast<size_t>(top) * storage.pitch +
-              static_cast<size_t>(left) * bpp,
-          storage.pitch};
-}
-
-void Texture::unlockRect(u32 subresource) {
-  if (subresource < levels_.size()) {
-    levels_[subresource].dirty = true;
-    syncLevelToBackend(subresource);
-  }
-  locked_ = false;
-}
-
-std::shared_ptr<Surface> Texture::surfaceLevel(u32 subresource) {
-  if (subresource >= levels_.size()) {
-    return {};
-  }
-  if (subresource < surfaces_.size()) {
-    if (auto surface = surfaces_[subresource].lock()) {
-      return surface;
-    }
-  } else {
-    surfaces_.resize(subresource + 1);
-  }
-  auto owner = owner_.lock();
-  if (!owner) {
-    return {};
-  }
-  const u32 level = mipLevelForSubresource(subresource);
-  SurfaceDesc surfaceDesc;
-  surfaceDesc.width = std::max(1u, desc_.width >> level);
-  surfaceDesc.height = std::max(1u, desc_.height >> level);
-  surfaceDesc.format = desc_.format;
-  surfaceDesc.pool = desc_.pool;
-  surfaceDesc.usage = desc_.usage;
-  surfaceDesc.renderTarget = (desc_.usage & UsageRenderTarget) != 0;
-  surfaceDesc.depthStencil = (desc_.usage & UsageDepthStencil) != 0;
-  auto surfaceHandle =
-      backend_
-          ? backend_->createSurfaceForTexture(handle_, subresource, surfaceDesc)
-          : SurfaceHandle{};
-  if (!surfaceHandle && backend_) {
-    surfaceHandle = backend_->createSurface(surfaceDesc);
-  }
-  if (!surfaceHandle) {
-    surfaceHandle = Handle{owner->nextHandle_++};
-  }
-  auto surface = std::make_shared<Surface>(owner, surfaceHandle,
-                                           shared_from_this(), subresource);
-  surfaces_[subresource] = surface;
-  return surface;
-}
-
-std::span<const u8> Texture::levelBytes(u32 subresource) const {
-  if (subresource >= levels_.size()) {
-    return {};
-  }
-  const auto &storage = levels_[subresource];
-  return std::span<const u8>(storage.bytes.data(), storage.bytes.size());
-}
-
-void Texture::fillColor(const Rect *rect, ColorRGBA color) {
-  if (!valid_ || levels_.empty()) {
-    return;
-  }
-  auto &storage = levels_[0];
-  fillBuffer(storage.bytes, storage.pitch, storage.width, storage.height,
-             desc_.format, rect, color);
-  storage.dirty = true;
-  syncLevelToBackend(0);
-}
-
-void Texture::fillColor(u32 subresource, const Rect *rect, ColorRGBA color) {
-  if (!valid_ || subresource >= levels_.size()) {
-    return;
-  }
-  auto &storage = levels_[subresource];
-  fillBuffer(storage.bytes, storage.pitch, storage.width, storage.height,
-             desc_.format, rect, color);
-  storage.dirty = true;
-  syncLevelToBackend(subresource);
-}
-
-void Texture::copyFrom(const Texture &src) {
-  if (!valid_ || !src.valid_ || desc_.format != src.desc_.format) {
-    return;
-  }
-  const size_t levels = std::min(levels_.size(), src.levels_.size());
-  for (size_t i = 0; i < levels; ++i) {
-    levels_[i].bytes = src.levels_[i].bytes;
-    levels_[i].dirty = true;
-    syncLevelToBackend(static_cast<u32>(i));
-  }
-}
-
-void Texture::syncLevelToBackend(u32 subresource) {
-  if (!valid_ || !backend_ || !handle_ || subresource >= levels_.size()) {
-    return;
-  }
-  const auto &storage = levels_[subresource];
-  if (storage.bytes.empty() || storage.width == 0 || storage.height == 0 ||
-      storage.pitch == 0) {
-    return;
-  }
-  if (const auto wanted = textureDumpHandle();
-      wanted && *wanted == handle_.value) {
-    const auto path = (std::filesystem::path(textureDumpDir()) /
-                       ("dxmt9_tex_" + std::to_string(handle_.value) +
-                        "_subresource_" + std::to_string(subresource) + ".bmp"))
-                          .string();
-    if (writeBmpScreenshot(
-            path, desc_.format, storage.width, storage.height, storage.pitch,
-            std::span<const u8>(storage.bytes.data(), storage.bytes.size()))) {
-      emitRenderTrace("texture dump handle=0x%x subresource=%u path=%s "
-                      "format=%u size=%ux%u pitch=%u",
-                      handle_.value, subresource, path.c_str(),
-                      static_cast<unsigned>(desc_.format), storage.width,
-                      storage.height, storage.pitch);
-    } else {
-      emitRenderTrace("texture dump handle=0x%x subresource=%u failed "
-                      "format=%u size=%ux%u pitch=%u",
-                      handle_.value, subresource,
-                      static_cast<unsigned>(desc_.format), storage.width,
-                      storage.height, storage.pitch);
-    }
-  }
-  backend_->uploadTextureLevel(
-      handle_, subresource, storage.width, storage.height, storage.pitch,
-      std::span<const u8>(storage.bytes.data(), storage.bytes.size()));
-}
-
-void Texture::invalidate() {
-  if (!valid_) {
-    return;
-  }
-  valid_ = false;
-  if (backend_ && handle_) {
-    backend_->destroyTexture(handle_);
-  }
-  handle_ = {};
-}
-
-Surface::Surface(std::shared_ptr<Device> owner, SurfaceHandle handle,
-                 SurfaceDesc desc)
-    : owner_(std::move(owner)), handle_(handle), desc_(desc),
-      containerKind_(ContainerKind::Device) {
-  if (auto ownerPtr = owner_.lock()) {
-    backend_ = ownerPtr->upperDevice();
-  }
-  if (desc_.width != 0 && desc_.height != 0) {
-    standalonePitch_ = formatRowPitch(desc_.format, desc_.width);
-    standaloneBytes_.resize(
-        formatByteSize(desc_.format, desc_.width, desc_.height), 0);
-  }
-}
-
-Surface::Surface(std::shared_ptr<Device> owner, SurfaceHandle handle,
-                 std::shared_ptr<Texture> texture, u32 level)
-    : owner_(std::move(owner)), textureContainer_(std::move(texture)),
-      handle_(handle), level_(level), containerKind_(ContainerKind::Texture) {
-  if (auto ownerPtr = owner_.lock()) {
-    backend_ = ownerPtr->upperDevice();
-  }
-  if (auto tex = textureContainer_.lock()) {
-    const u32 mipLevel = tex->mipLevelForSubresource(level_);
-    desc_.width = std::max(1u, tex->desc().width >> mipLevel);
-    desc_.height = std::max(1u, tex->desc().height >> mipLevel);
-    desc_.format = tex->desc().format;
-    desc_.pool = tex->desc().pool;
-    desc_.usage = tex->desc().usage;
-    desc_.renderTarget = (tex->desc().usage & UsageRenderTarget) != 0;
-    desc_.depthStencil = (tex->desc().usage & UsageDepthStencil) != 0;
-  }
-}
-
-Surface::~Surface() { invalidate(); }
-
-LockedRegion Surface::lockRect(const Rect *rect, u32 flags) {
-  if (!valid_) {
-    return {};
-  }
-  if (containerKind_ == ContainerKind::Texture) {
-    if (auto tex = textureContainer_.lock()) {
-      return tex->lockRect(level_, rect, flags);
-    }
-    return {};
-  }
-  if ((flags & UsageDiscard) != 0) {
-    standaloneBytes_.assign(
-        formatByteSize(desc_.format, desc_.width, desc_.height), 0);
-  }
-  locked_ = true;
-  if (standalonePitch_ == 0 || standaloneBytes_.empty()) {
-    return {};
-  }
-  const u32 left = rect ? std::max(0, rect->left) : 0;
-  const u32 top = rect ? std::max(0, rect->top) : 0;
-  if (isCompressedFormat(desc_.format)) {
-    const u32 blockWidth = formatBlockWidth(desc_.format);
-    const u32 blockHeight = formatBlockHeight(desc_.format);
-    const u32 blockBytes = formatBlockBytes(desc_.format);
-    const u32 blockX = std::min(left, desc_.width - 1u) / blockWidth;
-    const u32 blockY = std::min(top, desc_.height - 1u) / blockHeight;
-    return {standaloneBytes_.data() +
-                static_cast<size_t>(blockY) * standalonePitch_ +
-                static_cast<size_t>(blockX) * blockBytes,
-            standalonePitch_};
-  }
-  const u32 bpp = bytesPerPixel(desc_.format);
-  return {standaloneBytes_.data() +
-              static_cast<size_t>(top) * standalonePitch_ +
-              static_cast<size_t>(left) * bpp,
-          standalonePitch_};
-}
-
-void Surface::unlockRect() {
-  if (containerKind_ == ContainerKind::Texture) {
-    if (auto tex = textureContainer_.lock()) {
-      tex->unlockRect(level_);
-    }
-  }
-  locked_ = false;
-}
-
-void Surface::fillColor(const Rect *rect, ColorRGBA color) {
-  if (!valid_) {
-    return;
-  }
-  if (containerKind_ == ContainerKind::Texture) {
-    if (auto tex = textureContainer_.lock()) {
-      tex->fillColor(level_, rect, color);
-    }
-    return;
-  }
-  fillBuffer(standaloneBytes_, standalonePitch_, desc_.width, desc_.height,
-             desc_.format, rect, color);
-}
-
-void Surface::copyFrom(const Surface &src) {
-  if (!valid_ || !src.valid_ || desc_.format != src.desc_.format) {
-    return;
-  }
-  if (containerKind_ == ContainerKind::Texture) {
-    if (auto tex = textureContainer_.lock()) {
-      if (src.containerKind_ == ContainerKind::Texture) {
-        if (auto srcTex = src.textureContainer_.lock()) {
-          tex->copyFrom(*srcTex);
-        }
-      }
-    }
-    return;
-  }
-  if (src.containerKind_ == ContainerKind::Texture) {
-    if (auto srcTex = src.textureContainer_.lock()) {
-      if (!srcTex->levelBytes(src.level_).empty()) {
-        const auto bytes = srcTex->levelBytes(src.level_);
-        const size_t count = std::min(bytes.size(), standaloneBytes_.size());
-        std::copy_n(bytes.begin(), count, standaloneBytes_.begin());
-      }
-    }
-    return;
-  }
-  const size_t count =
-      std::min(standaloneBytes_.size(), src.standaloneBytes_.size());
-  std::copy_n(src.standaloneBytes_.begin(), count, standaloneBytes_.begin());
-}
-
-void Surface::invalidate() {
-  valid_ = false;
-  if (backend_ && handle_) {
-    backend_->destroySurface(handle_);
-  }
-  handle_ = {};
-}
+} // namespace detail
 
 Query::Query(QueryType type) : type_(type) {
   if (type_ == QueryType::TimestampFreq) {
@@ -654,39 +263,6 @@ HResult SwapChain::present(std::shared_ptr<dxmt9::Device> device,
   return D3D_OK;
 }
 
-std::shared_ptr<Buffer> Device::createBuffer(const BufferDesc &desc) {
-  auto handle =
-      upperDevice_ ? upperDevice_->createBuffer(desc) : BufferHandle{};
-  if (!handle) {
-    handle = Handle{nextHandle_++};
-  }
-  auto buffer = std::make_shared<Buffer>(shared_from_this(), handle, desc);
-  registerBuffer(buffer);
-  return buffer;
-}
-
-std::shared_ptr<Texture> Device::createTexture(const TextureDesc &desc) {
-  auto handle =
-      upperDevice_ ? upperDevice_->createTexture(desc) : TextureHandle{};
-  if (!handle) {
-    handle = Handle{nextHandle_++};
-  }
-  auto texture = std::make_shared<Texture>(shared_from_this(), handle, desc);
-  registerTexture(texture);
-  return texture;
-}
-
-std::shared_ptr<Surface> Device::createSurface(const SurfaceDesc &desc) {
-  auto handle =
-      upperDevice_ ? upperDevice_->createSurface(desc) : SurfaceHandle{};
-  if (!handle) {
-    handle = Handle{nextHandle_++};
-  }
-  auto surface = std::make_shared<Surface>(shared_from_this(), handle, desc);
-  registerSurface(surface);
-  return surface;
-}
-
 std::shared_ptr<Query> Device::createQuery(QueryType type) {
   auto query = std::make_shared<Query>(type);
   queries_.push_back(query);
@@ -786,8 +362,8 @@ HResult Device::clear(const ClearDesc &desc) {
       for (auto &surface : surfaces_) {
         if (auto sp = surface.lock();
             sp && sp->handle() == attachment.handle && sp->valid()) {
-          if (canTrustGpuReadback(backend_) &&
-              backendOwnsSurfaceContents(sp->desc())) {
+          if (detail::canTrustGpuReadback(backend_) &&
+              detail::backendOwnsSurfaceContents(sp->desc())) {
             continue;
           }
           if (snapshot.rects.empty()) {
@@ -802,8 +378,8 @@ HResult Device::clear(const ClearDesc &desc) {
       for (auto &texture : textures_) {
         if (auto tp = texture.lock();
             tp && tp->handle() == attachment.handle && tp->valid()) {
-          if (canTrustGpuReadback(backend_) &&
-              backendOwnsTextureContents(tp->desc())) {
+          if (detail::canTrustGpuReadback(backend_) &&
+              detail::backendOwnsTextureContents(tp->desc())) {
             continue;
           }
           if (snapshot.rects.empty()) {
@@ -824,8 +400,8 @@ HResult Device::clear(const ClearDesc &desc) {
         return;
       }
       const auto &surfaceDesc = surface->desc();
-      if (canTrustGpuReadback(backend_) &&
-          backendOwnsSurfaceContents(surfaceDesc)) {
+      if (detail::canTrustGpuReadback(backend_) &&
+          detail::backendOwnsSurfaceContents(surfaceDesc)) {
         return;
       }
       if (!surfaceDesc.depthStencil) {
@@ -939,18 +515,6 @@ void Device::completeUpTo(u64 sequenceId) {
   DXMT_ASSERT(completedSequenceId_ <= submittedSequenceId_);
 }
 
-void Device::registerBuffer(const std::shared_ptr<Buffer> &buffer) {
-  buffers_.push_back(buffer);
-}
-
-void Device::registerTexture(const std::shared_ptr<Texture> &texture) {
-  textures_.push_back(texture);
-}
-
-void Device::registerSurface(const std::shared_ptr<Surface> &surface) {
-  surfaces_.push_back(surface);
-}
-
 void Device::invalidateDefaultPoolResources() {
   auto invalidateWeak = [](auto &list) {
     list.erase(std::remove_if(list.begin(), list.end(),
@@ -971,8 +535,8 @@ void Device::invalidateDefaultPoolResources() {
 }
 
 void Device::submitClearInternal(const ClearDesc &desc) {
-  if (renderTraceEnabled()) {
-    emitRenderTrace(
+  if (detail::renderTraceEnabled()) {
+    detail::emitRenderTrace(
         "clear seq=%llu color=%d depth=%d stencil=%d color0=0x%llx "
         "depthStencil=0x%llx rects=%zu rgba=(%.3f,%.3f,%.3f,%.3f) "
         "depthValue=%.3f stencilValue=%u",
@@ -999,23 +563,24 @@ void Device::maybeCaptureExperimentFrame() {
   if (presentCount_ < experimentCapture_.frame) {
     return;
   }
-  const bool trace = renderTraceEnabled();
+  const bool trace = detail::renderTraceEnabled();
   if (trace) {
-    emitRenderTrace("capture frame=%u path=%s begin", presentCount_,
-                    experimentCapture_.path.c_str());
+    detail::emitRenderTrace("capture frame=%u path=%s begin", presentCount_,
+                            experimentCapture_.path.c_str());
   }
   auto chain = swapChain(0);
   if (!chain) {
     if (trace) {
-      emitRenderTrace("capture frame=%u aborted: no swap chain", presentCount_);
+      detail::emitRenderTrace("capture frame=%u aborted: no swap chain",
+                              presentCount_);
     }
     return;
   }
   auto backBuffer = chain->backBuffer();
   if (!backBuffer || !backBuffer->valid()) {
     if (trace) {
-      emitRenderTrace("capture frame=%u aborted: invalid backbuffer",
-                      presentCount_);
+      detail::emitRenderTrace("capture frame=%u aborted: invalid backbuffer",
+                              presentCount_);
     }
     return;
   }
@@ -1023,8 +588,9 @@ void Device::maybeCaptureExperimentFrame() {
   const u32 bpp = bytesPerPixel(desc.format);
   if (bpp == 0) {
     if (trace) {
-      emitRenderTrace("capture frame=%u aborted: unsupported format=%u",
-                      presentCount_, static_cast<unsigned>(desc.format));
+      detail::emitRenderTrace("capture frame=%u aborted: unsupported format=%u",
+                              presentCount_,
+                              static_cast<unsigned>(desc.format));
     }
     return;
   }
@@ -1033,24 +599,25 @@ void Device::maybeCaptureExperimentFrame() {
                      false, false, MultiSampleType::None});
   if (!scratch) {
     if (trace) {
-      emitRenderTrace("capture frame=%u aborted: scratch alloc failed",
-                      presentCount_);
+      detail::emitRenderTrace("capture frame=%u aborted: scratch alloc failed",
+                              presentCount_);
     }
     return;
   }
   const auto readbackHr = getRenderTargetData(backBuffer, scratch);
   if (readbackHr != D3D_OK) {
     if (trace) {
-      emitRenderTrace("capture frame=%u aborted: getRenderTargetData hr=0x%08x",
-                      presentCount_, static_cast<unsigned>(readbackHr));
+      detail::emitRenderTrace(
+          "capture frame=%u aborted: getRenderTargetData hr=0x%08x",
+          presentCount_, static_cast<unsigned>(readbackHr));
     }
     return;
   }
   auto region = scratch->lockRect(nullptr, 0);
   if (!region.data) {
     if (trace) {
-      emitRenderTrace("capture frame=%u aborted: lockRect failed",
-                      presentCount_);
+      detail::emitRenderTrace("capture frame=%u aborted: lockRect failed",
+                              presentCount_);
     }
     return;
   }
@@ -1063,280 +630,15 @@ void Device::maybeCaptureExperimentFrame() {
   if (wrote) {
     experimentCapture_.captured = true;
     if (trace) {
-      emitRenderTrace("capture frame=%u wrote=%s", presentCount_,
-                      experimentCapture_.path.c_str());
+      detail::emitRenderTrace("capture frame=%u wrote=%s", presentCount_,
+                              experimentCapture_.path.c_str());
     }
   } else {
     if (trace) {
-      emitRenderTrace("capture frame=%u aborted: writeBmp failed",
-                      presentCount_);
+      detail::emitRenderTrace("capture frame=%u aborted: writeBmp failed",
+                              presentCount_);
     }
   }
-}
-
-HResult Device::fillSurface(const std::shared_ptr<Surface> &surface,
-                            const Rect *rect, ColorRGBA color) {
-  if (!surface || !surface->valid()) {
-    return D3DERR_INVALIDCALL;
-  }
-  if (backend_) {
-    ColorFillDesc backendDesc;
-    backendDesc.destination = surface->handle();
-    if (rect) {
-      backendDesc.rect = *rect;
-      backendDesc.hasRect = true;
-    }
-    backendDesc.color = color;
-    upperDevice_->submitColorFill(backendDesc);
-  }
-  surface->fillColor(rect, color);
-  return D3D_OK;
-}
-
-HResult Device::stretchRect(const std::shared_ptr<Surface> &src,
-                            const Rect *srcRect,
-                            const std::shared_ptr<Surface> &dst,
-                            const Rect *dstRect, bool linear) {
-  if (!src || !dst || !src->valid() || !dst->valid()) {
-    return D3DERR_INVALIDCALL;
-  }
-  if (src->desc().format != dst->desc().format) {
-    return D3DERR_NOTAVAILABLE;
-  }
-  Rect srcArea = srcRect ? *srcRect
-                         : Rect{0, 0, static_cast<i32>(src->desc().width),
-                                static_cast<i32>(src->desc().height)};
-  Rect dstArea = dstRect ? *dstRect
-                         : Rect{0, 0, static_cast<i32>(dst->desc().width),
-                                static_cast<i32>(dst->desc().height)};
-  const i32 srcWidth = std::max(0, srcArea.right - srcArea.left);
-  const i32 srcHeight = std::max(0, srcArea.bottom - srcArea.top);
-  const i32 dstWidth = std::max(0, dstArea.right - dstArea.left);
-  const i32 dstHeight = std::max(0, dstArea.bottom - dstArea.top);
-  if (srcWidth == 0 || srcHeight == 0 || dstWidth == 0 || dstHeight == 0) {
-    return D3DERR_INVALIDCALL;
-  }
-
-  if (backend_) {
-    StretchRectDesc backendDesc;
-    backendDesc.source = src->handle();
-    backendDesc.destination = dst->handle();
-    backendDesc.sourceRect = srcArea;
-    backendDesc.destinationRect = dstArea;
-    backendDesc.linear = linear;
-    upperDevice_->submitStretchRect(backendDesc);
-    if (canTrustGpuReadback(backend_) &&
-        (backendOwnsSurfaceContents(src->desc()) ||
-         backendOwnsSurfaceContents(dst->desc()))) {
-      return D3D_OK;
-    }
-  }
-
-  auto extractRegion = [&](const std::shared_ptr<Surface> &surface,
-                           const Rect &area) -> std::vector<u8> {
-    const u32 bpp = bytesPerPixel(surface->desc().format);
-    const u32 width = static_cast<u32>(std::max(0, area.right - area.left));
-    const u32 height = static_cast<u32>(std::max(0, area.bottom - area.top));
-    auto region = surface->lockRect(&area, 0);
-    if (!region.data || bpp == 0) {
-      if (region.data) {
-        surface->unlockRect();
-      }
-      return {};
-    }
-    std::vector<u8> out(static_cast<size_t>(width) * height * bpp);
-    const auto *srcBytes = static_cast<const u8 *>(region.data);
-    for (u32 y = 0; y < height; ++y) {
-      std::memcpy(out.data() + static_cast<size_t>(y) * width * bpp,
-                  srcBytes + static_cast<size_t>(y) * region.pitch,
-                  static_cast<size_t>(width) * bpp);
-    }
-    surface->unlockRect();
-    return out;
-  };
-
-  auto blitRegion = [&](const std::shared_ptr<Surface> &surface,
-                        const Rect &area, std::span<const u8> bytes,
-                        u32 srcWidthPixels, u32 srcHeightPixels) -> HResult {
-    const u32 bpp = bytesPerPixel(surface->desc().format);
-    if (bpp == 0) {
-      return D3DERR_INVALIDCALL;
-    }
-    auto region = surface->lockRect(&area, 0);
-    if (!region.data) {
-      return D3DERR_INVALIDCALL;
-    }
-    const u32 dstW = static_cast<u32>(std::max(0, area.right - area.left));
-    const u32 dstH = static_cast<u32>(std::max(0, area.bottom - area.top));
-    std::vector<u8> temp;
-    if (srcWidthPixels == dstW && srcHeightPixels == dstH) {
-      temp.assign(bytes.begin(), bytes.end());
-    } else {
-      temp.resize(static_cast<size_t>(dstW) * dstH * bpp);
-      std::vector<u8> srcCopy(bytes.begin(), bytes.end());
-      if (!stretchPixels(temp, dstW * bpp, dstW, dstH, surface->desc().format,
-                         srcCopy, srcWidthPixels * bpp, srcWidthPixels,
-                         srcHeightPixels, surface->desc().format)) {
-        surface->unlockRect();
-        return D3DERR_INVALIDCALL;
-      }
-    }
-    const auto *srcBytes = temp.data();
-    for (u32 y = 0; y < dstH; ++y) {
-      std::memcpy(static_cast<u8 *>(region.data) +
-                      static_cast<size_t>(y) * region.pitch,
-                  srcBytes + static_cast<size_t>(y) * dstW * bpp,
-                  static_cast<size_t>(dstW) * bpp);
-    }
-    surface->unlockRect();
-    return D3D_OK;
-  };
-
-  const auto srcBytes = extractRegion(src, srcArea);
-  if (srcBytes.empty()) {
-    return D3DERR_INVALIDCALL;
-  }
-
-  const HResult result = blitRegion(
-      dst, dstArea, std::span<const u8>(srcBytes.data(), srcBytes.size()),
-      static_cast<u32>(srcWidth), static_cast<u32>(srcHeight));
-  if (result != D3D_OK) {
-    return result;
-  }
-  return D3D_OK;
-}
-
-HResult Device::updateSurface(const std::shared_ptr<Surface> &src,
-                              const std::shared_ptr<Surface> &dst) {
-  if (!src || !dst || !src->valid() || !dst->valid()) {
-    return D3DERR_INVALIDCALL;
-  }
-  if (src->desc().format != dst->desc().format) {
-    return D3DERR_NOTAVAILABLE;
-  }
-
-  if (backend_) {
-    SurfaceCopyDesc backendDesc;
-    backendDesc.source = src->handle();
-    backendDesc.destination = dst->handle();
-    backendDesc.sourceRect = {0, 0, static_cast<i32>(src->desc().width),
-                              static_cast<i32>(src->desc().height)};
-    backendDesc.destinationRect = {0, 0, static_cast<i32>(dst->desc().width),
-                                   static_cast<i32>(dst->desc().height)};
-    upperDevice_->submitSurfaceCopy(backendDesc);
-  }
-
-  auto srcRegion = src->lockRect(nullptr, 0);
-  auto dstRegion = dst->lockRect(nullptr, 0);
-  if (!srcRegion.data || !dstRegion.data) {
-    if (srcRegion.data) {
-      src->unlockRect();
-    }
-    if (dstRegion.data) {
-      dst->unlockRect();
-    }
-    return D3DERR_INVALIDCALL;
-  }
-
-  const u32 width = std::min(src->desc().width, dst->desc().width);
-  const u32 height = std::min(src->desc().height, dst->desc().height);
-  const u32 rowBytes = formatRowPitch(src->desc().format, width);
-  const u32 rows = formatRowCount(src->desc().format, height);
-  if (rowBytes == 0 || rows == 0 || srcRegion.pitch < rowBytes ||
-      dstRegion.pitch < rowBytes) {
-    src->unlockRect();
-    dst->unlockRect();
-    return D3DERR_INVALIDCALL;
-  }
-  for (u32 y = 0; y < rows; ++y) {
-    std::memcpy(static_cast<u8 *>(dstRegion.data) +
-                    static_cast<size_t>(y) * dstRegion.pitch,
-                static_cast<const u8 *>(srcRegion.data) +
-                    static_cast<size_t>(y) * srcRegion.pitch,
-                rowBytes);
-  }
-  src->unlockRect();
-  dst->unlockRect();
-  return D3D_OK;
-}
-
-HResult Device::updateTexture(const std::shared_ptr<Texture> &src,
-                              const std::shared_ptr<Texture> &dst) {
-  if (!src || !dst || !src->valid() || !dst->valid()) {
-    return D3DERR_INVALIDCALL;
-  }
-  if (src->desc().format != dst->desc().format) {
-    return D3DERR_NOTAVAILABLE;
-  }
-  const u32 levels = std::min(src->levelCount(), dst->levelCount());
-  for (u32 level = 0; level < levels; ++level) {
-    auto srcSurface = src->surfaceLevel(level);
-    auto dstSurface = dst->surfaceLevel(level);
-    if (!srcSurface || !dstSurface) {
-      return D3DERR_INVALIDCALL;
-    }
-    if (backend_) {
-      SurfaceCopyDesc backendDesc;
-      backendDesc.source = srcSurface->handle();
-      backendDesc.destination = dstSurface->handle();
-      backendDesc.sourceLevel = 0;
-      backendDesc.destinationLevel = 0;
-      backendDesc.sourceRect = {0, 0,
-                                static_cast<i32>(srcSurface->desc().width),
-                                static_cast<i32>(srcSurface->desc().height)};
-      backendDesc.destinationRect = {
-          0, 0, static_cast<i32>(dstSurface->desc().width),
-          static_cast<i32>(dstSurface->desc().height)};
-      upperDevice_->submitSurfaceCopy(backendDesc);
-    }
-  }
-  dst->copyFrom(*src);
-  return D3D_OK;
-}
-
-HResult Device::getRenderTargetData(const std::shared_ptr<Surface> &src,
-                                    const std::shared_ptr<Surface> &dst) {
-  if (!src || !dst || !src->valid() || !dst->valid()) {
-    return D3DERR_INVALIDCALL;
-  }
-  if (backend_) {
-    ReadbackDesc backendDesc;
-    backendDesc.source = src->handle();
-    backendDesc.destination = dst->handle();
-    backendDesc.sourceRect = {0, 0, static_cast<i32>(src->desc().width),
-                              static_cast<i32>(src->desc().height)};
-    upperDevice_->submitReadback(backendDesc);
-    upperDevice_->flush();
-    ReadbackPixels pixels;
-    if (backend_->readbackSurface(backendDesc, pixels)) {
-      auto dstRegion = dst->lockRect(nullptr, 0);
-      if (!dstRegion.data) {
-        return D3DERR_INVALIDCALL;
-      }
-      const u32 bpp = bytesPerPixel(src->desc().format);
-      if (bpp == 0) {
-        dst->unlockRect();
-        return D3DERR_NOTAVAILABLE;
-      }
-      const u32 width = std::min(src->desc().width, dst->desc().width);
-      const u32 height = std::min(src->desc().height, dst->desc().height);
-      const size_t rowBytes = static_cast<size_t>(width) * bpp;
-      if (pixels.pitch < rowBytes ||
-          pixels.bytes.size() < static_cast<size_t>(pixels.pitch) * height) {
-        dst->unlockRect();
-        return D3DERR_INVALIDCALL;
-      }
-      for (u32 y = 0; y < height; ++y) {
-        std::memcpy(static_cast<u8 *>(dstRegion.data) +
-                        static_cast<size_t>(y) * dstRegion.pitch,
-                    pixels.bytes.data() + static_cast<size_t>(y) * pixels.pitch,
-                    rowBytes);
-      }
-      dst->unlockRect();
-      return D3D_OK;
-    }
-  }
-  return updateSurface(src, dst);
 }
 
 } // namespace dxmt9::core
