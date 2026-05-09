@@ -43,15 +43,37 @@ smoke = executable(
 
 test('dxmt9-smoke', smoke)
 
-core_device_flow_spec = executable(
-  'dxmt9-core-device-flow-spec',
-  'native/core/core_device_flow_spec.cpp',
+core_device_com_spec = executable(
+  'dxmt9-core-device-com-spec',
+  'native/core/core_device_com_spec.cpp',
   include_directories: dxmt9_inc,
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-core-device-flow-spec', core_device_flow_spec,
+test('dxmt9-core-device-com-spec', core_device_com_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
+core_device_coverage_spec = executable(
+  'dxmt9-core-device-coverage-spec',
+  'native/core/core_device_coverage_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-device-coverage-spec', core_device_coverage_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
+core_device_lifecycle_spec = executable(
+  'dxmt9-core-device-lifecycle-spec',
+  'native/core/core_device_lifecycle_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-device-lifecycle-spec', core_device_lifecycle_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
 core_ffp_state_key_spec = executable(
