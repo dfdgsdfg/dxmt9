@@ -136,6 +136,12 @@ if host_machine.system() == 'darwin' and dxmt9_winemetal_unix_needs_install_name
   custom_target(
     'winemetal_unix_install_name_fixup',
     input: dxmt9_winemetal_unix_module,
+    # depends: forces stamp invalidation when the shared_library is
+    # re-linked (input: alone tracks only the artifact path, not the
+    # build-rule output). Without this, ninja can leave winemetal.so with
+    # bare 'winemac.so' / 'ntdll.so' install_names after a relink, which
+    # breaks DYLD resolution at test runtime (SIGABRT during dyld load).
+    depends: dxmt9_winemetal_unix_module,
     output: 'winemetal_unix_install_name_fixup.stamp',
     command: [
       'sh', '-c',

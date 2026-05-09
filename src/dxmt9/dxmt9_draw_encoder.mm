@@ -418,6 +418,7 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
   info.t_address_mode = WMTSamplerAddressModeClampToEdge;
   info.r_address_mode = WMTSamplerAddressModeClampToEdge;
   info.normalized_coords = true;
+  DXMT_ASSERT(device && "makeSampler(linear) called with stale/null Metal device handle");
   return device.newSamplerState(info);
 }
 
@@ -458,6 +459,7 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot) {
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
                                                 const SamplerSnapshot& snapshot) {
   auto info = makeSamplerInfo(snapshot);
+  DXMT_ASSERT(device && "makeSampler(snapshot) called with stale/null Metal device handle");
   return device.newSamplerState(info);
 }
 
@@ -496,6 +498,7 @@ WMT::Reference<WMT::SamplerState> makeSampler(
     WMT::Reference<WMT::Device> device,
     const core::FlatStateSet<core::kMaxSamplerStates>& states) {
   auto info = makeSamplerInfo(states);
+  DXMT_ASSERT(device && "makeSampler(FlatStateSet) called with stale/null Metal device handle");
   return device.newSamplerState(info);
 }
 
@@ -919,6 +922,7 @@ bool encodeDraw(EncodeContext& ctx,
       }
       return false;
     }
+    DXMT_ASSERT(ctx.device && "depthStencilStateFor called with stale/null Metal device handle");
     auto depthState = ctx.cache.depthStencilStateFor(ctx.device, depthKey);
     if (depthState) {
       encoder.setDepthStencilState(depthState);
