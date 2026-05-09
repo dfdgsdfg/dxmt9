@@ -1,4 +1,5 @@
 #include "dxmt9_presenter.hpp"
+#include "dxmt9/assert.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_queue.hpp"
@@ -463,6 +464,8 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
   result.acquired = true;
   presentimpl::traceEvent("nextDrawable.ok", params.seqId, hwnd_);
 
+  DXMT_ASSERT(drawable &&
+              "Presenter::encodeCommands reached Metal encode with null drawable handle");
   auto drawableTex = drawable.texture();
   WMTRenderPassInfo passInfo{};
   passInfo.colors[0].texture = drawableTex.handle;

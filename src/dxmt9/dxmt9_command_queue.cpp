@@ -130,6 +130,8 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   // next chunk's records start fresh. C2 still calls markAllDirty(...)
   // at encoder init per R-BACK-12.12 to fold in the implicit
   // "everything could have changed since last encode" semantic.
+  DXMT_ASSERT(device_ &&
+              "CommandQueue::makeEncodeContext called with stale/null device handle");
   return encoders::EncodeContext{
       device_, limits_, pool_, pipelineCache_, allocators_,
       &shaderArchive_.reference(), &shaderArchive_.path(),
