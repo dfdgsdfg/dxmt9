@@ -537,6 +537,166 @@ void testCounterEmission() {
   countRenderPassTilePreservationBytes(7'372'800u);  // 1280×720×4 (RGBA8)
 }
 
+// H4 integration tests for the touched-set hooks introduced by H3.
+// The encoder integration itself is buried inside beginRenderPass /
+// flushRender and needs a real Metal device + chunk slot to drive, so
+// these tests instead exercise the public CommandQueue API in the same
+// pattern the encoder follows. H2's `testTouchedSet` covers the basic
+// mark/invalidate/clearAll smoke; the cases below add scenario-level
+// transitions that mirror what the encoder does end-to-end.
+
+void testTouchedCrossChunkPersists() {
+  // R-BACK-15.6: the touched-set is queue-local — the encoder marks a
+  // handle when it stores a render pass for that color attachment, and
+  // the membership must persist across encodeChunk boundaries (no API
+  // call clears it on chunk transitions). Simulate the boundary by
+  // doing nothing between the two phases: any state the encoder leaves
+  // behind on the queue is visible to the next chunk's beginRenderPass
+  // call. This complements H2's single-chunk smoke.
+  dxmt9::core::BackendLimits limits{};
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+
+  Handle h1{0xC0C1u};
+  // Phase 1: chunk N closes a render pass that stored color H1.
+  queue.markColorHandleTouched(h1);
+  check(queue.isColorHandleTouched(h1),
+        "R-BACK-15.6 mark recorded within chunk N");
+
+  // Pretend chunk N ends and chunk N+1 begins. The encoder makes no
+  // queue API call at this boundary — this is the whole point of
+  // queue-local retention. (We deliberately do nothing here.)
+
+  // Phase 2: chunk N+1 begins, the encoder calls beginRenderPass on the
+  // same color attachment. isColorHandleTouched must still return true
+  // so the load action is Load (not the first-use DontCare).
+  check(queue.isColorHandleTouched(h1),
+        "R-BACK-15.6 touched state persists across chunk boundaries");
+
+  // Same contract for a second handle marked in chunk N+1: the new
+  // entry coexists with H1 from chunk N (set semantics, no rollover).
+  Handle h2{0xC0C2u};
+  queue.markColorHandleTouched(h2);
+  check(queue.isColorHandleTouched(h1),
+        "R-BACK-15.6 prior chunk's handle survives new marks");
+  check(queue.isColorHandleTouched(h2),
+        "R-BACK-15.6 new chunk's mark coexists with prior entries");
+}
+
+void testTouchedClearAllResets() {
+  // R-BACK-15.4: clearAllTouchedColorHandles is the queue-reset hook
+  // (device reset, queue restart). H2 covers the two-handle smoke;
+  // this exercises a three-handle wipe so the spec contract that
+  // clearAll is a full-set operation (not a one-handle pop) is
+  // explicit in the test surface.
+  dxmt9::core::BackendLimits limits{};
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+
+  Handle h1{0xCEA1u};
+  Handle h2{0xCEA2u};
+  Handle h3{0xCEA3u};
+  queue.markColorHandleTouched(h1);
+  queue.markColorHandleTouched(h2);
+  queue.markColorHandleTouched(h3);
+  check(queue.isColorHandleTouched(h1),
+        "R-BACK-15.4 H1 marked before reset");
+  check(queue.isColorHandleTouched(h2),
+        "R-BACK-15.4 H2 marked before reset");
+  check(queue.isColorHandleTouched(h3),
+        "R-BACK-15.4 H3 marked before reset");
+
+  queue.clearAllTouchedColorHandles();
+
+  check(!queue.isColorHandleTouched(h1),
+        "R-BACK-15.4 clearAll wipes H1");
+  check(!queue.isColorHandleTouched(h2),
+        "R-BACK-15.4 clearAll wipes H2");
+  check(!queue.isColorHandleTouched(h3),
+        "R-BACK-15.4 clearAll wipes H3");
+
+  // Re-marking after reset behaves as a fresh first-use sequence: the
+  // handles that were just wiped are once again "first use" candidates
+  // for the next render pass on each.
+  queue.markColorHandleTouched(h2);
+  check(!queue.isColorHandleTouched(h1),
+        "R-BACK-15.4 H1 stays cleared until next mark");
+  check(queue.isColorHandleTouched(h2),
+        "R-BACK-15.4 post-reset mark records normally");
+  check(!queue.isColorHandleTouched(h3),
+        "R-BACK-15.4 H3 stays cleared until next mark");
+}
+
+void testDepthShadowMapBit3() {
+  // H1 extension, bit-3 placement: R-BACK-15.7 broadening must detect a
+  // depth-handle texture sample at any active stage, not just stage 0.
+  // The H1 baseline test (testDepthShadowMapSampleForcesStore) covers
+  // textures[0] / bit 0 — this case asserts the same contract holds at
+  // textures[3] / bit 3, exercising the textureMask iteration loop in
+  // the look-ahead.
+  ChunkSlot slot;
+  Handle depth{0xD0B3u};
+  appendDrawRunWithDepth(slot, depth);
+
+  Handle otherDepth{0xD0B4u};
+  FlatDrawStateRecord hot{};
+  hot.depthStencil.handle = otherDepth;
+  hot.textures[3] = depth;       // depth bound as shadow-map sample at stage 3
+  hot.textureMask = 0x1u << 3;   // bit 3 active
+  const auto stateIndex =
+      static_cast<std::uint32_t>(slot.drawHotStates.size());
+  slot.drawHotStates.push_back(hot);
+  slot.drawShaderLayouts.push_back(DrawShaderLayoutContext{});
+  slot.drawDebugSnapshots.push_back(DrawDebugSnapshot{});
+  const auto recordIndex =
+      static_cast<std::uint32_t>(slot.drawRunRecords.size());
+  slot.drawRunRecords.push_back(DrawRunCommandRecord{
+      .stateIndex = stateIndex,
+      .firstParam = 0u,
+      .paramCount = 0u,
+      .payloadOffset = 0u,
+      .payloadSize = 0u,
+      .uniformHandle = {},
+  });
+  slot.commandHeaders.push_back(MetalCommandHeader{
+      .kind = MetalCommandKind::DrawRun,
+      .payloadIndex = recordIndex,
+  });
+  appendClearOnDepth(slot, depth);  // would otherwise allow DontCare
+  check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
+        "H1 depth sampled at textures[3]/bit 3 forces defensive Store");
+
+  // Variant: same slot but bit 3 NOT set (slot value matches but mask
+  // says inactive) — the look-ahead must skip the stale binding and
+  // fall through to the trailing Clear, allowing DontCare-store.
+  ChunkSlot maskedSlot;
+  appendDrawRunWithDepth(maskedSlot, depth);
+  FlatDrawStateRecord stale{};
+  stale.depthStencil.handle = otherDepth;
+  stale.textures[3] = depth;     // stale binding at stage 3...
+  stale.textureMask = 0x0u;      // ...but no active slots.
+  const auto staleStateIndex =
+      static_cast<std::uint32_t>(maskedSlot.drawHotStates.size());
+  maskedSlot.drawHotStates.push_back(stale);
+  maskedSlot.drawShaderLayouts.push_back(DrawShaderLayoutContext{});
+  maskedSlot.drawDebugSnapshots.push_back(DrawDebugSnapshot{});
+  const auto staleRecordIndex =
+      static_cast<std::uint32_t>(maskedSlot.drawRunRecords.size());
+  maskedSlot.drawRunRecords.push_back(DrawRunCommandRecord{
+      .stateIndex = staleStateIndex,
+      .firstParam = 0u,
+      .paramCount = 0u,
+      .payloadOffset = 0u,
+      .payloadSize = 0u,
+      .uniformHandle = {},
+  });
+  maskedSlot.commandHeaders.push_back(MetalCommandHeader{
+      .kind = MetalCommandKind::DrawRun,
+      .payloadIndex = staleRecordIndex,
+  });
+  appendClearOnDepth(maskedSlot, depth);
+  check(dxmt9::encoders::nextDepthOperationIsClear(maskedSlot, 0u, depth),
+        "H1 stale textures[3] with mask bit clear does not force Store");
+}
+
 }  // namespace
 
 int main() {
@@ -548,6 +708,9 @@ int main() {
     testDepthShadowMapSampleForcesStore();
     testNoCrossChunkLookahead();
     testTouchedSet();
+    testTouchedCrossChunkPersists();
+    testTouchedClearAllResets();
+    testDepthShadowMapBit3();
     testCounterEmission();
   } catch (const TestFailure& e) {
     std::cerr << "render_pass_actions_spec failed: " << e.what() << '\n';
