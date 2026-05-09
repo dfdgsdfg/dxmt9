@@ -199,7 +199,7 @@ completion, empty commits, and `waitForSequence`).
 ### Run all specs
 
 ```sh
-bash scripts/verify_tla.sh
+bash scripts/check/verify_tla.sh
 ```
 
 This is the current verification path in the repository. Remote CI is not

@@ -114,7 +114,7 @@ conventions, not feature requirements; durable behavior belongs in `specs/`.
   `dxmt9-shader-transform-spec`, `dxmt9-chunk-record-import-spec`, or
   `dxmt9-resource-hazard-spec`.
 - For queue, resource lifetime, present latency, encoder lifecycle, or query
-  sequencing changes, run `dxmt9-verify-tla` or `bash scripts/verify_tla.sh`.
+  sequencing changes, run `dxmt9-verify-tla` or `bash scripts/check/verify_tla.sh`.
 - For shader translator changes, add source-contract tests before relying on
   runtime pixel probes.
 - For bridge/wire-format changes, update layout/import tests before changing

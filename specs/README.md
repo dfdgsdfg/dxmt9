@@ -135,7 +135,7 @@ curl -L -o tla2tools.jar \
 **Run all specs:**
 
 ```sh
-bash scripts/verify_tla.sh
+bash scripts/check/verify_tla.sh
 ```
 
 **GUI alternative:** [TLA+ Toolbox](https://github.com/tlaplus/tlaplus/releases) —

@@ -367,7 +367,7 @@ call sites until the encoder begins emitting the new command.
 | `R-BACK-12.18` static struct sizes | `static_assert` blocks in `dxmt9_draw_state.hpp` plus the layout spec. |
 | `R-BACK-12.19` per-draw write bound | `experiments/apps/PerformanceProbe` rerun under `dxmt9-perf-offscreen-heavy` — assert new `uniform_*_bytes` counters scale with state churn, not draw count. |
 | `R-BACK-12.20` per-draw API call bound | Same probe — assert `setBuffer*` calls/draw approach 0 on the sticky-bind common case. |
-| `R-BACK-12.21` counter coverage | `scripts/assert_perf_counters.py` extension — fail if expected `uniform_*` keys missing. |
+| `R-BACK-12.21` counter coverage | `scripts/check/assert_perf_counters.py` extension — fail if expected `uniform_*` keys missing. |
 
 TLA+ is not required for this spec; the queue/lifetime invariants are
 unchanged from the existing transient-slab model and continue to be

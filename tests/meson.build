@@ -36,7 +36,7 @@ endif
 python3 = find_program('python3', required: true)
 bash = find_program('bash', required: true)
 assert_perf_counters = find_program(
-  join_paths(meson.project_source_root(), 'scripts', 'assert_perf_counters.py'),
+  join_paths(meson.project_source_root(), 'scripts', 'check', 'assert_perf_counters.py'),
   required: true,
 )
 
@@ -68,7 +68,7 @@ if host_machine.system() == 'darwin'
   shader_manifest = join_paths(shader_corpus_root, 'MANIFEST.toml')
   # shader_runner_dxmt9 accepts individual .shader_test files; shard the
   # manifest so Meson applies timeout per case instead of to the full corpus.
-  shader_corpus_tool = join_paths(meson.project_source_root(), 'scripts/shader_corpus_tool.py')
+  shader_corpus_tool = join_paths(meson.project_source_root(), 'scripts/tools/shader_corpus_tool.py')
   shader_corpus_files = run_command(
     python3,
     shader_corpus_tool,
@@ -94,27 +94,27 @@ if host_machine.system() == 'darwin'
   endforeach
 endif
 
-verify_tla_script = join_paths(meson.project_source_root(), 'scripts', 'verify_tla.sh')
+verify_tla_script = join_paths(meson.project_source_root(), 'scripts', 'check', 'verify_tla.sh')
 test('dxmt9-verify-tla', bash, args: [verify_tla_script], is_parallel: false)
-test('dxmt9-manifest-check', bash, args: [join_paths(meson.project_source_root(), 'scripts/check_manifest.sh')],
+test('dxmt9-manifest-check', bash, args: [join_paths(meson.project_source_root(), 'scripts/check/check_manifest.sh')],
      is_parallel: false)
 test('dxmt9-shader-corpus-gaps', python3,
      args: [
-       join_paths(meson.project_source_root(), 'scripts/shader_corpus_tool.py'),
+       join_paths(meson.project_source_root(), 'scripts/tools/shader_corpus_tool.py'),
        'gaps',
        '--fail-on-metadata-gaps',
      ],
      is_parallel: false)
 test('dxmt9-d3d9-conformance-manifest-check', bash,
-     args: [join_paths(meson.project_source_root(), 'scripts/check_d3d9_conformance_manifest.sh')],
+     args: [join_paths(meson.project_source_root(), 'scripts/check/check_d3d9_conformance_manifest.sh')],
      is_parallel: false)
 test('dxmt9-d3d9-conformance-status-report', python3,
-     args: [join_paths(meson.project_source_root(), 'scripts/d3d9_conformance_status.py')],
+     args: [join_paths(meson.project_source_root(), 'scripts/check/check_d3d9_conformance_status.py')],
      is_parallel: false)
-test('dxmt9-drift-report', bash, args: [join_paths(meson.project_source_root(), 'scripts/check_drift.sh')],
+test('dxmt9-drift-report', bash, args: [join_paths(meson.project_source_root(), 'scripts/check/check_drift.sh')],
      is_parallel: false)
 test('dxmt9-perf-counter-table-audit', python3,
-     args: [join_paths(meson.project_source_root(), 'scripts/audit_perf_counter_table.py')],
+     args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_counter_table.py')],
      is_parallel: false)
 test('dxmt9-corpus-sync-smoke', python3,
      args: [join_paths(meson.project_source_root(), 'tests/shader_runner/corpus_sync_smoke.py')],

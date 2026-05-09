@@ -454,7 +454,7 @@ flowchart LR
 Suitability verdict:
 
 - The current experiments are appropriate for structural triage: they separate present pacing, no-present draw encoding, and mixed present+draw behavior.
-- They are still not sufficient for absolute performance claims. The reported FPS is `frames / process_elapsed_sec` from `scripts/run_experiment.py`, so it includes process startup, Wine prefix/runtime overhead, window creation, device/resource creation, render loop, teardown, and any final flush.
+- They are still not sufficient for absolute performance claims. The reported FPS is `frames / process_elapsed_sec` from `scripts/run_apps/run_experiment.py`, so it includes process startup, Wine prefix/runtime overhead, window creation, device/resource creation, render loop, teardown, and any final flush.
 - The new in-app and dxmt9 CPU counters now attribute the main renderer hot path, but the process-level metric remains useful only as an end-to-end number.
 - The Wine builtin lane is a practical compatibility/performance baseline, not an oracle proving what "CPU D3D9" should cost. Wined3D has its own command stream and backend acceleration.
 
@@ -603,7 +603,7 @@ Local reference points:
 ## Assumptions
 
 - The current oracle named `vanilla` is Wine builtin D3D9, not a native Windows/D3D9 hardware oracle.
-- FPS is measured from app log frame count divided by process elapsed time in `scripts/run_experiment.py`.
+- FPS is measured from app log frame count divided by process elapsed time in `scripts/run_apps/run_experiment.py`.
 - The tested SDK samples are simple immediate-present workloads; they amplify present pacing and next-drawable waits more than heavy shader or draw workloads.
 - SSIM below 1.0 is accepted by the current harness threshold, but it still means there is remaining visual delta versus the stored reference.
 - `present_acquire_wait_ms` includes time blocked around CAMetalLayer drawable acquisition.
@@ -618,7 +618,7 @@ PE/Wine binding:
 
 - Initial failing mode: `WINEDLLOVERRIDES=d3d9=b` caused Wine to reject staged `d3d9.dll` as `not a builtin`.
 - Root cause: the raw PE DLLs were copied before `winebuild --builtin` postprocess was guaranteed.
-- Fix added: `scripts/install_heroic_wine.sh` now runs matching Meson `.dll.postproc` targets before staging.
+- Fix added: `scripts/install/install_heroic_wine.sh` now runs matching Meson `.dll.postproc` targets before staging.
 - Fix added: PE `d3d9.dll` and PE `winemetal.dll` are staged into both the Wine runtime and the prefix `system32` / `syswow64` locations.
 - Verification: `BasicHLSL` now passes with `d3d9=b`; bridge fallback gets a valid unix-call handle.
 
@@ -691,7 +691,7 @@ Baseline performance, previous default latency 3:
 
 Performance probe split:
 
-- Harness: `bash scripts/run_dx9_performance_suite.sh --timeout 45 --app dxmt9-perf-present-only --app dxmt9-perf-offscreen-heavy --app dxmt9-perf-many-draw`
+- Harness: `bash scripts/run_suites/run_dx9_performance_suite.sh --timeout 45 --app dxmt9-perf-present-only --app dxmt9-perf-offscreen-heavy --app dxmt9-perf-many-draw`
 - Latest follow-up output: `experiments/output/dx9-performance-suite/summary.md`
 - Probe source: `experiments/apps/PerformanceProbe/PerformanceProbe.cpp`
 
@@ -744,7 +744,7 @@ Interpretation:
 
 PE recorder bridge experiment:
 
-- Harness: `DXMT9_PROBE_FRAMES=20 DXMT9_PROBE_DRAWS=64 DXMT_PERF_COUNTERS=1 scripts/run_experiment.py run dxmt9-perf-many-draw`.
+- Harness: `DXMT9_PROBE_FRAMES=20 DXMT9_PROBE_DRAWS=64 DXMT_PERF_COUNTERS=1 scripts/run_apps/run_experiment.py run dxmt9-perf-many-draw`.
 - Baseline output: `experiments/output/dxmt9-perf-many-draw-bridge-counter-smoke/result.json`.
 - Packet output: `experiments/output/dxmt9-perf-many-draw-draw-packet-queue-token-smoke/result.json`.
 - Chunk output: `experiments/output/dxmt9-perf-many-draw-draw-chunk-state-delta-smoke/result.json`.
@@ -866,7 +866,7 @@ Effective latency cap experiment, same-load follow-up:
 
 Present policy repeated A/B, 3 runs per app/mode:
 
-- Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --tag 20260426-present-policy-r3`
+- Harness: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --tag 20260426-present-policy-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-policy-r3/summary.md`
 
 | app | mode | pass | fps mean [min,max] | present encoded mean | fallbacks mean | boundary wait ms mean | acquire wait ms mean | token wait ms mean | command buffers mean |
@@ -880,10 +880,10 @@ Present policy repeated A/B, 3 runs per app/mode:
 
 Broader present policy A/B, 3 runs per app/mode:
 
-- Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-basichlsl --app dx-sdk-tutorial07 --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --app dxmt9-multitexture-terrain --tag 20260426-present-policy-broad-r3`
+- Harness: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-basichlsl --app dx-sdk-tutorial07 --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --app dxmt9-multitexture-terrain --tag 20260426-present-policy-broad-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-policy-broad-r3/summary.md`
 - Result: 54/54 runs passed.
-- HDR follow-up: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-hdrformats --tag 20260426-hdrformats-present-policy-r3`
+- HDR follow-up: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-hdrformats --tag 20260426-hdrformats-present-policy-r3`
 - HDR output: `experiments/output/dx9-present-policy-ab/20260426-hdrformats-present-policy-r3/summary.md`
 - HDR result: 9/9 runs passed. The previous apparent hang did not reproduce under the explicit timeout/debug lane.
 
@@ -899,7 +899,7 @@ Broader present policy A/B, 3 runs per app/mode:
 
 Preacquire policy triage:
 
-- Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --tag 20260426-present-preacquire-triage-r3`
+- Harness: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --tag 20260426-present-preacquire-triage-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-preacquire-triage-r3/summary.md`
 - Result: 36/36 runs passed. The first triage showed that the old preacquire path mostly missed because encode could race ahead while the prefetch thread was still in-flight.
 
@@ -913,7 +913,7 @@ Preacquire policy triage:
 Preacquire in-flight wait follow-up:
 
 - Change: when `DXMT9_PRESENT_PREACQUIRE=1`, encode now waits for an already in-flight prefetch instead of immediately issuing a second `nextDrawable()`.
-- Harness: `scripts/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --tag 20260426-present-preacquire-wait-r3`
+- Harness: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --tag 20260426-present-preacquire-wait-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-preacquire-wait-r3/summary.md`
 - Result: 18/18 runs passed.
 

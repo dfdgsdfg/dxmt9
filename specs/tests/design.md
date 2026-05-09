@@ -709,7 +709,7 @@ declared matrix is incomplete, `failing` must name failing lane evidence, and
 skipped case must record why it is not a dxmt9 target, for example crash-only
 invalid-pointer behaviour or a Windows-only window-manager message sequence.
 
-`scripts/check_d3d9_conformance_manifest.sh` validates that every manifest entry
+`scripts/check/check_d3d9_conformance_manifest.sh` validates that every manifest entry
 has the required fields, valid lane / architecture / status values, R-TEST-12
 anchors, `source_kind`, `license`, `license_scope`, a 40-character Wine upstream
 commit, lane/architecture evidence consistency, no duplicate executable/function
@@ -738,13 +738,13 @@ flowchart TD
     P --> D
 ```
 
-`scripts/d3d9_conformance_status.py` reads the manifest and reports the current
+`scripts/check/check_d3d9_conformance_status.py` reads the manifest and reports the current
 support state as text, Markdown, or Mermaid. The default Meson target
 `dxmt9-d3d9-conformance-status-report` is a parse/report smoke test. The
 release or merge-readiness gate is explicit:
 
 ```sh
-scripts/d3d9_conformance_status.py --fail-if-full-support-missing
+scripts/check/check_d3d9_conformance_status.py --fail-if-full-support-missing
 ```
 
 That command is expected to fail until all manifest entries are `passing`.
@@ -954,7 +954,7 @@ can keep provenance and manifest state aligned.
 
 ```toml
 # MANIFEST.toml — generated and hand-maintained
-# Run `scripts/check_manifest.sh` to verify it matches the filesystem.
+# Run `scripts/check/check_manifest.sh` to verify it matches the filesystem.
 
 [[test]]
 file    = "arithmetic/mad.shader_test"
@@ -989,11 +989,11 @@ status  = "passing"
 
 ### Enforcement
 
-A Meson custom target `dxmt9-manifest-check` runs `scripts/check_manifest.sh`
+A Meson custom target `dxmt9-manifest-check` runs `scripts/check/check_manifest.sh`
 before the test suite:
 
 ```sh
-# scripts/check_manifest.sh
+# scripts/check/check_manifest.sh
 # Fails if any .shader_test file is missing from MANIFEST.toml
 # or if MANIFEST.toml lists a file that does not exist.
 find tests/shader_runner/corpus -name "*.shader_test" | sort > /tmp/actual.txt
@@ -1005,24 +1005,24 @@ The sync workflow is separate:
 
 ```sh
 # Refresh vkd3d-sourced tests from a local upstream checkout.
-DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/sync_corpus.sh
+DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/tools/sync_corpus.sh
 
 # Report which tracked vkd3d files are behind that checkout.
-DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/check_drift.sh
+DXMT_UPSTREAM_ROOT=/path/to/vkd3d bash scripts/check/check_drift.sh
 ```
 
 ### Queries
 
 ```sh
 # Opcodes with no passing test (coverage gap):
-python3 scripts/shader_corpus_tool.py gaps --fail-on-metadata-gaps
+python3 scripts/tools/shader_corpus_tool.py gaps --fail-on-metadata-gaps
 
 # Per-file Meson corpus shards use the same status filter:
-python3 scripts/shader_corpus_tool.py list-files --status passing
+python3 scripts/tools/shader_corpus_tool.py list-files --status passing
 
 # Tests behind upstream vkd3d HEAD:
 # (compare recorded provenance commits against the configured checkout)
-DXMT_UPSTREAM_ROOT=/path/to/vkd3d scripts/check_drift.sh
+DXMT_UPSTREAM_ROOT=/path/to/vkd3d scripts/check/check_drift.sh
 
 # Count by shader model:
 tomlq -r '.test[] | .models[]' MANIFEST.toml | sort | uniq -c

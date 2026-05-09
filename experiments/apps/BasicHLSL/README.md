@@ -8,5 +8,5 @@ without depending on DXUT.
 - `BasicHLSL.fx`: preserved reference effect derived from the Microsoft sample
 - `BasicHLSL.hlsl`: runtime shader used by the experiment binary
 
-The executable is built locally by `scripts/build_basic_hlsl.sh` and written to
+The executable is built locally by `scripts/build_apps/build_basic_hlsl.sh` and written to
 this directory as `BasicHLSL.exe`.

@@ -25,13 +25,13 @@ Expected executable:
   - extracted benchmark binary:
 
 ```sh
-bash scripts/run_sfiv_benchmark_experiment.sh --binary "/path/to/Benchmark.exe"
+bash scripts/run_apps/run_sfiv_benchmark_experiment.sh --binary "/path/to/Benchmark.exe"
 ```
 
   - or the original installer package:
 
 ```sh
-bash scripts/run_sfiv_benchmark_experiment.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+bash scripts/run_apps/run_sfiv_benchmark_experiment.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 ```
 
 Installer handling:
@@ -42,7 +42,7 @@ Installer handling:
 - override the cache location with:
 
 ```sh
-bash scripts/run_sfiv_benchmark_experiment.sh \
+bash scripts/run_apps/run_sfiv_benchmark_experiment.sh \
   --binary "~/Downloads/StreetFighterIV_Benchmark.exe" \
   --cache-root "/tmp/sfiv-cache"
 ```
@@ -58,7 +58,7 @@ Host lanes:
 - Heroic `dxmt9` lane:
 
 ```sh
-bash scripts/run_sfiv_benchmark_experiment.sh \
+bash scripts/run_apps/run_sfiv_benchmark_experiment.sh \
   --host heroic \
   --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 ```
@@ -92,7 +92,7 @@ start /unix ./StreetFighterIV_Benchmark.exe
 - CrossOver oracle lane:
 
 ```sh
-bash scripts/run_sfiv_benchmark_experiment.sh \
+bash scripts/run_apps/run_sfiv_benchmark_experiment.sh \
   --host crossover \
   --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 ```

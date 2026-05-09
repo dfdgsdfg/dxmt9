@@ -26,7 +26,7 @@ device_c_unix_schema = custom_target(
   output: 'dxmt9_device_c_unix_schema.generated.h',
   command: [
     python3,
-    files('scripts/extract_device_c_schema.py'),
+    files('scripts/codegen/extract_device_c_schema.py'),
     '@INPUT@',
     '@OUTPUT@',
   ],
@@ -43,7 +43,7 @@ bridge_codegen = custom_target(
   ],
   command: [
     python3,
-    files('scripts/gen_wine_bridge.py'),
+    files('scripts/codegen/gen_wine_bridge.py'),
     '--schema-header', files('src/winemetal/winemetal_unix_schema.h'),
     '--schema-header', '@INPUT@',
     '--ops-header', '@OUTPUT0@',
@@ -53,8 +53,8 @@ bridge_codegen = custom_target(
   ],
   depend_files: files(
     'src/winemetal/winemetal_unix_schema.h',
-    'scripts/gen_wine_bridge.py',
-    'scripts/extract_device_c_schema.py',
+    'scripts/codegen/gen_wine_bridge.py',
+    'scripts/codegen/extract_device_c_schema.py',
   ),
 )
 

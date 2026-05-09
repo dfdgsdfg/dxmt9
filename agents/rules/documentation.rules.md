@@ -55,7 +55,7 @@ For shell examples, prefer the actual tooling used here:
 
 ```sh
 meson test -C build dxmt9-core-spec
-bash scripts/verify_tla.sh
+bash scripts/check/verify_tla.sh
 ```
 
 ## Structure Patterns

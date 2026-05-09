@@ -182,7 +182,7 @@ meson compile -C build-win32-x86
 Create a mixed x64/x86 app-local package:
 
 ```sh
-python3 scripts/package_app_local.py --clean --output-dir dist/dxmt9-app-local
+python3 scripts/tools/package_app_local.py --clean --output-dir dist/dxmt9-app-local
 ```
 
 Package outputs:
@@ -276,7 +276,7 @@ Typical `WINEPREFIX` examples:
 For Heroic's bundled Wine, use the installer helper:
 
 ```sh
-bash scripts/install_heroic_wine.sh \
+bash scripts/install/install_heroic_wine.sh \
   --prefix "$WINEPREFIX" \
   --wine-root "$WINE_ROOT"
 ```
@@ -371,7 +371,7 @@ query resolution) are formally verified with TLC:
 
 ```sh
 TLA2TOOLS_JAR="/Applications/TLA+ Toolbox.app/Contents/Eclipse/tla2tools.jar" \
-  bash scripts/verify_tla.sh
+  bash scripts/check/verify_tla.sh
 ```
 
 Expected output: `Model checking completed. No error has been found.` for all
@@ -401,8 +401,9 @@ specs/           Specifications and formal verification
   verification/  TLA+ specs (CommandQueue, ResourceLifetime,
                  EncoderLifecycle, QuerySeqId) + .cfg model files
   gap.md         Spec–implementation gap tracker
-scripts/         install_heroic_wine.sh, package_app_local.py, verification
-                 and corpus tooling
+scripts/         Purpose-organized helper scripts; see scripts/README.md
+                 (codegen, check, build_apps, run_apps, run_suites, install,
+                 tools)
 ```
 
 ---

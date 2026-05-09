@@ -10,7 +10,7 @@
 extern "C" NTSTATUS dxmt9_winemetal_abi_hash_unix_call(void*);
 
 // Forward-declarations for every thunk_<dxmt9c_*> + thunk_wow64_<dxmt9c_*>
-// produced by scripts/gen_wine_bridge.py. The macro expansion below pulls
+// produced by scripts/codegen/gen_wine_bridge.py. The macro expansion below pulls
 // in the same entries.h that the generated dispatch.cpp implements.
 #define DXMT9_BRIDGE_UNIX_ENTRY(thunk, wow64) \
   extern "C" NTSTATUS thunk(void*); \

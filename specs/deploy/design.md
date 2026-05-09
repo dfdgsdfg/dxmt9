@@ -163,7 +163,7 @@ layout. A packaging step should collect the artifacts into a flat app-local
 directory and generate a manifest.
 
 ```sh
-python3 scripts/package_app_local.py --clean --output-dir dist/dxmt9-app-local
+python3 scripts/tools/package_app_local.py --clean --output-dir dist/dxmt9-app-local
 ```
 
 ---
@@ -450,7 +450,7 @@ Windows loader failures and must be caught by packaging validation.
 Runtime lane:
 
 ```sh
-bash scripts/install_heroic_wine.sh --prefix "$PREFIX" --wine-root "$WINE_ROOT"
+bash scripts/install/install_heroic_wine.sh --prefix "$PREFIX" --wine-root "$WINE_ROOT"
 WINEPREFIX="$PREFIX" WINEDLLOVERRIDES="d3d9=b" "$WINE_ROOT/bin/wine" d3d9-smoke.exe
 ```
 

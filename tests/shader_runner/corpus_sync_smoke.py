@@ -25,8 +25,8 @@ def main() -> int:
     corpus_fixture = fixture_root / "corpus"
     upstream_fixture = fixture_root / "upstream"
 
-    sync_script = root / "scripts" / "sync_corpus.sh"
-    drift_script = root / "scripts" / "check_drift.sh"
+    sync_script = root / "scripts" / "tools" / "sync_corpus.sh"
+    drift_script = root / "scripts" / "check" / "check_drift.sh"
 
     with tempfile.TemporaryDirectory(prefix="dxmt9-corpus-sync-") as tempdir:
         temp_root = Path(tempdir)
@@ -111,7 +111,7 @@ def main() -> int:
         gaps = subprocess.run(
             [
                 "python3",
-                str(root / "scripts" / "shader_corpus_tool.py"),
+                str(root / "scripts" / "tools" / "shader_corpus_tool.py"),
                 "gaps",
                 "--root",
                 str(corpus),

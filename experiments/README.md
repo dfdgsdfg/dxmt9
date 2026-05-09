@@ -6,28 +6,28 @@ current `dxmt9` runtime.
 Primary entrypoint:
 
 ```sh
-python3 scripts/run_experiment.py list
-python3 scripts/run_experiment.py run dxmt9-wsi-present-local
-python3 scripts/run_experiment.py run dx-sdk-basichlsl --wine-root "$WINE_ROOT"
-python3 scripts/run_experiment.py run dx-sdk-tutorial07 --wine-root "$WINE_ROOT"
-python3 scripts/run_experiment.py run dx-sdk-hdrformats --wine-root "$WINE_ROOT"
-python3 scripts/run_experiment.py run dxut-simple-sample --wine-root "$WINE_ROOT"
-python3 scripts/run_experiment.py run irrlicht-managed-lights --wine-root "$WINE_ROOT"
-python3 scripts/run_experiment.py run anno-1404-gold --wine-root "$WINE_ROOT" --prefix "$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
-python3 scripts/run_experiment.py run street-fighter-iv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
-python3 scripts/run_experiment.py run street-fighter-iv-benchmark-crossover-oracle --wine-root "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver" --wine-bin "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine" --prefix "$HOME/Library/Application Support/CrossOver/Bottles/Heroic" --binary "/path/to/StreetFighterIV_Benchmark.exe"
+python3 scripts/run_apps/run_experiment.py list
+python3 scripts/run_apps/run_experiment.py run dxmt9-wsi-present-local
+python3 scripts/run_apps/run_experiment.py run dx-sdk-basichlsl --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-tutorial07 --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-hdrformats --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dxut-simple-sample --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run irrlicht-managed-lights --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run anno-1404-gold --wine-root "$WINE_ROOT" --prefix "$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
+python3 scripts/run_apps/run_experiment.py run street-fighter-iv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
+python3 scripts/run_apps/run_experiment.py run street-fighter-iv-benchmark-crossover-oracle --wine-root "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver" --wine-bin "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine" --prefix "$HOME/Library/Application Support/CrossOver/Bottles/Heroic" --binary "/path/to/StreetFighterIV_Benchmark.exe"
 ```
 
 DX9 regression suite:
 
 ```sh
-bash scripts/run_dx9_regression_suite.sh --wine-root "$WINE_ROOT"
+bash scripts/run_suites/run_dx9_regression_suite.sh --wine-root "$WINE_ROOT"
 ```
 
 DX9 fast sanity suite derived from the small `d9vk` D3D9 tests:
 
 ```sh
-bash scripts/run_dx9_fast_sanity_suite.sh --wine-root "$WINE_ROOT"
+bash scripts/tools/run_dx9_fast_sanity_suite.sh --wine-root "$WINE_ROOT"
 ```
 
 This suite:
@@ -40,14 +40,14 @@ This suite:
 Builtin-oracle compare suite for selected DX9 sample apps:
 
 ```sh
-bash scripts/run_dx9_oracle_compare_suite.sh --wine-root "$WINE_ROOT"
+bash scripts/run_suites/run_dx9_oracle_compare_suite.sh --wine-root "$WINE_ROOT"
 ```
 
 Stale temp-prefix cleanup for interrupted suite runs:
 
 ```sh
-python3 scripts/cleanup_dxmt9_temp_prefixes.py --dry-run
-python3 scripts/cleanup_dxmt9_temp_prefixes.py --all
+python3 scripts/tools/cleanup_dxmt9_temp_prefixes.py --dry-run
+python3 scripts/tools/cleanup_dxmt9_temp_prefixes.py --all
 ```
 
 Notes:
@@ -64,20 +64,20 @@ Notes:
 One-shot wrappers for the verified real apps:
 
 ```sh
-bash scripts/run_basic_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_tutorial07_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_hdrformats_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_simple_sample_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_irrlicht_managed_lights_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_anno1404_experiment.sh
-bash scripts/run_sfiv_benchmark_experiment.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
-bash scripts/run_sfiv_benchmark_crossover_oracle.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+bash scripts/run_apps/run_basic_experiment.sh --wine-root "$WINE_ROOT"
+bash scripts/run_apps/run_tutorial07_experiment.sh --wine-root "$WINE_ROOT"
+bash scripts/run_apps/run_hdrformats_experiment.sh --wine-root "$WINE_ROOT"
+bash scripts/run_apps/run_simple_sample_experiment.sh --wine-root "$WINE_ROOT"
+bash scripts/run_apps/run_irrlicht_managed_lights_experiment.sh --wine-root "$WINE_ROOT"
+bash scripts/run_apps/run_anno1404_experiment.sh
+bash scripts/run_apps/run_sfiv_benchmark_experiment.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+bash scripts/run_suites/run_sfiv_benchmark_crossover_oracle.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 ```
 
 Permanent-prefix installer for Heroic:
 
 ```sh
-bash scripts/install_heroic_experiment_prefix.sh --prefix "$HOME/.wine-dxmt9-heroic" --wine-root "$WINE_ROOT"
+bash scripts/install/install_heroic_experiment_prefix.sh --prefix "$HOME/.wine-dxmt9-heroic" --wine-root "$WINE_ROOT"
 ```
 
 The runner:
