@@ -1325,4 +1325,142 @@ void countPresentSetPropsWait(std::uint64_t nanoseconds) {
   add(counters().presentSetPropsWaitNs, nanoseconds);
 }
 
+// --- Per-frame snapshot mode (opt-in) ---------------------------------------
+// The cumulative `[dxmt9-perf]` line at process exit hides which frame caused
+// a spike. When DXMT9_PERF_FRAME_SAMPLING=1 the encode-thread Present handler
+// records a snapshot once per Present and prints a `[dxmt9-perf-frame]` line
+// whose values are deltas vs the prior snapshot.
+//
+// Subset emitted per frame (~30 keys): all timing nanoseconds we already
+// expose plus the major volume counters (submit_draw, submit_present,
+// render_pass_begin/end, draw_calls/indexed/primitives/triangles/vertices,
+// command_buffers, bind_pipeline, present_encoded). Keeps line length
+// bounded; the cumulative report at exit still covers all 200+ keys.
+
+bool frameSamplingEnabled() {
+  static const bool value = []() {
+    if (const char* v = std::getenv("DXMT9_PERF_FRAME_SAMPLING")) {
+      return v[0] != '\0' && v[0] != '0';
+    }
+    return false;
+  }();
+  return value;
+}
+
+CounterSnapshot snapshot() {
+  const Counters& c = counters();
+  CounterSnapshot s;
+  s.submitDraw = load(c.submitDraw);
+  s.submitClear = load(c.submitClear);
+  s.submitStretch = load(c.submitStretch);
+  s.submitPresent = load(c.submitPresent);
+  s.submitFlush = load(c.submitFlush);
+  s.commandBuffers = load(c.commandBuffers);
+  s.renderPassBegin = load(c.renderPassBegin);
+  s.renderPassEnd = load(c.renderPassEnd);
+  s.drawCalls = load(c.drawCalls);
+  s.drawIndexedCalls = load(c.drawIndexedCalls);
+  s.drawPrimitiveCount = load(c.drawPrimitiveCount);
+  s.drawTriangleEstimate = load(c.drawTriangleEstimate);
+  s.drawVertexCount = load(c.drawVertexCount);
+  s.bindPipeline = load(c.bindPipeline);
+  s.presentEncoded = load(c.presentEncoded);
+  s.submitDrawCpuNs = load(c.submitDrawCpuNs);
+  s.encodeChunkCalls = load(c.encodeChunkCalls);
+  s.encodeChunkCpuNs = load(c.encodeChunkCpuNs);
+  s.encodeDrawCpuNs = load(c.encodeDrawCpuNs);
+  s.encodeDrawPipelineLookupCpuNs = load(c.encodeDrawPipelineLookupCpuNs);
+  s.encodeDrawUniformBuildCpuNs = load(c.encodeDrawUniformBuildCpuNs);
+  s.encodeDrawFvfDecodeCpuNs = load(c.encodeDrawFvfDecodeCpuNs);
+  s.encodeDrawStreamBindCpuNs = load(c.encodeDrawStreamBindCpuNs);
+  s.encodeDrawIssueCpuNs = load(c.encodeDrawIssueCpuNs);
+  s.transientUploadCpuNs = load(c.transientUploadCpuNs);
+  s.commandBufferCreateCpuNs = load(c.commandBufferCreateCpuNs);
+  s.commandBufferCommitCpuNs = load(c.commandBufferCommitCpuNs);
+  s.completionWaitNs = load(c.completionWaitNs);
+  s.presentAcquireWaitNs = load(c.presentAcquireWaitNs);
+  s.presentBoundaryWaitNs = load(c.presentBoundaryWaitNs);
+  s.presentTokenWaitNs = load(c.presentTokenWaitNs);
+  return s;
+}
+
+void emitFrameDelta(std::uint64_t frameId,
+                    const CounterSnapshot& prev,
+                    const CounterSnapshot& curr) {
+  auto delta = [](std::uint64_t a, std::uint64_t b) -> std::uint64_t {
+    // Atomic loads are relaxed and the snapshot covers many counters,
+    // so a later snapshot field could lag a prior one if a writer is
+    // mid-update — clamp to 0 instead of wrapping.
+    return b >= a ? b - a : 0ull;
+  };
+  std::fprintf(
+      stderr,
+      "[dxmt9-perf-frame frame=%llu "
+      "submit_draw=%llu submit_clear=%llu submit_stretch=%llu "
+      "submit_present=%llu submit_flush=%llu command_buffers=%llu "
+      "render_pass_begin=%llu render_pass_end=%llu "
+      "draw_calls=%llu draw_indexed=%llu draw_primitives=%llu "
+      "draw_triangles=%llu draw_vertices=%llu bind_pipeline=%llu "
+      "present_encoded=%llu "
+      "submit_draw_cpu_ms=%.3f encode_chunk_calls=%llu "
+      "encode_chunk_cpu_ms=%.3f encode_draw_cpu_ms=%.3f "
+      "encode_draw_pipeline_lookup_cpu_ms=%.3f "
+      "encode_draw_uniform_build_cpu_ms=%.3f "
+      "encode_draw_fvf_decode_cpu_ms=%.3f "
+      "encode_draw_stream_bind_cpu_ms=%.3f "
+      "encode_draw_issue_cpu_ms=%.3f transient_upload_cpu_ms=%.3f "
+      "command_buffer_create_cpu_ms=%.3f command_buffer_commit_cpu_ms=%.3f "
+      "completion_wait_ms=%.3f present_acquire_wait_ms=%.3f "
+      "present_boundary_wait_ms=%.3f present_token_wait_ms=%.3f]\n",
+      static_cast<unsigned long long>(frameId),
+      static_cast<unsigned long long>(delta(prev.submitDraw, curr.submitDraw)),
+      static_cast<unsigned long long>(delta(prev.submitClear, curr.submitClear)),
+      static_cast<unsigned long long>(delta(prev.submitStretch, curr.submitStretch)),
+      static_cast<unsigned long long>(delta(prev.submitPresent, curr.submitPresent)),
+      static_cast<unsigned long long>(delta(prev.submitFlush, curr.submitFlush)),
+      static_cast<unsigned long long>(delta(prev.commandBuffers, curr.commandBuffers)),
+      static_cast<unsigned long long>(delta(prev.renderPassBegin, curr.renderPassBegin)),
+      static_cast<unsigned long long>(delta(prev.renderPassEnd, curr.renderPassEnd)),
+      static_cast<unsigned long long>(delta(prev.drawCalls, curr.drawCalls)),
+      static_cast<unsigned long long>(delta(prev.drawIndexedCalls, curr.drawIndexedCalls)),
+      static_cast<unsigned long long>(delta(prev.drawPrimitiveCount, curr.drawPrimitiveCount)),
+      static_cast<unsigned long long>(delta(prev.drawTriangleEstimate, curr.drawTriangleEstimate)),
+      static_cast<unsigned long long>(delta(prev.drawVertexCount, curr.drawVertexCount)),
+      static_cast<unsigned long long>(delta(prev.bindPipeline, curr.bindPipeline)),
+      static_cast<unsigned long long>(delta(prev.presentEncoded, curr.presentEncoded)),
+      static_cast<double>(delta(prev.submitDrawCpuNs, curr.submitDrawCpuNs)) / 1000000.0,
+      static_cast<unsigned long long>(delta(prev.encodeChunkCalls, curr.encodeChunkCalls)),
+      static_cast<double>(delta(prev.encodeChunkCpuNs, curr.encodeChunkCpuNs)) / 1000000.0,
+      static_cast<double>(delta(prev.encodeDrawCpuNs, curr.encodeDrawCpuNs)) / 1000000.0,
+      static_cast<double>(delta(prev.encodeDrawPipelineLookupCpuNs,
+                                 curr.encodeDrawPipelineLookupCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawUniformBuildCpuNs,
+                                 curr.encodeDrawUniformBuildCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawFvfDecodeCpuNs,
+                                 curr.encodeDrawFvfDecodeCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawStreamBindCpuNs,
+                                 curr.encodeDrawStreamBindCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.encodeDrawIssueCpuNs, curr.encodeDrawIssueCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.transientUploadCpuNs, curr.transientUploadCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.commandBufferCreateCpuNs,
+                                 curr.commandBufferCreateCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.commandBufferCommitCpuNs,
+                                 curr.commandBufferCommitCpuNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.completionWaitNs, curr.completionWaitNs)) / 1000000.0,
+      static_cast<double>(delta(prev.presentAcquireWaitNs, curr.presentAcquireWaitNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.presentBoundaryWaitNs, curr.presentBoundaryWaitNs)) /
+          1000000.0,
+      static_cast<double>(delta(prev.presentTokenWaitNs, curr.presentTokenWaitNs)) /
+          1000000.0);
+}
+
 }  // namespace dxmt9::perf

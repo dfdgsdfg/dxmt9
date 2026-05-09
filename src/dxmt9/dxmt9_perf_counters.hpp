@@ -148,4 +148,56 @@ void countPresentPreAcquireMiss();
 void countPresentPreAcquireWait(std::uint64_t nanoseconds);
 void countPresentSetPropsWait(std::uint64_t nanoseconds);
 
+// Per-frame snapshot mode (opt-in via DXMT9_PERF_FRAME_SAMPLING=1).
+//
+// Default off → callers pay only one bool check at the trigger point.
+// When enabled, the encode-thread Present handler takes a snapshot at
+// each Present and emits a `[dxmt9-perf-frame frame=N ...]` line whose
+// values are deltas vs the previous snapshot. The focused subset
+// (~30 keys: timing nanoseconds + major volume counters) keeps the
+// per-frame line length bounded; the cumulative `[dxmt9-perf]` report
+// at exit still covers everything.
+//
+// CounterSnapshot is a POD copy of the subset, suitable for
+// `static thread_local` storage at the trigger site.
+struct CounterSnapshot {
+  std::uint64_t submitDraw = 0;
+  std::uint64_t submitClear = 0;
+  std::uint64_t submitStretch = 0;
+  std::uint64_t submitPresent = 0;
+  std::uint64_t submitFlush = 0;
+  std::uint64_t commandBuffers = 0;
+  std::uint64_t renderPassBegin = 0;
+  std::uint64_t renderPassEnd = 0;
+  std::uint64_t drawCalls = 0;
+  std::uint64_t drawIndexedCalls = 0;
+  std::uint64_t drawPrimitiveCount = 0;
+  std::uint64_t drawTriangleEstimate = 0;
+  std::uint64_t drawVertexCount = 0;
+  std::uint64_t bindPipeline = 0;
+  std::uint64_t presentEncoded = 0;
+  std::uint64_t submitDrawCpuNs = 0;
+  std::uint64_t encodeChunkCalls = 0;
+  std::uint64_t encodeChunkCpuNs = 0;
+  std::uint64_t encodeDrawCpuNs = 0;
+  std::uint64_t encodeDrawPipelineLookupCpuNs = 0;
+  std::uint64_t encodeDrawUniformBuildCpuNs = 0;
+  std::uint64_t encodeDrawFvfDecodeCpuNs = 0;
+  std::uint64_t encodeDrawStreamBindCpuNs = 0;
+  std::uint64_t encodeDrawIssueCpuNs = 0;
+  std::uint64_t transientUploadCpuNs = 0;
+  std::uint64_t commandBufferCreateCpuNs = 0;
+  std::uint64_t commandBufferCommitCpuNs = 0;
+  std::uint64_t completionWaitNs = 0;
+  std::uint64_t presentAcquireWaitNs = 0;
+  std::uint64_t presentBoundaryWaitNs = 0;
+  std::uint64_t presentTokenWaitNs = 0;
+};
+
+bool frameSamplingEnabled();
+CounterSnapshot snapshot();
+void emitFrameDelta(std::uint64_t frameId,
+                    const CounterSnapshot& prev,
+                    const CounterSnapshot& curr);
+
 }  // namespace dxmt9::perf
