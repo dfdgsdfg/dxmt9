@@ -457,471 +457,398 @@ std::atomic<std::uint64_t>& splitReasonCounter(Counters& c, EncoderSplitReason r
   return c.renderSplitFinal;
 }
 
+// Data-driven counter table for the shutdown report. Each entry maps a stable
+// counter key to either a Counters atomic field (UnsignedCount/Milliseconds/
+// Hex64), a pair of fields (WidthByHeight), or a PercentileRing member with a
+// percentile fraction (PercentileMs). Adding a new counter is now (1) add the
+// Counters field + (2) one row here, in the position where the key should
+// appear in the report stream. Order is load-bearing for the consumer: the
+// runbook scripts parse the line in arrival order.
+struct CounterEntry {
+  enum class Kind : std::uint8_t {
+    UnsignedCount,   // " key=%llu"
+    Milliseconds,    // " key=%.3f" from a ns counter / 1e6
+    Hex64,           // " key=0x%llx" for handle/hash values
+    WidthByHeight,   // " key=%llux%llu" using both atomicField and field2
+    PercentileMs,    // " key=%.3f" from PercentileRing::percentile(p) / 1e6
+  };
+
+  const char* key;
+  Kind kind;
+  // Source — one of these three is non-null based on kind:
+  //   UnsignedCount/Milliseconds/Hex64: atomicField
+  //   WidthByHeight:                    atomicField + field2
+  //   PercentileMs:                     ringField + percentile
+  std::atomic<std::uint64_t> Counters::* atomicField;
+  std::atomic<std::uint64_t> Counters::* field2;
+  PercentileRing Counters::* ringField;
+  double percentile;
+};
+
+constexpr std::array<CounterEntry, 328> kCounterTable = {{
+    {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
+    {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
+    {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
+    {"ring_arena_heap_fallback_bytes", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackBytes, nullptr, nullptr, 0.0},
+    {"ring_arena_heap_fallback_argbuf", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCountArgbuf, nullptr, nullptr, 0.0},
+    {"ring_arena_heap_fallback_lambda", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCountLambda, nullptr, nullptr, 0.0},
+    {"ring_arena_heap_fallback_staging", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCountStaging, nullptr, nullptr, 0.0},
+    {"ring_arena_heap_fallback_copytemp", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCountCopyTemp, nullptr, nullptr, 0.0},
+    {"submit_draw", CounterEntry::Kind::UnsignedCount, &Counters::submitDraw, nullptr, nullptr, 0.0},
+    {"submit_clear", CounterEntry::Kind::UnsignedCount, &Counters::submitClear, nullptr, nullptr, 0.0},
+    {"submit_stretch", CounterEntry::Kind::UnsignedCount, &Counters::submitStretch, nullptr, nullptr, 0.0},
+    {"stretch_copy", CounterEntry::Kind::UnsignedCount, &Counters::stretchBlitCopy, nullptr, nullptr, 0.0},
+    {"stretch_pass", CounterEntry::Kind::UnsignedCount, &Counters::stretchRenderPass, nullptr, nullptr, 0.0},
+    {"stretch_full", CounterEntry::Kind::UnsignedCount, &Counters::stretchFullscreen, nullptr, nullptr, 0.0},
+    {"submit_present", CounterEntry::Kind::UnsignedCount, &Counters::submitPresent, nullptr, nullptr, 0.0},
+    {"submit_flush", CounterEntry::Kind::UnsignedCount, &Counters::submitFlush, nullptr, nullptr, 0.0},
+    {"command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::commandBuffers, nullptr, nullptr, 0.0},
+    {"metal_buffers", CounterEntry::Kind::UnsignedCount, &Counters::metalBuffers, nullptr, nullptr, 0.0},
+    {"metal_buffer_bytes", CounterEntry::Kind::UnsignedCount, &Counters::metalBufferBytes, nullptr, nullptr, 0.0},
+    {"pipeline_builds", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuilds, nullptr, nullptr, 0.0},
+    {"pipeline_hit_draw", CounterEntry::Kind::UnsignedCount, &Counters::pipelineHitDraw, nullptr, nullptr, 0.0},
+    {"pipeline_hit_fill", CounterEntry::Kind::UnsignedCount, &Counters::pipelineHitFill, nullptr, nullptr, 0.0},
+    {"pipeline_hit_stretch", CounterEntry::Kind::UnsignedCount, &Counters::pipelineHitStretch, nullptr, nullptr, 0.0},
+    {"pipeline_miss_draw", CounterEntry::Kind::UnsignedCount, &Counters::pipelineMissDraw, nullptr, nullptr, 0.0},
+    {"pipeline_miss_fill", CounterEntry::Kind::UnsignedCount, &Counters::pipelineMissFill, nullptr, nullptr, 0.0},
+    {"pipeline_miss_stretch", CounterEntry::Kind::UnsignedCount, &Counters::pipelineMissStretch, nullptr, nullptr, 0.0},
+    {"pipeline_build_draw", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildDraw, nullptr, nullptr, 0.0},
+    {"pipeline_build_fill", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildFill, nullptr, nullptr, 0.0},
+    {"pipeline_build_stretch", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildStretch, nullptr, nullptr, 0.0},
+    {"pipeline_build_present", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuildPresent, nullptr, nullptr, 0.0},
+    {"render_pass_begin", CounterEntry::Kind::UnsignedCount, &Counters::renderPassBegin, nullptr, nullptr, 0.0},
+    {"render_pass_end", CounterEntry::Kind::UnsignedCount, &Counters::renderPassEnd, nullptr, nullptr, 0.0},
+    {"render_split_final", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitFinal, nullptr, nullptr, 0.0},
+    {"render_split_rt_change", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitRenderTargetChange, nullptr, nullptr, 0.0},
+    {"render_split_hazard", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitHazard, nullptr, nullptr, 0.0},
+    {"render_split_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitClearBarrier, nullptr, nullptr, 0.0},
+    {"render_split_surface_copy", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitSurfaceCopy, nullptr, nullptr, 0.0},
+    {"render_split_stretch", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitStretchRect, nullptr, nullptr, 0.0},
+    {"render_split_readback", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitReadback, nullptr, nullptr, 0.0},
+    {"render_split_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitColorFill, nullptr, nullptr, 0.0},
+    {"render_split_present", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresent, nullptr, nullptr, 0.0},
+    {"render_split_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresentAcquire, nullptr, nullptr, 0.0},
+    {"hazard_probe", CounterEntry::Kind::UnsignedCount, &Counters::hazardProbeComparisons, nullptr, nullptr, 0.0},
+    {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
+    {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},
+    {"hazard_bloom_false_positive", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomFalsePositive, nullptr, nullptr, 0.0},
+    {"draw_calls", CounterEntry::Kind::UnsignedCount, &Counters::drawCalls, nullptr, nullptr, 0.0},
+    {"draw_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawIndexedCalls, nullptr, nullptr, 0.0},
+    {"draw_expanded_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawExpandedIndexedCalls, nullptr, nullptr, 0.0},
+    {"draw_primitives", CounterEntry::Kind::UnsignedCount, &Counters::drawPrimitiveCount, nullptr, nullptr, 0.0},
+    {"draw_triangles", CounterEntry::Kind::UnsignedCount, &Counters::drawTriangleEstimate, nullptr, nullptr, 0.0},
+    {"draw_vertices", CounterEntry::Kind::UnsignedCount, &Counters::drawVertexCount, nullptr, nullptr, 0.0},
+    {"draw_up_vertex_bytes", CounterEntry::Kind::UnsignedCount, &Counters::drawUpVertexBytes, nullptr, nullptr, 0.0},
+    {"draw_up_index_bytes", CounterEntry::Kind::UnsignedCount, &Counters::drawUpIndexBytes, nullptr, nullptr, 0.0},
+    {"bind_texture", CounterEntry::Kind::UnsignedCount, &Counters::bindTexture, nullptr, nullptr, 0.0},
+    {"bind_sampler", CounterEntry::Kind::UnsignedCount, &Counters::bindSampler, nullptr, nullptr, 0.0},
+    {"bind_vertex_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindVertexBuffer, nullptr, nullptr, 0.0},
+    {"bind_index_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindIndexBuffer, nullptr, nullptr, 0.0},
+    {"bind_uniform_buffer", CounterEntry::Kind::UnsignedCount, &Counters::bindUniformBuffer, nullptr, nullptr, 0.0},
+    {"bind_pipeline", CounterEntry::Kind::UnsignedCount, &Counters::bindPipeline, nullptr, nullptr, 0.0},
+    {"bind_depth_state", CounterEntry::Kind::UnsignedCount, &Counters::bindDepthState, nullptr, nullptr, 0.0},
+    {"bind_viewport", CounterEntry::Kind::UnsignedCount, &Counters::bindViewport, nullptr, nullptr, 0.0},
+    {"bind_scissor", CounterEntry::Kind::UnsignedCount, &Counters::bindScissor, nullptr, nullptr, 0.0},
+    {"bind_rasterizer", CounterEntry::Kind::UnsignedCount, &Counters::bindRasterizer, nullptr, nullptr, 0.0},
+    {"draw_shader_bucket_samples", CounterEntry::Kind::UnsignedCount, &Counters::drawShaderBucketSamples, nullptr, nullptr, 0.0},
+    {"draw_shader_bucket_changes", CounterEntry::Kind::UnsignedCount, &Counters::drawShaderBucketChanges, nullptr, nullptr, 0.0},
+    {"last_vs", CounterEntry::Kind::Hex64, &Counters::lastVertexShaderHash, nullptr, nullptr, 0.0},
+    {"last_ps", CounterEntry::Kind::Hex64, &Counters::lastPixelShaderHash, nullptr, nullptr, 0.0},
+    {"last_variant", CounterEntry::Kind::Hex64, &Counters::lastShaderVariantHash, nullptr, nullptr, 0.0},
+    {"draw_geometry_samples", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometrySamples, nullptr, nullptr, 0.0},
+    {"draw_geometry_ffp", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryFfp, nullptr, nullptr, 0.0},
+    {"draw_geometry_vs", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryVs, nullptr, nullptr, 0.0},
+    {"draw_geometry_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryIndexed, nullptr, nullptr, 0.0},
+    {"draw_geometry_index16", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryIndex16, nullptr, nullptr, 0.0},
+    {"draw_geometry_index32", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryIndex32, nullptr, nullptr, 0.0},
+    {"draw_geometry_direct", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryDirect, nullptr, nullptr, 0.0},
+    {"draw_geometry_up", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryUp, nullptr, nullptr, 0.0},
+    {"draw_geometry_expanded", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryExpanded, nullptr, nullptr, 0.0},
+    {"draw_geometry_nonzero_base_vertex", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryNonZeroBaseVertex, nullptr, nullptr, 0.0},
+    {"draw_geometry_nonzero_start_index", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryNonZeroStartIndex, nullptr, nullptr, 0.0},
+    {"draw_geometry_nonzero_stream0_offset", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryNonZeroStream0Offset, nullptr, nullptr, 0.0},
+    {"draw_geometry_last_stream0_stride", CounterEntry::Kind::UnsignedCount, &Counters::drawGeometryLastStream0Stride, nullptr, nullptr, 0.0},
+    {"draw_geometry_last_decl_hash", CounterEntry::Kind::Hex64, &Counters::drawGeometryLastVertexDeclHash, nullptr, nullptr, 0.0},
+    {"completion_compat_fp16_ms", CounterEntry::Kind::Milliseconds, &Counters::completionCompatFp16WaitNs, nullptr, nullptr, 0.0},
+    {"completion_compat_mrt_ms", CounterEntry::Kind::Milliseconds, &Counters::completionCompatMrtWaitNs, nullptr, nullptr, 0.0},
+    {"completion_compat_srgb_ms", CounterEntry::Kind::Milliseconds, &Counters::completionCompatSrgbWaitNs, nullptr, nullptr, 0.0},
+    {"completion_compat_projected_ms", CounterEntry::Kind::Milliseconds, &Counters::completionCompatProjectedWaitNs, nullptr, nullptr, 0.0},
+    {"completion_compat_msaa_ms", CounterEntry::Kind::Milliseconds, &Counters::completionCompatMsaaWaitNs, nullptr, nullptr, 0.0},
+    {"completion_compat_query_ms", CounterEntry::Kind::Milliseconds, &Counters::completionCompatQueryWaitNs, nullptr, nullptr, 0.0},
+    {"completion_shader_bucket_samples", CounterEntry::Kind::UnsignedCount, &Counters::completionShaderBucketSamples, nullptr, nullptr, 0.0},
+    {"completion_shader_bucket_changes", CounterEntry::Kind::UnsignedCount, &Counters::completionShaderBucketChanges, nullptr, nullptr, 0.0},
+    {"completion_last_vs", CounterEntry::Kind::Hex64, &Counters::completionLastVertexShaderHash, nullptr, nullptr, 0.0},
+    {"completion_last_ps", CounterEntry::Kind::Hex64, &Counters::completionLastPixelShaderHash, nullptr, nullptr, 0.0},
+    {"completion_last_variant", CounterEntry::Kind::Hex64, &Counters::completionLastShaderVariantHash, nullptr, nullptr, 0.0},
+    {"submit_draw_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitDrawCpuRing, 0.5},
+    {"submit_draw_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitDrawCpuRing, 0.95},
+    {"submit_draw_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitDrawCpuRing, 0.99},
+    {"encode_chunk_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeChunkCalls, nullptr, nullptr, 0.0},
+    {"encode_chunk_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeChunkCpuNs, nullptr, nullptr, 0.0},
+    {"encode_chunk_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeChunkCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_chunk_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeChunkCpuRing, 0.5},
+    {"encode_chunk_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeChunkCpuRing, 0.95},
+    {"encode_chunk_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeChunkCpuRing, 0.99},
+    {"encode_draw_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_draw_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawCpuRing, 0.5},
+    {"encode_draw_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawCpuRing, 0.95},
+    {"encode_draw_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawCpuRing, 0.99},
+    {"encode_draw_pipeline_lookup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPipelineLookupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_pipeline_lookup_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPipelineLookupCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_draw_pipeline_lookup_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawPipelineLookupCpuRing, 0.5},
+    {"encode_draw_pipeline_lookup_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawPipelineLookupCpuRing, 0.95},
+    {"encode_draw_pipeline_lookup_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawPipelineLookupCpuRing, 0.99},
+    {"encode_draw_uniform_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawUniformBuildCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_uniform_build_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawUniformBuildCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_draw_uniform_build_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawUniformBuildCpuRing, 0.5},
+    {"encode_draw_uniform_build_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawUniformBuildCpuRing, 0.95},
+    {"encode_draw_uniform_build_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawUniformBuildCpuRing, 0.99},
+    {"encode_draw_fvf_decode_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawFvfDecodeCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_fvf_decode_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawFvfDecodeCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_draw_fvf_decode_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawFvfDecodeCpuRing, 0.5},
+    {"encode_draw_fvf_decode_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawFvfDecodeCpuRing, 0.95},
+    {"encode_draw_fvf_decode_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawFvfDecodeCpuRing, 0.99},
+    {"encode_draw_stream_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.5},
+    {"encode_draw_stream_bind_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.95},
+    {"encode_draw_stream_bind_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawStreamBindCpuRing, 0.99},
+    {"encode_draw_issue_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_issue_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueCpuMaxNs, nullptr, nullptr, 0.0},
+    {"encode_draw_issue_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.5},
+    {"encode_draw_issue_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.95},
+    {"encode_draw_issue_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.99},
+    {"transient_upload_calls", CounterEntry::Kind::UnsignedCount, &Counters::transientUploadCalls, nullptr, nullptr, 0.0},
+    {"transient_upload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::transientUploadBytes, nullptr, nullptr, 0.0},
+    {"transient_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::transientUploadCpuNs, nullptr, nullptr, 0.0},
+    {"transient_upload_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::transientUploadCpuMaxNs, nullptr, nullptr, 0.0},
+    {"transient_upload_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::transientUploadCpuRing, 0.5},
+    {"transient_upload_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::transientUploadCpuRing, 0.95},
+    {"transient_upload_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::transientUploadCpuRing, 0.99},
+    {"uniform_vs_consts_calls", CounterEntry::Kind::UnsignedCount, &Counters::uniformVsConstsCalls, nullptr, nullptr, 0.0},
+    {"uniform_vs_consts_bytes", CounterEntry::Kind::UnsignedCount, &Counters::uniformVsConstsBytes, nullptr, nullptr, 0.0},
+    {"uniform_ps_consts_calls", CounterEntry::Kind::UnsignedCount, &Counters::uniformPsConstsCalls, nullptr, nullptr, 0.0},
+    {"uniform_ps_consts_bytes", CounterEntry::Kind::UnsignedCount, &Counters::uniformPsConstsBytes, nullptr, nullptr, 0.0},
+    {"uniform_ffp_vs_calls", CounterEntry::Kind::UnsignedCount, &Counters::uniformFfpVsCalls, nullptr, nullptr, 0.0},
+    {"uniform_ffp_vs_bytes", CounterEntry::Kind::UnsignedCount, &Counters::uniformFfpVsBytes, nullptr, nullptr, 0.0},
+    {"uniform_ffp_ps_calls", CounterEntry::Kind::UnsignedCount, &Counters::uniformFfpPsCalls, nullptr, nullptr, 0.0},
+    {"uniform_ffp_ps_bytes", CounterEntry::Kind::UnsignedCount, &Counters::uniformFfpPsBytes, nullptr, nullptr, 0.0},
+    {"uniform_volatile_pushes", CounterEntry::Kind::UnsignedCount, &Counters::uniformVolatilePushes, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_load", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionLoad, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionClear, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionDontCare, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_depth_load", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionDepthLoad, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_depth_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionDepthClear, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_depth_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionDepthDontCare, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_stencil_load", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionStencilLoad, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_stencil_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionStencilClear, nullptr, nullptr, 0.0},
+    {"render_pass_load_action_stencil_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionStencilDontCare, nullptr, nullptr, 0.0},
+    {"render_pass_store_action_store", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionStore, nullptr, nullptr, 0.0},
+    {"render_pass_store_action_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionDontCare, nullptr, nullptr, 0.0},
+    {"render_pass_store_action_resolve", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionResolve, nullptr, nullptr, 0.0},
+    {"render_pass_store_action_depth_store", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionDepthStore, nullptr, nullptr, 0.0},
+    {"render_pass_store_action_depth_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionDepthDontCare, nullptr, nullptr, 0.0},
+    {"render_pass_store_action_stencil_store", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionStencilStore, nullptr, nullptr, 0.0},
+    {"render_pass_store_action_stencil_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassStoreActionStencilDontCare, nullptr, nullptr, 0.0},
+    {"render_pass_tile_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTilePreservationBytes, nullptr, nullptr, 0.0},
+    {"command_buffer_create_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commandBufferCreateCpuNs, nullptr, nullptr, 0.0},
+    {"command_buffer_create_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commandBufferCreateCpuMaxNs, nullptr, nullptr, 0.0},
+    {"command_buffer_create_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCreateCpuRing, 0.5},
+    {"command_buffer_create_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCreateCpuRing, 0.95},
+    {"command_buffer_create_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCreateCpuRing, 0.99},
+    {"command_buffer_commit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commandBufferCommitCpuNs, nullptr, nullptr, 0.0},
+    {"command_buffer_commit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commandBufferCommitCpuMaxNs, nullptr, nullptr, 0.0},
+    {"command_buffer_commit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.5},
+    {"command_buffer_commit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.95},
+    {"command_buffer_commit_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.99},
+    {"completion_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionWaits, nullptr, nullptr, 0.0},
+    {"completion_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitNs, nullptr, nullptr, 0.0},
+    {"completion_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitRing, 0.5},
+    {"completion_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitRing, 0.95},
+    {"completion_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitRing, 0.99},
+    {"completion_present_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionPresentWaits, nullptr, nullptr, 0.0},
+    {"completion_present_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionPresentWaitNs, nullptr, nullptr, 0.0},
+    {"completion_present_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionPresentWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_present_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionPresentWaitRing, 0.5},
+    {"completion_present_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionPresentWaitRing, 0.95},
+    {"completion_present_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionPresentWaitRing, 0.99},
+    {"completion_draw_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionDrawWaits, nullptr, nullptr, 0.0},
+    {"completion_draw_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionDrawWaitNs, nullptr, nullptr, 0.0},
+    {"completion_draw_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionDrawWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_draw_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawWaitRing, 0.5},
+    {"completion_draw_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawWaitRing, 0.95},
+    {"completion_draw_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawWaitRing, 0.99},
+    {"completion_blit_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionBlitWaits, nullptr, nullptr, 0.0},
+    {"completion_blit_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionBlitWaitNs, nullptr, nullptr, 0.0},
+    {"completion_blit_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionBlitWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_blit_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionBlitWaitRing, 0.5},
+    {"completion_blit_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionBlitWaitRing, 0.95},
+    {"completion_blit_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionBlitWaitRing, 0.99},
+    {"completion_present_only_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionPresentOnlyWaits, nullptr, nullptr, 0.0},
+    {"completion_present_only_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionPresentOnlyWaitNs, nullptr, nullptr, 0.0},
+    {"completion_present_only_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionPresentOnlyWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_present_only_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionPresentOnlyWaitRing, 0.5},
+    {"completion_present_only_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionPresentOnlyWaitRing, 0.95},
+    {"completion_present_only_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionPresentOnlyWaitRing, 0.99},
+    {"completion_draw_present_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionDrawPresentWaits, nullptr, nullptr, 0.0},
+    {"completion_draw_present_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionDrawPresentWaitNs, nullptr, nullptr, 0.0},
+    {"completion_draw_present_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionDrawPresentWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_draw_present_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawPresentWaitRing, 0.5},
+    {"completion_draw_present_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawPresentWaitRing, 0.95},
+    {"completion_draw_present_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawPresentWaitRing, 0.99},
+    {"completion_draw_stretch_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionDrawStretchWaits, nullptr, nullptr, 0.0},
+    {"completion_draw_stretch_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionDrawStretchWaitNs, nullptr, nullptr, 0.0},
+    {"completion_draw_stretch_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionDrawStretchWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_draw_stretch_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawStretchWaitRing, 0.5},
+    {"completion_draw_stretch_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawStretchWaitRing, 0.95},
+    {"completion_draw_stretch_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionDrawStretchWaitRing, 0.99},
+    {"completion_stretch_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionStretchWaits, nullptr, nullptr, 0.0},
+    {"completion_stretch_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionStretchWaitNs, nullptr, nullptr, 0.0},
+    {"completion_stretch_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionStretchWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_stretch_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionStretchWaitRing, 0.5},
+    {"completion_stretch_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionStretchWaitRing, 0.95},
+    {"completion_stretch_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionStretchWaitRing, 0.99},
+    {"completion_blit_only_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionBlitOnlyWaits, nullptr, nullptr, 0.0},
+    {"completion_blit_only_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionBlitOnlyWaitNs, nullptr, nullptr, 0.0},
+    {"completion_blit_only_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionBlitOnlyWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_blit_only_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionBlitOnlyWaitRing, 0.5},
+    {"completion_blit_only_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionBlitOnlyWaitRing, 0.95},
+    {"completion_blit_only_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionBlitOnlyWaitRing, 0.99},
+    {"completion_other_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionOtherWaits, nullptr, nullptr, 0.0},
+    {"completion_other_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionOtherWaitNs, nullptr, nullptr, 0.0},
+    {"completion_other_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionOtherWaitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_other_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionOtherWaitRing, 0.5},
+    {"completion_other_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionOtherWaitRing, 0.95},
+    {"completion_other_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionOtherWaitRing, 0.99},
+    {"sync_waits", CounterEntry::Kind::UnsignedCount, &Counters::syncWaits, nullptr, nullptr, 0.0},
+    {"sync_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::syncWaitNs, nullptr, nullptr, 0.0},
+    {"sync_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::syncWaitMaxNs, nullptr, nullptr, 0.0},
+    {"sync_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::syncWaitRing, 0.5},
+    {"sync_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::syncWaitRing, 0.95},
+    {"sync_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::syncWaitRing, 0.99},
+    {"queue_writer_waits", CounterEntry::Kind::UnsignedCount, &Counters::queueWriterWaits, nullptr, nullptr, 0.0},
+    {"queue_writer_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::queueWriterWaitNs, nullptr, nullptr, 0.0},
+    {"queue_writer_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::queueWriterWaitMaxNs, nullptr, nullptr, 0.0},
+    {"queue_writer_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueWriterWaitRing, 0.5},
+    {"queue_writer_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueWriterWaitRing, 0.95},
+    {"queue_writer_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueWriterWaitRing, 0.99},
+    {"queue_commit_waits", CounterEntry::Kind::UnsignedCount, &Counters::queueCommitWaits, nullptr, nullptr, 0.0},
+    {"queue_commit_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::queueCommitWaitNs, nullptr, nullptr, 0.0},
+    {"queue_commit_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::queueCommitWaitMaxNs, nullptr, nullptr, 0.0},
+    {"queue_commit_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueCommitWaitRing, 0.5},
+    {"queue_commit_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueCommitWaitRing, 0.95},
+    {"queue_commit_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueCommitWaitRing, 0.99},
+    {"queue_sequence_waits", CounterEntry::Kind::UnsignedCount, &Counters::queueSequenceWaits, nullptr, nullptr, 0.0},
+    {"queue_sequence_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::queueSequenceWaitNs, nullptr, nullptr, 0.0},
+    {"queue_sequence_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::queueSequenceWaitMaxNs, nullptr, nullptr, 0.0},
+    {"queue_sequence_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.5},
+    {"queue_sequence_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.95},
+    {"queue_sequence_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.99},
+    {"present_boundary_applied", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryApplied, nullptr, nullptr, 0.0},
+    {"present_boundary_skipped", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundarySkipped, nullptr, nullptr, 0.0},
+    {"present_boundary_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryWaits, nullptr, nullptr, 0.0},
+    {"present_boundary_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentBoundaryWaitNs, nullptr, nullptr, 0.0},
+    {"present_boundary_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::presentBoundaryWaitMaxNs, nullptr, nullptr, 0.0},
+    {"present_boundary_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentBoundaryWaitRing, 0.5},
+    {"present_boundary_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentBoundaryWaitRing, 0.95},
+    {"present_boundary_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentBoundaryWaitRing, 0.99},
+    {"present_encoded", CounterEntry::Kind::UnsignedCount, &Counters::presentEncoded, nullptr, nullptr, 0.0},
+    {"present_skipped", CounterEntry::Kind::UnsignedCount, &Counters::presentSkipped, nullptr, nullptr, 0.0},
+    {"present_full", CounterEntry::Kind::UnsignedCount, &Counters::presentFullscreen, nullptr, nullptr, 0.0},
+    {"present_source_selections", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceSelections, nullptr, nullptr, 0.0},
+    {"present_source_explicit", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceExplicit, nullptr, nullptr, 0.0},
+    {"present_source_current_backbuffer", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceCurrentBackBuffer, nullptr, nullptr, 0.0},
+    {"present_source_checks", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceChecks, nullptr, nullptr, 0.0},
+    {"present_source_valid", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceValid, nullptr, nullptr, 0.0},
+    {"present_source_missing_surface", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceMissingSurface, nullptr, nullptr, 0.0},
+    {"present_source_missing_texture", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceMissingTexture, nullptr, nullptr, 0.0},
+    {"present_source_resolve", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceResolve, nullptr, nullptr, 0.0},
+    {"present_source_invalid_size", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceInvalidSize, nullptr, nullptr, 0.0},
+    {"present_source_handle", CounterEntry::Kind::Hex64, &Counters::presentSourceHandle, nullptr, nullptr, 0.0},
+    {"present_source_texture", CounterEntry::Kind::Hex64, &Counters::presentSourceTextureHandle, nullptr, nullptr, 0.0},
+    {"present_source_size", CounterEntry::Kind::WidthByHeight, &Counters::presentSourceWidth, &Counters::presentSourceHeight, nullptr, 0.0},
+    {"present_source_fmt", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceFormat, nullptr, nullptr, 0.0},
+    {"present_source_samples", CounterEntry::Kind::UnsignedCount, &Counters::presentSourceSampleCount, nullptr, nullptr, 0.0},
+    {"present_pass", CounterEntry::Kind::UnsignedCount, &Counters::presentPass, nullptr, nullptr, 0.0},
+    {"present_src", CounterEntry::Kind::WidthByHeight, &Counters::presentPassSrcWidth, &Counters::presentPassSrcHeight, nullptr, 0.0},
+    {"present_dst", CounterEntry::Kind::WidthByHeight, &Counters::presentPassDstWidth, &Counters::presentPassDstHeight, nullptr, 0.0},
+    {"present_dst_max", CounterEntry::Kind::WidthByHeight, &Counters::presentPassDstMaxWidth, &Counters::presentPassDstMaxHeight, nullptr, 0.0},
+    {"present_acquire_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentAcquireWaits, nullptr, nullptr, 0.0},
+    {"present_acquire_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentAcquireWaitNs, nullptr, nullptr, 0.0},
+    {"present_acquire_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::presentAcquireWaitMaxNs, nullptr, nullptr, 0.0},
+    {"present_acquire_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentAcquireWaitRing, 0.5},
+    {"present_acquire_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentAcquireWaitRing, 0.95},
+    {"present_acquire_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentAcquireWaitRing, 0.99},
+    {"present_acquire_slow_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentAcquireSlowWaits, nullptr, nullptr, 0.0},
+    {"present_async_acquire_requests", CounterEntry::Kind::UnsignedCount, &Counters::presentAsyncAcquireRequests, nullptr, nullptr, 0.0},
+    {"present_async_acquire_issued", CounterEntry::Kind::UnsignedCount, &Counters::presentAsyncAcquireIssued, nullptr, nullptr, 0.0},
+    {"present_async_acquire_fallbacks", CounterEntry::Kind::UnsignedCount, &Counters::presentAsyncAcquireFallbacks, nullptr, nullptr, 0.0},
+    {"present_async_acquire_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentAsyncAcquireWaits, nullptr, nullptr, 0.0},
+    {"present_async_acquire_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentAsyncAcquireWaitNs, nullptr, nullptr, 0.0},
+    {"present_async_acquire_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::presentAsyncAcquireWaitMaxNs, nullptr, nullptr, 0.0},
+    {"present_async_acquire_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentAsyncAcquireWaitRing, 0.5},
+    {"present_async_acquire_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentAsyncAcquireWaitRing, 0.95},
+    {"present_async_acquire_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentAsyncAcquireWaitRing, 0.99},
+    {"present_async_acquire_slow_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentAsyncAcquireSlowWaits, nullptr, nullptr, 0.0},
+    {"present_token_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentTokenWaits, nullptr, nullptr, 0.0},
+    {"present_token_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentTokenWaitNs, nullptr, nullptr, 0.0},
+    {"present_token_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::presentTokenWaitMaxNs, nullptr, nullptr, 0.0},
+    {"present_token_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentTokenWaitRing, 0.5},
+    {"present_token_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentTokenWaitRing, 0.95},
+    {"present_token_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentTokenWaitRing, 0.99},
+    {"present_token_slow_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentTokenSlowWaits, nullptr, nullptr, 0.0},
+    {"present_preacquire_requests", CounterEntry::Kind::UnsignedCount, &Counters::presentPreAcquireRequests, nullptr, nullptr, 0.0},
+    {"present_preacquire_hits", CounterEntry::Kind::UnsignedCount, &Counters::presentPreAcquireHits, nullptr, nullptr, 0.0},
+    {"present_preacquire_misses", CounterEntry::Kind::UnsignedCount, &Counters::presentPreAcquireMisses, nullptr, nullptr, 0.0},
+    {"present_preacquire_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentPreAcquireWaitNs, nullptr, nullptr, 0.0},
+    {"present_preacquire_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::presentPreAcquireWaitMaxNs, nullptr, nullptr, 0.0},
+    {"present_preacquire_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentPreAcquireWaitRing, 0.5},
+    {"present_preacquire_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentPreAcquireWaitRing, 0.95},
+    {"present_preacquire_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentPreAcquireWaitRing, 0.99},
+    {"present_set_props_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentSetPropsWaits, nullptr, nullptr, 0.0},
+    {"present_set_props_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentSetPropsWaitNs, nullptr, nullptr, 0.0},
+    {"present_set_props_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.5},
+    {"present_set_props_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.95},
+    {"present_set_props_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentSetPropsWaitRing, 0.99},
+}};
+
 void report() {
   if (!enabledFlag()) {
     return;
   }
   const Counters& c = counters();
-  std::fprintf(
-      stderr,
-      "[dxmt9-perf] chunk_admit=%llu chunk_reject=%llu "
-      "ring_arena_heap_fallback_count=%llu ring_arena_heap_fallback_bytes=%llu "
-      "ring_arena_heap_fallback_argbuf=%llu ring_arena_heap_fallback_lambda=%llu "
-      "ring_arena_heap_fallback_staging=%llu ring_arena_heap_fallback_copytemp=%llu "
-      "submit_draw=%llu submit_clear=%llu submit_stretch=%llu "
-      "stretch_copy=%llu stretch_pass=%llu stretch_full=%llu "
-      "submit_present=%llu submit_flush=%llu command_buffers=%llu "
-      "metal_buffers=%llu metal_buffer_bytes=%llu pipeline_builds=%llu "
-      "pipeline_hit_draw=%llu pipeline_hit_fill=%llu pipeline_hit_stretch=%llu "
-      "pipeline_miss_draw=%llu pipeline_miss_fill=%llu pipeline_miss_stretch=%llu "
-      "pipeline_build_draw=%llu pipeline_build_fill=%llu pipeline_build_stretch=%llu pipeline_build_present=%llu "
-      "render_pass_begin=%llu render_pass_end=%llu "
-      "render_split_final=%llu render_split_rt_change=%llu render_split_hazard=%llu "
-      "render_split_clear=%llu render_split_surface_copy=%llu render_split_stretch=%llu "
-      "render_split_readback=%llu render_split_color_fill=%llu render_split_present=%llu render_split_present_acquire=%llu "
-      "hazard_probe=%llu hazard_bloom=%llu hazard_exact=%llu hazard_bloom_false_positive=%llu "
-      "draw_calls=%llu draw_indexed=%llu draw_expanded_indexed=%llu "
-      "draw_primitives=%llu draw_triangles=%llu draw_vertices=%llu "
-      "draw_up_vertex_bytes=%llu draw_up_index_bytes=%llu "
-      "bind_texture=%llu bind_sampler=%llu bind_vertex_buffer=%llu bind_index_buffer=%llu "
-      "bind_uniform_buffer=%llu bind_pipeline=%llu bind_depth_state=%llu bind_viewport=%llu bind_scissor=%llu bind_rasterizer=%llu "
-      "draw_shader_bucket_samples=%llu draw_shader_bucket_changes=%llu "
-      "last_vs=0x%llx last_ps=0x%llx last_variant=0x%llx "
-      "draw_geometry_samples=%llu draw_geometry_ffp=%llu draw_geometry_vs=%llu "
-      "draw_geometry_indexed=%llu draw_geometry_index16=%llu draw_geometry_index32=%llu "
-      "draw_geometry_direct=%llu draw_geometry_up=%llu draw_geometry_expanded=%llu "
-      "draw_geometry_nonzero_base_vertex=%llu draw_geometry_nonzero_start_index=%llu "
-      "draw_geometry_nonzero_stream0_offset=%llu draw_geometry_last_stream0_stride=%llu "
-      "draw_geometry_last_decl_hash=0x%llx "
-      "completion_compat_fp16_ms=%.3f completion_compat_mrt_ms=%.3f completion_compat_srgb_ms=%.3f "
-      "completion_compat_projected_ms=%.3f completion_compat_msaa_ms=%.3f completion_compat_query_ms=%.3f "
-      "completion_shader_bucket_samples=%llu completion_shader_bucket_changes=%llu "
-      "completion_last_vs=0x%llx completion_last_ps=0x%llx completion_last_variant=0x%llx "
-      "submit_draw_cpu_ms=%.3f submit_draw_cpu_max_ms=%.3f "
-      "submit_draw_cpu_p50_ms=%.3f submit_draw_cpu_p95_ms=%.3f submit_draw_cpu_p99_ms=%.3f "
-      "encode_chunk_calls=%llu encode_chunk_cpu_ms=%.3f encode_chunk_cpu_max_ms=%.3f "
-      "encode_chunk_cpu_p50_ms=%.3f encode_chunk_cpu_p95_ms=%.3f encode_chunk_cpu_p99_ms=%.3f "
-      "encode_draw_cpu_ms=%.3f encode_draw_cpu_max_ms=%.3f "
-      "encode_draw_cpu_p50_ms=%.3f encode_draw_cpu_p95_ms=%.3f encode_draw_cpu_p99_ms=%.3f "
-      "encode_draw_pipeline_lookup_cpu_ms=%.3f encode_draw_pipeline_lookup_cpu_max_ms=%.3f "
-      "encode_draw_pipeline_lookup_cpu_p50_ms=%.3f encode_draw_pipeline_lookup_cpu_p95_ms=%.3f encode_draw_pipeline_lookup_cpu_p99_ms=%.3f "
-      "encode_draw_uniform_build_cpu_ms=%.3f encode_draw_uniform_build_cpu_max_ms=%.3f "
-      "encode_draw_uniform_build_cpu_p50_ms=%.3f encode_draw_uniform_build_cpu_p95_ms=%.3f encode_draw_uniform_build_cpu_p99_ms=%.3f "
-      "encode_draw_fvf_decode_cpu_ms=%.3f encode_draw_fvf_decode_cpu_max_ms=%.3f "
-      "encode_draw_fvf_decode_cpu_p50_ms=%.3f encode_draw_fvf_decode_cpu_p95_ms=%.3f encode_draw_fvf_decode_cpu_p99_ms=%.3f "
-      "encode_draw_stream_bind_cpu_ms=%.3f encode_draw_stream_bind_cpu_max_ms=%.3f "
-      "encode_draw_stream_bind_cpu_p50_ms=%.3f encode_draw_stream_bind_cpu_p95_ms=%.3f encode_draw_stream_bind_cpu_p99_ms=%.3f "
-      "encode_draw_issue_cpu_ms=%.3f encode_draw_issue_cpu_max_ms=%.3f "
-      "encode_draw_issue_cpu_p50_ms=%.3f encode_draw_issue_cpu_p95_ms=%.3f encode_draw_issue_cpu_p99_ms=%.3f "
-      "transient_upload_calls=%llu transient_upload_bytes=%llu "
-      "transient_upload_cpu_ms=%.3f transient_upload_cpu_max_ms=%.3f "
-      "transient_upload_cpu_p50_ms=%.3f transient_upload_cpu_p95_ms=%.3f transient_upload_cpu_p99_ms=%.3f "
-      "uniform_vs_consts_calls=%llu uniform_vs_consts_bytes=%llu "
-      "uniform_ps_consts_calls=%llu uniform_ps_consts_bytes=%llu "
-      "uniform_ffp_vs_calls=%llu uniform_ffp_vs_bytes=%llu "
-      "uniform_ffp_ps_calls=%llu uniform_ffp_ps_bytes=%llu "
-      "uniform_volatile_pushes=%llu "
-      "render_pass_load_action_load=%llu render_pass_load_action_clear=%llu render_pass_load_action_dontcare=%llu "
-      "render_pass_load_action_depth_load=%llu render_pass_load_action_depth_clear=%llu render_pass_load_action_depth_dontcare=%llu "
-      "render_pass_load_action_stencil_load=%llu render_pass_load_action_stencil_clear=%llu render_pass_load_action_stencil_dontcare=%llu "
-      "render_pass_store_action_store=%llu render_pass_store_action_dontcare=%llu render_pass_store_action_resolve=%llu "
-      "render_pass_store_action_depth_store=%llu render_pass_store_action_depth_dontcare=%llu "
-      "render_pass_store_action_stencil_store=%llu render_pass_store_action_stencil_dontcare=%llu "
-      "render_pass_tile_preservation_bytes=%llu "
-      "command_buffer_create_cpu_ms=%.3f command_buffer_create_cpu_max_ms=%.3f "
-      "command_buffer_create_cpu_p50_ms=%.3f command_buffer_create_cpu_p95_ms=%.3f command_buffer_create_cpu_p99_ms=%.3f "
-      "command_buffer_commit_cpu_ms=%.3f command_buffer_commit_cpu_max_ms=%.3f "
-      "command_buffer_commit_cpu_p50_ms=%.3f command_buffer_commit_cpu_p95_ms=%.3f command_buffer_commit_cpu_p99_ms=%.3f "
-      "completion_waits=%llu completion_wait_ms=%.3f completion_wait_max_ms=%.3f "
-      "completion_wait_p50_ms=%.3f completion_wait_p95_ms=%.3f completion_wait_p99_ms=%.3f "
-      "completion_present_waits=%llu completion_present_wait_ms=%.3f completion_present_wait_max_ms=%.3f "
-      "completion_present_wait_p50_ms=%.3f completion_present_wait_p95_ms=%.3f completion_present_wait_p99_ms=%.3f "
-      "completion_draw_waits=%llu completion_draw_wait_ms=%.3f completion_draw_wait_max_ms=%.3f "
-      "completion_draw_wait_p50_ms=%.3f completion_draw_wait_p95_ms=%.3f completion_draw_wait_p99_ms=%.3f "
-      "completion_blit_waits=%llu completion_blit_wait_ms=%.3f completion_blit_wait_max_ms=%.3f "
-      "completion_blit_wait_p50_ms=%.3f completion_blit_wait_p95_ms=%.3f completion_blit_wait_p99_ms=%.3f "
-      "completion_present_only_waits=%llu completion_present_only_wait_ms=%.3f completion_present_only_wait_max_ms=%.3f "
-      "completion_present_only_wait_p50_ms=%.3f completion_present_only_wait_p95_ms=%.3f completion_present_only_wait_p99_ms=%.3f "
-      "completion_draw_present_waits=%llu completion_draw_present_wait_ms=%.3f completion_draw_present_wait_max_ms=%.3f "
-      "completion_draw_present_wait_p50_ms=%.3f completion_draw_present_wait_p95_ms=%.3f completion_draw_present_wait_p99_ms=%.3f "
-      "completion_draw_stretch_waits=%llu completion_draw_stretch_wait_ms=%.3f completion_draw_stretch_wait_max_ms=%.3f "
-      "completion_draw_stretch_wait_p50_ms=%.3f completion_draw_stretch_wait_p95_ms=%.3f completion_draw_stretch_wait_p99_ms=%.3f "
-      "completion_stretch_waits=%llu completion_stretch_wait_ms=%.3f completion_stretch_wait_max_ms=%.3f "
-      "completion_stretch_wait_p50_ms=%.3f completion_stretch_wait_p95_ms=%.3f completion_stretch_wait_p99_ms=%.3f "
-      "completion_blit_only_waits=%llu completion_blit_only_wait_ms=%.3f completion_blit_only_wait_max_ms=%.3f "
-      "completion_blit_only_wait_p50_ms=%.3f completion_blit_only_wait_p95_ms=%.3f completion_blit_only_wait_p99_ms=%.3f "
-      "completion_other_waits=%llu completion_other_wait_ms=%.3f completion_other_wait_max_ms=%.3f "
-      "completion_other_wait_p50_ms=%.3f completion_other_wait_p95_ms=%.3f completion_other_wait_p99_ms=%.3f "
-      "sync_waits=%llu sync_wait_ms=%.3f sync_wait_max_ms=%.3f "
-      "sync_wait_p50_ms=%.3f sync_wait_p95_ms=%.3f sync_wait_p99_ms=%.3f "
-      "queue_writer_waits=%llu queue_writer_wait_ms=%.3f queue_writer_wait_max_ms=%.3f "
-      "queue_writer_wait_p50_ms=%.3f queue_writer_wait_p95_ms=%.3f queue_writer_wait_p99_ms=%.3f "
-      "queue_commit_waits=%llu queue_commit_wait_ms=%.3f queue_commit_wait_max_ms=%.3f "
-      "queue_commit_wait_p50_ms=%.3f queue_commit_wait_p95_ms=%.3f queue_commit_wait_p99_ms=%.3f "
-      "queue_sequence_waits=%llu queue_sequence_wait_ms=%.3f queue_sequence_wait_max_ms=%.3f "
-      "queue_sequence_wait_p50_ms=%.3f queue_sequence_wait_p95_ms=%.3f queue_sequence_wait_p99_ms=%.3f "
-      "present_boundary_applied=%llu present_boundary_skipped=%llu "
-      "present_boundary_waits=%llu present_boundary_wait_ms=%.3f present_boundary_wait_max_ms=%.3f "
-      "present_boundary_wait_p50_ms=%.3f present_boundary_wait_p95_ms=%.3f present_boundary_wait_p99_ms=%.3f "
-      "present_encoded=%llu present_skipped=%llu present_full=%llu "
-      "present_source_selections=%llu present_source_explicit=%llu present_source_current_backbuffer=%llu "
-      "present_source_checks=%llu present_source_valid=%llu present_source_missing_surface=%llu "
-      "present_source_missing_texture=%llu present_source_resolve=%llu present_source_invalid_size=%llu "
-      "present_source_handle=0x%llx present_source_texture=0x%llx "
-      "present_source_size=%llux%llu present_source_fmt=%llu present_source_samples=%llu "
-      "present_pass=%llu present_src=%llux%llu present_dst=%llux%llu "
-      "present_dst_max=%llux%llu present_acquire_waits=%llu "
-      "present_acquire_wait_ms=%.3f present_acquire_wait_max_ms=%.3f "
-      "present_acquire_wait_p50_ms=%.3f present_acquire_wait_p95_ms=%.3f present_acquire_wait_p99_ms=%.3f "
-      "present_acquire_slow_waits=%llu "
-      "present_async_acquire_requests=%llu present_async_acquire_issued=%llu "
-      "present_async_acquire_fallbacks=%llu "
-      "present_async_acquire_waits=%llu present_async_acquire_wait_ms=%.3f "
-      "present_async_acquire_wait_max_ms=%.3f "
-      "present_async_acquire_wait_p50_ms=%.3f present_async_acquire_wait_p95_ms=%.3f present_async_acquire_wait_p99_ms=%.3f "
-      "present_async_acquire_slow_waits=%llu "
-      "present_token_waits=%llu present_token_wait_ms=%.3f "
-      "present_token_wait_max_ms=%.3f "
-      "present_token_wait_p50_ms=%.3f present_token_wait_p95_ms=%.3f present_token_wait_p99_ms=%.3f "
-      "present_token_slow_waits=%llu "
-      "present_preacquire_requests=%llu present_preacquire_hits=%llu "
-      "present_preacquire_misses=%llu present_preacquire_wait_ms=%.3f "
-      "present_preacquire_wait_max_ms=%.3f "
-      "present_preacquire_wait_p50_ms=%.3f present_preacquire_wait_p95_ms=%.3f present_preacquire_wait_p99_ms=%.3f "
-      "present_set_props_waits=%llu present_set_props_wait_ms=%.3f "
-      "present_set_props_wait_p50_ms=%.3f present_set_props_wait_p95_ms=%.3f present_set_props_wait_p99_ms=%.3f\n",
-      static_cast<unsigned long long>(load(c.chunkAdmit)),
-      static_cast<unsigned long long>(load(c.chunkReject)),
-      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCount)),
-      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackBytes)),
-      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCountArgbuf)),
-      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCountLambda)),
-      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCountStaging)),
-      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCountCopyTemp)),
-      static_cast<unsigned long long>(load(c.submitDraw)),
-      static_cast<unsigned long long>(load(c.submitClear)),
-      static_cast<unsigned long long>(load(c.submitStretch)),
-      static_cast<unsigned long long>(load(c.stretchBlitCopy)),
-      static_cast<unsigned long long>(load(c.stretchRenderPass)),
-      static_cast<unsigned long long>(load(c.stretchFullscreen)),
-      static_cast<unsigned long long>(load(c.submitPresent)),
-      static_cast<unsigned long long>(load(c.submitFlush)),
-      static_cast<unsigned long long>(load(c.commandBuffers)),
-      static_cast<unsigned long long>(load(c.metalBuffers)),
-      static_cast<unsigned long long>(load(c.metalBufferBytes)),
-      static_cast<unsigned long long>(load(c.pipelineBuilds)),
-      static_cast<unsigned long long>(load(c.pipelineHitDraw)),
-      static_cast<unsigned long long>(load(c.pipelineHitFill)),
-      static_cast<unsigned long long>(load(c.pipelineHitStretch)),
-      static_cast<unsigned long long>(load(c.pipelineMissDraw)),
-      static_cast<unsigned long long>(load(c.pipelineMissFill)),
-      static_cast<unsigned long long>(load(c.pipelineMissStretch)),
-      static_cast<unsigned long long>(load(c.pipelineBuildDraw)),
-      static_cast<unsigned long long>(load(c.pipelineBuildFill)),
-      static_cast<unsigned long long>(load(c.pipelineBuildStretch)),
-      static_cast<unsigned long long>(load(c.pipelineBuildPresent)),
-      static_cast<unsigned long long>(load(c.renderPassBegin)),
-      static_cast<unsigned long long>(load(c.renderPassEnd)),
-      static_cast<unsigned long long>(load(c.renderSplitFinal)),
-      static_cast<unsigned long long>(load(c.renderSplitRenderTargetChange)),
-      static_cast<unsigned long long>(load(c.renderSplitHazard)),
-      static_cast<unsigned long long>(load(c.renderSplitClearBarrier)),
-      static_cast<unsigned long long>(load(c.renderSplitSurfaceCopy)),
-      static_cast<unsigned long long>(load(c.renderSplitStretchRect)),
-      static_cast<unsigned long long>(load(c.renderSplitReadback)),
-      static_cast<unsigned long long>(load(c.renderSplitColorFill)),
-      static_cast<unsigned long long>(load(c.renderSplitPresent)),
-      static_cast<unsigned long long>(load(c.renderSplitPresentAcquire)),
-      static_cast<unsigned long long>(load(c.hazardProbeComparisons)),
-      static_cast<unsigned long long>(load(c.hazardBloomOverlaps)),
-      static_cast<unsigned long long>(load(c.hazardExactOverlaps)),
-      static_cast<unsigned long long>(load(c.hazardBloomFalsePositive)),
-      static_cast<unsigned long long>(load(c.drawCalls)),
-      static_cast<unsigned long long>(load(c.drawIndexedCalls)),
-      static_cast<unsigned long long>(load(c.drawExpandedIndexedCalls)),
-      static_cast<unsigned long long>(load(c.drawPrimitiveCount)),
-      static_cast<unsigned long long>(load(c.drawTriangleEstimate)),
-      static_cast<unsigned long long>(load(c.drawVertexCount)),
-      static_cast<unsigned long long>(load(c.drawUpVertexBytes)),
-      static_cast<unsigned long long>(load(c.drawUpIndexBytes)),
-      static_cast<unsigned long long>(load(c.bindTexture)),
-      static_cast<unsigned long long>(load(c.bindSampler)),
-      static_cast<unsigned long long>(load(c.bindVertexBuffer)),
-      static_cast<unsigned long long>(load(c.bindIndexBuffer)),
-      static_cast<unsigned long long>(load(c.bindUniformBuffer)),
-      static_cast<unsigned long long>(load(c.bindPipeline)),
-      static_cast<unsigned long long>(load(c.bindDepthState)),
-      static_cast<unsigned long long>(load(c.bindViewport)),
-      static_cast<unsigned long long>(load(c.bindScissor)),
-      static_cast<unsigned long long>(load(c.bindRasterizer)),
-      static_cast<unsigned long long>(load(c.drawShaderBucketSamples)),
-      static_cast<unsigned long long>(load(c.drawShaderBucketChanges)),
-      static_cast<unsigned long long>(load(c.lastVertexShaderHash)),
-      static_cast<unsigned long long>(load(c.lastPixelShaderHash)),
-      static_cast<unsigned long long>(load(c.lastShaderVariantHash)),
-      static_cast<unsigned long long>(load(c.drawGeometrySamples)),
-      static_cast<unsigned long long>(load(c.drawGeometryFfp)),
-      static_cast<unsigned long long>(load(c.drawGeometryVs)),
-      static_cast<unsigned long long>(load(c.drawGeometryIndexed)),
-      static_cast<unsigned long long>(load(c.drawGeometryIndex16)),
-      static_cast<unsigned long long>(load(c.drawGeometryIndex32)),
-      static_cast<unsigned long long>(load(c.drawGeometryDirect)),
-      static_cast<unsigned long long>(load(c.drawGeometryUp)),
-      static_cast<unsigned long long>(load(c.drawGeometryExpanded)),
-      static_cast<unsigned long long>(load(c.drawGeometryNonZeroBaseVertex)),
-      static_cast<unsigned long long>(load(c.drawGeometryNonZeroStartIndex)),
-      static_cast<unsigned long long>(load(c.drawGeometryNonZeroStream0Offset)),
-      static_cast<unsigned long long>(load(c.drawGeometryLastStream0Stride)),
-      static_cast<unsigned long long>(load(c.drawGeometryLastVertexDeclHash)),
-      static_cast<double>(load(c.completionCompatFp16WaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionCompatMrtWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionCompatSrgbWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionCompatProjectedWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionCompatMsaaWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionCompatQueryWaitNs)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionShaderBucketSamples)),
-      static_cast<unsigned long long>(load(c.completionShaderBucketChanges)),
-      static_cast<unsigned long long>(load(c.completionLastVertexShaderHash)),
-      static_cast<unsigned long long>(load(c.completionLastPixelShaderHash)),
-      static_cast<unsigned long long>(load(c.completionLastShaderVariantHash)),
-      static_cast<double>(load(c.submitDrawCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.submitDrawCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.submitDrawCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.submitDrawCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.submitDrawCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.encodeChunkCalls)),
-      static_cast<double>(load(c.encodeChunkCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.encodeChunkCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.encodeChunkCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.encodeChunkCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.encodeChunkCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.encodeDrawCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.encodeDrawCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.encodeDrawCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawPipelineLookupCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawPipelineLookupCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.encodeDrawPipelineLookupCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.encodeDrawPipelineLookupCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.encodeDrawPipelineLookupCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawUniformBuildCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawUniformBuildCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.encodeDrawUniformBuildCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.encodeDrawUniformBuildCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.encodeDrawUniformBuildCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawFvfDecodeCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawFvfDecodeCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.encodeDrawFvfDecodeCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.encodeDrawFvfDecodeCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.encodeDrawFvfDecodeCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawStreamBindCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawStreamBindCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.encodeDrawStreamBindCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.encodeDrawStreamBindCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.encodeDrawStreamBindCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawIssueCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.encodeDrawIssueCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.encodeDrawIssueCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.encodeDrawIssueCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.encodeDrawIssueCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.transientUploadCalls)),
-      static_cast<unsigned long long>(load(c.transientUploadBytes)),
-      static_cast<double>(load(c.transientUploadCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.transientUploadCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.transientUploadCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.transientUploadCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.transientUploadCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.uniformVsConstsCalls)),
-      static_cast<unsigned long long>(load(c.uniformVsConstsBytes)),
-      static_cast<unsigned long long>(load(c.uniformPsConstsCalls)),
-      static_cast<unsigned long long>(load(c.uniformPsConstsBytes)),
-      static_cast<unsigned long long>(load(c.uniformFfpVsCalls)),
-      static_cast<unsigned long long>(load(c.uniformFfpVsBytes)),
-      static_cast<unsigned long long>(load(c.uniformFfpPsCalls)),
-      static_cast<unsigned long long>(load(c.uniformFfpPsBytes)),
-      static_cast<unsigned long long>(load(c.uniformVolatilePushes)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionLoad)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionClear)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionDontCare)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionDepthLoad)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionDepthClear)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionDepthDontCare)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionStencilLoad)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionStencilClear)),
-      static_cast<unsigned long long>(load(c.renderPassLoadActionStencilDontCare)),
-      static_cast<unsigned long long>(load(c.renderPassStoreActionStore)),
-      static_cast<unsigned long long>(load(c.renderPassStoreActionDontCare)),
-      static_cast<unsigned long long>(load(c.renderPassStoreActionResolve)),
-      static_cast<unsigned long long>(load(c.renderPassStoreActionDepthStore)),
-      static_cast<unsigned long long>(load(c.renderPassStoreActionDepthDontCare)),
-      static_cast<unsigned long long>(load(c.renderPassStoreActionStencilStore)),
-      static_cast<unsigned long long>(load(c.renderPassStoreActionStencilDontCare)),
-      static_cast<unsigned long long>(load(c.renderPassTilePreservationBytes)),
-      static_cast<double>(load(c.commandBufferCreateCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.commandBufferCreateCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.commandBufferCreateCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.commandBufferCreateCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.commandBufferCreateCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<double>(load(c.commandBufferCommitCpuNs)) / 1000000.0,
-      static_cast<double>(load(c.commandBufferCommitCpuMaxNs)) / 1000000.0,
-      static_cast<double>(c.commandBufferCommitCpuRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.commandBufferCommitCpuRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.commandBufferCommitCpuRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionWaits)),
-      static_cast<double>(load(c.completionWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionPresentWaits)),
-      static_cast<double>(load(c.completionPresentWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionPresentWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionPresentWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionPresentWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionPresentWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionDrawWaits)),
-      static_cast<double>(load(c.completionDrawWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionDrawWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionDrawWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionDrawWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionDrawWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionBlitWaits)),
-      static_cast<double>(load(c.completionBlitWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionBlitWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionBlitWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionBlitWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionBlitWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionPresentOnlyWaits)),
-      static_cast<double>(load(c.completionPresentOnlyWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionPresentOnlyWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionPresentOnlyWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionPresentOnlyWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionPresentOnlyWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionDrawPresentWaits)),
-      static_cast<double>(load(c.completionDrawPresentWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionDrawPresentWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionDrawPresentWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionDrawPresentWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionDrawPresentWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionDrawStretchWaits)),
-      static_cast<double>(load(c.completionDrawStretchWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionDrawStretchWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionDrawStretchWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionDrawStretchWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionDrawStretchWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionStretchWaits)),
-      static_cast<double>(load(c.completionStretchWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionStretchWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionStretchWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionStretchWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionStretchWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionBlitOnlyWaits)),
-      static_cast<double>(load(c.completionBlitOnlyWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionBlitOnlyWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionBlitOnlyWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionBlitOnlyWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionBlitOnlyWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.completionOtherWaits)),
-      static_cast<double>(load(c.completionOtherWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.completionOtherWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.completionOtherWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.completionOtherWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.completionOtherWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.syncWaits)),
-      static_cast<double>(load(c.syncWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.syncWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.syncWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.syncWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.syncWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.queueWriterWaits)),
-      static_cast<double>(load(c.queueWriterWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.queueWriterWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.queueWriterWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.queueWriterWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.queueWriterWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.queueCommitWaits)),
-      static_cast<double>(load(c.queueCommitWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.queueCommitWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.queueCommitWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.queueCommitWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.queueCommitWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.queueSequenceWaits)),
-      static_cast<double>(load(c.queueSequenceWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.queueSequenceWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.queueSequenceWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.queueSequenceWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.queueSequenceWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.presentBoundaryApplied)),
-      static_cast<unsigned long long>(load(c.presentBoundarySkipped)),
-      static_cast<unsigned long long>(load(c.presentBoundaryWaits)),
-      static_cast<double>(load(c.presentBoundaryWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.presentBoundaryWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.presentBoundaryWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.presentBoundaryWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.presentBoundaryWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.presentEncoded)),
-      static_cast<unsigned long long>(load(c.presentSkipped)),
-      static_cast<unsigned long long>(load(c.presentFullscreen)),
-      static_cast<unsigned long long>(load(c.presentSourceSelections)),
-      static_cast<unsigned long long>(load(c.presentSourceExplicit)),
-      static_cast<unsigned long long>(load(c.presentSourceCurrentBackBuffer)),
-      static_cast<unsigned long long>(load(c.presentSourceChecks)),
-      static_cast<unsigned long long>(load(c.presentSourceValid)),
-      static_cast<unsigned long long>(load(c.presentSourceMissingSurface)),
-      static_cast<unsigned long long>(load(c.presentSourceMissingTexture)),
-      static_cast<unsigned long long>(load(c.presentSourceResolve)),
-      static_cast<unsigned long long>(load(c.presentSourceInvalidSize)),
-      static_cast<unsigned long long>(load(c.presentSourceHandle)),
-      static_cast<unsigned long long>(load(c.presentSourceTextureHandle)),
-      static_cast<unsigned long long>(load(c.presentSourceWidth)),
-      static_cast<unsigned long long>(load(c.presentSourceHeight)),
-      static_cast<unsigned long long>(load(c.presentSourceFormat)),
-      static_cast<unsigned long long>(load(c.presentSourceSampleCount)),
-      static_cast<unsigned long long>(load(c.presentPass)),
-      static_cast<unsigned long long>(load(c.presentPassSrcWidth)),
-      static_cast<unsigned long long>(load(c.presentPassSrcHeight)),
-      static_cast<unsigned long long>(load(c.presentPassDstWidth)),
-      static_cast<unsigned long long>(load(c.presentPassDstHeight)),
-      static_cast<unsigned long long>(load(c.presentPassDstMaxWidth)),
-      static_cast<unsigned long long>(load(c.presentPassDstMaxHeight)),
-      static_cast<unsigned long long>(load(c.presentAcquireWaits)),
-      static_cast<double>(load(c.presentAcquireWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.presentAcquireWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.presentAcquireWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.presentAcquireWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.presentAcquireWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.presentAcquireSlowWaits)),
-      static_cast<unsigned long long>(load(c.presentAsyncAcquireRequests)),
-      static_cast<unsigned long long>(load(c.presentAsyncAcquireIssued)),
-      static_cast<unsigned long long>(load(c.presentAsyncAcquireFallbacks)),
-      static_cast<unsigned long long>(load(c.presentAsyncAcquireWaits)),
-      static_cast<double>(load(c.presentAsyncAcquireWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.presentAsyncAcquireWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.presentAsyncAcquireWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.presentAsyncAcquireWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.presentAsyncAcquireWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.presentAsyncAcquireSlowWaits)),
-      static_cast<unsigned long long>(load(c.presentTokenWaits)),
-      static_cast<double>(load(c.presentTokenWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.presentTokenWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.presentTokenWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.presentTokenWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.presentTokenWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.presentTokenSlowWaits)),
-      static_cast<unsigned long long>(load(c.presentPreAcquireRequests)),
-      static_cast<unsigned long long>(load(c.presentPreAcquireHits)),
-      static_cast<unsigned long long>(load(c.presentPreAcquireMisses)),
-      static_cast<double>(load(c.presentPreAcquireWaitNs)) / 1000000.0,
-      static_cast<double>(load(c.presentPreAcquireWaitMaxNs)) / 1000000.0,
-      static_cast<double>(c.presentPreAcquireWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.presentPreAcquireWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.presentPreAcquireWaitRing.percentile(0.99)) / 1000000.0,
-      static_cast<unsigned long long>(load(c.presentSetPropsWaits)),
-      static_cast<double>(load(c.presentSetPropsWaitNs)) / 1000000.0,
-      static_cast<double>(c.presentSetPropsWaitRing.percentile(0.50)) / 1000000.0,
-      static_cast<double>(c.presentSetPropsWaitRing.percentile(0.95)) / 1000000.0,
-      static_cast<double>(c.presentSetPropsWaitRing.percentile(0.99)) / 1000000.0);
+  std::fprintf(stderr, "[dxmt9-perf]");
+  for (const auto& e : kCounterTable) {
+    switch (e.kind) {
+      case CounterEntry::Kind::UnsignedCount:
+        std::fprintf(stderr, " %s=%llu", e.key,
+                     static_cast<unsigned long long>(load(c.*e.atomicField)));
+        break;
+      case CounterEntry::Kind::Milliseconds:
+        std::fprintf(stderr, " %s=%.3f", e.key,
+                     static_cast<double>(load(c.*e.atomicField)) / 1000000.0);
+        break;
+      case CounterEntry::Kind::Hex64:
+        std::fprintf(stderr, " %s=0x%llx", e.key,
+                     static_cast<unsigned long long>(load(c.*e.atomicField)));
+        break;
+      case CounterEntry::Kind::WidthByHeight:
+        std::fprintf(stderr, " %s=%llux%llu", e.key,
+                     static_cast<unsigned long long>(load(c.*e.atomicField)),
+                     static_cast<unsigned long long>(load(c.*e.field2)));
+        break;
+      case CounterEntry::Kind::PercentileMs:
+        std::fprintf(stderr, " %s=%.3f", e.key,
+                     static_cast<double>((c.*e.ringField).percentile(e.percentile)) /
+                         1000000.0);
+        break;
+    }
+  }
+  std::fputc('\n', stderr);
 }
 
 void ensureRegistered() {
