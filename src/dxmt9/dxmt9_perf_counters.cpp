@@ -1,11 +1,75 @@
 #include "dxmt9_perf_counters.hpp"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <cstdio>
+#include <cstdint>
+#include <vector>
 
 namespace dxmt9::perf {
 namespace {
+
+// 64-sample sliding ring of nanosecond samples used to compute P50/P95/P99 in
+// the shutdown report. Lock-free: writers race only on `head_` (atomic
+// fetch_add, relaxed) and on the slot store (relaxed). Two threads racing for
+// the same slot may overwrite each other's sample, but at the per-draw rate
+// the steady-state percentile estimate is unaffected. Reading is one-shot at
+// process exit, so a coarse snapshot via relaxed loads is acceptable.
+class PercentileRing {
+ public:
+  static constexpr std::size_t kCapacity = 64;
+
+  void record(std::uint64_t nanoseconds) {
+    const auto slot =
+        head_.fetch_add(1, std::memory_order_relaxed) % kCapacity;
+    samples_[slot].store(nanoseconds, std::memory_order_relaxed);
+    auto current = count_.load(std::memory_order_relaxed);
+    while (current < kCapacity &&
+           !count_.compare_exchange_weak(current, current + 1,
+                                         std::memory_order_relaxed)) {
+    }
+  }
+
+  std::vector<std::uint64_t> snapshot() const {
+    const auto size = std::min<std::size_t>(
+        count_.load(std::memory_order_relaxed), kCapacity);
+    std::vector<std::uint64_t> out;
+    out.reserve(size);
+    for (std::size_t i = 0; i < size; ++i) {
+      out.push_back(samples_[i].load(std::memory_order_relaxed));
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+  }
+
+  // p in [0.0, 1.0]. Returns 0 when the ring is empty. Uses nearest-rank
+  // (ceil) over the sorted snapshot, which is stable for small N (<=64) and
+  // matches what runbook scripts expect.
+  std::uint64_t percentile(double p) const {
+    const auto sorted = snapshot();
+    if (sorted.empty()) {
+      return 0;
+    }
+    if (p <= 0.0) {
+      return sorted.front();
+    }
+    if (p >= 1.0) {
+      return sorted.back();
+    }
+    auto rank = static_cast<std::size_t>(p * static_cast<double>(sorted.size()));
+    if (rank >= sorted.size()) {
+      rank = sorted.size() - 1;
+    }
+    return sorted[rank];
+  }
+
+ private:
+  std::array<std::atomic<std::uint64_t>, kCapacity> samples_{};
+  std::atomic<std::uint32_t> head_{0};
+  std::atomic<std::uint32_t> count_{0};
+};
 
 struct Counters {
   std::atomic<std::uint64_t> submitDraw{0};
@@ -239,6 +303,40 @@ struct Counters {
   std::atomic<std::uint64_t> presentPreAcquireWaitMaxNs{0};
   std::atomic<std::uint64_t> presentSetPropsWaits{0};
   std::atomic<std::uint64_t> presentSetPropsWaitNs{0};
+  // Sliding rings (R-BENCH-1.2): 64-sample percentile windows paired with the
+  // *_max_ms counters above. Used to emit P50/P95/P99 in the shutdown report
+  // so regression detection isn't outlier-driven by a single GC pause.
+  PercentileRing submitDrawCpuRing;
+  PercentileRing encodeChunkCpuRing;
+  PercentileRing encodeDrawCpuRing;
+  PercentileRing encodeDrawPipelineLookupCpuRing;
+  PercentileRing encodeDrawUniformBuildCpuRing;
+  PercentileRing encodeDrawFvfDecodeCpuRing;
+  PercentileRing encodeDrawStreamBindCpuRing;
+  PercentileRing encodeDrawIssueCpuRing;
+  PercentileRing transientUploadCpuRing;
+  PercentileRing commandBufferCreateCpuRing;
+  PercentileRing commandBufferCommitCpuRing;
+  PercentileRing completionWaitRing;
+  PercentileRing completionPresentWaitRing;
+  PercentileRing completionDrawWaitRing;
+  PercentileRing completionBlitWaitRing;
+  PercentileRing completionPresentOnlyWaitRing;
+  PercentileRing completionDrawPresentWaitRing;
+  PercentileRing completionDrawStretchWaitRing;
+  PercentileRing completionStretchWaitRing;
+  PercentileRing completionBlitOnlyWaitRing;
+  PercentileRing completionOtherWaitRing;
+  PercentileRing syncWaitRing;
+  PercentileRing queueWriterWaitRing;
+  PercentileRing queueCommitWaitRing;
+  PercentileRing queueSequenceWaitRing;
+  PercentileRing presentBoundaryWaitRing;
+  PercentileRing presentAcquireWaitRing;
+  PercentileRing presentAsyncAcquireWaitRing;
+  PercentileRing presentTokenWaitRing;
+  PercentileRing presentPreAcquireWaitRing;
+  PercentileRing presentSetPropsWaitRing;
 };
 
 Counters& counters() {
@@ -387,15 +485,24 @@ void report() {
       "completion_shader_bucket_samples=%llu completion_shader_bucket_changes=%llu "
       "completion_last_vs=0x%llx completion_last_ps=0x%llx completion_last_variant=0x%llx "
       "submit_draw_cpu_ms=%.3f submit_draw_cpu_max_ms=%.3f "
+      "submit_draw_cpu_p50_ms=%.3f submit_draw_cpu_p95_ms=%.3f submit_draw_cpu_p99_ms=%.3f "
       "encode_chunk_calls=%llu encode_chunk_cpu_ms=%.3f encode_chunk_cpu_max_ms=%.3f "
+      "encode_chunk_cpu_p50_ms=%.3f encode_chunk_cpu_p95_ms=%.3f encode_chunk_cpu_p99_ms=%.3f "
       "encode_draw_cpu_ms=%.3f encode_draw_cpu_max_ms=%.3f "
+      "encode_draw_cpu_p50_ms=%.3f encode_draw_cpu_p95_ms=%.3f encode_draw_cpu_p99_ms=%.3f "
       "encode_draw_pipeline_lookup_cpu_ms=%.3f encode_draw_pipeline_lookup_cpu_max_ms=%.3f "
+      "encode_draw_pipeline_lookup_cpu_p50_ms=%.3f encode_draw_pipeline_lookup_cpu_p95_ms=%.3f encode_draw_pipeline_lookup_cpu_p99_ms=%.3f "
       "encode_draw_uniform_build_cpu_ms=%.3f encode_draw_uniform_build_cpu_max_ms=%.3f "
+      "encode_draw_uniform_build_cpu_p50_ms=%.3f encode_draw_uniform_build_cpu_p95_ms=%.3f encode_draw_uniform_build_cpu_p99_ms=%.3f "
       "encode_draw_fvf_decode_cpu_ms=%.3f encode_draw_fvf_decode_cpu_max_ms=%.3f "
+      "encode_draw_fvf_decode_cpu_p50_ms=%.3f encode_draw_fvf_decode_cpu_p95_ms=%.3f encode_draw_fvf_decode_cpu_p99_ms=%.3f "
       "encode_draw_stream_bind_cpu_ms=%.3f encode_draw_stream_bind_cpu_max_ms=%.3f "
+      "encode_draw_stream_bind_cpu_p50_ms=%.3f encode_draw_stream_bind_cpu_p95_ms=%.3f encode_draw_stream_bind_cpu_p99_ms=%.3f "
       "encode_draw_issue_cpu_ms=%.3f encode_draw_issue_cpu_max_ms=%.3f "
+      "encode_draw_issue_cpu_p50_ms=%.3f encode_draw_issue_cpu_p95_ms=%.3f encode_draw_issue_cpu_p99_ms=%.3f "
       "transient_upload_calls=%llu transient_upload_bytes=%llu "
       "transient_upload_cpu_ms=%.3f transient_upload_cpu_max_ms=%.3f "
+      "transient_upload_cpu_p50_ms=%.3f transient_upload_cpu_p95_ms=%.3f transient_upload_cpu_p99_ms=%.3f "
       "uniform_vs_consts_calls=%llu uniform_vs_consts_bytes=%llu "
       "uniform_ps_consts_calls=%llu uniform_ps_consts_bytes=%llu "
       "uniform_ffp_vs_calls=%llu uniform_ffp_vs_bytes=%llu "
@@ -409,23 +516,40 @@ void report() {
       "render_pass_store_action_stencil_store=%llu render_pass_store_action_stencil_dontcare=%llu "
       "render_pass_tile_preservation_bytes=%llu "
       "command_buffer_create_cpu_ms=%.3f command_buffer_create_cpu_max_ms=%.3f "
+      "command_buffer_create_cpu_p50_ms=%.3f command_buffer_create_cpu_p95_ms=%.3f command_buffer_create_cpu_p99_ms=%.3f "
       "command_buffer_commit_cpu_ms=%.3f command_buffer_commit_cpu_max_ms=%.3f "
+      "command_buffer_commit_cpu_p50_ms=%.3f command_buffer_commit_cpu_p95_ms=%.3f command_buffer_commit_cpu_p99_ms=%.3f "
       "completion_waits=%llu completion_wait_ms=%.3f completion_wait_max_ms=%.3f "
+      "completion_wait_p50_ms=%.3f completion_wait_p95_ms=%.3f completion_wait_p99_ms=%.3f "
       "completion_present_waits=%llu completion_present_wait_ms=%.3f completion_present_wait_max_ms=%.3f "
+      "completion_present_wait_p50_ms=%.3f completion_present_wait_p95_ms=%.3f completion_present_wait_p99_ms=%.3f "
       "completion_draw_waits=%llu completion_draw_wait_ms=%.3f completion_draw_wait_max_ms=%.3f "
+      "completion_draw_wait_p50_ms=%.3f completion_draw_wait_p95_ms=%.3f completion_draw_wait_p99_ms=%.3f "
       "completion_blit_waits=%llu completion_blit_wait_ms=%.3f completion_blit_wait_max_ms=%.3f "
+      "completion_blit_wait_p50_ms=%.3f completion_blit_wait_p95_ms=%.3f completion_blit_wait_p99_ms=%.3f "
       "completion_present_only_waits=%llu completion_present_only_wait_ms=%.3f completion_present_only_wait_max_ms=%.3f "
+      "completion_present_only_wait_p50_ms=%.3f completion_present_only_wait_p95_ms=%.3f completion_present_only_wait_p99_ms=%.3f "
       "completion_draw_present_waits=%llu completion_draw_present_wait_ms=%.3f completion_draw_present_wait_max_ms=%.3f "
+      "completion_draw_present_wait_p50_ms=%.3f completion_draw_present_wait_p95_ms=%.3f completion_draw_present_wait_p99_ms=%.3f "
       "completion_draw_stretch_waits=%llu completion_draw_stretch_wait_ms=%.3f completion_draw_stretch_wait_max_ms=%.3f "
+      "completion_draw_stretch_wait_p50_ms=%.3f completion_draw_stretch_wait_p95_ms=%.3f completion_draw_stretch_wait_p99_ms=%.3f "
       "completion_stretch_waits=%llu completion_stretch_wait_ms=%.3f completion_stretch_wait_max_ms=%.3f "
+      "completion_stretch_wait_p50_ms=%.3f completion_stretch_wait_p95_ms=%.3f completion_stretch_wait_p99_ms=%.3f "
       "completion_blit_only_waits=%llu completion_blit_only_wait_ms=%.3f completion_blit_only_wait_max_ms=%.3f "
+      "completion_blit_only_wait_p50_ms=%.3f completion_blit_only_wait_p95_ms=%.3f completion_blit_only_wait_p99_ms=%.3f "
       "completion_other_waits=%llu completion_other_wait_ms=%.3f completion_other_wait_max_ms=%.3f "
+      "completion_other_wait_p50_ms=%.3f completion_other_wait_p95_ms=%.3f completion_other_wait_p99_ms=%.3f "
       "sync_waits=%llu sync_wait_ms=%.3f sync_wait_max_ms=%.3f "
+      "sync_wait_p50_ms=%.3f sync_wait_p95_ms=%.3f sync_wait_p99_ms=%.3f "
       "queue_writer_waits=%llu queue_writer_wait_ms=%.3f queue_writer_wait_max_ms=%.3f "
+      "queue_writer_wait_p50_ms=%.3f queue_writer_wait_p95_ms=%.3f queue_writer_wait_p99_ms=%.3f "
       "queue_commit_waits=%llu queue_commit_wait_ms=%.3f queue_commit_wait_max_ms=%.3f "
+      "queue_commit_wait_p50_ms=%.3f queue_commit_wait_p95_ms=%.3f queue_commit_wait_p99_ms=%.3f "
       "queue_sequence_waits=%llu queue_sequence_wait_ms=%.3f queue_sequence_wait_max_ms=%.3f "
+      "queue_sequence_wait_p50_ms=%.3f queue_sequence_wait_p95_ms=%.3f queue_sequence_wait_p99_ms=%.3f "
       "present_boundary_applied=%llu present_boundary_skipped=%llu "
       "present_boundary_waits=%llu present_boundary_wait_ms=%.3f present_boundary_wait_max_ms=%.3f "
+      "present_boundary_wait_p50_ms=%.3f present_boundary_wait_p95_ms=%.3f present_boundary_wait_p99_ms=%.3f "
       "present_encoded=%llu present_skipped=%llu present_full=%llu "
       "present_source_selections=%llu present_source_explicit=%llu present_source_current_backbuffer=%llu "
       "present_source_checks=%llu present_source_valid=%llu present_source_missing_surface=%llu "
@@ -435,17 +559,24 @@ void report() {
       "present_pass=%llu present_src=%llux%llu present_dst=%llux%llu "
       "present_dst_max=%llux%llu present_acquire_waits=%llu "
       "present_acquire_wait_ms=%.3f present_acquire_wait_max_ms=%.3f "
+      "present_acquire_wait_p50_ms=%.3f present_acquire_wait_p95_ms=%.3f present_acquire_wait_p99_ms=%.3f "
       "present_acquire_slow_waits=%llu "
       "present_async_acquire_requests=%llu present_async_acquire_issued=%llu "
       "present_async_acquire_fallbacks=%llu "
       "present_async_acquire_waits=%llu present_async_acquire_wait_ms=%.3f "
-      "present_async_acquire_wait_max_ms=%.3f present_async_acquire_slow_waits=%llu "
+      "present_async_acquire_wait_max_ms=%.3f "
+      "present_async_acquire_wait_p50_ms=%.3f present_async_acquire_wait_p95_ms=%.3f present_async_acquire_wait_p99_ms=%.3f "
+      "present_async_acquire_slow_waits=%llu "
       "present_token_waits=%llu present_token_wait_ms=%.3f "
-      "present_token_wait_max_ms=%.3f present_token_slow_waits=%llu "
+      "present_token_wait_max_ms=%.3f "
+      "present_token_wait_p50_ms=%.3f present_token_wait_p95_ms=%.3f present_token_wait_p99_ms=%.3f "
+      "present_token_slow_waits=%llu "
       "present_preacquire_requests=%llu present_preacquire_hits=%llu "
       "present_preacquire_misses=%llu present_preacquire_wait_ms=%.3f "
       "present_preacquire_wait_max_ms=%.3f "
-      "present_set_props_waits=%llu present_set_props_wait_ms=%.3f\n",
+      "present_preacquire_wait_p50_ms=%.3f present_preacquire_wait_p95_ms=%.3f present_preacquire_wait_p99_ms=%.3f "
+      "present_set_props_waits=%llu present_set_props_wait_ms=%.3f "
+      "present_set_props_wait_p50_ms=%.3f present_set_props_wait_p95_ms=%.3f present_set_props_wait_p99_ms=%.3f\n",
       static_cast<unsigned long long>(load(c.submitDraw)),
       static_cast<unsigned long long>(load(c.submitClear)),
       static_cast<unsigned long long>(load(c.submitStretch)),
@@ -534,25 +665,52 @@ void report() {
       static_cast<unsigned long long>(load(c.completionLastShaderVariantHash)),
       static_cast<double>(load(c.submitDrawCpuNs)) / 1000000.0,
       static_cast<double>(load(c.submitDrawCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.submitDrawCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.submitDrawCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.submitDrawCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.encodeChunkCalls)),
       static_cast<double>(load(c.encodeChunkCpuNs)) / 1000000.0,
       static_cast<double>(load(c.encodeChunkCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.encodeChunkCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.encodeChunkCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.encodeChunkCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawCpuNs)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.encodeDrawCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.encodeDrawCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.encodeDrawCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawPipelineLookupCpuNs)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawPipelineLookupCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.encodeDrawPipelineLookupCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.encodeDrawPipelineLookupCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.encodeDrawPipelineLookupCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawUniformBuildCpuNs)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawUniformBuildCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.encodeDrawUniformBuildCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.encodeDrawUniformBuildCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.encodeDrawUniformBuildCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawFvfDecodeCpuNs)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawFvfDecodeCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.encodeDrawFvfDecodeCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.encodeDrawFvfDecodeCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.encodeDrawFvfDecodeCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawStreamBindCpuNs)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawStreamBindCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.encodeDrawStreamBindCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.encodeDrawStreamBindCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.encodeDrawStreamBindCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawIssueCpuNs)) / 1000000.0,
       static_cast<double>(load(c.encodeDrawIssueCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.encodeDrawIssueCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.encodeDrawIssueCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.encodeDrawIssueCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.transientUploadCalls)),
       static_cast<unsigned long long>(load(c.transientUploadBytes)),
       static_cast<double>(load(c.transientUploadCpuNs)) / 1000000.0,
       static_cast<double>(load(c.transientUploadCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.transientUploadCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.transientUploadCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.transientUploadCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.uniformVsConstsCalls)),
       static_cast<unsigned long long>(load(c.uniformVsConstsBytes)),
       static_cast<unsigned long long>(load(c.uniformPsConstsCalls)),
@@ -581,55 +739,106 @@ void report() {
       static_cast<unsigned long long>(load(c.renderPassTilePreservationBytes)),
       static_cast<double>(load(c.commandBufferCreateCpuNs)) / 1000000.0,
       static_cast<double>(load(c.commandBufferCreateCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.commandBufferCreateCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.commandBufferCreateCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.commandBufferCreateCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<double>(load(c.commandBufferCommitCpuNs)) / 1000000.0,
       static_cast<double>(load(c.commandBufferCommitCpuMaxNs)) / 1000000.0,
+      static_cast<double>(c.commandBufferCommitCpuRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.commandBufferCommitCpuRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.commandBufferCommitCpuRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionWaits)),
       static_cast<double>(load(c.completionWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionPresentWaits)),
       static_cast<double>(load(c.completionPresentWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionPresentWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionPresentWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionPresentWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionPresentWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionDrawWaits)),
       static_cast<double>(load(c.completionDrawWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionDrawWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionDrawWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionDrawWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionDrawWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionBlitWaits)),
       static_cast<double>(load(c.completionBlitWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionBlitWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionBlitWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionBlitWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionBlitWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionPresentOnlyWaits)),
       static_cast<double>(load(c.completionPresentOnlyWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionPresentOnlyWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionPresentOnlyWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionPresentOnlyWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionPresentOnlyWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionDrawPresentWaits)),
       static_cast<double>(load(c.completionDrawPresentWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionDrawPresentWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionDrawPresentWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionDrawPresentWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionDrawPresentWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionDrawStretchWaits)),
       static_cast<double>(load(c.completionDrawStretchWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionDrawStretchWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionDrawStretchWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionDrawStretchWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionDrawStretchWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionStretchWaits)),
       static_cast<double>(load(c.completionStretchWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionStretchWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionStretchWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionStretchWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionStretchWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionBlitOnlyWaits)),
       static_cast<double>(load(c.completionBlitOnlyWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionBlitOnlyWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionBlitOnlyWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionBlitOnlyWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionBlitOnlyWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.completionOtherWaits)),
       static_cast<double>(load(c.completionOtherWaitNs)) / 1000000.0,
       static_cast<double>(load(c.completionOtherWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.completionOtherWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.completionOtherWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.completionOtherWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.syncWaits)),
       static_cast<double>(load(c.syncWaitNs)) / 1000000.0,
       static_cast<double>(load(c.syncWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.syncWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.syncWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.syncWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.queueWriterWaits)),
       static_cast<double>(load(c.queueWriterWaitNs)) / 1000000.0,
       static_cast<double>(load(c.queueWriterWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.queueWriterWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.queueWriterWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.queueWriterWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.queueCommitWaits)),
       static_cast<double>(load(c.queueCommitWaitNs)) / 1000000.0,
       static_cast<double>(load(c.queueCommitWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.queueCommitWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.queueCommitWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.queueCommitWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.queueSequenceWaits)),
       static_cast<double>(load(c.queueSequenceWaitNs)) / 1000000.0,
       static_cast<double>(load(c.queueSequenceWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.queueSequenceWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.queueSequenceWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.queueSequenceWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentBoundaryApplied)),
       static_cast<unsigned long long>(load(c.presentBoundarySkipped)),
       static_cast<unsigned long long>(load(c.presentBoundaryWaits)),
       static_cast<double>(load(c.presentBoundaryWaitNs)) / 1000000.0,
       static_cast<double>(load(c.presentBoundaryWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.presentBoundaryWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.presentBoundaryWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.presentBoundaryWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentEncoded)),
       static_cast<unsigned long long>(load(c.presentSkipped)),
       static_cast<unsigned long long>(load(c.presentFullscreen)),
@@ -658,6 +867,9 @@ void report() {
       static_cast<unsigned long long>(load(c.presentAcquireWaits)),
       static_cast<double>(load(c.presentAcquireWaitNs)) / 1000000.0,
       static_cast<double>(load(c.presentAcquireWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.presentAcquireWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.presentAcquireWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.presentAcquireWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentAcquireSlowWaits)),
       static_cast<unsigned long long>(load(c.presentAsyncAcquireRequests)),
       static_cast<unsigned long long>(load(c.presentAsyncAcquireIssued)),
@@ -665,18 +877,30 @@ void report() {
       static_cast<unsigned long long>(load(c.presentAsyncAcquireWaits)),
       static_cast<double>(load(c.presentAsyncAcquireWaitNs)) / 1000000.0,
       static_cast<double>(load(c.presentAsyncAcquireWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.presentAsyncAcquireWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.presentAsyncAcquireWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.presentAsyncAcquireWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentAsyncAcquireSlowWaits)),
       static_cast<unsigned long long>(load(c.presentTokenWaits)),
       static_cast<double>(load(c.presentTokenWaitNs)) / 1000000.0,
       static_cast<double>(load(c.presentTokenWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.presentTokenWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.presentTokenWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.presentTokenWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentTokenSlowWaits)),
       static_cast<unsigned long long>(load(c.presentPreAcquireRequests)),
       static_cast<unsigned long long>(load(c.presentPreAcquireHits)),
       static_cast<unsigned long long>(load(c.presentPreAcquireMisses)),
       static_cast<double>(load(c.presentPreAcquireWaitNs)) / 1000000.0,
       static_cast<double>(load(c.presentPreAcquireWaitMaxNs)) / 1000000.0,
+      static_cast<double>(c.presentPreAcquireWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.presentPreAcquireWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.presentPreAcquireWaitRing.percentile(0.99)) / 1000000.0,
       static_cast<unsigned long long>(load(c.presentSetPropsWaits)),
-      static_cast<double>(load(c.presentSetPropsWaitNs)) / 1000000.0);
+      static_cast<double>(load(c.presentSetPropsWaitNs)) / 1000000.0,
+      static_cast<double>(c.presentSetPropsWaitRing.percentile(0.50)) / 1000000.0,
+      static_cast<double>(c.presentSetPropsWaitRing.percentile(0.95)) / 1000000.0,
+      static_cast<double>(c.presentSetPropsWaitRing.percentile(0.99)) / 1000000.0);
 }
 
 void ensureRegistered() {
@@ -711,6 +935,13 @@ void store(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
     return;
   }
   counter.store(value, std::memory_order_relaxed);
+}
+
+void recordRing(PercentileRing& ring, std::uint64_t nanoseconds) {
+  if (!enabled()) {
+    return;
+  }
+  ring.record(nanoseconds);
 }
 
 }  // namespace
@@ -908,42 +1139,50 @@ void countDrawGeometryDiagnostics(bool fixedFunctionPath,
 void countSubmitDrawCpuTime(std::uint64_t nanoseconds) {
   add(counters().submitDrawCpuNs, nanoseconds);
   updateMax(counters().submitDrawCpuMaxNs, nanoseconds);
+  recordRing(counters().submitDrawCpuRing, nanoseconds);
 }
 
 void countEncodeChunkCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeChunkCalls);
   add(counters().encodeChunkCpuNs, nanoseconds);
   updateMax(counters().encodeChunkCpuMaxNs, nanoseconds);
+  recordRing(counters().encodeChunkCpuRing, nanoseconds);
 }
 
 void countEncodeDrawCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawCpuNs, nanoseconds);
   updateMax(counters().encodeDrawCpuMaxNs, nanoseconds);
+  recordRing(counters().encodeDrawCpuRing, nanoseconds);
 }
 
 void countEncodeDrawPipelineLookupCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawPipelineLookupCpuNs, nanoseconds);
   updateMax(counters().encodeDrawPipelineLookupCpuMaxNs, nanoseconds);
+  recordRing(counters().encodeDrawPipelineLookupCpuRing, nanoseconds);
 }
 
 void countEncodeDrawUniformBuildCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawUniformBuildCpuNs, nanoseconds);
   updateMax(counters().encodeDrawUniformBuildCpuMaxNs, nanoseconds);
+  recordRing(counters().encodeDrawUniformBuildCpuRing, nanoseconds);
 }
 
 void countEncodeDrawFvfDecodeCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawFvfDecodeCpuNs, nanoseconds);
   updateMax(counters().encodeDrawFvfDecodeCpuMaxNs, nanoseconds);
+  recordRing(counters().encodeDrawFvfDecodeCpuRing, nanoseconds);
 }
 
 void countEncodeDrawStreamBindCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawStreamBindCpuNs, nanoseconds);
   updateMax(counters().encodeDrawStreamBindCpuMaxNs, nanoseconds);
+  recordRing(counters().encodeDrawStreamBindCpuRing, nanoseconds);
 }
 
 void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawIssueCpuNs, nanoseconds);
   updateMax(counters().encodeDrawIssueCpuMaxNs, nanoseconds);
+  recordRing(counters().encodeDrawIssueCpuRing, nanoseconds);
 }
 
 void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes) {
@@ -951,6 +1190,7 @@ void countTransientUploadCpuTime(std::uint64_t nanoseconds, std::size_t bytes) {
   add(counters().transientUploadBytes, static_cast<std::uint64_t>(bytes));
   add(counters().transientUploadCpuNs, nanoseconds);
   updateMax(counters().transientUploadCpuMaxNs, nanoseconds);
+  recordRing(counters().transientUploadCpuRing, nanoseconds);
 }
 
 void countUniformVsConsts(std::size_t bytes) {
@@ -1051,11 +1291,13 @@ void countRenderPassTilePreservationBytes(std::uint64_t bytes) {
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds) {
   add(counters().commandBufferCreateCpuNs, nanoseconds);
   updateMax(counters().commandBufferCreateCpuMaxNs, nanoseconds);
+  recordRing(counters().commandBufferCreateCpuRing, nanoseconds);
 }
 
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds) {
   add(counters().commandBufferCommitCpuNs, nanoseconds);
   updateMax(counters().commandBufferCommitCpuMaxNs, nanoseconds);
+  recordRing(counters().commandBufferCommitCpuRing, nanoseconds);
 }
 
 void countCompletionWait(std::uint64_t nanoseconds,
@@ -1070,51 +1312,63 @@ void countCompletionWait(std::uint64_t nanoseconds,
   add(counters().completionWaits);
   add(counters().completionWaitNs, nanoseconds);
   updateMax(counters().completionWaitMaxNs, nanoseconds);
+  recordRing(counters().completionWaitRing, nanoseconds);
   auto addWaitBucket = [nanoseconds](std::atomic<std::uint64_t>& waits,
                                      std::atomic<std::uint64_t>& waitNs,
-                                     std::atomic<std::uint64_t>& maxNs) {
+                                     std::atomic<std::uint64_t>& maxNs,
+                                     PercentileRing& ring) {
     add(waits);
     add(waitNs, nanoseconds);
     updateMax(maxNs, nanoseconds);
+    recordRing(ring, nanoseconds);
   };
   if (hasPresent) {
     addWaitBucket(counters().completionPresentWaits,
                   counters().completionPresentWaitNs,
-                  counters().completionPresentWaitMaxNs);
+                  counters().completionPresentWaitMaxNs,
+                  counters().completionPresentWaitRing);
   } else if (hasDraw) {
     addWaitBucket(counters().completionDrawWaits,
                   counters().completionDrawWaitNs,
-                  counters().completionDrawWaitMaxNs);
+                  counters().completionDrawWaitMaxNs,
+                  counters().completionDrawWaitRing);
   } else if (hasBlit) {
     addWaitBucket(counters().completionBlitWaits,
                   counters().completionBlitWaitNs,
-                  counters().completionBlitWaitMaxNs);
+                  counters().completionBlitWaitMaxNs,
+                  counters().completionBlitWaitRing);
   } else {
     addWaitBucket(counters().completionOtherWaits,
                   counters().completionOtherWaitNs,
-                  counters().completionOtherWaitMaxNs);
+                  counters().completionOtherWaitMaxNs,
+                  counters().completionOtherWaitRing);
   }
 
   if (hasPresent && !hasDraw && !hasBlit && !hasStretchRect) {
     addWaitBucket(counters().completionPresentOnlyWaits,
                   counters().completionPresentOnlyWaitNs,
-                  counters().completionPresentOnlyWaitMaxNs);
+                  counters().completionPresentOnlyWaitMaxNs,
+                  counters().completionPresentOnlyWaitRing);
   } else if (hasPresent && hasDraw) {
     addWaitBucket(counters().completionDrawPresentWaits,
                   counters().completionDrawPresentWaitNs,
-                  counters().completionDrawPresentWaitMaxNs);
+                  counters().completionDrawPresentWaitMaxNs,
+                  counters().completionDrawPresentWaitRing);
   } else if (!hasPresent && hasDraw && hasStretchRect) {
     addWaitBucket(counters().completionDrawStretchWaits,
                   counters().completionDrawStretchWaitNs,
-                  counters().completionDrawStretchWaitMaxNs);
+                  counters().completionDrawStretchWaitMaxNs,
+                  counters().completionDrawStretchWaitRing);
   } else if (!hasPresent && !hasDraw && hasStretchRect) {
     addWaitBucket(counters().completionStretchWaits,
                   counters().completionStretchWaitNs,
-                  counters().completionStretchWaitMaxNs);
+                  counters().completionStretchWaitMaxNs,
+                  counters().completionStretchWaitRing);
   } else if (!hasPresent && hasBlit && !hasStretchRect) {
     addWaitBucket(counters().completionBlitOnlyWaits,
                   counters().completionBlitOnlyWaitNs,
-                  counters().completionBlitOnlyWaitMaxNs);
+                  counters().completionBlitOnlyWaitMaxNs,
+                  counters().completionBlitOnlyWaitRing);
   }
 
   constexpr std::uint32_t fp16 = 1u << 0;
@@ -1149,24 +1403,28 @@ void countSyncWait(std::uint64_t nanoseconds) {
   add(counters().syncWaits);
   add(counters().syncWaitNs, nanoseconds);
   updateMax(counters().syncWaitMaxNs, nanoseconds);
+  recordRing(counters().syncWaitRing, nanoseconds);
 }
 
 void countQueueWriterWait(std::uint64_t nanoseconds) {
   add(counters().queueWriterWaits);
   add(counters().queueWriterWaitNs, nanoseconds);
   updateMax(counters().queueWriterWaitMaxNs, nanoseconds);
+  recordRing(counters().queueWriterWaitRing, nanoseconds);
 }
 
 void countQueueCommitWait(std::uint64_t nanoseconds) {
   add(counters().queueCommitWaits);
   add(counters().queueCommitWaitNs, nanoseconds);
   updateMax(counters().queueCommitWaitMaxNs, nanoseconds);
+  recordRing(counters().queueCommitWaitRing, nanoseconds);
 }
 
 void countQueueSequenceWait(std::uint64_t nanoseconds) {
   add(counters().queueSequenceWaits);
   add(counters().queueSequenceWaitNs, nanoseconds);
   updateMax(counters().queueSequenceWaitMaxNs, nanoseconds);
+  recordRing(counters().queueSequenceWaitRing, nanoseconds);
 }
 
 void countPresentBoundaryApplied() {
@@ -1181,6 +1439,7 @@ void countPresentBoundaryWait(std::uint64_t nanoseconds) {
   add(counters().presentBoundaryWaits);
   add(counters().presentBoundaryWaitNs, nanoseconds);
   updateMax(counters().presentBoundaryWaitMaxNs, nanoseconds);
+  recordRing(counters().presentBoundaryWaitRing, nanoseconds);
 }
 
 void countPresentEncoded() {
@@ -1271,6 +1530,7 @@ void countPresentAcquireWait(std::uint64_t nanoseconds) {
   if (nanoseconds >= 1000000ull) {
     add(counters().presentAcquireSlowWaits);
   }
+  recordRing(counters().presentAcquireWaitRing, nanoseconds);
 }
 
 void countPresentAsyncAcquireRequest() {
@@ -1292,6 +1552,7 @@ void countPresentAsyncAcquireWait(std::uint64_t nanoseconds) {
   if (nanoseconds >= 1000000ull) {
     add(counters().presentAsyncAcquireSlowWaits);
   }
+  recordRing(counters().presentAsyncAcquireWaitRing, nanoseconds);
 }
 
 void countPresentTokenWait(std::uint64_t nanoseconds) {
@@ -1301,6 +1562,7 @@ void countPresentTokenWait(std::uint64_t nanoseconds) {
   if (nanoseconds >= 1000000ull) {
     add(counters().presentTokenSlowWaits);
   }
+  recordRing(counters().presentTokenWaitRing, nanoseconds);
 }
 
 void countPresentPreAcquireRequest() {
@@ -1318,11 +1580,13 @@ void countPresentPreAcquireMiss() {
 void countPresentPreAcquireWait(std::uint64_t nanoseconds) {
   add(counters().presentPreAcquireWaitNs, nanoseconds);
   updateMax(counters().presentPreAcquireWaitMaxNs, nanoseconds);
+  recordRing(counters().presentPreAcquireWaitRing, nanoseconds);
 }
 
 void countPresentSetPropsWait(std::uint64_t nanoseconds) {
   add(counters().presentSetPropsWaits);
   add(counters().presentSetPropsWaitNs, nanoseconds);
+  recordRing(counters().presentSetPropsWaitRing, nanoseconds);
 }
 
 }  // namespace dxmt9::perf
