@@ -280,6 +280,27 @@ std::uint32_t midChunkCommitNRecords() {
   return n;
 }
 
+// R-BACK-2.33 — per-chunk sub-CB chain length cap. The encode thread
+// stops splitting once a chunk has produced this many sub-CBs (counting
+// the chain tail toward the cap), so a 27-render-pass chunk does not
+// turn into a 27-CB chain whose tile-flush + commit overhead overwhelms
+// the pipelining win. 4 was chosen by `docs/research/g-axis-tuning.md`
+// against an estimated TBDR cost model; it is configurable so empirical
+// re-measurement can move the default. Read once at process start.
+std::uint32_t midChunkCommitCapPerRenderPass() {
+  static const std::uint32_t cap = [] {
+    const char* env = std::getenv("DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS");
+    if (!env || env[0] == '\0') return 4u;
+    char* end = nullptr;
+    const long parsed = std::strtol(env, &end, 10);
+    // 0 disables the cap (unbounded chain). Negative or unparseable
+    // tokens fall back to the default to preserve R-BACK-2.31 determinism.
+    if (parsed < 0 || end == env) return 4u;
+    return static_cast<std::uint32_t>(parsed);
+  }();
+  return cap;
+}
+
 WMTWinding frontFaceWinding() {
   return debug::frontFaceCounterClockwise() ? WMTWindingCounterClockwise : WMTWindingClockwise;
 }
@@ -2076,7 +2097,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
   const auto commitPolicy = midChunkCommitPolicy();
   const std::uint32_t splitNRecords = midChunkCommitNRecords();
+  const std::uint32_t splitChainCap = midChunkCommitCapPerRenderPass();
   std::uint32_t recordsSinceLastSplit = 0;
+  // R-BACK-2.33 — splitMidChunkUnderCap wraps splitMidChunk so callers
+  // do not need to repeat the cap check at every split site. cap=0
+  // disables the cap (unbounded chain) for diagnostic comparison.
+  // perChunkSubCBCount counts mid-chunk commits already issued; the
+  // chain tail (final commit at chunk exit) is implicit, so the cap
+  // applies to mid-chunk commits + 1 = chain length.
+  auto splitMidChunkUnderCap = [&] {
+    if (splitChainCap > 0 && perChunkSubCBCount + 1 >= splitChainCap) {
+      return;
+    }
+    splitMidChunk();
+  };
 
   using Kind = core::MetalCommandKind;
   for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
@@ -2152,7 +2186,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               // invariant (no active encoder) holds. Skip when policy
               // is off so the default 1 CB/chunk behavior is preserved.
               if (commitPolicy == MidChunkCommitPolicy::PerRenderPass) {
-                splitMidChunk();
+                splitMidChunkUnderCap();
               }
               startRenderPass(stateView, std::nullopt, commandIndex);
             } else {
@@ -2186,7 +2220,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             // forced the flush, but per-render-pass policy still
             // commits to start a new sub-CB before the next pass opens.
             if (commitPolicy == MidChunkCommitPolicy::PerRenderPass) {
-              splitMidChunk();
+              splitMidChunkUnderCap();
             }
             startRenderPass(stateView, std::nullopt, commandIndex);
           } else {
@@ -2412,7 +2446,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       flushBlit();
       flushRender(perf::EncoderSplitReason::Final);
       assertNoActiveEncoder();
-      splitMidChunk();
+      splitMidChunkUnderCap();
       recordsSinceLastSplit = 0;
     }
   }

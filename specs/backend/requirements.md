@@ -212,6 +212,18 @@ an intermediate sub-`MTLCommandBuffer`. Sub-buffer completion order on the GPU
 is guaranteed by Metal's same-queue in-order submission and must not be
 re-derived by the queue tracker.
 
+**R-BACK-2.33** When a mid-chunk commit policy under `R-BACK-2.29` is active,
+the encode thread must enforce a configurable per-chunk chain-length cap.
+The default cap is 4 sub-`MTLCommandBuffer` instances per chunk (chain tail
+counted toward the cap). Once the cap is reached the encode thread continues
+encoding into the current sub-buffer until `flushRender(Final)` at chunk exit;
+no further mid-chunk commit may fire. The cap is necessary because
+unbounded splitting at every render-pass boundary on a heavy frame
+(`docs/research/g-axis-tuning.md`) accumulates Apple-Silicon tile-flush
+overhead that exceeds the pipelining win past ≈4 sub-buffers. A cap value of
+0 disables the cap and is reserved for diagnostic A/B comparison; production
+runs must use a positive cap.
+
 ---
 
 ## 3. Pipeline State Objects

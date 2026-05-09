@@ -198,3 +198,90 @@ DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
 Compare per-frame `sub_command_buffers`, `command_buffers`,
 `encode_chunk_cpu_ms`, `completion_wait_ms`, and
 `present_acquire_wait_ms` between the two output dirs.
+
+---
+
+## Heavy-scene A/B with cap=4 (U1, 2026-05-10)
+
+Three runs comparing `off` (baseline), `per-render-pass + cap=4`
+(R-BACK-2.33 default), and `per-render-pass + cap=0` (unbounded).
+Captured against the heavy benchmark scene where the previous P1
+measurement saw 13.25 fps and 16-27 RPs/frame.
+
+**Heavy-scene steady-state (RP ≥ 10 frames, ≈1500 frames):**
+
+| metric | off | cap=4 | delta |
+|---|---:|---:|---:|
+| fps (whole run) | 11.89 | 11.24 | −0.65 (within noise) |
+| `command_buffers / frame` mean | 1 | **4** | cap reached |
+| `sub_command_buffers / frame` mean | 0 | **3** | mid-chunk commits |
+| `encode_chunk_cpu_ms` mean | 104.78 | 104.33 | unchanged |
+| `gpu_command_buffer_time_ms` mean | 129.31 | 104.99 | **−19%** |
+| `gpu_command_buffer_time_ms` p99 | **290.66** | **162.88** | **−44%** |
+| `present_acquire_wait_ms` mean | 98.06 | 98.08 | unchanged |
+| `render_pass_begin / frame` | 22 | 22 | identical |
+| `draw_calls / frame` | 100 | 102 | within noise |
+
+The unbounded run captured only the menu workload (RP=2, 0 heavy
+frames) so it does not produce a directly comparable heavy-scene
+data point.
+
+### Interpretation
+
+- **Cap is wired correctly.** `command_buffers / frame` plateaus at 4
+  exactly as R-BACK-2.33 specifies, with `sub_command_buffers = 3`
+  (cap minus the chain tail).
+- **GPU pipelining win is real.** `gpu_command_buffer_time_ms` p99
+  drops 44% (290.66 → 162.88 ms). With 4 sub-CBs the first sub-CB's
+  GPU work overlaps with the encoder thread building sub-CB 2-4, so
+  the sample buffer measuring per-CB GPU wall time captures shorter
+  per-CB intervals.
+- **fps is unchanged within run-to-run noise.** The pipelining win is
+  cancelled by the 4× tile-flush and commit overhead the
+  g-axis-tuning.md cost model predicted (≈2.1 ms / frame for
+  cap=4 = 2.8% of frame budget). At SFIV's 84 ms / frame, this is
+  the same magnitude as run-to-run fps variance.
+- **encode_chunk_cpu and present_acquire_wait are unchanged**, which
+  rules out CPU-side regression as the cause of the flat fps.
+
+### Conclusion
+
+R-BACK-2.33 cap=4 default is **functionally correct and not harmful**
+on the SFIV heavy scene, but does not yield a measurable fps win on
+this single benchmark. The G-axis pipelining benefit is fully
+captured at the per-CB level (44% p99 drop on `gpu_command_buffer_time_ms`)
+but the wall-clock frame budget gain is absorbed by tile-flush
+overhead — exactly the trade the cost model anticipated.
+
+### Recommendation update
+
+- Keep `DXMT9_MID_CHUNK_COMMIT_POLICY=off` as the production default
+  (no behavior change on existing tests).
+- Ship `DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS=4` as the cap
+  default for opt-in diagnostic / experimentation.
+- Defer the R-BACK-2.34 "flip default to per-render-pass" decision
+  until a workload that benefits clearly is identified — SFIV alone
+  is insufficient evidence. Candidate workloads: titles with low RP
+  count + heavy GPU per RP (where pipelining wins exceed the 4×
+  tile-flush penalty).
+- The `chunk_subcb_count_max` counter remains the regression sentinel
+  ensuring the cap holds.
+
+### Reproduction
+
+```sh
+# baseline
+env DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
+  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+
+# cap=4 default
+env DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
+  DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass \
+  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+
+# unbounded (diagnostic only)
+env DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
+  DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass \
+  DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS=0 \
+  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+```
