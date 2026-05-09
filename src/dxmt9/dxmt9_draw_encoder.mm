@@ -2421,6 +2421,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             });
           }
         }
+        // Per-frame snapshot mode (DXMT9_PERF_FRAME_SAMPLING=1). Fires
+        // exactly once per Present packet on the encode thread, so it
+        // does not make Present synchronous from the app side.
+        // Default off → just one bool check, no atomic loads.
+        if (perf::frameSamplingEnabled()) {
+          static thread_local perf::CounterSnapshot prevSnapshot{};
+          static thread_local std::uint64_t frameId = 0;
+          perf::CounterSnapshot curr = perf::snapshot();
+          perf::emitFrameDelta(frameId++, prevSnapshot, curr);
+          prevSnapshot = curr;
+        }
         break;
       }
     }
