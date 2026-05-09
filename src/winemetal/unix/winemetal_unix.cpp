@@ -60,6 +60,18 @@ static_assert(DXMT9_WINEMETAL_CALL_ABI_HASH == 4,
 static_assert(DXMT9_WINEMETAL_BRIDGE_OP_BASE == 5,
               "bridge entry table starts at slot 5 (after shader + abi-hash)");
 
+// Bridge defense-in-depth: Wine indexes __wine_unix_call_funcs[] by the
+// caller-supplied opcode without checking the index against the array
+// size. The PE side's codegen is supposed to emit only valid opcodes,
+// and the kBridgeAbiHash handshake in winemetal_abi_check.cpp catches
+// codegen drift before any other call lands. A bogus opcode arriving
+// past those defenses (e.g., a future bug in PE-side dispatch) would
+// reach an uninitialized slot. The cheapest additional defense is a
+// codegen sentinel `dxmt9c_bridge_op_count` followed by a
+// runtime-or-static_assert against the array size; that requires a
+// codegen change and is tracked as a follow-up to this hardening
+// commit (see specs/gap.md). For now, the dense static_asserts below
+// are the build-time guard.
 extern "C" DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_funcs[] = {
     &dxmt9_winemetal_compile_shader_unix_call,      // slot 0
     &dxmt9_winemetal_shader_source_size_unix_call,  // slot 1

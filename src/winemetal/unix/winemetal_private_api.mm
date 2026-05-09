@@ -6,6 +6,9 @@
 
 #include "../winemetal.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 
 namespace {
@@ -51,8 +54,55 @@ T resolveMacdrvSymbol(const char *name) {
 
 }  // namespace
 
+// Bridge defense-in-depth (winemetal hardening): a real Objective-C object
+// pointer is always at least 8-byte aligned on macOS. A handle that is
+// non-null but misaligned (e.g., an integer like 0x1234 that survived a
+// stale-record path) would otherwise reach `[(id)obj retain]` and trigger
+// a SIGBUS / SIGSEGV cascade on the unix side. The cheap alignment check
+// rejects bogus values before objc_msgSend dispatches. We log to stderr in
+// verbose mode (DXMT9_BRIDGE_VERBOSE=1) so a corrupted bridge call is
+// visible, but we never abort: the caller's intent was a no-op (the
+// resource is presumed already gone), so silent reject is the safe path.
+//
+// This is NOT a generation-counter / handle-table validation — full
+// stale-handle detection requires a registry refactor that is out of
+// scope for this hardening commit. See gap.md / future winemetal-bridge
+// expansion track for the full handle-tagging proposal.
+namespace {
+
+constexpr uintptr_t kObjcHandleAlignmentMask = 0x7;
+
+bool gBridgeVerboseInit = false;
+bool gBridgeVerbose = false;
+
+inline bool bridgeVerbose() {
+  if (!gBridgeVerboseInit) {
+    const char *v = std::getenv("DXMT9_BRIDGE_VERBOSE");
+    gBridgeVerbose = v && v[0] != '\0' && std::strcmp(v, "0") != 0;
+    gBridgeVerboseInit = true;
+  }
+  return gBridgeVerbose;
+}
+
+inline bool isPlausibleObjectHandle(obj_handle_t obj) {
+  if ((obj & kObjcHandleAlignmentMask) != 0) {
+    if (bridgeVerbose()) {
+      fprintf(stderr,
+              "winemetal: rejecting misaligned handle 0x%llx (likely stale)\n",
+              static_cast<unsigned long long>(obj));
+    }
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 extern "C" void NSObject_retain(obj_handle_t obj) {
   if (!obj) {
+    return;
+  }
+  if (!isPlausibleObjectHandle(obj)) {
     return;
   }
   [(id)obj retain];
@@ -60,6 +110,9 @@ extern "C" void NSObject_retain(obj_handle_t obj) {
 
 extern "C" void NSObject_release(obj_handle_t obj) {
   if (!obj) {
+    return;
+  }
+  if (!isPlausibleObjectHandle(obj)) {
     return;
   }
   [(id)obj release];

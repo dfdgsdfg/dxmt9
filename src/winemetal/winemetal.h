@@ -126,6 +126,28 @@ enum WMTResourceOptions : uint64_t {
   WMTResourceOptionCPUCacheModeWriteCombined = 1,
 };
 
+// PROCESS-LOCAL POINTER — DO NOT DEREFERENCE ACROSS THE PE/UNIX BOUNDARY.
+//
+// `WMTMemoryPointer.ptr` is a raw process-local address. It is meaningful
+// ONLY inside the address space that wrote it. The unix-side importer
+// MUST NOT call `.get()` / `.get_accessible_or_null()` on a pointer that
+// crossed from PE — doing so dereferences a stale or unmapped address.
+//
+// Search this contract by the magic token `WINEMETAL_PROCESS_LOCAL_PTR`.
+// All unix-side reads of `.ptr` must be limited to:
+//   1. PE-side outputs that get filled in unix and read back in PE
+//      (e.g., `D9CLockedRect.bits` is filled by the unix Lock impl as a
+//      shared-memory-mapped pointer the PE side then reads).
+//   2. Round-tripped values that the unix side never reads — only stores
+//      and returns to PE.
+//
+// If a future change adds a unix-side `.get()` on a PE-supplied pointer,
+// it is a UAF / sign-extension hazard. Audit script:
+//   grep -rn "WMTMemoryPointer\|WMTConstMemoryPointer\|\.get()" src/winemetal/unix/
+//
+// On 32-bit PE, `high_part` carries the upper 32 bits of a 64-bit unix
+// pointer that was pinned at PE side; `get()` fails-fast on x86 if the
+// pointer is unreachable from a 32-bit address space.
 struct WMTMemoryPointer {
   void *ptr;
 #if defined(__i386__)
@@ -141,6 +163,7 @@ struct WMTMemoryPointer {
     ptr = p;
   }
 
+  // WINEMETAL_PROCESS_LOCAL_PTR: only callable in the process that ran set().
   void *
   get() {
 #if defined(__i386__)
@@ -149,6 +172,7 @@ struct WMTMemoryPointer {
     return ptr;
   }
 
+  // WINEMETAL_PROCESS_LOCAL_PTR: only callable in the process that ran set().
   void *
   get_accessible_or_null() {
 #if defined(__i386__)
@@ -160,6 +184,7 @@ struct WMTMemoryPointer {
 #endif
 };
 
+// WINEMETAL_PROCESS_LOCAL_PTR — see WMTMemoryPointer above for the contract.
 struct WMTConstMemoryPointer {
   const void *ptr;
 #if defined(__i386__)
@@ -175,6 +200,7 @@ struct WMTConstMemoryPointer {
     ptr = p;
   }
 
+  // WINEMETAL_PROCESS_LOCAL_PTR: only callable in the process that ran set().
   const void *
   get() {
 #if defined(__i386__)
