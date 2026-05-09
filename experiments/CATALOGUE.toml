@@ -350,6 +350,46 @@ run_timeout_sec = 45
 capture_frame = 120
 reference_optional = true
 
+# V1 boundary B2 (audit item (b)) — bridge-ABI throughput probe. Issues a
+# tight loop of small Clear() calls (smallest record graph that still
+# triggers commit_chunk) to measure pure PE -> unix bridge crossing cost
+# in isolation from encode and GPU work. See docs/research/boundary-benchmarks.md.
+[[app]]
+name = "dxmt9-perf-bridge-empty"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/BridgeEmptyProbe/BridgeEmptyProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_bridge_empty.sh"
+reference = "experiments/references/dxmt9-perf-bridge-empty.png"
+features = ["performance", "synthetic", "bridge", "boundary-b2", "perf-probe"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 BridgeEmpty"
+capture_delay_sec = 2.0
+run_timeout_sec = 60
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-perf-encode-replay"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/EncodeReplayProbe/EncodeReplayProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_encode_replay.sh"
+reference = "experiments/references/dxmt9-perf-encode-replay.png"
+features = ["performance", "synthetic", "encode-replay", "boundary-isolated", "perf-probe"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 EncodeReplay"
+capture_delay_sec = 2.0
+run_timeout_sec = 60
+capture_frame = 0
+reference_optional = true
+
 [[app]]
 name = "anno-1404-gold"
 source = "local-heroic"
@@ -388,6 +428,24 @@ capture_frame = 0
 reference_optional = true
 allow_timeout = true
 
+[[app]]
+name = "dxmt9-perf-present-loop"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/PresentLoopProbe/PresentLoopProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_present_loop.sh"
+reference = "experiments/references/dxmt9-perf-present-loop.png"
+features = ["performance", "synthetic", "present", "drawable-acquire", "boundary-b6", "perf-probe"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 PresentLoop"
+capture_delay_sec = 2.0
+run_timeout_sec = 60
+capture_frame = 120
+reference_optional = true
+
 [apps.dxmt9-perf-ffp-only.expected_counters]
 # At least 100 draws total, with at least one FFP VS+PS uniform call
 # (i.e. the FFP shader path actually ran). The HLSL VS uniform path must
@@ -423,6 +481,32 @@ draw_calls = { min = 50 }
 uniform_volatile_pushes = { min = 1 }
 gpu_command_buffer_errors = { max = 0 }
 
+[apps.dxmt9-perf-bridge-empty.expected_counters]
+# V1 boundary B2 (audit item (b)) — bridge-ABI throughput probe.
+# chunk_admit >= 50000 proves the loop ran and at least half of the
+# default 100000 iterations reached the unix-side import success exit.
+# The threshold is conservative: we accept a Clear-record coalescing
+# factor up to 2x (some d3d9 frontends batch consecutive Clears into a
+# single chunk). gpu_command_buffer_errors must stay at 0 — boundary
+# isolation does not exempt a probe from the M5 sentinel.
+chunk_admit = { min = 50000 }
+gpu_command_buffer_errors = { max = 0 }
+
+[apps.dxmt9-perf-encode-replay.expected_counters]
+# Boundary-isolated encode-only probe (V1 audit (c), B3+B4):
+# - command_buffers >= 1 proves at least one MTLCommandBuffer was built
+#   from the captured chunk stream (B3 queue tracker fired).
+# - encode_chunk_calls >= 1 proves the encode thread actually consumed
+#   the chunk(s) and produced encoded work (B4 encode thread fired).
+# Conservative bounds — boundary isolation is the intent, not draw-count
+# coverage. Exact draw counts depend on the recorder's chunk capacity
+# splitting policy and ENCODE_REPLAY_* env vars.
+# gpu_command_buffer_errors must stay at 0 — same M5 L3 sentinel as the
+# other perf probes.
+command_buffers = { min = 1 }
+encode_chunk_calls = { min = 1 }
+gpu_command_buffer_errors = { max = 0 }
+
 [[app]]
 name = "street-fighter-iv-benchmark-crossover-oracle"
 source = "local-external"
@@ -444,3 +528,14 @@ allow_timeout = true
 skip_stage = true
 wine_dll_overrides = "d3d9=b;d3dx9_41=b"
 cx_bottle = "Heroic"
+
+[apps.dxmt9-perf-present-loop.expected_counters]
+# V1 audit (f) — drawable-acquire isolation (B6). The probe runs
+# PRESENT_LOOP_ITERATIONS empty Clear+Present cycles (default 1000) so
+# the existing present_* counter family reflects only B6 cost.
+# Conservative gate: at least 500 presents must reach the encoder
+# (proves the loop ran enough iterations for B6 timing distributions
+# to be meaningful). gpu_command_buffer_errors must stay at 0 — any
+# GPU fault during a perf probe is a regression (M5 L3 sentinel).
+present_encoded = { min = 500 }
+gpu_command_buffer_errors = { max = 0 }

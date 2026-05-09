@@ -14,6 +14,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -651,6 +652,14 @@ int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
 }  // namespace
 
 extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChunk* chunk) {
+  // V1 boundary B2 — wall-clock latency of one bridge crossing. Sampled
+  // at the d3d9-side bridge entry (this function) so the measurement
+  // reflects WINE_UNIX_CALL marshalling + importer validation + seqId
+  // assignment in isolation from encode and GPU work. Recorded only at
+  // the success exit (mirrors countChunkAdmit) so a reject path with a
+  // fast-rejected malformed payload does not skew the success-path
+  // distribution that the bridge_empty probe regression-gates on.
+  const auto bridgeCommitStart = std::chrono::steady_clock::now();
   if (!d || !chunk || chunk->version != D9C_COMMAND_CHUNK_VERSION) {
     return commitChunkFail("bad-header");
   }
@@ -1017,6 +1026,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // R-BACK-2.10: chunk fully validated + replayed. Bumping admit at the
   // single success point keeps reject + admit symmetric.
   dxmt9::perf::countChunkAdmit();
+  // V1 boundary B2 — record bridge crossing latency at the same single
+  // success exit so the percentile ring is populated only by complete
+  // commits. enabled() is checked inside the helper.
+  const auto bridgeCommitDelta =
+      std::chrono::steady_clock::now() - bridgeCommitStart;
+  dxmt9::perf::countBridgeCommitLatencyNs(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(bridgeCommitDelta)
+          .count()));
   return dxmt9::core::D3D_OK;
 }
 

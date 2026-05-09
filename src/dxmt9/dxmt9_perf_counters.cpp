@@ -256,6 +256,12 @@ struct Counters {
   std::atomic<std::uint64_t> commandBufferCreateCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuMaxNs{0};
+  // V1 boundary B2 — bridge commit latency (countBridgeCommitLatencyNs).
+  // Measured at the d3d9 PE-side commit_chunk entry, isolated from any
+  // encode or GPU work so a marshalling / importer regression surfaces
+  // even on near-empty chunks where chunk_admit alone would be flat.
+  std::atomic<std::uint64_t> bridgeCommitLatencyNs{0};
+  std::atomic<std::uint64_t> bridgeCommitLatencyMaxNs{0};
   std::atomic<std::uint64_t> completionWaits{0};
   std::atomic<std::uint64_t> completionWaitNs{0};
   std::atomic<std::uint64_t> completionWaitMaxNs{0};
@@ -365,6 +371,8 @@ struct Counters {
   PercentileRing transientUploadCpuRing;
   PercentileRing commandBufferCreateCpuRing;
   PercentileRing commandBufferCommitCpuRing;
+  // V1 boundary B2 — paired with bridgeCommitLatency*Ns above.
+  PercentileRing bridgeCommitLatencyRing;
   PercentileRing completionWaitRing;
   PercentileRing completionPresentWaitRing;
   PercentileRing completionDrawWaitRing;
@@ -510,6 +518,10 @@ struct CounterEntry {
     Hex64,           // " key=0x%llx" for handle/hash values
     WidthByHeight,   // " key=%llux%llu" using both atomicField and field2
     PercentileMs,    // " key=%.3f" from PercentileRing::percentile(p) / 1e6
+    // V1 boundary B2: bridge commit latency is reported in raw nanoseconds
+    // (not /1e6 ms) because per-call bridge cost is sub-microsecond and a
+    // ms-rounded value collapses to 0.000 across an entire run.
+    PercentileNs,    // " key=%llu" from PercentileRing::percentile(p)
   };
 
   const char* key;
@@ -524,7 +536,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 348> kCounterTable = {{
+constexpr std::array<CounterEntry, 353> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -722,6 +734,13 @@ constexpr std::array<CounterEntry, 348> kCounterTable = {{
     {"command_buffer_commit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.5},
     {"command_buffer_commit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.95},
     {"command_buffer_commit_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.99},
+    // V1 boundary B2 — bridge commit latency in raw nanoseconds (sub-us
+    // per-call cost would round to 0 in ms). Sum + max + 3 percentiles.
+    {"bridge_commit_latency_ns", CounterEntry::Kind::UnsignedCount, &Counters::bridgeCommitLatencyNs, nullptr, nullptr, 0.0},
+    {"bridge_commit_latency_max_ns", CounterEntry::Kind::UnsignedCount, &Counters::bridgeCommitLatencyMaxNs, nullptr, nullptr, 0.0},
+    {"bridge_commit_latency_p50_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.5},
+    {"bridge_commit_latency_p95_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.95},
+    {"bridge_commit_latency_p99_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.99},
     {"completion_waits", CounterEntry::Kind::UnsignedCount, &Counters::completionWaits, nullptr, nullptr, 0.0},
     {"completion_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitNs, nullptr, nullptr, 0.0},
     {"completion_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitMaxNs, nullptr, nullptr, 0.0},
@@ -903,6 +922,11 @@ void report() {
         std::fprintf(stderr, " %s=%.3f", e.key,
                      static_cast<double>((c.*e.ringField).percentile(e.percentile)) /
                          1000000.0);
+        break;
+      case CounterEntry::Kind::PercentileNs:
+        std::fprintf(stderr, " %s=%llu", e.key,
+                     static_cast<unsigned long long>(
+                         (c.*e.ringField).percentile(e.percentile)));
         break;
     }
   }
@@ -1387,6 +1411,16 @@ void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds) {
   add(counters().commandBufferCommitCpuNs, nanoseconds);
   updateMax(counters().commandBufferCommitCpuMaxNs, nanoseconds);
   recordRing(counters().commandBufferCommitCpuRing, nanoseconds);
+}
+
+void countBridgeCommitLatencyNs(std::uint64_t nanoseconds) {
+  // V1 boundary B2 — measured at the d3d9 PE-side commit_chunk entry,
+  // covers the WINE_UNIX_CALL marshalling, importer validation, and
+  // seqId assignment cost. The matching call site is in
+  // src/d3d9/device_c_chunk_replay.cpp (dxmt9c_device_commit_chunk).
+  add(counters().bridgeCommitLatencyNs, nanoseconds);
+  updateMax(counters().bridgeCommitLatencyMaxNs, nanoseconds);
+  recordRing(counters().bridgeCommitLatencyRing, nanoseconds);
 }
 
 void countCompletionWait(std::uint64_t nanoseconds,

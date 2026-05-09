@@ -104,6 +104,15 @@ BACKEND_COUNTER_FIELDS = [
     "render_pass_tile_preservation_bytes",
     "chunk_admit",
     "chunk_reject",
+    # V1 boundary B2 (audit item (b)) — bridge commit latency in raw
+    # nanoseconds. Surfaced here so cross-policy A/B diff can detect a
+    # bridge-ABI regression (bigger marshalling struct, extra importer
+    # validation) that chunk_admit alone would not catch.
+    "bridge_commit_latency_ns",
+    "bridge_commit_latency_max_ns",
+    "bridge_commit_latency_p50_ns",
+    "bridge_commit_latency_p95_ns",
+    "bridge_commit_latency_p99_ns",
     # R-BACK-2.29..2.32 — sub-command-buffer chain length and total
     # mid-chunk commits. Both are zero in default policy=off; positive
     # under DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass / per-n-records.

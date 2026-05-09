@@ -149,6 +149,14 @@ void countRenderPassStoreActionStencil(std::uint32_t action);
 void countRenderPassTilePreservationBytes(std::uint64_t bytes);
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);
+// R-VERIF / V1 boundary B2 — wall-clock latency of one commit_chunk()
+// round trip (PE -> unix import -> seqId assignment -> return). Sampled
+// at the d3d9 PE-side bridge entry (dxmt9c_device_commit_chunk in
+// device_c_chunk_replay.cpp) so the measurement isolates the bridge ABI
+// crossing cost from encode and GPU work, and so a regression in
+// marshalling / importer validation surfaces independently of the
+// existing chunk_admit / chunk_reject opcode counts.
+void countBridgeCommitLatencyNs(std::uint64_t nanoseconds);
 void countCompletionWait(std::uint64_t nanoseconds,
                          bool hasDraw,
                          bool hasPresent,

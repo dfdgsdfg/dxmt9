@@ -113,3 +113,18 @@ dod_state_format_spec = executable(
 
 test('dxmt9-dod-state-format-spec', dod_state_format_spec,
      env: dxmt9_native_test_env_vars)
+
+# CPU-only chunk-build microbenchmark (V1 audit item (a), boundary B1).
+# Times the cost of building POD chunk records from a typical D3D9
+# hot-path mix isolated from any bridge / Metal / GPU work. Output
+# scrape line: `[chunk_record_micro] iterations=... mean_ns=... ...`.
+chunk_record_micro_spec = executable(
+  'dxmt9-chunk-record-micro-spec',
+  'chunk_record_micro_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-chunk-record-micro-spec', chunk_record_micro_spec,
+     env: dxmt9_native_test_env_vars)
