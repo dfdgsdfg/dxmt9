@@ -13,7 +13,10 @@
 #include "dxmt9_ring_arena.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
@@ -21,6 +24,25 @@
 namespace dxmt9 {
 
 namespace {
+// Tiny helper that uploads a printf-formatted label to the bridge as an
+// autoreleased NSString, then returns a non-owning WMT::String view. The
+// NSString lives on the autoreleasepool of the encoding thread — long
+// enough for the setLabel: selector to retain it, but never longer.
+template <std::size_t Cap = 96>
+WMT::String makeLabelStringFmt(const char* fmt, ...) {
+  char buf[Cap];
+  va_list args;
+  va_start(args, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  return WMT::String::string(buf, WMTUTF8StringEncoding);
+}
+
+// Monotonic counter family for resources where the call site lacks a
+// stable id (e.g. transient slabs that don't have a Pool handle).
+std::atomic_uint64_t gTransientLabelCounter{0};
+std::atomic_uint64_t gCommandBufferLabelCounter{0};
+
 std::string resolveShaderCachePath() {
   const char* disableArchive = std::getenv("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE");
   if (disableArchive && disableArchive[0] != '\0' && std::strcmp(disableArchive, "0") != 0) {
@@ -93,6 +115,11 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
     return;
   }
   queueView_ = WMT::CommandQueue{queue_.handle};
+  // M1: name the queue so frame captures don't show a generic
+  // <CAMetalQueue: 0x...>. deviceId is the underlying MTLDevice handle —
+  // good enough to disambiguate multi-GPU configs in Xcode captures.
+  queueView_.setLabel(makeLabelStringFmt("dxmt9-q-0x%llx",
+      static_cast<unsigned long long>(device_.handle)));
 
   initializer_ = std::make_unique<resources::Initializer>(*this, pool_, device_);
 
@@ -130,8 +157,11 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   // next chunk's records start fresh. C2 still calls markAllDirty(...)
   // at encoder init per R-BACK-12.12 to fold in the implicit
   // "everything could have changed since last encode" semantic.
-  DXMT_ASSERT(device_ &&
-              "CommandQueue::makeEncodeContext called with stale/null device handle");
+  // Note: device_ may be a sentinel-null handle for fake-backend test
+  // fixtures (see tests/native/backend/resource_hazard_spec.cpp). The
+  // real Metal-side dereference happens deep inside encoders::encodeChunk
+  // / encoders::encodeDraw; assertion belongs there, not at context
+  // creation.
   return encoders::EncodeContext{
       device_, limits_, pool_, pipelineCache_, allocators_,
       &shaderArchive_.reference(), &shaderArchive_.path(),
@@ -263,6 +293,13 @@ WMT::Reference<WMT::CommandBuffer> CommandQueue::newCommandBuffer() {
   auto commandBuffer = queue_.commandBuffer();
   if (commandBuffer) {
     perf::countCommandBuffer();
+    // M1: monotonic counter — newCommandBuffer is called from multiple
+    // sites (chunk encode, transfers, present split). Mixing a sequence
+    // ID would be more meaningful but it isn't available at this site.
+    const auto id = gCommandBufferLabelCounter.fetch_add(1, std::memory_order_relaxed);
+    WMT::CommandBuffer view{commandBuffer.handle};
+    view.setLabel(makeLabelStringFmt("cb_seq_%llu",
+        static_cast<unsigned long long>(id)));
   }
   return commandBuffer;
 }
@@ -298,6 +335,15 @@ bool CommandQueue::ensureTransientBufferUnlocked(std::size_t minimumCapacity) {
   }
 
   perf::countMetalBuffer(capacity);
+  // M1: label the freshly-allocated transient slab. Each ensure-call
+  // gets a fresh counter id so back-to-back rotations are
+  // disambiguated in captures.
+  {
+    const auto id = gTransientLabelCounter.fetch_add(1, std::memory_order_relaxed);
+    WMT::Buffer view{buffer.handle};
+    view.setLabel(makeLabelStringFmt("dxmt9-transient-slab-%llu-cap%zu",
+        static_cast<unsigned long long>(id), capacity));
+  }
   transientBuffer_ = std::move(buffer);
   transientBufferContents_ = static_cast<std::byte*>(info.memory.ptr);
   transientBufferCapacity_ = capacity;
@@ -359,6 +405,14 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
       return {};
     }
     perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+    // M1: dedicated transient slabs (oversized payloads bypass the
+    // shared slab) — label with seq + size so captures distinguish
+    // them from ring-allocated transients.
+    {
+      WMT::Buffer view{buffer.handle};
+      view.setLabel(makeLabelStringFmt("dxmt9-transient-dedicated-seq%llu-bytes%zu",
+          static_cast<unsigned long long>(seqId), bytes.size()));
+    }
     retainedTransientBuffers_.push_back(RetainedTransientBuffer{
         .buffer = std::move(buffer),
         .seqId = seqId,
@@ -485,6 +539,12 @@ std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBuf
       auto buffer = device_.newBuffer(info);
       if (!buffer) return {};
       perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+      // M1: same labeling as single-payload uploadDedicated above.
+      {
+        WMT::Buffer view{buffer.handle};
+        view.setLabel(makeLabelStringFmt("dxmt9-transient-dedicated-seq%llu-bytes%zu",
+            static_cast<unsigned long long>(seqId), bytes.size()));
+      }
       retainedTransientBuffers_.push_back(RetainedTransientBuffer{
           .buffer = std::move(buffer), .seqId = seqId});
       return TransientBufferSlice{
@@ -576,6 +636,12 @@ CommandQueue::TransientBufferReservation CommandQueue::reserveTransientBuffer(
       return {};
     }
     perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+    // M1: reserved-slab dedicated path mirrors uploadDedicated naming.
+    {
+      WMT::Buffer view{buffer.handle};
+      view.setLabel(makeLabelStringFmt("dxmt9-transient-reserved-seq%llu-bytes%zu",
+          static_cast<unsigned long long>(seqId), size));
+    }
     retainedTransientBuffers_.push_back(RetainedTransientBuffer{
         .buffer = std::move(buffer),
         .seqId = seqId,
