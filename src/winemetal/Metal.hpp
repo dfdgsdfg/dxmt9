@@ -724,6 +724,38 @@ public:
     cmd.base_instance = base_instance;
     MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
   }
+
+  // Tile-stage ops. MTLRenderCommandEncoder hosts both render and tile
+  // commands; these are direct passthroughs (R-BACK-13.* prerequisite).
+  void
+  setTileRenderPipelineState(RenderPipelineState pso) {
+    MTLRenderCommandEncoder_setTileRenderPipelineState(handle, pso.handle);
+  }
+
+  void
+  dispatchThreadsPerTile(WMTSize threads_per_tile) {
+    MTLRenderCommandEncoder_dispatchThreadsPerTile(handle, threads_per_tile);
+  }
+
+  void
+  setTileBuffer(Buffer buffer, uint64_t offset, uint32_t index) {
+    MTLRenderCommandEncoder_setTileBuffer(handle, buffer.handle, offset, index);
+  }
+
+  void
+  setTileTexture(Texture texture, uint32_t index) {
+    MTLRenderCommandEncoder_setTileTexture(handle, texture.handle, index);
+  }
+
+  void
+  setTileBytes(const void *bytes, uint64_t length, uint32_t index) {
+    MTLRenderCommandEncoder_setTileBytes(handle, bytes, length, index);
+  }
+
+  void
+  setTileSamplerState(SamplerState sampler, uint32_t index) {
+    MTLRenderCommandEncoder_setTileSamplerState(handle, sampler.handle, index);
+  }
 };
 
 class BlitCommandEncoder : public CommandEncoder {
@@ -1223,6 +1255,12 @@ public:
   Reference<RenderPipelineState>
   newRenderPipelineState(const WMTTileRenderPipelineInfo &info, Error &error) {
     return Reference<RenderPipelineState>(MTLDevice_newTileRenderPipelineState(handle, &info, &error.handle));
+  }
+
+  Reference<RenderPipelineState>
+  newRenderPipelineState(const WMTTileRenderPipelineDescriptor &desc, Error &error) {
+    return Reference<RenderPipelineState>(
+        MTLDevice_newRenderPipelineStateWithTileDescriptor(handle, &desc, &error.handle));
   }
 
   Reference<Fence>

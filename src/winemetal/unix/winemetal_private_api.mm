@@ -967,6 +967,65 @@ extern "C" obj_handle_t MTLDevice_newComputePipelineState(obj_handle_t device,
   return (obj_handle_t)pso;
 }
 
+// Tile-stage pipeline factory (R-BACK-13.* prerequisite). Tile-FFP only
+// needs a minimal subset of MTLTileRenderPipelineDescriptor — see the
+// matching descriptor in winemetal.h for the rationale.
+extern "C" obj_handle_t MTLDevice_newRenderPipelineStateWithTileDescriptor(
+    obj_handle_t device, const struct WMTTileRenderPipelineDescriptor *desc_in, obj_handle_t *err_out) {
+  if (!device || !desc_in) return NULL_OBJECT_HANDLE;
+  MTLTileRenderPipelineDescriptor *desc = [[MTLTileRenderPipelineDescriptor alloc] init];
+  desc.tileFunction                    = (id<MTLFunction>)desc_in->tile_function;
+  desc.rasterSampleCount               = desc_in->raster_sample_count;
+  desc.threadgroupSizeMatchesTileSize  = desc_in->threadgroup_size_matches_tile_size != 0;
+  if (desc_in->max_total_threads_per_threadgroup) {
+    desc.maxTotalThreadsPerThreadgroup = desc_in->max_total_threads_per_threadgroup;
+  }
+  uint32_t count = desc_in->color_attachment_count;
+  if (count > 8) count = 8;
+  for (uint32_t i = 0; i < count; i++) {
+    desc.colorAttachments[i].pixelFormat = to_metal_pixel_format(desc_in->color_attachment_pixel_formats[i]);
+  }
+  NSError *err = nil;
+  id<MTLRenderPipelineState> pso = [(id<MTLDevice>)device
+      newRenderPipelineStateWithTileDescriptor:desc options:MTLPipelineOptionNone reflection:nil error:&err];
+  [desc release];
+  if (err_out) *err_out = err ? (obj_handle_t)CFBridgingRetain(err) : NULL_OBJECT_HANDLE;
+  return (obj_handle_t)pso;
+}
+
+// -- Tile-stage encoder ops (passthroughs) --
+
+extern "C" void MTLRenderCommandEncoder_setTileRenderPipelineState(obj_handle_t encoder, obj_handle_t pipeline) {
+  if (!encoder) return;
+  [(id<MTLRenderCommandEncoder>)encoder setTileRenderPipelineState:(id<MTLRenderPipelineState>)pipeline];
+}
+
+extern "C" void MTLRenderCommandEncoder_dispatchThreadsPerTile(obj_handle_t encoder, struct WMTSize threads_per_tile) {
+  if (!encoder) return;
+  [(id<MTLRenderCommandEncoder>)encoder
+      dispatchThreadsPerTile:MTLSizeMake(threads_per_tile.width, threads_per_tile.height, threads_per_tile.depth)];
+}
+
+extern "C" void MTLRenderCommandEncoder_setTileBuffer(obj_handle_t encoder, obj_handle_t buffer, uint64_t offset, uint32_t index) {
+  if (!encoder) return;
+  [(id<MTLRenderCommandEncoder>)encoder setTileBuffer:(id<MTLBuffer>)buffer offset:offset atIndex:index];
+}
+
+extern "C" void MTLRenderCommandEncoder_setTileTexture(obj_handle_t encoder, obj_handle_t texture, uint32_t index) {
+  if (!encoder) return;
+  [(id<MTLRenderCommandEncoder>)encoder setTileTexture:(id<MTLTexture>)texture atIndex:index];
+}
+
+extern "C" void MTLRenderCommandEncoder_setTileBytes(obj_handle_t encoder, const void *bytes, uint64_t length, uint32_t index) {
+  if (!encoder || !bytes || !length) return;
+  [(id<MTLRenderCommandEncoder>)encoder setTileBytes:bytes length:length atIndex:index];
+}
+
+extern "C" void MTLRenderCommandEncoder_setTileSamplerState(obj_handle_t encoder, obj_handle_t sampler, uint32_t index) {
+  if (!encoder) return;
+  [(id<MTLRenderCommandEncoder>)encoder setTileSamplerState:(id<MTLSamplerState>)sampler atIndex:index];
+}
+
 // -- Fence / Event --
 
 extern "C" obj_handle_t MTLDevice_newFence(obj_handle_t device) {

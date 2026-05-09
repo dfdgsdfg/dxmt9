@@ -2150,4 +2150,37 @@ WINEMETAL_API uint64_t MTLTexture_gpuResourceID(obj_handle_t texture);
 
 WINEMETAL_API uint64_t MTLSamplerState_gpuResourceID(obj_handle_t sampler);
 
+// -- Tile-stage pipeline + encoder ops (R-BACK-13.* prerequisite) --
+//
+// Minimal descriptor surface for MTLTileRenderPipelineDescriptor. The
+// portable-PSO `WMTTileRenderPipelineInfo` above carries the full DXMT-style
+// surface (binary archives, immutable buffer mask, etc); this descriptor
+// exposes only the subset Tile-FFP needs so the runtime can build a
+// per-RenderPass tile pipeline cheaply. The dxmt9 emitter that populates
+// `tileFunction` (makeFfpTilePixelSource) is not in scope here — see
+// R-BACK-13.* follow-up. The encoder selects between this and the portable
+// PSO at use time.
+struct WMTTileRenderPipelineDescriptor {
+  obj_handle_t tile_function;                          // MTLFunction handle
+  uint32_t raster_sample_count;
+  uint32_t threadgroup_size_matches_tile_size;         // bool
+  uint32_t max_total_threads_per_threadgroup;
+  uint32_t color_attachment_count;
+  enum WMTPixelFormat color_attachment_pixel_formats[8];
+};
+
+WINEMETAL_API obj_handle_t MTLDevice_newRenderPipelineStateWithTileDescriptor(
+    obj_handle_t device, const struct WMTTileRenderPipelineDescriptor *desc, obj_handle_t *err_out
+);
+
+// Tile-stage encoder ops. Metal puts both render and tile commands on
+// MTLRenderCommandEncoder, so these are member-style passthroughs onto
+// the same encoder handle.
+WINEMETAL_API void MTLRenderCommandEncoder_setTileRenderPipelineState(obj_handle_t encoder, obj_handle_t pipeline);
+WINEMETAL_API void MTLRenderCommandEncoder_dispatchThreadsPerTile(obj_handle_t encoder, struct WMTSize threads_per_tile);
+WINEMETAL_API void MTLRenderCommandEncoder_setTileBuffer(obj_handle_t encoder, obj_handle_t buffer, uint64_t offset, uint32_t index);
+WINEMETAL_API void MTLRenderCommandEncoder_setTileTexture(obj_handle_t encoder, obj_handle_t texture, uint32_t index);
+WINEMETAL_API void MTLRenderCommandEncoder_setTileBytes(obj_handle_t encoder, const void *bytes, uint64_t length, uint32_t index);
+WINEMETAL_API void MTLRenderCommandEncoder_setTileSamplerState(obj_handle_t encoder, obj_handle_t sampler, uint32_t index);
+
 #endif
