@@ -7,6 +7,7 @@
 
 #include "dxmt9/assert.hpp"
 #include "dxmt9_command_queue.hpp"
+#include "dxmt9_debug_alloc_guard.hpp"
 #include "dxmt9_device.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_draw_state.hpp"
@@ -774,6 +775,10 @@ bool encodeDraw(EncodeContext& ctx,
                  const core::DrawParam* paramOverride,
                  std::span<const u8> paramPayloadArena,
                  uniform::DirtyState* dirty) {
+  // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
+  // is permitted on this path; the guard is debug-only and asserts this when
+  // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
+  DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("encodeDraw");
   PerfScope scope(perf::countEncodeDrawCpuTime);
   (void)commandBuffer;
   const auto& hot = *drawState.hot;

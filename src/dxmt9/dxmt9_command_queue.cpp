@@ -1,5 +1,6 @@
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9_debug_alloc_guard.hpp"
 #include "dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
@@ -896,6 +897,10 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   if (draws.empty()) {
     return;
   }
+  // Per-draw-run hot entry. Heap-allocation invariant per
+  // codebase_conventions.rules.md; debug-only guard, no-op unless
+  // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 build flag and env are both set.
+  DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRun");
   for (std::size_t i = 0; i < draws.size(); ++i) {
     perf::countSubmitDraw();
   }
