@@ -292,7 +292,7 @@ summary = "First device-backed app-local run reached the provider with failures 
 
 [[case]]
 executable = "dxmt9-d3d9-device-lifetime.exe"
-source_file = "device_lifetime.cpp"
+source_file = "d3d9_device_lifetime.cpp"
 function = "test_get_direct3d_addref"
 source = "wine/dlls/d3d9/tests/device.c:test_refcount"
 source_kind = "behavioral-oracle"
@@ -309,7 +309,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-device-lifetime.exe"
-source_file = "device_lifetime.cpp"
+source_file = "d3d9_device_lifetime.cpp"
 function = "test_resource_get_device_addref"
 source = "wine/dlls/d3d9/tests/device.c:test_refcount"
 source_kind = "behavioral-oracle"
@@ -326,7 +326,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-device-lifetime.exe"
-source_file = "device_lifetime.cpp"
+source_file = "d3d9_device_lifetime.cpp"
 function = "test_private_data_bytes"
 source = "wine/dlls/d3d9/tests/device.c:test_private_data"
 source_kind = "behavioral-oracle"
@@ -343,7 +343,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-device-lifetime.exe"
-source_file = "device_lifetime.cpp"
+source_file = "d3d9_device_lifetime.cpp"
 function = "test_private_data_iunknown"
 source = "wine/dlls/d3d9/tests/device.c:test_private_data"
 source_kind = "behavioral-oracle"
@@ -360,7 +360,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-device-lifetime.exe"
-source_file = "device_lifetime.cpp"
+source_file = "d3d9_device_lifetime.cpp"
 function = "test_scene_transitions"
 source = "wine/dlls/d3d9/tests/device.c:scene tests"
 source_kind = "behavioral-oracle"
@@ -377,7 +377,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_exports_x64.exe"
-source_file = "exports.cpp"
+source_file = "d3d9_exports.cpp"
 function = "export_smoke_and_perf_noops"
 source = "wine/dlls/d3d9/d3d9.spec,wine/dlls/d3d9/d3d9_main.c"
 source_kind = "behavioral-oracle"
@@ -401,7 +401,7 @@ summary = "Focused x64 app-local export runtime evidence passes; builtin and x86
 
 [[case]]
 executable = "d3d9_auxiliary_x64.exe"
-source_file = "auxiliary.cpp"
+source_file = "d3d9_auxiliary.cpp"
 function = "shader_validator_stub_behavior"
 source = "wine/dlls/d3d9/tests/device.c:test_shader_validator"
 source_kind = "behavioral-oracle"
@@ -425,7 +425,7 @@ summary = "Focused x64 app-local auxiliary runtime evidence passes; builtin and 
 
 [[case]]
 executable = "d3d9_auxiliary_x64.exe"
-source_file = "auxiliary.cpp"
+source_file = "d3d9_auxiliary.cpp"
 function = "d3d9on12_loader_safe_failure"
 source = "wine/dlls/d3d9/tests/device.c:test_d3d9on12"
 source_kind = "behavioral-oracle"
@@ -442,7 +442,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_queries_x64.exe"
-source_file = "d3d9_queries_x64.cpp"
+source_file = "d3d9_queries.cpp"
 function = "query_support_probe"
 source = "wine/dlls/d3d9/tests/device.c:test_query_support"
 source_kind = "behavioral-oracle"
@@ -459,7 +459,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_queries_x64.exe"
-source_file = "d3d9_queries_x64.cpp"
+source_file = "d3d9_queries.cpp"
 function = "occlusion_query_public_sizes"
 source = "wine/dlls/d3d9/tests/device.c:test_occlusion_query"
 source_kind = "behavioral-oracle"
@@ -476,7 +476,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_queries_x64.exe"
-source_file = "d3d9_queries_x64.cpp"
+source_file = "d3d9_queries.cpp"
 function = "timestamp_query_public_sizes"
 source = "wine/dlls/d3d9/tests/device.c:test_timestamp_query"
 source_kind = "behavioral-oracle"
@@ -493,7 +493,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_resources_x64.exe"
-source_file = "d3d9_resources_x64.cpp"
+source_file = "d3d9_resources.cpp"
 function = "resource_container_level_desc_and_locks"
 source = "wine/dlls/d3d9/tests/device.c:test_surface_get_container,test_volume_get_container,test_surface_blocks,test_volume_locking"
 source_kind = "behavioral-oracle"
@@ -510,7 +510,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_resources_x64.exe"
-source_file = "d3d9_resources_x64.cpp"
+source_file = "d3d9_resources.cpp"
 function = "resource_getdc_lod_autogen_mipmap"
 source = "wine/dlls/d3d9/tests/device.c:test_lod,test_getdc,test_mipmap_gen,test_filter,test_format_unknown"
 source_kind = "behavioral-oracle"
@@ -527,7 +527,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_stateblock_x64.exe"
-source_file = "d3d9_stateblock_matrix_x64.cpp"
+source_file = "d3d9_stateblock_matrix.cpp"
 function = "stateblock_state_management_matrix"
 source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
 source_kind = "behavioral-oracle"
@@ -544,7 +544,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_reset_lost_x64.exe"
-source_file = "d3d9_reset_lost_x64.cpp"
+source_file = "d3d9_reset_lost.cpp"
 function = "reset_lost_default_pool_rebinding"
 source = "wine/dlls/d3d9/tests/device.c:reset tests,wine/dlls/d3d9/tests/d3d9ex.c:reset tests"
 source_kind = "behavioral-oracle"
@@ -561,7 +561,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_window_cursor_x64.exe"
-source_file = "d3d9_window_cursor_x64.cpp"
+source_file = "d3d9_window_cursor.cpp"
 function = "window_cursor_ownership"
 source = "wine/dlls/d3d9/tests/device.c:test_cursor,test_cursor_pos,test_cursor_clipping,test_wndproc,test_wndproc_windowed,test_window_style,test_device_window_reset,test_destroyed_window"
 source_kind = "behavioral-oracle"
@@ -578,7 +578,7 @@ status = "scaffolded"
 
 [[case]]
 executable = "d3d9_device_misc_x64.exe"
-source_file = "d3d9_device_misc_x64.cpp"
+source_file = "d3d9_device_misc.cpp"
 function = "device_utility_creation_flags"
 source = "wine/dlls/d3d9/tests/device.c:creation-flag and utility tests"
 source_kind = "behavioral-oracle"

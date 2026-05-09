@@ -23,7 +23,7 @@ d3d9_conformance = executable(
 
 d3d9_device_lifetime = executable(
   'dxmt9-d3d9-device-lifetime',
-  'device_lifetime.cpp',
+  'd3d9_device_lifetime.cpp',
   dependencies: [
     cpp.find_library('user32', required: true),
     cpp.find_library('d3d9', required: true),
@@ -33,19 +33,19 @@ d3d9_device_lifetime = executable(
 
 d3d9_exports = executable(
   'd3d9_exports_x64',
-  'exports.cpp',
+  'd3d9_exports.cpp',
   install: false,
 )
 
 d3d9_auxiliary = executable(
   'd3d9_auxiliary_x64',
-  'auxiliary.cpp',
+  'd3d9_auxiliary.cpp',
   install: false,
 )
 
 d3d9_queries = executable(
   'd3d9_queries_x64',
-  'd3d9_queries_x64.cpp',
+  'd3d9_queries.cpp',
   dependencies: [
     cpp.find_library('user32', required: true),
     cpp.find_library('d3d9', required: true),
@@ -55,7 +55,7 @@ d3d9_queries = executable(
 
 d3d9_resources = executable(
   'd3d9_resources_x64',
-  'd3d9_resources_x64.cpp',
+  'd3d9_resources.cpp',
   dependencies: [
     cpp.find_library('user32', required: true),
     cpp.find_library('gdi32', required: true),
@@ -66,7 +66,7 @@ d3d9_resources = executable(
 
 d3d9_device_misc = executable(
   'd3d9_device_misc_x64',
-  'd3d9_device_misc_x64.cpp',
+  'd3d9_device_misc.cpp',
   dependencies: [
     cpp.find_library('user32', required: true),
     cpp.find_library('d3d9', required: true),
@@ -76,7 +76,7 @@ d3d9_device_misc = executable(
 
 d3d9_stateblock = executable(
   'd3d9_stateblock_x64',
-  'd3d9_stateblock_matrix_x64.cpp',
+  'd3d9_stateblock_matrix.cpp',
   dependencies: [
     cpp.find_library('user32', required: true),
     cpp.find_library('d3d9', required: true),
@@ -86,7 +86,7 @@ d3d9_stateblock = executable(
 
 d3d9_reset_lost = executable(
   'd3d9_reset_lost_x64',
-  'd3d9_reset_lost_x64.cpp',
+  'd3d9_reset_lost.cpp',
   dependencies: [
     cpp.find_library('user32', required: true),
     cpp.find_library('d3d9', required: true),
@@ -96,7 +96,7 @@ d3d9_reset_lost = executable(
 
 d3d9_window_cursor = executable(
   'd3d9_window_cursor_x64',
-  'd3d9_window_cursor_x64.cpp',
+  'd3d9_window_cursor.cpp',
   dependencies: [
     cpp.find_library('user32', required: true),
     cpp.find_library('d3d9', required: true),

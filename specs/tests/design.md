@@ -678,7 +678,7 @@ because these tests are PE executables, not `.shader_test` files.
 ```toml
 [[case]]
 executable = "d3d9_exports_x64.exe"
-source_file = "exports.cpp"
+source_file = "d3d9_exports.cpp"
 function   = "export_smoke_and_perf_noops"
 source     = "wine/dlls/d3d9/d3d9.spec,wine/dlls/d3d9/d3d9_main.c"
 source_kind = "behavioral-oracle"
@@ -827,16 +827,16 @@ tests/
 │   └── d3d9/
 │       ├── MANIFEST.toml
 │       ├── meson.build
-│       ├── exports.cpp
-│       ├── auxiliary.cpp
-│       ├── device_lifetime.cpp
+│       ├── d3d9_exports.cpp
+│       ├── d3d9_auxiliary.cpp
+│       ├── d3d9_device_lifetime.cpp
 │       ├── d3d9_conformance.c
-│       ├── d3d9_device_misc_x64.cpp
-│       ├── d3d9_queries_x64.cpp
-│       ├── d3d9_reset_lost_x64.cpp
-│       ├── d3d9_resources_x64.cpp
-│       ├── d3d9_stateblock_matrix_x64.cpp
-│       └── d3d9_window_cursor_x64.cpp
+│       ├── d3d9_device_misc.cpp
+│       ├── d3d9_queries.cpp
+│       ├── d3d9_reset_lost.cpp
+│       ├── d3d9_resources.cpp
+│       ├── d3d9_stateblock_matrix.cpp
+│       └── d3d9_window_cursor.cpp
 ├── integration/
 │   └── wsi_present/
 │       └── main.cpp
