@@ -2,6 +2,7 @@
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_metal_labels.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_shader_sources.hpp"
@@ -205,6 +206,16 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
     WMT::Error err{};
     perf::countPipelineBuild(perf::PipelineKind::Fill);
     auto pso = device.newRenderPipelineState(info, err);
+    if (pso) {
+      const unsigned colorPacked =
+          (static_cast<unsigned>(std::clamp(color.r, 0.0f, 1.0f) * 255) << 24) |
+          (static_cast<unsigned>(std::clamp(color.g, 0.0f, 1.0f) * 255) << 16) |
+          (static_cast<unsigned>(std::clamp(color.b, 0.0f, 1.0f) * 255) <<  8) |
+          (static_cast<unsigned>(std::clamp(color.a, 0.0f, 1.0f) * 255));
+      pso.setLabel(labels::makeLabelStringFmt("pso_fill_fmt%u_rgba0x%08x",
+                                                static_cast<unsigned>(pixelFormat),
+                                                colorPacked));
+    }
     return pso;
   });
   auto shared = future.share();
@@ -252,6 +263,12 @@ Cache::getOrBuildStretchPipeline(WMT::Reference<WMT::Device> device,
     WMT::Error err{};
     perf::countPipelineBuild(perf::PipelineKind::Stretch);
     auto pso = device.newRenderPipelineState(info, err);
+    if (pso) {
+      pso.setLabel(labels::makeLabelStringFmt(
+          "pso_stretch_fmt%u_msaa%u",
+          static_cast<unsigned>(pixelFormat),
+          static_cast<unsigned>(sampleCountVal)));
+    }
     return pso;
   });
   auto shared = future.share();
@@ -313,6 +330,13 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
     WMT::Error err{};
     perf::countPipelineBuild(perf::PipelineKind::Draw);
     auto pso = device.newRenderPipelineState(info, err);
+    if (pso) {
+      pso.setLabel(labels::makeLabelStringFmt(
+          "pso_draw_h0x%llx_msaa%u_color0fmt%u",
+          static_cast<unsigned long long>(key.hash),
+          static_cast<unsigned>(std::max(1u, key.sampleCount)),
+          static_cast<unsigned>(key.colorFormats[0])));
+    }
     return pso;
   });
   auto shared = future.share();
@@ -346,6 +370,10 @@ buildPresentPipeline(WMT::Reference<WMT::Device> device, bool opaqueAlpha,
     WMT::Error err{};
     perf::countPipelineBuild(perf::PipelineKind::Present);
     auto pso = device.newRenderPipelineState(info, err);
+    if (pso) {
+      pso.setLabel(labels::makeLabelStringFmt("pso_present_%s",
+                                                opaqueAlpha ? "opaque" : "alpha"));
+    }
     return pso;
   });
   return future.share();

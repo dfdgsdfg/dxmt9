@@ -3,6 +3,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_metal_labels.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_queue.hpp"
 
@@ -182,7 +183,14 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
     }
     record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
   }
-  return bufferArena_.insert(std::move(record));
+  const auto handle = bufferArena_.insert(std::move(record));
+  if (auto* stored = bufferArena_.find(handle.value); stored && stored->buffer) {
+    stored->buffer.setLabel(labels::makeLabelStringFmt(
+        "pool_buf_h0x%llx_len%llu",
+        static_cast<unsigned long long>(handle.value),
+        static_cast<unsigned long long>(desc.size)));
+  }
+  return handle;
 }
 
 core::TextureHandle Pool::createTexture(WMT::Device device,
@@ -206,7 +214,17 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     record.isPrivate = (info.options == WMTResourceStorageModePrivate);
   }
   const auto handle = textureArena_.insert(std::move(record));
-  const auto* stored = textureArena_.find(handle.value);
+  auto* stored = textureArena_.find(handle.value);
+  if (stored && stored->texture) {
+    stored->texture.setLabel(labels::makeLabelStringFmt(
+        "pool_tex_h0x%llx_fmt%u_%ux%ux%u_l%u",
+        static_cast<unsigned long long>(handle.value),
+        static_cast<unsigned>(desc.format),
+        std::max(1u, desc.width),
+        std::max(1u, desc.height),
+        std::max(1u, desc.depth),
+        std::max(1u, desc.levels)));
+  }
   traceTextureCreate(handle, desc, stored && stored->texture, stored ? stored->isPrivate : false);
   return handle;
 }
@@ -241,7 +259,26 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
     }
   }
   const auto handle = surfaceArena_.insert(std::move(record));
-  const auto* stored = surfaceArena_.find(handle.value);
+  auto* stored = surfaceArena_.find(handle.value);
+  if (stored) {
+    if (stored->texture) {
+      stored->texture.setLabel(labels::makeLabelStringFmt(
+          "pool_rt_h0x%llx_fmt%u_%ux%u_msaa%u",
+          static_cast<unsigned long long>(handle.value),
+          static_cast<unsigned>(desc.format),
+          std::max(1u, desc.width),
+          std::max(1u, desc.height),
+          std::max(1u, core::sampleCount(desc.multiSampleType))));
+    }
+    if (stored->resolveTexture) {
+      stored->resolveTexture.setLabel(labels::makeLabelStringFmt(
+          "pool_rt_resolve_h0x%llx_fmt%u_%ux%u",
+          static_cast<unsigned long long>(handle.value),
+          static_cast<unsigned>(desc.format),
+          std::max(1u, desc.width),
+          std::max(1u, desc.height)));
+    }
+  }
   traceSurfaceCreate(handle, desc, stored && stored->texture);
   return handle;
 }
@@ -395,6 +432,10 @@ Pool::stageTextureUpload(WMT::Device device,
   if (!stagingTexture) {
     return std::nullopt;
   }
+  WMT::Texture{stagingTexture.handle}.setLabel(labels::makeLabelStringFmt(
+      "pool_staging_h0x%llx_l%u_%ux%u",
+      static_cast<unsigned long long>(record->texture.handle),
+      mipLevel, mipWidth, mipHeight));
   {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, 1};
@@ -455,6 +496,10 @@ void Pool::uploadTextureLevel(WMT::Device device,
   if (!stagingTexture) {
     return;
   }
+  WMT::Texture{stagingTexture.handle}.setLabel(labels::makeLabelStringFmt(
+      "pool_staging_h0x%llx_l%u_%ux%u",
+      static_cast<unsigned long long>(record->texture.handle),
+      mipLevel, mipWidth, mipHeight));
   {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, 1};
