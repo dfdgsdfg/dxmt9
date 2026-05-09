@@ -32,3 +32,10 @@ option(
   value: true,
   description: 'Compile bridge dispatch with perf-counter instrumentation. Disable for release-tuned builds.',
 )
+
+option(
+  'dxmt9_per_draw_alloc_guard',
+  type: 'feature',
+  value: 'auto',
+  description: 'Compile the per-draw heap allocation guard. auto = enabled in buildtype=debug only. Runtime override via DXMT_DEBUG_NO_PER_DRAW_ALLOC env (set to "0" to disable).',
+)

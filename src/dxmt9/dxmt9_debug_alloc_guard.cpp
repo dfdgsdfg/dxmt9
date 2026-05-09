@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <strings.h>
 
 namespace dxmt9::debug {
 
@@ -17,14 +18,20 @@ namespace {
 thread_local std::uint64_t g_thread_alloc_count = 0;
 
 // Cached arming flag from DXMT_DEBUG_NO_PER_DRAW_ALLOC env var. Computed once
-// per process. We use a plain int with std::call_once-equivalent guard via a
-// function-local static.
+// per process. T18 flipped the semantics: when this TU is compiled in (i.e.
+// DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 at build time), the guard is ON by default.
+// The env var becomes an opt-out toggle: setting DXMT_DEBUG_NO_PER_DRAW_ALLOC
+// to "0" or "false" disables the runtime assert without recompiling. Any
+// other value (or env var absent) leaves the assert armed.
 bool readEnvArmFlag() noexcept {
   const char* env = std::getenv("DXMT_DEBUG_NO_PER_DRAW_ALLOC");
   if (env == nullptr || env[0] == '\0') {
+    return true;
+  }
+  if (std::strcmp(env, "0") == 0 || strcasecmp(env, "false") == 0) {
     return false;
   }
-  return std::strcmp(env, "0") != 0;
+  return true;
 }
 
 }  // namespace

@@ -6,17 +6,18 @@
 //
 // Two compile/runtime modes:
 //
-//   1. Default (DXMT_DEBUG_NO_PER_DRAW_ALLOC undefined OR ==0 in env): the
+//   1. Release / debugoptimized (DXMT_DEBUG_NO_PER_DRAW_ALLOC undefined): the
 //      ScopedNoHeapAllocGuard is an empty inline RAII type with no body. The
 //      DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE macro expands to nothing; zero release
 //      overhead.
 //
-//   2. Opt-in debug build with -DDXMT_DEBUG_NO_PER_DRAW_ALLOC=1: a thread-local
-//      counter tracks calls to global operator new / delete. The guard
-//      snapshots the counter at scope entry and DXMT_ASSERTs equality at scope
-//      exit, but only when the env flag DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is also
-//      set. The compile flag wires the override; the env flag arms the assert
-//      so production debug builds do not abort if the flag is left off.
+//   2. Debug build with -DDXMT_DEBUG_NO_PER_DRAW_ALLOC=1 (T18: auto-derived
+//      from buildtype=debug, or forced via -Ddxmt9_per_draw_alloc_guard=enabled):
+//      a thread-local counter tracks calls to global operator new / delete.
+//      The guard snapshots the counter at scope entry and DXMT_ASSERTs equality
+//      at scope exit. The runtime assert is ARMED BY DEFAULT when compiled in;
+//      set the env var DXMT_DEBUG_NO_PER_DRAW_ALLOC=0 (or "false") to opt out
+//      without recompiling. Any other value (or unset) keeps it armed.
 //
 // Thread-safety: the counter is `thread_local`; only the local thread reads
 // or mutates it, so no atomics are required.
@@ -33,8 +34,10 @@ namespace dxmt9::debug {
 // since the thread started. Defined in dxmt9_debug_alloc_guard.cpp.
 std::uint64_t threadHeapAllocCount() noexcept;
 
-// Returns true when the env flag DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set; the
-// guard's destructor only asserts when this is true.
+// Returns true when the runtime guard is armed. T18 flipped the semantics:
+// armed by default whenever this TU is compiled in; the env var
+// DXMT_DEBUG_NO_PER_DRAW_ALLOC=0 (or "false") is the opt-out path. The guard's
+// destructor only asserts when this returns true.
 bool guardArmedFromEnv() noexcept;
 
 class ScopedNoHeapAllocGuard {
