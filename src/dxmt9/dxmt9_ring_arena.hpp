@@ -10,6 +10,7 @@
 // pulling in the backend TU.
 
 #include "dxmt9/assert.hpp"
+#include "dxmt9_perf_counters.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -24,7 +25,9 @@ using u64 = std::uint64_t;
 
 class RingArena {
  public:
-  explicit RingArena(std::size_t capacity = 1 << 20) : storage_(capacity) {}
+  explicit RingArena(std::size_t capacity = 1 << 20,
+                     perf::RingArenaKind kind = perf::RingArenaKind::Unknown)
+      : storage_(capacity), kind_(kind) {}
 
   void reclaim(u64 completedSeqId) {
     while (!allocations_.empty() && allocations_.front().seqId <= completedSeqId) {
@@ -42,6 +45,8 @@ class RingArena {
     }
     const std::size_t alignedSize = alignUp(size, alignment);
     if (alignedSize > storage_.size()) {
+      // R-BACK-2.27: oversize request forces permanent heap fallback.
+      perf::countRingArenaHeapFallback(kind_, alignedSize);
       return nullptr;
     }
 
@@ -67,6 +72,8 @@ class RingArena {
       if (!canPlace(offset)) {
         // TLA+: RingSafety. Exhaustion is recoverable: callers that need
         // transient upload memory fall back to one-shot Metal buffers.
+        // R-BACK-2.27: count the eviction so the gauge tracks pressure.
+        perf::countRingArenaHeapFallback(kind_, alignedSize);
         return nullptr;
       }
     }
@@ -98,15 +105,18 @@ class RingArena {
   std::vector<std::byte> storage_;
   std::size_t cursor_ = 0;
   std::deque<Allocation> allocations_;
+  perf::RingArenaKind kind_ = perf::RingArenaKind::Unknown;
 };
 
 // Per-backend set of ring arenas. All four are reclaimed in lockstep on
-// the finish path keyed by completedSeqId.
+// the finish path keyed by completedSeqId. Each is tagged with its
+// perf::RingArenaKind so heap-fallback gauges split per arena
+// (R-BACK-2.27 — argbuf vs lambda vs staging vs copyTemp).
 struct FrameAllocators {
-  RingArena argbuf{1 << 20};
-  RingArena lambdaStore{1 << 18};
-  RingArena staging{1 << 20};
-  RingArena copyTemp{1 << 20};
+  RingArena argbuf{1 << 20, perf::RingArenaKind::Argbuf};
+  RingArena lambdaStore{1 << 18, perf::RingArenaKind::LambdaStore};
+  RingArena staging{1 << 20, perf::RingArenaKind::Staging};
+  RingArena copyTemp{1 << 20, perf::RingArenaKind::CopyTemp};
 
   void reclaim(u64 completedSeqId) {
     argbuf.reclaim(completedSeqId);

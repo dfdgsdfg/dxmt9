@@ -72,6 +72,15 @@ class PercentileRing {
 };
 
 struct Counters {
+  // R-BACK-2.10 / 2.27 admit + ring heap fallback gauges.
+  std::atomic<std::uint64_t> chunkAdmit{0};
+  std::atomic<std::uint64_t> chunkReject{0};
+  std::atomic<std::uint64_t> ringArenaHeapFallbackCount{0};
+  std::atomic<std::uint64_t> ringArenaHeapFallbackBytes{0};
+  std::atomic<std::uint64_t> ringArenaHeapFallbackCountArgbuf{0};
+  std::atomic<std::uint64_t> ringArenaHeapFallbackCountLambda{0};
+  std::atomic<std::uint64_t> ringArenaHeapFallbackCountStaging{0};
+  std::atomic<std::uint64_t> ringArenaHeapFallbackCountCopyTemp{0};
   std::atomic<std::uint64_t> submitDraw{0};
   std::atomic<std::uint64_t> submitClear{0};
   std::atomic<std::uint64_t> submitStretch{0};
@@ -455,7 +464,11 @@ void report() {
   const Counters& c = counters();
   std::fprintf(
       stderr,
-      "[dxmt9-perf] submit_draw=%llu submit_clear=%llu submit_stretch=%llu "
+      "[dxmt9-perf] chunk_admit=%llu chunk_reject=%llu "
+      "ring_arena_heap_fallback_count=%llu ring_arena_heap_fallback_bytes=%llu "
+      "ring_arena_heap_fallback_argbuf=%llu ring_arena_heap_fallback_lambda=%llu "
+      "ring_arena_heap_fallback_staging=%llu ring_arena_heap_fallback_copytemp=%llu "
+      "submit_draw=%llu submit_clear=%llu submit_stretch=%llu "
       "stretch_copy=%llu stretch_pass=%llu stretch_full=%llu "
       "submit_present=%llu submit_flush=%llu command_buffers=%llu "
       "metal_buffers=%llu metal_buffer_bytes=%llu pipeline_builds=%llu "
@@ -577,6 +590,14 @@ void report() {
       "present_preacquire_wait_p50_ms=%.3f present_preacquire_wait_p95_ms=%.3f present_preacquire_wait_p99_ms=%.3f "
       "present_set_props_waits=%llu present_set_props_wait_ms=%.3f "
       "present_set_props_wait_p50_ms=%.3f present_set_props_wait_p95_ms=%.3f present_set_props_wait_p99_ms=%.3f\n",
+      static_cast<unsigned long long>(load(c.chunkAdmit)),
+      static_cast<unsigned long long>(load(c.chunkReject)),
+      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCount)),
+      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackBytes)),
+      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCountArgbuf)),
+      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCountLambda)),
+      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCountStaging)),
+      static_cast<unsigned long long>(load(c.ringArenaHeapFallbackCountCopyTemp)),
       static_cast<unsigned long long>(load(c.submitDraw)),
       static_cast<unsigned long long>(load(c.submitClear)),
       static_cast<unsigned long long>(load(c.submitStretch)),
@@ -953,6 +974,36 @@ bool enabled() {
 
 void countSubmitDraw() {
   add(counters().submitDraw);
+}
+
+void countChunkAdmit() {
+  add(counters().chunkAdmit);
+}
+
+void countChunkReject() {
+  add(counters().chunkReject);
+}
+
+void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes) {
+  if (!enabled()) return;
+  add(counters().ringArenaHeapFallbackCount);
+  add(counters().ringArenaHeapFallbackBytes, bytes);
+  switch (kind) {
+    case RingArenaKind::Argbuf:
+      add(counters().ringArenaHeapFallbackCountArgbuf);
+      break;
+    case RingArenaKind::LambdaStore:
+      add(counters().ringArenaHeapFallbackCountLambda);
+      break;
+    case RingArenaKind::Staging:
+      add(counters().ringArenaHeapFallbackCountStaging);
+      break;
+    case RingArenaKind::CopyTemp:
+      add(counters().ringArenaHeapFallbackCountCopyTemp);
+      break;
+    case RingArenaKind::Unknown:
+      break;
+  }
 }
 
 void countSubmitClear() {

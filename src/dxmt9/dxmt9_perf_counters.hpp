@@ -27,6 +27,24 @@ enum class EncoderSplitReason : std::uint8_t {
   PresentAcquire,
 };
 
+// Frame-allocator arena identity for ring_arena_heap_fallback_*
+// counters (R-BACK-2.27). Aggregate (`Unknown`) is reported when the
+// caller does not have access to the FrameAllocators tag.
+enum class RingArenaKind : std::uint8_t {
+  Unknown = 0,
+  Argbuf,
+  LambdaStore,
+  Staging,
+  CopyTemp,
+};
+
+// R-BACK-2.10 / 2.27: chunk admit/reject + ring arena heap fallback
+// counters. Aggregate values surface bridge backpressure and ring
+// exhaustion that R-BACK-2.6/2.13 invariants assume bounded.
+void countChunkAdmit();
+void countChunkReject();
+void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes);
+
 void countSubmitDraw();
 void countSubmitClear();
 void countSubmitStretch();
