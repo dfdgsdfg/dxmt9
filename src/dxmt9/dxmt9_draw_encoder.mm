@@ -637,11 +637,26 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
         break;
     }
   }
-  // R-BACK-15.7 end-of-chunk fall-through: depth handle never
-  // reappeared in the rest of the chunk. If no Present was seen the
-  // depth is dead within this chunk and R-BACK-15.9 (no cross-chunk
-  // look-ahead) leaves no future use to consider — DontCare-store is
-  // safe. If a Present was seen, fall back to defensive Store.
+  // R-BACK-15.7 end-of-chunk fall-through. Default keeps the defensive
+  // sawPresent guard: a Present in this chunk implies the frame may
+  // persist depth state across the chunk boundary (cross-frame shadow
+  // map / depth-test reuse), so we Store. Setting
+  // DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1 drops the guard so the look-ahead
+  // returns DontCare whenever the depth handle does not reappear in
+  // the chunk, even when a Present is present. Empirically this is the
+  // SFIV win path (Present-per-chunk pattern zeroes the conservative
+  // form). Use only on workloads known not to read depth across
+  // frames; depth-as-shadow-map within the same chunk is still
+  // protected by the texture-sample scan above.
+  static const bool aggressive = []() {
+    if (const char* v = std::getenv("DXMT9_AGGRESSIVE_DEPTH_DONTCARE")) {
+      return v[0] != '\0' && v[0] != '0';
+    }
+    return false;
+  }();
+  if (aggressive) {
+    return true;
+  }
   return !sawPresent;
 }
 
