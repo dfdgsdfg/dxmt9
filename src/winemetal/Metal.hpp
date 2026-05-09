@@ -270,6 +270,11 @@ public:
 
 class Texture : public Resource {
 public:
+  void
+  setLabel(String label) {
+    MTLTexture_setLabel(handle, label);
+  }
+
   Reference<Texture>
   newTextureView(
       WMTPixelFormat format, WMTTextureType texture_type, uint16_t level_start, uint16_t level_count,
@@ -329,6 +334,11 @@ public:
 
 class Buffer : public Resource {
 public:
+  void
+  setLabel(String label) {
+    MTLBuffer_setLabel(handle, label);
+  }
+
   Reference<Texture>
   newTexture(WMTTextureInfo &info, uint64_t offset, uint64_t bytes_per_row) {
     return Reference<Texture>(MTLBuffer_newTexture(handle, &info, offset, bytes_per_row));
@@ -366,14 +376,34 @@ public:
   setLabel(String label) {
     MTLCommandEncoder_setLabel(handle, label);
   }
+
+  // M2 — debug-group push/pop. Use DebugGroupScope (below) for matched
+  // RAII at logical render-pass / blit / draw boundaries.
+  void
+  pushDebugGroup(String name) {
+    MTLCommandEncoder_pushDebugGroup(handle, name);
+  }
+
+  void
+  popDebugGroup() {
+    MTLCommandEncoder_popDebugGroup(handle);
+  }
 };
 
 class ComputePipelineState : public Object {
 public:
+  void
+  setLabel(String label) {
+    MTLComputePipelineState_setLabel(handle, label);
+  }
 };
 
 class RenderPipelineState : public Object {
 public:
+  void
+  setLabel(String label) {
+    MTLRenderPipelineState_setLabel(handle, label);
+  }
 };
 
 class RenderCommandEncoder : public CommandEncoder {
@@ -832,6 +862,11 @@ public:
 class CommandBuffer : public Object {
 public:
   void
+  setLabel(String label) {
+    MTLCommandBuffer_setLabel(handle, label);
+  }
+
+  void
   commit() {
     return MTLCommandBuffer_commit(handle);
   }
@@ -854,6 +889,11 @@ public:
   LogContainer
   logs() {
     return LogContainer{MTLCommandBuffer_logs(handle)};
+  }
+
+  uint64_t
+  gpuStartTime() {
+    return MTLCommandBuffer_property(handle, WMTCommandBufferPropertyGPUStartTime);
   }
 
   uint64_t
@@ -917,6 +957,11 @@ public:
 
 class CommandQueue : public Object {
 public:
+  void
+  setLabel(String label) {
+    MTLCommandQueue_setLabel(handle, label);
+  }
+
   CommandBuffer
   commandBuffer() {
     return CommandBuffer{MTLCommandQueue_commandBuffer(handle)};
@@ -1092,6 +1137,11 @@ public:
   bool
   supportsFamily(WMTGPUFamily gpu_family) {
     return MTLDevice_supportsFamily(handle, gpu_family);
+  }
+
+  bool
+  supportsCounterSampling(WMTCounterSamplingPoint point) {
+    return MTLDevice_supportsCounterSampling(handle, point);
   }
 
   bool

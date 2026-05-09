@@ -1703,6 +1703,41 @@ WINEMETAL_API void ReleaseMetalView(obj_handle_t view);
 
 WINEMETAL_API void MTLCommandEncoder_setLabel(obj_handle_t encoder, obj_handle_t label);
 
+// M1 — additional setLabel entry points so frame captures show resource
+// names instead of anonymous handles. Each accepts a borrowed NSString*
+// (caller-owned) and is a no-op on null arguments. NOTE: MTLDepthStencilState
+// does not expose a settable `.label` property — its label is set on the
+// descriptor before creation, so there is no MTLDepthStencilState_setLabel
+// here. Pipeline-state setLabel (Render/Compute) sets the label after
+// creation via the corresponding selector, which is supported by both
+// MTLRenderPipelineState and MTLComputePipelineState protocols.
+WINEMETAL_API void MTLBuffer_setLabel(obj_handle_t buffer, obj_handle_t label);
+WINEMETAL_API void MTLTexture_setLabel(obj_handle_t texture, obj_handle_t label);
+WINEMETAL_API void MTLCommandQueue_setLabel(obj_handle_t queue, obj_handle_t label);
+WINEMETAL_API void MTLCommandBuffer_setLabel(obj_handle_t cmdbuf, obj_handle_t label);
+WINEMETAL_API void MTLRenderPipelineState_setLabel(obj_handle_t pso, obj_handle_t label);
+WINEMETAL_API void MTLComputePipelineState_setLabel(obj_handle_t pso, obj_handle_t label);
+
+// M2 — pushDebugGroup / popDebugGroup. Encoder-side debug-group markers
+// give Metal frame captures legible logical boundaries (render passes,
+// blits, draws, present). Cost is one ObjC selector dispatch per call.
+WINEMETAL_API void MTLCommandEncoder_pushDebugGroup(obj_handle_t encoder, obj_handle_t name);
+WINEMETAL_API void MTLCommandEncoder_popDebugGroup(obj_handle_t encoder);
+
+// M6 — counter-sampling capability discovery. Mirrors Apple's
+// MTLCounterSamplingPoint. supportsCounterSampling(point) returns true if
+// the device can sample GPU counters at the given pipeline boundary,
+// which gates the Metal-backed perf-counter integrations.
+enum WMTCounterSamplingPoint : uint64_t {
+  WMTCounterSamplingPointAtStageBoundary = 0,
+  WMTCounterSamplingPointAtDrawBoundary = 1,
+  WMTCounterSamplingPointAtBlitBoundary = 2,
+  WMTCounterSamplingPointAtDispatchBoundary = 3,
+  WMTCounterSamplingPointAtTileDispatchBoundary = 4,
+};
+
+WINEMETAL_API bool MTLDevice_supportsCounterSampling(obj_handle_t device, enum WMTCounterSamplingPoint point);
+
 WINEMETAL_API void MTLDevice_setShouldMaximizeConcurrentCompilation(obj_handle_t device, bool value);
 
 WINEMETAL_API obj_handle_t MTLCommandBuffer_error(obj_handle_t cmdbuf);

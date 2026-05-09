@@ -37,6 +37,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_perf_counters.cpp',
   'dxmt9_presenter.cpp',
   'dxmt9_presenter_macdrv.cpp',
+  'dxmt9_signposts.cpp',
   'dxmt9_queue.cpp',
   'dxmt9_queue_trace.cpp',
   'dxmt9_uniform_dirty.cpp',

@@ -19,12 +19,15 @@
 #include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
+#include "dxmt9_signposts.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -115,6 +118,52 @@ using i32 = std::int32_t;
 using f32 = float;
 
 namespace {
+
+// M1/M2 — printf-style label/group-name builder. Returns a non-owning
+// WMT::String view backed by an autoreleased NSString. Lifetime is safe
+// because the receiving setLabel:/pushDebugGroup: selector retains
+// immediately and encodeChunk runs inside an @autoreleasepool.
+template <std::size_t Cap = 96>
+WMT::String makeLabelStringFmt(const char* fmt, ...) {
+  char buf[Cap];
+  va_list args;
+  va_start(args, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  return WMT::String::string(buf, WMTUTF8StringEncoding);
+}
+
+// M2 — RAII debug-group helper. Pairs a pushDebugGroup with the
+// matching popDebugGroup on scope exit, even on early-return paths.
+// Holds a non-owning view of the encoder; the caller retains the
+// encoder's lifetime through Reference<>.
+class DebugGroupScope {
+ public:
+  DebugGroupScope(WMT::CommandEncoder encoder, WMT::String name)
+      : encoder_(encoder) {
+    if (encoder_ && name) {
+      encoder_.pushDebugGroup(name);
+      active_ = true;
+    }
+  }
+
+  ~DebugGroupScope() {
+    if (active_) {
+      encoder_.popDebugGroup();
+    }
+  }
+
+  // Non-copyable, non-movable — RAII pair must stay paired with one
+  // scope entry.
+  DebugGroupScope(const DebugGroupScope&) = delete;
+  DebugGroupScope& operator=(const DebugGroupScope&) = delete;
+  DebugGroupScope(DebugGroupScope&&) = delete;
+  DebugGroupScope& operator=(DebugGroupScope&&) = delete;
+
+ private:
+  WMT::CommandEncoder encoder_{};
+  bool active_ = false;
+};
 
 class PerfScope {
  public:
@@ -780,6 +829,30 @@ bool encodeDraw(EncodeContext& ctx,
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("encodeDraw");
   PerfScope scope(perf::countEncodeDrawCpuTime);
+  // M3 — per-draw Instruments interval. os_signpost_id_generate gives each
+  // call a unique paired id so overlapping work surfaces correctly in
+  // Instruments. No-op when no consumer is recording (~5 ns).
+  os_log_t signpostLog = dxmt9::signposts::log();
+  os_signpost_id_t drawSignpost = os_signpost_id_generate(signpostLog);
+  os_signpost_interval_begin(signpostLog, drawSignpost, "draw",
+                             "seq=%llu",
+                             static_cast<unsigned long long>(seqId));
+  struct DrawSignpostScope {
+    os_log_t log;
+    os_signpost_id_t id;
+    ~DrawSignpostScope() {
+      os_signpost_interval_end(log, id, "draw");
+    }
+  } drawSignpostScope{signpostLog, drawSignpost};
+  // M2: per-draw debug group, paired via DebugGroupScope's dtor on
+  // every return path (including early-return failures below).
+  // primitiveCount may be zero pre-paramOverride; that's OK — captures
+  // see whatever is encoded.
+  const auto drawDebugPrimCount = paramOverride ? paramOverride->primitiveCount : 0u;
+  DebugGroupScope drawDebugGroup(
+      WMT::CommandEncoder{encoder.handle},
+      makeLabelStringFmt("Draw[seq=%llu,prim=%u]",
+          static_cast<unsigned long long>(seqId), drawDebugPrimCount));
   (void)commandBuffer;
   const auto& hot = *drawState.hot;
   const auto& shader = drawState.shaderContext();
@@ -850,6 +923,19 @@ bool encodeDraw(EncodeContext& ctx,
     if (depthState) {
       encoder.setDepthStencilState(depthState);
       countDepthStateBind();
+    }
+    // M1: label the pipeline with the shader-variant hash so frame
+    // captures show "pso_h<hash>" instead of an anonymous pipeline.
+    // The MTL setLabel: API is idempotent — no harm if the same PSO
+    // is bound across frames; we keep the most recent label. Skipping
+    // when hash == 0 (no shader context) is intentional.
+    {
+      const auto variantHash = shaderVariantHashForDraw(drawState);
+      if (variantHash != 0) {
+        WMT::RenderPipelineState psoView{pipeline.handle};
+        psoView.setLabel(makeLabelStringFmt("pso_h%016llx",
+            static_cast<unsigned long long>(variantHash)));
+      }
     }
     encoder.setRenderPipelineState(pipeline);
     countPipelineBind();
@@ -1808,6 +1894,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       // TLA+: EncoderLifecycle / EndEncoder(Render)
       DXMT_ASSERT(hasActiveRender);
       DXMT_ASSERT(!activeBlitEncoder);
+      // M2: pop the render-pass debug group pushed in startRenderPass.
+      // Must happen before endEncoding — the encoder rejects further
+      // commands once endEncoding fires.
+      activeRenderEncoder.popDebugGroup();
       activeRenderEncoder.endEncoding();
       perf::countRenderPassEnd(reason);
       // R-BACK-15.4: color attachments stored on this pass become "touched"
@@ -1858,6 +1948,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // mark them touched on the queue once the encoder closes.
     for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
       activeColorHandles[i] = drawState.hot->colorAttachments[i].handle;
+    }
+    // M2: push a debug group identifying the render pass attachments.
+    // Paired with the popDebugGroup() at the head of flushRender.
+    if (activeRenderEncoder) {
+      const auto rt0 = static_cast<unsigned long long>(
+          drawState.hot->colorAttachments[0].handle.value);
+      const auto depth = static_cast<unsigned long long>(
+          drawState.hot->depthStencil.handle.value);
+      activeRenderEncoder.pushDebugGroup(makeLabelStringFmt(
+          "RenderPass[rt=0x%llx,depth=0x%llx]", rt0, depth));
     }
     // R-BACK-12.12: a fresh Metal render encoder loses any prior
     // sticky bindings — every uniform category must rebind on the
@@ -2171,6 +2271,26 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           perf::CounterSnapshot curr = perf::snapshot();
           perf::emitFrameDelta(frameId++, prevSnapshot, curr);
           prevSnapshot = curr;
+        }
+        // M3 — Instruments "frame" interval. End the frame that just
+        // got a Present commit, then immediately begin the next one so
+        // any encode work on this thread before the next Present is
+        // attributed to that frame. Single encode thread → EXCLUSIVE
+        // is the correct id. Always-on (no_op when no consumer).
+        {
+          os_log_t signpostLog = dxmt9::signposts::log();
+          static thread_local bool frameSignpostActive = false;
+          static thread_local std::uint64_t frameSignpostSeq = 0;
+          if (frameSignpostActive) {
+            os_signpost_interval_end(signpostLog, OS_SIGNPOST_ID_EXCLUSIVE,
+                                     "frame", "seq=%llu",
+                                     static_cast<unsigned long long>(frameSignpostSeq));
+          }
+          ++frameSignpostSeq;
+          os_signpost_interval_begin(signpostLog, OS_SIGNPOST_ID_EXCLUSIVE,
+                                     "frame", "seq=%llu",
+                                     static_cast<unsigned long long>(frameSignpostSeq));
+          frameSignpostActive = true;
         }
         break;
       }

@@ -95,6 +95,11 @@ struct Counters {
   std::atomic<std::uint64_t> submitPresent{0};
   std::atomic<std::uint64_t> submitFlush{0};
   std::atomic<std::uint64_t> commandBuffers{0};
+  // M5 — gpu_command_buffer_errors. Incremented once per Metal
+  // CommandBuffer that surfaces WMTCommandBufferStatusError; intended as
+  // a regression sentinel (R-BACK GPU faults) — paired with an
+  // expected_counters entry on perf probes so a fault trips L3.
+  std::atomic<std::uint64_t> gpuCommandBufferErrors{0};
   std::atomic<std::uint64_t> metalBuffers{0};
   std::atomic<std::uint64_t> metalBufferBytes{0};
   std::atomic<std::uint64_t> pipelineBuilds{0};
@@ -174,6 +179,12 @@ struct Counters {
   std::atomic<std::uint64_t> completionLastShaderVariantHash{0};
   std::atomic<std::uint64_t> submitDrawCpuNs{0};
   std::atomic<std::uint64_t> submitDrawCpuMaxNs{0};
+  // M4 — per-command-buffer GPU time, sampled via MTLCommandBuffer.GPUStartTime
+  // / GPUEndTime when the buffer reaches Completed. Skipped on samples where
+  // the driver returns 0 / non-monotonic values.
+  std::atomic<std::uint64_t> gpuCommandBufferTimeNs{0};
+  std::atomic<std::uint64_t> gpuCommandBufferTimeMaxNs{0};
+  std::atomic<std::uint64_t> gpuCommandBufferTimeSamples{0};
   std::atomic<std::uint64_t> encodeChunkCalls{0};
   std::atomic<std::uint64_t> encodeChunkCpuNs{0};
   std::atomic<std::uint64_t> encodeChunkCpuMaxNs{0};
@@ -321,6 +332,7 @@ struct Counters {
   // *_max_ms counters above. Used to emit P50/P95/P99 in the shutdown report
   // so regression detection isn't outlier-driven by a single GC pause.
   PercentileRing submitDrawCpuRing;
+  PercentileRing gpuCommandBufferTimeRing;
   PercentileRing encodeChunkCpuRing;
   PercentileRing encodeDrawCpuRing;
   PercentileRing encodeDrawPipelineLookupCpuRing;
@@ -490,7 +502,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 328> kCounterTable = {{
+constexpr std::array<CounterEntry, 335> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -508,6 +520,7 @@ constexpr std::array<CounterEntry, 328> kCounterTable = {{
     {"submit_present", CounterEntry::Kind::UnsignedCount, &Counters::submitPresent, nullptr, nullptr, 0.0},
     {"submit_flush", CounterEntry::Kind::UnsignedCount, &Counters::submitFlush, nullptr, nullptr, 0.0},
     {"command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::commandBuffers, nullptr, nullptr, 0.0},
+    {"gpu_command_buffer_errors", CounterEntry::Kind::UnsignedCount, &Counters::gpuCommandBufferErrors, nullptr, nullptr, 0.0},
     {"metal_buffers", CounterEntry::Kind::UnsignedCount, &Counters::metalBuffers, nullptr, nullptr, 0.0},
     {"metal_buffer_bytes", CounterEntry::Kind::UnsignedCount, &Counters::metalBufferBytes, nullptr, nullptr, 0.0},
     {"pipeline_builds", CounterEntry::Kind::UnsignedCount, &Counters::pipelineBuilds, nullptr, nullptr, 0.0},
@@ -590,6 +603,12 @@ constexpr std::array<CounterEntry, 328> kCounterTable = {{
     {"submit_draw_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitDrawCpuRing, 0.5},
     {"submit_draw_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitDrawCpuRing, 0.95},
     {"submit_draw_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::submitDrawCpuRing, 0.99},
+    {"gpu_command_buffer_time_ms", CounterEntry::Kind::Milliseconds, &Counters::gpuCommandBufferTimeNs, nullptr, nullptr, 0.0},
+    {"gpu_command_buffer_time_max_ms", CounterEntry::Kind::Milliseconds, &Counters::gpuCommandBufferTimeMaxNs, nullptr, nullptr, 0.0},
+    {"gpu_command_buffer_time_samples", CounterEntry::Kind::UnsignedCount, &Counters::gpuCommandBufferTimeSamples, nullptr, nullptr, 0.0},
+    {"gpu_command_buffer_time_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::gpuCommandBufferTimeRing, 0.5},
+    {"gpu_command_buffer_time_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::gpuCommandBufferTimeRing, 0.95},
+    {"gpu_command_buffer_time_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::gpuCommandBufferTimeRing, 0.99},
     {"encode_chunk_calls", CounterEntry::Kind::UnsignedCount, &Counters::encodeChunkCalls, nullptr, nullptr, 0.0},
     {"encode_chunk_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeChunkCpuNs, nullptr, nullptr, 0.0},
     {"encode_chunk_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeChunkCpuMaxNs, nullptr, nullptr, 0.0},
@@ -970,6 +989,10 @@ void countCommandBuffer() {
   add(counters().commandBuffers);
 }
 
+void countGpuCommandBufferError() {
+  add(counters().gpuCommandBufferErrors);
+}
+
 void countMetalBuffer(std::size_t bytes) {
   add(counters().metalBuffers);
   add(counters().metalBufferBytes, static_cast<std::uint64_t>(bytes));
@@ -1123,6 +1146,13 @@ void countSubmitDrawCpuTime(std::uint64_t nanoseconds) {
   add(counters().submitDrawCpuNs, nanoseconds);
   updateMax(counters().submitDrawCpuMaxNs, nanoseconds);
   recordRing(counters().submitDrawCpuRing, nanoseconds);
+}
+
+void countGpuCommandBufferTime(std::uint64_t nanoseconds) {
+  add(counters().gpuCommandBufferTimeNs, nanoseconds);
+  add(counters().gpuCommandBufferTimeSamples);
+  updateMax(counters().gpuCommandBufferTimeMaxNs, nanoseconds);
+  recordRing(counters().gpuCommandBufferTimeRing, nanoseconds);
 }
 
 void countEncodeChunkCpuTime(std::uint64_t nanoseconds) {

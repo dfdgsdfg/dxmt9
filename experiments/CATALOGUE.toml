@@ -392,10 +392,13 @@ allow_timeout = true
 # At least 100 draws total, with at least one FFP VS+PS uniform call
 # (i.e. the FFP shader path actually ran). The HLSL VS uniform path must
 # stay at 0 because this probe is FFP-only by construction.
+# gpu_command_buffer_errors must stay at 0 — any GPU fault during a
+# perf probe is a regression (M5 L3 sentinel).
 draw_calls = { min = 100 }
 uniform_ffp_vs_calls = { min = 1 }
 uniform_ffp_ps_calls = { min = 1 }
 uniform_vs_consts_calls = { max = 0 }
+gpu_command_buffer_errors = { max = 0 }
 
 [apps.dxmt9-perf-multi-rt.expected_counters]
 # At least 50 draws total. The probe rotates through 4 color render
@@ -404,18 +407,21 @@ uniform_vs_consts_calls = { max = 0 }
 # pass-rotation collapses this to 0/1).
 draw_calls = { min = 50 }
 render_pass_load_action_clear = { min = 2 }
+gpu_command_buffer_errors = { max = 0 }
 
 [apps.dxmt9-perf-depth-heavy.expected_counters]
 # At least 50 draws total and at least one DontCare depth-store event,
 # i.e. a shadow-map style pass that discards the depth buffer at the end.
 draw_calls = { min = 50 }
 render_pass_store_action_depth_dontcare = { min = 1 }
+gpu_command_buffer_errors = { max = 0 }
 
 [apps.dxmt9-perf-skeletal.expected_counters]
 # At least 50 draws total with several volatile uniform pushes
 # (skeletal animation reuploads bone palettes per draw).
 draw_calls = { min = 50 }
 uniform_volatile_pushes = { min = 1 }
+gpu_command_buffer_errors = { max = 0 }
 
 [[app]]
 name = "street-fighter-iv-benchmark-crossover-oracle"

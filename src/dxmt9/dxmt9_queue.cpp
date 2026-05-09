@@ -4,6 +4,7 @@
 #include "dxmt9_compat.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_signposts.hpp"
 #include "../winemetal/Metal.hpp"
 #include "util/log/log.hpp"
 
@@ -1086,7 +1087,19 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     }
 
     const auto commitStarted = std::chrono::steady_clock::now();
-    record.commandBuffer.commit();
+    // M3 — Instruments "commit" interval around the WMT commit call.
+    // No-op when no consumer is recording (~5 ns).
+    {
+      os_log_t signpostLog = dxmt9::signposts::log();
+      os_signpost_id_t commitSignpost = os_signpost_id_generate(signpostLog);
+      os_signpost_interval_begin(signpostLog, commitSignpost, "commit",
+                                 "seq=%llu",
+                                 static_cast<unsigned long long>(record.seqId));
+      record.commandBuffer.commit();
+      os_signpost_interval_end(signpostLog, commitSignpost, "commit",
+                               "seq=%llu",
+                               static_cast<unsigned long long>(record.seqId));
+    }
     perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - commitStarted).count()));
@@ -1429,6 +1442,23 @@ bool CompletionTracker::inspect(obj_handle_t commandBuffer,
     }
     lastErrorSummary_ = summary.str();
     dxmt9::util::logLine(dxmt9::util::LogLevel::Error, "dxmt9-metal", lastErrorSummary_);
+    // M5 — increment the GPU fault sentinel. Failures are rare so a
+    // single counter increment per faulted command buffer is fine and
+    // pairs with expected_counters{max=0} on perf probes (L3 gate).
+    dxmt9::perf::countGpuCommandBufferError();
+  } else if (status == WMTCommandBufferStatusCompleted) {
+    // M4 — sample MTLCommandBuffer GPU wall time. Apple Silicon
+    // returns nanosecond timestamps via MTLCommandBuffer_property; on
+    // older / unsupported drivers the values can be 0 or non-monotonic,
+    // so guard before recording.
+    const std::uint64_t gpuStart = wrapped.gpuStartTime();
+    const std::uint64_t gpuEnd = wrapped.gpuEndTime();
+    if (gpuStart > 0 && gpuEnd > gpuStart) {
+      dxmt9::perf::countGpuCommandBufferTime(gpuEnd - gpuStart);
+    }
+    if (diagnostics.hasPresent) {
+      lastErrorSummary_.clear();
+    }
   } else if (diagnostics.hasPresent) {
     lastErrorSummary_.clear();
   }

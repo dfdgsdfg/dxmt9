@@ -110,6 +110,19 @@ BACKEND_COUNTER_FIELDS = [
     "ring_arena_heap_fallback_lambda",
     "ring_arena_heap_fallback_staging",
     "ring_arena_heap_fallback_copytemp",
+    # GPU faults (M5). Always-zero in healthy runs; surfaced so the A/B
+    # diff cannot silently regress to a faulting policy.
+    "gpu_command_buffer_errors",
+    # Per-command-buffer GPU wall time (M4). Apple Silicon timestamps
+    # via MTLCommandBuffer.GPUStartTime/GPUEndTime sampled at Completed.
+    # Distribution lets policy A/B detect GPU regressions independent of
+    # CPU encode time.
+    "gpu_command_buffer_time_ms",
+    "gpu_command_buffer_time_max_ms",
+    "gpu_command_buffer_time_samples",
+    "gpu_command_buffer_time_p50_ms",
+    "gpu_command_buffer_time_p95_ms",
+    "gpu_command_buffer_time_p99_ms",
 ]
 
 COUNTER_FIELDS = PRESENT_COUNTER_FIELDS + BACKEND_COUNTER_FIELDS

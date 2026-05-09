@@ -21,6 +21,23 @@ namespace dxmt9 {
 namespace resources { struct Pool; }
 namespace pipeline { class Cache; }
 
+// M6 — device capability snapshot. Computed once at device construction
+// from MTL probes (supportsFamily / supportsCounterSampling). Cached on
+// the Device so callers don't re-probe per-call. counterSampling* gates
+// MTL counter sample buffer integrations; supportsAppleN gates GPU-
+// family-specific code paths in the encoder and pipeline cache. All
+// fields default to false on the test/no-device path.
+struct DeviceCapabilities {
+  bool counterSamplingAtStageBoundary = false;
+  bool counterSamplingAtDrawBoundary = false;
+  bool counterSamplingAtBlitBoundary = false;
+  bool counterSamplingAtDispatchBoundary = false;
+  bool counterSamplingAtTileDispatchBoundary = false;
+  bool supportsApple7 = false;
+  bool supportsApple8 = false;
+  bool supportsApple9 = false;
+};
+
 class Device {
  public:
   virtual ~Device() = default;
@@ -41,6 +58,13 @@ class Device {
 
   // Capability limits queried at construction.
   virtual const core::BackendLimits& limits() const = 0;
+
+  // M6 — device capability snapshot, computed once at construction.
+  // Test/stub paths return a zero-initialized DeviceCapabilities.
+  virtual const DeviceCapabilities& capabilities() const {
+    static const DeviceCapabilities kEmpty{};
+    return kEmpty;
+  }
 
   // Shared backend implementation — for now, the concrete MetalBackendDevice.
   // Downstream core::Factory / core::Device consume this while the full

@@ -1053,6 +1053,67 @@ extern "C" void MTLCommandEncoder_setLabel(obj_handle_t encoder, obj_handle_t la
   if (encoder && label) [(id<MTLCommandEncoder>)encoder setLabel:(NSString *)label];
 }
 
+// M1 — resource-side setLabel entry points. Each is a no-op on null args.
+// MTLBuffer, MTLTexture conform to MTLResource which exposes a writable
+// .label. MTLCommandQueue and MTLCommandBuffer protocols expose .label
+// directly. MTLRenderPipelineState and MTLComputePipelineState expose
+// .label as readonly on the public protocol — but Apple's concrete
+// implementation does respond to setLabel: (verified via respondsToSelector
+// to stay correct on older runtimes that never added the setter).
+extern "C" void MTLBuffer_setLabel(obj_handle_t buffer, obj_handle_t label) {
+  if (buffer && label) [(id<MTLBuffer>)buffer setLabel:(NSString *)label];
+}
+
+extern "C" void MTLTexture_setLabel(obj_handle_t texture, obj_handle_t label) {
+  if (texture && label) [(id<MTLTexture>)texture setLabel:(NSString *)label];
+}
+
+extern "C" void MTLCommandQueue_setLabel(obj_handle_t queue, obj_handle_t label) {
+  if (queue && label) [(id<MTLCommandQueue>)queue setLabel:(NSString *)label];
+}
+
+extern "C" void MTLCommandBuffer_setLabel(obj_handle_t cmdbuf, obj_handle_t label) {
+  if (cmdbuf && label) [(id<MTLCommandBuffer>)cmdbuf setLabel:(NSString *)label];
+}
+
+extern "C" void MTLRenderPipelineState_setLabel(obj_handle_t pso, obj_handle_t label) {
+  if (!pso || !label) return;
+  id obj = (id)pso;
+  if ([obj respondsToSelector:@selector(setLabel:)]) {
+    [obj setLabel:(NSString *)label];
+  }
+}
+
+extern "C" void MTLComputePipelineState_setLabel(obj_handle_t pso, obj_handle_t label) {
+  if (!pso || !label) return;
+  id obj = (id)pso;
+  if ([obj respondsToSelector:@selector(setLabel:)]) {
+    [obj setLabel:(NSString *)label];
+  }
+}
+
+// M2 — pushDebugGroup / popDebugGroup. Both selectors are MTLCommandEncoder
+// protocol surface; null-guard the encoder handle and the name.
+extern "C" void MTLCommandEncoder_pushDebugGroup(obj_handle_t encoder, obj_handle_t name) {
+  if (encoder && name) [(id<MTLCommandEncoder>)encoder pushDebugGroup:(NSString *)name];
+}
+
+extern "C" void MTLCommandEncoder_popDebugGroup(obj_handle_t encoder) {
+  if (encoder) [(id<MTLCommandEncoder>)encoder popDebugGroup];
+}
+
+// M6 — counter-sampling capability probe. The protocol method is
+// supportsCounterSampling: which takes an MTLCounterSamplingPoint enum.
+// respondsToSelector check tolerates the (rare) older Metal runtime where
+// the API isn't present at all, in which case we conservatively return
+// false.
+extern "C" bool MTLDevice_supportsCounterSampling(obj_handle_t device, enum WMTCounterSamplingPoint point) {
+  if (!device) return false;
+  id<MTLDevice> d = (id<MTLDevice>)device;
+  if (![d respondsToSelector:@selector(supportsCounterSampling:)]) return false;
+  return [d supportsCounterSampling:(MTLCounterSamplingPoint)point];
+}
+
 extern "C" uint64_t MTLCommandBuffer_property(obj_handle_t cmdbuf, enum WMTCommandBufferProperty prop) {
   if (!cmdbuf) return 0;
   id<MTLCommandBuffer> cb = (id<MTLCommandBuffer>)cmdbuf;

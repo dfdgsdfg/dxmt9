@@ -1,5 +1,6 @@
 #include "dxmt9_device.hpp"
 #include "../winemetal/Metal.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -29,6 +30,45 @@ core::BackendLimits finalizeLimits(core::BackendLimits base, WMT::Device device)
     base.supportsDepth24Stencil8 = device.supportsDepth24Stencil8();
   }
   return base;
+}
+
+// M6 — sampled once at device init and logged so triage on a bug report
+// can immediately see which Metal counter / family features the running
+// device exposes. Cheap: ~10 selector dispatches at process start.
+DeviceCapabilities probeCapabilities(WMT::Device device) {
+  DeviceCapabilities caps{};
+  if (!device) {
+    return caps;
+  }
+  caps.supportsApple7 = device.supportsFamily(WMTGPUFamilyApple7);
+  caps.supportsApple8 = device.supportsFamily(WMTGPUFamilyApple8);
+  caps.supportsApple9 = device.supportsFamily(WMTGPUFamilyApple9);
+  caps.counterSamplingAtStageBoundary =
+      device.supportsCounterSampling(WMTCounterSamplingPointAtStageBoundary);
+  caps.counterSamplingAtDrawBoundary =
+      device.supportsCounterSampling(WMTCounterSamplingPointAtDrawBoundary);
+  caps.counterSamplingAtBlitBoundary =
+      device.supportsCounterSampling(WMTCounterSamplingPointAtBlitBoundary);
+  caps.counterSamplingAtDispatchBoundary =
+      device.supportsCounterSampling(WMTCounterSamplingPointAtDispatchBoundary);
+  caps.counterSamplingAtTileDispatchBoundary =
+      device.supportsCounterSampling(WMTCounterSamplingPointAtTileDispatchBoundary);
+  return caps;
+}
+
+void logCapabilities(const DeviceCapabilities& caps) {
+  dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-device",
+                    "capabilities: family={apple7=%d apple8=%d apple9=%d} "
+                    "counter_sampling={stage=%d draw=%d blit=%d "
+                    "dispatch=%d tile=%d}",
+                    caps.supportsApple7 ? 1 : 0,
+                    caps.supportsApple8 ? 1 : 0,
+                    caps.supportsApple9 ? 1 : 0,
+                    caps.counterSamplingAtStageBoundary ? 1 : 0,
+                    caps.counterSamplingAtDrawBoundary ? 1 : 0,
+                    caps.counterSamplingAtBlitBoundary ? 1 : 0,
+                    caps.counterSamplingAtDispatchBoundary ? 1 : 0,
+                    caps.counterSamplingAtTileDispatchBoundary ? 1 : 0);
 }
 
 std::optional<std::uint32_t> envU32(const char* name) {
@@ -69,6 +109,7 @@ class DeviceImpl final : public Device {
       : wmt_device_(desc.device),
         metalVersion_(selectMetalVersion(wmt_device_)),
         limits_(finalizeLimits(desc.limits, wmt_device_)),
+        capabilities_(probeCapabilities(wmt_device_)),
         queue_(wmt_device_, limits_) {}
 
   // queue_ destructs first (last-declared) — joins worker threads,
@@ -80,6 +121,7 @@ class DeviceImpl final : public Device {
   WMTMetalVersion metalVersion() const override { return metalVersion_; }
   CommandQueue& queue() override { return queue_; }
   const core::BackendLimits& limits() const override { return limits_; }
+  const DeviceCapabilities& capabilities() const override { return capabilities_; }
   // backend() stays nullptr in production. Tests observe through
   // StubDxmt9Device + MockBackendDevice.
   std::shared_ptr<core::BackendDevice> backend() override { return nullptr; }
@@ -205,6 +247,7 @@ class DeviceImpl final : public Device {
   WMT::Reference<WMT::Device> wmt_device_;
   WMTMetalVersion metalVersion_ = WMTMetalVersionMax;
   core::BackendLimits limits_{};
+  DeviceCapabilities capabilities_{};
   core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = core::kDefaultFrameLatency;
@@ -218,6 +261,10 @@ std::unique_ptr<Device> CreateDXMT9Device(const DEVICE_DESC& desc) {
   if (!device->ready()) {
     return nullptr;
   }
+  // M6: log the already-probed capability snapshot once at init so bug
+  // reports include device family + counter-sampling support without
+  // requiring the reporter to enable trace logging.
+  logCapabilities(device->capabilities());
   return device;
 }
 

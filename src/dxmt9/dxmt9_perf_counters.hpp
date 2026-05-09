@@ -54,6 +54,7 @@ void countStretchFullscreen();
 void countSubmitPresent();
 void countSubmitFlush();
 void countCommandBuffer();
+void countGpuCommandBufferError();
 void countMetalBuffer(std::size_t bytes);
 void countPipelineBuild();
 void countPipelineCacheHit(PipelineKind kind);
@@ -94,6 +95,10 @@ void countDrawGeometryDiagnostics(bool fixedFunctionPath,
                                   std::uint32_t stream0Stride,
                                   std::uint64_t vertexDeclHash);
 void countSubmitDrawCpuTime(std::uint64_t nanoseconds);
+// M4 — per-command-buffer GPU time (MTLCommandBuffer.GPUEndTime -
+// GPUStartTime) in nanoseconds. Driver-returned 0/non-monotonic values
+// must be filtered at the call site.
+void countGpuCommandBufferTime(std::uint64_t nanoseconds);
 void countEncodeChunkCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawPipelineLookupCpuTime(std::uint64_t nanoseconds);
