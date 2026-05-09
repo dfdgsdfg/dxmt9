@@ -1,5 +1,6 @@
 #include "dxmt9_device.hpp"
 #include "../winemetal/Metal.hpp"
+#include "dxmt9_archive_prewarm.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
@@ -265,6 +266,20 @@ std::unique_ptr<Device> CreateDXMT9Device(const DEVICE_DESC& desc) {
   // reports include device family + counter-sampling support without
   // requiring the reporter to enable trace logging.
   logCapabilities(device->capabilities());
+
+  // R-BACK-3.8 — surface the resolved archive path and prewarm mode in
+  // present diagnostics so support reports can confirm prewarm hit the
+  // expected file. The path comes from the queue's already-constructed
+  // shader archive (it was resolved through archive_prewarm::resolveArchivePath
+  // during CommandQueue's ctor). Empty path means archive disabled at
+  // either the env-flag layer or the cache-root layer.
+  if (auto* path = device->shaderArchivePath()) {
+    const auto mode = archive_prewarm::resolveMode();
+    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-archive",
+                      "prewarm mode=%s archive=\"%s\"",
+                      archive_prewarm::modeName(mode),
+                      path->c_str());
+  }
   return device;
 }
 

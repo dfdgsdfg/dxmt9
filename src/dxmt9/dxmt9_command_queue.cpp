@@ -1,5 +1,6 @@
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9_archive_prewarm.hpp"
 #include "dxmt9_debug_alloc_guard.hpp"
 #include "dxmt9_device.hpp"
 #include "dxmt9_blit_encoders.hpp"
@@ -43,14 +44,14 @@ WMT::String makeLabelStringFmt(const char* fmt, ...) {
 std::atomic_uint64_t gTransientLabelCounter{0};
 std::atomic_uint64_t gCommandBufferLabelCounter{0};
 
-std::string resolveShaderCachePath() {
-  const char* disableArchive = std::getenv("DXMT_DEBUG_DISABLE_SHADER_ARCHIVE");
-  if (disableArchive && disableArchive[0] != '\0' && std::strcmp(disableArchive, "0") != 0) {
-    return {};
-  }
-  char buf[4096]{};
-  WMTGetShaderCachePath(buf, sizeof(buf));
-  return std::string(buf);
+// R-BACK-3.7 / R-BACK-3.8 / R-BACK-4.8 — archive path resolution moved
+// into archive_prewarm. The path now embeds the dxmt9 archive ABI
+// version and the sanitized GPU family token so cross-process readers
+// never observe an archive that was serialized against an incompatible
+// emitter / variant-key encoding (design §6.1).
+std::string resolveShaderCachePath(WMT::Device device) {
+  const auto mode = archive_prewarm::resolveMode();
+  return archive_prewarm::resolveArchivePath(device, mode);
 }
 
 constexpr std::size_t kTransientBufferInitialCapacity = 8ull << 20;
@@ -106,9 +107,18 @@ class PerfScope {
 CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
     : device_(device),
       limits_(limits),
-      shaderArchive_(device, resolveShaderCachePath()) {
+      shaderArchive_(device, resolveShaderCachePath(device)) {
   if (!device_) {
     return;
+  }
+  // R-BACK-3.7 / R-BACK-3.8 — drive the prewarm step now that the
+  // archive instance is constructed. Runs the §6.1 failure-mode table
+  // and bumps the relevant perf counters (missing / lock_busy /
+  // entries / bytes / load_ns). Non-fatal under all conditions; never
+  // blocks queue init beyond a single bounded flock retry budget.
+  {
+    const auto prewarmMode = archive_prewarm::resolveMode();
+    archive_prewarm::run(device, shaderArchive_.path(), prewarmMode);
   }
   queue_ = device_.newCommandQueue(0);
   if (!queue_) {

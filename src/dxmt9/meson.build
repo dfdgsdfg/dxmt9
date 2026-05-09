@@ -17,6 +17,7 @@ dxmt9_shader_pipeline_srcs = files(
 )
 
 dxmt9_runtime_srcs = files(
+  'dxmt9_archive_prewarm.cpp',
   'dxmt9_command_queue.cpp',
   'dxmt9_compat.cpp',
   'dxmt9_capture.cpp',

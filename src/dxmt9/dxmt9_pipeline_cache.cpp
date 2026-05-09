@@ -329,6 +329,13 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
     }
     WMT::Error err{};
     perf::countPipelineBuild(perf::PipelineKind::Draw);
+    // R-BACK-3.8 — every Draw PSO that lands in this closure is a
+    // miss against the prewarmed archive. The counter starts at zero
+    // after a successful Full prewarm and stays low when the archive
+    // is hot; a high value indicates the prewarm path missed (file
+    // missing, schema drift, lock_busy, or content mismatch with the
+    // current emitter / variant key).
+    perf::countColdCompileAfterWarm();
     auto pso = device.newRenderPipelineState(info, err);
     if (pso) {
       pso.setLabel(labels::makeLabelStringFmt(
