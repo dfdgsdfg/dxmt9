@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median, pstdev
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -84,6 +84,16 @@ def parse_args() -> argparse.Namespace:
         help="Policy mode to run. Repeatable.",
     )
     parser.add_argument("--runs", type=int, default=3, help="Runs per app/mode. Default: 3.")
+    parser.add_argument(
+        "--cv-tolerance",
+        type=float,
+        default=0.0,
+        help=(
+            "R-BENCH-1.2 determinism gate: fail when fps coefficient-of-"
+            "variation (max-min)/mean exceeds this. 0.0 = report only "
+            "(default). 0.02 = 2%% spread tolerance."
+        ),
+    )
     parser.add_argument("--timeout", type=str, default="60", help="Per-run timeout seconds. Default: 60.")
     parser.add_argument("--log-level", default="warn", help="DXMT_LOG_LEVEL. Default: warn.")
     parser.add_argument("--wine-root", type=Path, default=DEFAULT_WINE_ROOT, help="DXMT Wine root.")
@@ -113,10 +123,22 @@ def numeric(value: object) -> float | None:
 def summarize_values(values: list[float]) -> dict[str, float] | None:
     if not values:
         return None
+    avg = mean(values)
+    lo = min(values)
+    hi = max(values)
+    # CV is reported against the mean using the spread (max-min)/mean,
+    # which is the form R-BENCH-1.2 cares about: a single regression run
+    # whose worst-case sample drifts by more than the tolerance fails the
+    # determinism gate. pstdev is included for distribution shape but is
+    # not what the gate checks against.
+    cv = (hi - lo) / avg if avg > 0 else 0.0
     return {
-        "mean": mean(values),
-        "min": min(values),
-        "max": max(values),
+        "mean": avg,
+        "min": lo,
+        "max": hi,
+        "median": median(values),
+        "stddev": pstdev(values) if len(values) >= 2 else 0.0,
+        "cv": cv,
     }
 
 
@@ -249,18 +271,71 @@ def fmt_summary(value: object, digits: int = 2) -> str:
     return f"{mean_value:.{digits}f} [{min_value:.{digits}f}, {max_value:.{digits}f}]"
 
 
+def evaluate_cv_gate(
+    rows: list[dict[str, object]], tolerance: float
+) -> list[dict[str, object]]:
+    """Return a list of rows whose fps cv exceeds the tolerance.
+
+    R-BENCH-1.2 determinism gate. tolerance==0 disables enforcement (the
+    cv field is still computed and reported, just not gated against).
+    """
+    violations: list[dict[str, object]] = []
+    if tolerance <= 0.0:
+        return violations
+    for row in rows:
+        fps = row.get("fps")
+        if not isinstance(fps, dict):
+            continue
+        cv = fps.get("cv")
+        if not isinstance(cv, (int, float)):
+            continue
+        if cv > tolerance:
+            violations.append(
+                {
+                    "app": row.get("app"),
+                    "mode": row.get("mode"),
+                    "fps_cv": float(cv),
+                    "fps_mean": fps.get("mean"),
+                    "fps_min": fps.get("min"),
+                    "fps_max": fps.get("max"),
+                    "tolerance": tolerance,
+                }
+            )
+    return violations
+
+
+def fmt_cv(value: object, tolerance: float) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    cv = value.get("cv")
+    if not isinstance(cv, (int, float)):
+        return "-"
+    marker = ""
+    if tolerance > 0.0 and cv > tolerance:
+        marker = " ⚠️"
+    return f"{cv * 100:.2f}%{marker}"
+
+
 def write_markdown(path: Path, payload: dict[str, object]) -> None:
     rows = payload["summary"]
     assert isinstance(rows, list)
+    tolerance = payload.get("cv_tolerance")
+    if not isinstance(tolerance, (int, float)):
+        tolerance = 0.0
+    violations = payload.get("cv_violations")
+    if not isinstance(violations, list):
+        violations = []
     lines = [
         "# DX9 Present Policy A/B",
         "",
         f"- generated_at: `{payload['generated_at']}`",
         f"- tag: `{payload['tag']}`",
         f"- runs_per_app_mode: `{payload['runs_per_app_mode']}`",
+        f"- cv_tolerance: `{tolerance:.4f}`"
+        + (" (report-only)" if tolerance == 0.0 else ""),
         "",
-        "| app | mode | pass | fps mean [min,max] | present encoded | fallbacks | boundary ms | acquire ms | token ms | pre hits | pre misses | pre wait ms | command buffers |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| app | mode | pass | fps mean [min,max] | fps cv | present encoded | fallbacks | boundary ms | acquire ms | token ms | pre hits | pre misses | pre wait ms | command buffers |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         assert isinstance(row, dict)
@@ -272,6 +347,7 @@ def write_markdown(path: Path, payload: dict[str, object]) -> None:
             f"`{row.get('mode')}` | "
             f"`{row.get('pass_count')}/{row.get('runs')}` | "
             f"`{fmt_summary(row.get('fps'))}` | "
+            f"`{fmt_cv(row.get('fps'), float(tolerance))}` | "
             f"`{fmt_summary(counters.get('present_encoded'), 1)}` | "
             f"`{fmt_summary(counters.get('present_async_acquire_fallbacks'), 1)}` | "
             f"`{fmt_summary(counters.get('present_boundary_wait_ms'), 3)}` | "
@@ -282,6 +358,27 @@ def write_markdown(path: Path, payload: dict[str, object]) -> None:
             f"`{fmt_summary(counters.get('present_preacquire_wait_ms'), 3)}` | "
             f"`{fmt_summary(counters.get('command_buffers'), 1)}` |"
         )
+    if violations:
+        lines.append("")
+        lines.append(
+            f"## ⚠️ Determinism gate violations (cv > {float(tolerance):.4f})"
+        )
+        lines.append("")
+        lines.append("| app | mode | fps cv | fps mean | fps min | fps max |")
+        lines.append("|---|---|---:|---:|---:|---:|")
+        for v in violations:
+            assert isinstance(v, dict)
+            cv = v.get("fps_cv")
+            mean_v = v.get("fps_mean")
+            min_v = v.get("fps_min")
+            max_v = v.get("fps_max")
+            cv_s = f"{cv * 100:.2f}%" if isinstance(cv, (int, float)) else "-"
+            mean_s = f"{mean_v:.2f}" if isinstance(mean_v, (int, float)) else "-"
+            min_s = f"{min_v:.2f}" if isinstance(min_v, (int, float)) else "-"
+            max_s = f"{max_v:.2f}" if isinstance(max_v, (int, float)) else "-"
+            lines.append(
+                f"| `{v.get('app')}` | `{v.get('mode')}` | `{cv_s}` | `{mean_s}` | `{min_s}` | `{max_s}` |"
+            )
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -308,14 +405,18 @@ def main() -> int:
     finally:
         restore_trace_files(snapshots)
 
+    summary_rows = aggregate(results, apps, modes)
+    violations = evaluate_cv_gate(summary_rows, args.cv_tolerance)
     payload: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tag": tag,
         "apps": apps,
         "modes": modes,
         "runs_per_app_mode": args.runs,
+        "cv_tolerance": args.cv_tolerance,
+        "cv_violations": violations,
         "results": results,
-        "summary": aggregate(results, apps, modes),
+        "summary": summary_rows,
     }
     summary_json = out_dir / "summary.json"
     summary_md = out_dir / "summary.md"
@@ -324,6 +425,20 @@ def main() -> int:
     print(f"summary_json: {summary_json}")
     print(f"summary_md: {summary_md}")
     print(f"suite_log: {suite_log}")
+    if violations:
+        print(
+            f"determinism gate: FAIL — {len(violations)} row(s) over "
+            f"cv tolerance {args.cv_tolerance:.4f}:",
+            file=sys.stderr,
+        )
+        for v in violations:
+            cv = v.get("fps_cv")
+            cv_s = f"{cv * 100:.2f}%" if isinstance(cv, (int, float)) else "-"
+            print(
+                f"  {v.get('app')} / {v.get('mode')}: fps cv={cv_s}",
+                file=sys.stderr,
+            )
+        return 1
     return 0
 
 
