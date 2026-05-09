@@ -1,0 +1,341 @@
+/*
+ * Shared harness for the d3d9 PE conformance slice.
+ *
+ * Counters (current_test, checks_run, checks_failed, tests_skipped) are
+ * defined exactly once in d3d9_conformance.c and declared extern here so
+ * each domain bucket TU references the same instances.
+ *
+ * All other helpers are static inline so multiple TUs can include this
+ * header without ODR violations in C.
+ */
+
+#ifndef DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H
+#define DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H
+
+#define WIN32_LEAN_AND_MEAN
+#define COBJMACROS
+#include <windows.h>
+#include <initguid.h>
+#include <d3d9.h>
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#endif
+
+typedef IDirect3D9 *(WINAPI *PFN_Direct3DCreate9)(UINT sdk_version);
+typedef HRESULT (WINAPI *PFN_Direct3DCreate9Ex)(UINT sdk_version,
+        IDirect3D9Ex **d3d9ex);
+
+struct d3d9_api
+{
+    HMODULE module;
+    PFN_Direct3DCreate9 create9;
+    PFN_Direct3DCreate9Ex create9ex;
+};
+
+struct test_case
+{
+    const char *name;
+    void (*func)(const struct d3d9_api *api);
+};
+
+/*
+ * Single counter set shared across every bucket TU. Definitions live in
+ * d3d9_conformance.c next to main(); per-bucket files only reference them.
+ */
+extern const char *current_test;
+extern unsigned int checks_run;
+extern unsigned int checks_failed;
+extern unsigned int tests_skipped;
+
+/*
+ * Stable GUID used by SetPrivateData round-trip tests. Defined as static
+ * const so each TU that includes this header has its own copy; the value
+ * is identical and only used as an opaque key passed back to D3D9.
+ */
+static const GUID private_data_guid =
+{
+    0x9f1f9f4d, 0x4b01, 0x4a28,
+    {0x93, 0x5e, 0x76, 0xc5, 0x69, 0x2f, 0x3d, 0x91}
+};
+
+static inline void print_hr(char *buffer, size_t size, HRESULT hr)
+{
+    snprintf(buffer, size, "0x%08lx", (unsigned long)(DWORD)hr);
+}
+
+static inline void report_failure(const char *file, int line, const char *fmt, ...)
+{
+    va_list args;
+
+    ++checks_failed;
+    printf("FAIL %s:%d [%s] ", file, line, current_test);
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+    printf("\n");
+}
+
+static inline void check_true_at(const char *file, int line, bool condition,
+        const char *expr)
+{
+    ++checks_run;
+    if (!condition)
+        report_failure(file, line, "expected true: %s", expr);
+}
+
+static inline void check_hr_at(const char *file, int line, HRESULT actual,
+        HRESULT expected, const char *expr)
+{
+    char actual_buffer[16];
+    char expected_buffer[16];
+
+    ++checks_run;
+    if (actual == expected)
+        return;
+
+    print_hr(actual_buffer, sizeof(actual_buffer), actual);
+    print_hr(expected_buffer, sizeof(expected_buffer), expected);
+    report_failure(file, line, "%s returned %s, expected %s",
+            expr, actual_buffer, expected_buffer);
+}
+
+static inline void check_succeeded_at(const char *file, int line, HRESULT actual,
+        const char *expr)
+{
+    char actual_buffer[16];
+
+    ++checks_run;
+    if (SUCCEEDED(actual))
+        return;
+
+    print_hr(actual_buffer, sizeof(actual_buffer), actual);
+    report_failure(file, line, "%s failed with %s", expr, actual_buffer);
+}
+
+#define CHECK_TRUE(expr) check_true_at(__FILE__, __LINE__, !!(expr), #expr)
+#define CHECK_HR(expr, expected) \
+    do { HRESULT hr__ = (expr); check_hr_at(__FILE__, __LINE__, hr__, (expected), #expr); } while (0)
+#define CHECK_SUCCEEDED(expr) \
+    do { HRESULT hr__ = (expr); check_succeeded_at(__FILE__, __LINE__, hr__, #expr); } while (0)
+
+static inline void skip_current_test(const char *fmt, ...)
+{
+    va_list args;
+
+    ++tests_skipped;
+    printf("SKIP [%s] ", current_test);
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+    printf("\n");
+}
+
+static inline void strip_filename(char *path)
+{
+    char *slash = strrchr(path, '\\');
+    char *alt_slash = strrchr(path, '/');
+
+    if (!slash || alt_slash > slash)
+        slash = alt_slash;
+    if (slash)
+        *slash = '\0';
+}
+
+static inline HMODULE load_d3d9_module(void)
+{
+    char exe_path[MAX_PATH];
+    char candidate[MAX_PATH];
+    HMODULE module;
+
+    if (GetModuleFileNameA(NULL, exe_path, sizeof(exe_path)))
+    {
+        strip_filename(exe_path);
+
+        snprintf(candidate, sizeof(candidate), "%s\\d3d9.dll", exe_path);
+        module = LoadLibraryA(candidate);
+        if (module)
+            return module;
+
+        snprintf(candidate, sizeof(candidate),
+                "%s\\..\\..\\src\\win32\\d3d9.dll", exe_path);
+        module = LoadLibraryA(candidate);
+        if (module)
+            return module;
+    }
+
+    return LoadLibraryA("d3d9.dll");
+}
+
+static inline bool load_d3d9_api(struct d3d9_api *api)
+{
+    memset(api, 0, sizeof(*api));
+
+    api->module = load_d3d9_module();
+    if (!api->module)
+    {
+        printf("SKIP failed to load d3d9.dll, GetLastError=%lu\n",
+                GetLastError());
+        return false;
+    }
+
+    api->create9 = (PFN_Direct3DCreate9)GetProcAddress(api->module,
+            "Direct3DCreate9");
+    api->create9ex = (PFN_Direct3DCreate9Ex)GetProcAddress(api->module,
+            "Direct3DCreate9Ex");
+
+    if (!api->create9)
+    {
+        printf("SKIP d3d9.dll does not export Direct3DCreate9\n");
+        return false;
+    }
+
+    return true;
+}
+
+static inline HWND create_test_window(void)
+{
+    RECT rect = {0, 0, 640, 480};
+
+    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW | WS_VISIBLE, FALSE);
+    return CreateWindowA("static", "dxmt9-d3d9-conformance",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0, 0,
+            rect.right - rect.left, rect.bottom - rect.top,
+            NULL, NULL, NULL, NULL);
+}
+
+static inline void pump_window_messages(void)
+{
+    MSG msg;
+
+    while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
+        DispatchMessageA(&msg);
+}
+
+static inline D3DPRESENT_PARAMETERS default_present_parameters(HWND window)
+{
+    D3DPRESENT_PARAMETERS pp;
+
+    memset(&pp, 0, sizeof(pp));
+    pp.Windowed = TRUE;
+    pp.hDeviceWindow = window;
+    pp.SwapEffect = D3DSWAPEFFECT_COPY;
+    pp.BackBufferWidth = 640;
+    pp.BackBufferHeight = 480;
+    pp.BackBufferFormat = D3DFMT_UNKNOWN;
+    pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+    return pp;
+}
+
+static inline D3DPRESENT_PARAMETERS default_fullscreen_present_parameters(HWND window,
+        const D3DDISPLAYMODE *mode)
+{
+    D3DPRESENT_PARAMETERS pp;
+
+    memset(&pp, 0, sizeof(pp));
+    pp.Windowed = FALSE;
+    pp.hDeviceWindow = window;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferWidth = mode->Width;
+    pp.BackBufferHeight = mode->Height;
+    pp.BackBufferFormat = mode->Format;
+    pp.PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;
+    return pp;
+}
+
+static inline IDirect3DDevice9 *create_base_device(IDirect3D9 *d3d9, HWND window)
+{
+    D3DPRESENT_PARAMETERS pp = default_present_parameters(window);
+    IDirect3DDevice9 *device = NULL;
+    HRESULT hr;
+
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateDevice failed with %s", hr_buffer);
+        return NULL;
+    }
+
+    return device;
+}
+
+static inline IDirect3D9Ex *create_d3d9ex(const struct d3d9_api *api)
+{
+    IDirect3D9Ex *d3d9ex = NULL;
+    HRESULT hr;
+
+    if (!api->create9ex)
+    {
+        skip_current_test("Direct3DCreate9Ex is not exported");
+        return NULL;
+    }
+
+    hr = api->create9ex(D3D_SDK_VERSION, &d3d9ex);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("Direct3DCreate9Ex failed with %s", hr_buffer);
+        return NULL;
+    }
+
+    return d3d9ex;
+}
+
+static inline IDirect3DDevice9Ex *create_ex_device(IDirect3D9Ex *d3d9ex, HWND window)
+{
+    D3DPRESENT_PARAMETERS pp = default_present_parameters(window);
+    IDirect3DDevice9Ex *device = NULL;
+    HRESULT hr;
+
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    hr = IDirect3D9Ex_CreateDeviceEx(d3d9ex, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING,
+            &pp, NULL, &device);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateDeviceEx failed with %s", hr_buffer);
+        return NULL;
+    }
+
+    return device;
+}
+
+static inline ULONG get_refcount(IUnknown *object)
+{
+    IUnknown_AddRef(object);
+    return IUnknown_Release(object);
+}
+
+/* Per-domain test entries for main()'s dispatch table. */
+void test_factory_validation_return_codes(const struct d3d9_api *api);
+void test_device_display_mode_adapter_format(const struct d3d9_api *api);
+void test_factory_base_vs_ex_qi(const struct d3d9_api *api);
+void test_ex_created_normal_device_qi(const struct d3d9_api *api);
+void test_ex_create_reset_mode_validation(const struct d3d9_api *api);
+void test_scene_invalid_transitions(const struct d3d9_api *api);
+
+void test_display_mode_ex_size_filter_smoke(const struct d3d9_api *api);
+void test_present_parameter_validation(const struct d3d9_api *api);
+
+void test_stateblock_invalid_type_recording_invalid_calls(const struct d3d9_api *api);
+
+void test_private_data_iunknown_ownership_smoke(const struct d3d9_api *api);
+void test_private_data_resource_wrappers(const struct d3d9_api *api);
+void test_shared_handle_policy(const struct d3d9_api *api);
+void test_ex_shared_handle_policy(const struct d3d9_api *api);
+void test_creation_failure_out_pointers(const struct d3d9_api *api);
+
+#endif /* DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H */

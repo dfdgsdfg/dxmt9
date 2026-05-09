@@ -8,7 +8,13 @@ fs = import('fs')
 
 d3d9_conformance = executable(
   'dxmt9-d3d9-conformance',
-  'd3d9_conformance.c',
+  [
+    'd3d9_conformance.c',
+    'd3d9_conformance_device.c',
+    'd3d9_conformance_resource.c',
+    'd3d9_conformance_swapchain.c',
+    'd3d9_conformance_query_stateblock.c',
+  ],
   dependencies: [
     c.find_library('user32', required: true),
   ],
