@@ -18,7 +18,7 @@ static void dxmt9DeviceDebugLog(const char *fmt, ...) {
   va_end(args);
 }
 
-static HRESULT setPrivateData(dxmt9::util::ComPrivateData &storage,
+[[nodiscard]] static HRESULT setPrivateData(dxmt9::util::ComPrivateData &storage,
                               REFGUID guid, const void *data, DWORD size,
                               DWORD flags, const char *label,
                               const void *self) {
@@ -36,7 +36,7 @@ static HRESULT setPrivateData(dxmt9::util::ComPrivateData &storage,
   return hr;
 }
 
-static HRESULT getPrivateData(dxmt9::util::ComPrivateData &storage,
+[[nodiscard]] static HRESULT getPrivateData(dxmt9::util::ComPrivateData &storage,
                               REFGUID guid, void *data, DWORD *size,
                               const char *label, const void *self) {
   UINT localSize = size ? static_cast<UINT>(*size) : 0u;
@@ -50,7 +50,7 @@ static HRESULT getPrivateData(dxmt9::util::ComPrivateData &storage,
   return hr;
 }
 
-static HRESULT freePrivateData(dxmt9::util::ComPrivateData &storage,
+[[nodiscard]] static HRESULT freePrivateData(dxmt9::util::ComPrivateData &storage,
                                REFGUID guid, const char *label,
                                const void *self) {
   HRESULT hr = storage.removeData(guid);
@@ -59,7 +59,7 @@ static HRESULT freePrivateData(dxmt9::util::ComPrivateData &storage,
   return hr;
 }
 
-static HRESULT flushChildRecorder(D3D9PeRecorderFlush *recorder) {
+[[nodiscard]] static HRESULT flushChildRecorder(D3D9PeRecorderFlush *recorder) {
   return recorder ? recorder->FlushPeRecorderForChild() : S_OK;
 }
 

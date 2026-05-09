@@ -10,6 +10,14 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifndef DXMT9_NODISCARD
+#if defined(__cplusplus) && __cplusplus >= 201703L
+#define DXMT9_NODISCARD [[nodiscard]]
+#else
+#define DXMT9_NODISCARD
+#endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -783,42 +791,42 @@ typedef struct D9CCommandChunk {
 
 /* ── factory ─────────────────────────────────────────────────────────────── */
 
-D9CFactory* dxmt9c_factory_create(void);
+DXMT9_NODISCARD D9CFactory* dxmt9c_factory_create(void);
 void        dxmt9c_factory_addref(D9CFactory*);
 uint32_t    dxmt9c_factory_release(D9CFactory*);
 
 uint32_t dxmt9c_factory_adapter_count(D9CFactory*);
-int32_t  dxmt9c_factory_get_adapter_identifier(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t  dxmt9c_factory_get_adapter_identifier(D9CFactory*, uint32_t adapter,
                                                 D9CAdapterIdentifier* out);
 uint32_t dxmt9c_factory_get_adapter_mode_count(D9CFactory*, uint32_t adapter,
                                                 uint32_t fmt);
-int32_t  dxmt9c_factory_enum_adapter_modes(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t  dxmt9c_factory_enum_adapter_modes(D9CFactory*, uint32_t adapter,
                                             uint32_t fmt, uint32_t mode,
                                             uint32_t* outW, uint32_t* outH,
                                             uint32_t* outRefresh, uint32_t* outFmt);
-int32_t  dxmt9c_factory_get_adapter_display_mode(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t  dxmt9c_factory_get_adapter_display_mode(D9CFactory*, uint32_t adapter,
                                                   uint32_t* outW, uint32_t* outH,
                                                   uint32_t* outRefresh, uint32_t* outFmt);
 uint64_t dxmt9c_factory_get_adapter_monitor(D9CFactory*, uint32_t adapter);
-int32_t  dxmt9c_factory_check_device_type(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t  dxmt9c_factory_check_device_type(D9CFactory*, uint32_t adapter,
                                            uint32_t devType, uint32_t adapterFmt,
                                            uint32_t backFmt, uint32_t windowed);
-int32_t  dxmt9c_factory_check_device_format(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t  dxmt9c_factory_check_device_format(D9CFactory*, uint32_t adapter,
                                              uint32_t fmt, uint32_t usage);
-int32_t  dxmt9c_factory_check_device_format2(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t  dxmt9c_factory_check_device_format2(D9CFactory*, uint32_t adapter,
                                               uint32_t fmt, uint32_t usage,
                                               uint32_t resourceType);
-int32_t  dxmt9c_factory_check_device_multisample(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t  dxmt9c_factory_check_device_multisample(D9CFactory*, uint32_t adapter,
                                                   uint32_t fmt, uint32_t msType,
                                                   uint32_t windowed);
-int32_t  dxmt9c_factory_get_caps(D9CFactory*, uint32_t adapter, D9CCaps* out);
-int32_t  dxmt9c_factory_get_adapter_luid(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t  dxmt9c_factory_get_caps(D9CFactory*, uint32_t adapter, D9CCaps* out);
+DXMT9_NODISCARD int32_t  dxmt9c_factory_get_adapter_luid(D9CFactory*, uint32_t adapter,
                                           uint32_t* lowPart, int32_t* highPart);
 
-D9CDevice* dxmt9c_factory_create_device(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD D9CDevice* dxmt9c_factory_create_device(D9CFactory*, uint32_t adapter,
                                          const D9CPresentParams*, uint32_t behaviorFlags,
                                          const D9CDisplayModeEx* fullscreenMode);
-int32_t dxmt9c_factory_create_device2(D9CFactory*, uint32_t adapter,
+DXMT9_NODISCARD int32_t dxmt9c_factory_create_device2(D9CFactory*, uint32_t adapter,
                                        const D9CPresentParams*, uint32_t behaviorFlags,
                                        const D9CDisplayModeEx* fullscreenMode,
                                        D9CDevice** outDevice);
@@ -828,209 +836,209 @@ int32_t dxmt9c_factory_create_device2(D9CFactory*, uint32_t adapter,
 void     dxmt9c_device_addref(D9CDevice*);
 uint32_t dxmt9c_device_release(D9CDevice*);
 
-int32_t  dxmt9c_device_get_caps(D9CDevice*, D9CCaps* out);
-int32_t  dxmt9c_device_test_cooperative_level(D9CDevice*);
-int32_t  dxmt9c_device_check_device_state(D9CDevice*, uint64_t destWindow);
-int32_t  dxmt9c_device_reset(D9CDevice*, const D9CPresentParams*);
-int32_t  dxmt9c_device_reset_ex(D9CDevice*, const D9CPresentParams*,
+DXMT9_NODISCARD int32_t  dxmt9c_device_get_caps(D9CDevice*, D9CCaps* out);
+DXMT9_NODISCARD int32_t  dxmt9c_device_test_cooperative_level(D9CDevice*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_check_device_state(D9CDevice*, uint64_t destWindow);
+DXMT9_NODISCARD int32_t  dxmt9c_device_reset(D9CDevice*, const D9CPresentParams*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_reset_ex(D9CDevice*, const D9CPresentParams*,
                                  const D9CDisplayModeEx*);
-int32_t  dxmt9c_device_present(D9CDevice*, const D9CRect* src, const D9CRect* dst,
+DXMT9_NODISCARD int32_t  dxmt9c_device_present(D9CDevice*, const D9CRect* src, const D9CRect* dst,
                                 uint64_t destWindowOverride, const void* dirtyRegion,
                                 uint32_t flags);
-int32_t  dxmt9c_device_begin_scene(D9CDevice*);
-int32_t  dxmt9c_device_end_scene(D9CDevice*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_begin_scene(D9CDevice*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_end_scene(D9CDevice*);
 
-int32_t  dxmt9c_device_clear(D9CDevice*, uint32_t count, const D9CRect* rects,
+DXMT9_NODISCARD int32_t  dxmt9c_device_clear(D9CDevice*, uint32_t count, const D9CRect* rects,
                               uint32_t flags, uint32_t colorARGB, float z,
                               uint32_t stencil);
 
-int32_t  dxmt9c_device_set_viewport(D9CDevice*, const D9CViewport*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_viewport(D9CDevice*, const D9CViewport*);
 void     dxmt9c_device_get_viewport(D9CDevice*, D9CViewport*);
-int32_t  dxmt9c_device_set_scissor_rect(D9CDevice*, const D9CRect*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_scissor_rect(D9CDevice*, const D9CRect*);
 void     dxmt9c_device_get_scissor_rect(D9CDevice*, D9CRect*);
 
-int32_t  dxmt9c_device_set_transform(D9CDevice*, uint32_t state, const D9CMatrix*);
-int32_t  dxmt9c_device_get_transform(D9CDevice*, uint32_t state, D9CMatrix*);
-int32_t  dxmt9c_device_set_material(D9CDevice*, const D9CMaterial*);
-int32_t  dxmt9c_device_get_material(D9CDevice*, D9CMaterial*);
-int32_t  dxmt9c_device_set_light(D9CDevice*, uint32_t index, const D9CLight*);
-int32_t  dxmt9c_device_light_enable(D9CDevice*, uint32_t index, uint32_t enable);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_transform(D9CDevice*, uint32_t state, const D9CMatrix*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_get_transform(D9CDevice*, uint32_t state, D9CMatrix*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_material(D9CDevice*, const D9CMaterial*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_get_material(D9CDevice*, D9CMaterial*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_light(D9CDevice*, uint32_t index, const D9CLight*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_light_enable(D9CDevice*, uint32_t index, uint32_t enable);
 
-int32_t  dxmt9c_device_set_render_state(D9CDevice*, uint32_t state, uint32_t value);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_render_state(D9CDevice*, uint32_t state, uint32_t value);
 uint32_t dxmt9c_device_get_render_state(D9CDevice*, uint32_t state);
-int32_t  dxmt9c_device_set_texture_stage_state(D9CDevice*, uint32_t stage,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_texture_stage_state(D9CDevice*, uint32_t stage,
                                                 uint32_t type, uint32_t value);
 uint32_t dxmt9c_device_get_texture_stage_state(D9CDevice*, uint32_t stage,
                                                 uint32_t type);
-int32_t  dxmt9c_device_set_sampler_state(D9CDevice*, uint32_t sampler,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_sampler_state(D9CDevice*, uint32_t sampler,
                                           uint32_t type, uint32_t value);
 uint32_t dxmt9c_device_get_sampler_state(D9CDevice*, uint32_t sampler, uint32_t type);
 
-int32_t  dxmt9c_device_set_clip_plane(D9CDevice*, uint32_t index,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_clip_plane(D9CDevice*, uint32_t index,
                                        const float plane[4]);
-int32_t  dxmt9c_device_get_clip_plane(D9CDevice*, uint32_t index, float plane[4]);
+DXMT9_NODISCARD int32_t  dxmt9c_device_get_clip_plane(D9CDevice*, uint32_t index, float plane[4]);
 
-int32_t  dxmt9c_device_set_fvf(D9CDevice*, uint32_t fvf);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_fvf(D9CDevice*, uint32_t fvf);
 uint32_t dxmt9c_device_get_fvf(D9CDevice*);
-int32_t  dxmt9c_device_set_vertex_declaration(D9CDevice*, D9CVertexDecl*);
-int32_t  dxmt9c_device_set_stream_source(D9CDevice*, uint32_t stream,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_vertex_declaration(D9CDevice*, D9CVertexDecl*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_stream_source(D9CDevice*, uint32_t stream,
                                           D9CBuffer*, uint32_t offset, uint32_t stride);
-int32_t  dxmt9c_device_set_stream_source_freq(D9CDevice*, uint32_t stream,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_stream_source_freq(D9CDevice*, uint32_t stream,
                                                uint32_t freq);
-int32_t  dxmt9c_device_set_indices(D9CDevice*, D9CBuffer*);
-int32_t  dxmt9c_device_set_texture(D9CDevice*, uint32_t stage, D9CTexture*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_indices(D9CDevice*, D9CBuffer*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_texture(D9CDevice*, uint32_t stage, D9CTexture*);
 
-int32_t  dxmt9c_device_set_vertex_shader(D9CDevice*, D9CShader*);
-int32_t  dxmt9c_device_set_pixel_shader(D9CDevice*, D9CShader*);
-int32_t  dxmt9c_device_set_vs_const_f(D9CDevice*, uint32_t start,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_vertex_shader(D9CDevice*, D9CShader*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_pixel_shader(D9CDevice*, D9CShader*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_vs_const_f(D9CDevice*, uint32_t start,
                                        const float* data, uint32_t count);
-int32_t  dxmt9c_device_get_vs_const_f(D9CDevice*, uint32_t start,
+DXMT9_NODISCARD int32_t  dxmt9c_device_get_vs_const_f(D9CDevice*, uint32_t start,
                                        float* data, uint32_t count);
-int32_t  dxmt9c_device_set_ps_const_f(D9CDevice*, uint32_t start,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_ps_const_f(D9CDevice*, uint32_t start,
                                        const float* data, uint32_t count);
-int32_t  dxmt9c_device_get_ps_const_f(D9CDevice*, uint32_t start,
+DXMT9_NODISCARD int32_t  dxmt9c_device_get_ps_const_f(D9CDevice*, uint32_t start,
                                        float* data, uint32_t count);
-int32_t  dxmt9c_device_set_vs_const_i(D9CDevice*, uint32_t start,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_vs_const_i(D9CDevice*, uint32_t start,
                                        const int32_t* data, uint32_t count);
-int32_t  dxmt9c_device_set_ps_const_i(D9CDevice*, uint32_t start,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_ps_const_i(D9CDevice*, uint32_t start,
                                        const int32_t* data, uint32_t count);
-int32_t  dxmt9c_device_set_vs_const_b(D9CDevice*, uint32_t start,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_vs_const_b(D9CDevice*, uint32_t start,
                                        const uint32_t* data, uint32_t count);
-int32_t  dxmt9c_device_set_ps_const_b(D9CDevice*, uint32_t start,
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_ps_const_b(D9CDevice*, uint32_t start,
                                        const uint32_t* data, uint32_t count);
 
-int32_t  dxmt9c_device_set_render_target(D9CDevice*, uint32_t index, D9CSurface*);
-D9CSurface* dxmt9c_device_get_render_target(D9CDevice*, uint32_t index);
-int32_t  dxmt9c_device_set_depth_stencil(D9CDevice*, D9CSurface*);
-D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_render_target(D9CDevice*, uint32_t index, D9CSurface*);
+DXMT9_NODISCARD D9CSurface* dxmt9c_device_get_render_target(D9CDevice*, uint32_t index);
+DXMT9_NODISCARD int32_t  dxmt9c_device_set_depth_stencil(D9CDevice*, D9CSurface*);
+DXMT9_NODISCARD D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice*);
 
-int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
+DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
                                        uint32_t startVertex, uint32_t count);
-int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
-int32_t  dxmt9c_device_draw_primitive_packet(D9CDevice*,
+DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive_packet(D9CDevice*,
                                               const D9CDrawPrimitivePacket*);
-int32_t  dxmt9c_device_draw_primitive_chunk(D9CDevice*,
+DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive_chunk(D9CDevice*,
                                              const D9CDrawPrimitivePacket* packets,
                                              uint32_t packetCount);
-int32_t  dxmt9c_device_draw_indexed_primitive(D9CDevice*, uint32_t type,
+DXMT9_NODISCARD int32_t  dxmt9c_device_draw_indexed_primitive(D9CDevice*, uint32_t type,
                                                int32_t baseVertex, uint32_t minVertex,
                                                uint32_t numVertices, uint32_t startIndex,
                                                uint32_t count);
-int32_t  dxmt9c_device_draw_primitive_up(D9CDevice*, uint32_t type, uint32_t count,
+DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive_up(D9CDevice*, uint32_t type, uint32_t count,
                                           const void* data, uint32_t stride);
-int32_t  dxmt9c_device_draw_indexed_primitive_up(D9CDevice*, uint32_t type,
+DXMT9_NODISCARD int32_t  dxmt9c_device_draw_indexed_primitive_up(D9CDevice*, uint32_t type,
                                                   uint32_t minVertex, uint32_t numVertices,
                                                   uint32_t count, const void* indexData,
                                                   uint32_t indexFmt,
                                                   const void* vertexData, uint32_t stride);
 
-int32_t  dxmt9c_device_update_surface(D9CDevice*, D9CSurface* src,
+DXMT9_NODISCARD int32_t  dxmt9c_device_update_surface(D9CDevice*, D9CSurface* src,
                                        const D9CRect* srcRect,
                                        D9CSurface* dst, const D9CRect* dstPt);
-int32_t  dxmt9c_device_update_texture(D9CDevice*, D9CTexture* src, D9CTexture* dst);
-int32_t  dxmt9c_device_stretch_rect(D9CDevice*, D9CSurface* src, const D9CRect* srcRect,
+DXMT9_NODISCARD int32_t  dxmt9c_device_update_texture(D9CDevice*, D9CTexture* src, D9CTexture* dst);
+DXMT9_NODISCARD int32_t  dxmt9c_device_stretch_rect(D9CDevice*, D9CSurface* src, const D9CRect* srcRect,
                                      D9CSurface* dst, const D9CRect* dstRect, uint32_t filter);
-int32_t  dxmt9c_device_color_fill(D9CDevice*, D9CSurface*, const D9CRect*, uint32_t colorARGB);
-int32_t  dxmt9c_device_get_render_target_data(D9CDevice*, D9CSurface* rt, D9CSurface* dst);
+DXMT9_NODISCARD int32_t  dxmt9c_device_color_fill(D9CDevice*, D9CSurface*, const D9CRect*, uint32_t colorARGB);
+DXMT9_NODISCARD int32_t  dxmt9c_device_get_render_target_data(D9CDevice*, D9CSurface* rt, D9CSurface* dst);
 
-int32_t     dxmt9c_device_set_maximum_frame_latency(D9CDevice*, uint32_t);
+DXMT9_NODISCARD int32_t     dxmt9c_device_set_maximum_frame_latency(D9CDevice*, uint32_t);
 uint32_t    dxmt9c_device_get_maximum_frame_latency(D9CDevice*);
-int32_t     dxmt9c_device_wait_for_vblank(D9CDevice*, uint32_t swapChainIndex);
-int32_t     dxmt9c_device_check_device_multisample(D9CDevice*, uint32_t fmt,
+DXMT9_NODISCARD int32_t     dxmt9c_device_wait_for_vblank(D9CDevice*, uint32_t swapChainIndex);
+DXMT9_NODISCARD int32_t     dxmt9c_device_check_device_multisample(D9CDevice*, uint32_t fmt,
                                                     uint32_t msType, uint32_t windowed);
-D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice*, uint32_t index);
+DXMT9_NODISCARD D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice*, uint32_t index);
 uint32_t    dxmt9c_device_get_swap_chain_count(D9CDevice*);
-D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice*,
+DXMT9_NODISCARD D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice*,
                                                           const D9CPresentParams*);
 
 /* ── resource creation ───────────────────────────────────────────────────── */
 
-D9CTexture* dxmt9c_device_create_texture(D9CDevice*, uint32_t w, uint32_t h,
+DXMT9_NODISCARD D9CTexture* dxmt9c_device_create_texture(D9CDevice*, uint32_t w, uint32_t h,
                                           uint32_t levels, uint32_t usage,
                                           uint32_t fmt, uint32_t pool);
-D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice*, uint32_t size,
+DXMT9_NODISCARD D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice*, uint32_t size,
                                                uint32_t levels, uint32_t usage,
                                                uint32_t fmt, uint32_t pool);
-D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice*, uint32_t w, uint32_t h,
+DXMT9_NODISCARD D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice*, uint32_t w, uint32_t h,
                                                  uint32_t d, uint32_t levels,
                                                  uint32_t usage, uint32_t fmt,
                                                  uint32_t pool);
-D9CBuffer*  dxmt9c_device_create_vertex_buffer(D9CDevice*, uint32_t length,
+DXMT9_NODISCARD D9CBuffer*  dxmt9c_device_create_vertex_buffer(D9CDevice*, uint32_t length,
                                                 uint32_t usage, uint32_t fvf,
                                                 uint32_t pool);
-D9CBuffer*  dxmt9c_device_create_index_buffer(D9CDevice*, uint32_t length,
+DXMT9_NODISCARD D9CBuffer*  dxmt9c_device_create_index_buffer(D9CDevice*, uint32_t length,
                                                uint32_t usage, uint32_t fmt,
                                                uint32_t pool);
-D9CSurface* dxmt9c_device_create_render_target(D9CDevice*, uint32_t w, uint32_t h,
+DXMT9_NODISCARD D9CSurface* dxmt9c_device_create_render_target(D9CDevice*, uint32_t w, uint32_t h,
                                                 uint32_t fmt, uint32_t msType,
                                                 uint32_t msQuality, uint32_t lockable,
                                                 uint64_t* sharedHandle);
-D9CSurface* dxmt9c_device_create_depth_stencil(D9CDevice*, uint32_t w, uint32_t h,
+DXMT9_NODISCARD D9CSurface* dxmt9c_device_create_depth_stencil(D9CDevice*, uint32_t w, uint32_t h,
                                                 uint32_t fmt, uint32_t msType,
                                                 uint32_t msQuality, uint32_t discard,
                                                 uint64_t* sharedHandle);
-D9CSurface* dxmt9c_device_create_offscreen_surface(D9CDevice*, uint32_t w, uint32_t h,
+DXMT9_NODISCARD D9CSurface* dxmt9c_device_create_offscreen_surface(D9CDevice*, uint32_t w, uint32_t h,
                                                     uint32_t fmt, uint32_t pool,
                                                     uint64_t* sharedHandle);
 
-D9CShader*  dxmt9c_device_create_vertex_shader(D9CDevice*, const uint32_t* bytecode);
-D9CShader*  dxmt9c_device_create_pixel_shader(D9CDevice*, const uint32_t* bytecode);
+DXMT9_NODISCARD D9CShader*  dxmt9c_device_create_vertex_shader(D9CDevice*, const uint32_t* bytecode);
+DXMT9_NODISCARD D9CShader*  dxmt9c_device_create_pixel_shader(D9CDevice*, const uint32_t* bytecode);
 
-D9CVertexDecl* dxmt9c_device_create_vertex_declaration(D9CDevice*,
+DXMT9_NODISCARD D9CVertexDecl* dxmt9c_device_create_vertex_declaration(D9CDevice*,
                                                          const D9CVertexElement*);
 
-D9CQuery*      dxmt9c_device_create_query(D9CDevice*, uint32_t type);
-D9CStateBlock* dxmt9c_device_create_state_block(D9CDevice*, uint32_t type);
-int32_t        dxmt9c_device_begin_state_block(D9CDevice*);
-int32_t        dxmt9c_device_end_state_block(D9CDevice*, D9CStateBlock**);
+DXMT9_NODISCARD D9CQuery*      dxmt9c_device_create_query(D9CDevice*, uint32_t type);
+DXMT9_NODISCARD D9CStateBlock* dxmt9c_device_create_state_block(D9CDevice*, uint32_t type);
+DXMT9_NODISCARD int32_t        dxmt9c_device_begin_state_block(D9CDevice*);
+DXMT9_NODISCARD int32_t        dxmt9c_device_end_state_block(D9CDevice*, D9CStateBlock**);
 
 /* ── swap chain ──────────────────────────────────────────────────────────── */
 
 void     dxmt9c_swapchain_addref(D9CSwapChain*);
 uint32_t dxmt9c_swapchain_release(D9CSwapChain*);
-int32_t  dxmt9c_swapchain_present(D9CSwapChain*, const D9CRect* src,
+DXMT9_NODISCARD int32_t  dxmt9c_swapchain_present(D9CSwapChain*, const D9CRect* src,
                                    const D9CRect* dst, uint64_t destWindow,
                                    const void* dirtyRegion, uint32_t flags);
-D9CSurface* dxmt9c_swapchain_get_back_buffer(D9CSwapChain*, uint32_t index,
+DXMT9_NODISCARD D9CSurface* dxmt9c_swapchain_get_back_buffer(D9CSwapChain*, uint32_t index,
                                               uint32_t type);
-D9CSurface* dxmt9c_swapchain_get_depth_stencil(D9CSwapChain*);
-int32_t  dxmt9c_swapchain_get_present_params(D9CSwapChain*, D9CPresentParams*);
+DXMT9_NODISCARD D9CSurface* dxmt9c_swapchain_get_depth_stencil(D9CSwapChain*);
+DXMT9_NODISCARD int32_t  dxmt9c_swapchain_get_present_params(D9CSwapChain*, D9CPresentParams*);
 
 /* ── texture ─────────────────────────────────────────────────────────────── */
 
 void     dxmt9c_texture_addref(D9CTexture*);
 uint32_t dxmt9c_texture_release(D9CTexture*);
-int32_t  dxmt9c_texture_lock_rect(D9CTexture*, uint32_t level, D9CLockedRect* out,
+DXMT9_NODISCARD int32_t  dxmt9c_texture_lock_rect(D9CTexture*, uint32_t level, D9CLockedRect* out,
                                    const D9CRect*, uint32_t flags);
-int32_t  dxmt9c_texture_unlock_rect(D9CTexture*, uint32_t level);
-D9CSurface* dxmt9c_texture_get_surface_level(D9CTexture*, uint32_t level);
+DXMT9_NODISCARD int32_t  dxmt9c_texture_unlock_rect(D9CTexture*, uint32_t level);
+DXMT9_NODISCARD D9CSurface* dxmt9c_texture_get_surface_level(D9CTexture*, uint32_t level);
 uint32_t dxmt9c_texture_get_level_count(D9CTexture*);
-int32_t  dxmt9c_texture_get_level_desc(D9CTexture*, uint32_t level, D9CSurfaceDesc*);
-int32_t  dxmt9c_texture_generate_mip_sublevels(D9CTexture*);
+DXMT9_NODISCARD int32_t  dxmt9c_texture_get_level_desc(D9CTexture*, uint32_t level, D9CSurfaceDesc*);
+DXMT9_NODISCARD int32_t  dxmt9c_texture_generate_mip_sublevels(D9CTexture*);
 
 /* ── buffer ──────────────────────────────────────────────────────────────── */
 
 void     dxmt9c_buffer_addref(D9CBuffer*);
 uint32_t dxmt9c_buffer_release(D9CBuffer*);
-int32_t  dxmt9c_buffer_lock(D9CBuffer*, uint32_t offset, uint32_t size,
+DXMT9_NODISCARD int32_t  dxmt9c_buffer_lock(D9CBuffer*, uint32_t offset, uint32_t size,
                              void** data, uint32_t flags);
-int32_t  dxmt9c_buffer_unlock(D9CBuffer*);
-int32_t  dxmt9c_buffer_get_desc(D9CBuffer*, D9CBufferDesc*);
+DXMT9_NODISCARD int32_t  dxmt9c_buffer_unlock(D9CBuffer*);
+DXMT9_NODISCARD int32_t  dxmt9c_buffer_get_desc(D9CBuffer*, D9CBufferDesc*);
 
 /* ── surface ─────────────────────────────────────────────────────────────── */
 
 void     dxmt9c_surface_addref(D9CSurface*);
 uint32_t dxmt9c_surface_release(D9CSurface*);
-int32_t  dxmt9c_surface_lock_rect(D9CSurface*, D9CLockedRect*, const D9CRect*, uint32_t flags);
-int32_t  dxmt9c_surface_unlock_rect(D9CSurface*);
-int32_t  dxmt9c_surface_get_desc(D9CSurface*, D9CSurfaceDesc*);
-D9CTexture* dxmt9c_surface_get_container_texture(D9CSurface*);
+DXMT9_NODISCARD int32_t  dxmt9c_surface_lock_rect(D9CSurface*, D9CLockedRect*, const D9CRect*, uint32_t flags);
+DXMT9_NODISCARD int32_t  dxmt9c_surface_unlock_rect(D9CSurface*);
+DXMT9_NODISCARD int32_t  dxmt9c_surface_get_desc(D9CSurface*, D9CSurfaceDesc*);
+DXMT9_NODISCARD D9CTexture* dxmt9c_surface_get_container_texture(D9CSurface*);
 
 /* ── shader ──────────────────────────────────────────────────────────────── */
 
 void     dxmt9c_shader_addref(D9CShader*);
 uint32_t dxmt9c_shader_release(D9CShader*);
-int32_t  dxmt9c_shader_get_bytecode(D9CShader*, void* data, uint32_t* size);
+DXMT9_NODISCARD int32_t  dxmt9c_shader_get_bytecode(D9CShader*, void* data, uint32_t* size);
 
 /* ── vertex declaration ──────────────────────────────────────────────────── */
 
@@ -1041,8 +1049,8 @@ uint32_t dxmt9c_vdecl_release(D9CVertexDecl*);
 
 void     dxmt9c_query_addref(D9CQuery*);
 uint32_t dxmt9c_query_release(D9CQuery*);
-int32_t  dxmt9c_query_issue(D9CQuery*, uint32_t flags);
-int32_t  dxmt9c_query_get_data(D9CQuery*, void* data, uint32_t size, uint32_t flags);
+DXMT9_NODISCARD int32_t  dxmt9c_query_issue(D9CQuery*, uint32_t flags);
+DXMT9_NODISCARD int32_t  dxmt9c_query_get_data(D9CQuery*, void* data, uint32_t size, uint32_t flags);
 uint32_t dxmt9c_query_get_data_size(D9CQuery*);
 uint32_t dxmt9c_query_get_type(D9CQuery*);
 
@@ -1050,12 +1058,12 @@ uint32_t dxmt9c_query_get_type(D9CQuery*);
 
 void     dxmt9c_stateblock_addref(D9CStateBlock*);
 uint32_t dxmt9c_stateblock_release(D9CStateBlock*);
-int32_t  dxmt9c_stateblock_capture(D9CStateBlock*);
-int32_t  dxmt9c_stateblock_apply(D9CStateBlock*);
+DXMT9_NODISCARD int32_t  dxmt9c_stateblock_capture(D9CStateBlock*);
+DXMT9_NODISCARD int32_t  dxmt9c_stateblock_apply(D9CStateBlock*);
 
 /* ── vertex declaration ──────────────────────────────────────────────────── */
 
-int32_t  dxmt9c_vdecl_get_declaration(D9CVertexDecl*, D9CVertexElement* out,
+DXMT9_NODISCARD int32_t  dxmt9c_vdecl_get_declaration(D9CVertexDecl*, D9CVertexElement* out,
                                        uint32_t* count);
 
 #ifdef __cplusplus

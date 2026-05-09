@@ -20,7 +20,7 @@ static void dxmt9DeviceDebugLog(const char *fmt, ...) {
   va_end(args);
 }
 
-static HRESULT setPrivateData(dxmt9::util::ComPrivateData &storage,
+[[nodiscard]] static HRESULT setPrivateData(dxmt9::util::ComPrivateData &storage,
                               REFGUID guid, const void *data, DWORD size,
                               DWORD flags, const char *label,
                               const void *self) {
@@ -38,7 +38,7 @@ static HRESULT setPrivateData(dxmt9::util::ComPrivateData &storage,
   return hr;
 }
 
-static HRESULT getPrivateData(dxmt9::util::ComPrivateData &storage,
+[[nodiscard]] static HRESULT getPrivateData(dxmt9::util::ComPrivateData &storage,
                               REFGUID guid, void *data, DWORD *size,
                               const char *label, const void *self) {
   UINT localSize = size ? static_cast<UINT>(*size) : 0u;
@@ -52,7 +52,7 @@ static HRESULT getPrivateData(dxmt9::util::ComPrivateData &storage,
   return hr;
 }
 
-static HRESULT freePrivateData(dxmt9::util::ComPrivateData &storage,
+[[nodiscard]] static HRESULT freePrivateData(dxmt9::util::ComPrivateData &storage,
                                REFGUID guid, const char *label,
                                const void *self) {
   HRESULT hr = storage.removeData(guid);
@@ -79,11 +79,11 @@ static D9CRect toR(const D3DBOX &b) {
   return c;
 }
 
-static HRESULT flushChildRecorder(D3D9PeRecorderFlush *recorder) {
+[[nodiscard]] static HRESULT flushChildRecorder(D3D9PeRecorderFlush *recorder) {
   return recorder ? recorder->FlushPeRecorderForChild() : S_OK;
 }
 
-static HRESULT textureLevelDesc(D9CTexture *texture, UINT level,
+[[nodiscard]] static HRESULT textureLevelDesc(D9CTexture *texture, UINT level,
                                 D9CSurfaceDesc *desc) {
   if (!texture || !desc)
     return D3DERR_INVALIDCALL;
@@ -106,7 +106,7 @@ static DWORD setTextureLod(D9CTexture *texture, DWORD &lod, DWORD value) {
   return previous;
 }
 
-static HRESULT setAutoGenFilter(D3DTEXTUREFILTERTYPE &filter,
+[[nodiscard]] static HRESULT setAutoGenFilter(D3DTEXTUREFILTERTYPE &filter,
                                 D3DTEXTUREFILTERTYPE value) {
   if (value == D3DTEXF_NONE) {
     return D3DERR_INVALIDCALL;
@@ -115,7 +115,7 @@ static HRESULT setAutoGenFilter(D3DTEXTUREFILTERTYPE &filter,
   return S_OK;
 }
 
-static HRESULT lockTextureBox(D9CTexture *texture, UINT level,
+[[nodiscard]] static HRESULT lockTextureBox(D9CTexture *texture, UINT level,
                               D3DLOCKED_BOX *locked, const D3DBOX *box,
                               DWORD flags, D3D9PeRecorderFlush *recorder) {
   if (!locked)
@@ -146,7 +146,7 @@ static HRESULT lockTextureBox(D9CTexture *texture, UINT level,
   return S_OK;
 }
 
-static HRESULT unlockTextureBox(D9CTexture *texture, UINT level,
+[[nodiscard]] static HRESULT unlockTextureBox(D9CTexture *texture, UINT level,
                                 D3D9PeRecorderFlush *recorder) {
   const HRESULT flushHr = flushChildRecorder(recorder);
   if (FAILED(flushHr))
@@ -518,7 +518,7 @@ public:
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return;
-    dxmt9c_texture_generate_mip_sublevels(t_);
+    static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
@@ -733,7 +733,7 @@ public:
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return;
-    dxmt9c_texture_generate_mip_sublevels(t_);
+    static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
   }
   HRESULT STDMETHODCALLTYPE
   GetLevelDesc(UINT level, D3DSURFACE_DESC *pD) noexcept override {
@@ -1045,7 +1045,7 @@ public:
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return;
-    dxmt9c_texture_generate_mip_sublevels(t_);
+    static_cast<void>(dxmt9c_texture_generate_mip_sublevels(t_));
   }
   HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT level,
                                          D3DVOLUME_DESC *pD) noexcept override {

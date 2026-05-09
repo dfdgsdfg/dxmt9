@@ -88,7 +88,7 @@ static bool isUnknownFormat(D3DFORMAT fmt) {
 // The width/height == 1x1 narrowing for 2D textures is enforced at the
 // call site (validate* doesn't see W/H). DEFAULT-pool sharing remains
 // E_NOTIMPL until the IOSurface / MTLSharedTexture bridge lands.
-static HRESULT validateSharedHandleForTexture(bool extended,
+[[nodiscard]] static HRESULT validateSharedHandleForTexture(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
                                               UINT levels,
@@ -106,7 +106,7 @@ static HRESULT validateSharedHandleForTexture(bool extended,
 
 // T4: per Wine test_user_memory (~line 793-798), VB/IB with pSharedHandle
 // and SYSTEMMEM (or any non-DEFAULT pool) must return D3DERR_NOTAVAILABLE.
-static HRESULT validateSharedHandleForBuffer(bool extended,
+[[nodiscard]] static HRESULT validateSharedHandleForBuffer(bool extended,
                                              HANDLE* sharedHandle,
                                              D3DPOOL pool) {
     if (!sharedHandle) return S_OK;
@@ -120,7 +120,7 @@ static HRESULT validateSharedHandleForBuffer(bool extended,
 //   - SYSTEMMEM           -> S_OK; user pointer aliased
 //   - SCRATCH             -> D3DERR_INVALIDCALL
 //   - DEFAULT (E_NOTIMPL) -> partial scope, see validateSharedHandleForDefaultSurface
-static HRESULT validateSharedHandleForSurface(bool extended,
+[[nodiscard]] static HRESULT validateSharedHandleForSurface(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
                                               bool allowSystemMemUserMemory) {
@@ -135,7 +135,7 @@ static HRESULT validateSharedHandleForSurface(bool extended,
     return E_NOTIMPL;
 }
 
-static HRESULT validateSharedHandleForDefaultSurface(bool extended,
+[[nodiscard]] static HRESULT validateSharedHandleForDefaultSurface(bool extended,
                                                      HANDLE* sharedHandle) {
     if (!sharedHandle) return S_OK;
     if (!extended) return E_NOTIMPL;

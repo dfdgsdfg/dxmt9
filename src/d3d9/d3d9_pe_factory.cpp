@@ -70,7 +70,7 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
            interval == D3DPRESENT_INTERVAL_IMMEDIATE;
 }
 
-static HRESULT validatePresentParametersD3D(const D3DPRESENT_PARAMETERS& pp,
+[[nodiscard]] static HRESULT validatePresentParametersD3D(const D3DPRESENT_PARAMETERS& pp,
                                             bool extended) {
     switch (pp.SwapEffect) {
     case D3DSWAPEFFECT_DISCARD:
@@ -188,7 +188,7 @@ static UINT getAdapterModeCountForFilter(D9CFactory* f, UINT adapter,
     return count;
 }
 
-static HRESULT enumAdapterModeForFormat(D9CFactory* f, UINT adapter, D3DFORMAT format,
+[[nodiscard]] static HRESULT enumAdapterModeForFormat(D9CFactory* f, UINT adapter, D3DFORMAT format,
                                          UINT mode, D3DDISPLAYMODEEX* out) {
     if (!isSupportedAdapterModeFormat(format)) {
         return D3DERR_INVALIDCALL;
@@ -208,7 +208,7 @@ static HRESULT enumAdapterModeForFormat(D9CFactory* f, UINT adapter, D3DFORMAT f
     return S_OK;
 }
 
-static HRESULT enumAdapterModeForFilter(D9CFactory* f, UINT adapter,
+[[nodiscard]] static HRESULT enumAdapterModeForFilter(D9CFactory* f, UINT adapter,
                                          const D3DDISPLAYMODEFILTER* filter,
                                          UINT mode, D3DDISPLAYMODEEX* out) {
     if (!isValidDisplayModeFilter(filter) || !filterAllowsProgressiveModes(filter)) {

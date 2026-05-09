@@ -23,6 +23,10 @@ def main(argv: list[str]) -> int:
 
     text = source.read_text()
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    # Drop the DXMT9_NODISCARD attribute macro: downstream consumers parse
+    # the extracted schema and would otherwise treat it as part of the
+    # return type.
+    text = re.sub(r"\bDXMT9_NODISCARD\b", "", text)
     protos = [match.group(1).strip() for match in PROTOTYPE_RE.finditer(text)]
 
     lines = [

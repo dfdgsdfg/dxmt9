@@ -41,7 +41,7 @@ static D9CRect toR(const RECT &r) {
   return c;
 }
 
-static HRESULT flushChildRecorder(D3D9PeRecorderFlush *recorder) {
+[[nodiscard]] static HRESULT flushChildRecorder(D3D9PeRecorderFlush *recorder) {
   return recorder ? recorder->FlushPeRecorderForChild() : S_OK;
 }
 

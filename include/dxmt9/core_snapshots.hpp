@@ -1194,12 +1194,12 @@ class Device : public std::enable_shared_from_this<Device> {
   // renamed to upperDevice() once all call sites migrate.
   std::shared_ptr<dxmt9::Device> backend() const noexcept { return backend_; }
 
-  std::shared_ptr<Buffer> createBuffer(const BufferDesc& desc);
-  std::shared_ptr<Texture> createTexture(const TextureDesc& desc);
-  std::shared_ptr<Surface> createSurface(const SurfaceDesc& desc);
-  std::shared_ptr<Query> createQuery(QueryType type);
-  std::shared_ptr<StateBlock> createStateBlock(StateBlockType type = StateBlockType::All) const;
-  std::shared_ptr<SwapChain> createAdditionalSwapChain(const PresentParameters& params);
+  [[nodiscard]] std::shared_ptr<Buffer> createBuffer(const BufferDesc& desc);
+  [[nodiscard]] std::shared_ptr<Texture> createTexture(const TextureDesc& desc);
+  [[nodiscard]] std::shared_ptr<Surface> createSurface(const SurfaceDesc& desc);
+  [[nodiscard]] std::shared_ptr<Query> createQuery(QueryType type);
+  [[nodiscard]] std::shared_ptr<StateBlock> createStateBlock(StateBlockType type = StateBlockType::All) const;
+  [[nodiscard]] std::shared_ptr<SwapChain> createAdditionalSwapChain(const PresentParameters& params);
   std::shared_ptr<SwapChain> swapChain(size_t index = 0) const;
   size_t swapChainCount() const noexcept { return swapChains_.size(); }
   HResult testCooperativeLevel() const;

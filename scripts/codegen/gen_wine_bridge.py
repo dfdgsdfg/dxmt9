@@ -214,6 +214,10 @@ def collect_device_c_prototypes(schema_header: pathlib.Path) -> list[Proto]:
     text = load_schema_text(schema_header)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     text = re.sub(r"^\s*#.*$", "", text, flags=re.M)
+    # Strip the DXMT9_NODISCARD attribute macro before matching prototypes —
+    # otherwise the regex would absorb it into the return type and the bridge
+    # generator would emit it on struct fields too.
+    text = re.sub(r"\bDXMT9_NODISCARD\b", "", text)
     matches = re.finditer(
         r"([A-Za-z_][A-Za-z0-9_\s\*]*?\s+dxmt9c_[A-Za-z0-9_]+\s*\([^;]*?\)\s*;)",
         text,
