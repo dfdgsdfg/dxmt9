@@ -2027,4 +2027,77 @@ WINEMETAL_API obj_handle_t MTLDevice_newTileRenderPipelineState(
     obj_handle_t device, const struct WMTTileRenderPipelineInfo *info, obj_handle_t *err_out
 );
 
+// ----------------------------------------------------------------------------
+// MTLHeap surface (R-BACK-5.x / R-BACK-14.* small-resource heap pooling).
+//
+// MTLHeap provides suballocation of buffers and textures from a single large
+// MTLResource-style allocation. The dxmt9 small-resource pooling track will
+// adopt this surface to amortize per-resource allocation overhead and shrink
+// residency churn.
+//
+// The descriptor mirrors the relevant Metal MTLHeapDescriptor properties.
+// `WMTResourceOptions` already encodes storage / cache / hazard-tracking mode
+// as a packed bitfield (see line ~115); the standalone enum aliases below
+// expose the same numeric values so `MTLHeapDescriptor` can be configured
+// either as a full `resourceOptions` blob or via the individual properties
+// the way `MTLHeapDescriptor` does. The unix impl prefers the individual
+// fields when any of them are set to a non-default value, matching the
+// MTLHeapDescriptor convention.
+// ----------------------------------------------------------------------------
+
+enum WMTHeapType : uint32_t {
+  WMTHeapTypeAutomatic = 0,
+  WMTHeapTypePlacement = 1,
+  WMTHeapTypeSparse    = 2,
+};
+
+// Numeric values match the corresponding bits in WMTResourceOptions so that
+// either packed or individual configuration produces the same MTLHeapDescriptor.
+enum WMTResourceStorageMode : uint32_t {
+  WMTStorageModeShared     = 0,
+  WMTStorageModeManaged    = 1,
+  WMTStorageModePrivate    = 2,
+  WMTStorageModeMemoryless = 3,
+};
+
+enum WMTResourceCpuCacheMode : uint32_t {
+  WMTCpuCacheModeDefault       = 0,
+  WMTCpuCacheModeWriteCombined = 1,
+};
+
+enum WMTResourceHazardTrackingMode : uint32_t {
+  WMTHazardTrackingModeDefault   = 0,
+  WMTHazardTrackingModeUntracked = 1,
+  WMTHazardTrackingModeTracked   = 2,
+};
+
+struct WMTHeapDescriptor {
+  uint64_t                              size;
+  enum WMTHeapType                      type;
+  enum WMTResourceOptions               resourceOptions;
+  enum WMTResourceStorageMode           storageMode;
+  enum WMTResourceCpuCacheMode          cpuCacheMode;
+  enum WMTResourceHazardTrackingMode    hazardTrackingMode;
+};
+
+WINEMETAL_API obj_handle_t MTLDevice_newHeapWithDescriptor(obj_handle_t device, struct WMTHeapDescriptor *desc);
+
+WINEMETAL_API obj_handle_t MTLHeap_makeBuffer(obj_handle_t heap, uint64_t length, uint64_t options);
+
+WINEMETAL_API obj_handle_t MTLHeap_makeTexture(obj_handle_t heap, struct WMTTextureInfo *info);
+
+WINEMETAL_API uint64_t MTLHeap_size(obj_handle_t heap);
+
+WINEMETAL_API uint64_t MTLHeap_usedSize(obj_handle_t heap);
+
+WINEMETAL_API uint64_t MTLHeap_currentAllocatedSize(obj_handle_t heap);
+
+WINEMETAL_API void MTLHeap_setLabel(obj_handle_t heap, const char *label);
+
+WINEMETAL_API void MTLRenderCommandEncoder_useHeap(obj_handle_t encoder, obj_handle_t heap);
+
+WINEMETAL_API void MTLBlitCommandEncoder_useHeap(obj_handle_t encoder, obj_handle_t heap);
+
+WINEMETAL_API void MTLComputeCommandEncoder_useHeap(obj_handle_t encoder, obj_handle_t heap);
+
 #endif

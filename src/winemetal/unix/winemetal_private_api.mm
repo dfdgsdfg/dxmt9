@@ -1707,3 +1707,181 @@ extern "C" void WMTGetShaderCachePath(char *out, uint64_t capacity) {
     [full getCString:out maxLength:(NSUInteger)capacity encoding:NSUTF8StringEncoding];
   }
 }
+
+// ---------------------------------------------------------------------------
+// MTLHeap surface (R-BACK-5.x / R-BACK-14.* small-resource heap pooling).
+//
+// The descriptor exposes both the packed `resourceOptions` bitfield (matching
+// the existing WMTBufferInfo / WMTTextureInfo convention) and the individual
+// MTLHeapDescriptor properties (storageMode / cpuCacheMode / hazardTracking).
+// We always assign the individual descriptor properties because Apple's
+// MTLHeapDescriptor uses individual setters; if the caller only set
+// `resourceOptions`, we decode the bitfield. If the caller set individual
+// fields, we use those directly. This matches how MTLHeapDescriptor is
+// configured natively on macOS.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Decompose WMTResourceOptions bits into their individual axes. The constants
+// match WMTResourceOptions in winemetal.h (storage in bits 4-5, cache in bit 0,
+// hazard tracking in bits 8-9).
+void decompose_resource_options(enum WMTResourceOptions options,
+                                MTLStorageMode *storage,
+                                MTLCPUCacheMode *cache,
+                                MTLHazardTrackingMode *hazard) {
+  *cache = (options & 0x1) ? MTLCPUCacheModeWriteCombined : MTLCPUCacheModeDefaultCache;
+  switch (options & 0xF0) {
+    case 0:   *storage = MTLStorageModeShared;     break;
+    case 16:  *storage = MTLStorageModeManaged;    break;
+    case 32:  *storage = MTLStorageModePrivate;    break;
+    case 48:  *storage = MTLStorageModeMemoryless; break;
+    default:  *storage = MTLStorageModeShared;     break;
+  }
+  switch (options & 0x300) {
+    case 256: *hazard = MTLHazardTrackingModeUntracked; break;
+    case 512: *hazard = MTLHazardTrackingModeTracked;   break;
+    default:  *hazard = MTLHazardTrackingModeDefault;   break;
+  }
+}
+
+MTLStorageMode to_metal_storage_mode(enum WMTResourceStorageMode mode) {
+  switch (mode) {
+    case WMTStorageModeShared:     return MTLStorageModeShared;
+    case WMTStorageModeManaged:    return MTLStorageModeManaged;
+    case WMTStorageModePrivate:    return MTLStorageModePrivate;
+    case WMTStorageModeMemoryless: return MTLStorageModeMemoryless;
+  }
+  return MTLStorageModeShared;
+}
+
+MTLCPUCacheMode to_metal_cpu_cache_mode(enum WMTResourceCpuCacheMode mode) {
+  switch (mode) {
+    case WMTCpuCacheModeDefault:       return MTLCPUCacheModeDefaultCache;
+    case WMTCpuCacheModeWriteCombined: return MTLCPUCacheModeWriteCombined;
+  }
+  return MTLCPUCacheModeDefaultCache;
+}
+
+MTLHazardTrackingMode to_metal_hazard_mode(enum WMTResourceHazardTrackingMode mode) {
+  switch (mode) {
+    case WMTHazardTrackingModeDefault:   return MTLHazardTrackingModeDefault;
+    case WMTHazardTrackingModeUntracked: return MTLHazardTrackingModeUntracked;
+    case WMTHazardTrackingModeTracked:   return MTLHazardTrackingModeTracked;
+  }
+  return MTLHazardTrackingModeDefault;
+}
+
+}  // namespace
+
+extern "C" obj_handle_t MTLDevice_newHeapWithDescriptor(obj_handle_t device, struct WMTHeapDescriptor *desc) {
+  if (!device || !desc) return NULL_OBJECT_HANDLE;
+  @autoreleasepool {
+    MTLHeapDescriptor *mtl_desc = [[MTLHeapDescriptor alloc] init];
+    mtl_desc.size = (NSUInteger)desc->size;
+    mtl_desc.type = (MTLHeapType)desc->type;
+
+    // If any individual axis is set to a non-zero (non-default) value we
+    // honor it; otherwise we decode the packed `resourceOptions` field.
+    bool any_individual = (desc->storageMode != WMTStorageModeShared) ||
+                          (desc->cpuCacheMode != WMTCpuCacheModeDefault) ||
+                          (desc->hazardTrackingMode != WMTHazardTrackingModeDefault);
+    if (any_individual) {
+      mtl_desc.storageMode        = to_metal_storage_mode(desc->storageMode);
+      mtl_desc.cpuCacheMode       = to_metal_cpu_cache_mode(desc->cpuCacheMode);
+      mtl_desc.hazardTrackingMode = to_metal_hazard_mode(desc->hazardTrackingMode);
+      mtl_desc.resourceOptions    = (MTLResourceOptions)desc->resourceOptions;
+    } else {
+      MTLStorageMode        storage;
+      MTLCPUCacheMode       cache;
+      MTLHazardTrackingMode hazard;
+      decompose_resource_options(desc->resourceOptions, &storage, &cache, &hazard);
+      mtl_desc.storageMode        = storage;
+      mtl_desc.cpuCacheMode       = cache;
+      mtl_desc.hazardTrackingMode = hazard;
+      mtl_desc.resourceOptions    = (MTLResourceOptions)desc->resourceOptions;
+    }
+
+    id<MTLHeap> heap = [(id<MTLDevice>)device newHeapWithDescriptor:mtl_desc];
+    [mtl_desc release];
+    return heap ? (obj_handle_t)heap : NULL_OBJECT_HANDLE;
+  }
+}
+
+extern "C" obj_handle_t MTLHeap_makeBuffer(obj_handle_t heap, uint64_t length, uint64_t options) {
+  if (!heap) return NULL_OBJECT_HANDLE;
+  id<MTLBuffer> buf = [(id<MTLHeap>)heap newBufferWithLength:(NSUInteger)length
+                                                     options:(MTLResourceOptions)options];
+  return buf ? (obj_handle_t)buf : NULL_OBJECT_HANDLE;
+}
+
+extern "C" obj_handle_t MTLHeap_makeTexture(obj_handle_t heap, struct WMTTextureInfo *info) {
+  if (!heap || !info) return NULL_OBJECT_HANDLE;
+  MTLTextureDescriptor *desc = [[MTLTextureDescriptor alloc] init];
+  fill_texture_descriptor(desc, info);
+  id<MTLTexture> tex = [(id<MTLHeap>)heap newTextureWithDescriptor:desc];
+  [desc release];
+  if (!tex) return NULL_OBJECT_HANDLE;
+  info->gpu_resource_id = [tex gpuResourceID]._impl;
+  info->mach_port = 0;
+  return (obj_handle_t)tex;
+}
+
+extern "C" uint64_t MTLHeap_size(obj_handle_t heap) {
+  if (!heap) return 0;
+  return (uint64_t)[(id<MTLHeap>)heap size];
+}
+
+extern "C" uint64_t MTLHeap_usedSize(obj_handle_t heap) {
+  if (!heap) return 0;
+  return (uint64_t)[(id<MTLHeap>)heap usedSize];
+}
+
+extern "C" uint64_t MTLHeap_currentAllocatedSize(obj_handle_t heap) {
+  if (!heap) return 0;
+  return (uint64_t)[(id<MTLHeap>)heap currentAllocatedSize];
+}
+
+extern "C" void MTLHeap_setLabel(obj_handle_t heap, const char *label) {
+  if (!heap) return;
+  if (label && label[0]) {
+    [(id<MTLHeap>)heap setLabel:[NSString stringWithUTF8String:label]];
+  } else {
+    [(id<MTLHeap>)heap setLabel:nil];
+  }
+}
+
+extern "C" void MTLRenderCommandEncoder_useHeap(obj_handle_t encoder, obj_handle_t heap) {
+  if (!encoder || !heap) return;
+  // Apple deprecated bare useHeap: in macOS 13 in favour of useHeap:stages:.
+  // Prefer the stages-aware variant when present; default to "all stages"
+  // since the dxmt9 caller has not yet split heap residency by stage.
+  id<MTLRenderCommandEncoder> enc = (id<MTLRenderCommandEncoder>)encoder;
+  if ([enc respondsToSelector:@selector(useHeap:stages:)]) {
+    [enc useHeap:(id<MTLHeap>)heap stages:(MTLRenderStageVertex | MTLRenderStageFragment)];
+  } else {
+    // Pre-macOS-13 fallback: dispatch the deprecated bare useHeap: via
+    // objc_msgSend so we don't trip -Wdeprecated-declarations on builds
+    // targeting modern SDKs.
+    const auto fn = reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend);
+    fn(enc, @selector(useHeap:), (id<MTLHeap>)heap);
+  }
+}
+
+extern "C" void MTLBlitCommandEncoder_useHeap(obj_handle_t encoder, obj_handle_t heap) {
+  if (!encoder || !heap) return;
+  // MTLBlitCommandEncoder does not expose useHeap on all OS versions; gate
+  // on responsiveness so older runtimes degrade gracefully (the resource
+  // simply needs to be made resident some other way, e.g., via useResource
+  // on a sibling encoder).
+  id enc = (id)encoder;
+  if ([enc respondsToSelector:@selector(useHeap:)]) {
+    const auto fn = reinterpret_cast<void (*)(id, SEL, id)>(objc_msgSend);
+    fn(enc, @selector(useHeap:), (id<MTLHeap>)heap);
+  }
+}
+
+extern "C" void MTLComputeCommandEncoder_useHeap(obj_handle_t encoder, obj_handle_t heap) {
+  if (!encoder || !heap) return;
+  [(id<MTLComputeCommandEncoder>)encoder useHeap:(id<MTLHeap>)heap];
+}

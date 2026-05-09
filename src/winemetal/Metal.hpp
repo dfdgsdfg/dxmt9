@@ -365,6 +365,44 @@ class DepthStencilState : public Object {
 public:
 };
 
+// MTLHeap suballocation surface (R-BACK-5.x / R-BACK-14.* small-resource
+// heap pooling). The heap suballocates buffers and textures, which are
+// returned as ordinary Buffer / Texture references; their lifetime is bound
+// by the heap's residency. `useHeap` on an encoder marks every resource
+// suballocated from the heap as resident for that encoding pass.
+class Heap : public Object {
+public:
+  void
+  setLabel(const char *label) {
+    MTLHeap_setLabel(handle, label);
+  }
+
+  Reference<Buffer>
+  makeBuffer(uint64_t length, WMTResourceOptions options) {
+    return Reference<Buffer>(MTLHeap_makeBuffer(handle, length, (uint64_t)options));
+  }
+
+  Reference<Texture>
+  makeTexture(WMTTextureInfo &info) {
+    return Reference<Texture>(MTLHeap_makeTexture(handle, &info));
+  }
+
+  uint64_t
+  size() const {
+    return MTLHeap_size(handle);
+  }
+
+  uint64_t
+  usedSize() const {
+    return MTLHeap_usedSize(handle);
+  }
+
+  uint64_t
+  currentAllocatedSize() const {
+    return MTLHeap_currentAllocatedSize(handle);
+  }
+};
+
 class CommandEncoder : public Object {
 public:
   void
@@ -478,6 +516,13 @@ public:
     cmd.stages = stages;
     MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
   };
+
+  // R-BACK-5.x / R-BACK-14.* — mark every heap-suballocated resource as
+  // resident on this encoder.
+  void
+  useHeap(Heap heap) {
+    MTLRenderCommandEncoder_useHeap(handle, heap.handle);
+  }
 
   void
   setRenderPipelineState(RenderPipelineState pso) {
@@ -765,6 +810,13 @@ public:
     cmd.value = value;
     MTLBlitCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
   }
+
+  // R-BACK-5.x / R-BACK-14.* — mark every heap-suballocated resource as
+  // resident on this encoder.
+  void
+  useHeap(Heap heap) {
+    MTLBlitCommandEncoder_useHeap(handle, heap.handle);
+  }
 };
 
 class ComputeCommandEncoder : public CommandEncoder {
@@ -790,6 +842,13 @@ public:
     cmd.next.set(nullptr);
     cmd.fence = fence.handle;
     MTLComputeCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  // R-BACK-5.x / R-BACK-14.* — mark every heap-suballocated resource as
+  // resident on this encoder.
+  void
+  useHeap(Heap heap) {
+    MTLComputeCommandEncoder_useHeap(handle, heap.handle);
   }
 };
 
@@ -1207,6 +1266,14 @@ public:
   Reference<CounterSampleBuffer>
   newCounterSampleBuffer(uint32_t sample_count, bool shared = true) {
     return Reference<CounterSampleBuffer>(MTLCounterSampleBuffer_newTimestampBuffer(handle, sample_count, shared));
+  }
+
+  // R-BACK-5.x / R-BACK-14.* — small-resource heap pooling. The descriptor
+  // is in/out: the impl may set fields that depend on placement-vs-automatic
+  // negotiation in the future. Today the unix impl reads-only.
+  Reference<Heap>
+  newHeapWithDescriptor(WMTHeapDescriptor &desc) {
+    return Reference<Heap>(MTLDevice_newHeapWithDescriptor(handle, &desc));
   }
 };
 
