@@ -121,6 +121,14 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   queueView_.setLabel(makeLabelStringFmt("dxmt9-q-0x%llx",
       static_cast<unsigned long long>(device_.handle)));
 
+  // R-BACK-5.7: probe `MTLDevice.hasUnifiedMemory` ONCE at queue/device
+  // init and cache the result on the resource pool. Per-resource code
+  // (createTexture, stageTextureUpload, …) reads `pool_.hasUnifiedMemory_`
+  // — never re-queries Metal — so the storage-mode and staging-blit
+  // decisions stay one-shot per resource and consistent for that
+  // resource's lifetime.
+  pool_.setHasUnifiedMemory(device_.hasUnifiedMemory());
+
   initializer_ = std::make_unique<resources::Initializer>(*this, pool_, device_);
 
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat

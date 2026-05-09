@@ -38,7 +38,15 @@ struct BufferRecord {
 struct TextureRecord {
   core::TextureDesc desc{};
   WMT::Reference<WMT::Texture> texture;
-  bool isPrivate = false;  // true if storage mode is private (no CPU access)
+  // R-BACK-5.7: storage-mode classification recorded at create time and
+  // never updated. `needsStagingBlit` is true when CPU-side
+  // `replaceRegion` is not the upload path (Private; or Managed on a
+  // discrete-memory device). `isManagedDiscrete` is the subset of
+  // `needsStagingBlit` that came from `D3DPOOL_MANAGED` on a non-unified
+  // device — used to drive `perf::countManagedTextureUploadBlit` on the
+  // discrete path while keeping the counter at 0 on Apple Silicon.
+  bool needsStagingBlit = false;
+  bool isManagedDiscrete = false;
   bool destroyPending = false;
   u64 lastUsedSeqId = 0;
 };
@@ -206,6 +214,15 @@ class HandleArena {
 // Pool container. The typed arenas are the only production storage path.
 struct Pool {
   std::unordered_set<u64> dumpedGpuTextures;
+
+  // R-BACK-5.7: cached `MTLDevice.hasUnifiedMemory` snapshot. Set ONCE by
+  // CommandQueue at construction (`setHasUnifiedMemory`). Read by
+  // createBuffer/createTexture/createSurface and the texture upload path
+  // to pick the storage mode and decide whether the MANAGED-staging blit
+  // is needed. Never re-probed per-resource — the spec requires the
+  // selection to be made once at device init and at resource create time.
+  bool hasUnifiedMemory_ = false;
+  void setHasUnifiedMemory(bool value) noexcept { hasUnifiedMemory_ = value; }
 
   // Lookup helpers — return nullptr on miss. Caller is expected to hold the
   // protecting mutex (currently commandQueue_->mutex_).

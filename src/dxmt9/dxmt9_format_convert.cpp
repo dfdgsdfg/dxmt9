@@ -168,9 +168,25 @@ WMTTextureType toTextureType(TextureType type, bool multisample) {
   return multisample ? WMTTextureType2DMultisample : WMTTextureType2D;
 }
 
-WMTResourceOptions toResourceOptions(Pool pool, u32 usage) {
-  if (pool == Pool::SystemMem || pool == Pool::Scratch || pool == Pool::Managed) {
+WMTResourceOptions toResourceOptions(Pool pool, u32 usage, bool hasUnifiedMemory) {
+  // R-BACK-5.7: Pool/Usage → Metal storage mode.
+  //
+  //   D3D9 pool       Usage             Apple Silicon (UM)   Discrete
+  //   ─────────       ─────             ──────────────────   ────────────
+  //   SYSTEMMEM/SCRATCH any              Shared (host slab)   Shared (host slab)
+  //   MANAGED         any                Shared (no staging)  Managed (staging)
+  //   DEFAULT         DYNAMIC            Shared (rename ring) Shared (rename ring)
+  //   DEFAULT         RT/DS / other      Private              Private
+  //
+  // SystemMem/Scratch upload-side allocations stay Shared (the actual
+  // backing is host malloc; only a shared upload buffer reaches the GPU).
+  // The `hasUnifiedMemory` branch is intentionally only on MANAGED — the
+  // other rows are identical between unified and discrete paths.
+  if (pool == Pool::SystemMem || pool == Pool::Scratch) {
     return WMTResourceStorageModeShared;
+  }
+  if (pool == Pool::Managed) {
+    return hasUnifiedMemory ? WMTResourceStorageModeShared : WMTResourceStorageModeManaged;
   }
   return (usage & UsageDynamic) != 0 ? WMTResourceStorageModeShared : WMTResourceStorageModePrivate;
 }

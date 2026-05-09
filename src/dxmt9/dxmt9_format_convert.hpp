@@ -25,7 +25,16 @@ bool formatHasStencilAspect(core::Format format);
 bool formatHasDepthAspect(core::Format format);
 
 WMTTextureType toTextureType(core::TextureType type, bool multisample);
-WMTResourceOptions toResourceOptions(core::Pool pool, u32 usage);
+// R-BACK-5.7: Pool/usage → Metal storage mode mapping. `hasUnifiedMemory`
+// must come from a single MTLDevice.hasUnifiedMemory() probe cached at
+// device init (do not call per-resource). On unified-memory devices
+// (Apple Silicon), `D3DPOOL_MANAGED` resources stay on
+// `MTLStorageModeShared` with no staging copy — both CPU and GPU view the
+// same physical memory. On discrete-style devices the `MANAGED` pool maps
+// to `MTLStorageModeManaged`, which still requires a staging blit upload
+// path; that path is gated separately in the texture upload code and is
+// counted via `perf::countManagedTextureUploadBlit`.
+WMTResourceOptions toResourceOptions(core::Pool pool, u32 usage, bool hasUnifiedMemory);
 WMTTextureUsage toTextureUsage(const core::SurfaceDesc& desc);
 WMTTextureUsage toTextureUsage(const core::TextureDesc& desc);
 

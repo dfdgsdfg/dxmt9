@@ -67,7 +67,8 @@ bool shouldTraceResourceHandle(core::Handle handle) {
 }
 
 void traceTextureCreate(core::TextureHandle handle, const core::TextureDesc& desc,
-                        bool hasMetalTexture, bool isPrivate) {
+                        bool hasMetalTexture, bool needsStagingBlit,
+                        bool isManagedDiscrete) {
   if (!shouldTraceResourceHandle(handle)) {
     return;
   }
@@ -80,7 +81,8 @@ void traceTextureCreate(core::TextureHandle handle, const core::TextureDesc& des
       << " pool=" << static_cast<u32>(desc.pool)
       << " type=" << static_cast<u32>(desc.type)
       << " metal=" << (hasMetalTexture ? 1 : 0)
-      << " private=" << (isPrivate ? 1 : 0);
+      << " staging_blit=" << (needsStagingBlit ? 1 : 0)
+      << " managed_discrete=" << (isManagedDiscrete ? 1 : 0);
   core::metalqueue::emitTextureTraceLine(out.str());
 }
 
@@ -176,6 +178,14 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
   if (desc.pool != core::Pool::SystemMem && desc.pool != core::Pool::Scratch) {
     WMTBufferInfo info{};
     info.length = desc.size;
+    // R-BACK-5.7 / 5.8: buffer storage selection. The current buffer path
+    // keeps everything Shared (DEFAULT+DYNAMIC rename ring lives on
+    // Shared per R-BACK-5.8; MANAGED on unified memory is also Shared per
+    // R-BACK-5.7). DEFAULT non-DYNAMIC buffers are bound through the
+    // Shared shadow today — promoting them to Private is tracked
+    // separately as buffer-side R-BACK-5.7. The discrete-MANAGED buffer
+    // path is the same TODO item; the texture path below is what
+    // R-BACK-5.7 immediately requires.
     info.options = WMTResourceStorageModeShared;
     record.buffer = device.newBuffer(info);
     if (record.buffer) {
@@ -208,10 +218,23 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     info.mipmap_level_count = std::max(1u, desc.levels);
     info.sample_count = 1;
     info.array_length = 1;
-    info.options = convert::toResourceOptions(desc.pool, desc.usage);
+    // R-BACK-5.7: select storage mode from the cached unified-memory
+    // probe. On Apple Silicon, MANAGED collapses to Shared (no staging);
+    // on discrete, MANAGED becomes Managed (staging blit is wired up
+    // below). Selection is one-shot at create time.
+    info.options = convert::toResourceOptions(desc.pool, desc.usage, hasUnifiedMemory_);
     info.usage = convert::toTextureUsage(desc);
     record.texture = device.newTexture(info);
-    record.isPrivate = (info.options == WMTResourceStorageModePrivate);
+    // Both Private and Managed (discrete) reach the texture through a
+    // staging-blit upload path — for Private because the CPU cannot
+    // directly write to it, for Managed-discrete because we must pump
+    // bytes across the device-local-memory boundary once and have an
+    // observable counter (`countManagedTextureUploadBlit`) for the
+    // R-BACK-5.7 regression check (Apple Silicon must keep that counter
+    // at 0). Shared storage uses `replaceRegion` directly — no blit.
+    record.needsStagingBlit = (info.options == WMTResourceStorageModePrivate) ||
+                              (info.options == WMTResourceStorageModeManaged);
+    record.isManagedDiscrete = (info.options == WMTResourceStorageModeManaged);
   }
   const auto handle = textureArena_.insert(std::move(record));
   auto* stored = textureArena_.find(handle.value);
@@ -225,7 +248,9 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
         std::max(1u, desc.depth),
         std::max(1u, desc.levels)));
   }
-  traceTextureCreate(handle, desc, stored && stored->texture, stored ? stored->isPrivate : false);
+  traceTextureCreate(handle, desc, stored && stored->texture,
+                     stored ? stored->needsStagingBlit : false,
+                     stored ? stored->isManagedDiscrete : false);
   return handle;
 }
 
@@ -246,7 +271,13 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
     info.mipmap_level_count = 1;
     info.sample_count = sc;
     info.array_length = 1;
-    info.options = convert::toResourceOptions(desc.pool, desc.usage);
+    // Surfaces are RT/DS attachments; the storage mode is independent of
+    // pool/usage and effectively always Private on every device. The
+    // hasUnifiedMemory_ branch only matters for the MANAGED case which
+    // surfaces never carry, but we pass the flag for symmetry with the
+    // texture path so a future surface category change picks the right
+    // mode automatically.
+    info.options = convert::toResourceOptions(desc.pool, desc.usage, hasUnifiedMemory_);
     info.usage = convert::toTextureUsage(desc);
     record.texture = device.newTexture(info);
     if (sc > 1) {
@@ -407,16 +438,27 @@ Pool::stageTextureUpload(WMT::Device device,
   const u32 mipWidth = std::max(1u, width);
   const u32 mipHeight = std::max(1u, height);
 
-  if (!record->isPrivate) {
-    // Shared-mode: CPU write straight to the destination; no blit.
+  if (!record->needsStagingBlit) {
+    // Shared-mode (DEFAULT+DYNAMIC, MANAGED on unified memory, etc.):
+    // CPU write straight to the destination; no blit and no counter
+    // increment. The Apple-Silicon MANAGED branch lands here per
+    // R-BACK-5.7 — `countManagedTextureUploadBlit` must remain 0.
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, 1};
     texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch, 0);
     return std::nullopt;
   }
 
-  // Private-mode: populate a shared staging texture; caller encodes the
-  // staging→private blit (batched with other deferred uploads).
+  // Staging-blit path: Private destinations always; Managed destinations
+  // on discrete-memory devices (R-BACK-5.7). We populate a Shared staging
+  // texture from CPU bytes and queue a blit into the destination — the
+  // Initializer flushes the batch before each render chunk.
+  // R-BACK-5.7 counter: managedTextureUploadBlitCount/Bytes advance only
+  // when the destination is Managed (discrete path); Private destinations
+  // (DEFAULT non-DYNAMIC) do not contribute to that counter.
+  if (record->isManagedDiscrete) {
+    perf::countManagedTextureUploadBlit(byteCount);
+  }
   WMTTextureInfo stagingInfo{};
   stagingInfo.type = WMTTextureType2D;
   stagingInfo.pixel_format = texture.pixelFormat();
@@ -472,15 +514,21 @@ void Pool::uploadTextureLevel(WMT::Device device,
   const u32 mipWidth = std::max(1u, width);
   const u32 mipHeight = std::max(1u, height);
 
-  if (!record->isPrivate) {
+  if (!record->needsStagingBlit) {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{mipWidth, mipHeight, 1};
     texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch, 0);
     return;
   }
 
-  // Private-mode: allocate a shared staging texture, upload into it, then
-  // blit into the private destination on `queue`.
+  // Staging-blit path (Private; or Managed on a discrete-memory device).
+  // Allocates a Shared staging texture, uploads CPU bytes into it, then
+  // blits to the destination synchronously on `queue`. This synchronous
+  // entry point is currently unused in production (the Initializer's
+  // batched flush is the sole caller path), but mirrors the deferred
+  // `stageTextureUpload` so the two stay aligned. The R-BACK-5.7 counter
+  // advance lives only on the deferred path which is what the encoder
+  // actually drives — adding it here would double-count.
   WMTTextureInfo stagingInfo{};
   stagingInfo.type = WMTTextureType2D;
   stagingInfo.pixel_format = texture.pixelFormat();
