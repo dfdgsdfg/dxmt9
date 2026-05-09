@@ -25,6 +25,10 @@ enum class ProbeMode {
     PresentOnly,
     OffscreenHeavy,
     ManyDraw,
+    FfpOnly,
+    MultiRt,
+    DepthHeavy,
+    Skeletal,
 };
 
 struct Vertex {
@@ -50,6 +54,10 @@ struct TimingTotals {
     std::int64_t totalTicks = 0;
 };
 
+constexpr int kMultiRtCount = 4;
+constexpr int kSkeletalConstStart = 16;
+constexpr int kSkeletalConstCount = 184;  // 46 bones x 4 vec4
+
 struct AppState {
     ProbeMode mode = ProbeMode::PresentOnly;
     const char* modeName = "present-only";
@@ -61,6 +69,13 @@ struct AppState {
     IDirect3DTexture9* offscreenTexture = nullptr;
     IDirect3DSurface9* offscreenSurface = nullptr;
     IDirect3DSurface9* backBuffer = nullptr;
+    IDirect3DTexture9* defaultTexture = nullptr;
+    IDirect3DTexture9* multiRtTextures[kMultiRtCount] = {};
+    IDirect3DSurface9* multiRtSurfaces[kMultiRtCount] = {};
+    IDirect3DTexture9* depthTexture = nullptr;
+    IDirect3DSurface9* depthColorSurface = nullptr;
+    IDirect3DSurface9* depthStencilSurface = nullptr;
+    IDirect3DSurface9* defaultDepthStencil = nullptr;
     D3DPRESENT_PARAMETERS pp{};
     int frame = 0;
     int exitFrame = 240;
@@ -182,6 +197,18 @@ ProbeMode parse_mode(const char* value) {
     if (std::strcmp(value, "many-draw") == 0) {
         return ProbeMode::ManyDraw;
     }
+    if (std::strcmp(value, "ffp-only") == 0) {
+        return ProbeMode::FfpOnly;
+    }
+    if (std::strcmp(value, "multi-rt") == 0) {
+        return ProbeMode::MultiRt;
+    }
+    if (std::strcmp(value, "depth-heavy") == 0) {
+        return ProbeMode::DepthHeavy;
+    }
+    if (std::strcmp(value, "skeletal") == 0) {
+        return ProbeMode::Skeletal;
+    }
     std::fprintf(stderr, "FAIL: unknown mode '%s'\n", value);
     return ProbeMode::PresentOnly;
 }
@@ -206,6 +233,32 @@ void configure_mode(AppState& app, ProbeMode mode) {
             app.windowTitle = "DXMT9 ManyDraw";
             app.exitFrame = env_int("DXMT9_PROBE_FRAMES", 120);
             app.drawsPerFrame = env_int("DXMT9_PROBE_DRAWS", 512);
+            break;
+        case ProbeMode::FfpOnly:
+            app.modeName = "ffp-only";
+            app.windowTitle = "DXMT9 FfpOnly";
+            app.exitFrame = env_int("DXMT9_PROBE_FRAMES", 120);
+            app.drawsPerFrame = env_int("DXMT9_PROBE_DRAWS", 64);
+            break;
+        case ProbeMode::MultiRt:
+            app.modeName = "multi-rt";
+            app.windowTitle = "DXMT9 MultiRt";
+            app.exitFrame = env_int("DXMT9_PROBE_FRAMES", 120);
+            // Drawn in groups of 16 across kMultiRtCount targets per frame.
+            app.drawsPerFrame = env_int("DXMT9_PROBE_DRAWS", 64);
+            break;
+        case ProbeMode::DepthHeavy:
+            app.modeName = "depth-heavy";
+            app.windowTitle = "DXMT9 DepthHeavy";
+            app.exitFrame = env_int("DXMT9_PROBE_FRAMES", 120);
+            // Split as 32 depth-pass + 16 color-with-shadow per frame.
+            app.drawsPerFrame = env_int("DXMT9_PROBE_DRAWS", 48);
+            break;
+        case ProbeMode::Skeletal:
+            app.modeName = "skeletal";
+            app.windowTitle = "DXMT9 Skeletal";
+            app.exitFrame = env_int("DXMT9_PROBE_FRAMES", 120);
+            app.drawsPerFrame = env_int("DXMT9_PROBE_DRAWS", 64);
             break;
     }
     app.exitFrame = std::max(app.exitFrame, 1);
@@ -373,6 +426,94 @@ bool create_offscreen_target(AppState& app) {
     return true;
 }
 
+bool create_default_texture(AppState& app) {
+    if (app.mode != ProbeMode::FfpOnly) {
+        return true;
+    }
+    HRESULT hr = app.device->CreateTexture(
+        4, 4, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
+        &app.defaultTexture, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateTexture(ffp default)", hr);
+        return false;
+    }
+    D3DLOCKED_RECT locked{};
+    hr = app.defaultTexture->LockRect(0, &locked, nullptr, 0);
+    if (FAILED(hr)) {
+        print_hresult("LockRect(ffp default)", hr);
+        return false;
+    }
+    auto* row = static_cast<unsigned char*>(locked.pBits);
+    for (int y = 0; y < 4; ++y) {
+        auto* px = reinterpret_cast<DWORD*>(row + y * locked.Pitch);
+        for (int x = 0; x < 4; ++x) {
+            const DWORD checker = ((x + y) & 1) ? 0xffd0d0d0u : 0xff404040u;
+            px[x] = checker;
+        }
+    }
+    app.defaultTexture->UnlockRect(0);
+    return true;
+}
+
+bool create_multi_rt_targets(AppState& app) {
+    if (app.mode != ProbeMode::MultiRt) {
+        return true;
+    }
+    for (int i = 0; i < kMultiRtCount; ++i) {
+        HRESULT hr = app.device->CreateTexture(
+            kWidth, kHeight, 1, D3DUSAGE_RENDERTARGET,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &app.multiRtTextures[i], nullptr);
+        if (FAILED(hr)) {
+            print_hresult("CreateTexture(multi-rt)", hr);
+            return false;
+        }
+        hr = app.multiRtTextures[i]->GetSurfaceLevel(0, &app.multiRtSurfaces[i]);
+        if (FAILED(hr)) {
+            print_hresult("GetSurfaceLevel(multi-rt)", hr);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool create_depth_resources(AppState& app) {
+    if (app.mode != ProbeMode::DepthHeavy) {
+        return true;
+    }
+    HRESULT hr = app.device->CreateTexture(
+        kWidth, kHeight, 1, D3DUSAGE_DEPTHSTENCIL,
+        D3DFMT_D24S8, D3DPOOL_DEFAULT, &app.depthTexture, nullptr);
+    if (FAILED(hr)) {
+        // Some drivers only expose D24X8 or deny DEPTHSTENCIL textures; fall
+        // back to a plain depth-stencil surface so the probe still exercises
+        // depth load/store paths even without depth-as-texture sampling.
+        hr = app.device->CreateDepthStencilSurface(
+            kWidth, kHeight, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, TRUE,
+            &app.depthStencilSurface, nullptr);
+        if (FAILED(hr)) {
+            print_hresult("CreateDepthStencilSurface(depth-heavy)", hr);
+            return false;
+        }
+    } else {
+        hr = app.depthTexture->GetSurfaceLevel(0, &app.depthStencilSurface);
+        if (FAILED(hr)) {
+            print_hresult("GetSurfaceLevel(depth-heavy)", hr);
+            return false;
+        }
+    }
+
+    hr = app.device->CreateRenderTarget(
+        kWidth, kHeight, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE,
+        &app.depthColorSurface, nullptr);
+    if (FAILED(hr)) {
+        print_hresult("CreateRenderTarget(depth-heavy color)", hr);
+        return false;
+    }
+
+    app.device->GetDepthStencilSurface(&app.defaultDepthStencil);
+    return true;
+}
+
 bool create_resources(AppState& app) {
     if (!create_geometry(app)) {
         return false;
@@ -380,11 +521,25 @@ bool create_resources(AppState& app) {
     if (!create_offscreen_target(app)) {
         return false;
     }
+    if (!create_default_texture(app)) {
+        return false;
+    }
+    if (!create_multi_rt_targets(app)) {
+        return false;
+    }
+    if (!create_depth_resources(app)) {
+        return false;
+    }
 
     app.device->SetRenderState(D3DRS_LIGHTING, FALSE);
     app.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
     app.device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
-    app.device->SetRenderState(D3DRS_ZENABLE, FALSE);
+    const BOOL z_enable = (app.mode == ProbeMode::DepthHeavy) ? TRUE : FALSE;
+    app.device->SetRenderState(D3DRS_ZENABLE, z_enable);
+    if (app.mode == ProbeMode::DepthHeavy) {
+        app.device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+        app.device->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+    }
     return true;
 }
 
@@ -438,6 +593,161 @@ void draw_probe_geometry(AppState& app) {
     }
 }
 
+void draw_probe_geometry_range(AppState& app, int begin, int count) {
+    if (!app.vertexBuffer || count <= 0) {
+        return;
+    }
+    ScopedTicks draw_timer(app.timings.drawLoopTicks);
+    app.device->SetFVF(kVertexFvf);
+    app.device->SetStreamSource(0, app.vertexBuffer, 0, sizeof(Vertex));
+    const int total = std::max(app.drawsPerFrame, 1);
+    for (int i = 0; i < count; ++i) {
+        const int slot = (begin + i) % total;
+        HRESULT hr = app.device->DrawPrimitive(D3DPT_TRIANGLELIST, slot * 6, 2);
+        if (FAILED(hr)) {
+            print_hresult("DrawPrimitive", hr);
+            app.quit = true;
+            return;
+        }
+    }
+}
+
+void render_ffp_only(AppState& app) {
+    // Force fixed-function shader bindings: explicitly null shaders, sample
+    // a tiny default texture from stage 0. This separates FFP-only draw cost
+    // from VS/PS-bound draws.
+    app.device->SetVertexShader(nullptr);
+    app.device->SetPixelShader(nullptr);
+    if (app.defaultTexture) {
+        app.device->SetTexture(0, app.defaultTexture);
+        app.device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+        app.device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        app.device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+        app.device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG2);
+        app.device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+        app.device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        app.device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+    }
+    draw_probe_geometry(app);
+    if (app.defaultTexture) {
+        app.device->SetTexture(0, nullptr);
+    }
+}
+
+void render_multi_rt(AppState& app) {
+    // Bind kMultiRtCount RTs in sequence with 16 draws each.
+    constexpr int kDrawsPerRt = 16;
+    const int total_rt_changes = std::max(1, app.drawsPerFrame / kDrawsPerRt);
+    for (int rt = 0; rt < total_rt_changes; ++rt) {
+        const int slot = (app.frame + rt) % kMultiRtCount;
+        IDirect3DSurface9* surface = app.multiRtSurfaces[slot];
+        if (!surface) {
+            continue;
+        }
+        HRESULT hr = app.device->SetRenderTarget(0, surface);
+        if (FAILED(hr)) {
+            print_hresult("SetRenderTarget(multi-rt)", hr);
+            app.quit = true;
+            return;
+        }
+        const DWORD clear_color = D3DCOLOR_XRGB(
+            16 + ((slot * 31) % 80),
+            16 + ((slot * 53) % 80),
+            16 + ((slot * 79) % 80));
+        app.device->Clear(0, nullptr, D3DCLEAR_TARGET, clear_color, 1.0f, 0);
+        draw_probe_geometry_range(app, rt * kDrawsPerRt, kDrawsPerRt);
+        if (app.quit) {
+            return;
+        }
+    }
+    // Restore the backbuffer as RT so Present has something to swap.
+    app.device->SetRenderTarget(0, app.backBuffer);
+}
+
+void render_depth_heavy(AppState& app) {
+    // Phase 1: depth-only pass. Bind a color RT (so the device is happy) but
+    // mask out color writes; the depth surface receives all updates.
+    if (!app.depthStencilSurface || !app.depthColorSurface) {
+        draw_probe_geometry(app);
+        return;
+    }
+    HRESULT hr = app.device->SetRenderTarget(0, app.depthColorSurface);
+    if (FAILED(hr)) {
+        print_hresult("SetRenderTarget(depth-color)", hr);
+        app.quit = true;
+        return;
+    }
+    app.device->SetDepthStencilSurface(app.depthStencilSurface);
+    app.device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
+                     D3DCOLOR_XRGB(0, 0, 0), 1.0f, 0);
+    constexpr int kDepthDraws = 32;
+    constexpr int kColorDraws = 16;
+    app.device->SetRenderState(D3DRS_COLORWRITEENABLE, 0);
+    app.device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+    draw_probe_geometry_range(app, 0, kDepthDraws);
+    if (app.quit) {
+        return;
+    }
+
+    // Phase 2: bind depth as a sampled texture (if available) and draw to a
+    // color RT with depth-write disabled so the depth_store action persists.
+    app.device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xFu);
+    app.device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+    if (app.depthTexture) {
+        app.device->SetTexture(0, app.depthTexture);
+        app.device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+        app.device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+        app.device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+    }
+    draw_probe_geometry_range(app, kDepthDraws, kColorDraws);
+    if (app.depthTexture) {
+        app.device->SetTexture(0, nullptr);
+    }
+
+    // Restore default depth-stencil + backbuffer for Present.
+    app.device->SetRenderTarget(0, app.backBuffer);
+    app.device->SetDepthStencilSurface(app.defaultDepthStencil);
+    app.device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+}
+
+void render_skeletal(AppState& app) {
+    // Simulate per-draw bone-matrix churn by updating
+    // vsFloatConst[16..16+kSkeletalConstCount) before each draw. This is the
+    // hot path for SetVertexShaderConstantF traffic that R-BACK uniform-pack
+    // optimisations target.
+    if (!app.vertexBuffer || app.drawsPerFrame <= 0) {
+        return;
+    }
+    ScopedTicks draw_timer(app.timings.drawLoopTicks);
+    app.device->SetFVF(kVertexFvf);
+    app.device->SetStreamSource(0, app.vertexBuffer, 0, sizeof(Vertex));
+    std::vector<float> bone_block(static_cast<size_t>(kSkeletalConstCount) * 4u);
+    for (int i = 0; i < app.drawsPerFrame; ++i) {
+        const float t = static_cast<float>(app.frame) * 0.0125f
+                      + static_cast<float>(i) * 0.0037f;
+        for (int c = 0; c < kSkeletalConstCount; ++c) {
+            const float phase = t + static_cast<float>(c) * 0.017f;
+            bone_block[c * 4 + 0] = phase;
+            bone_block[c * 4 + 1] = phase * 0.5f;
+            bone_block[c * 4 + 2] = phase * 0.25f;
+            bone_block[c * 4 + 3] = 1.0f;
+        }
+        HRESULT hr = app.device->SetVertexShaderConstantF(
+            kSkeletalConstStart, bone_block.data(), kSkeletalConstCount);
+        if (FAILED(hr)) {
+            print_hresult("SetVertexShaderConstantF(skeletal)", hr);
+            app.quit = true;
+            return;
+        }
+        hr = app.device->DrawPrimitive(D3DPT_TRIANGLELIST, i * 6, 2);
+        if (FAILED(hr)) {
+            print_hresult("DrawPrimitive(skeletal)", hr);
+            app.quit = true;
+            return;
+        }
+    }
+}
+
 void render_frame(AppState& app) {
     ScopedTicks render_timer(app.timings.renderFrameTicks);
     IDirect3DSurface9* target =
@@ -457,7 +767,11 @@ void render_frame(AppState& app) {
         32 + ((app.frame * 7) % 64));
     {
         ScopedTicks clear_timer(app.timings.clearTicks);
-        app.device->Clear(0, nullptr, D3DCLEAR_TARGET, clear_color, 1.0f, 0);
+        DWORD clear_flags = D3DCLEAR_TARGET;
+        if (app.mode == ProbeMode::DepthHeavy) {
+            clear_flags |= D3DCLEAR_ZBUFFER;
+        }
+        app.device->Clear(0, nullptr, clear_flags, clear_color, 1.0f, 0);
     }
 
     {
@@ -467,7 +781,25 @@ void render_frame(AppState& app) {
             app.quit = true;
             return;
         }
-        draw_probe_geometry(app);
+        switch (app.mode) {
+            case ProbeMode::FfpOnly:
+                render_ffp_only(app);
+                break;
+            case ProbeMode::MultiRt:
+                render_multi_rt(app);
+                break;
+            case ProbeMode::DepthHeavy:
+                render_depth_heavy(app);
+                break;
+            case ProbeMode::Skeletal:
+                render_skeletal(app);
+                break;
+            case ProbeMode::PresentOnly:
+            case ProbeMode::OffscreenHeavy:
+            case ProbeMode::ManyDraw:
+                draw_probe_geometry(app);
+                break;
+        }
         app.device->EndScene();
     }
 
@@ -495,6 +827,15 @@ void render_frame(AppState& app) {
 void cleanup(AppState& app) {
     safe_release(app.offscreenSurface);
     safe_release(app.offscreenTexture);
+    for (int i = 0; i < kMultiRtCount; ++i) {
+        safe_release(app.multiRtSurfaces[i]);
+        safe_release(app.multiRtTextures[i]);
+    }
+    safe_release(app.depthColorSurface);
+    safe_release(app.depthStencilSurface);
+    safe_release(app.depthTexture);
+    safe_release(app.defaultDepthStencil);
+    safe_release(app.defaultTexture);
     safe_release(app.vertexBuffer);
     safe_release(app.backBuffer);
     safe_release(app.device);

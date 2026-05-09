@@ -279,6 +279,78 @@ capture_frame = 120
 reference_optional = true
 
 [[app]]
+name = "dxmt9-perf-ffp-only"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/PerformanceProbe/PerformanceProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_ffp_only.sh"
+reference = "experiments/references/dxmt9-perf-ffp-only.png"
+features = ["performance", "synthetic", "ffp", "fixed-function", "perf-probe"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 FfpOnly"
+capture_delay_sec = 2.0
+run_timeout_sec = 45
+capture_frame = 120
+reference_optional = true
+
+[[app]]
+name = "dxmt9-perf-multi-rt"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/PerformanceProbe/PerformanceProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_multi_rt.sh"
+reference = "experiments/references/dxmt9-perf-multi-rt.png"
+features = ["performance", "synthetic", "multi-rt", "render-pass", "perf-probe"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 MultiRt"
+capture_delay_sec = 2.0
+run_timeout_sec = 45
+capture_frame = 120
+reference_optional = true
+
+[[app]]
+name = "dxmt9-perf-depth-heavy"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/PerformanceProbe/PerformanceProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_depth_heavy.sh"
+reference = "experiments/references/dxmt9-perf-depth-heavy.png"
+features = ["performance", "synthetic", "depth", "shadow-map", "perf-probe"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 DepthHeavy"
+capture_delay_sec = 2.0
+run_timeout_sec = 45
+capture_frame = 120
+reference_optional = true
+
+[[app]]
+name = "dxmt9-perf-skeletal"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/PerformanceProbe/PerformanceProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_skeletal.sh"
+reference = "experiments/references/dxmt9-perf-skeletal.png"
+features = ["performance", "synthetic", "skeletal", "uniform-churn", "perf-probe"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 Skeletal"
+capture_delay_sec = 2.0
+run_timeout_sec = 45
+capture_frame = 120
+reference_optional = true
+
+[[app]]
 name = "anno-1404-gold"
 source = "local-heroic"
 license = "commercial"
