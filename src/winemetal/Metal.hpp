@@ -330,6 +330,11 @@ public:
     data.set((void *)pixelBytes);
     return MTLTexture_replaceRegion(handle, origin, size, level, slice, data, bytesPerRow, bytesPerImage);
   }
+
+  uint64_t
+  gpuResourceID() {
+    return MTLTexture_gpuResourceID(handle);
+  }
 };
 
 class Buffer : public Resource {
@@ -355,10 +360,19 @@ public:
     ptr.set(data);
     MTLBuffer_updateContents(handle, offset, ptr, length);
   }
+
+  uint64_t
+  gpuResourceID() {
+    return MTLBuffer_gpuResourceID(handle);
+  }
 };
 
 class SamplerState : public Object {
 public:
+  uint64_t
+  gpuResourceID() {
+    return MTLSamplerState_gpuResourceID(handle);
+  }
 };
 
 class DepthStencilState : public Object {
@@ -1054,6 +1068,39 @@ public:
   }
 };
 
+class ArgumentEncoder : public Object {
+public:
+  uint64_t
+  encodedLength() {
+    return MTLArgumentEncoder_encodedLength(handle);
+  }
+
+  uint64_t
+  alignment() {
+    return MTLArgumentEncoder_alignment(handle);
+  }
+
+  void
+  setArgumentBuffer(Buffer buffer, uint64_t offset) {
+    MTLArgumentEncoder_setArgumentBuffer(handle, buffer.handle, offset);
+  }
+
+  void
+  setBuffer(Buffer buffer, uint64_t offset, uint32_t index) {
+    MTLArgumentEncoder_setBuffer(handle, buffer.handle, offset, index);
+  }
+
+  void
+  setTexture(Texture texture, uint32_t index) {
+    MTLArgumentEncoder_setTexture(handle, texture.handle, index);
+  }
+
+  void
+  setSamplerState(SamplerState sampler, uint32_t index) {
+    MTLArgumentEncoder_setSamplerState(handle, sampler.handle, index);
+  }
+};
+
 class Device : public Object {
 public:
   uint64_t
@@ -1274,6 +1321,16 @@ public:
   Reference<Heap>
   newHeapWithDescriptor(WMTHeapDescriptor &desc) {
     return Reference<Heap>(MTLDevice_newHeapWithDescriptor(handle, &desc));
+  }
+
+  WMTArgumentBuffersTier
+  argumentBuffersSupport() {
+    return MTLDevice_argumentBuffersSupport(handle);
+  }
+
+  Reference<ArgumentEncoder>
+  newArgumentEncoder(const WMTArgumentDescriptor *descriptors, uint32_t descriptor_count) {
+    return Reference<ArgumentEncoder>(MTLDevice_newArgumentEncoder(handle, descriptors, descriptor_count));
   }
 };
 

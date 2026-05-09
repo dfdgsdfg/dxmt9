@@ -1885,3 +1885,98 @@ extern "C" void MTLComputeCommandEncoder_useHeap(obj_handle_t encoder, obj_handl
   if (!encoder || !heap) return;
   [(id<MTLComputeCommandEncoder>)encoder useHeap:(id<MTLHeap>)heap];
 }
+
+// -- Argument buffer / argument encoder --
+
+extern "C" enum WMTArgumentBuffersTier MTLDevice_argumentBuffersSupport(obj_handle_t device) {
+  if (!device) return WMTArgumentBuffersTier1;
+  return (enum WMTArgumentBuffersTier)[(id<MTLDevice>)device argumentBuffersSupport];
+}
+
+extern "C" obj_handle_t MTLDevice_newArgumentEncoder(obj_handle_t device,
+                                                      const struct WMTArgumentDescriptor *descriptors,
+                                                      uint32_t descriptor_count) {
+  if (!device || !descriptors || !descriptor_count) return NULL_OBJECT_HANDLE;
+  @autoreleasepool {
+    NSMutableArray<MTLArgumentDescriptor *> *arr = [NSMutableArray arrayWithCapacity:descriptor_count];
+    for (uint32_t i = 0; i < descriptor_count; ++i) {
+      const struct WMTArgumentDescriptor &src = descriptors[i];
+      MTLArgumentDescriptor *desc = [MTLArgumentDescriptor argumentDescriptor];
+      switch (src.argumentType) {
+        case WMTArgumentTypeBuffer:  desc.dataType = MTLDataTypePointer; break;
+        case WMTArgumentTypeTexture: desc.dataType = MTLDataTypeTexture; break;
+        case WMTArgumentTypeSampler: desc.dataType = MTLDataTypeSampler; break;
+        default:                     desc.dataType = MTLDataTypePointer; break;
+      }
+      desc.index       = (NSUInteger)src.index;
+      desc.arrayLength = (NSUInteger)src.arrayLength;
+      switch (src.access) {
+        case 1:  desc.access = MTLBindingAccessReadWrite; break;
+        case 2:  desc.access = MTLBindingAccessWriteOnly; break;
+        case 0:
+        default: desc.access = MTLBindingAccessReadOnly;  break;
+      }
+      if (src.argumentType == WMTArgumentTypeTexture) {
+        desc.textureType = (MTLTextureType)src.textureType;
+      }
+      if (src.argumentType == WMTArgumentTypeBuffer) {
+        desc.constantBlockAlignment = (NSUInteger)src.constantBlockAlignment;
+      }
+      [arr addObject:desc];
+    }
+    id<MTLArgumentEncoder> encoder = [(id<MTLDevice>)device newArgumentEncoderWithArguments:arr];
+    return encoder ? (obj_handle_t)encoder : NULL_OBJECT_HANDLE;
+  }
+}
+
+extern "C" uint64_t MTLArgumentEncoder_encodedLength(obj_handle_t encoder) {
+  if (!encoder) return 0;
+  return (uint64_t)[(id<MTLArgumentEncoder>)encoder encodedLength];
+}
+
+extern "C" uint64_t MTLArgumentEncoder_alignment(obj_handle_t encoder) {
+  if (!encoder) return 0;
+  return (uint64_t)[(id<MTLArgumentEncoder>)encoder alignment];
+}
+
+extern "C" void MTLArgumentEncoder_setArgumentBuffer(obj_handle_t encoder, obj_handle_t buffer, uint64_t offset) {
+  if (!encoder) return;
+  [(id<MTLArgumentEncoder>)encoder setArgumentBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset];
+}
+
+extern "C" void MTLArgumentEncoder_setBuffer(obj_handle_t encoder, obj_handle_t buffer, uint64_t offset,
+                                              uint32_t index) {
+  if (!encoder) return;
+  [(id<MTLArgumentEncoder>)encoder setBuffer:(id<MTLBuffer>)buffer
+                                     offset:(NSUInteger)offset
+                                    atIndex:(NSUInteger)index];
+}
+
+extern "C" void MTLArgumentEncoder_setTexture(obj_handle_t encoder, obj_handle_t texture, uint32_t index) {
+  if (!encoder) return;
+  [(id<MTLArgumentEncoder>)encoder setTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index];
+}
+
+extern "C" void MTLArgumentEncoder_setSamplerState(obj_handle_t encoder, obj_handle_t sampler, uint32_t index) {
+  if (!encoder) return;
+  [(id<MTLArgumentEncoder>)encoder setSamplerState:(id<MTLSamplerState>)sampler atIndex:(NSUInteger)index];
+}
+
+extern "C" uint64_t MTLBuffer_gpuResourceID(obj_handle_t buffer) {
+  if (!buffer) return 0;
+  // Tier 2 argbuf encodes buffers as their 8-byte gpuAddress (the value a shader
+  // dereferences directly). Textures/samplers encode their MTLResourceID. We
+  // unify the bridge name as gpuResourceID but return the correct argbuf-slot
+  // payload per resource kind.
+  return (uint64_t)[(id<MTLBuffer>)buffer gpuAddress];
+}
+
+extern "C" uint64_t MTLTexture_gpuResourceID(obj_handle_t texture) {
+  if (!texture) return 0;
+  return (uint64_t)[(id<MTLTexture>)texture gpuResourceID]._impl;
+}
+
+extern "C" uint64_t MTLSamplerState_gpuResourceID(obj_handle_t sampler) {
+  if (!sampler) return 0;
+  return (uint64_t)[(id<MTLSamplerState>)sampler gpuResourceID]._impl;
+}

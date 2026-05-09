@@ -2100,4 +2100,54 @@ WINEMETAL_API void MTLBlitCommandEncoder_useHeap(obj_handle_t encoder, obj_handl
 
 WINEMETAL_API void MTLComputeCommandEncoder_useHeap(obj_handle_t encoder, obj_handle_t heap);
 
+// -- Argument buffer / argument encoder --
+// MTLResourceID is a 64-bit GPU-resolvable handle in Metal; we expose it as
+// uint64_t so the bridge stays opaque-integer. The value is what writes into a
+// Tier 2 argument buffer slot.
+
+enum WMTArgumentBuffersTier : uint32_t {
+  WMTArgumentBuffersTier1 = 0,
+  WMTArgumentBuffersTier2 = 1,
+};
+
+enum WMTArgumentEncoderArgumentType : uint32_t {
+  WMTArgumentTypeBuffer  = 0,
+  WMTArgumentTypeTexture = 1,
+  WMTArgumentTypeSampler = 2,
+};
+
+struct WMTArgumentDescriptor {
+  enum WMTArgumentEncoderArgumentType argumentType;
+  uint32_t                            index;
+  uint32_t                            arrayLength;
+  uint32_t                            access;                 // 0=ReadOnly, 1=ReadWrite, 2=WriteOnly
+  uint32_t                            textureType;            // for textures only
+  uint32_t                            constantBlockAlignment; // for buffers only
+};
+
+WINEMETAL_API enum WMTArgumentBuffersTier MTLDevice_argumentBuffersSupport(obj_handle_t device);
+
+WINEMETAL_API obj_handle_t MTLDevice_newArgumentEncoder(
+    obj_handle_t device, const struct WMTArgumentDescriptor *descriptors, uint32_t descriptor_count
+);
+
+WINEMETAL_API uint64_t MTLArgumentEncoder_encodedLength(obj_handle_t encoder);
+
+WINEMETAL_API uint64_t MTLArgumentEncoder_alignment(obj_handle_t encoder);
+
+WINEMETAL_API void MTLArgumentEncoder_setArgumentBuffer(obj_handle_t encoder, obj_handle_t buffer, uint64_t offset);
+
+WINEMETAL_API void MTLArgumentEncoder_setBuffer(obj_handle_t encoder, obj_handle_t buffer, uint64_t offset,
+                                                 uint32_t index);
+
+WINEMETAL_API void MTLArgumentEncoder_setTexture(obj_handle_t encoder, obj_handle_t texture, uint32_t index);
+
+WINEMETAL_API void MTLArgumentEncoder_setSamplerState(obj_handle_t encoder, obj_handle_t sampler, uint32_t index);
+
+WINEMETAL_API uint64_t MTLBuffer_gpuResourceID(obj_handle_t buffer);
+
+WINEMETAL_API uint64_t MTLTexture_gpuResourceID(obj_handle_t texture);
+
+WINEMETAL_API uint64_t MTLSamplerState_gpuResourceID(obj_handle_t sampler);
+
 #endif
