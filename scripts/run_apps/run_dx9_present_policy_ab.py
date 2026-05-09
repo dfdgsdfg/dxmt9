@@ -104,6 +104,11 @@ BACKEND_COUNTER_FIELDS = [
     "render_pass_tile_preservation_bytes",
     "chunk_admit",
     "chunk_reject",
+    # R-BACK-2.29..2.32 — sub-command-buffer chain length and total
+    # mid-chunk commits. Both are zero in default policy=off; positive
+    # under DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass / per-n-records.
+    "sub_command_buffers",
+    "chunk_subcb_count_max",
     "ring_arena_heap_fallback_count",
     "ring_arena_heap_fallback_bytes",
     "ring_arena_heap_fallback_argbuf",

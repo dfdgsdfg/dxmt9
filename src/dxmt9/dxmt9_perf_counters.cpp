@@ -95,6 +95,14 @@ struct Counters {
   std::atomic<std::uint64_t> submitPresent{0};
   std::atomic<std::uint64_t> submitFlush{0};
   std::atomic<std::uint64_t> commandBuffers{0};
+  // R-BACK-2.29..2.32 — sub-command-buffer chain instrumentation.
+  // subCommandBufferCommits aggregates every mid-chunk commit that a
+  // chunk performs (one per split point that closes a non-final
+  // MTLCommandBuffer in the chain). chunkSubCBCountMax is the
+  // worst-case per-chunk chain length observed (mid + final commits
+  // combined), folded in at encodeChunk exit via updateMax.
+  std::atomic<std::uint64_t> subCommandBufferCommits{0};
+  std::atomic<std::uint64_t> chunkSubCBCountMax{0};
   // M5 — gpu_command_buffer_errors. Incremented once per Metal
   // CommandBuffer that surfaces WMTCommandBufferStatusError; intended as
   // a regression sentinel (R-BACK GPU faults) — paired with an
@@ -502,7 +510,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 335> kCounterTable = {{
+constexpr std::array<CounterEntry, 337> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -520,6 +528,8 @@ constexpr std::array<CounterEntry, 335> kCounterTable = {{
     {"submit_present", CounterEntry::Kind::UnsignedCount, &Counters::submitPresent, nullptr, nullptr, 0.0},
     {"submit_flush", CounterEntry::Kind::UnsignedCount, &Counters::submitFlush, nullptr, nullptr, 0.0},
     {"command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::commandBuffers, nullptr, nullptr, 0.0},
+    {"sub_command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::subCommandBufferCommits, nullptr, nullptr, 0.0},
+    {"chunk_subcb_count_max", CounterEntry::Kind::UnsignedCount, &Counters::chunkSubCBCountMax, nullptr, nullptr, 0.0},
     {"gpu_command_buffer_errors", CounterEntry::Kind::UnsignedCount, &Counters::gpuCommandBufferErrors, nullptr, nullptr, 0.0},
     {"metal_buffers", CounterEntry::Kind::UnsignedCount, &Counters::metalBuffers, nullptr, nullptr, 0.0},
     {"metal_buffer_bytes", CounterEntry::Kind::UnsignedCount, &Counters::metalBufferBytes, nullptr, nullptr, 0.0},
@@ -987,6 +997,14 @@ void countSubmitFlush() {
 
 void countCommandBuffer() {
   add(counters().commandBuffers);
+}
+
+void countSubCommandBufferCommit() {
+  add(counters().subCommandBufferCommits);
+}
+
+void recordChunkSubCBCount(std::uint64_t perChunkCount) {
+  updateMax(counters().chunkSubCBCountMax, perChunkCount);
 }
 
 void countGpuCommandBufferError() {
@@ -1661,6 +1679,7 @@ CounterSnapshot snapshot() {
   s.gpuCommandBufferTimeNs = load(c.gpuCommandBufferTimeNs);
   s.gpuCommandBufferTimeSamples = load(c.gpuCommandBufferTimeSamples);
   s.gpuCommandBufferErrors = load(c.gpuCommandBufferErrors);
+  s.subCommandBufferCommits = load(c.subCommandBufferCommits);
   return s;
 }
 
@@ -1693,7 +1712,7 @@ void emitFrameDelta(std::uint64_t frameId,
       "completion_wait_ms=%.3f present_acquire_wait_ms=%.3f "
       "present_boundary_wait_ms=%.3f present_token_wait_ms=%.3f "
       "gpu_command_buffer_time_ms=%.3f gpu_command_buffer_time_samples=%llu "
-      "gpu_command_buffer_errors=%llu]\n",
+      "gpu_command_buffer_errors=%llu sub_command_buffers=%llu]\n",
       static_cast<unsigned long long>(frameId),
       static_cast<unsigned long long>(delta(prev.submitDraw, curr.submitDraw)),
       static_cast<unsigned long long>(delta(prev.submitClear, curr.submitClear)),
@@ -1748,7 +1767,9 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(
           delta(prev.gpuCommandBufferTimeSamples, curr.gpuCommandBufferTimeSamples)),
       static_cast<unsigned long long>(
-          delta(prev.gpuCommandBufferErrors, curr.gpuCommandBufferErrors)));
+          delta(prev.gpuCommandBufferErrors, curr.gpuCommandBufferErrors)),
+      static_cast<unsigned long long>(
+          delta(prev.subCommandBufferCommits, curr.subCommandBufferCommits)));
 }
 
 }  // namespace dxmt9::perf

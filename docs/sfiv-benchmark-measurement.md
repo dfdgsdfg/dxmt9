@@ -125,3 +125,76 @@ DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
 DXMT_METAL_CAPTURE_FRAME=2000 DXMT_METAL_CAPTURE_PATH=/tmp/sfiv.gputrace \
   bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
 ```
+
+---
+
+## A/B follow-up — `DXMT9_MID_CHUNK_COMMIT_POLICY` (S3, 2026-05-10)
+
+After the R-BACK-2.29..2.32 implementation landed (S2), an A/B comparison
+was run against the SFIV benchmark with and without
+`DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass`. Both captures landed in
+the menu / startup workload (RP=2, draws=11 per frame) rather than the
+heavy benchmark scene from the original P1 run, so the absolute numbers
+are not comparable to the 13.25 fps figure above. The **wait-counter
+deltas** are still load-bearing evidence that the policy change works
+as designed.
+
+**Workload identity** (both runs — confirms same scene):
+
+| key | baseline `off` | treatment `per-render-pass` |
+|---|---:|---:|
+| frames captured | 10,600 | 10,736 |
+| `render_pass_begin / frame` | 2 | 2 |
+| `draw_calls / frame` | 11 | 11 |
+
+**Sub-CB chain working as designed** (R-BACK-2.29):
+
+| key | baseline | treatment | meaning |
+|---|---:|---:|---|
+| `command_buffers / frame` | 1 | **2** | one mid-chunk commit + one final commit per chunk; matches "split after every non-final flushRender" |
+
+**Wait-counter deltas** (steady-state p99, ms):
+
+| counter | baseline | treatment | delta |
+|---|---:|---:|---:|
+| `encode_chunk_cpu_ms` | 1.765 | 1.325 | **−25%** |
+| `completion_wait_ms` | 1.386 | 1.208 | **−13%** |
+| `present_acquire_wait_ms` | 1.523 | 0.111 | **−93%** |
+| `gpu_command_buffer_time_ms` | 0.907 | 0.878 | −3% |
+
+The 93% drop in `present_acquire_wait_ms` is the structural win: with
+the mid-chunk commit, the first sub-CB's GPU work starts while the
+encode thread is still building the chain tail, so by the time the
+present-bearing tail commits the GPU has already drained most of the
+chunk and the next drawable acquire finds the wait essentially gone.
+
+This is the **G-axis benefit** described in
+`docs/architecture-comparison.md §G` and the empirical confirmation
+that R-BACK-2.29..2.32 closes the bottleneck the P1 measurement
+identified. Heavy-scene SFIV re-measurement (where the actual benchmark
+loop runs at ~13fps) is recorded as a follow-up — the menu workload
+proves the implementation but not the magnitude of the win on a
+draw-bound frame.
+
+### Per-frame snapshot now includes `sub_command_buffers`
+
+The frame-sampling line gained `sub_command_buffers=N` so the policy
+can be verified frame-by-frame (replaces grepping the cumulative
+`[dxmt9-perf]` line).
+
+### Reproduction
+
+```sh
+# baseline (existing 1 CB / chunk)
+DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
+  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+
+# treatment (1+ CB / chunk via per-render-pass split)
+DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
+  DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass \
+  bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
+```
+
+Compare per-frame `sub_command_buffers`, `command_buffers`,
+`encode_chunk_cpu_ms`, `completion_wait_ms`, and
+`present_acquire_wait_ms` between the two output dirs.

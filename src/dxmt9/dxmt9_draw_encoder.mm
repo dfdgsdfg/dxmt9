@@ -241,6 +241,45 @@ bool presentBoundaryAfterAcquireEnabled() {
   return enabled;
 }
 
+// R-BACK-2.29..2.32 — env-driven mid-chunk commit policy. Read once at
+// process start; subsequent runs need a re-launch to change it. This is
+// the cleanest invariant under R-BACK-2.31 (deterministic split
+// decisions, no wallclock or GPU-feedback inputs).
+enum class MidChunkCommitPolicy : std::uint8_t {
+  Off,
+  PerRenderPass,
+  PerNRecords,
+};
+
+MidChunkCommitPolicy midChunkCommitPolicy() {
+  static const MidChunkCommitPolicy policy = [] {
+    const char* env = std::getenv("DXMT9_MID_CHUNK_COMMIT_POLICY");
+    if (!env || env[0] == '\0') return MidChunkCommitPolicy::Off;
+    if (std::strcmp(env, "per-render-pass") == 0) {
+      return MidChunkCommitPolicy::PerRenderPass;
+    }
+    if (std::strcmp(env, "per-n-records") == 0) {
+      return MidChunkCommitPolicy::PerNRecords;
+    }
+    // "off" or any unrecognized token → off (preserves the default 1
+    // CB per chunk behavior so no existing tests regress).
+    return MidChunkCommitPolicy::Off;
+  }();
+  return policy;
+}
+
+std::uint32_t midChunkCommitNRecords() {
+  static const std::uint32_t n = [] {
+    const char* env = std::getenv("DXMT9_MID_CHUNK_COMMIT_RECORDS");
+    if (!env || env[0] == '\0') return 64u;
+    char* end = nullptr;
+    const long parsed = std::strtol(env, &end, 10);
+    if (parsed <= 0 || end == env) return 64u;
+    return static_cast<std::uint32_t>(parsed);
+  }();
+  return n;
+}
+
 WMTWinding frontFaceWinding() {
   return debug::frontFaceCounterClockwise() ? WMTWindingCounterClockwise : WMTWindingClockwise;
 }
@@ -2001,6 +2040,44 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     commandBufferHasWork = false;
   };
 
+  // R-BACK-2.29..2.32 — mid-chunk MTLCommandBuffer split. Mirrors
+  // splitBeforeBlockingPresent exactly: open the next sub-CB on the same
+  // queue, commit the current one (timing the commit), swap, and reset the
+  // hasWork bit. CRITICAL invariants:
+  //   * Must NEVER be called while an encoder is active. The natural call
+  //     site after flushRender(non-Final) already satisfies this — flushRender
+  //     ends the active render encoder. Helper-encoder paths
+  //     (SurfaceCopy/StretchRect/Readback/ColorFill) own and end their own
+  //     short-lived encoders, so calling splitMidChunk after they return is
+  //     also safe. Callers must ensure flushBlit() has run if a blit encoder
+  //     could be open.
+  //   * Must NEVER be called between the present record's encoder open and
+  //     the chain tail. The Present arm flushes + calls
+  //     splitBeforeBlockingPresent already; do NOT add another split there.
+  // Sub-CB completion order is guaranteed by Metal's same-queue in-order
+  // submission (R-BACK-2.32). Per-chunk commits (mid + final) are folded
+  // into chunkSubCBCountMax via updateMax at chunk exit so the table
+  // surfaces both total mid-chunk commits and the worst-case chain length.
+  std::uint64_t perChunkSubCBCount = 0;
+  auto splitMidChunk = [&] {
+    if (!commandBufferHasWork) return;
+    auto next = ctx.queue.newCommandBuffer();
+    if (!next) return;
+    const auto commitStarted = std::chrono::steady_clock::now();
+    commandBuffer.commit();
+    perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - commitStarted).count()));
+    perf::countSubCommandBufferCommit();
+    ++perChunkSubCBCount;
+    commandBuffer = std::move(next);
+    commandBufferHasWork = false;
+  };
+
+  const auto commitPolicy = midChunkCommitPolicy();
+  const std::uint32_t splitNRecords = midChunkCommitNRecords();
+  std::uint32_t recordsSinceLastSplit = 0;
+
   using Kind = core::MetalCommandKind;
   for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
     const auto command = slot.commandAt(commandIndex);
@@ -2069,6 +2146,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                   : (hazardDetected ? perf::EncoderSplitReason::Hazard
                                     : perf::EncoderSplitReason::ClearBarrier);
               flushRender(splitReason);
+              // R-BACK-2.29..2.32 — per-render-pass policy commits the
+              // current sub-CB at every non-Final flushRender. Encoder is
+              // already ended by flushRender, so the splitMidChunk
+              // invariant (no active encoder) holds. Skip when policy
+              // is off so the default 1 CB/chunk behavior is preserved.
+              if (commitPolicy == MidChunkCommitPolicy::PerRenderPass) {
+                splitMidChunk();
+              }
               startRenderPass(stateView, std::nullopt, commandIndex);
             } else {
               // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
@@ -2096,6 +2181,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 : (hazardDetected ? perf::EncoderSplitReason::Hazard
                                   : perf::EncoderSplitReason::Final);
             flushRender(splitReason);
+            // R-BACK-2.29..2.32 — see twin call site above. The split
+            // reason here can be Final when neither RT-change nor hazard
+            // forced the flush, but per-render-pass policy still
+            // commits to start a new sub-CB before the next pass opens.
+            if (commitPolicy == MidChunkCommitPolicy::PerRenderPass) {
+              splitMidChunk();
+            }
             startRenderPass(stateView, std::nullopt, commandIndex);
           } else {
             // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
@@ -2299,11 +2391,44 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
     }
+    // R-BACK-2.29..2.32 — per-N-records policy. Counts every replayed
+    // record (including helper-encoder commands), and fires a mid-chunk
+    // commit when the threshold is hit AND there is no active encoder.
+    // The flushBlit + flushRender(non-Final) sequence enforces the
+    // splitMidChunk invariant: encoder must be ended before commit.
+    // Final reason is used here because we are not opening a new render
+    // pass after the commit; the next iteration will start one fresh.
+    //
+    // R-BACK-2.30: Present records attach drawable + presentDrawable to
+    // the CURRENT command buffer; a split right after Present would
+    // promote the present-bearing CB out of the chain tail position and
+    // violate the "present metadata on the last sub-CB only" rule.
+    // Suppress the per-N-records split immediately after a Present
+    // record; splitBeforeBlockingPresent owns the present-tail boundary.
+    ++recordsSinceLastSplit;
+    if (commitPolicy == MidChunkCommitPolicy::PerNRecords &&
+        recordsSinceLastSplit >= splitNRecords &&
+        command.kind != Kind::Present) {
+      flushBlit();
+      flushRender(perf::EncoderSplitReason::Final);
+      assertNoActiveEncoder();
+      splitMidChunk();
+      recordsSinceLastSplit = 0;
+    }
   }
 
   flushPendingClear();
   flushRender(perf::EncoderSplitReason::Final);
   flushBlit();
+
+  // R-BACK-2.29..2.32 — fold the chunk's local sub-CB chain length into
+  // chunkSubCBCountMax. The chain length includes every mid-chunk commit
+  // (counted via splitMidChunk above) PLUS the final commit performed by
+  // the queue once this record is returned, so the per-chunk count is
+  // perChunkSubCBCount + 1. Always at least 1 for a non-empty chunk.
+  if (commandBufferHasWork || perChunkSubCBCount > 0) {
+    perf::recordChunkSubCBCount(perChunkSubCBCount + 1);
+  }
 
   const u64 seqId = slot.seqId;
   core::metalqueue::QueueSubmissionRecord record;

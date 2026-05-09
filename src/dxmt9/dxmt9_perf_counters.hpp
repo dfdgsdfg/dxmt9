@@ -54,6 +54,19 @@ void countStretchFullscreen();
 void countSubmitPresent();
 void countSubmitFlush();
 void countCommandBuffer();
+// R-BACK-2.29..2.32: a single chunk may commit through a chain of
+// MTLCommandBuffer instances. countSubCommandBufferCommit() fires once per
+// mid-chunk commit (the chain's tail commit is already accounted for via
+// countCommandBuffer / commit-cpu-time), and the chunk's local sub-CB
+// count is folded into chunkSubCBCountMax at the chunk's exit so the
+// table surfaces both total mid-chunk commits and the worst-case per-chunk
+// chain length.
+void countSubCommandBufferCommit();
+// R-BACK-2.29..2.32 — fold a chunk's local sub-CB chain length into the
+// chunkSubCBCountMax atomic via updateMax. Encode thread calls this once
+// at encodeChunk exit; not a counting-style helper, so it is excluded from
+// the audit_perf_counter_callsites.py count*() rule by name.
+void recordChunkSubCBCount(std::uint64_t perChunkCount);
 void countGpuCommandBufferError();
 void countMetalBuffer(std::size_t bytes);
 void countPipelineBuild();
@@ -215,6 +228,9 @@ struct CounterSnapshot {
   std::uint64_t presentAcquireWaitNs = 0;
   std::uint64_t presentBoundaryWaitNs = 0;
   std::uint64_t presentTokenWaitNs = 0;
+  // R-BACK-2.29: per-frame mid-chunk commit count so the policy A/B
+  // (DXMT9_MID_CHUNK_COMMIT_POLICY) can be observed frame-by-frame.
+  std::uint64_t subCommandBufferCommits = 0;
   // M4/M5 surface in per-frame line so encode_chunk_cpu vs GPU wall time
   // can be compared frame-by-frame, and a GPU fault that erupts mid-run is
   // visible without grepping the cumulative line at exit.
