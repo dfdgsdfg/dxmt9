@@ -1658,6 +1658,9 @@ CounterSnapshot snapshot() {
   s.presentAcquireWaitNs = load(c.presentAcquireWaitNs);
   s.presentBoundaryWaitNs = load(c.presentBoundaryWaitNs);
   s.presentTokenWaitNs = load(c.presentTokenWaitNs);
+  s.gpuCommandBufferTimeNs = load(c.gpuCommandBufferTimeNs);
+  s.gpuCommandBufferTimeSamples = load(c.gpuCommandBufferTimeSamples);
+  s.gpuCommandBufferErrors = load(c.gpuCommandBufferErrors);
   return s;
 }
 
@@ -1688,7 +1691,9 @@ void emitFrameDelta(std::uint64_t frameId,
       "encode_draw_issue_cpu_ms=%.3f transient_upload_cpu_ms=%.3f "
       "command_buffer_create_cpu_ms=%.3f command_buffer_commit_cpu_ms=%.3f "
       "completion_wait_ms=%.3f present_acquire_wait_ms=%.3f "
-      "present_boundary_wait_ms=%.3f present_token_wait_ms=%.3f]\n",
+      "present_boundary_wait_ms=%.3f present_token_wait_ms=%.3f "
+      "gpu_command_buffer_time_ms=%.3f gpu_command_buffer_time_samples=%llu "
+      "gpu_command_buffer_errors=%llu]\n",
       static_cast<unsigned long long>(frameId),
       static_cast<unsigned long long>(delta(prev.submitDraw, curr.submitDraw)),
       static_cast<unsigned long long>(delta(prev.submitClear, curr.submitClear)),
@@ -1737,7 +1742,13 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<double>(delta(prev.presentBoundaryWaitNs, curr.presentBoundaryWaitNs)) /
           1000000.0,
       static_cast<double>(delta(prev.presentTokenWaitNs, curr.presentTokenWaitNs)) /
-          1000000.0);
+          1000000.0,
+      static_cast<double>(delta(prev.gpuCommandBufferTimeNs, curr.gpuCommandBufferTimeNs)) /
+          1000000.0,
+      static_cast<unsigned long long>(
+          delta(prev.gpuCommandBufferTimeSamples, curr.gpuCommandBufferTimeSamples)),
+      static_cast<unsigned long long>(
+          delta(prev.gpuCommandBufferErrors, curr.gpuCommandBufferErrors)));
 }
 
 }  // namespace dxmt9::perf

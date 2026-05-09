@@ -215,6 +215,12 @@ struct CounterSnapshot {
   std::uint64_t presentAcquireWaitNs = 0;
   std::uint64_t presentBoundaryWaitNs = 0;
   std::uint64_t presentTokenWaitNs = 0;
+  // M4/M5 surface in per-frame line so encode_chunk_cpu vs GPU wall time
+  // can be compared frame-by-frame, and a GPU fault that erupts mid-run is
+  // visible without grepping the cumulative line at exit.
+  std::uint64_t gpuCommandBufferTimeNs = 0;
+  std::uint64_t gpuCommandBufferTimeSamples = 0;
+  std::uint64_t gpuCommandBufferErrors = 0;
 };
 
 bool frameSamplingEnabled();
