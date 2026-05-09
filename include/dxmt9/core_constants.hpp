@@ -56,6 +56,10 @@ inline constexpr u32 kMaxBoolConstants = 16;
 inline constexpr u32 kMaxStateSlots = 256;
 inline constexpr u32 kMaxTextureStageStates = 64;
 inline constexpr u32 kMaxSamplerStates = 64;
+// D3D9 MAXD3DDECLLENGTH is 64 (including the end-marker). Snapshot capacity
+// kept fixed at 32 — production fixed-function and shader pipelines emit far
+// fewer vertex elements per declaration; the capacity bounds the worst case.
+inline constexpr u32 kMaxVertexElements = 32;
 
 struct Handle {
   u64 value = 0;

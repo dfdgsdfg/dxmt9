@@ -47,30 +47,10 @@ template <typename T> u64 hashTrivial(const T &value) {
   return hash;
 }
 
-u64 hashStateEntry(u32 key, u32 value) {
-  u64 hash = kFnvOffset;
-  hash = hashCombine(hash, key);
-  hash = hashCombine(hash, value);
-  return hash;
-}
-
 u64 hashStateDigest(std::size_t count, u64 rollingHash) {
   u64 hash = hashCombine(kFnvOffset, static_cast<u64>(count));
   hash = hashCombine(hash, rollingHash);
   return hash;
-}
-
-template <typename StateValues> u64 hashStateValues(const StateValues &values) {
-  u64 hash = hashCombine(kFnvOffset, static_cast<u64>(values.size()));
-  u64 rollingHash = 0;
-  for (const auto &entry : values) {
-    rollingHash ^= hashStateEntry(entry.first, entry.second);
-  }
-  return hashCombine(hash, rollingHash);
-}
-
-u64 hashStateMap(const std::unordered_map<u32, u32> &values) {
-  return hashStateValues(values);
 }
 
 template <std::size_t MaxEntries>
@@ -794,18 +774,18 @@ DrawDesc makeDrawDescFromState(const DeviceState &state,
   desc.indexType = args.indexType;
   desc.indexBuffer = state.indexBuffer ? state.indexBuffer->handle() : Handle{};
   desc.vertexDecl = shaderLayout.vertexDecl;
-  desc.rs.values = state.renderStates.toMap();
+  desc.rs.values = state.renderStates;
   for (size_t i = 0; i < kMaxTextures; ++i) {
     desc.textures[i].handle =
         state.textures[i] ? state.textures[i]->handle() : Handle{};
     if (i < kMaxTextureStages) {
-      desc.textures[i].stageStates = state.textureStageStates[i].toMap();
+      desc.textures[i].stageStates = state.textureStageStates[i];
     } else {
       desc.textures[i].stageStates.clear();
     }
   }
   for (size_t i = 0; i < kMaxSamplers; ++i) {
-    desc.samplers[i].states = state.samplerStates[i].toMap();
+    desc.samplers[i].states = state.samplerStates[i];
   }
   desc.rts.color = state.renderTargets;
   desc.rts.depthStencil = state.depthStencil;

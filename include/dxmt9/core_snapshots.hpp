@@ -2,11 +2,13 @@
 
 #include "dxmt9/core_constants.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <span>
@@ -18,48 +20,6 @@
 #include <vector>
 
 namespace dxmt9::core {
-
-struct TextureBinding {
-  Handle handle{};
-  std::unordered_map<u32, u32> stageStates;
-
-  friend bool operator==(const TextureBinding&, const TextureBinding&) = default;
-};
-
-struct SamplerSnapshot {
-  std::unordered_map<u32, u32> states;
-
-  friend bool operator==(const SamplerSnapshot&, const SamplerSnapshot&) = default;
-};
-
-template <size_t FloatCount>
-struct ShaderConstantSnapshot {
-  std::array<std::array<f32, 4>, FloatCount> float4{};
-  std::array<std::array<i32, 4>, kMaxIntegerConstants> int4{};
-  std::array<bool, kMaxBoolConstants> bools{};
-
-  friend bool operator==(const ShaderConstantSnapshot&, const ShaderConstantSnapshot&) = default;
-};
-
-using VertexShaderConstants = ShaderConstantSnapshot<kMaxVertexConstants>;
-using PixelShaderConstants = ShaderConstantSnapshot<kMaxPixelConstants>;
-
-struct VertexDeclSnapshot {
-  std::vector<VertexElement> elements;
-  std::array<StreamBinding, kMaxStreams> streams{};
-  u32 fvf = 0;
-
-  friend bool operator==(const VertexDeclSnapshot&, const VertexDeclSnapshot&) = default;
-};
-
-struct RenderTargetSnapshot {
-  std::array<RenderTargetAttachment, kMaxRenderTargets> color{};
-  RenderTargetAttachment depthStencil{};
-};
-
-struct RenderStateSnapshot {
-  std::unordered_map<u32, u32> values;
-};
 
 template <std::size_t MaxEntries>
 struct StateValueTable {
@@ -272,6 +232,141 @@ struct StateValueTable {
 using RenderStateTable = StateValueTable<kMaxStateSlots>;
 using TextureStageStateTable = StateValueTable<kMaxTextureStageStates>;
 using SamplerStateTable = StateValueTable<kMaxSamplerStates>;
+
+struct TextureBinding {
+  Handle handle{};
+  StateValueTable<kMaxTextureStageStates> stageStates{};
+
+  friend bool operator==(const TextureBinding&, const TextureBinding&) = default;
+};
+
+struct SamplerSnapshot {
+  StateValueTable<kMaxSamplerStates> states{};
+
+  friend bool operator==(const SamplerSnapshot&, const SamplerSnapshot&) = default;
+};
+
+template <size_t FloatCount>
+struct ShaderConstantSnapshot {
+  std::array<std::array<f32, 4>, FloatCount> float4{};
+  std::array<std::array<i32, 4>, kMaxIntegerConstants> int4{};
+  std::array<bool, kMaxBoolConstants> bools{};
+
+  friend bool operator==(const ShaderConstantSnapshot&, const ShaderConstantSnapshot&) = default;
+};
+
+using VertexShaderConstants = ShaderConstantSnapshot<kMaxVertexConstants>;
+using PixelShaderConstants = ShaderConstantSnapshot<kMaxPixelConstants>;
+
+// Fixed-capacity vertex element list. DOD-flat substitute for the previous
+// std::vector<VertexElement>: same observable surface (size/empty/range
+// iteration/indexing/initializer-list assignment, equality compares only the
+// first `count` elements) but inline storage with a hard cap of
+// kMaxVertexElements. Extra elements past the cap are dropped — production
+// fixed-function and shader pipelines emit far fewer than this bound.
+struct VertexElementArray {
+  std::array<VertexElement, kMaxVertexElements> data{};
+  u8 count = 0;
+
+  constexpr std::size_t size() const noexcept { return count; }
+  constexpr bool empty() const noexcept { return count == 0; }
+  static constexpr std::size_t max_size() noexcept { return kMaxVertexElements; }
+  constexpr void clear() noexcept {
+    data = {};
+    count = 0;
+  }
+
+  constexpr VertexElement& operator[](std::size_t index) noexcept { return data[index]; }
+  constexpr const VertexElement& operator[](std::size_t index) const noexcept { return data[index]; }
+
+  constexpr auto begin() noexcept { return data.begin(); }
+  constexpr auto end() noexcept { return data.begin() + count; }
+  constexpr auto begin() const noexcept { return data.begin(); }
+  constexpr auto end() const noexcept { return data.begin() + count; }
+  constexpr auto cbegin() const noexcept { return data.cbegin(); }
+  constexpr auto cend() const noexcept { return data.cbegin() + count; }
+
+  constexpr void push_back(const VertexElement& element) noexcept {
+    if (count < kMaxVertexElements) {
+      data[count++] = element;
+    }
+  }
+
+  constexpr void assign(std::span<const VertexElement> source) noexcept {
+    const std::size_t n = std::min<std::size_t>(source.size(), kMaxVertexElements);
+    data = {};
+    for (std::size_t i = 0; i < n; ++i) {
+      data[i] = source[i];
+    }
+    count = static_cast<u8>(n);
+  }
+
+  VertexElementArray() = default;
+
+  VertexElementArray(std::initializer_list<VertexElement> source) noexcept {
+    assign(std::span<const VertexElement>(source.begin(), source.size()));
+  }
+
+  VertexElementArray& operator=(std::initializer_list<VertexElement> source) noexcept {
+    assign(std::span<const VertexElement>(source.begin(), source.size()));
+    return *this;
+  }
+
+  VertexElementArray& operator=(const std::vector<VertexElement>& source) noexcept {
+    assign(std::span<const VertexElement>(source.data(), source.size()));
+    return *this;
+  }
+
+  friend constexpr bool operator==(const VertexElementArray& a,
+                                   const VertexElementArray& b) noexcept {
+    if (a.count != b.count) {
+      return false;
+    }
+    for (u8 i = 0; i < a.count; ++i) {
+      if (!(a.data[i] == b.data[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  friend bool operator==(const VertexElementArray& a,
+                         const std::vector<VertexElement>& b) noexcept {
+    if (a.count != b.size()) {
+      return false;
+    }
+    for (u8 i = 0; i < a.count; ++i) {
+      if (!(a.data[i] == b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  friend bool operator==(const std::vector<VertexElement>& a,
+                         const VertexElementArray& b) noexcept {
+    return b == a;
+  }
+};
+
+struct VertexDeclSnapshot {
+  VertexElementArray elements{};
+  std::array<StreamBinding, kMaxStreams> streams{};
+  u32 fvf = 0;
+
+  friend bool operator==(const VertexDeclSnapshot&, const VertexDeclSnapshot&) = default;
+};
+
+struct RenderTargetSnapshot {
+  std::array<RenderTargetAttachment, kMaxRenderTargets> color{};
+  RenderTargetAttachment depthStencil{};
+};
+
+struct RenderStateSnapshot {
+  StateValueTable<kMaxStateSlots> values{};
+
+  friend bool operator==(const RenderStateSnapshot&, const RenderStateSnapshot&) = default;
+};
 
 struct TransformTable {
   struct Entry {
