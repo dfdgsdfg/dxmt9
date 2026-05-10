@@ -640,8 +640,18 @@ struct FlatDrawStateRecord {
   std::array<Handle, kMaxStreams> streamBuffers{};
   std::array<u32, kMaxStreams> streamOffsets{};
   std::array<u32, kMaxStreams> streamStrides{};
+  // Captured Metal-buffer handle for stream 0 (the only stream the
+  // current encoder binds) at the moment this draw run was submitted.
+  // Resolves the rename-ring race: a Lock(D3DLOCK_DISCARD) on the same
+  // PE thread between submission and encoding rotates `record.buffer`
+  // off the entry that holds this draw's data. Encoder prefers the
+  // captured handle so the in-flight draw stays bound to the entry it
+  // was committed against. Zero falls back to the live pool lookup.
+  u64 streamBuffer0Metal = 0;
   u32 streamMask = 0;
   Handle indexBuffer{};
+  // Same rationale as streamBuffer0Metal but for the index buffer.
+  u64 indexBufferMetal = 0;
   std::array<Handle, kMaxTextures> textures{};
   u32 textureMask = 0;
   FlatStateSet<kMaxStateSlots> renderStates{};

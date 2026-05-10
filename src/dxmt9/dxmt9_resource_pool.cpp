@@ -752,6 +752,28 @@ void Pool::markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId) {
   markSurfaceUse(hot.depthStencil.handle, seqId);
 }
 
+void Pool::captureDrawBuffers(core::FlatDrawStateRecord& hot) const {
+  // Stream 0 vertex buffer: snapshot the active rename-ring entry so a
+  // later Lock(D3DLOCK_DISCARD) rotating to a fresh allocation does
+  // not redirect this in-flight draw to the new (empty / next-frame)
+  // entry. Non-rename buffers have a stable record.buffer, so the
+  // snapshot is a no-op redirect for them.
+  hot.streamBuffer0Metal = 0;
+  hot.indexBufferMetal = 0;
+  if (hot.streamBuffers[0]) {
+    if (const auto* record = findBuffer(hot.streamBuffers[0].value);
+        record && record->buffer) {
+      hot.streamBuffer0Metal = record->buffer.handle;
+    }
+  }
+  if (hot.indexBuffer) {
+    if (const auto* record = findBuffer(hot.indexBuffer.value);
+        record && record->buffer) {
+      hot.indexBufferMetal = record->buffer.handle;
+    }
+  }
+}
+
 void Pool::markClearResources(const core::ClearDesc& desc, u64 seqId) {
   if (desc.clearColor) {
     for (const auto& attachment : desc.colorAttachments) {

@@ -432,6 +432,12 @@ struct Pool {
   // Per-command-kind bulk marks. Walk the descriptor's resources and stamp
   // their last-used watermark.
   void markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId);
+  // Snapshot the active rename-ring entry's MTL buffer handle for the
+  // hot record's stream-0 vertex buffer and index buffer. Decouples the
+  // encoder bind from later Lock(D3DLOCK_DISCARD) rotations that would
+  // otherwise mutate `record.buffer` out from under in-flight draws.
+  // No-op for buffers without an active record / Metal allocation.
+  void captureDrawBuffers(core::FlatDrawStateRecord& hot) const;
   void markClearResources(const core::ClearDesc& desc, u64 seqId);
   void markSurfaceCopyResources(const core::SurfaceCopyDesc& desc, u64 seqId);
   void markStretchResources(const core::StretchRectDesc& desc, u64 seqId);
