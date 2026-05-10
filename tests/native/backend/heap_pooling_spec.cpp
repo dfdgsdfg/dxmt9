@@ -79,10 +79,16 @@ void testClassifyRejectsTooLargeFootprint() {
   check(!rejectedOverThreshold.eligible,
         "classifyTexture: footprint over threshold must be rejected");
 
-  const auto bufEligible =
+  // R-BACK-14.* — heap-backed buffer suballocation is temporarily disabled
+  // because the bridge does not expose the host-mapped pointer of a
+  // heap-suballocated MTLBuffer (see dxmt9_heap_manager.cpp::classifyBuffer
+  // for the full rationale). Until that is restored, every classifyBuffer
+  // call must short-circuit to direct allocation.
+  const auto bufBelow =
       m.classifyBuffer(2048u, Pool::Default, 0u);
-  check(bufEligible.eligible && bufEligible.family == HeapFamily::SharedBuffer,
-        "classifyBuffer: small DEFAULT buffer maps to SharedBuffer family");
+  check(!bufBelow.eligible,
+        "classifyBuffer: small DEFAULT buffer falls back to direct alloc "
+        "while heap path is disabled");
 
   const auto bufRejected =
       m.classifyBuffer(kHeapEligibilityFootprintBytes + 1u, Pool::Default, 0u);

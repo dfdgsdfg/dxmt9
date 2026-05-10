@@ -102,25 +102,26 @@ HeapEligibility HeapManager::classifyTexture(u64 footprintBytes,
 HeapEligibility HeapManager::classifyBuffer(u64 footprintBytes,
                                              core::Pool pool,
                                              u32 usage) const noexcept {
-  if (!initialized_) {
-    return {};
-  }
-  if (footprintBytes == 0 || footprintBytes > kHeapEligibilityFootprintBytes) {
-    return {};
-  }
-  if (usageBlocksHeap(usage)) {
-    return {};
-  }
-  switch (pool) {
-    case core::Pool::Default:
-    case core::Pool::Managed:
-      // R-BACK-14.1 SharedBuffer family: small non-dynamic VB/IB/CB.
-      // Buffer storage is currently always Shared in this backend.
-      return {true, HeapFamily::SharedBuffer};
-    case core::Pool::SystemMem:
-    case core::Pool::Scratch:
-      return {};
-  }
+  // R-BACK-14.* — heap-backed buffer suballocations are temporarily
+  // disabled. The bridge does not expose the host-mapped pointer of a
+  // heap-suballocated MTLBuffer (heap.makeBuffer returns the buffer
+  // reference but not `info.memory.ptr`), so `Pool::createBuffer`
+  // pins `record.contents = nullptr` on the heap path. The intended
+  // shadow-fallback in `uploadBufferData` was never wired: when
+  // `record.contents` is null the writer short-circuits, leaving the
+  // CPU-side write to never reach the GPU. The visible failure was
+  // every D3DPOOL_DEFAULT vertex/index buffer smaller than the heap
+  // footprint threshold ending up zero-filled at draw time —
+  // d9vk-d3d9-triangle's 36-byte VB landed exactly here, the GPU
+  // sampled (0,0,0,0) for every vertex, and the triangle collapsed
+  // to a degenerate point. Falling back to direct allocation puts
+  // the buffer on the same `device.newBuffer` path the encoder has
+  // always relied on, which does populate `info.memory.ptr`. Restore
+  // the heap-buffer fast path once the bridge exposes a Shared-mode
+  // `MTLBuffer.contents()` (or equivalent) so contents stays non-null.
+  (void)footprintBytes;
+  (void)pool;
+  (void)usage;
   return {};
 }
 
