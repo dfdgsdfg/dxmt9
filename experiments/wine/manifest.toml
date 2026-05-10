@@ -1,0 +1,26 @@
+# Wine root registry for dxmt9 wild experiments.
+# Spec: specs/experiments/runtime/requirements.md §3.
+# Schema: specs/experiments/assets/wine-manifest.schema.toml.
+#
+# To add a new Wine root: append a [[wine]] table with a unique id,
+# the source/variant taxonomy, and an absolute path to the wine root
+# (the directory containing bin/wine). The harness validates each
+# entry's executable at startup.
+
+manifest_version = 1
+
+[[wine]]
+id      = "heroic-11.7"
+source  = "heroic"
+variant = "vanilla"
+version = "11.7"
+path    = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
+notes   = "Default vanilla baseline (agents/rules/test_wild.rules.md)."
+
+[[wine]]
+id      = "heroic-11.7-dxmt"
+source  = "heroic"
+variant = "dxmt"
+version = "11.7"
+path    = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
+notes   = "DXMT-patched build; documented exception only (anno-1404-gold)."
