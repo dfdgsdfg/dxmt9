@@ -226,6 +226,30 @@ struct Counters {
   // staging-copy fallback was hit when it should not have been.
   std::atomic<std::uint64_t> managedTextureUploadBlitCount{0};
   std::atomic<std::uint64_t> managedTextureUploadBlitBytes{0};
+  // R-BACK-14.* — MTLHeap small-resource pooling counters. Aggregate across
+  // all heap families (priv-tex / shared-tex-um / shared-buf); per-family
+  // breakdown can be added later if profiling shows mis-allocation between
+  // families. `direct_fallback` advances on usage-flag mismatch fall-throughs;
+  // `fragmentation_failure` advances on heap.makeTexture nil while not full;
+  // `compaction` advances on heap retirement; `alloc_failure` on
+  // newHeapWithDescriptor failure → fall-through to direct allocation.
+  std::atomic<std::uint64_t> heapAllocCount{0};
+  std::atomic<std::uint64_t> heapBytesAllocated{0};
+  std::atomic<std::uint64_t> heapInstanceCount{0};
+  std::atomic<std::uint64_t> heapDirectFallbackCount{0};
+  std::atomic<std::uint64_t> heapFragmentationFailureCount{0};
+  std::atomic<std::uint64_t> heapCompactionCount{0};
+  std::atomic<std::uint64_t> heapAllocFailureCount{0};
+  std::atomic<std::uint64_t> useHeapCalls{0};
+  std::atomic<std::uint64_t> useResourceCalls{0};
+  // R-BACK-13.* — Tile-Shader FFP fast-path counters (Apple Silicon only).
+  std::atomic<std::uint64_t> tileFfpPassCount{0};
+  std::atomic<std::uint64_t> portableFfpPassCount{0};
+  std::atomic<std::uint64_t> tileFfpFallbackPrecision{0};
+  std::atomic<std::uint64_t> tileFfpFallbackUnsupportedState{0};
+  std::atomic<std::uint64_t> tileFfpFallbackGpuFamily{0};
+  std::atomic<std::uint64_t> tileFfpFallbackMidPassIneligible{0};
+  std::atomic<std::uint64_t> tileFfpMidPassResplitCount{0};
   // R-BACK-3.7 / 3.8 / 4.8: binary-archive prewarming counters.
   std::atomic<std::uint64_t> prewarmEntriesLoaded{0};
   std::atomic<std::uint64_t> prewarmLoadCpuNs{0};
@@ -536,7 +560,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 353> kCounterTable = {{
+constexpr std::array<CounterEntry, 369> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -699,6 +723,22 @@ constexpr std::array<CounterEntry, 353> kCounterTable = {{
     {"uniform_volatile_pushes", CounterEntry::Kind::UnsignedCount, &Counters::uniformVolatilePushes, nullptr, nullptr, 0.0},
     {"managed_texture_upload_blit_count", CounterEntry::Kind::UnsignedCount, &Counters::managedTextureUploadBlitCount, nullptr, nullptr, 0.0},
     {"managed_texture_upload_blit_bytes", CounterEntry::Kind::UnsignedCount, &Counters::managedTextureUploadBlitBytes, nullptr, nullptr, 0.0},
+    {"heap_alloc_count", CounterEntry::Kind::UnsignedCount, &Counters::heapAllocCount, nullptr, nullptr, 0.0},
+    {"heap_bytes_allocated", CounterEntry::Kind::UnsignedCount, &Counters::heapBytesAllocated, nullptr, nullptr, 0.0},
+    {"heap_instance_count", CounterEntry::Kind::UnsignedCount, &Counters::heapInstanceCount, nullptr, nullptr, 0.0},
+    {"heap_direct_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::heapDirectFallbackCount, nullptr, nullptr, 0.0},
+    {"heap_fragmentation_failure_count", CounterEntry::Kind::UnsignedCount, &Counters::heapFragmentationFailureCount, nullptr, nullptr, 0.0},
+    {"heap_compaction_count", CounterEntry::Kind::UnsignedCount, &Counters::heapCompactionCount, nullptr, nullptr, 0.0},
+    {"heap_alloc_failure_count", CounterEntry::Kind::UnsignedCount, &Counters::heapAllocFailureCount, nullptr, nullptr, 0.0},
+    {"use_heap_calls", CounterEntry::Kind::UnsignedCount, &Counters::useHeapCalls, nullptr, nullptr, 0.0},
+    {"use_resource_calls", CounterEntry::Kind::UnsignedCount, &Counters::useResourceCalls, nullptr, nullptr, 0.0},
+    {"tile_ffp_pass_count", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpPassCount, nullptr, nullptr, 0.0},
+    {"portable_ffp_pass_count", CounterEntry::Kind::UnsignedCount, &Counters::portableFfpPassCount, nullptr, nullptr, 0.0},
+    {"tile_ffp_fallback_precision", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpFallbackPrecision, nullptr, nullptr, 0.0},
+    {"tile_ffp_fallback_unsupported_state", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpFallbackUnsupportedState, nullptr, nullptr, 0.0},
+    {"tile_ffp_fallback_gpu_family", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpFallbackGpuFamily, nullptr, nullptr, 0.0},
+    {"tile_ffp_fallback_mid_pass_ineligible", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpFallbackMidPassIneligible, nullptr, nullptr, 0.0},
+    {"tile_ffp_mid_pass_resplit_count", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpMidPassResplitCount, nullptr, nullptr, 0.0},
     {"prewarm_entries_loaded", CounterEntry::Kind::UnsignedCount, &Counters::prewarmEntriesLoaded, nullptr, nullptr, 0.0},
     {"prewarm_load_cpu_ns", CounterEntry::Kind::UnsignedCount, &Counters::prewarmLoadCpuNs, nullptr, nullptr, 0.0},
     {"prewarm_failure_corrupt", CounterEntry::Kind::UnsignedCount, &Counters::prewarmFailureCorrupt, nullptr, nullptr, 0.0},
@@ -1303,6 +1343,32 @@ void countManagedTextureUploadBlit(std::uint64_t bytes) {
   add(counters().managedTextureUploadBlitCount);
   add(counters().managedTextureUploadBlitBytes, bytes);
 }
+
+// R-BACK-14.* — MTLHeap pooling counters.
+void countHeapAlloc(std::uint64_t bytes) {
+  add(counters().heapAllocCount);
+  add(counters().heapBytesAllocated, bytes);
+}
+void countHeapInstance() { add(counters().heapInstanceCount); }
+void countHeapDirectFallback() { add(counters().heapDirectFallbackCount); }
+void countHeapFragmentationFailure() { add(counters().heapFragmentationFailureCount); }
+void countHeapCompaction() { add(counters().heapCompactionCount); }
+void countHeapAllocFailure() { add(counters().heapAllocFailureCount); }
+void countUseHeap() { add(counters().useHeapCalls); }
+void countUseResource() { add(counters().useResourceCalls); }
+
+// R-BACK-13.* — Tile-Shader FFP counters.
+void countTileFfpPass() { add(counters().tileFfpPassCount); }
+void countPortableFfpPass() { add(counters().portableFfpPassCount); }
+void countTileFfpFallbackPrecision() { add(counters().tileFfpFallbackPrecision); }
+void countTileFfpFallbackUnsupportedState() {
+  add(counters().tileFfpFallbackUnsupportedState);
+}
+void countTileFfpFallbackGpuFamily() { add(counters().tileFfpFallbackGpuFamily); }
+void countTileFfpFallbackMidPassIneligible() {
+  add(counters().tileFfpFallbackMidPassIneligible);
+}
+void countTileFfpMidPassResplit() { add(counters().tileFfpMidPassResplitCount); }
 
 // R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming + cross-process.
 void countPrewarmEntriesLoaded(std::uint64_t entries) {

@@ -224,6 +224,14 @@ struct Pool {
   bool hasUnifiedMemory_ = false;
   void setHasUnifiedMemory(bool value) noexcept { hasUnifiedMemory_ = value; }
 
+  // R-BACK-13.* — Apple3 GPU family capability cache. Set once at device
+  // init via `setSupportsApple3` so the tile-shader FFP path can gate on
+  // a single bool without re-querying Metal per encoder. The selector at
+  // BeginRenderPass reads this via the encoder context.
+  bool supportsApple3_ = false;
+  void setSupportsApple3(bool value) noexcept { supportsApple3_ = value; }
+  bool supportsApple3() const noexcept { return supportsApple3_; }
+
   // Lookup helpers — return nullptr on miss. Caller is expected to hold the
   // protecting mutex (currently commandQueue_->mutex_).
   BufferRecord* findBuffer(u64 handle) noexcept;

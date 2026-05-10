@@ -127,6 +127,23 @@ void countUniformFfpPs(std::size_t bytes);
 void countUniformVolatilePush();
 // R-BACK-5.7. Bumps only on the discrete (non-unified-memory) blit path.
 void countManagedTextureUploadBlit(std::uint64_t bytes);
+// R-BACK-14.* — MTLHeap pooling counters.
+void countHeapAlloc(std::uint64_t bytes);
+void countHeapInstance();
+void countHeapDirectFallback();
+void countHeapFragmentationFailure();
+void countHeapCompaction();
+void countHeapAllocFailure();
+void countUseHeap();
+void countUseResource();
+// R-BACK-13.* — Tile-Shader FFP counters.
+void countTileFfpPass();
+void countPortableFfpPass();
+void countTileFfpFallbackPrecision();
+void countTileFfpFallbackUnsupportedState();
+void countTileFfpFallbackGpuFamily();
+void countTileFfpFallbackMidPassIneligible();
+void countTileFfpMidPassResplit();
 // R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming counters.
 void countPrewarmEntriesLoaded(std::uint64_t entries);
 void countPrewarmLoadCpuTime(std::uint64_t nanoseconds);

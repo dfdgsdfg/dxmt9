@@ -138,6 +138,10 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   // decisions stay one-shot per resource and consistent for that
   // resource's lifetime.
   pool_.setHasUnifiedMemory(device_.hasUnifiedMemory());
+  // R-BACK-13.* — cache Apple3 GPU family support so the tile-shader FFP
+  // selector can gate on a single bool. WMTGPUFamilyApple3 is the floor
+  // for `MTLTileRenderPipelineDescriptor` and programmable blending.
+  pool_.setSupportsApple3(device_.supportsFamily(WMTGPUFamilyApple3));
 
   initializer_ = std::make_unique<resources::Initializer>(*this, pool_, device_);
 
