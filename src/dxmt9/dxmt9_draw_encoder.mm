@@ -1112,20 +1112,20 @@ bool encodeDraw(EncodeContext& ctx,
   uniform::DirtyState scratchDirty;
   uniform::markAllDirty(scratchDirty);
   uniform::DirtyState* dirtyPtr = dirty ? dirty : &scratchDirty;
-  // R-BACK-12.24 — Stage 2 argbuf dirty mirror.
+  // R-BACK-12.24 — Stage 2 argbuf upload OR Stage 1 slot 0/3 binds.
   //
-  // When the encoder is on the argbuf-hybrid path AND any per-frequency
-  // bit is dirty, mirror the dirty regions into the argbuf so the cbuf
-  // [[id(0..3)]] entries point at fresh transient slabs. The Stage 1
-  // slot 0 / slot 3 binds below STILL run unmodified — the
-  // shader-translator emitter has not yet been switched to argbuf reads
-  // (P1 / R-BACK-12.26 track), so production shaders today still
-  // dereference the direct-bound slots. The argbuf write is therefore a
-  // shadow copy that exercises the populate path + bumps the upload
-  // counter; once P1 flips the emitter and P3 merges, this branch
-  // becomes the single source of truth and the slot 0/3 binds below
-  // can drop. Until then keeping both paths active preserves shader
-  // correctness on Apple Silicon (where the gate enables Stage 2).
+  // P1 (`b9cfffb`) wired the MSL emitter to read uniforms through
+  // `ArgbufLayout` at slot 30 when `argbufHybridMode` is set, so on
+  // Apple3+/Tier-2 hardware the GPU consumes the argbuf entries and
+  // the slot-0/3 binds are dead — drop them. Stage 1 is the floor for
+  // every other device.
+  //
+  // The FFP `preTransformed` viewport override (~30 lines below)
+  // modifies the local `ffpVs` host copy AFTER this point. For
+  // argbufHybridMode that override path needs `bindFfpVsIfDirty` to
+  // refresh the argbuf's FfpVs entry — that is wired into the lambda
+  // itself so the Stage 2 path stays correct without a second
+  // populator call here.
   if (argbufHybridMode) {
     const auto bytes = dxmt9::argbuf_hybrid::updateDirtyArgbufRegions(
         ctx.queue, ctx.queue.argbufEncoderResource(), drawState, *dirtyPtr,
@@ -1133,11 +1133,15 @@ bool encodeDraw(EncodeContext& ctx,
     if (bytes != 0) {
       perf::countArgbufHybridBytes(bytes);
     }
-    // Do NOT clear the dirty bits here — the Stage 1 binding loop below
-    // still consumes them so the slot 0 / slot 3 / FfpVs slot 3 binds
-    // remain consistent with the argbuf shadow copy.
-  }
-  {
+    // Populator is now the single source of truth for VS_F / PS_F /
+    // FFP_PS — clear those bits so the Stage 1 loop below skips them.
+    // FFP_VS is intentionally left dirty: `bindFfpVsIfDirty` may need
+    // to refresh the argbuf entry after the FFP preTransformed
+    // viewport override.
+    uniform::clearBits(*dirtyPtr, uniform::kVsAny);
+    uniform::clearBits(*dirtyPtr, uniform::kPsAny);
+    uniform::clearBits(*dirtyPtr, uniform::kFfpPsAny);
+  } else {
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
     if (uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
       VsConsts vs = buildVsConsts(drawState);
@@ -1188,9 +1192,22 @@ bool encodeDraw(EncodeContext& ctx,
     auto* host = ensureFfpVs();
     auto slice = uploadTransientBuffer(host, sizeof(FfpVsConsts), alignof(FfpVsConsts));
     if (slice) {
-      encoder.setVertexBuffer(slice.buffer, slice.offset, 3);
-      countUniformBufferBinds(1);
-      perf::countUniformFfpVs(sizeof(FfpVsConsts));
+      if (argbufHybridMode) {
+        // R-BACK-12.24 — Stage 2 path: route FfpVs through the argbuf
+        // entry [[id(1)]] instead of slot 3. The MSL Stage 2 variant
+        // reads `abuf->ffpVs->...`; slot 3 stays unbound. This handles
+        // the FFP `preTransformed` viewport override case where the
+        // local `ffpVs` host copy was modified after the populator's
+        // first pass — re-pointing the argbuf entry at the freshly
+        // uploaded slice ensures the GPU sees the override.
+        dxmt9::argbuf_hybrid::pointFfpVsAtSlice(
+            ctx.queue.argbufEncoderResource(), slice.buffer, slice.offset);
+        perf::countArgbufHybridBytes(sizeof(FfpVsConsts));
+      } else {
+        encoder.setVertexBuffer(slice.buffer, slice.offset, 3);
+        countUniformBufferBinds(1);
+        perf::countUniformFfpVs(sizeof(FfpVsConsts));
+      }
       uniform::clearBits(*dirtyPtr, uniform::kFfpVsAny);
       ffpVsBound = true;
     }
@@ -1298,7 +1315,15 @@ bool encodeDraw(EncodeContext& ctx,
     } else if (hot.streamBuffers[0]) {
       if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[0].value);
           buffer && buffer->buffer) {
-        vertexBuffer = WMT::Buffer{buffer->buffer.handle};
+        // Prefer the snapshot taken at submitDrawRun: a Lock(D3DLOCK_DISCARD)
+        // between submission and encoding rotates record.buffer to a fresh
+        // ring entry, but this draw still needs the entry that held its
+        // data at commit time. Falls back to the live record.buffer when
+        // the capture is unavailable (zero-initialised paths or
+        // non-Metal-backed handles).
+        const u64 captured = hot.streamBuffer0Metal;
+        vertexBuffer = captured != 0u ? WMT::Buffer{captured}
+                                      : WMT::Buffer{buffer->buffer.handle};
         vertexBufferOffset = hot.streamOffsets[0];
         if (!buffer->shadow.empty()) {
           vertexBytes = buffer->shadow;
@@ -1933,7 +1958,10 @@ bool encodeDraw(EncodeContext& ctx,
       } else {
         auto* buffer = ctx.pool.findBuffer(hot.indexBuffer.value);
         if (buffer && buffer->buffer) {
-          indexBuffer = WMT::Buffer{buffer->buffer.handle};
+          // Snapshot-aware bind: see streamBuffer0Metal note above.
+          const u64 captured = hot.indexBufferMetal;
+          indexBuffer = captured != 0u ? WMT::Buffer{captured}
+                                       : WMT::Buffer{buffer->buffer.handle};
         } else if (buffer && !buffer->shadow.empty()) {
           transientIndexBuffer = makeTransientBuffer(buffer->shadow.data(), buffer->shadow.size());
           if (transientIndexBuffer) {

@@ -220,4 +220,18 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               const uniform::DirtyState& dirty,
                               std::uint64_t seqId);
 
+// R-BACK-12.24 — re-point the FfpVs argbuf entry [[id(1)]] at an
+// already-uploaded transient slice. Used by the encoder's
+// `bindFfpVsIfDirty` lambda when the FFP `preTransformed` viewport
+// override has just modified the host copy and the slice was
+// uploaded to the transient ring; rather than rebuilding through
+// `state::buildFfpVsConsts(state)` (which would lose the override),
+// we point the existing argbuf entry at the override-aware slice.
+// Caller bumps `countArgbufHybridBytes(sizeof(FfpVsConsts))` itself
+// since this helper does no byte accounting. Buffer + offset taken
+// directly so the header doesn't drag in CommandQueue's full
+// definition.
+void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,
+                        WMT::Buffer buffer, std::uint64_t offset);
+
 }  // namespace dxmt9::argbuf_hybrid
