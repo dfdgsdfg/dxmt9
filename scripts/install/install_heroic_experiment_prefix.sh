@@ -59,11 +59,11 @@ if [[ -z "$prefix" ]]; then
 fi
 
 if [[ "$skip_build" != true ]]; then
-  bash "$repo_root/scripts/build_apps/build_basic_hlsl.sh"
-  bash "$repo_root/scripts/build_apps/build_tutorial07.sh"
-  bash "$repo_root/scripts/build_apps/build_hdrformats.sh"
-  bash "$repo_root/scripts/build_apps/build_simple_sample.sh"
-  bash "$repo_root/scripts/build_apps/build_irrlicht_managed_lights.sh"
+  bash "$repo_root/scripts/build_apps/build_dx-sdk-basichlsl.sh"
+  bash "$repo_root/scripts/build_apps/build_dx-sdk-tutorial07.sh"
+  bash "$repo_root/scripts/build_apps/build_dx-sdk-hdrformats.sh"
+  bash "$repo_root/scripts/build_apps/build_dxut-simple-sample.sh"
+  bash "$repo_root/scripts/build_apps/build_irrlicht-managed-lights.sh"
 fi
 
 cmd=(

@@ -20,6 +20,6 @@ RT-change cost, depth-pass cost, and uniform-update traffic can be compared
 without shader compilation or pipeline-cache noise.
 
 Mode selection: pass the mode name as `argv[1]` (the launcher scripts under
-`experiments/launchers/dxmt9_perf_probe_*.sh` do this) or set
+`experiments/launchers/dxmt9-perf-*.sh` do this) or set
 `DXMT9_PROBE_MODE`. Frame and draw counts can be overridden via
 `DXMT9_PROBE_FRAMES` and `DXMT9_PROBE_DRAWS`.
