@@ -840,14 +840,55 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     return {};
   }
   perf::countRenderPassBegin();
-  // R-BACK-14.3 — issue useHeap once per live heap instance so every
-  // heap-backed resource bound on this encoder is resident without
-  // per-resource useResource calls. Heap count is bounded (a handful
-  // per family), so this stays fixed cost regardless of bind volume.
-  ctx.pool.heapManager().forEachHeapInstance([&encoder](WMT::Heap heap) {
-    encoder.useHeap(heap);
-    perf::countUseHeap();
-  });
+  // R-BACK-14.3 — issue `useHeap` once per heap instance that actually
+  // backs a resource bound on this encoder. Walking the active draw
+  // state's stream/index buffers + sampler textures and consulting each
+  // record's `isHeapBacked` flag avoids the over-issue case where every
+  // pool heap (including heaps holding resources unrelated to this
+  // encoder) was made resident at encoder open. The dedup buffer is
+  // sized to the static binding cap (kMaxStreams streams + 1 index
+  // buffer + kMaxSamplers texture stages = 33 bindings, all of which
+  // share the same handful of heap instances per family) so this stays
+  // a fixed-size, allocation-free walk on the encoder-open hot path.
+  {
+    constexpr std::size_t kMaxBoundHeaps =
+        core::kMaxStreams + 1u + core::kMaxSamplers;
+    std::array<obj_handle_t, kMaxBoundHeaps> usedHeaps{};
+    std::size_t usedHeapCount = 0;
+    auto pushHeap = [&](WMT::Heap heap) {
+      const obj_handle_t h = heap.handle;
+      if (h == 0) return;
+      for (std::size_t i = 0; i < usedHeapCount; ++i) {
+        if (usedHeaps[i] == h) return;
+      }
+      if (usedHeapCount < usedHeaps.size()) {
+        usedHeaps[usedHeapCount++] = h;
+      }
+    };
+    auto considerBuffer = [&](core::Handle handle) {
+      if (!handle) return;
+      if (auto* rec = ctx.pool.findBuffer(handle.value); rec && rec->isHeapBacked) {
+        pushHeap(rec->heap);
+      }
+    };
+    auto considerTexture = [&](core::Handle handle) {
+      if (!handle) return;
+      if (auto* rec = ctx.pool.findTexture(handle.value); rec && rec->isHeapBacked) {
+        pushHeap(rec->heap);
+      }
+    };
+    considerBuffer(hot.indexBuffer);
+    for (const auto& streamHandle : hot.streamBuffers) {
+      considerBuffer(streamHandle);
+    }
+    for (const auto& textureHandle : hot.textures) {
+      considerTexture(textureHandle);
+    }
+    for (std::size_t i = 0; i < usedHeapCount; ++i) {
+      encoder.useHeap(WMT::Heap{usedHeaps[i]});
+      perf::countUseHeap();
+    }
+  }
   if (discardAfterPresent) {
     ctx.queue.backBufferDiscardAfterPresent_ = false;
   }
@@ -908,7 +949,8 @@ bool encodeDraw(EncodeContext& ctx,
                  const PreUploadedDrawData* preUploaded,
                  const core::DrawParam* paramOverride,
                  std::span<const u8> paramPayloadArena,
-                 uniform::DirtyState* dirty) {
+                 uniform::DirtyState* dirty,
+                 bool tileFfpMode) {
   // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
@@ -984,9 +1026,15 @@ bool encodeDraw(EncodeContext& ctx,
   if (!skipBaseStateBind) {
     PerfScope pipelineLookupScope(perf::countEncodeDrawPipelineLookupCpuTime);
     const auto depthKey = makeDepthStencilKey(drawState);
+    // R-BACK-13.3: pass `tileFfpMode` through so the cache returns the
+    // tile-stage MTLRenderPipelineState (built via
+    // newRenderPipelineStateWithTileDescriptor) when the selector chose
+    // Tile, and the standard fragment PSO otherwise. The variant key
+    // already records this bit, so the two variants land in distinct
+    // cache entries.
     auto pipeline = ctx.cache.getOrBuildDrawPipelineForState(
         ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
-        ctx.shaderArchivePath).get();
+        ctx.shaderArchivePath, tileFfpMode).get();
     if (!pipeline) {
       if (traceEncode) {
         std::ostringstream out;
@@ -1023,8 +1071,24 @@ bool encodeDraw(EncodeContext& ctx,
             static_cast<unsigned long long>(variantHash)));
       }
     }
-    encoder.setRenderPipelineState(pipeline);
-    countPipelineBind();
+    if (tileFfpMode) {
+      // R-BACK-13.6: tile-shader FFP path. The render encoder hosts
+      // both render and tile commands; setTileRenderPipelineState binds
+      // the tile-stage variant built from makeFfpTilePixelSource and
+      // dispatchThreadsPerTile launches one tile-stage thread per
+      // tile. Tile size is pinned to 16x16 — Apple GPU's typical tile
+      // dimension; threadgroup_size_matches_tile_size = 1 on the
+      // descriptor side keeps Metal in agreement.
+      // TODO(R-BACK-13.x): query MTLDevice for the GPU's exact preferred
+      // tile size (e.g. via tileSizeForRenderPipelineState if exposed
+      // through winemetal) and replace the 16x16 hardcode.
+      encoder.setTileRenderPipelineState(pipeline);
+      encoder.dispatchThreadsPerTile(WMTSize{16u, 16u, 1u});
+      countPipelineBind();
+    } else {
+      encoder.setRenderPipelineState(pipeline);
+      countPipelineBind();
+    }
   }
   auto uploadTransientBuffer = [&](const void* data, std::size_t len, std::size_t alignment) {
     return ctx.queue.uploadTransientBuffer(
@@ -2390,7 +2454,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          anyUpData ? &preData : nullptr,
                          &param,
                          recordPayloadArena,
-                         &uniformDirty)) {
+                         &uniformDirty,
+                         /*tileFfpMode=*/activePassUsesTileFfp)) {
             baseBound = true;
             activeDrawStateKey = hot.key;
           }

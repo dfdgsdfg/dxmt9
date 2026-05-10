@@ -53,12 +53,16 @@ bool isFullscreenStretch(const resources::SurfaceRecord& dst,
 }
 
 // R-BACK-14.3 — issue `useHeap:` once per live heap instance on a freshly
-// opened blit encoder. Mirrors the render-encoder helper in
-// beginRenderPass. Cheap: heap count is bounded per family. Doing this
-// even when the blit body does not touch a heap-backed resource is a
-// no-op residency hint, not a correctness issue. countUseHeap advances
-// per call so the heap-vs-direct ratio stays observable on the blit
-// path too (R-BACK-14.4 dashboard).
+// opened blit encoder. The render-encoder path was tightened to walk only
+// the bound resources and useHeap the heaps that actually back them; the
+// blit helpers below operate on SurfaceRecord src/dst pairs, which are
+// excluded from heap pooling by R-BACK-14.1, so the per-encoder set is
+// always empty and this call is a no-op when no heap-backed resource is
+// in play. TODO(R-BACK-14.3): plumb a per-encoder bound-resource list
+// (Buffer/Texture handles) from the few blit callers that may touch
+// heap-backed members and switch to the same dedup walk used in
+// beginRenderPass; until then keep the broad walk so heap-resident
+// bookkeeping stays correct on every blit path.
 void useHeapsOnBlit(WMT::BlitCommandEncoder& blit, resources::Pool& pool) {
   pool.heapManager().forEachHeapInstance([&blit](WMT::Heap heap) {
     blit.useHeap(heap);

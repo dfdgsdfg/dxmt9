@@ -666,6 +666,12 @@ void Pool::uploadTextureLevel(WMT::Device device,
   // useHeap pattern from the deferred-upload Initializer path so the
   // heap-resident bookkeeping stays consistent on both upload entry
   // points.
+  // TODO(R-BACK-14.3): the render encoder now walks only the bound
+  // resources and issues useHeap() on the heaps that actually back
+  // them. This synchronous upload path knows exactly one destination
+  // record; switch to a single-record `isHeapBacked` check when the
+  // direct-upload caller is reworked to pass a TextureRecord pointer
+  // (currently it's the legacy entry, unused in production).
   heapManager_.forEachHeapInstance([&blit](WMT::Heap heap) {
     blit.useHeap(heap);
     perf::countUseHeap();

@@ -142,6 +142,14 @@ struct PreUploadedDrawData {
 // lives across all draws on one Metal render encoder and calls
 // markAllDirty(...) when a fresh encoder opens (R-BACK-12.12). nullptr
 // is treated as "every draw rebinds everything".
+//
+// `tileFfpMode` (R-BACK-13.1..13.6): when true, the encoder is on the
+// tile-shader FFP path (selectTileFfpForPass returned Tile) and
+// encodeDraw must bind the tile pipeline via setTileRenderPipelineState
+// + dispatchThreadsPerTile rather than the portable
+// setRenderPipelineState. The flag is sticky for the encoder's lifetime
+// — mid-pass demotions force a render-pass split (R-BACK-13.6) so a
+// fresh encoder opens on the portable path.
 bool encodeDraw(EncodeContext& ctx,
                  WMT::CommandBuffer& commandBuffer,
                  WMT::RenderCommandEncoder& encoder,
@@ -151,7 +159,8 @@ bool encodeDraw(EncodeContext& ctx,
                  const PreUploadedDrawData* preUploaded = nullptr,
                  const core::DrawParam* paramOverride = nullptr,
                  std::span<const std::uint8_t> paramPayloadArena = {},
-                 uniform::DirtyState* dirty = nullptr);
+                 uniform::DirtyState* dirty = nullptr,
+                 bool tileFfpMode = false);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

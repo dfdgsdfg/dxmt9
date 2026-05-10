@@ -266,6 +266,13 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
   // useHeap call per live heap instance covers every member resident on
   // this blit encoder; the per-resource useResource path below is
   // therefore skipped (heap residency wins).
+  // TODO(R-BACK-14.3): the render encoder now walks only the bound
+  // resources and useHeap()s the subset of heaps that back them. The
+  // initializer flush has each pendingUpload's destination texture in
+  // hand (`u.destTexture`) but the records aren't resolved here, so a
+  // tightened walk would need an inverse handle lookup. Defer until the
+  // initializer carries the source TextureRecord pointer alongside the
+  // texture handle.
   pool_->heapManager().forEachHeapInstance([&blit](WMT::Heap heap) {
     blit.useHeap(heap);
     perf::countUseHeap();
