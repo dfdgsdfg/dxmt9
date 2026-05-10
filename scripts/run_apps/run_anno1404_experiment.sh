@@ -6,13 +6,13 @@ repo_root=$(cd -- "$script_dir/../.." && pwd)
 
 # Vanilla Wine — see agents/rules/test_wild.rules.md.
 # NOTE: anno-1404-gold is a documented exception that historically only ran
-# under Wine-11.6-DXMT (vanilla Wine trips d3dx10_43 / D3DX10SaveTextureToMemory
+# under Wine-*-DXMT (vanilla Wine trips d3dx10_43 / D3DX10SaveTextureToMemory
 # before the game becomes a usable baseline; see experiments/README.md).
 # When that path is needed, override explicitly:
-#   bash run_anno1404_experiment.sh --wine-root .../Wine-11.6-DXMT/.../wine
+#   bash run_anno1404_experiment.sh --wine-root .../Wine-11.7-DXMT/.../wine
 # Defaulting to vanilla here keeps the runner consistent with every other wild
 # runner; the user opts into the patched runtime per-invocation.
-wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6/Contents/Resources/wine"
+wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
 prefix_default="$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
 
 args=("$@")

@@ -17,7 +17,7 @@ SUMMARY_ROOT = OUTPUT_ROOT / "dx9-present-policy-ab"
 # Vanilla Wine, not Wine-*-DXMT / Wine-*-VK — see agents/rules/test_wild.rules.md.
 DEFAULT_WINE_ROOT = (
     Path.home()
-    / "Library/Application Support/heroic/tools/wine/Wine-11.6/Contents/Resources/wine"
+    / "Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
 )
 
 MODE_ENV = {

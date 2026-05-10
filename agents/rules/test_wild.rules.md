@@ -10,8 +10,8 @@ runtime, not the dxmt9 build itself.
 
 | Runtime | Use as default? | Why |
 |---------|-----------------|-----|
-| `Wine-11.6` (vanilla Heroic) | **Yes** | Reference baseline. Same `d3d9.dll` shim, `wow64` dispatcher, and `ntdll` thunks regardless of who runs the test. |
-| `Wine-11.6-DXMT` | No (exception below) | Carries DXMT-author patches to `d3d9` / `dxgi` / wow64. Hides dxmt9 bridge regressions and produces inconsistent baselines across machines. |
+| `Wine-11.7` (vanilla Heroic) | **Yes** | Reference baseline. Same `d3d9.dll` shim, `wow64` dispatcher, and `ntdll` thunks regardless of who runs the test. Update this row when Heroic publishes a newer minor (`Wine-11.8`, etc.) — the rule is "current vanilla Heroic Wine," not a frozen version. |
+| `Wine-*-DXMT` | No (exception below) | Carries DXMT-author patches to `d3d9` / `dxgi` / wow64. Hides dxmt9 bridge regressions and produces inconsistent baselines across machines. |
 | `Wine-*-VK` / Proton-style VK builds | No | Substitutes a different `d3d9.dll` and reroutes through Vulkan; the comparison is no longer "dxmt9 vs. Wine builtin." |
 | CrossOver Wine | No (unless explicitly testing CrossOver host) | Forks Wine; results don't generalize. |
 
@@ -31,10 +31,10 @@ When adding or editing a runner script under `scripts/run_apps/`,
 
 ```sh
 # Good — vanilla Wine baseline.
-wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6/Contents/Resources/wine"
+wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
 
 # Avoid — DXMT- or VK-patched Wine as the default.
-wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6-DXMT/Contents/Resources/wine"
+wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
 ```
 
 Always allow `--wine-root <path>` to override the default so a
@@ -52,7 +52,7 @@ adding one is a deliberate decision and must be justified inline:
 
 | App | Required runtime | Reason |
 |-----|------------------|--------|
-| `anno-1404-gold` | `Wine-11.6-DXMT` (or equivalent) | Vanilla Wine trips `d3dx10_43` / `D3DX10SaveTextureToMemory` before the game reaches a usable baseline. Documented in `experiments/README.md`. |
+| `anno-1404-gold` | `Wine-*-DXMT` (any current DXMT build) | Vanilla Wine trips `d3dx10_43` / `D3DX10SaveTextureToMemory` before the game reaches a usable baseline. Documented in `experiments/README.md`. |
 
 If you find another app that genuinely requires a patched Wine build,
 add a row here with the failure mode and a link to evidence. Do not
@@ -63,9 +63,9 @@ is compensating for.
 
 Before reporting a dxmt9 regression from a wild run, confirm:
 
-1. **Wine root is vanilla.** Inspect `result.json:wine_root` —
-   `Wine-11.6`, not `Wine-11.6-DXMT` / `Wine-11.6-VK` / a CrossOver
-   bottle.
+1. **Wine root is vanilla.** Inspect `result.json:wine_root` — current
+   vanilla Heroic build (e.g. `Wine-11.7`), not `Wine-*-DXMT` /
+   `Wine-*-VK` / a CrossOver bottle.
 2. **A small repro reproduces under the same runtime.** Run a fast
    sanity test (e.g. `d9vk-d3d9-triangle`) with the same `--wine-root`.
    If it passes, the bug is app-specific, not bridge-wide.

@@ -7,7 +7,7 @@ repo_root=$(cd -- "$script_dir/../.." && pwd)
 # Vanilla Wine, not Wine-*-DXMT or Wine-*-VK (see agents/rules/test_wild.rules.md):
 # patched runtimes mask dxmt9 bridge regressions because they wire d3d9 / wow64
 # differently and produce inconsistent baselines.
-heroic_wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6/Contents/Resources/wine"
+heroic_wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
 crossover_root_default="$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
 heroic_prefix_default="$HOME/Games/_Prefixes/Street Fighter IV Benchmark"
 crossover_prefix_default="$HOME/Library/Application Support/CrossOver/Bottles/Heroic"
