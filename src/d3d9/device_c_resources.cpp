@@ -300,7 +300,35 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
     const auto footprint = lockFootprint(desc.format, levelWidth, levelHeight, r);
     const uint32_t rowBytes = footprint.rowBytes;
     const uint32_t rows = footprint.rows;
-    const size_t shadowBytes = static_cast<size_t>(lock.pitch) * rows;
+    // SFIV BC3 level-9 page-fault repro (2026-05-10): for tiny mips
+    // (e.g. 1x1 BC3) Metal/the runtime reports `lock.pitch` equal to
+    // the BASE-level row pitch (1024 for a 256x256 BC3 base), and the
+    // game walks the lock pointer as if it had base-level rows worth
+    // of storage — observed writes at offsets 0x1000, 0x2000, 0x4000
+    // from the lock pointer. footprint.rows is the LEVEL block-row
+    // count (1 for a 1x1 mip), so `lock.pitch * rows` heavily
+    // underestimates the worst-case extent. Use the parent texture's
+    // full block-padded height as the upper bound (and let
+    // computeShadowBytesUpperBound enforce its own floor on top).
+    // copyNativeToShadow / copyShadowToNative continue to copy
+    // `rowBytes * rows` block-rows — that part is correct; only the
+    // allocation upper bound widens.
+    const uint32_t rectHeight =
+        r ? static_cast<uint32_t>(std::max<int32_t>(
+                0, std::clamp(r->bottom, 0, static_cast<int32_t>(levelHeight)) -
+                       std::clamp(r->top, 0, static_cast<int32_t>(levelHeight))))
+          : levelHeight;
+    const uint32_t blockHeight = dxmt9::core::formatBlockHeight(desc.format);
+    // When the lock's reported pitch exceeds the strictly-correct
+    // row pitch for the level (`> rowBytes`), the game evidently
+    // treats the lock as a base-level surface; size against the
+    // base-level height. Otherwise the level's own height is fine.
+    const uint32_t levelRowPitch =
+        dxmt9::core::formatRowPitch(desc.format, levelWidth);
+    const uint32_t effectiveHeight =
+        (rowBytes != 0 && lock.pitch > levelRowPitch) ? desc.height : rectHeight;
+    const size_t shadowBytes =
+        computeShadowBytesUpperBound(lock.pitch, effectiveHeight, blockHeight);
     auto& shadow = t->wow64Locks[level];
     if (rowBytes == 0 || rows == 0) {
       dxmt9DebugLog("texture_lock_rect shadow alloc failed texture=%p level=%u nativeBits=%p rowBytes=%u rows=%u",
@@ -537,17 +565,29 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
   if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
     const auto& desc = s->obj->desc();
     const uint32_t nativePitch = static_cast<uint32_t>(std::abs(out->pitch));
-    uint32_t rowBytes = nativePitch;
-    uint32_t rows = static_cast<uint32_t>(std::max<int32_t>(
+    const uint32_t rectHeight = static_cast<uint32_t>(std::max<int32_t>(
         0, (r ? std::clamp(r->bottom, 0, static_cast<int32_t>(desc.height))
               : static_cast<int32_t>(desc.height)) -
                (r ? std::clamp(r->top, 0, static_cast<int32_t>(desc.height)) : 0)));
+    uint32_t rowBytes = nativePitch;
+    uint32_t rows = rectHeight;
     if (dxmt9::core::isCompressedFormat(desc.format)) {
       const auto footprint = lockFootprint(desc.format, desc.width, desc.height, r);
       rowBytes = footprint.rowBytes;
       rows = footprint.rows;
     }
-    const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(nativePitch);
+    // See texture_lock_rect note: footprint.rows is the block-row count
+    // and `nativePitch` is the native row stride; games may iterate by
+    // texel row (or write a full base-level worth on tiny mips), so
+    // size the shadow against rectHeight (or the base-level height
+    // when the lock's pitch leaks the parent-level row stride).
+    const uint32_t blockHeight = dxmt9::core::formatBlockHeight(desc.format);
+    const uint32_t levelRowPitch =
+        dxmt9::core::formatRowPitch(desc.format, desc.width);
+    const uint32_t effectiveHeight =
+        (rowBytes != 0 && nativePitch > levelRowPitch) ? desc.height : rectHeight;
+    const size_t bytes =
+        computeShadowBytesUpperBound(nativePitch, effectiveHeight, blockHeight);
     if (bytes != 0) {
       auto& shadow = s->ownerTex ? s->ownerTex->wow64Locks[s->ownerLevel] : s->wow64Lock;
       if (!shadow.shadow || shadow.shadow.size < bytes) {

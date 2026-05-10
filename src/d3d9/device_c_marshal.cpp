@@ -210,6 +210,50 @@ bool requiresWow64PointerShadow() {
   return g_wow64ClientCallDepth != 0;
 }
 
+size_t computeShadowBytesUpperBound(uint32_t nativePitch, uint32_t rectHeight,
+                                    uint32_t blockHeight) {
+  if (nativePitch == 0 || rectHeight == 0) {
+    return 0;
+  }
+  const uint32_t bh = blockHeight ? blockHeight : 1u;
+  // Pad height up to a block boundary so the backing storage's last block
+  // row is fully addressable when the game iterates by texel rows.
+  const uint32_t alignedHeight =
+      ((static_cast<uint64_t>(rectHeight) + bh - 1u) / bh) * bh;
+  // For BC formats on tiny mips (e.g. BC3 1x1), guarantee at least one
+  // full block tall — the native storage is always at least blockHeight
+  // texels, and the game may walk that span via pitch.
+  const uint32_t paddedHeight = std::max(alignedHeight, bh);
+  const uint64_t paddedBytes =
+      static_cast<uint64_t>(nativePitch) * static_cast<uint64_t>(paddedHeight);
+
+  // Compatibility floor for tiny BC mips: SFIV (and likely other
+  // D3DX-using games) iterates the lock pointer past the strict
+  // block-row bound — observed faults at +0x1000 and +0x2000 from
+  // BC3 1x1 / 2x2 locks where the pitch is the parent-level pitch
+  // (Metal returns 1024 for the 1x1 mip of a 256x256 BC3 texture
+  // because the underlying buffer is row-aligned). On a real
+  // Wine-builtin Windows host the lock pointer lives inside a larger
+  // heap arena so over-writes land in mapped (but undefined) memory;
+  // dxmt9's wow64 shadow uses a page-aligned NtAllocateVirtualMemory /
+  // mach_vm_allocate which makes the post-buffer page UNMAPPED and
+  // any over-write faults immediately.
+  //
+  // We bridge that compatibility gap by enforcing a minimum allocation
+  // size of `nativePitch * blockHeight * kCompressedMipMinBlockRows`
+  // — i.e., at least kCompressedMipMinBlockRows block rows of pitch
+  // tall storage. For BC3 1x1 with pitch=1024 this lands at 16 KB
+  // (four pages), comfortably swallowing the observed game write
+  // patterns. For larger mips the natural `paddedBytes` already
+  // exceeds the floor, so this affects only tiny mips that are
+  // already small in absolute byte count.
+  constexpr uint64_t kCompressedMipMinBlockRows = 4u;
+  const uint64_t floorBytes = static_cast<uint64_t>(nativePitch) *
+                              static_cast<uint64_t>(bh) *
+                              kCompressedMipMinBlockRows;
+  return static_cast<size_t>(std::max(paddedBytes, floorBytes));
+}
+
 bool isWow64NativePointerAllowed(uint64_t value) {
   if (value == 0 || value > static_cast<uint64_t>(UINTPTR_MAX)) {
     return false;

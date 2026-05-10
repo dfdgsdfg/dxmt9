@@ -75,6 +75,30 @@ void releaseShadowLock(ShadowLock& lock);
 bool requiresWow64PointerShadow();
 bool isWow64NativePointerAllowed(uint64_t value);
 
+// Wow64 lock-rect shadow allocation upper bound.
+//
+// `nativePitch` is the byte stride between rows returned by the underlying
+// backend lock; `rectHeight` is the locked rect height in texels (clamped
+// to the level's logical height). `blockHeight` is the format's block
+// height in texels (1 for uncompressed formats, 4 for BC/DXT formats).
+//
+// The result is the worst-case number of bytes a game may write through
+// the lock pointer. It is the max of:
+//   1. `nativePitch * blockHeight-aligned(rectHeight)` — the natural
+//      block-row span padded to a full block boundary.
+//   2. `nativePitch * blockHeight * kCompressedMipMinBlockRows` — a
+//      compatibility floor for tiny BC mips where the parent-level
+//      pitch is reported by Metal (e.g. 1024 for a BC3 1x1 mip of a
+//      256x256 base) and games walk the lock pointer far past the
+//      strict block-row bound. Observed in SFIV: writes faulted at
+//      offsets 0x1000 and 0x2000 from a single-page shadow. The floor
+//      reserves four block rows (16 KB for this case) so the
+//      post-buffer page stays unmapped only well past any plausible
+//      game write.
+// See R-BACK fix for the SFIV BC3 level-9 page-fault (2026-05-10).
+size_t computeShadowBytesUpperBound(uint32_t nativePitch, uint32_t rectHeight,
+                                    uint32_t blockHeight);
+
 class ScopedWow64ClientCall {
  public:
   ScopedWow64ClientCall();

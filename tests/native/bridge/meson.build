@@ -85,3 +85,21 @@ wmt_setbytes_dispatch_spec = executable(
 )
 
 test('dxmt9-wmt-setbytes-dispatch-spec', wmt_setbytes_dispatch_spec)
+
+# Regression test for the wow64 texture-lock shadow allocation size.
+# SFIV crashed at 0x1A4B1000 because a BC3 1x1 mip's shadow was sized
+# to one 4KB page yet the game wrote past it. The helper that backs
+# the fix is unit-tested here so the size formula stays honest.
+texture_lock_shadow_spec = executable(
+  'dxmt9-texture-lock-shadow-spec',
+  'texture_lock_shadow_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src'),
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-texture-lock-shadow-spec', texture_lock_shadow_spec)
