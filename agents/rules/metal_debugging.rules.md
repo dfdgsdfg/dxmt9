@@ -166,7 +166,7 @@ labels narrate what happened. Cross-reference with the
 Run the policy A/B harness:
 
 ```sh
-python3 scripts/run_apps/run_dx9_present_policy_ab.py \
+python3 scripts/tools/run_dx9_present_policy_ab.py \
   --mode default --mode async --runs 5 \
   --cv-tolerance 0.02
 ```

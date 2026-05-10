@@ -81,7 +81,7 @@ Current test placement:
 
 - Implemented as `d9vk-d3d9-lock-matrix`.
 - Built by `scripts/build_apps/build_dx9_fast_sanity_apps.sh`.
-- Run by default in `scripts/tools/run_dx9_fast_sanity_suite.sh` across
+- Run by default in `scripts/run_suites/run_dx9_fast_sanity_suite.sh` across
   `dxmt9-x64`, `builtin-x64`, and `builtin-x86`.
 - Catalogue entry is `experiments/CATALOGUE.toml`.
 
@@ -234,7 +234,7 @@ Status:
 - Prefer fast sanity apps over large sample apps for these quirks because the
   failures need to identify a single D3D9 compatibility rule.
 - Add new apps to `scripts/build_apps/build_dx9_fast_sanity_apps.sh` and
-  `scripts/tools/run_dx9_fast_sanity_suite.sh` only when they are deterministic enough
+  `scripts/run_suites/run_dx9_fast_sanity_suite.sh` only when they are deterministic enough
   to run in all three lanes.
 - If a test intentionally documents a current `dxmt9` gap, add it as an
   opt-in app first, then move it into the default fast sanity suite after the

@@ -163,7 +163,7 @@ regressions can be attributed without ambiguity. Proposed section:
 
 ## 5. Harness recommendation
 
-`scripts/run_apps/run_dx9_present_policy_ab.py` is **the right base** —
+`scripts/tools/run_dx9_present_policy_ab.py` is **the right base** —
 it already handles multi-mode env vars, perf-counter extraction into
 `result.json`, A/B summary markdown via `BACKEND_COUNTER_FIELDS`, and the
 R-BENCH-1.2 CV gate (J3). Extend it with:

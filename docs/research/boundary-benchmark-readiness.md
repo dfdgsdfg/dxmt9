@@ -26,7 +26,7 @@ W3, W4, X1, Y1 against the V1 design (`docs/research/boundary-benchmarks.md`).
 - `PresentLoopProbe.cpp` (~250 LOC) — B6, tiny Clear + empty Presents.
 - `tests/native/core/chunk_record_micro_spec.cpp` — B1 native micro-bench, fake backend, no Wine.
 
-**Harness:** `scripts/run_apps/run_dx9_present_policy_ab.py` defines
+**Harness:** `scripts/tools/run_dx9_present_policy_ab.py` defines
 `BOUNDARY_COUNTER_FIELDS` (6 boundaries × 3-22 keys). `payload["boundary"] = args.boundary` carries the chosen boundary into `summary.json`.
 
 **Suite:** `scripts/run_suites/run_boundary_audit_suite.sh` runs 8

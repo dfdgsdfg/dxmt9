@@ -27,7 +27,7 @@ bash scripts/run_suites/run_dx9_regression_suite.sh --wine-root "$WINE_ROOT"
 DX9 fast sanity suite derived from the small `d9vk` D3D9 tests:
 
 ```sh
-bash scripts/tools/run_dx9_fast_sanity_suite.sh --wine-root "$WINE_ROOT"
+bash scripts/run_suites/run_dx9_fast_sanity_suite.sh --wine-root "$WINE_ROOT"
 ```
 
 This suite:

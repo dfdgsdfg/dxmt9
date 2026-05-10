@@ -12,5 +12,5 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   created by experiment runs.
 - `sync_corpus.sh` — sync a vkd3d upstream corpus into this tree via
   `shader_corpus_tool.py sync`.
-- `run_dx9_fast_sanity_suite.sh` — fast-sanity suite runner that drives the
-  fast-sanity bundle through `run_experiment.py`.
+- `run_dx9_present_policy_ab.py` — A/B compare present policies across apps;
+  emits boundary-counter JSON consumed by `specs/benchmarks/`.

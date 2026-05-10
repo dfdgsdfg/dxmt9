@@ -13,7 +13,7 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
-runner="$repo_root/scripts/run_apps/run_dx9_present_policy_ab.py"
+runner="$repo_root/scripts/tools/run_dx9_present_policy_ab.py"
 
 runs="${BOUNDARY_AUDIT_RUNS:-3}"
 timeout="${BOUNDARY_AUDIT_TIMEOUT:-60}"

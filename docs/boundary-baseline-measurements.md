@@ -5,7 +5,7 @@ plus a re-run of the R-BACK-2.33 cap=4 validation against the small-RT
 chain workload predicted to win.
 
 Measurement infrastructure:
-- `scripts/run_apps/run_dx9_present_policy_ab.py --boundary {B1..B6}`
+- `scripts/tools/run_dx9_present_policy_ab.py --boundary {B1..B6}`
   filters `summary.json["summary"][i]["counters"]` to the matching
   boundary's keys (W3).
 - `scripts/run_suites/run_boundary_audit_suite.sh` runs every boundary
@@ -139,19 +139,19 @@ produce useful numbers in every case.
 ```sh
 # B2 baseline
 env DXMT_PERF_COUNTERS=1 BRIDGE_EMPTY_ITERATIONS=20000 \
-  python3 scripts/run_apps/run_dx9_present_policy_ab.py \
+  python3 scripts/tools/run_dx9_present_policy_ab.py \
     --app dxmt9-perf-bridge-empty --mode default --runs 1 \
     --timeout 60 --boundary B2 --tag W4-baseline-B2
 
 # B3 chain (currently hits the encode anomaly above)
 env DXMT_PERF_COUNTERS=1 CHAIN_LENGTH=4 CHAIN_DRAWS_PER_PASS=20 CHAIN_ITERATIONS=300 \
-  python3 scripts/run_apps/run_dx9_present_policy_ab.py \
+  python3 scripts/tools/run_dx9_present_policy_ab.py \
     --app dxmt9-perf-chain-parametric --mode default --runs 1 \
     --timeout 60 --boundary B3 --tag W4-chain-off
 
 env DXMT_PERF_COUNTERS=1 CHAIN_LENGTH=4 CHAIN_DRAWS_PER_PASS=20 CHAIN_ITERATIONS=300 \
     DXMT9_MID_CHUNK_COMMIT_POLICY=per-render-pass \
-  python3 scripts/run_apps/run_dx9_present_policy_ab.py \
+  python3 scripts/tools/run_dx9_present_policy_ab.py \
     --app dxmt9-perf-chain-parametric --mode default --runs 1 \
     --timeout 60 --boundary B3 --tag W4-chain-cap4
 

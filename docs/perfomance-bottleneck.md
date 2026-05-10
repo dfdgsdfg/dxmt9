@@ -918,7 +918,7 @@ Effective latency cap experiment, same-load follow-up:
 
 Present policy repeated A/B, 3 runs per app/mode:
 
-- Harness: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --tag 20260426-present-policy-r3`
+- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --tag 20260426-present-policy-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-policy-r3/summary.md`
 
 | app | mode | pass | fps mean [min,max] | present encoded mean | fallbacks mean | boundary wait ms mean | acquire wait ms mean | token wait ms mean | command buffers mean |
@@ -932,10 +932,10 @@ Present policy repeated A/B, 3 runs per app/mode:
 
 Broader present policy A/B, 3 runs per app/mode:
 
-- Harness: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-basichlsl --app dx-sdk-tutorial07 --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --app dxmt9-multitexture-terrain --tag 20260426-present-policy-broad-r3`
+- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-basichlsl --app dx-sdk-tutorial07 --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --app dxmt9-multitexture-terrain --tag 20260426-present-policy-broad-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-policy-broad-r3/summary.md`
 - Result: 54/54 runs passed.
-- HDR follow-up: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-hdrformats --tag 20260426-hdrformats-present-policy-r3`
+- HDR follow-up: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --app dx-sdk-hdrformats --tag 20260426-hdrformats-present-policy-r3`
 - HDR output: `experiments/output/dx9-present-policy-ab/20260426-hdrformats-present-policy-r3/summary.md`
 - HDR result: 9/9 runs passed. The previous apparent hang did not reproduce under the explicit timeout/debug lane.
 
@@ -951,7 +951,7 @@ Broader present policy A/B, 3 runs per app/mode:
 
 Preacquire policy triage:
 
-- Harness: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --tag 20260426-present-preacquire-triage-r3`
+- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --app irrlicht-managed-lights --app dxmt9-water-rt --tag 20260426-present-preacquire-triage-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-preacquire-triage-r3/summary.md`
 - Result: 36/36 runs passed. The first triage showed that the old preacquire path mostly missed because encode could race ahead while the prefetch thread was still in-flight.
 
@@ -965,7 +965,7 @@ Preacquire policy triage:
 Preacquire in-flight wait follow-up:
 
 - Change: when `DXMT9_PRESENT_PREACQUIRE=1`, encode now waits for an already in-flight prefetch instead of immediately issuing a second `nextDrawable()`.
-- Harness: `scripts/run_apps/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --tag 20260426-present-preacquire-wait-r3`
+- Harness: `scripts/tools/run_dx9_present_policy_ab.py --runs 3 --timeout 45 --mode default --mode preacquire --mode preacquire-cap --app dx-sdk-basichlsl --app dxut-simple-sample --tag 20260426-present-preacquire-wait-r3`
 - Output: `experiments/output/dx9-present-policy-ab/20260426-present-preacquire-wait-r3/summary.md`
 - Result: 18/18 runs passed.
 

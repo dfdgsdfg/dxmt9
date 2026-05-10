@@ -14,7 +14,7 @@ apps=(
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/tools/run_dx9_fast_sanity_suite.sh [options]
+  bash scripts/run_suites/run_dx9_fast_sanity_suite.sh [options]
 
 Options:
   --wine-root <path>              Wine runtime root passed to run_experiment.py.

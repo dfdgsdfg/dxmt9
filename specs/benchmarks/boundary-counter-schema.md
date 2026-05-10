@@ -2,7 +2,7 @@
 
 Reporting contract for the V1 boundary-isolation benchmarks. Each
 pipeline boundary owns a fixed list of perf counters; A/B reports
-emitted by `scripts/run_apps/run_dx9_present_policy_ab.py --boundary
+emitted by `scripts/tools/run_dx9_present_policy_ab.py --boundary
 <Bn>` surface only that boundary's keys.
 
 A regression on the wild oracle (SFIV / Anno1404) is then attributable:
@@ -13,7 +13,7 @@ See:
 
 - `docs/research/boundary-benchmarks.md` — V1 audit + probe inventory.
 - `specs/backend/requirements.md` — boundary ownership (R-BACK-2.x).
-- `scripts/run_apps/run_dx9_present_policy_ab.py` — `BOUNDARY_COUNTER_FIELDS`
+- `scripts/tools/run_dx9_present_policy_ab.py` — `BOUNDARY_COUNTER_FIELDS`
   is the source of truth for the per-boundary key lists; this doc
   mirrors that table.
 - `scripts/run_suites/run_boundary_audit_suite.sh` — runs the matching
@@ -70,7 +70,7 @@ When a perf counter is added or renamed:
 
 1. Pick a single boundary owner.
 2. Add the key to the matching list in
-   `BOUNDARY_COUNTER_FIELDS` (`scripts/run_apps/run_dx9_present_policy_ab.py`).
+   `BOUNDARY_COUNTER_FIELDS` (`scripts/tools/run_dx9_present_policy_ab.py`).
 3. Update the table above to mirror.
 4. If the counter is gauge-style (sentinel / regression-only),
    consider an `expected_counters` entry in
