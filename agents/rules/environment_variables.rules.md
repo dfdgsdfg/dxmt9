@@ -100,7 +100,7 @@ unless documented otherwise.
 | `DXMT_SKIP_ALL_DRAWS` | Discard every draw at submit | `0` |
 | `DXMT9_AGGRESSIVE_DEPTH_DONTCARE` | Aggressive Store=DontCare for depth | `0` |
 | `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK` | Allow legacy provider fallback | `0` |
-| `DXMT9_MID_CHUNK_COMMIT_POLICY` | Sub-CB chain split policy: `off` / `per-render-pass` / `per-n-records` (R-BACK-2.29-2.31) | `off` |
+| `DXMT9_MID_CHUNK_COMMIT_POLICY` | Sub-CB chain split policy: `off` / `per-render-pass` / `per-n-records` (R-BACK-2.29-2.31, R-BACK-2.34 default-flip 2026-05-10) | `per-render-pass` |
 | `DXMT9_MID_CHUNK_COMMIT_RECORDS` | Records per sub-CB when policy=`per-n-records` | `64` |
 | `DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS` | Max sub-CBs per chunk; `0` disables (R-BACK-2.33) | `4` |
 

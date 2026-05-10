@@ -224,6 +224,20 @@ overhead that exceeds the pipelining win past ≈4 sub-buffers. A cap value of
 0 disables the cap and is reserved for diagnostic A/B comparison; production
 runs must use a positive cap.
 
+**R-BACK-2.34** The production default mid-chunk commit policy must be
+`per-render-pass` paired with the `R-BACK-2.33` default cap (4). The opt-out
+`off` mode must remain reachable through the `DXMT9_MID_CHUNK_COMMIT_POLICY`
+env knob so workloads that prefer the legacy 1-CB-per-chunk shape can disable
+sub-CB chaining without recompilation. Justification: the X1 chain-parametric
+measurement (`docs/boundary-baseline-measurements.md`) shows wall-clock `-5%`,
+encode CPU `-63%`, drawable-acquire wait `-20%` under the new default; the U1
+SFIV heavy-scene measurement (`docs/sfiv-benchmark-measurement.md`) is neutral
+on fps but `-44%` on `gpu_command_buffer_time_ms` p99. The default trades a
+small worst-case tile-flush overhead (≈2.1 ms / frame on SFIV-class envelopes
+per `docs/research/g-axis-tuning.md`) for a measurable encode-thread +
+drawable-acquire win on chain-rich frames, while the worst case stays bounded
+by R-BACK-2.33's cap.
+
 ---
 
 ## 3. Pipeline State Objects

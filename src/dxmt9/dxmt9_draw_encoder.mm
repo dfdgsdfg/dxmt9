@@ -253,17 +253,31 @@ enum class MidChunkCommitPolicy : std::uint8_t {
 
 MidChunkCommitPolicy midChunkCommitPolicy() {
   static const MidChunkCommitPolicy policy = [] {
+    // R-BACK-2.34 — production default flipped from Off to PerRenderPass
+    // 2026-05-10. The X1 chain-probe measurement showed wall-time -5%,
+    // encode CPU -63%, present_acquire_wait -20% under the cap=4 from
+    // R-BACK-2.33 (`docs/boundary-baseline-measurements.md`). SFIV
+    // heavy-scene (U1) was neutral on fps but -44% on
+    // `gpu_command_buffer_time_ms` p99. The cap from R-BACK-2.33
+    // bounds tile-flush + commit overhead at ~2.1 ms / frame on the
+    // SFIV envelope per `docs/research/g-axis-tuning.md`.
+    // `DXMT9_MID_CHUNK_COMMIT_POLICY=off` remains a one-line opt-out.
     const char* env = std::getenv("DXMT9_MID_CHUNK_COMMIT_POLICY");
-    if (!env || env[0] == '\0') return MidChunkCommitPolicy::Off;
+    if (!env || env[0] == '\0') return MidChunkCommitPolicy::PerRenderPass;
     if (std::strcmp(env, "per-render-pass") == 0) {
       return MidChunkCommitPolicy::PerRenderPass;
     }
     if (std::strcmp(env, "per-n-records") == 0) {
       return MidChunkCommitPolicy::PerNRecords;
     }
-    // "off" or any unrecognized token → off (preserves the default 1
-    // CB per chunk behavior so no existing tests regress).
-    return MidChunkCommitPolicy::Off;
+    if (std::strcmp(env, "off") == 0) {
+      return MidChunkCommitPolicy::Off;
+    }
+    // Unrecognized token → fall back to the production default rather
+    // than silently turning the policy off. R-BACK-2.31 determinism
+    // is preserved because the env is read-once and the table of
+    // accepted tokens is closed.
+    return MidChunkCommitPolicy::PerRenderPass;
   }();
   return policy;
 }
@@ -2154,6 +2168,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           perf::countHazardProbe(bloomOverlap, exactOverlap);
           return exactOverlap;
         };
+        // R-BACK-13.6 — mid-pass eligibility. When the active encoder is on
+        // the tile path and the next draw's state has become ineligible
+        // (e.g. alpha-test reference flipped out of [0,1], fog mode flipped
+        // to Exp/Exp2), force a render-pass split so the next encoder opens
+        // on the portable path. A pass that opened on the portable path
+        // stays portable regardless (portable handles every state).
+        auto tileMidPassIneligible = [&]() {
+          if (!hasActiveRender || !activePassUsesTileFfp) return false;
+          const auto sel =
+              dxmt9::pipeline::selectTileFfpForPass(stateView, ctx.pool.supportsApple3());
+          return sel.decision != dxmt9::pipeline::TileFfpDecision::Tile;
+        };
         if (pendingClear.has_value()) {
           const auto clearKey = makeAttachmentKey(*pendingClear);
           const auto clearHazard = makeAttachmentHazard(*pendingClear);
@@ -2165,7 +2191,19 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
             const bool hazardDetected =
                 hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
-            if (!hasActiveRender || renderTargetChanged || hazardDetected) {
+            const bool tileResplit =
+                hasActiveRender && !renderTargetChanged && !hazardDetected &&
+                tileMidPassIneligible();
+            if (tileResplit) {
+              // R-BACK-13.6: tile path can't host this draw; fall back
+              // to portable for a fresh encoder. The split is a real
+              // change of pipeline kind (not a Bloom false positive),
+              // so it does not violate R-BACK-2.28's no-false-positive
+              // policy.
+              perf::countTileFfpMidPassResplit();
+              perf::countTileFfpFallbackMidPassIneligible();
+            }
+            if (!hasActiveRender || renderTargetChanged || hazardDetected || tileResplit) {
               if (renderTargetChanged) {
                 // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
                 DXMT_ASSERT(hasActiveRender);
@@ -2200,7 +2238,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
           const bool hazardDetected =
               hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
-          if (!hasActiveRender || renderTargetChanged || hazardDetected) {
+          const bool tileResplit =
+              hasActiveRender && !renderTargetChanged && !hazardDetected &&
+              tileMidPassIneligible();
+          if (tileResplit) {
+            // R-BACK-13.6 — see twin call site above.
+            perf::countTileFfpMidPassResplit();
+            perf::countTileFfpFallbackMidPassIneligible();
+          }
+          if (!hasActiveRender || renderTargetChanged || hazardDetected || tileResplit) {
             if (renderTargetChanged) {
               // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
               DXMT_ASSERT(hasActiveRender);
