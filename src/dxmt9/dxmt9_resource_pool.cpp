@@ -299,7 +299,19 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
                                           const core::TextureDesc& desc) {
   TextureRecord record;
   record.desc = desc;
-  if (desc.pool != core::Pool::SystemMem && desc.pool != core::Pool::Scratch) {
+  // R-BACK-5.7 / R-BACK-5.10: every pool — including SYSTEMMEM and
+  // SCRATCH — gets a Shared-mode Metal texture backing. SYSTEMMEM in
+  // particular is the standard D3D9 staging path: app does
+  // `CreateTexture(SYSTEMMEM)` → `LockRect/Unlock` → `UpdateTexture(sysmem,
+  // default)`. UpdateTexture funnels into `submitSurfaceCopy`, which
+  // does a GPU blit between two Metal textures and early-returns if
+  // either side is null. Skipping the SYSTEMMEM Metal allocation here
+  // (the previous behavior) silently dropped every UpdateTexture upload,
+  // leaving the destination DEFAULT texture uninitialized — visible as
+  // black/garbage triangles in d9vk-d3d9-triangle and equivalent SDK
+  // samples. `toResourceOptions` already returns Shared for SYSTEMMEM,
+  // so the storage mode is correct on both unified and discrete devices.
+  {
     WMTTextureInfo info{};
     info.type = convert::toTextureType(desc.type, false);
     info.pixel_format = convert::toPixelFormat(desc.format, limits);
@@ -380,7 +392,12 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
                                           const core::SurfaceDesc& desc) {
   SurfaceRecord record;
   record.desc = desc;
-  if (desc.pool != core::Pool::SystemMem && desc.pool != core::Pool::Scratch) {
+  // Surfaces match the texture storage policy (R-BACK-5.7): every pool
+  // gets a Metal texture so `submitSurfaceCopy` can blit between any
+  // pair, including SYSTEMMEM-side staging surfaces. Storage mode comes
+  // from `toResourceOptions` — Shared for SYSTEMMEM/SCRATCH on every
+  // device, so a CPU-driven `replaceRegion` works on Lock/Unlock.
+  {
     const uint32_t sc = std::max(1u, core::sampleCount(desc.multiSampleType));
     WMTTextureInfo info{};
     info.type = convert::toTextureType(core::TextureType::TwoD,
