@@ -154,6 +154,10 @@ u32 makeSrcToken(u32 regType, u32 regIndex, u32 swizzle = 0xe4u, u32 modifier = 
          (regIndex & 0x7ffu);
 }
 
+u32 makeRelativeSrcToken(u32 regType, u32 regIndex, u32 swizzle = 0xe4u, u32 modifier = 0u) {
+  return makeSrcToken(regType, regIndex, swizzle, modifier) | (1u << 13);
+}
+
 u32 makeSwizzle(u32 x, u32 y, u32 z, u32 w) {
   return (x & 0x3u) | ((y & 0x3u) << 2) | ((z & 0x3u) << 4) | ((w & 0x3u) << 6);
 }
@@ -576,11 +580,46 @@ std::vector<u32> makePs30FixedOperandCountDecodeBytecode() {
 
 std::vector<u32> makePs30RelativeAddressingBytecode() {
   using namespace dxmt9::d3d9bc;
+  // Destination relative addressing remains unsupported; the rel-addr
+  // DWORD that follows the destination operand satisfies the parser
+  // but the IR layer must still throw deterministically.
   return {
       makeVersionToken(false, 3, 0),
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeRelativeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0),
       makeSrcToken(kD3DSPR_CONST, 0),
+      kD3DSIO_END,
+  };
+}
+
+// vs_2_0 shader that loads a bone index into a0 from v3 (BLENDINDICES)
+// and reads a constant via `c[a0+5]` — the canonical D3D9 hardware
+// skinning shape. Used to validate the parser consumes the rel-addr
+// DWORD correctly and the emitter lowers indexed const access into
+// `cFloat[clamp(a0 + 5, 0, 255)]`.
+std::vector<u32> makeVs20IndexedConstSourceBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 2, 0),
+      // dcl_blendindices v3
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(2u, 0u),
+      makeDstToken(kD3DSPR_INPUT, 3),
+      // mova a0, v3
+      makeInstructionToken(kD3DSIO_MOVA, 2),
+      makeDstToken(kD3DSPR_ADDR, 0, 0x1u),
+      makeSrcToken(kD3DSPR_INPUT, 3),
+      // mov r0, c[a0+5]
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeRelativeSrcToken(kD3DSPR_CONST, 5),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      // mov oPos, r0 — keeps the test bytecode well-formed for the
+      // vertex translator's output-semantics validator.
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
       kD3DSIO_END,
   };
 }
@@ -834,12 +873,66 @@ void testD3DBCFixedOperandCountDecodeContract() {
 }
 
 void testPs30RelativeAddressingThrowsDeterministically() {
+  // Source relative addressing is now supported; this test asserts
+  // *destination* relative addressing remains a deterministic throw
+  // until that path is implemented.
   checkThrowsContains(
       [] {
         (void)translatePixel(makePs30RelativeAddressingBytecode());
       },
       "relative addressing is not supported yet",
-      "ps_3_0 relative-addressing bytecode reports deterministic unsupported contract");
+      "ps_3_0 destination-relative-addressing bytecode reports deterministic unsupported contract");
+}
+
+void testVs20IndexedConstSourceParserConsumesRelAddrDword() {
+  using namespace dxmt9::d3d9bc;
+  namespace translator_test = dxmt9::translator::test;
+
+  DrawDesc desc{};
+  const auto module = translator_test::decodeD3DBytecodeForTest(
+      makeShader(makeVs20IndexedConstSourceBytecode()), true, desc);
+
+  // 4 instructions: dcl, mova, mov, mov. If the parser miscounts the
+  // rel-addr DWORD as the next operand, instruction count drifts and
+  // subsequent decode either truncates or surfaces a wrong opcode.
+  checkEqual(module.instructions.size(), size_t{4},
+             "vs_2_0 indexed-const source bytecode parses into four instructions after rel-addr DWORD consumption");
+  checkEqual(module.instructions[1].opcode, kD3DSIO_MOVA,
+             "second instruction stays MOVA after parser skips its operand boundary correctly");
+  checkEqual(module.instructions[2].opcode, kD3DSIO_MOV,
+             "third instruction stays MOV after parser consumes the rel-addr DWORD");
+
+  // The MOV operand 1 (src) carries the rel-addr DWORD that selects
+  // the address register a0.
+  const auto& movInstr = module.instructions[2];
+  checkEqual(movInstr.relAddrTokens.size(), size_t{2},
+             "MOV operand-parallel rel-addr vector matches operand count");
+  if (movInstr.relAddrTokens[1] == 0u) {
+    fail("MOV source operand should carry a non-zero rel-addr token");
+  }
+  const auto relReg = translator_test::decodeRegisterRefForTest(movInstr.relAddrTokens[1],
+                                                                 D3DShaderStage::Vertex);
+  checkRegister(relReg, D3DRegisterKind::Address, 0u,
+                "rel-addr token decodes to address register a0 in vertex stage");
+}
+
+void testVs20IndexedConstSourceLowersToClampedConstAccess() {
+  const auto source = translateVertex(makeVs20IndexedConstSourceBytecode());
+
+  // Source-side rel-addr produces clamped indexed access into the
+  // full vsFloatConst[256] range (kMaxVertexConstants - 1 = 255).
+  checkContains(source, "cFloat[clamp(a0 + 5, 0, 255)]",
+                "indexed const source emits clamped a0+N access");
+  // The mova lowers to the existing a0 = int(round(...)) pattern.
+  checkContains(source, "a0 = int(round(",
+                "MOVA still lowers to the address-register assignment");
+  // Indexed access forces pointer aliasing onto the full constant
+  // buffer so the clamp range stays valid.
+  checkContains(source, "constant float4* cFloat = ",
+                "indexed const access forces pointer aliasing for cFloat");
+  // Explicit guarantee against the previous silent-drop bug.
+  checkNotContains(source, "cFloat[5]u",
+                   "indexed access is no longer rewritten as a static cFloat[5] read");
 }
 
 }  // namespace
@@ -870,6 +963,8 @@ int main() {
     testPs30TextureLodOpcodeLoweringContracts();
     testD3DBCFixedOperandCountDecodeContract();
     testPs30RelativeAddressingThrowsDeterministically();
+    testVs20IndexedConstSourceParserConsumesRelAddrDword();
+    testVs20IndexedConstSourceLowersToClampedConstAccess();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

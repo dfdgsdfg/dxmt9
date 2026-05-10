@@ -238,14 +238,43 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
                                   const std::string& predicatePrefix,
                                   const VertexOutputSemantics* vertexOutputSemantics = nullptr) {
   (void)instruction;
+  // Relative-addressing helper: translates the rel-addr DWORD attached
+  // to a source operand into the address-register expression that
+  // indexes the constant array. vs_2_0/2_x can only use a0; vs_3_0+
+  // additionally allows aL inside a loop body. Anything else falls back
+  // to a0 (best effort — the bytecode would have failed validation
+  // before reaching the translator).
+  auto relAddrExpression = [](u32 relAddrToken) -> std::string {
+    if (relAddrToken == 0u) {
+      return {};
+    }
+    const auto relReg = decodeRegisterRef(relAddrToken, D3DShaderStage::Vertex);
+    return relReg.kind == D3DRegisterKind::Loop ? "aL" : "a0";
+  };
   switch (reg.kind) {
     case D3DRegisterKind::Temp:
       return tempPrefix + "[" + std::to_string(reg.index) + "]";
     case D3DRegisterKind::ConstFloat:
+      if (reg.relAddrToken != 0u) {
+        const std::string maxIdx = vertexStage ? std::to_string(::dxmt9::core::kMaxVertexConstants - 1u)
+                                               : std::to_string(::dxmt9::core::kMaxPixelConstants - 1u);
+        return constPrefix + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+               + std::to_string(reg.index) + ", 0, " + maxIdx + ")]";
+      }
       return constPrefix + "[" + std::to_string(reg.index) + "]";
     case D3DRegisterKind::ConstInt:
+      if (reg.relAddrToken != 0u) {
+        return "float4(" + intPrefix + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+               + std::to_string(reg.index) + ", 0, "
+               + std::to_string(::dxmt9::core::kMaxIntegerConstants - 1u) + ")])";
+      }
       return "float4(" + intPrefix + "[" + std::to_string(reg.index) + "])";
     case D3DRegisterKind::ConstBool:
+      if (reg.relAddrToken != 0u) {
+        return "(" + boolPrefix + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+               + std::to_string(reg.index) + ", 0, "
+               + std::to_string(::dxmt9::core::kMaxBoolConstants - 1u) + ")] != 0u ? float4(1.0f) : float4(0.0f))";
+      }
       return "(" + boolPrefix + "[" + std::to_string(reg.index) + "] != 0u ? float4(1.0f) : float4(0.0f))";
     case D3DRegisterKind::Input:
       if (vertexStage) {
@@ -330,22 +359,37 @@ void emitConstantBindings(std::ostringstream& out, bool vertexStage, const Const
   const char* intMember = vertexStage ? "vsIntConst" : "psIntConst";
   const char* boolMember = vertexStage ? "vsBoolConst" : "psBoolConst";
 
-  if (!usage.mutableConstants) {
-    out << "  constant float4* cFloat = " << container << "." << floatMember << ";\n";
-    out << "  constant int4* cInt = " << container << "." << intMember << ";\n";
-    out << "  constant uint* cBool = " << container << "." << boolMember << ";\n";
-    return;
-  }
+  // Each constant category gets pointer-aliasing whenever it is read
+  // through relative addressing — `c[a0+N]` must address the full
+  // 256-vec4 (16-int4, 16-bool) range, which the local-copy fast path
+  // can't guarantee. DEF/DEFI/DEFB writes then become read-only;
+  // combining DEF with indexed reads is not observed in any tracked
+  // SM2/SM3 shader, so the trade-off is correct on the common case.
+  const bool aliasFloat = !usage.mutableConstants || usage.hasIndexedFloat;
+  const bool aliasInt = !usage.mutableConstants || usage.hasIndexedInt;
+  const bool aliasBool = !usage.mutableConstants || usage.hasIndexedBool;
 
-  out << "  float4 cFloat[" << std::max(1u, usage.floatCount) << "];\n";
-  out << "  int4 cInt[" << std::max(1u, usage.intCount) << "];\n";
-  out << "  uint cBool[" << std::max(1u, usage.boolCount) << "];\n";
-  out << "  for (uint i = 0; i < " << usage.floatCount << "; ++i) { cFloat[i] = " << container << "."
-      << floatMember << "[i]; }\n";
-  out << "  for (uint i = 0; i < " << usage.intCount << "; ++i) { cInt[i] = " << container << "." << intMember
-      << "[i]; }\n";
-  out << "  for (uint i = 0; i < " << usage.boolCount << "; ++i) { cBool[i] = " << container << "." << boolMember
-      << "[i]; }\n";
+  if (aliasFloat) {
+    out << "  constant float4* cFloat = " << container << "." << floatMember << ";\n";
+  } else {
+    out << "  float4 cFloat[" << std::max(1u, usage.floatCount) << "];\n";
+    out << "  for (uint i = 0; i < " << usage.floatCount << "; ++i) { cFloat[i] = " << container << "."
+        << floatMember << "[i]; }\n";
+  }
+  if (aliasInt) {
+    out << "  constant int4* cInt = " << container << "." << intMember << ";\n";
+  } else {
+    out << "  int4 cInt[" << std::max(1u, usage.intCount) << "];\n";
+    out << "  for (uint i = 0; i < " << usage.intCount << "; ++i) { cInt[i] = " << container << "." << intMember
+        << "[i]; }\n";
+  }
+  if (aliasBool) {
+    out << "  constant uint* cBool = " << container << "." << boolMember << ";\n";
+  } else {
+    out << "  uint cBool[" << std::max(1u, usage.boolCount) << "];\n";
+    out << "  for (uint i = 0; i < " << usage.boolCount << "; ++i) { cBool[i] = " << container << "." << boolMember
+        << "[i]; }\n";
+  }
 }
 
 void emitPredicateBindings(std::ostringstream& out, bool usesPredicateRegisters) {
@@ -683,7 +727,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           throw std::runtime_error(message.str());
         }
         const auto token = instruction.operands[index];
-        const auto reg = decodeRegisterRef(token, module.stage);
+        auto reg = decodeRegisterRef(token, module.stage);
+        if (index < instruction.relAddrTokens.size()) {
+          reg.relAddrToken = instruction.relAddrTokens[index];
+        }
         std::string expr = readOperandExpression(instruction, reg, "vin", "in", true,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord",
                                                  "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
@@ -1426,7 +1473,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         throw std::runtime_error(message.str());
       }
       const auto token = instruction.operands[index];
-      const auto reg = decodeRegisterRef(token, module.stage);
+      auto reg = decodeRegisterRef(token, module.stage);
+      if (index < instruction.relAddrTokens.size()) {
+        reg.relAddrToken = instruction.relAddrTokens[index];
+      }
       std::string expr;
       if (reg.kind == D3DRegisterKind::Input) {
         expr = readPixelInputExpression(token, "in", pixelInputSemantics);

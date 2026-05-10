@@ -95,6 +95,16 @@ struct ConstantUsage {
   bool hasFloat = false;
   bool hasInt = false;
   bool hasBool = false;
+  // Set when any source operand reads a constant register through
+  // relative addressing (`c[a0+N]`, `c[aL+N]`). The emitter forces
+  // pointer aliasing to the full `vsConsts.vsFloatConst[]` buffer in
+  // that mode so the indexed read addresses the entire 256-vec4
+  // range. Combining indexed access with DEF overrides currently
+  // disables DEF — that combination is not observed in any tracked
+  // SM2/SM3 shader.
+  bool hasIndexedFloat = false;
+  bool hasIndexedInt = false;
+  bool hasIndexedBool = false;
   u32 floatCount = 0;
   u32 intCount = 0;
   u32 boolCount = 0;
@@ -105,13 +115,23 @@ struct FlowBlock {
   bool sawElse = false;
 };
 
-// DCL-usage codes that the translator special-cases.
+// DCL-usage codes that the translator special-cases. Mirrored from
+// dxmt9::ffp (canonical home in dxmt9_ffp_shaders.hpp) to keep the
+// translator detail namespace self-contained.
 constexpr u32 kD3DDeclUsagePosition = 0u;
+constexpr u32 kD3DDeclUsageBlendWeight = 1u;
+constexpr u32 kD3DDeclUsageBlendIndices = 2u;
+constexpr u32 kD3DDeclUsageNormal = 3u;
 constexpr u32 kD3DDeclUsagePSize = 4u;
 constexpr u32 kD3DDeclUsageTexcoord = 5u;
+constexpr u32 kD3DDeclUsageTangent = 6u;
+constexpr u32 kD3DDeclUsageBinormal = 7u;
+constexpr u32 kD3DDeclUsageTessFactor = 8u;
 constexpr u32 kD3DDeclUsagePositionT = 9u;
 constexpr u32 kD3DDeclUsageColor = 10u;
 constexpr u32 kD3DDeclUsageFog = 11u;
+constexpr u32 kD3DDeclUsageDepth = 12u;
+constexpr u32 kD3DDeclUsageSample = 13u;
 
 // --- Module-level analysis passes ------------------------------------------
 

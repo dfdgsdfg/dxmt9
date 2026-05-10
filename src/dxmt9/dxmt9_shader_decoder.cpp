@@ -617,6 +617,23 @@ ConstantUsage collectConstantUsage(const SpirvModule& module) {
     for (size_t i = sourceBegin; i < instruction.operands.size(); ++i) {
       const auto src = decodeRegisterRef(instruction.operands[i], module.stage);
       noteConstantUsage(usage, src.kind, src.index);
+      const bool indexed =
+          i < instruction.relAddrTokens.size() && instruction.relAddrTokens[i] != 0u;
+      if (indexed) {
+        switch (src.kind) {
+          case D3DRegisterKind::ConstFloat:
+            usage.hasIndexedFloat = true;
+            break;
+          case D3DRegisterKind::ConstInt:
+            usage.hasIndexedInt = true;
+            break;
+          case D3DRegisterKind::ConstBool:
+            usage.hasIndexedBool = true;
+            break;
+          default:
+            break;
+        }
+      }
     }
 
     const u32 rows = matrixConstantRows(instruction.opcode);
@@ -788,19 +805,34 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
         }
       }
     }
-    const size_t operandBytes = static_cast<size_t>(operandCount) * sizeof(u32);
-    if (offset + operandBytes > bytes.size()) {
-      throw std::runtime_error("truncated D3D instruction");
-    }
-
     D3DDecodedInstruction instruction;
     instruction.opcode = opcode;
     instruction.controls = (token >> 16) & 0xffu;
     instruction.predicated = ((token >> 28) & 0x1u) != 0;
     instruction.operands.reserve(operandCount);
+    instruction.relAddrTokens.assign(operandCount, 0u);
+    // D3D9 operand encoding: when an operand token has the rel-addr bit
+    // set (bit 13), an additional DWORD immediately follows that encodes
+    // the address-register source. The DWORD is NOT counted in the
+    // operandCount field of the instruction header. Read N operands and
+    // consume one extra DWORD per operand that carries a rel-addr bit.
     for (u32 i = 0; i < operandCount; ++i) {
-      instruction.operands.push_back(readWord(offset + static_cast<size_t>(i) * sizeof(u32)));
-      module.words.push_back(instruction.operands.back());
+      if (offset + sizeof(u32) > bytes.size()) {
+        throw std::runtime_error("truncated D3D instruction operand");
+      }
+      const u32 operandToken = readWord(offset);
+      offset += sizeof(u32);
+      module.words.push_back(operandToken);
+      instruction.operands.push_back(operandToken);
+      if (tokenHasRelativeAddressing(operandToken)) {
+        if (offset + sizeof(u32) > bytes.size()) {
+          throw std::runtime_error("truncated D3D rel-addr operand");
+        }
+        const u32 relAddrToken = readWord(offset);
+        offset += sizeof(u32);
+        module.words.push_back(relAddrToken);
+        instruction.relAddrTokens[i] = relAddrToken;
+      }
     }
     if (opcode == kD3DSIO_TEX || opcode == kD3DSIO_TEXLDD || opcode == kD3DSIO_TEXLDL || opcode == kD3DSIO_TEXDEPTH ||
         opcode == kD3DSIO_TEXDP3 || opcode == kD3DSIO_TEXDP3TEX || opcode == kD3DSIO_TEXM3x2DEPTH ||
@@ -808,7 +840,6 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
       module.usesTexture = true;
     }
     module.instructions.push_back(std::move(instruction));
-    offset += operandBytes;
   }
 
   return module;

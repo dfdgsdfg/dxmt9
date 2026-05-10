@@ -43,6 +43,12 @@ enum class D3DRegisterKind : u32 {
 struct D3DRegisterRef {
   D3DRegisterKind kind = D3DRegisterKind::Unknown;
   u32 index = 0;
+  // D3D9 source operands that use relative addressing (`c[a0+N]`,
+  // `c[aL+N]`) carry an extra token after the operand DWORD that
+  // encodes the address-register source. 0 == no relative addressing.
+  // The token is the raw bytecode word; consumers decode kind/index/
+  // swizzle from it on demand.
+  u32 relAddrToken = 0;
 };
 
 struct D3DDecodedInstruction {
@@ -50,6 +56,10 @@ struct D3DDecodedInstruction {
   u32 controls = 0;
   bool predicated = false;
   std::vector<u32> operands;
+  // Parallel to `operands`. Non-zero entries hold the rel-addr DWORD
+  // that immediately followed the corresponding operand token in the
+  // bytecode stream. Empty (or all-zero) when no operand has rel-addr.
+  std::vector<u32> relAddrTokens;
 };
 
 struct SpirvModule {

@@ -52,11 +52,19 @@ inline constexpr u32 kD3DDeclTypeDec3N = 14u;
 inline constexpr u32 kD3DDeclTypeFloat16_2 = 15u;
 inline constexpr u32 kD3DDeclTypeFloat16_4 = 16u;
 inline constexpr u32 kD3DDeclUsagePosition = 0u;
+inline constexpr u32 kD3DDeclUsageBlendWeight = 1u;
+inline constexpr u32 kD3DDeclUsageBlendIndices = 2u;
+inline constexpr u32 kD3DDeclUsageNormal = 3u;
 inline constexpr u32 kD3DDeclUsagePSize = 4u;
 inline constexpr u32 kD3DDeclUsageTexcoord = 5u;
+inline constexpr u32 kD3DDeclUsageTangent = 6u;
+inline constexpr u32 kD3DDeclUsageBinormal = 7u;
+inline constexpr u32 kD3DDeclUsageTessFactor = 8u;
 inline constexpr u32 kD3DDeclUsagePositionT = 9u;
 inline constexpr u32 kD3DDeclUsageColor = 10u;
 inline constexpr u32 kD3DDeclUsageFog = 11u;
+inline constexpr u32 kD3DDeclUsageDepth = 12u;
+inline constexpr u32 kD3DDeclUsageSample = 13u;
 
 // Decoded vertex layout (per-element offsets into the single-stream buffer)
 // used by the FFP generator to emit attribute loads. Keyed by a vertex
