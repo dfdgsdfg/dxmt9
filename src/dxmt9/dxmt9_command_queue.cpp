@@ -146,10 +146,16 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   // only when the device supports Tier-2 argbufs AND lives on Apple3+.
   // Probed once and cached on the pool so per-encoder selection is a
   // single bool read with no Metal traffic.
+  // DXMT9_DISABLE_ARGBUF_HYBRID escape hatch: forces the gate off so a
+  // suspected Stage 2 regression can be tested in isolation against the
+  // Stage 1 baseline without rebuilding.
   {
     const auto tier = device_.argumentBuffersSupport();
     const bool tierOk = tier >= WMTArgumentBuffersTier2;
-    pool_.setArgbufHybridEnabled(tierOk && pool_.supportsApple3());
+    const char* disableEnv = std::getenv("DXMT9_DISABLE_ARGBUF_HYBRID");
+    const bool disabled =
+        disableEnv && disableEnv[0] != '\0' && std::strcmp(disableEnv, "0") != 0;
+    pool_.setArgbufHybridEnabled(!disabled && tierOk && pool_.supportsApple3());
   }
   // R-BACK-12.22 / 12.24 — build the queue-owned MTLArgumentEncoder when
   // the capability gate held. The encoder is shared across every render
