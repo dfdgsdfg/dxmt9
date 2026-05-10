@@ -269,6 +269,20 @@ extern "C" obj_handle_t NSObject_description(obj_handle_t obj) {
   return (obj_handle_t)[(id)obj description];
 }
 
+extern "C" int64_t NSError_code(obj_handle_t err) {
+  if (!err) {
+    return 0;
+  }
+  return (int64_t)[(NSError *)err code];
+}
+
+extern "C" obj_handle_t NSError_domain(obj_handle_t err) {
+  if (!err) {
+    return NULL_OBJECT_HANDLE;
+  }
+  return (obj_handle_t)[(NSError *)err domain];
+}
+
 extern "C" obj_handle_t NSString_string(const char *data, enum WMTStringEncoding encoding) {
   if (!data) {
     return NULL_OBJECT_HANDLE;

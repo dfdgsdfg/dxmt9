@@ -118,11 +118,21 @@ const char* modeName(Mode mode) {
 }
 
 Mode buildDefaultMode() {
-  // dxmt9 has no `dev_build` meson option at the time of writing, and
-  // R-BACK-3.8 lets us choose the safest default unconditionally. Lazy
-  // is the safest because it never blocks device init on archive I/O
-  // and still warms the on-disk archive on subsequent runs.
+  // dxmt9 has no `dev_build` meson option at the time of writing, so
+  // pick the build-default off the standard `NDEBUG` macro:
+  //   * Release / shipping builds (`buildtype=release|releaseplus`)
+  //     define NDEBUG → Mode::Full so the first-frame PSO compile
+  //     ratio benefits from the on-disk archive.
+  //   * Debug / unoptimized builds leave NDEBUG undefined → Mode::Lazy
+  //     so device init is never blocked on archive I/O during dev
+  //     iteration. The compile path still writes back on shutdown so
+  //     subsequent runs can promote to Full via DXMT9_PREWARM.
+  // The env var DXMT9_PREWARM=full|lazy|disabled overrides either.
+#ifdef NDEBUG
+  return Mode::Full;
+#else
   return Mode::Lazy;
+#endif
 }
 
 Mode resolveMode() {
@@ -300,15 +310,50 @@ void renameAside(const std::string& path, const char* suffix) {
 
 }  // namespace
 
+namespace {
+
+// Mirror of MTLBinaryArchiveError (Metal/MTLBinaryArchive.h). Inlined here
+// so the prewarm module does not pull <Metal/Metal.h>; the values are ABI
+// for the framework and have not changed since macOS 11.
+//   MTLBinaryArchiveErrorNone               = 0
+//   MTLBinaryArchiveErrorInvalidFile        = 1  → corrupt
+//   MTLBinaryArchiveErrorUnexpectedElement  = 2  → schema (closest
+//       semantic match: an element from a different emitter / schema is
+//       unexpected by the current Metal / dxmt9 ABI). The public Metal
+//       header has no dedicated VersionMismatch code, so we treat
+//       UnexpectedElement as the schema-mismatch signal.
+//   MTLBinaryArchiveErrorCompilationFailure = 3  → ignored at prewarm
+//       time (compile-on-load failures only surface during actual PSO
+//       creation).
+//   MTLBinaryArchiveErrorInternalError      = 4  → not classified;
+//       reported through the existing magic-size fallback when present.
+constexpr int64_t kMTLBinaryArchiveErrorInvalidFile       = 1;
+constexpr int64_t kMTLBinaryArchiveErrorUnexpectedElement = 2;
+
+enum class FailureClass {
+  None,
+  Corrupt,
+  Schema,
+};
+
+// Classify NSError code under MTLBinaryArchiveDomain. Domain string isn't
+// matched explicitly — Metal returns these codes only under its own
+// domain, and any other domain (NSCocoaErrorDomain for I/O, etc.) is
+// caught by the magic-size + abi-stamp fallbacks below.
+FailureClass classifyArchiveError(int64_t errCode) {
+  switch (errCode) {
+    case kMTLBinaryArchiveErrorInvalidFile:
+      return FailureClass::Corrupt;
+    case kMTLBinaryArchiveErrorUnexpectedElement:
+      return FailureClass::Schema;
+    default:
+      return FailureClass::None;
+  }
+}
+
+}  // namespace
+
 void run(WMT::Device device, const std::string& archivePath, Mode mode) {
-  // The actual archive load currently rides on the existing
-  // shaders::Archive ctor (which calls MTLDevice_newBinaryArchive). This
-  // routine only adds the lock / failure-class / housekeeping wrapper —
-  // see the inner comment near `loadStart`. The `device` parameter
-  // therefore has no Metal call site here yet; the follow-up commit
-  // referenced in the TODO will route the load through this routine and
-  // start touching `device` directly.
-  (void)device;
   if (mode == Mode::Disabled || archivePath.empty()) {
     return;
   }
@@ -338,42 +383,67 @@ void run(WMT::Device device, const std::string& archivePath, Mode mode) {
   const auto loadStart = std::chrono::steady_clock::now();
   const auto sizeBytes = fileSize(archivePath);
 
-  // STUB-LOAD NOTE: a fully integrated load would call
-  // MTLDevice_newBinaryArchive(archivePath, ...) here and inspect the
-  // returned NSError to disambiguate corrupt vs schema. The bridge does
-  // attempt that load — it lives in shaders::Archive's ctor invoked
-  // immediately after this routine returns — but the NSError class is
-  // not surfaced through winemetal yet. Until that bridge surface lands
-  // we run two cheap pre-load probes that catch the obvious failure
-  // classes:
+  // Primary classification: probe the real MTLBinaryArchive load and
+  // inspect the returned NSError under MTLBinaryArchiveDomain. The
+  // bridge falls back to creating an empty archive when the URL load
+  // fails, so we can't rely on a null `archiveProbe` to mean "failed";
+  // instead we look at `probeError.code()` directly.
   //
-  //   * `corrupt`: the file is too small to be a Metal binary archive.
-  //     A real archive contains at least the macho-style header (a few
-  //     hundred bytes) plus one entry. Anything under kMinArchiveBytes
-  //     was either truncated by a crash or written by a bug.
-  //   * `schema`: a companion `${archive}.abi` stamp file records the
-  //     dxmt9 archive ABI version of the writer. If present and not
-  //     equal to kArchiveAbiVersion, the on-disk archive was written
-  //     against a different emitter / variant-key encoding. Per design
-  //     §6.1 the file is renamed `.outdated` and we start empty. If the
-  //     stamp is absent we proceed without classifying — the archive
-  //     can only have been written by an older dxmt9 that did not
-  //     stamp, in which case the load itself will reject it on schema
-  //     and the bridge fallback returns an empty archive.
+  //   MTLBinaryArchiveErrorInvalidFile        → corrupt
+  //   MTLBinaryArchiveErrorUnexpectedElement  → schema mismatch
+  //   any other / no error                    → treat as success here;
+  //                                             fall through to the
+  //                                             cheap fallbacks below.
   //
-  // These probes run before we hand the path to shaders::Archive; on a
-  // hit we rename the file aside so the ctor opens an empty archive.
-  // Both probes are conservative — false negatives just mean the actual
-  // load will catch the same class without bumping the counter.
-
-  constexpr std::uint64_t kMinArchiveBytes = 64;
+  // The probe load is independent of the shaders::Archive instance the
+  // caller already constructed — Metal allows multiple archives over
+  // the same URL, and the probe ref drops at end of scope. The cost is
+  // dominated by the I/O the caller already paid; we keep it inside
+  // the same shared-lock scope for cross-process consistency.
   bool classifiedFailure = false;
+  {
+    WMT::Error probeError{};
+    auto archiveProbe = device.newBinaryArchive(archivePath.c_str(), probeError);
+    (void)archiveProbe;
+    const auto failure = classifyArchiveError(probeError.code());
+    if (failure == FailureClass::Corrupt) {
+      perf::countPrewarmFailureCorrupt();
+      renameAside(archivePath, ".corrupt");
+      classifiedFailure = true;
+    } else if (failure == FailureClass::Schema) {
+      perf::countPrewarmFailureSchema();
+      renameAside(archivePath, ".outdated");
+      renameAside(archivePath + ".abi", ".outdated");
+      classifiedFailure = true;
+    }
+  }
 
-  if (sizeBytes > 0 && sizeBytes < kMinArchiveBytes) {
+  // Fallback probes — only consulted when the NSError-route did not
+  // classify. These catch failure classes that nil out before the
+  // MTLBinaryArchiveDomain code is set (older Metal versions, truncated
+  // files that the framework refuses early without a domain code, or
+  // dxmt9 ABI bumps the framework cannot detect on its own):
+  //
+  //   * `corrupt` (magic-size): a real archive contains at least a
+  //     macho-style header plus one entry. Anything under
+  //     kMinArchiveBytes was truncated by a crash or written by a bug.
+  //   * `schema` (.abi stamp): a companion file records the writer's
+  //     kArchiveAbiVersion. A mismatch means the on-disk archive was
+  //     written against a different emitter / variant-key encoding —
+  //     Metal's UnexpectedElement does not fire on a dxmt9-only ABI
+  //     bump because the underlying MSL is still well-formed.
+  //
+  // Both fallbacks are conservative: false negatives just mean the
+  // archive will be silently reset on the next compile path serialize.
+  constexpr std::uint64_t kMinArchiveBytes = 64;
+
+  if (!classifiedFailure && sizeBytes > 0 && sizeBytes < kMinArchiveBytes) {
     perf::countPrewarmFailureCorrupt();
     renameAside(archivePath, ".corrupt");
     classifiedFailure = true;
-  } else {
+  }
+
+  if (!classifiedFailure) {
     const std::string abiStamp = archivePath + ".abi";
     if (fileExists(abiStamp)) {
       std::uint32_t stampedAbi = 0;

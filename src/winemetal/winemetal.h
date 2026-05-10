@@ -618,6 +618,14 @@ WINEMETAL_API uint64_t NSString_lengthOfBytesUsingEncoding(obj_handle_t str, enu
 
 WINEMETAL_API obj_handle_t NSObject_description(obj_handle_t nserror);
 
+// NSError introspection. `NSError_code` returns the platform NSInteger as
+// int64_t; the value is meaningful only relative to the error domain
+// returned by `NSError_domain` (an NSString handle owned by the NSError).
+// On nil input both yield zero / NULL_OBJECT_HANDLE so callers can treat
+// "no error" uniformly.
+WINEMETAL_API int64_t NSError_code(obj_handle_t nserror);
+WINEMETAL_API obj_handle_t NSError_domain(obj_handle_t nserror);
+
 struct WMTComputePipelineInfo {
   obj_handle_t compute_function;
   struct WMTConstMemoryPointer binary_archives_for_lookup;

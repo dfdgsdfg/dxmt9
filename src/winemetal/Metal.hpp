@@ -219,6 +219,19 @@ Object::description() {
 
 class Error : public Object {
 public:
+  // Underlying NSError code (NSInteger). Meaningful only relative to
+  // `domain()`. Returns 0 when this Error is empty / nil.
+  int64_t
+  code() {
+    return NSError_code(handle);
+  }
+
+  // Underlying NSErrorDomain handle (NSString*). Returns NULL_OBJECT_HANDLE
+  // when this Error is empty / nil.
+  obj_handle_t
+  domain() {
+    return NSError_domain(handle);
+  }
 };
 
 class DispatchData : public Object {

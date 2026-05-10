@@ -41,10 +41,14 @@ enum class Mode {
               // (shipping default)
 };
 
-// Build-default prewarm mode. There is no `dev_build` build option in
-// dxmt9's meson tree at the time of writing; per spec we default to the
-// safest mode (Lazy) unconditionally and let the env var pick Full or
-// Disabled in shipping / debug runtimes.
+// Build-default prewarm mode. dxmt9's meson tree has no `dev_build`
+// option at the time of writing, so we branch on the standard `NDEBUG`
+// macro that release builds normally `#define`: shipping builds default
+// to Mode::Full (warm caches → fewer cold compiles on the first frame),
+// debug / unoptimized builds default to Mode::Lazy (skip the load step,
+// keeps device init off the I/O critical path while still letting the
+// compile path write the archive on shutdown). The DXMT9_PREWARM env
+// var continues to override either default.
 Mode buildDefaultMode();
 
 // Final mode: env DXMT9_PREWARM=full|lazy|disabled overrides the build
