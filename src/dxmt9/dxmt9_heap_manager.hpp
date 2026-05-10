@@ -138,27 +138,6 @@ class HeapManager {
   u32 instanceCount(HeapFamily family) const noexcept;
   u32 totalInstanceCount() const noexcept;
 
-  // R-BACK-14.3 — encoder-side useHeap helper. Iterates every live heap
-  // instance and applies `fn(WMT::Heap)` once per heap. Callers (render
-  // / blit / compute encoder open paths) pass a lambda that issues the
-  // appropriate `encoder.useHeap(heap)` call and bumps
-  // `countUseHeap`. The dedup is implicit — each heap instance appears
-  // exactly once in the families_ tables. Doing this on encoder open
-  // (rather than lazily on first heap-backed bind) keeps the per-draw
-  // hot path allocation-free; extra useHeap calls for heaps that this
-  // encoder does not bind from are cheap residency hints, not a
-  // correctness issue (per Metal docs `useHeap` is idempotent and
-  // bounded by heap count).
-  template <typename Fn>
-  void forEachHeapInstance(Fn&& fn) const {
-    for (const auto& family : families_) {
-      for (const auto& instance : family.heaps) {
-        if (!instance.heap) continue;
-        fn(WMT::Heap{instance.heap.handle});
-      }
-    }
-  }
-
  private:
   // Per-heap bookkeeping. The Reference owns the MTLHeap; liveMembers
   // tracks how many resource records still reference it; lastUsedSeqId

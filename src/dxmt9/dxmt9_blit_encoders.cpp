@@ -5,6 +5,7 @@
 #include "dxmt9_perf_counters.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -52,22 +53,58 @@ bool isFullscreenStretch(const resources::SurfaceRecord& dst,
          stretch.destinationRect.bottom == static_cast<int32_t>(dst.desc.height);
 }
 
-// R-BACK-14.3 — issue `useHeap:` once per live heap instance on a freshly
-// opened blit encoder. The render-encoder path was tightened to walk only
-// the bound resources and useHeap the heaps that actually back them; the
-// blit helpers below operate on SurfaceRecord src/dst pairs, which are
-// excluded from heap pooling by R-BACK-14.1, so the per-encoder set is
-// always empty and this call is a no-op when no heap-backed resource is
-// in play. TODO(R-BACK-14.3): plumb a per-encoder bound-resource list
-// (Buffer/Texture handles) from the few blit callers that may touch
-// heap-backed members and switch to the same dedup walk used in
-// beginRenderPass; until then keep the broad walk so heap-resident
-// bookkeeping stays correct on every blit path.
-void useHeapsOnBlit(WMT::BlitCommandEncoder& blit, resources::Pool& pool) {
-  pool.heapManager().forEachHeapInstance([&blit](WMT::Heap heap) {
-    blit.useHeap(heap);
+// R-BACK-14.3 — issue `useHeap` once per heap instance that actually
+// backs a resource referenced by this blit. Mirrors the render-encoder
+// pattern (see beginRenderPass in dxmt9_draw_encoder.mm): walk the small
+// set of resources the blit will touch, consult each record's
+// `isHeapBacked` flag, and dedup heap handles through a fixed-size
+// array so the encoder-open path stays allocation-free. Surfaces don't
+// participate in heap pooling (R-BACK-14.1), but a Surface created via
+// createSurfaceForTexture aliases a TextureRecord that may be
+// heap-backed — so the surface helper resolves through `aliasTexture`
+// and then checks the parent TextureRecord. A blit references at most a
+// source + destination resource, so a 2-slot dedup buffer is plenty.
+constexpr std::size_t kMaxBlitBoundHeaps = 2;
+struct UsedHeapSet {
+  std::array<obj_handle_t, kMaxBlitBoundHeaps> heaps{};
+  std::size_t count = 0;
+  void push(obj_handle_t h) {
+    if (h == 0) return;
+    for (std::size_t i = 0; i < count; ++i) {
+      if (heaps[i] == h) return;
+    }
+    if (count < heaps.size()) {
+      heaps[count++] = h;
+    }
+  }
+};
+
+void considerTexture(resources::Pool& pool, core::Handle handle, UsedHeapSet& set) {
+  if (!handle) return;
+  if (auto* rec = pool.findTexture(handle.value); rec && rec->isHeapBacked) {
+    set.push(rec->heap.handle);
+  }
+}
+
+void considerSurface(resources::Pool& pool, core::Handle handle, UsedHeapSet& set) {
+  if (!handle) return;
+  auto* surface = pool.findSurface(handle.value);
+  if (!surface) return;
+  // SurfaceRecord itself is never heap-backed (RT/DS attachments always
+  // allocate direct), but a surface created via createSurfaceForTexture
+  // aliases a TextureRecord that may live on a heap; the underlying
+  // Metal texture is the same object, so blits to/from that surface
+  // touch the parent's heap-backed memory.
+  if (surface->aliasTexture) {
+    considerTexture(pool, surface->aliasTexture, set);
+  }
+}
+
+void emitUseHeap(WMT::BlitCommandEncoder& blit, const UsedHeapSet& set) {
+  for (std::size_t i = 0; i < set.count; ++i) {
+    blit.useHeap(WMT::Heap{set.heaps[i]});
     perf::countUseHeap();
-  });
+  }
 }
 
 }  // namespace
@@ -82,7 +119,12 @@ void encodeReadback(WMT::CommandBuffer& commandBuffer,
   }
   auto blit = commandBuffer.blitCommandEncoder();
   if (!blit) return;
-  useHeapsOnBlit(blit, pool);
+  {
+    UsedHeapSet set;
+    considerSurface(pool, readback.source, set);
+    considerSurface(pool, readback.destination, set);
+    emitUseHeap(blit, set);
+  }
   WMT::Texture sourceTexture{src->resolveTexture ? src->resolveTexture.handle : src->texture.handle};
   const uint32_t w =
       static_cast<uint32_t>(std::max(1, readback.sourceRect.right - readback.sourceRect.left));
@@ -119,7 +161,12 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
   if (canCopyStretchRect(*src, *dst, stretch)) {
     auto blit = commandBuffer.blitCommandEncoder();
     if (!blit) return;
-    useHeapsOnBlit(blit, pool);
+    {
+      UsedHeapSet set;
+      considerSurface(pool, stretch.source, set);
+      considerSurface(pool, stretch.destination, set);
+      emitUseHeap(blit, set);
+    }
     const auto width = static_cast<uint32_t>(
         std::max(1, stretch.sourceRect.right - stretch.sourceRect.left));
     const auto height = static_cast<uint32_t>(
@@ -193,7 +240,12 @@ void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer,
   if (srcW == dstW && srcH == dstH) {
     auto blit = commandBuffer.blitCommandEncoder();
     if (!blit) return;
-    useHeapsOnBlit(blit, pool);
+    {
+      UsedHeapSet set;
+      considerSurface(pool, copy.source, set);
+      considerSurface(pool, copy.destination, set);
+      emitUseHeap(blit, set);
+    }
     WMTOrigin srcOrigin{static_cast<uint64_t>(copy.sourceRect.left),
                          static_cast<uint64_t>(copy.sourceRect.top), 0};
     WMTSize srcSize{srcW, srcH, 1};
@@ -384,7 +436,14 @@ bool readbackSurface(CommandQueue& queue,
   if (!blit) {
     return false;
   }
-  useHeapsOnBlit(blit, pool);
+  {
+    // Source is a Pool surface that may alias a heap-backed parent
+    // texture; destination is an ephemeral staging texture (not pooled,
+    // never heap-backed).
+    UsedHeapSet set;
+    considerSurface(pool, desc.source, set);
+    emitUseHeap(blit, set);
+  }
   WMTOrigin srcOrigin{(uint64_t)sourceRect.left, (uint64_t)sourceRect.top, 0};
   WMTSize srcSize{width, height, 1};
   WMTOrigin dstOrigin{0, 0, 0};
@@ -413,7 +472,12 @@ bool readbackSurface(CommandQueue& queue,
     if (cmdBuf2) {
       auto blit2 = cmdBuf2.blitCommandEncoder();
       if (blit2) {
-        useHeapsOnBlit(blit2, pool);
+        // Both source (staging) and destination (readback buffer) are
+        // ephemeral, non-pooled allocations — neither can be
+        // heap-backed, so no useHeap is required. The empty walk is
+        // kept for symmetry with other blit sites in this file.
+        UsedHeapSet set;
+        emitUseHeap(blit2, set);
         WMTOrigin origin{0, 0, 0};
         WMTSize size{width, height, 1};
         blit2.copyFromTextureToBuffer(WMT::Texture{stagingTexture.handle}, 0, 0,

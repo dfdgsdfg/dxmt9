@@ -583,7 +583,16 @@ Pool::stageTextureUpload(WMT::Device device,
     WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
                                                        normalized.data(), pitch, 0);
   }
-  return StagingCopy{std::move(stagingTexture), texture, mipLevel, slice, mipWidth, mipHeight};
+  StagingCopy out;
+  out.stagingTexture = std::move(stagingTexture);
+  out.destTexture = texture;
+  out.mipLevel = mipLevel;
+  out.slice = slice;
+  out.width = mipWidth;
+  out.height = mipHeight;
+  out.destIsHeapBacked = record->isHeapBacked;
+  out.destHeap = record->heap.handle;
+  return out;
 }
 
 void Pool::uploadTextureLevel(WMT::Device device,
@@ -662,20 +671,17 @@ void Pool::uploadTextureLevel(WMT::Device device,
   if (!blit) {
     return;
   }
-  // R-BACK-14.3 — destination texture may be heap-backed; mirror the
-  // useHeap pattern from the deferred-upload Initializer path so the
-  // heap-resident bookkeeping stays consistent on both upload entry
-  // points.
-  // TODO(R-BACK-14.3): the render encoder now walks only the bound
-  // resources and issues useHeap() on the heaps that actually back
-  // them. This synchronous upload path knows exactly one destination
-  // record; switch to a single-record `isHeapBacked` check when the
-  // direct-upload caller is reworked to pass a TextureRecord pointer
-  // (currently it's the legacy entry, unused in production).
-  heapManager_.forEachHeapInstance([&blit](WMT::Heap heap) {
-    blit.useHeap(heap);
+  // R-BACK-14.3 — bound-resource walk: this synchronous blit references
+  // exactly one source (ephemeral staging texture, never heap-backed)
+  // and one destination (the Pool TextureRecord we already resolved).
+  // The source contributes nothing to the useHeap set; the destination
+  // contributes its heap iff it was placed on one. Mirrors the
+  // render-encoder dedup pattern in beginRenderPass — a single-element
+  // walk here, no broad iteration over every live heap instance.
+  if (record->isHeapBacked && record->heap.handle != 0) {
+    blit.useHeap(record->heap);
     perf::countUseHeap();
-  });
+  }
   WMTOrigin origin{0, 0, 0};
   WMTSize size{mipWidth, mipHeight, 1};
   blit.copyFromTextureToTexture(WMT::Texture{stagingTexture.handle}, 0, 0,

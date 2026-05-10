@@ -369,6 +369,14 @@ struct Pool {
     u32 slice = 0;
     u32 width = 0;
     u32 height = 0;
+    // R-BACK-14.3 — capture the destination TextureRecord's heap-backed
+    // flag and heap handle at staging time so the Initializer's batched
+    // flush can perform the per-encoder useHeap dedup walk without an
+    // extra Pool lookup (the raw destTexture handle would not be
+    // reverse-resolvable to a TextureRecord). Default-zero values mean
+    // "not heap-backed"; the flush walk skips them.
+    bool destIsHeapBacked = false;
+    obj_handle_t destHeap = 0;
   };
   std::optional<StagingCopy>
   stageTextureUpload(WMT::Device device,

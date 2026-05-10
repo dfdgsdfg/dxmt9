@@ -11,6 +11,7 @@
 #include "dxmt9_resource_pool.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <iomanip>
@@ -261,22 +262,39 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
     result.value = lastSignaledValue_;
     return result;
   }
-  // R-BACK-14.3 — staging→destination blits target heap-backed Pool
-  // textures whenever the destination is a small Private texture. One
-  // useHeap call per live heap instance covers every member resident on
-  // this blit encoder; the per-resource useResource path below is
-  // therefore skipped (heap residency wins).
-  // TODO(R-BACK-14.3): the render encoder now walks only the bound
-  // resources and useHeap()s the subset of heaps that back them. The
-  // initializer flush has each pendingUpload's destination texture in
-  // hand (`u.destTexture`) but the records aren't resolved here, so a
-  // tightened walk would need an inverse handle lookup. Defer until the
-  // initializer carries the source TextureRecord pointer alongside the
-  // texture handle.
-  pool_->heapManager().forEachHeapInstance([&blit](WMT::Heap heap) {
-    blit.useHeap(heap);
-    perf::countUseHeap();
-  });
+  // R-BACK-14.3 — per-encoder bound-resource walk. Each pendingUpload
+  // is a staging→destination blit. The staging texture is ephemeral
+  // (never heap-backed); the destination's heap-backed flag and heap
+  // handle were captured at staging time (StagingCopy::destIsHeapBacked
+  // / destHeap) so the walk runs without an extra Pool lookup. Dedup
+  // through a small inline buffer: a flush typically batches a few
+  // unrelated texture uploads, but they tend to share the same handful
+  // of heaps within a family, so a fixed-size scan keeps this
+  // allocation-free. Mirrors the render-encoder pattern in
+  // beginRenderPass.
+  {
+    constexpr std::size_t kMaxFlushHeaps = 8;
+    std::array<obj_handle_t, kMaxFlushHeaps> usedHeaps{};
+    std::size_t usedHeapCount = 0;
+    auto pushHeap = [&](obj_handle_t h) {
+      if (h == 0) return;
+      for (std::size_t i = 0; i < usedHeapCount; ++i) {
+        if (usedHeaps[i] == h) return;
+      }
+      if (usedHeapCount < usedHeaps.size()) {
+        usedHeaps[usedHeapCount++] = h;
+      }
+    };
+    for (const auto& u : pendingUploads_) {
+      if (u.destIsHeapBacked) {
+        pushHeap(u.destHeap);
+      }
+    }
+    for (std::size_t i = 0; i < usedHeapCount; ++i) {
+      blit.useHeap(WMT::Heap{usedHeaps[i]});
+      perf::countUseHeap();
+    }
+  }
   for (const auto& u : pendingUploads_) {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{u.width, u.height, 1};
