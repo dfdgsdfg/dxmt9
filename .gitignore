@@ -24,6 +24,12 @@ states/
 tmp
 experiments/output/*
 !experiments/output/.gitkeep
+# Runtime spec — see specs/experiments/runtime/.
+experiments/apps_3rd/
+experiments/prefixs/
+experiments/wine/*
+!experiments/wine/manifest.toml
+!experiments/wine/README.md
 experiments/apps/**/*.trace.txt
 *.log
 **/__pycache__
