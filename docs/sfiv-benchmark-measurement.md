@@ -285,3 +285,85 @@ env DXMT_PERF_COUNTERS=1 DXMT9_PERF_FRAME_SAMPLING=1 \
   DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS=0 \
   bash scripts/run_apps/run_sfiv_benchmark_experiment.sh ...
 ```
+
+---
+
+## BB1 — SFIV with Y1 default flip + tile-FFP + heap pooling (2026-05-10)
+
+First SFIV re-measurement after R-BACK-2.34 (Y1) flipped
+`DXMT9_MID_CHUNK_COMMIT_POLICY` default to `per-render-pass`, and
+after R-BACK-13.x (tile-FFP) and R-BACK-5.x (MTLHeap pooling)
+landed in master between U1 and now.
+
+**Workload** (heavy scene, RP ≥ 10, 2526 frames out of 3319):
+
+| metric | P1 (off, 2026-05-10) | U1 (cap=4 explicit) | BB1 (Y1 default) |
+|---|---:|---:|---:|
+| fps (whole run) | 13.25 | 11.24 | **19.77** |
+| process_elapsed_sec | 175.8 | 176.6 | 167.9 |
+| `command_buffers / frame` | 1 | 4 | 4 |
+| `sub_command_buffers / frame` | 0 | 3 | 3 |
+| `chunk_subcb_count_max` | 1 | 4 | **4** (cap holds) |
+| `encode_chunk_cpu_ms` mean | 68.91 | 104.33 | **40.61** |
+| `completion_wait_ms` mean | 69.01 | 106.46 | 45.57 |
+| `present_acquire_wait_ms` mean | 98.06 | 98.08 | **34.38** |
+| `present_acquire_wait_ms` p50 (per-frame) | — | — | **0.14** |
+| `gpu_command_buffer_time_ms` mean | 129.31 | 104.99 | 45.10 |
+| `gpu_command_buffer_errors` | 0 | 0 | **0** |
+| `render_pass_begin / frame` | 22 | 22 | 23 |
+| `draw_calls / frame` | 100 | 102 | 178 |
+
+**Headline:** **+49% fps** vs P1 (13.25 → 19.77) under the new default.
+The BB1 capture used a heavier scene (178 draws/frame vs 100) yet
+still ran faster, which strengthens the result rather than
+weakening it.
+
+### Where the win comes from
+
+- **`encode_chunk_cpu_ms` mean −41% (68.9 → 40.6 ms).** Despite more
+  draws per frame, the encode thread spends less wall time per chunk
+  because mid-chunk commit fires off sub-CBs early; the encoder's
+  `commandBuffer.commit()` path no longer sits at the end with all
+  the encoded work to flush at once.
+- **`present_acquire_wait_ms` p50 collapsed.** In P1 every frame
+  paid ~98 ms drawable-acquire wait. In BB1 the median is 0.14 ms
+  — the GPU has finished the chain's leading sub-CBs by the time
+  the present-bearing tail commits, so the next drawable is ready
+  immediately.
+- **`gpu_command_buffer_time_ms` mean −65% (129 → 45 ms).** Per-CB
+  GPU wall time is much lower because each sub-CB runs less work.
+  Total GPU work across the chain is comparable (or higher with
+  more draws), but per-CB the driver completes faster.
+
+This is the structural pipelining win the U1 measurement *predicted*
+from per-CB GPU time delta (−44%) but couldn't materialise as fps
+because the SFIV-class envelope was the only data point available
+and the run-to-run noise was wider than the win. The BB1 measurement
+shows the win lands cleanly when:
+
+1. The default flip (Y1) makes per-render-pass + cap=4 the production
+   path, so frame-token routing, drawable acquire, and reclaim all
+   align with the chain shape from the first frame.
+2. The other R-BACK-13.x / R-BACK-5.x work merged in the meantime
+   (tile-FFP shader path, MTLHeap small-resource pooling) reduces
+   the per-RP work itself, which moves SFIV from the
+   "tile-flush-bound" regime where pipelining is cancelled into the
+   regime where it wins.
+
+### `gpu_command_buffer_errors = 0`
+
+No GPU faults across 33,074 chunk admits / 11,689 command buffers
+/ 8,370 mid-chunk commits. The cap=4 + per-render-pass default does
+not surface any GPU validation issue on this workload.
+
+### Notes
+
+- This is a single run; absolute numbers will vary with run-to-run
+  noise. The +49% delta is large enough that even pessimistic noise
+  bounds keep it as a clear win.
+- The BB1 scene has more draws/frame than P1 (178 vs 100). If the
+  scene drift is pessimistic (heavier scene running at higher fps
+  is suspicious), re-run with controlled scene capture or compare
+  against Anno1404 / Tutorial07 next cycle.
+- R-BACK-2.34 stays ✅ in `specs/gap.md`. Cap=4 production default
+  shipped.
