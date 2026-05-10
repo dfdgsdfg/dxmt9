@@ -4,6 +4,10 @@ Rules for running dxmt9 against real D3D9 binaries (catalogue experiments,
 SFIV, Anno 1404, etc.) in `experiments/`. They cover the host Wine
 runtime, not the dxmt9 build itself.
 
+> **Spec:** the mechanics of the manifest, prefix bootstrap, and apps_3rd
+> layout are defined in `specs/experiments/runtime/{requirements,design}.md`.
+> This rule covers operational guidance only.
+
 ## Rule: Default to Vanilla Wine
 
 **All experiment runners MUST default to a pristine, unpatched Wine build.**
@@ -30,11 +34,14 @@ When adding or editing a runner script under `scripts/run_apps/`,
 `scripts/run_suites/`, or `scripts/tools/`:
 
 ```sh
-# Good — vanilla Wine baseline.
-wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
+# Good — vanilla Wine baseline. The wine_id resolves through the
+# manifest at experiments/wine/manifest.toml; never hardcode paths.
+wine_id = "heroic-11.7"          # in CATALOGUE [[app]]
+# Or on the command line:
+bash scripts/run_apps/run_<name>_experiment.sh --wine-id heroic-11.7
 
-# Avoid — DXMT- or VK-patched Wine as the default.
-wine_root_default="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
+# Avoid — hardcoding a path or pointing at a non-vanilla variant.
+wine_root_default=".../Wine-11.7-DXMT/.../wine"   # bypasses the manifest.
 ```
 
 Always allow `--wine-root <path>` to override the default so a
