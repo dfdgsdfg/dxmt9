@@ -248,6 +248,13 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
       record.buffer = device.newBuffer(info);
       if (record.buffer) {
         perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+        // R-BACK-14.4 — count direct (non-heap) allocations as use-resource
+        // lifetime events. The ratio against `useHeap` is the heap-pool
+        // adoption signal: a high direct count means small-resource heap
+        // pooling is not absorbing as much of the allocation traffic as
+        // R-BACK-5.9 / R-BACK-14.* expect. This is a per-allocation proxy
+        // until per-bind counting in the encoder lands.
+        perf::countUseResource();
       }
       record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
     }
