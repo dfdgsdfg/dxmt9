@@ -125,6 +125,22 @@ argbuf_hybrid_spec = executable(
 
 test('dxmt9-argbuf-hybrid-spec', argbuf_hybrid_spec)
 
+# R-BACK-12.22..12.26 MSL routing — FFP and DXBC->MSL emitters route
+# uniform reads through ArgbufLayout at slot 30 when the variant key
+# carries argbufHybridMode. Pure source-level assertions on the emitted
+# MSL strings (no Metal device); pairs with dxmt9-argbuf-hybrid-spec
+# which covers the framework pieces (capability gate, descriptor build,
+# prelude shape).
+argbuf_hybrid_msl_spec = executable(
+  'dxmt9-argbuf-hybrid-msl-spec',
+  'argbuf_hybrid_msl_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-argbuf-hybrid-msl-spec', argbuf_hybrid_msl_spec)
+
 # Z1 audit item #2 — unix-side chunk-injection probe.
 # Constructs a wire-format chunk in memory and feeds it directly into
 # dxmt9c_device_commit_chunk(), bypassing PE D3D9 + the WINE_UNIX_CALL

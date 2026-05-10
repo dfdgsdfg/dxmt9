@@ -26,6 +26,12 @@ struct ShaderSourceContext {
   std::array<bool, core::kMaxTextures> textures{};
   std::uint32_t sampleCount = 1;
   std::uint32_t clipPlaneMask = 0;
+  // R-BACK-12.22..12.26 — when true, the FFP and DXBC->MSL emitters route
+  // per-stage uniform reads through `ArgbufLayout` at slot 30 instead of
+  // dedicated slots 0/3 and individual texture/sampler slots. The vertex
+  // stream (slot 1) and `DrawVolatile` (slot 5) stay direct (design.md
+  // §11.4). This is set from `ShaderVariantKey::argbufHybridMode`.
+  bool argbufHybridMode = false;
 };
 
 ShaderSourceContext makeShaderSourceContext(const core::DrawShaderLayoutContext& layout,

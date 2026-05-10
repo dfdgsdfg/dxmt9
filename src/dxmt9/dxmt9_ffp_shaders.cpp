@@ -183,6 +183,7 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
 std::string makeFfpVertexSource(const FfpVertexKey& key,
                                 const drawshader::ShaderSourceContext& context) {
   std::ostringstream out;
+  const bool argbufHybrid = context.argbufHybridMode;
   const auto layout = decodeFixedFunctionVertexLayout(context.vertexDecl);
   constexpr u32 kTciIndexMask = 0x0000ffffu;
   constexpr u32 kTciGenMask = 0xffff0000u;
@@ -208,13 +209,41 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       }
     }
   };
-  out << shaders::makeShaderPrelude(key.clipPlaneMask != 0);
+  if (argbufHybrid) {
+    out << shaders::makeShaderPreludeArgbufHybrid(key.clipPlaneMask != 0);
+  } else {
+    out << shaders::makeShaderPrelude(key.clipPlaneMask != 0);
+  }
+  // R-BACK-12.22..12.26 MSL routing — when argbufHybrid is set the entry
+  // point takes a single argument buffer at slot 30 instead of dedicated
+  // slots 0/3. Vertex stream stays at slot 1 and DrawVolatile at slot 5
+  // (design.md §11.4). Body code re-aliases `vsConsts`/`ffpVs` references
+  // off the argbuf so the existing reads (e.g. `ffpVs.halfPixelFixup`,
+  // `ffpVs.ffpWorldViewProj[0]`, helper calls taking
+  // `constant FfpVsConsts&`) compile unchanged.
+  const auto emitVertexSig = [&](bool withStream) {
+    if (argbufHybrid) {
+      out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], "
+             "constant ArgbufLayout const* abuf [[buffer("
+          << shaders::kArgbufHybridBindSlot << ")]], ";
+      if (withStream) {
+        out << "device const uchar* stream0 [[buffer(1)]], ";
+      }
+      out << "constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+      out << "  constant VsConsts& vsConsts = *abuf->vsConsts;\n";
+      out << "  constant FfpVsConsts& ffpVs = *abuf->ffpVs;\n";
+    } else {
+      out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], "
+             "constant VsConsts& vsConsts [[buffer(0)]], ";
+      if (withStream) {
+        out << "device const uchar* stream0 [[buffer(1)]], ";
+      }
+      out << "constant FfpVsConsts& ffpVs [[buffer(3)]], "
+             "constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    }
+  };
   if (layout && layout->preTransformed) {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], "
-           "constant VsConsts& vsConsts [[buffer(0)]], "
-           "device const uchar* stream0 [[buffer(1)]], "
-           "constant FfpVsConsts& ffpVs [[buffer(3)]], "
-           "constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    emitVertexSig(/*withStream=*/true);
     out << "  (void)vsConsts;\n";
     out << "  VSOut out;\n";
     out << "  const uint stride = drawVolatile.vertexStreamStride != 0u ? drawVolatile.vertexStreamStride : "
@@ -238,11 +267,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.fogFactor = 1.0;\n";
     out << "  out.pointSize = 1.0;\n";
   } else if (layout) {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], "
-           "constant VsConsts& vsConsts [[buffer(0)]], "
-           "device const uchar* stream0 [[buffer(1)]], "
-           "constant FfpVsConsts& ffpVs [[buffer(3)]], "
-           "constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    emitVertexSig(/*withStream=*/true);
     out << "  (void)vsConsts;\n";
     out << "  VSOut out;\n";
     out << "  const uint stride = drawVolatile.vertexStreamStride != 0u ? drawVolatile.vertexStreamStride : "
@@ -288,10 +313,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.fogFactor = 1.0;\n";
     out << "  out.pointSize = 1.0;\n";
   } else {
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]], "
-           "constant VsConsts& vsConsts [[buffer(0)]], "
-           "constant FfpVsConsts& ffpVs [[buffer(3)]], "
-           "constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    emitVertexSig(/*withStream=*/false);
     out << "  (void)vsConsts; (void)drawVolatile;\n";
     out << "  VSOut out;\n";
     out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
@@ -348,25 +370,57 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     const char* env = std::getenv("DXMT_DEBUG_FFP_ALPHA");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
   }();
-  out << shaders::makeShaderPrelude(context.clipPlaneMask != 0);
+  const bool argbufHybrid = context.argbufHybridMode;
+  if (argbufHybrid) {
+    out << shaders::makeShaderPreludeArgbufHybrid(context.clipPlaneMask != 0);
+  } else {
+    out << shaders::makeShaderPrelude(context.clipPlaneMask != 0);
+  }
+  // R-BACK-12.22..12.26 MSL routing — when argbufHybrid is set, the
+  // fragment entry point takes a single argument buffer at slot 30 and
+  // reads `psConsts`/`ffpPs` plus textures/samplers off the argbuf.
+  // The body code references `texN`/`sampN` locals so we materialize
+  // each active stage's texture and sampler off `abuf->textures[N]` /
+  // `abuf->samplers[N]` at function entry.
   if (textured) {
-    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
-           "constant PsConsts& psConsts [[buffer(0)]], "
-           "constant FfpPsConsts& ffpPs [[buffer(3)]], ";
-    for (size_t i = 0; i < activeStages.size(); ++i) {
-      const size_t stage = activeStages[i];
-      if (i != 0) {
-        out << ", ";
+    if (argbufHybrid) {
+      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+             "constant ArgbufLayout const* abuf [[buffer("
+          << shaders::kArgbufHybridBindSlot << ")]]) {\n";
+      out << "  constant PsConsts& psConsts = *abuf->psConsts;\n";
+      out << "  constant FfpPsConsts& ffpPs = *abuf->ffpPs;\n";
+      for (size_t i = 0; i < activeStages.size(); ++i) {
+        const size_t stage = activeStages[i];
+        out << "  texture2d<float> tex" << stage << " = abuf->textures[" << stage << "];\n";
+        out << "  sampler samp" << stage << " = abuf->samplers[" << stage << "];\n";
       }
-      out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], sampler samp" << stage
-          << " [[sampler(" << stage << ")]]";
+    } else {
+      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+             "constant PsConsts& psConsts [[buffer(0)]], "
+             "constant FfpPsConsts& ffpPs [[buffer(3)]], ";
+      for (size_t i = 0; i < activeStages.size(); ++i) {
+        const size_t stage = activeStages[i];
+        if (i != 0) {
+          out << ", ";
+        }
+        out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], sampler samp" << stage
+            << " [[sampler(" << stage << ")]]";
+      }
+      out << ") {\n";
     }
-    out << ") {\n";
     out << "  (void)psConsts;\n";
   } else {
-    out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
-           "constant PsConsts& psConsts [[buffer(0)]], "
-           "constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+    if (argbufHybrid) {
+      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+             "constant ArgbufLayout const* abuf [[buffer("
+          << shaders::kArgbufHybridBindSlot << ")]]) {\n";
+      out << "  constant PsConsts& psConsts = *abuf->psConsts;\n";
+      out << "  constant FfpPsConsts& ffpPs = *abuf->ffpPs;\n";
+    } else {
+      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+             "constant PsConsts& psConsts [[buffer(0)]], "
+             "constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+    }
     out << "  (void)psConsts;\n";
   }
   out << "  float4 color = in.color;\n";
@@ -512,6 +566,7 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   // from the portable path so binding indices line up.
   const bool useHalf = tileFfpAttachmentAcceptsHalf(colorAttachmentPixelFormat);
   const char* tileColorType = useHalf ? "half4" : "float4";
+  const bool argbufHybrid = context.argbufHybridMode;
   out << "#include <metal_stdlib>\n";
   out << "using namespace metal;\n";
   // Mirror the portable FFP PS consts struct so the same per-frequency
@@ -526,6 +581,28 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   out << "  uint alphaTestFunc;\n";
   out << "  uint fogMode;\n";
   out << "};\n";
+  if (argbufHybrid) {
+    // R-BACK-12.22..12.26 MSL routing — tile kernel reads `ffpPs`
+    // through the argument buffer at slot 30 instead of buffer(3).
+    // The remaining fields (vsConsts, psConsts, textures, samplers)
+    // are unused by the tile path but must be declared for the
+    // argbuf layout to match the host-side encoder.
+    out << "struct VsConsts;\n";
+    out << "struct PsConsts;\n";
+    out << "struct FfpVsConsts;\n";
+    out << "struct ArgbufLayout {\n";
+    out << "  constant VsConsts*    vsConsts [[id(0)]];\n";
+    out << "  constant FfpVsConsts* ffpVs    [[id(1)]];\n";
+    out << "  constant PsConsts*    psConsts [[id(2)]];\n";
+    out << "  constant FfpPsConsts* ffpPs    [[id(3)]];\n";
+    out << "  texture2d<float>      textures[" << shaders::kArgbufHybridTextureSlotCount
+        << "] [[id(" << shaders::kArgbufHybridConstantBufferCount << ")]];\n";
+    out << "  sampler               samplers[" << shaders::kArgbufHybridSamplerSlotCount
+        << "] [[id("
+        << (shaders::kArgbufHybridConstantBufferCount + shaders::kArgbufHybridTextureSlotCount)
+        << ")]];\n";
+    out << "};\n";
+  }
   out << "struct TileColorData {\n";
   out << "  " << tileColorType << " color [[color(0)]];\n";
   out << "};\n";
@@ -533,10 +610,19 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   // value in tile memory; thread_position_in_threadgroup picks the
   // per-pixel slot. R-BACK-13.5 specifies threadgroupSizeMatchesTileSize
   // so one thread maps to one tile lane.
-  out << "[[kernel]] void ffp_tile(\n";
-  out << "    imageblock<TileColorData, imageblock_layout_implicit> imageblock_data,\n";
-  out << "    ushort2 tid [[thread_position_in_threadgroup]],\n";
-  out << "    constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+  if (argbufHybrid) {
+    out << "[[kernel]] void ffp_tile(\n";
+    out << "    imageblock<TileColorData, imageblock_layout_implicit> imageblock_data,\n";
+    out << "    ushort2 tid [[thread_position_in_threadgroup]],\n";
+    out << "    constant ArgbufLayout const* abuf [[buffer("
+        << shaders::kArgbufHybridBindSlot << ")]]) {\n";
+    out << "  constant FfpPsConsts& ffpPs = *abuf->ffpPs;\n";
+  } else {
+    out << "[[kernel]] void ffp_tile(\n";
+    out << "    imageblock<TileColorData, imageblock_layout_implicit> imageblock_data,\n";
+    out << "    ushort2 tid [[thread_position_in_threadgroup]],\n";
+    out << "    constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+  }
   out << "  threadgroup_imageblock TileColorData* slot = imageblock_data.data(tid);\n";
   // R-BACK-13.7: even when the imageblock element is `half4`, FFP
   // arithmetic must be carried in `float` to preserve bit-identity with

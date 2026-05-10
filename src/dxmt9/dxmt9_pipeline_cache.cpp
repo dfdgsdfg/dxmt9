@@ -497,6 +497,10 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
   key.argbufHybridMode = argbufHybridMode;
   drawshader::ShaderSourceContext shaderSource =
       drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
+  // R-BACK-12.22..12.26 MSL routing — propagate the variant key bit into
+  // the source-emitter context so FFP and DXBC->MSL bodies read uniforms
+  // through `ArgbufLayout` at slot 30 instead of slots 0/3.
+  shaderSource.argbufHybridMode = argbufHybridMode;
   return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
 }
 

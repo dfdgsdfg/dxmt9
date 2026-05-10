@@ -37,6 +37,8 @@ using namespace ::dxmt9::ffp;
 using f32 = float;
 
 using ::dxmt9::shaders::makeShaderPrelude;
+using ::dxmt9::shaders::makeShaderPreludeArgbufHybrid;
+using ::dxmt9::shaders::kArgbufHybridBindSlot;
 
 namespace {
 
@@ -440,11 +442,31 @@ void emitFragmentTextureArguments(std::ostringstream& out,
   }
 }
 
+// R-BACK-12.22..12.26 MSL routing — emit local `texN` / `sampN` aliases
+// that copy the texture/sampler handles out of the bound argument buffer
+// at slot 30. Body code is unchanged because it still references `texN`
+// and `sampN` by name; only the source of those names moves.
+void emitFragmentTextureAliasesFromArgbuf(std::ostringstream& out,
+                                          const std::array<bool, kMaxSamplers>& samplerUsage) {
+  for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
+    if (!samplerUsage[stage]) {
+      continue;
+    }
+    out << "  texture2d<float> tex" << stage << " = abuf->textures[" << stage << "];\n";
+    out << "  sampler samp" << stage << " = abuf->samplers[" << stage << "];\n";
+  }
+}
+
 std::string translateSpirvToMsl(const SpirvModule& module,
                                 const ShaderSourceContext& context,
                                 bool vertex) {
   std::ostringstream out;
-  out << makeShaderPrelude(context.clipPlaneMask != 0);
+  const bool argbufHybrid = context.argbufHybridMode;
+  if (argbufHybrid) {
+    out << makeShaderPreludeArgbufHybrid(context.clipPlaneMask != 0);
+  } else {
+    out << makeShaderPrelude(context.clipPlaneMask != 0);
+  }
   if (vertex) {
     const auto inputLayout = decodeVertexShaderInputLayout(module, context);
     const auto outputSemantics = collectVertexOutputSemantics(module);
@@ -495,11 +517,25 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       std::fprintf(stderr, "%s\n", trace.str().c_str());
       std::fflush(stderr);
     }
-    out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]],\n";
-    out << "                     constant VsConsts& vsConsts [[buffer(0)]],\n";
-    out << "                     device const uchar* stream0 [[buffer(1)]],\n";
-    out << "                     constant FfpVsConsts& ffpVs [[buffer(3)]],\n";
-    out << "                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    if (argbufHybrid) {
+      // R-BACK-12.22..12.26 MSL routing — single argbuf at slot 30
+      // replaces slots 0/3. Vertex stream and DrawVolatile stay direct
+      // (design.md §11.4). Re-alias `vsConsts`/`ffpVs` references off
+      // the argbuf so downstream emission continues to read by name.
+      out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]],\n";
+      out << "                     constant ArgbufLayout const* abuf [[buffer("
+          << kArgbufHybridBindSlot << ")]],\n";
+      out << "                     device const uchar* stream0 [[buffer(1)]],\n";
+      out << "                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+      out << "  constant VsConsts& vsConsts = *abuf->vsConsts;\n";
+      out << "  constant FfpVsConsts& ffpVs = *abuf->ffpVs;\n";
+    } else {
+      out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]],\n";
+      out << "                     constant VsConsts& vsConsts [[buffer(0)]],\n";
+      out << "                     device const uchar* stream0 [[buffer(1)]],\n";
+      out << "                     constant FfpVsConsts& ffpVs [[buffer(3)]],\n";
+      out << "                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
+    }
     out << "  VSOut out;\n";
     out << "  float2 dxmt9_positions[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
     out << "  float4 outPosition = float4(dxmt9_positions[vid % 3], 0.0, 1.0);\n";
@@ -1258,17 +1294,40 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 
   const char* fragmentReturnType = usesFragmentOutStruct ? "FSOut" : "float4";
   if (textured) {
-    out << "fragment " << fragmentReturnType
-        << " dxmt9_fs(VSOut in [[stage_in]],\n";
-    out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
-    out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
-    emitFragmentTextureArguments(out, samplerUsage);
-    out << ") {\n";
+    if (argbufHybrid) {
+      // R-BACK-12.22..12.26 MSL routing — single argbuf at slot 30
+      // replaces slots 0/3 plus per-stage texture/sampler slots.
+      // Re-aliases on entry so the downstream body code continues to
+      // read `psConsts.X`, `ffpPs.X`, `texN.sample(sampN, ...)` by name.
+      out << "fragment " << fragmentReturnType
+          << " dxmt9_fs(VSOut in [[stage_in]],\n";
+      out << "                     constant ArgbufLayout const* abuf [[buffer("
+          << kArgbufHybridBindSlot << ")]]) {\n";
+      out << "  constant PsConsts& psConsts = *abuf->psConsts;\n";
+      out << "  constant FfpPsConsts& ffpPs = *abuf->ffpPs;\n";
+      emitFragmentTextureAliasesFromArgbuf(out, samplerUsage);
+    } else {
+      out << "fragment " << fragmentReturnType
+          << " dxmt9_fs(VSOut in [[stage_in]],\n";
+      out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
+      out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
+      emitFragmentTextureArguments(out, samplerUsage);
+      out << ") {\n";
+    }
   } else {
-    out << "fragment " << fragmentReturnType
-        << " dxmt9_fs(VSOut in [[stage_in]],\n";
-    out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
-    out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+    if (argbufHybrid) {
+      out << "fragment " << fragmentReturnType
+          << " dxmt9_fs(VSOut in [[stage_in]],\n";
+      out << "                     constant ArgbufLayout const* abuf [[buffer("
+          << kArgbufHybridBindSlot << ")]]) {\n";
+      out << "  constant PsConsts& psConsts = *abuf->psConsts;\n";
+      out << "  constant FfpPsConsts& ffpPs = *abuf->ffpPs;\n";
+    } else {
+      out << "fragment " << fragmentReturnType
+          << " dxmt9_fs(VSOut in [[stage_in]],\n";
+      out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
+      out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+    }
   }
   auto emitFragmentDebugReturn = [&](std::string_view valueExpr) {
     if (usesFragmentOutStruct) {
