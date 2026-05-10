@@ -117,4 +117,40 @@ std::string makeFfpVertexSource(const core::FfpVertexKey& key,
 std::string makeFfpPixelSource(const core::FfpPixelKey& key,
                                const drawshader::ShaderSourceContext& context);
 
+// R-BACK-13.* — Apple-Silicon-only tile-stage FFP source generator.
+// Mirrors makeFfpPixelSource but emits a tile-stage `[[kernel]]` that
+// reads attachment color via `imageblock<>` (programmable blending) and
+// writes back, executing fog blend / alpha-test / A2C without a fragment
+// dispatch. R-BACK-13.7: FFP arithmetic is typed `float`, not `half`,
+// to keep bit-identity with the portable path. The imageblock element
+// type is selected by `colorAttachmentPixelFormat` — `half4` is permitted
+// only for 8-bpc unorm formats whose attachment quantization already
+// discards precision below `half`; wider formats use `float4`.
+std::string makeFfpTilePixelSource(const core::FfpPixelKey& key,
+                                    const drawshader::ShaderSourceContext& context,
+                                    std::uint32_t colorAttachmentPixelFormat);
+
+// Selector classification + counter wiring helpers (R-BACK-13.1..13.6).
+// Pure value transforms; tested via tile_ffp_selector_spec without standing
+// up a Metal device. Eligibility is observable as a discriminated value so
+// the encoder can map it directly to the right counter.
+enum class TileFfpEligibility : std::uint8_t {
+  Eligible,
+  IneligiblePrecision,
+  IneligibleUnsupportedState,
+};
+
+// Classify an FFPKeyPS for tile-stage execution. Returns the reason class
+// (R-BACK-13.3 conformance boundary). The selector lives in pure code so
+// the encoder can reuse it on encoder-open and on mid-pass eligibility
+// re-checks (R-BACK-13.6) without duplicating the rules.
+TileFfpEligibility classifyTileFfpEligibility(const core::FfpPixelKey& key,
+                                              float alphaTestRefNormalized,
+                                              bool alphaToCoverageEnabled);
+
+// True iff `format` is an 8-bit-per-channel attachment whose quantization
+// already discards precision below `half`. R-BACK-13.7 permits `half4`
+// imageblock declarations only on these formats.
+bool tileFfpAttachmentAcceptsHalf(std::uint32_t pixelFormat);
+
 }  // namespace dxmt9::ffp

@@ -1939,6 +1939,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   AttachmentKey activeKey{};
   HazardProbe activeWriteHazard{};
   bool hasActiveRender = false;
+  // R-BACK-13.1 / 13.6 — current render encoder's chosen FFP path. Set
+  // at startRenderPass via selectTileFfpForPass; consulted on each draw
+  // to decide whether a mid-pass change forces a portable fallback
+  // resplit (tileFfpMidPassResplit / tileFfpFallbackByReason{mid_pass_ineligible}).
+  bool activePassUsesTileFfp = false;
   std::optional<core::FlatDrawStateKey> activeDrawStateKey;
   std::optional<core::ClearDesc> pendingClear;
   // R-BACK-15.4: color attachment handles bound on the active render
@@ -2030,6 +2035,40 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     activeKey = makeAttachmentKey(*drawState.hot);
     activeWriteHazard = makeAttachmentHazard(*drawState.hot);
     activeDrawStateKey.reset();
+    // R-BACK-13.1 — per-pass tile-shader FFP selector. Eligibility is
+    // computed once at encoder open; the choice is sticky for the pass.
+    // Counters: each opened pass bumps exactly one of
+    // tileFfpPassCount / portableFfpPassCount, plus the by-reason
+    // breakdown when the precision/unsupported_state path forced a
+    // fallback. R-BACK-13.5: gpu_family is recorded but only via the
+    // dedicated tileFfpFallbackGpuFamily counter, not the pass count.
+    {
+      const auto selection =
+          dxmt9::pipeline::selectTileFfpForPass(drawState, ctx.pool.supportsApple3());
+      activePassUsesTileFfp = selection.decision == dxmt9::pipeline::TileFfpDecision::Tile;
+      if (activePassUsesTileFfp) {
+        perf::countTileFfpPass();
+      } else {
+        perf::countPortableFfpPass();
+        switch (selection.reason) {
+          case dxmt9::pipeline::TileFfpFallbackReason::GpuFamily:
+            perf::countTileFfpFallbackGpuFamily();
+            break;
+          case dxmt9::pipeline::TileFfpFallbackReason::Precision:
+            perf::countTileFfpFallbackPrecision();
+            break;
+          case dxmt9::pipeline::TileFfpFallbackReason::UnsupportedState:
+            perf::countTileFfpFallbackUnsupportedState();
+            break;
+          case dxmt9::pipeline::TileFfpFallbackReason::None:
+          case dxmt9::pipeline::TileFfpFallbackReason::NotFfp:
+            // No fallback class is bumped: NotFfp means the pass never
+            // had an FFP key to translate, GpuFamily is its own counter,
+            // None is the eligible case (already on tile path).
+            break;
+        }
+      }
+    }
     // R-BACK-15.4: capture color attachment handles so flushRender can
     // mark them touched on the queue once the encoder closes.
     for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {

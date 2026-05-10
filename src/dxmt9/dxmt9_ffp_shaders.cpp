@@ -461,6 +461,127 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   return out.str();
 }
 
+bool tileFfpAttachmentAcceptsHalf(u32 pixelFormat) {
+  // R-BACK-13.7: only 8-bpc unorm attachments accept `half4` imageblock
+  // declarations because the attachment quantization already discards
+  // precision below `half`. Wider formats keep `float4` to preserve
+  // bit-identity with the portable path.
+  switch (pixelFormat) {
+    case static_cast<u32>(WMTPixelFormatRGBA8Unorm):
+    case static_cast<u32>(WMTPixelFormatRGBA8Unorm_sRGB):
+    case static_cast<u32>(WMTPixelFormatRGBA8Snorm):
+    case static_cast<u32>(WMTPixelFormatBGRA8Unorm):
+    case static_cast<u32>(WMTPixelFormatBGRA8Unorm_sRGB):
+    case static_cast<u32>(WMTPixelFormatBGRX8Unorm):
+    case static_cast<u32>(WMTPixelFormatBGRX8Unorm_sRGB):
+      return true;
+    default:
+      return false;
+  }
+}
+
+TileFfpEligibility classifyTileFfpEligibility(const FfpPixelKey& key,
+                                              float alphaTestRefNormalized,
+                                              bool alphaToCoverageEnabled) {
+  // R-BACK-13.3 conformance boundary:
+  //   - alpha-test reference outside [0.0, 1.0] -> precision fallback
+  //   - non-linear fog at high z (Exp / Exp2) -> precision fallback
+  //   - alpha-to-coverage with PS-emitted alpha-test -> unsupported_state
+  if (key.alphaTestEnable) {
+    if (!(alphaTestRefNormalized >= 0.0f && alphaTestRefNormalized <= 1.0f)) {
+      return TileFfpEligibility::IneligiblePrecision;
+    }
+    if (alphaToCoverageEnabled) {
+      // Programmable-blend interaction with PS-emitted alpha-to-coverage
+      // cannot be replicated bit-identical at the tile stage.
+      return TileFfpEligibility::IneligibleUnsupportedState;
+    }
+  }
+  if (key.fogMode == FogMode::Exp || key.fogMode == FogMode::Exp2) {
+    return TileFfpEligibility::IneligiblePrecision;
+  }
+  return TileFfpEligibility::Eligible;
+}
+
+std::string makeFfpTilePixelSource(const FfpPixelKey& key,
+                                    const drawshader::ShaderSourceContext& context,
+                                    u32 colorAttachmentPixelFormat) {
+  std::ostringstream out;
+  // Tile pipelines never carry the VS->PS interpolation prelude. Emit a
+  // minimal MSL translation unit with the FfpPsConsts structure mirrored
+  // from the portable path so binding indices line up.
+  const bool useHalf = tileFfpAttachmentAcceptsHalf(colorAttachmentPixelFormat);
+  const char* tileColorType = useHalf ? "half4" : "float4";
+  out << "#include <metal_stdlib>\n";
+  out << "using namespace metal;\n";
+  // Mirror the portable FFP PS consts struct so the same per-frequency
+  // UBO layout flows through the tile binding (FfpPsConsts buffer slot).
+  out << "struct FfpPsConsts {\n";
+  out << "  float4 textureFactor;\n";
+  out << "  float alphaRef;\n";
+  out << "  float fogStart;\n";
+  out << "  float fogEnd;\n";
+  out << "  float fogDensity;\n";
+  out << "  uint alphaTestEnable;\n";
+  out << "  uint alphaTestFunc;\n";
+  out << "  uint fogMode;\n";
+  out << "};\n";
+  out << "struct TileColorData {\n";
+  out << "  " << tileColorType << " color [[color(0)]];\n";
+  out << "};\n";
+  // Tile kernel signature: imageblock<> reads/writes the attachment
+  // value in tile memory; thread_position_in_threadgroup picks the
+  // per-pixel slot. R-BACK-13.5 specifies threadgroupSizeMatchesTileSize
+  // so one thread maps to one tile lane.
+  out << "[[kernel]] void ffp_tile(\n";
+  out << "    imageblock<TileColorData, imageblock_layout_implicit> imageblock_data,\n";
+  out << "    ushort2 tid [[thread_position_in_threadgroup]],\n";
+  out << "    constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+  out << "  threadgroup_imageblock TileColorData* slot = imageblock_data.data(tid);\n";
+  // R-BACK-13.7: even when the imageblock element is `half4`, FFP
+  // arithmetic must be carried in `float` to preserve bit-identity with
+  // the portable path. We promote on read and demote on write-back.
+  out << "  float4 color = float4(slot->color);\n";
+  if (key.alphaTestEnable) {
+    out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
+    out << "    bool pass = true;\n";
+    out << "    switch (ffpPs.alphaTestFunc) {\n";
+    out << "      case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
+    out << "      case 3u: pass = color.a == ffpPs.alphaRef; break;\n";
+    out << "      case 4u: pass = color.a <= ffpPs.alphaRef; break;\n";
+    out << "      case 5u: pass = color.a > ffpPs.alphaRef; break;\n";
+    out << "      case 6u: pass = color.a != ffpPs.alphaRef; break;\n";
+    out << "      case 7u: pass = color.a >= ffpPs.alphaRef; break;\n";
+    out << "      case 8u: pass = true; break;\n";
+    out << "      default: pass = true; break;\n";
+    out << "    }\n";
+    // Tile-stage equivalent of `discard_fragment()` is to bypass the
+    // write-back: the prior tile color stays. R-BACK-13.5 explicitly
+    // forbids discard_fragment() in the tile kernel.
+    out << "    if (!pass) { return; }\n";
+    out << "  }\n";
+  }
+  if (key.fogMode != FogMode::None) {
+    // Fog blend: linear over [fogStart, fogEnd]. Computed in float
+    // (R-BACK-13.7) regardless of attachment format.
+    out << "  float fog = clamp((ffpPs.fogEnd - color.a) /\n";
+    out << "                    max(ffpPs.fogEnd - ffpPs.fogStart, 1.0e-6f),\n";
+    out << "                    0.0f, 1.0f);\n";
+    out << "  float4 fogColor = float4(0.5f, 0.5f, 0.5f, 1.0f);\n";
+    out << "  color = mix(fogColor, color, fog);\n";
+  }
+  // Demote back to imageblock element type on write.
+  if (useHalf) {
+    out << "  slot->color = half4(color);\n";
+  } else {
+    out << "  slot->color = color;\n";
+  }
+  out << "}\n";
+  out << "// ffp tile pixel hash " << key.hash << " fmt " << colorAttachmentPixelFormat << "\n";
+  (void)context;
+  return out.str();
+}
+
 u32 computeVertexDeclStride(const VertexDeclSnapshot& decl) {
   if (decl.streams[0].stride != 0) {
     return decl.streams[0].stride;

@@ -71,6 +71,12 @@ struct ShaderVariantKey {
   bool clipPlanes = false;
   bool alphaTest = false;
   bool alphaToCoverage = false;
+  // R-BACK-13.3 — tile-FFP-mode bit. Two draws with the same FFPKeyPS
+  // but different tile-mode selection compile separate pipeline states
+  // (one fragment PSO, one tile PSO). The portable-path key always sets
+  // this to false; the selector flips it on at encoder open when the
+  // pass is chosen to run on the tile path.
+  bool tileFfpMode = false;
   u32 sampleCount = 1;
   std::array<u32, core::kMaxRenderTargets> colorFormats{};
   std::array<BlendAttachmentKey, core::kMaxRenderTargets> blend{};
@@ -165,13 +171,20 @@ class Cache {
   // keys from the flat render-state values, composes a ShaderVariantKey,
   // and delegates to getOrBuildDrawPipeline. Previously lived as
   // pipelineForDraw on MetalBackendDevice (Step 3d).
+  //
+  // R-BACK-13.3 — `tileFfpMode` flips the bit on the variant key so the
+  // tile-stage pipeline lands in a separate cache entry. The encoder is
+  // responsible for the gating decision (R-BACK-13.1, see
+  // selectTileFfpForPass); this entry point only routes the boolean
+  // through the key.
   std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
   getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                   const core::BackendLimits& limits,
                                   resources::Pool& pool,
                                   core::FlatDrawStateView state,
                                   WMT::Reference<WMT::BinaryArchive>* archive,
-                                  const std::string* archivePath);
+                                  const std::string* archivePath,
+                                  bool tileFfpMode = false);
 
   std::mutex mutex{};
   PipelineMap draw{};
@@ -198,5 +211,35 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::span<const BlendAttachmentKey> blendAttachments,
                                        u32 depthFormat,
                                        u32 stencilFormat);
+
+// R-BACK-13.* — per-pass tile-shader FFP selector. Encapsulates the
+// selection flow described in design.md §13.1. Pure value transform; no
+// Metal calls. Reads the pixel-key + alpha-test reference + A2C state
+// from `state` and combines with `supportsApple3`.
+//
+// Decision tree (in order):
+//   1. !supportsApple3                                 -> Portable, GpuFamily
+//   2. PS not fixed-function                           -> Portable, NotFfp
+//   3. classifyTileFfpEligibility() -> Eligible        -> Tile, None
+//   4. classifyTileFfpEligibility() -> reason          -> Portable, reason
+//
+// `reason == None` implies the tile path was chosen.
+// `reason == GpuFamily` is recorded but design.md §13.3 does NOT bump
+// tileFfpFallbackByReason for it (it's not an "almost made it" case);
+// the encoder bumps the dedicated GpuFamily fallback counter.
+enum class TileFfpDecision : std::uint8_t { Tile, Portable };
+enum class TileFfpFallbackReason : std::uint8_t {
+  None,
+  GpuFamily,
+  NotFfp,
+  Precision,
+  UnsupportedState,
+};
+struct TileFfpSelection {
+  TileFfpDecision decision = TileFfpDecision::Portable;
+  TileFfpFallbackReason reason = TileFfpFallbackReason::GpuFamily;
+};
+
+TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3);
 
 }  // namespace dxmt9::pipeline

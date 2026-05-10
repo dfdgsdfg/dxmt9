@@ -89,3 +89,24 @@ heap_pooling_spec = executable(
 )
 
 test('dxmt9-heap-pooling-spec', heap_pooling_spec)
+
+# R-BACK-13.* — Tile-shader FFP selector + MSL emit specs.
+tile_ffp_selector_spec = executable(
+  'dxmt9-tile-ffp-selector-spec',
+  'tile_ffp_selector_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-tile-ffp-selector-spec', tile_ffp_selector_spec)
+
+tile_ffp_msl_spec = executable(
+  'dxmt9-tile-ffp-msl-spec',
+  'tile_ffp_msl_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-tile-ffp-msl-spec', tile_ffp_msl_spec)

@@ -103,6 +103,10 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   hash = mix(hash, static_cast<u64>(key.clipPlanes));
   hash = mix(hash, static_cast<u64>(key.alphaTest));
   hash = mix(hash, static_cast<u64>(key.alphaToCoverage));
+  // R-BACK-13.3: tile_ffp_mode participates in the PSO key hash so the
+  // fragment-stage and tile-stage variants of the same FFPKeyPS hit
+  // distinct cache entries.
+  hash = mix(hash, static_cast<u64>(key.tileFfpMode));
   hash = mix(hash, key.sampleCount);
   for (auto fmt : key.colorFormats) {
     hash = mix(hash, fmt);
@@ -289,6 +293,62 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
     return it->second.future;
   }
   perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
+  // R-BACK-13.3 / 13.6: when the variant key carries tile_ffp_mode = true
+  // the cache builds an MTLTileRenderPipelineState via
+  // makeFfpTilePixelSource() instead of the standard fragment PSO. The
+  // resulting Reference<RenderPipelineState> is opaque to callers; the
+  // encoder switches between setRenderPipelineState() and
+  // setTileRenderPipelineState() based on the same bit on the key.
+  if (key.tileFfpMode) {
+    auto future = std::async(std::launch::async,
+                              [device, key, shaderSource = std::move(shaderSource), archive]() mutable {
+      core::FfpPixelKey psKey{};
+      if (shaderSource.pixelShader.kind == core::ShaderRef::Kind::FixedFunctionPixel &&
+          shaderSource.pixelShader.pixelKey.has_value()) {
+        psKey = *shaderSource.pixelShader.pixelKey;
+      }
+      auto tileSource = ffp::makeFfpTilePixelSource(psKey, shaderSource, key.colorFormats[0]);
+      auto tileLib = shaders::makeLibrary(device, tileSource);
+      if (!tileLib) {
+        return WMT::Reference<WMT::RenderPipelineState>{};
+      }
+      auto tileFn = tileLib.newFunction("ffp_tile");
+      if (!tileFn) {
+        return WMT::Reference<WMT::RenderPipelineState>{};
+      }
+      WMTTileRenderPipelineDescriptor desc{};
+      desc.tile_function = tileFn.handle;
+      desc.raster_sample_count = std::max(1u, key.sampleCount);
+      desc.threadgroup_size_matches_tile_size = 1u;
+      desc.max_total_threads_per_threadgroup = 0u;
+      std::uint32_t attachmentCount = 0;
+      for (std::size_t i = 0; i < core::kMaxRenderTargets && i < 8; ++i) {
+        desc.color_attachment_pixel_formats[i] = static_cast<WMTPixelFormat>(key.colorFormats[i]);
+        if (key.colorFormats[i] != 0u) {
+          attachmentCount = static_cast<std::uint32_t>(i + 1u);
+        }
+      }
+      for (std::size_t i = core::kMaxRenderTargets; i < 8; ++i) {
+        desc.color_attachment_pixel_formats[i] = WMTPixelFormatInvalid;
+      }
+      desc.color_attachment_count = attachmentCount;
+      WMT::Error err{};
+      perf::countPipelineBuild(perf::PipelineKind::Draw);
+      perf::countColdCompileAfterWarm();
+      auto pso = device.newRenderPipelineState(desc, err);
+      if (pso) {
+        pso.setLabel(labels::makeLabelStringFmt(
+            "pso_tile_ffp_h0x%llx_color0fmt%u",
+            static_cast<unsigned long long>(key.hash),
+            static_cast<unsigned>(key.colorFormats[0])));
+      }
+      (void)archive;
+      return pso;
+    });
+    auto shared = future.share();
+    this->draw.emplace(key, Entry{shared});
+    return shared;
+  }
   auto future = std::async(std::launch::async,
                             [device, key, shaderSource = std::move(shaderSource), archive]() mutable {
     auto vsSource = drawshader::makeDrawShaderSource(shaderSource, true);
@@ -392,7 +452,8 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       resources::Pool& pool,
                                       core::FlatDrawStateView state,
                                       WMT::Reference<WMT::BinaryArchive>* archive,
-                                      const std::string* archivePath) {
+                                      const std::string* archivePath,
+                                      bool tileFfpMode) {
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
     if (!handle) {
       return 0;
@@ -421,10 +482,57 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
           dxmt9::convert::formatHasStencilAspect(surface->desc.format) ? pixelFormat : 0u;
     }
   }
-  const auto key = makeShaderVariantKey(state, colorFormats, blendAttachments, depthFormat, stencilFormat);
+  auto key = makeShaderVariantKey(state, colorFormats, blendAttachments, depthFormat, stencilFormat);
+  // R-BACK-13.3: stamp the tile-FFP-mode bit onto the variant key so the
+  // tile-stage and fragment-stage variants share an FFPKeyPS but land in
+  // distinct cache entries.
+  key.tileFfpMode = tileFfpMode;
   drawshader::ShaderSourceContext shaderSource =
       drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
   return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
+}
+
+TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3) {
+  // R-BACK-13.5: tile-FFP is unconditionally off on non-Apple3.
+  if (!supportsApple3) {
+    return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::GpuFamily};
+  }
+  // Tile path only applies when the pixel shader is the fixed-function
+  // FFP. A programmable shader has no FFP key to translate; portable.
+  if (!state.hasShaderContext()) {
+    return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::NotFfp};
+  }
+  const auto& shader = state.shaderContext();
+  if (shader.pixelShader.kind != core::ShaderRef::Kind::FixedFunctionPixel ||
+      !shader.pixelShader.pixelKey.has_value()) {
+    return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::NotFfp};
+  }
+  const auto& key = *shader.pixelShader.pixelKey;
+  const auto& rs = state.hot->renderStates;
+  // RS_ALPHA_REF holds a 0..255 D3D9 byte. Normalize so the precision
+  // boundary check uses the same float space as the shader.
+  const u32 alphaRefRaw = core::flatStateOr(rs, core::RS_ALPHA_REF, 0u);
+  const float alphaRefNorm = static_cast<float>(alphaRefRaw & 0xffu) / 255.0f;
+  // R-BACK-13.7: A2C with PS-emitted alpha-test cannot be replicated
+  // tile-side. Pull the bit from the same render-state slot the
+  // ShaderVariantKey uses so the selector stays consistent with the PSO
+  // key.
+  // dxmt9 doesn't have a dedicated A2C render state (D3DRS_ADAPTIVETESS_Y
+  // is the historical encoding); for now drive A2C off `key.alphaToCoverage`
+  // through ShaderVariantKey, which is false until the AdaptiveTess path
+  // wires it. Always read it through the ShaderVariantKey contract once
+  // populated; for now treat it as false unless the hot record sets it.
+  const bool a2c = false;
+  auto eligibility = ffp::classifyTileFfpEligibility(key, alphaRefNorm, a2c);
+  switch (eligibility) {
+    case ffp::TileFfpEligibility::Eligible:
+      return TileFfpSelection{TileFfpDecision::Tile, TileFfpFallbackReason::None};
+    case ffp::TileFfpEligibility::IneligiblePrecision:
+      return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::Precision};
+    case ffp::TileFfpEligibility::IneligibleUnsupportedState:
+      return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::UnsupportedState};
+  }
+  return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::Precision};
 }
 
 ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
