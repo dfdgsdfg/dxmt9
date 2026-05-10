@@ -9,6 +9,8 @@ referenced bin/wine exists and is executable.
 
 from __future__ import annotations
 
+import os
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,3 +86,64 @@ def load_manifest(path: Path) -> list[WineEntry]:
             )
         )
     return entries
+
+
+def resolve_wine_id(
+    *,
+    entries: list[WineEntry],
+    cli_arg: str | None,
+    env_var: str | None,
+    catalogue_value: str | None,
+    app_name: str,
+) -> tuple[WineEntry, str]:
+    """Resolve a wine_id by priority CLI > env > CATALOGUE.
+
+    Returns (WineEntry, source_label_for_diagnostics).
+    Raises ManifestError if nothing resolves or the id is unknown.
+    """
+    by_id = {e.id: e for e in entries}
+    candidates = (
+        ("--wine-id", cli_arg),
+        ("DXMT_EXPERIMENT_WINE_ID", env_var),
+        (f"CATALOGUE [[{app_name}]].wine_id", catalogue_value),
+    )
+    for source, value in candidates:
+        if not value:
+            continue
+        entry = by_id.get(value)
+        if entry is None:
+            raise ManifestError(
+                f"{source}={value!r} not found in experiments/wine/manifest.toml"
+            )
+        return entry, source
+    raise ManifestError(
+        f"app {app_name!r}: no wine_id resolved (CLI, env, and CATALOGUE all empty)"
+    )
+
+
+def _cli() -> int:
+    import argparse
+    p = argparse.ArgumentParser(description="Inspect the Wine manifest.")
+    p.add_argument(
+        "--manifest",
+        type=Path,
+        default=REPO_ROOT / "experiments" / "wine" / "manifest.toml",
+        help="manifest path (default: experiments/wine/manifest.toml)",
+    )
+    p.add_argument("--list", action="store_true", help="list all entries")
+    args = p.parse_args()
+    try:
+        entries = load_manifest(args.manifest)
+    except ManifestError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if args.list:
+        for e in entries:
+            ok = e.path.exists() and (e.path / "bin").exists()
+            mark = "OK" if ok else "MISSING"
+            print(f"{mark:8} {e.id:30} {e.source:12} {e.variant:10} {e.path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_cli())
