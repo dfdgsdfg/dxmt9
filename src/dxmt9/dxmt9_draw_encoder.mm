@@ -1386,7 +1386,11 @@ bool encodeDraw(EncodeContext& ctx,
   u32 drawVertexStreamOffset = 0;
   u32 drawVertexStreamStride = 0;
   i32 drawVertexBaseIndex = 0;
-  if (ffLayout) {
+  // Branch on fixedFunctionPath (which respects the bound shader context),
+  // not just ffLayout. A user-bound programmable VS with an FFP-decodable
+  // vertex declaration must take the programmable path; gating on ffLayout
+  // alone would force such draws through the FFP setup below.
+  if (fixedFunctionPath && ffLayout) {
     if (!vertexBuffer) {
       if (traceEncode) {
         emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-vertex-buffer");
@@ -1630,7 +1634,7 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
   }
-  if (vertexBuffer && !ffLayout) {
+  if (vertexBuffer && !fixedFunctionPath) {
     const u64 ffTraceTex0 = debug::fixedFunctionTraceTextureHandle();
     const bool forceTrace =
         ffTraceTex0 != 0 && hot.textures[0] && hot.textures[0].value == ffTraceTex0;
