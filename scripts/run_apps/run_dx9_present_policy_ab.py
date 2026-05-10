@@ -141,6 +141,79 @@ BACKEND_COUNTER_FIELDS = [
 
 COUNTER_FIELDS = PRESENT_COUNTER_FIELDS + BACKEND_COUNTER_FIELDS
 
+# V1 boundary-isolation counter sets per docs/research/boundary-benchmarks.md.
+# When --boundary is passed, COUNTER_FIELDS is restricted to the matching
+# subset so summary.md / summary.json reflect only the stage being measured
+# and a regression at one boundary cannot be confused with another.
+BOUNDARY_COUNTER_FIELDS = {
+    # B1 — PE → CommandRecorder (native micro-bench owns this; perf
+    # probe view is just record-volume sentinels).
+    "B1": [
+        "chunk_admit",
+        "submit_draw_cpu_ms",
+        "draw_calls",
+    ],
+    # B2 — PE → unix bridge (W1-A bridge-empty probe).
+    "B2": [
+        "chunk_admit",
+        "chunk_reject",
+        "bridge_commit_latency_ns",
+        "bridge_commit_latency_max_ns",
+        "bridge_commit_latency_p50_ns",
+        "bridge_commit_latency_p95_ns",
+        "bridge_commit_latency_p99_ns",
+    ],
+    # B3 — unix CommandQueue + sub-CB chain (W1-B encode-replay,
+    # W2 chain-parametric).
+    "B3": [
+        "command_buffers",
+        "sub_command_buffers",
+        "chunk_subcb_count_max",
+        "queue_writer_wait_ms",
+        "queue_commit_wait_ms",
+        "ring_arena_heap_fallback_count",
+        "ring_arena_heap_fallback_bytes",
+    ],
+    # B4 — encode thread → Metal CB (W1-B encode-replay,
+    # W2 chain-parametric, plus the 4 existing ffp/multi-rt/depth/skeletal).
+    "B4": [
+        "encode_chunk_calls",
+        "encode_chunk_cpu_ms",
+        "encode_chunk_cpu_max_ms",
+        "encode_draw_cpu_ms",
+        "encode_draw_pipeline_lookup_cpu_ms",
+        "encode_draw_uniform_build_cpu_ms",
+        "encode_draw_fvf_decode_cpu_ms",
+        "encode_draw_stream_bind_cpu_ms",
+        "encode_draw_issue_cpu_ms",
+        "render_pass_begin",
+        "render_pass_end",
+        "render_pass_load_action_load",
+        "render_pass_load_action_clear",
+        "render_pass_load_action_dontcare",
+        "render_pass_store_action_store",
+        "render_pass_store_action_dontcare",
+        "render_pass_tile_preservation_bytes",
+        "uniform_vs_consts_calls",
+        "uniform_ps_consts_calls",
+        "uniform_ffp_vs_calls",
+        "uniform_ffp_ps_calls",
+        "uniform_volatile_pushes",
+    ],
+    # B5 — Metal driver → GPU (M4 GPU CB time + M5 errors).
+    "B5": [
+        "gpu_command_buffer_time_ms",
+        "gpu_command_buffer_time_max_ms",
+        "gpu_command_buffer_time_samples",
+        "gpu_command_buffer_time_p50_ms",
+        "gpu_command_buffer_time_p95_ms",
+        "gpu_command_buffer_time_p99_ms",
+        "gpu_command_buffer_errors",
+    ],
+    # B6 — GPU → Presenter (W1-D present-loop probe + present-policy A/B).
+    "B6": PRESENT_COUNTER_FIELDS,
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -170,6 +243,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wine-root", type=Path, default=DEFAULT_WINE_ROOT, help="DXMT Wine root.")
     parser.add_argument("--tag", default="", help="Output tag. Default: timestamp.")
     parser.add_argument("--keep-prefixes", action="store_true", help="Keep temporary Wine prefixes.")
+    parser.add_argument(
+        "--boundary",
+        choices=sorted(BOUNDARY_COUNTER_FIELDS),
+        default=None,
+        help=(
+            "V1 boundary-isolation mode. Restricts the summary to the "
+            "counter set owned by the named pipeline boundary "
+            "(B1=PE recorder, B2=bridge, B3=queue, B4=encoder, B5=GPU, "
+            "B6=presenter). See docs/research/boundary-benchmarks.md."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -288,14 +372,16 @@ def run_one(
     return result
 
 
-def aggregate(results: list[dict[str, object]], apps: list[str], modes: list[str]) -> list[dict[str, object]]:
+def aggregate(results: list[dict[str, object]], apps: list[str], modes: list[str],
+              counter_fields: list[str] | None = None) -> list[dict[str, object]]:
+    fields = counter_fields if counter_fields is not None else COUNTER_FIELDS
     rows: list[dict[str, object]] = []
     for app in apps:
         for mode in modes:
             matching = [r for r in results if r.get("app") == app and r.get("mode") == mode]
             fps_values: list[float] = []
             elapsed_values: list[float] = []
-            counters_by_field: dict[str, list[float]] = {field: [] for field in COUNTER_FIELDS}
+            counters_by_field: dict[str, list[float]] = {field: [] for field in fields}
             pass_count = 0
             for result in matching:
                 if result.get("status") == "pass":
@@ -310,7 +396,7 @@ def aggregate(results: list[dict[str, object]], apps: list[str], modes: list[str
                         elapsed_values.append(elapsed)
                 counters = result.get("dxmt9_perf_counters")
                 if isinstance(counters, dict):
-                    for field in COUNTER_FIELDS:
+                    for field in fields:
                         value = numeric(counters.get(field))
                         if value is not None:
                             counters_by_field[field].append(value)
@@ -528,7 +614,10 @@ def main() -> int:
     finally:
         restore_trace_files(snapshots)
 
-    summary_rows = aggregate(results, apps, modes)
+    counter_fields = (
+        BOUNDARY_COUNTER_FIELDS[args.boundary] if args.boundary else None
+    )
+    summary_rows = aggregate(results, apps, modes, counter_fields=counter_fields)
     violations = evaluate_cv_gate(summary_rows, args.cv_tolerance)
     payload: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -536,6 +625,7 @@ def main() -> int:
         "apps": apps,
         "modes": modes,
         "runs_per_app_mode": args.runs,
+        "boundary": args.boundary,
         "cv_tolerance": args.cv_tolerance,
         "cv_violations": violations,
         "results": results,

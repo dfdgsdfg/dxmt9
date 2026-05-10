@@ -446,6 +446,24 @@ run_timeout_sec = 60
 capture_frame = 120
 reference_optional = true
 
+[[app]]
+name = "dxmt9-perf-chain-parametric"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/ChainParametricProbe/ChainParametricProbe.exe"
+launcher = "experiments/launchers/dxmt9_perf_probe_chain_parametric.sh"
+reference = "experiments/references/dxmt9-perf-chain-parametric.png"
+features = ["performance", "synthetic", "chain-parametric", "sub-cb-chain", "boundary-b3-b4", "perf-probe"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 ChainParametric"
+capture_delay_sec = 2.0
+run_timeout_sec = 60
+capture_frame = 0
+reference_optional = true
+
 [apps.dxmt9-perf-ffp-only.expected_counters]
 # At least 100 draws total, with at least one FFP VS+PS uniform call
 # (i.e. the FFP shader path actually ran). The HLSL VS uniform path must
@@ -538,4 +556,21 @@ cx_bottle = "Heroic"
 # to be meaningful). gpu_command_buffer_errors must stay at 0 — any
 # GPU fault during a perf probe is a regression (M5 L3 sentinel).
 present_encoded = { min = 500 }
+gpu_command_buffer_errors = { max = 0 }
+
+[apps.dxmt9-perf-chain-parametric.expected_counters]
+# V1 audit (e) — sub-CB chain sensitivity probe (B3+B4). The probe is
+# designed to be re-run under different DXMT9_MID_CHUNK_COMMIT_POLICY /
+# DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS combinations from the W4
+# A/B harness, so chunk_subcb_count_max is intentionally NOT gated here
+# (its value depends on the cap policy under test, which is OFF by
+# default). Conservative gates only:
+# - command_buffers >= 1 proves chunks reached the encode thread and at
+#   least one MTLCommandBuffer was built.
+# - render_pass_begin >= 1 proves the chain itself ran (each chain RT
+#   switch should produce a non-Final flushRender → renderPassBegin).
+# - gpu_command_buffer_errors == 0 matches the M5 L3 sentinel
+#   convention used by all perf probes.
+command_buffers = { min = 1 }
+render_pass_begin = { min = 1 }
 gpu_command_buffer_errors = { max = 0 }
