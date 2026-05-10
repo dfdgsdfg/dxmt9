@@ -2,6 +2,7 @@
 #include "../wineunixlib.h"
 #include "../../dxmt9/dxmt9_provider_shader_handlers.hpp"
 #include "../winemetal_thunks.hpp"
+#include "dxmt9_bridge_ops.generated.h"
 
 // Reserved ABI-hash handler — slot 4 of the unified dispatch table. Returns
 // the codegen-time dxmt9::bridge::kBridgeAbiHash so the PE-side DllMain in
@@ -66,12 +67,15 @@ static_assert(DXMT9_WINEMETAL_BRIDGE_OP_BASE == 5,
 // and the kBridgeAbiHash handshake in winemetal_abi_check.cpp catches
 // codegen drift before any other call lands. A bogus opcode arriving
 // past those defenses (e.g., a future bug in PE-side dispatch) would
-// reach an uninitialized slot. The cheapest additional defense is a
-// codegen sentinel `dxmt9c_bridge_op_count` followed by a
-// runtime-or-static_assert against the array size; that requires a
-// codegen change and is tracked as a follow-up to this hardening
-// commit (see specs/gap.md). For now, the dense static_asserts below
-// are the build-time guard.
+// reach an uninitialized slot. A runtime bounds check is not feasible
+// here — Wine performs the indexing into __wine_unix_call_funcs[] in
+// ntdll before any code in this translation unit runs. The build-time
+// guard is two-layered: the dense slot-index static_asserts above pin
+// the reserved-region layout, and the codegen sentinel
+// `BridgeOpcode::dxmt9c_bridge_op_count` plus the static_assert just
+// below the array definition pin the total array length against the
+// generated opcode set, so adding/removing a dxmt9c_* op without
+// updating winemetal_unix.cpp is rejected at build time.
 extern "C" DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_funcs[] = {
     &dxmt9_winemetal_compile_shader_unix_call,      // slot 0
     &dxmt9_winemetal_shader_source_size_unix_call,  // slot 1
@@ -83,6 +87,19 @@ extern "C" DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_funcs[] = {
 #undef DXMT9_BRIDGE_UNIX_ENTRY
 };
 
+// Codegen-sentinel guard: the array above must have exactly
+// (DXMT9_WINEMETAL_BRIDGE_OP_BASE + kBridgeOpcodeCount) entries — i.e.
+// 5 reserved slots (4 shader handlers + 1 ABI-hash) plus one slot per
+// generated dxmt9c_* bridge op. The sentinel
+// `BridgeOpcode::dxmt9c_bridge_op_count` is emitted by
+// scripts/codegen/gen_wine_bridge.py as the last enumerator of
+// `BridgeOpcode`, so its underlying value is exactly the expected
+// array length (DXMT9_WINEMETAL_BRIDGE_OP_BASE + N).
+static_assert(
+    sizeof(__wine_unix_call_funcs) / sizeof(__wine_unix_call_funcs[0])
+        == static_cast<unsigned>(dxmt9::bridge::BridgeOpcode::dxmt9c_bridge_op_count),
+    "winemetal unix dispatch array size mismatch — codegen and unix.cpp out of sync");
+
 extern "C" DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_wow64_funcs[] = {
     &dxmt9_winemetal_compile_shader_unix_call,      // slot 0
     &dxmt9_winemetal_shader_source_size_unix_call,  // slot 1
@@ -93,5 +110,10 @@ extern "C" DECLSPEC_EXPORT const unixlib_entry_t __wine_unix_call_wow64_funcs[] 
 #include "dxmt9_wine_unix_entries.generated.h"
 #undef DXMT9_BRIDGE_UNIX_ENTRY
 };
+
+static_assert(
+    sizeof(__wine_unix_call_wow64_funcs) / sizeof(__wine_unix_call_wow64_funcs[0])
+        == static_cast<unsigned>(dxmt9::bridge::BridgeOpcode::dxmt9c_bridge_op_count),
+    "winemetal unix wow64 dispatch array size mismatch — codegen and unix.cpp out of sync");
 
 #endif

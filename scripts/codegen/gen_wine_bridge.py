@@ -314,6 +314,12 @@ def write_ops_header(path: pathlib.Path, protos: list[Proto]) -> None:
             lines.append(f"  {proto.name} = DXMT9_WINEMETAL_BRIDGE_OP_BASE,")
         else:
             lines.append(f"  {proto.name},")
+    # Sentinel — must be last. Takes the value of the previous enumerator + 1,
+    # giving (DXMT9_WINEMETAL_BRIDGE_OP_BASE + kBridgeOpcodeCount). The unix-side
+    # __wine_unix_call_funcs[] dispatch table static_asserts its size against
+    # this sentinel so codegen drift between the PE-side opcode set and the
+    # unix-side handler array is caught at build time.
+    lines.append("  dxmt9c_bridge_op_count,")
     lines.append("};")
     lines.append("")
     for proto in protos:
