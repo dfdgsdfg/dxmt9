@@ -593,6 +593,39 @@ std::vector<u32> makePs30RelativeAddressingBytecode() {
   };
 }
 
+// vs_2_0 shader whose `def cN, ...` literal operands accidentally have
+// bit 13 set in their float bit pattern. Without the per-opcode
+// rel-addr inhibit, the parser would treat the literal as a register
+// with relative addressing, consume the next DWORD as a rel-addr
+// token, and shift every subsequent instruction (yielding garbage
+// modifiers / opcodes downstream). Source modifier bits 24-27 of the
+// shifted token frequently land on `0xF` — the "unsupported D3D
+// source modifier 15" deterministic throw is the canonical surface.
+std::vector<u32> makeVs20DefLiteralWithRelAddrBitBytecode() {
+  using namespace dxmt9::d3d9bc;
+  // Float literal bit pattern with bit 13 set: 0x3F802000 ≈ 1.001f.
+  // Constructed so the literal cannot be confused with a register
+  // token's rel-addr bit on a correct parser.
+  constexpr u32 kFloatBit13Set = 0x3F802000u;
+  return {
+      makeVersionToken(true, 2, 0),
+      // def c0, 1.001, 0, 0, 0  (operands 1..4 are float literals; op 1
+      // has bit 13 set in its IEEE 754 bit pattern).
+      makeInstructionToken(kD3DSIO_DEF, 5),
+      makeDstToken(kD3DSPR_CONST, 0),
+      kFloatBit13Set,
+      0u,
+      0u,
+      0u,
+      // mov oPos, c0 — the well-formed second instruction proves the
+      // parser remained aligned across the DEF.
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      kD3DSIO_END,
+  };
+}
+
 // vs_2_0 shader that loads a bone index into a0 from v3 (BLENDINDICES)
 // and reads a constant via `c[a0+5]` — the canonical D3D9 hardware
 // skinning shape. Used to validate the parser consumes the rel-addr
@@ -884,6 +917,37 @@ void testPs30RelativeAddressingThrowsDeterministically() {
       "ps_3_0 destination-relative-addressing bytecode reports deterministic unsupported contract");
 }
 
+void testVs20DefLiteralWithRelAddrBitDoesNotDriftParser() {
+  using namespace dxmt9::d3d9bc;
+  namespace translator_test = dxmt9::translator::test;
+
+  DrawDesc desc{};
+  const auto module = translator_test::decodeD3DBytecodeForTest(
+      makeShader(makeVs20DefLiteralWithRelAddrBitBytecode()), true, desc);
+
+  // Two well-formed instructions: DEF (5 operands), MOV (2 operands).
+  // If the parser misreads the bit-13-set float literal as a register
+  // with rel-addr, it consumes an extra DWORD and the MOV either
+  // disappears or decodes as a different opcode — either way the
+  // count or downstream opcode would drift.
+  checkEqual(module.instructions.size(), size_t{2},
+             "DEF literal with bit 13 must not consume a phantom rel-addr DWORD");
+  checkEqual(module.instructions[0].opcode, kD3DSIO_DEF,
+             "DEF instruction parses unchanged when its float literal has bit 13 set");
+  checkEqual(module.instructions[0].operands.size(), size_t{5},
+             "DEF preserves its 5 operands across the inhibited rel-addr probe");
+  checkEqual(module.instructions[1].opcode, kD3DSIO_MOV,
+             "MOV after DEF stays aligned — no parser drift");
+  // Literal positions on DEF must NOT carry rel-addr tokens, even
+  // when the literal's bit 13 happens to be set.
+  for (size_t i = 1; i < module.instructions[0].relAddrTokens.size(); ++i) {
+    if (module.instructions[0].relAddrTokens[i] != 0u) {
+      fail("DEF literal operand position " + std::to_string(i) +
+           " spuriously captured a rel-addr token");
+    }
+  }
+}
+
 void testVs20IndexedConstSourceParserConsumesRelAddrDword() {
   using namespace dxmt9::d3d9bc;
   namespace translator_test = dxmt9::translator::test;
@@ -963,6 +1027,7 @@ int main() {
     testPs30TextureLodOpcodeLoweringContracts();
     testD3DBCFixedOperandCountDecodeContract();
     testPs30RelativeAddressingThrowsDeterministically();
+    testVs20DefLiteralWithRelAddrBitDoesNotDriftParser();
     testVs20IndexedConstSourceParserConsumesRelAddrDword();
     testVs20IndexedConstSourceLowersToClampedConstAccess();
   } catch (const TestFailure& error) {

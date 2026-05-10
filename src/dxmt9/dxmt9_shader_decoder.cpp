@@ -811,11 +811,35 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
     instruction.predicated = ((token >> 28) & 0x1u) != 0;
     instruction.operands.reserve(operandCount);
     instruction.relAddrTokens.assign(operandCount, 0u);
-    // D3D9 operand encoding: when an operand token has the rel-addr bit
-    // set (bit 13), an additional DWORD immediately follows that encodes
-    // the address-register source. The DWORD is NOT counted in the
-    // operandCount field of the instruction header. Read N operands and
-    // consume one extra DWORD per operand that carries a rel-addr bit.
+    // D3D9 operand encoding: when an *operand* token has the rel-addr
+    // bit (bit 13) set, an additional DWORD immediately follows that
+    // encodes the address-register source. The DWORD is NOT counted in
+    // the operandCount field of the instruction header. Read N
+    // operands and consume one extra DWORD per operand that carries a
+    // rel-addr bit.
+    //
+    // Caveat: a handful of opcodes carry *literal* operands (immediate
+    // floats / ints) instead of register tokens. The bit-13 rel-addr
+    // probe is only meaningful for register operands; on a literal
+    // value it would mistakenly consume the next word and shift every
+    // subsequent instruction. The inhibit list below mirrors the D3D9
+    // spec's per-opcode operand layout.
+    auto operandIsRegister = [](u32 op, u32 i) {
+      switch (op) {
+        case kD3DSIO_DEF:
+        case kD3DSIO_DEFI:
+          return i == 0;  // [dst, f32 x4] / [dst, i32 x4]
+        case kD3DSIO_DEFB:
+          return i == 0;  // [dst, bool]
+        case kD3DSIO_LABEL:
+        case kD3DSIO_CALL:
+          return false;   // label index only
+        case kD3DSIO_CALLNZ:
+          return i != 0;  // label index, then predicate src
+        default:
+          return true;
+      }
+    };
     for (u32 i = 0; i < operandCount; ++i) {
       if (offset + sizeof(u32) > bytes.size()) {
         throw std::runtime_error("truncated D3D instruction operand");
@@ -824,7 +848,7 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
       offset += sizeof(u32);
       module.words.push_back(operandToken);
       instruction.operands.push_back(operandToken);
-      if (tokenHasRelativeAddressing(operandToken)) {
+      if (operandIsRegister(opcode, i) && tokenHasRelativeAddressing(operandToken)) {
         if (offset + sizeof(u32) > bytes.size()) {
           throw std::runtime_error("truncated D3D rel-addr operand");
         }

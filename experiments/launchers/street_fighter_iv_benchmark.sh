@@ -32,5 +32,5 @@ if [[ -n "${DXMT_EXPERIMENT_CX_BOTTLE:-}" ]]; then
     wait "$wine_pid" || true
   )
 else
-  exp_run_wine_binary
+  exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" -benchmark
 fi
