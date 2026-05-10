@@ -14,12 +14,32 @@ import sys
 import tempfile
 import time
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from PIL import Image
+
+# Make `scripts.wine.*` importable whether the harness is invoked as a script
+# or as a module. Mirrors the sys.path bootstrap pattern used in
+# scripts/wine/bootstrap_prefix.py so this file can be run directly.
+_REPO_ROOT_GUESS = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT_GUESS) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT_GUESS))
+
+from scripts.wine.resolve import (  # noqa: E402
+    ManifestError,
+    WineEntry,
+    load_manifest,
+    resolve_wine_id,
+)
+from scripts.wine.bootstrap_prefix import (  # noqa: E402
+    APPS_3RD_ROOT,
+    PREFIXES_ROOT,
+    BootstrapResult,
+    bootstrap as bootstrap_prefix,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +51,7 @@ DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
 DEFAULT_TEMP_PREFIX_ROOT = REPO_ROOT / "tmp" / "prefixes"
 DEFAULT_MINGW_BIN_DIR = Path.home() / "llvm-mingw" / "x86_64-w64-mingw32" / "bin"
 DEFAULT_WOW64_MINGW_BIN_DIR = Path.home() / "llvm-mingw" / "i686-w64-mingw32" / "bin"
+DEFAULT_MANIFEST_PATH = REPO_ROOT / "experiments" / "wine" / "manifest.toml"
 
 SSIM_THRESHOLD = 0.90
 BLACK_LUMA_THRESHOLD = 8.0
@@ -69,6 +90,12 @@ class ExperimentApp:
     wine_dll_overrides: str | None = None
     cx_bottle: str | None = None
     build_script: str | None = None
+    # Wine manifest integration (R-RT-6). When wine_id is set, the harness
+    # resolves the wine root via experiments/wine/manifest.toml and bootstraps
+    # experiments/prefixs/<name>/ instead of the legacy temp-prefix path.
+    wine_id: str | None = None
+    wine_alternatives: list[str] = field(default_factory=list)
+    install_drive_letter: str = "d"
     # Optional probe-level expected-range gate. Each entry maps a counter
     # key (matching kCounterTable in src/dxmt9/dxmt9_perf_counters.cpp) to
     # an inclusive {min, max} range. Either bound may be omitted. Absent
@@ -115,6 +142,9 @@ class ExperimentApp:
             wine_dll_overrides=data.get("wine_dll_overrides"),
             cx_bottle=data.get("cx_bottle"),
             build_script=data.get("build_script"),
+            wine_id=data.get("wine_id"),
+            wine_alternatives=list(data.get("wine_alternatives") or []),
+            install_drive_letter=data.get("install_drive_letter", "d"),
         )
 
     def attach_expected_counters(self, raw: dict[str, Any] | None) -> None:
@@ -581,7 +611,78 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         if path.exists() or path.is_symlink():
             path.unlink()
 
-    if args.prefix:
+    # Resolve a manifest entry first when the app or CLI requests one. This
+    # implements R-RT-6.1 (CLI > env > CATALOGUE) and feeds both the prefix
+    # selection (R-RT-4) and the wine_root/wine_bin resolution below.
+    manifest_entry: WineEntry | None = None
+    manifest_source: str | None = None
+    cli_wine_id = getattr(args, "wine_id", None)
+    if app.wine_id or cli_wine_id:
+        manifest_path = getattr(args, "wine_manifest", None) or DEFAULT_MANIFEST_PATH
+        try:
+            entries = load_manifest(manifest_path)
+            manifest_entry, manifest_source = resolve_wine_id(
+                entries=entries,
+                cli_arg=cli_wine_id,
+                env_var=os.environ.get("DXMT_EXPERIMENT_WINE_ID"),
+                catalogue_value=app.wine_id,
+                app_name=app.name,
+            )
+        except ManifestError as exc:
+            print(f"[runtime] manifest error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        print(
+            f"[runtime] wine resolved via {manifest_source}: id={manifest_entry.id} "
+            f"path={manifest_entry.path}",
+            file=sys.stderr,
+        )
+        # R-RT-6.3: warn when a non-vanilla variant is selected without an
+        # explicit alternatives entry or --allow-non-vanilla override.
+        if manifest_entry.variant != "vanilla":
+            allow = getattr(args, "allow_non_vanilla", False)
+            if manifest_entry.id not in app.wine_alternatives and not allow:
+                print(
+                    f"[runtime] WARNING: wine variant={manifest_entry.variant!r} "
+                    f"is not vanilla and id {manifest_entry.id!r} is not in "
+                    f"[[{app.name}]].wine_alternatives. "
+                    f"See agents/rules/test_wild.rules.md.",
+                    file=sys.stderr,
+                )
+
+    # Prefix selection. When a manifest entry was resolved, we use the
+    # spec-defined experiments/prefixs/<name>/ path and bootstrap on demand
+    # (R-RT-4). Otherwise the legacy temp-prefix logic is preserved exactly.
+    prefix_bootstrap_payload: dict[str, Any] = {
+        "ran": False,
+        "mmap_errors": 0,
+        "degraded": False,
+    }
+    if manifest_entry is not None:
+        if args.prefix:
+            prefix = Path(args.prefix).expanduser().resolve()
+        else:
+            prefix = PREFIXES_ROOT / app.name
+        temp_prefix = False
+        rebuild_prefix = getattr(args, "rebuild_prefix", False)
+        needs_bootstrap = rebuild_prefix or not (prefix / "system.reg").exists()
+        if needs_bootstrap and not args.prefix:
+            boot: BootstrapResult = bootstrap_prefix(
+                name=app.name,
+                wine=manifest_entry,
+                drive_letter=app.install_drive_letter,
+                rebuild=rebuild_prefix,
+            )
+            prefix_bootstrap_payload = {
+                "ran": True,
+                "mmap_errors": boot.mmap_errors,
+                "degraded": boot.degraded,
+            }
+            print(
+                f"[runtime] prefix bootstrap: mmap_errors={boot.mmap_errors}"
+                f"{' (DEGRADED)' if boot.degraded else ''}",
+                file=sys.stderr,
+            )
+    elif args.prefix:
         prefix = Path(args.prefix).expanduser().resolve()
         temp_prefix = False
     else:
@@ -616,11 +717,28 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             previous_signal_handlers[sig] = signal.getsignal(sig)
             signal.signal(sig, handle_termination)
 
-    wine_root = Path(args.wine_root).expanduser().resolve() if args.wine_root else detect_heroic_wine_root()
+    # Wine root / bin resolution. Manifest entries take precedence; legacy
+    # apps fall back to the existing detect_heroic_wine_root() / resolve_wine_bin()
+    # path so no fixture-side change is required.
+    if manifest_entry is not None:
+        wine_root = manifest_entry.path
+    else:
+        wine_root = (
+            Path(args.wine_root).expanduser().resolve()
+            if args.wine_root
+            else detect_heroic_wine_root()
+        )
     try:
         if app.requires_wine and wine_root is None and not args.wine_bin:
             raise FileNotFoundError("no Wine root supplied and Heroic runtime auto-detect failed")
-        wine_bin = Path(args.wine_bin).expanduser().resolve() if args.wine_bin else resolve_wine_bin(wine_root)  # type: ignore[arg-type]
+        if manifest_entry is not None and not args.wine_bin:
+            wine_bin = manifest_entry.wine_bin()
+        else:
+            wine_bin = (
+                Path(args.wine_bin).expanduser().resolve()
+                if args.wine_bin
+                else resolve_wine_bin(wine_root)  # type: ignore[arg-type]
+            )
         pe_build_dir = Path(args.pe_build_dir).expanduser().resolve() if args.pe_build_dir else DEFAULT_PE_BUILD_DIR
         runtime_pe_build_dir = (
             Path(args.runtime_pe_build_dir).expanduser().resolve()
@@ -728,6 +846,16 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             "timed_out": timed_out,
             "performance": performance,
         }
+        # R-RT-6.2: record the resolved manifest entry and the prefix
+        # bootstrap result for diagnostic cross-reference.
+        if manifest_entry is not None:
+            result["wine"] = {
+                "id": manifest_entry.id,
+                "source": manifest_entry.source,
+                "variant": manifest_entry.variant,
+                "path": str(manifest_entry.path),
+            }
+            result["prefix_bootstrap"] = prefix_bootstrap_payload
         dxmt9_perf_counters = extract_dxmt9_perf_counters(log_path)
         if dxmt9_perf_counters:
             result["dxmt9_perf_counters"] = dxmt9_perf_counters
@@ -852,6 +980,27 @@ def main() -> int:
     run_parser.add_argument("name", help="Catalogue entry name")
     run_parser.add_argument("--wine-root", help="Wine runtime root")
     run_parser.add_argument("--wine-bin", help="Wine executable path")
+    run_parser.add_argument(
+        "--wine-id",
+        help="Wine manifest id from experiments/wine/manifest.toml. "
+             "Overrides CATALOGUE [[app]].wine_id and DXMT_EXPERIMENT_WINE_ID.",
+    )
+    run_parser.add_argument(
+        "--wine-manifest",
+        type=Path,
+        default=None,
+        help="Override default manifest path (experiments/wine/manifest.toml).",
+    )
+    run_parser.add_argument(
+        "--rebuild-prefix",
+        action="store_true",
+        help="Delete experiments/prefixs/<name>/ and re-bootstrap.",
+    )
+    run_parser.add_argument(
+        "--allow-non-vanilla",
+        action="store_true",
+        help="Suppress the warning when wine variant != vanilla (R-RT-6.3).",
+    )
     run_parser.add_argument("--prefix", help="Wine prefix path")
     run_parser.add_argument("--binary", help="Override the binary path for this run")
     run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
