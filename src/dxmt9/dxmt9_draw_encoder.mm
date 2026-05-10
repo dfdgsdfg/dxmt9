@@ -1034,6 +1034,16 @@ bool encodeDraw(EncodeContext& ctx,
     // Tile, and the standard fragment PSO otherwise. The variant key
     // already records this bit, so the two variants land in distinct
     // cache entries.
+    // R-BACK-12.22..12.26 — the cache also accepts an `argbufHybridMode`
+    // variant bit, but we deliberately omit it here. The Stage 2 MSL
+    // prelude is incomplete (the emitter still mirrors Stage 1 binds)
+    // and propagating the live bit flips every Apple-Silicon PSO onto
+    // the unfinished Stage 2 path, regressing the shader corpus suite.
+    // The encoder keeps Stage 1 slot 0/3 binds alongside the argbuf
+    // population (see the dirty-bit retention note ~30 lines below) so
+    // a Stage-1-compiled PSO is correct for both encoder modes today.
+    // When the Stage 2 emitter lands (R-BACK-12.24 P1), thread
+    // `argbufHybridMode` through here.
     auto pipeline = ctx.cache.getOrBuildDrawPipelineForState(
         ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
         ctx.shaderArchivePath, tileFfpMode).get();
