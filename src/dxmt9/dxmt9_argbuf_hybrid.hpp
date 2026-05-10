@@ -18,10 +18,17 @@
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_shader_sources.hpp"
+#include "dxmt9_uniform_dirty.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+
+namespace dxmt9 {
+class CommandQueue;
+namespace resources { struct Pool; }
+namespace core { struct FlatDrawStateView; }
+}  // namespace dxmt9
 
 namespace dxmt9::argbuf_hybrid {
 
@@ -91,5 +98,126 @@ struct ArgbufRegionOffsets {
   u64 samplerSlot0Offset = 0;
   u64 totalSize = 0;
 };
+
+// R-BACK-12.22 — per-CommandQueue-owned MTLArgumentEncoder. Built once
+// at queue construction from the descriptor table returned by
+// `buildArgumentDescriptors()`. The encoder's `encodedLength()` and
+// `alignment()` are queried on init and cached so the per-encoder
+// `openArgbuf` reservation is a single struct-field read on the hot
+// path. Lifetime: cleared automatically on `WMT::Reference` dtor when
+// the queue tears down.
+//
+// `init(WMT::Device)` is the production entry; `initForTest` lets a
+// CPU-only spec stand the resource up with a synthetic encodedLength /
+// alignment without standing up Metal — used by the populator spec to
+// assert the `openArgbuf().length` reservation matches the encoder's
+// reported size.
+class ArgbufEncoderResource {
+ public:
+  void init(WMT::Device device);
+  void initForTest(u64 encodedLength, u64 alignment) noexcept;
+
+  bool initialized() const noexcept { return initialized_; }
+  u64 encodedLength() const noexcept { return encodedLength_; }
+  u64 alignment() const noexcept { return alignment_; }
+  WMT::ArgumentEncoder& argumentEncoder() noexcept { return encoder_; }
+
+ private:
+  WMT::Reference<WMT::ArgumentEncoder> encoder_{};
+  u64 encodedLength_ = 0;
+  // Default to 16 B — matches the constant-block alignment of the four
+  // [[id(0..3)]] cbuf entries; production `init` overwrites with the
+  // value returned by `MTLArgumentEncoder::alignment()`.
+  u64 alignment_ = 16;
+  bool initialized_ = false;
+};
+
+// R-BACK-12.24 — per-encoder argbuf storage handle. `storage` is the
+// transient ring buffer the queue handed out; `offset` is where the
+// encoder bound the argument buffer; `length` is the number of bytes
+// reserved for this argbuf (encoderResource.encodedLength()). Empty
+// instance (length == 0) means open failed (transient ring exhausted).
+struct PopulatedArgbuf {
+  WMT::Buffer storage{};
+  u64 offset = 0;
+  u64 length = 0;
+
+  explicit operator bool() const noexcept {
+    return static_cast<bool>(storage) && length != 0;
+  }
+};
+
+// Pure value-transform: bytes the encoder would re-write for the given
+// dirty mask. Sums the four per-frequency host-struct sizes for the
+// matching kVsAny / kPsAny / kFfpVsAny / kFfpPsAny categories. Returns
+// 0 when no relevant bit is set (steady-state).
+//
+// Used by:
+//   - the encoder's mid-pass argbuf rewrite to feed
+//     `perf::countArgbufHybridBytes`
+//   - the populator spec to verify "no dirty bits ⇒ 0 bytes".
+u64 dirtyBytesEstimate(const uniform::DirtyState& dirty) noexcept;
+
+// R-BACK-12.24 — open a per-encoder argbuf. Reserves
+// `encoderResource.encodedLength()` bytes from the queue's transient
+// ring (alignment from the encoder), points the MTLArgumentEncoder at
+// the reservation via `setArgumentBuffer`, and returns the
+// (storage, offset, length) tuple the caller binds at slot 30. Returns
+// an empty `PopulatedArgbuf` if the encoder resource is uninitialized
+// or the transient reservation fails.
+//
+// Caller binds the constant buffers / textures / samplers via the
+// `bindResources` helper below, then issues
+// `setVertexBuffer(populated.storage, populated.offset, slot=30)` and
+// `setFragmentBuffer(...)` on the render encoder.
+PopulatedArgbuf openArgbuf(CommandQueue& queue,
+                            ArgbufEncoderResource& encoderResource,
+                            std::uint64_t seqId);
+
+// R-BACK-12.24 — populate the four constant-buffer entries in the
+// argbuf from per-frequency uniform host-structs. The call writes
+// VsConsts, PsConsts, FfpVsConsts, FfpPsConsts into the transient ring
+// (so the GPU has a stable backing buffer for each pointer) and points
+// the encoder's [[id(0..3)]] slots at them. Returns the total bytes
+// written into the transient ring (i.e., the four struct sizes).
+//
+// Resource binding (textures / samplers) is handled by
+// `populateResourceBindings` below; splitting the two keeps the const
+// upload and the resource bind on independent code paths so a future
+// per-frequency-only update can call only the one it needs.
+//
+// Production-only — invokes Metal calls on `encoderResource`. Tests
+// drive `dirtyBytesEstimate` directly.
+u64 populateConstantBuffers(CommandQueue& queue,
+                             ArgbufEncoderResource& encoderResource,
+                             core::FlatDrawStateView state,
+                             std::uint64_t seqId);
+
+// R-BACK-12.24 — populate the texture / sampler slots in the argbuf.
+// Writes one MTLResourceID per active stage at [[id(4..11)]] for
+// textures and [[id(12..19)]] for samplers. The pool resolves
+// per-stage texture handles to live `WMT::Texture` and the device is
+// asked for one `WMT::SamplerState` per stage. Stages without a bound
+// texture leave their argbuf entries unchanged.
+void populateResourceBindings(WMT::Reference<WMT::Device> device,
+                               resources::Pool& pool,
+                               ArgbufEncoderResource& encoderResource,
+                               core::FlatDrawStateView state);
+
+// R-BACK-12.24 — mid-pass dirty rewrite. Re-uploads the per-frequency
+// host structs corresponding to the dirty bits and re-points the
+// matching argbuf entries at the fresh transient slabs. Returns the
+// total bytes uploaded (matches `dirtyBytesEstimate(dirty)` on the
+// happy path). Returns 0 when no relevant bit is set.
+//
+// Called from the encoder's per-draw path between draws on a single
+// render encoder. Resource bindings (textures / samplers) are not
+// re-encoded here — those are stable on a render-pass encoder; if a
+// stage swap landed mid-pass we already split the encoder.
+u64 updateDirtyArgbufRegions(CommandQueue& queue,
+                              ArgbufEncoderResource& encoderResource,
+                              core::FlatDrawStateView state,
+                              const uniform::DirtyState& dirty,
+                              std::uint64_t seqId);
 
 }  // namespace dxmt9::argbuf_hybrid

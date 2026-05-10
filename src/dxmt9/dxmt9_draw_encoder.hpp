@@ -160,7 +160,18 @@ bool encodeDraw(EncodeContext& ctx,
                  const core::DrawParam* paramOverride = nullptr,
                  std::span<const std::uint8_t> paramPayloadArena = {},
                  uniform::DirtyState* dirty = nullptr,
-                 bool tileFfpMode = false);
+                 bool tileFfpMode = false,
+                 // R-BACK-12.22 / 12.24 — Stage 2 argbuf-hybrid mode for
+                 // this render encoder. When true, the per-frequency UBO
+                 // dirty consume path rewrites the matching argbuf
+                 // sub-regions (via argbuf_hybrid::updateDirtyArgbufRegions)
+                 // instead of issuing slot 0 / slot 3 vertex/fragment
+                 // buffer binds. The slot-30 argbuf bind itself is issued
+                 // once at startRenderPass; encodeDraw never re-binds
+                 // slot 30 because the per-encoder argbuf is sticky for
+                 // the pass. DrawVolatile (slot 5) and the vertex stream
+                 // (slot 1) are unchanged in either mode (design.md §11.2).
+                 bool argbufHybridMode = false);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.
 // Returns a QueueSubmissionRecord that the finish loop commits; nullopt

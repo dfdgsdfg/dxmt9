@@ -1,5 +1,13 @@
 #include "dxmt9_argbuf_hybrid.hpp"
 
+#include "dxmt9_command_queue.hpp"
+#include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_draw_state.hpp"
+#include "dxmt9_resource_pool.hpp"
+#include "dxmt9/core.hpp"
+
+#include <cstring>
+
 namespace dxmt9::argbuf_hybrid {
 
 namespace {
@@ -65,6 +73,201 @@ ArgumentDescriptors buildArgumentDescriptors() {
 
 bool computeCapabilityGate(WMTArgumentBuffersTier argumentBuffersTier, bool apple3) {
   return argumentBuffersTier >= WMTArgumentBuffersTier2 && apple3;
+}
+
+void ArgbufEncoderResource::init(WMT::Device device) {
+  if (initialized_) {
+    return;
+  }
+  // The descriptor set must outlive the newArgumentEncoder call (the WMT
+  // bridge reads the entries.data() span synchronously) — keep the local
+  // alive until the call returns.
+  const auto descriptors = buildArgumentDescriptors();
+  encoder_ = device.newArgumentEncoder(
+      descriptors.entries.data(),
+      static_cast<u32>(descriptors.count()));
+  if (!encoder_) {
+    // Sentinel-null device (test fixture) or Metal failure. Stay
+    // uninitialized so `openArgbuf` short-circuits to an empty handle
+    // and the caller falls back to Stage 1 binding.
+    return;
+  }
+  encodedLength_ = encoder_.encodedLength();
+  alignment_ = std::max<u64>(16u, encoder_.alignment());
+  initialized_ = true;
+}
+
+void ArgbufEncoderResource::initForTest(u64 encodedLength, u64 alignment) noexcept {
+  encodedLength_ = encodedLength;
+  alignment_ = std::max<u64>(16u, alignment);
+  initialized_ = true;
+}
+
+namespace {
+
+// Bytes the encoder rewrites for the four per-frequency categories.
+// Pinned to the Stage 1 host-struct sizes so Stage 2's argbuf-bytes
+// counter is apples-to-apples with Stage 1's per-frequency-bytes
+// counter (design.md §11.5 regression-compare contract).
+constexpr u64 kVsConstsBytes = sizeof(state::VsConsts);
+constexpr u64 kPsConstsBytes = sizeof(state::PsConsts);
+constexpr u64 kFfpVsBytes    = sizeof(state::FfpVsConsts);
+constexpr u64 kFfpPsBytes    = sizeof(state::FfpPsConsts);
+
+// argbuf [[id(N)]] indices for the four cbuf entries.
+constexpr u32 kVsConstsArgbufIdx = 0u;
+constexpr u32 kFfpVsArgbufIdx    = 1u;
+constexpr u32 kPsConstsArgbufIdx = 2u;
+constexpr u32 kFfpPsArgbufIdx    = 3u;
+
+// argbuf [[id(N)]] base for textures / samplers; the encoder writes
+// stages 0..7 at consecutive ids.
+constexpr u32 kTextureArgbufBase = shaders::kArgbufHybridConstantBufferCount;
+constexpr u32 kSamplerArgbufBase =
+    kTextureArgbufBase + shaders::kArgbufHybridTextureSlotCount;
+
+}  // namespace
+
+u64 dirtyBytesEstimate(const uniform::DirtyState& dirty) noexcept {
+  u64 bytes = 0;
+  if (uniform::anyDirty(dirty, uniform::kVsAny))    bytes += kVsConstsBytes;
+  if (uniform::anyDirty(dirty, uniform::kPsAny))    bytes += kPsConstsBytes;
+  if (uniform::anyDirty(dirty, uniform::kFfpVsAny)) bytes += kFfpVsBytes;
+  if (uniform::anyDirty(dirty, uniform::kFfpPsAny)) bytes += kFfpPsBytes;
+  return bytes;
+}
+
+PopulatedArgbuf openArgbuf(CommandQueue& queue,
+                            ArgbufEncoderResource& encoderResource,
+                            std::uint64_t seqId) {
+  if (!encoderResource.initialized() || encoderResource.encodedLength() == 0) {
+    return {};
+  }
+  const auto length = encoderResource.encodedLength();
+  const auto alignment = encoderResource.alignment();
+  auto reservation = queue.reserveTransientBuffer(
+      static_cast<std::size_t>(length),
+      static_cast<std::size_t>(alignment),
+      seqId);
+  if (!reservation) {
+    return {};
+  }
+  // Anchor the encoder onto the reservation. `setArgumentBuffer` is the
+  // prerequisite for any subsequent setBuffer/setTexture/setSamplerState
+  // call — none of the populate* helpers below should run before this.
+  encoderResource.argumentEncoder().setArgumentBuffer(
+      reservation.slice.buffer, reservation.slice.offset);
+  PopulatedArgbuf populated{};
+  populated.storage = reservation.slice.buffer;
+  populated.offset = reservation.slice.offset;
+  populated.length = length;
+  return populated;
+}
+
+namespace {
+
+// Single-argbuf cbuf upload helper. Reuses `uploadTransientBuffer` so
+// the per-cbuf backing storage retains against the same seqId as the
+// argbuf itself; the argbuf entry then points at the fresh transient
+// slab via `setBuffer`. Returns the bytes written into the transient
+// ring, or 0 on reservation failure (caller treats as "skipped").
+template <typename HostStruct>
+u64 uploadAndPointEntry(CommandQueue& queue,
+                         ArgbufEncoderResource& encoderResource,
+                         const HostStruct& host,
+                         u32 argbufIdx,
+                         u64 seqId) {
+  auto slice = queue.uploadTransientBuffer(
+      std::span<const std::byte>(
+          reinterpret_cast<const std::byte*>(&host), sizeof(HostStruct)),
+      alignof(HostStruct), seqId);
+  if (!slice) return 0;
+  encoderResource.argumentEncoder().setBuffer(
+      slice.buffer, slice.offset, argbufIdx);
+  return sizeof(HostStruct);
+}
+
+}  // namespace
+
+u64 populateConstantBuffers(CommandQueue& queue,
+                             ArgbufEncoderResource& encoderResource,
+                             core::FlatDrawStateView state,
+                             std::uint64_t seqId) {
+  if (!encoderResource.initialized()) return 0;
+  u64 bytes = 0;
+  // VsConsts / FfpVsConsts / PsConsts / FfpPsConsts mirror the Stage 1
+  // bind sequence in encodeDraw — same builders, same alignment, same
+  // upload path; the only delta is the argbuf [[id(N)]] target instead
+  // of the slot 0 / 3 vert/frag slots.
+  const auto vs = state::buildVsConsts(state);
+  bytes += uploadAndPointEntry(queue, encoderResource, vs,
+                                kVsConstsArgbufIdx, seqId);
+  const auto ffpVs = state::buildFfpVsConsts(state);
+  bytes += uploadAndPointEntry(queue, encoderResource, ffpVs,
+                                kFfpVsArgbufIdx, seqId);
+  const auto ps = state::buildPsConsts(state);
+  bytes += uploadAndPointEntry(queue, encoderResource, ps,
+                                kPsConstsArgbufIdx, seqId);
+  const auto ffpPs = state::buildFfpPsConsts(state);
+  bytes += uploadAndPointEntry(queue, encoderResource, ffpPs,
+                                kFfpPsArgbufIdx, seqId);
+  return bytes;
+}
+
+void populateResourceBindings(WMT::Reference<WMT::Device> device,
+                               resources::Pool& pool,
+                               ArgbufEncoderResource& encoderResource,
+                               core::FlatDrawStateView state) {
+  if (!encoderResource.initialized() || !state.hot) return;
+  auto& enc = encoderResource.argumentEncoder();
+  const auto& hot = *state.hot;
+  // Stages 0..7 — the argbuf descriptor table reserves exactly 8 slots
+  // for textures and 8 for samplers (shaders::kArgbufHybridTextureSlotCount).
+  // Stages without a bound texture leave the argbuf entry untouched;
+  // shaders that don't sample those slots never deref a stale id.
+  for (u32 stage = 0; stage < shaders::kArgbufHybridTextureSlotCount; ++stage) {
+    const auto textureHandle = hot.textures[stage];
+    if (!textureHandle) continue;
+    if (auto* texture = pool.findTexture(textureHandle.value);
+        texture && texture->texture) {
+      enc.setTexture(WMT::Texture{texture->texture.handle},
+                     kTextureArgbufBase + stage);
+    }
+    auto sampler = encoders::makeSampler(device, hot.samplerStates[stage]);
+    if (sampler) {
+      enc.setSamplerState(sampler, kSamplerArgbufBase + stage);
+    }
+  }
+}
+
+u64 updateDirtyArgbufRegions(CommandQueue& queue,
+                              ArgbufEncoderResource& encoderResource,
+                              core::FlatDrawStateView state,
+                              const uniform::DirtyState& dirty,
+                              std::uint64_t seqId) {
+  if (!encoderResource.initialized()) return 0;
+  u64 bytes = 0;
+  if (uniform::anyDirty(dirty, uniform::kVsAny)) {
+    const auto vs = state::buildVsConsts(state);
+    bytes += uploadAndPointEntry(queue, encoderResource, vs,
+                                  kVsConstsArgbufIdx, seqId);
+  }
+  if (uniform::anyDirty(dirty, uniform::kFfpVsAny)) {
+    const auto ffpVs = state::buildFfpVsConsts(state);
+    bytes += uploadAndPointEntry(queue, encoderResource, ffpVs,
+                                  kFfpVsArgbufIdx, seqId);
+  }
+  if (uniform::anyDirty(dirty, uniform::kPsAny)) {
+    const auto ps = state::buildPsConsts(state);
+    bytes += uploadAndPointEntry(queue, encoderResource, ps,
+                                  kPsConstsArgbufIdx, seqId);
+  }
+  if (uniform::anyDirty(dirty, uniform::kFfpPsAny)) {
+    const auto ffpPs = state::buildFfpPsConsts(state);
+    bytes += uploadAndPointEntry(queue, encoderResource, ffpPs,
+                                  kFfpPsArgbufIdx, seqId);
+  }
+  return bytes;
 }
 
 }  // namespace dxmt9::argbuf_hybrid

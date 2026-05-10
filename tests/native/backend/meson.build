@@ -141,6 +141,26 @@ argbuf_hybrid_msl_spec = executable(
 
 test('dxmt9-argbuf-hybrid-msl-spec', argbuf_hybrid_msl_spec)
 
+# R-BACK-12.22..12.26 — Stage 2 argbuf-hybrid populator spec.
+# CPU-only spec for the per-encoder argbuf populator: encoder-resource
+# init shape, dirtyBytesEstimate value-transform across categories,
+# PopulatedArgbuf default. Hardware exercise of openArgbuf /
+# populateConstantBuffers / populateResourceBindings / shader-runner
+# equality is covered by the runtime-integration suite.
+argbuf_populator_spec = executable(
+  'dxmt9-argbuf-populator-spec',
+  'dxmt9_argbuf_populator_spec.cpp',
+  include_directories: dxmt9_inc,
+  # Needs dxmt9_winemetal_dep so the WMT::Reference<ArgumentEncoder> dtor
+  # inside ArgbufEncoderResource resolves NSObject_release at link time;
+  # the spec itself never calls into Metal, but constructing the resource
+  # on the stack drags the dtor into the link.
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-argbuf-populator-spec', argbuf_populator_spec)
+
 # Z1 audit item #2 — unix-side chunk-injection probe.
 # Constructs a wire-format chunk in memory and feeds it directly into
 # dxmt9c_device_commit_chunk(), bypassing PE D3D9 + the WINE_UNIX_CALL

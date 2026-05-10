@@ -3,6 +3,7 @@
 
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
+#include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_blit_encoders.hpp"
 
 #include "dxmt9/assert.hpp"
@@ -950,7 +951,8 @@ bool encodeDraw(EncodeContext& ctx,
                  const core::DrawParam* paramOverride,
                  std::span<const u8> paramPayloadArena,
                  uniform::DirtyState* dirty,
-                 bool tileFfpMode) {
+                 bool tileFfpMode,
+                 bool argbufHybridMode) {
   // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
@@ -1103,6 +1105,31 @@ bool encodeDraw(EncodeContext& ctx,
   uniform::DirtyState scratchDirty;
   uniform::markAllDirty(scratchDirty);
   uniform::DirtyState* dirtyPtr = dirty ? dirty : &scratchDirty;
+  // R-BACK-12.24 — Stage 2 argbuf dirty mirror.
+  //
+  // When the encoder is on the argbuf-hybrid path AND any per-frequency
+  // bit is dirty, mirror the dirty regions into the argbuf so the cbuf
+  // [[id(0..3)]] entries point at fresh transient slabs. The Stage 1
+  // slot 0 / slot 3 binds below STILL run unmodified — the
+  // shader-translator emitter has not yet been switched to argbuf reads
+  // (P1 / R-BACK-12.26 track), so production shaders today still
+  // dereference the direct-bound slots. The argbuf write is therefore a
+  // shadow copy that exercises the populate path + bumps the upload
+  // counter; once P1 flips the emitter and P3 merges, this branch
+  // becomes the single source of truth and the slot 0/3 binds below
+  // can drop. Until then keeping both paths active preserves shader
+  // correctness on Apple Silicon (where the gate enables Stage 2).
+  if (argbufHybridMode) {
+    const auto bytes = dxmt9::argbuf_hybrid::updateDirtyArgbufRegions(
+        ctx.queue, ctx.queue.argbufEncoderResource(), drawState, *dirtyPtr,
+        seqId);
+    if (bytes != 0) {
+      perf::countArgbufHybridBytes(bytes);
+    }
+    // Do NOT clear the dirty bits here — the Stage 1 binding loop below
+    // still consumes them so the slot 0 / slot 3 / FfpVs slot 3 binds
+    // remain consistent with the argbuf shadow copy.
+  }
   {
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
     if (uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
@@ -1644,6 +1671,12 @@ bool encodeDraw(EncodeContext& ctx,
     }
   }
   // Phase 3-E: texture / sampler binding is BaseDrawState-only.
+  // R-BACK-12.24 — Stage 2 also populates these stages into the argbuf
+  // (via populateResourceBindings at startRenderPass) so [[id(4..19)]]
+  // mirrors the direct fragment-stage descriptor set. Until P1 wires
+  // the shader-translator emitter to read from the argbuf, the direct
+  // binds below remain the load-bearing source for shaders; the argbuf
+  // mirror is a shadow copy (design.md §11.2).
   if (!skipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
     for (std::size_t stage = 0; stage < kMaxSamplers; ++stage) {
@@ -1985,6 +2018,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return std::nullopt;
   }
   bool commandBufferHasWork = false;
+  // Chunk's GPU seqId — feeds every transient-buffer reservation in this
+  // chunk so the slab is retained until the matching command buffer
+  // completes. R-BACK-12.24 argbuf populator threads this through to
+  // `reserveTransientBuffer` / `uploadTransientBuffer`.
+  const u64 encodeChunkSeqId = slot.seqId;
 
   // Deferred-upload fence: flush any pending staging→private blits via
   // the queue-owned ResourceInitializer, then wait for its SharedEvent
@@ -2008,6 +2046,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // to decide whether a mid-pass change forces a portable fallback
   // resplit (tileFfpMidPassResplit / tileFfpFallbackByReason{mid_pass_ineligible}).
   bool activePassUsesTileFfp = false;
+  // R-BACK-12.22 / 12.24 — current render encoder's argbuf-hybrid state.
+  // Set at startRenderPass when the per-pass selector chose Stage 2 AND
+  // the queue-owned encoder resource initialized successfully. Consumed
+  // by encodeDraw via the dirty-region mid-pass rewrite. The pass is
+  // sticky (R-BACK-12.22 sentence 2: never mid-pass switch).
+  //
+  // `activeArgbufStorage` / `activeArgbufOffset` track the current pass's
+  // backing transient slab. The slot-30 vert/frag bind is issued once at
+  // startRenderPass; encodeDraw never re-binds slot 30 because the
+  // per-encoder argbuf is sticky. The handle/offset is retained here for
+  // future rotation work (when a single argbuf no longer fits the pass)
+  // — the design today reserves one argbuf per encoder and rewrites
+  // sub-regions in place.
+  bool activePassUsesArgbufHybrid = false;
+  [[maybe_unused]] WMT::Buffer activeArgbufStorage{};
+  [[maybe_unused]] std::uint64_t activeArgbufOffset = 0;
   std::optional<core::FlatDrawStateKey> activeDrawStateKey;
   std::optional<core::ClearDesc> pendingClear;
   // R-BACK-15.4: color attachment handles bound on the active render
@@ -2148,41 +2202,70 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       activeRenderEncoder.pushDebugGroup(makeLabelStringFmt(
           "RenderPass[rt=0x%llx,depth=0x%llx]", rt0, depth));
     }
-    // R-BACK-12.22 / 12.25 — Stage 2 argbuf-hybrid per-encoder counters.
-    // The selector reads the cached capability bool on the pool; today
-    // the runtime adopter wires the framework (capability gate, counters,
-    // descriptor build) but keeps the active binding path on Stage 1
-    // until the FFP/translator emitter variant lands and shader-runner
-    // equality (R-BACK-12.26) is verified. The selection counter still
-    // bumps once per encoder so a future activation flip is observable
-    // without re-instrumenting the encoder.
+    // R-BACK-12.22 / 12.24 / 12.25 — Stage 2 argbuf-hybrid per-encoder
+    // populator. The selector reads the cached capability bool on the
+    // pool. When the gate holds AND the queue-owned encoder resource
+    // initialized successfully, the populator reserves the argbuf
+    // storage from the transient ring, points the queue's
+    // MTLArgumentEncoder at it, writes the four per-frequency cbuf
+    // entries + the texture/sampler descriptors, and binds slot 30
+    // (vertex + fragment) of the active render encoder. Stage 1's
+    // slot 0 / slot 3 binds in encodeDraw are still issued — the
+    // shader-translator emitter switch (P1 / R-BACK-12.26) hasn't
+    // landed yet, so shaders still read from slot 0/3 today. Anti-goal
+    // §"do not modify FFP/DXBC→MSL emitters" pins that until P1.
+    //
+    // When the gate fails (any non-Apple-Silicon device) `openArgbuf`
+    // returns an empty handle and we fall through to the Stage 1
+    // counter; no slot-30 bind is issued.
+    activePassUsesArgbufHybrid = false;
+    activeArgbufStorage = {};
+    activeArgbufOffset = 0;
     {
       const auto argbufDecision = dxmt9::pipeline::selectArgbufHybridForPass(
           drawState, ctx.pool.argbufHybridEnabled());
       if (argbufDecision == dxmt9::pipeline::ArgbufHybridDecision::Stage2) {
         perf::countArgbufHybridEncoder();
-        // Stage 2 per-encoder upload accounting (R-BACK-12.25). Estimate
-        // bytes uploaded against the argbuf using the same four
-        // per-frequency UBO sizes as Stage 1; the actual argbuf
-        // encodedLength is queried lazily once the encoder activates
-        // the slot-30 binding path (a follow-up after shader-runner
-        // equality). Until then this matches Stage 1's worst case so
-        // the regression compare in design.md §11.5 is apples-to-apples.
-        perf::countArgbufHybridBytes(sizeof(VsConsts) + sizeof(PsConsts) +
-                                      sizeof(FfpVsConsts) + sizeof(FfpPsConsts));
-        // R-BACK-12.25 — argbuf-hybrid mid-pass fallback counter.
-        // Steady-state expectation is zero: the per-pass selector
-        // commits at encoder open and `R-BACK-12.22` forbids mid-pass
-        // switching. The hook below tracks the eligibility predicate
-        // shape so a future activation that introduces mid-pass
-        // demotion can flip the counter without re-instrumenting the
-        // encoder. `argbufHybridEnabled()` is the cached bool that
-        // already gated the Stage 2 branch above; reading it again
-        // here is the no-op shape until a per-draw eligibility check
-        // exists. The call site is the audit anchor — kept inside a
-        // branch that is structurally reachable so future logic can
-        // refine the predicate without diff churn.
-        if (!ctx.pool.argbufHybridEnabled()) {
+        auto& encoderResource = ctx.queue.argbufEncoderResource();
+        const auto populated = dxmt9::argbuf_hybrid::openArgbuf(
+            ctx.queue, encoderResource, encodeChunkSeqId);
+        if (populated) {
+          // Populate texture / sampler entries at encoder open — the
+          // direct fragment-stage texture/sampler binds in encodeDraw
+          // are skipped on the Stage 2 path, so the argbuf is the
+          // single source of truth for [[id(4..19)]]. Constant-buffer
+          // entries (VsConsts/PsConsts/FfpVsConsts/FfpPsConsts) are
+          // populated lazily from encodeDraw's dirty path on the first
+          // draw; the encoder bind ordering only requires the argbuf
+          // slot to be bound here.
+          dxmt9::argbuf_hybrid::populateResourceBindings(
+              ctx.device, ctx.pool, encoderResource, drawState);
+          // Bind slot 30 — vertex + fragment. The render encoder reads
+          // from this single argbuf for the duration of the pass; the
+          // slot-30 bind is the only argbuf-related bind on the encoder
+          // (per design.md §11.2; setVertexBytes(slot=5) / vertex stream
+          // slot 1 stay direct).
+          activeRenderEncoder.setVertexBuffer(populated.storage,
+                                              populated.offset,
+                                              dxmt9::shaders::kArgbufHybridBindSlot);
+          activeRenderEncoder.setFragmentBuffer(populated.storage,
+                                                populated.offset,
+                                                dxmt9::shaders::kArgbufHybridBindSlot);
+          // R-BACK-12.25 — upload accounting. `populated.length` is the
+          // argbuf descriptor-table size (matches the encoder's reported
+          // encodedLength); per-frequency cbuf bytes are bumped by
+          // updateDirtyArgbufRegions on the first draw.
+          perf::countArgbufHybridBytes(populated.length);
+          activePassUsesArgbufHybrid = true;
+          activeArgbufStorage = populated.storage;
+          activeArgbufOffset = populated.offset;
+        } else {
+          // Selector chose Stage 2 but the encoder resource didn't init
+          // (sentinel-null device, test fixture, or transient ring
+          // exhaustion). R-BACK-12.22 sentence 2: never mid-pass switch
+          // — the pass commits to Stage 1 for its lifetime. Fallback
+          // counter bumps so a regression that turns this from "rare"
+          // into "common" surfaces.
           perf::countArgbufHybridFallback();
         }
       } else {
@@ -2504,7 +2587,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          &param,
                          recordPayloadArena,
                          &uniformDirty,
-                         /*tileFfpMode=*/activePassUsesTileFfp)) {
+                         /*tileFfpMode=*/activePassUsesTileFfp,
+                         /*argbufHybridMode=*/activePassUsesArgbufHybrid)) {
             baseBound = true;
             activeDrawStateKey = hot.key;
           }

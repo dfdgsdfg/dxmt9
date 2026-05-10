@@ -151,6 +151,17 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
     const bool tierOk = tier >= WMTArgumentBuffersTier2;
     pool_.setArgbufHybridEnabled(tierOk && pool_.supportsApple3());
   }
+  // R-BACK-12.22 / 12.24 — build the queue-owned MTLArgumentEncoder when
+  // the capability gate held. The encoder is shared across every render
+  // pass on this queue; per-pass `openArgbuf` retargets it onto the
+  // freshly reserved transient storage. When the gate failed, the
+  // resource stays uninitialized and `openArgbuf` returns an empty
+  // handle — the Stage 1 binding path then runs unchanged. Skip on a
+  // sentinel-null device (test/fake-backend fixtures); ArgbufEncoderResource::init
+  // tolerates a null handle but the gate above already short-circuits.
+  if (pool_.argbufHybridEnabled() && device_) {
+    argbufEncoderResource_.init(device_);
+  }
   // R-BACK-14.* — bind the small-resource heap manager to the same
   // WMT::Device + unified-memory probe used by the pool's storage-mode
   // selectors. Init must run before initializer_ / encode loops because

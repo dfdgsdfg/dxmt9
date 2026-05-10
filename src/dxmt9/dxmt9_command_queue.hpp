@@ -18,6 +18,7 @@
 // @autoreleasepool itself (the encode chunk scopes its own).
 
 #include "../winemetal/Metal.hpp"
+#include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_backend_types.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_queue.hpp"
@@ -221,6 +222,17 @@ class CommandQueue {
   resources::Pool& pool() noexcept { return pool_; }
   pipeline::Cache& pipelineCache() noexcept { return pipelineCache_; }
   shaders::Archive& shaderArchive() noexcept { return shaderArchive_; }
+  // R-BACK-12.22 / 12.24 — Stage 2 argbuf-hybrid encoder resource. Built
+  // once at queue init from the device + descriptor table; stays
+  // uninitialized when the capability gate fails so per-encoder
+  // `openArgbuf` short-circuits to an empty handle and Stage 1 binding
+  // stays the floor. The encoder is shared across every render pass on
+  // this queue — it is stateless w.r.t. the argument-buffer storage; the
+  // per-pass `setArgumentBuffer` call retargets it onto the new
+  // transient slab.
+  argbuf_hybrid::ArgbufEncoderResource& argbufEncoderResource() noexcept {
+    return argbufEncoderResource_;
+  }
 
   // R-BACK-15.4 / 15.5 / 15.6: touched color attachment set API. The
   // encoder's beginRenderPass calls isColorHandleTouched on each color
@@ -349,6 +361,12 @@ class CommandQueue {
   resources::Pool pool_{};
   pipeline::Cache pipelineCache_{};
   shaders::Archive shaderArchive_{};
+  // R-BACK-12.22 / 12.24 — see argbufEncoderResource() accessor above.
+  // Lifetime: WMT::Reference inside owns the encoder; default ctor leaves
+  // it uninitialized (any sentinel-null device skips init() in the queue
+  // ctor). Order matters — must outlive the worker threads that may
+  // observe it via encoders::EncodeContext.
+  argbuf_hybrid::ArgbufEncoderResource argbufEncoderResource_{};
   std::unique_ptr<resources::Initializer> initializer_;
   core::metalcapture::MetalCaptureController metalCapture_{};
 
