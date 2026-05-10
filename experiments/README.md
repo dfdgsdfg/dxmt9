@@ -3,6 +3,21 @@
 Experiments are end-to-end runs against real D3D9 applications under the
 current `dxmt9` runtime.
 
+## Directory layout
+
+| Subdir | Committed? | Purpose |
+|---|---|---|
+| `apps/` | yes | Small fixture EXEs (D9VK, BasicHLSL). |
+| `apps_3rd/` | no | External installs (SFIV, Anno 1404, etc.). |
+| `prefixs/` | no | Per-experiment Wine prefixes. |
+| `wine/` | mixed | `manifest.toml` + README committed; bundles ignored. |
+| `launchers/` | yes | Per-app launcher scripts. |
+| `output/` | no | Run results. |
+| `references/` | yes | Reference screenshots. |
+| `CATALOGUE.toml` | yes | Manifest of every experiment. |
+
+Spec: `specs/experiments/runtime/{requirements,design}.md`.
+
 Primary entrypoint:
 
 ```sh
