@@ -33,14 +33,22 @@ differently — the dxmt9 bridge was fine, the runtime was the variable.
 When adding or editing a runner script under `scripts/run_apps/`,
 `scripts/run_suites/`, or `scripts/tools/`:
 
-```sh
-# Good — vanilla Wine baseline. The wine_id resolves through the
-# manifest at experiments/wine/manifest.toml; never hardcode paths.
-wine_id = "heroic-11.7"          # in CATALOGUE [[app]]
-# Or on the command line:
-bash scripts/run_apps/run_<name>_experiment.sh --wine-id heroic-11.7
+In `experiments/CATALOGUE.toml` the per-app default is the manifest id, not a path:
 
-# Avoid — hardcoding a path or pointing at a non-vanilla variant.
+```toml
+# In CATALOGUE [[app]] for a wild experiment:
+wine_id = "heroic-11.7"
+```
+
+On the command line, `--wine-id` overrides the CATALOGUE default (forward-looking — lands in a later round of `specs/experiments/runtime/`):
+
+```sh
+bash scripts/run_apps/run_<name>_experiment.sh --wine-id heroic-11.7
+```
+
+What to avoid — never hardcode a Wine path or default to a non-vanilla variant. Both bypass the manifest:
+
+```sh
 wine_root_default=".../Wine-11.7-DXMT/.../wine"   # bypasses the manifest.
 ```
 

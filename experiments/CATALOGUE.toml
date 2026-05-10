@@ -435,8 +435,8 @@ capture_frame = 0
 reference_optional = true
 allow_timeout = true
 # Runtime spec (specs/experiments/runtime/):
-wine_id              = "heroic-11.7"
-wine_alternatives    = []
+wine_id = "heroic-11.7"
+wine_alternatives = []
 install_drive_letter = "d"
 
 [[app]]

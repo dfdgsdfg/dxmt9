@@ -12,7 +12,7 @@ current `dxmt9` runtime.
 | `prefixs/` | no | Per-experiment Wine prefixes. |
 | `wine/` | mixed | `manifest.toml` + README committed; bundles ignored. |
 | `launchers/` | yes | Per-app launcher scripts. |
-| `output/` | no | Run results. |
+| `output/` | partial (`.gitkeep` only) | Run results. |
 | `references/` | yes | Reference screenshots. |
 | `CATALOGUE.toml` | yes | Manifest of every experiment. |
 
