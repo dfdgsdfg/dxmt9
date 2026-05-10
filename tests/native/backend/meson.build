@@ -110,3 +110,31 @@ tile_ffp_msl_spec = executable(
 )
 
 test('dxmt9-tile-ffp-msl-spec', tile_ffp_msl_spec)
+
+# Z1 audit item #2 — unix-side chunk-injection probe.
+# Constructs a wire-format chunk in memory and feeds it directly into
+# dxmt9c_device_commit_chunk(), bypassing PE D3D9 + the WINE_UNIX_CALL
+# bridge. Isolates B3 (CommandQueue) + B4 (encode thread) from B1 (PE
+# recorder) and B2 (PE→unix bridge). Soft-assertion only; real numbers
+# scrape from the cumulative `[dxmt9-perf]` line emitted at exit when
+# DXMT_PERF_COUNTERS=1.
+#
+# NOT registered as a meson test() yet — `commit_chunk` from the
+# native context trips an ASan halt-on-error in the current build
+# (probe loops succeed without ASan; meson runs default to
+# halt_on_error=1, which surfaces a Metal-side issue that needs
+# triage). The binary still builds; run manually with:
+#   DYLD_LIBRARY_PATH=...  \
+#   DXMT_PERF_COUNTERS=1 UNIX_CHUNK_INJECT_ITERATIONS=N \
+#   ./build-x86_64-builtin/tests/native/backend/dxmt9-unix-chunk-injection-probe
+# until the ASan finding is debugged. The probe is the sole consumer
+# of dxmt9c_device_commit_chunk from a native (non-Wine) main(), so
+# its failure pattern is itself a useful triage handle for the queue
+# code that currently runs only via the bridge.
+unix_chunk_injection_probe = executable(
+  'dxmt9-unix-chunk-injection-probe',
+  'dxmt9_unix_chunk_injection_probe.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
