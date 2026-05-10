@@ -1,0 +1,77 @@
+# Schema example for experiments/wine/manifest.toml.
+# Reference document — not a live manifest. The actual manifest at
+# experiments/wine/manifest.toml is hand-maintained per machine.
+#
+# Spec: specs/experiments/runtime/{requirements,design}.md §3.
+#
+# Required fields per [[wine]] entry:
+#   id       — unique key, referenced from CATALOGUE.toml [[app]].wine_id.
+#   source   — heroic | brew | gptk | crossover | sikarugir | manual
+#   variant  — vanilla | dxmt | vk | kegworks | patched
+#   path     — wine root directory (contains bin/wine and lib/wine/...)
+#              May start with $HOME or $REPO_ROOT (expanded at load time).
+# Optional:
+#   version  — free-form version string (e.g. "11.7", "2.1").
+#   notes    — operator-facing prose.
+
+manifest_version = 1
+
+# ─── Heroic vanilla (default for most wild experiments) ──────────────────
+[[wine]]
+id          = "heroic-11.7"
+source      = "heroic"
+variant     = "vanilla"
+version     = "11.7"
+path        = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
+notes       = "Default vanilla baseline; see agents/rules/test_wild.rules.md."
+
+# ─── Heroic + DXMT patches (documented exceptions only) ─────────────────
+[[wine]]
+id          = "heroic-11.7-dxmt"
+source      = "heroic"
+variant     = "dxmt"
+version     = "11.7"
+path        = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
+notes       = "Patched build; for documented exceptions (anno-1404-gold)."
+
+# ─── Homebrew wine-stable ───────────────────────────────────────────────
+[[wine]]
+id          = "brew-stable"
+source      = "brew"
+variant     = "vanilla"
+path        = "/opt/homebrew/opt/wine-stable/bin/wine"
+notes       = "brew install wine-stable; symlink into Cellar."
+
+# ─── CrossOver bottle host ──────────────────────────────────────────────
+[[wine]]
+id          = "crossover"
+source      = "crossover"
+variant     = "patched"
+path        = "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
+notes       = "CrossOver fork; bottle-managed."
+
+# ─── Apple Game Porting Toolkit ─────────────────────────────────────────
+[[wine]]
+id          = "gptk-2.1"
+source      = "gptk"
+variant     = "vanilla"
+version     = "2.1"
+path        = "/usr/local/opt/game-porting-toolkit/bin/wine64"
+notes       = "Apple GPTK; x86_64 only."
+
+# ─── Sikarugir (Wineskin / Kegworks lineage) ────────────────────────────
+[[wine]]
+id          = "sikarugir-default"
+source      = "sikarugir"
+variant     = "kegworks"
+path        = "/Applications/Sikarugir.app/Contents/SharedSupport/wine/bin/wine"
+notes       = "https://github.com/Sikarugir-App/Sikarugir."
+
+# ─── Manually-placed Wine bundle under experiments/wine/ ────────────────
+[[wine]]
+id          = "wine-11.7-local"
+source      = "manual"
+variant     = "vanilla"
+version     = "11.7"
+path        = "$REPO_ROOT/experiments/wine/Wine-11.7-local/Contents/Resources/wine"
+notes       = "Heroic-style bundle dropped into experiments/wine/ by hand."

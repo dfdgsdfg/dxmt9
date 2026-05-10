@@ -1,0 +1,84 @@
+# Schema example showing the runtime fields added to entries in
+# experiments/CATALOGUE.toml when the app is a wild experiment.
+# Reference document — not the live CATALOGUE.toml.
+#
+# Spec: specs/experiments/runtime/{requirements,design}.md §5.
+#
+# Existing fields (name/source/license/binary/launcher/...) are unchanged.
+# The runtime fields below apply only when requires_wine = true and the
+# app is an external install (source_kind != "project-authored").
+
+# ─── Example 1: vanilla-only wild experiment ───────────────────────────
+# A wild app that should always run on the vanilla baseline. wine_id
+# points at a manifest entry whose variant=vanilla.
+[[app]]
+name         = "street-fighter-iv-benchmark"
+source       = "https://www.capcom.com/sf4-benchmark"
+license      = "proprietary"
+source_kind  = "third-party-game"
+license_scope = "third-party-game"
+binary       = "D:/StreetFighterIV_Benchmark.exe"   # Windows-style path under <drive_letter>:
+launcher     = "experiments/launchers/street-fighter-iv-benchmark.sh"
+features     = ["wild", "benchmark", "wine"]
+status       = "passing"
+requires_wine = true
+window_title = "Street Fighter IV"
+run_timeout_sec = 90
+
+# Runtime fields added by this spec.
+wine_id              = "heroic-11.7"   # default; matches manifest entry
+wine_alternatives    = []              # no alternates; vanilla-only
+install_drive_letter = "d"             # default
+
+# ─── Example 2: wild experiment with documented exception ──────────────
+# anno-1404-gold needs Wine-*-DXMT (vanilla trips d3dx10_43 / D3DX10).
+# wine_id points at the patched entry. The harness emits a warning at
+# run-start unless the chosen ID is one of wine_alternatives — but since
+# this exception is the *default*, we silence the warning by listing the
+# chosen ID in alternatives too. (Equivalent to "pre-approved exception".)
+[[app]]
+name         = "anno-1404-gold"
+source       = "ubisoft"
+license      = "proprietary"
+source_kind  = "third-party-game"
+license_scope = "third-party-game"
+binary       = "D:/Anno1404.exe"
+launcher     = "experiments/launchers/anno-1404-gold.sh"
+features     = ["wild", "wine"]
+status       = "passing"
+requires_wine = true
+run_timeout_sec = 120
+
+wine_id              = "heroic-11.7-dxmt"
+wine_alternatives    = ["heroic-11.7-dxmt"]   # documented exception; suppress warning
+install_drive_letter = "d"
+
+# ─── Example 3: wild with explicit A/B alternates ──────────────────────
+# An experiment whose maintainer has verified it works under a few wine
+# roots and wants A/B with --wine-id <alt> to skip the variant warning.
+[[app]]
+name         = "some-other-d3d9-game"
+source       = "..."
+license      = "proprietary"
+source_kind  = "third-party-game"
+binary       = "D:/Game.exe"
+launcher     = "experiments/launchers/some-other-d3d9-game.sh"
+requires_wine = true
+
+wine_id              = "heroic-11.7"
+wine_alternatives    = ["brew-stable", "wine-11.7-local"]   # all pre-approved
+install_drive_letter = "d"
+
+# ─── Example 4: existing fixture (NO runtime fields) ───────────────────
+# Project-authored fixtures in experiments/apps/ are unchanged. They
+# don't get wine_id or wine_alternatives — the harness keeps the legacy
+# injection path for them.
+[[app]]
+name         = "d9vk-d3d9-clear"
+source       = "https://github.com/Joshua-Ashton/d9vk"
+license      = "zlib"
+source_kind  = "third-party-fixture"
+binary       = "experiments/apps/D9VKD3D9Clear/d3d9-clear-x64.exe"
+launcher     = "experiments/launchers/dx9_fast_sanity.sh"
+requires_wine = true
+# (no wine_id, no install_drive_letter — fixture, not a wild install)
