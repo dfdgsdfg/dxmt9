@@ -2148,6 +2148,55 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       activeRenderEncoder.pushDebugGroup(makeLabelStringFmt(
           "RenderPass[rt=0x%llx,depth=0x%llx]", rt0, depth));
     }
+    // R-BACK-12.22 / 12.25 — Stage 2 argbuf-hybrid per-encoder counters.
+    // The selector reads the cached capability bool on the pool; today
+    // the runtime adopter wires the framework (capability gate, counters,
+    // descriptor build) but keeps the active binding path on Stage 1
+    // until the FFP/translator emitter variant lands and shader-runner
+    // equality (R-BACK-12.26) is verified. The selection counter still
+    // bumps once per encoder so a future activation flip is observable
+    // without re-instrumenting the encoder.
+    {
+      const auto argbufDecision = dxmt9::pipeline::selectArgbufHybridForPass(
+          drawState, ctx.pool.argbufHybridEnabled());
+      if (argbufDecision == dxmt9::pipeline::ArgbufHybridDecision::Stage2) {
+        perf::countArgbufHybridEncoder();
+        // Stage 2 per-encoder upload accounting (R-BACK-12.25). Estimate
+        // bytes uploaded against the argbuf using the same four
+        // per-frequency UBO sizes as Stage 1; the actual argbuf
+        // encodedLength is queried lazily once the encoder activates
+        // the slot-30 binding path (a follow-up after shader-runner
+        // equality). Until then this matches Stage 1's worst case so
+        // the regression compare in design.md §11.5 is apples-to-apples.
+        perf::countArgbufHybridBytes(sizeof(VsConsts) + sizeof(PsConsts) +
+                                      sizeof(FfpVsConsts) + sizeof(FfpPsConsts));
+        // R-BACK-12.25 — argbuf-hybrid mid-pass fallback counter.
+        // Steady-state expectation is zero: the per-pass selector
+        // commits at encoder open and `R-BACK-12.22` forbids mid-pass
+        // switching. The hook below tracks the eligibility predicate
+        // shape so a future activation that introduces mid-pass
+        // demotion can flip the counter without re-instrumenting the
+        // encoder. `argbufHybridEnabled()` is the cached bool that
+        // already gated the Stage 2 branch above; reading it again
+        // here is the no-op shape until a per-draw eligibility check
+        // exists. The call site is the audit anchor — kept inside a
+        // branch that is structurally reachable so future logic can
+        // refine the predicate without diff churn.
+        if (!ctx.pool.argbufHybridEnabled()) {
+          perf::countArgbufHybridFallback();
+        }
+      } else {
+        perf::countStage1Encoder();
+        // Stage 1 byte total so the regression test in design.md §11.5
+        // can compare Stage 2's expected savings. Bytes scale with the
+        // four per-frequency UBOs the encoder may upload (worst-case,
+        // dirty-mask all set on encoder open). Stage 2's counter bumps
+        // with the argbuf encodedLength when the runtime activates
+        // it; both remain comparable per-encoder.
+        perf::countStage1Bytes(sizeof(VsConsts) + sizeof(PsConsts) +
+                                sizeof(FfpVsConsts) + sizeof(FfpPsConsts));
+      }
+    }
     // R-BACK-12.12: a fresh Metal render encoder loses any prior
     // sticky bindings — every uniform category must rebind on the
     // first draw of the new encoder.

@@ -303,4 +303,38 @@ std::string makeShaderPrelude(bool withClipDistances) {
   return out.str();
 }
 
+std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
+  using namespace dxmt9::core;
+  // Reuse the Stage 1 prelude as the canonical source of truth for the
+  // five per-category uniform struct layouts + helper inlines. Append
+  // the Stage 2 ArgbufLayout wrapper struct so shaders read from the
+  // slot-30 argument buffer instead of dedicated slots 0/3. The
+  // Stage 1 struct definitions remain visible (FfpVsConsts is
+  // referenced by helpers like dxmt9_apply_texture_transform that take
+  // it by `constant FfpVsConsts&`) — the wrapper only changes the
+  // entry-point binding shape.
+  std::ostringstream out;
+  out << makeShaderPrelude(withClipDistances);
+  // ArgbufLayout mirrors the per-encoder argbuf shape (design.md §11.2).
+  // [[id(N)]] attributes pin the descriptor indices so the host-side
+  // MTLArgumentEncoder layout stays compatible across MSL versions.
+  // Texture and sampler arrays are sized to 8 — D3D9 fragment-stage
+  // sampler/texture slots, matching the existing slot binding loop in
+  // the encoder. The fragment stage reads the textures/samplers; the
+  // vertex stage may reuse the same argbuf to access the constant-buffer
+  // pointers.
+  out << "struct ArgbufLayout {\n";
+  out << "  constant VsConsts*    vsConsts [[id(0)]];\n";
+  out << "  constant FfpVsConsts* ffpVs    [[id(1)]];\n";
+  out << "  constant PsConsts*    psConsts [[id(2)]];\n";
+  out << "  constant FfpPsConsts* ffpPs    [[id(3)]];\n";
+  out << "  texture2d<float>      textures[" << kArgbufHybridTextureSlotCount
+      << "] [[id(" << kArgbufHybridConstantBufferCount << ")]];\n";
+  out << "  sampler               samplers[" << kArgbufHybridSamplerSlotCount
+      << "] [[id(" << (kArgbufHybridConstantBufferCount + kArgbufHybridTextureSlotCount)
+      << ")]];\n";
+  out << "};\n";
+  return out.str();
+}
+
 }  // namespace dxmt9::shaders

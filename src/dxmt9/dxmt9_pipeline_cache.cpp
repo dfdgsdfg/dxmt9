@@ -107,6 +107,10 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // fragment-stage and tile-stage variants of the same FFPKeyPS hit
   // distinct cache entries.
   hash = mix(hash, static_cast<u64>(key.tileFfpMode));
+  // R-BACK-12.22 / 12.23: argbuf-hybrid mode participates in the key
+  // hash so Stage 1 and Stage 2 PSOs of the same shader live in
+  // distinct cache slots.
+  hash = mix(hash, static_cast<u64>(key.argbufHybridMode));
   hash = mix(hash, key.sampleCount);
   for (auto fmt : key.colorFormats) {
     hash = mix(hash, fmt);
@@ -453,7 +457,8 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       core::FlatDrawStateView state,
                                       WMT::Reference<WMT::BinaryArchive>* archive,
                                       const std::string* archivePath,
-                                      bool tileFfpMode) {
+                                      bool tileFfpMode,
+                                      bool argbufHybridMode) {
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
     if (!handle) {
       return 0;
@@ -487,6 +492,9 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
   // tile-stage and fragment-stage variants share an FFPKeyPS but land in
   // distinct cache entries.
   key.tileFfpMode = tileFfpMode;
+  // R-BACK-12.22 / 12.23: stamp the argbuf-hybrid-mode bit so Stage 1
+  // and Stage 2 variants of the same shader compile separate PSOs.
+  key.argbufHybridMode = argbufHybridMode;
   drawshader::ShaderSourceContext shaderSource =
       drawshader::makeShaderSourceContext(state.shaderContext(), *state.hot);
   return getOrBuildDrawPipeline(device, key, std::move(shaderSource), archive, archivePath);
@@ -533,6 +541,17 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
       return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::UnsupportedState};
   }
   return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::Precision};
+}
+
+ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,
+                                                 bool argbufHybridEnabled) {
+  (void)state;
+  // Capability gate is the only criterion today (design.md §11.1):
+  // Tier-2 argbuf + Apple3 cached as a single bool on the pool. When
+  // the gate fails the pass commits to Stage 1 and never switches
+  // (R-BACK-12.22).
+  return argbufHybridEnabled ? ArgbufHybridDecision::Stage2
+                              : ArgbufHybridDecision::Stage1;
 }
 
 ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,

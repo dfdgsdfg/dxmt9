@@ -57,4 +57,42 @@ void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path);
 // When withClipDistances is true, VSOut gets a clipDistance[6] array.
 std::string makeShaderPrelude(bool withClipDistances);
 
+// R-BACK-12.22..12.26 — Stage 2 argument-buffer hybrid prelude. Emits
+// the same per-category uniform struct definitions as makeShaderPrelude,
+// then declares an `ArgbufLayout` MSL struct that wraps the per-stage
+// constant pointers + texture/sampler descriptors at the layout offsets
+// described in design.md §11.2:
+//
+//   struct ArgbufLayout {
+//     constant VsConsts* vsConsts    [[id(0)]];
+//     constant FfpVsConsts* ffpVs    [[id(1)]];
+//     constant PsConsts* psConsts    [[id(2)]];
+//     constant FfpPsConsts* ffpPs    [[id(3)]];
+//     texture2d<float> textures[8]   [[id(4)]];
+//     sampler samplers[8]            [[id(12)]];
+//   };
+//
+// Shaders compiled with this prelude bind a single argument buffer at
+// MTL slot 30 (vertex + fragment) and dereference each member instead
+// of reading dedicated slot-0/3 buffers. `DrawVolatile` (slot 5,
+// setVertexBytes) and the vertex stream (slot 1) stay on direct
+// binding — see R-BACK-12.23 / design.md §11.2.
+std::string makeShaderPreludeArgbufHybrid(bool withClipDistances);
+
+// R-BACK-12.22 — argbuf bind slot. Mirrors DXMT's slot-30 convention so
+// frame captures and existing tooling stay consistent.
+inline constexpr std::uint32_t kArgbufHybridBindSlot = 30u;
+
+// R-BACK-12.23 — argbuf descriptor field counts. The ArgbufLayout
+// struct holds 4 constant-buffer pointers, 8 texture descriptors, and
+// 8 sampler descriptors — 20 fields total. Texture and sampler indices
+// are 8 each by design (design.md §11.2 references slots 0..7). The
+// MTLArgumentEncoder consumes 20 WMTArgumentDescriptor entries.
+inline constexpr std::uint32_t kArgbufHybridConstantBufferCount = 4u;
+inline constexpr std::uint32_t kArgbufHybridTextureSlotCount = 8u;
+inline constexpr std::uint32_t kArgbufHybridSamplerSlotCount = 8u;
+inline constexpr std::uint32_t kArgbufHybridDescriptorCount =
+    kArgbufHybridConstantBufferCount + kArgbufHybridTextureSlotCount +
+    kArgbufHybridSamplerSlotCount;
+
 }  // namespace dxmt9::shaders

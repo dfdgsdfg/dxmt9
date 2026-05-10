@@ -247,6 +247,16 @@ struct Pool {
   void setSupportsApple3(bool value) noexcept { supportsApple3_ = value; }
   bool supportsApple3() const noexcept { return supportsApple3_; }
 
+  // R-BACK-12.22 — Stage 2 argument-buffer hybrid capability cache. The
+  // CommandQueue probes `MTLDevice.argumentBuffersSupport` once at
+  // construction and ANDs the result with `supportsApple3_`. Per-encoder
+  // selection reads this via `argbufHybridEnabled()`; the bool is the
+  // single source of truth for "is the device eligible for Stage 2",
+  // matching the Apple-Silicon-only contract in design.md §11.1.
+  bool argbufHybridEnabled_ = false;
+  void setArgbufHybridEnabled(bool value) noexcept { argbufHybridEnabled_ = value; }
+  bool argbufHybridEnabled() const noexcept { return argbufHybridEnabled_; }
+
   // R-BACK-14.* — small-resource heap pooling. Owned by the pool so the
   // create/destroy paths can route eligible allocations through the heap
   // before falling back to direct allocation. Initialized once from

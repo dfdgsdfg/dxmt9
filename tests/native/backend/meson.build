@@ -111,6 +111,20 @@ tile_ffp_msl_spec = executable(
 
 test('dxmt9-tile-ffp-msl-spec', tile_ffp_msl_spec)
 
+# R-BACK-12.22..12.26 — Stage 2 argument-buffer hybrid runtime adopter.
+# CPU-only spec covering capability gate, selector decision shape,
+# variant-key bit, argument-descriptor layout, and MSL prelude variant.
+# Hardware shader-runner equality (R-BACK-12.26) is a follow-up.
+argbuf_hybrid_spec = executable(
+  'dxmt9-argbuf-hybrid-spec',
+  'argbuf_hybrid_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-argbuf-hybrid-spec', argbuf_hybrid_spec)
+
 # Z1 audit item #2 — unix-side chunk-injection probe.
 # Constructs a wire-format chunk in memory and feeds it directly into
 # dxmt9c_device_commit_chunk(), bypassing PE D3D9 + the WINE_UNIX_CALL

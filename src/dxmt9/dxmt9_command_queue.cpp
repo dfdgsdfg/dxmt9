@@ -142,6 +142,15 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   // selector can gate on a single bool. WMTGPUFamilyApple3 is the floor
   // for `MTLTileRenderPipelineDescriptor` and programmable blending.
   pool_.setSupportsApple3(device_.supportsFamily(WMTGPUFamilyApple3));
+  // R-BACK-12.22 — Stage 2 argument-buffer hybrid capability gate. Enable
+  // only when the device supports Tier-2 argbufs AND lives on Apple3+.
+  // Probed once and cached on the pool so per-encoder selection is a
+  // single bool read with no Metal traffic.
+  {
+    const auto tier = device_.argumentBuffersSupport();
+    const bool tierOk = tier >= WMTArgumentBuffersTier2;
+    pool_.setArgbufHybridEnabled(tierOk && pool_.supportsApple3());
+  }
   // R-BACK-14.* — bind the small-resource heap manager to the same
   // WMT::Device + unified-memory probe used by the pool's storage-mode
   // selectors. Init must run before initializer_ / encode loops because

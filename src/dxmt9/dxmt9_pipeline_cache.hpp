@@ -77,6 +77,12 @@ struct ShaderVariantKey {
   // this to false; the selector flips it on at encoder open when the
   // pass is chosen to run on the tile path.
   bool tileFfpMode = false;
+  // R-BACK-12.22 / 12.23 — Stage 2 argbuf-hybrid mode bit. Two draws with
+  // the same shaders but different argbuf-mode selection compile separate
+  // PSOs (one Stage 1 prelude reading slot 0/3, one Stage 2 prelude
+  // reading the slot-30 argbuf). The selector flips this on at encoder
+  // open when `argbufHybridEnabled()` holds and the pass is eligible.
+  bool argbufHybridMode = false;
   u32 sampleCount = 1;
   std::array<u32, core::kMaxRenderTargets> colorFormats{};
   std::array<BlendAttachmentKey, core::kMaxRenderTargets> blend{};
@@ -184,7 +190,8 @@ class Cache {
                                   core::FlatDrawStateView state,
                                   WMT::Reference<WMT::BinaryArchive>* archive,
                                   const std::string* archivePath,
-                                  bool tileFfpMode = false);
+                                  bool tileFfpMode = false,
+                                  bool argbufHybridMode = false);
 
   std::mutex mutex{};
   PipelineMap draw{};
@@ -241,5 +248,26 @@ struct TileFfpSelection {
 };
 
 TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool supportsApple3);
+
+// R-BACK-12.22 / 12.23 — Stage 2 argbuf-hybrid per-pass selector.
+//
+// Decision tree (in order):
+//   1. !argbufHybridEnabled (capability gate fail) -> Stage1
+//   2. otherwise                                   -> Stage2
+//
+// `argbufHybridEnabled` is the cached AND of `argumentBuffersTier ≥ 2`
+// and `supportsApple3`, populated once on the resource pool at queue
+// init. The selector is deliberately conservative: when the capability
+// gate fails for any reason the pass falls back to Stage 1 — never
+// mid-pass switches (R-BACK-12.22 sentence 2).
+//
+// State-driven eligibility (e.g., "skip Stage 2 for translated-bytecode
+// pixel shaders") is recorded as a future eligibility predicate; today
+// the gate is purely capability-based, matching the runtime adopter
+// scope in design.md §11.
+enum class ArgbufHybridDecision : std::uint8_t { Stage1, Stage2 };
+
+ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,
+                                                bool argbufHybridEnabled);
 
 }  // namespace dxmt9::pipeline
