@@ -80,9 +80,9 @@ fi
 cat <<EOF
 
 Experiment commands:
-  bash scripts/run_apps/run_basic_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  bash scripts/run_apps/run_tutorial07_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  bash scripts/run_apps/run_hdrformats_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  bash scripts/run_apps/run_simple_sample_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
-  bash scripts/run_apps/run_irrlicht_managed_lights_experiment.sh --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run dx-sdk-basichlsl --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run dx-sdk-tutorial07 --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run dx-sdk-hdrformats --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run dxut-simple-sample --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
+  python3 scripts/run_apps/run_experiment.py run irrlicht-managed-lights --build --prefix "$prefix"${wine_root:+ --wine-root "$wine_root"}
 EOF

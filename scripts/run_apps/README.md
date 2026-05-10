@@ -1,17 +1,19 @@
 # scripts/run_apps
 
-Per-app experiment runners. Each shell wrapper is a thin shim around
-`run_experiment.py` for one entry in `experiments/CATALOGUE.toml`. None of
-these are wired to Meson tests; they are evidence-gathering tools.
+Per-app experiment runners. Most apps go through the consolidated Python
+driver; a small number that need extra host-specific setup (default-prefix
+injection, installer extraction) keep a thin shell wrapper. None of these are
+wired to Meson tests; they are evidence-gathering tools.
 
 - `run_experiment.py` — core runner: stages a Wine prefix, launches the app,
   collects logs and metrics. All other entries here call this.
-- `run_anno1404_experiment.sh` — Anno 1404 Gold launcher.
-- `run_basic_experiment.sh` — DX SDK BasicHLSL.
-- `run_hdrformats_experiment.sh` — DX SDK HDRFormats.
-- `run_irrlicht_managed_lights_experiment.sh` — Irrlicht managed lights.
-- `run_multitextureterrain_experiment.sh` — multitexture terrain.
-- `run_sfiv_benchmark_experiment.sh` — Street Fighter IV benchmark.
-- `run_simple_sample_experiment.sh` — DXUT simple sample.
-- `run_tutorial07_experiment.sh` — DX SDK Tutorial07.
-- `run_waterrt_experiment.sh` — water render-target demo.
+  - `python3 run_experiment.py list` — list catalogue entries.
+  - `python3 run_experiment.py run <name>` — run one app.
+  - `python3 run_experiment.py run <name> --build` — first run the app's
+    `build_script` field from `experiments/CATALOGUE.toml`, then run. Errors if
+    the app has no `build_script` declared.
+- `run_anno1404_experiment.sh` — Anno 1404 Gold launcher (injects default
+  Heroic `--wine-root` and `--prefix`; no build step).
+- `run_sfiv_benchmark_experiment.sh` — Street Fighter IV benchmark (extracts
+  the public installer's MSI, installs prefix-native `d3dx9_41`, picks the
+  Heroic vs CrossOver host lane).

@@ -68,6 +68,7 @@ class ExperimentApp:
     skip_stage: bool = False
     wine_dll_overrides: str | None = None
     cx_bottle: str | None = None
+    build_script: str | None = None
     # Optional probe-level expected-range gate. Each entry maps a counter
     # key (matching kCounterTable in src/dxmt9/dxmt9_perf_counters.cpp) to
     # an inclusive {min, max} range. Either bound may be omitted. Absent
@@ -113,6 +114,7 @@ class ExperimentApp:
             skip_stage=bool(data.get("skip_stage", False)),
             wine_dll_overrides=data.get("wine_dll_overrides"),
             cx_bottle=data.get("cx_bottle"),
+            build_script=data.get("build_script"),
         )
 
     def attach_expected_counters(self, raw: dict[str, Any] | None) -> None:
@@ -153,6 +155,12 @@ class ExperimentApp:
     @property
     def reference_path(self) -> Path:
         return REPO_ROOT / self.reference
+
+    @property
+    def build_script_path(self) -> Path | None:
+        if self.build_script is None:
+            return None
+        return REPO_ROOT / self.build_script
 
 
 def load_catalogue(path: Path) -> list[ExperimentApp]:
@@ -861,6 +869,11 @@ def main() -> int:
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
     run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")
+    run_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="Run the app's build_script (from CATALOGUE.toml) before launching",
+    )
 
     args = parser.parse_args()
     apps = load_catalogue(CATALOGUE_PATH)
@@ -872,6 +885,16 @@ def main() -> int:
     if app is None:
         print(f"unknown experiment: {args.name}", file=sys.stderr)
         return 2
+    if getattr(args, "build", False):
+        build_script_path = app.build_script_path
+        if build_script_path is None:
+            print(
+                f"app {app.name} has no build_script in CATALOGUE; "
+                f"add a build_script field or omit --build",
+                file=sys.stderr,
+            )
+            return 2
+        run_command(["bash", str(build_script_path)], cwd=REPO_ROOT)
     return run_experiment(app, args)
 
 

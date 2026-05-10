@@ -61,14 +61,21 @@ Notes:
 - use the cleanup script when earlier runs were killed hard or the machine was
   interrupted and old `dxmt9-exp-*` prefixes remain under that temp root
 
-One-shot wrappers for the verified real apps:
+Build-then-run via the consolidated runner. Pass `--build` to invoke the
+app's `build_script` (declared in `CATALOGUE.toml`) before launching:
 
 ```sh
-bash scripts/run_apps/run_basic_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_apps/run_tutorial07_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_apps/run_hdrformats_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_apps/run_simple_sample_experiment.sh --wine-root "$WINE_ROOT"
-bash scripts/run_apps/run_irrlicht_managed_lights_experiment.sh --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-basichlsl --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-tutorial07 --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-hdrformats --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dxut-simple-sample --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run irrlicht-managed-lights --build --wine-root "$WINE_ROOT"
+```
+
+Wrappers that still need extra setup (default-prefix injection or installer
+extraction) remain as shell scripts:
+
+```sh
 bash scripts/run_apps/run_anno1404_experiment.sh
 bash scripts/run_apps/run_sfiv_benchmark_experiment.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 bash scripts/run_suites/run_sfiv_benchmark_crossover_oracle.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
