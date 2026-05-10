@@ -306,6 +306,11 @@ void CommandQueue::clearAllTouchedColorHandles() {
   touchedColorHandles_.clear();
 }
 
+void CommandQueue::markPendingDirtyAll() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::markAllDirty(pendingDirty_);
+}
+
 CommandQueue::~CommandQueue() {
   if (threadsStarted_) {
     stopThreads();

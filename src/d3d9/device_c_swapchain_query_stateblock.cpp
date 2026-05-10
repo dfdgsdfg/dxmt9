@@ -1,5 +1,11 @@
 #include "device_c_provider.hpp"
 
+// Needed so dxmt9c_stateblock_apply can mark the per-frequency uniform
+// DirtyState on the queue. A state-block apply is bulk state mutation
+// that bypasses per-record dirty marking; flagging every DirtyBit
+// matches Wine's "stateblock apply re-derives derived state" oracle.
+#include "dxmt9/dxmt9_device.hpp"
+
 using namespace dxmt9::d3d9::devicec;
 
 namespace {
@@ -263,6 +269,18 @@ extern "C" int32_t dxmt9c_stateblock_apply(D9CStateBlock* s) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   s->obj->apply(s->device->dev());
+  // Derived-cache invalidation: the d3d9::core::Device flat
+  // drawStateCache_{WithIndex,NoIndex} are already invalidated through
+  // the mutableState() accessor inside StateBlock::apply, but the
+  // dxmt9::CommandQueue's pendingDirty_ accumulator (per-frequency
+  // uniform DirtyState) sits one layer above and must also be flagged
+  // — otherwise the next encode chunk would observe a stale "no
+  // uniforms changed" hint and skip re-uploading FFP/PSO uniforms that
+  // the bulk state mutation altered. Mirrors Wine d3d9/stateblock.c
+  // wined3d_stateblock_apply semantics.
+  if (auto upper = s->device->dev().upperDevice()) {
+    upper->queue().markPendingDirtyAll();
+  }
   const auto& state = s->device->dev().state();
   const auto renderStateValue = [&](uint32_t key) -> uint32_t {
     const auto it = state.renderStates.find(key);

@@ -426,6 +426,13 @@ class CommandQueue {
   void applyDirtyRenderStateAlpha();
   void applyDirtyRenderStateTexFactor();
 
+  // Mark every per-frequency uniform DirtyBit on pendingDirty_. Used by
+  // the d3d9 stateblock-apply path: a state-block apply is bulk state
+  // mutation that bypasses per-record dirty marking, so the next
+  // EncodeContext must observe "everything could have changed since the
+  // last encode call" and re-upload all per-frequency UBOs.
+  void markPendingDirtyAll();
+
   // Snapshot + reset pendingDirty_. Called by makeEncodeContext (and
   // tests) to atomically move the accumulated dirty state into a new
   // encoder. Public so the d2 unit tests can drive end-to-end coverage
