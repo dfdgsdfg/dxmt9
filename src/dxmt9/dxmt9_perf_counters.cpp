@@ -250,6 +250,12 @@ struct Counters {
   std::atomic<std::uint64_t> tileFfpFallbackGpuFamily{0};
   std::atomic<std::uint64_t> tileFfpFallbackMidPassIneligible{0};
   std::atomic<std::uint64_t> tileFfpMidPassResplitCount{0};
+  // R-BACK-12.22~12.26 — Stage 2 Argbuf hybrid counters.
+  std::atomic<std::uint64_t> argbufHybridEncoderCount{0};
+  std::atomic<std::uint64_t> stage1EncoderCount{0};
+  std::atomic<std::uint64_t> argbufHybridFallbackCount{0};
+  std::atomic<std::uint64_t> argbufHybridBytesPerEncoder{0};
+  std::atomic<std::uint64_t> stage1BytesPerEncoder{0};
   // R-BACK-3.7 / 3.8 / 4.8: binary-archive prewarming counters.
   std::atomic<std::uint64_t> prewarmEntriesLoaded{0};
   std::atomic<std::uint64_t> prewarmLoadCpuNs{0};
@@ -560,7 +566,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 369> kCounterTable = {{
+constexpr std::array<CounterEntry, 374> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -739,6 +745,11 @@ constexpr std::array<CounterEntry, 369> kCounterTable = {{
     {"tile_ffp_fallback_gpu_family", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpFallbackGpuFamily, nullptr, nullptr, 0.0},
     {"tile_ffp_fallback_mid_pass_ineligible", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpFallbackMidPassIneligible, nullptr, nullptr, 0.0},
     {"tile_ffp_mid_pass_resplit_count", CounterEntry::Kind::UnsignedCount, &Counters::tileFfpMidPassResplitCount, nullptr, nullptr, 0.0},
+    {"argbuf_hybrid_encoder_count", CounterEntry::Kind::UnsignedCount, &Counters::argbufHybridEncoderCount, nullptr, nullptr, 0.0},
+    {"stage1_encoder_count", CounterEntry::Kind::UnsignedCount, &Counters::stage1EncoderCount, nullptr, nullptr, 0.0},
+    {"argbuf_hybrid_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::argbufHybridFallbackCount, nullptr, nullptr, 0.0},
+    {"argbuf_hybrid_bytes_per_encoder", CounterEntry::Kind::UnsignedCount, &Counters::argbufHybridBytesPerEncoder, nullptr, nullptr, 0.0},
+    {"stage1_bytes_per_encoder", CounterEntry::Kind::UnsignedCount, &Counters::stage1BytesPerEncoder, nullptr, nullptr, 0.0},
     {"prewarm_entries_loaded", CounterEntry::Kind::UnsignedCount, &Counters::prewarmEntriesLoaded, nullptr, nullptr, 0.0},
     {"prewarm_load_cpu_ns", CounterEntry::Kind::UnsignedCount, &Counters::prewarmLoadCpuNs, nullptr, nullptr, 0.0},
     {"prewarm_failure_corrupt", CounterEntry::Kind::UnsignedCount, &Counters::prewarmFailureCorrupt, nullptr, nullptr, 0.0},
@@ -1369,6 +1380,17 @@ void countTileFfpFallbackMidPassIneligible() {
   add(counters().tileFfpFallbackMidPassIneligible);
 }
 void countTileFfpMidPassResplit() { add(counters().tileFfpMidPassResplitCount); }
+
+// R-BACK-12.22~12.26 — Stage 2 Argbuf hybrid.
+void countArgbufHybridEncoder() { add(counters().argbufHybridEncoderCount); }
+void countStage1Encoder() { add(counters().stage1EncoderCount); }
+void countArgbufHybridFallback() { add(counters().argbufHybridFallbackCount); }
+void countArgbufHybridBytes(std::uint64_t bytes) {
+  add(counters().argbufHybridBytesPerEncoder, bytes);
+}
+void countStage1Bytes(std::uint64_t bytes) {
+  add(counters().stage1BytesPerEncoder, bytes);
+}
 
 // R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming + cross-process.
 void countPrewarmEntriesLoaded(std::uint64_t entries) {

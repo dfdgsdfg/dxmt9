@@ -144,6 +144,12 @@ void countTileFfpFallbackUnsupportedState();
 void countTileFfpFallbackGpuFamily();
 void countTileFfpFallbackMidPassIneligible();
 void countTileFfpMidPassResplit();
+// R-BACK-12.22~12.26 — Stage 2 Argbuf hybrid counters.
+void countArgbufHybridEncoder();
+void countStage1Encoder();
+void countArgbufHybridFallback();
+void countArgbufHybridBytes(std::uint64_t bytes);
+void countStage1Bytes(std::uint64_t bytes);
 // R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming counters.
 void countPrewarmEntriesLoaded(std::uint64_t entries);
 void countPrewarmLoadCpuTime(std::uint64_t nanoseconds);
