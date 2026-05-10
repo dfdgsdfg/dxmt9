@@ -90,6 +90,26 @@ heap_pooling_spec = executable(
 
 test('dxmt9-heap-pooling-spec', heap_pooling_spec)
 
+# R-BACK-5.8 — D3DUSAGE_DYNAMIC rename ring fresh-allocate fallback.
+# CPU-only spec: drives Pool::createBuffer + Pool::finalizeBufferMap on
+# a synthetic NULL device so the ring's structural shape (entry count,
+# active index, lastUsedSeqId watermarks) is exercised without a real
+# Metal allocation. Live shared-mode behavior is covered by the runtime
+# integration suite. dxmt9_winemetal_dep is needed because BufferRecord
+# and BufferRenameRingEntry hold WMT::Reference<Buffer> destructors
+# that link against winemetal's NSObject_release; the spec only
+# constructs default-initialized references (handle == 0) so no actual
+# release call ever executes.
+dynamic_rename_ring_spec = executable(
+  'dxmt9-dynamic-rename-ring-spec',
+  'dynamic_rename_ring_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-dynamic-rename-ring-spec', dynamic_rename_ring_spec)
+
 # R-BACK-13.* — Tile-shader FFP selector + MSL emit specs.
 tile_ffp_selector_spec = executable(
   'dxmt9-tile-ffp-selector-spec',

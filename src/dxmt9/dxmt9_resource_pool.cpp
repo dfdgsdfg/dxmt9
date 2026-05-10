@@ -206,6 +206,14 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
   BufferRecord record;
   record.desc = desc;
   record.shadow.resize(static_cast<std::size_t>(desc.size));
+  // R-BACK-5.8 — DEFAULT + UsageDynamic selects the per-handle rename
+  // ring. Tag at create time so `finalizeBufferMap` can branch without
+  // re-checking pool/usage on every DISCARD lock. Heap-backed
+  // allocation is mutually exclusive with the rename ring (heap
+  // classifyBuffer rejects UsageDynamic per R-BACK-14.2), so the
+  // create-time allocation always lands in the ring's first slot.
+  record.isDynamicRename =
+      desc.pool == core::Pool::Default && (desc.usage & core::UsageDynamic) != 0u;
   if (desc.pool != core::Pool::SystemMem && desc.pool != core::Pool::Scratch) {
     WMTBufferInfo info{};
     info.length = desc.size;
@@ -257,6 +265,20 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
         perf::countUseResource();
       }
       record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
+    }
+    // R-BACK-5.8 — seed the rename ring with the create-time allocation.
+    // Subsequent DISCARD locks rotate within or grow this ring instead
+    // of blocking on the GPU. We always seed (even when newBuffer
+    // returned NULL_OBJECT_HANDLE in test environments) so the
+    // book-keeping shape stays uniform — `finalizeBufferMap` falls
+    // back to the shadow pointer when contents is null.
+    if (record.isDynamicRename) {
+      BufferRenameRingEntry entry;
+      entry.buffer = record.buffer;
+      entry.contents = record.contents;
+      entry.lastUsedSeqId = 0;
+      record.renameRing.push_back(std::move(entry));
+      record.renameActiveIndex = 0;
     }
   }
   const auto handle = bufferArena_.insert(std::move(record));
@@ -785,10 +807,92 @@ u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
   return record->lastUsedSeqId;
 }
 
-void* Pool::finalizeBufferMap(core::BufferHandle handle, u32 flags) {
+// R-BACK-5.8 — rotate a DYNAMIC + DEFAULT buffer's rename ring on
+// `D3DLOCK_DISCARD`. Walks the ring for an entry whose `lastUsedSeqId`
+// is at or below the GPU completion watermark and swaps it in as the
+// active allocation; if every entry is still in flight, allocates a
+// fresh `MTLStorageModeShared` buffer and appends it to the ring
+// rather than blocking on prior GPU completion. Mirrors the active
+// entry into `record.buffer / contents / lastUsedSeqId` for the
+// existing bind paths. Caller already serialized on the pool mutex
+// and confirmed `record->isDynamicRename`.
+namespace {
+void rotateDynamicRename(WMT::Device device,
+                         BufferRecord& record,
+                         u64 completedSeqId) {
+  // Stamp the active entry's last-used seqId before rotating away from
+  // it — `record.lastUsedSeqId` carries the watermark from
+  // markBufferUse / markDrawResources, but the ring entry needs its
+  // own copy so a future rename can tell whether this allocation has
+  // drained.
+  if (record.renameActiveIndex < record.renameRing.size()) {
+    record.renameRing[record.renameActiveIndex].lastUsedSeqId =
+        std::max(record.renameRing[record.renameActiveIndex].lastUsedSeqId,
+                 record.lastUsedSeqId);
+  }
+  // Fast path: the active slot is itself idle. The DISCARD only needs
+  // a fresh write surface, not a different allocation — return without
+  // touching the ring shape. Zero-fill happens in finalizeBufferMap.
+  if (record.renameActiveIndex < record.renameRing.size() &&
+      record.renameRing[record.renameActiveIndex].lastUsedSeqId <= completedSeqId) {
+    record.lastUsedSeqId = record.renameRing[record.renameActiveIndex].lastUsedSeqId;
+    return;
+  }
+  // Look for any other idle entry to rotate into.
+  for (std::size_t i = 0; i < record.renameRing.size(); ++i) {
+    if (i == record.renameActiveIndex) {
+      continue;
+    }
+    if (record.renameRing[i].lastUsedSeqId <= completedSeqId) {
+      record.renameActiveIndex = static_cast<u32>(i);
+      auto& entry = record.renameRing[i];
+      record.buffer = entry.buffer;
+      record.contents = entry.contents;
+      // The new active slot becomes idle until the next bind stamps it
+      // again; reset the per-record watermark so later marks don't
+      // carry forward stale data from the previous active member.
+      record.lastUsedSeqId = entry.lastUsedSeqId;
+      return;
+    }
+  }
+  // No idle entry anywhere — fresh-allocate per R-BACK-5.8. Do NOT
+  // block on GPU completion; the spec explicitly requires growth over
+  // wait.
+  WMTBufferInfo info{};
+  info.length = record.desc.size;
+  info.options = WMTResourceStorageModeShared;
+  auto fresh = device.newBuffer(info);
+  BufferRenameRingEntry entry;
+  entry.buffer = std::move(fresh);
+  entry.contents = info.memory.ptr;
+  entry.lastUsedSeqId = 0;
+  if (entry.buffer) {
+    perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+    perf::countUseResource();
+  }
+  record.renameRing.push_back(std::move(entry));
+  record.renameActiveIndex = static_cast<u32>(record.renameRing.size() - 1);
+  auto& active = record.renameRing.back();
+  record.buffer = active.buffer;
+  record.contents = active.contents;
+  record.lastUsedSeqId = 0;
+}
+}  // namespace
+
+void* Pool::finalizeBufferMap(WMT::Device device,
+                              core::BufferHandle handle,
+                              u32 flags,
+                              u64 completedSeqId) {
   auto* record = findBuffer(handle.value);
   if (!record) {
     return nullptr;
+  }
+  // R-BACK-5.8 — rotate the rename ring before zero-fill so the bytes
+  // we clear belong to the freshly active allocation, not the old
+  // (possibly still-in-flight) one. Non-DYNAMIC paths skip this.
+  if ((flags & core::UsageDiscard) != 0 && record->isDynamicRename &&
+      !record->renameRing.empty()) {
+    rotateDynamicRename(device, *record, completedSeqId);
   }
   if ((flags & core::UsageDiscard) != 0) {
     std::fill(record->shadow.begin(), record->shadow.end(), 0);

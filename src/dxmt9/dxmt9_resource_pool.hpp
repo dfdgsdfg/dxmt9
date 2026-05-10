@@ -27,6 +27,20 @@ using u8 = std::uint8_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
+// R-BACK-5.8 — per-buffer-handle rename ring entry. DYNAMIC + DEFAULT
+// buffers carry a small inline ring of `MTLStorageModeShared`
+// allocations and rotate among them on `D3DLOCK_DISCARD` rather than
+// blocking on prior GPU completion. Each entry owns a Metal buffer
+// reference and remembers its last-used seqId; rename selects the
+// first entry whose `lastUsedSeqId` is at or below `completedSeqId`,
+// or appends a fresh allocation when none qualify (capacity grows on
+// demand and never shrinks per session).
+struct BufferRenameRingEntry {
+  WMT::Reference<WMT::Buffer> buffer;
+  void* contents = nullptr;  // shared-mode CPU pointer
+  u64 lastUsedSeqId = 0;
+};
+
 struct BufferRecord {
   core::BufferDesc desc{};
   WMT::Reference<WMT::Buffer> buffer;
@@ -42,6 +56,16 @@ struct BufferRecord {
   // sees the final use.
   bool isHeapBacked = false;
   WMT::Heap heap{};
+  // R-BACK-5.8 — DYNAMIC + DEFAULT rename-ring state. `isDynamicRename`
+  // is set at create time when the storage policy selects the rename
+  // ring (`Pool::Default` + `UsageDynamic`). `renameRing` always carries
+  // at least the create-time allocation; `renameActiveIndex` points at
+  // the entry currently mirrored into `buffer`/`contents`. The ring
+  // never shrinks during a session — capacity grows by one allocation
+  // each time a DISCARD rename finds no idle entry.
+  bool isDynamicRename = false;
+  u32 renameActiveIndex = 0;
+  std::vector<BufferRenameRingEntry> renameRing;
 };
 
 struct TextureRecord {
@@ -315,7 +339,18 @@ struct Pool {
   // return the CPU pointer for the buffer. Must be called AFTER any
   // required wait has completed. Returns nullptr for missing handle
   // or empty storage. Caller holds the pool's mutex.
-  void* finalizeBufferMap(core::BufferHandle handle, u32 flags);
+  //
+  // R-BACK-5.8 — when the record is `isDynamicRename` and `flags`
+  // carries `UsageDiscard`, this rotates the per-handle rename ring
+  // before returning the CPU pointer. The rotation prefers an entry
+  // whose `lastUsedSeqId <= completedSeqId`; if none exist a fresh
+  // `MTLStorageModeShared` buffer is allocated via `device.newBuffer`
+  // and appended to the ring rather than blocking on GPU completion.
+  // Non-DYNAMIC paths ignore `device` and `completedSeqId`.
+  void* finalizeBufferMap(WMT::Device device,
+                          core::BufferHandle handle,
+                          u32 flags,
+                          u64 completedSeqId);
 
   // Allocate a new buffer record (shared-mode WMT buffer + shadow).
   // Pool::Scratch / Pool::SystemMem skip the WMT allocation.

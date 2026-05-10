@@ -1229,7 +1229,11 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   if (waitSeq > completedSeqId_) {
     queueLifecycle_.waitForSequence(lock, waitSeq);
   }
-  return pool_.finalizeBufferMap(handle, flags);
+  // R-BACK-5.8 — pass the GPU completion watermark and the device
+  // reference so the rename ring can rotate / fresh-allocate on
+  // DISCARD without blocking on prior completion. Non-DYNAMIC paths
+  // ignore both arguments.
+  return pool_.finalizeBufferMap(device_, handle, flags, completedSeqId_);
 }
 
 bool CommandQueue::readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) {
