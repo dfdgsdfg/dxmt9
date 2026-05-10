@@ -2182,5 +2182,11 @@ WINEMETAL_API void MTLRenderCommandEncoder_setTileBuffer(obj_handle_t encoder, o
 WINEMETAL_API void MTLRenderCommandEncoder_setTileTexture(obj_handle_t encoder, obj_handle_t texture, uint32_t index);
 WINEMETAL_API void MTLRenderCommandEncoder_setTileBytes(obj_handle_t encoder, const void *bytes, uint64_t length, uint32_t index);
 WINEMETAL_API void MTLRenderCommandEncoder_setTileSamplerState(obj_handle_t encoder, obj_handle_t sampler, uint32_t index);
+// Tile dimensions Metal chose for the current render-pass attachment shape.
+// Readable on the live encoder after it is opened. Used by the dxmt9 runtime
+// to size dispatchThreadsPerTile against the GPU's preferred tile rather than
+// a hardcoded fallback (R-BACK-13.x).
+WINEMETAL_API uint64_t MTLRenderCommandEncoder_tileWidth(obj_handle_t encoder);
+WINEMETAL_API uint64_t MTLRenderCommandEncoder_tileHeight(obj_handle_t encoder);
 
 #endif

@@ -1078,14 +1078,21 @@ bool encodeDraw(EncodeContext& ctx,
       // both render and tile commands; setTileRenderPipelineState binds
       // the tile-stage variant built from makeFfpTilePixelSource and
       // dispatchThreadsPerTile launches one tile-stage thread per
-      // tile. Tile size is pinned to 16x16 — Apple GPU's typical tile
-      // dimension; threadgroup_size_matches_tile_size = 1 on the
-      // descriptor side keeps Metal in agreement.
-      // TODO(R-BACK-13.x): query MTLDevice for the GPU's exact preferred
-      // tile size (e.g. via tileSizeForRenderPipelineState if exposed
-      // through winemetal) and replace the 16x16 hardcode.
+      // tile. Metal computes the pass tile size from the bound
+      // attachment shape and exposes it via tileWidth/tileHeight on
+      // the encoder; query that as the source of truth and fall back
+      // to 16x16 (Apple GPU's typical tile dimension) if Metal returns
+      // 0 — older OS or unsupported attachment shapes.
+      // threadgroup_size_matches_tile_size = 1 on the descriptor side
+      // keeps Metal in agreement with the dispatch.
       encoder.setTileRenderPipelineState(pipeline);
-      encoder.dispatchThreadsPerTile(WMTSize{16u, 16u, 1u});
+      uint64_t tileW = encoder.tileWidth();
+      uint64_t tileH = encoder.tileHeight();
+      if (tileW == 0u || tileH == 0u) {
+        tileW = 16u;
+        tileH = 16u;
+      }
+      encoder.dispatchThreadsPerTile(WMTSize{tileW, tileH, 1u});
       countPipelineBind();
     } else {
       encoder.setRenderPipelineState(pipeline);

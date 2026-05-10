@@ -756,6 +756,19 @@ public:
   setTileSamplerState(SamplerState sampler, uint32_t index) {
     MTLRenderCommandEncoder_setTileSamplerState(handle, sampler.handle, index);
   }
+
+  // Tile-size getters. Metal computes the pass tile size from the bound
+  // attachment shape; reading these reflects the GPU's chosen dimension and
+  // lets dxmt9 size dispatchThreadsPerTile against it instead of a constant.
+  uint64_t
+  tileWidth() const {
+    return MTLRenderCommandEncoder_tileWidth(handle);
+  }
+
+  uint64_t
+  tileHeight() const {
+    return MTLRenderCommandEncoder_tileHeight(handle);
+  }
 };
 
 class BlitCommandEncoder : public CommandEncoder {

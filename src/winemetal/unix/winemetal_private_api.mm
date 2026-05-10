@@ -1026,6 +1026,16 @@ extern "C" void MTLRenderCommandEncoder_setTileSamplerState(obj_handle_t encoder
   [(id<MTLRenderCommandEncoder>)encoder setTileSamplerState:(id<MTLSamplerState>)sampler atIndex:index];
 }
 
+extern "C" uint64_t MTLRenderCommandEncoder_tileWidth(obj_handle_t encoder) {
+  if (!encoder) return 0;
+  return (uint64_t)[(id<MTLRenderCommandEncoder>)encoder tileWidth];
+}
+
+extern "C" uint64_t MTLRenderCommandEncoder_tileHeight(obj_handle_t encoder) {
+  if (!encoder) return 0;
+  return (uint64_t)[(id<MTLRenderCommandEncoder>)encoder tileHeight];
+}
+
 // -- Fence / Event --
 
 extern "C" obj_handle_t MTLDevice_newFence(obj_handle_t device) {
