@@ -65,6 +65,7 @@ BRIDGE_COUNTER_PATTERN = re.compile(r"^\[dxmt9-bridge-perf\]\s+(.*)$")
 PE_RECORDER_COUNTER_PATTERN = re.compile(r"^\[dxmt9-device\]\s+(?:[A-Za-z]+:\s+)?pe_recorder_stats\s+(.*)$")
 PERF_PROBE_PATTERN = re.compile(r"^\[perf-probe\]\s+(.*)$")
 PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s}]+)")
+_DRIVE_LETTER_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 
 
 @dataclass
@@ -175,8 +176,41 @@ class ExperimentApp:
         self.expected_counters = cleaned or None
 
     @property
+    def binary_is_windows_path(self) -> bool:
+        """True when binary is a drive-letter path (e.g. 'D:/CAPCOM/...').
+
+        Such paths only make sense for wild experiments where the apps_3rd
+        install is junctioned into the prefix via dosdevices/<letter>:.
+        """
+        return bool(_DRIVE_LETTER_RE.match(self.binary))
+
+    @property
     def binary_path(self) -> Path:
+        """Local POSIX path to the binary on disk (for existence checks).
+
+        For wild experiments using a drive-letter binary, this translates
+        '<L>:/rest' to 'experiments/apps_3rd/<name>/rest', mirroring the
+        dosdevices junction set up by scripts/wine/bootstrap_prefix.py.
+        """
+        m = _DRIVE_LETTER_RE.match(self.binary)
+        if m:
+            letter, rest = m.group(1), m.group(2)
+            if letter.lower() != self.install_drive_letter.lower():
+                raise ValueError(
+                    f"{self.name}: binary drive letter {letter!r} != "
+                    f"install_drive_letter {self.install_drive_letter!r}"
+                )
+            return REPO_ROOT / "experiments" / "apps_3rd" / self.name / rest.replace("\\", "/")
         return REPO_ROOT / self.binary
+
+    @property
+    def binary_for_wine(self) -> str:
+        """Path string to hand to Wine.
+
+        Windows-style for wild drive-letter installs (Wine resolves via
+        dosdevices); the local POSIX path otherwise.
+        """
+        return self.binary if self.binary_is_windows_path else str(self.binary_path)
 
     @property
     def launcher_path(self) -> Path:
@@ -763,7 +797,9 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         env.update(
             {
                 "DXMT_EXPERIMENT_NAME": app.name,
-                "DXMT_EXPERIMENT_BINARY": str(binary_path),
+                "DXMT_EXPERIMENT_BINARY": (
+                    args.binary if args.binary else app.binary_for_wine
+                ),
                 "DXMT_EXPERIMENT_PREFIX": str(prefix),
                 "DXMT_EXPERIMENT_WINE_ROOT": str(wine_root) if wine_root else "",
                 "DXMT_EXPERIMENT_WINE_BIN": str(wine_bin),
