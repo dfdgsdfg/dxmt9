@@ -122,3 +122,8 @@ test('dxmt9-perf-counter-callsite-audit', python3,
 test('dxmt9-corpus-sync-smoke', python3,
      args: [join_paths(meson.project_source_root(), 'tests/shader_runner/corpus_sync_smoke.py')],
      is_parallel: false)
+test('dxmt9-wine-resolve', python3,
+     args: ['-m', 'unittest', 'tests.scripts.test_wine_resolve'],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
