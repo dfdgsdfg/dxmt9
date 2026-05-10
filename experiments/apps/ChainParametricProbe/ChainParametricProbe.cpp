@@ -98,6 +98,12 @@ struct AppState {
   int chainLength = 4;
   int drawsPerPass = 50;
   int iterations = 1000;
+  // CHAIN_PRESENT_INTERVAL: 0 = no Present (the original B6-isolated
+  // mode; chunks must drain at process-exit only); N>0 = Present every
+  // N iterations to force encode-thread flush during the run. Without
+  // a periodic flush the queue can accept admits but defer encoding
+  // until cleanup, which makes per-frame attribution noisy.
+  int presentInterval = 0;
   int iter = 0;
   bool quit = false;
   LARGE_INTEGER qpcFrequency{};
@@ -457,10 +463,26 @@ void run_iteration(AppState& app) {
     app.device->EndScene();
   }
 
-  // Deliberately NO Present(): coupling B6 (drawable acquisition) into
-  // the measurement is what we are trying to avoid. The PE recorder's
-  // own auto-flush will commit chunks across the run.
+  // Per CHAIN_PRESENT_INTERVAL, optionally Present to force encode-
+  // thread flush. Setting CHAIN_PRESENT_INTERVAL=0 (default) keeps the
+  // pure-B3/B4 isolation but in practice has shown the encode thread
+  // can defer all work until process-exit drain (chunk_admit fires but
+  // command_buffers stays 0). Setting CHAIN_PRESENT_INTERVAL=10 (or
+  // similar) gives the encode thread a periodic flush trigger so the
+  // per-iteration counter deltas are meaningful. The Present cost
+  // contaminates B6 every N-th iteration; choose N small enough that
+  // encode-thread work shows up but large enough that B6 isn't the
+  // dominant signal in the per-iteration counter view.
   ++app.iter;
+  if (app.presentInterval > 0 &&
+      (app.iter % app.presentInterval) == 0) {
+    HRESULT hr = app.device->Present(nullptr, nullptr, nullptr, nullptr);
+    if (FAILED(hr)) {
+      print_hresult("Present", hr);
+      app.quit = true;
+      return;
+    }
+  }
   if ((app.iter % 100) == 0) {
     trace_log("OK: completed iteration %d", app.iter);
   }
@@ -512,6 +534,8 @@ int main(int argc, char** argv) {
       "CHAIN_DRAWS_PER_PASS", 50, kDrawsPerPassMin, kDrawsPerPassMax);
   app.iterations = env_int_clamped(
       "CHAIN_ITERATIONS", 1000, kIterationsMin, kIterationsMax);
+  app.presentInterval = env_int_clamped(
+      "CHAIN_PRESENT_INTERVAL", 0, 0, 100000);
 
   char trace_path[MAX_PATH]{};
   if (asset_path("ChainParametricProbe.trace.txt",

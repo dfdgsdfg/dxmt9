@@ -161,12 +161,86 @@ bash scripts/run_suites/run_boundary_audit_suite.sh
 
 ## Open follow-ups (next cycle)
 
-1. **Chain probe encode anomaly** (highest priority): why zero CBs
-   despite admitted chunks? Likely a Present-driven flush dependency.
-   Either fix the probe to add Present, or fix the runtime to
-   surface this case as an explicit chunk-stall counter.
+1. ~~**Chain probe encode anomaly**~~ — **resolved by X1 (2026-05-10)**.
+   Cause: encode thread is dormant without a Present-triggered flush.
+   Adding `CHAIN_PRESENT_INTERVAL=10` to the probe (Present every 10
+   iterations) restores expected behavior. Fix shipped in
+   `experiments/apps/ChainParametricProbe/ChainParametricProbe.cpp`.
+   Runtime-side investigation deferred — the no-Present case may
+   represent a real edge in the queue lifecycle worth a separate
+   gap.md row, but it does not block the cap=4 measurement.
 2. **Heavy SFIV B4 baseline with `--boundary B4`** to compare against
    the existing SFIV per-frame data. This validates B4 schema.
 3. **Present-loop full A/B** under each `DXMT9_PRESENT_*` mode for
    the B6 baseline.
-4. **R-BACK-2.34 default-flip decision** — pending #1 above.
+4. **R-BACK-2.34 default-flip decision** — see X1 result below; one
+   workload now supports the flip but more evidence (different RP
+   density, different draw count per pass) is desirable.
+
+---
+
+## X1 — chain probe with `CHAIN_PRESENT_INTERVAL=10` (2026-05-10)
+
+After adding optional Present to ChainParametricProbe, three runs at
+CHAIN_LENGTH=4 / CHAIN_DRAWS_PER_PASS=20 / CHAIN_ITERATIONS=300:
+
+| metric | NO PRESENT | PRESENT=10 / off | PRESENT=10 / cap=4 |
+|---|---:|---:|---:|
+| `chunk_admit` | 1201 | 1231 | 1231 |
+| `submit_draw` (PE side) | 24,000 | 24,000 | 24,000 |
+| `submit_present` | 0 | 30 | 30 |
+| `command_buffers` | **0** | 28 | **112** (4×) |
+| `sub_command_buffers` | 0 | 0 | **84** (3 mid-chunk × 28) |
+| `chunk_subcb_count_max` | 0 | 1 | **4** (cap holds) |
+| `render_pass_begin` | 0 | 1120 | 1120 |
+| `encode_chunk_cpu_ms` | 0 | 621.6 | **230.7** (−63%) |
+| `gpu_command_buffer_time_ms` | 0 | 118.9 | 103.2 (−13%) |
+| `completion_wait_ms` | 0 | 134.8 | 122.7 (−9%) |
+| `present_acquire_wait_ms` | 0 | 101.7 | **80.9** (−20%) |
+| `process_elapsed_sec` | 16.92 | 13.03 | **12.40** (−5%) |
+| iterations / sec | 17.7 | 23.0 | **24.2** |
+
+### Findings
+
+(a) **Encode anomaly confirmed and characterized.** Without ANY
+Present, the encode thread never produces command buffers despite
+1201 successful chunk_admits. Submit-side counters (PE) show 24k
+draws + 1.2k clears recorded. The encode thread sees the queue but
+never dequeues. Adding Present every 10 iterations restores expected
+behavior with all encode-side counters reflecting real work.
+
+This is a queue-lifecycle edge that may deserve its own gap.md row —
+"encoder requires Present-driven flush; no graceful drain on long
+non-Present runs". The probe-side workaround is sufficient for
+measurement purposes for now.
+
+(b) **R-BACK-2.33 cap=4 wins on this workload.** Compared to
+`policy=off` at the same Present interval:
+
+  - encode_chunk_cpu_ms 621 → 231 (−63%)
+  - present_acquire_wait_ms 102 → 81 (−20%)
+  - process_elapsed_sec 13.03 → 12.40 (−5%)
+
+The −63% encode CPU drop is striking — the per-chunk wall time of
+encodeChunk falls dramatically when the chunk's `commit()` is split
+into 4 smaller sub-CBs. Driver-side commit cost is non-linear in CB
+size; 4 small commits beats 1 large commit on this workload.
+
+(c) **Tile-flush envelope is the deciding factor.** SFIV's heavy
+scene (1920×1080 × 4 RTs ≈ 33 MB tile flush) cancelled cap=4 fps
+gain in U1. Chain probe's small RT (256×256 × 1 RT ≈ 256 KB tile
+flush) preserves the gain. The cost model in
+`docs/research/g-axis-tuning.md` predicted exactly this asymmetry.
+
+### R-BACK-2.34 status update
+
+One workload (chain probe with small RT) now shows a clear cap=4 fps
+win. SFIV (heavy real-app) shows neutral. Recommended next:
+
+1. Run additional synthetic probes varying RT size to map the
+   crossover point — at what RT × MSAA × format combination does
+   tile flush cancel the pipelining gain?
+2. Run a few more real D3D9 titles (Anno1404, Tutorial07,
+   simpler-than-SFIV apps) to see if any benefits.
+3. If at least one *real* title benefits and none regresses, flip
+   R-BACK-2.34 default to per-render-pass + cap=4.
