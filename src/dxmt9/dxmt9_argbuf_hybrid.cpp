@@ -270,10 +270,4 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
   return bytes;
 }
 
-void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,
-                        WMT::Buffer buffer, std::uint64_t offset) {
-  if (!encoderResource.initialized()) return;
-  encoderResource.argumentEncoder().setBuffer(buffer, offset, kFfpVsArgbufIdx);
-}
-
 }  // namespace dxmt9::argbuf_hybrid
