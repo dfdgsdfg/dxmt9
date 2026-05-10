@@ -26,7 +26,9 @@ Options:
   --vanilla-wine-root <path>  Pristine Wine root used as builtin D3D9 oracle.
                               Default: ~/Library/.../Wine-11.6/.../wine
   --dxmt9-wine-root <path>    Wine root where dxmt9 will be staged.
-                              Default: ~/Library/.../Wine-11.6-DXMT/.../wine
+                              Default: same vanilla Wine-11.6 (see
+                              agents/rules/test_wild.rules.md — never default
+                              to a Wine-*-DXMT / Wine-*-VK build).
   --timeout <seconds>         Override timeout for every experiment.
   --log-level <level>         DXMT_LOG_LEVEL for perf runs. Default: warn.
   --keep-prefixes             Do not delete auto-created temp prefixes.
@@ -44,7 +46,10 @@ EOF
 }
 
 vanilla_wine_root="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6/Contents/Resources/wine"
-dxmt9_wine_root="$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6-DXMT/Contents/Resources/wine"
+# dxmt9 stages itself into the same vanilla Wine root by default — Wine-*-DXMT
+# and Wine-*-VK builds carry custom d3d9 / wow64 patches that mask dxmt9
+# regressions. See agents/rules/test_wild.rules.md.
+dxmt9_wine_root="$vanilla_wine_root"
 timeout_override=""
 log_level="warn"
 cleanup_temp_prefix=true

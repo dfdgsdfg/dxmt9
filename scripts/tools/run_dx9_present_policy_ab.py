@@ -14,9 +14,10 @@ from statistics import mean, median, pstdev
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
 SUMMARY_ROOT = OUTPUT_ROOT / "dx9-present-policy-ab"
+# Vanilla Wine, not Wine-*-DXMT / Wine-*-VK — see agents/rules/test_wild.rules.md.
 DEFAULT_WINE_ROOT = (
     Path.home()
-    / "Library/Application Support/heroic/tools/wine/Wine-11.6-DXMT/Contents/Resources/wine"
+    / "Library/Application Support/heroic/tools/wine/Wine-11.6/Contents/Resources/wine"
 )
 
 MODE_ENV = {
