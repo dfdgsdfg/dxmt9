@@ -1,0 +1,13 @@
+manifest_version = 1
+
+[[wine]]
+id = "dup"
+source = "manual"
+variant = "vanilla"
+path = "/tmp/a"
+
+[[wine]]
+id = "dup"
+source = "manual"
+variant = "dxmt"
+path = "/tmp/b"

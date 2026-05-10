@@ -1,0 +1,14 @@
+manifest_version = 1
+
+[[wine]]
+id      = "fake-vanilla"
+source  = "manual"
+variant = "vanilla"
+path    = "$REPO_ROOT/tests/scripts/fixtures/fake_wine_root"
+
+[[wine]]
+id      = "fake-dxmt"
+source  = "manual"
+variant = "dxmt"
+path    = "$REPO_ROOT/tests/scripts/fixtures/fake_wine_root_dxmt"
+notes   = "second entry, exercises optional fields"

@@ -1,0 +1,7 @@
+manifest_version = 1
+
+[[wine]]
+id = "incomplete"
+source = "manual"
+# variant missing
+path = "/tmp/x"

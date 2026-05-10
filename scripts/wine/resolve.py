@@ -1,0 +1,86 @@
+"""Wine root manifest loader and resolver.
+
+Spec: specs/experiments/runtime/{requirements,design}.md.
+
+Loads experiments/wine/manifest.toml and resolves a wine_id (per CLI flag,
+env var, or CATALOGUE) to a concrete wine root path. Validates that the
+referenced bin/wine exists and is executable.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class ManifestError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class WineEntry:
+    id: str
+    source: str
+    variant: str
+    path: Path
+    version: str | None = None
+    notes: str | None = None
+
+    def wine_bin(self) -> Path:
+        for rel in ("bin/wine", "bin/wine64"):
+            candidate = self.path / rel
+            if candidate.exists():
+                return candidate
+        raise ManifestError(
+            f"wine entry id={self.id}: no bin/wine or bin/wine64 under {self.path}"
+        )
+
+
+_REQUIRED_FIELDS = ("id", "source", "variant", "path")
+
+
+def _expand_path(raw: str) -> Path:
+    expanded = raw
+    if "$HOME" in expanded:
+        expanded = expanded.replace("$HOME", str(Path.home()))
+    if "$REPO_ROOT" in expanded:
+        expanded = expanded.replace("$REPO_ROOT", str(REPO_ROOT))
+    p = Path(expanded)
+    if not p.is_absolute():
+        raise ManifestError(f"path must be absolute (after expansion): {raw!r}")
+    return p
+
+
+def load_manifest(path: Path) -> list[WineEntry]:
+    """Parse manifest.toml at path. Raises ManifestError on malformed input."""
+    with path.open("rb") as f:
+        data = tomllib.load(f)
+    raw_entries = data.get("wine", [])
+    seen: dict[str, int] = {}
+    entries: list[WineEntry] = []
+    for idx, raw in enumerate(raw_entries):
+        for field in _REQUIRED_FIELDS:
+            if field not in raw:
+                raise ManifestError(
+                    f"wine[{idx}]: required field '{field}' missing"
+                )
+        wid = raw["id"]
+        if wid in seen:
+            raise ManifestError(
+                f"wine[{idx}]: duplicate id '{wid}' (also at index {seen[wid]})"
+            )
+        seen[wid] = idx
+        entries.append(
+            WineEntry(
+                id=wid,
+                source=raw["source"],
+                variant=raw["variant"],
+                path=_expand_path(raw["path"]),
+                version=raw.get("version"),
+                notes=raw.get("notes"),
+            )
+        )
+    return entries
