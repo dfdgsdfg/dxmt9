@@ -126,19 +126,50 @@ void traceSurfaceAlias(core::SurfaceHandle handle,
   core::metalqueue::emitTextureTraceLine(out.str());
 }
 
+// R-BACK-14.4 — heap-backed records propagate their last-used seqId
+// back to HeapManager before the WMT::Reference releases the
+// suballocation. Surfaces never live on a heap (RT/DS attachments
+// always allocate direct per R-BACK-14.2), so the surface overload
+// is a no-op.
+template <typename Record>
+void releaseHeapIfBacked(HeapManager* /*heapManager*/, const Record& /*record*/) {
+  // SurfaceRecord (and any future record type without isHeapBacked)
+  // hits this default — no heap accounting needed.
+}
+
+void releaseHeapIfBacked(HeapManager* heapManager, const BufferRecord& record) {
+  if (heapManager && record.isHeapBacked && record.heap.handle != 0) {
+    heapManager->releaseHeapMember(record.heap.handle, record.lastUsedSeqId);
+  }
+}
+
+void releaseHeapIfBacked(HeapManager* heapManager, const TextureRecord& record) {
+  if (heapManager && record.isHeapBacked && record.heap.handle != 0) {
+    heapManager->releaseHeapMember(record.heap.handle, record.lastUsedSeqId);
+  }
+}
+
 template <typename Arena>
-void gcArena(Arena& arena, u64 completedSeqId) {
-  arena.reclaimCompleted(completedSeqId, [completedSeqId](const auto& record) {
+void gcArena(Arena& arena, u64 completedSeqId, HeapManager* heapManager) {
+  arena.reclaimCompleted(completedSeqId, [completedSeqId, heapManager](const auto& record) {
     // TLA+: NoUseAfterFree
     DXMT_ASSERT(record.lastUsedSeqId <= completedSeqId);
+    releaseHeapIfBacked(heapManager, record);
   });
 }
 }  // namespace
 
 void Pool::reclaimCompleted(u64 completedSeqId) {
-  gcArena(bufferArena_, completedSeqId);
-  gcArena(textureArena_, completedSeqId);
-  gcArena(surfaceArena_, completedSeqId);
+  gcArena(bufferArena_, completedSeqId, &heapManager_);
+  gcArena(textureArena_, completedSeqId, &heapManager_);
+  // Surfaces never use heap allocation (RT/DS ineligible per
+  // R-BACK-14.2). Pass nullptr; the type-dispatched overload above
+  // is a no-op for SurfaceRecord either way.
+  gcArena(surfaceArena_, completedSeqId, nullptr);
+  // R-BACK-14.4 / 14.5 — retire heap instances whose live-member count
+  // reached zero AND whose final member's lastUsedSeqId has been
+  // GPU-completed. Each retirement bumps `heap_compaction_count`.
+  heapManager_.retireFreedHeaps(completedSeqId);
 }
 
 bool Pool::markBufferDestroyAndGc(u64 handleValue, u64 completedSeqId) {
@@ -187,11 +218,39 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
     // path is the same TODO item; the texture path below is what
     // R-BACK-5.7 immediately requires.
     info.options = WMTResourceStorageModeShared;
-    record.buffer = device.newBuffer(info);
-    if (record.buffer) {
-      perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+    // R-BACK-14.* — try the small-resource heap before falling through
+    // to a direct device allocation. classify() rejects RT/DS/Dynamic
+    // and footprints over the threshold; allocBuffer further rejects
+    // when no heap satisfies the request and grow fails. On any of
+    // those rejections the direct allocation below runs unchanged and
+    // we count the fallback so the regression dashboard catches an
+    // overly-conservative heuristic.
+    const auto eligibility = heapManager_.classifyBuffer(info.length, desc.pool, desc.usage);
+    if (eligibility.eligible) {
+      WMT::Heap heap{};
+      auto heapBuf = heapManager_.allocBuffer(eligibility.family, info.length,
+                                                info.options, heap);
+      if (heapBuf) {
+        record.buffer = std::move(heapBuf);
+        record.isHeapBacked = true;
+        record.heap = heap;
+        // Heap-backed Shared buffers do not currently expose a
+        // host-mapped pointer through the bridge; CPU writes go through
+        // the shadow-copy path (uploadBufferData mirrors via shadow
+        // when contents is null). Keep contents nullptr to flag that.
+        record.contents = nullptr;
+        perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+      } else {
+        perf::countHeapDirectFallback();
+      }
     }
-    record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
+    if (!record.buffer) {
+      record.buffer = device.newBuffer(info);
+      if (record.buffer) {
+        perf::countMetalBuffer(static_cast<std::size_t>(info.length));
+      }
+      record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
+    }
   }
   const auto handle = bufferArena_.insert(std::move(record));
   if (auto* stored = bufferArena_.find(handle.value); stored && stored->buffer) {
@@ -199,6 +258,9 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
         "pool_buf_h0x%llx_len%llu",
         static_cast<unsigned long long>(handle.value),
         static_cast<unsigned long long>(desc.size)));
+    if (stored->isHeapBacked) {
+      heapManager_.retainHeapMember(stored->heap.handle, 0);
+    }
   }
   return handle;
 }
@@ -224,7 +286,34 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     // below). Selection is one-shot at create time.
     info.options = convert::toResourceOptions(desc.pool, desc.usage, hasUnifiedMemory_);
     info.usage = convert::toTextureUsage(desc);
-    record.texture = device.newTexture(info);
+    // R-BACK-14.* — heap-eligibility probe. The footprint estimate uses
+    // bytesPerPixel + width*height*depth (compressed-format rows are
+    // tiny in absolute terms — well under the 64 KB threshold either
+    // way), giving a portable upper bound for the per-mip-0 footprint
+    // without consulting Metal. classifyTexture rejects RT/DS, Dynamic,
+    // and footprints above kHeapEligibilityFootprintBytes; on a
+    // discrete-memory device the MANAGED branch is also rejected
+    // (Shared heap profile would mismatch).
+    const auto bpp = core::bytesPerPixel(desc.format);
+    const auto footprint = static_cast<std::uint64_t>(bpp) *
+                            static_cast<std::uint64_t>(info.width) *
+                            static_cast<std::uint64_t>(info.height) *
+                            static_cast<std::uint64_t>(info.depth);
+    const auto eligibility = heapManager_.classifyTexture(footprint, desc.pool, desc.usage);
+    if (eligibility.eligible) {
+      WMT::Heap heap{};
+      auto heapTex = heapManager_.allocTexture(eligibility.family, info, heap);
+      if (heapTex) {
+        record.texture = std::move(heapTex);
+        record.isHeapBacked = true;
+        record.heap = heap;
+      } else {
+        perf::countHeapDirectFallback();
+      }
+    }
+    if (!record.texture) {
+      record.texture = device.newTexture(info);
+    }
     // Both Private and Managed (discrete) reach the texture through a
     // staging-blit upload path — for Private because the CPU cannot
     // directly write to it, for Managed-discrete because we must pump
@@ -247,6 +336,9 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
         std::max(1u, desc.height),
         std::max(1u, desc.depth),
         std::max(1u, desc.levels)));
+  }
+  if (stored && stored->isHeapBacked) {
+    heapManager_.retainHeapMember(stored->heap.handle, 0);
   }
   traceTextureCreate(handle, desc, stored && stored->texture,
                      stored ? stored->needsStagingBlit : false,
@@ -563,6 +655,14 @@ void Pool::uploadTextureLevel(WMT::Device device,
   if (!blit) {
     return;
   }
+  // R-BACK-14.3 — destination texture may be heap-backed; mirror the
+  // useHeap pattern from the deferred-upload Initializer path so the
+  // heap-resident bookkeeping stays consistent on both upload entry
+  // points.
+  heapManager_.forEachHeapInstance([&blit](WMT::Heap heap) {
+    blit.useHeap(heap);
+    perf::countUseHeap();
+  });
   WMTOrigin origin{0, 0, 0};
   WMTSize size{mipWidth, mipHeight, 1};
   blit.copyFromTextureToTexture(WMT::Texture{stagingTexture.handle}, 0, 0,

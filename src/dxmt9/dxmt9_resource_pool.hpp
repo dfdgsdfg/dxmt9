@@ -10,6 +10,7 @@
 // lock-ordering invariants.
 
 #include "dxmt9/core.hpp"
+#include "dxmt9_heap_manager.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <cstddef>
@@ -33,6 +34,14 @@ struct BufferRecord {
   std::vector<u8> shadow;
   bool destroyPending = false;
   u64 lastUsedSeqId = 0;
+  // R-BACK-14.* — heap-backed allocation tracking. When `isHeapBacked`
+  // is true, `heap` is a non-owning view of the MTLHeap that owns this
+  // buffer; the WMT::Reference above still owns the suballocation. On
+  // record reclaim, Pool calls heapManager.releaseHeapMember(heap,
+  // lastUsedSeqId) before dropping the reference so retire bookkeeping
+  // sees the final use.
+  bool isHeapBacked = false;
+  WMT::Heap heap{};
 };
 
 struct TextureRecord {
@@ -49,6 +58,12 @@ struct TextureRecord {
   bool isManagedDiscrete = false;
   bool destroyPending = false;
   u64 lastUsedSeqId = 0;
+  // R-BACK-14.* — heap-backed allocation tracking; same shape as
+  // BufferRecord. `isHeapBacked` drives the encoder's useHeap dedup
+  // path (collapses N useResource calls into a single useHeap per
+  // owning MTLHeap).
+  bool isHeapBacked = false;
+  WMT::Heap heap{};
 };
 
 struct SurfaceRecord {
@@ -232,6 +247,15 @@ struct Pool {
   void setSupportsApple3(bool value) noexcept { supportsApple3_ = value; }
   bool supportsApple3() const noexcept { return supportsApple3_; }
 
+  // R-BACK-14.* — small-resource heap pooling. Owned by the pool so the
+  // create/destroy paths can route eligible allocations through the heap
+  // before falling back to direct allocation. Initialized once from
+  // CommandQueue::CommandQueue (init() snapshot of the same WMT::Device
+  // and hasUnifiedMemory_ probe used by the storage-mode selectors).
+  HeapManager heapManager_{};
+  HeapManager& heapManager() noexcept { return heapManager_; }
+  const HeapManager& heapManager() const noexcept { return heapManager_; }
+
   // Lookup helpers — return nullptr on miss. Caller is expected to hold the
   // protecting mutex (currently commandQueue_->mutex_).
   BufferRecord* findBuffer(u64 handle) noexcept;
@@ -258,6 +282,11 @@ struct Pool {
     bufferArena_.clear();
     textureArena_.clear();
     surfaceArena_.clear();
+    // R-BACK-14.* — drop all heap instances after the records that
+    // referenced them are gone. Order matters: arena.clear releases the
+    // WMT::Reference<Buffer/Texture> suballocations first; only then is
+    // it safe to drop the owning MTLHeaps.
+    heapManager_.purgeAll();
   }
 
   // Record a CPU-visible write to a buffer (updates shadow + mirrors to

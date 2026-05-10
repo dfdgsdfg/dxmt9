@@ -52,6 +52,20 @@ bool isFullscreenStretch(const resources::SurfaceRecord& dst,
          stretch.destinationRect.bottom == static_cast<int32_t>(dst.desc.height);
 }
 
+// R-BACK-14.3 — issue `useHeap:` once per live heap instance on a freshly
+// opened blit encoder. Mirrors the render-encoder helper in
+// beginRenderPass. Cheap: heap count is bounded per family. Doing this
+// even when the blit body does not touch a heap-backed resource is a
+// no-op residency hint, not a correctness issue. countUseHeap advances
+// per call so the heap-vs-direct ratio stays observable on the blit
+// path too (R-BACK-14.4 dashboard).
+void useHeapsOnBlit(WMT::BlitCommandEncoder& blit, resources::Pool& pool) {
+  pool.heapManager().forEachHeapInstance([&blit](WMT::Heap heap) {
+    blit.useHeap(heap);
+    perf::countUseHeap();
+  });
+}
+
 }  // namespace
 
 void encodeReadback(WMT::CommandBuffer& commandBuffer,
@@ -64,6 +78,7 @@ void encodeReadback(WMT::CommandBuffer& commandBuffer,
   }
   auto blit = commandBuffer.blitCommandEncoder();
   if (!blit) return;
+  useHeapsOnBlit(blit, pool);
   WMT::Texture sourceTexture{src->resolveTexture ? src->resolveTexture.handle : src->texture.handle};
   const uint32_t w =
       static_cast<uint32_t>(std::max(1, readback.sourceRect.right - readback.sourceRect.left));
@@ -100,6 +115,7 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
   if (canCopyStretchRect(*src, *dst, stretch)) {
     auto blit = commandBuffer.blitCommandEncoder();
     if (!blit) return;
+    useHeapsOnBlit(blit, pool);
     const auto width = static_cast<uint32_t>(
         std::max(1, stretch.sourceRect.right - stretch.sourceRect.left));
     const auto height = static_cast<uint32_t>(
@@ -173,6 +189,7 @@ void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer,
   if (srcW == dstW && srcH == dstH) {
     auto blit = commandBuffer.blitCommandEncoder();
     if (!blit) return;
+    useHeapsOnBlit(blit, pool);
     WMTOrigin srcOrigin{static_cast<uint64_t>(copy.sourceRect.left),
                          static_cast<uint64_t>(copy.sourceRect.top), 0};
     WMTSize srcSize{srcW, srcH, 1};
@@ -363,6 +380,7 @@ bool readbackSurface(CommandQueue& queue,
   if (!blit) {
     return false;
   }
+  useHeapsOnBlit(blit, pool);
   WMTOrigin srcOrigin{(uint64_t)sourceRect.left, (uint64_t)sourceRect.top, 0};
   WMTSize srcSize{width, height, 1};
   WMTOrigin dstOrigin{0, 0, 0};
@@ -391,6 +409,7 @@ bool readbackSurface(CommandQueue& queue,
     if (cmdBuf2) {
       auto blit2 = cmdBuf2.blitCommandEncoder();
       if (blit2) {
+        useHeapsOnBlit(blit2, pool);
         WMTOrigin origin{0, 0, 0};
         WMTSize size{width, height, 1};
         blit2.copyFromTextureToBuffer(WMT::Texture{stagingTexture.handle}, 0, 0,

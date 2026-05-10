@@ -142,6 +142,11 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   // selector can gate on a single bool. WMTGPUFamilyApple3 is the floor
   // for `MTLTileRenderPipelineDescriptor` and programmable blending.
   pool_.setSupportsApple3(device_.supportsFamily(WMTGPUFamilyApple3));
+  // R-BACK-14.* — bind the small-resource heap manager to the same
+  // WMT::Device + unified-memory probe used by the pool's storage-mode
+  // selectors. Init must run before initializer_ / encode loops because
+  // the very first createTexture / createBuffer can reach the heap path.
+  pool_.heapManager().init(device_, pool_.hasUnifiedMemory_);
 
   initializer_ = std::make_unique<resources::Initializer>(*this, pool_, device_);
 

@@ -72,3 +72,20 @@ allocation_counter_spec = executable(
 
 test('dxmt9-allocation-counter-spec', assert_perf_counters,
      args: [allocation_counter_spec])
+
+# R-BACK-5.9 / R-BACK-5.10 / R-BACK-14.* — MTLHeap small-resource pooling.
+# Pure-CPU classify + lifetime test (no Metal device required); deeper
+# allocation behavior is covered by the runtime integration suite.
+# Includes dxmt9_winemetal_dep so the WMT::Reference dtor in
+# HeapManager::Family resolves against winemetal's NSObject_release —
+# the test only constructs default-initialized references (handle ==
+# 0) so no actual release call ever executes.
+heap_pooling_spec = executable(
+  'dxmt9-heap-pooling-spec',
+  'heap_pooling_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-heap-pooling-spec', heap_pooling_spec)

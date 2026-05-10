@@ -30,6 +30,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_draw_encoder_hazard.mm',
   'dxmt9_draw_state.cpp',
   'dxmt9_format_convert.cpp',
+  'dxmt9_heap_manager.cpp',
   'dxmt9_pipeline_cache.cpp',
   'dxmt9_resource_initializer.mm',
   'dxmt9_resource_pool.cpp',

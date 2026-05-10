@@ -261,6 +261,15 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
     result.value = lastSignaledValue_;
     return result;
   }
+  // R-BACK-14.3 — staging→destination blits target heap-backed Pool
+  // textures whenever the destination is a small Private texture. One
+  // useHeap call per live heap instance covers every member resident on
+  // this blit encoder; the per-resource useResource path below is
+  // therefore skipped (heap residency wins).
+  pool_->heapManager().forEachHeapInstance([&blit](WMT::Heap heap) {
+    blit.useHeap(heap);
+    perf::countUseHeap();
+  });
   for (const auto& u : pendingUploads_) {
     WMTOrigin origin{0, 0, 0};
     WMTSize size{u.width, u.height, 1};

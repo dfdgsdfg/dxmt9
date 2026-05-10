@@ -840,6 +840,14 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     return {};
   }
   perf::countRenderPassBegin();
+  // R-BACK-14.3 — issue useHeap once per live heap instance so every
+  // heap-backed resource bound on this encoder is resident without
+  // per-resource useResource calls. Heap count is bounded (a handful
+  // per family), so this stays fixed cost regardless of bind volume.
+  ctx.pool.heapManager().forEachHeapInstance([&encoder](WMT::Heap heap) {
+    encoder.useHeap(heap);
+    perf::countUseHeap();
+  });
   if (discardAfterPresent) {
     ctx.queue.backBufferDiscardAfterPresent_ = false;
   }
