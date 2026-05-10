@@ -178,16 +178,18 @@ under DXVK lands ~5-15 `vkQueueSubmit` calls, each carrying a separate
 This is structurally different from dxmt9's current `1 chunk = 1
 MTLCommandBuffer` shape:
 
-| Axis | DXVK | dxmt9 (current) | dxmt9 (target, R-BACK-2.29) |
-|---|---|---|---|
-| CBs per frame | 5-15 | 1 | 1-N (mid-chunk split) |
-| Submission queue model | single producer (D3D9 device) → single consumer (CSThread) → driver | single producer (encode thread) → driver | unchanged single producer; sub-CB chain |
-| Fence per CB | one per submit | one per chunk | one per chunk (chain shares the fence) |
+| Axis | DXVK | dxmt9 (Y1 default, R-BACK-2.34) |
+|---|---|---|
+| CBs per frame | 5-15 (per-batch boundaries) | 1-4 sub-CBs per chunk × chunks/frame |
+| Split trigger | semantic boundaries in CSThread | per-render-pass + cap=4 in encodeChunk |
+| Submission queue model | single producer (D3D9 device) → single consumer (CSThread) → driver | single producer (encode thread) → driver |
+| Fence per CB | one per submit | one seqId per chunk; advances on chain tail |
 
-DXVK does **not** use a lock-free MPMC queue between D3D9 and CSThread —
-it is a single-producer / single-consumer ring. The lock-free MPMC
-pattern in this comparison is DXMT's territory (see
-`docs/research/dxmt.md`).
+DXVK and dxmt9 **both** use a single-producer / single-consumer queue
+on this path. The "lock-free MPMC ring" framing in some earlier notes
+came from an inaccurate read of DXMT — DXMT also uses a single-
+producer queue on the encode side
+(`dxmt/src/dxmt/dxmt_command_queue.cpp`).
 
 ### dxmt9 Adoption Points (G axis)
 

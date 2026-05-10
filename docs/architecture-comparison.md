@@ -33,7 +33,7 @@ flowchart TB
         d_d["D. Frontend: D7+D8+D9 unified"]
         d_e["E. Binding: per-frequency UBO + setBytes"]
         d_f["F. Pacing: seqId + frame token + ring"]
-        d_g["G. Submission grain: 1 chunk = 1 CB (target: 1:N)"]
+        d_g["G. Submission grain: 1 chunk = 1-4 sub-CB (Y1 default)"]
     end
     subgraph DXMT["DXMT (D3D11)"]
         x_a["A. Boundary: per Metal call thunk"]
@@ -42,7 +42,7 @@ flowchart TB
         x_d["D. Frontend: D3D10 shim → D3D11"]
         x_e["E. Binding: single per-encoder argbuf"]
         x_f["F. Pacing: CpuFence per chunk"]
-        x_g["G. Submission grain: 1 chunk = N CB (slot chain)"]
+        x_g["G. Submission grain: 1 chunk = 1 CB (strict 1:1)"]
     end
     subgraph DXVK["DXVK D3D9"]
         v_a["A. Boundary: none (in-process)"]
@@ -393,67 +393,93 @@ document. The SFIV measurement (2026-05-10, see
 `docs/perfomance-bottleneck.md`) made it visible as a **standalone
 bottleneck independent of the F axis pacing decisions**.
 
-| Project | Per-frame CBs | Producer ↔ consumer queue | Notes |
-|---|---|---|---|
-| **dxmt9 (current)** | 1 | encode-thread single-producer; `splitBeforeBlockingPresent()` is the lone exception | implicit invariant; not stated in R-BACK-2 |
-| **dxmt9 (target)** | 1-N (mid-chunk split) | unchanged single-producer; sub-CB chain shares one seqId | R-BACK-2.29..2.32 (proposed) |
-| DXMT | N per logical batch (submission slot chain) | **lock-free MPMC** ring across emit / encode / finish threads | one CpuFence per slot covers the chain |
-| DXVK | 5-15 per frame at semantic boundaries | single-producer / single-consumer (CSThread) | each `vkQueueSubmit` carries one VkCommandBuffer |
-| Wine | backend-decided (per-state-change-ish) | one opcode per D3D9 call | wined3d does not chunk |
+| Project | Chunk : CB mapping | Per-frame CBs (typical) | Producer ↔ consumer queue | Notes |
+|---|---|---|---|---|
+| **dxmt9 (pre-Y1)** | 1 : 1 | 1 per chunk × chunks/frame | encode-thread single-producer; `splitBeforeBlockingPresent()` was the lone exception | implicit invariant; not stated in R-BACK-2 |
+| **dxmt9 (Y1 default, R-BACK-2.34)** | 1 : 1-4 | 4 per chain (cap=4) × chunks/frame | unchanged single-producer; sub-CB chain shares one seqId | R-BACK-2.29..2.34 |
+| DXMT (D3D11) | **1 : 1** (verified `dxmt_command_queue.cpp:135-141`) | 1 per chunk × chunks/frame | encode + finish threads, single-producer queue | NO sub-CB split anywhere in source; chunk-level ring of 32 slots |
+| DXVK | 1 : N (per-frame submission split) | 5-15 per frame at semantic boundaries | single-producer / single-consumer (CSThread) | each `vkQueueSubmit` carries one VkCommandBuffer |
+| Wine | n/a (no chunk concept) | backend-decided (per-state-change-ish) | one opcode per D3D9 call | wined3d does not chunk |
+
+**dxmt9 Y1 is more aggressive than DXMT on this axis** — DXMT keeps
+strict 1 chunk = 1 CB, dxmt9 chains up to 4 sub-CBs per chunk. The G
+axis is therefore a dxmt9-original divergence, not a DXMT borrowing.
+(An earlier revision of this table claimed DXMT had a "submission
+slot chain" with N CBs per logical batch; that was wrong. DXMT's
+`CommandChunk::encode` runs the chunk's entire `list_enc.execute(enc)`
+into one CB, which is then committed once.)
 
 ```mermaid
 flowchart LR
-    subgraph dxmt9_now["dxmt9 today"]
-        c1["chunk N records"] --> c2["1 newCommandBuffer()"] --> c3["encode all"] --> c4["1 commit()"] --> c5["GPU run"]
+    subgraph dxmt[DXMT D3D11 — strict 1:1]
+        d1["chunk N records"] --> d2["1 newCommandBuffer"] --> d3["encode all"] --> d4["1 commit"] --> d5["GPU run"]
     end
-    subgraph dxmt9_tgt["dxmt9 target"]
-        t1["chunk N records"] --> t2["sub-CB 1: encode K records, commit()"]
-        t2 --> t3["sub-CB 2: encode K records, commit()"]
-        t3 --> t4["sub-CB 3 ... commit()"]
-        t4 --> t5["seqId advances on last sub-CB completion"]
+    subgraph d9_pre["dxmt9 pre-Y1 — strict 1:1 (DXMT-equivalent)"]
+        c1["chunk N records"] --> c2["1 newCommandBuffer"] --> c3["encode all"] --> c4["1 commit"] --> c5["GPU run"]
+    end
+    subgraph d9_y1["dxmt9 Y1 default — 1:1-to-4"]
+        t1["chunk N records"] --> t2["sub-CB 1: encode K records, commit"]
+        t2 --> t3["sub-CB 2: encode K records, commit"]
+        t3 --> t4["sub-CB 3 ... commit"]
+        t4 --> t5["sub-CB 4 (tail) — present metadata, commit"]
+        t5 --> t6["seqId advances on last sub-CB completion"]
     end
 ```
 
-### Why dxmt9 needs to move on this axis
+### Why dxmt9 went past DXMT here
 
 Single-CB-per-chunk forces encode CPU and GPU execute time to add to
-the frame budget rather than overlap. SFIV measurement: encode 69 ms
-mean, GPU 69 ms mean, frame budget 75 ms — each ≈ frame budget, neither
-hides the other. Mid-chunk commit lets the GPU start work while the
-encode thread is still building later sub-CBs in the same chunk,
-collapsing GPU lead time.
+the frame budget rather than overlap. SFIV measurement (P1, U1, BB1
+in `docs/sfiv-benchmark-measurement.md`):
 
-This is decoupled from F-axis pacing: 3-axis pacing (seqId / frame
-token / ring slot) already permits one seqId to span N sub-CBs as long
-as the seqId advances only when the chain's last CB completes. The
-present-frame-token axis only advances on the present-bearing sub-CB
-(the chain's tail per R-BACK-2.30), so frame pacing is unchanged.
+- P1 (1:1, DXMT-equivalent shape): 13.25 fps, encode 69 ms ≈ GPU 69
+  ms ≈ frame budget. Each phase consumed roughly the whole budget,
+  neither hid the other.
+- BB1 (1:1-to-4, Y1 default): 19.77 fps (+49%), encode 41 ms, GPU
+  per-CB 45 ms. The chain's leading sub-CBs run on GPU while the
+  encode thread is still building the chain tail.
 
-### Why dxmt9 should NOT adopt DXMT's full G-axis model
+This is decoupled from F-axis pacing: dxmt9's 3-axis model
+(seqId / frame token / ring slot, R-ARCH-6) already permits one
+seqId to span N sub-CBs as long as `completedSeqId` advances only
+when the chain's last CB completes (R-BACK-2.29). The present-frame-
+token axis only advances on the present-bearing sub-CB (the chain's
+tail per R-BACK-2.30), so frame pacing is unchanged.
 
-DXMT's lock-free MPMC ring is enabled by the per-call thunk (axis A) and
-the lambda capture (axis B) — producers can write a lambda into the
-ring without touching the consumer. dxmt9's chunk POD model is
-single-producer-only by construction (the encode thread owns the chunk
-record stream after import), so a lock-free MPMC pattern would have
-no producers to coordinate. **Adopt DXMT's submission slot chain
-shape, keep dxmt9's single-producer queue model.**
+### Why DXMT didn't go this way (and what we know)
+
+DXMT chose the simpler 1:1 mapping. The likely D3D11 reasons (we
+have not seen this written down anywhere; this is inference, not
+fact):
+
+- D3D11 chunks are larger and more uniform than D3D9 chunks under
+  the dxmt9 chunk-record model, so the per-chunk encode + GPU phases
+  are already roughly equal-sized.
+- Apple Silicon TBDR penalty for small CBs (tile flush per commit) is
+  steeper as a fraction of total cost on the simpler / smaller D3D11
+  draws DXMT mainly targets — see `docs/research/g-axis-tuning.md`
+  cost model.
+- D3D11 fence model is single-event-per-CpuFence; dxmt9's sub-CB
+  chain reuses dxmt9's seqId / frame-token decoupling.
+
+dxmt9 only wins here because it has different counters as objectives
+(D3D9 chunks are smaller and more numerous) and the 3-axis pacing
+provides cheap support for the chain.
 
 ### dxmt9's chosen position
 
-| Element | dxmt9 keeps | dxmt9 borrows from DXMT |
-|---|---|---|
-| Wire format | chunk POD (R-BACK-2.18) | — |
-| Storage shape | SoA data (R-BACK-2.21) | — |
-| Submission grain | — | 1 chunk → N sub-CB chain |
-| Fence model | one seqId per chunk (R-BACK-2.13) | seqId advances on last sub-CB |
-| Queue model | single-producer encode thread | — |
+| Element | dxmt9 keeps | dxmt9 borrows from DXMT | dxmt9-original |
+|---|---|---|---|
+| Wire format | chunk POD (R-BACK-2.18) | — | yes (PE/unix Wine boundary) |
+| Storage shape | SoA data (R-BACK-2.21) | — | yes |
+| Submission grain | — | — | **yes** (R-BACK-2.29..2.34) |
+| Fence model | one seqId per chunk (R-BACK-2.13) | basic chunk-fence shape | extended for sub-CB chain |
+| Queue model | single-producer encode thread | encode + finish thread split, ring back-pressure | yes (3-axis pacing on top) |
+| Hazard tracking | exact sets (R-BACK-2.28) | — | yes (DXMT uses Bloom) |
 
-The result is **partial DXMT adoption** — the submission grain alone,
-not the per-call thunk or lambda capture or lock-free MPMC. See
-R-BACK-2.29..2.32 in `specs/backend/requirements.md` for the contract
-and `docs/research/dxmt.md` for the source-of-truth on DXMT's
-submission slot mechanics.
+See R-BACK-2.29..2.34 in `specs/backend/requirements.md` for the
+contract and `docs/research/dxmt.md` "Submission Model (G axis)" for
+the corrected DXMT source survey.
 
 ---
 
@@ -467,7 +493,7 @@ submission slot mechanics.
 | D. Frontend | **D7+D8+D9 unified** | D10→D11 shim | D9-only | thin → wined3d |
 | E. Binding | **per-frequency + push** | single argbuf | multi-UBO + push | 8 categories |
 | F. Pacing | **3 axes** | CpuFence | frameLatencySignal | counter |
-| G. Submission grain | 1 CB → **target 1-N** | **N (slot chain)** | 5-15 CBs/frame | backend-decided |
+| G. Submission grain | **1 chunk → 1-4 sub-CB** (Y1 default) | 1 chunk → 1 CB (strict 1:1) | 5-15 CBs/frame at semantic boundaries | backend-decided |
 
 Bold cells are dxmt9's choices. Each is a deliberate divergence justified by
 D3D9 workload characteristics (small/many Metal calls, FFP, frequent

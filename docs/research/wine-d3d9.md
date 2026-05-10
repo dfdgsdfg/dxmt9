@@ -174,9 +174,13 @@ backend (GL or Vulkan). The backend opens and commits GL command lists
 
 The Wine model is **not the model dxmt9 follows for submission grain** —
 forwarding per-call is exactly what R-BACK-2.7 / R-BACK-2.8 avoid.
-For the G axis dxmt9 looks to DXVK's mid-batch CB split (see
-`docs/research/dxvk-d3d9.md`) and DXMT's submission slot chain
-(see `docs/research/dxmt.md`).
+For the G axis dxmt9 went past both Wine and DXMT: DXMT keeps a strict
+1 chunk = 1 CB shape (verified in
+`docs/research/dxmt.md` "Submission Model (G axis)") and DXVK does
+mid-batch CB split at semantic boundaries
+(`docs/research/dxvk-d3d9.md`). dxmt9 R-BACK-2.34 chains up to 4
+sub-CBs per chunk, more aggressive than DXMT and tuned for the D3D9
+chunk profile.
 
 What dxmt9 takes from Wine on this axis is **pacing-only**: wait when
 too far ahead, not after every present (`docs/architecture-comparison.md

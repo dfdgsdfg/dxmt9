@@ -198,51 +198,72 @@ graph LR
     C0 --- AB
 ```
 
-### Submission Slot Model (G axis)
+### Submission Model (G axis)
 
-DXMT does NOT enforce a 1 chunk = 1 `MTLCommandBuffer` mapping. Each
-chunk encodes into a **chain of MTLCommandBuffers** committed against
-the same `MTLCommandQueue`:
+**Correction (2026-05-10):** an earlier revision of this note claimed
+DXMT chains multiple `MTLCommandBuffer`s per chunk. That was wrong.
+DXMT actually uses a **strict 1 chunk = 1 `MTLCommandBuffer` mapping**.
 
-- The encode thread opens a CB, encodes a sub-range of the chunk's
-  records, calls `commit()`, opens the next CB, and continues.
-- All sub-CBs share the chunk's single `CpuFence` / completion signal —
-  the fence advances only when the **final** sub-CB completes on the GPU.
-- Resource lifetime (Rc captured by lambdas) is tied to the fence, so
-  reclaim happens after the entire chain completes — sub-CB granularity
-  is invisible to the resource owner.
+Verified in `dxmt/src/dxmt/dxmt_command_queue.cpp:135-141`:
 
-This decouples **encode CPU time** from **GPU lead time**. While the
-encode thread builds sub-CB N+1, sub-CB N is already running on the
-GPU. The CPU never has to wait for the whole chunk's encode work to
-finish before the GPU starts.
+```cpp
+auto cmdbuf = commandQueue.commandBuffer();      // one CB per chunk
+chunk.attached_cmdbuf = cmdbuf;
+if (chunk.resource_initializer_event_id) {
+  cmdbuf.encodeWaitForEvent(initializer.event(), ...);
+}
+chunk.encode(chunk.attached_cmdbuf, this->argument_encoding_ctx);
+cmdbuf.commit();                                  // committed once
+```
 
-The queue itself is a **lock-free MPMC ring**: producers (the application
-thread emitting via `EmitOP/EmitST`) and consumers (encode + finish
-threads) coordinate via atomic head/tail indices and per-slot atomic
-state words rather than a mutex. With 32 slots and `MAX_INFLIGHT=3` the
-contention envelope is bounded; the lock-free path matters when bursts
-arrive.
+`CommandChunk::encode()` runs `list_enc.execute(enc)` which iterates
+**every** lambda in the chunk into the SAME `cmdbuf`. The whole DXMT
+source has only two `commit()` call sites — this one and the
+unrelated `dxmt_resource_initializer.cpp:300` for the
+ResourceInitializer's separate queue. There is no in-chunk split.
 
-### dxmt9 Adoption Points (G axis)
+What DXMT does have:
 
-Adoption by dxmt9 should be **partial, not wholesale**:
+- **Chunk-level back-pressure ring** of size `kCommandChunkCount = 32`
+  (`dxmt_command_queue.hpp:71`). Mirrors dxmt9's slot ring.
+- **Per-chunk `CpuFence` / `chunk_event_id`** signalling completion to
+  resource lifetime / Rc lambda capture.
+- **Encode-thread + finish-thread split** (`EncodingThread` /
+  `WaitForChunk`).
+- **Async / sync mode toggle** via `ASYNC_ENCODING` macro — the
+  encode thread vs. inline encode is the same dxmt9 has.
 
-- Adopt the sub-CB chain pattern (one chunk → N MTLCommandBuffers,
-  single seqId, fence advances on last sub-CB).
-- Keep dxmt9's POD chunk wire format (R-BACK-2.18) — DXMT's lambda
-  capture model is incompatible with the PE/unix Wine boundary.
-- Keep dxmt9's exact-set hazard tracking (R-BACK-2.28) — DXMT's
-  Bloom-filter false positives force unnecessary splits, which is
-  worse on Apple Silicon TBDR than on D3D11's resource workload.
-- The lock-free MPMC queue is an **aspirational** target — dxmt9's
-  current ring uses fine-grained mutexes per slot. A measurement-led
-  conversion is appropriate once mutex contention shows up in the
-  perf counters.
+What DXMT does **not** have, contrary to the earlier claim:
 
-See `docs/architecture-comparison.md §G` for the full axis breakdown
-and `specs/backend/requirements.md` R-BACK-2.29..2.32 for the dxmt9
-contract.
+- No per-chunk sub-CB chain.
+- No `splitMidChunk` analogue.
+- No "encode N records, commit, encode next N" pattern.
+- No lock-free MPMC ring across producers — `EmitOP` / `EmitST` come
+  from a single producer (the immediate context) per device.
+
+### dxmt9 vs DXMT on the G axis (corrected)
+
+dxmt9's **R-BACK-2.34 default** (`per-render-pass + cap=4`, Y1, 2026-05-10)
+is **more aggressive than DXMT** on this axis, not borrowed from it.
+Where DXMT keeps strict 1 chunk = 1 CB, dxmt9 chains up to 4 sub-CBs
+per chunk to overlap CPU encode with GPU execute time. The +49% SFIV
+fps win measured in BB1 (`docs/sfiv-benchmark-measurement.md`) is
+therefore over-and-above what DXMT does, not catching up to it.
+
+The remaining DXMT influence on dxmt9 stays valid:
+
+- Encode + finish threads, queue back-pressure ring, completion-fence-
+  driven resource reclaim — all dxmt9 patterns mirror DXMT.
+- POD chunk wire format (R-BACK-2.18) is dxmt9's specific divergence
+  forced by the Wine PE/unix boundary; DXMT's lambda capture is fine
+  inside a single-process D3D11 stack.
+- Exact-set hazard tracking (R-BACK-2.28) is dxmt9's specific
+  divergence — DXMT uses Bloom filters and accepts the false-positive
+  splits.
+
+See `docs/architecture-comparison.md §G` for the full corrected axis
+breakdown and `specs/backend/requirements.md` R-BACK-2.29..2.34 for
+the dxmt9 contract.
 
 ---
 
