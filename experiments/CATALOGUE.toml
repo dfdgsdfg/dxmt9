@@ -422,7 +422,7 @@ source = "local-external"
 license = "commercial"
 source_kind = "external-application"
 license_scope = "external-not-vendored"
-binary = "/Users/dididi/games/_Heroic/Street Fighter IV Benchmark/Benchmark.exe"
+binary = "D:/StreetFighterIV_Benchmark.exe"
 launcher = "experiments/launchers/street-fighter-iv-benchmark.sh"
 reference = "experiments/references/street-fighter-iv-benchmark.png"
 features = ["commercial", "benchmark", "d3d9ex", "scene", "ui"]
@@ -434,6 +434,10 @@ run_timeout_sec = 50
 capture_frame = 0
 reference_optional = true
 allow_timeout = true
+# Runtime spec (specs/experiments/runtime/):
+wine_id              = "heroic-11.7"
+wine_alternatives    = []
+install_drive_letter = "d"
 
 [[app]]
 name = "dxmt9-perf-present-loop"
