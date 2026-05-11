@@ -422,7 +422,7 @@ source = "local-external"
 license = "commercial"
 source_kind = "external-application"
 license_scope = "external-not-vendored"
-binary = "D:/CAPCOM/STREETFIGHTERIV_BENCHMARK/StreetFighterIV_Benchmark.exe"
+binary = "experiments/apps_3rd/street-fighter-iv-benchmark/CAPCOM/STREETFIGHTERIV_BENCHMARK/StreetFighterIV_Benchmark.exe"
 launcher = "experiments/launchers/street-fighter-iv-benchmark.sh"
 reference = "experiments/references/street-fighter-iv-benchmark.png"
 features = ["commercial", "benchmark", "d3d9ex", "scene", "ui"]
@@ -435,7 +435,7 @@ capture_frame = 0
 reference_optional = true
 allow_timeout = true
 # Runtime spec (specs/experiments/runtime/):
-wine_id = "heroic-11.7"
+wine_id = "sikarugir-cx-24.0.7"
 wine_alternatives = []
 install_drive_letter = "d"
 

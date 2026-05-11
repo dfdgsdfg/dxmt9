@@ -316,54 +316,107 @@ manifest declaration.
 
 ## 9. Distribution & Operator Workflow
 
-The two reproducible paths to a working Wine root for dxmt9:
+Two recipes lead to a working Wine root for dxmt9. **Path A is the
+recommended default** because it is the cheapest fully-automated
+setup. Path B is the reproducible-from-source alternative.
 
 ```dot
 digraph workflow {
   rankdir=LR;
   start[shape=box,label="operator wants to run dxmt9"];
-  pick[shape=diamond,label="have CrossOver license?"];
-  cx_import[shape=box,label="path A — CrossOver import\nsymlink ~/Applications/CrossOver.app/.../CrossOver\ninto experiments/wine/crossover-<ver>/"];
-  source_build[shape=box,label="path B — Wine source build\n(R-WMB-10; 3Shain geek guide)"];
-  src_clone[shape=box,label="clone Wine tag from\nWineHQ or CodeWeavers source"];
-  src_patch[shape=box,label="apply wine/patches/\nwinemac-expose-symbols-<ver>.patch"];
-  src_build[shape=box,label="configure + make + install\ninto experiments/wine/<id>/"];
-  check[shape=box,label="scripts/wine/check_patch.py\n→ applied"];
-  manifest[shape=box,label="add [[wine]] entry to\nexperiments/wine/manifest.toml"];
-  ready[shape=doublecircle,label="probe succeeds;\nCAMetalLayer attaches"];
+  pick[shape=diamond,label="path"];
+  sika_dl[shape=box,label="path A — Sikarugir pre-built\nscripts/wine/install_wine.py --engine sika-cx-24.0.7"];
+  sika_engine[shape=box,label="fetch WS12WineCX24.0.7_<rev>.tar.xz\nfrom Sikarugir-App/Engines"];
+  sika_wrap[shape=box,label="fetch Template-<rev>.tar.xz\nfrom Sikarugir-App/Wrapper"];
+  sika_layout[shape=box,label="extract wswine.bundle → experiments/wine/<id>/\nextract Frameworks/*.dylib → experiments/wine/"];
+  sika_shim[shape=box,label="rename bin/wine → bin/wine.real (+ wineserver)\nwrite shims that export DYLD_FALLBACK_LIBRARY_PATH"];
+  source_build[shape=box,label="path B — Wine source build\n(R-WMB-10.B; 3Shain geek guide)"];
+  src_clone[shape=box,label="clone Wine tag (WineHQ / CodeWeavers source)"];
+  src_patch[shape=box,label="apply wine/patches/winemac-expose-symbols-<ver>.patch"];
+  src_build[shape=box,label="configure + make + install → experiments/wine/<id>/"];
+  check[shape=box,label="scripts/wine/check_patch.py → applied"];
+  manifest[shape=box,label="add [[wine]] entry to experiments/wine/manifest.toml\n(requires_patch=true, patch_status=applied)"];
+  ready[shape=doublecircle,label="probe succeeds;\nCAMetalLayer attaches;\nharness uses POSIX binary path → Z: drive"];
 
   start -> pick;
-  pick -> cx_import [label=yes];
-  pick -> source_build [label=no];
+  pick -> sika_dl [label="A — Sikarugir (default)"];
+  pick -> source_build [label="B — source build"];
+  sika_dl -> sika_engine -> sika_wrap -> sika_layout -> sika_shim -> check;
   source_build -> src_clone -> src_patch -> src_build -> check;
-  cx_import -> check;
   check -> manifest -> ready;
 }
 ```
 
-Path A — CrossOver import (R-WMB-6.2 row 1):
-- Already-licensed CodeWeavers CrossOver. `~/Applications/CrossOver.app`
-  exposes `_macdrv_functions` in its bundled `winemac.so` (verified
-  2026-05-11 on CrossOver 26).
-- dxmt9 keeps `experiments/wine/crossover-<ver>/` as a relative
-  symlink into the CrossOver.app bundle (no file copy — preserves
-  license terms and avoids 400+ MB duplication).
+### Path A — Sikarugir pre-built (recommended)
 
-Path B — Wine source build (R-WMB-10):
-- The reproducible / contributor-facing path. Patch text lives at
-  `wine/patches/winemac-expose-symbols-<ver>.patch`; rebase per Wine
-  bump.
-- After `make install`, `scripts/wine/check_patch.py` is the gate.
-- This is the workflow 3Shain documents in its
-  [DXMT Installation Guide for Geeks](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks);
-  dxmt9 follows the same recipe with only the patch contents and
-  manifest entry as dxmt9-specific deltas.
+`Sikarugir-App/Engines` (`v1.0` release tag) ships Wine bundles with
+`macdrv_functions` already exposed. The matching
+`Sikarugir-App/Wrapper` `Template-*.tar.xz` ships the runtime dylibs
+(`libfreetype`, `libinotify`, GStreamer.framework, ICU, etc.) that
+Wine's `dlopen()` calls expect. dxmt9 places them side-by-side and
+wraps `bin/wine` / `bin/wineserver` with shims that point dyld at
+the co-located dylibs.
 
-What is **not** a workflow:
+`scripts/wine/install_wine.py` automates the whole setup. On a
+fresh repo:
+
+```
+python3 scripts/wine/install_wine.py \
+  --engine sikarugir-cx-24.0.7 \
+  --target-id sikarugir-cx-24.0.7 \
+  --register-in-manifest
+```
+
+The script:
+1. Downloads `WS12WineCX24.0.7_<rev>.tar.xz` from
+   `Sikarugir-App/Engines` releases.
+2. Extracts `wswine.bundle/` into `experiments/wine/<target-id>/`.
+3. Downloads `Template-<rev>.tar.xz` from `Sikarugir-App/Wrapper`.
+4. Extracts `Template-*.app/Contents/Frameworks/*.dylib` into
+   `experiments/wine/` (so `bin/../../<lib>.dylib` resolves).
+5. Renames `bin/wine` → `bin/wine.real`, `bin/wineserver` →
+   `bin/wineserver.real`, then writes the shim scripts.
+6. Audits `winemac.so` for `_macdrv_functions` (refuses to register
+   if absent).
+7. Optionally appends a `[[wine]]` entry to `manifest.toml`.
+
+Verified 2026-05-11: SFIV runs end-to-end on this setup (status
+pass, 76 s full benchmark, `mean_luma=33.5`, abi-hash handshake OK).
+
+### Path B — Wine source build (reproducible alternative)
+
+For maintainers who want fully-open tooling or a Wine version not
+yet on Sikarugir Engines. Patch text at
+`wine/patches/winemac-expose-symbols-<ver>.patch`; rebase per Wine
+bump. After `make install`, `scripts/wine/check_patch.py` is the
+gate. dxmt9 does not automate the build itself — see R-WMB-10.B.
+
+This is the workflow 3Shain documents in its
+[DXMT Installation Guide for Geeks](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks);
+dxmt9 follows the same recipe with only the patch contents and
+manifest entry as dxmt9-specific deltas.
+
+### Binary path resolution
+
+R-WMB-6.5 forbids depending on `dosdevices/<letter>:` for the
+binary path. Sikarugir's bundled Wine (and any other macOS Wine)
+runs `wineboot` at startup, which rewrites `dosdevices/<letter>:`
+for any letter Wine auto-claims. dxmt9 uses the **local POSIX path**
+to the executable inside `experiments/apps_3rd/<name>/` and lets
+Wine map it through its built-in `Z:` drive (mapped to `/`).
+
+### What is **not** a workflow
+
 - Heroic's Wine downloader (`Wine-11.x`, `Wine-11.x-DXMT`,
-  `Wine-Crossover-23.7.1-1`). All current Gcenx / Heroic redistributed
-  binaries are stripped. R-WMB-6.4 codifies the refusal; the probe is
-  the runtime gate.
+  `Wine-Crossover-23.7.1-1`). All current Gcenx / Heroic
+  redistributed binaries are stripped. R-WMB-6.4 codifies the
+  refusal; the probe is the runtime gate.
+- Direct use of the licensed CodeWeavers CrossOver product
+  (without the dxmt9 info-class follow-up). CrossOver 26 exposes
+  `_macdrv_functions` but its wow64 lacks
+  `NtQueryVirtualMemory(MemoryWineImageInfo)`; the dxmt9 bridge
+  probe currently bails with `STATUS_INVALID_INFO_CLASS`. Tracked
+  as a follow-up.
 
 dxmt9 does not package Wine. The manifest names which roots are
 known-good per machine.

@@ -49,18 +49,33 @@ requires_patch = true
 patch_status   = "unpatched"
 notes          = "The '-DXMT' suffix bundles pre-built dxmt D3D11 DLLs; winemac.so is md5-identical to the vanilla 11.7 build (67afe1eb6fab5b958f47a6d58f4306b8). dxmt9 cannot run on this root."
 
-# ─── CrossOver product (CodeWeavers license). Path A in design §9. ───────
+# ─── Path A: Sikarugir-Engines pre-built Wine (recommended default). ─────
+# Installed via scripts/wine/install_wine.py --engine sikarugir-cx-24.0.7.
+# The script extracts wswine.bundle into experiments/wine/<id>/, drops the
+# Sikarugir Wrapper Template's Frameworks/*.dylib next to it, and wraps
+# bin/wine + bin/wineserver with DYLD_FALLBACK_LIBRARY_PATH shims.
 [[wine]]
-id             = "crossover-26"
-source         = "crossover"
+id             = "sikarugir-cx-24.0.7"
+source         = "sikarugir"
 variant        = "patched"
-version        = "26.0"
-path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
+version        = "wine-9.0 / SikarugirCX 24.0.7 r6"
+path           = "$REPO_ROOT/experiments/wine/sikarugir-cx-24.0.7"
 requires_patch = true
 patch_status   = "applied"
-notes          = "CrossOver 26 exposes the aggregate macdrv_functions symbol; dxmt9 reaches the Metal bridge natively. The standard licensed path."
+notes          = "Sikarugir-App/Engines pre-built CrossOver-derived Wine. _macdrv_functions exposed; wow64 compatible with dxmt9's MemoryWineImageInfo lookups. Verified SFIV end-to-end 2026-05-11."
 
-# ─── Self-built Wine with dxmt9 patch applied (R-WMB-10, design §9 path B).
+# ─── Path A alternative: Sikarugir's own Wine 10.0 fork. ──────────────────
+[[wine]]
+id             = "sikarugir-10.0"
+source         = "sikarugir"
+variant        = "patched"
+version        = "wine-10.0 / Sikarugir 10.0 r6"
+path           = "$REPO_ROOT/experiments/wine/sikarugir-10.0"
+requires_patch = true
+patch_status   = "applied"
+notes          = "Alternate Sikarugir Wine (non-CrossOver lineage). Same install_wine.py recipe, different engine tag."
+
+# ─── Path B: Self-built Wine with dxmt9 patch applied (R-WMB-10.B). ──────
 [[wine]]
 id             = "wine-source-built-11.7"
 source         = "manual"
@@ -70,3 +85,16 @@ path           = "$REPO_ROOT/experiments/wine/wine-source-built-11.7/Contents/Re
 requires_patch = true
 patch_status   = "applied"
 notes          = "Operator-built per wine/patches/README.md from WineHQ / CodeWeavers source with wine/patches/winemac-expose-symbols-11.7.patch applied."
+
+# ─── Documented-as-broken: CodeWeavers CrossOver product. ────────────────
+# Listed for users who already own CrossOver. Currently unusable until the
+# dxmt9 MemoryWineImageInfo fallback lands (see specs/winemetal/design.md §9).
+[[wine]]
+id             = "crossover-26"
+source         = "crossover"
+variant        = "patched"
+version        = "26.0"
+path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
+requires_patch = true
+patch_status   = "unsupported"
+notes          = "Exposes _macdrv_functions but wow64 rejects NtQueryVirtualMemory(MemoryWineImageInfo) — winemetal bridge fails with 0xc0000003. Pending dxmt9-side fallback."

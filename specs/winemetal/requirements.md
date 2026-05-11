@@ -183,14 +183,15 @@ release. The current set is recorded in this spec and mirrored in
 `experiments/wine/manifest.toml`. A Wine root outside that set may
 work but is not validated.
 
-**R-WMB-6.2** The initial supported set is:
+**R-WMB-6.2** The initial supported set, in order of preference:
 
 | Wine source | Working out of box? | How to qualify | Notes |
 |---|---|---|---|
-| CrossOver-branded Wine (CodeWeavers product, `~/Applications/CrossOver.app` or equivalent) | ✅ | already exposes `macdrv_functions` aggregate. Verify with `scripts/wine/check_patch.py`. | dxmt9's reference target. 3Shain dxmt's primary supported environment. |
-| Self-built Wine from WineHQ/CodeWeavers source with the dxmt9 macdrv patch applied (R-WMB-10) | ✅ | Confirmed by `scripts/wine/check_patch.py` after `make install`. | The reproducible path. Standard for contributors who cannot license CrossOver. |
-| Gcenx `macOS_Wine_builds` releases (Heroic also redistributes these as `Wine-11.x`, `Wine-11.x-DXMT`) | ❌ | none. Both `winemac.so` and the `-DXMT` variants ship stripped: only `__wine_unix_call_funcs` / `__wine_unix_call_wow64_funcs` are dynamically visible. | dxmt9 must refuse to run wild experiments on these. The "DXMT" suffix names a pre-bundled set of dxmt D3D11 DLLs, not a Wine patch — `winemac.so` is byte-identical to the vanilla bundle. Verified 2026-05-11 against Wine-11.0_1 / 11.6_1 / 11.7 / 11.7-DXMT (all md5-identical winemac.so). |
-| `Heroic-Games-Launcher/wine-crossover` (`Wine-Crossover-23.7.1-1` mirror) | ❌ | none. Also stripped. | Heroic PR #5488 itself documents this as a fallback "only when no other option works." |
+| **`Sikarugir-App/Engines` pre-built Wine** (`WS12WineCX24.0.7_*.tar.xz`, `WS12WineSikarugir10.0_*.tar.xz`) | ✅ | Drop the `wswine.bundle` into `experiments/wine/<id>/`; co-locate the Sikarugir Wrapper Template's `Frameworks/*.dylib` files in `experiments/wine/` (the dyld `@rpath/bin/../..` search target); replace `bin/wine` and `bin/wineserver` with shims that export `DYLD_FALLBACK_LIBRARY_PATH=experiments/wine`. `scripts/wine/install_wine.py` automates all of the above. | **dxmt9's default recommended runtime.** Verified 2026-05-11 end-to-end on SFIV: handshake OK, 76 s full benchmark, status pass. The Sikarugir builds re-expose `macdrv_functions` and ship a compatible wow64 (the `MemoryWineImageInfo` info class 1002 issue documented for vanilla CrossOver 26 does not affect this build). |
+| CodeWeavers CrossOver product (`~/Applications/CrossOver.app`, licensed) | ⚠️ partial | `_macdrv_functions` is exposed natively, but CrossOver 26's wow64 returns `STATUS_INVALID_INFO_CLASS` (`0xc0000003`) for `NtQueryVirtualMemory(MemoryWineImageInfo)`; dxmt9's app-local provider fallback fails and the bridge refuses to attach. The bin/wine Perl wrapper additionally requires a "default" CrossOver bottle that dxmt9 prefixes do not own. | Not usable as-is. Documented for users who already own CrossOver but want to migrate; pending a dxmt9-side info-class fallback (filed as a follow-up). |
+| Self-built Wine from WineHQ / CodeWeavers source with the dxmt9 macdrv patch applied (R-WMB-10) | ✅ | Confirmed by `scripts/wine/check_patch.py` after `make install`. | The reproducible / fully-open path for contributors who cannot license CrossOver and want to track upstream Wine more closely than Sikarugir releases. |
+| Gcenx `macOS_Wine_builds` releases (Heroic redistributes these as `Wine-11.x`, `Wine-11.x-DXMT`) | ❌ | none. Both vanilla and `-DXMT` variants ship a stripped `winemac.so` with only `__wine_unix_call_funcs` / `__wine_unix_call_wow64_funcs` visible. | dxmt9 must refuse to run wild experiments on these. The "DXMT" suffix names a pre-bundled set of dxmt D3D11 DLLs, not a Wine patch — `winemac.so` is md5-identical to the vanilla bundle (`67afe1eb6fab5b958f47a6d58f4306b8`). Verified 2026-05-11 against Wine-11.0_1 / 11.6_1 / 11.7 / 11.7-DXMT. |
+| `Heroic-Games-Launcher/wine-crossover` (`Wine-Crossover-23.7.1-1` mirror) | ❌ | none. Also stripped. | Heroic PR #5488 itself documents this as a fallback "only when no other option works." Listed for completeness. |
 | `wine-staging-master` ≥ 11.8 from a source build | Depends | The dxmt9 patch must be rebased; rerun `check_patch.py`. | Until the rebase lands, not in the supported set. |
 
 **R-WMB-6.3** Updating to a new Wine minor version is a deliberate
@@ -205,8 +206,22 @@ supported source for dxmt9 today. Heroic's UI may still advertise
 "DXMT compatibility" — that label refers to the pre-bundled D3D11
 DLL set, not to a patched `winemac.so`. The runtime probe (R-WMB-7)
 will reject any of these Wine roots once dxmt9 attempts to attach a
-Metal layer. Operators must use either the CodeWeavers CrossOver
-product or a self-built Wine (R-WMB-10).
+Metal layer. Operators must use Sikarugir-Engines pre-builds, the
+licensed CodeWeavers CrossOver product (with the info-class
+follow-up), or a self-built Wine (R-WMB-10).
+
+**R-WMB-6.5** Wine roots re-execute `wineboot` at every `wine`
+invocation when the prefix's `.update-timestamp` is stale or when
+the runtime detects new macOS volumes. That wineboot rewrites
+`<prefix>/dosdevices/<letter>:` for any letter Wine auto-claims (in
+practice `D:` on this machine, which gets re-bound to the first
+`/Volumes/` or cryptex mount). dxmt9 must therefore not depend on a
+`dosdevices`-routed binary path. The harness's binary path for a
+wild experiment is the **local POSIX path** to the executable inside
+`experiments/apps_3rd/<name>/`; Wine resolves that via its built-in
+`Z:` drive (mapped to `/`). The `install_drive_letter` field stays
+in CATALOGUE for documentation but is no longer load-bearing for the
+launch path.
 
 ---
 
@@ -274,41 +289,77 @@ how to add a new Wine version row to R-WMB-6.2.
 
 ---
 
-## 10. Wine Source Build Workflow (Optional Reference)
+## 10. Setup Workflows
 
-This is the official 3Shain dxmt geek-guide path. dxmt9 documents it
-here because it is the only reproducible way to obtain a working
-Wine root that is not the proprietary CrossOver product.
+Two recipes are supported. Both result in a `[[wine]]` entry whose
+`patch_status = "applied"` and whose probe (R-WMB-7) finds
+`macdrv_functions`.
 
-**R-WMB-10.1** dxmt9 ships a documentation entry at
+### 10.A — Sikarugir pre-built Wine (recommended)
+
+`Sikarugir-App/Engines` releases ship Wine bundles that already
+re-expose the macdrv symbols dxmt9 needs. The Wrapper Template (`Sikarugir-App/Wrapper`) ships the macOS runtime dylibs
+(`libfreetype`, `libinotify`, GStreamer.framework, etc.) the Wine
+binary links against. dxmt9 places them side-by-side.
+
+**R-WMB-10.A.1** `scripts/wine/install_wine.py` (operator-run,
+single command) MUST automate:
+1. Downloading `WS12WineCX24.0.7_<rev>.tar.xz` or
+   `WS12WineSikarugir10.0_<rev>.tar.xz` from
+   `https://github.com/Sikarugir-App/Engines/releases/download/v1.0/`.
+2. Extracting the contained `wswine.bundle` to
+   `experiments/wine/<id>/`.
+3. Downloading the matching `Sikarugir-App/Wrapper` Template
+   (`Template-<rev>.tar.xz`).
+4. Extracting `Template-*.app/Contents/Frameworks/*.dylib` to
+   `experiments/wine/` (one level above `<id>/`, where the bundle's
+   own `@rpath/bin/../..` resolves at runtime).
+5. Renaming `experiments/wine/<id>/bin/wine` and
+   `experiments/wine/<id>/bin/wineserver` to `*.real`, then writing
+   thin Bash shims that export
+   `DYLD_FALLBACK_LIBRARY_PATH=<experiments/wine>` and exec the
+   real binary. These let Wine's `dlopen()` calls (e.g. FreeType)
+   find the co-located dylibs.
+6. Verifying `winemac.so` exposes `_macdrv_functions` (the same
+   check `scripts/wine/check_patch.py` performs).
+7. Optionally appending a manifest entry — gated behind a CLI flag
+   so an existing entry is never overwritten silently.
+
+**R-WMB-10.A.2** The list of supported Sikarugir engine tags is
+sourced from `Sikarugir-App/Engines/EngineList.txt` at script
+runtime. The script must refuse to install an engine not listed
+there (defensive; reduces accidental drift).
+
+**R-WMB-10.A.3** `install_wine.py` MUST be idempotent. Re-running
+with the same target id either no-ops (if the bundle is intact and
+the symbol audit passes) or replaces the bundle cleanly.
+
+### 10.B — Wine source build (reproducible alternative)
+
+3Shain dxmt's geek-guide path. Use this when Sikarugir's releases
+do not cover the desired Wine version, or when the operator wants a
+fully-from-source pipeline.
+
+**R-WMB-10.B.1** dxmt9 ships a documentation entry at
 `wine/patches/README.md` that walks the operator through:
 1. Cloning a tagged Wine source tree (WineHQ or the CodeWeavers
    open-source CrossOver Wine tarball linked from
    https://www.codeweavers.com/about/wine).
 2. Applying `wine/patches/winemac-expose-symbols-<wine-version>.patch`.
 3. Configuring + building on macOS (Apple Silicon native or
-   x86_64 via Rosetta 2 for x86_64 Wine — the dxmt-community
-   default per 3Shain/dxmt #141).
-4. Installing into `experiments/wine/<id>/` (gitignored per
-   `specs/experiments/runtime/`).
+   x86_64 via Rosetta 2 — the dxmt-community default per
+   3Shain/dxmt #141).
+4. Installing into `experiments/wine/<id>/`.
 5. Running `scripts/wine/check_patch.py <root>` to confirm
    `applied`.
 6. Adding the matching `[[wine]]` entry to
-   `experiments/wine/manifest.toml` with `requires_patch = true`,
-   `patch_status = "applied"`.
+   `experiments/wine/manifest.toml`.
 
-**R-WMB-10.2** The dxmt9 repository does **not** automate steps 1–4.
-Build toolchain (Homebrew, LLVM, GStreamer, Wine prerequisites)
-varies per macOS version and is the operator's responsibility. dxmt9
-provides the patch text, the verifier script, and the manifest
-schema; the build itself stays out of dxmt9's CI.
+**R-WMB-10.B.2** dxmt9 does **not** automate the source-build
+steps. Build toolchain (Homebrew, LLVM, GStreamer, Wine
+prerequisites) varies per macOS version and is the operator's
+responsibility.
 
-**R-WMB-10.3** Cross-reference: the 3Shain dxmt geek guide lives at
+**R-WMB-10.B.3** Cross-reference: the 3Shain dxmt geek guide lives at
 https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks.
-That guide is normative for the source-build workflow on macOS; dxmt9
-follows the same recipe with only the patch contents and the
-manifest entry as dxmt9-specific deltas.
-
-**R-WMB-10.4** When 3Shain's guide moves or a different upstream
-maintainer takes ownership, `wine/patches/README.md` is the dxmt9
-side that gets updated; the requirement does not change.
+That guide is normative for the source-build workflow on macOS.

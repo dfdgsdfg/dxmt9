@@ -3,40 +3,56 @@
 Operator workflow for the Wine root manifest used by wild experiments.
 
 - **Manifest:** `manifest.toml` (committed). Lists every Wine root the harness may use.
-- **Manifest schema reference:** `specs/experiments/assets/wine-manifest.schema.toml`.
+- **Manifest schema:** `specs/experiments/assets/wine-manifest.schema.toml`.
 - **Runtime spec:** `specs/experiments/runtime/{requirements,design}.md`.
-- **macdrv symbol-bridge spec:** `specs/winemetal/{requirements,design}.md`. **Read this first** before adding a Wine root — most Heroic / Gcenx redistributed builds ship with `winemac.so` symbols stripped and cannot drive dxmt9. The spec's §6.2 compatibility matrix is authoritative.
+- **macdrv symbol-bridge spec:** `specs/winemetal/{requirements,design}.md`. Authoritative for which Wine builds actually work and why.
+
+## Recommended setup: Sikarugir pre-built Wine (path A)
+
+Run once per machine:
+
+```sh
+python3 scripts/wine/install_wine.py \
+  --engine sikarugir-cx-24.0.7 \
+  --target-id sikarugir-cx-24.0.7 \
+  --register-in-manifest
+```
+
+The script:
+1. Fetches `WS12WineCX24.0.7_<rev>.tar.xz` from [`Sikarugir-App/Engines`](https://github.com/Sikarugir-App/Engines) and extracts `wswine.bundle/` into `experiments/wine/<id>/`.
+2. Fetches the matching `Template-*.tar.xz` from [`Sikarugir-App/Wrapper`](https://github.com/Sikarugir-App/Wrapper) and drops its `Frameworks/*.dylib` files (FreeType, libinotify, GStreamer.framework, ICU, etc.) into `experiments/wine/` (one level above the bundle — this is where dyld's `@rpath/bin/../..` resolves).
+3. Renames `bin/wine` → `bin/wine.real` and `bin/wineserver` → `bin/wineserver.real`, then writes thin Bash shims that export `DYLD_FALLBACK_LIBRARY_PATH=experiments/wine` so Wine's `dlopen()` calls (FreeType etc.) find the co-located dylibs.
+4. Audits the bundle's `winemac.so` for the `_macdrv_functions` symbol (refuses to register a stripped build).
+5. Appends a `[[wine]]` entry to `manifest.toml` with `requires_patch=true, patch_status="applied"`.
+
+After install, the resolver picks it up automatically:
+
+```sh
+python3 scripts/wine/resolve.py --list   # should show OK sikarugir-cx-24.0.7
+```
+
+CATALOGUE entries point at this manifest id via `wine_id = "sikarugir-cx-24.0.7"`.
 
 ## Which Wine roots work today
 
-Audited 2026-05-11 on macOS Apple Silicon (Gcenx tags 11.0_1, 11.6_1, 11.7, 11.8; Heroic Wine-Crossover-23.7.1-1; CrossOver 26):
+Audited 2026-05-11 on macOS Apple Silicon:
 
 | Source | Works? | How to qualify |
 |---|---|---|
-| **CodeWeavers CrossOver product** (`~/Applications/CrossOver.app`) | ✅ | already exposes `_macdrv_functions`; symlink it into `experiments/wine/crossover-<ver>/`. |
-| **Self-built Wine** with `wine/patches/winemac-expose-symbols-<ver>.patch` applied | ✅ | follow 3Shain's [DXMT Installation Guide for Geeks](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks) (also referenced from `specs/winemetal/requirements.md` R-WMB-10). |
-| Heroic `Wine-11.x`, `Wine-11.x-DXMT`, `Wine-Crossover-23.7.1-1` | ❌ | none. `winemac.so` is stripped. The `-DXMT` suffix bundles dxmt's pre-built D3D11 DLLs only; it does **not** patch `winemac.so`. |
-| `Wine-Staging-macOS` / older Gcenx 11.x | ❌ | Heroic's UI may suggest this for DXMT; that advice is outdated. dxmt9's runtime probe will reject it. |
+| **`Sikarugir-App/Engines` pre-built** (`WS12WineCX24.0.7_*`, `WS12WineSikarugir10.0_*`) | ✅ | `install_wine.py` — fully automated. |
+| **Self-built Wine** with `wine/patches/winemac-expose-symbols-<ver>.patch` applied | ✅ | Follow 3Shain's [DXMT Installation Guide for Geeks](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks); also documented in `wine/patches/README.md`. |
+| CodeWeavers CrossOver product (`~/Applications/CrossOver.app`) | ⚠️ partial | Exposes the symbols but its wow64 lacks `NtQueryVirtualMemory(MemoryWineImageInfo)`; dxmt9's bridge bails with `0xc0000003`. Pending follow-up. |
+| Heroic `Wine-11.x`, `Wine-11.x-DXMT`, `Wine-Crossover-23.7.1-1` | ❌ | None. `winemac.so` is stripped. The `-DXMT` suffix bundles dxmt's pre-built D3D11 DLLs only; it does **not** patch `winemac.so` (md5-identical to vanilla). |
 
-## Adding a Wine root
+## Binary paths must be POSIX, not `D:\`
 
-1. Install the Wine source per the matrix above. Either:
-   - Path A — copy/symlink CrossOver's bundled wine tree into `experiments/wine/<id>/`, or
-   - Path B — clone Wine source, apply the dxmt9 macdrv patch, build, install into `experiments/wine/<id>/` (see `wine/patches/README.md`).
-2. Run `python3 scripts/wine/check_patch.py $(pwd)/experiments/wine/<id>` to confirm `applied`.
-3. Append a `[[wine]]` entry to `manifest.toml` with:
-   - `id` (unique short string)
-   - `source` (`heroic` / `brew` / `gptk` / `crossover` / `sikarugir` / `manual`)
-   - `variant` (`vanilla` / `dxmt` / `vk` / `kegworks` / `patched`)
-   - `path` (absolute, may use `$HOME` or `$REPO_ROOT`)
-   - `requires_patch = true` and `patch_status = "applied"` for source-built or CrossOver-imported roots (see `specs/winemetal/assets/wine-manifest-requires-patch.toml.example`).
-4. Run `python3 scripts/wine/resolve.py --list` to verify the entry parses (note: `resolve.py` lands in a later round; the `--list` check is forward-looking until then).
+Sikarugir's (and any other macOS) Wine re-runs `wineboot` at every `wine` invocation when it detects a stale `.update-timestamp` or new macOS mount, and that wineboot rewrites `dosdevices/<letter>:` to whatever mount it auto-claims (in practice `D:` ends up pointing at a cryptex mount on this machine). dxmt9 therefore uses the **local POSIX path** to the binary inside `experiments/apps_3rd/<name>/`; Wine resolves that through its built-in `Z:` drive (= `/`). The `install_drive_letter` field in CATALOGUE stays for documentation but no longer routes the launch path.
 
 ## Manually-placed bundles
 
-Drop a Heroic-style bundle (the `Contents/Resources/wine/` layout) into this directory; it is gitignored. Reference it in `manifest.toml` with `source = "manual"` and a `$REPO_ROOT/experiments/wine/...` path. Always run `check_patch.py` after placing the bundle — bundles whose `winemac.so` is stripped will fail at runtime regardless of the source label.
+Drop a Heroic-style bundle (the `Contents/Resources/wine/` layout) into this directory; it is gitignored. Reference it in `manifest.toml` with `source = "manual"` and a `$REPO_ROOT/experiments/wine/...` path. Always run `scripts/wine/check_patch.py` (when it lands) after placing the bundle — bundles whose `winemac.so` is stripped will fail at runtime regardless of the source label.
 
 ## What is and isn't committed
 
 - Committed: `manifest.toml`, this README.
-- Gitignored: every other file under `experiments/wine/` (including bundle directories and CrossOver symlinks).
+- Gitignored: every other file under `experiments/wine/` — bundle directories, the runtime dylibs `install_wine.py` deposits here, shim wrappers, downloaded tarballs.

@@ -8,16 +8,23 @@ runtime, not the dxmt9 build itself.
 > layout are defined in `specs/experiments/runtime/{requirements,design}.md`.
 > This rule covers operational guidance only.
 
-## Rule: Default to Vanilla Wine
+## Rule: Default to the Sikarugir-Engines Wine runtime
 
-**All experiment runners MUST default to a pristine, unpatched Wine build.**
+**All wild-experiment runners MUST default to a Wine root whose
+`winemac.so` re-exposes `_macdrv_functions`** so dxmt9 can attach a
+`CAMetalLayer`. Without that symbol, the bridge silently no-ops and
+the user sees a black window. See
+`specs/winemetal/requirements.md` R-WMB-6.2 for the audited
+compatibility matrix.
 
 | Runtime | Use as default? | Why |
 |---------|-----------------|-----|
-| `Wine-11.7` (vanilla Heroic) | **Yes** | Reference baseline. Same `d3d9.dll` shim, `wow64` dispatcher, and `ntdll` thunks regardless of who runs the test. Update this row when Heroic publishes a newer minor (`Wine-11.8`, etc.) — the rule is "current vanilla Heroic Wine," not a frozen version. |
-| `Wine-*-DXMT` | No (exception below) | Carries DXMT-author patches to `d3d9` / `dxgi` / wow64. Hides dxmt9 bridge regressions and produces inconsistent baselines across machines. |
+| **`sikarugir-cx-24.0.7`** (Sikarugir-App/Engines pre-built) | **Yes** | Installed in one command via `python3 scripts/wine/install_wine.py --engine sikarugir-cx-24.0.7 --target-id sikarugir-cx-24.0.7 --register-in-manifest`. Pre-built `winemac.so` exposes `_macdrv_functions`; wow64 is compatible with dxmt9's `MemoryWineImageInfo` lookup. Verified SFIV end-to-end 2026-05-11 (status pass, 76 s benchmark). |
+| Self-built Wine with `wine/patches/winemac-expose-symbols-<ver>.patch` | Yes (alternative) | The reproducible-from-source path; see `specs/winemetal/requirements.md` R-WMB-10.B. |
+| `Wine-11.x` / `Wine-11.x-DXMT` (Heroic / Gcenx redistributed) | **No** | `winemac.so` is stripped (md5-identical between vanilla and `-DXMT`). The `-DXMT` suffix bundles pre-built dxmt D3D11 DLLs only and does **not** patch `winemac.so`. Runtime probe rejects them. |
+| Heroic `Wine-Crossover-23.7.1-1` | **No** | Same stripping pattern; Heroic PR #5488 itself documents this build as a fallback "only when no other option works." |
+| CodeWeavers CrossOver product (licensed) | Partial | Exposes `_macdrv_functions` but its wow64 currently rejects `NtQueryVirtualMemory(MemoryWineImageInfo)`; dxmt9 bridge bails with `STATUS_INVALID_INFO_CLASS`. Tracked as a follow-up. |
 | `Wine-*-VK` / Proton-style VK builds | No | Substitutes a different `d3d9.dll` and reroutes through Vulkan; the comparison is no longer "dxmt9 vs. Wine builtin." |
-| CrossOver Wine | No (unless explicitly testing CrossOver host) | Forks Wine; results don't generalize. |
 
 **Reason — concrete incident (2026-05-10):** SFIV under `Wine-11.6-DXMT`
 appeared to flood `dxmt9.log` with `0xc0000005` access violations on

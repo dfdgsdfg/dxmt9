@@ -1,26 +1,66 @@
 # Wine root registry for dxmt9 wild experiments.
 # Spec: specs/experiments/runtime/requirements.md §3.
 # Schema: specs/experiments/assets/wine-manifest.schema.toml.
+# macdrv symbol-bridge spec: specs/winemetal/requirements.md (R-WMB-6.2).
+# Setup automation: scripts/wine/install_wine.py.
 #
-# To add a new Wine root: append a [[wine]] table with a unique id,
-# the source/variant taxonomy, and an absolute path to the wine root
-# (the directory containing bin/wine). The harness validates each
-# entry's executable at startup.
+# Audit data (2026-05-11): the macdrv Metal-bridge symbols dxmt9 needs are
+# present in Sikarugir-Engines pre-builds and the CodeWeavers CrossOver
+# product. Heroic / Gcenx redistributed builds (Wine-11.x, Wine-11.x-DXMT,
+# Wine-Crossover-23.7.1-1) all ship a stripped winemac.so. CrossOver 26's
+# wow64 additionally rejects NtQueryVirtualMemory(MemoryWineImageInfo)
+# — see specs/winemetal/design.md §9.
 
 manifest_version = 1
 
+# ─── Path A: Sikarugir-Engines pre-built (recommended default). ──────────
+# Installed via:
+#   python3 scripts/wine/install_wine.py \
+#     --engine sikarugir-cx-24.0.7 --target-id sikarugir-cx-24.0.7
 [[wine]]
-id      = "heroic-11.7"
-source  = "heroic"
-variant = "vanilla"
-version = "11.7"
-path    = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
-notes   = "Default vanilla baseline (agents/rules/test_wild.rules.md)."
+id             = "sikarugir-cx-24.0.7"
+source         = "sikarugir"
+variant        = "patched"
+version        = "wine-9.0 / SikarugirCX 24.0.7 r6"
+path           = "$REPO_ROOT/experiments/wine/sikarugir-cx-24.0.7"
+requires_patch = true
+patch_status   = "applied"
+notes          = "Sikarugir-App/Engines pre-built CrossOver-derived Wine. _macdrv_functions exposed; wow64 compatible. Verified SFIV end-to-end 2026-05-11. Default wine_id for wild experiments on this machine."
+
+# ─── Documented-as-broken: stripped Heroic / Gcenx builds. ────────────────
+# Kept so the runtime probe (R-WMB-7) can refuse them with a clear pointer
+# to spec. The harness will hard-error rather than silently producing a
+# black window.
+[[wine]]
+id             = "heroic-11.7"
+source         = "heroic"
+variant        = "vanilla"
+version        = "11.7"
+path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
+requires_patch = true
+patch_status   = "unpatched"
+notes          = "winemac.so stripped (only __wine_unix_call_funcs visible); dxmt9 cannot attach a Metal layer. See specs/winemetal/requirements.md R-WMB-6.4."
 
 [[wine]]
-id      = "heroic-11.7-dxmt"
-source  = "heroic"
-variant = "dxmt"
-version = "11.7"
-path    = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
-notes   = "DXMT-patched build; documented exception only (anno-1404-gold)."
+id             = "heroic-11.7-dxmt"
+source         = "heroic"
+variant        = "dxmt"
+version        = "11.7"
+path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
+requires_patch = true
+patch_status   = "unpatched"
+notes          = "winemac.so md5-identical to vanilla Wine-11.7 (67afe1eb6fab5b958f47a6d58f4306b8). The '-DXMT' suffix bundles pre-built dxmt D3D11 DLLs only — does not patch winemac.so."
+
+# ─── Documented-as-broken: CodeWeavers CrossOver product. ────────────────
+# Exposes _macdrv_functions but its wow64 lacks the MemoryWineImageInfo
+# query class dxmt9's app-local provider fallback uses. Pending a
+# dxmt9-side info-class fallback (filed as a follow-up).
+[[wine]]
+id             = "crossover-26"
+source         = "crossover"
+variant        = "patched"
+version        = "26.0"
+path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
+requires_patch = true
+patch_status   = "unsupported"
+notes          = "Currently incompatible — wow64 NtQueryVirtualMemory(class=1002) returns STATUS_INVALID_INFO_CLASS. Listed for users who already own CrossOver."
