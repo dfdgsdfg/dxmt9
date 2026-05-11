@@ -185,19 +185,28 @@ work but is not validated.
 
 **R-WMB-6.2** The initial supported set is:
 
-| Wine source | Patch needed? | Notes |
-|---|---|---|
-| `wine-staging-11.6` and earlier | No | macdrv symbols are natively visible. |
-| `wine-staging-11.7` (vanilla Heroic) | **Yes** — apply `wine/patches/winemac-expose-symbols-11.7.patch` | Out-of-the-box Heroic Wine-11.7 cannot reach Metal layer; dxmt9 emits a clear error and refuses to run wild experiments under it. |
-| `wine-staging-11.7-DXMT` (Heroic) | **Verify** — operator checks `nm winemac.so`; if symbols missing, treat as 11.7 | Heroic's `-DXMT` branding does not guarantee the dxmt9 patch is present. Run `scripts/wine/check_patch.py`. |
-| CrossOver Wine 24+ | No | CrossOver exposes the symbols natively. |
-| `wine-staging-master` ≥ 11.8 | Patch must be rebased | Untested until rebase lands. |
+| Wine source | Working out of box? | How to qualify | Notes |
+|---|---|---|---|
+| CrossOver-branded Wine (CodeWeavers product, `~/Applications/CrossOver.app` or equivalent) | ✅ | already exposes `macdrv_functions` aggregate. Verify with `scripts/wine/check_patch.py`. | dxmt9's reference target. 3Shain dxmt's primary supported environment. |
+| Self-built Wine from WineHQ/CodeWeavers source with the dxmt9 macdrv patch applied (R-WMB-10) | ✅ | Confirmed by `scripts/wine/check_patch.py` after `make install`. | The reproducible path. Standard for contributors who cannot license CrossOver. |
+| Gcenx `macOS_Wine_builds` releases (Heroic also redistributes these as `Wine-11.x`, `Wine-11.x-DXMT`) | ❌ | none. Both `winemac.so` and the `-DXMT` variants ship stripped: only `__wine_unix_call_funcs` / `__wine_unix_call_wow64_funcs` are dynamically visible. | dxmt9 must refuse to run wild experiments on these. The "DXMT" suffix names a pre-bundled set of dxmt D3D11 DLLs, not a Wine patch — `winemac.so` is byte-identical to the vanilla bundle. Verified 2026-05-11 against Wine-11.0_1 / 11.6_1 / 11.7 / 11.7-DXMT (all md5-identical winemac.so). |
+| `Heroic-Games-Launcher/wine-crossover` (`Wine-Crossover-23.7.1-1` mirror) | ❌ | none. Also stripped. | Heroic PR #5488 itself documents this as a fallback "only when no other option works." |
+| `wine-staging-master` ≥ 11.8 from a source build | Depends | The dxmt9 patch must be rebased; rerun `check_patch.py`. | Until the rebase lands, not in the supported set. |
 
 **R-WMB-6.3** Updating to a new Wine minor version is a deliberate
 change: the patch is rebased, validated against the symbol set in
 §2, and a new manifest entry is added. The previous version's
 manifest entry remains valid for one more release for operators who
 have not migrated.
+
+**R-WMB-6.4** Heroic's wine downloader (`Wine-Staging-macOS`,
+`Wine-11.x`, `Wine-11.x-DXMT`, `Wine-Crossover-*`) is **not** a
+supported source for dxmt9 today. Heroic's UI may still advertise
+"DXMT compatibility" — that label refers to the pre-bundled D3D11
+DLL set, not to a patched `winemac.so`. The runtime probe (R-WMB-7)
+will reject any of these Wine roots once dxmt9 attempts to attach a
+Metal layer. Operators must use either the CodeWeavers CrossOver
+product or a self-built Wine (R-WMB-10).
 
 ---
 
@@ -262,3 +271,44 @@ how to add a new Wine version row to R-WMB-6.2.
   set.
 - No support for hot-reloading the symbol set within a running
   process. Detection is one-shot at first use.
+
+---
+
+## 10. Wine Source Build Workflow (Optional Reference)
+
+This is the official 3Shain dxmt geek-guide path. dxmt9 documents it
+here because it is the only reproducible way to obtain a working
+Wine root that is not the proprietary CrossOver product.
+
+**R-WMB-10.1** dxmt9 ships a documentation entry at
+`wine/patches/README.md` that walks the operator through:
+1. Cloning a tagged Wine source tree (WineHQ or the CodeWeavers
+   open-source CrossOver Wine tarball linked from
+   https://www.codeweavers.com/about/wine).
+2. Applying `wine/patches/winemac-expose-symbols-<wine-version>.patch`.
+3. Configuring + building on macOS (Apple Silicon native or
+   x86_64 via Rosetta 2 for x86_64 Wine — the dxmt-community
+   default per 3Shain/dxmt #141).
+4. Installing into `experiments/wine/<id>/` (gitignored per
+   `specs/experiments/runtime/`).
+5. Running `scripts/wine/check_patch.py <root>` to confirm
+   `applied`.
+6. Adding the matching `[[wine]]` entry to
+   `experiments/wine/manifest.toml` with `requires_patch = true`,
+   `patch_status = "applied"`.
+
+**R-WMB-10.2** The dxmt9 repository does **not** automate steps 1–4.
+Build toolchain (Homebrew, LLVM, GStreamer, Wine prerequisites)
+varies per macOS version and is the operator's responsibility. dxmt9
+provides the patch text, the verifier script, and the manifest
+schema; the build itself stays out of dxmt9's CI.
+
+**R-WMB-10.3** Cross-reference: the 3Shain dxmt geek guide lives at
+https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks.
+That guide is normative for the source-build workflow on macOS; dxmt9
+follows the same recipe with only the patch contents and the
+manifest entry as dxmt9-specific deltas.
+
+**R-WMB-10.4** When 3Shain's guide moves or a different upstream
+maintainer takes ownership, `wine/patches/README.md` is the dxmt9
+side that gets updated; the requirement does not change.

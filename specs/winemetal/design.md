@@ -316,37 +316,57 @@ manifest declaration.
 
 ## 9. Distribution & Operator Workflow
 
-For each supported Wine version, the workflow is:
+The two reproducible paths to a working Wine root for dxmt9:
 
 ```dot
 digraph workflow {
-  start[shape=box,label="operator wants to run dxmt9 on Wine N.M"];
-  cv[shape=diamond,label="N.M in spec §6.2?"];
-  not_supported[shape=box,label="open a PR to add the row\n+ a patch file"];
-  has_patch[shape=diamond,label="patch already applied to this Wine root?"];
-  apply[shape=box,label="rebuild Wine with the patch\n(or use CrossOver Wine)"];
-  check[shape=box,label="run scripts/wine/check_patch.py\n→ paste 'applied' into manifest"];
-  ready[shape=doublecircle,label="bridge probe succeeds;\n  CAMetalLayer attaches"];
+  rankdir=LR;
+  start[shape=box,label="operator wants to run dxmt9"];
+  pick[shape=diamond,label="have CrossOver license?"];
+  cx_import[shape=box,label="path A — CrossOver import\nsymlink ~/Applications/CrossOver.app/.../CrossOver\ninto experiments/wine/crossover-<ver>/"];
+  source_build[shape=box,label="path B — Wine source build\n(R-WMB-10; 3Shain geek guide)"];
+  src_clone[shape=box,label="clone Wine tag from\nWineHQ or CodeWeavers source"];
+  src_patch[shape=box,label="apply wine/patches/\nwinemac-expose-symbols-<ver>.patch"];
+  src_build[shape=box,label="configure + make + install\ninto experiments/wine/<id>/"];
+  check[shape=box,label="scripts/wine/check_patch.py\n→ applied"];
+  manifest[shape=box,label="add [[wine]] entry to\nexperiments/wine/manifest.toml"];
+  ready[shape=doublecircle,label="probe succeeds;\nCAMetalLayer attaches"];
 
-  start -> cv;
-  cv -> not_supported [label=no];
-  cv -> has_patch [label=yes];
-  has_patch -> apply [label=no];
-  has_patch -> check [label=yes];
-  apply -> check;
-  check -> ready;
+  start -> pick;
+  pick -> cx_import [label=yes];
+  pick -> source_build [label=no];
+  source_build -> src_clone -> src_patch -> src_build -> check;
+  cx_import -> check;
+  check -> manifest -> ready;
 }
 ```
 
-Heroic users who do not build Wine themselves will, in practice,
-either:
-- Use CrossOver Wine 24+ as the manifest entry (no patch needed); or
-- Use a Heroic Wine bundle that a downstream packager produced with
-  the patch already applied (the user's `Wine-11.7-DXMT` bundle from
-  Heroic, if and when its packager incorporates the patch).
+Path A — CrossOver import (R-WMB-6.2 row 1):
+- Already-licensed CodeWeavers CrossOver. `~/Applications/CrossOver.app`
+  exposes `_macdrv_functions` in its bundled `winemac.so` (verified
+  2026-05-11 on CrossOver 26).
+- dxmt9 keeps `experiments/wine/crossover-<ver>/` as a relative
+  symlink into the CrossOver.app bundle (no file copy — preserves
+  license terms and avoids 400+ MB duplication).
 
-dxmt9 does not package Wine. The manifest tells the operator which
-roots are known-good.
+Path B — Wine source build (R-WMB-10):
+- The reproducible / contributor-facing path. Patch text lives at
+  `wine/patches/winemac-expose-symbols-<ver>.patch`; rebase per Wine
+  bump.
+- After `make install`, `scripts/wine/check_patch.py` is the gate.
+- This is the workflow 3Shain documents in its
+  [DXMT Installation Guide for Geeks](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks);
+  dxmt9 follows the same recipe with only the patch contents and
+  manifest entry as dxmt9-specific deltas.
+
+What is **not** a workflow:
+- Heroic's Wine downloader (`Wine-11.x`, `Wine-11.x-DXMT`,
+  `Wine-Crossover-23.7.1-1`). All current Gcenx / Heroic redistributed
+  binaries are stripped. R-WMB-6.4 codifies the refusal; the probe is
+  the runtime gate.
+
+dxmt9 does not package Wine. The manifest names which roots are
+known-good per machine.
 
 ---
 

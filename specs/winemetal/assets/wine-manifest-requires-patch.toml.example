@@ -23,7 +23,11 @@
 
 manifest_version = 1
 
-# ─── Stock Heroic Wine-11.7. Cannot serve dxmt9 today. ───────────────────
+# ─── Stock Heroic / Gcenx Wine-11.7. Cannot serve dxmt9. ─────────────────
+# Listed only so the harness can reject runs that point at it. The same
+# pattern applies to every Heroic-redistributed Gcenx release we have
+# audited as of 2026-05-11 (Wine-11.0_1, 11.6_1, 11.7, 11.7-DXMT,
+# Wine-Crossover-23.7.1-1) — all ship a stripped winemac.so.
 [[wine]]
 id             = "heroic-11.7"
 source         = "heroic"
@@ -32,9 +36,9 @@ version        = "11.7"
 path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
 requires_patch = true
 patch_status   = "unpatched"
-notes          = "Wine 11.7 stripped macdrv visibility(default) on the Metal-bridge symbols; will not produce a visible Metal layer without the dxmt9 patch. Run scripts/wine/check_patch.py to confirm."
+notes          = "Wine 11.7 ships with macdrv visibility-default stripped on the Metal-bridge symbols; will not attach a Metal layer. The runtime probe (R-WMB-7) refuses to launch."
 
-# ─── Heroic Wine-11.7-DXMT bundle. Status to be verified per machine. ─────
+# ─── Heroic Wine-11.7-DXMT bundle. Same winemac.so as vanilla 11.7. ──────
 [[wine]]
 id             = "heroic-11.7-dxmt"
 source         = "heroic"
@@ -42,37 +46,27 @@ variant        = "dxmt"
 version        = "11.7"
 path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
 requires_patch = true
-patch_status   = "unknown"
-notes          = "Naming suggests the DXMT-friendly patch is applied, but verify per-install with scripts/wine/check_patch.py. As of 2026-05-11 this build shipped identical to vanilla 11.7 on at least one machine."
+patch_status   = "unpatched"
+notes          = "The '-DXMT' suffix bundles pre-built dxmt D3D11 DLLs; winemac.so is md5-identical to the vanilla 11.7 build (67afe1eb6fab5b958f47a6d58f4306b8). dxmt9 cannot run on this root."
 
-# ─── CrossOver Wine 24+. Symbols exposed natively. ───────────────────────
+# ─── CrossOver product (CodeWeavers license). Path A in design §9. ───────
 [[wine]]
-id             = "crossover-24"
+id             = "crossover-26"
 source         = "crossover"
 variant        = "patched"
-version        = "24.0"
-path           = "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine"
+version        = "26.0"
+path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
 requires_patch = true
 patch_status   = "applied"
-notes          = "CrossOver 24+ exposes the macdrv Metal-bridge symbols natively; treat as patched."
+notes          = "CrossOver 26 exposes the aggregate macdrv_functions symbol; dxmt9 reaches the Metal bridge natively. The standard licensed path."
 
-# ─── Wine 11.6 era. Symbols visible by default. ──────────────────────────
+# ─── Self-built Wine with dxmt9 patch applied (R-WMB-10, design §9 path B).
 [[wine]]
-id             = "heroic-11.6"
-source         = "heroic"
-variant        = "vanilla"
-version        = "11.6"
-path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6/Contents/Resources/wine"
-requires_patch = false
-notes          = "Pre-stripping. The macdrv symbols are visible without the dxmt9 patch."
-
-# ─── Manually-placed local Wine bundle with dxmt9 patch applied. ─────────
-[[wine]]
-id             = "wine-11.7-local-patched"
+id             = "wine-source-built-11.7"
 source         = "manual"
 variant        = "vanilla"
 version        = "11.7"
-path           = "$REPO_ROOT/experiments/wine/Wine-11.7-local-patched/Contents/Resources/wine"
+path           = "$REPO_ROOT/experiments/wine/wine-source-built-11.7/Contents/Resources/wine"
 requires_patch = true
 patch_status   = "applied"
-notes          = "Operator-built Wine 11.7 with wine/patches/winemac-expose-symbols-11.7.patch applied."
+notes          = "Operator-built per wine/patches/README.md from WineHQ / CodeWeavers source with wine/patches/winemac-expose-symbols-11.7.patch applied."
