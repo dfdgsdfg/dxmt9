@@ -2,6 +2,7 @@
 
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_metal_labels.hpp"
 #include "dxmt9_perf_counters.hpp"
 
 #include <algorithm>
@@ -197,6 +198,10 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
   }
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
   if (!encoder) return;
+  encoder.setLabel(labels::makeLabelStringFmt(
+      "Stretch[src=0x%llx,dst=0x%llx]",
+      static_cast<unsigned long long>(stretch.source.value),
+      static_cast<unsigned long long>(stretch.destination.value)));
   const auto pixelFormat = static_cast<u32>(convert::toPixelFormat(dst->desc.format, limits));
   auto pipeline = pipelineCache.getOrBuildStretchPipeline(device, stretch, pixelFormat,
                                                             archive, archivePath).get();
@@ -299,6 +304,9 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
   if (!encoder) {
     return;
   }
+  encoder.setLabel(labels::makeLabelStringFmt(
+      "ColorFill[rt=0x%llx]",
+      static_cast<unsigned long long>(fill.destination.value)));
   if (fill.hasRect) {
     WMTScissorRect rect{};
     rect.x = static_cast<uint64_t>(std::max(0, fill.rect.left));
@@ -373,6 +381,12 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
   }
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
   if (encoder) {
+    const auto rt0 = static_cast<unsigned long long>(
+        clear.colorAttachments[0].handle.value);
+    const auto depth = static_cast<unsigned long long>(
+        clear.depthStencil.handle.value);
+    encoder.setLabel(labels::makeLabelStringFmt(
+        "Clear[rt=0x%llx,depth=0x%llx]", rt0, depth));
     encoder.endEncoding();
   }
 }

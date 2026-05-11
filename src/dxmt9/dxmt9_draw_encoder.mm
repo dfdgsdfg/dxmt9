@@ -2215,13 +2215,22 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
     // M2: push a debug group identifying the render pass attachments.
     // Paired with the popDebugGroup() at the head of flushRender.
+    //
+    // Also set the encoder label with the same string. The debug group is
+    // visible in Xcode's frame capture (.gputrace), but xctrace's
+    // metal-application-encoders-list schema reports only the encoder
+    // label, so without setLabel xctrace shows the Metal default
+    // "Render Command N" and per-pass GPU time cannot be attributed to
+    // an RT in text-based analysis.
     if (activeRenderEncoder) {
       const auto rt0 = static_cast<unsigned long long>(
           drawState.hot->colorAttachments[0].handle.value);
       const auto depth = static_cast<unsigned long long>(
           drawState.hot->depthStencil.handle.value);
-      activeRenderEncoder.pushDebugGroup(makeLabelStringFmt(
-          "RenderPass[rt=0x%llx,depth=0x%llx]", rt0, depth));
+      auto passLabel = makeLabelStringFmt(
+          "RenderPass[rt=0x%llx,depth=0x%llx]", rt0, depth);
+      activeRenderEncoder.setLabel(passLabel);
+      activeRenderEncoder.pushDebugGroup(passLabel);
     }
     // R-BACK-12.22 / 12.24 / 12.25 — Stage 2 argbuf-hybrid per-encoder
     // populator. The selector reads the cached capability bool on the

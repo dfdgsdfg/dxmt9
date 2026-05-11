@@ -45,8 +45,11 @@ are already labeled and grouped:
 - **CommandQueue**: `dxmt9-q-<deviceId>`
 - **CommandBuffer**: `cb_seq_N`
 - **Pipelines**: `pso_h<shader-hash>`
-- **Render encoders**: nested debug groups `RenderPass[rt=0xH,depth=0xH]`
-  → `Draw[idx=N,tri=M]`
+- **Render encoders**: label + nested debug groups
+  `RenderPass[rt=0xH,depth=0xH]` → `Draw[idx=N,tri=M]`. The label is what
+  `xctrace` (`metal-application-encoders-list` and `metal-gpu-intervals`)
+  uses to identify the encoder in text traces — without it the encoder
+  falls back to Metal's default "Render Command N".
 - **Blit encoders**: `Blit[<reason>]`
 - **Present encoder**: `Present[seq=N]`
 
@@ -129,10 +132,51 @@ Single counter; pair with `expected_counters{ max = 0 }` on probes.
 ### Stage-boundary GPU counter sample buffers (path B — not yet implemented)
 
 `MTLCounterSampleBuffer` is bridged in winemetal but not yet wired at
-encoder boundaries. To add per-encoder GPU stage timing, attach a
-timestamp sample buffer at `sampleBufferAttachments[0]` of the
-render/compute encoder descriptor and resolve it on completion. See
-the M4 follow-up note in audit notes.
+render-encoder boundaries (the blit variant
+`MTLCommandBuffer_blitCommandEncoderWithSampleBuffers` exists at
+`winemetal.h:2007` but no render-encoder twin). The full implementation
+spans PE/unix ABI plus dxmt9 wire-up:
+
+1. **winemetal ABI extension** — add either
+   `MTLCommandBuffer_renderCommandEncoderWithSampleBuffers(cmdbuf,
+   WMTRenderPassInfo*, WMTSampleBufferAttachmentInfo*, num)` as a new
+   bridge function, OR extend `WMTRenderPassInfo` with
+   `sample_buffer_attachments[N] + num_sample_buffer_attachments` and
+   keep a single render-encoder entry point. New ABI entries require:
+   - `winemetal.h` declaration
+   - `winemetal/unix/winemetal_private_api.mm` impl mapping to
+     `MTLRenderPassDescriptor.sampleBufferAttachments[i].*`
+   - Slot registered in `winemetal/unix/winemetal_unix.cpp`'s dispatch
+     table (next slot after the last `dxmt9_winemetal_*_unix_call`)
+   - PE-side stub in `winemetal_bridge.cpp` + spec
+   - `dxmt9_winemetal_abi_hash_unix_call` regen — every PE/unix lockstep
+     build must rebuild together; otherwise the bridge ABI handshake at
+     `DXMT9_WINEMETAL_CALL_ABI_HASH` (slot 4) refuses to attach.
+2. **dxmt9 side** — in `CommandQueue` (`dxmt9_command_queue.cpp:~107`),
+   gate on `device.supportsCounterSampling(WMTCounterSamplingPointAtStageBoundary)`,
+   allocate one `MTLCounterSampleBuffer` per CB sized to
+   `2 × encoders_per_cb_estimate` (start + end per encoder). At
+   render-encoder open in `dxmt9_draw_encoder.mm:839` and the four blit
+   sites in `dxmt9_blit_encoders.cpp` + `dxmt9_presenter.cpp:475`, set
+   `sample_buffer_attachments[0]` to the queue's buffer with
+   start/end indices bumped per encoder. On CB completion (queue
+   completion handler at `dxmt9_queue.cpp:~1450` where
+   `gpu_command_buffer_time_ms` is already sampled), call
+   `resolveCounterRange` and accumulate deltas into a new
+   `perf::countRenderEncoderGpuTime(rt_handle, ns_delta)` family —
+   bucket by RT handle so output mirrors xctrace's per-`RenderPass[rt=…]`
+   breakdown without xctrace.
+3. **Trade-off** — counter sample buffers are not free; each pair adds
+   a tiny GPU stall to drain the pipeline at the boundary. Gate on
+   `DXMT_PERF_COUNTERS=1` + a new `DXMT9_PERF_ENCODER_GPU_TIME` flag
+   so probe runs can opt out.
+
+Until this lands, use `xcrun xctrace record --template 'Metal System
+Trace' --all-processes` + the `metal-gpu-intervals` schema for
+per-encoder GPU time (see §4 and the encoder labels set at
+`dxmt9_draw_encoder.mm:2226`, `dxmt9_blit_encoders.cpp:200`,
+`dxmt9_blit_encoders.cpp:302`, `dxmt9_blit_encoders.cpp:380`,
+`dxmt9_presenter.cpp:480`).
 
 ## 6. Device capabilities
 

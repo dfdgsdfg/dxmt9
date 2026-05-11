@@ -1,5 +1,6 @@
 #include "dxmt9_presenter.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9_metal_labels.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_queue.hpp"
@@ -477,6 +478,8 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     presentimpl::traceEvent("encoder.nil", params.seqId, hwnd_);
     return result;
   }
+  encoder.setLabel(labels::makeLabelStringFmt(
+      "Present[seq=%llu]", static_cast<unsigned long long>(params.seqId)));
 
   encoder.setRenderPipelineState(pipeline);
   encoder.setFragmentTexture(params.source, 0);
