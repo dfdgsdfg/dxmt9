@@ -411,12 +411,33 @@ Wine map it through its built-in `Z:` drive (mapped to `/`).
   `Wine-Crossover-23.7.1-1`). All current Gcenx / Heroic
   redistributed binaries are stripped. R-WMB-6.4 codifies the
   refusal; the probe is the runtime gate.
-- Direct use of the licensed CodeWeavers CrossOver product
-  (without the dxmt9 info-class follow-up). CrossOver 26 exposes
-  `_macdrv_functions` but its wow64 lacks
-  `NtQueryVirtualMemory(MemoryWineImageInfo)`; the dxmt9 bridge
-  probe currently bails with `STATUS_INVALID_INFO_CLASS`. Tracked
-  as a follow-up.
+- Direct use of the licensed CodeWeavers CrossOver product.
+  CrossOver 26 (`wine-11.0-8709`) exposes `_macdrv_functions` but
+  carries three blockers, all confirmed by PoC on 2026-05-11:
+  1. `bin/wine` Perl wrapper demands a default bottle dxmt9
+     prefixes do not own (bypassable via `wineloader`).
+  2. wow64 `NtQueryVirtualMemory` is missing the
+     `MemoryWineLoadUnixLibByName` arm (info class 1002 →
+     `STATUS_INVALID_INFO_CLASS`). Class 1000
+     (`MemoryWineLoadUnixLib`) **is** present.
+  3. `ntdll.so` has `/opt/cxoffice/lib/wine` baked in as the
+     unixlib search root. `WINEDLLDIR0` and `WINEDLLPATH` env
+     overrides did **not** redirect the class-1000 lookup —
+     `builtin unixlib lookup: info=1000 status=0xc0000135
+     STATUS_DLL_NOT_FOUND` with both env vars pointing at our
+     staged tree. The unixlib pairing mechanism inside CrossOver
+     26's ntdll.so does not appear to consult these env vars.
+
+  Net effect: even with a runtime fallback added on the dxmt9
+  side, CrossOver 26 would still fail because (3) blocks the
+  class-1000 retry. The only ways to unblock CrossOver 26 are
+  (a) deploy `winemetal.dll`+`winemetal.so` into
+  `/opt/cxoffice/lib/wine/...` (requires `sudo`, modifies the
+  user's licensed install), (b) patch the CrossOver wineloader
+  (license-incompatible), or (c) wait for CodeWeavers to repair
+  the wow64 thunk and the unixlib search path. dxmt9 takes none
+  of these — CrossOver users should switch to Sikarugir-Engines
+  or build Wine from source.
 
 dxmt9 does not package Wine. The manifest names which roots are
 known-good per machine.

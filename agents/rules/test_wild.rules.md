@@ -23,7 +23,7 @@ compatibility matrix.
 | Self-built Wine with `wine/patches/winemac-expose-symbols-<ver>.patch` | Yes (alternative) | The reproducible-from-source path; see `specs/winemetal/requirements.md` R-WMB-10.B. |
 | `Wine-11.x` / `Wine-11.x-DXMT` (Heroic / Gcenx redistributed) | **No** | `winemac.so` is stripped (md5-identical between vanilla and `-DXMT`). The `-DXMT` suffix bundles pre-built dxmt D3D11 DLLs only and does **not** patch `winemac.so`. Runtime probe rejects them. |
 | Heroic `Wine-Crossover-23.7.1-1` | **No** | Same stripping pattern; Heroic PR #5488 itself documents this build as a fallback "only when no other option works." |
-| CodeWeavers CrossOver product (licensed) | Partial | Exposes `_macdrv_functions` but its wow64 currently rejects `NtQueryVirtualMemory(MemoryWineImageInfo)`; dxmt9 bridge bails with `STATUS_INVALID_INFO_CLASS`. Tracked as a follow-up. |
+| CodeWeavers CrossOver product (licensed) | **No** | Audited 2026-05-11: three independent blockers — bottle-context Perl wrapper at `bin/wine`, wow64 missing `MemoryWineLoadUnixLibByName` (class 1002), and `ntdll.so` hardcodes `/opt/cxoffice/lib/wine` for unixlib lookup with no working env override. See `specs/winemetal/requirements.md` §6.2. |
 | `Wine-*-VK` / Proton-style VK builds | No | Substitutes a different `d3d9.dll` and reroutes through Vulkan; the comparison is no longer "dxmt9 vs. Wine builtin." |
 
 **Reason — concrete incident (2026-05-10):** SFIV under `Wine-11.6-DXMT`

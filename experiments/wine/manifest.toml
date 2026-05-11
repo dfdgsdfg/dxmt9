@@ -52,15 +52,15 @@ patch_status   = "unpatched"
 notes          = "winemac.so md5-identical to vanilla Wine-11.7 (67afe1eb6fab5b958f47a6d58f4306b8). The '-DXMT' suffix bundles pre-built dxmt D3D11 DLLs only — does not patch winemac.so."
 
 # ─── Documented-as-broken: CodeWeavers CrossOver product. ────────────────
-# Exposes _macdrv_functions but its wow64 lacks the MemoryWineImageInfo
-# query class dxmt9's app-local provider fallback uses. Pending a
-# dxmt9-side info-class fallback (filed as a follow-up).
+# Three independent blockers audited on CrossOver 26 (wine-11.0-8709) on
+# 2026-05-11. See specs/winemetal/{requirements.md §6.2 crossover-26 row,
+# design.md §9 "What is not a workflow"} for the full PoC writeup.
 [[wine]]
 id             = "crossover-26"
 source         = "crossover"
 variant        = "patched"
-version        = "26.0"
+version        = "wine-11.0-8709 / CrossOver 26"
 path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
 requires_patch = true
 patch_status   = "unsupported"
-notes          = "Currently incompatible — wow64 NtQueryVirtualMemory(class=1002) returns STATUS_INVALID_INFO_CLASS. Listed for users who already own CrossOver."
+notes          = "Three blockers (audited 2026-05-11): (a) bin/wine Perl wrapper requires a default CrossOver bottle dxmt9 prefixes don't own — bypassable via wineloader. (b) wow64 NtQueryVirtualMemory lacks MemoryWineLoadUnixLibByName (class 1002 → STATUS_INVALID_INFO_CLASS). Class 1000 (MemoryWineLoadUnixLib) is supported. (c) ntdll.so has /opt/cxoffice/lib/wine baked in for unixlib lookup; WINEDLLDIR0+WINEDLLPATH overrides did not redirect it. Class-1000 retry under WINEDLLOVERRIDES=winemetal=b still returned STATUS_DLL_NOT_FOUND. Use Sikarugir-Engines instead."

@@ -41,7 +41,7 @@ Audited 2026-05-11 on macOS Apple Silicon:
 |---|---|---|
 | **`Sikarugir-App/Engines` pre-built** (`WS12WineCX24.0.7_*`, `WS12WineSikarugir10.0_*`) | ✅ | `install_wine.py` — fully automated. |
 | **Self-built Wine** with `wine/patches/winemac-expose-symbols-<ver>.patch` applied | ✅ | Follow 3Shain's [DXMT Installation Guide for Geeks](https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks); also documented in `wine/patches/README.md`. |
-| CodeWeavers CrossOver product (`~/Applications/CrossOver.app`) | ⚠️ partial | Exposes the symbols but its wow64 lacks `NtQueryVirtualMemory(MemoryWineImageInfo)`; dxmt9's bridge bails with `0xc0000003`. Pending follow-up. |
+| CodeWeavers CrossOver product (`~/Applications/CrossOver.app`) | ❌ blocked | Three issues audited on CrossOver 26 (2026-05-11): (1) `bin/wine` Perl wrapper demands a bottle; (2) wow64 `NtQueryVirtualMemory` lacks `MemoryWineLoadUnixLibByName` (class 1002 → `STATUS_INVALID_INFO_CLASS`); (3) `ntdll.so` hardcodes `/opt/cxoffice/lib/wine` for unixlib lookup and `WINEDLLDIR0`/`WINEDLLPATH` env overrides don't take effect. No dxmt9-side fix unblocks all three. Use Sikarugir-Engines. |
 | Heroic `Wine-11.x`, `Wine-11.x-DXMT`, `Wine-Crossover-23.7.1-1` | ❌ | None. `winemac.so` is stripped. The `-DXMT` suffix bundles dxmt's pre-built D3D11 DLLs only; it does **not** patch `winemac.so` (md5-identical to vanilla). |
 
 ## Binary paths must be POSIX, not `D:\`

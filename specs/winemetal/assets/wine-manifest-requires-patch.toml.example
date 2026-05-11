@@ -87,14 +87,15 @@ patch_status   = "applied"
 notes          = "Operator-built per wine/patches/README.md from WineHQ / CodeWeavers source with wine/patches/winemac-expose-symbols-11.7.patch applied."
 
 # ─── Documented-as-broken: CodeWeavers CrossOver product. ────────────────
-# Listed for users who already own CrossOver. Currently unusable until the
-# dxmt9 MemoryWineImageInfo fallback lands (see specs/winemetal/design.md §9).
+# Listed for users who already own CrossOver. Audit on 2026-05-11
+# (specs/winemetal/requirements.md §6.2 crossover-26 row) confirmed three
+# independent blockers; no dxmt9-side code change unblocks all three.
 [[wine]]
 id             = "crossover-26"
 source         = "crossover"
 variant        = "patched"
-version        = "26.0"
+version        = "wine-11.0-8709 / CrossOver 26"
 path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
 requires_patch = true
 patch_status   = "unsupported"
-notes          = "Exposes _macdrv_functions but wow64 rejects NtQueryVirtualMemory(MemoryWineImageInfo) — winemetal bridge fails with 0xc0000003. Pending dxmt9-side fallback."
+notes          = "Three blockers: bottle-context Perl wrapper at bin/wine; wow64 missing MemoryWineLoadUnixLibByName (class 1002 → STATUS_INVALID_INFO_CLASS, class 1000 OK); ntdll.so hardcodes /opt/cxoffice/lib/wine for unixlib lookup and is not overridden by WINEDLLDIR0/WINEDLLPATH. Use Sikarugir-Engines instead."
