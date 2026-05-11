@@ -96,6 +96,7 @@ class InstallResult:
     winemac_so: Path
     has_required_symbol: bool
     dylibs_copied: int
+    dylib_symlinks_created: int
 
 
 # ---------------------------------------------------------------------------
@@ -138,29 +139,37 @@ def _extract_wine_bundle(engine_tarball: Path, target_dir: Path) -> None:
             tar.extract(member, target_dir, set_attrs=True, filter="data")
 
 
-def _extract_frameworks(template_tarball: Path, dylib_dest: Path) -> int:
+def _extract_frameworks(template_tarball: Path, dylib_dest: Path) -> tuple[int, int]:
     """Copy every Template-*.app/Contents/Frameworks/*.dylib (top-level
     only) from the Sikarugir Wrapper Template tarball into dylib_dest.
-    Returns the number of dylibs copied.
+
+    The Template ships both real dylibs and version-aliasing symlinks
+    (e.g. `libfreetype.dylib -> libfreetype.6.dylib`); both are
+    preserved. Returns (regular_files_copied, symlinks_created).
     """
     dylib_dest.mkdir(parents=True, exist_ok=True)
-    copied = 0
+    files = 0
+    syms = 0
+    pattern = re.compile(r"^Template-[^/]+\.app/Contents/Frameworks/([^/]+\.dylib)$")
     with tarfile.open(template_tarball, "r:xz") as tar:
         for member in tar.getmembers():
-            # Match exactly Template-*.app/Contents/Frameworks/<basename>
-            # (no further path component). Skip directories.
-            m = re.match(
-                r"^Template-[^/]+\.app/Contents/Frameworks/([^/]+\.dylib)$",
-                member.name,
-            )
-            if not m or not member.isfile():
+            m = pattern.match(member.name)
+            if not m:
                 continue
             target = dylib_dest / m.group(1)
-            with tar.extractfile(member) as src, target.open("wb") as dst:  # type: ignore[union-attr]
-                shutil.copyfileobj(src, dst)
-            target.chmod(0o755)
-            copied += 1
-    return copied
+            if member.issym():
+                # Re-create version-alias symlink. linkname is the relative
+                # target path inside Frameworks/ (e.g. `libfreetype.6.dylib`).
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                target.symlink_to(member.linkname)
+                syms += 1
+            elif member.isfile():
+                with tar.extractfile(member) as src, target.open("wb") as dst:  # type: ignore[union-attr]
+                    shutil.copyfileobj(src, dst)
+                target.chmod(0o755)
+                files += 1
+    return files, syms
 
 
 def _install_shims(bundle_dir: Path) -> None:
@@ -234,7 +243,7 @@ def install(
         _download(WRAPPER_RELEASE.format(asset=wrapper_template), template_tarball)
 
         print("[4/6] Extracting Frameworks dylibs → experiments/wine/")
-        dylib_count = _extract_frameworks(template_tarball, WINE_DIR)
+        dylib_count, dylib_syms = _extract_frameworks(template_tarball, WINE_DIR)
 
     print("[5/6] Installing wine / wineserver shims…")
     _install_shims(target_dir)
@@ -260,6 +269,7 @@ def install(
         winemac_so=winemac_so,
         has_required_symbol=ok,
         dylibs_copied=dylib_count,
+        dylib_symlinks_created=dylib_syms,
     )
 
 
@@ -307,7 +317,7 @@ def _cli() -> int:
     print("Install complete.")
     print(f"  wine root          : {result.target_dir}")
     print(f"  winemac.so         : {result.winemac_so} (symbol OK)")
-    print(f"  Frameworks dylibs  : {result.dylibs_copied} copied to {WINE_DIR}/")
+    print(f"  Frameworks dylibs  : {result.dylibs_copied} files + {result.dylib_symlinks_created} version-alias symlinks → {WINE_DIR}/")
     print()
     print("Verify with:")
     print(f"  python3 scripts/wine/resolve.py --list")
