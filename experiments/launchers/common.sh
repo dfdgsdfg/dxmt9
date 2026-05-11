@@ -101,7 +101,7 @@ exp_run_wine_binary() {
       CX_ROOT="${DXMT_EXPERIMENT_WINE_ROOT:-}" \
       CX_BOTTLE="$DXMT_EXPERIMENT_CX_BOTTLE" \
       DYLD_LIBRARY_PATH="$dyld_library_path" \
-      DXMT_VALIDATE=1 \
+      DXMT_VALIDATE="${DXMT_VALIDATE:-1}" \
       DXMT9_WINEMETAL_SO="$winemetal_so" \
       DXMT_LOG_LEVEL="${DXMT_LOG_LEVEL:-debug}" \
       DXMT_LOG_PATH="$log_dir" \
@@ -113,7 +113,7 @@ exp_run_wine_binary() {
       WINEPREFIX="$DXMT_EXPERIMENT_PREFIX" \
       WINEDLLOVERRIDES="$dll_overrides" \
       DYLD_LIBRARY_PATH="$dyld_library_path" \
-      DXMT_VALIDATE=1 \
+      DXMT_VALIDATE="${DXMT_VALIDATE:-1}" \
       DXMT9_WINEMETAL_SO="$winemetal_so" \
       DXMT_LOG_LEVEL="${DXMT_LOG_LEVEL:-debug}" \
       DXMT_LOG_PATH="$log_dir" \
