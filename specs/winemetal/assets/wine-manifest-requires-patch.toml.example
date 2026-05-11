@@ -98,4 +98,4 @@ version        = "wine-11.0-8709 / CrossOver 26"
 path           = "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
 requires_patch = true
 patch_status   = "unsupported"
-notes          = "Three blockers: bottle-context Perl wrapper at bin/wine; wow64 missing MemoryWineLoadUnixLibByName (class 1002 → STATUS_INVALID_INFO_CLASS, class 1000 OK); ntdll.so hardcodes /opt/cxoffice/lib/wine for unixlib lookup and is not overridden by WINEDLLDIR0/WINEDLLPATH. Use Sikarugir-Engines instead."
+notes          = "Four blockers: (1) Perl bin/wine needs a bottle context (bypassable via cxbottle CLI but does not fix the next three); (2) wow64 missing MemoryWineLoadUnixLibByName (class 1002) — bottle context does NOT bypass; (3) ntdll.so hardcodes /opt/cxoffice/lib/wine and WINEDLLDIR0/WINEDLLPATH overrides don't take effect; (4) CrossOver.app/lib/wine is SIP/codesign-protected — winemetal.so cannot be staged. Use Sikarugir-Engines instead."

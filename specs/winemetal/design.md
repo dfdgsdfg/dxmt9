@@ -413,13 +413,19 @@ Wine map it through its built-in `Z:` drive (mapped to `/`).
   refusal; the probe is the runtime gate.
 - Direct use of the licensed CodeWeavers CrossOver product.
   CrossOver 26 (`wine-11.0-8709`) exposes `_macdrv_functions` but
-  carries three blockers, all confirmed by PoC on 2026-05-11:
+  carries four blockers, all confirmed by PoC on 2026-05-11:
   1. `bin/wine` Perl wrapper demands a default bottle dxmt9
-     prefixes do not own (bypassable via `wineloader`).
+     prefixes do not own. Bypassable two ways: direct `wineloader`
+     invocation, or creating a bottle via
+     `cxbottle --create --bottle <name> --template <type>` and
+     running `wine --bottle <name>`. Both routes verified to start
+     wine; neither resolves the remaining issues.
   2. wow64 `NtQueryVirtualMemory` is missing the
      `MemoryWineLoadUnixLibByName` arm (info class 1002 →
-     `STATUS_INVALID_INFO_CLASS`). Class 1000
-     (`MemoryWineLoadUnixLib`) **is** present.
+     `STATUS_INVALID_INFO_CLASS`). The same failure reproduces
+     **inside a `cxbottle`-created bottle** — bottle context is
+     a prefix-management layer with no effect on the wow64 thunk.
+     Class 1000 (`MemoryWineLoadUnixLib`) **is** present.
   3. `ntdll.so` has `/opt/cxoffice/lib/wine` baked in as the
      unixlib search root. `WINEDLLDIR0` and `WINEDLLPATH` env
      overrides did **not** redirect the class-1000 lookup —
@@ -427,17 +433,22 @@ Wine map it through its built-in `Z:` drive (mapped to `/`).
      STATUS_DLL_NOT_FOUND` with both env vars pointing at our
      staged tree. The unixlib pairing mechanism inside CrossOver
      26's ntdll.so does not appear to consult these env vars.
+  4. `~/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib/wine/`
+     is SIP/codesign-protected on macOS — `cp` returns
+     `Operation not permitted`. The builtin-lane fallback that
+     would otherwise stage `winemetal.so` next to `winemac.so`
+     is foreclosed for the licensed bundle.
 
-  Net effect: even with a runtime fallback added on the dxmt9
-  side, CrossOver 26 would still fail because (3) blocks the
-  class-1000 retry. The only ways to unblock CrossOver 26 are
-  (a) deploy `winemetal.dll`+`winemetal.so` into
-  `/opt/cxoffice/lib/wine/...` (requires `sudo`, modifies the
-  user's licensed install), (b) patch the CrossOver wineloader
-  (license-incompatible), or (c) wait for CodeWeavers to repair
-  the wow64 thunk and the unixlib search path. dxmt9 takes none
-  of these — CrossOver users should switch to Sikarugir-Engines
-  or build Wine from source.
+  Net effect: every attempt to drive CrossOver 26 from dxmt9 —
+  via direct `wineloader`, via the `cxbottle` CLI, or with
+  WINEDLLDIR overrides — hits one of (2), (3), or (4) and the
+  bridge refuses to attach. Unblocking CrossOver 26 would require
+  (a) deploying `winemetal.so` into `/opt/cxoffice/lib/wine/...`
+  with `sudo` AND SIP entitlements, (b) patching the CrossOver
+  wineloader (license-incompatible), or (c) waiting for
+  CodeWeavers to repair the wow64 thunk and unixlib search path.
+  dxmt9 takes none of these — CrossOver users should switch to
+  Sikarugir-Engines or build Wine from source.
 
 dxmt9 does not package Wine. The manifest names which roots are
 known-good per machine.
