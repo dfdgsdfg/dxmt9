@@ -1,0 +1,78 @@
+# Schema example showing the per-entry `requires_patch` / `patch_status`
+# fields added to experiments/wine/manifest.toml when this spec lands.
+# Reference document — not a live manifest.
+#
+# Spec: specs/winemetal/{requirements,design}.md §5.
+#
+# Each [[wine]] entry uses the existing schema from
+# specs/experiments/assets/wine-manifest.schema.toml plus two
+# optional booleans/enums:
+#
+#   requires_patch  — does this Wine root need the dxmt9 macdrv
+#                     symbol-expose patch applied for the bridge to
+#                     work? Defaults to false (back-compat).
+#   patch_status    — operator's assertion of patch state.
+#                     One of: "applied" / "unpatched" / "unknown".
+#                     Defaults to "unknown".
+#
+# Resolution behaviour at run time (R-WMB-5.3):
+#   requires_patch=true  + patch_status="unpatched" → hard error before launch.
+#   requires_patch=true  + patch_status="unknown"   → warn; let runtime probe decide.
+#   requires_patch=true  + patch_status="applied"   → silent; trust operator.
+#   requires_patch=false (any patch_status)         → silent; bridge probe still gates runtime.
+
+manifest_version = 1
+
+# ─── Stock Heroic Wine-11.7. Cannot serve dxmt9 today. ───────────────────
+[[wine]]
+id             = "heroic-11.7"
+source         = "heroic"
+variant        = "vanilla"
+version        = "11.7"
+path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7/Contents/Resources/wine"
+requires_patch = true
+patch_status   = "unpatched"
+notes          = "Wine 11.7 stripped macdrv visibility(default) on the Metal-bridge symbols; will not produce a visible Metal layer without the dxmt9 patch. Run scripts/wine/check_patch.py to confirm."
+
+# ─── Heroic Wine-11.7-DXMT bundle. Status to be verified per machine. ─────
+[[wine]]
+id             = "heroic-11.7-dxmt"
+source         = "heroic"
+variant        = "dxmt"
+version        = "11.7"
+path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
+requires_patch = true
+patch_status   = "unknown"
+notes          = "Naming suggests the DXMT-friendly patch is applied, but verify per-install with scripts/wine/check_patch.py. As of 2026-05-11 this build shipped identical to vanilla 11.7 on at least one machine."
+
+# ─── CrossOver Wine 24+. Symbols exposed natively. ───────────────────────
+[[wine]]
+id             = "crossover-24"
+source         = "crossover"
+variant        = "patched"
+version        = "24.0"
+path           = "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine"
+requires_patch = true
+patch_status   = "applied"
+notes          = "CrossOver 24+ exposes the macdrv Metal-bridge symbols natively; treat as patched."
+
+# ─── Wine 11.6 era. Symbols visible by default. ──────────────────────────
+[[wine]]
+id             = "heroic-11.6"
+source         = "heroic"
+variant        = "vanilla"
+version        = "11.6"
+path           = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.6/Contents/Resources/wine"
+requires_patch = false
+notes          = "Pre-stripping. The macdrv symbols are visible without the dxmt9 patch."
+
+# ─── Manually-placed local Wine bundle with dxmt9 patch applied. ─────────
+[[wine]]
+id             = "wine-11.7-local-patched"
+source         = "manual"
+variant        = "vanilla"
+version        = "11.7"
+path           = "$REPO_ROOT/experiments/wine/Wine-11.7-local-patched/Contents/Resources/wine"
+requires_patch = true
+patch_status   = "applied"
+notes          = "Operator-built Wine 11.7 with wine/patches/winemac-expose-symbols-11.7.patch applied."

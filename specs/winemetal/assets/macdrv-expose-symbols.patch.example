@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+#
+# REFERENCE EXAMPLE — dxmt9 macdrv-symbol-expose patch shape.
+# Spec: specs/winemetal/{requirements,design}.md §4.
+#
+# The live patch lives at:
+#   wine/patches/winemac-expose-symbols-<wine-version>.patch
+# per spec R-WMB-4.3. This file is a stable reference for what the
+# patch should look like; it does not target any specific Wine
+# commit and must not be applied as-is.
+#
+# Purpose: re-add the visibility("default") attribute to every
+# function in dlls/winemac.drv that dxmt9 reaches at runtime, so
+# dlsym(RTLD_DEFAULT, "<name>") finds them in the dynamic symbol
+# table of winemac.so. The set must match
+# specs/winemetal/requirements.md §2 exactly.
+#
+# Apply with:
+#   cd <wine-source>
+#   patch -p1 < wine/patches/winemac-expose-symbols-<wine-version>.patch
+# Verify after rebuild with:
+#   scripts/wine/check_patch.py <wine-prefix>
+# (returns "applied" when every required symbol is present in
+# winemac.so's dynamic table).
+
+Applies-to: wine-staging-11.7 (illustrative; real patches name the
+            exact upstream commit / tag they were rebased against).
+
+---
+ dlls/winemac.drv/macdrv.h | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+--- a/dlls/winemac.drv/macdrv.h
++++ b/dlls/winemac.drv/macdrv.h
+@@ -47,21 +47,21 @@
+ typedef struct macdrv_opaque_metal_view  *macdrv_metal_view;
+ typedef struct macdrv_opaque_metal_layer *macdrv_metal_layer;
+
+-extern struct macdrv_win_data *get_win_data(HWND hwnd);
+-extern void release_win_data(struct macdrv_win_data *data);
++extern __attribute__((visibility("default"))) struct macdrv_win_data *get_win_data(HWND hwnd);
++extern __attribute__((visibility("default"))) void release_win_data(struct macdrv_win_data *data);
+
+-extern macdrv_window macdrv_get_cocoa_window(HWND hwnd, BOOL require_on_screen);
++extern __attribute__((visibility("default"))) macdrv_window macdrv_get_cocoa_window(HWND hwnd, BOOL require_on_screen);
+
+-extern macdrv_metal_device macdrv_create_metal_device(void);
+-extern void macdrv_release_metal_device(macdrv_metal_device device);
++extern __attribute__((visibility("default"))) macdrv_metal_device macdrv_create_metal_device(void);
++extern __attribute__((visibility("default"))) void macdrv_release_metal_device(macdrv_metal_device device);
+
+-extern macdrv_metal_view macdrv_view_create_metal_view(macdrv_view view,
+-                                                       macdrv_metal_device device);
+-extern macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view view);
+-extern void macdrv_view_release_metal_view(macdrv_metal_view view);
++extern __attribute__((visibility("default"))) macdrv_metal_view macdrv_view_create_metal_view(macdrv_view view,
++                                                                                              macdrv_metal_device device);
++extern __attribute__((visibility("default"))) macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view view);
++extern __attribute__((visibility("default"))) void macdrv_view_release_metal_view(macdrv_metal_view view);

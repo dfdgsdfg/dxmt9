@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+//
+// Vendored from Wine's dlls/winemac.drv (LGPL-2.1+). Signatures only —
+// no implementation. The functions are implemented in winemac.so and
+// reached at runtime via dlsym after the Wine build re-exports them
+// with __attribute__((visibility("default"))). See
+// specs/winemetal/{requirements,design}.md for the contract.
+//
+// This is a REFERENCE EXAMPLE shipped alongside the spec. The live
+// header at include/winemetal/winemacdrv.h is maintained per Wine
+// version per specs/winemetal/requirements.md §3.
+
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ─── Opaque handles (Wine source: dlls/winemac.drv/macdrv_cocoa.h) ─────
+typedef struct macdrv_opaque_metal_device *macdrv_metal_device;
+typedef struct macdrv_opaque_metal_view   *macdrv_metal_view;
+typedef struct macdrv_opaque_metal_layer  *macdrv_metal_layer;
+typedef struct macdrv_opaque_view         *macdrv_view;
+typedef struct macdrv_opaque_window       *macdrv_window;
+typedef struct macdrv_opaque_window_data  *macdrv_window_data;
+
+// HWND is opaque from this header's perspective; the bridge casts
+// from the Wine PE-side definition at the boundary.
+typedef void *HWND;
+
+// ─── macdrv_win_data shape dxmt9 reads (Wine: macdrv.h) ─────────────────
+// Only the fields dxmt9 needs are declared. Real macdrv_win_data has
+// many more fields; we never read past these.
+struct macdrv_win_data {
+  HWND          hwnd;
+  macdrv_window cocoa_window;
+  macdrv_view   cocoa_view;
+  macdrv_view   client_cocoa_view;
+  // … (other fields ignored by dxmt9)
+};
+
+// ─── Aggregate function table (Wine: present when macdrv exposes
+//     macdrv_functions; older Wine versions exposed each symbol
+//     individually). dxmt9's probe tries the aggregate first, then
+//     falls back to per-symbol dlsym. ────────────────────────────────────
+struct macdrv_functions {
+  void (*macdrv_init_display_devices)(bool);
+
+  struct macdrv_win_data *(*get_win_data)(HWND hwnd);
+  void                    (*release_win_data)(struct macdrv_win_data *data);
+
+  macdrv_window (*macdrv_get_cocoa_window)(HWND hwnd, bool require_on_screen);
+
+  macdrv_metal_device (*macdrv_create_metal_device)(void);
+  void                (*macdrv_release_metal_device)(macdrv_metal_device device);
+
+  macdrv_metal_view   (*macdrv_view_create_metal_view)(macdrv_view view,
+                                                       macdrv_metal_device device);
+  macdrv_metal_layer  (*macdrv_view_get_metal_layer)(macdrv_metal_view view);
+  void                (*macdrv_view_release_metal_view)(macdrv_metal_view view);
+};
+
+// ─── Per-symbol declarations (resolved via dlsym(RTLD_DEFAULT, "<name>")
+//     when the aggregate is absent). These match Wine's signatures
+//     verbatim; the dxmt9 patch only adds visibility("default")
+//     attributes to keep them in the dynamic symbol table. ──────────────
+struct macdrv_win_data *get_win_data(HWND hwnd);
+void                    release_win_data(struct macdrv_win_data *data);
+
+macdrv_window           macdrv_get_cocoa_window(HWND hwnd, bool require_on_screen);
+
+macdrv_metal_device     macdrv_create_metal_device(void);
+void                    macdrv_release_metal_device(macdrv_metal_device device);
+
+macdrv_metal_view       macdrv_view_create_metal_view(macdrv_view view,
+                                                      macdrv_metal_device device);
+macdrv_metal_layer      macdrv_view_get_metal_layer(macdrv_metal_view view);
+void                    macdrv_view_release_metal_view(macdrv_metal_view view);
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif
