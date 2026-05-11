@@ -13,12 +13,31 @@ Steps performed:
     1. Fetch the engine tarball from Sikarugir-App/Engines.
     2. Extract the contained wswine.bundle into experiments/wine/<id>/.
     3. Fetch the Wrapper Template tarball from Sikarugir-App/Wrapper.
-    4. Extract Frameworks/*.dylib into experiments/wine/ (next to <id>/).
+    4. Extract Frameworks/*.dylib (+ symlinks) and .framework bundles
+       into experiments/wine/vendor/ (a single shared dependency dir
+       used by every installed wine engine).
     5. Rename bin/wine and bin/wineserver to *.real, write shim scripts
-       that export DYLD_FALLBACK_LIBRARY_PATH so the co-located dylibs
-       are discoverable by Wine's dlopen() calls.
+       that export DYLD_FALLBACK_LIBRARY_PATH and
+       DYLD_FALLBACK_FRAMEWORK_PATH pointing at vendor/ so Wine's
+       dlopen() calls resolve the co-located dylibs / frameworks.
     6. Audit winemac.so for the _macdrv_functions symbol.
     7. Optionally append a [[wine]] entry to manifest.toml.
+
+Layout on disk after install:
+    experiments/wine/
+    ├── manifest.toml         (committed)
+    ├── README.md             (committed)
+    ├── vendor/               (gitignored — shared dylib + framework dir)
+    │   ├── libfreetype.6.dylib
+    │   ├── libfreetype.dylib -> libfreetype.6.dylib
+    │   ├── GStreamer.framework/
+    │   └── SikarugirSdk.framework/
+    └── <target-id>/          (gitignored — wswine.bundle contents)
+        ├── bin/wine          (shim → wineloader)
+        ├── bin/wine.real     (CrossOver Perl wrapper, unused)
+        ├── bin/wineserver    (shim → real wineserver Mach-O)
+        ├── bin/wineserver.real
+        └── lib/wine/...
 
 This script is idempotent: re-running with the same --target-id will
 overwrite the install cleanly.
@@ -40,6 +59,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WINE_DIR = REPO_ROOT / "experiments" / "wine"
+VENDOR_DIR = WINE_DIR / "vendor"
 MANIFEST_PATH = WINE_DIR / "manifest.toml"
 
 # Sikarugir release URLs (v1.0 release tag, per 2026-05-11 audit).
@@ -78,13 +98,15 @@ REQUIRED_SYMBOL = "_macdrv_functions"
 SHIM_BODY = """#!/bin/bash
 # dxmt9 shim — written by scripts/wine/install_wine.py.
 # Sikarugir wine/wineserver expects runtime dylibs (FreeType, libinotify,
-# GStreamer.framework, ICU, …) at experiments/wine/, one level above the
-# bundle. Export DYLD_FALLBACK_LIBRARY_PATH so Wine's dlopen() calls
-# resolve them. The "real" binary lives next to this shim as *.real.
+# GStreamer.framework, ICU, …) which install_wine.py stages under
+# experiments/wine/vendor/. Export DYLD_FALLBACK_LIBRARY_PATH so Wine's
+# dlopen() calls resolve them. The "real" binary lives next to this shim
+# as *.real.
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WINE_ROOT="$(cd -- "$HERE/.." && pwd)"
-DYLIBS_DIR="$(cd -- "$WINE_ROOT/.." && pwd)"
-export DYLD_FALLBACK_LIBRARY_PATH="$DYLIBS_DIR:${DYLD_FALLBACK_LIBRARY_PATH:-}"
+VENDOR_DIR="$(cd -- "$WINE_ROOT/../vendor" && pwd)"
+export DYLD_FALLBACK_LIBRARY_PATH="$VENDOR_DIR:${DYLD_FALLBACK_LIBRARY_PATH:-}"
+export DYLD_FALLBACK_FRAMEWORK_PATH="$VENDOR_DIR:${DYLD_FALLBACK_FRAMEWORK_PATH:-}"
 TOOL=$(basename "${BASH_SOURCE[0]}")
 exec "$HERE/$TOOL.real" "$@"
 """
@@ -140,8 +162,9 @@ def _extract_wine_bundle(engine_tarball: Path, target_dir: Path) -> None:
 
 
 def _extract_frameworks(template_tarball: Path, dylib_dest: Path) -> tuple[int, int]:
-    """Copy every Template-*.app/Contents/Frameworks/*.dylib (top-level
-    only) from the Sikarugir Wrapper Template tarball into dylib_dest.
+    """Copy every Template-*.app/Contents/Frameworks/*.dylib AND every
+    top-level .framework bundle (e.g. GStreamer.framework, SikarugirSdk.framework)
+    from the Sikarugir Wrapper Template tarball into dylib_dest.
 
     The Template ships both real dylibs and version-aliasing symlinks
     (e.g. `libfreetype.dylib -> libfreetype.6.dylib`); both are
@@ -150,21 +173,45 @@ def _extract_frameworks(template_tarball: Path, dylib_dest: Path) -> tuple[int, 
     dylib_dest.mkdir(parents=True, exist_ok=True)
     files = 0
     syms = 0
-    pattern = re.compile(r"^Template-[^/]+\.app/Contents/Frameworks/([^/]+\.dylib)$")
+    dylib_pattern = re.compile(
+        r"^Template-[^/]+\.app/Contents/Frameworks/([^/]+\.dylib)$"
+    )
+    framework_pattern = re.compile(
+        r"^Template-[^/]+\.app/Contents/Frameworks/(?P<fw>[^/]+\.framework)/(?P<rest>.*)$"
+    )
     with tarfile.open(template_tarball, "r:xz") as tar:
         for member in tar.getmembers():
-            m = pattern.match(member.name)
-            if not m:
+            # Top-level dylib (with version-alias symlinks).
+            m = dylib_pattern.match(member.name)
+            if m:
+                target = dylib_dest / m.group(1)
+                if member.issym():
+                    if target.exists() or target.is_symlink():
+                        target.unlink()
+                    target.symlink_to(member.linkname)
+                    syms += 1
+                elif member.isfile():
+                    with tar.extractfile(member) as src, target.open("wb") as dst:  # type: ignore[union-attr]
+                        shutil.copyfileobj(src, dst)
+                    target.chmod(0o755)
+                    files += 1
                 continue
-            target = dylib_dest / m.group(1)
-            if member.issym():
-                # Re-create version-alias symlink. linkname is the relative
-                # target path inside Frameworks/ (e.g. `libfreetype.6.dylib`).
+
+            # Framework bundle (.framework dir tree). Preserve internal layout.
+            fw = framework_pattern.match(member.name)
+            if not fw:
+                continue
+            target = dylib_dest / fw["fw"] / fw["rest"] if fw["rest"] else dylib_dest / fw["fw"]
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif member.issym():
+                target.parent.mkdir(parents=True, exist_ok=True)
                 if target.exists() or target.is_symlink():
                     target.unlink()
                 target.symlink_to(member.linkname)
                 syms += 1
             elif member.isfile():
+                target.parent.mkdir(parents=True, exist_ok=True)
                 with tar.extractfile(member) as src, target.open("wb") as dst:  # type: ignore[union-attr]
                     shutil.copyfileobj(src, dst)
                 target.chmod(0o755)
@@ -242,8 +289,8 @@ def install(
         print(f"[3/6] Downloading Wrapper Template ({wrapper_template})…")
         _download(WRAPPER_RELEASE.format(asset=wrapper_template), template_tarball)
 
-        print("[4/6] Extracting Frameworks dylibs → experiments/wine/")
-        dylib_count, dylib_syms = _extract_frameworks(template_tarball, WINE_DIR)
+        print("[4/6] Extracting Frameworks dylibs + .framework bundles → experiments/wine/vendor/")
+        dylib_count, dylib_syms = _extract_frameworks(template_tarball, VENDOR_DIR)
 
     print("[5/6] Installing wine / wineserver shims…")
     _install_shims(target_dir)
@@ -317,7 +364,7 @@ def _cli() -> int:
     print("Install complete.")
     print(f"  wine root          : {result.target_dir}")
     print(f"  winemac.so         : {result.winemac_so} (symbol OK)")
-    print(f"  Frameworks dylibs  : {result.dylibs_copied} files + {result.dylib_symlinks_created} version-alias symlinks → {WINE_DIR}/")
+    print(f"  vendor dylibs      : {result.dylibs_copied} files + {result.dylib_symlinks_created} version-alias symlinks → {VENDOR_DIR}/")
     print()
     print("Verify with:")
     print(f"  python3 scripts/wine/resolve.py --list")

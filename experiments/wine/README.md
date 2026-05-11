@@ -20,10 +20,29 @@ python3 scripts/wine/install_wine.py \
 
 The script:
 1. Fetches `WS12WineCX24.0.7_<rev>.tar.xz` from [`Sikarugir-App/Engines`](https://github.com/Sikarugir-App/Engines) and extracts `wswine.bundle/` into `experiments/wine/<id>/`.
-2. Fetches the matching `Template-*.tar.xz` from [`Sikarugir-App/Wrapper`](https://github.com/Sikarugir-App/Wrapper) and drops its `Frameworks/*.dylib` files (FreeType, libinotify, GStreamer.framework, ICU, etc.) into `experiments/wine/` (one level above the bundle — this is where dyld's `@rpath/bin/../..` resolves).
-3. Renames `bin/wine` → `bin/wine.real` and `bin/wineserver` → `bin/wineserver.real`, then writes thin Bash shims that export `DYLD_FALLBACK_LIBRARY_PATH=experiments/wine` so Wine's `dlopen()` calls (FreeType etc.) find the co-located dylibs.
+2. Fetches the matching `Template-*.tar.xz` from [`Sikarugir-App/Wrapper`](https://github.com/Sikarugir-App/Wrapper) and drops its `Frameworks/*.dylib` files plus their version-alias symlinks (FreeType, libinotify, etc.) and `.framework` bundles (GStreamer.framework, SikarugirSdk.framework) into `experiments/wine/vendor/`. A single shared `vendor/` is reused by every installed wine engine on this machine.
+3. Renames `bin/wine` → `bin/wine.real` and `bin/wineserver` → `bin/wineserver.real`, then writes thin Bash shims that export `DYLD_FALLBACK_LIBRARY_PATH` and `DYLD_FALLBACK_FRAMEWORK_PATH` pointing at `vendor/` so Wine's `dlopen()` calls (FreeType etc.) find the co-located dylibs and framework bundles.
 4. Audits the bundle's `winemac.so` for the `_macdrv_functions` symbol (refuses to register a stripped build).
 5. Appends a `[[wine]]` entry to `manifest.toml` with `requires_patch=true, patch_status="applied"`.
+
+## Directory layout
+
+```
+experiments/wine/
+├── manifest.toml         (committed; Wine root registry)
+├── README.md             (committed; this file)
+├── vendor/               (gitignored; shared dylib + framework dir)
+│   ├── libfreetype.6.dylib
+│   ├── libfreetype.dylib -> libfreetype.6.dylib
+│   ├── GStreamer.framework/
+│   ├── SikarugirSdk.framework/
+│   └── …  (≈94 dylibs + 55 version-alias symlinks)
+└── <target-id>/          (gitignored; wswine.bundle contents)
+    ├── bin/wine          (shim — exports DYLD_FALLBACK_*_PATH=…vendor/)
+    ├── bin/wine.real     (CrossOver Perl wrapper, unused)
+    ├── bin/wineserver    (shim)
+    └── lib/wine/…
+```
 
 After install, the resolver picks it up automatically:
 
