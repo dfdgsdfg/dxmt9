@@ -99,6 +99,7 @@ unless documented otherwise.
 | `DXMT_FORCE_WINDOWED` | Force windowed mode | `0` |
 | `DXMT_SKIP_ALL_DRAWS` | Discard every draw at submit | `0` |
 | `DXMT9_AGGRESSIVE_DEPTH_DONTCARE` | Aggressive Store=DontCare for depth | `0` |
+| `DXMT9_TRIM_UNUSED_VARYINGS` | Trim VSOut to drop fields no SFIV FS reads (texcoord5/6/7 + fogFactor + pointSize). -56 B/vertex, eliminates Apple TBDR "Out of parameter buffer memory" annotations (SFIV: 95→0 events in 20 s). Workload-specific — apps that sample texcoord ≥ 5 or read fogFactor/pointSize will render wrong | `0` |
 | `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK` | Allow legacy provider fallback | `0` |
 | `DXMT9_MID_CHUNK_COMMIT_POLICY` | Sub-CB chain split policy: `off` / `per-render-pass` / `per-n-records` (R-BACK-2.29-2.31, R-BACK-2.34 default-flip 2026-05-10) | `per-render-pass` |
 | `DXMT9_MID_CHUNK_COMMIT_RECORDS` | Records per sub-CB when policy=`per-n-records` | `64` |

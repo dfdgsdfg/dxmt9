@@ -188,8 +188,13 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
   constexpr u32 kTciIndexMask = 0x0000ffffu;
   constexpr u32 kTciGenMask = 0xffff0000u;
   constexpr u32 kTciCameraSpacePosition = 0x00020000u;
+  const auto maxTexOut = shaders::vsoutMaxTexcoord();
   const auto emitStageTexcoords = [&](std::ostringstream& shader, const char* positionExpr) {
     for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
+      // DXMT9_TRIM_UNUSED_VARYINGS: skip stages that the trimmed VSOut
+      // doesn't declare; the local `dxmt9_texcoordN` would still compute
+      // but the `out.texcoordN` write would target an undefined field.
+      if (stage >= maxTexOut) continue;
       const u32 texCoordIndex = key.texCoordGen[stage] & kTciIndexMask;
       const u32 texCoordGen = key.texCoordGen[stage] & kTciGenMask;
       shader << "  float4 dxmt9_texcoord" << stage << " = float4(0.0f, 0.0f, 1.0f, 1.0f);\n";
@@ -264,8 +269,8 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     }
     out << "  out.secondaryColor = float4(0.0);\n";
     emitStageTexcoords(out, "inPosition");
-    out << "  out.fogFactor = 1.0;\n";
-    out << "  out.pointSize = 1.0;\n";
+    if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
+    if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
   } else if (layout) {
     emitVertexSig(/*withStream=*/true);
     out << "  (void)vsConsts;\n";
@@ -310,8 +315,8 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     }
     out << "  out.secondaryColor = float4(0.0);\n";
     emitStageTexcoords(out, "inPosition");
-    out << "  out.fogFactor = 1.0;\n";
-    out << "  out.pointSize = 1.0;\n";
+    if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
+    if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
   } else {
     emitVertexSig(/*withStream=*/false);
     out << "  (void)vsConsts; (void)drawVolatile;\n";
@@ -322,11 +327,11 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.color = float4(1.0);\n";
     out << "  out.secondaryColor = float4(0.0);\n";
     out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
-    for (size_t i = 1; i < kMaxTextureStages; ++i) {
+    for (size_t i = 1; i < maxTexOut; ++i) {
       out << "  out.texcoord" << i << " = out.texcoord0;\n";
     }
-    out << "  out.fogFactor = 1.0;\n";
-    out << "  out.pointSize = 1.0;\n";
+    if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
+    if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
   }
   out << "  if (" << (key.lightingEnabled ? "true" : "false") << ") {\n";
   out << "    out.color.rgb *= 1.0;\n";

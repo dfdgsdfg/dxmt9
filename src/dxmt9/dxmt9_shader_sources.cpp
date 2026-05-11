@@ -2,10 +2,32 @@
 
 #include "dxmt9/core.hpp"
 
+#include <cstdlib>
+#include <cstring>
 #include <sstream>
 #include <utility>
 
 namespace dxmt9::shaders {
+
+namespace {
+
+bool vsoutTrimEnabled() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_TRIM_UNUSED_VARYINGS");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return value;
+}
+
+}  // namespace
+
+std::size_t vsoutMaxTexcoord() {
+  return vsoutTrimEnabled() ? 5u : static_cast<std::size_t>(core::kMaxTextureStages);
+}
+
+bool vsoutEmitFogFactor() { return !vsoutTrimEnabled(); }
+
+bool vsoutEmitPointSize() { return !vsoutTrimEnabled(); }
 
 u64 makeHash(const std::string& source) {
   return core::hashString(source);
@@ -143,11 +165,16 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  float4 position [[position]];\n";
   out << "  float4 color;\n";
   out << "  float4 secondaryColor;\n";
-  for (size_t i = 0; i < kMaxTextureStages; ++i) {
+  const auto maxTex = vsoutMaxTexcoord();
+  for (size_t i = 0; i < maxTex; ++i) {
     out << "  float4 texcoord" << i << ";\n";
   }
-  out << "  float fogFactor;\n";
-  out << "  float pointSize [[point_size]];\n";
+  if (vsoutEmitFogFactor()) {
+    out << "  float fogFactor;\n";
+  }
+  if (vsoutEmitPointSize()) {
+    out << "  float pointSize [[point_size]];\n";
+  }
   if (withClipDistances) {
     out << "  float clipDistance [[clip_distance]] [6];\n";
   }
@@ -251,7 +278,7 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "}\n";
   out << "inline float4 dxmt9_select_texcoord(VSOut in, uint index) {\n";
   out << "  switch (index) {\n";
-  for (size_t i = 0; i < kMaxTextureStages; ++i) {
+  for (size_t i = 0; i < vsoutMaxTexcoord(); ++i) {
     out << "    case " << i << "u: return in.texcoord" << i << ";\n";
   }
   out << "    default: return in.texcoord0;\n";

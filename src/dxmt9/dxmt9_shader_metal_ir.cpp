@@ -595,11 +595,16 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "  out.position = outPosition;\n";
       out << "  out.color = outColor;\n";
       out << "  out.secondaryColor = outSecondaryColor;\n";
-      for (size_t i = 0; i < kMaxTextureStages; ++i) {
+      const auto maxTex = shaders::vsoutMaxTexcoord();
+      for (size_t i = 0; i < maxTex; ++i) {
         out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
       }
-      out << "  out.fogFactor = outFogFactor;\n";
-      out << "  out.pointSize = outPointSize;\n";
+      if (shaders::vsoutEmitFogFactor()) {
+        out << "  out.fogFactor = outFogFactor;\n";
+      }
+      if (shaders::vsoutEmitPointSize()) {
+        out << "  out.pointSize = outPointSize;\n";
+      }
       if (context.clipPlaneMask != 0) {
         out << "  for (uint i = 0; i < 6; ++i) { out.clipDistance[i] = 1.0f; }\n";
       }
@@ -1285,11 +1290,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
     out << "  out.color = outColor;\n";
     out << "  out.secondaryColor = outSecondaryColor;\n";
-    for (size_t i = 0; i < kMaxTextureStages; ++i) {
-      out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
+    {
+      const auto maxTex = shaders::vsoutMaxTexcoord();
+      for (size_t i = 0; i < maxTex; ++i) {
+        out << "  out.texcoord" << i << " = outTexcoord[" << i << "];\n";
+      }
     }
-    out << "  out.fogFactor = outFogFactor;\n";
-    out << "  out.pointSize = outPointSize;\n";
+    if (shaders::vsoutEmitFogFactor()) {
+      out << "  out.fogFactor = outFogFactor;\n";
+    }
+    if (shaders::vsoutEmitPointSize()) {
+      out << "  out.pointSize = outPointSize;\n";
+    }
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (context.clipPlaneMask != 0) {
       out << "  for (uint i = 0; i < 6; ++i) {\n";

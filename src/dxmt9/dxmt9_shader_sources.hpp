@@ -57,6 +57,24 @@ void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path);
 // When withClipDistances is true, VSOut gets a clipDistance[6] array.
 std::string makeShaderPrelude(bool withClipDistances);
 
+// DXMT9_TRIM_UNUSED_VARYINGS — opt-in trimming of VSOut fields that the
+// configured app's fragment shaders never read. Inspected once at first
+// call, cached. When enabled, drops texcoord5/6/7 + fogFactor + pointSize
+// from both the VSOut struct emit and every VS-body write to those
+// fields, shrinking the inter-stage parameter buffer by 56 bytes/vertex.
+// Default off — the trim is workload-specific (verified for
+// `street-fighter-iv-benchmark`'s 15 dumped FS); apps that DO sample
+// texcoord5..7 or read fogFactor/pointSize will produce wrong pixels.
+//
+// vsoutMaxTexcoord: 8 by default, 5 when trim is active. Loops over
+// texture stages in the VS emitters and the
+// `dxmt9_select_texcoord(in, N)` helper switch read this.
+// vsoutEmitFogFactor / vsoutEmitPointSize: true by default, false when
+// trim is active. Guards prelude declaration + VS body writes.
+std::size_t vsoutMaxTexcoord();
+bool vsoutEmitFogFactor();
+bool vsoutEmitPointSize();
+
 // R-BACK-12.22..12.26 — Stage 2 argument-buffer hybrid prelude. Emits
 // the same per-category uniform struct definitions as makeShaderPrelude,
 // then declares an `ArgbufLayout` MSL struct that wraps the per-stage
