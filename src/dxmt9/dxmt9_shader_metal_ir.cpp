@@ -692,9 +692,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
 	    out << "  int a0 = 0;\n";
 	    out << "  int aL = 0;\n";
-	    out << "  float4 r[32];\n";
-	    out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
 	    const auto constantUsage = collectConstantUsage(module);
+	    // R-SHADER-AIR-SIZE: same alloca-eliding trim as the FS path —
+	    // shrink `r[]` to the VS's actual max-written-Temp index. Apple
+	    // promotes the smaller array to scalar SSA registers instead of
+	    // a 512 B stack frame, freeing GPU register pressure for the
+	    // vertex stage. Indexed temp reads fall back to r[32] via the
+	    // 31-floor in `collectConstantUsage`.
+	    const u32 tempCount =
+	        static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxTempIndex + 1));
+	    out << "  float4 r[" << tempCount << "];\n";
+	    out << "  for (uint i = 0; i < " << tempCount
+	        << "u; ++i) { r[i] = float4(0.0f); }\n";
 	    emitConstantBindings(out, true, constantUsage);
 	    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
@@ -1428,9 +1437,23 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "// decoded d3d hash " << module.hash << "\n";
     return out.str();
   }
+  const auto constantUsage = collectConstantUsage(module);
+  // R-SHADER-AIR-SIZE: size r[] / outColor[] to the shader's actual
+  // max-written-Temp / max-written-oC index instead of the spec maxima
+  // (32 / 4). Apple's MSL → AIR keeps the oversized alloca because of
+  // dynamic-index patterns (`r[a0+N]`, etc.); shrinking the array gives
+  // the GPU register allocator room to promote remaining slots out of
+  // the 512 B (32 × float4) thread-local stack frame, raising
+  // occupancy. Both counts have a floor of 1 — every fragment shader
+  // writes at least oC0, and the per-frame init loop needs at least
+  // one element to be well-formed.
+  const u32 tempCount =
+      static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxTempIndex + 1));
+  const u32 colorCount =
+      static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxColorIndex + 1));
   out << "  float4 color = float4(1.0f);\n";
-  out << "  float4 outColor[" << kMaxRenderTargets << "];\n";
-  for (u32 i = 0; i < kMaxRenderTargets; ++i) {
+  out << "  float4 outColor[" << colorCount << "];\n";
+  for (u32 i = 0; i < colorCount; ++i) {
     out << "  outColor[" << i << "] = float4(1.0f);\n";
   }
   out << "  float4 ignoredColor = float4(0.0f);\n";
@@ -1445,9 +1468,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   out << "  float outPointSize = 1.0f;\n";
 	  out << "  int a0 = 0;\n";
 	  out << "  int aL = 0;\n";
-	  out << "  float4 r[32];\n";
-	  out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
-	  const auto constantUsage = collectConstantUsage(module);
+	  out << "  float4 r[" << tempCount << "];\n";
+	  out << "  for (uint i = 0; i < " << tempCount
+	      << "u; ++i) { r[i] = float4(0.0f); }\n";
 	  emitConstantBindings(out, false, constantUsage);
 	  emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
@@ -2029,9 +2052,213 @@ std::string makeTranslatedVertexSource(const ShaderRef& shader,
   return translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, true, context), context, true);
 }
 
+// DXMT9_FS_HALF_PRECISION post-pass — rewrites the emitted FS body to use
+// half (fp16) for every internal `float`/`float4` local, intermediate
+// expression, and texture-sample return type. Apple Silicon GPUs have
+// ~2× FP16 ALU throughput vs FP32; SFIV is 98% fragment-bound (verified
+// via DXMT_DEBUG_FORCE_FRAGMENT_COLOR A/B), so the in-shader precision
+// is the only dxmt9-side lever that meaningfully moves per-frame GPU
+// time without breaking D3D9 transparency.
+//
+// Why post-pass instead of conditional emit at every site: the emitter
+// produces ~50 distinct `float4` / `float` literal strings across the FS
+// path (including non-trivial expressions like
+// `clamp(..., float4(0.0f), float4(1.0f))`). A post-pass converts the
+// whole FS function body at once with a couple of targeted regex
+// substitutions — safer and far smaller diff than threading a `bool half`
+// through every emit helper.
+//
+// Preserves:
+//  * Host-side struct layouts (VSOut / VsConsts / PsConsts / FfpVsConsts /
+//    FfpPsConsts) — these match the CPU writer, narrowing happens at the
+//    use site.
+//  * VS function body — VS is not the bottleneck (vertex GPU time is ~5%
+//    of total per task-2 measurement).
+//
+// Modifies:
+//  * FSOut struct fields — `float4 colorN [[color(N)]]` → `half4 colorN`
+//    so the FS can `return half4(...)` natively. MSL writes half through
+//    the framebuffer at whatever pixel-format conversion the RT requires
+//    (RGBA8 downcast, RGBA16F native).
+//  * Bare-return FS signature — `fragment float4 dxmt9_fs` →
+//    `fragment half4 dxmt9_fs` for the single-color-output-no-depth path
+//    where there is no FSOut struct.
+//  * FS function body — all `float4`/`float3`/`float2`/`float ` →
+//    `half`-prefixed.
+//  * Texture sample type — `texture2d<float>` → `texture2d<half>` so
+//    samples return half4 matching the half-typed body locals.
+//  * Constant-buffer reads — `psConsts.psFloatConst[X]` is wrapped with
+//    `half4(...)` since the buffer is host-side float4 and Apple's MSL
+//    refuses implicit float→half on assignment.
+std::string applyFsHalfPrecisionRewrite(std::string source) {
+  // Locate the FS function open brace and matching close brace.
+  const std::string openMarker = "fragment ";
+  auto open = source.find(openMarker);
+  if (open == std::string::npos) return source;
+  auto braceOpen = source.find('{', open);
+  if (braceOpen == std::string::npos) return source;
+  // Find matching close brace by depth counting (skips nested struct
+  // initializers, switch statements, etc.).
+  std::size_t depth = 1;
+  std::size_t i = braceOpen + 1;
+  for (; i < source.size() && depth > 0; ++i) {
+    if (source[i] == '{') ++depth;
+    else if (source[i] == '}') --depth;
+  }
+  if (depth != 0) return source;
+  const auto braceClose = i;  // one past the '}'
+
+  auto replaceAll = [](std::string& s, std::string_view from, std::string_view to) {
+    if (from.empty()) return;
+    std::size_t pos = 0;
+    while ((pos = s.find(from, pos)) != std::string::npos) {
+      s.replace(pos, from.size(), to);
+      pos += to.size();
+    }
+  };
+
+  // (1) FS body — order matters: handle `float4` first so the more-
+  // specific token doesn't get consumed by the `float ` rule.
+  std::string body = source.substr(braceOpen, braceClose - braceOpen);
+  replaceAll(body, "float4", "half4");
+  replaceAll(body, "float2", "half2");
+  replaceAll(body, "float3", "half3");
+  replaceAll(body, "float ", "half ");
+  // (1c) Helper renames — `dxmt9_merge` is renamed to its half overload
+  // (71 SFIV FS calls). `dxmt9_select_texcoord` intentionally stays on
+  // the float-typed original: the texture `.sample(sampler, coord)`
+  // overload requires `float2 coord` regardless of texel type, so the
+  // texcoord must remain float at the sample site. Other use sites of
+  // select_texcoord that feed into a half4 expression (e.g.
+  // `half4(normalize((dxmt9_select_texcoord(...)).xyz), 0)` rely on
+  // MSL's narrow-on-assign through outer expressions; the half4 ctor
+  // accepts float3 for SIMD lanes via component-wise narrowing.
+  replaceAll(body, "dxmt9_merge(", "dxmt9_merge_h(");
+  // (1d) Float literals → half literals. Apple's constructor matching
+  // refuses `half4(half3, 0.0f)` (no `(half3, float)` candidate); the
+  // `h` suffix produces a half literal that matches. The 'f' is removed
+  // unconditionally on `<digit>.<digit>f` patterns in the body.
+  {
+    std::string out;
+    out.reserve(body.size());
+    for (std::size_t k = 0; k < body.size();) {
+      // Match `<digit>+.<digit>+f` (or `.<digit>+f`) literal endings.
+      auto digit = [](char c) { return c >= '0' && c <= '9'; };
+      if (k + 1 < body.size() && body[k] == 'f') {
+        // Look back to verify previous char is digit, and before that a
+        // chain of digits/dots matching a literal.
+        if (k > 0 && (digit(body[k - 1]) ||
+                       (k > 1 && body[k - 1] == '.' && digit(body[k - 2])))) {
+          // Confirm following char ends the token (paren / comma / op /
+          // whitespace). If it's an identifier char or letter, this `f`
+          // is part of a longer identifier — don't rewrite.
+          const char next = body[k + 1];
+          if (!(digit(next) || next == '_' || (next >= 'a' && next <= 'z') ||
+                (next >= 'A' && next <= 'Z'))) {
+            out.push_back('h');
+            ++k;
+            continue;
+          }
+        }
+      }
+      out.push_back(body[k]);
+      ++k;
+    }
+    body = std::move(out);
+  }
+  // (1b) Cast every host-float-typed constant-buffer read to half4. The
+  // PsConsts struct is shared with the CPU writer so we cannot change
+  // its layout. `replaceAll` is fine here because the source never emits
+  // the wrapped form first — the rewrite is idempotent for our emitter
+  // patterns (no `half4(psConsts.psFloatConst[...])` exists yet).
+  replaceAll(body, "psConsts.psFloatConst[",
+             "half4(psConsts.psFloatConst[xCAST_OPEN");
+  replaceAll(body, "xCAST_OPEN", "");
+  // Now every `psConsts.psFloatConst[ ... ]` is `half4(psConsts.psFloatConst[ ... ]`
+  // — we still need to close the wrapping `)` after the matching `]`.
+  // Walk and insert. (The pattern always appears as `[<expr>]` with no
+  // nested brackets in our emitter.)
+  {
+    std::string out;
+    out.reserve(body.size() + 64);
+    const std::string marker = "half4(psConsts.psFloatConst[";
+    std::size_t p = 0;
+    while (p < body.size()) {
+      auto hit = body.find(marker, p);
+      if (hit == std::string::npos) { out.append(body, p, std::string::npos); break; }
+      out.append(body, p, hit - p);
+      out.append(marker);
+      // copy until the matching ']' then insert ')'
+      auto bracket = body.find(']', hit + marker.size());
+      if (bracket == std::string::npos) {
+        // malformed — bail and keep original
+        out.append(body, hit + marker.size(), std::string::npos);
+        break;
+      }
+      out.append(body, hit + marker.size(), bracket - (hit + marker.size()) + 1);
+      out.push_back(')');
+      p = bracket + 1;
+    }
+    body = std::move(out);
+  }
+
+  // (2) Function signature (before braceOpen): convert texture2d<float>
+  // → texture2d<half> so the sample call returns half4 matching the
+  // half body.
+  std::string sig = source.substr(0, braceOpen);
+  replaceAll(sig, "texture2d<float>", "texture2d<half>");
+  // (2b) Bare-return path — `fragment float4 dxmt9_fs(` → `fragment half4
+  // dxmt9_fs(`. Leaves `fragment FSOut dxmt9_fs(` (struct return) alone;
+  // FSOut struct rewrite below handles that case.
+  replaceAll(sig, "fragment float4 dxmt9_fs", "fragment half4 dxmt9_fs");
+
+  // (3) Source preamble (before signature) — FSOut struct field types.
+  // The struct is emitted just before the fragment function. Rewriting
+  // `float4 colorN [[color(N)]]` to `half4 colorN [[color(N)]]` matches
+  // the body's half-typed `result.colorN = ...` assignments.
+  std::string head = std::move(sig);
+  // Walk `float4 color%u [[color(%u)]]` patterns and rewrite. There are
+  // at most kMaxRenderTargets such fields per struct, so a simple
+  // scan-and-replace is fine.
+  {
+    std::string out;
+    out.reserve(head.size() + 16);
+    std::size_t p = 0;
+    while (p < head.size()) {
+      auto hit = head.find("float4 color", p);
+      if (hit == std::string::npos) { out.append(head, p, std::string::npos); break; }
+      // Confirm this is an FSOut struct field: the next non-digit char
+      // after `color` should be a space followed by `[[color(`.
+      auto after = hit + std::string("float4 color").size();
+      auto digitsEnd = after;
+      while (digitsEnd < head.size() && std::isdigit(static_cast<unsigned char>(head[digitsEnd]))) {
+        ++digitsEnd;
+      }
+      if (digitsEnd < head.size() && head.compare(digitsEnd, std::strlen(" [[color("), " [[color(") == 0) {
+        // It's a field declaration. Rewrite.
+        out.append(head, p, hit - p);
+        out.append("half4 color");
+        out.append(head, after, digitsEnd - after);
+        p = digitsEnd;
+      } else {
+        // Not a field — copy through.
+        out.append(head, p, hit - p + 1);
+        p = hit + 1;
+      }
+    }
+    head = std::move(out);
+  }
+
+  return head + body + source.substr(braceClose);
+}
+
 std::string makeTranslatedFragmentSource(const ShaderRef& shader,
                                          const ShaderSourceContext& context) {
-  return translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, false, context), context, false);
+  auto source = translateSpirvToMsl(translateD3DBytecodeToSpirv(shader, false, context), context, false);
+  if (shaders::fsHalfPrecisionEnabled()) {
+    source = applyFsHalfPrecisionRewrite(std::move(source));
+  }
+  return source;
 }
 
 }  // namespace dxmt9::translator::detail_

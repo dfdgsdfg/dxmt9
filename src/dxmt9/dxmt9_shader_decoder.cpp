@@ -592,6 +592,28 @@ ConstantUsage collectConstantUsage(const SpirvModule& module) {
         usage.mutableConstants = true;
         noteConstantUsage(usage, dst.kind, dst.index);
       }
+      // Track max Temp / Output-Color index so the emitter sizes
+      // `r[]` / `outColor[]` to actual usage rather than the spec
+      // maxima (32 / 4). Apple's MSL → AIR keeps oversized alloca
+      // because of dynamic-index patterns; under-sizing the array
+      // gives the register allocator room to promote remaining slots
+      // to GPU registers (measured impact in the smoke harness).
+      // Indexed dest writes (`mov r[a0+N], ...`) escape to the full
+      // 31-index ceiling — the relAddr token can pick any slot at
+      // runtime and trimming the array would corrupt downstream reads.
+      const bool indexedDst =
+          !instruction.relAddrTokens.empty() && instruction.relAddrTokens[0] != 0u;
+      if (dst.kind == D3DRegisterKind::Temp) {
+        if (indexedDst) {
+          if (usage.maxTempIndex < 31) usage.maxTempIndex = 31;
+        } else {
+          const auto idx = static_cast<std::int32_t>(dst.index);
+          if (idx > usage.maxTempIndex) usage.maxTempIndex = idx;
+        }
+      } else if (dst.kind == D3DRegisterKind::ColorOut) {
+        const auto idx = static_cast<std::int32_t>(dst.index);
+        if (idx > usage.maxColorIndex) usage.maxColorIndex = idx;
+      }
     }
 
     size_t sourceBegin = 1;
@@ -617,6 +639,20 @@ ConstantUsage collectConstantUsage(const SpirvModule& module) {
     for (size_t i = sourceBegin; i < instruction.operands.size(); ++i) {
       const auto src = decodeRegisterRef(instruction.operands[i], module.stage);
       noteConstantUsage(usage, src.kind, src.index);
+      const bool indexedSrc =
+          i < instruction.relAddrTokens.size() && instruction.relAddrTokens[i] != 0u;
+      if (src.kind == D3DRegisterKind::Temp) {
+        // Source-side `r-N` reads also bound the trimmed array size.
+        // Indexed access (`r[a0+N]`) can hit any slot at runtime — fall
+        // back to the full 31-index maximum so the emitter keeps the
+        // spec-max array.
+        if (indexedSrc) {
+          if (usage.maxTempIndex < 31) usage.maxTempIndex = 31;
+        } else {
+          const auto idx = static_cast<std::int32_t>(src.index);
+          if (idx > usage.maxTempIndex) usage.maxTempIndex = idx;
+        }
+      }
       const bool indexed =
           i < instruction.relAddrTokens.size() && instruction.relAddrTokens[i] != 0u;
       if (indexed) {

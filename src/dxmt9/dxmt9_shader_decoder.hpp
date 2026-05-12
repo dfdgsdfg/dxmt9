@@ -95,6 +95,17 @@ struct ConstantUsage {
   bool hasFloat = false;
   bool hasInt = false;
   bool hasBool = false;
+  // Max written-to Temp register index (r0..r31) observed in the module.
+  // The emitter sizes `r[]` to `maxTempIndex + 1` so Apple's MSL → AIR
+  // pass doesn't allocate the full 32-slot stack array (512 B) per
+  // fragment when most SFIV shaders use r0..r1 only. Set to -1 when
+  // the shader writes no Temp register.
+  std::int32_t maxTempIndex = -1;
+  // Max written-to Output Color register index (oC0..oC3). Most apps
+  // write oC0 only; some MRT shaders write oC0..oC3. Emitter sizes
+  // `outColor[]` to `maxColorIndex + 1`. Set to -1 when the shader
+  // writes no oC register.
+  std::int32_t maxColorIndex = -1;
   // Set when any source operand reads a constant register through
   // relative addressing (`c[a0+N]`, `c[aL+N]`). The emitter forces
   // pointer aliasing to the full `vsConsts.vsFloatConst[]` buffer in
