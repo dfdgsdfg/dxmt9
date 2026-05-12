@@ -2045,6 +2045,28 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // `reserveTransientBuffer` / `uploadTransientBuffer`.
   const u64 encodeChunkSeqId = slot.seqId;
 
+  // M3 — Metal frame capture: when the chunk contains a Present and the
+  // capture controller's target frame matches, start capture HERE so
+  // every encoder open/draw/blit issued below is inside the scope.
+  // Apple's MTLCaptureManager.startCapture must precede any
+  // commandBuffer.{renderCommandEncoder,blitCommandEncoder,...} call for
+  // those commands to be recorded — the legacy site in
+  // commitCommandBuffer started capture AFTER all encoder calls had
+  // already issued, producing "No GPU commands captured" in Xcode.
+  std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest;
+  bool captureAlreadyStartedAtChunkBegin = false;
+  for (std::size_t i = 0; i < slot.commandCount(); ++i) {
+    if (slot.commandAt(i).kind == core::MetalCommandKind::Present) {
+      earlyCaptureRequest = ctx.queue.metalCaptureForPresentChunk(slot.seqId);
+      if (earlyCaptureRequest.has_value()) {
+        captureAlreadyStartedAtChunkBegin =
+            core::metalcapture::startMetalCapture(WMT::Device{ctx.device.handle},
+                                                   *earlyCaptureRequest);
+      }
+      break;
+    }
+  }
+
   // Deferred-upload fence: flush any pending staging→private blits via
   // the queue-owned ResourceInitializer, then wait for its SharedEvent
   // signal at the head of this chunk's command buffer so textures are
@@ -2688,7 +2710,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const auto& present = command.present->present;
         const auto presentSource = command.present->presentSource;
         if (!metalCaptureRequest.has_value()) {
-          metalCaptureRequest = ctx.queue.metalCaptureForPresentChunk(slot.seqId);
+          // Prefer the request consumed at chunk-begin (so capture scope
+          // includes every encoder issued earlier in this chunk loop).
+          // Fall back to the legacy detection for safety — should never
+          // fire because we already pre-scanned at chunk entry.
+          if (earlyCaptureRequest.has_value()) {
+            metalCaptureRequest = std::move(earlyCaptureRequest);
+          } else {
+            metalCaptureRequest = ctx.queue.metalCaptureForPresentChunk(slot.seqId);
+          }
         }
         flushPendingClear();
         flushRender(perf::EncoderSplitReason::Present);
@@ -2791,6 +2821,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (metalCaptureRequest.has_value()) {
     record.metalCaptureDevice = WMT::Device{ctx.device.handle};
     record.metalCapture = std::move(metalCaptureRequest);
+    record.metalCaptureAlreadyStarted = captureAlreadyStartedAtChunkBegin;
   }
   record.slotIndex = slotIndex;
   record.seqId = seqId;

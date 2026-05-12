@@ -1082,8 +1082,18 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   auto commitCommandBuffer = [&] {
     bool captureStarted = false;
     if (record.metalCapture.has_value()) {
-      captureStarted = metalcapture::startMetalCapture(record.metalCaptureDevice,
-                                                       *record.metalCapture);
+      if (record.metalCaptureAlreadyStarted) {
+        // Capture was already started at chunk-begin (encodeChunk) so
+        // all encoder commands are already in scope. Just remember the
+        // active capture so we issue stopCapture after the commit below.
+        captureStarted = true;
+      } else {
+        // Legacy fallback path — should not fire for chunks containing a
+        // Present command since encodeChunk pre-starts; kept for safety
+        // and for any future capture trigger that bypasses chunk-begin.
+        captureStarted = metalcapture::startMetalCapture(record.metalCaptureDevice,
+                                                         *record.metalCapture);
+      }
     }
 
     const auto commitStarted = std::chrono::steady_clock::now();

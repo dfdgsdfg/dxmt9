@@ -161,7 +161,21 @@ void Presenter::configureLayer(const AcquireParams& params) {
   props.device = device_.handle;
   props.pixel_format = WMTPixelFormatBGRA8Unorm;
   props.opaque = true;
-  props.framebuffer_only = false;
+  // `framebuffer_only=false` disables Apple's tile-only fast path on
+  // CAMetalLayer. With false, the drawable backing is system-memory
+  // resident (so D3D9 Lock() / GetRenderTargetData() on the backbuffer
+  // can read it) and WindowServer compositing reads from system memory
+  // — measured at ~15.8 s GPU per 20 s xctrace window on SFIV (alongside
+  // SFIV's own 19.9 s fragment, the compositor multiplies on-die GPU
+  // pressure). `DXMT9_LAYER_FRAMEBUFFER_ONLY=1` flips it to the
+  // direct-display fast path: Apple can keep the drawable in tile
+  // memory and skip the system-memory round-trip. Apps that rely on
+  // backbuffer readback will break, so default stays false.
+  static const bool fbOnly = [] {
+    const char* env = std::getenv("DXMT9_LAYER_FRAMEBUFFER_ONLY");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  props.framebuffer_only = fbOnly;
   props.drawable_width = std::max(1u, params.width);
   props.drawable_height = std::max(1u, params.height);
   // Match upstream dxmt: keep CAMetalLayer out of present pacing by

@@ -165,6 +165,11 @@ struct QueueSubmissionRecord {
   WMT::Reference<WMT::CommandBuffer> commandBuffer{};
   WMT::Device metalCaptureDevice{};
   std::optional<metalcapture::MetalCaptureRequest> metalCapture{};
+  // True when MTLCaptureManager.startCapture was already issued at
+  // chunk-begin (in encodeChunk) so every encoder/draw call is in scope.
+  // commitCommandBuffer skips the legacy start in that case and only
+  // issues stopCapture after commit.
+  bool metalCaptureAlreadyStarted = false;
   size_t slotIndex = 0;
   u64 seqId = 0;
   CommandBufferDiagnostics diagnostics{};

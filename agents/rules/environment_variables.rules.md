@@ -100,6 +100,8 @@ unless documented otherwise.
 | `DXMT_SKIP_ALL_DRAWS` | Discard every draw at submit | `0` |
 | `DXMT9_AGGRESSIVE_DEPTH_DONTCARE` | Aggressive Store=DontCare for depth | `0` |
 | `DXMT9_TRIM_UNUSED_VARYINGS` | Trim VSOut to drop fields no SFIV FS reads (texcoord5/6/7 + fogFactor + pointSize). -56 B/vertex, eliminates Apple TBDR "Out of parameter buffer memory" annotations (SFIV: 95→0 events in 20 s). Workload-specific — apps that sample texcoord ≥ 5 or read fogFactor/pointSize will render wrong | `0` |
+| `DXMT9_FS_HALF_PRECISION` | **EXPERIMENTAL — NOT FUNCTIONAL.** Rewrites translated FS bodies to half (fp16). Only ~33% of SFIV's FS sources compile under the current text-rewrite implementation; the remainder fail at MSL boundary type checks (sample-coord float2 requirement, helper-call dispatch, half4 ctor matching). Proper fix requires IR-level type propagation — see dxmt9_shader_sources.hpp header for the full status note. | `0` |
+| `DXMT9_LAYER_FRAMEBUFFER_ONLY` | Flip `CAMetalLayer.framebufferOnly` to `true` (Apple's tile-only fast path). Disables D3D9 `Lock()` / `GetRenderTargetData()` on the backbuffer surface — apps relying on backbuffer readback render wrong. Tested no-op on SFIV mean GPU time (compositor cost is parallel to SFIV's own fragment work, not stealing from it). | `0` |
 | `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK` | Allow legacy provider fallback | `0` |
 | `DXMT9_MID_CHUNK_COMMIT_POLICY` | Sub-CB chain split policy: `off` / `per-render-pass` / `per-n-records` (R-BACK-2.29-2.31, R-BACK-2.34 default-flip 2026-05-10) | `per-render-pass` |
 | `DXMT9_MID_CHUNK_COMMIT_RECORDS` | Records per sub-CB when policy=`per-n-records` | `64` |
