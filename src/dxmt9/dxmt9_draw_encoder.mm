@@ -2034,25 +2034,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return std::nullopt;
   }
 
-  auto commandBuffer = ctx.queue.newCommandBuffer();
-  if (!commandBuffer) {
-    return std::nullopt;
-  }
-  bool commandBufferHasWork = false;
-  // Chunk's GPU seqId — feeds every transient-buffer reservation in this
-  // chunk so the slab is retained until the matching command buffer
-  // completes. R-BACK-12.24 argbuf populator threads this through to
-  // `reserveTransientBuffer` / `uploadTransientBuffer`.
-  const u64 encodeChunkSeqId = slot.seqId;
-
   // M3 — Metal frame capture: when the chunk contains a Present and the
-  // capture controller's target frame matches, start capture HERE so
-  // every encoder open/draw/blit issued below is inside the scope.
-  // Apple's MTLCaptureManager.startCapture must precede any
-  // commandBuffer.{renderCommandEncoder,blitCommandEncoder,...} call for
-  // those commands to be recorded — the legacy site in
-  // commitCommandBuffer started capture AFTER all encoder calls had
-  // already issued, producing "No GPU commands captured" in Xcode.
+  // capture controller's target frame matches, start capture BEFORE we
+  // ask the queue for a new command buffer. Apple's
+  // MTLCaptureManager.startCapture only records command buffers
+  // *created* between startCapture and stopCapture; a CB created before
+  // startCapture leaves Xcode with "No GPU commands have been captured"
+  // even though the bundle is written. Pre-scan the slot first so we
+  // can choose to start capture before `newCommandBuffer()`.
   std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest;
   bool captureAlreadyStartedAtChunkBegin = false;
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
@@ -2066,6 +2055,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       break;
     }
   }
+
+  auto commandBuffer = ctx.queue.newCommandBuffer();
+  if (!commandBuffer) {
+    if (captureAlreadyStartedAtChunkBegin && earlyCaptureRequest.has_value()) {
+      core::metalcapture::stopMetalCapture(*earlyCaptureRequest);
+    }
+    return std::nullopt;
+  }
+  bool commandBufferHasWork = false;
+  // Chunk's GPU seqId — feeds every transient-buffer reservation in this
+  // chunk so the slab is retained until the matching command buffer
+  // completes. R-BACK-12.24 argbuf populator threads this through to
+  // `reserveTransientBuffer` / `uploadTransientBuffer`.
+  const u64 encodeChunkSeqId = slot.seqId;
 
   // Deferred-upload fence: flush any pending staging→private blits via
   // the queue-owned ResourceInitializer, then wait for its SharedEvent
