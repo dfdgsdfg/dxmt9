@@ -1103,6 +1103,7 @@ could test, holding submit_present and chunk shape constant
 | fs_body_skip | 102.16 | +0.9 | DXBC translation loop replaced with 1-line magenta emit, init + alpha-test kept |
 | fs_alpha_skip | 102.27 | +1.0 | alpha-test switch + `discard_fragment()` removed entirely |
 | force_fs_color | **1.33** | **-99.9** | full FS body replaced (init + alpha-test + body removed) |
+| fs_minimal | 101.62 | +0.4 | boilerplate removed, real SFIV work kept (`in.color * tex0.sample + in.secondaryColor`), no alpha — established 2026-05-12 |
 
 Three negative findings from this matrix:
 
@@ -1120,21 +1121,44 @@ Three negative findings from this matrix:
   struct, holds p50 at 102 ms.
 
 Yet `DXMT_DEBUG_FORCE_FRAGMENT_COLOR` drops p50 to 1.33 ms — a 75×
-speedup. The differences that `forceFragmentShaderColor()` ALSO
-applies and that source-level isolation does not reproduce:
+speedup. The two paths share the same function signature (the
+texture/sampler argument hypothesis was checked by reading the emit
+site at `dxmt9_shader_metal_ir.cpp:1365` — `forceFragmentShaderColor`
+runs AFTER the signature is fixed, so both lanes have identical
+`texture2d<float> tex0` / `sampler samp0` bindings when the original
+PS would have used them).
 
-- The forced-color FS function signature **drops the `tex0
-  [[texture(0)]]` and `samp0 [[sampler(0)]]` arguments entirely** when
-  the original PS would have used them.
-- The forced-color path emits an FSOut return immediately and
-  bypasses all locals.
+A fourth isolation lane — `fs_minimal`, which keeps the real SFIV
+fragment work (`float4(in.color) * tex0.sample(samp0, ...) +
+float4(in.secondaryColor)`) but strips all boilerplate (declarations,
+init loops, alpha-test) — also lands at 101.6 ms p50. So neither the
+boilerplate alone (body_skip) nor the body work alone (fs_minimal)
+moves p50. Only emitting `float4(1, 0, 1, 1)` as a constant escapes
+the ~100 ms floor.
 
-The pending hypothesis is that the cost lives in the per-draw
-argument-table / texture-residency setup that Metal performs when a
-PSO declares texture/sampler arguments, not in the FS source itself.
-This would not be visible to `xctrace` GPU intervals as encoder time
-because the work is counted under the draw / encoder shell, but
-would scale per draw × per pass.
+The remaining plausible explanations for the 75× gap, none of which
+source-level isolation can further narrow on its own:
+
+- **GPU "minimum useful work" floor**: any non-trivial FS that
+  samples a texture and writes a varying-derived color saturates an
+  Apple M1 fragment-stage scheduling unit, while a pure constant
+  emit goes through a fast-path tile fill that avoids the unit.
+- **Texture sample / cache thrashing under overdraw**: SFIV's main
+  scene RT has ~68 draws / pass; the dominant FS samples `tex0`
+  once per fragment per draw, and at the typical character-shader
+  overdraw factor the texture fetch volume per pass can saturate
+  L2 / parameter cache regardless of FS code complexity.
+- **Per-draw argument-buffer or residency setup** scaling with the
+  number of distinct PSOs (baseline has many, force_fs_color
+  collapses to one).
+
+Settling between these requires per-instruction or per-counter GPU
+sampling that the `Metal System Trace` CLI template does not
+populate. The `metal-shader-profiler-intervals` and
+`metal-gpu-counter-profile` tables are present in the schema but
+emit zero rows from a CLI capture; the data populates only under
+Xcode GUI Metal Frame Debugger captures (`.gputrace`). That is the
+next decisive step for this question.
 
 Raw artifacts: `/tmp/sfiv-mst/capture.trace`, `/tmp/sfiv-mst/gpu_intervals.xml`,
 `/tmp/sfiv-shaders/translated-fs-*.metal` (15 unique FS dumps with
