@@ -2034,26 +2034,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return std::nullopt;
   }
 
-  // M3 — Metal frame capture: when the chunk contains a Present and the
-  // capture controller's target frame matches, start capture BEFORE we
-  // ask the queue for a new command buffer. Apple's
-  // MTLCaptureManager.startCapture only records command buffers
-  // *created* between startCapture and stopCapture; a CB created before
-  // startCapture leaves Xcode with "No GPU commands have been captured"
-  // even though the bundle is written. Pre-scan the slot first so we
-  // can choose to start capture before `newCommandBuffer()`.
-  std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest;
+  // M3 — Metal frame capture: ask the controller whether this chunk is
+  // the first chunk of the target frame. If so, start capture BEFORE
+  // `newCommandBuffer()` so Apple's MTLCaptureManager records every CB
+  // we create. Capture stays open across every chunk of the target
+  // frame; `notePresentChunkForCapture` later returns the request when
+  // the target frame's Present chunk is encoded, and that request is
+  // attached to the record so the queue's commit closes the capture.
+  std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest =
+      ctx.queue.metalCaptureForChunkBegin(slot.seqId);
   bool captureAlreadyStartedAtChunkBegin = false;
-  for (std::size_t i = 0; i < slot.commandCount(); ++i) {
-    if (slot.commandAt(i).kind == core::MetalCommandKind::Present) {
-      earlyCaptureRequest = ctx.queue.metalCaptureForPresentChunk(slot.seqId);
-      if (earlyCaptureRequest.has_value()) {
-        captureAlreadyStartedAtChunkBegin =
-            core::metalcapture::startMetalCapture(WMT::Device{ctx.device.handle},
-                                                   *earlyCaptureRequest);
-      }
-      break;
-    }
+  if (earlyCaptureRequest.has_value()) {
+    captureAlreadyStartedAtChunkBegin =
+        core::metalcapture::startMetalCapture(WMT::Device{ctx.device.handle},
+                                               *earlyCaptureRequest);
   }
 
   auto commandBuffer = ctx.queue.newCommandBuffer();
@@ -2713,14 +2707,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const auto& present = command.present->present;
         const auto presentSource = command.present->presentSource;
         if (!metalCaptureRequest.has_value()) {
-          // Prefer the request consumed at chunk-begin (so capture scope
-          // includes every encoder issued earlier in this chunk loop).
-          // Fall back to the legacy detection for safety — should never
-          // fire because we already pre-scanned at chunk entry.
-          if (earlyCaptureRequest.has_value()) {
-            metalCaptureRequest = std::move(earlyCaptureRequest);
-          } else {
-            metalCaptureRequest = ctx.queue.metalCaptureForPresentChunk(slot.seqId);
+          // Bump the controller's frame counter and, if this is the
+          // target frame's Present chunk, recover the chunk-begin session
+          // request so `record.metalCapture` triggers stopCapture at
+          // commit time. For non-target frames the call is a no-op apart
+          // from the counter bump.
+          metalCaptureRequest = ctx.queue.notePresentChunkForCapture(slot.seqId);
+          if (metalCaptureRequest.has_value()) {
+            // Capture was started at an earlier chunk-begin; this
+            // chunk's commit should only call stopCapture, never
+            // re-start.
+            captureAlreadyStartedAtChunkBegin = true;
           }
         }
         flushPendingClear();

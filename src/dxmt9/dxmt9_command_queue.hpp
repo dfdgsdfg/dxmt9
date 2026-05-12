@@ -261,6 +261,13 @@ class CommandQueue {
   void notePresentDequeued(std::uint64_t seqId);
   std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureForPresentChunk(
       std::uint64_t seqId);
+  // Multi-chunk capture: chunk-begin opens the session, present-chunk-close
+  // returns the request whose `record.metalCapture` triggers stopCapture
+  // at commit time. See `dxmt9_capture.hpp` for the controller-side model.
+  std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureForChunkBegin(
+      std::uint64_t seqId);
+  std::optional<core::metalcapture::MetalCaptureRequest> notePresentChunkForCapture(
+      std::uint64_t seqId);
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
   void bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags);
   void startThreads(std::function<void()> encodeLoop,

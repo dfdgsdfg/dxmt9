@@ -1220,6 +1220,16 @@ CommandQueue::metalCaptureForPresentChunk(std::uint64_t seqId) {
   return metalCapture_.maybeCapturePresentChunk(seqId);
 }
 
+std::optional<core::metalcapture::MetalCaptureRequest>
+CommandQueue::metalCaptureForChunkBegin(std::uint64_t seqId) {
+  return metalCapture_.maybeCaptureAtChunkBegin(seqId);
+}
+
+std::optional<core::metalcapture::MetalCaptureRequest>
+CommandQueue::notePresentChunkForCapture(std::uint64_t seqId) {
+  return metalCapture_.maybePresentChunkClosesSession(seqId);
+}
+
 void CommandQueue::submitFlush() {
   perf::countSubmitFlush();
   std::unique_lock lock(mutex_);

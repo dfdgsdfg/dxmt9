@@ -85,12 +85,55 @@ MetalCaptureController::MetalCaptureController()
 MetalCaptureController::MetalCaptureController(MetalCaptureConfig config)
     : config_(std::move(config)) {}
 
-std::optional<MetalCaptureRequest> MetalCaptureController::maybeCapturePresentChunk(u64 seqId) {
-  if (!enabled() || requested_) {
+std::optional<MetalCaptureRequest> MetalCaptureController::maybeCaptureAtChunkBegin(u64 seqId) {
+  if (!enabled() || requested_ || !armedForChunkBegin_) {
+    return std::nullopt;
+  }
+  // First chunk after observedPresentFrames_ == targetFrame - 1.
+  armedForChunkBegin_ = false;
+  requested_ = true;
+  activeSession_ = MetalCaptureRequest{
+      .frame = config_.targetFrame,
+      .seqId = seqId,
+      .path = config_.path.empty() ? defaultMetalCapturePath(config_.targetFrame, seqId)
+                                   : config_.path,
+  };
+  return activeSession_;
+}
+
+std::optional<MetalCaptureRequest> MetalCaptureController::maybePresentChunkClosesSession(u64 seqId) {
+  if (!enabled()) {
     return std::nullopt;
   }
   ++observedPresentFrames_;
-  if (observedPresentFrames_ != config_.targetFrame) {
+  // Arm the next chunk-begin if this present is the (targetFrame - 1)-th.
+  if (config_.targetFrame > 0 && observedPresentFrames_ == config_.targetFrame - 1) {
+    armedForChunkBegin_ = true;
+  }
+  // Close session on the targetFrame-th Present chunk.
+  if (observedPresentFrames_ != config_.targetFrame || !activeSession_) {
+    return std::nullopt;
+  }
+  auto closing = std::move(activeSession_);
+  activeSession_.reset();
+  return closing;
+}
+
+std::optional<MetalCaptureRequest> MetalCaptureController::maybeCapturePresentChunk(u64 seqId) {
+  // Back-compat path: bump the frame counter and, when the target frame
+  // hits, return a one-shot request just like the original implementation
+  // (capture starts and stops within this same chunk). Used by callers
+  // that haven't migrated to the begin+close pair. `armedForChunkBegin_`
+  // and `activeSession_` are still maintained so a parallel chunk-begin
+  // call sees the right state.
+  if (!enabled()) {
+    return std::nullopt;
+  }
+  ++observedPresentFrames_;
+  if (config_.targetFrame > 0 && observedPresentFrames_ == config_.targetFrame - 1) {
+    armedForChunkBegin_ = true;
+  }
+  if (observedPresentFrames_ != config_.targetFrame || requested_) {
     return std::nullopt;
   }
   requested_ = true;
