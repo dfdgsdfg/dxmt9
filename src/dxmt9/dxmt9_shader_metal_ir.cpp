@@ -1438,23 +1438,42 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "// decoded d3d hash " << module.hash << "\n";
     return out.str();
   }
-  // R-SHADER-AIR-SIZE: FS r[] / outColor[] sizing temporarily reverted
-  // — visual regressions on SFIV stage-transition overlays (pink
-  // gradient on loading/versus screens) suggest the index-tracking
-  // scan misses corner cases (indexed writes, control-flow merges,
-  // subroutine bodies). Keep both at the spec maximum until the scan
-  // is audited; Apple's MSL → AIR still elides the loops in many
-  // cases, so the perf cost is bounded.
+  // R-SHADER-AIR-SIZE (FS only): size r[] and outColor[] to the
+  // shader's actual max-written-Temp / max-written-oC index instead of
+  // the spec maxima (32 / 4). DXMT_DEBUG_FORCE_FRAGMENT_COLOR isolation
+  // showed Apple's MSL → AIR is NOT eliding the per-fragment zero-init
+  // loops as expected — keeping `r[32]` charges ~96 ms of GPU work per
+  // SFIV main-scene CB on top of a ~1.3 ms force-color floor. The
+  // `collectConstantUsage` scan handles indexed dst/src writes by
+  // forcing maxTempIndex to 31, so the trim is safe for those. VS
+  // path stays at the spec maximum until the scan is audited for
+  // subroutine/control-flow corner cases — a prior reversion of the
+  // shared FS+VS trim caused a pink-gradient regression that the FS
+  // half alone is not implicated in.
+  const auto constantUsage = collectConstantUsage(module);
+  const u32 tempCount =
+      static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxTempIndex + 1));
+  const u32 colorCount =
+      static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxColorIndex + 1));
   out << "  float4 color = float4(1.0f);\n";
-  out << "  float4 outColor[" << kMaxRenderTargets << "];\n";
-  for (u32 i = 0; i < kMaxRenderTargets; ++i) {
+  out << "  float4 outColor[" << colorCount << "];\n";
+  for (u32 i = 0; i < colorCount; ++i) {
     out << "  outColor[" << i << "] = float4(1.0f);\n";
   }
   out << "  float4 ignoredColor = float4(0.0f);\n";
   out << "  float4 outSecondaryColor = float4(0.0f);\n";
-  out << "  float4 outTexcoord[" << kMaxTextureStages << "];\n";
-  out << "  for (uint i = 0; i < " << kMaxTextureStages
-      << "u; ++i) { outTexcoord[i] = float4(0.0f, 0.0f, 0.0f, 1.0f); }\n";
+  // R-SHADER-FS-DEAD-OT: SM2+ pixel shaders never write to oT* registers
+  // and the SM1.x `mov tN, …` pattern is the only producer. Scanning
+  // the module lets us skip the dead 8 × float4 zero-init loop per
+  // fragment for the common case. The compiler appears to DCE it
+  // anyway (~1% measured), but the IR-level skip is the source of
+  // truth.
+  const bool usesTexcoordOut = pixelUsesTexcoordOut(module);
+  if (usesTexcoordOut) {
+    out << "  float4 outTexcoord[" << kMaxTextureStages << "];\n";
+    out << "  for (uint i = 0; i < " << kMaxTextureStages
+        << "u; ++i) { outTexcoord[i] = float4(0.0f, 0.0f, 0.0f, 1.0f); }\n";
+  }
   out << "  float4 ignoredTexcoord = float4(0.0f);\n";
   out << "  float4 outPosition = float4(0.0f);\n";
   out << "  float outDepth = in.position.z;\n";
@@ -1462,9 +1481,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   out << "  float outPointSize = 1.0f;\n";
 	  out << "  int a0 = 0;\n";
 	  out << "  int aL = 0;\n";
-	  out << "  float4 r[32];\n";
-	  out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
-  const auto constantUsage = collectConstantUsage(module);
+	  out << "  float4 r[" << tempCount << "];\n";
+	  out << "  for (uint i = 0; i < " << tempCount
+	      << "u; ++i) { r[i] = float4(0.0f); }\n";
 	  emitConstantBindings(out, false, constantUsage);
 	  emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;

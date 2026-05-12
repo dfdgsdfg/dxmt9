@@ -155,6 +155,12 @@ VertexOutputSemantics collectVertexOutputSemantics(const SpirvModule& module);
 PixelInputSemantics collectPixelInputSemantics(const SpirvModule& module);
 u32 pixelColorOutputCount(const SpirvModule& module);
 bool pixelWritesDepth(const SpirvModule& module);
+// True iff the pixel shader writes to or reads from any oT* / output-texcoord
+// register. Modern SM2+ shaders never do; SM1.x can MOV to t<N>. When false,
+// the FS emitter can skip the dead `outTexcoord[8]` declaration + per-fragment
+// zero-init loop (8 × float4 stores per fragment otherwise emitted on every
+// invocation).
+bool pixelUsesTexcoordOut(const SpirvModule& module);
 std::array<bool, ::dxmt9::core::kMaxSamplers> collectPixelSamplerUsage(const SpirvModule& module,
                                                                        const ShaderSourceContext& context);
 void noteConstantUsage(ConstantUsage& usage, D3DRegisterKind kind, u32 index);

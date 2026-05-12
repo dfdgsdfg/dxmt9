@@ -542,6 +542,36 @@ bool pixelWritesDepth(const SpirvModule& module) {
   return false;
 }
 
+bool pixelUsesTexcoordOut(const SpirvModule& module) {
+  if (module.stage != D3DShaderStage::Pixel) {
+    return false;
+  }
+  for (const auto& instruction : module.instructions) {
+    const bool writesDest = opcodeWritesFirstOperand(instruction.opcode);
+    for (size_t i = 0; i < instruction.operands.size(); ++i) {
+      // Skip DEF/DEFI/DEFB literal operands (only operand 0 is a register).
+      if ((instruction.opcode == kD3DSIO_DEF ||
+           instruction.opcode == kD3DSIO_DEFI ||
+           instruction.opcode == kD3DSIO_DEFB) &&
+          i > 0) {
+        continue;
+      }
+      // LABEL/CALL operands index a label, not a register.
+      if ((instruction.opcode == kD3DSIO_LABEL || instruction.opcode == kD3DSIO_CALL) && i == 0) {
+        continue;
+      }
+      // Operand 0 is a destination only when the opcode actually writes it;
+      // otherwise treat it as a source for kind checking.
+      (void)writesDest;
+      const auto reg = decodeRegisterRef(instruction.operands[i], module.stage);
+      if (reg.kind == D3DRegisterKind::TexCoordOut) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 std::array<bool, kMaxSamplers> collectPixelSamplerUsage(const SpirvModule& module,
                                                         const ShaderSourceContext& context) {
   std::array<bool, kMaxSamplers> usage{};
