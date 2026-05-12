@@ -996,8 +996,90 @@ Current interpretation:
 - For the current SFIV draw/hazard/present investigation, async acquire and preacquire are explicitly postponed until direct indexed draws, exact hazard splits, and present-source validity counters are clean.
 - The next draw-side target is automatic chunk flushing or compact per-draw uniform upload so no-present workloads do not build very large command chunks and transient uniform slabs.
 
+## 2026-05-12 SFIV env-knob ceiling
+
+Question: how much fps does dxmt9 give up to CPU-side overhead on SFIV vs.
+genuine GPU work? Five-lane matrix with `DXMT_PERF_COUNTERS=1
+DXMT_PERF_COUNTERS_PERIODIC_PRESENTS=60 DXMT_LOG_LEVEL=Warn` on
+`sikarugir-cx-24.0.7`, 50 s run-timeout, periodic `[dxmt9-perf]` lines.
+
+| lane | env knobs | presents/50s | fps | Δ baseline | gpu_cb_p50 ms | gpu_cb_p95 ms | gpu_cb_p99 ms |
+|---|---|---:|---:|---:|---:|---:|---:|
+| baseline | — | 722 | 14.4 | — | 98.1 | 105.0 | 111.8 |
+| clamp1 | `DXMT9_MAX_FRAME_LATENCY=1` + `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=1` | 840 | 16.8 | **+17%** | 98.2 | 105.8 | 110.8 |
+| policy_off | `DXMT9_MID_CHUNK_COMMIT_POLICY=off` | 842 | 16.8 | **+17%** | 101.8 | 114.2 | 129.8 |
+| trim_varyings | `DXMT9_TRIM_UNUSED_VARYINGS=1` | 723 | 14.5 | ~0% | 101.1 | 106.8 | 111.9 |
+| depth_dontcare | `DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1` | 780 | 15.6 | +8% | 101.9 | 110.6 | 119.1 |
+| combined | clamp1 + policy_off + depth_dontcare | 780 | 15.6 | +8% | 102.4 | 111.3 | 116.4 |
+
+`render_pass_begin / submit_present ≈ 16` in every lane (≈ 11.5 k / 722
+in baseline). `sub_command_buffers` was 1991 in baseline, 0 under
+`policy_off` — confirming the knob took effect.
+
+Interpretation:
+
+- The **fps ceiling from env knobs alone is ~16.8** on SFIV. clamp1 and
+  policy_off both hit it independently; combining them stacks
+  imperfectly because policy_off's monolithic CBs lose some of the
+  drawable-acquire overlap that clamp1 buys.
+- `gpu_command_buffer_time_p50_ms` stays at ~98–102 ms across all
+  lanes. **GPU work itself is the bottleneck**, not the CPU bridge,
+  not sub-CB chain overhead, not parameter-buffer spill.
+- 16 render passes / frame × ~6 ms / pass = ~95 ms accounts for the
+  observed p50. This is the real cost — the Apple TBDR tile-flush
+  bandwidth (1280×720×4 ≈ 3.7 MiB per RT switch × 16 = ~60 MiB / frame).
+- `DXMT9_TRIM_UNUSED_VARYINGS=1` did not help here even though the
+  rule file documents it as eliminating SFIV's TBDR
+  "Out of parameter buffer memory" annotations. The earlier 95→0
+  annotation reduction was real but did not move fps — the parameter
+  buffer overflow was a cheap-to-recover spill, not the dominant cost.
+  Pipeline retranslation (`pipeline_miss_draw` 64 → 104) is the visible
+  side effect.
+- `DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1` gains +8% alone but adds +3 ms
+  to `gpu_cb_p50_ms` — the saved depth-store cost is paid back
+  elsewhere on the next pass. Combined with clamp1+policy_off it
+  **erases** the clamp1/policy_off win (combined matches
+  depth_dontcare alone, not their sum). For SFIV, dontcare is a NET
+  loss when stacked.
+- Earlier conclusion that the SFIV-trace `0x5b32a255` 88–196 ms texture
+  dealloc latency proved a 6-frame back-pressure queue is now
+  weakened. clamp1 clamps that queue and only buys +17%, with no
+  change to GPU p50. The 100 ms dealloc latency was the GPU draining,
+  not a CPU back-pressure smell.
+- Earlier `.gputrace` Frame-209 read where cb_seq_860 totalled
+  1.87 ms was misread — that was the present chunk only, not the
+  scene chunks (cb_seq_857–859) which carry the heavy passes. Aggregate
+  p50 from the perf counters is the authoritative number.
+
+What this means for next work:
+
+- Stop tuning SFIV with env knobs. The remaining headroom is in the
+  Metal command stream itself — render-pass coalescing, Store=DontCare
+  decisions for color where actually safe, RT format downgrades on
+  intermediate buffers.
+- The first concrete step is per-render-pass GPU time export via
+  `xcrun xctrace record --template 'Metal System Trace'` +
+  `--xpath '...table[@schema="metal-gpu-intervals"]'` (see
+  `agents/rules/metal_debugging.rules.md` §5 path B). Rank the 16
+  passes by GPU time; the long tail likely sits in 2–3 of them.
+- For day-to-day SFIV runs, leaving `DXMT9_MAX_FRAME_LATENCY=1` (or
+  `DXMT9_MID_CHUNK_COMMIT_POLICY=off`, but not both) enabled is
+  cheap +17%. `DXMT9_AGGRESSIVE_DEPTH_DONTCARE` should be **off** on
+  SFIV — it is a net regression in stacked policy.
+
+Raw run artifacts: `/tmp/sfiv-perf-matrix/{baseline,clamp1,policy_off,trim_varyings,depth_dontcare,combined}.log`
+(harness `dxmt9.log` copies preserving the `[dxmt9-perf]` lines).
+
 ## Open Questions
 
 - Should `queued async + effective latency cap` be gated by swapchain/present workload shape instead of becoming a global default?
 - Should the cap be applied only when async drawable tokens are enabled, given that cap-alone lowered FPS in both samples?
 - Are the SSIM deltas in BasicHLSL and Tutorial07 expected from color/present-path differences, or do they indicate remaining rendering correctness work?
+- Which of SFIV's 16 render passes / frame carry the bulk of the
+  ~98 ms p50 GPU CB time? `metal-gpu-intervals` export should rank
+  them. Likely candidates are shadow / glow / depth pre-pass over the
+  full RT.
+- Why does `DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1` interact destructively
+  with `DXMT9_MID_CHUNK_COMMIT_POLICY=off` on SFIV — does the
+  depth-store skip force a depth reload on the next chunk that the
+  PerRenderPass policy was hiding by re-using tile depth?
