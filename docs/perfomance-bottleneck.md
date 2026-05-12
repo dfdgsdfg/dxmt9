@@ -1070,6 +1070,76 @@ What this means for next work:
 Raw run artifacts: `/tmp/sfiv-perf-matrix/{baseline,clamp1,policy_off,trim_varyings,depth_dontcare,combined}.log`
 (harness `dxmt9.log` copies preserving the `[dxmt9-perf]` lines).
 
+### 2026-05-12 SFIV xctrace pass ranking + FS isolation
+
+xctrace `metal-gpu-intervals` export (15 s SFIV attach, default knobs):
+
+| chan | label | count | total ms | p50 µs |
+|---|---|---:|---:|---:|
+| **Fragment** | **RenderPass[rt=0x300000100000006, depth=0x300000100000005]** | **109** | **9105** | **94289** |
+| Fragment | RenderPass[rt=0x30000010000001f, depth=0x30000010000001e] | 5 | 13 | 2607 |
+| Fragment | RenderPass[rt=0x300000100000000, depth=0x300000100000001] | 98 | 10 | 103 |
+| Vertex | (per-RT, all under 510 µs p50) | — | <400 | <510 |
+
+The 100 ms p50 GPU CB time documented earlier is **almost entirely
+one Fragment pass on the main 1280×720 BGRA8 scene RT**, not a
+16-pass spread. dxmt9-render log: that RT carries 7368 draws across
+109 render-pass beginnings → ~68 draws per pass. Top three pixel
+shaders on this RT (psHash → draw count): `0x40f78cd0457fb73` 3921,
+`0xc05cea750b63b99a` 4383, `0xd36fb2fb94c44dae` 1475 — all simple
+"modulate by vertex color + add specular + 1-tex sample" FFP
+patterns.
+
+A series of isolation experiments via env knobs and source hacks
+ruled the cost OUT of every candidate that source-level analysis
+could test, holding submit_present and chunk shape constant
+(`DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1` baseline = 780 presents / 50 s):
+
+| lane | gpu_cb_p50 ms | Δ vs baseline | what changed |
+|---|---:|---:|---|
+| baseline_no_archive | 101.27 | — | reference |
+| fs_ot_skip | 100.32 | -1.0 | drop dead `outTexcoord[8]` decl when scan says unused |
+| fs_sized | 101.13 | -0.14 | r[] / outColor[] sized to actual max-written index (4fd2b46 FS half re-introduced) |
+| fs_body_skip | 102.16 | +0.9 | DXBC translation loop replaced with 1-line magenta emit, init + alpha-test kept |
+| fs_alpha_skip | 102.27 | +1.0 | alpha-test switch + `discard_fragment()` removed entirely |
+| force_fs_color | **1.33** | **-99.9** | full FS body replaced (init + alpha-test + body removed) |
+
+Three negative findings from this matrix:
+
+- **Apple's MSL → AIR compiler DCEs the per-fragment zero-init
+  loops** for `r[32]`, `outColor[4]`, `outTexcoord[8]` even when they
+  are unused. The 4fd2b46 FS-side re-introduction is therefore
+  semantically tighter but perf-neutral.
+- **`discard_fragment()` is not the cost.** The hypothesis that
+  alpha-test discard disables M1 early-Z and explodes fragment work
+  by overdraw was falsified: removing the entire alpha-test block,
+  including the discard call, did not move p50 GPU time at all.
+- **The DXBC body work itself is also not the cost.** Replacing the
+  translated `tex0.sample` + 3 ALU with a single magenta store, while
+  keeping bindings, declarations, init loops, alpha-test, and FSOut
+  struct, holds p50 at 102 ms.
+
+Yet `DXMT_DEBUG_FORCE_FRAGMENT_COLOR` drops p50 to 1.33 ms — a 75×
+speedup. The differences that `forceFragmentShaderColor()` ALSO
+applies and that source-level isolation does not reproduce:
+
+- The forced-color FS function signature **drops the `tex0
+  [[texture(0)]]` and `samp0 [[sampler(0)]]` arguments entirely** when
+  the original PS would have used them.
+- The forced-color path emits an FSOut return immediately and
+  bypasses all locals.
+
+The pending hypothesis is that the cost lives in the per-draw
+argument-table / texture-residency setup that Metal performs when a
+PSO declares texture/sampler arguments, not in the FS source itself.
+This would not be visible to `xctrace` GPU intervals as encoder time
+because the work is counted under the draw / encoder shell, but
+would scale per draw × per pass.
+
+Raw artifacts: `/tmp/sfiv-mst/capture.trace`, `/tmp/sfiv-mst/gpu_intervals.xml`,
+`/tmp/sfiv-shaders/translated-fs-*.metal` (15 unique FS dumps with
+`DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1`).
+
 ## Open Questions
 
 - Should `queued async + effective latency cap` be gated by swapchain/present workload shape instead of becoming a global default?
@@ -1083,3 +1153,16 @@ Raw run artifacts: `/tmp/sfiv-perf-matrix/{baseline,clamp1,policy_off,trim_varyi
   with `DXMT9_MID_CHUNK_COMMIT_POLICY=off` on SFIV — does the
   depth-store skip force a depth reload on the next chunk that the
   PerRenderPass policy was hiding by re-using tile depth?
+- Where does the SFIV main-scene 100 ms / CB go, given source-level
+  isolation has ruled out body work, init loops, alpha-test discard,
+  and array sizing? `metal-shader-profiler-intervals` or
+  `metal-gpu-counter-profile` export should be the next decisive step
+  — those tables attribute GPU cycles per shader instruction, which
+  the encoder-level `metal-gpu-intervals` does not.
+- Is the "force-fragment-color" 75× speedup attributable to dropping
+  the `texture2d<float> tex0 [[texture(0)]]` / `sampler samp0
+  [[sampler(0)]]` arguments from the FS function signature when the
+  app's PS would otherwise sample? If yes, a PSO specialization that
+  trims unused texture/sampler argument bindings per shader would
+  recover most of that. If no, the cost is elsewhere in Metal's
+  per-draw binding setup.
