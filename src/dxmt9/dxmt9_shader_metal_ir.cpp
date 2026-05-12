@@ -692,18 +692,19 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
 	    out << "  int a0 = 0;\n";
 	    out << "  int aL = 0;\n";
+	    // R-SHADER-AIR-SIZE: VS path keeps the full 32-temp array. FS
+	    // sizing alone gives us the bulk of the GPU-register-pressure
+	    // win (per-fragment thread runs in parallel × hundreds of
+	    // thousands of pixels — each saved alloca matters), while VS
+	    // is one thread per vertex and the analysis miss surface
+	    // (subroutine bodies, indexed reads in CALL targets, control-
+	    // flow joins) is wider. Visual regressions on SFIV stage-
+	    // transition overlays (pink gradient on the loading screen)
+	    // when both VS and FS were sized suggest the VS scan misses
+	    // a corner case; keep VS conservative until that's audited.
+	    out << "  float4 r[32];\n";
+	    out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
 	    const auto constantUsage = collectConstantUsage(module);
-	    // R-SHADER-AIR-SIZE: same alloca-eliding trim as the FS path —
-	    // shrink `r[]` to the VS's actual max-written-Temp index. Apple
-	    // promotes the smaller array to scalar SSA registers instead of
-	    // a 512 B stack frame, freeing GPU register pressure for the
-	    // vertex stage. Indexed temp reads fall back to r[32] via the
-	    // 31-floor in `collectConstantUsage`.
-	    const u32 tempCount =
-	        static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxTempIndex + 1));
-	    out << "  float4 r[" << tempCount << "];\n";
-	    out << "  for (uint i = 0; i < " << tempCount
-	        << "u; ++i) { r[i] = float4(0.0f); }\n";
 	    emitConstantBindings(out, true, constantUsage);
 	    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
@@ -1437,23 +1438,16 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "// decoded d3d hash " << module.hash << "\n";
     return out.str();
   }
-  const auto constantUsage = collectConstantUsage(module);
-  // R-SHADER-AIR-SIZE: size r[] / outColor[] to the shader's actual
-  // max-written-Temp / max-written-oC index instead of the spec maxima
-  // (32 / 4). Apple's MSL → AIR keeps the oversized alloca because of
-  // dynamic-index patterns (`r[a0+N]`, etc.); shrinking the array gives
-  // the GPU register allocator room to promote remaining slots out of
-  // the 512 B (32 × float4) thread-local stack frame, raising
-  // occupancy. Both counts have a floor of 1 — every fragment shader
-  // writes at least oC0, and the per-frame init loop needs at least
-  // one element to be well-formed.
-  const u32 tempCount =
-      static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxTempIndex + 1));
-  const u32 colorCount =
-      static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxColorIndex + 1));
+  // R-SHADER-AIR-SIZE: FS r[] / outColor[] sizing temporarily reverted
+  // — visual regressions on SFIV stage-transition overlays (pink
+  // gradient on loading/versus screens) suggest the index-tracking
+  // scan misses corner cases (indexed writes, control-flow merges,
+  // subroutine bodies). Keep both at the spec maximum until the scan
+  // is audited; Apple's MSL → AIR still elides the loops in many
+  // cases, so the perf cost is bounded.
   out << "  float4 color = float4(1.0f);\n";
-  out << "  float4 outColor[" << colorCount << "];\n";
-  for (u32 i = 0; i < colorCount; ++i) {
+  out << "  float4 outColor[" << kMaxRenderTargets << "];\n";
+  for (u32 i = 0; i < kMaxRenderTargets; ++i) {
     out << "  outColor[" << i << "] = float4(1.0f);\n";
   }
   out << "  float4 ignoredColor = float4(0.0f);\n";
@@ -1468,9 +1462,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   out << "  float outPointSize = 1.0f;\n";
 	  out << "  int a0 = 0;\n";
 	  out << "  int aL = 0;\n";
-	  out << "  float4 r[" << tempCount << "];\n";
-	  out << "  for (uint i = 0; i < " << tempCount
-	      << "u; ++i) { r[i] = float4(0.0f); }\n";
+	  out << "  float4 r[32];\n";
+	  out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
+  const auto constantUsage = collectConstantUsage(module);
 	  emitConstantBindings(out, false, constantUsage);
 	  emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
