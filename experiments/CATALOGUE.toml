@@ -558,6 +558,55 @@ skip_stage = true
 wine_dll_overrides = "d3d9=b;d3dx9_41=b"
 cx_bottle = "Heroic"
 
+# UL/Futuremark 3DMark series — two D3D9 benchmarks at increasing
+# complexity (3DMark05 = SM2, 3DMark06 = SM3). Useful as broad
+# correctness + perf samples beyond SFIV. (3DMark03 dropped — its
+# installer required Complete/Typical mode and the available image
+# left skins/iq/shots empty; 05/06 install cleanly.)
+[[app]]
+name = "3dmark05"
+source = "local-external"
+license = "commercial"
+source_kind = "external-application"
+license_scope = "external-not-vendored"
+binary = "experiments/prefixs/3dmark05/drive_c/Program Files (x86)/Futuremark/3DMark05/3DMark05.exe"
+launcher = "experiments/launchers/3dmark05.sh"
+reference = "experiments/references/3dmark05.png"
+features = ["commercial", "benchmark", "d3d9", "stress", "scene"]
+status = "exploratory"
+requires_wine = true
+window_title = "3DMark05"
+capture_delay_sec = 20.0
+run_timeout_sec = 60
+capture_frame = 0
+reference_optional = true
+allow_timeout = true
+wine_id = "sikarugir-cx-24.0.7"
+wine_alternatives = []
+install_drive_letter = "d"
+
+[[app]]
+name = "3dmark06"
+source = "local-external"
+license = "commercial"
+source_kind = "external-application"
+license_scope = "external-not-vendored"
+binary = "experiments/prefixs/3dmark06/drive_c/Program Files (x86)/Futuremark/3DMark06/3DMark06.exe"
+launcher = "experiments/launchers/3dmark06.sh"
+reference = "experiments/references/3dmark06.png"
+features = ["commercial", "benchmark", "d3d9", "stress", "scene", "shader-model-3"]
+status = "exploratory"
+requires_wine = true
+window_title = "3DMark06"
+capture_delay_sec = 20.0
+run_timeout_sec = 60
+capture_frame = 0
+reference_optional = true
+allow_timeout = true
+wine_id = "sikarugir-cx-24.0.7"
+wine_alternatives = []
+install_drive_letter = "d"
+
 [apps.dxmt9-perf-present-loop.expected_counters]
 # V1 audit (f) — drawable-acquire isolation (B6). The probe runs
 # PRESENT_LOOP_ITERATIONS empty Clear+Present cycles (default 1000) so
