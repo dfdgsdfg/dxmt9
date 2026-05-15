@@ -844,6 +844,28 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         controlStack.push_back(FlowBlock{instruction.opcode, false});
         continue;
       }
+      if (instruction.opcode == kD3DSIO_IFC) {
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("IFC requires two source operands");
+        }
+        // D3DSPC_* comparison code lives in the low 4 bits of
+        // `instruction.controls` (extracted from token bits 16..23 by
+        // the decoder). Reuse the IF FlowBlock type so the matching
+        // ELSE/ENDIF in the bytecode continues to pop correctly.
+        const char* op = "==";
+        switch (instruction.controls & 0xfu) {
+          case 1: op = ">";  break;  // D3DSPC_GT
+          case 2: op = "=="; break;  // D3DSPC_EQ
+          case 3: op = ">="; break;  // D3DSPC_GE
+          case 4: op = "<";  break;  // D3DSPC_LT
+          case 5: op = "!="; break;  // D3DSPC_NE
+          case 6: op = "<="; break;  // D3DSPC_LE
+          default: op = "=="; break; // reserved (0) — treat as EQ
+        }
+        out << "  if ((" << readSrc(0) << ").x " << op << " (" << readSrc(1) << ").x) {\n";
+        controlStack.push_back(FlowBlock{kD3DSIO_IF, false});
+        continue;
+      }
       if (instruction.opcode == kD3DSIO_ELSE) {
         if (controlStack.empty() || controlStack.back().opcode != kD3DSIO_IF || controlStack.back().sawElse) {
           throw std::runtime_error("ELSE without matching IF");
@@ -1605,6 +1627,24 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       out << "  if ((" << readSrc(0) << ").x != 0.0f) {\n";
       controlStack.push_back(FlowBlock{instruction.opcode, false});
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_IFC) {
+      if (instruction.operands.size() < 2) {
+        throw std::runtime_error("IFC requires two source operands");
+      }
+      const char* op = "==";
+      switch (instruction.controls & 0xfu) {
+        case 1: op = ">";  break;  // D3DSPC_GT
+        case 2: op = "=="; break;  // D3DSPC_EQ
+        case 3: op = ">="; break;  // D3DSPC_GE
+        case 4: op = "<";  break;  // D3DSPC_LT
+        case 5: op = "!="; break;  // D3DSPC_NE
+        case 6: op = "<="; break;  // D3DSPC_LE
+        default: op = "=="; break;
+      }
+      out << "  if ((" << readSrc(0) << ").x " << op << " (" << readSrc(1) << ").x) {\n";
+      controlStack.push_back(FlowBlock{kD3DSIO_IF, false});
       continue;
     }
     if (instruction.opcode == kD3DSIO_ELSE) {

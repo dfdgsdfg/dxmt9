@@ -158,6 +158,8 @@ std::string opcodeName(u32 opcode) {
       return "endrep";
     case kD3DSIO_IF:
       return "if";
+    case kD3DSIO_IFC:
+      return "ifc";
     case kD3DSIO_ELSE:
       return "else";
     case kD3DSIO_ENDIF:
@@ -267,6 +269,10 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_LOOP:
     case kD3DSIO_REP:
       return 1;
+    case kD3DSIO_IFC:
+      // `ifc <cmp_mode>, src0, src1` — cmp_mode lives in token high bits
+      // (instruction.controls), src0/src1 are the two register operands.
+      return 2;
     case kD3DSIO_ADD:
     case kD3DSIO_SUB:
     case kD3DSIO_MUL:
@@ -649,6 +655,7 @@ ConstantUsage collectConstantUsage(const SpirvModule& module) {
     size_t sourceBegin = 1;
     switch (instruction.opcode) {
       case kD3DSIO_IF:
+      case kD3DSIO_IFC:
       case kD3DSIO_LOOP:
       case kD3DSIO_REP:
       case kD3DSIO_BREAKP:
@@ -730,6 +737,7 @@ bool shaderUsesPredicateRegisters(const SpirvModule& module) {
     }
     switch (instruction.opcode) {
       case kD3DSIO_IF:
+      case kD3DSIO_IFC:
       case kD3DSIO_LOOP:
       case kD3DSIO_REP:
       case kD3DSIO_BREAKP:
