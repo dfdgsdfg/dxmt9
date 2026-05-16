@@ -7,7 +7,9 @@
 
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_ffp_shaders.hpp"
+#include "dxmt9_format_convert.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -144,6 +146,44 @@ struct ProgrammableVsExtraStreamBindingList {
   }
 };
 
+struct FragmentTextureSamplerBinding {
+  u32 stage = 0;
+  core::Handle texture{};
+  core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
+};
+
+struct FragmentTextureSamplerBindingList {
+  std::array<FragmentTextureSamplerBinding, core::kMaxSamplers> entries{};
+  std::size_t count = 0;
+
+  void push_back(FragmentTextureSamplerBinding binding) {
+    if (count < entries.size()) {
+      entries[count++] = binding;
+    }
+  }
+
+  bool empty() const noexcept { return count == 0; }
+  std::size_t size() const noexcept { return count; }
+
+  const FragmentTextureSamplerBinding& operator[](std::size_t index) const noexcept {
+    return entries[index];
+  }
+
+  const FragmentTextureSamplerBinding* begin() const noexcept {
+    return entries.data();
+  }
+
+  const FragmentTextureSamplerBinding* end() const noexcept {
+    return entries.data() + count;
+  }
+};
+
+struct EncoderRasterStatePlan {
+  WMTViewport viewport{};
+  WMTScissorRect scissor{};
+  WMTCullMode cullMode = WMTCullModeNone;
+};
+
 inline bool vertexDeclUsesStream(const core::VertexDeclSnapshot& vertexDecl, u32 stream) {
   for (const auto& element : vertexDecl.elements) {
     if (element.stream == stream) {
@@ -180,6 +220,78 @@ inline ProgrammableVsExtraStreamBindingList makeProgrammableVsExtraStreamBinding
     });
   }
   return bindings;
+}
+
+inline FragmentTextureSamplerBindingList makeFragmentTextureSamplerBindings(
+    const core::FlatDrawStateRecord& hot) {
+  FragmentTextureSamplerBindingList bindings;
+  for (u32 stage = 0; stage < core::kMaxSamplers; ++stage) {
+    const auto textureHandle = hot.textures[stage];
+    if (!textureHandle) {
+      continue;
+    }
+    bindings.push_back(FragmentTextureSamplerBinding{
+        .stage = stage,
+        .texture = textureHandle,
+        .samplerStates = hot.samplerStates[stage],
+    });
+  }
+  return bindings;
+}
+
+inline EncoderRasterStatePlan makeEncoderRasterStatePlan(
+    const core::FlatDrawStateRecord& hot,
+    u32 surfaceWidth,
+    u32 surfaceHeight,
+    bool preTransformed,
+    bool scissorDisabled,
+    bool cullDisabled) {
+  const auto targetWidth = std::max(1u, surfaceWidth);
+  const auto targetHeight = std::max(1u, surfaceHeight);
+  double viewportWidth = static_cast<double>(std::max(1u, hot.viewport.viewport.width));
+  double viewportHeight = static_cast<double>(std::max(1u, hot.viewport.viewport.height));
+  double viewportOriginX = static_cast<double>(hot.viewport.viewport.x);
+  double viewportOriginY = static_cast<double>(hot.viewport.viewport.y);
+  if (preTransformed) {
+    viewportOriginX = 0.0;
+    viewportOriginY = 0.0;
+    viewportWidth = static_cast<double>(targetWidth);
+    viewportHeight = static_cast<double>(targetHeight);
+  }
+
+  WMTScissorRect scissor{};
+  if (hot.viewport.scissorEnabled && !scissorDisabled) {
+    scissor.x = static_cast<std::uint64_t>(std::max(0, hot.viewport.scissor.left));
+    scissor.y = static_cast<std::uint64_t>(std::max(0, hot.viewport.scissor.top));
+    scissor.width = static_cast<std::uint64_t>(
+        std::max(0, hot.viewport.scissor.right - hot.viewport.scissor.left));
+    scissor.height = static_cast<std::uint64_t>(
+        std::max(0, hot.viewport.scissor.bottom - hot.viewport.scissor.top));
+  } else {
+    scissor.x = 0;
+    scissor.y = 0;
+    scissor.width = static_cast<std::uint64_t>(targetWidth);
+    scissor.height = static_cast<std::uint64_t>(targetHeight);
+  }
+
+  WMTCullMode cullMode = WMTCullModeNone;
+  if (!preTransformed && !cullDisabled) {
+    cullMode = static_cast<WMTCullMode>(convert::toCullMode(
+        core::flatStateOr(hot.renderStates, core::RS_CULL_MODE, 1u)));
+  }
+
+  return EncoderRasterStatePlan{
+      .viewport = WMTViewport{
+          viewportOriginX,
+          viewportOriginY,
+          viewportWidth,
+          viewportHeight,
+          static_cast<double>(hot.viewport.viewport.minZ),
+          static_cast<double>(hot.viewport.viewport.maxZ),
+      },
+      .scissor = scissor,
+      .cullMode = cullMode,
+  };
 }
 
 // Geometry-trace recorder (env-gated). Called from encodeDraw for the

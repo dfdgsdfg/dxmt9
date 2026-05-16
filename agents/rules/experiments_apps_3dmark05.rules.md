@@ -25,6 +25,10 @@ Current evidence does not show the Wine/vkd3d-shader SM1 HLSL compile failure
 pattern being investigated for 3DMark06. The latest 3DMark05 dxmt9 output
 reaches draw calls and a final present.
 
+A restored Wine builtin D3D9 oracle renders the same delayed GT1 scene normally.
+This separates app/timing/Wine viability from the current dxmt9 visual
+corruption.
+
 ## Repository State
 
 - Catalogue entry: `experiments/CATALOGUE.toml`, app name `3dmark05`.
@@ -71,7 +75,46 @@ practical automation:
 Earlier attempts to automate a mouse click were unreliable because Wine-on-macOS
 window geometry and accessibility metadata did not line up with the visible UI.
 
+Wine-builtin oracle note:
+
+- `d3d9=b` alone is not enough after dxmt9 has been staged into the Wine root:
+  `<wine-root>/lib/wine/*-windows/d3d9.dll` is itself dxmt9.
+- To run a real Wine builtin oracle, temporarily copy
+  `d3d9.dll.dxmt9-backup` over the staged `d3d9.dll` in both
+  `x86_64-windows` and `i386-windows`, run with `--skip-stage`, then restore the
+  staged dxmt9 DLLs. Confirm by checking the oracle log has `wined3d` noise and
+  no `[dxmt9-*]` backend lines.
+
 ## Latest Observed Result
+
+2026-05-16 restored Wine builtin oracle:
+
+- `experiments/output/3dmark05-wine-builtin-oracle-restored/result.json`
+  reports harness `status=pass`, `returncode=-15`, `timed_out=true`, and a
+  1024x768 delayed capture.
+- The captured GT1 scene is visually normal at the same timing: red-lit landing
+  bay, readable center monitor, and intact HUD. This proves the app, Wine
+  runtime, focus keepalive, Enter automation, capture delay, and timeout policy
+  are not the source of the dxmt9 corruption.
+- The oracle log contains `wined3d`/GLSL fixmes and no dxmt9 backend present
+  trace, confirming this was the restored Wine builtin path rather than staged
+  dxmt9.
+
+2026-05-16 programmable-VS multi-stream follow-up:
+
+- `experiments/output/3dmark05-post-vs-multistream-stream-bind-trace/result.json`
+  reports harness `status=pass`, `returncode=-15`, `timed_out=true`, and a
+  1024x768 delayed capture with shader archive disabled.
+- `DXMT_TRACE_SHADER_INPUTS=1` shows real 3DMark05 shaders mapping inputs from
+  stream 1, e.g. tangent/binormal/normal/texcoord declarations mapped as
+  `v1->s1`, `v2->s1`, and related stream-1 inputs.
+- `DXMT_TRACE_ENCODE_SEQ=5` with the focused stream bind trace shows stream 1 is
+  actually bound to Metal slot 6 with non-null live/bound Metal handles and
+  non-zero shadow byte counts. The earlier "stream1 decoded but not bound" class
+  is therefore unlikely to be the remaining primary cause.
+- The dxmt9 capture remains corrupted: scene structure is visible, but large
+  black regions, over-bright/white geometry, and magenta diagonal/area artifacts
+  remain.
 
 2026-05-16 post-boundary-coverage run after the R-TEST-0.10 / texture readback
 work:

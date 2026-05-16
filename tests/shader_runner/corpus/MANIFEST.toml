@@ -492,6 +492,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-04"
 
 [[test]]
+file = "vs_specific/dxmt9_vs_multistream_textured_quad.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
 file = "vs_specific/setp.shader_test"
 status = "passing"
 source = "dxmt9"

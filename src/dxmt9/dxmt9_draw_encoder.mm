@@ -1237,43 +1237,18 @@ bool encodeDraw(EncodeContext& ctx,
   if (!skipBaseStateBind) {
     PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
     if (auto* surface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value); surface && surface->texture) {
-      double viewportWidth = static_cast<double>(std::max(1u, hot.viewport.viewport.width));
-      double viewportHeight = static_cast<double>(std::max(1u, hot.viewport.viewport.height));
-      double viewportOriginX = static_cast<double>(hot.viewport.viewport.x);
-      double viewportOriginY = static_cast<double>(hot.viewport.viewport.y);
-      if (ffLayout && ffLayout->preTransformed) {
-        viewportOriginX = 0.0;
-        viewportOriginY = 0.0;
-        viewportWidth = static_cast<double>(std::max(1u, surface->desc.width));
-        viewportHeight = static_cast<double>(std::max(1u, surface->desc.height));
-      }
-      encoder.setViewport(WMTViewport{viewportOriginX, viewportOriginY, viewportWidth, viewportHeight,
-                                      static_cast<double>(hot.viewport.viewport.minZ),
-                                      static_cast<double>(hot.viewport.viewport.maxZ)});
+      const auto rasterPlan = makeEncoderRasterStatePlan(
+          hot,
+          surface->desc.width,
+          surface->desc.height,
+          ffLayout && ffLayout->preTransformed,
+          debug::disableScissor(),
+          debug::disableCull());
+      encoder.setViewport(rasterPlan.viewport);
       countViewportBind();
-      WMTScissorRect scissor{};
-      if (hot.viewport.scissorEnabled && !debug::disableScissor()) {
-        scissor.x = static_cast<uint64_t>(std::max(0, hot.viewport.scissor.left));
-        scissor.y = static_cast<uint64_t>(std::max(0, hot.viewport.scissor.top));
-        scissor.width = static_cast<uint64_t>(std::max(0, hot.viewport.scissor.right - hot.viewport.scissor.left));
-        scissor.height =
-            static_cast<uint64_t>(std::max(0, hot.viewport.scissor.bottom - hot.viewport.scissor.top));
-      } else {
-        scissor.x = 0;
-        scissor.y = 0;
-        scissor.width = static_cast<uint64_t>(std::max(1u, surface->desc.width));
-        scissor.height = static_cast<uint64_t>(std::max(1u, surface->desc.height));
-      }
-      encoder.setScissorRect(scissor);
+      encoder.setScissorRect(rasterPlan.scissor);
       countScissorBind();
-      if (ffLayout && ffLayout->preTransformed) {
-        setRasterizerCullMode(encoder, WMTCullModeNone);
-      } else if (debug::disableCull()) {
-        setRasterizerCullMode(encoder, WMTCullModeNone);
-      } else {
-        setRasterizerCullMode(encoder, static_cast<WMTCullMode>(toCullMode(
-            core::flatStateOr(hot.renderStates, RS_CULL_MODE, 1u))));
-      }
+      setRasterizerCullMode(encoder, rasterPlan.cullMode);
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};
@@ -1310,6 +1285,25 @@ bool encodeDraw(EncodeContext& ctx,
           buffer && buffer->buffer) {
         vertexBuffer = WMT::Buffer{buffer->buffer.handle};
         vertexBufferOffset = hot.streamOffsets[0];
+        if (traceEncode) {
+          std::ostringstream trace;
+          trace << "[dxmt9-encode-stream] seq=" << static_cast<unsigned long long>(seqId)
+                << " stream=0 slot=1 handle="
+                << static_cast<unsigned long long>(hot.streamBuffers[0].value)
+                << " liveMetal=0x" << std::hex
+                << static_cast<unsigned long long>(buffer->buffer.handle)
+                << " capturedMetal=0x"
+                << static_cast<unsigned long long>(hot.streamBuffer0Metal)
+                << std::dec
+                << " boundMetal=0x" << std::hex
+                << static_cast<unsigned long long>(vertexBuffer.handle)
+                << std::dec
+                << " offset=" << vertexBufferOffset
+                << " stride=" << hot.streamStrides[0]
+                << " shadowBytes=" << buffer->shadow.size()
+                << " contents=" << (buffer->contents ? 1 : 0);
+          emitQueueTraceLine(trace.str());
+        }
         if (!buffer->shadow.empty()) {
           vertexBytes = buffer->shadow;
         } else if (buffer->contents) {
@@ -1694,10 +1688,17 @@ bool encodeDraw(EncodeContext& ctx,
         WMT::Buffer extraVertexBuffer{};
         uint64_t extraVertexBufferOffset = streamBinding.offset;
         const u32 stream = streamBinding.stream;
+        uint64_t liveMetalHandle = 0;
+        std::size_t shadowBytes = 0;
+        bool hasContents = false;
+        bool usedDeclBytes = false;
         if (hot.streamBuffers[stream]) {
           if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
               buffer && buffer->buffer) {
             extraVertexBuffer = WMT::Buffer{buffer->buffer.handle};
+            liveMetalHandle = buffer->buffer.handle;
+            shadowBytes = buffer->shadow.size();
+            hasContents = buffer->contents != nullptr;
           }
         }
         if (!extraVertexBuffer && vertexDecl.streams[stream].buffer) {
@@ -1706,8 +1707,29 @@ bool encodeDraw(EncodeContext& ctx,
             if (auto slice = makeTransientBuffer(bytes.data(), bytes.size())) {
               extraVertexBuffer = slice.buffer;
               extraVertexBufferOffset += slice.offset;
+              usedDeclBytes = true;
             }
           }
+        }
+        if (traceEncode) {
+          std::ostringstream trace;
+          trace << "[dxmt9-encode-stream] seq=" << static_cast<unsigned long long>(seqId)
+                << " stream=" << stream
+                << " slot=" << streamBinding.metalSlot
+                << " handle="
+                << static_cast<unsigned long long>(hot.streamBuffers[stream].value)
+                << " liveMetal=0x" << std::hex
+                << static_cast<unsigned long long>(liveMetalHandle)
+                << " boundMetal=0x"
+                << static_cast<unsigned long long>(extraVertexBuffer.handle)
+                << std::dec
+                << " offset=" << extraVertexBufferOffset
+                << " stride=" << streamBinding.stride
+                << " declFallback=" << (usedDeclBytes ? 1 : 0)
+                << " shadowBytes=" << shadowBytes
+                << " contents=" << (hasContents ? 1 : 0)
+                << " bound=" << (extraVertexBuffer ? 1 : 0);
+          emitQueueTraceLine(trace.str());
         }
         if (extraVertexBuffer) {
           encoder.setVertexBuffer(extraVertexBuffer, extraVertexBufferOffset,
@@ -1726,11 +1748,9 @@ bool encodeDraw(EncodeContext& ctx,
   // mirror is a shadow copy (design.md §11.2).
   if (!skipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
-    for (std::size_t stage = 0; stage < kMaxSamplers; ++stage) {
-      const auto textureHandle = hot.textures[stage];
-      if (!textureHandle) {
-        continue;
-      }
+    for (const auto& binding : makeFragmentTextureSamplerBindings(hot)) {
+      const auto stage = binding.stage;
+      const auto textureHandle = binding.texture;
       if (const u64 skipped = debug::skippedTextureHandle();
           skipped != 0ull && textureHandle.value == skipped) {
         if (traceEncode || debug::shouldTraceTexture(textureHandle)) {
@@ -1754,7 +1774,7 @@ bool encodeDraw(EncodeContext& ctx,
         encoder.setFragmentTexture(resources::textureForShaderRead(*texture), (uint8_t)stage);
         countTextureBind();
       }
-      auto sampler = makeSampler(ctx.device, hot.samplerStates[stage]);
+      auto sampler = makeSampler(ctx.device, binding.samplerStates);
       if (sampler) {
         encoder.setFragmentSamplerState(sampler, (uint8_t)stage);
         countSamplerBind();

@@ -417,6 +417,31 @@ def is_black_screen(metrics: dict[str, float]) -> bool:
     )
 
 
+def effective_capture_frame(app: ExperimentApp, args: argparse.Namespace) -> int:
+    override = getattr(args, "capture_frame", None)
+    if override is not None:
+        return int(override)
+    return app.capture_frame
+
+
+def classify_capture_source(
+    actual_dump_path: Path,
+    actual_path: Path,
+    window_info: dict[str, Any] | None,
+) -> str | None:
+    if actual_dump_path.exists():
+        return "internal_dump"
+    if window_info:
+        mode = window_info.get("capture_mode")
+        if mode == "window_id":
+            return "window_capture"
+        if mode == "full_screen":
+            return "full_screen"
+    if actual_path.exists():
+        return "external_capture"
+    return None
+
+
 def compute_ssim(actual_path: Path, reference_path: Path) -> float:
     actual = Image.open(actual_path).convert("L")
     reference = Image.open(reference_path).convert("L")
@@ -814,6 +839,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         elif args.stage_mingw_runtime:
             stage_mingw_runtime(prefix, mingw_bin_dir, wow64_mingw_bin_dir)
 
+        capture_frame = effective_capture_frame(app, args)
         env = os.environ.copy()
         env.update(
             {
@@ -830,7 +856,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "DXMT_EXPERIMENT_OUTPUT_DIR": str(output_dir),
                 "DXMT_EXPERIMENT_LOG": str(log_path),
                 "DXMT_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
-                "DXMT_CAPTURE_FRAME": str(app.capture_frame),
+                "DXMT_CAPTURE_FRAME": str(capture_frame),
                 "DXMT_EXPERIMENT_SKIP_STAGE": "1" if skip_stage else "",
             }
         )
@@ -906,6 +932,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             "returncode": process.returncode if process is not None else None,
             "capture_error": capture_error,
             "window_info": window_info,
+            "capture_frame": capture_frame,
             "failures": [],
             "timed_out": timed_out,
             "performance": performance,
@@ -946,6 +973,12 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
         if actual_dump_path.exists():
             Image.open(actual_dump_path).save(actual_path)
+        capture_source = classify_capture_source(actual_dump_path, actual_path, window_info)
+        result["capture_source"] = capture_source
+        result["capture_paths"] = {
+            "actual": str(actual_path) if actual_path.exists() else None,
+            "internal_dump": str(actual_dump_path) if actual_dump_path.exists() else None,
+        }
 
         if app.reference_path.exists():
             if reference_link_path.exists() or reference_link_path.is_symlink():
@@ -1082,6 +1115,12 @@ def main() -> int:
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
     run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")
+    run_parser.add_argument(
+        "--capture-frame",
+        type=int,
+        default=None,
+        help="Override CATALOGUE capture_frame / DXMT_CAPTURE_FRAME for this run",
+    )
     run_parser.add_argument(
         "--build",
         action="store_true",

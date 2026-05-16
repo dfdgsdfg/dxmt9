@@ -9,14 +9,12 @@
 //     -> Stage 1 MSL texN/sampN [[texture(N)]]/[[sampler(N)]]
 //     -> Stage 2 MSL texN/sampN aliases from abuf->textures[N]/samplers[N]
 //     -> Stage 2 descriptor ids texture=4+N, sampler=12+N.
+//     -> Encoder call-plan values consumed by setFragmentTexture/Sampler,
+//        setViewport, setScissorRect, and setRasterizerCullMode.
 //
-// The final production encoder writes are not directly observable here:
-// Stage 1 calls RenderCommandEncoder::setFragmentTexture/SamplerState,
-// while Stage 2 calls MTLArgumentEncoder::setTexture/SamplerState. Both
-// require live Metal objects and the current wrappers expose no recording
-// seam for the destination index. The assertions below pin every pure
-// value transform that feeds those calls without introducing a test-only
-// production hook.
+// The final Metal object writes still require a live device/encoder, but
+// the encoder-facing call plans are pure helpers so this spec can pin the
+// exact stage/viewport/scissor/cull values before the live Metal seam.
 
 #include <array>
 #include <cmath>
@@ -35,6 +33,7 @@
 #include "dxmt9/core.hpp"
 #include "../../../src/dxmt9/dxmt9_argbuf_hybrid.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_shader.hpp"
 #include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 #include "../../../src/dxmt9/dxmt9_shader_translator.hpp"
@@ -388,6 +387,107 @@ void testDefaultSamplerInfoForNullTextureSlotIsDeterministic() {
         "default sampler arg-buffer support flag is not set");
 }
 
+// ---------------------------------------------------------------------
+// B5.5 - encoder-facing call plans preserve stage and raster values.
+
+void testEncoderFragmentBindingPlanMatchesShaderSlots() {
+  DrawDesc desc{};
+  desc.textures[5].handle = Handle{0x5005u};
+  desc.textures[7].handle = Handle{0x5007u};
+  desc.samplers[5].states[SAMP_ADDRESS_U] = 3u;
+  desc.samplers[5].states[SAMP_ADDRESS_V] = 3u;
+  desc.samplers[5].states[SAMP_MIN_FILTER] = 2u;
+  desc.samplers[7].states[SAMP_MIP_FILTER] = 2u;
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto bindings = dxmt9::encoders::makeFragmentTextureSamplerBindings(hot);
+
+  checkEq(bindings.size(), std::size_t{2},
+          "encoder fragment binding plan contains only non-null texture slots");
+  checkEq(bindings[0].stage, 5u,
+          "first encoder fragment binding keeps shader sampler slot 5");
+  checkEq(bindings[0].texture, Handle{0x5005u},
+          "first encoder fragment binding carries texture handle for slot 5");
+  checkEq(flatStateOr(bindings[0].samplerStates, SAMP_ADDRESS_U, 0u), 3u,
+          "slot 5 encoder sampler plan carries address U");
+  checkEq(flatStateOr(bindings[0].samplerStates, SAMP_MIN_FILTER, 0u), 2u,
+          "slot 5 encoder sampler plan carries min filter");
+  const auto slot5Info = dxmt9::encoders::makeSamplerInfo(bindings[0].samplerStates);
+  checkEq(slot5Info.min_filter, WMTSamplerMinMagFilterLinear,
+          "slot 5 encoder sampler plan maps linear min filter");
+  checkEq(slot5Info.s_address_mode, WMTSamplerAddressModeClampToEdge,
+          "slot 5 encoder sampler plan maps clamp address U");
+
+  checkEq(bindings[1].stage, 7u,
+          "second encoder fragment binding keeps shader sampler slot 7");
+  checkEq(bindings[1].texture, Handle{0x5007u},
+          "second encoder fragment binding carries texture handle for slot 7");
+  checkEq(flatStateOr(bindings[1].samplerStates, SAMP_MIP_FILTER, 0u), 2u,
+          "slot 7 encoder sampler plan carries mip filter");
+  const auto slot7Info = dxmt9::encoders::makeSamplerInfo(bindings[1].samplerStates);
+  checkEq(slot7Info.mip_filter, WMTSamplerMipFilterLinear,
+          "slot 7 encoder sampler plan maps linear mip filter");
+}
+
+void testEncoderRasterStatePlanMatchesMetalViewportScissorCull() {
+  DrawDesc desc{};
+  desc.viewport.viewport = Viewport{8u, 9u, 40u, 30u, 0.25f, 0.75f};
+  desc.viewport.scissor = Rect{10, 11, 28, 31};
+  desc.viewport.scissorEnabled = true;
+  desc.rs.values[RS_CULL_MODE] = static_cast<u32>(CullMode::Cw);
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto plan = dxmt9::encoders::makeEncoderRasterStatePlan(
+      hot, 128u, 64u, false, false, false);
+
+  checkNear(static_cast<float>(plan.viewport.originX), 8.0f, 0.0f,
+            "encoder viewport origin X carries draw viewport");
+  checkNear(static_cast<float>(plan.viewport.originY), 9.0f, 0.0f,
+            "encoder viewport origin Y carries draw viewport");
+  checkNear(static_cast<float>(plan.viewport.width), 40.0f, 0.0f,
+            "encoder viewport width carries draw viewport");
+  checkNear(static_cast<float>(plan.viewport.height), 30.0f, 0.0f,
+            "encoder viewport height carries draw viewport");
+  checkNear(static_cast<float>(plan.viewport.znear), 0.25f, 0.0f,
+            "encoder viewport znear carries draw viewport");
+  checkNear(static_cast<float>(plan.viewport.zfar), 0.75f, 0.0f,
+            "encoder viewport zfar carries draw viewport");
+  checkEq(plan.scissor.x, std::uint64_t{10},
+          "encoder scissor x carries draw scissor left");
+  checkEq(plan.scissor.y, std::uint64_t{11},
+          "encoder scissor y carries draw scissor top");
+  checkEq(plan.scissor.width, std::uint64_t{18},
+          "encoder scissor width carries right-left");
+  checkEq(plan.scissor.height, std::uint64_t{20},
+          "encoder scissor height carries bottom-top");
+  checkEq(plan.cullMode, WMTCullModeFront,
+          "D3DCULL_CW encoder plan maps to Metal front cull");
+
+  const auto scissorDisabledPlan = dxmt9::encoders::makeEncoderRasterStatePlan(
+      hot, 128u, 64u, false, true, false);
+  checkEq(scissorDisabledPlan.scissor.x, std::uint64_t{0},
+          "disabled scissor plan starts at surface origin");
+  checkEq(scissorDisabledPlan.scissor.y, std::uint64_t{0},
+          "disabled scissor plan starts at surface origin");
+  checkEq(scissorDisabledPlan.scissor.width, std::uint64_t{128},
+          "disabled scissor plan spans surface width");
+  checkEq(scissorDisabledPlan.scissor.height, std::uint64_t{64},
+          "disabled scissor plan spans surface height");
+
+  const auto preTransformedPlan = dxmt9::encoders::makeEncoderRasterStatePlan(
+      hot, 128u, 64u, true, false, false);
+  checkNear(static_cast<float>(preTransformedPlan.viewport.originX), 0.0f, 0.0f,
+            "pretransformed encoder viewport starts at target origin");
+  checkNear(static_cast<float>(preTransformedPlan.viewport.originY), 0.0f, 0.0f,
+            "pretransformed encoder viewport starts at target origin");
+  checkNear(static_cast<float>(preTransformedPlan.viewport.width), 128.0f, 0.0f,
+            "pretransformed encoder viewport spans target width");
+  checkNear(static_cast<float>(preTransformedPlan.viewport.height), 64.0f, 0.0f,
+            "pretransformed encoder viewport spans target height");
+  checkEq(preTransformedPlan.cullMode, WMTCullModeNone,
+          "pretransformed encoder plan disables culling");
+}
+
 }  // namespace
 
 int main() {
@@ -397,6 +497,8 @@ int main() {
     testNullFfpTextureSlotDoesNotMaterializeTextureBinding();
     testFlatSamplerInfoMatchesSnapshotAndPinsLodDefaults();
     testDefaultSamplerInfoForNullTextureSlotIsDeterministic();
+    testEncoderFragmentBindingPlanMatchesShaderSlots();
+    testEncoderRasterStatePlanMatchesMetalViewportScissorCull();
   } catch (const TestFailure& failure) {
     std::cerr << "shader_argbuf_binding_value_spec failed: "
               << failure.what() << '\n';

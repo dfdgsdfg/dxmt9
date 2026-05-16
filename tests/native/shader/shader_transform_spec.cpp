@@ -358,6 +358,43 @@ std::vector<u32> makeVs30OutputSemanticBytecode() {
   };
 }
 
+std::vector<u32> makeVs30HighRegisterOutputSemanticBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+  return {
+      makeVersionToken(true, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 0u),
+      makeDstToken(kD3DSPR_INPUT, 1),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 1u),
+      makeDstToken(kD3DSPR_INPUT, 2),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 7),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 0u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 3),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 1u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 4),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 7),
+      makeSrcToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 3),
+      makeSrcToken(kD3DSPR_INPUT, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 4),
+      makeSrcToken(kD3DSPR_INPUT, 2),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makeVs30InputSemanticBytecode() {
   using namespace dxmt9::d3d9bc;
   constexpr u32 kD3DDeclUsagePosition = 0u;
@@ -786,6 +823,47 @@ void testVs30OutputSemanticMappingBySemanticIndex() {
                    "vs_3_0 texcoord semantic does not fall back to raw output register index");
 }
 
+void testVs30HighOutputRegisterSemanticMapping() {
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat4 = 3u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  const std::vector<VertexElement> elements{
+      VertexElement{0, 0, kD3DDeclTypeFloat4, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+      VertexElement{1, 12, kD3DDeclTypeFloat2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+      VertexElement{1, 20, kD3DDeclTypeFloat2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 1},
+  };
+  std::array<u32, kMaxStreams> strides{};
+  strides[0] = 16u;
+  strides[1] = 28u;
+
+  const auto source = translateVertex(
+      makeVs30HighRegisterOutputSemanticBytecode(), elements, strides);
+
+  checkContains(source, "device const uchar* stream1 [[buffer(6)]]",
+                "high-output VS keeps stream1 on its own Metal buffer slot");
+  checkContains(source, "const uint stride1 = 28u",
+                "high-output VS preserves stream1 stride at the shader boundary");
+  checkContains(source, "dxmt9_load_f32x4(stream0, base + 0u)",
+                "high-output VS loads POSITION from stream0");
+  checkContains(source, "dxmt9_load_f32x2(stream1, base1 + 12u)",
+                "high-output VS loads TEXCOORD0 from stream1 offset 12");
+  checkContains(source, "dxmt9_load_f32x2(stream1, base1 + 20u)",
+                "high-output VS loads TEXCOORD1 from stream1 offset 20");
+  checkContains(source, "outPosition = vin[0]",
+                "POSITION semantic maps to Metal position despite high o-register index");
+  checkContains(source, "outTexcoord[0] = vin[1]",
+                "TEXCOORD0 semantic maps by semantic index, not output register 3");
+  checkContains(source, "outTexcoord[1] = vin[2]",
+                "TEXCOORD1 semantic maps by semantic index, not output register 4");
+  checkNotContains(source, "outTexcoord[3] = vin[1]",
+                   "TEXCOORD0 must not fall back to raw output register 3");
+  checkNotContains(source, "outTexcoord[4] = vin[2]",
+                   "TEXCOORD1 must not fall back to raw output register 4");
+}
+
 void testVs30VertexDeclarationTypeLoads() {
   constexpr u32 kD3DDeclTypeFloat3 = 2u;
   constexpr u32 kD3DDeclTypeUByte4 = 5u;
@@ -1150,6 +1228,7 @@ int main() {
     testPs30InputSemanticTexcoordMapping();
     testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();
+    testVs30HighOutputRegisterSemanticMapping();
     testVs30VertexDeclarationTypeLoads();
     testVs30InputLayoutPreservesStreamBoundaries();
     testVs30MultiStreamVertexDeclarationLoads();

@@ -11,6 +11,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <unordered_map>
 #include <optional>
 #include <span>
@@ -114,6 +115,7 @@ struct CorpusTest {
   bool drawDxmt9TexturedQuadXyz = false;
   bool drawDxmt9SolidQuad = false;
   bool drawDxmt9VsColorTriangle = false;
+  bool drawDxmt9VsMultistreamTexturedQuad = false;
   u32 clipPlaneMask = 0;
   std::optional<u32> colorWriteMask;
   std::optional<u32> zEnable;
@@ -194,6 +196,23 @@ struct ProgrammedColorVertex {
   float z = 0.0f;
   float w = 1.0f;
   u32 color = 0xffffffffu;
+};
+
+struct MultiStreamPositionVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float w = 1.0f;
+};
+
+struct MultiStreamTexcoordVertex {
+  float pad0 = 0.0f;
+  float pad1 = 0.0f;
+  float pad2 = 0.0f;
+  float u0 = 0.0f;
+  float v0 = 0.0f;
+  float u1 = 0.0f;
+  float v1 = 0.0f;
 };
 
 std::string trim(std::string_view text) {
@@ -1095,6 +1114,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-vs-multistream-textured-quad") {
+    test.drawDxmt9VsMultistreamTexturedQuad = true;
+    return;
+  }
+
   if (auto clear = parseClear(line)) {
     test.clearColor = *clear;
     return;
@@ -1561,6 +1585,68 @@ void drawDxmt9VsColorTriangle(Device& device) {
   }
 }
 
+template <typename T, size_t N>
+std::shared_ptr<Buffer> createVertexBufferWithData(
+    Device& device,
+    const std::array<T, N>& data) {
+  auto buffer = device.createBuffer({
+      static_cast<u32>(sizeof(T) * N),
+      Pool::Default,
+      UsageVertexBuffer,
+  });
+  if (!buffer) {
+    fail("dxmt9 vertex buffer creation failed");
+  }
+  auto region = buffer->lock(0, sizeof(T) * N, 0);
+  if (!region.data || region.pitch < sizeof(T) * N) {
+    fail("dxmt9 vertex buffer lock failed");
+  }
+  std::memcpy(region.data, data.data(), sizeof(T) * N);
+  buffer->unlock();
+  return buffer;
+}
+
+void drawDxmt9VsMultistreamTexturedQuad(Device& device) {
+  constexpr u32 kDeclUsageTexcoord = 5u;
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat4, 0, kDeclUsagePosition, 0},
+      VertexElement{1, 12, 1u, 0, kDeclUsageTexcoord, 0},
+      VertexElement{1, 20, 1u, 0, kDeclUsageTexcoord, 1},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 VS multistream vertex declaration setup failed");
+  }
+
+  const std::array<MultiStreamPositionVertex, 6> positions{
+      MultiStreamPositionVertex{-1.0f, 1.0f, 0.0f, 1.0f},
+      MultiStreamPositionVertex{1.0f, 1.0f, 0.0f, 1.0f},
+      MultiStreamPositionVertex{-1.0f, -1.0f, 0.0f, 1.0f},
+      MultiStreamPositionVertex{1.0f, 1.0f, 0.0f, 1.0f},
+      MultiStreamPositionVertex{1.0f, -1.0f, 0.0f, 1.0f},
+      MultiStreamPositionVertex{-1.0f, -1.0f, 0.0f, 1.0f},
+  };
+  const std::array<MultiStreamTexcoordVertex, 6> texcoords{
+      MultiStreamTexcoordVertex{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.25f, 0.25f},
+      MultiStreamTexcoordVertex{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.25f, 0.25f},
+      MultiStreamTexcoordVertex{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.25f, 0.25f},
+      MultiStreamTexcoordVertex{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.25f, 0.25f},
+      MultiStreamTexcoordVertex{0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.25f, 0.25f},
+      MultiStreamTexcoordVertex{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.25f, 0.25f},
+  };
+
+  auto positionBuffer = createVertexBufferWithData(device, positions);
+  auto texcoordBuffer = createVertexBufferWithData(device, texcoords);
+  if (device.setStreamSource(0, positionBuffer, 0, sizeof(MultiStreamPositionVertex)) != D3D_OK) {
+    fail("dxmt9 VS multistream stream0 setup failed");
+  }
+  if (device.setStreamSource(1, texcoordBuffer, 0, sizeof(MultiStreamTexcoordVertex)) != D3D_OK) {
+    fail("dxmt9 VS multistream stream1 setup failed");
+  }
+  if (device.drawPrimitive(PrimitiveType::TriangleList, 2, 0) != D3D_OK) {
+    fail("dxmt9 VS multistream textured quad draw failed");
+  }
+}
+
 void expectContains(const std::string& haystack, const std::string& needle, const std::string& path) {
   if (haystack.find(needle) == std::string::npos) {
     std::ostringstream out;
@@ -1601,7 +1687,9 @@ void runCorpusFile(const std::string& path) {
   const bool needsRuntime = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
                             test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadTex2 ||
                             test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
-                            test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty() ||
+                            test.drawDxmt9VsColorTriangle ||
+                            test.drawDxmt9VsMultistreamTexturedQuad ||
+                            !test.solidRectDraws.empty() ||
                             !test.textureSetups.empty() || !test.samplerSetups.empty() ||
                             !test.textureStageSetups.empty() || !test.textureTransformSetups.empty() ||
                             !test.textureBinds.empty() || !test.renderTargetSetups.empty() ||
@@ -1705,7 +1793,9 @@ void runCorpusFile(const std::string& path) {
   const bool needsClear = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
                           test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadTex2 ||
                           test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
-                          test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty() ||
+                          test.drawDxmt9VsColorTriangle ||
+                          test.drawDxmt9VsMultistreamTexturedQuad ||
+                          !test.solidRectDraws.empty() ||
                           !test.renderTargetSetups.empty();
   if (needsClear) {
     const auto clearColor = test.clearColor.value_or(ColorRGBA{0.0f, 0.0f, 0.0f, 1.0f});
@@ -1791,6 +1881,16 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9VsColorTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9VsMultistreamTexturedQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsMultistreamTexturedQuad(*device);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }
