@@ -124,6 +124,19 @@ FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
       std::bit_cast<f32>(core::flatStateOr(rs, RS_FOG_END, std::bit_cast<u32>(1.0f)));
   out.fogDensity =
       std::bit_cast<f32>(core::flatStateOr(rs, RS_FOG_DENSITY, std::bit_cast<u32>(1.0f)));
+  for (u32 stage = 0; stage < core::kMaxTextureStages; ++stage) {
+    const auto& tss = state.hot->textureStageStates[stage];
+    out.bumpEnvMat[stage] = {
+        std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVMAT00, 0u)),
+        std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVMAT01, 0u)),
+        std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVMAT10, 0u)),
+        std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVMAT11, 0u)),
+    };
+    out.bumpEnvLum[stage] = {
+        std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVLSCALE, 0u)),
+        std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVLOFFSET, 0u)),
+    };
+  }
   return out;
 }
 

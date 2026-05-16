@@ -38,24 +38,36 @@ This table reflects:
 - native source-contract coverage in `tests/native/shader/shader_transform_spec.cpp`
 - `python3 scripts/tools/shader_corpus_tool.py gaps`
 
-The corpus report currently has 61 entries: 60 passing and 1 failing
-(`render_state/dxmt9_alpha_test_readback.shader_test`). It reports 64 covered
-passing opcodes, 18 missing opcodes, and 84/711 covered model/opcode pairs.
+The corpus report currently has 70 passing entries. It reports 65 covered
+passing opcodes, 18 corpus-missing legacy texture opcodes, and 84/711 covered
+model/opcode pairs. Source-contract coverage now exists for SM1 legacy texture
+lowering, but runtime corpus coverage for `ps_1_x` / `vs_1_1` remains missing.
 
 ## Model Status
 
 | Model scope | Status | Evidence / gap |
 |---|---|---|
 | `ps_2_0`, `ps_3_0`, `vs_2_0`, `vs_3_0` | implemented, partial evidence | Decoder accepts SM2/SM3 and corpus has passing coverage, including a runtime `vs_2_0` color-triangle probe. Model/opcode pair coverage remains sparse, so a missing corpus pair is not automatically a missing lowering. |
-| `ps_1_1`, `ps_1_2`, `ps_1_3`, `ps_1_4`, `vs_1_1` | policy-rejected | `translateD3DBytecodeToSpirv()` rejects `module.major < 2` with `only SM 2.x and 3.x bytecode is supported`. Native D3DX is therefore required to avoid Wine/vkd3d-shader's SM1 compiler blocker for current 3DMark06 runs. |
+| `ps_1_1`, `ps_1_2`, `ps_1_3`, `ps_1_4` | implemented, source-contract evidence only | Decoder accepts SM1 pixel bytecode and version-sensitive legacy texture operand counts. The MSL emitter lowers the SM1 legacy texture family listed below. Runtime corpus/readback coverage is still missing. Native D3DX remains useful for avoiding Wine/vkd3d-shader's SM1 HLSL compiler blocker, but direct SM1 bytecode is no longer policy-rejected. |
+| `vs_1_1` | accepted, sparse evidence | Decoder accepts `vs_1_1`; common arithmetic/output paths share the existing vertex emitter. Dedicated runtime corpus coverage is still missing. |
 
 ## Opcode Status
 
 | Classification | Opcodes | Current evidence | Missing evidence / action |
 |---|---|---|---|
-| implemented, corpus covered | `ABS`, `ADD`, `BREAK`, `BREAKC`, `BREAKP`, `CALL`, `CALLNZ`, `CMP`, `CND`, `CRS`, `DCL`, `DEF`, `DEFB`, `DEFI`, `DP2ADD`, `DP3`, `DP4`, `DSX`, `DSY`, `ELSE`, `ENDIF`, `ENDLOOP`, `ENDREP`, `EXP`, `EXPP`, `FRC`, `IF`, `IFC`, `LABEL`, `LOG`, `LOGP`, `LOOP`, `LRP`, `M3x2`, `M3x3`, `M3x4`, `M4x3`, `M4x4`, `MAD`, `MAX`, `MIN`, `MOV`, `MOVA`, `MUL`, `NOP`, `NRM`, `POW`, `RCP`, `REP`, `RET`, `RSQ`, `SETP`, `SGE`, `SGN`, `SINCOS`, `SLT`, `SUB`, `TEX`, `TEXKILL`, `TEXLDD`, `TEXLDL` | Fixed operand decode and real MSL emission exist. Native source-contract tests cover decode/classification, arithmetic, transcendental, matrix, texture LOD, flow control, constants, modifiers, semantics, indexed constants, `TEXKILL`, `BREAKC`, and `CALLNZ`; corpus has at least one passing entry for each listed opcode. `texkill-cf1`/`texkill-cf2` and `shader-complete-cf1` provide app-level evidence that shader opcode support no longer trips in the current 3DMark06 path. | Broaden model/opcode pair coverage. Continue black-screen investigation outside the current shader opcode surface. |
-| deterministically unsupported | `TEXCOORD`, `TEXBEM`, `TEXBEML`, `TEXREG2AR`, `TEXREG2GB`, `TEXM3x2PAD`, `TEXM3x2TEX`, `TEXM3x3PAD`, `TEXM3x3TEX`, `TEXM3x3DIFF`, `TEXM3x3SPEC`, `TEXM3x3VSPEC`, `BEM`, `TEXDEPTH`, `TEXREG2RGB`, `TEXDP3TEX`, `TEXM3x2DEPTH`, `TEXDP3`, `TEXM3x3` | Opcode names are stable and all legacy texture opcodes now throw `unsupported legacy texture opcode: <name>` instead of silently no-oping. `opcode_audit_spec` keeps the legacy family out of fully-supported texture/sample classification. | Implement only when app evidence requires them. For current 3DMark06 native-D3DX runs, SM1 legacy texture direct-bytecode support remains out of scope. |
+| implemented, corpus covered | `ABS`, `ADD`, `BREAK`, `BREAKC`, `BREAKP`, `CALL`, `CALLNZ`, `CMP`, `CND`, `CRS`, `DCL`, `DEF`, `DEFB`, `DEFI`, `DP2ADD`, `DP3`, `DP4`, `DSX`, `DSY`, `ELSE`, `ENDIF`, `ENDLOOP`, `ENDREP`, `EXP`, `EXPP`, `FRC`, `IF`, `IFC`, `LABEL`, `LOG`, `LOGP`, `LOOP`, `LRP`, `M3x2`, `M3x3`, `M3x4`, `M4x3`, `M4x4`, `MAD`, `MAX`, `MIN`, `MOV`, `MOVA`, `MUL`, `NOP`, `NRM`, `POW`, `RCP`, `REP`, `RET`, `RSQ`, `SETP`, `SGE`, `SGN`, `SINCOS`, `SLT`, `SUB`, `TEX`, `TEXKILL`, `TEXLDD`, `TEXLDL` | Fixed operand decode and real MSL emission exist. Native source-contract tests cover decode/classification, arithmetic, transcendental, matrix, texture LOD, flow control, constants, all known D3D source modifiers, semantics, source and constant-destination indexed constants, `TEXKILL`, `BREAKC`, and `CALLNZ`; corpus has at least one passing entry for each listed opcode. `texkill-cf1`/`texkill-cf2` and `shader-complete-cf1` provide app-level evidence that shader opcode support no longer trips in the current 3DMark06 path. | Broaden model/opcode pair coverage. Continue black-screen investigation outside the current shader opcode surface. |
+| implemented, source-contract covered | `TEXCOORD`, `TEXBEM`, `TEXBEML`, `TEXREG2AR`, `TEXREG2GB`, `TEXM3x2PAD`, `TEXM3x2TEX`, `TEXM3x3PAD`, `TEXM3x3TEX`, `TEXM3x3SPEC`, `TEXM3x3VSPEC`, `BEM`, `TEXDEPTH`, `TEXREG2RGB`, `TEXDP3TEX`, `TEXM3x2DEPTH`, `TEXDP3`, `TEXM3x3` | `shader_transform_spec` covers ps_1_1 `texcoord`/`tex`, ps_1_4 `texcrd`/`texld`/`texdepth`/`bem`, and ps_1_3 bump, register-remap, dot-product, matrix, specular, vspec, and depth lowering source contracts. `FfpPsConsts` now carries bump-env matrix/luminance state used by `TEXBEM`, `TEXBEML`, and `BEM`. | Add shader-runner corpus/readback coverage for representative `ps_1_x` paths and app-level revalidation. |
+| reserved / deterministically unsupported | `TEXM3x3DIFF` | Opcode name remains stable, but the slot has no D3D9/DXVK semantic and throws `reserved legacy texture opcode: texm3x3diff`. | Keep as an explicit reserved path unless a real app requires a concrete vendor behavior. |
 | metadata / terminators | `COMMENT`, `END`, `PHASE` | Decoder skips comments, stops at `END`, and treats `PHASE` as no-op metadata. | No app blocker known. Keep parser tests covering comments and instruction alignment. |
+
+## Shader Operand Boundary Status
+
+| Boundary | Status | Contract |
+|---|---|---|
+| Source modifiers | implemented | `none`, `negate`, `bias`, `bias-negate`, `sign`, `sign-negate`, `complement`, `x2`, `x2-negate`, `dz`, `dw`, `abs`, `neg-abs`, and `not` lower to deterministic MSL expressions. Reserved modifier values still throw `unsupported D3D source modifier N`. |
+| Source relative addressing | implemented | Indexed constant reads lower to clamped `cFloat` / `cInt` / `cBool` array access. |
+| Destination relative addressing | limited | Indexed constant destinations lower to clamped mutable constant-array writes. Non-constant relative destinations, including temp-register writes, throw `destination relative addressing is only supported for constant registers`. |
+| Vertex `DepthOut` destination | invalid | Pixel `oDepth` remains supported. Vertex-stage `DepthOut` is rejected as `vertex depth output register is invalid` rather than being mis-mapped to clip-space position. |
 
 ## 3DMark06 Re-validation
 

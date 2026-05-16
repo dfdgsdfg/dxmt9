@@ -5,7 +5,7 @@ classification / source-contract over the lower decoder API.
 
 | Spec | Covers (R-* anchor) |
 |------|---------------------|
-| `shader_transform_spec.cpp` | D3DBC decode/classification fixtures (stage/version, opcodes, registers, swizzles/masks/modifiers, predicates, samplers, IF/ELSE/LOOP/REP/CALL flow, MAD/DP/CMP/SLT/SGE/POW/SINCOS/LOG/EXP/matrix/TEXLDD/TEXLDL source-contract matrix, deterministic unsupported relative-addressing errors) (`R-BACK-4.1-4.5`, `R-CORE-5.*`) |
+| `shader_transform_spec.cpp` | D3DBC decode/classification fixtures (stage/version, opcodes, registers, swizzles/masks/modifiers, predicates, samplers, IF/ELSE/LOOP/REP/CALL flow, MAD/DP/CMP/SLT/SGE/POW/SINCOS/LOG/EXP/matrix/TEXLDD/TEXLDL source-contract matrix, indexed constant relative addressing, deterministic unsupported invalid destination-addressing errors) (`R-BACK-4.1-4.5`, `R-CORE-5.*`) |
 
 ## Running
 

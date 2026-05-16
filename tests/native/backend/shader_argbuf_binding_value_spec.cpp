@@ -7,7 +7,7 @@
 //   FlatDrawStateRecord texture slot N
 //     -> ShaderSourceContext::textures[N]
 //     -> Stage 1 MSL texN/sampN [[texture(N)]]/[[sampler(N)]]
-//     -> Stage 2 MSL texN/sampN aliases from abuf->textures[N]/samplers[N]
+//     -> Stage 2 MSL texN/sampN aliases from abuf->textures2d[N]/samplers[N]
 //     -> Stage 2 descriptor ids texture=4+N, sampler=12+N.
 //     -> Encoder call-plan values consumed by setFragmentTexture/Sampler,
 //        setViewport, setScissorRect, and setRasterizerCullMode.
@@ -114,7 +114,7 @@ std::string stage1SamplerBinding(u32 stage) {
 
 std::string stage2TextureAlias(u32 stage) {
   std::ostringstream out;
-  out << "texture2d<float> tex" << stage << " = abuf->textures[" << stage << "]";
+  out << "texture2d<float> tex" << stage << " = abuf->textures2d[" << stage << "]";
   return out.str();
 }
 
@@ -175,12 +175,11 @@ FfpPixelKey makeSingleTextureStageKey(u32 stage) {
 }
 
 std::uint32_t textureArgbufId(u32 stage) {
-  return dxmt9::shaders::kArgbufHybridConstantBufferCount + stage;
+  return dxmt9::shaders::kArgbufHybridTexture2DBase + stage;
 }
 
 std::uint32_t samplerArgbufId(u32 stage) {
-  return dxmt9::shaders::kArgbufHybridConstantBufferCount +
-         dxmt9::shaders::kArgbufHybridTextureSlotCount + stage;
+  return dxmt9::shaders::kArgbufHybridSamplerBase + stage;
 }
 
 // ---------------------------------------------------------------------
@@ -245,7 +244,7 @@ void assertShaderSlotMapsToSameStage(u32 stage) {
   checkContains(stage2, "[[buffer(30)]]",
                 "Stage 2 translated shader binds the argbuf at slot 30");
   checkContains(stage2, stage2TextureAlias(stage),
-                "Stage 2 translated shader aliases texN from argbuf textures[N]");
+                "Stage 2 translated shader aliases texN from argbuf textures2d[N]");
   checkContains(stage2, stage2SamplerAlias(stage),
                 "Stage 2 translated shader aliases sampN from argbuf samplers[N]");
   checkContains(stage2, slotName("tex", stage) + ".sample(" + slotName("samp", stage),
@@ -263,9 +262,9 @@ void assertShaderSlotMapsToSameStage(u32 stage) {
 
   checkEq(static_cast<std::uint32_t>(textureDesc.argumentType),
           static_cast<std::uint32_t>(WMTArgumentTypeTexture),
-          "Stage 2 descriptor for textures[N] is a texture");
+          "Stage 2 descriptor for textures2d[N] is a texture");
   checkEq(static_cast<std::uint32_t>(textureDesc.index), textureId,
-          "Stage 2 texture descriptor index is 4 + N");
+          "Stage 2 2D texture descriptor index is 4 + N");
   checkEq(static_cast<std::uint32_t>(samplerDesc.argumentType),
           static_cast<std::uint32_t>(WMTArgumentTypeSampler),
           "Stage 2 descriptor for samplers[N] is a sampler");
@@ -301,7 +300,7 @@ void testNullFfpTextureSlotDoesNotMaterializeTextureBinding() {
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 FFP still binds argbuf for constants with no texture");
   checkNotContains(src, stage2TextureAlias(kStage),
-                   "null FFP texture stage does not alias abuf textures[N]");
+                   "null FFP texture stage does not alias abuf textures2d[N]");
   checkNotContains(src, stage2SamplerAlias(kStage),
                    "null FFP texture stage does not alias abuf samplers[N]");
   checkNotContains(src, "[[texture(5)]]",

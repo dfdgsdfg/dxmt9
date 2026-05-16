@@ -87,6 +87,11 @@ struct RenderTargetSetup {
   Format format = Format::A8R8G8B8;
 };
 
+struct ClipPlaneSetup {
+  u32 index = 0;
+  ClipPlane plane{};
+};
+
 struct RenderStateSetup {
   u32 state = 0;
   u32 value = 0;
@@ -115,6 +120,7 @@ struct CorpusTest {
   std::vector<TextureTransformSetup> textureTransformSetups;
   std::vector<TextureBind> textureBinds;
   std::vector<RenderTargetSetup> renderTargetSetups;
+  std::vector<ClipPlaneSetup> clipPlaneSetups;
   std::vector<RenderStateSetup> renderStateSetups;
   std::vector<SolidRectDraw> solidRectDraws;
   std::vector<SolidQuadXyzDepthDraw> solidQuadXyzDepthDraws;
@@ -598,6 +604,33 @@ u32 parseTextureFilter(std::string_view text) {
 }
 
 u32 parseU32Value(std::string_view text);
+u32 parseBoolState(std::string_view text);
+
+u32 bitCastFloatState(std::string_view text) {
+  size_t parsed = 0;
+  const auto value = std::stof(std::string(text), &parsed);
+  if (parsed != text.size() || !std::isfinite(value)) {
+    fail("invalid float render-state value");
+  }
+  return std::bit_cast<u32>(value);
+}
+
+u32 parseFogMode(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "none" || token == "off" || token == "disabled") {
+    return static_cast<u32>(FogMode::None);
+  }
+  if (token == "linear") {
+    return static_cast<u32>(FogMode::Linear);
+  }
+  if (token == "exp") {
+    return static_cast<u32>(FogMode::Exp);
+  }
+  if (token == "exp2") {
+    return static_cast<u32>(FogMode::Exp2);
+  }
+  return parseU32Value(text);
+}
 
 u32 parseBlendFactor(std::string_view text) {
   const auto token = normalizeToken(text);
@@ -666,6 +699,20 @@ u32 parseBlendOp(std::string_view text) {
   }
   if (token == "max") {
     return static_cast<u32>(BlendOp::Max);
+  }
+  return parseU32Value(text);
+}
+
+u32 parseFillMode(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "point") {
+    return 1u;
+  }
+  if (token == "wireframe" || token == "line" || token == "lines") {
+    return 2u;
+  }
+  if (token == "solid" || token == "fill") {
+    return 3u;
   }
   return parseU32Value(text);
 }
@@ -905,6 +952,8 @@ std::optional<SamplerSetup> parseDxmt9Sampler(std::string_view line) {
       sampler.states[SAMP_MAG_FILTER] = parseTextureFilter(value);
     } else if (key == "mipfilter") {
       sampler.states[SAMP_MIP_FILTER] = parseTextureFilter(value);
+    } else if (key == "srgbtexture" || key == "srgb") {
+      sampler.states[SAMP_SRGB_TEXTURE] = parseBoolState(value);
     } else {
       fail("unsupported dxmt9-sampler state");
     }
@@ -1004,6 +1053,27 @@ std::optional<RenderTargetSetup> parseDxmt9RenderTarget(std::string_view line) {
   }
   target.format = parseDxmt9Format(format);
   return target;
+}
+
+std::optional<ClipPlaneSetup> parseDxmt9ClipPlane(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  ClipPlaneSetup clipPlane;
+  if (!(stream >> command) || command != "dxmt9-clip-plane") {
+    return std::nullopt;
+  }
+  if (!(stream >> clipPlane.index >> clipPlane.plane[0] >> clipPlane.plane[1] >>
+        clipPlane.plane[2] >> clipPlane.plane[3])) {
+    fail("invalid dxmt9-clip-plane command");
+  }
+  if (clipPlane.index >= kMaxClipPlanes) {
+    fail("dxmt9-clip-plane index out of range");
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-clip-plane has extra values");
+  }
+  return clipPlane;
 }
 
 std::optional<SolidRectDraw> parseDxmt9SolidRect(std::string_view line) {
@@ -1138,6 +1208,32 @@ bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
       sawState = true;
     } else if (key == "cull" || key == "cullmode") {
       test.cullMode = parseCullMode(value);
+      sawState = true;
+    } else if (key == "fill" || key == "fillmode") {
+      test.renderStateSetups.push_back({RS_FILL_MODE, parseFillMode(value)});
+      sawState = true;
+    } else if (key == "clipplanes" || key == "clipplane" ||
+               key == "clipplaneenable" || key == "clipplaneenabled") {
+      test.renderStateSetups.push_back({RS_CLIP_PLANE_ENABLE, parseU32Value(value)});
+      sawState = true;
+    } else if (key == "srgbwrite" || key == "srgbwriteenable" ||
+               key == "srgbwriteenabled") {
+      test.renderStateSetups.push_back({RS_SRGB_WRITE_ENABLE, parseBoolState(value)});
+      sawState = true;
+    } else if (key == "fogenable" || key == "fogenabled" || key == "fog") {
+      test.renderStateSetups.push_back({RS_FOG_ENABLE, parseBoolState(value)});
+      sawState = true;
+    } else if (key == "fogtablemode" || key == "fogmode") {
+      test.renderStateSetups.push_back({RS_FOG_TABLE_MODE, parseFogMode(value)});
+      sawState = true;
+    } else if (key == "fogstart") {
+      test.renderStateSetups.push_back({RS_FOG_START, bitCastFloatState(value)});
+      sawState = true;
+    } else if (key == "fogend") {
+      test.renderStateSetups.push_back({RS_FOG_END, bitCastFloatState(value)});
+      sawState = true;
+    } else if (key == "fogdensity") {
+      test.renderStateSetups.push_back({RS_FOG_DENSITY, bitCastFloatState(value)});
       sawState = true;
     } else if (key == "alphablend" || key == "alphablendenable" ||
                key == "alphablendenabled") {
@@ -1509,6 +1605,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
 
   if (auto target = parseDxmt9RenderTarget(line)) {
     test.renderTargetSetups.push_back(*target);
+    return;
+  }
+
+  if (auto clipPlane = parseDxmt9ClipPlane(line)) {
+    test.clipPlaneSetups.push_back(*clipPlane);
     return;
   }
 
@@ -2304,6 +2405,7 @@ void runCorpusFile(const std::string& path) {
                             !test.textureSetups.empty() || !test.samplerSetups.empty() ||
                             !test.textureStageSetups.empty() || !test.textureTransformSetups.empty() ||
                             !test.textureBinds.empty() || !test.renderTargetSetups.empty() ||
+                            !test.clipPlaneSetups.empty() ||
                             !test.renderStateSetups.empty() ||
                             test.viewport.has_value() || test.scissor.has_value() ||
                             test.colorWriteMask.has_value() || test.zEnable.has_value() ||
@@ -2398,6 +2500,11 @@ void runCorpusFile(const std::string& path) {
   applyDxmt9TextureStageSetups(*device, test);
   applyDxmt9TextureTransforms(*device, test);
   applyDxmt9TextureBinds(*device, test, dxmt9Textures);
+  for (const auto& clipPlane : test.clipPlaneSetups) {
+    if (device->setClipPlane(clipPlane.index, clipPlane.plane) != D3D_OK) {
+      fail("dxmt9 clip-plane setup failed");
+    }
+  }
 
   if (test.alphaTestEnable) {
     device->setRenderState(RS_ALPHA_TEST_ENABLE, 1);

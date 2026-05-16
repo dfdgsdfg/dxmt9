@@ -69,6 +69,7 @@ struct SpirvModule {
   D3DShaderStage stage = D3DShaderStage::Vertex;
   u32 major = 0;
   u32 minor = 0;
+  std::array<::dxmt9::core::TextureType, ::dxmt9::core::kMaxSamplers> samplerTextureTypes{};
   std::vector<D3DDecodedInstruction> instructions;
 };
 

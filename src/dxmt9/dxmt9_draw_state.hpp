@@ -57,8 +57,11 @@ struct FfpPsConsts {
   u32 alphaTestEnable = 0;
   u32 alphaTestFunc = static_cast<u32>(core::CompareFunc::Always);
   u32 fogMode = static_cast<u32>(core::FogMode::None);
+  u32 _pad = 0;
+  std::array<std::array<f32, 4>, core::kMaxTextureStages> bumpEnvMat{};
+  std::array<std::array<f32, 2>, core::kMaxTextureStages> bumpEnvLum{};
 };
-static_assert(sizeof(FfpPsConsts) == 44,
+static_assert(sizeof(FfpPsConsts) == 240,
               "FfpPsConsts layout must match MSL prelude declaration");
 
 // Per-draw push constants. Padded to 16 B so Metal setVertexBytes

@@ -516,7 +516,10 @@ void testBaseStateRecorderCapturesRasterTextureSamplerOrdering() {
   state.hot.renderStates.entries[0] = dxmt9::core::FlatStateEntry{
       dxmt9::core::RS_CULL_MODE,
       static_cast<u32>(dxmt9::core::CullMode::Ccw)};
-  state.hot.renderStates.count = 1u;
+  state.hot.renderStates.entries[1] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_FILL_MODE,
+      2u};
+  state.hot.renderStates.count = 2u;
   state.hot.textures[0] = harness.createBoundTexture(kTexture0, 64u, 64u);
   state.hot.textures[1] = harness.createBoundTexture(kTexture1, 32u, 32u);
   state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 4096u);
@@ -567,7 +570,7 @@ void testBaseStateRecorderCapturesRasterTextureSamplerOrdering() {
   check(raster.kind == RecordedKind::SetRasterizerState,
         "fifth base-state command sets rasterizer state");
   checkEq(static_cast<unsigned>(raster.fillMode),
-          static_cast<unsigned>(WMTTriangleFillModeFill),
+          static_cast<unsigned>(WMTTriangleFillModeLines),
           "raster fill mode");
   checkEq(static_cast<unsigned>(raster.cullMode),
           static_cast<unsigned>(WMTCullModeBack),

@@ -76,6 +76,7 @@ struct TextureRecord {
   // used only for shader binding; uploads, copies, and surface aliases keep
   // using the storage texture above.
   WMT::Reference<WMT::Texture> shaderReadTexture;
+  WMT::Reference<WMT::Texture> srgbShaderReadTexture;
   // R-BACK-5.7: storage-mode classification recorded at create time and
   // never updated. `needsStagingBlit` is true when CPU-side
   // `replaceRegion` is not the upload path (Private; or Managed on a
@@ -95,7 +96,10 @@ struct TextureRecord {
   WMT::Heap heap{};
 };
 
-inline WMT::Texture textureForShaderRead(const TextureRecord& record) noexcept {
+inline WMT::Texture textureForShaderRead(const TextureRecord& record, bool srgb = false) noexcept {
+  if (srgb && record.srgbShaderReadTexture) {
+    return WMT::Texture{record.srgbShaderReadTexture.handle};
+  }
   return record.shaderReadTexture ? WMT::Texture{record.shaderReadTexture.handle}
                                   : WMT::Texture{record.texture.handle};
 }
@@ -103,6 +107,7 @@ inline WMT::Texture textureForShaderRead(const TextureRecord& record) noexcept {
 struct SurfaceRecord {
   core::SurfaceDesc desc{};
   WMT::Reference<WMT::Texture> texture;
+  WMT::Reference<WMT::Texture> srgbTexture;
   WMT::Reference<WMT::Texture> resolveTexture;
   core::TextureHandle aliasTexture{};
   u32 level = 0;

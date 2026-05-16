@@ -45,8 +45,10 @@ using u64 = std::uint64_t;
 // position is stable across MSL versions:
 //
 //   id 0..3   : VsConsts / FfpVsConsts / PsConsts / FfpPsConsts pointers
-//   id 4..11  : 8 textures
-//   id 12..19 : 8 samplers
+//   id 4..11  : 8 2D textures
+//   id 12..19 : 8 cube textures
+//   id 20..27 : 8 3D textures
+//   id 28..35 : 8 samplers
 struct ArgumentDescriptors {
   std::array<WMTArgumentDescriptor, shaders::kArgbufHybridDescriptorCount> entries{};
 
@@ -220,8 +222,9 @@ u64 populateConstantBuffers(CommandQueue& queue,
                              const ArgbufRecorder* recorder = nullptr);
 
 // R-BACK-12.24 — populate the texture / sampler slots in the argbuf.
-// Writes one MTLResourceID per active stage at [[id(4..11)]] for
-// textures and [[id(12..19)]] for samplers. The pool resolves
+// Writes one MTLResourceID per active stage at the typed texture range
+// ([[id(4..11)]], [[id(12..19)]], or [[id(20..27)]]) and
+// [[id(28..35)]] for samplers. The pool resolves
 // per-stage texture handles to live `WMT::Texture` and the device is
 // asked for one `WMT::SamplerState` per stage. Stages without a bound
 // texture leave their argbuf entries unchanged.

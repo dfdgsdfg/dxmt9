@@ -85,6 +85,7 @@ struct ShaderVariantKey {
   // open when `argbufHybridEnabled()` holds and the pass is eligible.
   bool argbufHybridMode = false;
   u32 sampleCount = 1;
+  std::array<u32, core::kMaxTextureStages> textureTypes{};
   std::array<u32, core::kMaxRenderTargets> colorFormats{};
   std::array<BlendAttachmentKey, core::kMaxRenderTargets> blend{};
   u32 depthFormat = 0;

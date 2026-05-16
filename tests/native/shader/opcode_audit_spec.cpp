@@ -135,7 +135,7 @@ constexpr std::array<OpcodeAudit, 83> kOpcodeAudit = {{
     {bc::kD3DSIO_DP2ADD, "dp2add", 4, true, false, 1},
     {bc::kD3DSIO_DSX, "dsx", 2, true, false, 1},
     {bc::kD3DSIO_DSY, "dsy", 2, true, false, 1},
-    {bc::kD3DSIO_TEXLDD, "texldd", 3, true, true, 1},
+    {bc::kD3DSIO_TEXLDD, "texldd", 5, true, true, 1},
     {bc::kD3DSIO_SETP, "setp", 2, false, false, 1},
     {bc::kD3DSIO_TEXLDL, "texldl", 3, true, true, 1},
     {bc::kD3DSIO_BREAKP, "breakp", 2, false, false, 1},

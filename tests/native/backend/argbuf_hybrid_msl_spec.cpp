@@ -188,7 +188,7 @@ void testFfpPixelStage2BindingsTextured() {
                 "Stage 2 FFP pixel aliases psConsts off the argbuf");
   checkContains(src, "abuf->ffpPs",
                 "Stage 2 FFP pixel aliases ffpPs off the argbuf");
-  checkContains(src, "abuf->textures[0]",
+  checkContains(src, "abuf->textures2d[0]",
                 "Stage 2 FFP pixel aliases tex0 off the argbuf");
   checkContains(src, "abuf->samplers[0]",
                 "Stage 2 FFP pixel aliases samp0 off the argbuf");
@@ -315,8 +315,8 @@ void testTranslatedPixelStage2Bindings() {
                 "Stage 2 translated pixel aliases psConsts off the argbuf");
   checkContains(src, "abuf->ffpPs",
                 "Stage 2 translated pixel aliases ffpPs off the argbuf");
-  checkContains(src, "abuf->textures[2]",
-                "Stage 2 translated pixel aliases tex2 off argbuf textures[2]");
+  checkContains(src, "abuf->textures2d[2]",
+                "Stage 2 translated pixel aliases tex2 off argbuf textures2d[2]");
   checkContains(src, "abuf->samplers[2]",
                 "Stage 2 translated pixel aliases samp2 off argbuf samplers[2]");
   checkNotContains(src, "[[buffer(0)]]",

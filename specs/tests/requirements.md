@@ -180,7 +180,8 @@ derived from the dxmt9 backend itself.
 | Matrix | M4x4, M4x3, M3x4, M3x3, M3x2 | One test per opcode |
 | Flow control | IF/ELSE/ENDIF, REP/ENDREP, LOOP/ENDLOOP, CALL/RET | One test per construct |
 | VS-specific | MOVA (address register), SETP | One test per opcode |
-| Source modifiers | negate, abs, swizzle, partial swizzle | One test per modifier |
+| Source modifiers | all D3D source modifier tokens, swizzle, partial swizzle | One test per modifier group |
+| Relative addressing | source indexed constants, constant-destination indexed writes, invalid non-constant destination indexing | One test per boundary |
 | Write masks | `.x`, `.xy`, `.xyz`, `.xw`, out-of-order | One test per case |
 
 **R-TEST-1.4** The `.shader_test` files must follow dxmt9's documented

@@ -240,7 +240,7 @@ oracle-date = "2026-03-29"
 
 [[test]]
 file = "render_state/dxmt9_alpha_blend_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -249,11 +249,10 @@ models = ["ps_2_0"]
 opcodes = ["DEF", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-16"
-issue = "runtime alpha blend produces expected RGB but alpha channel remains source alpha instead of blended alpha"
 
 [[test]]
 file = "render_state/dxmt9_alpha_test_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -262,7 +261,18 @@ models = ["ps_2_0"]
 opcodes = ["ALPHA_TEST", "DEF", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-06"
-issue = "runtime alpha-test discard is generated but not applied in readback output"
+
+[[test]]
+file = "render_state/dxmt9_clip_plane_runtime_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
 
 [[test]]
 file = "render_state/dxmt9_color_write_mask.shader_test"
@@ -565,6 +575,42 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
+file = "render_state/dxmt9_ffp_fog_linear_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "render_state/dxmt9_fill_wireframe_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp", "ps_2_0"]
+opcodes = ["DEF", "MOV", "PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "render_state/dxmt9_srgb_write_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV", "PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
 file = "texture/dxmt9_sampler_clamp_overscan_readback.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -577,8 +623,20 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
+file = "texture/dxmt9_sampler_srgb_texture_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX", "PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
 file = "texture/dxmt9_texture_alpha_blend_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -587,7 +645,6 @@ models = ["ps_2_0"]
 opcodes = ["DCL", "MOV", "TEX"]
 oracle = "math-derivation"
 oracle-date = "2026-05-16"
-issue = "runtime texture alpha blend produces expected RGB but alpha channel remains source alpha instead of blended alpha"
 
 [[test]]
 file = "texture/dxmt9_texture_2x2.shader_test"

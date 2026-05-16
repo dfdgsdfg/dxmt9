@@ -137,6 +137,12 @@ void testBlendOperationFallbacks() {
 
   desc.rs.values[RS_BLEND_OP_ALPHA] = static_cast<u32>(BlendOp::Max);
   keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
+  checkEq(keys[0].alphaBlendOperation,
+          static_cast<u32>(BlendOp::Subtract),
+          "alpha blend op override is ignored when separate alpha blend is disabled");
+
+  desc.rs.values[RS_SEPARATE_ALPHA_BLEND_ENABLE] = 1u;
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   checkEq(keys[0].rgbBlendOperation,
           static_cast<u32>(BlendOp::Subtract),
           "RGB blend op remains independent from alpha override");
@@ -166,6 +172,15 @@ void testBlendFactorFallbacks() {
 
   desc.rs.values[RS_SRC_BLEND_ALPHA] = static_cast<u32>(BlendFactor::One);
   desc.rs.values[RS_DEST_BLEND_ALPHA] = static_cast<u32>(BlendFactor::Zero);
+  keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
+  checkEq(keys[0].sourceAlphaBlendFactor,
+          static_cast<u32>(BlendFactor::SrcAlpha),
+          "source alpha blend factor override is ignored when separate alpha blend is disabled");
+  checkEq(keys[0].destinationAlphaBlendFactor,
+          static_cast<u32>(BlendFactor::InvDestAlpha),
+          "destination alpha blend factor override is ignored when separate alpha blend is disabled");
+
+  desc.rs.values[RS_SEPARATE_ALPHA_BLEND_ENABLE] = 1u;
   keys = makeBlendKeys(makeFlatDrawFixture(desc).hot);
   checkEq(keys[0].sourceAlphaBlendFactor,
           static_cast<u32>(BlendFactor::One),

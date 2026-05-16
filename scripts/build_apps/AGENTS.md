@@ -15,8 +15,10 @@ None of these are wired to Meson tests; they are launched manually or by
 - `build_dx-sdk-tutorial07.sh` — DirectX SDK Tutorial07.
 - `build_dxmt9-water-rt.sh` — dxmt9 water render-target demo.
 - `build_d3d9_intent_probe.sh` — shared D3D9 intent probe app for FFP,
-  render-state, blit/copy, stateblock, query, and vertex-blend catalogue
-  entries.
+  render-state, blit/copy, stateblock, query, vertex-blend, texture transform,
+  generated texcoord, color-material, sysmem draw, dynamic-map, attached-RT,
+  format-conversion, reset/resource, depth/scissor, mipmap/update, MSAA resolve,
+  fog/depth-bias, indexed-UP, shader-edge, and D3D9Ex WSI catalogue entries.
 - `build_dxmt9-perf-bridge-empty.sh` — boundary B2 bridge-throughput probe.
 - `build_dxmt9-perf-chain-parametric.sh` — boundary B3+B4 sub-CB chain probe.
 - `build_dxmt9-perf-encode-replay.sh` — boundary-isolated encode-only probe.

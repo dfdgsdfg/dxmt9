@@ -508,11 +508,20 @@ WMTCullMode applyDebugCullOverride(WMTCullMode cullMode) {
   return cullMode;
 }
 
+WMTTriangleFillMode triangleFillModeFromRenderState(
+    const core::FlatStateSet<core::kMaxStateSlots>& renderStates) {
+  constexpr u32 kD3DFillWireframe = 2u;
+  return core::flatStateOr(renderStates, core::RS_FILL_MODE, 3u) == kD3DFillWireframe
+             ? WMTTriangleFillModeLines
+             : WMTTriangleFillModeFill;
+}
+
 void setRasterizerCullMode(EncodeContext& ctx,
                            WMT::RenderCommandEncoder& encoder,
+                           const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
                            WMTCullMode cullMode) {
   cullMode = applyDebugCullOverride(cullMode);
-  recordedSetRasterizerState(ctx, encoder, WMTTriangleFillModeFill, cullMode,
+  recordedSetRasterizerState(ctx, encoder, triangleFillModeFromRenderState(renderStates), cullMode,
                              WMTDepthClipModeClip, frontFaceWinding(),
                              0.0f, 0.0f, 0.0f);
   countRasterizerBind();
@@ -890,7 +899,11 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
       continue;
     }
     auto& attachment = passInfo.colors[i];
-    attachment.texture = surface->texture.handle;
+    const bool srgbWrite =
+        core::flatStateOr(hot.renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
+    attachment.texture =
+        (srgbWrite && surface->srgbTexture) ? surface->srgbTexture.handle
+                                            : surface->texture.handle;
     const bool discardAttachment = discardAfterPresent && i == 0;
     const bool clearAttachment =
         clearMatchesColorAttachment(clear, i, hot.colorAttachments[i].handle);
@@ -1468,7 +1481,7 @@ bool encodeDraw(EncodeContext& ctx,
       countViewportBind();
       recordedSetScissorRect(ctx, encoder, rasterPlan.scissor);
       countScissorBind();
-      setRasterizerCullMode(ctx, encoder, rasterPlan.cullMode);
+      setRasterizerCullMode(ctx, encoder, hot.renderStates, rasterPlan.cullMode);
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};
@@ -1995,8 +2008,10 @@ bool encodeDraw(EncodeContext& ctx,
               << " levels=" << texture->desc.levels;
           emitTextureTraceLine(out.str());
         }
+        const bool srgbTexture =
+            core::flatStateOr(hot.samplerStates[stage], core::SAMP_SRGB_TEXTURE, 0u) != 0;
         recordedSetFragmentTexture(ctx, encoder,
-                                   resources::textureForShaderRead(*texture),
+                                   resources::textureForShaderRead(*texture, srgbTexture),
                                    static_cast<std::uint8_t>(stage));
         countTextureBind();
       }

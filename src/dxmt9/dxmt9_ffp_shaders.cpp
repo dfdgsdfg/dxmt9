@@ -471,7 +471,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // fragment entry point takes a single argument buffer at slot 30 and
   // reads `psConsts`/`ffpPs` plus textures/samplers off the argbuf.
   // The body code references `texN`/`sampN` locals so we materialize
-  // each active stage's texture and sampler off `abuf->textures[N]` /
+  // each active stage's texture and sampler off `abuf->textures2d[N]` /
   // `abuf->samplers[N]` at function entry.
   if (textured) {
     if (argbufHybrid) {
@@ -482,7 +482,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  constant FfpPsConsts& ffpPs = *abuf->ffpPs;\n";
       for (size_t i = 0; i < activeStages.size(); ++i) {
         const size_t stage = activeStages[i];
-        out << "  texture2d<float> tex" << stage << " = abuf->textures[" << stage << "];\n";
+        out << "  texture2d<float> tex" << stage << " = abuf->textures2d[" << stage << "];\n";
         out << "  sampler samp" << stage << " = abuf->samplers[" << stage << "];\n";
       }
     } else {
@@ -596,7 +596,18 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << "  if (!pass) { discard_fragment(); }\n";
   }
   if (key.fogMode != FogMode::None) {
-    out << "  float fog = clamp(in.fogFactor, 0.0, 1.0);\n";
+    out << "  float fogDepth = color.a;\n";
+    out << "  float fog = 1.0f;\n";
+    out << "  if (ffpPs.fogMode == 1u) {\n";
+    out << "    fog = clamp((ffpPs.fogEnd - fogDepth) /\n";
+    out << "                max(ffpPs.fogEnd - ffpPs.fogStart, 1.0e-6f),\n";
+    out << "                0.0f, 1.0f);\n";
+    out << "  } else if (ffpPs.fogMode == 2u) {\n";
+    out << "    fog = clamp(exp(-ffpPs.fogDensity * fogDepth), 0.0f, 1.0f);\n";
+    out << "  } else if (ffpPs.fogMode == 3u) {\n";
+    out << "    float d = ffpPs.fogDensity * fogDepth;\n";
+    out << "    fog = clamp(exp(-(d * d)), 0.0f, 1.0f);\n";
+    out << "  }\n";
     out << "  float4 fogColor = float4(0.5, 0.5, 0.5, 1.0);\n";
     out << "  color = mix(fogColor, color, fog);\n";
   }
@@ -671,6 +682,9 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   out << "  uint alphaTestEnable;\n";
   out << "  uint alphaTestFunc;\n";
   out << "  uint fogMode;\n";
+  out << "  uint _pad;\n";
+  out << "  float4 bumpEnvMat[" << kMaxTextureStages << "];\n";
+  out << "  float2 bumpEnvLum[" << kMaxTextureStages << "];\n";
   out << "};\n";
   if (argbufHybrid) {
     // R-BACK-12.22..12.26 MSL routing — tile kernel reads `ffpPs`

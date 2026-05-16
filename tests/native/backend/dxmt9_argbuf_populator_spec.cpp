@@ -287,11 +287,8 @@ void testPopulateResourceBindingsRecordsTextureSamplerWrites() {
   constexpr obj_handle_t kTexture1Storage = 0x6000000000000011ull;
   constexpr obj_handle_t kTexture1ShaderRead = 0x6000000000000012ull;
   constexpr obj_handle_t kSampler = 0x6000000000000020ull;
-  constexpr std::uint32_t kTextureBase =
-      dxmt9::shaders::kArgbufHybridConstantBufferCount;
-  constexpr std::uint32_t kSamplerBase =
-      dxmt9::shaders::kArgbufHybridConstantBufferCount +
-      dxmt9::shaders::kArgbufHybridTextureSlotCount;
+  constexpr std::uint32_t kTextureBase = dxmt9::shaders::kArgbufHybridTexture2DBase;
+  constexpr std::uint32_t kSamplerBase = dxmt9::shaders::kArgbufHybridSamplerBase;
 
   Harness harness;
   auto texture0 = harness.createTexture(kTexture0);
@@ -337,7 +334,7 @@ void testPopulateResourceBindingsRecordsTextureSamplerWrites() {
   checkEq(sampler0Command.handle, kSampler,
           "sampler0 writes the recorder sampler handle");
   checkEq(sampler0Command.index, kSamplerBase,
-          "sampler0 writes argbuf id 12");
+          "sampler0 writes argbuf id 28");
 
   const auto& texture1Command = commandAt(capture, 2, "missing texture1 write");
   check(texture1Command.kind == RecordedKind::SetTexture,
@@ -353,7 +350,7 @@ void testPopulateResourceBindingsRecordsTextureSamplerWrites() {
   checkEq(sampler1Command.handle, kSampler,
           "sampler1 writes the recorder sampler handle");
   checkEq(sampler1Command.index, kSamplerBase + 1u,
-          "sampler1 writes argbuf id 13");
+          "sampler1 writes argbuf id 29");
 }
 
 }  // namespace

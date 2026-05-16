@@ -26,6 +26,23 @@ constexpr u32 kConstantBlockAlignment = 16u;
 // is metadata for the encoder, not a runtime constraint on the bound
 // texture.
 constexpr u32 kTextureType2D = 2u;
+constexpr u32 kTextureTypeCube = 5u;
+constexpr u32 kTextureType3D = 7u;
+
+void appendTextureDescriptors(ArgumentDescriptors& descriptors,
+                              std::size_t& cursor,
+                              u32 baseIndex,
+                              u32 textureType) {
+  for (u32 i = 0; i < shaders::kArgbufHybridTextureSlotCount; ++i) {
+    auto& d = descriptors.entries[cursor++];
+    d.argumentType = WMTArgumentTypeTexture;
+    d.index = baseIndex + i;
+    d.arrayLength = 0;
+    d.access = kArgumentAccessReadOnly;
+    d.textureType = textureType;
+    d.constantBlockAlignment = 0;
+  }
+}
 
 }  // namespace
 
@@ -45,23 +62,15 @@ ArgumentDescriptors buildArgumentDescriptors() {
     d.constantBlockAlignment = kConstantBlockAlignment;
   }
 
-  // 8 texture descriptors at [[id(4)..id(11)]].
-  for (u32 i = 0; i < shaders::kArgbufHybridTextureSlotCount; ++i) {
-    auto& d = descriptors.entries[cursor++];
-    d.argumentType = WMTArgumentTypeTexture;
-    d.index = shaders::kArgbufHybridConstantBufferCount + i;
-    d.arrayLength = 0;
-    d.access = kArgumentAccessReadOnly;
-    d.textureType = kTextureType2D;
-    d.constantBlockAlignment = 0;
-  }
+  appendTextureDescriptors(descriptors, cursor, shaders::kArgbufHybridTexture2DBase, kTextureType2D);
+  appendTextureDescriptors(descriptors, cursor, shaders::kArgbufHybridTextureCubeBase, kTextureTypeCube);
+  appendTextureDescriptors(descriptors, cursor, shaders::kArgbufHybridTexture3DBase, kTextureType3D);
 
-  // 8 sampler descriptors at [[id(12)..id(19)]].
+  // 8 sampler descriptors after the typed texture descriptor ranges.
   for (u32 i = 0; i < shaders::kArgbufHybridSamplerSlotCount; ++i) {
     auto& d = descriptors.entries[cursor++];
     d.argumentType = WMTArgumentTypeSampler;
-    d.index = shaders::kArgbufHybridConstantBufferCount +
-              shaders::kArgbufHybridTextureSlotCount + i;
+    d.index = shaders::kArgbufHybridSamplerBase + i;
     d.arrayLength = 0;
     d.access = kArgumentAccessReadOnly;
     d.textureType = 0;
@@ -120,11 +129,12 @@ constexpr u32 kFfpVsArgbufIdx    = 1u;
 constexpr u32 kPsConstsArgbufIdx = 2u;
 constexpr u32 kFfpPsArgbufIdx    = 3u;
 
-// argbuf [[id(N)]] base for textures / samplers; the encoder writes
-// stages 0..7 at consecutive ids.
-constexpr u32 kTextureArgbufBase = shaders::kArgbufHybridConstantBufferCount;
-constexpr u32 kSamplerArgbufBase =
-    kTextureArgbufBase + shaders::kArgbufHybridTextureSlotCount;
+// argbuf [[id(N)]] bases for typed textures / samplers; the encoder writes
+// stages 0..7 at consecutive ids within each typed range.
+constexpr u32 kTexture2DArgbufBase = shaders::kArgbufHybridTexture2DBase;
+constexpr u32 kTextureCubeArgbufBase = shaders::kArgbufHybridTextureCubeBase;
+constexpr u32 kTexture3DArgbufBase = shaders::kArgbufHybridTexture3DBase;
+constexpr u32 kSamplerArgbufBase = shaders::kArgbufHybridSamplerBase;
 
 void recordedSetArgumentBuffer(ArgbufEncoderResource& encoderResource,
                                WMT::Buffer buffer,
@@ -286,8 +296,16 @@ void populateResourceBindings(WMT::Reference<WMT::Device> device,
     if (!textureHandle) continue;
     if (auto* texture = pool.findTexture(textureHandle.value);
         texture && texture->texture) {
-      recordedSetTexture(encoderResource, resources::textureForShaderRead(*texture),
-                         kTextureArgbufBase + stage, recorder);
+      const bool srgbTexture =
+          core::flatStateOr(hot.samplerStates[stage], core::SAMP_SRGB_TEXTURE, 0u) != 0;
+      u32 textureArgbufBase = kTexture2DArgbufBase;
+      if (texture->desc.type == core::TextureType::Cube) {
+        textureArgbufBase = kTextureCubeArgbufBase;
+      } else if (texture->desc.type == core::TextureType::Volume) {
+        textureArgbufBase = kTexture3DArgbufBase;
+      }
+      recordedSetTexture(encoderResource, resources::textureForShaderRead(*texture, srgbTexture),
+                         textureArgbufBase + stage, recorder);
     }
     if (recorder && recorder->suppressMetalCalls) {
       if (recorder->samplerState) {

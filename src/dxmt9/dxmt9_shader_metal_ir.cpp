@@ -195,6 +195,7 @@ std::string registerName(const D3DRegisterRef& reg, D3DShaderStage stage, bool d
 }
 
 std::string applySourceModifier(std::string expr, u32 modifier) {
+  const std::string value = "(" + expr + ")";
   switch (modifier) {
     case 0:
       return expr;
@@ -206,10 +207,24 @@ std::string applySourceModifier(std::string expr, u32 modifier) {
       return "-((" + expr + ") - float4(0.5f))";
     case 4:
       return "(" + expr + " * float4(2.0f) - float4(1.0f))";
+    case 5:
+      return "-(" + expr + " * float4(2.0f) - float4(1.0f))";
+    case 6:
+      return "(float4(1.0f) - " + expr + ")";
+    case 7:
+      return "(" + expr + " * float4(2.0f))";
+    case 8:
+      return "-(" + expr + " * float4(2.0f))";
+    case 9:
+      return "(" + value + " / float4(" + value + ".z))";
+    case 10:
+      return "(" + value + " / float4(" + value + ".w))";
     case 11:
       return "abs(" + expr + ")";
     case 12:
       return "-abs(" + expr + ")";
+    case 13:
+      return "select(float4(1.0f), float4(0.0f), " + value + " != float4(0.0f))";
     default:
       throw std::runtime_error("unsupported D3D source modifier " + std::to_string(modifier));
   }
@@ -266,6 +281,107 @@ std::string readVertexOutputMapping(const VertexOutputMapping& mapping,
   return "float4(0.0f)";
 }
 
+std::string relAddrExpression(u32 relAddrToken) {
+  if (relAddrToken == 0u) {
+    return {};
+  }
+  const auto relReg = decodeRegisterRef(relAddrToken, D3DShaderStage::Vertex);
+  return relReg.kind == D3DRegisterKind::Loop ? "aL" : "a0";
+}
+
+u32 constantRegisterMaxIndex(D3DRegisterKind kind, bool vertexStage) {
+  switch (kind) {
+    case D3DRegisterKind::ConstFloat:
+      return vertexStage ? ::dxmt9::core::kMaxVertexConstants - 1u
+                         : ::dxmt9::core::kMaxPixelConstants - 1u;
+    case D3DRegisterKind::ConstInt:
+      return ::dxmt9::core::kMaxIntegerConstants - 1u;
+    case D3DRegisterKind::ConstBool:
+      return ::dxmt9::core::kMaxBoolConstants - 1u;
+    default:
+      return 0u;
+  }
+}
+
+std::string constantRegisterArrayName(D3DRegisterKind kind) {
+  switch (kind) {
+    case D3DRegisterKind::ConstFloat:
+      return "cFloat";
+    case D3DRegisterKind::ConstInt:
+      return "cInt";
+    case D3DRegisterKind::ConstBool:
+      return "cBool";
+    default:
+      break;
+  }
+  throw std::runtime_error("not a constant register");
+}
+
+std::string constantDestinationTarget(const D3DRegisterRef& dst, bool vertexStage) {
+  const std::string arrayName = constantRegisterArrayName(dst.kind);
+  if (dst.relAddrToken == 0u) {
+    return arrayName + "[" + std::to_string(dst.index) + "]";
+  }
+  return arrayName + "[clamp(" + relAddrExpression(dst.relAddrToken) + " + "
+         + std::to_string(dst.index) + ", 0, "
+         + std::to_string(constantRegisterMaxIndex(dst.kind, vertexStage)) + ")]";
+}
+
+std::string tempDestinationTarget(const D3DRegisterRef& dst, u32 maxIndex) {
+  if (dst.relAddrToken == 0u) {
+    return "r[" + std::to_string(dst.index) + "]";
+  }
+  return "r[clamp(" + relAddrExpression(dst.relAddrToken) + " + " + std::to_string(dst.index) +
+         ", 0, " + std::to_string(maxIndex) + ")]";
+}
+
+void promoteIndexedConstantDestinations(ConstantUsage& usage, const SpirvModule& module, bool vertexStage) {
+  for (const auto& instruction : module.instructions) {
+    if (instruction.operands.empty() || !opcodeWritesFirstOperand(instruction.opcode) ||
+        instruction.relAddrTokens.empty() || instruction.relAddrTokens[0] == 0u) {
+      continue;
+    }
+    const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+    switch (dst.kind) {
+      case D3DRegisterKind::ConstFloat:
+        usage.mutableConstants = true;
+        usage.hasFloat = true;
+        usage.floatCount = constantRegisterMaxIndex(dst.kind, vertexStage) + 1u;
+        break;
+      case D3DRegisterKind::ConstInt:
+        usage.mutableConstants = true;
+        usage.hasInt = true;
+        usage.intCount = constantRegisterMaxIndex(dst.kind, vertexStage) + 1u;
+        break;
+      case D3DRegisterKind::ConstBool:
+        usage.mutableConstants = true;
+        usage.hasBool = true;
+        usage.boolCount = constantRegisterMaxIndex(dst.kind, vertexStage) + 1u;
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+D3DRegisterRef decodeOperandRegister(const D3DDecodedInstruction& instruction, size_t index,
+                                     D3DShaderStage stage) {
+  auto reg = decodeRegisterRef(instruction.operands[index], stage);
+  if (index < instruction.relAddrTokens.size()) {
+    reg.relAddrToken = instruction.relAddrTokens[index];
+  }
+  return reg;
+}
+
+void requireSupportedDestinationAddressing(const D3DRegisterRef& dst) {
+  if (dst.relAddrToken == 0u || dst.kind == D3DRegisterKind::ConstFloat ||
+      dst.kind == D3DRegisterKind::ConstInt || dst.kind == D3DRegisterKind::ConstBool ||
+      dst.kind == D3DRegisterKind::Temp) {
+    return;
+  }
+  throw std::runtime_error("destination relative addressing is only supported for temp and constant registers");
+}
+
 std::string readOperandExpression(const D3DDecodedInstruction& instruction, const D3DRegisterRef& reg,
                                   const std::string& vertexInputs, const std::string& pixelInputs,
                                   bool vertexStage, const std::string& outPosition, const std::string& outColor,
@@ -276,19 +392,6 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
                                   const std::string& predicatePrefix,
                                   const VertexOutputSemantics* vertexOutputSemantics = nullptr) {
   (void)instruction;
-  // Relative-addressing helper: translates the rel-addr DWORD attached
-  // to a source operand into the address-register expression that
-  // indexes the constant array. vs_2_0/2_x can only use a0; vs_3_0+
-  // additionally allows aL inside a loop body. Anything else falls back
-  // to a0 (best effort — the bytecode would have failed validation
-  // before reaching the translator).
-  auto relAddrExpression = [](u32 relAddrToken) -> std::string {
-    if (relAddrToken == 0u) {
-      return {};
-    }
-    const auto relReg = decodeRegisterRef(relAddrToken, D3DShaderStage::Vertex);
-    return relReg.kind == D3DRegisterKind::Loop ? "aL" : "a0";
-  };
   switch (reg.kind) {
     case D3DRegisterKind::Temp:
       return tempPrefix + "[" + std::to_string(reg.index) + "]";
@@ -382,11 +485,12 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
 }
 
 std::string decodeOperandToken(const u32 token, D3DShaderStage stage, bool destination) {
-  if (destination && tokenHasRelativeAddressing(token)) {
-    throw std::runtime_error("relative addressing is not supported yet");
-  }
   D3DRegisterRef reg = decodeRegisterRef(token, stage);
-  return registerName(reg, stage, destination);
+  std::string name = registerName(reg, stage, destination);
+  if (destination && tokenHasRelativeAddressing(token)) {
+    name += "[]";
+  }
+  return name;
 }
 
 void emitConstantBindings(std::ostringstream& out, bool vertexStage, const ConstantUsage& usage) {
@@ -508,8 +612,65 @@ std::string readPixelInputExpression(u32 token,
   return readPixelInputFallbackExpression(index, pixelInputs);
 }
 
+TextureType samplerTextureType(const SpirvModule& module,
+                               const ShaderSourceContext& context,
+                               u32 sampler) {
+  if (sampler >= kMaxSamplers) {
+    return TextureType::TwoD;
+  }
+  if (module.major >= 2u) {
+    return module.samplerTextureTypes[sampler];
+  }
+  return sampler < context.textureTypes.size() ? context.textureTypes[sampler] : TextureType::TwoD;
+}
+
+std::string textureTypeName(TextureType type) {
+  switch (type) {
+    case TextureType::Cube:
+      return "texturecube<float>";
+    case TextureType::Volume:
+      return "texture3d<float>";
+    case TextureType::TwoD:
+    case TextureType::Array2D:
+    default:
+      return "texture2d<float>";
+  }
+}
+
+std::string sampleCoordExpression(TextureType type, const std::string& coord, bool flip2D) {
+  switch (type) {
+    case TextureType::Cube:
+    case TextureType::Volume:
+      return "(" + coord + ").xyz";
+    case TextureType::TwoD:
+    case TextureType::Array2D:
+    default:
+      if (flip2D) {
+        return "float2((" + coord + ").x, 1.0f - (" + coord + ").y)";
+      }
+      return "(" + coord + ").xy";
+  }
+}
+
+std::string textureGradientExpression(TextureType type,
+                                      const std::string& ddx,
+                                      const std::string& ddy) {
+  switch (type) {
+    case TextureType::Cube:
+      return "gradientcube((" + ddx + ").xyz, (" + ddy + ").xyz)";
+    case TextureType::Volume:
+      return "gradient3d((" + ddx + ").xyz, (" + ddy + ").xyz)";
+    case TextureType::TwoD:
+    case TextureType::Array2D:
+    default:
+      return "gradient2d((" + ddx + ").xy, (" + ddy + ").xy)";
+  }
+}
+
 void emitFragmentTextureArguments(std::ostringstream& out,
-                                  const std::array<bool, kMaxSamplers>& samplerUsage) {
+                                  const std::array<bool, kMaxSamplers>& samplerUsage,
+                                  const SpirvModule& module,
+                                  const ShaderSourceContext& context) {
   bool first = true;
   for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
     if (!samplerUsage[stage]) {
@@ -519,7 +680,8 @@ void emitFragmentTextureArguments(std::ostringstream& out,
       out << ", ";
     }
     first = false;
-    out << "texture2d<float> tex" << stage << " [[texture(" << stage << ")]], "
+    out << textureTypeName(samplerTextureType(module, context, stage)) << " tex" << stage
+        << " [[texture(" << stage << ")]], "
         << "sampler samp" << stage << " [[sampler(" << stage << ")]]";
   }
 }
@@ -529,12 +691,26 @@ void emitFragmentTextureArguments(std::ostringstream& out,
 // at slot 30. Body code is unchanged because it still references `texN`
 // and `sampN` by name; only the source of those names moves.
 void emitFragmentTextureAliasesFromArgbuf(std::ostringstream& out,
-                                          const std::array<bool, kMaxSamplers>& samplerUsage) {
+                                          const std::array<bool, kMaxSamplers>& samplerUsage,
+                                          const SpirvModule& module,
+                                          const ShaderSourceContext& context) {
   for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
     if (!samplerUsage[stage]) {
       continue;
     }
-    out << "  texture2d<float> tex" << stage << " = abuf->textures[" << stage << "];\n";
+    switch (samplerTextureType(module, context, stage)) {
+      case TextureType::Cube:
+        out << "  texturecube<float> tex" << stage << " = abuf->texturesCube[" << stage << "];\n";
+        break;
+      case TextureType::Volume:
+        out << "  texture3d<float> tex" << stage << " = abuf->textures3d[" << stage << "];\n";
+        break;
+      case TextureType::TwoD:
+      case TextureType::Array2D:
+      default:
+        out << "  texture2d<float> tex" << stage << " = abuf->textures2d[" << stage << "];\n";
+        break;
+    }
     out << "  sampler samp" << stage << " = abuf->samplers[" << stage << "];\n";
   }
 }
@@ -754,7 +930,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	    // a corner case; keep VS conservative until that's audited.
 	    out << "  float4 r[32];\n";
 	    out << "  for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }\n";
-	    const auto constantUsage = collectConstantUsage(module);
+      auto constantUsage = collectConstantUsage(module);
+      promoteIndexedConstantDestinations(constantUsage, module, true);
 	    emitConstantBindings(out, true, constantUsage);
 	    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
@@ -793,10 +970,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           throw std::runtime_error(message.str());
         }
         const auto token = instruction.operands[index];
-        auto reg = decodeRegisterRef(token, module.stage);
-        if (index < instruction.relAddrTokens.size()) {
-          reg.relAddrToken = instruction.relAddrTokens[index];
-        }
+        auto reg = decodeOperandRegister(instruction, index, module.stage);
         std::string expr = readOperandExpression(instruction, reg, "vin", "in", true,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord",
                                                  "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
@@ -1004,6 +1178,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         continue;
       }
 
+      const bool predicatedBody = instruction.predicated;
+      if (predicatedBody) {
+        out << "  if (p[0]) {\n";
+      }
       switch (instruction.opcode) {
         case kD3DSIO_NOP:
           break;
@@ -1011,12 +1189,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (instruction.operands.size() < 2) {
           throw std::runtime_error("MOV requires 2 operands");
         }
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
           const auto dstMask = decodeWriteMask(instruction.operands[0]);
           const auto value = readSrc(1);
           switch (dst.kind) {
             case D3DRegisterKind::Temp:
-              emitMaskedAssign("r[" + std::to_string(dst.index) + "]", value, dstMask);
+              emitMaskedAssign(tempDestinationTarget(dst, 31u), value, dstMask);
               break;
             case D3DRegisterKind::RastOut:
               if (dst.index == 0) {
@@ -1043,17 +1222,20 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                 emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
               }
               break;
-	          case D3DRegisterKind::ColorOut:
-	            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
-	            break;
+            case D3DRegisterKind::ColorOut:
+              emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
+              break;
+            case D3DRegisterKind::DepthOut:
+              throw std::runtime_error("vertex depth output register is invalid");
             case D3DRegisterKind::ConstFloat:
-              out << "  cFloat[" << dst.index << "] = " << value << ";\n";
+              out << "  " << constantDestinationTarget(dst, true) << " = " << value << ";\n";
               break;
             case D3DRegisterKind::ConstInt:
-              out << "  cInt[" << dst.index << "] = int4(" << value << ");\n";
+              out << "  " << constantDestinationTarget(dst, true) << " = int4(" << value << ");\n";
               break;
             case D3DRegisterKind::ConstBool:
-              out << "  cBool[" << dst.index << "] = " << value << ".x != 0.0f ? 1u : 0u;\n";
+              out << "  " << constantDestinationTarget(dst, true) << " = "
+                  << value << ".x != 0.0f ? 1u : 0u;\n";
               break;
           default:
             throw std::runtime_error("unsupported MOV destination");
@@ -1064,7 +1246,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (instruction.operands.size() < 2) {
           throw std::runtime_error("MOVA requires 2 operands");
         }
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         const auto value = readSrc(1);
         switch (dst.kind) {
           case D3DRegisterKind::Address:
@@ -1082,7 +1265,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (instruction.operands.size() < 2) {
           throw std::runtime_error("SETP requires 2 operands");
         }
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         if (dst.kind != D3DRegisterKind::Predicate) {
           throw std::runtime_error("SETP requires a predicate register destination");
         }
@@ -1131,7 +1315,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (instruction.operands.size() < 2) {
             throw std::runtime_error("missing D3D destination or source operand");
           }
-          const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+          const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+          requireSupportedDestinationAddressing(dst);
           const auto dstMask = decodeWriteMask(instruction.operands[0]);
           std::string value;
           switch (instruction.opcode) {
@@ -1277,7 +1462,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               value = "dfdy(" + readSrc(1) + ")";
               break;
             case kD3DSIO_TEXLDD:
-              value = "tex0.sample(samp0, " + readSrc(1) + ".xy)";
+              value = "tex0.sample(samp0, " + readSrc(1) + ".xy, gradient2d((" + readSrc(3) +
+                      ").xy, (" + readSrc(4) + ").xy))";
               break;
             case kD3DSIO_TEXLDL:
               value = "tex0.sample(samp0, " + readSrc(1) + ".xy, level(" + readSrc(1) + ".w))";
@@ -1293,7 +1479,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           }
           switch (dst.kind) {
             case D3DRegisterKind::Temp:
-              emitMaskedAssign("r[" + std::to_string(dst.index) + "]", value, dstMask);
+              emitMaskedAssign(tempDestinationTarget(dst, 31u), value, dstMask);
               break;
             case D3DRegisterKind::RastOut:
               if (dst.index == 0) {
@@ -1320,11 +1506,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                 emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
               }
               break;
-	          case D3DRegisterKind::ColorOut:
-	            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
-	            break;
+            case D3DRegisterKind::ColorOut:
+              emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
+              break;
             case D3DRegisterKind::DepthOut:
-              throw std::runtime_error("depth output is not supported yet");
+              throw std::runtime_error("vertex depth output register is invalid");
             default:
               throw std::runtime_error("unsupported arithmetic destination");
           }
@@ -1334,7 +1520,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (instruction.operands.size() < 5) {
             throw std::runtime_error("DEF requires 5 operands");
           }
-          const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+          const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+          requireSupportedDestinationAddressing(dst);
           const auto values = std::array<f32, 4>{std::bit_cast<f32>(instruction.operands[1]),
                                                  std::bit_cast<f32>(instruction.operands[2]),
                                                  std::bit_cast<f32>(instruction.operands[3]),
@@ -1348,14 +1535,15 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                     << " kind=" << static_cast<u32>(dst.kind);
             throw std::runtime_error(message.str());
           }
-          out << "  cFloat[" << dst.index << "] = " << formatFloatVec4(values) << ";\n";
+          out << "  " << constantDestinationTarget(dst, true) << " = " << formatFloatVec4(values) << ";\n";
           break;
         }
         case kD3DSIO_DEFI: {
           if (instruction.operands.size() < 5) {
             throw std::runtime_error("DEFI requires 5 operands");
           }
-          const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+          const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+          requireSupportedDestinationAddressing(dst);
           const auto values = std::array<i32, 4>{static_cast<i32>(instruction.operands[1]),
                                                  static_cast<i32>(instruction.operands[2]),
                                                  static_cast<i32>(instruction.operands[3]),
@@ -1363,18 +1551,20 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (dst.kind != D3DRegisterKind::ConstInt) {
             throw std::runtime_error("DEFI requires an integer constant destination");
           }
-          out << "  cInt[" << dst.index << "] = " << formatIntVec4(values) << ";\n";
+          out << "  " << constantDestinationTarget(dst, true) << " = " << formatIntVec4(values) << ";\n";
           break;
         }
         case kD3DSIO_DEFB: {
           if (instruction.operands.size() < 2) {
             throw std::runtime_error("DEFB requires 2 operands");
           }
-          const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+          const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+          requireSupportedDestinationAddressing(dst);
           if (dst.kind != D3DRegisterKind::ConstBool) {
             throw std::runtime_error("DEFB requires a boolean constant destination");
           }
-          out << "  cBool[" << dst.index << "] = " << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
+          out << "  " << constantDestinationTarget(dst, true) << " = "
+              << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
           break;
         }
         case kD3DSIO_DCL:
@@ -1402,6 +1592,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           throw std::runtime_error("unsupported legacy texture opcode: " + opcodeName(instruction.opcode));
         default:
           throw std::runtime_error("unsupported D3D opcode: " + opcodeName(instruction.opcode));
+      }
+      if (predicatedBody) {
+        out << "  }\n";
       }
     }
     if (!controlStack.empty()) {
@@ -1491,13 +1684,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           << kArgbufHybridBindSlot << ")]]) {\n";
       out << "  constant PsConsts& psConsts = *abuf->psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf->ffpPs;\n";
-      emitFragmentTextureAliasesFromArgbuf(out, samplerUsage);
+      emitFragmentTextureAliasesFromArgbuf(out, samplerUsage, module, context);
     } else {
       out << "fragment " << fragmentReturnType
           << " dxmt9_fs(VSOut in [[stage_in]],\n";
       out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
       out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
-      emitFragmentTextureArguments(out, samplerUsage);
+      emitFragmentTextureArguments(out, samplerUsage, module, context);
       out << ") {\n";
     }
   } else {
@@ -1567,7 +1760,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   // subroutine/control-flow corner cases — a prior reversion of the
   // shared FS+VS trim caused a pink-gradient regression that the FS
   // half alone is not implicated in.
-  const auto constantUsage = collectConstantUsage(module);
+  auto constantUsage = collectConstantUsage(module);
+  promoteIndexedConstantDestinations(constantUsage, module, false);
   const u32 tempCount =
       static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxTempIndex + 1));
   const u32 colorCount =
@@ -1588,10 +1782,16 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   const bool usesTexcoordOut = pixelUsesTexcoordOut(module);
   if (usesTexcoordOut) {
     out << "  float4 outTexcoord[" << kMaxTextureStages << "];\n";
-    out << "  for (uint i = 0; i < " << kMaxTextureStages
-        << "u; ++i) { outTexcoord[i] = float4(0.0f, 0.0f, 0.0f, 1.0f); }\n";
+    if (module.major == 1u) {
+      out << "  for (uint i = 0; i < " << kMaxTextureStages
+          << "u; ++i) { outTexcoord[i] = dxmt9_select_texcoord(in, i); }\n";
+    } else {
+      out << "  for (uint i = 0; i < " << kMaxTextureStages
+          << "u; ++i) { outTexcoord[i] = float4(0.0f, 0.0f, 0.0f, 1.0f); }\n";
+    }
   }
   out << "  float4 ignoredTexcoord = float4(0.0f);\n";
+  out << "  float4 dxmt9_texm = float4(0.0f);\n";
   out << "  float4 outPosition = float4(0.0f);\n";
   out << "  float outDepth = in.position.z;\n";
   out << "  float outFogFactor = 1.0f;\n";
@@ -1605,6 +1805,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	  emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
     std::vector<bool> callConditionalStack;
+    u32 legacyM3x3PadCount = 0;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
       const auto& instruction = module.instructions[instructionIndex];
     if (instruction.opcode == kD3DSIO_COMMENT || instruction.opcode == kD3DSIO_PHASE) {
@@ -1639,12 +1840,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         throw std::runtime_error(message.str());
       }
       const auto token = instruction.operands[index];
-      auto reg = decodeRegisterRef(token, module.stage);
-      if (index < instruction.relAddrTokens.size()) {
-        reg.relAddrToken = instruction.relAddrTokens[index];
-      }
+      auto reg = decodeOperandRegister(instruction, index, module.stage);
       std::string expr;
-      if (reg.kind == D3DRegisterKind::Input) {
+      if (module.major == 1u && module.minor < 4u && decodeRegisterType(token) == kD3DSPR_ADDR) {
+        expr = "outTexcoord[" + std::to_string(std::min<u32>(decodeRegisterIndex(token), kMaxTextureStages - 1u)) + "]";
+      } else if (reg.kind == D3DRegisterKind::Input) {
         expr = readPixelInputExpression(token, "in", pixelInputSemantics);
       } else {
         expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
@@ -1684,11 +1884,59 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       return std::string("outTexcoord[") + std::to_string(index) + "]";
     };
     const bool forcePixelVFlip = ::dxmt9::debug::forcePixelVFlip();
-    auto sampleCoord = [forcePixelVFlip](const std::string& coord) {
-      if (forcePixelVFlip) {
-        return "float2((" + coord + ").x, 1.0f - (" + coord + ").y)";
+    auto sampleCoord = [&](u32 sampler, const std::string& coord) {
+      return sampleCoordExpression(samplerTextureType(module, context, sampler), coord, forcePixelVFlip);
+    };
+    auto legacyStage = [&] {
+      if (instruction.operands.empty()) {
+        throw std::runtime_error("legacy texture opcode requires a destination/stage operand");
       }
-      return "(" + coord + ").xy";
+      return std::min<u32>(decodeRegisterIndex(instruction.operands[0]), kMaxTextureStages - 1u);
+    };
+    auto legacyTexcoordInput = [](u32 stage) {
+      return "dxmt9_select_texcoord(in, " + std::to_string(stage) + "u)";
+    };
+    auto legacySample = [&](u32 stage, const std::string& coord) {
+      return "tex" + std::to_string(stage) + ".sample(samp" + std::to_string(stage) + ", " +
+             sampleCoord(stage, coord) + ")";
+    };
+    auto legacyDstTarget = [&](u32 token) {
+      const auto index = decodeRegisterIndex(token);
+      switch (decodeRegisterType(token)) {
+        case kD3DSPR_TEMP:
+          return "r[" + std::to_string(std::min<u32>(index, tempCount - 1u)) + "]";
+        case kD3DSPR_ADDR:
+          return index < kMaxTextureStages ? "outTexcoord[" + std::to_string(index) + "]"
+                                           : std::string("ignoredTexcoord");
+        case kD3DSPR_COLOROUT:
+          return pixelColorTarget(index);
+        default: {
+          const auto reg = decodeRegisterRef(token, module.stage);
+          if (reg.kind == D3DRegisterKind::Temp) {
+            return "r[" + std::to_string(std::min<u32>(reg.index, tempCount - 1u)) + "]";
+          }
+          if (reg.kind == D3DRegisterKind::ColorOut) {
+            return pixelColorTarget(reg.index);
+          }
+          if (reg.kind == D3DRegisterKind::TexCoordOut) {
+            return texcoordTarget(reg.index);
+          }
+          throw std::runtime_error("unsupported legacy texture destination");
+        }
+      }
+    };
+    auto legacyAssign = [&](const std::string& value) {
+      emitMaskedAssign(legacyDstTarget(instruction.operands[0]), value, decodeWriteMask(instruction.operands[0]));
+    };
+    auto legacyDot = [&](size_t srcIndex) {
+      const auto stage = legacyStage();
+      return "dot((" + texcoordTarget(stage) + ").xyz, (" + readSrc(srcIndex) + ").xyz)";
+    };
+    auto legacyBumpCoord = [&](u32 stage, const std::string& base, const std::string& bump) {
+      const auto s = std::to_string(stage);
+      return "float4((" + base + ").xy + float2(ffpPs.bumpEnvMat[" + s + "].x * (" + bump +
+             ").x + ffpPs.bumpEnvMat[" + s + "].z * (" + bump + ").y, ffpPs.bumpEnvMat[" + s +
+             "].y * (" + bump + ").x + ffpPs.bumpEnvMat[" + s + "].w * (" + bump + ").y), 0.0f, 1.0f)";
     };
 
     if (instruction.opcode == kD3DSIO_LABEL) {
@@ -1830,11 +2078,16 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       continue;
     }
 
+    const bool predicatedBody = instruction.predicated;
+    if (predicatedBody) {
+      out << "  if (p[0]) {\n";
+    }
     switch (instruction.opcode) {
       case kD3DSIO_NOP:
         break;
       case kD3DSIO_DEF: {
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         const auto values = std::array<f32, 4>{std::bit_cast<f32>(instruction.operands[1]),
                                                std::bit_cast<f32>(instruction.operands[2]),
                                                std::bit_cast<f32>(instruction.operands[3]),
@@ -1848,11 +2101,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                   << " kind=" << static_cast<u32>(dst.kind);
           throw std::runtime_error(message.str());
         }
-        out << "  cFloat[" << dst.index << "] = " << formatFloatVec4(values) << ";\n";
+        out << "  " << constantDestinationTarget(dst, false) << " = " << formatFloatVec4(values) << ";\n";
         break;
       }
       case kD3DSIO_DEFI: {
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         const auto values = std::array<i32, 4>{static_cast<i32>(instruction.operands[1]),
                                                static_cast<i32>(instruction.operands[2]),
                                                static_cast<i32>(instruction.operands[3]),
@@ -1860,24 +2114,27 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (dst.kind != D3DRegisterKind::ConstInt) {
           throw std::runtime_error("DEFI requires an integer constant destination");
         }
-        out << "  cInt[" << dst.index << "] = " << formatIntVec4(values) << ";\n";
+        out << "  " << constantDestinationTarget(dst, false) << " = " << formatIntVec4(values) << ";\n";
         break;
       }
       case kD3DSIO_DEFB: {
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         if (dst.kind != D3DRegisterKind::ConstBool) {
           throw std::runtime_error("DEFB requires a boolean constant destination");
         }
-        out << "  cBool[" << dst.index << "] = " << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
+        out << "  " << constantDestinationTarget(dst, false) << " = "
+            << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
         break;
       }
       case kD3DSIO_MOV: {
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         const auto dstMask = decodeWriteMask(instruction.operands[0]);
         const auto value = readSrc(1);
         switch (dst.kind) {
           case D3DRegisterKind::Temp:
-            emitMaskedAssign("r[" + std::to_string(dst.index) + "]", value, dstMask);
+            emitMaskedAssign(tempDestinationTarget(dst, tempCount - 1u), value, dstMask);
             break;
           case D3DRegisterKind::ColorOut:
             emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
@@ -1889,13 +2146,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             emitMaskedAssign("outDepth", value, dstMask, true);
             break;
           case D3DRegisterKind::ConstFloat:
-            out << "  cFloat[" << dst.index << "] = " << value << ";\n";
+            out << "  " << constantDestinationTarget(dst, false) << " = " << value << ";\n";
             break;
           case D3DRegisterKind::ConstInt:
-            out << "  cInt[" << dst.index << "] = int4(" << value << ");\n";
+            out << "  " << constantDestinationTarget(dst, false) << " = int4(" << value << ");\n";
             break;
           case D3DRegisterKind::ConstBool:
-            out << "  cBool[" << dst.index << "] = " << value << ".x != 0.0f ? 1u : 0u;\n";
+            out << "  " << constantDestinationTarget(dst, false) << " = "
+                << value << ".x != 0.0f ? 1u : 0u;\n";
             break;
           default:
             throw std::runtime_error("unsupported MOV destination");
@@ -1906,7 +2164,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (instruction.operands.size() < 2) {
           throw std::runtime_error("MOVA requires 2 operands");
         }
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         const auto value = readSrc(1);
         switch (dst.kind) {
           case D3DRegisterKind::Address:
@@ -1924,7 +2183,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (instruction.operands.size() < 2) {
           throw std::runtime_error("SETP requires 2 operands");
         }
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         if (dst.kind != D3DRegisterKind::Predicate) {
           throw std::runtime_error("SETP requires a predicate register destination");
         }
@@ -1989,7 +2249,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       case kD3DSIO_DSY:
       case kD3DSIO_TEXLDD:
       case kD3DSIO_TEXLDL: {
-        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        const auto dst = decodeOperandRegister(instruction, 0, module.stage);
+        requireSupportedDestinationAddressing(dst);
         const auto dstMask = decodeWriteMask(instruction.operands[0]);
         std::string value;
         switch (instruction.opcode) {
@@ -2128,34 +2389,39 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           case kD3DSIO_NRM:
             value = "float4(normalize((" + readSrc(1) + ").xyz), 0.0f)";
             break;
-	      case kD3DSIO_TEX:
-	            {
-	              const auto sampler = textureSamplerIndex(instruction, module.stage);
-	              const auto coord = readSrc(1);
-	              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-	                      sampleCoord(coord) + ")";
-	            }
-	            break;
+          case kD3DSIO_TEX:
+            {
+              const auto sampler =
+                  module.major == 1u ? legacyStage() : textureSamplerIndex(instruction, module.stage);
+              const auto coord =
+                  module.major == 1u && module.minor < 4u ? texcoordTarget(sampler) : readSrc(1);
+              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+                      sampleCoord(sampler, coord) + ")";
+            }
+            break;
           case kD3DSIO_DSX:
             value = "dfdx(" + readSrc(1) + ")";
             break;
           case kD3DSIO_DSY:
             value = "dfdy(" + readSrc(1) + ")";
             break;
-	          case kD3DSIO_TEXLDD:
-	            {
-	              const auto sampler = textureSamplerIndex(instruction, module.stage);
-	              const auto coord = readSrc(1);
-	              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-	                      sampleCoord(coord) + ")";
-	            }
-	            break;
+          case kD3DSIO_TEXLDD:
+            {
+              const auto sampler = textureSamplerIndex(instruction, module.stage);
+              const auto coord = readSrc(1);
+              const auto ddx = readSrc(3);
+              const auto ddy = readSrc(4);
+              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+                      sampleCoord(sampler, coord) + ", " +
+                      textureGradientExpression(samplerTextureType(module, context, sampler), ddx, ddy) + ")";
+            }
+            break;
 	          case kD3DSIO_TEXLDL:
 	            {
 	              const auto sampler = textureSamplerIndex(instruction, module.stage);
 	              const auto coord = readSrc(1);
 	              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-	                      sampleCoord(coord) + ", level(" + coord + ".w))";
+                      sampleCoord(sampler, coord) + ", level(" + coord + ".w))";
 	            }
 	            break;
           default:
@@ -2166,8 +2432,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         }
         switch (dst.kind) {
           case D3DRegisterKind::Temp:
-            emitMaskedAssign("r[" + std::to_string(dst.index) + "]", value, dstMask);
+            emitMaskedAssign(tempDestinationTarget(dst, tempCount - 1u), value, dstMask);
             break;
+          case D3DRegisterKind::Input:
+            if (module.major == 1u && decodeRegisterType(instruction.operands[0]) == kD3DSPR_ADDR) {
+              emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+              break;
+            }
+            throw std::runtime_error("unsupported arithmetic input destination");
           case D3DRegisterKind::ColorOut:
             emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
             break;
@@ -2178,13 +2450,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             emitMaskedAssign("outDepth", value, dstMask, true);
             break;
           case D3DRegisterKind::ConstFloat:
-            out << "  cFloat[" << dst.index << "] = " << value << ";\n";
+            out << "  " << constantDestinationTarget(dst, false) << " = " << value << ";\n";
             break;
           case D3DRegisterKind::ConstInt:
-            out << "  cInt[" << dst.index << "] = int4(" << value << ");\n";
+            out << "  " << constantDestinationTarget(dst, false) << " = int4(" << value << ");\n";
             break;
           case D3DRegisterKind::ConstBool:
-            out << "  cBool[" << dst.index << "] = " << value << ".x != 0.0f ? 1u : 0u;\n";
+            out << "  " << constantDestinationTarget(dst, false) << " = "
+                << value << ".x != 0.0f ? 1u : 0u;\n";
             break;
           default:
             throw std::runtime_error("unsupported arithmetic destination");
@@ -2193,28 +2466,122 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       case kD3DSIO_DCL:
         break;
-      case kD3DSIO_TEXCOORD:
+      case kD3DSIO_TEXCOORD: {
+        if (module.major != 1u) {
+          throw std::runtime_error("TEXCOORD is only implemented for SM1.x pixel shaders");
+        }
+        if (module.minor >= 4u) {
+          legacyAssign(readSrc(1));
+        } else {
+          const auto stage = legacyStage();
+          legacyAssign("float4(saturate((" + legacyTexcoordInput(stage) + ").xyz), 1.0f)");
+        }
+        break;
+      }
       case kD3DSIO_TEXBEM:
-      case kD3DSIO_TEXBEML:
-      case kD3DSIO_TEXREG2AR:
-      case kD3DSIO_TEXREG2GB:
+      case kD3DSIO_TEXBEML: {
+        const auto stage = legacyStage();
+        const auto coord = legacyBumpCoord(stage, texcoordTarget(stage), readSrc(1));
+        std::string value = legacySample(stage, coord);
+        if (instruction.opcode == kD3DSIO_TEXBEML) {
+          value = "(" + value + " * saturate((" + readSrc(1) + ").z * ffpPs.bumpEnvLum[" +
+                  std::to_string(stage) + "].x + ffpPs.bumpEnvLum[" + std::to_string(stage) + "].y))";
+        }
+        legacyAssign(value);
+        break;
+      }
+      case kD3DSIO_TEXREG2AR: {
+        const auto stage = legacyStage();
+        const auto src = readSrc(1);
+        legacyAssign(legacySample(stage, "float4((" + src + ").w, (" + src + ").x, 0.0f, 1.0f)"));
+        break;
+      }
+      case kD3DSIO_TEXREG2GB: {
+        const auto stage = legacyStage();
+        const auto src = readSrc(1);
+        legacyAssign(legacySample(stage, "float4((" + src + ").y, (" + src + ").z, 0.0f, 1.0f)"));
+        break;
+      }
       case kD3DSIO_TEXM3x2PAD:
-      case kD3DSIO_TEXM3x2TEX:
-      case kD3DSIO_TEXM3x3PAD:
-      case kD3DSIO_TEXM3x3TEX:
+        out << "  dxmt9_texm.x = " << legacyDot(1) << ";\n";
+        break;
+      case kD3DSIO_TEXM3x2TEX: {
+        const auto stage = legacyStage();
+        out << "  dxmt9_texm.y = " << legacyDot(1) << ";\n";
+        legacyAssign(legacySample(stage, "dxmt9_texm"));
+        break;
+      }
+      case kD3DSIO_TEXM3x3PAD: {
+        const char component = (legacyM3x3PadCount++ % 2u) == 0u ? 'x' : 'y';
+        out << "  dxmt9_texm." << component << " = " << legacyDot(1) << ";\n";
+        break;
+      }
+      case kD3DSIO_TEXM3x3TEX: {
+        const auto stage = legacyStage();
+        out << "  dxmt9_texm.z = " << legacyDot(1) << ";\n";
+        legacyM3x3PadCount = 0;
+        legacyAssign(legacySample(stage, "dxmt9_texm"));
+        break;
+      }
       case kD3DSIO_TEXM3x3DIFF:
-      case kD3DSIO_TEXM3x3SPEC:
-      case kD3DSIO_TEXM3x3VSPEC:
-      case kD3DSIO_BEM:
+        throw std::runtime_error("reserved legacy texture opcode: " + opcodeName(instruction.opcode));
+      case kD3DSIO_TEXM3x3SPEC: {
+        const auto stage = legacyStage();
+        out << "  dxmt9_texm.z = " << legacyDot(1) << ";\n";
+        legacyM3x3PadCount = 0;
+        const auto eye = readSrc(2);
+        legacyAssign(legacySample(stage, "float4(reflect(normalize((" + eye + ").xyz), "
+                                  "normalize(dxmt9_texm.xyz)), 1.0f)"));
+        break;
+      }
+      case kD3DSIO_TEXM3x3VSPEC: {
+        const auto stage = legacyStage();
+        const auto s0 = stage >= 2u ? stage - 2u : 0u;
+        const auto s1 = stage >= 1u ? stage - 1u : 0u;
+        out << "  dxmt9_texm.z = " << legacyDot(1) << ";\n";
+        legacyM3x3PadCount = 0;
+        const auto eye = "float3(" + texcoordTarget(s0) + ".w, " + texcoordTarget(s1) + ".w, " +
+                         texcoordTarget(stage) + ".w)";
+        legacyAssign(legacySample(stage, "float4(reflect(normalize(" + eye + "), "
+                                  "normalize(dxmt9_texm.xyz)), 1.0f)"));
+        break;
+      }
+      case kD3DSIO_BEM: {
+        const auto stage = legacyStage();
+        legacyAssign(legacyBumpCoord(stage, readSrc(1), readSrc(2)));
+        break;
+      }
       case kD3DSIO_TEXDEPTH:
-      case kD3DSIO_TEXREG2RGB:
-      case kD3DSIO_TEXDP3TEX:
+        out << "  outDepth = clamp((" << readSrc(0) << ").x / min((" << readSrc(0)
+            << ").y, 1.0f), 0.0f, 1.0f);\n";
+        break;
+      case kD3DSIO_TEXREG2RGB: {
+        const auto stage = legacyStage();
+        legacyAssign(legacySample(stage, readSrc(1)));
+        break;
+      }
+      case kD3DSIO_TEXDP3TEX: {
+        const auto stage = legacyStage();
+        legacyAssign(legacySample(stage, "float4(" + legacyDot(1) + ", 0.0f, 0.0f, 1.0f)"));
+        break;
+      }
       case kD3DSIO_TEXM3x2DEPTH:
+        out << "  dxmt9_texm.y = " << legacyDot(1) << ";\n";
+        out << "  outDepth = dxmt9_texm.y == 0.0f ? 1.0f : clamp(dxmt9_texm.x / dxmt9_texm.y, 0.0f, 1.0f);\n";
+        break;
       case kD3DSIO_TEXDP3:
+        legacyAssign("float4(" + legacyDot(1) + ")");
+        break;
       case kD3DSIO_TEXM3x3:
-        throw std::runtime_error("unsupported legacy texture opcode: " + opcodeName(instruction.opcode));
+        out << "  dxmt9_texm.z = " << legacyDot(1) << ";\n";
+        legacyM3x3PadCount = 0;
+        legacyAssign("float4(dxmt9_texm.xyz, 1.0f)");
+        break;
       default:
         throw std::runtime_error("unsupported D3D opcode: " + opcodeName(instruction.opcode));
+    }
+    if (predicatedBody) {
+      out << "  }\n";
     }
     }
     if (!controlStack.empty()) {

@@ -24,6 +24,7 @@ struct ShaderSourceContext {
   core::ShaderRef vertexShader{};
   core::ShaderRef pixelShader{};
   std::array<bool, core::kMaxTextures> textures{};
+  std::array<core::TextureType, core::kMaxTextures> textureTypes{};
   std::uint32_t sampleCount = 1;
   std::uint32_t clipPlaneMask = 0;
   // R-BACK-12.22..12.26 — when true, the FFP and DXBC->MSL emitters route

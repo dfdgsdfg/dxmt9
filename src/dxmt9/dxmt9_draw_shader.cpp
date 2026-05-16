@@ -43,6 +43,21 @@ void maybeDumpShaderSource(const char* label, const std::string& source) {
   out.write(source.data(), static_cast<std::streamsize>(source.size()));
 }
 
+TextureType textureTypeFromStateValue(u32 value) {
+  switch (value) {
+    case static_cast<u32>(TextureType::Cube):
+    case 5u:  // D3DRTYPE_CUBETEXTURE
+      return TextureType::Cube;
+    case static_cast<u32>(TextureType::Volume):
+    case 4u:  // D3DRTYPE_VOLUMETEXTURE
+      return TextureType::Volume;
+    case static_cast<u32>(TextureType::TwoD):
+    case 3u:  // D3DRTYPE_TEXTURE
+    default:
+      return TextureType::TwoD;
+  }
+}
+
 }  // namespace
 
 ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layout,
@@ -53,6 +68,10 @@ ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layou
   context.pixelShader = layout.pixelShader;
   for (std::size_t i = 0; i < context.textures.size(); ++i) {
     context.textures[i] = hot.textures[i] != Handle{};
+    if (i < hot.textureStageStates.size()) {
+      context.textureTypes[i] = textureTypeFromStateValue(
+          flatStateOr(hot.textureStageStates[i], TSS_TEXTURE_TYPE, static_cast<u32>(TextureType::TwoD)));
+    }
   }
   context.sampleCount = std::max(1u, hot.colorAttachments[0].sampleCount);
   context.clipPlaneMask = layout.clipPlaneMask;
@@ -67,6 +86,8 @@ ShaderSourceContext makeShaderSourceContext(const fixture::DrawDesc& desc) {
   context.pixelShader = layout.pixelShader;
   for (std::size_t i = 0; i < context.textures.size(); ++i) {
     context.textures[i] = desc.textures[i].handle != Handle{};
+    context.textureTypes[i] = textureTypeFromStateValue(
+        desc.textures[i].stageStates.valueOr(TSS_TEXTURE_TYPE, static_cast<u32>(TextureType::TwoD)));
   }
   context.sampleCount = std::max(1u, desc.rts.color[0].sampleCount);
   context.clipPlaneMask = layout.clipPlaneMask;

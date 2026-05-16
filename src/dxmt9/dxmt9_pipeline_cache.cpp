@@ -75,18 +75,23 @@ detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisible
   const auto& rs = state.hot->renderStates;
   const bool blendEnabled =
       !forceVisibleDraw && core::flatStateOr(rs, core::RS_ALPHABLEND_ENABLE, 0u) != 0;
+  const bool separateAlphaBlend =
+      core::flatStateOr(rs, core::RS_SEPARATE_ALPHA_BLEND_ENABLE, 0u) != 0;
   const u32 rgbBlendOperation =
       core::flatStateOr(rs, core::RS_BLEND_OP, static_cast<u32>(core::BlendOp::Add));
   const u32 alphaBlendOperation =
-      core::flatStateOr(rs, core::RS_BLEND_OP_ALPHA, rgbBlendOperation);
+      separateAlphaBlend ? core::flatStateOr(rs, core::RS_BLEND_OP_ALPHA, rgbBlendOperation)
+                         : rgbBlendOperation;
   const u32 sourceRGBBlendFactor =
       core::flatStateOr(rs, core::RS_SRC_BLEND, static_cast<u32>(core::BlendFactor::One));
   const u32 destinationRGBBlendFactor =
       core::flatStateOr(rs, core::RS_DEST_BLEND, static_cast<u32>(core::BlendFactor::Zero));
   const u32 sourceAlphaBlendFactor =
-      core::flatStateOr(rs, core::RS_SRC_BLEND_ALPHA, sourceRGBBlendFactor);
+      separateAlphaBlend ? core::flatStateOr(rs, core::RS_SRC_BLEND_ALPHA, sourceRGBBlendFactor)
+                         : sourceRGBBlendFactor;
   const u32 destinationAlphaBlendFactor =
-      core::flatStateOr(rs, core::RS_DEST_BLEND_ALPHA, destinationRGBBlendFactor);
+      separateAlphaBlend ? core::flatStateOr(rs, core::RS_DEST_BLEND_ALPHA, destinationRGBBlendFactor)
+                         : destinationRGBBlendFactor;
   const u32 colorWriteMask =
       forceVisibleDraw ? 0xfu : core::flatStateOr(rs, core::RS_COLOR_WRITE_ENABLE, 0xfu);
 
@@ -145,6 +150,9 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   // distinct cache slots.
   hash = mix(hash, static_cast<u64>(key.argbufHybridMode));
   hash = mix(hash, key.sampleCount);
+  for (auto type : key.textureTypes) {
+    hash = mix(hash, type);
+  }
   for (auto fmt : key.colorFormats) {
     hash = mix(hash, fmt);
   }
@@ -494,12 +502,15 @@ Cache::getOrBuildDrawPipelineForState(WMT::Reference<WMT::Device> device,
                                       const std::string* archivePath,
                                       bool tileFfpMode,
                                       bool argbufHybridMode) {
+  const bool srgbWrite =
+      core::flatStateOr(state.hot->renderStates, core::RS_SRGB_WRITE_ENABLE, 0u) != 0;
   auto resolvePixelFormat = [&](core::Handle handle) -> u32 {
     if (!handle) {
       return 0;
     }
     if (auto* surface = pool.findSurface(handle.value); surface) {
-      return static_cast<u32>(dxmt9::convert::toPixelFormat(surface->desc.format, limits));
+      return static_cast<u32>(
+          dxmt9::convert::toPixelFormat(surface->desc.format, limits, srgbWrite));
     }
     return 0;
   };
@@ -640,6 +651,11 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
   key.alphaTest = core::flatStateOr(hot.renderStates, core::RS_ALPHA_TEST_ENABLE, 0u) != 0;
   key.alphaToCoverage = false;
   key.sampleCount = std::max(1u, hot.colorAttachments[0].sampleCount);
+  for (std::size_t i = 0; i < core::kMaxTextureStages; ++i) {
+    key.textureTypes[i] =
+        core::flatStateOr(hot.textureStageStates[i], core::TSS_TEXTURE_TYPE,
+                          static_cast<u32>(core::TextureType::TwoD));
+  }
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     key.colorFormats[i] = i < colorFormats.size() ? colorFormats[i] : 0u;
     if (i < blendAttachments.size()) {

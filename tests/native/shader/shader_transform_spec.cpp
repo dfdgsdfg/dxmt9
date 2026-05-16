@@ -182,8 +182,8 @@ u32 makeDclTextureCoordToken(u32 writeMask = 0xfu) {
   return (1u << 31) | ((writeMask & 0xfu) << 16);
 }
 
-u32 makeDclSamplerTypeToken() {
-  return (1u << 31) | encodeRegisterType(dxmt9::d3d9bc::kD3DSPR_INPUT);
+u32 makeDclSamplerTypeToken(u32 textureType = 2u) {
+  return (1u << 31) | ((textureType & 0xfu) << 27);
 }
 
 u32 makeLabelToken(u32 label) {
@@ -289,6 +289,8 @@ std::vector<u32> makePs30DecodeFixtureBytecode() {
       makeDstToken(kD3DSPR_TEMP, 3, 0x7u, 1u),
       makeSrcToken(kD3DSPR_CONST, 9, makeSwizzle(2u, 1u, 0u, 3u), 11u),
       makeSrcToken(kD3DSPR_SAMPLER, 5),
+      makeSrcToken(kD3DSPR_CONST, 10),
+      makeSrcToken(kD3DSPR_CONST, 11),
       makePredicatedInstructionToken(kD3DSIO_MOV, 2, 0x5au),
       makeDstToken(kD3DSPR_COLOROUT, 1),
       makeSrcToken(kD3DSPR_CONSTBOOL, 2),
@@ -358,6 +360,17 @@ std::vector<u32> makeVs30OutputSemanticBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_TEXCRDOUT, 2),
       makeSrcToken(kD3DSPR_CONST, 2),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makeVs20DepthOutBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 2, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_DEPTHOUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
       kD3DSIO_END,
   };
 }
@@ -449,6 +462,42 @@ std::vector<u32> makePs30WriteMaskSwizzleModifierBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_COLOROUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 1),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30SourceModifierCoverageBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 0, 0xe4u, 5u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 1),
+      makeSrcToken(kD3DSPR_CONST, 1, 0xe4u, 6u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 2),
+      makeSrcToken(kD3DSPR_CONST, 2, 0xe4u, 7u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 3),
+      makeSrcToken(kD3DSPR_CONST, 3, 0xe4u, 8u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 4),
+      makeSrcToken(kD3DSPR_CONST, 4, 0xe4u, 9u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 5),
+      makeSrcToken(kD3DSPR_CONST, 5, 0xe4u, 10u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 6),
+      makeSrcToken(kD3DSPR_CONSTBOOL, 0, 0xe4u, 13u),
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_TEMP, 7),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 6),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 7),
       kD3DSIO_END,
   };
 }
@@ -568,26 +617,93 @@ std::vector<u32> makePs30CallnzLabelRetBytecode() {
   };
 }
 
-std::vector<u32> makePs30SingleOpcodeBytecode(u32 opcode, u32 operandCount) {
+std::vector<u32> makePs11TexcoordTexBytecode() {
   using namespace dxmt9::d3d9bc;
-  std::vector<u32> bytecode = {
-      makeVersionToken(false, 3, 0),
-      makeInstructionToken(opcode, operandCount),
-      makeDstToken(kD3DSPR_TEMP, 0),
+  return {
+      makeVersionToken(false, 1, 1),
+      makeInstructionToken(kD3DSIO_TEXCOORD, 0),
+      makeDstToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_TEX, 0),
+      makeDstToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_MOV, 0),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      kD3DSIO_END,
   };
-  if (operandCount >= 2) {
-    bytecode.push_back(makeSrcToken(kD3DSPR_CONST, 0));
-  }
-  if (operandCount >= 3) {
-    bytecode.push_back(makeSrcToken(kD3DSPR_CONST, 1));
-  }
-  bytecode.insert(bytecode.end(), {
-      makeInstructionToken(kD3DSIO_MOV, 2),
+}
+
+std::vector<u32> makePs14TexcrdTexldDepthBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 1, 4),
+      makeInstructionToken(kD3DSIO_TEXCOORD, 0),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_TEX, 0),
+      makeDstToken(kD3DSPR_TEMP, 1),
+      makeSrcToken(kD3DSPR_ADDR, 1),
+      makeInstructionToken(kD3DSIO_TEXDEPTH, 0),
+      makeSrcToken(kD3DSPR_TEMP, 5),
+      makeInstructionToken(kD3DSIO_MOV, 0),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 1),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs13LegacyTextureFamilyBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 1, 3),
+      makeInstructionToken(kD3DSIO_TEXCOORD, 0), makeDstToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_TEXCOORD, 0), makeDstToken(kD3DSPR_ADDR, 1),
+      makeInstructionToken(kD3DSIO_TEXBEM, 0), makeDstToken(kD3DSPR_ADDR, 0), makeSrcToken(kD3DSPR_ADDR, 1),
+      makeInstructionToken(kD3DSIO_TEXBEML, 0), makeDstToken(kD3DSPR_ADDR, 1), makeSrcToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_TEXREG2AR, 0), makeDstToken(kD3DSPR_ADDR, 2), makeSrcToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_TEXREG2GB, 0), makeDstToken(kD3DSPR_ADDR, 3), makeSrcToken(kD3DSPR_ADDR, 1),
+      makeInstructionToken(kD3DSIO_TEXREG2RGB, 0), makeDstToken(kD3DSPR_ADDR, 4), makeSrcToken(kD3DSPR_ADDR, 2),
+      makeInstructionToken(kD3DSIO_TEXDP3, 0), makeDstToken(kD3DSPR_ADDR, 5), makeSrcToken(kD3DSPR_ADDR, 4),
+      makeInstructionToken(kD3DSIO_TEXDP3TEX, 0), makeDstToken(kD3DSPR_ADDR, 5), makeSrcToken(kD3DSPR_ADDR, 4),
+      makeInstructionToken(kD3DSIO_TEXM3x2PAD, 0), makeDstToken(kD3DSPR_ADDR, 0), makeSrcToken(kD3DSPR_ADDR, 1),
+      makeInstructionToken(kD3DSIO_TEXM3x2TEX, 0), makeDstToken(kD3DSPR_ADDR, 1), makeSrcToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_TEXM3x3PAD, 0), makeDstToken(kD3DSPR_ADDR, 0), makeSrcToken(kD3DSPR_ADDR, 1),
+      makeInstructionToken(kD3DSIO_TEXM3x3PAD, 0), makeDstToken(kD3DSPR_ADDR, 1), makeSrcToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_TEXM3x3TEX, 0), makeDstToken(kD3DSPR_ADDR, 2), makeSrcToken(kD3DSPR_ADDR, 1),
+      makeInstructionToken(kD3DSIO_TEXM3x3SPEC, 0), makeDstToken(kD3DSPR_ADDR, 3), makeSrcToken(kD3DSPR_ADDR, 2),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_TEXM3x3VSPEC, 0), makeDstToken(kD3DSPR_ADDR, 4), makeSrcToken(kD3DSPR_ADDR, 3),
+      makeInstructionToken(kD3DSIO_TEXM3x3, 0), makeDstToken(kD3DSPR_ADDR, 5), makeSrcToken(kD3DSPR_ADDR, 4),
+      makeInstructionToken(kD3DSIO_TEXM3x2PAD, 0), makeDstToken(kD3DSPR_ADDR, 0), makeSrcToken(kD3DSPR_ADDR, 1),
+      makeInstructionToken(kD3DSIO_TEXM3x2DEPTH, 0), makeDstToken(kD3DSPR_ADDR, 1), makeSrcToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_MOV, 0), makeDstToken(kD3DSPR_COLOROUT, 0), makeSrcToken(kD3DSPR_ADDR, 5),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs14BemBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 1, 4),
+      makeInstructionToken(kD3DSIO_BEM, 0),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeSrcToken(kD3DSPR_TEMP, 1),
+      makeInstructionToken(kD3DSIO_MOV, 0),
       makeDstToken(kD3DSPR_COLOROUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 0),
       kD3DSIO_END,
-  });
-  return bytecode;
+  };
+}
+
+std::vector<u32> makePs13ReservedTexm3x3DiffBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 1, 3),
+      makeInstructionToken(kD3DSIO_TEXM3x3DIFF, 0),
+      makeDstToken(kD3DSPR_ADDR, 0),
+      makeSrcToken(kD3DSPR_ADDR, 1),
+      kD3DSIO_END,
+  };
 }
 
 std::vector<u32> makePs30CallnzFixedOperandCountBytecode() {
@@ -694,10 +810,12 @@ std::vector<u32> makePs30TextureLodOpcodeBytecode() {
       makeInstructionToken(kD3DSIO_DCL, 2),
       makeDclSamplerTypeToken(),
       makeDstToken(kD3DSPR_SAMPLER, 4),
-      makeInstructionToken(kD3DSIO_TEXLDD, 3),
+      makeInstructionToken(kD3DSIO_TEXLDD, 5),
       makeDstToken(kD3DSPR_TEMP, 0),
       makeSrcToken(kD3DSPR_CONST, 0),
       makeSrcToken(kD3DSPR_SAMPLER, 3),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeSrcToken(kD3DSPR_CONST, 3),
       makeInstructionToken(kD3DSIO_TEXLDL, 3),
       makeDstToken(kD3DSPR_TEMP, 1),
       makeSrcToken(kD3DSPR_CONST, 1),
@@ -705,6 +823,26 @@ std::vector<u32> makePs30TextureLodOpcodeBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_COLOROUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 1),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30TexlddSamplerTypeBytecode(u32 samplerType) {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSamplerTypeToken(samplerType),
+      makeDstToken(kD3DSPR_SAMPLER, 3),
+      makeInstructionToken(kD3DSIO_TEXLDD, 5),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeSrcToken(kD3DSPR_SAMPLER, 3),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeSrcToken(kD3DSPR_CONST, 3),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
       kD3DSIO_END,
   };
 }
@@ -753,15 +891,38 @@ std::vector<u32> makePs30FixedOperandCountDecodeBytecode() {
 
 std::vector<u32> makePs30RelativeAddressingBytecode() {
   using namespace dxmt9::d3d9bc;
-  // Destination relative addressing remains unsupported; the rel-addr
-  // DWORD that follows the destination operand satisfies the parser
-  // but the IR layer must still throw deterministically.
+  // Temp destination relative addressing is not a supported D3D9
+  // destination class for this translator. The rel-addr DWORD that
+  // follows the destination operand satisfies the parser, but the IR
+  // layer must still throw deterministically instead of dropping the
+  // dynamic index.
   return {
       makeVersionToken(false, 3, 0),
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeRelativeDstToken(kD3DSPR_TEMP, 0),
       makeSrcToken(kD3DSPR_ADDR, 0),
       makeSrcToken(kD3DSPR_CONST, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makeVs20IndexedConstDestinationBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 2, 0),
+      // mova a0.x, c0
+      makeInstructionToken(kD3DSIO_MOVA, 2),
+      makeDstToken(kD3DSPR_ADDR, 0, 0x1u),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      // mov c[a0+5], c1
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeRelativeDstToken(kD3DSPR_CONST, 5),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      // Keep the shader well-formed for the vertex translator.
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 5),
       kD3DSIO_END,
   };
 }
@@ -845,7 +1006,7 @@ void testD3DBCDecodeAndClassificationFixtures() {
   checkEqual(module.instructions.size(), size_t{3}, "D3DBC decode skips comments and excludes END token");
   checkEqual(module.instructions[0].opcode, kD3DSIO_DCL, "D3DBC decode preserves first opcode after comment");
   checkEqual(module.instructions[1].opcode, kD3DSIO_TEXLDD, "D3DBC decode preserves texture opcode");
-  checkEqual(module.instructions[1].operands.size(), size_t{3},
+  checkEqual(module.instructions[1].operands.size(), size_t{5},
              "D3DBC decode uses fixed operand count for known texture opcodes");
   checkEqual(module.instructions[2].opcode, kD3DSIO_MOV, "D3DBC decode preserves predicated opcode");
   checkEqual(module.instructions[2].controls, 0x5au, "D3DBC decode preserves instruction controls");
@@ -886,6 +1047,14 @@ void testD3DBCDecodeAndClassificationFixtures() {
                 "D3DBC register classification maps addr register type to input kind in pixel shaders");
   checkEqual(translator_test::tokenHasRelativeAddressingForTest(makeRelativeDstToken(kD3DSPR_TEMP, 0)), true,
              "D3DBC operand decode classifies relative-addressing tokens");
+}
+
+void testPs30PredicatedInstructionLowersGuard() {
+  const auto source = translatePixel(makePs30DecodeFixtureBytecode());
+  checkContains(source, "bool p[16];", "predicated instruction declares predicate register storage");
+  checkContains(source, "if (p[0]) {", "predicated instruction lowers to a p0 guard");
+  checkContains(source, "outColor[1] = (cBool[2] != 0u ? float4(1.0f) : float4(0.0f));",
+                "predicated MOV body remains inside translated source");
 }
 
 void testD3DOpcodeNamesCoverUnsupportedSurface() {
@@ -968,6 +1137,12 @@ void testVs30OutputSemanticMappingBySemanticIndex() {
   checkContains(source, "outSecondaryColor = cFloat[2]", "vs_3_0 color1 semantic maps to secondary color output");
   checkNotContains(source, "outTexcoord[1] = cFloat[1]",
                    "vs_3_0 texcoord semantic does not fall back to raw output register index");
+}
+
+void testVertexDepthOutThrowsDeterministically() {
+  checkThrowsContains([] { translateVertex(makeVs20DepthOutBytecode()); },
+                      "vertex depth output register is invalid",
+                      "D3D9 vertex shaders must not map oDepth to clip-space position.z");
 }
 
 void testVs30HighOutputRegisterSemanticMapping() {
@@ -1170,6 +1345,28 @@ void testPs30WriteMaskSwizzleAndSourceModifiers() {
   checkContains(source, "outColor[0] = r[1];", "ps_3_0 transformed masked result reaches color output");
 }
 
+void testPs30MissingSourceModifierCoverage() {
+  const auto source = translatePixel(makePs30SourceModifierCoverageBytecode());
+  checkContains(source, "r[0] = -(cFloat[0] * float4(2.0f) - float4(1.0f));",
+                "ps_3_0 signneg source modifier lowers to negated signed x2 bias");
+  checkContains(source, "r[1] = (float4(1.0f) - cFloat[1]);",
+                "ps_3_0 complement source modifier lowers to 1-src");
+  checkContains(source, "r[2] = (cFloat[2] * float4(2.0f));",
+                "ps_3_0 x2 source modifier lowers to multiply by two");
+  checkContains(source, "r[3] = -(cFloat[3] * float4(2.0f));",
+                "ps_3_0 x2neg source modifier lowers to negated multiply by two");
+  checkContains(source, "r[4] = ((cFloat[4]) / float4((cFloat[4]).z));",
+                "ps_3_0 dz source modifier lowers to z-projected vector");
+  checkContains(source, "r[5] = ((cFloat[5]) / float4((cFloat[5]).w));",
+                "ps_3_0 dw source modifier lowers to w-projected vector");
+  checkContains(source,
+                "r[6] = select(float4(1.0f), float4(0.0f), "
+                "((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))) != float4(0.0f));",
+                "ps_3_0 not source modifier lowers boolean-like source to inverted 0/1 float mask");
+  checkContains(source, "outColor[0] = r[7];",
+                "ps_3_0 source modifier coverage result reaches color output");
+}
+
 void testPs30IfElseFlowControlTranslation() {
   const auto source = translatePixel(makePs30IfElseBytecode());
   checkContains(source, "if ((cFloat[0]).x != 0.0f) {", "ps_3_0 IF condition lowers to scalar branch");
@@ -1212,26 +1409,16 @@ void testPs30BreakcFlowControlTranslation() {
 
 void testPs30CallLabelRetFlowControlTranslation() {
   const auto source = translatePixel(makePs30CallLabelRetBytecode());
-  checkContains(source, "// call label 7", "ps_3_0 CALL target is preserved in generated source comments");
-  checkContains(source, "do {", "ps_3_0 CALL opens a deterministic single-pass call block");
-  checkContains(source, "// label 7", "ps_3_0 LABEL target is preserved in generated source comments");
   checkContains(source, "r[0] = cFloat[4];", "ps_3_0 CALL/LABEL body is translated");
-  checkContains(source, "break;", "ps_3_0 RET inside CALL lowers to block break");
-  checkContains(source, "} while (false);", "ps_3_0 RET closes the single-pass call block");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 CALL/LABEL/RET result reaches color output");
 }
 
 void testPs30CallnzLabelRetFlowControlTranslation() {
   const auto source = translatePixel(makePs30CallnzLabelRetBytecode());
-  checkContains(source, "// callnz label 9", "ps_3_0 CALLNZ target is preserved in generated source comments");
   checkContains(source,
                 "if (((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f) {",
-                "ps_3_0 CALLNZ guards the call block with a bool-source nonzero test");
-  checkContains(source, "do {", "ps_3_0 CALLNZ opens the same single-pass call block as CALL");
-  checkContains(source, "// label 9", "ps_3_0 CALLNZ matching LABEL is preserved in generated source comments");
+                "ps_3_0 CALLNZ guards the inlined call body with a bool-source nonzero test");
   checkContains(source, "r[0] = cFloat[4];", "ps_3_0 CALLNZ/LABEL body is translated");
-  checkContains(source, "break;", "ps_3_0 RET inside CALLNZ lowers to block break");
-  checkContains(source, "} while (false);", "ps_3_0 RET closes the CALLNZ single-pass call block");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 CALLNZ/LABEL/RET result reaches color output");
 }
 
@@ -1274,44 +1461,87 @@ void testPs30TextureLodOpcodeLoweringContracts() {
   const auto source = translatePixel(makePs30TextureLodOpcodeBytecode());
   checkContains(source, "texture2d<float> tex3 [[texture(3)]]", "TEXLDD declares the referenced sampler slot");
   checkContains(source, "sampler samp4 [[sampler(4)]]", "TEXLDL declares the referenced sampler state slot");
-  checkContains(source, "tex3.sample(samp3, (cFloat[0]).xy)", "TEXLDD lowers to deterministic sample call");
+  checkContains(source,
+                "tex3.sample(samp3, (cFloat[0]).xy, gradient2d((cFloat[2]).xy, (cFloat[3]).xy))",
+                "TEXLDD lowers to an explicit-gradient sample call");
   checkContains(source, "tex4.sample(samp4, (cFloat[1]).xy, level(cFloat[1].w))",
                 "TEXLDL lowers to explicit level sample call");
   checkContains(source, "outColor[0] = r[1];", "texture LOD opcode result reaches color output");
 }
 
-void testLegacyTextureOpcodesThrowDeterministically() {
-  using namespace dxmt9::d3d9bc;
-  constexpr std::array<std::pair<u32, u32>, 19> kLegacyTextureOpcodes = {
-      std::pair{kD3DSIO_TEXCOORD, 1u},
-      std::pair{kD3DSIO_TEXBEM, 2u},
-      std::pair{kD3DSIO_TEXBEML, 2u},
-      std::pair{kD3DSIO_TEXREG2AR, 2u},
-      std::pair{kD3DSIO_TEXREG2GB, 2u},
-      std::pair{kD3DSIO_TEXM3x2PAD, 2u},
-      std::pair{kD3DSIO_TEXM3x2TEX, 2u},
-      std::pair{kD3DSIO_TEXM3x3PAD, 2u},
-      std::pair{kD3DSIO_TEXM3x3TEX, 2u},
-      std::pair{kD3DSIO_TEXM3x3DIFF, 2u},
-      std::pair{kD3DSIO_TEXM3x3SPEC, 3u},
-      std::pair{kD3DSIO_TEXM3x3VSPEC, 2u},
-      std::pair{kD3DSIO_BEM, 3u},
-      std::pair{kD3DSIO_TEXDEPTH, 1u},
-      std::pair{kD3DSIO_TEXREG2RGB, 2u},
-      std::pair{kD3DSIO_TEXDP3TEX, 2u},
-      std::pair{kD3DSIO_TEXM3x2DEPTH, 2u},
-      std::pair{kD3DSIO_TEXDP3, 2u},
-      std::pair{kD3DSIO_TEXM3x3, 2u},
-  };
+void testPs30TextureSamplerDimensionalityContracts() {
+  const auto cubeSource = translatePixel(makePs30TexlddSamplerTypeBytecode(3u));
+  checkContains(cubeSource, "texturecube<float> tex3 [[texture(3)]]",
+                "cube DCL sampler declares texturecube in MSL");
+  checkContains(cubeSource,
+                "tex3.sample(samp3, (cFloat[0]).xyz, gradientcube((cFloat[2]).xyz, (cFloat[3]).xyz))",
+                "cube TEXLDD lowers to xyz explicit-gradient sample");
 
-  for (const auto [opcode, operandCount] : kLegacyTextureOpcodes) {
-    checkThrowsContains(
-        [opcode, operandCount] {
-          (void)translatePixel(makePs30SingleOpcodeBytecode(opcode, operandCount));
-        },
-        "unsupported legacy texture opcode",
-        "legacy texture opcode no longer silently lowers or falls through");
-  }
+  const auto volumeSource = translatePixel(makePs30TexlddSamplerTypeBytecode(4u));
+  checkContains(volumeSource, "texture3d<float> tex3 [[texture(3)]]",
+                "volume DCL sampler declares texture3d in MSL");
+  checkContains(volumeSource,
+                "tex3.sample(samp3, (cFloat[0]).xyz, gradient3d((cFloat[2]).xyz, (cFloat[3]).xyz))",
+                "volume TEXLDD lowers to xyz explicit-gradient sample");
+}
+
+void testPs11LegacyTexcoordTexLoweringContract() {
+  const auto source = translatePixel(makePs11TexcoordTexBytecode());
+  checkContains(source, "for (uint i = 0; i < 8u; ++i) { outTexcoord[i] = dxmt9_select_texcoord(in, i); }",
+                "ps_1_1 initializes mutable t# registers from interpolated texcoords");
+  checkContains(source, "outTexcoord[0] = float4(saturate((dxmt9_select_texcoord(in, 0u)).xyz), 1.0f);",
+                "ps_1_1 TEXCOORD clamps the stage texcoord and forces w=1");
+  checkContains(source, "texture2d<float> tex0 [[texture(0)]]", "ps_1_1 TEX binds the destination stage texture");
+  checkContains(source, "outTexcoord[0] = tex0.sample(samp0, (outTexcoord[0]).xy);",
+                "ps_1_1 TEX samples stage 0 through destination t0");
+  checkContains(source, "outColor[0] = outTexcoord[0];", "ps_1_1 t# source reaches color output");
+}
+
+void testPs14TexcrdTexldTexdepthLoweringContract() {
+  const auto source = translatePixel(makePs14TexcrdTexldDepthBytecode());
+  checkContains(source, "r[0] = dxmt9_select_texcoord(in, 0u);",
+                "ps_1_4 TEXCRD copies explicit t# source to r#");
+  checkContains(source, "texture2d<float> tex1 [[texture(1)]]", "ps_1_4 TEXLD binds destination stage texture");
+  checkContains(source, "r[1] = tex1.sample(samp1, (dxmt9_select_texcoord(in, 1u)).xy);",
+                "ps_1_4 TEXLD samples destination stage with explicit source coords");
+  checkContains(source, "outDepth = clamp((r[5]).x / min((r[5]).y, 1.0f), 0.0f, 1.0f);",
+                "ps_1_4 TEXDEPTH writes fragment depth from r5-style source");
+}
+
+void testPs13LegacyTextureFamilyLoweringContract() {
+  const auto source = translatePixel(makePs13LegacyTextureFamilyBytecode());
+  checkContains(source, "ffpPs.bumpEnvMat[0]", "TEXBEM lowers through bump-env matrix state");
+  checkContains(source, "ffpPs.bumpEnvLum[1]", "TEXBEML lowers through bump-env luminance state");
+  checkContains(source, "float4((outTexcoord[0]).w, (outTexcoord[0]).x, 0.0f, 1.0f)",
+                "TEXREG2AR maps source alpha/red to sample coords");
+  checkContains(source, "float4((outTexcoord[1]).y, (outTexcoord[1]).z, 0.0f, 1.0f)",
+                "TEXREG2GB maps source green/blue to sample coords");
+  checkContains(source, "dot((outTexcoord[5]).xyz, (outTexcoord[4]).xyz)",
+                "TEXDP3/TEXDP3TEX use destination-stage texcoord dot source rgb");
+  checkContains(source, "dxmt9_texm.x =", "TEXM3x2/TEXM3x3 PAD stores matrix row x");
+  checkContains(source, "dxmt9_texm.y =", "TEXM3x2TEX/TEXM3x2DEPTH stores matrix row y");
+  checkContains(source, "dxmt9_texm.z =", "TEXM3x3 final op stores matrix row z");
+  checkContains(source, "reflect(normalize((cFloat[0]).xyz), normalize(dxmt9_texm.xyz))",
+                "TEXM3x3SPEC forms reflection coords from explicit eye vector");
+  checkContains(source, "reflect(normalize(float3(outTexcoord[2].w, outTexcoord[3].w, outTexcoord[4].w))",
+                "TEXM3x3VSPEC forms eye vector from texture-coordinate w components");
+  checkContains(source, "outDepth = dxmt9_texm.y == 0.0f ? 1.0f : clamp(dxmt9_texm.x / dxmt9_texm.y, 0.0f, 1.0f);",
+                "TEXM3x2DEPTH writes fragment depth with zero-y guard");
+}
+
+void testPs14BemLoweringContract() {
+  const auto source = translatePixel(makePs14BemBytecode());
+  checkContains(source, "r[0] = float4((dxmt9_select_texcoord(in, 0u)).xy + float2(ffpPs.bumpEnvMat[0].x",
+                "ps_1_4 BEM writes bumped coordinates using destination-stage bump matrix");
+}
+
+void testReservedTexm3x3DiffStillThrowsDeterministically() {
+  checkThrowsContains(
+      [] {
+        (void)translatePixel(makePs13ReservedTexm3x3DiffBytecode());
+      },
+      "reserved legacy texture opcode",
+      "reserved TEXM3x3DIFF opcode stays a deterministic unsupported path");
 }
 
 void testCallnzFixedOperandCountDecodeContract() {
@@ -1337,16 +1567,22 @@ void testD3DBCFixedOperandCountDecodeContract() {
   checkContains(source, "outColor[0] = r[1];", "fixed operand-count decode result reaches color output");
 }
 
-void testPs30RelativeAddressingThrowsDeterministically() {
-  // Source relative addressing is now supported; this test asserts
-  // *destination* relative addressing remains a deterministic throw
-  // until that path is implemented.
-  checkThrowsContains(
-      [] {
-        (void)translatePixel(makePs30RelativeAddressingBytecode());
-      },
-      "relative addressing is not supported yet",
-      "ps_3_0 destination-relative-addressing bytecode reports deterministic unsupported contract");
+void testPs30RelativeAddressingLowersTempDestinationIndex() {
+  const auto source = translatePixel(makePs30RelativeAddressingBytecode());
+  checkContains(source,
+                "r[clamp(a0 + 0, 0, 31)] = cFloat[0];",
+                "ps_3_0 temp destination relative addressing lowers to a clamped r[] write");
+}
+
+void testVs20IndexedConstDestinationLowersToClampedMutableConstWrite() {
+  const auto source = translateVertex(makeVs20IndexedConstDestinationBytecode());
+
+  checkContains(source, "float4 cFloat[256];",
+                "indexed const destination keeps a mutable full-size cFloat array");
+  checkContains(source, "cFloat[clamp(a0 + 5, 0, 255)] = cFloat[1];",
+                "indexed const destination emits clamped a0+N write");
+  checkNotContains(source, "constant float4* cFloat = ",
+                   "indexed const destination must not alias cFloat through a read-only constant pointer");
 }
 
 void testVs20DefLiteralWithRelAddrBitDoesNotDriftParser() {
@@ -1442,18 +1678,21 @@ int main() {
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
 
     testD3DBCDecodeAndClassificationFixtures();
+    testPs30PredicatedInstructionLowersGuard();
     testD3DOpcodeNamesCoverUnsupportedSurface();
     testPs20SamplerRegisterSlotMapping();
     testPs30InputSemanticTexcoordMapping();
     testPs30TexkillLoweringContract();
     testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();
+    testVertexDepthOutThrowsDeterministically();
     testVs30HighOutputRegisterSemanticMapping();
     testVs30VertexDeclarationTypeLoads();
     testVs30InputLayoutPreservesStreamBoundaries();
     testVs30MultiStreamVertexDeclarationLoads();
     testDefaultNoPixelVFlipAndNoVertexYFlip();
     testPs30WriteMaskSwizzleAndSourceModifiers();
+    testPs30MissingSourceModifierCoverage();
     testPs30IfElseFlowControlTranslation();
     testPs30LoopFlowControlTranslation();
     testPs30RepFlowControlTranslation();
@@ -1464,10 +1703,16 @@ int main() {
     testPs30TranscendentalOpcodeLoweringContracts();
     testPs30MatrixOpcodeLoweringContracts();
     testPs30TextureLodOpcodeLoweringContracts();
-    testLegacyTextureOpcodesThrowDeterministically();
+    testPs30TextureSamplerDimensionalityContracts();
+    testPs11LegacyTexcoordTexLoweringContract();
+    testPs14TexcrdTexldTexdepthLoweringContract();
+    testPs13LegacyTextureFamilyLoweringContract();
+    testPs14BemLoweringContract();
+    testReservedTexm3x3DiffStillThrowsDeterministically();
     testCallnzFixedOperandCountDecodeContract();
     testD3DBCFixedOperandCountDecodeContract();
-    testPs30RelativeAddressingThrowsDeterministically();
+    testPs30RelativeAddressingLowersTempDestinationIndex();
+    testVs20IndexedConstDestinationLowersToClampedMutableConstWrite();
     testVs20DefLiteralWithRelAddrBitDoesNotDriftParser();
     testVs20IndexedConstSourceParserConsumesRelAddrDword();
     testVs20IndexedConstSourceLowersToClampedConstAccess();

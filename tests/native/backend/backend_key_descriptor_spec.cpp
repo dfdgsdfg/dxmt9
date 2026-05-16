@@ -99,6 +99,12 @@ void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   desc.rs.values[RS_FOG_START] = std::bit_cast<u32>(2.5f);
   desc.rs.values[RS_FOG_END] = std::bit_cast<u32>(9.75f);
   desc.rs.values[RS_FOG_DENSITY] = std::bit_cast<u32>(0.125f);
+  desc.textures[2].stageStates[TSS_BUMPENVMAT00] = std::bit_cast<u32>(0.25f);
+  desc.textures[2].stageStates[TSS_BUMPENVMAT01] = std::bit_cast<u32>(0.5f);
+  desc.textures[2].stageStates[TSS_BUMPENVMAT10] = std::bit_cast<u32>(0.75f);
+  desc.textures[2].stageStates[TSS_BUMPENVMAT11] = std::bit_cast<u32>(1.0f);
+  desc.textures[2].stageStates[TSS_BUMPENVLSCALE] = std::bit_cast<u32>(1.5f);
+  desc.textures[2].stageStates[TSS_BUMPENVLOFFSET] = std::bit_cast<u32>(0.125f);
 
   const auto hot = makeFlatDrawStateRecord(desc);
   const auto shaderLayout = makeDrawShaderLayoutContext(desc);
@@ -128,6 +134,12 @@ void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   checkEq(ffpPs.fogStart, 2.5f, "fog start bit-cast from render state");
   checkEq(ffpPs.fogEnd, 9.75f, "fog end bit-cast from render state");
   checkEq(ffpPs.fogDensity, 0.125f, "fog density bit-cast from render state");
+  checkEq(ffpPs.bumpEnvMat[2][0], 0.25f, "bump env mat00 copied");
+  checkEq(ffpPs.bumpEnvMat[2][1], 0.5f, "bump env mat01 copied");
+  checkEq(ffpPs.bumpEnvMat[2][2], 0.75f, "bump env mat10 copied");
+  checkEq(ffpPs.bumpEnvMat[2][3], 1.0f, "bump env mat11 copied");
+  checkEq(ffpPs.bumpEnvLum[2][0], 1.5f, "bump env luminance scale copied");
+  checkEq(ffpPs.bumpEnvLum[2][1], 0.125f, "bump env luminance offset copied");
   checkEq(volatileConsts.vertexStreamOffset, 64u, "stream zero offset copied");
   checkEq(volatileConsts.vertexStreamStride, 28u, "stream zero stride copied");
   checkEq(ffpVs.clipPlaneMask, 0x15u, "clip plane mask copied");

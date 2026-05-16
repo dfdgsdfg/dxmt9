@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 // D3D9 bytecode → SpirvModule decoding layer. Token unpacking, opcode tables,
 // per-module analysis passes, and the streaming bytecode parser. The Metal IR
@@ -25,6 +26,28 @@ namespace dxmt9::translator::detail_ {
 using namespace ::dxmt9::core;
 using namespace ::dxmt9::d3d9bc;
 using namespace ::dxmt9::ffp;
+
+namespace {
+
+constexpr u32 kD3DSPTextureTypeShift = 27u;
+constexpr u32 kD3DSPTextureTypeMask = 0x78000000u;
+constexpr u32 kD3DSTT2D = 2u;
+constexpr u32 kD3DSTTCube = 3u;
+constexpr u32 kD3DSTTVolume = 4u;
+
+::dxmt9::core::TextureType decodeDclTextureType(u32 token) {
+  switch ((token & kD3DSPTextureTypeMask) >> kD3DSPTextureTypeShift) {
+    case kD3DSTTCube:
+      return ::dxmt9::core::TextureType::Cube;
+    case kD3DSTTVolume:
+      return ::dxmt9::core::TextureType::Volume;
+    case kD3DSTT2D:
+    default:
+      return ::dxmt9::core::TextureType::TwoD;
+  }
+}
+
+}  // namespace
 
 std::array<u8, 4> decodeSwizzle(u32 token) {
   return {static_cast<u8>((token >> 16) & 0x3u), static_cast<u8>((token >> 18) & 0x3u),
@@ -325,7 +348,6 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_MAX:
     case kD3DSIO_POW:
     case kD3DSIO_CRS:
-    case kD3DSIO_TEXLDD:
     case kD3DSIO_TEXLDL:
     case kD3DSIO_SLT:
     case kD3DSIO_SGE:
@@ -335,6 +357,8 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_M3x3:
     case kD3DSIO_M3x2:
       return 3;
+    case kD3DSIO_TEXLDD:
+      return 5;
     case kD3DSIO_MAD:
     case kD3DSIO_LRP:
     case kD3DSIO_CND:
@@ -401,6 +425,153 @@ bool opcodeWritesFirstOperand(u32 opcode) {
   }
 }
 
+namespace {
+
+struct LabelRange {
+  u32 label = 0;
+  size_t labelInstruction = 0;
+  size_t bodyBegin = 0;
+  size_t retInstruction = 0;
+};
+
+std::optional<size_t> findLabelRange(const std::vector<LabelRange>& labels, u32 label) {
+  for (size_t i = 0; i < labels.size(); ++i) {
+    if (labels[i].label == label) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
+bool instructionIsInsideLabelRange(const std::vector<LabelRange>& labels, size_t instructionIndex) {
+  for (const auto& range : labels) {
+    if (instructionIndex >= range.labelInstruction && instructionIndex <= range.retInstruction) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<LabelRange> discoverLabelRanges(const std::vector<D3DDecodedInstruction>& instructions) {
+  std::vector<LabelRange> labels;
+  for (size_t i = 0; i < instructions.size(); ++i) {
+    const auto& instruction = instructions[i];
+    if (instruction.opcode != kD3DSIO_LABEL) {
+      continue;
+    }
+    if (instruction.operands.empty()) {
+      throw std::runtime_error("LABEL requires a label operand");
+    }
+    const u32 label = decodeLabelIndex(instruction.operands[0]);
+    if (findLabelRange(labels, label)) {
+      throw std::runtime_error("duplicate D3D LABEL");
+    }
+    size_t ret = instructions.size();
+    for (size_t j = i + 1; j < instructions.size(); ++j) {
+      if (instructions[j].opcode == kD3DSIO_LABEL) {
+        throw std::runtime_error("nested D3D LABEL is unsupported");
+      }
+      if (instructions[j].opcode == kD3DSIO_RET) {
+        ret = j;
+        break;
+      }
+    }
+    if (ret == instructions.size()) {
+      throw std::runtime_error("D3D LABEL body is missing RET");
+    }
+    labels.push_back(LabelRange{label, i, i + 1, ret});
+    i = ret;
+  }
+  return labels;
+}
+
+void appendExpandedInstructionRange(std::vector<D3DDecodedInstruction>& out,
+                                    const std::vector<D3DDecodedInstruction>& instructions,
+                                    const std::vector<LabelRange>& labels,
+                                    size_t begin,
+                                    size_t end,
+                                    std::vector<u32>& activeLabels) {
+  for (size_t i = begin; i < end; ++i) {
+    const auto& instruction = instructions[i];
+    if (instruction.opcode == kD3DSIO_LABEL) {
+      if (instruction.operands.empty()) {
+        throw std::runtime_error("LABEL requires a label operand");
+      }
+      if (const auto labelIndex = findLabelRange(labels, decodeLabelIndex(instruction.operands[0]))) {
+        i = labels[*labelIndex].retInstruction;
+      }
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_RET) {
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_CALL || instruction.opcode == kD3DSIO_CALLNZ) {
+      if (instruction.operands.empty()) {
+        throw std::runtime_error("CALL requires a label operand");
+      }
+      const u32 label = decodeLabelIndex(instruction.operands[0]);
+      const auto labelIndex = findLabelRange(labels, label);
+      if (!labelIndex) {
+        throw std::runtime_error("D3D CALL target label is missing");
+      }
+      if (std::find(activeLabels.begin(), activeLabels.end(), label) != activeLabels.end()) {
+        throw std::runtime_error("recursive D3D CALL is unsupported");
+      }
+      if (instruction.opcode == kD3DSIO_CALLNZ) {
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("CALLNZ requires a label operand and condition source");
+        }
+        D3DDecodedInstruction syntheticIf{};
+        syntheticIf.opcode = kD3DSIO_IF;
+        syntheticIf.predicated = instruction.predicated;
+        syntheticIf.operands.push_back(instruction.operands[1]);
+        syntheticIf.relAddrTokens.push_back(instruction.relAddrTokens.size() > 1 ? instruction.relAddrTokens[1] : 0u);
+        out.push_back(std::move(syntheticIf));
+      } else if (instruction.predicated) {
+        D3DDecodedInstruction syntheticIf{};
+        syntheticIf.opcode = kD3DSIO_IF;
+        syntheticIf.operands.push_back((1u << 31) | (0u & 0x7ffu) | ((kD3DSPR_PREDICATE & 0x7u) << 28) |
+                                       (((kD3DSPR_PREDICATE >> 3) & 0x3u) << 11));
+        syntheticIf.relAddrTokens.push_back(0u);
+        out.push_back(std::move(syntheticIf));
+      }
+      activeLabels.push_back(label);
+      const auto& range = labels[*labelIndex];
+      appendExpandedInstructionRange(out, instructions, labels, range.bodyBegin, range.retInstruction, activeLabels);
+      activeLabels.pop_back();
+      if (instruction.opcode == kD3DSIO_CALLNZ || instruction.predicated) {
+        D3DDecodedInstruction syntheticEndIf{};
+        syntheticEndIf.opcode = kD3DSIO_ENDIF;
+        out.push_back(std::move(syntheticEndIf));
+      }
+      continue;
+    }
+    out.push_back(instruction);
+  }
+}
+
+void inlineShaderSubroutines(SpirvModule& module) {
+  const bool hasLabel = std::any_of(module.instructions.begin(), module.instructions.end(),
+                                   [](const D3DDecodedInstruction& instruction) {
+                                     return instruction.opcode == kD3DSIO_LABEL;
+                                   });
+  if (!hasLabel) {
+    return;
+  }
+  const auto labels = discoverLabelRanges(module.instructions);
+  std::vector<D3DDecodedInstruction> expanded;
+  std::vector<u32> activeLabels;
+  for (size_t i = 0; i < module.instructions.size(); ++i) {
+    if (instructionIsInsideLabelRange(labels, i)) {
+      continue;
+    }
+    appendExpandedInstructionRange(expanded, module.instructions, labels, i, i + 1, activeLabels);
+  }
+  module.instructions = std::move(expanded);
+}
+
+}  // namespace
+
 bool isConstantRegisterKind(D3DRegisterKind kind) {
   return kind == D3DRegisterKind::ConstFloat ||
          kind == D3DRegisterKind::ConstInt ||
@@ -411,6 +582,68 @@ bool isTextureSampleOpcode(u32 opcode) {
   return opcode == kD3DSIO_TEX ||
          opcode == kD3DSIO_TEXLDD ||
          opcode == kD3DSIO_TEXLDL;
+}
+
+bool isLegacyTextureSampleOpcode(u32 opcode) {
+  switch (opcode) {
+    case kD3DSIO_TEX:
+    case kD3DSIO_TEXBEM:
+    case kD3DSIO_TEXBEML:
+    case kD3DSIO_TEXREG2AR:
+    case kD3DSIO_TEXREG2GB:
+    case kD3DSIO_TEXM3x2TEX:
+    case kD3DSIO_TEXM3x3TEX:
+    case kD3DSIO_TEXM3x3SPEC:
+    case kD3DSIO_TEXM3x3VSPEC:
+    case kD3DSIO_TEXREG2RGB:
+    case kD3DSIO_TEXDP3TEX:
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::optional<u32> legacyPixelOperandCount(u32 opcode, u32 major, u32 minor, D3DShaderStage stage) {
+  if (stage != D3DShaderStage::Pixel || major != 1u) {
+    return std::nullopt;
+  }
+
+  switch (opcode) {
+    case kD3DSIO_TEXCOORD:
+      return minor >= 4u ? 2u : 1u;
+    case kD3DSIO_TEX:
+      return minor >= 4u ? 2u : 1u;
+    case kD3DSIO_TEXDEPTH:
+      return 1u;
+    case kD3DSIO_TEXBEM:
+    case kD3DSIO_TEXBEML:
+    case kD3DSIO_TEXREG2AR:
+    case kD3DSIO_TEXREG2GB:
+    case kD3DSIO_TEXM3x2PAD:
+    case kD3DSIO_TEXM3x2TEX:
+    case kD3DSIO_TEXM3x3PAD:
+    case kD3DSIO_TEXM3x3TEX:
+    case kD3DSIO_TEXM3x3DIFF:
+    case kD3DSIO_TEXM3x3VSPEC:
+    case kD3DSIO_TEXREG2RGB:
+    case kD3DSIO_TEXDP3TEX:
+    case kD3DSIO_TEXM3x2DEPTH:
+    case kD3DSIO_TEXDP3:
+    case kD3DSIO_TEXM3x3:
+      return 2u;
+    case kD3DSIO_TEXM3x3SPEC:
+    case kD3DSIO_BEM:
+      return 3u;
+    default:
+      return std::nullopt;
+  }
+}
+
+u32 legacyTextureStageIndex(const D3DDecodedInstruction& instruction) {
+  if (instruction.operands.empty()) {
+    return 0u;
+  }
+  return std::min<u32>(decodeRegisterIndex(instruction.operands[0]), kMaxSamplers - 1u);
 }
 
 u32 matrixConstantRows(u32 opcode) {
@@ -585,6 +818,9 @@ bool pixelWritesDepth(const SpirvModule& module) {
     return false;
   }
   for (const auto& instruction : module.instructions) {
+    if (instruction.opcode == kD3DSIO_TEXDEPTH || instruction.opcode == kD3DSIO_TEXM3x2DEPTH) {
+      return true;
+    }
     if (instruction.operands.empty() || !opcodeWritesFirstOperand(instruction.opcode)) {
       continue;
     }
@@ -599,6 +835,9 @@ bool pixelWritesDepth(const SpirvModule& module) {
 bool pixelUsesTexcoordOut(const SpirvModule& module) {
   if (module.stage != D3DShaderStage::Pixel) {
     return false;
+  }
+  if (module.major == 1u) {
+    return true;
   }
   for (const auto& instruction : module.instructions) {
     const bool writesDest = opcodeWritesFirstOperand(instruction.opcode);
@@ -633,7 +872,9 @@ std::array<bool, kMaxSamplers> collectPixelSamplerUsage(const SpirvModule& modul
     return usage;
   }
   for (const auto& instruction : module.instructions) {
-    if (isTextureSampleOpcode(instruction.opcode)) {
+    if (module.major == 1u && isLegacyTextureSampleOpcode(instruction.opcode)) {
+      usage[legacyTextureStageIndex(instruction)] = true;
+    } else if (isTextureSampleOpcode(instruction.opcode)) {
       usage[textureSamplerIndex(instruction, module.stage)] = true;
     }
   }
@@ -707,6 +948,7 @@ ConstantUsage collectConstantUsage(const SpirvModule& module) {
       case kD3DSIO_LOOP:
       case kD3DSIO_REP:
       case kD3DSIO_BREAKP:
+      case kD3DSIO_TEXDEPTH:
         sourceBegin = 0;
         break;
       case kD3DSIO_DEF:
@@ -848,8 +1090,11 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
   }
   module.major = (versionToken >> 8) & 0xffu;
   module.minor = versionToken & 0xffu;
-  if (module.major < 2 || module.major > 3) {
-    throw std::runtime_error("only SM 2.x and 3.x bytecode is supported");
+  if ((module.stage == D3DShaderStage::Vertex && !(module.major == 1u && module.minor == 1u) &&
+       module.major < 2u) ||
+      (module.stage == D3DShaderStage::Pixel && module.major < 1u) ||
+      module.major > 3u) {
+    throw std::runtime_error("only vs_1_1/SM 2.x/3.x vertex and ps_1_x/SM 2.x/3.x pixel bytecode is supported");
   }
 
   size_t offset = sizeof(u32);
@@ -876,7 +1121,9 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
     }
 
     u32 operandCount = 0;
-    try {
+    if (const auto legacyCount = legacyPixelOperandCount(opcode, module.major, module.minor, module.stage)) {
+      operandCount = *legacyCount;
+    } else try {
       operandCount = fixedOperandCount(opcode);
     } catch (const std::runtime_error&) {
       operandCount = (token >> 24) & 0xfu;
@@ -980,14 +1227,23 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
         instruction.relAddrTokens[i] = relAddrToken;
       }
     }
-    if (opcode == kD3DSIO_TEX || opcode == kD3DSIO_TEXLDD || opcode == kD3DSIO_TEXLDL || opcode == kD3DSIO_TEXDEPTH ||
-        opcode == kD3DSIO_TEXDP3 || opcode == kD3DSIO_TEXDP3TEX || opcode == kD3DSIO_TEXM3x2DEPTH ||
-        opcode == kD3DSIO_TEXM3x3 || opcode == kD3DSIO_TEXREG2RGB || opcode == kD3DSIO_BEM) {
+    if (opcode == kD3DSIO_TEX || opcode == kD3DSIO_TEXLDD || opcode == kD3DSIO_TEXLDL ||
+        opcode == kD3DSIO_TEXBEM || opcode == kD3DSIO_TEXBEML || opcode == kD3DSIO_TEXREG2AR ||
+        opcode == kD3DSIO_TEXREG2GB || opcode == kD3DSIO_TEXM3x2TEX || opcode == kD3DSIO_TEXM3x3TEX ||
+        opcode == kD3DSIO_TEXM3x3SPEC || opcode == kD3DSIO_TEXM3x3VSPEC || opcode == kD3DSIO_TEXREG2RGB ||
+        opcode == kD3DSIO_TEXDP3TEX) {
       module.usesTexture = true;
+    }
+    if (opcode == kD3DSIO_DCL && instruction.operands.size() >= 2) {
+      const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
+      if (dst.kind == D3DRegisterKind::Sampler && dst.index < module.samplerTextureTypes.size()) {
+        module.samplerTextureTypes[dst.index] = decodeDclTextureType(instruction.operands[0]);
+      }
     }
     module.instructions.push_back(std::move(instruction));
   }
 
+  inlineShaderSubroutines(module);
   return module;
 }
 

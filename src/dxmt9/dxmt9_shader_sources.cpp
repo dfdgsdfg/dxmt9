@@ -163,6 +163,9 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  uint alphaTestEnable;\n";
   out << "  uint alphaTestFunc;\n";
   out << "  uint fogMode;\n";
+  out << "  uint _pad;\n";
+  out << "  float4 bumpEnvMat[" << kMaxTextureStages << "];\n";
+  out << "  float2 bumpEnvLum[" << kMaxTextureStages << "];\n";
   out << "};\n";
   out << "struct DrawVolatile {\n";
   out << "  int vertexBaseIndex;\n";
@@ -382,11 +385,14 @@ std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
   out << "  constant FfpVsConsts* ffpVs    [[id(1)]];\n";
   out << "  constant PsConsts*    psConsts [[id(2)]];\n";
   out << "  constant FfpPsConsts* ffpPs    [[id(3)]];\n";
-  out << "  texture2d<float>      textures[" << kArgbufHybridTextureSlotCount
-      << "] [[id(" << kArgbufHybridConstantBufferCount << ")]];\n";
+  out << "  texture2d<float>      textures2d[" << kArgbufHybridTextureSlotCount
+      << "] [[id(" << kArgbufHybridTexture2DBase << ")]];\n";
+  out << "  texturecube<float>    texturesCube[" << kArgbufHybridTextureSlotCount
+      << "] [[id(" << kArgbufHybridTextureCubeBase << ")]];\n";
+  out << "  texture3d<float>      textures3d[" << kArgbufHybridTextureSlotCount
+      << "] [[id(" << kArgbufHybridTexture3DBase << ")]];\n";
   out << "  sampler               samplers[" << kArgbufHybridSamplerSlotCount
-      << "] [[id(" << (kArgbufHybridConstantBufferCount + kArgbufHybridTextureSlotCount)
-      << ")]];\n";
+      << "] [[id(" << kArgbufHybridSamplerBase << ")]];\n";
   out << "};\n";
   return out.str();
 }

@@ -15,5 +15,4 @@ ffff0200 05000051 a00f0000 3e800000 3f000000 3f400000 3f800000
 
 [test]
 expect-source pixel contains "tex0.sample"
-expect-source pixel contains "dfdx("
-expect-source pixel contains "dfdy("
+expect-source pixel contains "gradient2d("

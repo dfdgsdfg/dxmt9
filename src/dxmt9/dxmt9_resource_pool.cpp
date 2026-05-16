@@ -362,6 +362,20 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
           0, convert::toShaderReadViewSliceCount(desc.type),
           convert::toShaderReadSwizzle(desc.format), gpuId);
     }
+    if (record.texture) {
+      const auto srgbFormat = convert::toPixelFormat(desc.format, limits, true);
+      if (srgbFormat != info.pixel_format) {
+        uint64_t gpuId = 0;
+        record.srgbShaderReadTexture = record.texture.newTextureView(
+            srgbFormat, info.type, 0, info.mipmap_level_count,
+            0, convert::toShaderReadViewSliceCount(desc.type),
+            convert::formatNeedsShaderReadSwizzle(desc.format)
+                ? convert::toShaderReadSwizzle(desc.format)
+                : WMTTextureSwizzleChannels{WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+                                            WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha},
+            gpuId);
+      }
+    }
     // Both Private and Managed (discrete) reach the texture through a
     // staging-blit upload path — for Private because the CPU cannot
     // directly write to it, for Managed-discrete because we must pump
@@ -388,6 +402,12 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
   if (stored && stored->shaderReadTexture) {
     stored->shaderReadTexture.setLabel(labels::makeLabelStringFmt(
         "pool_tex_shader_view_h0x%llx_fmt%u",
+        static_cast<unsigned long long>(handle.value),
+        static_cast<unsigned>(desc.format)));
+  }
+  if (stored && stored->srgbShaderReadTexture) {
+    stored->srgbShaderReadTexture.setLabel(labels::makeLabelStringFmt(
+        "pool_tex_srgb_shader_view_h0x%llx_fmt%u",
         static_cast<unsigned long long>(handle.value),
         static_cast<unsigned>(desc.format)));
   }
@@ -431,6 +451,15 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
     info.options = convert::toResourceOptions(desc.pool, desc.usage, hasUnifiedMemory_);
     info.usage = convert::toTextureUsage(desc);
     record.texture = device.newTexture(info);
+    const auto srgbFormat = convert::toPixelFormat(desc.format, limits, true);
+    if (record.texture && srgbFormat != info.pixel_format) {
+      WMTTextureSwizzleChannels swizzle{
+          WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+          WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
+      uint64_t gpuId = 0;
+      record.srgbTexture = record.texture.newTextureView(
+          srgbFormat, record.texture.textureType(), 0, 1, 0, 1, swizzle, gpuId);
+    }
     if (sc > 1) {
       WMTTextureInfo resolveInfo = info;
       resolveInfo.sample_count = 1;

@@ -135,11 +135,7 @@ void testShaderThunk() {
   check(controlHandle != 0, "control flow shader thunk");
   const auto controlSource = shaderSourceToString(controlHandle);
   checkContains(controlSource, "vertex VSOut dxmt9_vs", "control flow vertex shader source");
-  checkContains(controlSource, "call label 7", "control flow call comment");
-  checkContains(controlSource, "label 7", "control flow label comment");
-  checkContains(controlSource, "do {", "control flow call wrapper");
-  checkContains(controlSource, "break;", "control flow return break");
-  checkContains(controlSource, "} while (false);", "control flow call wrapper close");
+  checkContains(controlSource, "r[3] = float4(sin(", "control flow call body is inlined at call site");
   checkContains(controlSource, "if ((cFloat[0]).x != 0.0f)", "control flow if translation");
   checkContains(controlSource, "} else {", "control flow else translation");
   checkContains(controlSource, "for (int dxmt9_loop_", "control flow loop translation");
