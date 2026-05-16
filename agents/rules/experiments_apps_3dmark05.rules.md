@@ -13,13 +13,13 @@ alwaysApply: false
 
 # 3DMark05 Experiment Status
 
-Last checked: 2026-05-15
+Last checked: 2026-05-16
 
 ## Summary
 
 3DMark05 is already registered as an exploratory local-external D3D9 benchmark.
-It currently has a launcher, installed Wine prefix, reference image, and a
-passing experiment result under the dxmt9 experiment harness.
+It currently has a launcher, installed Wine prefix, reference image, and
+repeatable dxmt9 execution that reaches 3D rendering.
 
 Current evidence does not show the Wine/vkd3d-shader SM1 HLSL compile failure
 pattern being investigated for 3DMark06. The latest 3DMark05 dxmt9 output
@@ -51,11 +51,61 @@ Catalogue notes:
 ```
 
 The flags select test groups and suppress splash/system-info/screens, but the
-skinned UI still requires the operator to click `Run 3DMark` once. Earlier
-attempts to automate the click were unreliable because Wine-on-macOS window
-geometry and accessibility metadata did not line up with the visible UI.
+skinned UI still requires the operator to activate `Run 3DMark`. Current
+practical automation:
+
+- `experiments/launchers/3dmark05.sh` sends `Enter` about 20 seconds after
+  launching the app by default. Set `DXMT_3DMARK05_AUTO_ENTER=0` to disable it,
+  or `DXMT_3DMARK05_ENTER_DELAY_SEC=N` to retime it.
+- Do not capture immediately after the benchmark starts. The first rendered
+  window can be black; the catalogue waits until `capture_delay_sec=32.0`.
+  In the 2026-05-16 run, visible 3D output appeared about 5 seconds after the
+  initial black frame.
+- The catalogue keeps `run_timeout_sec=10`, which is applied after screenshot
+  capture by `run_experiment.py`. This prevents long manual cleanup runs.
+
+Earlier attempts to automate a mouse click were unreliable because Wine-on-macOS
+window geometry and accessibility metadata did not line up with the visible UI.
 
 ## Latest Observed Result
+
+2026-05-16 delayed-capture investigation:
+
+- `experiments/launchers/3dmark05.sh` auto-pressed `Enter` after about 20
+  seconds, and `capture_delay_sec=32.0` captured the active GT1 scene instead
+  of the initial black frame.
+- `experiments/output/3dmark05-backbuffer-capture/actual.png` shows repeatable
+  severe visual corruption: large black/tan triangular regions, posterized red
+  character rendering, and noisy stippled texture-like regions.
+- The process is intentionally killed by the harness after capture
+  (`run_timeout_sec=10`, `returncode=-15`, `timed_out=true`,
+  `allow_timeout=true`), so this pass result only means the app reached a
+  capturable frame.
+- `DXMT_FORCE_EXPAND_INDEXED=1` did not materially change the corruption, so
+  direct indexed draw / index-buffer fetch is unlikely to be the primary cause.
+- `DXMT_DISABLE_ALPHA_TEST=1` did not materially change the corruption, so
+  alpha-test discard is unlikely to be the primary cause.
+- `DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1` produced a solid magenta render with HUD
+  still visible, confirming the present path is alive and that shader/pipeline
+  execution reaches fragment output.
+- Logs show VS/PS 2.x shader creation and many compressed texture resources
+  (`DXT1`, `DXT5`, some `DXT3`), with repeated successful
+  `device_present hr=0x00000000` and no D3DX/vkd3d shader compile failure
+  signatures.
+
+Earlier 2026-05-16 timing run:
+
+- Operator/automation sent `Enter` about 20 seconds after launch.
+- The benchmark entered the 3D scene and produced visibly non-black output after
+  a short black-screen period.
+- Harness `actual.png` was captured too early and reported `black_screen`
+  (`mean_luma=0.0`, `variance=0.0`), so treat that result as a capture-timing
+  failure, not proof that the app failed to render.
+- `returncode` was `0`; `timed_out` was `false`.
+- Logs showed repeated successful `device_present hr=0x00000000`, shader
+  creation, and no D3DX/vkd3d shader compile failure signatures.
+
+Earlier 2026-05-15 run:
 
 `experiments/output/3dmark05/result.json` reports:
 
@@ -84,8 +134,10 @@ frames in the current dxmt9 harness.
 
 - The experiment is still marked exploratory; pass status is harness-level, not
   a full visual/performance validation.
-- The launcher is not fully headless because the 3DMark UI requires one manual
-  click.
+- The launcher uses AppleScript to press Enter; this is sufficient locally but
+  still depends on macOS accessibility/focus behavior.
+- The current dxmt9 render is visually corrupted. Treat successful process
+  execution separately from visual correctness.
 - `dxmt9.log` contains common Wine macOS noise such as HID query fixmes,
   keyboard-layout fixmes, and experimental wow64 notice; these are not currently
   tied to a benchmark failure.

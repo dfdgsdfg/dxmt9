@@ -19,16 +19,18 @@ DXMT_EXPERIMENT_WORKDIR="$exp_repo_root/experiments/prefixs/3dmark05/drive_c/Pro
 ##   -nosysteminfo  skip system info collection
 ##
 ## NOTE: those flags only *select* the tests; the main UI still waits
-## for the user to press "Run 3DMark". Full automation via osascript
-## keystroke or cliclick was attempted but the wine-on-macOS window
-## geometry is inconsistent — CGWindowList reports 332x110 while the
-## visible 3DMark UI is ~1580x928 pixels (a ~2.4× ratio that doesn't
-## match any obvious Retina-vs-logical convention), so we can't
-## reliably compute the button's screen coordinate. Accessibility-tree
-## buttons also have missing labels under custom-skinned 3DMark UIs.
-##
-## So this launcher leaves the test selection automated and asks the
-## operator to click "Run 3DMark" once after the UI appears (within
-## ~15 s of launch).
+## for "Run 3DMark". Coordinate clicks are unreliable because the
+## Wine-on-macOS window geometry and accessibility metadata do not line
+## up with the visible skinned UI. In practice, pressing Enter after the
+## UI settles activates the default Run button reliably.
+if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
+  (
+    sleep "${DXMT_3DMARK05_ENTER_DELAY_SEC:-20}"
+    osascript \
+      -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true' \
+      -e 'tell application "System Events" to key code 36' || true
+  ) &
+fi
+
 exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" \
   -gtall -batchall -featureall -cpuall -nosplash -nosysteminfo -noscreens
