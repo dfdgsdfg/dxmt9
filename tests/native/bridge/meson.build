@@ -54,6 +54,17 @@ chunk_record_import_spec = executable(
 test('dxmt9-chunk-record-import-spec', chunk_record_import_spec,
      env: dxmt9_native_test_env)
 
+pe_chunk_record_value_spec = executable(
+  'dxmt9-pe-chunk-record-value-spec',
+  'pe_chunk_record_value_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-chunk-record-value-spec', pe_chunk_record_value_spec,
+     env: dxmt9_native_test_env)
+
 bridge_ops_spec = executable(
   'dxmt9-bridge-ops-spec',
   'bridge_ops_spec.cpp',
@@ -68,6 +79,21 @@ bridge_ops_spec = executable(
 )
 
 test('dxmt9-bridge-ops-spec', bridge_ops_spec)
+
+bridge_marshalling_value_spec = executable(
+  'dxmt9-bridge-marshalling-value-spec',
+  'bridge_marshalling_value_spec.cpp',
+  bridge_codegen[0],
+  include_directories: [
+    dxmt9_inc,
+    bridge_gen_inc,
+    include_directories('../../../src'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-bridge-marshalling-value-spec', bridge_marshalling_value_spec)
 
 # Stand-alone PE-side bridge test: links no provider, instead overriding
 # the unix-call thunk so we can observe the wmtcmd struct that the

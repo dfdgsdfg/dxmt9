@@ -41,6 +41,17 @@ resource_hazard_spec = executable(
 
 test('dxmt9-resource-hazard-spec', resource_hazard_spec)
 
+imported_apply_state_value_spec = executable(
+  'dxmt9-imported-apply-state-value-spec',
+  'imported_apply_state_value_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-imported-apply-state-value-spec',
+     imported_apply_state_value_spec)
+
 render_pass_actions_spec = executable(
   'dxmt9-render-pass-actions-spec',
   'render_pass_actions_spec.cpp',
@@ -160,6 +171,17 @@ argbuf_hybrid_msl_spec = executable(
 )
 
 test('dxmt9-argbuf-hybrid-msl-spec', argbuf_hybrid_msl_spec)
+
+shader_argbuf_binding_value_spec = executable(
+  'dxmt9-shader-argbuf-binding-value-spec',
+  'shader_argbuf_binding_value_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-shader-argbuf-binding-value-spec',
+     shader_argbuf_binding_value_spec)
 
 # R-BACK-12.22..12.26 — Stage 2 argbuf-hybrid populator spec.
 # CPU-only spec for the per-encoder argbuf populator: encoder-resource

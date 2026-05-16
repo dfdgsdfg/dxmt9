@@ -114,6 +114,17 @@ dod_state_format_spec = executable(
 test('dxmt9-dod-state-format-spec', dod_state_format_spec,
      env: dxmt9_native_test_env_vars)
 
+resource_format_boundary_spec = executable(
+  'dxmt9-resource-format-boundary-spec',
+  'resource_format_boundary_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-resource-format-boundary-spec', resource_format_boundary_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 # CPU-only chunk-build microbenchmark (V1 audit item (a), boundary B1).
 # Times the cost of building POD chunk records from a typical D3D9
 # hot-path mix isolated from any bridge / Metal / GPU work. Output

@@ -163,6 +163,23 @@ cover broad shader/backend behaviour. The layer remains partial because the
 extended runtime probe layer and Wine runtime execution of the PE conformance
 suite are still open.
 
+### R-TEST-0.10 Boundary Value Coverage
+
+⚠️ Partial. Existing native tests cover many helper-level value transforms, but
+the exact value carried across several production boundaries is not fully
+asserted. The rows below track the implementation goal for closing R-TEST-0.10:
+each boundary needs tests that compare the semantic value immediately before and
+after the boundary, not only layout, helper conversion, or final rendered output.
+
+| Boundary lane | Status | Current evidence | Missing evidence / implementation goal |
+|---|---|---|---|
+| B1: PE setters -> D9C packet / variable records | ⚠️ | `dxmt9-pe-chunk-record-value-spec` asserts exact rich `D9CDrawPrimitivePacket` values, retained handle ranges, record ordering, and all six SET_CONST tail payloads; layout/validation suites still guard POD shape. | Real PE setter capture is still blocked because the Windows-only `D3D9DeviceImpl` packet/const appenders are private. A narrow native-safe producer capture seam is still needed to prove actual PE setters generate those exact records. |
+| B2: imported records -> core `DeviceState` / replay inputs | ✅ | `dxmt9-imported-apply-state-value-spec` asserts rich APPLY_STATE and SET_CONST payload propagation into core state, submitted draw-run state, `DrawUniformPayload`, bulk retention, indexed draw policy, and malformed-record no-mutation behaviour; `resource_hazard_spec` and `dod_replay_observer_spec` cover ordering. | Queue dirty-range bitsets remain private, so this lane verifies constant values at `DeviceState` and draw uniform boundaries rather than directly asserting the internal dirty accumulator. |
+| B3: public resource creation -> backend/Metal descriptors | ⚠️ | `dxmt9-resource-format-boundary-spec` routes public D9C texture/cube/volume/render-target/depth-stencil/offscreen creation through core resources and asserts D3DFORMAT identity, component/alpha policy, sRGB-compatible conversion, depth fallback policy, usage/pool/dimensions/levels/MSAA, pitch, and BC row rounding. | Final `resources::Pool` -> `WMTTextureInfo` descriptor values are still not directly observable from `RecordingBackend`; a resource-pool/Metal descriptor observer is needed for complete post-Pool evidence. |
+| B4: generated bridge/unixcall marshalling -> C boundary args | ⚠️ | `dxmt9-bridge-marshalling-value-spec` asserts generated `Args_*` native/wow64 POD layout, commit-chunk pointer/status preservation, wire blob record/handle payload values, sampler/TSS/const/factory argument values, and wow64 pointer/handle decode helpers. | The PE client wrapper and unix dispatch TU are not directly linkable into this native test; a generated-call fake sink would be needed to observe the full wrapper-to-dispatch path. |
+| B5: draw state -> shader arg-buffer texture/sampler bindings | ⚠️ | `dxmt9-shader-argbuf-binding-value-spec` asserts `FlatDrawStateRecord` texture/sampler slot values through shader context, Stage 1 `texN`/`sampN` MSL bindings, Stage 2 arg-buffer aliases, descriptor ids, null texture slots, and sampler/LOD defaults. | Actual Stage 1 encoder calls and Stage 2 `MTLArgumentEncoder::setTexture/setSamplerState` writes still require a live Metal recorder seam. |
+| B6: Wine PE conformance HRESULT / out-pointer / status values | ❌ | `tests/conformance/d3d9/MANIFEST.toml` currently reports 23 scaffolded, 6 failing, 2 partial, and 0 fully passing cases; manifest validation passes. | Fix or record evidence for the current failing public ABI lanes: factory validation return codes, present-parameter validation, Ex create/reset mode validation, private-data resource wrappers, Ex shared-handle policy, and creation-failure out pointers; promote cases only when every declared lane/architecture has passing evidence. |
+
 | Area | Status | Spec |
 |---|---|---|
 | WSI integration test (`tests/integration/wsi_present/`) | ✅ | Heroic Wine 11.5 builtin path passes the full 180-frame `wsi_present_x64.exe` smoke |

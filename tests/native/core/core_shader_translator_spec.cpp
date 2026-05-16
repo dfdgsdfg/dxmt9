@@ -57,8 +57,10 @@ void testShaderThunk() {
   const auto pixelSource = shaderSourceToString(pixelHandle);
   checkContains(pixelSource, "fragment float4 dxmt9_fs", "pixel shader source");
   checkContains(pixelSource, "def c0", "pixel shader decode comment");
-  checkContains(pixelSource, "for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }",
-                "pixel shader temp initialization");
+  checkContains(pixelSource, "float4 r[1];",
+                "pixel shader trims temp array to max-written register");
+  checkContains(pixelSource, "for (uint i = 0; i < 1u; ++i) { r[i] = float4(0.0f); }",
+                "pixel shader trimmed temp initialization");
   checkContains(pixelSource, "add r0, c0, c0", "pixel shader arithmetic comment");
   checkContains(pixelSource, "r[0] = (cFloat[0] + cFloat[0])", "pixel shader arithmetic translation");
   checkContains(pixelSource, "discard_fragment()", "pixel shader alpha test");
