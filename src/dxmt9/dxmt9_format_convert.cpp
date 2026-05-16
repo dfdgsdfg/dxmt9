@@ -168,6 +168,35 @@ WMTTextureType toTextureType(TextureType type, bool multisample) {
   return multisample ? WMTTextureType2DMultisample : WMTTextureType2D;
 }
 
+bool formatNeedsShaderReadSwizzle(Format format) {
+  switch (format) {
+    case Format::L8:
+    case Format::L16:
+    case Format::A8L8:
+      return true;
+    default:
+      return false;
+  }
+}
+
+WMTTextureSwizzleChannels toShaderReadSwizzle(Format format) {
+  switch (format) {
+    case Format::L8:
+    case Format::L16:
+      return WMTTextureSwizzleChannels{
+          WMTTextureSwizzleRed, WMTTextureSwizzleRed,
+          WMTTextureSwizzleRed, WMTTextureSwizzleOne};
+    case Format::A8L8:
+      return WMTTextureSwizzleChannels{
+          WMTTextureSwizzleRed, WMTTextureSwizzleRed,
+          WMTTextureSwizzleRed, WMTTextureSwizzleGreen};
+    default:
+      return WMTTextureSwizzleChannels{
+          WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+          WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha};
+  }
+}
+
 WMTResourceOptions toResourceOptions(Pool pool, u32 usage, bool hasUnifiedMemory) {
   // R-BACK-5.7: Pool/Usage → Metal storage mode.
   //
@@ -204,6 +233,9 @@ WMTTextureUsage toTextureUsage(const TextureDesc& desc) {
   WMTTextureUsage usage = WMTTextureUsageShaderRead;
   if ((desc.usage & UsageRenderTarget) != 0 || (desc.usage & UsageDepthStencil) != 0) {
     usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsageRenderTarget);
+  }
+  if (formatNeedsShaderReadSwizzle(desc.format)) {
+    usage = static_cast<WMTTextureUsage>(usage | WMTTextureUsagePixelFormatView);
   }
   return usage;
 }

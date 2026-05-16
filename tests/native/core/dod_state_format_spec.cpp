@@ -43,6 +43,19 @@ BackendLimits defaultLimits() {
   return limits;
 }
 
+bool hasUsage(WMTTextureUsage usage, WMTTextureUsage flag) {
+  return (static_cast<u32>(usage) & static_cast<u32>(flag)) != 0;
+}
+
+void checkSwizzle(WMTTextureSwizzleChannels actual, WMTTextureSwizzle r,
+                  WMTTextureSwizzle g, WMTTextureSwizzle b,
+                  WMTTextureSwizzle a, std::string_view message) {
+  checkEq(actual.r, r, message);
+  checkEq(actual.g, g, message);
+  checkEq(actual.b, b, message);
+  checkEq(actual.a, a, message);
+}
+
 Factory makeFactory(BackendLimits limits = defaultLimits()) {
   return Factory(limits, std::make_shared<BackendDevice>());
 }
@@ -217,6 +230,43 @@ void testD24S8FallbackPolicy() {
           "Factory keeps D24S8 depth-stencil support advertised across backend fallback");
   checkEq(factory.checkDeviceFormat(0, Format::D24S8, UsageRenderTarget), D3DERR_NOTAVAILABLE,
           "Factory does not advertise D24S8 as a color render target");
+}
+
+void testShaderReadSwizzlePolicyForLuminanceFormats() {
+  check(!dxmt9::convert::formatNeedsShaderReadSwizzle(Format::A8R8G8B8),
+        "A8R8G8B8 samples without a shader-read swizzle view");
+  check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::L8),
+        "L8 needs shader-read swizzle");
+  check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::L16),
+        "L16 needs shader-read swizzle");
+  check(dxmt9::convert::formatNeedsShaderReadSwizzle(Format::A8L8),
+        "A8L8 needs shader-read swizzle");
+
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::A8R8G8B8),
+               WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+               WMTTextureSwizzleBlue, WMTTextureSwizzleAlpha,
+               "ordinary RGBA shader-read swizzle is identity");
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::L8),
+               WMTTextureSwizzleRed, WMTTextureSwizzleRed,
+               WMTTextureSwizzleRed, WMTTextureSwizzleOne,
+               "L8 shader-read swizzle expands luminance to RGB and alpha one");
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::L16),
+               WMTTextureSwizzleRed, WMTTextureSwizzleRed,
+               WMTTextureSwizzleRed, WMTTextureSwizzleOne,
+               "L16 shader-read swizzle expands luminance to RGB and alpha one");
+  checkSwizzle(dxmt9::convert::toShaderReadSwizzle(Format::A8L8),
+               WMTTextureSwizzleRed, WMTTextureSwizzleRed,
+               WMTTextureSwizzleRed, WMTTextureSwizzleGreen,
+               "A8L8 shader-read swizzle expands luminance and preserves alpha");
+
+  TextureDesc normalDesc{64, 64, 1, 1, Format::A8R8G8B8, TextureType::TwoD,
+                         Pool::Managed, UsageTexture};
+  TextureDesc l8Desc = normalDesc;
+  l8Desc.format = Format::L8;
+  check(!hasUsage(dxmt9::convert::toTextureUsage(normalDesc), WMTTextureUsagePixelFormatView),
+        "ordinary textures do not request pixel-format views");
+  check(hasUsage(dxmt9::convert::toTextureUsage(l8Desc), WMTTextureUsagePixelFormatView),
+        "L8 textures request pixel-format views for shader-read swizzle");
 }
 
 template <typename Table>
@@ -403,6 +453,7 @@ int main() {
   testUnsupportedFormatBehavior();
   testCompressedRenderTargetFactoryRejection();
   testD24S8FallbackPolicy();
+  testShaderReadSwizzlePolicyForLuminanceFormats();
   testStateValueTablesDirtyHashContracts();
 
   std::cout << "dod_state_format_spec passed\n";

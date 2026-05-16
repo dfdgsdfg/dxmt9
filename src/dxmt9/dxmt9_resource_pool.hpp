@@ -71,6 +71,11 @@ struct BufferRecord {
 struct TextureRecord {
   core::TextureDesc desc{};
   WMT::Reference<WMT::Texture> texture;
+  // D3D9 luminance formats store compact Metal R/RG data but sample as
+  // RGB-expanded colors. `shaderReadTexture` is an optional swizzled view
+  // used only for shader binding; uploads, copies, and surface aliases keep
+  // using the storage texture above.
+  WMT::Reference<WMT::Texture> shaderReadTexture;
   // R-BACK-5.7: storage-mode classification recorded at create time and
   // never updated. `needsStagingBlit` is true when CPU-side
   // `replaceRegion` is not the upload path (Private; or Managed on a
@@ -89,6 +94,11 @@ struct TextureRecord {
   bool isHeapBacked = false;
   WMT::Heap heap{};
 };
+
+inline WMT::Texture textureForShaderRead(const TextureRecord& record) noexcept {
+  return record.shaderReadTexture ? WMT::Texture{record.shaderReadTexture.handle}
+                                  : WMT::Texture{record.texture.handle};
+}
 
 struct SurfaceRecord {
   core::SurfaceDesc desc{};

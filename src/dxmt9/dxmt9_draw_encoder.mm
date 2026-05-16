@@ -1725,7 +1725,7 @@ bool encodeDraw(EncodeContext& ctx,
               << " levels=" << texture->desc.levels;
           emitTextureTraceLine(out.str());
         }
-        encoder.setFragmentTexture(WMT::Texture{texture->texture.handle}, (uint8_t)stage);
+        encoder.setFragmentTexture(resources::textureForShaderRead(*texture), (uint8_t)stage);
         countTextureBind();
       }
       auto sampler = makeSampler(ctx.device, hot.samplerStates[stage]);

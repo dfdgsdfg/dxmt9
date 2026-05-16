@@ -230,8 +230,7 @@ void populateResourceBindings(WMT::Reference<WMT::Device> device,
     if (!textureHandle) continue;
     if (auto* texture = pool.findTexture(textureHandle.value);
         texture && texture->texture) {
-      enc.setTexture(WMT::Texture{texture->texture.handle},
-                     kTextureArgbufBase + stage);
+      enc.setTexture(resources::textureForShaderRead(*texture), kTextureArgbufBase + stage);
     }
     auto sampler = encoders::makeSampler(device, hot.samplerStates[stage]);
     if (sampler) {

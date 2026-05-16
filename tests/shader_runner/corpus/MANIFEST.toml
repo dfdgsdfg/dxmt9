@@ -193,7 +193,7 @@ oracle-date = "2026-05-06"
 
 [[test]]
 file = "texture/dxmt9_l8_luminance_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -202,7 +202,6 @@ models = ["ps_2_0"]
 opcodes = ["DCL", "MOV", "TEX"]
 oracle = "math-derivation"
 oracle-date = "2026-05-16"
-issue = "L8 texture sampling must expand luminance to RGB as (L,L,L,1), but current Metal sampling exposes raw R8 channels"
 
 [[test]]
 file = "texture/dxmt9_mip_texldl_readback.shader_test"

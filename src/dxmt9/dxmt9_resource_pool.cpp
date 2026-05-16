@@ -355,6 +355,12 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
     if (!record.texture) {
       record.texture = device.newTexture(info);
     }
+    if (record.texture && convert::formatNeedsShaderReadSwizzle(desc.format)) {
+      uint64_t gpuId = 0;
+      record.shaderReadTexture = record.texture.newTextureView(
+          info.pixel_format, info.type, 0, info.mipmap_level_count,
+          0, 1, convert::toShaderReadSwizzle(desc.format), gpuId);
+    }
     // Both Private and Managed (discrete) reach the texture through a
     // staging-blit upload path — for Private because the CPU cannot
     // directly write to it, for Managed-discrete because we must pump
@@ -377,6 +383,12 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
         std::max(1u, desc.height),
         std::max(1u, desc.depth),
         std::max(1u, desc.levels)));
+  }
+  if (stored && stored->shaderReadTexture) {
+    stored->shaderReadTexture.setLabel(labels::makeLabelStringFmt(
+        "pool_tex_shader_view_h0x%llx_fmt%u",
+        static_cast<unsigned long long>(handle.value),
+        static_cast<unsigned>(desc.format)));
   }
   if (stored && stored->isHeapBacked) {
     heapManager_.retainHeapMember(stored->heap.handle, 0);
