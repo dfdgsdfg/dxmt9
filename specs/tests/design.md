@@ -346,6 +346,10 @@ Current implemented command subset:
 
 - `dxmt9-texture <id> <width> <height> A8R8G8B8 <texel...>` creates a named
   A8R8G8B8 2D managed texture and uploads row-major named texels.
+- `dxmt9-texture-raw <id> <width> <height> <format> <hex-bytes>` creates a
+  named texture and uploads exact storage bytes row-by-row using the format row
+  pitch. This is used for compressed block-boundary tests where the block
+  indices themselves are the value under test.
 - `dxmt9-texture-mip <id> <level> <width> <height> A8R8G8B8 <texel...>` adds
   an explicit mip level for a named texture; dimensions must match the level-0
   mip chain.
@@ -377,6 +381,20 @@ The first implemented runtime probes are:
 - `tests/shader_runner/corpus/texture/dxmt9_mip_texldl_readback.shader_test`
   validates explicit mip-level sampling through `texldl` and framebuffer
   readback.
+- `tests/shader_runner/corpus/texture/dxmt9_dxt1_multiblock_order_readback.shader_test`
+  validates BC1/DXT1 multi-block order across a block row.
+- `tests/shader_runner/corpus/texture/dxmt9_dxt1_intrablock_indices_readback.shader_test`
+  validates BC1/DXT1 indices inside a single compressed block using raw block
+  bytes rather than constant-block synthesis.
+- `tests/shader_runner/corpus/texture/dxmt9_dxt5_multiblock_alpha_readback.shader_test`
+  validates BC3/DXT5 alpha payload preservation across multiple blocks.
+- `tests/shader_runner/corpus/texture/dxmt9_dxt5_intrablock_alpha_indices_readback.shader_test`
+  validates BC3/DXT5 alpha indices inside a single compressed block using raw
+  block bytes.
+- `tests/shader_runner/corpus/texture/dxmt9_ffp_pixel_texture_readback.shader_test`
+  validates a pure fixed-function textured pixel path through framebuffer
+  readback; textured FFP is kept on the portable fragment path until the
+  tile-FFP path has readback equality coverage.
 - `tests/shader_runner/corpus/vs_specific/dxmt9_vs_color_triangle.shader_test`
   validates that programmable vertex POSITION and COLOR outputs affect
   rasterization and framebuffer color.

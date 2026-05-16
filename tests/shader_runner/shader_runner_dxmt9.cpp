@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <unordered_map>
 #include <optional>
 #include <span>
@@ -51,6 +52,7 @@ struct TextureLevelSetup {
   u32 width = 0;
   u32 height = 0;
   std::vector<std::array<u8, 4>> texels;
+  std::vector<u8> rawBytes;
 };
 
 struct TextureSetup {
@@ -62,6 +64,16 @@ struct TextureSetup {
 struct SamplerSetup {
   u32 stage = 0;
   std::unordered_map<u32, u32> states;
+};
+
+struct TextureStageSetup {
+  u32 stage = 0;
+  std::unordered_map<u32, u32> states;
+};
+
+struct TextureTransformSetup {
+  u32 stage = 0;
+  Matrix4x4 matrix{};
 };
 
 struct TextureBind {
@@ -89,6 +101,8 @@ struct CorpusTest {
   std::vector<ProbeExpectation> probes;
   std::vector<TextureSetup> textureSetups;
   std::vector<SamplerSetup> samplerSetups;
+  std::vector<TextureStageSetup> textureStageSetups;
+  std::vector<TextureTransformSetup> textureTransformSetups;
   std::vector<TextureBind> textureBinds;
   std::vector<RenderTargetSetup> renderTargetSetups;
   std::vector<SolidRectDraw> solidRectDraws;
@@ -96,10 +110,14 @@ struct CorpusTest {
   std::optional<Viewport> viewport;
   bool drawQuad = false;
   bool drawDxmt9TexturedQuad = false;
+  bool drawDxmt9TexturedQuadTex2 = false;
+  bool drawDxmt9TexturedQuadXyz = false;
   bool drawDxmt9SolidQuad = false;
   bool drawDxmt9VsColorTriangle = false;
   u32 clipPlaneMask = 0;
   std::optional<u32> colorWriteMask;
+  std::optional<u32> zEnable;
+  std::optional<u32> zWriteEnable;
   bool alphaTestEnable = false;
   CompareFunc alphaTestFunc = CompareFunc::Always;
   float alphaRef = 0.0f;
@@ -113,11 +131,19 @@ struct CorpusTest {
 }
 
 constexpr u32 kFvfXyzrhw = 0x0004u;
+constexpr u32 kFvfXyz = 0x0002u;
 constexpr u32 kFvfTex1 = 0x0100u;
+constexpr u32 kFvfTex2 = 0x0200u;
 constexpr u32 kDeclTypeFloat4 = 3u;
 constexpr u32 kDeclTypeD3DColor = 4u;
 constexpr u32 kDeclUsagePosition = 0u;
 constexpr u32 kDeclUsageColor = 10u;
+constexpr u32 kTextureArgDiffuse = 0u;
+constexpr u32 kTextureArgCurrent = 1u;
+constexpr u32 kTextureArgTexture = 2u;
+constexpr u32 kTextureArgTFactor = 3u;
+constexpr u32 kTextureArgSpecular = 4u;
+constexpr u32 kTextureArgTemp = 5u;
 constexpr u32 kTextureAddressWrap = 1u;
 constexpr u32 kTextureAddressMirror = 2u;
 constexpr u32 kTextureAddressClamp = 3u;
@@ -132,6 +158,25 @@ struct ScreenSpaceTexturedVertex {
   float y = 0.0f;
   float z = 0.0f;
   float rhw = 1.0f;
+  float u = 0.0f;
+  float v = 0.0f;
+};
+
+struct ScreenSpaceTexturedVertexTex2 {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float rhw = 1.0f;
+  float u0 = 0.0f;
+  float v0 = 0.0f;
+  float u1 = 0.0f;
+  float v1 = 0.0f;
+};
+
+struct ScreenSpaceTexturedVertexXyz {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
   float u = 0.0f;
   float v = 0.0f;
 };
@@ -182,7 +227,24 @@ std::array<u8, 4> toBGRA(const ColorRGBA& color) {
   return {clampToByte(color.b), clampToByte(color.g), clampToByte(color.r), clampToByte(color.a)};
 }
 
-std::array<u8, 4> parseNamedColor(std::string_view text) {
+std::optional<std::array<u8, 4>> parseRgbaColor(std::string_view text) {
+  if (!text.starts_with("rgba(") || !text.ends_with(")")) {
+    return std::nullopt;
+  }
+  float r = 0.0f;
+  float g = 0.0f;
+  float b = 0.0f;
+  float a = 0.0f;
+  if (std::sscanf(std::string(text).c_str(), "rgba(%f,%f,%f,%f)", &r, &g, &b, &a) != 4) {
+    fail("invalid dxmt9 texture rgba color");
+  }
+  return toBGRA({r, g, b, a});
+}
+
+std::array<u8, 4> parseTextureColor(std::string_view text) {
+  if (auto rgba = parseRgbaColor(text)) {
+    return *rgba;
+  }
   const auto token = normalizeToken(text);
   if (token == "black") {
     return toBGRA({0.0f, 0.0f, 0.0f, 1.0f});
@@ -210,6 +272,18 @@ Format parseDxmt9Format(std::string_view text) {
   if (token == "l8") {
     return Format::L8;
   }
+  if (token == "a8l8") {
+    return Format::A8L8;
+  }
+  if (token == "dxt1") {
+    return Format::DXT1;
+  }
+  if (token == "dxt3") {
+    return Format::DXT3;
+  }
+  if (token == "dxt5") {
+    return Format::DXT5;
+  }
   fail("unsupported dxmt9 format");
 }
 
@@ -221,9 +295,157 @@ void writeDxmt9TextureTexel(u8* dst, Format format, const std::array<u8, 4>& bgr
   case Format::L8:
     dst[0] = bgra[2];
     return;
+  case Format::A8L8:
+    dst[0] = bgra[2];
+    dst[1] = bgra[3];
+    return;
   default:
     fail("unsupported dxmt9 texture upload format");
   }
+}
+
+std::uint16_t rgb565FromBGRA(const std::array<u8, 4>& bgra) {
+  const auto r = static_cast<std::uint16_t>((static_cast<u32>(bgra[2]) * 31u + 127u) / 255u);
+  const auto g = static_cast<std::uint16_t>((static_cast<u32>(bgra[1]) * 63u + 127u) / 255u);
+  const auto b = static_cast<std::uint16_t>((static_cast<u32>(bgra[0]) * 31u + 127u) / 255u);
+  return static_cast<std::uint16_t>((r << 11u) | (g << 5u) | b);
+}
+
+void writeLe16(u8* dst, std::uint16_t value) {
+  dst[0] = static_cast<u8>(value & 0xffu);
+  dst[1] = static_cast<u8>((value >> 8u) & 0xffu);
+}
+
+bool isDxmt9CompressedTextureFormat(Format format) {
+  return format == Format::DXT1 || format == Format::DXT3 || format == Format::DXT5;
+}
+
+void writeConstantDxtColorBlock(u8* dst, const std::array<u8, 4>& bgra) {
+  writeLe16(dst, rgb565FromBGRA(bgra));
+  writeLe16(dst + 2, 0u);
+  std::memset(dst + 4, 0, 4);
+}
+
+void writeConstantDxtBlock(u8* dst, Format format, const std::array<u8, 4>& bgra) {
+  switch (format) {
+  case Format::DXT1:
+    writeConstantDxtColorBlock(dst, bgra);
+    return;
+  case Format::DXT3: {
+    const u8 a4 = static_cast<u8>((static_cast<u32>(bgra[3]) * 15u + 127u) / 255u);
+    const u8 packed = static_cast<u8>(a4 | (a4 << 4u));
+    std::memset(dst, packed, 8);
+    writeConstantDxtColorBlock(dst + 8, bgra);
+    return;
+  }
+  case Format::DXT5:
+    dst[0] = bgra[3];
+    dst[1] = 0u;
+    std::memset(dst + 2, 0, 6);
+    writeConstantDxtColorBlock(dst + 8, bgra);
+    return;
+  default:
+    fail("unsupported dxmt9 compressed texture format");
+  }
+}
+
+void writeDxmt9TextureLevel(u8* dst, u32 pitch, Format format,
+                            const TextureLevelSetup& level) {
+  if (!level.rawBytes.empty()) {
+    const u32 rowPitch = formatRowPitch(format, level.width);
+    const u32 rowCount = formatRowCount(format, level.height);
+    if (rowPitch == 0 || rowCount == 0) {
+      fail("dxmt9 raw texture upload requires a known row pitch");
+    }
+    const auto expectedSize =
+        static_cast<size_t>(rowPitch) * static_cast<size_t>(rowCount);
+    if (level.rawBytes.size() != expectedSize) {
+      fail("dxmt9 raw texture byte count does not match format storage size");
+    }
+    if (pitch < rowPitch) {
+      fail("dxmt9 raw texture upload pitch is too small");
+    }
+    for (u32 row = 0; row < rowCount; ++row) {
+      std::memcpy(dst + static_cast<size_t>(row) * pitch,
+                  level.rawBytes.data() + static_cast<size_t>(row) * rowPitch,
+                  rowPitch);
+    }
+    return;
+  }
+
+  if (isDxmt9CompressedTextureFormat(format)) {
+    const u32 blockWidth = formatBlockWidth(format);
+    const u32 blockHeight = formatBlockHeight(format);
+    const u32 blockBytes = formatBlockBytes(format);
+    if (blockWidth == 0 || blockHeight == 0 || blockBytes == 0 ||
+        (level.width % blockWidth) != 0 || (level.height % blockHeight) != 0) {
+      fail("dxmt9 compressed texture level must be block-aligned");
+    }
+    for (u32 by = 0; by < level.height / blockHeight; ++by) {
+      for (u32 bx = 0; bx < level.width / blockWidth; ++bx) {
+        const auto& first = level.texels[
+            static_cast<size_t>(by * blockHeight) * level.width +
+            static_cast<size_t>(bx * blockWidth)];
+        for (u32 y = 0; y < blockHeight; ++y) {
+          for (u32 x = 0; x < blockWidth; ++x) {
+            const auto& texel = level.texels[
+                static_cast<size_t>(by * blockHeight + y) * level.width +
+                static_cast<size_t>(bx * blockWidth + x)];
+            if (texel != first) {
+              fail("dxmt9 compressed texture writer only supports constant 4x4 blocks");
+            }
+          }
+        }
+        writeConstantDxtBlock(dst + static_cast<size_t>(by) * pitch +
+                                  static_cast<size_t>(bx) * blockBytes,
+                              format, first);
+      }
+    }
+    return;
+  }
+
+  const u32 texelBytes = bytesPerPixel(format);
+  if (texelBytes == 0) {
+    fail("dxmt9 texture upload requires an uncompressed byte-addressable format");
+  }
+  for (u32 y = 0; y < level.height; ++y) {
+    for (u32 x = 0; x < level.width; ++x) {
+      const auto& texel = level.texels[static_cast<size_t>(y) * level.width + x];
+      writeDxmt9TextureTexel(
+          dst + static_cast<size_t>(y) * pitch + static_cast<size_t>(x) * texelBytes,
+          format, texel);
+    }
+  }
+}
+
+u8 hexNibble(char value) {
+  if (value >= '0' && value <= '9') {
+    return static_cast<u8>(value - '0');
+  }
+  if (value >= 'a' && value <= 'f') {
+    return static_cast<u8>(10 + value - 'a');
+  }
+  if (value >= 'A' && value <= 'F') {
+    return static_cast<u8>(10 + value - 'A');
+  }
+  fail("invalid dxmt9 raw texture hex digit");
+}
+
+std::vector<u8> parseHexBytes(std::string_view text) {
+  if (text.size() >= 2 && text[0] == '0' &&
+      (text[1] == 'x' || text[1] == 'X')) {
+    text.remove_prefix(2);
+  }
+  if ((text.size() & 1u) != 0) {
+    fail("dxmt9 raw texture hex byte string must have an even length");
+  }
+  std::vector<u8> bytes;
+  bytes.reserve(text.size() / 2u);
+  for (size_t i = 0; i < text.size(); i += 2u) {
+    bytes.push_back(static_cast<u8>((hexNibble(text[i]) << 4u) |
+                                    hexNibble(text[i + 1u])));
+  }
+  return bytes;
 }
 
 u32 parseAddressMode(std::string_view text) {
@@ -260,6 +482,111 @@ u32 parseTextureFilter(std::string_view text) {
   fail("unsupported dxmt9 sampler filter");
 }
 
+u32 parseU32Value(std::string_view text) {
+  size_t parsed = 0;
+  const auto value = std::stoul(std::string(text), &parsed, 0);
+  if (parsed != text.size() || value > std::numeric_limits<u32>::max()) {
+    fail("invalid u32 value");
+  }
+  return static_cast<u32>(value);
+}
+
+u32 parseTextureStageOp(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "disable" || token == "disabled") {
+    return static_cast<u32>(TextureOp::Disable);
+  }
+  if (token == "selectarg1") {
+    return static_cast<u32>(TextureOp::SelectArg1);
+  }
+  if (token == "selectarg2") {
+    return static_cast<u32>(TextureOp::SelectArg2);
+  }
+  if (token == "modulate") {
+    return static_cast<u32>(TextureOp::Modulate);
+  }
+  if (token == "modulate2x") {
+    return static_cast<u32>(TextureOp::Modulate2x);
+  }
+  if (token == "modulate4x") {
+    return static_cast<u32>(TextureOp::Modulate4x);
+  }
+  if (token == "add") {
+    return static_cast<u32>(TextureOp::Add);
+  }
+  if (token == "addsigned") {
+    return static_cast<u32>(TextureOp::AddSigned);
+  }
+  if (token == "addsigned2x") {
+    return static_cast<u32>(TextureOp::AddSigned2x);
+  }
+  if (token == "subtract") {
+    return static_cast<u32>(TextureOp::Subtract);
+  }
+  if (token == "addsmooth") {
+    return static_cast<u32>(TextureOp::AddSmooth);
+  }
+  if (token == "dotproduct3") {
+    return static_cast<u32>(TextureOp::DotProduct3);
+  }
+  if (token == "lerp") {
+    return static_cast<u32>(TextureOp::Lerp);
+  }
+  return parseU32Value(text);
+}
+
+u32 parseTextureStageArg(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "diffuse") {
+    return kTextureArgDiffuse;
+  }
+  if (token == "current") {
+    return kTextureArgCurrent;
+  }
+  if (token == "texture") {
+    return kTextureArgTexture;
+  }
+  if (token == "tfactor") {
+    return kTextureArgTFactor;
+  }
+  if (token == "specular") {
+    return kTextureArgSpecular;
+  }
+  if (token == "temp") {
+    return kTextureArgTemp;
+  }
+  return parseU32Value(text);
+}
+
+u32 parseTextureTransformFlags(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "disable" || token == "disabled" || token == "none") {
+    return 0u;
+  }
+  if (token == "count1") {
+    return 1u;
+  }
+  if (token == "count2") {
+    return 2u;
+  }
+  if (token == "count3") {
+    return 3u;
+  }
+  if (token == "count4") {
+    return 4u;
+  }
+  if (token == "projectedcount2" || token == "count2projected") {
+    return 0x100u | 2u;
+  }
+  if (token == "projectedcount3" || token == "count3projected") {
+    return 0x100u | 3u;
+  }
+  if (token == "projectedcount4" || token == "count4projected") {
+    return 0x100u | 4u;
+  }
+  return parseU32Value(text);
+}
+
 std::optional<TextureSetup> parseDxmt9Texture(std::string_view line) {
   std::istringstream stream{std::string(line)};
   std::string command;
@@ -278,11 +605,37 @@ std::optional<TextureSetup> parseDxmt9Texture(std::string_view line) {
   }
   std::string color;
   while (stream >> color) {
-    level.texels.push_back(parseNamedColor(color));
+    level.texels.push_back(parseTextureColor(color));
   }
   if (level.texels.size() != static_cast<size_t>(level.width) * level.height) {
     fail("dxmt9-texture texel count does not match dimensions");
   }
+  texture.levels.push_back(std::move(level));
+  return texture;
+}
+
+std::optional<TextureSetup> parseDxmt9TextureRaw(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  std::string format;
+  std::string hex;
+  TextureSetup texture;
+  TextureLevelSetup level;
+  if (!(stream >> command) || command != "dxmt9-texture-raw") {
+    return std::nullopt;
+  }
+  if (!(stream >> texture.id >> level.width >> level.height >> format >> hex)) {
+    fail("invalid dxmt9-texture-raw command");
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-texture-raw accepts exactly one hex byte string");
+  }
+  texture.format = parseDxmt9Format(format);
+  if (level.width == 0 || level.height == 0) {
+    fail("dxmt9-texture-raw requires non-zero dimensions");
+  }
+  level.rawBytes = parseHexBytes(hex);
   texture.levels.push_back(std::move(level));
   return texture;
 }
@@ -306,7 +659,7 @@ bool parseDxmt9TextureMip(CorpusTest& test, std::string_view line) {
   }
   std::string color;
   while (stream >> color) {
-    level.texels.push_back(parseNamedColor(color));
+    level.texels.push_back(parseTextureColor(color));
   }
   if (level.texels.size() != static_cast<size_t>(level.width) * level.height) {
     fail("dxmt9-texture-mip texel count does not match dimensions");
@@ -369,6 +722,72 @@ std::optional<SamplerSetup> parseDxmt9Sampler(std::string_view line) {
     }
   }
   return sampler;
+}
+
+std::optional<TextureStageSetup> parseDxmt9TextureStage(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  TextureStageSetup stage;
+  if (!(stream >> command) || command != "dxmt9-texture-stage") {
+    return std::nullopt;
+  }
+  if (!(stream >> stage.stage)) {
+    fail("invalid dxmt9-texture-stage command");
+  }
+  std::string assignment;
+  while (stream >> assignment) {
+    const auto equals = assignment.find('=');
+    if (equals == std::string::npos) {
+      fail("dxmt9-texture-stage state must use key=value syntax");
+    }
+    const auto key = normalizeToken(std::string_view(assignment).substr(0, equals));
+    const auto value = std::string_view(assignment).substr(equals + 1);
+    if (key == "colorop") {
+      stage.states[TSS_COLOR_OP] = parseTextureStageOp(value);
+    } else if (key == "alphaop") {
+      stage.states[TSS_ALPHA_OP] = parseTextureStageOp(value);
+    } else if (key == "colorarg1") {
+      stage.states[TSS_COLOR_ARG1] = parseTextureStageArg(value);
+    } else if (key == "colorarg2") {
+      stage.states[TSS_COLOR_ARG2] = parseTextureStageArg(value);
+    } else if (key == "alphaarg1") {
+      stage.states[TSS_ALPHA_ARG1] = parseTextureStageArg(value);
+    } else if (key == "alphaarg2") {
+      stage.states[TSS_ALPHA_ARG2] = parseTextureStageArg(value);
+    } else if (key == "texcoordindex") {
+      stage.states[TSS_TEXCOORD_INDEX] = parseU32Value(value);
+    } else if (key == "texturetransform" || key == "texturetransformflags") {
+      stage.states[TSS_TEXTURE_TRANSFORM_FLAGS] = parseTextureTransformFlags(value);
+    } else {
+      fail("unsupported dxmt9-texture-stage state");
+    }
+  }
+  if (stage.states.empty()) {
+    fail("dxmt9-texture-stage requires at least one state");
+  }
+  return stage;
+}
+
+std::optional<TextureTransformSetup> parseDxmt9TextureTransform(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  TextureTransformSetup transform;
+  if (!(stream >> command) || command != "dxmt9-texture-transform") {
+    return std::nullopt;
+  }
+  if (!(stream >> transform.stage)) {
+    fail("invalid dxmt9-texture-transform command");
+  }
+  for (auto& value : transform.matrix.m) {
+    if (!(stream >> value)) {
+      fail("dxmt9-texture-transform requires 16 float values");
+    }
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-texture-transform has extra values");
+  }
+  return transform;
 }
 
 std::optional<TextureBind> parseDxmt9BindTexture(std::string_view line) {
@@ -438,6 +857,17 @@ u32 parseColorWriteMask(std::string_view text) {
   fail("unsupported dxmt9 color-write mask");
 }
 
+u32 parseBoolState(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "true" || token == "enable" || token == "enabled" || token == "on" || token == "1") {
+    return 1u;
+  }
+  if (token == "false" || token == "disable" || token == "disabled" || token == "off" || token == "0") {
+    return 0u;
+  }
+  fail("unsupported dxmt9 boolean state");
+}
+
 bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
   std::istringstream stream{std::string(line)};
   std::string command;
@@ -455,6 +885,12 @@ bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
     const auto value = std::string_view(assignment).substr(equals + 1);
     if (key == "colorwrite") {
       test.colorWriteMask = parseColorWriteMask(value);
+      sawState = true;
+    } else if (key == "zenable") {
+      test.zEnable = parseBoolState(value);
+      sawState = true;
+    } else if (key == "zwrite") {
+      test.zWriteEnable = parseBoolState(value);
       sawState = true;
     } else {
       fail("unsupported dxmt9-render-state state");
@@ -634,6 +1070,16 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-textured-quad-tex2") {
+    test.drawDxmt9TexturedQuadTex2 = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-textured-quad-xyz") {
+    test.drawDxmt9TexturedQuadXyz = true;
+    return;
+  }
+
   if (line == "dxmt9-draw-solid-quad") {
     test.drawDxmt9SolidQuad = true;
     return;
@@ -674,12 +1120,27 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (auto texture = parseDxmt9TextureRaw(line)) {
+    test.textureSetups.push_back(std::move(*texture));
+    return;
+  }
+
   if (parseDxmt9TextureMip(test, line)) {
     return;
   }
 
   if (auto sampler = parseDxmt9Sampler(line)) {
     test.samplerSetups.push_back(std::move(*sampler));
+    return;
+  }
+
+  if (auto stage = parseDxmt9TextureStage(line)) {
+    test.textureStageSetups.push_back(std::move(*stage));
+    return;
+  }
+
+  if (auto transform = parseDxmt9TextureTransform(line)) {
+    test.textureTransformSetups.push_back(*transform);
     return;
   }
 
@@ -916,10 +1377,6 @@ std::vector<std::shared_ptr<Texture>> createDxmt9Textures(Device& device, const 
     if (!texture) {
       fail("failed to create dxmt9 texture");
     }
-    const u32 texelBytes = bytesPerPixel(setup.format);
-    if (texelBytes == 0) {
-      fail("dxmt9 texture upload requires an uncompressed byte-addressable format");
-    }
 
     for (u32 levelIndex = 0; levelIndex < setup.levels.size(); ++levelIndex) {
       const auto& level = setup.levels[levelIndex];
@@ -936,18 +1393,11 @@ std::vector<std::shared_ptr<Texture>> createDxmt9Textures(Device& device, const 
       if (!upload.data) {
         fail("failed to lock dxmt9 texture");
       }
-      if (upload.pitch < level.width * texelBytes) {
+      if (upload.pitch < formatRowPitch(setup.format, level.width)) {
         fail("dxmt9 texture upload pitch is too small");
       }
       auto* bytes = static_cast<u8*>(upload.data);
-      for (u32 y = 0; y < level.height; ++y) {
-        for (u32 x = 0; x < level.width; ++x) {
-          const auto& texel = level.texels[static_cast<size_t>(y) * level.width + x];
-          writeDxmt9TextureTexel(
-              bytes + static_cast<size_t>(y) * upload.pitch + static_cast<size_t>(x) * texelBytes,
-              setup.format, texel);
-        }
-      }
+      writeDxmt9TextureLevel(bytes, upload.pitch, setup.format, level);
       texture->unlockRect(levelIndex);
     }
     textures[setup.id] = std::move(texture);
@@ -961,6 +1411,27 @@ void applyDxmt9SamplerSetups(Device& device, const CorpusTest& test) {
       if (device.setSamplerState(sampler.stage, state, value) != D3D_OK) {
         fail("dxmt9 sampler state setup failed");
       }
+    }
+  }
+}
+
+void applyDxmt9TextureStageSetups(Device& device, const CorpusTest& test) {
+  for (const auto& stage : test.textureStageSetups) {
+    for (const auto& [state, value] : stage.states) {
+      if (device.setTextureStageState(stage.stage, state, value) != D3D_OK) {
+        fail("dxmt9 texture stage state setup failed");
+      }
+    }
+  }
+}
+
+void applyDxmt9TextureTransforms(Device& device, const CorpusTest& test) {
+  for (const auto& transform : test.textureTransformSetups) {
+    if (transform.stage >= kMaxTextureStages) {
+      fail("dxmt9 texture transform stage out of range");
+    }
+    if (device.setTransform(XFORM_TEXTURE_BASE + transform.stage, transform.matrix) != D3D_OK) {
+      fail("dxmt9 texture transform setup failed");
     }
   }
 }
@@ -996,6 +1467,50 @@ void drawDxmt9TexturedQuad(Device& device, u32 width, u32 height) {
   if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
                              sizeof(ScreenSpaceTexturedVertex)) != D3D_OK) {
     fail("dxmt9 textured quad draw failed");
+  }
+}
+
+void drawDxmt9TexturedQuadTex2(Device& device, u32 width, u32 height) {
+  if (device.setFVF(kFvfXyzrhw | kFvfTex2) != D3D_OK) {
+    fail("dxmt9 textured quad TEX2 FVF setup failed");
+  }
+
+  const float w = static_cast<float>(width);
+  const float h = static_cast<float>(height);
+  const std::array<ScreenSpaceTexturedVertexTex2, 6> quad{
+      ScreenSpaceTexturedVertexTex2{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+      ScreenSpaceTexturedVertexTex2{w, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+      ScreenSpaceTexturedVertexTex2{0.0f, h, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+      ScreenSpaceTexturedVertexTex2{w, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+      ScreenSpaceTexturedVertexTex2{w, h, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertexTex2{0.0f, h, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceTexturedVertexTex2)) != D3D_OK) {
+    fail("dxmt9 textured quad TEX2 draw failed");
+  }
+}
+
+void drawDxmt9TexturedQuadXyz(Device& device, u32 width, u32 height) {
+  (void)width;
+  (void)height;
+  if (device.setFVF(kFvfXyz | kFvfTex1) != D3D_OK) {
+    fail("dxmt9 textured quad XYZ FVF setup failed");
+  }
+
+  const std::array<ScreenSpaceTexturedVertexXyz, 6> quad{
+      ScreenSpaceTexturedVertexXyz{-1.0f, 1.0f, 0.0f, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertexXyz{1.0f, 1.0f, 0.0f, 1.0f, 0.0f},
+      ScreenSpaceTexturedVertexXyz{-1.0f, -1.0f, 0.0f, 0.0f, 1.0f},
+      ScreenSpaceTexturedVertexXyz{1.0f, 1.0f, 0.0f, 1.0f, 0.0f},
+      ScreenSpaceTexturedVertexXyz{1.0f, -1.0f, 0.0f, 1.0f, 1.0f},
+      ScreenSpaceTexturedVertexXyz{-1.0f, -1.0f, 0.0f, 0.0f, 1.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceTexturedVertexXyz)) != D3D_OK) {
+    fail("dxmt9 textured quad XYZ draw failed");
   }
 }
 
@@ -1084,12 +1599,15 @@ void runCorpusFile(const std::string& path) {
   }
 
   const bool needsRuntime = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
-                            test.drawDxmt9TexturedQuad || test.drawDxmt9SolidQuad ||
+                            test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadTex2 ||
+                            test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                             test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty() ||
                             !test.textureSetups.empty() || !test.samplerSetups.empty() ||
+                            !test.textureStageSetups.empty() || !test.textureTransformSetups.empty() ||
                             !test.textureBinds.empty() || !test.renderTargetSetups.empty() ||
                             test.viewport.has_value() ||
-                            test.colorWriteMask.has_value() || test.alphaTestEnable;
+                            test.colorWriteMask.has_value() || test.zEnable.has_value() ||
+                            test.zWriteEnable.has_value() || test.alphaTestEnable;
   if (!needsRuntime) {
     return;
   }
@@ -1165,6 +1683,8 @@ void runCorpusFile(const std::string& path) {
 
   const auto dxmt9Textures = createDxmt9Textures(*device, test);
   applyDxmt9SamplerSetups(*device, test);
+  applyDxmt9TextureStageSetups(*device, test);
+  applyDxmt9TextureTransforms(*device, test);
   applyDxmt9TextureBinds(*device, test, dxmt9Textures);
 
   if (test.alphaTestEnable) {
@@ -1175,9 +1695,16 @@ void runCorpusFile(const std::string& path) {
   if (test.colorWriteMask) {
     device->setRenderState(RS_COLOR_WRITE_ENABLE, *test.colorWriteMask);
   }
+  if (test.zEnable) {
+    device->setRenderState(RS_Z_ENABLE, *test.zEnable);
+  }
+  if (test.zWriteEnable) {
+    device->setRenderState(RS_Z_WRITE_ENABLE, *test.zWriteEnable);
+  }
 
   const bool needsClear = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
-                          test.drawDxmt9TexturedQuad || test.drawDxmt9SolidQuad ||
+                          test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadTex2 ||
+                          test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                           test.drawDxmt9VsColorTriangle || !test.solidRectDraws.empty() ||
                           !test.renderTargetSetups.empty();
   if (needsClear) {
@@ -1214,6 +1741,26 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9TexturedQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9TexturedQuadTex2) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9TexturedQuadTex2(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9TexturedQuadXyz) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9TexturedQuadXyz(*device, params.backBufferWidth, params.backBufferHeight);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }
@@ -1290,7 +1837,12 @@ void runCorpusFile(const std::string& path) {
           std::ostringstream out;
           out << path << ": probe rt" << probe.target << " (" << probe.x << ", " << probe.y << ") channel " << i
               << " expected " << static_cast<unsigned>(probe.expected[i]) << " got "
-              << static_cast<unsigned>(actual[i]) << " tolerance " << probe.tolerance;
+              << static_cast<unsigned>(actual[i]) << " tolerance " << probe.tolerance
+              << " expected_bgra=(" << static_cast<unsigned>(probe.expected[0]) << ","
+              << static_cast<unsigned>(probe.expected[1]) << "," << static_cast<unsigned>(probe.expected[2])
+              << "," << static_cast<unsigned>(probe.expected[3]) << ") actual_bgra=("
+              << static_cast<unsigned>(actual[0]) << "," << static_cast<unsigned>(actual[1]) << ","
+              << static_cast<unsigned>(actual[2]) << "," << static_cast<unsigned>(actual[3]) << ")";
           fail(out.str());
         }
       }

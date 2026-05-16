@@ -519,6 +519,18 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
       !shader.pixelShader.pixelKey.has_value()) {
     return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::NotFfp};
   }
+  for (const auto& texture : state.hot->textures) {
+    if (texture) {
+      // The current tile-FFP kernel is a tile-memory alpha/fog transform,
+      // not a replacement for a full fragment shader with interpolated
+      // texcoords and texture sampling. Keep textured FFP draws on the
+      // portable fragment path until tile/portable readback equality exists.
+      return TileFfpSelection{
+          TileFfpDecision::Portable,
+          TileFfpFallbackReason::UnsupportedState,
+      };
+    }
+  }
   const auto& key = *shader.pixelShader.pixelKey;
   const auto& rs = state.hot->renderStates;
   // RS_ALPHA_REF holds a 0..255 D3D9 byte. Normalize so the precision

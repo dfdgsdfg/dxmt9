@@ -4,6 +4,7 @@
 // selection flow described in specs/backend/design.md §13.1:
 //   - !supportsApple3                      -> Portable, GpuFamily
 //   - PS not fixed-function                -> Portable, NotFfp
+//   - textured FFP                         -> Portable, UnsupportedState
 //   - eligible FFPKeyPS                    -> Tile
 //   - alpha-test ref out of [0,1]          -> Portable, Precision
 //   - fog mode Exp / Exp2                  -> Portable, Precision
@@ -34,12 +35,6 @@ struct TestFailure : std::runtime_error {
 
 [[noreturn]] void fail(std::string message) {
   throw TestFailure(std::move(message));
-}
-
-void check(bool condition, std::string_view message) {
-  if (!condition) {
-    fail(std::string(message));
-  }
 }
 
 template <typename A, typename B>
@@ -119,6 +114,26 @@ void testProgrammablePixelShaderIsNotFfp() {
   checkEq(static_cast<int>(sel.reason),
           static_cast<int>(dxmt9::pipeline::TileFfpFallbackReason::NotFfp),
           "programmable PS reports not_ffp reason");
+}
+
+void testTexturedFfpFallsBackToPortableFragmentPath() {
+  auto fixture = makeFfpFixture(FogMode::None, /*alphaTest=*/false);
+  fixture.hot.textures[0] = Handle{0x5000u};
+  fixture.hot.textureMask = 1u;
+  auto& stage = fixture.shaderLayout.pixelShader.pixelKey->stages[0];
+  stage.colorOp = static_cast<std::uint32_t>(TextureOp::SelectArg1);
+  stage.colorArg1 = 2u;
+  stage.alphaOp = static_cast<std::uint32_t>(TextureOp::SelectArg1);
+  stage.alphaArg1 = 2u;
+
+  const auto sel =
+      dxmt9::pipeline::selectTileFfpForPass(fixture.view(), /*supportsApple3=*/true);
+  checkEq(static_cast<int>(sel.decision),
+          static_cast<int>(dxmt9::pipeline::TileFfpDecision::Portable),
+          "textured FFP stays on the portable fragment path");
+  checkEq(static_cast<int>(sel.reason),
+          static_cast<int>(dxmt9::pipeline::TileFfpFallbackReason::UnsupportedState),
+          "textured FFP reports unsupported_state for tile path");
 }
 
 void testFogModeExpFallbackPrecision() {
@@ -238,6 +253,7 @@ int main() {
     testGpuFamilyFallback();
     testEligibleFfpPicksTile();
     testProgrammablePixelShaderIsNotFfp();
+    testTexturedFfpFallsBackToPortableFragmentPath();
     testFogModeExpFallbackPrecision();
     testFogModeExp2FallbackPrecision();
     testFogModeLinearStaysEligible();

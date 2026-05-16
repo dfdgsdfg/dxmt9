@@ -180,6 +180,18 @@ oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
 [[test]]
+file = "texture/dxmt9_a8l8_luminance_alpha_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
 file = "texture/dxmt9_dependent_texture_read.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -190,6 +202,126 @@ models = ["ps_2_0"]
 opcodes = ["DCL", "MOV", "TEX"]
 oracle = "math-derivation"
 oracle-date = "2026-05-06"
+
+[[test]]
+file = "texture/dxmt9_dxt1_intrablock_indices_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_dxt1_live_sample_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_dxt1_multiblock_order_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_dxt3_live_sample_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_dxt5_intrablock_alpha_indices_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_dxt5_live_sample_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_dxt5_multiblock_alpha_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_ffp_pixel_texture_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_ffp_texcoord1_select_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp", "ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_ffp_texture_transform_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp", "ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
 
 [[test]]
 file = "texture/dxmt9_l8_luminance_readback.shader_test"
@@ -214,6 +346,18 @@ models = ["ps_3_0"]
 opcodes = ["DCL", "DEF", "MOV", "TEXLDL"]
 oracle = "math-derivation"
 oracle-date = "2026-05-06"
+
+[[test]]
+file = "texture/dxmt9_sampler7_binding_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
 
 [[test]]
 file = "texture/dxmt9_texture_2x2.shader_test"
