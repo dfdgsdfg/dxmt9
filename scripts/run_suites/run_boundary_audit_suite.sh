@@ -18,6 +18,7 @@ runner="$repo_root/scripts/tools/run_dx9_present_policy_ab.py"
 runs="${BOUNDARY_AUDIT_RUNS:-3}"
 timeout="${BOUNDARY_AUDIT_TIMEOUT:-60}"
 tag="${BOUNDARY_AUDIT_TAG:-boundary-audit-$(date +%Y%m%d-%H%M%S)}"
+status=0
 
 # (boundary, probe app name) pairs. The probes must already be built
 # (scripts/build_apps/build_*_probe.sh) before this suite runs.
@@ -43,10 +44,13 @@ for entry in "${suites[@]}"; do
     --runs "$runs" \
     --timeout "$timeout" \
     --tag "${tag}-${boundary}-${app#dxmt9-perf-}" \
-    --boundary "$boundary" \
-    || echo "    !! ${app} failed; continuing"
+    --boundary "$boundary" || {
+      status=1
+      echo "    !! ${app} failed; continuing"
+    }
   echo
 done
 
 echo "boundary audit complete."
 echo "outputs under: experiments/output/dx9-present-policy-ab/${tag}-*"
+exit "$status"

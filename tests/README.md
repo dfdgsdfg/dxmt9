@@ -58,4 +58,5 @@ bash scripts/check/check_d3d9_conformance_manifest.sh
 | `dxmt9-d3d9-conformance-status-report` | `scripts/check/check_d3d9_conformance_status.py` | D3D9 conformance pass/fail report |
 | `dxmt9-drift-report` | `scripts/check/check_drift.sh` | upstream vkd3d corpus drift |
 | `dxmt9-perf-counter-table-audit` | `scripts/check/audit_perf_counter_table.py` | perf counter `Counters` field ↔ `kCounterTable` parity |
+| `dxmt9-perf-counter-callsite-audit` | `scripts/check/audit_perf_counter_callsites.py` | perf counter `count*()` declaration ↔ production callsite parity |
 | `dxmt9-corpus-sync-smoke` | `tests/shader_runner/corpus_sync_smoke.py` | corpus sync round-trip |

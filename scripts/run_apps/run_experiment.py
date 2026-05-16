@@ -66,6 +66,8 @@ PE_RECORDER_COUNTER_PATTERN = re.compile(r"^\[dxmt9-device\]\s+(?:[A-Za-z]+:\s+)
 PERF_PROBE_PATTERN = re.compile(r"^\[perf-probe\]\s+(.*)$")
 PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s}]+)")
 _DRIVE_LETTER_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
+HARNESS_ENV_PREFIXES = ("DXMT", "DXMT9", "WINE")
+HARNESS_ENV_KEYS = {"DYLD_LIBRARY_PATH"}
 
 
 @dataclass
@@ -268,6 +270,18 @@ def resolve_wine_bin(wine_root: Path) -> Path:
 
 def run_command(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=True, text=True, **kwargs)
+
+
+def snapshot_harness_environment(env: dict[str, str]) -> dict[str, str]:
+    return {
+        key: env[key]
+        for key in sorted(env)
+        if env[key]
+        and (
+            key in HARNESS_ENV_KEYS
+            or any(key.startswith(prefix) for prefix in HARNESS_ENV_PREFIXES)
+        )
+    }
 
 
 def find_window_by_title(expected_title: str) -> dict[str, Any] | None:
@@ -825,10 +839,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         if app.cx_bottle:
             env["DXMT_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
 
+        command = ["bash", str(app.launcher_path)]
+        environment_snapshot = snapshot_harness_environment(env)
+
         with log_path.open("wb") as log_fp:
             process_started_at = time.monotonic()
             process = subprocess.Popen(
-                ["bash", str(app.launcher_path)],
+                command,
                 cwd=REPO_ROOT,
                 env=env,
                 stdout=log_fp,
@@ -875,13 +892,17 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                     performance["fps"] = frame_count / elapsed
 
         result: dict[str, Any] = {
+            "schema": "dxmt9.experiment.result.v1",
             "name": app.name,
             "binary": str(binary_path),
             "launcher": str(app.launcher_path),
+            "command": command,
+            "environment": environment_snapshot,
             "reference": str(app.reference_path),
             "prefix": str(prefix),
             "wine_root": str(wine_root) if wine_root else None,
             "wine_bin": str(wine_bin),
+            "exit_code": process.returncode if process is not None else None,
             "returncode": process.returncode if process is not None else None,
             "capture_error": capture_error,
             "window_info": window_info,
