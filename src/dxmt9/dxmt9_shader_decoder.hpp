@@ -124,6 +124,7 @@ struct ConstantUsage {
 struct FlowBlock {
   u32 opcode = 0;
   bool sawElse = false;
+  std::string guard;
 };
 
 // DCL-usage codes that the translator special-cases. Mirrored from

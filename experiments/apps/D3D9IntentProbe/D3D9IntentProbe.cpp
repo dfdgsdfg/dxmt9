@@ -100,6 +100,16 @@ struct RhwTexVertex {
   float v;
 };
 
+struct RhwTex3Vertex {
+  float x;
+  float y;
+  float z;
+  float rhw;
+  float u;
+  float v;
+  float w;
+};
+
 struct XyzTexVertex {
   float x;
   float y;
@@ -202,6 +212,12 @@ public:
       runShaderEdgeVisual(stats);
     } else if (std::strcmp(mode, "d3d9ex-wsi") == 0) {
       runD3d9ExWsi(stats);
+    } else if (std::strcmp(mode, "cube-volume-texture-update") == 0) {
+      runCubeVolumeTextureUpdate(stats);
+    } else if (std::strcmp(mode, "autogen-mipmap") == 0) {
+      runAutogenMipmap(stats);
+    } else if (std::strcmp(mode, "npot-filter-lod") == 0) {
+      runNpotFilterLod(stats);
     } else {
       logf("FAIL: unknown mode '%s'", mode);
       stats.failed++;
@@ -623,6 +639,18 @@ private:
                      "DrawPrimitive(textured XYZRHW)", stats);
   }
 
+  void drawTexturedRhwQuad3(float u, float v, float w, const char* label, TestStats& stats) {
+    const RhwTex3Vertex vertices[4] = {
+        {0.0f, 0.0f, 0.5f, 1.0f, u, v, w},
+        {static_cast<float>(kWidth), 0.0f, 0.5f, 1.0f, u, v, w},
+        {0.0f, static_cast<float>(kHeight), 0.5f, 1.0f, u, v, w},
+        {static_cast<float>(kWidth), static_cast<float>(kHeight), 0.5f, 1.0f, u, v, w},
+    };
+    drawVertexBuffer(vertices, sizeof(vertices), sizeof(vertices[0]),
+                     D3DFVF_XYZRHW | D3DFVF_TEX1 | D3DFVF_TEXCOORDSIZE3(0),
+                     label, stats);
+  }
+
   void drawTexturedXyzQuad(TestStats& stats) {
     const XyzTexVertex vertices[4] = {
         {-1.0f, -1.0f, 0.5f, 0.0f, 1.0f},
@@ -701,6 +729,50 @@ private:
       }
     }
     stats.expectHr("Texture.UnlockRect(fill level)", texture->UnlockRect(level));
+  }
+
+  void fillCubeFace(IDirect3DCubeTexture9* texture,
+                    D3DCUBEMAP_FACES face,
+                    UINT level,
+                    D3DCOLOR color,
+                    TestStats& stats) {
+    D3DLOCKED_RECT locked{};
+    HRESULT hr = texture->LockRect(face, level, &locked, nullptr, 0);
+    stats.expectHr("CubeTexture.LockRect(fill face)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    D3DSURFACE_DESC desc{};
+    texture->GetLevelDesc(level, &desc);
+    for (UINT y = 0; y < desc.Height; ++y) {
+      auto* row = reinterpret_cast<D3DCOLOR*>(
+          static_cast<unsigned char*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch);
+      for (UINT x = 0; x < desc.Width; ++x) {
+        row[x] = color;
+      }
+    }
+    stats.expectHr("CubeTexture.UnlockRect(fill face)", texture->UnlockRect(face, level));
+  }
+
+  void fillVolumeLevel(IDirect3DVolumeTexture9* texture, UINT level, D3DCOLOR color, TestStats& stats) {
+    D3DLOCKED_BOX locked{};
+    HRESULT hr = texture->LockBox(level, &locked, nullptr, 0);
+    stats.expectHr("VolumeTexture.LockBox(fill level)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    D3DVOLUME_DESC desc{};
+    texture->GetLevelDesc(level, &desc);
+    for (UINT z = 0; z < desc.Depth; ++z) {
+      auto* slice = static_cast<unsigned char*>(locked.pBits) + static_cast<size_t>(z) * locked.SlicePitch;
+      for (UINT y = 0; y < desc.Height; ++y) {
+        auto* row = reinterpret_cast<D3DCOLOR*>(slice + static_cast<size_t>(y) * locked.RowPitch);
+        for (UINT x = 0; x < desc.Width; ++x) {
+          row[x] = color;
+        }
+      }
+    }
+    stats.expectHr("VolumeTexture.UnlockBox(fill level)", texture->UnlockBox(level));
   }
 
   bool waitEventQuery(IDirect3DQuery9* query, const char* label, TestStats& stats) {
@@ -1513,6 +1585,182 @@ private:
     clearBackbuffer(D3DCOLOR_XRGB(80, 120, 200), stats);
     finishScene(stats);
     readBackbufferNear(kWidth / 2, kHeight / 2, 80, 120, 200, "d3d9ex-wsi post-reset clear", stats);
+  }
+
+  void runCubeVolumeTextureUpdate(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(cube/volume update)", device_->GetDeviceCaps(&caps));
+    if (caps.PixelShaderVersion < D3DPS_VERSION(2, 0)) {
+      logf("SKIP: cube-volume-texture-update requires ps_2_0");
+      return;
+    }
+    if (!(caps.TextureCaps & D3DPTEXTURECAPS_CUBEMAP) ||
+        !(caps.TextureCaps & D3DPTEXTURECAPS_VOLUMEMAP)) {
+      logf("SKIP: cube or volume textures unsupported");
+      return;
+    }
+
+    static const DWORD psCube[] = {
+        0xffff0200,
+        0x0200001f, 0x98000000, 0xa00f0800,
+        0x0200001f, 0x80000000, 0xb00f0000,
+        0x03000042, 0x800f0000, 0xb0e40000, 0xa0e40800,
+        0x02000001, 0x800f0800, 0x80e40000,
+        0x0000ffff};
+    static const DWORD psVolume[] = {
+        0xffff0200,
+        0x0200001f, 0xa0000000, 0xa00f0800,
+        0x0200001f, 0x80000000, 0xb00f0000,
+        0x03000042, 0x800f0000, 0xb0e40000, 0xa0e40800,
+        0x02000001, 0x800f0800, 0x80e40000,
+        0x0000ffff};
+    ComPtr<IDirect3DPixelShader9> cubeShader;
+    ComPtr<IDirect3DPixelShader9> volumeShader;
+    stats.expectHr("CreatePixelShader(cube sampler)", device_->CreatePixelShader(psCube, cubeShader.put()));
+    stats.expectHr("CreatePixelShader(volume sampler)", device_->CreatePixelShader(psVolume, volumeShader.put()));
+
+    ComPtr<IDirect3DCubeTexture9> cubeSrc;
+    ComPtr<IDirect3DCubeTexture9> cubeDst;
+    HRESULT hr = device_->CreateCubeTexture(4, 1, 0, D3DFMT_A8R8G8B8,
+                                            D3DPOOL_SYSTEMMEM, cubeSrc.put(), nullptr);
+    stats.expectHr("CreateCubeTexture(SYSTEMMEM src)", hr);
+    hr = device_->CreateCubeTexture(4, 1, 0, D3DFMT_A8R8G8B8,
+                                    D3DPOOL_DEFAULT, cubeDst.put(), nullptr);
+    stats.expectHr("CreateCubeTexture(DEFAULT dst)", hr);
+    if (cubeSrc && cubeDst) {
+      const D3DCUBEMAP_FACES faces[] = {
+          D3DCUBEMAP_FACE_POSITIVE_X,
+          D3DCUBEMAP_FACE_NEGATIVE_X,
+          D3DCUBEMAP_FACE_POSITIVE_Y,
+          D3DCUBEMAP_FACE_NEGATIVE_Y,
+          D3DCUBEMAP_FACE_POSITIVE_Z,
+          D3DCUBEMAP_FACE_NEGATIVE_Z,
+      };
+      for (D3DCUBEMAP_FACES face : faces) {
+        fillCubeFace(cubeSrc.ptr(), face, 0,
+                     face == D3DCUBEMAP_FACE_POSITIVE_X ? D3DCOLOR_XRGB(0, 220, 0)
+                                                        : D3DCOLOR_XRGB(220, 0, 0),
+                     stats);
+      }
+      stats.expectHr("UpdateTexture(cube src->dst)", device_->UpdateTexture(cubeSrc.ptr(), cubeDst.ptr()));
+      stats.expectHr("SetTexture(cube dst)", device_->SetTexture(0, cubeDst.ptr()));
+      stats.expectHr("SetPixelShader(cube)", device_->SetPixelShader(cubeShader.ptr()));
+      clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+      drawTexturedRhwQuad3(1.0f, 0.0f, 0.0f, "DrawPrimitive(cube texture sample)", stats);
+      finishScene(stats);
+      readBackbufferNear(kWidth / 2, kHeight / 2, 0, 220, 0,
+                         "cube-volume-texture-update cube +X sample", stats);
+    }
+
+    resetFixedFunctionState();
+    ComPtr<IDirect3DVolumeTexture9> volumeSrc;
+    ComPtr<IDirect3DVolumeTexture9> volumeDst;
+    hr = device_->CreateVolumeTexture(4, 4, 4, 1, 0, D3DFMT_A8R8G8B8,
+                                      D3DPOOL_SYSTEMMEM, volumeSrc.put(), nullptr);
+    stats.expectHr("CreateVolumeTexture(SYSTEMMEM src)", hr);
+    hr = device_->CreateVolumeTexture(4, 4, 4, 1, 0, D3DFMT_A8R8G8B8,
+                                      D3DPOOL_DEFAULT, volumeDst.put(), nullptr);
+    stats.expectHr("CreateVolumeTexture(DEFAULT dst)", hr);
+    if (volumeSrc && volumeDst) {
+      fillVolumeLevel(volumeSrc.ptr(), 0, D3DCOLOR_XRGB(0, 0, 220), stats);
+      stats.expectHr("UpdateTexture(volume src->dst)", device_->UpdateTexture(volumeSrc.ptr(), volumeDst.ptr()));
+      stats.expectHr("SetTexture(volume dst)", device_->SetTexture(0, volumeDst.ptr()));
+      stats.expectHr("SetPixelShader(volume)", device_->SetPixelShader(volumeShader.ptr()));
+      clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+      drawTexturedRhwQuad3(0.5f, 0.5f, 0.5f, "DrawPrimitive(volume texture sample)", stats);
+      finishScene(stats);
+      readBackbufferNear(kWidth / 2, kHeight / 2, 0, 0, 220,
+                         "cube-volume-texture-update volume center sample", stats);
+    }
+  }
+
+  void runAutogenMipmap(TestStats& stats) {
+    resetFixedFunctionState();
+    HRESULT support = d3d_->CheckDeviceFormat(D3DADAPTER_DEFAULT,
+                                              D3DDEVTYPE_HAL,
+                                              D3DFMT_X8R8G8B8,
+                                              D3DUSAGE_AUTOGENMIPMAP,
+                                              D3DRTYPE_TEXTURE,
+                                              D3DFMT_A8R8G8B8);
+    if (support == D3DOK_NOAUTOGEN || support == D3DERR_NOTAVAILABLE) {
+      logf("SKIP: A8R8G8B8 autogen mipmap unsupported");
+      return;
+    }
+    stats.expectHr("CheckDeviceFormat(AUTOGENMIPMAP)", support);
+
+    ComPtr<IDirect3DTexture9> texture;
+    HRESULT hr = device_->CreateTexture(16, 16, 0, D3DUSAGE_AUTOGENMIPMAP,
+                                        D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
+                                        texture.put(), nullptr);
+    stats.expectHr("CreateTexture(AUTOGENMIPMAP managed)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    stats.expect(texture->GetLevelCount() == 1, "autogen-mipmap exposes only level 0");
+    stats.expect(texture->GetAutoGenFilterType() == D3DTEXF_LINEAR,
+                 "autogen-mipmap default filter is linear");
+    stats.expect(texture->SetAutoGenFilterType(D3DTEXF_NONE) == D3DERR_INVALIDCALL,
+                 "autogen-mipmap rejects NONE filter");
+    stats.expectHr("SetAutoGenFilterType(POINT)", texture->SetAutoGenFilterType(D3DTEXF_POINT));
+    fillTextureLevel(texture.ptr(), 0, D3DCOLOR_XRGB(0, 220, 0), stats);
+    texture->GenerateMipSubLevels();
+    stats.expect(true, "GenerateMipSubLevels");
+
+    stats.expectHr("SetTexture(autogen)", device_->SetTexture(0, texture.ptr()));
+    stats.expectHr("SetSamplerState(MIPFILTER POINT autogen)",
+                   device_->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_POINT));
+    stats.expectHr("SetSamplerState(MAXMIPLEVEL 1 autogen)",
+                   device_->SetSamplerState(0, D3DSAMP_MAXMIPLEVEL, 1));
+    stats.expectHr("SetTextureStageState(COLORARG1 TEXTURE autogen)",
+                   device_->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    drawTexturedRhwQuadColors(D3DCOLOR_ARGB(255, 255, 255, 255), stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 0, 220, 0,
+                       "autogen-mipmap generated sublevel sample", stats);
+  }
+
+  void runNpotFilterLod(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(npot filter lod)", device_->GetDeviceCaps(&caps));
+    if (!(caps.TextureCaps & D3DPTEXTURECAPS_MIPMAP)) {
+      logf("SKIP: mipmap textures unsupported");
+      return;
+    }
+
+    ComPtr<IDirect3DTexture9> texture;
+    HRESULT hr = device_->CreateTexture(3, 5, 3, 0, D3DFMT_A8R8G8B8,
+                                        D3DPOOL_MANAGED, texture.put(), nullptr);
+    if (hr == D3DERR_INVALIDCALL && (caps.TextureCaps & D3DPTEXTURECAPS_NONPOW2CONDITIONAL)) {
+      logf("SKIP: conditional NPOT mip texture unsupported");
+      return;
+    }
+    stats.expectHr("CreateTexture(NPOT mip chain)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    fillTextureLevel(texture.ptr(), 0, D3DCOLOR_XRGB(220, 0, 0), stats);
+    fillTextureLevel(texture.ptr(), 1, D3DCOLOR_XRGB(0, 220, 0), stats);
+    fillTextureLevel(texture.ptr(), 2, D3DCOLOR_XRGB(0, 0, 220), stats);
+
+    stats.expectHr("SetTexture(NPOT)", device_->SetTexture(0, texture.ptr()));
+    stats.expectHr("SetSamplerState(MINFILTER POINT NPOT)",
+                   device_->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT));
+    stats.expectHr("SetSamplerState(MAGFILTER POINT NPOT)",
+                   device_->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT));
+    stats.expectHr("SetSamplerState(MIPFILTER POINT NPOT)",
+                   device_->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_POINT));
+    stats.expectHr("SetSamplerState(MAXMIPLEVEL 1 NPOT)",
+                   device_->SetSamplerState(0, D3DSAMP_MAXMIPLEVEL, 1));
+    stats.expectHr("SetTextureStageState(COLORARG1 TEXTURE NPOT)",
+                   device_->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    drawTexturedRhwQuadColors(D3DCOLOR_ARGB(255, 255, 255, 255), stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 0, 220, 0,
+                       "npot-filter-lod maxmip level1 sample", stats);
   }
 
   HINSTANCE instance_ = nullptr;

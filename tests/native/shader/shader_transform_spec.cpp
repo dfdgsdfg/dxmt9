@@ -617,6 +617,94 @@ std::vector<u32> makePs30CallnzLabelRetBytecode() {
   };
 }
 
+std::vector<u32> makePs30CallLabelNestedRetBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_CALL, 1),
+      makeLabelToken(7),
+      makeInstructionToken(kD3DSIO_LABEL, 1),
+      makeLabelToken(7),
+      makeInstructionToken(kD3DSIO_IF, 1),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_RET, 0),
+      makeInstructionToken(kD3DSIO_ENDIF, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeInstructionToken(kD3DSIO_RET, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30PredicatedIfBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makePredicatedInstructionToken(kD3DSIO_IF, 1, 0u),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_ELSE, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeInstructionToken(kD3DSIO_ENDIF, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30PredicatedBreakcBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DSPCGt = 1u;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_REP, 1),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makePredicatedInstructionToken(kD3DSIO_BREAKC, 2, kD3DSPCGt),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 3),
+      makeInstructionToken(kD3DSIO_ENDREP, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30PredicatedCallnzLabelRetBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makePredicatedInstructionToken(kD3DSIO_CALLNZ, 0, 0u),
+      makeLabelToken(9),
+      makeSrcToken(kD3DSPR_CONSTBOOL, 0),
+      makeInstructionToken(kD3DSIO_LABEL, 1),
+      makeLabelToken(9),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 4),
+      makeInstructionToken(kD3DSIO_RET, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makePs11TexcoordTexBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -891,16 +979,47 @@ std::vector<u32> makePs30FixedOperandCountDecodeBytecode() {
 
 std::vector<u32> makePs30RelativeAddressingBytecode() {
   using namespace dxmt9::d3d9bc;
-  // Temp destination relative addressing is not a supported D3D9
-  // destination class for this translator. The rel-addr DWORD that
-  // follows the destination operand satisfies the parser, but the IR
-  // layer must still throw deterministically instead of dropping the
-  // dynamic index.
   return {
       makeVersionToken(false, 3, 0),
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeRelativeDstToken(kD3DSPR_TEMP, 0),
       makeSrcToken(kD3DSPR_ADDR, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30TempRelativeSourceBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 1),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 2),
+      makeRelativeSrcToken(kD3DSPR_TEMP, 1),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 2),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makeVs30TexcoordRelativeDestinationBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 3, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeRelativeDstToken(kD3DSPR_TEXCRDOUT, 1),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
       makeSrcToken(kD3DSPR_CONST, 0),
       kD3DSIO_END,
   };
@@ -1052,7 +1171,7 @@ void testD3DBCDecodeAndClassificationFixtures() {
 void testPs30PredicatedInstructionLowersGuard() {
   const auto source = translatePixel(makePs30DecodeFixtureBytecode());
   checkContains(source, "bool p[16];", "predicated instruction declares predicate register storage");
-  checkContains(source, "if (p[0]) {", "predicated instruction lowers to a p0 guard");
+  checkContains(source, "if ((p[0])) {", "predicated instruction lowers to a p0 guard");
   checkContains(source, "outColor[1] = (cBool[2] != 0u ? float4(1.0f) : float4(0.0f));",
                 "predicated MOV body remains inside translated source");
 }
@@ -1409,6 +1528,8 @@ void testPs30BreakcFlowControlTranslation() {
 
 void testPs30CallLabelRetFlowControlTranslation() {
   const auto source = translatePixel(makePs30CallLabelRetBytecode());
+  checkContains(source, "bool dxmt9_call_ret_0 = false;",
+                "ps_3_0 CALL creates a call-frame return guard");
   checkContains(source, "r[0] = cFloat[4];", "ps_3_0 CALL/LABEL body is translated");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 CALL/LABEL/RET result reaches color output");
 }
@@ -1420,6 +1541,36 @@ void testPs30CallnzLabelRetFlowControlTranslation() {
                 "ps_3_0 CALLNZ guards the inlined call body with a bool-source nonzero test");
   checkContains(source, "r[0] = cFloat[4];", "ps_3_0 CALLNZ/LABEL body is translated");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 CALLNZ/LABEL/RET result reaches color output");
+}
+
+void testPs30CallLabelNestedRetKeepsSubroutineBodyGuarded() {
+  const auto source = translatePixel(makePs30CallLabelNestedRetBytecode());
+
+  checkContains(source, "bool dxmt9_call_ret_0 = false;",
+                "CALL/LABEL nested RET lowering creates a return flag");
+  checkContains(source, "dxmt9_call_ret_0 = true;",
+                "RET inside an inlined label body sets the return flag");
+  checkContains(source, "if ((!dxmt9_call_ret_0)) {",
+                "instructions after a nested RET stay guarded by the call return flag");
+  checkContains(source, "r[0] = cFloat[2];",
+                "label body after nested control flow remains available when RET did not execute");
+}
+
+void testPs30PredicatedFlowControlTranslation() {
+  const auto ifSource = translatePixel(makePs30PredicatedIfBytecode());
+  checkContains(ifSource, "if (((p[0])) && ((cFloat[0]).x != 0.0f)) {",
+                "predicated IF combines p0 with the branch condition");
+  checkContains(ifSource, "} else if ((p[0])) {",
+                "predicated IF keeps ELSE under the same p0 guard");
+
+  const auto breakSource = translatePixel(makePs30PredicatedBreakcBytecode());
+  checkContains(breakSource, "if (((p[0])) && ((cFloat[0]).x > (cFloat[1]).x)) { break; }",
+                "predicated BREAKC combines p0 with the comparison condition");
+
+  const auto callnzSource = translatePixel(makePs30PredicatedCallnzLabelRetBytecode());
+  checkContains(callnzSource,
+                "if (((p[0])) && (((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f)) {",
+                "predicated CALLNZ combines p0 with the CALLNZ source condition");
 }
 
 void testPs30ArithmeticOpcodeLoweringContracts() {
@@ -1574,6 +1725,20 @@ void testPs30RelativeAddressingLowersTempDestinationIndex() {
                 "ps_3_0 temp destination relative addressing lowers to a clamped r[] write");
 }
 
+void testPs30RelativeAddressingLowersTempSourceIndex() {
+  const auto source = translatePixel(makePs30TempRelativeSourceBytecode());
+  checkContains(source,
+                "r[clamp(a0 + 1, 0, 31)]",
+                "ps_3_0 temp source relative addressing lowers to a clamped r[] read");
+}
+
+void testVs30RelativeAddressingLowersTexcoordDestinationIndex() {
+  const auto source = translateVertex(makeVs30TexcoordRelativeDestinationBytecode());
+  checkContains(source,
+                "outTexcoord[clamp(a0 + 1, 0, 7)] = cFloat[1];",
+                "vs_3_0 texcoord output relative destination lowers to a clamped output write");
+}
+
 void testVs20IndexedConstDestinationLowersToClampedMutableConstWrite() {
   const auto source = translateVertex(makeVs20IndexedConstDestinationBytecode());
 
@@ -1699,6 +1864,8 @@ int main() {
     testPs30BreakcFlowControlTranslation();
     testPs30CallLabelRetFlowControlTranslation();
     testPs30CallnzLabelRetFlowControlTranslation();
+    testPs30CallLabelNestedRetKeepsSubroutineBodyGuarded();
+    testPs30PredicatedFlowControlTranslation();
     testPs30ArithmeticOpcodeLoweringContracts();
     testPs30TranscendentalOpcodeLoweringContracts();
     testPs30MatrixOpcodeLoweringContracts();
@@ -1712,6 +1879,8 @@ int main() {
     testCallnzFixedOperandCountDecodeContract();
     testD3DBCFixedOperandCountDecodeContract();
     testPs30RelativeAddressingLowersTempDestinationIndex();
+    testPs30RelativeAddressingLowersTempSourceIndex();
+    testVs30RelativeAddressingLowersTexcoordDestinationIndex();
     testVs20IndexedConstDestinationLowersToClampedMutableConstWrite();
     testVs20DefLiteralWithRelAddrBitDoesNotDriftParser();
     testVs20IndexedConstSourceParserConsumesRelAddrDword();

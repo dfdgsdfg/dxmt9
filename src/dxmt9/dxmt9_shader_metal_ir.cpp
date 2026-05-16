@@ -257,6 +257,22 @@ std::string texkillMaskCondition(const std::string& value, u32 mask) {
   return first ? std::string("false") : condition.str();
 }
 
+std::string combineBooleanTerms(const std::vector<std::string>& terms) {
+  std::ostringstream out;
+  bool first = true;
+  for (const auto& term : terms) {
+    if (term.empty()) {
+      continue;
+    }
+    if (!first) {
+      out << " && ";
+    }
+    out << "(" << term << ")";
+    first = false;
+  }
+  return out.str();
+}
+
 std::string readVertexOutputMapping(const VertexOutputMapping& mapping,
                                     const std::string& outPosition,
                                     const std::string& outColor,
@@ -335,6 +351,14 @@ std::string tempDestinationTarget(const D3DRegisterRef& dst, u32 maxIndex) {
          ", 0, " + std::to_string(maxIndex) + ")]";
 }
 
+std::string texcoordDestinationTarget(const D3DRegisterRef& dst) {
+  if (dst.relAddrToken == 0u) {
+    return "outTexcoord[" + std::to_string(std::min<u32>(dst.index, kMaxTextureStages - 1u)) + "]";
+  }
+  return "outTexcoord[clamp(" + relAddrExpression(dst.relAddrToken) + " + " +
+         std::to_string(dst.index) + ", 0, " + std::to_string(kMaxTextureStages - 1u) + ")]";
+}
+
 void promoteIndexedConstantDestinations(ConstantUsage& usage, const SpirvModule& module, bool vertexStage) {
   for (const auto& instruction : module.instructions) {
     if (instruction.operands.empty() || !opcodeWritesFirstOperand(instruction.opcode) ||
@@ -376,10 +400,10 @@ D3DRegisterRef decodeOperandRegister(const D3DDecodedInstruction& instruction, s
 void requireSupportedDestinationAddressing(const D3DRegisterRef& dst) {
   if (dst.relAddrToken == 0u || dst.kind == D3DRegisterKind::ConstFloat ||
       dst.kind == D3DRegisterKind::ConstInt || dst.kind == D3DRegisterKind::ConstBool ||
-      dst.kind == D3DRegisterKind::Temp) {
+      dst.kind == D3DRegisterKind::Temp || dst.kind == D3DRegisterKind::TexCoordOut) {
     return;
   }
-  throw std::runtime_error("destination relative addressing is only supported for temp and constant registers");
+  throw std::runtime_error("destination relative addressing is only supported for temp, texcoord output, and constant registers");
 }
 
 std::string readOperandExpression(const D3DDecodedInstruction& instruction, const D3DRegisterRef& reg,
@@ -390,10 +414,15 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
                                   const std::string& tempPrefix, const std::string& constPrefix,
                                   const std::string& intPrefix, const std::string& boolPrefix,
                                   const std::string& predicatePrefix,
-                                  const VertexOutputSemantics* vertexOutputSemantics = nullptr) {
+                                  const VertexOutputSemantics* vertexOutputSemantics = nullptr,
+                                  u32 maxTempIndex = 31u) {
   (void)instruction;
   switch (reg.kind) {
     case D3DRegisterKind::Temp:
+      if (reg.relAddrToken != 0u) {
+        return tempPrefix + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + " +
+               std::to_string(reg.index) + ", 0, " + std::to_string(maxTempIndex) + ")]";
+      }
       return tempPrefix + "[" + std::to_string(reg.index) + "]";
     case D3DRegisterKind::ConstFloat:
       if (reg.relAddrToken != 0u) {
@@ -933,9 +962,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       auto constantUsage = collectConstantUsage(module);
       promoteIndexedConstantDestinations(constantUsage, module, true);
 	    emitConstantBindings(out, true, constantUsage);
-	    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
+    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
     std::vector<bool> callConditionalStack;
+    std::vector<std::string> callReturnStack;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
       const auto& instruction = module.instructions[instructionIndex];
       if (instruction.opcode == kD3DSIO_COMMENT || instruction.opcode == kD3DSIO_PHASE) {
@@ -1035,6 +1065,57 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         return true;
       };
 
+      auto currentGuard = [&](const D3DDecodedInstruction& guardedInstruction) {
+        std::vector<std::string> terms;
+        if (!callReturnStack.empty()) {
+          terms.push_back("!" + callReturnStack.back());
+        }
+        if (guardedInstruction.predicated) {
+          terms.push_back("p[0]");
+        }
+        return combineBooleanTerms(terms);
+      };
+      auto guardedCondition = [&](const D3DDecodedInstruction& guardedInstruction,
+                                  const std::string& condition) {
+        const auto guard = currentGuard(guardedInstruction);
+        if (guard.empty()) {
+          return condition;
+        }
+        std::vector<std::string> terms;
+        terms.push_back(guard);
+        terms.push_back(condition);
+        return combineBooleanTerms(terms);
+      };
+      auto emitInstructionGuardOpen = [&] {
+        const auto guard = currentGuard(instruction);
+        if (guard.empty()) {
+          return false;
+        }
+        out << "  if (" << guard << ") {\n";
+        return true;
+      };
+
+      if (instruction.opcode == kDXMT9_INTERNAL_CALL_BEGIN) {
+        const auto flag = "dxmt9_call_ret_" + std::to_string(instruction.controls);
+        out << "  bool " << flag << " = false;\n";
+        callReturnStack.push_back(flag);
+        continue;
+      }
+      if (instruction.opcode == kDXMT9_INTERNAL_CALL_END) {
+        if (callReturnStack.empty()) {
+          throw std::runtime_error("internal CALL_END without CALL_BEGIN");
+        }
+        callReturnStack.pop_back();
+        continue;
+      }
+      if (instruction.opcode == kDXMT9_INTERNAL_CALL_RET) {
+        if (callReturnStack.empty()) {
+          out << "  return out;\n";
+        } else {
+          out << "  " << callReturnStack.back() << " = true;\n";
+        }
+        continue;
+      }
       if (instruction.opcode == kD3DSIO_LABEL) {
         if (instruction.operands.empty()) {
           throw std::runtime_error("LABEL requires a label operand");
@@ -1079,8 +1160,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (instruction.operands.empty()) {
           throw std::runtime_error("IF requires a condition operand");
         }
-        out << "  if ((" << readSrc(0) << ").x != 0.0f) {\n";
-        controlStack.push_back(FlowBlock{instruction.opcode, false});
+        const auto guard = currentGuard(instruction);
+        out << "  if (" << guardedCondition(instruction, "(" + readSrc(0) + ").x != 0.0f") << ") {\n";
+        controlStack.push_back(FlowBlock{instruction.opcode, false, guard});
         continue;
       }
       if (instruction.opcode == kD3DSIO_IFC) {
@@ -1101,8 +1183,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           case 6: op = "<="; break;  // D3DSPC_LE
           default: op = "=="; break; // reserved (0) — treat as EQ
         }
-        out << "  if ((" << readSrc(0) << ").x " << op << " (" << readSrc(1) << ").x) {\n";
-        controlStack.push_back(FlowBlock{kD3DSIO_IF, false});
+        const auto guard = currentGuard(instruction);
+        out << "  if (" << guardedCondition(instruction, "(" + readSrc(0) + ").x " + op + " (" + readSrc(1) + ").x") << ") {\n";
+        controlStack.push_back(FlowBlock{kD3DSIO_IF, false, guard});
         continue;
       }
       if (instruction.opcode == kD3DSIO_ELSE) {
@@ -1110,7 +1193,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           throw std::runtime_error("ELSE without matching IF");
         }
         controlStack.back().sawElse = true;
-        out << "  } else {\n";
+        if (controlStack.back().guard.empty()) {
+          out << "  } else {\n";
+        } else {
+          out << "  } else if (" << controlStack.back().guard << ") {\n";
+        }
         continue;
       }
       if (instruction.opcode == kD3DSIO_ENDIF) {
@@ -1127,16 +1214,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         }
         const auto loopIndex = instructionIndex;
         const auto countExpr = "max(0, int(round(" + readSrc(0) + ".x)))";
+        const auto guard = currentGuard(instruction);
+        const auto loopGuard = guard.empty() ? std::string{} : guard + " && ";
         if (instruction.opcode == kD3DSIO_LOOP) {
           out << "  for (int dxmt9_loop_" << loopIndex << " = 0, dxmt9_loopCount_" << loopIndex << " = "
-              << countExpr << "; dxmt9_loop_" << loopIndex << " < dxmt9_loopCount_" << loopIndex
+              << countExpr << "; " << loopGuard << "dxmt9_loop_" << loopIndex << " < dxmt9_loopCount_" << loopIndex
               << "; ++dxmt9_loop_" << loopIndex << ") {\n";
         } else {
           out << "  for (int dxmt9_rep_" << loopIndex << " = 0, dxmt9_repCount_" << loopIndex << " = " << countExpr
-              << "; dxmt9_rep_" << loopIndex << " < dxmt9_repCount_" << loopIndex << "; ++dxmt9_rep_"
+              << "; " << loopGuard << "dxmt9_rep_" << loopIndex << " < dxmt9_repCount_" << loopIndex << "; ++dxmt9_rep_"
               << loopIndex << ") {\n";
         }
-        controlStack.push_back(FlowBlock{instruction.opcode, false});
+        controlStack.push_back(FlowBlock{instruction.opcode, false, guard});
         continue;
       }
       if (instruction.opcode == kD3DSIO_ENDLOOP || instruction.opcode == kD3DSIO_ENDREP) {
@@ -1150,14 +1239,19 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         continue;
       }
       if (instruction.opcode == kD3DSIO_BREAK) {
-        out << "  break;\n";
+        const auto guard = currentGuard(instruction);
+        if (guard.empty()) {
+          out << "  break;\n";
+        } else {
+          out << "  if (" << guard << ") { break; }\n";
+        }
         continue;
       }
       if (instruction.opcode == kD3DSIO_BREAKP) {
         if (instruction.operands.empty()) {
           throw std::runtime_error("BREAKP requires a predicate operand");
         }
-        out << "  if ((" << readSrc(0) << ").x != 0.0f) { break; }\n";
+        out << "  if (" << guardedCondition(instruction, "(" + readSrc(0) + ").x != 0.0f") << ") { break; }\n";
         continue;
       }
       if (instruction.opcode == kD3DSIO_BREAKC) {
@@ -1174,14 +1268,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           case 6: op = "<="; break;  // D3DSPC_LE
           default: op = "=="; break;
         }
-        out << "  if ((" << readSrc(0) << ").x " << op << " (" << readSrc(1) << ").x) { break; }\n";
+        out << "  if (" << guardedCondition(instruction, "(" + readSrc(0) + ").x " + op + " (" + readSrc(1) + ").x") << ") { break; }\n";
         continue;
       }
 
-      const bool predicatedBody = instruction.predicated;
-      if (predicatedBody) {
-        out << "  if (p[0]) {\n";
-      }
+      const bool predicatedBody = emitInstructionGuardOpen();
       switch (instruction.opcode) {
         case kD3DSIO_NOP:
           break;
@@ -1218,8 +1309,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               }
               break;
             case D3DRegisterKind::TexCoordOut:
-              if (!emitVertexOutputAssign(dst, value, dstMask)) {
-                emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+              if (dst.relAddrToken != 0u) {
+                emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
+              } else if (!emitVertexOutputAssign(dst, value, dstMask)) {
+                emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
               }
               break;
             case D3DRegisterKind::ColorOut:
@@ -1502,8 +1595,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               }
               break;
             case D3DRegisterKind::TexCoordOut:
-              if (!emitVertexOutputAssign(dst, value, dstMask)) {
-                emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+              if (dst.relAddrToken != 0u) {
+                emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
+              } else if (!emitVertexOutputAssign(dst, value, dstMask)) {
+                emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
               }
               break;
             case D3DRegisterKind::ColorOut:
@@ -1602,6 +1697,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
     if (!callConditionalStack.empty()) {
       throw std::runtime_error("unbalanced D3D CALL/RET");
+    }
+    if (!callReturnStack.empty()) {
+      throw std::runtime_error("unbalanced internal D3D CALL frame");
     }
 
     out << "  out.position = outPosition;\n";
@@ -1801,10 +1899,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	  out << "  float4 r[" << tempCount << "];\n";
 	  out << "  for (uint i = 0; i < " << tempCount
 	      << "u; ++i) { r[i] = float4(0.0f); }\n";
-	  emitConstantBindings(out, false, constantUsage);
-	  emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
+    emitConstantBindings(out, false, constantUsage);
+    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
     std::vector<bool> callConditionalStack;
+    std::vector<std::string> callReturnStack;
     u32 legacyM3x3PadCount = 0;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
       const auto& instruction = module.instructions[instructionIndex];
@@ -1849,7 +1948,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       } else {
         expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
                                      "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
-                                     "outPointSize", "r", "cFloat", "cInt", "cBool", "p");
+                                     "outPointSize", "r", "cFloat", "cInt", "cBool", "p",
+                                     nullptr, tempCount - 1u);
       }
       expr = applySwizzle(expr, decodeSwizzle(token));
       expr = applySourceModifier(std::move(expr), decodeSourceModifier(token));
@@ -1939,6 +2039,57 @@ std::string translateSpirvToMsl(const SpirvModule& module,
              "].y * (" + bump + ").x + ffpPs.bumpEnvMat[" + s + "].w * (" + bump + ").y), 0.0f, 1.0f)";
     };
 
+    auto currentGuard = [&](const D3DDecodedInstruction& guardedInstruction) {
+      std::vector<std::string> terms;
+      if (!callReturnStack.empty()) {
+        terms.push_back("!" + callReturnStack.back());
+      }
+      if (guardedInstruction.predicated) {
+        terms.push_back("p[0]");
+      }
+      return combineBooleanTerms(terms);
+    };
+    auto guardedCondition = [&](const D3DDecodedInstruction& guardedInstruction,
+                                const std::string& condition) {
+      const auto guard = currentGuard(guardedInstruction);
+      if (guard.empty()) {
+        return condition;
+      }
+      std::vector<std::string> terms;
+      terms.push_back(guard);
+      terms.push_back(condition);
+      return combineBooleanTerms(terms);
+    };
+    auto emitInstructionGuardOpen = [&] {
+      const auto guard = currentGuard(instruction);
+      if (guard.empty()) {
+        return false;
+      }
+      out << "  if (" << guard << ") {\n";
+      return true;
+    };
+
+    if (instruction.opcode == kDXMT9_INTERNAL_CALL_BEGIN) {
+      const auto flag = "dxmt9_call_ret_" + std::to_string(instruction.controls);
+      out << "  bool " << flag << " = false;\n";
+      callReturnStack.push_back(flag);
+      continue;
+    }
+    if (instruction.opcode == kDXMT9_INTERNAL_CALL_END) {
+      if (callReturnStack.empty()) {
+        throw std::runtime_error("internal CALL_END without CALL_BEGIN");
+      }
+      callReturnStack.pop_back();
+      continue;
+    }
+    if (instruction.opcode == kDXMT9_INTERNAL_CALL_RET) {
+      if (callReturnStack.empty()) {
+        out << "  return color;\n";
+      } else {
+        out << "  " << callReturnStack.back() << " = true;\n";
+      }
+      continue;
+    }
     if (instruction.opcode == kD3DSIO_LABEL) {
       if (instruction.operands.empty()) {
         throw std::runtime_error("LABEL requires a label operand");
@@ -1983,8 +2134,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       if (instruction.operands.empty()) {
         throw std::runtime_error("IF requires a condition operand");
       }
-      out << "  if ((" << readSrc(0) << ").x != 0.0f) {\n";
-      controlStack.push_back(FlowBlock{instruction.opcode, false});
+      const auto guard = currentGuard(instruction);
+      out << "  if (" << guardedCondition(instruction, "(" + readSrc(0) + ").x != 0.0f") << ") {\n";
+      controlStack.push_back(FlowBlock{instruction.opcode, false, guard});
       continue;
     }
     if (instruction.opcode == kD3DSIO_IFC) {
@@ -2001,8 +2153,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         case 6: op = "<="; break;  // D3DSPC_LE
         default: op = "=="; break;
       }
-      out << "  if ((" << readSrc(0) << ").x " << op << " (" << readSrc(1) << ").x) {\n";
-      controlStack.push_back(FlowBlock{kD3DSIO_IF, false});
+      const auto guard = currentGuard(instruction);
+      out << "  if (" << guardedCondition(instruction, "(" + readSrc(0) + ").x " + op + " (" + readSrc(1) + ").x") << ") {\n";
+      controlStack.push_back(FlowBlock{kD3DSIO_IF, false, guard});
       continue;
     }
     if (instruction.opcode == kD3DSIO_ELSE) {
@@ -2010,7 +2163,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         throw std::runtime_error("ELSE without matching IF");
       }
       controlStack.back().sawElse = true;
-      out << "  } else {\n";
+      if (controlStack.back().guard.empty()) {
+        out << "  } else {\n";
+      } else {
+        out << "  } else if (" << controlStack.back().guard << ") {\n";
+      }
       continue;
     }
     if (instruction.opcode == kD3DSIO_ENDIF) {
@@ -2027,16 +2184,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       const auto loopIndex = instructionIndex;
       const auto countExpr = "max(0, int(round(" + readSrc(0) + ".x)))";
+      const auto guard = currentGuard(instruction);
+      const auto loopGuard = guard.empty() ? std::string{} : guard + " && ";
       if (instruction.opcode == kD3DSIO_LOOP) {
         out << "  for (int dxmt9_loop_" << loopIndex << " = 0, dxmt9_loopCount_" << loopIndex << " = " << countExpr
-            << "; dxmt9_loop_" << loopIndex << " < dxmt9_loopCount_" << loopIndex << "; ++dxmt9_loop_"
+            << "; " << loopGuard << "dxmt9_loop_" << loopIndex << " < dxmt9_loopCount_" << loopIndex << "; ++dxmt9_loop_"
             << loopIndex << ") {\n";
       } else {
         out << "  for (int dxmt9_rep_" << loopIndex << " = 0, dxmt9_repCount_" << loopIndex << " = " << countExpr
-            << "; dxmt9_rep_" << loopIndex << " < dxmt9_repCount_" << loopIndex << "; ++dxmt9_rep_"
+            << "; " << loopGuard << "dxmt9_rep_" << loopIndex << " < dxmt9_repCount_" << loopIndex << "; ++dxmt9_rep_"
             << loopIndex << ") {\n";
       }
-      controlStack.push_back(FlowBlock{instruction.opcode, false});
+      controlStack.push_back(FlowBlock{instruction.opcode, false, guard});
       continue;
     }
     if (instruction.opcode == kD3DSIO_ENDLOOP || instruction.opcode == kD3DSIO_ENDREP) {
@@ -2050,14 +2209,19 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       continue;
     }
     if (instruction.opcode == kD3DSIO_BREAK) {
-      out << "  break;\n";
+      const auto guard = currentGuard(instruction);
+      if (guard.empty()) {
+        out << "  break;\n";
+      } else {
+        out << "  if (" << guard << ") { break; }\n";
+      }
       continue;
     }
     if (instruction.opcode == kD3DSIO_BREAKP) {
       if (instruction.operands.empty()) {
         throw std::runtime_error("BREAKP requires a predicate operand");
       }
-      out << "  if ((" << readSrc(0) << ").x != 0.0f) { break; }\n";
+      out << "  if (" << guardedCondition(instruction, "(" + readSrc(0) + ").x != 0.0f") << ") { break; }\n";
       continue;
     }
     if (instruction.opcode == kD3DSIO_BREAKC) {
@@ -2074,14 +2238,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         case 6: op = "<="; break;  // D3DSPC_LE
         default: op = "=="; break;
       }
-      out << "  if ((" << readSrc(0) << ").x " << op << " (" << readSrc(1) << ").x) { break; }\n";
+      out << "  if (" << guardedCondition(instruction, "(" + readSrc(0) + ").x " + op + " (" + readSrc(1) + ").x") << ") { break; }\n";
       continue;
     }
 
-    const bool predicatedBody = instruction.predicated;
-    if (predicatedBody) {
-      out << "  if (p[0]) {\n";
-    }
+    const bool predicatedBody = emitInstructionGuardOpen();
     switch (instruction.opcode) {
       case kD3DSIO_NOP:
         break;
@@ -2140,7 +2301,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
             break;
           case D3DRegisterKind::TexCoordOut:
-            emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+            emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
             break;
           case D3DRegisterKind::DepthOut:
             emitMaskedAssign("outDepth", value, dstMask, true);
@@ -2205,7 +2366,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         } else {
           value = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
                                         "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
-                                        "outPointSize", "r", "cFloat", "cInt", "cBool", "p");
+                                        "outPointSize", "r", "cFloat", "cInt", "cBool", "p",
+                                        nullptr, tempCount - 1u);
         }
         out << "  if (" << texkillMaskCondition(value, decodeWriteMask(instruction.operands[0])) << ") {\n";
         out << "    discard_fragment();\n";
@@ -2444,7 +2606,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
             break;
           case D3DRegisterKind::TexCoordOut:
-            emitMaskedAssign(texcoordTarget(dst.index), value, dstMask);
+            emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
             break;
           case D3DRegisterKind::DepthOut:
             emitMaskedAssign("outDepth", value, dstMask, true);
@@ -2587,9 +2749,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     if (!controlStack.empty()) {
       throw std::runtime_error("unbalanced D3D control flow");
     }
-    if (!callConditionalStack.empty()) {
-      throw std::runtime_error("unbalanced D3D CALL/RET");
-    }
+  if (!callConditionalStack.empty()) {
+    throw std::runtime_error("unbalanced D3D CALL/RET");
+  }
+  if (!callReturnStack.empty()) {
+    throw std::runtime_error("unbalanced internal D3D CALL frame");
+  }
 	  out << "  color = outColor[0];\n";
 	  out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
   out << "    bool pass = true;\n";

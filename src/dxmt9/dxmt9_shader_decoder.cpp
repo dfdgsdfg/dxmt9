@@ -125,6 +125,12 @@ u32 decodeLabelIndex(u32 token) {
 
 std::string opcodeName(u32 opcode) {
   switch (opcode) {
+    case kDXMT9_INTERNAL_CALL_BEGIN:
+      return "dxmt9_call_begin";
+    case kDXMT9_INTERNAL_CALL_END:
+      return "dxmt9_call_end";
+    case kDXMT9_INTERNAL_CALL_RET:
+      return "dxmt9_call_ret";
     case kD3DSIO_NOP:
       return "nop";
     case kD3DSIO_MOV:
@@ -434,6 +440,22 @@ struct LabelRange {
   size_t retInstruction = 0;
 };
 
+D3DDecodedInstruction makeInternalInstruction(u32 opcode, u32 controls = 0u) {
+  D3DDecodedInstruction instruction{};
+  instruction.opcode = opcode;
+  instruction.controls = controls;
+  return instruction;
+}
+
+D3DDecodedInstruction makePredicateIfInstruction() {
+  D3DDecodedInstruction instruction{};
+  instruction.opcode = kD3DSIO_IF;
+  instruction.operands.push_back((1u << 31) | (0u & 0x7ffu) | ((kD3DSPR_PREDICATE & 0x7u) << 28) |
+                                 (((kD3DSPR_PREDICATE >> 3) & 0x3u) << 11));
+  instruction.relAddrTokens.push_back(0u);
+  return instruction;
+}
+
 std::optional<size_t> findLabelRange(const std::vector<LabelRange>& labels, u32 label) {
   for (size_t i = 0; i < labels.size(); ++i) {
     if (labels[i].label == label) {
@@ -463,15 +485,42 @@ std::vector<LabelRange> discoverLabelRanges(const std::vector<D3DDecodedInstruct
       throw std::runtime_error("LABEL requires a label operand");
     }
     const u32 label = decodeLabelIndex(instruction.operands[0]);
-    if (findLabelRange(labels, label)) {
-      throw std::runtime_error("duplicate D3D LABEL");
+    std::vector<u32> aliases{label};
+    size_t bodyBegin = i + 1;
+    while (bodyBegin < instructions.size() && instructions[bodyBegin].opcode == kD3DSIO_LABEL) {
+      if (instructions[bodyBegin].operands.empty()) {
+        throw std::runtime_error("LABEL requires a label operand");
+      }
+      aliases.push_back(decodeLabelIndex(instructions[bodyBegin].operands[0]));
+      ++bodyBegin;
+    }
+    for (const u32 alias : aliases) {
+      if (findLabelRange(labels, alias) ||
+          std::count(aliases.begin(), aliases.end(), alias) != 1) {
+        throw std::runtime_error("duplicate D3D LABEL");
+      }
     }
     size_t ret = instructions.size();
-    for (size_t j = i + 1; j < instructions.size(); ++j) {
-      if (instructions[j].opcode == kD3DSIO_LABEL) {
-        throw std::runtime_error("nested D3D LABEL is unsupported");
+    std::vector<u32> controlStack;
+    for (size_t j = bodyBegin; j < instructions.size(); ++j) {
+      const auto opcode = instructions[j].opcode;
+      if (opcode == kD3DSIO_LABEL) {
+        throw std::runtime_error("overlapping D3D LABEL body is unsupported");
       }
-      if (instructions[j].opcode == kD3DSIO_RET) {
+      if (opcode == kD3DSIO_IF || opcode == kD3DSIO_IFC ||
+          opcode == kD3DSIO_LOOP || opcode == kD3DSIO_REP) {
+        controlStack.push_back(opcode);
+        continue;
+      }
+      if (opcode == kD3DSIO_ENDIF || opcode == kD3DSIO_ENDLOOP ||
+          opcode == kD3DSIO_ENDREP) {
+        if (controlStack.empty()) {
+          throw std::runtime_error("unbalanced D3D LABEL body control flow");
+        }
+        controlStack.pop_back();
+        continue;
+      }
+      if (opcode == kD3DSIO_RET && controlStack.empty()) {
         ret = j;
         break;
       }
@@ -479,7 +528,9 @@ std::vector<LabelRange> discoverLabelRanges(const std::vector<D3DDecodedInstruct
     if (ret == instructions.size()) {
       throw std::runtime_error("D3D LABEL body is missing RET");
     }
-    labels.push_back(LabelRange{label, i, i + 1, ret});
+    for (const u32 alias : aliases) {
+      labels.push_back(LabelRange{alias, i, bodyBegin, ret});
+    }
     i = ret;
   }
   return labels;
@@ -490,7 +541,8 @@ void appendExpandedInstructionRange(std::vector<D3DDecodedInstruction>& out,
                                     const std::vector<LabelRange>& labels,
                                     size_t begin,
                                     size_t end,
-                                    std::vector<u32>& activeLabels) {
+                                    std::vector<u32>& activeLabels,
+                                    u32& nextCallFrame) {
   for (size_t i = begin; i < end; ++i) {
     const auto& instruction = instructions[i];
     if (instruction.opcode == kD3DSIO_LABEL) {
@@ -503,6 +555,7 @@ void appendExpandedInstructionRange(std::vector<D3DDecodedInstruction>& out,
       continue;
     }
     if (instruction.opcode == kD3DSIO_RET) {
+      out.push_back(makeInternalInstruction(kDXMT9_INTERNAL_CALL_RET));
       continue;
     }
     if (instruction.opcode == kD3DSIO_CALL || instruction.opcode == kD3DSIO_CALLNZ) {
@@ -528,21 +581,18 @@ void appendExpandedInstructionRange(std::vector<D3DDecodedInstruction>& out,
         syntheticIf.relAddrTokens.push_back(instruction.relAddrTokens.size() > 1 ? instruction.relAddrTokens[1] : 0u);
         out.push_back(std::move(syntheticIf));
       } else if (instruction.predicated) {
-        D3DDecodedInstruction syntheticIf{};
-        syntheticIf.opcode = kD3DSIO_IF;
-        syntheticIf.operands.push_back((1u << 31) | (0u & 0x7ffu) | ((kD3DSPR_PREDICATE & 0x7u) << 28) |
-                                       (((kD3DSPR_PREDICATE >> 3) & 0x3u) << 11));
-        syntheticIf.relAddrTokens.push_back(0u);
-        out.push_back(std::move(syntheticIf));
+        out.push_back(makePredicateIfInstruction());
       }
+      const u32 callFrame = nextCallFrame++;
+      out.push_back(makeInternalInstruction(kDXMT9_INTERNAL_CALL_BEGIN, callFrame));
       activeLabels.push_back(label);
       const auto& range = labels[*labelIndex];
-      appendExpandedInstructionRange(out, instructions, labels, range.bodyBegin, range.retInstruction, activeLabels);
+      appendExpandedInstructionRange(out, instructions, labels, range.bodyBegin, range.retInstruction + 1u,
+                                     activeLabels, nextCallFrame);
       activeLabels.pop_back();
+      out.push_back(makeInternalInstruction(kDXMT9_INTERNAL_CALL_END, callFrame));
       if (instruction.opcode == kD3DSIO_CALLNZ || instruction.predicated) {
-        D3DDecodedInstruction syntheticEndIf{};
-        syntheticEndIf.opcode = kD3DSIO_ENDIF;
-        out.push_back(std::move(syntheticEndIf));
+        out.push_back(makeInternalInstruction(kD3DSIO_ENDIF));
       }
       continue;
     }
@@ -561,11 +611,13 @@ void inlineShaderSubroutines(SpirvModule& module) {
   const auto labels = discoverLabelRanges(module.instructions);
   std::vector<D3DDecodedInstruction> expanded;
   std::vector<u32> activeLabels;
+  u32 nextCallFrame = 0u;
   for (size_t i = 0; i < module.instructions.size(); ++i) {
     if (instructionIsInsideLabelRange(labels, i)) {
       continue;
     }
-    appendExpandedInstructionRange(expanded, module.instructions, labels, i, i + 1, activeLabels);
+    appendExpandedInstructionRange(expanded, module.instructions, labels, i, i + 1, activeLabels,
+                                   nextCallFrame);
   }
   module.instructions = std::move(expanded);
 }

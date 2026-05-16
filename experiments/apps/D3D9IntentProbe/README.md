@@ -38,6 +38,12 @@ Modes:
   state reset checks.
 - `shader-edge-visual` - pixel-shader validation plus shader output readback.
 - `d3d9ex-wsi` - D3D9Ex device state, frame-latency, and reset checks.
+- `cube-volume-texture-update` - cube and volume `UpdateTexture` upload
+  followed by shader sampling.
+- `autogen-mipmap` - managed autogen-mipmap filter/state and generated
+  sublevel sampling.
+- `npot-filter-lod` - non-power-of-two explicit mip chain sampled through
+  `MAXMIPLEVEL`.
 
 Each mode exits non-zero on failed D3D calls or mismatched readback. The app is
 kept intentionally small; broader HRESULT conformance belongs in
@@ -69,3 +75,6 @@ Current dxmt9 runtime status from local Wine 11.7 runs:
 | `draw-indexed-up-edges` | failing | `DrawIndexedPrimitiveUP` base-vertex or implicit state reset path does not pass self-validation. |
 | `shader-edge-visual` | failing | Pixel-shader validation/output path does not pass self-validation. |
 | `d3d9ex-wsi` | passing | `CheckDeviceState`, frame-latency roundtrip, `ResetEx`, and post-reset clear pass. |
+| `cube-volume-texture-update` | passing | Cube and volume `UpdateTexture` uploads sample through ps_2_0 cube/volume shaders with expected colors. |
+| `autogen-mipmap` | passing | Current runtime reports no A8R8G8B8 autogen support and exits through the documented skip path. |
+| `npot-filter-lod` | failing | NPOT mip chain creates and draws, but `MAXMIPLEVEL=1` still samples level 0. |

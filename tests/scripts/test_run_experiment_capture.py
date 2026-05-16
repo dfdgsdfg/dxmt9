@@ -164,6 +164,79 @@ class CaptureMetricTests(unittest.TestCase):
             "external_capture",
         )
 
+    def test_single_frame_window_capture_is_not_reported_as_dropped(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        actual = self.write_image(np.full((4, 4, 3), 96, dtype=np.uint8))
+        actual = actual.rename(root / "actual.png")
+        request = run_experiment.CaptureRequest(
+            mode="single-frame",
+            requested_frames=[0],
+            max_frames=1,
+            max_duration_sec=3.0,
+            max_bytes=1024 * 1024,
+        )
+
+        captured, dropped = run_experiment.collect_capture_frame_records(
+            capture_request=request,
+            output_dir=root,
+            actual_dump_path=root / "actual.bmp",
+            actual_path=actual,
+            scheduled_window_frames={},
+            capture_source="window_capture",
+        )
+
+        self.assertEqual(dropped, [])
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0]["frame_id"], 0)
+        self.assertEqual(captured[0]["path"], actual)
+        self.assertEqual(captured[0]["source"], "window_capture")
+
+    def test_debug_result_filters_dropped_frame_that_was_captured(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        actual = self.write_image(np.full((4, 4, 3), 96, dtype=np.uint8))
+        actual = actual.rename(root / "actual.png")
+        log = root / "dxmt9.log"
+        log.write_text("log\n")
+        debug_result = root / "debug_result.json"
+        app = Namespace(name="debug-capture", window_title="dxmt9 test")
+
+        run_experiment.write_experiment_debug_result(
+            app=app,
+            output_dir=root,
+            debug_result_path=debug_result,
+            log_path=log,
+            actual_path=actual,
+            command=["bash", "launcher.sh"],
+            environment={"DXMT_CAPTURE_FRAME": "0"},
+            capture_frame=0,
+            capture_source="window_capture",
+            capture_error=None,
+            window_info={
+                "capture_mode": "window_id",
+                "window_id": 42,
+                "window_title": "dxmt9 test",
+            },
+            captured_frames=[
+                {"frame_id": 0, "path": actual, "source": "window_capture"},
+            ],
+            dropped_frames=[
+                {
+                    "frame_id": 0,
+                    "source": "none",
+                    "reason": "requested frame was not emitted by internal dump or window capture",
+                },
+            ],
+        )
+
+        payload = debug_schema.load_json(debug_result)
+        capture = payload["diagnostics"]["render_capture"]
+        self.assertNotIn("dropped_frames", capture)
+        self.assertEqual(payload["failure_category"], "none")
+
     def test_experiment_debug_result_wraps_single_frame_capture(self):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)

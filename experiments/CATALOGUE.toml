@@ -524,6 +524,63 @@ capture_frame = 0
 reference_optional = true
 
 [[app]]
+name = "dxmt9-d3d9-cube-volume-texture-update"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-cube-volume-texture-update.sh"
+reference = "experiments/references/dxmt9-d3d9-cube-volume-texture-update.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "cubemap", "volume-texture", "updatetexture", "shader", "readback", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-autogen-mipmap"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-autogen-mipmap.sh"
+reference = "experiments/references/dxmt9-d3d9-autogen-mipmap.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "autogen-mipmap", "managed-texture", "sampler-lod", "readback", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-npot-filter-lod"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-npot-filter-lod.sh"
+reference = "experiments/references/dxmt9-d3d9-npot-filter-lod.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "npot", "mipmap", "sampler-lod", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
 name = "dx-sdk-basichlsl"
 source = "https://github.com/walbourn/directx-sdk-samples"
 license = "ms-directx-sdk"

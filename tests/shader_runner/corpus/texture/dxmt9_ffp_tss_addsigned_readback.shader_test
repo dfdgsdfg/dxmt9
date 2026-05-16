@@ -1,0 +1,17 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c texture_blending_ops behavior, reduced to FFP addsigned
+; oracle-date: 2026-05-16
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+dxmt9-texture 0 1 1 A8R8G8B8 rgba(0.25,0.25,0.25,1.0)
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=addsigned alpha_op=selectarg1 color_arg1=texture color_arg2=current alpha_arg1=texture texcoord_index=0
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad
+probe (32, 32) rgba(0.75, 0.75, 0.75, 1.0) 2

@@ -159,6 +159,12 @@ inline constexpr u32 kD3DSIO_PHASE = 0xfffdu;
 inline constexpr u32 kD3DSIO_COMMENT = 0xfffeu;
 inline constexpr u32 kD3DSIO_END = 0xffffu;
 
+// Internal lowering markers inserted after bytecode decode. These are not
+// D3D opcodes and never appear in the original token stream.
+inline constexpr u32 kDXMT9_INTERNAL_CALL_BEGIN = 0xfff00001u;
+inline constexpr u32 kDXMT9_INTERNAL_CALL_END = 0xfff00002u;
+inline constexpr u32 kDXMT9_INTERNAL_CALL_RET = 0xfff00003u;
+
 // Register type codes (D3DSPR_*).
 inline constexpr u32 kD3DSPR_TEMP = 0;
 inline constexpr u32 kD3DSPR_INPUT = 1;

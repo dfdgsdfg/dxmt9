@@ -51,6 +51,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOGUE_PATH = REPO_ROOT / "experiments" / "CATALOGUE.toml"
 DEFAULT_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "win32"
 DEFAULT_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "winemetal"
+DEFAULT_WOW64_PE_BUILD_DIR = REPO_ROOT / "build-win32-x86-builtin" / "src" / "win32"
+DEFAULT_WOW64_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x86-builtin" / "src" / "winemetal"
 DEFAULT_UNIX_BUILD_DIR = REPO_ROOT / "build-x86_64-builtin" / "src"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
 DEFAULT_TEMP_PREFIX_ROOT = REPO_ROOT / "tmp" / "prefixes"
@@ -692,6 +694,67 @@ def load_capture_skip_sidecar(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def collect_capture_frame_records(
+    *,
+    capture_request: CaptureRequest,
+    output_dir: Path,
+    actual_dump_path: Path,
+    actual_path: Path,
+    scheduled_window_frames: dict[int, dict[str, Any]],
+    capture_source: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    captured_frames: list[dict[str, Any]] = []
+    dropped_frames: list[dict[str, Any]] = []
+    for frame_id in capture_request.requested_frames:
+        internal_frame = first_existing_path(internal_frame_candidates(output_dir, frame_id))
+        if internal_frame is not None:
+            captured_frames.append({
+                "frame_id": frame_id,
+                "path": internal_frame,
+                "source": "internal_dump",
+            })
+            continue
+        if frame_id == capture_request.primary_frame and actual_dump_path.exists():
+            captured_frames.append({
+                "frame_id": frame_id,
+                "path": actual_path,
+                "source": "internal_dump",
+            })
+            continue
+        scheduled = scheduled_window_frames.get(frame_id)
+        if scheduled is not None and Path(scheduled["path"]).exists():
+            captured_frames.append({
+                "frame_id": frame_id,
+                "path": scheduled["path"],
+                "source": scheduled.get("source", "window_capture"),
+            })
+            continue
+        if frame_id == capture_request.primary_frame and actual_path.exists() and capture_source:
+            captured_frames.append({
+                "frame_id": frame_id,
+                "path": actual_path,
+                "source": capture_source,
+            })
+            continue
+        sidecar = first_existing_path(internal_frame_skip_candidates(output_dir, frame_id))
+        sidecar_payload = load_capture_skip_sidecar(sidecar) if sidecar is not None else None
+        if sidecar is not None and sidecar_payload is not None:
+            dropped_frames.append({
+                "frame_id": frame_id,
+                "source": sidecar_payload.get("source", "internal_dump"),
+                "reason": sidecar_payload.get("reason", "runtime skipped internal capture"),
+                "sidecar_path": str(sidecar),
+                "counters": sidecar_payload.get("counters"),
+            })
+            continue
+        dropped_frames.append({
+            "frame_id": frame_id,
+            "source": "internal_dump" if capture_request.wants_multiple_frames else "none",
+            "reason": "requested frame was not emitted by internal dump or window capture",
+        })
+    return captured_frames, dropped_frames
+
+
 def write_experiment_debug_result(
     *,
     app: ExperimentApp,
@@ -744,6 +807,11 @@ def write_experiment_debug_result(
             "path": actual_path,
             "source": source,
         })
+    captured_frame_ids = {int(frame["frame_id"]) for frame in captured_frames}
+    dropped_frames = [
+        frame for frame in dropped_frames
+        if int(frame["frame_id"]) not in captured_frame_ids
+    ]
     seen_frames: set[int] = set()
     for frame in captured_frames:
         frame_id = int(frame["frame_id"])
@@ -915,6 +983,8 @@ def stage_dxmt9(
     pe_build_dir: Path,
     runtime_pe_build_dir: Path,
     unix_build_dir: Path,
+    wow64_pe_build_dir: Path | None = None,
+    wow64_runtime_pe_build_dir: Path | None = None,
 ) -> None:
     cmd = [
         "bash",
@@ -928,6 +998,10 @@ def stage_dxmt9(
         "--unix-build-dir",
         str(unix_build_dir),
     ]
+    if wow64_pe_build_dir is not None:
+        cmd.extend(["--wow64-pe-build-dir", str(wow64_pe_build_dir)])
+    if wow64_runtime_pe_build_dir is not None:
+        cmd.extend(["--wow64-runtime-pe-build-dir", str(wow64_runtime_pe_build_dir)])
     if wine_root is not None:
         cmd.extend(["--wine-root", str(wine_root)])
     run_command(cmd, cwd=REPO_ROOT)
@@ -1255,6 +1329,16 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             else DEFAULT_RUNTIME_PE_BUILD_DIR
         )
         unix_build_dir = Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR
+        wow64_pe_build_dir = (
+            Path(args.wow64_pe_build_dir).expanduser().resolve()
+            if args.wow64_pe_build_dir
+            else DEFAULT_WOW64_PE_BUILD_DIR
+        )
+        wow64_runtime_pe_build_dir = (
+            Path(args.wow64_runtime_pe_build_dir).expanduser().resolve()
+            if args.wow64_runtime_pe_build_dir
+            else DEFAULT_WOW64_RUNTIME_PE_BUILD_DIR
+        )
         mingw_bin_dir = Path(args.mingw_bin_dir).expanduser().resolve() if args.mingw_bin_dir else DEFAULT_MINGW_BIN_DIR
         wow64_mingw_bin_dir = (
             Path(args.wow64_mingw_bin_dir).expanduser().resolve()
@@ -1264,7 +1348,15 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
         skip_stage = app.skip_stage or args.skip_stage
         if not skip_stage:
-            stage_dxmt9(prefix, wine_root, pe_build_dir, runtime_pe_build_dir, unix_build_dir)
+            stage_dxmt9(
+                prefix,
+                wine_root,
+                pe_build_dir,
+                runtime_pe_build_dir,
+                unix_build_dir,
+                wow64_pe_build_dir,
+                wow64_runtime_pe_build_dir,
+            )
         elif args.stage_mingw_runtime:
             stage_mingw_runtime(prefix, mingw_bin_dir, wow64_mingw_bin_dir)
 
@@ -1285,6 +1377,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "DXMT_EXPERIMENT_WINE_BIN": str(wine_bin),
                 "DXMT_EXPERIMENT_PE_BUILD_DIR": str(pe_build_dir),
                 "DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR": str(runtime_pe_build_dir),
+                "DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR": str(wow64_pe_build_dir),
+                "DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR": str(wow64_runtime_pe_build_dir),
                 "DXMT_EXPERIMENT_UNIX_BUILD_DIR": str(unix_build_dir),
                 "DXMT_EXPERIMENT_OUTPUT_DIR": str(output_dir),
                 "DXMT_EXPERIMENT_LOG": str(log_path),
@@ -1437,49 +1531,16 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
         if actual_dump_path.exists():
             Image.open(actual_dump_path).save(actual_path)
-        captured_frames: list[dict[str, Any]] = []
-        dropped_frames: list[dict[str, Any]] = []
-        for frame_id in capture_request.requested_frames:
-            internal_frame = first_existing_path(internal_frame_candidates(output_dir, frame_id))
-            if internal_frame is not None:
-                captured_frames.append({
-                    "frame_id": frame_id,
-                    "path": internal_frame,
-                    "source": "internal_dump",
-                })
-                continue
-            if frame_id == capture_request.primary_frame and actual_dump_path.exists():
-                captured_frames.append({
-                    "frame_id": frame_id,
-                    "path": actual_path,
-                    "source": "internal_dump",
-                })
-                continue
-            scheduled = scheduled_window_frames.get(frame_id)
-            if scheduled is not None and Path(scheduled["path"]).exists():
-                captured_frames.append({
-                    "frame_id": frame_id,
-                    "path": scheduled["path"],
-                    "source": scheduled.get("source", "window_capture"),
-                })
-                continue
-            sidecar = first_existing_path(internal_frame_skip_candidates(output_dir, frame_id))
-            sidecar_payload = load_capture_skip_sidecar(sidecar) if sidecar is not None else None
-            if sidecar is not None and sidecar_payload is not None:
-                dropped_frames.append({
-                    "frame_id": frame_id,
-                    "source": sidecar_payload.get("source", "internal_dump"),
-                    "reason": sidecar_payload.get("reason", "runtime skipped internal capture"),
-                    "sidecar_path": str(sidecar),
-                    "counters": sidecar_payload.get("counters"),
-                })
-                continue
-            dropped_frames.append({
-                "frame_id": frame_id,
-                "source": "internal_dump" if capture_request.wants_multiple_frames else "none",
-                "reason": "requested frame was not emitted by internal dump or window capture",
-            })
 
+        capture_source = classify_capture_source(actual_dump_path, actual_path, window_info)
+        captured_frames, dropped_frames = collect_capture_frame_records(
+            capture_request=capture_request,
+            output_dir=output_dir,
+            actual_dump_path=actual_dump_path,
+            actual_path=actual_path,
+            scheduled_window_frames=scheduled_window_frames,
+            capture_source=capture_source,
+        )
         if not actual_path.exists() and captured_frames:
             first_frame_path = Path(captured_frames[0]["path"])
             try:
@@ -1648,6 +1709,8 @@ def main() -> int:
     run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
     run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
+    run_parser.add_argument("--wow64-pe-build-dir", help="32-bit PE build dir containing d3d9.dll")
+    run_parser.add_argument("--wow64-runtime-pe-build-dir", help="builtin 32-bit PE build dir containing runtime winemetal.dll")
     run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal.so")
     run_parser.add_argument("--skip-stage", action="store_true", help="Do not stage dxmt9 into the Wine runtime/prefix")
     run_parser.add_argument(
