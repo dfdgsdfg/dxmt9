@@ -1,7 +1,9 @@
+#include <array>
 #include <bit>
 #include <cmath>
 #include <exception>
 #include <iostream>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -9,6 +11,7 @@
 
 #include "dxmt9/core.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
 
 using namespace dxmt9::core;
@@ -128,6 +131,66 @@ void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   checkEq(volatileConsts.vertexStreamOffset, 64u, "stream zero offset copied");
   checkEq(volatileConsts.vertexStreamStride, 28u, "stream zero stride copied");
   checkEq(ffpVs.clipPlaneMask, 0x15u, "clip plane mask copied");
+}
+
+void testProgrammableVsExtraStreamBindingPlan() {
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclTypeD3DColor = 4u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+  constexpr u32 kD3DDeclUsageColor = 10u;
+
+  DrawDesc desc{};
+  desc.vertexDecl.elements = {
+      VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+      VertexElement{1, 12, kD3DDeclTypeFloat2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+      VertexElement{2, 12, kD3DDeclTypeD3DColor, kD3DDeclMethodDefault, kD3DDeclUsageColor, 0},
+  };
+  desc.vertexDecl.streams[1].offset = 128u;
+  desc.vertexDecl.streams[1].stride = 20u;
+  desc.vertexDecl.streams[2].offset = 9u;
+  const auto hot = makeFlatDrawStateRecord(desc);
+
+  dxmt9::encoders::ParamView nonIndexed{
+      .primitiveType = PrimitiveType::TriangleList,
+      .primitiveCount = 1u,
+      .startVertex = 3u,
+      .baseVertexIndex = 0,
+      .startIndex = 0u,
+      .indexType = IndexType::UInt16,
+      .indexed = false,
+  };
+  auto bindings =
+      dxmt9::encoders::makeProgrammableVsExtraStreamBindings(desc.vertexDecl, hot, nonIndexed);
+  checkEq(bindings.size(), std::size_t{2},
+          "programmable VS binding plan includes each nonzero declared stream");
+  checkEq(bindings[0].stream, 1u, "first extra stream is stream1");
+  checkEq(bindings[0].metalSlot, 6u, "stream1 binds to the generated stream1 slot");
+  checkEq(bindings[0].stride, 20u, "stream1 binding plan uses declared stride");
+  checkEq(bindings[0].offset, 188u,
+          "non-indexed stream1 binding folds startVertex into the Metal buffer offset");
+  checkEq(bindings[1].stream, 2u, "second extra stream is stream2");
+  checkEq(bindings[1].metalSlot, 7u, "stream2 binds to the generated stream2 slot");
+  checkEq(bindings[1].stride, 16u, "stream2 binding plan computes stride from declaration data");
+  checkEq(bindings[1].offset, 57u,
+          "non-indexed stream2 binding uses computed stride at the boundary");
+
+  auto indexed = nonIndexed;
+  indexed.indexed = true;
+  bindings =
+      dxmt9::encoders::makeProgrammableVsExtraStreamBindings(desc.vertexDecl, hot, indexed);
+  checkEq(bindings[0].offset, 128u,
+          "indexed stream1 binding leaves baseVertexIndex for DrawVolatile/MSL");
+  checkEq(bindings[1].offset, 9u,
+          "indexed stream2 binding leaves baseVertexIndex for DrawVolatile/MSL");
+
+  const std::array<u8, 4> userBytes{1u, 2u, 3u, 4u};
+  nonIndexed.userVertexData = std::span<const u8>(userBytes);
+  bindings =
+      dxmt9::encoders::makeProgrammableVsExtraStreamBindings(desc.vertexDecl, hot, nonIndexed);
+  check(bindings.empty(), "UP draws do not plan direct extra stream buffer binds");
 }
 
 void testDepthStencilKeyReflectsDepthAndStencilState() {
@@ -301,6 +364,7 @@ int main() {
   try {
     testBuildPerStageConstsCopiesShaderConstants();
     testBuildFfpAndVolatileViewportAndRenderStateValues();
+    testProgrammableVsExtraStreamBindingPlan();
     testDepthStencilKeyReflectsDepthAndStencilState();
     testDepthStencilKeyDefaultsAndCcwFallback();
     testSamplerInfoDefaultsAreDeterministic();

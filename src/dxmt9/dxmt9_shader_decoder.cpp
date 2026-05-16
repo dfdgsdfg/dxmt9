@@ -432,6 +432,9 @@ std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const Spirv
 
   VertexShaderInputLayout layout;
   layout.stride = computeVertexDeclStride(context.vertexDecl);
+  for (u32 stream = 0; stream < layout.streamStrides.size(); ++stream) {
+    layout.streamStrides[stream] = computeVertexDeclStreamStride(context.vertexDecl, stream);
+  }
   bool hasBinding = false;
   for (const auto& instruction : module.instructions) {
     if (instruction.opcode != kD3DSIO_DCL || instruction.operands.size() < 2) {
@@ -445,17 +448,19 @@ std::optional<VertexShaderInputLayout> decodeVertexShaderInputLayout(const Spirv
     const u32 usage = (semanticToken & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT;
     const u32 usageIndex = (semanticToken & kD3DSP_DCL_USAGEINDEX_MASK) >> kD3DSP_DCL_USAGEINDEX_SHIFT;
     for (const auto& element : context.vertexDecl.elements) {
-      if (element.stream != 0) {
+      if (element.stream >= layout.streamStrides.size()) {
         continue;
       }
       if (element.usage == usage && element.usageIndex == usageIndex) {
         layout.inputs[dst.index] = VertexInputBinding{
             .valid = true,
+            .stream = element.stream,
             .offset = element.offset,
             .type = element.type,
             .usage = usage,
             .usageIndex = usageIndex,
         };
+        layout.streamMask |= 1u << element.stream;
         hasBinding = true;
         break;
       }

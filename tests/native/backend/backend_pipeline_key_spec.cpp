@@ -256,6 +256,43 @@ void testShaderVariantKeyHashRespondsToLayoutAndBlendState() {
         "blend state changes alter the PSO key hash");
 }
 
+void testProgrammableShaderVariantKeyUsesFullVertexDeclHash() {
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  DrawDesc desc{};
+  desc.vertexShader.kind = ShaderRef::Kind::Bytecode;
+  desc.vertexShader.hash = 0xabcdu;
+  desc.pixelShader.hash = 0x1234u;
+  desc.vertexDecl.elements = {
+      VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+      VertexElement{1, 12, kD3DDeclTypeFloat2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+  };
+  desc.vertexDecl.streams[0].stride = 12u;
+  desc.vertexDecl.streams[1].stride = 20u;
+
+  const auto base = makeVariantKey(makeFlatDrawFixture(desc));
+
+  auto changedStreamStride = desc;
+  changedStreamStride.vertexDecl.streams[1].stride = 24u;
+  const auto streamStrideKey = makeVariantKey(makeFlatDrawFixture(changedStreamStride));
+  check(streamStrideKey.hash != base.hash,
+        "programmable VS variant key changes when a nonzero stream stride changes");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(streamStrideKey) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(base),
+        "programmable VS PSO cache hash includes nonzero stream stride");
+
+  auto movedSemantic = desc;
+  movedSemantic.vertexDecl.elements[1].stream = 0u;
+  movedSemantic.vertexDecl.elements[1].offset = 12u;
+  const auto movedSemanticKey = makeVariantKey(makeFlatDrawFixture(movedSemantic));
+  check(movedSemanticKey.hash != base.hash,
+        "programmable VS variant key changes when a semantic crosses stream boundaries");
+}
+
 void testPipelineHelpersUseExplicitFlatInputs() {
   DrawDesc desc{};
   desc.vertexShader.hash = 0xabcdefu;
@@ -329,6 +366,7 @@ int main() {
     testShaderVariantKeyReflectsSamplerTextureAndFiltering();
     testFvfLayoutHashIsDeterministicAndResponsive();
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();
+    testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();
     testSrgbCompatiblePixelFormatConversion();
   } catch (const TestFailure& failure) {

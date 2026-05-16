@@ -86,13 +86,23 @@ struct FixedFunctionVertexLayout {
 // unknown types (caller typically treats that as "skip").
 u32 declTypeSize(u32 type);
 
-// Combined stride computation: returns the declared stream[0].stride if set,
-// otherwise the maximum (offset + size) over all elements on stream[0].
+// Combined stride computation for a single declaration stream: returns the
+// declared stream stride if set, otherwise the maximum (offset + size) over all
+// elements on that stream.
+u32 computeVertexDeclStreamStride(const core::VertexDeclSnapshot& decl, u32 stream);
+
+// Backward-compatible stream-0 stride helper.
 u32 computeVertexDeclStride(const core::VertexDeclSnapshot& decl);
+
+// Metal buffer slot used for a D3D vertex stream in generated programmable VS
+// MSL. stream0 keeps the historical slot 1 contract; extra streams live above
+// DrawVolatile slot 5 and below the argbuf slot 30.
+u32 vertexShaderStreamBufferSlot(u32 stream);
 
 // Per-input-register binding for the translated programmable vertex path.
 struct VertexInputBinding {
   bool valid = false;
+  u32 stream = 0;
   u32 offset = 0;
   u32 type = 0;
   u32 usage = 0;
@@ -103,6 +113,8 @@ struct VertexInputBinding {
 // Populated by the shader translator; members indexed by D3DSPR_INPUT reg.
 struct VertexShaderInputLayout {
   u32 stride = 0;
+  std::array<u32, core::kMaxStreams> streamStrides{};
+  u32 streamMask = 0;
   std::array<VertexInputBinding, 16> inputs{};
   u64 hash = 0;
 };

@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <future>
+#include <optional>
 #include <utility>
 
 namespace dxmt9::pipeline {
@@ -581,7 +582,10 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
   const auto& vertexShader = shader.vertexShader;
   const auto& pixelShader = shader.pixelShader;
   ShaderVariantKey key{};
-  const auto layout = ffp::decodeFixedFunctionVertexLayout(vertexDecl);
+  const auto layout =
+      vertexShader.kind == core::ShaderRef::Kind::FixedFunctionVertex
+          ? ffp::decodeFixedFunctionVertexLayout(vertexDecl)
+          : std::optional<ffp::FixedFunctionVertexLayout>{};
   const u64 layoutHash = layout ? layout->hash : ffp::hashVertexDeclaration(vertexDecl);
   key.hash = vertexShader.hash ^ (pixelShader.hash << 1) ^ hot.clipPlaneMask ^ depthFormat ^
              (stencilFormat << 1) ^ (layoutHash << 1) ^ vertexDecl.fvf;

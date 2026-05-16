@@ -82,6 +82,28 @@ std::string formatIntVec4(const std::array<i32, 4>& values) {
   return out.str();
 }
 
+std::string vertexStreamName(u32 stream) {
+  return "stream" + std::to_string(stream);
+}
+
+std::string vertexStreamBaseName(u32 stream) {
+  return stream == 0 ? "base" : "base" + std::to_string(stream);
+}
+
+void emitExtraVertexStreamParameters(std::ostringstream& out,
+                                     const std::optional<VertexShaderInputLayout>& inputLayout) {
+  if (!inputLayout) {
+    return;
+  }
+  for (u32 stream = 1; stream < inputLayout->streamStrides.size(); ++stream) {
+    if ((inputLayout->streamMask & (1u << stream)) == 0u) {
+      continue;
+    }
+    out << "                     device const uchar* " << vertexStreamName(stream)
+        << " [[buffer(" << vertexShaderStreamBufferSlot(stream) << ")]],\n";
+  }
+}
+
 std::string componentName(u32 component) {
   switch (component & 3u) {
     case 0:
@@ -539,7 +561,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (!binding.valid) {
             continue;
           }
-          trace << " v" << i << "->off" << binding.offset << "/type" << binding.type
+          trace << " v" << i << "->s" << binding.stream
+                << "/off" << binding.offset << "/type" << binding.type
                 << "/usage" << binding.usage << ":" << binding.usageIndex;
         }
       } else {
@@ -570,6 +593,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "                     constant ArgbufLayout const* abuf [[buffer("
           << kArgbufHybridBindSlot << ")]],\n";
       out << "                     device const uchar* stream0 [[buffer(1)]],\n";
+      emitExtraVertexStreamParameters(out, inputLayout);
       out << "                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
       out << "  constant VsConsts& vsConsts = *abuf->vsConsts;\n";
       out << "  constant FfpVsConsts& ffpVs = *abuf->ffpVs;\n";
@@ -577,6 +601,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]],\n";
       out << "                     constant VsConsts& vsConsts [[buffer(0)]],\n";
       out << "                     device const uchar* stream0 [[buffer(1)]],\n";
+      emitExtraVertexStreamParameters(out, inputLayout);
       out << "                     constant FfpVsConsts& ffpVs [[buffer(3)]],\n";
       out << "                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
     }
@@ -621,69 +646,78 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           << inputLayout->stride << "u;\n";
       out << "  const int vertexIndex = max(0, int(vid) + drawVolatile.vertexBaseIndex);\n";
       out << "  const uint base = drawVolatile.vertexStreamOffset + uint(vertexIndex) * stride;\n";
+      for (u32 stream = 1; stream < inputLayout->streamStrides.size(); ++stream) {
+        if ((inputLayout->streamMask & (1u << stream)) == 0u) {
+          continue;
+        }
+        out << "  const uint stride" << stream << " = " << inputLayout->streamStrides[stream] << "u;\n";
+        out << "  const uint base" << stream << " = uint(vertexIndex) * stride" << stream << ";\n";
+      }
       for (size_t i = 0; i < inputLayout->inputs.size(); ++i) {
         const auto& binding = inputLayout->inputs[i];
         if (!binding.valid) {
           continue;
         }
+        const std::string streamName = vertexStreamName(binding.stream);
+        const std::string baseName = vertexStreamBaseName(binding.stream);
         switch (binding.type) {
           case kD3DDeclTypeFloat1:
-            out << "  vin[" << i << "] = float4(dxmt9_load_f32(stream0, base + " << binding.offset
+            out << "  vin[" << i << "] = float4(dxmt9_load_f32(" << streamName << ", " << baseName << " + " << binding.offset
                 << "u), 0.0f, 0.0f, 1.0f);\n";
             break;
           case kD3DDeclTypeFloat2:
-            out << "  vin[" << i << "] = float4(dxmt9_load_f32x2(stream0, base + " << binding.offset
+            out << "  vin[" << i << "] = float4(dxmt9_load_f32x2(" << streamName << ", " << baseName << " + " << binding.offset
                 << "u), 0.0f, 1.0f);\n";
             break;
           case kD3DDeclTypeFloat3:
-            out << "  vin[" << i << "] = float4(dxmt9_load_f32x3(stream0, base + " << binding.offset
+            out << "  vin[" << i << "] = float4(dxmt9_load_f32x3(" << streamName << ", " << baseName << " + " << binding.offset
                 << "u), 1.0f);\n";
             break;
           case kD3DDeclTypeFloat4:
-            out << "  vin[" << i << "] = dxmt9_load_f32x4(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_f32x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeD3DColor:
-            out << "  vin[" << i << "] = dxmt9_load_d3dcolor(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_d3dcolor(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeUByte4:
-            out << "  vin[" << i << "] = dxmt9_load_u8x4(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_u8x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeShort2:
-            out << "  vin[" << i << "] = float4(dxmt9_load_i16x2(stream0, base + " << binding.offset
+            out << "  vin[" << i << "] = float4(dxmt9_load_i16x2(" << streamName << ", " << baseName << " + " << binding.offset
                 << "u), 0.0f, 1.0f);\n";
             break;
           case kD3DDeclTypeShort4:
-            out << "  vin[" << i << "] = dxmt9_load_i16x4(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_i16x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeUByte4N:
-            out << "  vin[" << i << "] = dxmt9_load_u8x4_unorm(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_u8x4_unorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeShort2N:
-            out << "  vin[" << i << "] = float4(dxmt9_load_i16x2_snorm(stream0, base + " << binding.offset
+            out << "  vin[" << i << "] = float4(dxmt9_load_i16x2_snorm(" << streamName << ", " << baseName << " + " << binding.offset
                 << "u), 0.0f, 1.0f);\n";
             break;
           case kD3DDeclTypeShort4N:
-            out << "  vin[" << i << "] = dxmt9_load_i16x4_snorm(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_i16x4_snorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeUShort2N:
-            out << "  vin[" << i << "] = float4(dxmt9_load_u16x2_unorm(stream0, base + " << binding.offset
+            out << "  vin[" << i << "] = float4(dxmt9_load_u16x2_unorm(" << streamName << ", " << baseName << " + " << binding.offset
                 << "u), 0.0f, 1.0f);\n";
             break;
           case kD3DDeclTypeUShort4N:
-            out << "  vin[" << i << "] = dxmt9_load_u16x4_unorm(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_u16x4_unorm(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeUDec3:
-            out << "  vin[" << i << "] = dxmt9_load_udec3(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_udec3(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeDec3N:
-            out << "  vin[" << i << "] = dxmt9_load_dec3n(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_dec3n(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           case kD3DDeclTypeFloat16_2:
-            out << "  vin[" << i << "] = float4(dxmt9_load_f16x2(stream0, base + " << binding.offset
+            out << "  vin[" << i << "] = float4(dxmt9_load_f16x2(" << streamName << ", " << baseName << " + " << binding.offset
                 << "u), 0.0f, 1.0f);\n";
             break;
           case kD3DDeclTypeFloat16_4:
-            out << "  vin[" << i << "] = dxmt9_load_f16x4(stream0, base + " << binding.offset << "u);\n";
+            out << "  vin[" << i << "] = dxmt9_load_f16x4(" << streamName << ", " << baseName << " + " << binding.offset << "u);\n";
             break;
           default:
             break;

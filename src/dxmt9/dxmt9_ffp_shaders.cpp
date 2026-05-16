@@ -673,13 +673,16 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   return out.str();
 }
 
-u32 computeVertexDeclStride(const VertexDeclSnapshot& decl) {
-  if (decl.streams[0].stride != 0) {
-    return decl.streams[0].stride;
+u32 computeVertexDeclStreamStride(const VertexDeclSnapshot& decl, u32 stream) {
+  if (stream >= decl.streams.size()) {
+    return 0;
+  }
+  if (decl.streams[stream].stride != 0) {
+    return decl.streams[stream].stride;
   }
   u32 computedStride = 0;
   for (const auto& element : decl.elements) {
-    if (element.stream != 0) {
+    if (element.stream != stream) {
       continue;
     }
     computedStride = std::max(computedStride, static_cast<u32>(element.offset + declTypeSize(element.type)));
@@ -687,12 +690,24 @@ u32 computeVertexDeclStride(const VertexDeclSnapshot& decl) {
   return computedStride;
 }
 
+u32 computeVertexDeclStride(const VertexDeclSnapshot& decl) {
+  return computeVertexDeclStreamStride(decl, 0);
+}
+
+u32 vertexShaderStreamBufferSlot(u32 stream) {
+  return stream == 0 ? 1u : 5u + stream;
+}
+
 u64 hashVertexDeclaration(const VertexDeclSnapshot& decl) {
   u64 hash = 1469598103934665603ull;
   hash ^= decl.fvf;
   hash *= 1099511628211ull;
-  hash ^= decl.streams[0].stride;
-  hash *= 1099511628211ull;
+  for (const auto& stream : decl.streams) {
+    hash ^= stream.offset;
+    hash *= 1099511628211ull;
+    hash ^= stream.stride;
+    hash *= 1099511628211ull;
+  }
   for (const auto& element : decl.elements) {
     hash ^= element.stream;
     hash *= 1099511628211ull;
@@ -714,8 +729,16 @@ u64 hashVertexShaderInputLayout(const VertexShaderInputLayout& layout) {
   u64 hash = 1469598103934665603ull;
   hash ^= layout.stride;
   hash *= 1099511628211ull;
+  hash ^= layout.streamMask;
+  hash *= 1099511628211ull;
+  for (const auto stride : layout.streamStrides) {
+    hash ^= stride;
+    hash *= 1099511628211ull;
+  }
   for (const auto& input : layout.inputs) {
     hash ^= static_cast<u64>(input.valid);
+    hash *= 1099511628211ull;
+    hash ^= input.stream;
     hash *= 1099511628211ull;
     hash ^= input.offset;
     hash *= 1099511628211ull;

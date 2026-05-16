@@ -1689,6 +1689,32 @@ bool encodeDraw(EncodeContext& ctx,
       PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
       encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
       countVertexBufferBind();
+      for (const auto& streamBinding :
+           makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv)) {
+        WMT::Buffer extraVertexBuffer{};
+        uint64_t extraVertexBufferOffset = streamBinding.offset;
+        const u32 stream = streamBinding.stream;
+        if (hot.streamBuffers[stream]) {
+          if (auto* buffer = ctx.pool.findBuffer(hot.streamBuffers[stream].value);
+              buffer && buffer->buffer) {
+            extraVertexBuffer = WMT::Buffer{buffer->buffer.handle};
+          }
+        }
+        if (!extraVertexBuffer && vertexDecl.streams[stream].buffer) {
+          const auto bytes = vertexDecl.streams[stream].buffer->bytes();
+          if (!bytes.empty()) {
+            if (auto slice = makeTransientBuffer(bytes.data(), bytes.size())) {
+              extraVertexBuffer = slice.buffer;
+              extraVertexBufferOffset += slice.offset;
+            }
+          }
+        }
+        if (extraVertexBuffer) {
+          encoder.setVertexBuffer(extraVertexBuffer, extraVertexBufferOffset,
+                                  streamBinding.metalSlot);
+          countVertexBufferBind();
+        }
+      }
     }
   }
   // Phase 3-E: texture / sampler binding is BaseDrawState-only.

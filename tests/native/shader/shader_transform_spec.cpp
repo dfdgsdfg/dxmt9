@@ -1,6 +1,8 @@
 #include "dxmt9/core.hpp"
 #include "../../../src/dxmt9/dxmt9_d3d9_bytecode.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_shader.hpp"
+#include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
+#include "../../../src/dxmt9/dxmt9_shader_decoder.hpp"
 #include "../../../src/dxmt9/dxmt9_shader_translator.hpp"
 
 #include <array>
@@ -28,6 +30,12 @@ struct TestFailure : std::runtime_error {
 
 [[noreturn]] void fail(std::string message) {
   throw TestFailure(std::move(message));
+}
+
+void check(bool condition, std::string_view message) {
+  if (!condition) {
+    fail(std::string(message));
+  }
 }
 
 void checkContains(std::string_view haystack, std::string_view needle, std::string_view message) {
@@ -205,7 +213,8 @@ std::string translateVertex(std::span<const u32> words) {
 }
 
 std::string translateVertex(std::span<const u32> words, std::vector<VertexElement> elements,
-                            std::array<u32, kMaxStreams> strides = {}) {
+                            std::array<u32, kMaxStreams> strides = {},
+                            bool argbufHybridMode = false) {
   const auto shader = makeShader(words);
   DrawDesc desc{};
   desc.vertexShader = shader;
@@ -213,8 +222,32 @@ std::string translateVertex(std::span<const u32> words, std::vector<VertexElemen
   for (size_t i = 0; i < strides.size(); ++i) {
     desc.vertexDecl.streams[i].stride = strides[i];
   }
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  context.argbufHybridMode = argbufHybridMode;
   return dxmt9::translator::makeTranslatedVertexSource(
-      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
+      shader, context);
+}
+
+dxmt9::ffp::VertexShaderInputLayout decodeVertexInputLayout(
+    std::span<const u32> words,
+    std::vector<VertexElement> elements,
+    std::array<u32, kMaxStreams> strides = {}) {
+  const auto shader = makeShader(words);
+  DrawDesc desc{};
+  desc.vertexShader = shader;
+  desc.vertexDecl.elements = std::move(elements);
+  for (size_t i = 0; i < strides.size(); ++i) {
+    desc.vertexDecl.streams[i].stride = strides[i];
+  }
+  const auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  const auto module =
+      dxmt9::translator::detail_::translateD3DBytecodeToSpirv(shader, true, context);
+  const auto layout =
+      dxmt9::translator::detail_::decodeVertexShaderInputLayout(module, context);
+  if (!layout) {
+    fail("vs_3_0 input layout did not decode");
+  }
+  return *layout;
 }
 
 std::vector<u32> makePs20TexturedBytecode(u32 samplerIndex) {
@@ -790,6 +823,109 @@ void testVs30VertexDeclarationTypeLoads() {
                 "declared stream stride participates in shader input fetch");
 }
 
+void testVs30InputLayoutPreservesStreamBoundaries() {
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclTypeUByte4 = 5u;
+  constexpr u32 kD3DDeclTypeShort4N = 10u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageBlendWeight = 1u;
+  constexpr u32 kD3DDeclUsageBlendIndices = 2u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  const std::vector<VertexElement> elements{
+      VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+      VertexElement{1, 0, kD3DDeclTypeShort4N, kD3DDeclMethodDefault, kD3DDeclUsageBlendWeight, 0},
+      VertexElement{1, 8, kD3DDeclTypeUByte4, kD3DDeclMethodDefault, kD3DDeclUsageBlendIndices, 0},
+      VertexElement{1, 12, kD3DDeclTypeFloat2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+  };
+  std::array<u32, kMaxStreams> strides{};
+  strides[0] = 12u;
+  strides[1] = 20u;
+
+  const auto layout = decodeVertexInputLayout(makeVs30InputSemanticBytecode(), elements, strides);
+  checkEqual(layout.stride, 12u, "stream0 stride remains the DrawVolatile fallback stride");
+  checkEqual(layout.streamStrides[0], 12u, "stream0 stride captured in the input layout");
+  checkEqual(layout.streamStrides[1], 20u, "stream1 stride captured in the input layout");
+  checkEqual(layout.streamMask, (1u << 0u) | (1u << 1u),
+             "input layout records every stream used by DCL-bound semantics");
+  checkEqual(layout.inputs[0].stream, 0u, "POSITION input remains on stream0");
+  checkEqual(layout.inputs[0].offset, 0u, "POSITION input offset");
+  checkEqual(layout.inputs[0].type, kD3DDeclTypeFloat3, "POSITION input type");
+  checkEqual(layout.inputs[1].stream, 1u, "BLENDWEIGHT input records stream1");
+  checkEqual(layout.inputs[2].offset, 8u, "BLENDINDICES input offset records stream1 offset");
+  checkEqual(layout.inputs[3].stream, 1u, "TEXCOORD input records stream1");
+  checkEqual(layout.inputs[3].offset, 12u, "TEXCOORD input records stream1 offset");
+
+  auto changedStride = strides;
+  changedStride[1] = 24u;
+  const auto strideChanged =
+      decodeVertexInputLayout(makeVs30InputSemanticBytecode(), elements, changedStride);
+  check(strideChanged.hash != layout.hash,
+        "input-layout hash changes when a nonzero stream stride changes");
+
+  auto movedElements = elements;
+  movedElements[3].stream = 0u;
+  movedElements[3].offset = 12u;
+  const auto movedLayout =
+      decodeVertexInputLayout(makeVs30InputSemanticBytecode(), movedElements, strides);
+  checkEqual(movedLayout.inputs[3].stream, 0u,
+             "input layout follows a semantic moved back to stream0");
+  check(movedLayout.hash != layout.hash,
+        "input-layout hash changes when a semantic crosses stream boundaries");
+}
+
+void testVs30MultiStreamVertexDeclarationLoads() {
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclTypeUByte4 = 5u;
+  constexpr u32 kD3DDeclTypeShort4N = 10u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageBlendWeight = 1u;
+  constexpr u32 kD3DDeclUsageBlendIndices = 2u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  const std::vector<VertexElement> elements{
+      VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+      VertexElement{1, 0, kD3DDeclTypeShort4N, kD3DDeclMethodDefault, kD3DDeclUsageBlendWeight, 0},
+      VertexElement{1, 8, kD3DDeclTypeUByte4, kD3DDeclMethodDefault, kD3DDeclUsageBlendIndices, 0},
+      VertexElement{1, 12, kD3DDeclTypeFloat2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+  };
+  std::array<u32, kMaxStreams> strides{};
+  strides[0] = 12u;
+  strides[1] = 20u;
+
+  const auto source = translateVertex(makeVs30InputSemanticBytecode(), elements, strides);
+
+  checkContains(source, "device const uchar* stream0 [[buffer(1)]]",
+                "stream0 keeps the legacy VS buffer slot");
+  checkContains(source, "device const uchar* stream1 [[buffer(6)]]",
+                "stream1 gets its own direct VS buffer slot");
+  checkContains(source, "const uint stride1 = 20u",
+                "stream1 declared stride is preserved at the shader boundary");
+  checkContains(source, "dxmt9_load_f32x3(stream0, base + 0u)",
+                "POSITION remains loaded from stream0");
+  checkContains(source, "dxmt9_load_i16x4_snorm(stream1, base1 + 0u)",
+                "BLENDWEIGHT declared on stream1 loads from stream1");
+  checkContains(source, "dxmt9_load_u8x4(stream1, base1 + 8u)",
+                "BLENDINDICES declared on stream1 loads from stream1");
+  checkContains(source, "dxmt9_load_f32x2(stream1, base1 + 12u)",
+                "TEXCOORD declared on stream1 loads from stream1");
+  checkNotContains(source, "dxmt9_load_f32x2(stream0, base + 12u)",
+                   "stream1 TEXCOORD must not be fetched from stream0");
+
+  const auto argbufSource = translateVertex(
+      makeVs30InputSemanticBytecode(), elements, strides, /*argbufHybridMode=*/true);
+  checkContains(argbufSource, "[[buffer(30)]]",
+                "argbuf-hybrid VS still binds the argbuf at slot 30");
+  checkContains(argbufSource, "device const uchar* stream1 [[buffer(6)]]",
+                "argbuf-hybrid VS keeps stream1 on a direct stream buffer slot");
+  checkContains(argbufSource, "dxmt9_load_f32x2(stream1, base1 + 12u)",
+                "argbuf-hybrid VS loads stream1 attributes from stream1");
+}
+
 void testDefaultNoPixelVFlipAndNoVertexYFlip() {
   const auto pixelSource = translatePixel(makePs20TexturedBytecode(0));
   const auto vertexSource = translateVertex(makeVs30OutputSemanticBytecode());
@@ -1015,6 +1151,8 @@ int main() {
     testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();
     testVs30VertexDeclarationTypeLoads();
+    testVs30InputLayoutPreservesStreamBoundaries();
+    testVs30MultiStreamVertexDeclarationLoads();
     testDefaultNoPixelVFlipAndNoVertexYFlip();
     testPs30WriteMaskSwizzleAndSourceModifiers();
     testPs30IfElseFlowControlTranslation();

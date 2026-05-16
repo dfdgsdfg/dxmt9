@@ -73,6 +73,27 @@ window geometry and accessibility metadata did not line up with the visible UI.
 
 ## Latest Observed Result
 
+2026-05-16 post-boundary-coverage run after the R-TEST-0.10 / texture readback
+work:
+
+- `experiments/output/3dmark05-post-boundary-coverage/result.json` reports
+  harness `status=pass`, `returncode=-15`, `timed_out=true`, and captures the
+  1024x768 `3DMark05` render window after the delayed 32 s capture.
+- The render is still badly corrupted: large black/white triangular regions,
+  over-bright geometry, and stippled/noisy patches remain. This confirms the
+  new DXT/L8/A8L8/FFP readback coverage did not by itself fix the real app.
+- Logs show a clean `winemetal` ABI handshake and repeated successful
+  `device_present hr=0x00000000`, with no Metal validation failure, page-fault,
+  or vkd3d-shader failure marker in the captured run.
+- `DXMT_DISABLE_CULL=1`
+  (`experiments/output/3dmark05-disable-cull-post-boundary`) produced the same
+  corruption shape; cull/winding state is therefore unlikely to be the primary
+  cause.
+- `DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX=1` with shader archive disabled captured
+  a black frame. Treat this as an aggressive diagnostic override, not as proof
+  of a normal app failure; it does show this override is not a useful oracle for
+  the current 3DMark05 scene without additional fragment/depth controls.
+
 2026-05-16 L8 shader-read swizzle follow-up:
 
 - `experiments/output/3dmark05-l8-swizzle-refocus/result.json` reports

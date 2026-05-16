@@ -6,6 +6,7 @@
 // reach hazard helpers and encodeDraw reach the geometry-trace recorder.
 
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_ffp_shaders.hpp"
 
 #include <array>
 #include <cstddef>
@@ -109,6 +110,77 @@ struct ParamView {
   std::span<const u8> userVertexData;
   std::span<const u8> userIndexData;
 };
+
+struct ProgrammableVsExtraStreamBinding {
+  u32 stream = 0;
+  u32 metalSlot = 0;
+  u64 offset = 0;
+  u32 stride = 0;
+};
+
+struct ProgrammableVsExtraStreamBindingList {
+  std::array<ProgrammableVsExtraStreamBinding, core::kMaxStreams - 1u> entries{};
+  std::size_t count = 0;
+
+  void push_back(ProgrammableVsExtraStreamBinding binding) {
+    if (count < entries.size()) {
+      entries[count++] = binding;
+    }
+  }
+
+  bool empty() const noexcept { return count == 0; }
+  std::size_t size() const noexcept { return count; }
+
+  const ProgrammableVsExtraStreamBinding& operator[](std::size_t index) const noexcept {
+    return entries[index];
+  }
+
+  const ProgrammableVsExtraStreamBinding* begin() const noexcept {
+    return entries.data();
+  }
+
+  const ProgrammableVsExtraStreamBinding* end() const noexcept {
+    return entries.data() + count;
+  }
+};
+
+inline bool vertexDeclUsesStream(const core::VertexDeclSnapshot& vertexDecl, u32 stream) {
+  for (const auto& element : vertexDecl.elements) {
+    if (element.stream == stream) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline ProgrammableVsExtraStreamBindingList makeProgrammableVsExtraStreamBindings(
+    const core::VertexDeclSnapshot& vertexDecl,
+    const core::FlatDrawStateRecord& hot,
+    const ParamView& pv) {
+  ProgrammableVsExtraStreamBindingList bindings;
+  if (!pv.userVertexData.empty()) {
+    return bindings;
+  }
+
+  for (u32 stream = 1; stream < vertexDecl.streams.size(); ++stream) {
+    if (!vertexDeclUsesStream(vertexDecl, stream)) {
+      continue;
+    }
+
+    const u32 stride = ffp::computeVertexDeclStreamStride(vertexDecl, stream);
+    u64 offset = hot.streamOffsets[stream];
+    if (!pv.indexed && stride != 0u) {
+      offset += static_cast<u64>(pv.startVertex) * static_cast<u64>(stride);
+    }
+    bindings.push_back(ProgrammableVsExtraStreamBinding{
+        .stream = stream,
+        .metalSlot = ffp::vertexShaderStreamBufferSlot(stream),
+        .offset = offset,
+        .stride = stride,
+    });
+  }
+  return bindings;
+}
 
 // Geometry-trace recorder (env-gated). Called from encodeDraw for the
 // indexed / expanded-indexed / non-indexed paths. Implementation lives
