@@ -12,8 +12,6 @@ wired to Meson tests; they are evidence-gathering tools.
   - `python3 run_experiment.py run <name> --build` — first run the app's
     `build_script` field from `experiments/CATALOGUE.toml`, then run. Errors if
     the app has no `build_script` declared.
-- `run_anno1404_experiment.sh` — Anno 1404 Gold launcher (injects default
-  Heroic `--wine-root` and `--prefix`; no build step).
 - `run_sfiv_benchmark_experiment.sh` — Street Fighter IV benchmark (extracts
   the public installer's MSI, installs prefix-native `d3dx9_41`, picks the
   Heroic vs CrossOver host lane).

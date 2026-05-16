@@ -37,8 +37,10 @@ inventory; the files below are the source of truth.
 | `agents/rules/documentation_spec.rules.md` | Editing `specs/**/*.md`, requirement IDs, design docs, gap tracking, verification mapping, or local implementation plans. |
 | `agents/rules/environment_variables.rules.md` | Looking up or documenting `DXMT*`, `DXMT9*`, Wine experiment, or Apple/Metal debug environment variables. |
 | `agents/rules/experiments_apps_3dmark05.rules.md` | Checking or updating 3DMark05 experiment status, launcher constraints, output evidence, or Wine/vkd3d-shader comparison notes. |
+| `agents/rules/experiments_apps_3dmark06.rules.md` | Checking or updating 3DMark06 experiment status, launcher constraints, output evidence, or Wine/vkd3d-shader comparison notes. |
 | `agents/rules/experiments_apps_street_fighter_iv_benchmark.rules.md` | Checking or updating Street Fighter IV Benchmark setup, binary discovery, host lanes, D3DX9 workaround notes, or oracle capture status. |
-| `agents/rules/test_wild.rules.md` | Running or editing real-app Wine experiments under `experiments/`, choosing Wine runtimes, diagnosing wild-run failures, or touching app runners. |
+| `agents/rules/test_apps.rules.md` | Adding, removing, or editing experiment app catalogue entries, committed fixture apps, external app layout, or launcher conventions. |
+| `agents/rules/test_wild.rules.md` | Choosing Wine runtimes or diagnosing real-app Wine experiment failures. |
 
 ## Documentation Routing
 

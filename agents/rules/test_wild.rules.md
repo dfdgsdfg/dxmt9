@@ -1,8 +1,8 @@
-# Wild Testing Rules — Wine Runtime Selection
+# Wild Testing Rules - Wine Runtime Selection
 
 Rules for running dxmt9 against real D3D9 binaries (catalogue experiments,
-SFIV, Anno 1404, etc.) in `experiments/`. They cover the host Wine
-runtime, not the dxmt9 build itself.
+SFIV, 3DMark05/06, etc.) in `experiments/`. They cover the host Wine runtime,
+not the app catalogue, launcher naming, or dxmt9 build itself.
 
 > **Spec:** the mechanics of the manifest, prefix bootstrap, and apps_3rd
 > layout are defined in `specs/experiments/runtime/{requirements,design}.md`.
@@ -67,19 +67,13 @@ When choosing a host for a perf A/B run, ensure both `vanilla` and
 explicitly is "vanilla-Wine builtin d3d9 vs. staged dxmt9" — in which
 case both must still be unpatched Wine builds.
 
-## Documented Exceptions
+## Runtime Exceptions
 
-The list of apps that legitimately need a non-vanilla runtime is small;
-adding one is a deliberate decision and must be justified inline:
-
-| App | Required runtime | Reason |
-|-----|------------------|--------|
-| `anno-1404-gold` | `Wine-*-DXMT` (any current DXMT build) | Vanilla Wine trips `d3dx10_43` / `D3DX10SaveTextureToMemory` before the game reaches a usable baseline. Documented in `experiments/README.md`. |
-
-If you find another app that genuinely requires a patched Wine build,
-add a row here with the failure mode and a link to evidence. Do not
-silently flip a runner's default — that hides what the patched runtime
-is compensating for.
+The default runtime remains Sikarugir or another validated Wine root that can
+host dxmt9's Metal bridge. If an app genuinely requires a non-default runtime,
+record that in the app-specific rule file and in the `CATALOGUE.toml` entry via
+`wine_id` / `wine_alternatives`. Do not silently flip a runner's default; that
+hides what the alternate runtime is compensating for.
 
 ## Diagnostic Checklist When a "Wild" Run Fails
 
@@ -107,5 +101,5 @@ Before reporting a dxmt9 regression from a wild run, confirm:
   diagnosis before attributing failures to dxmt9.
 - `agents/rules/debug_metal.rules.md` — capture / counter / signpost
   workflow that assumes a clean Wine baseline.
-- `experiments/README.md` — per-app wild-run conventions and the
-  catalogue of supported targets.
+- `agents/rules/test_apps.rules.md` - app catalogue, fixture, and launcher
+  conventions.

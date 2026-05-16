@@ -30,30 +30,7 @@ wine_id              = "heroic-11.7"   # default; matches manifest entry
 wine_alternatives    = []              # no alternates; vanilla-only
 install_drive_letter = "d"             # default
 
-# ─── Example 2: wild experiment with documented exception ──────────────
-# anno-1404-gold needs Wine-*-DXMT (vanilla trips d3dx10_43 / D3DX10).
-# wine_id points at the patched entry. The harness emits a warning at
-# run-start unless the chosen ID is one of wine_alternatives — but since
-# this exception is the *default*, we silence the warning by listing the
-# chosen ID in alternatives too. (Equivalent to "pre-approved exception".)
-[[app]]
-name         = "anno-1404-gold"
-source       = "ubisoft"
-license      = "proprietary"
-source_kind  = "third-party-game"
-license_scope = "third-party-game"
-binary       = "D:/Anno1404.exe"
-launcher     = "experiments/launchers/anno-1404-gold.sh"
-features     = ["wild", "wine"]
-status       = "passing"
-requires_wine = true
-run_timeout_sec = 120
-
-wine_id              = "heroic-11.7-dxmt"
-wine_alternatives    = ["heroic-11.7-dxmt"]   # documented exception; suppress warning
-install_drive_letter = "d"
-
-# ─── Example 3: wild with explicit A/B alternates ──────────────────────
+# ─── Example 2: wild with explicit A/B alternates ──────────────────────
 # An experiment whose maintainer has verified it works under a few wine
 # roots and wants A/B with --wine-id <alt> to skip the variant warning.
 [[app]]

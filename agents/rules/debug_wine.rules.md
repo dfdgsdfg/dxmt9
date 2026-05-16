@@ -78,6 +78,7 @@ Use the machine-readable result paths first, ad-hoc log summaries second.
 ## Related
 
 - `agents/rules/test_wild.rules.md` - wild app runtime selection.
+- `agents/rules/test_apps.rules.md` - experiment app and launcher conventions.
 - `agents/rules/environment_variables.rules.md` - `DXMT*`, `DXMT9*`, and Wine
   harness environment variables.
 - `specs/tests/design.md` - module-boundary, conformance, WSI, and debug-result

@@ -398,25 +398,6 @@ capture_frame = 0
 reference_optional = true
 
 [[app]]
-name = "anno-1404-gold"
-source = "local-heroic"
-license = "commercial"
-source_kind = "external-application"
-license_scope = "external-not-vendored"
-binary = "/Users/dididi/games/_Heroic/Anno 1404 Gold Edition/Anno4.exe"
-launcher = "experiments/launchers/anno-1404-gold.sh"
-reference = "experiments/references/anno-1404-gold.png"
-features = ["commercial", "d3d9", "bink", "ui", "scene"]
-status = "exploratory"
-requires_wine = true
-window_title = "Anno 1404"
-capture_delay_sec = 40.0
-run_timeout_sec = 55
-capture_frame = 0
-reference_optional = true
-allow_timeout = true
-
-[[app]]
 name = "street-fighter-iv-benchmark"
 source = "local-external"
 license = "commercial"

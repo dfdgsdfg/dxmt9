@@ -32,7 +32,7 @@ source      = "heroic"
 variant     = "dxmt"
 version     = "11.7"
 path        = "$HOME/Library/Application Support/heroic/tools/wine/Wine-11.7-DXMT/Contents/Resources/wine"
-notes       = "Patched build; for documented exceptions (anno-1404-gold)."
+notes       = "Patched build; for explicitly documented app-specific exceptions."
 
 # ─── Homebrew wine-stable ───────────────────────────────────────────────
 [[wine]]

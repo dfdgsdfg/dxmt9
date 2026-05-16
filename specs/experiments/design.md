@@ -192,6 +192,6 @@ Current verified Wine host:
 - Heroic Wine 11.5 builtin path
 
 Current exploratory commercial host:
-- `anno-1404-gold` on Heroic `Wine-11.6-DXMT`
-- plain Heroic `Wine-11.6` remains research-only because `Anno 1404` currently
-  aborts in Wine's `d3dx10_43` path before it can serve as a renderer oracle
+- `street-fighter-iv-benchmark`
+- `3dmark05`
+- `3dmark06`

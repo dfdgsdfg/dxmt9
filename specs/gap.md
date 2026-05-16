@@ -300,7 +300,6 @@ described by R-WILD-1.2.
 | Interval frame sequence + bounded video capture | ⚠️ | R-WILD-4.4-R-WILD-4.6; bundle writer, schema selftest, experiment CLI parsing, scheduled window frame collection, dropped-frame metadata, bounded `screencapture -v -V` video collection, and renderer-side multi-frame internal BMP production are implemented. Non-catalogue WSI runner adoption and renderer failure sidecars/counters remain open. |
 | Bootstrap verified entry: `dxmt9-wsi-present-local` on Heroic Wine 11.5 | ✅ | local workflow validation |
 | Verified real application entries: `dx-sdk-basichlsl`, `dx-sdk-tutorial07`, `dx-sdk-hdrformats`, `dxut-simple-sample`, `irrlicht-managed-lights` | ✅ | Heroic Wine 11.5, direct capture, SSIM 1.0000 |
-| Exploratory commercial entry: `anno-1404-gold` | ⚠️ | supported on Heroic `Wine-11.6-DXMT`; plain `Wine-11.6` is research-only due to Wine `d3dx10_43` aborts |
 | Initial catalogue from R-WILD-3.1 staged and verified | ✅ | All five required feature groups covered |
 | Reference screenshots for initial catalogue entries | ✅ | R-WILD-4.1 |
 
