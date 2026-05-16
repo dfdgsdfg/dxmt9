@@ -14,6 +14,9 @@ None of these are wired to Meson tests; they are launched manually or by
 - `build_dxut-simple-sample.sh` — DXUT simple sample.
 - `build_dx-sdk-tutorial07.sh` — DirectX SDK Tutorial07.
 - `build_dxmt9-water-rt.sh` — dxmt9 water render-target demo.
+- `build_d3d9_intent_probe.sh` — shared D3D9 intent probe app for FFP,
+  render-state, blit/copy, stateblock, query, and vertex-blend catalogue
+  entries.
 - `build_dxmt9-perf-bridge-empty.sh` — boundary B2 bridge-throughput probe.
 - `build_dxmt9-perf-chain-parametric.sh` — boundary B3+B4 sub-CB chain probe.
 - `build_dxmt9-perf-encode-replay.sh` — boundary-isolated encode-only probe.

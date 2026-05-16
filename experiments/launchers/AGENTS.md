@@ -17,7 +17,7 @@ Per-app or synthetic-probe shell launchers invoked by
 | Family | Launchers |
 |---|---|
 | D3D9 SDK / DXUT / third-party samples | `dx-sdk-basichlsl.sh`, `dx-sdk-tutorial07.sh`, `dx-sdk-hdrformats.sh`, `dxut-simple-sample.sh`, `irrlicht-managed-lights.sh` |
-| Self-authored apps | `dxmt9-multitexture-terrain.sh`, `dxmt9-water-rt.sh`, `dxmt9-wsi-present-local.sh` |
+| Self-authored apps | `dxmt9-multitexture-terrain.sh`, `dxmt9-water-rt.sh`, `dxmt9-wsi-present-local.sh`, `dxmt9-d3d9-basic-ffp.sh`, `dxmt9-d3d9-render-state.sh`, `dxmt9-d3d9-blit-copy.sh`, `dxmt9-d3d9-stateblock.sh`, `dxmt9-d3d9-query.sh`, `dxmt9-d3d9-ffp-vertex-blend.sh` |
 | Commercial / 3rd-party titles | `3dmark05.sh`, `3dmark06.sh`, `street-fighter-iv-benchmark.sh` |
 | Synthetic perf probes | `dxmt9-perf-bridge-empty.sh`, `dxmt9-perf-chain-parametric.sh`, `dxmt9-perf-depth-heavy.sh`, `dxmt9-perf-encode-replay.sh`, `dxmt9-perf-ffp-only.sh`, `dxmt9-perf-many-draw.sh`, `dxmt9-perf-multi-rt.sh`, `dxmt9-perf-offscreen-heavy.sh`, `dxmt9-perf-present-loop.sh`, `dxmt9-perf-present-only.sh`, `dxmt9-perf-skeletal.sh` |
 

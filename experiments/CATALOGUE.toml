@@ -106,6 +106,120 @@ capture_frame = 0
 reference_optional = true
 
 [[app]]
+name = "dxmt9-d3d9-basic-ffp"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-basic-ffp.sh"
+reference = "experiments/references/dxmt9-d3d9-basic-ffp.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "ffp", "draw", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-render-state"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-render-state.sh"
+reference = "experiments/references/dxmt9-d3d9-render-state.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "render-state", "alpha-test", "color-write", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-blit-copy"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-blit-copy.sh"
+reference = "experiments/references/dxmt9-d3d9-blit-copy.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "blit", "copy", "updatesurface", "stretchrect", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-stateblock"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-stateblock.sh"
+reference = "experiments/references/dxmt9-d3d9-stateblock.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "stateblock", "render-state", "texture-stage-state", "transform", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-query"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-query.sh"
+reference = "experiments/references/dxmt9-d3d9-query.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "query", "event-query", "occlusion-query", "timestamp-query", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-ffp-vertex-blend"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-ffp-vertex-blend.sh"
+reference = "experiments/references/dxmt9-d3d9-ffp-vertex-blend.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "ffp", "vertex-blending", "fvf-xyzb1", "readback", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
 name = "dx-sdk-basichlsl"
 source = "https://github.com/walbourn/directx-sdk-samples"
 license = "ms-directx-sdk"
