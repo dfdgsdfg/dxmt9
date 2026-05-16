@@ -767,3 +767,77 @@ a Mermaid output for roadmap reviews, and provide a nonzero full-support gate
 for release/merge readiness. The full-support gate must pass only when every
 manifest case is `passing`; it must not infer support from local scaffolds or
 partial lane evidence.
+
+---
+
+## 13. Module-Boundary Harness
+
+The module-boundary harness is the controlled layer between native unit tests and
+full Wine application experiments. It validates that built deployment artifacts
+load together and that calls cross the real PE / Wine unix / provider boundary.
+It is a test harness, not an experiment harness: each case has deterministic
+inputs, bounded scope, explicit pass/fail criteria, and machine-readable output.
+
+**R-TEST-13.1** dxmt9 must provide a module-boundary harness that stages the
+built `d3d9.dll`, `winemetal.dll`, and `winemetal.so` artifacts together with a
+small project-authored PE probe executable. The staged artifacts must come from
+the configured build directories, not from source-tree mocks or system-installed
+fallbacks, and the harness must record the artifact paths and hashes it used.
+
+**R-TEST-13.2** The harness must validate artifact and bridge compatibility
+before executing behavioural probes. The minimum compatibility checks are PE
+architecture, unix-provider architecture, generated bridge ABI hash agreement,
+presence of required PE runtime dependencies, presence of the Wine unix module,
+and availability of the configured provider lookup path.
+
+**R-TEST-13.3** The app-local lane must run the staged PE probe under Wine with
+`WINEDLLOVERRIDES="d3d9,winemetal=n,b"` and an explicit provider path such as
+`DXMT9_WINEMETAL_SO`. A passing app-local smoke must prove PE `LoadLibrary`
+resolution, `d3d9.dll` export lookup, `winemetal.dll` bridge import resolution,
+unix provider load, bridge ABI handshake, and at least one successful provider
+call reachable through `Direct3DCreate9` or `Direct3DCreate9Ex`.
+
+**R-TEST-13.4** The builtin lane must verify the same probe through Wine's
+builtin/native DLL resolution after installation or staging of the builtin PE
+and unix module artifacts. Builtin evidence is separate from app-local evidence;
+a passing app-local lane must not be treated as proof that builtin discovery,
+postprocessing, or provider lookup works.
+
+**R-TEST-13.5** The harness must include a bridge-call smoke that exercises at
+least one factory call, one device creation or reset path where supported, and
+one chunk or command submission path. The smoke must assert returned status
+values and bridge/provider counters or logs sufficient to prove that the call
+crossed the PE bridge and reached the unix provider; it must not infer bridge
+health solely from process exit success.
+
+**R-TEST-13.6** The harness must provide a provider-side boundary probe that
+executes the built unix provider entry path without the PE D3D9 frontend. This
+probe may be a native executable or an external FFI driver, but it must use the
+built provider or its exported C ABI entry points and must state which PE and
+Wine bridge layers it intentionally bypasses.
+
+**R-TEST-13.7** Module-boundary tests must produce deterministic, machine-readable
+results. Each result must include lane, architecture, artifact hashes, command
+line, relevant environment variables, exit status, failure category, and compact
+stdout/stderr or log excerpts. Screenshots, SSIM, frame timing, wild application
+behaviour, and performance thresholds are out of scope for this harness.
+
+**R-TEST-13.8** Module-boundary failures must be classified by boundary:
+artifact staging, PE loader/export resolution, bridge ABI mismatch, unix module
+load, provider entry dispatch, public D3D9 smoke failure, command submission
+failure, or unsupported host/runtime configuration. The classification must be
+visible in the machine-readable result so failures can be routed before running
+broader conformance or experiment suites.
+
+**R-TEST-13.9** Module-boundary tests must be runnable by checked-in automation.
+They may require configured Wine and cross-build artifacts, but the invocation,
+staging rules, environment variables, and result parser must live in the
+repository. A lightweight manifest/status target may be Meson-wired, while
+Wine-runtime execution gates may remain explicit if they depend on local Wine
+install paths.
+
+**R-TEST-13.10** Module-boundary evidence complements but does not replace
+native value-transform tests, Wine-oracle PE conformance, shader-runner probes,
+or full application experiments. Native tests still own exact data transforms,
+PE conformance still owns Wine-oracle D3D9 API semantics, and experiments still
+own app-level visual, performance, and integration evidence.

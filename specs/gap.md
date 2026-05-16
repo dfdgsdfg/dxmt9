@@ -180,6 +180,20 @@ after the boundary, not only layout, helper conversion, or final rendered output
 | B5: draw state -> shader arg-buffer texture/sampler bindings | ⚠️ | `dxmt9-shader-argbuf-binding-value-spec` asserts `FlatDrawStateRecord` texture/sampler slot values through shader context, Stage 1 `texN`/`sampN` MSL bindings, Stage 2 arg-buffer aliases, descriptor ids, null texture slots, and sampler/LOD defaults. | Actual Stage 1 encoder calls and Stage 2 `MTLArgumentEncoder::setTexture/setSamplerState` writes still require a live Metal recorder seam. |
 | B6: Wine PE conformance HRESULT / out-pointer / status values | ❌ | `tests/conformance/d3d9/MANIFEST.toml` currently reports 23 scaffolded, 6 failing, 2 partial, and 0 fully passing cases; manifest validation passes. | Fix or record evidence for the current failing public ABI lanes: factory validation return codes, present-parameter validation, Ex create/reset mode validation, private-data resource wrappers, Ex shared-handle policy, and creation-failure out pointers; promote cases only when every declared lane/architecture has passing evidence. |
 
+### R-TEST-13 Module-Boundary Harness
+
+❌ Not started as a first-class harness. Existing pieces cover adjacent slices:
+`scripts/tools/package_app_local.py` can stage and hash app-local artifacts,
+`tests/conformance/d3d9/` builds PE conformance executables and has manifest /
+status validation, `dxmt9-unix-chunk-injection-probe` manually exercises a
+provider-side chunk path, and `scripts/run_suites/` owns broader app
+experiments. Missing for R-TEST-13.1 through R-TEST-13.10 is a dedicated
+`tests/module_boundary/` harness with a project-authored PE probe, app-local and
+builtin lane runners, provider-side artifact probe integration, bridge ABI /
+loader checks, deterministic result JSON, fixed failure categories, and a
+lightweight manifest/status check that can run without requiring Wine runtime
+execution.
+
 | Area | Status | Spec |
 |---|---|---|
 | WSI integration test (`tests/integration/wsi_present/`) | ✅ | Heroic Wine 11.5 builtin path passes the full 180-frame `wsi_present_x64.exe` smoke |

@@ -798,12 +798,215 @@ with the deployment helper, then run the same PE executables with
 
 ---
 
-## 10. File Layout and Ownership Boundaries
+## 10. Module-Boundary Harness
+
+The module-boundary harness owns R-TEST-13. It is the deterministic test layer
+between native unit/value tests and full Wine application experiments. It uses
+real build artifacts and real Wine loader paths, but it keeps the workload small
+enough that every pass/fail result maps to one architectural boundary.
+
+This is a test harness, not an experiment harness. It does not judge screenshots,
+SSIM, frame pacing, user-visible app behaviour, or benchmark thresholds. It
+proves that the configured `d3d9.dll`, `winemetal.dll`, and `winemetal.so`
+artifacts stage together, load together, agree on the bridge ABI, and can carry
+a minimal call flow across the PE / Wine unix / provider boundary.
+
+### Boundary Map
+
+```mermaid
+flowchart LR
+    subgraph Native["Native deterministic tests"]
+        NativeUnit["native value/unit specs\ncore, backend, bridge"]
+        ShaderRunner["shader_runner_dxmt9\nnative GPU readback"]
+        ProviderProbe["provider-side boundary probe\nbuilt unix provider ABI"]
+        CoreBoundary["core records/importer\nbackend descriptors"]
+        NativeBackend["BackendDevice / Metal\nnative API"]
+    end
+
+    subgraph Artifacts["Built deployment artifacts"]
+        D3D["d3d9.dll\nPE D3D9 frontend"]
+        Bridge["winemetal.dll\nPE bridge"]
+        Unix["winemetal.so\nWine unix provider"]
+        Provider["dxmt9c_* provider entry"]
+    end
+
+    subgraph WineRuntime["Wine-hosted PE boundary"]
+        ModuleProbe["module-boundary PE probe\napp-local or builtin lane"]
+        Conformance["Wine-oracle PE conformance\npublic D3D9 semantics"]
+        WSI["wsi_present_x64.exe\nwindow/present smoke"]
+    end
+
+    subgraph Experiments["Full integration and measurement"]
+        Apps["real app experiments\nvisual, perf, logs"]
+    end
+
+    NativeUnit -->|"exact before/after values\nR-TEST-0.10"| CoreBoundary
+    ShaderRunner -->|"GPU-visible behaviour\nno PE loader"| NativeBackend
+    ProviderProbe -->|"provider ABI smoke\nPE frontend bypassed"| Unix
+    ModuleProbe -->|"loader + bridge smoke\nR-TEST-13"| D3D
+    Conformance -->|"HRESULT, COM, API oracle\nR-TEST-12"| D3D
+    WSI -->|"HWND to CAMetalLayer\nR-TEST-11"| D3D
+    Apps -->|"wild integration evidence\nR-WILD"| D3D
+
+    D3D -->|"imports / calls"| Bridge
+    Bridge -->|"WINE_UNIX_CALL"| Unix
+    Unix --> Provider
+```
+
+The key distinction is what each lane is allowed to prove:
+
+| Harness | Entry point | Boundary crossed | Evidence owned |
+|---|---|---|---|
+| Native unit/value specs | macOS test binary | Source values, POD packets, imported records, descriptors | Exact semantic values before and after local transforms. |
+| `shader_runner_dxmt9` | macOS native runner | Backend API and Metal readback | GPU-visible shader, texture, geometry, render-state, and synchronization behaviour. |
+| Provider-side boundary probe | Native executable or FFI driver | Built `winemetal.so` provider entry, with PE frontend intentionally bypassed | Provider load, exported C ABI availability, provider counters/status, and minimal command path through built unix artifacts. |
+| Module-boundary PE probe | Small project-authored PE executable under Wine | `d3d9.dll` -> `winemetal.dll` -> `winemetal.so` -> provider | Artifact staging, PE export lookup, bridge ABI agreement, unix module load, and one minimal public D3D9 call flow. |
+| Wine-oracle conformance | Focused PE conformance executables | Same PE/unix path as module-boundary, broader API surface | Windows D3D9 API semantics: HRESULTs, COM lifetime, state machines, resources, queries, reset/lost-device. |
+| WSI integration | `wsi_present_x64.exe` under Wine | Same PE/unix path plus Wine window system | HWND-to-Cocoa/Metal layer resolution and visible present path. |
+| Experiments | Real applications | Whole stack plus app launch/runtime environment | App-level visual correctness, performance, logging, and compatibility observations. |
+
+### App-Local Execution
+
+```mermaid
+sequenceDiagram
+    participant H as run_module_boundary.py
+    participant Stage as staging directory
+    participant Wine as wine
+    participant Probe as module_boundary_probe_x64.exe
+    participant D3D as d3d9.dll
+    participant Bridge as winemetal.dll
+    participant Unix as winemetal.so
+    participant Provider as dxmt9c provider
+
+    H->>Stage: copy d3d9.dll, winemetal.dll, winemetal.so, PE probe
+    H->>Stage: hash artifacts and write run manifest
+    H->>Wine: run with WINEDLLOVERRIDES and DXMT9_WINEMETAL_SO
+    Wine->>Probe: start PE process
+    Probe->>D3D: LoadLibrary + Direct3DCreate9/Ex export lookup
+    D3D->>Bridge: generated bridge call and ABI handshake
+    Bridge->>Unix: WINE_UNIX_CALL to unix provider
+    Unix->>Provider: provider entry dispatch
+    Provider-->>Unix: status, handles, counters
+    Unix-->>Bridge: HRESULT/status
+    Bridge-->>D3D: marshalled return
+    D3D-->>Probe: public D3D9 result
+    Probe-->>H: JSON result and compact logs
+```
+
+The app-local lane stages all artifacts in a temporary directory and runs with
+explicit loader configuration. It proves that the artifacts from the selected
+build directories work together without relying on globally installed dxmt9
+files.
+
+### Builtin Execution
+
+The builtin lane uses the same PE probe and checks, but the artifacts are first
+installed or staged through Wine's builtin/native DLL layout. Evidence from this
+lane is separate from app-local evidence because Wine builtin postprocessing,
+search order, and unix-module discovery can fail even when app-local override
+loading succeeds.
+
+### Provider-Side Probe
+
+The provider-side probe runs below the PE D3D9 frontend. It may be a native
+executable linked against local test support or an external FFI driver, but it
+must use the built unix provider or its exported C ABI entry points. Its result
+must explicitly state that it bypassed PE `d3d9.dll`, PE `winemetal.dll`, and
+Wine `WINE_UNIX_CALL` dispatch. That bypass is the point: this lane isolates
+provider loading and provider-entry failures before running PE loader probes.
+
+The existing `dxmt9-unix-chunk-injection-probe` is a seed for this lane because
+it exercises provider-side chunk submission without a PE D3D9 frontend. It does
+not become complete R-TEST-13 evidence until it is promoted into checked-in
+module-boundary automation with artifact hashing, result classification, and a
+machine-readable output file.
+
+### Required Smoke Checks
+
+The PE module-boundary probe should keep the behavioural surface deliberately
+small:
+
+| Check | Required assertion |
+|---|---|
+| Artifact staging | `d3d9.dll`, `winemetal.dll`, `winemetal.so`, PE probe, and required runtime dependencies are present and hashed. |
+| PE loader/export | `LoadLibrary("d3d9.dll")` succeeds and `Direct3DCreate9` or `Direct3DCreate9Ex` resolves from the staged DLL. |
+| Bridge import | `d3d9.dll` resolves the staged or builtin `winemetal.dll`, not an unrelated system fallback. |
+| ABI handshake | Generated bridge ABI hash/version agrees across PE bridge and unix provider. |
+| Provider load | The configured `winemetal.so` loads and exposes the expected provider entry points. |
+| Factory smoke | `Direct3DCreate9` or `Direct3DCreate9Ex` reaches the provider and returns the expected success or scoped failure status. |
+| Device/reset smoke | A small device create, reset, or documented no-window fallback path crosses the bridge when the host can support it. |
+| Submission smoke | At least one chunk or command submission path reaches provider-side counters/logs, not merely process exit. |
+
+### Result Schema
+
+The harness result is machine-readable so CI, local scripts, and spec reviews
+can route failures without parsing free-form logs.
+
+```json
+{
+  "schema": "dxmt9.module_boundary.result.v1",
+  "lane": "app-local",
+  "arch": "x64",
+  "artifacts": [
+    {"role": "d3d9.dll", "path": "...", "sha256": "..."},
+    {"role": "winemetal.dll", "path": "...", "sha256": "..."},
+    {"role": "winemetal.so", "path": "...", "sha256": "..."}
+  ],
+  "bridge_abi_hash": "...",
+  "command": ["wine", "module_boundary_probe_x64.exe"],
+  "environment": {
+    "WINEDLLOVERRIDES": "d3d9,winemetal=n,b",
+    "DXMT9_WINEMETAL_SO": "..."
+  },
+  "exit_code": 0,
+  "failure_category": "none",
+  "checks": [
+    {"name": "pe_export_lookup", "status": "pass"},
+    {"name": "provider_entry_dispatch", "status": "pass"}
+  ],
+  "log_excerpt": []
+}
+```
+
+Failure categories are fixed values:
+
+| Category | Meaning |
+|---|---|
+| `artifact-staging` | A requested build artifact, dependency, hash, or architecture check is missing or inconsistent. |
+| `pe-loader-export` | PE process startup, DLL load, import resolution, or exported D3D9 symbol lookup failed. |
+| `bridge-abi-mismatch` | PE bridge and unix provider disagree on generated ABI hash, version, or required opcode surface. |
+| `unix-module-load` | Wine unix module discovery, `winemetal.so` load, or provider path selection failed. |
+| `provider-entry-dispatch` | The unix provider loaded, but the selected provider entry point or handshake failed. |
+| `public-d3d9-smoke` | Public D3D9 factory/device/reset smoke returned an unexpected HRESULT or pointer state. |
+| `command-submission` | Minimal chunk/command submission did not reach provider-side status, counters, or logs. |
+| `unsupported-runtime` | The configured Wine, architecture, windowing, or host runtime cannot run the selected lane. |
+
+### Automation Contract
+
+The checked-in harness should live under `tests/module_boundary/` and provide:
+
+- a project-authored PE probe source and Meson cross-build target;
+- a runner that stages artifacts from configured build directories;
+- app-local and builtin lane selection;
+- artifact hashing and dependency checks before execution;
+- result JSON emission and a compact status reporter;
+- a lightweight manifest/status validation target that can be wired into Meson
+  even when Wine runtime execution stays explicit.
+
+Runtime execution may require local Wine paths and built artifacts, so it does
+not have to run unconditionally in every `meson test` invocation. The manifest,
+schema, and status parser should still be testable without Wine so drift is
+caught early.
+
+---
+
+## 11. File Layout and Ownership Boundaries
 
 The `tests/` tree is organized by execution boundary and ownership, not by file
-extension. Native stateless suites, runtime shader probes, Wine PE conformance,
-and WSI integration must stay in separate directories so a green result in one
-boundary cannot be mistaken for coverage in another.
+extension. Native stateless suites, runtime shader probes, module-boundary
+smokes, Wine PE conformance, and WSI integration must stay in separate
+directories so a green result in one boundary cannot be mistaken for coverage in
+another.
 
 Target layout:
 
@@ -841,6 +1044,11 @@ tests/
 │       ├── viewport/
 │       ├── visual_c/
 │       └── vs_specific/
+├── module_boundary/
+│   ├── MANIFEST.toml
+│   ├── meson.build
+│   ├── module_boundary_probe.cpp
+│   └── run_module_boundary.py
 ├── conformance/
 │   └── d3d9/
 │       ├── MANIFEST.toml
@@ -872,6 +1080,7 @@ Boundary ownership:
 | `tests/native/backend/` | Native macOS backend/data tests | descriptor keys, pipeline keys, resource hazard observations, DOD allocation evidence |
 | `tests/native/bridge/` | Native macOS packet/wire tests | chunk wire layout, import validation, draw-run grouping, handle/payload arena behaviour |
 | `tests/shader_runner/` | Native macOS runtime readback harness | `.shader_test` corpus, dxmt9-local extended probes, framebuffer readback evidence |
+| `tests/module_boundary/` | Built artifacts under controlled native/Wine module-boundary lanes | app-local/builtin loader smoke, bridge ABI agreement, unix provider load, minimal D3D9 and command submission flow |
 | `tests/conformance/d3d9/` | Windows PE binaries under Wine | Wine-oracle D3D9 ABI, HRESULT, COM lifetime, state-machine compatibility |
 | `tests/integration/wsi_present/` | Wine + window system + Metal presentation | full WSI smoke, HWND-to-Metal-layer resolution, visible present path |
 | `tests/fixtures/` | Static test data | local fixtures only; no executable test ownership |
@@ -884,6 +1093,7 @@ Legacy path mapping:
 | `tests/smoke.cpp` | `tests/native/smoke/smoke.cpp` |
 | `tests/shader_runner_dxmt9.cpp` | `tests/shader_runner/shader_runner_dxmt9.cpp` |
 | `tests/shader_tests/` | `tests/shader_runner/corpus/` |
+| module-boundary staging scripts | `tests/module_boundary/` |
 | `tests/d3d9_conformance/` | `tests/conformance/d3d9/` |
 | `tests/wsi_present/` | `tests/integration/wsi_present/` |
 | `tests/corpus_sync_smoke.py` | `tests/shader_runner/corpus_sync_smoke.py` |
@@ -900,7 +1110,7 @@ entries into individual test cases, but both modes must use the same
 
 ---
 
-## 11. Provenance Block
+## 12. Provenance Block
 
 Every `.shader_test` file opens with a provenance block. The block is pure comments
 (`;` prefix) so the vkd3d parser ignores it.
@@ -962,7 +1172,7 @@ are behind.
 
 ---
 
-## 12. Manifest
+## 13. Manifest
 
 `tests/shader_runner/corpus/MANIFEST.toml` is the machine-readable index of the corpus.
 Rows for upstream-sourced tests may also carry `upstream-commit` so the sync tool
