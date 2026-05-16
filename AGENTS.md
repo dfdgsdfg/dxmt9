@@ -26,13 +26,18 @@ inventory; the files below are the source of truth.
 | Rule file | Use when |
 |---|---|
 | `agents/rules/codebase_conventions.rules.md` | Editing `include/`, `src/`, `tests/`, Meson files, bridge code, Wine/PE/unix boundaries, Metal ownership, or deterministic tests. |
+| `agents/rules/debug_d3d9.rules.md` | Debugging D3D9 draw, shader, FVF/vertex declaration, render-state, topology, frame dump, or render-intent evidence. |
+| `agents/rules/debug_linux.rules.md` | Debugging Linux host, ELF loader, headless CI, Wine/Linux, X11/Wayland availability, or non-Metal evidence classification. |
+| `agents/rules/debug_metal.rules.md` | Debugging Metal captures, Xcode `.gputrace`, Instruments, validation layer, GPU counters, signposts, labels, or command-buffer failures. |
+| `agents/rules/debug_objcpp.rules.md` | Debugging Objective-C++, Cocoa, Wine macdrv, `CAMetalLayer`, `NSView`, autorelease, or macOS window lookup issues. |
+| `agents/rules/debug_windows.rules.md` | Debugging Win32/PE D3D9 ABI, COM, HRESULT, out-pointer, `HWND`, message-loop, or public Windows-visible behaviour. |
+| `agents/rules/debug_wine.rules.md` | Debugging Wine runtime selection, prefixes, app-local/builtin lanes, PE/unix provider loading, or ABI handshake failures. |
 | `agents/rules/documentation.rules.md` | Editing `AGENTS.md`, nested `AGENTS.md` files, agent docs, or general repository documentation. |
 | `agents/rules/documentation_memory.rules.md` | Adding or updating `agents/rules/*.rules.md` as project memory. |
 | `agents/rules/documentation_spec.rules.md` | Editing `specs/**/*.md`, requirement IDs, design docs, gap tracking, verification mapping, or local implementation plans. |
 | `agents/rules/environment_variables.rules.md` | Looking up or documenting `DXMT*`, `DXMT9*`, Wine experiment, or Apple/Metal debug environment variables. |
 | `agents/rules/experiments_apps_3dmark05.rules.md` | Checking or updating 3DMark05 experiment status, launcher constraints, output evidence, or Wine/vkd3d-shader comparison notes. |
 | `agents/rules/experiments_apps_street_fighter_iv_benchmark.rules.md` | Checking or updating Street Fighter IV Benchmark setup, binary discovery, host lanes, D3DX9 workaround notes, or oracle capture status. |
-| `agents/rules/metal_debugging.rules.md` | Debugging Metal captures, Xcode `.gputrace`, Instruments, validation layer, GPU counters, signposts, labels, or command-buffer failures. |
 | `agents/rules/test_wild.rules.md` | Running or editing real-app Wine experiments under `experiments/`, choosing Wine runtimes, diagnosing wild-run failures, or touching app runners. |
 
 ## Documentation Routing

@@ -1717,7 +1717,7 @@ The 2026-05-16 audit found this split:
 
 - Metal diagnostics are the strongest surface: `.gputrace`, validation layer
   usage, labels, debug groups, signposts, command-buffer GPU timing, fault
-  counters, and audit gates are documented in `agents/rules/metal_debugging.rules.md`.
+  counters, and audit gates are documented in `agents/rules/debug_metal.rules.md`.
 - WSI diagnostics have working pieces (`wsi_present_x64.exe`, queue trace lines,
   macOS window capture helpers, capture-source classification), but no dedicated
   WSI debug runbook or result schema.
