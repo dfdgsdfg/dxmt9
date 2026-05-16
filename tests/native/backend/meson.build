@@ -31,6 +31,19 @@ dod_replay_observer_spec = executable(
 
 test('dxmt9-dod-replay-observer-spec', dod_replay_observer_spec)
 
+draw_seq_filter_spec = executable(
+  'dxmt9-draw-seq-filter-spec',
+  [
+    'draw_seq_filter_spec.cpp',
+    '../../../src/dxmt9/dxmt9_debug_trace.cpp',
+  ],
+  include_directories: dxmt9_inc,
+  dependencies: dxmt9_util_dep,
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-draw-seq-filter-spec', draw_seq_filter_spec)
+
 resource_hazard_spec = executable(
   'dxmt9-resource-hazard-spec',
   'resource_hazard_spec.cpp',

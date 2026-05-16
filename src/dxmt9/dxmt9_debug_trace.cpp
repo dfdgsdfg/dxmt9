@@ -6,6 +6,29 @@
 
 namespace dxmt9::debug {
 
+DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept {
+  return DrawSeqRange{
+      .hasMin = min.has_value(),
+      .hasMax = max.has_value(),
+      .min = min.value_or(0),
+      .max = max.value_or(0),
+  };
+}
+
+bool drawSeqRangeEnabled(DrawSeqRange range) noexcept {
+  return range.hasMin || range.hasMax;
+}
+
+bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept {
+  if (range.hasMin && seqId < range.min) {
+    return true;
+  }
+  if (range.hasMax && seqId > range.max) {
+    return true;
+  }
+  return false;
+}
+
 bool forceVisibleDraw() {
   static const bool v = util::getenvFlag("DXMT_DEBUG_FORCE_VISIBLE");
   return v;
@@ -24,6 +47,13 @@ bool forceFragmentShaderColor() {
 bool skipAllDraws() {
   static const bool v = util::getenvFlag("DXMT_SKIP_ALL_DRAWS");
   return v;
+}
+
+bool shouldSkipDrawSeq(u64 seqId) {
+  static const DrawSeqRange range = makeDrawSeqRange(
+      util::getenvU64Auto("DXMT9_DRAW_SEQ_MIN"),
+      util::getenvU64Auto("DXMT9_DRAW_SEQ_MAX"));
+  return shouldSkipDrawSeq(seqId, range);
 }
 
 bool disableScissor() {

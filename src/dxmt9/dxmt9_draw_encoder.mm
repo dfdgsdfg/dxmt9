@@ -1006,8 +1006,9 @@ bool encodeDraw(EncodeContext& ctx,
                   false,
                   {},
                   {}};
+  const bool traceEncode = debug::shouldTraceEncode(hot, seqId);
   if (debug::skipAllDraws()) {
-    if (queueTraceEnabled()) {
+    if (queueTraceEnabled() || traceEncode) {
       std::ostringstream out;
       out << "[dxmt9-debug] skip all draws seq=" << static_cast<unsigned long long>(seqId)
           << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value);
@@ -1015,7 +1016,16 @@ bool encodeDraw(EncodeContext& ctx,
     }
     return false;
   }
-  const bool traceEncode = debug::shouldTraceEncode(hot, seqId);
+  if (debug::shouldSkipDrawSeq(seqId)) {
+    if (queueTraceEnabled() || traceEncode) {
+      std::ostringstream out;
+      out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
+          << " reason=seq-range"
+          << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value);
+      emitQueueTraceLine(out.str());
+    }
+    return false;
+  }
   if (!encoder) {
     if (traceEncode) {
       emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-encoder");

@@ -7,10 +7,22 @@
 #include "dxmt9/core.hpp"
 
 #include <cstdint>
+#include <optional>
 
 namespace dxmt9::debug {
 
 using u64 = std::uint64_t;
+
+struct DrawSeqRange {
+  bool hasMin = false;
+  bool hasMax = false;
+  u64 min = 0;
+  u64 max = 0;
+};
+
+DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept;
+bool drawSeqRangeEnabled(DrawSeqRange range) noexcept;
+bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept;
 
 // Force blend-disable + writeMask=0xf to make all draws visible, for
 // rendering-bisect work. Env: DXMT_DEBUG_FORCE_VISIBLE.
@@ -28,6 +40,10 @@ bool forceFragmentShaderColor();
 
 // Skip recording any draw command. Env: DXMT_SKIP_ALL_DRAWS.
 bool skipAllDraws();
+
+// Skip draws outside the inclusive seq-id range from
+// DXMT9_DRAW_SEQ_MIN / DXMT9_DRAW_SEQ_MAX.
+bool shouldSkipDrawSeq(u64 seqId);
 
 // Disable scissor rect — useful when debugging clipping issues.
 // Env: DXMT_DISABLE_SCISSOR.

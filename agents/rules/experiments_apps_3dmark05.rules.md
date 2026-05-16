@@ -223,6 +223,10 @@ frames in the current dxmt9 harness.
   still depends on macOS accessibility/focus behavior.
 - The current dxmt9 render is visually corrupted. Treat successful process
   execution separately from visual correctness.
+- For the next visual bisect, use `DXMT9_DRAW_SEQ_MIN` / `DXMT9_DRAW_SEQ_MAX`
+  to drop draws outside an inclusive submission seq-id range. Pair the narrowed
+  range with `DXMT_TRACE_ENCODE_SEQ=N`, `DXMT9_TRACE_DRAW_GEOMETRY=1`, shader
+  input tracing, and a delayed screenshot run.
 - `dxmt9.log` contains common Wine macOS noise such as HID query fixmes,
   keyboard-layout fixmes, and experimental wow64 notice; these are not currently
   tied to a benchmark failure.
