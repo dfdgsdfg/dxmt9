@@ -7,8 +7,8 @@
 Each experiment is a launcher script that:
 1. Injects dxmt9 as the D3D9 implementation for a real application
 2. Runs the application for a fixed number of frames or wall-clock seconds
-3. Captures a screenshot at a fixed point
-4. Compares the screenshot against the reference image (SSIM)
+3. Captures visual evidence at fixed points or bounded intervals
+4. Compares selected frames against reference images (SSIM)
 5. Checks Metal validation layer output and `DXMT_ASSERT` log for errors
 
 ```mermaid
@@ -16,7 +16,7 @@ graph LR
     subgraph Launcher["experiments/launchers/<app>.sh"]
         INJECT["Inject native backend\nor install d3d9.dll + winemetal.dll + winemetal.so"]
         RUN["Run app for N frames"]
-        SHOT["Capture screenshot"]
+        SHOT["Capture visual evidence\nsingle / interval / video"]
         CMP["SSIM vs reference\n≥ 0.90 = pass"]
         LOG["Check Metal validation\n+ DXMT_ASSERT log"]
     end
@@ -61,10 +61,10 @@ WINEDLLOVERRIDES="d3d9=n,b" wine app.exe
 
 ---
 
-## 3. Screenshot Capture
+## 3. Visual Capture
 
-Screenshots are captured either via macOS window capture or by reading back the
-back buffer via `GetRenderTargetData()` at the end of a fixed frame.
+Visual evidence is captured either via macOS window capture or by reading back
+the back buffer via `GetRenderTargetData()` at deterministic frame boundaries.
 
 The current `dxmt9` runner prefers the second path. Launchers set
 `DXMT_EXPERIMENT_CAPTURE_PATH` and `DXMT_CAPTURE_FRAME`, and the
@@ -72,6 +72,21 @@ core dumps a BMP from the presented back buffer on the requested `Present`
 count. The runner then converts that dump into `actual.png` before SSIM
 comparison. Window capture remains a fallback for applications that cannot use
 the internal frame-dump path.
+
+The same capture contract extends to:
+
+| Mode | Launcher input | Output |
+|---|---|---|
+| Single frame | One fixed frame index | `actual.png`, optional `diff.png`, SSIM result. |
+| Frame list | Ordered frame ids | `frames/frame_<id>.png` plus `frames/manifest.json`. |
+| Interval range | Start frame, end frame, interval | Deterministic image sequence with missing-frame records. |
+| Video segment | Start/end frame or time and max duration | `video/<segment>.mp4` or another declared container plus metadata. |
+
+Internal dumps remain the preferred correctness evidence because they sample the
+D3D9-presented image before compositor/window-capture uncertainty. Window-id
+capture is useful for WSI and compositor evidence. Frontmost-window and
+full-screen captures may be used for triage, but the result must label them as
+fallback sources.
 
 Comparison uses **SSIM** (Structural Similarity Index):
 - SSIM ≥ 0.90 → pass (visually equivalent)
@@ -81,6 +96,10 @@ Comparison uses **SSIM** (Structural Similarity Index):
 The SSIM threshold is intentionally loose — experiments are wild tests, not
 pixel-exact tests. Small differences due to driver precision or timing are
 acceptable.
+
+Video segments are qualitative evidence unless the run also preserves extracted
+frames or a human-review record. They are useful for temporal failures such as
+flicker, black-frame intervals, animation glitches, and present pacing issues.
 
 ---
 
@@ -94,6 +113,11 @@ experiments/output/<app-name>/
 ├── reference.png       Expected screenshot (symlink)
 ├── diff.png            Highlighted difference image
 ├── ssim.txt            SSIM score
+├── frames/             Optional interval/list frame captures
+│   └── manifest.json
+├── video/              Optional bounded video segments
+│   └── manifest.json
+├── capture_manifest.json
 └── dxmt9.log           DXMT_ASSERT + Metal validation output
 ```
 
@@ -107,8 +131,11 @@ that highlights regions of visible difference in red.
 To make experiment runs reproducible:
 - Applications must support `--frames N` or `--seed N` arguments, or be
   driven by a script that sends deterministic input events.
-- Frame capture happens at a fixed frame index (e.g., frame 100 of 300),
-  not at wall-clock time.
+- Frame capture happens at fixed frame indices, fixed frame intervals, or
+  event-anchored frame windows whenever possible, not at wall-clock time.
+- Video capture should be anchored to frame numbers when the application exposes
+  them. If only wall-clock capture is possible, the result records the timebase
+  and any expected drift.
 - GPU-side timing (async PSO compilation) must be masked by a warm-up pass
   of at least 60 frames before the reference frame.
 

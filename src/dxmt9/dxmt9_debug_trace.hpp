@@ -20,9 +20,20 @@ struct DrawSeqRange {
   u64 max = 0;
 };
 
+struct DrawOrdinalRange {
+  bool hasMin = false;
+  bool hasMax = false;
+  u64 min = 0;
+  u64 max = 0;
+};
+
 DrawSeqRange makeDrawSeqRange(std::optional<u64> min, std::optional<u64> max) noexcept;
 bool drawSeqRangeEnabled(DrawSeqRange range) noexcept;
 bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept;
+
+DrawOrdinalRange makeDrawOrdinalRange(std::optional<u64> min, std::optional<u64> max) noexcept;
+bool drawOrdinalRangeEnabled(DrawOrdinalRange range) noexcept;
+bool shouldSkipDrawOrdinal(u64 ordinal, DrawOrdinalRange range) noexcept;
 
 // Force blend-disable + writeMask=0xf to make all draws visible, for
 // rendering-bisect work. Env: DXMT_DEBUG_FORCE_VISIBLE.
@@ -44,6 +55,14 @@ bool skipAllDraws();
 // Skip draws outside the inclusive seq-id range from
 // DXMT9_DRAW_SEQ_MIN / DXMT9_DRAW_SEQ_MAX.
 bool shouldSkipDrawSeq(u64 seqId);
+
+// Monotonic draw ordinal after any seq-id filter has been applied. This is
+// useful for bisection inside a large submission chunk.
+u64 nextDrawOrdinal() noexcept;
+
+// Skip draws outside the inclusive per-process draw ordinal range from
+// DXMT9_DRAW_ORDINAL_MIN / DXMT9_DRAW_ORDINAL_MAX.
+bool shouldSkipDrawOrdinal(u64 ordinal);
 
 // Disable scissor rect — useful when debugging clipping issues.
 // Env: DXMT_DISABLE_SCISSOR.

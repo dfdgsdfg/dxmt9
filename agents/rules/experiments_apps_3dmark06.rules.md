@@ -196,6 +196,28 @@ validated the launcher native-DLL guard path, but still failed visual capture:
 - no compiler dialog or page fault
 - dxmt9 log showed 5 presents and thousands of indexed draws
 
+The `capture-frame-{1..5}`, `no-present-boundary-cf2`,
+`split-present-cf2`, and `shader-dump-cf2` experiments from 2026-05-16
+narrowed the black-screen failure beyond the compiler/page-fault blockers:
+
+- no `D3DCompile2`, `E5017`, `gametest_proxycon`, or unhandled page fault
+- first present reaches `source.info`, `nextDrawable.ok`, and `scheduled`
+- `capture-frame=1` creates an internal dump, but the backbuffer is black
+- later capture frames fall back to window capture because the requested
+  present does not complete before watchdog termination
+- all compared lanes hit `unsupported D3D opcode: opcode_65`
+
+Opcode 65 is `D3DSIO_TEXKILL` in `dxmt9_d3d9_bytecode.hpp`. A shader dump run
+left the failing `ps_3_0` bytecode at:
+
+```text
+experiments/output/3dmark06-shader-dump-cf2-shaders/shader-4803115731238309921.bin
+```
+
+That shader contains token `0x01000041` at word 47. Treat the current
+3DMark06 visual blocker as a dxmt9 shader translator gap until `TEXKILL`
+handling is implemented and re-tested.
+
 ## Current Risks / Follow-up
 
 - Automatic window capture is not trustworthy: macOS window lookup may fail to
@@ -205,6 +227,8 @@ validated the launcher native-DLL guard path, but still failed visual capture:
   show draw/present traffic. Do not treat `black_screen` as the compiler
   blocker returning; inspect logs for `D3DCompile2`, `E5017`, page faults,
   presents, and draws.
+- Before chasing present/capture policy further, add `TEXKILL` translator
+  coverage from the dumped shader and re-run `capture-frame=1/2`.
 - Re-validate benchmark visuals with a trustworthy 3DMark06 window capture.
 - Do not treat native `d3dx9_28` as a dxmt9 renderer fix; it changes the app's
   shader compiler dependency to get past the Wine/vkd3d-shader gap.

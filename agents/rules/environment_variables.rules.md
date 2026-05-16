@@ -88,6 +88,7 @@ unless documented otherwise.
 | `DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX` | Force fullscreen-quad vertices | `0` |
 | `DXMT_DEBUG_FORCE_FRAGMENT_COLOR` | Force fragment output color | unset |
 | `DXMT9_DRAW_SEQ_MIN` / `DXMT9_DRAW_SEQ_MAX` | Drop draws outside an inclusive submission seq-id range for visual bisection | unset |
+| `DXMT9_DRAW_ORDINAL_MIN` / `DXMT9_DRAW_ORDINAL_MAX` | Drop draws outside an inclusive draw-call ordinal range after any seq-id filter has been applied | unset |
 | `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` | Flip v-coordinate in pixel shader | `0` |
 | `DXMT_DEBUG_FLIP_VERTEX_Y` | Flip y-coordinate in vertex shader | `0` |
 | `DXMT_DEBUG_FRONT_FACE_CCW` | Force CCW front-face | `0` |

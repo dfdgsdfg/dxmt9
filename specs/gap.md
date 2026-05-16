@@ -179,6 +179,8 @@ after the boundary, not only layout, helper conversion, or final rendered output
 | B4: generated bridge/unixcall marshalling -> C boundary args | ⚠️ | `dxmt9-bridge-marshalling-value-spec` asserts generated `Args_*` native/wow64 POD layout, commit-chunk pointer/status preservation, wire blob record/handle payload values, sampler/TSS/const/factory argument values, and wow64 pointer/handle decode helpers. | The PE client wrapper and unix dispatch TU are not directly linkable into this native test; a generated-call fake sink would be needed to observe the full wrapper-to-dispatch path. |
 | B5: draw state -> shader arg-buffer texture/sampler bindings | ⚠️ | `dxmt9-shader-argbuf-binding-value-spec` asserts `FlatDrawStateRecord` texture/sampler slot values through shader context, Stage 1 `texN`/`sampN` MSL bindings, Stage 2 arg-buffer aliases, descriptor ids, null texture slots, and sampler/LOD defaults. | Actual Stage 1 encoder calls and Stage 2 `MTLArgumentEncoder::setTexture/setSamplerState` writes still require a live Metal recorder seam. |
 | B6: Wine PE conformance HRESULT / out-pointer / status values | ❌ | `tests/conformance/d3d9/MANIFEST.toml` currently reports 23 scaffolded, 6 failing, 2 partial, and 0 fully passing cases; manifest validation passes. | Fix or record evidence for the current failing public ABI lanes: factory validation return codes, present-parameter validation, Ex create/reset mode validation, private-data resource wrappers, Ex shared-handle policy, and creation-failure out pointers; promote cases only when every declared lane/architecture has passing evidence. |
+| B7: core draw API -> `DrawParam` / topology payload | ✅ | `dxmt9-core-device-coverage-spec` now asserts non-UP `TriangleFan` conversion for `drawPrimitive`, `drawIndexedPrimitive`, and coalesced `drawPrimitiveRun`: canonical `TriangleList`, generated/re-written user index payload bytes, index type, base vertex, start index, and stripped source index-buffer policy. `core_device_lifecycle_spec` already covers UP fan vertex/index payload decomposition. | Keep this lane green by requiring concrete topology payload assertions for any future primitive conversion; enum normalization alone is not sufficient evidence. |
+| B8: `DrawParam` / `FlatDrawStateView` -> Metal encoder draw command | ⚠️ | Focused 3DMark05 diagnostics show the fixed bad draw as `api=DrawIndexedPrimitiveUP`, `indexType=u16`, `userIndexBytes=12`, and `indexed=1`; backend geometry diagnostics cover the shape for manual investigation. | Add a first-class Metal encoder recorder seam that asserts `drawPrimitives` / `drawIndexedPrimitives` arguments exactly: primitive type, index count, index type, index-buffer offset, base vertex, vertex-buffer offset, stream stride, and `DrawVolatile` values. Logs and screenshots are useful evidence but not deterministic unit coverage. |
 
 ### R-TEST-13 Module-Boundary Harness
 
@@ -213,6 +215,25 @@ execution.
 | Winding / depth tests | ✅ | `testRasterStateCoverage()` |
 | Full upstream corpus sync | ✅ | `sync_corpus.sh` + provenance drift report |
 
+### R-TEST-14 Debugging Tooling Standard
+
+⚠️ Partial. Metal diagnostics are mostly implemented and documented, but WSI /
+window, Wine unix/provider, headless-host, and environment-registry diagnostics
+are not yet standardized as a single machine-readable evidence contract. The
+debugging surface must be treated as harness evidence when it diagnoses a module
+boundary, and as experiment evidence only when it proves app-level behaviour.
+
+| Area | Status | Current evidence | Missing evidence / implementation goal |
+|---|---|---|---|
+| Environment registry | ⚠️ | `agents/rules/environment_variables.rules.md` exists as the intended registry. | Add an automated drift audit for `DXMT*` / `DXMT9*` consumers and document live missing knobs such as `DXMT9_BRIDGE_VERBOSE`, `DXMT9_WINEMETAL_SO`, PE recorder flags, prewarm/cache flags, and provider fallback flags. |
+| Metal diagnostics | ⚠️ | Metal debug runbook covers `.gputrace`, validation-layer use, labels, debug groups, signposts, command-buffer GPU timing, and fault counters. | Link these artifacts into a standard result schema and keep per-stage GPU timing marked as external `xctrace` evidence until runtime `MTLCounterSampleBuffer` support exists. |
+| WSI/window diagnostics | ⚠️ | `wsi_present_x64.exe`, queue/present traces, macOS capture helpers, and capture-source classification exist. | Add a dedicated WSI debug result contract that records layer acquisition, HWND/window title, capture source, and rejects full-screen fallback as proof of WSI layer success. |
+| Wine unix/provider diagnostics | ⚠️ | Provider locator logs and ABI handshake logs exist; Wine manifest files already carry patch-related intent in places. | Implement read-only `scripts/wine/check_patch.py`; extend manifest resolution and experiment runs to pre-gate `requires_patch` / `patch_status` and record those fields in results. |
+| Headless / non-Darwin diagnostics | ⚠️ | `wsi_platform_headless` provides a headless utility path. | Emit explicit harness result fields that no WSI, CAMetalLayer, or window-capture evidence is available; avoid treating this as Linux visible-output support. |
+| Machine-readable debug results | ❌ | Existing runs have related fields such as capture source and artifact paths, but no shared schema. | Emit `dxmt9.debug.result.v1`-style JSON with command, environment snapshot, artifacts, diagnostics, and fixed failure category. |
+| Boundary data dumps | ❌ | Native tests assert many exact before/after boundary values, and logs/counters expose pieces of the runtime path. | Add opt-in schema-versioned dump bundles for each diagnosed boundary with before/after phase labels, sidecar manifests, and correlation keys across PE, bridge, unix import, backend, Metal, and WSI. |
+| Rendered frame/video capture | ⚠️ | Experiments already emit single-frame internal dumps or window captures for some runs. | Add frame-list, interval-range, and bounded video-segment capture with per-frame source, hashes, dimensions, frame/timebase metadata, result JSON entries, and artifact size limits. |
+
 ### Unit-First DoD Checklist
 
 | DoD item | Status | Evidence / remaining work |
@@ -240,6 +261,7 @@ described by R-WILD-1.2.
 | `experiments/CATALOGUE.toml` + launcher tree scaffolded | ✅ | R-WILD-5.1 |
 | Wine launcher injection harness (`run_experiment.py`, launcher scripts, Heroic staging) | ⚠️ | R-WILD-1.2 |
 | Internal backbuffer frame dump + SSIM comparison + `result.json` output | ✅ | R-WILD-2.3, R-WILD-4.1 |
+| Interval frame sequence + bounded video capture | ❌ | R-WILD-4.4-R-WILD-4.6 |
 | Bootstrap verified entry: `dxmt9-wsi-present-local` on Heroic Wine 11.5 | ✅ | local workflow validation |
 | Verified real application entries: `dx-sdk-basichlsl`, `dx-sdk-tutorial07`, `dx-sdk-hdrformats`, `dxut-simple-sample`, `irrlicht-managed-lights` | ✅ | Heroic Wine 11.5, direct capture, SSIM 1.0000 |
 | Exploratory commercial entry: `anno-1404-gold` | ⚠️ | supported on Heroic `Wine-11.6-DXMT`; plain `Wine-11.6` is research-only due to Wine `d3dx10_43` aborts |
@@ -341,3 +363,4 @@ No implementation exists yet. All R-D3D7-1.x through R-D3D7-10.x are not started
 | 8 | Build and verify the upstream-style PE targets: `d3d9.dll` + `winemetal.dll` + `winemetal.so` | d3d9/wsi §6, §9 |
 | 9 | Run the Wine WSI smoke on the upstream-style deployment and promote the gap status if it passes | R-TEST-11.3 |
 | 10 | D3D8 entry point + IDirect3D8 factory + resource wrappers | R-D3D8-1.1, R-D3D8-2.1 |
+| 11 | Standardize debug-tool evidence across Metal, WSI/window, Wine unix/provider, headless lanes, boundary dumps, render frame sequences, video segments, and the environment-variable registry | R-TEST-14.1-R-TEST-14.18, R-WILD-4.4-R-WILD-4.6 |

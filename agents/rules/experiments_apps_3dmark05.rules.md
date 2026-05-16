@@ -26,8 +26,9 @@ pattern being investigated for 3DMark06. The latest 3DMark05 dxmt9 output
 reaches draw calls and a final present.
 
 A restored Wine builtin D3D9 oracle renders the same delayed GT1 scene normally.
-This separates app/timing/Wine viability from the current dxmt9 visual
-corruption.
+The previous severe dxmt9 magenta/diagonal/large-triangle corruption was traced
+to D3D `D3DPT_TRIANGLEFAN` fullscreen copy draws being canonicalized to
+`TriangleList` without rewriting their vertex/index topology.
 
 ## Repository State
 
@@ -86,6 +87,27 @@ Wine-builtin oracle note:
   no `[dxmt9-*]` backend lines.
 
 ## Latest Observed Result
+
+2026-05-16 TriangleFan topology fix:
+
+- `experiments/output/3dmark05-fan-fix-baseline/result.json` reports harness
+  `status=pass`, `returncode=-15`, `timed_out=true`, and a 1024x768 delayed
+  capture.
+- The delayed capture no longer shows the prior huge magenta diagonal/wedge or
+  large tan/black malformed triangle caused by reading a 4-vertex fan as a
+  6-vertex triangle list.
+- The first visible backbuffer copy is still `seq=8 ordinal=562`, sourced from
+  texture handle `0x20000010000008c`, but the fixed trace now records
+  `indexed=1` and `api=DrawIndexedPrimitiveUP` with `userIndexBytes=12`, i.e.
+  generated `u16` triangle-list indices for the original 4-vertex fan.
+- The targeted evidence is
+  `experiments/output/3dmark05-fan-fix-seq-8-ord-562-trace/dxmt9.log` around
+  line 89099:
+  `seq=8 ordinal=562 ... indexed=1 primType=3 primCount=2 vertexCount=6`,
+  followed by geometry diagnostics showing `DrawIndexedPrimitiveUP`,
+  `indexType=u16`, and `userIndexBytes=12`.
+- Treat this as a strong fix for the observed topology corruption, not as a
+  final conformance oracle for the whole benchmark.
 
 2026-05-16 restored Wine builtin oracle:
 
@@ -221,12 +243,17 @@ frames in the current dxmt9 harness.
   a full visual/performance validation.
 - The launcher uses AppleScript to press Enter; this is sufficient locally but
   still depends on macOS accessibility/focus behavior.
-- The current dxmt9 render is visually corrupted. Treat successful process
-  execution separately from visual correctness.
+- Treat successful process execution separately from visual correctness. The
+  prior severe topology corruption is fixed, but the experiment remains
+  exploratory until a stable visual oracle/reference comparison is added.
 - For the next visual bisect, use `DXMT9_DRAW_SEQ_MIN` / `DXMT9_DRAW_SEQ_MAX`
   to drop draws outside an inclusive submission seq-id range. Pair the narrowed
   range with `DXMT_TRACE_ENCODE_SEQ=N`, `DXMT9_TRACE_DRAW_GEOMETRY=1`, shader
   input tracing, and a delayed screenshot run.
+- Once the bad submission seq is known, use `DXMT9_DRAW_ORDINAL_MIN` /
+  `DXMT9_DRAW_ORDINAL_MAX` to bisect draw calls inside that seq. The ordinal is
+  assigned after the seq-id filter, so `DXMT9_DRAW_SEQ_MIN=N`,
+  `DXMT9_DRAW_SEQ_MAX=N`, and an ordinal range isolate draws within one chunk.
 - `dxmt9.log` contains common Wine macOS noise such as HID query fixmes,
   keyboard-layout fixmes, and experimental wow64 notice; these are not currently
   tied to a benchmark failure.

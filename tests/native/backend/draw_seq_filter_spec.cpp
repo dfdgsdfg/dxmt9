@@ -30,6 +30,11 @@ dxmt9::debug::DrawSeqRange range(std::optional<u64> min, std::optional<u64> max)
   return dxmt9::debug::makeDrawSeqRange(min, max);
 }
 
+dxmt9::debug::DrawOrdinalRange ordinalRange(std::optional<u64> min,
+                                            std::optional<u64> max) {
+  return dxmt9::debug::makeDrawOrdinalRange(min, max);
+}
+
 void testUnboundedRangeKeepsEverySeq() {
   const auto unbounded = range(std::nullopt, std::nullopt);
   check(!dxmt9::debug::drawSeqRangeEnabled(unbounded),
@@ -88,6 +93,32 @@ void testInvertedRangeSkipsEverySeq() {
         "inverted range skips seq above both bounds");
 }
 
+void testDrawOrdinalRangeMatchesSeqRangeBoundaries() {
+  const auto unbounded = ordinalRange(std::nullopt, std::nullopt);
+  check(!dxmt9::debug::drawOrdinalRangeEnabled(unbounded),
+        "unbounded draw ordinal range is disabled");
+  check(!dxmt9::debug::shouldSkipDrawOrdinal(1u, unbounded),
+        "unbounded draw ordinal range keeps ordinal 1");
+
+  const auto closed = ordinalRange(u64{3}, u64{5});
+  check(dxmt9::debug::drawOrdinalRangeEnabled(closed),
+        "closed draw ordinal range is enabled");
+  check(dxmt9::debug::shouldSkipDrawOrdinal(2u, closed),
+        "closed draw ordinal range skips below min");
+  check(!dxmt9::debug::shouldSkipDrawOrdinal(3u, closed),
+        "closed draw ordinal range keeps min");
+  check(!dxmt9::debug::shouldSkipDrawOrdinal(4u, closed),
+        "closed draw ordinal range keeps inside");
+  check(!dxmt9::debug::shouldSkipDrawOrdinal(5u, closed),
+        "closed draw ordinal range keeps max");
+  check(dxmt9::debug::shouldSkipDrawOrdinal(6u, closed),
+        "closed draw ordinal range skips above max");
+
+  const auto inverted = ordinalRange(u64{5}, u64{3});
+  check(dxmt9::debug::shouldSkipDrawOrdinal(4u, inverted),
+        "inverted draw ordinal range skips between inverted bounds");
+}
+
 }  // namespace
 
 int main() {
@@ -97,6 +128,7 @@ int main() {
     testMaxBoundaryIsInclusive();
     testClosedRangeIsInclusive();
     testInvertedRangeSkipsEverySeq();
+    testDrawOrdinalRangeMatchesSeqRangeBoundaries();
   } catch (const TestFailure& failure) {
     std::cerr << "draw_seq_filter_spec failed: "
               << failure.what() << '\n';

@@ -328,6 +328,58 @@ bool writeTriangleFanIndexBytes(std::vector<u8> &out,
   return true;
 }
 
+template <typename Index>
+void writeSequentialTriangleFanIndexBytes(std::vector<u8> &out,
+                                          u32 primitiveCount) {
+  static_assert(std::is_same_v<Index, u16> || std::is_same_v<Index, u32>);
+  if (primitiveCount == 0) {
+    out.clear();
+    return;
+  }
+
+  out.resize(static_cast<size_t>(primitiveCount) * 3u * sizeof(Index));
+  auto writeIndex = [&](size_t &offset, Index value) {
+    std::memcpy(out.data() + offset, &value, sizeof(Index));
+    offset += sizeof(Index);
+  };
+
+  size_t offset = 0;
+  for (u32 i = 1; i <= primitiveCount; ++i) {
+    writeIndex(offset, Index{0});
+    writeIndex(offset, static_cast<Index>(i));
+    writeIndex(offset, static_cast<Index>(i + 1u));
+  }
+}
+
+IndexType writeSequentialTriangleFanIndexPayload(std::vector<u8> &out,
+                                                 u32 primitiveCount) {
+  if (primitiveCount <=
+      static_cast<u32>(std::numeric_limits<u16>::max()) - 1u) {
+    writeSequentialTriangleFanIndexBytes<u16>(out, primitiveCount);
+    return IndexType::UInt16;
+  }
+  writeSequentialTriangleFanIndexBytes<u32>(out, primitiveCount);
+  return IndexType::UInt32;
+}
+
+bool writeIndexedTriangleFanIndexPayload(std::vector<u8> &out,
+                                         std::span<const u8> sourceIndexBytes,
+                                         u32 primitiveCount, u32 startIndex,
+                                         IndexType indexType) {
+  const auto indexSize =
+      indexType == IndexType::UInt32 ? sizeof(u32) : sizeof(u16);
+  const auto firstIndexByte = static_cast<size_t>(startIndex) * indexSize;
+  if (firstIndexByte > sourceIndexBytes.size()) {
+    return false;
+  }
+  const auto fanIndexBytes = sourceIndexBytes.subspan(firstIndexByte);
+  return indexType == IndexType::UInt32
+             ? writeTriangleFanIndexBytes<u32>(out, fanIndexBytes,
+                                               primitiveCount)
+             : writeTriangleFanIndexBytes<u16>(out, fanIndexBytes,
+                                               primitiveCount);
+}
+
 template <typename StateValues> u64 hashMap(const StateValues &values) {
   u64 hash = kFnvOffset;
   std::vector<std::pair<u32, u32>> sorted;
@@ -1489,7 +1541,41 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
   if (draws.empty()) {
     return D3D_OK;
   }
-  submitDrawRunInternalFromCurrentState(draws);
+
+  std::vector<DrawParam> normalized(draws.begin(), draws.end());
+  std::vector<std::vector<u8>> indexPayloadStorage(normalized.size());
+  std::vector<DrawParamPayloadView> payloads(normalized.size());
+
+  for (std::size_t i = 0; i < normalized.size(); ++i) {
+    auto &draw = normalized[i];
+    const auto originalType = draw.primitiveType;
+    draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
+    if (originalType != PrimitiveType::TriangleFan) {
+      continue;
+    }
+
+    auto &indexPayload = indexPayloadStorage[i];
+    if (draw.indexed) {
+      if (!state_.indexBuffer) {
+        return D3DERR_INVALIDCALL;
+      }
+      if (!writeIndexedTriangleFanIndexPayload(
+              indexPayload, state_.indexBuffer->bytes(), draw.primitiveCount,
+              draw.startIndex, draw.indexType)) {
+        return D3DERR_INVALIDCALL;
+      }
+    } else {
+      draw.indexed = true;
+      draw.baseVertexIndex = static_cast<i32>(draw.startVertex);
+      draw.indexType = writeSequentialTriangleFanIndexPayload(
+          indexPayload, draw.primitiveCount);
+    }
+    draw.startIndex = 0;
+    payloads[i].userIndexData =
+        std::span<const u8>(indexPayload.data(), indexPayload.size());
+  }
+
+  submitDrawRunInternalFromCurrentState(normalized, payloads);
   return D3D_OK;
 }
 
@@ -1501,6 +1587,24 @@ HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount,
   draw.startVertex = startVertex;
   draw.indexType = state_.indexType;
   draw.indexed = false;
+  if (type == PrimitiveType::TriangleFan) {
+    draw.indexed = true;
+    draw.baseVertexIndex = static_cast<i32>(startVertex);
+    draw.startIndex = 0;
+    draw.indexType =
+        writeSequentialTriangleFanIndexPayload(upIndexScratch_, primitiveCount);
+    const DrawParamPayloadView payload{
+        .userIndexData =
+            std::span<const u8>(upIndexScratch_.data(), upIndexScratch_.size()),
+    };
+    submitDrawRunInternalFromCurrentState(
+        std::span<const DrawParam>(&draw, 1),
+        std::span<const DrawParamPayloadView>(&payload, 1));
+    if (state_.inScene) {
+      // No-op; draw submission is immediate in the core harness.
+    }
+    return D3D_OK;
+  }
   submitDrawRunInternalFromCurrentState(std::span<const DrawParam>(&draw, 1));
   if (state_.inScene) {
     // No-op; draw submission is immediate in the core harness.
@@ -1519,6 +1623,25 @@ HResult Device::drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount,
   draw.startIndex = startIndex;
   draw.indexType = indexType;
   draw.indexed = true;
+  if (type == PrimitiveType::TriangleFan) {
+    if (!state_.indexBuffer) {
+      return D3DERR_INVALIDCALL;
+    }
+    if (!writeIndexedTriangleFanIndexPayload(
+            upIndexScratch_, state_.indexBuffer->bytes(), primitiveCount,
+            startIndex, indexType)) {
+      return D3DERR_INVALIDCALL;
+    }
+    draw.startIndex = 0;
+    const DrawParamPayloadView payload{
+        .userIndexData =
+            std::span<const u8>(upIndexScratch_.data(), upIndexScratch_.size()),
+    };
+    submitDrawRunInternalFromCurrentState(
+        std::span<const DrawParam>(&draw, 1),
+        std::span<const DrawParamPayloadView>(&payload, 1));
+    return D3D_OK;
+  }
   submitDrawRunInternalFromCurrentState(std::span<const DrawParam>(&draw, 1));
   return D3D_OK;
 }

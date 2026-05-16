@@ -82,6 +82,12 @@ void testIndexedDrawPolicyContracts() {
   auto indexBuffer = device->createBuffer({64, Pool::Default, UsageIndexBuffer});
   check(vertexBuffer != nullptr, "indexed policy vertex buffer");
   check(indexBuffer != nullptr, "indexed policy index buffer");
+  const std::array<u32, 5> fanSourceIndices{4, 10, 11, 12, 99};
+  auto indexRegion = indexBuffer->lock(0, sizeof(fanSourceIndices), 0);
+  check(indexRegion.data != nullptr, "indexed policy index buffer lock");
+  std::memcpy(indexRegion.data, fanSourceIndices.data(),
+              sizeof(fanSourceIndices));
+  indexBuffer->unlock();
 
   checkEq(device->setStreamSource(0, vertexBuffer, 4, 16), D3D_OK,
           "indexed policy stream source");
@@ -124,6 +130,124 @@ void testIndexedDrawPolicyContracts() {
   check(nonIndexed.param.userIndexRange.empty(),
         "non-indexed draw does not carry user index payload");
 
+  checkEq(device->drawPrimitive(PrimitiveType::TriangleFan, 2, 7), D3D_OK,
+          "indexed policy non-indexed fan draw");
+  checkEq(backend->draws.size(), size_t{3}, "indexed policy fan draw count");
+  const auto& nonIndexedFan = backend->draws[2];
+  check(nonIndexedFan.param.indexed, "non-indexed fan is emitted as indexed");
+  checkEq(nonIndexedFan.param.primitiveType, PrimitiveType::TriangleList,
+          "non-indexed fan canonical primitive type");
+  checkEq(nonIndexedFan.param.primitiveCount, 2u,
+          "non-indexed fan primitive count");
+  checkEq(nonIndexedFan.param.startVertex, 7u,
+          "non-indexed fan keeps source start vertex for diagnostics");
+  checkEq(nonIndexedFan.param.baseVertexIndex, 7,
+          "non-indexed fan uses start vertex as generated base vertex");
+  checkEq(nonIndexedFan.param.startIndex, 0u,
+          "non-indexed fan starts generated index payload at zero");
+  checkEq(nonIndexedFan.param.indexType, IndexType::UInt16,
+          "non-indexed fan uses compact generated indices");
+  checkEq(nonIndexedFan.hot.indexBuffer, Handle{},
+          "non-indexed fan strips bound index buffer from base state");
+  const std::array<u16, 6> expectedNonIndexedFanIndices{0, 1, 2, 0, 2, 3};
+  std::array<u8, sizeof(expectedNonIndexedFanIndices)>
+      expectedNonIndexedFanIndexBytes{};
+  std::memcpy(expectedNonIndexedFanIndexBytes.data(),
+              expectedNonIndexedFanIndices.data(),
+              expectedNonIndexedFanIndexBytes.size());
+  checkEq(nonIndexedFan.param.userIndexRange.size,
+          static_cast<u32>(expectedNonIndexedFanIndexBytes.size()),
+          "non-indexed fan carries generated index payload");
+  checkBytes(payloadSlice(nonIndexedFan, nonIndexedFan.param.userIndexRange,
+                          "non-indexed fan user index payload range"),
+             std::span<const u8>(expectedNonIndexedFanIndexBytes.data(),
+                                 expectedNonIndexedFanIndexBytes.size()),
+             "non-indexed fan generated index payload");
+
+  checkEq(device->drawIndexedPrimitive(PrimitiveType::TriangleFan, 2, 0, 3, 1,
+                                       IndexType::UInt32),
+          D3D_OK, "indexed policy indexed fan draw");
+  checkEq(backend->draws.size(), size_t{4}, "indexed policy indexed fan draw count");
+  const auto& indexedFan = backend->draws[3];
+  check(indexedFan.param.indexed, "indexed fan remains indexed");
+  checkEq(indexedFan.param.primitiveType, PrimitiveType::TriangleList,
+          "indexed fan canonical primitive type");
+  checkEq(indexedFan.param.primitiveCount, 2u,
+          "indexed fan primitive count");
+  checkEq(indexedFan.param.baseVertexIndex, 3,
+          "indexed fan keeps incoming base vertex");
+  checkEq(indexedFan.param.startIndex, 0u,
+          "indexed fan starts generated index payload at zero");
+  checkEq(indexedFan.param.indexType, IndexType::UInt32,
+          "indexed fan keeps source index type");
+  checkEq(indexedFan.hot.indexBuffer, Handle{},
+          "indexed fan strips source index buffer after payload rewrite");
+  const std::array<u32, 6> expectedIndexedFanIndices{10, 11, 12, 10, 12, 99};
+  std::array<u8, sizeof(expectedIndexedFanIndices)>
+      expectedIndexedFanIndexBytes{};
+  std::memcpy(expectedIndexedFanIndexBytes.data(),
+              expectedIndexedFanIndices.data(),
+              expectedIndexedFanIndexBytes.size());
+  checkEq(indexedFan.param.userIndexRange.size,
+          static_cast<u32>(expectedIndexedFanIndexBytes.size()),
+          "indexed fan carries rewritten index payload");
+  checkBytes(payloadSlice(indexedFan, indexedFan.param.userIndexRange,
+                          "indexed fan user index payload range"),
+             std::span<const u8>(expectedIndexedFanIndexBytes.data(),
+                                 expectedIndexedFanIndexBytes.size()),
+             "indexed fan rewritten index payload");
+
+  std::array<DrawParam, 2> fanRun{};
+  fanRun[0].primitiveType = PrimitiveType::TriangleFan;
+  fanRun[0].primitiveCount = 2;
+  fanRun[0].startVertex = 9;
+  fanRun[1].primitiveType = PrimitiveType::TriangleFan;
+  fanRun[1].primitiveCount = 2;
+  fanRun[1].baseVertexIndex = 5;
+  fanRun[1].startIndex = 1;
+  fanRun[1].indexType = IndexType::UInt32;
+  fanRun[1].indexed = true;
+  checkEq(device->drawPrimitiveRun(std::span<const DrawParam>(fanRun.data(),
+                                                              fanRun.size())),
+          D3D_OK, "indexed policy fan draw run");
+  checkEq(backend->draws.size(), size_t{6}, "indexed policy fan draw run count");
+  checkEq(backend->drawRuns.back().draws.size(), size_t{2},
+          "indexed policy fan run stays coalesced");
+  const auto& runNonIndexedFan = backend->draws[4];
+  check(runNonIndexedFan.param.indexed,
+        "draw run non-indexed fan is emitted as indexed");
+  checkEq(runNonIndexedFan.param.primitiveType, PrimitiveType::TriangleList,
+          "draw run non-indexed fan canonical primitive type");
+  checkEq(runNonIndexedFan.param.baseVertexIndex, 9,
+          "draw run non-indexed fan uses start vertex as base vertex");
+  checkEq(runNonIndexedFan.param.userIndexRange.size,
+          static_cast<u32>(expectedNonIndexedFanIndexBytes.size()),
+          "draw run non-indexed fan carries generated index payload");
+  checkBytes(payloadSlice(runNonIndexedFan, runNonIndexedFan.param.userIndexRange,
+                          "draw run non-indexed fan index payload range"),
+             std::span<const u8>(expectedNonIndexedFanIndexBytes.data(),
+                                 expectedNonIndexedFanIndexBytes.size()),
+             "draw run non-indexed fan generated index payload");
+
+  const auto& runIndexedFan = backend->draws[5];
+  check(runIndexedFan.param.indexed, "draw run indexed fan remains indexed");
+  checkEq(runIndexedFan.param.primitiveType, PrimitiveType::TriangleList,
+          "draw run indexed fan canonical primitive type");
+  checkEq(runIndexedFan.param.baseVertexIndex, 5,
+          "draw run indexed fan keeps incoming base vertex");
+  checkEq(runIndexedFan.param.startIndex, 0u,
+          "draw run indexed fan starts generated payload at zero");
+  checkEq(runIndexedFan.hot.indexBuffer, Handle{},
+          "draw run indexed fan strips source index buffer after payload rewrite");
+  checkEq(runIndexedFan.param.userIndexRange.size,
+          static_cast<u32>(expectedIndexedFanIndexBytes.size()),
+          "draw run indexed fan carries rewritten index payload");
+  checkBytes(payloadSlice(runIndexedFan, runIndexedFan.param.userIndexRange,
+                          "draw run indexed fan index payload range"),
+             std::span<const u8>(expectedIndexedFanIndexBytes.data(),
+                                 expectedIndexedFanIndexBytes.size()),
+             "draw run indexed fan rewritten index payload");
+
   const std::array<u8, 24> upVertices{
       0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
       0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
@@ -139,8 +263,8 @@ void testIndexedDrawPolicyContracts() {
               std::span<const u8>(upIndexBytes.data(), upIndexBytes.size()),
               IndexType::UInt16, 8),
           D3D_OK, "indexed policy indexed UP draw");
-  checkEq(backend->draws.size(), size_t{3}, "indexed policy indexed UP draw count");
-  const auto& indexedUp = backend->draws[2];
+  checkEq(backend->draws.size(), size_t{7}, "indexed policy indexed UP draw count");
+  const auto& indexedUp = backend->draws[6];
   check(indexedUp.param.indexed, "indexed UP draw remains indexed");
   checkEq(indexedUp.param.indexType, IndexType::UInt16,
           "indexed UP draw keeps user index type");

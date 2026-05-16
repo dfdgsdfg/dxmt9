@@ -841,3 +841,120 @@ native value-transform tests, Wine-oracle PE conformance, shader-runner probes,
 or full application experiments. Native tests still own exact data transforms,
 PE conformance still owns Wine-oracle D3D9 API semantics, and experiments still
 own app-level visual, performance, and integration evidence.
+
+---
+
+## 14. Debugging Tooling Standard
+
+The debugging tooling standard covers repository-owned diagnostic surfaces used by
+tests, module-boundary harnesses, WSI smokes, and wild experiments. It does not
+make ad-hoc developer investigation a release gate, but it does require each
+architectural boundary to expose enough structured evidence that a failing run can
+be routed without grepping source code or relying on manual screenshots alone.
+
+**R-TEST-14.1** dxmt9 must maintain a single authoritative registry for runtime
+debug, trace, capture, dump, provider, and experiment environment variables. The
+registry must include every `DXMT*` and `DXMT9*` variable consumed by production
+code, experiment launchers, checked-in harnesses, and Wine runtime tooling, with
+purpose, default, and owning module.
+
+**R-TEST-14.2** The environment-variable registry must be checked by automation.
+The check must scan source, scripts, and experiment launchers for consumed
+`DXMT*` / `DXMT9*` variables and fail when a runtime knob is missing from the
+registry, unless it is an internal compile-time macro or generated symbol prefix.
+
+**R-TEST-14.3** Metal-side diagnostics must provide a standard evidence bundle for
+frame debugging: optional `.gputrace` capture, Metal validation-layer stderr,
+resource labels, encoder debug groups, signpost intervals, command-buffer GPU
+time counters, and GPU fault counters. The bundle must name the frame or
+sequence-id scope used for capture.
+
+**R-TEST-14.4** Metal-side diagnostics must distinguish implemented counters from
+external-tool-only workflows. Per-command-buffer GPU timing may be sourced from
+runtime counters, but per-render-encoder or per-stage GPU timing must be marked
+as external `xctrace` evidence until runtime `MTLCounterSampleBuffer` support is
+implemented.
+
+**R-TEST-14.5** WSI/window diagnostics must record which visible-output evidence
+was used: internal backbuffer dump, window-id capture, frontmost-window capture,
+full-screen fallback, manual observation, or none. A full-screen fallback must not
+be treated as proof that HWND-to-CAMetalLayer resolution succeeded.
+
+**R-TEST-14.6** WSI/window diagnostics must expose the layer-acquisition path when
+available: `macdrv_functions`, legacy `macdrv_get_cocoa_view`, no-window fallback,
+or acquisition failure. The evidence must include the relevant HWND/window title
+or the reason those values were unavailable.
+
+**R-TEST-14.7** Wine unix/provider diagnostics must include a read-only Wine
+macdrv symbol audit tool. The tool must report whether the selected Wine root
+exposes the macdrv symbols required by `specs/winemetal/`, and it must not modify
+the Wine root.
+
+**R-TEST-14.8** Wine manifest resolution must surface macdrv patch status in both
+pre-run gating and run results. If a selected Wine entry declares
+`requires_patch = true` and `patch_status = "unpatched"`, the harness must fail
+before staging or launching the application. Run results must record
+`requires_patch` and `patch_status` for the resolved Wine entry.
+
+**R-TEST-14.9** Provider discovery diagnostics must log the locator mode, every
+provider candidate path, the status for each candidate, whether runtime fallback
+was allowed, and the selected unixlib handle on success. These logs may be
+debug-level, but the enabling knob must be documented in the environment registry.
+
+**R-TEST-14.10** Headless, Linux, or other non-Darwin host diagnostics must be
+explicit about unsupported visible-output paths. A headless result may pass an
+offscreen or provider-side probe, but it must not claim WSI, CAMetalLayer, or
+window-capture evidence.
+
+**R-TEST-14.11** Debugging evidence emitted by checked-in harnesses must be
+machine-readable. Result JSON should include a schema version, command,
+environment snapshot, artifact paths, capture source, log paths, failure
+category, and any boundary or module label used to route the failure.
+
+**R-TEST-14.12** Debug tools may be opt-in to avoid hot-path overhead, but enabling
+a diagnostic must not change the architectural boundary being diagnosed except
+for explicitly documented mutating bisect knobs such as draw skipping, forced
+shader output, or forced present source selection. Mutating knobs must be recorded
+in the run environment snapshot.
+
+**R-TEST-14.13** Boundary diagnostics must be able to emit before/after data
+dumps for the architectural boundary being diagnosed. Dumps must cover, as
+applicable, PE-call inputs and HRESULT/status values, D9C packet or chunk
+records, bridge argument blocks, unix importer views, canonical draw/resource
+state, backend descriptors, shader texture/sampler bindings, queue/replay events,
+and WSI present/acquire metadata.
+
+**R-TEST-14.14** Boundary data dumps must be schema-versioned and
+machine-readable. Small structured state should be JSON or JSONL. Large binary
+payloads, such as chunk blobs, buffer contents, texture slices, or frame images,
+may be stored as sidecar files, but the dump manifest must record layout version,
+endianness when relevant, byte size, hash, dimensions, format, pitch, and the
+semantic meaning needed to interpret the bytes.
+
+**R-TEST-14.15** Boundary data dumps must carry correlation keys that allow
+artifacts from different modules to be joined without log scraping. At minimum,
+the dump manifest should include run id, boundary id, phase (`before` or `after`),
+frame or present id when available, sequence id, chunk id, record index, draw
+index, resource or shader handles, and command-buffer id when the data reached
+Metal.
+
+**R-TEST-14.16** Render-output diagnostics must support deterministic frame
+sequences in addition to a single screenshot. A capture request may name a fixed
+frame list, a closed frame range plus interval, or an event-anchored window such
+as N frames before and after a selected present. The result must record the
+capture source for every frame: internal backbuffer dump, window-id capture,
+frontmost-window capture, full-screen fallback, or unavailable.
+
+**R-TEST-14.17** Render-output diagnostics may emit bounded video segments for
+temporal failures, pacing issues, or animation regressions. Video artifacts must
+record start/end frame or time, timebase, nominal fps, resolution, source,
+container, codec, and whether frames came from internal dumps or external window
+capture. A video segment is triage evidence unless the harness also records
+extractable frame images or explicit human-review acceptance.
+
+**R-TEST-14.18** Boundary dumps and rendered-output captures must be bounded and
+discoverable. Harnesses must expose maximum frame, duration, and byte limits;
+write deterministic artifact names under the run output directory; list every
+artifact in result JSON; and keep generated dump, frame-sequence, and video
+artifacts out of committed source unless they are explicitly promoted as small
+reference assets.

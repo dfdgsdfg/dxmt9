@@ -115,6 +115,36 @@ draw-run SoA path, `dxmt9-bridge-ops-spec` pins the generated bridge opcode
 budget/placement for chunk submission, and `dxmt9-allocation-counter-spec`
 verifies that real allocation perf counters are emitted and machine-checkable.
 
+### 0.2 Concrete Transform Boundary Audit
+
+R-TEST-0.10 is applied as a boundary-by-boundary audit rule: every semantic
+transform must have at least one deterministic test that compares concrete input
+values with the exact output values at the next owned boundary. A test that only
+checks the final enum, hash, rendered image, or harness pass result is not enough
+when bytes, handles, offsets, topology, or state values are transformed on the
+way.
+
+The current audit lanes are:
+
+| Boundary | Concrete values that must be asserted | Primary evidence | Gap / risk |
+|---|---|---|---|
+| Public D3D9 / PE setter -> D9C packet | D3D enum values, counts, offsets, HRESULT/status, out-pointer mutation, retained handles, variable-tail bytes | `dxmt9-pe-chunk-record-value-spec`, bridge value specs | Producer capture from actual PE setters remains partial because several appenders are private. |
+| D9C packet / imported record -> core state and draw params | Packet fields after D3D-to-core enum mapping, render/texture/sampler tables, constants, resource handles, malformed-record no-mutation behavior | `dxmt9-imported-apply-state-value-spec`, chunk import/replay specs | Dirty-range internals are still observed indirectly through state/uniform outputs. |
+| Core draw API -> `DrawParam` / payload | Primitive topology, primitive count, start vertex, base vertex, start index, index type, generated UP payload bytes, stripped or retained index buffer policy | `dxmt9-core-device-coverage-spec`, `dxmt9-core-device-lifecycle-spec` | This lane must include non-UP topology transforms. `TriangleFan` cannot be accepted by enum normalization alone; tests must assert generated triangle-list index payloads such as `{0,1,2,0,2,3}`. |
+| Core draw-run -> queue/chunk SoA storage | Draw order, per-draw payload ranges, payload arena bytes, uniform handle reuse, draw-run boundaries, allocation behavior | `dxmt9-dod-replay-observer-spec`, core draw-run fixture tests | Coalesced paths must keep per-draw payload bytes addressable; runtime screenshots are not evidence for this boundary. |
+| `DrawParam` / `FlatDrawStateView` -> encoder draw inputs | Metal primitive type, indexed vs non-indexed method, index count, index type, base vertex, vertex buffer offset, stream stride, `DrawVolatile` values, user vs bound buffer source | Focused geometry diagnostics and selected backend tests | A first-class Metal encoder recorder seam is still needed to assert the exact draw command arguments without relying on log strings or GPU output. |
+| Resource creation -> backend/Metal descriptors | D3D format identity, component meaning, alpha defaults, sRGB compatibility, dimensions, levels, usage/pool, MSAA, row pitch, block rounding | `dxmt9-resource-format-boundary-spec` | Final `Pool` -> `WMTTextureInfo` values need a descriptor observer for complete post-Pool evidence. |
+| Texture/sampler state -> shader binding descriptors | Texture stage handles, sampler state defaults, address/filter/LOD values, null slots, Stage 1 MSL bindings, Stage 2 argument-buffer descriptor IDs | `dxmt9-shader-argbuf-binding-value-spec`, sampler/descriptor specs | Actual encoder calls and Stage 2 `MTLArgumentEncoder` writes still need a live recorder seam. |
+| Shader bytecode -> IR/source/register contracts | Opcode decode, register kind/index, swizzle/mask/modifiers, relative addressing, constants, semantic mapping, generated source snippets | `dxmt9-shader-transform-spec` | GPU-visible shader behavior still needs runtime readback when source inspection cannot prove the result. |
+| Render state -> backend descriptors / raster plans | Blend factors/ops, color write masks, DSS compare/write values, cull/front-face, viewport/scissor, alpha/fog/sRGB policy | `backend_pipeline_key_spec`, `render_pass_actions_spec`, raster/core coverage | Combined state behavior still needs runtime readback for interactions static descriptors cannot prove. |
+| Backend execution -> readback / WSI result | Pixel values, depth/stencil result, synchronization, present/readback ordering | `shader_runner_dxmt9`, WSI/integration probes, app experiments | Readback proves final behavior only; it must not be the only proof for upstream value transforms. |
+
+When a new wild-app failure identifies a bad draw or state combination, the
+fix is not complete until the corresponding lane above has deterministic value
+coverage. For example, the 3DMark05 `D3DPT_TRIANGLEFAN` regression was not a
+shader or final-present issue: the missing proof was the core draw topology
+boundary from non-UP fan input to generated triangle-list draw payload.
+
 ---
 
 ## 1. Test Infrastructure: dxmt9 Shader Runner
@@ -1255,3 +1285,296 @@ DXMT_UPSTREAM_ROOT=/path/to/vkd3d scripts/check/check_drift.sh
 # Count by shader model:
 tomlq -r '.test[] | .models[]' MANIFEST.toml | sort | uniq -c
 ```
+
+---
+
+## 14. Debugging Tooling Standard
+
+This section owns R-TEST-14. It standardizes diagnostics that sit next to the
+test and experiment harnesses: Metal GPU debugging, WSI/window evidence, Wine
+unix/provider discovery, headless host reporting, and the environment-variable
+registry that ties them together.
+
+The goal is not to make every diagnostic always-on. The goal is that a checked-in
+harness can answer three questions from its artifacts:
+
+- which module or boundary was being diagnosed;
+- which debug knobs were enabled;
+- which files, logs, captures, counters, dumps, or tool outputs prove the result;
+- how boundary data and rendered frames correlate across modules.
+
+### Debug Surface Map
+
+```mermaid
+flowchart LR
+    Harness["test / experiment / module-boundary runner"]
+    Env["environment registry\nDXMT* / DXMT9* knobs"]
+    Result["schema-versioned result JSON"]
+
+    subgraph Metal["Metal diagnostics"]
+        GpuTrace[".gputrace\nDXMT_METAL_CAPTURE_*"]
+        Validation["Metal validation stderr"]
+        Labels["resource labels + debug groups"]
+        Signposts["os_signpost frame/commit/draw"]
+        GpuCounters["GPU CB time + fault counters"]
+        Xctrace["xctrace only\nstage-boundary GPU time"]
+    end
+
+    subgraph WSI["WSI / window diagnostics"]
+        Layer["layer acquisition path\nmacdrv_functions / legacy / none"]
+        WindowCapture["window-id / frontmost / fullscreen capture"]
+        InternalDump["internal backbuffer dump"]
+        Visible["visible-output classification"]
+    end
+
+    subgraph Dumps["Boundary data dumps"]
+        BeforeAfter["before / after boundary values"]
+        ChunkDump["D9C chunk + bridge args"]
+        StateDump["imported state + canonical draw data"]
+        DescriptorDump["resource / sampler / shader bindings"]
+        DumpManifest["schema + correlation manifest"]
+    end
+
+    subgraph Render["Rendered-output capture"]
+        FrameList["fixed frame list"]
+        IntervalFrames["frame range + interval"]
+        VideoSegment["bounded video segment"]
+        RenderManifest["source + timebase manifest"]
+    end
+
+    subgraph Wine["Wine unix / provider diagnostics"]
+        PatchAudit["macdrv symbol audit\nscripts/wine/check_patch.py"]
+        Manifest["manifest requires_patch / patch_status"]
+        Locator["provider locator candidates\nDXMT9_WINEMETAL_SO"]
+        Abi["winemetal ABI handshake"]
+    end
+
+    subgraph Headless["Headless / non-Darwin"]
+        Host["platform=headless"]
+        NoWSI["no CAMetalLayer / no window capture claim"]
+    end
+
+    Harness --> Env
+    Harness --> Metal
+    Harness --> WSI
+    Harness --> Dumps
+    Harness --> Render
+    Harness --> Wine
+    Harness --> Headless
+    Metal --> Result
+    WSI --> Result
+    Dumps --> Result
+    Render --> Result
+    Wine --> Result
+    Headless --> Result
+    Env --> Result
+```
+
+### Module Responsibilities
+
+| Module | Standard tools / knobs | Required evidence | Current status |
+|---|---|---|---|
+| Metal backend | `DXMT_METAL_CAPTURE_FRAME`, `DXMT_METAL_CAPTURE_PATH`, `MTL_DEBUG_LAYER`, labels, debug groups, signposts, `DXMT_PERF_COUNTERS` | `.gputrace` path, validation log, frame/seq scope, CB GPU timing, GPU fault count | Mostly implemented; per-stage GPU timing is still `xctrace`-only. |
+| WSI / presenter | `DXMT_TRACE_QUEUE`, `DXMT_TRACE_FILE`, present trace lines, capture source classification | layer-acquisition path, HWND/window title, capture mode, visible-output source | Partially implemented; no dedicated WSI result schema yet. |
+| Wine unix/provider | `DXMT9_WINEMETAL_SO`, `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK`, `DXMT_LOG_LEVEL=debug`, `DXMT9_BRIDGE_VERBOSE` | provider candidate list, selected handle, ABI status, macdrv symbol status | Provider locator and ABI logs exist; patch-status gate/tooling is incomplete. |
+| Headless / non-Darwin | `wsi_platform_headless` platform result | explicit statement that WSI/window evidence is unavailable | Platform abstraction exists; no harness-level reporting contract yet. |
+| Environment registry | `agents/rules/environment_variables.rules.md` plus checked audit | every consumed runtime knob documented with owner/default | Registry exists; automated drift check is required. |
+| Boundary dump layer | harness options or env vars such as `DXMT_DEBUG_DUMP_DIR`, `DXMT_DEBUG_DUMP_BOUNDARIES` | schema-versioned before/after dumps with correlation keys | Not standardized; existing tests assert many values but do not emit a reusable dump bundle. |
+| Render capture layer | existing `DXMT_CAPTURE_FRAME`, `DXMT_EXPERIMENT_CAPTURE_PATH`, plus frame-list/range/video capture options | image sequence or video artifacts with source, frame/timebase, hash, dimensions, and limits | Single-frame internal/window capture exists in experiments; interval frame and video segment capture are not standardized. |
+
+### Boundary Data Dump Contract
+
+Boundary dumps are forensic evidence. They complement R-TEST-0.10 exact-value
+assertions, but a dump by itself is not a passing test oracle. A useful dump
+bundle contains:
+
+| Field | Meaning |
+|---|---|
+| `boundary` | Stable boundary id such as `B1`, `B4`, `wsi-present`, or `provider-locator`. |
+| `phase` | `before`, `after`, or `derived`, so a reviewer knows which side of the boundary emitted the value. |
+| `correlation` | Run id, frame/present id, seq id, chunk id, record index, draw index, resource handle, shader hash, and command-buffer id where available. |
+| `schema` | Versioned dump schema for the structured payload or sidecar binary. |
+| `payload` | Inline JSON for small state, or a path to a binary/image/text sidecar. |
+| `interpretation` | Format, dimensions, pitch, endian/layout version, hash, and semantic labels needed to read the sidecar. |
+
+Recommended artifact layout:
+
+```text
+<run-output>/
+├── boundary_dumps/
+│   ├── manifest.json
+│   ├── B1/
+│   │   ├── frame000120_seq000045_record0003_before.json
+│   │   └── frame000120_seq000045_record0003_after.json
+│   └── B5/
+│       ├── draw000814_bindings_after.json
+│       └── draw000814_texture_slot03.bin
+└── result.json
+```
+
+Binary sidecars should be content-addressable enough for triage: the manifest
+records hashes and byte sizes so a reviewer can compare two runs without opening
+every artifact. For texture or buffer dumps, the manifest records the logical D3D
+format and the backend/Metal format when both are relevant.
+
+### Rendered Output Capture Contract
+
+Rendered-output evidence has four capture modes:
+
+| Mode | Use | Required result metadata |
+|---|---|---|
+| `single-frame` | Existing reference screenshot or smoke evidence | frame id, source, path, dimensions, hash, SSIM/diff when compared. |
+| `frame-list` | A few deterministic points in a scene | ordered frame ids, per-frame paths, source, dimensions, hashes. |
+| `interval-range` | Temporal drift or intermittent corruption | start frame, end frame, interval, dropped/unavailable frames, per-frame paths. |
+| `video-segment` | Animation, pacing, flicker, or human review | start/end frame or time, fps/timebase, source, container/codec, path, hash. |
+
+Internal backbuffer dumps are preferred when the goal is renderer correctness.
+Window-id capture is appropriate for WSI/compositor evidence. Frontmost-window or
+full-screen fallback captures may help triage, but they must remain explicitly
+classified as fallback sources and must not prove HWND-to-layer success.
+
+Frame-sequence and video capture must be bounded. The run request records max
+frames, max seconds, and max bytes, and the harness reports truncation rather
+than silently dropping evidence. Video capture should be treated as qualitative
+triage unless the harness also preserves extracted frame images or a human-review
+record.
+
+### Result Shape
+
+Harnesses that emit debug evidence should extend their result JSON with a compact
+`debug` object. Existing experiment result files may keep their current
+top-level fields (`capture_source`, `capture_paths`, counters), but new harnesses
+should prefer this shape:
+
+```json
+{
+  "schema": "dxmt9.debug.result.v1",
+  "module": "wsi",
+  "boundary": "B6",
+  "command": ["wine", "wsi_present_x64.exe"],
+  "correlation": {
+    "run_id": "2026-05-16T10-31-22Z-wsi-present",
+    "frame_id": 120,
+    "present_id": 120,
+    "seq_id": 45,
+    "chunk_id": 7,
+    "record_index": 3,
+    "draw_index": 814
+  },
+  "environment": {
+    "DXMT_TRACE_QUEUE": "1",
+    "DXMT_TRACE_FILE": "..."
+  },
+  "artifacts": [
+    {
+      "role": "log",
+      "path": ".../dxmt9.log",
+      "format": "text"
+    },
+    {
+      "role": "capture",
+      "path": ".../actual.png",
+      "format": "png",
+      "source": "window_id"
+    },
+    {
+      "role": "boundary-dump-manifest",
+      "path": ".../boundary_dumps/manifest.json",
+      "format": "json"
+    },
+    {
+      "role": "frame-sequence-manifest",
+      "path": ".../frames/manifest.json",
+      "format": "json"
+    },
+    {
+      "role": "video-segment",
+      "path": ".../video/present_0120_0180.mp4",
+      "format": "mp4",
+      "source": "window_id"
+    }
+  ],
+  "diagnostics": {
+    "metal": {
+      "gputrace": null,
+      "gpu_command_buffer_errors": 0
+    },
+    "wsi": {
+      "layer_acquisition": "macdrv_functions",
+      "window_title": "dxmt9 WSI test",
+      "capture_source": "window_id"
+    },
+    "dumps": [
+      {
+        "boundary": "B4",
+        "phase": "after",
+        "schema": "dxmt9.boundary_dump.bridge_args.v1",
+        "path": ".../boundary_dumps/B4/frame000120_seq000045_record0003_after.json"
+      }
+    ],
+    "render_capture": {
+      "mode": "interval-range",
+      "start_frame": 120,
+      "end_frame": 180,
+      "interval": 5,
+      "source": "internal_dump"
+    },
+    "wine": {
+      "requires_patch": true,
+      "patch_status": "applied",
+      "provider_locator_mode": "app-local"
+    },
+    "headless": {
+      "active": false
+    }
+  },
+  "failure_category": "none"
+}
+```
+
+The fields are intentionally sparse. A module can omit subobjects that are not in
+scope for the current run, but it must not imply evidence that was not captured.
+For example, a full-screen desktop screenshot may be useful for triage, but it is
+not WSI proof unless the result explicitly identifies it as `full_screen`.
+
+### Failure Categories
+
+Diagnostic harnesses should use fixed categories so failures can be routed before
+manual log reading:
+
+| Category | Meaning |
+|---|---|
+| `env-registry-drift` | A consumed `DXMT*` / `DXMT9*` variable is undocumented or has stale ownership/default metadata. |
+| `metal-capture` | Requested Metal capture or validation evidence could not be produced. |
+| `metal-gpu-fault` | Command-buffer completion reported a GPU fault or Metal validation failure. |
+| `wsi-layer-acquisition` | HWND-to-layer lookup failed or used an unexpected path. |
+| `wsi-visible-output` | The run lacks trustworthy visible-output evidence, or only full-screen fallback evidence exists. |
+| `wine-macdrv-symbols` | The Wine root does not expose the required macdrv symbol surface. |
+| `wine-provider-locator` | `winemetal.so` could not be found or loaded through the required locator path. |
+| `wine-abi-handshake` | PE bridge and unix provider ABI hashes do not match. |
+| `headless-unsupported` | A requested WSI/window diagnostic was run on a headless or unsupported host. |
+| `boundary-dump` | A requested boundary dump is missing, malformed, over budget, or cannot be correlated to the run. |
+| `render-frame-sequence` | Requested frame-list or interval-range evidence could not be captured or has missing frame metadata. |
+| `render-video-segment` | Requested video-segment evidence could not be captured, encoded, bounded, or correlated to frame/time metadata. |
+
+### Current Implementation Notes
+
+The 2026-05-16 audit found this split:
+
+- Metal diagnostics are the strongest surface: `.gputrace`, validation layer
+  usage, labels, debug groups, signposts, command-buffer GPU timing, fault
+  counters, and audit gates are documented in `agents/rules/metal_debugging.rules.md`.
+- WSI diagnostics have working pieces (`wsi_present_x64.exe`, queue trace lines,
+  macOS window capture helpers, capture-source classification), but no dedicated
+  WSI debug runbook or result schema.
+- Boundary values are well covered by several native assertions, but no standard
+  before/after data-dump bundle exists for cross-boundary forensic analysis.
+- Experiments support single-frame internal dumps or window capture; interval
+  frame sequences and bounded video segments are not yet standardized.
+- Wine/provider diagnostics have provider locator debug logs and ABI handshake
+  logs, but the `scripts/wine/check_patch.py` tool and manifest `requires_patch`
+  / `patch_status` resolver gate are not fully implemented.
+- The non-Darwin path is a headless utility path. It must be reported as such and
+  must not be described as Linux WSI support.
+- The environment registry is useful but not yet enforced by a checked audit,
+  and it is missing several live debug/provider variables.

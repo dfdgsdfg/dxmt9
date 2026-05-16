@@ -1026,9 +1026,23 @@ bool encodeDraw(EncodeContext& ctx,
     }
     return false;
   }
+  const u64 drawOrdinal = debug::nextDrawOrdinal();
+  if (debug::shouldSkipDrawOrdinal(drawOrdinal)) {
+    if (queueTraceEnabled() || traceEncode) {
+      std::ostringstream out;
+      out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
+          << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
+          << " reason=ordinal-range"
+          << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value);
+      emitQueueTraceLine(out.str());
+    }
+    return false;
+  }
   if (!encoder) {
     if (traceEncode) {
-      emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-encoder");
+      emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) +
+                         " ordinal=" + std::to_string(drawOrdinal) +
+                         " skipped reason=no-encoder");
     }
     return false;
   }
@@ -1061,6 +1075,7 @@ bool encodeDraw(EncodeContext& ctx,
       if (traceEncode) {
         std::ostringstream out;
         out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
+            << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
             << " skipped reason=no-pipeline"
             << " rt0=" << static_cast<unsigned long long>(hot.colorAttachments[0].handle.value)
             << " ds=" << static_cast<unsigned long long>(hot.depthStencil.handle.value)
@@ -1407,7 +1422,9 @@ bool encodeDraw(EncodeContext& ctx,
   if (fixedFunctionPath && ffLayout) {
     if (!vertexBuffer) {
       if (traceEncode) {
-        emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) + " skipped reason=no-vertex-buffer");
+        emitQueueTraceLine("[dxmt9-encode] seq=" + std::to_string(seqId) +
+                           " ordinal=" + std::to_string(drawOrdinal) +
+                           " skipped reason=no-vertex-buffer");
       }
       return false;
     }
@@ -1766,6 +1783,7 @@ bool encodeDraw(EncodeContext& ctx,
         if (traceEncode || debug::shouldTraceTexture(textureHandle)) {
           std::ostringstream out;
           out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
+              << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
               << " tex" << stage << "=" << static_cast<unsigned long long>(textureHandle.value);
           emitQueueTraceLine(out.str());
         }
@@ -1803,6 +1821,7 @@ bool encodeDraw(EncodeContext& ctx,
     const auto effectiveCullMode = applyDebugCullOverride(requestedCullMode);
     std::ostringstream out;
     out << "[dxmt9-encode] seq=" << static_cast<unsigned long long>(seqId)
+        << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
         << " draw rt0=" << static_cast<unsigned long long>(hot.colorAttachments[0].handle.value)
         << " ds=" << static_cast<unsigned long long>(hot.depthStencil.handle.value)
         << " tex0=" << static_cast<unsigned long long>(hot.textures[0].value)

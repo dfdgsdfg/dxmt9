@@ -2,6 +2,7 @@
 #include "../util/config/config.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 
 namespace dxmt9::debug {
@@ -24,6 +25,29 @@ bool shouldSkipDrawSeq(u64 seqId, DrawSeqRange range) noexcept {
     return true;
   }
   if (range.hasMax && seqId > range.max) {
+    return true;
+  }
+  return false;
+}
+
+DrawOrdinalRange makeDrawOrdinalRange(std::optional<u64> min, std::optional<u64> max) noexcept {
+  return DrawOrdinalRange{
+      .hasMin = min.has_value(),
+      .hasMax = max.has_value(),
+      .min = min.value_or(0),
+      .max = max.value_or(0),
+  };
+}
+
+bool drawOrdinalRangeEnabled(DrawOrdinalRange range) noexcept {
+  return range.hasMin || range.hasMax;
+}
+
+bool shouldSkipDrawOrdinal(u64 ordinal, DrawOrdinalRange range) noexcept {
+  if (range.hasMin && ordinal < range.min) {
+    return true;
+  }
+  if (range.hasMax && ordinal > range.max) {
     return true;
   }
   return false;
@@ -54,6 +78,18 @@ bool shouldSkipDrawSeq(u64 seqId) {
       util::getenvU64Auto("DXMT9_DRAW_SEQ_MIN"),
       util::getenvU64Auto("DXMT9_DRAW_SEQ_MAX"));
   return shouldSkipDrawSeq(seqId, range);
+}
+
+u64 nextDrawOrdinal() noexcept {
+  static std::atomic<u64> ordinal{0};
+  return ordinal.fetch_add(1, std::memory_order_relaxed) + 1u;
+}
+
+bool shouldSkipDrawOrdinal(u64 ordinal) {
+  static const DrawOrdinalRange range = makeDrawOrdinalRange(
+      util::getenvU64Auto("DXMT9_DRAW_ORDINAL_MIN"),
+      util::getenvU64Auto("DXMT9_DRAW_ORDINAL_MAX"));
+  return shouldSkipDrawOrdinal(ordinal, range);
 }
 
 bool disableScissor() {
