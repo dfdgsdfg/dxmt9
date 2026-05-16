@@ -282,6 +282,39 @@ void reset_render_target_rebinding() {
   }
 }
 
+void get_depth_stencil_returns_user_surface() {
+  Fixture fixture;
+  if (!fixture.init("get_depth_stencil_returns_user_surface")) return;
+
+  IDirect3DSurface9 *depth_stencil = nullptr;
+  HRESULT hr = fixture.device->CreateDepthStencilSurface(64, 64, D3DFMT_D24S8,
+      D3DMULTISAMPLE_NONE, 0, TRUE, &depth_stencil, nullptr);
+  if (FAILED(hr)) {
+    hr = fixture.device->CreateDepthStencilSurface(64, 64, D3DFMT_D16,
+        D3DMULTISAMPLE_NONE, 0, TRUE, &depth_stencil, nullptr);
+  }
+  if (FAILED(hr) || !depth_stencil) {
+    std::printf("SKIP:get_depth_stencil_returns_user_surface: depth/stencil surface unavailable\n");
+    ++skips;
+    return;
+  }
+
+  CHECK_HR(fixture.device->SetDepthStencilSurface(depth_stencil), D3D_OK);
+
+  IDirect3DSurface9 *current = nullptr;
+  CHECK_HR(fixture.device->GetDepthStencilSurface(&current), D3D_OK);
+  CHECK(current == depth_stencil);
+  release_if(current);
+
+  CHECK_HR(fixture.device->SetDepthStencilSurface(nullptr), D3D_OK);
+  current = reinterpret_cast<IDirect3DSurface9 *>(0x1);
+  hr = fixture.device->GetDepthStencilSurface(&current);
+  CHECK(hr != D3D_OK);
+  CHECK(current == nullptr);
+
+  release_if(depth_stencil);
+}
+
 void reset_ex_cooperative_level_smoke() {
   HWND window = create_window();
   if (!window) {
@@ -325,6 +358,7 @@ void reset_lost_default_pool_rebinding() {
   reset_default_pool_invalidation();
   reset_non_default_pool_survival();
   reset_render_target_rebinding();
+  get_depth_stencil_returns_user_surface();
   reset_ex_cooperative_level_smoke();
 }
 

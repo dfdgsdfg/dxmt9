@@ -275,6 +275,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     PeConstShadowBlock peConsts_{};
     IDirect3DSurface9* rtSlots_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
+    bool dsSurfaceExplicit_ = false;
     PeCommandChunkBuilder commandChunk_{};
     PeRecorderStats peRecorderStats_{};
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
@@ -298,6 +299,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         setRef(vdecl_, (IDirect3DVertexDeclaration9*)nullptr);
         for (auto& rt : rtSlots_)   setRef(rt, (IDirect3DSurface9*)nullptr);
         setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
+        dsSurfaceExplicit_ = false;
         setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
         // T2 device-lost: explicitly nullify the device's primary RT slot
         // and depth-stencil on the C side so no stale Metal surface handle
@@ -2041,14 +2043,23 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override {
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
-        if (dsSurface_ == pSurf) return S_OK;
-        setRef(dsSurface_, pSurf);
-        peState_.pendingDs = true;
+        dsSurfaceExplicit_ = true;
+        if (dsSurface_ != pSurf) {
+            setRef(dsSurface_, pSurf);
+            peState_.pendingDs = true;
+        }
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetDepthStencilSurface(IDirect3DSurface9** ppS) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        if (dsSurfaceExplicit_) {
+            if (dsSurface_) dsSurface_->AddRef();
+            *ppS = dsSurface_;
+            dxmt9DeviceDebugLog("device_get_depth_stencil_surface device=%p -> cached surface=%p",
+                                this, static_cast<void*>(*ppS));
+            return *ppS ? S_OK : S_FALSE;
+        }
         D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
         *ppS = s ? CreatePeSurface(s, this, nullptr, this) : nullptr;
         dxmt9DeviceDebugLog("device_get_depth_stencil_surface device=%p -> surface=%p",
