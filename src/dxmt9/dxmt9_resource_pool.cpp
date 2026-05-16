@@ -359,7 +359,8 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
       uint64_t gpuId = 0;
       record.shaderReadTexture = record.texture.newTextureView(
           info.pixel_format, info.type, 0, info.mipmap_level_count,
-          0, 1, convert::toShaderReadSwizzle(desc.format), gpuId);
+          0, convert::toShaderReadViewSliceCount(desc.type),
+          convert::toShaderReadSwizzle(desc.format), gpuId);
     }
     // Both Private and Managed (discrete) reach the texture through a
     // staging-blit upload path — for Private because the CPU cannot

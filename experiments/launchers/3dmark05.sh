@@ -25,10 +25,21 @@ DXMT_EXPERIMENT_WORKDIR="$exp_repo_root/experiments/prefixs/3dmark05/drive_c/Pro
 ## UI settles activates the default Run button reliably.
 if [[ "${DXMT_3DMARK05_AUTO_ENTER:-1}" != "0" ]]; then
   (
+    focus_3dmark05() {
+      osascript \
+        -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true'
+    }
+
     sleep "${DXMT_3DMARK05_ENTER_DELAY_SEC:-20}"
-    osascript \
-      -e 'tell application "System Events" to set frontmost of first process whose name contains "3DMark05" to true' \
-      -e 'tell application "System Events" to key code 36' || true
+    focus_3dmark05 || true
+    osascript -e 'tell application "System Events" to key code 36' || true
+
+    remaining=${DXMT_3DMARK05_FOCUS_KEEPALIVE_SEC:-40}
+    while [[ "$remaining" =~ ^[0-9]+$ ]] && (( remaining > 0 )); do
+      sleep 1
+      focus_3dmark05 || true
+      remaining=$((remaining - 1))
+    done
   ) &
 fi
 

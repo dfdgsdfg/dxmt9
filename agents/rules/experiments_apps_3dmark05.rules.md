@@ -57,6 +57,10 @@ practical automation:
 - `experiments/launchers/3dmark05.sh` sends `Enter` about 20 seconds after
   launching the app by default. Set `DXMT_3DMARK05_AUTO_ENTER=0` to disable it,
   or `DXMT_3DMARK05_ENTER_DELAY_SEC=N` to retime it.
+- After sending Enter, the launcher keeps the 3DMark05 process frontmost for
+  about 40 seconds by default. This avoids the benchmark's `Display window lost
+  focus` modal while the render window is opening. Set
+  `DXMT_3DMARK05_FOCUS_KEEPALIVE_SEC=0` to disable or retime it.
 - Do not capture immediately after the benchmark starts. The first rendered
   window can be black; the catalogue waits until `capture_delay_sec=32.0`.
   In the 2026-05-16 run, visible 3D output appeared about 5 seconds after the
@@ -68,6 +72,23 @@ Earlier attempts to automate a mouse click were unreliable because Wine-on-macOS
 window geometry and accessibility metadata did not line up with the visible UI.
 
 ## Latest Observed Result
+
+2026-05-16 L8 shader-read swizzle follow-up:
+
+- `experiments/output/3dmark05-l8-swizzle-refocus/result.json` reports
+  harness `status=pass`, `returncode=-15`, `timed_out=true`, and captures the
+  1024x768 `3DMark05` render window.
+- The first post-fix attempt without keepalive reached many successful presents
+  but captured the main UI with a `Display window lost focus` modal. Treat that
+  as automation/focus loss, not a renderer crash.
+- The prior Metal validation crash for a 1x1 `L8` cube texture shader-read view
+  is fixed by using a six-slice cube view. Logs now show `fmt=50` cube texture
+  creation and repeated successful `device_present hr=0x00000000`.
+- The L8 swizzle fix changes the captured GT1 character from red/posterized to
+  gray/white, but severe corruption remains: large black/tan triangular regions
+  and stippled/noisy texture-like regions are still present. L8 luminance
+  semantics was a real issue, but not the primary remaining visual-corruption
+  cause.
 
 2026-05-16 delayed-capture investigation:
 

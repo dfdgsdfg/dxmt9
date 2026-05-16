@@ -27,6 +27,7 @@ bool formatHasDepthAspect(core::Format format);
 WMTTextureType toTextureType(core::TextureType type, bool multisample);
 bool formatNeedsShaderReadSwizzle(core::Format format);
 WMTTextureSwizzleChannels toShaderReadSwizzle(core::Format format);
+std::uint16_t toShaderReadViewSliceCount(core::TextureType type);
 // R-BACK-5.7: Pool/usage → Metal storage mode mapping. `hasUnifiedMemory`
 // must come from a single MTLDevice.hasUnifiedMemory() probe cached at
 // device init (do not call per-resource). On unified-memory devices

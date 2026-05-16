@@ -197,6 +197,10 @@ WMTTextureSwizzleChannels toShaderReadSwizzle(Format format) {
   }
 }
 
+std::uint16_t toShaderReadViewSliceCount(TextureType type) {
+  return type == TextureType::Cube ? 6u : 1u;
+}
+
 WMTResourceOptions toResourceOptions(Pool pool, u32 usage, bool hasUnifiedMemory) {
   // R-BACK-5.7: Pool/Usage → Metal storage mode.
   //

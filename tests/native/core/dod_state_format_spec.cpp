@@ -3,6 +3,7 @@
 #include "../../../src/dxmt9/dxmt9_format_convert.hpp"
 
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -267,6 +268,10 @@ void testShaderReadSwizzlePolicyForLuminanceFormats() {
         "ordinary textures do not request pixel-format views");
   check(hasUsage(dxmt9::convert::toTextureUsage(l8Desc), WMTTextureUsagePixelFormatView),
         "L8 textures request pixel-format views for shader-read swizzle");
+  checkEq(dxmt9::convert::toShaderReadViewSliceCount(TextureType::TwoD), std::uint16_t{1},
+          "2D shader-read view covers one slice");
+  checkEq(dxmt9::convert::toShaderReadViewSliceCount(TextureType::Cube), std::uint16_t{6},
+          "cube shader-read view covers all six cube faces");
 }
 
 template <typename Table>
