@@ -76,6 +76,18 @@ render_pass_actions_spec = executable(
 test('dxmt9-render-pass-actions-spec', render_pass_actions_spec,
      env: dxmt9_native_test_env_vars)
 
+metal_encoder_recorder_spec = executable(
+  'dxmt9-metal-encoder-recorder-spec',
+  'metal_encoder_recorder_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-metal-encoder-recorder-spec', metal_encoder_recorder_spec)
+
 metalcapture_spec = executable(
   'dxmt9-metalcapture-spec',
   'metalcapture_spec.cpp',
