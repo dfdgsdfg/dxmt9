@@ -32,6 +32,38 @@ namespace scratch { struct FrameAllocators; }
 
 namespace encoders {
 
+// Optional recorder seam for tests that need to observe the final draw-issue
+// commands after encodeDraw has selected UP vs bound resources and built the
+// per-draw volatile constants. Production leaves this null.
+struct EncodeDrawRecorder {
+  void* userdata = nullptr;
+  // Suppresses the recorded draw-issue calls below so tests can pass fake
+  // Metal handles. Callers must still skip or satisfy base-state binding paths.
+  bool suppressMetalCalls = false;
+
+  void (*setVertexBuffer)(void* userdata,
+                          WMT::Buffer buffer,
+                          std::uint64_t offset,
+                          std::uint8_t index) = nullptr;
+  void (*setVertexBytes)(void* userdata,
+                         const void* bytes,
+                         std::uint64_t length,
+                         std::uint8_t index) = nullptr;
+  void (*drawPrimitives)(void* userdata,
+                         WMTPrimitiveType primitiveType,
+                         std::uint64_t vertexStart,
+                         std::uint64_t vertexCount) = nullptr;
+  void (*drawIndexedPrimitives)(void* userdata,
+                                WMTPrimitiveType primitiveType,
+                                WMTIndexType indexType,
+                                std::uint64_t indexCount,
+                                WMT::Buffer indexBuffer,
+                                std::uint64_t indexBufferOffset,
+                                std::uint32_t instanceCount,
+                                std::int32_t baseVertex,
+                                std::uint32_t baseInstance) = nullptr;
+};
+
 // Bundle of references the draw encoder needs from its owner (DeviceImpl
 // during transition). All references must outlive the current chunk
 // encode pass. Not yet consumed by encodeDraw — prepared for the body
@@ -50,6 +82,7 @@ struct EncodeContext {
   // markAllDirty(dirty) at encoder init and clears bits as it issues
   // sub-allocations / binds. C1 sets the bits as records arrive.
   uniform::DirtyState dirty{};
+  EncodeDrawRecorder* drawRecorder = nullptr;
 };
 
 // Sampler factory helpers used by the draw encoder. Previously

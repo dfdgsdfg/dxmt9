@@ -88,6 +88,20 @@ metal_encoder_recorder_spec = executable(
 
 test('dxmt9-metal-encoder-recorder-spec', metal_encoder_recorder_spec)
 
+encode_draw_recorder_spec = executable(
+  'dxmt9-encode-draw-recorder-spec',
+  'encode_draw_recorder_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-encode-draw-recorder-spec', encode_draw_recorder_spec,
+     env: dxmt9_native_test_env)
+
 metalcapture_spec = executable(
   'dxmt9-metalcapture-spec',
   'metalcapture_spec.cpp',

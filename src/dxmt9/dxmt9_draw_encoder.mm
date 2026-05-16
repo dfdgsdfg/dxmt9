@@ -186,6 +186,77 @@ class PerfScope {
   std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
 };
 
+bool suppressRecordedMetalCalls(const EncodeContext& ctx) noexcept {
+  return ctx.drawRecorder && ctx.drawRecorder->suppressMetalCalls;
+}
+
+void recordedSetVertexBuffer(EncodeContext& ctx,
+                             WMT::RenderCommandEncoder& encoder,
+                             WMT::Buffer buffer,
+                             u64 offset,
+                             std::uint8_t index) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setVertexBuffer) {
+    recorder->setVertexBuffer(recorder->userdata, buffer, offset, index);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setVertexBuffer(buffer, offset, index);
+  }
+}
+
+void recordedSetVertexBytes(EncodeContext& ctx,
+                            WMT::RenderCommandEncoder& encoder,
+                            const void* bytes,
+                            u64 length,
+                            std::uint8_t index) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setVertexBytes) {
+    recorder->setVertexBytes(recorder->userdata, bytes, length, index);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setVertexBytes(bytes, length, index);
+  }
+}
+
+void recordedDrawPrimitives(EncodeContext& ctx,
+                            WMT::RenderCommandEncoder& encoder,
+                            WMTPrimitiveType primitiveType,
+                            u64 vertexStart,
+                            u64 vertexCount) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->drawPrimitives) {
+    recorder->drawPrimitives(recorder->userdata, primitiveType,
+                             vertexStart, vertexCount);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.drawPrimitives(primitiveType, vertexStart, vertexCount);
+  }
+}
+
+void recordedDrawIndexedPrimitives(EncodeContext& ctx,
+                                   WMT::RenderCommandEncoder& encoder,
+                                   WMTPrimitiveType primitiveType,
+                                   WMTIndexType indexType,
+                                   u64 indexCount,
+                                   WMT::Buffer indexBuffer,
+                                   u64 indexBufferOffset,
+                                   u32 instanceCount,
+                                   i32 baseVertex,
+                                   u32 baseInstance) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->drawIndexedPrimitives) {
+    recorder->drawIndexedPrimitives(recorder->userdata, primitiveType,
+                                    indexType, indexCount, indexBuffer,
+                                    indexBufferOffset, instanceCount,
+                                    baseVertex, baseInstance);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.drawIndexedPrimitives(primitiveType, indexType, indexCount,
+                                  indexBuffer, indexBufferOffset,
+                                  instanceCount, baseVertex, baseInstance);
+  }
+}
+
 void countTextureBind() {
   perf::countBaseStateBind(1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
@@ -978,10 +1049,13 @@ bool encodeDraw(EncodeContext& ctx,
   // primitiveCount may be zero pre-paramOverride; that's OK — captures
   // see whatever is encoded.
   const auto drawDebugPrimCount = paramOverride ? paramOverride->primitiveCount : 0u;
-  DebugGroupScope drawDebugGroup(
-      WMT::CommandEncoder{encoder.handle},
-      makeLabelStringFmt("Draw[seq=%llu,prim=%u]",
-          static_cast<unsigned long long>(seqId), drawDebugPrimCount));
+  std::optional<DebugGroupScope> drawDebugGroup;
+  if (!suppressRecordedMetalCalls(ctx)) {
+    drawDebugGroup.emplace(
+        WMT::CommandEncoder{encoder.handle},
+        makeLabelStringFmt("Draw[seq=%llu,prim=%u]",
+            static_cast<unsigned long long>(seqId), drawDebugPrimCount));
+  }
   (void)commandBuffer;
   const auto& hot = *drawState.hot;
   const auto& shader = drawState.shaderContext();
@@ -1178,7 +1252,7 @@ bool encodeDraw(EncodeContext& ctx,
       VsConsts vs = buildVsConsts(drawState);
       auto slice = uploadTransientBuffer(&vs, sizeof(VsConsts), alignof(VsConsts));
       if (slice) {
-        encoder.setVertexBuffer(slice.buffer, slice.offset, 0);
+        recordedSetVertexBuffer(ctx, encoder, slice.buffer, slice.offset, 0);
         countUniformBufferBinds(1);
         perf::countUniformVsConsts(sizeof(VsConsts));
         uniform::clearBits(*dirtyPtr, uniform::kVsAny);
@@ -1188,7 +1262,9 @@ bool encodeDraw(EncodeContext& ctx,
       PsConsts ps = buildPsConsts(drawState);
       auto slice = uploadTransientBuffer(&ps, sizeof(PsConsts), alignof(PsConsts));
       if (slice) {
-        encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
+        if (!suppressRecordedMetalCalls(ctx)) {
+          encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
+        }
         countUniformBufferBinds(1);
         perf::countUniformPsConsts(sizeof(PsConsts));
         uniform::clearBits(*dirtyPtr, uniform::kPsAny);
@@ -1198,7 +1274,9 @@ bool encodeDraw(EncodeContext& ctx,
       FfpPsConsts ffpPs = buildFfpPsConsts(drawState);
       auto slice = uploadTransientBuffer(&ffpPs, sizeof(FfpPsConsts), alignof(FfpPsConsts));
       if (slice) {
-        encoder.setFragmentBuffer(slice.buffer, slice.offset, 3);
+        if (!suppressRecordedMetalCalls(ctx)) {
+          encoder.setFragmentBuffer(slice.buffer, slice.offset, 3);
+        }
         countUniformBufferBinds(1);
         perf::countUniformFfpPs(sizeof(FfpPsConsts));
         uniform::clearBits(*dirtyPtr, uniform::kFfpPsAny);
@@ -1223,7 +1301,7 @@ bool encodeDraw(EncodeContext& ctx,
     auto* host = ensureFfpVs();
     auto slice = uploadTransientBuffer(host, sizeof(FfpVsConsts), alignof(FfpVsConsts));
     if (slice) {
-      encoder.setVertexBuffer(slice.buffer, slice.offset, 3);
+      recordedSetVertexBuffer(ctx, encoder, slice.buffer, slice.offset, 3);
       countUniformBufferBinds(1);
       perf::countUniformFfpVs(sizeof(FfpVsConsts));
       uniform::clearBits(*dirtyPtr, uniform::kFfpVsAny);
@@ -1443,7 +1521,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     {
       PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime);
-      encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
+      recordedSetVertexBuffer(ctx, encoder, vertexBuffer, vertexBufferOffset, 1);
       countVertexBufferBind();
     }
 
@@ -1708,7 +1786,7 @@ bool encodeDraw(EncodeContext& ctx,
     }
     {
       PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
-      encoder.setVertexBuffer(vertexBuffer, vertexBufferOffset, 1);
+      recordedSetVertexBuffer(ctx, encoder, vertexBuffer, vertexBufferOffset, 1);
       countVertexBufferBind();
       for (const auto& streamBinding :
            makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv)) {
@@ -1759,7 +1837,8 @@ bool encodeDraw(EncodeContext& ctx,
           emitQueueTraceLine(trace.str());
         }
         if (extraVertexBuffer) {
-          encoder.setVertexBuffer(extraVertexBuffer, extraVertexBufferOffset,
+          recordedSetVertexBuffer(ctx, encoder, extraVertexBuffer,
+                                  extraVertexBufferOffset,
                                   streamBinding.metalSlot);
           countVertexBufferBind();
         }
@@ -1920,7 +1999,8 @@ bool encodeDraw(EncodeContext& ctx,
           transientVertexBuffer = makeTransientBuffer(expandedVertices.data(), expandedVertices.size());
         }
         if (transientVertexBuffer) {
-          encoder.setVertexBuffer(transientVertexBuffer.buffer, transientVertexBuffer.offset, 1);
+          recordedSetVertexBuffer(ctx, encoder, transientVertexBuffer.buffer,
+                                  transientVertexBuffer.offset, 1);
           countVertexBufferBind();
           if (ffLayout && ffLayout->preTransformed && vertexCount >= 6 && hot.textures[0]) {
             const bool traceExpanded = [] {
@@ -1971,7 +2051,7 @@ bool encodeDraw(EncodeContext& ctx,
     auto pushDrawVolatile = [&] {
       const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
                                                   drawVertexStreamStride);
-      encoder.setVertexBytes(&vol, sizeof(DrawVolatile), 5);
+      recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
       perf::countUniformVolatilePush();
     };
     if (expandedIndexedDraw) {
@@ -1998,7 +2078,7 @@ bool encodeDraw(EncodeContext& ctx,
       pushDrawVolatile();
       {
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
-        encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
+        recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
       }
       return true;
     }
@@ -2060,9 +2140,10 @@ bool encodeDraw(EncodeContext& ctx,
       pushDrawVolatile();
       {
         PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
-        encoder.drawIndexedPrimitives(primitiveType, toIndexType(pv.indexType),
-                                      (uint64_t)vertexCount, indexBuffer, indexBufferOffset,
-                                      1, 0, 0);
+        recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
+                                      toIndexType(pv.indexType),
+                                      (uint64_t)vertexCount, indexBuffer,
+                                      indexBufferOffset, 1, 0, 0);
       }
       return true;
     }
@@ -2091,10 +2172,10 @@ bool encodeDraw(EncodeContext& ctx,
   {
     const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
                                                 drawVertexStreamStride);
-    encoder.setVertexBytes(&vol, sizeof(DrawVolatile), 5);
+    recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
     perf::countUniformVolatilePush();
     PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);
-    encoder.drawPrimitives(primitiveType, 0, (uint64_t)vertexCount);
+    recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
   }
   return true;
 }
