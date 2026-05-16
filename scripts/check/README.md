@@ -26,3 +26,15 @@ Validation and audit scripts. Entries here are either direct Meson tests in
 - `audit_perf_counter_callsites.py` — text-based audit detecting declared
   `count*()` perf-counter functions that have no production call site under
   `src/` (test `dxmt9-perf-counter-callsite-audit`).
+- `audit_diagnostic_costs.py` — source-level R-TEST-14.19..14.23 audit for
+  harness cost-class invariants and undocumented consumed `DXMT*` / `DXMT9*`
+  diagnostic environment variables. It runs without build artifacts and is a
+  failing Meson gate; `--dry-run` remains available for local preview.
+- `check_debug_result_schema.py` — validates the machine-readable
+  `dxmt9.debug.result.v1` contract for WSI visible-output evidence, headless
+  results, boundary dumps, frame sequences, and bounded video segments (test
+  `dxmt9-debug-result-schema-selftest`).
+- `scripts/tools/debug_artifact_bundle.py` — writes schema-compatible boundary
+  dump bundles, frame sequence manifests, and video segment metadata for
+  harnesses that already collected the underlying values or captures (test
+  `dxmt9-debug-artifact-bundle-selftest`).

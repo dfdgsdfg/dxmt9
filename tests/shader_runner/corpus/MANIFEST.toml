@@ -71,6 +71,66 @@ oracle = "math-derivation"
 oracle-date = "2026-03-29"
 
 [[test]]
+file = "ffp/dxmt9_ffp_vertex_blend_triangle.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "ffp/dxmt9_ffp_vertex_blend_2weights_decl.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "ffp/dxmt9_ffp_vertex_blend_3weights_decl.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "ffp/dxmt9_ffp_vertex_blend_indexed_decl.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "ffp/dxmt9_ffp_vertex_blend_fvf_xyzb2.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
 file = "flow_control/control.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -154,6 +214,18 @@ models = ["ps_3_0"]
 opcodes = ["DEF", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-06"
+
+[[test]]
+file = "render_state/dxmt9_odepth_depth_test.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
 
 [[test]]
 file = "source_modifiers/modifiers.shader_test"
@@ -500,6 +572,18 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ps_3_0", "vs_3_0"]
 opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "vs_specific/dxmt9_vs_skinned_triangle.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "M4x4", "MOV", "MOVA", "MUL"]
 oracle = "math-derivation"
 oracle-date = "2026-05-16"
 

@@ -26,7 +26,7 @@ using dxmt9::state::VsConsts;
 
 static_assert(sizeof(VsConsts) == 4416, "VsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(PsConsts) == 3904, "PsConsts size pinned for MSL prelude parity");
-static_assert(sizeof(FfpVsConsts) == 700, "FfpVsConsts size pinned for MSL prelude parity");
+static_assert(sizeof(FfpVsConsts) == 956, "FfpVsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(FfpPsConsts) == 44, "FfpPsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(DrawVolatile) == 16, "DrawVolatile size pinned for MSL prelude parity");
 
@@ -42,16 +42,18 @@ static_assert(offsetof(PsConsts, psFloatConst) == 0);
 static_assert(offsetof(PsConsts, psIntConst) == 224 * 16);
 static_assert(offsetof(PsConsts, psBoolConst) == 224 * 16 + 16 * 16);
 
-// FfpVsConsts: 16 B float4[4] | 16 B float4[8][4] | float4[6] (ClipPlane) |
-// float2 x3 | uint clipPlaneMask. ClipPlane = std::array<f32, 4> with 4 B
-// alignment, so float2 fields can pack tightly behind it.
+// FfpVsConsts: 16 B float4[4] | 16 B float4[4][4] |
+// 16 B float4[8][4] | float4[6] (ClipPlane) | float2 x3 |
+// uint clipPlaneMask. ClipPlane = std::array<f32, 4> with 4 B alignment,
+// so float2 fields can pack tightly behind it.
 static_assert(offsetof(FfpVsConsts, ffpWorldViewProj) == 0);
-static_assert(offsetof(FfpVsConsts, ffpTextureTransforms) == 64);
-static_assert(offsetof(FfpVsConsts, clipPlanes) == 64 + 512);
-static_assert(offsetof(FfpVsConsts, halfPixelFixup) == 64 + 512 + 96);
-static_assert(offsetof(FfpVsConsts, viewportOrigin) == 64 + 512 + 96 + 8);
-static_assert(offsetof(FfpVsConsts, viewportSize) == 64 + 512 + 96 + 16);
-static_assert(offsetof(FfpVsConsts, clipPlaneMask) == 64 + 512 + 96 + 24);
+static_assert(offsetof(FfpVsConsts, ffpBlendWorldViewProj) == 64);
+static_assert(offsetof(FfpVsConsts, ffpTextureTransforms) == 64 + 256);
+static_assert(offsetof(FfpVsConsts, clipPlanes) == 64 + 256 + 512);
+static_assert(offsetof(FfpVsConsts, halfPixelFixup) == 64 + 256 + 512 + 96);
+static_assert(offsetof(FfpVsConsts, viewportOrigin) == 64 + 256 + 512 + 96 + 8);
+static_assert(offsetof(FfpVsConsts, viewportSize) == 64 + 256 + 512 + 96 + 16);
+static_assert(offsetof(FfpVsConsts, clipPlaneMask) == 64 + 256 + 512 + 96 + 24);
 
 // FfpPsConsts: float4 textureFactor | 4x f32 | 3x u32.
 static_assert(offsetof(FfpPsConsts, textureFactor) == 0);
@@ -104,6 +106,8 @@ void checkMslPreludeContainsStructDecls() {
 
   // FfpVsConsts fields. kMaxTextureStages=8, kMaxClipPlanes=6.
   requireSubstring(prelude, "float4 ffpWorldViewProj[4]", "FfpVsConsts.ffpWorldViewProj");
+  requireSubstring(prelude, "float4 ffpBlendWorldViewProj[4][4]",
+                   "FfpVsConsts.ffpBlendWorldViewProj");
   requireSubstring(prelude, "float4 ffpTextureTransforms[8][4]",
                    "FfpVsConsts.ffpTextureTransforms");
   requireSubstring(prelude, "float4 clipPlanes[6]", "FfpVsConsts.clipPlanes");

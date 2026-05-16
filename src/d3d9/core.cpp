@@ -8,6 +8,7 @@
 #include "util/log/log.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -36,6 +37,60 @@ std::optional<u32> parseEnvU32(const char* name) {
 
 std::string getenvString(const char* name) {
   return dxmt9::util::getenvString(name);
+}
+
+void parseFrameList(const std::string& text, std::vector<u32>& out) {
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const auto comma = text.find(',', start);
+    const auto end = comma == std::string::npos ? text.size() : comma;
+    if (end > start) {
+      const auto token = text.substr(start, end - start);
+      char* tail = nullptr;
+      const unsigned long value = std::strtoul(token.c_str(), &tail, 10);
+      if (tail != token.c_str() && tail && *tail == '\0' &&
+          value <= std::numeric_limits<u32>::max()) {
+        out.push_back(static_cast<u32>(value));
+      }
+    }
+    if (comma == std::string::npos) {
+      break;
+    }
+    start = comma + 1;
+  }
+}
+
+bool parseFrameRange(const std::string& text, u32& start, u32& end,
+                     u32& interval) {
+  std::array<unsigned long, 3> values{0, 0, 1};
+  std::size_t count = 0;
+  std::size_t pos = 0;
+  while (count < values.size() && pos <= text.size()) {
+    const auto colon = text.find(':', pos);
+    const auto partEnd = colon == std::string::npos ? text.size() : colon;
+    if (partEnd == pos) {
+      return false;
+    }
+    const auto token = text.substr(pos, partEnd - pos);
+    char* tail = nullptr;
+    values[count] = std::strtoul(token.c_str(), &tail, 10);
+    if (tail == token.c_str() || !tail || *tail != '\0' ||
+        values[count] > std::numeric_limits<u32>::max()) {
+      return false;
+    }
+    ++count;
+    if (colon == std::string::npos) {
+      break;
+    }
+    pos = colon + 1;
+  }
+  if (count < 2 || values[1] < values[0] || values[2] == 0) {
+    return false;
+  }
+  start = static_cast<u32>(values[0]);
+  end = static_cast<u32>(values[1]);
+  interval = static_cast<u32>(values[2]);
+  return true;
 }
 
 bool syncPresentFlushEnabled() {
@@ -88,7 +143,20 @@ Device::Device(AdapterInfo adapter, BackendLimits limits,
     backend_->setMaxFrameLatency(maximumFrameLatency_);
   }
   experimentCapture_.path = getenvString("DXMT_EXPERIMENT_CAPTURE_PATH");
+  experimentCapture_.dir = getenvString("DXMT_EXPERIMENT_CAPTURE_DIR");
   experimentCapture_.frame = parseEnvU32("DXMT_CAPTURE_FRAME").value_or(0);
+  parseFrameList(getenvString("DXMT_CAPTURE_FRAMES"),
+                 experimentCapture_.frames);
+  const auto range = getenvString("DXMT_CAPTURE_RANGE");
+  if (!range.empty()) {
+    if (!parseFrameRange(range, experimentCapture_.rangeStart,
+                         experimentCapture_.rangeEnd,
+                         experimentCapture_.rangeInterval)) {
+      experimentCapture_.rangeStart = 0;
+      experimentCapture_.rangeEnd = 0;
+      experimentCapture_.rangeInterval = 0;
+    }
+  }
 }
 
 Device::~Device() {

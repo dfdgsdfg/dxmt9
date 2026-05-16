@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.run_apps import run_experiment
+from scripts.check import check_debug_result_schema as debug_schema
 
 
 class CaptureMetricTests(unittest.TestCase):
@@ -58,6 +59,55 @@ class CaptureMetricTests(unittest.TestCase):
             run_experiment.effective_capture_frame(app, Namespace(capture_frame=None)),
             3,
         )
+
+    def test_capture_request_parses_interval_and_exports_runtime_env(self):
+        app = Namespace(capture_frame=3)
+        request = run_experiment.build_capture_request(
+            app,
+            Namespace(
+                capture_frame=None,
+                capture_frames=None,
+                capture_range="120:130:5",
+                capture_video=None,
+                capture_video_acceptance="triage",
+                capture_max_frames=16,
+                capture_max_seconds=4.0,
+                capture_max_bytes=1024 * 1024,
+            ),
+        )
+
+        self.assertEqual(request.mode, "interval-range")
+        self.assertEqual(request.requested_frames, [120, 125, 130])
+        env = run_experiment.capture_request_environment(
+            request,
+            Path("/tmp/out"),
+            Path("/tmp/out/actual.bmp"),
+        )
+        self.assertEqual(env["DXMT_CAPTURE_FRAME"], "120")
+        self.assertEqual(env["DXMT_CAPTURE_FRAMES"], "120,125,130")
+        self.assertEqual(env["DXMT_CAPTURE_RANGE"], "120:130:5")
+        self.assertEqual(env["DXMT_EXPERIMENT_CAPTURE_DIR"], "/tmp/out/internal_frames")
+
+    def test_capture_request_parses_video_duration_and_caps_it(self):
+        app = Namespace(capture_frame=3)
+        request = run_experiment.build_capture_request(
+            app,
+            Namespace(
+                capture_frame=None,
+                capture_frames="7,9",
+                capture_range=None,
+                capture_video="10s",
+                capture_video_acceptance="human_review",
+                capture_max_frames=16,
+                capture_max_seconds=2.0,
+                capture_max_bytes=1024 * 1024,
+            ),
+        )
+
+        self.assertEqual(request.mode, "frame-list")
+        self.assertEqual(request.requested_frames, [7, 9])
+        self.assertEqual(request.video_duration_sec, 2.0)
+        self.assertEqual(request.video_acceptance, "human_review")
 
     def test_capture_source_prefers_internal_dump(self):
         temp_dir = tempfile.TemporaryDirectory()
@@ -113,6 +163,137 @@ class CaptureMetricTests(unittest.TestCase):
             run_experiment.classify_capture_source(dump, actual, None),
             "external_capture",
         )
+
+    def test_experiment_debug_result_wraps_single_frame_capture(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        actual = self.write_image(np.full((4, 4, 3), 128, dtype=np.uint8))
+        actual = actual.rename(root / "actual.png")
+        log = root / "dxmt9.log"
+        log.write_text("log\n")
+        debug_result = root / "debug_result.json"
+        app = Namespace(name="debug-capture", window_title="dxmt9 test")
+
+        path = run_experiment.write_experiment_debug_result(
+            app=app,
+            output_dir=root,
+            debug_result_path=debug_result,
+            log_path=log,
+            actual_path=actual,
+            command=["bash", "launcher.sh"],
+            environment={"DXMT_CAPTURE_FRAME": "7"},
+            capture_frame=7,
+            capture_source="window_capture",
+            capture_error=None,
+            window_info={
+                "capture_mode": "window_id",
+                "window_id": 42,
+                "window_title": "dxmt9 test",
+            },
+        )
+
+        self.assertEqual(path, debug_result)
+        payload = debug_schema.load_json(debug_result)
+        self.assertEqual(
+            debug_schema.validate_result(payload, require={"wsi", "render-capture"}),
+            [],
+        )
+        self.assertEqual(payload["diagnostics"]["render_capture"]["mode"], "single-frame")
+        self.assertEqual(payload["diagnostics"]["render_capture"]["source"], "window_id")
+        self.assertTrue((root / "frames" / "manifest.json").exists())
+
+    def test_experiment_debug_result_wraps_interval_frames_drops_and_video(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        frame120 = self.write_image(np.full((4, 4, 3), 64, dtype=np.uint8))
+        frame120 = frame120.rename(root / "frame120.png")
+        frame125 = self.write_image(np.full((4, 4, 3), 96, dtype=np.uint8))
+        frame125 = frame125.rename(root / "frame125.png")
+        video = root / "source.mov"
+        video.write_bytes(b"fake-video")
+        sidecar = root / "internal_frames" / "frame000130.bmp.skipped.json"
+        sidecar.parent.mkdir()
+        sidecar.write_text(
+            """{
+  "schema": "dxmt9.render_capture.skip.v1",
+  "frame_id": 130,
+  "present_id": 130,
+  "source": "internal_dump",
+  "reason": "artifact-write-failed",
+  "counters": {
+    "present_count": 130,
+    "requested_count": 3,
+    "captured_count": 2,
+    "dropped_count": 1
+  }
+}
+""",
+            encoding="utf-8",
+        )
+        log = root / "dxmt9.log"
+        log.write_text("log\n")
+        debug_result = root / "debug_result.json"
+        app = Namespace(name="debug-capture", window_title=None)
+        request = run_experiment.CaptureRequest(
+            mode="interval-range",
+            requested_frames=[120, 125, 130],
+            max_frames=8,
+            max_duration_sec=3.0,
+            max_bytes=1024 * 1024,
+            start_frame=120,
+            end_frame=130,
+            interval=5,
+            video_start_frame=120,
+            video_end_frame=130,
+            video_duration_sec=3.0,
+            video_acceptance="extractable_frames",
+        )
+
+        path = run_experiment.write_experiment_debug_result(
+            app=app,
+            output_dir=root,
+            debug_result_path=debug_result,
+            log_path=log,
+            actual_path=root / "missing.png",
+            command=["bash", "launcher.sh"],
+            environment={"DXMT_CAPTURE_RANGE": "120:130:5"},
+            capture_frame=120,
+            capture_source="internal_dump",
+            capture_error=None,
+            window_info=None,
+            capture_request=request,
+            captured_frames=[
+                {"frame_id": 120, "path": frame120, "source": "internal_dump"},
+                {"frame_id": 125, "path": frame125, "source": "window_capture"},
+            ],
+            dropped_frames=[
+                {
+                    "frame_id": 130,
+                    "source": "internal_dump",
+                    "reason": "artifact-write-failed",
+                    "sidecar_path": str(sidecar),
+                    "counters": {"present_count": 130, "requested_count": 3},
+                }
+            ],
+            video_path=video,
+            video_error=None,
+        )
+
+        self.assertEqual(path, debug_result)
+        payload = debug_schema.load_json(debug_result)
+        self.assertEqual(
+            debug_schema.validate_result(payload, require={"render-capture", "video"}),
+            [],
+        )
+        capture = payload["diagnostics"]["render_capture"]
+        self.assertEqual(capture["mode"], "interval-range")
+        self.assertEqual(capture["dropped_frames"][0]["frame_id"], 130)
+        self.assertEqual(capture["dropped_frames"][0]["sidecar_path"], "internal_frames/frame000130.bmp.skipped.json")
+        self.assertTrue(any(artifact["path"] == "internal_frames/frame000130.bmp.skipped.json" for artifact in payload["artifacts"]))
+        self.assertEqual(payload["diagnostics"]["video_segments"][0]["acceptance"], "extractable_frames")
+        self.assertEqual(payload["failure_category"], "render-frame-sequence")
 
 
 if __name__ == "__main__":

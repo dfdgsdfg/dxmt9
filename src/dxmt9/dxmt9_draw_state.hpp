@@ -37,6 +37,7 @@ static_assert(sizeof(PsConsts) == 3904,
 
 struct FfpVsConsts {
   std::array<std::array<f32, 4>, 4> ffpWorldViewProj{};
+  std::array<std::array<std::array<f32, 4>, 4>, 4> ffpBlendWorldViewProj{};
   std::array<std::array<std::array<f32, 4>, 4>, core::kMaxTextureStages> ffpTextureTransforms{};
   std::array<core::ClipPlane, core::kMaxClipPlanes> clipPlanes{};
   std::array<f32, 2> halfPixelFixup{};
@@ -44,7 +45,7 @@ struct FfpVsConsts {
   std::array<f32, 2> viewportSize{};
   u32 clipPlaneMask = 0;
 };
-static_assert(sizeof(FfpVsConsts) == 700,
+static_assert(sizeof(FfpVsConsts) == 956,
               "FfpVsConsts layout must match MSL prelude declaration");
 
 struct FfpPsConsts {

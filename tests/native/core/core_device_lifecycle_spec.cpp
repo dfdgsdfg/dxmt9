@@ -1,12 +1,58 @@
 #include "core_spec_fixtures.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
 
 using namespace dxmt9::core;
 using namespace dxmt9::core::fixture;
 using namespace dxmt9::core::spec;
 
 namespace {
+
+class ScopedEnv {
+ public:
+  ScopedEnv(const char* name, const char* value) : name_(name) {
+    const char* existing = std::getenv(name);
+    if (existing) {
+      oldValue_ = existing;
+      hadValue_ = true;
+    }
+    setenv(name, value, 1);
+  }
+
+  ~ScopedEnv() {
+    if (hadValue_) {
+      setenv(name_.c_str(), oldValue_.c_str(), 1);
+    } else {
+      unsetenv(name_.c_str());
+    }
+  }
+
+ private:
+  std::string name_;
+  std::string oldValue_;
+  bool hadValue_ = false;
+};
+
+bool fileExistsWithBmpHeader(const std::filesystem::path& path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return false;
+  }
+  char header[2] = {};
+  file.read(header, sizeof(header));
+  return header[0] == 'B' && header[1] == 'M';
+}
+
+std::string readTextFile(const std::filesystem::path& path) {
+  std::ifstream file(path);
+  std::ostringstream out;
+  out << file.rdbuf();
+  return out.str();
+}
 
 void testDeviceCoreFlow() {
   auto backend = std::make_shared<RecordingBackend>();
@@ -577,6 +623,104 @@ void testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer() {
           "swapchain present preserves destination window");
 }
 
+void testExperimentCaptureFrameListAndRangeWriteInternalFrames() {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("dxmt9-capture-" + std::to_string(std::rand()));
+  const auto captureDir = root / "internal_frames";
+  std::filesystem::remove_all(root);
+
+  ScopedEnv capturePath("DXMT_EXPERIMENT_CAPTURE_PATH",
+                        (root / "legacy.bmp").string().c_str());
+  ScopedEnv captureDirEnv("DXMT_EXPERIMENT_CAPTURE_DIR",
+                          captureDir.string().c_str());
+  ScopedEnv captureFrame("DXMT_CAPTURE_FRAME", "1");
+  ScopedEnv captureFrames("DXMT_CAPTURE_FRAMES", "2,4");
+  ScopedEnv captureRange("DXMT_CAPTURE_RANGE", "3:5:2");
+
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.backBufferWidth = 4;
+  params.backBufferHeight = 4;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{0x3000u};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "capture device");
+  auto backBuffer = device->swapChain()->backBuffer();
+  check(backBuffer != nullptr, "capture backbuffer");
+
+  checkEq(device->fillSurface(backBuffer, nullptr, {1.0f, 0.0f, 0.0f, 1.0f}),
+          D3D_OK, "fill capture frame 1");
+  checkEq(device->present(), D3D_OK, "present capture frame 1");
+  checkEq(device->fillSurface(backBuffer, nullptr, {0.0f, 1.0f, 0.0f, 1.0f}),
+          D3D_OK, "fill capture frame 2");
+  checkEq(device->present(), D3D_OK, "present capture frame 2");
+  checkEq(device->fillSurface(backBuffer, nullptr, {0.0f, 0.0f, 1.0f, 1.0f}),
+          D3D_OK, "fill capture frame 3");
+  checkEq(device->present(), D3D_OK, "present capture frame 3");
+
+  check(fileExistsWithBmpHeader(root / "legacy.bmp"),
+        "legacy DXMT_CAPTURE_FRAME writes single capture path");
+  check(fileExistsWithBmpHeader(captureDir / "frame000002.bmp"),
+        "DXMT_CAPTURE_FRAMES writes requested frame");
+  check(fileExistsWithBmpHeader(captureDir / "frame000003.bmp"),
+        "DXMT_CAPTURE_RANGE writes interval frame");
+  check(!std::filesystem::exists(captureDir / "frame000001.bmp"),
+        "multi-frame dir does not duplicate legacy single-frame capture");
+
+  std::filesystem::remove_all(root);
+}
+
+void testExperimentCaptureWriteFailureEmitsSkipSidecar() {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("dxmt9-capture-skip-" + std::to_string(std::rand()));
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  const auto blockedPath = root / "blocked.bmp";
+  std::filesystem::create_directories(blockedPath);
+
+  ScopedEnv capturePath("DXMT_EXPERIMENT_CAPTURE_PATH",
+                        blockedPath.string().c_str());
+  ScopedEnv captureFrame("DXMT_CAPTURE_FRAME", "1");
+
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.backBufferWidth = 4;
+  params.backBufferHeight = 4;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{0x3001u};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "capture skip device");
+  auto backBuffer = device->swapChain()->backBuffer();
+  check(backBuffer != nullptr, "capture skip backbuffer");
+
+  checkEq(device->fillSurface(backBuffer, nullptr, {1.0f, 1.0f, 0.0f, 1.0f}),
+          D3D_OK, "fill capture skip frame");
+  checkEq(device->present(), D3D_OK, "present capture skip frame");
+
+  const auto sidecar = root / "blocked.bmp.skipped.json";
+  check(std::filesystem::exists(sidecar),
+        "failed internal capture writes skipped-frame sidecar");
+  const auto payload = readTextFile(sidecar);
+  check(payload.find("\"schema\": \"dxmt9.render_capture.skip.v1\"") !=
+            std::string::npos,
+        "skip sidecar records schema");
+  check(payload.find("\"reason\": \"artifact-write-failed\"") !=
+            std::string::npos,
+        "skip sidecar records reason");
+
+  std::filesystem::remove_all(root);
+}
+
 }  // namespace
 
 int main() {
@@ -584,6 +728,8 @@ int main() {
     testDeviceCoreFlow();
     testFullscreenAndDeviceLost();
     testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer();
+    testExperimentCaptureFrameListAndRangeWriteInternalFrames();
+    testExperimentCaptureWriteFailureEmitsSkipSidecar();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

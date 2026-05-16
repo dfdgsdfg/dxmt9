@@ -60,7 +60,17 @@ void testFfpKeys() {
   checkEq(vertexKey.lightType[0], static_cast<u32>(LightType::Point), "vertex key light type");
   checkEq(vertexKey.texCoordGen[0], 4u, "vertex key texcoord");
   checkEq(vertexKey.texTransformFlags[0], 7u, "vertex key transform flags");
+  check(!vertexKey.indexedVertexBlend,
+        "vertex blend does not imply indexed vertex blending");
   check(vertexKey.hash != 0, "vertex key hash");
+
+  auto indexedBlendState = state;
+  indexedBlendState.renderStates[RS_INDEXED_VERTEX_BLEND_ENABLE] = 1;
+  const auto indexedBlendKey = makeFfpVertexKey(indexedBlendState);
+  check(indexedBlendKey.indexedVertexBlend,
+        "indexed vertex blend follows render state 167");
+  check(indexedBlendKey != vertexKey,
+        "indexed vertex blend participates in FFP vertex key");
 
   const auto pixelKey = makeFfpPixelKey(state);
   check(pixelKey.alphaTestEnable, "pixel key alpha test");
@@ -270,7 +280,8 @@ void testVisualPortCoverage() {
   const auto varyingVertexKey = makeFfpVertexKey(varyingState);
   check(varyingVertexKey.hash != 0, "vshader varying hash");
   check(varyingVertexKey.vertexBlend == 2u, "vshader varying vertex blend");
-  check(varyingVertexKey.indexedVertexBlend, "vshader varying indexed blend");
+  check(!varyingVertexKey.indexedVertexBlend,
+        "vshader varying indexed blend remains disabled without render state 167");
   check(varyingVertexKey != baselineVertexKey, "vshader varying key differs");
 }
 

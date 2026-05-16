@@ -136,6 +136,22 @@ void testTexturedFfpFallsBackToPortableFragmentPath() {
           "textured FFP reports unsupported_state for tile path");
 }
 
+void testVertexBlendFfpFallsBackToPortableFragmentPath() {
+  auto fixture = makeFfpFixture(FogMode::None, /*alphaTest=*/false);
+  fixture.shaderLayout.vertexShader.kind = ShaderRef::Kind::FixedFunctionVertex;
+  fixture.shaderLayout.vertexShader.vertexKey = FfpVertexKey{};
+  fixture.shaderLayout.vertexShader.vertexKey->vertexBlend = 1u;
+
+  const auto sel =
+      dxmt9::pipeline::selectTileFfpForPass(fixture.view(), /*supportsApple3=*/true);
+  checkEq(static_cast<int>(sel.decision),
+          static_cast<int>(dxmt9::pipeline::TileFfpDecision::Portable),
+          "FFP vertex blending stays on the portable draw path");
+  checkEq(static_cast<int>(sel.reason),
+          static_cast<int>(dxmt9::pipeline::TileFfpFallbackReason::UnsupportedState),
+          "FFP vertex blending reports unsupported_state for tile path");
+}
+
 void testFogModeExpFallbackPrecision() {
   auto fixture = makeFfpFixture(FogMode::Exp, /*alphaTest=*/false);
   const auto sel =
@@ -254,6 +270,7 @@ int main() {
     testEligibleFfpPicksTile();
     testProgrammablePixelShaderIsNotFfp();
     testTexturedFfpFallsBackToPortableFragmentPath();
+    testVertexBlendFfpFallsBackToPortableFragmentPath();
     testFogModeExpFallbackPrecision();
     testFogModeExp2FallbackPrecision();
     testFogModeLinearStaysEligible();

@@ -520,6 +520,15 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
       !shader.pixelShader.pixelKey.has_value()) {
     return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::NotFfp};
   }
+  if (shader.vertexShader.kind == core::ShaderRef::Kind::FixedFunctionVertex &&
+      shader.vertexShader.vertexKey.has_value() &&
+      (shader.vertexShader.vertexKey->vertexBlend != 0 ||
+       shader.vertexShader.vertexKey->indexedVertexBlend)) {
+    return TileFfpSelection{
+        TileFfpDecision::Portable,
+        TileFfpFallbackReason::UnsupportedState,
+    };
+  }
   for (const auto& texture : state.hot->textures) {
     if (texture) {
       // The current tile-FFP kernel is a tile-memory alpha/fog transform,

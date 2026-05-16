@@ -102,6 +102,7 @@ std::optional<MetalCaptureRequest> MetalCaptureController::maybeCaptureAtChunkBe
 }
 
 std::optional<MetalCaptureRequest> MetalCaptureController::maybePresentChunkClosesSession(u64 seqId) {
+  (void)seqId;
   if (!enabled()) {
     return std::nullopt;
   }
@@ -126,14 +127,14 @@ std::optional<MetalCaptureRequest> MetalCaptureController::maybeCapturePresentCh
   // that haven't migrated to the begin+close pair. `armedForChunkBegin_`
   // and `activeSession_` are still maintained so a parallel chunk-begin
   // call sees the right state.
-  if (!enabled()) {
+  if (!enabled() || requested_) {
     return std::nullopt;
   }
   ++observedPresentFrames_;
   if (config_.targetFrame > 0 && observedPresentFrames_ == config_.targetFrame - 1) {
     armedForChunkBegin_ = true;
   }
-  if (observedPresentFrames_ != config_.targetFrame || requested_) {
+  if (observedPresentFrames_ != config_.targetFrame) {
     return std::nullopt;
   }
   requested_ = true;

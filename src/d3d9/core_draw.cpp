@@ -105,6 +105,14 @@ u64 hashTextureTransforms(
   return hash;
 }
 
+u64 hashBlendWorldViewProj(const std::array<Matrix4x4, 4> &transforms) {
+  u64 hash = hashCombine(kFnvOffset, transforms.size());
+  for (const auto &transform : transforms) {
+    hash = hashCombine(hash, hashTrivial(transform));
+  }
+  return hash;
+}
+
 u64 hashClipPlanes(const std::array<ClipPlane, kMaxClipPlanes> &planes) {
   u64 hash = hashCombine(kFnvOffset, planes.size());
   for (const auto &plane : planes) {
@@ -117,6 +125,7 @@ u64 hashDrawUniformPayload(const DrawUniformPayload &payload) {
   u64 hash = hashCombine(kFnvOffset, hashTrivial(payload.vsConst));
   hash = hashCombine(hash, hashTrivial(payload.psConst));
   hash = hashCombine(hash, hashTrivial(payload.worldViewProj));
+  hash = hashCombine(hash, hashBlendWorldViewProj(payload.ffpBlendWorldViewProj));
   hash = hashCombine(hash, hashTextureTransforms(payload.textureTransforms));
   hash = hashCombine(hash, payload.clipPlaneMask);
   hash = hashCombine(hash, hashClipPlanes(payload.clipPlanes));
@@ -764,6 +773,18 @@ Matrix4x4 makeWorldViewProjFromState(const DeviceState &state) {
   return multiplyMatrix(multiplyMatrix(world, view), proj);
 }
 
+std::array<Matrix4x4, 4> makeBlendWorldViewProjFromState(const DeviceState &state) {
+  std::array<Matrix4x4, 4> transforms{};
+  const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
+  const Matrix4x4 proj = lookupTransform(state, XFORM_PROJECTION);
+  for (size_t i = 0; i < transforms.size(); ++i) {
+    const Matrix4x4 world =
+        lookupTransform(state, XFORM_WORLD_BASE + static_cast<u32>(i));
+    transforms[i] = multiplyMatrix(multiplyMatrix(world, view), proj);
+  }
+  return transforms;
+}
+
 ShaderRef makeVertexShaderRefFromState(const DeviceState &state) {
   if (state.vertexShader.kind == ShaderRef::Kind::Bytecode) {
     return state.vertexShader;
@@ -802,6 +823,7 @@ DrawUniformPayload makeDrawUniformPayloadFromState(const DeviceState &state,
   payload.vsConst = state.vsConst;
   payload.psConst = state.psConst;
   payload.worldViewProj = makeWorldViewProjFromState(state);
+  payload.ffpBlendWorldViewProj = makeBlendWorldViewProjFromState(state);
   payload.textureTransforms = makeTextureTransformsFromState(state);
   payload.clipPlaneMask = clipPlaneMask;
   payload.clipPlanes =
@@ -844,6 +866,7 @@ DrawDesc makeDrawDescFromState(const DeviceState &state,
   desc.viewport = makeViewportScissorFromState(state);
   desc.clipPlaneMask = shaderLayout.clipPlaneMask;
   desc.worldViewProj = uniforms.worldViewProj;
+  desc.ffpBlendWorldViewProj = uniforms.ffpBlendWorldViewProj;
   desc.textureTransforms = uniforms.textureTransforms;
   desc.clipPlanes = uniforms.clipPlanes;
   desc.vertexShader = shaderLayout.vertexShader;
@@ -906,6 +929,7 @@ FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc &desc) {
 
   key.viewportHash = hashViewportScissor(desc.viewport);
   key.worldViewProjHash = hashTrivial(desc.worldViewProj);
+  key.ffpBlendWorldViewProjHash = hashBlendWorldViewProj(desc.ffpBlendWorldViewProj);
   key.textureTransformsHash = hashTextureTransforms(desc.textureTransforms);
   key.clipPlaneMask = desc.clipPlaneMask;
   key.clipPlanesHash = hashClipPlanes(desc.clipPlanes);
@@ -939,6 +963,7 @@ FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc &desc) {
   record.vertexConstantsHash = record.key.vertexConstantsHash;
   record.pixelConstantsHash = record.key.pixelConstantsHash;
   record.worldViewProjHash = record.key.worldViewProjHash;
+  record.ffpBlendWorldViewProjHash = record.key.ffpBlendWorldViewProjHash;
   record.textureTransformsHash = record.key.textureTransformsHash;
   record.clipPlaneMask = record.key.clipPlaneMask;
   record.clipPlanesHash = record.key.clipPlanesHash;
@@ -1006,6 +1031,7 @@ FlatDrawStateKey makeFlatDrawStateKeyFromState(
 
   key.viewportHash = hashViewportScissor(viewport);
   key.worldViewProjHash = hashTrivial(uniforms.worldViewProj);
+  key.ffpBlendWorldViewProjHash = hashBlendWorldViewProj(uniforms.ffpBlendWorldViewProj);
   key.textureTransformsHash = hashTextureTransforms(uniforms.textureTransforms);
   key.clipPlaneMask = shaderLayout.clipPlaneMask;
   key.clipPlanesHash = hashClipPlanes(uniforms.clipPlanes);
@@ -1041,6 +1067,7 @@ FlatDrawStateRecord makeFlatDrawStateRecordFromState(
   record.vertexConstantsHash = record.key.vertexConstantsHash;
   record.pixelConstantsHash = record.key.pixelConstantsHash;
   record.worldViewProjHash = record.key.worldViewProjHash;
+  record.ffpBlendWorldViewProjHash = record.key.ffpBlendWorldViewProjHash;
   record.textureTransformsHash = record.key.textureTransformsHash;
   record.clipPlaneMask = record.key.clipPlaneMask;
   record.clipPlanesHash = record.key.clipPlanesHash;
@@ -1065,6 +1092,7 @@ DrawUniformPayload makeDrawUniformPayload(const DrawDesc &desc) {
   payload.vsConst = desc.vsConst;
   payload.psConst = desc.psConst;
   payload.worldViewProj = desc.worldViewProj;
+  payload.ffpBlendWorldViewProj = desc.ffpBlendWorldViewProj;
   payload.textureTransforms = desc.textureTransforms;
   payload.clipPlaneMask = desc.clipPlaneMask;
   payload.clipPlanes = desc.clipPlanes;
@@ -1784,7 +1812,9 @@ FfpVertexKey makeFfpVertexKey(const DeviceState &state) {
   key.vertexBlend = state.renderStates.contains(RS_VERTEX_BLEND)
                         ? state.renderStates.at(RS_VERTEX_BLEND)
                         : 0;
-  key.indexedVertexBlend = key.vertexBlend != 0;
+  key.indexedVertexBlend =
+      state.renderStates.contains(RS_INDEXED_VERTEX_BLEND_ENABLE) &&
+      state.renderStates.at(RS_INDEXED_VERTEX_BLEND_ENABLE) != 0;
   key.clipPlaneMask = state.renderStates.contains(RS_CLIP_PLANE_ENABLE)
                           ? state.renderStates.at(RS_CLIP_PLANE_ENABLE)
                           : 0;

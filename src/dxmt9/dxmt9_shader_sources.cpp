@@ -146,6 +146,7 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "};\n";
   out << "struct FfpVsConsts {\n";
   out << "  float4 ffpWorldViewProj[4];\n";
+  out << "  float4 ffpBlendWorldViewProj[4][4];\n";
   out << "  float4 ffpTextureTransforms[" << kMaxTextureStages << "][4];\n";
   out << "  float4 clipPlanes[" << kMaxClipPlanes << "];\n";
   out << "  float2 halfPixelFixup;\n";

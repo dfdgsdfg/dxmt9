@@ -626,6 +626,7 @@ struct FlatDrawStateKey {
   u32 renderTargetMask = 0;
   u64 viewportHash = 0;
   u64 worldViewProjHash = 0;
+  u64 ffpBlendWorldViewProjHash = 0;
   u64 textureTransformsHash = 0;
   u32 clipPlaneMask = 0;
   u64 clipPlanesHash = 0;
@@ -664,6 +665,7 @@ struct FlatDrawStateRecord {
   u64 vertexConstantsHash = 0;
   u64 pixelConstantsHash = 0;
   u64 worldViewProjHash = 0;
+  u64 ffpBlendWorldViewProjHash = 0;
   u64 textureTransformsHash = 0;
   u32 clipPlaneMask = 0;
   u64 clipPlanesHash = 0;
@@ -684,6 +686,7 @@ struct DrawUniformPayload {
   VertexShaderConstants vsConst{};
   PixelShaderConstants psConst{};
   Matrix4x4 worldViewProj{};
+  std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
@@ -812,6 +815,7 @@ struct DrawDesc {
   RenderTargetSnapshot rts{};
   ViewportScissor viewport{};
   Matrix4x4 worldViewProj{};
+  std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
@@ -1383,8 +1387,15 @@ class Device : public std::enable_shared_from_this<Device> {
  private:
   struct ExperimentCaptureConfig {
     std::string path;
+    std::string dir;
     u32 frame = 0;
+    std::vector<u32> frames;
+    u32 rangeStart = 0;
+    u32 rangeEnd = 0;
+    u32 rangeInterval = 0;
     bool captured = false;
+    u32 capturedCount = 0;
+    u32 droppedCount = 0;
   };
 
   friend class StateBlock;
@@ -1408,6 +1419,9 @@ class Device : public std::enable_shared_from_this<Device> {
       std::span<const DrawParamPayloadView> payloads = {});
   void submitPresentInternal(const SwapDesc& desc);
   void maybeCaptureExperimentFrame();
+  u32 experimentCaptureRequestedCount() const;
+  void recordExperimentCaptureSkip(const std::string& capturePath,
+                                   const char* reason);
   void resetState();
   HResult resetValidated(const PresentParameters& params);
 

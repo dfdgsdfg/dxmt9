@@ -1,0 +1,29 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: math-derivation
+; oracle-date: 2026-05-16
+
+[vertex shader d3dbc-hex]
+fffe0300 0200001f 80000000 900f0000
+0200001f 80000001 900f0001 0200001f
+80000002 900f0002 0200001f 80000000
+e00f0000 0200001f 8000000a e00f0001
+0200002e b0010000 90e40002 03000005
+800f0001 90e40000 90000001 03000014
+800f0000 80e40001 a0e42000 b0e40000
+02000001 e00f0000 80e40000 02000001
+e00f0001 a0e40008 0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300 0200001f 8000000a 900f0000
+02000001 800f0800 90e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state zenable=off zwrite=off
+dxmt9-draw-vs-skinned-triangle
+probe (48, 32) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (16, 32) rgba(0.0, 0.0, 0.0, 1.0) 1

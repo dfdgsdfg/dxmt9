@@ -37,6 +37,8 @@ int main() {
         fprintf(stderr, "FAIL: CreateWindow failed (%lu)\n", GetLastError());
         return 1;
     }
+    printf("OK: window hwnd=%p title=\"dxmt9 WSI test\"\n", hwnd);
+    fflush(stdout);
 
     IDirect3D9* d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d) {

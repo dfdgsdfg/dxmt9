@@ -347,6 +347,7 @@ inline constexpr u32 RS_VERTEX_BLEND = 151;
 inline constexpr u32 RS_CLIP_PLANE_ENABLE = 152;
 inline constexpr u32 RS_POINT_SPRITE_ENABLE = 156;
 inline constexpr u32 RS_POINT_SCALE_ENABLE = 157;
+inline constexpr u32 RS_INDEXED_VERTEX_BLEND_ENABLE = 167;
 inline constexpr u32 RS_CULL_MODE = 22;
 inline constexpr u32 RS_Z_WRITE_ENABLE = 14;
 inline constexpr u32 RS_Z_FUNC = 23;

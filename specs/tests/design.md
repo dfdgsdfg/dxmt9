@@ -197,11 +197,11 @@ flowchart LR
 
 | Intent class | What must be proved | Primary evidence | Gap / risk |
 |---|---|---|---|
-| Vertex semantic mapping | `D3DVERTEXELEMENT9` usage, usage index, stream, offset, stride, and type reach the shader input requested by DCL tokens or FFP layout. | `state_draw_transform_spec`, `shader_transform_spec` input-layout tests | Static coverage exists for several multi-stream cases; runtime probes do not yet prove a full semantic-mapped draw. |
-| Skinning constants | Vertex-shader constants used as matrix palettes retain slot number, range, value, and relative-addressing semantics. | shader transform tests for indexed constant reads, constant boundary tests | Existing tests inspect lowering; no readback fixture proves the selected constant matrix changes the pose. |
-| Weight/index conversion | `BLENDWEIGHT` and `BLENDINDICES` values keep component order, normalization/raw interpretation, and stream source through backend fetch. | shader transform source-contract tests | No runtime fixture distinguishes wrong component order or wrong index conversion from a correct skinned pose. |
-| Fixed-function vertex blending | FFP `vertexBlend`, `indexedVertexBlend`, world matrices, normals, and FVF layout produce the intended blended vertex position. | FFP key/unit tests, fixed-function shader corpus | FFP vertex blending is specified but lacks a targeted readback probe. |
-| Rendered pose | A known input pose produces a deterministic triangle/quad mask or probe pixels that would fail for wrong stream, constant, weight, index, or matrix multiply. | required `shader_runner_dxmt9` skinning probe | Missing first-class runtime fixture; app experiments are useful symptoms but not deterministic evidence. |
+| Vertex semantic mapping | `D3DVERTEXELEMENT9` usage, usage index, stream, offset, stride, and type reach the shader input requested by DCL tokens or FFP layout. | `state_draw_transform_spec`, `shader_transform_spec` input-layout tests, `vs_specific/dxmt9_vs_skinned_triangle.shader_test` | Static coverage exists for several multi-stream cases; runtime variants still need broader moved-semantic and nonzero-offset coverage. |
+| Skinning constants | Vertex-shader constants used as matrix palettes retain slot number, range, value, and relative-addressing semantics. | shader transform tests for indexed constant reads, constant boundary tests, `vs_specific/dxmt9_vs_skinned_triangle.shader_test` | First runtime pose fixture exists; additional matrix slots and mixed-weight cases remain open. |
+| Weight/index conversion | `BLENDWEIGHT` and `BLENDINDICES` values keep component order, normalization/raw interpretation, and stream source through backend fetch. | shader transform source-contract tests, programmable skinning runtime probe, FFP indexed vertex-blend probe | Runtime coverage exists for the canonical two-stream programmable case and FFP indexed declaration path; last-beta indexed FVF variants remain open. |
+| Fixed-function vertex blending | FFP `vertexBlend`, `indexedVertexBlend`, world matrices, normals, and FVF layout produce the intended blended vertex position. | FFP key/unit tests, FFP vertex-blend shader-runner probes | Non-indexed one-weight, 2/3-weight, indexed declaration, and FVF `XYZB2` runtime evidence pass; broader normal/lighting and last-beta index variants remain open. |
+| Rendered pose | A known input pose produces a deterministic triangle/quad mask or probe pixels that would fail for wrong stream, constant, weight, index, or matrix multiply. | `shader_runner_dxmt9` skinning and FFP vertex-blend probes | First fixtures exist; broader pose matrix and blend-mode matrix remains partial. |
 
 The intended first fixture is deliberately small: two bone matrices translate
 the same triangle into distinguishable screen-space positions, stream 0 carries
@@ -209,6 +209,41 @@ the same triangle into distinguishable screen-space positions, stream 0 carries
 the vertex shader computes the weighted position from constants. The oracle is a
 pixel mask that changes if stream selection, declaration usage mapping, constant
 slot selection, relative addressing, or matrix multiplication is wrong.
+
+The fixed-function vertex-blending roadmap is tracked as a separate staged
+coverage graph because each step exercises a different D3D9 boundary. The
+implemented stages now cover non-indexed one-weight, non-indexed 2/3-weight,
+indexed declaration matrix selection, and FVF `XYZB2` beta-weight decode through
+`shader_runner_dxmt9` readback.
+
+```mermaid
+flowchart TD
+    A["FFP vertex-blend intent\nR-TEST-0.12 / R-TEST-1.11"] --> B["Stage 1: non-indexed one-weight\nstatus: passing"]
+    A --> C["Stage 2: non-indexed multi-weight\nstatus: passing"]
+    A --> D["Stage 3: indexed vertex blend\nstatus: passing"]
+    A --> E["Stage 4: FVF beta-weight decode\nstatus: passing"]
+
+    B --> B1["Input: vertex declaration\nPOSITION + BLENDWEIGHT + COLOR"]
+    B --> B2["State: VERTEXBLEND=1\nINDEXEDVERTEXBLENDENABLE=0"]
+    B --> B3["Uniforms: world0/world1 + view/proj\nffpBlendWorldViewProj[0..1]"]
+    B --> B4["Evidence: ffp/dxmt9_ffp_vertex_blend_triangle.shader_test"]
+
+    C --> C1["Input: BLENDWEIGHT float2/float3"]
+    C --> C2["State: VERTEXBLEND=2 or 3"]
+    C --> C3["Evidence: 2weights + 3weights declaration probes"]
+
+    D --> D1["Input: BLENDINDICES + BLENDWEIGHT"]
+    D --> D2["State: INDEXEDVERTEXBLENDENABLE=1"]
+    D --> D3["Evidence: indexed declaration probe"]
+
+    E --> E1["Input: FVF XYZB* beta-weight layout"]
+    E --> E2["Decoder: FVF-derived offsets/stride"]
+    E --> E3["Evidence: FVF XYZB2 probe"]
+
+    classDef done fill:#d9f5d6,stroke:#2f7d32,color:#102a12;
+    classDef open fill:#fff3cd,stroke:#b7791f,color:#3b2f00;
+    class B,B1,B2,B3,B4,C,C1,C2,C3,D,D1,D2,D3,E,E1,E2,E3 done;
+```
 
 ---
 
@@ -1460,12 +1495,12 @@ flowchart LR
 | Module | Standard tools / knobs | Required evidence | Current status |
 |---|---|---|---|
 | Metal backend | `DXMT_METAL_CAPTURE_FRAME`, `DXMT_METAL_CAPTURE_PATH`, `MTL_DEBUG_LAYER`, labels, debug groups, signposts, `DXMT_PERF_COUNTERS` | `.gputrace` path, validation log, frame/seq scope, CB GPU timing, GPU fault count | Mostly implemented; per-stage GPU timing is still `xctrace`-only. |
-| WSI / presenter | `DXMT_TRACE_QUEUE`, `DXMT_TRACE_FILE`, present trace lines, capture source classification | layer-acquisition path, HWND/window title, capture mode, visible-output source | Partially implemented; no dedicated WSI result schema yet. |
+| WSI / presenter | `DXMT_TRACE_QUEUE`, `DXMT_TRACE_FILE`, present trace lines, capture source classification | layer-acquisition path, HWND/window title, capture mode, visible-output source | Partially implemented; non-catalogue WSI runner emits `dxmt9.debug.result.v1`, parses live HWND/title/frame evidence, and can attach window-id/fullscreen capture artifacts. |
 | Wine unix/provider | `DXMT9_WINEMETAL_SO`, `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK`, `DXMT_LOG_LEVEL=debug`, `DXMT9_BRIDGE_VERBOSE` | provider candidate list, selected handle, ABI status, macdrv symbol status | Provider locator and ABI logs exist; patch-status gate/tooling is incomplete. |
 | Headless / non-Darwin | `wsi_platform_headless` platform result | explicit statement that WSI/window evidence is unavailable | Platform abstraction exists; no harness-level reporting contract yet. |
 | Environment registry | `agents/rules/environment_variables.rules.md` plus checked audit | every consumed runtime knob documented with owner/default | Registry exists; automated drift check is required. |
-| Boundary dump layer | harness options or env vars such as `DXMT_DEBUG_DUMP_DIR`, `DXMT_DEBUG_DUMP_BOUNDARIES` | schema-versioned before/after dumps with correlation keys | Not standardized; existing tests assert many values but do not emit a reusable dump bundle. |
-| Render capture layer | existing `DXMT_CAPTURE_FRAME`, `DXMT_EXPERIMENT_CAPTURE_PATH`, plus frame-list/range/video capture options | image sequence or video artifacts with source, frame/timebase, hash, dimensions, and limits | Single-frame internal/window capture exists in experiments; interval frame and video segment capture are not standardized. |
+| Boundary dump layer | harness options or env vars such as `DXMT_DEBUG_DUMP_DIR`, `DXMT_DEBUG_DUMP_BOUNDARIES` | schema-versioned before/after dumps with correlation keys | Bundle writer and schema selftest exist; native/module-boundary/shader-runner adapters still need opt-in wiring. |
+| Render capture layer | existing `DXMT_CAPTURE_FRAME`, `DXMT_EXPERIMENT_CAPTURE_PATH`, plus frame-list/range/video capture options | image sequence or video artifacts with source, frame/timebase, hash, dimensions, and limits | Experiment runner wiring exists for single-frame, frame-list, interval-range, dropped-frame reporting, bounded video metadata, and skipped-frame sidecars/counters. Renderer-side multi-frame internal BMP dumps and `dxmt9.render_capture.skip.v1` sidecars exist for requested internal captures. |
 
 ### Diagnostic Cost Classes
 
@@ -1686,10 +1721,15 @@ The 2026-05-16 audit found this split:
 - WSI diagnostics have working pieces (`wsi_present_x64.exe`, queue trace lines,
   macOS window capture helpers, capture-source classification), but no dedicated
   WSI debug runbook or result schema.
-- Boundary values are well covered by several native assertions, but no standard
-  before/after data-dump bundle exists for cross-boundary forensic analysis.
-- Experiments support single-frame internal dumps or window capture; interval
-  frame sequences and bounded video segments are not yet standardized.
+- Boundary values are well covered by several native assertions. A standard
+  before/after data-dump bundle writer now exists, but production harness
+  adapters still need to emit real per-boundary payloads.
+- Experiments support single-frame internal dumps or window capture and now emit
+  schema-compatible debug results for single-frame, frame-list, interval-range,
+  dropped-frame, and bounded video paths. Renderer-side multi-frame internal BMP
+  dumps are wired for `DXMT_CAPTURE_FRAMES` / `DXMT_CAPTURE_RANGE`. The remaining
+  runtime gap is non-catalogue WSI runner adoption of the same schema path and
+  richer renderer failure sidecars/counters.
 - Wine/provider diagnostics have provider locator debug logs and ABI handshake
   logs, but the `scripts/wine/check_patch.py` tool and manifest `requires_patch`
   / `patch_status` resolver gate are not fully implemented.

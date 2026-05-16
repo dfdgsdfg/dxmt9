@@ -1,11 +1,11 @@
 # dxmt9 Environment Variables
 
 Master list of `DXMT*` environment variables honored by the dxmt9
-runtime. Kept in this file so a developer can find every knob without
-grepping. Generated from `src/` source-of-truth on demand:
+runtime or repository harnesses. Kept in this file so a developer can
+find every knob without grepping. Generated from source on demand:
 
 ```sh
-grep -rEho '"DXMT[A-Z0-9_]+"' src/ | sort -u
+rg -o '"DXMT9?_[A-Z0-9_]+|DXMT_[A-Z0-9_]+"' src scripts/run_apps scripts/run_suites scripts/tools | sort -u
 ```
 
 Categories:
@@ -16,6 +16,8 @@ Categories:
 - **Adapter spoofing** — D3D9 driver ID overrides.
 - **Present policy** — present-acquire / boundary / latency tuning.
 - **Encoder debug toggles** — force-state knobs for triaging.
+- **Pipeline cache** — archive prewarm and cache-root controls.
+- **PE bridge / recorder** — PE-side chunk recorder diagnostics.
 - **Compatibility** — opt-out / opt-in flags for known-issue surfaces.
 
 A flag is "set" when its value is a non-empty string that is not `0`,
@@ -33,8 +35,11 @@ unless documented otherwise.
 | `DXMT_DUMP_SHADER_DIR` / `DXMT_DUMP_SHADER_BYTECODE_DIR` | Shader translation dumps | unset | shader transform |
 | `DXMT_FORCE_PRESENT_TEXTURE_HANDLE` | Force a specific texture as present source | unset | presenter |
 | `DXMT_SKIP_TEXTURE_HANDLE` | Suppress texture by handle | unset | presenter / encoder |
-| `DXMT_CAPTURE_FRAME` | Legacy capture knob (use `DXMT_METAL_CAPTURE_FRAME`) | unset | core |
-| `DXMT_EXPERIMENT_CAPTURE_PATH` | Experiment-harness capture path | unset | experiment runner |
+| `DXMT_CAPTURE_FRAME` | Internal backbuffer capture frame; also primary frame for multi-frame runs | unset | core / experiment runner |
+| `DXMT_CAPTURE_FRAMES` | Comma-separated internal backbuffer capture frame list | unset | core / experiment runner |
+| `DXMT_CAPTURE_RANGE` | Inclusive internal backbuffer capture range `start:end:interval` | unset | core / experiment runner |
+| `DXMT_EXPERIMENT_CAPTURE_PATH` | Single-frame experiment-harness capture path | unset | experiment runner |
+| `DXMT_EXPERIMENT_CAPTURE_DIR` | Multi-frame internal capture output directory (`frameNNNNNN.bmp`) | unset | core / experiment runner |
 | `DXMT_LEAK_STATEBLOCKS` | Skip stateblock destruction (leak-check triage) | unset | d3d9 |
 
 ## Logging / Tracing
@@ -51,6 +56,7 @@ unless documented otherwise.
 | `DXMT_TRACE_SHADER_INPUTS` | Shader input binding trace | unset |
 | `DXMT_TRACE_TEXTURE_HANDLE` | Trace per-handle texture events | unset |
 | `DXMT9_TRACE_DRAW_GEOMETRY` / `DXMT9_TRACE_DRAW_GEOMETRY_LIMIT` | Draw geometry diagnostics | unset |
+| `DXMT9_BRIDGE_VERBOSE` | Log rejected or suspicious winemetal bridge handles | `0` |
 
 ## Perf counters
 
@@ -77,6 +83,14 @@ unless documented otherwise.
 | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT` | Max commands per chunk (numeric) | derived |
 | `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS` | Limit max frame latency to backbuffer count | `0` |
 | `DXMT9_MAX_FRAME_LATENCY` | Override max frame latency (numeric) | unset |
+| `DXMT9_SYNC_PRESENT_FLUSH` | Flush synchronously after present for present-path triage | `0` |
+
+## Pipeline cache
+
+| Var | Purpose | Default |
+|---|---|---|
+| `DXMT9_PREWARM` | Override Metal binary archive prewarm mode: `full` / `lazy` / `disabled` | release=`full`, debug=`lazy` |
+| `DXMT9_CACHE_DIR` | Override dxmt9 cache root for shader archives | platform cache dir |
 
 ## Encoder / state debug
 
@@ -96,6 +110,7 @@ unless documented otherwise.
 | `DXMT_DEBUG_FFP_ALPHA` / `DXMT_DEBUG_FFP_TEXTURE` / `DXMT_DEBUG_FFP_UV` | FFP pipeline debug toggles | `0` |
 | `DXMT_DEBUG_NO_PER_DRAW_ALLOC` | Trip per-draw alloc invariant | `0` |
 | `DXMT_DEBUG_DISABLE_SHADER_ARCHIVE` | Skip shader archive load/save | `0` |
+| `DXMT9_DISABLE_ARGBUF_HYBRID` | Force Stage 2 argument-buffer hybrid binding path off | `0` |
 | `DXMT_DISABLE_ALPHA_TEST` / `DXMT_DISABLE_CULL` / `DXMT_DISABLE_SCISSOR` | Disable specific state | `0` |
 | `DXMT_FORCE_EXPAND_INDEXED` | Force indexed-→-non-indexed expansion | `0` |
 | `DXMT_FORCE_WINDOWED` | Force windowed mode | `0` |
@@ -104,10 +119,19 @@ unless documented otherwise.
 | `DXMT9_TRIM_UNUSED_VARYINGS` | Trim VSOut to drop fields no SFIV FS reads (texcoord5/6/7 + fogFactor + pointSize). -56 B/vertex, eliminates Apple TBDR "Out of parameter buffer memory" annotations (SFIV: 95→0 events in 20 s). Workload-specific — apps that sample texcoord ≥ 5 or read fogFactor/pointSize will render wrong | `0` |
 | `DXMT9_FS_HALF_PRECISION` | **EXPERIMENTAL — NOT FUNCTIONAL.** Rewrites translated FS bodies to half (fp16). Only ~33% of SFIV's FS sources compile under the current text-rewrite implementation; the remainder fail at MSL boundary type checks (sample-coord float2 requirement, helper-call dispatch, half4 ctor matching). Proper fix requires IR-level type propagation — see dxmt9_shader_sources.hpp header for the full status note. | `0` |
 | `DXMT9_LAYER_FRAMEBUFFER_ONLY` | Flip `CAMetalLayer.framebufferOnly` to `true` (Apple's tile-only fast path). Disables D3D9 `Lock()` / `GetRenderTargetData()` on the backbuffer surface — apps relying on backbuffer readback render wrong. Tested no-op on SFIV mean GPU time (compositor cost is parallel to SFIV's own fragment work, not stealing from it). | `0` |
-| `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK` | Allow legacy provider fallback | `0` |
 | `DXMT9_MID_CHUNK_COMMIT_POLICY` | Sub-CB chain split policy: `off` / `per-render-pass` / `per-n-records` (R-BACK-2.29-2.31, R-BACK-2.34 default-flip 2026-05-10) | `per-render-pass` |
 | `DXMT9_MID_CHUNK_COMMIT_RECORDS` | Records per sub-CB when policy=`per-n-records` | `64` |
 | `DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS` | Max sub-CBs per chunk; `0` disables (R-BACK-2.33) | `4` |
+
+## PE bridge / recorder
+
+| Var | Purpose | Default |
+|---|---|---|
+| `DXMT9_PE_RECORDER_STATS` | Emit PE recorder aggregate stats | `0` |
+| `DXMT9_PE_RECORDER_CHUNK_LOG` | Emit PE recorder chunk boundary logs | `0` |
+| `DXMT9_PE_DRAW_FULL_SNAPSHOT` | Force every draw packet to include a full PE state snapshot | `0` |
+| `DXMT9_PE_CHUNK_MAX_RECORDS` | Override max pending PE chunk records before commit | `64` |
+| `DXMT9_PE_CHUNK_MAX_BYTES` | Override max pending PE chunk bytes before commit | `262144` |
 
 ## Adapter spoofing
 
@@ -126,11 +150,21 @@ unless documented otherwise.
 
 ## Cross-process / Wine
 
-These are inherited by the Wine prefix and reach dxmt9 via the bridge:
+These are used by Wine, the PE/unix bridge, or repository experiment
+harnesses:
 
 | Var | Purpose |
 |---|---|
+| `DXMT9_WINEMETAL_SO` | Explicit winemetal.so provider path for app-local bridge loading |
+| `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK` | Allow legacy runtime-by-name provider fallback |
 | `DXMT_EXPERIMENT_WINE_DLLOVERRIDES` | Wine `WINEDLLOVERRIDES` snippet for the experiment harness |
+| `DXMT_EXPERIMENT_WINE_ID` | Select a Wine manifest entry for experiment runs |
+| `DXMT_EXPERIMENT_CX_BOTTLE` | Select a CrossOver bottle for experiment launchers |
+| `DXMT_VALIDATE` | Enable validation-layer setup in experiment launchers |
+| `DXMT_UPSTREAM_ROOT` | Upstream shader-corpus checkout used by sync/drift tools |
+| `DXMT_UPSTREAM_COMMIT` | Upstream shader-corpus commit override used by sync/drift tools |
+| `DXMT_UPSTREAM_URL` | Upstream shader-corpus provenance URL override |
+| `DXMT_ORACLE_DATE` | Shader-corpus oracle provenance date override |
 
 ## Apple-side (not honored by dxmt9 directly)
 

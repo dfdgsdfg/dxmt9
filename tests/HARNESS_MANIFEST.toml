@@ -1,0 +1,225 @@
+# Repository-wide test / experiment harness inventory.
+# This is the reviewable list required before adding new harness internals.
+# Runtime-cost classes follow R-ARCH-2.8 and R-TEST-14.19..14.23.
+
+schema = 1
+
+[[harness]]
+id = "native-core"
+name = "Native core value specs"
+path = "tests/native/core"
+kind = "native-unit"
+status = "implemented"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-0.1", "R-TEST-0.3", "R-TEST-0.10", "R-TEST-0.11"]
+meson_targets = [
+  "dxmt9-core-device-coverage-spec",
+  "dxmt9-core-device-lifecycle-spec",
+  "dxmt9-state-draw-transform-spec",
+]
+evidence = [
+  "tests/native/core/core_device_coverage_spec.cpp",
+  "tests/native/core/state_draw_transform_spec.cpp",
+]
+next = ["Keep primitive-conversion tests payload-based, not enum-only."]
+
+[[harness]]
+id = "native-shader"
+name = "Native shader transform specs"
+path = "tests/native/shader"
+kind = "native-unit"
+status = "implemented"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-0.2", "R-TEST-0.12", "R-TEST-1.3", "R-TEST-1.5"]
+meson_targets = ["dxmt9-shader-transform-spec"]
+evidence = ["tests/native/shader/shader_transform_spec.cpp"]
+next = ["Pair static skinning-source coverage with a runtime pose fixture."]
+
+[[harness]]
+id = "native-backend"
+name = "Native backend / encoder observer specs"
+path = "tests/native/backend"
+kind = "native-unit"
+status = "implemented"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-0.8", "R-TEST-0.10", "R-TEST-0.11", "R-TEST-14.20"]
+meson_targets = [
+  "dxmt9-metal-encoder-recorder-spec",
+  "dxmt9-encode-draw-recorder-spec",
+  "dxmt9-render-pass-actions-spec",
+]
+evidence = [
+  "tests/native/backend/metal_encoder_recorder_spec.cpp",
+  "tests/native/backend/encode_draw_recorder_spec.cpp",
+]
+next = ["Add non-indexed drawPrimitives and direct bound-index encode coverage."]
+
+[[harness]]
+id = "native-bridge"
+name = "Native bridge / packet value specs"
+path = "tests/native/bridge"
+kind = "native-unit"
+status = "implemented"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-0.6", "R-TEST-0.10", "R-TEST-7.4"]
+meson_targets = [
+  "dxmt9-bridge-marshalling-value-spec",
+  "dxmt9-chunk-record-import-spec",
+  "dxmt9-pe-chunk-record-value-spec",
+]
+evidence = [
+  "tests/native/bridge/bridge_marshalling_value_spec.cpp",
+  "tests/native/bridge/pe_chunk_record_value_spec.cpp",
+]
+next = ["Keep packet assertions before and after every bridge boundary."]
+
+[[harness]]
+id = "shader-runner"
+name = "shader_runner_dxmt9 runtime readback"
+path = "tests/shader_runner"
+kind = "runtime-readback"
+status = "partial"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-1.1", "R-TEST-1.6", "R-TEST-1.10", "R-TEST-1.11"]
+meson_targets = ["shader_runner_dxmt9", "dxmt9-shader-corpus-gaps"]
+evidence = [
+  "tests/shader_runner/shader_runner_dxmt9.cpp",
+  "tests/shader_runner/corpus/MANIFEST.toml",
+  "tests/shader_runner/corpus/render_state/dxmt9_odepth_depth_test.shader_test",
+  "tests/shader_runner/corpus/ffp/dxmt9_ffp_vertex_blend_triangle.shader_test",
+  "tests/shader_runner/corpus/ffp/dxmt9_ffp_vertex_blend_2weights_decl.shader_test",
+  "tests/shader_runner/corpus/ffp/dxmt9_ffp_vertex_blend_3weights_decl.shader_test",
+  "tests/shader_runner/corpus/ffp/dxmt9_ffp_vertex_blend_indexed_decl.shader_test",
+  "tests/shader_runner/corpus/ffp/dxmt9_ffp_vertex_blend_fvf_xyzb2.shader_test",
+  "tests/shader_runner/corpus/vs_specific/dxmt9_vs_skinned_triangle.shader_test",
+]
+next = ["Expand FFP vertex blending coverage to last-beta indexed FVF variants and normal/lighting interactions."]
+
+[[harness]]
+id = "module-boundary"
+name = "Module-boundary PE / unix provider harness"
+path = "tests/module_boundary"
+kind = "module-boundary"
+status = "partial"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-13.1", "R-TEST-13.2", "R-TEST-13.3", "R-TEST-13.4", "R-TEST-13.5", "R-TEST-13.6", "R-TEST-13.7", "R-TEST-13.8", "R-TEST-13.9"]
+meson_targets = [
+  "dxmt9-module-boundary-manifest-check",
+  "dxmt9-module-boundary-runner-validate",
+  "dxmt9-module-boundary-scaffold-result",
+  "dxmt9-module-boundary-debug-result-selftest",
+]
+evidence = [
+  "tests/module_boundary/MANIFEST.toml",
+  "tests/module_boundary/module_boundary_probe.cpp",
+  "tests/module_boundary/meson.build",
+  "tests/module_boundary/run_module_boundary.py",
+  "tests/scripts/test_module_boundary_debug_result.py",
+]
+next = ["Resolve app-local unix provider load, Wine wrapper post-probe timeout, and passing bridge ABI live evidence."]
+
+[[harness]]
+id = "d3d9-conformance"
+name = "Wine-oracle D3D9 PE conformance"
+path = "tests/conformance/d3d9"
+kind = "wine-pe-conformance"
+status = "partial"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-12.1", "R-TEST-12.20", "R-TEST-12.21"]
+meson_targets = [
+  "dxmt9-d3d9-conformance-manifest-check",
+  "dxmt9-d3d9-conformance-status-report",
+]
+evidence = [
+  "tests/conformance/d3d9/MANIFEST.toml",
+  "scripts/check/check_d3d9_conformance_status.py",
+]
+next = ["Drive scaffolded cases to lane/arch runtime evidence."]
+
+[[harness]]
+id = "wsi-present"
+name = "WSI present integration smoke"
+path = "tests/integration/wsi_present"
+kind = "integration"
+status = "partial"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-11.1", "R-TEST-14.5", "R-TEST-14.6"]
+meson_targets = ["dxmt9-wsi-present-debug-result-selftest"]
+evidence = [
+  "tests/integration/wsi_present/main.cpp",
+  "tests/integration/wsi_present/run_wsi_present.py",
+  "tests/scripts/test_wsi_present_debug_result.py",
+]
+next = ["Run opt-in Wine WSI evidence with live macdrv layer-acquisition classification on patched Wine runtimes."]
+
+[[harness]]
+id = "debug-result-schema"
+name = "WSI / debug dump / capture result schema and bundle writer"
+path = "scripts/check/check_debug_result_schema.py"
+kind = "manifest-audit"
+status = "partial"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-TEST-14.5", "R-TEST-14.6", "R-TEST-14.10", "R-TEST-14.13", "R-TEST-14.14", "R-TEST-14.15", "R-TEST-14.16", "R-TEST-14.17", "R-TEST-14.18"]
+meson_targets = [
+  "dxmt9-debug-result-schema-selftest",
+  "dxmt9-debug-artifact-bundle-selftest",
+  "dxmt9-module-boundary-debug-result-selftest",
+  "dxmt9-wsi-present-debug-result-selftest",
+]
+evidence = [
+  "scripts/check/check_debug_result_schema.py",
+  "scripts/tools/debug_artifact_bundle.py",
+  "tests/scripts/test_debug_result_schema.py",
+  "tests/scripts/test_debug_artifact_bundle.py",
+  "tests/scripts/test_module_boundary_debug_result.py",
+  "tests/scripts/test_wsi_present_debug_result.py",
+]
+next = ["Add dedicated schema roles for module-boundary provider/ABI sidecars and renderer capture skip sidecars if log-role sidecars become too coarse."]
+
+[[harness]]
+id = "wild-experiments"
+name = "Wild application experiments"
+path = "experiments"
+kind = "experiment"
+status = "partial"
+cost_class = "opt-in-cold-diagnostic"
+release_default = "disabled"
+requirements = ["R-WILD-1.1", "R-WILD-4.4", "R-WILD-4.7"]
+meson_targets = ["dxmt9-run-experiment-capture"]
+evidence = [
+  "scripts/run_apps/run_experiment.py",
+  "tests/scripts/test_run_experiment_capture.py",
+  "scripts/tools/debug_artifact_bundle.py",
+]
+next = ["Drive opt-in live app evidence through the new skipped-frame sidecar and WSI/module-boundary artifact paths."]
+
+[[harness]]
+id = "diagnostic-cost-audit"
+name = "Diagnostic cost-class inventory audit"
+path = "tests/HARNESS_MANIFEST.toml"
+kind = "manifest-audit"
+status = "implemented"
+cost_class = "compile-time-test-only"
+release_default = "not-linked"
+requirements = ["R-ARCH-2.8", "R-TEST-14.19", "R-TEST-14.20", "R-TEST-14.21", "R-TEST-14.22", "R-TEST-14.23"]
+meson_targets = [
+  "dxmt9-harness-manifest-check",
+  "dxmt9-diagnostic-cost-audit",
+  "dxmt9-diagnostic-cost-audit-selftest",
+]
+evidence = [
+  "tests/HARNESS_MANIFEST.toml",
+  "scripts/check/audit_diagnostic_costs.py",
+  "scripts/check/check_harness_manifest.py",
+  "tests/scripts/test_diagnostic_cost_audit.py",
+]
+next = ["Add focused disabled-hook evidence for bridge counts, chunk counts, allocation growth, and artifact writes."]

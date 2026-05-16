@@ -228,6 +228,17 @@ void testFvfLayoutHashIsDeterministicAndResponsive() {
   checkEq(specularLayout->stride, 32u, "specular FVF increases stride");
   checkEq(specularLayout->texcoordOffset[0], 24u, "specular FVF shifts texcoord offset");
   check(specularLayout->hash != layout->hash, "FVF layout hash changes when vertex layout changes");
+
+  DrawDesc beta = desc;
+  beta.vertexDecl.fvf = dxmt9::ffp::kFvfXyzB2 | dxmt9::ffp::kFvfDiffuse;
+  const auto betaLayout = dxmt9::ffp::decodeFixedFunctionVertexLayout(beta.vertexDecl);
+  check(betaLayout.has_value(), "XYZB2 FVF layout decodes");
+  check(betaLayout->hasBlendWeight, "XYZB2 FVF creates blend weights");
+  checkEq(betaLayout->blendWeightOffset, 12u, "XYZB2 blend weight offset");
+  checkEq(betaLayout->blendWeightComponents, 2u, "XYZB2 blend weight components");
+  checkEq(betaLayout->diffuseOffset, 20u, "XYZB2 diffuse offset");
+  checkEq(betaLayout->stride, 24u, "XYZB2 diffuse stride");
+  check(betaLayout->hash != layout->hash, "XYZB2 layout hash differs from XYZRHW layout");
 }
 
 void testShaderVariantKeyHashRespondsToLayoutAndBlendState() {

@@ -70,6 +70,14 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
       out.ffpWorldViewProj[row][col] = payload.worldViewProj.m[row * 4 + col];
     }
   }
+  for (std::size_t matrix = 0; matrix < out.ffpBlendWorldViewProj.size(); ++matrix) {
+    for (std::size_t row = 0; row < 4; ++row) {
+      for (std::size_t col = 0; col < 4; ++col) {
+        out.ffpBlendWorldViewProj[matrix][row][col] =
+            payload.ffpBlendWorldViewProj[matrix].m[row * 4 + col];
+      }
+    }
+  }
   for (std::size_t stage = 0; stage < core::kMaxTextureStages; ++stage) {
     for (std::size_t row = 0; row < 4; ++row) {
       for (std::size_t col = 0; col < 4; ++col) {

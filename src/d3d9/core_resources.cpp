@@ -10,12 +10,16 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dxmt9::core {
@@ -37,6 +41,63 @@ std::optional<u32> parseEnvU32Auto(const char *name) {
 
 std::string getenvString(const char *name) {
   return dxmt9::util::getenvString(name);
+}
+
+bool frameInList(std::span<const u32> frames, u32 frame) {
+  return std::find(frames.begin(), frames.end(), frame) != frames.end();
+}
+
+bool frameInRange(u32 frame, u32 start, u32 end, u32 interval) {
+  return interval != 0 && frame >= start && frame <= end &&
+         ((frame - start) % interval) == 0;
+}
+
+std::string captureFramePath(const std::string& dir, u32 frame) {
+  char name[32];
+  std::snprintf(name, sizeof(name), "frame%06u.bmp", frame);
+  return (std::filesystem::path(dir) / name).string();
+}
+
+std::string captureSkipPath(const std::string& capturePath) {
+  return capturePath + ".skipped.json";
+}
+
+std::string jsonEscape(std::string_view value) {
+  std::string escaped;
+  escaped.reserve(value.size());
+  for (char ch : value) {
+    switch (ch) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped.push_back(ch);
+        break;
+    }
+  }
+  return escaped;
+}
+
+bool ensureParentDirectory(const std::string& path) {
+  const auto parent = std::filesystem::path(path).parent_path();
+  if (parent.empty()) {
+    return true;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(parent, ec);
+  return !ec;
 }
 
 } // namespace
@@ -555,18 +616,77 @@ void Device::submitClearInternal(const ClearDesc &desc) {
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
 }
 
+u32 Device::experimentCaptureRequestedCount() const {
+  u32 count = experimentCapture_.frame != 0 ? 1u : 0u;
+  count += static_cast<u32>(experimentCapture_.frames.size());
+  if (experimentCapture_.rangeInterval != 0 &&
+      experimentCapture_.rangeEnd >= experimentCapture_.rangeStart) {
+    count += ((experimentCapture_.rangeEnd - experimentCapture_.rangeStart) /
+              experimentCapture_.rangeInterval) +
+             1u;
+  }
+  return count;
+}
+
+void Device::recordExperimentCaptureSkip(const std::string& capturePath,
+                                         const char* reason) {
+  ++experimentCapture_.droppedCount;
+  const std::string sidecarPath = captureSkipPath(capturePath);
+  if (!ensureParentDirectory(sidecarPath)) {
+    return;
+  }
+  std::ofstream stream(sidecarPath, std::ios::out | std::ios::trunc);
+  if (!stream) {
+    return;
+  }
+  stream << "{\n"
+         << "  \"schema\": \"dxmt9.render_capture.skip.v1\",\n"
+         << "  \"frame_id\": " << presentCount_ << ",\n"
+         << "  \"present_id\": " << presentCount_ << ",\n"
+         << "  \"source\": \"internal_dump\",\n"
+         << "  \"reason\": \"" << jsonEscape(reason) << "\",\n"
+         << "  \"counters\": {\n"
+         << "    \"present_count\": " << presentCount_ << ",\n"
+         << "    \"requested_count\": " << experimentCaptureRequestedCount()
+         << ",\n"
+         << "    \"captured_count\": " << experimentCapture_.capturedCount
+         << ",\n"
+         << "    \"dropped_count\": " << experimentCapture_.droppedCount
+         << "\n"
+         << "  }\n"
+         << "}\n";
+}
+
 void Device::maybeCaptureExperimentFrame() {
-  if (experimentCapture_.captured || experimentCapture_.frame == 0 ||
-      experimentCapture_.path.empty()) {
+  const bool singleRequested =
+      experimentCapture_.frame != 0 && !experimentCapture_.path.empty() &&
+      !experimentCapture_.captured && presentCount_ >= experimentCapture_.frame;
+  const bool listRequested =
+      !experimentCapture_.dir.empty() &&
+      frameInList(experimentCapture_.frames, presentCount_);
+  const bool rangeRequested =
+      !experimentCapture_.dir.empty() &&
+      frameInRange(presentCount_, experimentCapture_.rangeStart,
+                   experimentCapture_.rangeEnd,
+                   experimentCapture_.rangeInterval);
+  if (!singleRequested && !listRequested && !rangeRequested) {
     return;
   }
-  if (presentCount_ < experimentCapture_.frame) {
-    return;
-  }
+  const std::string capturePath =
+      singleRequested ? experimentCapture_.path
+                      : captureFramePath(experimentCapture_.dir, presentCount_);
   const bool trace = detail::renderTraceEnabled();
   if (trace) {
     detail::emitRenderTrace("capture frame=%u path=%s begin", presentCount_,
-                            experimentCapture_.path.c_str());
+                            capturePath.c_str());
+  }
+  if (!ensureParentDirectory(capturePath)) {
+    if (trace) {
+      detail::emitRenderTrace("capture frame=%u aborted: mkdir failed path=%s",
+                              presentCount_, capturePath.c_str());
+    }
+    recordExperimentCaptureSkip(capturePath, "artifact-write-failed");
+    return;
   }
   auto chain = swapChain(0);
   if (!chain) {
@@ -574,6 +694,7 @@ void Device::maybeCaptureExperimentFrame() {
       detail::emitRenderTrace("capture frame=%u aborted: no swap chain",
                               presentCount_);
     }
+    recordExperimentCaptureSkip(capturePath, "backbuffer-unavailable");
     return;
   }
   auto backBuffer = chain->backBuffer();
@@ -582,6 +703,7 @@ void Device::maybeCaptureExperimentFrame() {
       detail::emitRenderTrace("capture frame=%u aborted: invalid backbuffer",
                               presentCount_);
     }
+    recordExperimentCaptureSkip(capturePath, "backbuffer-unavailable");
     return;
   }
   const auto &desc = backBuffer->desc();
@@ -592,6 +714,7 @@ void Device::maybeCaptureExperimentFrame() {
                               presentCount_,
                               static_cast<unsigned>(desc.format));
     }
+    recordExperimentCaptureSkip(capturePath, "backbuffer-unavailable");
     return;
   }
   auto scratch =
@@ -602,6 +725,7 @@ void Device::maybeCaptureExperimentFrame() {
       detail::emitRenderTrace("capture frame=%u aborted: scratch alloc failed",
                               presentCount_);
     }
+    recordExperimentCaptureSkip(capturePath, "backbuffer-unavailable");
     return;
   }
   const auto readbackHr = getRenderTargetData(backBuffer, scratch);
@@ -611,6 +735,7 @@ void Device::maybeCaptureExperimentFrame() {
           "capture frame=%u aborted: getRenderTargetData hr=0x%08x",
           presentCount_, static_cast<unsigned>(readbackHr));
     }
+    recordExperimentCaptureSkip(capturePath, "backbuffer-unavailable");
     return;
   }
   auto region = scratch->lockRect(nullptr, 0);
@@ -619,25 +744,30 @@ void Device::maybeCaptureExperimentFrame() {
       detail::emitRenderTrace("capture frame=%u aborted: lockRect failed",
                               presentCount_);
     }
+    recordExperimentCaptureSkip(capturePath, "backbuffer-unavailable");
     return;
   }
   const size_t byteCount = static_cast<size_t>(region.pitch) * desc.height;
   const bool wrote = writeBmpScreenshot(
-      experimentCapture_.path, desc.format, desc.width, desc.height,
+      capturePath, desc.format, desc.width, desc.height,
       region.pitch,
       std::span<const u8>(static_cast<const u8 *>(region.data), byteCount));
   scratch->unlockRect();
   if (wrote) {
-    experimentCapture_.captured = true;
+    if (singleRequested) {
+      experimentCapture_.captured = true;
+    }
+    ++experimentCapture_.capturedCount;
     if (trace) {
       detail::emitRenderTrace("capture frame=%u wrote=%s", presentCount_,
-                              experimentCapture_.path.c_str());
+                              capturePath.c_str());
     }
   } else {
     if (trace) {
       detail::emitRenderTrace("capture frame=%u aborted: writeBmp failed",
                               presentCount_);
     }
+    recordExperimentCaptureSkip(capturePath, "artifact-write-failed");
   }
 }
 

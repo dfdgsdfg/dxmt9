@@ -116,10 +116,19 @@ struct CorpusTest {
   bool drawDxmt9SolidQuad = false;
   bool drawDxmt9VsColorTriangle = false;
   bool drawDxmt9VsMultistreamTexturedQuad = false;
+  bool drawDxmt9VsSkinnedTriangle = false;
+  bool drawDxmt9FfpVertexBlendTriangle = false;
+  bool drawDxmt9FfpVertexBlend2WeightsTriangle = false;
+  bool drawDxmt9FfpVertexBlend3WeightsTriangle = false;
+  bool drawDxmt9FfpVertexBlendIndexedTriangle = false;
+  bool drawDxmt9FfpVertexBlendFvfXyzb2Triangle = false;
+  bool drawDxmt9ODepthOverlap = false;
   u32 clipPlaneMask = 0;
   std::optional<u32> colorWriteMask;
   std::optional<u32> zEnable;
   std::optional<u32> zWriteEnable;
+  std::optional<u32> zFunc;
+  std::optional<float> clearDepth;
   bool alphaTestEnable = false;
   CompareFunc alphaTestFunc = CompareFunc::Always;
   float alphaRef = 0.0f;
@@ -134,11 +143,19 @@ struct CorpusTest {
 
 constexpr u32 kFvfXyzrhw = 0x0004u;
 constexpr u32 kFvfXyz = 0x0002u;
+constexpr u32 kFvfXyzB2 = 0x0008u;
+constexpr u32 kFvfDiffuse = 0x0040u;
 constexpr u32 kFvfTex1 = 0x0100u;
 constexpr u32 kFvfTex2 = 0x0200u;
+constexpr u32 kDeclTypeFloat1 = 0u;
 constexpr u32 kDeclTypeFloat4 = 3u;
 constexpr u32 kDeclTypeD3DColor = 4u;
+constexpr u32 kDeclTypeFloat3 = 2u;
+constexpr u32 kDeclTypeUByte4 = 5u;
+constexpr u32 kDeclTypeShort4N = 10u;
 constexpr u32 kDeclUsagePosition = 0u;
+constexpr u32 kDeclUsageBlendWeight = 1u;
+constexpr u32 kDeclUsageBlendIndices = 2u;
 constexpr u32 kDeclUsageColor = 10u;
 constexpr u32 kTextureArgDiffuse = 0u;
 constexpr u32 kTextureArgCurrent = 1u;
@@ -154,6 +171,7 @@ constexpr u32 kTextureFilterNone = 0u;
 constexpr u32 kTextureFilterPoint = 1u;
 constexpr u32 kTextureFilterLinear = 2u;
 constexpr u32 kTextureFilterAnisotropic = 3u;
+constexpr u32 kDeclTypeFloat2 = 1u;
 
 struct ScreenSpaceTexturedVertex {
   float x = 0.0f;
@@ -190,6 +208,14 @@ struct ScreenSpaceVertex {
   float rhw = 1.0f;
 };
 
+struct ScreenSpaceColorVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float rhw = 1.0f;
+  u32 color = 0xffffffffu;
+};
+
 struct ProgrammedColorVertex {
   float x = 0.0f;
   float y = 0.0f;
@@ -213,6 +239,62 @@ struct MultiStreamTexcoordVertex {
   float v0 = 0.0f;
   float u1 = 0.0f;
   float v1 = 0.0f;
+};
+
+struct SkinnedPositionVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+};
+
+struct SkinnedPoseVertex {
+  std::int16_t weight0 = 0;
+  std::int16_t weight1 = 0;
+  std::int16_t weight2 = 0;
+  std::int16_t weight3 = 0;
+  u8 index0 = 0;
+  u8 index1 = 0;
+  u8 index2 = 0;
+  u8 index3 = 0;
+};
+
+struct FfpVertexBlendVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float weight = 0.0f;
+  u32 color = 0xffffffffu;
+};
+
+struct FfpVertexBlend2WeightsVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float weight0 = 0.0f;
+  float weight1 = 0.0f;
+  u32 color = 0xffffffffu;
+};
+
+struct FfpVertexBlendIndexedVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float weight = 0.0f;
+  u8 index0 = 0;
+  u8 index1 = 0;
+  u8 index2 = 0;
+  u8 index3 = 0;
+  u32 color = 0xffffffffu;
+};
+
+struct FfpVertexBlend3WeightsVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float weight0 = 0.0f;
+  float weight1 = 0.0f;
+  float weight2 = 0.0f;
+  u32 color = 0xffffffffu;
 };
 
 std::string trim(std::string_view text) {
@@ -887,6 +969,8 @@ u32 parseBoolState(std::string_view text) {
   fail("unsupported dxmt9 boolean state");
 }
 
+CompareFunc parseCompareFunc(std::string_view text);
+
 bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
   std::istringstream stream{std::string(line)};
   std::string command;
@@ -910,6 +994,9 @@ bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
       sawState = true;
     } else if (key == "zwrite") {
       test.zWriteEnable = parseBoolState(value);
+      sawState = true;
+    } else if (key == "zfunc") {
+      test.zFunc = static_cast<u32>(parseCompareFunc(value));
       sawState = true;
     } else {
       fail("unsupported dxmt9-render-state state");
@@ -947,7 +1034,7 @@ CompareFunc parseCompareFunc(std::string_view text) {
   if (token == "always") {
     return CompareFunc::Always;
   }
-  fail("unsupported alpha-test comparison function");
+  fail("unsupported comparison function");
 }
 
 std::vector<u8> parseHexWords(std::string_view text) {
@@ -1048,6 +1135,14 @@ std::optional<ColorRGBA> parseClear(std::string_view line) {
   return ColorRGBA{r, g, b, a};
 }
 
+std::optional<float> parseClearDepth(std::string_view line) {
+  float depth = 0.0f;
+  if (std::sscanf(std::string(line).c_str(), "dxmt9-clear-depth %f", &depth) != 1) {
+    return std::nullopt;
+  }
+  return std::clamp(depth, 0.0f, 1.0f);
+}
+
 std::optional<Viewport> parseDxmt9Viewport(std::string_view line) {
   std::istringstream stream{std::string(line)};
   std::string command;
@@ -1119,8 +1214,48 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-vs-skinned-triangle") {
+    test.drawDxmt9VsSkinnedTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-vertex-blend-triangle") {
+    test.drawDxmt9FfpVertexBlendTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-vertex-blend-2weights-triangle") {
+    test.drawDxmt9FfpVertexBlend2WeightsTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-vertex-blend-3weights-triangle") {
+    test.drawDxmt9FfpVertexBlend3WeightsTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-vertex-blend-indexed-triangle") {
+    test.drawDxmt9FfpVertexBlendIndexedTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-vertex-blend-fvf-xyzb2-triangle") {
+    test.drawDxmt9FfpVertexBlendFvfXyzb2Triangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-odepth-overlap") {
+    test.drawDxmt9ODepthOverlap = true;
+    return;
+  }
+
   if (auto clear = parseClear(line)) {
     test.clearColor = *clear;
+    return;
+  }
+
+  if (auto depth = parseClearDepth(line)) {
+    test.clearDepth = *depth;
     return;
   }
 
@@ -1563,6 +1698,33 @@ void drawDxmt9SolidQuad(Device& device, u32 width, u32 height) {
       device, SolidRectDraw{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)});
 }
 
+void drawDxmt9ODepthQuad(Device& device, u32 width, u32 height, u32 color) {
+  if (device.setFVF(kFvfXyzrhw | kFvfDiffuse) != D3D_OK) {
+    fail("dxmt9 oDepth quad FVF setup failed");
+  }
+
+  const float w = static_cast<float>(width);
+  const float h = static_cast<float>(height);
+  const std::array<ScreenSpaceColorVertex, 6> quad{
+      ScreenSpaceColorVertex{0.0f, 0.0f, 0.0f, 1.0f, color},
+      ScreenSpaceColorVertex{w, 0.0f, 0.0f, 1.0f, color},
+      ScreenSpaceColorVertex{0.0f, h, 0.0f, 1.0f, color},
+      ScreenSpaceColorVertex{w, 0.0f, 0.0f, 1.0f, color},
+      ScreenSpaceColorVertex{w, h, 0.0f, 1.0f, color},
+      ScreenSpaceColorVertex{0.0f, h, 0.0f, 1.0f, color},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceColorVertex)) != D3D_OK) {
+    fail("dxmt9 oDepth quad draw failed");
+  }
+}
+
+void drawDxmt9ODepthOverlap(Device& device, u32 width, u32 height) {
+  drawDxmt9ODepthQuad(device, width, height, 0xbfff0000u);
+  drawDxmt9ODepthQuad(device, width, height, 0x4000ff00u);
+}
+
 void drawDxmt9VsColorTriangle(Device& device) {
   const std::vector<VertexElement> declaration{
       VertexElement{0, 0, kDeclTypeFloat4, 0, kDeclUsagePosition, 0},
@@ -1647,6 +1809,208 @@ void drawDxmt9VsMultistreamTexturedQuad(Device& device) {
   }
 }
 
+void drawDxmt9VsSkinnedTriangle(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat3, 0, kDeclUsagePosition, 0},
+      VertexElement{1, 0, kDeclTypeShort4N, 0, kDeclUsageBlendWeight, 0},
+      VertexElement{1, 8, kDeclTypeUByte4, 0, kDeclUsageBlendIndices, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 VS skinned triangle vertex declaration setup failed");
+  }
+
+  auto& constants = device.mutableState().vsConst.float4;
+  constants[0] = {1.0f, 0.0f, 0.0f, 1.0f};
+  constants[1] = {0.0f, 1.0f, 0.0f, 0.0f};
+  constants[2] = {0.0f, 0.0f, 1.0f, 0.0f};
+  constants[3] = {0.0f, 0.0f, 0.0f, 1.0f};
+  constants[8] = {0.0f, 1.0f, 0.0f, 1.0f};
+
+  const std::array<SkinnedPositionVertex, 3> positions{
+      SkinnedPositionVertex{-1.0f, -1.0f, 0.0f},
+      SkinnedPositionVertex{-1.0f, 1.0f, 0.0f},
+      SkinnedPositionVertex{0.0f, -1.0f, 0.0f},
+  };
+  const std::array<SkinnedPoseVertex, 3> poses{
+      SkinnedPoseVertex{32767, 0, 0, 0, 0, 0, 0, 0},
+      SkinnedPoseVertex{32767, 0, 0, 0, 0, 0, 0, 0},
+      SkinnedPoseVertex{32767, 0, 0, 0, 0, 0, 0, 0},
+  };
+
+  auto positionBuffer = createVertexBufferWithData(device, positions);
+  auto poseBuffer = createVertexBufferWithData(device, poses);
+  if (device.setStreamSource(0, positionBuffer, 0, sizeof(SkinnedPositionVertex)) != D3D_OK) {
+    fail("dxmt9 VS skinned triangle stream0 setup failed");
+  }
+  if (device.setStreamSource(1, poseBuffer, 0, sizeof(SkinnedPoseVertex)) != D3D_OK) {
+    fail("dxmt9 VS skinned triangle stream1 setup failed");
+  }
+  if (device.drawPrimitive(PrimitiveType::TriangleList, 1, 0) != D3D_OK) {
+    fail("dxmt9 VS skinned triangle draw failed");
+  }
+}
+
+Matrix4x4 makeIdentityMatrix() {
+  Matrix4x4 matrix{};
+  matrix.m = {1.0f, 0.0f, 0.0f, 0.0f,
+              0.0f, 1.0f, 0.0f, 0.0f,
+              0.0f, 0.0f, 1.0f, 0.0f,
+              0.0f, 0.0f, 0.0f, 1.0f};
+  return matrix;
+}
+
+Matrix4x4 makeTranslatedMatrix(float x, float y, float z) {
+  Matrix4x4 matrix = makeIdentityMatrix();
+  matrix.m[12] = x;
+  matrix.m[13] = y;
+  matrix.m[14] = z;
+  return matrix;
+}
+
+void setFfpBlendTransforms(Device& device, float world0, float world1, float world2, float world3) {
+  if (device.setTransform(XFORM_WORLD_BASE, makeTranslatedMatrix(world0, 0.0f, 0.0f)) != D3D_OK ||
+      device.setTransform(XFORM_WORLD_BASE + 1u, makeTranslatedMatrix(world1, 0.0f, 0.0f)) != D3D_OK ||
+      device.setTransform(XFORM_WORLD_BASE + 2u, makeTranslatedMatrix(world2, 0.0f, 0.0f)) != D3D_OK ||
+      device.setTransform(XFORM_WORLD_BASE + 3u, makeTranslatedMatrix(world3, 0.0f, 0.0f)) != D3D_OK ||
+      device.setTransform(XFORM_VIEW, makeIdentityMatrix()) != D3D_OK ||
+      device.setTransform(XFORM_PROJECTION, makeIdentityMatrix()) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend transform setup failed");
+  }
+}
+
+void drawDxmt9FfpVertexBlendTriangle(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat3, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 12, kDeclTypeFloat1, 0, kDeclUsageBlendWeight, 0},
+      VertexElement{0, 16, kDeclTypeD3DColor, 0, kDeclUsageColor, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend declaration setup failed");
+  }
+
+  if (device.setRenderState(RS_VERTEX_BLEND, 1) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend render-state setup failed");
+  }
+  setFfpBlendTransforms(device, -0.75f, 0.75f, -0.75f, -0.75f);
+
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<FfpVertexBlendVertex, 3> triangle{
+      FfpVertexBlendVertex{-0.45f, -0.45f, 0.0f, 0.0f, kGreen},
+      FfpVertexBlendVertex{-0.45f, 0.45f, 0.0f, 0.0f, kGreen},
+      FfpVertexBlendVertex{0.15f, -0.45f, 0.0f, 0.0f, kGreen},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(triangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1, std::span<const u8>(bytes, sizeof(triangle)),
+                             sizeof(FfpVertexBlendVertex)) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend triangle draw failed");
+  }
+}
+
+void drawDxmt9FfpVertexBlend2WeightsTriangle(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat3, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 12, kDeclTypeFloat2, 0, kDeclUsageBlendWeight, 0},
+      VertexElement{0, 20, kDeclTypeD3DColor, 0, kDeclUsageColor, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend 2weights declaration setup failed");
+  }
+  if (device.setRenderState(RS_VERTEX_BLEND, 2) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend 2weights render-state setup failed");
+  }
+  setFfpBlendTransforms(device, -0.75f, 0.75f, -0.75f, -0.75f);
+
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<FfpVertexBlend2WeightsVertex, 3> triangle{
+      FfpVertexBlend2WeightsVertex{-0.45f, -0.45f, 0.0f, 0.0f, 1.0f, kGreen},
+      FfpVertexBlend2WeightsVertex{-0.45f, 0.45f, 0.0f, 0.0f, 1.0f, kGreen},
+      FfpVertexBlend2WeightsVertex{0.15f, -0.45f, 0.0f, 0.0f, 1.0f, kGreen},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(triangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1, std::span<const u8>(bytes, sizeof(triangle)),
+                             sizeof(FfpVertexBlend2WeightsVertex)) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend 2weights triangle draw failed");
+  }
+}
+
+void drawDxmt9FfpVertexBlend3WeightsTriangle(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat3, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 12, kDeclTypeFloat3, 0, kDeclUsageBlendWeight, 0},
+      VertexElement{0, 24, kDeclTypeD3DColor, 0, kDeclUsageColor, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend 3weights declaration setup failed");
+  }
+  if (device.setRenderState(RS_VERTEX_BLEND, 3) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend 3weights render-state setup failed");
+  }
+  setFfpBlendTransforms(device, -0.75f, -0.75f, 0.75f, -0.75f);
+
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<FfpVertexBlend3WeightsVertex, 3> triangle{
+      FfpVertexBlend3WeightsVertex{-0.45f, -0.45f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+      FfpVertexBlend3WeightsVertex{-0.45f, 0.45f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+      FfpVertexBlend3WeightsVertex{0.15f, -0.45f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(triangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1, std::span<const u8>(bytes, sizeof(triangle)),
+                             sizeof(FfpVertexBlend3WeightsVertex)) != D3D_OK) {
+    fail("dxmt9 FFP vertex blend 3weights triangle draw failed");
+  }
+}
+
+void drawDxmt9FfpVertexBlendIndexedTriangle(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat3, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 12, kDeclTypeFloat1, 0, kDeclUsageBlendWeight, 0},
+      VertexElement{0, 16, kDeclTypeUByte4, 0, kDeclUsageBlendIndices, 0},
+      VertexElement{0, 20, kDeclTypeD3DColor, 0, kDeclUsageColor, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 FFP indexed vertex blend declaration setup failed");
+  }
+  if (device.setRenderState(RS_VERTEX_BLEND, 1) != D3D_OK ||
+      device.setRenderState(RS_INDEXED_VERTEX_BLEND_ENABLE, 1) != D3D_OK) {
+    fail("dxmt9 FFP indexed vertex blend render-state setup failed");
+  }
+  setFfpBlendTransforms(device, -0.75f, -0.75f, 0.75f, -0.75f);
+
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<FfpVertexBlendIndexedVertex, 3> triangle{
+      FfpVertexBlendIndexedVertex{-0.45f, -0.45f, 0.0f, 0.0f, 0, 2, 0, 0, kGreen},
+      FfpVertexBlendIndexedVertex{-0.45f, 0.45f, 0.0f, 0.0f, 0, 2, 0, 0, kGreen},
+      FfpVertexBlendIndexedVertex{0.15f, -0.45f, 0.0f, 0.0f, 0, 2, 0, 0, kGreen},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(triangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1, std::span<const u8>(bytes, sizeof(triangle)),
+                             sizeof(FfpVertexBlendIndexedVertex)) != D3D_OK) {
+    fail("dxmt9 FFP indexed vertex blend triangle draw failed");
+  }
+}
+
+void drawDxmt9FfpVertexBlendFvfXyzb2Triangle(Device& device) {
+  if (device.setFVF(kFvfXyzB2 | kFvfDiffuse) != D3D_OK) {
+    fail("dxmt9 FFP FVF XYZB2 setup failed");
+  }
+  if (device.setRenderState(RS_VERTEX_BLEND, 2) != D3D_OK) {
+    fail("dxmt9 FFP FVF XYZB2 render-state setup failed");
+  }
+  setFfpBlendTransforms(device, -0.75f, 0.75f, -0.75f, -0.75f);
+
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<FfpVertexBlend2WeightsVertex, 3> triangle{
+      FfpVertexBlend2WeightsVertex{-0.45f, -0.45f, 0.0f, 0.0f, 1.0f, kGreen},
+      FfpVertexBlend2WeightsVertex{-0.45f, 0.45f, 0.0f, 0.0f, 1.0f, kGreen},
+      FfpVertexBlend2WeightsVertex{0.15f, -0.45f, 0.0f, 0.0f, 1.0f, kGreen},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(triangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1, std::span<const u8>(bytes, sizeof(triangle)),
+                             sizeof(FfpVertexBlend2WeightsVertex)) != D3D_OK) {
+    fail("dxmt9 FFP FVF XYZB2 triangle draw failed");
+  }
+}
+
 void expectContains(const std::string& haystack, const std::string& needle, const std::string& path) {
   if (haystack.find(needle) == std::string::npos) {
     std::ostringstream out;
@@ -1689,16 +2053,22 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                             test.drawDxmt9VsColorTriangle ||
                             test.drawDxmt9VsMultistreamTexturedQuad ||
+                            test.drawDxmt9VsSkinnedTriangle ||
+                            test.drawDxmt9FfpVertexBlendTriangle ||
+                            test.drawDxmt9ODepthOverlap ||
                             !test.solidRectDraws.empty() ||
                             !test.textureSetups.empty() || !test.samplerSetups.empty() ||
                             !test.textureStageSetups.empty() || !test.textureTransformSetups.empty() ||
                             !test.textureBinds.empty() || !test.renderTargetSetups.empty() ||
                             test.viewport.has_value() ||
                             test.colorWriteMask.has_value() || test.zEnable.has_value() ||
-                            test.zWriteEnable.has_value() || test.alphaTestEnable;
+                            test.zWriteEnable.has_value() || test.zFunc.has_value() ||
+                            test.clearDepth.has_value() || test.alphaTestEnable;
   if (!needsRuntime) {
     return;
   }
+  const bool needsDepthStencil = test.clearDepth.has_value() || test.drawDxmt9ODepthOverlap ||
+                                 (test.zEnable.has_value() && *test.zEnable != 0u);
 
   BackendLimits limits{};
   limits.maxTextureSize = 4096;
@@ -1715,6 +2085,7 @@ void runCorpusFile(const std::string& path) {
   params.windowed = true;
   params.presentationInterval = PresentInterval::Immediate;
   params.deviceWindow = Handle{0};
+  params.enableAutoDepthStencil = needsDepthStencil;
 
   auto device = factory.createDevice(0, params);
   if (!device) {
@@ -1723,9 +2094,11 @@ void runCorpusFile(const std::string& path) {
 
   auto backBuffer = device->swapChain()->backBuffer();
   auto depthStencil = device->swapChain()->depthStencilSurface();
-  (void)depthStencil;
   if (!backBuffer) {
     fail("missing back buffer");
+  }
+  if (needsDepthStencil && !depthStencil) {
+    fail("missing depth-stencil surface");
   }
 
   device->setViewport({0, 0, 64, 64, 0.0f, 1.0f});
@@ -1789,12 +2162,19 @@ void runCorpusFile(const std::string& path) {
   if (test.zWriteEnable) {
     device->setRenderState(RS_Z_WRITE_ENABLE, *test.zWriteEnable);
   }
+  if (test.zFunc) {
+    device->setRenderState(RS_Z_FUNC, *test.zFunc);
+  }
 
-  const bool needsClear = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
+  const bool needsClear = test.clearColor.has_value() || test.clearDepth.has_value() ||
+                          !test.probes.empty() || test.drawQuad ||
                           test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadTex2 ||
                           test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                           test.drawDxmt9VsColorTriangle ||
                           test.drawDxmt9VsMultistreamTexturedQuad ||
+                          test.drawDxmt9VsSkinnedTriangle ||
+                          test.drawDxmt9FfpVertexBlendTriangle ||
+                          test.drawDxmt9ODepthOverlap ||
                           !test.solidRectDraws.empty() ||
                           !test.renderTargetSetups.empty();
   if (needsClear) {
@@ -1808,6 +2188,15 @@ void runCorpusFile(const std::string& path) {
       }
       clear.colorAttachments[i] = {renderTargets[i]->handle(), renderTargets[i]->level(),
                                    renderTargets[i]->multiSampleCount()};
+    }
+    if (test.clearDepth) {
+      if (!depthStencil) {
+        fail("depth clear requires a depth-stencil surface");
+      }
+      clear.clearDepth = true;
+      clear.depth = *test.clearDepth;
+      clear.depthStencil = {depthStencil->handle(), depthStencil->level(),
+                            depthStencil->multiSampleCount()};
     }
     if (device->clear(clear) != D3D_OK) {
       fail("clear failed");
@@ -1891,6 +2280,76 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9VsMultistreamTexturedQuad(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9VsSkinnedTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsSkinnedTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpVertexBlendTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpVertexBlendTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpVertexBlend2WeightsTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpVertexBlend2WeightsTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpVertexBlend3WeightsTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpVertexBlend3WeightsTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpVertexBlendIndexedTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpVertexBlendIndexedTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpVertexBlendFvfXyzb2Triangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpVertexBlendFvfXyzb2Triangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9ODepthOverlap) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9ODepthOverlap(*device, params.backBufferWidth, params.backBufferHeight);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }

@@ -71,11 +71,21 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasDiffuse);
   hash *= 1099511628211ull;
+  hash ^= static_cast<u64>(layout.hasBlendWeight);
+  hash *= 1099511628211ull;
+  hash ^= static_cast<u64>(layout.hasBlendIndices);
+  hash *= 1099511628211ull;
   hash ^= layout.stride;
   hash *= 1099511628211ull;
   hash ^= layout.positionOffset;
   hash *= 1099511628211ull;
   hash ^= layout.diffuseOffset;
+  hash *= 1099511628211ull;
+  hash ^= layout.blendWeightOffset;
+  hash *= 1099511628211ull;
+  hash ^= layout.blendWeightComponents;
+  hash *= 1099511628211ull;
+  hash ^= layout.blendIndicesOffset;
   hash *= 1099511628211ull;
   for (size_t i = 0; i < layout.hasTexcoord.size(); ++i) {
     hash ^= static_cast<u64>(layout.hasTexcoord[i]);
@@ -117,6 +127,15 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
                  element.type == kD3DDeclTypeD3DColor) {
         layout.hasDiffuse = true;
         layout.diffuseOffset = element.offset;
+      } else if (element.usage == kD3DDeclUsageBlendWeight && element.usageIndex == 0 &&
+                 element.type <= kD3DDeclTypeFloat4) {
+        layout.hasBlendWeight = true;
+        layout.blendWeightOffset = element.offset;
+        layout.blendWeightComponents = element.type + 1u;
+      } else if (element.usage == kD3DDeclUsageBlendIndices && element.usageIndex == 0 &&
+                 element.type == kD3DDeclTypeUByte4) {
+        layout.hasBlendIndices = true;
+        layout.blendIndicesOffset = element.offset;
       } else if (element.usage == kD3DDeclUsageTexcoord && element.usageIndex < kMaxTextureStages &&
                  element.type == kD3DDeclTypeFloat2) {
         layout.hasTexcoord[element.usageIndex] = true;
@@ -133,7 +152,10 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
 
   const u32 fvf = decl.fvf;
   const u32 position = fvf & kFvfPositionMask;
-  if (position != kFvfXyzrhw && position != kFvfXyz) {
+  if (position != kFvfXyzrhw && position != kFvfXyz &&
+      position != kFvfXyzB1 && position != kFvfXyzB2 &&
+      position != kFvfXyzB3 && position != kFvfXyzB4 &&
+      position != kFvfXyzB5) {
     return std::nullopt;
   }
 
@@ -143,6 +165,12 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
   u32 offset = 0;
   layout.positionOffset = offset;
   offset += layout.preTransformed ? 16u : 12u;
+  if (!layout.preTransformed && position > kFvfXyz) {
+    layout.hasBlendWeight = true;
+    layout.blendWeightOffset = offset;
+    layout.blendWeightComponents = std::min<u32>((position - kFvfXyzrhw) / 2u, 4u);
+    offset += layout.blendWeightComponents * 4u;
+  }
 
   if ((fvf & kFvfNormal) != 0) {
     offset += 12u;
@@ -285,17 +313,75 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  float4 inPosition = float4(dxmt9_load_f32x3(stream0, base + " << layout->positionOffset
           << "u), 1.0f);\n";
     }
+    const bool emitVertexBlend =
+        key.vertexBlend > 0 && key.vertexBlend <= 3 && layout->hasBlendWeight;
     out << "  float4 clip;\n";
+    out << "  float4 blendedClip = float4(0.0f);\n";
     out << "  bool identityWvp = all(ffpVs.ffpWorldViewProj[0] == float4(1.0, 0.0, 0.0, 0.0)) &&\n";
     out << "                     all(ffpVs.ffpWorldViewProj[1] == float4(0.0, 1.0, 0.0, 0.0)) &&\n";
     out << "                     all(ffpVs.ffpWorldViewProj[2] == float4(0.0, 0.0, 1.0, 0.0)) &&\n";
     out << "                     all(ffpVs.ffpWorldViewProj[3] == float4(0.0, 0.0, 0.0, 1.0));\n";
-    out << "  bool pixelSpacePosition = identityWvp && (fabs(inPosition.x) > 2.0f || fabs(inPosition.y) > 2.0f);\n";
+    if (emitVertexBlend) {
+      out << "  float4 blendWeights = float4(0.0f);\n";
+      out << "  uint4 blendMatrixIndices = uint4(0u, 1u, 2u, 3u);\n";
+      if (layout->blendWeightComponents == 1) {
+        out << "  blendWeights.x = dxmt9_load_f32(stream0, base + " << layout->blendWeightOffset << "u);\n";
+      } else if (layout->blendWeightComponents == 2) {
+        out << "  blendWeights.xy = dxmt9_load_f32x2(stream0, base + " << layout->blendWeightOffset << "u);\n";
+      } else if (layout->blendWeightComponents == 3) {
+        out << "  blendWeights.xyz = dxmt9_load_f32x3(stream0, base + " << layout->blendWeightOffset << "u);\n";
+      } else {
+        out << "  blendWeights = dxmt9_load_f32x4(stream0, base + " << layout->blendWeightOffset << "u);\n";
+      }
+      if (key.indexedVertexBlend && layout->hasBlendIndices) {
+        out << "  float4 rawBlendIndices = dxmt9_load_u8x4(stream0, base + "
+            << layout->blendIndicesOffset << "u);\n";
+        out << "  blendMatrixIndices = uint4(uint(rawBlendIndices.x), uint(rawBlendIndices.y),\n";
+        out << "                             uint(rawBlendIndices.z), uint(rawBlendIndices.w));\n";
+      }
+      out << "  blendWeights = clamp(blendWeights, float4(0.0f), float4(1.0f));\n";
+      out << "  float4 matrixWeight = float4(0.0f);\n";
+      for (u32 i = 0; i < key.vertexBlend && i < 3u; ++i) {
+        out << "  matrixWeight[" << i << "] = blendWeights[" << i << "];\n";
+      }
+      out << "  matrixWeight[" << std::min<u32>(key.vertexBlend, 3u)
+          << "] = max(0.0f, 1.0f - (matrixWeight.x + matrixWeight.y + matrixWeight.z));\n";
+      for (u32 matrix = 0; matrix <= std::min<u32>(key.vertexBlend, 3u); ++matrix) {
+        if (key.indexedVertexBlend && layout->hasBlendIndices) {
+          out << "  uint blendMatrix" << matrix << " = min(blendMatrixIndices[" << matrix << "], 3u);\n";
+        } else {
+          out << "  constexpr uint blendMatrix" << matrix << " = " << matrix << "u;\n";
+        }
+        out << "  float4 blendClip" << matrix << ";\n";
+        out << "  blendClip" << matrix << ".x = dot(float4(ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][0].x, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][1].x, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][2].x, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix << "][3].x), inPosition);\n";
+        out << "  blendClip" << matrix << ".y = dot(float4(ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][0].y, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][1].y, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][2].y, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix << "][3].y), inPosition);\n";
+        out << "  blendClip" << matrix << ".z = dot(float4(ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][0].z, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][1].z, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][2].z, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix << "][3].z), inPosition);\n";
+        out << "  blendClip" << matrix << ".w = dot(float4(ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][0].w, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][1].w, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
+            << "][2].w, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix << "][3].w), inPosition);\n";
+        out << "  blendedClip += blendClip" << matrix << " * matrixWeight[" << matrix << "];\n";
+      }
+    }
+    out << "  bool useVertexBlend = " << (emitVertexBlend ? "true" : "false") << ";\n";
+    out << "  bool pixelSpacePosition = !useVertexBlend && identityWvp && "
+           "(fabs(inPosition.x) > 2.0f || fabs(inPosition.y) > 2.0f);\n";
     out << "  if (pixelSpacePosition) {\n";
     out << "    float2 viewportSize = max(ffpVs.viewportSize, float2(1.0f));\n";
     out << "    float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
     out << "                       1.0f - ((inPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
     out << "    clip = float4(ndc, inPosition.z, 1.0f);\n";
+    out << "  } else if (useVertexBlend) {\n";
+    out << "    clip = blendedClip;\n";
     out << "  } else {\n";
     out << "    clip.x = dot(float4(ffpVs.ffpWorldViewProj[0].x, ffpVs.ffpWorldViewProj[1].x,\n";
     out << "                           ffpVs.ffpWorldViewProj[2].x, ffpVs.ffpWorldViewProj[3].x), inPosition);\n";
