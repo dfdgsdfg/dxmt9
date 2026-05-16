@@ -10,6 +10,7 @@
 #include <utility>
 #include "d3d9_pe.hpp"
 #include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "util/config/config.hpp"
@@ -274,6 +275,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     PeHotStateShadow peState_{};
     PeConstShadowBlock peConsts_{};
     IDirect3DSurface9* rtSlots_[4]{};
+    bool rtSlotExplicit_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
     bool dsSurfaceExplicit_ = false;
     PeCommandChunkBuilder commandChunk_{};
@@ -298,6 +300,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         setRef(indexBuf_, (IDirect3DIndexBuffer9*)nullptr);
         setRef(vdecl_, (IDirect3DVertexDeclaration9*)nullptr);
         for (auto& rt : rtSlots_)   setRef(rt, (IDirect3DSurface9*)nullptr);
+        for (auto& explicitRt : rtSlotExplicit_) explicitRt = false;
         setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
         dsSurfaceExplicit_ = false;
         setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
@@ -309,8 +312,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // attachment references — invalidateDefaultPoolResources() clears
         // the resource itself but not the bound-slot pointer.
         if (dev_) {
-            dxmt9c_device_set_render_target(dev_, 0, nullptr);
-            dxmt9c_device_set_depth_stencil(dev_, nullptr);
+            (void)dxmt9c_device_set_render_target(dev_, 0, nullptr);
+            (void)dxmt9c_device_set_depth_stencil(dev_, nullptr);
         }
     }
 
@@ -351,6 +354,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                     UINT stride) const {
         return stream < 16 && streamSrc_[stream] == buffer &&
                streamOff_[stream] == offset && streamStr_[stream] == stride;
+    }
+
+    dxmt9::d3d9::pe::PeRtWireHandles currentRtWireHandles() const {
+        dxmt9::d3d9::pe::PeRtWireHandles handles{};
+        for (DWORD slot = 0; slot < 4; ++slot) {
+            handles[slot] = toWireHandle(rawSurf(rtSlots_[slot]));
+        }
+        return handles;
+    }
+
+    dxmt9::d3d9::pe::PeRtExplicitMask currentRtExplicitMask() const {
+        dxmt9::d3d9::pe::PeRtExplicitMask explicitMask{};
+        for (DWORD slot = 0; slot < 4; ++slot) {
+            explicitMask[slot] = rtSlotExplicit_[slot];
+        }
+        return explicitMask;
     }
 
     bool buildDrawPrimitivePacket(D3DPRIMITIVETYPE type,
@@ -397,17 +416,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         packet.psHandle = toWireHandle(rawPS(ps_));
         packet.vdeclValid = peState_.pendingVdecl ? 1u : 0u;
         packet.vdeclHandle = toWireHandle(rawVD(vdecl_));
-        // RT delta — emit handle for every set bit. Slot 0 is rt0_ if
-        // ever populated; slots 1..3 are rtSlots_[i]. The legacy SetRT
-        // path doesn't populate rt0_ separately, so always use rtSlots_.
-        packet.rtMask = peState_.pendingRtMask;
-        for (DWORD slot = 0; slot < 4; ++slot) {
-            packet.rtHandles[slot] = (peState_.pendingRtMask & (1u << slot))
-                                          ? toWireHandle(rawSurf(rtSlots_[slot]))
-                                          : D9CWireHandle{};
-        }
-        packet.dsValid = peState_.pendingDs ? 1u : 0u;
-        packet.dsHandle = toWireHandle(rawSurf(dsSurface_));
+        // RT / DS delta — emit a handle for every pending bit. A set bit
+        // with a zero wire handle is a deliberate detach.
+        dxmt9::d3d9::pe::populateDrawPacketAttachmentDelta(
+            packet, peState_.pendingRtMask, currentRtWireHandles(),
+            peState_.pendingDs, toWireHandle(rawSurf(dsSurface_)));
         packet.viewportValid = peState_.pendingViewport ? 1u : 0u;
         packet.viewport = peState_.viewportShadow;
         packet.scissorValid = peState_.pendingScissor ? 1u : 0u;
@@ -509,13 +522,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     s.stride = streamStr_[stream];
                 }
             }
-            packet.rtMask = 0;
-            for (DWORD slot = 0; slot < 4; ++slot) {
-                if (rtSlots_[slot] != nullptr) {
-                    packet.rtMask |= 1u << slot;
-                    packet.rtHandles[slot] = toWireHandle(rawSurf(rtSlots_[slot]));
-                }
-            }
+            dxmt9::d3d9::pe::populateDrawPacketAttachmentSnapshot(
+                packet, currentRtWireHandles(), currentRtExplicitMask(), true,
+                toWireHandle(rawSurf(dsSurface_)));
             // Scalar valid bits: emit shadow contents unconditionally.
             packet.fvfValid = 1u;
             packet.fvf = fvf_;
@@ -525,8 +534,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             packet.psHandle = toWireHandle(rawPS(ps_));
             packet.vdeclValid = 1u;
             packet.vdeclHandle = toWireHandle(rawVD(vdecl_));
-            packet.dsValid = 1u;
-            packet.dsHandle = toWireHandle(rawSurf(dsSurface_));
             packet.viewportValid = 1u;
             packet.viewport = peState_.viewportShadow;
             packet.scissorValid = 1u;
@@ -2013,12 +2020,18 @@ public:
         dxmt9DeviceDebugLog("device_set_render_target device=%p idx=%u surf=%p",
                             this, (unsigned)idx, pSurf);
         if (idx >= 4) return D3DERR_INVALIDCALL;
-        if (rtSlots_[idx] == pSurf) return S_OK;
         if (idx == 0) {
             setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
         }
-        setRef(rtSlots_[idx], pSurf);
-        peState_.pendingRtMask |= 1u << idx;
+        const bool wasExplicit = rtSlotExplicit_[idx];
+        const bool valueChanged = rtSlots_[idx] != pSurf;
+        rtSlotExplicit_[idx] = true;
+        if (valueChanged) {
+            setRef(rtSlots_[idx], pSurf);
+        }
+        if (valueChanged || !wasExplicit) {
+            peState_.pendingRtMask |= 1u << idx;
+        }
         return S_OK;
     }
 
@@ -2027,6 +2040,19 @@ public:
         if (!ppS) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u",
                             this, (unsigned)idx);
+        if (idx < 4 && rtSlotExplicit_[idx]) {
+            if (!rtSlots_[idx]) {
+                *ppS = nullptr;
+                dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> explicit null",
+                                    this, (unsigned)idx);
+                return D3DERR_NOTFOUND;
+            }
+            rtSlots_[idx]->AddRef();
+            *ppS = rtSlots_[idx];
+            dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u -> cached rt=%p",
+                                this, (unsigned)idx, static_cast<void*>(*ppS));
+            return S_OK;
+        }
         if (idx == 0 && cachedBackBuffer0_) {
             cachedBackBuffer0_->AddRef();
             *ppS = cachedBackBuffer0_;
@@ -2043,9 +2069,13 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override {
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
+        const bool wasExplicit = dsSurfaceExplicit_;
+        const bool valueChanged = dsSurface_ != pSurf;
         dsSurfaceExplicit_ = true;
-        if (dsSurface_ != pSurf) {
+        if (valueChanged) {
             setRef(dsSurface_, pSurf);
+        }
+        if (valueChanged || !wasExplicit) {
             peState_.pendingDs = true;
         }
         return S_OK;

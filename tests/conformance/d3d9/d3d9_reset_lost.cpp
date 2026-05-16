@@ -282,6 +282,70 @@ void reset_render_target_rebinding() {
   }
 }
 
+void get_render_target_returns_user_surface() {
+  Fixture fixture;
+  if (!fixture.init("get_render_target_returns_user_surface")) return;
+
+  IDirect3DTexture9 *texture = nullptr;
+  HRESULT hr = fixture.device->CreateTexture(64, 64, 1,
+      D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT,
+      &texture, nullptr);
+  CHECK_HR(hr, D3D_OK);
+  if (!texture) return;
+
+  IDirect3DSurface9 *render_target = nullptr;
+  CHECK_HR(texture->GetSurfaceLevel(0, &render_target), D3D_OK);
+  release_if(texture);
+  if (!render_target) return;
+
+  CHECK_HR(fixture.device->SetRenderTarget(0, render_target), D3D_OK);
+
+  IDirect3DSurface9 *current = nullptr;
+  CHECK_HR(fixture.device->GetRenderTarget(0, &current), D3D_OK);
+  CHECK(current == render_target);
+  release_if(current);
+
+  D3DCAPS9 caps = {};
+  CHECK_HR(fixture.device->GetDeviceCaps(&caps), D3D_OK);
+  if (caps.NumSimultaneousRTs > 1) {
+    IDirect3DTexture9 *texture1 = nullptr;
+    hr = fixture.device->CreateTexture(64, 64, 1,
+        D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT,
+        &texture1, nullptr);
+    CHECK_HR(hr, D3D_OK);
+    if (!texture1) {
+      release_if(render_target);
+      return;
+    }
+
+    IDirect3DSurface9 *render_target1 = nullptr;
+    CHECK_HR(texture1->GetSurfaceLevel(0, &render_target1), D3D_OK);
+    release_if(texture1);
+    if (!render_target1) {
+      release_if(render_target);
+      return;
+    }
+
+    CHECK_HR(fixture.device->SetRenderTarget(1, render_target1), D3D_OK);
+    current = nullptr;
+    CHECK_HR(fixture.device->GetRenderTarget(1, &current), D3D_OK);
+    CHECK(current == render_target1);
+    release_if(current);
+
+    CHECK_HR(fixture.device->SetRenderTarget(1, nullptr), D3D_OK);
+    current = reinterpret_cast<IDirect3DSurface9 *>(0x1);
+    CHECK_HR(fixture.device->GetRenderTarget(1, &current), D3DERR_NOTFOUND);
+    CHECK(current == nullptr);
+
+    release_if(render_target1);
+  } else {
+    std::printf("SKIP:get_render_target_returns_user_surface: slot 1 unavailable\n");
+    ++skips;
+  }
+
+  release_if(render_target);
+}
+
 void get_depth_stencil_returns_user_surface() {
   Fixture fixture;
   if (!fixture.init("get_depth_stencil_returns_user_surface")) return;
@@ -358,6 +422,7 @@ void reset_lost_default_pool_rebinding() {
   reset_default_pool_invalidation();
   reset_non_default_pool_survival();
   reset_render_target_rebinding();
+  get_render_target_returns_user_surface();
   get_depth_stencil_returns_user_surface();
   reset_ex_cooperative_level_smoke();
 }

@@ -123,10 +123,23 @@ extern "C" int32_t dxmt9c_device_set_pixel_shader(D9CDevice* d, D9CShader* s) {
 
 extern "C" int32_t dxmt9c_device_set_render_target(D9CDevice* d, uint32_t idx,
                                                    D9CSurface* surf) {
-  return d->iface->SetRenderTarget(idx, surf ? surf->obj : nullptr);
+  const int32_t hr = d->iface->SetRenderTarget(idx, surf ? surf->obj : nullptr);
+  if (hr == dxmt9::core::D3D_OK && idx < dxmt9::core::kMaxRenderTargets) {
+    d->renderTargets[idx] = surf ? surf->obj : nullptr;
+    d->renderTargetExplicit[idx] = true;
+  }
+  return hr;
 }
 
 extern "C" D9CSurface* dxmt9c_device_get_render_target(D9CDevice* d, uint32_t idx) {
+  if (idx >= dxmt9::core::kMaxRenderTargets) {
+    return nullptr;
+  }
+  if (d->renderTargetExplicit[idx]) {
+    auto surface = d->renderTargets[idx];
+    return surface ? new D9CSurface{surface} : nullptr;
+  }
+
   auto swapChain = d->iface->GetSwapChain(0);
   if (!swapChain) {
     return nullptr;

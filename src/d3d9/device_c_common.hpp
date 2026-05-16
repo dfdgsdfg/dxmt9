@@ -15,6 +15,7 @@
 #include "dxmt9/core.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>
@@ -140,6 +141,8 @@ struct D9CFactory {
 struct D9CDevice {
   dxmt9::com::IDirect3DDevice9Ex* iface;
   std::atomic<uint32_t> refs{1};
+  std::array<std::shared_ptr<dxmt9::core::Surface>, dxmt9::core::kMaxRenderTargets> renderTargets;
+  std::array<bool, dxmt9::core::kMaxRenderTargets> renderTargetExplicit{};
   bool stateBlockRecording = false;
   std::optional<dxmt9::core::DeviceState> stateBlockBaseState;
   std::unordered_set<uint32_t> stateBlockRenderStates;

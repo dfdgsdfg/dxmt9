@@ -985,6 +985,102 @@ void testImportedApplyStateAndSetConstValuePropagation() {
   checkEq(d3d->Release(), 0u, "release recording d3d factory");
 }
 
+void testImportedApplyStateCanDetachRtAndDepthStencil() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create detach recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{993};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create detach recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+    auto renderTarget = device->CreateSurface(SurfaceDesc{
+        .width = 32u,
+        .height = 24u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    auto depthStencil = device->CreateSurface(SurfaceDesc{
+        .width = 32u,
+        .height = 24u,
+        .format = Format::D24S8,
+        .pool = Pool::Default,
+        .usage = UsageDepthStencil,
+        .depthStencil = true,
+    });
+    check(renderTarget != nullptr, "detach test render target");
+    check(depthStencil != nullptr, "detach test depth stencil");
+
+    D9CSurface renderTargetWire(renderTarget);
+    D9CSurface depthStencilWire(depthStencil);
+
+    auto bind = makeApplyStateRecord();
+    bind.packet.rtMask = 1u << 0u;
+    bind.packet.rtHandles[0] = wireHandleFromPtr(&renderTargetWire);
+    bind.packet.dsValid = 1u;
+    bind.packet.dsHandle = wireHandleFromPtr(&depthStencilWire);
+
+    std::vector<std::uint8_t> payload;
+    const auto bindOffset = appendRecord(payload, bind);
+    const std::vector<D9CCommandChunkWireRecordHeader> bindRecords{
+        wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, bindOffset,
+                         sizeof(bind), 0u, 2u),
+    };
+    const std::vector<D9CCommandChunkWireHandleEntry> bindHandles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &depthStencilWire),
+    };
+    const auto bindBlob = makeWireChunkBlob(payload, bindRecords, bindHandles);
+    checkEq(commitWireChunk(cDevice, bindBlob, 1u, 2u), D3D_OK,
+            "commit imported RT/DS bind state");
+    checkEq(device->coreDevice().state().renderTargets[0].handle.value,
+            renderTarget->handle().value,
+            "imported bind sets RT0 attachment");
+    checkEq(device->coreDevice().state().depthStencil.handle.value,
+            depthStencil->handle().value,
+            "imported bind sets DS attachment");
+
+    auto detach = makeApplyStateRecord();
+    detach.packet.rtMask = (1u << 0u) | (1u << 1u);
+    detach.packet.rtHandles[0] = D9CWireHandle{};
+    detach.packet.rtHandles[1] = D9CWireHandle{};
+    detach.packet.dsValid = 1u;
+    detach.packet.dsHandle = D9CWireHandle{};
+
+    payload.clear();
+    const auto detachOffset = appendRecord(payload, detach);
+    const std::vector<D9CCommandChunkWireRecordHeader> detachRecords{
+        wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, detachOffset,
+                         sizeof(detach)),
+    };
+    const auto detachBlob = makeWireChunkBlob(payload, detachRecords, {});
+    checkEq(commitWireChunk(cDevice, detachBlob, 1u, 0u), D3D_OK,
+            "commit imported RT/DS detach state");
+    checkEq(device->coreDevice().state().renderTargets[0].handle.value, 0ull,
+            "imported detach clears RT0 attachment");
+    checkEq(device->coreDevice().state().renderTargets[1].handle.value, 0ull,
+            "imported detach clears RT1 attachment");
+    checkEq(device->coreDevice().state().depthStencil.handle.value, 0ull,
+            "imported detach clears DS attachment");
+  }
+
+  checkEq(device->Release(), 0u, "release detach d3d device");
+  checkEq(d3d->Release(), 0u, "release detach d3d factory");
+}
+
 void testMalformedImportedRecordDoesNotMutateState() {
   auto upper = std::make_unique<RecordingDxmt9Device>();
   auto* recorder = upper.get();
@@ -1049,6 +1145,7 @@ void testMalformedImportedRecordDoesNotMutateState() {
 int main() {
   try {
     testImportedApplyStateAndSetConstValuePropagation();
+    testImportedApplyStateCanDetachRtAndDepthStencil();
     testMalformedImportedRecordDoesNotMutateState();
   } catch (const TestFailure& e) {
     std::cerr << "imported_apply_state_value_spec failed: " << e.what()

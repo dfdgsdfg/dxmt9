@@ -1,4 +1,5 @@
 #include "chunk_record_import_spec_fixtures.hpp"
+#include "d3d9_pe_draw_packet.hpp"
 
 #include <array>
 #include <cstdint>
@@ -14,11 +15,9 @@ using namespace dxmt9::d3d9::devicec::spec;
 using dxmt9::d3d9::devicec::ImportedRecordView;
 
 // Native bridge tests cannot instantiate src/d3d9/d3d9_pe_device.cpp:
-// the PE device is built only for Windows targets, pulls in windows.h/d3d9.h,
-// and keeps buildDrawPrimitivePacket / flushConstShadow private to that TU.
-// The missing real-producer seam is a native-safe test hook that accepts a flat
-// PE shadow plus bound raw handles, runs the production packet/const appenders,
-// and returns the sealed D9C wire records before dxmt9c_device_commit_chunk().
+// the PE device is built only for Windows targets and pulls in windows.h/d3d9.h.
+// Attachment packet production is factored into a native-safe helper so this
+// spec can cover the PE live-shadow -> packet boundary for RT/DS deltas.
 
 constexpr std::uint32_t kD3dptTriangleList = 4u;
 
@@ -328,6 +327,58 @@ void checkRichDrawPacketValues(const D9CDrawPrimitivePacket& packet) {
           "run param primitive count");
 }
 
+void testPeAttachmentDeltaBuilderPreservesExplicitNullsAndSlots() {
+  D9CDrawPrimitivePacket packet{};
+  packet.rtMask = 0xffffffffu;
+  for (auto& handle : packet.rtHandles) {
+    handle = wireHandle(0xffffffffffffffffull);
+  }
+  packet.dsValid = 0u;
+  packet.dsHandle = wireHandle(0xffffffffffffffffull);
+
+  dxmt9::d3d9::pe::PeRtWireHandles rtHandles{};
+  rtHandles[0] = wireHandle(kRt0);
+  rtHandles[1] = D9CWireHandle{};
+  rtHandles[3] = wireHandle(kRt3);
+
+  dxmt9::d3d9::pe::populateDrawPacketAttachmentDelta(
+      packet, (1u << 0u) | (1u << 1u) | (1u << 3u) | (1u << 7u),
+      rtHandles, true, D9CWireHandle{});
+
+  checkEq(packet.rtMask, (1u << 0u) | (1u << 1u) | (1u << 3u),
+          "PE delta builder masks legal RT slots");
+  checkWire(packet.rtHandles[0], kRt0, "PE delta builder RT0 handle");
+  checkWire(packet.rtHandles[1], 0u, "PE delta builder explicit null RT1");
+  checkWire(packet.rtHandles[2], 0u, "PE delta builder clears inactive RT2");
+  checkWire(packet.rtHandles[3], kRt3, "PE delta builder RT3 handle");
+  checkEq(packet.dsValid, 1u, "PE delta builder explicit null DS valid");
+  checkWire(packet.dsHandle, 0u, "PE delta builder explicit null DS handle");
+}
+
+void testPeAttachmentSnapshotBuilderPreservesExplicitNulls() {
+  D9CDrawPrimitivePacket packet{};
+  dxmt9::d3d9::pe::PeRtWireHandles rtHandles{};
+  rtHandles[0] = wireHandle(kRt0);
+  rtHandles[2] = D9CWireHandle{};
+  rtHandles[3] = wireHandle(kRt3);
+
+  dxmt9::d3d9::pe::PeRtExplicitMask rtExplicit{};
+  rtExplicit[1] = false;
+  rtExplicit[2] = true;
+
+  dxmt9::d3d9::pe::populateDrawPacketAttachmentSnapshot(
+      packet, rtHandles, rtExplicit, true, wireHandle(kDs));
+
+  checkEq(packet.rtMask, (1u << 0u) | (1u << 2u) | (1u << 3u),
+          "PE snapshot builder includes populated and explicit-null RTs");
+  checkWire(packet.rtHandles[0], kRt0, "PE snapshot builder RT0 handle");
+  checkWire(packet.rtHandles[1], 0u, "PE snapshot builder omits implicit null RT1");
+  checkWire(packet.rtHandles[2], 0u, "PE snapshot builder keeps explicit null RT2");
+  checkWire(packet.rtHandles[3], kRt3, "PE snapshot builder RT3 handle");
+  checkEq(packet.dsValid, 1u, "PE snapshot builder DS valid");
+  checkWire(packet.dsHandle, kDs, "PE snapshot builder DS handle");
+}
+
 void testRichDrawRecordPreservesPacketValuesAndHandles() {
   const auto draw = makeRichDrawRecord();
   checkValidRecordBytes(recordBytes(draw), D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
@@ -485,6 +536,8 @@ void testSetConstTailBytesRecordOrderAndWireHandleRange() {
 
 int main() {
   try {
+    testPeAttachmentDeltaBuilderPreservesExplicitNullsAndSlots();
+    testPeAttachmentSnapshotBuilderPreservesExplicitNulls();
     testRichDrawRecordPreservesPacketValuesAndHandles();
     testSetConstTailBytesRecordOrderAndWireHandleRange();
   } catch (const TestFailure& e) {

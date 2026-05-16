@@ -5,6 +5,15 @@
 
 using namespace dxmt9::d3d9::devicec;
 
+namespace {
+
+void clearBoundRenderTargetCache(D9CDevice* d) {
+  d->renderTargets.fill(nullptr);
+  d->renderTargetExplicit.fill(false);
+}
+
+}  // namespace
+
 extern "C" void dxmt9c_device_addref(D9CDevice* d) {
   if (d) {
     d->refs.fetch_add(1);
@@ -50,7 +59,11 @@ extern "C" int32_t dxmt9c_device_reset(D9CDevice* d, const D9CPresentParams* pp)
   if (!pp) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  return d->iface->Reset(ppFromC(*pp));
+  const int32_t hr = d->iface->Reset(ppFromC(*pp));
+  if (hr == dxmt9::core::D3D_OK) {
+    clearBoundRenderTargetCache(d);
+  }
+  return hr;
 }
 
 extern "C" int32_t dxmt9c_device_reset_ex(D9CDevice* d, const D9CPresentParams* pp,
@@ -61,9 +74,17 @@ extern "C" int32_t dxmt9c_device_reset_ex(D9CDevice* d, const D9CPresentParams* 
   auto params = ppFromC(*pp);
   if (dm) {
     auto dmex = dmExFromC(*dm);
-    return d->iface->ResetEx(params, &dmex);
+    const int32_t hr = d->iface->ResetEx(params, &dmex);
+    if (hr == dxmt9::core::D3D_OK) {
+      clearBoundRenderTargetCache(d);
+    }
+    return hr;
   }
-  return d->iface->ResetEx(params, nullptr);
+  const int32_t hr = d->iface->ResetEx(params, nullptr);
+  if (hr == dxmt9::core::D3D_OK) {
+    clearBoundRenderTargetCache(d);
+  }
+  return hr;
 }
 
 extern "C" int32_t dxmt9c_device_set_viewport(D9CDevice* d, const D9CViewport* vp) {

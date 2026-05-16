@@ -200,6 +200,73 @@ void testComWrappersEx() {
     checkEq(discardBytes[0], static_cast<u8>(0x00), "d3d discard lock maps to core discard");
     checkEq(dxmt9c_texture_unlock_rect(discardTexture, 0), D3D_OK, "unlock c discard texture");
     checkEq(dxmt9c_texture_release(discardTexture), 0u, "release c discard texture");
+
+    constexpr uint32_t d3dUsageRenderTarget = 0x00000001u;
+    auto* renderTargetTexture = dxmt9c_device_create_texture(
+        &cDevice, 64, 64, 1, d3dUsageRenderTarget,
+        dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8), 0);
+    check(renderTargetTexture != nullptr, "create c render target texture");
+    auto* renderTargetSurface = dxmt9c_texture_get_surface_level(renderTargetTexture, 0);
+    check(renderTargetSurface != nullptr, "get c render target surface level");
+    checkEq(dxmt9c_device_set_render_target(&cDevice, 0, renderTargetSurface), D3D_OK,
+            "set c render target surface");
+    auto* currentRenderTarget = dxmt9c_device_get_render_target(&cDevice, 0);
+    check(currentRenderTarget != nullptr, "get c current render target");
+    check(currentRenderTarget->obj == renderTargetSurface->obj,
+          "c get render target returns currently bound surface");
+    checkEq(dxmt9c_surface_release(currentRenderTarget), 0u, "release c current render target");
+
+    checkEq(dxmt9c_device_set_render_target(&cDevice, kMaxRenderTargets, renderTargetSurface),
+            D3DERR_INVALIDCALL, "reject c render target index past max");
+    check(dxmt9c_device_get_render_target(&cDevice, kMaxRenderTargets) == nullptr,
+          "get c render target index past max returns null");
+
+    auto* renderTargetTexture1 = dxmt9c_device_create_texture(
+        &cDevice, 64, 64, 1, d3dUsageRenderTarget,
+        dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8), 0);
+    check(renderTargetTexture1 != nullptr, "create c render target texture slot 1");
+    auto* renderTargetSurface1 = dxmt9c_texture_get_surface_level(renderTargetTexture1, 0);
+    check(renderTargetSurface1 != nullptr, "get c render target surface level slot 1");
+    checkEq(dxmt9c_device_set_render_target(&cDevice, 1, renderTargetSurface1), D3D_OK,
+            "set c render target surface slot 1");
+    auto* currentRenderTarget1 = dxmt9c_device_get_render_target(&cDevice, 1);
+    check(currentRenderTarget1 != nullptr, "get c current render target slot 1");
+    check(currentRenderTarget1->obj == renderTargetSurface1->obj,
+          "c get render target slot 1 returns currently bound surface");
+    checkEq(dxmt9c_surface_release(currentRenderTarget1), 0u, "release c current render target slot 1");
+
+    checkEq(dxmt9c_device_set_render_target(&cDevice, 1, nullptr), D3D_OK,
+            "detach c render target slot 1");
+    check(dxmt9c_device_get_render_target(&cDevice, 1) == nullptr,
+          "c get render target slot 1 after detach returns null");
+    checkEq(dxmt9c_device_set_render_target(&cDevice, 0, nullptr), D3D_OK,
+            "detach c render target slot 0");
+    check(dxmt9c_device_get_render_target(&cDevice, 0) == nullptr,
+          "c get render target slot 0 after explicit detach returns null");
+
+    D9CPresentParams resetParams{};
+    resetParams.backBufferWidth = 320;
+    resetParams.backBufferHeight = 240;
+    resetParams.backBufferFormat = dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8);
+    resetParams.backBufferCount = 1;
+    resetParams.swapEffect = 1;
+    resetParams.windowed = 1;
+    resetParams.enableAutoDepthStencil = 1;
+    resetParams.autoDepthStencilFormat = dxmt9::d3d9::devicec::fmtToD3D(Format::D24S8);
+    checkEq(dxmt9c_device_reset(&cDevice, &resetParams), D3D_OK, "reset clears c render target cache");
+    auto* currentRenderTargetAfterReset = dxmt9c_device_get_render_target(&cDevice, 0);
+    check(currentRenderTargetAfterReset != nullptr, "get c render target after reset");
+    check(currentRenderTargetAfterReset->obj != renderTargetSurface->obj,
+          "c get render target after reset returns new backbuffer");
+    checkEq(dxmt9c_surface_release(currentRenderTargetAfterReset), 0u,
+            "release c current render target after reset");
+    check(dxmt9c_device_get_render_target(&cDevice, 1) == nullptr,
+          "c get render target slot 1 after reset returns null");
+
+    checkEq(dxmt9c_surface_release(renderTargetSurface1), 0u, "release c render target surface slot 1");
+    checkEq(dxmt9c_texture_release(renderTargetTexture1), 0u, "release c render target texture slot 1");
+    checkEq(dxmt9c_surface_release(renderTargetSurface), 0u, "release c render target surface");
+    checkEq(dxmt9c_texture_release(renderTargetTexture), 0u, "release c render target texture");
   }
 
   checkEq(device->GetMaximumFrameLatency(), 4u, "default max frame latency");
