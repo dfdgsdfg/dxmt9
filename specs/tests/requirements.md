@@ -119,6 +119,37 @@ applicable. End-to-end probes may prove the rendered result, but they are not
 sufficient evidence that the boundary contract preserved or intentionally
 converted the correct values.
 
+**R-TEST-0.11** Draw and render tests must assert intent-preserving transforms,
+not only enum normalization or descriptor equality. When a D3D9 draw, clear,
+copy, readback, or present operation is rewritten for the backend, tests must
+prove that the operation would address the same geometry, pixels, resources, and
+ordering boundary. For draw calls this includes primitive topology, equivalent
+vertex/index stream, primitive count, source selection (bound stream/index buffer
+vs UP payload), base vertex, start vertex/index, stream offset/stride,
+instancing fields, render-target/depth attachments, viewport/scissor/raster
+state, shader constants, texture/sampler bindings, and draw-run ordering where
+applicable. A test that only checks that `TriangleFan` became `TriangleList`,
+or that a render-state enum was mapped, is insufficient unless it also proves
+the resulting draw or render operation preserves the original D3D9 intent.
+
+**R-TEST-0.12** Vertex-input, shader-deformation, and animation-style skinning
+tests must prove the intent carried by the vertex declaration or FVF, not only
+that shader bytecode translated or that a draw produced any pixels. For
+programmable vertex shaders this includes `D3DDECLUSAGE_POSITION`, `NORMAL`,
+`BLENDWEIGHT`, `BLENDINDICES`, `COLOR`, `TEXCOORD`, `TANGENT`, and `BINORMAL`
+semantic mapping by usage and usage index; stream index, offset, stride, and
+declaration type conversion; vertex-shader constant ranges used as matrix
+palettes; relative constant addressing through `a0`; and matrix / dot-product
+instructions used to deform vertices. For fixed-function vertex processing this
+includes world/view/projection transforms, texture transforms, normal
+normalization, and vertex-blend / indexed-vertex-blend state where supported.
+The required proof must show that a known input pose becomes the expected
+backend-visible vertex inputs and, where GPU execution is needed, the expected
+rendered pose or geometry mask. Tests that only check presence of
+`BLENDWEIGHT`, `BLENDINDICES`, or matrix opcodes are insufficient unless they
+also prove that those values participate in the deformation intended by the D3D9
+application.
+
 ---
 
 ## 1. Shader Translation Correctness
@@ -126,8 +157,8 @@ converted the correct values.
 **R-TEST-1.1** dxmt9 must provide a native `shader_runner_dxmt9` runtime
 readback harness. It must accept the dxmt9-documented `.shader_test` compatible
 subset and dxmt9-local extensions needed for texture setup, geometry probes,
-and render-state interactions. It must not depend on, embed, or require exact
-vkd3d `shader_runner_ops` ABI compatibility.
+vertex-input / skinning probes, and render-state interactions. It must not
+depend on, embed, or require exact vkd3d `shader_runner_ops` ABI compatibility.
 
 **R-TEST-1.2** Oracle values for all `probe` assertions in `.shader_test` files must
 be produced by running an equivalent portable test through `shader_runner_d3d9`
@@ -183,11 +214,11 @@ probe must pass as well.
 
 **R-TEST-1.6** `shader_runner_dxmt9` must grow a dxmt9-local extended probe
 layer for tests that need explicit texture setup, vertex-shader geometry
-inspection, or render-state interaction beyond the portable vkd3d
-`.shader_test` syntax. The extension must remain isolated from vendored vkd3d
-test syntax so upstream corpus sync is not blocked by dxmt9-specific metadata.
-The extension complements, but does not replace, the stateless transform unit
-suites required by R-TEST-0.
+inspection, vertex-input / skinning fixtures, or render-state interaction beyond
+the portable vkd3d `.shader_test` syntax. The extension must remain isolated
+from vendored vkd3d test syntax so upstream corpus sync is not blocked by
+dxmt9-specific metadata. The extension complements, but does not replace, the
+stateless transform unit suites required by R-TEST-0.
 
 **R-TEST-1.7** The extended probe layer must provide a texture setup DSL. The
 minimum required coverage is:
@@ -215,12 +246,24 @@ color outputs, fog interaction, color-write masks, and sRGB write/sampling
 state. Each probe must combine shader output with the relevant D3D9 render state
 and verify the final framebuffer result through readback.
 
-**R-TEST-1.10** Extended texture, geometry, and render-state probes must converge
-on the same pass criterion: the backend renders into a deterministic target,
-performs real GPU readback, and compares expected pixels. Tests that only inspect
-generated shader source are allowed only for debug source-contract flags such as
-`DXMT_DEBUG_FORCE_PIXEL_V_FLIP` and `DXMT_DEBUG_FLIP_VERTEX_Y`, or in the
-stateless transform unit suites required by R-TEST-0.
+**R-TEST-1.10** Extended texture, geometry, vertex/skinning, and render-state
+probes must converge on the same pass criterion: the backend renders into a
+deterministic target, performs real GPU readback, and compares expected pixels.
+Tests that only inspect generated shader source are allowed only for debug
+source-contract flags such as `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` and
+`DXMT_DEBUG_FLIP_VERTEX_Y`, or in the stateless transform unit suites required by
+R-TEST-0.
+
+**R-TEST-1.11** The extended probe layer must provide at least one deterministic
+vertex-input / skinning intent fixture. The minimum fixture uses multiple vertex
+streams, explicit `D3DVERTEXELEMENT9` declarations for `POSITION`,
+`BLENDWEIGHT`, `BLENDINDICES`, and at least one varying output, a vertex shader
+that reads a bone matrix palette from vertex-shader constants via an address
+register or equivalent indexed constant access, and a draw whose expected
+framebuffer mask or probe pixels distinguish the correct skinned pose from
+wrong stream selection, wrong weight/index conversion, wrong constant slot, or
+missing matrix multiply. A source-only shader translator test may cover the
+lowering details, but it is not sufficient by itself for this runtime fixture.
 
 ---
 
@@ -237,6 +280,8 @@ tests for ps_1_x) for each major fixed-function feature:
 - Fog: linear, exp, exp2 in both vertex-fog and pixel-fog modes
 - Alpha test: all eight compare functions
 - Texture coordinate generation: CAMERASPACENORMAL, SPHEREMAP, CAMERASPACEPOSITION
+- Fixed-function vertex blending and indexed vertex blending, including the
+  transform matrices and vertex input fields that select the blended pose
 
 **R-TEST-2.2** For ps_1_x coverage (where the vkd3d D3D9 backend skips below
 ps_2_0), oracle values may be validated against Wine `visual.c` hardcoded
@@ -958,3 +1003,37 @@ write deterministic artifact names under the run output directory; list every
 artifact in result JSON; and keep generated dump, frame-sequence, and video
 artifacts out of committed source unless they are explicitly promoted as small
 reference assets.
+
+**R-TEST-14.19** Test, experiment, recorder, dump, and capture internals must
+declare a runtime-cost class before they are accepted: compile-time test-only,
+opt-in cold diagnostic, or release-retained telemetry. The cost class must be
+visible in the design doc, environment-variable registry, result schema, or test
+target metadata that owns the hook.
+
+**R-TEST-14.20** Compile-time test-only structures must be removable from release
+artifacts. Native recorder fakes, mock encoders, harness-only entry points, and
+schema writers must live in test targets or behind an explicit diagnostic build
+feature; they must not export production ABI symbols, change default provider
+lookup, or require production code to carry test-only payload fields.
+
+**R-TEST-14.21** Disabled opt-in diagnostics must have no material hot-path cost.
+When a dump, recorder, capture, verbose log, or experiment knob is off, ordinary
+draw/resource/queue paths must not perform diagnostic file I/O, string
+formatting, heap allocation, locks, Objective-C/Metal capture setup, extra bridge
+calls, or per-record schema construction. A precomputed mode check at a coarse
+boundary is acceptable; repeated inner-loop checks require a focused benchmark or
+counter gate.
+
+**R-TEST-14.22** Any diagnostic hook retained in a release build must have
+performance evidence for its disabled state. At minimum, focused tests or
+benchmarks must show unchanged logical operation counts, bridge operation counts,
+chunk commit counts, allocation/capacity-growth counts, and diagnostic artifact
+counts when the hook is disabled. If a release-retained counter intentionally
+adds cost, the owning requirement must state why that cost is production-worthy.
+
+**R-TEST-14.23** Mutating debug or experiment knobs must be opt-in and must never
+be default release behavior. Draw skipping, forced shader output, forced present
+source selection, capture-triggered synchronization, or diagnostic provider
+fallbacks may exist only as documented bisect paths. Harnesses must record these
+knobs in result JSON so evidence from a mutated run is not confused with normal
+runtime behavior.

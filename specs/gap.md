@@ -182,6 +182,41 @@ after the boundary, not only layout, helper conversion, or final rendered output
 | B7: core draw API -> `DrawParam` / topology payload | ✅ | `dxmt9-core-device-coverage-spec` now asserts non-UP `TriangleFan` conversion for `drawPrimitive`, `drawIndexedPrimitive`, and coalesced `drawPrimitiveRun`: canonical `TriangleList`, generated/re-written user index payload bytes, index type, base vertex, start index, and stripped source index-buffer policy. `core_device_lifecycle_spec` already covers UP fan vertex/index payload decomposition. | Keep this lane green by requiring concrete topology payload assertions for any future primitive conversion; enum normalization alone is not sufficient evidence. |
 | B8: `DrawParam` / `FlatDrawStateView` -> Metal encoder draw command | ⚠️ | `dxmt9-metal-encoder-recorder-spec` overrides `MTLRenderCommandEncoder_encodeCommands` and records final WMT command payloads for `drawIndexedPrimitives`, including the 3DMark05 fan-fix shape: triangle primitive, `u16`, index count 6, generated index-buffer offset 0, instance count 1, base vertex 0, base instance 0, plus the stream-0 Metal vertex-buffer bind offset 3712 at slot 1. `dxmt9-encode-draw-recorder-spec` now drives the full `encodeDraw` indexed issue path with Metal calls suppressed after recording: it asserts command order (`setVertexBuffer` slot 1 -> `setVertexBytes` slot 5 -> `drawIndexedPrimitives`), concrete `DrawVolatile` bytes, bound-vertex/user-index selection, UP-vertex/user-index selection, stream offsets/strides, base vertex, start-index offset, index count/type, and final draw arguments. Focused 3DMark05 diagnostics also show the fixed bad draw as `api=DrawIndexedPrimitiveUP`, `indexType=u16`, `userIndexBytes=12`, and `indexed=1`. | Remaining deterministic coverage: non-indexed `drawPrimitives` arguments, direct bound-index source selection, multi-stream programmable VS binds, and broader base-state encoder writes. Logs and screenshots remain useful evidence but not deterministic unit coverage. |
 
+### R-TEST-0.11 Draw / Render Intent Coverage
+
+⚠️ Partial. The 3DMark05 TriangleFan issue showed that enum normalization can
+pass while draw intent is still wrong. The render-part audit now treats each
+draw/render transform as incomplete unless tests prove the backend-visible
+operation preserves the D3D9 intent: equivalent topology, source data selection,
+raster footprint, render target effects, resource sampling, and ordering.
+
+| Intent class | Status | Current evidence | Missing evidence / implementation goal |
+|---|---|---|---|
+| Geometry topology intent | ⚠️ | Core TriangleFan payload coverage is now green for non-UP, indexed, draw-run, and UP paths; encoder recorder covers the final indexed Metal command shape and the encodeDraw indexed issue ordering through `DrawVolatile`. | Extend encoder-level coverage to non-indexed `drawPrimitives` and direct bound-index cases. |
+| Draw source intent | ⚠️ | Core tests assert generated/re-written index payloads, base/start fields, and stripped source index-buffer policy for TriangleFan conversion. `dxmt9-encode-draw-recorder-spec` covers bound stream offset/stride plus UP vertex/index slices at the encoder boundary. | Add direct bound-index and multi-stream programmable VS source-selection cases at the encoder boundary. |
+| Raster intent | ⚠️ | State/draw transform tests and raster-plan checks cover viewport/scissor/half-pixel inputs; shader-runner has viewport and half-pixel readback probes. | Add targeted runtime or encoder-observer coverage for cull/front-face, fill mode, scissor edge cases, depth range, and clip-plane interactions. |
+| Attachment / render-state intent | ⚠️ | Pipeline-key/render-pass tests cover descriptors and load/store policy; shader-runner covers color-write and MRT basics. | Finish alpha-test readback, oDepth, fog, sRGB, depth/stencil, blend, MRT interaction, and clear/load/store combined behavior probes. |
+| Resource sampling intent | ⚠️ | Resource-format boundary and shader arg-buffer tests cover descriptors, texture/sampler slot values, and several texture readback probes. | Add live encoder recorder evidence for Stage 1 binds and Stage 2 argument-encoder writes, then pair with readback where descriptor inspection cannot prove sampling behavior. |
+| Ordering / synchronization intent | ⚠️ | Chunk import/replay, hazard, replay observer, and TLA+ models cover many ordering and lifetime rules. | Add machine-readable Metal/WSI result schemas and command-level recorder evidence for final ordering across draw, clear, copy, readback, and present. |
+
+### R-TEST-0.12 / R-TEST-1.11 Vertex And Skinning Intent Coverage
+
+⚠️ Partial. Static shader-transform evidence already covers several important
+pieces of the D3D9 skinning shape: `BLENDWEIGHT` / `BLENDINDICES` declaration
+mapping, multi-stream vertex input layout, stream-specific MSL loads, and
+indexed constant access through `a0`. That is not yet enough evidence for
+animation/rigging intent because no deterministic runtime fixture proves that a
+known pose survives vertex declaration mapping, stream selection, constant
+palette binding, shader deformation, and final draw execution.
+
+| Intent class | Status | Current evidence | Missing evidence / implementation goal |
+|---|---|---|---|
+| Vertex semantic mapping | ⚠️ | `state_draw_transform_spec` snapshots vertex declaration streams and offsets; `shader_transform_spec` covers multi-stream input layouts and DCL-bound semantic loads. | Add encoder/runtime evidence that the same declaration and stream bindings are used by the draw that renders the probe. |
+| Skinning constants / matrix palette | ⚠️ | `shader_transform_spec` includes indexed constant-read lowering for the canonical hardware-skinning shape. | Add a runtime fixture where changing one bone matrix constant moves the rendered pose to a different expected mask. |
+| Blend weights / indices | ⚠️ | Static MSL source-contract tests verify `BLENDWEIGHT` and `BLENDINDICES` loads from the declared stream and offset. | Add readback coverage that fails on wrong component order, normalization/raw conversion, or wrong bone-index interpretation. |
+| Programmable skinned draw result | ❌ | No first-class `shader_runner_dxmt9` fixture exists. | Implement the R-TEST-1.11 fixture with multi-stream declarations, exact VS constants, indexed matrix access, and a deterministic framebuffer mask. |
+| Fixed-function vertex blending | ❌ | FFP key encodes `vertexBlend` and `indexedVertexBlend`; no targeted evidence appears in the shader-runner corpus. | Add an FFP readback probe or deterministic native+runtime pair for vertex-blend / indexed-vertex-blend transforms. |
+
 ### R-TEST-13 Module-Boundary Harness
 
 ❌ Not started as a first-class harness. Existing pieces cover adjacent slices:
@@ -203,7 +238,7 @@ execution.
 | Stateless state-to-draw-data unit suites | ✅ | `state_draw_transform_spec` covers `makeCanonicalDrawStateFromState()` and fixture/offline `makeDrawDescFromState()` for draw args, viewport/scissor, render/sampler/TSS copy, FFP keys, transforms, clip planes, constants, bytecode shader refs, texture/resource handles, stream/index bindings, vertex decl/FVF, and RT/DS attachment variants |
 | Stateless key/descriptor unit suites | ✅ | `backend_key_descriptor_spec` covers `buildDrawUniforms()`, depth/stencil keys, and pure `SamplerSnapshot` → `WMTSamplerInfo` descriptor mapping. `backend_pipeline_key_spec` covers blend enable, RGB/alpha op/factor fallback, MRT color-write defaults/overrides, force-visible override, sampler texture/filter flags, FVF vertex-layout hashing, PSO hash responsiveness, and sRGB-compatible pixel format conversion |
 | `shader_runner_dxmt9` backend | ✅ | R-TEST-1.1 |
-| `shader_runner_dxmt9` extended probe layer | ⚠️ | dxmt9-local runtime probes now cover texture setup/readback, dependent texture read, one VS geometry path, viewport-bounded and nonzero-origin rasterization, half-pixel edge masks, and two color-write render-state interactions: `texture/dxmt9_texture_2x2.shader_test`, `texture/dxmt9_dependent_texture_read.shader_test`, `vs_specific/dxmt9_vs_color_triangle.shader_test`, `viewport/dxmt9_viewport_vs_triangle.shader_test`, `viewport/dxmt9_viewport_nonzero_origin.shader_test`, `viewport/dxmt9_half_pixel_solid_rect.shader_test`, `render_state/dxmt9_color_write_mask.shader_test`, and `render_state/dxmt9_color_write_rgb_preserves_alpha.shader_test`. Broader mip/4x4/LOD, alpha/oDepth/MRT/fog/sRGB coverage remains open; `render_state/dxmt9_alpha_test_readback.shader_test` is tracked as a failing regression probe |
+| `shader_runner_dxmt9` extended probe layer | ⚠️ | dxmt9-local runtime probes now cover texture setup/readback, dependent texture read, one VS geometry path, viewport-bounded and nonzero-origin rasterization, half-pixel edge masks, and two color-write render-state interactions: `texture/dxmt9_texture_2x2.shader_test`, `texture/dxmt9_dependent_texture_read.shader_test`, `vs_specific/dxmt9_vs_color_triangle.shader_test`, `viewport/dxmt9_viewport_vs_triangle.shader_test`, `viewport/dxmt9_viewport_nonzero_origin.shader_test`, `viewport/dxmt9_half_pixel_solid_rect.shader_test`, `render_state/dxmt9_color_write_mask.shader_test`, and `render_state/dxmt9_color_write_rgb_preserves_alpha.shader_test`. Broader mip/4x4/LOD, vertex-input/skinning, alpha/oDepth/MRT/fog/sRGB coverage remains open; `render_state/dxmt9_alpha_test_readback.shader_test` is tracked as a failing regression probe |
 | Expanded `.shader_test` corpus (arithmetic, comparison, flow control, transcendental, matrix, source modifiers, texture, FFP sanity/alpha test) | ✅ | 27 tracked shader tests: 26 passing tests, one failing alpha-test readback probe, and eight dxmt9-local runtime extended probes in the passing Meson shader-corpus suite |
 | Provenance blocks on corpus files | ✅ | R-TEST-9.1 |
 | `MANIFEST.toml` + `check_manifest.sh` + `check_drift.sh` + `sync_corpus.sh` | ✅ | R-TEST-10.1–10.2, R-TEST-7.3; corpus manifest now records `models`, `opcodes`, license provenance, and `shader_corpus_tool.py gaps` reports model/opcode coverage gaps |
@@ -233,6 +268,7 @@ boundary, and as experiment evidence only when it proves app-level behaviour.
 | Machine-readable debug results | ❌ | Existing runs have related fields such as capture source and artifact paths, but no shared schema. | Emit `dxmt9.debug.result.v1`-style JSON with command, environment snapshot, artifacts, diagnostics, and fixed failure category. |
 | Boundary data dumps | ❌ | Native tests assert many exact before/after boundary values, and logs/counters expose pieces of the runtime path. | Add opt-in schema-versioned dump bundles for each diagnosed boundary with before/after phase labels, sidecar manifests, and correlation keys across PE, bridge, unix import, backend, Metal, and WSI. |
 | Rendered frame/video capture | ⚠️ | Experiments already emit single-frame internal dumps or window captures for some runs. | Add frame-list, interval-range, and bounded video-segment capture with per-frame source, hashes, dimensions, frame/timebase metadata, result JSON entries, and artifact size limits. |
+| Diagnostic cost gating | ❌ | R-ARCH-2.8 and R-TEST-14.19 through R-TEST-14.23 now require cost classes for test/experiment internals. Some native recorder seams exist in test targets, but there is no uniform audit. | Add an automated or reviewable inventory that classifies each recorder, dump, capture, verbose log, and experiment knob as compile-time test-only, opt-in cold diagnostic, or release-retained telemetry; prove disabled hooks do not change bridge counts, chunk counts, allocation growth, or artifact writes. |
 
 ### Unit-First DoD Checklist
 

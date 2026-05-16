@@ -106,6 +106,14 @@ committed reference assets by default. They must live under
 git unless a small frame is explicitly promoted through the reference-screenshot
 review process.
 
+**R-WILD-4.7** Experiment-only capture, dump, logging, and bisect support must
+follow the diagnostic cost classes in R-TEST-14.19 through R-TEST-14.23. An
+experiment launcher may enable expensive diagnostics for a run, but those knobs
+must be opt-in, recorded in `result.json`, bounded by artifact limits, and off in
+the normal release runtime. Experiment support must not require production draw,
+queue, bridge, or WSI paths to carry test-only payloads or always-on artifact
+writers.
+
 ---
 
 ## 5. Catalogue Manifest

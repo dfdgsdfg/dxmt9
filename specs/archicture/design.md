@@ -118,6 +118,23 @@ Copies that should be treated as regressions:
 - storing process-local pointers in wire payloads;
 - rebuilding large shader/layout payloads when hashes or handles are enough.
 
+### 2.3 Test And Diagnostic Cost Classes
+
+Test and experiment observability is kept out of the normal execution shape by
+assigning every internal hook to a cost class:
+
+| Cost class | Allowed in release default? | Shape |
+|---|---:|---|
+| Compile-time test-only | No | Native recorder fakes, mock encoders, harness-only entry points, and schema writers that are built only for test targets or explicit diagnostic builds. |
+| Opt-in cold diagnostic | Yes, disabled | Environment-gated dumps, frame capture, verbose provider logs, or Metal capture setup. Disabled state must not perform per-draw allocation, formatting, file I/O, locks, or extra bridge calls. |
+| Release-retained telemetry | Yes | Flat counters or bounded state already needed for production diagnosis or performance gates. It must be cheap enough to measure with R-ARCH-2.6 counters. |
+
+Hot-path code may branch on a precomputed diagnostic mode at coarse boundaries,
+but inner draw/resource loops should see either compile-time elimination or a
+single predictable disabled check. Test-only recorders must consume production
+value records from the outside rather than adding fields to wire packets or
+queue records solely for tests.
+
 ---
 
 ## 3. CPU-Bound Submission Sequence

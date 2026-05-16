@@ -75,6 +75,15 @@ CPU submission, bridge/import, queue storage, encode/cache, GPU execution,
 presentation, or synchronous readback. Each bottleneck class must name observable
 counters or evidence before it is optimized.
 
+**R-ARCH-2.8** Test, experiment, recorder, and diagnostic structures must not
+become unbounded production hot-path state. Each such structure must be classified
+as compile-time test-only, opt-in cold diagnostic, or release-retained telemetry.
+Compile-time test-only structures must be removable from release artifacts.
+Opt-in diagnostics must be disabled by default and must not add per-draw heap
+allocation, file I/O, string formatting, locks, Objective-C/Metal capture calls,
+or extra bridge traffic when disabled. Release-retained telemetry must be flat,
+bounded, and measured by the counters required in R-ARCH-2.6.
+
 ---
 
 ## 3. Boundary Contracts

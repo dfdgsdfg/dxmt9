@@ -145,6 +145,71 @@ coverage. For example, the 3DMark05 `D3DPT_TRIANGLEFAN` regression was not a
 shader or final-present issue: the missing proof was the core draw topology
 boundary from non-UP fan input to generated triangle-list draw payload.
 
+### 0.3 Draw And Render Intent Audit
+
+R-TEST-0.11 extends the boundary audit from "which values crossed" to "whether
+the next module will execute the same D3D9 intent." This matters whenever a
+normalizer changes the representation: primitive conversion, UP payload capture,
+render-pass folding, descriptor packing, draw-run coalescing, or present-source
+selection.
+
+| Intent class | What must be proved | Primary evidence | Gap / risk |
+|---|---|---|---|
+| Geometry topology | The backend draw sees the same triangle/line/point set as the D3D9 call, including generated fan indices such as `{0,1,2,0,2,3}`. | `dxmt9-core-device-coverage-spec`, `dxmt9-core-device-lifecycle-spec`, `dxmt9-metal-encoder-recorder-spec`, `dxmt9-encode-draw-recorder-spec` | B7 is covered for TriangleFan core payloads; B8 now covers the indexed encodeDraw command order and `DrawVolatile` bytes. Non-indexed `drawPrimitives` still needs the same encoder-level proof. |
+| Draw source selection | Bound stream/index buffers and UP payloads are not confused; base vertex, start vertex/index, stream offset, stride, and index type reach the command actually encoded. | core coverage specs, draw-run fixture tests, `dxmt9-encode-draw-recorder-spec` | Live encodeDraw coverage now proves bound-vertex/user-index and UP-vertex/user-index source selection. Direct bound-index and multi-stream programmable VS source selection remain open. |
+| Raster intent | Viewport, scissor, cull/front-face, fill mode, half-pixel correction, depth range, and clip planes produce the intended raster footprint. | `state_draw_transform_spec`, raster plan tests, shader-runner viewport/half-pixel probes | Static plans prove parameters; combined cull/fill/scissor/runtime interactions still need targeted readback probes. |
+| Attachment and render-state intent | RT/DS/MRT bindings, clear/load/store policy, color masks, blend, depth/stencil, alpha/fog/sRGB state affect the intended attachment pixels. | `backend_pipeline_key_spec`, `render_pass_actions_spec`, shader-runner render-state probes | Color-write and MRT have partial probes; alpha-test readback is still a tracked failing probe and oDepth/fog/sRGB coverage remains open. |
+| Resource sampling intent | Texture format, swizzle/luminance/alpha policy, sampler defaults, LOD, address/filter, and shader binding slots preserve what the shader samples. | `resource_format_boundary_spec`, `shader_argbuf_binding_value_spec`, shader-runner texture probes | Actual Stage 1/Stage 2 encoder writes need a live recorder seam; static descriptors cannot prove all sampling behavior. |
+| Ordering and synchronization intent | Coalescing, hazard barriers, readbacks, and presents keep D3D9-visible ordering while still batching. | chunk import/replay specs, `resource_hazard_spec`, `dod_replay_observer_spec`, TLA+ models | Full Metal-command ordering and WSI result schemas are still partial. |
+
+The expected testing pattern is layered:
+
+1. Native tests assert the exact rewritten operation at the producing boundary.
+2. Queue or encoder observer tests assert the operation that the backend will
+   execute.
+3. Runtime readback proves GPU-visible behavior only for interactions that
+   cannot be established from the deterministic operation data.
+
+### 0.4 Vertex And Skinning Intent Audit
+
+R-TEST-0.12 and R-TEST-1.11 cover D3D9 application intent that is expressed
+across vertex declarations, stream bindings, shader constants, and vertex shader
+math. D3D9 does not expose a high-level rig object, so the test contract treats
+animation/rigging as shader-driven or fixed-function vertex deformation whose
+inputs must remain coherent across every boundary.
+
+```mermaid
+flowchart LR
+    APP["D3D9 app draw\npose inputs"] --> DECL["FVF / vertex declaration\nusage + usage index"]
+    APP --> STREAMS["stream sources\noffset + stride + data"]
+    APP --> CONSTS["VS constants\nbone matrix palette"]
+    APP --> STATE["FFP transform / vertex-blend state"]
+
+    DECL --> CORE["core draw snapshot"]
+    STREAMS --> CORE
+    CONSTS --> CORE
+    STATE --> CORE
+
+    CORE --> SHADER["shader input layout\nand MSL lowering"]
+    SHADER --> ENC["encoder vertex bindings\nand DrawVolatile"]
+    ENC --> GPU["rendered pose / geometry mask"]
+```
+
+| Intent class | What must be proved | Primary evidence | Gap / risk |
+|---|---|---|---|
+| Vertex semantic mapping | `D3DVERTEXELEMENT9` usage, usage index, stream, offset, stride, and type reach the shader input requested by DCL tokens or FFP layout. | `state_draw_transform_spec`, `shader_transform_spec` input-layout tests | Static coverage exists for several multi-stream cases; runtime probes do not yet prove a full semantic-mapped draw. |
+| Skinning constants | Vertex-shader constants used as matrix palettes retain slot number, range, value, and relative-addressing semantics. | shader transform tests for indexed constant reads, constant boundary tests | Existing tests inspect lowering; no readback fixture proves the selected constant matrix changes the pose. |
+| Weight/index conversion | `BLENDWEIGHT` and `BLENDINDICES` values keep component order, normalization/raw interpretation, and stream source through backend fetch. | shader transform source-contract tests | No runtime fixture distinguishes wrong component order or wrong index conversion from a correct skinned pose. |
+| Fixed-function vertex blending | FFP `vertexBlend`, `indexedVertexBlend`, world matrices, normals, and FVF layout produce the intended blended vertex position. | FFP key/unit tests, fixed-function shader corpus | FFP vertex blending is specified but lacks a targeted readback probe. |
+| Rendered pose | A known input pose produces a deterministic triangle/quad mask or probe pixels that would fail for wrong stream, constant, weight, index, or matrix multiply. | required `shader_runner_dxmt9` skinning probe | Missing first-class runtime fixture; app experiments are useful symptoms but not deterministic evidence. |
+
+The intended first fixture is deliberately small: two bone matrices translate
+the same triangle into distinguishable screen-space positions, stream 0 carries
+`POSITION`, stream 1 carries `BLENDWEIGHT` / `BLENDINDICES` and a varying, and
+the vertex shader computes the weighted position from constants. The oracle is a
+pixel mask that changes if stream selection, declaration usage mapping, constant
+slot selection, relative addressing, or matrix multiplication is wrong.
+
 ---
 
 ## 1. Test Infrastructure: dxmt9 Shader Runner
@@ -331,8 +396,9 @@ without depending on a Metal render/readback path:
 The dxmt9 `.shader_test` compatible subset remains the base corpus format.
 dxmt9-specific coverage that needs richer setup is expressed through a local
 extended probe layer owned by `shader_runner_dxmt9`. The extension is used for
-texture setup, vertex output geometry probes, and render-state interaction
-probes that cannot be represented cleanly in the shared upstream corpus.
+texture setup, vertex output geometry probes, vertex-input / skinning probes,
+and render-state interaction probes that cannot be represented cleanly in the
+shared upstream corpus.
 It is not the primary proof mechanism for shader/state/draw transforms; those
 belong in the stateless unit suites described in section 0.
 
@@ -340,7 +406,8 @@ belong in the stateless unit suites described in section 0.
 flowchart TD
     A["shader_runner_dxmt9 extension"] --> B["Texture Setup DSL"]
     A --> C["VS Geometry Probe"]
-    A --> D["Render State Interaction Probe"]
+    A --> D["Vertex Input / Skinning Probe"]
+    A --> F["Render State Interaction Probe"]
 
     B --> B1["2x2 / 4x4 texture"]
     B --> B2["mip levels"]
@@ -353,14 +420,20 @@ flowchart TD
     C --> C4["viewport / clip-space orientation"]
     C --> C5["half-pixel edge masks"]
 
-    D --> D1["alpha test"]
-    D --> D2["oDepth"]
-    D --> D3["MRT"]
-    D --> D4["fog / color write / sRGB"]
+    D --> D1["multi-stream declaration"]
+    D --> D2["BLENDWEIGHT / BLENDINDICES"]
+    D --> D3["VS constant matrix palette"]
+    D --> D4["skinned pose mask"]
+
+    F --> F1["alpha test"]
+    F --> F2["oDepth"]
+    F --> F3["MRT"]
+    F --> F4["fog / color write / sRGB"]
 
     B --> E["actual pixel readback"]
     C --> E
     D --> E
+    F --> E
 ```
 
 The extension is declarative: test files describe resources, render states,
@@ -369,8 +442,8 @@ runner translates that into backend calls, renders into an offscreen target,
 performs readback, and compares the actual pixels. Generated shader source is
 not a pass criterion for these probes; source and descriptor expectations belong
 in fast transform unit tests. Extended probes are reserved for GPU-visible
-behaviour such as orientation, sampler filtering/addressing, depth, MRT routing,
-and combined render-state effects.
+behaviour such as orientation, sampler filtering/addressing, vertex input
+deformation, depth, MRT routing, and combined render-state effects.
 
 Current implemented command subset:
 
@@ -399,6 +472,18 @@ Current implemented command subset:
   `green`, `rgb`, or `rgba`.
 - `dxmt9-draw-solid-quad` renders a full-target XYZRHW quad for render-state
   interaction probes.
+
+Required next command subset for vertex/skinning intent:
+
+- `dxmt9-vertex-stream <stream> stride=<bytes> <hex-bytes>` defines an exact
+  stream payload used by the following draw.
+- `dxmt9-vertex-decl <stream>:<offset>:<type>:<usage><index> ...` defines the
+  `D3DVERTEXELEMENT9` semantic mapping instead of relying on a default quad.
+- `dxmt9-vs-constants-f <first> <float4...>` writes exact vertex-shader
+  constants, including matrix-palette slots.
+- `dxmt9-draw-vs-skinned-triangle` draws a programmable VS triangle whose
+  expected pixel mask distinguishes the correct skinned pose from wrong stream,
+  declaration, constant, weight/index, or matrix-math behaviour.
 
 The first implemented runtime probes are:
 
@@ -1381,6 +1466,40 @@ flowchart LR
 | Environment registry | `agents/rules/environment_variables.rules.md` plus checked audit | every consumed runtime knob documented with owner/default | Registry exists; automated drift check is required. |
 | Boundary dump layer | harness options or env vars such as `DXMT_DEBUG_DUMP_DIR`, `DXMT_DEBUG_DUMP_BOUNDARIES` | schema-versioned before/after dumps with correlation keys | Not standardized; existing tests assert many values but do not emit a reusable dump bundle. |
 | Render capture layer | existing `DXMT_CAPTURE_FRAME`, `DXMT_EXPERIMENT_CAPTURE_PATH`, plus frame-list/range/video capture options | image sequence or video artifacts with source, frame/timebase, hash, dimensions, and limits | Single-frame internal/window capture exists in experiments; interval frame and video segment capture are not standardized. |
+
+### Diagnostic Cost Classes
+
+R-TEST-14.19 through R-TEST-14.23 make observability a build/runtime contract,
+not an excuse to put permanent scaffolding in the renderer. Every new internal
+test or experiment hook chooses one of these classes:
+
+| Cost class | Default release behavior | Examples | Acceptance rule |
+|---|---|---|---|
+| Compile-time test-only | Not linked or not exported | Recorder fakes, mock encoders, harness-only entry points, schema emitters used only by native tests | Must be isolated to test targets or explicit diagnostic build options. Production ABI and wire records must not depend on it. |
+| Opt-in cold diagnostic | Present but disabled | Boundary dumps, rendered frame/video capture, verbose provider logs, Metal capture triggers | Disabled mode must avoid per-draw allocation, file I/O, string formatting, locks, capture setup, extra bridge calls, and schema construction. |
+| Release-retained telemetry | Always present, bounded | Flat counters, coarse failure categories, cheap mode flags needed for field triage | Must be measured by operation/allocation/bridge counters and justified as production-worthy. |
+
+```mermaid
+flowchart TD
+    Hook["new test / experiment hook"] --> Classify{"cost class?"}
+    Classify --> TestOnly["compile-time test-only"]
+    Classify --> Cold["opt-in cold diagnostic"]
+    Classify --> Telemetry["release-retained telemetry"]
+
+    TestOnly --> BuildGate["test target or explicit diagnostic build"]
+    Cold --> OffGate["disabled default\ncoarse mode check only"]
+    Telemetry --> PerfGate["bounded flat data\ncounter/benchmark evidence"]
+
+    BuildGate --> Accept["accepted"]
+    OffGate --> Accept
+    PerfGate --> Accept
+```
+
+The release-disabled path must be observable in tests or benchmarks. For a hook
+touching draw, queue, encoder, bridge, or WSI paths, the disabled case should
+show no change in bridge operation count, chunk commit count, allocation growth,
+or diagnostic artifact count. A hook that cannot meet that bar belongs in a
+test-only build, not in the normal runtime.
 
 ### Boundary Data Dump Contract
 

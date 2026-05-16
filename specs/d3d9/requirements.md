@@ -313,7 +313,14 @@ vertex and index data into GPU-accessible memory before issuing the draw. The ca
 buffer may be freed immediately after the call returns.
 
 **R-CORE-5.3** `D3DPT_TRIANGLEFAN` must be supported. It has no Metal equivalent and
-must be decomposed into `D3DPT_TRIANGLELIST` before submission.
+must be decomposed into an equivalent `D3DPT_TRIANGLELIST` operation before
+submission. The conversion must preserve the caller's triangle stream, not only
+normalize the primitive enum. For fan vertices or indices `[0, 1, 2, 3, ...]`,
+the submitted list must address triangles `[0,1,2]`, `[0,2,3]`, and so on.
+Non-UP draws using bound vertex/index buffers must preserve the intended bound
+source data through generated/re-written index payloads or an equivalent
+queue-owned representation; UP draws must copy/decompose caller-owned payloads
+before the API call returns.
 
 **R-CORE-5.4** `Clear()` must support independent clearing of color, depth, and
 stencil. It must support rectangular sub-region clears via the `pRects` / `Count`
@@ -359,7 +366,8 @@ dispatched by subsequent draw calls.
 
 **R-CORE-6.3** When no vertex shader is set (`SetVertexShader(NULL)`), the fixed-
 function vertex pipeline must be active. Its behavior must be governed by the
-transform state, lighting state, material, active lights, FVF, and fog parameters.
+transform state, vertex-blend / indexed-vertex-blend state, lighting state,
+material, active lights, FVF, and fog parameters.
 
 **R-CORE-6.4** When no pixel shader is set (`SetPixelShader(NULL)`), the fixed-
 function texture-and-lighting blending pipeline must be active. Its behavior must be
@@ -386,6 +394,16 @@ translation-option inputs. They must not read mutable `DeviceState`, COM object
 identity, backend caches, or global debug state except through explicit
 parameters, and their outputs must be unit-testable as values: IR, MSL text,
 resource binding metadata, diagnostics, or errors.
+
+**R-CORE-6.8** Programmable vertex-shader translation must preserve
+shader-driven deformation patterns used by D3D9 animation and skinning code.
+This includes `dcl` input semantics for `POSITION`, `NORMAL`, `BLENDWEIGHT`,
+`BLENDINDICES`, `COLOR`, and `TEXCOORD`; `mova` / address-register use for
+relative constant addressing; indexed reads from vertex-shader constant arrays
+used as matrix palettes; and matrix / dot-product instructions that combine
+bone transforms and weights. The translated shader must consume the vertex
+declaration streams and constant slots selected by the D3D9 state for the draw,
+not a backend-default layout or reordered constant range.
 
 ---
 
@@ -414,6 +432,16 @@ pixel texture-coordinate contract. The default programmable vertex-shader
 translation must not inject a global debug Y inversion. `DXMT_DEBUG_FLIP_VERTEX_Y`
 may force `out.position.y = -out.position.y` only as a diagnostic bisect path;
 it must be controlled separately from `DXMT_DEBUG_FORCE_PIXEL_V_FLIP`.
+
+**R-CORE-7.6** Explicit vertex declarations must preserve input semantic intent
+across the D3D9-to-backend boundary. Each `D3DVERTEXELEMENT9` stream, offset,
+type, method, usage, and usage index must map to the shader input requested by
+bytecode declaration tokens or fixed-function layout generation. This includes
+skinning-relevant declarations such as `D3DDECLUSAGE_BLENDWEIGHT` and
+`D3DDECLUSAGE_BLENDINDICES`, normal / tangent-space attributes, colors, and
+multi-set texture coordinates. Type conversion must preserve D3D9 component
+meaning, including normalized and packed formats, before shader deformation or
+fixed-function vertex processing consumes the values.
 
 ---
 

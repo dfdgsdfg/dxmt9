@@ -582,7 +582,51 @@ behavior. The key must not contain any pointers or handles — only scalar state
 
 ---
 
-## 6. Triangle Fan Decomposition
+## 6. Vertex Input And Skinning Intent
+
+D3D9 application animation is represented in this layer as vertex data,
+declarations, shader constants, bytecode, and fixed-function vertex-blend state.
+There is no separate rig object to validate. Correctness therefore depends on
+preserving the relationships between those values until the backend fetches and
+executes the draw.
+
+```mermaid
+flowchart LR
+    DECL["D3DVERTEXELEMENT9\nusage/type/stream/offset"] --> SNAP["DrawDesc / FlatDrawStateView"]
+    STREAM["SetStreamSource\nbuffer/offset/stride"] --> SNAP
+    CONST["SetVertexShaderConstantF/I/B\nmatrix palette"] --> SNAP
+    BYTECODE["VS bytecode\nDCL + MOVA + matrix ops"] --> LAYOUT["Vertex input layout\nMSL source"]
+    SNAP --> LAYOUT
+    LAYOUT --> ENCODE["encoder vertex buffers\nDrawVolatile + constants"]
+    ENCODE --> DRAW["backend draw\nrendered pose"]
+```
+
+Programmable vertex-shader skinning must keep these contracts:
+
+- Declaration lookup is by D3D semantic usage and usage index, not by raw
+  declaration order. A `BLENDWEIGHT` or `BLENDINDICES` element moved to another
+  stream must change the generated input layout and the stream buffer read.
+- Stream offset and stride are part of the vertex-input contract. A draw that
+  snapshots stream 1 for blend data must not silently read stream 0 fallback
+  bytes.
+- Packed and normalized declaration types must be converted according to their
+  D3D component meaning before shader math uses them.
+- Vertex-shader constants used as matrix palettes remain in the caller-selected
+  slots. Relative addressing through `a0` must select the same matrix row or
+  vector that D3D9 would expose to the shader.
+- The final proof for skinning bugs is a rendered pose or deterministic geometry
+  mask, because source text can prove lowering but cannot prove that the draw
+  used the intended streams and constants at execution time.
+
+Fixed-function vertex blending follows the same value path through generated FFP
+shaders. `vertexBlend`, `indexedVertexBlend`, world matrices, normals, and FVF
+layout are part of the FFP vertex key and uniform payload, so a change in any of
+those values must change either the generated vertex work or the uniform values
+seen by the backend draw.
+
+---
+
+## 7. Triangle Fan Decomposition
 
 `D3DPT_TRIANGLEFAN` must be decomposed in the core before submission to the backend.
 The backend never sees `D3DPT_TRIANGLEFAN`.
@@ -591,16 +635,24 @@ This primitive conversion is separate from the ordinary indexed-draw policy abov
 indexed triangle-list/triangle-strip draws stay direct indexed draws by default.
 
 For fan `[v0, v1, v2, …, vN]` (primitive count = N−1):
-- Non-indexed: copy vertices into a temporary triangle list buffer.
-- Indexed: read original indices and write a new index sequence into a temporary
-  index buffer.
+- Bound `DrawPrimitive`: keep the active vertex stream as the vertex source and
+  synthesize a queue-owned sequential index payload, e.g. `{0,1,2,0,2,3}` for a
+  two-triangle fan.
+- Bound `DrawIndexedPrimitive`: read the active index-buffer range and write a
+  queue-owned expanded index payload that addresses the same source vertices.
+- `DrawPrimitiveUP`: copy caller vertex bytes into a queue-owned triangle-list
+  vertex payload, or otherwise provide an equivalent queue-owned representation.
+- `DrawIndexedPrimitiveUP`: copy caller vertex bytes and write an expanded
+  queue-owned index payload over the caller's index stream.
 
-The temporary buffer is valid until the draw call returns. The backend must copy or
-consume it before returning.
+The conversion is correct only if the backend-visible operation addresses the
+same triangles as the D3D9 fan. Primitive enum normalization by itself is not
+evidence of correctness. Any temporary payload must be copied into queue-owned
+storage before the API call returns.
 
 ---
 
-## 7. Half-Pixel Offset Correction
+## 8. Half-Pixel Offset Correction
 
 D3D9 pixel centers are at integer screen coordinates; Metal pixel centers are at
 half-integers. Without correction, all 3D geometry renders shifted by 0.5 pixels.
