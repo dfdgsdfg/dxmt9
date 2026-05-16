@@ -108,6 +108,17 @@ requirements document, implementation mechanics belong in `specs/tests/design.md
 and current evidence, remaining gaps, and next acceptance focus belong in
 `specs/gap.md`.
 
+**R-TEST-0.10** Boundary tests must assert exact value propagation across each
+translation boundary, not only final behaviour. When D3D9-visible data crosses
+into core records, bridge packets, imported draw state, backend descriptors,
+Metal resource formats, or generated shader sampling code, tests must verify the
+specific semantic value before and after that boundary: format identity and
+component meaning, swizzle/alpha defaults, pitch/byte layout, sampler state,
+shader constants, resource handles, ordering tokens, and error/status values as
+applicable. End-to-end probes may prove the rendered result, but they are not
+sufficient evidence that the boundary contract preserved or intentionally
+converted the correct values.
+
 ---
 
 ## 1. Shader Translation Correctness

@@ -207,7 +207,23 @@ Format parseDxmt9Format(std::string_view text) {
   if (token == "a8r8g8b8") {
     return Format::A8R8G8B8;
   }
+  if (token == "l8") {
+    return Format::L8;
+  }
   fail("unsupported dxmt9 format");
+}
+
+void writeDxmt9TextureTexel(u8* dst, Format format, const std::array<u8, 4>& bgra) {
+  switch (format) {
+  case Format::A8R8G8B8:
+    std::memcpy(dst, bgra.data(), bgra.size());
+    return;
+  case Format::L8:
+    dst[0] = bgra[2];
+    return;
+  default:
+    fail("unsupported dxmt9 texture upload format");
+  }
 }
 
 u32 parseAddressMode(std::string_view text) {
@@ -900,6 +916,10 @@ std::vector<std::shared_ptr<Texture>> createDxmt9Textures(Device& device, const 
     if (!texture) {
       fail("failed to create dxmt9 texture");
     }
+    const u32 texelBytes = bytesPerPixel(setup.format);
+    if (texelBytes == 0) {
+      fail("dxmt9 texture upload requires an uncompressed byte-addressable format");
+    }
 
     for (u32 levelIndex = 0; levelIndex < setup.levels.size(); ++levelIndex) {
       const auto& level = setup.levels[levelIndex];
@@ -916,12 +936,16 @@ std::vector<std::shared_ptr<Texture>> createDxmt9Textures(Device& device, const 
       if (!upload.data) {
         fail("failed to lock dxmt9 texture");
       }
+      if (upload.pitch < level.width * texelBytes) {
+        fail("dxmt9 texture upload pitch is too small");
+      }
       auto* bytes = static_cast<u8*>(upload.data);
       for (u32 y = 0; y < level.height; ++y) {
         for (u32 x = 0; x < level.width; ++x) {
           const auto& texel = level.texels[static_cast<size_t>(y) * level.width + x];
-          std::memcpy(bytes + static_cast<size_t>(y) * upload.pitch + static_cast<size_t>(x) * texel.size(),
-                      texel.data(), texel.size());
+          writeDxmt9TextureTexel(
+              bytes + static_cast<size_t>(y) * upload.pitch + static_cast<size_t>(x) * texelBytes,
+              setup.format, texel);
         }
       }
       texture->unlockRect(levelIndex);

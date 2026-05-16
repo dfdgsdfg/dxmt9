@@ -119,6 +119,10 @@ conventions, not feature requirements; durable behavior belongs in `specs/`.
   runtime pixel probes.
 - For bridge/wire-format changes, update layout/import tests before changing
   replay behavior.
+- For translation boundaries, test exact value propagation at the boundary, not
+  just final behavior. Assert the before/after values for formats, component
+  semantics, swizzles/default channels, byte layout, sampler/descriptor state,
+  handles, ordering tokens, and HRESULT/status values as applicable.
 - Runtime Wine conformance and experiments are evidence layers, not substitutes
   for deterministic unit or fake-backend tests.
 
