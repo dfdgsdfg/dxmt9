@@ -538,12 +538,52 @@ void testFullscreenAndDeviceLost() {
   checkEq(device->swapChain()->backBuffer()->desc().height, 1080u, "fullscreen reset height");
 }
 
+void testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters primaryParams{};
+  primaryParams.backBufferWidth = 320;
+  primaryParams.backBufferHeight = 240;
+  primaryParams.backBufferFormat = Format::A8R8G8B8;
+  primaryParams.windowed = true;
+  primaryParams.presentationInterval = PresentInterval::Immediate;
+  primaryParams.deviceWindow = Handle{0x1000u};
+
+  auto device = factory.createDevice(0, primaryParams);
+  check(device != nullptr, "swapchain present primary device");
+
+  PresentParameters secondaryParams = primaryParams;
+  secondaryParams.backBufferWidth = 128;
+  secondaryParams.backBufferHeight = 96;
+  secondaryParams.deviceWindow = Handle{0x2000u};
+  auto secondary = device->createAdditionalSwapChain(secondaryParams);
+  check(secondary != nullptr, "secondary swapchain created");
+  check(secondary->backBuffer() != nullptr, "secondary swapchain backbuffer");
+
+  SwapDesc callerDesc{};
+  callerDesc.window = Handle{0x2000u};
+  callerDesc.width = 128;
+  callerDesc.height = 96;
+  callerDesc.sourceSurface = Handle{0xdeadbeefu};
+  checkEq(secondary->present(device->backend(), callerDesc), D3D_OK,
+          "secondary swapchain present");
+
+  checkEq(backend->presents.size(), size_t{1},
+          "secondary swapchain present submitted once");
+  checkEq(backend->presents[0].sourceSurface, secondary->backBuffer()->handle(),
+          "swapchain present uses owning backbuffer as source");
+  checkEq(backend->presents[0].window, callerDesc.window,
+          "swapchain present preserves destination window");
+}
+
 }  // namespace
 
 int main() {
   try {
     testDeviceCoreFlow();
     testFullscreenAndDeviceLost();
+    testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

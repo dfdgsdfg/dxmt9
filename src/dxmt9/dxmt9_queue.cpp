@@ -276,6 +276,10 @@ CommandBufferDiagnostics summarizeCommands(u64 seqId,
   return summarizeChunk(seqId, slotIndex, std::span<const ChunkObservation>(observations.data(), observations.size()));
 }
 
+Handle selectPresentSourceHandle(const SwapDesc& desc, Handle currentBackBuffer) noexcept {
+  return desc.sourceSurface ? desc.sourceSurface : currentBackBuffer;
+}
+
 CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
     u64 seqId,
     size_t slotIndex) const {

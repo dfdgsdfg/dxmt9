@@ -184,6 +184,7 @@ CommandBufferDiagnostics summarizeCommands(u64 seqId,
                                           size_t slotIndex,
                                           const ChunkSlot& slot,
                                           const std::function<u32(Handle)>& resolveSurfaceFlags);
+Handle selectPresentSourceHandle(const SwapDesc& desc, Handle currentBackBuffer) noexcept;
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state);
 
 template <typename CommandContainer, typename ObservationMapper>

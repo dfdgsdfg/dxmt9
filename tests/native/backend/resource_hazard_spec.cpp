@@ -18,6 +18,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/dxmt9_device.hpp"
+#include "../../../src/dxmt9/dxmt9_presenter.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 
 namespace {
@@ -984,6 +985,75 @@ void testResourcePoolUsesArenaStorageOnly() {
         "resource pool finds current recycled buffer handle");
 }
 
+void testPresentSourceSelectionPrefersExplicitSourceOverCurrentBackBuffer() {
+  SwapDesc present{};
+  present.sourceSurface = Handle{0x7000u};
+  const Handle currentBackBuffer{0x6000u};
+
+  checkEq(dxmt9::core::metalqueue::selectPresentSourceHandle(present, currentBackBuffer).value,
+          present.sourceSurface.value,
+          "explicit present source wins over current backbuffer fallback");
+
+  present.sourceSurface = Handle{};
+  checkEq(dxmt9::core::metalqueue::selectPresentSourceHandle(present, currentBackBuffer).value,
+          currentBackBuffer.value,
+          "missing present source falls back to current backbuffer");
+}
+
+void testEncodePresentRejectsMissingSourceWithoutStatusCallback() {
+  dxmt9::resources::Pool resourcePool;
+  WMT::CommandBuffer commandBuffer{NULL_OBJECT_HANDLE};
+
+  bool statusNotified = false;
+  SwapDesc present{};
+  present.window = Handle{0x8000u};
+  present.width = 32u;
+  present.height = 32u;
+  present.notifyPresentationStatus = [&](bool) { statusNotified = true; };
+
+  const bool encoded =
+      dxmt9::encodePresent(commandBuffer, resourcePool, present,
+                           SurfaceHandle{0x12345678u}, 9u);
+  check(!encoded, "encodePresent rejects a missing source surface");
+  check(!statusNotified,
+        "missing source does not report presentation status without drawable work");
+}
+
+void testEncodePresentRejectsSourceWithoutTexture() {
+  BackendLimits limits{};
+  dxmt9::resources::Pool resourcePool;
+  const auto source = resourcePool.createSurface(
+      WMT::Device{NULL_OBJECT_HANDLE},
+      limits,
+      SurfaceDesc{
+          .width = 32u,
+          .height = 32u,
+          .format = Format::A8R8G8B8,
+          .pool = Pool::Default,
+          .usage = UsageRenderTarget,
+          .renderTarget = true,
+      });
+  check(static_cast<bool>(source), "textureless source surface allocated");
+  auto* sourceRecord = resourcePool.findSurface(source.value);
+  check(sourceRecord != nullptr, "textureless source surface record");
+  check(!sourceRecord->texture, "null WMT device creates no source texture");
+
+  WMT::CommandBuffer commandBuffer{NULL_OBJECT_HANDLE};
+  bool statusNotified = false;
+  SwapDesc present{};
+  present.window = Handle{0x8001u};
+  present.sourceSurface = source;
+  present.width = 32u;
+  present.height = 32u;
+  present.notifyPresentationStatus = [&](bool) { statusNotified = true; };
+
+  const bool encoded =
+      dxmt9::encodePresent(commandBuffer, resourcePool, present, source, 10u);
+  check(!encoded, "encodePresent rejects a surface with no texture");
+  check(!statusNotified,
+        "textureless source does not report presentation status without drawable work");
+}
+
 }  // namespace
 
 int main() {
@@ -994,6 +1064,9 @@ int main() {
     testImportedIndexedDrawRunCoalescesParamOnlyPackets();
     testResourcePoolArenaRejectsStaleHandles();
     testResourcePoolUsesArenaStorageOnly();
+    testPresentSourceSelectionPrefersExplicitSourceOverCurrentBackBuffer();
+    testEncodePresentRejectsMissingSourceWithoutStatusCallback();
+    testEncodePresentRejectsSourceWithoutTexture();
   } catch (const TestFailure& e) {
     std::cerr << "resource_hazard_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

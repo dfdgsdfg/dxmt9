@@ -1132,7 +1132,8 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   std::uint64_t presentSeqId = 0;
   {
     std::unique_lock lock(mutex_);
-    const core::Handle sourceHandle = queuedDesc.sourceSurface ? queuedDesc.sourceSurface : currentBackBuffer_;
+    const core::Handle sourceHandle =
+        core::metalqueue::selectPresentSourceHandle(queuedDesc, currentBackBuffer_);
     perf::countPresentSourceSelection(static_cast<bool>(queuedDesc.sourceSurface),
                                       sourceHandle.value != 0 &&
                                           sourceHandle.value == currentBackBuffer_.value);

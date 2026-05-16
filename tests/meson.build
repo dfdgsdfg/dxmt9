@@ -123,7 +123,12 @@ test('dxmt9-corpus-sync-smoke', python3,
      args: [join_paths(meson.project_source_root(), 'tests/shader_runner/corpus_sync_smoke.py')],
      is_parallel: false)
 test('dxmt9-wine-resolve', python3,
-     args: ['-m', 'unittest', 'tests.scripts.test_wine_resolve'],
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_wine_resolve.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-run-experiment-capture', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_run_experiment_capture.py')],
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)

@@ -396,6 +396,13 @@ def image_luma_metrics(path: Path) -> dict[str, float]:
     }
 
 
+def is_black_screen(metrics: dict[str, float]) -> bool:
+    return (
+        metrics["mean_luma"] <= BLACK_LUMA_THRESHOLD
+        and metrics["variance"] <= BLACK_VARIANCE_THRESHOLD
+    )
+
+
 def compute_ssim(actual_path: Path, reference_path: Path) -> float:
     actual = Image.open(actual_path).convert("L")
     reference = Image.open(reference_path).convert("L")
@@ -944,7 +951,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         if actual_path.exists():
             metrics = image_luma_metrics(actual_path)
             result["image_metrics"] = metrics
-            if metrics["mean_luma"] <= BLACK_LUMA_THRESHOLD and metrics["variance"] <= BLACK_VARIANCE_THRESHOLD:
+            if is_black_screen(metrics):
                 result["failures"].append({"type": "black_screen", **metrics})
         else:
             result["failures"].append({"type": "missing_capture"})

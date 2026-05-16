@@ -35,7 +35,7 @@ resource_hazard_spec = executable(
   'dxmt9-resource-hazard-spec',
   'resource_hazard_spec.cpp',
   include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
 
