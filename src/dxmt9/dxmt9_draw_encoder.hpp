@@ -40,7 +40,35 @@ struct EncodeDrawRecorder {
   // Suppresses the recorded draw-issue calls below so tests can pass fake
   // Metal handles. Callers must still skip or satisfy base-state binding paths.
   bool suppressMetalCalls = false;
+  // Test-only path for skipBaseStateBind=false without a live Metal device.
+  // When set, encodeDraw uses the fake objects below instead of consulting the
+  // pipeline/DSSO/sampler caches.
+  bool suppressBaseStateLookup = false;
+  WMT::RenderPipelineState renderPipelineState{};
+  WMT::DepthStencilState depthStencilState{};
+  WMT::SamplerState fragmentSamplerState{};
 
+  void (*setRenderPipelineState)(void* userdata,
+                                 WMT::RenderPipelineState pipeline) = nullptr;
+  void (*setDepthStencilState)(void* userdata,
+                               WMT::DepthStencilState depthStencil,
+                               std::uint8_t stencilRef) = nullptr;
+  void (*setViewport)(void* userdata, WMTViewport viewport) = nullptr;
+  void (*setScissorRect)(void* userdata, WMTScissorRect rect) = nullptr;
+  void (*setRasterizerState)(void* userdata,
+                             WMTTriangleFillMode fillMode,
+                             WMTCullMode cullMode,
+                             WMTDepthClipMode depthClipMode,
+                             WMTWinding winding,
+                             float depthBias,
+                             float slopeScale,
+                             float depthBiasClamp) = nullptr;
+  void (*setFragmentTexture)(void* userdata,
+                             WMT::Texture texture,
+                             std::uint8_t index) = nullptr;
+  void (*setFragmentSamplerState)(void* userdata,
+                                  WMT::SamplerState sampler,
+                                  std::uint8_t index) = nullptr;
   void (*setVertexBuffer)(void* userdata,
                           WMT::Buffer buffer,
                           std::uint64_t offset,

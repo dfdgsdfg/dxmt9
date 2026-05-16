@@ -146,6 +146,8 @@ std::string opcodeName(u32 opcode) {
       return "m3x2";
     case kD3DSIO_CALL:
       return "call";
+    case kD3DSIO_CALLNZ:
+      return "callnz";
     case kD3DSIO_LRP:
       return "lrp";
     case kD3DSIO_FRC:
@@ -166,6 +168,8 @@ std::string opcodeName(u32 opcode) {
       return "endif";
     case kD3DSIO_BREAK:
       return "break";
+    case kD3DSIO_BREAKC:
+      return "breakc";
     case kD3DSIO_RET:
       return "ret";
     case kD3DSIO_LOOP:
@@ -194,14 +198,50 @@ std::string opcodeName(u32 opcode) {
       return "cnd";
     case kD3DSIO_DEF:
       return "def";
+    case kD3DSIO_TEXCOORD:
+      return "texcoord";
     case kD3DSIO_TEX:
       return "tex";
+    case kD3DSIO_TEXKILL:
+      return "texkill";
+    case kD3DSIO_TEXBEM:
+      return "texbem";
+    case kD3DSIO_TEXBEML:
+      return "texbeml";
+    case kD3DSIO_TEXREG2AR:
+      return "texreg2ar";
+    case kD3DSIO_TEXREG2GB:
+      return "texreg2gb";
+    case kD3DSIO_TEXM3x2PAD:
+      return "texm3x2pad";
+    case kD3DSIO_TEXM3x2TEX:
+      return "texm3x2tex";
+    case kD3DSIO_TEXM3x3PAD:
+      return "texm3x3pad";
+    case kD3DSIO_TEXM3x3TEX:
+      return "texm3x3tex";
+    case kD3DSIO_TEXM3x3DIFF:
+      return "texm3x3diff";
+    case kD3DSIO_TEXM3x3SPEC:
+      return "texm3x3spec";
+    case kD3DSIO_TEXM3x3VSPEC:
+      return "texm3x3vspec";
     case kD3DSIO_TEXDEPTH:
       return "texdepth";
     case kD3DSIO_CMP:
       return "cmp";
     case kD3DSIO_BEM:
       return "bem";
+    case kD3DSIO_TEXREG2RGB:
+      return "texreg2rgb";
+    case kD3DSIO_TEXDP3TEX:
+      return "texdp3tex";
+    case kD3DSIO_TEXM3x2DEPTH:
+      return "texm3x2depth";
+    case kD3DSIO_TEXDP3:
+      return "texdp3";
+    case kD3DSIO_TEXM3x3:
+      return "texm3x3";
     case kD3DSIO_DP2ADD:
       return "dp2add";
     case kD3DSIO_DSX:
@@ -266,12 +306,15 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_LABEL:
     case kD3DSIO_CALL:
     case kD3DSIO_IF:
+    case kD3DSIO_TEXKILL:
     case kD3DSIO_LOOP:
     case kD3DSIO_REP:
       return 1;
     case kD3DSIO_IFC:
-      // `ifc <cmp_mode>, src0, src1` — cmp_mode lives in token high bits
-      // (instruction.controls), src0/src1 are the two register operands.
+    case kD3DSIO_BREAKC:
+    case kD3DSIO_CALLNZ:
+      // IFC/BREAKC store the comparison mode in instruction.controls.
+      // CALLNZ stores a literal label token followed by a condition source.
       return 2;
     case kD3DSIO_ADD:
     case kD3DSIO_SUB:

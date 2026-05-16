@@ -87,11 +87,20 @@ struct RenderTargetSetup {
   Format format = Format::A8R8G8B8;
 };
 
+struct RenderStateSetup {
+  u32 state = 0;
+  u32 value = 0;
+};
+
 struct SolidRectDraw {
   float left = 0.0f;
   float top = 0.0f;
   float right = 0.0f;
   float bottom = 0.0f;
+};
+
+struct SolidQuadXyzDepthDraw {
+  float z = 0.0f;
 };
 
 struct CorpusTest {
@@ -106,11 +115,15 @@ struct CorpusTest {
   std::vector<TextureTransformSetup> textureTransformSetups;
   std::vector<TextureBind> textureBinds;
   std::vector<RenderTargetSetup> renderTargetSetups;
+  std::vector<RenderStateSetup> renderStateSetups;
   std::vector<SolidRectDraw> solidRectDraws;
+  std::vector<SolidQuadXyzDepthDraw> solidQuadXyzDepthDraws;
   std::optional<ColorRGBA> clearColor;
   std::optional<Viewport> viewport;
+  std::optional<Rect> scissor;
   bool drawQuad = false;
   bool drawDxmt9TexturedQuad = false;
+  bool drawDxmt9TexturedQuadOverscan = false;
   bool drawDxmt9TexturedQuadTex2 = false;
   bool drawDxmt9TexturedQuadXyz = false;
   bool drawDxmt9SolidQuad = false;
@@ -128,6 +141,7 @@ struct CorpusTest {
   std::optional<u32> zEnable;
   std::optional<u32> zWriteEnable;
   std::optional<u32> zFunc;
+  std::optional<u32> cullMode;
   std::optional<float> clearDepth;
   bool alphaTestEnable = false;
   CompareFunc alphaTestFunc = CompareFunc::Always;
@@ -583,6 +597,79 @@ u32 parseTextureFilter(std::string_view text) {
   fail("unsupported dxmt9 sampler filter");
 }
 
+u32 parseU32Value(std::string_view text);
+
+u32 parseBlendFactor(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "zero") {
+    return static_cast<u32>(BlendFactor::Zero);
+  }
+  if (token == "one") {
+    return static_cast<u32>(BlendFactor::One);
+  }
+  if (token == "srccolor" || token == "sourcecolor") {
+    return static_cast<u32>(BlendFactor::SrcColor);
+  }
+  if (token == "invsrccolor" || token == "invsourcecolor" ||
+      token == "oneminussrccolor" || token == "oneminussourcecolor") {
+    return static_cast<u32>(BlendFactor::InvSrcColor);
+  }
+  if (token == "srcalpha" || token == "sourcealpha") {
+    return static_cast<u32>(BlendFactor::SrcAlpha);
+  }
+  if (token == "invsrcalpha" || token == "invsourcealpha" ||
+      token == "oneminussrcalpha" || token == "oneminussourcealpha") {
+    return static_cast<u32>(BlendFactor::InvSrcAlpha);
+  }
+  if (token == "destalpha" || token == "dstalpha" || token == "destinationalpha") {
+    return static_cast<u32>(BlendFactor::DestAlpha);
+  }
+  if (token == "invdestalpha" || token == "invdstalpha" ||
+      token == "invdestinationalpha" || token == "oneminusdestalpha" ||
+      token == "oneminusdstalpha" || token == "oneminusdestinationalpha") {
+    return static_cast<u32>(BlendFactor::InvDestAlpha);
+  }
+  if (token == "destcolor" || token == "dstcolor" || token == "destinationcolor") {
+    return static_cast<u32>(BlendFactor::DestColor);
+  }
+  if (token == "invdestcolor" || token == "invdstcolor" ||
+      token == "invdestinationcolor" || token == "oneminusdestcolor" ||
+      token == "oneminusdstcolor" || token == "oneminusdestinationcolor") {
+    return static_cast<u32>(BlendFactor::InvDestColor);
+  }
+  if (token == "srcalphasat" || token == "sourcealphasat" ||
+      token == "srcalphasaturate" || token == "sourcealphasaturate") {
+    return static_cast<u32>(BlendFactor::SrcAlphaSat);
+  }
+  if (token == "blendfactor") {
+    return static_cast<u32>(BlendFactor::BlendFactor);
+  }
+  if (token == "invblendfactor" || token == "oneminusblendfactor") {
+    return static_cast<u32>(BlendFactor::InvBlendFactor);
+  }
+  return parseU32Value(text);
+}
+
+u32 parseBlendOp(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "add") {
+    return static_cast<u32>(BlendOp::Add);
+  }
+  if (token == "subtract" || token == "sub") {
+    return static_cast<u32>(BlendOp::Subtract);
+  }
+  if (token == "revsubtract" || token == "reversesubtract" || token == "revsub") {
+    return static_cast<u32>(BlendOp::RevSubtract);
+  }
+  if (token == "min") {
+    return static_cast<u32>(BlendOp::Min);
+  }
+  if (token == "max") {
+    return static_cast<u32>(BlendOp::Max);
+  }
+  return parseU32Value(text);
+}
+
 u32 parseU32Value(std::string_view text) {
   size_t parsed = 0;
   const auto value = std::stoul(std::string(text), &parsed, 0);
@@ -935,6 +1022,43 @@ std::optional<SolidRectDraw> parseDxmt9SolidRect(std::string_view line) {
   return rect;
 }
 
+std::optional<SolidQuadXyzDepthDraw> parseDxmt9SolidQuadXyzDepth(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  SolidQuadXyzDepthDraw draw;
+  if (!(stream >> command) || command != "dxmt9-draw-solid-quad-xyz-depth") {
+    return std::nullopt;
+  }
+  if (!(stream >> draw.z)) {
+    fail("invalid dxmt9-draw-solid-quad-xyz-depth command");
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-draw-solid-quad-xyz-depth has extra values");
+  }
+  return draw;
+}
+
+std::optional<Rect> parseDxmt9Scissor(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  Rect rect;
+  if (!(stream >> command) || command != "dxmt9-scissor") {
+    return std::nullopt;
+  }
+  if (!(stream >> rect.left >> rect.top >> rect.right >> rect.bottom)) {
+    fail("invalid dxmt9-scissor command");
+  }
+  if (rect.left > rect.right || rect.top > rect.bottom) {
+    fail("dxmt9-scissor requires ordered edges");
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-scissor has extra values");
+  }
+  return rect;
+}
+
 u32 parseColorWriteMask(std::string_view text) {
   const auto token = normalizeToken(text);
   if (token == "red" || token == "r") {
@@ -971,6 +1095,20 @@ u32 parseBoolState(std::string_view text) {
 
 CompareFunc parseCompareFunc(std::string_view text);
 
+u32 parseCullMode(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "none" || token == "off" || token == "disabled") {
+    return static_cast<u32>(CullMode::None);
+  }
+  if (token == "cw" || token == "clockwise") {
+    return static_cast<u32>(CullMode::Cw);
+  }
+  if (token == "ccw" || token == "counterclockwise") {
+    return static_cast<u32>(CullMode::Ccw);
+  }
+  fail("unsupported dxmt9 cull mode");
+}
+
 bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
   std::istringstream stream{std::string(line)};
   std::string command;
@@ -997,6 +1135,42 @@ bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
       sawState = true;
     } else if (key == "zfunc") {
       test.zFunc = static_cast<u32>(parseCompareFunc(value));
+      sawState = true;
+    } else if (key == "cull" || key == "cullmode") {
+      test.cullMode = parseCullMode(value);
+      sawState = true;
+    } else if (key == "alphablend" || key == "alphablendenable" ||
+               key == "alphablendenabled") {
+      test.renderStateSetups.push_back({RS_ALPHABLEND_ENABLE, parseBoolState(value)});
+      sawState = true;
+    } else if (key == "srcblend" || key == "sourceblend") {
+      test.renderStateSetups.push_back({RS_SRC_BLEND, parseBlendFactor(value)});
+      sawState = true;
+    } else if (key == "destblend" || key == "dstblend" ||
+               key == "destinationblend") {
+      test.renderStateSetups.push_back({RS_DEST_BLEND, parseBlendFactor(value)});
+      sawState = true;
+    } else if (key == "blendop" || key == "blendoperation") {
+      test.renderStateSetups.push_back({RS_BLEND_OP, parseBlendOp(value)});
+      sawState = true;
+    } else if (key == "separatealphablend" ||
+               key == "separatealphablendenable" ||
+               key == "separatealphablendenabled") {
+      test.renderStateSetups.push_back({RS_SEPARATE_ALPHA_BLEND_ENABLE, parseBoolState(value)});
+      sawState = true;
+    } else if (key == "srcblendalpha" || key == "sourceblendalpha") {
+      test.renderStateSetups.push_back({RS_SRC_BLEND_ALPHA, parseBlendFactor(value)});
+      sawState = true;
+    } else if (key == "destblendalpha" || key == "dstblendalpha" ||
+               key == "destinationblendalpha") {
+      test.renderStateSetups.push_back({RS_DEST_BLEND_ALPHA, parseBlendFactor(value)});
+      sawState = true;
+    } else if (key == "blendopalpha" || key == "blendoperationalpha") {
+      test.renderStateSetups.push_back({RS_BLEND_OP_ALPHA, parseBlendOp(value)});
+      sawState = true;
+    } else if (key == "scissor" || key == "scissortest" ||
+               key == "scissortestenable" || key == "scissortestenabled") {
+      test.renderStateSetups.push_back({RS_SCISSOR_TEST_ENABLE, parseBoolState(value)});
       sawState = true;
     } else {
       fail("unsupported dxmt9-render-state state");
@@ -1156,8 +1330,18 @@ std::optional<Viewport> parseDxmt9Viewport(std::string_view line) {
   if (viewport.width == 0 || viewport.height == 0) {
     fail("dxmt9-viewport requires non-zero dimensions");
   }
-  viewport.minZ = 0.0f;
-  viewport.maxZ = 1.0f;
+  if (stream >> viewport.minZ) {
+    if (!(stream >> viewport.maxZ)) {
+      fail("dxmt9-viewport requires both minZ and maxZ");
+    }
+    std::string extra;
+    if (stream >> extra) {
+      fail("dxmt9-viewport has extra values");
+    }
+  } else {
+    viewport.minZ = 0.0f;
+    viewport.maxZ = 1.0f;
+  }
   return viewport;
 }
 
@@ -1184,6 +1368,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-textured-quad-overscan") {
+    test.drawDxmt9TexturedQuadOverscan = true;
+    return;
+  }
+
   if (line == "dxmt9-draw-textured-quad-tex2") {
     test.drawDxmt9TexturedQuadTex2 = true;
     return;
@@ -1201,6 +1390,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
 
   if (auto solidRect = parseDxmt9SolidRect(line)) {
     test.solidRectDraws.push_back(*solidRect);
+    return;
+  }
+
+  if (auto solidQuadXyzDepth = parseDxmt9SolidQuadXyzDepth(line)) {
+    test.solidQuadXyzDepthDraws.push_back(*solidQuadXyzDepth);
     return;
   }
 
@@ -1261,6 +1455,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
 
   if (auto viewport = parseDxmt9Viewport(line)) {
     test.viewport = *viewport;
+    return;
+  }
+
+  if (auto scissor = parseDxmt9Scissor(line)) {
+    test.scissor = *scissor;
     return;
   }
 
@@ -1629,6 +1828,28 @@ void drawDxmt9TexturedQuad(Device& device, u32 width, u32 height) {
   }
 }
 
+void drawDxmt9TexturedQuadOverscan(Device& device, u32 width, u32 height) {
+  if (device.setFVF(kFvfXyzrhw | kFvfTex1) != D3D_OK) {
+    fail("dxmt9 overscan textured quad FVF setup failed");
+  }
+
+  const float w = static_cast<float>(width);
+  const float h = static_cast<float>(height);
+  const std::array<ScreenSpaceTexturedVertex, 6> quad{
+      ScreenSpaceTexturedVertex{0.0f, 0.0f, 0.0f, 1.0f, -0.5f, -0.5f},
+      ScreenSpaceTexturedVertex{w, 0.0f, 0.0f, 1.0f, 1.5f, -0.5f},
+      ScreenSpaceTexturedVertex{0.0f, h, 0.0f, 1.0f, -0.5f, 1.5f},
+      ScreenSpaceTexturedVertex{w, 0.0f, 0.0f, 1.0f, 1.5f, -0.5f},
+      ScreenSpaceTexturedVertex{w, h, 0.0f, 1.0f, 1.5f, 1.5f},
+      ScreenSpaceTexturedVertex{0.0f, h, 0.0f, 1.0f, -0.5f, 1.5f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceTexturedVertex)) != D3D_OK) {
+    fail("dxmt9 overscan textured quad draw failed");
+  }
+}
+
 void drawDxmt9TexturedQuadTex2(Device& device, u32 width, u32 height) {
   if (device.setFVF(kFvfXyzrhw | kFvfTex2) != D3D_OK) {
     fail("dxmt9 textured quad TEX2 FVF setup failed");
@@ -1696,6 +1917,27 @@ void drawDxmt9SolidRect(Device& device, const SolidRectDraw& rect) {
 void drawDxmt9SolidQuad(Device& device, u32 width, u32 height) {
   drawDxmt9SolidRect(
       device, SolidRectDraw{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)});
+}
+
+void drawDxmt9SolidQuadXyzDepth(Device& device, float z) {
+  if (device.setFVF(kFvfXyz) != D3D_OK) {
+    fail("dxmt9 solid XYZ quad FVF setup failed");
+  }
+
+  const std::array<ScreenSpaceTexturedVertexXyz, 6> quad{
+      ScreenSpaceTexturedVertexXyz{-1.0f, 1.0f, z, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertexXyz{1.0f, 1.0f, z, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertexXyz{-1.0f, -1.0f, z, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertexXyz{1.0f, 1.0f, z, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertexXyz{1.0f, -1.0f, z, 0.0f, 0.0f},
+      ScreenSpaceTexturedVertexXyz{-1.0f, -1.0f, z, 0.0f, 0.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceTexturedVertexXyz)) != D3D_OK) {
+    fail("dxmt9 solid XYZ quad draw failed");
+  }
 }
 
 void drawDxmt9ODepthQuad(Device& device, u32 width, u32 height, u32 color) {
@@ -2050,6 +2292,7 @@ void runCorpusFile(const std::string& path) {
 
   const bool needsRuntime = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
                             test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadTex2 ||
+                            test.drawDxmt9TexturedQuadOverscan ||
                             test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                             test.drawDxmt9VsColorTriangle ||
                             test.drawDxmt9VsMultistreamTexturedQuad ||
@@ -2057,12 +2300,15 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9FfpVertexBlendTriangle ||
                             test.drawDxmt9ODepthOverlap ||
                             !test.solidRectDraws.empty() ||
+                            !test.solidQuadXyzDepthDraws.empty() ||
                             !test.textureSetups.empty() || !test.samplerSetups.empty() ||
                             !test.textureStageSetups.empty() || !test.textureTransformSetups.empty() ||
                             !test.textureBinds.empty() || !test.renderTargetSetups.empty() ||
-                            test.viewport.has_value() ||
+                            !test.renderStateSetups.empty() ||
+                            test.viewport.has_value() || test.scissor.has_value() ||
                             test.colorWriteMask.has_value() || test.zEnable.has_value() ||
                             test.zWriteEnable.has_value() || test.zFunc.has_value() ||
+                            test.cullMode.has_value() ||
                             test.clearDepth.has_value() || test.alphaTestEnable;
   if (!needsRuntime) {
     return;
@@ -2133,6 +2379,11 @@ void runCorpusFile(const std::string& path) {
       fail("dxmt9 viewport setup failed");
     }
   }
+  if (test.scissor) {
+    if (device->setScissorRect(*test.scissor) != D3D_OK) {
+      fail("dxmt9 scissor setup failed");
+    }
+  }
   device->setRenderState(RS_CULL_MODE, static_cast<u32>(CullMode::None));
 
   if (test.vertexShader) {
@@ -2165,10 +2416,19 @@ void runCorpusFile(const std::string& path) {
   if (test.zFunc) {
     device->setRenderState(RS_Z_FUNC, *test.zFunc);
   }
+  if (test.cullMode) {
+    device->setRenderState(RS_CULL_MODE, *test.cullMode);
+  }
+  for (const auto& renderState : test.renderStateSetups) {
+    if (device->setRenderState(renderState.state, renderState.value) != D3D_OK) {
+      fail("dxmt9 render-state setup failed");
+    }
+  }
 
   const bool needsClear = test.clearColor.has_value() || test.clearDepth.has_value() ||
                           !test.probes.empty() || test.drawQuad ||
                           test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadTex2 ||
+                          test.drawDxmt9TexturedQuadOverscan ||
                           test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                           test.drawDxmt9VsColorTriangle ||
                           test.drawDxmt9VsMultistreamTexturedQuad ||
@@ -2176,6 +2436,7 @@ void runCorpusFile(const std::string& path) {
                           test.drawDxmt9FfpVertexBlendTriangle ||
                           test.drawDxmt9ODepthOverlap ||
                           !test.solidRectDraws.empty() ||
+                          !test.solidQuadXyzDepthDraws.empty() ||
                           !test.renderTargetSetups.empty();
   if (needsClear) {
     const auto clearColor = test.clearColor.value_or(ColorRGBA{0.0f, 0.0f, 0.0f, 1.0f});
@@ -2225,6 +2486,17 @@ void runCorpusFile(const std::string& path) {
     }
   }
 
+  if (test.drawDxmt9TexturedQuadOverscan) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9TexturedQuadOverscan(*device, params.backBufferWidth,
+                                  params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
   if (test.drawDxmt9TexturedQuadTex2) {
     if (device->beginScene() != D3D_OK) {
       fail("beginScene failed");
@@ -2260,6 +2532,16 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9SolidRect(*device, solidRect);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  for (const auto& solidQuadXyzDepth : test.solidQuadXyzDepthDraws) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9SolidQuadXyzDepth(*device, solidQuadXyzDepth.z);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }

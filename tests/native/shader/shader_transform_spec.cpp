@@ -144,6 +144,10 @@ u32 makePredicatedInstructionToken(u32 opcode, u32 operandCount, u32 controls) {
   return makeInstructionToken(opcode, operandCount) | ((controls & 0xffu) << 16) | (1u << 28);
 }
 
+u32 makeControlledInstructionToken(u32 opcode, u32 operandCount, u32 controls) {
+  return makeInstructionToken(opcode, operandCount) | ((controls & 0xffu) << 16);
+}
+
 u32 makeCommentToken(u32 wordCount) {
   return dxmt9::d3d9bc::kD3DSIO_COMMENT | ((wordCount & 0x7fffu) << 16);
 }
@@ -504,6 +508,27 @@ std::vector<u32> makePs30RepBytecode() {
   };
 }
 
+std::vector<u32> makePs30BreakcBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DSPCGt = 1u;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_REP, 1),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeControlledInstructionToken(kD3DSIO_BREAKC, 2, kD3DSPCGt),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 3),
+      makeInstructionToken(kD3DSIO_ENDREP, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makePs30CallLabelRetBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -519,6 +544,62 @@ std::vector<u32> makePs30CallLabelRetBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_COLOROUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30CallnzLabelRetBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_CALLNZ, 0),
+      makeLabelToken(9),
+      makeSrcToken(kD3DSPR_CONSTBOOL, 0),
+      makeInstructionToken(kD3DSIO_LABEL, 1),
+      makeLabelToken(9),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 4),
+      makeInstructionToken(kD3DSIO_RET, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30SingleOpcodeBytecode(u32 opcode, u32 operandCount) {
+  using namespace dxmt9::d3d9bc;
+  std::vector<u32> bytecode = {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(opcode, operandCount),
+      makeDstToken(kD3DSPR_TEMP, 0),
+  };
+  if (operandCount >= 2) {
+    bytecode.push_back(makeSrcToken(kD3DSPR_CONST, 0));
+  }
+  if (operandCount >= 3) {
+    bytecode.push_back(makeSrcToken(kD3DSPR_CONST, 1));
+  }
+  bytecode.insert(bytecode.end(), {
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  });
+  return bytecode;
+}
+
+std::vector<u32> makePs30CallnzFixedOperandCountBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_CALLNZ, 0),
+      makeLabelToken(3),
+      makeSrcToken(kD3DSPR_CONSTBOOL, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
       kD3DSIO_END,
   };
 }
@@ -624,6 +705,28 @@ std::vector<u32> makePs30TextureLodOpcodeBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_COLOROUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 1),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30TexkillBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_DEF, 5),
+      makeDstToken(kD3DSPR_CONST, 0),
+      0xbf800000u,
+      0x3e800000u,
+      0x00000000u,
+      0x3f800000u,
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_TEXKILL, 1),
+      makeDstToken(kD3DSPR_TEMP, 0, 0x3u),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
       kD3DSIO_END,
   };
 }
@@ -785,6 +888,41 @@ void testD3DBCDecodeAndClassificationFixtures() {
              "D3DBC operand decode classifies relative-addressing tokens");
 }
 
+void testD3DOpcodeNamesCoverUnsupportedSurface() {
+  using namespace dxmt9::d3d9bc;
+  namespace detail = dxmt9::translator::detail_;
+
+  checkEqual(detail::opcodeName(kD3DSIO_BREAKC), std::string("breakc"), "BREAKC has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_CALLNZ), std::string("callnz"), "CALLNZ has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXCOORD), std::string("texcoord"), "TEXCOORD has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXBEM), std::string("texbem"), "TEXBEM has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXBEML), std::string("texbeml"), "TEXBEML has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXREG2AR), std::string("texreg2ar"), "TEXREG2AR has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXREG2GB), std::string("texreg2gb"), "TEXREG2GB has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x2PAD), std::string("texm3x2pad"),
+             "TEXM3x2PAD has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x2TEX), std::string("texm3x2tex"),
+             "TEXM3x2TEX has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x3PAD), std::string("texm3x3pad"),
+             "TEXM3x3PAD has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x3TEX), std::string("texm3x3tex"),
+             "TEXM3x3TEX has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x3DIFF), std::string("texm3x3diff"),
+             "TEXM3x3DIFF has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x3SPEC), std::string("texm3x3spec"),
+             "TEXM3x3SPEC has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x3VSPEC), std::string("texm3x3vspec"),
+             "TEXM3x3VSPEC has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXREG2RGB), std::string("texreg2rgb"),
+             "TEXREG2RGB has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXDP3TEX), std::string("texdp3tex"),
+             "TEXDP3TEX has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x2DEPTH), std::string("texm3x2depth"),
+             "TEXM3x2DEPTH has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXDP3), std::string("texdp3"), "TEXDP3 has a stable opcode name");
+  checkEqual(detail::opcodeName(kD3DSIO_TEXM3x3), std::string("texm3x3"), "TEXM3x3 has a stable opcode name");
+}
+
 void testPs20SamplerRegisterSlotMapping() {
   const auto source = translatePixel(makePs20TexturedBytecode(7));
   checkContains(source, "texture2d<float> tex7 [[texture(7)]]", "ps_2_0 declares texture at sampler register slot");
@@ -797,6 +935,15 @@ void testPs30InputSemanticTexcoordMapping() {
   checkContains(source, "dxmt9_select_texcoord(in, 3u)",
                 "ps_3_0 dcl_texcoord semantic index maps input register reads by semantic index");
   checkContains(source, "tex2.sample(samp2", "ps_3_0 texture sample preserves sampler register mapping");
+}
+
+void testPs30TexkillLoweringContract() {
+  const auto source = translatePixel(makePs30TexkillBytecode());
+  checkContains(source, "// texkill r0", "ps_3_0 TEXKILL is named in emitted instruction comments");
+  checkContains(source, "if ((r[0]).x < 0.0f || (r[0]).y < 0.0f)",
+                "ps_3_0 TEXKILL lowers selected components to a negative-value discard predicate");
+  checkContains(source, "discard_fragment()", "ps_3_0 TEXKILL lowers to Metal fragment discard");
+  checkContains(source, "outColor[0] = cFloat[0]", "ps_3_0 TEXKILL does not terminate subsequent translation");
 }
 
 void testPs20ColorInputUsesLegacyInputMapping() {
@@ -1054,6 +1201,15 @@ void testPs30RepFlowControlTranslation() {
   checkContains(source, "outColor[0] = r[1];", "ps_3_0 REP result reaches color output");
 }
 
+void testPs30BreakcFlowControlTranslation() {
+  const auto source = translatePixel(makePs30BreakcBytecode());
+  checkContains(source,
+                "if ((cFloat[0]).x > (cFloat[1]).x) { break; }",
+                "ps_3_0 BREAKC lowers comparison controls into a conditional break");
+  checkContains(source, "r[0] = cFloat[3];", "ps_3_0 BREAKC body continues after the guard");
+  checkContains(source, "outColor[0] = r[0];", "ps_3_0 BREAKC result reaches color output");
+}
+
 void testPs30CallLabelRetFlowControlTranslation() {
   const auto source = translatePixel(makePs30CallLabelRetBytecode());
   checkContains(source, "// call label 7", "ps_3_0 CALL target is preserved in generated source comments");
@@ -1063,6 +1219,20 @@ void testPs30CallLabelRetFlowControlTranslation() {
   checkContains(source, "break;", "ps_3_0 RET inside CALL lowers to block break");
   checkContains(source, "} while (false);", "ps_3_0 RET closes the single-pass call block");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 CALL/LABEL/RET result reaches color output");
+}
+
+void testPs30CallnzLabelRetFlowControlTranslation() {
+  const auto source = translatePixel(makePs30CallnzLabelRetBytecode());
+  checkContains(source, "// callnz label 9", "ps_3_0 CALLNZ target is preserved in generated source comments");
+  checkContains(source,
+                "if (((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f) {",
+                "ps_3_0 CALLNZ guards the call block with a bool-source nonzero test");
+  checkContains(source, "do {", "ps_3_0 CALLNZ opens the same single-pass call block as CALL");
+  checkContains(source, "// label 9", "ps_3_0 CALLNZ matching LABEL is preserved in generated source comments");
+  checkContains(source, "r[0] = cFloat[4];", "ps_3_0 CALLNZ/LABEL body is translated");
+  checkContains(source, "break;", "ps_3_0 RET inside CALLNZ lowers to block break");
+  checkContains(source, "} while (false);", "ps_3_0 RET closes the CALLNZ single-pass call block");
+  checkContains(source, "outColor[0] = r[0];", "ps_3_0 CALLNZ/LABEL/RET result reaches color output");
 }
 
 void testPs30ArithmeticOpcodeLoweringContracts() {
@@ -1108,6 +1278,54 @@ void testPs30TextureLodOpcodeLoweringContracts() {
   checkContains(source, "tex4.sample(samp4, (cFloat[1]).xy, level(cFloat[1].w))",
                 "TEXLDL lowers to explicit level sample call");
   checkContains(source, "outColor[0] = r[1];", "texture LOD opcode result reaches color output");
+}
+
+void testLegacyTextureOpcodesThrowDeterministically() {
+  using namespace dxmt9::d3d9bc;
+  constexpr std::array<std::pair<u32, u32>, 19> kLegacyTextureOpcodes = {
+      std::pair{kD3DSIO_TEXCOORD, 1u},
+      std::pair{kD3DSIO_TEXBEM, 2u},
+      std::pair{kD3DSIO_TEXBEML, 2u},
+      std::pair{kD3DSIO_TEXREG2AR, 2u},
+      std::pair{kD3DSIO_TEXREG2GB, 2u},
+      std::pair{kD3DSIO_TEXM3x2PAD, 2u},
+      std::pair{kD3DSIO_TEXM3x2TEX, 2u},
+      std::pair{kD3DSIO_TEXM3x3PAD, 2u},
+      std::pair{kD3DSIO_TEXM3x3TEX, 2u},
+      std::pair{kD3DSIO_TEXM3x3DIFF, 2u},
+      std::pair{kD3DSIO_TEXM3x3SPEC, 3u},
+      std::pair{kD3DSIO_TEXM3x3VSPEC, 2u},
+      std::pair{kD3DSIO_BEM, 3u},
+      std::pair{kD3DSIO_TEXDEPTH, 1u},
+      std::pair{kD3DSIO_TEXREG2RGB, 2u},
+      std::pair{kD3DSIO_TEXDP3TEX, 2u},
+      std::pair{kD3DSIO_TEXM3x2DEPTH, 2u},
+      std::pair{kD3DSIO_TEXDP3, 2u},
+      std::pair{kD3DSIO_TEXM3x3, 2u},
+  };
+
+  for (const auto [opcode, operandCount] : kLegacyTextureOpcodes) {
+    checkThrowsContains(
+        [opcode, operandCount] {
+          (void)translatePixel(makePs30SingleOpcodeBytecode(opcode, operandCount));
+        },
+        "unsupported legacy texture opcode",
+        "legacy texture opcode no longer silently lowers or falls through");
+  }
+}
+
+void testCallnzFixedOperandCountDecodeContract() {
+  namespace translator_test = dxmt9::translator::test;
+  const auto module = translator_test::decodeD3DBytecodeForTest(
+      makeShader(makePs30CallnzFixedOperandCountBytecode()),
+      false,
+      DrawDesc{});
+
+  checkEqual(module.instructions.size(), size_t{2}, "CALLNZ fixed count keeps the following MOV aligned");
+  checkEqual(module.instructions[0].opcode, dxmt9::d3d9bc::kD3DSIO_CALLNZ, "CALLNZ opcode decodes");
+  checkEqual(module.instructions[0].operands.size(), size_t{2}, "CALLNZ decodes label plus condition source");
+  checkEqual(module.instructions[1].opcode, dxmt9::d3d9bc::kD3DSIO_MOV,
+             "CALLNZ fixed operand count preserves the next instruction");
 }
 
 void testD3DBCFixedOperandCountDecodeContract() {
@@ -1224,8 +1442,10 @@ int main() {
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
 
     testD3DBCDecodeAndClassificationFixtures();
+    testD3DOpcodeNamesCoverUnsupportedSurface();
     testPs20SamplerRegisterSlotMapping();
     testPs30InputSemanticTexcoordMapping();
+    testPs30TexkillLoweringContract();
     testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();
     testVs30HighOutputRegisterSemanticMapping();
@@ -1237,11 +1457,15 @@ int main() {
     testPs30IfElseFlowControlTranslation();
     testPs30LoopFlowControlTranslation();
     testPs30RepFlowControlTranslation();
+    testPs30BreakcFlowControlTranslation();
     testPs30CallLabelRetFlowControlTranslation();
+    testPs30CallnzLabelRetFlowControlTranslation();
     testPs30ArithmeticOpcodeLoweringContracts();
     testPs30TranscendentalOpcodeLoweringContracts();
     testPs30MatrixOpcodeLoweringContracts();
     testPs30TextureLodOpcodeLoweringContracts();
+    testLegacyTextureOpcodesThrowDeterministically();
+    testCallnzFixedOperandCountDecodeContract();
     testD3DBCFixedOperandCountDecodeContract();
     testPs30RelativeAddressingThrowsDeterministically();
     testVs20DefLiteralWithRelAddrBitDoesNotDriftParser();

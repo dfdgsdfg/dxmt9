@@ -1,0 +1,20 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: math-derivation
+; oracle-date: 2026-05-16
+
+[pixel shader d3dbc-hex]
+ffff0200 05000051 a00f0000 00000000 3f800000 00000000 3f800000
+02000001 800f0800 a0e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-scissor 0 0 1 64
+dxmt9-render-state scissor=on
+dxmt9-draw-solid-quad
+probe (0, 32) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (1, 32) rgba(0.0, 0.0, 0.0, 1.0) 1
+probe (63, 32) rgba(0.0, 0.0, 0.0, 1.0) 1

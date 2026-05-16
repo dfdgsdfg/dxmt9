@@ -23,6 +23,30 @@ oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
 [[test]]
+file = "arithmetic/dxmt9_m3_arithmetic_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "DP2ADD", "FRC", "LRP", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "arithmetic/dxmt9_ps30_arithmetic_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DEF", "DP3", "DP4", "MAD", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
 file = "arithmetic/mov.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -57,6 +81,18 @@ models = ["ps_2_0"]
 opcodes = ["DEF", "MOV", "SLT"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
+
+[[test]]
+file = "discard/dxmt9_texkill_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DEF", "MOV", "TEXKILL"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
 
 [[test]]
 file = "ffp/alpha_test.shader_test"
@@ -143,6 +179,42 @@ oracle = "source-inspection"
 oracle-date = "2026-03-29"
 
 [[test]]
+file = "flow_control/dxmt9_m3_constants_control_source.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["BREAK", "BREAKP", "DEF", "DEFB", "DEFI", "ENDREP", "ENDIF", "IFC", "MOV", "REP", "SETP"]
+oracle = "source-inspection"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "flow_control/dxmt9_ps30_breakc_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["BREAKC", "DEF", "ENDREP", "MOV", "REP"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "flow_control/dxmt9_ps30_callnz_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["CALLNZ", "DEFB", "LABEL", "MOV", "RET"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
 file = "matrix/matrix.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -165,6 +237,19 @@ models = ["vs_3_0"]
 opcodes = ["DEF", "M3x3", "M3x4", "MOV"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
+
+[[test]]
+file = "render_state/dxmt9_alpha_blend_readback.shader_test"
+status = "failing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+issue = "runtime alpha blend produces expected RGB but alpha channel remains source alpha instead of blended alpha"
 
 [[test]]
 file = "render_state/dxmt9_alpha_test_readback.shader_test"
@@ -204,6 +289,42 @@ oracle = "math-derivation"
 oracle-date = "2026-05-04"
 
 [[test]]
+file = "render_state/dxmt9_cull_ccw_keeps_clockwise_triangle.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "render_state/dxmt9_cull_cw_rejects_clockwise_triangle.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "render_state/dxmt9_depth_range_maxz_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp", "ps_2_0"]
+opcodes = ["DEF", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
 file = "render_state/dxmt9_mrt_color_outputs.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -224,6 +345,18 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ps_3_0"]
 opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "render_state/dxmt9_scissor_left_edge_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
@@ -432,6 +565,31 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
+file = "texture/dxmt9_sampler_clamp_overscan_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+
+[[test]]
+file = "texture/dxmt9_texture_alpha_blend_readback.shader_test"
+status = "failing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
+issue = "runtime texture alpha blend produces expected RGB but alpha channel remains source alpha instead of blended alpha"
+
+[[test]]
 file = "texture/dxmt9_texture_2x2.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -478,6 +636,18 @@ models = ["ps_2_0"]
 opcodes = ["DEF", "MOV", "POW"]
 oracle = "source-inspection"
 oracle-date = "2026-03-29"
+
+[[test]]
+file = "transcendental/dxmt9_m3_partial_precision_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DEF", "EXPP", "LOGP", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
 
 [[test]]
 file = "transcendental/transcendental.shader_test"
@@ -562,6 +732,18 @@ models = ["ps_3_0", "vs_3_0"]
 opcodes = ["DCL", "MOV"]
 oracle = "math-derivation"
 oracle-date = "2026-05-04"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_color_triangle.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "math-derivation"
+oracle-date = "2026-05-16"
 
 [[test]]
 file = "vs_specific/dxmt9_vs_multistream_textured_quad.shader_test"

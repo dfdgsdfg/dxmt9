@@ -1,0 +1,30 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: source-inspection
+; oracle-date: 2026-05-16
+
+[pixel shader d3dbc-hex]
+ffff0300
+05000051 a00f0000 3f800000 00000000 00000000 00000000
+05000051 a00f0001 00000000 00000000 00000000 00000000
+05000030 f00f0000 00000001 00000002 00000003 00000004
+0200002f e00f0800 00000001
+0200005e b00f1000 a0e40000
+02010029 a0e40000 a0e40001
+01000026 a0e40000
+01000060 b0e41000
+0000002c
+00000027
+0000002b
+02000001 800f0800 a0e40001
+0000ffff
+
+[test]
+expect-source pixel contains "cInt[0] = int4(1, 2, 3, 4)"
+expect-source pixel contains "cBool[0] = 1u"
+expect-source pixel contains "if ((cFloat[0]).x > (cFloat[1]).x)"
+expect-source pixel contains "if (((p[0] ? float4(1.0f) : float4(0.0f))).x != 0.0f) { break; }"
+expect-source pixel contains "break;"

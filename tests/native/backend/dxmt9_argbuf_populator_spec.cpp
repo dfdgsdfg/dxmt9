@@ -13,10 +13,14 @@
 //     and matches the four host-struct sizes when each category fires.
 //   - dirtyBytesEstimate composes additively across categories so the
 //     encoder counter accounts for every dirty bit.
+//   - the Stage 2 argument-buffer recorder seam captures concrete
+//     texture/sampler writes and argbuf [[id(N)]] ordering without a
+//     live Metal device.
 //
 // `openArgbuf` itself reaches into CommandQueue::reserveTransientBuffer
 // which requires a Metal device; the runtime suite covers that path.
 
+#include <array>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -25,9 +29,11 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "../../../src/dxmt9/dxmt9_argbuf_hybrid.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
+#include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../../src/dxmt9/dxmt9_uniform_dirty.hpp"
 
 namespace {
@@ -55,6 +61,106 @@ void checkEq(const A& left, const B& right, std::string_view message) {
     fail(out.str());
   }
 }
+
+enum class RecordedKind {
+  SetTexture,
+  SetSamplerState,
+};
+
+struct RecordedCommand {
+  RecordedKind kind = RecordedKind::SetTexture;
+  obj_handle_t handle = 0;
+  std::uint32_t index = 0;
+};
+
+struct Capture {
+  std::vector<RecordedCommand> commands;
+};
+
+void recordSetTexture(void* userdata, WMT::Texture texture, std::uint32_t index) {
+  auto& capture = *static_cast<Capture*>(userdata);
+  capture.commands.push_back(RecordedCommand{
+      .kind = RecordedKind::SetTexture,
+      .handle = texture.handle,
+      .index = index,
+  });
+}
+
+void recordSetSamplerState(void* userdata,
+                           WMT::SamplerState sampler,
+                           std::uint32_t index) {
+  auto& capture = *static_cast<Capture*>(userdata);
+  capture.commands.push_back(RecordedCommand{
+      .kind = RecordedKind::SetSamplerState,
+      .handle = sampler.handle,
+      .index = index,
+  });
+}
+
+dxmt9::argbuf_hybrid::ArgbufRecorder makeRecorder(Capture& capture,
+                                                   obj_handle_t samplerHandle) {
+  dxmt9::argbuf_hybrid::ArgbufRecorder recorder{};
+  recorder.userdata = &capture;
+  recorder.suppressMetalCalls = true;
+  recorder.samplerState.handle = samplerHandle;
+  recorder.setTexture = recordSetTexture;
+  recorder.setSamplerState = recordSetSamplerState;
+  return recorder;
+}
+
+const RecordedCommand& commandAt(const Capture& capture,
+                                 std::size_t index,
+                                 std::string_view message) {
+  if (index >= capture.commands.size()) {
+    fail(std::string(message));
+  }
+  return capture.commands[index];
+}
+
+struct Harness {
+  dxmt9::core::BackendLimits limits{};
+  dxmt9::resources::Pool pool{};
+  std::vector<dxmt9::core::TextureHandle> patchedTextures;
+
+  ~Harness() {
+    clearPatchedTextureHandles();
+  }
+
+  void clearPatchedTextureHandles() {
+    for (const auto& handle : patchedTextures) {
+      if (auto* record = pool.findTexture(handle.value)) {
+        record->texture.handle = 0;
+        record->shaderReadTexture.handle = 0;
+      }
+    }
+  }
+
+  void restorePatchedTextureHandle(dxmt9::core::TextureHandle handle,
+                                   obj_handle_t textureHandle,
+                                   obj_handle_t shaderReadHandle = 0) {
+    auto* record = pool.findTexture(handle.value);
+    check(record != nullptr, "patched texture record remains live");
+    record->texture.handle = textureHandle;
+    record->shaderReadTexture.handle = shaderReadHandle;
+  }
+
+  dxmt9::core::TextureHandle createTexture(obj_handle_t textureHandle,
+                                           obj_handle_t shaderReadHandle = 0) {
+    clearPatchedTextureHandles();
+
+    dxmt9::core::TextureDesc desc{};
+    desc.width = 2u;
+    desc.height = 2u;
+    desc.levels = 1u;
+    desc.pool = dxmt9::core::Pool::Default;
+    auto handle = pool.createTexture(WMT::Device{}, limits, desc);
+    check(pool.findTexture(handle.value) != nullptr,
+          "pool creates texture record");
+    patchedTextures.push_back(handle);
+    restorePatchedTextureHandle(handle, textureHandle, shaderReadHandle);
+    return handle;
+  }
+};
 
 // ---------------------------------------------------------------------
 // E1 — ArgbufEncoderResource shape
@@ -173,6 +279,83 @@ void testPopulatedArgbufDefaultIsEmpty() {
   checkEq(p.offset, std::uint64_t{0}, "default offset is 0");
 }
 
+// ---------------------------------------------------------------------
+// E4 — Stage 2 texture/sampler MTLArgumentEncoder write seam
+
+void testPopulateResourceBindingsRecordsTextureSamplerWrites() {
+  constexpr obj_handle_t kTexture0 = 0x6000000000000010ull;
+  constexpr obj_handle_t kTexture1Storage = 0x6000000000000011ull;
+  constexpr obj_handle_t kTexture1ShaderRead = 0x6000000000000012ull;
+  constexpr obj_handle_t kSampler = 0x6000000000000020ull;
+  constexpr std::uint32_t kTextureBase =
+      dxmt9::shaders::kArgbufHybridConstantBufferCount;
+  constexpr std::uint32_t kSamplerBase =
+      dxmt9::shaders::kArgbufHybridConstantBufferCount +
+      dxmt9::shaders::kArgbufHybridTextureSlotCount;
+
+  Harness harness;
+  auto texture0 = harness.createTexture(kTexture0);
+  auto texture1 = harness.createTexture(kTexture1Storage, kTexture1ShaderRead);
+  harness.restorePatchedTextureHandle(texture0, kTexture0);
+
+  dxmt9::core::FlatDrawStateRecord hot{};
+  hot.textures[0] = texture0;
+  hot.textures[1] = texture1;
+  hot.samplerStates[0].entries[0] =
+      dxmt9::core::FlatStateEntry{dxmt9::core::SAMP_ADDRESS_U, 3u};
+  hot.samplerStates[0].count = 1u;
+  hot.samplerStates[1].entries[0] =
+      dxmt9::core::FlatStateEntry{dxmt9::core::SAMP_MIN_FILTER, 2u};
+  hot.samplerStates[1].count = 1u;
+
+  dxmt9::argbuf_hybrid::ArgbufEncoderResource encoderResource;
+  encoderResource.initForTest(/*encodedLength=*/512u, /*alignment=*/16u);
+  Capture capture;
+  auto recorder = makeRecorder(capture, kSampler);
+
+  dxmt9::argbuf_hybrid::populateResourceBindings(
+      WMT::Reference<WMT::Device>{},
+      harness.pool,
+      encoderResource,
+      dxmt9::core::FlatDrawStateView{.hot = &hot},
+      &recorder);
+
+  checkEq(capture.commands.size(), std::size_t{4},
+          "Stage 2 resource write command count");
+
+  const auto& texture0Command = commandAt(capture, 0, "missing texture0 write");
+  check(texture0Command.kind == RecordedKind::SetTexture,
+        "texture0 write is first");
+  checkEq(texture0Command.handle, kTexture0,
+          "texture0 writes the storage texture handle");
+  checkEq(texture0Command.index, kTextureBase,
+          "texture0 writes argbuf id 4");
+
+  const auto& sampler0Command = commandAt(capture, 1, "missing sampler0 write");
+  check(sampler0Command.kind == RecordedKind::SetSamplerState,
+        "sampler0 write follows texture0");
+  checkEq(sampler0Command.handle, kSampler,
+          "sampler0 writes the recorder sampler handle");
+  checkEq(sampler0Command.index, kSamplerBase,
+          "sampler0 writes argbuf id 12");
+
+  const auto& texture1Command = commandAt(capture, 2, "missing texture1 write");
+  check(texture1Command.kind == RecordedKind::SetTexture,
+        "texture1 write follows sampler0");
+  checkEq(texture1Command.handle, kTexture1ShaderRead,
+          "texture1 writes the shader-read texture view when present");
+  checkEq(texture1Command.index, kTextureBase + 1u,
+          "texture1 writes argbuf id 5");
+
+  const auto& sampler1Command = commandAt(capture, 3, "missing sampler1 write");
+  check(sampler1Command.kind == RecordedKind::SetSamplerState,
+        "sampler1 write follows texture1");
+  checkEq(sampler1Command.handle, kSampler,
+          "sampler1 writes the recorder sampler handle");
+  checkEq(sampler1Command.index, kSamplerBase + 1u,
+          "sampler1 writes argbuf id 13");
+}
+
 }  // namespace
 
 int main() {
@@ -188,6 +371,7 @@ int main() {
     testDirtyBytesEstimateAllCategories();
     testDirtyBytesEstimateAdditive();
     testPopulatedArgbufDefaultIsEmpty();
+    testPopulateResourceBindingsRecordsTextureSamplerWrites();
   } catch (const TestFailure& failure) {
     std::cerr << "argbuf_populator_spec failed: " << failure.what() << '\n';
     return 1;

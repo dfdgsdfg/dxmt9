@@ -226,6 +226,22 @@ std::string applySwizzle(const std::string& expr, const std::array<u8, 4>& swizz
   return out.str();
 }
 
+std::string texkillMaskCondition(const std::string& value, u32 mask) {
+  std::ostringstream condition;
+  bool first = true;
+  for (u32 component = 0; component < 4; ++component) {
+    if ((mask & (1u << component)) == 0u) {
+      continue;
+    }
+    if (!first) {
+      condition << " || ";
+    }
+    condition << "(" << value << ")." << componentName(component) << " < 0.0f";
+    first = false;
+  }
+  return first ? std::string("false") : condition.str();
+}
+
 std::string readVertexOutputMapping(const VertexOutputMapping& mapping,
                                     const std::string& outPosition,
                                     const std::string& outColor,
@@ -742,7 +758,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	    emitConstantBindings(out, true, constantUsage);
 	    emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
-    size_t callDepth = 0;
+    std::vector<bool> callConditionalStack;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
       const auto& instruction = module.instructions[instructionIndex];
       if (instruction.opcode == kD3DSIO_COMMENT || instruction.opcode == kD3DSIO_PHASE) {
@@ -758,7 +774,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           out << static_cast<i32>(instruction.operands[i]);
         } else if (instruction.opcode == kD3DSIO_DEFB && i > 0) {
           out << (instruction.operands[i] != 0u ? "true" : "false");
-        } else if (instruction.opcode == kD3DSIO_LABEL || instruction.opcode == kD3DSIO_CALL) {
+        } else if ((instruction.opcode == kD3DSIO_LABEL || instruction.opcode == kD3DSIO_CALL
+                    || instruction.opcode == kD3DSIO_CALLNZ) && i == 0) {
           out << "label" << decodeLabelIndex(instruction.operands[i]);
         } else {
           out << decodeOperandToken(instruction.operands[i], module.stage, destination);
@@ -857,14 +874,28 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         }
         out << "  // call label " << decodeLabelIndex(instruction.operands[0]) << "\n";
         out << "  do {\n";
-        ++callDepth;
+        callConditionalStack.push_back(false);
+        continue;
+      }
+      if (instruction.opcode == kD3DSIO_CALLNZ) {
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("CALLNZ requires a label operand and condition source");
+        }
+        out << "  // callnz label " << decodeLabelIndex(instruction.operands[0]) << "\n";
+        out << "  if ((" << readSrc(1) << ").x != 0.0f) {\n";
+        out << "  do {\n";
+        callConditionalStack.push_back(true);
         continue;
       }
       if (instruction.opcode == kD3DSIO_RET) {
-        if (callDepth > 0) {
-          --callDepth;
+        if (!callConditionalStack.empty()) {
+          const bool conditionalCall = callConditionalStack.back();
+          callConditionalStack.pop_back();
           out << "  break;\n";
           out << "  } while (false);\n";
+          if (conditionalCall) {
+            out << "  }\n";
+          }
         } else {
           out << "  return out;\n";
         }
@@ -955,6 +986,23 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         out << "  if ((" << readSrc(0) << ").x != 0.0f) { break; }\n";
         continue;
       }
+      if (instruction.opcode == kD3DSIO_BREAKC) {
+        if (instruction.operands.size() < 2) {
+          throw std::runtime_error("BREAKC requires two source operands");
+        }
+        const char* op = "==";
+        switch (instruction.controls & 0xfu) {
+          case 1: op = ">";  break;  // D3DSPC_GT
+          case 2: op = "=="; break;  // D3DSPC_EQ
+          case 3: op = ">="; break;  // D3DSPC_GE
+          case 4: op = "<";  break;  // D3DSPC_LT
+          case 5: op = "!="; break;  // D3DSPC_NE
+          case 6: op = "<="; break;  // D3DSPC_LE
+          default: op = "=="; break;
+        }
+        out << "  if ((" << readSrc(0) << ").x " << op << " (" << readSrc(1) << ").x) { break; }\n";
+        continue;
+      }
 
       switch (instruction.opcode) {
         case kD3DSIO_NOP:
@@ -1041,6 +1089,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         out << "  p[" << dst.index << "] = (" << readSrc(1) << ").x != 0.0f;\n";
         break;
       }
+      case kD3DSIO_TEXKILL:
+        throw std::runtime_error("TEXKILL is only valid in pixel shaders");
         case kD3DSIO_ADD:
         case kD3DSIO_SUB:
         case kD3DSIO_MUL:
@@ -1330,6 +1380,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         case kD3DSIO_DCL:
           // No-op for now: DCL informs semantics, but the current translator maps outputs by register class.
           break;
+        case kD3DSIO_TEXCOORD:
+        case kD3DSIO_TEXBEM:
+        case kD3DSIO_TEXBEML:
+        case kD3DSIO_TEXREG2AR:
+        case kD3DSIO_TEXREG2GB:
+        case kD3DSIO_TEXM3x2PAD:
+        case kD3DSIO_TEXM3x2TEX:
+        case kD3DSIO_TEXM3x3PAD:
+        case kD3DSIO_TEXM3x3TEX:
+        case kD3DSIO_TEXM3x3DIFF:
+        case kD3DSIO_TEXM3x3SPEC:
+        case kD3DSIO_TEXM3x3VSPEC:
         case kD3DSIO_BEM:
         case kD3DSIO_TEXDEPTH:
         case kD3DSIO_TEXREG2RGB:
@@ -1337,8 +1399,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         case kD3DSIO_TEXM3x2DEPTH:
         case kD3DSIO_TEXDP3:
         case kD3DSIO_TEXM3x3:
-          // Texture instructions are lowered through the supported TEXLD-style sample path above when present.
-          break;
+          throw std::runtime_error("unsupported legacy texture opcode: " + opcodeName(instruction.opcode));
         default:
           throw std::runtime_error("unsupported D3D opcode: " + opcodeName(instruction.opcode));
       }
@@ -1346,7 +1407,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     if (!controlStack.empty()) {
       throw std::runtime_error("unbalanced D3D control flow");
     }
-    if (callDepth != 0) {
+    if (!callConditionalStack.empty()) {
       throw std::runtime_error("unbalanced D3D CALL/RET");
     }
 
@@ -1543,7 +1604,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	  emitConstantBindings(out, false, constantUsage);
 	  emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
-    size_t callDepth = 0;
+    std::vector<bool> callConditionalStack;
     for (size_t instructionIndex = 0; instructionIndex < module.instructions.size(); ++instructionIndex) {
       const auto& instruction = module.instructions[instructionIndex];
     if (instruction.opcode == kD3DSIO_COMMENT || instruction.opcode == kD3DSIO_PHASE) {
@@ -1559,7 +1620,8 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         out << static_cast<i32>(instruction.operands[i]);
       } else if (instruction.opcode == kD3DSIO_DEFB && i > 0) {
         out << (instruction.operands[i] != 0u ? "true" : "false");
-      } else if (instruction.opcode == kD3DSIO_LABEL || instruction.opcode == kD3DSIO_CALL) {
+      } else if ((instruction.opcode == kD3DSIO_LABEL || instruction.opcode == kD3DSIO_CALL
+                  || instruction.opcode == kD3DSIO_CALLNZ) && i == 0) {
         out << "label" << decodeLabelIndex(instruction.operands[i]);
       } else {
         out << decodeOperandToken(instruction.operands[i], module.stage, destination);
@@ -1642,14 +1704,28 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       out << "  // call label " << decodeLabelIndex(instruction.operands[0]) << "\n";
       out << "  do {\n";
-      ++callDepth;
+      callConditionalStack.push_back(false);
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_CALLNZ) {
+      if (instruction.operands.size() < 2) {
+        throw std::runtime_error("CALLNZ requires a label operand and condition source");
+      }
+      out << "  // callnz label " << decodeLabelIndex(instruction.operands[0]) << "\n";
+      out << "  if ((" << readSrc(1) << ").x != 0.0f) {\n";
+      out << "  do {\n";
+      callConditionalStack.push_back(true);
       continue;
     }
     if (instruction.opcode == kD3DSIO_RET) {
-      if (callDepth > 0) {
-        --callDepth;
+      if (!callConditionalStack.empty()) {
+        const bool conditionalCall = callConditionalStack.back();
+        callConditionalStack.pop_back();
         out << "  break;\n";
         out << "  } while (false);\n";
+        if (conditionalCall) {
+          out << "  }\n";
+        }
       } else {
         out << "  return color;\n";
       }
@@ -1734,6 +1810,23 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         throw std::runtime_error("BREAKP requires a predicate operand");
       }
       out << "  if ((" << readSrc(0) << ").x != 0.0f) { break; }\n";
+      continue;
+    }
+    if (instruction.opcode == kD3DSIO_BREAKC) {
+      if (instruction.operands.size() < 2) {
+        throw std::runtime_error("BREAKC requires two source operands");
+      }
+      const char* op = "==";
+      switch (instruction.controls & 0xfu) {
+        case 1: op = ">";  break;  // D3DSPC_GT
+        case 2: op = "=="; break;  // D3DSPC_EQ
+        case 3: op = ">="; break;  // D3DSPC_GE
+        case 4: op = "<";  break;  // D3DSPC_LT
+        case 5: op = "!="; break;  // D3DSPC_NE
+        case 6: op = "<="; break;  // D3DSPC_LE
+        default: op = "=="; break;
+      }
+      out << "  if ((" << readSrc(0) << ").x " << op << " (" << readSrc(1) << ").x) { break; }\n";
       continue;
     }
 
@@ -1836,6 +1929,27 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           throw std::runtime_error("SETP requires a predicate register destination");
         }
         out << "  p[" << dst.index << "] = (" << readSrc(1) << ").x != 0.0f;\n";
+        break;
+      }
+      case kD3DSIO_TEXKILL: {
+        if (instruction.operands.empty()) {
+          throw std::runtime_error("TEXKILL requires a source operand");
+        }
+        auto reg = decodeRegisterRef(instruction.operands[0], module.stage);
+        if (!instruction.relAddrTokens.empty()) {
+          reg.relAddrToken = instruction.relAddrTokens[0];
+        }
+        std::string value;
+        if (reg.kind == D3DRegisterKind::Input) {
+          value = readPixelInputExpression(instruction.operands[0], "in", pixelInputSemantics);
+        } else {
+          value = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, "outPosition",
+                                        "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
+                                        "outPointSize", "r", "cFloat", "cInt", "cBool", "p");
+        }
+        out << "  if (" << texkillMaskCondition(value, decodeWriteMask(instruction.operands[0])) << ") {\n";
+        out << "    discard_fragment();\n";
+        out << "  }\n";
         break;
       }
       case kD3DSIO_ADD:
@@ -2079,6 +2193,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       case kD3DSIO_DCL:
         break;
+      case kD3DSIO_TEXCOORD:
+      case kD3DSIO_TEXBEM:
+      case kD3DSIO_TEXBEML:
+      case kD3DSIO_TEXREG2AR:
+      case kD3DSIO_TEXREG2GB:
+      case kD3DSIO_TEXM3x2PAD:
+      case kD3DSIO_TEXM3x2TEX:
+      case kD3DSIO_TEXM3x3PAD:
+      case kD3DSIO_TEXM3x3TEX:
+      case kD3DSIO_TEXM3x3DIFF:
+      case kD3DSIO_TEXM3x3SPEC:
+      case kD3DSIO_TEXM3x3VSPEC:
       case kD3DSIO_BEM:
       case kD3DSIO_TEXDEPTH:
       case kD3DSIO_TEXREG2RGB:
@@ -2086,7 +2212,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       case kD3DSIO_TEXM3x2DEPTH:
       case kD3DSIO_TEXDP3:
       case kD3DSIO_TEXM3x3:
-        break;
+        throw std::runtime_error("unsupported legacy texture opcode: " + opcodeName(instruction.opcode));
       default:
         throw std::runtime_error("unsupported D3D opcode: " + opcodeName(instruction.opcode));
     }
@@ -2094,7 +2220,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     if (!controlStack.empty()) {
       throw std::runtime_error("unbalanced D3D control flow");
     }
-    if (callDepth != 0) {
+    if (!callConditionalStack.empty()) {
       throw std::runtime_error("unbalanced D3D CALL/RET");
     }
 	  out << "  color = outColor[0];\n";

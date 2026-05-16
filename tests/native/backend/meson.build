@@ -15,7 +15,7 @@ backend_pipeline_key_spec = executable(
   'dxmt9-backend-pipeline-key-spec',
   'backend_pipeline_key_spec.cpp',
   include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
 
@@ -193,7 +193,8 @@ argbuf_hybrid_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-argbuf-hybrid-spec', argbuf_hybrid_spec)
+test('dxmt9-argbuf-hybrid-spec', argbuf_hybrid_spec,
+     env: dxmt9_native_test_env)
 
 # R-BACK-12.22..12.26 MSL routing — FFP and DXBC->MSL emitters route
 # uniform reads through ArgbufLayout at slot 30 when the variant key
@@ -209,7 +210,8 @@ argbuf_hybrid_msl_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-argbuf-hybrid-msl-spec', argbuf_hybrid_msl_spec)
+test('dxmt9-argbuf-hybrid-msl-spec', argbuf_hybrid_msl_spec,
+     env: dxmt9_native_test_env)
 
 shader_argbuf_binding_value_spec = executable(
   'dxmt9-shader-argbuf-binding-value-spec',
@@ -220,7 +222,8 @@ shader_argbuf_binding_value_spec = executable(
 )
 
 test('dxmt9-shader-argbuf-binding-value-spec',
-     shader_argbuf_binding_value_spec)
+     shader_argbuf_binding_value_spec,
+     env: dxmt9_native_test_env)
 
 # R-BACK-12.22..12.26 — Stage 2 argbuf-hybrid populator spec.
 # CPU-only spec for the per-encoder argbuf populator: encoder-resource
@@ -240,7 +243,8 @@ argbuf_populator_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 
-test('dxmt9-argbuf-populator-spec', argbuf_populator_spec)
+test('dxmt9-argbuf-populator-spec', argbuf_populator_spec,
+     env: dxmt9_native_test_env)
 
 # Z1 audit item #2 — unix-side chunk-injection probe.
 # Constructs a wire-format chunk in memory and feeds it directly into

@@ -59,6 +59,7 @@ constexpr uint32_t kD3DSIO_IFC = 41u;
 constexpr uint32_t kD3DSIO_ELSE = 42u;
 constexpr uint32_t kD3DSIO_ENDIF = 43u;
 constexpr uint32_t kD3DSIO_BREAK = 44u;
+constexpr uint32_t kD3DSIO_BREAKC = 45u;
 constexpr uint32_t kD3DSIO_MOVA = 46u;
 constexpr uint32_t kD3DSIO_DEFB = 47u;
 constexpr uint32_t kD3DSIO_DEFI = 48u;
@@ -142,23 +143,25 @@ uint32_t shaderFixedOperandCount(uint32_t opcode, bool* known) {
     case kD3DSIO_TEXM3x3PAD:
     case kD3DSIO_TEXM3x3TEX:
     case kD3DSIO_TEXM3x3DIFF:
-    case kD3DSIO_TEXM3x3SPEC:
     case kD3DSIO_TEXM3x3VSPEC:
     case kD3DSIO_TEXREG2RGB:
     case kD3DSIO_TEXDP3TEX:
     case kD3DSIO_TEXM3x2DEPTH:
     case kD3DSIO_TEXDP3:
     case kD3DSIO_TEXM3x3:
-    case kD3DSIO_TEXDEPTH:
       return 2;
+    case kD3DSIO_TEXDEPTH:
+      return 1;
     case kD3DSIO_LABEL:
     case kD3DSIO_CALL:
-    case kD3DSIO_CALLNZ:
     case kD3DSIO_IF:
-    case kD3DSIO_IFC:
     case kD3DSIO_LOOP:
     case kD3DSIO_REP:
       return 1;
+    case kD3DSIO_IFC:
+    case kD3DSIO_BREAKC:
+    case kD3DSIO_CALLNZ:
+      return 2;
     case kD3DSIO_ADD:
     case kD3DSIO_SUB:
     case kD3DSIO_MUL:
@@ -178,6 +181,7 @@ uint32_t shaderFixedOperandCount(uint32_t opcode, bool* known) {
     case kD3DSIO_M3x3:
     case kD3DSIO_M3x2:
     case kD3DSIO_BEM:
+    case kD3DSIO_TEXM3x3SPEC:
     case kD3DSIO_SINCOS:
       return 3;
     case kD3DSIO_MAD:

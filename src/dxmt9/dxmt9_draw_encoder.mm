@@ -190,6 +190,106 @@ bool suppressRecordedMetalCalls(const EncodeContext& ctx) noexcept {
   return ctx.drawRecorder && ctx.drawRecorder->suppressMetalCalls;
 }
 
+bool suppressBaseStateLookup(const EncodeContext& ctx) noexcept {
+  return ctx.drawRecorder && ctx.drawRecorder->suppressBaseStateLookup;
+}
+
+void recordedSetRenderPipelineState(EncodeContext& ctx,
+                                    WMT::RenderCommandEncoder& encoder,
+                                    WMT::RenderPipelineState pipeline) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setRenderPipelineState) {
+    recorder->setRenderPipelineState(recorder->userdata, pipeline);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setRenderPipelineState(pipeline);
+  }
+}
+
+void recordedSetDepthStencilState(EncodeContext& ctx,
+                                  WMT::RenderCommandEncoder& encoder,
+                                  WMT::DepthStencilState depthStencil,
+                                  std::uint8_t stencilRef = 0) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setDepthStencilState) {
+    recorder->setDepthStencilState(recorder->userdata, depthStencil, stencilRef);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setDepthStencilState(depthStencil, stencilRef);
+  }
+}
+
+void recordedSetViewport(EncodeContext& ctx,
+                         WMT::RenderCommandEncoder& encoder,
+                         WMTViewport viewport) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setViewport) {
+    recorder->setViewport(recorder->userdata, viewport);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setViewport(viewport);
+  }
+}
+
+void recordedSetScissorRect(EncodeContext& ctx,
+                            WMT::RenderCommandEncoder& encoder,
+                            WMTScissorRect rect) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setScissorRect) {
+    recorder->setScissorRect(recorder->userdata, rect);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setScissorRect(rect);
+  }
+}
+
+void recordedSetRasterizerState(EncodeContext& ctx,
+                                WMT::RenderCommandEncoder& encoder,
+                                WMTTriangleFillMode fillMode,
+                                WMTCullMode cullMode,
+                                WMTDepthClipMode depthClipMode,
+                                WMTWinding winding,
+                                float depthBias,
+                                float slopeScale,
+                                float depthBiasClamp) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setRasterizerState) {
+    recorder->setRasterizerState(recorder->userdata, fillMode, cullMode,
+                                 depthClipMode, winding, depthBias,
+                                 slopeScale, depthBiasClamp);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setRasterizerState(fillMode, cullMode, depthClipMode, winding,
+                               depthBias, slopeScale, depthBiasClamp);
+  }
+}
+
+void recordedSetFragmentTexture(EncodeContext& ctx,
+                                WMT::RenderCommandEncoder& encoder,
+                                WMT::Texture texture,
+                                std::uint8_t index) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setFragmentTexture) {
+    recorder->setFragmentTexture(recorder->userdata, texture, index);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setFragmentTexture(texture, index);
+  }
+}
+
+void recordedSetFragmentSamplerState(EncodeContext& ctx,
+                                     WMT::RenderCommandEncoder& encoder,
+                                     WMT::SamplerState sampler,
+                                     std::uint8_t index) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setFragmentSamplerState) {
+    recorder->setFragmentSamplerState(recorder->userdata, sampler, index);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setFragmentSamplerState(sampler, index);
+  }
+}
+
 void recordedSetVertexBuffer(EncodeContext& ctx,
                              WMT::RenderCommandEncoder& encoder,
                              WMT::Buffer buffer,
@@ -408,10 +508,13 @@ WMTCullMode applyDebugCullOverride(WMTCullMode cullMode) {
   return cullMode;
 }
 
-void setRasterizerCullMode(WMT::RenderCommandEncoder& encoder, WMTCullMode cullMode) {
+void setRasterizerCullMode(EncodeContext& ctx,
+                           WMT::RenderCommandEncoder& encoder,
+                           WMTCullMode cullMode) {
   cullMode = applyDebugCullOverride(cullMode);
-  encoder.setRasterizerState(WMTTriangleFillModeFill, cullMode, WMTDepthClipModeClip,
-                             frontFaceWinding(), 0.0f, 0.0f, 0.0f);
+  recordedSetRasterizerState(ctx, encoder, WMTTriangleFillModeFill, cullMode,
+                             WMTDepthClipModeClip, frontFaceWinding(),
+                             0.0f, 0.0f, 0.0f);
   countRasterizerBind();
 }
 
@@ -1142,9 +1245,16 @@ bool encodeDraw(EncodeContext& ctx,
     // a Stage-1-compiled PSO is correct for both encoder modes today.
     // When the Stage 2 emitter lands (R-BACK-12.24 P1), thread
     // `argbufHybridMode` through here.
-    auto pipeline = ctx.cache.getOrBuildDrawPipelineForState(
-        ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
-        ctx.shaderArchivePath, tileFfpMode).get();
+    WMT::Reference<WMT::RenderPipelineState> pipelineRef;
+    WMT::RenderPipelineState pipeline{};
+    if (suppressBaseStateLookup(ctx)) {
+      pipeline = ctx.drawRecorder->renderPipelineState;
+    } else {
+      pipelineRef = ctx.cache.getOrBuildDrawPipelineForState(
+          ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
+          ctx.shaderArchivePath, tileFfpMode).get();
+      pipeline = WMT::RenderPipelineState{pipelineRef.handle};
+    }
     if (!pipeline) {
       if (traceEncode) {
         std::ostringstream out;
@@ -1163,10 +1273,17 @@ bool encodeDraw(EncodeContext& ctx,
       }
       return false;
     }
-    DXMT_ASSERT(ctx.device && "depthStencilStateFor called with stale/null Metal device handle");
-    auto depthState = ctx.cache.depthStencilStateFor(ctx.device, depthKey);
+    WMT::Reference<WMT::DepthStencilState> depthStateRef;
+    WMT::DepthStencilState depthState{};
+    if (suppressBaseStateLookup(ctx)) {
+      depthState = ctx.drawRecorder->depthStencilState;
+    } else {
+      DXMT_ASSERT(ctx.device && "depthStencilStateFor called with stale/null Metal device handle");
+      depthStateRef = ctx.cache.depthStencilStateFor(ctx.device, depthKey);
+      depthState = WMT::DepthStencilState{depthStateRef.handle};
+    }
     if (depthState) {
-      encoder.setDepthStencilState(depthState);
+      recordedSetDepthStencilState(ctx, encoder, depthState);
       countDepthStateBind();
     }
     // M1: label the pipeline with the shader-variant hash so frame
@@ -1176,7 +1293,7 @@ bool encodeDraw(EncodeContext& ctx,
     // when hash == 0 (no shader context) is intentional.
     {
       const auto variantHash = shaderVariantHashForDraw(drawState);
-      if (variantHash != 0) {
+      if (variantHash != 0 && !suppressRecordedMetalCalls(ctx)) {
         WMT::RenderPipelineState psoView{pipeline.handle};
         psoView.setLabel(makeLabelStringFmt("pso_h%016llx",
             static_cast<unsigned long long>(variantHash)));
@@ -1204,7 +1321,7 @@ bool encodeDraw(EncodeContext& ctx,
       encoder.dispatchThreadsPerTile(WMTSize{tileW, tileH, 1u});
       countPipelineBind();
     } else {
-      encoder.setRenderPipelineState(pipeline);
+      recordedSetRenderPipelineState(ctx, encoder, pipeline);
       countPipelineBind();
     }
   }
@@ -1347,11 +1464,11 @@ bool encodeDraw(EncodeContext& ctx,
           ffLayout && ffLayout->preTransformed,
           debug::disableScissor(),
           debug::disableCull());
-      encoder.setViewport(rasterPlan.viewport);
+      recordedSetViewport(ctx, encoder, rasterPlan.viewport);
       countViewportBind();
-      encoder.setScissorRect(rasterPlan.scissor);
+      recordedSetScissorRect(ctx, encoder, rasterPlan.scissor);
       countScissorBind();
-      setRasterizerCullMode(encoder, rasterPlan.cullMode);
+      setRasterizerCullMode(ctx, encoder, rasterPlan.cullMode);
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};
@@ -1878,12 +1995,22 @@ bool encodeDraw(EncodeContext& ctx,
               << " levels=" << texture->desc.levels;
           emitTextureTraceLine(out.str());
         }
-        encoder.setFragmentTexture(resources::textureForShaderRead(*texture), (uint8_t)stage);
+        recordedSetFragmentTexture(ctx, encoder,
+                                   resources::textureForShaderRead(*texture),
+                                   static_cast<std::uint8_t>(stage));
         countTextureBind();
       }
-      auto sampler = makeSampler(ctx.device, binding.samplerStates);
+      WMT::Reference<WMT::SamplerState> samplerRef;
+      WMT::SamplerState sampler{};
+      if (suppressBaseStateLookup(ctx)) {
+        sampler = ctx.drawRecorder->fragmentSamplerState;
+      } else {
+        samplerRef = makeSampler(ctx.device, binding.samplerStates);
+        sampler = WMT::SamplerState{samplerRef.handle};
+      }
       if (sampler) {
-        encoder.setFragmentSamplerState(sampler, (uint8_t)stage);
+        recordedSetFragmentSamplerState(ctx, encoder, sampler,
+                                        static_cast<std::uint8_t>(stage));
         countSamplerBind();
       }
     }

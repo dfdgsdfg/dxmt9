@@ -1,0 +1,22 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: math-derivation
+; oracle-date: 2026-05-16
+
+[pixel shader d3dbc-hex]
+ffff0300
+05000051 a00f0000 bf800000 00000000 00000000 00000000
+05000051 a00f0001 00000000 3f800000 00000000 3f800000
+02000001 800f0000 a0e40000
+01000041 800f0000
+02000001 800f0800 a0e40001
+0000ffff
+
+[test]
+clear rgba(1.0, 0.0, 0.0, 1.0)
+dxmt9-draw-solid-quad
+expect-source pixel contains "discard_fragment()"
+probe (32, 32) rgba(1.0, 0.0, 0.0, 1.0) 1

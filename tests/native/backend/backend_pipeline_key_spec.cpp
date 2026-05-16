@@ -78,6 +78,33 @@ auto makeVariantKey(const FlatDrawFixture& fixture) {
       0u);
 }
 
+u32 makeVersionToken(bool vertex, u32 major, u32 minor) {
+  return ((vertex ? 0xfffeu : 0xffffu) << 16) | ((major & 0xffu) << 8) | (minor & 0xffu);
+}
+
+u32 makeInstructionToken(u32 opcode, u32 operandCount) {
+  return (opcode & 0xffffu) | ((operandCount & 0xfu) << 24);
+}
+
+ShaderRef makeUnsupportedOpcodePixelShader() {
+  constexpr u32 kUnsupportedOpcode = 0x1234u;
+  constexpr u32 kD3DSIOEnd = 0xffffu;
+  const std::array<u32, 4> bytecode = {
+      makeVersionToken(/*vertex=*/false, 2u, 0u),
+      makeInstructionToken(kUnsupportedOpcode, 1u),
+      0x800f0000u,
+      kD3DSIOEnd,
+  };
+
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::Bytecode;
+  shader.hash = 0x1200340056007800ull;
+  shader.bytecode.hash = shader.hash;
+  const auto* base = reinterpret_cast<const u8*>(bytecode.data());
+  shader.bytecode.bytes.assign(base, base + bytecode.size() * sizeof(u32));
+  return shader;
+}
+
 void testAlphaBlendEnableAndDisable() {
   DrawDesc desc{};
 
@@ -366,6 +393,33 @@ void testSrgbCompatiblePixelFormatConversion() {
           "depth-stencil format stays unchanged for sRGB request");
 }
 
+void testUnsupportedDrawTranslatorFailureReturnsEmptyPipelineFuture() {
+  DrawDesc desc{};
+  desc.pixelShader = makeUnsupportedOpcodePixelShader();
+  auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+
+  dxmt9::pipeline::ShaderVariantKey key{};
+  key.hash = 0xfeed1234ull;
+  key.colorFormats[0] = WMTPixelFormatBGRA8Unorm;
+  key.blend[0].pixelFormat = WMTPixelFormatBGRA8Unorm;
+
+  const auto contained =
+      dxmt9::pipeline::detail::makeContainedDrawShaderSources(context, key.hash);
+  check(!contained.has_value(),
+        "unsupported draw shader bytecode is contained during source generation");
+
+  dxmt9::pipeline::Cache cache;
+  auto future = cache.getOrBuildDrawPipeline(
+      WMT::Reference<WMT::Device>{}, key, std::move(context), nullptr, nullptr);
+
+  try {
+    const auto& pso = future.get();
+    check(!pso, "unsupported draw shader bytecode resolves to an empty pipeline");
+  } catch (const std::exception& ex) {
+    fail(std::string("unsupported draw shader bytecode escaped the pipeline future: ") + ex.what());
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -380,6 +434,7 @@ int main() {
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();
     testSrgbCompatiblePixelFormatConversion();
+    testUnsupportedDrawTranslatorFailureReturnsEmptyPipelineFuture();
   } catch (const TestFailure& failure) {
     std::cerr << "backend_pipeline_key_spec failed: " << failure.what() << '\n';
     return 1;

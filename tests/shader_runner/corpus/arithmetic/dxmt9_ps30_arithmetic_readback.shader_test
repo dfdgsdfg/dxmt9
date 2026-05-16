@@ -1,0 +1,26 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: math-derivation
+; oracle-date: 2026-05-16
+
+[pixel shader d3dbc-hex]
+ffff0300 05000051 a00f0000 3e4ccccd 3e99999a 3ecccccd
+3f800000 05000051 a00f0001 3f000000 3f000000 3f000000
+3f000000 05000051 a00f0002 3dcccccd 3dcccccd 3dcccccd
+00000000 05000051 a00f0003 3dcccccd 3dcccccd 3dcccccd
+3dcccccd 04000004 800f0000 a0e40000 a0e40001 a0e40002
+03000008 800f0001 a0e40000 a0e40001 03000009 800f0002
+a0e40000 a0e40003 02000001 80010003 80e40000 02000001
+80020003 80e40001 02000001 80040003 80e40002 02000001
+80080003 a0e40000 02000001 800f0800 80e40003 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+draw quad
+expect-source pixel contains "r[0] = (cFloat[0] * cFloat[1] + cFloat[2]);"
+expect-source pixel contains "float4(dot((cFloat[0]).xyz, (cFloat[1]).xyz))"
+expect-source pixel contains "float4(dot(cFloat[0], cFloat[3]))"
+probe (32, 32) rgba(0.2, 0.45, 0.19, 1.0) 2

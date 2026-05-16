@@ -6,12 +6,14 @@
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_shader_sources.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <future>
 #include <optional>
 #include <utility>
@@ -36,6 +38,36 @@ bool debugForceVisibleDraw() {
 }
 
 }  // namespace
+
+std::optional<detail::DrawShaderSources>
+detail::makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& shaderSource,
+                                       u64 variantHash) {
+  auto shaderHash = [](const core::ShaderRef& shader) {
+    return shader.hash != 0 ? shader.hash : shader.bytecode.hash;
+  };
+
+  try {
+    return detail::DrawShaderSources{
+        .vertex = drawshader::makeDrawShaderSource(shaderSource, true),
+        .fragment = drawshader::makeDrawShaderSource(shaderSource, false),
+    };
+  } catch (const std::exception& ex) {
+    util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
+               "draw shader source generation failed: %s variant=0x%llx vs=0x%llx ps=0x%llx",
+               ex.what(),
+               static_cast<unsigned long long>(variantHash),
+               static_cast<unsigned long long>(shaderHash(shaderSource.vertexShader)),
+               static_cast<unsigned long long>(shaderHash(shaderSource.pixelShader)));
+  } catch (...) {
+    util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
+               "draw shader source generation failed: unknown exception variant=0x%llx vs=0x%llx ps=0x%llx",
+               static_cast<unsigned long long>(variantHash),
+               static_cast<unsigned long long>(shaderHash(shaderSource.vertexShader)),
+               static_cast<unsigned long long>(shaderHash(shaderSource.pixelShader)));
+  }
+
+  return std::nullopt;
+}
 
 std::array<BlendAttachmentKey, core::kMaxRenderTargets>
 detail::makeBlendAttachmentKeys(core::FlatDrawStateView state, bool forceVisibleDraw) {
@@ -356,10 +388,12 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
   }
   auto future = std::async(std::launch::async,
                             [device, key, shaderSource = std::move(shaderSource), archive]() mutable {
-    auto vsSource = drawshader::makeDrawShaderSource(shaderSource, true);
-    auto fsSource = drawshader::makeDrawShaderSource(shaderSource, false);
-    auto vsLib = shaders::makeLibrary(device, vsSource);
-    auto fsLib = shaders::makeLibrary(device, fsSource);
+    auto sources = detail::makeContainedDrawShaderSources(shaderSource, key.hash);
+    if (!sources) {
+      return WMT::Reference<WMT::RenderPipelineState>{};
+    }
+    auto vsLib = shaders::makeLibrary(device, sources->vertex);
+    auto fsLib = shaders::makeLibrary(device, sources->fragment);
     if (!vsLib || !fsLib) {
       return WMT::Reference<WMT::RenderPipelineState>{};
     }

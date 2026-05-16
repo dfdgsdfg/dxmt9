@@ -147,6 +147,30 @@ struct PopulatedArgbuf {
   }
 };
 
+// Test/diagnostic recorder for the Stage 2 argument-buffer populator.
+// Production passes nullptr. Tests may set suppressMetalCalls=true and
+// provide fake object handles so the exact MTLArgumentEncoder write
+// indices and ordering can be asserted without a live Metal device.
+struct ArgbufRecorder {
+  void* userdata = nullptr;
+  bool suppressMetalCalls = false;
+  WMT::SamplerState samplerState{};
+
+  void (*setArgumentBuffer)(void* userdata,
+                            WMT::Buffer buffer,
+                            u64 offset) = nullptr;
+  void (*setBuffer)(void* userdata,
+                    WMT::Buffer buffer,
+                    u64 offset,
+                    u32 index) = nullptr;
+  void (*setTexture)(void* userdata,
+                     WMT::Texture texture,
+                     u32 index) = nullptr;
+  void (*setSamplerState)(void* userdata,
+                          WMT::SamplerState sampler,
+                          u32 index) = nullptr;
+};
+
 // Pure value-transform: bytes the encoder would re-write for the given
 // dirty mask. Sums the four per-frequency host-struct sizes for the
 // matching kVsAny / kPsAny / kFfpVsAny / kFfpPsAny categories. Returns
@@ -172,7 +196,8 @@ u64 dirtyBytesEstimate(const uniform::DirtyState& dirty) noexcept;
 // `setFragmentBuffer(...)` on the render encoder.
 PopulatedArgbuf openArgbuf(CommandQueue& queue,
                             ArgbufEncoderResource& encoderResource,
-                            std::uint64_t seqId);
+                            std::uint64_t seqId,
+                            const ArgbufRecorder* recorder = nullptr);
 
 // R-BACK-12.24 — populate the four constant-buffer entries in the
 // argbuf from per-frequency uniform host-structs. The call writes
@@ -191,7 +216,8 @@ PopulatedArgbuf openArgbuf(CommandQueue& queue,
 u64 populateConstantBuffers(CommandQueue& queue,
                              ArgbufEncoderResource& encoderResource,
                              core::FlatDrawStateView state,
-                             std::uint64_t seqId);
+                             std::uint64_t seqId,
+                             const ArgbufRecorder* recorder = nullptr);
 
 // R-BACK-12.24 — populate the texture / sampler slots in the argbuf.
 // Writes one MTLResourceID per active stage at [[id(4..11)]] for
@@ -202,7 +228,8 @@ u64 populateConstantBuffers(CommandQueue& queue,
 void populateResourceBindings(WMT::Reference<WMT::Device> device,
                                resources::Pool& pool,
                                ArgbufEncoderResource& encoderResource,
-                               core::FlatDrawStateView state);
+                               core::FlatDrawStateView state,
+                               const ArgbufRecorder* recorder = nullptr);
 
 // R-BACK-12.24 — mid-pass dirty rewrite. Re-uploads the per-frequency
 // host structs corresponding to the dirty bits and re-points the
@@ -218,6 +245,7 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               ArgbufEncoderResource& encoderResource,
                               core::FlatDrawStateView state,
                               const uniform::DirtyState& dirty,
-                              std::uint64_t seqId);
+                              std::uint64_t seqId,
+                              const ArgbufRecorder* recorder = nullptr);
 
 }  // namespace dxmt9::argbuf_hybrid

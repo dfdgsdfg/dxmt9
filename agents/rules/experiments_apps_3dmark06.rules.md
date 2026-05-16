@@ -214,9 +214,42 @@ left the failing `ps_3_0` bytecode at:
 experiments/output/3dmark06-shader-dump-cf2-shaders/shader-4803115731238309921.bin
 ```
 
-That shader contains token `0x01000041` at word 47. Treat the current
-3DMark06 visual blocker as a dxmt9 shader translator gap until `TEXKILL`
-handling is implemented and re-tested.
+That shader contains token `0x01000041` at word 47.
+
+Follow-up `texkill-cf1` and `texkill-cf2` runs from 2026-05-16 re-tested after
+adding `TEXKILL` decode/lowering and shader corpus coverage:
+
+- `experiments/output/3dmark06-texkill-cf1/result.json`: `status=fail`
+  solely due `black_screen`, `returncode=0`, `capture_source=internal_dump`
+- `experiments/output/3dmark06-texkill-cf2/result.json`: `status=fail`
+  solely due `black_screen`, `returncode=0`, `capture_source=internal_dump`
+- no `unsupported D3D opcode`, `opcode_65`, `D3DCompile2`, `E5017`,
+  `gametest_proxycon`, or unhandled page fault in either output tree
+- both internal dumps are all black with identical hash
+  `sha256:20f08885b32fd899b85bcdfc5d390a99015ecd71de0242214234ec1efba549e7`
+- logs still show sustained `DrawIndexedPrimitive` traffic until launcher
+  watchdog termination
+
+Treat `TEXKILL` as cleared for the current 3DMark06 app path. The active
+failure is now black internal output after draw traffic, not shader opcode 65.
+
+Follow-up `shader-complete-cf1` from 2026-05-16 re-tested after adding
+`BREAKC`, `CALLNZ`, and broader ps_3_0 arithmetic/control-flow corpus
+coverage:
+
+- `experiments/output/3dmark06-shader-complete-cf1/result.json`:
+  `status=fail` solely due `black_screen`, `returncode=0`,
+  `timed_out=false`, `capture_source=internal_dump`
+- no `unsupported D3D opcode`, `D3DCompile2`, `E5017`,
+  `gametest_proxycon`, or unhandled page fault in the output logs
+- internal dump stayed all black with hash
+  `sha256:20f08885b32fd899b85bcdfc5d390a99015ecd71de0242214234ec1efba549e7`
+- logs show sustained traffic: 4655 `device_draw_indexed_primitive` lines and
+  12 `device_present` lines
+
+Treat the current shader-opcode surface as cleared for the observed 3DMark06
+path. Continue from render output, capture, render-target binding, or present
+timing rather than opcode support unless new shader diagnostics appear.
 
 ## Current Risks / Follow-up
 
@@ -227,8 +260,9 @@ handling is implemented and re-tested.
   show draw/present traffic. Do not treat `black_screen` as the compiler
   blocker returning; inspect logs for `D3DCompile2`, `E5017`, page faults,
   presents, and draws.
-- Before chasing present/capture policy further, add `TEXKILL` translator
-  coverage from the dumped shader and re-run `capture-frame=1/2`.
+- `TEXKILL` translator coverage has been added and `capture-frame=1/2` has
+  been re-run. Continue black-screen diagnosis from render output, capture,
+  render-target binding, or present timing rather than opcode 65.
 - Re-validate benchmark visuals with a trustworthy 3DMark06 window capture.
 - Do not treat native `d3dx9_28` as a dxmt9 renderer fix; it changes the app's
   shader compiler dependency to get past the Wine/vkd3d-shader gap.

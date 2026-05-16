@@ -1,0 +1,24 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: math-derivation
+; oracle-date: 2026-05-16
+
+[pixel shader d3dbc-hex]
+ffff0300 05000051 a00f0000 40000000 00000000 00000000
+00000000 05000051 a00f0001 3f800000 00000000 00000000
+00000000 05000051 a00f0002 3f800000 00000000 00000000
+00000000 05000051 a00f0003 00000000 3f800000 00000000
+3f800000 05000051 a00f0004 3f800000 00000000 00000000
+3f800000 02000001 800f0000 a0e40004 01000026 a0e40002
+0201002d a0e40000 a0e40001 02000001 800f0000 a0e40003
+00000027 02000001 800f0800 80e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+draw quad
+expect-source pixel contains "if ((cFloat[0]).x > (cFloat[1]).x) { break; }"
+expect-source pixel contains "r[0] = cFloat[3];"
+probe (32, 32) rgba(1.0, 0.0, 0.0, 1.0) 1

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <future>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -97,6 +98,19 @@ struct ShaderVariantKeyHash {
 };
 
 namespace detail {
+
+struct DrawShaderSources {
+  std::string vertex;
+  std::string fragment;
+};
+
+// Generate VS+FS draw sources while containing translator failures. Returns
+// std::nullopt when a bytecode translator or source emitter throws so async
+// PSO builders can resolve to "no pipeline" instead of rethrowing through
+// shared_future::get().
+std::optional<DrawShaderSources>
+makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& shaderSource,
+                               u64 variantHash);
 
 // Render-state-only blend attachment key mapping. Pixel formats are resolved
 // by Cache::getOrBuildDrawPipelineForState after surface lookup.
