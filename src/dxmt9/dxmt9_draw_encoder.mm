@@ -680,7 +680,7 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
   return device.newSamplerState(info);
 }
 
-WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot) {
+WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot, float lodMinClamp) {
   const auto minFilter = samplerStateOr(snapshot, SAMP_MIN_FILTER, 0u);
   const auto magFilter = samplerStateOr(snapshot, SAMP_MAG_FILTER, 0u);
   const auto mipFilter = samplerStateOr(snapshot, SAMP_MIP_FILTER, 0u);
@@ -708,6 +708,7 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot) {
   // Keep explicit texldl / mip-filter sampling from being clamped to level 0.
   // LOD bias is still intentionally ignored because WMTSamplerInfo has no
   // separate bias field.
+  info.lod_min_clamp = lodMinClamp;
   info.lod_max_clamp = 1e9f;
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
@@ -721,7 +722,16 @@ WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device
   return device.newSamplerState(info);
 }
 
-WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>& states) {
+WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
+                                                const SamplerSnapshot& snapshot,
+                                                float lodMinClamp) {
+  auto info = makeSamplerInfo(snapshot, lodMinClamp);
+  DXMT_ASSERT(device && "makeSampler(snapshot,lod) called with stale/null Metal device handle");
+  return device.newSamplerState(info);
+}
+
+WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>& states,
+                               float lodMinClamp) {
   const auto minFilter = samplerStateOr(states, SAMP_MIN_FILTER, 0u);
   const auto magFilter = samplerStateOr(states, SAMP_MAG_FILTER, 0u);
   const auto mipFilter = samplerStateOr(states, SAMP_MIP_FILTER, 0u);
@@ -746,6 +756,7 @@ WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>
       info.r_address_mode == WMTSamplerAddressModeClampToBorderColor) {
     info.border_color = resolveSamplerBorderColor(borderColor);
   }
+  info.lod_min_clamp = lodMinClamp;
   info.lod_max_clamp = 1e9f;
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
@@ -757,6 +768,15 @@ WMT::Reference<WMT::SamplerState> makeSampler(
     const core::FlatStateSet<core::kMaxSamplerStates>& states) {
   auto info = makeSamplerInfo(states);
   DXMT_ASSERT(device && "makeSampler(FlatStateSet) called with stale/null Metal device handle");
+  return device.newSamplerState(info);
+}
+
+WMT::Reference<WMT::SamplerState> makeSampler(
+    WMT::Reference<WMT::Device> device,
+    const core::FlatStateSet<core::kMaxSamplerStates>& states,
+    float lodMinClamp) {
+  auto info = makeSamplerInfo(states, lodMinClamp);
+  DXMT_ASSERT(device && "makeSampler(FlatStateSet,lod) called with stale/null Metal device handle");
   return device.newSamplerState(info);
 }
 
@@ -1345,6 +1365,7 @@ bool encodeDraw(EncodeContext& ctx,
   uniform::DirtyState scratchDirty;
   uniform::markAllDirty(scratchDirty);
   uniform::DirtyState* dirtyPtr = dirty ? dirty : &scratchDirty;
+  const auto& shaderUsage = drawState.shaderContext();
   // R-BACK-12.24 — Stage 2 argbuf dirty mirror.
   //
   // When the encoder is on the argbuf-hybrid path AND any per-frequency
@@ -1355,7 +1376,7 @@ bool encodeDraw(EncodeContext& ctx,
   if (argbufHybridMode) {
     const auto bytes = dxmt9::argbuf_hybrid::updateDirtyArgbufRegions(
         ctx.queue, ctx.queue.argbufEncoderResource(), drawState, *dirtyPtr,
-        seqId);
+        shaderUsage.vertexConstantUsage, shaderUsage.pixelConstantUsage, seqId);
     if (bytes != 0) {
       perf::countArgbufHybridBytes(bytes);
     }
@@ -1367,23 +1388,29 @@ bool encodeDraw(EncodeContext& ctx,
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
     if (!argbufHybridMode && uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
       VsConsts vs = buildVsConsts(drawState);
-      auto slice = uploadTransientBuffer(&vs, sizeof(VsConsts), alignof(VsConsts));
+      const auto plan =
+          uniform::makeVsConstantUploadPlan(*dirtyPtr, shaderUsage.vertexConstantUsage);
+      const auto bytes = static_cast<std::size_t>(uniform::vsConstantUploadBytes(plan));
+      auto slice = uploadTransientBuffer(&vs, bytes, alignof(VsConsts));
       if (slice) {
         recordedSetVertexBuffer(ctx, encoder, slice.buffer, slice.offset, 0);
         countUniformBufferBinds(1);
-        perf::countUniformVsConsts(sizeof(VsConsts));
+        perf::countUniformVsConsts(bytes);
         uniform::clearBits(*dirtyPtr, uniform::kVsAny);
       }
     }
     if (!argbufHybridMode && uniform::anyDirty(*dirtyPtr, uniform::kPsAny)) {
       PsConsts ps = buildPsConsts(drawState);
-      auto slice = uploadTransientBuffer(&ps, sizeof(PsConsts), alignof(PsConsts));
+      const auto plan =
+          uniform::makePsConstantUploadPlan(*dirtyPtr, shaderUsage.pixelConstantUsage);
+      const auto bytes = static_cast<std::size_t>(uniform::psConstantUploadBytes(plan));
+      auto slice = uploadTransientBuffer(&ps, bytes, alignof(PsConsts));
       if (slice) {
         if (!suppressRecordedMetalCalls(ctx)) {
           encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
         }
         countUniformBufferBinds(1);
-        perf::countUniformPsConsts(sizeof(PsConsts));
+        perf::countUniformPsConsts(bytes);
         uniform::clearBits(*dirtyPtr, uniform::kPsAny);
       }
     }
@@ -1985,6 +2012,18 @@ bool encodeDraw(EncodeContext& ctx,
           ctx.device, ctx.pool, ctx.queue.argbufEncoderResource(), drawState);
     }
     if (!argbufHybridMode) {
+      struct ResolvedFragmentTextureSamplerBinding {
+        u32 stage = 0;
+        core::Handle textureHandle{};
+        u32 textureLod = 0;
+        const resources::TextureRecord* textureRecord = nullptr;
+        WMT::Texture texture{};
+        WMT::Reference<WMT::SamplerState> samplerRef{};
+        WMT::SamplerState sampler{};
+      };
+      std::array<ResolvedFragmentTextureSamplerBinding, core::kMaxSamplers>
+          resolvedFragmentBindings{};
+      std::size_t resolvedFragmentBindingCount = 0;
       for (const auto& binding : bindingPacket.fragmentTextureSamplers) {
         const auto stage = binding.stage;
         const auto textureHandle = binding.texture;
@@ -1999,34 +2038,47 @@ bool encodeDraw(EncodeContext& ctx,
           }
           return false;
         }
+        auto& resolved = resolvedFragmentBindings[resolvedFragmentBindingCount++];
+        resolved.stage = stage;
+        resolved.textureHandle = textureHandle;
+        resolved.textureLod = binding.textureLod;
         if (auto* texture = ctx.pool.findTexture(textureHandle.value); texture && texture->texture) {
-          if (debug::shouldTraceTexture(textureHandle)) {
-            std::ostringstream out;
-            out << "[dxmt9-texture] bind stage=" << stage
-                << " handle=0x" << std::hex << textureHandle.value << std::dec
-                << " format=" << static_cast<unsigned>(texture->desc.format)
-                << " size=" << texture->desc.width << "x" << texture->desc.height
-                << " levels=" << texture->desc.levels;
-            emitTextureTraceLine(out.str());
-          }
           const bool srgbTexture =
               core::flatStateOr(hot.samplerStates[stage], core::SAMP_SRGB_TEXTURE, 0u) != 0;
-          recordedSetFragmentTexture(ctx, encoder,
-                                     resources::textureForShaderRead(*texture, srgbTexture),
-                                     static_cast<std::uint8_t>(stage));
+          resolved.textureRecord = texture;
+          resolved.texture = resources::textureForShaderRead(*texture, srgbTexture);
+        }
+        if (suppressBaseStateLookup(ctx)) {
+          resolved.sampler = ctx.drawRecorder->fragmentSamplerState;
+        } else {
+          resolved.samplerRef =
+              makeSampler(ctx.device, binding.samplerStates,
+                          static_cast<float>(binding.textureLod));
+          resolved.sampler = WMT::SamplerState{resolved.samplerRef.handle};
+        }
+      }
+
+      for (std::size_t i = 0; i < resolvedFragmentBindingCount; ++i) {
+        const auto& binding = resolvedFragmentBindings[i];
+        if (binding.texture) {
+          if (debug::shouldTraceTexture(binding.textureHandle) && binding.textureRecord) {
+            std::ostringstream out;
+            out << "[dxmt9-texture] bind stage=" << binding.stage
+                << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
+                << " format=" << static_cast<unsigned>(binding.textureRecord->desc.format)
+                << " size=" << binding.textureRecord->desc.width << "x"
+                << binding.textureRecord->desc.height
+                << " levels=" << binding.textureRecord->desc.levels
+                << " lod=" << binding.textureLod;
+            emitTextureTraceLine(out.str());
+          }
+          recordedSetFragmentTexture(ctx, encoder, binding.texture,
+                                     static_cast<std::uint8_t>(binding.stage));
           countTextureBind();
         }
-        WMT::Reference<WMT::SamplerState> samplerRef;
-        WMT::SamplerState sampler{};
-        if (suppressBaseStateLookup(ctx)) {
-          sampler = ctx.drawRecorder->fragmentSamplerState;
-        } else {
-          samplerRef = makeSampler(ctx.device, binding.samplerStates);
-          sampler = WMT::SamplerState{samplerRef.handle};
-        }
-        if (sampler) {
-          recordedSetFragmentSamplerState(ctx, encoder, sampler,
-                                          static_cast<std::uint8_t>(stage));
+        if (binding.sampler) {
+          recordedSetFragmentSamplerState(ctx, encoder, binding.sampler,
+                                          static_cast<std::uint8_t>(binding.stage));
           countSamplerBind();
         }
       }

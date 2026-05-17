@@ -116,6 +116,9 @@ class Device {
                                     std::uint32_t /*width*/, std::uint32_t /*height*/,
                                     std::uint32_t /*pitch*/,
                                     std::span<const std::uint8_t> /*bytes*/) {}
+  virtual core::HResult generateTextureMipSublevels(core::TextureHandle) {
+    return core::D3D_OK;
+  }
 
   // Encode + submit commands. core::Device dispatches compact draw runs
   // through the upper runtime; DeviceImpl forwards to CommandQueue.

@@ -23,17 +23,17 @@ shadow source), `docs/perfomance-bottleneck.md` (empirical motivation).
 
 Vertex-shader-only state (`vs*Const`, FFP transforms, clip planes,
 `halfPixelFixup`, viewport, `DrawVolatile`) must not be bound to the fragment
-stage. Fragment-shader-only state (`ps*Const`, fog, alpha test, textureFactor)
-must not be bound to the vertex stage.
+stage. Fragment-shader-only state (`ps*Const`, fog, alpha test, textureFactor,
+per-stage `D3DTSS_CONSTANT`) must not be bound to the vertex stage.
 
 ### 1.2 Shader / FFP separation (`R-BACK-12.2`)
 
 Shader-stage constants (`vsFloatConst`, `vsIntConst`, `vsBoolConst`,
 `psFloatConst`, `psIntConst`, `psBoolConst`) must live in a different binding
 slot from FFP state (`ffpWorldViewProj`, `ffpTextureTransforms`, fog scalars,
-alpha test, textureFactor). Apps that only use the shader pipeline must not
-incur an FFP write per draw, and FFP-only apps must not incur a shader-constant
-write per draw beyond the range they actually use.
+alpha test, textureFactor, per-stage `D3DTSS_CONSTANT`). Apps that only use the
+shader pipeline must not incur an FFP write per draw, and FFP-only apps must not
+incur a shader-constant write per draw beyond the range they actually use.
 
 ### 1.3 Volatile / stable separation (`R-BACK-12.3`)
 

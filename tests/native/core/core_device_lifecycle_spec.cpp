@@ -97,6 +97,7 @@ void testDeviceCoreFlow() {
   auto texture = device->createTexture({4, 4, 1, 2, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
   auto srcTexture = device->createTexture({2, 2, 1, 2, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
   auto dstTexture = device->createTexture({2, 2, 1, 2, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
+  auto mipTexture = device->createTexture({2, 2, 1, 2, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
   auto dxt5Texture =
       device->createTexture({1276, 164, 1, 1, Format::DXT5, TextureType::TwoD, Pool::Managed, UsageTexture});
   auto systemSurface = device->createSurface({2, 2, Format::A8R8G8B8, Pool::SystemMem, 0, false, false});
@@ -110,6 +111,7 @@ void testDeviceCoreFlow() {
   check(texture != nullptr, "managed texture");
   check(srcTexture != nullptr, "source texture");
   check(dstTexture != nullptr, "destination texture");
+  check(mipTexture != nullptr, "mipmap texture");
   check(dxt5Texture != nullptr, "dxt5 texture");
   check(systemSurface != nullptr, "systemmem surface");
   check(scratchSurface != nullptr, "scratch surface");
@@ -152,6 +154,17 @@ void testDeviceCoreFlow() {
   checkEq(device->updateTexture(srcTexture, dstTexture), D3D_OK, "update texture");
   checkBytes(dstTexture->levelBytes(0), srcTexture->levelBytes(0), "texture level 0 copy");
   checkBytes(dstTexture->levelBytes(1), srcTexture->levelBytes(1), "texture level 1 copy");
+
+  auto mipLevel0 = mipTexture->surfaceLevel(0);
+  auto mipLevel1 = mipTexture->surfaceLevel(1);
+  check(mipLevel0 != nullptr && mipLevel1 != nullptr, "mipmap texture levels");
+  mipLevel0->fillColor(nullptr, {1.0f, 0.0f, 0.0f, 1.0f});
+  mipLevel1->fillColor(nullptr, {0.0f, 0.0f, 0.0f, 1.0f});
+  checkEq(mipTexture->generateMipSubLevels(), D3D_OK, "generate mip sublevels");
+  const std::array<u8, 4> redPixel = bgra(0x00, 0x00, 0xff, 0xff);
+  checkBytes(std::span<const u8>(mipTexture->levelBytes(1).data(), 4),
+             std::span<const u8>(redPixel.data(), redPixel.size()),
+             "generated mip level 1");
 
   checkEq(formatRowPitch(Format::DXT5, 1276), 5104u, "dxt5 row pitch");
   checkEq(formatRowCount(Format::DXT5, 164), 41u, "dxt5 row count");
@@ -306,6 +319,8 @@ void testDeviceCoreFlow() {
   checkEq(device->state().textures[0], nullptr, "vertex block left texture binding alone");
 
   checkEq(device->applyStateBlock(*stateBlock), D3D_OK, "restore state after typed blocks");
+  checkEq(texture->setLod(1), 0u, "texture SetLOD previous value");
+  checkEq(texture->lod(), 1u, "texture SetLOD stored value");
 
   std::array<u8, 4> vertexPayload{1, 2, 3, 4};
   checkEq(device->drawPrimitiveUP(PrimitiveType::TriangleList, 1,
@@ -324,6 +339,7 @@ void testDeviceCoreFlow() {
   checkEq(draw0.hot.streamOffsets[0], 0u, "draw0 stream offset");
   checkEq(draw0.hot.streamStrides[0], 16u, "draw0 stream stride");
   checkEq(draw0.hot.textures[0], texture->handle(), "draw0 texture handle");
+  checkEq(draw0.hot.textureLods[0], 1u, "draw0 texture lod");
   checkEq(flatStateOr(draw0.hot.textureStageStates[0], TSS_COLOR_OP, 0u),
           static_cast<u32>(TextureOp::SelectArg1),
           "draw0 color op");

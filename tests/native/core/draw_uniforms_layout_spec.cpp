@@ -27,7 +27,7 @@ using dxmt9::state::VsConsts;
 static_assert(sizeof(VsConsts) == 4416, "VsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(PsConsts) == 3904, "PsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(FfpVsConsts) == 956, "FfpVsConsts size pinned for MSL prelude parity");
-static_assert(sizeof(FfpPsConsts) == 240, "FfpPsConsts size pinned for MSL prelude parity");
+static_assert(sizeof(FfpPsConsts) == 384, "FfpPsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(DrawVolatile) == 16, "DrawVolatile size pinned for MSL prelude parity");
 
 // --- R-BACK-12.16: per-field byte offsets -----------------------------------
@@ -55,18 +55,21 @@ static_assert(offsetof(FfpVsConsts, viewportOrigin) == 64 + 256 + 512 + 96 + 8);
 static_assert(offsetof(FfpVsConsts, viewportSize) == 64 + 256 + 512 + 96 + 16);
 static_assert(offsetof(FfpVsConsts, clipPlaneMask) == 64 + 256 + 512 + 96 + 24);
 
-// FfpPsConsts: float4 textureFactor | 4x f32 | 4x u32 | bump-env arrays.
+// FfpPsConsts: textureFactor | per-stage constants | 4x f32 | 4x u32 |
+// bump-env arrays.
 static_assert(offsetof(FfpPsConsts, textureFactor) == 0);
-static_assert(offsetof(FfpPsConsts, alphaRef) == 16);
-static_assert(offsetof(FfpPsConsts, fogStart) == 20);
-static_assert(offsetof(FfpPsConsts, fogEnd) == 24);
-static_assert(offsetof(FfpPsConsts, fogDensity) == 28);
-static_assert(offsetof(FfpPsConsts, alphaTestEnable) == 32);
-static_assert(offsetof(FfpPsConsts, alphaTestFunc) == 36);
-static_assert(offsetof(FfpPsConsts, fogMode) == 40);
-static_assert(offsetof(FfpPsConsts, _pad) == 44);
-static_assert(offsetof(FfpPsConsts, bumpEnvMat) == 48);
-static_assert(offsetof(FfpPsConsts, bumpEnvLum) == 176);
+static_assert(offsetof(FfpPsConsts, stageConstants) == 16);
+static_assert(offsetof(FfpPsConsts, alphaRef) == 144);
+static_assert(offsetof(FfpPsConsts, fogStart) == 148);
+static_assert(offsetof(FfpPsConsts, fogEnd) == 152);
+static_assert(offsetof(FfpPsConsts, fogDensity) == 156);
+static_assert(offsetof(FfpPsConsts, alphaTestEnable) == 160);
+static_assert(offsetof(FfpPsConsts, alphaTestFunc) == 164);
+static_assert(offsetof(FfpPsConsts, fogMode) == 168);
+static_assert(offsetof(FfpPsConsts, _pad) == 172);
+static_assert(offsetof(FfpPsConsts, bumpEnvMat) == 176);
+static_assert(offsetof(FfpPsConsts, bumpEnvLum) == 304);
+static_assert(offsetof(FfpPsConsts, fogColor) == 368);
 
 // DrawVolatile: i32 | u32 | u32 | u32 _pad — 16 B push-constant footprint
 // for setVertexBytes.
@@ -121,6 +124,7 @@ void checkMslPreludeContainsStructDecls() {
 
   // FfpPsConsts fields.
   requireSubstring(prelude, "float4 textureFactor", "FfpPsConsts.textureFactor");
+  requireSubstring(prelude, "float4 stageConstants[8]", "FfpPsConsts.stageConstants");
   requireSubstring(prelude, "float alphaRef", "FfpPsConsts.alphaRef");
   requireSubstring(prelude, "float fogStart", "FfpPsConsts.fogStart");
   requireSubstring(prelude, "float fogEnd", "FfpPsConsts.fogEnd");
@@ -131,6 +135,7 @@ void checkMslPreludeContainsStructDecls() {
   requireSubstring(prelude, "uint _pad", "FfpPsConsts._pad");
   requireSubstring(prelude, "float4 bumpEnvMat[8]", "FfpPsConsts.bumpEnvMat");
   requireSubstring(prelude, "float2 bumpEnvLum[8]", "FfpPsConsts.bumpEnvLum");
+  requireSubstring(prelude, "float4 fogColor", "FfpPsConsts.fogColor");
 
   // DrawVolatile fields.
   requireSubstring(prelude, "int vertexBaseIndex", "DrawVolatile.vertexBaseIndex");

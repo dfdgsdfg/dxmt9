@@ -1301,7 +1301,7 @@ void testD3DBCDecodeAndClassificationFixtures() {
              "D3DBC operand decode classifies relative-addressing tokens");
 }
 
-void testPs30VFaceDecodeAndCurrentSourceContract() {
+void testPs30VFaceDecodeAndSourceContract() {
   using namespace dxmt9::d3d9bc;
   namespace translator_test = dxmt9::translator::test;
 
@@ -1321,10 +1321,20 @@ void testPs30VFaceDecodeAndCurrentSourceContract() {
   const auto source = translatePixel(makePs30VFaceBytecode());
   checkContains(source, "vFace", "ps_3_0 vFace operand is preserved in source comments");
   checkContains(source, "// mov oC0, vFace", "ps_3_0 vFace source is preserved in source comments");
-  checkContains(source, "outColor[0] = float4(0.0f);",
-                "ps_3_0 vFace currently lowers through the misc fallback instead of a facing input");
-  checkNotContains(source, "[[front_facing]]",
-                   "ps_3_0 vFace runtime readback is blocked until the fragment signature carries facing");
+  checkContains(source, "bool frontFacing [[front_facing]]",
+                "ps_3_0 vFace requests the Metal front-facing fragment input");
+  checkContains(source, "outColor[0] = float4(frontFacing ? 1.0f : -1.0f);",
+                "ps_3_0 vFace lowers to signed front-facing evidence");
+}
+
+void testPixelShaderOutputReceivesFixedFunctionFog() {
+  const auto source = translatePixel(makePs20ColorInputBytecode());
+  checkContains(source, "if (ffpPs.fogMode != 0u)",
+                "translated pixel shaders dynamically gate fixed-function fog");
+  checkContains(source, "dxmt9_apply_fog(color, ffpPs, in.position.z)",
+                "translated pixel shaders apply table fog after shader color output");
+  checkContains(source, "outColor[0] = color",
+                "fogged color is written back to the primary color output");
 }
 
 void testLegacyShaderModelDecodeContracts() {
@@ -1932,6 +1942,8 @@ void testPs14BemLoweringContract() {
 }
 
 void testReservedTexm3x3DiffStillThrowsDeterministically() {
+  // Wine keeps this opcode name for diagnostics, but its SM1 opcode table marks
+  // TEXM3x3DIFF with an empty 0.0..0.0 valid shader-model range.
   checkThrowsContains(
       [] {
         (void)translatePixel(makePs13ReservedTexm3x3DiffBytecode());
@@ -2124,7 +2136,8 @@ int main() {
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
 
     testD3DBCDecodeAndClassificationFixtures();
-    testPs30VFaceDecodeAndCurrentSourceContract();
+    testPs30VFaceDecodeAndSourceContract();
+    testPixelShaderOutputReceivesFixedFunctionFog();
     testLegacyShaderModelDecodeContracts();
     testPs30PredicatedInstructionLowersGuard();
     testD3DOpcodeNamesCoverUnsupportedSurface();

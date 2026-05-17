@@ -100,6 +100,7 @@ class CommandQueue {
                           std::uint32_t height,
                           std::uint32_t pitch,
                           std::span<const std::uint8_t> bytes);
+  core::HResult generateTextureMipSublevels(core::TextureHandle handle);
 
   // Flush any pending deferred uploads. Returned (event, value) is what
   // the render command buffer must wait on; value==0 means nothing to
@@ -432,6 +433,7 @@ class CommandQueue {
   void applyDirtyRenderStateFog();
   void applyDirtyRenderStateAlpha();
   void applyDirtyRenderStateTexFactor();
+  void applyDirtyTextureStageConstant();
 
   // Mark every per-frequency uniform DirtyBit on pendingDirty_. Used by
   // the d3d9 stateblock-apply path: a state-block apply is bulk state

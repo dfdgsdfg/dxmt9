@@ -79,12 +79,14 @@ struct FixedFunctionVertexLayout {
   bool preTransformed = false;
   u32 positionComponents = 0;
   bool hasDiffuse = false;
+  bool hasNormal = false;
   bool hasBlendWeight = false;
   bool hasBlendIndices = false;
   std::array<bool, core::kMaxTextureStages> hasTexcoord{};
   u32 stride = 0;
   u32 positionOffset = 0;
   u32 diffuseOffset = 0;
+  u32 normalOffset = 0;
   u32 blendWeightOffset = 0;
   u32 blendWeightComponents = 0;
   u32 blendIndicesOffset = 0;

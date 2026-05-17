@@ -131,8 +131,8 @@ void testFogArithmeticTypedFloat() {
   // R-BACK-13.7: fog arithmetic must declare `float fog`, not `half`.
   checkContains(src, "float fog",
                 "fog blend variable is typed float");
-  checkContains(src, "float4 fogColor",
-                "fog color literal is typed float4");
+  checkContains(src, "ffpPs.fogColor",
+                "fog blend reads the fixed-function fog color uniform");
   checkNotContains(src, "half fog",
                     "fog variable is never typed half");
   // Fog blend must promote the imageblock-read color to float regardless
@@ -166,7 +166,7 @@ void testFogOmittedWhenFogModeNone() {
   key.fogMode = FogMode::None;
   auto src = dxmt9::ffp::makeFfpTilePixelSource(
       key, makeContext(), static_cast<std::uint32_t>(WMTPixelFormatBGRA8Unorm));
-  checkNotContains(src, "fogColor",
+  checkNotContains(src, "mix(ffpPs.fogColor.rgb",
                     "no fog code emitted when fog mode is None");
 }
 

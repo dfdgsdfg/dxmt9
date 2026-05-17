@@ -8,7 +8,7 @@
 //   - constant-set helpers update the per-stage high-water counter
 //     monotonically (max-of-prev-and-new) without leaking across stages
 //   - clearBit removes only the targeted bit
-//   - markAllDirty asserts the full 12-bit mask
+//   - markAllDirty asserts the full 13-bit mask
 //
 // The dirty tracker is a pure value transform; no Metal / Wine / queue
 // state is required, so this is a free-standing native unit test.
@@ -61,8 +61,10 @@ void testBitmaskGranularity() {
   checkEq(bitValue(DirtyBit::FfpPsFog), 1u << 9, "FfpPsFog == 1<<9");
   checkEq(bitValue(DirtyBit::FfpPsAlpha), 1u << 10, "FfpPsAlpha == 1<<10");
   checkEq(bitValue(DirtyBit::FfpPsTexFactor), 1u << 11, "FfpPsTexFactor == 1<<11");
+  checkEq(bitValue(DirtyBit::FfpPsTssConstant), 1u << 12,
+          "FfpPsTssConstant == 1<<12");
 
-  // All twelve bits should be distinct and pack into the low 12 bits of u16.
+  // All thirteen bits should be distinct and pack into the low 13 bits of u16.
   const std::uint16_t allBits = bitValue(DirtyBit::VsF) | bitValue(DirtyBit::VsI) |
                                 bitValue(DirtyBit::VsB) | bitValue(DirtyBit::PsF) |
                                 bitValue(DirtyBit::PsI) | bitValue(DirtyBit::PsB) |
@@ -71,8 +73,9 @@ void testBitmaskGranularity() {
                                 bitValue(DirtyBit::FfpVsViewport) |
                                 bitValue(DirtyBit::FfpPsFog) |
                                 bitValue(DirtyBit::FfpPsAlpha) |
-                                bitValue(DirtyBit::FfpPsTexFactor);
-  checkEq(allBits, static_cast<std::uint16_t>(0x0FFFu), "all 12 bits pack as 0x0FFF");
+                                bitValue(DirtyBit::FfpPsTexFactor) |
+                                bitValue(DirtyBit::FfpPsTssConstant);
+  checkEq(allBits, static_cast<std::uint16_t>(0x1FFFu), "all 13 bits pack as 0x1FFF");
 }
 
 // R-BACK-12.9 — apply* helpers OR the matching bit and only the matching
@@ -143,6 +146,12 @@ void testApplyHelpersSetMatchingBit() {
     dxmt9::uniform::applyRenderStateTexFactor(s);
     checkEq(s.mask, bitValue(DirtyBit::FfpPsTexFactor),
             "applyRenderStateTexFactor sets only FfpPsTexFactor");
+  }
+  {
+    DirtyState s{};
+    dxmt9::uniform::applyTextureStageConstant(s);
+    checkEq(s.mask, bitValue(DirtyBit::FfpPsTssConstant),
+            "applyTextureStageConstant sets only FfpPsTssConstant");
   }
 }
 
@@ -248,8 +257,8 @@ void testClearBit() {
 void testMarkAllDirty() {
   DirtyState s{};
   dxmt9::uniform::markAllDirty(s);
-  checkEq(s.mask, static_cast<std::uint16_t>(0x0FFFu),
-          "markAllDirty sets all 12 category bits");
+  checkEq(s.mask, static_cast<std::uint16_t>(0x1FFFu),
+          "markAllDirty sets all 13 category bits");
 
   // Every named bit must be present.
   check(dxmt9::uniform::isDirty(s, DirtyBit::VsF), "markAllDirty: VsF dirty");
@@ -270,6 +279,8 @@ void testMarkAllDirty() {
         "markAllDirty: FfpPsAlpha dirty");
   check(dxmt9::uniform::isDirty(s, DirtyBit::FfpPsTexFactor),
         "markAllDirty: FfpPsTexFactor dirty");
+  check(dxmt9::uniform::isDirty(s, DirtyBit::FfpPsTssConstant),
+        "markAllDirty: FfpPsTssConstant dirty");
 }
 
 // Bonus — `isDirty` consistency. setBit toggles the predicate true,

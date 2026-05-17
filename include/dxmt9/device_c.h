@@ -1015,6 +1015,7 @@ DXMT9_NODISCARD D9CSurface* dxmt9c_texture_get_surface_level(D9CTexture*, uint32
 uint32_t dxmt9c_texture_get_level_count(D9CTexture*);
 DXMT9_NODISCARD int32_t  dxmt9c_texture_get_level_desc(D9CTexture*, uint32_t level, D9CSurfaceDesc*);
 DXMT9_NODISCARD int32_t  dxmt9c_texture_generate_mip_sublevels(D9CTexture*);
+uint32_t dxmt9c_texture_set_lod(D9CTexture*, uint32_t lod);
 
 /* ── buffer ──────────────────────────────────────────────────────────────── */
 

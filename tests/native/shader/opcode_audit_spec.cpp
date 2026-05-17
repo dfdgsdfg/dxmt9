@@ -177,7 +177,7 @@ void testKnownD3DSIOOpcodesHaveStableClassification() {
   }
 }
 
-void testLegacyTextureOpcodesAreNotClassifiedAsFullyImplementedSamples() {
+void testLegacyTextureOpcodesKeepSpecialDecodeClassification() {
   constexpr std::array<u32, 19> kLegacyTextureOpcodes = {{
       bc::kD3DSIO_TEXCOORD,
       bc::kD3DSIO_TEXBEM,
@@ -203,12 +203,27 @@ void testLegacyTextureOpcodesAreNotClassifiedAsFullyImplementedSamples() {
   for (const u32 opcode : kLegacyTextureOpcodes) {
     const auto label = opcodeLabel(opcode, detail::opcodeName(opcode));
     checkEqual(fixedOperandCountOrUnsupported(opcode), kUnsupportedFixedOperandCount,
-               "legacy texture opcode must not have fixed fully-supported operand count for " + label);
+               "legacy texture opcode keeps model-version-specific operand count for " + label);
     checkEqual(detail::opcodeWritesFirstOperand(opcode), false,
-               "legacy texture opcode must not be classified as writing a lowered destination for " + label);
+               "legacy texture opcode writes are handled by SM1-specific lowering for " + label);
     checkEqual(detail::isTextureSampleOpcode(opcode), false,
-               "legacy texture opcode must not be classified as a supported sample opcode for " + label);
+               "legacy texture opcode samples are handled by SM1-specific lowering for " + label);
   }
+}
+
+void testReservedTexm3x3DiffKeepsInvalidSm1Classification() {
+  // Wine's SM1 table keeps the token/name but marks TEXM3x3DIFF with an
+  // empty 0.0..0.0 shader-model range and no backend handler.
+  constexpr u32 kOpcode = bc::kD3DSIO_TEXM3x3DIFF;
+
+  checkEqual(detail::opcodeName(kOpcode), std::string("texm3x3diff"),
+             "reserved TEXM3x3DIFF keeps a stable diagnostic name");
+  checkEqual(fixedOperandCountOrUnsupported(kOpcode), kUnsupportedFixedOperandCount,
+             "reserved TEXM3x3DIFF does not become a generic fixed-count opcode");
+  checkEqual(detail::opcodeWritesFirstOperand(kOpcode), false,
+             "reserved TEXM3x3DIFF writes must stay behind SM1-specific validation");
+  checkEqual(detail::isTextureSampleOpcode(kOpcode), false,
+             "reserved TEXM3x3DIFF must not allocate implicit sampler evidence");
 }
 
 }  // namespace
@@ -216,7 +231,8 @@ void testLegacyTextureOpcodesAreNotClassifiedAsFullyImplementedSamples() {
 int main() {
   try {
     testKnownD3DSIOOpcodesHaveStableClassification();
-    testLegacyTextureOpcodesAreNotClassifiedAsFullyImplementedSamples();
+    testLegacyTextureOpcodesKeepSpecialDecodeClassification();
+    testReservedTexm3x3DiffKeepsInvalidSm1Classification();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

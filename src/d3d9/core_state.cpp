@@ -194,6 +194,7 @@ void DeviceState::reset() {
     stage.set(TSS_RESULT_ARG, 1); // D3DTA_CURRENT
     stage.set(TSS_TEXCOORD_INDEX, static_cast<u32>(stageIndex));
     stage.set(TSS_TEXTURE_TRANSFORM_FLAGS, 0);
+    stage.set(TSS_CONSTANT, 0);
     stage.set(TSS_TEXTURE_TYPE, 0);
   }
 
@@ -851,6 +852,16 @@ u32 Device::getSamplerState(u32 sampler, u32 key) const {
   return 0;
 }
 
+void Device::notifyTextureLodChanged(const Texture &texture) {
+  const auto handle = texture.handle();
+  for (const auto &bound : state_.textures) {
+    if (bound && bound->handle() == handle) {
+      invalidateDrawStateCache();
+      return;
+    }
+  }
+}
+
 HResult Device::setTransform(u32 key, const Matrix4x4 &matrix) {
   state_.transforms.set(key, matrix);
   invalidateDrawStateCache();
@@ -885,6 +896,10 @@ HResult Device::setMaterial(const Material &material) {
 HResult Device::setTexture(u32 stage, std::shared_ptr<Texture> texture) {
   if (stage >= kMaxTextures) {
     return D3DERR_INVALIDCALL;
+  }
+  if (stage < kMaxTextureStages) {
+    const u32 type = texture ? static_cast<u32>(texture->desc().type) : 0u;
+    state_.textureStageStates[stage].set(TSS_TEXTURE_TYPE, type);
   }
   state_.textures[stage] = std::move(texture);
   invalidateDrawStateCache();

@@ -1,6 +1,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_d3d9_bytecode.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -11,6 +12,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <span>
 #include <type_traits>
@@ -22,6 +24,7 @@ using detail::DrawParamInlineStorage;
 using detail::DrawPayloadArenaStorage;
 using detail::kDrawRunInlineParamCapacity;
 using detail::kDrawRunInlinePayloadCapacity;
+namespace bc = ::dxmt9::d3d9bc;
 
 // Split from core.cpp; keep this unit private to the D3D9 frontend.
 namespace {
@@ -94,6 +97,335 @@ u64 hashShaderRefSummary(const ShaderRef &shader) {
   hash = hashCombine(hash, shader.hash);
   hash = hashCombine(hash, shader.bytecode.hash);
   return hash;
+}
+
+u32 readShaderWord(std::span<const u8> bytes, std::size_t offset) {
+  u32 value = 0;
+  std::memcpy(&value, bytes.data() + offset, sizeof(value));
+  return value;
+}
+
+u32 shaderRegisterType(u32 token) {
+  return ((token >> 28) & 0x7u) | (((token >> 11) & 0x3u) << 3);
+}
+
+u32 shaderRegisterIndex(u32 token) {
+  return token & 0x7ffu;
+}
+
+bool shaderTokenHasRelativeAddressing(u32 token) {
+  return ((token >> 13) & 0x1u) != 0;
+}
+
+std::optional<u32> legacyPixelOperandCount(u32 opcode, u32 major, u32 minor) {
+  if (major != 1u) {
+    return std::nullopt;
+  }
+
+  switch (opcode) {
+    case bc::kD3DSIO_TEXCOORD:
+      return minor >= 4u ? 2u : 1u;
+    case bc::kD3DSIO_TEX:
+      return minor >= 4u ? 2u : 1u;
+    case bc::kD3DSIO_TEXDEPTH:
+      return 1u;
+    case bc::kD3DSIO_TEXBEM:
+    case bc::kD3DSIO_TEXBEML:
+    case bc::kD3DSIO_TEXREG2AR:
+    case bc::kD3DSIO_TEXREG2GB:
+    case bc::kD3DSIO_TEXM3x2PAD:
+    case bc::kD3DSIO_TEXM3x2TEX:
+    case bc::kD3DSIO_TEXM3x3PAD:
+    case bc::kD3DSIO_TEXM3x3TEX:
+    case bc::kD3DSIO_TEXM3x3DIFF:
+    case bc::kD3DSIO_TEXM3x3VSPEC:
+    case bc::kD3DSIO_TEXREG2RGB:
+    case bc::kD3DSIO_TEXDP3TEX:
+    case bc::kD3DSIO_TEXM3x2DEPTH:
+    case bc::kD3DSIO_TEXDP3:
+    case bc::kD3DSIO_TEXM3x3:
+      return 2u;
+    case bc::kD3DSIO_TEXM3x3SPEC:
+    case bc::kD3DSIO_BEM:
+      return 3u;
+    default:
+      return std::nullopt;
+  }
+}
+
+u32 fixedShaderOperandCount(u32 opcode) {
+  switch (opcode) {
+    case bc::kD3DSIO_NOP:
+    case bc::kD3DSIO_PHASE:
+    case bc::kD3DSIO_ELSE:
+    case bc::kD3DSIO_ENDIF:
+    case bc::kD3DSIO_ENDLOOP:
+    case bc::kD3DSIO_ENDREP:
+    case bc::kD3DSIO_RET:
+    case bc::kD3DSIO_BREAK:
+      return 0;
+    case bc::kD3DSIO_IF:
+    case bc::kD3DSIO_TEXKILL:
+    case bc::kD3DSIO_LABEL:
+    case bc::kD3DSIO_CALL:
+      return 1;
+    case bc::kD3DSIO_MOV:
+    case bc::kD3DSIO_DEFB:
+    case bc::kD3DSIO_RCP:
+    case bc::kD3DSIO_RSQ:
+    case bc::kD3DSIO_FRC:
+    case bc::kD3DSIO_DSX:
+    case bc::kD3DSIO_DSY:
+    case bc::kD3DSIO_SETP:
+    case bc::kD3DSIO_BREAKP:
+    case bc::kD3DSIO_MOVA:
+    case bc::kD3DSIO_LOG:
+    case bc::kD3DSIO_LOGP:
+    case bc::kD3DSIO_EXP:
+    case bc::kD3DSIO_EXPP:
+    case bc::kD3DSIO_SGN:
+    case bc::kD3DSIO_ABS:
+    case bc::kD3DSIO_NRM:
+    case bc::kD3DSIO_IFC:
+    case bc::kD3DSIO_BREAKC:
+    case bc::kD3DSIO_CALLNZ:
+      return 2;
+    case bc::kD3DSIO_ADD:
+    case bc::kD3DSIO_SUB:
+    case bc::kD3DSIO_MUL:
+    case bc::kD3DSIO_DP3:
+    case bc::kD3DSIO_DP4:
+    case bc::kD3DSIO_MIN:
+    case bc::kD3DSIO_MAX:
+    case bc::kD3DSIO_POW:
+    case bc::kD3DSIO_CRS:
+    case bc::kD3DSIO_TEXLDL:
+    case bc::kD3DSIO_SLT:
+    case bc::kD3DSIO_SGE:
+    case bc::kD3DSIO_M4x4:
+    case bc::kD3DSIO_M4x3:
+    case bc::kD3DSIO_M3x4:
+    case bc::kD3DSIO_M3x3:
+    case bc::kD3DSIO_M3x2:
+      return 3;
+    case bc::kD3DSIO_MAD:
+    case bc::kD3DSIO_LRP:
+    case bc::kD3DSIO_CND:
+    case bc::kD3DSIO_CMP:
+    case bc::kD3DSIO_DP2ADD:
+      return 4;
+    case bc::kD3DSIO_TEXLDD:
+    case bc::kD3DSIO_DEF:
+    case bc::kD3DSIO_DEFI:
+      return 5;
+    default:
+      return 0;
+  }
+}
+
+bool shaderOperandIsRegister(u32 opcode, u32 operandIndex) {
+  switch (opcode) {
+    case bc::kD3DSIO_DEF:
+    case bc::kD3DSIO_DEFI:
+    case bc::kD3DSIO_DEFB:
+      return operandIndex == 0;
+    case bc::kD3DSIO_LABEL:
+    case bc::kD3DSIO_CALL:
+      return false;
+    case bc::kD3DSIO_CALLNZ:
+      return operandIndex != 0;
+    default:
+      return true;
+  }
+}
+
+bool shaderOpcodeWritesFirstOperand(u32 opcode) {
+  switch (opcode) {
+    case bc::kD3DSIO_DEF:
+    case bc::kD3DSIO_DEFI:
+    case bc::kD3DSIO_DEFB:
+    case bc::kD3DSIO_MOV:
+    case bc::kD3DSIO_ADD:
+    case bc::kD3DSIO_SUB:
+    case bc::kD3DSIO_MUL:
+    case bc::kD3DSIO_MAD:
+    case bc::kD3DSIO_MIN:
+    case bc::kD3DSIO_MAX:
+    case bc::kD3DSIO_SLT:
+    case bc::kD3DSIO_SGE:
+    case bc::kD3DSIO_EXP:
+    case bc::kD3DSIO_LOG:
+    case bc::kD3DSIO_EXPP:
+    case bc::kD3DSIO_LOGP:
+    case bc::kD3DSIO_M4x4:
+    case bc::kD3DSIO_M4x3:
+    case bc::kD3DSIO_M3x4:
+    case bc::kD3DSIO_M3x3:
+    case bc::kD3DSIO_M3x2:
+    case bc::kD3DSIO_RCP:
+    case bc::kD3DSIO_RSQ:
+    case bc::kD3DSIO_FRC:
+    case bc::kD3DSIO_LRP:
+    case bc::kD3DSIO_DP3:
+    case bc::kD3DSIO_DP4:
+    case bc::kD3DSIO_CND:
+    case bc::kD3DSIO_CMP:
+    case bc::kD3DSIO_DP2ADD:
+    case bc::kD3DSIO_POW:
+    case bc::kD3DSIO_CRS:
+    case bc::kD3DSIO_SGN:
+    case bc::kD3DSIO_ABS:
+    case bc::kD3DSIO_NRM:
+    case bc::kD3DSIO_TEX:
+    case bc::kD3DSIO_DSX:
+    case bc::kD3DSIO_DSY:
+    case bc::kD3DSIO_TEXLDD:
+    case bc::kD3DSIO_TEXLDL:
+      return true;
+    default:
+      return false;
+  }
+}
+
+u32 matrixConstantRows(u32 opcode) {
+  switch (opcode) {
+    case bc::kD3DSIO_M4x4:
+    case bc::kD3DSIO_M3x4:
+      return 4;
+    case bc::kD3DSIO_M4x3:
+    case bc::kD3DSIO_M3x3:
+      return 3;
+    case bc::kD3DSIO_M3x2:
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+void noteShaderConstantUsage(ShaderConstantUsageBounds& usage,
+                             u32 registerType,
+                             u32 registerIndex,
+                             bool indexed) {
+  const auto nextCount = static_cast<std::uint16_t>(
+      std::min<u32>(registerIndex + 1u, std::numeric_limits<std::uint16_t>::max()));
+  switch (registerType) {
+    case bc::kD3DSPR_CONST:
+      usage.floatCount = std::max(usage.floatCount, nextCount);
+      usage.indexedFloat = usage.indexedFloat || indexed;
+      break;
+    case bc::kD3DSPR_CONSTINT:
+      usage.intCount = std::max(usage.intCount, nextCount);
+      usage.indexedInt = usage.indexedInt || indexed;
+      break;
+    case bc::kD3DSPR_CONSTBOOL:
+      usage.boolCount = std::max(usage.boolCount, nextCount);
+      usage.indexedBool = usage.indexedBool || indexed;
+      break;
+    default:
+      break;
+  }
+}
+
+ShaderConstantUsageBounds scanShaderConstantUsage(const ShaderRef& shader) {
+  ShaderConstantUsageBounds usage{};
+  if (shader.kind != ShaderRef::Kind::Bytecode || shader.bytecode.bytes.size() < sizeof(u32)) {
+    return usage;
+  }
+
+  const auto bytes = std::span<const u8>(shader.bytecode.bytes.data(), shader.bytecode.bytes.size());
+  const u32 version = readShaderWord(bytes, 0);
+  const u32 major = (version >> 8) & 0xffu;
+  const u32 minor = version & 0xffu;
+  std::size_t offset = sizeof(u32);
+  usage.unknown = false;
+
+  while (offset + sizeof(u32) <= bytes.size()) {
+    const u32 token = readShaderWord(bytes, offset);
+    offset += sizeof(u32);
+    const u32 opcode = token & 0xffffu;
+    if (opcode == bc::kD3DSIO_END) {
+      return usage;
+    }
+    if (opcode == bc::kD3DSIO_COMMENT) {
+      const std::size_t commentBytes =
+          static_cast<std::size_t>((token >> 16) & 0x7fffu) * sizeof(u32);
+      if (offset + commentBytes > bytes.size()) {
+        usage.unknown = true;
+        return usage;
+      }
+      offset += commentBytes;
+      continue;
+    }
+    if (opcode == bc::kD3DSIO_PHASE) {
+      continue;
+    }
+
+    u32 operandCount = legacyPixelOperandCount(opcode, major, minor)
+        .value_or(fixedShaderOperandCount(opcode));
+    if (operandCount == 0 && ((token >> 24) & 0xfu) != 0) {
+      operandCount = (token >> 24) & 0xfu;
+    }
+
+    std::array<u32, 8> operands{};
+    std::array<bool, 8> indexedOperands{};
+    if (operandCount > operands.size()) {
+      usage.unknown = true;
+      return usage;
+    }
+    for (u32 i = 0; i < operandCount; ++i) {
+      if (offset + sizeof(u32) > bytes.size()) {
+        usage.unknown = true;
+        return usage;
+      }
+      const u32 operand = readShaderWord(bytes, offset);
+      offset += sizeof(u32);
+      operands[i] = operand;
+      if (shaderOperandIsRegister(opcode, i) && shaderTokenHasRelativeAddressing(operand)) {
+        if (offset + sizeof(u32) > bytes.size()) {
+          usage.unknown = true;
+          return usage;
+        }
+        offset += sizeof(u32);
+        indexedOperands[i] = true;
+      }
+    }
+
+    std::size_t sourceBegin = 0;
+    if (shaderOpcodeWritesFirstOperand(opcode)) {
+      sourceBegin = 1;
+      if (operandCount > 0) {
+        noteShaderConstantUsage(usage, shaderRegisterType(operands[0]),
+                                shaderRegisterIndex(operands[0]), indexedOperands[0]);
+      }
+    }
+    switch (opcode) {
+      case bc::kD3DSIO_DEF:
+      case bc::kD3DSIO_DEFI:
+      case bc::kD3DSIO_DEFB:
+      case bc::kD3DSIO_DCL:
+      case bc::kD3DSIO_LABEL:
+      case bc::kD3DSIO_CALL:
+        sourceBegin = operandCount;
+        break;
+      default:
+        break;
+    }
+    for (std::size_t i = sourceBegin; i < operandCount; ++i) {
+      noteShaderConstantUsage(usage, shaderRegisterType(operands[i]),
+                              shaderRegisterIndex(operands[i]), indexedOperands[i]);
+    }
+    const u32 rows = matrixConstantRows(opcode);
+    if (rows > 1 && operandCount > 2) {
+      const u32 registerType = shaderRegisterType(operands[2]);
+      if (registerType == bc::kD3DSPR_CONST) {
+        noteShaderConstantUsage(usage, registerType,
+                                shaderRegisterIndex(operands[2]) + rows - 1u,
+                                indexedOperands[2]);
+      }
+    }
+  }
+  usage.unknown = true;
+  return usage;
 }
 
 u64 hashTextureTransforms(
@@ -684,6 +1016,7 @@ u64 hashShaderRef(const ShaderRef &ref) {
       hashCombine(hash, static_cast<u64>(state.indexType == IndexType::UInt32));
   for (const auto &tex : state.textures) {
     hash = hashCombine(hash, tex ? tex->handle().value : 0);
+    hash = hashCombine(hash, tex ? tex->lod() : 0);
   }
   for (const auto &rt : state.renderTargets) {
     hash = hashCombine(hash, rt.handle.value);
@@ -813,6 +1146,8 @@ makeDrawShaderLayoutContextFromState(const DeviceState &state) {
   context.vertexDecl = makeVertexDeclSnapshotFromState(state);
   context.vertexShader = makeVertexShaderRefFromState(state);
   context.pixelShader = makePixelShaderRefFromState(state);
+  context.vertexConstantUsage = scanShaderConstantUsage(context.vertexShader);
+  context.pixelConstantUsage = scanShaderConstantUsage(context.pixelShader);
   context.clipPlaneMask = clipPlaneMaskFromState(state);
   return context;
 }
@@ -852,6 +1187,7 @@ DrawDesc makeDrawDescFromState(const DeviceState &state,
   for (size_t i = 0; i < kMaxTextures; ++i) {
     desc.textures[i].handle =
         state.textures[i] ? state.textures[i]->handle() : Handle{};
+    desc.textures[i].lod = state.textures[i] ? state.textures[i]->lod() : 0;
     if (i < kMaxTextureStages) {
       desc.textures[i].stageStates = state.textureStageStates[i];
     } else {
@@ -902,6 +1238,7 @@ FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc &desc) {
 
   for (size_t i = 0; i < kMaxTextures; ++i) {
     key.textures[i] = desc.textures[i].handle;
+    key.textureLods[i] = desc.textures[i].lod;
     if (key.textures[i]) {
       key.textureMask |= 1u << i;
     }
@@ -946,6 +1283,7 @@ FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc &desc) {
   record.streamMask = record.key.streamMask;
   record.indexBuffer = record.key.indexBuffer;
   record.textures = record.key.textures;
+  record.textureLods = record.key.textureLods;
   record.textureMask = record.key.textureMask;
   record.renderStates = makeFlatStateSet<kMaxStateSlots>(desc.rs.values);
   for (size_t i = 0; i < kMaxTextureStages; ++i) {
@@ -1004,6 +1342,7 @@ FlatDrawStateKey makeFlatDrawStateKeyFromState(
   for (size_t i = 0; i < kMaxTextures; ++i) {
     key.textures[i] =
         state.textures[i] ? state.textures[i]->handle() : Handle{};
+    key.textureLods[i] = state.textures[i] ? state.textures[i]->lod() : 0;
     if (key.textures[i]) {
       key.textureMask |= 1u << i;
     }
@@ -1050,6 +1389,7 @@ FlatDrawStateRecord makeFlatDrawStateRecordFromState(
   record.streamMask = record.key.streamMask;
   record.indexBuffer = record.key.indexBuffer;
   record.textures = record.key.textures;
+  record.textureLods = record.key.textureLods;
   record.textureMask = record.key.textureMask;
   record.renderStates = makeFlatStateSet<kMaxStateSlots>(state.renderStates);
   for (size_t i = 0; i < kMaxTextureStages; ++i) {
@@ -1083,6 +1423,8 @@ DrawShaderLayoutContext makeDrawShaderLayoutContext(const DrawDesc &desc) {
   context.vertexDecl = desc.vertexDecl;
   context.vertexShader = desc.vertexShader;
   context.pixelShader = desc.pixelShader;
+  context.vertexConstantUsage = scanShaderConstantUsage(context.vertexShader);
+  context.pixelConstantUsage = scanShaderConstantUsage(context.pixelShader);
   context.clipPlaneMask = desc.clipPlaneMask;
   return context;
 }

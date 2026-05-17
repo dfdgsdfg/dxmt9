@@ -223,6 +223,7 @@ using SamplerStateTable = StateValueTable<kMaxSamplerStates>;
 
 struct TextureBinding {
   Handle handle{};
+  u32 lod = 0;
   StateValueTable<kMaxTextureStageStates> stageStates{};
 
   friend bool operator==(const TextureBinding&, const TextureBinding&) = default;
@@ -616,6 +617,7 @@ struct FlatDrawStateKey {
   u64 vertexConstantsHash = 0;
   u64 pixelConstantsHash = 0;
   std::array<Handle, kMaxTextures> textures{};
+  std::array<u32, kMaxTextures> textureLods{};
   u32 textureMask = 0;
   std::array<u64, kMaxTextureStages> textureStageStateHashes{};
   std::array<u64, kMaxSamplers> samplerStateHashes{};
@@ -654,6 +656,7 @@ struct FlatDrawStateRecord {
   // Same rationale as streamBuffer0Metal but for the index buffer.
   u64 indexBufferMetal = 0;
   std::array<Handle, kMaxTextures> textures{};
+  std::array<u32, kMaxTextures> textureLods{};
   u32 textureMask = 0;
   FlatStateSet<kMaxStateSlots> renderStates{};
   std::array<FlatStateSet<kMaxTextureStageStates>, kMaxTextureStages> textureStageStates{};
@@ -677,6 +680,8 @@ struct DrawShaderLayoutContext {
   VertexDeclSnapshot vertexDecl{};
   ShaderRef vertexShader{};
   ShaderRef pixelShader{};
+  ShaderConstantUsageBounds vertexConstantUsage{};
+  ShaderConstantUsageBounds pixelConstantUsage{};
   u32 clipPlaneMask = 0;
 
   friend bool operator==(const DrawShaderLayoutContext&, const DrawShaderLayoutContext&) = default;
@@ -1097,8 +1102,10 @@ class Texture : public std::enable_shared_from_this<Texture> {
   TextureHandle handle() const noexcept { return handle_; }
   const TextureDesc& desc() const noexcept { return desc_; }
   bool valid() const noexcept { return valid_; }
+  u32 lod() const noexcept { return lod_; }
   std::shared_ptr<Device> device() const noexcept { return owner_.lock(); }
   u32 levelCount() const noexcept;
+  u32 setLod(u32 lod);
   u32 subresourceCount() const noexcept { return static_cast<u32>(levels_.size()); }
   u32 mipLevelForSubresource(u32 subresource) const noexcept;
   LockedRegion lockRect(u32 subresource, const Rect* rect, u32 flags);
@@ -1108,6 +1115,7 @@ class Texture : public std::enable_shared_from_this<Texture> {
   void fillColor(u32 subresource, const Rect* rect, ColorRGBA color);
   void fillColor(const Rect* rect, ColorRGBA color);
   void copyFrom(const Texture& src);
+  HResult generateMipSubLevels();
   void invalidate();
 
  private:
@@ -1125,6 +1133,7 @@ class Texture : public std::enable_shared_from_this<Texture> {
   TextureDesc desc_{};
   std::vector<LevelStorage> levels_;
   std::vector<std::weak_ptr<Surface>> surfaces_;
+  u32 lod_ = 0;
   bool valid_ = true;
   bool locked_ = false;
 
@@ -1424,6 +1433,7 @@ class Device : public std::enable_shared_from_this<Device> {
                                    const char* reason);
   void resetState();
   HResult resetValidated(const PresentParameters& params);
+  void notifyTextureLodChanged(const Texture& texture);
 
   struct CachedBaseDrawState {
     u64 generation = 0;

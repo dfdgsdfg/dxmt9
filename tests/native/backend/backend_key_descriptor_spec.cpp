@@ -95,10 +95,13 @@ void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
   desc.rs.values[RS_ALPHA_FUNC] = static_cast<u32>(CompareFunc::GreaterEqual);
   desc.rs.values[RS_ALPHA_REF] = 128u;
+  desc.rs.values[RS_FOG_ENABLE] = 1u;
+  desc.rs.values[RS_FOG_COLOR] = 0x7f102040u;
   desc.rs.values[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Exp2);
   desc.rs.values[RS_FOG_START] = std::bit_cast<u32>(2.5f);
   desc.rs.values[RS_FOG_END] = std::bit_cast<u32>(9.75f);
   desc.rs.values[RS_FOG_DENSITY] = std::bit_cast<u32>(0.125f);
+  desc.textures[1].stageStates[TSS_CONSTANT] = 0x7f102040u;
   desc.textures[2].stageStates[TSS_BUMPENVMAT00] = std::bit_cast<u32>(0.25f);
   desc.textures[2].stageStates[TSS_BUMPENVMAT01] = std::bit_cast<u32>(0.5f);
   desc.textures[2].stageStates[TSS_BUMPENVMAT10] = std::bit_cast<u32>(0.75f);
@@ -127,10 +130,19 @@ void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   checkNear(ffpPs.textureFactor[1], 0x20 / 255.0f, 1.0e-6f, "texture factor green extracted");
   checkNear(ffpPs.textureFactor[2], 0x10 / 255.0f, 1.0e-6f, "texture factor blue extracted");
   checkNear(ffpPs.textureFactor[3], 0x80 / 255.0f, 1.0e-6f, "texture factor alpha extracted");
+  checkNear(ffpPs.stageConstants[1][0], 0x10 / 255.0f, 1.0e-6f, "stage constant red extracted");
+  checkNear(ffpPs.stageConstants[1][1], 0x20 / 255.0f, 1.0e-6f, "stage constant green extracted");
+  checkNear(ffpPs.stageConstants[1][2], 0x40 / 255.0f, 1.0e-6f, "stage constant blue extracted");
+  checkNear(ffpPs.stageConstants[1][3], 0x7f / 255.0f, 1.0e-6f, "stage constant alpha extracted");
+  checkEq(ffpPs.stageConstants[0][0], 0.0f, "unset stage constant defaults to transparent black");
   checkNear(ffpPs.alphaRef, 128.0f / 255.0f, 1.0e-6f, "alpha ref normalized");
   checkEq(ffpPs.alphaTestEnable, 1u, "alpha test enable reflected");
   checkEq(ffpPs.alphaTestFunc, static_cast<u32>(CompareFunc::GreaterEqual), "alpha test func reflected");
   checkEq(ffpPs.fogMode, static_cast<u32>(FogMode::Exp2), "fog mode reflected");
+  checkNear(ffpPs.fogColor[0], 0x10 / 255.0f, 1.0e-6f, "fog color red extracted");
+  checkNear(ffpPs.fogColor[1], 0x20 / 255.0f, 1.0e-6f, "fog color green extracted");
+  checkNear(ffpPs.fogColor[2], 0x40 / 255.0f, 1.0e-6f, "fog color blue extracted");
+  checkNear(ffpPs.fogColor[3], 0x7f / 255.0f, 1.0e-6f, "fog color alpha extracted");
   checkEq(ffpPs.fogStart, 2.5f, "fog start bit-cast from render state");
   checkEq(ffpPs.fogEnd, 9.75f, "fog end bit-cast from render state");
   checkEq(ffpPs.fogDensity, 0.125f, "fog density bit-cast from render state");
@@ -350,6 +362,12 @@ void testSamplerInfoReflectsSamplerSnapshot() {
           "flat sampler helper matches snapshot address W mapping");
   checkEq(flatInfo.border_color, info.border_color,
           "flat sampler helper matches snapshot border color mapping");
+
+  const auto lodInfo = dxmt9::encoders::makeSamplerInfo(hot.samplerStates[0], 2.0f);
+  checkEq(lodInfo.lod_min_clamp, 2.0f,
+          "texture SetLOD/maxmip feeds sampler min LOD clamp");
+  checkEq(lodInfo.lod_max_clamp, 1e9f,
+          "texture SetLOD keeps explicit LOD sampling upper clamp open");
 }
 
 void testSamplerInfoBorderColorFallbacks() {

@@ -36,7 +36,8 @@ constexpr std::uint16_t kAllBits =
     static_cast<std::uint16_t>(DirtyBit::FfpVsViewport) |
     static_cast<std::uint16_t>(DirtyBit::FfpPsFog) |
     static_cast<std::uint16_t>(DirtyBit::FfpPsAlpha) |
-    static_cast<std::uint16_t>(DirtyBit::FfpPsTexFactor);
+    static_cast<std::uint16_t>(DirtyBit::FfpPsTexFactor) |
+    static_cast<std::uint16_t>(DirtyBit::FfpPsTssConstant);
 
 std::uint16_t clampCount(std::uint16_t value, std::uint16_t limit) {
   return std::min(value, limit);
@@ -67,7 +68,11 @@ std::uint64_t constantUploadBytes(
   const std::uint64_t boolEnd = plan.boolCount == 0
       ? 0
       : boolBase + static_cast<std::uint64_t>(plan.boolCount) * kBoolBytes;
-  return std::max({floatEnd, intEnd, boolEnd});
+  const std::uint64_t prefixBytes = std::max({floatEnd, intEnd, boolEnd});
+  // The generated MSL binds VsConsts/PsConsts as pointer-like ABI entries
+  // and may form a reference before dead-code elimination removes unused
+  // reads. Keep a tiny valid backing slab even for known-zero usage.
+  return prefixBytes == 0 ? kFloat4Bytes : prefixBytes;
 }
 
 ShaderConstantUploadPlan makeConstantUploadPlan(
@@ -177,6 +182,10 @@ void applyRenderStateAlpha(DirtyState& state) {
 
 void applyRenderStateTexFactor(DirtyState& state) {
   setBit(state, DirtyBit::FfpPsTexFactor);
+}
+
+void applyTextureStageConstant(DirtyState& state) {
+  setBit(state, DirtyBit::FfpPsTssConstant);
 }
 
 ShaderConstantUploadPlan makeVsConstantUploadPlan(

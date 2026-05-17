@@ -511,6 +511,9 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       if (!vertexStage && reg.index == 0) {
         return pixelPositionExpression(pixelInputs);
       }
+      if (!vertexStage && reg.index == 1) {
+        return "float4(frontFacing ? 1.0f : -1.0f)";
+      }
       return "float4(0.0f)";
     case D3DRegisterKind::Sampler:
     case D3DRegisterKind::Unknown:
@@ -755,6 +758,36 @@ void emitFragmentTextureAliasesFromArgbuf(std::ostringstream& out,
     }
     out << "  sampler samp" << stage << " = abuf->samplers[" << stage << "];\n";
   }
+}
+
+bool pixelUsesVFaceInput(const SpirvModule& module) {
+  if (module.stage != D3DShaderStage::Pixel) {
+    return false;
+  }
+  for (const auto& instruction : module.instructions) {
+    for (size_t i = 0; i < instruction.operands.size(); ++i) {
+      if (instruction.opcode == kD3DSIO_DCL && i == 0) {
+        continue;
+      }
+      if ((instruction.opcode == kD3DSIO_DEF ||
+           instruction.opcode == kD3DSIO_DEFI ||
+           instruction.opcode == kD3DSIO_DEFB) &&
+          i > 0) {
+        continue;
+      }
+      if ((instruction.opcode == kD3DSIO_LABEL ||
+           instruction.opcode == kD3DSIO_CALL ||
+           instruction.opcode == kD3DSIO_CALLNZ) &&
+          i == 0) {
+        continue;
+      }
+      const auto reg = decodeRegisterRef(instruction.operands[i], module.stage);
+      if (reg.kind == D3DRegisterKind::MiscType && reg.index == 1) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 std::string translateSpirvToMsl(const SpirvModule& module,
@@ -1753,6 +1786,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   const auto samplerUsage = collectPixelSamplerUsage(module, context);
   const auto pixelInputSemantics = collectPixelInputSemantics(module);
   const bool textured = std::any_of(samplerUsage.begin(), samplerUsage.end(), [](bool used) { return used; });
+  const bool usesVFaceInput = pixelUsesVFaceInput(module);
   const bool traceShaderInputs = [] {
     const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
     return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
@@ -1786,6 +1820,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   }
 
   const char* fragmentReturnType = usesFragmentOutStruct ? "FSOut" : "float4";
+  auto emitFrontFacingParameter = [&] {
+    if (usesVFaceInput) {
+      out << "                     bool frontFacing [[front_facing]],\n";
+    }
+  };
   if (textured) {
     if (argbufHybrid) {
       // R-BACK-12.22..12.26 MSL routing — single argbuf at slot 30
@@ -1794,6 +1833,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       // read `psConsts.X`, `ffpPs.X`, `texN.sample(sampN, ...)` by name.
       out << "fragment " << fragmentReturnType
           << " dxmt9_fs(VSOut in [[stage_in]],\n";
+      emitFrontFacingParameter();
       out << "                     constant ArgbufLayout const* abuf [[buffer("
           << kArgbufHybridBindSlot << ")]]) {\n";
       out << "  constant PsConsts& psConsts = *abuf->psConsts;\n";
@@ -1802,6 +1842,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     } else {
       out << "fragment " << fragmentReturnType
           << " dxmt9_fs(VSOut in [[stage_in]],\n";
+      emitFrontFacingParameter();
       out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
       out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
       emitFragmentTextureArguments(out, samplerUsage, module, context);
@@ -1811,6 +1852,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     if (argbufHybrid) {
       out << "fragment " << fragmentReturnType
           << " dxmt9_fs(VSOut in [[stage_in]],\n";
+      emitFrontFacingParameter();
       out << "                     constant ArgbufLayout const* abuf [[buffer("
           << kArgbufHybridBindSlot << ")]]) {\n";
       out << "  constant PsConsts& psConsts = *abuf->psConsts;\n";
@@ -1818,6 +1860,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     } else {
       out << "fragment " << fragmentReturnType
           << " dxmt9_fs(VSOut in [[stage_in]],\n";
+      emitFrontFacingParameter();
       out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
       out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
     }
@@ -2813,6 +2856,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   out << "    if (!pass) {\n";
 	  out << "      discard_fragment();\n";
 	  out << "    }\n";
+		  out << "  }\n";
+		  out << "  if (ffpPs.fogMode != 0u) {\n";
+		  out << "    color = dxmt9_apply_fog(color, ffpPs, in.position.z);\n";
 		  out << "  }\n";
 		  out << "  outColor[0] = color;\n";
 		  if (usesFragmentOutStruct) {

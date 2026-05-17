@@ -1,0 +1,20 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: math-derivation
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0103 00000040 b00f0000 00000040 b00f0001 00000047 b00f0000 b0e40000
+00000054 b00f0001 b0e40001 00000001 800f0800 b0e40001 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-clear-depth 1.0
+dxmt9-draw-textured-quad-tex2
+expect-source pixel contains "outDepth = dxmt9_texm.y == 0.0f ? 1.0f : clamp(dxmt9_texm.x / dxmt9_texm.y, 0.0f, 1.0f);"
+expect-source pixel contains "float depth [[depth(any)]]"
+probe (16, 16) rgba(0.75, 0.73, 1.0, 1.0) 8
+probe (48, 48) rgba(0.25, 0.23, 1.0, 1.0) 8

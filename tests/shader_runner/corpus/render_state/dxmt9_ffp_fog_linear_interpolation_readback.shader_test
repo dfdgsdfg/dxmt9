@@ -1,0 +1,18 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c fog_test/test_fog/test_fog_interpolation behavior, reduced to linear fog interpolation readback
+; oracle-date: 2026-05-17
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state fog=on fog_mode=linear fog_start=0.0 fog_end=1.0 fog_color=rgba(0.5,0.5,0.5,1.0)
+dxmt9-texture 0 2 1 A8R8G8B8 rgba(1.0,1.0,1.0,0.0) rgba(1.0,1.0,1.0,1.0)
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=texture alpha_arg1=texture
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad
+probe (16, 32) rgba(1.0, 1.0, 1.0, 0.0) 2
+probe (48, 32) rgba(0.5, 0.5, 0.5, 1.0) 2

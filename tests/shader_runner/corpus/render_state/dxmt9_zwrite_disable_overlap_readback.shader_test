@@ -1,0 +1,19 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c zwriteenable_test behavior, reduced to ordered zwrite off/on overlap readback
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0300
+0200001f 8000000a 900f0000
+02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(1.0, 0.0, 0.0, 1.0)
+dxmt9-clear-depth 1.0
+dxmt9-draw-ffp-zwrite-disable-overlap
+probe (32, 32) rgba(0.0, 0.0, 1.0, 1.0) 1

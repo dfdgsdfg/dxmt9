@@ -332,7 +332,8 @@ void populateResourceBindings(WMT::Reference<WMT::Device> device,
                                 kSamplerArgbufBase + stage, recorder);
       }
     } else {
-      auto sampler = encoders::makeSampler(device, hot.samplerStates[stage]);
+      auto sampler = encoders::makeSampler(device, hot.samplerStates[stage],
+                                           static_cast<float>(hot.textureLods[stage]));
       if (sampler) {
         recordedSetSamplerState(encoderResource,
                                 WMT::SamplerState{sampler.handle},

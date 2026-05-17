@@ -397,7 +397,8 @@ inline constexpr u32 TSS_TEXCOORD_INDEX = 11;
 inline constexpr u32 TSS_BUMPENVLSCALE = 22;
 inline constexpr u32 TSS_BUMPENVLOFFSET = 23;
 inline constexpr u32 TSS_TEXTURE_TRANSFORM_FLAGS = 24;
-inline constexpr u32 TSS_TEXTURE_TYPE = 32;  // D3DTSS_CONSTANT; kept as internal placeholder key.
+inline constexpr u32 TSS_CONSTANT = 32;      // D3DTSS_CONSTANT.
+inline constexpr u32 TSS_TEXTURE_TYPE = 63;  // Internal shader-source texture kind key.
 
 inline constexpr u32 SAMP_ADDRESS_U = 1;
 inline constexpr u32 SAMP_ADDRESS_V = 2;
@@ -509,6 +510,19 @@ struct ShaderBytecode {
   u64 hash = 0;
 
   friend bool operator==(const ShaderBytecode&, const ShaderBytecode&) = default;
+};
+
+struct ShaderConstantUsageBounds {
+  std::uint16_t floatCount = 0;
+  std::uint16_t intCount = 0;
+  std::uint16_t boolCount = 0;
+  bool indexedFloat = false;
+  bool indexedInt = false;
+  bool indexedBool = false;
+  bool unknown = true;
+
+  friend constexpr bool operator==(const ShaderConstantUsageBounds&,
+                                   const ShaderConstantUsageBounds&) = default;
 };
 
 struct FfpVertexKey {

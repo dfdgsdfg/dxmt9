@@ -103,6 +103,7 @@ static DWORD setTextureLod(D9CTexture *texture, DWORD &lod, DWORD value) {
   const DWORD previous = lod;
   const DWORD levelCount = dxmt9c_texture_get_level_count(texture);
   lod = std::min<DWORD>(value, levelCount > 0 ? levelCount - 1 : 0);
+  dxmt9c_texture_set_lod(texture, lod);
   return previous;
 }
 

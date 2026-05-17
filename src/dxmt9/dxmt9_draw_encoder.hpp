@@ -118,12 +118,20 @@ struct EncodeContext {
 // linear" variant), a pure SamplerSnapshot -> WMTSamplerInfo mapper, and the
 // full SamplerSnapshot variant that creates the Metal object.
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device, bool linear);
-WMTSamplerInfo makeSamplerInfo(const core::SamplerSnapshot& snapshot);
-WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>& states);
+WMTSamplerInfo makeSamplerInfo(const core::SamplerSnapshot& snapshot, float lodMinClamp = 0.0f);
+WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>& states,
+                               float lodMinClamp = 0.0f);
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
                                                 const core::SamplerSnapshot& snapshot);
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
+                                                const core::SamplerSnapshot& snapshot,
+                                                float lodMinClamp);
+WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device,
                                                 const core::FlatStateSet<core::kMaxSamplerStates>& states);
+WMT::Reference<WMT::SamplerState> makeSampler(
+    WMT::Reference<WMT::Device> device,
+    const core::FlatStateSet<core::kMaxSamplerStates>& states,
+    float lodMinClamp);
 
 // Render-pass setup. Builds a WMTRenderPassInfo from the current draw
 // target + optional clear, then begins the encoder on the given command

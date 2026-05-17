@@ -1,4 +1,5 @@
 #include "core_spec_fixtures.hpp"
+#include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 
 #include <memory>
 
@@ -123,7 +124,10 @@ void testVisualDerivedFfpCoverage() {
   check(fogHandle != 0, "fog ffp shader");
   const auto fogSource = shaderSourceToString(fogHandle);
   checkContains(fogSource, "fogFactor", "fog visual source");
-  checkContains(fogSource, "mix(fogColor, color, fog)", "fog visual blend");
+  checkContains(fogSource, "dxmt9_apply_fog(color, ffpPs, fogDepth)",
+                "fog visual blend helper");
+  checkContains(fogSource, "mix(ffpPs.fogColor.rgb, color.rgb, fog)",
+                "fog visual blend uses FFP fog color");
   dxmt9_winemetal_destroy_shader(fogHandle);
 
   // behavioral oracle: Wine visual.c:texture_transform_test
@@ -135,15 +139,46 @@ void testVisualDerivedFfpCoverage() {
   checkEq(transformVertexKey.texCoordGen[0], 4u, "texture transform texcoord");
   checkEq(transformVertexKey.texTransformFlags[0], 7u, "texture transform flags");
 
+  // behavioral oracle: Wine visual.c:test_texcoordindex
+  DrawDesc generatedTexcoordDesc{};
+  generatedTexcoordDesc.vertexDecl.fvf = dxmt9::ffp::kFvfXyz | dxmt9::ffp::kFvfNormal;
+  const auto generatedLayout =
+      dxmt9::ffp::decodeFixedFunctionVertexLayout(generatedTexcoordDesc.vertexDecl);
+  check(generatedLayout.has_value(), "generated texcoord FVF layout decodes");
+  check(generatedLayout->hasNormal, "generated texcoord FVF captures normal");
+  checkEq(generatedLayout->normalOffset, 12u, "generated texcoord normal offset");
+  FfpVertexKey generatedTexcoordKey{};
+  generatedTexcoordKey.texCoordGen[0] = 0x00010000u;
+  auto generatedContext = dxmt9::drawshader::makeShaderSourceContext(generatedTexcoordDesc);
+  const auto normalSource =
+      dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
+  checkContains(normalSource, "dxmt9_load_f32x3(stream0, base + 12u)",
+                "generated normal source loads FVF normal");
+  checkContains(normalSource, "float4(inNormal, 1.0f)",
+                "generated normal source writes camera-space normal texcoord");
+  generatedTexcoordKey.texCoordGen[0] = 0x00030000u;
+  const auto reflectionSource =
+      dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
+  checkContains(reflectionSource, "reflect(-dxmt9_eye0, unitNormal)",
+                "generated reflection source uses camera-space normal");
+  generatedTexcoordKey.texCoordGen[0] = 0x00040000u;
+  const auto sphereSource =
+      dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
+  checkContains(sphereSource, "float2(dxmt9_reflect0.x / dxmt9_sphereM0 + 0.5f",
+                "generated sphere-map source emits sphere-map coordinates");
+
   // behavioral oracle: Wine visual.c:texop_test
   DeviceState texopState;
   texopState.reset();
   texopState.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::Add);
+  texopState.textureStageStates[0][TSS_COLOR_ARG1] = 6u; // D3DTA_CONSTANT
   texopState.textureStageStates[0][TSS_ALPHA_OP] = static_cast<u32>(TextureOp::Modulate);
+  texopState.textureStageStates[0][TSS_CONSTANT] = 0x80402010u;
   texopState.textureStageStates[0][TSS_TEXCOORD_INDEX] = 4;
   texopState.textureStageStates[0][TSS_TEXTURE_TRANSFORM_FLAGS] = 7;
   const auto texopPixelKey = makeFfpPixelKey(texopState);
   checkEq(texopPixelKey.stages[0].colorOp, static_cast<u32>(TextureOp::Add), "texop visual color op");
+  checkEq(texopPixelKey.stages[0].colorArg1, 6u, "texop visual D3DTA_CONSTANT arg");
   checkEq(texopPixelKey.stages[0].alphaOp, static_cast<u32>(TextureOp::Modulate), "texop visual alpha op");
   checkEq(texopPixelKey.stages[0].texCoordIndex, 4u, "texop visual texcoord");
   WinemetalShaderCompileRequest texopRequest{};
@@ -154,6 +189,10 @@ void testVisualDerivedFfpCoverage() {
   check(texopHandle != 0, "texop ffp shader");
   const auto texopSource = shaderSourceToString(texopHandle);
   checkContains(texopSource, "case 7u: return saturate(arg1 + arg2);", "texop add source");
+  checkContains(texopSource, "case 6u: value = stageConstant; break;",
+                "D3DTA_CONSTANT selects per-stage constant");
+  checkContains(texopSource, "ffpPs.stageConstants[0]",
+                "FFP pixel source reads stage 0 constant from FfpPsConsts");
   dxmt9_winemetal_destroy_shader(texopHandle);
 
   // behavioral oracle: Wine visual.c:fixed_function_varying_test

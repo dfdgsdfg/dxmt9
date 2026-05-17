@@ -14,8 +14,10 @@ using core::StencilOp;
 using core::RS_ALPHA_FUNC;
 using core::RS_ALPHA_REF;
 using core::RS_ALPHA_TEST_ENABLE;
+using core::RS_FOG_COLOR;
 using core::RS_FOG_DENSITY;
 using core::RS_FOG_END;
+using core::RS_FOG_ENABLE;
 using core::RS_FOG_START;
 using core::RS_FOG_TABLE_MODE;
 using core::RS_STENCIL_CCW_FAIL;
@@ -35,6 +37,19 @@ using core::RS_TEXTURE_FACTOR;
 using core::RS_Z_ENABLE;
 using core::RS_Z_FUNC;
 using core::RS_Z_WRITE_ENABLE;
+
+namespace {
+
+std::array<f32, 4> normalizedD3DColor(u32 raw) {
+  return {
+      static_cast<f32>((raw >> 16) & 0xffu) / 255.0f,
+      static_cast<f32>((raw >> 8) & 0xffu) / 255.0f,
+      static_cast<f32>(raw & 0xffu) / 255.0f,
+      static_cast<f32>((raw >> 24) & 0xffu) / 255.0f,
+  };
+}
+
+}  // namespace
 
 VsConsts buildVsConsts(core::FlatDrawStateView state) {
   DXMT_ASSERT(state.hasUniformPayload());
@@ -102,20 +117,18 @@ FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
   const auto& rs = state.hot->renderStates;
   FfpPsConsts out;
   if (const auto* textureFactor = core::findFlatState(rs, RS_TEXTURE_FACTOR)) {
-    const u32 raw = textureFactor->value;
-    out.textureFactor = {
-        static_cast<f32>((raw >> 16) & 0xffu) / 255.0f,
-        static_cast<f32>((raw >> 8) & 0xffu) / 255.0f,
-        static_cast<f32>(raw & 0xffu) / 255.0f,
-        static_cast<f32>((raw >> 24) & 0xffu) / 255.0f,
-    };
+    out.textureFactor = normalizedD3DColor(textureFactor->value);
   }
   out.alphaTestEnable = !debug::disableAlphaTest() &&
                         core::flatStateOr(rs, RS_ALPHA_TEST_ENABLE, 0u) != 0;
   out.alphaTestFunc =
       core::flatStateOr(rs, RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always));
-  out.fogMode =
-      core::flatStateOr(rs, RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::None));
+  const bool fogEnabled = core::flatStateOr(rs, RS_FOG_ENABLE, 0u) != 0;
+  out.fogMode = fogEnabled
+                    ? core::flatStateOr(rs, RS_FOG_TABLE_MODE,
+                                        static_cast<u32>(FogMode::None))
+                    : static_cast<u32>(FogMode::None);
+  out.fogColor = normalizedD3DColor(core::flatStateOr(rs, RS_FOG_COLOR, 0u));
   out.alphaRef =
       static_cast<f32>(core::flatStateOr(rs, RS_ALPHA_REF, 0u)) / 255.0f;
   out.fogStart =
@@ -126,6 +139,8 @@ FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
       std::bit_cast<f32>(core::flatStateOr(rs, RS_FOG_DENSITY, std::bit_cast<u32>(1.0f)));
   for (u32 stage = 0; stage < core::kMaxTextureStages; ++stage) {
     const auto& tss = state.hot->textureStageStates[stage];
+    out.stageConstants[stage] =
+        normalizedD3DColor(core::flatStateOr(tss, core::TSS_CONSTANT, 0u));
     out.bumpEnvMat[stage] = {
         std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVMAT00, 0u)),
         std::bit_cast<f32>(core::flatStateOr(tss, core::TSS_BUMPENVMAT01, 0u)),

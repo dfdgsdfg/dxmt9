@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -149,6 +150,7 @@ struct ProgrammableVsExtraStreamBindingList {
 struct FragmentTextureSamplerBinding {
   u32 stage = 0;
   core::Handle texture{};
+  u32 textureLod = 0;
   core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
 };
 
@@ -190,6 +192,169 @@ struct DrawBindingPacketPlan {
   EncoderRasterStatePlan raster{};
   bool argbufResourceRepopulate = false;
 };
+
+struct DrawBindingPacketTextureSamplerKey {
+  u32 stage = 0;
+  u64 texture = 0;
+  u32 textureLod = 0;
+  core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
+
+  friend constexpr bool operator==(const DrawBindingPacketTextureSamplerKey&,
+                                   const DrawBindingPacketTextureSamplerKey&) = default;
+};
+
+struct DrawBindingPacketExtraStreamKey {
+  u32 stream = 0;
+  u32 metalSlot = 0;
+  u64 offset = 0;
+  u32 stride = 0;
+
+  friend constexpr bool operator==(const DrawBindingPacketExtraStreamKey&,
+                                   const DrawBindingPacketExtraStreamKey&) = default;
+};
+
+struct DrawBindingPacketRasterKey {
+  std::array<u64, 6> viewportBits{};
+  u64 scissorX = 0;
+  u64 scissorY = 0;
+  u64 scissorWidth = 0;
+  u64 scissorHeight = 0;
+  u32 cullMode = 0;
+
+  friend constexpr bool operator==(const DrawBindingPacketRasterKey&,
+                                   const DrawBindingPacketRasterKey&) = default;
+};
+
+struct DrawBindingPacketKey {
+  std::array<DrawBindingPacketTextureSamplerKey, core::kMaxSamplers> fragmentTextureSamplers{};
+  u32 fragmentTextureSamplerCount = 0;
+  std::array<DrawBindingPacketExtraStreamKey, core::kMaxStreams - 1u> extraStreams{};
+  u32 extraStreamCount = 0;
+  DrawBindingPacketRasterKey raster{};
+  bool argbufResourceRepopulate = false;
+
+  friend constexpr bool operator==(const DrawBindingPacketKey&,
+                                   const DrawBindingPacketKey&) = default;
+};
+
+inline u64 drawBindingPacketHashMix(u64 seed, u64 value) noexcept {
+  value += 0x9e3779b97f4a7c15ull;
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebull;
+  value ^= value >> 31;
+  seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+  return seed;
+}
+
+inline u64 drawBindingPacketDoubleBits(double value) noexcept {
+  return std::bit_cast<u64>(value);
+}
+
+inline u64 hashDrawBindingPacketSamplerStates(
+    const core::FlatStateSet<core::kMaxSamplerStates>& states) noexcept {
+  u64 seed = drawBindingPacketHashMix(0x9f6c2a3b5d7e1c8full, states.count);
+  seed = drawBindingPacketHashMix(seed, states.hash);
+  seed = drawBindingPacketHashMix(seed, states.overflow ? 1ull : 0ull);
+  for (u32 i = 0; i < states.count && i < core::kMaxSamplerStates; ++i) {
+    seed = drawBindingPacketHashMix(seed, states.entries[i].state);
+    seed = drawBindingPacketHashMix(seed, states.entries[i].value);
+  }
+  return seed;
+}
+
+inline DrawBindingPacketRasterKey makeDrawBindingPacketRasterKey(
+    const EncoderRasterStatePlan& raster) noexcept {
+  return DrawBindingPacketRasterKey{
+      .viewportBits = {
+          drawBindingPacketDoubleBits(raster.viewport.originX),
+          drawBindingPacketDoubleBits(raster.viewport.originY),
+          drawBindingPacketDoubleBits(raster.viewport.width),
+          drawBindingPacketDoubleBits(raster.viewport.height),
+          drawBindingPacketDoubleBits(raster.viewport.znear),
+          drawBindingPacketDoubleBits(raster.viewport.zfar),
+      },
+      .scissorX = raster.scissor.x,
+      .scissorY = raster.scissor.y,
+      .scissorWidth = raster.scissor.width,
+      .scissorHeight = raster.scissor.height,
+      .cullMode = static_cast<u32>(raster.cullMode),
+  };
+}
+
+inline DrawBindingPacketKey makeDrawBindingPacketKey(
+    const DrawBindingPacketPlan& packet) noexcept {
+  DrawBindingPacketKey key{};
+  key.fragmentTextureSamplerCount = static_cast<u32>(packet.fragmentTextureSamplers.size());
+  for (u32 i = 0; i < key.fragmentTextureSamplerCount; ++i) {
+    const auto& binding = packet.fragmentTextureSamplers[i];
+    key.fragmentTextureSamplers[i] = DrawBindingPacketTextureSamplerKey{
+        .stage = binding.stage,
+        .texture = binding.texture.value,
+        .textureLod = binding.textureLod,
+        .samplerStates = binding.samplerStates,
+    };
+  }
+
+  key.extraStreamCount = static_cast<u32>(packet.extraStreams.size());
+  for (u32 i = 0; i < key.extraStreamCount; ++i) {
+    const auto& binding = packet.extraStreams[i];
+    key.extraStreams[i] = DrawBindingPacketExtraStreamKey{
+        .stream = binding.stream,
+        .metalSlot = binding.metalSlot,
+        .offset = binding.offset,
+        .stride = binding.stride,
+    };
+  }
+
+  key.raster = makeDrawBindingPacketRasterKey(packet.raster);
+  key.argbufResourceRepopulate = packet.argbufResourceRepopulate;
+  return key;
+}
+
+inline u64 hashDrawBindingPacketKey(const DrawBindingPacketKey& key) noexcept {
+  u64 seed = drawBindingPacketHashMix(0x5ad07b1f4c2e9638ull,
+                                      key.fragmentTextureSamplerCount);
+  for (u32 i = 0; i < key.fragmentTextureSamplerCount; ++i) {
+    const auto& binding = key.fragmentTextureSamplers[i];
+    seed = drawBindingPacketHashMix(seed, binding.stage);
+    seed = drawBindingPacketHashMix(seed, binding.texture);
+    seed = drawBindingPacketHashMix(seed, binding.textureLod);
+    seed = drawBindingPacketHashMix(
+        seed, hashDrawBindingPacketSamplerStates(binding.samplerStates));
+  }
+
+  seed = drawBindingPacketHashMix(seed, key.extraStreamCount);
+  for (u32 i = 0; i < key.extraStreamCount; ++i) {
+    const auto& binding = key.extraStreams[i];
+    seed = drawBindingPacketHashMix(seed, binding.stream);
+    seed = drawBindingPacketHashMix(seed, binding.metalSlot);
+    seed = drawBindingPacketHashMix(seed, binding.offset);
+    seed = drawBindingPacketHashMix(seed, binding.stride);
+  }
+
+  for (const auto bits : key.raster.viewportBits) {
+    seed = drawBindingPacketHashMix(seed, bits);
+  }
+  seed = drawBindingPacketHashMix(seed, key.raster.scissorX);
+  seed = drawBindingPacketHashMix(seed, key.raster.scissorY);
+  seed = drawBindingPacketHashMix(seed, key.raster.scissorWidth);
+  seed = drawBindingPacketHashMix(seed, key.raster.scissorHeight);
+  seed = drawBindingPacketHashMix(seed, key.raster.cullMode);
+  seed = drawBindingPacketHashMix(seed, key.argbufResourceRepopulate ? 1ull : 0ull);
+  return seed;
+}
+
+struct DrawBindingPacketKeyHash {
+  std::size_t operator()(const DrawBindingPacketKey& key) const noexcept {
+    return static_cast<std::size_t>(hashDrawBindingPacketKey(key));
+  }
+};
+
+inline bool shouldRepopulateArgbufResources(
+    bool argbufHybridMode,
+    const FragmentTextureSamplerBindingList& fragmentTextureSamplers) noexcept {
+  return argbufHybridMode && fragmentTextureSamplers.empty();
+}
 
 inline bool vertexDeclUsesStream(const core::VertexDeclSnapshot& vertexDecl, u32 stream) {
   for (const auto& element : vertexDecl.elements) {
@@ -240,6 +405,7 @@ inline FragmentTextureSamplerBindingList makeFragmentTextureSamplerBindings(
     bindings.push_back(FragmentTextureSamplerBinding{
         .stage = stage,
         .texture = textureHandle,
+        .textureLod = hot.textureLods[stage],
         .samplerStates = hot.samplerStates[stage],
     });
   }
@@ -311,12 +477,14 @@ inline DrawBindingPacketPlan makeDrawBindingPacketPlan(
     bool scissorDisabled,
     bool cullDisabled,
     bool argbufHybridMode) {
+  const auto fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot);
   return DrawBindingPacketPlan{
-      .fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot),
+      .fragmentTextureSamplers = fragmentTextureSamplers,
       .extraStreams = makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv),
       .raster = makeEncoderRasterStatePlan(
           hot, surfaceWidth, surfaceHeight, preTransformed, scissorDisabled, cullDisabled),
-      .argbufResourceRepopulate = argbufHybridMode,
+      .argbufResourceRepopulate =
+          shouldRepopulateArgbufResources(argbufHybridMode, fragmentTextureSamplers),
   };
 }
 

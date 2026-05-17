@@ -8,7 +8,7 @@
 
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
-dxmt9-render-state fog=on fog_mode=exp fog_density=0.693147
+dxmt9-render-state fog=on fog_mode=exp fog_density=0.693147 fog_color=rgba(0.5,0.5,0.5,1.0)
 dxmt9-texture 0 1 1 A8R8G8B8 rgba(1.0,1.0,1.0,1.0)
 dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
 dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=texture alpha_arg1=texture

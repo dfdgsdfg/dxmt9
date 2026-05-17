@@ -429,8 +429,18 @@ extern "C" int32_t dxmt9c_texture_get_level_desc(D9CTexture* t, uint32_t level,
   return dxmt9::core::D3D_OK;
 }
 
-extern "C" int32_t dxmt9c_texture_generate_mip_sublevels(D9CTexture*) {
-  return dxmt9::core::D3D_OK;
+extern "C" int32_t dxmt9c_texture_generate_mip_sublevels(D9CTexture* t) {
+  if (!t) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  return t->obj->generateMipSubLevels();
+}
+
+extern "C" uint32_t dxmt9c_texture_set_lod(D9CTexture* t, uint32_t lod) {
+  if (!t || !t->obj) {
+    return 0;
+  }
+  return t->obj->setLod(lod);
 }
 
 extern "C" void dxmt9c_buffer_addref(D9CBuffer* b) {

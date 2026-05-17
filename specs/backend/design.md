@@ -589,10 +589,44 @@ changing generated MSL. It requires exporting shader constant-usage metadata to
 the draw/cache boundary and replacing transient full-struct rebuilds with a
 full-size backing buffer whose dirty byte ranges can be updated independently.
 
+The implementation target has two phases. Phase 1 publishes shader usage as
+value metadata beside the shader layout. Phase 2 lets the encoder consume that
+metadata when it builds the constant upload packet:
+
+```mermaid
+flowchart TD
+    BYTECODE["ShaderRef bytecode\nor FFP key"]
+    DECODE["decodeD3DBytecode\ncollectConstantUsage"]
+    META["ShaderConstantUsageBounds\nVS + PS\nunknown/indexed flags"]
+    LAYOUT["DrawShaderLayoutContext\nshader refs + usage metadata"]
+    STATE["FlatDrawStateView\nDirtyState high-water ranges"]
+    PLAN["ShaderConstantUploadPlan\nper stage"]
+    BYTES["vs/psConstantUploadBytes\nprefix byte count or full struct"]
+    BUILD["buildVsConsts/buildPsConsts\nfull ABI struct in host memory"]
+    SLAB["Transient upload slab\nbyte span = planned bytes"]
+    BIND1["Stage 1 bind\nslot 0"]
+    BIND2["Stage 2 argbuf pointer\nid 0 / id 2"]
+
+    BYTECODE --> DECODE --> META --> LAYOUT
+    LAYOUT --> PLAN
+    STATE --> PLAN
+    PLAN --> BYTES
+    BUILD --> SLAB
+    BYTES --> SLAB
+    SLAB --> BIND1
+    SLAB --> BIND2
+```
+
+The invariant is that generated MSL still sees `constant VsConsts&` and
+`constant PsConsts&`. Only the host-side bytes copied into the backing slab are
+allowed to shrink, and only when the usage metadata proves no indexed or unknown
+constant access can read outside the uploaded prefix.
+
 ### 5.3 Binding Packet Resolution Target
 
-`DrawBindingPacketPlan` is intentionally value-only. Live Metal handles stay
-behind the resource pool because they depend on rename rings, texture view
+`DrawBindingPacketPlan` is intentionally value-only. It can be reduced to a
+flat `DrawBindingPacketKey` before any Metal object lookup. Live Metal handles
+stay behind the resource pool because they depend on rename rings, texture view
 selection, sampler creation, and sequence-id retention:
 
 ```mermaid
@@ -601,6 +635,7 @@ flowchart LR
     DECL["VertexDeclSnapshot"]
     PARAM["ParamView"]
     PLAN["DrawBindingPacketPlan\nslot numbers, handles, offsets,\nraster/scissor/cull values"]
+    KEY["DrawBindingPacketKey\nflat equality/hash\ntexture LOD + sampler states"]
     POOL["ResourcePool resolver\nBuffer/Texture/Surface lookup"]
     SAMPLER["Sampler cache/build\nSamplerSnapshot -> WMT::SamplerState"]
     RETAIN["CommandQueue retention\nseqId lifetime fence"]
@@ -609,14 +644,62 @@ flowchart LR
     HOT --> PLAN
     DECL --> PLAN
     PARAM --> PLAN
+    PLAN --> KEY
     PLAN --> POOL --> RETAIN --> CALLS
     PLAN --> SAMPLER --> RETAIN
     PLAN --> CALLS
 ```
 
-The next refinement is a resolved packet scoped to the encoder call, not to the
-canonical draw state. That packet may carry live WMT handles only after the pool
-has retained or otherwise proven their lifetime for the draw's sequence id.
+`DrawBindingPacketKey` is the persistent-cache boundary. It is stable across
+equivalent canonical input values and changes when texture handle/LOD, sampler
+state, raster values, or programmable extra-stream offsets change. The resolved
+packet remains scoped to the encoder call, not to the canonical draw state. That
+packet may carry live WMT handles only after the pool has retained or otherwise
+proven their lifetime for the draw's sequence id.
+
+The resolved packet is a short-lived product of the value plan. It must not be
+stored in canonical state or reused across command buffers:
+
+```mermaid
+flowchart LR
+    PLAN["DrawBindingPacketPlan\nPOD/value only"]
+    KEY["DrawBindingPacketKey\npersistent cache identity"]
+    CACHE{"packet key hit?"}
+    VALUE["reuse cached value packet\nno live handles"]
+    RESOLVE["resolveDrawBindingPacket\nencoder-local live handles"]
+    PACKET["ResolvedDrawBindingPacket\nWMT handles + offsets\nsampler states + view handles"]
+    RETAIN["retain for seqId\nor prove queue-owned lifetime"]
+    ENCODE["emit binding calls\nordered by packet arrays"]
+    DROP["drop packet after draw"]
+
+    PLAN --> KEY --> CACHE
+    CACHE -->|"yes"| VALUE --> RESOLVE
+    CACHE -->|"no"| PLAN --> RESOLVE
+    PACKET --> RETAIN --> ENCODE --> DROP
+    RESOLVE --> PACKET
+```
+
+```mermaid
+flowchart TD
+    PLAN["Plan fields"]
+    VB["vertex buffer handles\noffsets/strides"]
+    IB["index buffer handle\noffset/type"]
+    TEX["texture handles\nstage + sRGB/view policy"]
+    SAMP["sampler snapshots\nstage + state hash"]
+    RAST["viewport/scissor/cull/depth-bias"]
+    LIVE["Resolved packet fields"]
+
+    PLAN --> VB --> LIVE
+    PLAN --> IB --> LIVE
+    PLAN --> TEX --> LIVE
+    PLAN --> SAMP --> LIVE
+    PLAN --> RAST --> LIVE
+```
+
+The dependency rule is one-way: canonical state may create a value plan, but
+live Metal handles may only appear after resource-pool lookup and sequence-id
+retention. This keeps cache keys deterministic and keeps lifetime ownership in
+the queue/resource layer.
 
 ### 5.4 Argbuf Stage 2 Texture-bound Draw Target
 
@@ -646,6 +729,42 @@ The promotion gate is evidence-driven: deterministic descriptor tests are
 necessary, but texture-bound Stage 2 should not become the default until live
 GPU readback proves sampling equality across representative 2D, cube, 3D,
 sRGB, mip, and sampler-state cases.
+
+The equality gate compares the same draw through both binding lanes. Stage 2 is
+eligible for promotion only when command-level values and framebuffer readback
+agree:
+
+```mermaid
+flowchart TD
+    CASE["Representative texture-bound corpus case"]
+    S1["Stage 1 lane\nsetFragmentTexture/Sampler"]
+    S2["Stage 2 lane\nargbuf texture/sampler descriptors"]
+    REC1["Encoder recorder\nslot/order/resource ids"]
+    REC2["Encoder recorder\nargbuf ids/type ranges"]
+    GPU1["GPU readback\nStage 1 pixels"]
+    GPU2["GPU readback\nStage 2 pixels"]
+    CMPREC{"binding intent equal?"}
+    CMPGPU{"pixels equal\nwithin probe tolerance?"}
+    MATRIX["equality matrix\n2D/cube/3D/sRGB/mip/filter/address"]
+    PROMOTE["selector may return Stage 2\nfor texture-bound draws"]
+    FALLBACK["keep texture-bound Stage 1 fallback"]
+
+    CASE --> S1 --> REC1 --> CMPREC
+    CASE --> S2 --> REC2 --> CMPREC
+    S1 --> GPU1 --> CMPGPU
+    S2 --> GPU2 --> CMPGPU
+    CMPREC -->|"yes"| MATRIX
+    CMPGPU -->|"yes"| MATRIX
+    MATRIX -->|"complete"| PROMOTE
+    CMPREC -->|"no"| FALLBACK
+    CMPGPU -->|"no"| FALLBACK
+```
+
+The promotion must be all-or-nothing for the default selector. Partial support
+may exist behind an explicit debug gate, but the normal path keeps Stage 1 for
+texture-bound draws until the matrix covers sampler address modes, filter modes,
+sRGB decode, mip level selection, unbound/default samplers, and non-2D texture
+classes.
 
 ### 5.5 Cache Prewarm From `MTLBinaryArchive`
 

@@ -65,6 +65,18 @@ Texture::~Texture() { invalidate(); }
 
 u32 Texture::levelCount() const noexcept { return std::max(1u, desc_.levels); }
 
+u32 Texture::setLod(u32 lod) {
+  const u32 previous = lod_;
+  const u32 levels = levelCount();
+  lod_ = std::min(lod, levels > 0 ? levels - 1u : 0u);
+  if (lod_ != previous) {
+    if (auto owner = owner_.lock()) {
+      owner->notifyTextureLodChanged(*this);
+    }
+  }
+  return previous;
+}
+
 u32 Texture::mipLevelForSubresource(u32 subresource) const noexcept {
   const u32 mipLevels = levelCount();
   if (desc_.type == TextureType::Cube && mipLevels != 0) {
@@ -192,6 +204,67 @@ void Texture::copyFrom(const Texture &src) {
     levels_[i].dirty = true;
     syncLevelToBackend(static_cast<u32>(i));
   }
+}
+
+HResult Texture::generateMipSubLevels() {
+  if (!valid_) {
+    return D3DERR_INVALIDCALL;
+  }
+
+  const u32 mipLevels = levelCount();
+  if (mipLevels <= 1) {
+    return D3D_OK;
+  }
+
+  const u32 bpp = bytesPerPixel(desc_.format);
+  if (bpp == 0 || isCompressedFormat(desc_.format)) {
+    return D3D_OK;
+  }
+
+  HResult backendResult = D3D_OK;
+  if (backend_ && handle_) {
+    backendResult = backend_->generateTextureMipSublevels(handle_);
+  }
+  if (backendResult != D3D_OK) {
+    return backendResult;
+  }
+
+  const u32 faceCount = desc_.type == TextureType::Cube ? 6u : 1u;
+  for (u32 face = 0; face < faceCount; ++face) {
+    const u32 baseSubresource = face * mipLevels;
+    for (u32 level = 1; level < mipLevels; ++level) {
+      auto& src = levels_[baseSubresource + level - 1u];
+      auto& dst = levels_[baseSubresource + level];
+      if (src.bytes.empty() || dst.bytes.empty() || src.width == 0 ||
+          src.height == 0 || dst.width == 0 || dst.height == 0) {
+        continue;
+      }
+      for (u32 y = 0; y < dst.height; ++y) {
+        for (u32 x = 0; x < dst.width; ++x) {
+          const u32 srcX0 = std::min(src.width - 1u, x * 2u);
+          const u32 srcY0 = std::min(src.height - 1u, y * 2u);
+          for (u32 component = 0; component < bpp; ++component) {
+            u32 sum = 0;
+            u32 count = 0;
+            for (u32 dy = 0; dy < 2; ++dy) {
+              for (u32 dx = 0; dx < 2; ++dx) {
+                const u32 srcX = std::min(src.width - 1u, srcX0 + dx);
+                const u32 srcY = std::min(src.height - 1u, srcY0 + dy);
+                sum += src.bytes[static_cast<size_t>(srcY) * src.pitch +
+                                 static_cast<size_t>(srcX) * bpp + component];
+                ++count;
+              }
+            }
+            dst.bytes[static_cast<size_t>(y) * dst.pitch +
+                      static_cast<size_t>(x) * bpp + component] =
+                static_cast<u8>((sum + count / 2u) / count);
+          }
+        }
+      }
+      dst.dirty = true;
+    }
+  }
+  return D3D_OK;
 }
 
 void Texture::syncLevelToBackend(u32 subresource) {

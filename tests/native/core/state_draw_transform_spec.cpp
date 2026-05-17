@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -96,6 +97,25 @@ ShaderRef makeBytecodeShader(u64 hash, std::vector<u8> bytes) {
   shader.bytecode.hash = hash ^ 0x9e3779b97f4a7c15ull;
   shader.bytecode.bytes = std::move(bytes);
   return shader;
+}
+
+std::vector<u8> wordsToBytes(std::initializer_list<u32> words) {
+  std::vector<u8> bytes(words.size() * sizeof(u32));
+  std::size_t offset = 0;
+  for (const auto word : words) {
+    std::memcpy(bytes.data() + offset, &word, sizeof(word));
+    offset += sizeof(word);
+  }
+  return bytes;
+}
+
+u32 makeInstructionToken(u32 opcode, u32 operandCount) {
+  return opcode | (operandCount << 24);
+}
+
+u32 makeRegisterToken(u32 type, u32 index, bool relative = false) {
+  return index | ((type & 0x7u) << 28) | (((type >> 3) & 0x3u) << 11) |
+         (relative ? (1u << 13) : 0u);
 }
 
 CanonicalDrawState makeCanonicalDrawStateForTest(const DrawDesc& desc) {
@@ -586,6 +606,60 @@ void testConstantsAndShaderRefs() {
             "changed vertex constant value reaches uniform payload");
 }
 
+void testShaderLayoutCarriesConstantUsageMetadata() {
+  DrawDesc desc{};
+  desc.vertexShader = makeBytecodeShader(
+      0x5151u,
+      wordsToBytes({
+          0xfffe0300u,
+          makeInstructionToken(81u, 5u),
+          makeRegisterToken(2u, 0u),
+          0u, 0u, 0u, 0u,
+          makeInstructionToken(20u, 3u),
+          makeRegisterToken(4u, 0u),
+          makeRegisterToken(1u, 0u),
+          makeRegisterToken(2u, 4u),
+          makeInstructionToken(1u, 2u),
+          makeRegisterToken(0u, 0u),
+          makeRegisterToken(2u, 2u, true),
+          makeRegisterToken(3u, 0u),
+          0x0000ffffu,
+      }));
+  desc.pixelShader = makeBytecodeShader(
+      0x6262u,
+      wordsToBytes({
+          0xffff0300u,
+          makeInstructionToken(48u, 5u),
+          makeRegisterToken(7u, 2u),
+          1u, 2u, 3u, 4u,
+          makeInstructionToken(47u, 2u),
+          makeRegisterToken(14u, 4u),
+          1u,
+          0x0000ffffu,
+      }));
+
+  const auto layout = makeDrawShaderLayoutContext(desc);
+  check(!layout.vertexConstantUsage.unknown,
+        "VS bytecode scan publishes known constant usage metadata");
+  checkEq(layout.vertexConstantUsage.floatCount, std::uint16_t{8},
+          "VS matrix operand expands float usage through the matrix row span");
+  check(layout.vertexConstantUsage.indexedFloat,
+        "VS relative constant source marks indexed float usage");
+  check(!layout.pixelConstantUsage.unknown,
+        "PS bytecode scan publishes known constant usage metadata");
+  checkEq(layout.pixelConstantUsage.intCount, std::uint16_t{3},
+          "PS DEFI destination contributes integer constant metadata");
+  checkEq(layout.pixelConstantUsage.boolCount, std::uint16_t{5},
+          "PS DEFB destination contributes boolean constant metadata");
+
+  DrawDesc fixedFunction{};
+  const auto fixedLayout = makeDrawShaderLayoutContext(fixedFunction);
+  check(fixedLayout.vertexConstantUsage.unknown,
+        "fixed-function VS keeps conservative unknown constant usage");
+  check(fixedLayout.pixelConstantUsage.unknown,
+        "fixed-function PS keeps conservative unknown constant usage");
+}
+
 void testResourceBindingsAndAttachments() {
   DeviceState state;
   state.reset();
@@ -738,16 +812,17 @@ void testTextureStageArgumentCanonicalValues() {
   DeviceState state;
   state.reset();
 
-  constexpr u32 kD3DTA_DIFFUSE = 0u;
   constexpr u32 kD3DTA_CURRENT = 1u;
   constexpr u32 kD3DTA_TEXTURE = 2u;
   constexpr u32 kD3DTA_TEMP = 5u;
+  constexpr u32 kD3DTA_CONSTANT = 6u;
   constexpr u32 kD3DTA_COMPLEMENT = 0x10u;
   constexpr u32 kD3DTA_ALPHAREPLICATE = 0x20u;
   constexpr u32 kD3DTSS_TCI_CAMERASPACENORMAL = 0x00010000u;
 
   const u32 colorArg1 = kD3DTA_TEXTURE | kD3DTA_COMPLEMENT;
   const u32 colorArg2 = kD3DTA_CURRENT | kD3DTA_ALPHAREPLICATE;
+  const u32 alphaArg1 = kD3DTA_CONSTANT | kD3DTA_ALPHAREPLICATE;
   const u32 alphaArg2 = kD3DTA_TEMP | kD3DTA_COMPLEMENT | kD3DTA_ALPHAREPLICATE;
   const u32 texcoordIndex = kD3DTSS_TCI_CAMERASPACENORMAL | 2u;
 
@@ -755,10 +830,11 @@ void testTextureStageArgumentCanonicalValues() {
   state.textureStageStates[1][TSS_COLOR_ARG1] = colorArg1;
   state.textureStageStates[1][TSS_COLOR_ARG2] = colorArg2;
   state.textureStageStates[1][TSS_ALPHA_OP] = static_cast<u32>(TextureOp::SelectArg2);
-  state.textureStageStates[1][TSS_ALPHA_ARG1] = kD3DTA_DIFFUSE;
+  state.textureStageStates[1][TSS_ALPHA_ARG1] = alphaArg1;
   state.textureStageStates[1][TSS_ALPHA_ARG2] = alphaArg2;
   state.textureStageStates[1][TSS_RESULT_ARG] = kD3DTA_TEMP;
   state.textureStageStates[1][TSS_TEXCOORD_INDEX] = texcoordIndex;
+  state.textureStageStates[1][TSS_CONSTANT] = 0x80402010u;
   state.textureStageStates[1][TSS_TEXTURE_TYPE] = static_cast<u32>(TextureType::Cube);
 
   const DrawDesc desc = makeDrawDescFromState(state, {});
@@ -777,13 +853,18 @@ void testTextureStageArgumentCanonicalValues() {
           kD3DTA_TEMP, "canonical hot state preserves TSS result arg");
   checkEq(flatStateOr(canonical.hot.textureStageStates[1], TSS_TEXCOORD_INDEX, 0u),
           texcoordIndex, "canonical hot state preserves TCI texcoord bits");
+  checkEq(flatStateOr(canonical.hot.textureStageStates[1], TSS_CONSTANT, 0u),
+          0x80402010u, "canonical hot state preserves D3DTSS_CONSTANT");
+  checkEq(flatStateOr(canonical.hot.textureStageStates[1], TSS_TEXTURE_TYPE, 0u),
+          static_cast<u32>(TextureType::Cube),
+          "canonical hot state keeps internal texture type separate from D3DTSS_CONSTANT");
   checkEq(stage.colorOp, static_cast<u32>(TextureOp::Modulate4x),
           "FFP pixel key preserves stage color op");
   checkEq(stage.colorArg1, colorArg1,
           "FFP pixel key preserves D3DTA color arg1");
   checkEq(stage.colorArg2, colorArg2,
           "FFP pixel key preserves D3DTA color arg2");
-  checkEq(stage.alphaArg1, kD3DTA_DIFFUSE,
+  checkEq(stage.alphaArg1, alphaArg1,
           "FFP pixel key preserves D3DTA alpha arg1");
   checkEq(stage.alphaArg2, alphaArg2,
           "FFP pixel key preserves D3DTA alpha arg2");
@@ -1385,6 +1466,7 @@ int main() {
   testTransformMultiplicationOrderAndBlendSlots();
   testClipPlaneLimitsAtCoreBoundary();
   testConstantsAndShaderRefs();
+  testShaderLayoutCarriesConstantUsageMetadata();
   testResourceBindingsAndAttachments();
   testVertexDeclFvfAndStreamBindings();
   testTextureStageArgumentCanonicalValues();

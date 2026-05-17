@@ -31,7 +31,8 @@ enum class DirtyBit : std::uint16_t {
   FfpVsViewport   = 1u << 8,
   FfpPsFog        = 1u << 9,
   FfpPsAlpha      = 1u << 10,
-  FfpPsTexFactor  = 1u << 11,
+  FfpPsTexFactor   = 1u << 11,
+  FfpPsTssConstant = 1u << 12,
 };
 
 // Dirty state carried by EncodeContext. Default-constructed = nothing
@@ -52,15 +53,7 @@ struct DirtyState {
   std::uint16_t maxChangedPsB = 0;
 };
 
-struct ShaderConstantUsageBounds {
-  std::uint16_t floatCount = 0;
-  std::uint16_t intCount = 0;
-  std::uint16_t boolCount = 0;
-  bool indexedFloat = false;
-  bool indexedInt = false;
-  bool indexedBool = false;
-  bool unknown = true;
-};
+using ShaderConstantUsageBounds = core::ShaderConstantUsageBounds;
 
 struct ShaderConstantUploadPlan {
   std::uint16_t floatCount = 0;
@@ -88,7 +81,8 @@ inline constexpr std::uint16_t kFfpVsAny =
 inline constexpr std::uint16_t kFfpPsAny =
     static_cast<std::uint16_t>(DirtyBit::FfpPsFog) |
     static_cast<std::uint16_t>(DirtyBit::FfpPsAlpha) |
-    static_cast<std::uint16_t>(DirtyBit::FfpPsTexFactor);
+    static_cast<std::uint16_t>(DirtyBit::FfpPsTexFactor) |
+    static_cast<std::uint16_t>(DirtyBit::FfpPsTssConstant);
 
 // Bit-level helpers — pure value transforms.
 void markAllDirty(DirtyState& state);
@@ -121,6 +115,7 @@ void applyViewportChange(DirtyState& state);
 void applyRenderStateFog(DirtyState& state);     // RS_FOG* family
 void applyRenderStateAlpha(DirtyState& state);   // RS_ALPHA_TEST_ENABLE/FUNC/REF
 void applyRenderStateTexFactor(DirtyState& state); // RS_TEXTURE_FACTOR
+void applyTextureStageConstant(DirtyState& state); // D3DTSS_CONSTANT
 
 // Conservative planning helper for the shader-usage-aware upload path.
 // The current MSL ABI still binds full VsConsts/PsConsts structs; these

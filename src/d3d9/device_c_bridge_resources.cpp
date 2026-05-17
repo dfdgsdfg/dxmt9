@@ -64,6 +64,10 @@ extern "C" int32_t dxmt9c_texture_generate_mip_sublevels(D9CTexture* arg0) {
   return dxmt9p_texture_generate_mip_sublevels(arg0);
 }
 
+extern "C" uint32_t dxmt9c_texture_set_lod(D9CTexture* arg0, uint32_t lod) {
+  return dxmt9p_texture_set_lod(arg0, lod);
+}
+
 extern "C" void dxmt9c_buffer_addref(D9CBuffer* arg0) {
   dxmt9p_buffer_addref(arg0);
 }

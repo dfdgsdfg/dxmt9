@@ -194,6 +194,9 @@ class DeviceImpl final : public Device {
                            std::span<const std::uint8_t> bytes) override {
     queue_.uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
+  core::HResult generateTextureMipSublevels(core::TextureHandle handle) override {
+    return queue_.generateTextureMipSublevels(handle);
+  }
 
   void submitDrawRun(core::CanonicalDrawState state,
                      const core::DrawUniformPayload& uniforms,

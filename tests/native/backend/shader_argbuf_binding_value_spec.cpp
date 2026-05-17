@@ -489,7 +489,137 @@ void testEncoderRasterStatePlanMatchesMetalViewportScissorCull() {
           "pretransformed encoder plan disables culling");
 }
 
-void testDrawBindingPacketPlanPreResolvesEncoderValues() {
+DrawDesc makeBindingPacketKeyDesc() {
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageNormal = 3u;
+
+  DrawDesc desc{};
+  desc.vertexDecl.elements = {
+      VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+      VertexElement{1, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsageNormal, 0},
+  };
+  desc.vertexDecl.streams[0].stride = 12u;
+  desc.vertexDecl.streams[1].stride = 24u;
+  desc.vertexDecl.streams[1].offset = 64u;
+  desc.textures[2].handle = Handle{0x2222u};
+  desc.samplers[2].states[SAMP_MIN_FILTER] = 2u;
+  desc.samplers[2].states[SAMP_ADDRESS_U] = 3u;
+  desc.viewport.viewport = Viewport{4u, 5u, 60u, 40u, 0.25f, 0.75f};
+  desc.viewport.scissor = Rect{6, 7, 32, 33};
+  desc.viewport.scissorEnabled = true;
+  desc.rs.values[RS_CULL_MODE] = static_cast<u32>(CullMode::Cw);
+  return desc;
+}
+
+dxmt9::encoders::ParamView makeBindingPacketKeyParamView(u32 startVertex = 3u) {
+  return dxmt9::encoders::ParamView{
+      .primitiveType = PrimitiveType::TriangleList,
+      .primitiveCount = 2u,
+      .startVertex = startVertex,
+      .baseVertexIndex = 0,
+      .startIndex = 0u,
+      .indexType = IndexType::UInt16,
+      .indexed = false,
+      .userVertexData = {},
+      .userIndexData = {},
+  };
+}
+
+dxmt9::encoders::DrawBindingPacketKey makeBindingPacketKey(
+    DrawDesc desc,
+    dxmt9::encoders::ParamView pv = makeBindingPacketKeyParamView()) {
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto packet = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      pv,
+      128u,
+      96u,
+      false,
+      false,
+      false,
+      true);
+  return dxmt9::encoders::makeDrawBindingPacketKey(packet);
+}
+
+void checkBindingPacketKeyDiffers(
+    const dxmt9::encoders::DrawBindingPacketKey& base,
+    const dxmt9::encoders::DrawBindingPacketKey& changed,
+    std::string_view message) {
+  check(!(base == changed), message);
+  check(dxmt9::encoders::hashDrawBindingPacketKey(base) !=
+            dxmt9::encoders::hashDrawBindingPacketKey(changed),
+        message);
+}
+
+void testDrawBindingPacketKeyIsStableForSameCanonicalValues() {
+  static_assert(std::is_trivially_copyable_v<dxmt9::encoders::DrawBindingPacketKey>);
+
+  const auto first = makeBindingPacketKey(makeBindingPacketKeyDesc());
+  const auto second = makeBindingPacketKey(makeBindingPacketKeyDesc());
+
+  check(first == second,
+        "same canonical binding packet values produce the same key");
+  checkEq(dxmt9::encoders::hashDrawBindingPacketKey(first),
+          dxmt9::encoders::hashDrawBindingPacketKey(second),
+          "same canonical binding packet values produce the same hash");
+}
+
+void testDrawBindingPacketKeyDiffersForTextureHandleChange() {
+  auto changed = makeBindingPacketKeyDesc();
+  changed.textures[2].handle = Handle{0x3333u};
+
+  checkBindingPacketKeyDiffers(
+      makeBindingPacketKey(makeBindingPacketKeyDesc()),
+      makeBindingPacketKey(changed),
+      "binding packet key changes when texture handle changes");
+}
+
+void testDrawBindingPacketKeyDiffersForSamplerStateChange() {
+  auto changed = makeBindingPacketKeyDesc();
+  changed.samplers[2].states[SAMP_ADDRESS_U] = 1u;
+
+  checkBindingPacketKeyDiffers(
+      makeBindingPacketKey(makeBindingPacketKeyDesc()),
+      makeBindingPacketKey(changed),
+      "binding packet key changes when sampler state changes");
+}
+
+void testDrawBindingPacketKeyDiffersForRasterChange() {
+  const auto base = makeBindingPacketKey(makeBindingPacketKeyDesc());
+
+  auto viewportChanged = makeBindingPacketKeyDesc();
+  viewportChanged.viewport.viewport.x = 8u;
+  checkBindingPacketKeyDiffers(
+      base,
+      makeBindingPacketKey(viewportChanged),
+      "binding packet key changes when raster viewport changes");
+
+  auto scissorChanged = makeBindingPacketKeyDesc();
+  scissorChanged.viewport.scissor.left = 8;
+  checkBindingPacketKeyDiffers(
+      base,
+      makeBindingPacketKey(scissorChanged),
+      "binding packet key changes when raster scissor changes");
+
+  auto cullChanged = makeBindingPacketKeyDesc();
+  cullChanged.rs.values[RS_CULL_MODE] = static_cast<u32>(CullMode::None);
+  checkBindingPacketKeyDiffers(
+      base,
+      makeBindingPacketKey(cullChanged),
+      "binding packet key changes when raster cull mode changes");
+}
+
+void testDrawBindingPacketKeyDiffersForExtraStreamChange() {
+  checkBindingPacketKeyDiffers(
+      makeBindingPacketKey(makeBindingPacketKeyDesc(), makeBindingPacketKeyParamView(3u)),
+      makeBindingPacketKey(makeBindingPacketKeyDesc(), makeBindingPacketKeyParamView(4u)),
+      "binding packet key changes when extra stream offset changes");
+}
+
+void testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues() {
   constexpr u32 kD3DDeclTypeFloat3 = 2u;
   constexpr u32 kD3DDeclMethodDefault = 0u;
   constexpr u32 kD3DDeclUsagePosition = 0u;
@@ -559,8 +689,54 @@ void testDrawBindingPacketPlanPreResolvesEncoderValues() {
             "binding packet carries viewport origin X");
   checkEq(packet.raster.scissor.x, std::uint64_t{6},
           "binding packet carries scissor x");
-  check(packet.argbufResourceRepopulate,
-        "binding packet records argbuf population requirement");
+  check(!packet.argbufResourceRepopulate,
+        "texture-bound binding packet suppresses Stage 2 argbuf resource repopulation");
+}
+
+void testDrawBindingPacketPlanAllowsTextureFreeArgbufRepopulate() {
+  DrawDesc desc{};
+  desc.viewport.viewport = Viewport{0u, 0u, 16u, 16u, 0.0f, 1.0f};
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const dxmt9::encoders::ParamView pv{
+      .primitiveType = PrimitiveType::TriangleList,
+      .primitiveCount = 1u,
+      .startVertex = 0u,
+      .baseVertexIndex = 0,
+      .startIndex = 0u,
+      .indexType = IndexType::UInt16,
+      .indexed = false,
+      .userVertexData = {},
+      .userIndexData = {},
+  };
+
+  const auto argbufPacket = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      pv,
+      16u,
+      16u,
+      false,
+      false,
+      false,
+      true);
+  check(argbufPacket.fragmentTextureSamplers.empty(),
+        "texture-free binding packet has no fragment texture/sampler plan");
+  check(argbufPacket.argbufResourceRepopulate,
+        "texture-free Stage 2 binding packet allows argbuf resource repopulation");
+
+  const auto stage1Packet = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      pv,
+      16u,
+      16u,
+      false,
+      false,
+      false,
+      false);
+  check(!stage1Packet.argbufResourceRepopulate,
+        "Stage 1 binding packet does not request argbuf resource repopulation");
 }
 
 }  // namespace
@@ -574,7 +750,13 @@ int main() {
     testDefaultSamplerInfoForNullTextureSlotIsDeterministic();
     testEncoderFragmentBindingPlanMatchesShaderSlots();
     testEncoderRasterStatePlanMatchesMetalViewportScissorCull();
-    testDrawBindingPacketPlanPreResolvesEncoderValues();
+    testDrawBindingPacketKeyIsStableForSameCanonicalValues();
+    testDrawBindingPacketKeyDiffersForTextureHandleChange();
+    testDrawBindingPacketKeyDiffersForSamplerStateChange();
+    testDrawBindingPacketKeyDiffersForRasterChange();
+    testDrawBindingPacketKeyDiffersForExtraStreamChange();
+    testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues();
+    testDrawBindingPacketPlanAllowsTextureFreeArgbufRepopulate();
   } catch (const TestFailure& failure) {
     std::cerr << "shader_argbuf_binding_value_spec failed: "
               << failure.what() << '\n';

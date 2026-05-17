@@ -1,0 +1,22 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: math-derivation
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0103 00000040 b00f0000 00000040 b00f0001 00000047 b00f0000 b0040000
+00000048 b00f0001 b0040001 00000001 800f0800 b0e40001 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-texture 1 2 2 A8R8G8B8 red green blue white
+dxmt9-sampler 1 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-bind-texture 1 1
+dxmt9-draw-textured-quad-tex2
+probe (16, 16) rgba(0.0, 0.0, 1.0, 1.0) 1
+probe (48, 16) rgba(1.0, 1.0, 1.0, 1.0) 1
+probe (16, 48) rgba(1.0, 1.0, 1.0, 1.0) 1
+probe (48, 48) rgba(0.0, 1.0, 0.0, 1.0) 1

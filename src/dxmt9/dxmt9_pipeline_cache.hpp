@@ -36,7 +36,7 @@ using u64 = std::uint64_t;
 // emitter/layout versions when MSL text or host-visible source layout changes;
 // debugEnvKey covers source-affecting env toggles for the current process.
 inline constexpr u32 kShaderEmitterVersion = 1u;
-inline constexpr u32 kShaderSourceLayoutVersion = 1u;
+inline constexpr u32 kShaderSourceLayoutVersion = 2u;
 inline constexpr u32 kShaderDebugEnvSchemaVersion = 1u;
 
 struct BlendAttachmentKey {

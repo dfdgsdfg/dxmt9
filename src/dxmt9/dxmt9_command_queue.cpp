@@ -290,6 +290,11 @@ void CommandQueue::applyDirtyRenderStateTexFactor() {
   uniform::applyRenderStateTexFactor(pendingDirty_);
 }
 
+void CommandQueue::applyDirtyTextureStageConstant() {
+  std::lock_guard<std::mutex> guard(dirtyMutex_);
+  uniform::applyTextureStageConstant(pendingDirty_);
+}
+
 // R-BACK-15.4 / 15.5 / 15.6: touched color attachment set. Single-thread
 // access (encoder thread); no mutex. Null/zero handles are no-ops on
 // every entry-point so callers don't have to guard.
@@ -333,6 +338,46 @@ void CommandQueue::uploadTextureLevel(core::TextureHandle handle,
   if (initializer_) {
     initializer_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
   }
+}
+
+core::HResult CommandQueue::generateTextureMipSublevels(core::TextureHandle handle) {
+  if (!handle || !queue_) {
+    return core::D3DERR_INVALIDCALL;
+  }
+
+  const auto flushResult = flushInitializerUploads();
+  if (flushResult.event && flushResult.value > 0) {
+    WMT::SharedEvent{flushResult.event.handle}.waitUntilSignaledValue(
+        flushResult.value, /*timeout-ms*/ 1000);
+  }
+
+  std::lock_guard lock(mutex_);
+  auto* record = pool_.findTexture(handle.value);
+  if (!record || !record->texture || record->desc.levels <= 1) {
+    return record ? core::D3D_OK : core::D3DERR_INVALIDCALL;
+  }
+
+  auto commandBuffer = newCommandBuffer();
+  if (!commandBuffer) {
+    return core::D3DERR_INVALIDCALL;
+  }
+  auto blit = commandBuffer.blitCommandEncoder();
+  if (!blit) {
+    return core::D3DERR_INVALIDCALL;
+  }
+  if (record->isHeapBacked && record->heap.handle != 0) {
+    blit.useHeap(record->heap);
+    perf::countUseHeap();
+  }
+  blit.generateMipmaps(WMT::Texture{record->texture.handle});
+  blit.endEncoding();
+  commandBuffer.commit();
+  const auto started = std::chrono::steady_clock::now();
+  commandBuffer.waitUntilCompleted();
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  perf::countSyncWait(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  return core::D3D_OK;
 }
 
 CommandQueue::InitializerFlush CommandQueue::flushInitializerUploads() {

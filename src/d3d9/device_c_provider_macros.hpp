@@ -115,6 +115,7 @@
 #define dxmt9c_texture_get_level_count dxmt9p_texture_get_level_count
 #define dxmt9c_texture_get_level_desc dxmt9p_texture_get_level_desc
 #define dxmt9c_texture_generate_mip_sublevels dxmt9p_texture_generate_mip_sublevels
+#define dxmt9c_texture_set_lod dxmt9p_texture_set_lod
 #define dxmt9c_buffer_addref dxmt9p_buffer_addref
 #define dxmt9c_buffer_release dxmt9p_buffer_release
 #define dxmt9c_buffer_lock dxmt9p_buffer_lock

@@ -71,6 +71,8 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasDiffuse);
   hash *= 1099511628211ull;
+  hash ^= static_cast<u64>(layout.hasNormal);
+  hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasBlendWeight);
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasBlendIndices);
@@ -80,6 +82,8 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash ^= layout.positionOffset;
   hash *= 1099511628211ull;
   hash ^= layout.diffuseOffset;
+  hash *= 1099511628211ull;
+  hash ^= layout.normalOffset;
   hash *= 1099511628211ull;
   hash ^= layout.blendWeightOffset;
   hash *= 1099511628211ull;
@@ -127,6 +131,10 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
                  element.type == kD3DDeclTypeD3DColor) {
         layout.hasDiffuse = true;
         layout.diffuseOffset = element.offset;
+      } else if (element.usage == kD3DDeclUsageNormal && element.usageIndex == 0 &&
+                 (element.type == kD3DDeclTypeFloat3 || element.type == kD3DDeclTypeFloat4)) {
+        layout.hasNormal = true;
+        layout.normalOffset = element.offset;
       } else if (element.usage == kD3DDeclUsageBlendWeight && element.usageIndex == 0 &&
                  element.type <= kD3DDeclTypeFloat4) {
         layout.hasBlendWeight = true;
@@ -173,6 +181,8 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
   }
 
   if ((fvf & kFvfNormal) != 0) {
+    layout.hasNormal = true;
+    layout.normalOffset = offset;
     offset += 12u;
   }
 
@@ -215,9 +225,15 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
   const auto layout = decodeFixedFunctionVertexLayout(context.vertexDecl);
   constexpr u32 kTciIndexMask = 0x0000ffffu;
   constexpr u32 kTciGenMask = 0xffff0000u;
+  constexpr u32 kTciCameraSpaceNormal = 0x00010000u;
   constexpr u32 kTciCameraSpacePosition = 0x00020000u;
+  constexpr u32 kTciCameraSpaceReflection = 0x00030000u;
+  constexpr u32 kTciSphereMap = 0x00040000u;
   const auto maxTexOut = shaders::vsoutMaxTexcoord();
-  const auto emitStageTexcoords = [&](std::ostringstream& shader, const char* positionExpr) {
+  const auto emitStageTexcoords = [&](std::ostringstream& shader,
+                                      const char* positionExpr,
+                                      const char* normalExpr,
+                                      const char* unitNormalExpr) {
     for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
       // DXMT9_TRIM_UNUSED_VARYINGS: skip stages that the trimmed VSOut
       // doesn't declare; the local `dxmt9_texcoordN` would still compute
@@ -232,6 +248,30 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       }
       if (texCoordGen == kTciCameraSpacePosition && !(layout && layout->preTransformed)) {
         shader << "  dxmt9_texcoord" << stage << " = float4(" << positionExpr << ".xyz, 1.0f);\n";
+      } else if (texCoordGen == kTciCameraSpaceNormal && !(layout && layout->preTransformed)) {
+        shader << "  dxmt9_texcoord" << stage << " = float4(" << normalExpr << ", 1.0f);\n";
+      } else if (texCoordGen == kTciCameraSpaceReflection && !(layout && layout->preTransformed)) {
+        shader << "  float3 dxmt9_eye" << stage << " = normalize(-" << positionExpr << ".xyz);\n";
+        shader << "  if (all(fabs(" << positionExpr << ".xyz) < float3(1.0e-8f))) "
+               << "dxmt9_eye" << stage << " = float3(0.0f, 0.0f, 1.0f);\n";
+        shader << "  dxmt9_texcoord" << stage << " = float4(reflect(-dxmt9_eye" << stage
+               << ", " << unitNormalExpr << "), 1.0f);\n";
+      } else if (texCoordGen == kTciSphereMap && !(layout && layout->preTransformed)) {
+        shader << "  float3 dxmt9_eye" << stage << " = normalize(-" << positionExpr << ".xyz);\n";
+        shader << "  if (all(fabs(" << positionExpr << ".xyz) < float3(1.0e-8f))) "
+               << "dxmt9_eye" << stage << " = float3(0.0f, 0.0f, 1.0f);\n";
+        shader << "  float3 dxmt9_reflect" << stage << " = reflect(-dxmt9_eye" << stage
+               << ", " << unitNormalExpr << ");\n";
+        shader << "  float dxmt9_sphereM" << stage
+               << " = 2.0f * sqrt(dot(dxmt9_reflect" << stage << ".xy, dxmt9_reflect" << stage
+               << ".xy) + (dxmt9_reflect" << stage << ".z + 1.0f) * "
+               << "(dxmt9_reflect" << stage << ".z + 1.0f));\n";
+        shader << "  float2 dxmt9_sphereUv" << stage << " = dxmt9_sphereM" << stage
+               << " > 1.0e-8f ? float2(dxmt9_reflect" << stage
+               << ".x / dxmt9_sphereM" << stage << " + 0.5f, -dxmt9_reflect" << stage
+               << ".y / dxmt9_sphereM" << stage << " + 0.5f) : float2(0.5f, 0.5f);\n";
+        shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_sphereUv" << stage
+               << ", dxmt9_reflect" << stage << ".z, 1.0f);\n";
       }
       if (layout && layout->preTransformed) {
         shader << "  out.texcoord" << stage << " = dxmt9_texcoord" << stage << ";\n";
@@ -296,7 +336,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.color = float4(1.0);\n";
     }
     out << "  out.secondaryColor = float4(0.0);\n";
-    emitStageTexcoords(out, "inPosition");
+    emitStageTexcoords(out, "inPosition", "float3(0.0f, 0.0f, 1.0f)", "float3(0.0f, 0.0f, 1.0f)");
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
     if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
   } else if (layout) {
@@ -312,6 +352,16 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     } else {
       out << "  float4 inPosition = float4(dxmt9_load_f32x3(stream0, base + " << layout->positionOffset
           << "u), 1.0f);\n";
+    }
+    if (layout->hasNormal) {
+      out << "  float3 inNormal = dxmt9_load_f32x3(stream0, base + " << layout->normalOffset << "u);\n";
+    } else {
+      out << "  float3 inNormal = float3(0.0f, 0.0f, 1.0f);\n";
+    }
+    out << "  float inNormalLength = length(inNormal);\n";
+    out << "  float3 unitNormal = inNormalLength > 1.0e-8f ? inNormal / inNormalLength : float3(0.0f, 0.0f, 1.0f);\n";
+    if (key.normalizeNormals) {
+      out << "  inNormal = unitNormal;\n";
     }
     const bool emitVertexBlend =
         key.vertexBlend > 0 && key.vertexBlend <= 3 && layout->hasBlendWeight;
@@ -400,7 +450,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.color = float4(1.0);\n";
     }
     out << "  out.secondaryColor = float4(0.0);\n";
-    emitStageTexcoords(out, "inPosition");
+    emitStageTexcoords(out, "inPosition", "inNormal", "unitNormal");
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
     if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
   } else {
@@ -563,15 +613,19 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
         out << "  float4 texColor" << stage << " = float4(1.0f);\n";
       }
       out << "  float4 colorArg1_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg1
-          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
+          << "ffpPs.stageConstants[" << stage << "]);\n";
       out << "  float4 colorArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg2
-          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
+          << "ffpPs.stageConstants[" << stage << "]);\n";
       out << "  float4 stageResult" << stage << " = dxmt9_apply_texture_op(" << stageKey.colorOp
           << "u, colorArg1_" << stage << ", colorArg2_" << stage << ", current);\n";
       out << "  float4 alphaArg1_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg1
-          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
+          << "ffpPs.stageConstants[" << stage << "]);\n";
       out << "  float4 alphaArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg2
-          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp);\n";
+          << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
+          << "ffpPs.stageConstants[" << stage << "]);\n";
       out << "  stageResult" << stage << ".a = dxmt9_apply_texture_op(" << stageKey.alphaOp
           << "u, alphaArg1_" << stage << ", alphaArg2_" << stage << ", current).a;\n";
       out << "  current = stageResult" << stage << ";\n";
@@ -597,19 +651,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   }
   if (key.fogMode != FogMode::None) {
     out << "  float fogDepth = color.a;\n";
-    out << "  float fog = 1.0f;\n";
-    out << "  if (ffpPs.fogMode == 1u) {\n";
-    out << "    fog = clamp((ffpPs.fogEnd - fogDepth) /\n";
-    out << "                max(ffpPs.fogEnd - ffpPs.fogStart, 1.0e-6f),\n";
-    out << "                0.0f, 1.0f);\n";
-    out << "  } else if (ffpPs.fogMode == 2u) {\n";
-    out << "    fog = clamp(exp(-ffpPs.fogDensity * fogDepth), 0.0f, 1.0f);\n";
-    out << "  } else if (ffpPs.fogMode == 3u) {\n";
-    out << "    float d = ffpPs.fogDensity * fogDepth;\n";
-    out << "    fog = clamp(exp(-(d * d)), 0.0f, 1.0f);\n";
-    out << "  }\n";
-    out << "  float4 fogColor = float4(0.5, 0.5, 0.5, 1.0);\n";
-    out << "  color = mix(fogColor, color, fog);\n";
+    out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth);\n";
   }
   out << "  return color;\n";
   out << "}\n";
@@ -675,6 +717,7 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   // UBO layout flows through the tile binding (FfpPsConsts buffer slot).
   out << "struct FfpPsConsts {\n";
   out << "  float4 textureFactor;\n";
+  out << "  float4 stageConstants[" << kMaxTextureStages << "];\n";
   out << "  float alphaRef;\n";
   out << "  float fogStart;\n";
   out << "  float fogEnd;\n";
@@ -685,6 +728,7 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   out << "  uint _pad;\n";
   out << "  float4 bumpEnvMat[" << kMaxTextureStages << "];\n";
   out << "  float2 bumpEnvLum[" << kMaxTextureStages << "];\n";
+  out << "  float4 fogColor;\n";
   out << "};\n";
   if (argbufHybrid) {
     // R-BACK-12.22..12.26 MSL routing — tile kernel reads `ffpPs`
@@ -758,8 +802,7 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
     out << "  float fog = clamp((ffpPs.fogEnd - color.a) /\n";
     out << "                    max(ffpPs.fogEnd - ffpPs.fogStart, 1.0e-6f),\n";
     out << "                    0.0f, 1.0f);\n";
-    out << "  float4 fogColor = float4(0.5f, 0.5f, 0.5f, 1.0f);\n";
-    out << "  color = mix(fogColor, color, fog);\n";
+    out << "  color = float4(mix(ffpPs.fogColor.rgb, color.rgb, fog), color.a);\n";
   }
   // Demote back to imageblock element type on write.
   if (useHalf) {

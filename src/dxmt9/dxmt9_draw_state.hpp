@@ -50,6 +50,7 @@ static_assert(sizeof(FfpVsConsts) == 956,
 
 struct FfpPsConsts {
   std::array<f32, 4> textureFactor{1.0f, 1.0f, 1.0f, 1.0f};
+  std::array<std::array<f32, 4>, core::kMaxTextureStages> stageConstants{};
   f32 alphaRef = 0.0f;
   f32 fogStart = 1.0f;
   f32 fogEnd = 1.0f;
@@ -60,8 +61,9 @@ struct FfpPsConsts {
   u32 _pad = 0;
   std::array<std::array<f32, 4>, core::kMaxTextureStages> bumpEnvMat{};
   std::array<std::array<f32, 2>, core::kMaxTextureStages> bumpEnvLum{};
+  std::array<f32, 4> fogColor{};
 };
-static_assert(sizeof(FfpPsConsts) == 240,
+static_assert(sizeof(FfpPsConsts) == 384,
               "FfpPsConsts layout must match MSL prelude declaration");
 
 // Per-draw push constants. Padded to 16 B so Metal setVertexBytes

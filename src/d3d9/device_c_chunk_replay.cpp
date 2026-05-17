@@ -138,6 +138,11 @@ void markDirtyFromDrawPacketState(dxmt9::CommandQueue* q,
       q->applyDirtyRenderStateTexFactor();
     }
   }
+  for (uint32_t i = 0; i < packet.tssCount; ++i) {
+    if (packet.tss[i].type == dxmt9::core::TSS_CONSTANT) {
+      q->applyDirtyTextureStageConstant();
+    }
+  }
   if (packet.transformCount > 0) q->applyDirtyTransformChange();
   // Light slot/enable + material deltas share the FFP VS uniform
   // block with transforms (design.md §10 — lights[8] sits next to
