@@ -544,6 +544,29 @@ struct ShaderConstantUsageBounds {
                                    const ShaderConstantUsageBounds&) = default;
 };
 
+// Normalized FFP vertex-pipeline variant key. POD by design — owns no
+// pointers, no heap-backed containers. Two D3D9 `DeviceState`s that affect
+// the FFP vertex shader text identically MUST produce the same key (same
+// member bytes and same `hash`). This is the deterministic contract that
+// keeps the PSO cache and shader-source cache from thrashing.
+//
+// Lifecycle:
+//   - Sole canonical builder: `dxmt9::core::makeFfpVertexKey(const
+//     DeviceState&)` (declared in `core_snapshots.hpp`, implemented in
+//     `src/d3d9/core_draw.cpp`). The builder reads each render state with
+//     a default of 0 / false when absent so missing entries do not perturb
+//     the key.
+//   - Hashed by `hashFfpVertexKey()` in `src/d3d9/core_draw.cpp`; the
+//     result is stored in `hash` and is also consumed via
+//     `hashShaderRef()` when this key is wrapped in a `ShaderRef`.
+//   - Tests in `tests/native/core/core_ffp_state_key_spec.cpp` and
+//     `tests/native/backend/ffp_key_determinism_spec.cpp` guard the
+//     "same state -> same key" and "1-bit perturbation -> different key"
+//     invariants; both must pass before any change to the builder.
+//   - Test fixtures may brace-init this struct directly to inject a
+//     specific variant without going through `DeviceState`; callers that
+//     do so are responsible for also assigning `hash = hashFfpVertexKey(*this)`
+//     if they intend the key to participate in caching.
 struct FfpVertexKey {
   bool lightingEnabled = false;
   bool specularEnabled = false;
@@ -578,6 +601,21 @@ struct FfpPixelStage {
   friend constexpr bool operator==(const FfpPixelStage&, const FfpPixelStage&) = default;
 };
 
+// Normalized FFP pixel-pipeline variant key. Same determinism contract as
+// `FfpVertexKey` — same `DeviceState` (texture stage states + fog + alpha
+// test) MUST produce the same byte-identical key and the same `hash`.
+//
+// Lifecycle:
+//   - Sole canonical builder: `dxmt9::core::makeFfpPixelKey(const
+//     DeviceState&)` (declared in `core_snapshots.hpp`, implemented in
+//     `src/d3d9/core_draw.cpp`).
+//   - Hashed by `hashFfpPixelKey()` in `src/d3d9/core_draw.cpp`.
+//   - One-bit perturbations in any `FfpPixelStage` field (e.g. flipping
+//     `TSS_COLOR_OP` from `SelectArg1` to `Modulate`) MUST produce a key
+//     that compares unequal — the shader source generator branches on
+//     these and a hash collision would silently miscompile.
+//   - Guard tests: `tests/native/core/core_ffp_state_key_spec.cpp` plus
+//     `tests/native/backend/ffp_key_determinism_spec.cpp`.
 struct FfpPixelKey {
   std::array<FfpPixelStage, kMaxTextureStages> stages{};
   FogMode fogMode = FogMode::None;

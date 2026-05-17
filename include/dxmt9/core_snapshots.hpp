@@ -997,6 +997,17 @@ class BackendDevice {
 
 struct DeviceState;
 
+// Canonical FFP variant-key builders. Determinism contract: for any
+// `DeviceState` value `s`, repeated invocations `makeFfpVertexKey(s)` /
+// `makeFfpPixelKey(s)` produce keys whose member bytes and `hash` are
+// equal, and whose `operator==` returns true. Conversely, any single
+// D3D9 render-state / texture-stage-state bit that the key reads MUST
+// flip the resulting key to compare unequal — otherwise PSO cache lookups
+// would silently merge unrelated shader variants. See the comments on
+// `FfpVertexKey` / `FfpPixelKey` in `core_constants.hpp`. Implementation
+// lives in `src/d3d9/core_draw.cpp`; regression-guarded by
+// `tests/native/core/core_ffp_state_key_spec.cpp` and
+// `tests/native/backend/ffp_key_determinism_spec.cpp`.
 FfpVertexKey makeFfpVertexKey(const DeviceState& state);
 FfpPixelKey makeFfpPixelKey(const DeviceState& state);
 

@@ -2133,6 +2133,15 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
   return D3D_OK;
 }
 
+// Determinism: for a fixed `DeviceState` value, repeated calls produce
+// byte-identical keys (including `key.hash`). Every read uses
+// `contains() ? at() : default` so a missing render state collapses to a
+// well-defined zero rather than reading uninitialized storage. Sensitivity:
+// any bit toggled in the render-state map fields enumerated below MUST
+// alter the resulting key — silent collisions cause PSO cache merging.
+// Tests: `tests/native/core/core_ffp_state_key_spec.cpp` and
+// `tests/native/backend/ffp_key_determinism_spec.cpp` enforce both
+// directions.
 FfpVertexKey makeFfpVertexKey(const DeviceState &state) {
   FfpVertexKey key;
   key.lightingEnabled = state.renderStates.contains(RS_LIGHTING) &&
@@ -2197,6 +2206,10 @@ FfpVertexKey makeFfpVertexKey(const DeviceState &state) {
   return key;
 }
 
+// Same determinism + sensitivity contract as `makeFfpVertexKey`. Each
+// per-stage field reads from `state.textureStageStates[stage]` with a 0
+// default when absent, so the key is order-independent on the underlying
+// map storage. Guard tests live alongside the vertex builder.
 FfpPixelKey makeFfpPixelKey(const DeviceState &state) {
   FfpPixelKey key;
   for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {

@@ -73,6 +73,17 @@ struct StencilFaceKeyHash {
   std::size_t operator()(const StencilFaceKey& key) const noexcept;
 };
 
+// PSO cache key. The FFP variant-key contribution is indirect: when the
+// PE state contains a fixed-function shader stage the corresponding
+// `core::FfpVertexKey` / `core::FfpPixelKey` is wrapped in a
+// `core::ShaderRef`, the shader-source generator (`dxmt9_ffp_shaders.cpp`)
+// emits MSL text that is content-hashed into `vertexSourceHash` /
+// `fragmentSourceHash` here. The determinism contract on the FFP keys
+// (same `DeviceState` -> same key -> same source text -> same source
+// hash) is therefore load-bearing for the PSO cache hit rate. See the
+// header comments on `core::FfpVertexKey` / `core::FfpPixelKey` in
+// `include/dxmt9/core_constants.hpp` for the canonical builders and the
+// dedicated regression tests.
 struct ShaderVariantKey {
   u64 hash = 0;
   u64 vertexSourceHash = 0;

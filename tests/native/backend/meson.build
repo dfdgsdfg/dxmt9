@@ -11,6 +11,21 @@ backend_key_descriptor_spec = executable(
 test('dxmt9-backend-key-descriptor-spec', backend_key_descriptor_spec,
      env: dxmt9_native_test_env)
 
+# Regression guard for the FFP variant-key determinism + sensitivity
+# contract. See the header comment in
+# `tests/native/backend/ffp_key_determinism_spec.cpp` and the lifecycle
+# comments on `core::FfpVertexKey` / `core::FfpPixelKey`.
+ffp_key_determinism_spec = executable(
+  'dxmt9-ffp-key-determinism-spec',
+  'ffp_key_determinism_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-ffp-key-determinism-spec', ffp_key_determinism_spec,
+     env: dxmt9_native_test_env)
+
 backend_pipeline_key_spec = executable(
   'dxmt9-backend-pipeline-key-spec',
   'backend_pipeline_key_spec.cpp',
