@@ -106,7 +106,7 @@ void testFfpVertexStage1Bindings() {
                    "Stage 1 FFP vertex must not bind argbuf at slot 30");
   checkNotContains(src, "ArgbufLayout",
                    "Stage 1 FFP vertex must not reference ArgbufLayout");
-  checkNotContains(src, "abuf->",
+  checkNotContains(src, "abuf.",
                    "Stage 1 FFP vertex must not dereference an argbuf pointer");
 }
 
@@ -121,11 +121,11 @@ void testFfpVertexStage2Bindings() {
   // and DrawVolatile stay at their direct slots (design.md §11.4).
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 FFP vertex binds argbuf at slot 30");
-  checkContains(src, "ArgbufLayout const* abuf",
-                "Stage 2 FFP vertex declares ArgbufLayout pointer parameter");
-  checkContains(src, "abuf->vsConsts",
+  checkContains(src, "ArgbufLayout& abuf",
+                "Stage 2 FFP vertex declares ArgbufLayout reference parameter");
+  checkContains(src, "abuf.vsConsts",
                 "Stage 2 FFP vertex aliases vsConsts off the argbuf");
-  checkContains(src, "abuf->ffpVs",
+  checkContains(src, "abuf.ffpVs",
                 "Stage 2 FFP vertex aliases ffpVs off the argbuf");
   checkContains(src, "[[buffer(1)]]",
                 "Stage 2 FFP vertex keeps stream0 direct at slot 1");
@@ -154,7 +154,7 @@ void testFfpPixelStage1Bindings() {
   checkContains(src, "[[buffer(3)]]", "Stage 1 FFP pixel declares FfpPsConsts at slot 3");
   checkNotContains(src, "[[buffer(30)]]",
                    "Stage 1 FFP pixel must not bind argbuf at slot 30");
-  checkNotContains(src, "abuf->",
+  checkNotContains(src, "abuf.",
                    "Stage 1 FFP pixel must not dereference an argbuf pointer");
 }
 
@@ -182,24 +182,20 @@ void testFfpPixelStage2BindingsTextured() {
                                                     makeContext(desc, /*argbufHybridMode=*/true));
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 FFP pixel binds argbuf at slot 30");
-  checkContains(src, "ArgbufLayout const* abuf",
-                "Stage 2 FFP pixel declares ArgbufLayout pointer parameter");
-  checkContains(src, "abuf->psConsts",
+  checkContains(src, "ArgbufLayout& abuf",
+                "Stage 2 FFP pixel declares ArgbufLayout reference parameter");
+  checkContains(src, "abuf.psConsts",
                 "Stage 2 FFP pixel aliases psConsts off the argbuf");
-  checkContains(src, "abuf->ffpPs",
+  checkContains(src, "abuf.ffpPs",
                 "Stage 2 FFP pixel aliases ffpPs off the argbuf");
-  checkContains(src, "abuf->textures2d[0]",
-                "Stage 2 FFP pixel aliases tex0 off the argbuf");
-  checkContains(src, "abuf->samplers[0]",
-                "Stage 2 FFP pixel aliases samp0 off the argbuf");
+  checkContains(src, "texture2d<float> tex0 [[texture(0)]]",
+                "Stage 2 FFP pixel keeps tex0 on the direct texture lane");
+  checkContains(src, "sampler samp0 [[sampler(0)]]",
+                "Stage 2 FFP pixel keeps samp0 on the direct sampler lane");
   checkNotContains(src, "[[buffer(0)]]",
                    "Stage 2 FFP pixel must not bind PsConsts at slot 0");
   checkNotContains(src, "[[buffer(3)]]",
                    "Stage 2 FFP pixel must not bind FfpPsConsts at slot 3");
-  checkNotContains(src, "[[texture(0)]]",
-                   "Stage 2 FFP pixel must not bind texture at dedicated slot");
-  checkNotContains(src, "[[sampler(0)]]",
-                   "Stage 2 FFP pixel must not bind sampler at dedicated slot");
   // Body still uses `tex0.sample(samp0, ...)` by name.
   checkContains(src, "tex0.sample(samp0",
                 "Stage 2 FFP pixel body keeps tex0.sample(samp0, ...) form");
@@ -215,9 +211,9 @@ void testFfpPixelStage2BindingsNoTexture() {
                                                     makeContext(desc, /*argbufHybridMode=*/true));
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 FFP pixel (no-texture) binds argbuf at slot 30");
-  checkContains(src, "abuf->psConsts",
+  checkContains(src, "abuf.psConsts",
                 "Stage 2 FFP pixel (no-texture) aliases psConsts");
-  checkContains(src, "abuf->ffpPs",
+  checkContains(src, "abuf.ffpPs",
                 "Stage 2 FFP pixel (no-texture) aliases ffpPs");
   checkNotContains(src, "[[buffer(0)]]",
                    "Stage 2 FFP pixel (no-texture) must not bind slot 0");
@@ -250,7 +246,7 @@ void testFfpTileStage2Bindings() {
       static_cast<u32>(WMTPixelFormatBGRA8Unorm));
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 tile FFP binds argbuf at slot 30");
-  checkContains(src, "abuf->ffpPs",
+  checkContains(src, "abuf.ffpPs",
                 "Stage 2 tile FFP aliases ffpPs off the argbuf");
   checkNotContains(src, "[[buffer(3)]]",
                    "Stage 2 tile FFP must not bind ffpPs directly at slot 3");
@@ -298,7 +294,7 @@ void testTranslatedPixelStage1Bindings() {
                 "Stage 1 translated pixel binds sampler stage 2 directly");
   checkNotContains(src, "[[buffer(30)]]",
                    "Stage 1 translated pixel must not bind argbuf at slot 30");
-  checkNotContains(src, "abuf->",
+  checkNotContains(src, "abuf.",
                    "Stage 1 translated pixel must not dereference an argbuf pointer");
 }
 
@@ -311,26 +307,23 @@ void testTranslatedPixelStage2Bindings() {
       shader, makeContext(desc, /*argbufHybridMode=*/true));
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 translated pixel binds argbuf at slot 30");
-  checkContains(src, "ArgbufLayout const* abuf",
-                "Stage 2 translated pixel declares argbuf pointer parameter");
-  checkContains(src, "abuf->psConsts",
+  checkContains(src, "ArgbufLayout& abuf",
+                "Stage 2 translated pixel declares argbuf reference parameter");
+  checkContains(src, "abuf.psConsts",
                 "Stage 2 translated pixel aliases psConsts off the argbuf");
-  checkContains(src, "abuf->ffpPs",
+  checkContains(src, "abuf.ffpPs",
                 "Stage 2 translated pixel aliases ffpPs off the argbuf");
-  checkContains(src, "abuf->textures2d[2]",
-                "Stage 2 translated pixel aliases tex2 off argbuf textures2d[2]");
-  checkContains(src, "abuf->samplers[2]",
-                "Stage 2 translated pixel aliases samp2 off argbuf samplers[2]");
+  checkContains(src, "texture2d<float> tex2 [[texture(2)]]",
+                "Stage 2 translated pixel keeps tex2 on the direct texture lane");
+  checkContains(src, "sampler samp2 [[sampler(2)]]",
+                "Stage 2 translated pixel keeps samp2 on the direct sampler lane");
   checkNotContains(src, "[[buffer(0)]]",
                    "Stage 2 translated pixel must not bind slot 0");
   checkNotContains(src, "[[buffer(3)]]",
                    "Stage 2 translated pixel must not bind slot 3");
-  checkNotContains(src, "[[texture(2)]]",
-                   "Stage 2 translated pixel must not bind texture(2) directly");
-  checkNotContains(src, "[[sampler(2)]]",
-                   "Stage 2 translated pixel must not bind sampler(2) directly");
-  // Body still calls tex2.sample(samp2, ...) — argbuf rewrite happens at
-  // the binding site only; the rest of the body is unchanged.
+  // Body still calls tex2.sample(samp2, ...) — only the constant binding
+  // changes between Stage 1 and Stage 2; the texture sample form is
+  // unchanged.
   checkContains(src, "tex2.sample(samp2",
                 "Stage 2 translated pixel body keeps tex2.sample(samp2, ...) form");
 }
@@ -392,11 +385,11 @@ void testTranslatedVertexStage2Bindings() {
       shader, makeContext(desc, /*argbufHybridMode=*/true));
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 translated vertex binds argbuf at slot 30");
-  checkContains(src, "ArgbufLayout const* abuf",
+  checkContains(src, "ArgbufLayout& abuf",
                 "Stage 2 translated vertex declares argbuf pointer parameter");
-  checkContains(src, "abuf->vsConsts",
+  checkContains(src, "abuf.vsConsts",
                 "Stage 2 translated vertex aliases vsConsts off the argbuf");
-  checkContains(src, "abuf->ffpVs",
+  checkContains(src, "abuf.ffpVs",
                 "Stage 2 translated vertex aliases ffpVs off the argbuf");
   // Vertex stream + DrawVolatile remain on direct binding (design.md §11.4).
   checkContains(src, "device const uchar* stream0 [[buffer(1)]]",
@@ -430,6 +423,19 @@ void testArgbufLayoutStructPresentOnlyForStage2() {
   // Prelude pin: bind slot 30 mirrors DXMT, designs.md §11.2.
   check(dxmt9::shaders::kArgbufHybridBindSlot == 30u,
         "argbuf bind slot constant is 30");
+  // R-BACK-12.22..12.26 — argbuf is constants-only; texture/sampler resources
+  // stay on the direct render-encoder lane.
+  checkNotContains(stage2, "textures2d",
+                   "Stage 2 prelude must not declare argbuf texture arrays");
+  checkNotContains(stage2, "texturesCube",
+                   "Stage 2 prelude must not declare argbuf cube texture arrays");
+  checkNotContains(stage2, "textures3d",
+                   "Stage 2 prelude must not declare argbuf 3D texture arrays");
+  checkNotContains(stage2, "array<sampler",
+                   "Stage 2 prelude must not declare an argbuf sampler array");
+  check(dxmt9::shaders::kArgbufHybridDescriptorCount ==
+            dxmt9::shaders::kArgbufHybridConstantBufferCount,
+        "argbuf descriptor count equals the four constant-buffer pointers");
 }
 
 }  // namespace

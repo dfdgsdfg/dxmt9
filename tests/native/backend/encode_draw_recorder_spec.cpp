@@ -516,12 +516,14 @@ void testBaseStateRecorderCapturesRasterTextureSamplerOrdering() {
                                                       0.25f, 0.75f};
   state.hot.viewport.scissorEnabled = true;
   state.hot.viewport.scissor = dxmt9::core::Rect{11, 22, 111, 222};
+  // FlatStateSet invariant: entries[0..count) sorted ascending by state.
+  // RS_FILL_MODE (8) < RS_CULL_MODE (22).
   state.hot.renderStates.entries[0] = dxmt9::core::FlatStateEntry{
-      dxmt9::core::RS_CULL_MODE,
-      static_cast<u32>(dxmt9::core::CullMode::Ccw)};
-  state.hot.renderStates.entries[1] = dxmt9::core::FlatStateEntry{
       dxmt9::core::RS_FILL_MODE,
       2u};
+  state.hot.renderStates.entries[1] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_CULL_MODE,
+      static_cast<u32>(dxmt9::core::CullMode::Ccw)};
   state.hot.renderStates.count = 2u;
   state.hot.textures[0] = harness.createBoundTexture(kTexture0, 64u, 64u);
   state.hot.textures[1] = harness.createBoundTexture(kTexture1, 32u, 32u);
@@ -633,7 +635,11 @@ void testBaseStateRecorderCapturesRasterTextureSamplerOrdering() {
       3u);
 }
 
-void testArgbufModeSkipsStage1TextureSamplerShadowBinds() {
+void testArgbufModeKeepsDirectTextureSamplerBinds() {
+  // R-BACK-12.22..12.26 — Stage 2 is constants-only. Texture and sampler
+  // resources continue to travel on the direct render-encoder
+  // setFragmentTexture / setFragmentSamplerState lane (the validated
+  // Stage 1 path) even when argbuf hybrid mode is active.
   Harness harness;
   Capture capture;
   auto recorder = makeRecorder(capture);
@@ -666,12 +672,19 @@ void testArgbufModeSkipsStage1TextureSamplerShadowBinds() {
                 /*skipBaseStateBind=*/false,
                 /*argbufHybridMode=*/true);
 
+  bool sawFragmentTexture = false;
+  bool sawFragmentSampler = false;
   for (const auto& command : capture.commands) {
-    check(command.kind != RecordedKind::SetFragmentTexture,
-          "Stage 2 argbuf mode skips direct fragment texture binds");
-    check(command.kind != RecordedKind::SetFragmentSamplerState,
-          "Stage 2 argbuf mode skips direct fragment sampler binds");
+    if (command.kind == RecordedKind::SetFragmentTexture) {
+      sawFragmentTexture = true;
+    } else if (command.kind == RecordedKind::SetFragmentSamplerState) {
+      sawFragmentSampler = true;
+    }
   }
+  check(sawFragmentTexture,
+        "Stage 2 argbuf mode keeps the direct setFragmentTexture bind");
+  check(sawFragmentSampler,
+        "Stage 2 argbuf mode keeps the direct setFragmentSamplerState bind");
 }
 
 void testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset() {
@@ -1004,7 +1017,7 @@ void testUserVertexAndUserIndexOrdering() {
 int main() {
   try {
     testBaseStateRecorderCapturesRasterTextureSamplerOrdering();
-    testArgbufModeSkipsStage1TextureSamplerShadowBinds();
+    testArgbufModeKeepsDirectTextureSamplerBinds();
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
     testBoundVertexAndUserIndexOrdering();

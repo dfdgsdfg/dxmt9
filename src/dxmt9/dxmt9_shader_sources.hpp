@@ -113,26 +113,24 @@ bool fsHalfPrecisionEnabled();
 
 // R-BACK-12.22..12.26 — Stage 2 argument-buffer hybrid prelude. Emits
 // the same per-category uniform struct definitions as makeShaderPrelude,
-// then declares an `ArgbufLayout` MSL struct that wraps the per-stage
-// constant pointers + texture/sampler descriptors at the layout offsets
+// then declares an `ArgbufLayout` MSL struct that wraps the four
+// per-frequency constant-buffer pointers at the layout offsets
 // described in design.md §11.2:
 //
 //   struct ArgbufLayout {
-//     constant VsConsts* vsConsts    [[id(0)]];
+//     constant VsConsts*    vsConsts [[id(0)]];
 //     constant FfpVsConsts* ffpVs    [[id(1)]];
-//     constant PsConsts* psConsts    [[id(2)]];
+//     constant PsConsts*    psConsts [[id(2)]];
 //     constant FfpPsConsts* ffpPs    [[id(3)]];
-//     array<texture2d<float>, 8> textures2d     [[id(4)]];
-//     array<texturecube<float>, 8> texturesCube [[id(12)]];
-//     array<texture3d<float>, 8> textures3d     [[id(20)]];
-//     array<sampler, 8> samplers                [[id(28)]];
 //   };
 //
 // Shaders compiled with this prelude bind a single argument buffer at
-// MTL slot 30 (vertex + fragment) and dereference each member instead
-// of reading dedicated slot-0/3 buffers. `DrawVolatile` (slot 5,
-// setVertexBytes) and the vertex stream (slot 1) stay on direct
-// binding — see R-BACK-12.23 / design.md §11.2.
+// MTL slot 30 (vertex + fragment) and dereference each constant pointer
+// instead of reading dedicated slot-0/3 buffers. Texture/sampler
+// resources stay on direct `[[texture(N)]]` / `[[sampler(N)]]`
+// binding — the validated Stage 1 lane is retained for resource binds.
+// `DrawVolatile` (slot 5, setVertexBytes) and the vertex stream (slot 1)
+// also stay direct. See R-BACK-12.23 / design.md §11.2.
 std::string makeShaderPreludeArgbufHybrid(bool withClipDistances);
 
 // R-BACK-12.22 — argbuf bind slot. Mirrors DXMT's slot-30 convention so
@@ -140,22 +138,11 @@ std::string makeShaderPreludeArgbufHybrid(bool withClipDistances);
 inline constexpr std::uint32_t kArgbufHybridBindSlot = 30u;
 
 // R-BACK-12.23 — argbuf descriptor field counts. The ArgbufLayout
-// struct holds 4 constant-buffer pointers, three texture arrays, and
-// one sampler array. The array fields expose element ids 4..35, but
-// each array is represented by one MTLArgumentDescriptor with
-// arrayLength=8.
+// struct holds exactly four constant-buffer pointers; texture and
+// sampler resources are bound directly on the render encoder, not
+// through this argument buffer.
 inline constexpr std::uint32_t kArgbufHybridConstantBufferCount = 4u;
-inline constexpr std::uint32_t kArgbufHybridTextureSlotCount = 8u;
-inline constexpr std::uint32_t kArgbufHybridTexture2DBase =
-    kArgbufHybridConstantBufferCount;
-inline constexpr std::uint32_t kArgbufHybridTextureCubeBase =
-    kArgbufHybridTexture2DBase + kArgbufHybridTextureSlotCount;
-inline constexpr std::uint32_t kArgbufHybridTexture3DBase =
-    kArgbufHybridTextureCubeBase + kArgbufHybridTextureSlotCount;
-inline constexpr std::uint32_t kArgbufHybridSamplerBase =
-    kArgbufHybridTexture3DBase + kArgbufHybridTextureSlotCount;
-inline constexpr std::uint32_t kArgbufHybridSamplerSlotCount = 8u;
 inline constexpr std::uint32_t kArgbufHybridDescriptorCount =
-    kArgbufHybridConstantBufferCount + 3u + 1u;
+    kArgbufHybridConstantBufferCount;
 
 }  // namespace dxmt9::shaders

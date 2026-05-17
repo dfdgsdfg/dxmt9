@@ -229,8 +229,8 @@ test('dxmt9-shader-argbuf-binding-value-spec',
 # CPU-only spec for the per-encoder argbuf populator: encoder-resource
 # init shape, dirtyBytesEstimate value-transform across categories,
 # PopulatedArgbuf default. Hardware exercise of openArgbuf /
-# populateConstantBuffers / populateResourceBindings / shader-runner
-# equality is covered by the runtime-integration suite.
+# populateConstantBuffers / shader-runner equality is covered by the
+# runtime-integration suite.
 argbuf_populator_spec = executable(
   'dxmt9-argbuf-populator-spec',
   'dxmt9_argbuf_populator_spec.cpp',

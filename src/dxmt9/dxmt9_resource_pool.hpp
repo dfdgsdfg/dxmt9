@@ -4,10 +4,28 @@
 // keyed by opaque Handle. Lifted out of backend_metal.mm so the pool has a
 // named home matching dxmt's per-resource-type managers.
 //
-// The pool carries no mutex of its own; it's protected by
-// commandQueue_->mutex_ (same mutex guarding queue state). Splitting the
-// mutex is a deferred task; leaving it shared preserves all existing
-// lock-ordering invariants.
+// Concurrency contract:
+//
+//  * **Mutating ops** (`createBuffer`/`createTexture`/`createSurface`,
+//    `destroy*`, `mark*`, `finalizeBufferMap`, `reclaim*`) must be called
+//    with `CommandQueue::mutex_` held. DeviceImpl wraps each PE-side
+//    entry point with `std::lock_guard lock(queue_.mutex_)`.
+//
+//  * **Lookup ops** (`findBuffer`/`findTexture`/`findSurface`) may be
+//    called without the queue mutex — they only read arena storage. The
+//    encoder thread runs `encodeChunk` with `mutex_` released and walks
+//    the pool freely through this surface.
+//
+//  * **Pointer stability**: a record pointer returned by `find*()`
+//    stays valid for the entire lifetime of a single `encodeChunk`
+//    even if a PE-thread `createBuffer`/`createTexture` runs in
+//    parallel. Two reasons:
+//      - `HandleArena::slots_` is a `std::deque`, whose `push_back`
+//        preserves every previously-handed-out element address.
+//      - The TLA+ `NoUseAfterFree` invariant guarantees a record is
+//        not released into the free list while its `lastUsedSeqId`
+//        is ahead of the GPU-completed watermark; chunk N's encoder
+//        holds the marking that pins every record it consumes.
 
 #include "dxmt9/core.hpp"
 #include "dxmt9_heap_manager.hpp"
@@ -15,6 +33,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <optional>
 #include <unordered_set>
@@ -259,7 +278,14 @@ class HandleArena {
     freeList_.push_back(index);
   }
 
-  std::vector<Slot> slots_;
+  // std::deque keeps `Slot` storage pointer-stable across `push_back` so
+  // that a record pointer returned by `find()` remains valid while the
+  // encoder thread runs without the queue mutex (PE-thread `insert` can
+  // grow this container concurrently). The TLA+ `NoUseAfterFree`
+  // invariant separately ensures `releaseSlot` cannot fire on a record
+  // the encoder is currently consuming (its `lastUsedSeqId` is ahead of
+  // the completed watermark).
+  std::deque<Slot> slots_;
   std::vector<u32> freeList_;
 };
 
@@ -305,8 +331,10 @@ struct Pool {
   HeapManager& heapManager() noexcept { return heapManager_; }
   const HeapManager& heapManager() const noexcept { return heapManager_; }
 
-  // Lookup helpers — return nullptr on miss. Caller is expected to hold the
-  // protecting mutex (currently commandQueue_->mutex_).
+  // Lookup helpers — return nullptr on miss. Safe to call from the
+  // encoder thread without holding the queue mutex; the returned
+  // pointer remains valid for the duration of a single encodeChunk
+  // (see HandleArena::slots_ stability note in this header).
   BufferRecord* findBuffer(u64 handle) noexcept;
   const BufferRecord* findBuffer(u64 handle) const noexcept;
   TextureRecord* findTexture(u64 handle) noexcept;
@@ -402,7 +430,9 @@ struct Pool {
                            u32 level,
                            u32 width,
                            u32 height,
+                           u32 depth,
                            u32 pitch,
+                           u32 slicePitch,
                            const std::uint8_t* bytes,
                            std::size_t byteCount);
 
@@ -419,6 +449,7 @@ struct Pool {
     u32 slice = 0;
     u32 width = 0;
     u32 height = 0;
+    u32 depth = 1;
     // R-BACK-14.3 — capture the destination TextureRecord's heap-backed
     // flag and heap handle at staging time so the Initializer's batched
     // flush can perform the per-encoder useHeap dedup walk without an
@@ -430,13 +461,15 @@ struct Pool {
   };
   std::optional<StagingCopy>
   stageTextureUpload(WMT::Device device,
-                     core::TextureHandle handle,
-                     u32 level,
-                     u32 width,
-                     u32 height,
-                     u32 pitch,
-                     const std::uint8_t* bytes,
-                     std::size_t byteCount);
+                      core::TextureHandle handle,
+                      u32 level,
+                      u32 width,
+                      u32 height,
+                      u32 depth,
+                      u32 pitch,
+                      u32 slicePitch,
+                      const std::uint8_t* bytes,
+                      std::size_t byteCount);
 
   // Stamp lastUsedSeqId on a record so the finish-thread GC respects the
   // in-flight watermark. No-ops on zero handle.
@@ -447,12 +480,6 @@ struct Pool {
   // Per-command-kind bulk marks. Walk the descriptor's resources and stamp
   // their last-used watermark.
   void markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId);
-  // Snapshot the active rename-ring entry's MTL buffer handle for the
-  // hot record's stream-0 vertex buffer and index buffer. Decouples the
-  // encoder bind from later Lock(D3DLOCK_DISCARD) rotations that would
-  // otherwise mutate `record.buffer` out from under in-flight draws.
-  // No-op for buffers without an active record / Metal allocation.
-  void captureDrawBuffers(core::FlatDrawStateRecord& hot) const;
   void markClearResources(const core::ClearDesc& desc, u64 seqId);
   void markSurfaceCopyResources(const core::SurfaceCopyDesc& desc, u64 seqId);
   void markStretchResources(const core::StretchRectDesc& desc, u64 seqId);

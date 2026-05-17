@@ -422,24 +422,15 @@ std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
   // ArgbufLayout mirrors the per-encoder argbuf shape (design.md §11.2).
   // [[id(N)]] attributes pin the descriptor indices so the host-side
   // MTLArgumentEncoder layout stays compatible across MSL versions.
-  // Texture and sampler arrays are sized to 8 — D3D9 fragment-stage
-  // sampler/texture slots, matching the existing slot binding loop in
-  // the encoder. The fragment stage reads the textures/samplers; the
-  // vertex stage may reuse the same argbuf to access the constant-buffer
-  // pointers.
+  // The argbuf carries only the four per-frequency constant-buffer
+  // pointers — texture and sampler resources continue to use the direct
+  // [[texture(N)]] / [[sampler(N)]] binding lane (the validated Stage 1
+  // resource path).
   out << "struct ArgbufLayout {\n";
   out << "  constant VsConsts*    vsConsts [[id(0)]];\n";
   out << "  constant FfpVsConsts* ffpVs    [[id(1)]];\n";
   out << "  constant PsConsts*    psConsts [[id(2)]];\n";
   out << "  constant FfpPsConsts* ffpPs    [[id(3)]];\n";
-  out << "  array<texture2d<float>, " << kArgbufHybridTextureSlotCount
-      << "> textures2d [[id(" << kArgbufHybridTexture2DBase << ")]];\n";
-  out << "  array<texturecube<float>, " << kArgbufHybridTextureSlotCount
-      << "> texturesCube [[id(" << kArgbufHybridTextureCubeBase << ")]];\n";
-  out << "  array<texture3d<float>, " << kArgbufHybridTextureSlotCount
-      << "> textures3d [[id(" << kArgbufHybridTexture3DBase << ")]];\n";
-  out << "  array<sampler, " << kArgbufHybridSamplerSlotCount
-      << "> samplers [[id(" << kArgbufHybridSamplerBase << ")]];\n";
   out << "};\n";
   return out.str();
 }

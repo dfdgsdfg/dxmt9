@@ -151,7 +151,7 @@ void releaseHeapIfBacked(HeapManager* heapManager, const TextureRecord& record) 
 
 template <typename Arena>
 void gcArena(Arena& arena, u64 completedSeqId, HeapManager* heapManager) {
-  arena.reclaimCompleted(completedSeqId, [completedSeqId, heapManager](const auto& record) {
+  arena.reclaimCompleted(completedSeqId, [heapManager](const auto& record) {
     // TLA+: NoUseAfterFree
     DXMT_ASSERT(record.lastUsedSeqId <= completedSeqId);
     releaseHeapIfBacked(heapManager, record);
@@ -545,7 +545,8 @@ core::SurfaceHandle Pool::createSurfaceForTexture(core::TextureHandle textureHan
 namespace {
 
 std::span<const std::uint8_t> normalizeUploadBytes(core::Format format, u32 width, u32 height,
-                                                     u32 pitch,
+                                                     u32 depth, u32 pitch,
+                                                     u32 slicePitch,
                                                      std::span<const std::uint8_t> bytes,
                                                      std::vector<std::uint8_t>& scratch) {
   if (bytes.empty()) {
@@ -555,31 +556,39 @@ std::span<const std::uint8_t> normalizeUploadBytes(core::Format format, u32 widt
     case core::Format::X8R8G8B8:
     case core::Format::X8B8G8R8: {
       const std::size_t rowBytes = static_cast<std::size_t>(pitch);
-      const std::size_t expected = rowBytes * static_cast<std::size_t>(height);
+      const std::size_t imageBytes = static_cast<std::size_t>(slicePitch);
+      const std::size_t expected = imageBytes * static_cast<std::size_t>(depth);
       if (expected == 0 || bytes.size() < expected) {
         return bytes;
       }
       scratch.assign(bytes.begin(), bytes.begin() + expected);
-      for (u32 y = 0; y < height; ++y) {
-        std::uint8_t* row = scratch.data() + static_cast<std::size_t>(y) * rowBytes;
-        for (u32 x = 0; x < width; ++x) {
-          row[static_cast<std::size_t>(x) * 4 + 3] = 0xffu;
+      for (u32 z = 0; z < depth; ++z) {
+        auto* slice = scratch.data() + static_cast<std::size_t>(z) * imageBytes;
+        for (u32 y = 0; y < height; ++y) {
+          std::uint8_t* row = slice + static_cast<std::size_t>(y) * rowBytes;
+          for (u32 x = 0; x < width; ++x) {
+            row[static_cast<std::size_t>(x) * 4 + 3] = 0xffu;
+          }
         }
       }
       return scratch;
     }
     case core::Format::X1R5G5B5: {
       const std::size_t rowBytes = static_cast<std::size_t>(pitch);
-      const std::size_t expected = rowBytes * static_cast<std::size_t>(height);
+      const std::size_t imageBytes = static_cast<std::size_t>(slicePitch);
+      const std::size_t expected = imageBytes * static_cast<std::size_t>(depth);
       if (expected == 0 || bytes.size() < expected) {
         return bytes;
       }
       scratch.assign(bytes.begin(), bytes.begin() + expected);
-      for (u32 y = 0; y < height; ++y) {
-        auto* row = reinterpret_cast<std::uint16_t*>(scratch.data() +
-                                                       static_cast<std::size_t>(y) * rowBytes);
-        for (u32 x = 0; x < width; ++x) {
-          row[x] |= 0x8000u;
+      for (u32 z = 0; z < depth; ++z) {
+        auto* slice = scratch.data() + static_cast<std::size_t>(z) * imageBytes;
+        for (u32 y = 0; y < height; ++y) {
+          auto* row = reinterpret_cast<std::uint16_t*>(
+              slice + static_cast<std::size_t>(y) * rowBytes);
+          for (u32 x = 0; x < width; ++x) {
+            row[x] |= 0x8000u;
+          }
         }
       }
       return scratch;
@@ -597,7 +606,9 @@ Pool::stageTextureUpload(WMT::Device device,
                           u32 level,
                           u32 width,
                           u32 height,
+                          u32 depth,
                           u32 pitch,
+                          u32 slicePitch,
                           const std::uint8_t* bytes,
                           std::size_t byteCount) {
   auto* record = findTexture(handle.value);
@@ -605,8 +616,10 @@ Pool::stageTextureUpload(WMT::Device device,
     return std::nullopt;
   }
 
-  const auto normalized = normalizeUploadBytes(record->desc.format, width, height, pitch,
-                                                  {bytes, byteCount}, textureUploadScratch_);
+  const auto normalized =
+      normalizeUploadBytes(record->desc.format, width, height, depth, pitch,
+                           slicePitch, {bytes, byteCount},
+                           textureUploadScratch_);
 
   const auto subresource = decodeTextureSubresource(record->desc, level);
   if (!subresource.valid) {
@@ -617,6 +630,12 @@ Pool::stageTextureUpload(WMT::Device device,
   const u32 slice = subresource.slice;
   const u32 mipWidth = std::max(1u, width);
   const u32 mipHeight = std::max(1u, height);
+  const u32 mipDepth = std::max(1u, depth);
+  const u32 imagePitch =
+      slicePitch != 0 ? slicePitch
+                      : pitch * core::formatRowCount(record->desc.format, height);
+  const u32 uploadImagePitch =
+      record->desc.type == core::TextureType::Volume ? imagePitch : 0u;
 
   if (!record->needsStagingBlit) {
     // Shared-mode (DEFAULT+DYNAMIC, MANAGED on unified memory, etc.):
@@ -624,8 +643,9 @@ Pool::stageTextureUpload(WMT::Device device,
     // increment. The Apple-Silicon MANAGED branch lands here per
     // R-BACK-5.7 — `countManagedTextureUploadBlit` must remain 0.
     WMTOrigin origin{0, 0, 0};
-    WMTSize size{mipWidth, mipHeight, 1};
-    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch, 0);
+    WMTSize size{mipWidth, mipHeight, mipDepth};
+    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch,
+                          uploadImagePitch);
     return std::nullopt;
   }
 
@@ -640,11 +660,13 @@ Pool::stageTextureUpload(WMT::Device device,
     perf::countManagedTextureUploadBlit(byteCount);
   }
   WMTTextureInfo stagingInfo{};
-  stagingInfo.type = WMTTextureType2D;
+  stagingInfo.type = record->desc.type == core::TextureType::Volume
+                         ? WMTTextureType3D
+                         : WMTTextureType2D;
   stagingInfo.pixel_format = texture.pixelFormat();
   stagingInfo.width = mipWidth;
   stagingInfo.height = mipHeight;
-  stagingInfo.depth = 1;
+  stagingInfo.depth = mipDepth;
   stagingInfo.mipmap_level_count = 1;
   stagingInfo.sample_count = 1;
   stagingInfo.array_length = 1;
@@ -660,9 +682,10 @@ Pool::stageTextureUpload(WMT::Device device,
       mipLevel, mipWidth, mipHeight));
   {
     WMTOrigin origin{0, 0, 0};
-    WMTSize size{mipWidth, mipHeight, 1};
+    WMTSize size{mipWidth, mipHeight, mipDepth};
     WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
-                                                       normalized.data(), pitch, 0);
+                                                       normalized.data(), pitch,
+                                                       uploadImagePitch);
   }
   StagingCopy out;
   out.stagingTexture = std::move(stagingTexture);
@@ -671,6 +694,7 @@ Pool::stageTextureUpload(WMT::Device device,
   out.slice = slice;
   out.width = mipWidth;
   out.height = mipHeight;
+  out.depth = mipDepth;
   out.destIsHeapBacked = record->isHeapBacked;
   out.destHeap = record->heap.handle;
   return out;
@@ -682,7 +706,9 @@ void Pool::uploadTextureLevel(WMT::Device device,
                                u32 level,
                                u32 width,
                                u32 height,
+                               u32 depth,
                                u32 pitch,
+                               u32 slicePitch,
                                const std::uint8_t* bytes,
                                std::size_t byteCount) {
   auto* record = findTexture(handle.value);
@@ -690,8 +716,10 @@ void Pool::uploadTextureLevel(WMT::Device device,
     return;
   }
 
-  const auto normalized = normalizeUploadBytes(record->desc.format, width, height, pitch,
-                                                  {bytes, byteCount}, textureUploadScratch_);
+  const auto normalized =
+      normalizeUploadBytes(record->desc.format, width, height, depth, pitch,
+                           slicePitch, {bytes, byteCount},
+                           textureUploadScratch_);
 
   const auto subresource = decodeTextureSubresource(record->desc, level);
   if (!subresource.valid) {
@@ -702,11 +730,18 @@ void Pool::uploadTextureLevel(WMT::Device device,
   const u32 slice = subresource.slice;
   const u32 mipWidth = std::max(1u, width);
   const u32 mipHeight = std::max(1u, height);
+  const u32 mipDepth = std::max(1u, depth);
+  const u32 imagePitch =
+      slicePitch != 0 ? slicePitch
+                      : pitch * core::formatRowCount(record->desc.format, height);
+  const u32 uploadImagePitch =
+      record->desc.type == core::TextureType::Volume ? imagePitch : 0u;
 
   if (!record->needsStagingBlit) {
     WMTOrigin origin{0, 0, 0};
-    WMTSize size{mipWidth, mipHeight, 1};
-    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch, 0);
+    WMTSize size{mipWidth, mipHeight, mipDepth};
+    texture.replaceRegion(origin, size, mipLevel, slice, normalized.data(), pitch,
+                          uploadImagePitch);
     return;
   }
 
@@ -719,11 +754,13 @@ void Pool::uploadTextureLevel(WMT::Device device,
   // advance lives only on the deferred path which is what the encoder
   // actually drives — adding it here would double-count.
   WMTTextureInfo stagingInfo{};
-  stagingInfo.type = WMTTextureType2D;
+  stagingInfo.type = record->desc.type == core::TextureType::Volume
+                         ? WMTTextureType3D
+                         : WMTTextureType2D;
   stagingInfo.pixel_format = texture.pixelFormat();
   stagingInfo.width = mipWidth;
   stagingInfo.height = mipHeight;
-  stagingInfo.depth = 1;
+  stagingInfo.depth = mipDepth;
   stagingInfo.mipmap_level_count = 1;
   stagingInfo.sample_count = 1;
   stagingInfo.array_length = 1;
@@ -739,9 +776,10 @@ void Pool::uploadTextureLevel(WMT::Device device,
       mipLevel, mipWidth, mipHeight));
   {
     WMTOrigin origin{0, 0, 0};
-    WMTSize size{mipWidth, mipHeight, 1};
+    WMTSize size{mipWidth, mipHeight, mipDepth};
     WMT::Texture{stagingTexture.handle}.replaceRegion(origin, size, 0, 0,
-                                                       normalized.data(), pitch, 0);
+                                                       normalized.data(), pitch,
+                                                       uploadImagePitch);
   }
   auto commandBuffer = queue.commandBuffer();
   if (!commandBuffer) {
@@ -764,7 +802,7 @@ void Pool::uploadTextureLevel(WMT::Device device,
     perf::countUseHeap();
   }
   WMTOrigin origin{0, 0, 0};
-  WMTSize size{mipWidth, mipHeight, 1};
+  WMTSize size{mipWidth, mipHeight, mipDepth};
   blit.copyFromTextureToTexture(WMT::Texture{stagingTexture.handle}, 0, 0,
                                  origin, size, texture, slice, mipLevel, origin);
   blit.endEncoding();
@@ -809,28 +847,6 @@ void Pool::markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId) {
     markSurfaceUse(rt.handle, seqId);
   }
   markSurfaceUse(hot.depthStencil.handle, seqId);
-}
-
-void Pool::captureDrawBuffers(core::FlatDrawStateRecord& hot) const {
-  // Stream 0 vertex buffer: snapshot the active rename-ring entry so a
-  // later Lock(D3DLOCK_DISCARD) rotating to a fresh allocation does
-  // not redirect this in-flight draw to the new (empty / next-frame)
-  // entry. Non-rename buffers have a stable record.buffer, so the
-  // snapshot is a no-op redirect for them.
-  hot.streamBuffer0Metal = 0;
-  hot.indexBufferMetal = 0;
-  if (hot.streamBuffers[0]) {
-    if (const auto* record = findBuffer(hot.streamBuffers[0].value);
-        record && record->buffer) {
-      hot.streamBuffer0Metal = record->buffer.handle;
-    }
-  }
-  if (hot.indexBuffer) {
-    if (const auto* record = findBuffer(hot.indexBuffer.value);
-        record && record->buffer) {
-      hot.indexBufferMetal = record->buffer.handle;
-    }
-  }
 }
 
 void Pool::markClearResources(const core::ClearDesc& desc, u64 seqId) {

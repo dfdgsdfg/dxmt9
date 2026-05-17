@@ -1,9 +1,7 @@
 #include "dxmt9_argbuf_hybrid.hpp"
 
 #include "dxmt9_command_queue.hpp"
-#include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_state.hpp"
-#include "dxmt9_resource_pool.hpp"
 #include "dxmt9/core.hpp"
 
 #include <cstring>
@@ -19,39 +17,17 @@ constexpr u32 kArgumentAccessReadOnly = 0u;
 // PsConsts) without over-aligning the smaller FFP scalars.
 constexpr u32 kConstantBlockAlignment = 16u;
 
-// MTLTextureType2D — pinned at the value used by the existing
-// fragment-stage texture binding loop in dxmt9_draw_encoder.mm. The
-// host-side argbuf populates this slot via
-// `MTLArgumentEncoder::setTexture(texture, idx)` regardless, so this
-// is metadata for the encoder, not a runtime constraint on the bound
-// texture.
-constexpr u32 kTextureType2D = 2u;
-constexpr u32 kTextureTypeCube = 5u;
-constexpr u32 kTextureType3D = 7u;
-
-void appendTextureDescriptors(ArgumentDescriptors& descriptors,
-                              std::size_t& cursor,
-                              u32 baseIndex,
-                              u32 textureType) {
-  auto& d = descriptors.entries[cursor++];
-  d.argumentType = WMTArgumentTypeTexture;
-  d.index = baseIndex;
-  d.arrayLength = shaders::kArgbufHybridTextureSlotCount;
-  d.access = kArgumentAccessReadOnly;
-  d.textureType = textureType;
-  d.constantBlockAlignment = 0;
-}
-
 }  // namespace
 
 ArgumentDescriptors buildArgumentDescriptors() {
   ArgumentDescriptors descriptors{};
-  std::size_t cursor = 0;
 
   // Constant-buffer entries — VsConsts, FfpVsConsts, PsConsts, FfpPsConsts.
-  // Each lives at consecutive [[id(N)]] indices 0..3.
+  // Each lives at consecutive [[id(N)]] indices 0..3. Texture and sampler
+  // resources are bound directly on the render encoder (the validated
+  // Stage 1 lane); the argbuf never carries them.
   for (u32 i = 0; i < shaders::kArgbufHybridConstantBufferCount; ++i) {
-    auto& d = descriptors.entries[cursor++];
+    auto& d = descriptors.entries[i];
     d.argumentType = WMTArgumentTypeBuffer;
     d.index = i;
     d.arrayLength = 0;
@@ -59,19 +35,6 @@ ArgumentDescriptors buildArgumentDescriptors() {
     d.textureType = 0;
     d.constantBlockAlignment = kConstantBlockAlignment;
   }
-
-  appendTextureDescriptors(descriptors, cursor, shaders::kArgbufHybridTexture2DBase, kTextureType2D);
-  appendTextureDescriptors(descriptors, cursor, shaders::kArgbufHybridTextureCubeBase, kTextureTypeCube);
-  appendTextureDescriptors(descriptors, cursor, shaders::kArgbufHybridTexture3DBase, kTextureType3D);
-
-  // One sampler array descriptor after the typed texture array ranges.
-  auto& sampler = descriptors.entries[cursor++];
-  sampler.argumentType = WMTArgumentTypeSampler;
-  sampler.index = shaders::kArgbufHybridSamplerBase;
-  sampler.arrayLength = shaders::kArgbufHybridSamplerSlotCount;
-  sampler.access = kArgumentAccessReadOnly;
-  sampler.textureType = 0;
-  sampler.constantBlockAlignment = 0;
 
   return descriptors;
 }
@@ -122,13 +85,6 @@ constexpr u32 kFfpVsArgbufIdx    = 1u;
 constexpr u32 kPsConstsArgbufIdx = 2u;
 constexpr u32 kFfpPsArgbufIdx    = 3u;
 
-// argbuf [[id(N)]] bases for typed textures / samplers; the encoder writes
-// stages 0..7 at consecutive ids within each typed range.
-constexpr u32 kTexture2DArgbufBase = shaders::kArgbufHybridTexture2DBase;
-constexpr u32 kTextureCubeArgbufBase = shaders::kArgbufHybridTextureCubeBase;
-constexpr u32 kTexture3DArgbufBase = shaders::kArgbufHybridTexture3DBase;
-constexpr u32 kSamplerArgbufBase = shaders::kArgbufHybridSamplerBase;
-
 void recordedSetArgumentBuffer(ArgbufEncoderResource& encoderResource,
                                WMT::Buffer buffer,
                                u64 offset,
@@ -146,7 +102,8 @@ void recordedSetBuffer(ArgbufEncoderResource& encoderResource,
                        WMT::Buffer buffer,
                        u64 offset,
                        u32 index,
-                       const ArgbufRecorder* recorder) {
+                       const ArgbufRecorder* recorder,
+                       WMT::RenderCommandEncoder residencyEncoder) {
   if (recorder && recorder->setBuffer) {
     recorder->setBuffer(recorder->userdata, buffer, offset, index);
   }
@@ -154,32 +111,12 @@ void recordedSetBuffer(ArgbufEncoderResource& encoderResource,
     return;
   }
   encoderResource.argumentEncoder().setBuffer(buffer, offset, index);
-}
-
-void recordedSetTexture(ArgbufEncoderResource& encoderResource,
-                        WMT::Texture texture,
-                        u32 index,
-                        const ArgbufRecorder* recorder) {
-  if (recorder && recorder->setTexture) {
-    recorder->setTexture(recorder->userdata, texture, index);
+  if (residencyEncoder && buffer) {
+    residencyEncoder.useResource(
+        WMT::Resource{buffer.handle},
+        WMTResourceUsageRead,
+        static_cast<WMTRenderStages>(WMTRenderStageVertex | WMTRenderStageFragment));
   }
-  if (recorder && recorder->suppressMetalCalls) {
-    return;
-  }
-  encoderResource.argumentEncoder().setTexture(texture, index);
-}
-
-void recordedSetSamplerState(ArgbufEncoderResource& encoderResource,
-                             WMT::SamplerState sampler,
-                             u32 index,
-                             const ArgbufRecorder* recorder) {
-  if (recorder && recorder->setSamplerState) {
-    recorder->setSamplerState(recorder->userdata, sampler, index);
-  }
-  if (recorder && recorder->suppressMetalCalls) {
-    return;
-  }
-  encoderResource.argumentEncoder().setSamplerState(sampler, index);
 }
 
 }  // namespace
@@ -248,7 +185,8 @@ u64 uploadAndPointEntry(CommandQueue& queue,
                          std::size_t byteCount,
                          u32 argbufIdx,
                          u64 seqId,
-                         const ArgbufRecorder* recorder) {
+                         const ArgbufRecorder* recorder,
+                         WMT::RenderCommandEncoder residencyEncoder) {
   if (byteCount == 0) return 0;
   auto slice = queue.uploadTransientBuffer(
       std::span<const std::byte>(
@@ -256,7 +194,7 @@ u64 uploadAndPointEntry(CommandQueue& queue,
       alignof(HostStruct), seqId);
   if (!slice) return 0;
   recordedSetBuffer(encoderResource, slice.buffer, slice.offset, argbufIdx,
-                    recorder);
+                    recorder, residencyEncoder);
   return byteCount;
 }
 
@@ -266,9 +204,11 @@ u64 uploadAndPointEntry(CommandQueue& queue,
                          const HostStruct& host,
                          u32 argbufIdx,
                          u64 seqId,
-                         const ArgbufRecorder* recorder) {
+                         const ArgbufRecorder* recorder,
+                         WMT::RenderCommandEncoder residencyEncoder) {
   return uploadAndPointEntry(
-      queue, encoderResource, host, sizeof(HostStruct), argbufIdx, seqId, recorder);
+      queue, encoderResource, host, sizeof(HostStruct), argbufIdx, seqId,
+      recorder, residencyEncoder);
 }
 
 }  // namespace
@@ -277,7 +217,8 @@ u64 populateConstantBuffers(CommandQueue& queue,
                              ArgbufEncoderResource& encoderResource,
                              core::FlatDrawStateView state,
                              std::uint64_t seqId,
-                             const ArgbufRecorder* recorder) {
+                             const ArgbufRecorder* recorder,
+                             WMT::RenderCommandEncoder residencyEncoder) {
   if (!encoderResource.initialized()) return 0;
   u64 bytes = 0;
   // VsConsts / FfpVsConsts / PsConsts / FfpPsConsts mirror the Stage 1
@@ -286,61 +227,17 @@ u64 populateConstantBuffers(CommandQueue& queue,
   // of the slot 0 / 3 vert/frag slots.
   const auto vs = state::buildVsConsts(state);
   bytes += uploadAndPointEntry(queue, encoderResource, vs,
-                                kVsConstsArgbufIdx, seqId, recorder);
+                                kVsConstsArgbufIdx, seqId, recorder, residencyEncoder);
   const auto ffpVs = state::buildFfpVsConsts(state);
   bytes += uploadAndPointEntry(queue, encoderResource, ffpVs,
-                                kFfpVsArgbufIdx, seqId, recorder);
+                                kFfpVsArgbufIdx, seqId, recorder, residencyEncoder);
   const auto ps = state::buildPsConsts(state);
   bytes += uploadAndPointEntry(queue, encoderResource, ps,
-                                kPsConstsArgbufIdx, seqId, recorder);
+                                kPsConstsArgbufIdx, seqId, recorder, residencyEncoder);
   const auto ffpPs = state::buildFfpPsConsts(state);
   bytes += uploadAndPointEntry(queue, encoderResource, ffpPs,
-                                kFfpPsArgbufIdx, seqId, recorder);
+                                kFfpPsArgbufIdx, seqId, recorder, residencyEncoder);
   return bytes;
-}
-
-void populateResourceBindings(WMT::Reference<WMT::Device> device,
-                               resources::Pool& pool,
-                               ArgbufEncoderResource& encoderResource,
-                               core::FlatDrawStateView state,
-                               const ArgbufRecorder* recorder) {
-  if (!encoderResource.initialized() || !state.hot) return;
-  const auto& hot = *state.hot;
-  // Stages 0..7 — the argbuf descriptor table reserves exactly 8 slots
-  // for textures and 8 for samplers (shaders::kArgbufHybridTextureSlotCount).
-  // Stages without a bound texture leave the argbuf entry untouched;
-  // shaders that don't sample those slots never deref a stale id.
-  for (u32 stage = 0; stage < shaders::kArgbufHybridTextureSlotCount; ++stage) {
-    const auto textureHandle = hot.textures[stage];
-    if (!textureHandle) continue;
-    if (auto* texture = pool.findTexture(textureHandle.value);
-        texture && texture->texture) {
-      const bool srgbTexture =
-          core::flatStateOr(hot.samplerStates[stage], core::SAMP_SRGB_TEXTURE, 0u) != 0;
-      u32 textureArgbufBase = kTexture2DArgbufBase;
-      if (texture->desc.type == core::TextureType::Cube) {
-        textureArgbufBase = kTextureCubeArgbufBase;
-      } else if (texture->desc.type == core::TextureType::Volume) {
-        textureArgbufBase = kTexture3DArgbufBase;
-      }
-      recordedSetTexture(encoderResource, resources::textureForShaderRead(*texture, srgbTexture),
-                         textureArgbufBase + stage, recorder);
-    }
-    if (recorder && recorder->suppressMetalCalls) {
-      if (recorder->samplerState) {
-        recordedSetSamplerState(encoderResource, recorder->samplerState,
-                                kSamplerArgbufBase + stage, recorder);
-      }
-    } else {
-      auto sampler = encoders::makeSampler(device, hot.samplerStates[stage],
-                                           static_cast<float>(hot.textureLods[stage]));
-      if (sampler) {
-        recordedSetSamplerState(encoderResource,
-                                WMT::SamplerState{sampler.handle},
-                                kSamplerArgbufBase + stage, recorder);
-      }
-    }
-  }
 }
 
 u64 updateDirtyArgbufRegions(CommandQueue& queue,
@@ -348,10 +245,12 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               core::FlatDrawStateView state,
                               const uniform::DirtyState& dirty,
                               std::uint64_t seqId,
-                              const ArgbufRecorder* recorder) {
+                              const ArgbufRecorder* recorder,
+                              WMT::RenderCommandEncoder residencyEncoder) {
   uniform::ShaderConstantUsageBounds unknown{};
   return updateDirtyArgbufRegions(
-      queue, encoderResource, state, dirty, unknown, unknown, seqId, recorder);
+      queue, encoderResource, state, dirty, unknown, unknown, seqId,
+      recorder, residencyEncoder);
 }
 
 u64 updateDirtyArgbufRegions(CommandQueue& queue,
@@ -361,7 +260,8 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               uniform::ShaderConstantUsageBounds vsUsage,
                               uniform::ShaderConstantUsageBounds psUsage,
                               std::uint64_t seqId,
-                              const ArgbufRecorder* recorder) {
+                              const ArgbufRecorder* recorder,
+                              WMT::RenderCommandEncoder residencyEncoder) {
   if (!encoderResource.initialized()) return 0;
   u64 bytes = 0;
   if (uniform::anyDirty(dirty, uniform::kVsAny)) {
@@ -370,12 +270,12 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
     bytes += uploadAndPointEntry(queue, encoderResource, vs,
                                   static_cast<std::size_t>(
                                       uniform::vsConstantUploadBytes(plan)),
-                                  kVsConstsArgbufIdx, seqId, recorder);
+                                  kVsConstsArgbufIdx, seqId, recorder, residencyEncoder);
   }
   if (uniform::anyDirty(dirty, uniform::kFfpVsAny)) {
     const auto ffpVs = state::buildFfpVsConsts(state);
     bytes += uploadAndPointEntry(queue, encoderResource, ffpVs,
-                                  kFfpVsArgbufIdx, seqId, recorder);
+                                  kFfpVsArgbufIdx, seqId, recorder, residencyEncoder);
   }
   if (uniform::anyDirty(dirty, uniform::kPsAny)) {
     const auto ps = state::buildPsConsts(state);
@@ -383,12 +283,12 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
     bytes += uploadAndPointEntry(queue, encoderResource, ps,
                                   static_cast<std::size_t>(
                                       uniform::psConstantUploadBytes(plan)),
-                                  kPsConstsArgbufIdx, seqId, recorder);
+                                  kPsConstsArgbufIdx, seqId, recorder, residencyEncoder);
   }
   if (uniform::anyDirty(dirty, uniform::kFfpPsAny)) {
     const auto ffpPs = state::buildFfpPsConsts(state);
     bytes += uploadAndPointEntry(queue, encoderResource, ffpPs,
-                                  kFfpPsArgbufIdx, seqId, recorder);
+                                  kFfpPsArgbufIdx, seqId, recorder, residencyEncoder);
   }
   return bytes;
 }
@@ -396,9 +296,11 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
 void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,
                        WMT::Buffer buffer,
                        u64 offset,
-                       const ArgbufRecorder* recorder) {
+                       const ArgbufRecorder* recorder,
+                       WMT::RenderCommandEncoder residencyEncoder) {
   if (!encoderResource.initialized() || !buffer) return;
-  recordedSetBuffer(encoderResource, buffer, offset, kFfpVsArgbufIdx, recorder);
+  recordedSetBuffer(encoderResource, buffer, offset, kFfpVsArgbufIdx,
+                    recorder, residencyEncoder);
 }
 
 }  // namespace dxmt9::argbuf_hybrid

@@ -1378,7 +1378,8 @@ bool encodeDraw(EncodeContext& ctx,
   if (argbufHybridMode) {
     const auto bytes = dxmt9::argbuf_hybrid::updateDirtyArgbufRegions(
         ctx.queue, ctx.queue.argbufEncoderResource(), drawState, *dirtyPtr,
-        shaderUsage.vertexConstantUsage, shaderUsage.pixelConstantUsage, seqId);
+        shaderUsage.vertexConstantUsage, shaderUsage.pixelConstantUsage, seqId,
+        nullptr, encoder);
     if (bytes != 0) {
       perf::countArgbufHybridBytes(bytes);
     }
@@ -1449,7 +1450,8 @@ bool encodeDraw(EncodeContext& ctx,
     if (slice) {
       if (argbufHybridMode) {
         dxmt9::argbuf_hybrid::pointFfpVsAtSlice(
-            ctx.queue.argbufEncoderResource(), slice.buffer, slice.offset);
+            ctx.queue.argbufEncoderResource(), slice.buffer, slice.offset,
+            nullptr, encoder);
         perf::countArgbufHybridBytes(sizeof(FfpVsConsts));
       } else {
         recordedSetVertexBuffer(ctx, encoder, slice.buffer, slice.offset, 3);
@@ -1479,8 +1481,7 @@ bool encodeDraw(EncodeContext& ctx,
       bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
       ffLayout && ffLayout->preTransformed,
       debug::disableScissor(),
-      debug::disableCull(),
-      argbufHybridMode);
+      debug::disableCull());
   const auto& bindingPacket =
       cacheDrawBindingPacket(gDrawBindingPacketCache, bindingPacketPlan);
   // Apply FFP preTransformed viewport override to the FfpVs host copy
@@ -1556,8 +1557,6 @@ bool encodeDraw(EncodeContext& ctx,
                 << static_cast<unsigned long long>(hot.streamBuffers[0].value)
                 << " liveMetal=0x" << std::hex
                 << static_cast<unsigned long long>(buffer->buffer.handle)
-                << " capturedMetal=0x"
-                << static_cast<unsigned long long>(hot.streamBuffer0Metal)
                 << std::dec
                 << " boundMetal=0x" << std::hex
                 << static_cast<unsigned long long>(vertexBuffer.handle)
@@ -2006,16 +2005,12 @@ bool encodeDraw(EncodeContext& ctx,
     }
   }
   // Phase 3-E: texture / sampler binding is BaseDrawState-only.
-  // R-BACK-12.24 — Stage 2 shaders read textures/samplers from the
-  // argbuf. Re-populate on each base-state bind so a same-pass draw that
-  // changes descriptors does not sample stale argbuf entries.
+  // R-BACK-12.24 — texture/sampler resources travel on the direct render
+  // encoder lane (the validated Stage 1 binding path) regardless of
+  // whether the constant argbuf hybrid is active.
   if (!skipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
-    if (bindingPacket.argbufResourceRepopulate) {
-      dxmt9::argbuf_hybrid::populateResourceBindings(
-          ctx.device, ctx.pool, ctx.queue.argbufEncoderResource(), drawState);
-    }
-    if (!argbufHybridMode) {
+    if (!bindingPacket.fragmentTextureSamplers.empty()) {
       struct ResolvedFragmentTextureSamplerBinding {
         u32 stage = 0;
         core::Handle textureHandle{};
@@ -2633,16 +2628,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const auto populated = dxmt9::argbuf_hybrid::openArgbuf(
             ctx.queue, encoderResource, encodeChunkSeqId);
         if (populated) {
-          // Populate texture / sampler entries at encoder open — the
-          // direct fragment-stage texture/sampler binds in encodeDraw
-          // are skipped on the Stage 2 path, so the argbuf is the
-          // single source of truth for [[id(4..19)]]. Constant-buffer
-          // entries (VsConsts/PsConsts/FfpVsConsts/FfpPsConsts) are
-          // populated lazily from encodeDraw's dirty path on the first
-          // draw; the encoder bind ordering only requires the argbuf
-          // slot to be bound here.
-          dxmt9::argbuf_hybrid::populateResourceBindings(
-              ctx.device, ctx.pool, encoderResource, drawState);
+          // Constant-buffer entries (VsConsts/PsConsts/FfpVsConsts/
+          // FfpPsConsts) are populated lazily from encodeDraw's dirty
+          // path on the first draw. Texture/sampler resources remain on
+          // the direct fragment binding lane for texture-bound Stage 2
+          // draws, so encoder open only binds the argbuf storage.
           // Bind slot 30 — vertex + fragment. The render encoder reads
           // from this single argbuf for the duration of the pass; the
           // slot-30 bind is the only argbuf-related bind on the encoder

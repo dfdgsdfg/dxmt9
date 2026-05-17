@@ -77,9 +77,6 @@ FlatStateSet<MaxEntries> makeFlatStateSet(const auto &values) {
             [](const FlatStateEntry &a, const FlatStateEntry &b) {
               return a.state < b.state;
             });
-  for (u32 i = 0; i < set.count; ++i) {
-    set.occupied[i / 64u] |= 1ull << (i % 64u);
-  }
   return set;
 }
 

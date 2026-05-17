@@ -704,76 +704,75 @@ live Metal handles may only appear after resource-pool lookup and sequence-id
 retention. This keeps cache keys deterministic and keeps lifetime ownership in
 the queue/resource layer.
 
-### 5.4 Argbuf Stage 2 Texture-bound Draw Target
+### 5.4 Argbuf Stage 2 Texture-bound Draw Path
 
-Stage 2 currently remains the uniform-buffer path for live draws; texture-bound
-draws fall back to Stage 1 until the Metal argument-buffer texture/sampler lane
-has fault-free runtime readback evidence. Texture/sampler descriptor population
-still lives under the same packet boundary, and the CPU evidence pins the typed
-descriptor ids for 2D, cube, and volume texture arrays plus sampler array
-entries:
+Stage 2 is the default argbuf path whenever the capability gate holds. It is a
+constants-only argument buffer: only the four per-frequency constant-buffer
+pointers (`VsConsts`, `FfpVsConsts`, `PsConsts`, `FfpPsConsts`) live in the
+slot-30 argbuf. Texture and sampler resources continue to travel on the
+validated direct render-encoder binding lane that Stage 1 already proves; this
+keeps Stage 2 from inheriting the argbuf-indirect resource-residency hazard
+class while still removing the per-draw constant-slot rebinds.
 
 ```mermaid
 flowchart TD
     SEL["selectArgbufHybridForPass"]
-    TEX{"texture-bound draw?"}
-    S1["Stage 1 fallback\ncapability gate failed\nor texture-bound draw"]
+    GATE{"argbufHybridEnabled?"}
+    S1["Stage 1 direct binding\nslot 0/3 + direct textures/samplers"]
     PLAN["DrawBindingPacketPlan\ntexture/sampler handles + states"]
-    ARGPOP["populateResourceBindings\ntexture type range + sampler ids"]
-    S2MSL["Stage 2 MSL\nabuf->textures2d/cube/3d[N]\nabuf->samplers[N]"]
-    READBACK["shader-corpus readback equality\nStage 1 == Stage 2"]
-    S2["Stage 2 draw\nuniforms through slot 30"]
-    PROMOTE["Allow texture-bound Stage 2"]
+    DIRECT["direct fragment binding\nsetFragmentTexture/Sampler"]
+    CBUF["updateDirtyArgbufRegions\nconstant pointer ids 0..3"]
+    RES["useResource residency\nfor argbuf-pointed constant slabs"]
+    S2MSL["Stage 2 MSL\nconstants via abuf, textures/samplers via [[texture(N)]]/[[sampler(N)]]"]
+    S2["Stage 2 draw\nslot 30 argbuf + direct textures"]
 
-    SEL --> TEX
-    TEX -->|"yes; current safe path"| S1
-    TEX -->|"yes; target"| PLAN --> ARGPOP --> S2MSL --> READBACK --> PROMOTE
-    TEX -->|"no; gate holds"| S2
+    SEL --> GATE
+    GATE -->|"no"| S1
+    GATE -->|"yes"| PLAN
+    PLAN --> DIRECT
+    PLAN --> CBUF
+    CBUF --> RES
+    DIRECT --> S2MSL
+    RES --> S2MSL --> S2
 ```
 
-The promotion is evidence-driven. Deterministic descriptor tests prove that
-Stage 2 writes the same texture/sampler intent into the argbuf table, including
-2D base id `4`, cube base id `12`, volume base id `20`, and sampler base id
-`28`, but they are not sufficient proof for live GPU-visible sampling. The
-2026-05-17 shader-corpus regression showed GPU address faults when
-texture-bound draws were promoted to Stage 2 without readback parity, so the
-default selector keeps those draws on Stage 1.
-
-The equality gate compares the same draw through both binding lanes. Stage 2 is
-eligible for promotion only when command-level values and framebuffer readback
-agree:
+The evidence is split across value and runtime boundaries. The Stage 2 argbuf
+descriptor table holds exactly the four constant-buffer pointer entries at
+`[[id(0..3)]]`. Deterministic descriptor tests prove the argbuf carries no
+texture / sampler slots, and the translated MSL fragment / vertex parameter
+list keeps the `[[texture(N)]]` / `[[sampler(N)]]` parameters that Stage 1
+emits. The shader corpus then proves the live GPU-visible path on both lanes;
+because the texture-bound path now uses identical resource binding to Stage 1,
+Stage 2 inherits Stage 1's residency proof for free.
 
 ```mermaid
 flowchart TD
     CASE["Representative texture-bound corpus case"]
-    S1["Stage 1 lane\nsetFragmentTexture/Sampler"]
-    S2["Stage 2 lane\nargbuf texture/sampler descriptors"]
+    S1["Stage 1 lane\nsetFragmentTexture/Sampler\nbuffer(0) + buffer(3)"]
+    S2["Stage 2 lane\nsetFragmentTexture/Sampler\nargbuf(30) for constants"]
     REC1["Encoder recorder\nslot/order/resource ids"]
-    REC2["Encoder recorder\nargbuf ids/type ranges"]
+    REC2["Encoder recorder\nslot/order/resource ids + argbuf ids 0..3"]
     GPU1["GPU readback\nStage 1 pixels"]
     GPU2["GPU readback\nStage 2 pixels"]
     CMPREC{"binding intent equal?"}
     CMPGPU{"pixels equal\nwithin probe tolerance?"}
-    MATRIX["equality matrix\n2D/cube/3D/sRGB/mip/filter/address"]
-    PROMOTE["selector may return Stage 2\nfor texture-bound draws"]
-    FALLBACK["keep texture-bound Stage 1 fallback"]
+    MATRIX["coverage matrix\n2D/cube/3D/sRGB/mip/filter/address"]
+    DEFAULT["default selector\ncapability gate -> Stage 2"]
 
     CASE --> S1 --> REC1 --> CMPREC
     CASE --> S2 --> REC2 --> CMPREC
-    S1 --> GPU1 --> CMPGPU
     S2 --> GPU2 --> CMPGPU
+    S1 --> GPU1 --> CMPGPU
     CMPREC -->|"yes"| MATRIX
     CMPGPU -->|"yes"| MATRIX
-    MATRIX -->|"complete"| PROMOTE
-    CMPREC -->|"no"| FALLBACK
-    CMPGPU -->|"no"| FALLBACK
+    MATRIX --> DEFAULT
 ```
 
-The promotion must be all-or-nothing for the default selector. Partial support
-may exist behind an explicit debug gate, but the normal path keeps Stage 1 for
-texture-bound draws until the matrix covers sampler address modes, filter modes,
-sRGB decode, mip level selection, unbound/default samplers, and non-2D texture
-classes with live readback equality.
+The default selector remains all-or-nothing at the capability boundary. The
+constants-only narrowing is durable contract, not a transient fallback: a
+future widening that puts textures or samplers back into the argbuf must
+re-prove residency for argbuf-indirect resources, document the new descriptor
+shape here, and add the matching corpus coverage.
 
 ### 5.5 Cache Prewarm From `MTLBinaryArchive`
 

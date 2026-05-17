@@ -203,100 +203,6 @@ void testRingNeverShrinksOnSubsequentDiscards() {
           "rename ring must not shrink after every entry retires");
 }
 
-void testCaptureDrawBuffersSnapshotsActiveEntryBeforeRotation() {
-  using namespace dxmt9::resources;
-  using namespace dxmt9::core;
-  dxmt9::resources::Pool resourcePool;
-  WMT::Device dev{NULL_OBJECT_HANDLE};
-  const auto handle = resourcePool.createBuffer(dev, dynamicBufferDesc());
-  auto* record = resourcePool.findBuffer(handle.value);
-  check(record != nullptr, "createBuffer record reachable for capture test");
-
-  // Forge a non-zero MTL handle into the create-time entry so the
-  // capture can be distinguished from the post-rotation entry. With
-  // a NULL_OBJECT_HANDLE WMT::Device, real `newBuffer` returns 0 for
-  // every entry, which makes "captured handle preserved" assertions
-  // trivially true. Reset handles back to zero before the test exits
-  // so the Reference dtor's release() does not run against a forged
-  // pointer-shaped value.
-  constexpr std::uint64_t kForgedActive = 0x1111u;
-  constexpr std::uint64_t kForgedRotated = 0x2222u;
-  record->buffer.handle = kForgedActive;
-  record->renameRing[0].buffer.handle = kForgedActive;
-
-  // Snapshot the active-entry MTL handle into a draw record built
-  // against this buffer. The handle should match what record.buffer
-  // points to right now (kForgedActive).
-  FlatDrawStateRecord beforeRotation{};
-  beforeRotation.streamBuffers[0] = handle;
-  beforeRotation.indexBuffer = handle;
-  resourcePool.captureDrawBuffers(beforeRotation);
-  checkEq(beforeRotation.streamBuffer0Metal, kForgedActive,
-          "captureDrawBuffers snapshots the active stream-0 MTL handle");
-  checkEq(beforeRotation.indexBufferMetal, kForgedActive,
-          "captureDrawBuffers snapshots the active index-buffer MTL handle");
-
-  // Force a growth-rename: mark active(0) as in-flight at seqId 5,
-  // DISCARD with completedSeqId 4. Ring grows to 2 entries; active
-  // becomes entry(1). record.buffer redirects to the fresh entry
-  // (whose handle is still 0 since the test device is NULL).
-  resourcePool.markBufferUse(handle, /*seqId=*/5u);
-  resourcePool.finalizeBufferMap(dev, handle, UsageDiscard, /*completedSeqId=*/4u);
-  checkEq(record->renameRing.size(), std::size_t{2u},
-          "rotation grew the ring as expected");
-  checkEq(record->renameActiveIndex, 1u,
-          "rotation moved active to the freshly appended entry");
-  // Forge the new active entry's handle so a second capture has a
-  // distinguishable value.
-  record->buffer.handle = kForgedRotated;
-  record->renameRing[1].buffer.handle = kForgedRotated;
-
-  // The pre-rotation capture must be untouched — that is the bug
-  // fix's whole point: the encoder bind for an already-submitted
-  // draw cannot drift onto the rotated entry.
-  checkEq(beforeRotation.streamBuffer0Metal, kForgedActive,
-          "pre-rotation streamBuffer0Metal must not be mutated by a later DISCARD");
-  checkEq(beforeRotation.indexBufferMetal, kForgedActive,
-          "pre-rotation indexBufferMetal must not be mutated by a later DISCARD");
-
-  // A fresh capture taken AFTER rotation reflects the new active
-  // entry. This proves submitDrawRun for the next draw still binds
-  // against fresh data while the old draw's snapshot stays pinned to
-  // its committed entry.
-  FlatDrawStateRecord afterRotation{};
-  afterRotation.streamBuffers[0] = handle;
-  afterRotation.indexBuffer = handle;
-  resourcePool.captureDrawBuffers(afterRotation);
-  checkEq(afterRotation.streamBuffer0Metal, kForgedRotated,
-          "post-rotation captureDrawBuffers picks up the new active MTL handle");
-  checkEq(afterRotation.indexBufferMetal, kForgedRotated,
-          "post-rotation index capture picks up the new active MTL handle");
-
-  // Cleanup: zero out every Reference handle so the dtor does not
-  // call NSObject_release on a forged value when the Pool tears down.
-  record->buffer.handle = NULL_OBJECT_HANDLE;
-  for (auto& entry : record->renameRing) {
-    entry.buffer.handle = NULL_OBJECT_HANDLE;
-  }
-}
-
-void testCaptureDrawBuffersIgnoresMissingBuffers() {
-  using namespace dxmt9::resources;
-  using namespace dxmt9::core;
-  dxmt9::resources::Pool resourcePool;
-
-  // FlatDrawStateRecord with only zero handles must leave the
-  // captured fields at zero — capture is opt-in via valid handles.
-  FlatDrawStateRecord empty{};
-  empty.streamBuffer0Metal = 0xdeadbeefu;  // garbage that should be cleared
-  empty.indexBufferMetal = 0xdeadbeefu;
-  resourcePool.captureDrawBuffers(empty);
-  checkEq(empty.streamBuffer0Metal, std::uint64_t{0u},
-          "captureDrawBuffers clears the snapshot when no stream-0 handle is set");
-  checkEq(empty.indexBufferMetal, std::uint64_t{0u},
-          "captureDrawBuffers clears the snapshot when no index handle is set");
-}
-
 void testNonDiscardLockSkipsRotation() {
   using namespace dxmt9::resources;
   using namespace dxmt9::core;
@@ -324,8 +230,6 @@ int main() {
     testDiscardWithInflightUseGrowsTheRing();
     testDiscardReusesIdleEntryAcrossRing();
     testRingNeverShrinksOnSubsequentDiscards();
-    testCaptureDrawBuffersSnapshotsActiveEntryBeforeRotation();
-    testCaptureDrawBuffersIgnoresMissingBuffers();
     testNonDiscardLockSkipsRotation();
   } catch (const TestFailure& e) {
     std::cerr << "dynamic_rename_ring_spec failed: " << e.what() << '\n';

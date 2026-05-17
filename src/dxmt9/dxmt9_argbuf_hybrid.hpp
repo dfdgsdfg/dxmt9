@@ -26,7 +26,6 @@
 
 namespace dxmt9 {
 class CommandQueue;
-namespace resources { struct Pool; }
 namespace core { struct FlatDrawStateView; }
 }  // namespace dxmt9
 
@@ -37,18 +36,17 @@ using u64 = std::uint64_t;
 
 // R-BACK-12.23 — argbuf descriptor layout. Mirrors the MSL ArgbufLayout
 // struct emitted by `shaders::makeShaderPreludeArgbufHybrid`. The
-// encoder calls `buildArgumentDescriptors` once at queue init (or per
-// encoder open if the descriptor set is encoder-local) and feeds the
-// resulting array into `MTLDevice::newArgumentEncoder`.
+// encoder calls `buildArgumentDescriptors` once at queue init and feeds
+// the resulting array into `MTLDevice::newArgumentEncoder`.
 //
 // Indices are pinned to the MSL [[id(N)]] attributes so descriptor
 // position is stable across MSL versions:
 //
 //   id 0..3   : VsConsts / FfpVsConsts / PsConsts / FfpPsConsts pointers
-//   id 4..11  : 8 2D textures
-//   id 12..19 : 8 cube textures
-//   id 20..27 : 8 3D textures
-//   id 28..35 : 8 samplers
+//
+// Texture and sampler resources stay on the direct render-encoder
+// `[[texture(N)]]` / `[[sampler(N)]]` binding lane (the validated
+// Stage 1 path); the argument buffer carries constants only.
 struct ArgumentDescriptors {
   std::array<WMTArgumentDescriptor, shaders::kArgbufHybridDescriptorCount> entries{};
 
@@ -66,8 +64,7 @@ struct ArgumentDescriptors {
 // constant-block alignment (the smallest alignment compatible with the
 // Stage 1 host structs — VsConsts/PsConsts have float4 leading members,
 // FfpVsConsts/FfpPsConsts also begin on 4-byte boundaries; 16 B keeps
-// the Tier-2 GPU-pointer slot aligned). Texture and sampler entries
-// carry no alignment.
+// the Tier-2 GPU-pointer slot aligned).
 ArgumentDescriptors buildArgumentDescriptors();
 
 // Capability-gate sense check for unit tests. The actual gate result is
@@ -96,8 +93,6 @@ struct ArgbufRegionOffsets {
   u64 ffpVsOffset = 0;
   u64 psConstsOffset = 0;
   u64 ffpPsOffset = 0;
-  u64 textureSlot0Offset = 0;
-  u64 samplerSlot0Offset = 0;
   u64 totalSize = 0;
 };
 
@@ -150,13 +145,15 @@ struct PopulatedArgbuf {
 };
 
 // Test/diagnostic recorder for the Stage 2 argument-buffer populator.
-// Production passes nullptr. Tests may set suppressMetalCalls=true and
-// provide fake object handles so the exact MTLArgumentEncoder write
-// indices and ordering can be asserted without a live Metal device.
+// Production passes nullptr. Tests may set suppressMetalCalls=true so
+// the exact MTLArgumentEncoder write indices and ordering can be
+// asserted without a live Metal device. Only the constant-buffer
+// pointer writes (setArgumentBuffer / setBuffer) are recorded — texture
+// and sampler bindings travel on the direct render-encoder lane and
+// are observed through other harnesses.
 struct ArgbufRecorder {
   void* userdata = nullptr;
   bool suppressMetalCalls = false;
-  WMT::SamplerState samplerState{};
 
   void (*setArgumentBuffer)(void* userdata,
                             WMT::Buffer buffer,
@@ -165,12 +162,6 @@ struct ArgbufRecorder {
                     WMT::Buffer buffer,
                     u64 offset,
                     u32 index) = nullptr;
-  void (*setTexture)(void* userdata,
-                     WMT::Texture texture,
-                     u32 index) = nullptr;
-  void (*setSamplerState)(void* userdata,
-                          WMT::SamplerState sampler,
-                          u32 index) = nullptr;
 };
 
 // Pure value-transform: bytes the encoder would re-write for the given
@@ -211,10 +202,9 @@ PopulatedArgbuf openArgbuf(CommandQueue& queue,
 // the encoder's [[id(0..3)]] slots at them. Returns the total bytes
 // written into the transient ring (i.e., the four struct sizes).
 //
-// Resource binding (textures / samplers) is handled by
-// `populateResourceBindings` below; splitting the two keeps the const
-// upload and the resource bind on independent code paths so a future
-// per-frequency-only update can call only the one it needs.
+// Texture and sampler resources are bound directly on the render
+// encoder by the encoder hot path — they never travel through this
+// argument buffer.
 //
 // Production-only — invokes Metal calls on `encoderResource`. Tests
 // drive `dirtyBytesEstimate` directly.
@@ -222,20 +212,8 @@ u64 populateConstantBuffers(CommandQueue& queue,
                              ArgbufEncoderResource& encoderResource,
                              core::FlatDrawStateView state,
                              std::uint64_t seqId,
-                             const ArgbufRecorder* recorder = nullptr);
-
-// R-BACK-12.24 — populate the texture / sampler slots in the argbuf.
-// Writes one MTLResourceID per active stage at the typed texture range
-// ([[id(4..11)]], [[id(12..19)]], or [[id(20..27)]]) and
-// [[id(28..35)]] for samplers. The pool resolves
-// per-stage texture handles to live `WMT::Texture` and the device is
-// asked for one `WMT::SamplerState` per stage. Stages without a bound
-// texture leave their argbuf entries unchanged.
-void populateResourceBindings(WMT::Reference<WMT::Device> device,
-                               resources::Pool& pool,
-                               ArgbufEncoderResource& encoderResource,
-                               core::FlatDrawStateView state,
-                               const ArgbufRecorder* recorder = nullptr);
+                             const ArgbufRecorder* recorder = nullptr,
+                             WMT::RenderCommandEncoder residencyEncoder = {});
 
 // R-BACK-12.24 — mid-pass dirty rewrite. Re-uploads the per-frequency
 // host structs corresponding to the dirty bits and re-points the
@@ -244,15 +222,15 @@ void populateResourceBindings(WMT::Reference<WMT::Device> device,
 // happy path). Returns 0 when no relevant bit is set.
 //
 // Called from the encoder's per-draw path between draws on a single
-// render encoder. Resource bindings (textures / samplers) are not
-// re-encoded here — those are stable on a render-pass encoder; if a
-// stage swap landed mid-pass we already split the encoder.
+// render encoder. Texture and sampler resources travel on the direct
+// render-encoder lane and are never touched here.
 u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               ArgbufEncoderResource& encoderResource,
                               core::FlatDrawStateView state,
                               const uniform::DirtyState& dirty,
                               std::uint64_t seqId,
-                              const ArgbufRecorder* recorder = nullptr);
+                              const ArgbufRecorder* recorder = nullptr,
+                              WMT::RenderCommandEncoder residencyEncoder = {});
 u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               ArgbufEncoderResource& encoderResource,
                               core::FlatDrawStateView state,
@@ -260,7 +238,8 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               uniform::ShaderConstantUsageBounds vsUsage,
                               uniform::ShaderConstantUsageBounds psUsage,
                               std::uint64_t seqId,
-                              const ArgbufRecorder* recorder = nullptr);
+                              const ArgbufRecorder* recorder = nullptr,
+                              WMT::RenderCommandEncoder residencyEncoder = {});
 
 // R-BACK-12.24 — point the Stage 2 FfpVsConsts entry at an already
 // uploaded host slice. Used by encodeDraw after the FFP preTransformed
@@ -269,6 +248,7 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
 void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,
                        WMT::Buffer buffer,
                        u64 offset,
-                       const ArgbufRecorder* recorder = nullptr);
+                       const ArgbufRecorder* recorder = nullptr,
+                       WMT::RenderCommandEncoder residencyEncoder = {});
 
 }  // namespace dxmt9::argbuf_hybrid

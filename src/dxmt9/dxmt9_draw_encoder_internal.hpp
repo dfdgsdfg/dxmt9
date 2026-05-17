@@ -190,7 +190,6 @@ struct DrawBindingPacketPlan {
   FragmentTextureSamplerBindingList fragmentTextureSamplers{};
   ProgrammableVsExtraStreamBindingList extraStreams{};
   EncoderRasterStatePlan raster{};
-  bool argbufResourceRepopulate = false;
 };
 
 struct DrawBindingPacketTextureSamplerKey {
@@ -231,7 +230,6 @@ struct DrawBindingPacketKey {
   std::array<DrawBindingPacketExtraStreamKey, core::kMaxStreams - 1u> extraStreams{};
   u32 extraStreamCount = 0;
   DrawBindingPacketRasterKey raster{};
-  bool argbufResourceRepopulate = false;
 
   friend constexpr bool operator==(const DrawBindingPacketKey&,
                                    const DrawBindingPacketKey&) = default;
@@ -307,7 +305,6 @@ inline DrawBindingPacketKey makeDrawBindingPacketKey(
   }
 
   key.raster = makeDrawBindingPacketRasterKey(packet.raster);
-  key.argbufResourceRepopulate = packet.argbufResourceRepopulate;
   return key;
 }
 
@@ -340,7 +337,6 @@ inline u64 hashDrawBindingPacketKey(const DrawBindingPacketKey& key) noexcept {
   seed = drawBindingPacketHashMix(seed, key.raster.scissorWidth);
   seed = drawBindingPacketHashMix(seed, key.raster.scissorHeight);
   seed = drawBindingPacketHashMix(seed, key.raster.cullMode);
-  seed = drawBindingPacketHashMix(seed, key.argbufResourceRepopulate ? 1ull : 0ull);
   return seed;
 }
 
@@ -381,13 +377,6 @@ inline const DrawBindingPacketPlan& cacheDrawBindingPacket(
   entry.key = key;
   entry.packet = packet;
   return entry.packet;
-}
-
-inline bool shouldRepopulateArgbufResources(
-    bool argbufHybridMode,
-    const FragmentTextureSamplerBindingList& fragmentTextureSamplers) noexcept {
-  (void)fragmentTextureSamplers;
-  return argbufHybridMode;
 }
 
 inline bool vertexDeclUsesStream(const core::VertexDeclSnapshot& vertexDecl, u32 stream) {
@@ -509,16 +498,12 @@ inline DrawBindingPacketPlan makeDrawBindingPacketPlan(
     u32 surfaceHeight,
     bool preTransformed,
     bool scissorDisabled,
-    bool cullDisabled,
-    bool argbufHybridMode) {
-  const auto fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot);
+    bool cullDisabled) {
   return DrawBindingPacketPlan{
-      .fragmentTextureSamplers = fragmentTextureSamplers,
+      .fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot),
       .extraStreams = makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv),
       .raster = makeEncoderRasterStatePlan(
           hot, surfaceWidth, surfaceHeight, preTransformed, scissorDisabled, cullDisabled),
-      .argbufResourceRepopulate =
-          shouldRepopulateArgbufResources(argbufHybridMode, fragmentTextureSamplers),
   };
 }
 

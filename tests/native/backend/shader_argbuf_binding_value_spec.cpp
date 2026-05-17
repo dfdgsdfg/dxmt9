@@ -1,4 +1,4 @@
-// R-TEST-0.10 B5 - draw state -> shader arg-buffer texture/sampler bindings.
+// R-TEST-0.10 B5 - draw state -> shader bindings (Stage 2: constants-only argbuf).
 //
 // CPU-only value-boundary spec for dxmt9-shader-argbuf-binding-value-spec.
 // This test intentionally stops at the strongest observable boundary in
@@ -6,9 +6,12 @@
 //
 //   FlatDrawStateRecord texture slot N
 //     -> ShaderSourceContext::textures[N]
-//     -> Stage 1 MSL texN/sampN [[texture(N)]]/[[sampler(N)]]
-//     -> Stage 2 MSL texN/sampN aliases from abuf->textures2d[N]/samplers[N]
-//     -> Stage 2 descriptor ids texture=4+N, sampler=12+N.
+//     -> Stage 1 and Stage 2 MSL texN/sampN [[texture(N)]]/[[sampler(N)]]
+//        (texture/sampler resources always travel on the direct render
+//         encoder lane; the argbuf only carries the four constant-buffer
+//         pointers).
+//     -> Stage 2 argbuf descriptor table holds only the constant buffer
+//        pointers at [[id(0..3)]].
 //     -> Encoder call-plan values consumed by setFragmentTexture/Sampler,
 //        setViewport, setScissorRect, and setRasterizerCullMode.
 //
@@ -112,16 +115,16 @@ std::string stage1SamplerBinding(u32 stage) {
   return out.str();
 }
 
-std::string stage2TextureAlias(u32 stage) {
-  std::ostringstream out;
-  out << "texture2d<float> tex" << stage << " = abuf->textures2d[" << stage << "]";
-  return out.str();
+std::string anyArgbufTextureAliasFragment() {
+  // The constants-only argbuf must NEVER emit a textures2d[] / samplers[]
+  // member; production shaders sample textures via direct [[texture(N)]]
+  // / [[sampler(N)]] parameters. Tests probe both family names to lock
+  // the negative.
+  return std::string("abuf.textures2d[");
 }
 
-std::string stage2SamplerAlias(u32 stage) {
-  std::ostringstream out;
-  out << "sampler samp" << stage << " = abuf->samplers[" << stage << "]";
-  return out.str();
+std::string anyArgbufSamplerAliasFragment() {
+  return std::string("abuf.samplers[");
 }
 
 ShaderRef makePixelShaderSamplingStage(u32 stage) {
@@ -174,14 +177,6 @@ FfpPixelKey makeSingleTextureStageKey(u32 stage) {
   return key;
 }
 
-std::uint32_t textureArgbufId(u32 stage) {
-  return dxmt9::shaders::kArgbufHybridTexture2DBase + stage;
-}
-
-std::uint32_t samplerArgbufId(u32 stage) {
-  return dxmt9::shaders::kArgbufHybridSamplerBase + stage;
-}
-
 // ---------------------------------------------------------------------
 // B5.1 - flat draw state preserves slot values and null/default state.
 
@@ -196,18 +191,13 @@ void testFlatDrawStateTextureSlotsFeedShaderContext() {
   const auto layout = makeDrawShaderLayoutContext(desc);
   const auto context = dxmt9::drawshader::makeShaderSourceContext(layout, hot);
 
-  checkEq(dxmt9::shaders::kArgbufHybridTextureSlotCount, kMaxTextureStages,
-          "argbuf texture array covers the 8 fixed-function texture stages");
-  checkEq(dxmt9::shaders::kArgbufHybridSamplerSlotCount, kMaxTextureStages,
-          "argbuf sampler array covers the same 8 stage slots");
-
   checkEq(hot.textures[0], Handle{0x1000u}, "slot 0 texture handle preserved");
   checkEq(hot.textures[7], Handle{0x7000u}, "slot 7 texture handle preserved");
   checkEq(hot.textures[3], Handle{}, "null slot 3 stays a zero handle");
   checkEq(hot.textureMask, (1u << 0) | (1u << 7),
           "textureMask contains only non-null slots");
 
-  for (u32 stage = 0; stage < dxmt9::shaders::kArgbufHybridTextureSlotCount; ++stage) {
+  for (u32 stage = 0; stage < kMaxTextureStages; ++stage) {
     checkEq(context.textures[stage], hot.textures[stage] != Handle{},
             "ShaderSourceContext texture bit mirrors FlatDrawStateRecord slot");
   }
@@ -241,37 +231,33 @@ void assertShaderSlotMapsToSameStage(u32 stage) {
   checkContains(stage1, slotName("tex", stage) + ".sample(" + slotName("samp", stage),
                 "Stage 1 shader body samples texN with sampN");
 
+  // Stage 2 keeps the constants on the argbuf (buffer 30) but the
+  // texture/sampler parameters stay on the direct render-encoder lane.
   checkContains(stage2, "[[buffer(30)]]",
                 "Stage 2 translated shader binds the argbuf at slot 30");
-  checkContains(stage2, stage2TextureAlias(stage),
-                "Stage 2 translated shader aliases texN from argbuf textures2d[N]");
-  checkContains(stage2, stage2SamplerAlias(stage),
-                "Stage 2 translated shader aliases sampN from argbuf samplers[N]");
+  checkContains(stage2, stage1TextureBinding(stage),
+                "Stage 2 keeps the direct [[texture(N)]] parameter for the textured stage");
+  checkContains(stage2, stage1SamplerBinding(stage),
+                "Stage 2 keeps the direct [[sampler(N)]] parameter for the textured stage");
   checkContains(stage2, slotName("tex", stage) + ".sample(" + slotName("samp", stage),
                 "Stage 2 shader body still samples texN with sampN");
-  checkNotContains(stage2, "[[texture(" + std::to_string(stage) + ")]]",
-                   "Stage 2 shader does not keep a direct texture(N) bind");
-  checkNotContains(stage2, "[[sampler(" + std::to_string(stage) + ")]]",
-                   "Stage 2 shader does not keep a direct sampler(N) bind");
+  checkNotContains(stage2, anyArgbufTextureAliasFragment(),
+                   "Stage 2 shader never aliases texN through the argbuf");
+  checkNotContains(stage2, anyArgbufSamplerAliasFragment(),
+                   "Stage 2 shader never aliases sampN through the argbuf");
 
   const auto descriptors = dxmt9::argbuf_hybrid::buildArgumentDescriptors();
-  const auto textureId = textureArgbufId(stage);
-  const auto samplerId = samplerArgbufId(stage);
-  const auto& textureDesc = descriptors.entries[4u];
-  const auto& samplerDesc = descriptors.entries[7u];
-
-  checkEq(static_cast<std::uint32_t>(textureDesc.argumentType),
-          static_cast<std::uint32_t>(WMTArgumentTypeTexture),
-          "Stage 2 descriptor for textures2d[] is a texture array");
-  check(textureId >= textureDesc.index &&
-            textureId < textureDesc.index + textureDesc.arrayLength,
-        "Stage 2 2D texture descriptor array covers texture id 4 + N");
-  checkEq(static_cast<std::uint32_t>(samplerDesc.argumentType),
-          static_cast<std::uint32_t>(WMTArgumentTypeSampler),
-          "Stage 2 descriptor for samplers[] is a sampler array");
-  check(samplerId >= samplerDesc.index &&
-            samplerId < samplerDesc.index + samplerDesc.arrayLength,
-        "Stage 2 sampler descriptor array covers sampler id 28 + N");
+  checkEq(descriptors.count(),
+          static_cast<std::size_t>(dxmt9::shaders::kArgbufHybridConstantBufferCount),
+          "Stage 2 argbuf descriptor table holds only the four constant pointers");
+  for (std::uint32_t i = 0; i < dxmt9::shaders::kArgbufHybridConstantBufferCount; ++i) {
+    const auto& d = descriptors.entries[i];
+    checkEq(static_cast<std::uint32_t>(d.argumentType),
+            static_cast<std::uint32_t>(WMTArgumentTypeBuffer),
+            "Stage 2 argbuf descriptor entry is a constant buffer pointer");
+    checkEq(d.index, i,
+            "Stage 2 argbuf descriptor entries occupy [[id(0..3)]] in order");
+  }
 }
 
 void testStageBindingsForFirstMiddleAndLastArgbufSlots() {
@@ -301,10 +287,10 @@ void testNullFfpTextureSlotDoesNotMaterializeTextureBinding() {
       *desc.pixelShader.pixelKey, context);
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 FFP still binds argbuf for constants with no texture");
-  checkNotContains(src, stage2TextureAlias(kStage),
-                   "null FFP texture stage does not alias abuf textures2d[N]");
-  checkNotContains(src, stage2SamplerAlias(kStage),
-                   "null FFP texture stage does not alias abuf samplers[N]");
+  checkNotContains(src, anyArgbufTextureAliasFragment(),
+                   "Stage 2 FFP never aliases textures through the argbuf");
+  checkNotContains(src, anyArgbufSamplerAliasFragment(),
+                   "Stage 2 FFP never aliases samplers through the argbuf");
   checkNotContains(src, "[[texture(5)]]",
                    "null FFP texture stage does not direct-bind texture(5)");
   checkNotContains(src, "[[sampler(5)]]",
@@ -539,8 +525,7 @@ dxmt9::encoders::DrawBindingPacketKey makeBindingPacketKey(
       96u,
       false,
       false,
-      false,
-      true);
+      false);
   return dxmt9::encoders::makeDrawBindingPacketKey(packet);
 }
 
@@ -630,8 +615,7 @@ void testDrawBindingPacketCacheReusesStableValuePacket() {
       96u,
       false,
       false,
-      false,
-      true);
+      false);
 
   dxmt9::encoders::DrawBindingPacketCache cache{};
   const auto& first = dxmt9::encoders::cacheDrawBindingPacket(cache, packet);
@@ -654,8 +638,7 @@ void testDrawBindingPacketCacheReusesStableValuePacket() {
       96u,
       false,
       false,
-      false,
-      true);
+      false);
   (void)dxmt9::encoders::cacheDrawBindingPacket(cache, changedPacket);
   checkEq(cache.misses, std::uint64_t{2},
           "changed binding packet key inserts a new cached value");
@@ -702,8 +685,7 @@ void testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues() {
       96u,
       false,
       false,
-      false,
-      true);
+      false);
 
   checkEq(packet.fragmentTextureSamplers.size(), std::size_t{1},
           "binding packet carries fragment texture/sampler plan");
@@ -731,11 +713,9 @@ void testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues() {
             "binding packet carries viewport origin X");
   checkEq(packet.raster.scissor.x, std::uint64_t{6},
           "binding packet carries scissor x");
-  check(packet.argbufResourceRepopulate,
-        "texture-bound Stage 2 binding packet repopulates argbuf resources");
 }
 
-void testDrawBindingPacketPlanAllowsTextureFreeArgbufRepopulate() {
+void testDrawBindingPacketPlanTextureFreeHasEmptyFragmentBindings() {
   DrawDesc desc{};
   desc.viewport.viewport = Viewport{0u, 0u, 16u, 16u, 0.0f, 1.0f};
 
@@ -752,33 +732,17 @@ void testDrawBindingPacketPlanAllowsTextureFreeArgbufRepopulate() {
       .userIndexData = {},
   };
 
-  const auto argbufPacket = dxmt9::encoders::makeDrawBindingPacketPlan(
+  const auto packet = dxmt9::encoders::makeDrawBindingPacketPlan(
       desc.vertexDecl,
       hot,
       pv,
       16u,
       16u,
-      false,
-      false,
-      false,
-      true);
-  check(argbufPacket.fragmentTextureSamplers.empty(),
-        "texture-free binding packet has no fragment texture/sampler plan");
-  check(argbufPacket.argbufResourceRepopulate,
-        "texture-free Stage 2 binding packet repopulates argbuf resources");
-
-  const auto stage1Packet = dxmt9::encoders::makeDrawBindingPacketPlan(
-      desc.vertexDecl,
-      hot,
-      pv,
-      16u,
-      16u,
-      false,
       false,
       false,
       false);
-  check(!stage1Packet.argbufResourceRepopulate,
-        "Stage 1 binding packet does not request argbuf resource repopulation");
+  check(packet.fragmentTextureSamplers.empty(),
+        "texture-free binding packet has no fragment texture/sampler plan");
 }
 
 }  // namespace
@@ -799,7 +763,7 @@ int main() {
     testDrawBindingPacketKeyDiffersForExtraStreamChange();
     testDrawBindingPacketCacheReusesStableValuePacket();
     testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues();
-    testDrawBindingPacketPlanAllowsTextureFreeArgbufRepopulate();
+    testDrawBindingPacketPlanTextureFreeHasEmptyFragmentBindings();
   } catch (const TestFailure& failure) {
     std::cerr << "shader_argbuf_binding_value_spec failed: "
               << failure.what() << '\n';

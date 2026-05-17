@@ -333,10 +333,13 @@ void CommandQueue::uploadTextureLevel(core::TextureHandle handle,
                                         std::uint32_t level,
                                         std::uint32_t width,
                                         std::uint32_t height,
+                                        std::uint32_t depth,
                                         std::uint32_t pitch,
+                                        std::uint32_t slicePitch,
                                         std::span<const std::uint8_t> bytes) {
   if (initializer_) {
-    initializer_->uploadTextureLevel(handle, level, width, height, pitch, bytes);
+    initializer_->uploadTextureLevel(handle, level, width, height, depth, pitch,
+                                     slicePitch, bytes);
   }
 }
 
@@ -1081,12 +1084,6 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   if (!skipDrawResourceMarking_) {
     pool_.markDrawResources(state.hot, seqIdForMark(*this, 0));
   }
-  // Snapshot the active rename-ring buffer handles for stream 0 and
-  // index buffer. Runs unconditionally so the skipDrawResourceMarking_
-  // chunk-import path also gets the captures. Decouples the encoder
-  // bind from a future Lock(D3DLOCK_DISCARD) rotating record.buffer
-  // off the entry holding this draw's data.
-  pool_.captureDrawBuffers(state.hot);
   currentBackBuffer_ = state.hot.colorAttachments[0].handle;
   currentSlotUnlocked(*this).appendDrawRun(std::move(state), uniforms, draws, payloads);
   maybeCommitDrawChunkUnlocked(*this, pool_, lock);

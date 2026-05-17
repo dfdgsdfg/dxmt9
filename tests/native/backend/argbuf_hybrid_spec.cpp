@@ -162,53 +162,29 @@ void testArgumentDescriptorCount() {
   const auto descriptors = dxmt9::argbuf_hybrid::buildArgumentDescriptors();
   checkEq(static_cast<std::uint64_t>(descriptors.count()),
           static_cast<std::uint64_t>(dxmt9::shaders::kArgbufHybridDescriptorCount),
-          "descriptor table holds 4 cbuf + 3 texture arrays + 1 sampler array");
+          "descriptor count matches kArgbufHybridDescriptorCount");
   checkEq(static_cast<std::uint64_t>(descriptors.count()),
-          static_cast<std::uint64_t>(8),
-          "descriptor count is 8");
+          static_cast<std::uint64_t>(dxmt9::shaders::kArgbufHybridConstantBufferCount),
+          "descriptor table holds exactly the four constant-buffer pointers");
 }
 
 void testArgumentDescriptorRoles() {
   const auto descriptors = dxmt9::argbuf_hybrid::buildArgumentDescriptors();
-  // First 4 entries: constant buffers at id 0..3.
-  for (std::uint32_t i = 0; i < 4; ++i) {
+  // Constants-only argbuf: exactly four constant-buffer pointer
+  // descriptors at id 0..3, no texture/sampler entries.
+  checkEq(descriptors.count(),
+          static_cast<std::size_t>(dxmt9::shaders::kArgbufHybridConstantBufferCount),
+          "argbuf descriptor table contains exactly the constant pointers");
+  for (std::uint32_t i = 0; i < dxmt9::shaders::kArgbufHybridConstantBufferCount; ++i) {
     const auto& d = descriptors.entries[i];
     checkEq(static_cast<std::uint32_t>(d.argumentType),
             static_cast<std::uint32_t>(WMTArgumentTypeBuffer),
-            "first 4 descriptors are buffers");
+            "every argbuf descriptor is a constant buffer pointer");
     checkEq(static_cast<std::uint32_t>(d.index), i,
             "buffer descriptor indices are 0..3");
     check(d.constantBlockAlignment >= 16u,
           "buffer descriptors carry >=16 B alignment");
   }
-  // Next 3 entries: 2D, cube, then 3D texture arrays.
-  const std::uint32_t textureBases[] = {
-      dxmt9::shaders::kArgbufHybridTexture2DBase,
-      dxmt9::shaders::kArgbufHybridTextureCubeBase,
-      dxmt9::shaders::kArgbufHybridTexture3DBase,
-  };
-  for (std::uint32_t i = 0; i < 3; ++i) {
-    const auto& d = descriptors.entries[4u + i];
-    checkEq(static_cast<std::uint32_t>(d.argumentType),
-            static_cast<std::uint32_t>(WMTArgumentTypeTexture),
-            "entries 4..6 are texture arrays");
-    checkEq(static_cast<std::uint32_t>(d.index), textureBases[i],
-            "texture array descriptor index is the MSL base id");
-    checkEq(static_cast<std::uint32_t>(d.arrayLength),
-            dxmt9::shaders::kArgbufHybridTextureSlotCount,
-            "texture array descriptors have 8 elements");
-  }
-  // Final entry: sampler array at id 28 with 8 elements.
-  const auto& sampler = descriptors.entries[7u];
-  checkEq(static_cast<std::uint32_t>(sampler.argumentType),
-          static_cast<std::uint32_t>(WMTArgumentTypeSampler),
-          "entry 7 is the sampler array");
-  checkEq(static_cast<std::uint32_t>(sampler.index),
-          dxmt9::shaders::kArgbufHybridSamplerBase,
-          "sampler array descriptor index is the MSL base id");
-  checkEq(static_cast<std::uint32_t>(sampler.arrayLength),
-          dxmt9::shaders::kArgbufHybridSamplerSlotCount,
-          "sampler array descriptor has 8 elements");
 }
 
 // ---------------------------------------------------------------------
@@ -218,20 +194,21 @@ void testArgbufHybridPreludeContainsArgbufLayout() {
   const auto prelude = dxmt9::shaders::makeShaderPreludeArgbufHybrid(/*withClipDistances=*/false);
   check(prelude.find("struct ArgbufLayout") != std::string::npos,
         "argbuf-hybrid prelude declares struct ArgbufLayout");
-  check(prelude.find("[[id(0)]]") != std::string::npos,
-        "argbuf-hybrid prelude pins descriptor id 0");
-  check(prelude.find("[[id(4)]]") != std::string::npos,
-        "argbuf-hybrid prelude pins texture base id 4");
-  check(prelude.find("[[id(28)]]") != std::string::npos,
-        "argbuf-hybrid prelude pins sampler base id 28");
-  check(prelude.find("array<texture2d<float>, 8> textures2d") != std::string::npos,
-        "argbuf-hybrid prelude declares 8 2D textures");
-  check(prelude.find("array<texturecube<float>, 8> texturesCube") != std::string::npos,
-        "argbuf-hybrid prelude declares 8 cube textures");
-  check(prelude.find("array<texture3d<float>, 8> textures3d") != std::string::npos,
-        "argbuf-hybrid prelude declares 8 3D textures");
-  check(prelude.find("array<sampler, 8> samplers") != std::string::npos,
-        "argbuf-hybrid prelude declares 8 samplers");
+  for (const char* tag : {"[[id(0)]]", "[[id(1)]]", "[[id(2)]]", "[[id(3)]]"}) {
+    check(prelude.find(tag) != std::string::npos,
+          "argbuf-hybrid prelude pins each constant-buffer descriptor id");
+  }
+  // Constants-only argbuf — texture/sampler arrays must NOT appear in
+  // the layout. Resource binding stays on the direct render encoder
+  // lane (the validated Stage 1 path).
+  check(prelude.find("textures2d") == std::string::npos,
+        "argbuf-hybrid prelude does not declare textures2d");
+  check(prelude.find("texturesCube") == std::string::npos,
+        "argbuf-hybrid prelude does not declare texturesCube");
+  check(prelude.find("textures3d") == std::string::npos,
+        "argbuf-hybrid prelude does not declare textures3d");
+  check(prelude.find("array<sampler") == std::string::npos,
+        "argbuf-hybrid prelude does not declare an argbuf sampler array");
 }
 
 void testArgbufHybridPreludeIncludesStage1Structs() {

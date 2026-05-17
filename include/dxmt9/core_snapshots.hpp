@@ -569,10 +569,15 @@ struct FlatStateEntry {
   friend constexpr bool operator==(const FlatStateEntry&, const FlatStateEntry&) = default;
 };
 
+// Sorted, fixed-capacity state-id → value set produced by
+// `makeFlatStateSet`. Invariant: `entries[0..count)` is sorted in
+// ascending order by `state`; `entries[count..MaxEntries)` is zero-
+// initialized. `findFlatState` relies on the sorted prefix to binary
+// search in O(log N). Anything that constructs a FlatStateSet without
+// going through `makeFlatStateSet` must preserve the same order.
 template <std::size_t MaxEntries>
 struct FlatStateSet {
   std::array<FlatStateEntry, MaxEntries> entries{};
-  std::array<u64, (MaxEntries + 63u) / 64u> occupied{};
   u32 count = 0;
   u64 hash = 0;
   bool overflow = false;
@@ -583,12 +588,17 @@ struct FlatStateSet {
 template <std::size_t MaxEntries>
 constexpr const FlatStateEntry* findFlatState(const FlatStateSet<MaxEntries>& set,
                                               u32 state) noexcept {
-  for (u32 i = 0; i < set.count && i < MaxEntries; ++i) {
-    if (set.entries[i].state == state) {
-      return &set.entries[i];
-    }
+  const auto* first = set.entries.data();
+  const auto* last = first + (set.count <= MaxEntries ? set.count : MaxEntries);
+  const auto* hit = std::lower_bound(
+      first, last, state,
+      [](const FlatStateEntry& entry, u32 needle) noexcept {
+        return entry.state < needle;
+      });
+  if (hit == last || hit->state != state) {
+    return nullptr;
   }
-  return nullptr;
+  return hit;
 }
 
 template <std::size_t MaxEntries>
@@ -643,18 +653,8 @@ struct FlatDrawStateRecord {
   std::array<Handle, kMaxStreams> streamBuffers{};
   std::array<u32, kMaxStreams> streamOffsets{};
   std::array<u32, kMaxStreams> streamStrides{};
-  // Captured Metal-buffer handle for stream 0 (the only stream the
-  // current encoder binds) at the moment this draw run was submitted.
-  // Resolves the rename-ring race: a Lock(D3DLOCK_DISCARD) on the same
-  // PE thread between submission and encoding rotates `record.buffer`
-  // off the entry that holds this draw's data. Encoder prefers the
-  // captured handle so the in-flight draw stays bound to the entry it
-  // was committed against. Zero falls back to the live pool lookup.
-  u64 streamBuffer0Metal = 0;
   u32 streamMask = 0;
   Handle indexBuffer{};
-  // Same rationale as streamBuffer0Metal but for the index buffer.
-  u64 indexBufferMetal = 0;
   std::array<Handle, kMaxTextures> textures{};
   std::array<u32, kMaxTextures> textureLods{};
   u32 textureMask = 0;
@@ -951,13 +951,16 @@ class BackendDevice {
     (void)handle;
     (void)bytes;
   }
-  virtual void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
+  virtual void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height,
+                                  u32 depth, u32 pitch, u32 slicePitch,
                                   std::span<const u8> bytes) {
     (void)handle;
     (void)level;
     (void)width;
     (void)height;
+    (void)depth;
     (void)pitch;
+    (void)slicePitch;
     (void)bytes;
   }
   // Immediate draw-run submission. `draws`, `payloads`, and `uniforms` are
@@ -1130,7 +1133,9 @@ class Texture : public std::enable_shared_from_this<Texture> {
   struct LevelStorage {
     u32 width = 0;
     u32 height = 0;
+    u32 depth = 1;
     u32 pitch = 0;
+    u32 slicePitch = 0;
     std::vector<u8> bytes;
     bool dirty = false;
   };
