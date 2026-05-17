@@ -343,10 +343,53 @@ public:
                                            std::size_t firstHandle,
                                            std::uint32_t kind,
                                            std::uint64_t handle) {
+        // PE-side recorder path: `handle` is an opaque server-side wrapper
+        // pointer (D9CTexture* / D9CBuffer* / D9CSurface*) cast to uint64,
+        // not a `core::Handle.value`. PE cannot decode the wrapper's
+        // current generation without a bridged round trip, so the wire
+        // entry is stamped with the legacy NONE sentinel. The unix-side
+        // chunk importer treats NONE as "unstamped" and skips the
+        // cross-side equality check; producers that *do* have a
+        // `core::Handle` in hand should call
+        // `appendRecordWireHandleFromCoreHandle` instead so the importer
+        // can reject zombie / use-after-free handles.
+        return appendRecordWireHandleStamped(
+            handles, firstHandle, kind, handle,
+            D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE);
+    }
+
+    // Append a wire handle entry whose `handle` value is a fully-encoded
+    // `core::Handle.value`. The generation field is decoded from the high
+    // bits of the handle and stamped into the wire entry so unix-side
+    // importers can verify both producer and consumer observe the same
+    // generation (zombie handle rejection). Use this overload whenever the
+    // caller already has a `core::Handle`; the legacy
+    // `appendRecordWireHandleFrom` variant is reserved for opaque-pointer
+    // PE recorder callers that cannot decode generation locally.
+    static bool appendRecordWireHandleFromCoreHandle(
+        WireHandleEntryList& handles,
+        std::size_t firstHandle,
+        std::uint32_t kind,
+        std::uint64_t coreHandleValue) {
+        const auto generation =
+            d9c_command_chunk_wire_handle_generation_from_handle(
+                coreHandleValue);
+        return appendRecordWireHandleStamped(handles, firstHandle, kind,
+                                             coreHandleValue, generation);
+    }
+
+    static bool appendRecordWireHandleStamped(WireHandleEntryList& handles,
+                                              std::size_t firstHandle,
+                                              std::uint32_t kind,
+                                              std::uint64_t handle,
+                                              std::uint32_t generation) {
         if (handle == 0) {
             return true;
         }
         if (kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
+            return false;
+        }
+        if (!d9c_command_chunk_wire_handle_generation_valid(generation)) {
             return false;
         }
         if (firstHandle > handles.size()) {
@@ -356,12 +399,29 @@ public:
              it != handles.end(); ++it) {
             const auto& existing = *it;
             if (existing.kind == kind && existing.opaqueHandle == handle) {
-                return true;
+                // De-duplicate identical entries. If a later append carries a
+                // stamped generation but the existing entry is the NONE
+                // sentinel, promote in place so the importer can run the
+                // cross-side check. Conflicting non-NONE generations indicate
+                // a producer bug; reject the append rather than silently
+                // overwrite a stamped value.
+                if (generation == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) {
+                    return true;
+                }
+                if (existing.generation == generation) {
+                    return true;
+                }
+                if (existing.generation ==
+                    D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) {
+                    it->generation = generation;
+                    return true;
+                }
+                return false;
             }
         }
         handles.push_back(D9CCommandChunkWireHandleEntry{
             .kind = kind,
-            .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+            .generation = generation,
             .opaqueHandle = handle,
             .reserved0 = 0,
             .reserved1 = 0,

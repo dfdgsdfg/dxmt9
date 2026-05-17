@@ -707,6 +707,62 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // and the bulk mark would silently be a no-op.
   bool didBulkMarkResources = false;
   if (importedChunk.handleCount > 0) {
+    // Cross-side generation check (wire-record bounds-checkable, per
+    // `agents/rules/codebase_conventions.rules.md`): when a producer
+    // stamped a non-NONE generation into the wire handle entry, decode
+    // the wrapper's current `core::Handle.value` and verify the stamped
+    // generation matches the encoded generation. A mismatch indicates a
+    // zombie / use-after-free wrapper pointer (the slot was released and
+    // re-used between PE record and unix import) and the chunk MUST be
+    // rejected before any record is dispatched. NONE-stamped entries are
+    // the legacy path; they pass through unchanged so the PE recorder's
+    // existing opaque-pointer encoding still imports.
+    for (std::uint32_t i = 0; i < importedChunk.handleCount; ++i) {
+      const auto& entry = importedChunk.handles[i];
+      if (entry.generation == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) {
+        continue;
+      }
+      if (entry.opaqueHandle == 0) {
+        continue;
+      }
+      dxmt9::core::Handle resolved{};
+      switch (entry.kind) {
+      case D9C_CHUNK_HANDLE_KIND_TEXTURE: {
+        auto* wrapper = wireValuePtr<D9CTexture>(entry.opaqueHandle);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case D9C_CHUNK_HANDLE_KIND_SURFACE: {
+        auto* wrapper = wireValuePtr<D9CSurface>(entry.opaqueHandle);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case D9C_CHUNK_HANDLE_KIND_BUFFER: {
+        auto* wrapper = wireValuePtr<D9CBuffer>(entry.opaqueHandle);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case D9C_CHUNK_HANDLE_KIND_SHADER:
+      case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+        // Shaders / vertex decls have no `core::Handle` representation
+        // on the server side; the producer must not stamp a non-NONE
+        // generation for these kinds. Treating any stamped value as a
+        // mismatch keeps the importer honest about the supported set.
+        return commitChunkFail("bad-handle-generation", i, entry.kind);
+      default:
+        return commitChunkFail("bad-handle-generation", i, entry.kind);
+      }
+      if (resolved.value == 0) {
+        // Wrapper resolved to a null core handle — the producer stamped
+        // a generation but the wrapper is no longer live. This is the
+        // exact zombie case the cross-side check is meant to catch.
+        return commitChunkFail("bad-handle-generation", i, entry.generation);
+      }
+      if (!d9c_command_chunk_wire_handle_generation_matches(
+              entry.generation, resolved.value)) {
+        return commitChunkFail("bad-handle-generation", i, entry.generation);
+      }
+    }
     ImportedChunkHandleSet retainedWireHandles;
     if (!collectImportedWireChunkHandles(importedChunk, retainedWireHandles)) {
       return commitChunkFail("collect-handles");

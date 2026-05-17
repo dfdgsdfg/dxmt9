@@ -406,7 +406,20 @@ typedef struct D9CDrawIndexedPrimitiveUPPacket {
 #define D9C_COMMAND_CHUNK_WIRE_HANDLE_RANGE_SIZE 8u
 #define D9C_COMMAND_CHUNK_WIRE_RECORD_RANGES_SIZE 16u
 #define D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE 0u
+/* Sentinel for "producer did not stamp a generation" (legacy / opaque-pointer
+ * wire entries). Importers MUST accept this value without comparing against
+ * the resolved handle's generation; this preserves backward compatibility
+ * with the pre-validation PE recorder while still letting newer producers
+ * stamp the actual encoded generation so the importer can reject zombie
+ * handles. The encoded generation field uses 24 bits (matching
+ * `dxmt9::detail::HandleArena::kGenerationBits` in
+ * `src/dxmt9/dxmt9_resource_pool.hpp`); zero is therefore reserved as the
+ * "unstamped" sentinel and never produced by `HandleArena::insert`. */
 #define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE 0u
+#define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_BITS 24u
+#define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_SHIFT 32u
+#define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK \
+    ((1u << D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_BITS) - 1u)
 
 typedef struct D9CCommandChunkWireHeader {
     uint32_t version;
@@ -542,6 +555,48 @@ static inline int d9c_command_chunk_wire_record_reserved_valid(
 static inline int d9c_command_chunk_wire_handle_entry_reserved_valid(
     const D9CCommandChunkWireHandleEntry* handle) {
     return handle && handle->reserved0 == 0u && handle->reserved1 == 0u;
+}
+
+/* Decode the generation field that `dxmt9::detail::HandleArena<...>::encode`
+ * stuffs into bits [32, 32+24) of a `core::Handle.value`. The wire entry's
+ * `generation` slot mirrors this field so PE producers and unix importers
+ * can cross-check that they see the same generation for a given handle
+ * (zombie / freed-slot rejection). The bit layout MUST match
+ * `kGenerationBits` / `kGenerationShift` / `kGenerationMask` in
+ * `src/dxmt9/dxmt9_resource_pool.hpp`. */
+static inline uint32_t d9c_command_chunk_wire_handle_generation_from_handle(
+    uint64_t coreHandleValue) {
+    return (uint32_t)((coreHandleValue >>
+                       D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_SHIFT) &
+                      D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK);
+}
+
+/* Returns non-zero when `entry.generation` is accepted by the wire-record
+ * importer: either the legacy NONE sentinel (producer did not stamp) or a
+ * stamped value within the encoded generation domain. The cross-side equality
+ * check against a resolved handle is performed separately by
+ * `d9c_command_chunk_wire_handle_generation_matches`. */
+static inline int d9c_command_chunk_wire_handle_generation_valid(
+    uint32_t generation) {
+    return generation == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE ||
+           (generation & ~D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK) == 0u;
+}
+
+/* Compares the wire entry's stamped generation against the generation
+ * decoded from a resolved unix-side `core::Handle.value`. Returns non-zero
+ * when the entry is either unstamped (legacy NONE — caller may bump a
+ * "legacy" counter and accept) OR exactly matches the resolved generation.
+ * A non-zero stamped generation that disagrees with the resolved generation
+ * is a zombie / use-after-free wire record and the importer MUST reject it. */
+static inline int d9c_command_chunk_wire_handle_generation_matches(
+    uint32_t stampedGeneration,
+    uint64_t resolvedCoreHandleValue) {
+    if (stampedGeneration == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) {
+        return 1;
+    }
+    return stampedGeneration ==
+           d9c_command_chunk_wire_handle_generation_from_handle(
+               resolvedCoreHandleValue);
 }
 
 /* Per-record resource handle ranges. PE recorder derives handles from each

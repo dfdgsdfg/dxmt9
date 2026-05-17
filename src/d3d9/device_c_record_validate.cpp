@@ -147,8 +147,13 @@ const T* wireHandlePtr(const D9CWireHandle& handle) noexcept {
 
 bool importedWireHandleEntryValid(
     const D9CCommandChunkWireHandleEntry& handle) noexcept {
+  // R-BACK (wire-record bounds-checkable): the generation field is either the
+  // legacy NONE sentinel (producer did not stamp) or a value inside the encoded
+  // generation domain. The cross-side equality check against the resolved
+  // handle generation is performed at replay time after the wrapper is
+  // dereferenced — see `device_c_chunk_replay.cpp` "bad-handle-generation".
   return handle.kind <= D9C_CHUNK_HANDLE_KIND_VERTEX_DECL &&
-         handle.generation == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE &&
+         d9c_command_chunk_wire_handle_generation_valid(handle.generation) &&
          d9c_command_chunk_wire_handle_entry_reserved_valid(&handle);
 }
 

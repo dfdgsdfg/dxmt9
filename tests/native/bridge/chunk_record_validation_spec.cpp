@@ -437,6 +437,10 @@ void testImportedWireChunkEnforcesHandleTableAndRanges() {
           "wire handle table rejects nonzero trailing reserved fields");
 
   handles[1].reserved1 = 0u;
+  // In-range stamped generation must now pass the structural validator —
+  // the cross-side equality check moved to chunk replay where the wrapper
+  // pointer can be dereferenced. See
+  // `device_c_chunk_replay.cpp` "bad-handle-generation".
   handles[1].generation = 1u;
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
@@ -444,8 +448,78 @@ void testImportedWireChunkEnforcesHandleTableAndRanges() {
       static_cast<std::uint32_t>(handles.size()));
   validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::Valid),
+          "wire handle table accepts in-range stamped generations");
+
+  // Generations outside the encoded domain (24 bits) are still structurally
+  // invalid — a producer stamping 25+ bits of generation has corrupted the
+  // encoding and the importer must reject the entry before any cross-side
+  // lookup is attempted.
+  handles[1].generation =
+      D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK + 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
-          "wire handle table rejects unsupported handle generations");
+          "wire handle table rejects out-of-range stamped generations");
+  checkEq(validation.failedHandleIndex, 1u,
+          "wire handle table reports failed handle index for "
+          "out-of-range generation");
+  handles[1].generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE;
+}
+
+// Cross-side generation match: the helper used by the chunk-replay
+// importer must accept the legacy NONE sentinel, accept stamped values
+// that match the resolved core handle's generation, and reject every
+// non-matching non-NONE stamp. This is the "zombie handle" gate that
+// fires when a PE recorder's wrapper pointer is reused before the
+// unix-side import resolves it — without the gate the importer would
+// silently dispatch records against a freed resource slot.
+void testWireHandleGenerationCrossSideEquality() {
+  // Build a `core::Handle.value`-shaped uint64 with explicit generation
+  // bits so the test does not depend on HandleArena internals being
+  // visible to the bridge layer.
+  const std::uint64_t handleWithGen5 =
+      (static_cast<std::uint64_t>(5u) <<
+       D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_SHIFT) |
+      0x42u;
+  const std::uint64_t handleWithGen6 =
+      (static_cast<std::uint64_t>(6u) <<
+       D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_SHIFT) |
+      0x42u;
+
+  checkEq(
+      d9c_command_chunk_wire_handle_generation_from_handle(handleWithGen5),
+      5u, "decoded generation matches encoded high bits");
+
+  check(d9c_command_chunk_wire_handle_generation_matches(
+            D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE, handleWithGen5) != 0,
+        "legacy NONE sentinel accepts any resolved generation");
+
+  check(d9c_command_chunk_wire_handle_generation_matches(5u, handleWithGen5) !=
+            0,
+        "stamped generation accepts matching resolved generation");
+
+  check(d9c_command_chunk_wire_handle_generation_matches(6u, handleWithGen5) ==
+            0,
+        "stamped generation rejects mismatched resolved generation");
+
+  check(d9c_command_chunk_wire_handle_generation_matches(5u, handleWithGen6) ==
+            0,
+        "decoded generation is sensitive to the high bits of the handle");
+
+  check(d9c_command_chunk_wire_handle_generation_valid(
+            D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) != 0,
+        "structural validator accepts NONE sentinel");
+  check(d9c_command_chunk_wire_handle_generation_valid(
+            D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK) != 0,
+        "structural validator accepts the maximum encoded generation");
+  check(d9c_command_chunk_wire_handle_generation_valid(
+            D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK + 1u) == 0,
+        "structural validator rejects generations past the encoded domain");
 }
 
 void testImportedWireAcceptsAllCommandIds() {
@@ -594,6 +668,7 @@ int main() {
     testCommandChunkWireBlobRejectsLegacyRawRecordStream();
     testImportedWireChunkRejectsMalformedPayloadRange();
     testImportedWireChunkEnforcesHandleTableAndRanges();
+    testWireHandleGenerationCrossSideEquality();
     testImportedWireAcceptsAllCommandIds();
     testImportedWireSpecialRecordValidationMatrix();
   } catch (const dxmt9::d3d9::devicec::spec::TestFailure& e) {

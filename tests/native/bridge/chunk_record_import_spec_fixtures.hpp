@@ -537,6 +537,9 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           std::string(name) + " rejects wire handle reserved fields");
 
+  // In-range stamped generations are now structurally valid (the
+  // cross-side equality check moved into chunk replay). The wire
+  // validator only flags generations that overflow the encoded domain.
   badHandles = handles;
   badHandles[0].generation = 1u;
   wire = makeImportedWireChunkView(
@@ -545,8 +548,20 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
       badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
   validation = validateImportedWireChunk(wire);
   checkEq(static_cast<int>(validation.status),
+          static_cast<int>(ImportedWireChunkValidationStatus::Valid),
+          std::string(name) + " accepts in-range stamped generation");
+
+  badHandles = handles;
+  badHandles[0].generation =
+      D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK + 1u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()),
+      payload.data(), static_cast<std::uint32_t>(payload.size()),
+      badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
+  validation = validateImportedWireChunk(wire);
+  checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
-          std::string(name) + " rejects wire handle generations");
+          std::string(name) + " rejects out-of-range wire handle generations");
 }
 
 inline void checkWireAcceptsRecordBytes(const std::vector<std::uint8_t>& payload,
