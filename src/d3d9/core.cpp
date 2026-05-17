@@ -199,7 +199,7 @@ SwapDesc Device::snapshotSwapDesc() const {
     if (auto backBuffer = swapChains_[0]->backBuffer()) {
       desc.sourceSurface = backBuffer->handle();
     }
-    desc.presenter = swapChains_[0]->presenter();
+    desc.presentId = swapChains_[0]->presentId();
   }
   return desc;
 }
@@ -313,7 +313,7 @@ HResult Device::waitForVBlank(size_t swapChainIndex) {
   }
   if (backend_) {
     auto vblankDesc = makeSwapDesc(chain->params());
-    vblankDesc.presenter = chain->presenter();
+    vblankDesc.presentId = chain->presentId();
     return upperDevice_->waitForVBlank(vblankDesc);
   }
   return D3D_OK;

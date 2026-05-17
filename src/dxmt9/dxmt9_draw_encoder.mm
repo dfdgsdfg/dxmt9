@@ -3068,11 +3068,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         flushRender(perf::EncoderSplitReason::Present);
         flushBlit();
         splitBeforeBlockingPresent();
+        // Resolve the queue-local Presenter binding once per Present
+        // packet and reclaim any acquire-before-present token stashed by
+        // submitPresent. A stale PresentId (swapchain destroyed since
+        // submission) produces a nullptr Presenter — encodePresent then
+        // short-circuits to a skipped present.
+        dxmt9::Presenter* const presenter = ctx.queue.lookupPresenter(present.presentId);
+        auto pendingDrawableToken = ctx.queue.takeDrawableToken(present.presentId);
         const bool noteAfterAcquire = presentBoundaryAfterAcquireEnabled();
         if (!noteAfterAcquire) {
           ctx.queue.notePresentDequeued(slot.seqId);
         }
         const bool presentEncoded = dxmt9::encodePresent(commandBuffer, ctx.pool,
+                                                          presenter,
+                                                          std::move(pendingDrawableToken),
                                                           present, presentSource, slot.seqId);
         if (noteAfterAcquire) {
           ctx.queue.notePresentDequeued(slot.seqId);
@@ -3080,7 +3089,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         if (presentEncoded) {
           commandBufferHasWork = true;
           ctx.queue.backBufferDiscardAfterPresent_ = true;
-          if (auto* presenter = present.presenter) {
+          if (presenter) {
             postCommitCallbacks.push_back([presenter, seqId = slot.seqId] {
               presenter->preAcquireNextDrawable(seqId);
             });

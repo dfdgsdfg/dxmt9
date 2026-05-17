@@ -47,6 +47,8 @@ namespace dxmt9 {
 
 class Device;
 class CommandQueue;
+class Presenter;
+class PresentDrawableToken;
 
 namespace encoders { struct EncodeContext; }
 namespace resources { class Initializer; }
@@ -151,6 +153,30 @@ class CommandQueue {
   void presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency);
   void submitFlush();
   core::HResult waitForVBlank();
+
+  // Per-swapchain Presenter registry. Each core::SwapChain registers its
+  // Presenter on creation and unregisters on destruction; the queue
+  // holds a non-owning observer pointer. The returned core::PresentId is
+  // a queue-local opaque handle that survives across the PE/unix wire —
+  // it is what travels on core::SwapDesc instead of the raw Presenter
+  // pointer + shared_ptr<PresentDrawableToken>. Returning a zero
+  // PresentId means the queue refused the binding (null pointer);
+  // callers must check before forwarding.
+  //
+  // lookupPresenter returns nullptr for an invalid / stale (generation
+  // mismatch) id; encode-side code must tolerate that path because a
+  // SwapChain can be destroyed between submitPresent and the encode
+  // worker draining the chunk.
+  //
+  // Drawable tokens from async / sync acquire-on-submit are stashed
+  // against the same PresentId so the encode worker can claim them
+  // without the queue carrying a shared_ptr on the PE-visible record.
+  core::PresentId registerPresenter(Presenter* presenter);
+  void unregisterPresenter(core::PresentId id);
+  Presenter* lookupPresenter(core::PresentId id) const;
+  void stashDrawableToken(core::PresentId id,
+                          std::shared_ptr<PresentDrawableToken> token);
+  std::shared_ptr<PresentDrawableToken> takeDrawableToken(core::PresentId id);
 
   // Queue-owned transfer paths. mapBuffer orchestrates Pool storage +
   // queue's wait-for-sequence rule under one mutex acquisition;
@@ -413,6 +439,36 @@ class CommandQueue {
   // race during steady-state operation.
   std::mutex dirtyMutex_{};
   uniform::DirtyState pendingDirty_{};
+
+  // Per-swapchain Presenter registry. SwapChain owns the Presenter
+  // (unique_ptr); the queue holds a non-owning observer pointer plus a
+  // generation counter so a stale PresentId from a torn-down swapchain
+  // resolves to nullptr (the encoder then skips the present cleanly).
+  // The encoded id is `(generation << 32) | (slot + 1)` so a zero value
+  // is never a real binding. Free slots form a stack via
+  // PresenterSlot::nextFree. Drawable tokens from acquire-on-submit are
+  // stashed here keyed by id so the encode worker reclaims them without
+  // a shared_ptr field on the PE-visible SwapDesc.
+  struct PresenterSlot {
+    Presenter* presenter = nullptr;
+    std::uint32_t generation = 0;
+    std::int32_t nextFree = -1;
+    std::shared_ptr<PresentDrawableToken> pendingToken{};
+  };
+  static constexpr std::uint64_t encodePresentId(std::uint32_t slotIndex,
+                                                 std::uint32_t generation) noexcept {
+    return (static_cast<std::uint64_t>(generation) << 32) |
+           (static_cast<std::uint64_t>(slotIndex) + 1ull);
+  }
+  static constexpr std::uint32_t decodePresentIdSlot(core::PresentId id) noexcept {
+    return static_cast<std::uint32_t>((id.value & 0xffffffffull) - 1ull);
+  }
+  static constexpr std::uint32_t decodePresentIdGeneration(core::PresentId id) noexcept {
+    return static_cast<std::uint32_t>(id.value >> 32);
+  }
+  mutable std::mutex presenterRegistryMutex_{};
+  std::vector<PresenterSlot> presenterSlots_{};
+  std::int32_t presenterFreeHead_ = -1;
 
  public:
   // Limits accessor — value member, not a borrowed pointer.

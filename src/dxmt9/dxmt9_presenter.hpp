@@ -155,10 +155,18 @@ class Presenter {
 // Returns true if the presenter drew (caller may then set a
 // discard-after-present flag).
 //
-// Extracted out of MetalBackendDevice::encodePresent so that present policy
-// lives with the Presenter rather than the Renderer.
+// `presenter` is the queue-resolved binding (CommandQueue::lookupPresenter
+// on `present.presentId`); a null pointer means the swapchain either
+// never had a layer (test path) or was destroyed between submission and
+// encode — both fall through to a skipped present.
+// `drawableToken` is the optional queue-stashed token from an
+// acquire-before-present experiment (CommandQueue::takeDrawableToken on
+// the same id). The legacy shared_ptr / Presenter* fields no longer
+// live on the PE-visible core::SwapDesc.
 bool encodePresent(WMT::CommandBuffer& commandBuffer,
                    resources::Pool& pool,
+                   Presenter* presenter,
+                   std::shared_ptr<PresentDrawableToken> drawableToken,
                    const core::SwapDesc& present,
                    core::Handle sourceHandle,
                    std::uint64_t seqId);

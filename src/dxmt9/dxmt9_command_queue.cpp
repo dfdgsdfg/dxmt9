@@ -1148,17 +1148,23 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // TLA+: PresentFrameLatency / CommitPresent.
   perf::countSubmitPresent();
   core::SwapDesc queuedDesc = desc;
-  if (queuedDesc.presenter && asyncAcquirePresentOnSubmit()) {
+  // Resolve the queue-local Presenter binding once. Stale ids (swapchain
+  // destroyed between snapshotSwapDesc and submitPresent) resolve to
+  // nullptr; the legacy raw-pointer code already tolerated that path so
+  // the rest of this function preserves the same control flow.
+  Presenter* presenter = lookupPresenter(queuedDesc.presentId);
+  if (presenter && asyncAcquirePresentOnSubmit()) {
     perf::countPresentAsyncAcquireRequest();
-    queuedDesc.drawableToken =
-        queuedDesc.presenter->beginAcquireDrawable(makePresentAcquireParams(queuedDesc));
-    if (queuedDesc.drawableToken) {
+    auto token = presenter->beginAcquireDrawable(makePresentAcquireParams(queuedDesc));
+    if (token) {
       perf::countPresentAsyncAcquireIssued();
+      queuedDesc.drawableTokenRequired = true;
     } else {
       perf::countPresentAsyncAcquireFallback();
+      queuedDesc.drawableTokenRequired = false;
     }
-    queuedDesc.drawableTokenRequired = static_cast<bool>(queuedDesc.drawableToken);
-  } else if (queuedDesc.presenter && acquirePresentOnSubmit()) {
+    stashDrawableToken(queuedDesc.presentId, std::move(token));
+  } else if (presenter && acquirePresentOnSubmit()) {
     {
       std::unique_lock lock(mutex_);
       queueLifecycle_.commitCurrentChunk(
@@ -1166,9 +1172,9 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
             markSlotResourcesUnlocked(pool_, slot);
           });
     }
-    queuedDesc.drawableToken =
-        queuedDesc.presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
+    auto token = presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
     queuedDesc.drawableTokenRequired = true;
+    stashDrawableToken(queuedDesc.presentId, std::move(token));
   }
 
   std::uint64_t presentSeqId = 0;
@@ -1354,6 +1360,101 @@ void CommandQueue::runCompletionWatcherLoop() {
   while (queueLifecycle_.processOnePendingCompletion(stop_)) {
     // continue until processOnePendingCompletion returns false (stop)
   }
+}
+
+core::PresentId CommandQueue::registerPresenter(Presenter* presenter) {
+  if (!presenter) {
+    return {};
+  }
+  std::lock_guard lock(presenterRegistryMutex_);
+  std::uint32_t slotIndex = 0;
+  if (presenterFreeHead_ >= 0) {
+    slotIndex = static_cast<std::uint32_t>(presenterFreeHead_);
+    presenterFreeHead_ = presenterSlots_[slotIndex].nextFree;
+    presenterSlots_[slotIndex].nextFree = -1;
+  } else {
+    slotIndex = static_cast<std::uint32_t>(presenterSlots_.size());
+    presenterSlots_.emplace_back();
+  }
+  auto& slot = presenterSlots_[slotIndex];
+  slot.presenter = presenter;
+  slot.pendingToken.reset();
+  // Generation is bumped on free; the current value is what the caller
+  // observes for this allocation lifetime.
+  return core::PresentId{encodePresentId(slotIndex, slot.generation)};
+}
+
+void CommandQueue::unregisterPresenter(core::PresentId id) {
+  if (!id) {
+    return;
+  }
+  std::lock_guard lock(presenterRegistryMutex_);
+  const std::uint32_t slotIndex = decodePresentIdSlot(id);
+  if (slotIndex >= presenterSlots_.size()) {
+    return;
+  }
+  auto& slot = presenterSlots_[slotIndex];
+  if (slot.generation != decodePresentIdGeneration(id)) {
+    return;
+  }
+  slot.presenter = nullptr;
+  slot.pendingToken.reset();
+  // Bump generation so any in-flight PresentId carrying the old value
+  // resolves to nullptr in lookupPresenter — the encoder will skip the
+  // present rather than reach into a destroyed Presenter.
+  ++slot.generation;
+  slot.nextFree = presenterFreeHead_;
+  presenterFreeHead_ = static_cast<std::int32_t>(slotIndex);
+}
+
+Presenter* CommandQueue::lookupPresenter(core::PresentId id) const {
+  if (!id) {
+    return nullptr;
+  }
+  std::lock_guard lock(presenterRegistryMutex_);
+  const std::uint32_t slotIndex = decodePresentIdSlot(id);
+  if (slotIndex >= presenterSlots_.size()) {
+    return nullptr;
+  }
+  const auto& slot = presenterSlots_[slotIndex];
+  if (slot.generation != decodePresentIdGeneration(id)) {
+    return nullptr;
+  }
+  return slot.presenter;
+}
+
+void CommandQueue::stashDrawableToken(core::PresentId id,
+                                       std::shared_ptr<PresentDrawableToken> token) {
+  if (!id) {
+    return;
+  }
+  std::lock_guard lock(presenterRegistryMutex_);
+  const std::uint32_t slotIndex = decodePresentIdSlot(id);
+  if (slotIndex >= presenterSlots_.size()) {
+    return;
+  }
+  auto& slot = presenterSlots_[slotIndex];
+  if (slot.generation != decodePresentIdGeneration(id)) {
+    return;
+  }
+  slot.pendingToken = std::move(token);
+}
+
+std::shared_ptr<PresentDrawableToken>
+CommandQueue::takeDrawableToken(core::PresentId id) {
+  if (!id) {
+    return {};
+  }
+  std::lock_guard lock(presenterRegistryMutex_);
+  const std::uint32_t slotIndex = decodePresentIdSlot(id);
+  if (slotIndex >= presenterSlots_.size()) {
+    return {};
+  }
+  auto& slot = presenterSlots_[slotIndex];
+  if (slot.generation != decodePresentIdGeneration(id)) {
+    return {};
+  }
+  return std::exchange(slot.pendingToken, {});
 }
 
 }  // namespace dxmt9

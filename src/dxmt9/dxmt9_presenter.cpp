@@ -549,6 +549,8 @@ std::uint64_t forcedPresentTextureHandle() {
 
 bool encodePresent(WMT::CommandBuffer& commandBuffer,
                    resources::Pool& pool,
+                   Presenter* presenter,
+                   std::shared_ptr<PresentDrawableToken> drawableToken,
                    const core::SwapDesc& present,
                    core::Handle sourceHandle,
                    std::uint64_t seqId) {
@@ -648,10 +650,11 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
                                    sourceHandle.value,
                                    sourceTextureHandle);
 
-  // The originating core::SwapChain owns the Presenter and passes it via
-  // SwapDesc. Missing presenter = no layer available (hwnd=0 or failed
-  // acquisition in SwapChain::ensurePresenter).
-  Presenter* presenter = present.presenter;
+  // The originating core::SwapChain owns the Presenter; the queue
+  // resolved the SwapDesc::presentId to a non-owning pointer before
+  // calling encodePresent. Missing presenter = no layer available
+  // (hwnd=0 or failed acquisition in SwapChain::ensurePresenter), or a
+  // stale id from a destroyed swapchain.
   if (!presenter) {
     perf::countPresentSkipped();
     presentimpl::traceEvent("missing-layer", seqId, present.window.value);
@@ -674,7 +677,7 @@ bool encodePresent(WMT::CommandBuffer& commandBuffer,
   params.maxDrawableCount = kDefaultMetalDrawableCount;
   params.opaqueAlpha = opaqueAlpha;
   params.seqId = seqId;
-  params.drawableToken = present.drawableToken;
+  params.drawableToken = std::move(drawableToken);
   params.drawableTokenRequired = present.drawableTokenRequired;
 
   const auto presentResult = presenter->encodeCommands(commandBuffer, params);

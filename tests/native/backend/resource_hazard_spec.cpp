@@ -1012,7 +1012,8 @@ void testEncodePresentRejectsMissingSourceWithoutStatusCallback() {
   present.notifyPresentationStatus = [&](bool) { statusNotified = true; };
 
   const bool encoded =
-      dxmt9::encodePresent(commandBuffer, resourcePool, present,
+      dxmt9::encodePresent(commandBuffer, resourcePool, /*presenter=*/nullptr,
+                           /*drawableToken=*/nullptr, present,
                            SurfaceHandle{0x12345678u}, 9u);
   check(!encoded, "encodePresent rejects a missing source surface");
   check(!statusNotified,
@@ -1048,7 +1049,8 @@ void testEncodePresentRejectsSourceWithoutTexture() {
   present.notifyPresentationStatus = [&](bool) { statusNotified = true; };
 
   const bool encoded =
-      dxmt9::encodePresent(commandBuffer, resourcePool, present, source, 10u);
+      dxmt9::encodePresent(commandBuffer, resourcePool, /*presenter=*/nullptr,
+                           /*drawableToken=*/nullptr, present, source, 10u);
   check(!encoded, "encodePresent rejects a surface with no texture");
   check(!statusNotified,
         "textureless source does not report presentation status without drawable work");

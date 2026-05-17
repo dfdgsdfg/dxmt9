@@ -260,7 +260,21 @@ SwapChain::SwapChain(std::shared_ptr<Device> owner, SwapChainHandle handle,
   ensurePresenter();
 }
 
-SwapChain::~SwapChain() = default;
+SwapChain::~SwapChain() {
+  // Release the queue-local Presenter binding before the Presenter
+  // itself disappears. Generation bump in CommandQueue::unregisterPresenter
+  // invalidates any in-flight PresentId so a late submitPresent / encode
+  // sees a nullptr and skips the present instead of dereferencing
+  // freed memory.
+  if (presentId_.value != 0) {
+    if (auto owner = owner_.lock()) {
+      if (const auto& upper = owner->upperDevice()) {
+        upper->queue().unregisterPresenter(presentId_);
+      }
+    }
+    presentId_ = {};
+  }
+}
 
 void SwapChain::ensurePresenter() {
   auto owner = owner_.lock();
@@ -284,7 +298,9 @@ void SwapChain::ensurePresenter() {
                                                   upper->shaderArchivePath());
   if (!presenter_->valid()) {
     presenter_.reset();
+    return;
   }
+  presentId_ = upper->queue().registerPresenter(presenter_.get());
 }
 
 bool SwapChain::displaySyncEnabled() const noexcept {

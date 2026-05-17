@@ -1273,8 +1273,17 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
 
   // Per-window Presenter (WMT::MetalLayer-centric upper object). Owned by
   // this swap chain; nullptr on test paths where the upper dxmt9::Device
-  // has no WMT::Device.
+  // has no WMT::Device. Production submit/present paths thread the
+  // queue-local presentId() instead — the raw Presenter pointer is kept
+  // here only for the d3d9-internal accessors that pre-date the
+  // registry (none of them cross the PE/unix wire).
   dxmt9::Presenter* presenter() const noexcept { return presenter_.get(); }
+
+  // Queue-local opaque binding registered by ensurePresenter. Zero when
+  // no Presenter could be constructed (test path / hwnd=0). Travels on
+  // core::SwapDesc; the unix-side CommandQueue resolves it back to a
+  // Presenter* (and any pending drawable token).
+  PresentId presentId() const noexcept { return presentId_; }
 
  private:
   void ensurePresenter();
@@ -1285,6 +1294,7 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   std::shared_ptr<Surface> backBuffer_;
   std::shared_ptr<Surface> depthStencilSurface_;
   std::unique_ptr<dxmt9::Presenter> presenter_{};
+  PresentId presentId_{};
 };
 
 class Device : public std::enable_shared_from_this<Device> {

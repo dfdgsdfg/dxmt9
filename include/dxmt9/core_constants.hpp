@@ -14,7 +14,6 @@
 namespace dxmt9 {
 class Device;     // forward decl — defined in src/dxmt9/dxmt9_device.hpp
 class Presenter;  // forward decl — defined in src/dxmt9/dxmt9_presenter.hpp
-class PresentDrawableToken;  // retained CAMetalDrawable for tokenized present experiments
 }
 
 namespace dxmt9::core {
@@ -75,6 +74,23 @@ using BufferHandle = Handle;
 using TextureHandle = Handle;
 using SurfaceHandle = Handle;
 using SwapChainHandle = Handle;
+
+// Queue-local opaque identifier for the per-swapchain Presenter binding.
+// CommandQueue encodes the value as (generation << 32) | (slot + 1) so a
+// zero value is always the invalid sentinel — never collides with a real
+// binding. Callers treat the value as opaque.
+//
+// PE/unix wire records (`SwapDesc` crossing the bridge) carry only this
+// POD identifier; the unix-side queue resolves it back to a Presenter
+// pointer + pending drawable token. Keeping the wire pointer-free is the
+// codebase convention (`agents/rules/codebase_conventions.rules.md`,
+// "Cross-boundary records must be POD, … pointer-free").
+struct PresentId {
+  u64 value = 0;
+
+  constexpr explicit operator bool() const noexcept { return value != 0; }
+  friend constexpr bool operator==(const PresentId&, const PresentId&) = default;
+};
 
 enum class Pool : u32 {
   Default,
@@ -657,14 +673,15 @@ struct SwapDesc {
   u32 backBufferCount = 1;
   bool displaySyncEnabled = true;
   MultiSampleType multiSampleType = MultiSampleType::None;
-  // Owned by the SwapChain this desc was built from; the backend uses this
-  // to target the per-window Presenter without an hwnd-keyed registry.
-  dxmt9::Presenter* presenter = nullptr;
-  // Optional token acquired before the present packet reaches the encode
-  // worker. This is intentionally experimental: it lets dxmt9 test a
-  // DXVK-like acquire-before-present shape without making CAMetalLayer
-  // acquisition part of the core D3D9 surface.
-  std::shared_ptr<dxmt9::PresentDrawableToken> drawableToken{};
+  // Queue-local handle for the per-window Presenter binding registered by
+  // the owning core::SwapChain. The unix-side CommandQueue resolves this
+  // back to a Presenter* (and any pending drawable token from
+  // acquire-before-present experiments). A zero value means no presenter
+  // is associated with this packet — typical for the test / no-Metal
+  // path. Keeping a POD identifier here (instead of a raw Presenter
+  // pointer + shared_ptr<PresentDrawableToken>) is what makes SwapDesc
+  // safe to cross the PE/unix wire.
+  PresentId presentId{};
   bool drawableTokenRequired = false;
   // Per-present back-channels — DeviceImpl::present() fills these from its
   // own observers + maxFrameLatency_ before forwarding to the queue. Frame
