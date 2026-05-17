@@ -1,0 +1,29 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c fog_with_shader_test behavior, reduced to vs_1_1 oFog driving vertex fog
+; oracle-date: 2026-05-17
+
+[vertex shader d3dbc-hex]
+fffe0101
+02000001 c00f0000 90e40000
+02000001 d00f0000 a0e40000
+02000001 c0010001 a0000001
+0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300
+0200001f 8000000a 900f0000
+02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-vs-const-f 0 1.0 0.0 0.0 1.0
+dxmt9-vs-const-f 1 0.25 0.25 0.25 0.25
+dxmt9-render-state fog=on fog_mode=none fog_vertex_mode=linear fog_color=rgba(0.0,1.0,0.0,1.0) zenable=off zwrite=off
+dxmt9-draw-vs-color-triangle
+expect-source vertex contains "outFogFactor = float4(cFloat[1]"
+probe (32, 32) rgba(0.25, 0.75, 0.0, 1.0) 2

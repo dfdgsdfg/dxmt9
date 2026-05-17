@@ -1905,3 +1905,195 @@ models = ["ps_2_0"]
 opcodes = ["DCL", "MOV", "TEX"]
 oracle = "Wine d3d9 visual.c maxmip_test behavior, reduced to SetLOD selecting the most detailed sampled mip for ordinary texture sampling"
 oracle-date = "2026-05-17"
+
+[[test]]
+file = "vs_specific/dxmt9_vs_constant_no_clamp_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_2_0", "ps_3_0"]
+opcodes = ["ADD", "DCL", "MOV"]
+oracle = "Wine d3d9 visual.c test_constant_clamp_vs behavior, reduced to VS constants preserving out-of-range values before arithmetic"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "arithmetic/dxmt9_ps14_constant_clamp_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_4"]
+opcodes = ["ADD", "DEF", "MOV"]
+oracle = "Wine d3d9 visual.c constant_clamp_ps_test behavior, reduced to ps_1_4 constant clamping before arithmetic"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "arithmetic/dxmt9_ps20_constant_no_clamp_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["ADD", "MOV"]
+oracle = "Wine d3d9 visual.c constant_clamp_ps_test behavior, reduced to ps_2_0 constants preserving out-of-range values before arithmetic"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "vs_specific/dxmt9_vs_float16_color_quads_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_2_0", "ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "Wine d3d9 visual.c test_vshader_float16 behavior, reduced to FLOAT16_4 color input conversion"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "vs_specific/dxmt9_vs_partial_initialized_diffuse_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_2_0", "ps_2_0"]
+opcodes = ["DEF", "DCL", "MOV"]
+oracle = "Wine d3d9 visual.c test_uninitialized_varyings behavior, reduced to initialized COLOR0.x with dxmt9-defined default components"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "render_state/dxmt9_ffp_vertex_fog_linear_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c fog_test vertex-fog behavior, reduced to FFP vertex fog factor interpolation"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "render_state/dxmt9_ffp_range_fog_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c fog_special_test/test_table_fog_zw range-fog behavior, reduced to range-based FFP vertex fog"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_cube_wrap_positive_x_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "Wine d3d9 visual.c test_cube_wrap behavior, reduced to cube sampler +X face sampling with wrap-capable address modes"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_volume_v16u16_depth1_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "MOV", "TEXLDL"]
+oracle = "Wine d3d9 visual.c volume_v16u16_test behavior, reduced to true texture3d/V16U16 binding with depth=1 signed sampling"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_autogen_update_texture_texldl_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "DEF", "MOV", "TEXLDL"]
+oracle = "Wine d3d9 visual.c test_mipmap_autogen behavior, reduced to UpdateTexture into an AUTOGENMIPMAP destination regenerating an explicit TEXLDL level 1 sample"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "ffp/dxmt9_ffp_lighting_directional_diffuse_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c lighting_test behavior, reduced to directional diffuse material readback"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "ffp/dxmt9_ffp_specular_lighting_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_specular_lighting behavior, reduced to FFP specular term routed through D3DTA_SPECULAR"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "ffp/dxmt9_ffp_color_vertex_material_source_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_color_vertex behavior, reduced to D3DMCS_COLOR1 diffuse material source"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "ffp/dxmt9_ffp_decl_missing_defaults_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c fixed_function_decl_test behavior, reduced to missing COLOR0 default white"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "ffp/dxmt9_ffp_gouraud_shademode_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_shademode behavior, reduced to default Gouraud diffuse interpolation"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "render_state/dxmt9_vs11_ofog_vertex_fog_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_1_1", "ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "Wine d3d9 visual.c fog_with_shader_test behavior, reduced to vs_1_1 oFog driving vertex fog"
+oracle-date = "2026-05-17"

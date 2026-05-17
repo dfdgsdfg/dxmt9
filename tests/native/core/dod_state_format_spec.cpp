@@ -183,6 +183,24 @@ void testUnsupportedFormatBehavior() {
           "Factory rejects out-of-range texture format");
 }
 
+void testYuvAndColorKeyPolicyAreExplicitlyUnsupported() {
+  using dxmt9::d3d9::devicec::fmtFromD3D;
+
+  checkEq(fmtFromD3D(fourcc('Y', 'U', 'Y', '2')), Format::Unknown,
+          "YUY2 is not mapped to a shader-readable core format");
+  checkEq(fmtFromD3D(fourcc('U', 'Y', 'V', 'Y')), Format::Unknown,
+          "UYVY is not mapped to a shader-readable core format");
+  checkEq(fmtFromD3D(fourcc('Y', 'V', '1', '2')), Format::Unknown,
+          "YV12 is not mapped to a shader-readable core format");
+
+  auto factory = makeFactory();
+  checkEq(factory.checkDeviceFormat(0, fmtFromD3D(fourcc('Y', 'U', 'Y', '2')), UsageTexture),
+          D3DERR_NOTAVAILABLE,
+          "YUV texture formats remain unavailable until conversion/layout support exists");
+  checkEq(factory.checkDeviceFormat(0, Format::Unknown, UsageTexture), D3DERR_NOTAVAILABLE,
+          "color-key tests have no color-key-capable texture format policy in core");
+}
+
 void testCompressedRenderTargetFactoryRejection() {
   auto factory = makeFactory();
 
@@ -456,6 +474,7 @@ int main() {
   testFormatTableCoverageAndClassifierPolicy();
   testFourCcAndPseudoFormatExplicitPolicy();
   testUnsupportedFormatBehavior();
+  testYuvAndColorKeyPolicyAreExplicitlyUnsupported();
   testCompressedRenderTargetFactoryRejection();
   testD24S8FallbackPolicy();
   testShaderReadSwizzlePolicyForLuminanceFormats();

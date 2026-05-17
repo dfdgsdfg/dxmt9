@@ -1,0 +1,23 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_constant_clamp_vs behavior, reduced to VS constants preserving out-of-range values before arithmetic
+; oracle-date: 2026-05-17
+
+[vertex shader d3dbc-hex]
+fffe0200 0200001f 80000000 900f0000 02000001 800f0001 a0e40001
+03000002 d00f0000 80e40001 a0e40002 02000001 c00f0000 90e40000
+0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300 0200001f 8000000a 900f0000 02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-vs-const-f 1 1.25 -0.50 -1.50 1.0
+dxmt9-vs-const-f 2 -0.50 1.25 2.00 1.0
+dxmt9-draw-vs-color-triangle
+probe (48, 32) rgba(0.75, 0.75, 0.50, 1.0) 2

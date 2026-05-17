@@ -741,14 +741,11 @@ ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,
                                                  bool argbufHybridEnabled) {
   // Tier-2 argbuf + Apple3 is cached as a single bool on the pool. When
   // the gate fails the pass commits to Stage 1 and never switches
-  // (R-BACK-12.22). Texture-bound draws also stay on Stage 1 until the
-  // Stage 2 texture/sampler readback lane is stable.
+  // (R-BACK-12.22). Texture-bound draws stay on Stage 1 until the live
+  // Metal texture/sampler argbuf lane has fault-free runtime evidence.
   if (!argbufHybridEnabled) {
     return ArgbufHybridDecision::Stage1;
   }
-  // The Stage 2 texture/sampler argbuf path is kept behind a runtime
-  // fallback until texture-bound readback evidence is stable. Uniform-only
-  // draws still exercise the slot-30 cbuf path.
   if (state.hot) {
     for (const auto& texture : state.hot->textures) {
       if (texture) {

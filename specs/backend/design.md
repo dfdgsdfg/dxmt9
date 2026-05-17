@@ -652,10 +652,12 @@ flowchart LR
 
 `DrawBindingPacketKey` is the persistent-cache boundary. It is stable across
 equivalent canonical input values and changes when texture handle/LOD, sampler
-state, raster values, or programmable extra-stream offsets change. The resolved
-packet remains scoped to the encoder call, not to the canonical draw state. That
-packet may carry live WMT handles only after the pool has retained or otherwise
-proven their lifetime for the draw's sequence id.
+state, raster values, or programmable extra-stream offsets change. The runtime
+uses a fixed-size value cache (`DrawBindingPacketCache`) keyed by this identity;
+cache entries contain only the value packet, never live Metal handles. The
+resolved packet remains scoped to the encoder call, not to the canonical draw
+state. That packet may carry live WMT handles only after the pool has retained
+or otherwise proven their lifetime for the draw's sequence id.
 
 The resolved packet is a short-lived product of the value plan. It must not be
 stored in canonical state or reused across command buffers:
@@ -666,6 +668,7 @@ flowchart LR
     KEY["DrawBindingPacketKey\npersistent cache identity"]
     CACHE{"packet key hit?"}
     VALUE["reuse cached value packet\nno live handles"]
+    INSERT["insert value packet\nfixed-size cache"]
     RESOLVE["resolveDrawBindingPacket\nencoder-local live handles"]
     PACKET["ResolvedDrawBindingPacket\nWMT handles + offsets\nsampler states + view handles"]
     RETAIN["retain for seqId\nor prove queue-owned lifetime"]
@@ -674,7 +677,7 @@ flowchart LR
 
     PLAN --> KEY --> CACHE
     CACHE -->|"yes"| VALUE --> RESOLVE
-    CACHE -->|"no"| PLAN --> RESOLVE
+    CACHE -->|"no"| PLAN --> INSERT --> VALUE
     PACKET --> RETAIN --> ENCODE --> DROP
     RESOLVE --> PACKET
 ```
@@ -703,32 +706,38 @@ the queue/resource layer.
 
 ### 5.4 Argbuf Stage 2 Texture-bound Draw Target
 
-Stage 2 currently prioritizes uniform-only draws while texture-bound draws can
-fall back to Stage 1. The target path moves texture/sampler descriptor
-population under the same packet boundary and promotes the selector once
-shader-runner equality is established:
+Stage 2 currently remains the uniform-buffer path for live draws; texture-bound
+draws fall back to Stage 1 until the Metal argument-buffer texture/sampler lane
+has fault-free runtime readback evidence. Texture/sampler descriptor population
+still lives under the same packet boundary, and the CPU evidence pins the typed
+descriptor ids for 2D, cube, and volume texture arrays plus sampler array
+entries:
 
 ```mermaid
 flowchart TD
     SEL["selectArgbufHybridForPass"]
     TEX{"texture-bound draw?"}
-    S1["Stage 1 fallback\ncurrent safe texture path"]
+    S1["Stage 1 fallback\ncapability gate failed\nor texture-bound draw"]
     PLAN["DrawBindingPacketPlan\ntexture/sampler handles + states"]
     ARGPOP["populateResourceBindings\ntexture type range + sampler ids"]
     S2MSL["Stage 2 MSL\nabuf->textures2d/cube/3d[N]\nabuf->samplers[N]"]
-    READBACK["shader-runner readback equality\nStage 1 == Stage 2"]
-    PROMOTE["Allow texture-bound Stage 2\nremove texture fallback gate"]
+    READBACK["shader-corpus readback equality\nStage 1 == Stage 2"]
+    S2["Stage 2 draw\nuniforms through slot 30"]
+    PROMOTE["Allow texture-bound Stage 2"]
 
     SEL --> TEX
-    TEX -->|yes; until equality evidence| S1
-    TEX -->|yes; target| PLAN --> ARGPOP --> S2MSL --> READBACK --> PROMOTE
-    TEX -->|no| PROMOTE
+    TEX -->|"yes; current safe path"| S1
+    TEX -->|"yes; target"| PLAN --> ARGPOP --> S2MSL --> READBACK --> PROMOTE
+    TEX -->|"no; gate holds"| S2
 ```
 
-The promotion gate is evidence-driven: deterministic descriptor tests are
-necessary, but texture-bound Stage 2 should not become the default until live
-GPU readback proves sampling equality across representative 2D, cube, 3D,
-sRGB, mip, and sampler-state cases.
+The promotion is evidence-driven. Deterministic descriptor tests prove that
+Stage 2 writes the same texture/sampler intent into the argbuf table, including
+2D base id `4`, cube base id `12`, volume base id `20`, and sampler base id
+`28`, but they are not sufficient proof for live GPU-visible sampling. The
+2026-05-17 shader-corpus regression showed GPU address faults when
+texture-bound draws were promoted to Stage 2 without readback parity, so the
+default selector keeps those draws on Stage 1.
 
 The equality gate compares the same draw through both binding lanes. Stage 2 is
 eligible for promotion only when command-level values and framebuffer readback
@@ -764,7 +773,7 @@ The promotion must be all-or-nothing for the default selector. Partial support
 may exist behind an explicit debug gate, but the normal path keeps Stage 1 for
 texture-bound draws until the matrix covers sampler address modes, filter modes,
 sRGB decode, mip level selection, unbound/default samplers, and non-2D texture
-classes.
+classes with live readback equality.
 
 ### 5.5 Cache Prewarm From `MTLBinaryArchive`
 

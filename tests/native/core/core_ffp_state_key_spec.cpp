@@ -88,6 +88,8 @@ void testVisualDerivedFfpCoverage() {
   lightingState.reset();
   lightingState.renderStates[RS_LIGHTING] = 1;
   lightingState.renderStates[RS_SPECULAR_ENABLE] = 1;
+  lightingState.renderStates[RS_DIFFUSE_MATERIAL_SOURCE] = 0;
+  lightingState.renderStates[RS_SPECULAR_MATERIAL_SOURCE] = 0;
   lightingState.lightEnabled[0] = true;
   lightingState.lights[0].type = LightType::Directional;
   lightingState.lights[0].diffuse = {1.0f, 0.5f, 0.25f, 1.0f};
@@ -102,7 +104,14 @@ void testVisualDerivedFfpCoverage() {
   const auto lightingHandle = dxmt9_winemetal_compile_shader(&lightingRequest);
   check(lightingHandle != 0, "lighting ffp shader");
   const auto lightingSource = shaderSourceToString(lightingHandle);
-  checkContains(lightingSource, "out.color.rgb *= 1.0", "lighting visual source");
+  checkContains(lightingSource, "out.color = saturate(float4(dxmt9_diffuseAccum",
+                "lighting visual source");
+  checkContains(lightingSource, "dxmt9_materialDiffuse = ffpVs.materialDiffuse",
+                "lighting material diffuse source follows render state");
+  checkContains(lightingSource, "ffpVs.lightDiffuse[0].rgb * dxmt9_ndotl0",
+                "lighting source applies directional diffuse");
+  checkContains(lightingSource, "out.secondaryColor = float4(dxmt9_specularAccum, 0.0f)",
+                "lighting source exports specular term");
   dxmt9_winemetal_destroy_shader(lightingHandle);
 
   // behavioral oracle: Wine visual.c:fog_test
@@ -124,7 +133,7 @@ void testVisualDerivedFfpCoverage() {
   check(fogHandle != 0, "fog ffp shader");
   const auto fogSource = shaderSourceToString(fogHandle);
   checkContains(fogSource, "fogFactor", "fog visual source");
-  checkContains(fogSource, "dxmt9_apply_fog(color, ffpPs, fogDepth)",
+  checkContains(fogSource, "dxmt9_apply_fog(color, ffpPs, fogDepth, in.fogFactor)",
                 "fog visual blend helper");
   checkContains(fogSource, "mix(ffpPs.fogColor.rgb, color.rgb, fog)",
                 "fog visual blend uses FFP fog color");
@@ -154,18 +163,37 @@ void testVisualDerivedFfpCoverage() {
       dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
   checkContains(normalSource, "dxmt9_load_f32x3(stream0, base + 12u)",
                 "generated normal source loads FVF normal");
-  checkContains(normalSource, "float4(inNormal, 1.0f)",
+  checkContains(normalSource, "float4(dxmt9_cameraNormal, 1.0f)",
                 "generated normal source writes camera-space normal texcoord");
   generatedTexcoordKey.texCoordGen[0] = 0x00030000u;
   const auto reflectionSource =
       dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
-  checkContains(reflectionSource, "reflect(-dxmt9_eye0, unitNormal)",
+  checkContains(reflectionSource, "reflect(-dxmt9_eye0, dxmt9_cameraUnitNormal)",
                 "generated reflection source uses camera-space normal");
   generatedTexcoordKey.texCoordGen[0] = 0x00040000u;
   const auto sphereSource =
       dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
   checkContains(sphereSource, "float2(dxmt9_reflect0.x / dxmt9_sphereM0 + 0.5f",
                 "generated sphere-map source emits sphere-map coordinates");
+
+  // behavioral oracle: Wine visual.c:fixed_function_decl_test
+  DrawDesc declDefaultDesc{};
+  declDefaultDesc.vertexDecl.elements = {
+      VertexElement{0, 0, dxmt9::ffp::kD3DDeclTypeFloat4, 0,
+                    dxmt9::ffp::kD3DDeclUsagePositionT, 0},
+  };
+  declDefaultDesc.vertexDecl.streams[0].stride = 16;
+  const auto declDefaultLayout =
+      dxmt9::ffp::decodeFixedFunctionVertexLayout(declDefaultDesc.vertexDecl);
+  check(declDefaultLayout.has_value(), "fixed-function POSITIONT declaration decodes");
+  check(!declDefaultLayout->hasDiffuse,
+        "fixed-function declaration without COLOR0 records missing diffuse");
+  const auto declDefaultSource = dxmt9::ffp::makeFfpVertexSource(
+      FfpVertexKey{}, dxmt9::drawshader::makeShaderSourceContext(declDefaultDesc));
+  checkContains(declDefaultSource, "out.color = float4(1.0);",
+                "missing diffuse defaults to white FFP color");
+  checkContains(declDefaultSource, "out.pointSize = 1.0;",
+                "missing point-size input defaults to one-pixel point size");
 
   // behavioral oracle: Wine visual.c:texop_test
   DeviceState texopState;

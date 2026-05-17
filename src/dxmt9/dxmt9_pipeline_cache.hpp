@@ -317,10 +317,9 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
 // gate fails for any reason the pass falls back to Stage 1 — never
 // mid-pass switches (R-BACK-12.22 sentence 2).
 //
-// State-driven eligibility (e.g., "skip Stage 2 for translated-bytecode
-// pixel shaders") is recorded as a future eligibility predicate; today
-// the gate is purely capability-based, matching the runtime adopter
-// scope in design.md §11.
+// Texture-bound draws currently stay on Stage 1. CPU-side argbuf descriptor
+// value tests are not enough proof for the live Metal texture/sampler lane;
+// promote this only with fault-free shader-corpus readback evidence.
 enum class ArgbufHybridDecision : std::uint8_t { Stage1, Stage2 };
 
 ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,

@@ -529,9 +529,11 @@ void testCubeAndVolumeCreationDescriptors() {
   checkEq(volumeLevel1.format, kD3DFmtA8R8G8B8, "volume public format");
   checkEq(volumeLevel1.width, 4u, "volume level1 width");
   checkEq(volumeLevel1.height, 2u, "volume level1 height");
-  // D9CSurfaceDesc has no depth field and this native D9C layer exposes no
-  // volume lock/box path, so backend TextureDesc::depth is the observable
-  // creation boundary for volume depth in this unit.
+  checkEq(volume->obj->levelBytes(0).size(), size_t{8u * 4u * 4u},
+          "volume CPU shadow currently stores one slice per level");
+  // D9CSurfaceDesc has no depth field and the texture upload ABI carries
+  // width/height/pitch but no slice pitch/depth. Multi-slice volume
+  // upload/sampling stays blocked until that boundary is widened.
 }
 
 void testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch() {

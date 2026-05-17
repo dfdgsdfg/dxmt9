@@ -619,6 +619,48 @@ void testDrawBindingPacketKeyDiffersForExtraStreamChange() {
       "binding packet key changes when extra stream offset changes");
 }
 
+void testDrawBindingPacketCacheReusesStableValuePacket() {
+  auto desc = makeBindingPacketKeyDesc();
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto packet = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      makeBindingPacketKeyParamView(),
+      128u,
+      96u,
+      false,
+      false,
+      false,
+      true);
+
+  dxmt9::encoders::DrawBindingPacketCache cache{};
+  const auto& first = dxmt9::encoders::cacheDrawBindingPacket(cache, packet);
+  const auto& second = dxmt9::encoders::cacheDrawBindingPacket(cache, packet);
+  check(&first == &second,
+        "binding packet cache returns the persistent value packet on hit");
+  checkEq(cache.misses, std::uint64_t{1},
+          "first binding packet cache lookup misses");
+  checkEq(cache.hits, std::uint64_t{1},
+          "second binding packet cache lookup hits");
+
+  auto changedDesc = makeBindingPacketKeyDesc();
+  changedDesc.textures[2].handle = Handle{0x3333u};
+  const auto changedHot = makeFlatDrawStateRecord(changedDesc);
+  const auto changedPacket = dxmt9::encoders::makeDrawBindingPacketPlan(
+      changedDesc.vertexDecl,
+      changedHot,
+      makeBindingPacketKeyParamView(),
+      128u,
+      96u,
+      false,
+      false,
+      false,
+      true);
+  (void)dxmt9::encoders::cacheDrawBindingPacket(cache, changedPacket);
+  checkEq(cache.misses, std::uint64_t{2},
+          "changed binding packet key inserts a new cached value");
+}
+
 void testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues() {
   constexpr u32 kD3DDeclTypeFloat3 = 2u;
   constexpr u32 kD3DDeclMethodDefault = 0u;
@@ -689,8 +731,8 @@ void testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues() {
             "binding packet carries viewport origin X");
   checkEq(packet.raster.scissor.x, std::uint64_t{6},
           "binding packet carries scissor x");
-  check(!packet.argbufResourceRepopulate,
-        "texture-bound binding packet suppresses Stage 2 argbuf resource repopulation");
+  check(packet.argbufResourceRepopulate,
+        "texture-bound Stage 2 binding packet repopulates argbuf resources");
 }
 
 void testDrawBindingPacketPlanAllowsTextureFreeArgbufRepopulate() {
@@ -723,7 +765,7 @@ void testDrawBindingPacketPlanAllowsTextureFreeArgbufRepopulate() {
   check(argbufPacket.fragmentTextureSamplers.empty(),
         "texture-free binding packet has no fragment texture/sampler plan");
   check(argbufPacket.argbufResourceRepopulate,
-        "texture-free Stage 2 binding packet allows argbuf resource repopulation");
+        "texture-free Stage 2 binding packet repopulates argbuf resources");
 
   const auto stage1Packet = dxmt9::encoders::makeDrawBindingPacketPlan(
       desc.vertexDecl,
@@ -755,6 +797,7 @@ int main() {
     testDrawBindingPacketKeyDiffersForSamplerStateChange();
     testDrawBindingPacketKeyDiffersForRasterChange();
     testDrawBindingPacketKeyDiffersForExtraStreamChange();
+    testDrawBindingPacketCacheReusesStableValuePacket();
     testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues();
     testDrawBindingPacketPlanAllowsTextureFreeArgbufRepopulate();
   } catch (const TestFailure& failure) {

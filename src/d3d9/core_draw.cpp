@@ -453,10 +453,19 @@ u64 hashClipPlanes(const std::array<ClipPlane, kMaxClipPlanes> &planes) {
   return hash;
 }
 
+u64 hashLight(const Light &light);
+u64 hashMaterial(const Material &material);
+
 u64 hashDrawUniformPayload(const DrawUniformPayload &payload) {
   u64 hash = hashCombine(kFnvOffset, hashTrivial(payload.vsConst));
   hash = hashCombine(hash, hashTrivial(payload.psConst));
   hash = hashCombine(hash, hashTrivial(payload.worldViewProj));
+  hash = hashCombine(hash, hashTrivial(payload.ffpWorldView));
+  hash = hashCombine(hash, hashTrivial(payload.ffpNormalMatrix));
+  hash = hashCombine(hash, hashMaterial(payload.material));
+  for (const auto &light : payload.lights) {
+    hash = hashCombine(hash, hashLight(light));
+  }
   hash = hashCombine(hash, hashBlendWorldViewProj(payload.ffpBlendWorldViewProj));
   hash = hashCombine(hash, hashTextureTransforms(payload.textureTransforms));
   hash = hashCombine(hash, payload.clipPlaneMask);
@@ -1106,6 +1115,20 @@ Matrix4x4 makeWorldViewProjFromState(const DeviceState &state) {
   return multiplyMatrix(multiplyMatrix(world, view), proj);
 }
 
+Matrix4x4 makeWorldViewFromState(const DeviceState &state) {
+  const Matrix4x4 world = lookupTransform(state, XFORM_WORLD_BASE);
+  const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
+  return multiplyMatrix(world, view);
+}
+
+Matrix4x4 makeNormalMatrixFromWorldView(const Matrix4x4 &worldView) {
+  Matrix4x4 inverse{};
+  if (!invertMatrix(worldView, &inverse)) {
+    return identityMatrix();
+  }
+  return transposeMatrix(inverse);
+}
+
 std::array<Matrix4x4, 4> makeBlendWorldViewProjFromState(const DeviceState &state) {
   std::array<Matrix4x4, 4> transforms{};
   const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
@@ -1157,7 +1180,11 @@ DrawUniformPayload makeDrawUniformPayloadFromState(const DeviceState &state,
   DrawUniformPayload payload{};
   payload.vsConst = state.vsConst;
   payload.psConst = state.psConst;
+  payload.ffpWorldView = makeWorldViewFromState(state);
+  payload.ffpNormalMatrix = makeNormalMatrixFromWorldView(payload.ffpWorldView);
   payload.worldViewProj = makeWorldViewProjFromState(state);
+  payload.material = state.material;
+  payload.lights = state.lights;
   payload.ffpBlendWorldViewProj = makeBlendWorldViewProjFromState(state);
   payload.textureTransforms = makeTextureTransformsFromState(state);
   payload.clipPlaneMask = clipPlaneMask;
@@ -1434,6 +1461,10 @@ DrawUniformPayload makeDrawUniformPayload(const DrawDesc &desc) {
   payload.vsConst = desc.vsConst;
   payload.psConst = desc.psConst;
   payload.worldViewProj = desc.worldViewProj;
+  payload.ffpWorldView = desc.ffpWorldView;
+  payload.ffpNormalMatrix = desc.ffpNormalMatrix;
+  payload.material = desc.material;
+  payload.lights = desc.lights;
   payload.ffpBlendWorldViewProj = desc.ffpBlendWorldViewProj;
   payload.textureTransforms = desc.textureTransforms;
   payload.clipPlaneMask = desc.clipPlaneMask;
@@ -2133,10 +2164,15 @@ FfpVertexKey makeFfpVertexKey(const DeviceState &state) {
       state.renderStates.contains(RS_SPECULAR_MATERIAL_SOURCE)
           ? state.renderStates.at(RS_SPECULAR_MATERIAL_SOURCE)
           : 0;
-  key.fogMode =
+  const auto tableFogMode =
       static_cast<FogMode>(state.renderStates.contains(RS_FOG_TABLE_MODE)
                                ? state.renderStates.at(RS_FOG_TABLE_MODE)
                                : 0);
+  const auto vertexFogMode =
+      static_cast<FogMode>(state.renderStates.contains(RS_FOG_FROM_VERTEX)
+                               ? state.renderStates.at(RS_FOG_FROM_VERTEX)
+                               : 0);
+  key.fogMode = tableFogMode != FogMode::None ? tableFogMode : vertexFogMode;
   key.fogFromVertex = state.renderStates.contains(RS_FOG_FROM_VERTEX) &&
                       state.renderStates.at(RS_FOG_FROM_VERTEX) != 0;
   key.rangeFog = state.renderStates.contains(RS_RANGE_FOG) &&
@@ -2180,10 +2216,15 @@ FfpPixelKey makeFfpPixelKey(const DeviceState &state) {
     out.texCoordIndex =
         map.contains(TSS_TEXCOORD_INDEX) ? map.at(TSS_TEXCOORD_INDEX) : 0;
   }
-  key.fogMode =
+  const auto tableFogMode =
       static_cast<FogMode>(state.renderStates.contains(RS_FOG_TABLE_MODE)
                                ? state.renderStates.at(RS_FOG_TABLE_MODE)
                                : 0);
+  const auto vertexFogMode =
+      static_cast<FogMode>(state.renderStates.contains(RS_FOG_FROM_VERTEX)
+                               ? state.renderStates.at(RS_FOG_FROM_VERTEX)
+                               : 0);
+  key.fogMode = tableFogMode != FogMode::None ? tableFogMode : vertexFogMode;
   key.alphaTestEnable = state.renderStates.contains(RS_ALPHA_TEST_ENABLE) &&
                         state.renderStates.at(RS_ALPHA_TEST_ENABLE) != 0;
   key.alphaTestFunc = state.renderStates.contains(RS_ALPHA_FUNC)

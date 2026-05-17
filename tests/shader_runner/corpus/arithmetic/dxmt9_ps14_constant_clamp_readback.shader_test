@@ -1,0 +1,18 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c constant_clamp_ps_test behavior, reduced to ps_1_4 constant clamping before arithmetic
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0104 00000051 a00f0002 bf000000 3fa00000 40000000 3f800000
+00000001 800f0001 a0e40001 00000002 800f0000 80e40001 a0e40002
+0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-ps-const-f 1 1.25 -0.50 -1.50 1.0
+dxmt9-draw-solid-quad
+probe (32, 32) rgba(0.50, 0.50, 0.0, 1.0) 2

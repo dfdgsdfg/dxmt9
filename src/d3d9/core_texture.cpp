@@ -120,6 +120,10 @@ void Texture::unlockRect(u32 subresource) {
   if (subresource < levels_.size()) {
     levels_[subresource].dirty = true;
     syncLevelToBackend(subresource);
+    if ((desc_.usage & UsageAutoGenMipmap) != 0 &&
+        mipLevelForSubresource(subresource) == 0) {
+      static_cast<void>(generateMipSubLevels());
+    }
   }
   locked_ = false;
 }
@@ -338,10 +342,11 @@ HResult Device::updateTexture(const std::shared_ptr<Texture> &src,
   if (src->desc().format != dst->desc().format) {
     return D3DERR_NOTAVAILABLE;
   }
-  const u32 levels = std::min(src->levelCount(), dst->levelCount());
-  for (u32 level = 0; level < levels; ++level) {
-    auto srcSurface = src->surfaceLevel(level);
-    auto dstSurface = dst->surfaceLevel(level);
+  const u32 subresources =
+      std::min(src->subresourceCount(), dst->subresourceCount());
+  for (u32 subresource = 0; subresource < subresources; ++subresource) {
+    auto srcSurface = src->surfaceLevel(subresource);
+    auto dstSurface = dst->surfaceLevel(subresource);
     if (!srcSurface || !dstSurface) {
       return D3DERR_INVALIDCALL;
     }
@@ -361,6 +366,9 @@ HResult Device::updateTexture(const std::shared_ptr<Texture> &src,
     }
   }
   dst->copyFrom(*src);
+  if ((dst->desc().usage & UsageAutoGenMipmap) != 0) {
+    return dst->generateMipSubLevels();
+  }
   return D3D_OK;
 }
 

@@ -558,19 +558,22 @@ void emitConstantBindings(std::ostringstream& out, bool vertexStage, const Const
     out << "  constant float4* cFloat = " << container << "." << floatMember << ";\n";
   } else {
     out << "  float4 cFloat[" << std::max(1u, floatCount) << "];\n";
-    out << "  for (uint i = 0; i < " << floatCount << "; ++i) { cFloat[i] = float4(0.0f); }\n";
+    out << "  for (uint i = 0; i < " << floatCount << "; ++i) { cFloat[i] = "
+        << container << "." << floatMember << "[i]; }\n";
   }
   if (aliasInt) {
     out << "  constant int4* cInt = " << container << "." << intMember << ";\n";
   } else {
     out << "  int4 cInt[" << std::max(1u, intCount) << "];\n";
-    out << "  for (uint i = 0; i < " << intCount << "; ++i) { cInt[i] = int4(0); }\n";
+    out << "  for (uint i = 0; i < " << intCount << "; ++i) { cInt[i] = "
+        << container << "." << intMember << "[i]; }\n";
   }
   if (aliasBool) {
     out << "  constant uint* cBool = " << container << "." << boolMember << ";\n";
   } else {
     out << "  uint cBool[" << std::max(1u, boolCount) << "];\n";
-    out << "  for (uint i = 0; i < " << boolCount << "; ++i) { cBool[i] = 0u; }\n";
+    out << "  for (uint i = 0; i < " << boolCount << "; ++i) { cBool[i] = "
+        << container << "." << boolMember << "[i]; }\n";
   }
 }
 
@@ -1457,6 +1460,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (instruction.operands.size() < 2) {
             throw std::runtime_error("missing D3D destination or source operand");
           }
+          if (instruction.opcode == kD3DSIO_TEX ||
+              instruction.opcode == kD3DSIO_TEXLDD ||
+              instruction.opcode == kD3DSIO_TEXLDL) {
+            throw std::runtime_error("vertex texture fetch requires vertex-stage texture/sampler binding ABI");
+          }
           const auto dst = decodeOperandRegister(instruction, 0, module.stage);
           requireSupportedDestinationAddressing(dst);
           const auto dstMask = decodeWriteMask(instruction.operands[0]);
@@ -1988,7 +1996,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
     out << "\n";
 
-    auto readSrc = [&](size_t index) {
+    auto readSrc = [&](size_t index, bool clampSm1Constants = true) {
       if (index >= instruction.operands.size()) {
         std::ostringstream message;
         message << "missing D3D source operand"
@@ -2009,6 +2017,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                                      "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
                                      "outPointSize", "r", "cFloat", "cInt", "cBool", "p",
                                      nullptr, tempCount - 1u);
+      }
+      if (clampSm1Constants && module.major == 1u && reg.kind == D3DRegisterKind::ConstFloat) {
+        expr = "clamp(" + expr + ", float4(-1.0f), float4(1.0f))";
       }
       expr = applySwizzle(expr, decodeSwizzle(token));
       expr = applySourceModifier(std::move(expr), decodeSourceModifier(token));
@@ -2042,6 +2053,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         return std::string("ignoredColor");
       }
       return std::string("outColor[") + std::to_string(index) + "]";
+    };
+    auto pixelColorWriteTarget = [&](u32 index) {
+      return module.major == 1u ? std::string("r[0]") : pixelColorTarget(index);
     };
     auto texcoordTarget = [](u32 index) {
       if (index >= kMaxTextureStages) {
@@ -2082,14 +2096,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           return index < kMaxTextureStages ? "outTexcoord[" + std::to_string(index) + "]"
                                            : std::string("ignoredTexcoord");
         case kD3DSPR_COLOROUT:
-          return pixelColorTarget(index);
+          return pixelColorWriteTarget(index);
         default: {
           const auto reg = decodeRegisterRef(token, module.stage);
           if (reg.kind == D3DRegisterKind::Temp) {
             return "r[" + std::to_string(std::min<u32>(reg.index, tempCount - 1u)) + "]";
           }
           if (reg.kind == D3DRegisterKind::ColorOut) {
-            return pixelColorTarget(reg.index);
+            return pixelColorWriteTarget(reg.index);
           }
           if (reg.kind == D3DRegisterKind::TexCoordOut) {
             return texcoordTarget(reg.index);
@@ -2374,7 +2388,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             emitMaskedAssign(tempDestinationTarget(dst, tempCount - 1u), value, dstMask);
             break;
           case D3DRegisterKind::ColorOut:
-            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
+            emitMaskedAssign(pixelColorWriteTarget(dst.index), value, dstMask);
             break;
           case D3DRegisterKind::TexCoordOut:
             emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
@@ -2688,7 +2702,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             }
             throw std::runtime_error("unsupported arithmetic input destination");
           case D3DRegisterKind::ColorOut:
-            emitMaskedAssign(pixelColorTarget(dst.index), value, dstMask);
+            emitMaskedAssign(pixelColorWriteTarget(dst.index), value, dstMask);
             break;
           case D3DRegisterKind::TexCoordOut:
             emitMaskedAssign(texcoordDestinationTarget(dst), value, dstMask);
@@ -2776,7 +2790,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         const auto stage = legacyStage();
         out << "  dxmt9_texm.z = " << legacyDot(1) << ";\n";
         legacyM3x3PadCount = 0;
-        const auto eye = readSrc(2);
+        const auto eye = readSrc(2, /*clampSm1Constants=*/false);
         legacyAssign(legacySample(stage, "float4(reflect(normalize((" + eye + ").xyz), "
                                   "normalize(dxmt9_texm.xyz)), 1.0f)"));
         break;
@@ -2840,7 +2854,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   if (!callReturnStack.empty()) {
     throw std::runtime_error("unbalanced internal D3D CALL frame");
   }
-	  out << "  color = outColor[0];\n";
+  if (module.major == 1u) {
+    out << "  color = r[0];\n";
+  } else {
+    out << "  color = outColor[0];\n";
+  }
 	  out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
   out << "    bool pass = true;\n";
   out << "    switch (ffpPs.alphaTestFunc) {\n";
@@ -2858,7 +2876,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	  out << "    }\n";
 		  out << "  }\n";
 		  out << "  if (ffpPs.fogMode != 0u) {\n";
-		  out << "    color = dxmt9_apply_fog(color, ffpPs, in.position.z);\n";
+		  out << "    color = dxmt9_apply_fog(color, ffpPs, in.position.z, in.fogFactor);\n";
 		  out << "  }\n";
 		  out << "  outColor[0] = color;\n";
 		  if (usesFragmentOutStruct) {

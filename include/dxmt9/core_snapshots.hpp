@@ -691,6 +691,10 @@ struct DrawUniformPayload {
   VertexShaderConstants vsConst{};
   PixelShaderConstants psConst{};
   Matrix4x4 worldViewProj{};
+  Matrix4x4 ffpWorldView{};
+  Matrix4x4 ffpNormalMatrix{};
+  Material material{};
+  std::array<Light, kMaxLights> lights{};
   std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
@@ -820,6 +824,10 @@ struct DrawDesc {
   RenderTargetSnapshot rts{};
   ViewportScissor viewport{};
   Matrix4x4 worldViewProj{};
+  Matrix4x4 ffpWorldView{};
+  Matrix4x4 ffpNormalMatrix{};
+  Material material{};
+  std::array<Light, kMaxLights> lights{};
   std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;

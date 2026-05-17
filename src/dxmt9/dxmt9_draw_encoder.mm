@@ -134,6 +134,8 @@ WMT::String makeLabelStringFmt(const char* fmt, ...) {
   return WMT::String::string(buf, WMTUTF8StringEncoding);
 }
 
+thread_local DrawBindingPacketCache gDrawBindingPacketCache;
+
 // M2 — RAII debug-group helper. Pairs a pushDebugGroup with the
 // matching popDebugGroup on scope exit, even on early-return paths.
 // Holds a non-owning view of the encoder; the caller retains the
@@ -1469,7 +1471,7 @@ bool encodeDraw(EncodeContext& ctx,
       ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
   const bool bindingPacketHasRasterTarget =
       bindingPacketSurface && bindingPacketSurface->texture;
-  const auto bindingPacket = makeDrawBindingPacketPlan(
+  const auto bindingPacketPlan = makeDrawBindingPacketPlan(
       vertexDecl,
       hot,
       pv,
@@ -1479,6 +1481,8 @@ bool encodeDraw(EncodeContext& ctx,
       debug::disableScissor(),
       debug::disableCull(),
       argbufHybridMode);
+  const auto& bindingPacket =
+      cacheDrawBindingPacket(gDrawBindingPacketCache, bindingPacketPlan);
   // Apply FFP preTransformed viewport override to the FfpVs host copy
   // before any bindFfpVsIfDirty call uploads it (R-BACK-12.5). The
   // override values come from run-stable sources (ffLayout +
@@ -2610,10 +2614,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // storage from the transient ring, points the queue's
     // MTLArgumentEncoder at it, writes the four per-frequency cbuf
     // entries + the texture/sampler descriptors, and binds slot 30
-    // (vertex + fragment) of the active render encoder. Stage 1's
-    // slot 0 / slot 3 binds in encodeDraw are still issued as Stage 1
-    // compatibility shadowing, but Stage 2 PSOs read through this slot-30
-    // argbuf.
+    // (vertex + fragment) of the active render encoder. Stage 2 PSOs
+    // read through this slot-30 argbuf; encodeDraw skips the direct
+    // Stage 1 slot 0 / slot 3 and texture/sampler binds in this mode.
     //
     // When the gate fails (any non-Apple-Silicon device) `openArgbuf`
     // returns an empty handle and we fall through to the Stage 1

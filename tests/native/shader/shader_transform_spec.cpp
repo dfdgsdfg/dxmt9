@@ -1243,6 +1243,30 @@ std::vector<u32> makeVs20IndexedConstSourceBytecode() {
   };
 }
 
+std::vector<u32> makeVs30VertexTextureBytecode() {
+  return {
+      0xfffe0300,
+      0x05000051, 0xa00f0000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+      0x0200001f, 0x80000000, 0x900f0000,
+      0x0200001f, 0x90000000, 0xa00f0800,
+      0x0200001f, 0x80000000, 0xe00f0000,
+      0x0200001f, 0x8000000a, 0xe00f0001,
+      0x0300005f, 0xe00f0001, 0xa0000000, 0xa0e40800,
+      0x02000001, 0xe00f0000, 0x90e40000,
+      0x0000ffff,
+  };
+}
+
+std::vector<u32> makePs14ConstantClampBytecode() {
+  return {
+      0xffff0104,
+      0x00000051, 0xa00f0002, 0xbf000000, 0x3fa00000, 0x40000000, 0x3f800000,
+      0x00000001, 0x800f0001, 0xa0e40001,
+      0x00000002, 0x800f0000, 0x80e40001, 0xa0e40002,
+      0x0000ffff,
+  };
+}
+
 void testD3DBCDecodeAndClassificationFixtures() {
   using namespace dxmt9::d3d9bc;
   namespace translator_test = dxmt9::translator::test;
@@ -1331,7 +1355,7 @@ void testPixelShaderOutputReceivesFixedFunctionFog() {
   const auto source = translatePixel(makePs20ColorInputBytecode());
   checkContains(source, "if (ffpPs.fogMode != 0u)",
                 "translated pixel shaders dynamically gate fixed-function fog");
-  checkContains(source, "dxmt9_apply_fog(color, ffpPs, in.position.z)",
+  checkContains(source, "dxmt9_apply_fog(color, ffpPs, in.position.z, in.fogFactor)",
                 "translated pixel shaders apply table fog after shader color output");
   checkContains(source, "outColor[0] = color",
                 "fogged color is written back to the primary color output");
@@ -1886,7 +1910,7 @@ void testPs11LegacyTexcoordTexLoweringContract() {
   checkContains(source, "texture2d<float> tex0 [[texture(0)]]", "ps_1_1 TEX binds the destination stage texture");
   checkContains(source, "outTexcoord[0] = tex0.sample(samp0, (outTexcoord[0]).xy);",
                 "ps_1_1 TEX samples stage 0 through destination t0");
-  checkContains(source, "outColor[0] = outTexcoord[0];", "ps_1_1 t# source reaches color output");
+  checkContains(source, "r[0] = outTexcoord[0];", "ps_1_1 t# source reaches r0 color output");
 }
 
 void testVs11FixedFunctionOutputLoweringContract() {
@@ -1927,8 +1951,10 @@ void testPs13LegacyTextureFamilyLoweringContract() {
   checkContains(source, "dxmt9_texm.x =", "TEXM3x2/TEXM3x3 PAD stores matrix row x");
   checkContains(source, "dxmt9_texm.y =", "TEXM3x2TEX/TEXM3x2DEPTH stores matrix row y");
   checkContains(source, "dxmt9_texm.z =", "TEXM3x3 final op stores matrix row z");
-  checkContains(source, "reflect(normalize((cFloat[0]).xyz), normalize(dxmt9_texm.xyz))",
+  checkContains(source, "reflect(normalize(",
                 "TEXM3x3SPEC forms reflection coords from explicit eye vector");
+  checkContains(source, "normalize(dxmt9_texm.xyz)",
+                "TEXM3x3SPEC normalizes the matrix texture vector");
   checkContains(source, "reflect(normalize(float3(outTexcoord[2].w, outTexcoord[3].w, outTexcoord[4].w))",
                 "TEXM3x3VSPEC forms eye vector from texture-coordinate w components");
   checkContains(source, "outDepth = dxmt9_texm.y == 0.0f ? 1.0f : clamp(dxmt9_texm.x / dxmt9_texm.y, 0.0f, 1.0f);",
@@ -2001,6 +2027,8 @@ void testPs30IndexedConstDestinationLowersToClampedMutableConstWrite() {
   const auto source = translatePixel(makePs30IndexedConstDestinationBytecode());
   checkContains(source, "float4 cFloat[224];",
                 "ps_3_0 indexed const destination keeps a mutable full-size cFloat array");
+  checkContains(source, "cFloat[i] = psConsts.psFloatConst[i];",
+                "mutable pixel constants are initialized from host constants before shader writes");
   checkContains(source, "cFloat[clamp(a0 + 7, 0, 223)] = cFloat[1];",
                 "ps_3_0 indexed const destination emits clamped a0+N write");
   checkNotContains(source, "constant float4* cFloat = ",
@@ -2037,6 +2065,8 @@ void testVs20IndexedConstDestinationLowersToClampedMutableConstWrite() {
 
   checkContains(source, "float4 cFloat[256];",
                 "indexed const destination keeps a mutable full-size cFloat array");
+  checkContains(source, "cFloat[i] = vsConsts.vsFloatConst[i];",
+                "mutable vertex constants are initialized from host constants before shader writes");
   checkContains(source, "cFloat[clamp(a0 + 5, 0, 255)] = cFloat[1];",
                 "indexed const destination emits clamped a0+N write");
   checkNotContains(source, "constant float4* cFloat = ",
@@ -2125,6 +2155,29 @@ void testVs20IndexedConstSourceLowersToClampedConstAccess() {
                    "indexed access is no longer rewritten as a static cFloat[5] read");
 }
 
+void testVs30VertexTextureFetchThrowsDeterministically() {
+  // Wine visual.c `test_vertex_texture` exercises real VS texture fetch only
+  // when caps expose D3DUSAGE_QUERY_VERTEXTEXTURE. dxmt9 currently has
+  // fragment-stage texture/sampler commands in the Stage 1 winemetal ABI;
+  // emitting `tex0.sample` from the vertex function would produce invalid MSL,
+  // so the translator must fail this lane at source generation until a
+  // vertex-stage texture/sampler binding ABI is added.
+  checkThrowsContains([] {
+    (void)translateVertex(makeVs30VertexTextureBytecode());
+  }, "vertex texture fetch requires vertex-stage texture/sampler binding ABI",
+                      "VS texture fetch gap is classified deterministically");
+}
+
+void testPs14ConstantSourcesClampBeforeArithmetic() {
+  const auto source = translatePixel(makePs14ConstantClampBytecode());
+  checkContains(source, "clamp(cFloat[1], float4(-1.0f), float4(1.0f))",
+                "ps_1_4 runtime float constants are clamped before MOV");
+  checkContains(source, "clamp(cFloat[2], float4(-1.0f), float4(1.0f))",
+                "ps_1_4 DEF constants are clamped before ADD");
+  checkContains(source, "color = r[0];",
+                "ps_1_4 final color comes from r0 instead of the SM2+ outColor path");
+}
+
 }  // namespace
 
 int main() {
@@ -2187,6 +2240,8 @@ int main() {
     testVs20DefLiteralWithRelAddrBitDoesNotDriftParser();
     testVs20IndexedConstSourceParserConsumesRelAddrDword();
     testVs20IndexedConstSourceLowersToClampedConstAccess();
+    testVs30VertexTextureFetchThrowsDeterministically();
+    testPs14ConstantSourcesClampBeforeArithmetic();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

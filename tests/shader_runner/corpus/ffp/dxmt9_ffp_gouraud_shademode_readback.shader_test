@@ -1,0 +1,17 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_shademode behavior, reduced to default Gouraud diffuse interpolation
+; oracle-date: 2026-05-17
+
+[test]
+dxmt9-render-state zenable=off
+dxmt9-texture 0 1 1 A8R8G8B8 rgba(1.0,1.0,1.0,1.0)
+dxmt9-bind-texture 0 0
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 color_arg1=diffuse alpha_op=selectarg1 alpha_arg1=diffuse
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-draw-ffp-gouraud-triangle
+probe (16, 16) rgba(0.5, 0.25, 0.25, 1.0) 32

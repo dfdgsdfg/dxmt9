@@ -113,7 +113,8 @@ bool isFogRenderState(uint32_t state) {
          state == dxmt9::core::RS_FOG_START ||
          state == dxmt9::core::RS_FOG_END ||
          state == dxmt9::core::RS_FOG_DENSITY ||
-         state == dxmt9::core::RS_FOG_FROM_VERTEX;
+         state == dxmt9::core::RS_FOG_FROM_VERTEX ||
+         state == dxmt9::core::RS_RANGE_FOG;
 }
 
 bool isAlphaRenderState(uint32_t state) {

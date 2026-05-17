@@ -1,0 +1,23 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_mipmap_autogen behavior, reduced to UpdateTexture into an AUTOGENMIPMAP destination regenerating an explicit TEXLDL level 1 sample
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0300 0200001f 90000000 a00f0800 05000051 a00f0000 3f000000
+3f000000 00000000 3f800000 0300005f 800f0000 a0e40000 a0e40800
+02000001 800f0800 80e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-texture 0 2 2 A8R8G8B8 red red red red
+dxmt9-texture-autogen 1 2 2 A8R8G8B8 blue blue blue blue
+dxmt9-texture-mip 1 1 1 1 A8R8G8B8 black
+dxmt9-update-texture 0 1
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-bind-texture 0 1
+dxmt9-draw-textured-quad
+probe (32, 32) rgba(1.0, 0.0, 0.0, 1.0) 1

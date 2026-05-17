@@ -1,0 +1,23 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_uninitialized_varyings behavior, reduced to initialized COLOR0.x with dxmt9-defined default components
+; oracle-date: 2026-05-17
+
+[vertex shader d3dbc-hex]
+fffe0200 0200001f 80000000 900f0000
+05000051 a00f0000 3f000000 3f000000 3f000000 3f000000
+02000001 c00f0000 90e40000
+02000001 d0010000 a0e40000
+0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0200 0200001f 80000000 900f0000 02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-draw-vs-color-triangle
+probe (48, 32) rgba(0.50, 1.0, 1.0, 1.0) 1

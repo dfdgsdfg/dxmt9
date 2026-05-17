@@ -350,10 +350,44 @@ struct DrawBindingPacketKeyHash {
   }
 };
 
+struct DrawBindingPacketCacheEntry {
+  bool valid = false;
+  u64 hash = 0;
+  DrawBindingPacketKey key{};
+  DrawBindingPacketPlan packet{};
+};
+
+struct DrawBindingPacketCache {
+  static constexpr std::size_t kCapacity = 128;
+  std::array<DrawBindingPacketCacheEntry, kCapacity> entries{};
+  u64 hits = 0;
+  u64 misses = 0;
+};
+
+inline const DrawBindingPacketPlan& cacheDrawBindingPacket(
+    DrawBindingPacketCache& cache,
+    const DrawBindingPacketPlan& packet) noexcept {
+  const auto key = makeDrawBindingPacketKey(packet);
+  const auto hash = hashDrawBindingPacketKey(key);
+  auto& entry = cache.entries[hash % DrawBindingPacketCache::kCapacity];
+  if (entry.valid && entry.hash == hash && entry.key == key) {
+    ++cache.hits;
+    return entry.packet;
+  }
+
+  ++cache.misses;
+  entry.valid = true;
+  entry.hash = hash;
+  entry.key = key;
+  entry.packet = packet;
+  return entry.packet;
+}
+
 inline bool shouldRepopulateArgbufResources(
     bool argbufHybridMode,
     const FragmentTextureSamplerBindingList& fragmentTextureSamplers) noexcept {
-  return argbufHybridMode && fragmentTextureSamplers.empty();
+  (void)fragmentTextureSamplers;
+  return argbufHybridMode;
 }
 
 inline bool vertexDeclUsesStream(const core::VertexDeclSnapshot& vertexDecl, u32 stream) {

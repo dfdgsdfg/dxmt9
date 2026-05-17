@@ -37,15 +37,32 @@ static_assert(sizeof(PsConsts) == 3904,
 
 struct FfpVsConsts {
   std::array<std::array<f32, 4>, 4> ffpWorldViewProj{};
+  std::array<std::array<f32, 4>, 4> ffpWorldView{};
+  std::array<std::array<f32, 4>, 4> ffpNormalMatrix{};
+  std::array<f32, 4> materialEmissive{};
+  std::array<f32, 4> materialAmbient{};
+  std::array<f32, 4> materialDiffuse{};
+  std::array<f32, 4> materialSpecular{};
+  std::array<f32, 4> globalAmbient{};
+  std::array<f32, 4> materialPower{};
+  std::array<std::array<f32, 4>, core::kMaxLights> lightDiffuse{};
+  std::array<std::array<f32, 4>, core::kMaxLights> lightSpecular{};
+  std::array<std::array<f32, 4>, core::kMaxLights> lightAmbient{};
+  std::array<std::array<f32, 4>, core::kMaxLights> lightDirection{};
   std::array<std::array<std::array<f32, 4>, 4>, 4> ffpBlendWorldViewProj{};
   std::array<std::array<std::array<f32, 4>, 4>, core::kMaxTextureStages> ffpTextureTransforms{};
   std::array<core::ClipPlane, core::kMaxClipPlanes> clipPlanes{};
   std::array<f32, 2> halfPixelFixup{};
   std::array<f32, 2> viewportOrigin{};
   std::array<f32, 2> viewportSize{};
+  f32 fogStart = 1.0f;
+  f32 fogEnd = 1.0f;
+  f32 fogDensity = 1.0f;
+  u32 fogMode = 0;
+  u32 rangeFog = 0;
   u32 clipPlaneMask = 0;
 };
-static_assert(sizeof(FfpVsConsts) == 956,
+static_assert(sizeof(FfpVsConsts) == 1712,
               "FfpVsConsts layout must match MSL prelude declaration");
 
 struct FfpPsConsts {
@@ -58,7 +75,7 @@ struct FfpPsConsts {
   u32 alphaTestEnable = 0;
   u32 alphaTestFunc = static_cast<u32>(core::CompareFunc::Always);
   u32 fogMode = static_cast<u32>(core::FogMode::None);
-  u32 _pad = 0;
+  u32 fogSource = 0;
   std::array<std::array<f32, 4>, core::kMaxTextureStages> bumpEnvMat{};
   std::array<std::array<f32, 2>, core::kMaxTextureStages> bumpEnvLum{};
   std::array<f32, 4> fogColor{};

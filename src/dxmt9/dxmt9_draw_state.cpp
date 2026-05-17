@@ -18,8 +18,10 @@ using core::RS_FOG_COLOR;
 using core::RS_FOG_DENSITY;
 using core::RS_FOG_END;
 using core::RS_FOG_ENABLE;
+using core::RS_FOG_FROM_VERTEX;
 using core::RS_FOG_START;
 using core::RS_FOG_TABLE_MODE;
+using core::RS_RANGE_FOG;
 using core::RS_STENCIL_CCW_FAIL;
 using core::RS_STENCIL_CCW_FUNC;
 using core::RS_STENCIL_CCW_MASK;
@@ -47,6 +49,10 @@ std::array<f32, 4> normalizedD3DColor(u32 raw) {
       static_cast<f32>(raw & 0xffu) / 255.0f,
       static_cast<f32>((raw >> 24) & 0xffu) / 255.0f,
   };
+}
+
+std::array<f32, 4> colorToArray(const core::ColorRGBA& color) {
+  return {color.r, color.g, color.b, color.a};
 }
 
 }  // namespace
@@ -83,7 +89,24 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
   for (std::size_t row = 0; row < 4; ++row) {
     for (std::size_t col = 0; col < 4; ++col) {
       out.ffpWorldViewProj[row][col] = payload.worldViewProj.m[row * 4 + col];
+      out.ffpWorldView[row][col] = payload.ffpWorldView.m[row * 4 + col];
+      out.ffpNormalMatrix[row][col] = payload.ffpNormalMatrix.m[row * 4 + col];
     }
+  }
+  out.materialEmissive = colorToArray(payload.material.emissive);
+  out.materialAmbient = colorToArray(payload.material.ambient);
+  out.materialDiffuse = colorToArray(payload.material.diffuse);
+  out.materialSpecular = colorToArray(payload.material.specular);
+  out.globalAmbient =
+      normalizedD3DColor(core::flatStateOr(hot.renderStates, core::RS_AMBIENT, 0u));
+  out.materialPower = {payload.material.power, 0.0f, 0.0f, 0.0f};
+  for (std::size_t i = 0; i < core::kMaxLights; ++i) {
+    const auto& light = payload.lights[i];
+    out.lightDiffuse[i] = colorToArray(light.diffuse);
+    out.lightSpecular[i] = colorToArray(light.specular);
+    out.lightAmbient[i] = colorToArray(light.ambient);
+    out.lightDirection[i] = {light.direction[0], light.direction[1],
+                             light.direction[2], 0.0f};
   }
   for (std::size_t matrix = 0; matrix < out.ffpBlendWorldViewProj.size(); ++matrix) {
     for (std::size_t row = 0; row < 4; ++row) {
@@ -109,6 +132,15 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
                         static_cast<f32>(hot.viewport.viewport.y)};
   out.viewportSize = {static_cast<f32>(std::max(1u, hot.viewport.viewport.width)),
                       static_cast<f32>(std::max(1u, hot.viewport.viewport.height))};
+  out.fogStart =
+      std::bit_cast<f32>(core::flatStateOr(hot.renderStates, RS_FOG_START, std::bit_cast<u32>(1.0f)));
+  out.fogEnd =
+      std::bit_cast<f32>(core::flatStateOr(hot.renderStates, RS_FOG_END, std::bit_cast<u32>(1.0f)));
+  out.fogDensity =
+      std::bit_cast<f32>(core::flatStateOr(hot.renderStates, RS_FOG_DENSITY, std::bit_cast<u32>(1.0f)));
+  out.fogMode = core::flatStateOr(hot.renderStates, RS_FOG_FROM_VERTEX,
+                                  static_cast<u32>(core::FogMode::None));
+  out.rangeFog = core::flatStateOr(hot.renderStates, RS_RANGE_FOG, 0u) != 0 ? 1u : 0u;
   out.clipPlaneMask = hot.clipPlaneMask;
   return out;
 }
@@ -128,6 +160,11 @@ FfpPsConsts buildFfpPsConsts(core::FlatDrawStateView state) {
                     ? core::flatStateOr(rs, RS_FOG_TABLE_MODE,
                                         static_cast<u32>(FogMode::None))
                     : static_cast<u32>(FogMode::None);
+  if (fogEnabled && out.fogMode == static_cast<u32>(FogMode::None)) {
+    out.fogMode = core::flatStateOr(rs, RS_FOG_FROM_VERTEX,
+                                    static_cast<u32>(FogMode::None));
+    out.fogSource = out.fogMode != static_cast<u32>(FogMode::None) ? 1u : 0u;
+  }
   out.fogColor = normalizedD3DColor(core::flatStateOr(rs, RS_FOG_COLOR, 0u));
   out.alphaRef =
       static_cast<f32>(core::flatStateOr(rs, RS_ALPHA_REF, 0u)) / 255.0f;

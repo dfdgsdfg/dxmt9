@@ -162,14 +162,18 @@ struct Harness {
     record->shaderReadTexture.handle = shaderReadHandle;
   }
 
-  dxmt9::core::TextureHandle createTexture(obj_handle_t textureHandle,
-                                           obj_handle_t shaderReadHandle = 0) {
+  dxmt9::core::TextureHandle createTexture(
+      obj_handle_t textureHandle,
+      obj_handle_t shaderReadHandle = 0,
+      dxmt9::core::TextureType type = dxmt9::core::TextureType::TwoD) {
     clearPatchedTextureHandles();
 
     dxmt9::core::TextureDesc desc{};
     desc.width = 2u;
     desc.height = 2u;
+    desc.depth = type == dxmt9::core::TextureType::Volume ? 2u : 1u;
     desc.levels = 1u;
+    desc.type = type;
     desc.pool = dxmt9::core::Pool::Default;
     auto handle = pool.createTexture(WMT::Device{}, limits, desc);
     check(pool.findTexture(handle.value) != nullptr,
@@ -390,6 +394,90 @@ void testPopulateResourceBindingsRecordsTextureSamplerWrites() {
           "sampler1 writes argbuf id 29");
 }
 
+void testPopulateResourceBindingsRecordsTypedTextureWriteIds() {
+  constexpr obj_handle_t kTexture2D = 0x6000000000000040ull;
+  constexpr obj_handle_t kTextureCube = 0x6000000000000041ull;
+  constexpr obj_handle_t kTextureVolume = 0x6000000000000042ull;
+  constexpr obj_handle_t kSampler = 0x6000000000000050ull;
+
+  Harness harness;
+  auto texture2d = harness.createTexture(kTexture2D);
+  auto textureCube = harness.createTexture(
+      kTextureCube, 0, dxmt9::core::TextureType::Cube);
+  auto textureVolume = harness.createTexture(
+      kTextureVolume, 0, dxmt9::core::TextureType::Volume);
+  harness.restorePatchedTextureHandle(texture2d, kTexture2D);
+  harness.restorePatchedTextureHandle(textureCube, kTextureCube);
+
+  dxmt9::core::FlatDrawStateRecord hot{};
+  hot.textures[0] = texture2d;
+  hot.textures[1] = textureCube;
+  hot.textures[2] = textureVolume;
+
+  dxmt9::argbuf_hybrid::ArgbufEncoderResource encoderResource;
+  encoderResource.initForTest(/*encodedLength=*/512u, /*alignment=*/16u);
+  Capture capture;
+  auto recorder = makeRecorder(capture, kSampler);
+
+  dxmt9::argbuf_hybrid::populateResourceBindings(
+      WMT::Reference<WMT::Device>{},
+      harness.pool,
+      encoderResource,
+      dxmt9::core::FlatDrawStateView{.hot = &hot},
+      &recorder);
+
+  checkEq(capture.commands.size(), std::size_t{6},
+          "typed Stage 2 resource write command count");
+
+  const auto& texture2dCommand = commandAt(capture, 0, "missing 2D texture write");
+  check(texture2dCommand.kind == RecordedKind::SetTexture,
+        "2D texture write is first");
+  checkEq(texture2dCommand.handle, kTexture2D,
+          "2D texture writes its shader-read handle");
+  checkEq(texture2dCommand.index,
+          dxmt9::shaders::kArgbufHybridTexture2DBase,
+          "2D texture writes argbuf id 4");
+
+  const auto& sampler0Command = commandAt(capture, 1, "missing sampler0 write");
+  check(sampler0Command.kind == RecordedKind::SetSamplerState,
+        "sampler0 write follows 2D texture");
+  checkEq(sampler0Command.index,
+          dxmt9::shaders::kArgbufHybridSamplerBase,
+          "sampler0 writes argbuf id 28");
+
+  const auto& textureCubeCommand = commandAt(capture, 2, "missing cube texture write");
+  check(textureCubeCommand.kind == RecordedKind::SetTexture,
+        "cube texture write follows sampler0");
+  checkEq(textureCubeCommand.handle, kTextureCube,
+          "cube texture writes its shader-read handle");
+  checkEq(textureCubeCommand.index,
+          dxmt9::shaders::kArgbufHybridTextureCubeBase + 1u,
+          "cube texture writes argbuf id 13");
+
+  const auto& sampler1Command = commandAt(capture, 3, "missing sampler1 write");
+  check(sampler1Command.kind == RecordedKind::SetSamplerState,
+        "sampler1 write follows cube texture");
+  checkEq(sampler1Command.index,
+          dxmt9::shaders::kArgbufHybridSamplerBase + 1u,
+          "sampler1 writes argbuf id 29");
+
+  const auto& textureVolumeCommand = commandAt(capture, 4, "missing volume texture write");
+  check(textureVolumeCommand.kind == RecordedKind::SetTexture,
+        "volume texture write follows sampler1");
+  checkEq(textureVolumeCommand.handle, kTextureVolume,
+          "volume texture writes its shader-read handle");
+  checkEq(textureVolumeCommand.index,
+          dxmt9::shaders::kArgbufHybridTexture3DBase + 2u,
+          "volume texture writes argbuf id 22");
+
+  const auto& sampler2Command = commandAt(capture, 5, "missing sampler2 write");
+  check(sampler2Command.kind == RecordedKind::SetSamplerState,
+        "sampler2 write follows volume texture");
+  checkEq(sampler2Command.index,
+          dxmt9::shaders::kArgbufHybridSamplerBase + 2u,
+          "sampler2 writes argbuf id 30");
+}
+
 void testPointFfpVsAtSliceRecordsArgbufEntry() {
   constexpr obj_handle_t kBuffer = 0x6000000000000030ull;
   constexpr std::uint64_t kOffset = 256u;
@@ -434,6 +522,7 @@ int main() {
     testDirtyBytesEstimateAdditive();
     testPopulatedArgbufDefaultIsEmpty();
     testPopulateResourceBindingsRecordsTextureSamplerWrites();
+    testPopulateResourceBindingsRecordsTypedTextureWriteIds();
     testPointFfpVsAtSliceRecordsArgbufEntry();
   } catch (const TestFailure& failure) {
     std::cerr << "argbuf_populator_spec failed: " << failure.what() << '\n';

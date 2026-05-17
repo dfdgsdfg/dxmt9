@@ -101,7 +101,7 @@ void testSelectorPicksStage2WhenEnabled() {
           "capability gate hold picks Stage 2");
 }
 
-void testSelectorFallsBackForTextureBoundDraws() {
+void testSelectorPromotesTextureBoundDrawsWhenEnabled() {
   FlatDrawStateRecord hot{};
   hot.textures[0] = Handle{1};
   DrawShaderLayoutContext shaderLayout{};
@@ -109,8 +109,8 @@ void testSelectorFallsBackForTextureBoundDraws() {
   const auto decision =
       dxmt9::pipeline::selectArgbufHybridForPass(view, /*argbufHybridEnabled=*/true);
   checkEq(static_cast<int>(decision),
-          static_cast<int>(dxmt9::pipeline::ArgbufHybridDecision::Stage1),
-          "texture-bound draws stay on Stage 1 until Stage 2 texture equality is stable");
+          static_cast<int>(dxmt9::pipeline::ArgbufHybridDecision::Stage2),
+          "texture-bound draws promote to Stage 2 when the argbuf gate is enabled");
 }
 
 // ---------------------------------------------------------------------
@@ -278,7 +278,7 @@ int main() {
     testCapabilityGateAcceptsTier2Apple3();
     testSelectorPicksStage1WhenDisabled();
     testSelectorPicksStage2WhenEnabled();
-    testSelectorFallsBackForTextureBoundDraws();
+    testSelectorPromotesTextureBoundDrawsWhenEnabled();
     testVariantKeyArgbufHybridBitDistinguishesStages();
     testTileFfpAndArgbufHybridBitsAreIndependent();
     testArgumentDescriptorCount();

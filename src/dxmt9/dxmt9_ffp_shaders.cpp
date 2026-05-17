@@ -100,6 +100,77 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   return hash;
 }
 
+std::string materialSourceExpr(u32 mode, const char* materialField) {
+  switch (mode) {
+    case 1u:
+      return "dxmt9_vertexDiffuse";
+    case 2u:
+      return "dxmt9_vertexSpecular";
+    default:
+      return std::string("ffpVs.") + materialField;
+  }
+}
+
+void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key) {
+  if (!key.lightingEnabled) {
+    return;
+  }
+  bool hasSupportedLight = false;
+  for (u32 i = 0; i < kMaxLights; ++i) {
+    hasSupportedLight = hasSupportedLight ||
+        (key.lightEnabled[i] && key.lightType[i] == static_cast<u32>(LightType::Directional));
+  }
+  if (!hasSupportedLight) {
+    return;
+  }
+
+  shader << "  float4 dxmt9_vertexDiffuse = out.color;\n";
+  shader << "  float4 dxmt9_vertexSpecular = out.secondaryColor;\n";
+  shader << "  float4 dxmt9_materialEmissive = "
+         << materialSourceExpr(key.colorMaterialMode[0], "materialEmissive") << ";\n";
+  shader << "  float4 dxmt9_materialAmbient = "
+         << materialSourceExpr(key.colorMaterialMode[1], "materialAmbient") << ";\n";
+  shader << "  float4 dxmt9_materialDiffuse = "
+         << materialSourceExpr(key.colorMaterialMode[2], "materialDiffuse") << ";\n";
+  shader << "  float4 dxmt9_materialSpecular = "
+         << materialSourceExpr(key.colorMaterialMode[3], "materialSpecular") << ";\n";
+  shader << "  float3 dxmt9_litNormal = normalize(dxmt9_lightingNormal);\n";
+  shader << "  float3 dxmt9_diffuseAccum = dxmt9_materialEmissive.rgb + "
+            "dxmt9_materialAmbient.rgb * ffpVs.globalAmbient.rgb;\n";
+  shader << "  float3 dxmt9_specularAccum = float3(0.0f);\n";
+  for (u32 i = 0; i < kMaxLights; ++i) {
+    if (!key.lightEnabled[i]) {
+      continue;
+    }
+    if (key.lightType[i] != static_cast<u32>(LightType::Directional)) {
+      continue;
+    }
+    shader << "  dxmt9_diffuseAccum += dxmt9_materialAmbient.rgb * ffpVs.lightAmbient["
+           << i << "].rgb;\n";
+    shader << "  float3 dxmt9_lightVec" << i << " = -ffpVs.lightDirection[" << i << "].xyz;\n";
+    shader << "  if (length(dxmt9_lightVec" << i << ") <= 1.0e-8f) "
+           << "dxmt9_lightVec" << i << " = float3(0.0f, 0.0f, 1.0f);\n";
+    shader << "  dxmt9_lightVec" << i << " = normalize(dxmt9_lightVec" << i << ");\n";
+    shader << "  float dxmt9_ndotl" << i
+           << " = max(dot(dxmt9_litNormal, dxmt9_lightVec" << i << "), 0.0f);\n";
+    shader << "  dxmt9_diffuseAccum += dxmt9_materialDiffuse.rgb * ffpVs.lightDiffuse["
+           << i << "].rgb * dxmt9_ndotl" << i << ";\n";
+    if (key.specularEnabled) {
+      shader << "  float3 dxmt9_halfVec" << i
+             << " = normalize(dxmt9_lightVec" << i << " + float3(0.0f, 0.0f, 1.0f));\n";
+      shader << "  float dxmt9_specFactor" << i
+             << " = dxmt9_ndotl" << i << " > 0.0f ? pow(max(dot(dxmt9_litNormal, dxmt9_halfVec"
+             << i << "), 0.0f), max(ffpVs.materialPower.x, 1.0f)) : 0.0f;\n";
+      shader << "  dxmt9_specularAccum += dxmt9_materialSpecular.rgb * ffpVs.lightSpecular["
+             << i << "].rgb * dxmt9_specFactor" << i << ";\n";
+    }
+  }
+  shader << "  out.color = saturate(float4(dxmt9_diffuseAccum, dxmt9_materialDiffuse.a));\n";
+  if (key.specularEnabled) {
+    shader << "  out.secondaryColor = float4(dxmt9_specularAccum, 0.0f);\n";
+  }
+}
+
 }  // namespace
 
 std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const VertexDeclSnapshot& decl) {
@@ -230,10 +301,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
   constexpr u32 kTciCameraSpaceReflection = 0x00030000u;
   constexpr u32 kTciSphereMap = 0x00040000u;
   const auto maxTexOut = shaders::vsoutMaxTexcoord();
-  const auto emitStageTexcoords = [&](std::ostringstream& shader,
-                                      const char* positionExpr,
-                                      const char* normalExpr,
-                                      const char* unitNormalExpr) {
+  const auto emitStageTexcoords = [&](std::ostringstream& shader) {
     for (size_t stage = 0; stage < kMaxTextureStages; ++stage) {
       // DXMT9_TRIM_UNUSED_VARYINGS: skip stages that the trimmed VSOut
       // doesn't declare; the local `dxmt9_texcoordN` would still compute
@@ -247,21 +315,21 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
                << layout->texcoordOffset[texCoordIndex] << "u), 1.0f, 1.0f);\n";
       }
       if (texCoordGen == kTciCameraSpacePosition && !(layout && layout->preTransformed)) {
-        shader << "  dxmt9_texcoord" << stage << " = float4(" << positionExpr << ".xyz, 1.0f);\n";
+        shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_cameraPosition.xyz, 1.0f);\n";
       } else if (texCoordGen == kTciCameraSpaceNormal && !(layout && layout->preTransformed)) {
-        shader << "  dxmt9_texcoord" << stage << " = float4(" << normalExpr << ", 1.0f);\n";
+        shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_cameraNormal, 1.0f);\n";
       } else if (texCoordGen == kTciCameraSpaceReflection && !(layout && layout->preTransformed)) {
-        shader << "  float3 dxmt9_eye" << stage << " = normalize(-" << positionExpr << ".xyz);\n";
-        shader << "  if (all(fabs(" << positionExpr << ".xyz) < float3(1.0e-8f))) "
+        shader << "  float3 dxmt9_eye" << stage << " = normalize(-dxmt9_cameraPosition.xyz);\n";
+        shader << "  if (all(fabs(dxmt9_cameraPosition.xyz) < float3(1.0e-8f))) "
                << "dxmt9_eye" << stage << " = float3(0.0f, 0.0f, 1.0f);\n";
         shader << "  dxmt9_texcoord" << stage << " = float4(reflect(-dxmt9_eye" << stage
-               << ", " << unitNormalExpr << "), 1.0f);\n";
+               << ", dxmt9_cameraUnitNormal), 1.0f);\n";
       } else if (texCoordGen == kTciSphereMap && !(layout && layout->preTransformed)) {
-        shader << "  float3 dxmt9_eye" << stage << " = normalize(-" << positionExpr << ".xyz);\n";
-        shader << "  if (all(fabs(" << positionExpr << ".xyz) < float3(1.0e-8f))) "
+        shader << "  float3 dxmt9_eye" << stage << " = normalize(-dxmt9_cameraPosition.xyz);\n";
+        shader << "  if (all(fabs(dxmt9_cameraPosition.xyz) < float3(1.0e-8f))) "
                << "dxmt9_eye" << stage << " = float3(0.0f, 0.0f, 1.0f);\n";
         shader << "  float3 dxmt9_reflect" << stage << " = reflect(-dxmt9_eye" << stage
-               << ", " << unitNormalExpr << ");\n";
+               << ", dxmt9_cameraUnitNormal);\n";
         shader << "  float dxmt9_sphereM" << stage
                << " = 2.0f * sqrt(dot(dxmt9_reflect" << stage << ".xy, dxmt9_reflect" << stage
                << ".xy) + (dxmt9_reflect" << stage << ".z + 1.0f) * "
@@ -336,7 +404,8 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.color = float4(1.0);\n";
     }
     out << "  out.secondaryColor = float4(0.0);\n";
-    emitStageTexcoords(out, "inPosition", "float3(0.0f, 0.0f, 1.0f)", "float3(0.0f, 0.0f, 1.0f)");
+    out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
+    emitStageTexcoords(out);
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
     if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
   } else if (layout) {
@@ -363,6 +432,21 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     if (key.normalizeNormals) {
       out << "  inNormal = unitNormal;\n";
     }
+    out << "  float4 dxmt9_cameraPosition;\n";
+    out << "  dxmt9_cameraPosition.x = dot(float4(ffpVs.ffpWorldView[0].x, ffpVs.ffpWorldView[1].x,\n";
+    out << "                                      ffpVs.ffpWorldView[2].x, ffpVs.ffpWorldView[3].x), inPosition);\n";
+    out << "  dxmt9_cameraPosition.y = dot(float4(ffpVs.ffpWorldView[0].y, ffpVs.ffpWorldView[1].y,\n";
+    out << "                                      ffpVs.ffpWorldView[2].y, ffpVs.ffpWorldView[3].y), inPosition);\n";
+    out << "  dxmt9_cameraPosition.z = dot(float4(ffpVs.ffpWorldView[0].z, ffpVs.ffpWorldView[1].z,\n";
+    out << "                                      ffpVs.ffpWorldView[2].z, ffpVs.ffpWorldView[3].z), inPosition);\n";
+    out << "  dxmt9_cameraPosition.w = dot(float4(ffpVs.ffpWorldView[0].w, ffpVs.ffpWorldView[1].w,\n";
+    out << "                                      ffpVs.ffpWorldView[2].w, ffpVs.ffpWorldView[3].w), inPosition);\n";
+    out << "  float3 dxmt9_cameraNormal = float3(\n";
+    out << "      dot(float3(ffpVs.ffpNormalMatrix[0].x, ffpVs.ffpNormalMatrix[1].x, ffpVs.ffpNormalMatrix[2].x), inNormal),\n";
+    out << "      dot(float3(ffpVs.ffpNormalMatrix[0].y, ffpVs.ffpNormalMatrix[1].y, ffpVs.ffpNormalMatrix[2].y), inNormal),\n";
+    out << "      dot(float3(ffpVs.ffpNormalMatrix[0].z, ffpVs.ffpNormalMatrix[1].z, ffpVs.ffpNormalMatrix[2].z), inNormal));\n";
+    out << "  float dxmt9_cameraNormalLength = length(dxmt9_cameraNormal);\n";
+    out << "  float3 dxmt9_cameraUnitNormal = dxmt9_cameraNormalLength > 1.0e-8f ? dxmt9_cameraNormal / dxmt9_cameraNormalLength : float3(0.0f, 0.0f, 1.0f);\n";
     const bool emitVertexBlend =
         key.vertexBlend > 0 && key.vertexBlend <= 3 && layout->hasBlendWeight;
     out << "  float4 clip;\n";
@@ -450,8 +534,14 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.color = float4(1.0);\n";
     }
     out << "  out.secondaryColor = float4(0.0);\n";
-    emitStageTexcoords(out, "inPosition", "inNormal", "unitNormal");
-    if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
+    out << "  float3 dxmt9_lightingNormal = dxmt9_cameraUnitNormal;\n";
+    emitStageTexcoords(out);
+    if (shaders::vsoutEmitFogFactor()) {
+      out << "  float dxmt9_fogDepth = ffpVs.rangeFog != 0u ? length(dxmt9_cameraPosition.xyz) : dxmt9_cameraPosition.z;\n";
+      out << "  out.fogFactor = dxmt9_compute_fog_factor(ffpVs.fogMode, dxmt9_fogDepth,\n";
+      out << "                                           ffpVs.fogStart, ffpVs.fogEnd,\n";
+      out << "                                           ffpVs.fogDensity);\n";
+    }
     if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
   } else {
     emitVertexSig(/*withStream=*/false);
@@ -462,6 +552,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     out << "  out.color = float4(1.0);\n";
     out << "  out.secondaryColor = float4(0.0);\n";
+    out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
     out << "  out.texcoord0 = float4(float2(vid & 1u, (vid >> 1u) & 1u), 0.0f, 1.0f);\n";
     for (size_t i = 1; i < maxTexOut; ++i) {
       out << "  out.texcoord" << i << " = out.texcoord0;\n";
@@ -469,9 +560,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
     if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
   }
-  out << "  if (" << (key.lightingEnabled ? "true" : "false") << ") {\n";
-  out << "    out.color.rgb *= 1.0;\n";
-  out << "  }\n";
+  emitLightingBlock(out, key);
   if (key.clipPlaneMask != 0 || context.clipPlaneMask != 0) {
     out << "  for (uint i = 0; i < 6; ++i) {\n";
     out << "    if ((ffpVs.clipPlaneMask & (1u << i)) != 0u) {\n";
@@ -651,7 +740,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   }
   if (key.fogMode != FogMode::None) {
     out << "  float fogDepth = color.a;\n";
-    out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth);\n";
+    out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth, in.fogFactor);\n";
   }
   out << "  return color;\n";
   out << "}\n";
@@ -725,7 +814,7 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
   out << "  uint alphaTestEnable;\n";
   out << "  uint alphaTestFunc;\n";
   out << "  uint fogMode;\n";
-  out << "  uint _pad;\n";
+  out << "  uint fogSource;\n";
   out << "  float4 bumpEnvMat[" << kMaxTextureStages << "];\n";
   out << "  float2 bumpEnvLum[" << kMaxTextureStages << "];\n";
   out << "  float4 fogColor;\n";

@@ -342,8 +342,65 @@ void testCubeTextureSubresourceFlow() {
   checkEq(upload.width, 2u, "cube upload width");
   checkEq(upload.height, 2u, "cube upload height");
 
+  auto srcCube = device->createTexture(
+      {2, 2, 1, 2, Format::A8R8G8B8, TextureType::Cube, Pool::Managed, UsageTexture});
+  auto dstCube = device->createTexture(
+      {2, 2, 1, 2, Format::A8R8G8B8, TextureType::Cube, Pool::Managed, UsageTexture});
+  check(srcCube != nullptr && dstCube != nullptr, "cube update textures");
+  auto srcFace4Mip1 = srcCube->surfaceLevel(4u * srcCube->levelCount() + 1u);
+  check(srcFace4Mip1 != nullptr, "cube update source face/mip surface");
+  srcFace4Mip1->fillColor(nullptr, {0.0f, 1.0f, 0.0f, 1.0f});
+  checkEq(device->updateTexture(srcCube, dstCube), D3D_OK, "cube UpdateTexture");
+  const std::array<u8, 4> greenPixel = bgra(0x00, 0xff, 0x00, 0xff);
+  checkBytes(std::span<const u8>(dstCube->levelBytes(4u * dstCube->levelCount() + 1u).data(), 4),
+             std::span<const u8>(greenPixel.data(), greenPixel.size()),
+             "cube UpdateTexture copies packed face/mip subresource");
+
+  auto genCube = device->createTexture(
+      {2, 2, 1, 2, Format::A8R8G8B8, TextureType::Cube, Pool::Managed, UsageTexture});
+  check(genCube != nullptr, "cube generate texture");
+  auto genFace3Base = genCube->surfaceLevel(3u * genCube->levelCount());
+  check(genFace3Base != nullptr, "cube generate base face surface");
+  genFace3Base->fillColor(nullptr, {1.0f, 0.0f, 0.0f, 1.0f});
+  checkEq(genCube->generateMipSubLevels(), D3D_OK, "cube GenerateMipSubLevels");
+  const std::array<u8, 4> redPixel = bgra(0x00, 0x00, 0xff, 0xff);
+  checkBytes(std::span<const u8>(genCube->levelBytes(3u * genCube->levelCount() + 1u).data(), 4),
+             std::span<const u8>(redPixel.data(), redPixel.size()),
+             "cube GenerateMipSubLevels writes packed face mip");
+
   auto invalid = cube->surfaceLevel(cube->subresourceCount());
   check(invalid == nullptr, "cube invalid subresource rejected");
+}
+
+void testAutogenUpdateTextureRegeneratesMipShadow() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory(BackendLimits{}, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 64;
+  params.backBufferHeight = 64;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{8};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "autogen update device creation");
+
+  auto src = device->createTexture(
+      {2, 2, 1, 1, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed, UsageTexture});
+  auto dst = device->createTexture(
+      {2, 2, 1, 2, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed,
+       UsageTexture | UsageAutoGenMipmap});
+  check(src != nullptr && dst != nullptr, "autogen update textures");
+
+  src->fillColor(0, nullptr, {1.0f, 0.0f, 0.0f, 1.0f});
+  dst->fillColor(0, nullptr, {0.0f, 0.0f, 1.0f, 1.0f});
+  dst->fillColor(1, nullptr, {0.0f, 0.0f, 0.0f, 1.0f});
+
+  checkEq(device->updateTexture(src, dst), D3D_OK, "autogen UpdateTexture");
+  const std::array<u8, 4> redPixel = bgra(0x00, 0x00, 0xff, 0xff);
+  checkBytes(std::span<const u8>(dst->levelBytes(1).data(), 4),
+             std::span<const u8>(redPixel.data(), redPixel.size()),
+             "autogen UpdateTexture regenerates mip shadow from copied base");
 }
 
 void testMetalSamplerBorderColorCoverage() {
@@ -535,6 +592,7 @@ int main() {
     testIndexedDrawPolicyContracts();
     testMetalSamplerBorderColorCoverage();
     testCubeTextureSubresourceFlow();
+    testAutogenUpdateTextureRegeneratesMipShadow();
     testProgrammableTextureOrientationSmoke();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';

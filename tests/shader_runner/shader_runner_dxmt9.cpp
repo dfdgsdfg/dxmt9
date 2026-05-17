@@ -59,7 +59,12 @@ struct TextureLevelSetup {
 struct TextureSetup {
   u32 id = 0;
   Format format = Format::A8R8G8B8;
+  TextureType type = TextureType::TwoD;
+  u32 depth = 1;
+  u32 usage = UsageTexture;
   std::vector<TextureLevelSetup> levels;
+  std::array<TextureLevelSetup, 6> cubeFaces;
+  std::array<bool, 6> hasCubeFace{};
 };
 
 struct SamplerSetup {
@@ -96,6 +101,12 @@ struct TextureLodSetup {
   u32 lod = 0;
 };
 
+struct ShaderFloatConstSetup {
+  ShaderSection::Kind kind = ShaderSection::Kind::Vertex;
+  u32 index = 0;
+  std::array<float, 4> value{};
+};
+
 struct RenderTargetSetup {
   u32 slot = 0;
   Format format = Format::A8R8G8B8;
@@ -122,6 +133,12 @@ struct SolidQuadXyzDepthDraw {
   float z = 0.0f;
 };
 
+struct TexturedQuadTex3Draw {
+  float u = 1.0f;
+  float v = 0.0f;
+  float w = 0.0f;
+};
+
 struct CorpusTest {
   std::string path;
   std::optional<ShaderSection> vertexShader;
@@ -136,6 +153,7 @@ struct CorpusTest {
   std::vector<TextureUpdate> textureUpdates;
   std::vector<TextureMipGeneration> textureMipGenerations;
   std::vector<TextureLodSetup> textureLods;
+  std::vector<ShaderFloatConstSetup> shaderFloatConsts;
   std::vector<RenderTargetSetup> renderTargetSetups;
   std::vector<ClipPlaneSetup> clipPlaneSetups;
   std::vector<RenderStateSetup> renderStateSetups;
@@ -150,17 +168,25 @@ struct CorpusTest {
   bool drawDxmt9TexturedQuadOverscan = false;
   bool drawDxmt9TexturedQuadTex2 = false;
   bool drawDxmt9TexturedQuadXyz = false;
+  std::optional<TexturedQuadTex3Draw> drawDxmt9TexturedQuadTex3;
   bool drawDxmt9SolidQuad = false;
   bool drawDxmt9VsColorTriangle = false;
   bool drawDxmt9VFaceFacingQuads = false;
   bool drawDxmt9VsMultistreamTexturedQuad = false;
   bool drawDxmt9VsSkinnedTriangle = false;
+  bool drawDxmt9VsFloat16ColorQuads = false;
   bool drawDxmt9FfpVertexBlendTriangle = false;
   bool drawDxmt9FfpVertexBlend2WeightsTriangle = false;
   bool drawDxmt9FfpVertexBlend3WeightsTriangle = false;
   bool drawDxmt9FfpVertexBlendIndexedTriangle = false;
   bool drawDxmt9FfpVertexBlendFvfXyzb2Triangle = false;
   bool drawDxmt9FfpGeneratedNormalQuad = false;
+  bool drawDxmt9FfpDeclDefaultsQuad = false;
+  bool drawDxmt9FfpColorVertexQuad = false;
+  bool drawDxmt9FfpLitDirectionalQuad = false;
+  bool drawDxmt9FfpSpecularDirectionalQuad = false;
+  bool drawDxmt9FfpGouraudTriangle = false;
+  bool drawDxmt9FfpPointDefault = false;
   bool drawDxmt9ODepthOverlap = false;
   bool drawDxmt9ZWriteDisableOverlap = false;
   u32 clipPlaneMask = 0;
@@ -195,6 +221,7 @@ constexpr u32 kDeclTypeD3DColor = 4u;
 constexpr u32 kDeclTypeFloat3 = 2u;
 constexpr u32 kDeclTypeUByte4 = 5u;
 constexpr u32 kDeclTypeShort4N = 10u;
+constexpr u32 kDeclTypeFloat16_4 = 16u;
 constexpr u32 kDeclUsagePosition = 0u;
 constexpr u32 kDeclUsageBlendWeight = 1u;
 constexpr u32 kDeclUsageBlendIndices = 2u;
@@ -236,6 +263,16 @@ struct ScreenSpaceTexturedVertexTex2 {
   float v1 = 0.0f;
 };
 
+struct ScreenSpaceTexturedVertexTex3 {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float rhw = 1.0f;
+  float u = 0.0f;
+  float v = 0.0f;
+  float w = 0.0f;
+};
+
 struct ScreenSpaceTexturedVertexXyz {
   float x = 0.0f;
   float y = 0.0f;
@@ -251,6 +288,16 @@ struct GeneratedNormalVertex {
   float nx = 0.0f;
   float ny = 0.0f;
   float nz = 1.0f;
+};
+
+struct LitColorVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float nx = 0.0f;
+  float ny = 0.0f;
+  float nz = 1.0f;
+  u32 color = 0xffffffffu;
 };
 
 struct ScreenSpaceVertex {
@@ -274,6 +321,16 @@ struct ProgrammedColorVertex {
   float z = 0.0f;
   float w = 1.0f;
   u32 color = 0xffffffffu;
+};
+
+struct Float16ColorVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  u16 c0 = 0;
+  u16 c1 = 0;
+  u16 c2 = 0;
+  u16 c3 = 0;
 };
 
 struct MultiStreamPositionVertex {
@@ -907,23 +964,28 @@ std::optional<TextureSetup> parseDxmt9Texture(std::string_view line) {
   std::string command;
   std::string format;
   TextureSetup texture;
-  if (!(stream >> command) || command != "dxmt9-texture") {
+  if (!(stream >> command)) {
+    return std::nullopt;
+  }
+  if (command == "dxmt9-texture-autogen") {
+    texture.usage |= UsageAutoGenMipmap;
+  } else if (command != "dxmt9-texture") {
     return std::nullopt;
   }
   TextureLevelSetup level;
   if (!(stream >> texture.id >> level.width >> level.height >> format)) {
-    fail("invalid dxmt9-texture command");
+    fail("invalid dxmt9 texture command");
   }
   texture.format = parseDxmt9Format(format);
   if (level.width == 0 || level.height == 0) {
-    fail("dxmt9-texture requires non-zero dimensions");
+    fail("dxmt9 texture requires non-zero dimensions");
   }
   std::string color;
   while (stream >> color) {
     level.texels.push_back(parseTextureColor(color));
   }
   if (level.texels.size() != static_cast<size_t>(level.width) * level.height) {
-    fail("dxmt9-texture texel count does not match dimensions");
+    fail("dxmt9 texture texel count does not match dimensions");
   }
   texture.levels.push_back(std::move(level));
   return texture;
@@ -949,6 +1011,72 @@ std::optional<TextureSetup> parseDxmt9TextureRaw(std::string_view line) {
   texture.format = parseDxmt9Format(format);
   if (level.width == 0 || level.height == 0) {
     fail("dxmt9-texture-raw requires non-zero dimensions");
+  }
+  level.rawBytes = parseHexBytes(hex);
+  texture.levels.push_back(std::move(level));
+  return texture;
+}
+
+std::optional<TextureSetup> parseDxmt9CubeTexture(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  std::string format;
+  TextureSetup texture;
+  u32 size = 0;
+  if (!(stream >> command) || command != "dxmt9-cube-texture") {
+    return std::nullopt;
+  }
+  if (!(stream >> texture.id >> size >> format)) {
+    fail("invalid dxmt9-cube-texture command");
+  }
+  texture.format = parseDxmt9Format(format);
+  texture.type = TextureType::Cube;
+  if (size == 0) {
+    fail("dxmt9-cube-texture requires a non-zero size");
+  }
+  for (u32 face = 0; face < texture.cubeFaces.size(); ++face) {
+    std::string color;
+    if (!(stream >> color)) {
+      fail("dxmt9-cube-texture requires six face colors");
+    }
+    TextureLevelSetup level;
+    level.width = size;
+    level.height = size;
+    level.texels.assign(static_cast<size_t>(size) * size, parseTextureColor(color));
+    texture.cubeFaces[face] = std::move(level);
+    texture.hasCubeFace[face] = true;
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-cube-texture accepts exactly six face colors");
+  }
+  return texture;
+}
+
+std::optional<TextureSetup> parseDxmt9VolumeTextureRaw(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  std::string format;
+  std::string hex;
+  TextureSetup texture;
+  TextureLevelSetup level;
+  if (!(stream >> command) || command != "dxmt9-volume-texture-raw") {
+    return std::nullopt;
+  }
+  if (!(stream >> texture.id >> level.width >> level.height >> texture.depth >> format >> hex)) {
+    fail("invalid dxmt9-volume-texture-raw command");
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-volume-texture-raw accepts exactly one hex byte string");
+  }
+  texture.format = parseDxmt9Format(format);
+  texture.type = TextureType::Volume;
+  if (level.width == 0 || level.height == 0 || texture.depth == 0) {
+    fail("dxmt9-volume-texture-raw requires non-zero dimensions");
+  }
+  if (texture.depth != 1u) {
+    fail("dxmt9-volume-texture-raw currently supports depth=1 until volume upload carries slice pitch");
   }
   level.rawBytes = parseHexBytes(hex);
   texture.levels.push_back(std::move(level));
@@ -1026,6 +1154,8 @@ std::optional<SamplerSetup> parseDxmt9Sampler(std::string_view line) {
       sampler.states[SAMP_ADDRESS_U] = parseAddressMode(value);
     } else if (key == "addressv") {
       sampler.states[SAMP_ADDRESS_V] = parseAddressMode(value);
+    } else if (key == "addressw") {
+      sampler.states[SAMP_ADDRESS_W] = parseAddressMode(value);
     } else if (key == "minfilter") {
       sampler.states[SAMP_MIN_FILTER] = parseTextureFilter(value);
     } else if (key == "magfilter") {
@@ -1187,6 +1317,31 @@ std::optional<TextureLodSetup> parseDxmt9TextureLod(std::string_view line) {
   return setup;
 }
 
+std::optional<ShaderFloatConstSetup> parseDxmt9ShaderFloatConst(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  ShaderFloatConstSetup setup;
+  if (!(stream >> command)) {
+    return std::nullopt;
+  }
+  if (command == "dxmt9-vs-const-f") {
+    setup.kind = ShaderSection::Kind::Vertex;
+  } else if (command == "dxmt9-ps-const-f") {
+    setup.kind = ShaderSection::Kind::Pixel;
+  } else {
+    return std::nullopt;
+  }
+  if (!(stream >> setup.index >> setup.value[0] >> setup.value[1] >>
+        setup.value[2] >> setup.value[3])) {
+    fail("invalid dxmt9 shader float constant command");
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9 shader float constant accepts exactly index and four floats");
+  }
+  return setup;
+}
+
 std::optional<RenderTargetSetup> parseDxmt9RenderTarget(std::string_view line) {
   std::istringstream stream{std::string(line)};
   std::string command;
@@ -1252,6 +1407,23 @@ std::optional<SolidQuadXyzDepthDraw> parseDxmt9SolidQuadXyzDepth(std::string_vie
   std::string extra;
   if (stream >> extra) {
     fail("dxmt9-draw-solid-quad-xyz-depth has extra values");
+  }
+  return draw;
+}
+
+std::optional<TexturedQuadTex3Draw> parseDxmt9TexturedQuadTex3(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  TexturedQuadTex3Draw draw;
+  if (!(stream >> command) || command != "dxmt9-draw-textured-quad-tex3") {
+    return std::nullopt;
+  }
+  if (!(stream >> draw.u >> draw.v >> draw.w)) {
+    fail("invalid dxmt9-draw-textured-quad-tex3 command");
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-draw-textured-quad-tex3 has extra values");
   }
   return draw;
 }
@@ -1367,6 +1539,9 @@ bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
                key == "srgbwriteenabled") {
       test.renderStateSetups.push_back({RS_SRGB_WRITE_ENABLE, parseBoolState(value)});
       sawState = true;
+    } else if (key == "lighting") {
+      test.renderStateSetups.push_back({RS_LIGHTING, parseBoolState(value)});
+      sawState = true;
     } else if (key == "fogenable" || key == "fogenabled" || key == "fog") {
       test.renderStateSetups.push_back({RS_FOG_ENABLE, parseBoolState(value)});
       sawState = true;
@@ -1384,6 +1559,14 @@ bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
       sawState = true;
     } else if (key == "fogcolor" || key == "fogcolour") {
       test.renderStateSetups.push_back({RS_FOG_COLOR, parseD3DColorValue(value)});
+      sawState = true;
+    } else if (key == "fogvertexmode" || key == "fogvertex" ||
+               key == "vertexfogmode" || key == "vertexfog") {
+      test.renderStateSetups.push_back({RS_FOG_FROM_VERTEX, parseFogMode(value)});
+      sawState = true;
+    } else if (key == "rangefog" || key == "rangefogenable" ||
+               key == "rangefogenabled") {
+      test.renderStateSetups.push_back({RS_RANGE_FOG, parseBoolState(value)});
       sawState = true;
     } else if (key == "alphablend" || key == "alphablendenable" ||
                key == "alphablendenabled") {
@@ -1652,6 +1835,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (auto tex3 = parseDxmt9TexturedQuadTex3(line)) {
+    test.drawDxmt9TexturedQuadTex3 = *tex3;
+    return;
+  }
+
   if (line == "dxmt9-draw-vs-color-triangle") {
     test.drawDxmt9VsColorTriangle = true;
     return;
@@ -1669,6 +1857,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
 
   if (line == "dxmt9-draw-vs-skinned-triangle") {
     test.drawDxmt9VsSkinnedTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-vs-float16-color-quads") {
+    test.drawDxmt9VsFloat16ColorQuads = true;
     return;
   }
 
@@ -1698,6 +1891,36 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
   }
   if (line == "dxmt9-draw-ffp-tci-normal-quad") {
     test.drawDxmt9FfpGeneratedNormalQuad = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-decl-defaults-quad") {
+    test.drawDxmt9FfpDeclDefaultsQuad = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-color-vertex-quad") {
+    test.drawDxmt9FfpColorVertexQuad = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-lit-directional-quad") {
+    test.drawDxmt9FfpLitDirectionalQuad = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-specular-directional-quad") {
+    test.drawDxmt9FfpSpecularDirectionalQuad = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-gouraud-triangle") {
+    test.drawDxmt9FfpGouraudTriangle = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-point-default") {
+    test.drawDxmt9FfpPointDefault = true;
     return;
   }
 
@@ -1751,6 +1974,16 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (auto texture = parseDxmt9CubeTexture(line)) {
+    test.textureSetups.push_back(std::move(*texture));
+    return;
+  }
+
+  if (auto texture = parseDxmt9VolumeTextureRaw(line)) {
+    test.textureSetups.push_back(std::move(*texture));
+    return;
+  }
+
   if (parseDxmt9TextureMip(test, line)) {
     return;
   }
@@ -1787,6 +2020,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
 
   if (auto lod = parseDxmt9TextureLod(line)) {
     test.textureLods.push_back(*lod);
+    return;
+  }
+
+  if (auto shaderConst = parseDxmt9ShaderFloatConst(line)) {
+    test.shaderFloatConsts.push_back(*shaderConst);
     return;
   }
 
@@ -2009,22 +2247,27 @@ ShaderRef makeShaderRef(const ShaderSection& section) {
 std::vector<std::shared_ptr<Texture>> createDxmt9Textures(Device& device, const CorpusTest& test) {
   std::vector<std::shared_ptr<Texture>> textures;
   for (const auto& setup : test.textureSetups) {
-    if (setup.levels.empty() || setup.levels[0].width == 0 || setup.levels[0].height == 0) {
+    const bool isCube = setup.type == TextureType::Cube;
+    if (!isCube && setup.levels.empty()) {
+      fail("dxmt9 texture requires level 0");
+    }
+    const TextureLevelSetup& base = isCube ? setup.cubeFaces[0] : setup.levels[0];
+    if (base.width == 0 || base.height == 0) {
       fail("dxmt9 texture requires level 0");
     }
     if (setup.id >= textures.size()) {
       textures.resize(static_cast<size_t>(setup.id) + 1u);
     }
 
-    const auto& base = setup.levels[0];
-    auto texture =
-        device.createTexture({base.width, base.height, 1, static_cast<u32>(setup.levels.size()), setup.format,
-                              TextureType::TwoD, Pool::Managed, UsageTexture});
+    const u32 levelCount = isCube ? 1u : static_cast<u32>(setup.levels.size());
+    auto texture = device.createTexture({base.width, base.height, setup.depth, levelCount,
+                                         setup.format, setup.type, Pool::Managed,
+                                         setup.usage});
     if (!texture) {
       fail("failed to create dxmt9 texture");
     }
 
-    for (u32 levelIndex = 0; levelIndex < setup.levels.size(); ++levelIndex) {
+    for (u32 levelIndex = 0; !isCube && levelIndex < levelCount; ++levelIndex) {
       const auto& level = setup.levels[levelIndex];
       if (level.width == 0 || level.height == 0) {
         fail("dxmt9 texture mip level missing");
@@ -2045,6 +2288,27 @@ std::vector<std::shared_ptr<Texture>> createDxmt9Textures(Device& device, const 
       auto* bytes = static_cast<u8*>(upload.data);
       writeDxmt9TextureLevel(bytes, upload.pitch, setup.format, level);
       texture->unlockRect(levelIndex);
+    }
+    if (isCube) {
+      for (u32 face = 0; face < setup.cubeFaces.size(); ++face) {
+        if (!setup.hasCubeFace[face]) {
+          fail("dxmt9 cube texture missing face");
+        }
+        const auto& level = setup.cubeFaces[face];
+        if (level.width != base.width || level.height != base.height) {
+          fail("dxmt9 cube texture face dimensions must match");
+        }
+        auto upload = texture->lockRect(face * levelCount, nullptr, UsageDiscard);
+        if (!upload.data) {
+          fail("failed to lock dxmt9 cube texture");
+        }
+        if (upload.pitch < formatRowPitch(setup.format, level.width)) {
+          fail("dxmt9 cube texture upload pitch is too small");
+        }
+        auto* bytes = static_cast<u8*>(upload.data);
+        writeDxmt9TextureLevel(bytes, upload.pitch, setup.format, level);
+        texture->unlockRect(face * levelCount);
+      }
     }
     textures[setup.id] = std::move(texture);
   }
@@ -2129,6 +2393,22 @@ void applyDxmt9TextureLods(const CorpusTest& test,
       fail("dxmt9-texture-lod references an unknown texture");
     }
     textures[lod.textureId]->setLod(lod.lod);
+  }
+}
+
+void applyDxmt9ShaderFloatConsts(Device& device, const CorpusTest& test) {
+  for (const auto& setup : test.shaderFloatConsts) {
+    if (setup.kind == ShaderSection::Kind::Vertex) {
+      if (setup.index >= device.mutableState().vsConst.float4.size()) {
+        fail("dxmt9-vs-const-f index out of range");
+      }
+      device.mutableState().vsConst.float4[setup.index] = setup.value;
+    } else {
+      if (setup.index >= device.mutableState().psConst.float4.size()) {
+        fail("dxmt9-ps-const-f index out of range");
+      }
+      device.mutableState().psConst.float4[setup.index] = setup.value;
+    }
   }
 }
 
@@ -2222,6 +2502,31 @@ void drawDxmt9TexturedQuadTex2(Device& device, u32 width, u32 height) {
   }
 }
 
+void drawDxmt9TexturedQuadTex3(Device& device, u32 width, u32 height,
+                               const TexturedQuadTex3Draw& draw) {
+  constexpr u32 kFvfTexcoord0Size3 = 0x00010000u;
+  if (device.setFVF(kFvfXyzrhw | kFvfTex1 | kFvfTexcoord0Size3) != D3D_OK) {
+    fail("dxmt9 textured quad TEX3 FVF setup failed");
+  }
+
+  const float widthf = static_cast<float>(width);
+  const float heightf = static_cast<float>(height);
+  const std::array<ScreenSpaceTexturedVertexTex3, 6> quad{
+      ScreenSpaceTexturedVertexTex3{0.0f, 0.0f, 0.0f, 1.0f, draw.u, draw.v, draw.w},
+      ScreenSpaceTexturedVertexTex3{widthf, 0.0f, 0.0f, 1.0f, draw.u, draw.v, draw.w},
+      ScreenSpaceTexturedVertexTex3{0.0f, heightf, 0.0f, 1.0f, draw.u, draw.v, draw.w},
+      ScreenSpaceTexturedVertexTex3{widthf, 0.0f, 0.0f, 1.0f, draw.u, draw.v, draw.w},
+      ScreenSpaceTexturedVertexTex3{widthf, heightf, 0.0f, 1.0f, draw.u, draw.v, draw.w},
+      ScreenSpaceTexturedVertexTex3{0.0f, heightf, 0.0f, 1.0f, draw.u, draw.v, draw.w},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceTexturedVertexTex3)) != D3D_OK) {
+    fail("dxmt9 textured quad TEX3 draw failed");
+  }
+}
+
 void drawDxmt9TexturedQuadXyz(Device& device, u32 width, u32 height) {
   (void)width;
   (void)height;
@@ -2263,6 +2568,170 @@ void drawDxmt9FfpGeneratedNormalQuad(Device& device, u32 width, u32 height) {
   if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
                              sizeof(GeneratedNormalVertex)) != D3D_OK) {
     fail("dxmt9 generated-normal quad draw failed");
+  }
+}
+
+void setupDirectionalLight(Device& device, const Material& material) {
+  Light light{};
+  light.type = LightType::Directional;
+  light.diffuse = {1.0f, 1.0f, 1.0f, 1.0f};
+  light.specular = {1.0f, 1.0f, 1.0f, 1.0f};
+  light.ambient = {0.0f, 0.0f, 0.0f, 1.0f};
+  light.direction = {0.0f, 0.0f, -1.0f};
+  if (device.setMaterial(material) != D3D_OK ||
+      device.setLight(0, light) != D3D_OK ||
+      device.lightEnable(0, true) != D3D_OK ||
+      device.setRenderState(RS_LIGHTING, 1) != D3D_OK) {
+    fail("dxmt9 FFP directional light setup failed");
+  }
+}
+
+void drawDxmt9FfpDeclDefaultsQuad(Device& device, u32 width, u32 height) {
+  if (device.setFVF(kFvfXyzrhw) != D3D_OK) {
+    fail("dxmt9 FFP decl-default FVF setup failed");
+  }
+
+  const float w = static_cast<float>(width);
+  const float h = static_cast<float>(height);
+  const std::array<ScreenSpaceVertex, 6> quad{
+      ScreenSpaceVertex{0.0f, 0.0f, 0.0f, 1.0f},
+      ScreenSpaceVertex{w, 0.0f, 0.0f, 1.0f},
+      ScreenSpaceVertex{0.0f, h, 0.0f, 1.0f},
+      ScreenSpaceVertex{w, 0.0f, 0.0f, 1.0f},
+      ScreenSpaceVertex{w, h, 0.0f, 1.0f},
+      ScreenSpaceVertex{0.0f, h, 0.0f, 1.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceVertex)) != D3D_OK) {
+    fail("dxmt9 FFP decl-default quad draw failed");
+  }
+}
+
+void drawDxmt9FfpColorVertexQuad(Device& device, u32 width, u32 height) {
+  (void)width;
+  (void)height;
+  if (device.setFVF(kFvfXyz | kFvfNormal | kFvfDiffuse) != D3D_OK) {
+    fail("dxmt9 FFP color-vertex FVF setup failed");
+  }
+  Material material{};
+  material.diffuse = {0.05f, 0.05f, 0.05f, 1.0f};
+  setupDirectionalLight(device, material);
+  if (device.setRenderState(RS_DIFFUSE_MATERIAL_SOURCE, 1) != D3D_OK) {
+    fail("dxmt9 FFP color-vertex material source setup failed");
+  }
+
+  constexpr u32 kGreen = 0xff00ff00u;
+  const std::array<LitColorVertex, 6> quad{
+      LitColorVertex{-1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+      LitColorVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+      LitColorVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+      LitColorVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+      LitColorVertex{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+      LitColorVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kGreen},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(LitColorVertex)) != D3D_OK) {
+    fail("dxmt9 FFP color-vertex quad draw failed");
+  }
+}
+
+void drawDxmt9FfpLitDirectionalQuad(Device& device, u32 width, u32 height) {
+  (void)width;
+  (void)height;
+  if (device.setFVF(kFvfXyz | kFvfNormal) != D3D_OK) {
+    fail("dxmt9 FFP lit FVF setup failed");
+  }
+  Material material{};
+  material.diffuse = {1.0f, 0.0f, 0.0f, 1.0f};
+  setupDirectionalLight(device, material);
+  if (device.setRenderState(RS_DIFFUSE_MATERIAL_SOURCE, 0) != D3D_OK) {
+    fail("dxmt9 FFP lit material source setup failed");
+  }
+
+  const std::array<GeneratedNormalVertex, 6> quad{
+      GeneratedNormalVertex{-1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(GeneratedNormalVertex)) != D3D_OK) {
+    fail("dxmt9 FFP lit directional quad draw failed");
+  }
+}
+
+void drawDxmt9FfpSpecularDirectionalQuad(Device& device, u32 width, u32 height) {
+  (void)width;
+  (void)height;
+  if (device.setFVF(kFvfXyz | kFvfNormal) != D3D_OK) {
+    fail("dxmt9 FFP specular FVF setup failed");
+  }
+  Material material{};
+  material.diffuse = {0.0f, 0.0f, 0.0f, 1.0f};
+  material.specular = {0.0f, 0.0f, 1.0f, 1.0f};
+  material.power = 1.0f;
+  setupDirectionalLight(device, material);
+  if (device.setRenderState(RS_DIFFUSE_MATERIAL_SOURCE, 0) != D3D_OK ||
+      device.setRenderState(RS_SPECULAR_MATERIAL_SOURCE, 0) != D3D_OK) {
+    fail("dxmt9 FFP specular material source setup failed");
+  }
+  if (device.setRenderState(RS_SPECULAR_ENABLE, 1) != D3D_OK) {
+    fail("dxmt9 FFP specular render-state setup failed");
+  }
+
+  const std::array<GeneratedNormalVertex, 6> quad{
+      GeneratedNormalVertex{-1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(GeneratedNormalVertex)) != D3D_OK) {
+    fail("dxmt9 FFP specular directional quad draw failed");
+  }
+}
+
+void drawDxmt9FfpGouraudTriangle(Device& device) {
+  if (device.setFVF(kFvfXyzrhw | kFvfDiffuse) != D3D_OK) {
+    fail("dxmt9 FFP gouraud FVF setup failed");
+  }
+  const std::array<ScreenSpaceColorVertex, 3> triangle{
+      ScreenSpaceColorVertex{0.0f, 0.0f, 0.0f, 1.0f, 0xffff0000u},
+      ScreenSpaceColorVertex{64.0f, 0.0f, 0.0f, 1.0f, 0xff00ff00u},
+      ScreenSpaceColorVertex{0.0f, 64.0f, 0.0f, 1.0f, 0xff0000ffu},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(triangle.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 1,
+                             std::span<const u8>(bytes, sizeof(triangle)),
+                             sizeof(ScreenSpaceColorVertex)) != D3D_OK) {
+    fail("dxmt9 FFP gouraud triangle draw failed");
+  }
+}
+
+void drawDxmt9FfpPointDefault(Device& device) {
+  if (device.setFVF(kFvfXyzrhw | kFvfDiffuse) != D3D_OK) {
+    fail("dxmt9 FFP point FVF setup failed");
+  }
+  const std::array<ScreenSpaceColorVertex, 1> point{
+      ScreenSpaceColorVertex{32.0f, 32.0f, 0.0f, 1.0f, 0xff00ffffu},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(point.data());
+  if (device.drawPrimitiveUP(PrimitiveType::PointList, 1,
+                             std::span<const u8>(bytes, sizeof(point)),
+                             sizeof(ScreenSpaceColorVertex)) != D3D_OK) {
+    fail("dxmt9 FFP default point draw failed");
   }
 }
 
@@ -2531,6 +3000,52 @@ void drawDxmt9VsSkinnedTriangle(Device& device) {
   }
 }
 
+void drawDxmt9VsFloat16ColorQuads(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat3, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 12, kDeclTypeFloat16_4, 0, kDeclUsageColor, 0},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 VS float16 color declaration setup failed");
+  }
+
+  constexpr u16 kHalfOne = 0x3c00u;
+  const std::array<Float16ColorVertex, 24> quads{
+      Float16ColorVertex{-1.0f, 1.0f, 0.0f, 0, kHalfOne, 0, kHalfOne},
+      Float16ColorVertex{0.0f, 1.0f, 0.0f, 0, kHalfOne, 0, kHalfOne},
+      Float16ColorVertex{-1.0f, 0.0f, 0.0f, 0, kHalfOne, 0, kHalfOne},
+      Float16ColorVertex{0.0f, 1.0f, 0.0f, 0, kHalfOne, 0, kHalfOne},
+      Float16ColorVertex{0.0f, 0.0f, 0.0f, 0, kHalfOne, 0, kHalfOne},
+      Float16ColorVertex{-1.0f, 0.0f, 0.0f, 0, kHalfOne, 0, kHalfOne},
+
+      Float16ColorVertex{0.0f, 1.0f, 0.0f, kHalfOne, 0, 0, kHalfOne},
+      Float16ColorVertex{1.0f, 1.0f, 0.0f, kHalfOne, 0, 0, kHalfOne},
+      Float16ColorVertex{0.0f, 0.0f, 0.0f, kHalfOne, 0, 0, kHalfOne},
+      Float16ColorVertex{1.0f, 1.0f, 0.0f, kHalfOne, 0, 0, kHalfOne},
+      Float16ColorVertex{1.0f, 0.0f, 0.0f, kHalfOne, 0, 0, kHalfOne},
+      Float16ColorVertex{0.0f, 0.0f, 0.0f, kHalfOne, 0, 0, kHalfOne},
+
+      Float16ColorVertex{-1.0f, 0.0f, 0.0f, 0, 0, 0, kHalfOne},
+      Float16ColorVertex{0.0f, 0.0f, 0.0f, 0, 0, 0, kHalfOne},
+      Float16ColorVertex{-1.0f, -1.0f, 0.0f, 0, 0, 0, kHalfOne},
+      Float16ColorVertex{0.0f, 0.0f, 0.0f, 0, 0, 0, kHalfOne},
+      Float16ColorVertex{0.0f, -1.0f, 0.0f, 0, 0, 0, kHalfOne},
+      Float16ColorVertex{-1.0f, -1.0f, 0.0f, 0, 0, 0, kHalfOne},
+
+      Float16ColorVertex{0.0f, 0.0f, 0.0f, 0, 0, kHalfOne, kHalfOne},
+      Float16ColorVertex{1.0f, 0.0f, 0.0f, 0, 0, kHalfOne, kHalfOne},
+      Float16ColorVertex{0.0f, -1.0f, 0.0f, 0, 0, kHalfOne, kHalfOne},
+      Float16ColorVertex{1.0f, 0.0f, 0.0f, 0, 0, kHalfOne, kHalfOne},
+      Float16ColorVertex{1.0f, -1.0f, 0.0f, 0, 0, kHalfOne, kHalfOne},
+      Float16ColorVertex{0.0f, -1.0f, 0.0f, 0, 0, kHalfOne, kHalfOne},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quads.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 8, std::span<const u8>(bytes, sizeof(quads)),
+                             sizeof(Float16ColorVertex)) != D3D_OK) {
+    fail("dxmt9 VS float16 color quads draw failed");
+  }
+}
+
 Matrix4x4 makeIdentityMatrix() {
   Matrix4x4 matrix{};
   matrix.m = {1.0f, 0.0f, 0.0f, 0.0f,
@@ -2732,14 +3247,22 @@ void runCorpusFile(const std::string& path) {
   const bool needsRuntime = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
                             test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadRhwGradient ||
                             test.drawDxmt9TexturedQuadTex2 ||
+                            test.drawDxmt9TexturedQuadTex3.has_value() ||
                             test.drawDxmt9TexturedQuadOverscan ||
                             test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                             test.drawDxmt9VsColorTriangle ||
                             test.drawDxmt9VFaceFacingQuads ||
                             test.drawDxmt9VsMultistreamTexturedQuad ||
                             test.drawDxmt9VsSkinnedTriangle ||
+                            test.drawDxmt9VsFloat16ColorQuads ||
                             test.drawDxmt9FfpVertexBlendTriangle ||
                             test.drawDxmt9FfpGeneratedNormalQuad ||
+                            test.drawDxmt9FfpDeclDefaultsQuad ||
+                            test.drawDxmt9FfpColorVertexQuad ||
+                            test.drawDxmt9FfpLitDirectionalQuad ||
+                            test.drawDxmt9FfpSpecularDirectionalQuad ||
+                            test.drawDxmt9FfpGouraudTriangle ||
+                            test.drawDxmt9FfpPointDefault ||
                             test.drawDxmt9ODepthOverlap ||
                             test.drawDxmt9ZWriteDisableOverlap ||
                             !test.solidRectDraws.empty() ||
@@ -2849,6 +3372,7 @@ void runCorpusFile(const std::string& path) {
   applyDxmt9TextureMipGenerations(test, dxmt9Textures);
   applyDxmt9TextureLods(test, dxmt9Textures);
   applyDxmt9TextureBinds(*device, test, dxmt9Textures);
+  applyDxmt9ShaderFloatConsts(*device, test);
   for (const auto& clipPlane : test.clipPlaneSetups) {
     if (device->setClipPlane(clipPlane.index, clipPlane.plane) != D3D_OK) {
       fail("dxmt9 clip-plane setup failed");
@@ -2885,14 +3409,22 @@ void runCorpusFile(const std::string& path) {
                           !test.probes.empty() || test.drawQuad ||
                           test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadRhwGradient ||
                           test.drawDxmt9TexturedQuadTex2 ||
+                          test.drawDxmt9TexturedQuadTex3.has_value() ||
                           test.drawDxmt9TexturedQuadOverscan ||
                           test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                           test.drawDxmt9VsColorTriangle ||
-                          test.drawDxmt9VFaceFacingQuads ||
-                          test.drawDxmt9VsMultistreamTexturedQuad ||
-                          test.drawDxmt9VsSkinnedTriangle ||
-                          test.drawDxmt9FfpVertexBlendTriangle ||
+                            test.drawDxmt9VFaceFacingQuads ||
+                            test.drawDxmt9VsMultistreamTexturedQuad ||
+                            test.drawDxmt9VsSkinnedTriangle ||
+                            test.drawDxmt9VsFloat16ColorQuads ||
+                            test.drawDxmt9FfpVertexBlendTriangle ||
                           test.drawDxmt9FfpGeneratedNormalQuad ||
+                          test.drawDxmt9FfpDeclDefaultsQuad ||
+                          test.drawDxmt9FfpColorVertexQuad ||
+                          test.drawDxmt9FfpLitDirectionalQuad ||
+                          test.drawDxmt9FfpSpecularDirectionalQuad ||
+                          test.drawDxmt9FfpGouraudTriangle ||
+                          test.drawDxmt9FfpPointDefault ||
                           test.drawDxmt9ODepthOverlap ||
                           test.drawDxmt9ZWriteDisableOverlap ||
                           !test.solidRectDraws.empty() ||
@@ -2972,6 +3504,18 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9TexturedQuadTex2(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9TexturedQuadTex3) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9TexturedQuadTex3(*device, params.backBufferWidth,
+                              params.backBufferHeight,
+                              *test.drawDxmt9TexturedQuadTex3);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }
@@ -3057,6 +3601,16 @@ void runCorpusFile(const std::string& path) {
     }
   }
 
+  if (test.drawDxmt9VsFloat16ColorQuads) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9VsFloat16ColorQuads(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
   if (test.drawDxmt9FfpVertexBlendTriangle) {
     if (device->beginScene() != D3D_OK) {
       fail("beginScene failed");
@@ -3112,6 +3666,66 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9FfpGeneratedNormalQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpDeclDefaultsQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpDeclDefaultsQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpColorVertexQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpColorVertexQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpLitDirectionalQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpLitDirectionalQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpSpecularDirectionalQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpSpecularDirectionalQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpGouraudTriangle) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpGouraudTriangle(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpPointDefault) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpPointDefault(*device);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }
