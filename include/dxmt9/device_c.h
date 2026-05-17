@@ -187,7 +187,7 @@ typedef struct D9CSurfaceDesc {
     uint32_t pool;                /* D3DPOOL */
     uint32_t multiSampleType;     /* D3DMULTISAMPLE_TYPE */
     uint32_t multiSampleQuality;
-    uint32_t width, height;
+    uint32_t width, height, depth;
 } D9CSurfaceDesc;
 
 typedef struct D9CVertexElement {
@@ -199,7 +199,7 @@ typedef struct D9CVertexElement {
  * lanes so the packet layout is identical for 32-bit PE, WoW64, and 64-bit
  * unix-side consumers. */
 #define D9C_DRAW_PACKET_MAX_RENDER_STATES 64
-#define D9C_DRAW_PACKET_MAX_TEXTURES 16
+#define D9C_DRAW_PACKET_MAX_TEXTURES 20
 #define D9C_DRAW_PACKET_MAX_STREAMS 16
 #define D9C_DRAW_PACKET_MAX_RENDER_TARGETS 4
 /* Phase 12: per-draw delta caps for the per-stage / per-sampler scalar

@@ -340,6 +340,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_ex_shader_validation_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_unsupported_shaders"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-shader-validation"
+owner = "core/device"
+requirements = ["R-TEST-12.4", "R-TEST-12.15"]
+acceptance = ["D3D9Ex devices validate null, unsupported, and valid D3D9 shader bytecode with Wine-compatible HRESULTs and out-pointer behavior"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_texture_stage_states"
 source = "wine/dlls/d3d9/tests/device.c:test_texture_stage_states"
 source_kind = "behavioral-oracle"
@@ -510,6 +527,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_query_stateblock.c"
+function = "test_shader_constant_stateblock_cross_stage"
+source = "wine/dlls/d3d9/tests/device.c:test_shader_constant_apply"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.15", "R-TEST-12.19"]
+acceptance = ["stateblocks restore vertex and pixel shader float, integer, and boolean constants from non-zero registers without cross-stage leakage"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_query_stateblock.c"
 function = "test_vdecl_apply"
 source = "wine/dlls/d3d9/tests/stateblock.c:test_vdecl_apply"
 source_kind = "behavioral-oracle"
@@ -665,6 +699,57 @@ area = "resource-description"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["GetType returns the public D3DRESOURCETYPE matching each created resource wrapper"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_volume_resource_container_desc"
+source = "wine/dlls/d3d9/tests/device.c:test_volume_resource"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "volume-resources"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["volume levels expose descriptions and parent containers, but do not expose IDirect3DResource9 through QueryInterface"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_volume_block_lock_layout"
+source = "wine/dlls/d3d9/tests/device.c:test_volume_blocks"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "volume-resources"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["DXT scratch volume locks expose block-shaped row and slice pitch and reject block-misaligned lock boxes"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_vendor_format_public_api_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_surface_format_null,test_volume_blocks"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-policy"
+owner = "core/resources"
+requirements = ["R-TEST-12.8", "R-TEST-12.13"]
+acceptance = ["public CheckDeviceFormat policy for vendor FourCC formats reports support or not-available, and NULL render-target format behavior matches Wine when advertised"]
 status = "scaffolded"
 
 [[case]]

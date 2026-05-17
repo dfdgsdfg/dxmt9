@@ -317,9 +317,10 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
 // gate fails for any reason the pass falls back to Stage 1 — never
 // mid-pass switches (R-BACK-12.22 sentence 2).
 //
-// Texture-bound draws currently stay on Stage 1. CPU-side argbuf descriptor
-// value tests are not enough proof for the live Metal texture/sampler lane;
-// promote this only with fault-free shader-corpus readback evidence.
+// Texture-free and texture-bound draws use the same Stage 2 path when the
+// capability gate holds. CPU-side argbuf descriptor and encoder-recorder tests
+// pin the typed texture/sampler ids; shader-corpus texture probes provide the
+// live sampling evidence on capable devices.
 enum class ArgbufHybridDecision : std::uint8_t { Stage1, Stage2 };
 
 ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,

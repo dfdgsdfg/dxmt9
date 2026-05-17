@@ -529,11 +529,38 @@ void testCubeAndVolumeCreationDescriptors() {
   checkEq(volumeLevel1.format, kD3DFmtA8R8G8B8, "volume public format");
   checkEq(volumeLevel1.width, 4u, "volume level1 width");
   checkEq(volumeLevel1.height, 2u, "volume level1 height");
-  checkEq(volume->obj->levelBytes(0).size(), size_t{8u * 4u * 4u},
-          "volume CPU shadow currently stores one slice per level");
-  // D9CSurfaceDesc has no depth field and the texture upload ABI carries
-  // width/height/pitch but no slice pitch/depth. Multi-slice volume
-  // upload/sampling stays blocked until that boundary is widened.
+  checkEq(volume->obj->levelBytes(0).size(), size_t{8u * 4u * 3u * 4u},
+          "volume CPU shadow stores every slice in level0");
+  checkEq(volume->obj->levelBytes(1).size(), size_t{4u * 2u * 1u * 4u},
+          "volume CPU shadow mip depth shrinks with level");
+
+  const auto uploadBefore = fixture.backend->textureUploads.size();
+  D9CLockedRect lock{};
+  checkEq(dxmt9c_texture_lock_rect(volume.get(), 0, &lock, nullptr, 0),
+          D3D_OK, "volume texture lock succeeds");
+  check(lock.bits != nullptr, "volume texture lock bits");
+  checkEq(lock.pitch, 32, "volume row pitch");
+  auto* bytes = static_cast<u8*>(lock.bits);
+  const size_t slicePitch = size_t{8u * 4u * 4u};
+  bytes[0] = 0x11u;
+  bytes[slicePitch + 0] = 0x22u;
+  bytes[slicePitch * 2u + 0] = 0x33u;
+  checkEq(dxmt9c_texture_unlock_rect(volume.get(), 0), D3D_OK,
+          "volume texture unlock succeeds");
+  checkEq(fixture.backend->textureUploads.size(), uploadBefore + size_t{1},
+          "volume unlock uploads one multi-slice subresource");
+  const auto& upload = fixture.backend->textureUploads.back();
+  checkEq(upload.width, 8u, "volume upload width");
+  checkEq(upload.height, 4u, "volume upload height");
+  checkEq(upload.depth, 3u, "volume upload depth");
+  checkEq(upload.pitch, 32u, "volume upload row pitch");
+  checkEq(upload.slicePitch, 128u, "volume upload slice pitch");
+  checkEq(upload.bytes.size(), size_t{8u * 4u * 3u * 4u},
+          "volume upload byte count");
+  checkEq(upload.bytes[0], 0x11u, "volume upload slice0 byte");
+  checkEq(upload.bytes[slicePitch], 0x22u, "volume upload slice1 byte");
+  checkEq(upload.bytes[slicePitch * 2u], 0x33u,
+          "volume upload slice2 byte");
 }
 
 void testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch() {

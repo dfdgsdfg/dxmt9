@@ -164,6 +164,32 @@ class CaptureMetricTests(unittest.TestCase):
             "external_capture",
         )
 
+    def test_provider_locator_failure_classifies_missing_unixlib_by_name(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        log = Path(temp_dir.name) / "dxmt9.log"
+        log.write_text(
+            "\n".join(
+                [
+                    "[winemetal-bridge] debug: builtin unixlib lookup: info=1000 status=0xc0000135 handle=0x0",
+                    "00c4:fixme:virtual:NtQueryVirtualMemory (0xffffffffffffffff,0x11f330,info_class=1002,0x11f340,16,0x0) Unknown information class",
+                    "[winemetal-bridge] debug: provider candidate[env]: info=1002 name=\\??\\Z:\\tmp\\winemetal.so status=0xc0000003 module=0x0 handle=0x0",
+                    "[winemetal-abi] error: abi-hash unix-call failed status=0xc0000003; refusing to attach winemetal.dll",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        failures = run_experiment.extract_wine_provider_locator_failures(log)
+
+        self.assertEqual(
+            [failure["category"] for failure in failures],
+            [
+                "memory_wine_load_unixlib_by_name_unsupported",
+                "builtin_unixlib_not_found",
+            ],
+        )
+
     def test_single_frame_window_capture_is_not_reported_as_dropped(self):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)

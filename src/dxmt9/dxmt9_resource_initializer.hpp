@@ -34,7 +34,9 @@ class Initializer {
                            std::uint32_t level,
                            std::uint32_t width,
                            std::uint32_t height,
+                           std::uint32_t depth,
                            std::uint32_t pitch,
+                           std::uint32_t slicePitch,
                            std::span<const std::uint8_t> bytes);
 
   // Result of flushing any pending deferred uploads.

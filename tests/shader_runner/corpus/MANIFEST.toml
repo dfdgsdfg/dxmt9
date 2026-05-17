@@ -1763,6 +1763,30 @@ oracle = "Wine d3d9 visual.c test_texcoordindex behavior, reduced to camera-spac
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "texture/dxmt9_ffp_tci_reflection_nonidentity_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_generated_texcoords behavior, reduced to non-identity view reflection coordinates"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_ffp_tci_spheremap_nonidentity_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_generated_texcoords behavior, reduced to non-identity view spheremap coordinates"
+oracle-date = "2026-05-17"
+
+[[test]]
 file = "texture/dxmt9_float_a16b16g16r16f_readback.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -2012,6 +2036,30 @@ license_scope = "project-mit"
 models = ["ps_3_0"]
 opcodes = ["DCL", "MOV", "TEXLDL"]
 oracle = "Wine d3d9 visual.c volume_v16u16_test behavior, reduced to true texture3d/V16U16 binding with depth=1 signed sampling"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_volume_v16u16_depth2_slice0_readback.shader_test"
+status = "failing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "MOV", "TEXLDL"]
+oracle = "Wine d3d9 visual.c volume_v16u16_test behavior, reduced to true texture3d/V16U16 depth=2 slice0 sampling"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_volume_v16u16_depth2_slice1_readback.shader_test"
+status = "failing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "MOV", "TEXLDL"]
+oracle = "Wine d3d9 visual.c volume_v16u16_test behavior, reduced to true texture3d/V16U16 depth=2 slice1 sampling"
 oracle-date = "2026-05-17"
 
 [[test]]

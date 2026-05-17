@@ -422,6 +422,9 @@ extern "C" int32_t dxmt9c_texture_get_level_desc(D9CTexture* t, uint32_t level,
   out->multiSampleQuality = 0;
   out->width = std::max(1u, desc.width >> shift);
   out->height = std::max(1u, desc.height >> shift);
+  out->depth = desc.type == dxmt9::core::TextureType::Volume
+                   ? std::max(1u, desc.depth >> shift)
+                   : 1u;
   dxmt9DebugLog("texture_get_level_desc texture=%p level=%u fmt=%u(%s) usage=0x%x pool=%u size=%ux%u",
                 static_cast<void*>(t), level, out->format,
                 dxmt9::core::formatName(desc.format).c_str(), out->usage, out->pool, out->width,
@@ -686,6 +689,7 @@ extern "C" int32_t dxmt9c_surface_get_desc(D9CSurface* s, D9CSurfaceDesc* out) {
       desc.multiSampleType == dxmt9::core::MultiSampleType::None ? 0u : 1u;
   out->width = desc.width;
   out->height = desc.height;
+  out->depth = 1;
   return dxmt9::core::D3D_OK;
 }
 

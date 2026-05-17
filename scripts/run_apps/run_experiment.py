@@ -977,6 +977,49 @@ def scan_log_for_failures(log_path: Path) -> list[str]:
     return [marker for marker in markers if marker in content]
 
 
+def extract_wine_provider_locator_failures(log_path: Path) -> list[dict[str, Any]]:
+    if not log_path.exists():
+        return []
+    content = log_path.read_text(errors="replace")
+    failures: list[dict[str, Any]] = []
+    if (
+        "info_class=1002" in content
+        or "info=1002" in content
+    ) and (
+        "Unknown information class" in content
+        or "status=0xc0000003" in content
+    ):
+        failures.append({
+            "type": "wine_provider_locator",
+            "category": "memory_wine_load_unixlib_by_name_unsupported",
+            "message": (
+                "Wine rejected MemoryWineLoadUnixLibByName (info class 1002); "
+                "app-local winemetal.so loading is unsupported by this runtime."
+            ),
+        })
+    if "builtin unixlib lookup" in content and "status=0xc0000135" in content:
+        failures.append({
+            "type": "wine_provider_locator",
+            "category": "builtin_unixlib_not_found",
+            "message": (
+                "Wine builtin unixlib lookup could not attach winemetal.so "
+                "(STATUS_DLL_NOT_FOUND). Check builtin PE staging, Wine/winebuild "
+                "compatibility, and unix provider architecture."
+            ),
+        })
+    if (
+        "abi-hash unix-call failed status=0xc0000003" in content
+        and not any(failure["category"] == "memory_wine_load_unixlib_by_name_unsupported"
+                    for failure in failures)
+    ):
+        failures.append({
+            "type": "wine_provider_locator",
+            "category": "provider_unix_call_invalid_info_class",
+            "message": "Provider ABI handshake failed before attach with STATUS_INVALID_INFO_CLASS.",
+        })
+    return failures
+
+
 def stage_dxmt9(
     prefix: Path,
     wine_root: Path | None,
@@ -1608,6 +1651,9 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         log_markers = scan_log_for_failures(log_path)
         if log_markers:
             result["failures"].append({"type": "log_markers", "markers": log_markers})
+        provider_failures = extract_wine_provider_locator_failures(log_path)
+        if provider_failures:
+            result["failures"].extend(provider_failures)
 
         if process is not None and process.returncode != 0 and not (timed_out and app.allow_timeout):
             result["failures"].append({"type": "process_exit", "returncode": process.returncode})
@@ -1816,7 +1862,15 @@ def main() -> int:
             )
             return 2
         run_command(["bash", str(build_script_path)], cwd=REPO_ROOT)
-    return run_experiment(app, args)
+    try:
+        return run_experiment(app, args)
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"[runtime] command failed with exit code {exc.returncode}: "
+            f"{' '.join(str(part) for part in exc.cmd)}",
+            file=sys.stderr,
+        )
+        return int(exc.returncode or 1)
 
 
 if __name__ == "__main__":

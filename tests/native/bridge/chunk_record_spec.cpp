@@ -188,96 +188,96 @@ void testDrawPacketLayouts() {
   checkSizeAlign<D9CDrawPacketTransform>("D9CDrawPacketTransform", 72u, 4u);
   checkSizeAlign<D9CDrawPacketStreamSource>("D9CDrawPacketStreamSource", 16u, 4u);
 
-  checkSizeAlign<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket", 4776u, 4u);
+  checkSizeAlign<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket", 4808u, 4u);
   checkEq(offsetof(D9CDrawPrimitivePacket, renderStateCount), std::size_t{0},
           "draw packet render-state count offset");
   checkEq(offsetof(D9CDrawPrimitivePacket, textureMask), std::size_t{516},
           "draw packet texture mask offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, streamSourceMask), std::size_t{648},
+  checkEq(offsetof(D9CDrawPrimitivePacket, streamSourceMask), std::size_t{680},
           "draw packet stream-source mask offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, fvfValid), std::size_t{908},
+  checkEq(offsetof(D9CDrawPrimitivePacket, fvfValid), std::size_t{940},
           "draw packet FVF valid offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, vsValid), std::size_t{916},
+  checkEq(offsetof(D9CDrawPrimitivePacket, vsValid), std::size_t{948},
           "draw packet VS valid offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, psValid), std::size_t{928},
+  checkEq(offsetof(D9CDrawPrimitivePacket, psValid), std::size_t{960},
           "draw packet PS valid offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, vdeclValid), std::size_t{940},
+  checkEq(offsetof(D9CDrawPrimitivePacket, vdeclValid), std::size_t{972},
           "draw packet vertex declaration valid offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, rtMask), std::size_t{952},
+  checkEq(offsetof(D9CDrawPrimitivePacket, rtMask), std::size_t{984},
           "draw packet render-target mask offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, dsValid), std::size_t{988},
+  checkEq(offsetof(D9CDrawPrimitivePacket, dsValid), std::size_t{1020},
           "draw packet depth-stencil valid offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, viewportValid), std::size_t{1000},
+  checkEq(offsetof(D9CDrawPrimitivePacket, viewportValid), std::size_t{1032},
           "draw packet viewport valid offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, scissorValid), std::size_t{1028},
+  checkEq(offsetof(D9CDrawPrimitivePacket, scissorValid), std::size_t{1060},
           "draw packet scissor valid offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, tssCount), std::size_t{1048},
+  checkEq(offsetof(D9CDrawPrimitivePacket, tssCount), std::size_t{1080},
           "draw packet texture-stage-state count offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, samplerStateCount), std::size_t{1820},
+  checkEq(offsetof(D9CDrawPrimitivePacket, samplerStateCount), std::size_t{1852},
           "draw packet sampler-state count offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, materialValid), std::size_t{2592},
+  checkEq(offsetof(D9CDrawPrimitivePacket, materialValid), std::size_t{2624},
           "draw packet material valid offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, clipPlaneMask), std::size_t{2664},
+  checkEq(offsetof(D9CDrawPrimitivePacket, clipPlaneMask), std::size_t{2696},
           "draw packet clip-plane mask offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, transformCount), std::size_t{2764},
+  checkEq(offsetof(D9CDrawPrimitivePacket, transformCount), std::size_t{2796},
           "draw packet transform count offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, lightSlotMask), std::size_t{3920},
+  checkEq(offsetof(D9CDrawPrimitivePacket, lightSlotMask), std::size_t{3952},
           "draw packet light slot mask offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, primitiveType), std::size_t{4764},
+  checkEq(offsetof(D9CDrawPrimitivePacket, primitiveType), std::size_t{4796},
           "draw packet primitive type offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, startVertex), std::size_t{4768},
+  checkEq(offsetof(D9CDrawPrimitivePacket, startVertex), std::size_t{4800},
           "draw packet start vertex offset");
-  checkEq(offsetof(D9CDrawPrimitivePacket, primitiveCount), std::size_t{4772},
+  checkEq(offsetof(D9CDrawPrimitivePacket, primitiveCount), std::size_t{4804},
           "draw packet primitive count offset");
 
   checkSizeAlign<D9CDrawIndexedPrimitivePacket>(
-      "D9CDrawIndexedPrimitivePacket", 4808u, 4u);
+      "D9CDrawIndexedPrimitivePacket", 4840u, 4u);
   checkEq(offsetof(D9CDrawIndexedPrimitivePacket, state), std::size_t{0},
           "indexed draw state offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, baseVertex), std::size_t{4776},
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, baseVertex), std::size_t{4808},
           "indexed draw base vertex offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, primitiveCount), std::size_t{4792},
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, primitiveCount), std::size_t{4824},
           "indexed draw primitive count offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibValid), std::size_t{4796},
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibValid), std::size_t{4828},
           "indexed draw IB valid offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibHandle), std::size_t{4800},
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibHandle), std::size_t{4832},
           "indexed draw IB handle offset");
 
-  checkSizeAlign<D9CDrawPrimitiveUPPacket>("D9CDrawPrimitiveUPPacket", 4792u, 4u);
-  checkEq(offsetof(D9CDrawPrimitiveUPPacket, primitiveCount), std::size_t{4776},
+  checkSizeAlign<D9CDrawPrimitiveUPPacket>("D9CDrawPrimitiveUPPacket", 4824u, 4u);
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, primitiveCount), std::size_t{4808},
           "draw primitive UP count offset");
-  checkEq(offsetof(D9CDrawPrimitiveUPPacket, stride), std::size_t{4780},
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, stride), std::size_t{4812},
           "draw primitive UP stride offset");
-  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataOffset), std::size_t{4784},
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataOffset), std::size_t{4816},
           "draw primitive UP vertex data offset field");
-  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataSize), std::size_t{4788},
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataSize), std::size_t{4820},
           "draw primitive UP vertex data size field");
 
   checkSizeAlign<D9CDrawIndexedPrimitiveUPPacket>(
-      "D9CDrawIndexedPrimitiveUPPacket", 4812u, 4u);
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, minVertex), std::size_t{4776},
+      "D9CDrawIndexedPrimitiveUPPacket", 4844u, 4u);
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, minVertex), std::size_t{4808},
           "indexed UP min vertex offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, numVertices), std::size_t{4780},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, numVertices), std::size_t{4812},
           "indexed UP vertex count offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, primitiveCount), std::size_t{4784},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, primitiveCount), std::size_t{4816},
           "indexed UP primitive count offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexFormat), std::size_t{4788},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexFormat), std::size_t{4820},
           "indexed UP index format offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexDataOffset), std::size_t{4796},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexDataOffset), std::size_t{4828},
           "indexed UP index data offset field");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, vertexDataOffset), std::size_t{4804},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, vertexDataOffset), std::size_t{4836},
           "indexed UP vertex data offset field");
 }
 
 void testCommandRecordLayouts() {
   checkSizeAlign<D9CCommandRecordDrawPrimitive>(
-      "D9CCommandRecordDrawPrimitive", 4784u, 4u);
+      "D9CCommandRecordDrawPrimitive", 4816u, 4u);
   checkSizeAlign<D9CCommandRecordDrawIndexedPrimitive>(
-      "D9CCommandRecordDrawIndexedPrimitive", 4816u, 4u);
+      "D9CCommandRecordDrawIndexedPrimitive", 4848u, 4u);
   checkSizeAlign<D9CCommandRecordDrawPrimitiveUP>(
-      "D9CCommandRecordDrawPrimitiveUP", 4800u, 4u);
+      "D9CCommandRecordDrawPrimitiveUP", 4832u, 4u);
   checkSizeAlign<D9CCommandRecordDrawIndexedPrimitiveUP>(
-      "D9CCommandRecordDrawIndexedPrimitiveUP", 4820u, 4u);
+      "D9CCommandRecordDrawIndexedPrimitiveUP", 4852u, 4u);
   checkSizeAlign<D9CCommandRecordSetConst>("D9CCommandRecordSetConst", 16u, 4u);
   checkSizeAlign<D9CCommandRecordClear>("D9CCommandRecordClear", 32u, 4u);
   checkSizeAlign<D9CCommandRecordPresent>(
@@ -294,7 +294,7 @@ void testCommandRecordLayouts() {
       "D9CCommandRecordQueryIssue", 24u, alignof(std::uint64_t));
   checkSizeAlign<D9CCommandRecordReadback>(
       "D9CCommandRecordReadback", 24u, alignof(std::uint64_t));
-  checkSizeAlign<D9CCommandRecordApplyState>("D9CCommandRecordApplyState", 4784u, 4u);
+  checkSizeAlign<D9CCommandRecordApplyState>("D9CCommandRecordApplyState", 4816u, 4u);
   checkSizeAlign<D9CCommandChunk>("D9CCommandChunk", 32u, 4u);
   checkSizeAlign<D9CChunkHandleEntry>(
       "D9CChunkHandleEntry", 16u, alignof(std::uint64_t));

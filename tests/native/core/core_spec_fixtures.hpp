@@ -124,7 +124,9 @@ struct TextureUploadRecord {
   u32 level = 0;
   u32 width = 0;
   u32 height = 0;
+  u32 depth = 1;
   u32 pitch = 0;
+  u32 slicePitch = 0;
   std::vector<u8> bytes;
 };
 
@@ -498,9 +500,12 @@ struct RecordingBackend final : BackendDevice {
     unmappedBuffers.push_back(handle);
   }
 
-  void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height, u32 pitch,
+  void uploadTextureLevel(TextureHandle handle, u32 level, u32 width, u32 height,
+                          u32 depth, u32 pitch, u32 slicePitch,
                           std::span<const u8> bytes) override {
-    textureUploads.push_back({handle, level, width, height, pitch, std::vector<u8>(bytes.begin(), bytes.end())});
+    textureUploads.push_back({handle, level, width, height, depth, pitch,
+                              slicePitch,
+                              std::vector<u8>(bytes.begin(), bytes.end())});
   }
 
   void submitDrawRun(CanonicalDrawState state, const DrawUniformPayload& uniforms,

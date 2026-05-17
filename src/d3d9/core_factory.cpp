@@ -118,10 +118,13 @@ public:
       backend_->uploadBufferData(handle, bytes);
   }
   void uploadTextureLevel(TextureHandle handle, std::uint32_t level,
-                          std::uint32_t w, std::uint32_t h, std::uint32_t pitch,
+                          std::uint32_t w, std::uint32_t h,
+                          std::uint32_t depth, std::uint32_t pitch,
+                          std::uint32_t slicePitch,
                           std::span<const std::uint8_t> bytes) override {
     if (backend_)
-      backend_->uploadTextureLevel(handle, level, w, h, pitch, bytes);
+      backend_->uploadTextureLevel(handle, level, w, h, depth, pitch,
+                                   slicePitch, bytes);
   }
   void submitDrawRun(CanonicalDrawState state,
                      const DrawUniformPayload &uniforms,

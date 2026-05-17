@@ -670,6 +670,7 @@ void testResourceBindingsAndAttachments() {
   const auto indexBuffer = makeBuffer(0x4040, 2048, UsageIndexBuffer);
   const auto texture0 = makeTexture(0x5050, Format::A8R8G8B8);
   const auto texture7 = makeTexture(0x5757, Format::DXT1);
+  const auto vertexTexture0 = makeTexture(0x5810, Format::R32F);
   const auto texture15 = makeTexture(0x5f5f, Format::A16B16G16R16F);
 
   state.streamBuffers[0] = stream0;
@@ -688,9 +689,12 @@ void testResourceBindingsAndAttachments() {
 
   state.textures[0] = texture0;
   state.textures[kMaxTextureStages - 1] = texture7;
+  state.textures[kVertexTextureSampler0] = vertexTexture0;
   state.textures[kMaxTextures - 1] = texture15;
   state.textureStageStates[0][TSS_COLOR_OP] = static_cast<u32>(TextureOp::SelectArg2);
   state.textureStageStates[kMaxTextureStages - 1][TSS_TEXTURE_TYPE] = 3;
+  state.samplerStates[kVertexTextureSampler0][SAMP_MIN_FILTER] = 2;
+  state.samplerStates[kVertexTextureSampler0][SAMP_ADDRESS_U] = 3;
 
   const auto rt0 = makeSurface(0x6000, Format::A8R8G8B8, MultiSampleType::None, true, false);
   const auto rt3 = makeSurface(0x6003, Format::A16B16G16R16F, MultiSampleType::Four, true, false);
@@ -723,12 +727,20 @@ void testResourceBindingsAndAttachments() {
   checkEq(desc.textures[0].handle, texture0->handle(), "texture 0 handle copied");
   checkEq(desc.textures[kMaxTextureStages - 1].handle, texture7->handle(),
           "last fixed-function texture handle copied");
+  checkEq(desc.textures[kVertexTextureSampler0].handle, vertexTexture0->handle(),
+          "first vertex texture handle copied");
   checkEq(desc.textures[kMaxTextures - 1].handle, texture15->handle(), "extra sampler texture handle copied");
   checkEq(desc.textures[0].stageStates.at(TSS_COLOR_OP), static_cast<u32>(TextureOp::SelectArg2),
           "texture stage 0 states copied");
   checkEq(desc.textures[kMaxTextureStages - 1].stageStates.at(TSS_TEXTURE_TYPE), 3u,
           "last texture stage states copied");
+  check(desc.textures[kVertexTextureSampler0].stageStates.empty(),
+        "vertex texture sampler has no fixed-function texture-stage state");
   check(desc.textures[kMaxTextures - 1].stageStates.empty(), "non-stage texture states cleared");
+  checkEq(desc.samplers[kVertexTextureSampler0].states.at(SAMP_MIN_FILTER), 2u,
+          "first vertex sampler min filter copied");
+  checkEq(desc.samplers[kVertexTextureSampler0].states.at(SAMP_ADDRESS_U), 3u,
+          "first vertex sampler address mode copied");
 
   checkEq(desc.rts.color[0], state.renderTargets[0], "render target 0 attachment copied");
   checkEq(desc.rts.color[1], state.renderTargets[1], "texture-level render target attachment copied");
@@ -737,6 +749,19 @@ void testResourceBindingsAndAttachments() {
   checkEq(desc.rts.depthStencil, state.depthStencil, "depth-stencil attachment copied");
 
   const auto canonical = makeCanonicalDrawStateFromState(state, args);
+  checkEq(canonical.hot.textures[kVertexTextureSampler0], vertexTexture0->handle(),
+          "canonical hot state preserves first vertex texture handle");
+  check((canonical.hot.textureMask & (1u << kVertexTextureSampler0)) != 0,
+        "canonical hot state marks first vertex texture slot");
+  check((canonical.hot.key.textureMask & (1u << kVertexTextureSampler0)) != 0,
+        "canonical key marks first vertex texture slot");
+  checkEq(flatStateOr(canonical.hot.samplerStates[kVertexTextureSampler0], SAMP_ADDRESS_U, 0u),
+          3u, "canonical hot state stores first vertex sampler state");
+  check((canonical.hot.key.samplerStateMask & (1u << kVertexTextureSampler0)) != 0,
+        "canonical key marks first vertex sampler state");
+  checkEq(canonical.hot.samplerStates[kVertexTextureSampler0].hash,
+          canonical.hot.key.samplerStateHashes[kVertexTextureSampler0],
+          "first vertex sampler hash is part of the canonical key");
   checkEq(canonical.hot.indexBuffer, indexBuffer->handle(),
           "canonical hot state preserves index buffer handle");
   checkEq(canonical.hot.colorAttachments[0], state.renderTargets[0],

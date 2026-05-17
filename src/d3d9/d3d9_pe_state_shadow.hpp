@@ -13,7 +13,11 @@
 static constexpr std::uint32_t kPeRenderStateSlots = 256;
 static constexpr std::uint32_t kPeTextureStageSlots = 8;
 static constexpr std::uint32_t kPeTextureStageStateSlots = 64;
-static constexpr std::uint32_t kPeSamplerSlots = 16;
+static constexpr std::uint32_t kPeFragmentSamplerSlots = 16;
+static constexpr std::uint32_t kPeVertexTextureSamplerSlots = 4;
+static constexpr std::uint32_t kPeTextureSlots =
+    kPeFragmentSamplerSlots + kPeVertexTextureSamplerSlots;
+static constexpr std::uint32_t kPeSamplerSlots = kPeTextureSlots;
 static constexpr std::uint32_t kPeSamplerStateSlots = 64;
 static constexpr std::uint32_t kPeTransformTextureSlots = 8;
 static constexpr std::uint32_t kPeTransformWorldSlots = 256;
@@ -303,6 +307,23 @@ inline std::uint32_t textureStageSlot(DWORD stage) noexcept {
     return std::min<std::uint32_t>(stage, kPeTextureStageSlots - 1u);
 }
 
+inline bool vertexTextureSamplerSlot(DWORD sampler, std::uint32_t& slot) noexcept {
+    if (sampler < D3DVERTEXTEXTURESAMPLER0 || sampler > D3DVERTEXTEXTURESAMPLER3) {
+        return false;
+    }
+    slot = kPeFragmentSamplerSlots +
+        static_cast<std::uint32_t>(sampler - D3DVERTEXTEXTURESAMPLER0);
+    return true;
+}
+
+inline bool textureBindingSlot(DWORD stage, std::uint32_t& slot) noexcept {
+    if (stage < kPeFragmentSamplerSlots) {
+        slot = static_cast<std::uint32_t>(stage);
+        return true;
+    }
+    return vertexTextureSamplerSlot(stage, slot);
+}
+
 inline std::uint32_t textureStageStateSlot(
     D3DTEXTURESTAGESTATETYPE type) noexcept {
     return std::min<std::uint32_t>(
@@ -310,11 +331,11 @@ inline std::uint32_t textureStageStateSlot(
 }
 
 inline bool samplerSlot(DWORD sampler, std::uint32_t& slot) noexcept {
-    if (sampler >= kPeSamplerSlots) {
-        return false;
+    if (sampler < kPeFragmentSamplerSlots) {
+        slot = static_cast<std::uint32_t>(sampler);
+        return true;
     }
-    slot = sampler;
-    return true;
+    return vertexTextureSamplerSlot(sampler, slot);
 }
 
 inline bool samplerStateSlot(D3DSAMPLERSTATETYPE type,

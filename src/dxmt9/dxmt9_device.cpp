@@ -190,9 +190,12 @@ class DeviceImpl final : public Device {
     return queue_.mapBuffer(handle, flags);
   }
   void uploadTextureLevel(core::TextureHandle handle, std::uint32_t level,
-                           std::uint32_t width, std::uint32_t height, std::uint32_t pitch,
+                           std::uint32_t width, std::uint32_t height,
+                           std::uint32_t depth, std::uint32_t pitch,
+                           std::uint32_t slicePitch,
                            std::span<const std::uint8_t> bytes) override {
-    queue_.uploadTextureLevel(handle, level, width, height, pitch, bytes);
+    queue_.uploadTextureLevel(handle, level, width, height, depth, pitch,
+                              slicePitch, bytes);
   }
   core::HResult generateTextureMipSublevels(core::TextureHandle handle) override {
     return queue_.generateTextureMipSublevels(handle);

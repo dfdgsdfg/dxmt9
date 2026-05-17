@@ -1012,6 +1012,78 @@ done_d3d9:
 }
 
 /*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_unsupported_shaders()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_ex_shader_validation_policy(const struct d3d9_api *api)
+{
+    IDirect3DVertexShader9 *vs = NULL;
+    IDirect3DPixelShader9 *ps = NULL;
+    IDirect3DDevice9Ex *device = NULL;
+    IDirect3D9Ex *d3d9ex;
+    HWND window;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_ex_device(d3d9ex, window);
+    if (!device)
+        goto done_window;
+
+    CHECK_HR(IDirect3DDevice9Ex_CreateVertexShader(device, NULL, &vs),
+            D3DERR_INVALIDCALL);
+    CHECK_TRUE(vs == NULL);
+    CHECK_HR(IDirect3DDevice9Ex_CreatePixelShader(device, NULL, &ps),
+            D3DERR_INVALIDCALL);
+    CHECK_TRUE(ps == NULL);
+
+    vs = (IDirect3DVertexShader9 *)0xdeadbeef;
+    hr = IDirect3DDevice9Ex_CreateVertexShader(device, invalid_shader_4_0,
+            &vs);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(vs == NULL || vs == (IDirect3DVertexShader9 *)0xdeadbeef);
+    if (SUCCEEDED(hr) && vs && vs != (IDirect3DVertexShader9 *)0xdeadbeef)
+        IDirect3DVertexShader9_Release(vs);
+    vs = NULL;
+
+    ps = (IDirect3DPixelShader9 *)0xdeadbeef;
+    hr = IDirect3DDevice9Ex_CreatePixelShader(device, invalid_shader_4_0,
+            &ps);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(ps == NULL || ps == (IDirect3DPixelShader9 *)0xdeadbeef);
+    if (SUCCEEDED(hr) && ps && ps != (IDirect3DPixelShader9 *)0xdeadbeef)
+        IDirect3DPixelShader9_Release(ps);
+    ps = NULL;
+
+    hr = IDirect3DDevice9Ex_CreateVertexShader(device, simple_vs_2_0, &vs);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(vs != NULL);
+    if (SUCCEEDED(hr))
+        IDirect3DVertexShader9_Release(vs);
+
+    hr = IDirect3DDevice9Ex_CreatePixelShader(device, simple_ps_2_0, &ps);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(ps != NULL);
+    if (SUCCEEDED(hr))
+        IDirect3DPixelShader9_Release(ps);
+
+    IDirect3DDevice9Ex_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
  * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_texture_stage_states()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727

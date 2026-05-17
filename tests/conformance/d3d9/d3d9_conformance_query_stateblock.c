@@ -217,6 +217,138 @@ done_d3d9:
 }
 
 /*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_shader_constant_apply()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_shader_constant_stateblock_cross_stage(const struct d3d9_api *api)
+{
+    static const float vs_f_a[8] =
+    {
+        1.0f, 2.0f, 3.0f, 4.0f,
+        5.0f, 6.0f, 7.0f, 8.0f
+    };
+    static const float ps_f_a[4] = {-1.0f, -2.0f, -3.0f, -4.0f};
+    static const int vs_i_a[4] = {1, 2, 3, 4};
+    static const int ps_i_a[4] = {-1, -2, -3, -4};
+    static const BOOL vs_b_a[3] = {TRUE, FALSE, TRUE};
+    static const BOOL ps_b_a[3] = {FALSE, TRUE, FALSE};
+    static const float vs_f_b[8] =
+    {
+        8.0f, 7.0f, 6.0f, 5.0f,
+        4.0f, 3.0f, 2.0f, 1.0f
+    };
+    static const float ps_f_b[4] = {4.0f, 3.0f, 2.0f, 1.0f};
+    static const int vs_i_b[4] = {10, 20, 30, 40};
+    static const int ps_i_b[4] = {-10, -20, -30, -40};
+    static const BOOL vs_b_b[3] = {FALSE, FALSE, TRUE};
+    static const BOOL ps_b_b[3] = {TRUE, TRUE, FALSE};
+    IDirect3DStateBlock9 *stateblock = NULL;
+    IDirect3DDevice9 *device = NULL;
+    float out_f[8];
+    int out_i[4];
+    BOOL out_b[3];
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    CHECK_HR(IDirect3DDevice9_BeginStateBlock(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 2, vs_f_a, 2),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantF(device, 1, ps_f_a, 1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantI(device, 1, vs_i_a, 1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantI(device, 1, ps_i_a, 1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantB(device, 1, vs_b_a, 3),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantB(device, 1, ps_b_a, 3),
+            D3D_OK);
+    hr = IDirect3DDevice9_EndStateBlock(device, &stateblock);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(stateblock != NULL);
+    if (FAILED(hr) || !stateblock)
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 2, vs_f_b, 2),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantF(device, 1, ps_f_b, 1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantI(device, 1, vs_i_b, 1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantI(device, 1, ps_i_b, 1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantB(device, 1, vs_b_b, 3),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantB(device, 1, ps_b_b, 3),
+            D3D_OK);
+
+    CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3D_OK);
+
+    memset(out_f, 0xcc, sizeof(out_f));
+    hr = IDirect3DDevice9_GetVertexShaderConstantF(device, 2, out_f, 2);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(out_f, vs_f_a, sizeof(vs_f_a)) == 0);
+
+    memset(out_f, 0xcc, sizeof(out_f));
+    hr = IDirect3DDevice9_GetPixelShaderConstantF(device, 1, out_f, 1);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(out_f, ps_f_a, sizeof(ps_f_a)) == 0);
+
+    memset(out_i, 0xcc, sizeof(out_i));
+    hr = IDirect3DDevice9_GetVertexShaderConstantI(device, 1, out_i, 1);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(out_i, vs_i_a, sizeof(vs_i_a)) == 0);
+
+    memset(out_i, 0xcc, sizeof(out_i));
+    hr = IDirect3DDevice9_GetPixelShaderConstantI(device, 1, out_i, 1);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(out_i, ps_i_a, sizeof(ps_i_a)) == 0);
+
+    memset(out_b, 0xcc, sizeof(out_b));
+    hr = IDirect3DDevice9_GetVertexShaderConstantB(device, 1, out_b, 3);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(out_b, vs_b_a, sizeof(vs_b_a)) == 0);
+
+    memset(out_b, 0xcc, sizeof(out_b));
+    hr = IDirect3DDevice9_GetPixelShaderConstantB(device, 1, out_b, 3);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(out_b, ps_b_a, sizeof(ps_b_a)) == 0);
+
+done_device:
+    if (stateblock)
+        IDirect3DStateBlock9_Release(stateblock);
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
  * Wine provenance: dlls/d3d9/tests/stateblock.c
  * function: test_vdecl_apply()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727

@@ -249,6 +249,12 @@ void testDeviceCoreFlow() {
   checkEq(device->setSamplerState(0, SAMP_ADDRESS_V, kTextureAddressBorder), D3D_OK, "sampler address v");
   checkEq(device->setSamplerState(0, SAMP_BORDER_COLOR, 0xffffffffu), D3D_OK, "sampler border color");
   checkEq(device->setTexture(0, texture), D3D_OK, "texture binding");
+  checkEq(device->setSamplerState(kVertexTextureSampler0, SAMP_MIN_FILTER, 2), D3D_OK,
+          "first vertex sampler state accepted");
+  checkEq(device->setTexture(kVertexTextureSampler0, texture), D3D_OK,
+          "first vertex texture binding accepted");
+  checkEq(device->setTexture(kMaxTextures, texture), D3DERR_INVALIDCALL,
+          "texture slot past vertex texture range rejected");
   checkEq(device->setStreamSource(0, dynamicBuffer, 8, 16), D3D_OK, "stream source");
   checkEq(device->setIndices(dynamicBuffer, IndexType::UInt32), D3D_OK, "index buffer");
   checkEq(device->setFVF(0x1122u), D3D_OK, "fvf");
@@ -264,6 +270,8 @@ void testDeviceCoreFlow() {
   auto stateBlock = device->createStateBlock();
   check(stateBlock != nullptr, "state block");
   check(stateBlock->snapshot().textures[0] == texture, "state block texture snapshot");
+  check(stateBlock->snapshot().textures[kVertexTextureSampler0] == texture,
+        "state block vertex texture snapshot");
   checkEq(stateBlock->snapshot().fvf, 0x1122u, "state block fvf snapshot");
 
   checkEq(device->setRenderState(RS_LIGHTING, 0), D3D_OK, "mutate lighting");
@@ -339,6 +347,10 @@ void testDeviceCoreFlow() {
   checkEq(draw0.hot.streamOffsets[0], 0u, "draw0 stream offset");
   checkEq(draw0.hot.streamStrides[0], 16u, "draw0 stream stride");
   checkEq(draw0.hot.textures[0], texture->handle(), "draw0 texture handle");
+  checkEq(draw0.hot.textures[kVertexTextureSampler0], texture->handle(),
+          "draw0 vertex texture handle");
+  check((draw0.hot.textureMask & (1u << kVertexTextureSampler0)) != 0,
+        "draw0 vertex texture mask bit");
   checkEq(draw0.hot.textureLods[0], 1u, "draw0 texture lod");
   checkEq(flatStateOr(draw0.hot.textureStageStates[0], TSS_COLOR_OP, 0u),
           static_cast<u32>(TextureOp::SelectArg1),
@@ -355,6 +367,8 @@ void testDeviceCoreFlow() {
           "draw0 address v");
   checkEq(flatStateOr(draw0.hot.samplerStates[0], SAMP_BORDER_COLOR, 0u), 0xffffffffu,
           "draw0 border color");
+  checkEq(flatStateOr(draw0.hot.samplerStates[kVertexTextureSampler0], SAMP_MIN_FILTER, 0u), 2u,
+          "draw0 vertex sampler min filter");
   checkEq(flatStateOr(draw0.hot.renderStates, RS_LIGHTING, 0u), 1u, "draw0 lighting state");
   checkEq(flatStateOr(draw0.hot.renderStates, RS_ALPHA_TEST_ENABLE, 0u), 1u,
           "draw0 alpha test state");

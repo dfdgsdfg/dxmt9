@@ -82,6 +82,11 @@ struct TextureTransformSetup {
   Matrix4x4 matrix{};
 };
 
+struct TransformSetup {
+  u32 key = 0;
+  Matrix4x4 matrix{};
+};
+
 struct TextureBind {
   u32 stage = 0;
   u32 textureId = 0;
@@ -149,6 +154,7 @@ struct CorpusTest {
   std::vector<SamplerSetup> samplerSetups;
   std::vector<TextureStageSetup> textureStageSetups;
   std::vector<TextureTransformSetup> textureTransformSetups;
+  std::vector<TransformSetup> transformSetups;
   std::vector<TextureBind> textureBinds;
   std::vector<TextureUpdate> textureUpdates;
   std::vector<TextureMipGeneration> textureMipGenerations;
@@ -181,6 +187,7 @@ struct CorpusTest {
   bool drawDxmt9FfpVertexBlendIndexedTriangle = false;
   bool drawDxmt9FfpVertexBlendFvfXyzb2Triangle = false;
   bool drawDxmt9FfpGeneratedNormalQuad = false;
+  bool drawDxmt9FfpFlatNormalQuad = false;
   bool drawDxmt9FfpDeclDefaultsQuad = false;
   bool drawDxmt9FfpColorVertexQuad = false;
   bool drawDxmt9FfpLitDirectionalQuad = false;
@@ -572,25 +579,32 @@ void writeConstantDxtBlock(u8* dst, Format format, const std::array<u8, 4>& bgra
 }
 
 void writeDxmt9TextureLevel(u8* dst, u32 pitch, Format format,
-                            const TextureLevelSetup& level) {
+                            const TextureLevelSetup& level, u32 depth = 1) {
   if (!level.rawBytes.empty()) {
     const u32 rowPitch = formatRowPitch(format, level.width);
     const u32 rowCount = formatRowCount(format, level.height);
     if (rowPitch == 0 || rowCount == 0) {
       fail("dxmt9 raw texture upload requires a known row pitch");
     }
-    const auto expectedSize =
-        static_cast<size_t>(rowPitch) * static_cast<size_t>(rowCount);
+    const auto expectedSize = static_cast<size_t>(rowPitch) *
+                              static_cast<size_t>(rowCount) *
+                              static_cast<size_t>(depth);
     if (level.rawBytes.size() != expectedSize) {
       fail("dxmt9 raw texture byte count does not match format storage size");
     }
     if (pitch < rowPitch) {
       fail("dxmt9 raw texture upload pitch is too small");
     }
-    for (u32 row = 0; row < rowCount; ++row) {
-      std::memcpy(dst + static_cast<size_t>(row) * pitch,
-                  level.rawBytes.data() + static_cast<size_t>(row) * rowPitch,
-                  rowPitch);
+    const auto dstSlicePitch = static_cast<size_t>(pitch) * rowCount;
+    const auto srcSlicePitch = static_cast<size_t>(rowPitch) * rowCount;
+    for (u32 z = 0; z < depth; ++z) {
+      for (u32 row = 0; row < rowCount; ++row) {
+        std::memcpy(dst + static_cast<size_t>(z) * dstSlicePitch +
+                        static_cast<size_t>(row) * pitch,
+                    level.rawBytes.data() + static_cast<size_t>(z) * srcSlicePitch +
+                        static_cast<size_t>(row) * rowPitch,
+                    rowPitch);
+      }
     }
     return;
   }
@@ -1075,9 +1089,6 @@ std::optional<TextureSetup> parseDxmt9VolumeTextureRaw(std::string_view line) {
   if (level.width == 0 || level.height == 0 || texture.depth == 0) {
     fail("dxmt9-volume-texture-raw requires non-zero dimensions");
   }
-  if (texture.depth != 1u) {
-    fail("dxmt9-volume-texture-raw currently supports depth=1 until volume upload carries slice pitch");
-  }
   level.rawBytes = parseHexBytes(hex);
   texture.levels.push_back(std::move(level));
   return texture;
@@ -1249,6 +1260,48 @@ std::optional<TextureTransformSetup> parseDxmt9TextureTransform(std::string_view
   std::string extra;
   if (stream >> extra) {
     fail("dxmt9-texture-transform has extra values");
+  }
+  return transform;
+}
+
+u32 parseTransformKey(std::string_view text) {
+  const auto token = normalizeToken(text);
+  if (token == "world" || token == "world0") {
+    return XFORM_WORLD_BASE;
+  }
+  if (token == "view") {
+    return XFORM_VIEW;
+  }
+  if (token == "projection" || token == "proj") {
+    return XFORM_PROJECTION;
+  }
+  if (token.starts_with("world")) {
+    const auto index = parseU32Value(token.substr(std::string_view("world").size()));
+    return XFORM_WORLD_BASE + index;
+  }
+  return parseU32Value(text);
+}
+
+std::optional<TransformSetup> parseDxmt9Transform(std::string_view line) {
+  std::istringstream stream{std::string(line)};
+  std::string command;
+  std::string key;
+  TransformSetup transform;
+  if (!(stream >> command) || command != "dxmt9-transform") {
+    return std::nullopt;
+  }
+  if (!(stream >> key)) {
+    fail("invalid dxmt9-transform command");
+  }
+  transform.key = parseTransformKey(key);
+  for (auto& value : transform.matrix.m) {
+    if (!(stream >> value)) {
+      fail("dxmt9-transform requires a transform key and 16 float values");
+    }
+  }
+  std::string extra;
+  if (stream >> extra) {
+    fail("dxmt9-transform has extra values");
   }
   return transform;
 }
@@ -1894,6 +1947,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-ffp-flat-normal-quad") {
+    test.drawDxmt9FfpFlatNormalQuad = true;
+    return;
+  }
+
   if (line == "dxmt9-draw-ffp-decl-defaults-quad") {
     test.drawDxmt9FfpDeclDefaultsQuad = true;
     return;
@@ -2000,6 +2058,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
 
   if (auto transform = parseDxmt9TextureTransform(line)) {
     test.textureTransformSetups.push_back(*transform);
+    return;
+  }
+
+  if (auto transform = parseDxmt9Transform(line)) {
+    test.transformSetups.push_back(*transform);
     return;
   }
 
@@ -2286,7 +2349,8 @@ std::vector<std::shared_ptr<Texture>> createDxmt9Textures(Device& device, const 
         fail("dxmt9 texture upload pitch is too small");
       }
       auto* bytes = static_cast<u8*>(upload.data);
-      writeDxmt9TextureLevel(bytes, upload.pitch, setup.format, level);
+      const u32 uploadDepth = setup.type == TextureType::Volume ? setup.depth : 1u;
+      writeDxmt9TextureLevel(bytes, upload.pitch, setup.format, level, uploadDepth);
       texture->unlockRect(levelIndex);
     }
     if (isCube) {
@@ -2342,6 +2406,14 @@ void applyDxmt9TextureTransforms(Device& device, const CorpusTest& test) {
     }
     if (device.setTransform(XFORM_TEXTURE_BASE + transform.stage, transform.matrix) != D3D_OK) {
       fail("dxmt9 texture transform setup failed");
+    }
+  }
+}
+
+void applyDxmt9Transforms(Device& device, const CorpusTest& test) {
+  for (const auto& transform : test.transformSetups) {
+    if (device.setTransform(transform.key, transform.matrix) != D3D_OK) {
+      fail("dxmt9 transform setup failed");
     }
   }
 }
@@ -2568,6 +2640,29 @@ void drawDxmt9FfpGeneratedNormalQuad(Device& device, u32 width, u32 height) {
   if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
                              sizeof(GeneratedNormalVertex)) != D3D_OK) {
     fail("dxmt9 generated-normal quad draw failed");
+  }
+}
+
+void drawDxmt9FfpFlatNormalQuad(Device& device, u32 width, u32 height) {
+  (void)width;
+  (void)height;
+  if (device.setFVF(kFvfXyz | kFvfNormal) != D3D_OK) {
+    fail("dxmt9 flat-normal quad FVF setup failed");
+  }
+
+  const std::array<GeneratedNormalVertex, 6> quad{
+      GeneratedNormalVertex{-1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(GeneratedNormalVertex)) != D3D_OK) {
+    fail("dxmt9 flat-normal quad draw failed");
   }
 }
 
@@ -3257,6 +3352,7 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9VsFloat16ColorQuads ||
                             test.drawDxmt9FfpVertexBlendTriangle ||
                             test.drawDxmt9FfpGeneratedNormalQuad ||
+                            test.drawDxmt9FfpFlatNormalQuad ||
                             test.drawDxmt9FfpDeclDefaultsQuad ||
                             test.drawDxmt9FfpColorVertexQuad ||
                             test.drawDxmt9FfpLitDirectionalQuad ||
@@ -3367,6 +3463,7 @@ void runCorpusFile(const std::string& path) {
   const auto dxmt9Textures = createDxmt9Textures(*device, test);
   applyDxmt9SamplerSetups(*device, test);
   applyDxmt9TextureStageSetups(*device, test);
+  applyDxmt9Transforms(*device, test);
   applyDxmt9TextureTransforms(*device, test);
   applyDxmt9TextureUpdates(*device, test, dxmt9Textures);
   applyDxmt9TextureMipGenerations(test, dxmt9Textures);
@@ -3419,6 +3516,7 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9VsFloat16ColorQuads ||
                             test.drawDxmt9FfpVertexBlendTriangle ||
                           test.drawDxmt9FfpGeneratedNormalQuad ||
+                          test.drawDxmt9FfpFlatNormalQuad ||
                           test.drawDxmt9FfpDeclDefaultsQuad ||
                           test.drawDxmt9FfpColorVertexQuad ||
                           test.drawDxmt9FfpLitDirectionalQuad ||
@@ -3666,6 +3764,16 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9FfpGeneratedNormalQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpFlatNormalQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpFlatNormalQuad(*device, params.backBufferWidth, params.backBufferHeight);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }

@@ -1,0 +1,21 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c volume_v16u16_test behavior, reduced to true texture3d/V16U16 depth=2 slice1 sampling
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0200 0200001f 80000000 b0070000 0200001f a0000000 a00f0800
+05000051 a00f0000 3f000000 3f000000 3f000000 00000000 03000042
+800f0000 b0e40000 a0e40800 03000002 800f0000 80e40000 a0e40000
+02000001 800f0800 80e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-volume-texture-raw 0 1 1 2 V16U16 00000000004000c0
+dxmt9-sampler 0 address_u=clamp address_v=clamp address_w=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad-tex3 0.0 0.0 1.0
+probe (32, 32) rgba(1.0, 0.0, 0.5, 1.0) 3

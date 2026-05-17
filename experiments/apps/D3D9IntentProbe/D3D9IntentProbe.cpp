@@ -195,6 +195,14 @@ struct RhwPSizeVertex {
   DWORD color;
 };
 
+struct XyzPSizeDiffuseVertex {
+  float x;
+  float y;
+  float z;
+  float psize;
+  DWORD color;
+};
+
 struct RhwSpecularVertex {
   float x;
   float y;
@@ -336,6 +344,14 @@ public:
       runPerStageConstant(stats);
     } else if (std::strcmp(mode, "shader-fragment-coords") == 0) {
       runShaderFragmentCoords(stats);
+    } else if (std::strcmp(mode, "shademode-provoking") == 0) {
+      runShadeModeProvoking(stats);
+    } else if (std::strcmp(mode, "pointsize-policy") == 0) {
+      runPointSizePolicy(stats);
+    } else if (std::strcmp(mode, "yuv-format-policy") == 0) {
+      runYuvFormatPolicy(stats);
+    } else if (std::strcmp(mode, "vendor-format-policy") == 0) {
+      runVendorFormatPolicy(stats);
     } else {
       logf("FAIL: unknown mode '%s'", mode);
       stats.failed++;
@@ -505,6 +521,38 @@ private:
          dxmt9::fastsanity::channelR(color),
          dxmt9::fastsanity::channelG(color),
          dxmt9::fastsanity::channelB(color));
+    return true;
+  }
+
+  bool readBackbufferGrey(UINT x, UINT y, unsigned char minimum, const char* label, TestStats& stats) {
+    D3DCOLOR color = 0;
+    if (!readBackbufferColor(x, y, color, label, stats)) {
+      return false;
+    }
+    const int r = static_cast<int>(dxmt9::fastsanity::channelR(color));
+    const int g = static_cast<int>(dxmt9::fastsanity::channelG(color));
+    const int b = static_cast<int>(dxmt9::fastsanity::channelB(color));
+    const bool grey = r >= minimum && g >= minimum && b >= minimum &&
+        std::abs(r - g) <= 50 && std::abs(g - b) <= 50 && std::abs(r - b) <= 50;
+    stats.expect(grey, label);
+    return grey;
+  }
+
+  bool expectSupportedOrUnavailable(HRESULT hr,
+                                    const char* label,
+                                    const char* unsupportedLabel,
+                                    TestStats& stats) {
+    if (hr == D3DERR_NOTAVAILABLE) {
+      logf("SKIP: %s unsupported", unsupportedLabel);
+      stats.expect(true, label);
+      return false;
+    }
+    if (hr != D3D_OK) {
+      log_hresult(label, hr);
+      stats.expect(false, label);
+      return false;
+    }
+    stats.expect(true, label);
     return true;
   }
 
@@ -2476,6 +2524,106 @@ private:
     }
   }
 
+  void runShadeModeProvoking(TestStats& stats) {
+    resetFixedFunctionState();
+    const XyzDiffuseVertex strip[4] = {
+        {-1.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 255, 0, 0)},
+        {-1.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 255, 0)},
+        {1.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 0, 255)},
+        {1.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 255, 255, 255)},
+    };
+    const XyzDiffuseVertex list[6] = {
+        {-1.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 255, 0, 0)},
+        {-1.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 255, 0)},
+        {1.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 0, 255)},
+        {1.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 0, 255)},
+        {-1.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 255, 0)},
+        {1.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 255, 255, 255)},
+    };
+
+    stats.expectHr("SetRenderState(SHADEMODE FLAT provoking)",
+                   device_->SetRenderState(D3DRS_SHADEMODE, D3DSHADE_FLAT));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetFVF(shademode-provoking strip)", device_->SetFVF(D3DFVF_XYZ | D3DFVF_DIFFUSE));
+    stats.expectHr("DrawPrimitiveUP(shademode-provoking strip)",
+                   device_->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, strip, sizeof(strip[0])));
+    finishScene(stats);
+    readBackbufferNear(30, 30, 255, 0, 0,
+                       "shademode-provoking strip first triangle uses first vertex", stats);
+    readBackbufferNear(kWidth - 30, kHeight - 30, 0, 255, 0,
+                       "shademode-provoking strip second triangle uses first logical vertex", stats);
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetFVF(shademode-provoking list)", device_->SetFVF(D3DFVF_XYZ | D3DFVF_DIFFUSE));
+    stats.expectHr("DrawPrimitiveUP(shademode-provoking list)",
+                   device_->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 2, list, sizeof(list[0])));
+    finishScene(stats);
+    readBackbufferNear(30, 30, 255, 0, 0,
+                       "shademode-provoking list first triangle uses first vertex", stats);
+    readBackbufferNear(kWidth - 30, kHeight - 30, 0, 0, 255,
+                       "shademode-provoking list second triangle uses first vertex", stats);
+  }
+
+  void runPointSizePolicy(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(pointsize policy)", device_->GetDeviceCaps(&caps));
+    if (caps.MaxPointSize < 32.0f) {
+      logf("SKIP: MaxPointSize %.2f below 32.0", caps.MaxPointSize);
+      return;
+    }
+
+    const XyzDiffuseVertex statePoints[2] = {
+        {-0.5f, 0.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+        {0.0f, 0.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+    };
+    const XyzPSizeDiffuseVertex fvfPoint = {
+        0.5f, 0.0f, 0.5f, 24.0f, D3DCOLOR_ARGB(255, 0, 220, 0),
+    };
+
+    stats.expectHr("SetRenderState(POINTSPRITE false policy)",
+                   device_->SetRenderState(D3DRS_POINTSPRITEENABLE, FALSE));
+    stats.expectHr("SetRenderState(POINTSCALE false policy)",
+                   device_->SetRenderState(D3DRS_POINTSCALEENABLE, FALSE));
+    stats.expectHr("SetRenderState(POINTSIZE_MIN 1)",
+                   device_->SetRenderState(D3DRS_POINTSIZE_MIN, floatAsDword(1.0f)));
+    stats.expectHr("SetRenderState(POINTSIZE_MAX 64)",
+                   device_->SetRenderState(D3DRS_POINTSIZE_MAX,
+                                           floatAsDword(std::min(caps.MaxPointSize, 64.0f))));
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetFVF(pointsize policy render-state)", device_->SetFVF(D3DFVF_XYZ | D3DFVF_DIFFUSE));
+    stats.expectHr("SetRenderState(POINTSIZE 15)",
+                   device_->SetRenderState(D3DRS_POINTSIZE, floatAsDword(15.0f)));
+    stats.expectHr("DrawPrimitiveUP(pointsize policy state size)",
+                   device_->DrawPrimitiveUP(D3DPT_POINTLIST, 1, &statePoints[0], sizeof(statePoints[0])));
+
+    stats.expectHr("SetRenderState(POINTSIZE_MAX clamp 1)",
+                   device_->SetRenderState(D3DRS_POINTSIZE_MAX, floatAsDword(1.0f)));
+    stats.expectHr("DrawPrimitiveUP(pointsize policy max clamp)",
+                   device_->DrawPrimitiveUP(D3DPT_POINTLIST, 1, &statePoints[1], sizeof(statePoints[1])));
+    stats.expectHr("SetRenderState(POINTSIZE_MAX restore)",
+                   device_->SetRenderState(D3DRS_POINTSIZE_MAX,
+                                           floatAsDword(std::min(caps.MaxPointSize, 64.0f))));
+
+    stats.expectHr("SetFVF(pointsize policy FVF PSIZE)",
+                   device_->SetFVF(D3DFVF_XYZ | D3DFVF_PSIZE | D3DFVF_DIFFUSE));
+    stats.expectHr("DrawPrimitiveUP(pointsize policy fvf size)",
+                   device_->DrawPrimitiveUP(D3DPT_POINTLIST, 1, &fvfPoint, sizeof(fvfPoint)));
+    finishScene(stats);
+
+    readBackbufferNear(kWidth / 4, kHeight / 2, 0, 220, 0,
+                       "pointsize-policy render-state point center", stats);
+    readBackbufferNear(kWidth / 4 + 6, kHeight / 2, 0, 220, 0,
+                       "pointsize-policy render-state point radius", stats);
+    readBackbufferNear(kWidth / 2 + 4, kHeight / 2, 0, 0, 0,
+                       "pointsize-policy max clamp shrinks point", stats);
+    readBackbufferNear(3 * kWidth / 4 + 10, kHeight / 2, 0, 220, 0,
+                       "pointsize-policy FVF PSIZE point radius", stats);
+    readBackbufferNear(3 * kWidth / 4 + 16, kHeight / 2, 0, 0, 0,
+                       "pointsize-policy FVF PSIZE outside point", stats);
+  }
+
   void runFillingConvention(TestStats& stats) {
     resetFixedFunctionState();
     ComPtr<IDirect3DSurface9> originalRt;
@@ -2725,6 +2873,141 @@ private:
                        "null-format preserved depth write from NULL RT", stats);
     readBackbufferNear(20, 20, 0, 0, 0,
                        "null-format rejected far color outside near quad", stats);
+  }
+
+  void fillPackedYuvSurface(IDirect3DSurface9* surface, D3DFORMAT format, TestStats& stats) {
+    D3DLOCKED_RECT locked{};
+    HRESULT hr = surface->LockRect(&locked, nullptr, 0);
+    stats.expectHr("LockRect(YUV surface)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    auto* row = reinterpret_cast<DWORD*>(locked.pBits);
+    const DWORD packedGrey = format == D3DFMT_UYVY ? 0xeb80eb80u : 0x80eb80ebu;
+    row[0] = packedGrey;
+    row[1] = packedGrey;
+    stats.expectHr("UnlockRect(YUV surface)", surface->UnlockRect());
+  }
+
+  void runYuvFormatPolicy(TestStats& stats) {
+    resetFixedFunctionState();
+    ComPtr<IDirect3DSurface9> target;
+    stats.expectHr("GetRenderTarget(YUV policy)", device_->GetRenderTarget(0, target.put()));
+    if (!target) {
+      return;
+    }
+    D3DSURFACE_DESC targetDesc{};
+    stats.expectHr("GetDesc(YUV target)", target->GetDesc(&targetDesc));
+
+    struct YuvCase {
+      D3DFORMAT format;
+      const char* name;
+      bool packed;
+    };
+    const YuvCase cases[] = {
+        {D3DFMT_UYVY, "UYVY", true},
+        {D3DFMT_YUY2, "YUY2", true},
+        {static_cast<D3DFORMAT>(MAKEFOURCC('Y', 'V', '1', '2')), "YV12", false},
+        {static_cast<D3DFORMAT>(MAKEFOURCC('N', 'V', '1', '2')), "NV12", false},
+    };
+
+    for (const YuvCase& test : cases) {
+      char label[96]{};
+      std::snprintf(label, sizeof(label), "CheckDeviceFormat(YUV %s surface)", test.name);
+      HRESULT support = d3d_->CheckDeviceFormat(D3DADAPTER_DEFAULT,
+                                                D3DDEVTYPE_HAL,
+                                                D3DFMT_X8R8G8B8,
+                                                0,
+                                                D3DRTYPE_SURFACE,
+                                                test.format);
+      if (!expectSupportedOrUnavailable(support, label, test.name, stats)) {
+        continue;
+      }
+
+      std::snprintf(label, sizeof(label), "CheckDeviceFormatConversion(YUV %s)", test.name);
+      HRESULT conversion = d3d_->CheckDeviceFormatConversion(D3DADAPTER_DEFAULT,
+                                                             D3DDEVTYPE_HAL,
+                                                             test.format,
+                                                             targetDesc.Format);
+      if (!expectSupportedOrUnavailable(conversion, label, test.name, stats)) {
+        continue;
+      }
+
+      if (!test.packed) {
+        logf("SKIP: %s layout readback policy recorded; planar upload probe deferred", test.name);
+        continue;
+      }
+
+      ComPtr<IDirect3DSurface9> surface;
+      HRESULT hr = device_->CreateOffscreenPlainSurface(4, 1, test.format,
+                                                        D3DPOOL_DEFAULT, surface.put(), nullptr);
+      std::snprintf(label, sizeof(label), "CreateOffscreenPlainSurface(YUV %s)", test.name);
+      stats.expectHr(label, hr);
+      if (FAILED(hr)) {
+        continue;
+      }
+      fillPackedYuvSurface(surface.ptr(), test.format, stats);
+      stats.expectHr("Clear(YUV target)", device_->Clear(0, nullptr, D3DCLEAR_TARGET,
+                                                         D3DCOLOR_XRGB(0, 0, 0), 0.0f, 0));
+      std::snprintf(label, sizeof(label), "StretchRect(YUV %s to target)", test.name);
+      stats.expectHr(label, device_->StretchRect(surface.ptr(), nullptr, target.ptr(), nullptr, D3DTEXF_POINT));
+      std::snprintf(label, sizeof(label), "YUV %s neutral grey conversion", test.name);
+      readBackbufferGrey(kWidth / 2, kHeight / 2, 180, label, stats);
+    }
+  }
+
+  void runVendorFormatPolicy(TestStats& stats) {
+    resetFixedFunctionState();
+    struct FormatCase {
+      const char* name;
+      D3DFORMAT adapterFormat;
+      DWORD usage;
+      D3DRESOURCETYPE resourceType;
+      D3DFORMAT checkFormat;
+    };
+    const FormatCase cases[] = {
+        {"DF24 depth texture", D3DFMT_X8R8G8B8, D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_TEXTURE,
+         static_cast<D3DFORMAT>(MAKEFOURCC('D', 'F', '2', '4'))},
+        {"INTZ depth texture", D3DFMT_X8R8G8B8, D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_TEXTURE,
+         static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z'))},
+        {"RESZ render-target pseudo-format", D3DFMT_X8R8G8B8, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE,
+         static_cast<D3DFORMAT>(MAKEFOURCC('R', 'E', 'S', 'Z'))},
+        {"ATOC multisample pseudo-format", D3DFMT_X8R8G8B8, 0, D3DRTYPE_SURFACE,
+         static_cast<D3DFORMAT>(MAKEFOURCC('A', 'T', 'O', 'C'))},
+    };
+
+    for (const FormatCase& test : cases) {
+      char label[128]{};
+      std::snprintf(label, sizeof(label), "CheckDeviceFormat(%s)", test.name);
+      HRESULT hr = d3d_->CheckDeviceFormat(D3DADAPTER_DEFAULT,
+                                           D3DDEVTYPE_HAL,
+                                           test.adapterFormat,
+                                           test.usage,
+                                           test.resourceType,
+                                           test.checkFormat);
+      const bool supported = expectSupportedOrUnavailable(hr, label, test.name, stats);
+      if (!supported || test.resourceType != D3DRTYPE_TEXTURE) {
+        continue;
+      }
+
+      ComPtr<IDirect3DTexture9> texture;
+      std::snprintf(label, sizeof(label), "CreateTexture(%s)", test.name);
+      hr = device_->CreateTexture(16, 16, 1, test.usage, test.checkFormat,
+                                  D3DPOOL_DEFAULT, texture.put(), nullptr);
+      stats.expectHr(label, hr);
+    }
+
+    HRESULT hr = device_->SetRenderState(D3DRS_POINTSIZE, MAKEFOURCC('G', 'E', 'T', '4'));
+    stats.expect(hr == D3D_OK || hr == D3DERR_INVALIDCALL,
+                 "FETCH4 GET4 render-state token is accepted or explicitly rejected");
+    if (hr == D3DERR_INVALIDCALL) {
+      logf("SKIP: FETCH4 GET4 render-state token rejected");
+    }
+    stats.expectHr("SetRenderState(POINTSIZE restore)",
+                   device_->SetRenderState(D3DRS_POINTSIZE, floatAsDword(1.0f)));
+
+    clearBackbuffer(D3DCOLOR_XRGB(35, 35, 70), stats);
+    finishScene(stats);
   }
 
   void runDepthClamp(TestStats& stats) {

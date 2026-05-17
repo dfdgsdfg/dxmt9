@@ -54,9 +54,15 @@ Texture::Texture(std::shared_ptr<Device> owner, TextureHandle handle,
     LevelStorage storage;
     storage.width = std::max(1u, desc_.width >> level);
     storage.height = std::max(1u, desc_.height >> level);
+    storage.depth = desc_.type == TextureType::Volume
+                        ? std::max(1u, desc_.depth >> level)
+                        : 1u;
     storage.pitch = formatRowPitch(desc_.format, storage.width);
-    storage.bytes.resize(
-        formatByteSize(desc_.format, storage.width, storage.height), 0);
+    storage.slicePitch =
+        formatByteSize(desc_.format, storage.width, storage.height);
+    storage.bytes.resize(static_cast<size_t>(storage.slicePitch) *
+                             static_cast<size_t>(storage.depth),
+                         0);
     levels_[subresource] = std::move(storage);
   }
 }
@@ -91,8 +97,9 @@ LockedRegion Texture::lockRect(u32 subresource, const Rect *rect, u32 flags) {
   }
   LevelStorage &storage = levels_[subresource];
   if ((flags & UsageDiscard) != 0) {
-    storage.bytes.assign(
-        formatByteSize(desc_.format, storage.width, storage.height), 0);
+    storage.bytes.assign(static_cast<size_t>(storage.slicePitch) *
+                             static_cast<size_t>(storage.depth),
+                         0);
   }
   locked_ = true;
   if (storage.pitch == 0 || storage.bytes.empty()) {
@@ -304,7 +311,8 @@ void Texture::syncLevelToBackend(u32 subresource) {
     }
   }
   backend_->uploadTextureLevel(
-      handle_, subresource, storage.width, storage.height, storage.pitch,
+      handle_, subresource, storage.width, storage.height, storage.depth,
+      storage.pitch, storage.slicePitch,
       std::span<const u8>(storage.bytes.data(), storage.bytes.size()));
 }
 

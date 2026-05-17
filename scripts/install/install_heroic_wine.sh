@@ -117,6 +117,49 @@ install_file() {
   printf 'installed %s -> %s\n' "$source" "$target"
 }
 
+mach_o_arch() {
+  local path=$1 desc
+  if [[ ! -f "$path" ]]; then
+    return 1
+  fi
+  desc=$(file -b "$path")
+  case "$desc" in
+    *"Mach-O"*" x86_64"*) printf 'x86_64\n' ;;
+    *"Mach-O"*" arm64"*) printf 'arm64\n' ;;
+    *"Mach-O"*" aarch64"*) printf 'arm64\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_unix_provider_compatible() {
+  local provider=$1 runtime_probe=$2 provider_arch runtime_arch
+
+  if [[ ! -f "$provider" ]]; then
+    printf 'error: required file not found: %s\n' "$provider" >&2
+    exit 1
+  fi
+  if [[ ! -f "$runtime_probe" ]]; then
+    return 0
+  fi
+  provider_arch=$(mach_o_arch "$provider" || true)
+  runtime_arch=$(mach_o_arch "$runtime_probe" || true)
+  if [[ -z "$provider_arch" || -z "$runtime_arch" ]]; then
+    return 0
+  fi
+  if [[ "$provider_arch" != "$runtime_arch" ]]; then
+    cat >&2 <<EOF
+error: winemetal.so architecture mismatch
+  provider: $provider ($provider_arch)
+  runtime:  $runtime_probe ($runtime_arch)
+
+The Wine unix module must match the host-side Wine runtime. For this runtime,
+use an x86_64 unix build such as:
+  --unix-build-dir $repo_root/build-x86_64-builtin/src
+EOF
+    exit 2
+  fi
+}
+
 ensure_meson_postprocess() {
   local artifact build_root rel_target parent
   artifact=$1
@@ -256,6 +299,10 @@ fi
 if [[ ! -f "$unix_build_dir/winemetal/unix/winemetal.so" && -f "$repo_root/build/src/winemetal/unix/winemetal.so" ]]; then
   unix_build_dir="$repo_root/build/src"
 fi
+
+ensure_unix_provider_compatible \
+  "$unix_build_dir/winemetal/unix/winemetal.so" \
+  "$unix_runtime_dir/ntdll.so"
 
 if [[ ! -f "$runtime_pe_build_dir/winemetal.dll" ]]; then
   printf 'error: could not locate winemetal.dll in runtime PE build dir: %s\n' "$runtime_pe_build_dir" >&2

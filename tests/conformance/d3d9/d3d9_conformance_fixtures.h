@@ -332,6 +332,7 @@ void test_vertex_shader_constant(const struct d3d9_api *api);
 void test_get_set_pixel_shader(const struct d3d9_api *api);
 void test_pixel_shader_constant(const struct d3d9_api *api);
 void test_unsupported_shaders(const struct d3d9_api *api);
+void test_ex_shader_validation_policy(const struct d3d9_api *api);
 void test_texture_stage_states(const struct d3d9_api *api);
 void test_fpu_setup(const struct d3d9_api *api);
 void test_limits(const struct d3d9_api *api);
@@ -350,6 +351,7 @@ void test_lockable_backbuffer_lock_policy(const struct d3d9_api *api);
 
 void test_stateblock_invalid_type_recording_invalid_calls(const struct d3d9_api *api);
 void test_shader_constant_apply(const struct d3d9_api *api);
+void test_shader_constant_stateblock_cross_stage(const struct d3d9_api *api);
 void test_vdecl_apply(const struct d3d9_api *api);
 
 void test_private_data_iunknown_ownership_smoke(const struct d3d9_api *api);
@@ -360,6 +362,9 @@ void test_vertex_buffer_alignment(const struct d3d9_api *api);
 void test_surface_alignment(const struct d3d9_api *api);
 void test_surface_dimensions(const struct d3d9_api *api);
 void test_resource_type(const struct d3d9_api *api);
+void test_volume_resource_container_desc(const struct d3d9_api *api);
+void test_volume_block_lock_layout(const struct d3d9_api *api);
+void test_vendor_format_public_api_policy(const struct d3d9_api *api);
 void test_resource_priority_roundtrip(const struct d3d9_api *api);
 void test_shared_handle_policy(const struct d3d9_api *api);
 void test_ex_shared_handle_policy(const struct d3d9_api *api);

@@ -926,7 +926,7 @@ public:
     pD->Pool = static_cast<D3DPOOL>(sd.pool);
     pD->Width = sd.width;
     pD->Height = sd.height;
-    pD->Depth = 1;
+    pD->Depth = sd.depth;
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX *locked, const D3DBOX *box,
@@ -1062,7 +1062,7 @@ public:
     pD->Pool = static_cast<D3DPOOL>(sd.pool);
     pD->Width = sd.width;
     pD->Height = sd.height;
-    pD->Depth = 1;
+    pD->Depth = sd.depth;
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE

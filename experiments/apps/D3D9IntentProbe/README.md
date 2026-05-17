@@ -102,6 +102,14 @@ Modes:
 - `per-stage-constant` - stage-local `D3DTSS_CONSTANT` routing across two FFP
   texture stages.
 - `shader-fragment-coords` - `ps_3_0` `VPOS` fragment coordinate routing.
+- `shademode-provoking` - flat-shade provoking vertex policy for triangle
+  strips and triangle lists.
+- `pointsize-policy` - render-state point size, max clamp, and `D3DFVF_PSIZE`
+  raster size behavior.
+- `yuv-format-policy` - YUV surface support/conversion classification with
+  packed `UYVY` / `YUY2` neutral-color blit readback when advertised.
+- `vendor-format-policy` - `DF24`, `INTZ`, `RESZ`, `ATOC`, and `FETCH4`
+  acceptance/rejection policy checks, with unsupported paths logged as skips.
 
 Each mode exits non-zero on failed D3D calls or mismatched readback. The app is
 kept intentionally small; broader HRESULT conformance belongs in

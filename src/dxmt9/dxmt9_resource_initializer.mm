@@ -202,7 +202,9 @@ void Initializer::uploadTextureLevel(core::TextureHandle handle,
                                        std::uint32_t level,
                                        std::uint32_t width,
                                        std::uint32_t height,
+                                       std::uint32_t depth,
                                        std::uint32_t pitch,
+                                       std::uint32_t slicePitch,
                                        std::span<const std::uint8_t> bytes) {
   std::lock_guard lock(queue_->mutex_);
   if (debug::shouldTraceTexture(handle)) {
@@ -211,8 +213,8 @@ void Initializer::uploadTextureLevel(core::TextureHandle handle,
   // stageTextureUpload either does an immediate replaceRegion (shared
   // mode, returns nullopt) or allocates+populates a staging texture
   // (private mode, returns StagingCopy that we queue for flush).
-  auto staging = pool_->stageTextureUpload(device_, handle, level,
-                                             width, height, pitch,
+  auto staging = pool_->stageTextureUpload(device_, handle, level, width,
+                                             height, depth, pitch, slicePitch,
                                              bytes.data(), bytes.size());
   if (staging) {
     pendingUploads_.push_back(std::move(*staging));
@@ -297,7 +299,7 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
   }
   for (const auto& u : pendingUploads_) {
     WMTOrigin origin{0, 0, 0};
-    WMTSize size{u.width, u.height, 1};
+    WMTSize size{u.width, u.height, u.depth};
     blit.copyFromTextureToTexture(WMT::Texture{u.stagingTexture.handle}, 0, 0,
                                     origin, size, u.destTexture, u.slice, u.mipLevel, origin);
   }

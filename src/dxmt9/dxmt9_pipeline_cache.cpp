@@ -737,21 +737,15 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
   return TileFfpSelection{TileFfpDecision::Portable, TileFfpFallbackReason::Precision};
 }
 
-ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,
+ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView,
                                                  bool argbufHybridEnabled) {
   // Tier-2 argbuf + Apple3 is cached as a single bool on the pool. When
   // the gate fails the pass commits to Stage 1 and never switches
-  // (R-BACK-12.22). Texture-bound draws stay on Stage 1 until the live
-  // Metal texture/sampler argbuf lane has fault-free runtime evidence.
+  // (R-BACK-12.22). When the gate holds, texture-free and texture-bound
+  // draws use the same Stage 2 path; argbuf resource population marks
+  // indirect buffers/textures resident on the render encoder.
   if (!argbufHybridEnabled) {
     return ArgbufHybridDecision::Stage1;
-  }
-  if (state.hot) {
-    for (const auto& texture : state.hot->textures) {
-      if (texture) {
-        return ArgbufHybridDecision::Stage1;
-      }
-    }
   }
   return ArgbufHybridDecision::Stage2;
 }

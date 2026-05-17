@@ -260,7 +260,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::recursive_mutex recorderMutex_{};
 
     /* bound resource tracking (AddRef'd) */
-    IDirect3DBaseTexture9*     textures_[16]    = {};
+    IDirect3DBaseTexture9*     textures_[D9C_DRAW_PACKET_MAX_TEXTURES] = {};
     IDirect3DVertexShader9*    vs_              = nullptr;
     IDirect3DPixelShader9*     ps_              = nullptr;
     IDirect3DVertexBuffer9*    streamSrc_[16]   = {};
@@ -345,7 +345,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     bool shadowedTextureEquals(DWORD stage, IDirect3DBaseTexture9* texture) const {
-        return stage < 16 && textures_[stage] == texture;
+        uint32_t slot = 0;
+        return textureBindingSlot(stage, slot) && textures_[slot] == texture;
     }
 
     bool shadowedStreamSourceEquals(UINT stream,
@@ -2591,7 +2592,12 @@ public:
                                                D3DSAMPLERSTATETYPE type,
                                                DWORD* pValue) noexcept override {
         if (!pValue) return D3DERR_INVALIDCALL;
-        *pValue = dxmt9c_device_get_sampler_state(dev_, sampler, (uint32_t)type);
+        uint32_t samplerIndex = 0;
+        if (!samplerSlot(sampler, samplerIndex)) {
+            *pValue = 0;
+            return S_OK;
+        }
+        *pValue = dxmt9c_device_get_sampler_state(dev_, samplerIndex, (uint32_t)type);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE ValidateDevice(DWORD* pPasses) noexcept override {
@@ -2637,18 +2643,21 @@ public:
                                           IDirect3DBaseTexture9* pTex) noexcept override {
         dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
                             this, (unsigned)stage, pTex);
-        if (stage >= 16) return D3DERR_INVALIDCALL;
-        if (shadowedTextureEquals(stage, pTex)) {
+        uint32_t textureSlot = 0;
+        if (!textureBindingSlot(stage, textureSlot)) return D3DERR_INVALIDCALL;
+        if (textures_[textureSlot] == pTex) {
             return S_OK;
         }
-        setRef(textures_[stage], pTex);
-        peState_.pendingTextureMask |= 1u << stage;
+        setRef(textures_[textureSlot], pTex);
+        peState_.pendingTextureMask |= 1u << textureSlot;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetTexture(DWORD stage,
                                           IDirect3DBaseTexture9** ppTex) noexcept override {
         if (!ppTex) return D3DERR_INVALIDCALL;
-        IDirect3DBaseTexture9* t = textures_[stage < 16 ? stage : 0];
+        uint32_t textureSlot = 0;
+        IDirect3DBaseTexture9* t =
+            textureBindingSlot(stage, textureSlot) ? textures_[textureSlot] : nullptr;
         if (t) t->AddRef();
         *ppTex = t;
         dxmt9DeviceDebugLog("device_get_texture device=%p stage=%u -> tex=%p",
