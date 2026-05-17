@@ -29,8 +29,10 @@ namespace dxmt9::archive_prewarm {
 // dxmt9 archive ABI version. Bump whenever the MSL emitter output, the
 // variant-key encoding, the MTLBinaryArchive schema we depend on, or the
 // FFP key bit layout changes. Embedded into the filename so a version
-// drift never reads from a stale archive.
-inline constexpr std::uint32_t kArchiveAbiVersion = 1;
+// drift never reads from a stale archive. Keep this in step with
+// pipeline::kShaderEmitterVersion / kShaderSourceLayoutVersion when those
+// source-identity fields change the generated MSL contract.
+inline constexpr std::uint32_t kArchiveAbiVersion = 2;
 
 // R-BACK-3.8 — prewarm mode selection.
 enum class Mode {

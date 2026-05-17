@@ -327,6 +327,10 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "    case 9u: return saturate((arg1 + arg2 - float4(0.5f)) * 2.0f);\n";
   out << "    case 10u: return saturate(arg1 - arg2);\n";
   out << "    case 11u: return saturate(arg1 + arg2 - arg1 * arg2);\n";
+  out << "    case 24u: {\n";
+  out << "      float value = clamp(dot(arg1.rgb * 2.0f - 1.0f, arg2.rgb * 2.0f - 1.0f), 0.0f, 1.0f);\n";
+  out << "      return float4(value, value, value, value);\n";
+  out << "    }\n";
   out << "    case 26u: return mix(arg2, arg1, current);\n";
   out << "    default: return arg1;\n";
   out << "  }\n";
@@ -385,14 +389,14 @@ std::string makeShaderPreludeArgbufHybrid(bool withClipDistances) {
   out << "  constant FfpVsConsts* ffpVs    [[id(1)]];\n";
   out << "  constant PsConsts*    psConsts [[id(2)]];\n";
   out << "  constant FfpPsConsts* ffpPs    [[id(3)]];\n";
-  out << "  texture2d<float>      textures2d[" << kArgbufHybridTextureSlotCount
-      << "] [[id(" << kArgbufHybridTexture2DBase << ")]];\n";
-  out << "  texturecube<float>    texturesCube[" << kArgbufHybridTextureSlotCount
-      << "] [[id(" << kArgbufHybridTextureCubeBase << ")]];\n";
-  out << "  texture3d<float>      textures3d[" << kArgbufHybridTextureSlotCount
-      << "] [[id(" << kArgbufHybridTexture3DBase << ")]];\n";
-  out << "  sampler               samplers[" << kArgbufHybridSamplerSlotCount
-      << "] [[id(" << kArgbufHybridSamplerBase << ")]];\n";
+  out << "  array<texture2d<float>, " << kArgbufHybridTextureSlotCount
+      << "> textures2d [[id(" << kArgbufHybridTexture2DBase << ")]];\n";
+  out << "  array<texturecube<float>, " << kArgbufHybridTextureSlotCount
+      << "> texturesCube [[id(" << kArgbufHybridTextureCubeBase << ")]];\n";
+  out << "  array<texture3d<float>, " << kArgbufHybridTextureSlotCount
+      << "> textures3d [[id(" << kArgbufHybridTexture3DBase << ")]];\n";
+  out << "  array<sampler, " << kArgbufHybridSamplerSlotCount
+      << "> samplers [[id(" << kArgbufHybridSamplerBase << ")]];\n";
   out << "};\n";
   return out.str();
 }

@@ -1248,16 +1248,10 @@ bool encodeDraw(EncodeContext& ctx,
     // Tile, and the standard fragment PSO otherwise. The variant key
     // already records this bit, so the two variants land in distinct
     // cache entries.
-    // R-BACK-12.22..12.26 — the cache also accepts an `argbufHybridMode`
-    // variant bit, but we deliberately omit it here. The Stage 2 MSL
-    // prelude is incomplete (the emitter still mirrors Stage 1 binds)
-    // and propagating the live bit flips every Apple-Silicon PSO onto
-    // the unfinished Stage 2 path, regressing the shader corpus suite.
-    // The encoder keeps Stage 1 slot 0/3 binds alongside the argbuf
-    // population (see the dirty-bit retention note ~30 lines below) so
-    // a Stage-1-compiled PSO is correct for both encoder modes today.
-    // When the Stage 2 emitter lands (R-BACK-12.24 P1), thread
-    // `argbufHybridMode` through here.
+    // R-BACK-12.22..12.26: pass `argbufHybridMode` through as a real
+    // PSO/source variant. Stage 1 uses direct slot 0/3 bindings; Stage 2
+    // emits the slot-30 ArgbufLayout prelude and reads cbuf/texture/sampler
+    // state through the argument buffer.
     WMT::Reference<WMT::RenderPipelineState> pipelineRef;
     WMT::RenderPipelineState pipeline{};
     if (suppressBaseStateLookup(ctx)) {
@@ -1265,7 +1259,7 @@ bool encodeDraw(EncodeContext& ctx,
     } else {
       pipelineRef = ctx.cache.getOrBuildDrawPipelineForState(
           ctx.device, ctx.limits, ctx.pool, drawState, ctx.shaderArchive,
-          ctx.shaderArchivePath, tileFfpMode).get();
+          ctx.shaderArchivePath, tileFfpMode, argbufHybridMode).get();
       pipeline = WMT::RenderPipelineState{pipelineRef.handle};
     }
     if (!pipeline) {
@@ -1357,14 +1351,9 @@ bool encodeDraw(EncodeContext& ctx,
   // bit is dirty, mirror the dirty regions into the argbuf so the cbuf
   // [[id(0..3)]] entries point at fresh transient slabs. The Stage 1
   // slot 0 / slot 3 binds below STILL run unmodified — the
-  // shader-translator emitter has not yet been switched to argbuf reads
-  // (P1 / R-BACK-12.26 track), so production shaders today still
-  // dereference the direct-bound slots. The argbuf write is therefore a
-  // shadow copy that exercises the populate path + bumps the upload
-  // counter; once P1 flips the emitter and P3 merges, this branch
-  // becomes the single source of truth and the slot 0/3 binds below
-  // can drop. Until then keeping both paths active preserves shader
-  // correctness on Apple Silicon (where the gate enables Stage 2).
+  // Stage 2 shaders dereference these cbuf entries through slot 30; the
+  // direct slot 0 / slot 3 binds below are retained as harmless Stage 1
+  // compatibility shadowing while the backend keeps both paths observable.
   if (argbufHybridMode) {
     const auto bytes = dxmt9::argbuf_hybrid::updateDirtyArgbufRegions(
         ctx.queue, ctx.queue.argbufEncoderResource(), drawState, *dirtyPtr,
@@ -1372,9 +1361,9 @@ bool encodeDraw(EncodeContext& ctx,
     if (bytes != 0) {
       perf::countArgbufHybridBytes(bytes);
     }
-    // Do NOT clear the dirty bits here — the Stage 1 binding loop below
-    // still consumes them so the slot 0 / slot 3 / FfpVs slot 3 binds
-    // remain consistent with the argbuf shadow copy.
+    // Do NOT clear the dirty bits here — the direct binding loop below
+    // still consumes them so Stage 1-observable slot 0 / slot 3 mirrors
+    // remain consistent with the Stage 2 argbuf entries.
   }
   {
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
@@ -1431,6 +1420,10 @@ bool encodeDraw(EncodeContext& ctx,
     auto* host = ensureFfpVs();
     auto slice = uploadTransientBuffer(host, sizeof(FfpVsConsts), alignof(FfpVsConsts));
     if (slice) {
+      if (argbufHybridMode) {
+        dxmt9::argbuf_hybrid::pointFfpVsAtSlice(
+            ctx.queue.argbufEncoderResource(), slice.buffer, slice.offset);
+      }
       recordedSetVertexBuffer(ctx, encoder, slice.buffer, slice.offset, 3);
       countUniformBufferBinds(1);
       perf::countUniformFfpVs(sizeof(FfpVsConsts));
@@ -1976,14 +1969,15 @@ bool encodeDraw(EncodeContext& ctx,
     }
   }
   // Phase 3-E: texture / sampler binding is BaseDrawState-only.
-  // R-BACK-12.24 — Stage 2 also populates these stages into the argbuf
-  // (via populateResourceBindings at startRenderPass) so [[id(4..19)]]
-  // mirrors the direct fragment-stage descriptor set. Until P1 wires
-  // the shader-translator emitter to read from the argbuf, the direct
-  // binds below remain the load-bearing source for shaders; the argbuf
-  // mirror is a shadow copy (design.md §11.2).
+  // R-BACK-12.24 — Stage 2 shaders read textures/samplers from the
+  // argbuf. Re-populate on each base-state bind so a same-pass draw that
+  // changes descriptors does not sample stale argbuf entries.
   if (!skipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
+    if (argbufHybridMode) {
+      dxmt9::argbuf_hybrid::populateResourceBindings(
+          ctx.device, ctx.pool, ctx.queue.argbufEncoderResource(), drawState);
+    }
     for (const auto& binding : makeFragmentTextureSamplerBindings(hot)) {
       const auto stage = binding.stage;
       const auto textureHandle = binding.texture;
@@ -2557,10 +2551,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // MTLArgumentEncoder at it, writes the four per-frequency cbuf
     // entries + the texture/sampler descriptors, and binds slot 30
     // (vertex + fragment) of the active render encoder. Stage 1's
-    // slot 0 / slot 3 binds in encodeDraw are still issued — the
-    // shader-translator emitter switch (P1 / R-BACK-12.26) hasn't
-    // landed yet, so shaders still read from slot 0/3 today. Anti-goal
-    // §"do not modify FFP/DXBC→MSL emitters" pins that until P1.
+    // slot 0 / slot 3 binds in encodeDraw are still issued as Stage 1
+    // compatibility shadowing, but Stage 2 PSOs read through this slot-30
+    // argbuf.
     //
     // When the gate fails (any non-Apple-Silicon device) `openArgbuf`
     // returns an empty handle and we fall through to the Stage 1

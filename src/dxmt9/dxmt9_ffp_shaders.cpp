@@ -700,10 +700,10 @@ std::string makeFfpTilePixelSource(const FfpPixelKey& key,
     out << "  constant FfpVsConsts* ffpVs    [[id(1)]];\n";
     out << "  constant PsConsts*    psConsts [[id(2)]];\n";
     out << "  constant FfpPsConsts* ffpPs    [[id(3)]];\n";
-    out << "  texture2d<float>      textures[" << shaders::kArgbufHybridTextureSlotCount
-        << "] [[id(" << shaders::kArgbufHybridConstantBufferCount << ")]];\n";
-    out << "  sampler               samplers[" << shaders::kArgbufHybridSamplerSlotCount
-        << "] [[id("
+    out << "  array<texture2d<float>, " << shaders::kArgbufHybridTextureSlotCount
+        << "> textures [[id(" << shaders::kArgbufHybridConstantBufferCount << ")]];\n";
+    out << "  array<sampler, " << shaders::kArgbufHybridSamplerSlotCount
+        << "> samplers [[id("
         << (shaders::kArgbufHybridConstantBufferCount + shaders::kArgbufHybridTextureSlotCount)
         << ")]];\n";
     out << "};\n";

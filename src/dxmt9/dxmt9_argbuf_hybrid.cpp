@@ -33,15 +33,13 @@ void appendTextureDescriptors(ArgumentDescriptors& descriptors,
                               std::size_t& cursor,
                               u32 baseIndex,
                               u32 textureType) {
-  for (u32 i = 0; i < shaders::kArgbufHybridTextureSlotCount; ++i) {
-    auto& d = descriptors.entries[cursor++];
-    d.argumentType = WMTArgumentTypeTexture;
-    d.index = baseIndex + i;
-    d.arrayLength = 0;
-    d.access = kArgumentAccessReadOnly;
-    d.textureType = textureType;
-    d.constantBlockAlignment = 0;
-  }
+  auto& d = descriptors.entries[cursor++];
+  d.argumentType = WMTArgumentTypeTexture;
+  d.index = baseIndex;
+  d.arrayLength = shaders::kArgbufHybridTextureSlotCount;
+  d.access = kArgumentAccessReadOnly;
+  d.textureType = textureType;
+  d.constantBlockAlignment = 0;
 }
 
 }  // namespace
@@ -66,16 +64,14 @@ ArgumentDescriptors buildArgumentDescriptors() {
   appendTextureDescriptors(descriptors, cursor, shaders::kArgbufHybridTextureCubeBase, kTextureTypeCube);
   appendTextureDescriptors(descriptors, cursor, shaders::kArgbufHybridTexture3DBase, kTextureType3D);
 
-  // 8 sampler descriptors after the typed texture descriptor ranges.
-  for (u32 i = 0; i < shaders::kArgbufHybridSamplerSlotCount; ++i) {
-    auto& d = descriptors.entries[cursor++];
-    d.argumentType = WMTArgumentTypeSampler;
-    d.index = shaders::kArgbufHybridSamplerBase + i;
-    d.arrayLength = 0;
-    d.access = kArgumentAccessReadOnly;
-    d.textureType = 0;
-    d.constantBlockAlignment = 0;
-  }
+  // One sampler array descriptor after the typed texture array ranges.
+  auto& sampler = descriptors.entries[cursor++];
+  sampler.argumentType = WMTArgumentTypeSampler;
+  sampler.index = shaders::kArgbufHybridSamplerBase;
+  sampler.arrayLength = shaders::kArgbufHybridSamplerSlotCount;
+  sampler.access = kArgumentAccessReadOnly;
+  sampler.textureType = 0;
+  sampler.constantBlockAlignment = 0;
 
   return descriptors;
 }
@@ -352,6 +348,14 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                                   kFfpPsArgbufIdx, seqId, recorder);
   }
   return bytes;
+}
+
+void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,
+                       WMT::Buffer buffer,
+                       u64 offset,
+                       const ArgbufRecorder* recorder) {
+  if (!encoderResource.initialized() || !buffer) return;
+  recordedSetBuffer(encoderResource, buffer, offset, kFfpVsArgbufIdx, recorder);
 }
 
 }  // namespace dxmt9::argbuf_hybrid

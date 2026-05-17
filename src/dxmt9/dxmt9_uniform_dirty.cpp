@@ -42,12 +42,10 @@ constexpr std::uint16_t kAllBits =
 
 void markAllDirty(DirtyState& state) {
   state.mask = kAllBits;
-  // C2 reads the range counters when VsF/VsI/... is dirty. After a
-  // markAllDirty (encoder init / per R-BACK-12.12), the counters carry
-  // the previously-observed high-water marks, which are still valid as
-  // an upper bound on slots that were ever written. We do NOT zero
-  // them: zeroing would tell C2 "no slots were ever written", which is
-  // a missed-dirty bug.
+  // Keep range counters intact across all-dirty transitions. They are
+  // diagnostic/future-planning metadata today; zeroing them would still
+  // lose the only high-water evidence collected from incoming state
+  // records.
 }
 
 void clearBit(DirtyState& state, DirtyBit bit) {

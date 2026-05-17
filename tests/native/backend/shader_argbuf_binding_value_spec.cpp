@@ -257,19 +257,21 @@ void assertShaderSlotMapsToSameStage(u32 stage) {
   const auto descriptors = dxmt9::argbuf_hybrid::buildArgumentDescriptors();
   const auto textureId = textureArgbufId(stage);
   const auto samplerId = samplerArgbufId(stage);
-  const auto& textureDesc = descriptors.entries[textureId];
-  const auto& samplerDesc = descriptors.entries[samplerId];
+  const auto& textureDesc = descriptors.entries[4u];
+  const auto& samplerDesc = descriptors.entries[7u];
 
   checkEq(static_cast<std::uint32_t>(textureDesc.argumentType),
           static_cast<std::uint32_t>(WMTArgumentTypeTexture),
-          "Stage 2 descriptor for textures2d[N] is a texture");
-  checkEq(static_cast<std::uint32_t>(textureDesc.index), textureId,
-          "Stage 2 2D texture descriptor index is 4 + N");
+          "Stage 2 descriptor for textures2d[] is a texture array");
+  check(textureId >= textureDesc.index &&
+            textureId < textureDesc.index + textureDesc.arrayLength,
+        "Stage 2 2D texture descriptor array covers texture id 4 + N");
   checkEq(static_cast<std::uint32_t>(samplerDesc.argumentType),
           static_cast<std::uint32_t>(WMTArgumentTypeSampler),
-          "Stage 2 descriptor for samplers[N] is a sampler");
-  checkEq(static_cast<std::uint32_t>(samplerDesc.index), samplerId,
-          "Stage 2 sampler descriptor index is 12 + N");
+          "Stage 2 descriptor for samplers[] is a sampler array");
+  check(samplerId >= samplerDesc.index &&
+            samplerId < samplerDesc.index + samplerDesc.arrayLength,
+        "Stage 2 sampler descriptor array covers sampler id 28 + N");
 }
 
 void testStageBindingsForFirstMiddleAndLastArgbufSlots() {

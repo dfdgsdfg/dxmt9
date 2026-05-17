@@ -108,11 +108,11 @@ struct ConstantUsage {
   std::int32_t maxColorIndex = -1;
   // Set when any source operand reads a constant register through
   // relative addressing (`c[a0+N]`, `c[aL+N]`). The emitter forces
-  // pointer aliasing to the full `vsConsts.vsFloatConst[]` buffer in
-  // that mode so the indexed read addresses the entire 256-vec4
-  // range. Combining indexed access with DEF overrides currently
-  // disables DEF — that combination is not observed in any tracked
-  // SM2/SM3 shader.
+  // pointer aliasing to the full `vsConsts.vsFloatConst[]` buffer when
+  // the shader does not write constants. If the shader combines indexed
+  // reads with DEF/DEFI/DEFB writes, the emitter materializes the full
+  // constant category into a mutable local array so both behaviours are
+  // preserved.
   bool hasIndexedFloat = false;
   bool hasIndexedInt = false;
   bool hasIndexedBool = false;

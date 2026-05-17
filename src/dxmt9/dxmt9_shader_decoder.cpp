@@ -336,8 +336,6 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_CALL:
     case kD3DSIO_IF:
     case kD3DSIO_TEXKILL:
-    case kD3DSIO_LOOP:
-    case kD3DSIO_REP:
       return 1;
     case kD3DSIO_IFC:
     case kD3DSIO_BREAKC:
@@ -997,11 +995,15 @@ ConstantUsage collectConstantUsage(const SpirvModule& module) {
     switch (instruction.opcode) {
       case kD3DSIO_IF:
       case kD3DSIO_IFC:
-      case kD3DSIO_LOOP:
-      case kD3DSIO_REP:
       case kD3DSIO_BREAKP:
       case kD3DSIO_TEXDEPTH:
         sourceBegin = 0;
+        break;
+      case kD3DSIO_LOOP:
+        sourceBegin = instruction.operands.size() > 1 ? 1u : 0u;
+        break;
+      case kD3DSIO_REP:
+        sourceBegin = 0u;
         break;
       case kD3DSIO_DEF:
       case kD3DSIO_DEFI:
@@ -1252,6 +1254,9 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
           return i == 0;  // [dst, f32 x4] / [dst, i32 x4]
         case kD3DSIO_DEFB:
           return i == 0;  // [dst, bool]
+        case kD3DSIO_LOOP:
+        case kD3DSIO_REP:
+          return true;   // LOOP [aL, i#] / REP [i#] register operands.
         case kD3DSIO_LABEL:
         case kD3DSIO_CALL:
           return false;   // label index only

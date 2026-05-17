@@ -75,6 +75,7 @@ ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layou
   }
   context.sampleCount = std::max(1u, hot.colorAttachments[0].sampleCount);
   context.clipPlaneMask = layout.clipPlaneMask;
+  context.unboundTextureFallback = true;
   return context;
 }
 

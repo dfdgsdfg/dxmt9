@@ -63,13 +63,15 @@ void checkEq(const A& left, const B& right, std::string_view message) {
 }
 
 enum class RecordedKind {
+  SetBuffer,
   SetTexture,
   SetSamplerState,
 };
 
 struct RecordedCommand {
-  RecordedKind kind = RecordedKind::SetTexture;
+  RecordedKind kind = RecordedKind::SetBuffer;
   obj_handle_t handle = 0;
+  std::uint64_t offset = 0;
   std::uint32_t index = 0;
 };
 
@@ -82,6 +84,20 @@ void recordSetTexture(void* userdata, WMT::Texture texture, std::uint32_t index)
   capture.commands.push_back(RecordedCommand{
       .kind = RecordedKind::SetTexture,
       .handle = texture.handle,
+      .offset = 0,
+      .index = index,
+  });
+}
+
+void recordSetBuffer(void* userdata,
+                     WMT::Buffer buffer,
+                     std::uint64_t offset,
+                     std::uint32_t index) {
+  auto& capture = *static_cast<Capture*>(userdata);
+  capture.commands.push_back(RecordedCommand{
+      .kind = RecordedKind::SetBuffer,
+      .handle = buffer.handle,
+      .offset = offset,
       .index = index,
   });
 }
@@ -93,6 +109,7 @@ void recordSetSamplerState(void* userdata,
   capture.commands.push_back(RecordedCommand{
       .kind = RecordedKind::SetSamplerState,
       .handle = sampler.handle,
+      .offset = 0,
       .index = index,
   });
 }
@@ -103,6 +120,7 @@ dxmt9::argbuf_hybrid::ArgbufRecorder makeRecorder(Capture& capture,
   recorder.userdata = &capture;
   recorder.suppressMetalCalls = true;
   recorder.samplerState.handle = samplerHandle;
+  recorder.setBuffer = recordSetBuffer;
   recorder.setTexture = recordSetTexture;
   recorder.setSamplerState = recordSetSamplerState;
   return recorder;
@@ -353,6 +371,33 @@ void testPopulateResourceBindingsRecordsTextureSamplerWrites() {
           "sampler1 writes argbuf id 29");
 }
 
+void testPointFfpVsAtSliceRecordsArgbufEntry() {
+  constexpr obj_handle_t kBuffer = 0x6000000000000030ull;
+  constexpr std::uint64_t kOffset = 256u;
+
+  dxmt9::argbuf_hybrid::ArgbufEncoderResource encoderResource;
+  encoderResource.initForTest(/*encodedLength=*/512u, /*alignment=*/16u);
+  Capture capture;
+  auto recorder = makeRecorder(capture, /*samplerHandle=*/0);
+
+  WMT::Buffer buffer{};
+  buffer.handle = kBuffer;
+  dxmt9::argbuf_hybrid::pointFfpVsAtSlice(
+      encoderResource, buffer, kOffset, &recorder);
+
+  checkEq(capture.commands.size(), std::size_t{1},
+          "FfpVs repoint records one argbuf write");
+  const auto& command = commandAt(capture, 0, "missing FfpVs setBuffer write");
+  check(command.kind == RecordedKind::SetBuffer,
+        "FfpVs repoint writes a buffer entry");
+  checkEq(command.handle, kBuffer,
+          "FfpVs repoint uses the uploaded slice buffer");
+  checkEq(command.offset, kOffset,
+          "FfpVs repoint uses the uploaded slice offset");
+  checkEq(command.index, std::uint32_t{1},
+          "FfpVs repoint writes argbuf id 1");
+}
+
 }  // namespace
 
 int main() {
@@ -369,6 +414,7 @@ int main() {
     testDirtyBytesEstimateAdditive();
     testPopulatedArgbufDefaultIsEmpty();
     testPopulateResourceBindingsRecordsTextureSamplerWrites();
+    testPointFfpVsAtSliceRecordsArgbufEntry();
   } catch (const TestFailure& failure) {
     std::cerr << "argbuf_populator_spec failed: " << failure.what() << '\n';
     return 1;

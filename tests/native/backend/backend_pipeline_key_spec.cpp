@@ -309,6 +309,76 @@ void testShaderVariantKeyHashRespondsToLayoutAndBlendState() {
         "blend state changes alter the PSO key hash");
 }
 
+void testShaderVariantKeyCarriesSourceIdentity() {
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x4444u;
+  desc.pixelShader.hash = 0x8888u;
+
+  const auto base = makeVariantKey(makeFlatDrawFixture(desc));
+  checkEq(base.emitterVersion,
+          dxmt9::pipeline::kShaderEmitterVersion,
+          "variant key stamps shader emitter version");
+  checkEq(base.sourceLayoutVersion,
+          dxmt9::pipeline::kShaderSourceLayoutVersion,
+          "variant key stamps shader source layout version");
+  checkEq(base.debugEnvSchemaVersion,
+          dxmt9::pipeline::kShaderDebugEnvSchemaVersion,
+          "variant key stamps debug-env schema version");
+  checkEq(base.debugEnvKey,
+          dxmt9::pipeline::currentShaderSourceDebugEnvKey(),
+          "variant key stamps current source-affecting debug env key");
+
+  const auto baseHash = dxmt9::pipeline::ShaderVariantKeyHash{}(base);
+
+  auto emitterChanged = base;
+  ++emitterChanged.emitterVersion;
+  check(!(emitterChanged == base), "emitter version changes key equality");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(emitterChanged) != baseHash,
+        "emitter version changes key hash");
+
+  auto layoutChanged = base;
+  ++layoutChanged.sourceLayoutVersion;
+  check(!(layoutChanged == base), "source layout version changes key equality");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(layoutChanged) != baseHash,
+        "source layout version changes key hash");
+
+  auto debugSchemaChanged = base;
+  ++debugSchemaChanged.debugEnvSchemaVersion;
+  check(!(debugSchemaChanged == base), "debug env schema version changes key equality");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(debugSchemaChanged) != baseHash,
+        "debug env schema version changes key hash");
+
+  const auto debugOff = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
+      /*trimUnusedVaryings=*/false,
+      /*fsHalfPrecision=*/false,
+      /*forceFullscreenVertex=*/false,
+      /*flipTranslatedVertexY=*/false,
+      /*forceFragmentShaderColor=*/false,
+      "",
+      /*forcePixelVFlip=*/false,
+      /*debugFfpUv=*/false,
+      /*debugFfpTexture=*/false,
+      /*debugFfpAlpha=*/false);
+  const auto debugUv = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
+      /*trimUnusedVaryings=*/true,
+      /*fsHalfPrecision=*/false,
+      /*forceFullscreenVertex=*/false,
+      /*flipTranslatedVertexY=*/false,
+      /*forceFragmentShaderColor=*/false,
+      "uv",
+      /*forcePixelVFlip=*/false,
+      /*debugFfpUv=*/false,
+      /*debugFfpTexture=*/false,
+      /*debugFfpAlpha=*/false);
+  check(debugOff != debugUv, "pure debug env key responds to source-affecting values");
+
+  auto debugEnvChanged = base;
+  debugEnvChanged.debugEnvKey = base.debugEnvKey ^ 0x9e3779b97f4a7c15ull;
+  check(!(debugEnvChanged == base), "source-affecting debug env changes key equality");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(debugEnvChanged) != baseHash,
+        "source-affecting debug env changes key hash");
+}
+
 void testProgrammableShaderVariantKeyUsesFullVertexDeclHash() {
   constexpr u32 kD3DDeclTypeFloat2 = 1u;
   constexpr u32 kD3DDeclTypeFloat3 = 2u;
@@ -446,6 +516,7 @@ int main() {
     testShaderVariantKeyReflectsSamplerTextureAndFiltering();
     testFvfLayoutHashIsDeterministicAndResponsive();
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();
+    testShaderVariantKeyCarriesSourceIdentity();
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();
     testSrgbCompatiblePixelFormatConversion();

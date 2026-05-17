@@ -36,9 +36,10 @@ enum class DirtyBit : std::uint16_t {
 // dirty. C2 calls markAllDirty(...) at encoder init per R-BACK-12.12.
 //
 // The maxChanged* counters track the highest (startReg + count) seen
-// per shader-constant category since the last clear. C2 reads these to
-// size the upload sub-allocation and skip writing slots above the high
-// water mark.
+// per shader-constant category since the last clear. They are retained
+// for a future shader-usage-aware range-upload path; the production
+// encoder still binds full VsConsts/PsConsts blocks because the current
+// MSL ABI exposes each category as one contiguous struct.
 struct DirtyState {
   std::uint16_t mask = 0;
   std::uint16_t maxChangedVsF = 0;

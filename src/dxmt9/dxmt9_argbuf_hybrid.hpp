@@ -251,4 +251,13 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               std::uint64_t seqId,
                               const ArgbufRecorder* recorder = nullptr);
 
+// R-BACK-12.24 — point the Stage 2 FfpVsConsts entry at an already
+// uploaded host slice. Used by encodeDraw after the FFP preTransformed
+// viewport override mutates the lazily-built host block; reusing the same
+// slice keeps Stage 1 slot 3 and Stage 2 argbuf id(1) coherent.
+void pointFfpVsAtSlice(ArgbufEncoderResource& encoderResource,
+                       WMT::Buffer buffer,
+                       u64 offset,
+                       const ArgbufRecorder* recorder = nullptr);
+
 }  // namespace dxmt9::argbuf_hybrid

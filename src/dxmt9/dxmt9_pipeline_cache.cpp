@@ -16,6 +16,7 @@
 #include <exception>
 #include <future>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace dxmt9::pipeline {
@@ -37,7 +38,52 @@ bool debugForceVisibleDraw() {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
+bool envFlag(const char* name) noexcept {
+  const char* env = std::getenv(name);
+  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
 }  // namespace
+
+u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
+                                bool fsHalfPrecision,
+                                bool forceFullscreenVertex,
+                                bool flipTranslatedVertexY,
+                                bool forceFragmentShaderColor,
+                                std::string_view fragmentMode,
+                                bool forcePixelVFlip,
+                                bool debugFfpUv,
+                                bool debugFfpTexture,
+                                bool debugFfpAlpha) noexcept {
+  u64 hash = kFnvOffset;
+  hash = mix(hash, kShaderDebugEnvSchemaVersion);
+  hash = mix(hash, static_cast<u64>(trimUnusedVaryings));
+  hash = mix(hash, static_cast<u64>(fsHalfPrecision));
+  hash = mix(hash, static_cast<u64>(forceFullscreenVertex));
+  hash = mix(hash, static_cast<u64>(flipTranslatedVertexY));
+  hash = mix(hash, static_cast<u64>(forceFragmentShaderColor));
+  hash = mix(hash, core::hashString(fragmentMode));
+  hash = mix(hash, static_cast<u64>(forcePixelVFlip));
+  hash = mix(hash, static_cast<u64>(debugFfpUv));
+  hash = mix(hash, static_cast<u64>(debugFfpTexture));
+  hash = mix(hash, static_cast<u64>(debugFfpAlpha));
+  return hash;
+}
+
+u64 currentShaderSourceDebugEnvKey() noexcept {
+  const char* fragmentMode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE");
+  return makeShaderSourceDebugEnvKey(
+      envFlag("DXMT9_TRIM_UNUSED_VARYINGS"),
+      envFlag("DXMT9_FS_HALF_PRECISION"),
+      envFlag("DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX"),
+      envFlag("DXMT_DEBUG_FLIP_VERTEX_Y"),
+      envFlag("DXMT_DEBUG_FORCE_FRAGMENT_COLOR"),
+      fragmentMode ? std::string_view(fragmentMode) : std::string_view{},
+      envFlag("DXMT_DEBUG_FORCE_PIXEL_V_FLIP"),
+      envFlag("DXMT_DEBUG_FFP_UV"),
+      envFlag("DXMT_DEBUG_FFP_TEXTURE"),
+      envFlag("DXMT_DEBUG_FFP_ALPHA"));
+}
 
 std::optional<detail::DrawShaderSources>
 detail::makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& shaderSource,
@@ -136,6 +182,10 @@ std::size_t StencilFaceKeyHash::operator()(const StencilFaceKey& key) const noex
 
 std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const noexcept {
   u64 hash = key.hash;
+  hash = mix(hash, key.emitterVersion);
+  hash = mix(hash, key.sourceLayoutVersion);
+  hash = mix(hash, key.debugEnvSchemaVersion);
+  hash = mix(hash, key.debugEnvKey);
   hash = mix(hash, static_cast<u64>(key.textured));
   hash = mix(hash, static_cast<u64>(key.linear));
   hash = mix(hash, static_cast<u64>(key.clipPlanes));
@@ -616,13 +666,24 @@ TileFfpSelection selectTileFfpForPass(core::FlatDrawStateView state, bool suppor
 
 ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,
                                                  bool argbufHybridEnabled) {
-  (void)state;
-  // Capability gate is the only criterion today (design.md §11.1):
-  // Tier-2 argbuf + Apple3 cached as a single bool on the pool. When
+  // Tier-2 argbuf + Apple3 is cached as a single bool on the pool. When
   // the gate fails the pass commits to Stage 1 and never switches
-  // (R-BACK-12.22).
-  return argbufHybridEnabled ? ArgbufHybridDecision::Stage2
-                              : ArgbufHybridDecision::Stage1;
+  // (R-BACK-12.22). Texture-bound draws also stay on Stage 1 until the
+  // Stage 2 texture/sampler readback lane is stable.
+  if (!argbufHybridEnabled) {
+    return ArgbufHybridDecision::Stage1;
+  }
+  // The Stage 2 texture/sampler argbuf path is kept behind a runtime
+  // fallback until texture-bound readback evidence is stable. Uniform-only
+  // draws still exercise the slot-30 cbuf path.
+  if (state.hot) {
+    for (const auto& texture : state.hot->textures) {
+      if (texture) {
+        return ArgbufHybridDecision::Stage1;
+      }
+    }
+  }
+  return ArgbufHybridDecision::Stage2;
 }
 
 ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
@@ -636,6 +697,10 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
   const auto& vertexShader = shader.vertexShader;
   const auto& pixelShader = shader.pixelShader;
   ShaderVariantKey key{};
+  key.emitterVersion = kShaderEmitterVersion;
+  key.sourceLayoutVersion = kShaderSourceLayoutVersion;
+  key.debugEnvSchemaVersion = kShaderDebugEnvSchemaVersion;
+  key.debugEnvKey = currentShaderSourceDebugEnvKey();
   const auto layout =
       vertexShader.kind == core::ShaderRef::Kind::FixedFunctionVertex
           ? ffp::decodeFixedFunctionVertexLayout(vertexDecl)

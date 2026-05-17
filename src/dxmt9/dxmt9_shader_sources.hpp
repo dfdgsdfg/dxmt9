@@ -122,10 +122,10 @@ bool fsHalfPrecisionEnabled();
 //     constant FfpVsConsts* ffpVs    [[id(1)]];
 //     constant PsConsts* psConsts    [[id(2)]];
 //     constant FfpPsConsts* ffpPs    [[id(3)]];
-//     texture2d<float> textures2d[8]     [[id(4)]];
-//     texturecube<float> texturesCube[8] [[id(12)]];
-//     texture3d<float> textures3d[8]     [[id(20)]];
-//     sampler samplers[8]                [[id(28)]];
+//     array<texture2d<float>, 8> textures2d     [[id(4)]];
+//     array<texturecube<float>, 8> texturesCube [[id(12)]];
+//     array<texture3d<float>, 8> textures3d     [[id(20)]];
+//     array<sampler, 8> samplers                [[id(28)]];
 //   };
 //
 // Shaders compiled with this prelude bind a single argument buffer at
@@ -140,10 +140,10 @@ std::string makeShaderPreludeArgbufHybrid(bool withClipDistances);
 inline constexpr std::uint32_t kArgbufHybridBindSlot = 30u;
 
 // R-BACK-12.23 — argbuf descriptor field counts. The ArgbufLayout
-// struct holds 4 constant-buffer pointers, 8 descriptors for each
-// texture dimensionality (2D / cube / 3D), and 8 sampler descriptors.
-// Texture and sampler indices are 8 each by design (design.md §11.2
-// references slots 0..7).
+// struct holds 4 constant-buffer pointers, three texture arrays, and
+// one sampler array. The array fields expose element ids 4..35, but
+// each array is represented by one MTLArgumentDescriptor with
+// arrayLength=8.
 inline constexpr std::uint32_t kArgbufHybridConstantBufferCount = 4u;
 inline constexpr std::uint32_t kArgbufHybridTextureSlotCount = 8u;
 inline constexpr std::uint32_t kArgbufHybridTexture2DBase =
@@ -156,7 +156,6 @@ inline constexpr std::uint32_t kArgbufHybridSamplerBase =
     kArgbufHybridTexture3DBase + kArgbufHybridTextureSlotCount;
 inline constexpr std::uint32_t kArgbufHybridSamplerSlotCount = 8u;
 inline constexpr std::uint32_t kArgbufHybridDescriptorCount =
-    kArgbufHybridConstantBufferCount + (3u * kArgbufHybridTextureSlotCount) +
-    kArgbufHybridSamplerSlotCount;
+    kArgbufHybridConstantBufferCount + 3u + 1u;
 
 }  // namespace dxmt9::shaders

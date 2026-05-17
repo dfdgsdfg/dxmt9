@@ -684,7 +684,7 @@ oracle-date = "2026-05-17"
 
 [[test]]
 file = "texture/dxmt9_ffp_tss_dotproduct3_alpha_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -816,7 +816,7 @@ oracle-date = "2026-05-16"
 
 [[test]]
 file = "texture/dxmt9_unbound_sampler_2d_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -1164,7 +1164,7 @@ oracle-date = "2026-03-29"
 
 [[test]]
 file = "arithmetic/dxmt9_dsy_vpos_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -1200,7 +1200,7 @@ oracle-date = "2026-05-17"
 
 [[test]]
 file = "flow_control/dxmt9_ps30_nested_loop_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -1260,7 +1260,7 @@ oracle-date = "2026-05-17"
 
 [[test]]
 file = "viewport/dxmt9_vpos_fragment_coords_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -1272,7 +1272,7 @@ oracle-date = "2026-05-17"
 
 [[test]]
 file = "vs_specific/dxmt9_mova_relative_color_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"

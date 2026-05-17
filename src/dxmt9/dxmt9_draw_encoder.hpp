@@ -226,12 +226,11 @@ bool encodeDraw(EncodeContext& ctx,
                  // this render encoder. When true, the per-frequency UBO
                  // dirty consume path rewrites the matching argbuf
                  // sub-regions (via argbuf_hybrid::updateDirtyArgbufRegions)
-                 // instead of issuing slot 0 / slot 3 vertex/fragment
-                 // buffer binds. The slot-30 argbuf bind itself is issued
-                 // once at startRenderPass; encodeDraw never re-binds
-                 // slot 30 because the per-encoder argbuf is sticky for
-                 // the pass. DrawVolatile (slot 5) and the vertex stream
-                 // (slot 1) are unchanged in either mode (design.md §11.2).
+                 // while the Stage 2 PSO reads slot 30. Direct slot 0 / 3
+                 // binds may still be mirrored for Stage 1 observability,
+                 // but they are not load-bearing for Stage 2 shaders.
+                 // DrawVolatile (slot 5) and the vertex stream (slot 1)
+                 // are unchanged in either mode (design.md §11.2).
                  bool argbufHybridMode = false);
 
 // Encode a single chunk's commands into a fresh WMT::CommandBuffer.

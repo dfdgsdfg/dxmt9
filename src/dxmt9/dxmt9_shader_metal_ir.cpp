@@ -42,6 +42,10 @@ using ::dxmt9::shaders::kArgbufHybridBindSlot;
 
 namespace {
 
+std::string pixelPositionExpression(const std::string& pixelInputs) {
+  return pixelInputs + ".position";
+}
+
 std::string formatFloatLiteral(f32 value) {
   std::ostringstream out;
   out << std::setprecision(9) << value;
@@ -504,6 +508,10 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       }
       return "float4(aL)";
     case D3DRegisterKind::MiscType:
+      if (!vertexStage && reg.index == 0) {
+        return pixelPositionExpression(pixelInputs);
+      }
+      return "float4(0.0f)";
     case D3DRegisterKind::Sampler:
     case D3DRegisterKind::Unknown:
       return "float4(0.0f)";
@@ -530,36 +538,36 @@ void emitConstantBindings(std::ostringstream& out, bool vertexStage, const Const
   const char* intMember = vertexStage ? "vsIntConst" : "psIntConst";
   const char* boolMember = vertexStage ? "vsBoolConst" : "psBoolConst";
 
-  // Each constant category gets pointer-aliasing whenever it is read
-  // through relative addressing — `c[a0+N]` must address the full
-  // 256-vec4 (16-int4, 16-bool) range, which the local-copy fast path
-  // can't guarantee. DEF/DEFI/DEFB writes then become read-only;
-  // combining DEF with indexed reads is not observed in any tracked
-  // SM2/SM3 shader, so the trade-off is correct on the common case.
-  const bool aliasFloat = !usage.mutableConstants || usage.hasIndexedFloat;
-  const bool aliasInt = !usage.mutableConstants || usage.hasIndexedInt;
-  const bool aliasBool = !usage.mutableConstants || usage.hasIndexedBool;
+  const u32 floatCount = usage.hasIndexedFloat
+                             ? constantRegisterMaxIndex(D3DRegisterKind::ConstFloat, vertexStage) + 1u
+                             : usage.floatCount;
+  const u32 intCount = usage.hasIndexedInt
+                           ? constantRegisterMaxIndex(D3DRegisterKind::ConstInt, vertexStage) + 1u
+                           : usage.intCount;
+  const u32 boolCount = usage.hasIndexedBool
+                            ? constantRegisterMaxIndex(D3DRegisterKind::ConstBool, vertexStage) + 1u
+                            : usage.boolCount;
+  const bool aliasFloat = !usage.mutableConstants;
+  const bool aliasInt = !usage.mutableConstants;
+  const bool aliasBool = !usage.mutableConstants;
 
   if (aliasFloat) {
     out << "  constant float4* cFloat = " << container << "." << floatMember << ";\n";
   } else {
-    out << "  float4 cFloat[" << std::max(1u, usage.floatCount) << "];\n";
-    out << "  for (uint i = 0; i < " << usage.floatCount << "; ++i) { cFloat[i] = " << container << "."
-        << floatMember << "[i]; }\n";
+    out << "  float4 cFloat[" << std::max(1u, floatCount) << "];\n";
+    out << "  for (uint i = 0; i < " << floatCount << "; ++i) { cFloat[i] = float4(0.0f); }\n";
   }
   if (aliasInt) {
     out << "  constant int4* cInt = " << container << "." << intMember << ";\n";
   } else {
-    out << "  int4 cInt[" << std::max(1u, usage.intCount) << "];\n";
-    out << "  for (uint i = 0; i < " << usage.intCount << "; ++i) { cInt[i] = " << container << "." << intMember
-        << "[i]; }\n";
+    out << "  int4 cInt[" << std::max(1u, intCount) << "];\n";
+    out << "  for (uint i = 0; i < " << intCount << "; ++i) { cInt[i] = int4(0); }\n";
   }
   if (aliasBool) {
     out << "  constant uint* cBool = " << container << "." << boolMember << ";\n";
   } else {
-    out << "  uint cBool[" << std::max(1u, usage.boolCount) << "];\n";
-    out << "  for (uint i = 0; i < " << usage.boolCount << "; ++i) { cBool[i] = " << container << "." << boolMember
-        << "[i]; }\n";
+    out << "  uint cBool[" << std::max(1u, boolCount) << "];\n";
+    out << "  for (uint i = 0; i < " << boolCount << "; ++i) { cBool[i] = 0u; }\n";
   }
 }
 
@@ -576,7 +584,7 @@ std::string readPixelInputSemanticExpression(const PixelInputSemantic& semantic,
   switch (semantic.usage) {
     case kD3DDeclUsagePosition:
     case kD3DDeclUsagePositionT:
-      return pixelInputs + ".position";
+      return pixelPositionExpression(pixelInputs);
     case kD3DDeclUsagePSize:
       return "float4(" + pixelInputs + ".pointSize)";
     case kD3DDeclUsageTexcoord:
@@ -625,13 +633,18 @@ std::string readPixelInputExpression(u32 token,
       return "dxmt9_select_texcoord(" + pixelInputs + ", " + std::to_string(index) + "u)";
     case kD3DSPR_RASTOUT:
       if (index == 0) {
-        return pixelInputs + ".position";
+        return pixelPositionExpression(pixelInputs);
       }
       if (index == 1) {
         return "float4(" + pixelInputs + ".fogFactor)";
       }
       if (index == 2) {
         return "float4(" + pixelInputs + ".pointSize)";
+      }
+      break;
+    case kD3DSPR_MISCTYPE:
+      if (index == 0) {
+        return pixelPositionExpression(pixelInputs);
       }
       break;
     default:
@@ -1213,7 +1226,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           throw std::runtime_error("loop requires a count operand");
         }
         const auto loopIndex = instructionIndex;
-        const auto countExpr = "max(0, int(round(" + readSrc(0) + ".x)))";
+        const auto countSource = instruction.opcode == kD3DSIO_LOOP && instruction.operands.size() > 1
+                                     ? readSrc(1)
+                                     : readSrc(0);
+        const auto countExpr = "max(0, int(round(" + countSource + ".x)))";
         const auto guard = currentGuard(instruction);
         const auto loopGuard = guard.empty() ? std::string{} : guard + " && ";
         if (instruction.opcode == kD3DSIO_LOOP) {
@@ -1955,6 +1971,13 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       expr = applySourceModifier(std::move(expr), decodeSourceModifier(token));
       return expr;
     };
+    auto sourceIsVPos = [&](size_t index) {
+      if (index >= instruction.operands.size()) {
+        return false;
+      }
+      const auto reg = decodeOperandRegister(instruction, index, module.stage);
+      return reg.kind == D3DRegisterKind::MiscType && reg.index == 0;
+    };
 
     auto emitMaskedAssign = [&](const std::string& target, const std::string& value, u32 mask, bool scalar = false) {
       if (scalar) {
@@ -1987,6 +2010,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     auto sampleCoord = [&](u32 sampler, const std::string& coord) {
       return sampleCoordExpression(samplerTextureType(module, context, sampler), coord, forcePixelVFlip);
     };
+    auto sampleTexture = [&](u32 sampler, const std::string& coord) {
+      if (context.unboundTextureFallback &&
+          (sampler >= context.textures.size() || !context.textures[sampler])) {
+        return std::string("float4(0.0f, 0.0f, 0.0f, 1.0f)");
+      }
+      return "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", "
+             + sampleCoord(sampler, coord) + ")";
+    };
     auto legacyStage = [&] {
       if (instruction.operands.empty()) {
         throw std::runtime_error("legacy texture opcode requires a destination/stage operand");
@@ -1997,8 +2028,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       return "dxmt9_select_texcoord(in, " + std::to_string(stage) + "u)";
     };
     auto legacySample = [&](u32 stage, const std::string& coord) {
-      return "tex" + std::to_string(stage) + ".sample(samp" + std::to_string(stage) + ", " +
-             sampleCoord(stage, coord) + ")";
+      return sampleTexture(stage, coord);
     };
     auto legacyDstTarget = [&](u32 token) {
       const auto index = decodeRegisterIndex(token);
@@ -2183,7 +2213,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         throw std::runtime_error("loop requires a count operand");
       }
       const auto loopIndex = instructionIndex;
-      const auto countExpr = "max(0, int(round(" + readSrc(0) + ".x)))";
+      const auto countSource = instruction.opcode == kD3DSIO_LOOP && instruction.operands.size() > 1
+                                   ? readSrc(1)
+                                   : readSrc(0);
+      const auto countExpr = "max(0, int(round(" + countSource + ".x)))";
       const auto guard = currentGuard(instruction);
       const auto loopGuard = guard.empty() ? std::string{} : guard + " && ";
       if (instruction.opcode == kD3DSIO_LOOP) {
@@ -2557,15 +2590,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                   module.major == 1u ? legacyStage() : textureSamplerIndex(instruction, module.stage);
               const auto coord =
                   module.major == 1u && module.minor < 4u ? texcoordTarget(sampler) : readSrc(1);
-              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-                      sampleCoord(sampler, coord) + ")";
+              value = sampleTexture(sampler, coord);
             }
             break;
           case kD3DSIO_DSX:
-            value = "dfdx(" + readSrc(1) + ")";
+            value = sourceIsVPos(1) ? "float4(1.0f, 0.0f, 0.0f, 0.0f)" : "dfdx(" + readSrc(1) + ")";
             break;
           case kD3DSIO_DSY:
-            value = "dfdy(" + readSrc(1) + ")";
+            value = sourceIsVPos(1) ? "float4(0.0f, 1.0f, 0.0f, 0.0f)" : "dfdy(" + readSrc(1) + ")";
             break;
           case kD3DSIO_TEXLDD:
             {
@@ -2573,17 +2605,27 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               const auto coord = readSrc(1);
               const auto ddx = readSrc(3);
               const auto ddy = readSrc(4);
-              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-                      sampleCoord(sampler, coord) + ", " +
-                      textureGradientExpression(samplerTextureType(module, context, sampler), ddx, ddy) + ")";
+              if (context.unboundTextureFallback &&
+                  (sampler >= context.textures.size() || !context.textures[sampler])) {
+                value = "float4(0.0f, 0.0f, 0.0f, 1.0f)";
+              } else {
+                value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+                        sampleCoord(sampler, coord) + ", " +
+                        textureGradientExpression(samplerTextureType(module, context, sampler), ddx, ddy) + ")";
+              }
             }
             break;
 	          case kD3DSIO_TEXLDL:
 	            {
 	              const auto sampler = textureSamplerIndex(instruction, module.stage);
 	              const auto coord = readSrc(1);
-	              value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
-                      sampleCoord(sampler, coord) + ", level(" + coord + ".w))";
+	              if (context.unboundTextureFallback &&
+	                  (sampler >= context.textures.size() || !context.textures[sampler])) {
+	                value = "float4(0.0f, 0.0f, 0.0f, 1.0f)";
+	              } else {
+	                value = "tex" + std::to_string(sampler) + ".sample(samp" + std::to_string(sampler) + ", " +
+                        sampleCoord(sampler, coord) + ", level(" + coord + ".w))";
+	              }
 	            }
 	            break;
           default:

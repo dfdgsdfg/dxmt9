@@ -285,6 +285,7 @@ void testTranslatedPixelStage1Bindings() {
   ShaderRef shader = makePixelShaderRef();
   DrawDesc desc{};
   desc.pixelShader = shader;
+  desc.textures[2].handle = Handle{3};
   const auto src = dxmt9::translator::makeTranslatedFragmentSource(
       shader, makeContext(desc, /*argbufHybridMode=*/false));
   checkContains(src, "constant PsConsts& psConsts [[buffer(0)]]",
@@ -305,6 +306,7 @@ void testTranslatedPixelStage2Bindings() {
   ShaderRef shader = makePixelShaderRef();
   DrawDesc desc{};
   desc.pixelShader = shader;
+  desc.textures[2].handle = Handle{3};
   const auto src = dxmt9::translator::makeTranslatedFragmentSource(
       shader, makeContext(desc, /*argbufHybridMode=*/true));
   checkContains(src, "[[buffer(30)]]",

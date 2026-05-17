@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace dxmt9 { namespace resources { struct Pool; } }
@@ -30,6 +31,13 @@ namespace dxmt9::pipeline {
 
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
+
+// Shader-source identity that is orthogonal to D3D9 input state. Bump the
+// emitter/layout versions when MSL text or host-visible source layout changes;
+// debugEnvKey covers source-affecting env toggles for the current process.
+inline constexpr u32 kShaderEmitterVersion = 1u;
+inline constexpr u32 kShaderSourceLayoutVersion = 1u;
+inline constexpr u32 kShaderDebugEnvSchemaVersion = 1u;
 
 struct BlendAttachmentKey {
   bool blendingEnabled = false;
@@ -67,6 +75,10 @@ struct StencilFaceKeyHash {
 
 struct ShaderVariantKey {
   u64 hash = 0;
+  u32 emitterVersion = kShaderEmitterVersion;
+  u32 sourceLayoutVersion = kShaderSourceLayoutVersion;
+  u32 debugEnvSchemaVersion = kShaderDebugEnvSchemaVersion;
+  u64 debugEnvKey = 0;
   bool textured = false;
   bool linear = false;
   bool clipPlanes = false;
@@ -97,6 +109,22 @@ struct ShaderVariantKey {
 struct ShaderVariantKeyHash {
   std::size_t operator()(const ShaderVariantKey& key) const noexcept;
 };
+
+// Stable value transform for source-affecting debug flags. Kept public so
+// native tests can verify the key shape without mutating process env.
+u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
+                                bool fsHalfPrecision,
+                                bool forceFullscreenVertex,
+                                bool flipTranslatedVertexY,
+                                bool forceFragmentShaderColor,
+                                std::string_view fragmentMode,
+                                bool forcePixelVFlip,
+                                bool debugFfpUv,
+                                bool debugFfpTexture,
+                                bool debugFfpAlpha) noexcept;
+
+// Reads the current process env knobs that can change emitted draw MSL.
+u64 currentShaderSourceDebugEnvKey() noexcept;
 
 namespace detail {
 

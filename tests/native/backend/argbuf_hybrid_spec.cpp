@@ -6,8 +6,8 @@
 //   - ShaderVariantKey carries the argbufHybridMode bit so Stage 1 and
 //     Stage 2 PSOs hash to distinct cache entries (R-BACK-12.23).
 //   - WMTArgumentDescriptor build covers the typed argbuf layout
-//     (4 const buffers + 8 textures + 8 samplers) at the [[id(N)]]
-//     positions the MSL ArgbufLayout pins.
+//     (4 const buffers + 3 texture arrays + 1 sampler array) at the
+//     [[id(N)]] positions the MSL ArgbufLayout pins.
 //   - MSL prelude variant text contains the ArgbufLayout struct.
 //
 // Hardware shader-runner equality (R-BACK-12.26) is a follow-up — this
@@ -101,6 +101,18 @@ void testSelectorPicksStage2WhenEnabled() {
           "capability gate hold picks Stage 2");
 }
 
+void testSelectorFallsBackForTextureBoundDraws() {
+  FlatDrawStateRecord hot{};
+  hot.textures[0] = Handle{1};
+  DrawShaderLayoutContext shaderLayout{};
+  FlatDrawStateView view{.hot = &hot, .shaderLayout = &shaderLayout};
+  const auto decision =
+      dxmt9::pipeline::selectArgbufHybridForPass(view, /*argbufHybridEnabled=*/true);
+  checkEq(static_cast<int>(decision),
+          static_cast<int>(dxmt9::pipeline::ArgbufHybridDecision::Stage1),
+          "texture-bound draws stay on Stage 1 until Stage 2 texture evidence is stable");
+}
+
 // ---------------------------------------------------------------------
 // A3 — variant key bit (R-BACK-12.23)
 
@@ -150,10 +162,10 @@ void testArgumentDescriptorCount() {
   const auto descriptors = dxmt9::argbuf_hybrid::buildArgumentDescriptors();
   checkEq(static_cast<std::uint64_t>(descriptors.count()),
           static_cast<std::uint64_t>(dxmt9::shaders::kArgbufHybridDescriptorCount),
-          "descriptor table holds 4 cbuf + 24 typed texture + 8 sampler entries");
+          "descriptor table holds 4 cbuf + 3 texture arrays + 1 sampler array");
   checkEq(static_cast<std::uint64_t>(descriptors.count()),
-          static_cast<std::uint64_t>(36),
-          "descriptor count is 36");
+          static_cast<std::uint64_t>(8),
+          "descriptor count is 8");
 }
 
 void testArgumentDescriptorRoles() {
@@ -169,24 +181,34 @@ void testArgumentDescriptorRoles() {
     check(d.constantBlockAlignment >= 16u,
           "buffer descriptors carry >=16 B alignment");
   }
-  // Next 24 entries: 2D, cube, then 3D texture descriptors.
-  for (std::uint32_t i = 0; i < 24; ++i) {
+  // Next 3 entries: 2D, cube, then 3D texture arrays.
+  const std::uint32_t textureBases[] = {
+      dxmt9::shaders::kArgbufHybridTexture2DBase,
+      dxmt9::shaders::kArgbufHybridTextureCubeBase,
+      dxmt9::shaders::kArgbufHybridTexture3DBase,
+  };
+  for (std::uint32_t i = 0; i < 3; ++i) {
     const auto& d = descriptors.entries[4u + i];
     checkEq(static_cast<std::uint32_t>(d.argumentType),
             static_cast<std::uint32_t>(WMTArgumentTypeTexture),
-            "entries 4..27 are textures");
-    checkEq(static_cast<std::uint32_t>(d.index), 4u + i,
-            "texture descriptor indices are 4..27");
+            "entries 4..6 are texture arrays");
+    checkEq(static_cast<std::uint32_t>(d.index), textureBases[i],
+            "texture array descriptor index is the MSL base id");
+    checkEq(static_cast<std::uint32_t>(d.arrayLength),
+            dxmt9::shaders::kArgbufHybridTextureSlotCount,
+            "texture array descriptors have 8 elements");
   }
-  // Next 8 entries: samplers at id 28..35.
-  for (std::uint32_t i = 0; i < 8; ++i) {
-    const auto& d = descriptors.entries[28u + i];
-    checkEq(static_cast<std::uint32_t>(d.argumentType),
-            static_cast<std::uint32_t>(WMTArgumentTypeSampler),
-            "entries 28..35 are samplers");
-    checkEq(static_cast<std::uint32_t>(d.index), 28u + i,
-            "sampler descriptor indices are 28..35");
-  }
+  // Final entry: sampler array at id 28 with 8 elements.
+  const auto& sampler = descriptors.entries[7u];
+  checkEq(static_cast<std::uint32_t>(sampler.argumentType),
+          static_cast<std::uint32_t>(WMTArgumentTypeSampler),
+          "entry 7 is the sampler array");
+  checkEq(static_cast<std::uint32_t>(sampler.index),
+          dxmt9::shaders::kArgbufHybridSamplerBase,
+          "sampler array descriptor index is the MSL base id");
+  checkEq(static_cast<std::uint32_t>(sampler.arrayLength),
+          dxmt9::shaders::kArgbufHybridSamplerSlotCount,
+          "sampler array descriptor has 8 elements");
 }
 
 // ---------------------------------------------------------------------
@@ -202,13 +224,13 @@ void testArgbufHybridPreludeContainsArgbufLayout() {
         "argbuf-hybrid prelude pins texture base id 4");
   check(prelude.find("[[id(28)]]") != std::string::npos,
         "argbuf-hybrid prelude pins sampler base id 28");
-  check(prelude.find("textures2d[8]") != std::string::npos,
+  check(prelude.find("array<texture2d<float>, 8> textures2d") != std::string::npos,
         "argbuf-hybrid prelude declares 8 2D textures");
-  check(prelude.find("texturesCube[8]") != std::string::npos,
+  check(prelude.find("array<texturecube<float>, 8> texturesCube") != std::string::npos,
         "argbuf-hybrid prelude declares 8 cube textures");
-  check(prelude.find("textures3d[8]") != std::string::npos,
+  check(prelude.find("array<texture3d<float>, 8> textures3d") != std::string::npos,
         "argbuf-hybrid prelude declares 8 3D textures");
-  check(prelude.find("samplers[8]") != std::string::npos,
+  check(prelude.find("array<sampler, 8> samplers") != std::string::npos,
         "argbuf-hybrid prelude declares 8 samplers");
 }
 
@@ -256,6 +278,7 @@ int main() {
     testCapabilityGateAcceptsTier2Apple3();
     testSelectorPicksStage1WhenDisabled();
     testSelectorPicksStage2WhenEnabled();
+    testSelectorFallsBackForTextureBoundDraws();
     testVariantKeyArgbufHybridBitDistinguishesStages();
     testTileFfpAndArgbufHybridBitsAreIndependent();
     testArgumentDescriptorCount();
