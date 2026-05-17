@@ -21,6 +21,7 @@
 
 using dxmt9::uniform::DirtyBit;
 using dxmt9::uniform::DirtyState;
+using dxmt9::uniform::ShaderConstantUsageBounds;
 
 namespace {
 
@@ -287,6 +288,58 @@ void testIsDirtyConsistency() {
   check(!dxmt9::uniform::isDirty(s, DirtyBit::VsF), "after clearBit: VsF not dirty");
 }
 
+void testShaderUsageAwareUploadPlanIsConservative() {
+  DirtyState s{};
+  dxmt9::uniform::applyConstantSetVsF(s, 6, 2);
+  dxmt9::uniform::applyConstantSetVsI(s, 1, 1);
+  dxmt9::uniform::applyConstantSetVsB(s, 0, 1);
+
+  ShaderConstantUsageBounds usage{};
+  usage.unknown = false;
+  usage.floatCount = 4;
+  usage.intCount = 3;
+  usage.boolCount = 0;
+
+  const auto plan = dxmt9::uniform::makeVsConstantUploadPlan(s, usage);
+  check(!plan.fullStructRequired,
+        "known non-indexed VS constants can use a range upload plan");
+  checkEq(plan.floatCount, 8u,
+          "VS upload float count covers max(dirty high-water, shader usage)");
+  checkEq(plan.intCount, 3u,
+          "VS upload int count covers shader usage when it exceeds dirty range");
+  checkEq(plan.boolCount, 1u,
+          "VS upload bool count covers dirty range when usage is lower");
+}
+
+void testShaderUsageAwareUploadPlanFallsBackForUnknownOrIndexedUse() {
+  DirtyState s{};
+  dxmt9::uniform::applyConstantSetPsF(s, 1, 2);
+  dxmt9::uniform::applyConstantSetPsI(s, 1, 2);
+  dxmt9::uniform::applyConstantSetPsB(s, 1, 2);
+
+  ShaderConstantUsageBounds unknownUsage{};
+  const auto unknownPlan = dxmt9::uniform::makePsConstantUploadPlan(s, unknownUsage);
+  check(unknownPlan.fullStructRequired,
+        "unknown PS constant usage requires the current full struct ABI");
+  checkEq(unknownPlan.floatCount, dxmt9::core::kMaxPixelConstants,
+          "unknown PS float usage expands to full pixel constant capacity");
+  checkEq(unknownPlan.intCount, dxmt9::core::kMaxIntegerConstants,
+          "unknown PS int usage expands to full integer constant capacity");
+  checkEq(unknownPlan.boolCount, dxmt9::core::kMaxBoolConstants,
+          "unknown PS bool usage expands to full bool constant capacity");
+
+  ShaderConstantUsageBounds indexedUsage{};
+  indexedUsage.unknown = false;
+  indexedUsage.floatCount = 4;
+  indexedUsage.indexedFloat = true;
+
+  const auto indexedPlan = dxmt9::uniform::makePsConstantUploadPlan(s, indexedUsage);
+  check(indexedPlan.fullStructRequired,
+        "relative/indexed constant reads require full struct backing");
+  checkEq(indexedPlan.floatCount, dxmt9::core::kMaxPixelConstants,
+          "indexed PS float usage expands to full pixel constant capacity");
+}
+
 }  // namespace
 
 int main() {
@@ -296,5 +349,7 @@ int main() {
   testClearBit();
   testMarkAllDirty();
   testIsDirtyConsistency();
+  testShaderUsageAwareUploadPlanIsConservative();
+  testShaderUsageAwareUploadPlanFallsBackForUnknownOrIndexedUse();
   return 0;
 }

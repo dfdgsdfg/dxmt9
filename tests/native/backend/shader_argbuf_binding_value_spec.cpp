@@ -489,6 +489,80 @@ void testEncoderRasterStatePlanMatchesMetalViewportScissorCull() {
           "pretransformed encoder plan disables culling");
 }
 
+void testDrawBindingPacketPlanPreResolvesEncoderValues() {
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageNormal = 3u;
+
+  DrawDesc desc{};
+  desc.vertexDecl.elements = {
+      VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+      VertexElement{1, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsageNormal, 0},
+  };
+  desc.vertexDecl.streams[0].stride = 12u;
+  desc.vertexDecl.streams[1].stride = 24u;
+  desc.vertexDecl.streams[1].offset = 64u;
+  desc.textures[2].handle = Handle{0x2222u};
+  desc.samplers[2].states[SAMP_MIN_FILTER] = 2u;
+  desc.viewport.viewport = Viewport{4u, 5u, 60u, 40u, 0.0f, 1.0f};
+  desc.viewport.scissor = Rect{6, 7, 32, 33};
+  desc.viewport.scissorEnabled = true;
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const dxmt9::encoders::ParamView pv{
+      .primitiveType = PrimitiveType::TriangleList,
+      .primitiveCount = 2u,
+      .startVertex = 3u,
+      .baseVertexIndex = 0,
+      .startIndex = 0u,
+      .indexType = IndexType::UInt16,
+      .indexed = false,
+      .userVertexData = {},
+      .userIndexData = {},
+  };
+
+  const auto packet = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      pv,
+      128u,
+      96u,
+      false,
+      false,
+      false,
+      true);
+
+  checkEq(packet.fragmentTextureSamplers.size(), std::size_t{1},
+          "binding packet carries fragment texture/sampler plan");
+  checkEq(packet.fragmentTextureSamplers[0].stage, 2u,
+          "binding packet preserves texture stage");
+  checkEq(packet.fragmentTextureSamplers[0].texture, Handle{0x2222u},
+          "binding packet preserves texture handle");
+  checkEq(flatStateOr(packet.fragmentTextureSamplers[0].samplerStates, SAMP_MIN_FILTER, 0u),
+          2u,
+          "binding packet preserves sampler states");
+
+  checkEq(packet.extraStreams.size(), std::size_t{1},
+          "binding packet carries programmable extra stream plan");
+  checkEq(packet.extraStreams[0].stream, 1u,
+          "binding packet resolves stream 1");
+  checkEq(packet.extraStreams[0].metalSlot,
+          dxmt9::ffp::vertexShaderStreamBufferSlot(1u),
+          "binding packet resolves stream 1 Metal slot");
+  checkEq(packet.extraStreams[0].offset, std::uint64_t{136},
+          "binding packet resolves stream offset plus startVertex stride");
+  checkEq(packet.extraStreams[0].stride, 24u,
+          "binding packet resolves stream stride");
+
+  checkNear(static_cast<float>(packet.raster.viewport.originX), 4.0f, 0.0f,
+            "binding packet carries viewport origin X");
+  checkEq(packet.raster.scissor.x, std::uint64_t{6},
+          "binding packet carries scissor x");
+  check(packet.argbufResourceRepopulate,
+        "binding packet records argbuf population requirement");
+}
+
 }  // namespace
 
 int main() {
@@ -500,6 +574,7 @@ int main() {
     testDefaultSamplerInfoForNullTextureSlotIsDeterministic();
     testEncoderFragmentBindingPlanMatchesShaderSlots();
     testEncoderRasterStatePlanMatchesMetalViewportScissorCull();
+    testDrawBindingPacketPlanPreResolvesEncoderValues();
   } catch (const TestFailure& failure) {
     std::cerr << "shader_argbuf_binding_value_spec failed: "
               << failure.what() << '\n';

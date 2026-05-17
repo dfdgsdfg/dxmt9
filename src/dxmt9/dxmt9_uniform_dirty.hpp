@@ -10,6 +10,8 @@
 // no side effects beyond mutating the passed DirtyState&. They live in
 // the matching .cpp.
 
+#include "dxmt9/core_constants.hpp"
+
 #include <cstdint>
 
 namespace dxmt9::uniform {
@@ -48,6 +50,23 @@ struct DirtyState {
   std::uint16_t maxChangedPsF = 0;
   std::uint16_t maxChangedPsI = 0;
   std::uint16_t maxChangedPsB = 0;
+};
+
+struct ShaderConstantUsageBounds {
+  std::uint16_t floatCount = 0;
+  std::uint16_t intCount = 0;
+  std::uint16_t boolCount = 0;
+  bool indexedFloat = false;
+  bool indexedInt = false;
+  bool indexedBool = false;
+  bool unknown = true;
+};
+
+struct ShaderConstantUploadPlan {
+  std::uint16_t floatCount = 0;
+  std::uint16_t intCount = 0;
+  std::uint16_t boolCount = 0;
+  bool fullStructRequired = true;
 };
 
 // Composite per-frequency masks. The encoder consumes the per-frequency
@@ -102,5 +121,16 @@ void applyViewportChange(DirtyState& state);
 void applyRenderStateFog(DirtyState& state);     // RS_FOG* family
 void applyRenderStateAlpha(DirtyState& state);   // RS_ALPHA_TEST_ENABLE/FUNC/REF
 void applyRenderStateTexFactor(DirtyState& state); // RS_TEXTURE_FACTOR
+
+// Conservative planning helper for the shader-usage-aware upload path.
+// The current MSL ABI still binds full VsConsts/PsConsts structs; these
+// pure transforms expose the future range boundary without changing live
+// binding lifetime or buffer layout.
+ShaderConstantUploadPlan makeVsConstantUploadPlan(
+    const DirtyState& state,
+    ShaderConstantUsageBounds usage);
+ShaderConstantUploadPlan makePsConstantUploadPlan(
+    const DirtyState& state,
+    ShaderConstantUsageBounds usage);
 
 }  // namespace dxmt9::uniform

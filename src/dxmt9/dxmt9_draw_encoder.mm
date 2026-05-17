@@ -1438,6 +1438,20 @@ bool encodeDraw(EncodeContext& ctx,
     ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
     fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
   }
+  const auto* bindingPacketSurface =
+      ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
+  const bool bindingPacketHasRasterTarget =
+      bindingPacketSurface && bindingPacketSurface->texture;
+  const auto bindingPacket = makeDrawBindingPacketPlan(
+      vertexDecl,
+      hot,
+      pv,
+      bindingPacketHasRasterTarget ? bindingPacketSurface->desc.width : 1u,
+      bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
+      ffLayout && ffLayout->preTransformed,
+      debug::disableScissor(),
+      debug::disableCull(),
+      argbufHybridMode);
   // Apply FFP preTransformed viewport override to the FfpVs host copy
   // before any bindFfpVsIfDirty call uploads it (R-BACK-12.5). The
   // override values come from run-stable sources (ffLayout +
@@ -1462,19 +1476,12 @@ bool encodeDraw(EncodeContext& ctx,
   // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
   if (!skipBaseStateBind) {
     PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
-    if (auto* surface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value); surface && surface->texture) {
-      const auto rasterPlan = makeEncoderRasterStatePlan(
-          hot,
-          surface->desc.width,
-          surface->desc.height,
-          ffLayout && ffLayout->preTransformed,
-          debug::disableScissor(),
-          debug::disableCull());
-      recordedSetViewport(ctx, encoder, rasterPlan.viewport);
+    if (bindingPacketHasRasterTarget) {
+      recordedSetViewport(ctx, encoder, bindingPacket.raster.viewport);
       countViewportBind();
-      recordedSetScissorRect(ctx, encoder, rasterPlan.scissor);
+      recordedSetScissorRect(ctx, encoder, bindingPacket.raster.scissor);
       countScissorBind();
-      setRasterizerCullMode(ctx, encoder, hot.renderStates, rasterPlan.cullMode);
+      setRasterizerCullMode(ctx, encoder, hot.renderStates, bindingPacket.raster.cullMode);
     }
   }
   static std::atomic<int> ffTraceRemaining{debug::fixedFunctionTraceBudget()};
@@ -1911,8 +1918,7 @@ bool encodeDraw(EncodeContext& ctx,
       PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
       recordedSetVertexBuffer(ctx, encoder, vertexBuffer, vertexBufferOffset, 1);
       countVertexBufferBind();
-      for (const auto& streamBinding :
-           makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv)) {
+      for (const auto& streamBinding : bindingPacket.extraStreams) {
         WMT::Buffer extraVertexBuffer{};
         uint64_t extraVertexBufferOffset = streamBinding.offset;
         const u32 stream = streamBinding.stream;
@@ -1974,11 +1980,11 @@ bool encodeDraw(EncodeContext& ctx,
   // changes descriptors does not sample stale argbuf entries.
   if (!skipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
-    if (argbufHybridMode) {
+    if (bindingPacket.argbufResourceRepopulate) {
       dxmt9::argbuf_hybrid::populateResourceBindings(
           ctx.device, ctx.pool, ctx.queue.argbufEncoderResource(), drawState);
     }
-    for (const auto& binding : makeFragmentTextureSamplerBindings(hot)) {
+    for (const auto& binding : bindingPacket.fragmentTextureSamplers) {
       const auto stage = binding.stage;
       const auto textureHandle = binding.texture;
       if (const u64 skipped = debug::skippedTextureHandle();

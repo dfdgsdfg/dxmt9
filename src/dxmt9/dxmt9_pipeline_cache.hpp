@@ -75,6 +75,9 @@ struct StencilFaceKeyHash {
 
 struct ShaderVariantKey {
   u64 hash = 0;
+  u64 vertexSourceHash = 0;
+  u64 fragmentSourceHash = 0;
+  u64 tileSourceHash = 0;
   u32 emitterVersion = kShaderEmitterVersion;
   u32 sourceLayoutVersion = kShaderSourceLayoutVersion;
   u32 debugEnvSchemaVersion = kShaderDebugEnvSchemaVersion;
@@ -131,6 +134,8 @@ namespace detail {
 struct DrawShaderSources {
   std::string vertex;
   std::string fragment;
+  u64 vertexHash = 0;
+  u64 fragmentHash = 0;
 };
 
 // Generate VS+FS draw sources while containing translator failures. Returns

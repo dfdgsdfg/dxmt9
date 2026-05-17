@@ -13,6 +13,7 @@
 #include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 #include "../../../src/dxmt9/dxmt9_format_convert.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
+#include "../../../src/dxmt9/dxmt9_shader_sources.hpp"
 
 using namespace dxmt9::core;
 using namespace dxmt9::core::fixture;
@@ -377,6 +378,46 @@ void testShaderVariantKeyCarriesSourceIdentity() {
   check(!(debugEnvChanged == base), "source-affecting debug env changes key equality");
   check(dxmt9::pipeline::ShaderVariantKeyHash{}(debugEnvChanged) != baseHash,
         "source-affecting debug env changes key hash");
+
+  auto vertexSourceChanged = base;
+  vertexSourceChanged.vertexSourceHash = 0x1111222233334444ull;
+  check(!(vertexSourceChanged == base), "actual VS source hash changes key equality");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(vertexSourceChanged) != baseHash,
+        "actual VS source hash changes key hash");
+
+  auto fragmentSourceChanged = base;
+  fragmentSourceChanged.fragmentSourceHash = 0x5555666677778888ull;
+  check(!(fragmentSourceChanged == base), "actual FS source hash changes key equality");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(fragmentSourceChanged) != baseHash,
+        "actual FS source hash changes key hash");
+
+  auto tileSourceChanged = base;
+  tileSourceChanged.tileSourceHash = 0x9999aaaabbbbccccull;
+  check(!(tileSourceChanged == base), "actual tile source hash changes key equality");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(tileSourceChanged) != baseHash,
+        "actual tile source hash changes key hash");
+}
+
+void testContainedDrawShaderSourcesCarryActualSourceHashes() {
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x1001u;
+  desc.pixelShader.hash = 0x2002u;
+  desc.vertexDecl.fvf =
+      dxmt9::ffp::kFvfXyzrhw | dxmt9::ffp::kFvfDiffuse | (1u << dxmt9::ffp::kFvfTexCountShift);
+
+  const auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+  const auto sources = dxmt9::pipeline::detail::makeContainedDrawShaderSources(
+      context, 0xabcdef1234567890ull);
+
+  check(sources.has_value(), "default FFP draw sources are generated");
+  check(!sources->vertex.empty(), "generated VS source is non-empty");
+  check(!sources->fragment.empty(), "generated FS source is non-empty");
+  checkEq(sources->vertexHash,
+          dxmt9::shaders::makeHash(sources->vertex),
+          "VS source hash matches the actual generated MSL text");
+  checkEq(sources->fragmentHash,
+          dxmt9::shaders::makeHash(sources->fragment),
+          "FS source hash matches the actual generated MSL text");
 }
 
 void testProgrammableShaderVariantKeyUsesFullVertexDeclHash() {
@@ -517,6 +558,7 @@ int main() {
     testFvfLayoutHashIsDeterministicAndResponsive();
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();
     testShaderVariantKeyCarriesSourceIdentity();
+    testContainedDrawShaderSourcesCarryActualSourceHashes();
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();
     testSrgbCompatiblePixelFormatConversion();

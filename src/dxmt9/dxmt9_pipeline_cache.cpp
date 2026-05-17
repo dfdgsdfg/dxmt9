@@ -43,6 +43,13 @@ bool envFlag(const char* name) noexcept {
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+makeReadyPipelineFuture(WMT::Reference<WMT::RenderPipelineState> value = {}) {
+  std::promise<WMT::Reference<WMT::RenderPipelineState>> promise;
+  promise.set_value(std::move(value));
+  return promise.get_future().share();
+}
+
 }  // namespace
 
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
@@ -93,9 +100,15 @@ detail::makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& sh
   };
 
   try {
+    auto vertex = drawshader::makeDrawShaderSource(shaderSource, true);
+    auto fragment = drawshader::makeDrawShaderSource(shaderSource, false);
+    const u64 vertexHash = shaders::makeHash(vertex);
+    const u64 fragmentHash = shaders::makeHash(fragment);
     return detail::DrawShaderSources{
-        .vertex = drawshader::makeDrawShaderSource(shaderSource, true),
-        .fragment = drawshader::makeDrawShaderSource(shaderSource, false),
+        .vertex = std::move(vertex),
+        .fragment = std::move(fragment),
+        .vertexHash = vertexHash,
+        .fragmentHash = fragmentHash,
     };
   } catch (const std::exception& ex) {
     util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
@@ -182,6 +195,9 @@ std::size_t StencilFaceKeyHash::operator()(const StencilFaceKey& key) const noex
 
 std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const noexcept {
   u64 hash = key.hash;
+  hash = mix(hash, key.vertexSourceHash);
+  hash = mix(hash, key.fragmentSourceHash);
+  hash = mix(hash, key.tileSourceHash);
   hash = mix(hash, key.emitterVersion);
   hash = mix(hash, key.sourceLayoutVersion);
   hash = mix(hash, key.debugEnvSchemaVersion);
@@ -382,12 +398,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
                                 WMT::Reference<WMT::BinaryArchive>* archive,
                                 const std::string* archivePath) {
   (void)archivePath;
-  std::lock_guard lock(mutex);
-  if (auto it = this->draw.find(key); it != this->draw.end()) {
-    perf::countPipelineCacheHit(perf::PipelineKind::Draw);
-    return it->second.future;
-  }
-  perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
+  ShaderVariantKey sourceKey = key;
   // R-BACK-13.3 / 13.6: when the variant key carries tile_ffp_mode = true
   // the cache builds an MTLTileRenderPipelineState via
   // makeFfpTilePixelSource() instead of the standard fragment PSO. The
@@ -395,117 +406,157 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
   // encoder switches between setRenderPipelineState() and
   // setTileRenderPipelineState() based on the same bit on the key.
   if (key.tileFfpMode) {
-    auto future = std::async(std::launch::async,
-                              [device, key, shaderSource = std::move(shaderSource), archive]() mutable {
-      core::FfpPixelKey psKey{};
-      if (shaderSource.pixelShader.kind == core::ShaderRef::Kind::FixedFunctionPixel &&
-          shaderSource.pixelShader.pixelKey.has_value()) {
-        psKey = *shaderSource.pixelShader.pixelKey;
-      }
-      auto tileSource = ffp::makeFfpTilePixelSource(psKey, shaderSource, key.colorFormats[0]);
-      auto tileLib = shaders::makeLibrary(device, tileSource);
-      if (!tileLib) {
-        return WMT::Reference<WMT::RenderPipelineState>{};
-      }
-      auto tileFn = tileLib.newFunction("ffp_tile");
-      if (!tileFn) {
-        return WMT::Reference<WMT::RenderPipelineState>{};
-      }
-      WMTTileRenderPipelineDescriptor desc{};
-      desc.tile_function = tileFn.handle;
-      desc.raster_sample_count = std::max(1u, key.sampleCount);
-      desc.threadgroup_size_matches_tile_size = 1u;
-      desc.max_total_threads_per_threadgroup = 0u;
-      std::uint32_t attachmentCount = 0;
-      for (std::size_t i = 0; i < core::kMaxRenderTargets && i < 8; ++i) {
-        desc.color_attachment_pixel_formats[i] = static_cast<WMTPixelFormat>(key.colorFormats[i]);
-        if (key.colorFormats[i] != 0u) {
-          attachmentCount = static_cast<std::uint32_t>(i + 1u);
-        }
-      }
-      for (std::size_t i = core::kMaxRenderTargets; i < 8; ++i) {
-        desc.color_attachment_pixel_formats[i] = WMTPixelFormatInvalid;
-      }
-      desc.color_attachment_count = attachmentCount;
-      WMT::Error err{};
-      perf::countPipelineBuild(perf::PipelineKind::Draw);
-      perf::countColdCompileAfterWarm();
-      auto pso = device.newRenderPipelineState(desc, err);
-      if (pso) {
-        pso.setLabel(labels::makeLabelStringFmt(
-            "pso_tile_ffp_h0x%llx_color0fmt%u",
-            static_cast<unsigned long long>(key.hash),
-            static_cast<unsigned>(key.colorFormats[0])));
-      }
-      (void)archive;
-      return pso;
-    });
+    core::FfpPixelKey psKey{};
+    if (shaderSource.pixelShader.kind == core::ShaderRef::Kind::FixedFunctionPixel &&
+        shaderSource.pixelShader.pixelKey.has_value()) {
+      psKey = *shaderSource.pixelShader.pixelKey;
+    }
+    std::string tileSource;
+    try {
+      tileSource = ffp::makeFfpTilePixelSource(psKey, shaderSource, key.colorFormats[0]);
+    } catch (const std::exception& ex) {
+      util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
+                 "tile shader source generation failed: %s variant=0x%llx",
+                 ex.what(),
+                 static_cast<unsigned long long>(key.hash));
+      return makeReadyPipelineFuture();
+    } catch (...) {
+      util::logf(util::LogLevel::Error, "dxmt9-pipeline-cache",
+                 "tile shader source generation failed: unknown exception variant=0x%llx",
+                 static_cast<unsigned long long>(key.hash));
+      return makeReadyPipelineFuture();
+    }
+    sourceKey.tileSourceHash = shaders::makeHash(tileSource);
+
+    std::lock_guard lock(mutex);
+    if (auto it = this->draw.find(sourceKey); it != this->draw.end()) {
+      perf::countPipelineCacheHit(perf::PipelineKind::Draw);
+      return it->second.future;
+    }
+    perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
+    auto future = std::async(
+        std::launch::async,
+        [device, sourceKey, tileSource = std::move(tileSource), archive]() mutable {
+          auto tileLib = shaders::makeLibrary(device, tileSource);
+          if (!tileLib) {
+            return WMT::Reference<WMT::RenderPipelineState>{};
+          }
+          auto tileFn = tileLib.newFunction("ffp_tile");
+          if (!tileFn) {
+            return WMT::Reference<WMT::RenderPipelineState>{};
+          }
+          WMTTileRenderPipelineDescriptor desc{};
+          desc.tile_function = tileFn.handle;
+          desc.raster_sample_count = std::max(1u, sourceKey.sampleCount);
+          desc.threadgroup_size_matches_tile_size = 1u;
+          desc.max_total_threads_per_threadgroup = 0u;
+          std::uint32_t attachmentCount = 0;
+          for (std::size_t i = 0; i < core::kMaxRenderTargets && i < 8; ++i) {
+            desc.color_attachment_pixel_formats[i] =
+                static_cast<WMTPixelFormat>(sourceKey.colorFormats[i]);
+            if (sourceKey.colorFormats[i] != 0u) {
+              attachmentCount = static_cast<std::uint32_t>(i + 1u);
+            }
+          }
+          for (std::size_t i = core::kMaxRenderTargets; i < 8; ++i) {
+            desc.color_attachment_pixel_formats[i] = WMTPixelFormatInvalid;
+          }
+          desc.color_attachment_count = attachmentCount;
+          WMT::Error err{};
+          perf::countPipelineBuild(perf::PipelineKind::Draw);
+          perf::countColdCompileAfterWarm();
+          auto pso = device.newRenderPipelineState(desc, err);
+          if (pso) {
+            pso.setLabel(labels::makeLabelStringFmt(
+                "pso_tile_ffp_h0x%llx_color0fmt%u",
+                static_cast<unsigned long long>(sourceKey.hash),
+                static_cast<unsigned>(sourceKey.colorFormats[0])));
+          }
+          (void)archive;
+          return pso;
+        });
     auto shared = future.share();
-    this->draw.emplace(key, Entry{shared});
+    this->draw.emplace(sourceKey, Entry{shared});
     return shared;
   }
-  auto future = std::async(std::launch::async,
-                            [device, key, shaderSource = std::move(shaderSource), archive]() mutable {
-    auto sources = detail::makeContainedDrawShaderSources(shaderSource, key.hash);
-    if (!sources) {
-      return WMT::Reference<WMT::RenderPipelineState>{};
+  auto sources = detail::makeContainedDrawShaderSources(shaderSource, key.hash);
+  if (!sources) {
+    return makeReadyPipelineFuture();
+  }
+  sourceKey.vertexSourceHash = sources->vertexHash;
+  sourceKey.fragmentSourceHash = sources->fragmentHash;
+  {
+    std::lock_guard lock(mutex);
+    if (auto it = this->draw.find(sourceKey); it != this->draw.end()) {
+      perf::countPipelineCacheHit(perf::PipelineKind::Draw);
+      return it->second.future;
     }
-    auto vsLib = shaders::makeLibrary(device, sources->vertex);
-    auto fsLib = shaders::makeLibrary(device, sources->fragment);
-    if (!vsLib || !fsLib) {
-      return WMT::Reference<WMT::RenderPipelineState>{};
-    }
-    auto vs = vsLib.newFunction("dxmt9_vs");
-    auto fs = fsLib.newFunction("dxmt9_fs");
-    if (!vs || !fs) {
-      return WMT::Reference<WMT::RenderPipelineState>{};
-    }
-    WMTRenderPipelineInfo info{};
-    info.max_tessellation_factor = 1;
-    info.vertex_function = vs.handle;
-    info.fragment_function = fs.handle;
-    info.raster_sample_count = std::max(1u, key.sampleCount);
-    info.alpha_to_coverage_enabled = key.alphaToCoverage;
-    info.depth_pixel_format = static_cast<WMTPixelFormat>(key.depthFormat);
-    info.stencil_pixel_format = static_cast<WMTPixelFormat>(key.stencilFormat);
-    info.rasterization_enabled = true;
-    if (archive && *archive) {
-      info.binary_archive_for_serialization = (*archive).handle;
-    }
-    for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-      auto& ca = info.colors[i];
-      ca.pixel_format = static_cast<WMTPixelFormat>(key.colorFormats[i]);
-      ca.blending_enabled = key.blend[i].blendingEnabled;
-      ca.rgb_blend_operation = convert::toBlendOperation(key.blend[i].rgbBlendOperation);
-      ca.alpha_blend_operation = convert::toBlendOperation(key.blend[i].alphaBlendOperation);
-      ca.src_rgb_blend_factor = convert::toBlendFactor(key.blend[i].sourceRGBBlendFactor);
-      ca.dst_rgb_blend_factor = convert::toBlendFactor(key.blend[i].destinationRGBBlendFactor);
-      ca.src_alpha_blend_factor = convert::toBlendFactor(key.blend[i].sourceAlphaBlendFactor);
-      ca.dst_alpha_blend_factor = convert::toBlendFactor(key.blend[i].destinationAlphaBlendFactor);
-      ca.write_mask = convert::toColorWriteMask(key.blend[i].colorWriteMask);
-    }
-    WMT::Error err{};
-    perf::countPipelineBuild(perf::PipelineKind::Draw);
-    // R-BACK-3.8 — every Draw PSO that lands in this closure is a
-    // miss against the prewarmed archive. The counter starts at zero
-    // after a successful Full prewarm and stays low when the archive
-    // is hot; a high value indicates the prewarm path missed (file
-    // missing, schema drift, lock_busy, or content mismatch with the
-    // current emitter / variant key).
-    perf::countColdCompileAfterWarm();
-    auto pso = device.newRenderPipelineState(info, err);
-    if (pso) {
-      pso.setLabel(labels::makeLabelStringFmt(
-          "pso_draw_h0x%llx_msaa%u_color0fmt%u",
-          static_cast<unsigned long long>(key.hash),
-          static_cast<unsigned>(std::max(1u, key.sampleCount)),
-          static_cast<unsigned>(key.colorFormats[0])));
-    }
-    return pso;
-  });
-  auto shared = future.share();
-  this->draw.emplace(key, Entry{shared});
-  return shared;
+    perf::countPipelineCacheMiss(perf::PipelineKind::Draw);
+    auto future = std::async(
+        std::launch::async,
+        [device, sourceKey, sources = std::move(*sources), archive]() mutable {
+          auto vsLib = shaders::makeLibrary(device, sources.vertex);
+          auto fsLib = shaders::makeLibrary(device, sources.fragment);
+          if (!vsLib || !fsLib) {
+            return WMT::Reference<WMT::RenderPipelineState>{};
+          }
+          auto vs = vsLib.newFunction("dxmt9_vs");
+          auto fs = fsLib.newFunction("dxmt9_fs");
+          if (!vs || !fs) {
+            return WMT::Reference<WMT::RenderPipelineState>{};
+          }
+          WMTRenderPipelineInfo info{};
+          info.max_tessellation_factor = 1;
+          info.vertex_function = vs.handle;
+          info.fragment_function = fs.handle;
+          info.raster_sample_count = std::max(1u, sourceKey.sampleCount);
+          info.alpha_to_coverage_enabled = sourceKey.alphaToCoverage;
+          info.depth_pixel_format = static_cast<WMTPixelFormat>(sourceKey.depthFormat);
+          info.stencil_pixel_format = static_cast<WMTPixelFormat>(sourceKey.stencilFormat);
+          info.rasterization_enabled = true;
+          if (archive && *archive) {
+            info.binary_archive_for_serialization = (*archive).handle;
+          }
+          for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+            auto& ca = info.colors[i];
+            ca.pixel_format = static_cast<WMTPixelFormat>(sourceKey.colorFormats[i]);
+            ca.blending_enabled = sourceKey.blend[i].blendingEnabled;
+            ca.rgb_blend_operation = convert::toBlendOperation(sourceKey.blend[i].rgbBlendOperation);
+            ca.alpha_blend_operation =
+                convert::toBlendOperation(sourceKey.blend[i].alphaBlendOperation);
+            ca.src_rgb_blend_factor =
+                convert::toBlendFactor(sourceKey.blend[i].sourceRGBBlendFactor);
+            ca.dst_rgb_blend_factor =
+                convert::toBlendFactor(sourceKey.blend[i].destinationRGBBlendFactor);
+            ca.src_alpha_blend_factor =
+                convert::toBlendFactor(sourceKey.blend[i].sourceAlphaBlendFactor);
+            ca.dst_alpha_blend_factor =
+                convert::toBlendFactor(sourceKey.blend[i].destinationAlphaBlendFactor);
+            ca.write_mask = convert::toColorWriteMask(sourceKey.blend[i].colorWriteMask);
+          }
+          WMT::Error err{};
+          perf::countPipelineBuild(perf::PipelineKind::Draw);
+          // R-BACK-3.8 — every Draw PSO that lands in this closure is a
+          // miss against the prewarmed archive. The counter starts at zero
+          // after a successful Full prewarm and stays low when the archive
+          // is hot; a high value indicates the prewarm path missed (file
+          // missing, schema drift, lock_busy, or content mismatch with the
+          // current emitter / variant key).
+          perf::countColdCompileAfterWarm();
+          auto pso = device.newRenderPipelineState(info, err);
+          if (pso) {
+            pso.setLabel(labels::makeLabelStringFmt(
+                "pso_draw_h0x%llx_msaa%u_color0fmt%u",
+                static_cast<unsigned long long>(sourceKey.hash),
+                static_cast<unsigned>(std::max(1u, sourceKey.sampleCount)),
+                static_cast<unsigned>(sourceKey.colorFormats[0])));
+          }
+          return pso;
+        });
+    auto shared = future.share();
+    this->draw.emplace(sourceKey, Entry{shared});
+    return shared;
+  }
 }
 
 std::shared_future<WMT::Reference<WMT::RenderPipelineState>>

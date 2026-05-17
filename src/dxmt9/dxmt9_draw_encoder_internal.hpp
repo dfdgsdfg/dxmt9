@@ -184,6 +184,13 @@ struct EncoderRasterStatePlan {
   WMTCullMode cullMode = WMTCullModeNone;
 };
 
+struct DrawBindingPacketPlan {
+  FragmentTextureSamplerBindingList fragmentTextureSamplers{};
+  ProgrammableVsExtraStreamBindingList extraStreams{};
+  EncoderRasterStatePlan raster{};
+  bool argbufResourceRepopulate = false;
+};
+
 inline bool vertexDeclUsesStream(const core::VertexDeclSnapshot& vertexDecl, u32 stream) {
   for (const auto& element : vertexDecl.elements) {
     if (element.stream == stream) {
@@ -291,6 +298,25 @@ inline EncoderRasterStatePlan makeEncoderRasterStatePlan(
       },
       .scissor = scissor,
       .cullMode = cullMode,
+  };
+}
+
+inline DrawBindingPacketPlan makeDrawBindingPacketPlan(
+    const core::VertexDeclSnapshot& vertexDecl,
+    const core::FlatDrawStateRecord& hot,
+    const ParamView& pv,
+    u32 surfaceWidth,
+    u32 surfaceHeight,
+    bool preTransformed,
+    bool scissorDisabled,
+    bool cullDisabled,
+    bool argbufHybridMode) {
+  return DrawBindingPacketPlan{
+      .fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot),
+      .extraStreams = makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv),
+      .raster = makeEncoderRasterStatePlan(
+          hot, surfaceWidth, surfaceHeight, preTransformed, scissorDisabled, cullDisabled),
+      .argbufResourceRepopulate = argbufHybridMode,
   };
 }
 

@@ -38,6 +38,35 @@ constexpr std::uint16_t kAllBits =
     static_cast<std::uint16_t>(DirtyBit::FfpPsAlpha) |
     static_cast<std::uint16_t>(DirtyBit::FfpPsTexFactor);
 
+std::uint16_t clampCount(std::uint16_t value, std::uint16_t limit) {
+  return std::min(value, limit);
+}
+
+ShaderConstantUploadPlan makeConstantUploadPlan(
+    std::uint16_t dirtyFloatCount,
+    std::uint16_t dirtyIntCount,
+    std::uint16_t dirtyBoolCount,
+    ShaderConstantUsageBounds usage,
+    std::uint16_t maxFloatCount,
+    std::uint16_t maxIntCount,
+    std::uint16_t maxBoolCount) {
+  if (usage.unknown || usage.indexedFloat || usage.indexedInt || usage.indexedBool) {
+    return ShaderConstantUploadPlan{
+        .floatCount = maxFloatCount,
+        .intCount = maxIntCount,
+        .boolCount = maxBoolCount,
+        .fullStructRequired = true,
+    };
+  }
+
+  return ShaderConstantUploadPlan{
+      .floatCount = clampCount(std::max(dirtyFloatCount, usage.floatCount), maxFloatCount),
+      .intCount = clampCount(std::max(dirtyIntCount, usage.intCount), maxIntCount),
+      .boolCount = clampCount(std::max(dirtyBoolCount, usage.boolCount), maxBoolCount),
+      .fullStructRequired = false,
+  };
+}
+
 }  // namespace
 
 void markAllDirty(DirtyState& state) {
@@ -120,6 +149,32 @@ void applyRenderStateAlpha(DirtyState& state) {
 
 void applyRenderStateTexFactor(DirtyState& state) {
   setBit(state, DirtyBit::FfpPsTexFactor);
+}
+
+ShaderConstantUploadPlan makeVsConstantUploadPlan(
+    const DirtyState& state,
+    ShaderConstantUsageBounds usage) {
+  return makeConstantUploadPlan(
+      state.maxChangedVsF,
+      state.maxChangedVsI,
+      state.maxChangedVsB,
+      usage,
+      static_cast<std::uint16_t>(core::kMaxVertexConstants),
+      static_cast<std::uint16_t>(core::kMaxIntegerConstants),
+      static_cast<std::uint16_t>(core::kMaxBoolConstants));
+}
+
+ShaderConstantUploadPlan makePsConstantUploadPlan(
+    const DirtyState& state,
+    ShaderConstantUsageBounds usage) {
+  return makeConstantUploadPlan(
+      state.maxChangedPsF,
+      state.maxChangedPsI,
+      state.maxChangedPsB,
+      usage,
+      static_cast<std::uint16_t>(core::kMaxPixelConstants),
+      static_cast<std::uint16_t>(core::kMaxIntegerConstants),
+      static_cast<std::uint16_t>(core::kMaxBoolConstants));
 }
 
 }  // namespace dxmt9::uniform

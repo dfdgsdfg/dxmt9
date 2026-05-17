@@ -1362,6 +1362,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
         capture_request = build_capture_request(app, args)
         capture_frame = capture_request.primary_frame
+        capture_delay_sec = (
+            float(args.capture_delay_sec)
+            if args.capture_delay_sec is not None
+            else app.capture_delay_sec
+        )
+        if capture_delay_sec < 0.0:
+            raise ValueError("--capture-delay-sec must be >= 0")
         internal_capture_dir = output_dir / "internal_frames"
         if capture_request.wants_multiple_frames:
             internal_capture_dir.mkdir(parents=True, exist_ok=True)
@@ -1405,7 +1412,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 start_new_session=True,
             )
             try:
-                deadline = time.monotonic() + app.capture_delay_sec
+                deadline = time.monotonic() + capture_delay_sec
                 while time.monotonic() < deadline and process.poll() is None:
                     time.sleep(0.1)
                 if capture_request.wants_video and process.poll() is None:
@@ -1723,6 +1730,12 @@ def main() -> int:
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
     run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")
+    run_parser.add_argument(
+        "--capture-delay-sec",
+        type=float,
+        default=None,
+        help="Override CATALOGUE capture_delay_sec for this run",
+    )
     run_parser.add_argument(
         "--capture-frame",
         type=int,
