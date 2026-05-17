@@ -752,6 +752,405 @@ capture_frame = 0
 reference_optional = true
 
 [[app]]
+name = "dxmt9-d3d9-specular-lighting"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-specular-lighting.sh"
+reference = "experiments/references/dxmt9-d3d9-specular-lighting.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "ffp", "lighting", "specular", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-shademode"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-shademode.sh"
+reference = "experiments/references/dxmt9-d3d9-shademode.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "ffp", "shademode", "flat", "gouraud", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-filling-convention"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-filling-convention.sh"
+reference = "experiments/references/dxmt9-d3d9-filling-convention.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "rasterization", "filling-convention", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-mismatched-sample-types"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-mismatched-sample-types.sh"
+reference = "experiments/references/dxmt9-d3d9-mismatched-sample-types.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "shader", "sampler-type", "volume-texture", "readback", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-max-index16"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-max-index16.sh"
+reference = "experiments/references/dxmt9-d3d9-max-index16.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "index-buffer", "index16", "max-vertex-index", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-null-format"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-null-format.sh"
+reference = "experiments/references/dxmt9-d3d9-null-format.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "null-format", "depth-stencil", "render-target", "readback", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-depth-clamp"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-depth-clamp.sh"
+reference = "experiments/references/dxmt9-d3d9-depth-clamp.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "depth", "clipping", "depth-clamp", "readback", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-clear-different-size-surfaces"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-clear-different-size-surfaces.sh"
+reference = "experiments/references/dxmt9-d3d9-clear-different-size-surfaces.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "clear", "mrt", "depth-stencil", "surface-size", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-color-fill"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-color-fill.sh"
+reference = "experiments/references/dxmt9-d3d9-color-fill.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "color-fill", "surface", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-z-range"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-z-range.sh"
+reference = "experiments/references/dxmt9-d3d9-z-range.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "depth", "z-range", "z-test", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-offscreen-surface"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-offscreen-surface.sh"
+reference = "experiments/references/dxmt9-d3d9-offscreen-surface.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "offscreen", "render-target-texture", "sampling", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-depth-stencil-size"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-depth-stencil-size.sh"
+reference = "experiments/references/dxmt9-d3d9-depth-stencil-size.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "depth-stencil", "surface-size", "validate-device", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-vshader-float16"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-vshader-float16.sh"
+reference = "experiments/references/dxmt9-d3d9-vshader-float16.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "shader", "vertex-declaration", "float16", "readback", "self-validated"]
+status = "passing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-shader-fog"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-shader-fog.sh"
+reference = "experiments/references/dxmt9-d3d9-shader-fog.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "shader", "fog", "ffp", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-vertex-texture"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-vertex-texture.sh"
+reference = "experiments/references/dxmt9-d3d9-vertex-texture.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "shader", "vs_3_0", "vertex-texture", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-ffp-w"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-ffp-w.sh"
+reference = "experiments/references/dxmt9-d3d9-ffp-w.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "ffp", "rhw", "w", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-texture-transform-flags"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-texture-transform-flags.sh"
+reference = "experiments/references/dxmt9-d3d9-texture-transform-flags.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "ffp", "texture-transform", "projected", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-texcoord-index-matrix"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-texcoord-index-matrix.sh"
+reference = "experiments/references/dxmt9-d3d9-texcoord-index-matrix.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "ffp", "texcoord-index", "texture-transform", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-uninitialized-varyings"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-uninitialized-varyings.sh"
+reference = "experiments/references/dxmt9-d3d9-uninitialized-varyings.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "shader", "varying-defaults", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-per-stage-constant"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-per-stage-constant.sh"
+reference = "experiments/references/dxmt9-d3d9-per-stage-constant.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "ffp", "texture-stage-state", "constant", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
+name = "dxmt9-d3d9-shader-fragment-coords"
+source = "repo-local"
+license = "mit"
+source_kind = "project-authored"
+license_scope = "project-mit"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-shader-fragment-coords.sh"
+reference = "experiments/references/dxmt9-d3d9-shader-fragment-coords.png"
+build_script = "scripts/build_apps/build_d3d9_intent_probe.sh"
+features = ["d3d9-intent", "shader", "ps_3_0", "vpos", "readback", "self-validated"]
+status = "failing"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 0.5
+run_timeout_sec = 20
+capture_frame = 0
+reference_optional = true
+
+[[app]]
 name = "dx-sdk-basichlsl"
 source = "https://github.com/walbourn/directx-sdk-samples"
 license = "ms-directx-sdk"

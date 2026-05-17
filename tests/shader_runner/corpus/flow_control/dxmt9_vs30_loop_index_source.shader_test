@@ -1,0 +1,18 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c loop_index_test behavior, reduced to vs_3_0 aL relative-addressing source contract
+; oracle-date: 2026-05-17
+
+[vertex shader d3dbc-hex]
+fffe0300 05000051 a00f0000 40000000 00000000 00000000
+00000000 05000051 a00f0001 3f800000 00000000 00000000
+3f800000 05000051 a00f0002 00000000 3f800000 00000000
+3f800000 0100001b a0e40000 02000001 e00f0000 a0e42001
+f0e40800 0000001d 02000001 c00f0000 a0e40001 0000ffff
+
+[test]
+expect-source vertex contains "for (int dxmt9_loop_"
+expect-source vertex contains "cFloat[clamp(aL + 1, 0, 255)]"

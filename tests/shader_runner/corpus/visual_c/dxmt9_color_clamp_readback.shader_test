@@ -1,0 +1,16 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_color_clamping behavior, reduced to oversized shader color output
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0200 05000051 a00f0000 40000000 bf000000 3f000000
+3fa00000 02000001 800f0800 a0e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+draw quad
+probe (32, 32) rgba(1.0, 0.0, 0.5, 1.0) 1

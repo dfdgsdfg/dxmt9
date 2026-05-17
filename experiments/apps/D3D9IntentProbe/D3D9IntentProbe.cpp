@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace {
 
@@ -162,6 +163,29 @@ struct XyzUbyte4nColorVertex {
   unsigned char a;
 };
 
+struct XyzHalfTexHalfColorVertex {
+  float x;
+  float y;
+  float z;
+  std::uint16_t u;
+  std::uint16_t v;
+  std::uint16_t r;
+  std::uint16_t g;
+  std::uint16_t b;
+  std::uint16_t a;
+};
+
+struct RhwTex2Vertex {
+  float x;
+  float y;
+  float z;
+  float rhw;
+  float u0;
+  float v0;
+  float u1;
+  float v1;
+};
+
 struct RhwPSizeVertex {
   float x;
   float y;
@@ -169,6 +193,15 @@ struct RhwPSizeVertex {
   float rhw;
   float psize;
   DWORD color;
+};
+
+struct RhwSpecularVertex {
+  float x;
+  float y;
+  float z;
+  float rhw;
+  DWORD diffuse;
+  DWORD specular;
 };
 
 class IntentProbe {
@@ -261,6 +294,48 @@ public:
       runPointSize(stats);
     } else if (std::strcmp(mode, "depth-stencil-init") == 0) {
       runDepthStencilInit(stats);
+    } else if (std::strcmp(mode, "specular-lighting") == 0) {
+      runSpecularLighting(stats);
+    } else if (std::strcmp(mode, "shademode") == 0) {
+      runShadeMode(stats);
+    } else if (std::strcmp(mode, "filling-convention") == 0) {
+      runFillingConvention(stats);
+    } else if (std::strcmp(mode, "mismatched-sample-types") == 0) {
+      runMismatchedSampleTypes(stats);
+    } else if (std::strcmp(mode, "max-index16") == 0) {
+      runMaxIndex16(stats);
+    } else if (std::strcmp(mode, "null-format") == 0) {
+      runNullFormat(stats);
+    } else if (std::strcmp(mode, "depth-clamp") == 0) {
+      runDepthClamp(stats);
+    } else if (std::strcmp(mode, "clear-different-size-surfaces") == 0) {
+      runClearDifferentSizeSurfaces(stats);
+    } else if (std::strcmp(mode, "color-fill") == 0) {
+      runColorFill(stats);
+    } else if (std::strcmp(mode, "z-range") == 0) {
+      runZRange(stats);
+    } else if (std::strcmp(mode, "offscreen-surface") == 0) {
+      runOffscreenSurface(stats);
+    } else if (std::strcmp(mode, "depth-stencil-size") == 0) {
+      runDepthStencilSize(stats);
+    } else if (std::strcmp(mode, "vshader-float16") == 0) {
+      runVshaderFloat16(stats);
+    } else if (std::strcmp(mode, "shader-fog") == 0) {
+      runShaderFog(stats);
+    } else if (std::strcmp(mode, "vertex-texture") == 0) {
+      runVertexTexture(stats);
+    } else if (std::strcmp(mode, "ffp-w") == 0) {
+      runFfpW(stats);
+    } else if (std::strcmp(mode, "texture-transform-flags") == 0) {
+      runTextureTransformFlags(stats);
+    } else if (std::strcmp(mode, "texcoord-index-matrix") == 0) {
+      runTexcoordIndexMatrix(stats);
+    } else if (std::strcmp(mode, "uninitialized-varyings") == 0) {
+      runUninitializedVaryings(stats);
+    } else if (std::strcmp(mode, "per-stage-constant") == 0) {
+      runPerStageConstant(stats);
+    } else if (std::strcmp(mode, "shader-fragment-coords") == 0) {
+      runShaderFragmentCoords(stats);
     } else {
       logf("FAIL: unknown mode '%s'", mode);
       stats.failed++;
@@ -417,6 +492,20 @@ private:
     }
     stats.expect(matches, label);
     return matches;
+  }
+
+  bool readBackbufferColor(UINT x, UINT y, D3DCOLOR& color, const char* label, TestStats& stats) {
+    const bool read = readBackbufferPixel(device_.ptr(), x, y, color);
+    stats.expect(read, label);
+    if (!read) {
+      return false;
+    }
+    logf("DETAIL: %s actual rgb=(%u,%u,%u)",
+         label,
+         dxmt9::fastsanity::channelR(color),
+         dxmt9::fastsanity::channelG(color),
+         dxmt9::fastsanity::channelB(color));
+    return true;
   }
 
   void runBasicFfp(TestStats& stats) {
@@ -645,6 +734,66 @@ private:
     return SUCCEEDED(hr);
   }
 
+  bool compileVertexShader(const char* source,
+                           const char* profile,
+                           ComPtr<IDirect3DVertexShader9>& shader,
+                           TestStats& stats,
+                           const char* label) {
+    ComPtr<ID3DXBuffer> bytecode;
+    ComPtr<ID3DXBuffer> errors;
+    const HRESULT compileHr = D3DXCompileShader(source,
+                                                static_cast<UINT>(std::strlen(source)),
+                                                nullptr,
+                                                nullptr,
+                                                "main",
+                                                profile,
+                                                D3DXSHADER_NO_PRESHADER | D3DXSHADER_SKIPOPTIMIZATION,
+                                                bytecode.put(),
+                                                errors.put(),
+                                                nullptr);
+    if (errors) {
+      logf("DETAIL: %s compile log: %s", label, static_cast<const char*>(errors->GetBufferPointer()));
+    }
+    stats.expectHr(label, compileHr);
+    if (FAILED(compileHr)) {
+      return false;
+    }
+    const HRESULT createHr =
+        device_->CreateVertexShader(static_cast<const DWORD*>(bytecode->GetBufferPointer()), shader.put());
+    stats.expectHr(label, createHr);
+    return SUCCEEDED(createHr);
+  }
+
+  bool compilePixelShader(const char* source,
+                          const char* profile,
+                          ComPtr<IDirect3DPixelShader9>& shader,
+                          TestStats& stats,
+                          const char* label) {
+    ComPtr<ID3DXBuffer> bytecode;
+    ComPtr<ID3DXBuffer> errors;
+    const HRESULT compileHr = D3DXCompileShader(source,
+                                                static_cast<UINT>(std::strlen(source)),
+                                                nullptr,
+                                                nullptr,
+                                                "main",
+                                                profile,
+                                                D3DXSHADER_NO_PRESHADER | D3DXSHADER_SKIPOPTIMIZATION,
+                                                bytecode.put(),
+                                                errors.put(),
+                                                nullptr);
+    if (errors) {
+      logf("DETAIL: %s compile log: %s", label, static_cast<const char*>(errors->GetBufferPointer()));
+    }
+    stats.expectHr(label, compileHr);
+    if (FAILED(compileHr)) {
+      return false;
+    }
+    const HRESULT createHr =
+        device_->CreatePixelShader(static_cast<const DWORD*>(bytecode->GetBufferPointer()), shader.put());
+    stats.expectHr(label, createHr);
+    return SUCCEEDED(createHr);
+  }
+
   void fillTextureQuadrants(IDirect3DTexture9* texture,
                             D3DCOLOR topLeft,
                             D3DCOLOR topRight,
@@ -717,6 +866,24 @@ private:
                      "DrawPrimitive(textured diffuse XYZRHW)", stats);
   }
 
+  void drawTexturedRhwRect(float left,
+                           float top,
+                           float right,
+                           float bottom,
+                           DWORD color,
+                           const char* label,
+                           TestStats& stats) {
+    const XyzrhwDiffuseTexVertex vertices[4] = {
+        {left, top, 0.5f, 1.0f, color, 0.0f, 0.0f},
+        {right, top, 0.5f, 1.0f, color, 1.0f, 0.0f},
+        {left, bottom, 0.5f, 1.0f, color, 0.0f, 1.0f},
+        {right, bottom, 0.5f, 1.0f, color, 1.0f, 1.0f},
+    };
+    drawVertexBuffer(vertices, sizeof(vertices), sizeof(vertices[0]),
+                     D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1,
+                     label, stats);
+  }
+
   void drawRhwQuadZ(float left,
                     float top,
                     float right,
@@ -733,6 +900,25 @@ private:
     };
     drawVertexBuffer(vertices, sizeof(vertices), sizeof(vertices[0]), D3DFVF_XYZRHW | D3DFVF_DIFFUSE,
                      label, stats);
+  }
+
+  void fillTextureR32F(IDirect3DTexture9* texture, float value, TestStats& stats) {
+    D3DLOCKED_RECT locked{};
+    HRESULT hr = texture->LockRect(0, &locked, nullptr, 0);
+    stats.expectHr("Texture.LockRect(fill R32F)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    D3DSURFACE_DESC desc{};
+    texture->GetLevelDesc(0, &desc);
+    for (UINT y = 0; y < desc.Height; ++y) {
+      auto* row = reinterpret_cast<float*>(
+          static_cast<unsigned char*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch);
+      for (UINT x = 0; x < desc.Width; ++x) {
+        row[x] = value;
+      }
+    }
+    stats.expectHr("Texture.UnlockRect(fill R32F)", texture->UnlockRect(0));
   }
 
   DWORD floatAsDword(float value) {
@@ -2214,6 +2400,1080 @@ private:
     finishScene(stats);
     readBackbufferNear(kWidth / 2, kHeight / 2, 0, 0, 0,
                        "depth-stencil-init clear depth 0 rejects farther draw", stats);
+  }
+
+  void runSpecularLighting(TestStats& stats) {
+    resetFixedFunctionState();
+
+    D3DMATERIAL9 material{};
+    material.Specular.g = 1.0f;
+    material.Power = 8.0f;
+    stats.expectHr("SetMaterial(specular)", device_->SetMaterial(&material));
+
+    D3DLIGHT9 light{};
+    light.Type = D3DLIGHT_POINT;
+    light.Specular.g = 1.0f;
+    light.Position.z = -1.0f;
+    light.Range = 100.0f;
+    light.Attenuation0 = 1.0f;
+    stats.expectHr("SetLight(specular point)", device_->SetLight(0, &light));
+    stats.expectHr("LightEnable(specular point)", device_->LightEnable(0, TRUE));
+    stats.expectHr("SetRenderState(LIGHTING specular)", device_->SetRenderState(D3DRS_LIGHTING, TRUE));
+    stats.expectHr("SetRenderState(SPECULARENABLE true)",
+                   device_->SetRenderState(D3DRS_SPECULARENABLE, TRUE));
+    stats.expectHr("SetRenderState(LOCALVIEWER true)", device_->SetRenderState(D3DRS_LOCALVIEWER, TRUE));
+    stats.expectHr("SetTextureStageState(COLORARG1 SPECULAR)",
+                   device_->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_SPECULAR));
+
+    const XyzNormalTexVertex quad[4] = {
+        {-0.8f, -0.8f, 0.5f, 0.0f, 0.0f, -1.0f},
+        {-0.8f, 0.8f, 0.5f, 0.0f, 0.0f, -1.0f},
+        {0.8f, -0.8f, 0.5f, 0.0f, 0.0f, -1.0f},
+        {0.8f, 0.8f, 0.5f, 0.0f, 0.0f, -1.0f},
+    };
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    drawVertexBuffer(quad, sizeof(quad), sizeof(quad[0]), D3DFVF_XYZ | D3DFVF_NORMAL,
+                     "DrawPrimitive(specular lit quad)", stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 0, 255, 0,
+                       "specular-lighting center highlight", stats);
+  }
+
+  void runShadeMode(TestStats& stats) {
+    resetFixedFunctionState();
+    const RhwVertex strip[4] = {
+        {0.0f, 0.0f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 255, 0, 0)},
+        {0.0f, static_cast<float>(kHeight), 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 255, 0)},
+        {static_cast<float>(kWidth), 0.0f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 0, 255)},
+        {static_cast<float>(kWidth), static_cast<float>(kHeight), 0.5f, 1.0f,
+         D3DCOLOR_ARGB(255, 255, 255, 255)},
+    };
+
+    stats.expectHr("SetRenderState(SHADEMODE FLAT)",
+                   device_->SetRenderState(D3DRS_SHADEMODE, D3DSHADE_FLAT));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    drawVertexBuffer(strip, sizeof(strip), sizeof(strip[0]), D3DFVF_XYZRHW | D3DFVF_DIFFUSE,
+                     "DrawPrimitive(shademode flat strip)", stats);
+    finishScene(stats);
+    readBackbufferNear(30, 30, 255, 0, 0, "shademode flat first triangle", stats);
+    readBackbufferNear(kWidth - 30, kHeight - 30, 0, 255, 0,
+                       "shademode flat second triangle", stats);
+
+    stats.expectHr("SetRenderState(SHADEMODE GOURAUD)",
+                   device_->SetRenderState(D3DRS_SHADEMODE, D3DSHADE_GOURAUD));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    drawVertexBuffer(strip, sizeof(strip), sizeof(strip[0]), D3DFVF_XYZRHW | D3DFVF_DIFFUSE,
+                     "DrawPrimitive(shademode gouraud strip)", stats);
+    finishScene(stats);
+
+    D3DCOLOR color = 0;
+    if (readBackbufferColor(kWidth / 2, kHeight / 2, color, "shademode gouraud center read", stats)) {
+      const unsigned int r = dxmt9::fastsanity::channelR(color);
+      const unsigned int g = dxmt9::fastsanity::channelG(color);
+      const unsigned int b = dxmt9::fastsanity::channelB(color);
+      stats.expect(r > 40 && r < 220 && g > 40 && g < 220 && b > 40 && b < 220,
+                   "shademode gouraud interpolates diffuse color");
+    }
+  }
+
+  void runFillingConvention(TestStats& stats) {
+    resetFixedFunctionState();
+    ComPtr<IDirect3DSurface9> originalRt;
+    stats.expectHr("GetRenderTarget(filling original)", device_->GetRenderTarget(0, originalRt.put()));
+
+    ComPtr<IDirect3DSurface9> rt;
+    if (!createRt(8, 8, rt, stats)) {
+      return;
+    }
+    D3DVIEWPORT9 smallViewport{0, 0, 8, 8, 0.0f, 1.0f};
+    stats.expectHr("SetRenderTarget(filling 8x8)", device_->SetRenderTarget(0, rt.ptr()));
+    stats.expectHr("SetViewport(filling 8x8)", device_->SetViewport(&smallViewport));
+    stats.expectHr("BeginScene(filling)", device_->BeginScene());
+    stats.expectHr("Clear(filling)", device_->Clear(0, nullptr, D3DCLEAR_TARGET,
+                                                    D3DCOLOR_XRGB(0, 0, 255), 0.0f, 0));
+    const RhwVertex redTri[3] = {
+        {0.5f, 0.5f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 255, 0, 0)},
+        {7.5f, 0.5f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 255, 0, 0)},
+        {0.5f, 7.5f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 255, 0, 0)},
+    };
+    const RhwVertex greenTri[3] = {
+        {7.5f, 0.5f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 255, 0)},
+        {7.5f, 7.5f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 255, 0)},
+        {0.5f, 7.5f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 255, 0)},
+    };
+    stats.expectHr("SetFVF(filling)", device_->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE));
+    stats.expectHr("DrawPrimitiveUP(filling red)",
+                   device_->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 1, redTri, sizeof(redTri[0])));
+    stats.expectHr("DrawPrimitiveUP(filling green)",
+                   device_->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 1, greenTri, sizeof(greenTri[0])));
+    finishScene(stats);
+
+    ComPtr<IDirect3DSurface9> staging;
+    if (copyRtToSysmem(rt.ptr(), staging, stats)) {
+      expectSurfacePixel(staging.ptr(), 1, 1, 255, 0, 0, "filling-convention upper-left interior", stats);
+      expectSurfacePixel(staging.ptr(), 6, 6, 0, 255, 0, "filling-convention lower-right interior", stats);
+      D3DCOLOR diagonal = 0;
+      const bool read = readSurfacePixel(staging.ptr(), 3, 3, diagonal);
+      const bool covered = read && !colorNear(diagonal, 0, 0, 255, 8);
+      if (read && !covered) {
+        logf("DETAIL: filling-convention diagonal actual rgb=(%u,%u,%u)",
+             dxmt9::fastsanity::channelR(diagonal),
+             dxmt9::fastsanity::channelG(diagonal),
+             dxmt9::fastsanity::channelB(diagonal));
+      }
+      stats.expect(covered, "filling-convention shared edge is covered once");
+    }
+
+    D3DVIEWPORT9 fullViewport{0, 0, kWidth, kHeight, 0.0f, 1.0f};
+    stats.expectHr("SetRenderTarget(filling restore)", device_->SetRenderTarget(0, originalRt.ptr()));
+    stats.expectHr("SetViewport(filling restore)", device_->SetViewport(&fullViewport));
+    clearBackbuffer(D3DCOLOR_XRGB(40, 40, 80), stats);
+    finishScene(stats);
+  }
+
+  void runMismatchedSampleTypes(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(mismatched sample types)", device_->GetDeviceCaps(&caps));
+    if (caps.PixelShaderVersion < D3DPS_VERSION(2, 0) ||
+        !(caps.TextureCaps & D3DPTEXTURECAPS_VOLUMEMAP)) {
+      logf("SKIP: mismatched-sample-types requires ps_2_0 and volume textures");
+      return;
+    }
+
+    static const DWORD ps2d[] = {
+        0xffff0200,
+        0x0200001f, 0x80000000, 0xb00f0000,
+        0x0200001f, 0x90000000, 0xa00f0800,
+        0x03000042, 0x800f0000, 0xb0e40000, 0xa0e40800,
+        0x02000001, 0x800f0800, 0x80e40000,
+        0x0000ffff};
+    static const DWORD psVolume[] = {
+        0xffff0200,
+        0x0200001f, 0x80000000, 0xb00f0000,
+        0x0200001f, 0xa0000000, 0xa00f0800,
+        0x03000042, 0x800f0000, 0xb0e40000, 0xa0e40800,
+        0x02000001, 0x800f0800, 0x80e40000,
+        0x0000ffff};
+
+    ComPtr<IDirect3DTexture9> tex2d;
+    ComPtr<IDirect3DVolumeTexture9> volume;
+    if (!createTexture(2, 2, D3DFMT_A8R8G8B8, 0, D3DPOOL_MANAGED, tex2d, stats,
+                       "CreateTexture(mismatched 2D)")) {
+      return;
+    }
+    fillTextureLevel(tex2d.ptr(), 0, D3DCOLOR_XRGB(112, 112, 112), stats);
+    HRESULT hr = device_->CreateVolumeTexture(2, 2, 2, 1, 0, D3DFMT_A8R8G8B8,
+                                              D3DPOOL_MANAGED, volume.put(), nullptr);
+    stats.expectHr("CreateVolumeTexture(mismatched volume)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    fillVolumeLevel(volume.ptr(), 0, D3DCOLOR_XRGB(48, 48, 48), stats);
+
+    ComPtr<IDirect3DPixelShader9> shader2d;
+    ComPtr<IDirect3DPixelShader9> shaderVolume;
+    stats.expectHr("CreatePixelShader(mismatched 2D)", device_->CreatePixelShader(ps2d, shader2d.put()));
+    stats.expectHr("CreatePixelShader(mismatched volume)",
+                   device_->CreatePixelShader(psVolume, shaderVolume.put()));
+
+    struct SampleCase {
+      const char* label;
+      IDirect3DBaseTexture9* texture;
+      IDirect3DPixelShader9* shader;
+      unsigned char expected;
+      bool allowZero;
+    };
+    const SampleCase cases[] = {
+        {"mismatched-sample-types 2D texture / 2D sampler", tex2d.ptr(), shader2d.ptr(), 112, false},
+        {"mismatched-sample-types volume texture / volume sampler", volume.ptr(), shaderVolume.ptr(), 48, false},
+        {"mismatched-sample-types 2D texture / volume sampler", tex2d.ptr(), shaderVolume.ptr(), 112, true},
+        {"mismatched-sample-types volume texture / 2D sampler", volume.ptr(), shader2d.ptr(), 48, true},
+    };
+
+    for (const SampleCase& sample : cases) {
+      resetFixedFunctionState();
+      stats.expectHr("SetTexture(mismatched)", device_->SetTexture(0, sample.texture));
+      stats.expectHr("SetPixelShader(mismatched)", device_->SetPixelShader(sample.shader));
+      clearBackbuffer(D3DCOLOR_XRGB(17, 17, 17), stats);
+      drawTexturedRhwQuad3(0.5f, 0.5f, 0.5f, sample.label, stats);
+      finishScene(stats);
+
+      D3DCOLOR color = 0;
+      if (readBackbufferColor(kWidth / 2, kHeight / 2, color, sample.label, stats)) {
+        const bool sampled = colorNear(color, sample.expected, sample.expected, sample.expected, 8);
+        const bool zero = sample.allowZero && colorNear(color, 0, 0, 0, 8);
+        stats.expect(sampled || zero, sample.label);
+      }
+    }
+  }
+
+  void runMaxIndex16(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(max-index16)", device_->GetDeviceCaps(&caps));
+    if (caps.MaxVertexIndex < 0xffff) {
+      logf("SKIP: MaxVertexIndex %#lx is below 0xffff", static_cast<unsigned long>(caps.MaxVertexIndex));
+      return;
+    }
+
+    constexpr UINT kVertexCount = 0x10000;
+    std::vector<RhwVertex> vertices(kVertexCount);
+    vertices[0] = {0.0f, 0.0f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 220, 0)};
+    vertices[1] = {static_cast<float>(kWidth), 0.0f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 220, 0)};
+    vertices[2] = {0.0f, static_cast<float>(kHeight), 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 220, 0)};
+    vertices[0xffff] = {static_cast<float>(kWidth), static_cast<float>(kHeight), 0.5f, 1.0f,
+                        D3DCOLOR_ARGB(255, 0, 220, 0)};
+    const WORD indices[4] = {0, 1, 2, 0xffff};
+
+    ComPtr<IDirect3DVertexBuffer9> vb;
+    HRESULT hr = device_->CreateVertexBuffer(static_cast<UINT>(vertices.size() * sizeof(vertices[0])),
+                                             D3DUSAGE_WRITEONLY,
+                                             D3DFVF_XYZRHW | D3DFVF_DIFFUSE,
+                                             D3DPOOL_DEFAULT,
+                                             vb.put(),
+                                             nullptr);
+    stats.expectHr("CreateVertexBuffer(max-index16)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    void* mapped = nullptr;
+    hr = vb->Lock(0, static_cast<UINT>(vertices.size() * sizeof(vertices[0])), &mapped, 0);
+    stats.expectHr("VertexBuffer.Lock(max-index16)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    std::memcpy(mapped, vertices.data(), vertices.size() * sizeof(vertices[0]));
+    stats.expectHr("VertexBuffer.Unlock(max-index16)", vb->Unlock());
+
+    ComPtr<IDirect3DIndexBuffer9> ib;
+    hr = device_->CreateIndexBuffer(sizeof(indices), D3DUSAGE_WRITEONLY, D3DFMT_INDEX16,
+                                    D3DPOOL_DEFAULT, ib.put(), nullptr);
+    stats.expectHr("CreateIndexBuffer(max-index16)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    hr = ib->Lock(0, sizeof(indices), &mapped, 0);
+    stats.expectHr("IndexBuffer.Lock(max-index16)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+    std::memcpy(mapped, indices, sizeof(indices));
+    stats.expectHr("IndexBuffer.Unlock(max-index16)", ib->Unlock());
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetFVF(max-index16)", device_->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE));
+    stats.expectHr("SetStreamSource(max-index16)", device_->SetStreamSource(0, vb.ptr(), 0, sizeof(vertices[0])));
+    stats.expectHr("SetIndices(max-index16)", device_->SetIndices(ib.ptr()));
+    stats.expectHr("DrawIndexedPrimitive(max-index16)",
+                   device_->DrawIndexedPrimitive(D3DPT_TRIANGLESTRIP, 0, 0, kVertexCount, 0, 2));
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 0, 220, 0,
+                       "max-index16 indexed quad uses vertex 0xffff", stats);
+  }
+
+  void runNullFormat(TestStats& stats) {
+    resetFixedFunctionState();
+    const D3DFORMAT nullFormat = static_cast<D3DFORMAT>(MAKEFOURCC('N', 'U', 'L', 'L'));
+    HRESULT support = d3d_->CheckDeviceFormat(D3DADAPTER_DEFAULT,
+                                              D3DDEVTYPE_HAL,
+                                              D3DFMT_X8R8G8B8,
+                                              D3DUSAGE_RENDERTARGET,
+                                              D3DRTYPE_SURFACE,
+                                              nullFormat);
+    if (support == D3DERR_NOTAVAILABLE) {
+      logf("SKIP: NULL render-target format unsupported");
+      return;
+    }
+    stats.expectHr("CheckDeviceFormat(NULL render target)", support);
+
+    ComPtr<IDirect3DSurface9> originalRt;
+    stats.expectHr("GetRenderTarget(NULL original)", device_->GetRenderTarget(0, originalRt.put()));
+    ComPtr<IDirect3DSurface9> nullRt;
+    HRESULT hr = device_->CreateRenderTarget(kWidth, kHeight, nullFormat, D3DMULTISAMPLE_NONE,
+                                             0, FALSE, nullRt.put(), nullptr);
+    stats.expectHr("CreateRenderTarget(NULL)", hr);
+    ComPtr<IDirect3DSurface9> depth;
+    if (FAILED(hr) || !createDepthStencil(kWidth, kHeight, depth, stats)) {
+      return;
+    }
+
+    D3DVIEWPORT9 fullViewport{0, 0, kWidth, kHeight, 0.0f, 1.0f};
+    stats.expectHr("SetRenderTarget(NULL)", device_->SetRenderTarget(0, nullRt.ptr()));
+    stats.expectHr("SetDepthStencilSurface(NULL format)", device_->SetDepthStencilSurface(depth.ptr()));
+    stats.expectHr("SetViewport(NULL format)", device_->SetViewport(&fullViewport));
+    stats.expectHr("SetRenderState(ZENABLE NULL format)", device_->SetRenderState(D3DRS_ZENABLE, TRUE));
+    stats.expectHr("SetRenderState(ZWRITE NULL format)", device_->SetRenderState(D3DRS_ZWRITEENABLE, TRUE));
+    stats.expectHr("SetRenderState(ZFUNC NULL format)", device_->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESS));
+    stats.expectHr("Clear(NULL depth)", device_->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0));
+    stats.expectHr("BeginScene(NULL depth write)", device_->BeginScene());
+    drawRhwQuadZ(0.0f, 0.0f, static_cast<float>(kWidth), static_cast<float>(kHeight), 0.25f,
+                 D3DCOLOR_ARGB(255, 255, 0, 0), "DrawPrimitive(NULL depth writer)", stats);
+    finishScene(stats);
+
+    stats.expectHr("SetRenderTarget(NULL restore)", device_->SetRenderTarget(0, originalRt.ptr()));
+    stats.expectHr("SetViewport(NULL restore)", device_->SetViewport(&fullViewport));
+    stats.expectHr("BeginScene(NULL verify)", device_->BeginScene());
+    stats.expectHr("Clear(NULL verify target only)", device_->Clear(0, nullptr, D3DCLEAR_TARGET,
+                                                                    D3DCOLOR_XRGB(0, 0, 0), 0.0f, 0));
+    drawRhwQuadZ(0.0f, 0.0f, static_cast<float>(kWidth), static_cast<float>(kHeight), 0.75f,
+                 D3DCOLOR_ARGB(255, 220, 0, 0), "DrawPrimitive(NULL far rejected)", stats);
+    drawRhwQuadZ(40.0f, 30.0f, 120.0f, 90.0f, 0.10f,
+                 D3DCOLOR_ARGB(255, 0, 220, 0), "DrawPrimitive(NULL near accepted)", stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 0, 220, 0,
+                       "null-format preserved depth write from NULL RT", stats);
+    readBackbufferNear(20, 20, 0, 0, 0,
+                       "null-format rejected far color outside near quad", stats);
+  }
+
+  void runDepthClamp(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(depth-clamp)", device_->GetDeviceCaps(&caps));
+
+    ComPtr<IDirect3DSurface9> depth;
+    if (!createDepthStencil(kWidth, kHeight, depth, stats)) {
+      return;
+    }
+    D3DVIEWPORT9 viewport{0, 0, kWidth, kHeight, 0.0f, 1.0f};
+    stats.expectHr("SetViewport(depth-clamp)", device_->SetViewport(&viewport));
+    stats.expectHr("SetDepthStencilSurface(depth-clamp)", device_->SetDepthStencilSurface(depth.ptr()));
+    stats.expectHr("SetRenderState(ZENABLE depth-clamp)", device_->SetRenderState(D3DRS_ZENABLE, TRUE));
+    stats.expectHr("SetRenderState(ZWRITE depth-clamp)", device_->SetRenderState(D3DRS_ZWRITEENABLE, FALSE));
+    stats.expectHr("SetRenderState(ZFUNC depth-clamp)", device_->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL));
+    stats.expectHr("SetRenderState(CLIPPING false depth-clamp)",
+                   device_->SetRenderState(D3DRS_CLIPPING, FALSE));
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("Clear(depth-clamp z)", device_->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0));
+    drawRhwQuadZ(0.0f, 0.0f, static_cast<float>(kWidth), static_cast<float>(kHeight), 2.0f,
+                 D3DCOLOR_ARGB(255, 0, 220, 0), "DrawPrimitive(depth-clamp out-of-range)", stats);
+    finishScene(stats);
+
+    if (caps.PrimitiveMiscCaps & D3DPMISCCAPS_CLIPTLVERTS) {
+      readBackbufferNear(kWidth / 2, kHeight / 2, 0, 0, 0,
+                         "depth-clamp clipped transformed z above one", stats);
+    } else {
+      readBackbufferNear(kWidth / 2, kHeight / 2, 0, 220, 0,
+                         "depth-clamp clamps transformed z above one", stats);
+    }
+    stats.expectHr("SetDepthStencilSurface(depth-clamp restore)", device_->SetDepthStencilSurface(nullptr));
+    clearBackbuffer(D3DCOLOR_XRGB(40, 40, 80), stats);
+    finishScene(stats);
+  }
+
+  void runClearDifferentSizeSurfaces(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(clear-different-size)", device_->GetDeviceCaps(&caps));
+
+    ComPtr<IDirect3DSurface9> originalRt;
+    stats.expectHr("GetRenderTarget(clear-different-size original)", device_->GetRenderTarget(0, originalRt.put()));
+
+    ComPtr<IDirect3DSurface9> rt;
+    ComPtr<IDirect3DSurface9> rt2;
+    ComPtr<IDirect3DSurface9> depth;
+    ComPtr<IDirect3DSurface9> staging;
+    if (!createRt(1, 1, rt, stats) || !createRt(1, 2, rt2, stats)) {
+      return;
+    }
+
+    const D3DFORMAT depthFormat =
+        SUCCEEDED(d3d_->CheckDeviceFormat(D3DADAPTER_DEFAULT,
+                                          D3DDEVTYPE_HAL,
+                                          D3DFMT_X8R8G8B8,
+                                          D3DUSAGE_DEPTHSTENCIL,
+                                          D3DRTYPE_SURFACE,
+                                          D3DFMT_D16_LOCKABLE))
+            ? D3DFMT_D16_LOCKABLE
+            : D3DFMT_D24S8;
+    HRESULT hr = device_->CreateDepthStencilSurface(4, 4, depthFormat, D3DMULTISAMPLE_NONE,
+                                                    0, FALSE, depth.put(), nullptr);
+    stats.expectHr("CreateDepthStencilSurface(clear-different-size)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+
+    D3DVIEWPORT9 viewport{0, 0, 4, 4, 0.0f, 1.0f};
+    stats.expectHr("SetRenderTarget(clear-different-size rt0)", device_->SetRenderTarget(0, rt.ptr()));
+    if (caps.NumSimultaneousRTs >= 2) {
+      stats.expectHr("SetRenderTarget(clear-different-size rt1)", device_->SetRenderTarget(1, rt2.ptr()));
+    }
+    stats.expectHr("SetDepthStencilSurface(clear-different-size)", device_->SetDepthStencilSurface(depth.ptr()));
+    stats.expectHr("SetViewport(clear-different-size)", device_->SetViewport(&viewport));
+    stats.expectHr("Clear(clear-different-size)",
+                   device_->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
+                                  D3DCOLOR_XRGB(220, 0, 0), 0.5f, 0));
+
+    if (copyRtToSysmem(rt.ptr(), staging, stats)) {
+      expectSurfacePixel(staging.ptr(), 0, 0, 220, 0, 0,
+                         "clear-different-size rt0 was cleared", stats);
+    }
+    if (caps.NumSimultaneousRTs >= 2) {
+      ComPtr<IDirect3DSurface9> staging2;
+      if (copyRtToSysmem(rt2.ptr(), staging2, stats)) {
+        expectSurfacePixel(staging2.ptr(), 0, 1, 220, 0, 0,
+                           "clear-different-size rt1 was cleared", stats);
+      }
+      stats.expectHr("SetRenderTarget(clear-different-size rt1 restore)",
+                     device_->SetRenderTarget(1, nullptr));
+    }
+
+    if (depthFormat == D3DFMT_D16_LOCKABLE) {
+      D3DLOCKED_RECT locked{};
+      hr = depth->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+      stats.expectHr("LockRect(clear-different-size depth)", hr);
+      if (SUCCEEDED(hr)) {
+        bool allHalfDepth = true;
+        for (UINT y = 0; y < 4; ++y) {
+          const auto* row = reinterpret_cast<const std::uint16_t*>(
+              static_cast<const unsigned char*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch);
+          for (UINT x = 0; x < 4; ++x) {
+            allHalfDepth = allHalfDepth && std::abs(static_cast<int>(row[x]) - 0x7fff) <= 2;
+          }
+        }
+        stats.expectHr("UnlockRect(clear-different-size depth)", depth->UnlockRect());
+        stats.expect(allHalfDepth, "clear-different-size depth surface was cleared");
+      }
+    } else {
+      logf("SKIP: clear-different-size depth readback requires D16_LOCKABLE");
+    }
+
+    D3DVIEWPORT9 fullViewport{0, 0, kWidth, kHeight, 0.0f, 1.0f};
+    stats.expectHr("SetDepthStencilSurface(clear-different-size restore)",
+                   device_->SetDepthStencilSurface(nullptr));
+    stats.expectHr("SetRenderTarget(clear-different-size restore)", device_->SetRenderTarget(0, originalRt.ptr()));
+    stats.expectHr("SetViewport(clear-different-size restore)", device_->SetViewport(&fullViewport));
+    clearBackbuffer(D3DCOLOR_XRGB(40, 40, 80), stats);
+    finishScene(stats);
+  }
+
+  void runColorFill(TestStats& stats) {
+    resetFixedFunctionState();
+    HRESULT hr = device_->ColorFill(nullptr, nullptr, 0);
+    stats.expect(hr == D3DERR_INVALIDCALL, "color-fill rejects null surface");
+
+    ComPtr<IDirect3DSurface9> backbuffer;
+    stats.expectHr("GetRenderTarget(color-fill backbuffer)", device_->GetRenderTarget(0, backbuffer.put()));
+    if (backbuffer) {
+      stats.expectHr("ColorFill(color-fill backbuffer)",
+                     device_->ColorFill(backbuffer.ptr(), nullptr, D3DCOLOR_XRGB(17, 34, 51)));
+      readBackbufferNear(0, 0, 17, 34, 51, "color-fill backbuffer pixel", stats);
+    }
+
+    ComPtr<IDirect3DSurface9> rt;
+    ComPtr<IDirect3DSurface9> staging;
+    if (createRt(32, 32, rt, stats)) {
+      RECT rect{4, 4, 20, 20};
+      stats.expectHr("ColorFill(color-fill rt full)",
+                     device_->ColorFill(rt.ptr(), nullptr, D3DCOLOR_XRGB(68, 85, 102)));
+      stats.expectHr("ColorFill(color-fill rt rect)",
+                     device_->ColorFill(rt.ptr(), &rect, D3DCOLOR_XRGB(119, 136, 153)));
+      if (copyRtToSysmem(rt.ptr(), staging, stats)) {
+        expectSurfacePixel(staging.ptr(), 1, 1, 68, 85, 102,
+                           "color-fill rt outside rect", stats);
+        expectSurfacePixel(staging.ptr(), 8, 8, 119, 136, 153,
+                           "color-fill rt inside rect", stats);
+      }
+    }
+
+    ComPtr<IDirect3DSurface9> sysmem;
+    if (createSysmemSurface(16, 16, sysmem, stats)) {
+      hr = device_->ColorFill(sysmem.ptr(), nullptr, D3DCOLOR_XRGB(1, 2, 3));
+      stats.expect(hr == D3DERR_INVALIDCALL, "color-fill rejects system-memory surface");
+    }
+
+    ComPtr<IDirect3DSurface9> depth;
+    if (createDepthStencil(16, 16, depth, stats)) {
+      hr = device_->ColorFill(depth.ptr(), nullptr, D3DCOLOR_XRGB(1, 2, 3));
+      stats.expect(hr == D3DERR_INVALIDCALL, "color-fill rejects depth-stencil surface");
+    }
+  }
+
+  void runZRange(TestStats& stats) {
+    resetFixedFunctionState();
+    ComPtr<IDirect3DSurface9> depth;
+    if (!createDepthStencil(kWidth, kHeight, depth, stats)) {
+      return;
+    }
+    stats.expectHr("SetDepthStencilSurface(z-range)", device_->SetDepthStencilSurface(depth.ptr()));
+    stats.expectHr("SetRenderState(ZENABLE z-range)", device_->SetRenderState(D3DRS_ZENABLE, TRUE));
+    stats.expectHr("SetRenderState(ZWRITE z-range)", device_->SetRenderState(D3DRS_ZWRITEENABLE, FALSE));
+    stats.expectHr("SetRenderState(CLIPPING false z-range)", device_->SetRenderState(D3DRS_CLIPPING, FALSE));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("Clear(z-range depth)", device_->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 0.5f, 0));
+
+    stats.expectHr("SetRenderState(ZFUNC LESS z-range)", device_->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESS));
+    drawRhwQuadZ(0.0f, 0.0f, 50.0f, static_cast<float>(kHeight), 0.25f,
+                 D3DCOLOR_ARGB(255, 0, 220, 0), "DrawPrimitive(z-range less)", stats);
+    stats.expectHr("SetRenderState(ZFUNC GREATER z-range)", device_->SetRenderState(D3DRS_ZFUNC, D3DCMP_GREATER));
+    drawRhwQuadZ(55.0f, 0.0f, 105.0f, static_cast<float>(kHeight), 0.75f,
+                 D3DCOLOR_ARGB(255, 0, 0, 220), "DrawPrimitive(z-range greater)", stats);
+    finishScene(stats);
+
+    readBackbufferNear(25, kHeight / 2, 0, 220, 0, "z-range less-than clear depth", stats);
+    readBackbufferNear(80, kHeight / 2, 0, 0, 220, "z-range greater-than clear depth", stats);
+    stats.expectHr("SetDepthStencilSurface(z-range restore)", device_->SetDepthStencilSurface(nullptr));
+  }
+
+  void runOffscreenSurface(TestStats& stats) {
+    resetFixedFunctionState();
+    HRESULT support = d3d_->CheckDeviceFormat(D3DADAPTER_DEFAULT,
+                                              D3DDEVTYPE_HAL,
+                                              D3DFMT_X8R8G8B8,
+                                              D3DUSAGE_RENDERTARGET,
+                                              D3DRTYPE_TEXTURE,
+                                              D3DFMT_A8R8G8B8);
+    if (support == D3DERR_NOTAVAILABLE) {
+      logf("SKIP: offscreen-surface requires A8R8G8B8 render-target textures");
+      return;
+    }
+    stats.expectHr("CheckDeviceFormat(offscreen-surface rt texture)", support);
+
+    ComPtr<IDirect3DSurface9> originalRt;
+    stats.expectHr("GetRenderTarget(offscreen original)", device_->GetRenderTarget(0, originalRt.put()));
+
+    ComPtr<IDirect3DTexture9> texture;
+    if (!createTexture(64, 64, D3DFMT_A8R8G8B8, D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT,
+                       texture, stats, "CreateTexture(offscreen rt texture)")) {
+      return;
+    }
+    ComPtr<IDirect3DSurface9> offscreen;
+    stats.expectHr("GetSurfaceLevel(offscreen)", texture->GetSurfaceLevel(0, offscreen.put()));
+    if (!offscreen) {
+      return;
+    }
+
+    D3DVIEWPORT9 offscreenViewport{0, 0, 64, 64, 0.0f, 1.0f};
+    stats.expectHr("SetRenderTarget(offscreen)", device_->SetRenderTarget(0, offscreen.ptr()));
+    stats.expectHr("SetViewport(offscreen)", device_->SetViewport(&offscreenViewport));
+    clearBackbuffer(D3DCOLOR_XRGB(255, 0, 255), stats);
+    drawXyzDiffuseQuad(-0.5f, -0.5f, 0.5f, 0.5f, D3DCOLOR_ARGB(255, 255, 255, 255), stats);
+    finishScene(stats);
+
+    D3DVIEWPORT9 fullViewport{0, 0, kWidth, kHeight, 0.0f, 1.0f};
+    stats.expectHr("SetRenderTarget(offscreen restore)", device_->SetRenderTarget(0, originalRt.ptr()));
+    stats.expectHr("SetViewport(offscreen restore)", device_->SetViewport(&fullViewport));
+    stats.expectHr("SetTexture(offscreen)", device_->SetTexture(0, texture.ptr()));
+    stats.expectHr("SetTextureStageState(offscreen texture arg)",
+                   device_->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE));
+    stats.expectHr("SetSamplerState(offscreen min)", device_->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT));
+    stats.expectHr("SetSamplerState(offscreen mag)", device_->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT));
+    clearBackbuffer(D3DCOLOR_XRGB(220, 0, 0), stats);
+    drawTexturedRhwRect(16.0f, 12.0f, 144.0f, 108.0f, D3DCOLOR_ARGB(255, 255, 255, 255),
+                        "DrawPrimitive(offscreen textured)", stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 255, 255, 255,
+                       "offscreen-surface sampled drawn center", stats);
+    readBackbufferNear(32, kHeight / 2, 255, 0, 255,
+                       "offscreen-surface sampled cleared edge", stats);
+    readBackbufferNear(4, 4, 220, 0, 0,
+                       "offscreen-surface outside textured quad", stats);
+  }
+
+  void runDepthStencilSize(TestStats& stats) {
+    resetFixedFunctionState();
+    ComPtr<IDirect3DSurface9> originalRt;
+    stats.expectHr("GetRenderTarget(depth-stencil-size original)", device_->GetRenderTarget(0, originalRt.put()));
+
+    ComPtr<IDirect3DSurface9> rt;
+    ComPtr<IDirect3DSurface9> depth;
+    if (!createRt(64, 64, rt, stats)) {
+      return;
+    }
+    HRESULT hr = device_->CreateDepthStencilSurface(32, 32, D3DFMT_D24X8, D3DMULTISAMPLE_NONE,
+                                                    0, TRUE, depth.put(), nullptr);
+    if (hr == D3DERR_NOTAVAILABLE || hr == D3DERR_INVALIDCALL) {
+      logf("SKIP: depth-stencil-size requires D24X8 depth-stencil surface");
+      return;
+    }
+    stats.expectHr("CreateDepthStencilSurface(depth-stencil-size)", hr);
+    if (FAILED(hr)) {
+      return;
+    }
+
+    D3DVIEWPORT9 smallViewport{0, 0, 64, 64, 0.0f, 1.0f};
+    DWORD passes = 0;
+    stats.expectHr("SetRenderTarget(depth-stencil-size)", device_->SetRenderTarget(0, rt.ptr()));
+    stats.expectHr("SetDepthStencilSurface(depth-stencil-size)", device_->SetDepthStencilSurface(depth.ptr()));
+    stats.expectHr("SetViewport(depth-stencil-size)", device_->SetViewport(&smallViewport));
+    stats.expectHr("SetRenderState(ZENABLE false depth-stencil-size)",
+                   device_->SetRenderState(D3DRS_ZENABLE, FALSE));
+    stats.expectHr("SetRenderState(STENCIL false depth-stencil-size)",
+                   device_->SetRenderState(D3DRS_STENCILENABLE, FALSE));
+    stats.expectHr("SetRenderState(ZWRITE false depth-stencil-size)",
+                   device_->SetRenderState(D3DRS_ZWRITEENABLE, FALSE));
+    stats.expectHr("ValidateDevice(depth-stencil-size disabled)", device_->ValidateDevice(&passes));
+    stats.expectHr("Clear(depth-stencil-size target)",
+                   device_->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0, 0, 255), 0.0f, 0));
+    stats.expectHr("Clear(depth-stencil-size z only)",
+                   device_->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 0.2f, 0));
+    hr = device_->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
+                        D3DCOLOR_XRGB(255, 0, 0), 0.5f, 0);
+    stats.expectHr("Clear(depth-stencil-size target+z)", hr);
+
+    stats.expectHr("SetRenderState(ZENABLE true depth-stencil-size)",
+                   device_->SetRenderState(D3DRS_ZENABLE, TRUE));
+    hr = device_->ValidateDevice(&passes);
+    stats.expect(hr == D3D_OK || hr == D3DERR_CONFLICTINGRENDERSTATE,
+                 "depth-stencil-size validates or reports conflicting render state");
+
+    stats.expectHr("SetRenderState(ZENABLE restore depth-stencil-size)",
+                   device_->SetRenderState(D3DRS_ZENABLE, FALSE));
+    stats.expectHr("SetRenderState(ZWRITE restore depth-stencil-size)",
+                   device_->SetRenderState(D3DRS_ZWRITEENABLE, FALSE));
+    stats.expectHr("BeginScene(depth-stencil-size draw)", device_->BeginScene());
+    const XyzOnlyVertex quad[4] = {
+        {-1.0f, -1.0f, 0.0f},
+        {-1.0f, 1.0f, 0.0f},
+        {1.0f, -1.0f, 0.0f},
+        {1.0f, 1.0f, 0.0f},
+    };
+    stats.expectHr("SetFVF(depth-stencil-size)", device_->SetFVF(D3DFVF_XYZ));
+    stats.expectHr("DrawPrimitiveUP(depth-stencil-size)",
+                   device_->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(quad[0])));
+    finishScene(stats);
+
+    stats.expectHr("SetDepthStencilSurface(depth-stencil-size restore)",
+                   device_->SetDepthStencilSurface(nullptr));
+    stats.expectHr("SetRenderTarget(depth-stencil-size restore)", device_->SetRenderTarget(0, originalRt.ptr()));
+    D3DVIEWPORT9 fullViewport{0, 0, kWidth, kHeight, 0.0f, 1.0f};
+    stats.expectHr("SetViewport(depth-stencil-size restore)", device_->SetViewport(&fullViewport));
+    clearBackbuffer(D3DCOLOR_XRGB(40, 40, 80), stats);
+    finishScene(stats);
+  }
+
+  void runVshaderFloat16(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(vshader-float16)", device_->GetDeviceCaps(&caps));
+    if (caps.VertexShaderVersion < D3DVS_VERSION(2, 0) ||
+        caps.PixelShaderVersion < D3DPS_VERSION(2, 0)) {
+      logf("SKIP: vshader-float16 requires vs_2_0/ps_2_0");
+      return;
+    }
+
+    static const char vsSource[] = R"(
+struct VS_IN {
+  float4 pos : POSITION0;
+  float2 tex : TEXCOORD0;
+  float4 color : COLOR0;
+};
+struct VS_OUT {
+  float4 pos : POSITION0;
+  float4 color : COLOR0;
+};
+VS_OUT main(VS_IN input) {
+  VS_OUT output;
+  output.pos = float4(input.pos.xyz, 1.0);
+  output.color = float4(input.tex.x, input.color.y, input.tex.y, input.color.w);
+  return output;
+}
+)";
+    static const char psSource[] = R"(
+float4 main(float4 color : COLOR0) : COLOR0 {
+  return color;
+}
+)";
+    ComPtr<IDirect3DVertexShader9> vs;
+    ComPtr<IDirect3DPixelShader9> ps;
+    if (!compileVertexShader(vsSource, "vs_2_0", vs, stats, "CompileVertexShader(vshader-float16)") ||
+        !compilePixelShader(psSource, "ps_2_0", ps, stats, "CompilePixelShader(vshader-float16)")) {
+      return;
+    }
+
+    static const D3DVERTEXELEMENT9 elements[] = {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, 12, D3DDECLTYPE_FLOAT16_2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+        {0, 16, D3DDECLTYPE_FLOAT16_4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
+        D3DDECL_END()};
+    constexpr std::uint16_t h0 = 0x0000;
+    constexpr std::uint16_t hHalf = 0x3800;
+    constexpr std::uint16_t hOne = 0x3c00;
+    const XyzHalfTexHalfColorVertex quad[4] = {
+        {-1.0f, -1.0f, 0.5f, hHalf, h0, h0, hOne, h0, hOne},
+        {1.0f, -1.0f, 0.5f, hHalf, h0, h0, hOne, h0, hOne},
+        {-1.0f, 1.0f, 0.5f, hHalf, h0, h0, hOne, h0, hOne},
+        {1.0f, 1.0f, 0.5f, hHalf, h0, h0, hOne, h0, hOne},
+    };
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetVertexShader(vshader-float16)", device_->SetVertexShader(vs.ptr()));
+    stats.expectHr("SetPixelShader(vshader-float16)", device_->SetPixelShader(ps.ptr()));
+    drawDeclaredVertexBuffer(quad, sizeof(quad), sizeof(quad[0]), elements,
+                             "DrawPrimitive(vshader-float16)", stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 128, 255, 0,
+                       "vshader-float16 FLOAT16_2/4 inputs", stats);
+  }
+
+  void runShaderFog(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(shader-fog)", device_->GetDeviceCaps(&caps));
+    if (caps.VertexShaderVersion < D3DVS_VERSION(2, 0)) {
+      logf("SKIP: shader-fog requires vs_2_0");
+      return;
+    }
+
+    static const char vsSource[] = R"(
+float4 FogControl : register(c0);
+struct VS_IN {
+  float4 pos : POSITION0;
+  float4 color : COLOR0;
+};
+struct VS_OUT {
+  float4 pos : POSITION0;
+  float4 color : COLOR0;
+  float fog : FOG;
+};
+VS_OUT main(VS_IN input) {
+  VS_OUT output;
+  output.pos = float4(input.pos.xyz, 1.0);
+  output.color = input.color;
+  output.fog = FogControl.x;
+  return output;
+}
+)";
+    ComPtr<IDirect3DVertexShader9> vs;
+    if (!compileVertexShader(vsSource, "vs_2_0", vs, stats, "CompileVertexShader(shader-fog)")) {
+      return;
+    }
+
+    static const D3DVERTEXELEMENT9 elements[] = {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0},
+        D3DDECL_END()};
+    const XyzDiffuseVertex left[4] = {
+        {-1.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 220, 0, 0)},
+        {0.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 220, 0, 0)},
+        {-1.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 220, 0, 0)},
+        {0.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 220, 0, 0)},
+    };
+    const XyzDiffuseVertex right[4] = {
+        {0.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+        {1.0f, -1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+        {0.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+        {1.0f, 1.0f, 0.5f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+    };
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetVertexShader(shader-fog)", device_->SetVertexShader(vs.ptr()));
+    stats.expectHr("SetRenderState(FOGENABLE shader-fog)", device_->SetRenderState(D3DRS_FOGENABLE, TRUE));
+    stats.expectHr("SetRenderState(FOGCOLOR shader-fog)",
+                   device_->SetRenderState(D3DRS_FOGCOLOR, D3DCOLOR_XRGB(0, 220, 220)));
+    const float fogZero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    stats.expectHr("SetVertexShaderConstantF(shader-fog zero)",
+                   device_->SetVertexShaderConstantF(0, fogZero, 1));
+    drawDeclaredVertexBuffer(left, sizeof(left), sizeof(left[0]), elements,
+                             "DrawPrimitive(shader-fog fogged)", stats);
+    const float fogOne[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+    stats.expectHr("SetVertexShaderConstantF(shader-fog one)",
+                   device_->SetVertexShaderConstantF(0, fogOne, 1));
+    drawDeclaredVertexBuffer(right, sizeof(right), sizeof(right[0]), elements,
+                             "DrawPrimitive(shader-fog unfogged)", stats);
+    finishScene(stats);
+    readBackbufferNear(40, kHeight / 2, 0, 220, 220,
+                       "shader-fog vertex fog factor zero uses fog color", stats);
+    readBackbufferNear(120, kHeight / 2, 0, 220, 0,
+                       "shader-fog vertex fog factor one keeps source color", stats);
+  }
+
+  void runVertexTexture(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(vertex-texture)", device_->GetDeviceCaps(&caps));
+    if (caps.VertexShaderVersion < D3DVS_VERSION(3, 0) ||
+        caps.PixelShaderVersion < D3DPS_VERSION(2, 0)) {
+      logf("SKIP: vertex-texture requires vs_3_0/ps_2_0");
+      return;
+    }
+    HRESULT support = d3d_->CheckDeviceFormat(D3DADAPTER_DEFAULT,
+                                              D3DDEVTYPE_HAL,
+                                              D3DFMT_X8R8G8B8,
+                                              D3DUSAGE_QUERY_VERTEXTEXTURE,
+                                              D3DRTYPE_TEXTURE,
+                                              D3DFMT_R32F);
+    if (support == D3DERR_NOTAVAILABLE) {
+      logf("SKIP: vertex-texture R32F vertex texture unsupported");
+      return;
+    }
+    stats.expectHr("CheckDeviceFormat(vertex-texture R32F)", support);
+
+    static const char vsSource[] = R"(
+sampler2D VertexTexture : register(s0);
+struct VS_IN {
+  float4 pos : POSITION0;
+  float2 tex : TEXCOORD0;
+};
+struct VS_OUT {
+  float4 pos : POSITION0;
+  float4 color : COLOR0;
+};
+VS_OUT main(VS_IN input) {
+  VS_OUT output;
+  float value = tex2Dlod(VertexTexture, float4(input.tex, 0.0, 0.0)).r;
+  output.pos = float4(input.pos.xyz, 1.0);
+  output.color = float4(value, 0.0, 0.0, 1.0);
+  return output;
+}
+)";
+    static const char psSource[] = R"(
+float4 main(float4 color : COLOR0) : COLOR0 {
+  return color;
+}
+)";
+    ComPtr<IDirect3DVertexShader9> vs;
+    ComPtr<IDirect3DPixelShader9> ps;
+    if (!compileVertexShader(vsSource, "vs_3_0", vs, stats, "CompileVertexShader(vertex-texture)") ||
+        !compilePixelShader(psSource, "ps_2_0", ps, stats, "CompilePixelShader(vertex-texture)")) {
+      return;
+    }
+
+    ComPtr<IDirect3DTexture9> texture;
+    if (!createTexture(2, 2, D3DFMT_R32F, 0, D3DPOOL_MANAGED, texture, stats,
+                       "CreateTexture(vertex-texture R32F)")) {
+      return;
+    }
+    fillTextureR32F(texture.ptr(), 1.0f, stats);
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetTexture(vertex sampler 0)",
+                   device_->SetTexture(D3DVERTEXTEXTURESAMPLER0, texture.ptr()));
+    stats.expectHr("SetSamplerState(vertex texture min)",
+                   device_->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MINFILTER, D3DTEXF_POINT));
+    stats.expectHr("SetSamplerState(vertex texture mag)",
+                   device_->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MAGFILTER, D3DTEXF_POINT));
+    stats.expectHr("SetSamplerState(vertex texture mip)",
+                   device_->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MIPFILTER, D3DTEXF_NONE));
+    stats.expectHr("SetVertexShader(vertex-texture)", device_->SetVertexShader(vs.ptr()));
+    stats.expectHr("SetPixelShader(vertex-texture)", device_->SetPixelShader(ps.ptr()));
+    drawTexturedXyzQuad(stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 255, 0, 0,
+                       "vertex-texture sampled R32F in vertex shader", stats);
+  }
+
+  void runFfpW(TestStats& stats) {
+    resetFixedFunctionState();
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    const RhwVertex left[4] = {
+        {0.0f, 0.0f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+        {75.0f, 0.0f, 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+        {0.0f, static_cast<float>(kHeight), 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+        {75.0f, static_cast<float>(kHeight), 0.5f, 1.0f, D3DCOLOR_ARGB(255, 0, 220, 0)},
+    };
+    const RhwVertex right[4] = {
+        {85.0f, 0.0f, 0.5f, 0.5f, D3DCOLOR_ARGB(255, 0, 0, 220)},
+        {160.0f, 0.0f, 0.5f, 0.5f, D3DCOLOR_ARGB(255, 0, 0, 220)},
+        {85.0f, static_cast<float>(kHeight), 0.5f, 0.5f, D3DCOLOR_ARGB(255, 0, 0, 220)},
+        {160.0f, static_cast<float>(kHeight), 0.5f, 0.5f, D3DCOLOR_ARGB(255, 0, 0, 220)},
+    };
+    drawVertexBuffer(left, sizeof(left), sizeof(left[0]), D3DFVF_XYZRHW | D3DFVF_DIFFUSE,
+                     "DrawPrimitive(ffp-w rhw one)", stats);
+    drawVertexBuffer(right, sizeof(right), sizeof(right[0]), D3DFVF_XYZRHW | D3DFVF_DIFFUSE,
+                     "DrawPrimitive(ffp-w rhw half)", stats);
+    finishScene(stats);
+    readBackbufferNear(35, kHeight / 2, 0, 220, 0, "ffp-w rhw one covers screen-space quad", stats);
+    readBackbufferNear(125, kHeight / 2, 0, 0, 220, "ffp-w rhw half covers screen-space quad", stats);
+  }
+
+  void runTextureTransformFlags(TestStats& stats) {
+    resetFixedFunctionState();
+    ComPtr<IDirect3DTexture9> texture;
+    if (!createTexture(4, 4, D3DFMT_A8R8G8B8, 0, D3DPOOL_MANAGED, texture, stats,
+                       "CreateTexture(texture-transform-flags)")) {
+      return;
+    }
+    fillTextureQuadrants(texture.ptr(),
+                         D3DCOLOR_XRGB(220, 0, 0),
+                         D3DCOLOR_XRGB(0, 220, 0),
+                         D3DCOLOR_XRGB(0, 0, 220),
+                         D3DCOLOR_XRGB(220, 220, 0),
+                         stats);
+    D3DMATRIX identity = identityMatrix();
+    stats.expectHr("SetTexture(texture-transform-flags)", device_->SetTexture(0, texture.ptr()));
+    stats.expectHr("SetTextureStageState(ttf color texture)",
+                   device_->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE));
+    stats.expectHr("SetTransform(TEXTURE0 identity flags)", device_->SetTransform(D3DTS_TEXTURE0, &identity));
+
+    stats.expectHr("SetTextureStageState(TTFF COUNT2)",
+                   device_->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_COUNT2));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    drawTexturedRhwQuad(0.25f, 0.25f, stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 220, 0, 0,
+                       "texture-transform-flags COUNT2 samples xy", stats);
+
+    stats.expectHr("SetTextureStageState(TTFF COUNT3 PROJECTED)",
+                   device_->SetTextureStageState(0,
+                                                 D3DTSS_TEXTURETRANSFORMFLAGS,
+                                                 D3DTTFF_COUNT3 | D3DTTFF_PROJECTED));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    drawTexturedRhwQuad3(0.125f, 0.375f, 0.5f,
+                         "DrawPrimitive(texture-transform-flags projected)", stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 0, 0, 220,
+                       "texture-transform-flags PROJECTED divides by q", stats);
+  }
+
+  void runTexcoordIndexMatrix(TestStats& stats) {
+    resetFixedFunctionState();
+    ComPtr<IDirect3DTexture9> texture;
+    if (!createTexture(2, 2, D3DFMT_A8R8G8B8, 0, D3DPOOL_MANAGED, texture, stats,
+                       "CreateTexture(texcoord-index-matrix)")) {
+      return;
+    }
+    fillTextureQuadrants(texture.ptr(),
+                         D3DCOLOR_XRGB(220, 0, 0),
+                         D3DCOLOR_XRGB(0, 220, 0),
+                         D3DCOLOR_XRGB(0, 0, 220),
+                         D3DCOLOR_XRGB(220, 220, 0),
+                         stats);
+
+    D3DMATRIX flip = identityMatrix();
+    flip._11 = -1.0f;
+    flip._14 = 1.0f;
+    flip._22 = -1.0f;
+    flip._24 = 1.0f;
+    const RhwTex2Vertex vertices[4] = {
+        {0.0f, 0.0f, 0.5f, 1.0f, 0.1f, 0.1f, 0.0f, 0.0f},
+        {static_cast<float>(kWidth), 0.0f, 0.5f, 1.0f, 0.1f, 0.1f, 1.0f, 0.0f},
+        {0.0f, static_cast<float>(kHeight), 0.5f, 1.0f, 0.1f, 0.1f, 0.0f, 1.0f},
+        {static_cast<float>(kWidth), static_cast<float>(kHeight), 0.5f, 1.0f, 0.1f, 0.1f, 1.0f, 1.0f},
+    };
+
+    stats.expectHr("SetTexture(texcoord-index-matrix)", device_->SetTexture(0, texture.ptr()));
+    stats.expectHr("SetTextureStageState(texcoord-index-matrix texture)",
+                   device_->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE));
+    stats.expectHr("SetTextureStageState(texcoord-index-matrix index 1)",
+                   device_->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 1));
+    stats.expectHr("SetTextureStageState(texcoord-index-matrix count2)",
+                   device_->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_COUNT2));
+    stats.expectHr("SetTransform(TEXTURE0 texcoord-index-matrix)", device_->SetTransform(D3DTS_TEXTURE0, &flip));
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetFVF(texcoord-index-matrix)", device_->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX2));
+    stats.expectHr("DrawPrimitiveUP(texcoord-index-matrix)",
+                   device_->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(vertices[0])));
+    finishScene(stats);
+    readBackbufferNear(40, 30, 220, 220, 0,
+                       "texcoord-index-matrix stage selects texcoord1 and flips top-left", stats);
+    readBackbufferNear(120, 90, 220, 0, 0,
+                       "texcoord-index-matrix ignores texcoord0 constant", stats);
+  }
+
+  void runUninitializedVaryings(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(uninitialized-varyings)", device_->GetDeviceCaps(&caps));
+    if (caps.VertexShaderVersion < D3DVS_VERSION(2, 0) ||
+        caps.PixelShaderVersion < D3DPS_VERSION(2, 0)) {
+      logf("SKIP: uninitialized-varyings requires vs_2_0/ps_2_0");
+      return;
+    }
+
+    static const char vsSource[] = R"(
+struct VS_IN {
+  float4 pos : POSITION0;
+};
+struct VS_OUT {
+  float4 pos : POSITION0;
+};
+VS_OUT main(VS_IN input) {
+  VS_OUT output;
+  output.pos = float4(input.pos.xyz, 1.0);
+  return output;
+}
+)";
+    static const char psSource[] = R"(
+float4 main(float4 color : COLOR0) : COLOR0 {
+  return color;
+}
+)";
+    ComPtr<IDirect3DVertexShader9> vs;
+    ComPtr<IDirect3DPixelShader9> ps;
+    if (!compileVertexShader(vsSource, "vs_2_0", vs, stats, "CompileVertexShader(uninitialized-varyings)") ||
+        !compilePixelShader(psSource, "ps_2_0", ps, stats, "CompilePixelShader(uninitialized-varyings)")) {
+      return;
+    }
+
+    static const D3DVERTEXELEMENT9 elements[] = {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        D3DDECL_END()};
+    const XyzOnlyVertex quad[4] = {
+        {-1.0f, -1.0f, 0.5f},
+        {1.0f, -1.0f, 0.5f},
+        {-1.0f, 1.0f, 0.5f},
+        {1.0f, 1.0f, 0.5f},
+    };
+    clearBackbuffer(D3DCOLOR_XRGB(220, 0, 0), stats);
+    stats.expectHr("SetVertexShader(uninitialized-varyings)", device_->SetVertexShader(vs.ptr()));
+    stats.expectHr("SetPixelShader(uninitialized-varyings)", device_->SetPixelShader(ps.ptr()));
+    drawDeclaredVertexBuffer(quad, sizeof(quad), sizeof(quad[0]), elements,
+                             "DrawPrimitive(uninitialized-varyings)", stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 0, 0, 0,
+                       "uninitialized-varyings missing VS color defaults to zero", stats);
+  }
+
+  void runPerStageConstant(TestStats& stats) {
+    resetFixedFunctionState();
+    stats.expectHr("SetTextureStageState(stage0 constant)",
+                   device_->SetTextureStageState(0, D3DTSS_CONSTANT, D3DCOLOR_XRGB(0, 220, 0)));
+    stats.expectHr("SetTextureStageState(stage0 color arg constant)",
+                   device_->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_CONSTANT));
+    stats.expectHr("SetTextureStageState(stage1 constant)",
+                   device_->SetTextureStageState(1, D3DTSS_CONSTANT, D3DCOLOR_XRGB(0, 0, 220)));
+    stats.expectHr("SetTextureStageState(stage1 color op add)",
+                   device_->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_ADD));
+    stats.expectHr("SetTextureStageState(stage1 color arg current)",
+                   device_->SetTextureStageState(1, D3DTSS_COLORARG1, D3DTA_CURRENT));
+    stats.expectHr("SetTextureStageState(stage1 color arg constant)",
+                   device_->SetTextureStageState(1, D3DTSS_COLORARG2, D3DTA_CONSTANT));
+    stats.expectHr("SetTextureStageState(stage1 alpha disable)",
+                   device_->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE));
+    stats.expectHr("SetTextureStageState(stage2 color disable)",
+                   device_->SetTextureStageState(2, D3DTSS_COLOROP, D3DTOP_DISABLE));
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    drawRhwQuad(20.0f, 20.0f, 140.0f, 100.0f, D3DCOLOR_ARGB(255, 255, 255, 255), stats);
+    finishScene(stats);
+    readBackbufferNear(kWidth / 2, kHeight / 2, 0, 220, 220,
+                       "per-stage-constant stage0 plus stage1 constants", stats);
+  }
+
+  void runShaderFragmentCoords(TestStats& stats) {
+    resetFixedFunctionState();
+    D3DCAPS9 caps{};
+    stats.expectHr("GetDeviceCaps(shader-fragment-coords)", device_->GetDeviceCaps(&caps));
+    if (caps.PixelShaderVersion < D3DPS_VERSION(3, 0)) {
+      logf("SKIP: shader-fragment-coords requires ps_3_0");
+      return;
+    }
+
+    static const char psSource[] = R"(
+float4 main(float2 pos : VPOS) : COLOR0 {
+  if (pos.x < 80.0) {
+    return float4(1.0, 0.0, 0.0, 1.0);
+  }
+  return float4(0.0, 1.0, 0.0, 1.0);
+}
+)";
+    ComPtr<IDirect3DPixelShader9> ps;
+    if (!compilePixelShader(psSource, "ps_3_0", ps, stats, "CompilePixelShader(shader-fragment-coords)")) {
+      return;
+    }
+
+    clearBackbuffer(D3DCOLOR_XRGB(0, 0, 0), stats);
+    stats.expectHr("SetPixelShader(shader-fragment-coords)", device_->SetPixelShader(ps.ptr()));
+    drawRhwQuad(0.0f, 0.0f, static_cast<float>(kWidth), static_cast<float>(kHeight),
+                D3DCOLOR_ARGB(255, 255, 255, 255), stats);
+    finishScene(stats);
+    readBackbufferNear(40, kHeight / 2, 255, 0, 0,
+                       "shader-fragment-coords VPOS left half", stats);
+    readBackbufferNear(120, kHeight / 2, 0, 255, 0,
+                       "shader-fragment-coords VPOS right half", stats);
   }
 
   HINSTANCE instance_ = nullptr;

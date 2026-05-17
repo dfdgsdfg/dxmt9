@@ -19,3 +19,4 @@ shader_opcode_audit_spec = executable(
 )
 
 test('dxmt9-shader-opcode-audit-spec', shader_opcode_audit_spec)
+test('dxmt9-opcode-audit-spec', shader_opcode_audit_spec)

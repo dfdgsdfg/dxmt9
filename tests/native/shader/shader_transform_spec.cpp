@@ -540,6 +540,27 @@ std::vector<u32> makePs30LoopBytecode() {
   };
 }
 
+std::vector<u32> makePs30NestedLoopBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_LOOP, 1),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_REP, 1),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      makeInstructionToken(kD3DSIO_ENDREP, 0),
+      makeInstructionToken(kD3DSIO_ENDLOOP, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makePs30RepBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -701,6 +722,62 @@ std::vector<u32> makePs30PredicatedCallnzLabelRetBytecode() {
       makeInstructionToken(kD3DSIO_MOV, 2),
       makeDstToken(kD3DSPR_COLOROUT, 0),
       makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30PositionInputBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30MissingInputBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, 5),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30IndexedConstSourceBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeRelativeSrcToken(kD3DSPR_CONST, 7),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30IndexedConstDestinationBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeRelativeDstToken(kD3DSPR_CONST, 7),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
       kD3DSIO_END,
   };
 }
@@ -1010,6 +1087,48 @@ std::vector<u32> makePs30TempRelativeSourceBytecode() {
   };
 }
 
+std::vector<u32> makeVs11FixedFunctionOutputBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 1, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_ATTROUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_ATTROUT, 1),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 3),
+      makeSrcToken(kD3DSPR_CONST, 2),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makeVs30MissingInputBytecode() {
+  using namespace dxmt9::d3d9bc;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+  return {
+      makeVersionToken(true, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsagePosition, 0u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(kD3DDeclUsageTexcoord, 0u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      makeSrcToken(kD3DSPR_INPUT, 0),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 1),
+      makeSrcToken(kD3DSPR_INPUT, 5),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makeVs30TexcoordRelativeDestinationBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -1166,6 +1285,62 @@ void testD3DBCDecodeAndClassificationFixtures() {
                 "D3DBC register classification maps addr register type to input kind in pixel shaders");
   checkEqual(translator_test::tokenHasRelativeAddressingForTest(makeRelativeDstToken(kD3DSPR_TEMP, 0)), true,
              "D3DBC operand decode classifies relative-addressing tokens");
+}
+
+void testLegacyShaderModelDecodeContracts() {
+  using namespace dxmt9::d3d9bc;
+  namespace translator_test = dxmt9::translator::test;
+
+  DrawDesc desc{};
+  const auto ps11 = translator_test::decodeD3DBytecodeForTest(
+      makeShader(makePs11TexcoordTexBytecode()), false, desc);
+  checkEqual(ps11.stage, D3DShaderStage::Pixel, "ps_1_1 decode preserves pixel stage");
+  checkEqual(ps11.major, 1u, "ps_1_1 decode preserves major version");
+  checkEqual(ps11.minor, 1u, "ps_1_1 decode preserves minor version");
+  checkEqual(ps11.instructions.size(), size_t{3}, "ps_1_1 decode keeps legacy texture instruction stream aligned");
+  checkEqual(ps11.instructions[0].opcode, kD3DSIO_TEXCOORD, "ps_1_1 TEXCOORD opcode decodes");
+  checkEqual(ps11.instructions[0].operands.size(), size_t{1}, "ps_1_1 TEXCOORD has destination-stage operand");
+  checkEqual(ps11.instructions[1].opcode, kD3DSIO_TEX, "ps_1_1 TEX opcode decodes");
+  checkEqual(ps11.instructions[1].operands.size(), size_t{1}, "ps_1_1 TEX has destination-stage operand");
+  checkEqual(ps11.usesTexture, true, "ps_1_1 TEX marks the module as texture-using");
+
+  const auto ps13 = translator_test::decodeD3DBytecodeForTest(
+      makeShader(makePs13LegacyTextureFamilyBytecode()), false, desc);
+  checkEqual(ps13.stage, D3DShaderStage::Pixel, "ps_1_3 decode preserves pixel stage");
+  checkEqual(ps13.major, 1u, "ps_1_3 decode preserves major version");
+  checkEqual(ps13.minor, 3u, "ps_1_3 decode preserves minor version");
+  checkEqual(ps13.instructions.size(), size_t{20}, "ps_1_3 decode keeps the legacy texture family aligned");
+  checkEqual(ps13.instructions[2].opcode, kD3DSIO_TEXBEM, "ps_1_3 TEXBEM opcode decodes");
+  checkEqual(ps13.instructions[2].operands.size(), size_t{2}, "ps_1_3 TEXBEM has dst/source operands");
+  checkEqual(ps13.instructions[14].opcode, kD3DSIO_TEXM3x3SPEC, "ps_1_3 TEXM3x3SPEC opcode decodes");
+  checkEqual(ps13.instructions[14].operands.size(), size_t{3}, "ps_1_3 TEXM3x3SPEC has dst/source/eye operands");
+  checkEqual(ps13.instructions[18].opcode, kD3DSIO_TEXM3x2DEPTH, "ps_1_3 TEXM3x2DEPTH opcode decodes");
+  checkEqual(ps13.instructions[18].operands.size(), size_t{2}, "ps_1_3 TEXM3x2DEPTH has dst/source operands");
+
+  const auto ps14 = translator_test::decodeD3DBytecodeForTest(
+      makeShader(makePs14TexcrdTexldDepthBytecode()), false, desc);
+  checkEqual(ps14.instructions[0].opcode, kD3DSIO_TEXCOORD, "ps_1_4 TEXCRD opcode decodes");
+  checkEqual(ps14.instructions[0].operands.size(), size_t{2}, "ps_1_4 TEXCRD has dst/source operands");
+  checkEqual(ps14.instructions[1].opcode, kD3DSIO_TEX, "ps_1_4 TEXLD opcode decodes as TEX token");
+  checkEqual(ps14.instructions[1].operands.size(), size_t{2}, "ps_1_4 TEXLD has dst/source operands");
+  checkEqual(ps14.instructions[2].opcode, kD3DSIO_TEXDEPTH, "ps_1_4 TEXDEPTH opcode decodes");
+  checkEqual(ps14.instructions[2].operands.size(), size_t{1}, "ps_1_4 TEXDEPTH has source operand");
+
+  const auto vs11 = translator_test::decodeD3DBytecodeForTest(
+      makeShader(makeVs11FixedFunctionOutputBytecode()), true, desc);
+  checkEqual(vs11.stage, D3DShaderStage::Vertex, "vs_1_1 decode preserves vertex stage");
+  checkEqual(vs11.major, 1u, "vs_1_1 decode preserves major version");
+  checkEqual(vs11.minor, 1u, "vs_1_1 decode preserves minor version");
+  checkEqual(vs11.instructions.size(), size_t{4}, "vs_1_1 decode keeps fixed-function output MOVs aligned");
+  checkRegister(translator_test::decodeRegisterRefForTest(vs11.instructions[0].operands[0], vs11.stage),
+                D3DRegisterKind::RastOut, 0u,
+                "vs_1_1 output register oPos decodes as raster output zero");
+  checkRegister(translator_test::decodeRegisterRefForTest(vs11.instructions[1].operands[0], vs11.stage),
+                D3DRegisterKind::AttrOut, 0u,
+                "vs_1_1 output register oD0 decodes as attribute output zero");
+  checkRegister(translator_test::decodeRegisterRefForTest(vs11.instructions[3].operands[0], vs11.stage),
+                D3DRegisterKind::TexCoordOut, 3u,
+                "vs_1_1 output register oT3 decodes as texcoord output three");
 }
 
 void testPs30PredicatedInstructionLowersGuard() {
@@ -1506,6 +1681,22 @@ void testPs30LoopFlowControlTranslation() {
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 LOOP result reaches color output");
 }
 
+void testPs30NestedLoopFlowControlTranslation() {
+  const auto source = translatePixel(makePs30NestedLoopBytecode());
+  checkContains(source,
+                "for (int dxmt9_loop_0 = 0, dxmt9_loopCount_0 = max(0, int(round(cFloat[0].x))); "
+                "dxmt9_loop_0 < dxmt9_loopCount_0; ++dxmt9_loop_0) {",
+                "outer ps_3_0 LOOP lowers to a counted for-loop");
+  checkContains(source,
+                "for (int dxmt9_rep_1 = 0, dxmt9_repCount_1 = max(0, int(round(cFloat[1].x))); "
+                "dxmt9_rep_1 < dxmt9_repCount_1; ++dxmt9_rep_1) {",
+                "inner ps_3_0 REP lowers to a distinct counted for-loop");
+  checkContains(source, "r[0] = (r[0] + cFloat[2]);",
+                "nested loop body remains inside the generated source");
+  checkContains(source, "outColor[0] = r[0];",
+                "nested loop result reaches color output after both loops close");
+}
+
 void testPs30RepFlowControlTranslation() {
   const auto source = translatePixel(makePs30RepBytecode());
   checkContains(source,
@@ -1648,6 +1839,20 @@ void testPs11LegacyTexcoordTexLoweringContract() {
   checkContains(source, "outColor[0] = outTexcoord[0];", "ps_1_1 t# source reaches color output");
 }
 
+void testVs11FixedFunctionOutputLoweringContract() {
+  const auto source = translateVertex(makeVs11FixedFunctionOutputBytecode());
+  checkContains(source, "outPosition = vin[0];",
+                "vs_1_1 oPos writes lower to the Metal position output");
+  checkContains(source, "outColor = cFloat[0];",
+                "vs_1_1 oD0 writes lower to the primary color output");
+  checkContains(source, "outSecondaryColor = cFloat[1];",
+                "vs_1_1 oD1 writes lower to the secondary color output");
+  checkContains(source, "outTexcoord[3] = cFloat[2];",
+                "vs_1_1 oT3 writes lower to the matching texcoord output");
+  checkContains(source, "out.position = outPosition;",
+                "vs_1_1 translated source returns the lowered position");
+}
+
 void testPs14TexcrdTexldTexdepthLoweringContract() {
   const auto source = translatePixel(makePs14TexcrdTexldDepthBytecode());
   checkContains(source, "r[0] = dxmt9_select_texcoord(in, 0u);",
@@ -1730,6 +1935,42 @@ void testPs30RelativeAddressingLowersTempSourceIndex() {
   checkContains(source,
                 "r[clamp(a0 + 1, 0, 31)]",
                 "ps_3_0 temp source relative addressing lowers to a clamped r[] read");
+}
+
+void testPs30IndexedConstSourceLowersToClampedConstAccess() {
+  const auto source = translatePixel(makePs30IndexedConstSourceBytecode());
+  checkContains(source, "cFloat[clamp(a0 + 7, 0, 223)]",
+                "ps_3_0 indexed const source emits clamped a0+N access");
+  checkContains(source, "constant float4* cFloat = psConsts.psFloatConst;",
+                "ps_3_0 indexed const source aliases the full pixel constant buffer");
+}
+
+void testPs30IndexedConstDestinationLowersToClampedMutableConstWrite() {
+  const auto source = translatePixel(makePs30IndexedConstDestinationBytecode());
+  checkContains(source, "float4 cFloat[224];",
+                "ps_3_0 indexed const destination keeps a mutable full-size cFloat array");
+  checkContains(source, "cFloat[clamp(a0 + 7, 0, 223)] = cFloat[1];",
+                "ps_3_0 indexed const destination emits clamped a0+N write");
+  checkNotContains(source, "constant float4* cFloat = ",
+                   "ps_3_0 indexed const destination must not alias cFloat through a read-only constant pointer");
+}
+
+void testPs30FragmentPositionAndMissingInputContracts() {
+  const auto positionSource = translatePixel(makePs30PositionInputBytecode());
+  checkContains(positionSource, "outColor[0] = in.position;",
+                "ps_3_0 POSITION input maps to the Metal fragment position");
+
+  const auto missingSource = translatePixel(makePs30MissingInputBytecode());
+  checkContains(missingSource, "outColor[0] = float4(0.0f);",
+                "undeclared ps_3_0 input register reads lower to a zero default");
+}
+
+void testVs30MissingInputDefaultsToZero() {
+  const auto source = translateVertex(makeVs30MissingInputBytecode());
+  checkContains(source, "for (uint i = 0; i < 16u; ++i) { vin[i] = float4(0.0f); }",
+                "vs_3_0 input register file is zero-initialized before declaration loads");
+  checkContains(source, "outTexcoord[0] = vin[5];",
+                "undeclared vs_3_0 input reads preserve the zero-default source");
 }
 
 void testVs30RelativeAddressingLowersTexcoordDestinationIndex() {
@@ -1843,6 +2084,7 @@ int main() {
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
 
     testD3DBCDecodeAndClassificationFixtures();
+    testLegacyShaderModelDecodeContracts();
     testPs30PredicatedInstructionLowersGuard();
     testD3DOpcodeNamesCoverUnsupportedSurface();
     testPs20SamplerRegisterSlotMapping();
@@ -1860,6 +2102,7 @@ int main() {
     testPs30MissingSourceModifierCoverage();
     testPs30IfElseFlowControlTranslation();
     testPs30LoopFlowControlTranslation();
+    testPs30NestedLoopFlowControlTranslation();
     testPs30RepFlowControlTranslation();
     testPs30BreakcFlowControlTranslation();
     testPs30CallLabelRetFlowControlTranslation();
@@ -1872,6 +2115,7 @@ int main() {
     testPs30TextureLodOpcodeLoweringContracts();
     testPs30TextureSamplerDimensionalityContracts();
     testPs11LegacyTexcoordTexLoweringContract();
+    testVs11FixedFunctionOutputLoweringContract();
     testPs14TexcrdTexldTexdepthLoweringContract();
     testPs13LegacyTextureFamilyLoweringContract();
     testPs14BemLoweringContract();
@@ -1880,6 +2124,10 @@ int main() {
     testD3DBCFixedOperandCountDecodeContract();
     testPs30RelativeAddressingLowersTempDestinationIndex();
     testPs30RelativeAddressingLowersTempSourceIndex();
+    testPs30IndexedConstSourceLowersToClampedConstAccess();
+    testPs30IndexedConstDestinationLowersToClampedMutableConstWrite();
+    testPs30FragmentPositionAndMissingInputContracts();
+    testVs30MissingInputDefaultsToZero();
     testVs30RelativeAddressingLowersTexcoordDestinationIndex();
     testVs20IndexedConstDestinationLowersToClampedMutableConstWrite();
     testVs20DefLiteralWithRelAddrBitDoesNotDriftParser();

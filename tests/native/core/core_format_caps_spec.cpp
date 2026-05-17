@@ -79,6 +79,76 @@ void testFormatAndCaps() {
           "8x MSAA support");
 }
 
+void testSigned3DcAndUnsupportedFormatCaps() {
+  BackendLimits limits{};
+  limits.supportsBgr10A2 = true;
+  limits.supportsDepth24Stencil8 = true;
+  limits.supportsDepth32FloatStencil8 = true;
+  Factory factory(limits);
+
+  const auto* v8u8 = findFormatInfo(Format::V8U8);
+  check(v8u8 != nullptr, "V8U8 format info missing");
+  checkEq(v8u8->backendFormat, BackendPixelFormat::RG8Snorm,
+          "V8U8 backend format");
+  checkEq(v8u8->support, FormatClass::Required, "V8U8 support class");
+  checkEq(v8u8->bytesPerPixel, 2u, "V8U8 bytes per pixel");
+  checkEq(dxmt9::convert::toPixelFormat(Format::V8U8, limits),
+          WMTPixelFormatRG8Snorm, "V8U8 WMT signed-normal pixel format");
+  checkEq(factory.checkDeviceFormat(0, Format::V8U8, UsageTexture), D3D_OK,
+          "V8U8 texture caps");
+
+  const auto* q8w8v8u8 = findFormatInfo(Format::Q8W8V8U8);
+  check(q8w8v8u8 != nullptr, "Q8W8V8U8 format info missing");
+  checkEq(q8w8v8u8->backendFormat, BackendPixelFormat::RGBA8Snorm,
+          "Q8W8V8U8 backend format");
+  checkEq(q8w8v8u8->bytesPerPixel, 4u, "Q8W8V8U8 bytes per pixel");
+  checkEq(dxmt9::convert::toPixelFormat(Format::Q8W8V8U8, limits),
+          WMTPixelFormatRGBA8Snorm,
+          "Q8W8V8U8 WMT signed-normal pixel format");
+
+  const auto* v16u16 = findFormatInfo(Format::V16U16);
+  check(v16u16 != nullptr, "V16U16 format info missing");
+  checkEq(v16u16->backendFormat, BackendPixelFormat::RG16Snorm,
+          "V16U16 backend format");
+  checkEq(v16u16->bytesPerPixel, 4u, "V16U16 bytes per pixel");
+  checkEq(dxmt9::convert::toPixelFormat(Format::V16U16, limits),
+          WMTPixelFormatRG16Snorm,
+          "V16U16 WMT signed-normal pixel format");
+
+  const auto* ati2 = findFormatInfo(Format::ATI2);
+  check(ati2 != nullptr, "ATI2 format info missing");
+  checkEq(ati2->backendFormat, BackendPixelFormat::BC5_RGUnorm,
+          "ATI2 backend format");
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(843666497u), Format::ATI2,
+          "ATI2 FOURCC maps to core format");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::BC5), 843666497u,
+          "BC5 maps to ATI2 D3D FOURCC");
+  checkEq(dxmt9::convert::toPixelFormat(Format::ATI2, limits),
+          WMTPixelFormatBC5_RGUnorm, "ATI2 WMT BC5 pixel format");
+  checkEq(formatBlockBytes(Format::ATI2), 16u, "ATI2 block bytes");
+  checkEq(formatRowPitch(Format::ATI2, 5u), 32u,
+          "ATI2 row pitch rounds to 4-wide blocks");
+  checkEq(formatByteSize(Format::ATI2, 5u, 7u), std::size_t{64},
+          "ATI2 byte size rounds to 4x4 blocks");
+  checkEq(factory.checkDeviceFormat(0, Format::ATI2, UsageTexture), D3D_OK,
+          "ATI2 texture caps");
+  checkEq(factory.checkDeviceFormat(0, Format::ATI2, UsageRenderTarget),
+          D3DERR_NOTAVAILABLE, "ATI2 render-target caps rejected");
+
+  const auto* cxv8u8 = findFormatInfo(Format::CxV8U8);
+  check(cxv8u8 != nullptr, "CxV8U8 format info missing");
+  checkEq(cxv8u8->support, FormatClass::Unsupported,
+          "CxV8U8 unsupported vendor format class");
+  checkEq(cxv8u8->backendFormat, BackendPixelFormat::Unknown,
+          "CxV8U8 has no backend format");
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(117u), Format::CxV8U8,
+          "CxV8U8 D3DFORMAT maps to explicit unsupported core value");
+  checkEq(factory.checkDeviceFormat(0, Format::CxV8U8, UsageTexture),
+          D3DERR_NOTAVAILABLE, "CxV8U8 texture caps rejected");
+  checkEq(factory.checkDeviceFormat(0, Format::Unknown, UsageTexture),
+          D3DERR_NOTAVAILABLE, "unknown/null-like format caps rejected");
+}
+
 void testHelpers() {
   const Viewport viewport{0, 0, 800, 600, 0.0f, 1.0f};
   const auto fixup = halfPixelFixup(viewport);
@@ -155,6 +225,7 @@ void testRingArenaExhaustionFallsBack() {
 int main() {
   try {
     testFormatAndCaps();
+    testSigned3DcAndUnsupportedFormatCaps();
     testHelpers();
     testDeviceCPresentIntervalMapping();
     testRingArenaExhaustionFallsBack();

@@ -62,6 +62,46 @@ Modes:
   readback.
 - `depth-stencil-init` - depth-surface clear initialization and reject/accept
   ordering.
+- `specular-lighting` - FFP point-light specular contribution selected through
+  the specular texture-stage argument.
+- `shademode` - flat and Gouraud diffuse interpolation on a transformed
+  triangle strip.
+- `filling-convention` - 8x8 render-target shared-edge coverage for adjacent
+  screen-space triangles.
+- `mismatched-sample-types` - 2D/volume texture sampling through matching and
+  mismatched sampler declarations.
+- `max-index16` - `DrawIndexedPrimitive` with a 16-bit index referencing vertex
+  `0xffff`.
+- `null-format` - NULL render-target support path, skipped when unsupported,
+  with depth-write intent when available.
+- `depth-clamp` - transformed out-of-range depth handling follows
+  `D3DPMISCCAPS_CLIPTLVERTS` clamp/clip intent.
+- `clear-different-size-surfaces` - `Clear()` covers differently sized render
+  targets and a larger depth surface.
+- `color-fill` - `ColorFill()` accepted and rejected surface classes with
+  target readback.
+- `z-range` - depth compare behaviour for in-range `XYZRHW` z values on both
+  sides of the depth clear value.
+- `offscreen-surface` - render-target texture draw, restore, and texture
+  sampling from the offscreen surface.
+- `depth-stencil-size` - mismatched render-target/depth-stencil sizes validate
+  correctly with depth disabled and report a valid depth-enabled state.
+- `vshader-float16` - `FLOAT16_2` and `FLOAT16_4` vertex declaration inputs
+  converted through a vertex/pixel shader pair.
+- `shader-fog` - programmable vertex shader fog output blended by the fixed
+  function pixel fog path.
+- `vertex-texture` - `vs_3_0` vertex texture fetch from an `R32F` texture,
+  skipped when the runtime does not advertise support.
+- `ffp-w` - transformed `XYZRHW` draws with different reciprocal-W values.
+- `texture-transform-flags` - `D3DTTFF_COUNT2` and projected `COUNT3`
+  texture-transform modes.
+- `texcoord-index-matrix` - texture stage coordinate index selection combined
+  with a texture matrix.
+- `uninitialized-varyings` - pixel shader readback from a varying not written
+  by the active vertex shader.
+- `per-stage-constant` - stage-local `D3DTSS_CONSTANT` routing across two FFP
+  texture stages.
+- `shader-fragment-coords` - `ps_3_0` `VPOS` fragment coordinate routing.
 
 Each mode exits non-zero on failed D3D calls or mismatched readback. The app is
 kept intentionally small; broader HRESULT conformance belongs in
@@ -110,3 +150,24 @@ Current dxmt9 runtime status from local Wine 11.7 runs:
 | `vshader-input-types` | passing | `UBYTE4N` declaration color converts through vs_2_0/ps_2_0 to the expected green output. |
 | `pointsize` | failing | `D3DFVF_PSIZE` point draw succeeds but the center pixel remains black. |
 | `depth-stencil-init` | failing | Depth-surface clear/draw calls succeed, but the accepted nearer draw still reads back black. |
+| `specular-lighting` | failing | FFP specular-lighting draw succeeds, but the center highlight reads back black. |
+| `shademode` | failing | Flat/Gouraud diffuse draws succeed, but the sampled pixels remain black. |
+| `filling-convention` | failing | 8x8 RT triangle draws succeed, but the render target remains at the clear color. |
+| `mismatched-sample-types` | passing | Matching and mismatched 2D/volume sampler cases return the sampled texture colors. |
+| `max-index16` | failing | `DrawIndexedPrimitive` with index `0xffff` succeeds, but the sampled quad remains black. |
+| `null-format` | passing | Runtime reports NULL render-target format unsupported and exits through the documented skip path. |
+| `depth-clamp` | passing | Transformed z above one is clipped on the current runtime and the probe exits cleanly. |
+| `clear-different-size-surfaces` | failing | Render-target clears pass, but the larger lockable depth surface does not read back the expected half-depth clear. |
+| `color-fill` | failing | `ColorFill` succeeds for target surfaces, but invalid surface classes are not rejected and target readback returns `D3DERR_INVALIDCALL`. |
+| `z-range` | failing | In-range `LESS` / `GREATER` depth draws succeed but read back black. |
+| `offscreen-surface` | failing | Offscreen render-target texture clears and draws, but sampling the drawn center returns the clear color. |
+| `depth-stencil-size` | passing | Smaller depth-stencil with a larger render target validates with depth disabled and reports a valid depth-enabled state. |
+| `vshader-float16` | passing | `FLOAT16_2` and `FLOAT16_4` declaration inputs convert through vs_2_0/ps_2_0 to the expected color. |
+| `shader-fog` | failing | Shader fog draw calls succeed, but both fogged and unfogged halves read back black. |
+| `vertex-texture` | failing | `R32F` vertex texture support is advertised, but vertex-sampler texture/sampler binding returns `D3DERR_INVALIDCALL`. |
+| `ffp-w` | failing | `XYZRHW` draws with `rhw=1.0` and `rhw=0.5` succeed, but both sampled regions remain black. |
+| `texture-transform-flags` | failing | `D3DTTFF_COUNT2` passes; projected `COUNT3` sampling reads the unprojected quadrant. |
+| `texcoord-index-matrix` | failing | `TEXCOORDINDEX=1` draw succeeds, but the texture matrix flip is not reflected in the sampled quadrants. |
+| `uninitialized-varyings` | failing | Pixel shader read from a VS-unwritten color varying returns white instead of the expected zero default. |
+| `per-stage-constant` | failing | Per-stage constants and TSS setup succeed, but the draw reads back black instead of the combined constant color. |
+| `shader-fragment-coords` | failing | `VPOS` ps_3_0 draw succeeds and the left side passes, but the right-side coordinate branch still reads red. |

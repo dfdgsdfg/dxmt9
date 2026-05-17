@@ -1,0 +1,27 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c cnd_test and dp2add_ps_test behavior, reduced to SM3 arithmetic readback
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0300 05000051 a00f0000 3e800000 3f400000 3f000000
+3f028f5c 05000051 a00f0001 3dcccccd 3e4ccccd 3e99999a
+3ecccccd 05000051 a00f0002 3f000000 3f19999a 3f333333
+3f4ccccd 05000051 a00f0003 3e4ccccd 3e99999a 00000000
+00000000 05000051 a00f0004 3dcccccd 00000000 00000000
+00000000 05000051 a00f0005 3f800000 00000000 00000000
+00000000 04000050 800f0000 a0e40000 a0e40001 a0e40002
+0400005a 800f0001 80e40000 a0e40003 a0e40004 02000001
+80010002 80000000 02000001 80020002 80550000 02000001
+80040002 80000001 02000001 80080002 a0000005 02000001
+800f0800 80e40002 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+draw quad
+expect-source pixel contains "select(cFloat[2], cFloat[1], cFloat[0] > float4(0.5f))"
+expect-source pixel contains "dot((r[0]).xy, (cFloat[3]).xy) + (cFloat[4]).x"
+probe (32, 32) rgba(0.5, 0.2, 0.26, 1.0) 2

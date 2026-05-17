@@ -676,6 +676,666 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_vb_lock_flags()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_vb_lock_flags(const struct d3d9_api *api)
+{
+    IDirect3DVertexBuffer9 *dynamic_vb = NULL;
+    IDirect3DVertexBuffer9 *system_vb = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    void *data = NULL;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 64, 0, 0,
+            D3DPOOL_SYSTEMMEM, &system_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_HR(IDirect3DVertexBuffer9_Lock(system_vb, 0, 16, NULL, 0),
+                D3DERR_INVALIDCALL);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(system_vb),
+                D3DERR_INVALIDCALL);
+
+        data = NULL;
+        hr = IDirect3DVertexBuffer9_Lock(system_vb, 4, 16, &data,
+                D3DLOCK_READONLY);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(data != NULL);
+            CHECK_HR(IDirect3DVertexBuffer9_Lock(system_vb, 0, 16, &data, 0),
+                    D3DERR_INVALIDCALL);
+            CHECK_HR(IDirect3DVertexBuffer9_Unlock(system_vb), D3D_OK);
+            CHECK_HR(IDirect3DVertexBuffer9_Unlock(system_vb),
+                    D3DERR_INVALIDCALL);
+        }
+
+        data = NULL;
+        hr = IDirect3DVertexBuffer9_Lock(system_vb, 64, 1, &data, 0);
+        CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+        IDirect3DVertexBuffer9_Release(system_vb);
+    }
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 64,
+            D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT,
+            &dynamic_vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        data = NULL;
+        hr = IDirect3DVertexBuffer9_Lock(dynamic_vb, 0, 0, &data,
+                D3DLOCK_DISCARD);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(data != NULL);
+            memset(data, 0x5a, 64);
+            CHECK_HR(IDirect3DVertexBuffer9_Unlock(dynamic_vb), D3D_OK);
+        }
+
+        data = NULL;
+        hr = IDirect3DVertexBuffer9_Lock(dynamic_vb, 16, 16, &data,
+                D3DLOCK_NOOVERWRITE);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(data != NULL);
+            memset(data, 0xa5, 16);
+            CHECK_HR(IDirect3DVertexBuffer9_Unlock(dynamic_vb), D3D_OK);
+        }
+
+        IDirect3DVertexBuffer9_Release(dynamic_vb);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_vertex_buffer_alignment()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_vertex_buffer_alignment(const struct d3d9_api *api)
+{
+    IDirect3DVertexBuffer9 *vertex_buffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    BYTE *base_data = NULL;
+    BYTE *data = NULL;
+    BYTE *offset_data = NULL;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 64, 0, 0,
+            D3DPOOL_SYSTEMMEM, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DVertexBuffer9_Lock(vertex_buffer, 0, 0, (void **)&data, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(data != NULL);
+        CHECK_TRUE(((ULONG_PTR)data & 15) == 0);
+        base_data = data;
+        memset(data, 0x1d, 64);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(vertex_buffer), D3D_OK);
+    }
+
+    hr = IDirect3DVertexBuffer9_Lock(vertex_buffer, 4, 16,
+            (void **)&offset_data, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        if (base_data)
+            CHECK_TRUE(offset_data == base_data + 4);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(vertex_buffer), D3D_OK);
+    }
+
+    IDirect3DVertexBuffer9_Release(vertex_buffer);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_surface_alignment()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_surface_alignment(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked;
+    IDirect3D9 *d3d9;
+    RECT rect;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 8, 4,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(surface, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(locked.pBits != NULL);
+        CHECK_TRUE(((ULONG_PTR)locked.pBits & 3) == 0);
+        CHECK_TRUE(locked.Pitch >= 8 * 4);
+        CHECK_TRUE((locked.Pitch & 3) == 0);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+    }
+
+    rect.left = 1;
+    rect.top = 1;
+    rect.right = 3;
+    rect.bottom = 3;
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(surface, &locked, &rect, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(locked.pBits != NULL);
+        CHECK_TRUE(((ULONG_PTR)locked.pBits & 3) == 0);
+        CHECK_TRUE(locked.Pitch >= 8 * 4);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+    }
+
+    IDirect3DSurface9_Release(surface);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_surface_dimensions()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_surface_dimensions(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DSURFACE_DESC desc;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    surface = (IDirect3DSurface9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 0, 4,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &surface, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(surface == NULL);
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 7, 5,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DSurface9_GetDesc(surface, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_SURFACE);
+            CHECK_TRUE(desc.Width == 7);
+            CHECK_TRUE(desc.Height == 5);
+            CHECK_TRUE(desc.Format == D3DFMT_A8R8G8B8);
+            CHECK_TRUE(desc.Pool == D3DPOOL_SCRATCH);
+        }
+        IDirect3DSurface9_Release(surface);
+        surface = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 2, 3, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DTexture9_GetLevelCount(texture) == 3);
+
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DTexture9_GetLevelDesc(texture, 0, &desc);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(desc.Width == 4);
+        CHECK_TRUE(desc.Height == 2);
+
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DTexture9_GetLevelDesc(texture, 1, &desc);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(desc.Width == 2);
+        CHECK_TRUE(desc.Height == 1);
+
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DTexture9_GetLevelDesc(texture, 2, &desc);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(desc.Width == 1);
+        CHECK_TRUE(desc.Height == 1);
+
+        CHECK_HR(IDirect3DTexture9_GetLevelDesc(texture, 3, &desc),
+                D3DERR_INVALIDCALL);
+        CHECK_HR(IDirect3DTexture9_GetLevelDesc(texture, 0, NULL),
+                D3DERR_INVALIDCALL);
+
+        IDirect3DTexture9_Release(texture);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_resource_type()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_resource_type(const struct d3d9_api *api)
+{
+    IDirect3DVolumeTexture9 *volume_texture = NULL;
+    IDirect3DCubeTexture9 *cube_texture = NULL;
+    IDirect3DVertexBuffer9 *vertex_buffer = NULL;
+    IDirect3DIndexBuffer9 *index_buffer = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 4, 4,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DSurface9_GetType(surface) == D3DRTYPE_SURFACE);
+        IDirect3DSurface9_Release(surface);
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 4, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DTexture9_GetType(texture) == D3DRTYPE_TEXTURE);
+        IDirect3DTexture9_Release(texture);
+    }
+
+    if (caps.TextureCaps & D3DPTEXTURECAPS_CUBEMAP)
+    {
+        hr = IDirect3DDevice9_CreateCubeTexture(device, 4, 1, 0,
+                D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &cube_texture, NULL);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(IDirect3DCubeTexture9_GetType(cube_texture)
+                    == D3DRTYPE_CUBETEXTURE);
+            IDirect3DCubeTexture9_Release(cube_texture);
+        }
+    }
+
+    if (caps.TextureCaps & D3DPTEXTURECAPS_VOLUMEMAP)
+    {
+        hr = IDirect3DDevice9_CreateVolumeTexture(device, 4, 4, 4, 1, 0,
+                D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &volume_texture, NULL);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(IDirect3DVolumeTexture9_GetType(volume_texture)
+                    == D3DRTYPE_VOLUMETEXTURE);
+            IDirect3DVolumeTexture9_Release(volume_texture);
+        }
+    }
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 16, 0, 0,
+            D3DPOOL_SYSTEMMEM, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DVertexBuffer9_GetType(vertex_buffer)
+                == D3DRTYPE_VERTEXBUFFER);
+        IDirect3DVertexBuffer9_Release(vertex_buffer);
+    }
+
+    hr = IDirect3DDevice9_CreateIndexBuffer(device, 16, 0, D3DFMT_INDEX16,
+            D3DPOOL_SYSTEMMEM, &index_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DIndexBuffer9_GetType(index_buffer)
+                == D3DRTYPE_INDEXBUFFER);
+        IDirect3DIndexBuffer9_Release(index_buffer);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_resource_priority()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_resource_priority_roundtrip(const struct d3d9_api *api)
+{
+    IDirect3DVertexBuffer9 *vertex_buffer = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    DWORD previous;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 4, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DTexture9_GetPriority(texture) == 0);
+        previous = IDirect3DTexture9_SetPriority(texture, 7);
+        CHECK_TRUE(previous == 0);
+        CHECK_TRUE(IDirect3DTexture9_GetPriority(texture) == 7);
+        previous = IDirect3DTexture9_SetPriority(texture, 3);
+        CHECK_TRUE(previous == 7);
+        CHECK_TRUE(IDirect3DTexture9_GetPriority(texture) == 3);
+        IDirect3DTexture9_Release(texture);
+    }
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 16, 0, 0,
+            D3DPOOL_MANAGED, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DVertexBuffer9_GetPriority(vertex_buffer) == 0);
+        previous = IDirect3DVertexBuffer9_SetPriority(vertex_buffer, 11);
+        CHECK_TRUE(previous == 0);
+        CHECK_TRUE(IDirect3DVertexBuffer9_GetPriority(vertex_buffer) == 11);
+        IDirect3DVertexBuffer9_Release(vertex_buffer);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_render_target_device_mismatch()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_render_target_device_mismatch(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *foreign_depth = NULL;
+    IDirect3DSurface9 *foreign_rt = NULL;
+    IDirect3DDevice9 *device_a = NULL;
+    IDirect3DDevice9 *device_b = NULL;
+    IDirect3D9 *d3d9;
+    HWND window_a;
+    HWND window_b;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window_a = create_test_window();
+    CHECK_TRUE(window_a != NULL);
+    if (!window_a)
+        goto done_d3d9;
+
+    window_b = create_test_window();
+    CHECK_TRUE(window_b != NULL);
+    if (!window_b)
+        goto done_window_a;
+
+    device_a = create_base_device(d3d9, window_a);
+    if (!device_a)
+        goto done_window_b;
+
+    device_b = create_base_device(d3d9, window_b);
+    if (!device_b)
+        goto done_device_a;
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device_b, 16, 16,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &foreign_rt,
+            NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_HR(IDirect3DDevice9_SetRenderTarget(device_a, 0, foreign_rt),
+                D3DERR_INVALIDCALL);
+        IDirect3DSurface9_Release(foreign_rt);
+    }
+
+    hr = IDirect3DDevice9_CreateDepthStencilSurface(device_b, 16, 16,
+            D3DFMT_D16, D3DMULTISAMPLE_NONE, 0, FALSE, &foreign_depth,
+            NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_HR(IDirect3DDevice9_SetDepthStencilSurface(device_a,
+                foreign_depth), D3DERR_INVALIDCALL);
+        IDirect3DSurface9_Release(foreign_depth);
+    }
+
+    IDirect3DDevice9_Release(device_b);
+
+done_device_a:
+    IDirect3DDevice9_Release(device_a);
+done_window_b:
+    DestroyWindow(window_b);
+done_window_a:
+    DestroyWindow(window_a);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_create_depth_stencil_surface_ex()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_create_depth_stencil_surface_ex(const struct d3d9_api *api)
+{
+    IDirect3DDevice9Ex *device = NULL;
+    IDirect3DSurface9 *surface;
+    D3DSURFACE_DESC desc;
+    IDirect3D9Ex *d3d9ex;
+    HWND window;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_ex_device(d3d9ex, window);
+    if (!device)
+        goto done_window;
+
+    CHECK_HR(IDirect3DDevice9Ex_CreateDepthStencilSurfaceEx(device, 8, 8,
+            D3DFMT_D16, D3DMULTISAMPLE_NONE, 0, FALSE, NULL, NULL, 0),
+            D3DERR_INVALIDCALL);
+
+    surface = (IDirect3DSurface9 *)0xdeadbeef;
+    hr = IDirect3DDevice9Ex_CreateDepthStencilSurfaceEx(device, 8, 8,
+            D3DFMT_UNKNOWN, D3DMULTISAMPLE_NONE, 0, FALSE, &surface, NULL, 0);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(surface == NULL);
+
+    surface = NULL;
+    hr = IDirect3DDevice9Ex_CreateDepthStencilSurfaceEx(device, 8, 8,
+            D3DFMT_D16, D3DMULTISAMPLE_NONE, 0, TRUE, &surface, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DSurface9_GetDesc(surface, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_SURFACE);
+            CHECK_TRUE(desc.Usage == D3DUSAGE_DEPTHSTENCIL);
+            CHECK_TRUE(desc.Pool == D3DPOOL_DEFAULT);
+            CHECK_TRUE(desc.Format == D3DFMT_D16);
+            CHECK_TRUE(desc.Width == 8);
+            CHECK_TRUE(desc.Height == 8);
+            CHECK_TRUE(desc.MultiSampleType == D3DMULTISAMPLE_NONE);
+        }
+        IDirect3DSurface9_Release(surface);
+    }
+
+    IDirect3DDevice9Ex_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_shared_handle()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

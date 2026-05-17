@@ -105,6 +105,57 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_swapchain.c"
+function = "test_ex_adapter_luid_display_mode"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_get_adapter_luid,test_get_adapter_displaymode_ex"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-display"
+owner = "core/factory"
+requirements = ["R-TEST-12.4"]
+acceptance = ["GetAdapterLUID and GetAdapterDisplayModeEx validate null/invalid inputs and expose stable adapter display identity"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_ex_swapchain_display_mode"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_swapchain_get_displaymode_ex"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-display"
+owner = "core/swapchain"
+requirements = ["R-TEST-12.4", "R-TEST-12.17"]
+acceptance = ["IDirect3DDevice9Ex and IDirect3DSwapChain9Ex display-mode Ex getters validate Size and expose display mode data"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_ex_frame_latency_state"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_frame_latency"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-present"
+owner = "core/device"
+requirements = ["R-TEST-12.4", "R-TEST-12.17"]
+acceptance = ["MaximumFrameLatency default, valid range, invalid range, and getter null-pointer behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
 function = "test_present_parameter_validation"
 source = "wine/dlls/d3d9/tests/device.c:test_swapchain_parameters"
 source_kind = "behavioral-oracle"
@@ -125,6 +176,23 @@ arch = "x64"
 status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the present-parameter validation group."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_lockable_backbuffer_lock_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_lockable_backbuffer"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "backbuffer-locking"
+owner = "core/swapchain"
+requirements = ["R-TEST-12.13", "R-TEST-12.17"]
+acceptance = ["lockable back buffers can be locked and ordinary back buffers reject LockRect with Wine-compatible HRESULTs"]
+status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -186,6 +254,227 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_get_set_vertex_shader"
+source = "wine/dlls/d3d9/tests/device.c:test_get_set_vertex_shader"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "shader-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.15"]
+acceptance = ["Create/Get/SetVertexShader null handling, refcount ownership, getter AddRef, and clear state match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_vertex_shader_constant"
+source = "wine/dlls/d3d9/tests/device.c:test_vertex_shader_constant"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "shader-constants"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.15"]
+acceptance = ["vertex shader float, int, and bool constants round-trip with exact public out-pointer and invalid-range behavior"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_get_set_pixel_shader"
+source = "wine/dlls/d3d9/tests/device.c:test_get_set_pixel_shader"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "shader-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.15"]
+acceptance = ["Create/Get/SetPixelShader null handling, refcount ownership, getter AddRef, and clear state match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_pixel_shader_constant"
+source = "wine/dlls/d3d9/tests/device.c:test_pixel_shader_constant"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "shader-constants"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.15"]
+acceptance = ["pixel shader float, int, and bool constants round-trip with exact public out-pointer behavior"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_unsupported_shaders"
+source = "wine/dlls/d3d9/tests/device.c:test_unsupported_shaders,wine/dlls/d3d9/tests/d3d9ex.c:test_unsupported_shaders"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "shader-validation"
+owner = "core/device"
+requirements = ["R-TEST-12.4", "R-TEST-12.15"]
+acceptance = ["base and D3D9Ex devices reject unsupported shader versions with Wine-compatible HRESULT and out-pointer policy"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_texture_stage_states"
+source = "wine/dlls/d3d9/tests/device.c:test_texture_stage_states"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "texture-stage-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.15"]
+acceptance = ["texture stage getter/setter matrix round-trips color, alpha, bump, result, constant, invalid type, null out-pointer, and limit behavior"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_fpu_setup"
+source = "wine/dlls/d3d9/tests/device.c:test_fpu_setup"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-creation"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["D3DCREATE_FPU_PRESERVE participates in CreateDevice and GetCreationParameters public behavior flags"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_limits"
+source = "wine/dlls/d3d9/tests/device.c:test_limits"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-caps"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.10"]
+acceptance = ["public D3DCAPS9 limit fields are populated and limit-indexed state calls reject out-of-range values"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_null_stream_state"
+source = "wine/dlls/d3d9/tests/device.c:test_null_stream"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stream-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["null stream-source state round-trips through SetStreamSource/GetStreamSource with exact HRESULT and out-parameter behavior"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_set_stream_source_state"
+source = "wine/dlls/d3d9/tests/device.c:test_set_stream_source"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stream-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["stream-source pointer, offset, stride, AddRef, unset, and invalid stream-index behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_get_set_texture"
+source = "wine/dlls/d3d9/tests/device.c:test_get_set_texture"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "texture-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.13", "R-TEST-12.18"]
+acceptance = ["GetTexture/SetTexture null state, AddRef ownership, clear, null out-pointer, and invalid stage behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_set_palette_roundtrip"
+source = "wine/dlls/d3d9/tests/device.c:test_set_palette"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "palette-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["palette entries and current texture palette state round-trip and reject null out-parameters with Wine-compatible HRESULTs"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_multi_adapter"
+source = "wine/dlls/d3d9/tests/device.c:test_multi_adapter"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "adapter-enumeration"
+owner = "core/factory"
+requirements = ["R-TEST-12.3", "R-TEST-12.10"]
+acceptance = ["adapter count bounds, per-adapter identifier/caps, and invalid adapter HRESULTs match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_query_stateblock.c"
 function = "test_stateblock_invalid_type_recording_invalid_calls"
 source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
@@ -199,6 +488,40 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["invalid stateblock types and recording-time invalid calls match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_query_stateblock.c"
+function = "test_shader_constant_apply"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_shader_constant_apply"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.15", "R-TEST-12.19"]
+acceptance = ["stateblocks record, apply, and capture vertex/pixel shader constants through public Get/Set constant APIs"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_query_stateblock.c"
+function = "test_vdecl_apply"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_vdecl_apply"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["stateblocks record, apply, and capture vertex declaration state with getter AddRef behavior preserved"]
 status = "scaffolded"
 
 [[case]]
@@ -257,6 +580,108 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["surface, texture, mip-level, dynamic write-only texture, and volume lock invalid/double-unlock policies match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_vb_lock_flags"
+source = "wine/dlls/d3d9/tests/device.c:test_vb_lock_flags"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["vertex-buffer lock flags, double-lock rejection, unlock rejection, DISCARD, and NOOVERWRITE behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_vertex_buffer_alignment"
+source = "wine/dlls/d3d9/tests/device.c:test_vertex_buffer_alignment"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["vertex-buffer Lock returns aligned storage and offset locks point at the requested byte offset"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_surface_alignment"
+source = "wine/dlls/d3d9/tests/device.c:test_surface_alignment"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["surface LockRect returns aligned pBits and stable pitch for full and sub-rect locks"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_surface_dimensions"
+source = "wine/dlls/d3d9/tests/device.c:test_surface_dimensions"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["surface and texture level descriptions expose Windows-compatible dimensions, formats, pools, and invalid-level HRESULTs"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_resource_type"
+source = "wine/dlls/d3d9/tests/device.c:test_resource_type"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["GetType returns the public D3DRESOURCETYPE matching each created resource wrapper"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_resource_priority_roundtrip"
+source = "wine/dlls/d3d9/tests/device.c:test_resource_priority"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-priority"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["managed resource SetPriority returns the previous value and GetPriority exposes the current value"]
 status = "scaffolded"
 
 [[case]]
@@ -323,6 +748,40 @@ arch = "x64"
 status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the creation-failure out-pointer group."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_render_target_device_mismatch"
+source = "wine/dlls/d3d9/tests/device.c:test_render_target_device_mismatch"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "render-target-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["render-target and depth-stencil surfaces created by another device are rejected with Wine-compatible HRESULTs"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_create_depth_stencil_surface_ex"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_create_depth_stencil_surface_ex"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-resources"
+owner = "core/resources"
+requirements = ["R-TEST-12.4", "R-TEST-12.13"]
+acceptance = ["CreateDepthStencilSurfaceEx validates null/unknown-format failures and exposes a depth-stencil surface description on success"]
+status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-device-lifetime.exe"

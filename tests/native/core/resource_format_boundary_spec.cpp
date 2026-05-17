@@ -228,6 +228,63 @@ void testPublicTextureCreationPreservesD3DValuesAndUploadPitch() {
                    "upload preserves A8R8G8B8 component order");
 }
 
+void testNpotMiptreeLayoutBoundaryValues() {
+  PublicDevice fixture;
+  const auto before = fixture.backend->createdTextures.size();
+
+  auto texture = UniqueTexture(dxmt9c_device_create_texture(
+      fixture.c(), 13, 9, 4, 0, kD3DFmtA8R8G8B8, kD3DPoolManaged));
+  check(texture != nullptr, "NPOT mip texture creation succeeds");
+  checkEq(fixture.backend->createdTextures.size(), before + size_t{1},
+          "NPOT mip texture reaches backend creation path");
+  checkEq(dxmt9c_texture_get_level_count(texture.get()), 4u,
+          "NPOT explicit mip level count");
+
+  const auto& backendDesc = fixture.backend->createdTextures[before];
+  checkEq(backendDesc.width, 13u, "NPOT backend width");
+  checkEq(backendDesc.height, 9u, "NPOT backend height");
+  checkEq(backendDesc.levels, 4u, "NPOT backend level count");
+
+  struct ExpectedLevel {
+    u32 width = 0;
+    u32 height = 0;
+    int32_t pitch = 0;
+    size_t byteCount = 0;
+  };
+  const std::array<ExpectedLevel, 4> levels{{
+      {13u, 9u, 52, 468u},
+      {6u, 4u, 24, 96u},
+      {3u, 2u, 12, 24u},
+      {1u, 1u, 4, 4u},
+  }};
+
+  for (u32 level = 0; level < levels.size(); ++level) {
+    const auto desc = textureLevelDesc(texture.get(), level, "NPOT level desc");
+    checkEq(desc.format, kD3DFmtA8R8G8B8, "NPOT level format");
+    checkEq(desc.resourceType, kD3DResourceTypeTexture,
+            "NPOT level resource type");
+    checkEq(desc.width, levels[level].width, "NPOT level width");
+    checkEq(desc.height, levels[level].height, "NPOT level height");
+    checkEq(texture->obj->levelBytes(level).size(), levels[level].byteCount,
+            "NPOT level storage byte count");
+
+    D9CLockedRect lock{};
+    checkEq(dxmt9c_texture_lock_rect(texture.get(), level, &lock, nullptr, 0),
+            D3D_OK, "NPOT level lock succeeds");
+    check(lock.bits != nullptr, "NPOT level lock bits");
+    checkEq(lock.pitch, levels[level].pitch, "NPOT level lock pitch");
+    checkEq(dxmt9c_texture_unlock_rect(texture.get(), level), D3D_OK,
+            "NPOT level unlock succeeds");
+  }
+
+  D9CSurfaceDesc invalidDesc{};
+  invalidDesc.width = 0xaaaaaaaau;
+  checkEq(dxmt9c_texture_get_level_desc(texture.get(), 4, &invalidDesc),
+          D3DERR_INVALIDCALL, "NPOT level past end is rejected");
+  checkEq(invalidDesc.width, 0u,
+          "NPOT invalid level desc is cleared before failure");
+}
+
 void testComponentOrderAlphaAndSrgbCompatibility() {
   struct Case {
     u32 d3dFormat = 0;
@@ -617,6 +674,7 @@ void testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch() {
 int main() {
   try {
     testPublicTextureCreationPreservesD3DValuesAndUploadPitch();
+    testNpotMiptreeLayoutBoundaryValues();
     testComponentOrderAlphaAndSrgbCompatibility();
     testLuminanceDefaultChannelPolicy();
     testCompressedCreationAndBlockRowRounding();

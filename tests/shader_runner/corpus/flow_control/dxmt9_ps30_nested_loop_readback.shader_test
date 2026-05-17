@@ -1,0 +1,21 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c nested_loop_test behavior, reduced to SM3 nested LOOP readback
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0300 05000051 a00f0000 00000000 00000000 00000000 3f800000
+05000051 a00f0001 3d000000 00000000 00000000 00000000 05000030
+f00f0000 00000004 00000000 00000002 00000000 02000001 800f0000
+a0e40000 0200001b f0e40800 f0e40000 0200001b f0e40800 f0e40000
+03000002 800f0000 80e40000 a0e40001 0000001d 0000001d 02000001
+800f0800 80e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+draw quad
+expect-source pixel contains "for (int dxmt9_loop_"
+probe (32, 32) rgba(0.5, 0.0, 0.0, 1.0) 1

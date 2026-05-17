@@ -1,4 +1,5 @@
 #include "dxmt9/core.hpp"
+#include "core_spec_fixtures.hpp"
 #include "../../../src/dxmt9/dxmt9_backend_types.hpp"
 
 #include <array>
@@ -34,6 +35,18 @@ void checkNear(float actual, float expected, std::string_view message) {
   if (std::fabs(actual - expected) > 0.0001f) {
     std::cerr << "FAIL: " << message << " actual=" << actual << " expected=" << expected << '\n';
     std::exit(1);
+  }
+}
+
+void checkMatrixNear(const Matrix4x4& actual, const Matrix4x4& expected,
+                     std::string_view message) {
+  for (size_t i = 0; i < actual.m.size(); ++i) {
+    if (std::fabs(actual.m[i] - expected.m[i]) > 0.0001f) {
+      std::cerr << "FAIL: " << message << " index=" << i
+                << " actual=" << actual.m[i]
+                << " expected=" << expected.m[i] << '\n';
+      std::exit(1);
+    }
   }
 }
 
@@ -420,6 +433,107 @@ void testStateDrawTransform() {
   checkEq(desc.textureTransforms[0], state.transforms.at(XFORM_TEXTURE_BASE), "texture transform propagated");
 }
 
+void testTransformMultiplicationOrderAndBlendSlots() {
+  DeviceState state;
+  state.reset();
+
+  Matrix4x4 world{};
+  world.m = {
+      2.0f, 0.0f, 0.0f, 0.0f,
+      0.0f, 3.0f, 0.0f, 0.0f,
+      0.0f, 0.0f, 4.0f, 0.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+  };
+  Matrix4x4 view{};
+  view.m = {
+      1.0f, 5.0f, 0.0f, 0.0f,
+      0.0f, 1.0f, 6.0f, 0.0f,
+      0.0f, 0.0f, 1.0f, 7.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+  };
+  Matrix4x4 projection{};
+  projection.m = {
+      10.0f, 0.0f, 0.0f, 0.0f,
+      0.0f, 20.0f, 0.0f, 0.0f,
+      0.0f, 0.0f, 30.0f, 0.0f,
+      0.0f, 0.0f, 0.0f, 40.0f,
+  };
+
+  state.transforms[XFORM_WORLD_BASE] = world;
+  state.transforms[XFORM_VIEW] = view;
+  state.transforms[XFORM_PROJECTION] = projection;
+
+  const DrawDesc desc = makeDrawDescFromState(state, {});
+  Matrix4x4 expectedWorldViewProj{};
+  expectedWorldViewProj.m = {
+      20.0f, 200.0f, 0.0f, 0.0f,
+      0.0f, 60.0f, 540.0f, 0.0f,
+      0.0f, 0.0f, 120.0f, 1120.0f,
+      0.0f, 0.0f, 0.0f, 40.0f,
+  };
+  Matrix4x4 expectedViewProj{};
+  expectedViewProj.m = {
+      10.0f, 100.0f, 0.0f, 0.0f,
+      0.0f, 20.0f, 180.0f, 0.0f,
+      0.0f, 0.0f, 30.0f, 280.0f,
+      0.0f, 0.0f, 0.0f, 40.0f,
+  };
+
+  checkMatrixNear(desc.worldViewProj, expectedWorldViewProj,
+                  "world-view-projection multiply order");
+  checkMatrixNear(desc.ffpBlendWorldViewProj[0], expectedWorldViewProj,
+                  "blend slot 0 uses WORLD0 * VIEW * PROJECTION");
+  checkMatrixNear(desc.ffpBlendWorldViewProj[1], expectedViewProj,
+                  "unset blend slot uses identity WORLD1");
+}
+
+void testClipPlaneLimitsAtCoreBoundary() {
+  auto backend = std::make_shared<dxmt9::core::spec::RecordingBackend>();
+  Factory factory(BackendLimits{}, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 32;
+  params.backBufferHeight = 32;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{0x5150};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "clip-plane limit device creation");
+
+  for (u32 i = 0; i < kMaxClipPlanes; ++i) {
+    const ClipPlane plane{
+        1.0f + static_cast<float>(i),
+        2.0f + static_cast<float>(i),
+        3.0f + static_cast<float>(i),
+        4.0f + static_cast<float>(i),
+    };
+    checkEq(device->setClipPlane(i, plane), D3D_OK,
+            "clip-plane slot within max succeeds");
+  }
+
+  const ClipPlane rejectedPlane{9.0f, 8.0f, 7.0f, 6.0f};
+  checkEq(device->setClipPlane(kMaxClipPlanes, rejectedPlane),
+          D3DERR_INVALIDCALL, "clip-plane slot past max is rejected");
+
+  checkEq(device->setRenderState(RS_CLIP_PLANE_ENABLE, 0xffffffffu), D3D_OK,
+          "clip-plane enable mask with high bits is accepted at state boundary");
+  checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1), D3D_OK,
+          "clip-plane limit draw records");
+  checkEq(backend->draws.size(), std::size_t{1},
+          "clip-plane limit records one draw");
+
+  const auto& draw = backend->draws.back();
+  checkEq(draw.uniforms.clipPlaneMask, 0xffffffffu,
+          "clip-plane mask value is preserved for downstream consumers");
+  for (u32 i = 0; i < kMaxClipPlanes; ++i) {
+    for (size_t component = 0; component < 4; ++component) {
+      const float expected = static_cast<float>(component + 1u + i);
+      checkNear(draw.uniforms.clipPlanes[i][component], expected,
+                "clip-plane value propagates for each supported slot");
+    }
+  }
+}
+
 void testConstantsAndShaderRefs() {
   DeviceState state;
   state.reset();
@@ -447,6 +561,29 @@ void testConstantsAndShaderRefs() {
   checkEq(desc.pixelShader, state.pixelShader, "bytecode pixel shader ref copied");
   checkEq(desc.vertexShader.kind, ShaderRef::Kind::Bytecode, "bytecode vertex shader preserved");
   checkEq(desc.pixelShader.kind, ShaderRef::Kind::Bytecode, "bytecode pixel shader preserved");
+
+  const auto canonical = makeCanonicalDrawStateFromState(state, {});
+  const auto uniforms = makeDrawUniformPayload(desc);
+  checkEq(uniforms.vsConst, state.vsConst,
+          "draw uniform payload preserves vertex shader constants");
+  checkEq(uniforms.psConst, state.psConst,
+          "draw uniform payload preserves pixel shader constants");
+  checkEq(canonical.hot.vertexConstantsHash, canonical.hot.key.vertexConstantsHash,
+          "hot vertex constant hash matches canonical key");
+  checkEq(canonical.hot.pixelConstantsHash, canonical.hot.key.pixelConstantsHash,
+          "hot pixel constant hash matches canonical key");
+  check(uniforms.hash != 0,
+        "draw uniform payload hash records shader constant payload");
+
+  DeviceState changed = state;
+  changed.vsConst.float4[7][0] = -99.0f;
+  const DrawDesc changedDesc = makeDrawDescFromState(changed, {});
+  const auto changedCanonical = makeCanonicalDrawStateFromState(changed, {});
+  const auto changedUniforms = makeDrawUniformPayload(changedDesc);
+  check(changedCanonical.hot.vertexConstantsHash != canonical.hot.vertexConstantsHash,
+        "vertex constant value change affects canonical hot hash");
+  checkNear(changedUniforms.vsConst.float4[7][0], -99.0f,
+            "changed vertex constant value reaches uniform payload");
 }
 
 void testResourceBindingsAndAttachments() {
@@ -524,6 +661,26 @@ void testResourceBindingsAndAttachments() {
   checkEq(desc.rts.color[2], RenderTargetAttachment{}, "unbound render target attachment remains empty");
   checkEq(desc.rts.color[3], state.renderTargets[3], "multisampled render target attachment copied");
   checkEq(desc.rts.depthStencil, state.depthStencil, "depth-stencil attachment copied");
+
+  const auto canonical = makeCanonicalDrawStateFromState(state, args);
+  checkEq(canonical.hot.indexBuffer, indexBuffer->handle(),
+          "canonical hot state preserves index buffer handle");
+  checkEq(canonical.hot.colorAttachments[0], state.renderTargets[0],
+          "canonical hot state preserves RT0 attachment");
+  checkEq(canonical.hot.colorAttachments[1], state.renderTargets[1],
+          "canonical hot state preserves mip-level RT attachment");
+  checkEq(canonical.hot.colorAttachments[3], state.renderTargets[3],
+          "canonical hot state preserves multisample RT attachment");
+  checkEq(canonical.hot.depthStencil, state.depthStencil,
+          "canonical hot state preserves depth-stencil attachment");
+  checkEq(canonical.hot.renderTargetMask, (1u << 0) | (1u << 1) | (1u << 3),
+          "canonical hot state records sparse render-target mask");
+  checkEq(canonical.hot.key.colorAttachments[1].level, 2u,
+          "canonical key keeps render-target mip level");
+  checkEq(canonical.hot.key.colorAttachments[3].sampleCount, 4u,
+          "canonical key keeps render-target sample count");
+  checkEq(canonical.hot.key.depthStencil.sampleCount, 2u,
+          "canonical key keeps depth-stencil sample count");
 }
 
 void testVertexDeclFvfAndStreamBindings() {
@@ -557,6 +714,85 @@ void testVertexDeclFvfAndStreamBindings() {
   checkEq(desc.vertexDecl.streams[4].buffer, stream4, "decl stream 4 binding copied");
   checkEq(desc.vertexDecl.streams[4].offset, 40u, "decl stream 4 offset copied");
   checkEq(desc.vertexDecl.streams[4].stride, 56u, "decl stream 4 stride copied");
+
+  const auto canonical = makeCanonicalDrawStateFromState(state, {});
+  checkEq(canonical.shaderLayout.vertexDecl.elements, state.vertexDecl.elements,
+          "canonical shader layout preserves sparse vertex declaration elements");
+  checkEq(canonical.hot.key.vertexElementCount, 3u,
+          "canonical key records vertex declaration element count");
+  checkEq(canonical.hot.key.fvf, 0x11223344u,
+          "canonical key records FVF value");
+  check(canonical.hot.key.vertexDeclHash != 0,
+        "canonical key records vertex declaration hash");
+  checkEq(canonical.hot.streamMask, (1u << 2) | (1u << 4),
+          "canonical hot state records sparse stream mask");
+  checkEq(canonical.hot.streamBuffers[2], stream2->handle(),
+          "canonical hot state preserves stream 2 handle");
+  checkEq(canonical.hot.streamOffsets[4], 40u,
+          "canonical hot state preserves stream 4 offset");
+  checkEq(canonical.hot.streamStrides[4], 56u,
+          "canonical hot state preserves stream 4 stride");
+}
+
+void testTextureStageArgumentCanonicalValues() {
+  DeviceState state;
+  state.reset();
+
+  constexpr u32 kD3DTA_DIFFUSE = 0u;
+  constexpr u32 kD3DTA_CURRENT = 1u;
+  constexpr u32 kD3DTA_TEXTURE = 2u;
+  constexpr u32 kD3DTA_TEMP = 5u;
+  constexpr u32 kD3DTA_COMPLEMENT = 0x10u;
+  constexpr u32 kD3DTA_ALPHAREPLICATE = 0x20u;
+  constexpr u32 kD3DTSS_TCI_CAMERASPACENORMAL = 0x00010000u;
+
+  const u32 colorArg1 = kD3DTA_TEXTURE | kD3DTA_COMPLEMENT;
+  const u32 colorArg2 = kD3DTA_CURRENT | kD3DTA_ALPHAREPLICATE;
+  const u32 alphaArg2 = kD3DTA_TEMP | kD3DTA_COMPLEMENT | kD3DTA_ALPHAREPLICATE;
+  const u32 texcoordIndex = kD3DTSS_TCI_CAMERASPACENORMAL | 2u;
+
+  state.textureStageStates[1][TSS_COLOR_OP] = static_cast<u32>(TextureOp::Modulate4x);
+  state.textureStageStates[1][TSS_COLOR_ARG1] = colorArg1;
+  state.textureStageStates[1][TSS_COLOR_ARG2] = colorArg2;
+  state.textureStageStates[1][TSS_ALPHA_OP] = static_cast<u32>(TextureOp::SelectArg2);
+  state.textureStageStates[1][TSS_ALPHA_ARG1] = kD3DTA_DIFFUSE;
+  state.textureStageStates[1][TSS_ALPHA_ARG2] = alphaArg2;
+  state.textureStageStates[1][TSS_RESULT_ARG] = kD3DTA_TEMP;
+  state.textureStageStates[1][TSS_TEXCOORD_INDEX] = texcoordIndex;
+  state.textureStageStates[1][TSS_TEXTURE_TYPE] = static_cast<u32>(TextureType::Cube);
+
+  const DrawDesc desc = makeDrawDescFromState(state, {});
+  const auto canonical = makeCanonicalDrawStateFromState(state, {});
+  const auto& stage = canonical.shaderLayout.pixelShader.pixelKey->stages[1];
+
+  checkEq(desc.textures[1].stageStates.at(TSS_COLOR_ARG1), colorArg1,
+          "draw desc preserves D3DTA color arg1 modifier bits");
+  checkEq(flatStateOr(canonical.hot.textureStageStates[1], TSS_COLOR_ARG1, 0u),
+          colorArg1, "canonical hot state preserves D3DTA color arg1");
+  checkEq(flatStateOr(canonical.hot.textureStageStates[1], TSS_COLOR_ARG2, 0u),
+          colorArg2, "canonical hot state preserves D3DTA color arg2");
+  checkEq(flatStateOr(canonical.hot.textureStageStates[1], TSS_ALPHA_ARG2, 0u),
+          alphaArg2, "canonical hot state preserves D3DTA alpha arg2");
+  checkEq(flatStateOr(canonical.hot.textureStageStates[1], TSS_RESULT_ARG, 0u),
+          kD3DTA_TEMP, "canonical hot state preserves TSS result arg");
+  checkEq(flatStateOr(canonical.hot.textureStageStates[1], TSS_TEXCOORD_INDEX, 0u),
+          texcoordIndex, "canonical hot state preserves TCI texcoord bits");
+  checkEq(stage.colorOp, static_cast<u32>(TextureOp::Modulate4x),
+          "FFP pixel key preserves stage color op");
+  checkEq(stage.colorArg1, colorArg1,
+          "FFP pixel key preserves D3DTA color arg1");
+  checkEq(stage.colorArg2, colorArg2,
+          "FFP pixel key preserves D3DTA color arg2");
+  checkEq(stage.alphaArg1, kD3DTA_DIFFUSE,
+          "FFP pixel key preserves D3DTA alpha arg1");
+  checkEq(stage.alphaArg2, alphaArg2,
+          "FFP pixel key preserves D3DTA alpha arg2");
+  checkEq(stage.resultArg, kD3DTA_TEMP,
+          "FFP pixel key preserves result arg");
+  checkEq(stage.texType, static_cast<u32>(TextureType::Cube),
+          "FFP pixel key preserves texture type");
+  checkEq(stage.texCoordIndex, texcoordIndex,
+          "FFP pixel key preserves full texcoord index value");
 }
 
 void testVertexDeclSnapshotSurvivesLaterStateMutation() {
@@ -1146,9 +1382,12 @@ int main() {
   testChunkSlotDirectDrawRunUniformLookup();
   testStateValueTableDirtyHashContract();
   testStateDrawTransform();
+  testTransformMultiplicationOrderAndBlendSlots();
+  testClipPlaneLimitsAtCoreBoundary();
   testConstantsAndShaderRefs();
   testResourceBindingsAndAttachments();
   testVertexDeclFvfAndStreamBindings();
+  testTextureStageArgumentCanonicalValues();
   testVertexDeclSnapshotSurvivesLaterStateMutation();
   testIndexedDrawRunPolicyDataContract();
   testFlatDrawStateKey();

@@ -1,0 +1,16 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c sincos_test behavior, reduced to SINCOS source contract
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0300 05000051 a00f0000 3f060a92 00000000 00000000
+00000000 02000025 800f0000 a0000000 02000001 800f0800
+80e40000 0000ffff
+
+[test]
+expect-source pixel contains "float4(sin("
+expect-source pixel contains "cos("

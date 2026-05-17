@@ -1,0 +1,25 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_mova behavior, reduced to SM2 MOVA relative constant color readback
+; oracle-date: 2026-05-17
+
+[vertex shader d3dbc-hex]
+fffe0200 0200001f 80000000 900f0000 05000051 a00f0000 3f800000
+00000000 00000000 00000000 05000051 a00f0001 3f800000 00000000
+00000000 3f800000 05000051 a00f0002 00000000 3f800000 00000000
+3f800000 0200002e b0010000 a0000000 03000001 d00f0000 a0e42001
+b0000000 02000001 c00f0000 90e40000 0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300 0200001f 8000000a 900f0000 02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-draw-vs-color-triangle
+expect-source vertex contains "a0 = int(round("
+probe (48, 32) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (16, 32) rgba(0.0, 0.0, 0.0, 1.0) 1

@@ -78,6 +78,22 @@ void testIndexedDrawPolicyContracts() {
   auto device = factory.createDevice(0, params);
   check(device != nullptr, "indexed policy device creation");
 
+  checkEq(device->drawIndexedPrimitive(PrimitiveType::TriangleFan, 1, 0, 0, 0,
+                                       IndexType::UInt16),
+          D3DERR_INVALIDCALL,
+          "indexed fan without an index buffer is rejected before recording");
+  std::array<DrawParam, 1> missingIndexFan{};
+  missingIndexFan[0].primitiveType = PrimitiveType::TriangleFan;
+  missingIndexFan[0].primitiveCount = 1;
+  missingIndexFan[0].indexed = true;
+  missingIndexFan[0].indexType = IndexType::UInt16;
+  checkEq(device->drawPrimitiveRun(std::span<const DrawParam>(
+              missingIndexFan.data(), missingIndexFan.size())),
+          D3DERR_INVALIDCALL,
+          "indexed fan draw-run without an index buffer is rejected before recording");
+  check(backend->draws.empty(),
+        "invalid indexed fan topology does not reach backend recorder");
+
   auto vertexBuffer = device->createBuffer({64, Pool::Default, UsageVertexBuffer});
   auto indexBuffer = device->createBuffer({64, Pool::Default, UsageIndexBuffer});
   check(vertexBuffer != nullptr, "indexed policy vertex buffer");
