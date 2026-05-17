@@ -1056,6 +1056,41 @@ void testEncodePresentRejectsSourceWithoutTexture() {
         "textureless source does not report presentation status without drawable work");
 }
 
+// R-VERIF-3.4 SlotIdentityStable: HandleArena depends on std::deque's
+// guarantee that push_back does not invalidate previously-handed-out
+// element addresses. The static_assert in HandleArena pins the container
+// type at compile time; this runtime test additionally proves that, for
+// the std::deque the build actually links against, a Record* captured
+// from find() survives many subsequent inserts (the regression a
+// vector-backed slot store would exhibit on first reallocation).
+void testHandleArenaSlotPointerStableAcrossInserts() {
+  using BufferArena =
+      dxmt9::resources::detail::HandleArena<ArenaTestRecord,
+                                            dxmt9::resources::detail::ResourceHandleKind::Buffer>;
+  BufferArena buffers;
+
+  const auto first = buffers.insert(ArenaTestRecord{});
+  check(static_cast<bool>(first), "arena allocates first slot");
+  ArenaTestRecord* anchorPtr = buffers.find(first.value);
+  check(anchorPtr != nullptr, "arena returns pointer to first slot");
+  anchorPtr->lastUsedSeqId = 0xfeedfaceu;
+
+  // Force growth well past any plausible inline / small-buffer storage
+  // a slot container might reasonably ship with. std::vector would
+  // reallocate within this range; std::deque must not.
+  for (int i = 0; i < 256; ++i) {
+    const auto h = buffers.insert(ArenaTestRecord{});
+    check(static_cast<bool>(h), "arena allocates Nth slot during growth");
+  }
+
+  ArenaTestRecord* reloadedPtr = buffers.find(first.value);
+  check(reloadedPtr == anchorPtr,
+        "arena returns the same address for the first slot after growth "
+        "(deque pointer-stability axiom — R-VERIF-3.4 SlotIdentityStable)");
+  check(reloadedPtr->lastUsedSeqId == 0xfeedfaceu,
+        "first slot's contents survive inserts unchanged");
+}
+
 }  // namespace
 
 int main() {
@@ -1065,6 +1100,7 @@ int main() {
     testDeviceCSetIndicesInfersIndex32Format();
     testImportedIndexedDrawRunCoalescesParamOnlyPackets();
     testResourcePoolArenaRejectsStaleHandles();
+    testHandleArenaSlotPointerStableAcrossInserts();
     testResourcePoolUsesArenaStorageOnly();
     testPresentSourceSelectionPrefersExplicitSourceOverCurrentBackBuffer();
     testEncodePresentRejectsMissingSourceWithoutStatusCallback();

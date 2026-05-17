@@ -36,6 +36,7 @@
 #include <deque>
 #include <limits>
 #include <optional>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -285,8 +286,20 @@ class HandleArena {
   // invariant separately ensures `releaseSlot` cannot fire on a record
   // the encoder is currently consuming (its `lastUsedSeqId` is ahead of
   // the completed watermark).
+  //
+  // R-VERIF-3.4 (SlotIdentityStable): the slot container must be
+  // std::deque because its growth must not invalidate previously
+  // handed-out element addresses. Swapping to std::vector silently
+  // breaks the encoder-side pointer contract on the first reallocation.
+  // The static_assert below pins this at compile time so a casual edit
+  // tripping the TLC invariant in `ResourceLifetime.tla` would also
+  // refuse to build.
   std::deque<Slot> slots_;
   std::vector<u32> freeList_;
+
+  static_assert(std::is_same_v<decltype(slots_), std::deque<Slot>>,
+                "HandleArena::slots_ must be std::deque — R-VERIF-3.4 "
+                "SlotIdentityStable depends on pointer-stable growth");
 };
 
 }  // namespace detail

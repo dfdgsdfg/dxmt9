@@ -95,6 +95,25 @@ No other path to the Freed state may exist.
 `DestroyPending` is eventually freed once the GPU has drained past its
 last-use sequence ID (no permanent leak).
 
+**R-VERIF-3.4** The formal spec must check the `HandleArena` pointer
+lifetime contract that backs `dxmt9::resources::detail::HandleArena` at
+`src/dxmt9/dxmt9_resource_pool.hpp:281-287`. Two properties must hold
+in every reachable state:
+
+- **Slot identity stability.** The arena's growth action (modeling
+  `std::deque<Slot>::push_back`) must not re-bind any previously
+  handed-out slot index. A future maintainer who swapped `std::deque`
+  for `std::vector` (which can invalidate addresses on growth) must
+  trip a TLC invariant.
+- **Encoder-held pointer safety.** A record pointer the encoder thread
+  is currently dereferencing inside `encodeChunk` must not be freed by
+  a concurrent `releaseSlot`. `FreeResource` must be gated on the
+  encoder's held set; TLC must show no reachable state where the
+  encoder holds a pointer to a `Freed` record.
+
+Ties back to R-BACK-5.6 / R-BACK-7.3 (deferred destruction) and to the
+C++ header comment that asserts this contract informally today.
+
 ---
 
 ## 4. Encoder Lifecycle

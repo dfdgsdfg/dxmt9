@@ -152,7 +152,12 @@ void releaseHeapIfBacked(HeapManager* heapManager, const TextureRecord& record) 
 template <typename Arena>
 void gcArena(Arena& arena, u64 completedSeqId, HeapManager* heapManager) {
   arena.reclaimCompleted(completedSeqId, [heapManager](const auto& record) {
-    // TLA+: NoUseAfterFree
+    // TLA+ NoUseAfterFree (R-VERIF-3.1) — the watermark gate that also
+    // implements R-VERIF-3.4 EncoderPointerStable in C++: by the time
+    // record.lastUsedSeqId <= completedSeqId, no in-flight encoder can
+    // still be dereferencing this record's pointer (chunk-N encoder
+    // marks its resources with lastUsedSeqId = N, and N > completedSeqId
+    // until the chunk completes).
     DXMT_ASSERT(record.lastUsedSeqId <= completedSeqId);
     releaseHeapIfBacked(heapManager, record);
   });

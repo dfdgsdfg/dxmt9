@@ -144,8 +144,8 @@ exercise all structural behaviors while keeping the state space tractable.
 | QueueLifecycleRefinement | `MAX_SEQID` | 4 | unbounded |
 | PresentFrameLatency | `MAX_SEQID` | 5 | unbounded |
 | PresentFrameLatency | `MAX_FRAME_LATENCY` | 2 | `SetMaximumFrameLatency()` / backend latency cap |
-| ResourceLifetime | `Resources` | `{r1,r2,r3}` | dynamic |
-| ResourceLifetime | `MAX_SEQID` | 5 | unbounded |
+| ResourceLifetime | `Resources` | `{r1,r2}` | dynamic |
+| ResourceLifetime | `MAX_SEQID` | 4 | unbounded |
 | EncoderLifecycle | `RenderTargets` | `{rt1,rt2}` | dynamic |
 | EncoderLifecycle | `MAX_OPS` | 8 | unbounded |
 | QuerySeqId | `MAX_QUERIES` | 3 | dynamic |
@@ -156,6 +156,21 @@ wrap-around, back-pressure blocking, hazard-triggered splits, flush-commit
 sequencing) all occur within these bounds. Increasing parameters does not
 reveal new behaviors — it only generates more repetitions of the same
 patterns.
+
+### 5.1 HandleArena pointer-lifetime invariants (R-VERIF-3.4)
+
+The two HandleArena contracts — `std::deque` slot-identity stability
+and encoder-held pointer safety — extend `ResourceLifetime.tla` rather
+than living in a sibling module. The natural place is `ResourceLifetime`
+because the new gate is on the same `FreeResource` action that already
+owns the GPU-drain gate, and TLC explores both axes in a single run.
+The extended model adds three variables (`slotIndex`, `numSlots`,
+`encoderHolds`), two actions (`InsertNewSlot`, `EncoderFindResource` /
+`EncoderFinishChunk`), two safety invariants (`SlotIdentityStable`,
+`EncoderPointerStable`), and a `SF_vars(FreeResource(r))` fairness
+upgrade (strong fairness is required because the encoder-pointer gate
+intermittently disables `FreeResource`, and weak fairness would let a
+pathological scheduler toggle the gate forever).
 
 ---
 
