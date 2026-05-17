@@ -308,6 +308,23 @@ must be re-run with Stage 2 enabled and disabled. A pass-level regression
 disables Stage 2 for the failing variant, never weakens the conformance
 target.
 
+### 7.6 Pixel-equivalence corpus gate (`R-BACK-12.27`)
+
+Every shader-corpus case currently marked `status = "passing"` in
+`tests/shader_runner/corpus/MANIFEST.toml` must pass under both the Stage 2
+default lane (Meson suite `shader-corpus`, runtime selector picks Stage 2
+where the Apple3+Tier2 capability gate holds) and a forced Stage 1 lane
+(Meson suite `shader-corpus-stage1`, environment `DXMT9_DISABLE_ARGBUF_HYBRID=1`
+applied via the existing runtime escape hatch). Both lanes assert the same
+`[probe]` expectations against GPU-readback pixels, so passing both *is*
+the constants-only pixel-equality proof for `R-BACK-12.22`–`R-BACK-12.26`;
+no separate per-pixel diff engine is permitted. A regression in either
+lane on a previously-passing case is a Stage 2 release blocker and must
+be triaged before Stage 2 ships — the harness must not be silenced by
+demoting the case to `failing`. A future widening that puts textures or
+samplers back into the argbuf must re-prove resource residency and update
+`specs/backend/design.md` §5.4 before relying on this gate.
+
 ---
 
 ## 8. Out-of-Scope Constraints

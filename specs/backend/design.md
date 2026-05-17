@@ -774,6 +774,20 @@ future widening that puts textures or samplers back into the argbuf must
 re-prove residency for argbuf-indirect resources, document the new descriptor
 shape here, and add the matching corpus coverage.
 
+#### A/B equivalence harness
+
+The Stage 2 vs Stage 1 pixel-equality proof rides on a paired Meson test
+fan-out (`R-BACK-12.27`). Every passing `.shader_test` in
+`tests/shader_runner/corpus/MANIFEST.toml` is registered twice: once as
+`dxmt9-shader-corpus-<case>` in suite `shader-corpus` (runtime selector
+default — Stage 2 wherever the capability gate holds), and once as
+`dxmt9-shader-corpus-stage1-<case>` in suite `shader-corpus-stage1` with
+`DXMT9_DISABLE_ARGBUF_HYBRID=1` forcing the gate off. Both runs assert the
+same `[probe]` lines against GPU readback, so passing both *is* the pixel
+comparison — no separate per-pixel diff layer exists or is permitted.
+Maintainers run the Stage 1 lane alone with `meson test --suite
+shader-corpus-stage1 -C build`.
+
 ### 5.5 Cache Prewarm From `MTLBinaryArchive`
 
 Prewarming populates PSO and shader-function caches at device init by

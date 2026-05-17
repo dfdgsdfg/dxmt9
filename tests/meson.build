@@ -80,6 +80,25 @@ if host_machine.system() == 'darwin'
     check: true,
   ).stdout().strip().split('\n')
 
+  # R-BACK-12.27 — Stage 2 argbuf hybrid A/B equivalence harness. The default
+  # lane inherits the runtime selector (Stage 2 wherever the Apple3+Tier2 gate
+  # holds); the Stage 1 lane forces the gate off via the runtime-side escape
+  # hatch `DXMT9_DISABLE_ARGBUF_HYBRID=1` (see
+  # `src/dxmt9/dxmt9_command_queue.cpp` around the `setArgbufHybridEnabled`
+  # call). Both lanes execute the same `.shader_test` and assert the same
+  # `[probe]` lines, so passing both *is* the pixel-equality proof — no
+  # separate diff engine is needed. A regression in either lane fails the case
+  # and is a Stage 2 release blocker per `specs/backend/draw-uniforms/requirements.md`
+  # §7.6.
+  shader_corpus_stage1_env = environment()
+  if host_machine.system() == 'darwin' and dxmt9_wine_install_path != ''
+    shader_corpus_stage1_env.prepend(
+      'DYLD_LIBRARY_PATH',
+      dxmt9_wine_unix_runtime_path,
+      separator: ':')
+  endif
+  shader_corpus_stage1_env.set('DXMT9_DISABLE_ARGBUF_HYBRID', '1')
+
   foreach shader_corpus_file : shader_corpus_files
     if shader_corpus_file == ''
       continue
@@ -90,6 +109,13 @@ if host_machine.system() == 'darwin'
          env: dxmt9_native_test_env,
          is_parallel: false,
          suite: ['shader-corpus'],
+         timeout: 60)
+    shader_corpus_stage1_test_name = 'dxmt9-shader-corpus-stage1-' + shader_corpus_file.replace('/', '-').replace('.shader_test', '')
+    test(shader_corpus_stage1_test_name, shader_runner,
+         args: [join_paths(shader_corpus_root, shader_corpus_file)],
+         env: shader_corpus_stage1_env,
+         is_parallel: false,
+         suite: ['shader-corpus-stage1'],
          timeout: 60)
   endforeach
 endif

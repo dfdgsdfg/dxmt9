@@ -611,6 +611,24 @@ probes cover `oDepth`, fog, and sRGB write/sampling state. MRT color output
 routing is covered by per-target readback. Every probe verifies the final
 framebuffer through readback.
 
+### 4.3 Stage 2 Argbuf Hybrid A/B Lane
+
+Each currently-passing `.shader_test` is fanned out into two Meson tests:
+`dxmt9-shader-corpus-<case>` (suite `shader-corpus`) runs with the runtime
+default — Stage 2 argbuf hybrid on Apple3+Tier2 devices, Stage 1 elsewhere —
+and `dxmt9-shader-corpus-stage1-<case>` (suite `shader-corpus-stage1`) forces
+Stage 1 via `DXMT9_DISABLE_ARGBUF_HYBRID=1`. The skip filter is the same one
+used by the default lane: `shader_corpus_tool.py list-files --status passing`
+emits the seed list, so cases marked `failing` or `skipped` in the corpus
+manifest do not gain a Stage 1 twin. Both lanes assert the same `[probe]`
+expectations through `shader_runner_dxmt9`, so passing both *is* the
+Stage 1 ↔ Stage 2 pixel-equality proof for `R-BACK-12.22`–`R-BACK-12.26`;
+see `R-BACK-12.27` and `specs/backend/design.md` §5.4 for the contract.
+A maintainer reproduces just the Stage 1 lane with `meson test --suite
+shader-corpus-stage1 -C build`. A regression in either lane on a
+previously-passing case is a Stage 2 release blocker, not a corpus
+demotion candidate.
+
 ---
 
 ## 5. Comparison Criteria
