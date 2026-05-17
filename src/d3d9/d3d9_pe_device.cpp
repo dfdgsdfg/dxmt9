@@ -65,6 +65,21 @@ static bool dxmt9PeRecorderChunkLogEnabled() {
 // self-contained and can be replayed independently of prior packets.
 // Off (default) keeps the delta optimization that makes run-coalescing
 // detection cheap (packetHasNoStateDelta == "all valid bits zero").
+//
+// SOLE APPLICATION SITE: buildDrawPrimitivePacket() below, after the
+// delta block populates valid/mask fields from pending-* PE state. When
+// enabled, the snapshot block overrides every delta field with the full
+// shadow contents (render-state table, every populated texture slot,
+// every populated stream, every shadow-driven scalar, all sampler/TSS
+// tables, full clip-plane mask 0x3F, every transform/light slot). Both
+// modes share the same wire layout (D9CDrawPrimitivePacket); only the
+// valid/mask population policy differs.
+//
+// Equivalence guarantee: applying a delta-mode packet sequence vs the
+// matching full-snapshot sequence through device_c_chunk_replay's
+// applyDrawPacketStateDirect() yields identical effective state. The
+// regression guard is tests/native/bridge/
+// pe_full_snapshot_equivalence_spec.cpp.
 static bool dxmt9PeFullSnapshotEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_DRAW_FULL_SNAPSHOT");
     return enabled;
@@ -494,6 +509,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // requiring any importer changes. We respect the per-array caps;
         // a shadow that overflows (e.g. > 64 distinct render states)
         // returns false to force the chunk to seal.
+        //
+        // Triggered exclusively by DXMT9_PE_DRAW_FULL_SNAPSHOT=1 (see
+        // dxmt9PeFullSnapshotEnabled() above for the env-flag contract
+        // and equivalence guarantee). Branch is delta-vs-snapshot only —
+        // both produce a D9CDrawPrimitivePacket with the same wire layout
+        // (no schema change), and the unix-side applier in
+        // device_c_chunk_replay.cpp::applyDrawPacketStateDirect() applies
+        // either packet by the same valid/mask iteration.
         if (dxmt9PeFullSnapshotEnabled()) {
             // Render states: drain the entire shadow table.
             if (peState_.renderStateShadow.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {

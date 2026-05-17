@@ -65,6 +65,23 @@ pe_chunk_record_value_spec = executable(
 test('dxmt9-pe-chunk-record-value-spec', pe_chunk_record_value_spec,
      env: dxmt9_native_test_env)
 
+# Regression guard for DXMT9_PE_DRAW_FULL_SNAPSHOT (Phase 16 debug knob).
+# Proves that the delta-mode packet stream and the full-snapshot-mode
+# packet stream produce identical unix-side effective state for
+# representative D3D9 draw scenarios. See header comment in the spec
+# source for the equivalence claim and the modelling boundary.
+pe_full_snapshot_equivalence_spec = executable(
+  'dxmt9-pe-full-snapshot-equivalence-spec',
+  'pe_full_snapshot_equivalence_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-full-snapshot-equivalence-spec',
+     pe_full_snapshot_equivalence_spec,
+     env: dxmt9_native_test_env)
+
 bridge_ops_spec = executable(
   'dxmt9-bridge-ops-spec',
   'bridge_ops_spec.cpp',

@@ -437,6 +437,13 @@ int32_t applyDrawPacketStateViaIface(D9CDevice* d, const D9CDrawPrimitivePacket&
 // Normal chunk replay path: apply the packet's flat delta directly to the
 // core DeviceState and invalidate derived draw-state caches once. The iface
 // replay above remains only for state-block recording semantics.
+//
+// This routine is mode-agnostic: it observes valid/mask bits and applies
+// whatever is set. A delta packet sets only what changed since the last
+// draw; a full-snapshot packet (DXMT9_PE_DRAW_FULL_SNAPSHOT=1, produced
+// in d3d9_pe_device.cpp::buildDrawPrimitivePacket) sets every field from
+// the PE shadow. Both yield the same DeviceState — proved by
+// tests/native/bridge/pe_full_snapshot_equivalence_spec.cpp.
 int32_t applyDrawPacketStateDirect(D9CDevice* d, const D9CDrawPrimitivePacket& packet) {
   const int32_t validationHr = validateDrawPacketStateDelta(packet);
   if (failed(validationHr)) {
