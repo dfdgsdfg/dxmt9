@@ -1,0 +1,17 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c alpha-test compare behavior, reduced to notequal readback
+; oracle-date: 2026-05-17
+
+[pixel shader d3dbc-hex]
+ffff0200 05000051 a00f0000 00000000 3f800000 00000000 3e800000
+02000001 800f0800 a0e40000 0000ffff
+
+[test]
+clear rgba(1.0, 0.0, 0.0, 1.0)
+alpha-test enable notequal 0.5
+dxmt9-draw-solid-quad
+probe (32, 32) rgba(0.0, 1.0, 0.0, 0.25) 2

@@ -451,3 +451,118 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * functions: test_vertex_declaration(), test_fvf_decl()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_vertex_declaration_fvf_policy(const struct d3d9_api *api)
+{
+    static const D3DVERTEXELEMENT9 valid_elements[] =
+    {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT,
+                D3DDECLUSAGE_POSITION, 0},
+        {0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT,
+                D3DDECLUSAGE_COLOR, 0},
+        D3DDECL_END()
+    };
+    static const D3DVERTEXELEMENT9 misaligned_elements[] =
+    {
+        {0, 1, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT,
+                D3DDECLUSAGE_POSITION, 0},
+        D3DDECL_END()
+    };
+    IDirect3DVertexDeclaration9 *decl = NULL;
+    IDirect3DVertexDeclaration9 *current = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    DWORD fvf = 0xdeadbeef;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    current = (IDirect3DVertexDeclaration9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_GetVertexDeclaration(device, &current);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(current == NULL);
+
+    CHECK_HR(IDirect3DDevice9_GetVertexDeclaration(device, NULL),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_GetFVF(device, NULL), D3DERR_INVALIDCALL);
+
+    fvf = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetFVF(device, &fvf);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(fvf == 0);
+
+    CHECK_HR(IDirect3DDevice9_CreateVertexDeclaration(device, NULL, &decl),
+            D3DERR_INVALIDCALL);
+    CHECK_TRUE(decl == NULL);
+
+    decl = (IDirect3DVertexDeclaration9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_CreateVertexDeclaration(device, misaligned_elements,
+            &decl);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(decl == NULL);
+
+    hr = IDirect3DDevice9_CreateVertexDeclaration(device, valid_elements,
+            &decl);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(decl != NULL);
+    if (!decl)
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device, decl), D3D_OK);
+
+    current = NULL;
+    hr = IDirect3DDevice9_GetVertexDeclaration(device, &current);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(current == decl);
+    if (current)
+        IDirect3DVertexDeclaration9_Release(current);
+
+    fvf = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetFVF(device, &fvf);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(fvf == 0);
+
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ | D3DFVF_DIFFUSE),
+            D3D_OK);
+    fvf = 0;
+    hr = IDirect3DDevice9_GetFVF(device, &fvf);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(fvf == (D3DFVF_XYZ | D3DFVF_DIFFUSE));
+
+    current = NULL;
+    hr = IDirect3DDevice9_GetVertexDeclaration(device, &current);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(current != NULL);
+    CHECK_TRUE(current != decl);
+    if (current)
+        IDirect3DVertexDeclaration9_Release(current);
+
+    IDirect3DVertexDeclaration9_Release(decl);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

@@ -326,6 +326,7 @@ void test_factory_base_vs_ex_qi(const struct d3d9_api *api);
 void test_ex_created_normal_device_qi(const struct d3d9_api *api);
 void test_ex_create_reset_mode_validation(const struct d3d9_api *api);
 void test_scene_invalid_transitions(const struct d3d9_api *api);
+void test_vertex_declaration_fvf_policy(const struct d3d9_api *api);
 
 void test_display_mode_ex_size_filter_smoke(const struct d3d9_api *api);
 void test_present_parameter_validation(const struct d3d9_api *api);
@@ -334,6 +335,7 @@ void test_stateblock_invalid_type_recording_invalid_calls(const struct d3d9_api 
 
 void test_private_data_iunknown_ownership_smoke(const struct d3d9_api *api);
 void test_private_data_resource_wrappers(const struct d3d9_api *api);
+void test_resource_lock_error_policy(const struct d3d9_api *api);
 void test_shared_handle_policy(const struct d3d9_api *api);
 void test_ex_shared_handle_policy(const struct d3d9_api *api);
 void test_creation_failure_out_pointers(const struct d3d9_api *api);

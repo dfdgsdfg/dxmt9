@@ -282,6 +282,11 @@ void reset_render_target_rebinding() {
   }
 }
 
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * functions: reset tests, render-target getter checks
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
 void get_render_target_returns_user_surface() {
   Fixture fixture;
   if (!fixture.init("get_render_target_returns_user_surface")) return;
@@ -346,6 +351,11 @@ void get_render_target_returns_user_surface() {
   release_if(render_target);
 }
 
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * functions: reset tests, depth-stencil getter checks
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
 void get_depth_stencil_returns_user_surface() {
   Fixture fixture;
   if (!fixture.init("get_depth_stencil_returns_user_surface")) return;

@@ -169,6 +169,23 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_vertex_declaration_fvf_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_vertex_declaration,test_fvf_decl"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-declaration"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["Get/SetVertexDeclaration, Get/SetFVF, FVF-generated declarations, and invalid declaration HRESULTs match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_query_stateblock.c"
 function = "test_stateblock_invalid_type_recording_invalid_calls"
 source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
@@ -224,6 +241,23 @@ arch = "x64"
 status = "failing"
 source = "specs/gap.md:170"
 summary = "First device-backed app-local run reached the provider with failures in the private-data resource wrapper group."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_resource_lock_error_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_lockrect_invalid,test_lockrect_offset,test_mipmap_lock,test_volume_locking"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["surface, texture, mip-level, dynamic write-only texture, and volume lock invalid/double-unlock policies match Wine oracle"]
+status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
@@ -540,6 +574,40 @@ area = "stateblock"
 owner = "core/stateblock"
 requirements = ["R-TEST-12.5", "R-TEST-12.19"]
 acceptance = ["D3DSBT_ALL, D3DSBT_VERTEXSTATE, D3DSBT_PIXELSTATE, Capture, Apply, and reset/resource interactions match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_reset_lost_x64.exe"
+source_file = "d3d9_reset_lost.cpp"
+function = "get_render_target_returns_user_surface"
+source = "wine/dlls/d3d9/tests/device.c:reset tests,render-target getter checks"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "render-target-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.17"]
+acceptance = ["GetRenderTarget returns the caller-bound render-target surface and clears missing slot out-pointers"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_reset_lost_x64.exe"
+source_file = "d3d9_reset_lost.cpp"
+function = "get_depth_stencil_returns_user_surface"
+source = "wine/dlls/d3d9/tests/device.c:reset tests,depth-stencil getter checks"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "depth-stencil-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.17"]
+acceptance = ["GetDepthStencilSurface returns the caller-bound depth-stencil surface and clears missing-surface out-pointers"]
 status = "scaffolded"
 
 [[case]]

@@ -44,10 +44,33 @@ Modes:
   sublevel sampling.
 - `npot-filter-lod` - non-power-of-two explicit mip chain sampled through
   `MAXMIPLEVEL`.
+- `managed-reset-texture` - managed texture draw, device reset, and redraw
+  persistence.
+- `sample-mask` - MSAA sample mask draw resolved to a deterministic partial
+  color.
+- `alpha-to-coverage` - Wine ATOC pseudo-format path with MSAA resolve
+  evidence, skipped when unsupported.
+- `cube-wrap` - cube sampler draw remains face-directed across sampler address
+  modes.
+- `line-aa-blending` - Wine line-antialiasing-adjacent alpha blending matrix
+  reduced to center-pixel render intent.
+- `default-attribute-components` - missing declaration color input defaults
+  observed through shader color output.
+- `vshader-input-types` - non-`D3DCOLOR` declaration input conversion observed
+  through shader color output.
+- `pointsize` - `D3DFVF_PSIZE` point-list rasterization and uncovered-pixel
+  readback.
+- `depth-stencil-init` - depth-surface clear initialization and reject/accept
+  ordering.
 
 Each mode exits non-zero on failed D3D calls or mismatched readback. The app is
 kept intentionally small; broader HRESULT conformance belongs in
 `tests/conformance/d3d9`.
+
+Wine `visual.c:test_mipmap_upload` is intentionally listed but not implemented
+as a runtime mode: it writes every mip level through the level-0 lock pointer,
+which can run past the API-visible locked rectangle. Track that as a compatibility
+gap or conformance-only oracle, not as an unsafe experiment probe.
 
 Current dxmt9 runtime status from local Wine 11.7 runs:
 
@@ -78,3 +101,12 @@ Current dxmt9 runtime status from local Wine 11.7 runs:
 | `cube-volume-texture-update` | passing | Cube and volume `UpdateTexture` uploads sample through ps_2_0 cube/volume shaders with expected colors. |
 | `autogen-mipmap` | passing | Current runtime reports no A8R8G8B8 autogen support and exits through the documented skip path. |
 | `npot-filter-lod` | failing | NPOT mip chain creates and draws, but `MAXMIPLEVEL=1` still samples level 0. |
+| `managed-reset-texture` | passing | Managed texture renders before and after `ResetEx` with the expected color. |
+| `sample-mask` | failing | `D3DRS_MULTISAMPLEMASK=0x1` resolves to the red clear color instead of the expected partial covered color. |
+| `alpha-to-coverage` | passing | Runtime reports unsupported ATOC pseudo-format and exits through the documented skip path. |
+| `cube-wrap` | passing | Cube sample remains on the +X face across wrap, mirror, clamp, border, and mirror-once address modes. |
+| `line-aa-blending` | failing | Alpha-blended XYZ diffuse draws leave the clear color unchanged, so the Wine blend matrix is not satisfied. |
+| `default-attribute-components` | passing | Missing declaration color input defaults to zero and shader color output reads back black over a red clear. |
+| `vshader-input-types` | passing | `UBYTE4N` declaration color converts through vs_2_0/ps_2_0 to the expected green output. |
+| `pointsize` | failing | `D3DFVF_PSIZE` point draw succeeds but the center pixel remains black. |
+| `depth-stencil-init` | failing | Depth-surface clear/draw calls succeed, but the accepted nearer draw still reads back black. |

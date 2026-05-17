@@ -452,6 +452,228 @@ done_d3d9:
     IDirect3D9_Release(d3d9);
 }
 
+static void check_surface_lock_policy(IDirect3DSurface9 *surface)
+{
+    D3DLOCKED_RECT locked;
+    RECT rect;
+    HRESULT hr;
+
+    CHECK_HR(IDirect3DSurface9_LockRect(surface, NULL, NULL, 0),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3DERR_INVALIDCALL);
+
+    rect.left = 3;
+    rect.top = 0;
+    rect.right = 1;
+    rect.bottom = 2;
+    CHECK_HR(IDirect3DSurface9_LockRect(surface, &locked, &rect, 0),
+            D3DERR_INVALIDCALL);
+
+    rect.left = -1;
+    rect.top = 0;
+    rect.right = 2;
+    rect.bottom = 2;
+    CHECK_HR(IDirect3DSurface9_LockRect(surface, &locked, &rect, 0),
+            D3DERR_INVALIDCALL);
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(surface, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(locked.pBits != NULL);
+        CHECK_TRUE(locked.Pitch >= 16);
+        CHECK_HR(IDirect3DSurface9_LockRect(surface, &locked, NULL, 0),
+                D3DERR_INVALIDCALL);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3DERR_INVALIDCALL);
+    }
+
+    rect.left = 1;
+    rect.top = 1;
+    rect.right = 3;
+    rect.bottom = 3;
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(surface, &locked, &rect, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(locked.pBits != NULL);
+        CHECK_TRUE(locked.Pitch >= 16);
+        memset(locked.pBits, 0x5a, 2 * 4);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+    }
+}
+
+static void check_texture_lock_policy(IDirect3DTexture9 *texture)
+{
+    D3DLOCKED_RECT locked;
+    RECT rect;
+    HRESULT hr;
+
+    CHECK_HR(IDirect3DTexture9_LockRect(texture, 3, &locked, NULL, 0),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DTexture9_UnlockRect(texture, 3), D3DERR_INVALIDCALL);
+
+    rect.left = 0;
+    rect.top = 0;
+    rect.right = 1;
+    rect.bottom = 1;
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DTexture9_LockRect(texture, 1, &locked, &rect, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(locked.pBits != NULL);
+        CHECK_TRUE(locked.Pitch >= 8);
+        memset(locked.pBits, 0xa5, 4);
+        CHECK_HR(IDirect3DTexture9_UnlockRect(texture, 1), D3D_OK);
+    }
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DTexture9_LockRect(texture, 0, &locked, NULL,
+            D3DLOCK_DISCARD);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+}
+
+static void check_volume_lock_policy(IDirect3DVolumeTexture9 *texture)
+{
+    D3DLOCKED_BOX locked;
+    D3DBOX box;
+    HRESULT hr;
+
+    CHECK_HR(IDirect3DVolumeTexture9_LockBox(texture, 0, NULL, NULL, 0),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DVolumeTexture9_UnlockBox(texture, 0),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DVolumeTexture9_LockBox(texture, 2, &locked, NULL, 0),
+            D3DERR_INVALIDCALL);
+
+    box.Left = 3;
+    box.Top = 0;
+    box.Right = 1;
+    box.Bottom = 2;
+    box.Front = 0;
+    box.Back = 1;
+    CHECK_HR(IDirect3DVolumeTexture9_LockBox(texture, 0, &locked, &box, 0),
+            D3DERR_INVALIDCALL);
+
+    box.Left = 1;
+    box.Top = 1;
+    box.Right = 3;
+    box.Bottom = 3;
+    box.Front = 1;
+    box.Back = 3;
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DVolumeTexture9_LockBox(texture, 0, &locked, &box, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(locked.pBits != NULL);
+        CHECK_TRUE(locked.RowPitch >= 16);
+        CHECK_TRUE(locked.SlicePitch >= locked.RowPitch * 4);
+        CHECK_HR(IDirect3DVolumeTexture9_LockBox(texture, 0, &locked,
+                NULL, 0), D3DERR_INVALIDCALL);
+        memset(locked.pBits, 0x3c, 2 * 4);
+        CHECK_HR(IDirect3DVolumeTexture9_UnlockBox(texture, 0), D3D_OK);
+        CHECK_HR(IDirect3DVolumeTexture9_UnlockBox(texture, 0),
+                D3DERR_INVALIDCALL);
+    }
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * functions: test_lockrect_invalid(), test_lockrect_offset(),
+ * test_mipmap_lock(), test_volume_locking()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_resource_lock_error_policy(const struct d3d9_api *api)
+{
+    IDirect3DVolumeTexture9 *volume_texture = NULL;
+    IDirect3DTexture9 *writeonly_texture = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DLOCKED_RECT locked;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 4, 4,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        check_surface_lock_policy(surface);
+        IDirect3DSurface9_Release(surface);
+        surface = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 4, 3, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        check_texture_lock_policy(texture);
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 4, 1,
+            D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, D3DFMT_A8R8G8B8,
+            D3DPOOL_DEFAULT, &writeonly_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&locked, 0xcc, sizeof(locked));
+        hr = IDirect3DTexture9_LockRect(writeonly_texture, 0, &locked,
+                NULL, D3DLOCK_DISCARD);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(locked.pBits != NULL);
+            memset(locked.pBits, 0x7e, 4 * 4 * 4);
+            CHECK_HR(IDirect3DTexture9_UnlockRect(writeonly_texture, 0),
+                    D3D_OK);
+        }
+        IDirect3DTexture9_Release(writeonly_texture);
+        writeonly_texture = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateVolumeTexture(device, 4, 4, 4, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &volume_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        check_volume_lock_policy(volume_texture);
+        IDirect3DVolumeTexture9_Release(volume_texture);
+        volume_texture = NULL;
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_shared_handle()
