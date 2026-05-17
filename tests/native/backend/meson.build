@@ -26,6 +26,21 @@ ffp_key_determinism_spec = executable(
 test('dxmt9-ffp-key-determinism-spec', ffp_key_determinism_spec,
      env: dxmt9_native_test_env)
 
+# Present drawable acquire policy resolver matrix — locks the priority
+# `Async > SyncOnSubmit > PreAcquire > Sync` and the "0" / empty-string
+# treatment of the three DXMT9_PRESENT_* env strings. See the header
+# comment in `tests/native/backend/present_acquire_policy_spec.cpp`.
+present_acquire_policy_spec = executable(
+  'dxmt9-present-acquire-policy-spec',
+  'present_acquire_policy_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-present-acquire-policy-spec', present_acquire_policy_spec,
+     env: dxmt9_native_test_env)
+
 backend_pipeline_key_spec = executable(
   'dxmt9-backend-pipeline-key-spec',
   'backend_pipeline_key_spec.cpp',

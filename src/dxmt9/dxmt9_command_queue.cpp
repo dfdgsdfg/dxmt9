@@ -953,22 +953,6 @@ bool shouldApplyPresentBoundary(const core::SwapDesc&) {
   return !disablePresentBoundary();
 }
 
-bool acquirePresentOnSubmit() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_PRESENT_ACQUIRE_ON_SUBMIT");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-bool asyncAcquirePresentOnSubmit() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_PRESENT_ASYNC_ACQUIRE");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
 Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
   return Presenter::AcquireParams{
       .width = desc.width,
@@ -1153,28 +1137,40 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // nullptr; the legacy raw-pointer code already tolerated that path so
   // the rest of this function preserves the same control flow.
   Presenter* presenter = lookupPresenter(queuedDesc.presentId);
-  if (presenter && asyncAcquirePresentOnSubmit()) {
-    perf::countPresentAsyncAcquireRequest();
-    auto token = presenter->beginAcquireDrawable(makePresentAcquireParams(queuedDesc));
-    if (token) {
-      perf::countPresentAsyncAcquireIssued();
-      queuedDesc.drawableTokenRequired = true;
-    } else {
-      perf::countPresentAsyncAcquireFallback();
-      queuedDesc.drawableTokenRequired = false;
+  if (presenter) {
+    switch (presenter->acquirePolicy()) {
+      case AcquirePolicy::Async: {
+        perf::countPresentAsyncAcquireRequest();
+        auto token = presenter->beginAcquireDrawable(makePresentAcquireParams(queuedDesc));
+        if (token) {
+          perf::countPresentAsyncAcquireIssued();
+          queuedDesc.drawableTokenRequired = true;
+        } else {
+          perf::countPresentAsyncAcquireFallback();
+          queuedDesc.drawableTokenRequired = false;
+        }
+        stashDrawableToken(queuedDesc.presentId, std::move(token));
+        break;
+      }
+      case AcquirePolicy::SyncOnSubmit: {
+        {
+          std::unique_lock lock(mutex_);
+          queueLifecycle_.commitCurrentChunk(
+              lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+                markSlotResourcesUnlocked(pool_, slot);
+              });
+        }
+        auto token = presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
+        queuedDesc.drawableTokenRequired = true;
+        stashDrawableToken(queuedDesc.presentId, std::move(token));
+        break;
+      }
+      case AcquirePolicy::Sync:
+      case AcquirePolicy::PreAcquire:
+        // Sync acquires inline in encodeCommands; PreAcquire feeds the
+        // prefetched-drawable cache from the encode thread.
+        break;
     }
-    stashDrawableToken(queuedDesc.presentId, std::move(token));
-  } else if (presenter && acquirePresentOnSubmit()) {
-    {
-      std::unique_lock lock(mutex_);
-      queueLifecycle_.commitCurrentChunk(
-          lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
-            markSlotResourcesUnlocked(pool_, slot);
-          });
-    }
-    auto token = presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
-    queuedDesc.drawableTokenRequired = true;
-    stashDrawableToken(queuedDesc.presentId, std::move(token));
   }
 
   std::uint64_t presentSeqId = 0;

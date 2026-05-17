@@ -29,6 +29,38 @@ class Device;
 
 inline constexpr uint32_t kDefaultMetalDrawableCount = 3;
 
+// Present-drawable acquire policy. The four values collapse the
+// previous if/else chain that walked
+// DXMT9_PRESENT_ASYNC_ACQUIRE / DXMT9_PRESENT_ACQUIRE_ON_SUBMIT /
+// DXMT9_PRESENT_PREACQUIRE in separate static-lambda env parsers
+// spread across Presenter and CommandQueue. Resolution is done once
+// per process via resolveAcquirePolicyFromEnv() and cached in
+// Presenter::policy_.
+//
+// Priority when multiple env-vars are set simultaneously (highest
+// first): Async > SyncOnSubmit > PreAcquire > Sync. This matches the
+// pre-existing if/else order in CommandQueue::submitPresent (the
+// async branch was checked before the sync-on-submit branch). For the
+// common case where at most one env-var is set, behavior is
+// unchanged.
+enum class AcquirePolicy : uint32_t {
+  Sync = 0,        // default — acquire inline in encodeCommands.
+  SyncOnSubmit,    // DXMT9_PRESENT_ACQUIRE_ON_SUBMIT — sync acquire at submit.
+  PreAcquire,      // DXMT9_PRESENT_PREACQUIRE — prefetch via background thread.
+  Async,           // DXMT9_PRESENT_ASYNC_ACQUIRE — async acquire at submit.
+};
+
+// Pure resolver — takes explicit env strings (nullptr / "" / "0"
+// count as "not set"). Used by Presenter and the spec test.
+AcquirePolicy resolveAcquirePolicy(const char* asyncEnv,
+                                   const char* onSubmitEnv,
+                                   const char* preAcquireEnv);
+
+// Process-once env reader; reads DXMT9_PRESENT_{ASYNC_ACQUIRE,
+// ACQUIRE_ON_SUBMIT, PREACQUIRE} via std::getenv on first call and
+// caches the result.
+AcquirePolicy resolveAcquirePolicyFromEnv();
+
 class PresentDrawableToken {
  public:
   PresentDrawableToken() = default;
@@ -90,6 +122,7 @@ class Presenter {
   bool valid() const noexcept { return acquisition_.valid(); }
   uint64_t hwnd() const noexcept { return hwnd_; }
   WMT::MetalLayer layer() const noexcept { return layer_; }
+  AcquirePolicy acquirePolicy() const noexcept { return policy_; }
 
   std::shared_ptr<PresentDrawableToken> acquireDrawable(const AcquireParams& params);
   std::shared_ptr<PresentDrawableToken> beginAcquireDrawable(const AcquireParams& params);
@@ -112,6 +145,10 @@ class Presenter {
   uint64_t hwnd_ = 0;
   presentimpl::LayerAcquisition acquisition_{};
   WMT::MetalLayer layer_{};
+  // Acquire policy is resolved once at construction from env (process-
+  // wide cache). Branch sites read this directly instead of going
+  // through scattered env-parsing lambdas.
+  AcquirePolicy policy_ = AcquirePolicy::Sync;
   // Pipeline cache — two variants (alpha-preserving + alpha-forced-to-1).
   // std::shared_future lets concurrent encodeCommands calls share the result
   // of a single async build.

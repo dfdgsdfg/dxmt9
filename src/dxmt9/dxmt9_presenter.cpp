@@ -17,23 +17,8 @@ namespace dxmt9 {
 
 namespace {
 
-bool presentPreAcquireEnabled() {
-  static const bool value = [] {
-    const char* env = std::getenv("DXMT9_PRESENT_PREACQUIRE");
-    return env && env[0] != '\0' && env[0] != '0';
-  }();
-  return value;
-}
-
-bool presentAcquireOnSubmitEnabled() {
-  static const bool value = [] {
-    const char* syncEnv = std::getenv("DXMT9_PRESENT_ACQUIRE_ON_SUBMIT");
-    const char* asyncEnv = std::getenv("DXMT9_PRESENT_ASYNC_ACQUIRE");
-    const bool syncEnabled = syncEnv && syncEnv[0] != '\0' && std::strcmp(syncEnv, "0") != 0;
-    const bool asyncEnabled = asyncEnv && asyncEnv[0] != '\0' && std::strcmp(asyncEnv, "0") != 0;
-    return syncEnabled || asyncEnabled;
-  }();
-  return value;
+bool envFlagSet(const char* env) {
+  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
 }
 
 bool layerDisplaySyncEnabled() {
@@ -82,6 +67,32 @@ bool sameLayerProps(const WMTLayerProps& a, const WMTLayerProps& b) {
 
 }  // namespace
 
+AcquirePolicy resolveAcquirePolicy(const char* asyncEnv,
+                                   const char* onSubmitEnv,
+                                   const char* preAcquireEnv) {
+  // Priority order — see AcquirePolicy doc-comment. Each branch is
+  // checked independently so that callers can pass arbitrary
+  // combinations.
+  if (envFlagSet(asyncEnv)) {
+    return AcquirePolicy::Async;
+  }
+  if (envFlagSet(onSubmitEnv)) {
+    return AcquirePolicy::SyncOnSubmit;
+  }
+  if (envFlagSet(preAcquireEnv)) {
+    return AcquirePolicy::PreAcquire;
+  }
+  return AcquirePolicy::Sync;
+}
+
+AcquirePolicy resolveAcquirePolicyFromEnv() {
+  static const AcquirePolicy value = resolveAcquirePolicy(
+      std::getenv("DXMT9_PRESENT_ASYNC_ACQUIRE"),
+      std::getenv("DXMT9_PRESENT_ACQUIRE_ON_SUBMIT"),
+      std::getenv("DXMT9_PRESENT_PREACQUIRE"));
+  return value;
+}
+
 void PresentDrawableToken::complete(WMT::Reference<WMT::MetalDrawable> drawable) {
   {
     std::lock_guard lock(mutex_);
@@ -112,6 +123,7 @@ Presenter::Presenter(WMT::Device device, uint64_t hwnd, uint64_t seqId,
     : device_(device), hwnd_(hwnd),
       acquisition_(presentimpl::acquireLayerForHwnd(hwnd, seqId)),
       layer_(acquisition_.layerHandle),
+      policy_(resolveAcquirePolicyFromEnv()),
       archive_(archive), archivePath_(archivePath) {}
 
 Presenter::~Presenter() {
@@ -273,7 +285,7 @@ void Presenter::finishAsyncAcquireToken() {
 }
 
 void Presenter::preAcquireNextDrawable(uint64_t seqId) {
-  if (!presentPreAcquireEnabled() || !layer_) {
+  if (policy_ != AcquirePolicy::PreAcquire || !layer_) {
     return;
   }
   {
@@ -402,11 +414,22 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
       .maxDrawableCount = params.maxDrawableCount,
       .seqId = params.seqId,
   };
-  if (presentAcquireOnSubmitEnabled()) {
-    std::lock_guard lock(stateMutex_);
-    configureLayer(acquireParams);
-  } else {
-    configureLayer(acquireParams);
+  // Lock the layer-config path only when a concurrent thread can be
+  // calling configureLayer: the async-acquire worker
+  // (runAsyncAcquireLoop) or the queue-side sync-on-submit acquire.
+  // The Sync and PreAcquire policies have configureLayer as the only
+  // caller and don't need the lock.
+  switch (policy_) {
+    case AcquirePolicy::SyncOnSubmit:
+    case AcquirePolicy::Async: {
+      std::lock_guard lock(stateMutex_);
+      configureLayer(acquireParams);
+      break;
+    }
+    case AcquirePolicy::Sync:
+    case AcquirePolicy::PreAcquire:
+      configureLayer(acquireParams);
+      break;
   }
 
   auto pipelineFuture = pipelineFor(params.opaqueAlpha);
@@ -460,7 +483,7 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     perf::countPresentPreAcquireHit();
     drawable = WMT::MetalDrawable{prefetchedDrawable.handle};
   } else {
-    if (!drawable && presentPreAcquireEnabled()) {
+    if (!drawable && policy_ == AcquirePolicy::PreAcquire) {
       perf::countPresentPreAcquireMiss();
     }
     if (!drawable) {

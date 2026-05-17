@@ -73,6 +73,14 @@ unless documented otherwise.
 | `DXMT9_PRESENT_ASYNC_ACQUIRE` | Request drawable on the encode thread async | `0` |
 | `DXMT9_PRESENT_PREACQUIRE` | Pre-acquire drawable before encode | `0` |
 | `DXMT9_PRESENT_ACQUIRE_ON_SUBMIT` | Acquire drawable at submit time | `0` |
+
+The three acquire-policy vars above are mutually exclusive in effect:
+the runtime resolves them once at Presenter construction into a single
+`AcquirePolicy` value with priority `Async > SyncOnSubmit > PreAcquire
+> Sync`. With multiple vars set the highest-priority one wins; the
+others are ignored. See `dxmt9::resolveAcquirePolicy` in
+`src/dxmt9/dxmt9_presenter.hpp` and the matrix spec
+`tests/native/backend/present_acquire_policy_spec.cpp`.
 | `DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE` | Defer present boundary | `0` |
 | `DXMT9_PRESENT_BOUNDARY_COMPLETION` / `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION` | Boundary on completion | `0` |
 | `DXMT9_PRESENT_REFRESH_HZ` | Override refresh rate (numeric Hz) | derived |
