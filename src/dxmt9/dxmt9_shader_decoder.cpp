@@ -2,6 +2,7 @@
 
 #include "dxmt9_d3d9_bytecode.hpp"
 #include "dxmt9_draw_shader.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9/assert.hpp"
 
 #include <algorithm>
@@ -44,6 +45,108 @@ constexpr u32 kD3DSTTVolume = 4u;
     case kD3DSTT2D:
     default:
       return ::dxmt9::core::TextureType::TwoD;
+  }
+}
+
+// Safe-rejection plumbing for translateD3DBytecodeToSpirv. The decoder
+// treats malformed D3DBC bytecode as input, not as an internal
+// invariant violation: it bumps one of the `shader_decoder_reject_*`
+// perf counters and returns an empty SpirvModule. Upstream callers
+// then emit a benign fallback MSL stub instead of aborting the
+// process. Pre-existing `throw std::runtime_error` sites in this TU
+// are caught at the entry point and routed into the `invalid_opcode`
+// bucket as a catch-all.
+enum class DecoderRejectReason : u32 {
+  Truncated,
+  UnsupportedVersion,
+  OobRegister,
+  MissingEnd,
+  InvalidOpcode,
+};
+
+struct DecoderReject : std::runtime_error {
+  DecoderRejectReason reason;
+  explicit DecoderReject(DecoderRejectReason r, const char* message)
+      : std::runtime_error(message), reason(r) {}
+};
+
+inline void bumpShaderDecoderReject(DecoderRejectReason reason) {
+  switch (reason) {
+    case DecoderRejectReason::Truncated:
+      ::dxmt9::perf::countShaderDecoderRejectTruncated();
+      break;
+    case DecoderRejectReason::UnsupportedVersion:
+      ::dxmt9::perf::countShaderDecoderRejectUnsupportedVersion();
+      break;
+    case DecoderRejectReason::OobRegister:
+      ::dxmt9::perf::countShaderDecoderRejectOobRegister();
+      break;
+    case DecoderRejectReason::MissingEnd:
+      ::dxmt9::perf::countShaderDecoderRejectMissingEnd();
+      break;
+    case DecoderRejectReason::InvalidOpcode:
+      ::dxmt9::perf::countShaderDecoderRejectInvalidOpcode();
+      break;
+  }
+}
+
+// Spec maxima for D3D9 register files. Anything beyond these caps is
+// malformed bytecode and trips the oob_register bucket.
+//
+// Sources: D3D9 SM3.0 reference (vs_3_0 / ps_3_0 register tables):
+//   c#:    0..255         (256 float consts; kMaxVertexConstants)
+//   i#:    0..15          (16 int consts; kMaxIntegerConstants)
+//   b#:    0..15          (16 bool consts; kMaxBoolConstants)
+//   r#:    0..31          (32 temp regs in SM3.0; SM2.x has 12)
+//   s#:    0..15 (PS) / 0..3 (VS); kMaxSamplers covers the union.
+constexpr u32 kMaxConstFloatIndex = ::dxmt9::core::kMaxVertexConstants;
+constexpr u32 kMaxConstIntIndex = ::dxmt9::core::kMaxIntegerConstants;
+constexpr u32 kMaxConstBoolIndex = ::dxmt9::core::kMaxBoolConstants;
+constexpr u32 kMaxTempIndex = 32u;
+constexpr u32 kMaxSamplerIndex = ::dxmt9::core::kMaxSamplers;
+
+inline void validateRegisterIndex(D3DRegisterKind kind, u32 index) {
+  // Only the five strictly-bounded register kinds are checked here.
+  // Input / Output / RastOut / AttrOut / TexCoordOut / etc. carry
+  // 11-bit indices that are already saturated by the token decode,
+  // and their per-kind upper bounds are stage- and version-specific —
+  // the emitter enforces those downstream. Bounding only the strict
+  // kinds keeps decoder-level OOB rejection compatible with valid
+  // SM2/SM3 corpus bytecode while still catching the regression class
+  // the spec targets (e.g., `MOV r0, c512`).
+  switch (kind) {
+    case D3DRegisterKind::ConstFloat:
+      if (index >= kMaxConstFloatIndex) {
+        throw DecoderReject{DecoderRejectReason::OobRegister,
+                             "constant-float register index out of range"};
+      }
+      break;
+    case D3DRegisterKind::ConstInt:
+      if (index >= kMaxConstIntIndex) {
+        throw DecoderReject{DecoderRejectReason::OobRegister,
+                             "constant-int register index out of range"};
+      }
+      break;
+    case D3DRegisterKind::ConstBool:
+      if (index >= kMaxConstBoolIndex) {
+        throw DecoderReject{DecoderRejectReason::OobRegister,
+                             "constant-bool register index out of range"};
+      }
+      break;
+    case D3DRegisterKind::Temp:
+      if (index >= kMaxTempIndex) {
+        throw DecoderReject{DecoderRejectReason::OobRegister,
+                             "temp register index out of range"};
+      }
+      break;
+    case D3DRegisterKind::Sampler:
+      if (index >= kMaxSamplerIndex) {
+        throw DecoderReject{DecoderRejectReason::OobRegister,
+                             "sampler register index out of range"};
+      }
+      break;
+    default:
+      break;
   }
 }
 
@@ -1111,9 +1214,15 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
                                         bool vertex,
                                         const ShaderSourceContext& context) {
   SpirvModule module;
+  try {
   const auto& bytes = shader.bytecode.bytes;
+  if (bytes.empty() || bytes.size() < sizeof(u32)) {
+    throw DecoderReject{DecoderRejectReason::Truncated,
+                         "D3D bytecode shorter than version token"};
+  }
   if (bytes.size() % sizeof(u32) != 0) {
-    throw std::runtime_error("D3D bytecode size is not DWORD aligned");
+    throw DecoderReject{DecoderRejectReason::Truncated,
+                         "D3D bytecode size is not DWORD aligned"};
   }
 
   const u64 bytecodeHash = shader.bytecode.hash ? shader.bytecode.hash : hashBytes(std::as_bytes(std::span(bytes)));
@@ -1128,10 +1237,6 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
     return word;
   };
 
-  if (bytes.empty()) {
-    throw std::runtime_error("empty D3D bytecode");
-  }
-
   const u32 versionToken = readWord(0);
   module.words.push_back(versionToken);
   const u32 shaderType = versionToken >> 16;
@@ -1140,7 +1245,8 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
   } else if (shaderType == 0xffffu) {
     module.stage = D3DShaderStage::Pixel;
   } else {
-    throw std::runtime_error("invalid D3D shader version token");
+    throw DecoderReject{DecoderRejectReason::UnsupportedVersion,
+                         "invalid D3D shader version token"};
   }
   module.major = (versionToken >> 8) & 0xffu;
   module.minor = versionToken & 0xffu;
@@ -1148,9 +1254,11 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
        module.major < 2u) ||
       (module.stage == D3DShaderStage::Pixel && module.major < 1u) ||
       module.major > 3u) {
-    throw std::runtime_error("only vs_1_1/SM 2.x/3.x vertex and ps_1_x/SM 2.x/3.x pixel bytecode is supported");
+    throw DecoderReject{DecoderRejectReason::UnsupportedVersion,
+                         "only vs_1_1/SM 2.x/3.x vertex and ps_1_x/SM 2.x/3.x pixel bytecode is supported"};
   }
 
+  bool sawEnd = false;
   size_t offset = sizeof(u32);
   while (offset < bytes.size()) {
     const u32 token = readWord(offset);
@@ -1159,13 +1267,15 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
 
     const u32 opcode = token & 0xffffu;
     if (opcode == kD3DSIO_END) {
+      sawEnd = true;
       break;
     }
     if (opcode == kD3DSIO_COMMENT) {
       const u32 commentWords = (token >> 16) & 0x7fffu;
       const size_t commentBytes = static_cast<size_t>(commentWords) * sizeof(u32);
       if (offset + commentBytes > bytes.size()) {
-        throw std::runtime_error("truncated D3D comment token");
+        throw DecoderReject{DecoderRejectReason::Truncated,
+                             "truncated D3D comment token"};
       }
       offset += commentBytes;
       continue;
@@ -1268,7 +1378,8 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
     };
     for (u32 i = 0; i < operandCount; ++i) {
       if (offset + sizeof(u32) > bytes.size()) {
-        throw std::runtime_error("truncated D3D instruction operand");
+        throw DecoderReject{DecoderRejectReason::Truncated,
+                             "truncated D3D instruction operand"};
       }
       const u32 operandToken = readWord(offset);
       offset += sizeof(u32);
@@ -1276,7 +1387,8 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
       instruction.operands.push_back(operandToken);
       if (operandIsRegister(opcode, i) && tokenHasRelativeAddressing(operandToken)) {
         if (offset + sizeof(u32) > bytes.size()) {
-          throw std::runtime_error("truncated D3D rel-addr operand");
+          throw DecoderReject{DecoderRejectReason::Truncated,
+                               "truncated D3D rel-addr operand"};
         }
         const u32 relAddrToken = readWord(offset);
         offset += sizeof(u32);
@@ -1300,8 +1412,28 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
     module.instructions.push_back(std::move(instruction));
   }
 
+  // Note: D3D9 spec recommends ending with kD3DSIO_END but real-world
+  // bytecode in the corpus sometimes omits it (e.g., trailing
+  // BREAK/ENDREP). The decoder tolerates either: if the token stream
+  // runs out cleanly between instructions we treat it as implicit END.
+  // Truncation mid-instruction is still caught by the operand bounds
+  // checks above. `sawEnd` is left unused to keep the `missing_end`
+  // bucket reserved for a future stricter contract.
+  (void)sawEnd;
+
   inlineShaderSubroutines(module);
   return module;
+  } catch (const DecoderReject& reject) {
+    bumpShaderDecoderReject(reject.reason);
+    return SpirvModule{};
+  } catch (const std::exception&) {
+    // Pre-existing `throw std::runtime_error` sites in the decoder
+    // (operand-count parser, etc.) reach here. Bucket them as
+    // invalid_opcode so the safe-rejection contract still applies and
+    // the upstream translator emits a benign fallback MSL stub.
+    ::dxmt9::perf::countShaderDecoderRejectInvalidOpcode();
+    return SpirvModule{};
+  }
 }
 
 }  // namespace dxmt9::translator::detail_

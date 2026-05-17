@@ -265,6 +265,17 @@ struct Counters {
   std::atomic<std::uint64_t> prewarmFailureMissing{0};
   std::atomic<std::uint64_t> coldCompileCountAfterWarm{0};
   std::atomic<std::uint64_t> archiveBytes{0};
+  // D3DBC shader-decoder safe-rejection buckets (declarations in
+  // dxmt9_perf_counters.hpp). Each counter MUST be a healthy 0 on a
+  // passing probe — non-zero indicates a translator input regressed
+  // or a workload genuinely fed malformed bytecode. The contract is
+  // that a non-zero count here pairs with an empty SpirvModule +
+  // fallback MSL stub, never a process abort.
+  std::atomic<std::uint64_t> shaderDecoderRejectTruncated{0};
+  std::atomic<std::uint64_t> shaderDecoderRejectUnsupportedVersion{0};
+  std::atomic<std::uint64_t> shaderDecoderRejectOobRegister{0};
+  std::atomic<std::uint64_t> shaderDecoderRejectMissingEnd{0};
+  std::atomic<std::uint64_t> shaderDecoderRejectInvalidOpcode{0};
   std::atomic<std::uint64_t> renderPassLoadActionLoad{0};
   std::atomic<std::uint64_t> renderPassLoadActionClear{0};
   std::atomic<std::uint64_t> renderPassLoadActionDontCare{0};
@@ -566,7 +577,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 374> kCounterTable = {{
+constexpr std::array<CounterEntry, 379> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -758,6 +769,11 @@ constexpr std::array<CounterEntry, 374> kCounterTable = {{
     {"prewarm_failure_missing", CounterEntry::Kind::UnsignedCount, &Counters::prewarmFailureMissing, nullptr, nullptr, 0.0},
     {"cold_compile_count_after_warm", CounterEntry::Kind::UnsignedCount, &Counters::coldCompileCountAfterWarm, nullptr, nullptr, 0.0},
     {"archive_bytes", CounterEntry::Kind::UnsignedCount, &Counters::archiveBytes, nullptr, nullptr, 0.0},
+    {"shader_decoder_reject_truncated", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectTruncated, nullptr, nullptr, 0.0},
+    {"shader_decoder_reject_unsupported_version", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectUnsupportedVersion, nullptr, nullptr, 0.0},
+    {"shader_decoder_reject_oob_register", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectOobRegister, nullptr, nullptr, 0.0},
+    {"shader_decoder_reject_missing_end", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectMissingEnd, nullptr, nullptr, 0.0},
+    {"shader_decoder_reject_invalid_opcode", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectInvalidOpcode, nullptr, nullptr, 0.0},
     {"render_pass_load_action_load", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionLoad, nullptr, nullptr, 0.0},
     {"render_pass_load_action_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionClear, nullptr, nullptr, 0.0},
     {"render_pass_load_action_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionDontCare, nullptr, nullptr, 0.0},
@@ -1417,6 +1433,41 @@ void countColdCompileAfterWarm() {
 void countArchiveBytes(std::uint64_t bytes) {
   counters().archiveBytes.store(bytes, std::memory_order_relaxed);
 }
+
+// D3DBC bytecode safe-rejection — see dxmt9_perf_counters.hpp for the
+// reject-bucket taxonomy. These bumps fire from the shader decoder's
+// catch site (translateD3DBytecodeToSpirv in dxmt9_shader_decoder.cpp)
+// after a malformed-input check converts a parser failure into an
+// empty SpirvModule. None of these counters allocate; logging is at
+// trace level and gated by dxmt9::util::shouldLog.
+void countShaderDecoderRejectTruncated() {
+  add(counters().shaderDecoderRejectTruncated);
+}
+void countShaderDecoderRejectUnsupportedVersion() {
+  add(counters().shaderDecoderRejectUnsupportedVersion);
+}
+void countShaderDecoderRejectOobRegister() {
+  add(counters().shaderDecoderRejectOobRegister);
+}
+void countShaderDecoderRejectMissingEnd() {
+  add(counters().shaderDecoderRejectMissingEnd);
+}
+void countShaderDecoderRejectInvalidOpcode() {
+  add(counters().shaderDecoderRejectInvalidOpcode);
+}
+
+namespace test {
+ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects() {
+  const Counters& c = counters();
+  return ShaderDecoderRejectSnapshot{
+      load(c.shaderDecoderRejectTruncated),
+      load(c.shaderDecoderRejectUnsupportedVersion),
+      load(c.shaderDecoderRejectOobRegister),
+      load(c.shaderDecoderRejectMissingEnd),
+      load(c.shaderDecoderRejectInvalidOpcode),
+  };
+}
+}  // namespace test
 
 // WMTLoadAction: DontCare=0, Load=1, Clear=2 (winemetal.h).
 void countRenderPassLoadActionColor(std::uint32_t action) {

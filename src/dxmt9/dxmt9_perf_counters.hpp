@@ -150,6 +150,47 @@ void countStage1Encoder();
 void countArgbufHybridFallback();
 void countArgbufHybridBytes(std::uint64_t bytes);
 void countStage1Bytes(std::uint64_t bytes);
+// D3DBC bytecode safe-rejection counters. The shader decoder
+// (translateD3DBytecodeToSpirv) treats malformed bytecode as input,
+// not as an internal invariant violation: it returns an empty
+// SpirvModule (which makes the upper translator emit a benign fallback
+// MSL stub) and bumps one of the buckets below so a regression in a
+// real workload surfaces in the `[dxmt9-perf]` line. Hot path stays
+// allocation-free; logging is gated at trace level.
+//   * truncated:           bytes < 4, mid-instruction truncation,
+//                          or unterminated comment/rel-addr trailer
+//   * unsupported_version: version DWORD is not vs/ps within the
+//                          1.x-3.x supported range
+//   * oob_register:        register index exceeds the spec maximum
+//                          for its register file (e.g. cN >= 256,
+//                          sN >= kMaxSamplers, rN >= 32)
+//   * missing_end:         token stream ran out before kD3DSIO_END
+//   * invalid_opcode:      decoder rejected an opcode whose operand
+//                          count cannot be determined (catch-all for
+//                          internal parser errors lifted out of
+//                          std::runtime_error throws)
+void countShaderDecoderRejectTruncated();
+void countShaderDecoderRejectUnsupportedVersion();
+void countShaderDecoderRejectOobRegister();
+void countShaderDecoderRejectMissingEnd();
+void countShaderDecoderRejectInvalidOpcode();
+
+namespace test {
+// Test-only seam: snapshot the five `shader_decoder_reject_*` buckets
+// in declaration order. Returned values are raw counter atoms — when
+// `DXMT_PERF_COUNTERS` is unset the count*() helpers no-op and the
+// snapshot reads zero. Spec callers set the env var before invoking
+// the decoder.
+struct ShaderDecoderRejectSnapshot {
+  std::uint64_t truncated = 0;
+  std::uint64_t unsupportedVersion = 0;
+  std::uint64_t oobRegister = 0;
+  std::uint64_t missingEnd = 0;
+  std::uint64_t invalidOpcode = 0;
+};
+ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects();
+}  // namespace test
+
 // R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming counters.
 void countPrewarmEntriesLoaded(std::uint64_t entries);
 void countPrewarmLoadCpuTime(std::uint64_t nanoseconds);

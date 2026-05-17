@@ -70,6 +70,21 @@ test('dxmt9-core-shader-translator-spec-pixel-vflip-contract', core_shader_trans
 test('dxmt9-core-shader-translator-spec-vertex-yflip-contract', core_shader_translator_spec,
      env: dxmt9_native_test_env_vars + ['DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1', 'DXMT_DEBUG_FLIP_VERTEX_Y=1'])
 
+# Decoder safe-rejection spec — defense-in-depth on malformed D3DBC
+# bytecode input (truncated / unsupported version / OOB register /
+# missing END / invalid opcode). DXMT_PERF_COUNTERS=1 is required so
+# the count*() helpers are not no-ops during the snapshot deltas.
+shader_bytecode_validation_spec = executable(
+  'dxmt9-shader-bytecode-validation-spec',
+  'shader_bytecode_validation_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-shader-bytecode-validation-spec', shader_bytecode_validation_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1', 'DXMT_PERF_COUNTERS=1'])
+
 state_draw_transform_spec = executable(
   'dxmt9-state-draw-transform-spec',
   'state_draw_transform_spec.cpp',
