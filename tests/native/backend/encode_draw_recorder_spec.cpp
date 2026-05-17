@@ -466,7 +466,8 @@ void runEncodeDraw(Harness& harness,
                    const dxmt9::core::DrawParam& param,
                    const PreUploadedDrawData& preUploaded,
                    std::span<const std::uint8_t> arena,
-                   bool skipBaseStateBind = true) {
+                   bool skipBaseStateBind = true,
+                   bool argbufHybridMode = false) {
   auto ctx = makeContext(harness, recorder);
   WMT::CommandBuffer commandBuffer{};
   WMT::RenderCommandEncoder encoder{};
@@ -483,7 +484,9 @@ void runEncodeDraw(Harness& harness,
       &preUploaded,
       &param,
       arena,
-      &cleanDirty);
+      &cleanDirty,
+      /*tileFfpMode=*/false,
+      argbufHybridMode);
 
   check(encoded, "encodeDraw emits a draw");
 }
@@ -628,6 +631,47 @@ void testBaseStateRecorderCapturesRasterTextureSamplerOrdering() {
       WMTPrimitiveTypeTriangle,
       0u,
       3u);
+}
+
+void testArgbufModeSkipsStage1TextureSamplerShadowBinds() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kPipeline = 0x700000700000731ull;
+  constexpr obj_handle_t kDepthState = 0x700000700000732ull;
+  constexpr obj_handle_t kSampler = 0x700000700000733ull;
+  constexpr obj_handle_t kRenderTarget = 0x700000700000734ull;
+  constexpr obj_handle_t kTexture0 = 0x700000700000735ull;
+  constexpr obj_handle_t kBoundVertex = 0x700000700000736ull;
+
+  recorder.suppressBaseStateLookup = true;
+  recorder.renderPipelineState.handle = kPipeline;
+  recorder.depthStencilState.handle = kDepthState;
+  recorder.fragmentSamplerState.handle = kSampler;
+
+  auto state = makeProgrammableState(20u);
+  state.hot.colorAttachments[0].handle =
+      harness.createRenderTargetSurface(kRenderTarget, 640u, 480u);
+  state.hot.textures[0] = harness.createBoundTexture(kTexture0, 64u, 64u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 4096u);
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/false,
+                /*argbufHybridMode=*/true);
+
+  for (const auto& command : capture.commands) {
+    check(command.kind != RecordedKind::SetFragmentTexture,
+          "Stage 2 argbuf mode skips direct fragment texture binds");
+    check(command.kind != RecordedKind::SetFragmentSamplerState,
+          "Stage 2 argbuf mode skips direct fragment sampler binds");
+  }
 }
 
 void testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset() {
@@ -960,6 +1004,7 @@ void testUserVertexAndUserIndexOrdering() {
 int main() {
   try {
     testBaseStateRecorderCapturesRasterTextureSamplerOrdering();
+    testArgbufModeSkipsStage1TextureSamplerShadowBinds();
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
     testBoundVertexAndUserIndexOrdering();

@@ -42,6 +42,34 @@ std::uint16_t clampCount(std::uint16_t value, std::uint16_t limit) {
   return std::min(value, limit);
 }
 
+constexpr std::uint64_t kFloat4Bytes = 16u;
+constexpr std::uint64_t kInt4Bytes = 16u;
+constexpr std::uint64_t kBoolBytes = 4u;
+
+std::uint64_t constantUploadBytes(
+    ShaderConstantUploadPlan plan,
+    std::uint16_t maxFloatCount,
+    std::uint16_t maxIntCount,
+    std::uint64_t fullStructBytes) noexcept {
+  if (plan.fullStructRequired) {
+    return fullStructBytes;
+  }
+
+  const std::uint64_t floatEnd =
+      static_cast<std::uint64_t>(plan.floatCount) * kFloat4Bytes;
+  const std::uint64_t intBase =
+      static_cast<std::uint64_t>(maxFloatCount) * kFloat4Bytes;
+  const std::uint64_t intEnd = plan.intCount == 0
+      ? 0
+      : intBase + static_cast<std::uint64_t>(plan.intCount) * kInt4Bytes;
+  const std::uint64_t boolBase =
+      intBase + static_cast<std::uint64_t>(maxIntCount) * kInt4Bytes;
+  const std::uint64_t boolEnd = plan.boolCount == 0
+      ? 0
+      : boolBase + static_cast<std::uint64_t>(plan.boolCount) * kBoolBytes;
+  return std::max({floatEnd, intEnd, boolEnd});
+}
+
 ShaderConstantUploadPlan makeConstantUploadPlan(
     std::uint16_t dirtyFloatCount,
     std::uint16_t dirtyIntCount,
@@ -175,6 +203,26 @@ ShaderConstantUploadPlan makePsConstantUploadPlan(
       static_cast<std::uint16_t>(core::kMaxPixelConstants),
       static_cast<std::uint16_t>(core::kMaxIntegerConstants),
       static_cast<std::uint16_t>(core::kMaxBoolConstants));
+}
+
+std::uint64_t vsConstantUploadBytes(ShaderConstantUploadPlan plan) noexcept {
+  return constantUploadBytes(
+      plan,
+      static_cast<std::uint16_t>(core::kMaxVertexConstants),
+      static_cast<std::uint16_t>(core::kMaxIntegerConstants),
+      static_cast<std::uint64_t>(core::kMaxVertexConstants) * kFloat4Bytes +
+          static_cast<std::uint64_t>(core::kMaxIntegerConstants) * kInt4Bytes +
+          static_cast<std::uint64_t>(core::kMaxBoolConstants) * kBoolBytes);
+}
+
+std::uint64_t psConstantUploadBytes(ShaderConstantUploadPlan plan) noexcept {
+  return constantUploadBytes(
+      plan,
+      static_cast<std::uint16_t>(core::kMaxPixelConstants),
+      static_cast<std::uint16_t>(core::kMaxIntegerConstants),
+      static_cast<std::uint64_t>(core::kMaxPixelConstants) * kFloat4Bytes +
+          static_cast<std::uint64_t>(core::kMaxIntegerConstants) * kInt4Bytes +
+          static_cast<std::uint64_t>(core::kMaxBoolConstants) * kBoolBytes);
 }
 
 }  // namespace dxmt9::uniform

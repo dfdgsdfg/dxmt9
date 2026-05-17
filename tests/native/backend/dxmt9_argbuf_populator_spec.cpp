@@ -233,6 +233,25 @@ void testDirtyBytesEstimateVsAny() {
           "VsF dirty => sizeof(VsConsts) bytes");
 }
 
+void testDirtyBytesEstimateUsesShaderUsageRangeForVsPs() {
+  dxmt9::uniform::DirtyState s{};
+  dxmt9::uniform::applyConstantSetVsF(s, 2, 2);
+  dxmt9::uniform::applyConstantSetPsF(s, 1, 1);
+
+  dxmt9::uniform::ShaderConstantUsageBounds vsUsage{};
+  vsUsage.unknown = false;
+  vsUsage.floatCount = 6;
+  dxmt9::uniform::ShaderConstantUsageBounds psUsage{};
+  psUsage.unknown = false;
+  psUsage.floatCount = 3;
+
+  const std::uint64_t expected =
+      6u * 16u + 3u * 16u;
+  checkEq(dxmt9::argbuf_hybrid::dirtyBytesEstimate(s, vsUsage, psUsage),
+          expected,
+          "known fixed shader usage shrinks Stage 2 VS/PS constant byte estimate");
+}
+
 void testDirtyBytesEstimatePsAny() {
   dxmt9::uniform::DirtyState s{};
   dxmt9::uniform::setBit(s, dxmt9::uniform::DirtyBit::PsB);
@@ -407,6 +426,7 @@ int main() {
     testEncoderResourceAlignmentFloor();
     testDirtyBytesEstimateEmpty();
     testDirtyBytesEstimateVsAny();
+    testDirtyBytesEstimateUsesShaderUsageRangeForVsPs();
     testDirtyBytesEstimatePsAny();
     testDirtyBytesEstimateFfpVsAny();
     testDirtyBytesEstimateFfpPsAny();

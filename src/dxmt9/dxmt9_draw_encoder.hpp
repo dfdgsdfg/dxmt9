@@ -227,8 +227,7 @@ bool encodeDraw(EncodeContext& ctx,
                  // dirty consume path rewrites the matching argbuf
                  // sub-regions (via argbuf_hybrid::updateDirtyArgbufRegions)
                  // while the Stage 2 PSO reads slot 30. Direct slot 0 / 3
-                 // binds may still be mirrored for Stage 1 observability,
-                 // but they are not load-bearing for Stage 2 shaders.
+                 // Stage 1 shadow binds are skipped in this mode.
                  // DrawVolatile (slot 5) and the vertex stream (slot 1)
                  // are unchanged in either mode (design.md §11.2).
                  bool argbufHybridMode = false);

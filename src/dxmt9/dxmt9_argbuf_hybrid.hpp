@@ -183,6 +183,9 @@ struct ArgbufRecorder {
 //     `perf::countArgbufHybridBytes`
 //   - the populator spec to verify "no dirty bits ⇒ 0 bytes".
 u64 dirtyBytesEstimate(const uniform::DirtyState& dirty) noexcept;
+u64 dirtyBytesEstimate(const uniform::DirtyState& dirty,
+                       uniform::ShaderConstantUsageBounds vsUsage,
+                       uniform::ShaderConstantUsageBounds psUsage) noexcept;
 
 // R-BACK-12.24 — open a per-encoder argbuf. Reserves
 // `encoderResource.encodedLength()` bytes from the queue's transient
@@ -248,6 +251,14 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               ArgbufEncoderResource& encoderResource,
                               core::FlatDrawStateView state,
                               const uniform::DirtyState& dirty,
+                              std::uint64_t seqId,
+                              const ArgbufRecorder* recorder = nullptr);
+u64 updateDirtyArgbufRegions(CommandQueue& queue,
+                              ArgbufEncoderResource& encoderResource,
+                              core::FlatDrawStateView state,
+                              const uniform::DirtyState& dirty,
+                              uniform::ShaderConstantUsageBounds vsUsage,
+                              uniform::ShaderConstantUsageBounds psUsage,
                               std::uint64_t seqId,
                               const ArgbufRecorder* recorder = nullptr);
 

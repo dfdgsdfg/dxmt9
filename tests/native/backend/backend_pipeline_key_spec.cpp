@@ -398,6 +398,31 @@ void testShaderVariantKeyCarriesSourceIdentity() {
         "actual tile source hash changes key hash");
 }
 
+void testShaderVariantProbeKeyDropsOnlyActualSourceHashes() {
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x4444u;
+  desc.pixelShader.hash = 0x8888u;
+
+  auto sourceBacked = makeVariantKey(makeFlatDrawFixture(desc));
+  sourceBacked.vertexSourceHash = 0x1111222233334444ull;
+  sourceBacked.fragmentSourceHash = 0x5555666677778888ull;
+  sourceBacked.tileSourceHash = 0x9999aaaabbbbccccull;
+  sourceBacked.argbufHybridMode = true;
+  sourceBacked.sampleCount = 4u;
+
+  auto expectedProbe = sourceBacked;
+  expectedProbe.vertexSourceHash = 0;
+  expectedProbe.fragmentSourceHash = 0;
+  expectedProbe.tileSourceHash = 0;
+
+  const auto probe = dxmt9::pipeline::makeShaderVariantProbeKey(sourceBacked);
+  check(probe == expectedProbe,
+        "probe key preserves canonical variant fields and drops only actual source hashes");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(probe) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(sourceBacked),
+        "probe and source-backed keys occupy distinct hash identities");
+}
+
 void testContainedDrawShaderSourcesCarryActualSourceHashes() {
   DrawDesc desc{};
   desc.vertexShader.hash = 0x1001u;
@@ -558,6 +583,7 @@ int main() {
     testFvfLayoutHashIsDeterministicAndResponsive();
     testShaderVariantKeyHashRespondsToLayoutAndBlendState();
     testShaderVariantKeyCarriesSourceIdentity();
+    testShaderVariantProbeKeyDropsOnlyActualSourceHashes();
     testContainedDrawShaderSourcesCarryActualSourceHashes();
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();

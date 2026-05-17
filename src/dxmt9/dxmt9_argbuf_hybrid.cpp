@@ -110,12 +110,9 @@ void ArgbufEncoderResource::initForTest(u64 encodedLength, u64 alignment) noexce
 
 namespace {
 
-// Bytes the encoder rewrites for the four per-frequency categories.
-// Pinned to the Stage 1 host-struct sizes so Stage 2's argbuf-bytes
-// counter is apples-to-apples with Stage 1's per-frequency-bytes
-// counter (design.md §11.5 regression-compare contract).
-constexpr u64 kVsConstsBytes = sizeof(state::VsConsts);
-constexpr u64 kPsConstsBytes = sizeof(state::PsConsts);
+// Bytes the encoder rewrites for fixed-function categories. Shader constant
+// categories use uniform::ShaderConstantUploadPlan so known fixed ranges may
+// upload only the MSL-visible struct prefix they can read.
 constexpr u64 kFfpVsBytes    = sizeof(state::FfpVsConsts);
 constexpr u64 kFfpPsBytes    = sizeof(state::FfpPsConsts);
 
@@ -188,9 +185,22 @@ void recordedSetSamplerState(ArgbufEncoderResource& encoderResource,
 }  // namespace
 
 u64 dirtyBytesEstimate(const uniform::DirtyState& dirty) noexcept {
+  uniform::ShaderConstantUsageBounds unknown{};
+  return dirtyBytesEstimate(dirty, unknown, unknown);
+}
+
+u64 dirtyBytesEstimate(const uniform::DirtyState& dirty,
+                       uniform::ShaderConstantUsageBounds vsUsage,
+                       uniform::ShaderConstantUsageBounds psUsage) noexcept {
   u64 bytes = 0;
-  if (uniform::anyDirty(dirty, uniform::kVsAny))    bytes += kVsConstsBytes;
-  if (uniform::anyDirty(dirty, uniform::kPsAny))    bytes += kPsConstsBytes;
+  if (uniform::anyDirty(dirty, uniform::kVsAny)) {
+    bytes += uniform::vsConstantUploadBytes(
+        uniform::makeVsConstantUploadPlan(dirty, vsUsage));
+  }
+  if (uniform::anyDirty(dirty, uniform::kPsAny)) {
+    bytes += uniform::psConstantUploadBytes(
+        uniform::makePsConstantUploadPlan(dirty, psUsage));
+  }
   if (uniform::anyDirty(dirty, uniform::kFfpVsAny)) bytes += kFfpVsBytes;
   if (uniform::anyDirty(dirty, uniform::kFfpPsAny)) bytes += kFfpPsBytes;
   return bytes;
@@ -235,17 +245,30 @@ template <typename HostStruct>
 u64 uploadAndPointEntry(CommandQueue& queue,
                          ArgbufEncoderResource& encoderResource,
                          const HostStruct& host,
+                         std::size_t byteCount,
                          u32 argbufIdx,
                          u64 seqId,
                          const ArgbufRecorder* recorder) {
+  if (byteCount == 0) return 0;
   auto slice = queue.uploadTransientBuffer(
       std::span<const std::byte>(
-          reinterpret_cast<const std::byte*>(&host), sizeof(HostStruct)),
+          reinterpret_cast<const std::byte*>(&host), byteCount),
       alignof(HostStruct), seqId);
   if (!slice) return 0;
   recordedSetBuffer(encoderResource, slice.buffer, slice.offset, argbufIdx,
                     recorder);
-  return sizeof(HostStruct);
+  return byteCount;
+}
+
+template <typename HostStruct>
+u64 uploadAndPointEntry(CommandQueue& queue,
+                         ArgbufEncoderResource& encoderResource,
+                         const HostStruct& host,
+                         u32 argbufIdx,
+                         u64 seqId,
+                         const ArgbufRecorder* recorder) {
+  return uploadAndPointEntry(
+      queue, encoderResource, host, sizeof(HostStruct), argbufIdx, seqId, recorder);
 }
 
 }  // namespace
@@ -325,11 +348,27 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
                               const uniform::DirtyState& dirty,
                               std::uint64_t seqId,
                               const ArgbufRecorder* recorder) {
+  uniform::ShaderConstantUsageBounds unknown{};
+  return updateDirtyArgbufRegions(
+      queue, encoderResource, state, dirty, unknown, unknown, seqId, recorder);
+}
+
+u64 updateDirtyArgbufRegions(CommandQueue& queue,
+                              ArgbufEncoderResource& encoderResource,
+                              core::FlatDrawStateView state,
+                              const uniform::DirtyState& dirty,
+                              uniform::ShaderConstantUsageBounds vsUsage,
+                              uniform::ShaderConstantUsageBounds psUsage,
+                              std::uint64_t seqId,
+                              const ArgbufRecorder* recorder) {
   if (!encoderResource.initialized()) return 0;
   u64 bytes = 0;
   if (uniform::anyDirty(dirty, uniform::kVsAny)) {
     const auto vs = state::buildVsConsts(state);
+    const auto plan = uniform::makeVsConstantUploadPlan(dirty, vsUsage);
     bytes += uploadAndPointEntry(queue, encoderResource, vs,
+                                  static_cast<std::size_t>(
+                                      uniform::vsConstantUploadBytes(plan)),
                                   kVsConstsArgbufIdx, seqId, recorder);
   }
   if (uniform::anyDirty(dirty, uniform::kFfpVsAny)) {
@@ -339,7 +378,10 @@ u64 updateDirtyArgbufRegions(CommandQueue& queue,
   }
   if (uniform::anyDirty(dirty, uniform::kPsAny)) {
     const auto ps = state::buildPsConsts(state);
+    const auto plan = uniform::makePsConstantUploadPlan(dirty, psUsage);
     bytes += uploadAndPointEntry(queue, encoderResource, ps,
+                                  static_cast<std::size_t>(
+                                      uniform::psConstantUploadBytes(plan)),
                                   kPsConstsArgbufIdx, seqId, recorder);
   }
   if (uniform::anyDirty(dirty, uniform::kFfpPsAny)) {

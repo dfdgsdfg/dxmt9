@@ -92,6 +92,13 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
       envFlag("DXMT_DEBUG_FFP_ALPHA"));
 }
 
+ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept {
+  key.vertexSourceHash = 0;
+  key.fragmentSourceHash = 0;
+  key.tileSourceHash = 0;
+  return key;
+}
+
 std::optional<detail::DrawShaderSources>
 detail::makeContainedDrawShaderSources(const drawshader::ShaderSourceContext& shaderSource,
                                        u64 variantHash) {
@@ -398,6 +405,17 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
                                 WMT::Reference<WMT::BinaryArchive>* archive,
                                 const std::string* archivePath) {
   (void)archivePath;
+  const ShaderVariantKey probeKey = makeShaderVariantProbeKey(key);
+  {
+    std::lock_guard lock(mutex);
+    if (auto probe = this->drawProbe.find(probeKey); probe != this->drawProbe.end()) {
+      if (auto it = this->draw.find(probe->second); it != this->draw.end()) {
+        perf::countPipelineCacheHit(perf::PipelineKind::Draw);
+        return it->second.future;
+      }
+    }
+  }
+
   ShaderVariantKey sourceKey = key;
   // R-BACK-13.3 / 13.6: when the variant key carries tile_ffp_mode = true
   // the cache builds an MTLTileRenderPipelineState via
@@ -430,6 +448,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
 
     std::lock_guard lock(mutex);
     if (auto it = this->draw.find(sourceKey); it != this->draw.end()) {
+      this->drawProbe[probeKey] = sourceKey;
       perf::countPipelineCacheHit(perf::PipelineKind::Draw);
       return it->second.future;
     }
@@ -477,6 +496,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
         });
     auto shared = future.share();
     this->draw.emplace(sourceKey, Entry{shared});
+    this->drawProbe[probeKey] = sourceKey;
     return shared;
   }
   auto sources = detail::makeContainedDrawShaderSources(shaderSource, key.hash);
@@ -488,6 +508,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
   {
     std::lock_guard lock(mutex);
     if (auto it = this->draw.find(sourceKey); it != this->draw.end()) {
+      this->drawProbe[probeKey] = sourceKey;
       perf::countPipelineCacheHit(perf::PipelineKind::Draw);
       return it->second.future;
     }
@@ -555,6 +576,7 @@ Cache::getOrBuildDrawPipeline(WMT::Reference<WMT::Device> device,
         });
     auto shared = future.share();
     this->draw.emplace(sourceKey, Entry{shared});
+    this->drawProbe[probeKey] = sourceKey;
     return shared;
   }
 }

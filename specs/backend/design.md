@@ -504,7 +504,150 @@ The `MTLDepthStencilState` cache is separate and keyed by the DSS key (depth +
 stencil compare/write state). DSS creation is cheap; the cache prevents redundant
 object allocation.
 
-### 5.1 Cache Prewarm From `MTLBinaryArchive`
+### 5.1 Data-oriented Draw-Key Refinement
+
+The draw hot path is a value pipeline:
+
+```mermaid
+flowchart LR
+    D3D["D3D9 state + bytecode + draw params"]
+    FLAT["FlatDrawStateRecord\nFlatDrawStateView"]
+    CANON["Canonical draw key\nstate/resource/shader hashes\nsource-affecting versions/env"]
+    SOURCE["MSL source generation\nVS/FS/tile text"]
+    FINAL["Source-backed PSO key\ncanonical key + actual MSL hashes"]
+    PSO["PSO cache\nfinal key -> shared_future<MTLRenderPipelineState>"]
+    PACKET["DrawBindingPacketPlan\ntexture/sampler slots\nextra streams\nraster state"]
+    RESOLVE["Live resource resolution\nPool lookup + retained WMT handles"]
+    ENCODE["Metal encoder calls"]
+
+    D3D --> FLAT --> CANON
+    CANON --> SOURCE --> FINAL --> PSO
+    FLAT --> PACKET --> RESOLVE --> ENCODE
+    PSO --> ENCODE
+```
+
+This shape is correct but still pays source-generation CPU cost before proving
+that the final source-backed key is already warm. The target cache shape keeps
+the final source hash in the authoritative PSO key while adding a fast index
+from canonical inputs to the known final key:
+
+```mermaid
+flowchart TD
+    DRAW["FlatDrawStateView + shader layout"]
+    PROBE["CanonicalPsoProbeKey\nbytecode/FFP hash\nvariant bits\nsource version/env\nRT/blend/sample formats"]
+    IDX{"probe index hit?"}
+    FINAL_HIT["Final SourceBackedPsoKey\npreviously published"]
+    PSO_LOOKUP{"PSO cache hit?"}
+    USE["Use cached PSO\n(no MSL generation)"]
+    GEN["Generate MSL source\nonly on probe miss or invalidation"]
+    HASH["Hash actual source\nvertex/fragment/tile"]
+    FINAL_NEW["Build SourceBackedPsoKey"]
+    COMPILE["Compile PSO future"]
+    PUBLISH["Publish:\nprobe -> final key\nfinal key -> future"]
+
+    DRAW --> PROBE --> IDX
+    IDX -->|yes| FINAL_HIT --> PSO_LOOKUP
+    PSO_LOOKUP -->|yes| USE
+    PSO_LOOKUP -->|no; cache evicted or cold archive| COMPILE
+    IDX -->|no| GEN --> HASH --> FINAL_NEW --> PSO_LOOKUP
+    COMPILE --> PUBLISH --> USE
+    FINAL_NEW --> PUBLISH
+```
+
+The probe key is not authoritative for correctness; it is only an index. The
+final key remains source-backed, so emitter drift, debug source toggles, and tile
+vs fragment source differences cannot alias to a stale PSO.
+
+### 5.2 Uniform Range Upload Target
+
+The current dirty tracker records high-water ranges and exposes
+`ShaderConstantUploadPlan`, but the live ABI still binds full `VsConsts` and
+`PsConsts` structs. The target keeps the full MSL-visible struct ABI while making
+host writes range-aware:
+
+```mermaid
+flowchart TD
+    DEC["Shader decode / IR scan"]
+    USAGE["ShaderConstantUsageBounds\nfloat/int/bool counts\nindexed flags\nunknown flag"]
+    DIRTY["DirtyState\ncategory bits + maxChanged ranges"]
+    PLAN["ShaderConstantUploadPlan\ncount = max(usage, dirty)\nfullStructRequired if indexed/unknown"]
+    FULL["Full struct rebuild/upload\ncurrent safe path"]
+    RANGE["Range update into full-size backing\ncopy only used/dirty prefix"]
+    ABI["MSL-visible ABI unchanged\nconstant VsConsts*/PsConsts*"]
+    ARG["Stage 1 slot 0/3 bind\nor Stage 2 argbuf id 0/2 pointer"]
+
+    DEC --> USAGE
+    DIRTY --> PLAN
+    USAGE --> PLAN
+    PLAN -->|"unknown or indexed"| FULL --> ABI
+    PLAN -->|"known fixed ranges"| RANGE --> ABI
+    ABI --> ARG
+```
+
+Range upload therefore does not require slicing shader-visible structs or
+changing generated MSL. It requires exporting shader constant-usage metadata to
+the draw/cache boundary and replacing transient full-struct rebuilds with a
+full-size backing buffer whose dirty byte ranges can be updated independently.
+
+### 5.3 Binding Packet Resolution Target
+
+`DrawBindingPacketPlan` is intentionally value-only. Live Metal handles stay
+behind the resource pool because they depend on rename rings, texture view
+selection, sampler creation, and sequence-id retention:
+
+```mermaid
+flowchart LR
+    HOT["FlatDrawStateRecord"]
+    DECL["VertexDeclSnapshot"]
+    PARAM["ParamView"]
+    PLAN["DrawBindingPacketPlan\nslot numbers, handles, offsets,\nraster/scissor/cull values"]
+    POOL["ResourcePool resolver\nBuffer/Texture/Surface lookup"]
+    SAMPLER["Sampler cache/build\nSamplerSnapshot -> WMT::SamplerState"]
+    RETAIN["CommandQueue retention\nseqId lifetime fence"]
+    CALLS["Encoder binding calls\nset*Buffer/Texture/Sampler\nsetViewport/setScissor/setCull"]
+
+    HOT --> PLAN
+    DECL --> PLAN
+    PARAM --> PLAN
+    PLAN --> POOL --> RETAIN --> CALLS
+    PLAN --> SAMPLER --> RETAIN
+    PLAN --> CALLS
+```
+
+The next refinement is a resolved packet scoped to the encoder call, not to the
+canonical draw state. That packet may carry live WMT handles only after the pool
+has retained or otherwise proven their lifetime for the draw's sequence id.
+
+### 5.4 Argbuf Stage 2 Texture-bound Draw Target
+
+Stage 2 currently prioritizes uniform-only draws while texture-bound draws can
+fall back to Stage 1. The target path moves texture/sampler descriptor
+population under the same packet boundary and promotes the selector once
+shader-runner equality is established:
+
+```mermaid
+flowchart TD
+    SEL["selectArgbufHybridForPass"]
+    TEX{"texture-bound draw?"}
+    S1["Stage 1 fallback\ncurrent safe texture path"]
+    PLAN["DrawBindingPacketPlan\ntexture/sampler handles + states"]
+    ARGPOP["populateResourceBindings\ntexture type range + sampler ids"]
+    S2MSL["Stage 2 MSL\nabuf->textures2d/cube/3d[N]\nabuf->samplers[N]"]
+    READBACK["shader-runner readback equality\nStage 1 == Stage 2"]
+    PROMOTE["Allow texture-bound Stage 2\nremove texture fallback gate"]
+
+    SEL --> TEX
+    TEX -->|yes; until equality evidence| S1
+    TEX -->|yes; target| PLAN --> ARGPOP --> S2MSL --> READBACK --> PROMOTE
+    TEX -->|no| PROMOTE
+```
+
+The promotion gate is evidence-driven: deterministic descriptor tests are
+necessary, but texture-bound Stage 2 should not become the default until live
+GPU readback proves sampling equality across representative 2D, cube, 3D,
+sRGB, mip, and sampler-state cases.
+
+### 5.5 Cache Prewarm From `MTLBinaryArchive`
 
 Prewarming populates PSO and shader-function caches at device init by
 deserializing entries already present in the on-disk `MTLBinaryArchive`,

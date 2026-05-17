@@ -741,6 +741,20 @@ std::vector<u32> makePs30PositionInputBytecode() {
   };
 }
 
+std::vector<u32> makePs30VFaceBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(0u),
+      makeDstToken(kD3DSPR_MISCTYPE, 1),
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_MISCTYPE, 1),
+      kD3DSIO_END,
+  };
+}
+
 std::vector<u32> makePs30MissingInputBytecode() {
   using namespace dxmt9::d3d9bc;
   return {
@@ -1285,6 +1299,32 @@ void testD3DBCDecodeAndClassificationFixtures() {
                 "D3DBC register classification maps addr register type to input kind in pixel shaders");
   checkEqual(translator_test::tokenHasRelativeAddressingForTest(makeRelativeDstToken(kD3DSPR_TEMP, 0)), true,
              "D3DBC operand decode classifies relative-addressing tokens");
+}
+
+void testPs30VFaceDecodeAndCurrentSourceContract() {
+  using namespace dxmt9::d3d9bc;
+  namespace translator_test = dxmt9::translator::test;
+
+  DrawDesc desc{};
+  const auto module = translator_test::decodeD3DBytecodeForTest(
+      makeShader(makePs30VFaceBytecode()), false, desc);
+
+  checkEqual(module.stage, D3DShaderStage::Pixel, "ps_3_0 vFace decode preserves pixel stage");
+  checkEqual(module.instructions.size(), size_t{2}, "ps_3_0 vFace decode keeps DCL and MOV");
+  checkRegister(translator_test::decodeRegisterRefForTest(module.instructions[0].operands[1], module.stage),
+                D3DRegisterKind::MiscType, 1u,
+                "ps_3_0 dcl vFace decodes as misc register one");
+  checkRegister(translator_test::decodeRegisterRefForTest(module.instructions[1].operands[1], module.stage),
+                D3DRegisterKind::MiscType, 1u,
+                "ps_3_0 vFace source decodes as misc register one");
+
+  const auto source = translatePixel(makePs30VFaceBytecode());
+  checkContains(source, "vFace", "ps_3_0 vFace operand is preserved in source comments");
+  checkContains(source, "// mov oC0, vFace", "ps_3_0 vFace source is preserved in source comments");
+  checkContains(source, "outColor[0] = float4(0.0f);",
+                "ps_3_0 vFace currently lowers through the misc fallback instead of a facing input");
+  checkNotContains(source, "[[front_facing]]",
+                   "ps_3_0 vFace runtime readback is blocked until the fragment signature carries facing");
 }
 
 void testLegacyShaderModelDecodeContracts() {
@@ -2084,6 +2124,7 @@ int main() {
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
 
     testD3DBCDecodeAndClassificationFixtures();
+    testPs30VFaceDecodeAndCurrentSourceContract();
     testLegacyShaderModelDecodeContracts();
     testPs30PredicatedInstructionLowersGuard();
     testD3DOpcodeNamesCoverUnsupportedSurface();

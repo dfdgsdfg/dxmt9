@@ -991,6 +991,8 @@ std::optional<TextureStageSetup> parseDxmt9TextureStage(std::string_view line) {
       stage.states[TSS_ALPHA_ARG1] = parseTextureStageArg(value);
     } else if (key == "alphaarg2") {
       stage.states[TSS_ALPHA_ARG2] = parseTextureStageArg(value);
+    } else if (key == "resultarg") {
+      stage.states[TSS_RESULT_ARG] = parseTextureStageArg(value);
     } else if (key == "texcoordindex") {
       stage.states[TSS_TEXCOORD_INDEX] = parseU32Value(value);
     } else if (key == "texturetransform" || key == "texturetransformflags") {
@@ -1263,6 +1265,9 @@ bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
       sawState = true;
     } else if (key == "blendopalpha" || key == "blendoperationalpha") {
       test.renderStateSetups.push_back({RS_BLEND_OP_ALPHA, parseBlendOp(value)});
+      sawState = true;
+    } else if (key == "texturefactor" || key == "tfactor") {
+      test.renderStateSetups.push_back({RS_TEXTURE_FACTOR, parseU32Value(value)});
       sawState = true;
     } else if (key == "scissor" || key == "scissortest" ||
                key == "scissortestenable" || key == "scissortestenabled") {

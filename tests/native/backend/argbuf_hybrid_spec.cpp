@@ -110,7 +110,7 @@ void testSelectorFallsBackForTextureBoundDraws() {
       dxmt9::pipeline::selectArgbufHybridForPass(view, /*argbufHybridEnabled=*/true);
   checkEq(static_cast<int>(decision),
           static_cast<int>(dxmt9::pipeline::ArgbufHybridDecision::Stage1),
-          "texture-bound draws stay on Stage 1 until Stage 2 texture evidence is stable");
+          "texture-bound draws stay on Stage 1 until Stage 2 texture equality is stable");
 }
 
 // ---------------------------------------------------------------------

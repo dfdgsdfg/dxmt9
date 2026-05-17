@@ -133,4 +133,10 @@ ShaderConstantUploadPlan makePsConstantUploadPlan(
     const DirtyState& state,
     ShaderConstantUsageBounds usage);
 
+// Byte prefix required by the current MSL-visible VsConsts/PsConsts ABI.
+// Fixed-range plans may upload only the prefix that reaches the last used
+// member. Unknown or indexed plans return the full host-struct size.
+std::uint64_t vsConstantUploadBytes(ShaderConstantUploadPlan plan) noexcept;
+std::uint64_t psConstantUploadBytes(ShaderConstantUploadPlan plan) noexcept;
+
 }  // namespace dxmt9::uniform

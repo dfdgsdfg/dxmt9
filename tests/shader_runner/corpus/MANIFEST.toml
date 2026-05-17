@@ -1281,3 +1281,231 @@ models = ["ps_3_0", "vs_2_0"]
 opcodes = ["DCL", "DEF", "MOV", "MOVA"]
 oracle = "Wine d3d9 visual.c test_mova behavior, reduced to SM2 MOVA relative constant color readback"
 oracle-date = "2026-05-17"
+
+[[test]]
+file = "legacy_sm1/dxmt9_ps11_texcoord_tex_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_1"]
+opcodes = ["MOV", "TEX", "TEXCOORD"]
+oracle = "math-derivation"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "legacy_sm1/dxmt9_ps12_texcoord_tex_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_2"]
+opcodes = ["MOV", "TEX", "TEXCOORD"]
+oracle = "math-derivation"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "legacy_sm1/dxmt9_ps13_texcoord_tex_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_3"]
+opcodes = ["MOV", "TEX", "TEXCOORD"]
+oracle = "math-derivation"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "legacy_sm1/dxmt9_ps14_texcrd_texld_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_4"]
+opcodes = ["MOV", "TEX", "TEXCOORD"]
+oracle = "math-derivation"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "legacy_sm1/dxmt9_vs11_const_color_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_1_1", "ps_3_0"]
+opcodes = ["DCL", "DEF", "MOV"]
+oracle = "Wine d3d9 visual.c vs_1_1 shader behavior, reduced to oPos/oD0 runtime readback"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_ffp_texture_transform_projected_count3_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_texture_transform_flags behavior, reduced to D3DTTFF_COUNT3 | D3DTTFF_PROJECTED"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_ffp_texture_transform_projected_count4_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_texture_transform_flags behavior, reduced to D3DTTFF_COUNT4 | D3DTTFF_PROJECTED"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_mip_texldl_level2_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "DEF", "MOV", "TEXLDL"]
+oracle = "Wine d3d9 visual.c texture_mipmaps_test and maxmip_test behavior, reduced to explicit TEXLDL level 2 sampling"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "render_state/dxmt9_ffp_fog_exp_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c fog_test behavior, reduced to EXP table-fog readback"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "render_state/dxmt9_depth_func_greater_rejects_near_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp", "ps_2_0"]
+opcodes = ["DEF", "MOV"]
+oracle = "Wine d3d9 visual.c zwriteenable_test/depth-state behavior, reduced to depth-read compare readback"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "render_state/dxmt9_cull_none_keeps_clockwise_triangle.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "Wine d3d9 visual.c vface_register_test/culling behavior, reduced to cull-none orientation readback"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "render_state/dxmt9_alpha_depth_color_mask_combined_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp", "ps_2_0"]
+opcodes = ["ALPHA_TEST", "DEF", "MOV"]
+oracle = "Wine d3d9 visual.c alphatest_test and depth/render-state interaction, reduced to combined readback"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "ffp/dxmt9_ffp_vertex_blend_3weights_outside_probe.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c test_vertex_blending behavior, reduced to a 3-weight FFP transform and outside readback probe"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "ffp/dxmt9_ffp_vertex_blend_indexed_outside_probe.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c test_indexed_vertex_blending behavior, reduced to indexed palette selection and outside readback probes"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "vs_specific/dxmt9_vs_multistream_texcoord1_offset_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "Wine d3d9 visual.c stream_test and test_vshader_input behavior, reduced to stream-1 texcoord1 declaration offset readback"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "vs_specific/dxmt9_vs_skinned_triangle_edge_regression.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "M4x3", "MUL", "MOV"]
+oracle = "Wine d3d9 visual.c vertex pipeline skinning behavior, reduced to SHORT4N blend-weight stream readback and edge probes"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_resultarg_temp_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c tssargtemp_test behavior, reduced to RESULTARG TEMP handoff"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_tfactor_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_blending_ops behavior, reduced to D3DTA_TFACTOR readback"
+oracle-date = "2026-05-17"
+
+[[test]]
+file = "vs_specific/dxmt9_positiont_diffuse_varying_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "Wine d3d9 visual.c pretransformed_varying_test behavior, reduced to XYZRHW diffuse varying readback"
+oracle-date = "2026-05-17"

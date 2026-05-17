@@ -113,6 +113,12 @@ struct ShaderVariantKeyHash {
   std::size_t operator()(const ShaderVariantKey& key) const noexcept;
 };
 
+// Canonical probe key used as a fast index into a previously published
+// source-backed PSO key. The returned key deliberately drops actual MSL source
+// hashes; it is never authoritative for correctness and only avoids source
+// generation when it maps to an existing final key in Cache::draw.
+ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept;
+
 // Stable value transform for source-affecting debug flags. Kept public so
 // native tests can verify the key shape without mutating process env.
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
@@ -172,6 +178,7 @@ struct Entry {
 };
 
 using PipelineMap = std::unordered_map<ShaderVariantKey, Entry, ShaderVariantKeyHash>;
+using DrawProbeMap = std::unordered_map<ShaderVariantKey, ShaderVariantKey, ShaderVariantKeyHash>;
 using DepthMap =
     std::unordered_map<DepthStencilKey, WMT::Reference<WMT::DepthStencilState>, DepthStencilKeyHash>;
 
@@ -243,6 +250,7 @@ class Cache {
 
   std::mutex mutex{};
   PipelineMap draw{};
+  DrawProbeMap drawProbe{};
   PipelineMap fill{};
   PipelineMap stretch{};
   DepthMap depth{};

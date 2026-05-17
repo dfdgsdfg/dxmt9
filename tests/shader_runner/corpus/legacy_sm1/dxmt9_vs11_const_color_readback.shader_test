@@ -1,0 +1,27 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c vs_1_1 shader behavior, reduced to oPos/oD0 runtime readback
+; oracle-date: 2026-05-17
+
+[vertex shader d3dbc-hex]
+fffe0101
+05000051 a00f0000 00000000 3f800000 00000000 3f800000
+02000001 c00f0000 90e40000
+02000001 d00f0000 a0e40000
+0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300
+0200001f 8000000a 900f0000
+02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-draw-vs-color-triangle
+expect-source vertex contains "outPosition = vin[0];"
+expect-source vertex contains "outColor = cFloat[0];"
+probe (32, 32) rgba(0.0, 1.0, 0.0, 1.0) 1

@@ -1349,11 +1349,9 @@ bool encodeDraw(EncodeContext& ctx,
   //
   // When the encoder is on the argbuf-hybrid path AND any per-frequency
   // bit is dirty, mirror the dirty regions into the argbuf so the cbuf
-  // [[id(0..3)]] entries point at fresh transient slabs. The Stage 1
-  // slot 0 / slot 3 binds below STILL run unmodified — the
-  // Stage 2 shaders dereference these cbuf entries through slot 30; the
-  // direct slot 0 / slot 3 binds below are retained as harmless Stage 1
-  // compatibility shadowing while the backend keeps both paths observable.
+  // [[id(0..3)]] entries point at fresh transient slabs. Stage 2 shaders
+  // dereference these cbuf entries through slot 30, so the direct slot 0 /
+  // slot 3 Stage 1 binds below are skipped once the argbuf owns the data.
   if (argbufHybridMode) {
     const auto bytes = dxmt9::argbuf_hybrid::updateDirtyArgbufRegions(
         ctx.queue, ctx.queue.argbufEncoderResource(), drawState, *dirtyPtr,
@@ -1361,13 +1359,13 @@ bool encodeDraw(EncodeContext& ctx,
     if (bytes != 0) {
       perf::countArgbufHybridBytes(bytes);
     }
-    // Do NOT clear the dirty bits here — the direct binding loop below
-    // still consumes them so Stage 1-observable slot 0 / slot 3 mirrors
-    // remain consistent with the Stage 2 argbuf entries.
+    const auto argbufConsumedBits = static_cast<std::uint16_t>(
+        uniform::kVsAny | uniform::kPsAny | uniform::kFfpVsAny | uniform::kFfpPsAny);
+    uniform::clearBits(*dirtyPtr, argbufConsumedBits);
   }
   {
     PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
-    if (uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
+    if (!argbufHybridMode && uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
       VsConsts vs = buildVsConsts(drawState);
       auto slice = uploadTransientBuffer(&vs, sizeof(VsConsts), alignof(VsConsts));
       if (slice) {
@@ -1377,7 +1375,7 @@ bool encodeDraw(EncodeContext& ctx,
         uniform::clearBits(*dirtyPtr, uniform::kVsAny);
       }
     }
-    if (uniform::anyDirty(*dirtyPtr, uniform::kPsAny)) {
+    if (!argbufHybridMode && uniform::anyDirty(*dirtyPtr, uniform::kPsAny)) {
       PsConsts ps = buildPsConsts(drawState);
       auto slice = uploadTransientBuffer(&ps, sizeof(PsConsts), alignof(PsConsts));
       if (slice) {
@@ -1389,7 +1387,7 @@ bool encodeDraw(EncodeContext& ctx,
         uniform::clearBits(*dirtyPtr, uniform::kPsAny);
       }
     }
-    if (uniform::anyDirty(*dirtyPtr, uniform::kFfpPsAny)) {
+    if (!argbufHybridMode && uniform::anyDirty(*dirtyPtr, uniform::kFfpPsAny)) {
       FfpPsConsts ffpPs = buildFfpPsConsts(drawState);
       auto slice = uploadTransientBuffer(&ffpPs, sizeof(FfpPsConsts), alignof(FfpPsConsts));
       if (slice) {
@@ -1423,10 +1421,12 @@ bool encodeDraw(EncodeContext& ctx,
       if (argbufHybridMode) {
         dxmt9::argbuf_hybrid::pointFfpVsAtSlice(
             ctx.queue.argbufEncoderResource(), slice.buffer, slice.offset);
+        perf::countArgbufHybridBytes(sizeof(FfpVsConsts));
+      } else {
+        recordedSetVertexBuffer(ctx, encoder, slice.buffer, slice.offset, 3);
+        countUniformBufferBinds(1);
+        perf::countUniformFfpVs(sizeof(FfpVsConsts));
       }
-      recordedSetVertexBuffer(ctx, encoder, slice.buffer, slice.offset, 3);
-      countUniformBufferBinds(1);
-      perf::countUniformFfpVs(sizeof(FfpVsConsts));
       uniform::clearBits(*dirtyPtr, uniform::kFfpVsAny);
       ffpVsBound = true;
     }
@@ -1984,49 +1984,51 @@ bool encodeDraw(EncodeContext& ctx,
       dxmt9::argbuf_hybrid::populateResourceBindings(
           ctx.device, ctx.pool, ctx.queue.argbufEncoderResource(), drawState);
     }
-    for (const auto& binding : bindingPacket.fragmentTextureSamplers) {
-      const auto stage = binding.stage;
-      const auto textureHandle = binding.texture;
-      if (const u64 skipped = debug::skippedTextureHandle();
-          skipped != 0ull && textureHandle.value == skipped) {
-        if (traceEncode || debug::shouldTraceTexture(textureHandle)) {
-          std::ostringstream out;
-          out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
-              << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
-              << " tex" << stage << "=" << static_cast<unsigned long long>(textureHandle.value);
-          emitQueueTraceLine(out.str());
+    if (!argbufHybridMode) {
+      for (const auto& binding : bindingPacket.fragmentTextureSamplers) {
+        const auto stage = binding.stage;
+        const auto textureHandle = binding.texture;
+        if (const u64 skipped = debug::skippedTextureHandle();
+            skipped != 0ull && textureHandle.value == skipped) {
+          if (traceEncode || debug::shouldTraceTexture(textureHandle)) {
+            std::ostringstream out;
+            out << "[dxmt9-debug] skip draw seq=" << static_cast<unsigned long long>(seqId)
+                << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
+                << " tex" << stage << "=" << static_cast<unsigned long long>(textureHandle.value);
+            emitQueueTraceLine(out.str());
+          }
+          return false;
         }
-        return false;
-      }
-      if (auto* texture = ctx.pool.findTexture(textureHandle.value); texture && texture->texture) {
-        if (debug::shouldTraceTexture(textureHandle)) {
-          std::ostringstream out;
-          out << "[dxmt9-texture] bind stage=" << stage
-              << " handle=0x" << std::hex << textureHandle.value << std::dec
-              << " format=" << static_cast<unsigned>(texture->desc.format)
-              << " size=" << texture->desc.width << "x" << texture->desc.height
-              << " levels=" << texture->desc.levels;
-          emitTextureTraceLine(out.str());
+        if (auto* texture = ctx.pool.findTexture(textureHandle.value); texture && texture->texture) {
+          if (debug::shouldTraceTexture(textureHandle)) {
+            std::ostringstream out;
+            out << "[dxmt9-texture] bind stage=" << stage
+                << " handle=0x" << std::hex << textureHandle.value << std::dec
+                << " format=" << static_cast<unsigned>(texture->desc.format)
+                << " size=" << texture->desc.width << "x" << texture->desc.height
+                << " levels=" << texture->desc.levels;
+            emitTextureTraceLine(out.str());
+          }
+          const bool srgbTexture =
+              core::flatStateOr(hot.samplerStates[stage], core::SAMP_SRGB_TEXTURE, 0u) != 0;
+          recordedSetFragmentTexture(ctx, encoder,
+                                     resources::textureForShaderRead(*texture, srgbTexture),
+                                     static_cast<std::uint8_t>(stage));
+          countTextureBind();
         }
-        const bool srgbTexture =
-            core::flatStateOr(hot.samplerStates[stage], core::SAMP_SRGB_TEXTURE, 0u) != 0;
-        recordedSetFragmentTexture(ctx, encoder,
-                                   resources::textureForShaderRead(*texture, srgbTexture),
-                                   static_cast<std::uint8_t>(stage));
-        countTextureBind();
-      }
-      WMT::Reference<WMT::SamplerState> samplerRef;
-      WMT::SamplerState sampler{};
-      if (suppressBaseStateLookup(ctx)) {
-        sampler = ctx.drawRecorder->fragmentSamplerState;
-      } else {
-        samplerRef = makeSampler(ctx.device, binding.samplerStates);
-        sampler = WMT::SamplerState{samplerRef.handle};
-      }
-      if (sampler) {
-        recordedSetFragmentSamplerState(ctx, encoder, sampler,
-                                        static_cast<std::uint8_t>(stage));
-        countSamplerBind();
+        WMT::Reference<WMT::SamplerState> samplerRef;
+        WMT::SamplerState sampler{};
+        if (suppressBaseStateLookup(ctx)) {
+          sampler = ctx.drawRecorder->fragmentSamplerState;
+        } else {
+          samplerRef = makeSampler(ctx.device, binding.samplerStates);
+          sampler = WMT::SamplerState{samplerRef.handle};
+        }
+        if (sampler) {
+          recordedSetFragmentSamplerState(ctx, encoder, sampler,
+                                          static_cast<std::uint8_t>(stage));
+          countSamplerBind();
+        }
       }
     }
   }
