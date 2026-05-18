@@ -444,6 +444,137 @@ done:
 
 /*
  * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_get_adapter_displaymode_ex()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_ex_adapter_display_mode_null_rotation(const struct d3d9_api *api)
+{
+    IDirect3D9Ex *d3d9ex;
+    IDirect3D9 *d3d9 = NULL;
+    D3DDISPLAYMODEEX mode_ex;
+    D3DDISPLAYMODE mode;
+    UINT adapter_count;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    adapter_count = IDirect3D9Ex_GetAdapterCount(d3d9ex);
+    if (!adapter_count)
+    {
+        skip_current_test("no adapters available");
+        goto done;
+    }
+
+    hr = IDirect3D9Ex_QueryInterface(d3d9ex, &IID_IDirect3D9,
+            (void **)&d3d9);
+    CHECK_HR(hr, S_OK);
+    if (FAILED(hr))
+        goto done;
+
+    memset(&mode, 0, sizeof(mode));
+    hr = IDirect3D9_GetAdapterDisplayMode(d3d9, D3DADAPTER_DEFAULT, &mode);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done;
+
+    memset(&mode_ex, 0, sizeof(mode_ex));
+    mode_ex.Size = sizeof(mode_ex);
+    hr = IDirect3D9Ex_GetAdapterDisplayModeEx(d3d9ex, D3DADAPTER_DEFAULT,
+            &mode_ex, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(mode_ex.Size == sizeof(mode_ex));
+        CHECK_TRUE(mode_ex.Width == mode.Width);
+        CHECK_TRUE(mode_ex.Height == mode.Height);
+        CHECK_TRUE(mode_ex.RefreshRate == mode.RefreshRate);
+        CHECK_TRUE(mode_ex.Format == mode.Format);
+        CHECK_TRUE(mode_ex.ScanLineOrdering != 0);
+    }
+
+done:
+    if (d3d9)
+        IDirect3D9_Release(d3d9);
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_reset_ex()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_ex_adapter_mode_enum_bounds(const struct d3d9_api *api)
+{
+    D3DDISPLAYMODEFILTER filter;
+    D3DDISPLAYMODEEX current;
+    D3DDISPLAYMODEEX mode;
+    IDirect3D9Ex *d3d9ex;
+    UINT adapter_count;
+    UINT mode_count;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    adapter_count = IDirect3D9Ex_GetAdapterCount(d3d9ex);
+    if (!adapter_count)
+    {
+        skip_current_test("no adapters available");
+        goto done;
+    }
+
+    memset(&current, 0, sizeof(current));
+    current.Size = sizeof(current);
+    hr = IDirect3D9Ex_GetAdapterDisplayModeEx(d3d9ex, D3DADAPTER_DEFAULT,
+            &current, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done;
+
+    memset(&filter, 0, sizeof(filter));
+    filter.Size = sizeof(filter);
+    filter.Format = current.Format;
+    mode_count = IDirect3D9Ex_GetAdapterModeCountEx(d3d9ex,
+            D3DADAPTER_DEFAULT, &filter);
+    CHECK_TRUE(mode_count > 0);
+    CHECK_TRUE(IDirect3D9Ex_GetAdapterModeCountEx(d3d9ex, adapter_count,
+            &filter) == 0);
+    if (!mode_count)
+        goto done;
+
+    memset(&mode, 0, sizeof(mode));
+    mode.Size = sizeof(mode);
+    hr = IDirect3D9Ex_EnumAdapterModesEx(d3d9ex, D3DADAPTER_DEFAULT,
+            &filter, 0, &mode);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(mode.Size == sizeof(mode));
+        CHECK_TRUE(mode.Width > 0);
+        CHECK_TRUE(mode.Height > 0);
+        CHECK_TRUE(mode.Format == filter.Format);
+        CHECK_TRUE(mode.ScanLineOrdering != 0);
+    }
+
+    memset(&mode, 0, sizeof(mode));
+    mode.Size = sizeof(mode);
+    CHECK_HR(IDirect3D9Ex_EnumAdapterModesEx(d3d9ex, D3DADAPTER_DEFAULT,
+            &filter, mode_count, &mode), D3DERR_INVALIDCALL);
+
+    memset(&mode, 0, sizeof(mode));
+    mode.Size = sizeof(mode);
+    CHECK_HR(IDirect3D9Ex_EnumAdapterModesEx(d3d9ex, adapter_count, &filter,
+            0, &mode), D3DERR_INVALIDCALL);
+
+done:
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
  * function: test_swapchain_get_displaymode_ex()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

@@ -156,6 +156,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_swapchain.c"
+function = "test_ex_adapter_display_mode_null_rotation"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_get_adapter_displaymode_ex"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-display"
+owner = "core/factory"
+requirements = ["R-TEST-12.4"]
+acceptance = ["GetAdapterDisplayModeEx accepts a null rotation out-pointer while preserving the base display-mode fields and ScanLineOrdering"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_ex_adapter_mode_enum_bounds"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_reset_ex"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-display"
+owner = "core/factory"
+requirements = ["R-TEST-12.4"]
+acceptance = ["GetAdapterModeCountEx and EnumAdapterModesEx preserve filter format, reject invalid adapters, and reject out-of-range mode indices"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
 function = "test_ex_swapchain_display_mode"
 source = "wine/dlls/d3d9/tests/d3d9ex.c:test_swapchain_get_displaymode_ex"
 source_kind = "behavioral-oracle"

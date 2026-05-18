@@ -360,6 +360,8 @@ void test_multi_adapter(const struct d3d9_api *api);
 
 void test_display_mode_ex_size_filter_smoke(const struct d3d9_api *api);
 void test_ex_adapter_luid_display_mode(const struct d3d9_api *api);
+void test_ex_adapter_display_mode_null_rotation(const struct d3d9_api *api);
+void test_ex_adapter_mode_enum_bounds(const struct d3d9_api *api);
 void test_ex_swapchain_display_mode(const struct d3d9_api *api);
 void test_ex_frame_latency_state(const struct d3d9_api *api);
 void test_present_parameter_validation(const struct d3d9_api *api);
