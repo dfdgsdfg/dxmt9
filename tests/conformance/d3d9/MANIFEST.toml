@@ -1299,6 +1299,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_index_buffer_desc_binding_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_surface_blocks"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["index-buffer GetDesc exposes Wine-compatible type, format, usage, pool, and size metadata; valid buffers lock and bind through SetIndices/GetIndices while scratch-pool creation is rejected"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_vertex_buffer_desc_binding_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_surface_blocks"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["vertex-buffer GetDesc exposes Wine-compatible type, FVF, usage, pool, and size metadata; valid buffers lock and bind through SetStreamSource/GetStreamSource while scratch-pool creation is rejected"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_texture_surface_container_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_surface_get_container"
 source_kind = "behavioral-oracle"

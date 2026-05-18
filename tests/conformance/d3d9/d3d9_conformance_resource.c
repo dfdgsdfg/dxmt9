@@ -2063,6 +2063,238 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_surface_blocks()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_index_buffer_desc_binding_policy(const struct d3d9_api *api)
+{
+    IDirect3DIndexBuffer9 *index_buffer = NULL;
+    IDirect3DIndexBuffer9 *current = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DINDEXBUFFER_DESC desc;
+    IDirect3D9 *d3d9;
+    void *data = NULL;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateIndexBuffer(device, 32, 0,
+            D3DFMT_INDEX16, D3DPOOL_SYSTEMMEM, &index_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DIndexBuffer9_GetDesc(index_buffer, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_INDEXBUFFER);
+            CHECK_TRUE(desc.Format == D3DFMT_INDEX16);
+            CHECK_TRUE(desc.Usage == 0);
+            CHECK_TRUE(desc.Pool == D3DPOOL_SYSTEMMEM);
+            CHECK_TRUE(desc.Size == 32);
+        }
+
+        CHECK_HR(IDirect3DIndexBuffer9_Lock(index_buffer, 0, 0, &data, 0),
+                D3D_OK);
+        CHECK_TRUE(data != NULL);
+        CHECK_HR(IDirect3DIndexBuffer9_Unlock(index_buffer), D3D_OK);
+
+        CHECK_HR(IDirect3DDevice9_SetIndices(device, index_buffer), D3D_OK);
+        hr = IDirect3DDevice9_GetIndices(device, &current);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(current == index_buffer);
+        if (current)
+        {
+            IDirect3DIndexBuffer9_Release(current);
+            current = NULL;
+        }
+
+        CHECK_HR(IDirect3DDevice9_SetIndices(device, NULL), D3D_OK);
+        current = (IDirect3DIndexBuffer9 *)0xdeadbeef;
+        hr = IDirect3DDevice9_GetIndices(device, &current);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(current == NULL);
+
+        IDirect3DIndexBuffer9_Release(index_buffer);
+        index_buffer = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateIndexBuffer(device, 64, D3DUSAGE_DYNAMIC,
+            D3DFMT_INDEX32, D3DPOOL_DEFAULT, &index_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DIndexBuffer9_GetDesc(index_buffer, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_INDEXBUFFER);
+            CHECK_TRUE(desc.Format == D3DFMT_INDEX32);
+            CHECK_TRUE(desc.Usage == D3DUSAGE_DYNAMIC);
+            CHECK_TRUE(desc.Pool == D3DPOOL_DEFAULT);
+            CHECK_TRUE(desc.Size == 64);
+        }
+
+        data = NULL;
+        CHECK_HR(IDirect3DIndexBuffer9_Lock(index_buffer, 0, 0, &data,
+                D3DLOCK_DISCARD), D3D_OK);
+        CHECK_TRUE(data != NULL);
+        CHECK_HR(IDirect3DIndexBuffer9_Unlock(index_buffer), D3D_OK);
+        IDirect3DIndexBuffer9_Release(index_buffer);
+        index_buffer = NULL;
+    }
+
+    index_buffer = (IDirect3DIndexBuffer9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_CreateIndexBuffer(device, 16, 0,
+            D3DFMT_INDEX16, D3DPOOL_SCRATCH, &index_buffer, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(index_buffer == NULL);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_surface_blocks()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_vertex_buffer_desc_binding_policy(const struct d3d9_api *api)
+{
+    const DWORD fvf = D3DFVF_XYZ | D3DFVF_DIFFUSE;
+    IDirect3DVertexBuffer9 *vertex_buffer = NULL;
+    IDirect3DVertexBuffer9 *current = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DVERTEXBUFFER_DESC desc;
+    IDirect3D9 *d3d9;
+    UINT offset;
+    UINT stride;
+    void *data = NULL;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 48,
+            D3DUSAGE_DYNAMIC, fvf, D3DPOOL_DEFAULT, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DVertexBuffer9_GetDesc(vertex_buffer, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_VERTEXBUFFER);
+            CHECK_TRUE(desc.FVF == fvf);
+            CHECK_TRUE(desc.Usage == D3DUSAGE_DYNAMIC);
+            CHECK_TRUE(desc.Pool == D3DPOOL_DEFAULT);
+            CHECK_TRUE(desc.Size == 48);
+        }
+
+        CHECK_HR(IDirect3DVertexBuffer9_Lock(vertex_buffer, 0, 0, &data,
+                D3DLOCK_DISCARD), D3D_OK);
+        CHECK_TRUE(data != NULL);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(vertex_buffer), D3D_OK);
+
+        CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0,
+                vertex_buffer, 4, 16), D3D_OK);
+        current = NULL;
+        offset = 0xdeadbeef;
+        stride = 0xdeadbeef;
+        hr = IDirect3DDevice9_GetStreamSource(device, 0, &current,
+                &offset, &stride);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(current == vertex_buffer);
+            CHECK_TRUE(offset == 4);
+            CHECK_TRUE(stride == 16);
+            if (current)
+                IDirect3DVertexBuffer9_Release(current);
+        }
+
+        CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, NULL, 0, 0),
+                D3D_OK);
+        IDirect3DVertexBuffer9_Release(vertex_buffer);
+        vertex_buffer = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 32, 0, 0,
+            D3DPOOL_SYSTEMMEM, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DVertexBuffer9_GetDesc(vertex_buffer, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_VERTEXBUFFER);
+            CHECK_TRUE(desc.FVF == 0);
+            CHECK_TRUE(desc.Usage == 0);
+            CHECK_TRUE(desc.Pool == D3DPOOL_SYSTEMMEM);
+            CHECK_TRUE(desc.Size == 32);
+        }
+
+        data = NULL;
+        CHECK_HR(IDirect3DVertexBuffer9_Lock(vertex_buffer, 0, 0, &data, 0),
+                D3D_OK);
+        CHECK_TRUE(data != NULL);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(vertex_buffer), D3D_OK);
+        IDirect3DVertexBuffer9_Release(vertex_buffer);
+        vertex_buffer = NULL;
+    }
+
+    vertex_buffer = (IDirect3DVertexBuffer9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 16, 0, 0,
+            D3DPOOL_SCRATCH, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(vertex_buffer == NULL);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_surface_get_container()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

@@ -398,6 +398,8 @@ void test_texture_auto_mipmap_level_count(const struct d3d9_api *api);
 void test_texture_autogen_filter_level_policy(const struct d3d9_api *api);
 void test_surface_format_null_policy(const struct d3d9_api *api);
 void test_resource_type(const struct d3d9_api *api);
+void test_index_buffer_desc_binding_policy(const struct d3d9_api *api);
+void test_vertex_buffer_desc_binding_policy(const struct d3d9_api *api);
 void test_texture_surface_container_policy(const struct d3d9_api *api);
 void test_cube_texture_level_surface_policy(const struct d3d9_api *api);
 void test_volume_resource_container_desc(const struct d3d9_api *api);
