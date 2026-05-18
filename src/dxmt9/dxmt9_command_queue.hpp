@@ -149,6 +149,16 @@ class CommandQueue {
   void submitStretchRect(const core::StretchRectDesc& desc);
   void submitReadback(const core::ReadbackDesc& desc);
   void submitColorFill(const core::ColorFillDesc& desc);
+  // submitPresent / presentBoundary are the present surface today; any
+  // future PresenterSlot registry (CommandQueue-owned table mapping a
+  // PresentId → Presenter* with slot reuse + per-slot generation counter,
+  // mirroring detail::HandleArena in dxmt9_resource_pool.hpp) must
+  // preserve the ABA-safety invariants formally proven in
+  // specs/verification/tla/PresentIdAba.tla (StaleResolvesNull,
+  // NoCrossSlotAlias, GenerationMonotone, EventualReclaim). The TLA+ model
+  // documents the assumption that the production generation domain
+  // (24-bit in HandleArena, 32-bit in the forward-looking PresenterSlot
+  // design) never wraps within the lifetime of any outstanding id.
   std::uint64_t submitPresent(const core::SwapDesc& desc);
   void presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency);
   void submitFlush();

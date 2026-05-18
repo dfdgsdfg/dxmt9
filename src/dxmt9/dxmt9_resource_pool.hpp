@@ -144,6 +144,14 @@ enum class ResourceHandleKind : u64 {
   Surface = 3,
 };
 
+// Slot-reuse + per-slot 24-bit generation handle arena. The ABA-safety
+// invariants of this pattern (a stale handle whose slot has been
+// re-occupied resolves to nullptr rather than aliasing onto the new
+// record) are formally proven in
+// specs/verification/tla/PresentIdAba.tla — StaleResolvesNull,
+// NoCrossSlotAlias, GenerationMonotone, EventualReclaim. The spec
+// documents the boundedness assumption that the 24-bit generation
+// counter never wraps during the lifetime of any outstanding handle.
 template <typename Record, ResourceHandleKind Kind>
 class HandleArena {
  public:
