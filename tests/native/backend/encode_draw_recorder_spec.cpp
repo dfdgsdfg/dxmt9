@@ -965,6 +965,112 @@ void testProgrammableVsBindsExtraBoundStreamBeforeDraw() {
       6u);
 }
 
+void testIndexedProgrammableDrawPreservesSparseStreamOffsets() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kStream0 = 0x5200005200007a0ull;
+  constexpr obj_handle_t kStream2 = 0x6200006200008b2ull;
+  constexpr obj_handle_t kIndexBuffer = 0x7200007200009c3ull;
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  auto state = makeProgrammableState(20u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kStream0, 8192u);
+  state.hot.streamBuffers[2] = harness.createBoundBuffer(kStream2, 8192u);
+  state.hot.streamOffsets[0] = 64u;
+  state.hot.streamOffsets[2] = 192u;
+  state.hot.streamStrides[2] = 12u;
+  state.hot.indexBuffer = harness.createBoundBuffer(kIndexBuffer, 4096u);
+  state.shaderLayout.vertexDecl.elements = {
+      dxmt9::core::VertexElement{0, 0, kD3DDeclTypeFloat3,
+                                 kD3DDeclMethodDefault,
+                                 kD3DDeclUsagePosition, 0},
+      dxmt9::core::VertexElement{2, 0, kD3DDeclTypeFloat2,
+                                 kD3DDeclMethodDefault,
+                                 kD3DDeclUsageTexcoord, 0},
+  };
+  state.shaderLayout.vertexDecl.streams[2].stride = 12u;
+
+  std::array<std::uint8_t, 1> arena{};
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 2u;
+  param.startVertex = 9u;
+  param.baseVertexIndex = -2;
+  param.startIndex = 5u;
+  param.indexType = IndexType::UInt32;
+  param.indexed = true;
+
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena);
+
+  checkEq(capture.commands.size(), std::size_t{4},
+          "indexed sparse-stream draw command count");
+
+  const auto& stream0 = commandAt(capture, 0,
+                                  "missing indexed stream0 bind");
+  check(stream0.kind == RecordedKind::SetVertexBuffer,
+        "first indexed command binds stream0");
+  checkEq(stream0.bufferHandle, kStream0, "indexed stream0 buffer source");
+  checkEq(stream0.offset, std::uint64_t{64},
+          "indexed stream0 keeps bound offset");
+  checkEq(static_cast<unsigned>(stream0.index), 1u,
+          "indexed stream0 binds to Metal slot 1");
+
+  const auto& stream2 = commandAt(capture, 1,
+                                  "missing indexed sparse stream2 bind");
+  check(stream2.kind == RecordedKind::SetVertexBuffer,
+        "second indexed command binds sparse stream2");
+  checkEq(stream2.bufferHandle, kStream2,
+          "indexed sparse stream2 buffer source");
+  checkEq(stream2.offset, std::uint64_t{192},
+          "indexed sparse stream2 keeps bound offset");
+  checkEq(static_cast<unsigned>(stream2.index), 7u,
+          "indexed sparse stream2 binds to generated extra Metal slot");
+
+  const auto& volCommand =
+      commandAt(capture, 2, "missing indexed sparse-stream DrawVolatile");
+  check(volCommand.kind == RecordedKind::SetVertexBytes,
+        "third indexed command pushes DrawVolatile");
+  checkEq(static_cast<unsigned>(volCommand.index), 5u,
+          "indexed DrawVolatile binds before draw");
+  const auto vol = volatileBytes(volCommand);
+  checkEq(vol.vertexBaseIndex, std::int32_t{-2},
+          "indexed DrawVolatile carries base vertex");
+  checkEq(vol.vertexStreamOffset, std::uint32_t{0},
+          "indexed DrawVolatile stream offset");
+  checkEq(vol.vertexStreamStride, std::uint32_t{20},
+          "indexed DrawVolatile primary stream stride");
+  checkEq(vol._pad, std::uint32_t{0}, "indexed DrawVolatile pad");
+
+  const auto& draw = commandAt(capture, 3,
+                               "missing indexed sparse-stream draw");
+  check(draw.kind == RecordedKind::DrawIndexedPrimitives,
+        "fourth indexed command is drawIndexedPrimitives");
+  checkEq(static_cast<unsigned>(draw.primitiveType),
+          static_cast<unsigned>(WMTPrimitiveTypeTriangle),
+          "indexed sparse-stream primitive type");
+  checkEq(static_cast<unsigned>(draw.indexType),
+          static_cast<unsigned>(WMTIndexTypeUInt32),
+          "indexed sparse-stream index type");
+  checkEq(draw.count, std::uint64_t{6}, "indexed sparse-stream index count");
+  checkEq(draw.bufferHandle, kIndexBuffer,
+          "indexed sparse-stream index buffer source");
+  checkEq(draw.offset, std::uint64_t{20},
+          "indexed sparse-stream startIndex becomes UInt32 byte offset");
+  checkEq(draw.instanceCount, std::uint32_t{1},
+          "indexed sparse-stream instance count");
+  checkEq(draw.baseVertex, std::int32_t{0},
+          "Metal draw base vertex stays zero; shader uses DrawVolatile");
+  checkEq(draw.baseInstance, std::uint32_t{0},
+          "indexed sparse-stream base instance");
+}
+
 void testBoundVertexAndUserIndexOrdering() {
   Harness harness;
   Capture capture;
@@ -1163,6 +1269,7 @@ int main() {
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
     testNonIndexedPrimitiveTopologyVertexCounts();
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
+    testIndexedProgrammableDrawPreservesSparseStreamOffsets();
     testBoundVertexAndUserIndexOrdering();
     testBoundVertexAndBoundIndexOrdering();
     testUserVertexAndUserIndexOrdering();
