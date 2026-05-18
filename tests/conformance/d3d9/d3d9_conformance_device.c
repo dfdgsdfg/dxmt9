@@ -1557,6 +1557,151 @@ done_d3d9:
     IDirect3D9_Release(d3d9);
 }
 
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * functions: test_filter(), srgbtexture_test(), unbound_sampler_test()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_sampler_state_edges(const struct d3d9_api *api)
+{
+    static const struct
+    {
+        D3DSAMPLERSTATETYPE state;
+        DWORD value;
+    } cases[] =
+    {
+        {D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP},
+        {D3DSAMP_ADDRESSV, D3DTADDRESS_BORDER},
+        {D3DSAMP_MAGFILTER, D3DTEXF_POINT},
+        {D3DSAMP_MINFILTER, D3DTEXF_LINEAR},
+        {D3DSAMP_MIPFILTER, D3DTEXF_NONE},
+        {D3DSAMP_SRGBTEXTURE, TRUE},
+        {D3DSAMP_ELEMENTINDEX, 0},
+        {D3DSAMP_DMAPOFFSET, 0},
+    };
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    DWORD value;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    value = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetSamplerState(device, 0, D3DSAMP_ADDRESSU,
+            &value);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(value != 0xdeadbeef);
+
+    for (i = 0; i < ARRAY_SIZE(cases); ++i)
+    {
+        CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0,
+                cases[i].state, cases[i].value), D3D_OK);
+        value = 0xdeadbeef;
+        hr = IDirect3DDevice9_GetSamplerState(device, 0, cases[i].state,
+                &value);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(value == cases[i].value);
+    }
+
+    CHECK_HR(IDirect3DDevice9_GetSamplerState(device, 0,
+            D3DSAMP_ADDRESSU, NULL), D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lights()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_light_enable_state(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DLIGHT9 light;
+    D3DCAPS9 caps;
+    BOOL enabled;
+    HWND window;
+    DWORD slot;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    slot = caps.MaxActiveLights ? caps.MaxActiveLights - 1 : 0;
+
+    memset(&light, 0, sizeof(light));
+    light.Type = D3DLIGHT_DIRECTIONAL;
+    light.Diffuse.r = 1.0f;
+    light.Diffuse.g = 0.5f;
+    light.Diffuse.b = 0.25f;
+    light.Direction.z = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetLight(device, slot, &light), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetLight(device, slot, NULL),
+            D3DERR_INVALIDCALL);
+
+    enabled = TRUE;
+    hr = IDirect3DDevice9_GetLightEnable(device, slot, &enabled);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(enabled == FALSE);
+
+    CHECK_HR(IDirect3DDevice9_LightEnable(device, slot, TRUE), D3D_OK);
+    enabled = FALSE;
+    hr = IDirect3DDevice9_GetLightEnable(device, slot, &enabled);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(enabled == TRUE);
+
+    CHECK_HR(IDirect3DDevice9_LightEnable(device, slot, FALSE), D3D_OK);
+    enabled = TRUE;
+    hr = IDirect3DDevice9_GetLightEnable(device, slot, &enabled);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(enabled == FALSE);
+
+    CHECK_HR(IDirect3DDevice9_GetLightEnable(device, slot, NULL),
+            D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
 static void check_fpu_create_flags(IDirect3D9 *d3d9, HWND window, DWORD flags)
 {
     D3DDEVICE_CREATION_PARAMETERS creation;

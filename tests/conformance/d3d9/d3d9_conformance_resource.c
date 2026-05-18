@@ -1665,6 +1665,82 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_update_texture_pool()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_update_texture_pool_copy_2d(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *dst_default = NULL;
+    IDirect3DTexture9 *src_system = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &src_system, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &dst_default, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_src;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DTexture9_LockRect(src_system, 0, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        DWORD *pixels = locked.pBits;
+        pixels[0] = 0x11223344;
+        pixels[1] = 0x55667788;
+        CHECK_HR(IDirect3DTexture9_UnlockRect(src_system, 0), D3D_OK);
+    }
+
+    CHECK_HR(IDirect3DDevice9_UpdateTexture(device,
+            (IDirect3DBaseTexture9 *)src_system,
+            (IDirect3DBaseTexture9 *)dst_default), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_UpdateTexture(device,
+            (IDirect3DBaseTexture9 *)dst_default,
+            (IDirect3DBaseTexture9 *)src_system), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_UpdateTexture(device, NULL,
+            (IDirect3DBaseTexture9 *)dst_default), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_UpdateTexture(device,
+            (IDirect3DBaseTexture9 *)src_system, NULL), D3DERR_INVALIDCALL);
+
+    IDirect3DTexture9_Release(dst_default);
+done_src:
+    IDirect3DTexture9_Release(src_system);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_render_target_device_mismatch()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

@@ -510,6 +510,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_sampler_state_edges"
+source = "wine/dlls/d3d9/tests/device.c:test_filter,wine/dlls/d3d9/tests/visual.c:srgbtexture_test,unbound_sampler_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "sampler-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.15"]
+acceptance = ["sampler address/filter/sRGB/displacement states round-trip and null out-parameters match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_light_enable_state"
+source = "wine/dlls/d3d9/tests/device.c:test_lights"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "fixed-function-lighting"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["SetLight validates null lights and LightEnable/GetLightEnable preserve caller-visible enable state"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_fpu_setup"
 source = "wine/dlls/d3d9/tests/device.c:test_fpu_setup"
 source_kind = "behavioral-oracle"
@@ -937,6 +971,23 @@ area = "resource-priority"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["managed resource SetPriority returns the previous value and GetPriority exposes the current value"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_update_texture_pool_copy_2d"
+source = "wine/dlls/d3d9/tests/device.c:test_update_texture_pool"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-copy"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["UpdateTexture accepts system-memory source to default-pool destination and rejects reversed or null texture operands"]
 status = "scaffolded"
 
 [[case]]
