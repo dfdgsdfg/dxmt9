@@ -1,0 +1,23 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c sampler/state and shader constant behavior, reduced to sampler7 texture binding plus PS constant readback parity
+; oracle-date: 2026-05-18
+
+[pixel shader d3dbc-hex]
+ffff0200 0200001f 80000000 b0030000 0200001f 90000000 a00f0807
+03000042 800f0000 b0e40000 a0e40807 03000005 800f0000 80e40000
+a0e40001 02000001 800f0800 80e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-texture 0 1 1 A8R8G8B8 white
+dxmt9-sampler 7 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-bind-texture 7 0
+dxmt9-ps-const-f 1 0.25 0.50 1.00 1.0
+dxmt9-draw-textured-quad
+expect-source pixel contains "tex7.sample(samp7"
+expect-source pixel contains "cFloat[1]"
+probe (32, 32) rgba(0.25, 0.50, 1.0, 1.0) 1
