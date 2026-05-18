@@ -1,0 +1,32 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_position_index behavior, reduced to POSITION1 input routed through TEXCOORD0 readback
+; oracle-date: 2026-05-18
+
+[vertex shader d3dbc-hex]
+fffe0300
+0200001f 80000000 900f0000
+0200001f 80010000 900f0001
+0200001f 80000000 e00f0000
+0200001f 80000005 e00f0001
+02000001 e00f0000 90e40000
+02000001 e00f0001 90e40001
+0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300
+0200001f 80000005 900f0000
+02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(1.0, 0.0, 1.0, 0.0)
+dxmt9-render-state zenable=off zwrite=off
+dxmt9-draw-position-index-quad
+probe (8, 32) rgba(0.875, 0.125, 0.0, 1.0) 3
+probe (24, 32) rgba(0.625, 0.375, 0.0, 1.0) 3
+probe (40, 32) rgba(0.375, 0.625, 0.0, 1.0) 3
+probe (56, 32) rgba(0.125, 0.875, 0.0, 1.0) 3

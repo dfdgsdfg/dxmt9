@@ -179,6 +179,7 @@ struct CorpusTest {
   bool drawDxmt9SolidQuad = false;
   bool drawDxmt9VsColorTriangle = false;
   bool drawDxmt9VFaceFacingQuads = false;
+  bool drawDxmt9PositionIndexQuad = false;
   bool drawDxmt9VsMultistreamTexturedQuad = false;
   bool drawDxmt9VsSkinnedTriangle = false;
   bool drawDxmt9VsFloat16ColorQuads = false;
@@ -368,6 +369,15 @@ struct MultiStreamPositionVertex {
   float y = 0.0f;
   float z = 0.0f;
   float w = 1.0f;
+};
+
+struct PositionIndexVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float x1 = 0.0f;
+  float y1 = 0.0f;
+  float z1 = 0.0f;
 };
 
 struct MultiStreamTexcoordVertex {
@@ -1943,6 +1953,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-position-index-quad") {
+    test.drawDxmt9PositionIndexQuad = true;
+    return;
+  }
+
   if (line == "dxmt9-draw-vs-multistream-textured-quad") {
     test.drawDxmt9VsMultistreamTexturedQuad = true;
     return;
@@ -3149,6 +3164,29 @@ void drawDxmt9VFaceFacingQuads(Device& device) {
   }
 }
 
+void drawDxmt9PositionIndexQuad(Device& device) {
+  const std::vector<VertexElement> declaration{
+      VertexElement{0, 0, kDeclTypeFloat3, 0, kDeclUsagePosition, 0},
+      VertexElement{0, 12, kDeclTypeFloat3, 0, kDeclUsagePosition, 1},
+  };
+  if (device.setVertexDeclaration(declaration) != D3D_OK) {
+    fail("dxmt9 position-index quad vertex declaration setup failed");
+  }
+
+  const std::array<PositionIndexVertex, 4> quad{
+      PositionIndexVertex{-1.0f, -1.0f, 0.5f, 1.0f, 0.0f, 0.0f},
+      PositionIndexVertex{-1.0f, 1.0f, 0.5f, 1.0f, 0.0f, 0.0f},
+      PositionIndexVertex{1.0f, -1.0f, 0.5f, 0.0f, 1.0f, 0.0f},
+      PositionIndexVertex{1.0f, 1.0f, 0.5f, 0.0f, 1.0f, 0.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleStrip, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(PositionIndexVertex)) != D3D_OK) {
+    fail("dxmt9 position-index quad draw failed");
+  }
+}
+
 template <typename T, size_t N>
 std::shared_ptr<Buffer> createVertexBufferWithData(
     Device& device,
@@ -3506,6 +3544,7 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                             test.drawDxmt9VsColorTriangle ||
                             test.drawDxmt9VFaceFacingQuads ||
+                            test.drawDxmt9PositionIndexQuad ||
                             test.drawDxmt9VsMultistreamTexturedQuad ||
                             test.drawDxmt9VsSkinnedTriangle ||
                             test.drawDxmt9VsFloat16ColorQuads ||
@@ -3673,11 +3712,12 @@ void runCorpusFile(const std::string& path) {
                           test.drawDxmt9TexturedQuadOverscan ||
                           test.drawDxmt9TexturedQuadXyz || test.drawDxmt9SolidQuad ||
                           test.drawDxmt9VsColorTriangle ||
-                            test.drawDxmt9VFaceFacingQuads ||
-                            test.drawDxmt9VsMultistreamTexturedQuad ||
-                            test.drawDxmt9VsSkinnedTriangle ||
-                            test.drawDxmt9VsFloat16ColorQuads ||
-                            test.drawDxmt9FfpVertexBlendTriangle ||
+                          test.drawDxmt9VFaceFacingQuads ||
+                          test.drawDxmt9PositionIndexQuad ||
+                          test.drawDxmt9VsMultistreamTexturedQuad ||
+                          test.drawDxmt9VsSkinnedTriangle ||
+                          test.drawDxmt9VsFloat16ColorQuads ||
+                          test.drawDxmt9FfpVertexBlendTriangle ||
                           test.drawDxmt9FfpGeneratedNormalQuad ||
                           test.drawDxmt9FfpFlatNormalQuad ||
                           test.drawDxmt9FfpDeclDefaultsQuad ||
@@ -3849,6 +3889,16 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9VFaceFacingQuads(*device);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9PositionIndexQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9PositionIndexQuad(*device);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }
