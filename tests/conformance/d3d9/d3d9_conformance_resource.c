@@ -1741,6 +1741,121 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_create_rt_ds_fail()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_create_rt_ds_failure_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *surface = (IDirect3DSurface9 *)0xdeadbeef;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 4, 4, D3DFMT_D16,
+            D3DMULTISAMPLE_NONE, 0, FALSE, &surface, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(surface == NULL);
+    if (SUCCEEDED(hr) && surface)
+        IDirect3DSurface9_Release(surface);
+
+    surface = (IDirect3DSurface9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_CreateDepthStencilSurface(device, 4, 4,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, TRUE, &surface, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(surface == NULL);
+    if (SUCCEEDED(hr) && surface)
+        IDirect3DSurface9_Release(surface);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_get_render_target_data()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_get_render_target_data_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *offscreen_surface = NULL;
+    IDirect3DSurface9 *render_target = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 32, 32,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &offscreen_surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 32, 32,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, TRUE, &render_target,
+            NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_offscreen;
+
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, NULL, NULL),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, render_target,
+            NULL), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, NULL,
+            offscreen_surface), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, render_target,
+            offscreen_surface), D3D_OK);
+
+    IDirect3DSurface9_Release(render_target);
+done_offscreen:
+    IDirect3DSurface9_Release(offscreen_surface);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_render_target_device_mismatch()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

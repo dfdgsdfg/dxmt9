@@ -86,6 +86,8 @@ static const struct test_case tests[] =
     {"ex_shared_handle_policy", test_ex_shared_handle_policy},
     {"ex_user_memory_lock_identity", test_ex_user_memory_lock_identity},
     {"creation_failure_out_pointers", test_creation_failure_out_pointers},
+    {"create_rt_ds_failure_policy", test_create_rt_ds_failure_policy},
+    {"get_render_target_data_policy", test_get_render_target_data_policy},
     {"render_target_device_mismatch", test_render_target_device_mismatch},
     {"create_depth_stencil_surface_ex", test_create_depth_stencil_surface_ex},
     {"ex_adapter_luid_display_mode", test_ex_adapter_luid_display_mode},
