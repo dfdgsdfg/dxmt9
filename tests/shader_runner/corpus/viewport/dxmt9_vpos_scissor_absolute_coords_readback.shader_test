@@ -1,0 +1,21 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_fragment_coords behavior, reduced to vPos absolute coordinate readback under scissor
+; oracle-date: 2026-05-18
+
+[pixel shader d3dbc-hex]
+ffff0300 05000051 a00f0000 3c800000 3c800000 00000000 3f800000
+0200001f 80000000 90031000 02000001 800f0000 a0e40000 03000005
+80030000 90541000 a0e40000 02000001 800f0800 80e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state scissor=on
+dxmt9-scissor 16 16 48 48
+dxmt9-draw-solid-quad
+probe (20, 20) rgba(0.3203125, 0.3203125, 0.0, 1.0) 1
+probe (40, 32) rgba(0.6328125, 0.5078125, 0.0, 1.0) 1
+probe (8, 20) rgba(0.0, 0.0, 0.0, 1.0) 1
