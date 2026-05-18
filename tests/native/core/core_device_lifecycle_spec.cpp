@@ -889,6 +889,110 @@ void testGetRenderTargetDataUsesRuntimeReadbackPayload() {
   destination->unlockRect();
 }
 
+void testGetRenderTargetDataFallsBackWhenRuntimeReadbackUnavailable() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.backBufferWidth = 32u;
+  params.backBufferHeight = 32u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{0x1701u};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "readback fallback device");
+
+  auto source = device->createSurface({
+      .width = 2u,
+      .height = 2u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::Default,
+      .usage = UsageRenderTarget,
+      .renderTarget = true,
+  });
+  auto destination = device->createSurface({
+      .width = 2u,
+      .height = 2u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::Scratch,
+  });
+  check(source != nullptr, "readback fallback source surface");
+  check(destination != nullptr, "readback fallback destination surface");
+
+  const std::array<u8, 16> sourcePixels{
+      0x10u, 0x11u, 0x12u, 0xffu,
+      0x20u, 0x21u, 0x22u, 0xffu,
+      0x30u, 0x31u, 0x32u, 0xffu,
+      0x40u, 0x41u, 0x42u, 0xffu,
+  };
+  auto sourceRegion = source->lockRect(nullptr, 0);
+  check(sourceRegion.data != nullptr, "readback fallback source lock");
+  checkEq(sourceRegion.pitch, 8u, "readback fallback source pitch");
+  std::memcpy(sourceRegion.data, sourcePixels.data(), sourcePixels.size());
+  source->unlockRect();
+
+  const std::array<u8, 16> runtimePixels{
+      0xa0u, 0xa1u, 0xa2u, 0xffu,
+      0xb0u, 0xb1u, 0xb2u, 0xffu,
+      0xc0u, 0xc1u, 0xc2u, 0xffu,
+      0xd0u, 0xd1u, 0xd2u, 0xffu,
+  };
+  backend->surfaceCopies.clear();
+  backend->readbacks.clear();
+  backend->readbackSurfaceCalls.clear();
+  backend->flushCount = 0;
+  backend->readbackSurfaceResult = false;
+  backend->readbackSurfacePixels.pitch = 8u;
+  backend->readbackSurfacePixels.bytes.assign(runtimePixels.begin(),
+                                              runtimePixels.end());
+
+  checkEq(device->getRenderTargetData(source, destination), D3D_OK,
+          "readback fallback succeeds");
+
+  checkEq(backend->readbacks.size(), size_t{1},
+          "fallback submits readback boundary before copy");
+  checkEq(backend->flushCount, 1u,
+          "fallback flushes submitted readback before probing backend pixels");
+  checkEq(backend->readbackSurfaceCalls.size(), size_t{1},
+          "fallback probes runtime readback once");
+  checkEq(backend->surfaceCopies.size(), size_t{1},
+          "fallback records surface-copy boundary after runtime miss");
+
+  const auto& readback = backend->readbacks[0];
+  const auto& consumed = backend->readbackSurfaceCalls[0];
+  const auto& copy = backend->surfaceCopies[0];
+  checkEq(readback.source, source->handle(),
+          "fallback readback source handle");
+  checkEq(readback.destination, destination->handle(),
+          "fallback readback destination handle");
+  checkEq(readback.sourceRect, Rect{0, 0, 2, 2},
+          "fallback readback covers source extent");
+  checkEq(consumed.source, readback.source,
+          "fallback runtime probe sees submitted source");
+  checkEq(consumed.destination, readback.destination,
+          "fallback runtime probe sees submitted destination");
+  checkEq(copy.source, source->handle(),
+          "fallback copy source handle");
+  checkEq(copy.destination, destination->handle(),
+          "fallback copy destination handle");
+  checkEq(copy.sourceRect, Rect{0, 0, 2, 2},
+          "fallback copy covers source extent");
+  checkEq(copy.destinationRect, Rect{0, 0, 2, 2},
+          "fallback copy covers destination extent");
+
+  auto destinationRegion = destination->lockRect(nullptr, 0);
+  check(destinationRegion.data != nullptr, "readback fallback destination lock");
+  checkEq(destinationRegion.pitch, 8u, "readback fallback destination pitch");
+  checkBytes(std::span<const u8>(
+                 static_cast<const u8*>(destinationRegion.data),
+                 sourcePixels.size()),
+             std::span<const u8>(sourcePixels.data(), sourcePixels.size()),
+             "fallback copies CPU surface bytes instead of stale runtime pixels");
+  destination->unlockRect();
+}
+
 void testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer() {
   auto backend = std::make_shared<RecordingBackend>();
   Factory factory({}, backend);
@@ -1034,6 +1138,7 @@ int main() {
     testFullscreenAndDeviceLost();
     testQueryFlushPresentResetSequenceBoundaries();
     testGetRenderTargetDataUsesRuntimeReadbackPayload();
+    testGetRenderTargetDataFallsBackWhenRuntimeReadbackUnavailable();
     testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer();
     testExperimentCaptureFrameListAndRangeWriteInternalFrames();
     testExperimentCaptureWriteFailureEmitsSkipSidecar();
