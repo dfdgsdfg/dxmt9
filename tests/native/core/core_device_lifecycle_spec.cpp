@@ -923,6 +923,158 @@ void testResetClearsStaleDrawStateBeforeNextBoundaryPacket() {
           "post-reset draw restores texture-stage default");
 }
 
+void testResetRejectsStaleSurfaceOpsBeforeBackendBoundary() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.backBufferWidth = 64u;
+  params.backBufferHeight = 32u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{0x1650u};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "reset surface-op device create");
+  const auto oldBackBuffer = device->swapChain()->backBuffer();
+  check(oldBackBuffer != nullptr, "reset surface-op old backbuffer");
+
+  auto staleDefault = device->createSurface({
+      .width = 4u,
+      .height = 4u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::Default,
+      .usage = UsageRenderTarget,
+      .renderTarget = true,
+  });
+  auto staleStretchTarget = device->createSurface({
+      .width = 4u,
+      .height = 4u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::Default,
+      .usage = UsageRenderTarget,
+      .renderTarget = true,
+  });
+  auto systemSource = device->createSurface({
+      .width = 4u,
+      .height = 4u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::SystemMem,
+  });
+  auto scratchDestination = device->createSurface({
+      .width = 4u,
+      .height = 4u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::Scratch,
+  });
+  check(staleDefault != nullptr, "reset surface-op stale default surface");
+  check(staleStretchTarget != nullptr,
+        "reset surface-op stale stretch target surface");
+  check(systemSource != nullptr, "reset surface-op surviving system source");
+  check(scratchDestination != nullptr,
+        "reset surface-op surviving scratch destination");
+
+  checkEq(device->fillSurface(staleDefault, nullptr,
+                              {0.0f, 0.5f, 1.0f, 1.0f}),
+          D3D_OK, "reset surface-op pre-reset fill");
+  checkEq(device->stretchRect(systemSource, nullptr, staleStretchTarget,
+                              nullptr, true),
+          D3D_OK, "reset surface-op pre-reset stretch");
+  checkEq(device->getRenderTargetData(oldBackBuffer, scratchDestination),
+          D3D_OK, "reset surface-op pre-reset readback");
+  checkEq(backend->colorFills.size(), size_t{1},
+          "reset surface-op pre-reset fill submitted");
+  checkEq(backend->stretchRects.size(), size_t{1},
+          "reset surface-op pre-reset stretch submitted");
+  checkEq(backend->readbacks.size(), size_t{1},
+          "reset surface-op pre-reset readback submitted");
+
+  PresentParameters resetParams = params;
+  resetParams.backBufferWidth = 96u;
+  resetParams.backBufferHeight = 48u;
+  resetParams.deviceWindow = Handle{0x1651u};
+  checkEq(device->reset(resetParams), D3D_OK,
+          "reset surface-op reset succeeds");
+  const auto resetBackBuffer = device->swapChain()->backBuffer();
+  check(resetBackBuffer != nullptr, "reset surface-op replacement backbuffer");
+  check(resetBackBuffer != oldBackBuffer,
+        "reset surface-op backbuffer was recreated");
+  check(!oldBackBuffer->valid(), "reset surface-op old backbuffer invalidated");
+  check(!staleDefault->valid(),
+        "reset surface-op default surface invalidated");
+  check(!staleStretchTarget->valid(),
+        "reset surface-op stretch target invalidated");
+  check(systemSource->valid(),
+        "reset surface-op system source survives reset");
+  check(scratchDestination->valid(),
+        "reset surface-op scratch destination survives reset");
+
+  backend->colorFills.clear();
+  backend->stretchRects.clear();
+  backend->surfaceCopies.clear();
+  backend->readbacks.clear();
+  backend->readbackSurfaceCalls.clear();
+  backend->presents.clear();
+
+  checkEq(device->fillSurface(staleDefault, nullptr,
+                              {1.0f, 0.0f, 0.0f, 1.0f}),
+          D3DERR_INVALIDCALL,
+          "reset surface-op rejects stale fill before backend boundary");
+  checkEq(device->stretchRect(systemSource, nullptr, staleStretchTarget,
+                              nullptr, false),
+          D3DERR_INVALIDCALL,
+          "reset surface-op rejects stale stretch before backend boundary");
+  checkEq(device->updateSurface(systemSource, staleDefault),
+          D3DERR_INVALIDCALL,
+          "reset surface-op rejects stale update before backend boundary");
+  checkEq(device->getRenderTargetData(oldBackBuffer, scratchDestination),
+          D3DERR_INVALIDCALL,
+          "reset surface-op rejects stale readback before backend boundary");
+  check(backend->colorFills.empty(),
+        "stale fill emits no backend color-fill command");
+  check(backend->stretchRects.empty(),
+        "stale stretch emits no backend stretch command");
+  check(backend->surfaceCopies.empty(),
+        "stale update/readback emits no backend surface-copy command");
+  check(backend->readbacks.empty(),
+        "stale readback emits no backend readback command");
+
+  const Rect fillRect{1, 2, 5, 6};
+  checkEq(device->fillSurface(resetBackBuffer, &fillRect,
+                              {0.25f, 0.5f, 0.75f, 1.0f}),
+          D3D_OK, "reset surface-op replacement fill");
+  checkEq(device->present(), D3D_OK,
+          "reset surface-op replacement present");
+  checkEq(device->getRenderTargetData(resetBackBuffer, scratchDestination),
+          D3D_OK, "reset surface-op replacement readback");
+
+  checkEq(backend->colorFills.size(), size_t{1},
+          "replacement fill emits one backend color-fill command");
+  checkEq(backend->colorFills[0].destination, resetBackBuffer->handle(),
+          "replacement fill uses reset backbuffer handle");
+  checkEq(backend->colorFills[0].rect, fillRect,
+          "replacement fill preserves caller rect");
+  check(backend->colorFills[0].hasRect,
+        "replacement fill preserves caller rect flag");
+  checkEq(backend->presents.size(), size_t{1},
+          "replacement present emits one backend present command");
+  checkEq(backend->presents[0].sourceSurface, resetBackBuffer->handle(),
+          "replacement present uses reset backbuffer handle");
+  checkEq(backend->presents[0].width, 96u,
+          "replacement present carries reset width");
+  checkEq(backend->presents[0].height, 48u,
+          "replacement present carries reset height");
+  checkEq(backend->readbacks.size(), size_t{1},
+          "replacement readback emits one backend readback command");
+  checkEq(backend->readbacks[0].source, resetBackBuffer->handle(),
+          "replacement readback uses reset backbuffer source");
+  checkEq(backend->readbacks[0].destination, scratchDestination->handle(),
+          "replacement readback keeps surviving scratch destination");
+  checkEq(backend->readbacks[0].sourceRect, Rect{0, 0, 96, 48},
+          "replacement readback carries reset backbuffer extent");
+}
+
 void testGetRenderTargetDataUsesRuntimeReadbackPayload() {
   auto backend = std::make_shared<RecordingBackend>();
   Factory factory({}, backend);
@@ -1357,6 +1509,7 @@ int main() {
     testFullscreenAndDeviceLost();
     testQueryFlushPresentResetSequenceBoundaries();
     testResetClearsStaleDrawStateBeforeNextBoundaryPacket();
+    testResetRejectsStaleSurfaceOpsBeforeBackendBoundary();
     testGetRenderTargetDataUsesRuntimeReadbackPayload();
     testGetRenderTargetDataFallsBackWhenRuntimeReadbackUnavailable();
     testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer();
