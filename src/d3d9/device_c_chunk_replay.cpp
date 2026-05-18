@@ -179,6 +179,18 @@ T* wireValuePtr(uint64_t value) {
       return nullptr;
     }
   }
+  // Sentinel-rejection guard. The WoW64 decode + native-pointer allowlist
+  // above resolve every well-formed wire pointer; anything reaching the
+  // bare reinterpret_cast below is an "as-is" native pointer where the
+  // caller trusted the wire value. Without this guard a malformed packet
+  // (sign-extended `0xffffffff`, low-page `0x1`, or `~0` INVALID_HANDLE_VALUE)
+  // would crash deep inside applyDrawPacketStateDirect on the next deref.
+  // Treat the rejection as the same "detach" signal a zero would produce
+  // — callers already nullptr-check.
+  if (isWirePointerSentinel(value)) {
+    dxmt9::perf::countChunkWireInvalidPointerRejected();
+    return nullptr;
+  }
   return reinterpret_cast<T*>(static_cast<uintptr_t>(value));
 }
 

@@ -80,6 +80,11 @@ struct Counters {
   // R-BACK-2.10 / 2.27 admit + ring heap fallback gauges.
   std::atomic<std::uint64_t> chunkAdmit{0};
   std::atomic<std::uint64_t> chunkReject{0};
+  // wireValuePtr<T>() in device_c_chunk_replay.cpp returns nullptr in
+  // place of a sentinel (low-page address / ~0 / zero-extended 32-bit -1)
+  // that would otherwise be deref'd. Healthy runs hold this at 0;
+  // non-zero is a corruption tell.
+  std::atomic<std::uint64_t> chunkWireInvalidPointerRejected{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCount{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackBytes{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCountArgbuf{0};
@@ -577,9 +582,10 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 379> kCounterTable = {{
+constexpr std::array<CounterEntry, 380> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
+    {"chunk_wire_invalid_pointer_rejected", CounterEntry::Kind::UnsignedCount, &Counters::chunkWireInvalidPointerRejected, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_bytes", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackBytes, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_argbuf", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCountArgbuf, nullptr, nullptr, 0.0},
@@ -1058,6 +1064,10 @@ void countChunkAdmit() {
 
 void countChunkReject() {
   add(counters().chunkReject);
+}
+
+void countChunkWireInvalidPointerRejected() {
+  add(counters().chunkWireInvalidPointerRejected);
 }
 
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes) {
