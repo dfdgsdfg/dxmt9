@@ -1631,6 +1631,18 @@ oracle = "Wine d3d9 visual.c vface_register_test behavior, reduced to front/back
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "render_state/dxmt9_vface_mrt_front_back_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "MOV"]
+oracle = "Wine d3d9 visual.c vface_register_test behavior, reduced to VFACE sign parity across backbuffer and offscreen RT"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "render_state/dxmt9_alpha_depth_color_mask_combined_readback.shader_test"
 status = "passing"
 source = "dxmt9"
