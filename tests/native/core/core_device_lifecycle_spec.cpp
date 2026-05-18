@@ -783,6 +783,146 @@ void testQueryFlushPresentResetSequenceBoundaries() {
           "post-reset timestamp uses reset-local sequence id");
 }
 
+void testResetClearsStaleDrawStateBeforeNextBoundaryPacket() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.backBufferWidth = 128u;
+  params.backBufferHeight = 64u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{0x1600u};
+  params.enableAutoDepthStencil = true;
+  params.autoDepthStencilFormat = Format::D24S8;
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "reset draw-state device create");
+  const auto originalBackBuffer = device->swapChain()->backBuffer();
+  const auto originalDepth = device->swapChain()->depthStencilSurface();
+  check(originalBackBuffer != nullptr, "reset draw-state original backbuffer");
+  check(originalDepth != nullptr, "reset draw-state original depth");
+
+  auto staleVertexBuffer =
+      device->createBuffer({64u, Pool::Default, UsageVertexBuffer});
+  auto staleIndexBuffer =
+      device->createBuffer({32u, Pool::Default, UsageIndexBuffer});
+  auto staleTexture = device->createTexture(
+      {4u, 4u, 1u, 1u, Format::A8R8G8B8, TextureType::TwoD, Pool::Managed,
+       UsageTexture});
+  auto staleRt1 = device->createSurface(
+      {32u, 32u, Format::A8R8G8B8, Pool::Default, UsageRenderTarget, true});
+  auto staleDepth = device->createSurface(
+      {32u, 32u, Format::D24S8, Pool::Default, UsageDepthStencil, false,
+       true});
+  check(staleVertexBuffer != nullptr, "reset draw-state stale vb");
+  check(staleIndexBuffer != nullptr, "reset draw-state stale ib");
+  check(staleTexture != nullptr, "reset draw-state stale texture");
+  check(staleRt1 != nullptr, "reset draw-state stale rt1");
+  check(staleDepth != nullptr, "reset draw-state stale depth");
+
+  checkEq(device->setStreamSource(0, staleVertexBuffer, 12u, 24u), D3D_OK,
+          "reset draw-state bind stream");
+  checkEq(device->setIndices(staleIndexBuffer, IndexType::UInt32), D3D_OK,
+          "reset draw-state bind index");
+  checkEq(device->setTexture(0, staleTexture), D3D_OK,
+          "reset draw-state bind texture");
+  checkEq(device->setTexture(kVertexTextureSampler0, staleTexture), D3D_OK,
+          "reset draw-state bind vertex texture");
+  checkEq(device->setRenderTarget(1, staleRt1), D3D_OK,
+          "reset draw-state bind rt1");
+  checkEq(device->setDepthStencilSurface(staleDepth), D3D_OK,
+          "reset draw-state bind custom depth");
+  checkEq(device->setRenderState(RS_ALPHA_TEST_ENABLE, 1u), D3D_OK,
+          "reset draw-state mutate alpha test");
+  checkEq(device->setSamplerState(0, SAMP_MIN_FILTER, 2u), D3D_OK,
+          "reset draw-state mutate sampler");
+  checkEq(device->setTextureStageState(0, TSS_COLOR_OP,
+                                       static_cast<u32>(TextureOp::SelectArg1)),
+          D3D_OK, "reset draw-state mutate tss");
+
+  checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1u, 3u), D3D_OK,
+          "reset draw-state pre-reset draw");
+  checkEq(backend->draws.size(), size_t{1},
+          "reset draw-state pre-reset draw recorded");
+  const auto& staleDraw = backend->draws.back();
+  checkEq(staleDraw.hot.streamBuffers[0], staleVertexBuffer->handle(),
+          "pre-reset draw carries stale stream");
+  checkEq(staleDraw.hot.indexBuffer, Handle{},
+          "pre-reset non-indexed draw strips bound index");
+  checkEq(staleDraw.hot.textures[0], staleTexture->handle(),
+          "pre-reset draw carries stale texture");
+  checkEq(staleDraw.hot.textures[kVertexTextureSampler0],
+          staleTexture->handle(),
+          "pre-reset draw carries stale vertex texture");
+  checkEq(staleDraw.hot.colorAttachments[1].handle, staleRt1->handle(),
+          "pre-reset draw carries stale rt1");
+  checkEq(staleDraw.hot.depthStencil.handle, staleDepth->handle(),
+          "pre-reset draw carries stale depth");
+
+  PresentParameters resetParams = params;
+  resetParams.backBufferWidth = 96u;
+  resetParams.backBufferHeight = 48u;
+  resetParams.deviceWindow = Handle{0x1601u};
+  checkEq(device->reset(resetParams), D3D_OK,
+          "reset draw-state reset succeeds");
+  const auto resetBackBuffer = device->swapChain()->backBuffer();
+  const auto resetDepth = device->swapChain()->depthStencilSurface();
+  check(resetBackBuffer != nullptr, "reset draw-state replacement backbuffer");
+  check(resetDepth != nullptr, "reset draw-state replacement depth");
+  check(resetBackBuffer != originalBackBuffer,
+        "reset draw-state backbuffer recreated");
+  check(resetDepth != originalDepth, "reset draw-state depth recreated");
+  check(!staleVertexBuffer->valid(),
+        "reset draw-state default stream invalidated");
+  check(!staleIndexBuffer->valid(),
+        "reset draw-state default index invalidated");
+  check(!staleRt1->valid(), "reset draw-state rt1 invalidated");
+  check(!staleDepth->valid(), "reset draw-state custom depth invalidated");
+  check(staleTexture->valid(), "reset draw-state managed texture survives");
+
+  checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1u, 0u), D3D_OK,
+          "reset draw-state post-reset draw");
+  checkEq(backend->draws.size(), size_t{2},
+          "reset draw-state post-reset draw recorded");
+  const auto& resetDraw = backend->draws.back();
+  checkEq(resetDraw.hot.streamBuffers[0], Handle{},
+          "post-reset draw does not carry stale stream handle");
+  checkEq(resetDraw.hot.streamOffsets[0], 0u,
+          "post-reset draw clears stale stream offset");
+  checkEq(resetDraw.hot.streamStrides[0], 0u,
+          "post-reset draw clears stale stream stride");
+  checkEq(resetDraw.hot.indexBuffer, Handle{},
+          "post-reset draw does not carry stale index handle");
+  checkEq(resetDraw.param.indexType, IndexType::UInt16,
+          "post-reset draw restores default index type");
+  checkEq(resetDraw.hot.textures[0], Handle{},
+          "post-reset draw does not carry stale texture");
+  checkEq(resetDraw.hot.textures[kVertexTextureSampler0], Handle{},
+          "post-reset draw does not carry stale vertex texture");
+  checkEq(resetDraw.hot.colorAttachments[0].handle, resetBackBuffer->handle(),
+          "post-reset draw carries replacement backbuffer");
+  checkEq(resetDraw.hot.colorAttachments[0].sampleCount,
+          resetBackBuffer->multiSampleCount(),
+          "post-reset draw carries replacement backbuffer samples");
+  checkEq(resetDraw.hot.colorAttachments[1].handle, Handle{},
+          "post-reset draw clears stale rt1");
+  checkEq(resetDraw.hot.depthStencil.handle, resetDepth->handle(),
+          "post-reset draw carries replacement depth");
+  checkEq(resetDraw.hot.viewport.viewport.width, 96u,
+          "post-reset draw carries reset viewport width");
+  checkEq(resetDraw.hot.viewport.viewport.height, 48u,
+          "post-reset draw carries reset viewport height");
+  checkEq(flatStateOr(resetDraw.hot.renderStates, RS_ALPHA_TEST_ENABLE, 99u),
+          0u, "post-reset draw restores alpha-test default");
+  checkEq(flatStateOr(resetDraw.hot.samplerStates[0], SAMP_MIN_FILTER, 99u),
+          1u, "post-reset draw restores sampler default");
+  checkEq(flatStateOr(resetDraw.hot.textureStageStates[0], TSS_COLOR_OP, 0u),
+          static_cast<u32>(TextureOp::Modulate),
+          "post-reset draw restores texture-stage default");
+}
+
 void testGetRenderTargetDataUsesRuntimeReadbackPayload() {
   auto backend = std::make_shared<RecordingBackend>();
   Factory factory({}, backend);
@@ -1084,6 +1224,85 @@ void testExperimentCaptureFrameListAndRangeWriteInternalFrames() {
   std::filesystem::remove_all(root);
 }
 
+void testResetRestartsExperimentCaptureFrameCounter() {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("dxmt9-capture-reset-" + std::to_string(std::rand()));
+  const auto capturePath = root / "frame2.bmp";
+  std::filesystem::remove_all(root);
+
+  ScopedEnv capturePathEnv("DXMT_EXPERIMENT_CAPTURE_PATH",
+                           capturePath.string().c_str());
+  ScopedEnv captureDirEnv("DXMT_EXPERIMENT_CAPTURE_DIR", "");
+  ScopedEnv captureFrame("DXMT_CAPTURE_FRAME", "2");
+  ScopedEnv captureFrames("DXMT_CAPTURE_FRAMES", "");
+  ScopedEnv captureRange("DXMT_CAPTURE_RANGE", "");
+
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.backBufferWidth = 4;
+  params.backBufferHeight = 4;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{0x3002u};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "capture reset device");
+  auto backBuffer = device->swapChain()->backBuffer();
+  check(backBuffer != nullptr, "capture reset backbuffer");
+
+  checkEq(device->fillSurface(backBuffer, nullptr, {1.0f, 0.0f, 0.0f, 1.0f}),
+          D3D_OK, "fill capture reset frame 1");
+  checkEq(device->present(), D3D_OK, "present capture reset frame 1");
+  check(!std::filesystem::exists(capturePath),
+        "capture reset frame 1 does not satisfy frame 2 request");
+  checkEq(backend->readbacks.size(), size_t{0},
+          "capture reset frame 1 does not issue readback");
+
+  checkEq(device->fillSurface(backBuffer, nullptr, {0.0f, 1.0f, 0.0f, 1.0f}),
+          D3D_OK, "fill capture reset frame 2");
+  checkEq(device->present(), D3D_OK, "present capture reset frame 2");
+  check(fileExistsWithBmpHeader(capturePath),
+        "capture reset pre-reset frame 2 writes capture");
+  checkEq(backend->readbacks.size(), size_t{1},
+          "capture reset pre-reset frame 2 issues readback");
+
+  std::filesystem::remove(capturePath);
+  backend->readbacks.clear();
+  backend->readbackSurfaceCalls.clear();
+  backend->surfaceCopies.clear();
+
+  PresentParameters resetParams = params;
+  resetParams.backBufferWidth = 6;
+  resetParams.backBufferHeight = 6;
+  checkEq(device->reset(resetParams), D3D_OK,
+          "capture reset resets device");
+  backBuffer = device->swapChain()->backBuffer();
+  check(backBuffer != nullptr, "capture reset replacement backbuffer");
+
+  checkEq(device->fillSurface(backBuffer, nullptr, {0.0f, 0.0f, 1.0f, 1.0f}),
+          D3D_OK, "fill capture reset post-reset frame 1");
+  checkEq(device->present(), D3D_OK,
+          "present capture reset post-reset frame 1");
+  check(!std::filesystem::exists(capturePath),
+        "capture reset post-reset frame 1 does not reuse stale counter");
+  checkEq(backend->readbacks.size(), size_t{0},
+          "capture reset post-reset frame 1 does not issue readback");
+
+  checkEq(device->fillSurface(backBuffer, nullptr, {1.0f, 1.0f, 0.0f, 1.0f}),
+          D3D_OK, "fill capture reset post-reset frame 2");
+  checkEq(device->present(), D3D_OK,
+          "present capture reset post-reset frame 2");
+  check(fileExistsWithBmpHeader(capturePath),
+        "capture reset post-reset frame 2 writes capture again");
+  checkEq(backend->readbacks.size(), size_t{1},
+          "capture reset post-reset frame 2 issues exactly one readback");
+
+  std::filesystem::remove_all(root);
+}
+
 void testExperimentCaptureWriteFailureEmitsSkipSidecar() {
   const auto root = std::filesystem::temp_directory_path() /
                     ("dxmt9-capture-skip-" + std::to_string(std::rand()));
@@ -1137,10 +1356,12 @@ int main() {
     testDeviceCoreFlow();
     testFullscreenAndDeviceLost();
     testQueryFlushPresentResetSequenceBoundaries();
+    testResetClearsStaleDrawStateBeforeNextBoundaryPacket();
     testGetRenderTargetDataUsesRuntimeReadbackPayload();
     testGetRenderTargetDataFallsBackWhenRuntimeReadbackUnavailable();
     testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer();
     testExperimentCaptureFrameListAndRangeWriteInternalFrames();
+    testResetRestartsExperimentCaptureFrameCounter();
     testExperimentCaptureWriteFailureEmitsSkipSidecar();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
