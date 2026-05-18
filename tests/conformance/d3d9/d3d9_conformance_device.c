@@ -2157,6 +2157,136 @@ done_d3d9:
 }
 
 /*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_set_stream_source()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_stream_source_null_layout_policy(const struct d3d9_api *api)
+{
+    IDirect3DVertexBuffer9 *stream = (IDirect3DVertexBuffer9 *)0xdeadbeef;
+    IDirect3DVertexBuffer9 *vertex_buffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    UINT offset = 0xdeadbeef;
+    UINT stride = 0xdeadbeef;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 512, 0, 0,
+            D3DPOOL_DEFAULT, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, vertex_buffer,
+            4, 32), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, NULL, 0, 0),
+            D3D_OK);
+
+    hr = IDirect3DDevice9_GetStreamSource(device, 0, &stream, &offset,
+            &stride);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(stream == NULL);
+        CHECK_TRUE(offset == 4);
+        CHECK_TRUE(stride == 32);
+        if (stream)
+            IDirect3DVertexBuffer9_Release(stream);
+    }
+
+    IDirect3DVertexBuffer9_Release(vertex_buffer);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_set_stream_source()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_stream_source_zero_stride_policy(const struct d3d9_api *api)
+{
+    IDirect3DVertexBuffer9 *stream = NULL;
+    IDirect3DVertexBuffer9 *vertex_buffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    UINT offset = 0xdeadbeef;
+    UINT stride = 0xdeadbeef;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 512, 0, 0,
+            D3DPOOL_DEFAULT, &vertex_buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, vertex_buffer,
+            0, 0), D3D_OK);
+
+    hr = IDirect3DDevice9_GetStreamSource(device, 0, &stream, &offset,
+            &stride);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(stream == vertex_buffer);
+        CHECK_TRUE(offset == 0);
+        CHECK_TRUE(stride == 0);
+        if (stream)
+            IDirect3DVertexBuffer9_Release(stream);
+    }
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, NULL, 0, 0),
+            D3D_OK);
+    IDirect3DVertexBuffer9_Release(vertex_buffer);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
  * Wine provenance: dlls/d3d9/tests/visual.c
  * function: stream_test()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
