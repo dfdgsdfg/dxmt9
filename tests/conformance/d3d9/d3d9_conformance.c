@@ -83,6 +83,8 @@ static const struct test_case tests[] =
     {"vendor_format_public_api_policy",
             test_vendor_format_public_api_policy},
     {"resource_priority_roundtrip", test_resource_priority_roundtrip},
+    {"resource_priority_pool_policy", test_resource_priority_pool_policy},
+    {"texture_lod_policy", test_texture_lod_policy},
     {"update_texture_pool_copy_2d", test_update_texture_pool_copy_2d},
     {"shared_handle_policy", test_shared_handle_policy},
     {"ex_shared_handle_policy", test_ex_shared_handle_policy},

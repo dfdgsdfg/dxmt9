@@ -1665,6 +1665,207 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_resource_priority()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_resource_priority_pool_policy(const struct d3d9_api *api)
+{
+    static const struct
+    {
+        D3DPOOL pool;
+        BOOL can_set_priority;
+    }
+    cases[] =
+    {
+        {D3DPOOL_DEFAULT, FALSE},
+        {D3DPOOL_SYSTEMMEM, FALSE},
+        {D3DPOOL_MANAGED, TRUE},
+        {D3DPOOL_SCRATCH, FALSE},
+    };
+    IDirect3DVertexBuffer9 *vertex_buffer = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    DWORD priority;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    for (i = 0; i < ARRAY_SIZE(cases); ++i)
+    {
+        hr = IDirect3DDevice9_CreateTexture(device, 16, 16, 1, 0,
+                D3DFMT_X8R8G8B8, cases[i].pool, &texture, NULL);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            priority = IDirect3DTexture9_GetPriority(texture);
+            CHECK_TRUE(priority == 0);
+            priority = IDirect3DTexture9_SetPriority(texture, 1);
+            CHECK_TRUE(priority == 0);
+            priority = IDirect3DTexture9_GetPriority(texture);
+            CHECK_TRUE(priority == (cases[i].can_set_priority ? 1 : 0));
+
+            surface = NULL;
+            hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                priority = IDirect3DSurface9_GetPriority(surface);
+                CHECK_TRUE(priority == 0);
+                priority = IDirect3DSurface9_SetPriority(surface, 1);
+                CHECK_TRUE(priority == 0);
+                priority = IDirect3DSurface9_GetPriority(surface);
+                CHECK_TRUE(priority == 0);
+                IDirect3DSurface9_Release(surface);
+            }
+
+            IDirect3DTexture9_Release(texture);
+        }
+
+        if (cases[i].pool != D3DPOOL_MANAGED)
+        {
+            hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 16, 16,
+                    D3DFMT_X8R8G8B8, cases[i].pool, &surface, NULL);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                priority = IDirect3DSurface9_GetPriority(surface);
+                CHECK_TRUE(priority == 0);
+                priority = IDirect3DSurface9_SetPriority(surface, 1);
+                CHECK_TRUE(priority == 0);
+                priority = IDirect3DSurface9_GetPriority(surface);
+                CHECK_TRUE(priority == 0);
+                IDirect3DSurface9_Release(surface);
+            }
+        }
+
+        if (cases[i].pool != D3DPOOL_SCRATCH)
+        {
+            hr = IDirect3DDevice9_CreateVertexBuffer(device, 256, 0, 0,
+                    cases[i].pool, &vertex_buffer, NULL);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                priority = IDirect3DVertexBuffer9_GetPriority(vertex_buffer);
+                CHECK_TRUE(priority == 0);
+                priority = IDirect3DVertexBuffer9_SetPriority(vertex_buffer, 1);
+                CHECK_TRUE(priority == 0);
+                priority = IDirect3DVertexBuffer9_GetPriority(vertex_buffer);
+                CHECK_TRUE(priority == (cases[i].can_set_priority ? 1 : 0));
+                IDirect3DVertexBuffer9_Release(vertex_buffer);
+            }
+        }
+    }
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 16, 16, D3DFMT_X8R8G8B8,
+            D3DMULTISAMPLE_NONE, 0, FALSE, &surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        priority = IDirect3DSurface9_GetPriority(surface);
+        CHECK_TRUE(priority == 0);
+        priority = IDirect3DSurface9_SetPriority(surface, 1);
+        CHECK_TRUE(priority == 0);
+        priority = IDirect3DSurface9_GetPriority(surface);
+        CHECK_TRUE(priority == 0);
+        IDirect3DSurface9_Release(surface);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lod()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_texture_lod_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    DWORD previous;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 128, 128, 3, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        previous = IDirect3DTexture9_SetLOD(texture, 0);
+        CHECK_TRUE(previous == 0);
+        previous = IDirect3DTexture9_SetLOD(texture, 1);
+        CHECK_TRUE(previous == 0);
+        previous = IDirect3DTexture9_SetLOD(texture, 2);
+        CHECK_TRUE(previous == 0);
+        CHECK_TRUE(IDirect3DTexture9_GetLOD(texture) == 0);
+        IDirect3DTexture9_Release(texture);
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 128, 128, 3, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DTexture9_GetLOD(texture) == 0);
+        previous = IDirect3DTexture9_SetLOD(texture, 2);
+        CHECK_TRUE(previous == 0);
+        CHECK_TRUE(IDirect3DTexture9_GetLOD(texture) == 2);
+        previous = IDirect3DTexture9_SetLOD(texture, 1);
+        CHECK_TRUE(previous == 2);
+        CHECK_TRUE(IDirect3DTexture9_GetLOD(texture) == 1);
+        IDirect3DTexture9_Release(texture);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_update_texture_pool()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

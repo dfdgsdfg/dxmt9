@@ -380,6 +380,8 @@ void test_volume_resource_container_desc(const struct d3d9_api *api);
 void test_volume_block_lock_layout(const struct d3d9_api *api);
 void test_vendor_format_public_api_policy(const struct d3d9_api *api);
 void test_resource_priority_roundtrip(const struct d3d9_api *api);
+void test_resource_priority_pool_policy(const struct d3d9_api *api);
+void test_texture_lod_policy(const struct d3d9_api *api);
 void test_update_texture_pool_copy_2d(const struct d3d9_api *api);
 void test_shared_handle_policy(const struct d3d9_api *api);
 void test_ex_shared_handle_policy(const struct d3d9_api *api);
