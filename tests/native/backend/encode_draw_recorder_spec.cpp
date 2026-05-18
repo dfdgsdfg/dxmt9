@@ -456,14 +456,17 @@ dxmt9::encoders::EncodeContext makeContext(Harness& harness,
 void assertIndexedDrawCommand(const RecordedCommand& command,
                               obj_handle_t indexBuffer,
                               std::uint64_t indexOffset,
-                              std::uint64_t indexCount) {
+                              std::uint64_t indexCount,
+                              WMTPrimitiveType primitiveType =
+                                  WMTPrimitiveTypeTriangle,
+                              WMTIndexType indexType = WMTIndexTypeUInt16) {
   check(command.kind == RecordedKind::DrawIndexedPrimitives,
         "third command is drawIndexedPrimitives");
   checkEq(static_cast<unsigned>(command.primitiveType),
-          static_cast<unsigned>(WMTPrimitiveTypeTriangle),
+          static_cast<unsigned>(primitiveType),
           "draw primitive type");
   checkEq(static_cast<unsigned>(command.indexType),
-          static_cast<unsigned>(WMTIndexTypeUInt16),
+          static_cast<unsigned>(indexType),
           "draw index type");
   checkEq(command.count, indexCount, "draw index count");
   checkEq(command.bufferHandle, indexBuffer, "draw index buffer source");
@@ -825,6 +828,92 @@ void testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset() {
       WMTPrimitiveTypeTriangle,
       0u,
       6u);
+}
+
+void testIndexedPrimitiveTopologyAndIndexWidthBoundaries() {
+  struct Case {
+    PrimitiveType primitiveType = PrimitiveType::PointList;
+    u32 primitiveCount = 0;
+    IndexType indexType = IndexType::UInt16;
+    WMTPrimitiveType metalPrimitiveType = WMTPrimitiveTypePoint;
+    WMTIndexType metalIndexType = WMTIndexTypeUInt16;
+    std::uint64_t indexCount = 0;
+    std::uint64_t indexStride = 0;
+    const char* label = "";
+  };
+
+  const std::array<Case, 5> cases{{
+      {PrimitiveType::PointList, 5u, IndexType::UInt16,
+       WMTPrimitiveTypePoint, WMTIndexTypeUInt16, 5u, sizeof(std::uint16_t),
+       "indexed point list"},
+      {PrimitiveType::LineList, 3u, IndexType::UInt16,
+       WMTPrimitiveTypeLine, WMTIndexTypeUInt16, 6u, sizeof(std::uint16_t),
+       "indexed line list"},
+      {PrimitiveType::LineStrip, 3u, IndexType::UInt32,
+       WMTPrimitiveTypeLineStrip, WMTIndexTypeUInt32, 4u, sizeof(std::uint32_t),
+       "indexed line strip"},
+      {PrimitiveType::TriangleList, 2u, IndexType::UInt32,
+       WMTPrimitiveTypeTriangle, WMTIndexTypeUInt32, 6u, sizeof(std::uint32_t),
+       "indexed triangle list"},
+      {PrimitiveType::TriangleStrip, 4u, IndexType::UInt16,
+       WMTPrimitiveTypeTriangleStrip, WMTIndexTypeUInt16, 6u,
+       sizeof(std::uint16_t), "indexed triangle strip"},
+  }};
+
+  constexpr std::uint32_t kStartIndex = 7u;
+
+  for (const auto& testCase : cases) {
+    Harness harness;
+    Capture capture;
+    auto recorder = makeRecorder(capture);
+
+    constexpr obj_handle_t kBoundVertex = 0x5300005300005acull;
+    constexpr obj_handle_t kBoundIndex = 0x6300006300006bdull;
+    auto state = makeProgrammableState(28u);
+    state.hot.streamBuffers[0] =
+        harness.createBoundBuffer(kBoundVertex, 16384u);
+    state.hot.streamOffsets[0] = 160u;
+    state.hot.indexBuffer = harness.createBoundBuffer(kBoundIndex, 4096u);
+
+    dxmt9::core::DrawParam param{};
+    param.primitiveType = testCase.primitiveType;
+    param.primitiveCount = testCase.primitiveCount;
+    param.baseVertexIndex = -5;
+    param.startIndex = kStartIndex;
+    param.indexType = testCase.indexType;
+    param.indexed = true;
+
+    PreUploadedDrawData preUploaded{};
+    std::array<std::uint8_t, 1> arena{};
+    runEncodeDraw(harness, recorder, state, param, preUploaded, arena);
+
+    checkEq(capture.commands.size(), std::size_t{3},
+            std::string(testCase.label) + " command count");
+    const auto& stream = commandAt(capture, 0,
+                                   std::string(testCase.label) + " stream bind");
+    check(stream.kind == RecordedKind::SetVertexBuffer,
+          std::string(testCase.label) + " first command binds vertex stream");
+    checkEq(stream.bufferHandle, kBoundVertex,
+            std::string(testCase.label) + " vertex buffer source");
+    checkEq(stream.offset, std::uint64_t{160},
+            std::string(testCase.label) + " indexed draw keeps stream offset");
+
+    const auto& volCommand = commandAt(
+        capture, 1, std::string(testCase.label) + " DrawVolatile");
+    const auto vol = volatileBytes(volCommand);
+    checkEq(vol.vertexBaseIndex, std::int32_t{-5},
+            std::string(testCase.label) + " DrawVolatile base vertex");
+    checkEq(vol.vertexStreamStride, std::uint32_t{28},
+            std::string(testCase.label) + " DrawVolatile stride");
+
+    assertIndexedDrawCommand(
+        commandAt(capture, 2, std::string(testCase.label) + " draw"),
+        kBoundIndex,
+        static_cast<std::uint64_t>(kStartIndex) * testCase.indexStride,
+        testCase.indexCount,
+        testCase.metalPrimitiveType,
+        testCase.metalIndexType);
+  }
 }
 
 void testNonIndexedPrimitiveTopologyVertexCounts() {
@@ -1267,6 +1356,7 @@ int main() {
     testArgbufModeKeepsDirectTextureSamplerBinds();
     testArgbufModeKeepsDirectVertexTextureSamplerBinds();
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
+    testIndexedPrimitiveTopologyAndIndexWidthBoundaries();
     testNonIndexedPrimitiveTopologyVertexCounts();
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
     testIndexedProgrammableDrawPreservesSparseStreamOffsets();
