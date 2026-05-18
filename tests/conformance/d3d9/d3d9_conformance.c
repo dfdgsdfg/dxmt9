@@ -56,6 +56,7 @@ static const struct test_case tests[] =
     {"clip_plane_state_getters", test_clip_plane_state_getters},
     {"null_stream_state", test_null_stream_state},
     {"set_stream_source_state", test_set_stream_source_state},
+    {"stream_source_frequency_state", test_stream_source_frequency_state},
     {"get_set_texture", test_get_set_texture},
     {"set_palette_roundtrip", test_set_palette_roundtrip},
     {"multi_adapter", test_multi_adapter},

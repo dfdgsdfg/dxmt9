@@ -680,6 +680,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_stream_source_frequency_state"
+source = "wine/dlls/d3d9/tests/visual.c:stream_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stream-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["stream-source frequency defaults, instancing/indexed flag combinations, invalid stream-zero instancing, and invalid zero-frequency behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_get_set_texture"
 source = "wine/dlls/d3d9/tests/device.c:test_get_set_texture"
 source_kind = "behavioral-oracle"

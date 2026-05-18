@@ -2157,6 +2157,103 @@ done_d3d9:
 }
 
 /*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: stream_test()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_stream_source_frequency_state(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    UINT freq;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    if (caps.MaxStreams < 2)
+    {
+        skip_current_test("device exposes fewer than two streams");
+        goto done_device;
+    }
+
+    freq = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetStreamSourceFreq(device, 0, &freq);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(freq == 1);
+
+    freq = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetStreamSourceFreq(device, 1, &freq);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(freq == 1);
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1, 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 0,
+            D3DSTREAMSOURCE_INSTANCEDATA | 1), D3DERR_INVALIDCALL);
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1, 0),
+            D3DERR_INVALIDCALL);
+    freq = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetStreamSourceFreq(device, 1, &freq);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(freq == 1);
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1, 2), D3D_OK);
+    freq = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetStreamSourceFreq(device, 1, &freq);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(freq == 2);
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1,
+            D3DSTREAMSOURCE_INDEXEDDATA), D3D_OK);
+    freq = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetStreamSourceFreq(device, 1, &freq);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(freq == D3DSTREAMSOURCE_INDEXEDDATA);
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1,
+            D3DSTREAMSOURCE_INSTANCEDATA), D3D_OK);
+    freq = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetStreamSourceFreq(device, 1, &freq);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(freq == D3DSTREAMSOURCE_INSTANCEDATA);
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1,
+            D3DSTREAMSOURCE_INSTANCEDATA | D3DSTREAMSOURCE_INDEXEDDATA),
+            D3DERR_INVALIDCALL);
+    freq = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetStreamSourceFreq(device, 1, &freq);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(freq == D3DSTREAMSOURCE_INSTANCEDATA);
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSourceFreq(device, 1, 1), D3D_OK);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
  * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_get_set_texture()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
