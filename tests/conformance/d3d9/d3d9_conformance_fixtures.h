@@ -386,6 +386,8 @@ void test_surface_lockrect_subrect_offset_policy(const struct d3d9_api *api);
 void test_compressed_surface_lockrect_block_offset(const struct d3d9_api *api);
 void test_surface_reentrant_lock_preserves_output(const struct d3d9_api *api);
 void test_texture_reentrant_lock_preserves_output(const struct d3d9_api *api);
+void test_texture_level_surface_unlock_policy(const struct d3d9_api *api);
+void test_mipmap_surface_update_lock_policy(const struct d3d9_api *api);
 void test_vb_lock_flags(const struct d3d9_api *api);
 void test_vertex_buffer_alignment(const struct d3d9_api *api);
 void test_surface_alignment(const struct d3d9_api *api);

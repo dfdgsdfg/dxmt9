@@ -1112,6 +1112,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_texture_level_surface_unlock_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_lockrect_invalid"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["extra UnlockRect behavior distinguishes texture-owned surface levels from offscreen and cube-level surfaces after a successful LockRect/UnlockRect pair"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_mipmap_surface_update_lock_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_mipmap_lock"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["locked system-memory mip surfaces reject per-surface UpdateSurface for the locked level while whole-texture UpdateTexture remains accepted"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_vb_lock_flags"
 source = "wine/dlls/d3d9/tests/device.c:test_vb_lock_flags"
 source_kind = "behavioral-oracle"

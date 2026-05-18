@@ -1099,6 +1099,228 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lockrect_invalid()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_texture_level_surface_unlock_policy(const struct d3d9_api *api)
+{
+    IDirect3DCubeTexture9 *cube_texture = NULL;
+    IDirect3DSurface9 *offscreen = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 8, 8,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &offscreen, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&locked, 0xcc, sizeof(locked));
+        hr = IDirect3DSurface9_LockRect(offscreen, &locked, NULL, 0);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_HR(IDirect3DSurface9_UnlockRect(offscreen), D3D_OK);
+            CHECK_HR(IDirect3DSurface9_UnlockRect(offscreen),
+                    D3DERR_INVALIDCALL);
+        }
+        IDirect3DSurface9_Release(offscreen);
+        offscreen = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 8, 8, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&locked, 0xcc, sizeof(locked));
+            hr = IDirect3DSurface9_LockRect(surface, &locked, NULL, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+                CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+            }
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateCubeTexture(device, 8, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &cube_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DCubeTexture9_GetCubeMapSurface(cube_texture,
+                D3DCUBEMAP_FACE_NEGATIVE_X, 0, &surface);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            memset(&locked, 0xcc, sizeof(locked));
+            hr = IDirect3DSurface9_LockRect(surface, &locked, NULL, 0);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+                CHECK_HR(IDirect3DSurface9_UnlockRect(surface),
+                        D3DERR_INVALIDCALL);
+            }
+            IDirect3DSurface9_Release(surface);
+            surface = NULL;
+        }
+        IDirect3DCubeTexture9_Release(cube_texture);
+        cube_texture = NULL;
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_mipmap_lock()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_mipmap_surface_update_lock_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *default_texture = NULL;
+    IDirect3DTexture9 *system_texture = NULL;
+    IDirect3DSurface9 *default_level0 = NULL;
+    IDirect3DSurface9 *default_level1 = NULL;
+    IDirect3DSurface9 *system_level0 = NULL;
+    IDirect3DSurface9 *system_level1 = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked0;
+    D3DLOCKED_RECT locked1;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 4, 2, 0,
+            D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &default_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 4, 2, 0,
+            D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &system_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_default_texture;
+
+    hr = IDirect3DTexture9_GetSurfaceLevel(default_texture, 0,
+            &default_level0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_system_texture;
+    hr = IDirect3DTexture9_GetSurfaceLevel(default_texture, 1,
+            &default_level1);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_default_level0;
+    hr = IDirect3DTexture9_GetSurfaceLevel(system_texture, 0,
+            &system_level0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_default_level1;
+    hr = IDirect3DTexture9_GetSurfaceLevel(system_texture, 1,
+            &system_level1);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_system_level0;
+
+    memset(&locked0, 0xcc, sizeof(locked0));
+    hr = IDirect3DSurface9_LockRect(system_level0, &locked0, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_system_level1;
+
+    memset(&locked1, 0xcc, sizeof(locked1));
+    hr = IDirect3DSurface9_LockRect(system_level1, &locked1, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+    {
+        CHECK_HR(IDirect3DSurface9_UnlockRect(system_level0), D3D_OK);
+        goto done_system_level1;
+    }
+
+    CHECK_HR(IDirect3DSurface9_UnlockRect(system_level0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_UpdateSurface(device, system_level0, NULL,
+            default_level0, NULL), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_UpdateSurface(device, system_level1, NULL,
+            default_level1, NULL), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_UpdateTexture(device,
+            (IDirect3DBaseTexture9 *)system_texture,
+            (IDirect3DBaseTexture9 *)default_texture), D3D_OK);
+    CHECK_HR(IDirect3DSurface9_UnlockRect(system_level1), D3D_OK);
+
+done_system_level1:
+    IDirect3DSurface9_Release(system_level1);
+done_system_level0:
+    IDirect3DSurface9_Release(system_level0);
+done_default_level1:
+    IDirect3DSurface9_Release(default_level1);
+done_default_level0:
+    IDirect3DSurface9_Release(default_level0);
+done_system_texture:
+    IDirect3DTexture9_Release(system_texture);
+done_default_texture:
+    IDirect3DTexture9_Release(default_texture);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_vb_lock_flags()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */
