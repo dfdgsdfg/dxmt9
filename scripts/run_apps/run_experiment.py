@@ -52,6 +52,7 @@ DEFAULT_TEMP_PREFIX_ROOT = REPO_ROOT / "tmp" / "prefixes"
 DEFAULT_MINGW_BIN_DIR = Path.home() / "llvm-mingw" / "x86_64-w64-mingw32" / "bin"
 DEFAULT_WOW64_MINGW_BIN_DIR = Path.home() / "llvm-mingw" / "i686-w64-mingw32" / "bin"
 DEFAULT_MANIFEST_PATH = REPO_ROOT / "experiments" / "wine" / "manifest.toml"
+CATALOGUE_SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hlsl", ".fx"}
 
 SSIM_THRESHOLD = 0.90
 BLACK_LUMA_THRESHOLD = 8.0
@@ -225,6 +226,52 @@ class ExperimentApp:
         if self.build_script is None:
             return None
         return REPO_ROOT / self.build_script
+
+
+def is_git_ignored(path: Path) -> bool:
+    try:
+        repo_relative = path.relative_to(REPO_ROOT)
+    except ValueError:
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "--quiet", str(repo_relative)],
+            cwd=REPO_ROOT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def has_catalogue_source_near_binary(binary_path: Path) -> bool:
+    parent = binary_path.parent
+    if not parent.is_dir():
+        return False
+    for candidate in parent.iterdir():
+        if candidate == binary_path or not candidate.is_file():
+            continue
+        if candidate.suffix.lower() not in CATALOGUE_SOURCE_SUFFIXES:
+            continue
+        if not is_git_ignored(candidate):
+            return True
+    return False
+
+
+def catalogue_blockers(app: ExperimentApp) -> list[str]:
+    blockers: list[str] = []
+    binary_path = app.binary_path
+    try:
+        binary_path.relative_to(REPO_ROOT / "experiments" / "apps")
+    except ValueError:
+        return blockers
+    if (
+        binary_path.name.lower().endswith(".exe")
+        and is_git_ignored(binary_path)
+        and not has_catalogue_source_near_binary(binary_path)
+    ):
+        blockers.append("ignored-binary-missing-source")
+    return blockers
 
 
 def load_catalogue(path: Path) -> list[ExperimentApp]:
@@ -625,6 +672,12 @@ def create_temp_prefix(app_name: str) -> Path:
 def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     if not app.launcher_path.exists():
         raise FileNotFoundError(f"launcher not found: {app.launcher_path}")
+    blockers = catalogue_blockers(app)
+    if blockers and args.binary is None:
+        raise FileNotFoundError(
+            f"{app.name}: source/build lane unavailable ({', '.join(blockers)}); "
+            f"not running generated/ignored binary {app.binary_path}"
+        )
     binary_path = Path(args.binary).expanduser().resolve() if args.binary else app.binary_path
     if not binary_path.exists():
         raise FileNotFoundError(f"binary not found: {binary_path}")
@@ -997,12 +1050,15 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
 def print_catalogue(apps: list[ExperimentApp]) -> None:
     for app in apps:
+        blockers = catalogue_blockers(app)
+        blocker_text = f" blocker={','.join(blockers)}" if blockers else ""
         print(
             f"{app.name:28} status={app.status:8} "
             f"binary={'yes' if app.binary_path.exists() else 'no ':3} "
             f"reference={'yes' if app.reference_path.exists() else 'no ':3} "
             f"scope={app.license_scope:20} "
             f"features={','.join(app.features)}"
+            f"{blocker_text}"
         )
 
 
@@ -1080,7 +1136,11 @@ def main() -> int:
             )
             return 2
         run_command(["bash", str(build_script_path)], cwd=REPO_ROOT)
-    return run_experiment(app, args)
+    try:
+        return run_experiment(app, args)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

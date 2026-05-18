@@ -173,6 +173,22 @@ Current exploratory commercial target:
 
 Current exploratory feature targets:
 
+- `dxmt9-d3d9-srgbtexture`
+- `dxmt9-d3d9-float-texture`
+- `dxmt9-d3d9-stream-source`
+- `dxmt9-d3d9-shademode-provoking`
+- `dxmt9-d3d9-pointsize-policy`
+- `dxmt9-d3d9-yuv-format-policy`
+- `dxmt9-d3d9-vendor-format-policy`
+
+D3D9IntentProbe notes:
+
+- These modes map to Wine `dlls/d3d9/tests/visual.c` behavior.
+- Current tree only has the ignored local `D3D9IntentProbe.exe`; the
+  corresponding source is absent from `experiments/apps/D3D9IntentProbe/`.
+- Catalogue rows and launchers are kept as exploratory scaffolding while the
+  source/build lane is restored or replaced by a clean project-owned probe.
+
 - `dxmt9-water-rt`
   - repo-local DX9 sample
   - render-to-texture + projected UV + alpha blend

@@ -106,6 +106,139 @@ capture_frame = 0
 reference_optional = true
 
 [[app]]
+name = "dxmt9-d3d9-srgbtexture"
+source = "wine/visual.c:srgbtexture_test"
+license = "lgpl-2.1-or-later"
+source_kind = "structure-reference"
+license_scope = "external-not-vendored"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-srgbtexture.sh"
+reference = "experiments/references/dxmt9-d3d9-srgbtexture.png"
+features = ["wine-visual.c", "srgbtexture", "sampler-state", "texture-stage-state", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 1.0
+run_timeout_sec = 45
+capture_frame = 0
+reference_optional = true
+wine_id = "sikarugir-cx-24.0.7"
+
+[[app]]
+name = "dxmt9-d3d9-float-texture"
+source = "wine/visual.c:float_texture_test"
+license = "lgpl-2.1-or-later"
+source_kind = "structure-reference"
+license_scope = "external-not-vendored"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-float-texture.sh"
+reference = "experiments/references/dxmt9-d3d9-float-texture.png"
+features = ["wine-visual.c", "float-texture", "r32f", "ps_2_0", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 1.0
+run_timeout_sec = 45
+capture_frame = 0
+reference_optional = true
+wine_id = "sikarugir-cx-24.0.7"
+
+[[app]]
+name = "dxmt9-d3d9-stream-source"
+source = "wine/visual.c:stream_source_test"
+license = "lgpl-2.1-or-later"
+source_kind = "structure-reference"
+license_scope = "external-not-vendored"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-stream-source.sh"
+reference = "experiments/references/dxmt9-d3d9-stream-source.png"
+features = ["wine-visual.c", "stream-source", "vertex-declaration", "multi-stream", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 1.0
+run_timeout_sec = 45
+capture_frame = 0
+reference_optional = true
+wine_id = "sikarugir-cx-24.0.7"
+
+[[app]]
+name = "dxmt9-d3d9-shademode-provoking"
+source = "wine/visual.c:test_shademode"
+license = "lgpl-2.1-or-later"
+source_kind = "structure-reference"
+license_scope = "external-not-vendored"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-shademode-provoking.sh"
+reference = "experiments/references/dxmt9-d3d9-shademode-provoking.png"
+features = ["wine-visual.c", "shademode", "flat-shading", "provoking-vertex", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 1.0
+run_timeout_sec = 45
+capture_frame = 0
+reference_optional = true
+wine_id = "sikarugir-cx-24.0.7"
+
+[[app]]
+name = "dxmt9-d3d9-pointsize-policy"
+source = "wine/visual.c:test_pointsize"
+license = "lgpl-2.1-or-later"
+source_kind = "structure-reference"
+license_scope = "external-not-vendored"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-pointsize-policy.sh"
+reference = "experiments/references/dxmt9-d3d9-pointsize-policy.png"
+features = ["wine-visual.c", "pointsize", "point-sprite-state", "fvf-psize", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 1.0
+run_timeout_sec = 45
+capture_frame = 0
+reference_optional = true
+wine_id = "sikarugir-cx-24.0.7"
+
+[[app]]
+name = "dxmt9-d3d9-yuv-format-policy"
+source = "wine/visual.c:yuv_color_test,yuv_layout_test"
+license = "lgpl-2.1-or-later"
+source_kind = "structure-reference"
+license_scope = "external-not-vendored"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-yuv-format-policy.sh"
+reference = "experiments/references/dxmt9-d3d9-yuv-format-policy.png"
+features = ["wine-visual.c", "yuv", "fourcc", "stretchrect", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 1.0
+run_timeout_sec = 45
+capture_frame = 0
+reference_optional = true
+wine_id = "sikarugir-cx-24.0.7"
+
+[[app]]
+name = "dxmt9-d3d9-vendor-format-policy"
+source = "wine/visual.c:test_fetch4"
+license = "lgpl-2.1-or-later"
+source_kind = "structure-reference"
+license_scope = "external-not-vendored"
+binary = "experiments/apps/D3D9IntentProbe/D3D9IntentProbe.exe"
+launcher = "experiments/launchers/dxmt9-d3d9-vendor-format-policy.sh"
+reference = "experiments/references/dxmt9-d3d9-vendor-format-policy.png"
+features = ["wine-visual.c", "vendor-format", "fourcc", "fetch4", "policy", "self-validated"]
+status = "exploratory"
+requires_wine = true
+window_title = "DXMT9 D3D9 Intent Probe"
+capture_delay_sec = 1.0
+run_timeout_sec = 45
+capture_frame = 0
+reference_optional = true
+wine_id = "sikarugir-cx-24.0.7"
+
+[[app]]
 name = "dx-sdk-basichlsl"
 source = "https://github.com/walbourn/directx-sdk-samples"
 license = "ms-directx-sdk"

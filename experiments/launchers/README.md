@@ -25,6 +25,13 @@ D3D9 SDK / DXUT / third-party samples:
 
 Self-authored apps:
 
+- `dxmt9-d3d9-srgbtexture.sh` — D3D9IntentProbe `srgbtexture` mode.
+- `dxmt9-d3d9-float-texture.sh` — D3D9IntentProbe `float-texture` mode.
+- `dxmt9-d3d9-stream-source.sh` — D3D9IntentProbe `stream-source` mode.
+- `dxmt9-d3d9-shademode-provoking.sh` — D3D9IntentProbe `shademode-provoking` mode.
+- `dxmt9-d3d9-pointsize-policy.sh` — D3D9IntentProbe `pointsize-policy` mode.
+- `dxmt9-d3d9-yuv-format-policy.sh` — D3D9IntentProbe `yuv-format-policy` mode.
+- `dxmt9-d3d9-vendor-format-policy.sh` — D3D9IntentProbe `vendor-format-policy` mode.
 - `dxmt9-multitexture-terrain.sh` — multitexture terrain demo.
 - `dxmt9-water-rt.sh` — water render-target / refraction demo.
 - `dxmt9-wsi-present-local.sh` — minimal WSI present smoke (CI bootstrap).

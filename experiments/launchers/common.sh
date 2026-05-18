@@ -121,3 +121,20 @@ exp_run_wine_binary() {
     )
   fi
 }
+
+exp_run_d3d9_intent_probe() {
+  local mode=$1
+  shift || true
+
+  local source_path="$exp_repo_root/experiments/apps/D3D9IntentProbe/D3D9IntentProbe.cpp"
+  if [[ ! -f "$source_path" ]]; then
+    exp_log "D3D9IntentProbe source/build lane unavailable: missing $source_path"
+    exp_log "not running generated/ignored binary: ${DXMT_EXPERIMENT_BINARY:-<unset>}"
+    exit 2
+  fi
+
+  exp_stage_dxmt9
+  export DXMT_EXPERIMENT_WORKDIR
+  DXMT_EXPERIMENT_WORKDIR=$(dirname -- "$DXMT_EXPERIMENT_BINARY")
+  exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" "$mode" "$@"
+}
