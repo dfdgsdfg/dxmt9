@@ -1463,6 +1463,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "legacy_sm1/dxmt9_ps11_texbem_stage1_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_1"]
+opcodes = ["MOV", "TEX", "TEXBEM"]
+oracle = "Wine d3d9 visual.c texbem_test behavior, reduced to ps_1_1 TEXBEM stage-1 bump-env matrix readback"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "legacy_sm1/dxmt9_ps13_texbeml_readback.shader_test"
 status = "passing"
 source = "dxmt9"
