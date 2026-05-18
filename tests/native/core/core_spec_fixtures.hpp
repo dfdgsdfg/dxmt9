@@ -573,6 +573,10 @@ struct RecordingBackend final : BackendDevice {
     presents.push_back(desc);
   }
 
+  void flush() override {
+    ++flushCount;
+  }
+
   u64 nextHandle = 1;
   std::vector<BufferDesc> createdBuffers;
   std::vector<TextureDesc> createdTextures;
@@ -592,6 +596,7 @@ struct RecordingBackend final : BackendDevice {
   std::vector<ReadbackDesc> readbacks;
   std::vector<ColorFillDesc> colorFills;
   std::vector<SwapDesc> presents;
+  u32 flushCount = 0;
   DeviceLostObserver deviceLostObserver;
   PresentationStatusObserver presentationStatusObserver;
   u32 maxFrameLatency = kDefaultFrameLatency;

@@ -686,6 +686,103 @@ void testFullscreenAndDeviceLost() {
   checkEq(device->swapChain()->backBuffer()->desc().height, 1080u, "fullscreen reset height");
 }
 
+void testQueryFlushPresentResetSequenceBoundaries() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.backBufferWidth = 64;
+  params.backBufferHeight = 48;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{0x1200u};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "query sequence device create");
+
+  auto timestamp = device->createQuery(QueryType::Timestamp);
+  check(timestamp != nullptr, "timestamp sequence query");
+  checkEq(device->issueQuery(timestamp, false), D3D_OK,
+          "timestamp issue records submitted sequence");
+  checkEq(device->submittedSequenceId(), 1ull,
+          "timestamp issue advances submitted sequence");
+  checkEq(device->completedSequenceId(), 0ull,
+          "timestamp issue does not complete sequence");
+
+  u64 timestampValue = 0;
+  checkEq(device->getQueryData(timestamp, &timestampValue,
+                               sizeof(timestampValue), 0),
+          S_FALSE, "timestamp unresolved before flush");
+  checkEq(backend->flushCount, 0u, "non-flush query poll does not flush");
+  checkEq(device->completedSequenceId(), 0ull,
+          "non-flush query poll keeps completion cursor");
+
+  checkEq(device->getQueryData(timestamp, &timestampValue,
+                               sizeof(timestampValue), QUERY_GETDATA_FLUSH),
+          S_OK, "timestamp query resolves after explicit flush");
+  checkEq(backend->flushCount, 1u, "query flush crosses backend boundary once");
+  checkEq(device->completedSequenceId(), 1ull,
+          "query flush completes through submitted sequence");
+  checkEq(timestampValue, 1ull, "timestamp value records issued sequence");
+
+  auto event = device->createQuery(QueryType::Event);
+  check(event != nullptr, "event sequence query");
+  checkEq(device->issueQuery(event, false), D3D_OK,
+          "event issue records next submitted sequence");
+  checkEq(device->submittedSequenceId(), 2ull,
+          "event issue advances submitted sequence");
+  checkEq(device->completedSequenceId(), 1ull,
+          "event issue leaves completion behind");
+  checkEq(device->present(), D3D_OK, "present completes outstanding event");
+  checkEq(backend->presents.size(), size_t{1}, "present submitted once");
+  checkEq(backend->flushCount, 1u,
+          "immediate present does not add a synchronous flush");
+  checkEq(device->submittedSequenceId(), 3ull,
+          "present itself advances submitted sequence");
+  checkEq(device->completedSequenceId(), 3ull,
+          "present completes outstanding query and present sequence");
+  checkEq(device->getQueryData(event, nullptr, 0, 0), S_OK,
+          "event query is ready after present completion");
+
+  PresentParameters resetParams = params;
+  resetParams.backBufferWidth = 80;
+  resetParams.backBufferHeight = 60;
+  resetParams.deviceWindow = Handle{0x1201u};
+  checkEq(device->reset(resetParams), D3D_OK,
+          "reset drains and recreates swapchain");
+  checkEq(backend->flushCount, 2u, "reset flushes before teardown");
+  checkEq(device->submittedSequenceId(), 0ull,
+          "reset clears submitted sequence cursor");
+  checkEq(device->completedSequenceId(), 0ull,
+          "reset clears completed sequence cursor");
+  checkEq(device->state().viewport.width, 80u,
+          "reset sequence test viewport width");
+  checkEq(device->state().viewport.height, 60u,
+          "reset sequence test viewport height");
+
+  auto postResetTimestamp = device->createQuery(QueryType::Timestamp);
+  check(postResetTimestamp != nullptr, "post-reset timestamp query");
+  checkEq(device->issueQuery(postResetTimestamp, false), D3D_OK,
+          "post-reset timestamp issue");
+  checkEq(device->submittedSequenceId(), 1ull,
+          "post-reset query starts from fresh submitted sequence");
+  checkEq(device->completedSequenceId(), 0ull,
+          "post-reset query is not completed by stale pre-reset cursor");
+  timestampValue = 0;
+  checkEq(device->getQueryData(postResetTimestamp, &timestampValue,
+                               sizeof(timestampValue), 0),
+          S_FALSE, "post-reset query waits for new completion");
+  checkEq(device->present(), D3D_OK, "post-reset present completes query");
+  checkEq(backend->presents.size(), size_t{2},
+          "post-reset present submitted once");
+  checkEq(device->getQueryData(postResetTimestamp, &timestampValue,
+                               sizeof(timestampValue), 0),
+          S_OK, "post-reset query ready after new present");
+  checkEq(timestampValue, 1ull,
+          "post-reset timestamp uses reset-local sequence id");
+}
+
 void testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer() {
   auto backend = std::make_shared<RecordingBackend>();
   Factory factory({}, backend);
@@ -829,6 +926,7 @@ int main() {
   try {
     testDeviceCoreFlow();
     testFullscreenAndDeviceLost();
+    testQueryFlushPresentResetSequenceBoundaries();
     testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer();
     testExperimentCaptureFrameListAndRangeWriteInternalFrames();
     testExperimentCaptureWriteFailureEmitsSkipSidecar();
