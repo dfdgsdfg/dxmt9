@@ -1320,6 +1320,125 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * functions: test_cube_textures(), test_cube_texture_levels()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_cube_texture_level_surface_policy(const struct d3d9_api *api)
+{
+    IDirect3DCubeTexture9 *texture = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DSURFACE_DESC desc;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    DWORD levels;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    if (!(caps.TextureCaps & D3DPTEXTURECAPS_CUBEMAP))
+    {
+        skip_current_test("cube textures are not supported");
+        goto done_device;
+    }
+
+    hr = IDirect3DDevice9_CreateCubeTexture(device, 64, 0, 0,
+            D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &texture, NULL);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateCubeTexture failed with %s", hr_buffer);
+        goto done_device;
+    }
+
+    levels = IDirect3DCubeTexture9_GetLevelCount(texture);
+    if (caps.TextureCaps & D3DPTEXTURECAPS_MIPCUBEMAP)
+        CHECK_TRUE(levels == 7);
+    else
+        CHECK_TRUE(levels == 1);
+
+    memset(&desc, 0xcc, sizeof(desc));
+    hr = IDirect3DCubeTexture9_GetLevelDesc(texture, levels - 1, &desc);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(desc.Type == D3DRTYPE_SURFACE);
+        CHECK_TRUE(desc.Width == 1);
+        CHECK_TRUE(desc.Height == 1);
+        CHECK_TRUE(desc.Format == D3DFMT_X8R8G8B8);
+        CHECK_TRUE(desc.Pool == D3DPOOL_DEFAULT);
+    }
+
+    CHECK_HR(IDirect3DCubeTexture9_GetLevelDesc(texture, levels, &desc),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DCubeTexture9_GetLevelDesc(texture, levels + 1, &desc),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DCubeTexture9_GetLevelDesc(texture, 0, NULL),
+            D3DERR_INVALIDCALL);
+
+    surface = NULL;
+    hr = IDirect3DCubeTexture9_GetCubeMapSurface(texture,
+            D3DCUBEMAP_FACE_POSITIVE_X, 0, &surface);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(surface != NULL);
+    if (surface)
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DSurface9_GetDesc(surface, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_SURFACE);
+            CHECK_TRUE(desc.Width == 64);
+            CHECK_TRUE(desc.Height == 64);
+            CHECK_TRUE(desc.Format == D3DFMT_X8R8G8B8);
+        }
+        IDirect3DSurface9_Release(surface);
+        surface = NULL;
+    }
+
+    CHECK_HR(IDirect3DCubeTexture9_GetCubeMapSurface(texture,
+            (D3DCUBEMAP_FACES)(D3DCUBEMAP_FACE_NEGATIVE_Z + 1), 0,
+            &surface), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DCubeTexture9_GetCubeMapSurface(texture,
+            (D3DCUBEMAP_FACES)(D3DCUBEMAP_FACE_POSITIVE_X - 1), 0,
+            &surface), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DCubeTexture9_GetCubeMapSurface(texture,
+            D3DCUBEMAP_FACE_POSITIVE_X, levels, &surface),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DCubeTexture9_GetCubeMapSurface(texture,
+            D3DCUBEMAP_FACE_POSITIVE_X, 0, NULL), D3DERR_INVALIDCALL);
+
+    IDirect3DCubeTexture9_Release(texture);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_volume_resource()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */
@@ -1404,6 +1523,139 @@ void test_volume_resource_container_desc(const struct d3d9_api *api)
 
 done_texture:
     IDirect3DVolumeTexture9_Release(texture);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_resource_type()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_volume_mipmap_level_desc_policy(const struct d3d9_api *api)
+{
+    IDirect3DVolumeTexture9 *texture = NULL;
+    IDirect3DVolume9 *volume = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DVOLUME_DESC desc;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    if (!(caps.TextureCaps & D3DPTEXTURECAPS_MIPVOLUMEMAP))
+    {
+        skip_current_test("mipmapped volume textures are not supported");
+        goto done_device;
+    }
+
+    hr = IDirect3DDevice9_CreateVolumeTexture(device, 2, 4, 8, 4, 0,
+            D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &texture, NULL);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateVolumeTexture failed with %s", hr_buffer);
+        goto done_device;
+    }
+
+    CHECK_TRUE(IDirect3DVolumeTexture9_GetLevelCount(texture) == 4);
+
+    hr = IDirect3DVolumeTexture9_GetVolumeLevel(texture, 0, &volume);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(volume != NULL);
+    if (SUCCEEDED(hr) && volume)
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DVolume9_GetDesc(volume, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_VOLUME);
+            CHECK_TRUE(desc.Width == 2);
+            CHECK_TRUE(desc.Height == 4);
+            CHECK_TRUE(desc.Depth == 8);
+            CHECK_TRUE(desc.Format == D3DFMT_X8R8G8B8);
+            CHECK_TRUE(desc.Pool == D3DPOOL_SYSTEMMEM);
+        }
+        IDirect3DVolume9_Release(volume);
+        volume = NULL;
+    }
+
+    memset(&desc, 0xcc, sizeof(desc));
+    hr = IDirect3DVolumeTexture9_GetLevelDesc(texture, 0, &desc);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(desc.Type == D3DRTYPE_VOLUME);
+        CHECK_TRUE(desc.Width == 2);
+        CHECK_TRUE(desc.Height == 4);
+        CHECK_TRUE(desc.Depth == 8);
+    }
+
+    hr = IDirect3DVolumeTexture9_GetVolumeLevel(texture, 2, &volume);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(volume != NULL);
+    if (SUCCEEDED(hr) && volume)
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DVolume9_GetDesc(volume, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(desc.Type == D3DRTYPE_VOLUME);
+            CHECK_TRUE(desc.Width == 1);
+            CHECK_TRUE(desc.Height == 1);
+            CHECK_TRUE(desc.Depth == 2);
+            CHECK_TRUE(desc.Format == D3DFMT_X8R8G8B8);
+            CHECK_TRUE(desc.Pool == D3DPOOL_SYSTEMMEM);
+        }
+        IDirect3DVolume9_Release(volume);
+        volume = NULL;
+    }
+
+    memset(&desc, 0xcc, sizeof(desc));
+    hr = IDirect3DVolumeTexture9_GetLevelDesc(texture, 2, &desc);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(desc.Type == D3DRTYPE_VOLUME);
+        CHECK_TRUE(desc.Width == 1);
+        CHECK_TRUE(desc.Height == 1);
+        CHECK_TRUE(desc.Depth == 2);
+    }
+
+    CHECK_HR(IDirect3DVolumeTexture9_GetVolumeLevel(texture, 4, &volume),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DVolumeTexture9_GetLevelDesc(texture, 4, &desc),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DVolumeTexture9_GetLevelDesc(texture, 0, NULL),
+            D3DERR_INVALIDCALL);
+
+    IDirect3DVolumeTexture9_Release(texture);
+
 done_device:
     IDirect3DDevice9_Release(device);
 done_window:
