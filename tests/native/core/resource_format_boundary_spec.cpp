@@ -622,6 +622,144 @@ void testCubeAndVolumeCreationDescriptors() {
           "volume upload slice2 byte");
 }
 
+void testCubeAndVolumeSubresourceUploadMetadata() {
+  PublicDevice fixture;
+
+  const auto cubeBefore = fixture.backend->createdTextures.size();
+  auto cube = UniqueTexture(dxmt9c_device_create_cube_texture(
+      fixture.c(), 8, 4, 0, kD3DFmtDXT5, kD3DPoolManaged));
+  check(cube != nullptr, "compressed cube texture creation succeeds");
+  checkEq(fixture.backend->createdTextures.size(), cubeBefore + size_t{1},
+          "compressed cube reaches backend");
+  const auto& cubeDesc = fixture.backend->createdTextures[cubeBefore];
+  checkEq(cubeDesc.type, TextureType::Cube, "compressed cube backend type");
+  checkEq(cubeDesc.format, Format::DXT5, "compressed cube backend format");
+  checkEq(cubeDesc.width, 8u, "compressed cube backend width");
+  checkEq(cubeDesc.height, 8u, "compressed cube backend height");
+  checkEq(cubeDesc.levels, 4u, "compressed cube backend level count");
+
+  const auto mip3 = textureLevelDesc(cube.get(), 3,
+                                     "compressed cube public mip3 desc");
+  checkEq(mip3.resourceType, kD3DResourceTypeCubeTexture,
+          "compressed cube public resource type");
+  checkEq(mip3.format, kD3DFmtDXT5, "compressed cube public format");
+  checkEq(mip3.width, 1u, "compressed cube mip3 width");
+  checkEq(mip3.height, 1u, "compressed cube mip3 height");
+  checkEq(mip3.depth, 1u, "compressed cube mip3 depth");
+  checkEq(cube->obj->levelBytes(3).size(), size_t{16},
+          "compressed cube face0 mip3 stores one DXT5 block");
+
+  const u32 cubeLevels = dxmt9c_texture_get_level_count(cube.get());
+  const u32 face4Mip3 = 4u * cubeLevels + 3u;
+  const auto surfaceBefore = fixture.backend->textureSurfaces.size();
+  auto faceSurface =
+      UniqueSurface(dxmt9c_texture_get_surface_level(cube.get(), face4Mip3));
+  check(faceSurface != nullptr, "compressed cube face4 mip3 surface exists");
+  checkEq(fixture.backend->textureSurfaces.size(), surfaceBefore + size_t{1},
+          "compressed cube face mip reaches backend surface-for-texture path");
+  const auto& faceSurfaceRecord = fixture.backend->textureSurfaces.back();
+  checkEq(faceSurfaceRecord.texture, cube->obj->handle(),
+          "compressed cube surface aliases parent texture");
+  checkEq(faceSurfaceRecord.subresource, face4Mip3,
+          "compressed cube surface preserves face-major subresource index");
+  checkEq(faceSurfaceRecord.desc.width, 1u,
+          "compressed cube surface backend width");
+  checkEq(faceSurfaceRecord.desc.height, 1u,
+          "compressed cube surface backend height");
+  checkEq(faceSurfaceRecord.desc.format, Format::DXT5,
+          "compressed cube surface backend format");
+  check(!faceSurfaceRecord.desc.renderTarget,
+        "compressed cube surface is not render-target");
+
+  const auto facePublic = surfaceDesc(faceSurface.get(),
+                                      "compressed cube face mip public desc");
+  checkEq(facePublic.resourceType, kD3DResourceTypeSurface,
+          "compressed cube face mip public surface type");
+  checkEq(facePublic.format, kD3DFmtDXT5,
+          "compressed cube face mip public format");
+  checkEq(facePublic.width, 1u, "compressed cube face mip public width");
+  checkEq(facePublic.height, 1u, "compressed cube face mip public height");
+
+  const auto cubeUploadBefore = fixture.backend->textureUploads.size();
+  D9CLockedRect cubeLock{};
+  checkEq(dxmt9c_texture_lock_rect(cube.get(), face4Mip3, &cubeLock, nullptr, 0),
+          D3D_OK, "compressed cube face mip lock succeeds");
+  check(cubeLock.bits != nullptr, "compressed cube face mip lock bits");
+  checkEq(cubeLock.pitch, 16, "compressed cube face mip pitch");
+  auto* cubeBytes = static_cast<u8*>(cubeLock.bits);
+  for (u32 i = 0; i < 16u; ++i) {
+    cubeBytes[i] = static_cast<u8>(0xa0u + i);
+  }
+  checkEq(dxmt9c_texture_unlock_rect(cube.get(), face4Mip3), D3D_OK,
+          "compressed cube face mip unlock succeeds");
+  checkEq(fixture.backend->textureUploads.size(), cubeUploadBefore + size_t{1},
+          "compressed cube face mip uploads once");
+  const auto& cubeUpload = fixture.backend->textureUploads.back();
+  checkEq(cubeUpload.handle, cube->obj->handle(),
+          "compressed cube upload handle");
+  checkEq(cubeUpload.level, face4Mip3,
+          "compressed cube upload preserves face-major subresource");
+  checkEq(cubeUpload.width, 1u, "compressed cube upload width");
+  checkEq(cubeUpload.height, 1u, "compressed cube upload height");
+  checkEq(cubeUpload.depth, 1u, "compressed cube upload depth");
+  checkEq(cubeUpload.pitch, 16u, "compressed cube upload pitch");
+  checkEq(cubeUpload.slicePitch, 16u, "compressed cube upload slice pitch");
+  checkEq(cubeUpload.bytes.size(), size_t{16},
+          "compressed cube upload byte count");
+  checkEq(cubeUpload.bytes[0], 0xa0u, "compressed cube upload first byte");
+  checkEq(cubeUpload.bytes[15], 0xafu, "compressed cube upload last byte");
+
+  const auto volumeBefore = fixture.backend->createdTextures.size();
+  auto volume = UniqueTexture(dxmt9c_device_create_volume_texture(
+      fixture.c(), 16, 8, 5, 3, 0, kD3DFmtA8R8G8B8, kD3DPoolManaged));
+  check(volume != nullptr, "deep volume texture creation succeeds");
+  checkEq(fixture.backend->createdTextures.size(), volumeBefore + size_t{1},
+          "deep volume reaches backend");
+  const auto& volumeDesc = fixture.backend->createdTextures[volumeBefore];
+  checkEq(volumeDesc.type, TextureType::Volume, "deep volume backend type");
+  checkEq(volumeDesc.depth, 5u, "deep volume backend depth");
+  checkEq(volumeDesc.levels, 3u, "deep volume backend levels");
+
+  const auto volumeMip1 = textureLevelDesc(volume.get(), 1,
+                                           "deep volume mip1 public desc");
+  checkEq(volumeMip1.resourceType, kD3DResourceTypeVolumeTexture,
+          "deep volume public resource type");
+  checkEq(volumeMip1.width, 8u, "deep volume mip1 width");
+  checkEq(volumeMip1.height, 4u, "deep volume mip1 height");
+  checkEq(volumeMip1.depth, 2u, "deep volume mip1 depth");
+  checkEq(volume->obj->levelBytes(1).size(), size_t{8u * 4u * 2u * 4u},
+          "deep volume mip1 stores two slices");
+
+  const auto volumeUploadBefore = fixture.backend->textureUploads.size();
+  D9CLockedRect volumeLock{};
+  checkEq(dxmt9c_texture_lock_rect(volume.get(), 1, &volumeLock, nullptr, 0),
+          D3D_OK, "deep volume mip1 lock succeeds");
+  check(volumeLock.bits != nullptr, "deep volume mip1 lock bits");
+  checkEq(volumeLock.pitch, 32, "deep volume mip1 row pitch");
+  auto* volumeBytes = static_cast<u8*>(volumeLock.bits);
+  const size_t volumeMip1SlicePitch = size_t{8u * 4u * 4u};
+  volumeBytes[0] = 0x44u;
+  volumeBytes[volumeMip1SlicePitch] = 0x88u;
+  checkEq(dxmt9c_texture_unlock_rect(volume.get(), 1), D3D_OK,
+          "deep volume mip1 unlock succeeds");
+  checkEq(fixture.backend->textureUploads.size(),
+          volumeUploadBefore + size_t{1}, "deep volume mip1 uploads once");
+  const auto& volumeUpload = fixture.backend->textureUploads.back();
+  checkEq(volumeUpload.handle, volume->obj->handle(),
+          "deep volume upload handle");
+  checkEq(volumeUpload.level, 1u, "deep volume upload mip level");
+  checkEq(volumeUpload.width, 8u, "deep volume upload width");
+  checkEq(volumeUpload.height, 4u, "deep volume upload height");
+  checkEq(volumeUpload.depth, 2u, "deep volume upload depth");
+  checkEq(volumeUpload.pitch, 32u, "deep volume upload row pitch");
+  checkEq(volumeUpload.slicePitch, 128u, "deep volume upload slice pitch");
+  checkEq(volumeUpload.bytes.size(), size_t{8u * 4u * 2u * 4u},
+          "deep volume upload byte count");
+  checkEq(volumeUpload.bytes[0], 0x44u, "deep volume upload slice0 byte");
+  checkEq(volumeUpload.bytes[volumeMip1SlicePitch], 0x88u,
+          "deep volume upload slice1 byte");
+}
+
 void testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch() {
   PublicDevice fixture;
 
@@ -768,6 +906,7 @@ int main() {
     testLuminanceDefaultChannelPolicy();
     testCompressedCreationAndBlockRowRounding();
     testCubeAndVolumeCreationDescriptors();
+    testCubeAndVolumeSubresourceUploadMetadata();
     testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
