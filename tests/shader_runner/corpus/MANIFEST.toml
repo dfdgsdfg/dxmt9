@@ -1235,6 +1235,18 @@ oracle = "Wine d3d9 visual.c test_fragment_coords behavior, reduced to vPos abso
 oracle-date = "2026-05-18"
 
 [[test]]
+file = "viewport/dxmt9_vpos_mrt_absolute_coords_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "DEF", "MOV", "MUL"]
+oracle = "Wine d3d9 visual.c test_fragment_coords behavior, reduced to vPos absolute coordinate parity across MRT outputs"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "viewport/dxmt9_viewport_vs_triangle.shader_test"
 status = "passing"
 source = "dxmt9"
@@ -1485,6 +1497,18 @@ models = ["ps_1_3"]
 opcodes = ["MOV", "TEX", "TEXCOORD"]
 oracle = "math-derivation"
 oracle-date = "2026-05-17"
+
+[[test]]
+file = "legacy_sm1/dxmt9_ps13_cnd_component_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_3"]
+opcodes = ["CND", "DEF", "MOV"]
+oracle = "Wine d3d9 visual.c cnd_test behavior, reduced to ps_1_3 component-wise CND readback"
+oracle-date = "2026-05-18"
 
 [[test]]
 file = "legacy_sm1/dxmt9_ps14_texcrd_texld_readback.shader_test"

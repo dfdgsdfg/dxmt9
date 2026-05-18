@@ -1,0 +1,20 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c cnd_test behavior, reduced to ps_1_3 component-wise CND readback
+; oracle-date: 2026-05-18
+
+[pixel shader d3dbc-hex]
+ffff0103 05000051 a00f0000 3e800000 3f400000 3f000000 3f19999a
+05000051 a00f0001 3f800000 00000000 00000000 3f800000
+05000051 a00f0002 00000000 00000000 3f800000 3f800000
+04000050 800f0000 a0e40000 a0e40001 a0e40002
+00000001 800f0800 80e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+draw quad
+expect-source pixel contains "> float4(0.5f)"
+probe (32, 32) rgba(0.0, 0.0, 1.0, 1.0) 1
