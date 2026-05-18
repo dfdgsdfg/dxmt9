@@ -1054,6 +1054,82 @@ void testProgrammableVsBindsExtraBoundStreamBeforeDraw() {
       6u);
 }
 
+void testProgrammableVsSkipsMissingExtraStreamWithoutStaleBind() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kStream0 = 0x5300005300007a0ull;
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  auto state = makeProgrammableState(20u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kStream0, 8192u);
+  state.hot.streamOffsets[0] = 40u;
+  state.hot.streamOffsets[3] = 256u;
+  state.hot.streamStrides[3] = 12u;
+  state.shaderLayout.vertexDecl.elements = {
+      dxmt9::core::VertexElement{0, 0, kD3DDeclTypeFloat3,
+                                 kD3DDeclMethodDefault,
+                                 kD3DDeclUsagePosition, 0},
+      dxmt9::core::VertexElement{3, 0, kD3DDeclTypeFloat2,
+                                 kD3DDeclMethodDefault,
+                                 kD3DDeclUsageTexcoord, 0},
+  };
+  state.shaderLayout.vertexDecl.streams[3].stride = 12u;
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleStrip;
+  param.primitiveCount = 2u;
+  param.startVertex = 5u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {});
+
+  checkEq(capture.commands.size(), std::size_t{3},
+          "missing extra stream draw command count");
+
+  const auto& stream0 = commandAt(capture, 0, "missing primary stream bind");
+  check(stream0.kind == RecordedKind::SetVertexBuffer,
+        "missing-extra-stream draw binds primary stream");
+  checkEq(stream0.bufferHandle, kStream0,
+          "missing-extra-stream draw uses primary stream buffer");
+  checkEq(stream0.offset, std::uint64_t{140},
+          "missing-extra-stream draw folds startVertex into primary stream");
+  checkEq(static_cast<unsigned>(stream0.index), 1u,
+          "missing-extra-stream draw binds primary Metal slot");
+
+  const auto& volCommand =
+      commandAt(capture, 1, "missing missing-extra-stream DrawVolatile");
+  check(volCommand.kind == RecordedKind::SetVertexBytes,
+        "missing-extra-stream draw pushes DrawVolatile after primary stream");
+  const auto vol = volatileBytes(volCommand);
+  checkEq(vol.vertexBaseIndex, std::int32_t{0},
+          "missing-extra-stream DrawVolatile clears base vertex");
+  checkEq(vol.vertexStreamOffset, std::uint32_t{0},
+          "missing-extra-stream DrawVolatile stream offset");
+  checkEq(vol.vertexStreamStride, std::uint32_t{20},
+          "missing-extra-stream DrawVolatile primary stride");
+  checkEq(vol._pad, std::uint32_t{0},
+          "missing-extra-stream DrawVolatile pad");
+
+  assertDrawPrimitivesCommand(
+      commandAt(capture, 2, "missing missing-extra-stream drawPrimitives"),
+      WMTPrimitiveTypeTriangleStrip,
+      0u,
+      4u);
+
+  for (const auto& command : capture.commands) {
+    check(command.kind != RecordedKind::SetVertexBuffer ||
+              static_cast<unsigned>(command.index) != 8u,
+          "missing extra stream does not bind stale Metal slot 8");
+  }
+}
+
 void testIndexedProgrammableDrawPreservesSparseStreamOffsets() {
   Harness harness;
   Capture capture;
@@ -1359,6 +1435,7 @@ int main() {
     testIndexedPrimitiveTopologyAndIndexWidthBoundaries();
     testNonIndexedPrimitiveTopologyVertexCounts();
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
+    testProgrammableVsSkipsMissingExtraStreamWithoutStaleBind();
     testIndexedProgrammableDrawPreservesSparseStreamOffsets();
     testBoundVertexAndUserIndexOrdering();
     testBoundVertexAndBoundIndexOrdering();
