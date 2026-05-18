@@ -1,0 +1,18 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c fog_test/test_negative_fixedfunction_fog behavior, reduced to FFP vertex fog clamping after fog end
+; oracle-date: 2026-05-18
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-transform projection 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0
+dxmt9-render-state lighting=off fog=on fog_mode=none fog_vertex_mode=linear range_fog=off fog_start=0.0 fog_end=1.0 fog_color=rgba(0.0,1.0,0.0,1.0) zenable=off zwrite=off
+dxmt9-texture 0 1 1 A8R8G8B8 white
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=texture alpha_arg1=texture
+dxmt9-bind-texture 0 0
+dxmt9-draw-solid-quad-xyz-depth 2.0
+probe (32, 32) rgba(0.0, 1.0, 0.0, 1.0) 2
