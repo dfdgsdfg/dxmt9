@@ -1270,6 +1270,190 @@ done_d3d9:
     IDirect3D9_Release(d3d9);
 }
 
+static void check_texture_auto_mipmap_levels(IDirect3DDevice9 *device,
+        UINT width, UINT height, DWORD expected_levels)
+{
+    IDirect3DTexture9 *texture = NULL;
+    HRESULT hr;
+
+    hr = IDirect3DDevice9_CreateTexture(device, width, height, 0, 0,
+            D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        return;
+
+    CHECK_TRUE(IDirect3DTexture9_GetLevelCount(texture) == expected_levels);
+    IDirect3DTexture9_Release(texture);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_mipmap_levels()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_texture_auto_mipmap_level_count(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    check_texture_auto_mipmap_levels(device, 32, 32, 6);
+    check_texture_auto_mipmap_levels(device, 256, 1, 9);
+    check_texture_auto_mipmap_levels(device, 1, 256, 9);
+    check_texture_auto_mipmap_levels(device, 1, 1, 1);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_mipmap_gen()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_texture_autogen_filter_level_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DTEXTUREFILTERTYPE filter;
+    D3DSURFACE_DESC desc;
+    IDirect3D9 *d3d9;
+    D3DLOCKED_RECT locked;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DUSAGE_AUTOGENMIPMAP,
+            D3DRTYPE_TEXTURE, D3DFMT_X8R8G8B8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("X8R8G8B8 autogen mipmap is not supported");
+        goto done_d3d9;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 64, 64, 0,
+            D3DUSAGE_AUTOGENMIPMAP, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED,
+            &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        filter = IDirect3DTexture9_GetAutoGenFilterType(texture);
+        CHECK_TRUE(filter == D3DTEXF_LINEAR);
+        CHECK_HR(IDirect3DTexture9_SetAutoGenFilterType(texture,
+                D3DTEXF_NONE), D3DERR_INVALIDCALL);
+        CHECK_HR(IDirect3DTexture9_SetAutoGenFilterType(texture,
+                D3DTEXF_ANISOTROPIC), D3D_OK);
+        filter = IDirect3DTexture9_GetAutoGenFilterType(texture);
+        CHECK_TRUE(filter == D3DTEXF_ANISOTROPIC);
+        CHECK_HR(IDirect3DTexture9_SetAutoGenFilterType(texture,
+                D3DTEXF_LINEAR), D3D_OK);
+
+        CHECK_TRUE(IDirect3DTexture9_GetLevelCount(texture) == 1);
+        for (i = 0; i < 6; ++i)
+        {
+            surface = NULL;
+            hr = IDirect3DTexture9_GetSurfaceLevel(texture, i, &surface);
+            CHECK_HR(hr, i ? D3DERR_INVALIDCALL : D3D_OK);
+            if (surface)
+            {
+                IDirect3DSurface9_Release(surface);
+                surface = NULL;
+            }
+
+            memset(&desc, 0xcc, sizeof(desc));
+            hr = IDirect3DTexture9_GetLevelDesc(texture, i, &desc);
+            CHECK_HR(hr, i ? D3DERR_INVALIDCALL : D3D_OK);
+
+            memset(&locked, 0xcc, sizeof(locked));
+            hr = IDirect3DTexture9_LockRect(texture, i, &locked, NULL, 0);
+            CHECK_HR(hr, i ? D3DERR_INVALIDCALL : D3D_OK);
+            if (SUCCEEDED(hr))
+                CHECK_HR(IDirect3DTexture9_UnlockRect(texture, i), D3D_OK);
+        }
+
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 64, 64, 2,
+            D3DUSAGE_AUTOGENMIPMAP, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED,
+            &texture, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    if (SUCCEEDED(hr))
+    {
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 64, 64, 1,
+            D3DUSAGE_AUTOGENMIPMAP, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED,
+            &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(IDirect3DTexture9_GetLevelCount(texture) == 1);
+        memset(&desc, 0xcc, sizeof(desc));
+        hr = IDirect3DTexture9_GetLevelDesc(texture, 0, &desc);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+            CHECK_TRUE(desc.Usage == D3DUSAGE_AUTOGENMIPMAP);
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    hr = IDirect3DDevice9_CreateTexture(device, 64, 64, 0,
+            D3DUSAGE_AUTOGENMIPMAP, D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM,
+            &texture, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    if (SUCCEEDED(hr))
+        IDirect3DTexture9_Release(texture);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_surface_format_null()

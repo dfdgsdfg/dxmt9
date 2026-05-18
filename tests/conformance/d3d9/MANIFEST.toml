@@ -1129,6 +1129,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_texture_auto_mipmap_level_count"
+source = "wine/dlls/d3d9/tests/device.c:test_mipmap_levels"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["implicit full mip-chain texture creation exposes Wine-compatible level counts for square, one-dimensional, and 1x1 textures"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_texture_autogen_filter_level_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_mipmap_gen"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["autogen-mipmap textures expose one public level, default LINEAR filter state, filter setter validation, level-desc usage flags, and invalid explicit-level/systemmem creation parity"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_surface_format_null_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_surface_format_null"
 source_kind = "behavioral-oracle"
