@@ -1619,6 +1619,18 @@ oracle = "Wine d3d9 visual.c fog_test behavior, reduced to EXP table-fog readbac
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "render_state/dxmt9_ffp_fog_exp2_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c fog_test behavior, reduced to EXP2 table-fog readback"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "render_state/dxmt9_depth_func_greater_rejects_near_readback.shader_test"
 status = "passing"
 source = "dxmt9"
