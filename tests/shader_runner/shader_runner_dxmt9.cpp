@@ -170,6 +170,7 @@ struct CorpusTest {
   std::optional<Rect> scissor;
   bool drawQuad = false;
   bool drawDxmt9TexturedQuad = false;
+  bool drawDxmt9TexturedQuadDiffuseAlpha = false;
   bool drawDxmt9TexturedQuadRhwGradient = false;
   bool drawDxmt9TexturedQuadOverscan = false;
   bool drawDxmt9TexturedQuadTex2 = false;
@@ -258,6 +259,16 @@ struct ScreenSpaceTexturedVertex {
   float y = 0.0f;
   float z = 0.0f;
   float rhw = 1.0f;
+  float u = 0.0f;
+  float v = 0.0f;
+};
+
+struct ScreenSpaceColorTexturedVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float rhw = 1.0f;
+  u32 color = 0xffffffffu;
   float u = 0.0f;
   float v = 0.0f;
 };
@@ -898,8 +909,20 @@ u32 parseTextureStageOp(std::string_view text) {
   if (token == "addsmooth") {
     return static_cast<u32>(TextureOp::AddSmooth);
   }
+  if (token == "blenddiffusealpha") {
+    return 12u;
+  }
+  if (token == "blendtexturealpha") {
+    return 13u;
+  }
+  if (token == "blendfactoralpha") {
+    return 14u;
+  }
   if (token == "dotproduct3") {
     return static_cast<u32>(TextureOp::DotProduct3);
+  }
+  if (token == "multiplyadd") {
+    return 25u;
   }
   if (token == "lerp") {
     return static_cast<u32>(TextureOp::Lerp);
@@ -1865,6 +1888,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-textured-quad-diffuse-alpha") {
+    test.drawDxmt9TexturedQuadDiffuseAlpha = true;
+    return;
+  }
+
   if (line == "dxmt9-draw-textured-quad-rhw-gradient") {
     test.drawDxmt9TexturedQuadRhwGradient = true;
     return;
@@ -2525,6 +2553,30 @@ void drawDxmt9TexturedQuad(Device& device, u32 width, u32 height) {
   if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2, std::span<const u8>(bytes, sizeof(quad)),
                              sizeof(ScreenSpaceTexturedVertex)) != D3D_OK) {
     fail("dxmt9 textured quad draw failed");
+  }
+}
+
+void drawDxmt9TexturedQuadDiffuseAlpha(Device& device, u32 width, u32 height) {
+  if (device.setFVF(kFvfXyzrhw | kFvfDiffuse | kFvfTex1) != D3D_OK) {
+    fail("dxmt9 diffuse-alpha textured quad FVF setup failed");
+  }
+
+  const float w = static_cast<float>(width);
+  const float h = static_cast<float>(height);
+  constexpr u32 kQuarterAlphaWhite = 0x40ffffffu;
+  const std::array<ScreenSpaceColorTexturedVertex, 6> quad{
+      ScreenSpaceColorTexturedVertex{0.0f, 0.0f, 0.0f, 1.0f, kQuarterAlphaWhite, 0.0f, 0.0f},
+      ScreenSpaceColorTexturedVertex{w, 0.0f, 0.0f, 1.0f, kQuarterAlphaWhite, 1.0f, 0.0f},
+      ScreenSpaceColorTexturedVertex{0.0f, h, 0.0f, 1.0f, kQuarterAlphaWhite, 0.0f, 1.0f},
+      ScreenSpaceColorTexturedVertex{w, 0.0f, 0.0f, 1.0f, kQuarterAlphaWhite, 1.0f, 0.0f},
+      ScreenSpaceColorTexturedVertex{w, h, 0.0f, 1.0f, kQuarterAlphaWhite, 1.0f, 1.0f},
+      ScreenSpaceColorTexturedVertex{0.0f, h, 0.0f, 1.0f, kQuarterAlphaWhite, 0.0f, 1.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceColorTexturedVertex)) != D3D_OK) {
+    fail("dxmt9 diffuse-alpha textured quad draw failed");
   }
 }
 
@@ -3445,7 +3497,9 @@ void runCorpusFile(const std::string& path) {
   }
 
   const bool needsRuntime = test.clearColor.has_value() || !test.probes.empty() || test.drawQuad ||
-                            test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadRhwGradient ||
+                            test.drawDxmt9TexturedQuad ||
+                            test.drawDxmt9TexturedQuadDiffuseAlpha ||
+                            test.drawDxmt9TexturedQuadRhwGradient ||
                             test.drawDxmt9TexturedQuadTex2 ||
                             test.drawDxmt9TexturedQuadTex3.has_value() ||
                             test.drawDxmt9TexturedQuadOverscan ||
@@ -3611,7 +3665,9 @@ void runCorpusFile(const std::string& path) {
 
   const bool needsClear = test.clearColor.has_value() || test.clearDepth.has_value() ||
                           !test.probes.empty() || test.drawQuad ||
-                          test.drawDxmt9TexturedQuad || test.drawDxmt9TexturedQuadRhwGradient ||
+                          test.drawDxmt9TexturedQuad ||
+                          test.drawDxmt9TexturedQuadDiffuseAlpha ||
+                          test.drawDxmt9TexturedQuadRhwGradient ||
                           test.drawDxmt9TexturedQuadTex2 ||
                           test.drawDxmt9TexturedQuadTex3.has_value() ||
                           test.drawDxmt9TexturedQuadOverscan ||
@@ -3680,6 +3736,16 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9TexturedQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9TexturedQuadDiffuseAlpha) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9TexturedQuadDiffuseAlpha(*device, params.backBufferWidth, params.backBufferHeight);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }

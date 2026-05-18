@@ -210,6 +210,20 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key) {
   }
 }
 
+void emitFfpTextureOpHelper(std::ostringstream& out) {
+  out << "inline float4 dxmt9_apply_ffp_texture_op(uint op, float4 arg1, float4 arg2,\n";
+  out << "                                          float4 current, float4 diffuse,\n";
+  out << "                                          float4 texture, float4 tfactor) {\n";
+  out << "  switch (op) {\n";
+  out << "    case 12u: return mix(arg2, arg1, diffuse.a);\n";
+  out << "    case 13u: return mix(arg2, arg1, texture.a);\n";
+  out << "    case 14u: return mix(arg2, arg1, tfactor.a);\n";
+  out << "    case 25u: return saturate(arg1 + arg2 * current);\n";
+  out << "    default: return dxmt9_apply_texture_op(op, arg1, arg2, current);\n";
+  out << "  }\n";
+  out << "}\n";
+}
+
 }  // namespace
 
 std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const VertexDeclSnapshot& decl) {
@@ -677,6 +691,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   } else {
     out << shaders::makeShaderPrelude(context.clipPlaneMask != 0);
   }
+  emitFfpTextureOpHelper(out);
   // R-BACK-12.22..12.26 MSL routing — when argbufHybrid is set, the
   // fragment entry point takes a single argument buffer at slot 30 for
   // `psConsts`/`ffpPs`. Texture/sampler parameters remain direct so
@@ -780,16 +795,18 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  float4 colorArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.colorArg2
           << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
           << "ffpPs.stageConstants[" << stage << "]);\n";
-      out << "  float4 stageResult" << stage << " = dxmt9_apply_texture_op(" << stageKey.colorOp
-          << "u, colorArg1_" << stage << ", colorArg2_" << stage << ", current);\n";
+      out << "  float4 stageResult" << stage << " = dxmt9_apply_ffp_texture_op(" << stageKey.colorOp
+          << "u, colorArg1_" << stage << ", colorArg2_" << stage << ", current, diffuse, texColor"
+          << stage << ", tfactor);\n";
       out << "  float4 alphaArg1_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg1
           << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
           << "ffpPs.stageConstants[" << stage << "]);\n";
       out << "  float4 alphaArg2_" << stage << " = dxmt9_select_texture_arg(" << stageKey.alphaArg2
           << "u, current, diffuse, specular, texColor" << stage << ", tfactor, temp, "
           << "ffpPs.stageConstants[" << stage << "]);\n";
-      out << "  stageResult" << stage << ".a = dxmt9_apply_texture_op(" << stageKey.alphaOp
-          << "u, alphaArg1_" << stage << ", alphaArg2_" << stage << ", current).a;\n";
+      out << "  stageResult" << stage << ".a = dxmt9_apply_ffp_texture_op(" << stageKey.alphaOp
+          << "u, alphaArg1_" << stage << ", alphaArg2_" << stage << ", current, diffuse, texColor"
+          << stage << ", tfactor).a;\n";
       out << "  current = stageResult" << stage << ";\n";
       if (stageKey.resultArg == 5u) {
         out << "  temp = stageResult" << stage << ";\n";

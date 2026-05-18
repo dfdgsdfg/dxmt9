@@ -647,6 +647,102 @@ oracle = "Wine d3d9 visual.c alphareplicate_test behavior, reduced to D3DTA_ALPH
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "texture/dxmt9_ffp_tss_alpha_modulate_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_texture_blending behavior, reduced to FFP alpha MODULATE"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_alpha_add_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_texture_blending behavior, reduced to FFP alpha ADD"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_alpha_addsmooth_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_texture_blending behavior, reduced to FFP alpha ADDSMOOTH"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_alpha_lerp_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_texture_blending behavior, reduced to FFP alpha LERP"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_blendtexturealpha_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_blending_ops behavior, reduced to FFP BLENDTEXTUREALPHA"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_blenddiffusealpha_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_blending_ops behavior, reduced to FFP BLENDDIFFUSEALPHA"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_blendfactoralpha_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_blending_ops behavior, reduced to FFP BLENDFACTORALPHA"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_multiplyadd_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_blending_ops behavior, reduced to FFP MULTIPLYADD"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "texture/dxmt9_ffp_tss_addsmooth_readback.shader_test"
 status = "passing"
 source = "dxmt9"
