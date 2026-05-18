@@ -293,6 +293,32 @@ D9CCommandRecordDrawPrimitive makeDrawRecord(D9CSurface* renderTarget,
   return draw;
 }
 
+D9CCommandRecordApplyState makeApplyStateRecord(D9CSurface* renderTarget,
+                                                D9CBuffer* vertexBuffer) {
+  D9CCommandRecordApplyState apply{};
+  apply.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+  apply.header.size = sizeof(apply);
+  apply.packet.rtMask = 0x1u;
+  apply.packet.rtHandles[0] = wireHandleFromPtr(renderTarget);
+  apply.packet.streamSourceMask = 0x1u;
+  apply.packet.streamSources[0].buffer = wireHandleFromPtr(vertexBuffer);
+  apply.packet.streamSources[0].offset = 8u;
+  apply.packet.streamSources[0].stride = 24u;
+  return apply;
+}
+
+D9CCommandRecordDrawPrimitive makeParamOnlyDrawRecord(
+    std::uint32_t startVertex,
+    std::uint32_t primitiveCount = 1u) {
+  D9CCommandRecordDrawPrimitive draw{};
+  draw.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  draw.header.size = sizeof(draw);
+  draw.packet.primitiveType = 4u;
+  draw.packet.startVertex = startVertex;
+  draw.packet.primitiveCount = primitiveCount;
+  return draw;
+}
+
 D9CCommandRecordDrawIndexedPrimitive makeIndexedDrawRecord(
     D9CSurface* renderTarget,
     D9CBuffer* vertexBuffer,
@@ -533,6 +559,190 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
 
   checkEq(device->Release(), 0u, "release recording d3d device");
   checkEq(d3d->Release(), 0u, "release recording d3d factory");
+}
+
+void testReadbackBoundarySplitsCoalescedImportedDrawRun() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create readback-run recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{78};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create readback-run recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+
+    auto renderTarget = device->CreateSurface(SurfaceDesc{
+        .width = 16u,
+        .height = 16u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    auto readbackTarget = device->CreateSurface(SurfaceDesc{
+        .width = 16u,
+        .height = 16u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Scratch,
+    });
+    auto vertexBuffer = device->CreateBuffer(BufferDesc{
+        .size = 128u,
+        .pool = Pool::Default,
+        .usage = UsageVertexBuffer,
+    });
+    check(renderTarget != nullptr, "readback-run render target");
+    check(readbackTarget != nullptr, "readback-run readback target");
+    check(vertexBuffer != nullptr, "readback-run vertex buffer");
+
+    D9CSurface renderTargetWire(renderTarget);
+    D9CSurface readbackTargetWire(readbackTarget);
+    D9CBuffer vertexBufferWire(vertexBuffer);
+
+    const auto apply = makeApplyStateRecord(&renderTargetWire, &vertexBufferWire);
+    const auto draw0 = makeParamOnlyDrawRecord(2u, 1u);
+    const auto draw1 = makeParamOnlyDrawRecord(5u, 2u);
+    const auto readback =
+        makeReadbackRecord(&renderTargetWire, &readbackTargetWire);
+    const auto draw2 = makeParamOnlyDrawRecord(11u, 3u);
+
+    std::vector<std::uint8_t> bytes;
+    appendRecord(bytes, apply);
+    appendRecord(bytes, draw0);
+    appendRecord(bytes, draw1);
+    appendRecord(bytes, readback);
+    appendRecord(bytes, draw2);
+
+    const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &readbackTargetWire),
+    };
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, 0u,
+                         sizeof(apply), 0u, 2u),
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                         sizeof(apply), sizeof(draw0), 0u, 0u),
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                         sizeof(apply) + sizeof(draw0), sizeof(draw1), 0u, 0u),
+        wireRecordHeader(D9C_COMMAND_RECORD_READBACK,
+                         sizeof(apply) + sizeof(draw0) + sizeof(draw1),
+                         sizeof(readback), 0u, 3u),
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                         sizeof(apply) + sizeof(draw0) + sizeof(draw1) +
+                             sizeof(readback),
+                         sizeof(draw2), 0u, 0u),
+    };
+    const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
+
+    D9CCommandChunk chunk{};
+    chunk.version = D9C_COMMAND_CHUNK_VERSION;
+    chunk.recordCount = static_cast<std::uint32_t>(records.size());
+    chunk.recordBytes = static_cast<std::uint32_t>(wireBlob.size());
+    chunk.records = wireHandleFromPtr(wireBlob.data());
+    chunk.handleCount = static_cast<std::uint32_t>(std::size(handles));
+    chunk.handles = {};
+
+    recorder->events.clear();
+    checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
+            "commit readback-split imported draw-run chunk");
+
+    checkEq(recorder->events.size(), static_cast<std::size_t>(8),
+            "readback-split event count");
+    checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
+                   "readback-split bulk retention happens first");
+    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                   "readback-split enables bulk-retention skip");
+    check(recorder->events[1].skipDrawResourceMarking,
+          "readback-split bulk-retention skip enabled");
+    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+                   "draws before readback submit as one run");
+    checkEventKind(recorder->events, 3u, EventKind::SubmitReadback,
+                   "readback follows the coalesced draw run");
+    checkEventKind(recorder->events, 4u, EventKind::Flush,
+                   "readback forces a synchronous flush before fallback copy");
+    checkEventKind(recorder->events, 5u, EventKind::SubmitSurfaceCopy,
+                   "readback fallback copy stays before later draws");
+    checkEventKind(recorder->events, 6u, EventKind::SubmitDraw,
+                   "draw after readback starts a new run");
+    checkEventKind(recorder->events, 7u, EventKind::SetSkipDrawResourceMarking,
+                   "readback-split resets bulk-retention skip");
+    check(!recorder->events[7].skipDrawResourceMarking,
+          "readback-split bulk-retention skip disabled");
+
+    const auto& retained = recorder->events[0].chunkHandles;
+    checkEq(retained.size(), static_cast<std::size_t>(3),
+            "readback-split retention resolves every pool-backed handle");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              renderTarget->handle()),
+          "readback-split retention includes render target");
+    check(containsChunkHandle(retained, ChunkHandleKind::Buffer,
+                              vertexBuffer->handle()),
+          "readback-split retention includes vertex buffer");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              readbackTarget->handle()),
+          "readback-split retention includes readback target");
+
+    const auto& beforeReadback = recorder->events[2].drawRun;
+    checkEq(beforeReadback.draws.size(), static_cast<std::size_t>(2),
+            "pre-readback draw run keeps both param-only draws");
+    checkEq(beforeReadback.hot.colorAttachments[0].handle.value,
+            renderTarget->handle().value,
+            "pre-readback run inherits applied render target");
+    checkEq(beforeReadback.hot.streamBuffers[0].value,
+            vertexBuffer->handle().value,
+            "pre-readback run inherits applied stream buffer");
+    checkEq(beforeReadback.hot.streamOffsets[0], 8u,
+            "pre-readback run inherits applied stream offset");
+    checkEq(beforeReadback.hot.streamStrides[0], 24u,
+            "pre-readback run inherits applied stream stride");
+    checkEq(beforeReadback.draws[0].startVertex, 2u,
+            "first pre-readback draw keeps start vertex");
+    checkEq(beforeReadback.draws[0].primitiveCount, 1u,
+            "first pre-readback draw keeps primitive count");
+    checkEq(beforeReadback.draws[1].startVertex, 5u,
+            "second pre-readback draw keeps start vertex");
+    checkEq(beforeReadback.draws[1].primitiveCount, 2u,
+            "second pre-readback draw keeps primitive count");
+    check(beforeReadback.payloadArena.empty(),
+          "pre-readback run has no UP payload arena");
+
+    checkEq(recorder->events[3].readback.source.value,
+            renderTarget->handle().value, "readback-split source handle");
+    checkEq(recorder->events[3].readback.destination.value,
+            readbackTarget->handle().value,
+            "readback-split destination handle");
+
+    const auto& afterReadback = recorder->events[6].drawRun;
+    checkEq(afterReadback.draws.size(), static_cast<std::size_t>(1),
+            "post-readback draw run is not merged across readback");
+    checkEq(afterReadback.hot.colorAttachments[0].handle.value,
+            renderTarget->handle().value,
+            "post-readback run keeps applied render target");
+    checkEq(afterReadback.hot.streamBuffers[0].value,
+            vertexBuffer->handle().value,
+            "post-readback run keeps applied stream buffer");
+    checkEq(afterReadback.draws[0].startVertex, 11u,
+            "post-readback draw keeps start vertex");
+    checkEq(afterReadback.draws[0].primitiveCount, 3u,
+            "post-readback draw keeps primitive count");
+    check(afterReadback.payloadArena.empty(),
+          "post-readback run has no UP payload arena");
+  }
+
+  checkEq(device->Release(), 0u, "release readback-run recording d3d device");
+  checkEq(d3d->Release(), 0u, "release readback-run recording d3d factory");
 }
 
 void testImportedIndexedDrawPreservesBoundIndexPolicy() {
@@ -1096,6 +1306,7 @@ void testHandleArenaSlotPointerStableAcrossInserts() {
 int main() {
   try {
     testImportedChunkBulkRetentionAndBarrierOrdering();
+    testReadbackBoundarySplitsCoalescedImportedDrawRun();
     testImportedIndexedDrawPreservesBoundIndexPolicy();
     testDeviceCSetIndicesInfersIndex32Format();
     testImportedIndexedDrawRunCoalescesParamOnlyPackets();
