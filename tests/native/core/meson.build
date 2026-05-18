@@ -70,6 +70,23 @@ test('dxmt9-core-shader-translator-spec-pixel-vflip-contract', core_shader_trans
 test('dxmt9-core-shader-translator-spec-vertex-yflip-contract', core_shader_translator_spec,
      env: dxmt9_native_test_env_vars + ['DXMT9_CORE_SPEC_SOURCE_CONTRACT_ONLY=1', 'DXMT_DEBUG_FLIP_VERTEX_Y=1'])
 
+# Byte-equal determinism + sensitivity regression guard for the MSL
+# source generators (translator + FFP + dispatch wrapper). Pairs with
+# the FFP variant-key determinism spec
+# (tests/native/backend/ffp_key_determinism_spec.cpp), which covers
+# state -> key, by covering key -> source. Pure source-level value
+# comparison; no Metal device, no env-var dependencies.
+shader_source_determinism_spec = executable(
+  'dxmt9-shader-source-determinism-spec',
+  'shader_source_determinism_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-shader-source-determinism-spec', shader_source_determinism_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 # Decoder safe-rejection spec — defense-in-depth on malformed D3DBC
 # bytecode input (truncated / unsupported version / OOB register /
 # missing END / invalid opcode). DXMT_PERF_COUNTERS=1 is required so
