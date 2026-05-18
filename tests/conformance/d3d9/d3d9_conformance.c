@@ -139,6 +139,8 @@ static const struct test_case tests[] =
             test_ex_adapter_display_mode_null_rotation},
     {"ex_adapter_mode_enum_bounds", test_ex_adapter_mode_enum_bounds},
     {"ex_swapchain_display_mode", test_ex_swapchain_display_mode},
+    {"ex_swapchain_display_mode_null_rotation",
+            test_ex_swapchain_display_mode_null_rotation},
     {"ex_frame_latency_state", test_ex_frame_latency_state},
     {"lockable_backbuffer_lock_policy", test_lockable_backbuffer_lock_policy},
     {"nonlockable_backbuffer_getdc_policy",
