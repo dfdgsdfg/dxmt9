@@ -982,6 +982,135 @@ void testResourceBindingsAndAttachments() {
           "canonical key keeps depth-stencil sample count");
 }
 
+void testTextureSamplerAndAttachmentPayloadSurvivesDrawRunCommandView() {
+  DeviceState state;
+  state.reset();
+
+  const auto stream0 = makeBuffer(0x9a00, 4096, UsageVertexBuffer);
+  const auto texture0 = makeTexture(0x9b00, Format::A8R8G8B8, 4);
+  const auto texture7 = makeTexture(0x9b07, Format::DXT5, 3);
+  const auto vertexTexture = makeTexture(0x9b08, Format::R32F, 2);
+  const auto extraSamplerTexture = makeTexture(0x9b0f, Format::A16B16G16R16F, 5);
+  const auto rt0 = makeSurface(0x9c00, Format::A8R8G8B8, MultiSampleType::None,
+                               true, false);
+  const auto rt2 = makeSurface(0x9c02, Format::A16B16G16R16F, MultiSampleType::Four,
+                               true, false);
+  const auto depth = makeSurface(0x9d00, Format::D24S8, MultiSampleType::Two,
+                                 false, true);
+
+  texture0->setLod(2u);
+  vertexTexture->setLod(1u);
+  extraSamplerTexture->setLod(3u);
+
+  state.streamBuffers[0] = stream0;
+  state.streamOffsets[0] = 24u;
+  state.streamStrides[0] = 32u;
+  state.textures[0] = texture0;
+  state.textures[kMaxTextureStages - 1] = texture7;
+  state.textures[kVertexTextureSampler0] = vertexTexture;
+  state.textures[kMaxTextures - 1] = extraSamplerTexture;
+  state.textureStageStates[0][TSS_COLOR_OP] =
+      static_cast<u32>(TextureOp::Modulate);
+  state.textureStageStates[kMaxTextureStages - 1][TSS_TEXTURE_TYPE] =
+      static_cast<u32>(TextureType::Cube);
+  state.samplerStates[0][SAMP_ADDRESS_U] = 3u;
+  state.samplerStates[kVertexTextureSampler0][SAMP_MIN_FILTER] = 2u;
+  state.samplerStates[kMaxSamplers - 1][SAMP_MIP_FILTER] = 1u;
+  state.renderTargets[0] =
+      {rt0->handle(), rt0->level(), rt0->multiSampleCount()};
+  state.renderTargets[2] =
+      {rt2->handle(), rt2->level(), rt2->multiSampleCount()};
+  state.depthStencil =
+      {depth->handle(), depth->level(), depth->multiSampleCount()};
+
+  const DrawCallArgs args{PrimitiveType::TriangleList, 2u, 5u, 0, 0,
+                          IndexType::UInt16};
+  const DrawDesc desc = makeDrawDescFromState(state, args);
+  CanonicalDrawState canonical = makeCanonicalDrawStateForTest(desc);
+  const auto uniforms = makeDrawUniformPayload(desc);
+  DrawParam param = makeDrawParamForTest(desc);
+
+  ChunkSlot slot{};
+  slot.appendDrawRun(canonical, uniforms, std::span<const DrawParam>(&param, 1),
+                     std::span<const DrawParamPayloadView>{});
+
+  canonical.hot.textures[0] = Handle{};
+  canonical.hot.textureLods[kVertexTextureSampler0] = 0u;
+  canonical.hot.samplerStates[kVertexTextureSampler0] = {};
+  canonical.hot.colorAttachments[0] = {};
+  canonical.hot.depthStencil = {};
+  state.textures[0].reset();
+  state.textures[kVertexTextureSampler0].reset();
+  state.renderTargets[0] = {};
+  state.depthStencil = {};
+
+  const auto command = slot.commandAt(0);
+  checkEq(command.kind, MetalCommandKind::DrawRun,
+          "resource draw-run command is recorded");
+  check(command.drawState.hot != nullptr,
+        "resource draw-run command exposes hot draw state");
+  check(command.drawState.debug != nullptr,
+        "resource draw-run command exposes debug snapshot");
+
+  const auto expectedTextureMask =
+      (1u << 0u) | (1u << (kMaxTextureStages - 1)) |
+      (1u << kVertexTextureSampler0) | (1u << (kMaxTextures - 1));
+  checkEq(command.drawState.hot->textureMask, expectedTextureMask,
+          "slot command keeps sparse texture mask across draw-run boundary");
+  checkEq(command.drawState.key().textureMask, expectedTextureMask,
+          "slot command key keeps sparse texture mask");
+  checkEq(command.drawState.debugSnapshot().textureMask, expectedTextureMask,
+          "slot command debug snapshot keeps sparse texture mask");
+  checkEq(command.drawState.hot->textures[0], texture0->handle(),
+          "slot command keeps stage 0 texture handle");
+  checkEq(command.drawState.hot->textures[kMaxTextureStages - 1],
+          texture7->handle(),
+          "slot command keeps last FFP texture handle");
+  checkEq(command.drawState.hot->textures[kVertexTextureSampler0],
+          vertexTexture->handle(),
+          "slot command keeps vertex texture sampler handle");
+  checkEq(command.drawState.hot->textures[kMaxTextures - 1],
+          extraSamplerTexture->handle(),
+          "slot command keeps high sampler texture handle");
+  checkEq(command.drawState.hot->textureLods[0], 2u,
+          "slot command keeps stage 0 texture LOD");
+  checkEq(command.drawState.hot->textureLods[kVertexTextureSampler0], 1u,
+          "slot command keeps vertex texture LOD");
+  checkEq(command.drawState.key().textureLods[kMaxTextures - 1], 3u,
+          "slot command key keeps high sampler texture LOD");
+  checkFlatStateValue(command.drawState.hot->samplerStates[0],
+                      SAMP_ADDRESS_U, 3u,
+                      "slot command keeps stage 0 sampler state");
+  checkFlatStateValue(command.drawState.hot->samplerStates[kVertexTextureSampler0],
+                      SAMP_MIN_FILTER, 2u,
+                      "slot command keeps vertex sampler state");
+  checkFlatStateValue(command.drawState.hot->samplerStates[kMaxSamplers - 1],
+                      SAMP_MIP_FILTER, 1u,
+                      "slot command keeps high sampler state");
+
+  const u32 expectedRtMask = (1u << 0u) | (1u << 2u);
+  checkEq(command.drawState.hot->renderTargetMask, expectedRtMask,
+          "slot command keeps sparse render-target mask");
+  checkEq(command.drawState.debugSnapshot().renderTargetMask, expectedRtMask,
+          "slot command debug snapshot keeps render-target mask");
+  checkEq(command.drawState.hot->colorAttachments[0].handle, rt0->handle(),
+          "slot command keeps RT0 handle");
+  checkEq(command.drawState.hot->colorAttachments[2].handle, rt2->handle(),
+          "slot command keeps sparse RT2 handle");
+  checkEq(command.drawState.hot->colorAttachments[2].sampleCount, 4u,
+          "slot command keeps RT2 multisample count");
+  checkEq(command.drawState.key().colorAttachments[2],
+          RenderTargetAttachment{rt2->handle(), rt2->level(),
+                                 rt2->multiSampleCount()},
+          "slot command key keeps full RT2 attachment payload");
+  checkEq(command.drawState.hot->depthStencil.handle, depth->handle(),
+          "slot command keeps depth-stencil handle");
+  checkEq(command.drawState.hot->depthStencil.sampleCount, 2u,
+          "slot command keeps depth-stencil sample count");
+  checkEq(command.drawParams.size(), std::size_t{1},
+          "slot command keeps draw param span");
+}
+
 void testVertexDeclFvfAndStreamBindings() {
   DeviceState state;
   state.reset();
@@ -1922,6 +2051,7 @@ int main() {
   testShaderConstantPayloadSurvivesDrawRunCommandView();
   testShaderLayoutCarriesConstantUsageMetadata();
   testResourceBindingsAndAttachments();
+  testTextureSamplerAndAttachmentPayloadSurvivesDrawRunCommandView();
   testVertexDeclFvfAndStreamBindings();
   testTextureStageArgumentCanonicalValues();
   testRenderStateIntentPayloadAcrossDrawRunBoundary();
