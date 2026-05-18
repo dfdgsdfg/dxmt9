@@ -1803,6 +1803,116 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_volume_get_container()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_volume_container_interface_policy(const struct d3d9_api *api)
+{
+    IDirect3DVolumeTexture9 *texture = NULL;
+    IDirect3DVolume9 *volume = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IUnknown *container = NULL;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    if (!(caps.TextureCaps & D3DPTEXTURECAPS_VOLUMEMAP))
+    {
+        skip_current_test("volume textures are not supported");
+        goto done_device;
+    }
+
+    hr = IDirect3DDevice9_CreateVolumeTexture(device, 8, 8, 8, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DVolumeTexture9_GetVolumeLevel(texture, 0, &volume);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(volume != NULL);
+    if (FAILED(hr) || !volume)
+        goto done_texture;
+
+    hr = IDirect3DVolume9_GetContainer(volume, &IID_IUnknown,
+            (void **)&container);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(container == (IUnknown *)texture);
+    if (container)
+    {
+        IUnknown_Release(container);
+        container = NULL;
+    }
+
+    hr = IDirect3DVolume9_GetContainer(volume, &IID_IDirect3DResource9,
+            (void **)&container);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(container == (IUnknown *)texture);
+    if (container)
+    {
+        IUnknown_Release(container);
+        container = NULL;
+    }
+
+    hr = IDirect3DVolume9_GetContainer(volume, &IID_IDirect3DBaseTexture9,
+            (void **)&container);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(container == (IUnknown *)texture);
+    if (container)
+    {
+        IUnknown_Release(container);
+        container = NULL;
+    }
+
+    hr = IDirect3DVolume9_GetContainer(volume, &IID_IDirect3DVolumeTexture9,
+            (void **)&container);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(container == (IUnknown *)texture);
+    if (container)
+    {
+        IUnknown_Release(container);
+        container = NULL;
+    }
+
+    container = (IUnknown *)0xdeadbeef;
+    hr = IDirect3DVolume9_GetContainer(volume, &IID_IDirect3DVolume9,
+            (void **)&container);
+    CHECK_HR(hr, E_NOINTERFACE);
+    CHECK_TRUE(container == NULL);
+
+    IDirect3DVolume9_Release(volume);
+
+done_texture:
+    IDirect3DVolumeTexture9_Release(texture);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_resource_type()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

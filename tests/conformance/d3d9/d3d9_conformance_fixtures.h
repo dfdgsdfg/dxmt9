@@ -388,6 +388,7 @@ void test_resource_type(const struct d3d9_api *api);
 void test_texture_surface_container_policy(const struct d3d9_api *api);
 void test_cube_texture_level_surface_policy(const struct d3d9_api *api);
 void test_volume_resource_container_desc(const struct d3d9_api *api);
+void test_volume_container_interface_policy(const struct d3d9_api *api);
 void test_volume_mipmap_level_desc_policy(const struct d3d9_api *api);
 void test_volume_block_lock_layout(const struct d3d9_api *api);
 void test_volume_lockbox_bounds_offset_policy(const struct d3d9_api *api);

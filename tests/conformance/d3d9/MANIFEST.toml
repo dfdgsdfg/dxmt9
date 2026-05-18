@@ -1146,6 +1146,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_volume_container_interface_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_volume_get_container"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "volume-resources"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["volume level GetContainer returns the owning volume texture for IUnknown, IDirect3DResource9, IDirect3DBaseTexture9, and IDirect3DVolumeTexture9, and rejects IDirect3DVolume9 with a null out-pointer"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_volume_mipmap_level_desc_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_resource_type"
 source_kind = "behavioral-oracle"

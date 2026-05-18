@@ -95,6 +95,8 @@ static const struct test_case tests[] =
     {"cube_texture_level_surface_policy",
             test_cube_texture_level_surface_policy},
     {"volume_resource_container_desc", test_volume_resource_container_desc},
+    {"volume_container_interface_policy",
+            test_volume_container_interface_policy},
     {"volume_mipmap_level_desc_policy",
             test_volume_mipmap_level_desc_policy},
     {"volume_block_lock_layout", test_volume_block_lock_layout},
