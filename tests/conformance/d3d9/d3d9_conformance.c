@@ -59,6 +59,7 @@ static const struct test_case tests[] =
     {"stream_source_frequency_state", test_stream_source_frequency_state},
     {"get_set_texture", test_get_set_texture},
     {"set_palette_roundtrip", test_set_palette_roundtrip},
+    {"palette_alpha_caps_policy", test_palette_alpha_caps_policy},
     {"multi_adapter", test_multi_adapter},
     {"stateblock_invalid_type_recording_invalid_calls",
             test_stateblock_invalid_type_recording_invalid_calls},

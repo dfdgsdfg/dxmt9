@@ -350,6 +350,7 @@ void test_set_stream_source_state(const struct d3d9_api *api);
 void test_stream_source_frequency_state(const struct d3d9_api *api);
 void test_get_set_texture(const struct d3d9_api *api);
 void test_set_palette_roundtrip(const struct d3d9_api *api);
+void test_palette_alpha_caps_policy(const struct d3d9_api *api);
 void test_multi_adapter(const struct d3d9_api *api);
 
 void test_display_mode_ex_size_filter_smoke(const struct d3d9_api *api);

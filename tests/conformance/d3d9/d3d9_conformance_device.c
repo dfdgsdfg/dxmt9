@@ -2387,7 +2387,7 @@ void test_set_palette_roundtrip(const struct d3d9_api *api)
         expected[i].peRed = (BYTE)i;
         expected[i].peGreen = (BYTE)(255 - i);
         expected[i].peBlue = (BYTE)(i ^ 0x5a);
-        expected[i].peFlags = (BYTE)(i & 3);
+        expected[i].peFlags = 0xff;
     }
 
     CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, expected),
@@ -2410,6 +2410,86 @@ void test_set_palette_roundtrip(const struct d3d9_api *api)
             D3DERR_INVALIDCALL);
     CHECK_HR(IDirect3DDevice9_GetCurrentTexturePalette(device, NULL),
             D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_set_palette()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_palette_alpha_caps_policy(const struct d3d9_api *api)
+{
+    PALETTEENTRY baseline[256];
+    PALETTEENTRY alpha[256];
+    PALETTEENTRY actual[256];
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+
+    for (i = 0; i < ARRAY_SIZE(baseline); ++i)
+    {
+        baseline[i].peRed = (BYTE)i;
+        baseline[i].peGreen = (BYTE)i;
+        baseline[i].peBlue = (BYTE)i;
+        baseline[i].peFlags = 0xff;
+
+        alpha[i].peRed = (BYTE)i;
+        alpha[i].peGreen = (BYTE)(255 - i);
+        alpha[i].peBlue = (BYTE)(i ^ 0x33);
+        alpha[i].peFlags = (BYTE)i;
+    }
+
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, baseline),
+            D3D_OK);
+
+    hr = IDirect3DDevice9_SetPaletteEntries(device, 0, alpha);
+    if (caps.TextureCaps & D3DPTEXTURECAPS_ALPHAPALETTE)
+    {
+        CHECK_HR(hr, D3D_OK);
+        memset(actual, 0xcc, sizeof(actual));
+        hr = IDirect3DDevice9_GetPaletteEntries(device, 0, actual);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+            CHECK_TRUE(memcmp(actual, alpha, sizeof(alpha)) == 0);
+    }
+    else
+    {
+        CHECK_HR(hr, D3DERR_INVALIDCALL);
+        memset(actual, 0xcc, sizeof(actual));
+        hr = IDirect3DDevice9_GetPaletteEntries(device, 0, actual);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+            CHECK_TRUE(memcmp(actual, baseline, sizeof(baseline)) == 0);
+    }
 
     IDirect3DDevice9_Release(device);
 
