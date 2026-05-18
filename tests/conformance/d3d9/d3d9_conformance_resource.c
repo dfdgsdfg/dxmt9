@@ -928,6 +928,175 @@ done_d3d9:
     IDirect3D9_Release(d3d9);
 }
 
+static void check_locked_rect_preserved(const D3DLOCKED_RECT *locked)
+{
+    CHECK_TRUE(locked->pBits == (void *)0xdeadbeef);
+    CHECK_TRUE(locked->Pitch == 1);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lockrect_invalid()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_surface_reentrant_lock_preserves_output(const struct d3d9_api *api)
+{
+    static const RECT rect = {2, 2, 8, 8};
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 16, 16,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(surface, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        locked.pBits = (void *)0xdeadbeef;
+        locked.Pitch = 1;
+        CHECK_HR(IDirect3DSurface9_LockRect(surface, &locked, NULL, 0),
+                D3DERR_INVALIDCALL);
+        check_locked_rect_preserved(&locked);
+
+        locked.pBits = (void *)0xdeadbeef;
+        locked.Pitch = 1;
+        CHECK_HR(IDirect3DSurface9_LockRect(surface, &locked, &rect, 0),
+                D3DERR_INVALIDCALL);
+        check_locked_rect_preserved(&locked);
+
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+    }
+
+    IDirect3DSurface9_Release(surface);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lockrect_invalid()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_texture_reentrant_lock_preserves_output(const struct d3d9_api *api)
+{
+    static const RECT rect = {2, 2, 8, 8};
+    IDirect3DCubeTexture9 *cube_texture = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 16, 16, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&locked, 0xcc, sizeof(locked));
+        hr = IDirect3DTexture9_LockRect(texture, 0, &locked, NULL, 0);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            locked.pBits = (void *)0xdeadbeef;
+            locked.Pitch = 1;
+            CHECK_HR(IDirect3DTexture9_LockRect(texture, 0, &locked,
+                    NULL, 0), D3DERR_INVALIDCALL);
+            check_locked_rect_preserved(&locked);
+
+            locked.pBits = (void *)0xdeadbeef;
+            locked.Pitch = 1;
+            CHECK_HR(IDirect3DTexture9_LockRect(texture, 0, &locked,
+                    &rect, 0), D3DERR_INVALIDCALL);
+            check_locked_rect_preserved(&locked);
+
+            CHECK_HR(IDirect3DTexture9_UnlockRect(texture, 0), D3D_OK);
+        }
+        IDirect3DTexture9_Release(texture);
+    }
+
+    hr = IDirect3DDevice9_CreateCubeTexture(device, 16, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &cube_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&locked, 0xcc, sizeof(locked));
+        hr = IDirect3DCubeTexture9_LockRect(cube_texture,
+                D3DCUBEMAP_FACE_POSITIVE_X, 0, &locked, NULL, 0);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            locked.pBits = (void *)0xdeadbeef;
+            locked.Pitch = 1;
+            CHECK_HR(IDirect3DCubeTexture9_LockRect(cube_texture,
+                    D3DCUBEMAP_FACE_POSITIVE_X, 0, &locked, NULL, 0),
+                    D3DERR_INVALIDCALL);
+            check_locked_rect_preserved(&locked);
+
+            locked.pBits = (void *)0xdeadbeef;
+            locked.Pitch = 1;
+            CHECK_HR(IDirect3DCubeTexture9_LockRect(cube_texture,
+                    D3DCUBEMAP_FACE_POSITIVE_X, 0, &locked, &rect, 0),
+                    D3DERR_INVALIDCALL);
+            check_locked_rect_preserved(&locked);
+
+            CHECK_HR(IDirect3DCubeTexture9_UnlockRect(cube_texture,
+                    D3DCUBEMAP_FACE_POSITIVE_X, 0), D3D_OK);
+        }
+        IDirect3DCubeTexture9_Release(cube_texture);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_vb_lock_flags()

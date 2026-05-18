@@ -384,6 +384,8 @@ void test_private_data_replace_and_size_policy(const struct d3d9_api *api);
 void test_resource_lock_error_policy(const struct d3d9_api *api);
 void test_surface_lockrect_subrect_offset_policy(const struct d3d9_api *api);
 void test_compressed_surface_lockrect_block_offset(const struct d3d9_api *api);
+void test_surface_reentrant_lock_preserves_output(const struct d3d9_api *api);
+void test_texture_reentrant_lock_preserves_output(const struct d3d9_api *api);
 void test_vb_lock_flags(const struct d3d9_api *api);
 void test_vertex_buffer_alignment(const struct d3d9_api *api);
 void test_surface_alignment(const struct d3d9_api *api);
