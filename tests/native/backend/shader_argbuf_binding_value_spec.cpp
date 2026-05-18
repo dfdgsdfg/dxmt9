@@ -604,6 +604,102 @@ void testDrawBindingPacketKeyDiffersForExtraStreamChange() {
       "binding packet key changes when extra stream offset changes");
 }
 
+void testDrawBindingPacketPlanResolvesSparseExtraStreamIntent() {
+  constexpr u32 kD3DDeclTypeFloat2 = 1u;
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclMethodDefault = 0u;
+  constexpr u32 kD3DDeclUsagePosition = 0u;
+  constexpr u32 kD3DDeclUsageNormal = 3u;
+  constexpr u32 kD3DDeclUsageTexcoord = 5u;
+
+  DrawDesc desc{};
+  desc.vertexDecl.elements = {
+      VertexElement{0, 0, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsagePosition, 0},
+      VertexElement{1, 4, kD3DDeclTypeFloat2, kD3DDeclMethodDefault, kD3DDeclUsageTexcoord, 0},
+      VertexElement{3, 8, kD3DDeclTypeFloat3, kD3DDeclMethodDefault, kD3DDeclUsageNormal, 0},
+  };
+  desc.vertexDecl.streams[0].stride = 12u;
+  desc.vertexDecl.streams[1].offset = 32u;
+  desc.vertexDecl.streams[2].offset = 64u;
+  desc.vertexDecl.streams[2].stride = 28u;
+  desc.vertexDecl.streams[3].offset = 96u;
+  desc.vertexDecl.streams[3].stride = 40u;
+  desc.viewport.viewport = Viewport{0u, 0u, 64u, 64u, 0.0f, 1.0f};
+
+  const auto hot = makeFlatDrawStateRecord(desc);
+  const auto packet = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      makeBindingPacketKeyParamView(5u),
+      64u,
+      64u,
+      false,
+      false,
+      false);
+
+  checkEq(packet.extraStreams.size(), std::size_t{2},
+          "binding packet only materializes extra streams used by the vertex declaration");
+  checkEq(packet.extraStreams[0].stream, 1u,
+          "binding packet preserves sparse stream 1 ordering");
+  checkEq(packet.extraStreams[0].metalSlot,
+          dxmt9::ffp::vertexShaderStreamBufferSlot(1u),
+          "binding packet maps stream 1 to the programmable VS Metal slot");
+  checkEq(packet.extraStreams[0].stride, 12u,
+          "binding packet infers stream 1 stride from declaration offsets and types");
+  checkEq(packet.extraStreams[0].offset, std::uint64_t{92},
+          "non-indexed binding packet applies startVertex to inferred stream 1 stride");
+  checkEq(packet.extraStreams[1].stream, 3u,
+          "binding packet skips unused bound stream 2 and preserves stream 3");
+  checkEq(packet.extraStreams[1].metalSlot,
+          dxmt9::ffp::vertexShaderStreamBufferSlot(3u),
+          "binding packet maps stream 3 to its stable Metal slot");
+  checkEq(packet.extraStreams[1].stride, 40u,
+          "binding packet keeps explicit stream 3 stride");
+  checkEq(packet.extraStreams[1].offset, std::uint64_t{296},
+          "non-indexed binding packet applies startVertex to explicit stream 3 stride");
+
+  const auto key = dxmt9::encoders::makeDrawBindingPacketKey(packet);
+  checkEq(key.extraStreamCount, 2u,
+          "binding packet key records sparse extra stream count");
+  checkEq(key.extraStreams[0].offset, std::uint64_t{92},
+          "binding packet key preserves resolved stream 1 byte offset");
+  checkEq(key.extraStreams[1].stream, 3u,
+          "binding packet key preserves sparse stream identity");
+
+  auto indexedPv = makeBindingPacketKeyParamView(5u);
+  indexedPv.indexed = true;
+  indexedPv.baseVertexIndex = -2;
+  indexedPv.startIndex = 7u;
+  const auto indexedPacket = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      indexedPv,
+      64u,
+      64u,
+      false,
+      false,
+      false);
+  checkEq(indexedPacket.extraStreams[0].offset, std::uint64_t{32},
+          "indexed binding packet keeps stream 1 at bound offset");
+  checkEq(indexedPacket.extraStreams[1].offset, std::uint64_t{96},
+          "indexed binding packet keeps stream 3 at bound offset");
+
+  std::array<u8, 4> upVertexData{0u, 1u, 2u, 3u};
+  auto upPv = makeBindingPacketKeyParamView(5u);
+  upPv.userVertexData = std::span<const u8>(upVertexData.data(), upVertexData.size());
+  const auto upPacket = dxmt9::encoders::makeDrawBindingPacketPlan(
+      desc.vertexDecl,
+      hot,
+      upPv,
+      64u,
+      64u,
+      false,
+      false,
+      false);
+  check(upPacket.extraStreams.empty(),
+        "UP vertex payload does not materialize bound extra stream bindings");
+}
+
 void testDrawBindingPacketCacheReusesStableValuePacket() {
   auto desc = makeBindingPacketKeyDesc();
   const auto hot = makeFlatDrawStateRecord(desc);
@@ -761,6 +857,7 @@ int main() {
     testDrawBindingPacketKeyDiffersForSamplerStateChange();
     testDrawBindingPacketKeyDiffersForRasterChange();
     testDrawBindingPacketKeyDiffersForExtraStreamChange();
+    testDrawBindingPacketPlanResolvesSparseExtraStreamIntent();
     testDrawBindingPacketCacheReusesStableValuePacket();
     testDrawBindingPacketPlanPreResolvesTextureBoundEncoderValues();
     testDrawBindingPacketPlanTextureFreeHasEmptyFragmentBindings();
