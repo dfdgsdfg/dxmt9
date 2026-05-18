@@ -228,10 +228,43 @@ void testDeviceCoreFlow() {
 
   Light light{};
   light.type = LightType::Point;
-  light.diffuse = {1.0f, 1.0f, 1.0f, 1.0f};
+  light.diffuse = {0.25f, 0.5f, 0.75f, 1.0f};
+  light.specular = {0.9f, 0.8f, 0.7f, 1.0f};
+  light.ambient = {0.1f, 0.2f, 0.3f, 1.0f};
   light.position = {1.0f, 2.0f, 3.0f};
+  light.direction = {0.0f, -1.0f, 0.0f};
+  light.range = 42.0f;
+  light.falloff = 0.75f;
+  light.attenuation0 = 0.5f;
+  light.attenuation1 = 0.25f;
+  light.attenuation2 = 0.125f;
+  light.theta = 0.3f;
+  light.phi = 0.6f;
+  Light secondaryLight{};
+  secondaryLight.type = LightType::Spot;
+  secondaryLight.diffuse = {0.4f, 0.3f, 0.2f, 1.0f};
+  secondaryLight.specular = {0.2f, 0.3f, 0.4f, 1.0f};
+  secondaryLight.ambient = {0.05f, 0.06f, 0.07f, 1.0f};
+  secondaryLight.position = {-2.0f, -4.0f, -6.0f};
+  secondaryLight.direction = {0.0f, 0.0f, -1.0f};
+  secondaryLight.range = 12.0f;
+  secondaryLight.falloff = 0.5f;
+  secondaryLight.attenuation0 = 1.0f;
+  secondaryLight.attenuation1 = 0.1f;
+  secondaryLight.attenuation2 = 0.01f;
+  secondaryLight.theta = 0.2f;
+  secondaryLight.phi = 0.9f;
+  Material material{};
+  material.emissive = {0.01f, 0.02f, 0.03f, 1.0f};
+  material.ambient = {0.11f, 0.12f, 0.13f, 1.0f};
+  material.diffuse = {0.21f, 0.22f, 0.23f, 0.8f};
+  material.specular = {0.31f, 0.32f, 0.33f, 1.0f};
+  material.power = 17.0f;
   checkEq(device->setLight(0, light), D3D_OK, "set light");
   checkEq(device->lightEnable(0, true), D3D_OK, "enable light");
+  checkEq(device->setLight(1, secondaryLight), D3D_OK, "set secondary light");
+  checkEq(device->lightEnable(1, false), D3D_OK, "disable secondary light");
+  checkEq(device->setMaterial(material), D3D_OK, "set material");
   checkEq(device->setRenderState(RS_LIGHTING, 1), D3D_OK, "lighting state");
   checkEq(device->setRenderState(RS_ALPHA_TEST_ENABLE, 1), D3D_OK, "alpha test state");
   checkEq(device->setRenderState(RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::GreaterEqual)), D3D_OK,
@@ -273,8 +306,28 @@ void testDeviceCoreFlow() {
   check(stateBlock->snapshot().textures[kVertexTextureSampler0] == texture,
         "state block vertex texture snapshot");
   checkEq(stateBlock->snapshot().fvf, 0x1122u, "state block fvf snapshot");
+  checkEq(stateBlock->snapshot().material, material, "state block material snapshot");
+  checkEq(stateBlock->snapshot().lights[0], device->state().lights[0],
+          "state block primary light snapshot");
+  checkEq(stateBlock->snapshot().lights[1], secondaryLight,
+          "state block secondary light snapshot");
+  check(stateBlock->snapshot().lightEnabled[0], "state block primary light enable snapshot");
+  check(!stateBlock->snapshot().lightEnabled[1],
+        "state block secondary light disable snapshot");
 
   checkEq(device->setRenderState(RS_LIGHTING, 0), D3D_OK, "mutate lighting");
+  Material mutatedMaterial{};
+  mutatedMaterial.diffuse = {0.9f, 0.8f, 0.7f, 0.6f};
+  mutatedMaterial.power = 3.0f;
+  Light mutatedLight{};
+  mutatedLight.type = LightType::Directional;
+  mutatedLight.diffuse = {0.6f, 0.5f, 0.4f, 1.0f};
+  mutatedLight.direction = {1.0f, 0.0f, 0.0f};
+  checkEq(device->setMaterial(mutatedMaterial), D3D_OK, "mutate material");
+  checkEq(device->setLight(0, mutatedLight), D3D_OK, "mutate primary light");
+  checkEq(device->lightEnable(0, false), D3D_OK, "mutate primary light enable");
+  checkEq(device->setLight(1, mutatedLight), D3D_OK, "mutate secondary light");
+  checkEq(device->lightEnable(1, true), D3D_OK, "mutate secondary light enable");
   checkEq(device->setTexture(0, nullptr), D3D_OK, "unbind texture");
   checkEq(device->setStreamSource(0, nullptr, 0, 0), D3D_OK, "unbind stream");
   checkEq(device->setIndices(nullptr), D3D_OK, "unbind indices");
@@ -290,6 +343,12 @@ void testDeviceCoreFlow() {
   checkEq(device->state().scissorEnabled, false, "restored scissor enabled");
   checkEq(device->state().scissorRect.left, 16, "restored scissor left");
   checkEq(device->state().transforms.at(XFORM_VIEW).m[0], 2.0f, "restored transform");
+  checkEq(device->state().material, material, "restored material");
+  checkEq(device->state().lights[0], stateBlock->snapshot().lights[0],
+          "restored primary light");
+  checkEq(device->state().lights[1], secondaryLight, "restored secondary light");
+  check(device->state().lightEnabled[0], "restored primary light enable");
+  check(!device->state().lightEnabled[1], "restored secondary light disable");
 
   auto pixelStateBlock = device->createStateBlock(StateBlockType::PixelState);
   check(pixelStateBlock != nullptr, "pixel state block");
@@ -372,6 +431,11 @@ void testDeviceCoreFlow() {
   checkEq(flatStateOr(draw0.hot.renderStates, RS_LIGHTING, 0u), 1u, "draw0 lighting state");
   checkEq(flatStateOr(draw0.hot.renderStates, RS_ALPHA_TEST_ENABLE, 0u), 1u,
           "draw0 alpha test state");
+  checkEq(draw0.uniforms.material, material, "draw0 material payload");
+  checkEq(draw0.uniforms.lights[0], device->state().lights[0],
+          "draw0 primary light payload");
+  checkEq(draw0.uniforms.lights[1], secondaryLight,
+          "draw0 secondary light payload");
   checkEq(draw0.uniforms.clipPlaneMask, 1u, "draw0 clip plane mask");
   checkNear(draw0.uniforms.clipPlanes[0][0], 0.5f, 1.0e-6f, "draw0 clip plane x");
   checkNear(draw0.uniforms.clipPlanes[0][1], 0.0f, 1.0e-6f, "draw0 clip plane y");
@@ -392,6 +456,14 @@ void testDeviceCoreFlow() {
   check(draw0.state.shaderLayout.vertexShader.vertexKey.has_value(), "draw0 vertex shader key");
   check(draw0.state.shaderLayout.pixelShader.pixelKey.has_value(), "draw0 pixel shader key");
   check(draw0.state.shaderLayout.vertexShader.vertexKey->lightingEnabled, "draw0 vertex key lighting");
+  check(draw0.state.shaderLayout.vertexShader.vertexKey->lightEnabled[0],
+        "draw0 vertex key primary light enabled");
+  check(!draw0.state.shaderLayout.vertexShader.vertexKey->lightEnabled[1],
+        "draw0 vertex key secondary light disabled");
+  checkEq(draw0.state.shaderLayout.vertexShader.vertexKey->lightType[0],
+          static_cast<u32>(LightType::Point), "draw0 vertex key primary light type");
+  checkEq(draw0.state.shaderLayout.vertexShader.vertexKey->lightType[1],
+          static_cast<u32>(LightType::Spot), "draw0 vertex key secondary light type");
   check(draw0.state.shaderLayout.pixelShader.pixelKey->alphaTestEnable, "draw0 pixel key alpha test");
   checkEq(draw0.param.userVertexRange.size, static_cast<u32>(vertexPayload.size()),
           "draw0 user vertex payload size");

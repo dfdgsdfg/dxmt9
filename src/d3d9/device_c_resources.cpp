@@ -13,6 +13,7 @@ struct LockFootprint {
 
 constexpr uint32_t kD3DLockDiscard = 0x00002000u;
 constexpr uint32_t kD3DLockNoOverwrite = 0x00001000u;
+constexpr uint32_t kD3DUsageAutoGenMipmap = 0x00000400u;
 
 uint32_t lockFlagsToCore(uint32_t flags) {
   uint32_t out = 0;
@@ -64,6 +65,30 @@ bool invalidCompressedTextureDimensions(dxmt9::core::Format format, uint32_t wid
          (height % dxmt9::core::formatBlockHeight(format)) != 0;
 }
 
+uint32_t fullMipLevelCount(uint32_t width, uint32_t height, uint32_t depth) {
+  uint32_t dimension = std::max({width, height, depth});
+  uint32_t levels = 1;
+  while (dimension > 1u) {
+    dimension >>= 1u;
+    ++levels;
+  }
+  return levels;
+}
+
+uint32_t resolveMipLevelCount(uint32_t levels,
+                              uint32_t usage,
+                              uint32_t width,
+                              uint32_t height,
+                              uint32_t depth) {
+  if (levels != 0u) {
+    return levels;
+  }
+  if ((usage & kD3DUsageAutoGenMipmap) != 0u) {
+    return 1u;
+  }
+  return fullMipLevelCount(width, height, depth);
+}
+
 void copyNativeToShadow(ShadowLock& shadow) {
   auto* dst = static_cast<uint8_t*>(shadow.shadow.ptr);
   auto* src = static_cast<const uint8_t*>(shadow.nativePtr);
@@ -95,7 +120,7 @@ extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, ui
   dxmt9::core::TextureDesc desc;
   desc.width = w;
   desc.height = h;
-  desc.levels = levels ? levels : 1;
+  desc.levels = resolveMipLevelCount(levels, usage, w, h, 1u);
   desc.format = fmtFromD3D(fmt);
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
@@ -121,7 +146,7 @@ extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t 
   dxmt9::core::TextureDesc desc;
   desc.width = size;
   desc.height = size;
-  desc.levels = levels ? levels : 1;
+  desc.levels = resolveMipLevelCount(levels, usage, size, size, 1u);
   desc.format = fmtFromD3D(fmt);
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
@@ -144,7 +169,7 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_
   desc.width = w;
   desc.height = h;
   desc.depth = depth;
-  desc.levels = levels ? levels : 1;
+  desc.levels = resolveMipLevelCount(levels, usage, w, h, depth);
   desc.format = fmtFromD3D(fmt);
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);

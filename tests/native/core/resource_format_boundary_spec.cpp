@@ -285,6 +285,65 @@ void testNpotMiptreeLayoutBoundaryValues() {
           "NPOT invalid level desc is cleared before failure");
 }
 
+void testZeroLevelRequestsCreateFullMipChains() {
+  PublicDevice fixture;
+
+  const auto textureBefore = fixture.backend->createdTextures.size();
+  auto texture = UniqueTexture(dxmt9c_device_create_texture(
+      fixture.c(), 17, 9, 0, 0, kD3DFmtA8R8G8B8, kD3DPoolManaged));
+  check(texture != nullptr, "2D zero-level texture creation succeeds");
+  checkEq(fixture.backend->createdTextures.size(), textureBefore + size_t{1},
+          "2D zero-level texture reaches backend");
+  checkEq(dxmt9c_texture_get_level_count(texture.get()), 5u,
+          "2D zero-level request expands to full mip chain");
+  checkEq(fixture.backend->createdTextures[textureBefore].levels, 5u,
+          "2D backend descriptor receives full mip count");
+  const auto textureLevel4 = textureLevelDesc(texture.get(), 4,
+                                             "2D zero-level final mip desc");
+  checkEq(textureLevel4.width, 1u, "2D final mip width clamps to one");
+  checkEq(textureLevel4.height, 1u, "2D final mip height clamps to one");
+  checkEq(texture->obj->levelBytes(4).size(), size_t{4},
+          "2D final mip owns one BGRA texel");
+
+  const auto cubeBefore = fixture.backend->createdTextures.size();
+  auto cube = UniqueTexture(dxmt9c_device_create_cube_texture(
+      fixture.c(), 8, 0, 0, kD3DFmtA8R8G8B8, kD3DPoolManaged));
+  check(cube != nullptr, "cube zero-level texture creation succeeds");
+  checkEq(dxmt9c_texture_get_level_count(cube.get()), 4u,
+          "cube zero-level request expands to full face mip chain");
+  checkEq(fixture.backend->createdTextures[cubeBefore].levels, 4u,
+          "cube backend descriptor receives full mip count");
+  auto cubeFace5Mip3 = UniqueSurface(dxmt9c_texture_get_surface_level(
+      cube.get(), 5u * dxmt9c_texture_get_level_count(cube.get()) + 3u));
+  check(cubeFace5Mip3 != nullptr, "cube final face mip surface exists");
+  const auto cubeMipDesc = surfaceDesc(cubeFace5Mip3.get(),
+                                       "cube final face mip desc");
+  checkEq(cubeMipDesc.width, 1u, "cube final face mip width");
+  checkEq(cubeMipDesc.height, 1u, "cube final face mip height");
+
+  const auto volumeBefore = fixture.backend->createdTextures.size();
+  auto volume = UniqueTexture(dxmt9c_device_create_volume_texture(
+      fixture.c(), 9, 5, 3, 0, 0, kD3DFmtA8R8G8B8, kD3DPoolManaged));
+  check(volume != nullptr, "volume zero-level texture creation succeeds");
+  checkEq(dxmt9c_texture_get_level_count(volume.get()), 4u,
+          "volume zero-level request expands across max dimension");
+  checkEq(fixture.backend->createdTextures[volumeBefore].levels, 4u,
+          "volume backend descriptor receives full mip count");
+  const auto volumeLevel3 = textureLevelDesc(volume.get(), 3,
+                                             "volume final mip desc");
+  checkEq(volumeLevel3.width, 1u, "volume final mip width");
+  checkEq(volumeLevel3.height, 1u, "volume final mip height");
+  checkEq(volume->obj->levelBytes(3).size(), size_t{4},
+          "volume final mip clamps depth to one slice");
+
+  auto autogen = UniqueTexture(dxmt9c_device_create_texture(
+      fixture.c(), 64, 64, 0, kD3DUsageAutoGenMipmap,
+      kD3DFmtA8R8G8B8, kD3DPoolManaged));
+  check(autogen != nullptr, "autogen zero-level texture creation succeeds");
+  checkEq(dxmt9c_texture_get_level_count(autogen.get()), 1u,
+          "autogen zero-level request exposes only the app-visible top level");
+}
+
 void testComponentOrderAlphaAndSrgbCompatibility() {
   struct Case {
     u32 d3dFormat = 0;
@@ -704,6 +763,7 @@ int main() {
   try {
     testPublicTextureCreationPreservesD3DValuesAndUploadPitch();
     testNpotMiptreeLayoutBoundaryValues();
+    testZeroLevelRequestsCreateFullMipChains();
     testComponentOrderAlphaAndSrgbCompatibility();
     testLuminanceDefaultChannelPolicy();
     testCompressedCreationAndBlockRowRounding();

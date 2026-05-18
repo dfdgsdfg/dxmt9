@@ -464,6 +464,13 @@ void testTransformMultiplicationOrderAndBlendSlots() {
       0.0f, 0.0f, 4.0f, 0.0f,
       0.0f, 0.0f, 0.0f, 1.0f,
   };
+  Matrix4x4 blendWorld1{};
+  blendWorld1.m = {
+      11.0f, 0.0f, 0.0f, 0.0f,
+      0.0f, 13.0f, 0.0f, 0.0f,
+      0.0f, 0.0f, 17.0f, 0.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+  };
   Matrix4x4 view{};
   view.m = {
       1.0f, 5.0f, 0.0f, 0.0f,
@@ -480,6 +487,7 @@ void testTransformMultiplicationOrderAndBlendSlots() {
   };
 
   state.transforms[XFORM_WORLD_BASE] = world;
+  state.transforms[XFORM_WORLD_BASE + 1u] = blendWorld1;
   state.transforms[XFORM_VIEW] = view;
   state.transforms[XFORM_PROJECTION] = projection;
 
@@ -498,13 +506,22 @@ void testTransformMultiplicationOrderAndBlendSlots() {
       0.0f, 0.0f, 30.0f, 280.0f,
       0.0f, 0.0f, 0.0f, 40.0f,
   };
+  Matrix4x4 expectedBlendWorld1ViewProj{};
+  expectedBlendWorld1ViewProj.m = {
+      110.0f, 1100.0f, 0.0f, 0.0f,
+      0.0f, 260.0f, 2340.0f, 0.0f,
+      0.0f, 0.0f, 510.0f, 4760.0f,
+      0.0f, 0.0f, 0.0f, 40.0f,
+  };
 
   checkMatrixNear(desc.worldViewProj, expectedWorldViewProj,
                   "world-view-projection multiply order");
   checkMatrixNear(desc.ffpBlendWorldViewProj[0], expectedWorldViewProj,
                   "blend slot 0 uses WORLD0 * VIEW * PROJECTION");
-  checkMatrixNear(desc.ffpBlendWorldViewProj[1], expectedViewProj,
-                  "unset blend slot uses identity WORLD1");
+  checkMatrixNear(desc.ffpBlendWorldViewProj[1], expectedBlendWorld1ViewProj,
+                  "blend slot 1 uses WORLD1 * VIEW * PROJECTION");
+  checkMatrixNear(desc.ffpBlendWorldViewProj[2], expectedViewProj,
+                  "unset blend slot uses identity WORLD2");
 }
 
 void testClipPlaneLimitsAtCoreBoundary() {
@@ -552,6 +569,84 @@ void testClipPlaneLimitsAtCoreBoundary() {
                 "clip-plane value propagates for each supported slot");
     }
   }
+}
+
+void testClipPlaneTransformPayloadAndMaskBounds() {
+  DeviceState state;
+  state.reset();
+
+  Matrix4x4 world{};
+  world.m = {
+      2.0f, 0.0f, 0.0f, 0.0f,
+      0.0f, 3.0f, 0.0f, 0.0f,
+      0.0f, 0.0f, 4.0f, 0.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+  };
+  Matrix4x4 view{};
+  view.m = {
+      5.0f, 0.0f, 0.0f, 0.0f,
+      0.0f, 7.0f, 0.0f, 0.0f,
+      0.0f, 0.0f, 11.0f, 0.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+  };
+  Matrix4x4 projection{};
+  projection.m = {
+      13.0f, 0.0f, 0.0f, 0.0f,
+      0.0f, 17.0f, 0.0f, 0.0f,
+      0.0f, 0.0f, 19.0f, 0.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+  };
+  state.transforms[XFORM_WORLD_BASE] = world;
+  state.transforms[XFORM_VIEW] = view;
+  state.transforms[XFORM_PROJECTION] = projection;
+
+  state.clipPlanes[0] = {130.0f, 714.0f, 2508.0f, -4.0f};
+  state.clipPlanes[1] = {999.0f, 999.0f, 999.0f, 999.0f};
+  state.clipPlanes[2] = {-260.0f, 357.0f, 0.0f, 9.0f};
+  state.clipPlanes[5] = {0.0f, 0.0f, -836.0f, 8.0f};
+  constexpr u32 kClipMask =
+      (1u << 0u) | (1u << 2u) | (1u << 5u) | (1u << 9u);
+  state.renderStates[RS_CLIP_PLANE_ENABLE] = kClipMask;
+
+  const DrawDesc desc = makeDrawDescFromState(state, {});
+  const auto uniforms = makeDrawUniformPayload(desc);
+  const auto canonical = makeCanonicalDrawStateFromState(state, {});
+
+  checkEq(desc.clipPlaneMask, kClipMask,
+          "draw desc preserves clip-plane mask including unsupported high bits");
+  checkEq(uniforms.clipPlaneMask, desc.clipPlaneMask,
+          "draw uniform payload preserves clip-plane mask");
+  checkEq(canonical.shaderLayout.clipPlaneMask, desc.clipPlaneMask,
+          "shader layout preserves clip-plane mask");
+  checkEq(canonical.hot.clipPlaneMask, desc.clipPlaneMask,
+          "canonical hot state preserves clip-plane mask");
+
+  const std::array<ClipPlane, kMaxClipPlanes> expected{{
+      {1.0f, 2.0f, 3.0f, -4.0f},
+      {0.0f, 0.0f, 0.0f, 0.0f},
+      {-2.0f, 1.0f, 0.0f, 9.0f},
+      {0.0f, 0.0f, 0.0f, 0.0f},
+      {0.0f, 0.0f, 0.0f, 0.0f},
+      {0.0f, 0.0f, -1.0f, 8.0f},
+  }};
+
+  for (size_t plane = 0; plane < expected.size(); ++plane) {
+    for (size_t component = 0; component < 4; ++component) {
+      checkNear(desc.clipPlanes[plane][component], expected[plane][component],
+                "draw desc stores transformed enabled clip planes only");
+      checkNear(uniforms.clipPlanes[plane][component],
+                expected[plane][component],
+                "uniform payload stores transformed enabled clip planes only");
+    }
+  }
+
+  const auto changed = [&] {
+    DeviceState next = state;
+    next.clipPlanes[2][1] += 357.0f;
+    return makeCanonicalDrawStateFromState(next, {});
+  }();
+  check(changed.hot.key.clipPlanesHash != canonical.hot.key.clipPlanesHash,
+        "transformed clip-plane payload participates in canonical key hash");
 }
 
 void testConstantsAndShaderRefs() {
@@ -1490,6 +1585,7 @@ int main() {
   testStateDrawTransform();
   testTransformMultiplicationOrderAndBlendSlots();
   testClipPlaneLimitsAtCoreBoundary();
+  testClipPlaneTransformPayloadAndMaskBounds();
   testConstantsAndShaderRefs();
   testShaderLayoutCarriesConstantUsageMetadata();
   testResourceBindingsAndAttachments();

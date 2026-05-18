@@ -827,6 +827,61 @@ void testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset() {
       6u);
 }
 
+void testNonIndexedPrimitiveTopologyVertexCounts() {
+  struct Case {
+    PrimitiveType primitiveType = PrimitiveType::PointList;
+    u32 primitiveCount = 0;
+    WMTPrimitiveType metalType = WMTPrimitiveTypePoint;
+    std::uint64_t vertexCount = 0;
+    const char* label = "";
+  };
+
+  const std::array<Case, 5> cases{{
+      {PrimitiveType::PointList, 5u, WMTPrimitiveTypePoint, 5u,
+       "point list"},
+      {PrimitiveType::LineList, 3u, WMTPrimitiveTypeLine, 6u,
+       "line list"},
+      {PrimitiveType::LineStrip, 3u, WMTPrimitiveTypeLineStrip, 4u,
+       "line strip"},
+      {PrimitiveType::TriangleList, 4u, WMTPrimitiveTypeTriangle, 12u,
+       "triangle list"},
+      {PrimitiveType::TriangleStrip, 4u, WMTPrimitiveTypeTriangleStrip, 6u,
+       "triangle strip"},
+  }};
+
+  for (const auto& testCase : cases) {
+    Harness harness;
+    Capture capture;
+    auto recorder = makeRecorder(capture);
+
+    constexpr obj_handle_t kBoundVertex = 0x5100005100005fcull;
+    auto state = makeProgrammableState(20u);
+    state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 8192u);
+    state.hot.streamOffsets[0] = 80u;
+
+    dxmt9::core::DrawParam param{};
+    param.primitiveType = testCase.primitiveType;
+    param.primitiveCount = testCase.primitiveCount;
+    param.startVertex = 2u;
+    param.indexed = false;
+
+    PreUploadedDrawData preUploaded{};
+    runEncodeDraw(harness, recorder, state, param, preUploaded, {});
+
+    checkEq(capture.commands.size(), std::size_t{3},
+            std::string(testCase.label) + " command count");
+    const auto& stream = commandAt(capture, 0,
+                                   std::string(testCase.label) + " stream bind");
+    checkEq(stream.offset, std::uint64_t{120},
+            std::string(testCase.label) + " startVertex folded into stream offset");
+    assertDrawPrimitivesCommand(
+        commandAt(capture, 2, std::string(testCase.label) + " draw command"),
+        testCase.metalType,
+        0u,
+        testCase.vertexCount);
+  }
+}
+
 void testProgrammableVsBindsExtraBoundStreamBeforeDraw() {
   Harness harness;
   Capture capture;
@@ -1106,6 +1161,7 @@ int main() {
     testArgbufModeKeepsDirectTextureSamplerBinds();
     testArgbufModeKeepsDirectVertexTextureSamplerBinds();
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
+    testNonIndexedPrimitiveTopologyVertexCounts();
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
     testBoundVertexAndUserIndexOrdering();
     testBoundVertexAndBoundIndexOrdering();
