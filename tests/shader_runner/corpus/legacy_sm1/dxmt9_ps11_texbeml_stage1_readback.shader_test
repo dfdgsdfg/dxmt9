@@ -1,0 +1,23 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c texbem_test behavior, reduced to ps_1_1 TEXBEML stage-1 bump-env luminance readback
+; oracle-date: 2026-05-18
+
+[pixel shader d3dbc-hex]
+ffff0101 00000042 b00f0000 00000044 b00f0001 b0e40000
+00000001 800f0800 b0e40001 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-texture 0 1 1 A8R8G8B8 red
+dxmt9-texture 1 2 2 A8R8G8B8 red green blue white
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-sampler 1 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 1 bump_env_mat00=0.0 bump_env_mat01=0.5 bump_env_mat10=-0.5 bump_env_mat11=0.0 bump_env_lscale=0.5 bump_env_loffset=0.25
+dxmt9-bind-texture 0 0
+dxmt9-bind-texture 1 1
+dxmt9-draw-textured-quad-tex2
+probe (32, 32) rgba(0.25, 0.25, 0.25, 0.25) 1
