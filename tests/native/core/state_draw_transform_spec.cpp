@@ -137,6 +137,17 @@ DrawParam makeDrawParamForTest(const DrawDesc& desc) {
   return param;
 }
 
+template <std::size_t MaxEntries>
+void checkFlatStateValue(const FlatStateSet<MaxEntries>& states, u32 key,
+                         u32 expected, std::string_view message) {
+  checkEq(flatStateOr(states, key, 0xffffffffu), expected, message);
+}
+
+template <typename StateTable>
+bool stateTableDirty(const StateTable& table, u32 key) {
+  return (table.dirty[StateTable::word(key)] & StateTable::bit(key)) != 0;
+}
+
 void testChunkSlotU32GuardBoundaries() {
   const auto u32Max = detail::kChunkSlotU32Max;
 
@@ -996,6 +1007,233 @@ void testTextureStageArgumentCanonicalValues() {
           "FFP pixel key preserves full texcoord index value");
 }
 
+void testRenderStateIntentPayloadAcrossDrawRunBoundary() {
+  DeviceState state;
+  state.reset();
+
+  state.renderStates[RS_ALPHABLEND_ENABLE] = 1u;
+  state.renderStates[RS_SRC_BLEND] = static_cast<u32>(BlendFactor::SrcAlpha);
+  state.renderStates[RS_DEST_BLEND] = static_cast<u32>(BlendFactor::InvSrcAlpha);
+  state.renderStates[RS_BLEND_OP] = static_cast<u32>(BlendOp::RevSubtract);
+  state.renderStates[RS_SEPARATE_ALPHA_BLEND_ENABLE] = 1u;
+  state.renderStates[RS_SRC_BLEND_ALPHA] = static_cast<u32>(BlendFactor::One);
+  state.renderStates[RS_DEST_BLEND_ALPHA] = static_cast<u32>(BlendFactor::InvDestAlpha);
+  state.renderStates[RS_BLEND_OP_ALPHA] = static_cast<u32>(BlendOp::Max);
+  state.renderStates[RS_BLEND_FACTOR] = 0x80402010u;
+  state.renderStates[RS_COLOR_WRITE_ENABLE] = 0x5u;
+  state.renderStates[RS_SRGB_WRITE_ENABLE] = 1u;
+  state.renderStates[RS_Z_ENABLE] = 0u;
+  state.renderStates[RS_Z_WRITE_ENABLE] = 0u;
+  state.renderStates[RS_Z_FUNC] = static_cast<u32>(CompareFunc::GreaterEqual);
+  state.renderStates[RS_STENCIL_ENABLE] = 1u;
+  state.renderStates[RS_STENCIL_FUNC] = static_cast<u32>(CompareFunc::Less);
+  state.renderStates[RS_STENCIL_FAIL] = static_cast<u32>(StencilOp::Replace);
+  state.renderStates[RS_STENCIL_ZFAIL] = static_cast<u32>(StencilOp::Incr);
+  state.renderStates[RS_STENCIL_PASS] = static_cast<u32>(StencilOp::Decr);
+  state.renderStates[RS_STENCIL_REF] = 0x33u;
+  state.renderStates[RS_STENCIL_MASK] = 0x0fu;
+  state.renderStates[RS_STENCIL_WRITEMASK] = 0xf0u;
+  state.renderStates[RS_STENCIL_CCW_FUNC] = static_cast<u32>(CompareFunc::Greater);
+  state.renderStates[RS_STENCIL_CCW_FAIL] = static_cast<u32>(StencilOp::Zero);
+  state.renderStates[RS_STENCIL_CCW_ZFAIL] = static_cast<u32>(StencilOp::Invert);
+  state.renderStates[RS_STENCIL_CCW_PASS] = static_cast<u32>(StencilOp::Keep);
+  state.renderStates[RS_ALPHA_TEST_ENABLE] = 1u;
+  state.renderStates[RS_ALPHA_FUNC] = static_cast<u32>(CompareFunc::NotEqual);
+  state.renderStates[RS_ALPHA_REF] = 0x7fu;
+  state.renderStates[RS_FOG_ENABLE] = 1u;
+  state.renderStates[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Exp2);
+  state.renderStates[RS_FOG_FROM_VERTEX] = static_cast<u32>(FogMode::Linear);
+  state.renderStates[RS_RANGE_FOG] = 1u;
+  state.renderStates[RS_TEXTURE_FACTOR] = 0x10204080u;
+  state.renderStates[RS_FILL_MODE] = 2u;
+  state.renderStates[RS_CULL_MODE] = static_cast<u32>(CullMode::None);
+
+  const DrawCallArgs args{
+      PrimitiveType::TriangleList, 2u, 4u, -2, 6u, IndexType::UInt32};
+  const DrawDesc desc = makeDrawDescFromState(state, args);
+  const auto uniforms = makeDrawUniformPayload(desc);
+  const auto canonical = makeCanonicalDrawStateFromState(state, args);
+  const auto descCanonical = makeCanonicalDrawStateForTest(desc);
+  const auto expectedKey = makeFlatDrawStateKey(desc);
+
+  checkEq(descCanonical.hot.key, expectedKey,
+          "fixture canonicalization builds the expected render-state key");
+  checkEq(canonical.hot.key, expectedKey,
+          "direct canonicalization preserves the same render-state key");
+  checkEq(canonical.hot.renderStates.hash, expectedKey.renderStateHash,
+          "hot render-state payload hash matches flat key");
+  checkEq(canonical.debug.renderStateHash, expectedKey.renderStateHash,
+          "debug snapshot carries render-state hash");
+  checkEq(makeFlatDrawStateRecord(desc).renderStates.hash, expectedKey.renderStateHash,
+          "draw desc render-state table flattens to the same hash");
+
+  checkFlatStateValue(canonical.hot.renderStates, RS_ALPHABLEND_ENABLE, 1u,
+                      "hot state preserves alpha blend enable");
+  checkFlatStateValue(canonical.hot.renderStates, RS_SRC_BLEND,
+                      static_cast<u32>(BlendFactor::SrcAlpha),
+                      "hot state preserves source blend factor");
+  checkFlatStateValue(canonical.hot.renderStates, RS_DEST_BLEND,
+                      static_cast<u32>(BlendFactor::InvSrcAlpha),
+                      "hot state preserves destination blend factor");
+  checkFlatStateValue(canonical.hot.renderStates, RS_BLEND_OP,
+                      static_cast<u32>(BlendOp::RevSubtract),
+                      "hot state preserves blend operation");
+  checkFlatStateValue(canonical.hot.renderStates, RS_SEPARATE_ALPHA_BLEND_ENABLE, 1u,
+                      "hot state preserves separate alpha blend enable");
+  checkFlatStateValue(canonical.hot.renderStates, RS_BLEND_OP_ALPHA,
+                      static_cast<u32>(BlendOp::Max),
+                      "hot state preserves alpha blend operation");
+  checkFlatStateValue(canonical.hot.renderStates, RS_COLOR_WRITE_ENABLE, 0x5u,
+                      "hot state preserves color-write mask");
+  checkFlatStateValue(canonical.hot.renderStates, RS_STENCIL_CCW_ZFAIL,
+                      static_cast<u32>(StencilOp::Invert),
+                      "hot state preserves back-face stencil operation");
+  checkFlatStateValue(canonical.hot.renderStates, RS_ALPHA_REF, 0x7fu,
+                      "hot state preserves alpha reference value");
+  checkFlatStateValue(canonical.hot.renderStates, RS_TEXTURE_FACTOR, 0x10204080u,
+                      "hot state preserves texture factor");
+
+  check(canonical.shaderLayout.pixelShader.pixelKey.has_value(),
+        "fixed-function pixel key exists for render-state intent");
+  checkEq(canonical.shaderLayout.pixelShader.pixelKey->fogMode, FogMode::Exp2,
+          "pixel key prefers table fog mode over vertex fog mode");
+  check(canonical.shaderLayout.pixelShader.pixelKey->alphaTestEnable,
+        "pixel key carries alpha-test enable");
+  checkEq(canonical.shaderLayout.pixelShader.pixelKey->alphaTestFunc,
+          static_cast<u32>(CompareFunc::NotEqual),
+          "pixel key carries alpha-test function");
+  check(canonical.shaderLayout.vertexShader.vertexKey.has_value(),
+        "fixed-function vertex key exists for render-state intent");
+  checkEq(canonical.shaderLayout.vertexShader.vertexKey->fogMode, FogMode::Exp2,
+          "vertex key carries effective fog mode");
+  check(canonical.shaderLayout.vertexShader.vertexKey->rangeFog,
+        "vertex key carries range-fog enable");
+
+  DrawParam param = makeDrawParamForTest(desc);
+  DrawRunDesc run{};
+  run.state = canonical;
+  check(drawRunAppend(run, param), "render-state draw-run param appends");
+  check(drawRunValidate(run), "render-state draw-run validates");
+  checkEq(run.state.hot.key.renderStateHash, expectedKey.renderStateHash,
+          "draw-run state keeps render-state hash");
+  checkFlatStateValue(run.state.hot.renderStates, RS_STENCIL_PASS,
+                      static_cast<u32>(StencilOp::Decr),
+                      "draw-run hot state keeps stencil pass operation");
+
+  ChunkSlot slot{};
+  slot.appendDrawRun(canonical, uniforms, std::span<const DrawParam>(&param, 1),
+                     std::span<const DrawParamPayloadView>{});
+  const auto view = slot.commandAt(0);
+  check(view.drawRunRecord != nullptr,
+        "slot command exposes render-state draw-run record");
+  checkEq(view.drawState.key().renderStateHash, expectedKey.renderStateHash,
+          "slot draw-state view keeps render-state key hash");
+  checkEq(view.drawState.debugSnapshot().renderStateHash, expectedKey.renderStateHash,
+          "slot debug view keeps render-state key hash");
+  checkFlatStateValue(view.drawState.hot->renderStates, RS_BLEND_FACTOR, 0x80402010u,
+                      "slot hot state keeps blend factor payload");
+  check(view.drawUniformPayload != nullptr,
+        "slot resolves the draw uniform payload alongside render state");
+
+  DeviceState changed = state;
+  changed.renderStates.set(RS_COLOR_WRITE_ENABLE,
+                           state.renderStates.at(RS_COLOR_WRITE_ENABLE) ^ 0x3u);
+  const auto changedCanonical = makeCanonicalDrawStateFromState(changed, args);
+  check(changedCanonical.hot.key.renderStateHash != canonical.hot.key.renderStateHash,
+        "single render-state intent change produces a distinct draw key");
+  check(changedCanonical.debug.renderStateHash != canonical.debug.renderStateHash,
+        "single render-state intent change produces a distinct debug hash");
+}
+
+void testSamplerAndTextureStageDirtyHashPayloadBoundaries() {
+  DeviceState state;
+  state.reset();
+
+  auto& stage2 = state.textureStageStates[2];
+  stage2.clearDirty();
+  const u64 initialStageHash = stage2.rollingHash;
+  stage2.set(TSS_COLOR_OP, stage2.at(TSS_COLOR_OP));
+  checkEq(stage2.rollingHash, initialStageHash,
+          "redundant texture-stage set keeps rolling hash");
+  check(!stateTableDirty(stage2, TSS_COLOR_OP),
+        "redundant texture-stage set does not mark dirty");
+  stage2.set(TSS_COLOR_OP, static_cast<u32>(TextureOp::AddSigned2x));
+  stage2.set(TSS_ALPHA_ARG2, 0x21u);
+  stage2.set(TSS_TEXCOORD_INDEX, 0x00010002u);
+  check(stateTableDirty(stage2, TSS_COLOR_OP),
+        "changed texture-stage op marks dirty");
+  check(stateTableDirty(stage2, TSS_ALPHA_ARG2),
+        "changed texture-stage arg marks dirty");
+
+  auto& sampler3 = state.samplerStates[3];
+  sampler3.clearDirty();
+  const u64 initialSamplerHash = sampler3.rollingHash;
+  sampler3.set(SAMP_ADDRESS_U, sampler3.at(SAMP_ADDRESS_U));
+  checkEq(sampler3.rollingHash, initialSamplerHash,
+          "redundant sampler set keeps rolling hash");
+  check(!stateTableDirty(sampler3, SAMP_ADDRESS_U),
+        "redundant sampler set does not mark dirty");
+  sampler3.set(SAMP_ADDRESS_U, 3u);
+  sampler3.set(SAMP_MAX_ANISOTROPY, 16u);
+  sampler3.set(SAMP_SRGB_TEXTURE, 1u);
+  check(stateTableDirty(sampler3, SAMP_ADDRESS_U),
+        "changed sampler address mode marks dirty");
+  check(stateTableDirty(sampler3, SAMP_MAX_ANISOTROPY),
+        "changed sampler anisotropy marks dirty");
+
+  const DrawDesc desc = makeDrawDescFromState(state, {});
+  const auto canonical = makeCanonicalDrawStateFromState(state, {});
+  const auto expectedKey = makeFlatDrawStateKey(desc);
+
+  checkEq(canonical.hot.textureStageStates[2].hash,
+          expectedKey.textureStageStateHashes[2],
+          "hot TSS payload hash matches flat key slot");
+  checkEq(canonical.hot.samplerStates[3].hash,
+          expectedKey.samplerStateHashes[3],
+          "hot sampler payload hash matches flat key slot");
+  checkFlatStateValue(canonical.hot.textureStageStates[2], TSS_COLOR_OP,
+                      static_cast<u32>(TextureOp::AddSigned2x),
+                      "hot TSS payload preserves color op");
+  checkFlatStateValue(canonical.hot.textureStageStates[2], TSS_TEXCOORD_INDEX,
+                      0x00010002u,
+                      "hot TSS payload preserves generated texcoord selector");
+  checkFlatStateValue(canonical.hot.samplerStates[3], SAMP_MAX_ANISOTROPY, 16u,
+                      "hot sampler payload preserves anisotropy");
+  checkFlatStateValue(canonical.hot.samplerStates[3], SAMP_SRGB_TEXTURE, 1u,
+                      "hot sampler payload preserves sRGB sampling bit");
+  check((canonical.hot.key.samplerStateMask & (1u << 3u)) != 0,
+        "sampler dirty payload contributes to sampler-state mask");
+  checkEq(canonical.debug.samplerStateMask, canonical.hot.key.samplerStateMask,
+          "debug snapshot carries sampler-state mask");
+
+  DrawRunDesc run{};
+  run.state = canonical;
+  DrawParam param{};
+  param.primitiveCount = 1u;
+  check(drawRunAppend(run, param), "sampler/TSS draw-run param appends");
+  check(drawRunValidate(run), "sampler/TSS draw-run validates");
+  checkEq(run.state.hot.textureStageStates[2].hash,
+          canonical.hot.textureStageStates[2].hash,
+          "draw-run keeps TSS hash");
+  checkEq(run.state.hot.samplerStates[3].hash,
+          canonical.hot.samplerStates[3].hash,
+          "draw-run keeps sampler hash");
+
+  DeviceState changedStage = state;
+  changedStage.textureStageStates[2].set(TSS_ALPHA_ARG2, 0x20u);
+  const auto changedStageKey = makeCanonicalDrawStateFromState(changedStage, {}).hot.key;
+  check(changedStageKey.textureStageStateHashes[2] !=
+            canonical.hot.key.textureStageStateHashes[2],
+        "texture-stage payload change alters only its keyed slot");
+
+  DeviceState changedSampler = state;
+  changedSampler.samplerStates[3].set(SAMP_MAX_ANISOTROPY, 8u);
+  const auto changedSamplerKey = makeCanonicalDrawStateFromState(changedSampler, {}).hot.key;
+  check(changedSamplerKey.samplerStateHashes[3] !=
+            canonical.hot.key.samplerStateHashes[3],
+        "sampler payload change alters only its keyed slot");
+}
+
 void testVertexDeclSnapshotSurvivesLaterStateMutation() {
   DeviceState state;
   state.reset();
@@ -1591,6 +1829,8 @@ int main() {
   testResourceBindingsAndAttachments();
   testVertexDeclFvfAndStreamBindings();
   testTextureStageArgumentCanonicalValues();
+  testRenderStateIntentPayloadAcrossDrawRunBoundary();
+  testSamplerAndTextureStageDirtyHashPayloadBoundaries();
   testVertexDeclSnapshotSurvivesLaterStateMutation();
   testIndexedDrawRunPolicyDataContract();
   testFlatDrawStateKey();
