@@ -1342,6 +1342,7 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
     instruction.opcode = opcode;
     instruction.controls = (token >> 16) & 0xffu;
     instruction.predicated = ((token >> 28) & 0x1u) != 0;
+    instruction.coissue = (token & 0x40000000u) != 0;
     instruction.operands.reserve(operandCount);
     instruction.relAddrTokens.assign(operandCount, 0u);
     // D3D9 operand encoding: when an *operand* token has the rel-addr

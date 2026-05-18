@@ -1585,7 +1585,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               value = "float4(dot(" + readSrc(1) + ", " + readSrc(2) + "))";
               break;
             case kD3DSIO_CND:
-              value = "select(" + readSrc(3) + ", " + readSrc(2) + ", " + readSrc(1) + " > float4(0.5f))";
+              if (instruction.coissue && module.stage == D3DShaderStage::Pixel &&
+                  module.major == 1u && module.minor < 4u) {
+                value = readSrc(2);
+              } else {
+                value = "select(" + readSrc(3) + ", " + readSrc(2) + ", " + readSrc(1) + " > float4(0.5f))";
+              }
               break;
             case kD3DSIO_CMP:
               value = "select(" + readSrc(3) + ", " + readSrc(2) + ", " + readSrc(1) + " >= float4(0.0f))";
@@ -2628,7 +2633,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             value = "float4(dot(" + readSrc(1) + ", " + readSrc(2) + "))";
             break;
           case kD3DSIO_CND:
-            value = "select(" + readSrc(3) + ", " + readSrc(2) + ", " + readSrc(1) + " > float4(0.5f))";
+            if (instruction.coissue && module.stage == D3DShaderStage::Pixel &&
+                module.major == 1u && module.minor < 4u) {
+              value = readSrc(2);
+            } else {
+              value = "select(" + readSrc(3) + ", " + readSrc(2) + ", " + readSrc(1) + " > float4(0.5f))";
+            }
             break;
           case kD3DSIO_CMP:
             value = "select(" + readSrc(3) + ", " + readSrc(2) + ", " + readSrc(1) + " >= float4(0.0f))";

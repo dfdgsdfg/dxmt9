@@ -1511,6 +1511,18 @@ oracle = "Wine d3d9 visual.c cnd_test behavior, reduced to ps_1_3 component-wise
 oracle-date = "2026-05-18"
 
 [[test]]
+file = "legacy_sm1/dxmt9_ps13_cnd_coissue_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_3"]
+opcodes = ["ADD", "CND", "DEF", "DP3", "MOV", "SUB", "TEXCOORD"]
+oracle = "Wine d3d9 visual.c cnd_test behavior, reduced to ps_1_3 coissued CND alpha-path readback"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "legacy_sm1/dxmt9_ps14_texcrd_texld_readback.shader_test"
 status = "passing"
 source = "dxmt9"

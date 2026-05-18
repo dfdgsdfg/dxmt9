@@ -55,6 +55,7 @@ struct D3DDecodedInstruction {
   u32 opcode = 0;
   u32 controls = 0;
   bool predicated = false;
+  bool coissue = false;
   std::vector<u32> operands;
   // Parallel to `operands`. Non-zero entries hold the rel-addr DWORD
   // that immediately followed the corresponding operand token in the
