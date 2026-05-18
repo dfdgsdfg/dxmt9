@@ -935,6 +935,18 @@ oracle = "Wine d3d9 visual.c unbound_sampler_test behavior, reduced to unbound 2
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "texture/dxmt9_unbound_sampler_texldl_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0"]
+opcodes = ["DCL", "DEF", "MOV", "TEXLDL"]
+oracle = "Wine d3d9 visual.c unbound_sampler_test behavior, reduced to unbound explicit-LOD TEXLDL fallback readback"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "render_state/dxmt9_ffp_fog_linear_readback.shader_test"
 status = "passing"
 source = "dxmt9"
