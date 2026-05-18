@@ -935,6 +935,18 @@ oracle = "Wine d3d9 visual.c sampler/state and shader constant behavior, reduced
 oracle-date = "2026-05-18"
 
 [[test]]
+file = "texture/dxmt9_argbuf_sampler15_psconst31_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "MUL", "TEX"]
+oracle = "Wine d3d9 visual.c sampler/state and shader constant behavior, reduced to high sampler plus high PS constant readback parity"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "texture/dxmt9_unbound_sampler_2d_readback.shader_test"
 status = "passing"
 source = "dxmt9"
