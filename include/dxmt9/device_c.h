@@ -447,6 +447,12 @@ typedef struct D9CCommandChunkWireRecordHeader {
     uint32_t reserved1;
 } D9CCommandChunkWireRecordHeader;
 
+/* TLA+ binding: `specs/verification/tla/WireHandleGeneration.tla` —
+ * `NoZombieAccept` (with `StampedMatchesArenaOnAdmit`) proves that no
+ * wire entry whose stamped `generation` disagrees with the unix-side
+ * resolved `core::Handle` generation can reach the importer's admit
+ * branch; `LegacyNoneAlwaysAccepts` encodes the documented NONE-sentinel
+ * trade-off, and `NoForwardInconsistency` pins the 24-bit domain. */
 typedef struct D9CCommandChunkWireHandleEntry {
     uint32_t kind;
     uint32_t generation;
