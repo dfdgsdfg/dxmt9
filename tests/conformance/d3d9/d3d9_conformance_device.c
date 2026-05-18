@@ -2501,6 +2501,95 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_set_palette()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_palette_current_entry_isolation(const struct d3d9_api *api)
+{
+    PALETTEENTRY palette0[256];
+    PALETTEENTRY palette1[256];
+    PALETTEENTRY actual[256];
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    UINT current;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    for (i = 0; i < ARRAY_SIZE(palette0); ++i)
+    {
+        palette0[i].peRed = (BYTE)i;
+        palette0[i].peGreen = (BYTE)(255 - i);
+        palette0[i].peBlue = (BYTE)(i ^ 0x5a);
+        palette0[i].peFlags = 0xff;
+
+        palette1[i].peRed = (BYTE)(255 - i);
+        palette1[i].peGreen = (BYTE)(i ^ 0xa5);
+        palette1[i].peBlue = (BYTE)i;
+        palette1[i].peFlags = 0xff;
+    }
+
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 1, palette1),
+            D3D_OK);
+
+    memset(actual, 0xcc, sizeof(actual));
+    hr = IDirect3DDevice9_GetPaletteEntries(device, 0, actual);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(actual, palette0, sizeof(palette0)) == 0);
+
+    memset(actual, 0xcc, sizeof(actual));
+    hr = IDirect3DDevice9_GetPaletteEntries(device, 1, actual);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(actual, palette1, sizeof(palette1)) == 0);
+
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 1), D3D_OK);
+    current = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetCurrentTexturePalette(device, &current);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(current == 1);
+
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
+    current = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetCurrentTexturePalette(device, &current);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(current == 0);
+
+    memset(actual, 0xcc, sizeof(actual));
+    hr = IDirect3DDevice9_GetPaletteEntries(device, 1, actual);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(actual, palette1, sizeof(palette1)) == 0);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_multi_adapter()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

@@ -351,6 +351,7 @@ void test_stream_source_frequency_state(const struct d3d9_api *api);
 void test_get_set_texture(const struct d3d9_api *api);
 void test_set_palette_roundtrip(const struct d3d9_api *api);
 void test_palette_alpha_caps_policy(const struct d3d9_api *api);
+void test_palette_current_entry_isolation(const struct d3d9_api *api);
 void test_multi_adapter(const struct d3d9_api *api);
 
 void test_display_mode_ex_size_filter_smoke(const struct d3d9_api *api);
@@ -385,6 +386,7 @@ void test_cube_texture_level_surface_policy(const struct d3d9_api *api);
 void test_volume_resource_container_desc(const struct d3d9_api *api);
 void test_volume_mipmap_level_desc_policy(const struct d3d9_api *api);
 void test_volume_block_lock_layout(const struct d3d9_api *api);
+void test_volume_lockbox_bounds_offset_policy(const struct d3d9_api *api);
 void test_vendor_format_public_api_policy(const struct d3d9_api *api);
 void test_resource_priority_roundtrip(const struct d3d9_api *api);
 void test_resource_priority_pool_policy(const struct d3d9_api *api);

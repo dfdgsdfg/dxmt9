@@ -748,6 +748,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_palette_current_entry_isolation"
+source = "wine/dlls/d3d9/tests/device.c:test_set_palette"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "palette-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["multiple palette entry arrays remain isolated and SetCurrentTexturePalette/GetCurrentTexturePalette switch the active palette without mutating stored entries"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_multi_adapter"
 source = "wine/dlls/d3d9/tests/device.c:test_multi_adapter"
 source_kind = "behavioral-oracle"
@@ -1090,6 +1107,23 @@ area = "volume-resources"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["DXT scratch volume locks expose block-shaped row and slice pitch and reject block-misaligned lock boxes"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_volume_lockbox_bounds_offset_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_lockbox_invalid"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "volume-resources"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["volume LockBox validates empty, reversed, and out-of-bounds boxes while valid partial boxes expose pBits offsets matching slice/row/texel layout"]
 status = "scaffolded"
 
 [[case]]

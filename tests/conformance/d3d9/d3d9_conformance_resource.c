@@ -1861,6 +1861,102 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lockbox_invalid()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_volume_lockbox_bounds_offset_policy(const struct d3d9_api *api)
+{
+    static const struct
+    {
+        D3DBOX box;
+        HRESULT result;
+    }
+    cases[] =
+    {
+        {{0, 0, 2, 2, 0, 1}, D3D_OK},
+        {{1, 1, 4, 4, 1, 2}, D3D_OK},
+        {{0, 0, 0, 4, 0, 1}, D3DERR_INVALIDCALL},
+        {{0, 0, 4, 0, 0, 1}, D3DERR_INVALIDCALL},
+        {{0, 0, 4, 4, 1, 1}, D3DERR_INVALIDCALL},
+        {{4, 0, 0, 4, 0, 1}, D3DERR_INVALIDCALL},
+        {{0, 4, 4, 0, 0, 1}, D3DERR_INVALIDCALL},
+        {{0, 0, 4, 4, 1, 0}, D3DERR_INVALIDCALL},
+        {{0, 0, 8, 4, 0, 1}, D3DERR_INVALIDCALL},
+        {{0, 0, 4, 8, 0, 1}, D3DERR_INVALIDCALL},
+        {{0, 0, 4, 4, 0, 3}, D3DERR_INVALIDCALL},
+    };
+    IDirect3DVolumeTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_BOX locked;
+    IDirect3D9 *d3d9;
+    BYTE *base = NULL;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVolumeTexture(device, 4, 4, 2, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DVolumeTexture9_LockBox(texture, 0, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_texture;
+    base = locked.pBits;
+    CHECK_HR(IDirect3DVolumeTexture9_UnlockBox(texture, 0), D3D_OK);
+
+    for (i = 0; i < ARRAY_SIZE(cases); ++i)
+    {
+        const D3DBOX *box = &cases[i].box;
+
+        locked.pBits = (void *)0xdeadbeef;
+        locked.RowPitch = 0xdeadbeef;
+        locked.SlicePitch = 0xdeadbeef;
+        hr = IDirect3DVolumeTexture9_LockBox(texture, 0, &locked, box, 0);
+        CHECK_HR(hr, cases[i].result);
+        if (FAILED(hr))
+            continue;
+
+        CHECK_TRUE(locked.pBits != NULL);
+        CHECK_TRUE(locked.RowPitch >= 16);
+        CHECK_TRUE(locked.SlicePitch >= locked.RowPitch * 4);
+        CHECK_TRUE((BYTE *)locked.pBits - base ==
+                (ptrdiff_t)(box->Front * locked.SlicePitch
+                + box->Top * locked.RowPitch + box->Left * 4));
+        CHECK_HR(IDirect3DVolumeTexture9_UnlockBox(texture, 0), D3D_OK);
+    }
+
+done_texture:
+    IDirect3DVolumeTexture9_Release(texture);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * functions: test_surface_format_null(), test_volume_blocks()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */
