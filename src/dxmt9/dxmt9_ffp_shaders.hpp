@@ -80,6 +80,7 @@ struct FixedFunctionVertexLayout {
   bool preTransformed = false;
   u32 positionComponents = 0;
   bool hasDiffuse = false;
+  bool hasSpecular = false;
   bool hasNormal = false;
   bool hasPointSize = false;
   bool hasBlendWeight = false;
@@ -89,6 +90,7 @@ struct FixedFunctionVertexLayout {
   u32 stride = 0;
   u32 positionOffset = 0;
   u32 diffuseOffset = 0;
+  u32 specularOffset = 0;
   u32 normalOffset = 0;
   u32 pointSizeOffset = 0;
   u32 blendWeightOffset = 0;

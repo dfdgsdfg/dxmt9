@@ -1739,6 +1739,18 @@ oracle = "Wine d3d9 visual.c pretransformed_varying_test behavior, reduced to XY
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "vs_specific/dxmt9_positiont_specular_varying_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c pretransformed_varying_test behavior, reduced to XYZRHW SPECULAR/COLOR1 varying readback through D3DTA_SPECULAR"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "vs_specific/dxmt9_position_index_texcoord_readback.shader_test"
 status = "passing"
 source = "dxmt9"

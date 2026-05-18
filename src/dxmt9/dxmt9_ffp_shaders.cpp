@@ -71,6 +71,8 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasDiffuse);
   hash *= 1099511628211ull;
+  hash ^= static_cast<u64>(layout.hasSpecular);
+  hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasNormal);
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasPointSize);
@@ -84,6 +86,8 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash ^= layout.positionOffset;
   hash *= 1099511628211ull;
   hash ^= layout.diffuseOffset;
+  hash *= 1099511628211ull;
+  hash ^= layout.specularOffset;
   hash *= 1099511628211ull;
   hash ^= layout.normalOffset;
   hash *= 1099511628211ull;
@@ -255,6 +259,10 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
                  element.type == kD3DDeclTypeD3DColor) {
         layout.hasDiffuse = true;
         layout.diffuseOffset = element.offset;
+      } else if (element.usage == kD3DDeclUsageColor && element.usageIndex == 1 &&
+                 element.type == kD3DDeclTypeD3DColor) {
+        layout.hasSpecular = true;
+        layout.specularOffset = element.offset;
       } else if (element.usage == kD3DDeclUsageNormal && element.usageIndex == 0 &&
                  (element.type == kD3DDeclTypeFloat3 || element.type == kD3DDeclTypeFloat4)) {
         layout.hasNormal = true;
@@ -330,6 +338,8 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
     offset += 4;
   }
   if ((fvf & kFvfSpecular) != 0) {
+    layout.hasSpecular = true;
+    layout.specularOffset = offset;
     offset += 4;
   }
 
@@ -474,7 +484,12 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     } else {
       out << "  out.color = float4(1.0);\n";
     }
-    out << "  out.secondaryColor = float4(0.0);\n";
+    if (layout->hasSpecular) {
+      out << "  out.secondaryColor = dxmt9_load_d3dcolor(stream0, base + "
+          << layout->specularOffset << "u);\n";
+    } else {
+      out << "  out.secondaryColor = float4(0.0);\n";
+    }
     out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
     emitStageTexcoords(out);
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
@@ -611,7 +626,12 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     } else {
       out << "  out.color = float4(1.0);\n";
     }
-    out << "  out.secondaryColor = float4(0.0);\n";
+    if (layout->hasSpecular) {
+      out << "  out.secondaryColor = dxmt9_load_d3dcolor(stream0, base + "
+          << layout->specularOffset << "u);\n";
+    } else {
+      out << "  out.secondaryColor = float4(0.0);\n";
+    }
     out << "  float3 dxmt9_lightingNormal = dxmt9_cameraUnitNormal;\n";
     emitStageTexcoords(out);
     if (shaders::vsoutEmitFogFactor()) {

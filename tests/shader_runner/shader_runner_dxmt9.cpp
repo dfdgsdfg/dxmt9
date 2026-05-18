@@ -194,6 +194,7 @@ struct CorpusTest {
   bool drawDxmt9FfpColorVertexQuad = false;
   bool drawDxmt9FfpLitDirectionalQuad = false;
   bool drawDxmt9FfpSpecularDirectionalQuad = false;
+  bool drawDxmt9FfpPositionTSpecularQuad = false;
   bool drawDxmt9FfpAmbientEmissiveMaterialQuad = false;
   bool drawDxmt9FfpAmbientColorEmissiveMaterialQuad = false;
   bool drawDxmt9FfpGouraudTriangle = false;
@@ -225,6 +226,7 @@ constexpr u32 kFvfXyzB2 = 0x0008u;
 constexpr u32 kFvfNormal = 0x0010u;
 constexpr u32 kFvfPSize = 0x0020u;
 constexpr u32 kFvfDiffuse = 0x0040u;
+constexpr u32 kFvfSpecular = 0x0080u;
 constexpr u32 kFvfTex1 = 0x0100u;
 constexpr u32 kFvfTex2 = 0x0200u;
 constexpr u32 kDeclTypeFloat1 = 0u;
@@ -335,6 +337,15 @@ struct ScreenSpaceColorVertex {
   float z = 0.0f;
   float rhw = 1.0f;
   u32 color = 0xffffffffu;
+};
+
+struct ScreenSpaceDualColorVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float rhw = 1.0f;
+  u32 diffuse = 0xffffffffu;
+  u32 specular = 0xff000000u;
 };
 
 struct ScreenSpacePSizeColorVertex {
@@ -2027,6 +2038,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-ffp-positiont-specular-quad") {
+    test.drawDxmt9FfpPositionTSpecularQuad = true;
+    return;
+  }
+
   if (line == "dxmt9-draw-ffp-ambient-emissive-material-quad") {
     test.drawDxmt9FfpAmbientEmissiveMaterialQuad = true;
     return;
@@ -2903,6 +2919,31 @@ void setupAmbientMaterialLight(Device& device, const Material& material) {
   }
 }
 
+void drawDxmt9FfpPositionTSpecularQuad(Device& device, u32 width, u32 height) {
+  if (device.setFVF(kFvfXyzrhw | kFvfDiffuse | kFvfSpecular) != D3D_OK) {
+    fail("dxmt9 FFP POSITIONT specular FVF setup failed");
+  }
+
+  const float w = static_cast<float>(width);
+  const float h = static_cast<float>(height);
+  constexpr u32 kOpaqueWhite = 0xffffffffu;
+  constexpr u32 kSpecularBlue = 0xff0000ffu;
+  const std::array<ScreenSpaceDualColorVertex, 6> quad{
+      ScreenSpaceDualColorVertex{0.0f, 0.0f, 0.0f, 1.0f, kOpaqueWhite, kSpecularBlue},
+      ScreenSpaceDualColorVertex{w, 0.0f, 0.0f, 1.0f, kOpaqueWhite, kSpecularBlue},
+      ScreenSpaceDualColorVertex{0.0f, h, 0.0f, 1.0f, kOpaqueWhite, kSpecularBlue},
+      ScreenSpaceDualColorVertex{w, 0.0f, 0.0f, 1.0f, kOpaqueWhite, kSpecularBlue},
+      ScreenSpaceDualColorVertex{w, h, 0.0f, 1.0f, kOpaqueWhite, kSpecularBlue},
+      ScreenSpaceDualColorVertex{0.0f, h, 0.0f, 1.0f, kOpaqueWhite, kSpecularBlue},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(ScreenSpaceDualColorVertex)) != D3D_OK) {
+    fail("dxmt9 FFP POSITIONT specular quad draw failed");
+  }
+}
+
 void drawDxmt9FfpAmbientEmissiveMaterialQuad(Device& device, u32 width, u32 height) {
   (void)width;
   (void)height;
@@ -3555,6 +3596,7 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9FfpColorVertexQuad ||
                             test.drawDxmt9FfpLitDirectionalQuad ||
                             test.drawDxmt9FfpSpecularDirectionalQuad ||
+                            test.drawDxmt9FfpPositionTSpecularQuad ||
                             test.drawDxmt9FfpAmbientEmissiveMaterialQuad ||
                             test.drawDxmt9FfpAmbientColorEmissiveMaterialQuad ||
                             test.drawDxmt9FfpGouraudTriangle ||
@@ -3724,6 +3766,7 @@ void runCorpusFile(const std::string& path) {
                           test.drawDxmt9FfpColorVertexQuad ||
                           test.drawDxmt9FfpLitDirectionalQuad ||
                           test.drawDxmt9FfpSpecularDirectionalQuad ||
+                          test.drawDxmt9FfpPositionTSpecularQuad ||
                           test.drawDxmt9FfpAmbientEmissiveMaterialQuad ||
                           test.drawDxmt9FfpAmbientColorEmissiveMaterialQuad ||
                           test.drawDxmt9FfpGouraudTriangle ||
@@ -4039,6 +4082,16 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9FfpSpecularDirectionalQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpPositionTSpecularQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpPositionTSpecularQuad(*device, params.backBufferWidth, params.backBufferHeight);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }
