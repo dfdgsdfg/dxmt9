@@ -251,11 +251,14 @@ std::uint32_t appendConstRecord(std::vector<std::uint8_t>& bytes,
   return offset;
 }
 
-D9CCommandChunkWireHandleEntry wireHandleEntry(std::uint32_t kind,
-                                               const void* ptr) {
+D9CCommandChunkWireHandleEntry wireHandleEntry(
+    std::uint32_t kind,
+    const void* ptr,
+    std::uint32_t generation =
+        D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) {
   return D9CCommandChunkWireHandleEntry{
       .kind = kind,
-      .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
+      .generation = generation,
       .opaqueHandle = wireValueFromPtr(ptr),
       .reserved0 = 0u,
       .reserved1 = 0u,
@@ -1081,6 +1084,238 @@ void testImportedApplyStateCanDetachRtAndDepthStencil() {
   checkEq(d3d->Release(), 0u, "release detach d3d factory");
 }
 
+void testImportedSparseRtAndDepthStencilBindingBoundary() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create sparse RT/DS recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 32u;
+  params.backBufferHeight = 24u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{994};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create sparse RT/DS recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+    auto renderTarget0 = device->CreateSurface(SurfaceDesc{
+        .width = 32u,
+        .height = 24u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+        .multiSampleType = MultiSampleType::None,
+    });
+    auto renderTarget2 = device->CreateSurface(SurfaceDesc{
+        .width = 64u,
+        .height = 48u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+        .multiSampleType = MultiSampleType::Four,
+    });
+    auto depthStencil = device->CreateSurface(SurfaceDesc{
+        .width = 64u,
+        .height = 48u,
+        .format = Format::D24S8,
+        .pool = Pool::Default,
+        .usage = UsageDepthStencil,
+        .depthStencil = true,
+        .multiSampleType = MultiSampleType::Two,
+    });
+    check(renderTarget0 != nullptr, "sparse bind RT0");
+    check(renderTarget2 != nullptr, "sparse bind RT2");
+    check(depthStencil != nullptr, "sparse bind DS");
+
+    D9CSurface rt0Wire(renderTarget0);
+    D9CSurface rt2Wire(renderTarget2);
+    D9CSurface dsWire(depthStencil);
+
+    auto bind = makeApplyStateRecord();
+    bind.packet.rtMask = (1u << 0u) | (1u << 2u);
+    bind.packet.rtHandles[0] = wireHandleFromPtr(&rt0Wire);
+    bind.packet.rtHandles[2] = wireHandleFromPtr(&rt2Wire);
+    bind.packet.dsValid = 1u;
+    bind.packet.dsHandle = wireHandleFromPtr(&dsWire);
+
+    const auto draw = makeDrawRecord(7u, 2u);
+
+    std::vector<std::uint8_t> payload;
+    const auto bindOffset = appendRecord(payload, bind);
+    const auto drawOffset = appendRecord(payload, draw);
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, bindOffset,
+                         sizeof(bind), 0u, 3u),
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, drawOffset,
+                         sizeof(draw)),
+    };
+    const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &rt0Wire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &rt2Wire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &dsWire),
+    };
+    const auto wireBlob = makeWireChunkBlob(payload, records, handles);
+
+    recorder->events.clear();
+    checkEq(commitWireChunk(cDevice, wireBlob,
+                            static_cast<std::uint32_t>(records.size()),
+                            static_cast<std::uint32_t>(handles.size())),
+            D3D_OK, "commit sparse RT/DS imported chunk");
+
+    checkEq(recorder->events.size(), static_cast<std::size_t>(4),
+            "sparse RT/DS import event count");
+    checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
+                   "sparse RT/DS retention event");
+    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                   "sparse RT/DS skip enabled event");
+    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+                   "sparse RT/DS draw event");
+    checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
+                   "sparse RT/DS skip disabled event");
+    check(recorder->events[1].skipDrawResourceMarking,
+          "sparse RT/DS skip enabled");
+    check(!recorder->events[3].skipDrawResourceMarking,
+          "sparse RT/DS skip disabled");
+
+    const auto& retained = recorder->events[0].chunkHandles;
+    checkEq(retained.size(), static_cast<std::size_t>(3),
+            "sparse RT/DS retention resolves every surface");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              renderTarget0->handle()),
+          "sparse RT/DS retention includes RT0");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              renderTarget2->handle()),
+          "sparse RT/DS retention includes RT2");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              depthStencil->handle()),
+          "sparse RT/DS retention includes DS");
+
+    const auto& state = device->coreDevice().state();
+    checkEq(state.renderTargets[0].handle.value,
+            renderTarget0->handle().value, "sparse import state RT0");
+    checkEq(state.renderTargets[2].handle.value,
+            renderTarget2->handle().value, "sparse import state RT2");
+    checkEq(state.renderTargets[2].sampleCount, 4u,
+            "sparse import state RT2 sample count");
+    checkEq(state.renderTargets[1].handle.value, 0ull,
+            "sparse import state leaves RT1 untouched");
+    checkEq(state.depthStencil.handle.value,
+            depthStencil->handle().value, "sparse import state DS");
+    checkEq(state.depthStencil.sampleCount, 2u,
+            "sparse import state DS sample count");
+
+    const auto& run = recorder->events[2].drawRun;
+    checkEq(run.draws.size(), static_cast<std::size_t>(1),
+            "sparse RT/DS draw run count");
+    checkEq(run.draws[0].startVertex, 7u,
+            "sparse RT/DS draw param start vertex");
+    checkEq(run.draws[0].primitiveCount, 2u,
+            "sparse RT/DS draw param primitive count");
+    checkEq(run.hot.renderTargetMask, (1u << 0u) | (1u << 2u),
+            "sparse RT/DS draw hot RT mask");
+    checkEq(run.hot.colorAttachments[0].handle.value,
+            renderTarget0->handle().value, "sparse draw hot RT0");
+    checkEq(run.hot.colorAttachments[2].handle.value,
+            renderTarget2->handle().value, "sparse draw hot RT2");
+    checkEq(run.hot.colorAttachments[2].sampleCount, 4u,
+            "sparse draw hot RT2 sample count");
+    checkEq(run.hot.colorAttachments[1].handle.value, 0ull,
+            "sparse draw hot leaves RT1 empty");
+    checkEq(run.hot.depthStencil.handle.value,
+            depthStencil->handle().value, "sparse draw hot DS");
+    checkEq(run.hot.depthStencil.sampleCount, 2u,
+            "sparse draw hot DS sample count");
+    checkEq(run.hot.key.colorAttachments[2].handle.value,
+            renderTarget2->handle().value, "sparse draw key RT2");
+    checkEq(run.hot.key.depthStencil.handle.value,
+            depthStencil->handle().value, "sparse draw key DS");
+  }
+
+  checkEq(device->Release(), 0u, "release sparse RT/DS d3d device");
+  checkEq(d3d->Release(), 0u, "release sparse RT/DS d3d factory");
+}
+
+void testStampedSurfaceGenerationMismatchRejectsBeforeReplay() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create bad-generation recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{995};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create bad-generation recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+    auto renderTarget = device->CreateSurface(SurfaceDesc{
+        .width = 16u,
+        .height = 16u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    check(renderTarget != nullptr, "bad-generation RT");
+
+    D9CSurface rtWire(renderTarget);
+    const auto originalRt0 =
+        device->coreDevice().state().renderTargets[0].handle;
+    auto bind = makeApplyStateRecord();
+    bind.packet.rtMask = 1u << 0u;
+    bind.packet.rtHandles[0] = wireHandleFromPtr(&rtWire);
+
+    std::vector<std::uint8_t> payload;
+    const auto bindOffset = appendRecord(payload, bind);
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, bindOffset,
+                         sizeof(bind), 0u, 1u),
+    };
+    const std::uint32_t resolvedGeneration =
+        d9c_command_chunk_wire_handle_generation_from_handle(
+            renderTarget->handle().value);
+    const std::uint32_t mismatchedGeneration =
+        resolvedGeneration == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK
+            ? 1u
+            : resolvedGeneration + 1u;
+    const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &rtWire,
+                        mismatchedGeneration),
+    };
+    const auto wireBlob = makeWireChunkBlob(payload, records, handles);
+
+    recorder->events.clear();
+    checkEq(commitWireChunk(cDevice, wireBlob, 1u, 1u),
+            D3DERR_INVALIDCALL,
+            "bad-generation imported surface chunk rejected");
+    checkEq(device->coreDevice().state().renderTargets[0].handle.value,
+            originalRt0.value,
+            "bad-generation chunk rejects before mutating RT state");
+    check(recorder->events.empty(),
+          "bad-generation chunk rejects before fake backend events");
+  }
+
+  checkEq(device->Release(), 0u, "release bad-generation d3d device");
+  checkEq(d3d->Release(), 0u, "release bad-generation d3d factory");
+}
+
 void testMalformedImportedRecordDoesNotMutateState() {
   auto upper = std::make_unique<RecordingDxmt9Device>();
   auto* recorder = upper.get();
@@ -1146,6 +1381,8 @@ int main() {
   try {
     testImportedApplyStateAndSetConstValuePropagation();
     testImportedApplyStateCanDetachRtAndDepthStencil();
+    testImportedSparseRtAndDepthStencilBindingBoundary();
+    testStampedSurfaceGenerationMismatchRejectsBeforeReplay();
     testMalformedImportedRecordDoesNotMutateState();
   } catch (const TestFailure& e) {
     std::cerr << "imported_apply_state_value_spec failed: " << e.what()
