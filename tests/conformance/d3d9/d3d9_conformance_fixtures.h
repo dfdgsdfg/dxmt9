@@ -343,6 +343,8 @@ void test_sampler_state_edges(const struct d3d9_api *api);
 void test_light_enable_state(const struct d3d9_api *api);
 void test_fpu_setup(const struct d3d9_api *api);
 void test_limits(const struct d3d9_api *api);
+void test_viewport_scissor_state_getters(const struct d3d9_api *api);
+void test_clip_plane_state_getters(const struct d3d9_api *api);
 void test_null_stream_state(const struct d3d9_api *api);
 void test_set_stream_source_state(const struct d3d9_api *api);
 void test_get_set_texture(const struct d3d9_api *api);

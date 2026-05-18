@@ -578,6 +578,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_viewport_scissor_state_getters"
+source = "wine/dlls/d3d9/tests/device.c:test_set_rt_vp_scissor"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-state-getters"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.17"]
+acceptance = ["viewport and scissor getters expose default device dimensions, reject null out-pointers, and round-trip explicit caller state"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_clip_plane_state_getters"
+source = "wine/dlls/d3d9/tests/device.c:test_clip_planes_limits"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-state-getters"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["clip-plane getters expose default zero planes, reject null out-pointers, and preserve SetClipPlane plus CLIPPLANEENABLE state"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_null_stream_state"
 source = "wine/dlls/d3d9/tests/device.c:test_null_stream"
 source_kind = "behavioral-oracle"

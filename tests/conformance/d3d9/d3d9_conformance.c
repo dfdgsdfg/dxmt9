@@ -52,6 +52,8 @@ static const struct test_case tests[] =
     {"light_enable_state", test_light_enable_state},
     {"fpu_setup", test_fpu_setup},
     {"limits", test_limits},
+    {"viewport_scissor_state_getters", test_viewport_scissor_state_getters},
+    {"clip_plane_state_getters", test_clip_plane_state_getters},
     {"null_stream_state", test_null_stream_state},
     {"set_stream_source_state", test_set_stream_source_state},
     {"get_set_texture", test_get_set_texture},

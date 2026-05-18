@@ -1829,6 +1829,182 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_set_rt_vp_scissor()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_viewport_scissor_state_getters(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    D3DVIEWPORT9 expected_vp;
+    D3DVIEWPORT9 actual_vp;
+    IDirect3D9 *d3d9;
+    RECT expected_rect;
+    RECT actual_rect;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&actual_vp, 0xcc, sizeof(actual_vp));
+    hr = IDirect3DDevice9_GetViewport(device, &actual_vp);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(actual_vp.X == 0);
+        CHECK_TRUE(actual_vp.Y == 0);
+        CHECK_TRUE(actual_vp.Width == 640);
+        CHECK_TRUE(actual_vp.Height == 480);
+        CHECK_TRUE(actual_vp.MinZ == 0.0f);
+        CHECK_TRUE(actual_vp.MaxZ == 1.0f);
+    }
+
+    memset(&actual_rect, 0xcc, sizeof(actual_rect));
+    hr = IDirect3DDevice9_GetScissorRect(device, &actual_rect);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(actual_rect.left == 0);
+        CHECK_TRUE(actual_rect.top == 0);
+        CHECK_TRUE(actual_rect.right == 640);
+        CHECK_TRUE(actual_rect.bottom == 480);
+    }
+
+    CHECK_HR(IDirect3DDevice9_GetViewport(device, NULL), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_GetScissorRect(device, NULL), D3DERR_INVALIDCALL);
+
+    expected_vp.X = 10;
+    expected_vp.Y = 20;
+    expected_vp.Width = 30;
+    expected_vp.Height = 40;
+    expected_vp.MinZ = 0.25f;
+    expected_vp.MaxZ = 0.75f;
+    CHECK_HR(IDirect3DDevice9_SetViewport(device, &expected_vp), D3D_OK);
+
+    SetRect(&expected_rect, 50, 60, 70, 80);
+    CHECK_HR(IDirect3DDevice9_SetScissorRect(device, &expected_rect), D3D_OK);
+
+    memset(&actual_vp, 0xcc, sizeof(actual_vp));
+    hr = IDirect3DDevice9_GetViewport(device, &actual_vp);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(&actual_vp, &expected_vp, sizeof(actual_vp)) == 0);
+
+    memset(&actual_rect, 0xcc, sizeof(actual_rect));
+    hr = IDirect3DDevice9_GetScissorRect(device, &actual_rect);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(EqualRect(&actual_rect, &expected_rect));
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_clip_planes_limits()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_clip_plane_state_getters(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    float expected_plane[4];
+    float actual_plane[4];
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    DWORD state;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    if (!caps.MaxUserClipPlanes)
+    {
+        skip_current_test("user clip planes are not supported");
+        goto done_device;
+    }
+
+    memset(actual_plane, 0xff, sizeof(actual_plane));
+    hr = IDirect3DDevice9_GetClipPlane(device, 0, actual_plane);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(actual_plane[0] == 0.0f);
+        CHECK_TRUE(actual_plane[1] == 0.0f);
+        CHECK_TRUE(actual_plane[2] == 0.0f);
+        CHECK_TRUE(actual_plane[3] == 0.0f);
+    }
+
+    expected_plane[0] = 2.0f;
+    expected_plane[1] = 8.0f;
+    expected_plane[2] = 5.0f;
+    expected_plane[3] = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetClipPlane(device, 0, expected_plane),
+            D3D_OK);
+
+    memset(actual_plane, 0xff, sizeof(actual_plane));
+    hr = IDirect3DDevice9_GetClipPlane(device, 0, actual_plane);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(memcmp(actual_plane, expected_plane,
+                sizeof(actual_plane)) == 0);
+
+    CHECK_HR(IDirect3DDevice9_GetClipPlane(device, 0, NULL),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetClipPlane(device, 0, NULL),
+            D3DERR_INVALIDCALL);
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device,
+            D3DRS_CLIPPLANEENABLE, 1), D3D_OK);
+    state = 0xdeadbeef;
+    hr = IDirect3DDevice9_GetRenderState(device, D3DRS_CLIPPLANEENABLE,
+            &state);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(state == 1);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_null_stream()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */
