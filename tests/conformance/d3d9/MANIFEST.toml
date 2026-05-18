@@ -697,6 +697,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_null_stream_shader_draw_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_null_stream"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stream-state"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.16"]
+acceptance = ["a programmable vertex declaration may reference a null secondary stream while DrawPrimitive still succeeds when stream 0 provides the position input"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_set_stream_source_state"
 source = "wine/dlls/d3d9/tests/device.c:test_set_stream_source"
 source_kind = "behavioral-oracle"

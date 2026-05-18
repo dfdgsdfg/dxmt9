@@ -55,6 +55,8 @@ static const struct test_case tests[] =
     {"viewport_scissor_state_getters", test_viewport_scissor_state_getters},
     {"clip_plane_state_getters", test_clip_plane_state_getters},
     {"null_stream_state", test_null_stream_state},
+    {"null_stream_shader_draw_policy",
+            test_null_stream_shader_draw_policy},
     {"set_stream_source_state", test_set_stream_source_state},
     {"stream_source_frequency_state", test_stream_source_frequency_state},
     {"stream_source_vb_offset_alignment_policy",

@@ -346,6 +346,7 @@ void test_limits(const struct d3d9_api *api);
 void test_viewport_scissor_state_getters(const struct d3d9_api *api);
 void test_clip_plane_state_getters(const struct d3d9_api *api);
 void test_null_stream_state(const struct d3d9_api *api);
+void test_null_stream_shader_draw_policy(const struct d3d9_api *api);
 void test_set_stream_source_state(const struct d3d9_api *api);
 void test_stream_source_frequency_state(const struct d3d9_api *api);
 void test_stream_source_vb_offset_alignment_policy(const struct d3d9_api *api);

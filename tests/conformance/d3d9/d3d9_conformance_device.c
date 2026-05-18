@@ -2078,6 +2078,102 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_null_stream()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_null_stream_shader_draw_policy(const struct d3d9_api *api)
+{
+    static const DWORD shader_code[] =
+    {
+        0xfffe0101,                         /* vs_1_1 */
+        0x0000001f, 0x80000000, 0x900f0000, /* dcl_position v0 */
+        0x00000001, 0xc00f0000, 0x90e40000, /* mov oPos, v0 */
+        0x0000ffff,                         /* end */
+    };
+    static const D3DVERTEXELEMENT9 elements[] =
+    {
+        {0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT,
+                D3DDECLUSAGE_POSITION, 0},
+        {1, 0, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT,
+                D3DDECLUSAGE_COLOR, 0},
+        D3DDECL_END()
+    };
+    IDirect3DVertexDeclaration9 *decl = NULL;
+    IDirect3DVertexShader9 *shader = NULL;
+    IDirect3DVertexBuffer9 *buffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexShader(device, shader_code, &shader);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateVertexShader failed with %s", hr_buffer);
+        goto done_device;
+    }
+
+    hr = IDirect3DDevice9_CreateVertexDeclaration(device, elements, &decl);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_shader;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 12 * sizeof(float), 0, 0,
+            D3DPOOL_MANAGED, &buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_decl;
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, buffer, 0,
+            3 * sizeof(float)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 1, NULL, 0, 0),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, shader), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device, decl), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitive(device, D3DPT_POINTLIST, 0, 1),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_SetVertexDeclaration(device, NULL), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShader(device, NULL), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, NULL, 0, 0),
+            D3D_OK);
+
+    IDirect3DVertexBuffer9_Release(buffer);
+done_decl:
+    IDirect3DVertexDeclaration9_Release(decl);
+done_shader:
+    IDirect3DVertexShader9_Release(shader);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_set_stream_source()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */
