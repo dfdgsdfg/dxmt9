@@ -1320,6 +1320,108 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_surface_get_container()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_texture_surface_container_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IUnknown *container = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 128, 128, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(surface != NULL);
+    if (FAILED(hr) || !surface)
+        goto done_texture;
+
+    container = NULL;
+    hr = IDirect3DSurface9_GetContainer(surface, &IID_IUnknown,
+            (void **)&container);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(container == (IUnknown *)texture);
+    if (container)
+    {
+        IUnknown_Release(container);
+        container = NULL;
+    }
+
+    hr = IDirect3DSurface9_GetContainer(surface, &IID_IDirect3DResource9,
+            (void **)&container);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(container == (IUnknown *)texture);
+    if (container)
+    {
+        IUnknown_Release(container);
+        container = NULL;
+    }
+
+    hr = IDirect3DSurface9_GetContainer(surface, &IID_IDirect3DBaseTexture9,
+            (void **)&container);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(container == (IUnknown *)texture);
+    if (container)
+    {
+        IUnknown_Release(container);
+        container = NULL;
+    }
+
+    hr = IDirect3DSurface9_GetContainer(surface, &IID_IDirect3DTexture9,
+            (void **)&container);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(container == (IUnknown *)texture);
+    if (container)
+    {
+        IUnknown_Release(container);
+        container = NULL;
+    }
+
+    container = (IUnknown *)0xdeadbeef;
+    hr = IDirect3DSurface9_GetContainer(surface, &IID_IDirect3DSurface9,
+            (void **)&container);
+    CHECK_HR(hr, E_NOINTERFACE);
+    CHECK_TRUE(container == NULL);
+
+    IDirect3DSurface9_Release(surface);
+
+done_texture:
+    IDirect3DTexture9_Release(texture);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * functions: test_cube_textures(), test_cube_texture_levels()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

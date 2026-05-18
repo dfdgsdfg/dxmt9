@@ -993,6 +993,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_texture_surface_container_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_surface_get_container"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["texture level surfaces return the owning texture for IUnknown, IDirect3DResource9, IDirect3DBaseTexture9, and IDirect3DTexture9 containers, and reject IDirect3DSurface9 with a null out-pointer"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_cube_texture_level_surface_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_cube_textures/test_cube_texture_levels"
 source_kind = "behavioral-oracle"

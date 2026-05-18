@@ -79,6 +79,8 @@ static const struct test_case tests[] =
     {"surface_dimensions", test_surface_dimensions},
     {"surface_format_null_policy", test_surface_format_null_policy},
     {"resource_type", test_resource_type},
+    {"texture_surface_container_policy",
+            test_texture_surface_container_policy},
     {"cube_texture_level_surface_policy",
             test_cube_texture_level_surface_policy},
     {"volume_resource_container_desc", test_volume_resource_container_desc},
