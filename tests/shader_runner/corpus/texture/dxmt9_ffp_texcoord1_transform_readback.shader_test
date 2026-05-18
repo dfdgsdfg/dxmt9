@@ -1,0 +1,26 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_texcoordindex/test_texture_transform_flags behavior, reduced to texcoord-index selection feeding a non-identity texture matrix
+; oracle-date: 2026-05-18
+
+[pixel shader d3dbc-hex]
+ffff0200 0200001f 80000000 b0030000 0200001f 90000000 a00f0800
+03000042 800f0000 b0e40000 a0e40800 02000001 800f0800 80e40000
+0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+dxmt9-texture 0 2 2 A8R8G8B8 red green blue white
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 texcoord_index=1 texture_transform=count2
+dxmt9-texture-transform 0 -1.0 0.0 0.0 1.0 0.0 -1.0 0.0 1.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad-tex2
+probe (16, 16) rgba(1.0, 0.0, 0.0, 1.0) 1
+probe (48, 16) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (16, 48) rgba(0.0, 0.0, 1.0, 1.0) 1
+probe (48, 48) rgba(1.0, 1.0, 1.0, 1.0) 1

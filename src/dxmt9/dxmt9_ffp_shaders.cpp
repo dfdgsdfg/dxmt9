@@ -422,13 +422,9 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
         shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_sphereUv" << stage
                << ", dxmt9_reflect" << stage << ".z, 1.0f);\n";
       }
-      if (layout && layout->preTransformed) {
-        shader << "  out.texcoord" << stage << " = dxmt9_texcoord" << stage << ";\n";
-      } else {
-        shader << "  out.texcoord" << stage << " = float4(dxmt9_apply_texture_transform(dxmt9_texcoord" << stage
-               << ", ffpVs, " << stage << "u, " << key.texTransformFlags[stage]
-               << "u), dxmt9_texcoord" << stage << ".zw);\n";
-      }
+      shader << "  out.texcoord" << stage << " = float4(dxmt9_apply_texture_transform(dxmt9_texcoord" << stage
+             << ", ffpVs, " << stage << "u, " << key.texTransformFlags[stage]
+             << "u), dxmt9_texcoord" << stage << ".zw);\n";
     }
   };
   if (argbufHybrid) {
