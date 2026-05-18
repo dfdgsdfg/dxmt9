@@ -97,6 +97,55 @@ void testResourceRetentionDerivationFromSurfaceAndReadbackRecords() {
   check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x6008u), "readback destination retained");
 }
 
+void testResourceRetentionDerivationFromApplyStateRecords() {
+  D9CCommandRecordApplyState apply{};
+  apply.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
+  apply.header.size = sizeof(apply);
+  apply.packet.textureMask = (1u << 0u) | (1u << 3u);
+  apply.packet.textures[0] = wireHandle(0x7000u);
+  apply.packet.textures[3] = wireHandle(0x7008u);
+  apply.packet.rtMask = (1u << 0u) | (1u << 2u);
+  apply.packet.rtHandles[0] = wireHandle(0x8000u);
+  apply.packet.rtHandles[2] = wireHandle(0x8008u);
+  apply.packet.dsValid = 1u;
+  apply.packet.dsHandle = wireHandle(0x8010u);
+  apply.packet.tssCount = 2u;
+  apply.packet.tss[0] = D9CDrawPacketTextureStageState{
+      .stage = 0u, .type = dxmt9::core::TSS_COLOR_OP, .value = 2u};
+  apply.packet.tss[1] = D9CDrawPacketTextureStageState{
+      .stage = 7u, .type = dxmt9::core::TSS_TEXCOORD_INDEX, .value = 13u};
+  apply.packet.samplerStateCount = 2u;
+  apply.packet.samplerStates[0] = D9CDrawPacketSamplerState{
+      .sampler = 0u, .type = dxmt9::core::SAMP_ADDRESS_U, .value = 3u};
+  apply.packet.samplerStates[1] = D9CDrawPacketSamplerState{
+      .sampler = 15u, .type = dxmt9::core::SAMP_MAX_ANISOTROPY, .value = 12u};
+
+  const auto bytes = recordBytes(apply);
+  const auto chunk = makeImportedChunkView(bytes.data(), static_cast<std::uint32_t>(bytes.size()), 1u);
+  const auto record = nextImportedRecord(chunk, 0u, 0u);
+  check(record.has_value(), "apply-state retention record exists");
+  check(record->valid(), "apply-state retention record validates");
+
+  ImportedChunkHandleSet handles;
+  collectImportedRecordResourceHandles(*record, handles);
+  const auto entries = makeImportedChunkHandleEntries(handles);
+
+  checkEq(entries.size(), static_cast<std::size_t>(5),
+          "apply-state retention includes resource bindings only");
+  check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x7000u),
+        "apply-state retention includes texture slot 0");
+  check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x7008u),
+        "apply-state retention includes sparse texture slot 3");
+  check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x8000u),
+        "apply-state retention includes RT0");
+  check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x8008u),
+        "apply-state retention includes sparse RT2");
+  check(containsHandle(entries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x8010u),
+        "apply-state retention includes depth-stencil");
+  check(!containsHandle(entries, D9C_CHUNK_HANDLE_KIND_TEXTURE, 3u),
+        "apply-state scalar sampler/TSS values are not retained as resources");
+}
+
 void testImportedRecordHazardsSeparateReadsAndWrites() {
   auto draw = makeHazardDrawRecord(0x3000u, 0x1000u, 0x2000u);
   D9CCommandRecordDrawIndexedPrimitive indexed{};
@@ -221,6 +270,7 @@ int main() {
   try {
     testResourceRetentionDerivationFromDrawRecords();
     testResourceRetentionDerivationFromSurfaceAndReadbackRecords();
+    testResourceRetentionDerivationFromApplyStateRecords();
     testImportedRecordHazardsSeparateReadsAndWrites();
     testImportedReplayOrderingDecisionsAreDataDriven();
   } catch (const dxmt9::d3d9::devicec::spec::TestFailure& e) {
