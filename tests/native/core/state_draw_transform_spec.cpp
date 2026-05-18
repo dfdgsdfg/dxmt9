@@ -1,6 +1,7 @@
 #include "dxmt9/core.hpp"
 #include "core_spec_fixtures.hpp"
 #include "../../../src/dxmt9/dxmt9_backend_types.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_state.hpp"
 
 #include <array>
 #include <cmath>
@@ -710,6 +711,99 @@ void testConstantsAndShaderRefs() {
         "vertex constant value change affects canonical hot hash");
   checkNear(changedUniforms.vsConst.float4[7][0], -99.0f,
             "changed vertex constant value reaches uniform payload");
+}
+
+void testShaderConstantPayloadSurvivesDrawRunCommandView() {
+  DeviceState state;
+  state.reset();
+
+  state.vertexShader = makeBytecodeShader(0x1234000000005678ull, {0xaa, 0xbb, 0xcc});
+  state.pixelShader = makeBytecodeShader(0x8765000000004321ull, {0x10, 0x20, 0x30, 0x40});
+  state.vsConst.float4[0] = {1.0f, -2.0f, 3.5f, -4.5f};
+  state.vsConst.float4[kMaxVertexConstants - 1] = {255.0f, 128.0f, 64.0f, 32.0f};
+  state.vsConst.int4[2] = {7, -8, 9, -10};
+  state.vsConst.bools[0] = true;
+  state.vsConst.bools[kMaxBoolConstants - 1] = true;
+  state.psConst.float4[3] = {-11.0f, 12.25f, -13.5f, 14.75f};
+  state.psConst.float4[kMaxPixelConstants - 1] = {0.125f, 0.25f, 0.5f, 1.0f};
+  state.psConst.int4[1] = {-101, 202, -303, 404};
+  state.psConst.bools[4] = true;
+  state.psConst.bools[kMaxBoolConstants - 2] = true;
+
+  const DrawDesc desc = makeDrawDescFromState(
+      state, {PrimitiveType::TriangleList, 2u, 4u, -3, 6u, IndexType::UInt16});
+  const FlatDrawStateKey expectedKey = makeFlatDrawStateKey(desc);
+  auto canonical = makeCanonicalDrawStateForTest(desc);
+  auto uniforms = makeDrawUniformPayload(desc);
+
+  DrawParam param = makeDrawParamForTest(desc);
+  ChunkSlot slot{};
+  slot.appendDrawRun(canonical, uniforms,
+                     std::span<const DrawParam>(&param, 1u),
+                     std::span<const DrawParamPayloadView>{});
+
+  canonical.hot.vertexConstantsHash = 0u;
+  canonical.shaderLayout.vertexShader.hash = 0u;
+  uniforms.vsConst.float4[0] = {};
+  uniforms.psConst.float4[3] = {};
+
+  const auto command = slot.commandAt(0);
+  checkEq(command.kind, MetalCommandKind::DrawRun,
+          "shader constant command view reports draw-run kind");
+  check(command.drawRunRecord != nullptr,
+        "shader constant command view resolves draw-run record");
+  check(command.drawState.hasShaderContext(),
+        "shader constant command view carries shader layout context");
+  check(command.drawState.hasUniformPayload(),
+        "shader constant command view carries copied uniform payload");
+  check(command.drawUniformPayload != nullptr,
+        "shader constant command view resolves interned uniform payload");
+  checkEq(command.drawParams.size(), std::size_t{1},
+          "shader constant command view keeps draw param count");
+
+  checkEq(command.drawState.shaderContext().vertexShader, state.vertexShader,
+          "draw-run command view preserves vertex shader ref");
+  checkEq(command.drawState.shaderContext().pixelShader, state.pixelShader,
+          "draw-run command view preserves pixel shader ref");
+  checkEq(command.drawState.hot->key.vertexShaderHash, expectedKey.vertexShaderHash,
+          "draw-run command key preserves vertex shader hash");
+  checkEq(command.drawState.hot->key.pixelShaderHash, expectedKey.pixelShaderHash,
+          "draw-run command key preserves pixel shader hash");
+  checkEq(command.drawState.hot->vertexConstantsHash,
+          command.drawState.hot->key.vertexConstantsHash,
+          "draw-run command hot state keeps vertex constant hash");
+  checkEq(command.drawState.hot->pixelConstantsHash,
+          command.drawState.hot->key.pixelConstantsHash,
+          "draw-run command hot state keeps pixel constant hash");
+  checkEq(command.drawRunRecord->uniformHandle.hash,
+          command.drawUniformPayload->hash,
+          "draw-run command uniform handle hashes the copied payload");
+
+  const auto vsConsts = dxmt9::state::buildVsConsts(command.drawState);
+  const auto psConsts = dxmt9::state::buildPsConsts(command.drawState);
+  checkNear(vsConsts.vsFloatConst[0][0], 1.0f,
+            "encoder VS constants read copied c0.x");
+  checkNear(vsConsts.vsFloatConst[0][1], -2.0f,
+            "encoder VS constants read copied c0.y");
+  checkNear(vsConsts.vsFloatConst[kMaxVertexConstants - 1][0], 255.0f,
+            "encoder VS constants read copied max float register");
+  checkEq(vsConsts.vsIntConst[2][1], -8,
+          "encoder VS constants read copied int register");
+  checkEq(vsConsts.vsBoolConst[0], 1u,
+          "encoder VS constants read copied first bool register");
+  checkEq(vsConsts.vsBoolConst[kMaxBoolConstants - 1], 1u,
+          "encoder VS constants read copied last bool register");
+
+  checkNear(psConsts.psFloatConst[3][2], -13.5f,
+            "encoder PS constants read copied c3.z");
+  checkNear(psConsts.psFloatConst[kMaxPixelConstants - 1][3], 1.0f,
+            "encoder PS constants read copied max float register");
+  checkEq(psConsts.psIntConst[1][2], -303,
+          "encoder PS constants read copied int register");
+  checkEq(psConsts.psBoolConst[4], 1u,
+          "encoder PS constants read copied bool register");
+  checkEq(psConsts.psBoolConst[kMaxBoolConstants - 2], 1u,
+          "encoder PS constants read copied high bool register");
 }
 
 void testShaderLayoutCarriesConstantUsageMetadata() {
@@ -1825,6 +1919,7 @@ int main() {
   testClipPlaneLimitsAtCoreBoundary();
   testClipPlaneTransformPayloadAndMaskBounds();
   testConstantsAndShaderRefs();
+  testShaderConstantPayloadSurvivesDrawRunCommandView();
   testShaderLayoutCarriesConstantUsageMetadata();
   testResourceBindingsAndAttachments();
   testVertexDeclFvfAndStreamBindings();
