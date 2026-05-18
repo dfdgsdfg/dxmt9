@@ -1211,6 +1211,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-06"
 
 [[test]]
+file = "viewport/dxmt9_vpos_nonzero_viewport_coords_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_3_0"]
+opcodes = ["DCL", "DEF", "MOV", "MUL"]
+oracle = "Wine d3d9 visual.c test_fragment_coords behavior, reduced to vPos absolute coordinate readback with a nonzero viewport origin"
+oracle-date = "2026-05-18"
+
+[[test]]
 file = "viewport/dxmt9_viewport_vs_triangle.shader_test"
 status = "passing"
 source = "dxmt9"

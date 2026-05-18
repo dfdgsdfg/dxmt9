@@ -1,0 +1,24 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_fragment_coords behavior, reduced to vPos absolute coordinate readback with a nonzero viewport origin
+; oracle-date: 2026-05-18
+
+[vertex shader d3dbc-hex]
+fffe0300 0200001f 80000000 900f0000 0200001f 8000000a 900f0001
+0200001f 80000000 e00f0000 0200001f 8000000a e00f0001 02000001
+e00f0000 90e40000 02000001 e00f0001 90e40001 0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300 05000051 a00f0000 3c800000 3c800000 00000000 3f800000
+0200001f 80000000 90031000 02000001 800f0000 a0e40000 03000005
+80030000 90541000 a0e40000 02000001 800f0800 80e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-viewport 16 16 32 32
+dxmt9-draw-vs-color-triangle
+probe (40, 32) rgba(0.6328125, 0.5078125, 0.0, 1.0) 1
+probe (8, 32) rgba(0.0, 0.0, 0.0, 1.0) 1
