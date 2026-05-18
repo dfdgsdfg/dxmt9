@@ -734,6 +734,37 @@ void emitFragmentTextureArguments(std::ostringstream& out,
   }
 }
 
+std::array<bool, kMaxVertexTextureSamplers> collectVertexSamplerUsage(const SpirvModule& module) {
+  std::array<bool, kMaxVertexTextureSamplers> usage{};
+  if (module.stage != D3DShaderStage::Vertex) {
+    return usage;
+  }
+  for (const auto& instruction : module.instructions) {
+    if (!isTextureSampleOpcode(instruction.opcode)) {
+      continue;
+    }
+    const u32 sampler = textureSamplerIndex(instruction, module.stage);
+    if (sampler < usage.size()) {
+      usage[sampler] = true;
+    }
+  }
+  return usage;
+}
+
+void emitVertexTextureArguments(std::ostringstream& out,
+                                const std::array<bool, kMaxVertexTextureSamplers>& samplerUsage,
+                                const SpirvModule& module,
+                                const ShaderSourceContext& context) {
+  for (u32 stage = 0; stage < kMaxVertexTextureSamplers; ++stage) {
+    if (!samplerUsage[stage]) {
+      continue;
+    }
+    out << "                     " << textureTypeName(samplerTextureType(module, context, stage))
+        << " tex" << stage << " [[texture(" << stage << ")]], "
+        << "sampler samp" << stage << " [[sampler(" << stage << ")]],\n";
+  }
+}
+
 bool pixelUsesVFaceInput(const SpirvModule& module) {
   if (module.stage != D3DShaderStage::Pixel) {
     return false;
@@ -777,6 +808,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   if (vertex) {
     const auto inputLayout = decodeVertexShaderInputLayout(module, context);
     const auto outputSemantics = collectVertexOutputSemantics(module);
+    const auto vertexSamplerUsage = collectVertexSamplerUsage(module);
     const bool traceShaderInputs = [] {
       const char* env = std::getenv("DXMT_TRACE_SHADER_INPUTS");
       return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
@@ -835,6 +867,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           << kArgbufHybridBindSlot << ")]],\n";
       out << "                     device const uchar* stream0 [[buffer(1)]],\n";
       emitExtraVertexStreamParameters(out, inputLayout);
+      emitVertexTextureArguments(out, vertexSamplerUsage, module, context);
       out << "                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
       out << "  constant VsConsts& vsConsts = *abuf.vsConsts;\n";
       out << "  constant FfpVsConsts& ffpVs = *abuf.ffpVs;\n";
@@ -844,6 +877,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "                     device const uchar* stream0 [[buffer(1)]],\n";
       emitExtraVertexStreamParameters(out, inputLayout);
       out << "                     constant FfpVsConsts& ffpVs [[buffer(3)]],\n";
+      emitVertexTextureArguments(out, vertexSamplerUsage, module, context);
       out << "                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {\n";
     }
     out << "  VSOut out;\n";
@@ -1057,6 +1091,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	      }
 	      return std::string("outTexcoord[") + std::to_string(index) + "]";
 	    };
+      auto sampleCoord = [&](u32 sampler, const std::string& coord) {
+        return sampleCoordExpression(samplerTextureType(module, context, sampler), coord, false);
+      };
       auto emitVertexOutputAssign = [&](const D3DRegisterRef& dst, const std::string& value, u32 mask) {
         const auto mapped = vertexOutputMapping(dst, &outputSemantics);
         if (!mapped) {
@@ -1431,11 +1468,6 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (instruction.operands.size() < 2) {
             throw std::runtime_error("missing D3D destination or source operand");
           }
-          if (instruction.opcode == kD3DSIO_TEX ||
-              instruction.opcode == kD3DSIO_TEXLDD ||
-              instruction.opcode == kD3DSIO_TEXLDL) {
-            throw std::runtime_error("vertex texture fetch requires vertex-stage texture/sampler binding ABI");
-          }
           const auto dst = decodeOperandRegister(instruction, 0, module.stage);
           requireSupportedDestinationAddressing(dst);
           const auto dstMask = decodeWriteMask(instruction.operands[0]);
@@ -1583,15 +1615,21 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               value = "dfdy(" + readSrc(1) + ")";
               break;
             case kD3DSIO_TEXLDD:
-              value = "tex0.sample(samp0, " + readSrc(1) + ".xy, gradient2d((" + readSrc(3) +
-                      ").xy, (" + readSrc(4) + ").xy))";
-              break;
+              throw std::runtime_error("TEXLDD is invalid in vertex shaders");
             case kD3DSIO_TEXLDL:
-              value = "tex0.sample(samp0, " + readSrc(1) + ".xy, level(" + readSrc(1) + ".w))";
+              {
+                const auto sampler = textureSamplerIndex(instruction, module.stage);
+                if (sampler >= kMaxVertexTextureSamplers) {
+                  throw std::runtime_error("vertex texture sampler index out of range");
+                }
+                const auto coord = readSrc(1);
+                value = "tex" + std::to_string(sampler) + ".sample(samp" +
+                        std::to_string(sampler) + ", " + sampleCoord(sampler, coord) +
+                        ", level(" + coord + ".w))";
+              }
               break;
             case kD3DSIO_TEX:
-              value = "tex0.sample(samp0, " + readSrc(1) + ".xy)";
-              break;
+              throw std::runtime_error("TEX requires pixel-shader implicit gradients");
             default:
               throw std::runtime_error("unsupported arithmetic opcode");
           }

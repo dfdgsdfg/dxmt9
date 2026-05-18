@@ -40,19 +40,12 @@ from scripts.wine.bootstrap_prefix import (  # noqa: E402
     BootstrapResult,
     bootstrap as bootstrap_prefix,
 )
-from scripts.tools.debug_artifact_bundle import (  # noqa: E402
-    ArtifactBundleError,
-    RenderCaptureBundle,
-    merge_debug_sections,
-)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOGUE_PATH = REPO_ROOT / "experiments" / "CATALOGUE.toml"
 DEFAULT_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "win32"
 DEFAULT_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "winemetal"
-DEFAULT_WOW64_PE_BUILD_DIR = REPO_ROOT / "build-win32-x86-builtin" / "src" / "win32"
-DEFAULT_WOW64_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x86-builtin" / "src" / "winemetal"
 DEFAULT_UNIX_BUILD_DIR = REPO_ROOT / "build-x86_64-builtin" / "src"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
 DEFAULT_TEMP_PREFIX_ROOT = REPO_ROOT / "tmp" / "prefixes"
@@ -73,8 +66,6 @@ PE_RECORDER_COUNTER_PATTERN = re.compile(r"^\[dxmt9-device\]\s+(?:[A-Za-z]+:\s+)
 PERF_PROBE_PATTERN = re.compile(r"^\[perf-probe\]\s+(.*)$")
 PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s}]+)")
 _DRIVE_LETTER_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
-HARNESS_ENV_PREFIXES = ("DXMT", "DXMT9", "WINE")
-HARNESS_ENV_KEYS = {"DYLD_LIBRARY_PATH"}
 
 
 @dataclass
@@ -236,34 +227,6 @@ class ExperimentApp:
         return REPO_ROOT / self.build_script
 
 
-@dataclass(frozen=True)
-class CaptureRequest:
-    mode: str
-    requested_frames: list[int]
-    max_frames: int
-    max_duration_sec: float
-    max_bytes: int
-    start_frame: int | None = None
-    end_frame: int | None = None
-    interval: int | None = None
-    video_start_frame: int | None = None
-    video_end_frame: int | None = None
-    video_duration_sec: float | None = None
-    video_acceptance: str = "triage"
-
-    @property
-    def primary_frame(self) -> int:
-        return self.requested_frames[0] if self.requested_frames else 0
-
-    @property
-    def wants_multiple_frames(self) -> bool:
-        return self.mode in {"frame-list", "interval-range"}
-
-    @property
-    def wants_video(self) -> bool:
-        return self.video_duration_sec is not None or self.video_start_frame is not None
-
-
 def load_catalogue(path: Path) -> list[ExperimentApp]:
     data = tomllib.loads(path.read_text())
     apps = [ExperimentApp.from_toml(item) for item in data.get("app", [])]
@@ -305,18 +268,6 @@ def resolve_wine_bin(wine_root: Path) -> Path:
 
 def run_command(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=True, text=True, **kwargs)
-
-
-def snapshot_harness_environment(env: dict[str, str]) -> dict[str, str]:
-    return {
-        key: env[key]
-        for key in sorted(env)
-        if env[key]
-        and (
-            key in HARNESS_ENV_KEYS
-            or any(key.startswith(prefix) for prefix in HARNESS_ENV_PREFIXES)
-        )
-    }
 
 
 def find_window_by_title(expected_title: str) -> dict[str, Any] | None:
@@ -423,7 +374,6 @@ def capture_frontmost_window(output_path: Path, expected_title: str | None, time
                 continue
             rect = f"{info['x']},{info['y']},{info['width']},{info['height']}"
             run_command(["screencapture", "-x", "-R", rect, str(output_path)])
-            info["capture_mode"] = "frontmost_window"
             return info
         except subprocess.CalledProcessError as exc:
             last_error = exc.stderr.strip() or exc.stdout.strip() or str(exc)
@@ -436,42 +386,6 @@ def capture_full_screen(output_path: Path) -> dict[str, Any]:
     return {"capture_mode": "full_screen"}
 
 
-def capture_window_or_fallback(
-    output_path: Path,
-    *,
-    expected_title: str | None,
-    timeout_sec: float,
-) -> tuple[dict[str, Any] | None, str | None]:
-    try:
-        if expected_title:
-            return capture_window_by_title(output_path, expected_title, timeout_sec=timeout_sec), None
-        return capture_frontmost_window(output_path, expected_title, timeout_sec=timeout_sec), None
-    except Exception as exc:  # noqa: BLE001
-        try:
-            return capture_full_screen(output_path), str(exc)
-        except Exception as fallback_exc:  # noqa: BLE001
-            return None, f"{exc}; fullscreen fallback failed: {fallback_exc}"
-
-
-def record_bounded_video(
-    output_path: Path,
-    *,
-    duration_sec: float,
-) -> tuple[Path | None, str | None]:
-    try:
-        run_command([
-            "screencapture",
-            "-x",
-            "-v",
-            "-V",
-            str(max(1, math.ceil(duration_sec))),
-            str(output_path),
-        ])
-        return output_path if output_path.exists() else None, None
-    except Exception as exc:  # noqa: BLE001
-        return None, str(exc)
-
-
 def image_luma_metrics(path: Path) -> dict[str, float]:
     image = Image.open(path).convert("RGB")
     arr = np.asarray(image, dtype=np.float32)
@@ -480,447 +394,6 @@ def image_luma_metrics(path: Path) -> dict[str, float]:
         "mean_luma": float(np.mean(luma)),
         "variance": float(np.var(luma)),
     }
-
-
-def is_black_screen(metrics: dict[str, float]) -> bool:
-    return (
-        metrics["mean_luma"] <= BLACK_LUMA_THRESHOLD
-        and metrics["variance"] <= BLACK_VARIANCE_THRESHOLD
-    )
-
-
-def effective_capture_frame(app: ExperimentApp, args: argparse.Namespace) -> int:
-    override = getattr(args, "capture_frame", None)
-    if override is not None:
-        return int(override)
-    return app.capture_frame
-
-
-def _parse_positive_int(value: str, label: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"{label} must be an integer: {value!r}") from exc
-    if parsed < 0:
-        raise ValueError(f"{label} must be >= 0: {value!r}")
-    return parsed
-
-
-def parse_capture_frames(value: str) -> list[int]:
-    frames: list[int] = []
-    for item in value.split(","):
-        text = item.strip()
-        if not text:
-            continue
-        frames.append(_parse_positive_int(text, "capture frame"))
-    if not frames:
-        raise ValueError("--capture-frames must include at least one frame")
-    return frames
-
-
-def parse_capture_range(value: str) -> tuple[int, int, int, list[int]]:
-    parts = [part.strip() for part in value.split(":")]
-    if len(parts) not in {2, 3}:
-        raise ValueError("--capture-range must use START:END[:INTERVAL]")
-    start = _parse_positive_int(parts[0], "capture range start")
-    end = _parse_positive_int(parts[1], "capture range end")
-    interval = _parse_positive_int(parts[2], "capture range interval") if len(parts) == 3 else 1
-    if end < start:
-        raise ValueError("--capture-range END must be >= START")
-    if interval <= 0:
-        raise ValueError("--capture-range INTERVAL must be > 0")
-    return start, end, interval, list(range(start, end + 1, interval))
-
-
-def parse_capture_video(value: str) -> tuple[int | None, int | None, float]:
-    text = value.strip().lower()
-    if not text:
-        raise ValueError("--capture-video must not be empty")
-    if text.endswith("s"):
-        duration = float(text[:-1])
-        if duration <= 0.0:
-            raise ValueError("--capture-video duration must be > 0")
-        return None, None, duration
-    if ":" in text:
-        start_text, end_text = text.split(":", 1)
-        start = _parse_positive_int(start_text, "capture video start")
-        end = _parse_positive_int(end_text, "capture video end")
-        if end < start:
-            raise ValueError("--capture-video END must be >= START")
-        # Frame spans are still bounded by max_duration_sec at recording time.
-        return start, end, 0.0
-    duration = float(text)
-    if duration <= 0.0:
-        raise ValueError("--capture-video duration must be > 0")
-    return None, None, duration
-
-
-def build_capture_request(app: ExperimentApp, args: argparse.Namespace) -> CaptureRequest:
-    max_frames = int(getattr(args, "capture_max_frames", 64) or 64)
-    max_duration_sec = float(getattr(args, "capture_max_seconds", 5.0) or 5.0)
-    max_bytes = int(getattr(args, "capture_max_bytes", 64 * 1024 * 1024) or 64 * 1024 * 1024)
-    if max_frames <= 0:
-        raise ValueError("--capture-max-frames must be > 0")
-    if max_duration_sec <= 0.0:
-        raise ValueError("--capture-max-seconds must be > 0")
-    if max_bytes <= 0:
-        raise ValueError("--capture-max-bytes must be > 0")
-
-    capture_frames = getattr(args, "capture_frames", None)
-    capture_range = getattr(args, "capture_range", None)
-    if capture_frames and capture_range:
-        raise ValueError("--capture-frames and --capture-range are mutually exclusive")
-
-    start_frame = None
-    end_frame = None
-    interval = None
-    if capture_range:
-        start_frame, end_frame, interval, requested = parse_capture_range(capture_range)
-        mode = "interval-range"
-    elif capture_frames:
-        requested = parse_capture_frames(capture_frames)
-        mode = "frame-list"
-    else:
-        requested = [effective_capture_frame(app, args)]
-        mode = "single-frame"
-
-    if len(requested) > max_frames:
-        requested = requested[:max_frames]
-
-    video_start_frame = None
-    video_end_frame = None
-    video_duration_sec = None
-    capture_video = getattr(args, "capture_video", None)
-    if capture_video:
-        video_start_frame, video_end_frame, parsed_duration = parse_capture_video(capture_video)
-        video_duration_sec = parsed_duration if parsed_duration > 0.0 else max_duration_sec
-        video_duration_sec = min(video_duration_sec, max_duration_sec)
-
-    return CaptureRequest(
-        mode=mode,
-        requested_frames=requested,
-        max_frames=max_frames,
-        max_duration_sec=max_duration_sec,
-        max_bytes=max_bytes,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        interval=interval,
-        video_start_frame=video_start_frame,
-        video_end_frame=video_end_frame,
-        video_duration_sec=video_duration_sec,
-        video_acceptance=getattr(args, "capture_video_acceptance", "triage"),
-    )
-
-
-def classify_capture_source(
-    actual_dump_path: Path,
-    actual_path: Path,
-    window_info: dict[str, Any] | None,
-) -> str | None:
-    if actual_dump_path.exists():
-        return "internal_dump"
-    if window_info:
-        mode = window_info.get("capture_mode")
-        if mode == "window_id":
-            return "window_capture"
-        if mode == "frontmost_window":
-            return "frontmost_window"
-        if mode == "full_screen":
-            return "full_screen"
-    if actual_path.exists():
-        return "external_capture"
-    return None
-
-
-def debug_capture_source(capture_source: str | None) -> str:
-    if capture_source in {"internal_dump", "window_id", "frontmost_window", "full_screen", "manual_observation", "none", "unavailable"}:
-        return capture_source
-    if capture_source == "window_capture":
-        return "window_id"
-    if capture_source == "external_capture":
-        return "manual_observation"
-    if capture_source in {"internal_dump", "full_screen"}:
-        return capture_source
-    return "none"
-
-
-def relative_artifact(path: Path, root: Path) -> str:
-    try:
-        return path.relative_to(root).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def capture_request_environment(request: CaptureRequest, output_dir: Path, actual_dump_path: Path) -> dict[str, str]:
-    values = {
-        "DXMT_CAPTURE_FRAME": str(request.primary_frame),
-        "DXMT_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
-    }
-    if request.wants_multiple_frames:
-        values["DXMT_CAPTURE_FRAMES"] = ",".join(str(frame) for frame in request.requested_frames)
-        values["DXMT_EXPERIMENT_CAPTURE_DIR"] = str(output_dir / "internal_frames")
-    if request.mode == "interval-range":
-        values["DXMT_CAPTURE_RANGE"] = f"{request.start_frame}:{request.end_frame}:{request.interval}"
-    return values
-
-
-def internal_frame_candidates(output_dir: Path, frame_id: int) -> list[Path]:
-    return [
-        output_dir / "internal_frames" / f"frame{frame_id:06d}.png",
-        output_dir / "internal_frames" / f"frame{frame_id:06d}.bmp",
-        output_dir / "internal_frames" / f"frame_{frame_id:06d}.png",
-        output_dir / "internal_frames" / f"frame_{frame_id:06d}.bmp",
-        output_dir / f"actual_frame{frame_id:06d}.png",
-        output_dir / f"actual_frame{frame_id:06d}.bmp",
-    ]
-
-
-def internal_frame_skip_candidates(output_dir: Path, frame_id: int) -> list[Path]:
-    return [
-        path.with_suffix(path.suffix + ".skipped.json")
-        for path in internal_frame_candidates(output_dir, frame_id)
-    ]
-
-
-def first_existing_path(paths: list[Path]) -> Path | None:
-    return next((path for path in paths if path.exists()), None)
-
-
-def load_capture_skip_sidecar(path: Path) -> dict[str, Any] | None:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def collect_capture_frame_records(
-    *,
-    capture_request: CaptureRequest,
-    output_dir: Path,
-    actual_dump_path: Path,
-    actual_path: Path,
-    scheduled_window_frames: dict[int, dict[str, Any]],
-    capture_source: str | None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    captured_frames: list[dict[str, Any]] = []
-    dropped_frames: list[dict[str, Any]] = []
-    for frame_id in capture_request.requested_frames:
-        internal_frame = first_existing_path(internal_frame_candidates(output_dir, frame_id))
-        if internal_frame is not None:
-            captured_frames.append({
-                "frame_id": frame_id,
-                "path": internal_frame,
-                "source": "internal_dump",
-            })
-            continue
-        if frame_id == capture_request.primary_frame and actual_dump_path.exists():
-            captured_frames.append({
-                "frame_id": frame_id,
-                "path": actual_path,
-                "source": "internal_dump",
-            })
-            continue
-        scheduled = scheduled_window_frames.get(frame_id)
-        if scheduled is not None and Path(scheduled["path"]).exists():
-            captured_frames.append({
-                "frame_id": frame_id,
-                "path": scheduled["path"],
-                "source": scheduled.get("source", "window_capture"),
-            })
-            continue
-        if frame_id == capture_request.primary_frame and actual_path.exists() and capture_source:
-            captured_frames.append({
-                "frame_id": frame_id,
-                "path": actual_path,
-                "source": capture_source,
-            })
-            continue
-        sidecar = first_existing_path(internal_frame_skip_candidates(output_dir, frame_id))
-        sidecar_payload = load_capture_skip_sidecar(sidecar) if sidecar is not None else None
-        if sidecar is not None and sidecar_payload is not None:
-            dropped_frames.append({
-                "frame_id": frame_id,
-                "source": sidecar_payload.get("source", "internal_dump"),
-                "reason": sidecar_payload.get("reason", "runtime skipped internal capture"),
-                "sidecar_path": str(sidecar),
-                "counters": sidecar_payload.get("counters"),
-            })
-            continue
-        dropped_frames.append({
-            "frame_id": frame_id,
-            "source": "internal_dump" if capture_request.wants_multiple_frames else "none",
-            "reason": "requested frame was not emitted by internal dump or window capture",
-        })
-    return captured_frames, dropped_frames
-
-
-def write_experiment_debug_result(
-    *,
-    app: ExperimentApp,
-    output_dir: Path,
-    debug_result_path: Path,
-    log_path: Path,
-    actual_path: Path,
-    command: list[str],
-    environment: dict[str, str],
-    capture_frame: int,
-    capture_source: str | None,
-    capture_error: str | None,
-    window_info: dict[str, Any] | None,
-    capture_request: CaptureRequest | None = None,
-    captured_frames: list[dict[str, Any]] | None = None,
-    dropped_frames: list[dict[str, Any]] | None = None,
-    video_path: Path | None = None,
-    video_error: str | None = None,
-) -> Path | None:
-    captured_frames = list(captured_frames or [])
-    dropped_frames = list(dropped_frames or [])
-    has_video = video_path is not None and video_path.exists()
-    if not actual_path.exists() and not captured_frames and not has_video:
-        return None
-
-    request = capture_request or CaptureRequest(
-        mode="single-frame",
-        requested_frames=[capture_frame],
-        max_frames=1,
-        max_duration_sec=5.0,
-        max_bytes=64 * 1024 * 1024,
-    )
-    run_id = f"{app.name}-{request.mode}-{request.primary_frame}"
-    source = debug_capture_source(capture_source)
-    bundle = RenderCaptureBundle(
-        output_dir,
-        run_id=run_id,
-        mode=request.mode,
-        source=source,
-        frame_id=request.primary_frame if request.mode == "single-frame" else None,
-        start_frame=request.start_frame,
-        end_frame=request.end_frame,
-        interval=request.interval,
-        requested_frames=request.requested_frames if request.mode == "frame-list" else None,
-        max_bytes=request.max_bytes,
-    )
-    if actual_path.exists() and not captured_frames:
-        captured_frames.append({
-            "frame_id": request.primary_frame,
-            "path": actual_path,
-            "source": source,
-        })
-    captured_frame_ids = {int(frame["frame_id"]) for frame in captured_frames}
-    dropped_frames = [
-        frame for frame in dropped_frames
-        if int(frame["frame_id"]) not in captured_frame_ids
-    ]
-    seen_frames: set[int] = set()
-    for frame in captured_frames:
-        frame_id = int(frame["frame_id"])
-        if frame_id in seen_frames:
-            continue
-        seen_frames.add(frame_id)
-        bundle.copy_frame(
-            Path(frame["path"]),
-            frame_id=frame_id,
-            capture_source=debug_capture_source(frame.get("source")) if frame.get("source") else source,
-            name=f"{debug_capture_source(frame.get('source')) or source}_frame{frame_id:06d}.png",
-        )
-    for frame in dropped_frames:
-        sidecar_path = frame.get("sidecar_path")
-        sidecar_rel = relative_artifact(Path(sidecar_path), output_dir) if sidecar_path else None
-        bundle.add_dropped_frame(
-            frame_id=int(frame["frame_id"]),
-            source=debug_capture_source(frame.get("source")) if frame.get("source") else source,
-            reason=str(frame["reason"]),
-            sidecar_path=sidecar_rel,
-            counters=frame.get("counters") if isinstance(frame.get("counters"), dict) else None,
-        )
-    if has_video:
-        bundle.add_video_segment(
-            video_path,  # type: ignore[arg-type]
-            source="full_screen",
-            container=video_path.suffix.lstrip(".") or "mov",  # type: ignore[union-attr]
-            codec="system",
-            timebase="frame" if request.video_start_frame is not None else "time",
-            nominal_fps=60.0,
-            width=1,
-            height=1,
-            start_frame=request.video_start_frame,
-            end_frame=request.video_end_frame,
-            start_time=0.0 if request.video_start_frame is None else None,
-            end_time=request.video_duration_sec if request.video_start_frame is None else None,
-            acceptance=request.video_acceptance,
-        )
-    frame_manifest = bundle.write_frame_manifest()
-
-    artifacts: list[dict[str, Any]] = []
-    if log_path.exists():
-        artifacts.append({
-            "role": "log",
-            "path": relative_artifact(log_path, output_dir),
-            "format": "text",
-        })
-    artifacts.append(frame_manifest)
-    artifacts.extend(bundle.video_artifacts())
-    for frame in dropped_frames:
-        sidecar_path = frame.get("sidecar_path")
-        if not sidecar_path:
-            continue
-        path = Path(sidecar_path)
-        if path.exists():
-            artifacts.append({
-                "role": "log",
-                "path": relative_artifact(path, output_dir),
-                "format": "json",
-            })
-
-    diagnostics = merge_debug_sections(bundle.render_capture_diagnostics(), bundle.video_diagnostics())
-    if window_info or capture_error:
-        capture_mode = window_info.get("capture_mode") if window_info else None
-        diagnostics["wsi"] = {
-            "layer_acquisition": "unavailable",
-            "capture_source": source,
-            "visible_output_proves_layer": False if source == "full_screen" else None,
-        }
-        if window_info:
-            if "window_id" in window_info:
-                diagnostics["wsi"]["hwnd"] = str(window_info["window_id"])
-            if "window_title" in window_info:
-                diagnostics["wsi"]["window_title"] = str(window_info["window_title"])
-            elif app.window_title:
-                diagnostics["wsi"]["window_title"] = app.window_title
-            else:
-                diagnostics["wsi"]["failure_reason"] = "window identity unavailable"
-        else:
-            diagnostics["wsi"]["failure_reason"] = capture_error or "capture unavailable"
-        diagnostics["wsi"] = {key: value for key, value in diagnostics["wsi"].items() if value is not None}
-
-    result = {
-        "schema": "dxmt9.debug.result.v1",
-        "module": "experiment",
-        "boundary": "render-capture",
-        "command": command,
-        "correlation": {
-            "run_id": run_id,
-            "frame_id": capture_frame,
-        },
-        "environment": environment,
-        "limits": {
-            "max_frames": 1,
-            "max_duration_sec": request.max_duration_sec,
-            "max_bytes": request.max_bytes,
-        },
-        "artifacts": artifacts,
-        "diagnostics": diagnostics,
-        "failure_category": (
-            "render-video-segment"
-            if video_error
-            else "render-frame-sequence"
-            if dropped_frames
-            else "none"
-        ),
-    }
-    debug_result_path.write_text(json.dumps(result, indent=2, sort_keys=True))
-    return debug_result_path
 
 
 def compute_ssim(actual_path: Path, reference_path: Path) -> float:
@@ -977,57 +450,12 @@ def scan_log_for_failures(log_path: Path) -> list[str]:
     return [marker for marker in markers if marker in content]
 
 
-def extract_wine_provider_locator_failures(log_path: Path) -> list[dict[str, Any]]:
-    if not log_path.exists():
-        return []
-    content = log_path.read_text(errors="replace")
-    failures: list[dict[str, Any]] = []
-    if (
-        "info_class=1002" in content
-        or "info=1002" in content
-    ) and (
-        "Unknown information class" in content
-        or "status=0xc0000003" in content
-    ):
-        failures.append({
-            "type": "wine_provider_locator",
-            "category": "memory_wine_load_unixlib_by_name_unsupported",
-            "message": (
-                "Wine rejected MemoryWineLoadUnixLibByName (info class 1002); "
-                "app-local winemetal.so loading is unsupported by this runtime."
-            ),
-        })
-    if "builtin unixlib lookup" in content and "status=0xc0000135" in content:
-        failures.append({
-            "type": "wine_provider_locator",
-            "category": "builtin_unixlib_not_found",
-            "message": (
-                "Wine builtin unixlib lookup could not attach winemetal.so "
-                "(STATUS_DLL_NOT_FOUND). Check builtin PE staging, Wine/winebuild "
-                "compatibility, and unix provider architecture."
-            ),
-        })
-    if (
-        "abi-hash unix-call failed status=0xc0000003" in content
-        and not any(failure["category"] == "memory_wine_load_unixlib_by_name_unsupported"
-                    for failure in failures)
-    ):
-        failures.append({
-            "type": "wine_provider_locator",
-            "category": "provider_unix_call_invalid_info_class",
-            "message": "Provider ABI handshake failed before attach with STATUS_INVALID_INFO_CLASS.",
-        })
-    return failures
-
-
 def stage_dxmt9(
     prefix: Path,
     wine_root: Path | None,
     pe_build_dir: Path,
     runtime_pe_build_dir: Path,
     unix_build_dir: Path,
-    wow64_pe_build_dir: Path | None = None,
-    wow64_runtime_pe_build_dir: Path | None = None,
 ) -> None:
     cmd = [
         "bash",
@@ -1041,10 +469,6 @@ def stage_dxmt9(
         "--unix-build-dir",
         str(unix_build_dir),
     ]
-    if wow64_pe_build_dir is not None:
-        cmd.extend(["--wow64-pe-build-dir", str(wow64_pe_build_dir)])
-    if wow64_runtime_pe_build_dir is not None:
-        cmd.extend(["--wow64-runtime-pe-build-dir", str(wow64_runtime_pe_build_dir)])
     if wine_root is not None:
         cmd.extend(["--wine-root", str(wine_root)])
     run_command(cmd, cwd=REPO_ROOT)
@@ -1217,22 +641,9 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     ssim_path = output_dir / "ssim.txt"
     log_path = output_dir / "dxmt9.log"
     result_path = output_dir / "result.json"
-    debug_result_path = output_dir / "debug_result.json"
-    for path in (
-        actual_path,
-        actual_dump_path,
-        diff_path,
-        ssim_path,
-        reference_link_path,
-        log_path,
-        result_path,
-        debug_result_path,
-    ):
+    for path in (actual_path, actual_dump_path, diff_path, ssim_path, reference_link_path, log_path, result_path):
         if path.exists() or path.is_symlink():
             path.unlink()
-    for directory in (output_dir / "frames", output_dir / "video", output_dir / "boundary_dumps"):
-        if directory.is_dir():
-            shutil.rmtree(directory)
 
     # Resolve a manifest entry first when the app or CLI requests one. This
     # implements R-RT-6.1 (CLI > env > CATALOGUE) and feeds both the prefix
@@ -1317,9 +728,6 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     process: subprocess.Popen[str] | None = None
     capture_error: str | None = None
     window_info: dict[str, Any] | None = None
-    scheduled_window_frames: dict[int, dict[str, Any]] = {}
-    video_path: Path | None = None
-    video_error: str | None = None
     timed_out = False
     process_started_at: float | None = None
     process_finished_at: float | None = None
@@ -1372,16 +780,6 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             else DEFAULT_RUNTIME_PE_BUILD_DIR
         )
         unix_build_dir = Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR
-        wow64_pe_build_dir = (
-            Path(args.wow64_pe_build_dir).expanduser().resolve()
-            if args.wow64_pe_build_dir
-            else DEFAULT_WOW64_PE_BUILD_DIR
-        )
-        wow64_runtime_pe_build_dir = (
-            Path(args.wow64_runtime_pe_build_dir).expanduser().resolve()
-            if args.wow64_runtime_pe_build_dir
-            else DEFAULT_WOW64_RUNTIME_PE_BUILD_DIR
-        )
         mingw_bin_dir = Path(args.mingw_bin_dir).expanduser().resolve() if args.mingw_bin_dir else DEFAULT_MINGW_BIN_DIR
         wow64_mingw_bin_dir = (
             Path(args.wow64_mingw_bin_dir).expanduser().resolve()
@@ -1391,30 +789,10 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
         skip_stage = app.skip_stage or args.skip_stage
         if not skip_stage:
-            stage_dxmt9(
-                prefix,
-                wine_root,
-                pe_build_dir,
-                runtime_pe_build_dir,
-                unix_build_dir,
-                wow64_pe_build_dir,
-                wow64_runtime_pe_build_dir,
-            )
+            stage_dxmt9(prefix, wine_root, pe_build_dir, runtime_pe_build_dir, unix_build_dir)
         elif args.stage_mingw_runtime:
             stage_mingw_runtime(prefix, mingw_bin_dir, wow64_mingw_bin_dir)
 
-        capture_request = build_capture_request(app, args)
-        capture_frame = capture_request.primary_frame
-        capture_delay_sec = (
-            float(args.capture_delay_sec)
-            if args.capture_delay_sec is not None
-            else app.capture_delay_sec
-        )
-        if capture_delay_sec < 0.0:
-            raise ValueError("--capture-delay-sec must be >= 0")
-        internal_capture_dir = output_dir / "internal_frames"
-        if capture_request.wants_multiple_frames:
-            internal_capture_dir.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         env.update(
             {
@@ -1427,27 +805,23 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "DXMT_EXPERIMENT_WINE_BIN": str(wine_bin),
                 "DXMT_EXPERIMENT_PE_BUILD_DIR": str(pe_build_dir),
                 "DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR": str(runtime_pe_build_dir),
-                "DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR": str(wow64_pe_build_dir),
-                "DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR": str(wow64_runtime_pe_build_dir),
                 "DXMT_EXPERIMENT_UNIX_BUILD_DIR": str(unix_build_dir),
                 "DXMT_EXPERIMENT_OUTPUT_DIR": str(output_dir),
                 "DXMT_EXPERIMENT_LOG": str(log_path),
+                "DXMT_EXPERIMENT_CAPTURE_PATH": str(actual_dump_path),
+                "DXMT_CAPTURE_FRAME": str(app.capture_frame),
                 "DXMT_EXPERIMENT_SKIP_STAGE": "1" if skip_stage else "",
             }
         )
-        env.update(capture_request_environment(capture_request, output_dir, actual_dump_path))
         if app.wine_dll_overrides:
             env["DXMT_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
         if app.cx_bottle:
             env["DXMT_EXPERIMENT_CX_BOTTLE"] = app.cx_bottle
 
-        command = ["bash", str(app.launcher_path)]
-        environment_snapshot = snapshot_harness_environment(env)
-
         with log_path.open("wb") as log_fp:
             process_started_at = time.monotonic()
             process = subprocess.Popen(
-                command,
+                ["bash", str(app.launcher_path)],
                 cwd=REPO_ROOT,
                 env=env,
                 stdout=log_fp,
@@ -1455,42 +829,10 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 start_new_session=True,
             )
             try:
-                deadline = time.monotonic() + capture_delay_sec
+                deadline = time.monotonic() + app.capture_delay_sec
                 while time.monotonic() < deadline and process.poll() is None:
                     time.sleep(0.1)
-                if capture_request.wants_video and process.poll() is None:
-                    raw_video_path = output_dir / "capture_work" / "segment.mov"
-                    raw_video_path.parent.mkdir(parents=True, exist_ok=True)
-                    video_path, video_error = record_bounded_video(
-                        raw_video_path,
-                        duration_sec=capture_request.video_duration_sec or capture_request.max_duration_sec,
-                    )
-                if process.poll() is None and capture_request.wants_multiple_frames:
-                    for frame_id in capture_request.requested_frames:
-                        if process.poll() is not None:
-                            break
-                        frame_path = output_dir / "capture_work" / f"window_frame{frame_id:06d}.png"
-                        frame_path.parent.mkdir(parents=True, exist_ok=True)
-                        info, error = capture_window_or_fallback(
-                            frame_path,
-                            expected_title=app.window_title,
-                            timeout_sec=float(getattr(args, "capture_window_timeout", 2.0) or 2.0),
-                        )
-                        if info is not None and frame_path.exists():
-                            scheduled_window_frames[frame_id] = {
-                                "path": frame_path,
-                                "source": "window_capture" if info.get("capture_mode") == "window_id" else info.get("capture_mode", "external_capture"),
-                            }
-                            if window_info is None:
-                                window_info = info
-                        if error and capture_error is None:
-                            capture_error = error
-                        time.sleep(float(getattr(args, "capture_interval_sec", 0.25) or 0.25))
-                if (
-                    process.poll() is None
-                    and not capture_request.wants_multiple_frames
-                    and not actual_dump_path.exists()
-                ):
+                if process.poll() is None and not actual_dump_path.exists():
                     try:
                         if app.window_title:
                             window_info = capture_window_by_title(actual_path, app.window_title, timeout_sec=10.0)
@@ -1526,21 +868,16 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                     performance["fps"] = frame_count / elapsed
 
         result: dict[str, Any] = {
-            "schema": "dxmt9.experiment.result.v1",
             "name": app.name,
             "binary": str(binary_path),
             "launcher": str(app.launcher_path),
-            "command": command,
-            "environment": environment_snapshot,
             "reference": str(app.reference_path),
             "prefix": str(prefix),
             "wine_root": str(wine_root) if wine_root else None,
             "wine_bin": str(wine_bin),
-            "exit_code": process.returncode if process is not None else None,
             "returncode": process.returncode if process is not None else None,
             "capture_error": capture_error,
             "window_info": window_info,
-            "capture_frame": capture_frame,
             "failures": [],
             "timed_out": timed_out,
             "performance": performance,
@@ -1582,60 +919,6 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         if actual_dump_path.exists():
             Image.open(actual_dump_path).save(actual_path)
 
-        capture_source = classify_capture_source(actual_dump_path, actual_path, window_info)
-        captured_frames, dropped_frames = collect_capture_frame_records(
-            capture_request=capture_request,
-            output_dir=output_dir,
-            actual_dump_path=actual_dump_path,
-            actual_path=actual_path,
-            scheduled_window_frames=scheduled_window_frames,
-            capture_source=capture_source,
-        )
-        if not actual_path.exists() and captured_frames:
-            first_frame_path = Path(captured_frames[0]["path"])
-            try:
-                Image.open(first_frame_path).save(actual_path)
-            except Exception:  # noqa: BLE001
-                shutil.copy2(first_frame_path, actual_path)
-
-        capture_source = classify_capture_source(actual_dump_path, actual_path, window_info)
-        result["capture_source"] = capture_source
-        result["capture_paths"] = {
-            "actual": str(actual_path) if actual_path.exists() else None,
-            "internal_dump": str(actual_dump_path) if actual_dump_path.exists() else None,
-            "internal_frame_dir": str(internal_capture_dir) if internal_capture_dir.exists() else None,
-        }
-        debug_result = write_experiment_debug_result(
-            app=app,
-            output_dir=output_dir,
-            debug_result_path=debug_result_path,
-            log_path=log_path,
-            actual_path=actual_path,
-            command=command,
-            environment=environment_snapshot,
-            capture_frame=capture_frame,
-            capture_source=capture_source,
-            capture_error=capture_error,
-            window_info=window_info,
-            capture_request=capture_request,
-            captured_frames=captured_frames,
-            dropped_frames=dropped_frames,
-            video_path=video_path,
-            video_error=video_error,
-        )
-        if debug_result is not None:
-            result["debug_result"] = str(debug_result)
-        if dropped_frames:
-            result["failures"].append({
-                "type": "render-frame-sequence",
-                "dropped_frames": dropped_frames,
-            })
-        if video_error:
-            result["failures"].append({
-                "type": "render-video-segment",
-                "message": video_error,
-            })
-
         if app.reference_path.exists():
             if reference_link_path.exists() or reference_link_path.is_symlink():
                 reference_link_path.unlink()
@@ -1651,9 +934,6 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         log_markers = scan_log_for_failures(log_path)
         if log_markers:
             result["failures"].append({"type": "log_markers", "markers": log_markers})
-        provider_failures = extract_wine_provider_locator_failures(log_path)
-        if provider_failures:
-            result["failures"].extend(provider_failures)
 
         if process is not None and process.returncode != 0 and not (timed_out and app.allow_timeout):
             result["failures"].append({"type": "process_exit", "returncode": process.returncode})
@@ -1664,7 +944,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         if actual_path.exists():
             metrics = image_luma_metrics(actual_path)
             result["image_metrics"] = metrics
-            if is_black_screen(metrics):
+            if metrics["mean_luma"] <= BLACK_LUMA_THRESHOLD and metrics["variance"] <= BLACK_VARIANCE_THRESHOLD:
                 result["failures"].append({"type": "black_screen", **metrics})
         else:
             result["failures"].append({"type": "missing_capture"})
@@ -1762,8 +1042,6 @@ def main() -> int:
     run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
     run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
-    run_parser.add_argument("--wow64-pe-build-dir", help="32-bit PE build dir containing d3d9.dll")
-    run_parser.add_argument("--wow64-runtime-pe-build-dir", help="builtin 32-bit PE build dir containing runtime winemetal.dll")
     run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal.so")
     run_parser.add_argument("--skip-stage", action="store_true", help="Do not stage dxmt9 into the Wine runtime/prefix")
     run_parser.add_argument(
@@ -1776,66 +1054,6 @@ def main() -> int:
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
     run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")
-    run_parser.add_argument(
-        "--capture-delay-sec",
-        type=float,
-        default=None,
-        help="Override CATALOGUE capture_delay_sec for this run",
-    )
-    run_parser.add_argument(
-        "--capture-frame",
-        type=int,
-        default=None,
-        help="Override CATALOGUE capture_frame / DXMT_CAPTURE_FRAME for this run",
-    )
-    run_parser.add_argument(
-        "--capture-frames",
-        help="Capture a comma-separated frame list, e.g. 120,125,130. Sets DXMT_CAPTURE_FRAMES.",
-    )
-    run_parser.add_argument(
-        "--capture-range",
-        help="Capture an inclusive frame interval START:END[:INTERVAL], e.g. 120:180:5.",
-    )
-    run_parser.add_argument(
-        "--capture-video",
-        help="Capture a bounded video segment as seconds (10s) or frame span START:END.",
-    )
-    run_parser.add_argument(
-        "--capture-video-acceptance",
-        choices=["triage", "extractable_frames", "human_review"],
-        default="triage",
-        help="Classify video evidence strength in dxmt9.debug.result.v1.",
-    )
-    run_parser.add_argument(
-        "--capture-max-frames",
-        type=int,
-        default=64,
-        help="Maximum frames retained for frame-list or interval capture.",
-    )
-    run_parser.add_argument(
-        "--capture-max-seconds",
-        type=float,
-        default=5.0,
-        help="Maximum seconds for video capture and runtime capture scheduling.",
-    )
-    run_parser.add_argument(
-        "--capture-max-bytes",
-        type=int,
-        default=64 * 1024 * 1024,
-        help="Maximum debug artifact bytes for frame/video manifests.",
-    )
-    run_parser.add_argument(
-        "--capture-interval-sec",
-        type=float,
-        default=0.25,
-        help="Window-capture scheduler delay between requested frames.",
-    )
-    run_parser.add_argument(
-        "--capture-window-timeout",
-        type=float,
-        default=2.0,
-        help="Per-frame timeout for locating the target window during scheduled captures.",
-    )
     run_parser.add_argument(
         "--build",
         action="store_true",
@@ -1862,15 +1080,7 @@ def main() -> int:
             )
             return 2
         run_command(["bash", str(build_script_path)], cwd=REPO_ROOT)
-    try:
-        return run_experiment(app, args)
-    except subprocess.CalledProcessError as exc:
-        print(
-            f"[runtime] command failed with exit code {exc.returncode}: "
-            f"{' '.join(str(part) for part in exc.cmd)}",
-            file=sys.stderr,
-        )
-        return int(exc.returncode or 1)
+    return run_experiment(app, args)
 
 
 if __name__ == "__main__":

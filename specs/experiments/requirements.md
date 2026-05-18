@@ -88,32 +88,6 @@ and committed after human review.
 a comment explaining why the visual output changed. Automated reference updates
 are forbidden.
 
-**R-WILD-4.4** Experiment runners must support capturing more than one rendered
-frame from a deterministic run. A capture request may specify an explicit frame
-list or a closed frame range plus interval. The result must record each captured
-frame's source, frame id, dimensions, hash, path, and comparison status when a
-reference frame exists.
-
-**R-WILD-4.5** Experiment runners may capture bounded video segments for
-animation, flicker, pacing, or manual visual-review failures. A video segment
-must be tied to a deterministic frame or time window and must record source,
-timebase, nominal fps, resolution, container, codec, path, hash, and any dropped
-or unavailable frames.
-
-**R-WILD-4.6** Interval frame captures and video segments are run artifacts, not
-committed reference assets by default. They must live under
-`experiments/output/<app-name>/`, be listed in `result.json`, and be kept out of
-git unless a small frame is explicitly promoted through the reference-screenshot
-review process.
-
-**R-WILD-4.7** Experiment-only capture, dump, logging, and bisect support must
-follow the diagnostic cost classes in R-TEST-14.19 through R-TEST-14.23. An
-experiment launcher may enable expensive diagnostics for a run, but those knobs
-must be opt-in, recorded in `result.json`, bounded by artifact limits, and off in
-the normal release runtime. Experiment support must not require production draw,
-queue, bridge, or WSI paths to carry test-only payloads or always-on artifact
-writers.
-
 ---
 
 ## 5. Catalogue Manifest

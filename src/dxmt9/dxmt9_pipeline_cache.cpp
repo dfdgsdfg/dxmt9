@@ -742,8 +742,8 @@ ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView,
   // Tier-2 argbuf + Apple3 is cached as a single bool on the pool. When
   // the gate fails the pass commits to Stage 1 and never switches
   // (R-BACK-12.22). When the gate holds, texture-free and texture-bound
-  // draws use the same Stage 2 path; argbuf resource population marks
-  // indirect buffers/textures resident on the render encoder.
+  // draws use Stage 2 for uniform bindings. Texture/sampler resources stay
+  // on the direct render-encoder lane.
   if (!argbufHybridEnabled) {
     return ArgbufHybridDecision::Stage1;
   }

@@ -115,136 +115,6 @@ draw-run SoA path, `dxmt9-bridge-ops-spec` pins the generated bridge opcode
 budget/placement for chunk submission, and `dxmt9-allocation-counter-spec`
 verifies that real allocation perf counters are emitted and machine-checkable.
 
-### 0.2 Concrete Transform Boundary Audit
-
-R-TEST-0.10 is applied as a boundary-by-boundary audit rule: every semantic
-transform must have at least one deterministic test that compares concrete input
-values with the exact output values at the next owned boundary. A test that only
-checks the final enum, hash, rendered image, or harness pass result is not enough
-when bytes, handles, offsets, topology, or state values are transformed on the
-way.
-
-The current audit lanes are:
-
-| Boundary | Concrete values that must be asserted | Primary evidence | Gap / risk |
-|---|---|---|---|
-| Public D3D9 / PE setter -> D9C packet | D3D enum values, counts, offsets, HRESULT/status, out-pointer mutation, retained handles, variable-tail bytes | `dxmt9-pe-chunk-record-value-spec`, bridge value specs | Producer capture from actual PE setters remains partial because several appenders are private. |
-| D9C packet / imported record -> core state and draw params | Packet fields after D3D-to-core enum mapping, render/texture/sampler tables, constants, resource handles, malformed-record no-mutation behavior | `dxmt9-imported-apply-state-value-spec`, chunk import/replay specs | Dirty-range internals are still observed indirectly through state/uniform outputs. |
-| Core draw API -> `DrawParam` / payload | Primitive topology, primitive count, start vertex, base vertex, start index, index type, generated UP payload bytes, stripped or retained index buffer policy | `dxmt9-core-device-coverage-spec`, `dxmt9-core-device-lifecycle-spec` | This lane must include non-UP topology transforms. `TriangleFan` cannot be accepted by enum normalization alone; tests must assert generated triangle-list index payloads such as `{0,1,2,0,2,3}`. |
-| Core draw-run -> queue/chunk SoA storage | Draw order, per-draw payload ranges, payload arena bytes, uniform handle reuse, draw-run boundaries, allocation behavior | `dxmt9-dod-replay-observer-spec`, core draw-run fixture tests | Coalesced paths must keep per-draw payload bytes addressable; runtime screenshots are not evidence for this boundary. |
-| `DrawParam` / `FlatDrawStateView` -> encoder draw inputs | Metal primitive type, indexed vs non-indexed method, index count, index type, base vertex, vertex buffer offset, stream stride, `DrawVolatile` values, user vs bound buffer source | `dxmt9-metal-encoder-recorder-spec`, `dxmt9-encode-draw-recorder-spec`, focused geometry diagnostics, selected backend tests | The WMT wrapper seam records final `drawIndexedPrimitives` command payloads, including the 3DMark05 fan-fix shape. The encodeDraw seam now records indexed and non-indexed draw issue paths through stream bind -> optional extra stream binds -> `DrawVolatile` slot 5 -> final draw, and asserts bound-vertex/user-index, UP-vertex/user-index, direct bound-index, multi-stream programmable VS source selection, and representative `skipBaseStateBind=false` pipeline, depth-stencil, viewport, scissor, rasterizer, texture0/1, and sampler0/1 encoder writes. Remaining gaps are runtime GPU-visible behavior and broader variants driven by concrete app failures. |
-| Resource creation -> backend/Metal descriptors | D3D format identity, component meaning, alpha defaults, sRGB compatibility, dimensions, levels, usage/pool, MSAA, row pitch, block rounding | `dxmt9-resource-format-boundary-spec` | Final `Pool` -> `WMTTextureInfo` values need a descriptor observer for complete post-Pool evidence. |
-| Texture/sampler state -> shader binding descriptors | Texture stage handles, sampler state defaults, address/filter/LOD values, null slots, Stage 1 MSL bindings, Stage 2 argument-buffer descriptor IDs and encoder writes | `dxmt9-shader-argbuf-binding-value-spec`, `dxmt9-encode-draw-recorder-spec`, `dxmt9-argbuf-populator-spec`, sampler/descriptor specs | Stage 1 encoder calls and Stage 2 `MTLArgumentEncoder::setTexture/setSamplerState` writes have deterministic recorder coverage. Stage 2 GPU sampling equality and broader texture + render-state interactions still need readback evidence. |
-| Shader bytecode -> IR/source/register contracts | Opcode decode, register kind/index, swizzle/mask/modifiers, source and constant-destination relative addressing, invalid destination-addressing errors, constants, semantic mapping, generated source snippets | `dxmt9-shader-transform-spec` | GPU-visible shader behavior still needs runtime readback when source inspection cannot prove the result. |
-| Render state -> backend descriptors / raster plans | Blend factors/ops, color write masks, DSS compare/write values, cull/front-face, fill, viewport/scissor, alpha/fog/sRGB policy | `backend_pipeline_key_spec`, `render_pass_actions_spec`, raster/core coverage, shader-runner cull/depth/scissor/fill/color-write/blend/fog/sRGB probes | Combined state behavior still needs runtime readback for interactions static descriptors cannot prove. |
-| Backend execution -> readback / WSI result | Pixel values, depth/stencil result, synchronization, present/readback ordering | `shader_runner_dxmt9`, WSI/integration probes, app experiments | Readback proves final behavior only; it must not be the only proof for upstream value transforms. |
-
-When a new wild-app failure identifies a bad draw or state combination, the
-fix is not complete until the corresponding lane above has deterministic value
-coverage. For example, the 3DMark05 `D3DPT_TRIANGLEFAN` regression was not a
-shader or final-present issue: the missing proof was the core draw topology
-boundary from non-UP fan input to generated triangle-list draw payload.
-
-### 0.3 Draw And Render Intent Audit
-
-R-TEST-0.11 extends the boundary audit from "which values crossed" to "whether
-the next module will execute the same D3D9 intent." This matters whenever a
-normalizer changes the representation: primitive conversion, UP payload capture,
-render-pass folding, descriptor packing, draw-run coalescing, or present-source
-selection.
-
-| Intent class | What must be proved | Primary evidence | Gap / risk |
-|---|---|---|---|
-| Geometry topology | The backend draw sees the same triangle/line/point set as the D3D9 call, including generated fan indices such as `{0,1,2,0,2,3}`. | `dxmt9-core-device-coverage-spec`, `dxmt9-core-device-lifecycle-spec`, `dxmt9-metal-encoder-recorder-spec`, `dxmt9-encode-draw-recorder-spec` | B7 is covered for TriangleFan core payloads; B8 now covers indexed and non-indexed encodeDraw command order, `DrawVolatile` bytes, and representative base-state command ordering. Runtime raster variants remain failure-driven follow-up work. |
-| Draw source selection | Bound stream/index buffers and UP payloads are not confused; base vertex, start vertex/index, stream offset, stride, and index type reach the command actually encoded. | core coverage specs, draw-run fixture tests, `dxmt9-encode-draw-recorder-spec`, shader-runner sampler/cull/depth probes | Live encodeDraw coverage now proves bound-vertex/user-index, UP-vertex/user-index, direct bound-index, multi-stream programmable VS source selection, and representative base-state texture/sampler/depth/raster/pipeline command values. Initial GPU-visible sampling/depth/raster probes exist; broader combinations remain failure-driven follow-up work. |
-| Raster intent | Viewport, scissor, cull/front-face, fill mode, half-pixel correction, depth range, and clip planes produce the intended raster footprint. | `state_draw_transform_spec`, raster plan tests, shader-runner viewport/half-pixel/cull/scissor/depth-range/fill/clip-plane probes | Static plans prove parameters and initial runtime probes cover the primary raster boundaries; broader combined raster-state probes remain useful. |
-| Attachment and render-state intent | RT/DS/MRT bindings, clear/load/store policy, color masks, blend, depth/stencil, alpha/fog/sRGB state affect the intended attachment pixels. | `backend_pipeline_key_spec`, `render_pass_actions_spec`, shader-runner render-state probes | Color-write, MRT, `oDepth`, alpha-test, alpha-blend RGB/alpha, FFP fog, and sRGB write now have readback probes; combined state matrices remain open. |
-| Resource sampling intent | Texture format, swizzle/luminance/alpha policy, sampler defaults, LOD, address/filter, sRGB decode, and shader binding slots preserve what the shader samples. | `resource_format_boundary_spec`, `shader_argbuf_binding_value_spec`, `dxmt9-encode-draw-recorder-spec`, `dxmt9-argbuf-populator-spec`, shader-runner texture/sampler probes | Stage 1 and Stage 2 encoder writes plus sampler clamp and sampler sRGB readback have representative coverage; Stage 2 GPU sampling equality and broader sampling interactions still need targeted evidence. |
-| Ordering and synchronization intent | Coalescing, hazard barriers, readbacks, and presents keep D3D9-visible ordering while still batching. | chunk import/replay specs, `resource_hazard_spec`, `dod_replay_observer_spec`, TLA+ models | Full Metal-command ordering and WSI result schemas are still partial. |
-
-The expected testing pattern is layered:
-
-1. Native tests assert the exact rewritten operation at the producing boundary.
-2. Queue or encoder observer tests assert the operation that the backend will
-   execute.
-3. Runtime readback proves GPU-visible behavior only for interactions that
-   cannot be established from the deterministic operation data.
-
-### 0.4 Vertex And Skinning Intent Audit
-
-R-TEST-0.12 and R-TEST-1.11 cover D3D9 application intent that is expressed
-across vertex declarations, stream bindings, shader constants, and vertex shader
-math. D3D9 does not expose a high-level rig object, so the test contract treats
-animation/rigging as shader-driven or fixed-function vertex deformation whose
-inputs must remain coherent across every boundary.
-
-```mermaid
-flowchart LR
-    APP["D3D9 app draw\npose inputs"] --> DECL["FVF / vertex declaration\nusage + usage index"]
-    APP --> STREAMS["stream sources\noffset + stride + data"]
-    APP --> CONSTS["VS constants\nbone matrix palette"]
-    APP --> STATE["FFP transform / vertex-blend state"]
-
-    DECL --> CORE["core draw snapshot"]
-    STREAMS --> CORE
-    CONSTS --> CORE
-    STATE --> CORE
-
-    CORE --> SHADER["shader input layout\nand MSL lowering"]
-    SHADER --> ENC["encoder vertex bindings\nand DrawVolatile"]
-    ENC --> GPU["rendered pose / geometry mask"]
-```
-
-| Intent class | What must be proved | Primary evidence | Gap / risk |
-|---|---|---|---|
-| Vertex semantic mapping | `D3DVERTEXELEMENT9` usage, usage index, stream, offset, stride, and type reach the shader input requested by DCL tokens or FFP layout. | `state_draw_transform_spec`, `shader_transform_spec` input-layout tests, `vs_specific/dxmt9_vs_skinned_triangle.shader_test` | Static coverage exists for several multi-stream cases; runtime variants still need broader moved-semantic and nonzero-offset coverage. |
-| Skinning constants | Vertex-shader constants used as matrix palettes retain slot number, range, value, and relative-addressing semantics. | shader transform tests for indexed constant reads, constant boundary tests, `vs_specific/dxmt9_vs_skinned_triangle.shader_test` | First runtime pose fixture exists; additional matrix slots and mixed-weight cases remain open. |
-| Weight/index conversion | `BLENDWEIGHT` and `BLENDINDICES` values keep component order, normalization/raw interpretation, and stream source through backend fetch. | shader transform source-contract tests, programmable skinning runtime probe, FFP indexed vertex-blend probe | Runtime coverage exists for the canonical two-stream programmable case and FFP indexed declaration path; last-beta indexed FVF variants remain open. |
-| Fixed-function vertex blending | FFP `vertexBlend`, `indexedVertexBlend`, world matrices, normals, and FVF layout produce the intended blended vertex position. | FFP key/unit tests, FFP vertex-blend shader-runner probes | Non-indexed one-weight, 2/3-weight, indexed declaration, and FVF `XYZB2` runtime evidence pass; broader normal/lighting and last-beta index variants remain open. |
-| Rendered pose | A known input pose produces a deterministic triangle/quad mask or probe pixels that would fail for wrong stream, constant, weight, index, or matrix multiply. | `shader_runner_dxmt9` skinning and FFP vertex-blend probes | First fixtures exist; broader pose matrix and blend-mode matrix remains partial. |
-
-The intended first fixture is deliberately small: two bone matrices translate
-the same triangle into distinguishable screen-space positions, stream 0 carries
-`POSITION`, stream 1 carries `BLENDWEIGHT` / `BLENDINDICES` and a varying, and
-the vertex shader computes the weighted position from constants. The oracle is a
-pixel mask that changes if stream selection, declaration usage mapping, constant
-slot selection, relative addressing, or matrix multiplication is wrong.
-
-The fixed-function vertex-blending roadmap is tracked as a separate staged
-coverage graph because each step exercises a different D3D9 boundary. The
-implemented stages now cover non-indexed one-weight, non-indexed 2/3-weight,
-indexed declaration matrix selection, and FVF `XYZB2` beta-weight decode through
-`shader_runner_dxmt9` readback.
-
-```mermaid
-flowchart TD
-    A["FFP vertex-blend intent\nR-TEST-0.12 / R-TEST-1.11"] --> B["Stage 1: non-indexed one-weight\nstatus: passing"]
-    A --> C["Stage 2: non-indexed multi-weight\nstatus: passing"]
-    A --> D["Stage 3: indexed vertex blend\nstatus: passing"]
-    A --> E["Stage 4: FVF beta-weight decode\nstatus: passing"]
-
-    B --> B1["Input: vertex declaration\nPOSITION + BLENDWEIGHT + COLOR"]
-    B --> B2["State: VERTEXBLEND=1\nINDEXEDVERTEXBLENDENABLE=0"]
-    B --> B3["Uniforms: world0/world1 + view/proj\nffpBlendWorldViewProj[0..1]"]
-    B --> B4["Evidence: ffp/dxmt9_ffp_vertex_blend_triangle.shader_test"]
-
-    C --> C1["Input: BLENDWEIGHT float2/float3"]
-    C --> C2["State: VERTEXBLEND=2 or 3"]
-    C --> C3["Evidence: 2weights + 3weights declaration probes"]
-
-    D --> D1["Input: BLENDINDICES + BLENDWEIGHT"]
-    D --> D2["State: INDEXEDVERTEXBLENDENABLE=1"]
-    D --> D3["Evidence: indexed declaration probe"]
-
-    E --> E1["Input: FVF XYZB* beta-weight layout"]
-    E --> E2["Decoder: FVF-derived offsets/stride"]
-    E --> E3["Evidence: FVF XYZB2 probe"]
-
-    classDef done fill:#d9f5d6,stroke:#2f7d32,color:#102a12;
-    classDef open fill:#fff3cd,stroke:#b7791f,color:#3b2f00;
-    class B,B1,B2,B3,B4,C,C1,C2,C3,D,D1,D2,D3,E,E1,E2,E3 done;
-```
-
 ---
 
 ## 1. Test Infrastructure: dxmt9 Shader Runner
@@ -431,9 +301,8 @@ without depending on a Metal render/readback path:
 The dxmt9 `.shader_test` compatible subset remains the base corpus format.
 dxmt9-specific coverage that needs richer setup is expressed through a local
 extended probe layer owned by `shader_runner_dxmt9`. The extension is used for
-texture setup, vertex output geometry probes, vertex-input / skinning probes,
-and render-state interaction probes that cannot be represented cleanly in the
-shared upstream corpus.
+texture setup, vertex output geometry probes, and render-state interaction
+probes that cannot be represented cleanly in the shared upstream corpus.
 It is not the primary proof mechanism for shader/state/draw transforms; those
 belong in the stateless unit suites described in section 0.
 
@@ -441,8 +310,7 @@ belong in the stateless unit suites described in section 0.
 flowchart TD
     A["shader_runner_dxmt9 extension"] --> B["Texture Setup DSL"]
     A --> C["VS Geometry Probe"]
-    A --> D["Vertex Input / Skinning Probe"]
-    A --> F["Render State Interaction Probe"]
+    A --> D["Render State Interaction Probe"]
 
     B --> B1["2x2 / 4x4 texture"]
     B --> B2["mip levels"]
@@ -455,20 +323,14 @@ flowchart TD
     C --> C4["viewport / clip-space orientation"]
     C --> C5["half-pixel edge masks"]
 
-    D --> D1["multi-stream declaration"]
-    D --> D2["BLENDWEIGHT / BLENDINDICES"]
-    D --> D3["VS constant matrix palette"]
-    D --> D4["skinned pose mask"]
-
-    F --> F1["alpha test"]
-    F --> F2["oDepth"]
-    F --> F3["MRT"]
-    F --> F4["fog / color write / sRGB"]
+    D --> D1["alpha test"]
+    D --> D2["oDepth"]
+    D --> D3["MRT"]
+    D --> D4["fog / color write / sRGB"]
 
     B --> E["actual pixel readback"]
     C --> E
     D --> E
-    F --> E
 ```
 
 The extension is declarative: test files describe resources, render states,
@@ -477,17 +339,13 @@ runner translates that into backend calls, renders into an offscreen target,
 performs readback, and compares the actual pixels. Generated shader source is
 not a pass criterion for these probes; source and descriptor expectations belong
 in fast transform unit tests. Extended probes are reserved for GPU-visible
-behaviour such as orientation, sampler filtering/addressing, vertex input
-deformation, depth, MRT routing, and combined render-state effects.
+behaviour such as orientation, sampler filtering/addressing, depth, MRT routing,
+and combined render-state effects.
 
 Current implemented command subset:
 
 - `dxmt9-texture <id> <width> <height> A8R8G8B8 <texel...>` creates a named
   A8R8G8B8 2D managed texture and uploads row-major named texels.
-- `dxmt9-texture-raw <id> <width> <height> <format> <hex-bytes>` creates a
-  named texture and uploads exact storage bytes row-by-row using the format row
-  pitch. This is used for compressed block-boundary tests where the block
-  indices themselves are the value under test.
 - `dxmt9-texture-mip <id> <level> <width> <height> A8R8G8B8 <texel...>` adds
   an explicit mip level for a named texture; dimensions must match the level-0
   mip chain.
@@ -508,18 +366,6 @@ Current implemented command subset:
 - `dxmt9-draw-solid-quad` renders a full-target XYZRHW quad for render-state
   interaction probes.
 
-Required next command subset for vertex/skinning intent:
-
-- `dxmt9-vertex-stream <stream> stride=<bytes> <hex-bytes>` defines an exact
-  stream payload used by the following draw.
-- `dxmt9-vertex-decl <stream>:<offset>:<type>:<usage><index> ...` defines the
-  `D3DVERTEXELEMENT9` semantic mapping instead of relying on a default quad.
-- `dxmt9-vs-constants-f <first> <float4...>` writes exact vertex-shader
-  constants, including matrix-palette slots.
-- `dxmt9-draw-vs-skinned-triangle` draws a programmable VS triangle whose
-  expected pixel mask distinguishes the correct skinned pose from wrong stream,
-  declaration, constant, weight/index, or matrix-math behaviour.
-
 The first implemented runtime probes are:
 
 - `tests/shader_runner/corpus/texture/dxmt9_texture_2x2.shader_test` validates top-left
@@ -531,20 +377,6 @@ The first implemented runtime probes are:
 - `tests/shader_runner/corpus/texture/dxmt9_mip_texldl_readback.shader_test`
   validates explicit mip-level sampling through `texldl` and framebuffer
   readback.
-- `tests/shader_runner/corpus/texture/dxmt9_dxt1_multiblock_order_readback.shader_test`
-  validates BC1/DXT1 multi-block order across a block row.
-- `tests/shader_runner/corpus/texture/dxmt9_dxt1_intrablock_indices_readback.shader_test`
-  validates BC1/DXT1 indices inside a single compressed block using raw block
-  bytes rather than constant-block synthesis.
-- `tests/shader_runner/corpus/texture/dxmt9_dxt5_multiblock_alpha_readback.shader_test`
-  validates BC3/DXT5 alpha payload preservation across multiple blocks.
-- `tests/shader_runner/corpus/texture/dxmt9_dxt5_intrablock_alpha_indices_readback.shader_test`
-  validates BC3/DXT5 alpha indices inside a single compressed block using raw
-  block bytes.
-- `tests/shader_runner/corpus/texture/dxmt9_ffp_pixel_texture_readback.shader_test`
-  validates a pure fixed-function textured pixel path through framebuffer
-  readback; textured FFP is kept on the portable fragment path until the
-  tile-FFP path has readback equality coverage.
 - `tests/shader_runner/corpus/vs_specific/dxmt9_vs_color_triangle.shader_test`
   validates that programmable vertex POSITION and COLOR outputs affect
   rasterization and framebuffer color.
@@ -568,9 +400,7 @@ The first implemented runtime probes are:
   generated programmable pixel shader contains alpha-test discard code, but the
   current readback output still shows the fragment surviving.
 
-`oDepth`, fog, and sRGB render-state probes are now present as initial
-runtime readback coverage; broader combined-state probes remain future
-extension points.
+`oDepth`, fog, and sRGB render-state probes remain future extension points.
 Alpha-test readback has a checked-in failing probe and should move to `passing`
 only after the runtime discard behaviour is fixed.
 
@@ -610,24 +440,6 @@ by a failing readback probe until the discard path is fixed. Required future
 probes cover `oDepth`, fog, and sRGB write/sampling state. MRT color output
 routing is covered by per-target readback. Every probe verifies the final
 framebuffer through readback.
-
-### 4.3 Stage 2 Argbuf Hybrid A/B Lane
-
-Each currently-passing `.shader_test` is fanned out into two Meson tests:
-`dxmt9-shader-corpus-<case>` (suite `shader-corpus`) runs with the runtime
-default — Stage 2 argbuf hybrid on Apple3+Tier2 devices, Stage 1 elsewhere —
-and `dxmt9-shader-corpus-stage1-<case>` (suite `shader-corpus-stage1`) forces
-Stage 1 via `DXMT9_DISABLE_ARGBUF_HYBRID=1`. The skip filter is the same one
-used by the default lane: `shader_corpus_tool.py list-files --status passing`
-emits the seed list, so cases marked `failing` or `skipped` in the corpus
-manifest do not gain a Stage 1 twin. Both lanes assert the same `[probe]`
-expectations through `shader_runner_dxmt9`, so passing both *is* the
-Stage 1 ↔ Stage 2 pixel-equality proof for `R-BACK-12.22`–`R-BACK-12.26`;
-see `R-BACK-12.27` and `specs/backend/design.md` §5.4 for the contract.
-A maintainer reproduces just the Stage 1 lane with `meson test --suite
-shader-corpus-stage1 -C build`. A regression in either lane on a
-previously-passing case is a Stage 2 release blocker, not a corpus
-demotion candidate.
 
 ---
 
@@ -968,215 +780,12 @@ with the deployment helper, then run the same PE executables with
 
 ---
 
-## 10. Module-Boundary Harness
-
-The module-boundary harness owns R-TEST-13. It is the deterministic test layer
-between native unit/value tests and full Wine application experiments. It uses
-real build artifacts and real Wine loader paths, but it keeps the workload small
-enough that every pass/fail result maps to one architectural boundary.
-
-This is a test harness, not an experiment harness. It does not judge screenshots,
-SSIM, frame pacing, user-visible app behaviour, or benchmark thresholds. It
-proves that the configured `d3d9.dll`, `winemetal.dll`, and `winemetal.so`
-artifacts stage together, load together, agree on the bridge ABI, and can carry
-a minimal call flow across the PE / Wine unix / provider boundary.
-
-### Boundary Map
-
-```mermaid
-flowchart LR
-    subgraph Native["Native deterministic tests"]
-        NativeUnit["native value/unit specs\ncore, backend, bridge"]
-        ShaderRunner["shader_runner_dxmt9\nnative GPU readback"]
-        ProviderProbe["provider-side boundary probe\nbuilt unix provider ABI"]
-        CoreBoundary["core records/importer\nbackend descriptors"]
-        NativeBackend["BackendDevice / Metal\nnative API"]
-    end
-
-    subgraph Artifacts["Built deployment artifacts"]
-        D3D["d3d9.dll\nPE D3D9 frontend"]
-        Bridge["winemetal.dll\nPE bridge"]
-        Unix["winemetal.so\nWine unix provider"]
-        Provider["dxmt9c_* provider entry"]
-    end
-
-    subgraph WineRuntime["Wine-hosted PE boundary"]
-        ModuleProbe["module-boundary PE probe\napp-local or builtin lane"]
-        Conformance["Wine-oracle PE conformance\npublic D3D9 semantics"]
-        WSI["wsi_present_x64.exe\nwindow/present smoke"]
-    end
-
-    subgraph Experiments["Full integration and measurement"]
-        Apps["real app experiments\nvisual, perf, logs"]
-    end
-
-    NativeUnit -->|"exact before/after values\nR-TEST-0.10"| CoreBoundary
-    ShaderRunner -->|"GPU-visible behaviour\nno PE loader"| NativeBackend
-    ProviderProbe -->|"provider ABI smoke\nPE frontend bypassed"| Unix
-    ModuleProbe -->|"loader + bridge smoke\nR-TEST-13"| D3D
-    Conformance -->|"HRESULT, COM, API oracle\nR-TEST-12"| D3D
-    WSI -->|"HWND to CAMetalLayer\nR-TEST-11"| D3D
-    Apps -->|"wild integration evidence\nR-WILD"| D3D
-
-    D3D -->|"imports / calls"| Bridge
-    Bridge -->|"WINE_UNIX_CALL"| Unix
-    Unix --> Provider
-```
-
-The key distinction is what each lane is allowed to prove:
-
-| Harness | Entry point | Boundary crossed | Evidence owned |
-|---|---|---|---|
-| Native unit/value specs | macOS test binary | Source values, POD packets, imported records, descriptors | Exact semantic values before and after local transforms. |
-| `shader_runner_dxmt9` | macOS native runner | Backend API and Metal readback | GPU-visible shader, texture, geometry, render-state, and synchronization behaviour. |
-| Provider-side boundary probe | Native executable or FFI driver | Built `winemetal.so` provider entry, with PE frontend intentionally bypassed | Provider load, exported C ABI availability, provider counters/status, and minimal command path through built unix artifacts. |
-| Module-boundary PE probe | Small project-authored PE executable under Wine | `d3d9.dll` -> `winemetal.dll` -> `winemetal.so` -> provider | Artifact staging, PE export lookup, bridge ABI agreement, unix module load, and one minimal public D3D9 call flow. |
-| Wine-oracle conformance | Focused PE conformance executables | Same PE/unix path as module-boundary, broader API surface | Windows D3D9 API semantics: HRESULTs, COM lifetime, state machines, resources, queries, reset/lost-device. |
-| WSI integration | `wsi_present_x64.exe` under Wine | Same PE/unix path plus Wine window system | HWND-to-Cocoa/Metal layer resolution and visible present path. |
-| Experiments | Real applications | Whole stack plus app launch/runtime environment | App-level visual correctness, performance, logging, and compatibility observations. |
-
-### App-Local Execution
-
-```mermaid
-sequenceDiagram
-    participant H as run_module_boundary.py
-    participant Stage as staging directory
-    participant Wine as wine
-    participant Probe as module_boundary_probe_x64.exe
-    participant D3D as d3d9.dll
-    participant Bridge as winemetal.dll
-    participant Unix as winemetal.so
-    participant Provider as dxmt9c provider
-
-    H->>Stage: copy d3d9.dll, winemetal.dll, winemetal.so, PE probe
-    H->>Stage: hash artifacts and write run manifest
-    H->>Wine: run with WINEDLLOVERRIDES and DXMT9_WINEMETAL_SO
-    Wine->>Probe: start PE process
-    Probe->>D3D: LoadLibrary + Direct3DCreate9/Ex export lookup
-    D3D->>Bridge: generated bridge call and ABI handshake
-    Bridge->>Unix: WINE_UNIX_CALL to unix provider
-    Unix->>Provider: provider entry dispatch
-    Provider-->>Unix: status, handles, counters
-    Unix-->>Bridge: HRESULT/status
-    Bridge-->>D3D: marshalled return
-    D3D-->>Probe: public D3D9 result
-    Probe-->>H: JSON result and compact logs
-```
-
-The app-local lane stages all artifacts in a temporary directory and runs with
-explicit loader configuration. It proves that the artifacts from the selected
-build directories work together without relying on globally installed dxmt9
-files.
-
-### Builtin Execution
-
-The builtin lane uses the same PE probe and checks, but the artifacts are first
-installed or staged through Wine's builtin/native DLL layout. Evidence from this
-lane is separate from app-local evidence because Wine builtin postprocessing,
-search order, and unix-module discovery can fail even when app-local override
-loading succeeds.
-
-### Provider-Side Probe
-
-The provider-side probe runs below the PE D3D9 frontend. It may be a native
-executable linked against local test support or an external FFI driver, but it
-must use the built unix provider or its exported C ABI entry points. Its result
-must explicitly state that it bypassed PE `d3d9.dll`, PE `winemetal.dll`, and
-Wine `WINE_UNIX_CALL` dispatch. That bypass is the point: this lane isolates
-provider loading and provider-entry failures before running PE loader probes.
-
-The existing `dxmt9-unix-chunk-injection-probe` is a seed for this lane because
-it exercises provider-side chunk submission without a PE D3D9 frontend. It does
-not become complete R-TEST-13 evidence until it is promoted into checked-in
-module-boundary automation with artifact hashing, result classification, and a
-machine-readable output file.
-
-### Required Smoke Checks
-
-The PE module-boundary probe should keep the behavioural surface deliberately
-small:
-
-| Check | Required assertion |
-|---|---|
-| Artifact staging | `d3d9.dll`, `winemetal.dll`, `winemetal.so`, PE probe, and required runtime dependencies are present and hashed. |
-| PE loader/export | `LoadLibrary("d3d9.dll")` succeeds and `Direct3DCreate9` or `Direct3DCreate9Ex` resolves from the staged DLL. |
-| Bridge import | `d3d9.dll` resolves the staged or builtin `winemetal.dll`, not an unrelated system fallback. |
-| ABI handshake | Generated bridge ABI hash/version agrees across PE bridge and unix provider. |
-| Provider load | The configured `winemetal.so` loads and exposes the expected provider entry points. |
-| Factory smoke | `Direct3DCreate9` or `Direct3DCreate9Ex` reaches the provider and returns the expected success or scoped failure status. |
-| Device/reset smoke | A small device create, reset, or documented no-window fallback path crosses the bridge when the host can support it. |
-| Submission smoke | At least one chunk or command submission path reaches provider-side counters/logs, not merely process exit. |
-
-### Result Schema
-
-The harness result is machine-readable so CI, local scripts, and spec reviews
-can route failures without parsing free-form logs.
-
-```json
-{
-  "schema": "dxmt9.module_boundary.result.v1",
-  "lane": "app-local",
-  "arch": "x64",
-  "artifacts": [
-    {"role": "d3d9.dll", "path": "...", "sha256": "..."},
-    {"role": "winemetal.dll", "path": "...", "sha256": "..."},
-    {"role": "winemetal.so", "path": "...", "sha256": "..."}
-  ],
-  "bridge_abi_hash": "...",
-  "command": ["wine", "module_boundary_probe_x64.exe"],
-  "environment": {
-    "WINEDLLOVERRIDES": "d3d9,winemetal=n,b",
-    "DXMT9_WINEMETAL_SO": "..."
-  },
-  "exit_code": 0,
-  "failure_category": "none",
-  "checks": [
-    {"name": "pe_export_lookup", "status": "pass"},
-    {"name": "provider_entry_dispatch", "status": "pass"}
-  ],
-  "log_excerpt": []
-}
-```
-
-Failure categories are fixed values:
-
-| Category | Meaning |
-|---|---|
-| `artifact-staging` | A requested build artifact, dependency, hash, or architecture check is missing or inconsistent. |
-| `pe-loader-export` | PE process startup, DLL load, import resolution, or exported D3D9 symbol lookup failed. |
-| `bridge-abi-mismatch` | PE bridge and unix provider disagree on generated ABI hash, version, or required opcode surface. |
-| `unix-module-load` | Wine unix module discovery, `winemetal.so` load, or provider path selection failed. |
-| `provider-entry-dispatch` | The unix provider loaded, but the selected provider entry point or handshake failed. |
-| `public-d3d9-smoke` | Public D3D9 factory/device/reset smoke returned an unexpected HRESULT or pointer state. |
-| `command-submission` | Minimal chunk/command submission did not reach provider-side status, counters, or logs. |
-| `unsupported-runtime` | The configured Wine, architecture, windowing, or host runtime cannot run the selected lane. |
-
-### Automation Contract
-
-The checked-in harness should live under `tests/module_boundary/` and provide:
-
-- a project-authored PE probe source and Meson cross-build target;
-- a runner that stages artifacts from configured build directories;
-- app-local and builtin lane selection;
-- artifact hashing and dependency checks before execution;
-- result JSON emission and a compact status reporter;
-- a lightweight manifest/status validation target that can be wired into Meson
-  even when Wine runtime execution stays explicit.
-
-Runtime execution may require local Wine paths and built artifacts, so it does
-not have to run unconditionally in every `meson test` invocation. The manifest,
-schema, and status parser should still be testable without Wine so drift is
-caught early.
-
----
-
-## 11. File Layout and Ownership Boundaries
+## 10. File Layout and Ownership Boundaries
 
 The `tests/` tree is organized by execution boundary and ownership, not by file
-extension. Native stateless suites, runtime shader probes, module-boundary
-smokes, Wine PE conformance, and WSI integration must stay in separate
-directories so a green result in one boundary cannot be mistaken for coverage in
-another.
+extension. Native stateless suites, runtime shader probes, Wine PE conformance,
+and WSI integration must stay in separate directories so a green result in one
+boundary cannot be mistaken for coverage in another.
 
 Target layout:
 
@@ -1214,11 +823,6 @@ tests/
 │       ├── viewport/
 │       ├── visual_c/
 │       └── vs_specific/
-├── module_boundary/
-│   ├── MANIFEST.toml
-│   ├── meson.build
-│   ├── module_boundary_probe.cpp
-│   └── run_module_boundary.py
 ├── conformance/
 │   └── d3d9/
 │       ├── MANIFEST.toml
@@ -1250,7 +854,6 @@ Boundary ownership:
 | `tests/native/backend/` | Native macOS backend/data tests | descriptor keys, pipeline keys, resource hazard observations, DOD allocation evidence |
 | `tests/native/bridge/` | Native macOS packet/wire tests | chunk wire layout, import validation, draw-run grouping, handle/payload arena behaviour |
 | `tests/shader_runner/` | Native macOS runtime readback harness | `.shader_test` corpus, dxmt9-local extended probes, framebuffer readback evidence |
-| `tests/module_boundary/` | Built artifacts under controlled native/Wine module-boundary lanes | app-local/builtin loader smoke, bridge ABI agreement, unix provider load, minimal D3D9 and command submission flow |
 | `tests/conformance/d3d9/` | Windows PE binaries under Wine | Wine-oracle D3D9 ABI, HRESULT, COM lifetime, state-machine compatibility |
 | `tests/integration/wsi_present/` | Wine + window system + Metal presentation | full WSI smoke, HWND-to-Metal-layer resolution, visible present path |
 | `tests/fixtures/` | Static test data | local fixtures only; no executable test ownership |
@@ -1263,7 +866,6 @@ Legacy path mapping:
 | `tests/smoke.cpp` | `tests/native/smoke/smoke.cpp` |
 | `tests/shader_runner_dxmt9.cpp` | `tests/shader_runner/shader_runner_dxmt9.cpp` |
 | `tests/shader_tests/` | `tests/shader_runner/corpus/` |
-| module-boundary staging scripts | `tests/module_boundary/` |
 | `tests/d3d9_conformance/` | `tests/conformance/d3d9/` |
 | `tests/wsi_present/` | `tests/integration/wsi_present/` |
 | `tests/corpus_sync_smoke.py` | `tests/shader_runner/corpus_sync_smoke.py` |
@@ -1280,7 +882,7 @@ entries into individual test cases, but both modes must use the same
 
 ---
 
-## 12. Provenance Block
+## 11. Provenance Block
 
 Every `.shader_test` file opens with a provenance block. The block is pure comments
 (`;` prefix) so the vkd3d parser ignores it.
@@ -1342,7 +944,7 @@ are behind.
 
 ---
 
-## 13. Manifest
+## 12. Manifest
 
 `tests/shader_runner/corpus/MANIFEST.toml` is the machine-readable index of the corpus.
 Rows for upstream-sourced tests may also carry `upstream-commit` so the sync tool
@@ -1425,335 +1027,3 @@ DXMT_UPSTREAM_ROOT=/path/to/vkd3d scripts/check/check_drift.sh
 # Count by shader model:
 tomlq -r '.test[] | .models[]' MANIFEST.toml | sort | uniq -c
 ```
-
----
-
-## 14. Debugging Tooling Standard
-
-This section owns R-TEST-14. It standardizes diagnostics that sit next to the
-test and experiment harnesses: Metal GPU debugging, WSI/window evidence, Wine
-unix/provider discovery, headless host reporting, and the environment-variable
-registry that ties them together.
-
-The goal is not to make every diagnostic always-on. The goal is that a checked-in
-harness can answer three questions from its artifacts:
-
-- which module or boundary was being diagnosed;
-- which debug knobs were enabled;
-- which files, logs, captures, counters, dumps, or tool outputs prove the result;
-- how boundary data and rendered frames correlate across modules.
-
-### Debug Surface Map
-
-```mermaid
-flowchart LR
-    Harness["test / experiment / module-boundary runner"]
-    Env["environment registry\nDXMT* / DXMT9* knobs"]
-    Result["schema-versioned result JSON"]
-
-    subgraph Metal["Metal diagnostics"]
-        GpuTrace[".gputrace\nDXMT_METAL_CAPTURE_*"]
-        Validation["Metal validation stderr"]
-        Labels["resource labels + debug groups"]
-        Signposts["os_signpost frame/commit/draw"]
-        GpuCounters["GPU CB time + fault counters"]
-        Xctrace["xctrace only\nstage-boundary GPU time"]
-    end
-
-    subgraph WSI["WSI / window diagnostics"]
-        Layer["layer acquisition path\nmacdrv_functions / legacy / none"]
-        WindowCapture["window-id / frontmost / fullscreen capture"]
-        InternalDump["internal backbuffer dump"]
-        Visible["visible-output classification"]
-    end
-
-    subgraph Dumps["Boundary data dumps"]
-        BeforeAfter["before / after boundary values"]
-        ChunkDump["D9C chunk + bridge args"]
-        StateDump["imported state + canonical draw data"]
-        DescriptorDump["resource / sampler / shader bindings"]
-        DumpManifest["schema + correlation manifest"]
-    end
-
-    subgraph Render["Rendered-output capture"]
-        FrameList["fixed frame list"]
-        IntervalFrames["frame range + interval"]
-        VideoSegment["bounded video segment"]
-        RenderManifest["source + timebase manifest"]
-    end
-
-    subgraph Wine["Wine unix / provider diagnostics"]
-        PatchAudit["macdrv symbol audit\nscripts/wine/check_patch.py"]
-        Manifest["manifest requires_patch / patch_status"]
-        Locator["provider locator candidates\nDXMT9_WINEMETAL_SO"]
-        Abi["winemetal ABI handshake"]
-    end
-
-    subgraph Headless["Headless / non-Darwin"]
-        Host["platform=headless"]
-        NoWSI["no CAMetalLayer / no window capture claim"]
-    end
-
-    Harness --> Env
-    Harness --> Metal
-    Harness --> WSI
-    Harness --> Dumps
-    Harness --> Render
-    Harness --> Wine
-    Harness --> Headless
-    Metal --> Result
-    WSI --> Result
-    Dumps --> Result
-    Render --> Result
-    Wine --> Result
-    Headless --> Result
-    Env --> Result
-```
-
-### Module Responsibilities
-
-| Module | Standard tools / knobs | Required evidence | Current status |
-|---|---|---|---|
-| Metal backend | `DXMT_METAL_CAPTURE_FRAME`, `DXMT_METAL_CAPTURE_PATH`, `MTL_DEBUG_LAYER`, labels, debug groups, signposts, `DXMT_PERF_COUNTERS` | `.gputrace` path, validation log, frame/seq scope, CB GPU timing, GPU fault count | Mostly implemented; per-stage GPU timing is still `xctrace`-only. |
-| WSI / presenter | `DXMT_TRACE_QUEUE`, `DXMT_TRACE_FILE`, present trace lines, capture source classification | layer-acquisition path, HWND/window title, capture mode, visible-output source | Partially implemented; non-catalogue WSI runner emits `dxmt9.debug.result.v1`, parses live HWND/title/frame evidence, and can attach window-id/fullscreen capture artifacts. |
-| Wine unix/provider | `DXMT9_WINEMETAL_SO`, `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK`, `DXMT_LOG_LEVEL=debug`, `DXMT9_BRIDGE_VERBOSE` | provider candidate list, selected handle, ABI status, macdrv symbol status | Provider locator and ABI logs exist; patch-status gate/tooling is incomplete. |
-| Headless / non-Darwin | `wsi_platform_headless` platform result | explicit statement that WSI/window evidence is unavailable | Platform abstraction exists; no harness-level reporting contract yet. |
-| Environment registry | `agents/rules/environment_variables.rules.md` plus checked audit | every consumed runtime knob documented with owner/default | Registry exists; automated drift check is required. |
-| Boundary dump layer | harness options or env vars such as `DXMT_DEBUG_DUMP_DIR`, `DXMT_DEBUG_DUMP_BOUNDARIES` | schema-versioned before/after dumps with correlation keys | Bundle writer and schema selftest exist; native/module-boundary/shader-runner adapters still need opt-in wiring. |
-| Render capture layer | existing `DXMT_CAPTURE_FRAME`, `DXMT_EXPERIMENT_CAPTURE_PATH`, plus frame-list/range/video capture options | image sequence or video artifacts with source, frame/timebase, hash, dimensions, and limits | Experiment runner wiring exists for single-frame, frame-list, interval-range, dropped-frame reporting, bounded video metadata, and skipped-frame sidecars/counters. Renderer-side multi-frame internal BMP dumps and `dxmt9.render_capture.skip.v1` sidecars exist for requested internal captures. |
-
-### Diagnostic Cost Classes
-
-R-TEST-14.19 through R-TEST-14.23 make observability a build/runtime contract,
-not an excuse to put permanent scaffolding in the renderer. Every new internal
-test or experiment hook chooses one of these classes:
-
-| Cost class | Default release behavior | Examples | Acceptance rule |
-|---|---|---|---|
-| Compile-time test-only | Not linked or not exported | Recorder fakes, mock encoders, harness-only entry points, schema emitters used only by native tests | Must be isolated to test targets or explicit diagnostic build options. Production ABI and wire records must not depend on it. |
-| Opt-in cold diagnostic | Present but disabled | Boundary dumps, rendered frame/video capture, verbose provider logs, Metal capture triggers | Disabled mode must avoid per-draw allocation, file I/O, string formatting, locks, capture setup, extra bridge calls, and schema construction. |
-| Release-retained telemetry | Always present, bounded | Flat counters, coarse failure categories, cheap mode flags needed for field triage | Must be measured by operation/allocation/bridge counters and justified as production-worthy. |
-
-```mermaid
-flowchart TD
-    Hook["new test / experiment hook"] --> Classify{"cost class?"}
-    Classify --> TestOnly["compile-time test-only"]
-    Classify --> Cold["opt-in cold diagnostic"]
-    Classify --> Telemetry["release-retained telemetry"]
-
-    TestOnly --> BuildGate["test target or explicit diagnostic build"]
-    Cold --> OffGate["disabled default\ncoarse mode check only"]
-    Telemetry --> PerfGate["bounded flat data\ncounter/benchmark evidence"]
-
-    BuildGate --> Accept["accepted"]
-    OffGate --> Accept
-    PerfGate --> Accept
-```
-
-The release-disabled path must be observable in tests or benchmarks. For a hook
-touching draw, queue, encoder, bridge, or WSI paths, the disabled case should
-show no change in bridge operation count, chunk commit count, allocation growth,
-or diagnostic artifact count. A hook that cannot meet that bar belongs in a
-test-only build, not in the normal runtime.
-
-### Boundary Data Dump Contract
-
-Boundary dumps are forensic evidence. They complement R-TEST-0.10 exact-value
-assertions, but a dump by itself is not a passing test oracle. A useful dump
-bundle contains:
-
-| Field | Meaning |
-|---|---|
-| `boundary` | Stable boundary id such as `B1`, `B4`, `wsi-present`, or `provider-locator`. |
-| `phase` | `before`, `after`, or `derived`, so a reviewer knows which side of the boundary emitted the value. |
-| `correlation` | Run id, frame/present id, seq id, chunk id, record index, draw index, resource handle, shader hash, and command-buffer id where available. |
-| `schema` | Versioned dump schema for the structured payload or sidecar binary. |
-| `payload` | Inline JSON for small state, or a path to a binary/image/text sidecar. |
-| `interpretation` | Format, dimensions, pitch, endian/layout version, hash, and semantic labels needed to read the sidecar. |
-
-Recommended artifact layout:
-
-```text
-<run-output>/
-├── boundary_dumps/
-│   ├── manifest.json
-│   ├── B1/
-│   │   ├── frame000120_seq000045_record0003_before.json
-│   │   └── frame000120_seq000045_record0003_after.json
-│   └── B5/
-│       ├── draw000814_bindings_after.json
-│       └── draw000814_texture_slot03.bin
-└── result.json
-```
-
-Binary sidecars should be content-addressable enough for triage: the manifest
-records hashes and byte sizes so a reviewer can compare two runs without opening
-every artifact. For texture or buffer dumps, the manifest records the logical D3D
-format and the backend/Metal format when both are relevant.
-
-### Rendered Output Capture Contract
-
-Rendered-output evidence has four capture modes:
-
-| Mode | Use | Required result metadata |
-|---|---|---|
-| `single-frame` | Existing reference screenshot or smoke evidence | frame id, source, path, dimensions, hash, SSIM/diff when compared. |
-| `frame-list` | A few deterministic points in a scene | ordered frame ids, per-frame paths, source, dimensions, hashes. |
-| `interval-range` | Temporal drift or intermittent corruption | start frame, end frame, interval, dropped/unavailable frames, per-frame paths. |
-| `video-segment` | Animation, pacing, flicker, or human review | start/end frame or time, fps/timebase, source, container/codec, path, hash. |
-
-Internal backbuffer dumps are preferred when the goal is renderer correctness.
-Window-id capture is appropriate for WSI/compositor evidence. Frontmost-window or
-full-screen fallback captures may help triage, but they must remain explicitly
-classified as fallback sources and must not prove HWND-to-layer success.
-
-Frame-sequence and video capture must be bounded. The run request records max
-frames, max seconds, and max bytes, and the harness reports truncation rather
-than silently dropping evidence. Video capture should be treated as qualitative
-triage unless the harness also preserves extracted frame images or a human-review
-record.
-
-### Result Shape
-
-Harnesses that emit debug evidence should extend their result JSON with a compact
-`debug` object. Existing experiment result files may keep their current
-top-level fields (`capture_source`, `capture_paths`, counters), but new harnesses
-should prefer this shape:
-
-```json
-{
-  "schema": "dxmt9.debug.result.v1",
-  "module": "wsi",
-  "boundary": "B6",
-  "command": ["wine", "wsi_present_x64.exe"],
-  "correlation": {
-    "run_id": "2026-05-16T10-31-22Z-wsi-present",
-    "frame_id": 120,
-    "present_id": 120,
-    "seq_id": 45,
-    "chunk_id": 7,
-    "record_index": 3,
-    "draw_index": 814
-  },
-  "environment": {
-    "DXMT_TRACE_QUEUE": "1",
-    "DXMT_TRACE_FILE": "..."
-  },
-  "artifacts": [
-    {
-      "role": "log",
-      "path": ".../dxmt9.log",
-      "format": "text"
-    },
-    {
-      "role": "capture",
-      "path": ".../actual.png",
-      "format": "png",
-      "source": "window_id"
-    },
-    {
-      "role": "boundary-dump-manifest",
-      "path": ".../boundary_dumps/manifest.json",
-      "format": "json"
-    },
-    {
-      "role": "frame-sequence-manifest",
-      "path": ".../frames/manifest.json",
-      "format": "json"
-    },
-    {
-      "role": "video-segment",
-      "path": ".../video/present_0120_0180.mp4",
-      "format": "mp4",
-      "source": "window_id"
-    }
-  ],
-  "diagnostics": {
-    "metal": {
-      "gputrace": null,
-      "gpu_command_buffer_errors": 0
-    },
-    "wsi": {
-      "layer_acquisition": "macdrv_functions",
-      "window_title": "dxmt9 WSI test",
-      "capture_source": "window_id"
-    },
-    "dumps": [
-      {
-        "boundary": "B4",
-        "phase": "after",
-        "schema": "dxmt9.boundary_dump.bridge_args.v1",
-        "path": ".../boundary_dumps/B4/frame000120_seq000045_record0003_after.json"
-      }
-    ],
-    "render_capture": {
-      "mode": "interval-range",
-      "start_frame": 120,
-      "end_frame": 180,
-      "interval": 5,
-      "source": "internal_dump"
-    },
-    "wine": {
-      "requires_patch": true,
-      "patch_status": "applied",
-      "provider_locator_mode": "app-local"
-    },
-    "headless": {
-      "active": false
-    }
-  },
-  "failure_category": "none"
-}
-```
-
-The fields are intentionally sparse. A module can omit subobjects that are not in
-scope for the current run, but it must not imply evidence that was not captured.
-For example, a full-screen desktop screenshot may be useful for triage, but it is
-not WSI proof unless the result explicitly identifies it as `full_screen`.
-
-### Failure Categories
-
-Diagnostic harnesses should use fixed categories so failures can be routed before
-manual log reading:
-
-| Category | Meaning |
-|---|---|
-| `env-registry-drift` | A consumed `DXMT*` / `DXMT9*` variable is undocumented or has stale ownership/default metadata. |
-| `metal-capture` | Requested Metal capture or validation evidence could not be produced. |
-| `metal-gpu-fault` | Command-buffer completion reported a GPU fault or Metal validation failure. |
-| `wsi-layer-acquisition` | HWND-to-layer lookup failed or used an unexpected path. |
-| `wsi-visible-output` | The run lacks trustworthy visible-output evidence, or only full-screen fallback evidence exists. |
-| `wine-macdrv-symbols` | The Wine root does not expose the required macdrv symbol surface. |
-| `wine-provider-locator` | `winemetal.so` could not be found or loaded through the required locator path. |
-| `wine-abi-handshake` | PE bridge and unix provider ABI hashes do not match. |
-| `headless-unsupported` | A requested WSI/window diagnostic was run on a headless or unsupported host. |
-| `boundary-dump` | A requested boundary dump is missing, malformed, over budget, or cannot be correlated to the run. |
-| `render-frame-sequence` | Requested frame-list or interval-range evidence could not be captured or has missing frame metadata. |
-| `render-video-segment` | Requested video-segment evidence could not be captured, encoded, bounded, or correlated to frame/time metadata. |
-
-### Current Implementation Notes
-
-The 2026-05-16 audit found this split:
-
-- Metal diagnostics are the strongest surface: `.gputrace`, validation layer
-  usage, labels, debug groups, signposts, command-buffer GPU timing, fault
-  counters, and audit gates are documented in `agents/rules/debug_metal.rules.md`.
-- WSI diagnostics have working pieces (`wsi_present_x64.exe`, queue trace lines,
-  macOS window capture helpers, capture-source classification), but no dedicated
-  WSI debug runbook or result schema.
-- Boundary values are well covered by several native assertions. A standard
-  before/after data-dump bundle writer now exists, but production harness
-  adapters still need to emit real per-boundary payloads.
-- Experiments support single-frame internal dumps or window capture and now emit
-  schema-compatible debug results for single-frame, frame-list, interval-range,
-  dropped-frame, and bounded video paths. Renderer-side multi-frame internal BMP
-  dumps are wired for `DXMT_CAPTURE_FRAMES` / `DXMT_CAPTURE_RANGE`. The remaining
-  runtime gap is non-catalogue WSI runner adoption of the same schema path and
-  richer renderer failure sidecars/counters.
-- Wine/provider diagnostics have provider locator debug logs and ABI handshake
-  logs, but the `scripts/wine/check_patch.py` tool and manifest `requires_patch`
-  / `patch_status` resolver gate are not fully implemented.
-- The non-Darwin path is a headless utility path. It must be reported as such and
-  must not be described as Linux WSI support.
-- The environment registry is useful but not yet enforced by a checked audit,
-  and it is missing several live debug/provider variables.

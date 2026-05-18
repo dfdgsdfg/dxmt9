@@ -121,7 +121,7 @@ The workflow is sound; gap #3 (diff tool) would speed it up.
 - **Consolidate PerformanceProbe 4 mode-variants.** Env-var modes are
   fine; per-launcher granularity is correct for reproducibility.
 - **Replace wild-app benchmarks.** Boundary probes complement
-  SFIV / 3DMark / SDK samples. End-to-end fps remains the user-visible
+  SFIV / Anno / SDK samples. End-to-end fps remains the user-visible
   oracle.
 - ~~Flip sub-CB chain default to per-render-pass~~ — **already done by Y1
   (R-BACK-2.34, 2026-05-10)** based on X1 chain-probe evidence

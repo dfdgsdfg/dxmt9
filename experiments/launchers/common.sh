@@ -63,14 +63,6 @@ exp_stage_dxmt9() {
     cmd+=(--runtime-pe-build-dir "$DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR")
   fi
 
-  if [[ -n "${DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR:-}" ]]; then
-    cmd+=(--wow64-pe-build-dir "$DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR")
-  fi
-
-  if [[ -n "${DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR:-}" ]]; then
-    cmd+=(--wow64-runtime-pe-build-dir "$DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR")
-  fi
-
   if [[ -n "${DXMT_EXPERIMENT_WINE_ROOT:-}" ]]; then
     cmd+=(--wine-root "$DXMT_EXPERIMENT_WINE_ROOT")
   fi

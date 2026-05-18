@@ -76,7 +76,7 @@ flowchart LR
     VsConsts["VsConsts\nvsFloat[N] + vsInt + vsBool\nVS slot 0\n[0..maxChangedVsF] only"]
     PsConsts["PsConsts\npsFloat[N] + psInt + psBool\nFS slot 0\n[0..maxChangedPsF] only"]
     FfpVs["FfpVsConsts\nworld/view/proj +\n8 texture transforms +\n6 clip planes +\nhalfPixelFixup + viewport\nVS slot 3 (~720 B)"]
-    FfpPs["FfpPsConsts\ntextureFactor + stage constants +\nfog + alpha test\nFS slot 3"]
+    FfpPs["FfpPsConsts\ntextureFactor + fog +\nalpha test\nFS slot 3 (~64 B)"]
     Slab --> VsConsts
     Slab --> PsConsts
     Slab --> FfpVs
@@ -84,7 +84,7 @@ flowchart LR
   end
 
   subgraph PerEncoder["Encoder entry (dirty bitmask gates each bind)"]
-    Bitmask["DirtyMask : u16\n(per encoder context)\nVS_F / VS_I / VS_B /\nPS_F / PS_I / PS_B /\nFFP_VS_TRANSFORMS / CLIP / VIEWPORT /\nFFP_PS_FOG / ALPHA / TEX_FACTOR / TSS_CONSTANT"]
+    Bitmask["DirtyMask : u16\n(per encoder context)\nVS_F / VS_I / VS_B /\nPS_F / PS_I / PS_B /\nFFP_VS_TRANSFORMS / CLIP / VIEWPORT /\nFFP_PS_FOG / ALPHA / TEX_FACTOR"]
     Bitmask -. dirty? .-> VsConsts
     Bitmask -. dirty? .-> PsConsts
     Bitmask -. dirty? .-> FfpVs
@@ -115,7 +115,7 @@ flowchart LR
 | 0 | FS | `PsConsts` | shader constant change | `psFloat[0..maxChangedPsF]`, `psInt`, `psBool` |
 | 1 | VS | stream0 | per draw (existing) | vertex buffer slice |
 | 3 | VS | `FfpVsConsts` | FFP transform / clip / viewport change | matrices + clip planes + viewport |
-| 3 | FS | `FfpPsConsts` | FFP fog / alpha / textureFactor / `D3DTSS_CONSTANT` change | FFP PS scalar + per-stage color data |
+| 3 | FS | `FfpPsConsts` | FFP fog / alpha / textureFactor change | small scalars (~64 B) |
 | 5 | VS | `DrawVolatile` (push) | per draw (always) | `vertexBaseIndex`, stream meta |
 
 Slot 2 and slots 4, 6+ are reserved for future categories. Texture and sampler
@@ -168,7 +168,6 @@ struct FfpVsConsts {
 ```c
 struct FfpPsConsts {
   float4 textureFactor;
-  float4 stageConstants[8];
   float  alphaRef;
   float  fogStart;
   float  fogEnd;
@@ -176,9 +175,6 @@ struct FfpPsConsts {
   uint   alphaTestEnable;
   uint   alphaTestFunc;
   uint   fogMode;
-  uint   _pad;
-  float4 bumpEnvMat[8];
-  float2 bumpEnvLum[8];
 };
 ```
 

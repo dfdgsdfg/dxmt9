@@ -240,7 +240,7 @@ win. SFIV (heavy real-app) shows neutral. Recommended next:
 1. Run additional synthetic probes varying RT size to map the
    crossover point — at what RT × MSAA × format combination does
    tile flush cancel the pipelining gain?
-2. Run a few more real D3D9 titles (Tutorial07, 3DMark05/06,
+2. Run a few more real D3D9 titles (Anno1404, Tutorial07,
    simpler-than-SFIV apps) to see if any benefits.
 3. If at least one *real* title benefits and none regresses, flip
    R-BACK-2.34 default to per-render-pass + cap=4.

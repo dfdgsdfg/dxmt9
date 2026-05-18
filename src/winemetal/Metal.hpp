@@ -584,6 +584,16 @@ public:
   };
 
   void
+  setVertexTexture(Texture texture, uint8_t index) {
+    struct wmtcmd_render_settexture cmd;
+    cmd.type = WMTRenderCommandSetVertexTexture;
+    cmd.next.set(nullptr);
+    cmd.texture = texture;
+    cmd.index = index;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  };
+
+  void
   setFragmentBytes(const void *buf, uint64_t length, uint8_t index) {
     struct wmtcmd_render_setbytes cmd;
     cmd.type = WMTRenderCommandSetFragmentBytes;
@@ -704,6 +714,16 @@ public:
   setFragmentSamplerState(SamplerState sampler, uint8_t index) {
     struct wmtcmd_render_setsamplerstate cmd;
     cmd.type = WMTRenderCommandSetFragmentSamplerState;
+    cmd.next.set(nullptr);
+    cmd.sampler_state = sampler.handle;
+    cmd.index = index;
+    MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
+  }
+
+  void
+  setVertexSamplerState(SamplerState sampler, uint8_t index) {
+    struct wmtcmd_render_setsamplerstate cmd;
+    cmd.type = WMTRenderCommandSetVertexSamplerState;
     cmd.next.set(nullptr);
     cmd.sampler_state = sampler.handle;
     cmd.index = index;

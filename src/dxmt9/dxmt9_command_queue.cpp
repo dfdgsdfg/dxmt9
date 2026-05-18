@@ -899,32 +899,15 @@ bool splitStretchChunk() {
   return enabled;
 }
 
-bool presentBoundaryWaitsForCompletion() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_PRESENT_BOUNDARY_COMPLETION");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-bool presentBoundaryWaitsForPresentCompletion() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION");
-    if (!env) {
-      return true;
-    }
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-bool disablePresentBoundary() {
-  static const bool disabled = [] {
-    const char* env = std::getenv("DXMT9_DISABLE_PRESENT_BOUNDARY");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return disabled;
-}
+// Boundary-wait policy — resolved once per process via
+// dxmt9::resolveBoundaryPolicyFromEnv() (see dxmt9_presenter.hpp).
+// The five-value enum collapses the previous trio of env-parsing
+// lambdas (DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION /
+// DXMT9_PRESENT_BOUNDARY_COMPLETION / DXMT9_DISABLE_PRESENT_BOUNDARY)
+// into a single switch — see resolveBoundaryPolicy() doc-comment for
+// the priority ordering. AfterAcquire is observationally a no-op on
+// the wait branch here; its effect lives in dxmt9_draw_encoder.mm,
+// which also reads through resolveBoundaryPolicyFromEnv().
 
 bool capFrameLatencyToBackBuffers() {
   static const bool enabled = [] {
@@ -950,7 +933,7 @@ std::uint32_t presentBoundaryLatency(const core::SwapDesc& desc) {
 }
 
 bool shouldApplyPresentBoundary(const core::SwapDesc&) {
-  return !disablePresentBoundary();
+  return resolveBoundaryPolicyFromEnv() != BoundaryPolicy::Disabled;
 }
 
 Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
@@ -1223,27 +1206,43 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
   }
   const std::uint64_t targetSeqId = presentSeqId - maxFrameLatency;
   std::unique_lock lock(mutex_);
-  const bool waitForPresentCompletion = presentBoundaryWaitsForPresentCompletion();
-  const bool waitForCompletion = !waitForPresentCompletion && presentBoundaryWaitsForCompletion();
+  // R-BACK / PresentFrameLatency — branch on the unified
+  // BoundaryPolicy resolved once at process init. Disabled is
+  // filtered earlier by shouldApplyPresentBoundary and never reaches
+  // here; AfterAcquire shares the Default wait branch (the position
+  // of notePresentDequeued is the only observable difference).
+  const BoundaryPolicy policy = resolveBoundaryPolicyFromEnv();
   const auto reachedBoundary = [&] {
-    if (waitForPresentCompletion) {
-      return presentCompletedSeqId_ >= targetSeqId;
+    switch (policy) {
+      case BoundaryPolicy::PresentCompletion:
+        return presentCompletedSeqId_ >= targetSeqId;
+      case BoundaryPolicy::Completion:
+        return completedSeqId_ >= targetSeqId;
+      case BoundaryPolicy::Default:
+      case BoundaryPolicy::AfterAcquire:
+        return presentDequeuedSeqId_ >= targetSeqId;
+      case BoundaryPolicy::Disabled:
+        return true;
     }
-    if (waitForCompletion) {
-      return completedSeqId_ >= targetSeqId;
-    }
-    return presentDequeuedSeqId_ >= targetSeqId;
+    return true;
   };
   if (reachedBoundary()) {
     return;
   }
   const auto waitStarted = std::chrono::steady_clock::now();
-  if (waitForPresentCompletion) {
-    presentCompletedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
-  } else if (waitForCompletion) {
-    finishCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
-  } else {
-    presentDequeuedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
+  switch (policy) {
+    case BoundaryPolicy::PresentCompletion:
+      presentCompletedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
+      break;
+    case BoundaryPolicy::Completion:
+      finishCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
+      break;
+    case BoundaryPolicy::Default:
+    case BoundaryPolicy::AfterAcquire:
+      presentDequeuedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
+      break;
+    case BoundaryPolicy::Disabled:
+      break;
   }
   const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
   // TLA+: PresentFrameLatency / AppWaitReturnSafe

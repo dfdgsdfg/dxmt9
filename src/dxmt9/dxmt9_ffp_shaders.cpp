@@ -73,6 +73,8 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasNormal);
   hash *= 1099511628211ull;
+  hash ^= static_cast<u64>(layout.hasPointSize);
+  hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasBlendWeight);
   hash *= 1099511628211ull;
   hash ^= static_cast<u64>(layout.hasBlendIndices);
@@ -85,6 +87,8 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   hash *= 1099511628211ull;
   hash ^= layout.normalOffset;
   hash *= 1099511628211ull;
+  hash ^= layout.pointSizeOffset;
+  hash *= 1099511628211ull;
   hash ^= layout.blendWeightOffset;
   hash *= 1099511628211ull;
   hash ^= layout.blendWeightComponents;
@@ -94,10 +98,45 @@ u64 hashFixedFunctionLayout(const FixedFunctionVertexLayout& layout) {
   for (size_t i = 0; i < layout.hasTexcoord.size(); ++i) {
     hash ^= static_cast<u64>(layout.hasTexcoord[i]);
     hash *= 1099511628211ull;
+    hash ^= layout.texcoordComponents[i];
+    hash *= 1099511628211ull;
     hash ^= layout.texcoordOffset[i];
     hash *= 1099511628211ull;
   }
   return hash;
+}
+
+u32 floatDeclTypeComponents(u32 type) {
+  switch (type) {
+    case kD3DDeclTypeFloat1:
+      return 1;
+    case kD3DDeclTypeFloat2:
+      return 2;
+    case kD3DDeclTypeFloat3:
+      return 3;
+    case kD3DDeclTypeFloat4:
+      return 4;
+    default:
+      return 0;
+  }
+}
+
+std::string texcoordLoadExpression(u32 offset, u32 components) {
+  switch (components) {
+    case 1:
+      return "float4(dxmt9_load_f32(stream0, base + " +
+             std::to_string(offset) + "u), 0.0f, 1.0f, 1.0f)";
+    case 3:
+      return "float4(dxmt9_load_f32x3(stream0, base + " +
+             std::to_string(offset) + "u), 1.0f)";
+    case 4:
+      return "dxmt9_load_f32x4(stream0, base + " +
+             std::to_string(offset) + "u)";
+    case 2:
+    default:
+      return "float4(dxmt9_load_f32x2(stream0, base + " +
+             std::to_string(offset) + "u), 1.0f, 1.0f)";
+  }
 }
 
 std::string materialSourceExpr(u32 mode, const char* materialField) {
@@ -206,6 +245,10 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
                  (element.type == kD3DDeclTypeFloat3 || element.type == kD3DDeclTypeFloat4)) {
         layout.hasNormal = true;
         layout.normalOffset = element.offset;
+      } else if (element.usage == kD3DDeclUsagePSize && element.usageIndex == 0 &&
+                 element.type == kD3DDeclTypeFloat1) {
+        layout.hasPointSize = true;
+        layout.pointSizeOffset = element.offset;
       } else if (element.usage == kD3DDeclUsageBlendWeight && element.usageIndex == 0 &&
                  element.type <= kD3DDeclTypeFloat4) {
         layout.hasBlendWeight = true;
@@ -215,9 +258,13 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
                  element.type == kD3DDeclTypeUByte4) {
         layout.hasBlendIndices = true;
         layout.blendIndicesOffset = element.offset;
-      } else if (element.usage == kD3DDeclUsageTexcoord && element.usageIndex < kMaxTextureStages &&
-                 element.type == kD3DDeclTypeFloat2) {
+      } else if (element.usage == kD3DDeclUsageTexcoord && element.usageIndex < kMaxTextureStages) {
+        const u32 components = floatDeclTypeComponents(element.type);
+        if (components == 0) {
+          continue;
+        }
         layout.hasTexcoord[element.usageIndex] = true;
+        layout.texcoordComponents[element.usageIndex] = components;
         layout.texcoordOffset[element.usageIndex] = element.offset;
       }
     }
@@ -257,6 +304,12 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
     offset += 12u;
   }
 
+  if ((fvf & kFvfPSize) != 0) {
+    layout.hasPointSize = true;
+    layout.pointSizeOffset = offset;
+    offset += 4u;
+  }
+
   if ((fvf & kFvfDiffuse) != 0) {
     layout.hasDiffuse = true;
     layout.diffuseOffset = offset;
@@ -269,11 +322,13 @@ std::optional<FixedFunctionVertexLayout> decodeFixedFunctionVertexLayout(const V
   const u32 texCount = (fvf & kFvfTexCountMask) >> kFvfTexCountShift;
   if (texCount > 0) {
     for (u32 i = 0; i < std::min<u32>(texCount, kMaxTextureStages); ++i) {
-      if (fvfTexcoordSize(fvf, i) >= 2u) {
+      const u32 components = fvfTexcoordSize(fvf, i);
+      if (components >= 1u) {
         layout.hasTexcoord[i] = true;
+        layout.texcoordComponents[i] = components;
         layout.texcoordOffset[i] = offset;
       }
-      offset += fvfTexcoordSize(fvf, i) * 4u;
+      offset += components * 4u;
     }
   } else {
     for (u32 i = 0; i < texCount; ++i) {
@@ -311,8 +366,10 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       const u32 texCoordGen = key.texCoordGen[stage] & kTciGenMask;
       shader << "  float4 dxmt9_texcoord" << stage << " = float4(0.0f, 0.0f, 1.0f, 1.0f);\n";
       if (layout && texCoordIndex < layout->hasTexcoord.size() && layout->hasTexcoord[texCoordIndex]) {
-        shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_load_f32x2(stream0, base + "
-               << layout->texcoordOffset[texCoordIndex] << "u), 1.0f, 1.0f);\n";
+        shader << "  dxmt9_texcoord" << stage << " = "
+               << texcoordLoadExpression(layout->texcoordOffset[texCoordIndex],
+                                          layout->texcoordComponents[texCoordIndex])
+               << ";\n";
       }
       if (texCoordGen == kTciCameraSpacePosition && !(layout && layout->preTransformed)) {
         shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_cameraPosition.xyz, 1.0f);\n";
@@ -407,7 +464,14 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
     emitStageTexcoords(out);
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
-    if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
+    if (shaders::vsoutEmitPointSize()) {
+      if (layout->hasPointSize) {
+        out << "  out.pointSize = dxmt9_load_f32(stream0, base + "
+            << layout->pointSizeOffset << "u);\n";
+      } else {
+        out << "  out.pointSize = 1.0;\n";
+      }
+    }
   } else if (layout) {
     emitVertexSig(/*withStream=*/true);
     out << "  (void)vsConsts;\n";
@@ -537,12 +601,19 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  float3 dxmt9_lightingNormal = dxmt9_cameraUnitNormal;\n";
     emitStageTexcoords(out);
     if (shaders::vsoutEmitFogFactor()) {
-      out << "  float dxmt9_fogDepth = ffpVs.rangeFog != 0u ? length(dxmt9_cameraPosition.xyz) : dxmt9_cameraPosition.z;\n";
+      out << "  float dxmt9_fogDepth = ffpVs.rangeFog != 0u ? length(dxmt9_cameraPosition.xyz) : fabs(dxmt9_cameraPosition.z);\n";
       out << "  out.fogFactor = dxmt9_compute_fog_factor(ffpVs.fogMode, dxmt9_fogDepth,\n";
       out << "                                           ffpVs.fogStart, ffpVs.fogEnd,\n";
       out << "                                           ffpVs.fogDensity);\n";
     }
-    if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
+    if (shaders::vsoutEmitPointSize()) {
+      if (layout->hasPointSize) {
+        out << "  out.pointSize = dxmt9_load_f32(stream0, base + "
+            << layout->pointSizeOffset << "u);\n";
+      } else {
+        out << "  out.pointSize = 1.0;\n";
+      }
+    }
   } else {
     emitVertexSig(/*withStream=*/false);
     out << "  (void)vsConsts; (void)drawVolatile;\n";

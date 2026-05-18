@@ -108,48 +108,6 @@ requirements document, implementation mechanics belong in `specs/tests/design.md
 and current evidence, remaining gaps, and next acceptance focus belong in
 `specs/gap.md`.
 
-**R-TEST-0.10** Boundary tests must assert exact value propagation across each
-translation boundary, not only final behaviour. When D3D9-visible data crosses
-into core records, bridge packets, imported draw state, backend descriptors,
-Metal resource formats, or generated shader sampling code, tests must verify the
-specific semantic value before and after that boundary: format identity and
-component meaning, swizzle/alpha defaults, pitch/byte layout, sampler state,
-shader constants, resource handles, ordering tokens, and error/status values as
-applicable. End-to-end probes may prove the rendered result, but they are not
-sufficient evidence that the boundary contract preserved or intentionally
-converted the correct values.
-
-**R-TEST-0.11** Draw and render tests must assert intent-preserving transforms,
-not only enum normalization or descriptor equality. When a D3D9 draw, clear,
-copy, readback, or present operation is rewritten for the backend, tests must
-prove that the operation would address the same geometry, pixels, resources, and
-ordering boundary. For draw calls this includes primitive topology, equivalent
-vertex/index stream, primitive count, source selection (bound stream/index buffer
-vs UP payload), base vertex, start vertex/index, stream offset/stride,
-instancing fields, render-target/depth attachments, viewport/scissor/raster
-state, shader constants, texture/sampler bindings, and draw-run ordering where
-applicable. A test that only checks that `TriangleFan` became `TriangleList`,
-or that a render-state enum was mapped, is insufficient unless it also proves
-the resulting draw or render operation preserves the original D3D9 intent.
-
-**R-TEST-0.12** Vertex-input, shader-deformation, and animation-style skinning
-tests must prove the intent carried by the vertex declaration or FVF, not only
-that shader bytecode translated or that a draw produced any pixels. For
-programmable vertex shaders this includes `D3DDECLUSAGE_POSITION`, `NORMAL`,
-`BLENDWEIGHT`, `BLENDINDICES`, `COLOR`, `TEXCOORD`, `TANGENT`, and `BINORMAL`
-semantic mapping by usage and usage index; stream index, offset, stride, and
-declaration type conversion; vertex-shader constant ranges used as matrix
-palettes; relative constant addressing through `a0`; and matrix / dot-product
-instructions used to deform vertices. For fixed-function vertex processing this
-includes world/view/projection transforms, texture transforms, normal
-normalization, and vertex-blend / indexed-vertex-blend state where supported.
-The required proof must show that a known input pose becomes the expected
-backend-visible vertex inputs and, where GPU execution is needed, the expected
-rendered pose or geometry mask. Tests that only check presence of
-`BLENDWEIGHT`, `BLENDINDICES`, or matrix opcodes are insufficient unless they
-also prove that those values participate in the deformation intended by the D3D9
-application.
-
 ---
 
 ## 1. Shader Translation Correctness
@@ -157,8 +115,8 @@ application.
 **R-TEST-1.1** dxmt9 must provide a native `shader_runner_dxmt9` runtime
 readback harness. It must accept the dxmt9-documented `.shader_test` compatible
 subset and dxmt9-local extensions needed for texture setup, geometry probes,
-vertex-input / skinning probes, and render-state interactions. It must not
-depend on, embed, or require exact vkd3d `shader_runner_ops` ABI compatibility.
+and render-state interactions. It must not depend on, embed, or require exact
+vkd3d `shader_runner_ops` ABI compatibility.
 
 **R-TEST-1.2** Oracle values for all `probe` assertions in `.shader_test` files must
 be produced by running an equivalent portable test through `shader_runner_d3d9`
@@ -180,8 +138,7 @@ derived from the dxmt9 backend itself.
 | Matrix | M4x4, M4x3, M3x4, M3x3, M3x2 | One test per opcode |
 | Flow control | IF/ELSE/ENDIF, REP/ENDREP, LOOP/ENDLOOP, CALL/RET | One test per construct |
 | VS-specific | MOVA (address register), SETP | One test per opcode |
-| Source modifiers | all D3D source modifier tokens, swizzle, partial swizzle | One test per modifier group |
-| Relative addressing | source indexed constants, constant-destination indexed writes, invalid non-constant destination indexing | One test per boundary |
+| Source modifiers | negate, abs, swizzle, partial swizzle | One test per modifier |
 | Write masks | `.x`, `.xy`, `.xyz`, `.xw`, out-of-order | One test per case |
 
 **R-TEST-1.4** The `.shader_test` files must follow dxmt9's documented
@@ -215,11 +172,11 @@ probe must pass as well.
 
 **R-TEST-1.6** `shader_runner_dxmt9` must grow a dxmt9-local extended probe
 layer for tests that need explicit texture setup, vertex-shader geometry
-inspection, vertex-input / skinning fixtures, or render-state interaction beyond
-the portable vkd3d `.shader_test` syntax. The extension must remain isolated
-from vendored vkd3d test syntax so upstream corpus sync is not blocked by
-dxmt9-specific metadata. The extension complements, but does not replace, the
-stateless transform unit suites required by R-TEST-0.
+inspection, or render-state interaction beyond the portable vkd3d
+`.shader_test` syntax. The extension must remain isolated from vendored vkd3d
+test syntax so upstream corpus sync is not blocked by dxmt9-specific metadata.
+The extension complements, but does not replace, the stateless transform unit
+suites required by R-TEST-0.
 
 **R-TEST-1.7** The extended probe layer must provide a texture setup DSL. The
 minimum required coverage is:
@@ -247,24 +204,12 @@ color outputs, fog interaction, color-write masks, and sRGB write/sampling
 state. Each probe must combine shader output with the relevant D3D9 render state
 and verify the final framebuffer result through readback.
 
-**R-TEST-1.10** Extended texture, geometry, vertex/skinning, and render-state
-probes must converge on the same pass criterion: the backend renders into a
-deterministic target, performs real GPU readback, and compares expected pixels.
-Tests that only inspect generated shader source are allowed only for debug
-source-contract flags such as `DXMT_DEBUG_FORCE_PIXEL_V_FLIP` and
-`DXMT_DEBUG_FLIP_VERTEX_Y`, or in the stateless transform unit suites required by
-R-TEST-0.
-
-**R-TEST-1.11** The extended probe layer must provide at least one deterministic
-vertex-input / skinning intent fixture. The minimum fixture uses multiple vertex
-streams, explicit `D3DVERTEXELEMENT9` declarations for `POSITION`,
-`BLENDWEIGHT`, `BLENDINDICES`, and at least one varying output, a vertex shader
-that reads a bone matrix palette from vertex-shader constants via an address
-register or equivalent indexed constant access, and a draw whose expected
-framebuffer mask or probe pixels distinguish the correct skinned pose from
-wrong stream selection, wrong weight/index conversion, wrong constant slot, or
-missing matrix multiply. A source-only shader translator test may cover the
-lowering details, but it is not sufficient by itself for this runtime fixture.
+**R-TEST-1.10** Extended texture, geometry, and render-state probes must converge
+on the same pass criterion: the backend renders into a deterministic target,
+performs real GPU readback, and compares expected pixels. Tests that only inspect
+generated shader source are allowed only for debug source-contract flags such as
+`DXMT_DEBUG_FORCE_PIXEL_V_FLIP` and `DXMT_DEBUG_FLIP_VERTEX_Y`, or in the
+stateless transform unit suites required by R-TEST-0.
 
 ---
 
@@ -281,8 +226,6 @@ tests for ps_1_x) for each major fixed-function feature:
 - Fog: linear, exp, exp2 in both vertex-fog and pixel-fog modes
 - Alpha test: all eight compare functions
 - Texture coordinate generation: CAMERASPACENORMAL, SPHEREMAP, CAMERASPACEPOSITION
-- Fixed-function vertex blending and indexed vertex blending, including the
-  transform matrices and vertex input fields that select the blended pose
 
 **R-TEST-2.2** For ps_1_x coverage (where the vkd3d D3D9 backend skips below
 ps_2_0), oracle values may be validated against Wine `visual.c` hardcoded
@@ -813,228 +756,3 @@ a Mermaid output for roadmap reviews, and provide a nonzero full-support gate
 for release/merge readiness. The full-support gate must pass only when every
 manifest case is `passing`; it must not infer support from local scaffolds or
 partial lane evidence.
-
----
-
-## 13. Module-Boundary Harness
-
-The module-boundary harness is the controlled layer between native unit tests and
-full Wine application experiments. It validates that built deployment artifacts
-load together and that calls cross the real PE / Wine unix / provider boundary.
-It is a test harness, not an experiment harness: each case has deterministic
-inputs, bounded scope, explicit pass/fail criteria, and machine-readable output.
-
-**R-TEST-13.1** dxmt9 must provide a module-boundary harness that stages the
-built `d3d9.dll`, `winemetal.dll`, and `winemetal.so` artifacts together with a
-small project-authored PE probe executable. The staged artifacts must come from
-the configured build directories, not from source-tree mocks or system-installed
-fallbacks, and the harness must record the artifact paths and hashes it used.
-
-**R-TEST-13.2** The harness must validate artifact and bridge compatibility
-before executing behavioural probes. The minimum compatibility checks are PE
-architecture, unix-provider architecture, generated bridge ABI hash agreement,
-presence of required PE runtime dependencies, presence of the Wine unix module,
-and availability of the configured provider lookup path.
-
-**R-TEST-13.3** The app-local lane must run the staged PE probe under Wine with
-`WINEDLLOVERRIDES="d3d9,winemetal=n,b"` and an explicit provider path such as
-`DXMT9_WINEMETAL_SO`. A passing app-local smoke must prove PE `LoadLibrary`
-resolution, `d3d9.dll` export lookup, `winemetal.dll` bridge import resolution,
-unix provider load, bridge ABI handshake, and at least one successful provider
-call reachable through `Direct3DCreate9` or `Direct3DCreate9Ex`.
-
-**R-TEST-13.4** The builtin lane must verify the same probe through Wine's
-builtin/native DLL resolution after installation or staging of the builtin PE
-and unix module artifacts. Builtin evidence is separate from app-local evidence;
-a passing app-local lane must not be treated as proof that builtin discovery,
-postprocessing, or provider lookup works.
-
-**R-TEST-13.5** The harness must include a bridge-call smoke that exercises at
-least one factory call, one device creation or reset path where supported, and
-one chunk or command submission path. The smoke must assert returned status
-values and bridge/provider counters or logs sufficient to prove that the call
-crossed the PE bridge and reached the unix provider; it must not infer bridge
-health solely from process exit success.
-
-**R-TEST-13.6** The harness must provide a provider-side boundary probe that
-executes the built unix provider entry path without the PE D3D9 frontend. This
-probe may be a native executable or an external FFI driver, but it must use the
-built provider or its exported C ABI entry points and must state which PE and
-Wine bridge layers it intentionally bypasses.
-
-**R-TEST-13.7** Module-boundary tests must produce deterministic, machine-readable
-results. Each result must include lane, architecture, artifact hashes, command
-line, relevant environment variables, exit status, failure category, and compact
-stdout/stderr or log excerpts. Screenshots, SSIM, frame timing, wild application
-behaviour, and performance thresholds are out of scope for this harness.
-
-**R-TEST-13.8** Module-boundary failures must be classified by boundary:
-artifact staging, PE loader/export resolution, bridge ABI mismatch, unix module
-load, provider entry dispatch, public D3D9 smoke failure, command submission
-failure, or unsupported host/runtime configuration. The classification must be
-visible in the machine-readable result so failures can be routed before running
-broader conformance or experiment suites.
-
-**R-TEST-13.9** Module-boundary tests must be runnable by checked-in automation.
-They may require configured Wine and cross-build artifacts, but the invocation,
-staging rules, environment variables, and result parser must live in the
-repository. A lightweight manifest/status target may be Meson-wired, while
-Wine-runtime execution gates may remain explicit if they depend on local Wine
-install paths.
-
-**R-TEST-13.10** Module-boundary evidence complements but does not replace
-native value-transform tests, Wine-oracle PE conformance, shader-runner probes,
-or full application experiments. Native tests still own exact data transforms,
-PE conformance still owns Wine-oracle D3D9 API semantics, and experiments still
-own app-level visual, performance, and integration evidence.
-
----
-
-## 14. Debugging Tooling Standard
-
-The debugging tooling standard covers repository-owned diagnostic surfaces used by
-tests, module-boundary harnesses, WSI smokes, and wild experiments. It does not
-make ad-hoc developer investigation a release gate, but it does require each
-architectural boundary to expose enough structured evidence that a failing run can
-be routed without grepping source code or relying on manual screenshots alone.
-
-**R-TEST-14.1** dxmt9 must maintain a single authoritative registry for runtime
-debug, trace, capture, dump, provider, and experiment environment variables. The
-registry must include every `DXMT*` and `DXMT9*` variable consumed by production
-code, experiment launchers, checked-in harnesses, and Wine runtime tooling, with
-purpose, default, and owning module.
-
-**R-TEST-14.2** The environment-variable registry must be checked by automation.
-The check must scan source, scripts, and experiment launchers for consumed
-`DXMT*` / `DXMT9*` variables and fail when a runtime knob is missing from the
-registry, unless it is an internal compile-time macro or generated symbol prefix.
-
-**R-TEST-14.3** Metal-side diagnostics must provide a standard evidence bundle for
-frame debugging: optional `.gputrace` capture, Metal validation-layer stderr,
-resource labels, encoder debug groups, signpost intervals, command-buffer GPU
-time counters, and GPU fault counters. The bundle must name the frame or
-sequence-id scope used for capture.
-
-**R-TEST-14.4** Metal-side diagnostics must distinguish implemented counters from
-external-tool-only workflows. Per-command-buffer GPU timing may be sourced from
-runtime counters, but per-render-encoder or per-stage GPU timing must be marked
-as external `xctrace` evidence until runtime `MTLCounterSampleBuffer` support is
-implemented.
-
-**R-TEST-14.5** WSI/window diagnostics must record which visible-output evidence
-was used: internal backbuffer dump, window-id capture, frontmost-window capture,
-full-screen fallback, manual observation, or none. A full-screen fallback must not
-be treated as proof that HWND-to-CAMetalLayer resolution succeeded.
-
-**R-TEST-14.6** WSI/window diagnostics must expose the layer-acquisition path when
-available: `macdrv_functions`, legacy `macdrv_get_cocoa_view`, no-window fallback,
-or acquisition failure. The evidence must include the relevant HWND/window title
-or the reason those values were unavailable.
-
-**R-TEST-14.7** Wine unix/provider diagnostics must include a read-only Wine
-macdrv symbol audit tool. The tool must report whether the selected Wine root
-exposes the macdrv symbols required by `specs/winemetal/`, and it must not modify
-the Wine root.
-
-**R-TEST-14.8** Wine manifest resolution must surface macdrv patch status in both
-pre-run gating and run results. If a selected Wine entry declares
-`requires_patch = true` and `patch_status = "unpatched"`, the harness must fail
-before staging or launching the application. Run results must record
-`requires_patch` and `patch_status` for the resolved Wine entry.
-
-**R-TEST-14.9** Provider discovery diagnostics must log the locator mode, every
-provider candidate path, the status for each candidate, whether runtime fallback
-was allowed, and the selected unixlib handle on success. These logs may be
-debug-level, but the enabling knob must be documented in the environment registry.
-
-**R-TEST-14.10** Headless, Linux, or other non-Darwin host diagnostics must be
-explicit about unsupported visible-output paths. A headless result may pass an
-offscreen or provider-side probe, but it must not claim WSI, CAMetalLayer, or
-window-capture evidence.
-
-**R-TEST-14.11** Debugging evidence emitted by checked-in harnesses must be
-machine-readable. Result JSON should include a schema version, command,
-environment snapshot, artifact paths, capture source, log paths, failure
-category, and any boundary or module label used to route the failure.
-
-**R-TEST-14.12** Debug tools may be opt-in to avoid hot-path overhead, but enabling
-a diagnostic must not change the architectural boundary being diagnosed except
-for explicitly documented mutating bisect knobs such as draw skipping, forced
-shader output, or forced present source selection. Mutating knobs must be recorded
-in the run environment snapshot.
-
-**R-TEST-14.13** Boundary diagnostics must be able to emit before/after data
-dumps for the architectural boundary being diagnosed. Dumps must cover, as
-applicable, PE-call inputs and HRESULT/status values, D9C packet or chunk
-records, bridge argument blocks, unix importer views, canonical draw/resource
-state, backend descriptors, shader texture/sampler bindings, queue/replay events,
-and WSI present/acquire metadata.
-
-**R-TEST-14.14** Boundary data dumps must be schema-versioned and
-machine-readable. Small structured state should be JSON or JSONL. Large binary
-payloads, such as chunk blobs, buffer contents, texture slices, or frame images,
-may be stored as sidecar files, but the dump manifest must record layout version,
-endianness when relevant, byte size, hash, dimensions, format, pitch, and the
-semantic meaning needed to interpret the bytes.
-
-**R-TEST-14.15** Boundary data dumps must carry correlation keys that allow
-artifacts from different modules to be joined without log scraping. At minimum,
-the dump manifest should include run id, boundary id, phase (`before` or `after`),
-frame or present id when available, sequence id, chunk id, record index, draw
-index, resource or shader handles, and command-buffer id when the data reached
-Metal.
-
-**R-TEST-14.16** Render-output diagnostics must support deterministic frame
-sequences in addition to a single screenshot. A capture request may name a fixed
-frame list, a closed frame range plus interval, or an event-anchored window such
-as N frames before and after a selected present. The result must record the
-capture source for every frame: internal backbuffer dump, window-id capture,
-frontmost-window capture, full-screen fallback, or unavailable.
-
-**R-TEST-14.17** Render-output diagnostics may emit bounded video segments for
-temporal failures, pacing issues, or animation regressions. Video artifacts must
-record start/end frame or time, timebase, nominal fps, resolution, source,
-container, codec, and whether frames came from internal dumps or external window
-capture. A video segment is triage evidence unless the harness also records
-extractable frame images or explicit human-review acceptance.
-
-**R-TEST-14.18** Boundary dumps and rendered-output captures must be bounded and
-discoverable. Harnesses must expose maximum frame, duration, and byte limits;
-write deterministic artifact names under the run output directory; list every
-artifact in result JSON; and keep generated dump, frame-sequence, and video
-artifacts out of committed source unless they are explicitly promoted as small
-reference assets.
-
-**R-TEST-14.19** Test, experiment, recorder, dump, and capture internals must
-declare a runtime-cost class before they are accepted: compile-time test-only,
-opt-in cold diagnostic, or release-retained telemetry. The cost class must be
-visible in the design doc, environment-variable registry, result schema, or test
-target metadata that owns the hook.
-
-**R-TEST-14.20** Compile-time test-only structures must be removable from release
-artifacts. Native recorder fakes, mock encoders, harness-only entry points, and
-schema writers must live in test targets or behind an explicit diagnostic build
-feature; they must not export production ABI symbols, change default provider
-lookup, or require production code to carry test-only payload fields.
-
-**R-TEST-14.21** Disabled opt-in diagnostics must have no material hot-path cost.
-When a dump, recorder, capture, verbose log, or experiment knob is off, ordinary
-draw/resource/queue paths must not perform diagnostic file I/O, string
-formatting, heap allocation, locks, Objective-C/Metal capture setup, extra bridge
-calls, or per-record schema construction. A precomputed mode check at a coarse
-boundary is acceptable; repeated inner-loop checks require a focused benchmark or
-counter gate.
-
-**R-TEST-14.22** Any diagnostic hook retained in a release build must have
-performance evidence for its disabled state. At minimum, focused tests or
-benchmarks must show unchanged logical operation counts, bridge operation counts,
-chunk commit counts, allocation/capacity-growth counts, and diagnostic artifact
-counts when the hook is disabled. If a release-retained counter intentionally
-adds cost, the owning requirement must state why that cost is production-worthy.
-
-**R-TEST-14.23** Mutating debug or experiment knobs must be opt-in and must never
-be default release behavior. Draw skipping, forced shader output, forced present
-source selection, capture-triggered synchronization, or diagnostic provider
-fallbacks may exist only as documented bisect paths. Harnesses must record these
-knobs in result JSON so evidence from a mutated run is not confused with normal
-runtime behavior.

@@ -2,7 +2,7 @@
 
 This spec governs how dxmt9 manages the **non-source artifacts** that wild
 experiments need to run: the Wine runtime binary, the per-experiment Wine
-prefix, and the externally-installed app binaries (e.g. SFIV or 3DMark).
+prefix, and the externally-installed app binaries (e.g. SFIV, Anno 1404).
 
 It is a sibling to `specs/experiments/requirements.md` (which covers what an
 experiment is and how its pass criteria are evaluated). This document covers
@@ -49,7 +49,7 @@ Reason: keeps the experiment namespace cohesive and matches existing
 | Path | Committed? | Purpose |
 |---|---|---|
 | `experiments/apps/` | yes | Existing — small fixture EXEs (D9VK, BasicHLSL). Unchanged. |
-| `experiments/apps_3rd/` | no (gitignored) | New — externally-installed app binaries (SFIV, 3DMark, etc.). One subdirectory per app. |
+| `experiments/apps_3rd/` | no (gitignored) | New — externally-installed app binaries (SFIV, Anno 1404, etc.). One subdirectory per app. |
 | `experiments/prefixs/` | no (gitignored) | New — per-experiment Wine prefixes. One subdirectory per app. |
 | `experiments/wine/` | mixed | New — manifest committed; downloaded Wine bundles gitignored. |
 | `experiments/wine/manifest.toml` | yes | New — Wine root catalogue (see §3). |
@@ -212,7 +212,13 @@ migrated automatically. Each affected experiment is converted by:
 **R-RT-7.2** SFIV is the first experiment converted (this spec's driving
 case) and serves as the migration template.
 
-**R-RT-7.3** No deletion of old `~/Games/_Prefixes/<name>/` is mandatory.
+**R-RT-7.3** Anno 1404 follows next. Its documented Wine-DXMT exception in
+`agents/rules/test_wild.rules.md` is preserved by setting
+`wine_id = "heroic-11.7-dxmt"` in its CATALOGUE entry — the rule of "default
+must be vanilla" is encoded as a *warning at run time*, not a hard refusal,
+so the documented exception can default to its required runtime.
+
+**R-RT-7.4** No deletion of old `~/Games/_Prefixes/<name>/` is mandatory.
 A maintainer may keep the old prefix for comparison until the new lane is
 stable.
 

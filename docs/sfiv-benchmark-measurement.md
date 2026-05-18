@@ -364,6 +364,6 @@ not surface any GPU validation issue on this workload.
 - The BB1 scene has more draws/frame than P1 (178 vs 100). If the
   scene drift is pessimistic (heavier scene running at higher fps
   is suspicious), re-run with controlled scene capture or compare
-  against Tutorial07 / 3DMark05/06 next cycle.
+  against Anno1404 / Tutorial07 next cycle.
 - R-BACK-2.34 stays ✅ in `specs/gap.md`. Cap=4 production default
   shipped.

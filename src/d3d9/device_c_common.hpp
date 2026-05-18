@@ -76,25 +76,6 @@ void releaseShadowLock(ShadowLock& lock);
 bool requiresWow64PointerShadow();
 bool isWow64NativePointerAllowed(uint64_t value);
 
-// Chunk-import sentinel rejection for wire-resolved pointers.
-//
-// `wireValuePtr<T>()` in device_c_chunk_replay.cpp resolves a wire-encoded
-// pointer through the WoW64 decode + native-pointer allowlist, then would
-// otherwise hand the raw value to a callsite that dereferences it. A
-// nullptr is a valid "detach" signal (e.g. clearing a render target slot),
-// but a sentinel such as `0x1`, a low-page address, or `~0` is not — those
-// are corruption / uninitialized-field tells that crash deep inside the
-// replay machinery instead of being rejected at the boundary.
-//
-// Returns true when `value` resolves to a pointer that must NOT be passed
-// downstream: addresses below the smallest OS page (`< 0x1000`), the
-// all-ones sentinel (`~static_cast<uint64_t>(0)` and its 32-bit
-// sign-extended cousin), and any value above `UINTPTR_MAX` on the current
-// host. A zero value is treated as the dedicated detach signal and is NOT
-// flagged as a sentinel; `wireValuePtr<T>()` already returns nullptr for
-// it without consulting this helper.
-bool isWirePointerSentinel(uint64_t value);
-
 // Wow64 lock-rect shadow allocation upper bound.
 //
 // `nativePitch` is the byte stride between rows returned by the underlying

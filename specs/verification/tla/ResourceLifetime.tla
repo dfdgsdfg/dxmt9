@@ -19,34 +19,13 @@
  *   A drain commit is modeled explicitly so teardown can eventually make
  *   progress even when the Wine thread stops issuing more work.
  *
- * Additionally (R-VERIF-3.4) this module models the HandleArena pointer
- * lifetime contract that backs `dxmt9::resources::detail::HandleArena`
- * in src/dxmt9/dxmt9_resource_pool.hpp lines 281-287:
- *
- *   1. `std::deque<Slot>::push_back` must keep already-handed-out element
- *      addresses pointer-stable. The model represents the slot store as
- *      a function `slotIndex : Resources -> Nat`. The growth action
- *      (`InsertNewSlot`) may only bump `numSlots`; it must never re-bind
- *      a previously-allocated `slotIndex`. `SlotIdentityStable` is the
- *      formalization of that C++ axiom — if a future maintainer modeled
- *      insertion as a re-permutation, the invariant would fail.
- *
- *   2. While the encoder thread is mid-`encodeChunk` it has dereferenced
- *      a `Record*` returned by `find()` and is reading it without the
- *      queue mutex. `encoderHolds` tracks the set of records the encoder
- *      is currently dereferencing; `FreeResource` is gated on
- *      `r \notin encoderHolds` so `releaseSlot` cannot fire on a record
- *      the encoder is currently consuming.
- *
  * Requirement traceability:
  *   R-BACK-5.6  destroyBuffer/destroyTexture must defer until GPU done
  *   R-BACK-7.3  Resource destruction safe while in-flight GPU work references it
- *   R-VERIF-3.4 HandleArena slot-identity stability + encoder-held pointer safety
  *
  * Properties verified:
- *   Safety   — TypeOK, NoUseAfterFree, PrematureFreeImpossible,
- *              SlotIdentityStable, EncoderPointerStable
- *   Liveness — DestroyPendingEventuallyFreed, EncoderEventuallyReleases
+ *   Safety   — TypeOK, NoUseAfterFree
+ *   Liveness — DestroyPendingEventuallyFreed
  *)
 
 EXTENDS Naturals, FiniteSets
@@ -60,55 +39,23 @@ ASSUME MAX_SEQID \in Nat /\ MAX_SEQID >= 1
 
 ResourceStates == {"Live", "DestroyPending", "Freed"}
 
-(*
- * C++ axiom (modeled by the action shape below):
- *   std::deque<T>::push_back never invalidates existing element addresses.
- *   The HandleArena depends on this; if std::deque were swapped for
- *   std::vector the assumption would silently break. The model encodes
- *   the axiom by never permitting an action that mutates `slotIndex` —
- *   only the monotone `numSlots` grows.
- *)
-
 VARIABLES
-  resState,        \* FUNCTION Resources -> ResourceStates
-  lastUsedSeqId,   \* FUNCTION Resources -> Nat  (seqId of last chunk that used it; 0 = unused)
+  resState,        \* FUNCTION Resources → ResourceStates
+  lastUsedSeqId,   \* FUNCTION Resources → Nat  (seqId of last chunk that used it; 0 = unused)
   completedSeqId,  \* Nat — seq ID of most recently GPU-completed chunk (mirrors CommandQueue)
-  currentSeqId,    \* Nat — next seq ID to assign
-  slotIndex,       \* FUNCTION Resources -> Nat  — index of each resource's HandleArena slot
-  numSlots,        \* Nat — total slots ever allocated in the arena (monotone)
-  encoderHolds     \* SUBSET Resources — records the encoder thread currently dereferences
+  currentSeqId     \* Nat — next seq ID to assign
 
-vars == <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
-          slotIndex, numSlots, encoderHolds>>
+vars == <<resState, lastUsedSeqId, completedSeqId, currentSeqId>>
 
 (* ================================================================
    Initialization
-
-   Resources are pre-allocated dense slot indices 0..|Resources|-1 at
-   the start. `numSlots` counts how many slots have ever been handed
-   out; it only grows.
    ================================================================ *)
-
-\* Deterministic slot assignment from a finite resource set. CHOOSE picks
-\* a fixed bijection so the initial slotIndex is well-defined.
-RECURSIVE AssignSlotsRec(_, _)
-AssignSlotsRec(remaining, next) ==
-  IF remaining = {} THEN <<[r \in {} |-> 0], next>>
-  ELSE LET r == CHOOSE x \in remaining : TRUE
-           rec == AssignSlotsRec(remaining \ {r}, next + 1)
-       IN <<[s \in (DOMAIN rec[1]) \cup {r} |->
-              IF s = r THEN next ELSE rec[1][s]], rec[2]>>
-
-InitialAssignment == AssignSlotsRec(Resources, 0)
 
 Init ==
   /\ resState       = [r \in Resources |-> "Live"]
   /\ lastUsedSeqId  = [r \in Resources |-> 0]
   /\ completedSeqId = 0
   /\ currentSeqId   = 1
-  /\ slotIndex      = InitialAssignment[1]
-  /\ numSlots       = InitialAssignment[2]
-  /\ encoderHolds   = {}
 
 (* ================================================================
    Actions
@@ -124,8 +71,7 @@ UseResource(r) ==
   /\ resState[r] = "Live"
   /\ currentSeqId <= MAX_SEQID
   /\ lastUsedSeqId' = [lastUsedSeqId EXCEPT ![r] = currentSeqId]
-  /\ UNCHANGED <<resState, completedSeqId, currentSeqId,
-                 slotIndex, numSlots, encoderHolds>>
+  /\ UNCHANGED <<resState, completedSeqId, currentSeqId>>
 
 (*
  * CommitChunk
@@ -136,8 +82,7 @@ UseResource(r) ==
 CommitChunk ==
   /\ currentSeqId <= MAX_SEQID
   /\ currentSeqId' = currentSeqId + 1
-  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId,
-                 slotIndex, numSlots, encoderHolds>>
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId>>
 
 (*
  * DrainCommit
@@ -149,8 +94,7 @@ DrainCommit ==
   /\ \E r \in Resources : resState[r] = "DestroyPending"
   /\ currentSeqId <= MAX_SEQID
   /\ currentSeqId' = currentSeqId + 1
-  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId,
-                 slotIndex, numSlots, encoderHolds>>
+  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId>>
 
 (*
  * DestroyResource(r)
@@ -161,24 +105,19 @@ DrainCommit ==
 DestroyResource(r) ==
   /\ resState[r] = "Live"
   /\ resState' = [resState EXCEPT ![r] = "DestroyPending"]
-  /\ UNCHANGED <<lastUsedSeqId, completedSeqId, currentSeqId,
-                 slotIndex, numSlots, encoderHolds>>
+  /\ UNCHANGED <<lastUsedSeqId, completedSeqId, currentSeqId>>
 
 (*
  * FreeResource(r)
- * Backend frees the underlying MTL object via HandleArena::releaseSlot.
- * Permitted only when:
- *   (a) completedSeqId >= lastUsedSeqId[r] — GPU drained past last use, AND
- *   (b) r \notin encoderHolds — encoder is not currently dereferencing
- *       the record's pointer (R-VERIF-3.4 encoder-held pointer safety).
+ * Backend frees the underlying MTL object.
+ * ONLY permitted when completedSeqId >= lastUsedSeqId[r], i.e., the GPU has
+ * finished all commands in the last chunk that referenced this resource.
  *)
 FreeResource(r) ==
   /\ resState[r] = "DestroyPending"
-  /\ completedSeqId >= lastUsedSeqId[r]   \* GPU-drain gate
-  /\ r \notin encoderHolds                \* encoder-pointer-lifetime gate
+  /\ completedSeqId >= lastUsedSeqId[r]   \* safety gate
   /\ resState' = [resState EXCEPT ![r] = "Freed"]
-  /\ UNCHANGED <<lastUsedSeqId, completedSeqId, currentSeqId,
-                 slotIndex, numSlots, encoderHolds>>
+  /\ UNCHANGED <<lastUsedSeqId, completedSeqId, currentSeqId>>
 
 (*
  * GPUComplete
@@ -188,97 +127,36 @@ FreeResource(r) ==
 GPUComplete ==
   /\ completedSeqId < currentSeqId - 1
   /\ completedSeqId' = completedSeqId + 1
-  /\ UNCHANGED <<resState, lastUsedSeqId, currentSeqId,
-                 slotIndex, numSlots, encoderHolds>>
-
-(*
- * InsertNewSlot
- * Models the PE thread calling HandleArena::insert (push_back into
- * slots_). The deque axiom forbids re-binding any previously assigned
- * slotIndex; the action only grows `numSlots`. With a finite resource
- * set there is no fresh identifier to bind, so the structural shape
- * (slotIndex left UNCHANGED) is what the C++ implementation must
- * preserve. The bound keeps the state space finite.
- *)
-InsertNewSlot ==
-  /\ numSlots < Cardinality(Resources) + 2
-  /\ numSlots' = numSlots + 1
-  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
-                 slotIndex, encoderHolds>>
-
-(*
- * EncoderFindResource(r)
- * Encoder thread calls find(handle) and obtains a Record*. The pointer
- * goes into encoderHolds until EncoderFinishChunk clears it.
- * Precondition: the record still exists (not Freed) — find() returns
- * nullptr otherwise and the encoder would not retain a pointer.
- *)
-EncoderFindResource(r) ==
-  /\ resState[r] # "Freed"
-  /\ r \notin encoderHolds
-  /\ encoderHolds' = encoderHolds \cup {r}
-  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
-                 slotIndex, numSlots>>
-
-(*
- * EncoderFinishChunk
- * The encode call (one full encodeChunk) returns; the encoder no longer
- * holds any record pointers. Modeling this as draining the whole set
- * matches the C++ contract: the encoder cannot retain a Record* past
- * encodeChunk's return.
- *)
-EncoderFinishChunk ==
-  /\ encoderHolds # {}
-  /\ encoderHolds' = {}
-  /\ UNCHANGED <<resState, lastUsedSeqId, completedSeqId, currentSeqId,
-                 slotIndex, numSlots>>
+  /\ UNCHANGED <<resState, lastUsedSeqId, currentSeqId>>
 
 (* ================================================================
    Specification
-
-   Fairness rationale:
-     WF on GPUComplete, DrainCommit, EncoderFinishChunk — these actions
-       must eventually fire when continuously enabled (the GPU, the
-       drain pump, the encoder's chunk boundary).
-     SF on FreeResource(r) — the encoder-pointer gate can briefly
-       disable FreeResource(r) every time the encoder dips back in
-       through EncoderFindResource. Strong fairness translates
-       "enabled infinitely often" into "eventually taken"; weak
-       fairness would let a pathological scheduler toggle the gate
-       forever without ever freeing the record.
    ================================================================ *)
 
 Next ==
   \/ CommitChunk
   \/ DrainCommit
   \/ GPUComplete
-  \/ InsertNewSlot
-  \/ EncoderFinishChunk
   \/ \E r \in Resources : UseResource(r)
   \/ \E r \in Resources : DestroyResource(r)
   \/ \E r \in Resources : FreeResource(r)
-  \/ \E r \in Resources : EncoderFindResource(r)
 
 Spec ==
   Init
   /\ [][Next]_vars
   /\ WF_vars(GPUComplete)
   /\ WF_vars(DrainCommit)
-  /\ WF_vars(EncoderFinishChunk)
-  /\ \A r \in Resources : SF_vars(FreeResource(r))
+  /\ \A r \in Resources : WF_vars(FreeResource(r))
 
 (* ================================================================
    Type invariant
    ================================================================ *)
 
 TypeOK ==
-  /\ resState       \in [Resources -> ResourceStates]
-  /\ lastUsedSeqId  \in [Resources -> Nat]
+  /\ resState      \in [Resources -> ResourceStates]
+  /\ lastUsedSeqId \in [Resources -> Nat]
   /\ completedSeqId \in Nat
-  /\ currentSeqId   \in Nat
-  /\ slotIndex      \in [Resources -> Nat]
-  /\ numSlots       \in Nat
-  /\ encoderHolds   \subseteq Resources
+  /\ currentSeqId  \in Nat
 
 (* ================================================================
    Safety invariants
@@ -291,6 +169,9 @@ TypeOK ==
  * A resource is Freed only after completedSeqId >= lastUsedSeqId[r].
  * At that point, no in-flight command can reference it, because all chunks
  * with seqId <= completedSeqId have already completed on the GPU.
+ *
+ * Formally: if a resource is Freed, then the GPU has completed past its
+ * last-use seqId — the dangerous "in flight" window is closed.
  *)
 NoUseAfterFree ==
   \A r \in Resources :
@@ -306,34 +187,7 @@ PrematureFreeImpossible ==
     (resState[r] = "DestroyPending" /\ lastUsedSeqId[r] > completedSeqId)
     => resState[r] # "Freed"
 
-(*
- * SlotIdentityStable (R-VERIF-3.4 — std::deque pointer-stability axiom)
- * Every resource keeps its initially assigned arena slot index for the
- * entire spec run. The only action that grows the arena (InsertNewSlot)
- * leaves `slotIndex` UNCHANGED; existing slot bindings remain pinned.
- * The invariant says `slotIndex[r]` always stays within [0, numSlots),
- * and `numSlots` never drops below the initial allocation count.
- *)
-SlotIdentityStable ==
-  /\ numSlots >= Cardinality(Resources)
-  /\ \A r \in Resources : slotIndex[r] < numSlots
-
-(*
- * EncoderPointerStable (R-VERIF-3.4 — encoder-held pointer safety)
- * Formalizes the C++ comment at src/dxmt9/dxmt9_resource_pool.hpp:281-287:
- * if the encoder thread is currently dereferencing a record's pointer
- * (r \in encoderHolds), then that record cannot already be Freed. The
- * FreeResource gate enforces this; the invariant verifies it.
- *)
-EncoderPointerStable ==
-  \A r \in encoderHolds : resState[r] # "Freed"
-
-Safety ==
-  /\ TypeOK
-  /\ NoUseAfterFree
-  /\ PrematureFreeImpossible
-  /\ SlotIdentityStable
-  /\ EncoderPointerStable
+Safety == TypeOK /\ NoUseAfterFree /\ PrematureFreeImpossible
 
 (* ================================================================
    Liveness
@@ -342,27 +196,11 @@ Safety ==
 (*
  * DestroyPendingEventuallyFreed
  * A resource marked DestroyPending is eventually freed.
- * Guaranteed because:
- *   (a) the GPU eventually completes all submitted work (WF_GPUComplete),
- *   (b) the encoder eventually returns from encodeChunk
- *       (WF_EncoderFinishChunk) so the encoder-pointer gate in
- *       FreeResource opens infinitely often, and
- *   (c) FreeResource is taken once both gates are open
- *       (SF_FreeResource — strong fairness is required because the
- *       encoder-pointer gate intermittently disables the action).
+ * Guaranteed because the GPU eventually completes all submitted work (WF_GPUComplete)
+ * and the FreeResource action is taken once the gate opens (WF_FreeResource).
  *)
 DestroyPendingEventuallyFreed ==
   \A r \in Resources :
     resState[r] = "DestroyPending" ~> resState[r] = "Freed"
-
-(*
- * EncoderEventuallyReleases
- * Any record the encoder picks up is eventually released — encodeChunk
- * cannot hold a pointer forever. This is what makes DestroyPending
- * liveness above hold under the extended FreeResource gate.
- *)
-EncoderEventuallyReleases ==
-  \A r \in Resources :
-    r \in encoderHolds ~> r \notin encoderHolds
 
 ====

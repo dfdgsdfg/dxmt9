@@ -61,6 +61,54 @@ AcquirePolicy resolveAcquirePolicy(const char* asyncEnv,
 // caches the result.
 AcquirePolicy resolveAcquirePolicyFromEnv();
 
+// Present-boundary policy. The five values collapse the previous
+// trio of static-lambda env parsers that walked
+// DXMT9_DISABLE_PRESENT_BOUNDARY /
+// DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION /
+// DXMT9_PRESENT_BOUNDARY_COMPLETION in CommandQueue, plus the
+// DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE bit consumed in the present
+// encode path. Resolution is done once per process via
+// resolveBoundaryPolicyFromEnv() and cached behind a process-wide
+// reader; branch sites read this directly instead of going through
+// scattered env-parsing lambdas.
+//
+// Priority when multiple env-vars are set simultaneously (highest
+// first): Disabled > PresentCompletion > Completion > AfterAcquire >
+// Default. This matches the pre-existing if/else order in
+// CommandQueue::presentBoundary: DXMT9_DISABLE_PRESENT_BOUNDARY=1
+// short-circuits the whole boundary; otherwise the default-true
+// PresentCompletion branch wins over Completion, which in turn wins
+// over the legacy Dequeued (presentDequeued CV) path. The
+// AfterAcquire bit is observationally a no-op when the wait branch
+// is PresentCompletion or Completion (those branches do not consult
+// presentDequeuedSeqId_), so collapsing it into the lower-priority
+// enum slot preserves behavior exactly.
+enum class BoundaryPolicy : uint32_t {
+  Default = 0,         // wait on presentDequeuedSeqId_ — note dequeued before encode.
+  AfterAcquire,        // DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE — same wait, note after encode.
+  Completion,          // DXMT9_PRESENT_BOUNDARY_COMPLETION — wait on completedSeqId_.
+  PresentCompletion,   // DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION (default on) — wait on presentCompletedSeqId_.
+  Disabled,            // DXMT9_DISABLE_PRESENT_BOUNDARY — skip the boundary altogether.
+};
+
+// Pure resolver — takes explicit env strings (nullptr / "" / "0"
+// count as "not set"). Used by CommandQueue and the spec test. Note
+// the unset-presentCompletionEnv default: when the caller passes
+// nullptr/empty for presentCompletionEnv it counts as set (matches
+// the pre-normalization default-true behavior of the historical
+// lambda).
+BoundaryPolicy resolveBoundaryPolicy(const char* disableEnv,
+                                     const char* presentCompletionEnv,
+                                     const char* completionEnv,
+                                     const char* afterAcquireEnv);
+
+// Process-once env reader; reads DXMT9_DISABLE_PRESENT_BOUNDARY /
+// DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION /
+// DXMT9_PRESENT_BOUNDARY_COMPLETION /
+// DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE via std::getenv on first call
+// and caches the result.
+BoundaryPolicy resolveBoundaryPolicyFromEnv();
+
 class PresentDrawableToken {
  public:
   PresentDrawableToken() = default;

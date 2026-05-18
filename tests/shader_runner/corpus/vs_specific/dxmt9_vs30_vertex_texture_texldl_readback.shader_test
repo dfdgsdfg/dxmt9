@@ -1,0 +1,37 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c test_vertex_texture behavior, reduced to vs_3_0 texldl sampling from core vertex texture slot 16 (D3DVERTEXTEXTURESAMPLER0 after PE mapping)
+; oracle-date: 2026-05-18
+
+[vertex shader d3dbc-hex]
+fffe0300
+05000051 a00f0000 00000000 00000000 00000000 00000000
+0200001f 80000000 900f0000
+0200001f 90000000 a00f0800
+0200001f 80000000 e00f0000
+0200001f 80010005 e00f0001
+0300005f e00f0001 a0e40000 a0e40800
+02000001 e00f0000 90e40000
+0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300
+0200001f 80010005 900f0001
+02000001 800f0800 90e40001
+0000ffff
+
+[test]
+expect-source vertex contains "texture2d<float> tex0 [[texture(0)]]"
+expect-source vertex contains "sampler samp0 [[sampler(0)]]"
+expect-source vertex contains "tex0.sample(samp0, (cFloat[0]).xy, level(cFloat[0].w))"
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-texture 0 1 1 A8R8G8B8 green
+dxmt9-sampler 16 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-bind-texture 16 0
+dxmt9-render-state zenable=off zwrite=off
+dxmt9-draw-vs-color-triangle
+probe (48, 32) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (16, 32) rgba(0.0, 0.0, 0.0, 1.0) 1

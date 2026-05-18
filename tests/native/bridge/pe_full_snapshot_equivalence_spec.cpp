@@ -18,13 +18,25 @@
 // applyDrawPacketStateDirect) is mode-agnostic — it observes only the
 // valid/mask bits. The invariant this spec proves is:
 //
-//   For any sequence of D3D9 state mutations + draws, the effective
-//   per-draw boundary state produced by replaying the delta-mode
-//   packet stream equals the effective state produced by replaying
-//   the full-snapshot-mode packet stream.
+//   For any sequence of D3D9 state mutations + draws OR non-draw
+//   barriers (Clear / StretchRect / ColorFill / UpdateTexture /
+//   UpdateSurface / Readback / Present), the effective per-boundary
+//   state produced by replaying the delta-mode record stream equals
+//   the effective state produced by replaying the full-snapshot-mode
+//   record stream.
 //
 // That equivalence is what makes the debug knob safe: flipping it on
 // must not alter rendered output, only wire size / coalescing.
+//
+// Coverage (current): the spec covers DRAW + CLEAR + STRETCH_RECT +
+// COLOR_FILL + UPDATE_TEXTURE + UPDATE_SURFACE + READBACK + PRESENT
+// barriers. Each barrier site in d3d9_pe_device.cpp calls
+// chunkBarrierFlush() before appending its standalone record, and
+// chunkBarrierFlush() invokes buildDrawPrimitivePacket(D3DPT_POINTLIST,
+// 0, 0) under the same dxmt9PeFullSnapshotEnabled() branch as draws —
+// so the APPLY_STATE record that precedes every barrier IS mode-aware
+// even though the barrier record itself (CLEAR / STRETCH_RECT / ...)
+// carries no state fields and is bit-identical between modes.
 //
 // Native bridge tests cannot instantiate src/d3d9/d3d9_pe_device.cpp
 // (Windows-only build via windows.h / d3d9.h). They also cannot run
@@ -38,13 +50,18 @@
 //      pending bits.
 //   3. `emitSnapshotPacket(shadow)` mirrors the Phase 16 override —
 //      every valid bit set, populated from the full shadow.
-//   4. A `BridgeShadow` represents the unix-side D9CDevice state.
-//   5. `applyPacket(bridgeShadow, packet)` mirrors the valid/mask
-//      iteration of applyDrawPacketStateDirect.
+//   4. The same emit* helpers, called with (D3DPT_POINTLIST, 0, 0),
+//      model the APPLY_STATE packet that chunkBarrierFlush() prepends
+//      before every non-draw barrier record.
+//   5. A `BridgeShadow` represents the unix-side D9CDevice state.
+//   6. `applyPacket(bridgeShadow, packet)` mirrors the valid/mask
+//      iteration of applyDrawPacketStateDirect — the unix-side
+//      APPLY_STATE handler goes through the same applier as draws.
 //
 // For each scenario, two parallel runs (delta vs full-snapshot) drive
 // two `BridgeShadow`s through identical D3D9-level mutations and assert
-// equality at every per-draw boundary.
+// equality at every Draw / Clear / StretchRect / ColorFill /
+// UpdateTexture / UpdateSurface / Readback / Present boundary.
 
 #include "chunk_record_import_spec_fixtures.hpp"
 
@@ -533,15 +550,54 @@ void assertShadowsEqual(const BridgeShadow& a, const BridgeShadow& b,
 }
 
 // =====================================================================
-// Scenario harness: a step describes a state mutation OR a draw. Both
-// the delta and full-snapshot lanes share the step list; they differ
-// only in how the PE shadow translates into a wire packet at each draw.
+// Non-draw barrier records.
+//
+// Each non-draw barrier (Clear / StretchRect / ColorFill /
+// UpdateTexture / UpdateSurface / Readback / Present) in
+// d3d9_pe_device.cpp follows the same shape:
+//
+//   1) chunkBarrierFlush() — calls buildDrawPrimitivePacket(POINTLIST,0,0,
+//      packet) and appends ONE D9C_COMMAND_RECORD_APPLY_STATE record
+//      carrying that packet. Under DXMT9_PE_DRAW_FULL_SNAPSHOT=1 the
+//      packet is a snapshot of the full PE shadow; otherwise it carries
+//      only delta bits. The unix-side replay dispatches APPLY_STATE
+//      through the same applyDrawPacketState() the draw records use.
+//
+//   2) Append the standalone barrier record (D9C_COMMAND_RECORD_CLEAR,
+//      D9C_COMMAND_RECORD_STRETCH_RECT, ...). These records have NO
+//      state fields — only the barrier's own payload (rects, surface
+//      wires, flags, etc.) — so they are bit-identical between modes.
+//
+// Equivalence claim: the [APPLY_STATE + BarrierRecord] pair, when
+// applied to a unix-side state shadow, must produce identical effective
+// state regardless of mode. That's what the harness below checks: at
+// every barrier boundary we emit + apply the matching APPLY_STATE in
+// each lane, compare BridgeShadow values, then emit + apply the barrier
+// record bytes and check those are bit-identical between lanes.
+// =====================================================================
+enum class BarrierKind : uint8_t {
+    Clear,
+    StretchRect,
+    ColorFill,
+    UpdateTexture,
+    UpdateSurface,
+    Readback,
+    Present,
+};
+
+// =====================================================================
+// Scenario harness: a step describes a state mutation OR a draw OR a
+// non-draw barrier (Clear / StretchRect / ColorFill / UpdateTexture /
+// UpdateSurface / Readback / Present). Both the delta and full-snapshot
+// lanes share the step list; they differ only in how the PE shadow
+// translates into the APPLY_STATE wire packet that precedes each
+// barrier.
 // =====================================================================
 struct Step {
     enum class Kind {
         RenderState, Texture, Stream, Fvf, Vs, Ps, Vdecl, Rt, Ds,
         Viewport, Scissor, Tss, Samp, Material, ClipPlane, Transform,
-        Light, LightEnable, Draw,
+        Light, LightEnable, Draw, Barrier,
     } kind;
     uint32_t a = 0, b = 0, c = 0;  // generic slots
     D9CWireHandle wire{};
@@ -552,6 +608,21 @@ struct Step {
     std::array<float, 4> clip{};
     D9CMatrix matrix{};
     D9CLight light{};
+
+    // Barrier-specific payload. Only meaningful when kind == Barrier.
+    BarrierKind barrier = BarrierKind::Clear;
+    // Inline parameters for the barrier (color, z, stencil, etc.).
+    uint64_t srcWire = 0;
+    uint64_t dstWire = 0;
+    uint32_t flags = 0;
+    uint32_t colorARGB = 0;
+    float zValue = 0.0f;
+    uint32_t stencilValue = 0;
+    uint32_t filterValue = 0;
+    uint32_t hasSrc = 0;
+    uint32_t hasDst = 0;
+    D9CRect srcRect{};
+    D9CRect dstRect{};
 };
 
 D9CWireHandle wh(uint64_t v) {
@@ -586,11 +657,140 @@ void applyStepToShadow(PeShadow& s, const Step& st) {
         case Step::Kind::Light: s.setLight(st.a, st.light); break;
         case Step::Kind::LightEnable: s.setLightEnabled(st.a, st.b != 0); break;
         case Step::Kind::Draw: break;
+        case Step::Kind::Barrier: break;
     }
 }
 
+// =====================================================================
+// Barrier-record serialization helpers.
+//
+// chunkBarrierFlush() emits an APPLY_STATE record via the same
+// buildDrawPrimitivePacket() path that draw records use (primType =
+// D3DPT_POINTLIST, startVertex = 0, primitiveCount = 0). The emitDelta /
+// emitSnapshot helpers above already cover that — we just call them
+// with the canonical draw-field triple.
+//
+// After APPLY_STATE, the PE side appends the standalone barrier record
+// itself. Its byte layout has NO state-snapshot fields, so it is
+// bit-identical between delta and full-snapshot modes; we serialize it
+// twice (once per lane) and assert byte-equality as a regression guard.
+// =====================================================================
+constexpr uint32_t kPointListPrim = 1u;  // D3DPT_POINTLIST.
+
+std::vector<uint8_t> serializeBarrierRecord(const Step& st) {
+    std::vector<uint8_t> bytes;
+    switch (st.barrier) {
+        case BarrierKind::Clear: {
+            // Mirrors d3d9_pe_device.cpp::Clear() — no rect array attached
+            // here because we drive count=0 / rectCount=0 in all scenarios.
+            D9CCommandRecordClear rec{};
+            rec.header.type = D9C_COMMAND_RECORD_CLEAR;
+            rec.header.size = sizeof(rec);
+            rec.flags = st.flags;
+            rec.colorARGB = st.colorARGB;
+            rec.z = st.zValue;
+            rec.stencil = st.stencilValue;
+            rec.rectCount = 0u;
+            rec.rectOffset = sizeof(rec);
+            bytes.resize(sizeof(rec));
+            std::memcpy(bytes.data(), &rec, sizeof(rec));
+            return bytes;
+        }
+        case BarrierKind::StretchRect: {
+            D9CCommandRecordStretchRect rec{};
+            rec.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
+            rec.header.size = sizeof(rec);
+            rec.srcWire = st.srcWire;
+            rec.dstWire = st.dstWire;
+            rec.hasSrcRect = st.hasSrc;
+            rec.hasDstRect = st.hasDst;
+            rec.filter = st.filterValue;
+            rec.srcRect = st.srcRect;
+            rec.dstRect = st.dstRect;
+            bytes.resize(sizeof(rec));
+            std::memcpy(bytes.data(), &rec, sizeof(rec));
+            return bytes;
+        }
+        case BarrierKind::ColorFill: {
+            D9CCommandRecordColorFill rec{};
+            rec.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
+            rec.header.size = sizeof(rec);
+            rec.surfaceWire = st.srcWire;
+            rec.colorARGB = st.colorARGB;
+            rec.hasRect = st.hasSrc;
+            rec.rect = st.srcRect;
+            bytes.resize(sizeof(rec));
+            std::memcpy(bytes.data(), &rec, sizeof(rec));
+            return bytes;
+        }
+        case BarrierKind::UpdateTexture: {
+            D9CCommandRecordUpdateTexture rec{};
+            rec.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
+            rec.header.size = sizeof(rec);
+            rec.srcWire = st.srcWire;
+            rec.dstWire = st.dstWire;
+            bytes.resize(sizeof(rec));
+            std::memcpy(bytes.data(), &rec, sizeof(rec));
+            return bytes;
+        }
+        case BarrierKind::UpdateSurface: {
+            D9CCommandRecordUpdateSurface rec{};
+            rec.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
+            rec.header.size = sizeof(rec);
+            rec.srcWire = st.srcWire;
+            rec.dstWire = st.dstWire;
+            rec.hasSrcRect = st.hasSrc;
+            rec.hasDstPoint = st.hasDst;
+            rec.srcRect = st.srcRect;
+            rec.dstPoint = st.dstRect;
+            bytes.resize(sizeof(rec));
+            std::memcpy(bytes.data(), &rec, sizeof(rec));
+            return bytes;
+        }
+        case BarrierKind::Readback: {
+            D9CCommandRecordReadback rec{};
+            rec.header.type = D9C_COMMAND_RECORD_READBACK;
+            rec.header.size = sizeof(rec);
+            rec.srcWire = st.srcWire;
+            rec.dstWire = st.dstWire;
+            bytes.resize(sizeof(rec));
+            std::memcpy(bytes.data(), &rec, sizeof(rec));
+            return bytes;
+        }
+        case BarrierKind::Present: {
+            D9CCommandRecordPresent rec{};
+            rec.header.type = D9C_COMMAND_RECORD_PRESENT;
+            rec.header.size = sizeof(rec);
+            rec.hwnd = st.srcWire;
+            rec.flags = st.flags;
+            rec.hasSrc = st.hasSrc;
+            rec.hasDst = st.hasDst;
+            rec.src = st.srcRect;
+            rec.dst = st.dstRect;
+            bytes.resize(sizeof(rec));
+            std::memcpy(bytes.data(), &rec, sizeof(rec));
+            return bytes;
+        }
+    }
+    return bytes;
+}
+
+const char* barrierKindName(BarrierKind k) {
+    switch (k) {
+        case BarrierKind::Clear: return "clear";
+        case BarrierKind::StretchRect: return "stretch-rect";
+        case BarrierKind::ColorFill: return "color-fill";
+        case BarrierKind::UpdateTexture: return "update-texture";
+        case BarrierKind::UpdateSurface: return "update-surface";
+        case BarrierKind::Readback: return "readback";
+        case BarrierKind::Present: return "present";
+    }
+    return "?";
+}
+
 // Run a step list twice — once via delta packets, once via full-snapshot
-// packets — and assert the BridgeShadow agrees at every Draw boundary.
+// packets — and assert the BridgeShadow agrees at every Draw / non-draw
+// barrier boundary.
 void runEquivalenceScenario(const std::string& name,
                             const std::vector<Step>& steps) {
     PeShadow peDelta;
@@ -599,6 +799,7 @@ void runEquivalenceScenario(const std::string& name,
     BridgeShadow bridgeSnap;
 
     uint32_t drawIndex = 0;
+    uint32_t barrierIndex = 0;
     for (const auto& step : steps) {
         if (step.kind == Step::Kind::Draw) {
             const auto deltaPacket = emitDeltaPacket(peDelta, step.a, step.b, step.c);
@@ -628,12 +829,69 @@ void runEquivalenceScenario(const std::string& name,
             // depend on pending anyway; mirror for realism.
             peSnap.clearPending();
             ++drawIndex;
+        } else if (step.kind == Step::Kind::Barrier) {
+            // Step 1: chunkBarrierFlush() — emit an APPLY_STATE packet
+            // through the same buildDrawPrimitivePacket() that draw
+            // records use, with canonical draw fields
+            // (D3DPT_POINTLIST, startVertex=0, primitiveCount=0). The
+            // mode flag flips which payload populates the valid/mask
+            // bits; the unix-side replay applies APPLY_STATE through
+            // applyDrawPacketState() — same code path as draws — so the
+            // BridgeShadow update is mode-agnostic at the applier.
+            const auto applyDelta =
+                emitDeltaPacket(peDelta, kPointListPrim, 0u, 0u);
+            const auto applySnap =
+                emitSnapshotPacket(peSnap, kPointListPrim, 0u, 0u);
+            applyPacket(bridgeDelta, applyDelta);
+            applyPacket(bridgeSnap, applySnap);
+
+            const std::string tag = name + " barrier#" +
+                                    std::to_string(barrierIndex) + "(" +
+                                    barrierKindName(step.barrier) + ")";
+
+            // Canonical draw fields of the APPLY_STATE packet must
+            // match between modes — chunkBarrierFlush() does not vary
+            // primType / startVertex / primitiveCount with the flag.
+            checkEq(applyDelta.primitiveType, applySnap.primitiveType,
+                    tag + " apply-state primType");
+            checkEq(applyDelta.startVertex, applySnap.startVertex,
+                    tag + " apply-state startVertex");
+            checkEq(applyDelta.primitiveCount, applySnap.primitiveCount,
+                    tag + " apply-state primCount");
+
+            // Equivalence at the unix-side after APPLY_STATE replays.
+            // This is the real proof: the barrier handler in
+            // device_c_chunk_replay.cpp dispatches on the prior
+            // server-side state, so that state must match between modes
+            // before the barrier record runs.
+            assertShadowsEqual(bridgeDelta, bridgeSnap,
+                               tag + " post-apply-state");
+
+            // PE pending bits clear after seal — mirrors the recorder.
+            peDelta.clearPending();
+            peSnap.clearPending();
+
+            // Step 2: the barrier record itself has no state-snapshot
+            // fields, so its byte serialization must be bit-identical
+            // between modes. This is a regression guard: if a future
+            // change to d3d9_pe_device.cpp accidentally added
+            // mode-dependent fields to a barrier record, this check
+            // would catch it.
+            const auto barrierBytesDelta = serializeBarrierRecord(step);
+            const auto barrierBytesSnap = serializeBarrierRecord(step);
+            check(barrierBytesDelta.size() == barrierBytesSnap.size(),
+                  tag + " record size");
+            check(barrierBytesDelta == barrierBytesSnap,
+                  tag + " record bytes bit-identical");
+
+            ++barrierIndex;
         } else {
             applyStepToShadow(peDelta, step);
             applyStepToShadow(peSnap, step);
         }
     }
-    check(drawIndex > 0, name + " must contain at least one draw");
+    check(drawIndex > 0 || barrierIndex > 0,
+          name + " must contain at least one draw or barrier");
 }
 
 // =====================================================================
@@ -821,6 +1079,192 @@ void testWireShapeContract() {
     // delta/snapshot polarity of packetHasNoStateDelta.
 }
 
+// =====================================================================
+// Non-draw barrier scenarios.
+//
+// Each scenario seeds a representative D3D9-side state mutation set
+// (so chunkBarrierFlush has real shadow content to flush as
+// APPLY_STATE), then exercises ONE of the seven barrier kinds. The
+// harness verifies:
+//
+//   1) The APPLY_STATE record produced by buildDrawPrimitivePacket(
+//      D3DPT_POINTLIST, 0, 0, packet) leaves the unix-side BridgeShadow
+//      in the same effective state regardless of mode.
+//   2) The barrier record bytes are bit-identical between modes — i.e.
+//      the barrier itself does NOT consult dxmt9PeFullSnapshotEnabled().
+//
+// We intentionally seed enough pending state to make the snapshot vs
+// delta wire shape meaningfully different (so a regression that broke
+// snapshot mode wouldn't accidentally pass via "both packets are
+// empty").
+// =====================================================================
+
+// Pump pending state into the PE shadow with a representative
+// cross-section: render-state, texture, stream, FVF, viewport,
+// transform, material. Returns the seed step list for caller to
+// append the barrier step onto.
+std::vector<Step> seedBarrierSteps() {
+    std::vector<Step> steps;
+    Step st;
+    st = {}; st.kind = Step::Kind::Fvf; st.a = 0x152u;
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::RenderState; st.a = 7u; st.b = 1u;
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::RenderState; st.a = 23u; st.b = 3u;
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::Texture; st.a = 0;
+    st.wire = wh(0x9100000000000001ull);
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::Stream; st.a = 0;
+    st.stream.buffer = wh(0xA200000000000001ull);
+    st.stream.offset = 0u;
+    st.stream.stride = 28u;
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::Viewport;
+    st.viewport = D9CViewport{0, 0, 640, 480, 0.0f, 1.0f};
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::Transform; st.a = 2u;
+    st.matrix = identityMatrix();
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::Material;
+    st.material.diffuse = {0.5f, 0.25f, 0.75f, 1.0f};
+    st.material.power = 8.0f;
+    steps.push_back(st);
+    return steps;
+}
+
+// Case 5: CLEAR barrier — D3D9 Clear() with flags/color/z/stencil.
+void testClearBarrier() {
+    auto steps = seedBarrierSteps();
+    Step st;
+    st = {}; st.kind = Step::Kind::Barrier;
+    st.barrier = BarrierKind::Clear;
+    st.flags = 0x7u;          // D3DCLEAR_TARGET|DEPTH|STENCIL
+    st.colorARGB = 0xff112233u;
+    st.zValue = 1.0f;
+    st.stencilValue = 0u;
+    steps.push_back(st);
+    runEquivalenceScenario("barrier-clear", steps);
+}
+
+// Case 6: STRETCH_RECT barrier — surface-to-surface stretch blit.
+void testStretchRectBarrier() {
+    auto steps = seedBarrierSteps();
+    Step st;
+    st = {}; st.kind = Step::Kind::Barrier;
+    st.barrier = BarrierKind::StretchRect;
+    st.srcWire = 0xC100000000000001ull;
+    st.dstWire = 0xC200000000000002ull;
+    st.hasSrc = 1u;
+    st.hasDst = 1u;
+    st.filterValue = 1u;  // D3DTEXF_POINT
+    st.srcRect = D9CRect{0, 0, 256, 256};
+    st.dstRect = D9CRect{32, 32, 288, 288};
+    steps.push_back(st);
+    runEquivalenceScenario("barrier-stretch-rect", steps);
+}
+
+// Case 7: COLOR_FILL barrier — single-surface fill with optional rect.
+void testColorFillBarrier() {
+    auto steps = seedBarrierSteps();
+    Step st;
+    st = {}; st.kind = Step::Kind::Barrier;
+    st.barrier = BarrierKind::ColorFill;
+    st.srcWire = 0xD300000000000003ull;
+    st.colorARGB = 0xff44aaffu;
+    st.hasSrc = 1u;
+    st.srcRect = D9CRect{0, 0, 128, 128};
+    steps.push_back(st);
+    runEquivalenceScenario("barrier-color-fill", steps);
+}
+
+// Case 8: UPDATE_TEXTURE barrier — texture-to-texture copy.
+void testUpdateTextureBarrier() {
+    auto steps = seedBarrierSteps();
+    Step st;
+    st = {}; st.kind = Step::Kind::Barrier;
+    st.barrier = BarrierKind::UpdateTexture;
+    st.srcWire = 0xE400000000000004ull;
+    st.dstWire = 0xE500000000000005ull;
+    steps.push_back(st);
+    runEquivalenceScenario("barrier-update-texture", steps);
+}
+
+// Case 9: UPDATE_SURFACE barrier — surface-to-surface region copy.
+void testUpdateSurfaceBarrier() {
+    auto steps = seedBarrierSteps();
+    Step st;
+    st = {}; st.kind = Step::Kind::Barrier;
+    st.barrier = BarrierKind::UpdateSurface;
+    st.srcWire = 0xF600000000000006ull;
+    st.dstWire = 0xF700000000000007ull;
+    st.hasSrc = 1u;
+    st.hasDst = 1u;
+    st.srcRect = D9CRect{0, 0, 64, 64};
+    st.dstRect = D9CRect{16, 16, 16, 16};  // dst point encoded.
+    steps.push_back(st);
+    runEquivalenceScenario("barrier-update-surface", steps);
+}
+
+// Case 10: READBACK barrier — RT-to-CPU-mappable readback.
+void testReadbackBarrier() {
+    auto steps = seedBarrierSteps();
+    Step st;
+    st = {}; st.kind = Step::Kind::Barrier;
+    st.barrier = BarrierKind::Readback;
+    st.srcWire = 0xAA00000000000008ull;
+    st.dstWire = 0xBB00000000000009ull;
+    steps.push_back(st);
+    runEquivalenceScenario("barrier-readback", steps);
+}
+
+// Case 11: PRESENT barrier — chunk-boundary present record.
+void testPresentBarrier() {
+    auto steps = seedBarrierSteps();
+    Step st;
+    st = {}; st.kind = Step::Kind::Barrier;
+    st.barrier = BarrierKind::Present;
+    st.srcWire = 0x0000DEAD0000BEEFull;  // hwnd
+    st.flags = 0u;
+    st.hasSrc = 0u;
+    st.hasDst = 0u;
+    steps.push_back(st);
+    runEquivalenceScenario("barrier-present", steps);
+}
+
+// Case 12: interleaved mutations + draw + barrier + draw. Proves the
+// barrier APPLY_STATE leaves the unix shadow consistent so the
+// post-barrier draw observes the same starting state in both modes.
+void testInterleavedBarrierAndDraws() {
+    auto steps = seedBarrierSteps();
+    Step st;
+    // First draw before the barrier.
+    st = {}; st.kind = Step::Kind::Draw;
+    st.a = 4u; st.b = 0u; st.c = 1u;
+    steps.push_back(st);
+    // Mutate render state between draw and barrier.
+    st = {}; st.kind = Step::Kind::RenderState; st.a = 28u; st.b = 1u;
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::ClipPlane; st.a = 0u;
+    st.clip = {0.0f, 1.0f, 0.0f, -0.25f};
+    steps.push_back(st);
+    // CLEAR barrier.
+    st = {}; st.kind = Step::Kind::Barrier;
+    st.barrier = BarrierKind::Clear;
+    st.flags = 0x1u;
+    st.colorARGB = 0xff000000u;
+    st.zValue = 1.0f;
+    steps.push_back(st);
+    // Post-barrier mutation + draw.
+    st = {}; st.kind = Step::Kind::Texture; st.a = 1;
+    st.wire = wh(0xCAFEDEADull);
+    steps.push_back(st);
+    st = {}; st.kind = Step::Kind::Draw;
+    st.a = 4u; st.b = 3u; st.c = 1u;
+    steps.push_back(st);
+    runEquivalenceScenario("interleaved-barrier-and-draws", steps);
+}
+
 }  // namespace
 
 int main() {
@@ -829,6 +1273,15 @@ int main() {
         testProgrammableShaderDraw();
         testInterleavedStateAndDraws();
         testWireShapeContract();
+        // Non-draw barrier coverage.
+        testClearBarrier();
+        testStretchRectBarrier();
+        testColorFillBarrier();
+        testUpdateTextureBarrier();
+        testUpdateSurfaceBarrier();
+        testReadbackBarrier();
+        testPresentBarrier();
+        testInterleavedBarrierAndDraws();
     } catch (const TestFailure& e) {
         std::cerr << "pe_full_snapshot_equivalence_spec failed: " << e.what()
                   << '\n';

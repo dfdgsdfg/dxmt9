@@ -292,6 +292,32 @@ void recordedSetFragmentSamplerState(EncodeContext& ctx,
   }
 }
 
+void recordedSetVertexTexture(EncodeContext& ctx,
+                              WMT::RenderCommandEncoder& encoder,
+                              WMT::Texture texture,
+                              std::uint8_t index) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setVertexTexture) {
+    recorder->setVertexTexture(recorder->userdata, texture, index);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setVertexTexture(texture, index);
+  }
+}
+
+void recordedSetVertexSamplerState(EncodeContext& ctx,
+                                   WMT::RenderCommandEncoder& encoder,
+                                   WMT::SamplerState sampler,
+                                   std::uint8_t index) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setVertexSamplerState) {
+    recorder->setVertexSamplerState(recorder->userdata, sampler, index);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setVertexSamplerState(sampler, index);
+  }
+}
+
 void recordedSetVertexBuffer(EncodeContext& ctx,
                              WMT::RenderCommandEncoder& encoder,
                              WMT::Buffer buffer,
@@ -2078,6 +2104,68 @@ bool encodeDraw(EncodeContext& ctx,
         if (binding.sampler) {
           recordedSetFragmentSamplerState(ctx, encoder, binding.sampler,
                                           static_cast<std::uint8_t>(binding.stage));
+          countSamplerBind();
+        }
+      }
+    }
+    if (!bindingPacket.vertexTextureSamplers.empty()) {
+      struct ResolvedVertexTextureSamplerBinding {
+        u32 stage = 0;
+        core::Handle textureHandle{};
+        u32 textureLod = 0;
+        const resources::TextureRecord* textureRecord = nullptr;
+        WMT::Texture texture{};
+        WMT::Reference<WMT::SamplerState> samplerRef{};
+        WMT::SamplerState sampler{};
+      };
+      std::array<ResolvedVertexTextureSamplerBinding, core::kMaxVertexTextureSamplers>
+          resolvedVertexBindings{};
+      std::size_t resolvedVertexBindingCount = 0;
+      for (const auto& binding : bindingPacket.vertexTextureSamplers) {
+        const auto stage = binding.stage;
+        const auto textureHandle = binding.texture;
+        auto& resolved = resolvedVertexBindings[resolvedVertexBindingCount++];
+        resolved.stage = stage;
+        resolved.textureHandle = textureHandle;
+        resolved.textureLod = binding.textureLod;
+        if (auto* texture = ctx.pool.findTexture(textureHandle.value); texture && texture->texture) {
+          const u32 textureSlot = core::kVertexTextureSampler0 + stage;
+          const bool srgbTexture =
+              core::flatStateOr(hot.samplerStates[textureSlot], core::SAMP_SRGB_TEXTURE, 0u) != 0;
+          resolved.textureRecord = texture;
+          resolved.texture = resources::textureForShaderRead(*texture, srgbTexture);
+        }
+        if (suppressBaseStateLookup(ctx)) {
+          resolved.sampler = ctx.drawRecorder->fragmentSamplerState;
+        } else {
+          resolved.samplerRef =
+              makeSampler(ctx.device, binding.samplerStates,
+                          static_cast<float>(binding.textureLod));
+          resolved.sampler = WMT::SamplerState{resolved.samplerRef.handle};
+        }
+      }
+
+      for (std::size_t i = 0; i < resolvedVertexBindingCount; ++i) {
+        const auto& binding = resolvedVertexBindings[i];
+        if (binding.texture) {
+          if (debug::shouldTraceTexture(binding.textureHandle) && binding.textureRecord) {
+            std::ostringstream out;
+            out << "[dxmt9-texture] bind vertex stage=" << binding.stage
+                << " handle=0x" << std::hex << binding.textureHandle.value << std::dec
+                << " format=" << static_cast<unsigned>(binding.textureRecord->desc.format)
+                << " size=" << binding.textureRecord->desc.width << "x"
+                << binding.textureRecord->desc.height
+                << " levels=" << binding.textureRecord->desc.levels
+                << " lod=" << binding.textureLod;
+            emitTextureTraceLine(out.str());
+          }
+          recordedSetVertexTexture(ctx, encoder, binding.texture,
+                                   static_cast<std::uint8_t>(binding.stage));
+          countTextureBind();
+        }
+        if (binding.sampler) {
+          recordedSetVertexSamplerState(ctx, encoder, binding.sampler,
+                                        static_cast<std::uint8_t>(binding.stage));
           countSamplerBind();
         }
       }

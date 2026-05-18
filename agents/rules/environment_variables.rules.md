@@ -81,17 +81,32 @@ the runtime resolves them once at Presenter construction into a single
 others are ignored. See `dxmt9::resolveAcquirePolicy` in
 `src/dxmt9/dxmt9_presenter.hpp` and the matrix spec
 `tests/native/backend/present_acquire_policy_spec.cpp`.
-| `DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE` | Defer present boundary | `0` |
-| `DXMT9_PRESENT_BOUNDARY_COMPLETION` / `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION` | Boundary on completion | `0` |
+| `DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE` | Move `notePresentDequeued` to after acquire (selects `BoundaryPolicy::AfterAcquire`) | `0` |
+| `DXMT9_PRESENT_BOUNDARY_COMPLETION` | Wait on command-buffer `completedSeqId_` (selects `BoundaryPolicy::Completion`) | `0` |
+| `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION` | Wait on `presentCompletedSeqId_` (selects `BoundaryPolicy::PresentCompletion`) — default on; explicit `0` opts out | `1` |
 | `DXMT9_PRESENT_REFRESH_HZ` | Override refresh rate (numeric Hz) | derived |
 | `DXMT9_LAYER_DISPLAY_SYNC` | CAMetalLayer display sync flag | `1` |
-| `DXMT9_DISABLE_PRESENT_BOUNDARY` | Disable explicit present boundary | `0` |
+| `DXMT9_DISABLE_PRESENT_BOUNDARY` | Skip the present-boundary wait entirely (selects `BoundaryPolicy::Disabled`) | `0` |
 | `DXMT9_SPLIT_PRESENT_CHUNK` / `DXMT9_SPLIT_PRESENT_ACQUIRE` | Split present chunks | `0` |
 | `DXMT9_SPLIT_STRETCH_CHUNK` | Split stretch-rect chunks | `0` |
 | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT` | Max commands per chunk (numeric) | derived |
 | `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS` | Limit max frame latency to backbuffer count | `0` |
 | `DXMT9_MAX_FRAME_LATENCY` | Override max frame latency (numeric) | unset |
 | `DXMT9_SYNC_PRESENT_FLUSH` | Flush synchronously after present for present-path triage | `0` |
+
+The four `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
+process init into a single `dxmt9::BoundaryPolicy` value with priority
+`Disabled > PresentCompletion > Completion > AfterAcquire > Default`
+— `Disabled` short-circuits the whole boundary; `PresentCompletion`
+is the historical default-on branch (null / empty env counts as set,
+only explicit `0` demotes). `AfterAcquire` is observationally a no-op
+when a higher-precedence wait branch is selected (those branches do
+not consult `presentDequeuedSeqId_`). See
+`dxmt9::resolveBoundaryPolicy` in `src/dxmt9/dxmt9_presenter.hpp`,
+the switch in `CommandQueue::presentBoundary`
+(`src/dxmt9/dxmt9_command_queue.cpp`), the AfterAcquire site in
+`src/dxmt9/dxmt9_draw_encoder.mm`, and the matrix spec
+`tests/native/backend/present_boundary_policy_spec.cpp`.
 
 ## Pipeline cache
 

@@ -41,6 +41,8 @@ enum class RecordedKind {
   SetRasterizerState,
   SetFragmentTexture,
   SetFragmentSamplerState,
+  SetVertexTexture,
+  SetVertexSamplerState,
   SetVertexBuffer,
   SetVertexBytes,
   DrawPrimitives,
@@ -192,6 +194,28 @@ void recordSetFragmentSamplerState(void* userdata,
   capture->commands.push_back(command);
 }
 
+void recordSetVertexTexture(void* userdata,
+                            WMT::Texture texture,
+                            std::uint8_t index) {
+  auto* capture = static_cast<Capture*>(userdata);
+  RecordedCommand command{};
+  command.kind = RecordedKind::SetVertexTexture;
+  command.bufferHandle = texture.handle;
+  command.index = index;
+  capture->commands.push_back(command);
+}
+
+void recordSetVertexSamplerState(void* userdata,
+                                 WMT::SamplerState sampler,
+                                 std::uint8_t index) {
+  auto* capture = static_cast<Capture*>(userdata);
+  RecordedCommand command{};
+  command.kind = RecordedKind::SetVertexSamplerState;
+  command.bufferHandle = sampler.handle;
+  command.index = index;
+  capture->commands.push_back(command);
+}
+
 void recordSetVertexBuffer(void* userdata,
                            WMT::Buffer buffer,
                            std::uint64_t offset,
@@ -266,6 +290,8 @@ EncodeDrawRecorder makeRecorder(Capture& capture) {
       .setRasterizerState = recordSetRasterizerState,
       .setFragmentTexture = recordSetFragmentTexture,
       .setFragmentSamplerState = recordSetFragmentSamplerState,
+      .setVertexTexture = recordSetVertexTexture,
+      .setVertexSamplerState = recordSetVertexSamplerState,
       .setVertexBuffer = recordSetVertexBuffer,
       .setVertexBytes = recordSetVertexBytes,
       .drawPrimitives = recordDrawPrimitives,
@@ -687,6 +713,66 @@ void testArgbufModeKeepsDirectTextureSamplerBinds() {
         "Stage 2 argbuf mode keeps the direct setFragmentSamplerState bind");
 }
 
+void testArgbufModeKeepsDirectVertexTextureSamplerBinds() {
+  // Vertex texture fetch uses the same direct Metal resource lane as
+  // fragment sampling. Stage 2 argbuf mode may replace constants, but it
+  // must still emit setVertexTexture / setVertexSamplerState before draw.
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kPipeline = 0x700000700000741ull;
+  constexpr obj_handle_t kDepthState = 0x700000700000742ull;
+  constexpr obj_handle_t kSampler = 0x700000700000743ull;
+  constexpr obj_handle_t kRenderTarget = 0x700000700000744ull;
+  constexpr obj_handle_t kVertexTexture0 = 0x700000700000745ull;
+  constexpr obj_handle_t kBoundVertex = 0x700000700000746ull;
+
+  recorder.suppressBaseStateLookup = true;
+  recorder.renderPipelineState.handle = kPipeline;
+  recorder.depthStencilState.handle = kDepthState;
+  recorder.fragmentSamplerState.handle = kSampler;
+
+  auto state = makeProgrammableState(20u);
+  state.hot.colorAttachments[0].handle =
+      harness.createRenderTargetSurface(kRenderTarget, 640u, 480u);
+  state.hot.textures[dxmt9::core::kVertexTextureSampler0] =
+      harness.createBoundTexture(kVertexTexture0, 64u, 64u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 4096u);
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/false,
+                /*argbufHybridMode=*/true);
+
+  bool sawVertexTexture = false;
+  bool sawVertexSampler = false;
+  for (const auto& command : capture.commands) {
+    if (command.kind == RecordedKind::SetVertexTexture) {
+      checkEq(command.bufferHandle, kVertexTexture0,
+              "vertex texture bind handle");
+      checkEq(static_cast<unsigned>(command.index), 0u,
+              "vertex texture binds sampler slot 0");
+      sawVertexTexture = true;
+    } else if (command.kind == RecordedKind::SetVertexSamplerState) {
+      checkEq(command.bufferHandle, kSampler,
+              "vertex sampler bind handle");
+      checkEq(static_cast<unsigned>(command.index), 0u,
+              "vertex sampler binds sampler slot 0");
+      sawVertexSampler = true;
+    }
+  }
+  check(sawVertexTexture,
+        "Stage 2 argbuf mode keeps the direct setVertexTexture bind");
+  check(sawVertexSampler,
+        "Stage 2 argbuf mode keeps the direct setVertexSamplerState bind");
+}
+
 void testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset() {
   Harness harness;
   Capture capture;
@@ -1018,6 +1104,7 @@ int main() {
   try {
     testBaseStateRecorderCapturesRasterTextureSamplerOrdering();
     testArgbufModeKeepsDirectTextureSamplerBinds();
+    testArgbufModeKeepsDirectVertexTextureSamplerBinds();
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
     testBoundVertexAndUserIndexOrdering();

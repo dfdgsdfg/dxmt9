@@ -1,0 +1,19 @@
+LIBRARY binkw32.dll
+EXPORTS
+    _BinkSetSoundSystem@8 = BinkSetSoundSystem@8
+    _BinkCopyToBufferRect@44 = BinkCopyToBufferRect@44
+    _BinkDX9SurfaceType@4 = BinkDX9SurfaceType@4
+    _BinkShouldSkip@4 = BinkShouldSkip@4
+    _BinkNextFrame@4 = BinkNextFrame@4
+    _BinkDoFrame@4 = BinkDoFrame@4
+    _BinkWait@4 = BinkWait@4
+    _BinkOpen@8 = BinkOpen@8
+    _BinkGetError@0 = BinkGetError@0
+    _BinkSetVideoOnOff@8 = BinkSetVideoOnOff@8
+    _BinkSetSoundTrack@8 = BinkSetSoundTrack@8
+    _BinkOpenMiles@4 = BinkOpenMiles@4
+    _BinkClose@4 = BinkClose@4
+    _BinkPause@8 = BinkPause@8
+    _BinkService@4 = BinkService@4
+    _BinkSetMixBinVolumes@20 = BinkSetMixBinVolumes@20
+    _BinkSetVolume@12 = BinkSetVolume@12

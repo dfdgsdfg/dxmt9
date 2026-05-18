@@ -192,6 +192,8 @@ struct CorpusTest {
   bool drawDxmt9FfpColorVertexQuad = false;
   bool drawDxmt9FfpLitDirectionalQuad = false;
   bool drawDxmt9FfpSpecularDirectionalQuad = false;
+  bool drawDxmt9FfpAmbientEmissiveMaterialQuad = false;
+  bool drawDxmt9FfpAmbientColorEmissiveMaterialQuad = false;
   bool drawDxmt9FfpGouraudTriangle = false;
   bool drawDxmt9FfpPointDefault = false;
   bool drawDxmt9ODepthOverlap = false;
@@ -219,6 +221,7 @@ constexpr u32 kFvfXyzrhw = 0x0004u;
 constexpr u32 kFvfXyz = 0x0002u;
 constexpr u32 kFvfXyzB2 = 0x0008u;
 constexpr u32 kFvfNormal = 0x0010u;
+constexpr u32 kFvfPSize = 0x0020u;
 constexpr u32 kFvfDiffuse = 0x0040u;
 constexpr u32 kFvfTex1 = 0x0100u;
 constexpr u32 kFvfTex2 = 0x0200u;
@@ -319,6 +322,15 @@ struct ScreenSpaceColorVertex {
   float y = 0.0f;
   float z = 0.0f;
   float rhw = 1.0f;
+  u32 color = 0xffffffffu;
+};
+
+struct ScreenSpacePSizeColorVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float rhw = 1.0f;
+  float psize = 1.0f;
   u32 color = 0xffffffffu;
 };
 
@@ -1972,6 +1984,16 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
     return;
   }
 
+  if (line == "dxmt9-draw-ffp-ambient-emissive-material-quad") {
+    test.drawDxmt9FfpAmbientEmissiveMaterialQuad = true;
+    return;
+  }
+
+  if (line == "dxmt9-draw-ffp-ambient-color-emissive-material-quad") {
+    test.drawDxmt9FfpAmbientColorEmissiveMaterialQuad = true;
+    return;
+  }
+
   if (line == "dxmt9-draw-ffp-gouraud-triangle") {
     test.drawDxmt9FfpGouraudTriangle = true;
     return;
@@ -2798,6 +2820,89 @@ void drawDxmt9FfpSpecularDirectionalQuad(Device& device, u32 width, u32 height) 
   }
 }
 
+void setupAmbientMaterialLight(Device& device, const Material& material) {
+  Light light{};
+  light.type = LightType::Directional;
+  light.diffuse = {0.0f, 0.0f, 0.0f, 1.0f};
+  light.specular = {0.0f, 0.0f, 0.0f, 1.0f};
+  light.ambient = {0.0f, 0.0f, 0.0f, 1.0f};
+  light.direction = {0.0f, 0.0f, -1.0f};
+  if (device.setMaterial(material) != D3D_OK ||
+      device.setLight(0, light) != D3D_OK ||
+      device.lightEnable(0, true) != D3D_OK ||
+      device.setRenderState(RS_LIGHTING, 1) != D3D_OK ||
+      device.setRenderState(RS_AMBIENT, 0xffffffffu) != D3D_OK) {
+    fail("dxmt9 FFP ambient material light setup failed");
+  }
+}
+
+void drawDxmt9FfpAmbientEmissiveMaterialQuad(Device& device, u32 width, u32 height) {
+  (void)width;
+  (void)height;
+  if (device.setFVF(kFvfXyz | kFvfNormal) != D3D_OK) {
+    fail("dxmt9 FFP ambient/emissive material FVF setup failed");
+  }
+  Material material{};
+  material.emissive = {0.0f, 0.0f, 0.5f, 1.0f};
+  material.ambient = {0.25f, 0.0f, 0.0f, 1.0f};
+  material.diffuse = {0.0f, 0.0f, 0.0f, 1.0f};
+  setupAmbientMaterialLight(device, material);
+  if (device.setRenderState(RS_AMBIENT_MATERIAL_SOURCE, 0) != D3D_OK ||
+      device.setRenderState(RS_EMISSIVE_MATERIAL_SOURCE, 0) != D3D_OK ||
+      device.setRenderState(RS_DIFFUSE_MATERIAL_SOURCE, 0) != D3D_OK) {
+    fail("dxmt9 FFP ambient/emissive material source setup failed");
+  }
+
+  const std::array<GeneratedNormalVertex, 6> quad{
+      GeneratedNormalVertex{-1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(GeneratedNormalVertex)) != D3D_OK) {
+    fail("dxmt9 FFP ambient/emissive material quad draw failed");
+  }
+}
+
+void drawDxmt9FfpAmbientColorEmissiveMaterialQuad(Device& device, u32 width, u32 height) {
+  (void)width;
+  (void)height;
+  if (device.setFVF(kFvfXyz | kFvfNormal | kFvfDiffuse) != D3D_OK) {
+    fail("dxmt9 FFP ambient color/emissive material FVF setup failed");
+  }
+  Material material{};
+  material.emissive = {0.0f, 0.0f, 0.25f, 1.0f};
+  material.ambient = {0.0f, 0.0f, 0.0f, 1.0f};
+  material.diffuse = {0.0f, 0.0f, 0.0f, 1.0f};
+  setupAmbientMaterialLight(device, material);
+  if (device.setRenderState(RS_AMBIENT_MATERIAL_SOURCE, 1) != D3D_OK ||
+      device.setRenderState(RS_EMISSIVE_MATERIAL_SOURCE, 0) != D3D_OK ||
+      device.setRenderState(RS_DIFFUSE_MATERIAL_SOURCE, 0) != D3D_OK) {
+    fail("dxmt9 FFP ambient color/emissive material source setup failed");
+  }
+
+  constexpr u32 kRed = 0xffff0000u;
+  const std::array<LitColorVertex, 6> quad{
+      LitColorVertex{-1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kRed},
+      LitColorVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kRed},
+      LitColorVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kRed},
+      LitColorVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kRed},
+      LitColorVertex{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kRed},
+      LitColorVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, kRed},
+  };
+  const auto* bytes = reinterpret_cast<const u8*>(quad.data());
+  if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,
+                             std::span<const u8>(bytes, sizeof(quad)),
+                             sizeof(LitColorVertex)) != D3D_OK) {
+    fail("dxmt9 FFP ambient color/emissive material quad draw failed");
+  }
+}
+
 void drawDxmt9FfpGouraudTriangle(Device& device) {
   if (device.setFVF(kFvfXyzrhw | kFvfDiffuse) != D3D_OK) {
     fail("dxmt9 FFP gouraud FVF setup failed");
@@ -2816,16 +2921,16 @@ void drawDxmt9FfpGouraudTriangle(Device& device) {
 }
 
 void drawDxmt9FfpPointDefault(Device& device) {
-  if (device.setFVF(kFvfXyzrhw | kFvfDiffuse) != D3D_OK) {
+  if (device.setFVF(kFvfXyzrhw | kFvfPSize | kFvfDiffuse) != D3D_OK) {
     fail("dxmt9 FFP point FVF setup failed");
   }
-  const std::array<ScreenSpaceColorVertex, 1> point{
-      ScreenSpaceColorVertex{32.0f, 32.0f, 0.0f, 1.0f, 0xff00ffffu},
+  const std::array<ScreenSpacePSizeColorVertex, 1> point{
+      ScreenSpacePSizeColorVertex{32.0f, 32.0f, 0.0f, 1.0f, 3.0f, 0xff00ffffu},
   };
   const auto* bytes = reinterpret_cast<const u8*>(point.data());
   if (device.drawPrimitiveUP(PrimitiveType::PointList, 1,
                              std::span<const u8>(bytes, sizeof(point)),
-                             sizeof(ScreenSpaceColorVertex)) != D3D_OK) {
+                             sizeof(ScreenSpacePSizeColorVertex)) != D3D_OK) {
     fail("dxmt9 FFP default point draw failed");
   }
 }
@@ -3357,6 +3462,8 @@ void runCorpusFile(const std::string& path) {
                             test.drawDxmt9FfpColorVertexQuad ||
                             test.drawDxmt9FfpLitDirectionalQuad ||
                             test.drawDxmt9FfpSpecularDirectionalQuad ||
+                            test.drawDxmt9FfpAmbientEmissiveMaterialQuad ||
+                            test.drawDxmt9FfpAmbientColorEmissiveMaterialQuad ||
                             test.drawDxmt9FfpGouraudTriangle ||
                             test.drawDxmt9FfpPointDefault ||
                             test.drawDxmt9ODepthOverlap ||
@@ -3521,6 +3628,8 @@ void runCorpusFile(const std::string& path) {
                           test.drawDxmt9FfpColorVertexQuad ||
                           test.drawDxmt9FfpLitDirectionalQuad ||
                           test.drawDxmt9FfpSpecularDirectionalQuad ||
+                          test.drawDxmt9FfpAmbientEmissiveMaterialQuad ||
+                          test.drawDxmt9FfpAmbientColorEmissiveMaterialQuad ||
                           test.drawDxmt9FfpGouraudTriangle ||
                           test.drawDxmt9FfpPointDefault ||
                           test.drawDxmt9ODepthOverlap ||
@@ -3814,6 +3923,26 @@ void runCorpusFile(const std::string& path) {
       fail("beginScene failed");
     }
     drawDxmt9FfpSpecularDirectionalQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpAmbientEmissiveMaterialQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpAmbientEmissiveMaterialQuad(*device, params.backBufferWidth, params.backBufferHeight);
+    if (device->endScene() != D3D_OK) {
+      fail("endScene failed");
+    }
+  }
+
+  if (test.drawDxmt9FfpAmbientColorEmissiveMaterialQuad) {
+    if (device->beginScene() != D3D_OK) {
+      fail("beginScene failed");
+    }
+    drawDxmt9FfpAmbientColorEmissiveMaterialQuad(*device, params.backBufferWidth, params.backBufferHeight);
     if (device->endScene() != D3D_OK) {
       fail("endScene failed");
     }

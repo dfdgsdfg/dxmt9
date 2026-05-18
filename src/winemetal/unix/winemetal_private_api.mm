@@ -1334,6 +1334,11 @@ extern "C" void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder,
       [enc setFragmentTexture:(id<MTLTexture>)b->texture atIndex:b->index];
       break;
     }
+    case WMTRenderCommandSetVertexTexture: {
+      const struct wmtcmd_render_settexture *b = (const struct wmtcmd_render_settexture *)next;
+      [enc setVertexTexture:(id<MTLTexture>)b->texture atIndex:b->index];
+      break;
+    }
     case WMTRenderCommandSetRasterizerState: {
       const struct wmtcmd_render_setrasterizerstate *b = (const struct wmtcmd_render_setrasterizerstate *)next;
       [enc setTriangleFillMode:(MTLTriangleFillMode)b->fill_mode];
@@ -1559,6 +1564,11 @@ extern "C" void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder,
     case WMTRenderCommandSetFragmentSamplerState: {
       const struct wmtcmd_render_setsamplerstate *b = (const struct wmtcmd_render_setsamplerstate *)next;
       [enc setFragmentSamplerState:(id<MTLSamplerState>)b->sampler_state atIndex:b->index];
+      break;
+    }
+    case WMTRenderCommandSetVertexSamplerState: {
+      const struct wmtcmd_render_setsamplerstate *b = (const struct wmtcmd_render_setsamplerstate *)next;
+      [enc setVertexSamplerState:(id<MTLSamplerState>)b->sampler_state atIndex:b->index];
       break;
     }
     case WMTRenderCommandSetStencilReferenceValue: {

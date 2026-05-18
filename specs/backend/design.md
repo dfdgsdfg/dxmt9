@@ -461,25 +461,76 @@ that spec to allow conditional `MTLStoreActionDontCare` on RT change.
 
 ## 4. Argument Buffer Binding
 
-All shader resources for a draw call are packed into a single GPU-side argument
-buffer. The shader accesses all inputs through this one buffer pointer.
+The production Stage 2 argument-buffer path is constants-only. When the
+capability gate (`argumentBuffersSupport >= Tier2` and Apple GPU family support)
+holds, texture-free and texture-bound draws select the Stage 2 PSO variant and
+bind one slot-30 argument buffer for the four per-frequency constant-buffer
+pointers:
 
 ```
-Argument Buffer layout (per draw):
-┌────────────────────────────────────┐
-│ Vertex buffer slots                │  {gpu_address, stride, size}[] × 16
-│ VS constant buffer (256 × float4)  │  or gpu_address if >4 KB
-│ PS constant buffer (224 × float4)  │
-│ VS samplers                        │  handle[] × 16
-│ PS samplers                        │  handle[] × 16
-│ VS textures                        │  handle[] × 16
-│ PS textures                        │  handle[] × 16
-└────────────────────────────────────┘
+Stage 2 ArgbufLayout (slot 30):
+┌──────────────────────────────────────────────┐
+│ id(0): constant VsConsts*                    │
+│ id(1): constant FfpVsConsts*                 │
+│ id(2): constant PsConsts*                    │
+│ id(3): constant FfpPsConsts*                 │
+└──────────────────────────────────────────────┘
 ```
 
-The argument buffer is suballocated from the `argbuf` ring allocator per draw call.
-The Metal encoder receives one `setVertexBufferOffset` / `setFragmentBufferOffset`
-call pointing to the base of this buffer.
+Texture and sampler resources intentionally stay on the direct Metal encoder
+lane (`setVertexTexture` / `setVertexSamplerState` /
+`setFragmentTexture` / `setFragmentSamplerState`). The shader source for
+texture-bound Stage 2 draws therefore combines a slot-30 argbuf uniform
+parameter with direct `[[texture(N)]]` / `[[sampler(N)]]` parameters. This is
+the current hot path contract: Stage 2 removes the direct slot 0/3 uniform
+bindings, but it does not move texture or sampler resources into Metal
+argument-buffer resource arrays.
+
+```mermaid
+flowchart TD
+    STATE["FlatDrawStateView"]
+    GATE{"argbuf hybrid gate?"}
+    S1["Stage 1 PSO\nuniforms: direct slot 0/3\ntextures/samplers: direct"]
+    S2["Stage 2 PSO\nuniforms: slot 30 argbuf\ntextures/samplers: direct"]
+    CBUF["updateDirtyArgbufRegions\nids 0..3 only"]
+    RES["binding packet\npre-resolved texture/sampler handles"]
+    DIRECT["set*Texture / set*SamplerState"]
+    DRAW["draw"]
+
+    STATE --> GATE
+    GATE -->|"no"| S1 --> DRAW
+    GATE -->|"yes"| S2
+    S2 --> CBUF --> DRAW
+    S2 --> RES --> DIRECT --> DRAW
+```
+
+The fully packed "texture/sampler resource-array" lane remains an experimental
+candidate, not the default path. It can be attractive for draw streams that bind
+many textures/samplers and reuse the same binding packet, but it does not make
+Metal-side writes disappear: the encoder still has to patch the argument buffer,
+retain or mark resources resident, and keep sampler/resource lifetimes valid
+until command-buffer completion. For small binding counts or frequently changing
+D3D9 sampler state, direct `setTexture` / `setSamplerState` calls may be cheaper
+and are much easier to validate.
+
+The last resource-array attempt faulted on a representative texture corpus case.
+Current fault candidates are:
+
+- sampler objects not created or bridged with argument-buffer resource support
+  (`supportArgumentBuffers` / resource-id path);
+- sampler lifetime not retained through the command-buffer completion sequence;
+- texture or sampler `MTLResourceID` encoding mismatch across the WMT bridge;
+- missing or incorrectly scoped `useResource` / `useHeap` residency for
+  argbuf-pointed resources;
+- MSL/argument-encoder layout mismatch for resource arrays or root argbuf
+  reference shape.
+
+Any future promotion of texture/sampler resource arrays must land behind a
+separate feature flag and prove, in order: texture-only argbuf sampling,
+sampler-only argbuf sampling, combined 2D sampling, cube/3D/volume coverage,
+sampler filter/address/sRGB/mip coverage, and paired Stage 1 vs Stage 2
+shader-corpus pixel equality. Until that evidence exists, the default Stage 2
+path stays constants-only with direct texture/sampler binding.
 
 ---
 
@@ -504,291 +555,7 @@ The `MTLDepthStencilState` cache is separate and keyed by the DSS key (depth +
 stencil compare/write state). DSS creation is cheap; the cache prevents redundant
 object allocation.
 
-### 5.1 Data-oriented Draw-Key Refinement
-
-The draw hot path is a value pipeline:
-
-```mermaid
-flowchart LR
-    D3D["D3D9 state + bytecode + draw params"]
-    FLAT["FlatDrawStateRecord\nFlatDrawStateView"]
-    CANON["Canonical draw key\nstate/resource/shader hashes\nsource-affecting versions/env"]
-    SOURCE["MSL source generation\nVS/FS/tile text"]
-    FINAL["Source-backed PSO key\ncanonical key + actual MSL hashes"]
-    PSO["PSO cache\nfinal key -> shared_future<MTLRenderPipelineState>"]
-    PACKET["DrawBindingPacketPlan\ntexture/sampler slots\nextra streams\nraster state"]
-    RESOLVE["Live resource resolution\nPool lookup + retained WMT handles"]
-    ENCODE["Metal encoder calls"]
-
-    D3D --> FLAT --> CANON
-    CANON --> SOURCE --> FINAL --> PSO
-    FLAT --> PACKET --> RESOLVE --> ENCODE
-    PSO --> ENCODE
-```
-
-This shape is correct but still pays source-generation CPU cost before proving
-that the final source-backed key is already warm. The target cache shape keeps
-the final source hash in the authoritative PSO key while adding a fast index
-from canonical inputs to the known final key:
-
-```mermaid
-flowchart TD
-    DRAW["FlatDrawStateView + shader layout"]
-    PROBE["CanonicalPsoProbeKey\nbytecode/FFP hash\nvariant bits\nsource version/env\nRT/blend/sample formats"]
-    IDX{"probe index hit?"}
-    FINAL_HIT["Final SourceBackedPsoKey\npreviously published"]
-    PSO_LOOKUP{"PSO cache hit?"}
-    USE["Use cached PSO\n(no MSL generation)"]
-    GEN["Generate MSL source\nonly on probe miss or invalidation"]
-    HASH["Hash actual source\nvertex/fragment/tile"]
-    FINAL_NEW["Build SourceBackedPsoKey"]
-    COMPILE["Compile PSO future"]
-    PUBLISH["Publish:\nprobe -> final key\nfinal key -> future"]
-
-    DRAW --> PROBE --> IDX
-    IDX -->|yes| FINAL_HIT --> PSO_LOOKUP
-    PSO_LOOKUP -->|yes| USE
-    PSO_LOOKUP -->|no; cache evicted or cold archive| COMPILE
-    IDX -->|no| GEN --> HASH --> FINAL_NEW --> PSO_LOOKUP
-    COMPILE --> PUBLISH --> USE
-    FINAL_NEW --> PUBLISH
-```
-
-The probe key is not authoritative for correctness; it is only an index. The
-final key remains source-backed, so emitter drift, debug source toggles, and tile
-vs fragment source differences cannot alias to a stale PSO.
-
-### 5.2 Uniform Range Upload Target
-
-The current dirty tracker records high-water ranges and exposes
-`ShaderConstantUploadPlan`, but the live ABI still binds full `VsConsts` and
-`PsConsts` structs. The target keeps the full MSL-visible struct ABI while making
-host writes range-aware:
-
-```mermaid
-flowchart TD
-    DEC["Shader decode / IR scan"]
-    USAGE["ShaderConstantUsageBounds\nfloat/int/bool counts\nindexed flags\nunknown flag"]
-    DIRTY["DirtyState\ncategory bits + maxChanged ranges"]
-    PLAN["ShaderConstantUploadPlan\ncount = max(usage, dirty)\nfullStructRequired if indexed/unknown"]
-    FULL["Full struct rebuild/upload\ncurrent safe path"]
-    RANGE["Range update into full-size backing\ncopy only used/dirty prefix"]
-    ABI["MSL-visible ABI unchanged\nconstant VsConsts*/PsConsts*"]
-    ARG["Stage 1 slot 0/3 bind\nor Stage 2 argbuf id 0/2 pointer"]
-
-    DEC --> USAGE
-    DIRTY --> PLAN
-    USAGE --> PLAN
-    PLAN -->|"unknown or indexed"| FULL --> ABI
-    PLAN -->|"known fixed ranges"| RANGE --> ABI
-    ABI --> ARG
-```
-
-Range upload therefore does not require slicing shader-visible structs or
-changing generated MSL. It requires exporting shader constant-usage metadata to
-the draw/cache boundary and replacing transient full-struct rebuilds with a
-full-size backing buffer whose dirty byte ranges can be updated independently.
-
-The implementation target has two phases. Phase 1 publishes shader usage as
-value metadata beside the shader layout. Phase 2 lets the encoder consume that
-metadata when it builds the constant upload packet:
-
-```mermaid
-flowchart TD
-    BYTECODE["ShaderRef bytecode\nor FFP key"]
-    DECODE["decodeD3DBytecode\ncollectConstantUsage"]
-    META["ShaderConstantUsageBounds\nVS + PS\nunknown/indexed flags"]
-    LAYOUT["DrawShaderLayoutContext\nshader refs + usage metadata"]
-    STATE["FlatDrawStateView\nDirtyState high-water ranges"]
-    PLAN["ShaderConstantUploadPlan\nper stage"]
-    BYTES["vs/psConstantUploadBytes\nprefix byte count or full struct"]
-    BUILD["buildVsConsts/buildPsConsts\nfull ABI struct in host memory"]
-    SLAB["Transient upload slab\nbyte span = planned bytes"]
-    BIND1["Stage 1 bind\nslot 0"]
-    BIND2["Stage 2 argbuf pointer\nid 0 / id 2"]
-
-    BYTECODE --> DECODE --> META --> LAYOUT
-    LAYOUT --> PLAN
-    STATE --> PLAN
-    PLAN --> BYTES
-    BUILD --> SLAB
-    BYTES --> SLAB
-    SLAB --> BIND1
-    SLAB --> BIND2
-```
-
-The invariant is that generated MSL still sees `constant VsConsts&` and
-`constant PsConsts&`. Only the host-side bytes copied into the backing slab are
-allowed to shrink, and only when the usage metadata proves no indexed or unknown
-constant access can read outside the uploaded prefix.
-
-### 5.3 Binding Packet Resolution Target
-
-`DrawBindingPacketPlan` is intentionally value-only. It can be reduced to a
-flat `DrawBindingPacketKey` before any Metal object lookup. Live Metal handles
-stay behind the resource pool because they depend on rename rings, texture view
-selection, sampler creation, and sequence-id retention:
-
-```mermaid
-flowchart LR
-    HOT["FlatDrawStateRecord"]
-    DECL["VertexDeclSnapshot"]
-    PARAM["ParamView"]
-    PLAN["DrawBindingPacketPlan\nslot numbers, handles, offsets,\nraster/scissor/cull values"]
-    KEY["DrawBindingPacketKey\nflat equality/hash\ntexture LOD + sampler states"]
-    POOL["ResourcePool resolver\nBuffer/Texture/Surface lookup"]
-    SAMPLER["Sampler cache/build\nSamplerSnapshot -> WMT::SamplerState"]
-    RETAIN["CommandQueue retention\nseqId lifetime fence"]
-    CALLS["Encoder binding calls\nset*Buffer/Texture/Sampler\nsetViewport/setScissor/setCull"]
-
-    HOT --> PLAN
-    DECL --> PLAN
-    PARAM --> PLAN
-    PLAN --> KEY
-    PLAN --> POOL --> RETAIN --> CALLS
-    PLAN --> SAMPLER --> RETAIN
-    PLAN --> CALLS
-```
-
-`DrawBindingPacketKey` is the persistent-cache boundary. It is stable across
-equivalent canonical input values and changes when texture handle/LOD, sampler
-state, raster values, or programmable extra-stream offsets change. The runtime
-uses a fixed-size value cache (`DrawBindingPacketCache`) keyed by this identity;
-cache entries contain only the value packet, never live Metal handles. The
-resolved packet remains scoped to the encoder call, not to the canonical draw
-state. That packet may carry live WMT handles only after the pool has retained
-or otherwise proven their lifetime for the draw's sequence id.
-
-The resolved packet is a short-lived product of the value plan. It must not be
-stored in canonical state or reused across command buffers:
-
-```mermaid
-flowchart LR
-    PLAN["DrawBindingPacketPlan\nPOD/value only"]
-    KEY["DrawBindingPacketKey\npersistent cache identity"]
-    CACHE{"packet key hit?"}
-    VALUE["reuse cached value packet\nno live handles"]
-    INSERT["insert value packet\nfixed-size cache"]
-    RESOLVE["resolveDrawBindingPacket\nencoder-local live handles"]
-    PACKET["ResolvedDrawBindingPacket\nWMT handles + offsets\nsampler states + view handles"]
-    RETAIN["retain for seqId\nor prove queue-owned lifetime"]
-    ENCODE["emit binding calls\nordered by packet arrays"]
-    DROP["drop packet after draw"]
-
-    PLAN --> KEY --> CACHE
-    CACHE -->|"yes"| VALUE --> RESOLVE
-    CACHE -->|"no"| PLAN --> INSERT --> VALUE
-    PACKET --> RETAIN --> ENCODE --> DROP
-    RESOLVE --> PACKET
-```
-
-```mermaid
-flowchart TD
-    PLAN["Plan fields"]
-    VB["vertex buffer handles\noffsets/strides"]
-    IB["index buffer handle\noffset/type"]
-    TEX["texture handles\nstage + sRGB/view policy"]
-    SAMP["sampler snapshots\nstage + state hash"]
-    RAST["viewport/scissor/cull/depth-bias"]
-    LIVE["Resolved packet fields"]
-
-    PLAN --> VB --> LIVE
-    PLAN --> IB --> LIVE
-    PLAN --> TEX --> LIVE
-    PLAN --> SAMP --> LIVE
-    PLAN --> RAST --> LIVE
-```
-
-The dependency rule is one-way: canonical state may create a value plan, but
-live Metal handles may only appear after resource-pool lookup and sequence-id
-retention. This keeps cache keys deterministic and keeps lifetime ownership in
-the queue/resource layer.
-
-### 5.4 Argbuf Stage 2 Texture-bound Draw Path
-
-Stage 2 is the default argbuf path whenever the capability gate holds. It is a
-constants-only argument buffer: only the four per-frequency constant-buffer
-pointers (`VsConsts`, `FfpVsConsts`, `PsConsts`, `FfpPsConsts`) live in the
-slot-30 argbuf. Texture and sampler resources continue to travel on the
-validated direct render-encoder binding lane that Stage 1 already proves; this
-keeps Stage 2 from inheriting the argbuf-indirect resource-residency hazard
-class while still removing the per-draw constant-slot rebinds.
-
-```mermaid
-flowchart TD
-    SEL["selectArgbufHybridForPass"]
-    GATE{"argbufHybridEnabled?"}
-    S1["Stage 1 direct binding\nslot 0/3 + direct textures/samplers"]
-    PLAN["DrawBindingPacketPlan\ntexture/sampler handles + states"]
-    DIRECT["direct fragment binding\nsetFragmentTexture/Sampler"]
-    CBUF["updateDirtyArgbufRegions\nconstant pointer ids 0..3"]
-    RES["useResource residency\nfor argbuf-pointed constant slabs"]
-    S2MSL["Stage 2 MSL\nconstants via abuf, textures/samplers via [[texture(N)]]/[[sampler(N)]]"]
-    S2["Stage 2 draw\nslot 30 argbuf + direct textures"]
-
-    SEL --> GATE
-    GATE -->|"no"| S1
-    GATE -->|"yes"| PLAN
-    PLAN --> DIRECT
-    PLAN --> CBUF
-    CBUF --> RES
-    DIRECT --> S2MSL
-    RES --> S2MSL --> S2
-```
-
-The evidence is split across value and runtime boundaries. The Stage 2 argbuf
-descriptor table holds exactly the four constant-buffer pointer entries at
-`[[id(0..3)]]`. Deterministic descriptor tests prove the argbuf carries no
-texture / sampler slots, and the translated MSL fragment / vertex parameter
-list keeps the `[[texture(N)]]` / `[[sampler(N)]]` parameters that Stage 1
-emits. The shader corpus then proves the live GPU-visible path on both lanes;
-because the texture-bound path now uses identical resource binding to Stage 1,
-Stage 2 inherits Stage 1's residency proof for free.
-
-```mermaid
-flowchart TD
-    CASE["Representative texture-bound corpus case"]
-    S1["Stage 1 lane\nsetFragmentTexture/Sampler\nbuffer(0) + buffer(3)"]
-    S2["Stage 2 lane\nsetFragmentTexture/Sampler\nargbuf(30) for constants"]
-    REC1["Encoder recorder\nslot/order/resource ids"]
-    REC2["Encoder recorder\nslot/order/resource ids + argbuf ids 0..3"]
-    GPU1["GPU readback\nStage 1 pixels"]
-    GPU2["GPU readback\nStage 2 pixels"]
-    CMPREC{"binding intent equal?"}
-    CMPGPU{"pixels equal\nwithin probe tolerance?"}
-    MATRIX["coverage matrix\n2D/cube/3D/sRGB/mip/filter/address"]
-    DEFAULT["default selector\ncapability gate -> Stage 2"]
-
-    CASE --> S1 --> REC1 --> CMPREC
-    CASE --> S2 --> REC2 --> CMPREC
-    S2 --> GPU2 --> CMPGPU
-    S1 --> GPU1 --> CMPGPU
-    CMPREC -->|"yes"| MATRIX
-    CMPGPU -->|"yes"| MATRIX
-    MATRIX --> DEFAULT
-```
-
-The default selector remains all-or-nothing at the capability boundary. The
-constants-only narrowing is durable contract, not a transient fallback: a
-future widening that puts textures or samplers back into the argbuf must
-re-prove residency for argbuf-indirect resources, document the new descriptor
-shape here, and add the matching corpus coverage.
-
-#### A/B equivalence harness
-
-The Stage 2 vs Stage 1 pixel-equality proof rides on a paired Meson test
-fan-out (`R-BACK-12.27`). Every passing `.shader_test` in
-`tests/shader_runner/corpus/MANIFEST.toml` is registered twice: once as
-`dxmt9-shader-corpus-<case>` in suite `shader-corpus` (runtime selector
-default — Stage 2 wherever the capability gate holds), and once as
-`dxmt9-shader-corpus-stage1-<case>` in suite `shader-corpus-stage1` with
-`DXMT9_DISABLE_ARGBUF_HYBRID=1` forcing the gate off. Both runs assert the
-same `[probe]` lines against GPU readback, so passing both *is* the pixel
-comparison — no separate per-pixel diff layer exists or is permitted.
-Maintainers run the Stage 1 lane alone with `meson test --suite
-shader-corpus-stage1 -C build`.
-
-### 5.5 Cache Prewarm From `MTLBinaryArchive`
+### 5.1 Cache Prewarm From `MTLBinaryArchive`
 
 Prewarming populates PSO and shader-function caches at device init by
 deserializing entries already present in the on-disk `MTLBinaryArchive`,

@@ -53,7 +53,7 @@ struct HazardBloom {
 
 struct HazardHandles {
   static constexpr std::size_t kCapacity =
-      1u + core::kMaxRenderTargets + core::kMaxStreams + core::kMaxTextureStages;
+      1u + core::kMaxRenderTargets + core::kMaxStreams + core::kMaxTextures;
   std::array<u64, kCapacity> handles{};
   std::size_t count = 0;
 
@@ -180,6 +180,39 @@ struct FragmentTextureSamplerBindingList {
   }
 };
 
+struct VertexTextureSamplerBinding {
+  u32 stage = 0;
+  core::Handle texture{};
+  u32 textureLod = 0;
+  core::FlatStateSet<core::kMaxSamplerStates> samplerStates{};
+};
+
+struct VertexTextureSamplerBindingList {
+  std::array<VertexTextureSamplerBinding, core::kMaxVertexTextureSamplers> entries{};
+  std::size_t count = 0;
+
+  void push_back(VertexTextureSamplerBinding binding) {
+    if (count < entries.size()) {
+      entries[count++] = binding;
+    }
+  }
+
+  bool empty() const noexcept { return count == 0; }
+  std::size_t size() const noexcept { return count; }
+
+  const VertexTextureSamplerBinding& operator[](std::size_t index) const noexcept {
+    return entries[index];
+  }
+
+  const VertexTextureSamplerBinding* begin() const noexcept {
+    return entries.data();
+  }
+
+  const VertexTextureSamplerBinding* end() const noexcept {
+    return entries.data() + count;
+  }
+};
+
 struct EncoderRasterStatePlan {
   WMTViewport viewport{};
   WMTScissorRect scissor{};
@@ -188,6 +221,7 @@ struct EncoderRasterStatePlan {
 
 struct DrawBindingPacketPlan {
   FragmentTextureSamplerBindingList fragmentTextureSamplers{};
+  VertexTextureSamplerBindingList vertexTextureSamplers{};
   ProgrammableVsExtraStreamBindingList extraStreams{};
   EncoderRasterStatePlan raster{};
 };
@@ -227,6 +261,8 @@ struct DrawBindingPacketRasterKey {
 struct DrawBindingPacketKey {
   std::array<DrawBindingPacketTextureSamplerKey, core::kMaxSamplers> fragmentTextureSamplers{};
   u32 fragmentTextureSamplerCount = 0;
+  std::array<DrawBindingPacketTextureSamplerKey, core::kMaxVertexTextureSamplers> vertexTextureSamplers{};
+  u32 vertexTextureSamplerCount = 0;
   std::array<DrawBindingPacketExtraStreamKey, core::kMaxStreams - 1u> extraStreams{};
   u32 extraStreamCount = 0;
   DrawBindingPacketRasterKey raster{};
@@ -293,6 +329,17 @@ inline DrawBindingPacketKey makeDrawBindingPacketKey(
     };
   }
 
+  key.vertexTextureSamplerCount = static_cast<u32>(packet.vertexTextureSamplers.size());
+  for (u32 i = 0; i < key.vertexTextureSamplerCount; ++i) {
+    const auto& binding = packet.vertexTextureSamplers[i];
+    key.vertexTextureSamplers[i] = DrawBindingPacketTextureSamplerKey{
+        .stage = binding.stage,
+        .texture = binding.texture.value,
+        .textureLod = binding.textureLod,
+        .samplerStates = binding.samplerStates,
+    };
+  }
+
   key.extraStreamCount = static_cast<u32>(packet.extraStreams.size());
   for (u32 i = 0; i < key.extraStreamCount; ++i) {
     const auto& binding = packet.extraStreams[i];
@@ -313,6 +360,16 @@ inline u64 hashDrawBindingPacketKey(const DrawBindingPacketKey& key) noexcept {
                                       key.fragmentTextureSamplerCount);
   for (u32 i = 0; i < key.fragmentTextureSamplerCount; ++i) {
     const auto& binding = key.fragmentTextureSamplers[i];
+    seed = drawBindingPacketHashMix(seed, binding.stage);
+    seed = drawBindingPacketHashMix(seed, binding.texture);
+    seed = drawBindingPacketHashMix(seed, binding.textureLod);
+    seed = drawBindingPacketHashMix(
+        seed, hashDrawBindingPacketSamplerStates(binding.samplerStates));
+  }
+
+  seed = drawBindingPacketHashMix(seed, key.vertexTextureSamplerCount);
+  for (u32 i = 0; i < key.vertexTextureSamplerCount; ++i) {
+    const auto& binding = key.vertexTextureSamplers[i];
     seed = drawBindingPacketHashMix(seed, binding.stage);
     seed = drawBindingPacketHashMix(seed, binding.texture);
     seed = drawBindingPacketHashMix(seed, binding.textureLod);
@@ -420,7 +477,7 @@ inline ProgrammableVsExtraStreamBindingList makeProgrammableVsExtraStreamBinding
 inline FragmentTextureSamplerBindingList makeFragmentTextureSamplerBindings(
     const core::FlatDrawStateRecord& hot) {
   FragmentTextureSamplerBindingList bindings;
-  for (u32 stage = 0; stage < core::kMaxSamplers; ++stage) {
+  for (u32 stage = 0; stage < core::kMaxFragmentSamplers; ++stage) {
     const auto textureHandle = hot.textures[stage];
     if (!textureHandle) {
       continue;
@@ -430,6 +487,25 @@ inline FragmentTextureSamplerBindingList makeFragmentTextureSamplerBindings(
         .texture = textureHandle,
         .textureLod = hot.textureLods[stage],
         .samplerStates = hot.samplerStates[stage],
+    });
+  }
+  return bindings;
+}
+
+inline VertexTextureSamplerBindingList makeVertexTextureSamplerBindings(
+    const core::FlatDrawStateRecord& hot) {
+  VertexTextureSamplerBindingList bindings;
+  for (u32 stage = 0; stage < core::kMaxVertexTextureSamplers; ++stage) {
+    const u32 textureSlot = core::kVertexTextureSampler0 + stage;
+    const auto textureHandle = hot.textures[textureSlot];
+    if (!textureHandle) {
+      continue;
+    }
+    bindings.push_back(VertexTextureSamplerBinding{
+        .stage = stage,
+        .texture = textureHandle,
+        .textureLod = hot.textureLods[textureSlot],
+        .samplerStates = hot.samplerStates[textureSlot],
     });
   }
   return bindings;
@@ -501,6 +577,7 @@ inline DrawBindingPacketPlan makeDrawBindingPacketPlan(
     bool cullDisabled) {
   return DrawBindingPacketPlan{
       .fragmentTextureSamplers = makeFragmentTextureSamplerBindings(hot),
+      .vertexTextureSamplers = makeVertexTextureSamplerBindings(hot),
       .extraStreams = makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv),
       .raster = makeEncoderRasterStatePlan(
           hot, surfaceWidth, surfaceHeight, preTransformed, scissorDisabled, cullDisabled),

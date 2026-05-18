@@ -87,51 +87,6 @@ bool pointerFits32Bit(const void* ptr) {
   return reinterpret_cast<uintptr_t>(ptr) <= 0xffffffffu;
 }
 
-bool isWirePointerSentinel(uint64_t value) {
-  // A zero is the dedicated detach signal — wireValuePtr<T>() bails before
-  // ever calling this helper for value == 0. The sentinel check guards the
-  // path *after* a non-zero pointer has been resolved through the WoW64
-  // table / native allowlist.
-  if (value == 0) {
-    return false;
-  }
-  // Reject anything that does not fit in the host's pointer width. On a
-  // 64-bit unix this is a no-op since UINTPTR_MAX is ~0; on a 32-bit PE
-  // build it rejects any high-half garbage that survived a marshalling
-  // bug.
-  if (value > static_cast<uint64_t>(UINTPTR_MAX)) {
-    return true;
-  }
-  // Low-page sentinel: every host OS we run on (macOS, Linux, Windows)
-  // reserves the first virtual page so an address strictly below 0x1000
-  // can never point at a valid heap allocation. Catches stray
-  // `0x1` / `0xdeadbeef` constants and uninitialized low-bit fields.
-  constexpr uint64_t kSmallestValidPage = 0x1000ull;
-  if (value < kSmallestValidPage) {
-    return true;
-  }
-  // INVALID_HANDLE_VALUE / -1 sentinels.
-  //
-  // The 64-bit all-ones pattern is the canonical Win32 INVALID_HANDLE_VALUE
-  // and also what `(uintptr_t)-1` produces on a 64-bit host. We always
-  // reject it: it has never been a valid wire-resolved object pointer.
-  constexpr uint64_t kAllOnes64 = ~static_cast<uint64_t>(0);
-  if (value == kAllOnes64) {
-    return true;
-  }
-  // The zero-extended 32-bit all-ones is `(uint32_t)-1` widened — what
-  // a 32-bit PE app pushes when it forgets to clear a sentinel before
-  // marshalling. wireValuePtr<T>() only enters this branch for native
-  // pointer dispatch (i.e., value > 0xffffffffull), so a bare
-  // 0xffffffff here is already only reached when the WoW64 decode /
-  // allowlist did not claim it. Reject it as a corruption tell.
-  constexpr uint64_t kZeroExtendedAllOnes32 = 0xffffffffull;
-  if (value == kZeroExtendedAllOnes32) {
-    return true;
-  }
-  return false;
-}
-
 Low4GBAllocation allocateLow4GB(size_t size) {
 #if defined(__APPLE__)
   if (size == 0) {

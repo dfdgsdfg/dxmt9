@@ -93,6 +93,56 @@ AcquirePolicy resolveAcquirePolicyFromEnv() {
   return value;
 }
 
+namespace {
+// DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION historically defaulted to
+// true: when the env var was unset the boundary waited on
+// presentCompletedSeqId_. Treat a null / empty string as "set" while
+// keeping a literal "0" as the explicit opt-out.
+bool presentCompletionEnvDefaultOn(const char* env) {
+  if (env == nullptr) {
+    return true;
+  }
+  if (env[0] == '\0') {
+    return true;
+  }
+  return std::strcmp(env, "0") != 0;
+}
+}  // namespace
+
+BoundaryPolicy resolveBoundaryPolicy(const char* disableEnv,
+                                     const char* presentCompletionEnv,
+                                     const char* completionEnv,
+                                     const char* afterAcquireEnv) {
+  // Priority order — see BoundaryPolicy doc-comment. Disabled
+  // short-circuits the whole boundary, so it is consulted first. The
+  // default-on PresentCompletion branch matches the historical
+  // `if (!env) return true;` behavior of the legacy lambda; an
+  // explicit "0" demotes us to the Completion / AfterAcquire /
+  // Default chain.
+  if (envFlagSet(disableEnv)) {
+    return BoundaryPolicy::Disabled;
+  }
+  if (presentCompletionEnvDefaultOn(presentCompletionEnv)) {
+    return BoundaryPolicy::PresentCompletion;
+  }
+  if (envFlagSet(completionEnv)) {
+    return BoundaryPolicy::Completion;
+  }
+  if (envFlagSet(afterAcquireEnv)) {
+    return BoundaryPolicy::AfterAcquire;
+  }
+  return BoundaryPolicy::Default;
+}
+
+BoundaryPolicy resolveBoundaryPolicyFromEnv() {
+  static const BoundaryPolicy value = resolveBoundaryPolicy(
+      std::getenv("DXMT9_DISABLE_PRESENT_BOUNDARY"),
+      std::getenv("DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION"),
+      std::getenv("DXMT9_PRESENT_BOUNDARY_COMPLETION"),
+      std::getenv("DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE"));
+  return value;
+}
+
 void PresentDrawableToken::complete(WMT::Reference<WMT::MetalDrawable> drawable) {
   {
     std::lock_guard lock(mutex_);

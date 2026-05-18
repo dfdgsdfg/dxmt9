@@ -69,6 +69,12 @@ struct EncodeDrawRecorder {
   void (*setFragmentSamplerState)(void* userdata,
                                   WMT::SamplerState sampler,
                                   std::uint8_t index) = nullptr;
+  void (*setVertexTexture)(void* userdata,
+                           WMT::Texture texture,
+                           std::uint8_t index) = nullptr;
+  void (*setVertexSamplerState)(void* userdata,
+                                WMT::SamplerState sampler,
+                                std::uint8_t index) = nullptr;
   void (*setVertexBuffer)(void* userdata,
                           WMT::Buffer buffer,
                           std::uint64_t offset,

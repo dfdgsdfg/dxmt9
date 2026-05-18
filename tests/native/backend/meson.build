@@ -41,6 +41,24 @@ present_acquire_policy_spec = executable(
 test('dxmt9-present-acquire-policy-spec', present_acquire_policy_spec,
      env: dxmt9_native_test_env)
 
+# Present boundary policy resolver matrix — locks the priority
+# `Disabled > PresentCompletion > Completion > AfterAcquire > Default`
+# and the "0" / empty-string / null treatment of the four
+# DXMT9_PRESENT_BOUNDARY_* / DXMT9_DISABLE_PRESENT_BOUNDARY env strings.
+# PresentCompletion defaults on (null / empty env counts as set) — see
+# the header comment in
+# `tests/native/backend/present_boundary_policy_spec.cpp`.
+present_boundary_policy_spec = executable(
+  'dxmt9-present-boundary-policy-spec',
+  'present_boundary_policy_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-present-boundary-policy-spec', present_boundary_policy_spec,
+     env: dxmt9_native_test_env)
+
 backend_pipeline_key_spec = executable(
   'dxmt9-backend-pipeline-key-spec',
   'backend_pipeline_key_spec.cpp',

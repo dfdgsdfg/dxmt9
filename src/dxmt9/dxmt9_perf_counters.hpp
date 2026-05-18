@@ -43,14 +43,6 @@ enum class RingArenaKind : std::uint8_t {
 // exhaustion that R-BACK-2.6/2.13 invariants assume bounded.
 void countChunkAdmit();
 void countChunkReject();
-// Chunk-import sentinel rejection: bumped whenever wireValuePtr<T>() in
-// device_c_chunk_replay.cpp resolves a non-zero wire pointer to a
-// recognised invalid-pointer sentinel (`< 0x1000`, `~0`, or the
-// zero-extended 32-bit `-1`) and returns nullptr to the caller in place
-// of a deref-doomed raw cast. A healthy run holds this at zero; non-zero
-// at process exit means a malformed packet (or a marshalling regression)
-// reached the importer but did not crash the replay.
-void countChunkWireInvalidPointerRejected();
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes);
 
 void countSubmitDraw();

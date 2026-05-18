@@ -1,0 +1,210 @@
+# Experiments
+
+Experiments are end-to-end runs against real D3D9 applications under the
+current `dxmt9` runtime.
+
+## Directory layout
+
+| Subdir | Committed? | Purpose |
+|---|---|---|
+| `apps/` | yes | Small fixture EXEs (D9VK, BasicHLSL). |
+| `apps_3rd/` | no | External installs (SFIV, Anno 1404, etc.). |
+| `prefixs/` | no | Per-experiment Wine prefixes. |
+| `wine/` | mixed | `manifest.toml` + README committed; bundles ignored. |
+| `launchers/` | yes | Per-app launcher scripts. |
+| `output/` | partial (`.gitkeep` only) | Run results. |
+| `references/` | yes | Reference screenshots. |
+| `CATALOGUE.toml` | yes | Manifest of every experiment. |
+
+Spec: `specs/experiments/runtime/{requirements,design}.md`.
+
+Primary entrypoint:
+
+```sh
+python3 scripts/run_apps/run_experiment.py list
+python3 scripts/run_apps/run_experiment.py run dxmt9-wsi-present-local
+python3 scripts/run_apps/run_experiment.py run dx-sdk-basichlsl --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-tutorial07 --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-hdrformats --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dxut-simple-sample --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run irrlicht-managed-lights --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run anno-1404-gold --wine-root "$WINE_ROOT" --prefix "$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
+python3 scripts/run_apps/run_experiment.py run street-fighter-iv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
+python3 scripts/run_apps/run_experiment.py run street-fighter-iv-benchmark-crossover-oracle --wine-root "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver" --wine-bin "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine" --prefix "$HOME/Library/Application Support/CrossOver/Bottles/Heroic" --binary "/path/to/StreetFighterIV_Benchmark.exe"
+```
+
+DX9 regression suite:
+
+```sh
+bash scripts/run_suites/run_dx9_regression_suite.sh --wine-root "$WINE_ROOT"
+```
+
+DX9 fast sanity suite derived from the small `d9vk` D3D9 tests:
+
+```sh
+bash scripts/run_suites/run_dx9_fast_sanity_suite.sh --wine-root "$WINE_ROOT"
+```
+
+This suite:
+
+- cross-builds the repo-local Win32 sanity apps
+- runs them across `dxmt9-x64`, `builtin-x64`, and `builtin-x86`
+- uses self-validating app exits plus captured frames, not builtin-oracle SSIM
+- writes `experiments/output/dx9-fast-sanity/summary.json` and `summary.md`
+
+Builtin-oracle compare suite for selected DX9 sample apps:
+
+```sh
+bash scripts/run_suites/run_dx9_oracle_compare_suite.sh --wine-root "$WINE_ROOT"
+```
+
+Stale temp-prefix cleanup for interrupted suite runs:
+
+```sh
+python3 scripts/tools/cleanup_dxmt9_temp_prefixes.py --dry-run
+python3 scripts/tools/cleanup_dxmt9_temp_prefixes.py --all
+```
+
+Notes:
+
+- `run_experiment.py` now cleans auto-created temp prefixes on normal exit and on
+  `SIGINT`/`SIGTERM`/`SIGHUP`
+- auto-created temp prefixes now live under `tmp/prefixes` in the repo root by
+  default
+- oracle/regression suite wrappers run stale temp-prefix cleanup automatically
+  before starting
+- use the cleanup script when earlier runs were killed hard or the machine was
+  interrupted and old `dxmt9-exp-*` prefixes remain under that temp root
+
+Build-then-run via the consolidated runner. Pass `--build` to invoke the
+app's `build_script` (declared in `CATALOGUE.toml`) before launching:
+
+```sh
+python3 scripts/run_apps/run_experiment.py run dx-sdk-basichlsl --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-tutorial07 --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dx-sdk-hdrformats --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run dxut-simple-sample --build --wine-root "$WINE_ROOT"
+python3 scripts/run_apps/run_experiment.py run irrlicht-managed-lights --build --wine-root "$WINE_ROOT"
+```
+
+Wrappers that still need extra setup (default-prefix injection or installer
+extraction) remain as shell scripts:
+
+```sh
+bash scripts/run_apps/run_anno1404_experiment.sh
+bash scripts/run_apps/run_sfiv_benchmark_experiment.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+bash scripts/run_suites/run_sfiv_benchmark_crossover_oracle.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+```
+
+Permanent-prefix installer for Heroic:
+
+```sh
+bash scripts/install/install_heroic_experiment_prefix.sh --prefix "$HOME/.wine-dxmt9-heroic" --wine-root "$WINE_ROOT"
+```
+
+The runner:
+
+- reads [`CATALOGUE.toml`](./CATALOGUE.toml)
+- stages `d3d9.dll`, `winemetal.dll`, and `winemetal.so` into a Wine runtime/prefix
+- runs the selected launcher
+- captures the presented back buffer directly from dxmt9 when `capture_frame` is set
+- falls back to window capture only when an internal frame dump is unavailable
+- writes `actual.png`, `diff.png`, `ssim.txt`, `dxmt9.log`, and `result.json`
+
+Current note:
+
+- the committed sample references are stale for several shader apps
+- use the builtin-oracle compare suite to judge current renderer parity
+- current builtin-vs-dxmt9 sample parity:
+  - `dx-sdk-basichlsl`: `0.9539`
+  - `dx-sdk-tutorial07`: `0.9094`
+  - `dxut-simple-sample`: `0.9426`
+  - `irrlicht-managed-lights`: `0.9979`
+
+Current verified bootstrap entry:
+
+- `dxmt9-wsi-present-local`
+
+This is not a catalogue target from the experiments spec. It exists to validate
+the launcher, frame-dump capture, and SSIM workflow locally before external
+sample binaries are staged.
+
+Current verified real application entry:
+
+- `dx-sdk-basichlsl`
+  - Heroic Wine 11.6 builtin path
+  - 240 frames
+  - direct backbuffer capture
+  - `ssim = 1.0000`
+- `dx-sdk-tutorial07`
+  - Heroic Wine 11.6 builtin path
+  - 180 frames
+  - direct backbuffer capture
+  - `ssim = 1.0000`
+- `dxut-simple-sample`
+  - Heroic Wine 11.6 builtin path
+  - 180 frames
+  - direct backbuffer capture
+  - `ssim = 1.0000`
+- `dx-sdk-hdrformats`
+  - Heroic Wine 11.6 builtin path
+  - 180 frames
+  - direct backbuffer capture
+  - `ssim = 1.0000`
+- `irrlicht-managed-lights`
+  - Heroic Wine 11.6 builtin path
+  - 180 frames
+  - direct backbuffer capture
+  - `ssim = 1.0000`
+
+Current verified host:
+
+- Heroic Wine 11.6 builtin path
+
+Current exploratory commercial target:
+
+- `anno-1404-gold`
+  - local Heroic install
+  - supported runtime: `Wine-11.6-DXMT`
+  - plain `Wine-11.6` is research-only because the game currently trips Wine's
+    `d3dx10_43` / `D3DX10SaveTextureToMemory` path before it becomes a usable
+    baseline
+  - reference-free exploratory capture for real-game bring-up
+
+Current exploratory feature targets:
+
+- `dxmt9-water-rt`
+  - repo-local DX9 sample
+  - render-to-texture + projected UV + alpha blend
+  - intended as the first focused proxy for `Anno 1404` water rendering bugs
+  - builtin-oracle compare now matches and can be used as a regression gate
+- `dxmt9-multitexture-terrain`
+  - repo-local DX9 sample
+  - multi-sampler terrain material blend
+  - intended as the second focused proxy for outdoor terrain/material bugs
+  - builtin-oracle compare currently matches and can be used as a regression gate
+- `dxmt9-perf-present-only`
+  - repo-local DX9 micro-benchmark
+  - clear + immediate present, no draw stress
+  - intended to isolate present/compositor pacing against Wine builtin D3D9
+- `dxmt9-perf-offscreen-heavy`
+  - repo-local DX9 micro-benchmark
+  - many fixed-function draws into an offscreen render target, no per-frame present
+  - intended to isolate draw/encode throughput without CAMetalLayer pacing
+- `dxmt9-perf-many-draw`
+  - repo-local DX9 micro-benchmark
+  - many fixed-function draw calls followed by immediate present
+  - intended to expose whether draw-call submission or present pacing dominates
+
+Current exploratory commercial-oracle candidate:
+
+- `street-fighter-iv-benchmark`
+  - Heroic `11.6-DXMT` research lane for `dxmt9`
+  - keep the Heroic prefix fresh; if the benchmark starts failing after local DLL
+    or `winetricks` experiments, recreate the prefix instead of trying to
+    salvage it
+  - wrapper now installs prefix-native `d3dx9_41` and mirrors the 32-bit DLL next to the extracted benchmark binary
+- `street-fighter-iv-benchmark-crossover-oracle`
+  - CrossOver `Heroic` bottle oracle lane
+  - uses builtin `d3d9` / `d3dx9_41` for commercial visual comparison
+  - current automatic capture is not trustworthy yet; use this lane as a manual visual oracle host until window capture is stabilized

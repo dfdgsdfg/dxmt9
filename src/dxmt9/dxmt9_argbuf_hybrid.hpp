@@ -186,8 +186,7 @@ u64 dirtyBytesEstimate(const uniform::DirtyState& dirty,
 // an empty `PopulatedArgbuf` if the encoder resource is uninitialized
 // or the transient reservation fails.
 //
-// Caller binds the constant buffers / textures / samplers via the
-// `bindResources` helper below, then issues
+// Caller binds the returned storage at slot 30 with
 // `setVertexBuffer(populated.storage, populated.offset, slot=30)` and
 // `setFragmentBuffer(...)` on the render encoder.
 PopulatedArgbuf openArgbuf(CommandQueue& queue,

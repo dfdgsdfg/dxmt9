@@ -2040,7 +2040,7 @@ oracle-date = "2026-05-17"
 
 [[test]]
 file = "texture/dxmt9_volume_v16u16_depth2_slice0_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -2052,7 +2052,7 @@ oracle-date = "2026-05-17"
 
 [[test]]
 file = "texture/dxmt9_volume_v16u16_depth2_slice1_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"
@@ -2061,6 +2061,90 @@ models = ["ps_3_0"]
 opcodes = ["DCL", "MOV", "TEXLDL"]
 oracle = "Wine d3d9 visual.c volume_v16u16_test behavior, reduced to true texture3d/V16U16 depth=2 slice1 sampling"
 oracle-date = "2026-05-17"
+
+[[test]]
+file = "ffp/dxmt9_ffp_material_ambient_emissive_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c lighting/material behavior, reduced to ambient plus emissive material readback"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "ffp/dxmt9_ffp_material_ambient_color_emissive_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c lighting/material behavior, reduced to COLOR1 ambient source plus emissive material readback"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "ffp/dxmt9_ffp_point_default_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_pointsize behavior, reduced to D3DFVF_PSIZE point-list readback"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "render_state/dxmt9_ffp_negative_vertex_fog_linear_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_negative_fixedfunction_fog behavior, reduced to FFP vertex fog abs(z) linear readback"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_alpha_disable_preserves_current_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_blending_ops behavior, reduced to ALPHAOP DISABLE preserving current alpha"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "texture/dxmt9_ffp_tss_color_disable_preserves_current_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c texture_blending_ops behavior, reduced to COLOROP DISABLE preserving current color"
+oracle-date = "2026-05-18"
+
+[[test]]
+file = "vs_specific/dxmt9_vs30_vertex_texture_texldl_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "MOV", "TEXLDL"]
+oracle = "Wine d3d9 visual.c test_vertex_texture behavior, reduced to VS TEXLDL vertex texture fetch readback"
+oracle-date = "2026-05-18"
 
 [[test]]
 file = "texture/dxmt9_autogen_update_texture_texldl_readback.shader_test"
