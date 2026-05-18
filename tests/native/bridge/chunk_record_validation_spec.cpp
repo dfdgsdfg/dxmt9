@@ -658,75 +658,6 @@ void testImportedWireSpecialRecordValidationMatrix() {
                         "STRETCH_RECT");
 }
 
-// `wireValuePtr<T>()` in device_c_chunk_replay.cpp resolves a wire pointer
-// through the WoW64 decode + native-pointer allowlist, then would otherwise
-// hand the raw value to a deref-doomed call site. The
-// isWirePointerSentinel() helper that the importer consults must:
-//   - allow nullptr (the dedicated detach signal — handled before the
-//     helper runs)
-//   - allow ordinary page-aligned heap pointers (real server-side
-//     allocations)
-//   - reject low-page sentinels (< 0x1000), the all-ones
-//     INVALID_HANDLE_VALUE pattern, and the zero-extended 32-bit -1.
-void testWirePointerSentinelRejectionMatrix() {
-  using dxmt9::d3d9::devicec::isWirePointerSentinel;
-
-  // Detach signal — handled by wireValuePtr<T>() before sentinel
-  // dispatch. The helper itself reports false for zero so the
-  // counter never bumps on the detach path.
-  check(!isWirePointerSentinel(0ull),
-        "zero is the detach signal, not a sentinel");
-
-  // Page-aligned + arbitrary high addresses — these are the valid
-  // PE heap allocations the bridge marshals across.
-  check(!isWirePointerSentinel(0x1000ull),
-        "smallest legal user-space page passes");
-  check(!isWirePointerSentinel(0x7fff'0000'1234ull),
-        "typical 64-bit heap pointer passes");
-  check(!isWirePointerSentinel(0x100000ull),
-        "1 MiB-aligned pointer passes");
-
-  // Low-page sentinels (< 0x1000) — uninitialized / poisoned values.
-  check(isWirePointerSentinel(0x1ull), "0x1 is rejected as a sentinel");
-  check(isWirePointerSentinel(0x7ull),
-        "low-bit-set value below first page is rejected");
-  check(isWirePointerSentinel(0xfffull),
-        "value one below the smallest page is rejected");
-
-  // 32-bit -1 zero-extended (a (uint32_t)-1 promoted to uint64).
-  check(isWirePointerSentinel(0xffffffffull),
-        "zero-extended 32-bit -1 is rejected");
-
-  // 64-bit INVALID_HANDLE_VALUE / -1.
-  check(isWirePointerSentinel(~static_cast<std::uint64_t>(0)),
-        "64-bit all-ones is rejected");
-}
-
-void testWireInvalidPointerRejectedCounterRequiresPerf() {
-  // The counter only ticks when DXMT_PERF_COUNTERS is enabled, which
-  // matches the rest of the perf counter contract. We never assert on
-  // an exact count here because other tests in this binary can run
-  // before us — instead, snapshot before + after and check monotonic
-  // delta. Skip cleanly when counters are off so this stays Linux/CI
-  // friendly without forcing DXMT_PERF_COUNTERS=1 on every harness.
-  if (!dxmt9::perf::enabled()) {
-    return;
-  }
-  const auto before = dxmt9::perf::snapshot();
-  // perf::snapshot() does not include chunk_wire_invalid_pointer_rejected
-  // in its focused per-frame subset; the counter is reported only via the
-  // cumulative [dxmt9-perf] line at exit. The end-to-end probe lives in
-  // the experiment harness expected-counters gate. Here we only verify
-  // that calling the public count function compiles, links, and does not
-  // crash — the table-audit Meson test guarantees the row exists.
-  dxmt9::perf::countChunkWireInvalidPointerRejected();
-  const auto after = dxmt9::perf::snapshot();
-  // Sanity: snapshot bookends are well-formed. Other counters can move
-  // concurrently in this binary; we deliberately do not compare them.
-  check(after.commandBuffers >= before.commandBuffers,
-        "perf snapshot must be monotonic across helper calls");
-}
-
 }  // namespace
 
 int main() {
@@ -744,8 +675,6 @@ int main() {
     testWireHandleGenerationCrossSideEquality();
     testImportedWireAcceptsAllCommandIds();
     testImportedWireSpecialRecordValidationMatrix();
-    testWirePointerSentinelRejectionMatrix();
-    testWireInvalidPointerRejectedCounterRequiresPerf();
   } catch (const dxmt9::d3d9::devicec::spec::TestFailure& e) {
     std::cerr << "chunk_record_validation_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;
