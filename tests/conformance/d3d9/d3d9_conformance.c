@@ -90,6 +90,10 @@ static const struct test_case tests[] =
     {"ex_frame_latency_state", test_ex_frame_latency_state},
     {"lockable_backbuffer_lock_policy", test_lockable_backbuffer_lock_policy},
     {"swapchain_multisample_reset", test_swapchain_multisample_reset},
+    {"fullscreen_window_position_restore",
+            test_fullscreen_window_position_restore},
+    {"ex_user_memory_getdc_dib_identity",
+            test_ex_user_memory_getdc_dib_identity},
 };
 
 int main(void)

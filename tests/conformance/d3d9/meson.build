@@ -16,6 +16,7 @@ d3d9_conformance = executable(
     'd3d9_conformance_query_stateblock.c',
   ],
   dependencies: [
+    c.find_library('gdi32', required: true),
     c.find_library('user32', required: true),
   ],
   install: false,

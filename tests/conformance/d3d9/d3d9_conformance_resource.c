@@ -1970,6 +1970,86 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_user_memory_getdc()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_ex_user_memory_getdc_dib_identity(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9Ex *device = NULL;
+    DIBSECTION dib;
+    HBITMAP bitmap;
+    IDirect3D9Ex *d3d9ex;
+    unsigned int *data;
+    void *mem;
+    HWND window;
+    HDC dc;
+    HRESULT hr;
+    int size;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_ex_device(d3d9ex, window);
+    if (!device)
+        goto done_window;
+
+    data = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+            16 * 16 * sizeof(*data));
+    CHECK_TRUE(data != NULL);
+    if (!data)
+        goto done_device;
+
+    mem = data;
+    hr = IDirect3DDevice9Ex_CreateOffscreenPlainSurface(device, 16, 16,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &surface, &mem);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_allocation;
+
+    dc = NULL;
+    hr = IDirect3DSurface9_GetDC(surface, &dc);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        bitmap = GetCurrentObject(dc, OBJ_BITMAP);
+        CHECK_TRUE(bitmap != NULL);
+        if (bitmap)
+        {
+            memset(&dib, 0, sizeof(dib));
+            size = GetObjectA(bitmap, sizeof(dib), &dib);
+            CHECK_TRUE(size == sizeof(dib));
+            if (size == sizeof(dib))
+                CHECK_TRUE(dib.dsBm.bmBits == data);
+        }
+
+        CHECK_TRUE(BitBlt(dc, 0, 0, 16, 8, NULL, 0, 0, WHITENESS));
+        CHECK_TRUE(BitBlt(dc, 0, 8, 16, 8, NULL, 0, 0, BLACKNESS));
+        CHECK_HR(IDirect3DSurface9_ReleaseDC(surface, dc), D3D_OK);
+        CHECK_TRUE(data[0] == 0xffffffffu);
+        CHECK_TRUE(data[8 * 16] == 0x00000000u);
+    }
+
+    IDirect3DSurface9_Release(surface);
+
+done_allocation:
+    HeapFree(GetProcessHeap(), 0, data);
+done_device:
+    IDirect3DDevice9Ex_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
  * function: test_user_memory()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

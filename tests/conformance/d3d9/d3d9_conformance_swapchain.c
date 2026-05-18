@@ -118,6 +118,98 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_window_position()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_fullscreen_window_position_restore(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    D3DDISPLAYMODE mode;
+    MONITORINFO monitor_info;
+    RECT window_rect;
+    HMONITOR monitor;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    BOOL ret;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    monitor = IDirect3D9_GetAdapterMonitor(d3d9, D3DADAPTER_DEFAULT);
+    CHECK_TRUE(monitor != NULL);
+    if (!monitor)
+        goto done_d3d9;
+
+    memset(&monitor_info, 0, sizeof(monitor_info));
+    monitor_info.cbSize = sizeof(monitor_info);
+    ret = GetMonitorInfoA(monitor, &monitor_info);
+    CHECK_TRUE(ret);
+    if (!ret)
+        goto done_d3d9;
+
+    memset(&mode, 0, sizeof(mode));
+    hr = IDirect3D9_GetAdapterDisplayMode(d3d9, D3DADAPTER_DEFAULT, &mode);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_d3d9;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    pp = default_fullscreen_present_parameters(window, &mode);
+    pp.BackBufferWidth = monitor_info.rcMonitor.right
+            - monitor_info.rcMonitor.left;
+    pp.BackBufferHeight = monitor_info.rcMonitor.bottom
+            - monitor_info.rcMonitor.top;
+
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    if (FAILED(hr))
+    {
+        skip_current_test("fullscreen CreateDevice failed");
+        goto done_window;
+    }
+
+    pump_window_messages();
+    ret = GetWindowRect(window, &window_rect);
+    CHECK_TRUE(ret);
+    if (ret)
+        CHECK_TRUE(EqualRect(&window_rect, &monitor_info.rcMonitor));
+
+    ret = SetWindowPos(window, NULL, monitor_info.rcMonitor.left + 11,
+            monitor_info.rcMonitor.top + 13, 0, 0,
+            SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE);
+    CHECK_TRUE(ret);
+
+    hr = IDirect3DDevice9_Reset(device, &pp);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        pump_window_messages();
+        ret = GetWindowRect(window, &window_rect);
+        CHECK_TRUE(ret);
+        if (ret)
+            CHECK_TRUE(EqualRect(&window_rect, &monitor_info.rcMonitor));
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_swapchain_parameters()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

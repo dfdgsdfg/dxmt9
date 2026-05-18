@@ -355,6 +355,7 @@ void test_present_parameter_validation(const struct d3d9_api *api);
 void test_present_parameter_normalization(const struct d3d9_api *api);
 void test_lockable_backbuffer_lock_policy(const struct d3d9_api *api);
 void test_swapchain_multisample_reset(const struct d3d9_api *api);
+void test_fullscreen_window_position_restore(const struct d3d9_api *api);
 
 void test_stateblock_invalid_type_recording_invalid_calls(const struct d3d9_api *api);
 void test_shader_constant_apply(const struct d3d9_api *api);
@@ -378,6 +379,7 @@ void test_resource_priority_roundtrip(const struct d3d9_api *api);
 void test_shared_handle_policy(const struct d3d9_api *api);
 void test_ex_shared_handle_policy(const struct d3d9_api *api);
 void test_ex_user_memory_lock_identity(const struct d3d9_api *api);
+void test_ex_user_memory_getdc_dib_identity(const struct d3d9_api *api);
 void test_creation_failure_out_pointers(const struct d3d9_api *api);
 void test_render_target_device_mismatch(const struct d3d9_api *api);
 void test_create_depth_stencil_surface_ex(const struct d3d9_api *api);
