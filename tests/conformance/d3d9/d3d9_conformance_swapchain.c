@@ -677,6 +677,146 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lockable_backbuffer()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_nonlockable_backbuffer_getdc_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *backbuffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    HDC dc;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_GetBackBuffer(device, 0, 0,
+            D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&locked, 0xcc, sizeof(locked));
+        CHECK_HR(IDirect3DSurface9_LockRect(backbuffer, &locked, NULL,
+                D3DLOCK_DISCARD), D3DERR_INVALIDCALL);
+
+        dc = (HDC)(ULONG_PTR)0xdeadbeef;
+        CHECK_HR(IDirect3DSurface9_GetDC(backbuffer, &dc),
+                D3DERR_INVALIDCALL);
+        CHECK_TRUE(dc == (HDC)(ULONG_PTR)0xdeadbeef);
+
+        IDirect3DSurface9_Release(backbuffer);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lockable_backbuffer()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_reset_lockable_backbuffer_policy(const struct d3d9_api *api)
+{
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DSurface9 *backbuffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS actual;
+    D3DPRESENT_PARAMETERS pp;
+    D3DLOCKED_RECT locked;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    pp = default_present_parameters(window);
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.Flags = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
+
+    hr = IDirect3DDevice9_Reset(device, &pp);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&actual, 0xcc, sizeof(actual));
+        hr = IDirect3DSwapChain9_GetPresentParameters(swapchain, &actual);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE((actual.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER) != 0);
+            CHECK_TRUE(actual.SwapEffect == D3DSWAPEFFECT_DISCARD);
+        }
+        IDirect3DSwapChain9_Release(swapchain);
+    }
+
+    hr = IDirect3DDevice9_GetBackBuffer(device, 0, 0,
+            D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&locked, 0xcc, sizeof(locked));
+        hr = IDirect3DSurface9_LockRect(backbuffer, &locked, NULL,
+                D3DLOCK_DISCARD);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(locked.pBits != NULL);
+            CHECK_TRUE(locked.Pitch != 0);
+            CHECK_HR(IDirect3DSurface9_UnlockRect(backbuffer), D3D_OK);
+        }
+        IDirect3DSurface9_Release(backbuffer);
+    }
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_swapchain_multisample_reset()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

@@ -358,6 +358,8 @@ void test_ex_frame_latency_state(const struct d3d9_api *api);
 void test_present_parameter_validation(const struct d3d9_api *api);
 void test_present_parameter_normalization(const struct d3d9_api *api);
 void test_lockable_backbuffer_lock_policy(const struct d3d9_api *api);
+void test_nonlockable_backbuffer_getdc_policy(const struct d3d9_api *api);
+void test_reset_lockable_backbuffer_policy(const struct d3d9_api *api);
 void test_swapchain_multisample_reset(const struct d3d9_api *api);
 void test_fullscreen_window_position_restore(const struct d3d9_api *api);
 

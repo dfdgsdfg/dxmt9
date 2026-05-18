@@ -248,6 +248,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_swapchain.c"
+function = "test_nonlockable_backbuffer_getdc_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_lockable_backbuffer"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "backbuffer-locking"
+owner = "core/swapchain"
+requirements = ["R-TEST-12.13", "R-TEST-12.17"]
+acceptance = ["ordinary back buffers reject LockRect(DISCARD) and GetDC without mutating the HDC out-parameter"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_reset_lockable_backbuffer_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_lockable_backbuffer"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "backbuffer-locking"
+owner = "core/swapchain"
+requirements = ["R-TEST-12.13", "R-TEST-12.17"]
+acceptance = ["Reset with D3DPRESENTFLAG_LOCKABLE_BACKBUFFER preserves present parameters and produces a lockable back buffer"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
 function = "test_swapchain_multisample_reset"
 source = "wine/dlls/d3d9/tests/device.c:test_swapchain_multisample_reset"
 source_kind = "behavioral-oracle"
