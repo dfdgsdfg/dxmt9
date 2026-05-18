@@ -309,6 +309,204 @@ void testChunkSlotSimpleCommandSoAViews() {
         "slot clearCommands resets recent uniform handle");
 }
 
+void testBlitReadbackPresentCommandViewPayloadCopies() {
+  ChunkSlot slot{};
+
+  SurfaceCopyDesc surfaceCopy{};
+  surfaceCopy.source = Handle{0x1100};
+  surfaceCopy.destination = Handle{0x2200};
+  surfaceCopy.sourceRect = Rect{1, 3, 17, 19};
+  surfaceCopy.destinationRect = Rect{5, 7, 29, 31};
+  surfaceCopy.sourceLevel = 2;
+  surfaceCopy.destinationLevel = 4;
+  surfaceCopy.linear = true;
+  surfaceCopy.sourceSampleCount = 4;
+  surfaceCopy.destinationSampleCount = 1;
+  slot.appendSurfaceCopy(surfaceCopy);
+
+  StretchRectDesc stretchRect{};
+  stretchRect.source = Handle{0x3300};
+  stretchRect.destination = Handle{0x4400};
+  stretchRect.sourceRect = Rect{11, 13, 41, 43};
+  stretchRect.destinationRect = Rect{17, 19, 47, 53};
+  stretchRect.linear = true;
+  stretchRect.sourceSampleCount = 2;
+  stretchRect.destinationSampleCount = 4;
+  slot.appendStretchRect(stretchRect);
+
+  ReadbackDesc readback{};
+  readback.source = Handle{0x5500};
+  readback.destination = Handle{0x6600};
+  readback.sourceRect = Rect{23, 29, 59, 61};
+  readback.sourceLevel = 3;
+  readback.sourceSampleCount = 8;
+  readback.destinationSampleCount = 1;
+  slot.appendReadback(readback);
+
+  ColorFillDesc colorFill{};
+  colorFill.destination = Handle{0x7700};
+  colorFill.rect = Rect{31, 37, 67, 71};
+  colorFill.hasRect = true;
+  colorFill.color = ColorRGBA{0.125f, 0.25f, 0.5f, 0.75f};
+  slot.appendColorFill(colorFill);
+
+  SwapDesc present{};
+  present.window = Handle{0x8800};
+  present.sourceSurface = Handle{0x9900};
+  present.width = 1280;
+  present.height = 720;
+  present.format = Format::X8R8G8B8;
+  present.interval = PresentInterval::Immediate;
+  present.windowed = false;
+  present.backBufferCount = 3;
+  present.displaySyncEnabled = false;
+  present.multiSampleType = MultiSampleType::Four;
+  present.presentId = PresentId{0xaa00};
+  present.drawableTokenRequired = true;
+  present.maxFrameLatency = 2;
+  slot.appendPresent(present, Handle{0xab00});
+
+  surfaceCopy.source = Handle{0};
+  surfaceCopy.destination = Handle{0};
+  surfaceCopy.sourceRect = {};
+  surfaceCopy.destinationRect = {};
+  surfaceCopy.sourceLevel = 99;
+  surfaceCopy.destinationLevel = 99;
+  surfaceCopy.linear = false;
+  surfaceCopy.sourceSampleCount = 99;
+  surfaceCopy.destinationSampleCount = 99;
+  stretchRect.source = Handle{0};
+  stretchRect.destination = Handle{0};
+  stretchRect.sourceRect = {};
+  stretchRect.destinationRect = {};
+  stretchRect.linear = false;
+  stretchRect.sourceSampleCount = 99;
+  stretchRect.destinationSampleCount = 99;
+  readback.source = Handle{0};
+  readback.destination = Handle{0};
+  readback.sourceRect = {};
+  readback.sourceLevel = 99;
+  readback.sourceSampleCount = 99;
+  readback.destinationSampleCount = 99;
+  colorFill.destination = Handle{0};
+  colorFill.rect = {};
+  colorFill.hasRect = false;
+  colorFill.color = {};
+  present.window = Handle{0};
+  present.sourceSurface = Handle{0};
+  present.width = 0;
+  present.height = 0;
+  present.format = Format::Unknown;
+  present.interval = PresentInterval::Default;
+  present.windowed = true;
+  present.backBufferCount = 0;
+  present.displaySyncEnabled = true;
+  present.multiSampleType = MultiSampleType::None;
+  present.presentId = {};
+  present.drawableTokenRequired = false;
+  present.maxFrameLatency = 0;
+
+  const auto surfaceCopyView = slot.commandAt(0);
+  check(surfaceCopyView.surfaceCopy != nullptr,
+        "surface-copy command view resolves copied payload");
+  checkEq(surfaceCopyView.surfaceCopy->source, Handle{0x1100},
+          "surface-copy command view preserves source handle copy");
+  checkEq(surfaceCopyView.surfaceCopy->destination, Handle{0x2200},
+          "surface-copy command view preserves destination handle copy");
+  checkEq(surfaceCopyView.surfaceCopy->sourceRect, Rect{1, 3, 17, 19},
+          "surface-copy command view preserves source rect copy");
+  checkEq(surfaceCopyView.surfaceCopy->destinationRect, Rect{5, 7, 29, 31},
+          "surface-copy command view preserves destination rect copy");
+  checkEq(surfaceCopyView.surfaceCopy->sourceLevel, 2u,
+          "surface-copy command view preserves source level copy");
+  checkEq(surfaceCopyView.surfaceCopy->destinationLevel, 4u,
+          "surface-copy command view preserves destination level copy");
+  check(surfaceCopyView.surfaceCopy->linear,
+        "surface-copy command view preserves filter intent copy");
+  checkEq(surfaceCopyView.surfaceCopy->sourceSampleCount, 4u,
+          "surface-copy command view preserves source sample count copy");
+  checkEq(surfaceCopyView.surfaceCopy->destinationSampleCount, 1u,
+          "surface-copy command view preserves destination sample count copy");
+
+  const auto stretchRectView = slot.commandAt(1);
+  check(stretchRectView.stretchRect != nullptr,
+        "stretch-rect command view resolves copied payload");
+  checkEq(stretchRectView.stretchRect->source, Handle{0x3300},
+          "stretch-rect command view preserves source handle copy");
+  checkEq(stretchRectView.stretchRect->destination, Handle{0x4400},
+          "stretch-rect command view preserves destination handle copy");
+  checkEq(stretchRectView.stretchRect->sourceRect, Rect{11, 13, 41, 43},
+          "stretch-rect command view preserves source rect copy");
+  checkEq(stretchRectView.stretchRect->destinationRect, Rect{17, 19, 47, 53},
+          "stretch-rect command view preserves destination rect copy");
+  check(stretchRectView.stretchRect->linear,
+        "stretch-rect command view preserves filter intent copy");
+  checkEq(stretchRectView.stretchRect->sourceSampleCount, 2u,
+          "stretch-rect command view preserves source sample count copy");
+  checkEq(stretchRectView.stretchRect->destinationSampleCount, 4u,
+          "stretch-rect command view preserves destination sample count copy");
+
+  const auto readbackView = slot.commandAt(2);
+  check(readbackView.readback != nullptr,
+        "readback command view resolves copied payload");
+  checkEq(readbackView.readback->source, Handle{0x5500},
+          "readback command view preserves source handle copy");
+  checkEq(readbackView.readback->destination, Handle{0x6600},
+          "readback command view preserves destination handle copy");
+  checkEq(readbackView.readback->sourceRect, Rect{23, 29, 59, 61},
+          "readback command view preserves source rect copy");
+  checkEq(readbackView.readback->sourceLevel, 3u,
+          "readback command view preserves source level copy");
+  checkEq(readbackView.readback->sourceSampleCount, 8u,
+          "readback command view preserves source sample count copy");
+  checkEq(readbackView.readback->destinationSampleCount, 1u,
+          "readback command view preserves destination sample count copy");
+
+  const auto colorFillView = slot.commandAt(3);
+  check(colorFillView.colorFill != nullptr,
+        "color-fill command view resolves copied payload");
+  checkEq(colorFillView.colorFill->destination, Handle{0x7700},
+          "color-fill command view preserves destination handle copy");
+  checkEq(colorFillView.colorFill->rect, Rect{31, 37, 67, 71},
+          "color-fill command view preserves rect copy");
+  check(colorFillView.colorFill->hasRect,
+        "color-fill command view preserves optional rect flag copy");
+  checkEq(colorFillView.colorFill->color, ColorRGBA{0.125f, 0.25f, 0.5f, 0.75f},
+          "color-fill command view preserves fill color copy");
+
+  const auto presentView = slot.commandAt(4);
+  check(presentView.present != nullptr,
+        "present command view resolves copied payload");
+  checkEq(presentView.present->present.window, Handle{0x8800},
+          "present command view preserves window handle copy");
+  checkEq(presentView.present->present.sourceSurface, Handle{0x9900},
+          "present command view preserves source surface copy");
+  checkEq(presentView.present->present.width, 1280u,
+          "present command view preserves width copy");
+  checkEq(presentView.present->present.height, 720u,
+          "present command view preserves height copy");
+  checkEq(presentView.present->present.format, Format::X8R8G8B8,
+          "present command view preserves format copy");
+  checkEq(presentView.present->present.interval, PresentInterval::Immediate,
+          "present command view preserves interval copy");
+  check(!presentView.present->present.windowed,
+        "present command view preserves fullscreen/windowed intent copy");
+  checkEq(presentView.present->present.backBufferCount, 3u,
+          "present command view preserves back-buffer count copy");
+  check(!presentView.present->present.displaySyncEnabled,
+        "present command view preserves display-sync intent copy");
+  checkEq(presentView.present->present.multiSampleType, MultiSampleType::Four,
+          "present command view preserves multisample copy");
+  checkEq(presentView.present->present.presentId, PresentId{0xaa00},
+          "present command view preserves presenter id copy");
+  check(presentView.present->present.drawableTokenRequired,
+        "present command view preserves drawable-token requirement copy");
+  checkEq(presentView.present->present.maxFrameLatency, 2u,
+          "present command view preserves frame-latency copy");
+  checkEq(presentView.present->presentSource, Handle{0xab00},
+          "present command view preserves explicit present source copy");
+}
+
 void testChunkSlotDirectDrawRunUniformLookup() {
   DrawDesc base{};
   base.primitiveCount = 1;
@@ -2041,6 +2239,7 @@ void testFlatDrawStateKey() {
 int main() {
   testChunkSlotU32GuardBoundaries();
   testChunkSlotSimpleCommandSoAViews();
+  testBlitReadbackPresentCommandViewPayloadCopies();
   testChunkSlotDirectDrawRunUniformLookup();
   testStateValueTableDirtyHashContract();
   testStateDrawTransform();

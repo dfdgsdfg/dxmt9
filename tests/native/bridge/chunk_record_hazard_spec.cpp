@@ -178,6 +178,119 @@ void testImportedRecordHazardsSeparateReadsAndWrites() {
         "draw hazard writes render target");
 }
 
+void testImportedSurfaceOperationHazardsPreserveReadWriteIntent() {
+  D9CCommandRecordStretchRect stretch{};
+  stretch.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
+  stretch.header.size = sizeof(stretch);
+  stretch.srcWire = 0x4100u;
+  stretch.dstWire = 0x4108u;
+
+  D9CCommandRecordUpdateSurface updateSurface{};
+  updateSurface.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
+  updateSurface.header.size = sizeof(updateSurface);
+  updateSurface.srcWire = 0x4200u;
+  updateSurface.dstWire = 0x4208u;
+
+  D9CCommandRecordColorFill colorFill{};
+  colorFill.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
+  colorFill.header.size = sizeof(colorFill);
+  colorFill.surfaceWire = 0x4300u;
+
+  D9CCommandRecordUpdateTexture updateTexture{};
+  updateTexture.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
+  updateTexture.header.size = sizeof(updateTexture);
+  updateTexture.srcWire = 0x4400u;
+  updateTexture.dstWire = 0x4408u;
+
+  D9CCommandRecordReadback readback{};
+  readback.header.type = D9C_COMMAND_RECORD_READBACK;
+  readback.header.size = sizeof(readback);
+  readback.srcWire = 0x4500u;
+  readback.dstWire = 0x4508u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, stretch);
+  appendRecord(bytes, updateSurface);
+  appendRecord(bytes, colorFill);
+  appendRecord(bytes, updateTexture);
+  appendRecord(bytes, readback);
+
+  const auto chunk = makeImportedChunkView(bytes.data(),
+                                           static_cast<std::uint32_t>(bytes.size()),
+                                           5u);
+  std::uint32_t offset = 0;
+  std::uint32_t index = 0;
+  const auto nextHazards = [&](std::uint32_t type) {
+    const auto record = nextImportedRecord(chunk, offset, index);
+    check(record.has_value(), "surface operation hazard record exists");
+    check(record->valid(), "surface operation hazard record validates");
+    checkEq(record->header.type, type, "surface operation hazard record type");
+    dxmt9::d3d9::devicec::ImportedRecordResourceHazards hazards;
+    collectImportedRecordResourceHazards(*record, hazards);
+    offset = record->nextOffset();
+    index = record->nextIndex();
+    return hazards;
+  };
+
+  auto hazards = nextHazards(D9C_COMMAND_RECORD_STRETCH_RECT);
+  auto reads = makeImportedChunkHandleEntries(hazards.reads);
+  auto writes = makeImportedChunkHandleEntries(hazards.writes);
+  checkEq(reads.size(), static_cast<std::size_t>(1),
+          "stretch-rect hazard has one read surface");
+  checkEq(writes.size(), static_cast<std::size_t>(1),
+          "stretch-rect hazard has one write surface");
+  check(containsHandle(reads, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4100u),
+        "stretch-rect hazard reads source surface");
+  check(containsHandle(writes, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4108u),
+        "stretch-rect hazard writes destination surface");
+
+  hazards = nextHazards(D9C_COMMAND_RECORD_UPDATE_SURFACE);
+  reads = makeImportedChunkHandleEntries(hazards.reads);
+  writes = makeImportedChunkHandleEntries(hazards.writes);
+  checkEq(reads.size(), static_cast<std::size_t>(1),
+          "update-surface hazard has one read surface");
+  checkEq(writes.size(), static_cast<std::size_t>(1),
+          "update-surface hazard has one write surface");
+  check(containsHandle(reads, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4200u),
+        "update-surface hazard reads source surface");
+  check(containsHandle(writes, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4208u),
+        "update-surface hazard writes destination surface");
+
+  hazards = nextHazards(D9C_COMMAND_RECORD_COLOR_FILL);
+  reads = makeImportedChunkHandleEntries(hazards.reads);
+  writes = makeImportedChunkHandleEntries(hazards.writes);
+  check(reads.empty(), "color-fill hazard has no read handle");
+  checkEq(writes.size(), static_cast<std::size_t>(1),
+          "color-fill hazard has one write surface");
+  check(containsHandle(writes, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4300u),
+        "color-fill hazard writes destination surface");
+
+  hazards = nextHazards(D9C_COMMAND_RECORD_UPDATE_TEXTURE);
+  reads = makeImportedChunkHandleEntries(hazards.reads);
+  writes = makeImportedChunkHandleEntries(hazards.writes);
+  checkEq(reads.size(), static_cast<std::size_t>(1),
+          "update-texture hazard has one read texture");
+  checkEq(writes.size(), static_cast<std::size_t>(1),
+          "update-texture hazard has one write texture");
+  check(containsHandle(reads, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x4400u),
+        "update-texture hazard reads source texture");
+  check(containsHandle(writes, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x4408u),
+        "update-texture hazard writes destination texture");
+
+  hazards = nextHazards(D9C_COMMAND_RECORD_READBACK);
+  reads = makeImportedChunkHandleEntries(hazards.reads);
+  writes = makeImportedChunkHandleEntries(hazards.writes);
+  checkEq(reads.size(), static_cast<std::size_t>(1),
+          "readback hazard has one read surface");
+  checkEq(writes.size(), static_cast<std::size_t>(1),
+          "readback hazard has one write surface");
+  check(containsHandle(reads, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4500u),
+        "readback hazard reads source surface");
+  check(containsHandle(writes, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4508u),
+        "readback hazard writes destination surface");
+  checkEq(index, 5u, "surface operation hazards consumed all records");
+}
+
 void testImportedReplayOrderingDecisionsAreDataDriven() {
   const auto firstDraw = makeHazardDrawRecord(0x3000u, 0x1000u, 0x2000u);
   const auto cleanDraw = makeHazardDrawRecord(0x3008u, 0x1008u, 0x2008u);
@@ -272,6 +385,7 @@ int main() {
     testResourceRetentionDerivationFromSurfaceAndReadbackRecords();
     testResourceRetentionDerivationFromApplyStateRecords();
     testImportedRecordHazardsSeparateReadsAndWrites();
+    testImportedSurfaceOperationHazardsPreserveReadWriteIntent();
     testImportedReplayOrderingDecisionsAreDataDriven();
   } catch (const dxmt9::d3d9::devicec::spec::TestFailure& e) {
     std::cerr << "chunk_record_hazard_spec failed: " << e.what() << '\n';
