@@ -783,6 +783,112 @@ void testQueryFlushPresentResetSequenceBoundaries() {
           "post-reset timestamp uses reset-local sequence id");
 }
 
+void testGetRenderTargetDataUsesRuntimeReadbackPayload() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+
+  PresentParameters params{};
+  params.backBufferWidth = 64u;
+  params.backBufferHeight = 32u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.presentationInterval = PresentInterval::Immediate;
+  params.deviceWindow = Handle{0x1700u};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "readback payload device");
+
+  auto source = device->createSurface({
+      .width = 3u,
+      .height = 2u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::Default,
+      .usage = UsageRenderTarget,
+      .renderTarget = true,
+  });
+  auto destination = device->createSurface({
+      .width = 3u,
+      .height = 2u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::Scratch,
+  });
+  check(source != nullptr, "readback payload source surface");
+  check(destination != nullptr, "readback payload destination surface");
+
+  backend->surfaceCopies.clear();
+  backend->readbacks.clear();
+  backend->readbackSurfaceCalls.clear();
+  backend->flushCount = 0;
+  backend->readbackSurfaceResult = true;
+  backend->readbackSurfacePixels.pitch = 16u;
+  backend->readbackSurfacePixels.bytes = {
+      0x11u, 0x12u, 0x13u, 0xffu,
+      0x21u, 0x22u, 0x23u, 0xffu,
+      0x31u, 0x32u, 0x33u, 0xffu,
+      0xeeu, 0xeeu, 0xeeu, 0xeeu,
+      0x41u, 0x42u, 0x43u, 0xffu,
+      0x51u, 0x52u, 0x53u, 0xffu,
+      0x61u, 0x62u, 0x63u, 0xffu,
+      0xddu, 0xddu, 0xddu, 0xddu,
+  };
+
+  checkEq(device->getRenderTargetData(source, destination), D3D_OK,
+          "runtime readback payload succeeds");
+
+  checkEq(backend->readbacks.size(), size_t{1},
+          "runtime readback submits exactly one ReadbackDesc");
+  checkEq(backend->readbackSurfaceCalls.size(), size_t{1},
+          "runtime readback invokes backend readbackSurface once");
+  checkEq(backend->flushCount, 1u,
+          "runtime readback flushes before reading backend pixels");
+  check(backend->surfaceCopies.empty(),
+        "successful runtime readback does not fall back to surface copy");
+
+  const auto& submitted = backend->readbacks[0];
+  const auto& consumed = backend->readbackSurfaceCalls[0];
+  checkEq(submitted.source, source->handle(),
+          "submitted readback source handle");
+  checkEq(submitted.destination, destination->handle(),
+          "submitted readback destination handle");
+  checkEq(submitted.sourceRect, Rect{0, 0, 3, 2},
+          "submitted readback covers full source extent");
+  checkEq(submitted.sourceLevel, 0u,
+          "submitted readback source level");
+  checkEq(submitted.sourceSampleCount, 1u,
+          "submitted readback source sample count");
+  checkEq(submitted.destinationSampleCount, 1u,
+          "submitted readback destination sample count");
+  checkEq(consumed.source, submitted.source,
+          "backend readbackSurface consumes same source handle");
+  checkEq(consumed.destination, submitted.destination,
+          "backend readbackSurface consumes same destination handle");
+  checkEq(consumed.sourceRect, submitted.sourceRect,
+          "backend readbackSurface consumes same source rect");
+
+  auto region = destination->lockRect(nullptr, 0);
+  check(region.data != nullptr, "runtime readback destination lock");
+  checkEq(region.pitch, 12u,
+          "destination surface keeps native compact pitch");
+  const auto* bytes = static_cast<const u8*>(region.data);
+  const std::array<u8, 12> firstRow{
+      0x11u, 0x12u, 0x13u, 0xffu,
+      0x21u, 0x22u, 0x23u, 0xffu,
+      0x31u, 0x32u, 0x33u, 0xffu,
+  };
+  const std::array<u8, 12> secondRow{
+      0x41u, 0x42u, 0x43u, 0xffu,
+      0x51u, 0x52u, 0x53u, 0xffu,
+      0x61u, 0x62u, 0x63u, 0xffu,
+  };
+  checkBytes(std::span<const u8>(bytes, firstRow.size()),
+             std::span<const u8>(firstRow.data(), firstRow.size()),
+             "runtime readback copies first backend row");
+  checkBytes(std::span<const u8>(bytes + region.pitch, secondRow.size()),
+             std::span<const u8>(secondRow.data(), secondRow.size()),
+             "runtime readback honors backend pitch for second row");
+  destination->unlockRect();
+}
+
 void testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer() {
   auto backend = std::make_shared<RecordingBackend>();
   Factory factory({}, backend);
@@ -927,6 +1033,7 @@ int main() {
     testDeviceCoreFlow();
     testFullscreenAndDeviceLost();
     testQueryFlushPresentResetSequenceBoundaries();
+    testGetRenderTargetDataUsesRuntimeReadbackPayload();
     testSwapChainPresentOverridesCallerSourceWithOwningBackBuffer();
     testExperimentCaptureFrameListAndRangeWriteInternalFrames();
     testExperimentCaptureWriteFailureEmitsSkipSidecar();

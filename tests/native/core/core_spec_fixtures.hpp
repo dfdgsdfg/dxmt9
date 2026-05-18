@@ -577,6 +577,15 @@ struct RecordingBackend final : BackendDevice {
     ++flushCount;
   }
 
+  bool readbackSurface(const ReadbackDesc& desc, ReadbackPixels& pixels) override {
+    readbackSurfaceCalls.push_back(desc);
+    if (!readbackSurfaceResult) {
+      return false;
+    }
+    pixels = readbackSurfacePixels;
+    return true;
+  }
+
   u64 nextHandle = 1;
   std::vector<BufferDesc> createdBuffers;
   std::vector<TextureDesc> createdTextures;
@@ -594,6 +603,9 @@ struct RecordingBackend final : BackendDevice {
   std::vector<SurfaceCopyDesc> surfaceCopies;
   std::vector<StretchRectDesc> stretchRects;
   std::vector<ReadbackDesc> readbacks;
+  std::vector<ReadbackDesc> readbackSurfaceCalls;
+  ReadbackPixels readbackSurfacePixels;
+  bool readbackSurfaceResult = false;
   std::vector<ColorFillDesc> colorFills;
   std::vector<SwapDesc> presents;
   u32 flushCount = 0;
