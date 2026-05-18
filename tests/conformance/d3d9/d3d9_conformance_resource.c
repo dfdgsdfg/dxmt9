@@ -762,6 +762,174 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lockrect_offset()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_surface_lockrect_subrect_offset_policy(const struct d3d9_api *api)
+{
+    static const RECT rect = {3, 5, 7, 9};
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked;
+    ptrdiff_t expected;
+    LONG full_pitch;
+    IDirect3D9 *d3d9;
+    HWND window;
+    BYTE *base;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 16, 16,
+            D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH, &surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(surface, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_surface;
+    CHECK_TRUE(locked.pBits != NULL);
+    CHECK_TRUE(locked.Pitch >= 16 * 4);
+    base = locked.pBits;
+    full_pitch = locked.Pitch;
+    CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(surface, &locked, &rect, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(locked.Pitch == full_pitch);
+        expected = rect.top * full_pitch + rect.left * 4;
+        CHECK_TRUE((BYTE *)locked.pBits - base == expected);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+    }
+
+done_surface:
+    IDirect3DSurface9_Release(surface);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_lockrect_offset()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_compressed_surface_lockrect_block_offset(const struct d3d9_api *api)
+{
+    static const RECT rect = {4, 8, 12, 16};
+    static const struct
+    {
+        D3DFORMAT format;
+        unsigned int block_width;
+        unsigned int block_height;
+        unsigned int block_size;
+    }
+    formats[] =
+    {
+        {D3DFMT_DXT1, 4, 4, 8},
+        {D3DFMT_DXT5, 4, 4, 16},
+    };
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_RECT locked;
+    unsigned int expected_pitch;
+    ptrdiff_t expected;
+    IDirect3D9 *d3d9;
+    HWND window;
+    BYTE *base;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    for (i = 0; i < ARRAY_SIZE(formats); ++i)
+    {
+        if (FAILED(IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+                D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+                formats[i].format)))
+            continue;
+
+        hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 128, 128,
+                formats[i].format, D3DPOOL_SCRATCH, &surface, NULL);
+        CHECK_HR(hr, D3D_OK);
+        if (FAILED(hr))
+            continue;
+
+        memset(&locked, 0xcc, sizeof(locked));
+        hr = IDirect3DSurface9_LockRect(surface, &locked, NULL, 0);
+        CHECK_HR(hr, D3D_OK);
+        if (FAILED(hr))
+            goto release_surface;
+
+        base = locked.pBits;
+        expected_pitch = (128 + formats[i].block_height - 1)
+                / formats[i].block_width * formats[i].block_size;
+        CHECK_TRUE((unsigned int)locked.Pitch == expected_pitch);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+
+        memset(&locked, 0xcc, sizeof(locked));
+        hr = IDirect3DSurface9_LockRect(surface, &locked, &rect, 0);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            expected = (rect.top / formats[i].block_height) * expected_pitch
+                    + (rect.left / formats[i].block_width)
+                    * formats[i].block_size;
+            CHECK_TRUE((BYTE *)locked.pBits - base == expected);
+            CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+        }
+
+release_surface:
+        IDirect3DSurface9_Release(surface);
+        surface = NULL;
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_vb_lock_flags()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

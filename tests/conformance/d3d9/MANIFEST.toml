@@ -925,6 +925,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_surface_lockrect_subrect_offset_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_lockrect_offset"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["uncompressed surface sub-rectangle LockRect returns a pBits pointer offset by top * pitch + left * bytes-per-pixel from the full-surface base"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_compressed_surface_lockrect_block_offset"
+source = "wine/dlls/d3d9/tests/device.c:test_lockrect_offset"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["DXT surface full-lock pitch and sub-rectangle LockRect pBits block offsets match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_vb_lock_flags"
 source = "wine/dlls/d3d9/tests/device.c:test_vb_lock_flags"
 source_kind = "behavioral-oracle"
