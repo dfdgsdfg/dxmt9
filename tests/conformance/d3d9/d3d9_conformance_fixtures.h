@@ -321,17 +321,22 @@ static inline ULONG get_refcount(IUnknown *object)
 
 /* Per-domain test entries for main()'s dispatch table. */
 void test_factory_validation_return_codes(const struct d3d9_api *api);
+void test_factory_caps_edge_matrix(const struct d3d9_api *api);
+void test_invalid_multisample_render_target_quality(const struct d3d9_api *api);
 void test_device_display_mode_adapter_format(const struct d3d9_api *api);
 void test_factory_base_vs_ex_qi(const struct d3d9_api *api);
 void test_ex_created_normal_device_qi(const struct d3d9_api *api);
 void test_ex_create_reset_mode_validation(const struct d3d9_api *api);
 void test_scene_invalid_transitions(const struct d3d9_api *api);
 void test_vertex_declaration_fvf_policy(const struct d3d9_api *api);
+void test_fvf_decl_management(const struct d3d9_api *api);
+void test_unused_declaration_type(const struct d3d9_api *api);
 void test_get_set_vertex_shader(const struct d3d9_api *api);
 void test_vertex_shader_constant(const struct d3d9_api *api);
 void test_get_set_pixel_shader(const struct d3d9_api *api);
 void test_pixel_shader_constant(const struct d3d9_api *api);
 void test_unsupported_shaders(const struct d3d9_api *api);
+void test_shader_unsupported_stage_variants(const struct d3d9_api *api);
 void test_ex_shader_validation_policy(const struct d3d9_api *api);
 void test_texture_stage_states(const struct d3d9_api *api);
 void test_fpu_setup(const struct d3d9_api *api);
@@ -347,7 +352,9 @@ void test_ex_adapter_luid_display_mode(const struct d3d9_api *api);
 void test_ex_swapchain_display_mode(const struct d3d9_api *api);
 void test_ex_frame_latency_state(const struct d3d9_api *api);
 void test_present_parameter_validation(const struct d3d9_api *api);
+void test_present_parameter_normalization(const struct d3d9_api *api);
 void test_lockable_backbuffer_lock_policy(const struct d3d9_api *api);
+void test_swapchain_multisample_reset(const struct d3d9_api *api);
 
 void test_stateblock_invalid_type_recording_invalid_calls(const struct d3d9_api *api);
 void test_shader_constant_apply(const struct d3d9_api *api);
@@ -356,11 +363,13 @@ void test_vdecl_apply(const struct d3d9_api *api);
 
 void test_private_data_iunknown_ownership_smoke(const struct d3d9_api *api);
 void test_private_data_resource_wrappers(const struct d3d9_api *api);
+void test_private_data_replace_and_size_policy(const struct d3d9_api *api);
 void test_resource_lock_error_policy(const struct d3d9_api *api);
 void test_vb_lock_flags(const struct d3d9_api *api);
 void test_vertex_buffer_alignment(const struct d3d9_api *api);
 void test_surface_alignment(const struct d3d9_api *api);
 void test_surface_dimensions(const struct d3d9_api *api);
+void test_surface_format_null_policy(const struct d3d9_api *api);
 void test_resource_type(const struct d3d9_api *api);
 void test_volume_resource_container_desc(const struct d3d9_api *api);
 void test_volume_block_lock_layout(const struct d3d9_api *api);
@@ -368,6 +377,7 @@ void test_vendor_format_public_api_policy(const struct d3d9_api *api);
 void test_resource_priority_roundtrip(const struct d3d9_api *api);
 void test_shared_handle_policy(const struct d3d9_api *api);
 void test_ex_shared_handle_policy(const struct d3d9_api *api);
+void test_ex_user_memory_lock_identity(const struct d3d9_api *api);
 void test_creation_failure_out_pointers(const struct d3d9_api *api);
 void test_render_target_device_mismatch(const struct d3d9_api *api);
 void test_create_depth_stencil_surface_ex(const struct d3d9_api *api);

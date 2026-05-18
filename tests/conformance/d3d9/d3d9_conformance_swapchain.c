@@ -116,6 +116,71 @@ done_d3d9:
     IDirect3D9_Release(d3d9);
 }
 
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_swapchain_parameters()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_present_parameter_normalization(const struct d3d9_api *api)
+{
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS actual;
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    pp = default_present_parameters(window);
+    pp.BackBufferCount = 0;
+    pp.SwapEffect = D3DSWAPEFFECT_COPY;
+    pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_window;
+
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&actual, 0xcc, sizeof(actual));
+        hr = IDirect3DSwapChain9_GetPresentParameters(swapchain, &actual);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(actual.hDeviceWindow == window);
+            CHECK_TRUE(actual.Windowed == TRUE);
+            CHECK_TRUE(actual.SwapEffect == D3DSWAPEFFECT_COPY);
+            CHECK_TRUE(actual.BackBufferCount == 1);
+            CHECK_TRUE(actual.PresentationInterval ==
+                    D3DPRESENT_INTERVAL_IMMEDIATE);
+        }
+        IDirect3DSwapChain9_Release(swapchain);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
 /* Wine d3d9ex.c: display mode Ex validates Size and honors filter shape. */
 void test_display_mode_ex_size_filter_smoke(const struct d3d9_api *api)
 {
@@ -509,6 +574,82 @@ void test_lockable_backbuffer_lock_policy(const struct d3d9_api *api)
                 D3DLOCK_READONLY), D3DERR_INVALIDCALL);
         IDirect3DSurface9_Release(backbuffer);
     }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_swapchain_multisample_reset()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_swapchain_multisample_reset(const struct d3d9_api *api)
+{
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    DWORD quality_levels = 0;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    hr = IDirect3D9_CheckDeviceMultiSampleType(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_A8R8G8B8, TRUE,
+            D3DMULTISAMPLE_2_SAMPLES, &quality_levels);
+    if (hr == D3DERR_NOTAVAILABLE || !quality_levels)
+    {
+        skip_current_test("2x multisample A8R8G8B8 swapchains are unavailable");
+        goto done_d3d9;
+    }
+    CHECK_HR(hr, D3D_OK);
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    pp = default_present_parameters(window);
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_window;
+
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xffffffff, 1.0f, 0), D3D_OK);
+
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&pp, 0xcc, sizeof(pp));
+        hr = IDirect3DSwapChain9_GetPresentParameters(swapchain, &pp);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+            CHECK_TRUE(pp.MultiSampleType == D3DMULTISAMPLE_NONE);
+        IDirect3DSwapChain9_Release(swapchain);
+    }
+
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.MultiSampleType = D3DMULTISAMPLE_2_SAMPLES;
+    pp.MultiSampleQuality = quality_levels - 1;
+    CHECK_HR(IDirect3DDevice9_Reset(device, &pp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xffffffff, 1.0f, 0), D3D_OK);
 
     IDirect3DDevice9_Release(device);
 
