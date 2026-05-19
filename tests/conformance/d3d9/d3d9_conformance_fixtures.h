@@ -488,4 +488,22 @@ void test_visual_add_dirty_rect_policy(const struct d3d9_api *api);
 void test_visual_multisample_get_front_buffer_data_policy(const struct d3d9_api *api);
 void test_visual_multisample_rt_ds_mismatch_policy(const struct d3d9_api *api);
 
+/* Wine visual.c additional planned-item scaffolds. */
+void test_visual_buffer_no_dirty_update_policy(const struct d3d9_api *api);
+void test_visual_yuv_color_caps_policy(const struct d3d9_api *api);
+void test_visual_yuv_layout_lock_policy(const struct d3d9_api *api);
+void test_visual_3dc_format_caps_policy(const struct d3d9_api *api);
+void test_visual_position_index_decl_policy(const struct d3d9_api *api);
+void test_visual_mvp_software_vp_policy(const struct d3d9_api *api);
+
+/* Wine stateblock.c capture/apply matrix scaffolds. */
+void test_state_management_all_capture_apply_matrix(const struct d3d9_api *api);
+void test_state_management_pixel_capture_apply_slice(const struct d3d9_api *api);
+void test_state_management_vertex_capture_apply_slice(const struct d3d9_api *api);
+
+/* Wine device.c advanced query / format / multithreading scaffolds. */
+void test_query_get_data_size_policy(const struct d3d9_api *api);
+void test_check_device_format_conversion_matrix(const struct d3d9_api *api);
+void test_multithreaded_device_creation_policy(const struct d3d9_api *api);
+
 #endif /* DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H */

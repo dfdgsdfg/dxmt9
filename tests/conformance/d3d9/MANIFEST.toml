@@ -3040,3 +3040,207 @@ owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["binding a multisampled depth-stencil to a non-multisampled render target is rejected with D3DERR_INVALIDCALL when 2x multisample is supported"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_misc.c"
+function = "test_visual_buffer_no_dirty_update_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_buffer_no_dirty_update"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-buffer"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["MANAGED vertex buffers Lock/Unlock without an explicit AddDirtyRect dance and DYNAMIC|WRITEONLY DEFAULT-pool buffers accept DISCARD locks"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_misc.c"
+function = "test_visual_yuv_color_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:yuv_color_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormat returns a Wine-compatible HRESULT (S_OK or D3DERR_NOTAVAILABLE) for YUY2 and UYVY offscreen surfaces"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_misc.c"
+function = "test_visual_yuv_layout_lock_policy"
+source = "wine/dlls/d3d9/tests/visual.c:yuv_layout_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "surface"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["YUY2 offscreen-plain surfaces LockRect with a row pitch of at least 2*width bytes"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_misc.c"
+function = "test_visual_3dc_format_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_3dc_formats"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormat returns a Wine-compatible HRESULT for the ATI1 and ATI2 vendor 3Dc compressed formats"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_misc.c"
+function = "test_visual_position_index_decl_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_position_index"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vertex-declaration"
+owner = "core/device"
+requirements = ["R-TEST-12.13"]
+acceptance = ["CreateVertexDeclaration accepts a declaration with D3DDECLUSAGE_POSITION at indices 0 and 1"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_misc.c"
+function = "test_visual_mvp_software_vp_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_mvp_software_vertex_shaders"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-lifecycle"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["CreateDevice with D3DCREATE_SOFTWARE_VERTEXPROCESSING reports its software-vertex-processing mode through GetSoftwareVertexProcessing and the create HRESULT is one of S_OK, D3DERR_INVALIDCALL, or D3DERR_NOTAVAILABLE"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_query_stateblock.c"
+function = "test_state_management_all_capture_apply_matrix"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["A D3DSBT_ALL stateblock capture-then-apply restores D3DRS_FILLMODE after a subsequent mutation"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_query_stateblock.c"
+function = "test_state_management_pixel_capture_apply_slice"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["A D3DSBT_PIXELSTATE stateblock restores D3DRS_SRCBLEND but not the vertex-state D3DRS_CULLMODE on Apply"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_query_stateblock.c"
+function = "test_state_management_vertex_capture_apply_slice"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["A D3DSBT_VERTEXSTATE stateblock restores D3DRS_CULLMODE but not the pixel-state D3DRS_SRCBLEND on Apply"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_query_get_data_size_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_query_support,test_occlusion_query,test_timestamp_query"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "query"
+owner = "core/queries"
+requirements = ["R-TEST-12.8"]
+acceptance = ["CreateQuery returns S_OK for supported types and the returned IDirect3DQuery9 reports a positive GetDataSize and the requested GetType; unknown query types are rejected with D3DERR_NOTAVAILABLE or D3DERR_INVALIDCALL"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_check_device_format_conversion_matrix"
+source = "wine/dlls/d3d9/tests/device.c:test_check_device_format"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/factory"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormatConversion returns S_OK for identity and A8R8G8B8 <-> X8R8G8B8 pairs and D3DERR_NOTAVAILABLE for incompatible pairs (DXT1 -> A8R8G8B8, R5G6B5 -> A8R8G8B8)"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_multithreaded_device_creation_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_creation_parameters"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-lifecycle"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["CreateDevice with D3DCREATE_MULTITHREADED | D3DCREATE_HARDWARE_VERTEXPROCESSING succeeds and GetCreationParameters reports both flags in BehaviorFlags"]
+status = "scaffolded"

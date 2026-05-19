@@ -657,3 +657,184 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/stateblock.c
+ * function: test_state_management (D3DSBT_ALL capture/apply matrix)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_state_management_all_capture_apply_matrix(const struct d3d9_api *api)
+{
+    IDirect3D9 *d3d9;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3DStateBlock9 *stateblock = NULL;
+    HWND window;
+    DWORD value;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Snapshot known-default state, mutate a few entries, verify
+     * D3DSBT_ALL apply restores them. */
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_FILLMODE,
+            D3DFILL_SOLID), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_CULLMODE,
+            D3DCULL_CCW), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_CreateStateBlock(device, D3DSBT_ALL,
+            &stateblock), D3D_OK);
+    if (!stateblock)
+        goto done_device;
+
+    /* Mutate and apply to restore. */
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_FILLMODE,
+            D3DFILL_WIREFRAME), D3D_OK);
+    CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_FILLMODE, &value),
+            D3D_OK);
+    CHECK_TRUE(value == D3DFILL_SOLID);
+
+    IDirect3DStateBlock9_Release(stateblock);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/stateblock.c
+ * function: test_state_management (D3DSBT_PIXELSTATE capture/apply slice)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_state_management_pixel_capture_apply_slice(const struct d3d9_api *api)
+{
+    IDirect3D9 *d3d9;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3DStateBlock9 *stateblock = NULL;
+    HWND window;
+    DWORD blend_value;
+    DWORD cull_value;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Set pixel-state and a vertex-state value; pixel stateblock must
+     * restore the first but not the second. */
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SRCBLEND,
+            D3DBLEND_ONE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_CULLMODE,
+            D3DCULL_CCW), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_CreateStateBlock(device, D3DSBT_PIXELSTATE,
+            &stateblock), D3D_OK);
+    if (!stateblock)
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SRCBLEND,
+            D3DBLEND_ZERO), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_CULLMODE,
+            D3DCULL_NONE), D3D_OK);
+
+    CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_SRCBLEND,
+            &blend_value), D3D_OK);
+    CHECK_TRUE(blend_value == D3DBLEND_ONE);
+
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_CULLMODE,
+            &cull_value), D3D_OK);
+    /* D3DRS_CULLMODE is a vertex-state render-state — must remain mutated. */
+    CHECK_TRUE(cull_value == D3DCULL_NONE);
+
+    IDirect3DStateBlock9_Release(stateblock);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/stateblock.c
+ * function: test_state_management (D3DSBT_VERTEXSTATE capture/apply slice)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_state_management_vertex_capture_apply_slice(const struct d3d9_api *api)
+{
+    IDirect3D9 *d3d9;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3DStateBlock9 *stateblock = NULL;
+    HWND window;
+    DWORD blend_value;
+    DWORD cull_value;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SRCBLEND,
+            D3DBLEND_ONE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_CULLMODE,
+            D3DCULL_CCW), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_CreateStateBlock(device, D3DSBT_VERTEXSTATE,
+            &stateblock), D3D_OK);
+    if (!stateblock)
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SRCBLEND,
+            D3DBLEND_ZERO), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_CULLMODE,
+            D3DCULL_NONE), D3D_OK);
+
+    CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_SRCBLEND,
+            &blend_value), D3D_OK);
+    /* D3DRS_SRCBLEND is a pixel-state render-state — must remain mutated. */
+    CHECK_TRUE(blend_value == D3DBLEND_ZERO);
+
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_CULLMODE,
+            &cull_value), D3D_OK);
+    CHECK_TRUE(cull_value == D3DCULL_CCW);
+
+    IDirect3DStateBlock9_Release(stateblock);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

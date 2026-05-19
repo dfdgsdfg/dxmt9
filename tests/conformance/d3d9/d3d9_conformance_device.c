@@ -3670,3 +3670,167 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_query_support / test_occlusion_query / test_timestamp_query
+ *           (focused on GetDataSize policy)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_query_get_data_size_policy(const struct d3d9_api *api)
+{
+    static const D3DQUERYTYPE types[] =
+    {
+        D3DQUERYTYPE_EVENT,
+        D3DQUERYTYPE_OCCLUSION,
+        D3DQUERYTYPE_TIMESTAMP,
+        D3DQUERYTYPE_TIMESTAMPFREQ,
+        D3DQUERYTYPE_TIMESTAMPDISJOINT,
+    };
+    IDirect3D9 *d3d9;
+    IDirect3DDevice9 *device = NULL;
+    HWND window;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    for (i = 0; i < ARRAY_SIZE(types); ++i)
+    {
+        IDirect3DQuery9 *query = NULL;
+        DWORD size;
+        HRESULT hr;
+
+        hr = IDirect3DDevice9_CreateQuery(device, types[i], &query);
+        if (hr != D3D_OK)
+            continue;
+
+        size = IDirect3DQuery9_GetDataSize(query);
+        CHECK_TRUE(size > 0);
+        CHECK_TRUE(IDirect3DQuery9_GetType(query) == types[i]);
+
+        IDirect3DQuery9_Release(query);
+    }
+
+    /* Invalid query type → CreateQuery returns D3DERR_NOTAVAILABLE. */
+    {
+        IDirect3DQuery9 *query = NULL;
+        HRESULT hr = IDirect3DDevice9_CreateQuery(device,
+                (D3DQUERYTYPE)0xdeadbeef, &query);
+        CHECK_TRUE(hr == D3DERR_NOTAVAILABLE || hr == D3DERR_INVALIDCALL);
+        if (SUCCEEDED(hr) && query)
+            IDirect3DQuery9_Release(query);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_check_device_format (focused on CheckDeviceFormatConversion)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_check_device_format_conversion_matrix(const struct d3d9_api *api)
+{
+    static const struct
+    {
+        D3DFORMAT src;
+        D3DFORMAT dst;
+        BOOL expect_compatible;
+    } matrix[] =
+    {
+        {D3DFMT_A8R8G8B8, D3DFMT_A8R8G8B8, TRUE},  /* identity */
+        {D3DFMT_X8R8G8B8, D3DFMT_X8R8G8B8, TRUE},
+        {D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8, TRUE},  /* compatible pair */
+        {D3DFMT_X8R8G8B8, D3DFMT_A8R8G8B8, TRUE},
+        {D3DFMT_DXT1,     D3DFMT_A8R8G8B8, FALSE}, /* incompatible */
+        {D3DFMT_R5G6B5,   D3DFMT_A8R8G8B8, FALSE},
+    };
+    IDirect3D9 *d3d9;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(matrix); ++i)
+    {
+        hr = IDirect3D9_CheckDeviceFormatConversion(d3d9, D3DADAPTER_DEFAULT,
+                D3DDEVTYPE_HAL, matrix[i].src, matrix[i].dst);
+        if (matrix[i].expect_compatible)
+            CHECK_HR(hr, D3D_OK);
+        else
+            CHECK_HR(hr, D3DERR_NOTAVAILABLE);
+    }
+
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_creation_parameters (focused on D3DCREATE_MULTITHREADED)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_multithreaded_device_creation_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    D3DDEVICE_CREATION_PARAMETERS params;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+
+    memset(&pp, 0, sizeof(pp));
+    pp.Windowed = TRUE;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_UNKNOWN;
+    pp.hDeviceWindow = window;
+
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window,
+            D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_MULTITHREADED
+                    | D3DCREATE_FPU_PRESERVE,
+            &pp, &device);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr) || !device)
+        goto done_window;
+
+    memset(&params, 0xcc, sizeof(params));
+    CHECK_HR(IDirect3DDevice9_GetCreationParameters(device, &params), D3D_OK);
+    CHECK_TRUE((params.BehaviorFlags & D3DCREATE_MULTITHREADED) != 0);
+    CHECK_TRUE((params.BehaviorFlags & D3DCREATE_HARDWARE_VERTEXPROCESSING) != 0);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

@@ -453,3 +453,273 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_buffer_no_dirty_update
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_buffer_no_dirty_update_policy(const struct d3d9_api *api)
+{
+    IDirect3DVertexBuffer9 *vb_managed = NULL;
+    IDirect3DVertexBuffer9 *vb_default = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    void *data;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* MANAGED VBs accept Lock without an explicit AddDirtyRect dance. */
+    CHECK_HR(IDirect3DDevice9_CreateVertexBuffer(device, 64, 0, 0,
+            D3DPOOL_MANAGED, &vb_managed, NULL), D3D_OK);
+    if (vb_managed)
+    {
+        CHECK_HR(IDirect3DVertexBuffer9_Lock(vb_managed, 0, 0, &data, 0), D3D_OK);
+        CHECK_TRUE(data != NULL);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(vb_managed), D3D_OK);
+        IDirect3DVertexBuffer9_Release(vb_managed);
+    }
+
+    /* DEFAULT-pool DYNAMIC also accepts Lock with DISCARD/NOOVERWRITE. */
+    if (SUCCEEDED(IDirect3DDevice9_CreateVertexBuffer(device, 64,
+            D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT,
+            &vb_default, NULL)))
+    {
+        CHECK_HR(IDirect3DVertexBuffer9_Lock(vb_default, 0, 0, &data,
+                D3DLOCK_DISCARD), D3D_OK);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(vb_default), D3D_OK);
+        IDirect3DVertexBuffer9_Release(vb_default);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: yuv_color_test
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_yuv_color_caps_policy(const struct d3d9_api *api)
+{
+    static const D3DFORMAT yuv_fourcc[] =
+    {
+        D3DFMT_YUY2, D3DFMT_UYVY,
+    };
+    IDirect3D9 *d3d9;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(yuv_fourcc); ++i)
+    {
+        hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+                D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_SURFACE,
+                yuv_fourcc[i]);
+        CHECK_TRUE(hr == D3D_OK || hr == D3DERR_NOTAVAILABLE);
+    }
+
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: yuv_layout_test
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_yuv_layout_lock_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DLOCKED_RECT locked;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_SURFACE,
+            D3DFMT_YUY2);
+    if (FAILED(hr))
+    {
+        skip_current_test("YUY2 not supported");
+        goto done_d3d9;
+    }
+
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 16, 16,
+            D3DFMT_YUY2, D3DPOOL_DEFAULT, &surface, NULL);
+    if (SUCCEEDED(hr))
+    {
+        memset(&locked, 0xcc, sizeof(locked));
+        if (SUCCEEDED(IDirect3DSurface9_LockRect(surface, &locked, NULL, 0)))
+        {
+            /* YUY2 packs 2 pixels per 32 bits, so pitch must be >= 2*width. */
+            CHECK_TRUE(locked.Pitch >= 32);
+            IDirect3DSurface9_UnlockRect(surface);
+        }
+        IDirect3DSurface9_Release(surface);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_3dc_formats
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_3dc_format_caps_policy(const struct d3d9_api *api)
+{
+    static const D3DFORMAT atc_fourcc[] =
+    {
+        MAKEFOURCC('A','T','I','1'),
+        MAKEFOURCC('A','T','I','2'),
+    };
+    IDirect3D9 *d3d9;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(atc_fourcc); ++i)
+    {
+        hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+                D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+                atc_fourcc[i]);
+        CHECK_TRUE(hr == D3D_OK || hr == D3DERR_NOTAVAILABLE);
+    }
+
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_position_index
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_position_index_decl_policy(const struct d3d9_api *api)
+{
+    static const D3DVERTEXELEMENT9 decl_elements[] =
+    {
+        {0, 0,  D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 1},
+        D3DDECL_END(),
+    };
+    IDirect3DVertexDeclaration9 *decl = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Declaration with POSITION0 + POSITION1 must be accepted. */
+    CHECK_HR(IDirect3DDevice9_CreateVertexDeclaration(device,
+            decl_elements, &decl), D3D_OK);
+    if (decl)
+        IDirect3DVertexDeclaration9_Release(decl);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_mvp_software_vertex_shaders
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_mvp_software_vp_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device_swvp = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+
+    memset(&pp, 0, sizeof(pp));
+    pp.Windowed = TRUE;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_UNKNOWN;
+    pp.hDeviceWindow = window;
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
+            &pp, &device_swvp);
+    /* SWVP create must either succeed or return a documented HRESULT. */
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_INVALIDCALL || hr == D3DERR_NOTAVAILABLE);
+    if (SUCCEEDED(hr))
+    {
+        /* GetSoftwareVertexProcessing returns BOOL, not HRESULT. */
+        CHECK_TRUE(IDirect3DDevice9_GetSoftwareVertexProcessing(device_swvp));
+        IDirect3DDevice9_Release(device_swvp);
+    }
+
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
