@@ -1180,6 +1180,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_surface_double_unlock_pool_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_surface_double_unlock"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["offscreen plain surfaces in DEFAULT, SCRATCH, and SYSTEMMEM pools expose descriptor metadata and reject unlock-before-lock and double-unlock with Wine-compatible HRESULTs"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_mipmap_surface_update_lock_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_mipmap_lock"
 source_kind = "behavioral-oracle"
@@ -1209,6 +1226,23 @@ area = "resource-locking"
 owner = "core/resources"
 requirements = ["R-TEST-12.13"]
 acceptance = ["vertex-buffer lock flags, double-lock rejection, unlock rejection, DISCARD, and NOOVERWRITE behavior match Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_writeonly_vertex_buffer_readback_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_writeonly_resource"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-locking"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13", "R-TEST-12.16"]
+acceptance = ["dynamic WRITEONLY vertex buffers preserve uploaded data across stream binding and DrawPrimitive, and both normal and READONLY locks expose the original bytes"]
 status = "scaffolded"
 
 [[case]]
