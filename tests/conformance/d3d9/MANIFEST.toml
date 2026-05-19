@@ -282,6 +282,40 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_swapchain.c"
+function = "test_swapchain_backbuffer_getter_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_swapchain_parameters"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "swapchain-state"
+owner = "core/swapchain"
+requirements = ["R-TEST-12.3", "R-TEST-12.17"]
+acceptance = ["implicit swapchain back-buffer getters reject invalid indices, ignore back-buffer type values, return the same surface object, and clear invalid device getter out-pointers like Wine"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_additional_swapchain_backbuffer_bounds"
+source = "wine/dlls/d3d9/tests/device.c:test_swapchain_parameters"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "swapchain-state"
+owner = "core/swapchain"
+requirements = ["R-TEST-12.3", "R-TEST-12.17"]
+acceptance = ["additional swapchains normalize zero back-buffer count, default a NULL device window to the device window, expose valid buffers, and preserve failed out-pointers for out-of-range indices"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
 function = "test_lockable_backbuffer_lock_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_lockable_backbuffer"
 source_kind = "behavioral-oracle"
