@@ -15,6 +15,7 @@ d3d9_conformance = executable(
     'd3d9_conformance_swapchain.c',
     'd3d9_conformance_query_stateblock.c',
     'd3d9_conformance_visual_formats.c',
+    'd3d9_conformance_visual_depth.c',
   ],
   dependencies: [
     c.find_library('gdi32', required: true),

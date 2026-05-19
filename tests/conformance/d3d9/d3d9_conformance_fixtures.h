@@ -458,4 +458,14 @@ void test_visual_volume_srgb_caps_policy(const struct d3d9_api *api);
 void test_visual_volume_dxtn_format_policy(const struct d3d9_api *api);
 void test_visual_signed_formats_caps_policy(const struct d3d9_api *api);
 
+/* Wine visual.c depth-stencil oracle scaffolds. */
+void test_visual_z_range_render_state_policy(const struct d3d9_api *api);
+void test_visual_ds_smaller_than_rt_policy(const struct d3d9_api *api);
+void test_visual_depth_buffer_clear_policy(const struct d3d9_api *api);
+void test_visual_depth_buffer_reset_policy(const struct d3d9_api *api);
+void test_visual_depth_bounds_caps_policy(const struct d3d9_api *api);
+void test_visual_zenable_render_state_policy(const struct d3d9_api *api);
+void test_visual_zwriteenable_render_state_policy(const struct d3d9_api *api);
+void test_visual_multisampled_depth_buffer_caps_policy(const struct d3d9_api *api);
+
 #endif /* DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H */

@@ -220,6 +220,22 @@ static const struct test_case tests[] =
             test_visual_volume_dxtn_format_policy},
     {"visual_signed_formats_caps_policy",
             test_visual_signed_formats_caps_policy},
+    {"visual_z_range_render_state_policy",
+            test_visual_z_range_render_state_policy},
+    {"visual_ds_smaller_than_rt_policy",
+            test_visual_ds_smaller_than_rt_policy},
+    {"visual_depth_buffer_clear_policy",
+            test_visual_depth_buffer_clear_policy},
+    {"visual_depth_buffer_reset_policy",
+            test_visual_depth_buffer_reset_policy},
+    {"visual_depth_bounds_caps_policy",
+            test_visual_depth_bounds_caps_policy},
+    {"visual_zenable_render_state_policy",
+            test_visual_zenable_render_state_policy},
+    {"visual_zwriteenable_render_state_policy",
+            test_visual_zwriteenable_render_state_policy},
+    {"visual_multisampled_depth_buffer_caps_policy",
+            test_visual_multisampled_depth_buffer_caps_policy},
 };
 
 int main(void)

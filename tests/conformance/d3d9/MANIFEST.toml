@@ -2632,3 +2632,139 @@ owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["IDirect3D9::CheckDeviceFormat for D3DFMT_V8U8, D3DFMT_V16U16, and D3DFMT_Q8W8V8U8 as 2D textures returns either S_OK or D3DERR_NOTAVAILABLE for each format"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_depth.c"
+function = "test_visual_z_range_render_state_policy"
+source = "wine/dlls/d3d9/tests/visual.c:z_range_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "render-state"
+owner = "core/device"
+requirements = ["R-TEST-12.9", "R-TEST-12.14"]
+acceptance = ["SetRenderState(D3DRS_ZENABLE) round-trips through GetRenderState and viewport MinZ/MaxZ outside [0,1] is still accepted by SetViewport"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_depth.c"
+function = "test_visual_ds_smaller_than_rt_policy"
+source = "wine/dlls/d3d9/tests/visual.c:ds_size_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "depth-stencil"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["binding a depth-stencil surface smaller than the bound render target returns a Wine-compatible HRESULT (S_OK or D3DERR_INVALIDCALL) and never crashes"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_depth.c"
+function = "test_visual_depth_buffer_clear_policy"
+source = "wine/dlls/d3d9/tests/visual.c:depth_buffer_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "depth-stencil"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["Clear with D3DCLEAR_ZBUFFER succeeds when a depth surface is bound and rejects with D3DERR_INVALIDCALL after SetDepthStencilSurface(NULL)"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_depth.c"
+function = "test_visual_depth_buffer_reset_policy"
+source = "wine/dlls/d3d9/tests/visual.c:depth_buffer2_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "depth-stencil"
+owner = "core/device"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["Reset with EnableAutoDepthStencil=FALSE makes GetDepthStencilSurface return D3DERR_NOTFOUND, and a follow-up Reset with auto-depth-stencil restores the implicit DS surface"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_depth.c"
+function = "test_visual_depth_bounds_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:depth_bounds_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormat reports a Wine-compatible HRESULT (S_OK or D3DERR_NOTAVAILABLE) when querying the vendor depth-bounds D3DFMT_NVDB format"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_depth.c"
+function = "test_visual_zenable_render_state_policy"
+source = "wine/dlls/d3d9/tests/visual.c:zenable_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "render-state"
+owner = "core/device"
+requirements = ["R-TEST-12.9"]
+acceptance = ["SetRenderState(D3DRS_ZENABLE) accepts D3DZB_FALSE, D3DZB_TRUE, and D3DZB_USEW and round-trips each value through GetRenderState"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_depth.c"
+function = "test_visual_zwriteenable_render_state_policy"
+source = "wine/dlls/d3d9/tests/visual.c:zwriteenable_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "render-state"
+owner = "core/device"
+requirements = ["R-TEST-12.9"]
+acceptance = ["SetRenderState(D3DRS_ZWRITEENABLE) defaults to TRUE after CreateDevice and round-trips both TRUE and FALSE through GetRenderState"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_depth.c"
+function = "test_visual_multisampled_depth_buffer_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:multisampled_depth_buffer_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "depth-stencil"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["CheckDeviceMultiSampleType for D3DFMT_D24S8 with D3DMULTISAMPLE_2_SAMPLES reports a Wine-compatible HRESULT and a successful create matches the quality bound"]
+status = "scaffolded"
