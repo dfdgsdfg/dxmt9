@@ -1895,6 +1895,18 @@ oracle = "Wine d3d9 visual.c tssargtemp_test behavior, reduced to RESULTARG TEMP
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "texture/dxmt9_ffp_tss_temp_add_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c tssargtemp_test behavior, reduced to D3DTA_TEMP as arithmetic source argument"
+oracle-date = "2026-05-19"
+
+[[test]]
 file = "texture/dxmt9_ffp_tss_tfactor_readback.shader_test"
 status = "passing"
 source = "dxmt9"

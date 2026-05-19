@@ -1,0 +1,21 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c tssargtemp_test behavior, reduced to D3DTA_TEMP as arithmetic source argument
+; oracle-date: 2026-05-19
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+dxmt9-texture 0 1 1 A8R8G8B8 rgba(0.25,0.125,0.0,0.5)
+dxmt9-texture 1 1 1 A8R8G8B8 rgba(0.125,0.25,0.375,1.0)
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-sampler 1 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=texture alpha_arg1=texture result_arg=temp texcoord_index=0
+dxmt9-texture-stage 1 color_op=add alpha_op=selectarg1 color_arg1=temp color_arg2=texture alpha_arg1=temp texcoord_index=0
+dxmt9-bind-texture 0 0
+dxmt9-bind-texture 1 1
+dxmt9-draw-textured-quad
+probe (32, 32) rgba(0.376, 0.376, 0.376, 0.502) 2
