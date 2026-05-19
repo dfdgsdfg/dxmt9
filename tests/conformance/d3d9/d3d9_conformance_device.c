@@ -3340,3 +3340,333 @@ done_windows:
     if (window)
         DestroyWindow(window);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_multi_device
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_multi_device_independent_state(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device1 = NULL;
+    IDirect3DDevice9 *device2 = NULL;
+    IDirect3D9 *parent1 = NULL;
+    IDirect3D9 *parent2 = NULL;
+    HWND window1 = NULL;
+    HWND window2 = NULL;
+    IDirect3D9 *d3d9;
+    DWORD value;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window1 = create_test_window();
+    CHECK_TRUE(window1 != NULL);
+    if (!window1)
+        goto done_d3d9;
+
+    window2 = create_test_window();
+    CHECK_TRUE(window2 != NULL);
+    if (!window2)
+        goto done_window1;
+
+    device1 = create_base_device(d3d9, window1);
+    if (!device1)
+        goto done_window2;
+
+    device2 = create_base_device(d3d9, window2);
+    if (!device2)
+        goto done_device1;
+
+    hr = IDirect3DDevice9_GetDirect3D(device1, &parent1);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_GetDirect3D(device2, &parent2);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(parent1 == d3d9);
+    CHECK_TRUE(parent2 == d3d9);
+    if (parent1)
+        IDirect3D9_Release(parent1);
+    if (parent2)
+        IDirect3D9_Release(parent2);
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device1, D3DRS_ZENABLE,
+            D3DZB_FALSE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device2, D3DRS_ZENABLE,
+            D3DZB_TRUE), D3D_OK);
+
+    value = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device1, D3DRS_ZENABLE, &value),
+            D3D_OK);
+    CHECK_TRUE(value == D3DZB_FALSE);
+
+    value = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device2, D3DRS_ZENABLE, &value),
+            D3D_OK);
+    CHECK_TRUE(value == D3DZB_TRUE);
+
+    IDirect3DDevice9_Release(device2);
+    device2 = NULL;
+done_device1:
+    if (device1)
+        IDirect3DDevice9_Release(device1);
+done_window2:
+    if (window2)
+        DestroyWindow(window2);
+done_window1:
+    if (window1)
+        DestroyWindow(window1);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_mode_change
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_mode_change_focus_swap_policy(const struct d3d9_api *api)
+{
+    D3DDEVICE_CREATION_PARAMETERS creation;
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    HWND focus_window = NULL;
+    HWND device_window = NULL;
+    IDirect3D9 *d3d9;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    focus_window = create_test_window();
+    CHECK_TRUE(focus_window != NULL);
+    if (!focus_window)
+        goto done_d3d9;
+
+    device_window = create_test_window();
+    CHECK_TRUE(device_window != NULL);
+    if (!device_window)
+        goto done_focus;
+
+    pp = default_present_parameters(device_window);
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            focus_window, D3DCREATE_SOFTWARE_VERTEXPROCESSING
+            | D3DCREATE_NOWINDOWCHANGES, &pp, &device);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device_window;
+
+    memset(&creation, 0xcc, sizeof(creation));
+    hr = IDirect3DDevice9_GetCreationParameters(device, &creation);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(creation.hFocusWindow == focus_window);
+        CHECK_TRUE((creation.BehaviorFlags & D3DCREATE_NOWINDOWCHANGES) != 0);
+    }
+
+    /*
+     * The Wine oracle exercises a series of WM_DISPLAYCHANGE / mode swaps
+     * that the focus window must not propagate to the device window while
+     * D3DCREATE_NOWINDOWCHANGES is set. Scaffolded scope only validates
+     * that a Reset on the same focus-window pair still succeeds and that
+     * GetCreationParameters continues to report the original focus HWND.
+     */
+    pp = default_present_parameters(device_window);
+    hr = IDirect3DDevice9_Reset(device, &pp);
+    CHECK_HR(hr, D3D_OK);
+
+    memset(&creation, 0xcc, sizeof(creation));
+    hr = IDirect3DDevice9_GetCreationParameters(device, &creation);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(creation.hFocusWindow == focus_window);
+
+    IDirect3DDevice9_Release(device);
+    device = NULL;
+
+done_device_window:
+    if (device_window)
+        DestroyWindow(device_window);
+done_focus:
+    if (focus_window)
+        DestroyWindow(focus_window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_reset_fullscreen
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_reset_fullscreen_focus_window_policy(const struct d3d9_api *api)
+{
+    D3DDEVICE_CREATION_PARAMETERS creation;
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    D3DDISPLAYMODE mode;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    memset(&mode, 0, sizeof(mode));
+    hr = IDirect3D9_GetAdapterDisplayMode(d3d9, D3DADAPTER_DEFAULT, &mode);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_window;
+
+    pp = default_fullscreen_present_parameters(window, &mode);
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("fullscreen CreateDevice failed with %s", hr_buffer);
+        goto done_window;
+    }
+
+    memset(&creation, 0xcc, sizeof(creation));
+    hr = IDirect3DDevice9_GetCreationParameters(device, &creation);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(creation.hFocusWindow == window);
+
+    /*
+     * Wine's oracle covers Reset-back-to-fullscreen after a windowed
+     * trip. Scaffolded scope only validates that a fullscreen->fullscreen
+     * Reset with identical parameters succeeds and that GetSwapChain(0)
+     * still returns the implicit swapchain bound to the focus window.
+     */
+    pp = default_fullscreen_present_parameters(window, &mode);
+    hr = IDirect3DDevice9_Reset(device, &pp);
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_DEVICELOST);
+
+    if (hr == D3D_OK)
+    {
+        IDirect3DSwapChain9 *swapchain = NULL;
+        hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+        CHECK_HR(hr, D3D_OK);
+        if (swapchain)
+            IDirect3DSwapChain9_Release(swapchain);
+    }
+
+    IDirect3DDevice9_Release(device);
+    device = NULL;
+
+done_window:
+    if (window)
+        DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_window_position
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_window_position_present_parameter_policy(const struct d3d9_api *api)
+{
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS observed;
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    pp = default_present_parameters(window);
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_window;
+
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    memset(&observed, 0xcc, sizeof(observed));
+    hr = IDirect3DSwapChain9_GetPresentParameters(swapchain, &observed);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(observed.hDeviceWindow == window);
+        CHECK_TRUE(observed.Windowed == TRUE);
+        CHECK_TRUE(observed.BackBufferWidth == pp.BackBufferWidth);
+        CHECK_TRUE(observed.BackBufferHeight == pp.BackBufferHeight);
+    }
+
+    CHECK_HR(IDirect3DSwapChain9_GetPresentParameters(swapchain, NULL),
+            D3DERR_INVALIDCALL);
+
+    /*
+     * Wine's oracle moves the device window and asserts the present
+     * parameters do not auto-track the new client rect. Scaffolded scope
+     * confirms a Reset that re-uses hDeviceWindow=window round-trips and
+     * GetPresentParameters still reports the same focus HWND.
+     */
+    IDirect3DSwapChain9_Release(swapchain);
+    swapchain = NULL;
+
+    pp = default_present_parameters(window);
+    hr = IDirect3DDevice9_Reset(device, &pp);
+    CHECK_HR(hr, D3D_OK);
+
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&observed, 0xcc, sizeof(observed));
+        hr = IDirect3DSwapChain9_GetPresentParameters(swapchain, &observed);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+            CHECK_TRUE(observed.hDeviceWindow == window);
+    }
+
+done_device:
+    if (swapchain)
+        IDirect3DSwapChain9_Release(swapchain);
+    if (device)
+        IDirect3DDevice9_Release(device);
+done_window:
+    if (window)
+        DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

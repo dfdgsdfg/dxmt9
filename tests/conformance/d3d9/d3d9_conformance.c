@@ -183,6 +183,14 @@ static const struct test_case tests[] =
             test_fullscreen_window_position_restore},
     {"ex_user_memory_getdc_dib_identity",
             test_ex_user_memory_getdc_dib_identity},
+    {"multi_device_independent_state",
+            test_multi_device_independent_state},
+    {"mode_change_focus_swap_policy",
+            test_mode_change_focus_swap_policy},
+    {"reset_fullscreen_focus_window_policy",
+            test_reset_fullscreen_focus_window_policy},
+    {"window_position_present_parameter_policy",
+            test_window_position_present_parameter_policy},
 };
 
 int main(void)

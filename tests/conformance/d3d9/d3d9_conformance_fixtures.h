@@ -362,6 +362,10 @@ void test_device_creation_parameters_policy(const struct d3d9_api *api);
 void test_device_parent_caps_getter_policy(const struct d3d9_api *api);
 void test_device_raster_status_bounds(const struct d3d9_api *api);
 void test_pixel_format_window_policy(const struct d3d9_api *api);
+void test_multi_device_independent_state(const struct d3d9_api *api);
+void test_mode_change_focus_swap_policy(const struct d3d9_api *api);
+void test_reset_fullscreen_focus_window_policy(const struct d3d9_api *api);
+void test_window_position_present_parameter_policy(const struct d3d9_api *api);
 
 void test_display_mode_ex_size_filter_smoke(const struct d3d9_api *api);
 void test_ex_adapter_luid_display_mode(const struct d3d9_api *api);

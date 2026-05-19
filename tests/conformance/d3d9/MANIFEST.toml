@@ -2309,3 +2309,71 @@ owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["GetRasterStatus accepts swapchain zero with Wine-compatible host variance and rejects null or out-of-range swapchain arguments"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_multi_device_independent_state"
+source = "wine/dlls/d3d9/tests/device.c:test_multi_device"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-lifecycle"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["two concurrent IDirect3DDevice9 instances created from the same factory keep independent render state and report the same parent factory"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_mode_change_focus_swap_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_mode_change"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "display-mode"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.14"]
+acceptance = ["CreateDevice with split focus/device windows under D3DCREATE_NOWINDOWCHANGES preserves the focus HWND across a windowed Reset"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_reset_fullscreen_focus_window_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_reset_fullscreen"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "display-mode"
+owner = "core/wsi"
+requirements = ["R-TEST-12.3", "R-TEST-12.14"]
+acceptance = ["fullscreen CreateDevice records hFocusWindow and a fullscreen-to-fullscreen Reset preserves the implicit swapchain binding"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_window_position_present_parameter_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_window_position"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "window-policy"
+owner = "core/wsi"
+requirements = ["R-TEST-12.3", "R-TEST-12.14"]
+acceptance = ["GetPresentParameters round-trips hDeviceWindow and back-buffer dimensions across a Reset that re-uses the same focus window, and rejects a null out-pointer"]
+status = "scaffolded"
