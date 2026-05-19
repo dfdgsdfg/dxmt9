@@ -2567,6 +2567,18 @@ oracle = "Wine d3d9 visual.c fixed_function_decl_test behavior, reduced to missi
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "ffp/dxmt9_ffp_decl_missing_texcoord_default_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c fixed_function_decl_test behavior, reduced to missing TEXCOORD0 default texture sampling"
+oracle-date = "2026-05-19"
+
+[[test]]
 file = "ffp/dxmt9_ffp_gouraud_shademode_readback.shader_test"
 status = "passing"
 source = "dxmt9"
