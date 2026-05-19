@@ -1871,6 +1871,18 @@ oracle = "Wine d3d9 visual.c test_per_stage_constant behavior, reduced to D3DTA_
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "texture/dxmt9_ffp_tss_stage1_constant_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_per_stage_constant behavior, reduced to nonzero-stage D3DTA_CONSTANT readback"
+oracle-date = "2026-05-19"
+
+[[test]]
 file = "texture/dxmt9_ffp_tss_resultarg_temp_readback.shader_test"
 status = "passing"
 source = "dxmt9"

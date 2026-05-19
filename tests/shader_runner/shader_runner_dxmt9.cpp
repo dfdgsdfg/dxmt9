@@ -2343,6 +2343,17 @@ std::string compileShaderSource(const ShaderSection& section, const CorpusTest& 
 std::string compileDefaultFfpSource(ShaderSection::Kind kind, const CorpusTest& test) {
   DeviceState state;
   state.reset();
+  for (const auto& renderState : test.renderStateSetups) {
+    state.renderStates[renderState.state] = renderState.value;
+  }
+  for (const auto& stage : test.textureStageSetups) {
+    if (stage.stage >= state.textureStageStates.size()) {
+      fail("dxmt9 texture stage source setup out of range");
+    }
+    for (const auto& [key, value] : stage.states) {
+      state.textureStageStates[stage.stage][key] = value;
+    }
+  }
   if (test.alphaTestEnable) {
     state.renderStates[RS_ALPHA_TEST_ENABLE] = 1;
     state.renderStates[RS_ALPHA_FUNC] = static_cast<u32>(test.alphaTestFunc);
@@ -2354,6 +2365,10 @@ std::string compileDefaultFfpSource(ShaderSection::Kind kind, const CorpusTest& 
   request.alphaTestEnable = test.alphaTestEnable ? 1u : 0u;
   request.alphaTestFunc = static_cast<u32>(test.alphaTestFunc);
   request.alphaRef = test.alphaRef;
+  request.textured = std::any_of(test.textureBinds.begin(), test.textureBinds.end(),
+                                 [](const TextureBind& bind) {
+                                   return bind.stage == 0;
+                                 }) ? 1u : 0u;
 
   if (kind == ShaderSection::Kind::Vertex) {
     const auto key = makeFfpVertexKey(state);
