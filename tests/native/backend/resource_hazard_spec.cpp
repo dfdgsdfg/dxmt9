@@ -1112,6 +1112,146 @@ void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
   checkEq(d3d->Release(), 0u, "release indexed run recording d3d factory");
 }
 
+void testImportedDrawRetainsOnlyRecordScopedHandles() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create scoped-handle recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{90};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create scoped-handle recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+
+    auto renderTarget = device->CreateSurface(SurfaceDesc{
+        .width = 16u,
+        .height = 16u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    auto unusedSurface = device->CreateSurface(SurfaceDesc{
+        .width = 32u,
+        .height = 32u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    auto vertexBuffer = device->CreateBuffer(BufferDesc{
+        .size = 96u,
+        .pool = Pool::Default,
+        .usage = UsageVertexBuffer,
+    });
+    auto unusedBuffer = device->CreateBuffer(BufferDesc{
+        .size = 64u,
+        .pool = Pool::Default,
+        .usage = UsageVertexBuffer,
+    });
+    check(renderTarget != nullptr, "scoped-handle render target");
+    check(unusedSurface != nullptr, "scoped-handle unused surface");
+    check(vertexBuffer != nullptr, "scoped-handle vertex buffer");
+    check(unusedBuffer != nullptr, "scoped-handle unused buffer");
+
+    D9CSurface renderTargetWire(renderTarget);
+    D9CSurface unusedSurfaceWire(unusedSurface);
+    D9CBuffer vertexBufferWire(vertexBuffer);
+    D9CBuffer unusedBufferWire(unusedBuffer);
+
+    const auto draw = makeDrawRecord(&renderTargetWire, &vertexBufferWire, 4u);
+
+    std::vector<std::uint8_t> bytes;
+    appendRecord(bytes, draw);
+
+    const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &unusedSurfaceWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &unusedBufferWire),
+    };
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, 0u, sizeof(draw),
+                         0u, 2u),
+    };
+    const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
+
+    D9CCommandChunk chunk{};
+    chunk.version = D9C_COMMAND_CHUNK_VERSION;
+    chunk.recordCount = static_cast<std::uint32_t>(records.size());
+    chunk.recordBytes = static_cast<std::uint32_t>(wireBlob.size());
+    chunk.records = wireHandleFromPtr(wireBlob.data());
+    chunk.handleCount = static_cast<std::uint32_t>(std::size(handles));
+    chunk.handles = {};
+
+    recorder->events.clear();
+    checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
+            "commit scoped-handle imported draw chunk");
+
+    checkEq(recorder->events.size(), static_cast<std::size_t>(4),
+            "scoped-handle import event count");
+    checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
+                   "scoped-handle bulk retention happens first");
+    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                   "scoped-handle replay enables bulk-retention skip");
+    check(recorder->events[1].skipDrawResourceMarking,
+          "scoped-handle bulk-retention skip enabled");
+    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+                   "scoped-handle draw submits after retention");
+    checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
+                   "scoped-handle replay resets bulk-retention skip");
+    check(!recorder->events[3].skipDrawResourceMarking,
+          "scoped-handle bulk-retention skip disabled");
+
+    const auto& retained = recorder->events[0].chunkHandles;
+    checkEq(retained.size(), static_cast<std::size_t>(2),
+            "bulk retention keeps only record-scoped pool handles");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              renderTarget->handle()),
+          "scoped retention includes draw render target");
+    check(containsChunkHandle(retained, ChunkHandleKind::Buffer,
+                              vertexBuffer->handle()),
+          "scoped retention includes draw vertex buffer");
+    check(!containsChunkHandle(retained, ChunkHandleKind::Surface,
+                               unusedSurface->handle()),
+          "scoped retention excludes out-of-range surface handle");
+    check(!containsChunkHandle(retained, ChunkHandleKind::Buffer,
+                               unusedBuffer->handle()),
+          "scoped retention excludes out-of-range buffer handle");
+
+    const auto& drawRun = recorder->events[2].drawRun;
+    checkEq(drawRun.draws.size(), static_cast<std::size_t>(1),
+            "scoped-handle draw run contains one draw");
+    checkEq(drawRun.hot.colorAttachments[0].handle.value,
+            renderTarget->handle().value,
+            "scoped-handle draw uses the record-scoped RT");
+    checkEq(drawRun.hot.streamBuffers[0].value, vertexBuffer->handle().value,
+            "scoped-handle draw uses the record-scoped stream");
+    checkEq(drawRun.hot.streamOffsets[0], 0u,
+            "scoped-handle draw keeps stream offset");
+    checkEq(drawRun.hot.streamStrides[0], 16u,
+            "scoped-handle draw keeps stream stride");
+    checkEq(drawRun.draws[0].startVertex, 4u,
+            "scoped-handle draw keeps start vertex");
+    check(drawRun.payloadArena.empty(),
+          "scoped-handle draw has no UP payload arena");
+  }
+
+  checkEq(device->Release(), 0u, "release scoped-handle recording d3d device");
+  checkEq(d3d->Release(), 0u, "release scoped-handle recording d3d factory");
+}
+
 struct ArenaTestRecord {
   bool destroyPending = false;
   std::uint64_t lastUsedSeqId = 0;
@@ -1310,6 +1450,7 @@ int main() {
     testImportedIndexedDrawPreservesBoundIndexPolicy();
     testDeviceCSetIndicesInfersIndex32Format();
     testImportedIndexedDrawRunCoalescesParamOnlyPackets();
+    testImportedDrawRetainsOnlyRecordScopedHandles();
     testResourcePoolArenaRejectsStaleHandles();
     testHandleArenaSlotPointerStableAcrossInserts();
     testResourcePoolUsesArenaStorageOnly();
