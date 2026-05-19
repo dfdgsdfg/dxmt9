@@ -468,4 +468,24 @@ void test_visual_zenable_render_state_policy(const struct d3d9_api *api);
 void test_visual_zwriteenable_render_state_policy(const struct d3d9_api *api);
 void test_visual_multisampled_depth_buffer_caps_policy(const struct d3d9_api *api);
 
+/* Wine visual.c render-target / clear / surface oracle scaffolds. */
+void test_visual_depth_clamp_render_state_policy(const struct d3d9_api *api);
+void test_visual_clear_color_only_policy(const struct d3d9_api *api);
+void test_visual_clear_smaller_rt_policy(const struct d3d9_api *api);
+void test_visual_colorfill_format_policy(const struct d3d9_api *api);
+void test_visual_offscreen_surface_creation_policy(const struct d3d9_api *api);
+void test_visual_stencil_cull_caps_policy(const struct d3d9_api *api);
+void test_visual_update_surface_policy(const struct d3d9_api *api);
+void test_visual_swapchain_flip_present_policy(const struct d3d9_api *api);
+
+/* Wine visual.c shading / lighting / surface misc oracle scaffolds. */
+void test_visual_shademode_render_state_policy(const struct d3d9_api *api);
+void test_visual_lighting_render_state_policy(const struct d3d9_api *api);
+void test_visual_lighting_world_view_matrix_policy(const struct d3d9_api *api);
+void test_visual_release_buffer_bound_policy(const struct d3d9_api *api);
+void test_visual_evict_managed_resources_policy(const struct d3d9_api *api);
+void test_visual_add_dirty_rect_policy(const struct d3d9_api *api);
+void test_visual_multisample_get_front_buffer_data_policy(const struct d3d9_api *api);
+void test_visual_multisample_rt_ds_mismatch_policy(const struct d3d9_api *api);
+
 #endif /* DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H */
