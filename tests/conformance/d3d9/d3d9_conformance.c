@@ -292,6 +292,8 @@ static const struct test_case tests[] =
             test_check_device_format_conversion_matrix},
     {"multithreaded_device_creation_policy",
             test_multithreaded_device_creation_policy},
+    {"visual_shadow_depth_compare_caps_policy",
+            test_visual_shadow_depth_compare_caps_policy},
 };
 
 int main(void)

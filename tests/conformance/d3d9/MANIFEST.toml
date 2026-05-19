@@ -3244,3 +3244,20 @@ owner = "core/device"
 requirements = ["R-TEST-12.3", "R-TEST-12.18"]
 acceptance = ["CreateDevice with D3DCREATE_MULTITHREADED | D3DCREATE_HARDWARE_VERTEXPROCESSING succeeds and GetCreationParameters reports both flags in BehaviorFlags"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_shadow_depth_compare_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:shadow_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormat returns a Wine-compatible HRESULT when probing D3DUSAGE_DEPTHSTENCIL with D3DRTYPE_TEXTURE for D3DFMT_D16, D3DFMT_D24S8, and D3DFMT_D24X8 (shadow-texture sampling caps)"]
+status = "scaffolded"

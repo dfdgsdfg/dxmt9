@@ -388,3 +388,38 @@ void test_visual_signed_formats_caps_policy(const struct d3d9_api *api)
 
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: shadow_test
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_shadow_depth_compare_caps_policy(const struct d3d9_api *api)
+{
+    static const D3DFORMAT shadow_fourcc[] =
+    {
+        D3DFMT_D16, D3DFMT_D24S8, D3DFMT_D24X8,
+    };
+    IDirect3D9 *d3d9;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(shadow_fourcc); ++i)
+    {
+        /* Probe whether the depth format can be sampled as a shadow
+         * texture (D3DUSAGE_DEPTHSTENCIL + texture rtype). */
+        hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+                D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DUSAGE_DEPTHSTENCIL,
+                D3DRTYPE_TEXTURE, shadow_fourcc[i]);
+        CHECK_TRUE(hr == D3D_OK || hr == D3DERR_NOTAVAILABLE);
+    }
+
+    IDirect3D9_Release(d3d9);
+}
