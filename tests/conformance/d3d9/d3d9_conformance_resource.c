@@ -1719,6 +1719,107 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * functions: test_mipmap_levels(), test_resource_type()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_base_texture_metadata_iface_policy(const struct d3d9_api *api)
+{
+    IDirect3DVolumeTexture9 *volume_texture = NULL;
+    IDirect3DCubeTexture9 *cube_texture = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3DBaseTexture9 *base;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 8, 0, 0,
+            D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        base = (IDirect3DBaseTexture9 *)texture;
+        CHECK_TRUE(IDirect3DBaseTexture9_GetType(base) == D3DRTYPE_TEXTURE);
+        CHECK_TRUE(IDirect3DBaseTexture9_GetLevelCount(base) == 4);
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    if (caps.TextureCaps & D3DPTEXTURECAPS_CUBEMAP)
+    {
+        hr = IDirect3DDevice9_CreateCubeTexture(device, 8, 0, 0,
+                D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &cube_texture, NULL);
+        if (FAILED(hr))
+        {
+            char hr_buffer[16];
+            print_hr(hr_buffer, sizeof(hr_buffer), hr);
+            skip_current_test("CreateCubeTexture failed with %s", hr_buffer);
+        }
+        else
+        {
+            base = (IDirect3DBaseTexture9 *)cube_texture;
+            CHECK_TRUE(IDirect3DBaseTexture9_GetType(base)
+                    == D3DRTYPE_CUBETEXTURE);
+            CHECK_TRUE(IDirect3DBaseTexture9_GetLevelCount(base)
+                    == ((caps.TextureCaps & D3DPTEXTURECAPS_MIPCUBEMAP)
+                    ? 4 : 1));
+            IDirect3DCubeTexture9_Release(cube_texture);
+            cube_texture = NULL;
+        }
+    }
+
+    if (caps.TextureCaps & D3DPTEXTURECAPS_MIPVOLUMEMAP)
+    {
+        hr = IDirect3DDevice9_CreateVolumeTexture(device, 2, 4, 8, 4, 0,
+                D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &volume_texture, NULL);
+        if (FAILED(hr))
+        {
+            char hr_buffer[16];
+            print_hr(hr_buffer, sizeof(hr_buffer), hr);
+            skip_current_test("CreateVolumeTexture failed with %s",
+                    hr_buffer);
+        }
+        else
+        {
+            base = (IDirect3DBaseTexture9 *)volume_texture;
+            CHECK_TRUE(IDirect3DBaseTexture9_GetType(base)
+                    == D3DRTYPE_VOLUMETEXTURE);
+            CHECK_TRUE(IDirect3DBaseTexture9_GetLevelCount(base) == 4);
+            IDirect3DVolumeTexture9_Release(volume_texture);
+            volume_texture = NULL;
+        }
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_mipmap_gen()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

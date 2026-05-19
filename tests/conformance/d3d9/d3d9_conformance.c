@@ -108,6 +108,8 @@ static const struct test_case tests[] =
     {"surface_dimensions", test_surface_dimensions},
     {"texture_auto_mipmap_level_count",
             test_texture_auto_mipmap_level_count},
+    {"base_texture_metadata_iface_policy",
+            test_base_texture_metadata_iface_policy},
     {"texture_autogen_filter_level_policy",
             test_texture_autogen_filter_level_policy},
     {"surface_format_null_policy", test_surface_format_null_policy},
