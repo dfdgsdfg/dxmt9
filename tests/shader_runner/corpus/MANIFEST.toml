@@ -707,6 +707,18 @@ oracle = "Wine d3d9 visual.c test_texture_blending behavior, reduced to FFP alph
 oracle-date = "2026-05-18"
 
 [[test]]
+file = "texture/dxmt9_ffp_tss_alpha_subtract_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c test_texture_blending behavior, reduced to FFP alpha SUBTRACT"
+oracle-date = "2026-05-19"
+
+[[test]]
 file = "texture/dxmt9_ffp_tss_blendtexturealpha_readback.shader_test"
 status = "passing"
 source = "dxmt9"
