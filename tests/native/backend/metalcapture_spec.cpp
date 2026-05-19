@@ -49,6 +49,68 @@ void testSingleRequestedPresentFrame() {
         "capture controller should stop counting after one-shot request");
 }
 
+void testChunkBeginSessionStartsOnTargetFrameBoundary() {
+  dxmt9::core::metalcapture::MetalCaptureController capture({
+      .targetFrame = 3,
+      .path = "/tmp/dxmt9-session.gputrace",
+  });
+
+  check(!capture.maybeCaptureAtChunkBegin(20).has_value(),
+        "chunk-begin capture is not armed before prior presents");
+  check(!capture.maybePresentChunkClosesSession(21).has_value(),
+        "frame 1 present cannot close a session");
+  check(capture.observedPresentFrames() == 1,
+        "frame 1 present advances capture counter");
+  check(!capture.maybeCaptureAtChunkBegin(22).has_value(),
+        "frame 2 chunk-begin is still before target frame");
+
+  check(!capture.maybePresentChunkClosesSession(23).has_value(),
+        "frame 2 present arms the next chunk but does not close");
+  check(capture.observedPresentFrames() == 2,
+        "frame 2 present advances capture counter");
+
+  auto request = capture.maybeCaptureAtChunkBegin(24);
+  check(request.has_value(),
+        "first chunk after frame 2 starts target-frame capture");
+  check(request->frame == 3, "chunk-begin request records target frame");
+  check(request->seqId == 24, "chunk-begin request records start seq");
+  check(request->path == "/tmp/dxmt9-session.gputrace",
+        "chunk-begin request preserves configured path");
+
+  check(!capture.maybeCaptureAtChunkBegin(25).has_value(),
+        "same frame does not start a second capture session");
+}
+
+void testChunkBeginSessionClosesOnTargetPresent() {
+  dxmt9::core::metalcapture::MetalCaptureController capture({
+      .targetFrame = 2,
+      .path = "/tmp/dxmt9-session-close.gputrace",
+  });
+
+  check(!capture.maybePresentChunkClosesSession(30).has_value(),
+        "frame 1 present arms frame 2 chunk-begin only");
+
+  auto started = capture.maybeCaptureAtChunkBegin(31);
+  check(started.has_value(), "frame 2 first chunk starts capture session");
+  check(started->seqId == 31, "start request records first target chunk");
+
+  auto closing = capture.maybePresentChunkClosesSession(32);
+  check(closing.has_value(), "frame 2 present closes active capture session");
+  check(closing->frame == started->frame,
+        "closing request preserves captured frame");
+  check(closing->seqId == started->seqId,
+        "closing request preserves capture start seq");
+  check(closing->path == started->path,
+        "closing request preserves capture path");
+  check(capture.observedPresentFrames() == 2,
+        "target present advances counter exactly once");
+
+  check(!capture.maybePresentChunkClosesSession(33).has_value(),
+        "closed one-shot session cannot emit a second close request");
+  check(capture.observedPresentFrames() == 3,
+        "post-close presents still update observed frame counter");
+}
+
 void testDefaultPathContainsFrameAndSeq() {
   dxmt9::core::metalcapture::MetalCaptureController capture({
       .targetFrame = 1,
@@ -66,6 +128,8 @@ int main() {
   try {
     testDisabledControllerDoesNotCountFrames();
     testSingleRequestedPresentFrame();
+    testChunkBeginSessionStartsOnTargetFrameBoundary();
+    testChunkBeginSessionClosesOnTargetPresent();
     testDefaultPathContainsFrameAndSeq();
   } catch (const TestFailure& failure) {
     std::cerr << "metalcapture_spec: " << failure.what() << "\n";
