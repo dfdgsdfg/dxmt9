@@ -55,7 +55,9 @@ enum class EventKind {
   SubmitClear,
   SubmitReadback,
   SubmitSurfaceCopy,
+  SubmitStretchRect,
   Flush,
+  SubmitColorFill,
 };
 
 struct RecordedDrawRun {
@@ -73,6 +75,8 @@ struct RecordedEvent {
   ClearDesc clear;
   ReadbackDesc readback;
   SurfaceCopyDesc surfaceCopy;
+  StretchRectDesc stretchRect;
+  ColorFillDesc colorFill;
 };
 
 struct RecordingDxmt9Device final : dxmt9::Device {
@@ -175,9 +179,23 @@ struct RecordingDxmt9Device final : dxmt9::Device {
     events.push_back(std::move(event));
   }
 
+  void submitStretchRect(const StretchRectDesc& desc) override {
+    RecordedEvent event;
+    event.kind = EventKind::SubmitStretchRect;
+    event.stretchRect = desc;
+    events.push_back(std::move(event));
+  }
+
   void flush() override {
     RecordedEvent event;
     event.kind = EventKind::Flush;
+    events.push_back(std::move(event));
+  }
+
+  void submitColorFill(const ColorFillDesc& desc) override {
+    RecordedEvent event;
+    event.kind = EventKind::SubmitColorFill;
+    event.colorFill = desc;
     events.push_back(std::move(event));
   }
 
@@ -378,12 +396,44 @@ D9CCommandRecordReadback makeReadbackRecord(D9CSurface* source,
   return readback;
 }
 
+D9CCommandRecordStretchRect makeStretchRectRecord(D9CSurface* source,
+                                                  D9CSurface* destination) {
+  D9CCommandRecordStretchRect stretch{};
+  stretch.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
+  stretch.header.size = sizeof(stretch);
+  stretch.srcWire = wireValueFromPtr(source);
+  stretch.dstWire = wireValueFromPtr(destination);
+  stretch.hasSrcRect = 1u;
+  stretch.hasDstRect = 1u;
+  stretch.filter = 2u;
+  stretch.srcRect = D9CRect{1, 2, 13, 18};
+  stretch.dstRect = D9CRect{3, 5, 27, 37};
+  return stretch;
+}
+
+D9CCommandRecordColorFill makeColorFillRecord(D9CSurface* destination) {
+  D9CCommandRecordColorFill color{};
+  color.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
+  color.header.size = sizeof(color);
+  color.surfaceWire = wireValueFromPtr(destination);
+  color.colorARGB = 0x8040a0ffu;
+  color.hasRect = 1u;
+  color.rect = D9CRect{4, 6, 14, 16};
+  return color;
+}
+
 bool containsChunkHandle(const std::vector<ChunkHandleEntry>& entries,
                          ChunkHandleKind kind,
                          Handle handle) {
   return std::find_if(entries.begin(), entries.end(), [&](const auto& entry) {
            return entry.kind == kind && entry.handle == handle;
          }) != entries.end();
+}
+
+void checkNear(float left, float right, std::string_view message) {
+  if (std::abs(left - right) > 0.0001f) {
+    fail(std::string(message));
+  }
 }
 
 void checkEventKind(const std::vector<RecordedEvent>& events,
@@ -883,6 +933,160 @@ void testImportedIndexedDrawPreservesBoundIndexPolicy() {
 
   checkEq(device->Release(), 0u, "release indexed recording d3d device");
   checkEq(d3d->Release(), 0u, "release indexed recording d3d factory");
+}
+
+void testImportedSurfaceOpsPreserveBoundaryPayloads() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create surface-op recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 32u;
+  params.backBufferHeight = 32u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{87};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create surface-op recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+
+    auto source = device->CreateSurface(SurfaceDesc{
+        .width = 32u,
+        .height = 32u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    auto destination = device->CreateSurface(SurfaceDesc{
+        .width = 48u,
+        .height = 48u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    auto fillTarget = device->CreateSurface(SurfaceDesc{
+        .width = 24u,
+        .height = 24u,
+        .format = Format::A8R8G8B8,
+        .pool = Pool::Default,
+        .usage = UsageRenderTarget,
+        .renderTarget = true,
+    });
+    check(source != nullptr, "surface-op source");
+    check(destination != nullptr, "surface-op destination");
+    check(fillTarget != nullptr, "surface-op fill target");
+
+    D9CSurface sourceWire(source);
+    D9CSurface destinationWire(destination);
+    D9CSurface fillTargetWire(fillTarget);
+
+    const auto stretch =
+        makeStretchRectRecord(&sourceWire, &destinationWire);
+    const auto color = makeColorFillRecord(&fillTargetWire);
+
+    std::vector<std::uint8_t> bytes;
+    appendRecord(bytes, stretch);
+    appendRecord(bytes, color);
+
+    const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &sourceWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &destinationWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &fillTargetWire),
+    };
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_STRETCH_RECT, 0u,
+                         sizeof(stretch), 0u, 2u),
+        wireRecordHeader(D9C_COMMAND_RECORD_COLOR_FILL, sizeof(stretch),
+                         sizeof(color), 2u, 1u),
+    };
+    const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
+
+    D9CCommandChunk chunk{};
+    chunk.version = D9C_COMMAND_CHUNK_VERSION;
+    chunk.recordCount = static_cast<std::uint32_t>(records.size());
+    chunk.recordBytes = static_cast<std::uint32_t>(wireBlob.size());
+    chunk.records = wireHandleFromPtr(wireBlob.data());
+    chunk.handleCount = static_cast<std::uint32_t>(std::size(handles));
+    chunk.handles = {};
+
+    recorder->events.clear();
+    checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
+            "commit imported surface-op chunk");
+
+    checkEq(recorder->events.size(), static_cast<std::size_t>(5),
+            "surface-op import event count");
+    checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
+                   "surface-op retention happens first");
+    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                   "surface-op replay enables bulk-retention skip");
+    check(recorder->events[1].skipDrawResourceMarking,
+          "surface-op bulk-retention skip enabled");
+    checkEventKind(recorder->events, 2u, EventKind::SubmitStretchRect,
+                   "stretch rect submits after retention");
+    checkEventKind(recorder->events, 3u, EventKind::SubmitColorFill,
+                   "color fill remains ordered after stretch");
+    checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
+                   "surface-op replay resets bulk-retention skip");
+    check(!recorder->events[4].skipDrawResourceMarking,
+          "surface-op bulk-retention skip disabled");
+
+    const auto& retained = recorder->events[0].chunkHandles;
+    checkEq(retained.size(), static_cast<std::size_t>(3),
+            "surface-op retention resolves every record-scoped surface");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              source->handle()),
+          "surface-op retention includes stretch source");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              destination->handle()),
+          "surface-op retention includes stretch destination");
+    check(containsChunkHandle(retained, ChunkHandleKind::Surface,
+                              fillTarget->handle()),
+          "surface-op retention includes color-fill target");
+
+    const auto& stretchDesc = recorder->events[2].stretchRect;
+    checkEq(stretchDesc.source.value, source->handle().value,
+            "stretch boundary source handle");
+    checkEq(stretchDesc.destination.value, destination->handle().value,
+            "stretch boundary destination handle");
+    check(stretchDesc.sourceRect == Rect{1, 2, 13, 18},
+          "stretch boundary source rect");
+    check(stretchDesc.destinationRect == Rect{3, 5, 27, 37},
+          "stretch boundary destination rect");
+    check(stretchDesc.linear,
+          "stretch boundary preserves linear filter intent");
+    checkEq(stretchDesc.sourceSampleCount, 1u,
+            "stretch boundary source sample count default");
+    checkEq(stretchDesc.destinationSampleCount, 1u,
+            "stretch boundary destination sample count default");
+
+    const auto& colorDesc = recorder->events[3].colorFill;
+    checkEq(colorDesc.destination.value, fillTarget->handle().value,
+            "color-fill boundary destination handle");
+    check(colorDesc.hasRect, "color-fill boundary preserves rect flag");
+    check(colorDesc.rect == Rect{4, 6, 14, 16},
+          "color-fill boundary rect");
+    checkNear(colorDesc.color.r, 64.0f / 255.0f,
+              "color-fill boundary red channel");
+    checkNear(colorDesc.color.g, 160.0f / 255.0f,
+              "color-fill boundary green channel");
+    checkNear(colorDesc.color.b, 1.0f,
+              "color-fill boundary blue channel");
+    checkNear(colorDesc.color.a, 128.0f / 255.0f,
+              "color-fill boundary alpha channel");
+  }
+
+  checkEq(device->Release(), 0u,
+          "release surface-op recording d3d device");
+  checkEq(d3d->Release(), 0u, "release surface-op recording d3d factory");
 }
 
 void testDeviceCSetIndicesInfersIndex32Format() {
@@ -1448,6 +1652,7 @@ int main() {
     testImportedChunkBulkRetentionAndBarrierOrdering();
     testReadbackBoundarySplitsCoalescedImportedDrawRun();
     testImportedIndexedDrawPreservesBoundIndexPolicy();
+    testImportedSurfaceOpsPreserveBoundaryPayloads();
     testDeviceCSetIndicesInfersIndex32Format();
     testImportedIndexedDrawRunCoalescesParamOnlyPackets();
     testImportedDrawRetainsOnlyRecordScopedHandles();
