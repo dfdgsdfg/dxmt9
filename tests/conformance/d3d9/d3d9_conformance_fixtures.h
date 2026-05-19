@@ -384,6 +384,10 @@ void test_nonlockable_backbuffer_getdc_policy(const struct d3d9_api *api);
 void test_reset_lockable_backbuffer_policy(const struct d3d9_api *api);
 void test_swapchain_multisample_reset(const struct d3d9_api *api);
 void test_fullscreen_window_position_restore(const struct d3d9_api *api);
+void test_swapchain_get_display_mode_ex_policy(const struct d3d9_api *api);
+void test_ex_get_adapter_luid_policy(const struct d3d9_api *api);
+void test_ex_get_adapter_display_mode_ex_policy(const struct d3d9_api *api);
+void test_backbuffer_resize_present_parameter_policy(const struct d3d9_api *api);
 
 void test_stateblock_invalid_type_recording_invalid_calls(const struct d3d9_api *api);
 void test_shader_constant_apply(const struct d3d9_api *api);

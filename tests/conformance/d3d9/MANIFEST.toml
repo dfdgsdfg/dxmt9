@@ -2428,3 +2428,71 @@ owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CreateOffscreenPlainSurfaceEx with user memory accepts D3DFMT_X8R8G8B8 with a round-tripping surface descriptor and rejects D3DFMT_DXT1 with D3DERR_INVALIDCALL and a cleared out-pointer"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_swapchain_get_display_mode_ex_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_swapchain_get_displaymode_ex"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex"
+owner = "core/wsi"
+requirements = ["R-TEST-12.3", "R-TEST-12.10"]
+acceptance = ["IDirect3DSwapChain9Ex::GetDisplayModeEx fills Size, an X8R8G8B8/A8R8G8B8/R5G6B5 Format, and one of four D3DDISPLAYROTATION values; NULL out-pointer is rejected"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_ex_get_adapter_luid_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_get_adapter_luid"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex"
+owner = "core/factory"
+requirements = ["R-TEST-12.3"]
+acceptance = ["IDirect3D9Ex::GetAdapterLUID returns a non-zero LUID for the default adapter and rejects out-of-range ordinals and NULL out-pointers"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_ex_get_adapter_display_mode_ex_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_get_adapter_displaymode_ex"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex"
+owner = "core/factory"
+requirements = ["R-TEST-12.3", "R-TEST-12.10"]
+acceptance = ["IDirect3D9Ex::GetAdapterDisplayModeEx fills Size and a valid rotation, tolerates a NULL rotation out-pointer, and rejects invalid adapter ordinals"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_swapchain.c"
+function = "test_backbuffer_resize_present_parameter_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_backbuffer_resize"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "swapchain"
+owner = "core/wsi"
+requirements = ["R-TEST-12.10"]
+acceptance = ["ResetEx with new BackBufferWidth/Height resizes the implicit swapchain and the new backbuffer GetDesc reports the new dimensions; non-Ex Reset with mismatched present parameters resolves to D3D_OK or D3DERR_INVALIDCALL"]
+status = "scaffolded"

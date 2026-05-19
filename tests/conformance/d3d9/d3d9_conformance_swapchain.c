@@ -1374,3 +1374,286 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_swapchain_get_displaymode_ex
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_swapchain_get_display_mode_ex_policy(const struct d3d9_api *api)
+{
+    IDirect3DSwapChain9Ex *swapchain_ex = NULL;
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DDevice9Ex *device = NULL;
+    D3DDISPLAYROTATION rotation;
+    D3DDISPLAYMODEEX mode_ex;
+    IDirect3D9Ex *d3d9ex;
+    HWND window;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_ex_device(d3d9ex, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9Ex_GetSwapChain(device, 0, &swapchain);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DSwapChain9_QueryInterface(swapchain,
+            &IID_IDirect3DSwapChain9Ex, (void **)&swapchain_ex);
+    CHECK_HR(hr, S_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    /* NULL out-pointer probe: D3DERR_INVALIDCALL. */
+    rotation = (D3DDISPLAYROTATION)0xdeadbeef;
+    CHECK_HR(IDirect3DSwapChain9Ex_GetDisplayModeEx(swapchain_ex, NULL,
+            &rotation), D3DERR_INVALIDCALL);
+
+    /* Successful call: validate Size, Format family, and rotation enum. */
+    memset(&mode_ex, 0, sizeof(mode_ex));
+    mode_ex.Size = sizeof(mode_ex);
+    rotation = (D3DDISPLAYROTATION)0xdeadbeef;
+    hr = IDirect3DSwapChain9Ex_GetDisplayModeEx(swapchain_ex, &mode_ex,
+            &rotation);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(mode_ex.Size == sizeof(D3DDISPLAYMODEEX));
+        CHECK_TRUE(mode_ex.Width > 0);
+        CHECK_TRUE(mode_ex.Height > 0);
+        CHECK_TRUE(mode_ex.Format == D3DFMT_X8R8G8B8
+                || mode_ex.Format == D3DFMT_A8R8G8B8
+                || mode_ex.Format == D3DFMT_R5G6B5);
+        CHECK_TRUE(rotation == D3DDISPLAYROTATION_IDENTITY
+                || rotation == D3DDISPLAYROTATION_90
+                || rotation == D3DDISPLAYROTATION_180
+                || rotation == D3DDISPLAYROTATION_270);
+    }
+
+done_device:
+    if (swapchain_ex)
+        IDirect3DSwapChain9Ex_Release(swapchain_ex);
+    if (swapchain)
+        IDirect3DSwapChain9_Release(swapchain);
+    IDirect3DDevice9Ex_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_get_adapter_luid
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_ex_get_adapter_luid_policy(const struct d3d9_api *api)
+{
+    IDirect3D9Ex *d3d9ex;
+    UINT adapter_count;
+    LUID luid;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    adapter_count = IDirect3D9Ex_GetAdapterCount(d3d9ex);
+    if (!adapter_count)
+    {
+        skip_current_test("no adapters available");
+        goto done;
+    }
+
+    /* Successful call: LUID must not be all-zero. */
+    memset(&luid, 0, sizeof(luid));
+    hr = IDirect3D9Ex_GetAdapterLUID(d3d9ex, D3DADAPTER_DEFAULT, &luid);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(luid.LowPart != 0 || luid.HighPart != 0);
+
+    /* Invalid adapter ordinal: D3DERR_INVALIDCALL. */
+    memset(&luid, 0xcc, sizeof(luid));
+    CHECK_HR(IDirect3D9Ex_GetAdapterLUID(d3d9ex, adapter_count, &luid),
+            D3DERR_INVALIDCALL);
+
+    /* NULL out-pointer: D3DERR_INVALIDCALL. */
+    CHECK_HR(IDirect3D9Ex_GetAdapterLUID(d3d9ex, D3DADAPTER_DEFAULT, NULL),
+            D3DERR_INVALIDCALL);
+
+done:
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_get_adapter_displaymode_ex
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_ex_get_adapter_display_mode_ex_policy(const struct d3d9_api *api)
+{
+    D3DDISPLAYROTATION rotation;
+    D3DDISPLAYMODEEX mode_ex;
+    IDirect3D9Ex *d3d9ex;
+    UINT adapter_count;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    adapter_count = IDirect3D9Ex_GetAdapterCount(d3d9ex);
+    if (!adapter_count)
+    {
+        skip_current_test("no adapters available");
+        goto done;
+    }
+
+    /* Successful call with rotation out-pointer: validate Size + rotation. */
+    memset(&mode_ex, 0, sizeof(mode_ex));
+    mode_ex.Size = sizeof(mode_ex);
+    rotation = (D3DDISPLAYROTATION)0xdeadbeef;
+    hr = IDirect3D9Ex_GetAdapterDisplayModeEx(d3d9ex, D3DADAPTER_DEFAULT,
+            &mode_ex, &rotation);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(mode_ex.Size == sizeof(D3DDISPLAYMODEEX));
+        CHECK_TRUE(mode_ex.Width > 0);
+        CHECK_TRUE(mode_ex.Height > 0);
+        CHECK_TRUE(mode_ex.Format != D3DFMT_UNKNOWN);
+        CHECK_TRUE(rotation == D3DDISPLAYROTATION_IDENTITY
+                || rotation == D3DDISPLAYROTATION_90
+                || rotation == D3DDISPLAYROTATION_180
+                || rotation == D3DDISPLAYROTATION_270);
+    }
+
+    /* NULL rotation is allowed: still succeeds and preserves Size. */
+    memset(&mode_ex, 0, sizeof(mode_ex));
+    mode_ex.Size = sizeof(mode_ex);
+    hr = IDirect3D9Ex_GetAdapterDisplayModeEx(d3d9ex, D3DADAPTER_DEFAULT,
+            &mode_ex, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+        CHECK_TRUE(mode_ex.Size == sizeof(D3DDISPLAYMODEEX));
+
+    /* Invalid adapter ordinal: D3DERR_INVALIDCALL. */
+    memset(&mode_ex, 0, sizeof(mode_ex));
+    mode_ex.Size = sizeof(mode_ex);
+    CHECK_HR(IDirect3D9Ex_GetAdapterDisplayModeEx(d3d9ex, adapter_count,
+            &mode_ex, &rotation), D3DERR_INVALIDCALL);
+
+done:
+    IDirect3D9Ex_Release(d3d9ex);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c, dlls/d3d9/tests/d3d9ex.c
+ * function: test_backbuffer_resize
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_backbuffer_resize_present_parameter_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *backbuffer = NULL;
+    IDirect3DDevice9Ex *device = NULL;
+    IDirect3DDevice9 *base_device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    D3DSURFACE_DESC desc;
+    IDirect3D9Ex *d3d9ex;
+    HWND window;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    /* Start with a small swapchain. */
+    pp = default_present_parameters(window);
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    pp.BackBufferWidth = 320;
+    pp.BackBufferHeight = 240;
+    hr = IDirect3D9Ex_CreateDeviceEx(d3d9ex, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING,
+            &pp, NULL, &device);
+    if (FAILED(hr))
+    {
+        skip_current_test("CreateDeviceEx with small swapchain failed");
+        goto done_window;
+    }
+
+    /* ResetEx with larger BackBufferWidth/Height should resize. */
+    pp = default_present_parameters(window);
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    pp.BackBufferWidth = 800;
+    pp.BackBufferHeight = 600;
+    hr = IDirect3DDevice9Ex_ResetEx(device, &pp, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DDevice9Ex_GetBackBuffer(device, 0, 0,
+                D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr) && backbuffer)
+        {
+            memset(&desc, 0, sizeof(desc));
+            hr = IDirect3DSurface9_GetDesc(backbuffer, &desc);
+            CHECK_HR(hr, D3D_OK);
+            if (SUCCEEDED(hr))
+            {
+                CHECK_TRUE(desc.Width == 800);
+                CHECK_TRUE(desc.Height == 600);
+            }
+            IDirect3DSurface9_Release(backbuffer);
+            backbuffer = NULL;
+        }
+    }
+
+    IDirect3DDevice9Ex_Release(device);
+    device = NULL;
+
+    /* Non-Ex Reset with mismatched present-parameter size: spec-tolerant.
+     * Wine returns either D3DERR_INVALIDCALL or S_OK depending on focus
+     * window. Only assert the HRESULT lands in that two-value set. */
+    pp = default_present_parameters(window);
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    pp.BackBufferWidth = 320;
+    pp.BackBufferHeight = 240;
+    hr = IDirect3D9Ex_CreateDevice((IDirect3D9 *)d3d9ex, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING,
+            &pp, &base_device);
+    if (FAILED(hr))
+        goto done_window;
+
+    pp.BackBufferWidth = 1024;
+    pp.BackBufferHeight = 768;
+    hr = IDirect3DDevice9_Reset(base_device, &pp);
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(base_device);
+
+done_window:
+    if (device)
+        IDirect3DDevice9Ex_Release(device);
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}
