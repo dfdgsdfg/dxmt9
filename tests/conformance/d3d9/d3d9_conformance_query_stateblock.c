@@ -9,6 +9,21 @@
 
 #include "d3d9_conformance_fixtures.h"
 
+static void set_scale_matrix(D3DMATRIX *matrix, float scale)
+{
+    memset(matrix, 0, sizeof(*matrix));
+    matrix->m[0][0] = scale;
+    matrix->m[1][1] = scale;
+    matrix->m[2][2] = scale;
+    matrix->m[3][3] = scale;
+}
+
+static void check_matrix_equals(const D3DMATRIX *actual,
+        const D3DMATRIX *expected)
+{
+    CHECK_TRUE(memcmp(actual, expected, sizeof(*actual)) == 0);
+}
+
 /*
  * Wine stateblock.c covers stateblock creation/record/apply paths. Wine
  * device.c adds the invalid-call recording transitions kept in this slice.
@@ -449,6 +464,193 @@ done_device:
         IDirect3DVertexDeclaration9_Release(decl_b);
     if (decl_a)
         IDirect3DVertexDeclaration9_Release(decl_a);
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/stateblock.c
+ * function: transform state in test_state_management()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_stateblock_transform_capture_apply(const struct d3d9_api *api)
+{
+    IDirect3DStateBlock9 *stateblock = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DMATRIX view_a, view_b, out;
+    D3DMATRIX world_a, world_b;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    set_scale_matrix(&view_a, 2.0f);
+    set_scale_matrix(&view_b, 3.0f);
+    set_scale_matrix(&world_a, 4.0f);
+    set_scale_matrix(&world_b, 5.0f);
+
+    CHECK_HR(IDirect3DDevice9_BeginStateBlock(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_VIEW, &view_a),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_WORLDMATRIX(255),
+            &world_a), D3D_OK);
+    hr = IDirect3DDevice9_EndStateBlock(device, &stateblock);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(stateblock != NULL);
+    if (FAILED(hr) || !stateblock)
+        goto done_device;
+
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_VIEW, &view_b),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_WORLDMATRIX(255),
+            &world_b), D3D_OK);
+    CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3D_OK);
+
+    memset(&out, 0xcc, sizeof(out));
+    CHECK_HR(IDirect3DDevice9_GetTransform(device, D3DTS_VIEW, &out),
+            D3D_OK);
+    check_matrix_equals(&out, &view_a);
+    memset(&out, 0xcc, sizeof(out));
+    CHECK_HR(IDirect3DDevice9_GetTransform(device, D3DTS_WORLDMATRIX(255),
+            &out), D3D_OK);
+    check_matrix_equals(&out, &world_a);
+
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_VIEW, &view_b),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_WORLDMATRIX(255),
+            &world_b), D3D_OK);
+    CHECK_HR(IDirect3DStateBlock9_Capture(stateblock), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_VIEW, &view_a),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTransform(device, D3DTS_WORLDMATRIX(255),
+            &world_a), D3D_OK);
+    CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3D_OK);
+
+    memset(&out, 0xcc, sizeof(out));
+    CHECK_HR(IDirect3DDevice9_GetTransform(device, D3DTS_VIEW, &out),
+            D3D_OK);
+    check_matrix_equals(&out, &view_b);
+    memset(&out, 0xcc, sizeof(out));
+    CHECK_HR(IDirect3DDevice9_GetTransform(device, D3DTS_WORLDMATRIX(255),
+            &out), D3D_OK);
+    check_matrix_equals(&out, &world_b);
+
+done_device:
+    if (stateblock)
+        IDirect3DStateBlock9_Release(stateblock);
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_multiply_transform()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_stateblock_multiply_transform_capture(const struct d3d9_api *api)
+{
+    static const D3DTRANSFORMSTATETYPE tests[] =
+    {
+        D3DTS_VIEW,
+        D3DTS_PROJECTION,
+        D3DTS_TEXTURE0,
+        D3DTS_TEXTURE7,
+        D3DTS_WORLD,
+        D3DTS_WORLDMATRIX(255),
+    };
+    IDirect3DStateBlock9 *stateblock = NULL;
+    D3DMATRIX identity, scale, out;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    unsigned int i;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    set_scale_matrix(&identity, 1.0f);
+    set_scale_matrix(&scale, 2.0f);
+
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
+    {
+        if (stateblock)
+        {
+            IDirect3DStateBlock9_Release(stateblock);
+            stateblock = NULL;
+        }
+
+        CHECK_HR(IDirect3DDevice9_SetTransform(device, tests[i], &identity),
+                D3D_OK);
+        CHECK_HR(IDirect3DDevice9_MultiplyTransform(device, tests[i], &scale),
+                D3D_OK);
+        memset(&out, 0xcc, sizeof(out));
+        CHECK_HR(IDirect3DDevice9_GetTransform(device, tests[i], &out),
+                D3D_OK);
+        check_matrix_equals(&out, &scale);
+
+        CHECK_HR(IDirect3DDevice9_SetTransform(device, tests[i], &identity),
+                D3D_OK);
+        CHECK_HR(IDirect3DDevice9_BeginStateBlock(device), D3D_OK);
+        CHECK_HR(IDirect3DDevice9_MultiplyTransform(device, tests[i], &scale),
+                D3D_OK);
+        hr = IDirect3DDevice9_EndStateBlock(device, &stateblock);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(stateblock != NULL);
+        if (FAILED(hr) || !stateblock)
+            break;
+
+        memset(&out, 0xcc, sizeof(out));
+        CHECK_HR(IDirect3DDevice9_GetTransform(device, tests[i], &out),
+                D3D_OK);
+        check_matrix_equals(&out, &scale);
+
+        CHECK_HR(IDirect3DStateBlock9_Capture(stateblock), D3D_OK);
+        CHECK_HR(IDirect3DDevice9_SetTransform(device, tests[i], &identity),
+                D3D_OK);
+        CHECK_HR(IDirect3DStateBlock9_Apply(stateblock), D3D_OK);
+        memset(&out, 0xcc, sizeof(out));
+        CHECK_HR(IDirect3DDevice9_GetTransform(device, tests[i], &out),
+                D3D_OK);
+        check_matrix_equals(&out, &identity);
+    }
+
+    if (stateblock)
+        IDirect3DStateBlock9_Release(stateblock);
     IDirect3DDevice9_Release(device);
 done_window:
     DestroyWindow(window);

@@ -1019,6 +1019,40 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_query_stateblock.c"
+function = "test_stateblock_transform_capture_apply"
+source = "wine/dlls/d3d9/tests/stateblock.c:test_state_management"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["stateblocks record, apply, and capture view and high-index world transform values through public Get/SetTransform APIs"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_query_stateblock.c"
+function = "test_stateblock_multiply_transform_capture"
+source = "wine/dlls/d3d9/tests/device.c:test_multiply_transform"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["MultiplyTransform updates live primary state while recording and captured stateblocks replay the Wine-observed transform result for view, projection, texture, and world matrices"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
 function = "test_private_data_iunknown_ownership_smoke"
 source = "wine/dlls/d3d9/tests/device.c:test_private_data"

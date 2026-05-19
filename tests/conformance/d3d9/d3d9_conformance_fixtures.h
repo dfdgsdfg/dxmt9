@@ -385,6 +385,8 @@ void test_stateblock_invalid_type_recording_invalid_calls(const struct d3d9_api 
 void test_shader_constant_apply(const struct d3d9_api *api);
 void test_shader_constant_stateblock_cross_stage(const struct d3d9_api *api);
 void test_vdecl_apply(const struct d3d9_api *api);
+void test_stateblock_transform_capture_apply(const struct d3d9_api *api);
+void test_stateblock_multiply_transform_capture(const struct d3d9_api *api);
 
 void test_private_data_iunknown_ownership_smoke(const struct d3d9_api *api);
 void test_private_data_resource_wrappers(const struct d3d9_api *api);
