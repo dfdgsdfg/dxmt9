@@ -1539,6 +1539,64 @@ void testResourcePoolUsesArenaStorageOnly() {
         "resource pool finds current recycled buffer handle");
 }
 
+void testResourcePoolTextureAndSurfaceDestroyWaitForUseSeq() {
+  auto* resourcePool = new dxmt9::resources::Pool;
+  BackendLimits limits{};
+
+  const auto texture = resourcePool->createTexture(
+      WMT::Device{NULL_OBJECT_HANDLE}, limits,
+      TextureDesc{
+          .width = 8u,
+          .height = 4u,
+          .depth = 1u,
+          .levels = 2u,
+          .format = Format::A8R8G8B8,
+          .type = TextureType::TwoD,
+          .pool = Pool::Managed,
+          .usage = UsageTexture,
+      });
+  check(static_cast<bool>(texture), "resource pool allocates texture handle");
+  check(resourcePool->findTexture(texture.value) != nullptr,
+        "resource pool finds live texture before destroy");
+  check(resourcePool->findBuffer(texture.value) == nullptr,
+        "resource pool rejects texture handle as buffer");
+
+  const auto surface = resourcePool->createSurface(
+      WMT::Device{NULL_OBJECT_HANDLE}, limits,
+      SurfaceDesc{
+          .width = 8u,
+          .height = 4u,
+          .format = Format::A8R8G8B8,
+          .pool = Pool::Default,
+          .usage = UsageRenderTarget,
+          .renderTarget = true,
+      });
+  check(static_cast<bool>(surface), "resource pool allocates surface handle");
+  check(resourcePool->findSurface(surface.value) != nullptr,
+        "resource pool finds live surface before destroy");
+  check(resourcePool->findTexture(surface.value) == nullptr,
+        "resource pool rejects surface handle as texture");
+
+  resourcePool->markTextureUse(texture, 11u);
+  resourcePool->markSurfaceUse(surface, 12u);
+
+  check(resourcePool->markTextureDestroyAndGc(texture.value, 10u),
+        "resource pool marks texture destroy-pending");
+  check(resourcePool->findTexture(texture.value) != nullptr,
+        "resource pool keeps pending texture until completed seq catches up");
+
+  check(resourcePool->markSurfaceDestroyAndGc(surface.value, 11u),
+        "resource pool marks surface destroy-pending");
+  check(resourcePool->findTexture(texture.value) == nullptr,
+        "resource pool reclaims texture once completed seq reaches last use");
+  check(resourcePool->findSurface(surface.value) != nullptr,
+        "resource pool keeps pending surface past lower completed seq");
+
+  resourcePool->reclaimCompleted(12u);
+  check(resourcePool->findSurface(surface.value) == nullptr,
+        "resource pool reclaims surface once completed seq reaches last use");
+}
+
 void testPresentSourceSelectionPrefersExplicitSourceOverCurrentBackBuffer() {
   SwapDesc present{};
   present.sourceSurface = Handle{0x7000u};
@@ -1659,6 +1717,7 @@ int main() {
     testResourcePoolArenaRejectsStaleHandles();
     testHandleArenaSlotPointerStableAcrossInserts();
     testResourcePoolUsesArenaStorageOnly();
+    testResourcePoolTextureAndSurfaceDestroyWaitForUseSeq();
     testPresentSourceSelectionPrefersExplicitSourceOverCurrentBackBuffer();
     testEncodePresentRejectsMissingSourceWithoutStatusCallback();
     testEncodePresentRejectsSourceWithoutTexture();
