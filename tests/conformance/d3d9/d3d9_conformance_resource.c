@@ -4855,3 +4855,265 @@ done_window:
 done_d3d9:
     IDirect3D9Ex_Release(d3d9ex);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_pinned_buffers
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_pinned_buffers_d3dusage_policy(const struct d3d9_api *api)
+{
+    IDirect3DVertexBuffer9 *buffer = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DVERTEXBUFFER_DESC desc;
+    IDirect3D9 *d3d9;
+    void *data = NULL;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, 256,
+            D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT,
+            &buffer, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    memset(&desc, 0xcc, sizeof(desc));
+    hr = IDirect3DVertexBuffer9_GetDesc(buffer, &desc);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(desc.Type == D3DRTYPE_VERTEXBUFFER);
+        CHECK_TRUE(desc.Pool == D3DPOOL_DEFAULT);
+        CHECK_TRUE((desc.Usage & D3DUSAGE_DYNAMIC) == D3DUSAGE_DYNAMIC);
+        CHECK_TRUE((desc.Usage & D3DUSAGE_WRITEONLY) == D3DUSAGE_WRITEONLY);
+        CHECK_TRUE(desc.Size == 256);
+        CHECK_TRUE(desc.Format == D3DFMT_VERTEXDATA);
+    }
+
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(buffer, 0, 0, &data, D3DLOCK_DISCARD);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(data != NULL);
+        if (data)
+            memset(data, 0x5a, 256);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(buffer), D3D_OK);
+    }
+
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(buffer, 32, 64, &data,
+            D3DLOCK_NOOVERWRITE);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(data != NULL);
+        if (data)
+            memset(data, 0xa5, 64);
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(buffer), D3D_OK);
+    }
+
+    memset(&desc, 0xcc, sizeof(desc));
+    CHECK_HR(IDirect3DVertexBuffer9_GetDesc(buffer, &desc), D3D_OK);
+    CHECK_TRUE(desc.Size == 256);
+    CHECK_TRUE(desc.Pool == D3DPOOL_DEFAULT);
+    CHECK_TRUE((desc.Usage & D3DUSAGE_DYNAMIC) == D3DUSAGE_DYNAMIC);
+
+    IDirect3DVertexBuffer9_Release(buffer);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_volume_blocks
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_volume_blocks_compressed_layout_policy(const struct d3d9_api *api)
+{
+    IDirect3DVolumeTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    D3DLOCKED_BOX locked;
+    D3DVOLUME_DESC desc;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    D3DBOX box;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    if (!(caps.TextureCaps & D3DPTEXTURECAPS_VOLUMEMAP))
+    {
+        skip_current_test("volume textures are not supported");
+        goto done_device;
+    }
+
+    hr = IDirect3DDevice9_CreateVolumeTexture(device, 8, 8, 2, 1, 0,
+            D3DFMT_DXT1, D3DPOOL_SCRATCH, &texture, NULL);
+    if (hr == D3DERR_INVALIDCALL || hr == D3DERR_NOTAVAILABLE)
+    {
+        skip_current_test("DXT1 scratch volume textures are unavailable");
+        goto done_device;
+    }
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    memset(&desc, 0xcc, sizeof(desc));
+    hr = IDirect3DVolumeTexture9_GetLevelDesc(texture, 0, &desc);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(desc.Format == D3DFMT_DXT1);
+        CHECK_TRUE(desc.Type == D3DRTYPE_VOLUME);
+        CHECK_TRUE(desc.Width == 8);
+        CHECK_TRUE(desc.Height == 8);
+        CHECK_TRUE(desc.Depth == 2);
+        CHECK_TRUE(desc.Pool == D3DPOOL_SCRATCH);
+        CHECK_TRUE((desc.Width % 4) == 0);
+        CHECK_TRUE((desc.Height % 4) == 0);
+    }
+
+    box.Left = 0;
+    box.Top = 0;
+    box.Front = 0;
+    box.Right = 4;
+    box.Bottom = 4;
+    box.Back = 1;
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DVolumeTexture9_LockBox(texture, 0, &locked, &box,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(locked.pBits != NULL);
+        /* DXT1: a 4x4 row of texels packs into 8 bytes, so a single
+         * block-aligned column row is at least block_size_x * 8 / 4 = 8. */
+        CHECK_TRUE(locked.RowPitch >= 8);
+        CHECK_TRUE((locked.RowPitch % 8) == 0);
+        CHECK_TRUE(locked.SlicePitch >= locked.RowPitch);
+        CHECK_HR(IDirect3DVolumeTexture9_UnlockBox(texture, 0), D3D_OK);
+    }
+
+    IDirect3DVolumeTexture9_Release(texture);
+
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_user_memory_getdc
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_ex_user_memory_getdc_format_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9Ex *device = NULL;
+    IDirect3D9Ex *d3d9ex;
+    D3DSURFACE_DESC desc;
+    unsigned int *data;
+    void *mem;
+    HWND window;
+    HRESULT hr;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_ex_device(d3d9ex, window);
+    if (!device)
+        goto done_window;
+
+    data = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+            16 * 16 * sizeof(*data));
+    CHECK_TRUE(data != NULL);
+    if (!data)
+        goto done_device;
+
+    /* X8R8G8B8 is a valid user-memory target; the wrapper must accept
+     * the caller allocation and round-trip the surface descriptor. */
+    mem = data;
+    hr = IDirect3DDevice9Ex_CreateOffscreenPlainSurface(device, 16, 16,
+            D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &surface, &mem);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr) && surface)
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        CHECK_HR(IDirect3DSurface9_GetDesc(surface, &desc), D3D_OK);
+        CHECK_TRUE(desc.Format == D3DFMT_X8R8G8B8);
+        CHECK_TRUE(desc.Type == D3DRTYPE_SURFACE);
+        CHECK_TRUE(desc.Pool == D3DPOOL_SYSTEMMEM);
+        CHECK_TRUE(desc.Width == 16);
+        CHECK_TRUE(desc.Height == 16);
+        IDirect3DSurface9_Release(surface);
+        surface = NULL;
+    }
+
+    /* DXT1 with user memory must be rejected: the Wine oracle requires
+     * D3DERR_INVALIDCALL because compressed formats are not legal with
+     * caller-supplied linear buffers, and the out-pointer must clear. */
+    mem = data;
+    surface = (IDirect3DSurface9 *)0xdeadbeef;
+    hr = IDirect3DDevice9Ex_CreateOffscreenPlainSurface(device, 16, 16,
+            D3DFMT_DXT1, D3DPOOL_SYSTEMMEM, &surface, &mem);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(surface == NULL);
+
+    HeapFree(GetProcessHeap(), 0, data);
+
+done_device:
+    IDirect3DDevice9Ex_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}
