@@ -331,6 +331,14 @@ bool containsChunkHandle(const std::vector<ChunkHandleEntry>& entries,
          }) != entries.end();
 }
 
+std::uint32_t mismatchedGenerationForHandle(Handle handle) {
+  const std::uint32_t resolvedGeneration =
+      d9c_command_chunk_wire_handle_generation_from_handle(handle.value);
+  return resolvedGeneration == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK
+             ? 1u
+             : resolvedGeneration + 1u;
+}
+
 void checkEventKind(const std::vector<RecordedEvent>& events,
                     std::size_t index,
                     EventKind expected,
@@ -1288,16 +1296,9 @@ void testStampedSurfaceGenerationMismatchRejectsBeforeReplay() {
         wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, bindOffset,
                          sizeof(bind), 0u, 1u),
     };
-    const std::uint32_t resolvedGeneration =
-        d9c_command_chunk_wire_handle_generation_from_handle(
-            renderTarget->handle().value);
-    const std::uint32_t mismatchedGeneration =
-        resolvedGeneration == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK
-            ? 1u
-            : resolvedGeneration + 1u;
     const std::vector<D9CCommandChunkWireHandleEntry> handles{
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &rtWire,
-                        mismatchedGeneration),
+                        mismatchedGenerationForHandle(renderTarget->handle())),
     };
     const auto wireBlob = makeWireChunkBlob(payload, records, handles);
 
@@ -1314,6 +1315,120 @@ void testStampedSurfaceGenerationMismatchRejectsBeforeReplay() {
 
   checkEq(device->Release(), 0u, "release bad-generation d3d device");
   checkEq(d3d->Release(), 0u, "release bad-generation d3d factory");
+}
+
+void testStampedTextureAndBufferGenerationMismatchRejectBeforeReplay() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create bad resource-generation d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{996};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create bad resource-generation d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+    auto texture = device->CreateTexture(TextureDesc{
+        .width = 16u,
+        .height = 16u,
+        .depth = 1u,
+        .levels = 1u,
+        .format = Format::A8R8G8B8,
+        .type = TextureType::TwoD,
+        .pool = Pool::Default,
+        .usage = UsageTexture,
+    });
+    auto vertexBuffer = device->CreateBuffer(BufferDesc{
+        .size = 128u,
+        .pool = Pool::Default,
+        .usage = UsageVertexBuffer,
+    });
+    check(texture != nullptr, "bad resource-generation texture");
+    check(vertexBuffer != nullptr, "bad resource-generation buffer");
+
+    D9CTexture textureWire(texture, &cDevice);
+    D9CBuffer bufferWire(vertexBuffer);
+
+    auto textureApply = makeApplyStateRecord();
+    textureApply.packet.renderStateCount = 1u;
+    textureApply.packet.renderStates[0] = {RS_TEXTURE_FACTOR, 0x11223344u};
+    textureApply.packet.textureMask = 1u << 3u;
+    textureApply.packet.textures[3] = wireHandleFromPtr(&textureWire);
+
+    std::vector<std::uint8_t> payload;
+    const auto textureOffset = appendRecord(payload, textureApply);
+    const std::vector<D9CCommandChunkWireRecordHeader> textureRecords{
+        wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, textureOffset,
+                         sizeof(textureApply), 0u, 1u),
+    };
+    const std::vector<D9CCommandChunkWireHandleEntry> textureHandles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_TEXTURE, &textureWire,
+                        mismatchedGenerationForHandle(texture->handle())),
+    };
+    const auto textureBlob =
+        makeWireChunkBlob(payload, textureRecords, textureHandles);
+
+    recorder->events.clear();
+    checkEq(commitWireChunk(cDevice, textureBlob, 1u, 1u),
+            D3DERR_INVALIDCALL,
+            "bad-generation imported texture chunk rejected");
+    check(!device->coreDevice().state().renderStates.contains(RS_TEXTURE_FACTOR),
+          "bad texture-generation chunk rejects before render-state mutation");
+    check(!device->coreDevice().state().textures[3],
+          "bad texture-generation chunk rejects before texture binding");
+    check(recorder->events.empty(),
+          "bad texture-generation chunk rejects before fake backend events");
+
+    auto bufferApply = makeApplyStateRecord();
+    bufferApply.packet.renderStateCount = 1u;
+    bufferApply.packet.renderStates[0] = {RS_TEXTURE_FACTOR, 0x55667788u};
+    bufferApply.packet.streamSourceMask = 1u << 2u;
+    bufferApply.packet.streamSources[2].buffer = wireHandleFromPtr(&bufferWire);
+    bufferApply.packet.streamSources[2].offset = 24u;
+    bufferApply.packet.streamSources[2].stride = 36u;
+
+    payload.clear();
+    const auto bufferOffset = appendRecord(payload, bufferApply);
+    const std::vector<D9CCommandChunkWireRecordHeader> bufferRecords{
+        wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, bufferOffset,
+                         sizeof(bufferApply), 0u, 1u),
+    };
+    const std::vector<D9CCommandChunkWireHandleEntry> bufferHandles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &bufferWire,
+                        mismatchedGenerationForHandle(vertexBuffer->handle())),
+    };
+    const auto bufferBlob =
+        makeWireChunkBlob(payload, bufferRecords, bufferHandles);
+
+    recorder->events.clear();
+    checkEq(commitWireChunk(cDevice, bufferBlob, 1u, 1u),
+            D3DERR_INVALIDCALL,
+            "bad-generation imported buffer chunk rejected");
+    check(!device->coreDevice().state().renderStates.contains(RS_TEXTURE_FACTOR),
+          "bad buffer-generation chunk rejects before render-state mutation");
+    check(!device->coreDevice().state().streamBuffers[2],
+          "bad buffer-generation chunk rejects before stream binding");
+    checkEq(device->coreDevice().state().streamOffsets[2], 0u,
+            "bad buffer-generation chunk rejects before stream offset mutation");
+    checkEq(device->coreDevice().state().streamStrides[2], 0u,
+            "bad buffer-generation chunk rejects before stream stride mutation");
+    check(recorder->events.empty(),
+          "bad buffer-generation chunk rejects before fake backend events");
+  }
+
+  checkEq(device->Release(), 0u, "release bad resource-generation d3d device");
+  checkEq(d3d->Release(), 0u,
+          "release bad resource-generation d3d factory");
 }
 
 void testMalformedImportedRecordDoesNotMutateState() {
@@ -1383,6 +1498,7 @@ int main() {
     testImportedApplyStateCanDetachRtAndDepthStencil();
     testImportedSparseRtAndDepthStencilBindingBoundary();
     testStampedSurfaceGenerationMismatchRejectsBeforeReplay();
+    testStampedTextureAndBufferGenerationMismatchRejectBeforeReplay();
     testMalformedImportedRecordDoesNotMutateState();
   } catch (const TestFailure& e) {
     std::cerr << "imported_apply_state_value_spec failed: " << e.what()
