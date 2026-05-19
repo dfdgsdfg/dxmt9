@@ -405,6 +405,75 @@ void testRichDrawRecordPreservesPacketValuesAndHandles() {
         "draw payload collects DS");
 }
 
+void testMaxTextureStageAndSamplerDeltaPacketBoundaries() {
+  constexpr std::uint32_t kMaxTss = D9C_DRAW_PACKET_MAX_TSS;
+  constexpr std::uint32_t kMaxSampler = D9C_DRAW_PACKET_MAX_SAMPLER;
+
+  D9CCommandRecordDrawPrimitive draw{};
+  draw.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  draw.header.size = sizeof(draw);
+  draw.packet.primitiveType = kD3dptTriangleList;
+  draw.packet.primitiveCount = 1u;
+  draw.packet.tssCount = kMaxTss;
+  draw.packet.samplerStateCount = kMaxSampler;
+
+  for (std::uint32_t i = 0; i < kMaxTss; ++i) {
+    draw.packet.tss[i] = D9CDrawPacketTextureStageState{
+        i % 8u,
+        1u + (i / 8u),
+        0x81000000u | i,
+    };
+  }
+  for (std::uint32_t i = 0; i < kMaxSampler; ++i) {
+    draw.packet.samplerStates[i] = D9CDrawPacketSamplerState{
+        i % 16u,
+        1u + (i / 16u),
+        0x52000000u | (i * 3u),
+    };
+  }
+
+  checkValidRecordBytes(recordBytes(draw), D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                        sizeof(draw), sizeof(draw),
+                        "max TSS/sampler draw record validates");
+
+  std::vector<std::uint8_t> arena;
+  const auto drawOffset = appendPayload(arena, draw);
+  const auto record = wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                                       drawOffset,
+                                       static_cast<std::uint32_t>(sizeof(draw)));
+  const auto wire = makeImportedWireChunkView(
+      &record, 1u, arena.data(), static_cast<std::uint32_t>(arena.size()),
+      nullptr, 0u);
+  const auto validation = validateImportedWireChunk(wire);
+  check(validation.valid(), "max TSS/sampler wire chunk validates");
+
+  const auto imported = nextImportedRecord(wire, 0u);
+  check(imported.has_value(), "max TSS/sampler draw record imports");
+  D9CCommandRecordDrawPrimitive decoded{};
+  std::memcpy(&decoded, imported->record, sizeof(decoded));
+  checkEq(decoded.packet.tssCount, kMaxTss,
+          "max TSS count survives wire import");
+  checkEq(decoded.packet.samplerStateCount, kMaxSampler,
+          "max sampler-state count survives wire import");
+
+  for (std::uint32_t i = 0; i < kMaxTss; ++i) {
+    checkEq(decoded.packet.tss[i].stage, i % 8u,
+            "TSS max-boundary stage");
+    checkEq(decoded.packet.tss[i].type, 1u + (i / 8u),
+            "TSS max-boundary type");
+    checkEq(decoded.packet.tss[i].value, 0x81000000u | i,
+            "TSS max-boundary value");
+  }
+  for (std::uint32_t i = 0; i < kMaxSampler; ++i) {
+    checkEq(decoded.packet.samplerStates[i].sampler, i % 16u,
+            "sampler max-boundary slot");
+    checkEq(decoded.packet.samplerStates[i].type, 1u + (i / 16u),
+            "sampler max-boundary type");
+    checkEq(decoded.packet.samplerStates[i].value, 0x52000000u | (i * 3u),
+            "sampler max-boundary value");
+  }
+}
+
 void testSetConstTailBytesRecordOrderAndWireHandleRange() {
   const std::vector<float> vsF{
       1.0f, -2.0f, 3.25f, -4.5f,
@@ -539,6 +608,7 @@ int main() {
     testPeAttachmentDeltaBuilderPreservesExplicitNullsAndSlots();
     testPeAttachmentSnapshotBuilderPreservesExplicitNulls();
     testRichDrawRecordPreservesPacketValuesAndHandles();
+    testMaxTextureStageAndSamplerDeltaPacketBoundaries();
     testSetConstTailBytesRecordOrderAndWireHandleRange();
   } catch (const TestFailure& e) {
     std::cerr << "pe_chunk_record_value_spec failed: " << e.what() << '\n';
