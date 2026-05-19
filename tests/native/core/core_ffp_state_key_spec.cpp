@@ -240,6 +240,42 @@ void testVisualDerivedFfpCoverage() {
   check(varyingPixelKey.hash != fogPixelKey.hash, "varying pixel key differs");
 }
 
+void testFixedFunctionDeclarationMissingInputsEmitD3DDefaults() {
+  // behavioral oracle: Wine visual.c:fixed_function_decl_test
+  DrawDesc desc{};
+  desc.vertexDecl.elements = {
+      VertexElement{0, 0, dxmt9::ffp::kD3DDeclTypeFloat3, 0,
+                    dxmt9::ffp::kD3DDeclUsagePosition, 0},
+  };
+  desc.vertexDecl.streams[0].stride = 12;
+
+  const auto layout =
+      dxmt9::ffp::decodeFixedFunctionVertexLayout(desc.vertexDecl);
+  check(layout.has_value(), "position-only FFP declaration decodes");
+  check(!layout->preTransformed, "position-only declaration is untransformed");
+  check(!layout->hasNormal, "missing NORMAL is recorded");
+  check(!layout->hasDiffuse, "missing COLOR0 is recorded");
+  check(!layout->hasSpecular, "missing COLOR1 is recorded");
+  check(!layout->hasPointSize, "missing PSIZE is recorded");
+  check(!layout->hasTexcoord[0], "missing TEXCOORD0 is recorded");
+
+  FfpVertexKey key{};
+  key.texCoordGen[0] = 0u;
+  const auto source = dxmt9::ffp::makeFfpVertexSource(
+      key, dxmt9::drawshader::makeShaderSourceContext(desc));
+  checkContains(source, "float3 inNormal = float3(0.0f, 0.0f, 1.0f);",
+                "missing NORMAL defaults to +Z normal");
+  checkContains(source, "out.color = float4(1.0);",
+                "missing COLOR0 defaults to white diffuse");
+  checkContains(source, "out.secondaryColor = float4(0.0);",
+                "missing COLOR1 defaults to black specular");
+  checkContains(source,
+                "float4 dxmt9_texcoord0 = float4(0.0f, 0.0f, 1.0f, 1.0f);",
+                "missing TEXCOORD0 defaults to D3D xyz/w payload");
+  checkContains(source, "out.pointSize = 1.0;",
+                "missing PSIZE defaults to one-pixel point size");
+}
+
 void testVisualPortCoverage() {
   // behavioral oracle: Wine visual.c:test_sanity
   auto backend = std::make_shared<RecordingBackend>();
@@ -359,6 +395,7 @@ int main() {
     testDepthStencilKeyDisablesDepthCompare();
     testFfpKeys();
     testVisualDerivedFfpCoverage();
+    testFixedFunctionDeclarationMissingInputsEmitD3DDefaults();
     testVisualPortCoverage();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
