@@ -1967,6 +1967,18 @@ oracle = "Wine d3d9 visual.c texdepth_test behavior, reduced to ps_1_4 TEXDEPTH 
 oracle-date = "2026-05-19"
 
 [[test]]
+file = "legacy_sm1/dxmt9_ps14_phase_texcrd_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_1_4"]
+opcodes = ["DEF", "MOV", "TEXCOORD"]
+oracle = "Wine d3d9 visual.c ps_1_4 phase behavior, reduced to TEXCRD value surviving PHASE boundary"
+oracle-date = "2026-05-19"
+
+[[test]]
 file = "legacy_sm1/dxmt9_ps13_texdp3_readback.shader_test"
 status = "passing"
 source = "dxmt9"
