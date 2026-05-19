@@ -1495,6 +1495,75 @@ void testUserVertexAndUserIndexOrdering() {
                            3u);
 }
 
+void testPreUploadedIndexedUserVertexIgnoresStartVertex() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kIgnoredBoundVertex = 0x5600005600005acull;
+  constexpr obj_handle_t kUploadedVertex = 0x6600006600006bdull;
+  constexpr obj_handle_t kUploadedIndex = 0x7600007600007ceull;
+  auto state = makeProgrammableState(20u);
+  state.hot.streamBuffers[0] =
+      harness.createBoundBuffer(kIgnoredBoundVertex, 4096u);
+  state.hot.streamOffsets[0] = 36u;
+
+  std::array<std::uint8_t, 86> arena{};
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 2u;
+  param.startVertex = 13u;
+  param.baseVertexIndex = -7;
+  param.startIndex = 4u;
+  param.indexType = IndexType::UInt16;
+  param.indexed = true;
+  param.userVertexRange = dxmt9::core::DrawPayloadRange{0u, 80u};
+  param.userIndexRange = dxmt9::core::DrawPayloadRange{80u, 6u};
+
+  PreUploadedDrawData preUploaded{};
+  preUploaded.vertex.buffer.handle = kUploadedVertex;
+  preUploaded.vertex.offset = 300u;
+  preUploaded.vertex.size = 80u;
+  preUploaded.index.buffer.handle = kUploadedIndex;
+  preUploaded.index.offset = 900u;
+  preUploaded.index.size = 6u;
+
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena);
+
+  checkEq(capture.commands.size(), std::size_t{3},
+          "preuploaded indexed UP draw command count");
+
+  const auto& stream =
+      commandAt(capture, 0, "missing preuploaded indexed UP stream bind");
+  check(stream.kind == RecordedKind::SetVertexBuffer,
+        "first command binds preuploaded indexed UP vertex stream");
+  checkEq(stream.bufferHandle, kUploadedVertex,
+          "indexed UP vertex upload slice wins over stale bound stream0");
+  checkEq(stream.offset, std::uint64_t{336},
+          "indexed UP startVertex does not fold into vertex buffer offset");
+  checkEq(static_cast<unsigned>(stream.index), 1u,
+          "indexed UP vertex stream binds to Metal slot 1");
+
+  const auto& volCommand =
+      commandAt(capture, 1, "missing preuploaded indexed UP DrawVolatile");
+  check(volCommand.kind == RecordedKind::SetVertexBytes,
+        "second command pushes indexed UP DrawVolatile");
+  const auto vol = volatileBytes(volCommand);
+  checkEq(vol.vertexBaseIndex, std::int32_t{-7},
+          "indexed UP DrawVolatile carries base vertex");
+  checkEq(vol.vertexStreamOffset, std::uint32_t{0},
+          "indexed UP DrawVolatile stream offset");
+  checkEq(vol.vertexStreamStride, std::uint32_t{20},
+          "indexed UP DrawVolatile primary stride");
+  checkEq(vol._pad, std::uint32_t{0}, "indexed UP DrawVolatile pad");
+
+  assertIndexedDrawCommand(
+      commandAt(capture, 2, "missing preuploaded indexed UP draw"),
+      kUploadedIndex,
+      908u,
+      6u);
+}
+
 void testPreUploadedNonIndexedUserVertexFoldsStartVertex() {
   Harness harness;
   Capture capture;
@@ -1574,6 +1643,7 @@ int main() {
     testBoundVertexAndUserIndexOrdering();
     testBoundVertexAndBoundIndexOrdering();
     testUserVertexAndUserIndexOrdering();
+    testPreUploadedIndexedUserVertexIgnoresStartVertex();
     testPreUploadedNonIndexedUserVertexFoldsStartVertex();
   } catch (const TestFailure& e) {
     std::cerr << "encode_draw_recorder_spec failed: " << e.what() << '\n';
