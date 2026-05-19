@@ -830,6 +830,77 @@ void testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset() {
       6u);
 }
 
+void testNonIndexedDrawIgnoresStaleIndexIntent() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+
+  constexpr obj_handle_t kBoundVertex = 0x5500005500005fcull;
+  constexpr obj_handle_t kIgnoredBoundIndex = 0x6500006500006bdull;
+  constexpr obj_handle_t kIgnoredUploadedIndex = 0x7500007500007ceull;
+  auto state = makeProgrammableState(24u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 8192u);
+  state.hot.streamOffsets[0] = 96u;
+  state.hot.indexBuffer = harness.createBoundBuffer(kIgnoredBoundIndex, 4096u);
+
+  std::array<std::uint8_t, 16> arena{};
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::LineStrip;
+  param.primitiveCount = 4u;
+  param.startVertex = 6u;
+  param.baseVertexIndex = -11;
+  param.startIndex = 9u;
+  param.indexType = IndexType::UInt32;
+  param.indexed = false;
+  param.userIndexRange = dxmt9::core::DrawPayloadRange{0u, arena.size()};
+
+  PreUploadedDrawData preUploaded{};
+  preUploaded.index.buffer.handle = kIgnoredUploadedIndex;
+  preUploaded.index.offset = 512u;
+  preUploaded.index.size = arena.size();
+
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena);
+
+  checkEq(capture.commands.size(), std::size_t{3},
+          "non-indexed stale-index draw command count");
+
+  const auto& stream = commandAt(capture, 0,
+                                 "missing non-indexed stale-index stream bind");
+  check(stream.kind == RecordedKind::SetVertexBuffer,
+        "non-indexed stale-index draw binds vertex stream");
+  checkEq(stream.bufferHandle, kBoundVertex,
+          "non-indexed stale-index draw uses vertex buffer");
+  checkEq(stream.offset, std::uint64_t{240},
+          "non-indexed stale-index draw folds startVertex into stream offset");
+
+  const auto& volCommand =
+      commandAt(capture, 1, "missing non-indexed stale-index DrawVolatile");
+  check(volCommand.kind == RecordedKind::SetVertexBytes,
+        "non-indexed stale-index draw pushes DrawVolatile");
+  const auto vol = volatileBytes(volCommand);
+  checkEq(vol.vertexBaseIndex, std::int32_t{0},
+          "non-indexed stale-index DrawVolatile clears base vertex");
+  checkEq(vol.vertexStreamOffset, std::uint32_t{0},
+          "non-indexed stale-index DrawVolatile stream offset");
+  checkEq(vol.vertexStreamStride, std::uint32_t{24},
+          "non-indexed stale-index DrawVolatile stride");
+
+  const auto& draw = commandAt(capture, 2,
+                               "missing non-indexed stale-index draw");
+  assertDrawPrimitivesCommand(draw, WMTPrimitiveTypeLineStrip, 0u, 5u);
+  check(draw.kind != RecordedKind::DrawIndexedPrimitives,
+        "non-indexed stale-index draw never emits indexed Metal command");
+
+  for (const auto& command : capture.commands) {
+    check(command.kind != RecordedKind::DrawIndexedPrimitives,
+          "stale bound/user index data is ignored when DrawParam is non-indexed");
+    check(command.bufferHandle != kIgnoredBoundIndex,
+          "stale bound index buffer is not consumed");
+    check(command.bufferHandle != kIgnoredUploadedIndex,
+          "stale uploaded index buffer is not consumed");
+  }
+}
+
 void testIndexedPrimitiveTopologyAndIndexWidthBoundaries() {
   struct Case {
     PrimitiveType primitiveType = PrimitiveType::PointList;
@@ -1494,6 +1565,7 @@ int main() {
     testArgbufModeKeepsDirectTextureSamplerBinds();
     testArgbufModeKeepsDirectVertexTextureSamplerBinds();
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
+    testNonIndexedDrawIgnoresStaleIndexIntent();
     testIndexedPrimitiveTopologyAndIndexWidthBoundaries();
     testNonIndexedPrimitiveTopologyVertexCounts();
     testProgrammableVsBindsExtraBoundStreamBeforeDraw();
