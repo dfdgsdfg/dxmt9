@@ -550,6 +550,28 @@ reference_optional = true
 allow_timeout = true
 
 [[app]]
+name = "3dmark05"
+source = "local-external"
+license = "commercial"
+source_kind = "external-application"
+license_scope = "external-not-vendored"
+binary = "experiments/prefixs/3dmark05/drive_c/Program Files (x86)/Futuremark/3DMark05/3DMark05.exe"
+launcher = "experiments/launchers/3dmark05.sh"
+reference = "experiments/references/3dmark05.png"
+features = ["commercial", "benchmark", "d3d9", "stress", "scene"]
+status = "exploratory"
+requires_wine = true
+window_title = "3DMark05"
+capture_delay_sec = 70.0
+run_timeout_sec = 180
+capture_frame = 0
+reference_optional = true
+allow_timeout = true
+wine_id = "sikarugir-cx-24.0.7"
+wine_alternatives = []
+install_drive_letter = "d"
+
+[[app]]
 name = "street-fighter-iv-benchmark"
 source = "local-external"
 license = "commercial"

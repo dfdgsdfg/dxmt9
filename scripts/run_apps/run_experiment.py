@@ -46,6 +46,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOGUE_PATH = REPO_ROOT / "experiments" / "CATALOGUE.toml"
 DEFAULT_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "win32"
 DEFAULT_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x64-builtin" / "src" / "winemetal"
+DEFAULT_WOW64_PE_BUILD_DIR = REPO_ROOT / "build-win32-x86-builtin" / "src" / "win32"
+DEFAULT_WOW64_RUNTIME_PE_BUILD_DIR = REPO_ROOT / "build-win32-x86-builtin" / "src" / "winemetal"
 DEFAULT_UNIX_BUILD_DIR = REPO_ROOT / "build-x86_64-builtin" / "src"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "experiments" / "output"
 DEFAULT_TEMP_PREFIX_ROOT = REPO_ROOT / "tmp" / "prefixes"
@@ -503,6 +505,8 @@ def stage_dxmt9(
     pe_build_dir: Path,
     runtime_pe_build_dir: Path,
     unix_build_dir: Path,
+    wow64_pe_build_dir: Path | None = None,
+    wow64_runtime_pe_build_dir: Path | None = None,
 ) -> None:
     cmd = [
         "bash",
@@ -516,6 +520,10 @@ def stage_dxmt9(
         "--unix-build-dir",
         str(unix_build_dir),
     ]
+    if wow64_pe_build_dir is not None:
+        cmd.extend(["--wow64-pe-build-dir", str(wow64_pe_build_dir)])
+    if wow64_runtime_pe_build_dir is not None:
+        cmd.extend(["--wow64-runtime-pe-build-dir", str(wow64_runtime_pe_build_dir)])
     if wine_root is not None:
         cmd.extend(["--wine-root", str(wine_root)])
     run_command(cmd, cwd=REPO_ROOT)
@@ -833,6 +841,16 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             else DEFAULT_RUNTIME_PE_BUILD_DIR
         )
         unix_build_dir = Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR
+        wow64_pe_build_dir = (
+            Path(args.wow64_pe_build_dir).expanduser().resolve()
+            if args.wow64_pe_build_dir
+            else DEFAULT_WOW64_PE_BUILD_DIR
+        )
+        wow64_runtime_pe_build_dir = (
+            Path(args.wow64_runtime_pe_build_dir).expanduser().resolve()
+            if args.wow64_runtime_pe_build_dir
+            else DEFAULT_WOW64_RUNTIME_PE_BUILD_DIR
+        )
         mingw_bin_dir = Path(args.mingw_bin_dir).expanduser().resolve() if args.mingw_bin_dir else DEFAULT_MINGW_BIN_DIR
         wow64_mingw_bin_dir = (
             Path(args.wow64_mingw_bin_dir).expanduser().resolve()
@@ -842,7 +860,15 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
         skip_stage = app.skip_stage or args.skip_stage
         if not skip_stage:
-            stage_dxmt9(prefix, wine_root, pe_build_dir, runtime_pe_build_dir, unix_build_dir)
+            stage_dxmt9(
+                prefix,
+                wine_root,
+                pe_build_dir,
+                runtime_pe_build_dir,
+                unix_build_dir,
+                wow64_pe_build_dir,
+                wow64_runtime_pe_build_dir,
+            )
         elif args.stage_mingw_runtime:
             stage_mingw_runtime(prefix, mingw_bin_dir, wow64_mingw_bin_dir)
 
@@ -858,6 +884,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "DXMT_EXPERIMENT_WINE_BIN": str(wine_bin),
                 "DXMT_EXPERIMENT_PE_BUILD_DIR": str(pe_build_dir),
                 "DXMT_EXPERIMENT_RUNTIME_PE_BUILD_DIR": str(runtime_pe_build_dir),
+                "DXMT_EXPERIMENT_WOW64_PE_BUILD_DIR": str(wow64_pe_build_dir),
+                "DXMT_EXPERIMENT_WOW64_RUNTIME_PE_BUILD_DIR": str(wow64_runtime_pe_build_dir),
                 "DXMT_EXPERIMENT_UNIX_BUILD_DIR": str(unix_build_dir),
                 "DXMT_EXPERIMENT_OUTPUT_DIR": str(output_dir),
                 "DXMT_EXPERIMENT_LOG": str(log_path),
@@ -882,7 +910,14 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 start_new_session=True,
             )
             try:
-                deadline = time.monotonic() + app.capture_delay_sec
+                capture_delay_sec = (
+                    float(args.capture_delay_sec)
+                    if args.capture_delay_sec is not None
+                    else app.capture_delay_sec
+                )
+                if capture_delay_sec < 0.0:
+                    raise ValueError("--capture-delay-sec must be >= 0")
+                deadline = time.monotonic() + capture_delay_sec
                 while time.monotonic() < deadline and process.poll() is None:
                     time.sleep(0.1)
                 if process.poll() is None and not actual_dump_path.exists():
@@ -1098,6 +1133,8 @@ def main() -> int:
     run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
     run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
+    run_parser.add_argument("--wow64-pe-build-dir", help="32-bit PE build dir containing d3d9.dll")
+    run_parser.add_argument("--wow64-runtime-pe-build-dir", help="builtin 32-bit PE build dir containing runtime winemetal.dll")
     run_parser.add_argument("--unix-build-dir", help="Unix build dir containing winemetal.so")
     run_parser.add_argument("--skip-stage", action="store_true", help="Do not stage dxmt9 into the Wine runtime/prefix")
     run_parser.add_argument(
@@ -1110,6 +1147,7 @@ def main() -> int:
     run_parser.add_argument("--accept-reference", action="store_true", help="Create the reference image if it does not exist")
     run_parser.add_argument("--cleanup-temp-prefix", action="store_true", help="Delete the auto-created temp prefix after the run")
     run_parser.add_argument("--output-suffix", help="Append a suffix to the output directory name")
+    run_parser.add_argument("--capture-delay-sec", type=float, default=None, help="Override CATALOGUE capture_delay_sec for this run")
     run_parser.add_argument(
         "--build",
         action="store_true",
