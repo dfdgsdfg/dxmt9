@@ -1,20 +1,15 @@
 ---
 name: metal-gpu-debug
 description: >
-  Metal GPU debugging and profiling via xctrace and Apple's Metal toolchain. Use this skill when the user mentions:
-  Metal debugging, .gputrace files, Metal shaders, Metal pipeline state, Metal performance,
-  Metal System Trace, Apple GPU profiling, Metal validation, shader compilation errors,
-  MSL (Metal Shading Language), .metallib files, .air files, Metal render pass,
-  Metal command buffer, Metal encoder, MTLDevice, MTLTexture, Metal Performance HUD,
-  GPU counters on Apple Silicon, Metal frame capture, Metal API validation,
-  Metal shader validation, xcrun metal, xctrace, Instruments GPU trace,
-  MoltenVK debugging, Vulkan on macOS, Apple Silicon GPU, Metal 3, Metal 4,
-  Metal compute kernel, MetalFX, Metal Performance Shaders, Metal ray tracing,
-  "profile my Metal app", "why is my shader slow", "capture a Metal frame",
-  "Metal validation error", "debug Metal on Mac", "GPU trace on macOS".
-  DO NOT use for: RenderDoc, Vulkan on Windows/Linux, D3D debugging, PIX,
-  Nsight, CSS rendering, React rendering, server-side rendering, HTML layout,
-  browser DevTools, web performance.
+  Metal GPU debugging and profiling via xctrace and Apple's Metal toolchain. Use when the user mentions:
+  Metal debugging, .gputrace, Metal shaders, pipeline state, Metal performance, Metal System Trace,
+  Apple GPU profiling, Metal validation, shader compilation errors, MSL, .metallib, .air, render pass,
+  command buffer, encoder, MTLDevice, MTLTexture, Metal Performance HUD, GPU counters on Apple Silicon,
+  frame capture, API validation, xcrun metal, xctrace, Instruments GPU trace, MoltenVK, Vulkan on macOS,
+  Apple Silicon GPU, Metal 3/4, compute kernel, MetalFX, MPS, Metal ray tracing, "profile my Metal app",
+  "why is my shader slow", "capture a Metal frame", "Metal validation error", "debug Metal on Mac",
+  "GPU trace on macOS". DO NOT use for: RenderDoc, Vulkan on Windows/Linux, D3D, PIX, Nsight, CSS,
+  React rendering, SSR, HTML layout, browser DevTools, web performance.
 ---
 
 # Metal GPU Debugging & Profiling Skill
