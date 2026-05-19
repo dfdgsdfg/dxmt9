@@ -2173,3 +2173,54 @@ owner = "core/device"
 requirements = ["R-TEST-12.18"]
 acceptance = ["GetDirect3D(NULL), GetDeviceCaps(NULL), creation parameters, texture memory, eviction, ValidateDevice, raster status, dialog-box mode, and creation flags match Wine oracle"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_base_vidmem_accounting_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_vidmem_accounting"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-memory-accounting"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["base D3D9 default-pool render-target texture allocation decreases GetAvailableTextureMem by Wine-compatible magnitude and accepts out-of-memory HRESULTs"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_ex_vidmem_accounting_policy"
+source = "wine/dlls/d3d9/tests/d3d9ex.c:test_vidmem_accounting"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "d3d9ex-resource-memory-accounting"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["D3D9Ex default-pool render-target texture allocation keeps GetAvailableTextureMem stable within the Wine oracle tolerance and never reports D3DERR_OUTOFVIDEOMEMORY"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_pixel_format_window_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_pixel_format"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "window-pixel-format"
+owner = "pe/windowing"
+requirements = ["R-TEST-12.14"]
+acceptance = ["device creation, draw, present, and alternate-window present preserve existing window pixel formats and do not assign a pixel format to a blank window"]
+status = "scaffolded"

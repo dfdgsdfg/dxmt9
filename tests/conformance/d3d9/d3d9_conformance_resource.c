@@ -4730,3 +4730,128 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_vidmem_accounting()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_base_vidmem_accounting_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *textures[20];
+    IDirect3DDevice9 *device = NULL;
+    UINT vidmem_start;
+    UINT vidmem_end;
+    IDirect3D9 *d3d9;
+    UINT diff;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(textures, 0, sizeof(textures));
+    vidmem_start = IDirect3DDevice9_GetAvailableTextureMem(device);
+    for (i = 0; i < ARRAY_SIZE(textures); ++i)
+    {
+        hr = IDirect3DDevice9_CreateTexture(device, 1024, 1024, 1,
+                D3DUSAGE_RENDERTARGET, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT,
+                &textures[i], NULL);
+        CHECK_TRUE(SUCCEEDED(hr) || hr == D3DERR_OUTOFVIDEOMEMORY
+                || hr == E_OUTOFMEMORY);
+    }
+    vidmem_end = IDirect3DDevice9_GetAvailableTextureMem(device);
+
+    CHECK_TRUE(vidmem_start > vidmem_end);
+    diff = vidmem_start - vidmem_end;
+    CHECK_TRUE(diff > 1024 * 1024 * 2 * ARRAY_SIZE(textures));
+
+    for (i = 0; i < ARRAY_SIZE(textures); ++i)
+    {
+        if (textures[i])
+            IDirect3DTexture9_Release(textures[i]);
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/d3d9ex.c
+ * function: test_vidmem_accounting()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_ex_vidmem_accounting_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *textures[20];
+    IDirect3DDevice9Ex *device = NULL;
+    IDirect3D9Ex *d3d9ex;
+    UINT vidmem_start;
+    UINT vidmem_end;
+    UINT diff;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9ex = create_d3d9ex(api);
+    if (!d3d9ex)
+        return;
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_ex_device(d3d9ex, window);
+    if (!device)
+        goto done_window;
+
+    memset(textures, 0, sizeof(textures));
+    vidmem_start = IDirect3DDevice9_GetAvailableTextureMem(
+            (IDirect3DDevice9 *)device);
+    for (i = 0; i < ARRAY_SIZE(textures); ++i)
+    {
+        hr = IDirect3DDevice9Ex_CreateTexture(device, 1024, 1024, 1,
+                D3DUSAGE_RENDERTARGET, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT,
+                &textures[i], NULL);
+        CHECK_TRUE(SUCCEEDED(hr) || hr == E_OUTOFMEMORY);
+    }
+    vidmem_end = IDirect3DDevice9_GetAvailableTextureMem(
+            (IDirect3DDevice9 *)device);
+
+    diff = vidmem_start > vidmem_end
+            ? vidmem_start - vidmem_end
+            : vidmem_end - vidmem_start;
+    CHECK_TRUE(diff < 1024 * 1024);
+
+    for (i = 0; i < ARRAY_SIZE(textures); ++i)
+    {
+        if (textures[i])
+            IDirect3DTexture9_Release(textures[i]);
+    }
+
+    IDirect3DDevice9Ex_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9Ex_Release(d3d9ex);
+}

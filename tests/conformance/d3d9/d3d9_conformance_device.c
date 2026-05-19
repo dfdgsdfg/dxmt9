@@ -3004,3 +3004,165 @@ void test_multi_adapter(const struct d3d9_api *api)
 done:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_pixel_format()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_pixel_format_window_policy(const struct d3d9_api *api)
+{
+    static const float point[] = {0.0f, 0.0f, 0.0f};
+    IDirect3DDevice9 *device = NULL;
+    PIXELFORMATDESCRIPTOR pfd;
+    IDirect3D9 *d3d9 = NULL;
+    HMODULE opengl = NULL;
+    HWND window3 = NULL;
+    HDC dc3 = NULL;
+    HWND window2;
+    HWND window;
+    int format;
+    int actual;
+    HDC dc2;
+    HDC dc;
+
+    window = create_test_window();
+    window2 = create_test_window();
+    CHECK_TRUE(window != NULL);
+    CHECK_TRUE(window2 != NULL);
+    if (!window || !window2)
+        goto done_windows;
+
+    dc = GetDC(window);
+    dc2 = GetDC(window2);
+    CHECK_TRUE(dc != NULL);
+    CHECK_TRUE(dc2 != NULL);
+    if (!dc || !dc2)
+        goto done_dcs;
+
+    opengl = LoadLibraryA("opengl32.dll");
+    if (!opengl)
+    {
+        skip_current_test("opengl32.dll unavailable for pixel-format setup");
+        goto done_dcs;
+    }
+
+    CHECK_TRUE(GetPixelFormat(dc) == 0);
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.nSize = sizeof(pfd);
+    pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL;
+    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.iLayerType = PFD_MAIN_PLANE;
+
+    format = ChoosePixelFormat(dc, &pfd);
+    if (format <= 0)
+    {
+        skip_current_test("ChoosePixelFormat found no usable format");
+        goto done_dcs;
+    }
+
+    if (!SetPixelFormat(dc, format, &pfd)
+            || GetPixelFormat(dc) != format
+            || !SetPixelFormat(dc2, format, &pfd)
+            || GetPixelFormat(dc2) != format)
+    {
+        skip_current_test("SetPixelFormat did not stick on test windows");
+        goto done_dcs;
+    }
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        goto done_dcs;
+    }
+
+    actual = GetPixelFormat(dc);
+    CHECK_TRUE(actual == format);
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_d3d9;
+
+    actual = GetPixelFormat(dc);
+    CHECK_TRUE(actual == format);
+
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST, 1,
+            point, 3 * sizeof(float)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Present(device, NULL, NULL, window2, NULL),
+            D3D_OK);
+
+    CHECK_TRUE(GetPixelFormat(dc) == format);
+    CHECK_TRUE(GetPixelFormat(dc2) == format);
+
+    IDirect3DDevice9_Release(device);
+    device = NULL;
+    IDirect3D9_Release(d3d9);
+    d3d9 = NULL;
+
+    CHECK_TRUE(GetPixelFormat(dc) == format);
+    CHECK_TRUE(GetPixelFormat(dc2) == format);
+
+    window3 = create_test_window();
+    CHECK_TRUE(window3 != NULL);
+    if (!window3)
+        goto done_dcs;
+
+    dc3 = GetDC(window3);
+    CHECK_TRUE(dc3 != NULL);
+    if (!dc3)
+        goto done_window3;
+
+    CHECK_TRUE(GetPixelFormat(dc3) == 0);
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL for blank window");
+        goto done_window3;
+    }
+
+    device = create_base_device(d3d9, window3);
+    if (!device)
+        goto done_d3d9;
+
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST, 1,
+            point, 3 * sizeof(float)), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_TRUE(GetPixelFormat(dc3) == 0);
+    CHECK_HR(IDirect3DDevice9_Present(device, NULL, NULL, NULL, NULL),
+            D3D_OK);
+    CHECK_TRUE(GetPixelFormat(dc3) == 0);
+
+done_d3d9:
+    if (device)
+        IDirect3DDevice9_Release(device);
+    if (d3d9)
+        IDirect3D9_Release(d3d9);
+done_window3:
+    if (dc3)
+        ReleaseDC(window3, dc3);
+    if (window3)
+        DestroyWindow(window3);
+done_dcs:
+    if (opengl)
+        FreeLibrary(opengl);
+    if (dc2)
+        ReleaseDC(window2, dc2);
+    if (dc)
+        ReleaseDC(window, dc);
+done_windows:
+    if (window2)
+        DestroyWindow(window2);
+    if (window)
+        DestroyWindow(window);
+}
