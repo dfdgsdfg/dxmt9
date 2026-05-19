@@ -1,0 +1,21 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c texdepth_test behavior, reduced to ps_1_4 TEXDEPTH c0 ratio driving depth compare
+; oracle-date: 2026-05-19
+
+[pixel shader d3dbc-hex]
+ffff0104 00000001 800f0005 a0e40000 00000057 80e40005 00000001 800f0800
+90e40000 0000ffff
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-clear-depth 0.25
+dxmt9-render-state zenable=on zwrite=on zfunc=greater
+dxmt9-ps-const-f 0 0.25 0.5 0.0 0.0
+dxmt9-draw-odepth-overlap
+expect-source pixel contains "outDepth = clamp((r[5]).x / min((r[5]).y, 1.0f), 0.0f, 1.0f);"
+expect-source pixel contains "float depth [[depth(any)]]"
+probe (32, 32) rgba(1.0, 0.0, 0.0, 0.75) 1
