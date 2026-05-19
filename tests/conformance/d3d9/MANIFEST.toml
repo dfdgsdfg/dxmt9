@@ -2224,3 +2224,54 @@ owner = "pe/windowing"
 requirements = ["R-TEST-12.14"]
 acceptance = ["device creation, draw, present, and alternate-window present preserve existing window pixel formats and do not assign a pixel format to a blank window"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_device_creation_parameters_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_creation_parameters"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-creation"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["GetCreationParameters reports adapter, device type, focus window, and creation flags from the creating call and rejects null out-pointers"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_device_parent_caps_getter_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_refcount,device utility getter checks"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-misc"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["GetDirect3D null-pointer, AddRef, returned parent identity, GetDeviceCaps null-pointer, caps identity, available texture memory, and EvictManagedResources behavior match the Wine oracle"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_device_raster_status_bounds"
+source = "wine/dlls/d3d9/tests/device.c:device utility GetRasterStatus checks"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-misc"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.18"]
+acceptance = ["GetRasterStatus accepts swapchain zero with Wine-compatible host variance and rejects null or out-of-range swapchain arguments"]
+status = "scaffolded"

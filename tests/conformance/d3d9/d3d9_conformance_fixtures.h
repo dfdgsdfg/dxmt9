@@ -358,6 +358,9 @@ void test_set_palette_roundtrip(const struct d3d9_api *api);
 void test_palette_alpha_caps_policy(const struct d3d9_api *api);
 void test_palette_current_entry_isolation(const struct d3d9_api *api);
 void test_multi_adapter(const struct d3d9_api *api);
+void test_device_creation_parameters_policy(const struct d3d9_api *api);
+void test_device_parent_caps_getter_policy(const struct d3d9_api *api);
+void test_device_raster_status_bounds(const struct d3d9_api *api);
 void test_pixel_format_window_policy(const struct d3d9_api *api);
 
 void test_display_mode_ex_size_filter_smoke(const struct d3d9_api *api);

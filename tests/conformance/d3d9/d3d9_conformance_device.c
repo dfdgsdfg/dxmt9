@@ -3007,6 +3007,180 @@ done:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_creation_parameters()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_device_creation_parameters_policy(const struct d3d9_api *api)
+{
+    D3DDEVICE_CREATION_PARAMETERS creation;
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    pp = default_present_parameters(window);
+    device = (IDirect3DDevice9 *)0xdeadbeef;
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING
+            | D3DCREATE_NOWINDOWCHANGES, &pp, &device);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(device != NULL && device != (IDirect3DDevice9 *)0xdeadbeef);
+    if (FAILED(hr))
+    {
+        CHECK_TRUE(device == NULL);
+        goto done_window;
+    }
+
+    memset(&creation, 0xcc, sizeof(creation));
+    hr = IDirect3DDevice9_GetCreationParameters(device, &creation);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(creation.AdapterOrdinal == D3DADAPTER_DEFAULT);
+        CHECK_TRUE(creation.DeviceType == D3DDEVTYPE_HAL);
+        CHECK_TRUE(creation.hFocusWindow == window);
+        CHECK_TRUE((creation.BehaviorFlags
+                & D3DCREATE_SOFTWARE_VERTEXPROCESSING) != 0);
+        CHECK_TRUE((creation.BehaviorFlags & D3DCREATE_NOWINDOWCHANGES) != 0);
+    }
+
+    CHECK_HR(IDirect3DDevice9_GetCreationParameters(device, NULL),
+            D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * functions: test_refcount(), device utility getter checks
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_device_parent_caps_getter_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *parent = NULL;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    ULONG refcount;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    CHECK_HR(IDirect3DDevice9_GetDirect3D(device, NULL),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, NULL),
+            D3DERR_INVALIDCALL);
+
+    refcount = get_refcount((IUnknown *)d3d9);
+    hr = IDirect3DDevice9_GetDirect3D(device, &parent);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(parent == d3d9);
+    CHECK_TRUE(get_refcount((IUnknown *)d3d9) == refcount + 1);
+    if (parent)
+        IDirect3D9_Release(parent);
+    CHECK_TRUE(get_refcount((IUnknown *)d3d9) == refcount);
+
+    memset(&caps, 0xcc, sizeof(caps));
+    hr = IDirect3DDevice9_GetDeviceCaps(device, &caps);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(caps.AdapterOrdinal == D3DADAPTER_DEFAULT);
+        CHECK_TRUE(caps.DeviceType == D3DDEVTYPE_HAL);
+    }
+
+    CHECK_TRUE(IDirect3DDevice9_GetAvailableTextureMem(device) != 0);
+    CHECK_HR(IDirect3DDevice9_EvictManagedResources(device), D3D_OK);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: device utility GetRasterStatus checks
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_device_raster_status_bounds(const struct d3d9_api *api)
+{
+    D3DRASTER_STATUS raster_status;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&raster_status, 0xcc, sizeof(raster_status));
+    hr = IDirect3DDevice9_GetRasterStatus(device, 0, &raster_status);
+    CHECK_TRUE(hr == D3D_OK || hr == E_FAIL);
+
+    CHECK_HR(IDirect3DDevice9_GetRasterStatus(device, 0, NULL),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_GetRasterStatus(device, 1, &raster_status),
+            D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_pixel_format()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */
