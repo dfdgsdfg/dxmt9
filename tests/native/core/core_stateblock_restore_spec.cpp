@@ -203,12 +203,77 @@ void testRecordedDeltaStateBlockAppliesOnlyChangedResourcePayloads() {
           "recorded stateblock delta leaves unchanged sampler payload alone");
 }
 
+void testRecordedDeltaStateBlockCapturesShaderConstantPayloads() {
+  auto device = makeDevice();
+
+  DeviceState before;
+  before.reset();
+  before.vsConst.float4[1] = {1.0f, 2.0f, 3.0f, 4.0f};
+  before.vsConst.int4[2] = {10, 20, 30, 40};
+  before.psConst.float4[4] = {-1.0f, -2.0f, -3.0f, -4.0f};
+  before.psConst.bools[5] = true;
+
+  auto recorded = before;
+  recorded.vsConst.float4[1] = {5.0f, 6.0f, 7.0f, 8.0f};
+  recorded.vsConst.int4[2] = {-10, -20, -30, -40};
+  recorded.vsConst.bools[3] = true;
+  recorded.psConst.float4[4] = {9.0f, 10.0f, 11.0f, 12.0f};
+  recorded.psConst.int4[1] = {100, 200, 300, 400};
+  recorded.psConst.bools[5] = false;
+
+  StateBlock block;
+  block.captureDelta(before, recorded);
+
+  auto current = before;
+  current.vsConst.float4[1] = {21.0f, 22.0f, 23.0f, 24.0f};
+  current.vsConst.float4[6] = {91.0f, 92.0f, 93.0f, 94.0f};
+  current.vsConst.int4[2] = {-101, -202, -303, -404};
+  current.vsConst.bools[3] = true;
+  current.psConst.float4[4] = {31.0f, 32.0f, 33.0f, 34.0f};
+  current.psConst.int4[1] = {501, 502, 503, 504};
+  current.psConst.bools[5] = false;
+  current.psConst.bools[7] = true;
+  block.capture(current);
+
+  auto& target = device->mutableState();
+  target.vsConst.float4[1] = {-1.0f, -1.0f, -1.0f, -1.0f};
+  target.vsConst.float4[6] = {41.0f, 42.0f, 43.0f, 44.0f};
+  target.vsConst.int4[2] = {1, 1, 1, 1};
+  target.vsConst.bools[3] = false;
+  target.psConst.float4[4] = {-9.0f, -9.0f, -9.0f, -9.0f};
+  target.psConst.int4[1] = {2, 2, 2, 2};
+  target.psConst.bools[5] = true;
+  target.psConst.bools[7] = false;
+
+  block.apply(*device);
+  const auto& state = device->state();
+  checkNear(state.vsConst.float4[1][0], 21.0f, 1.0e-6f,
+            "recorded stateblock captures current VS float constant");
+  checkNear(state.vsConst.float4[1][3], 24.0f, 1.0e-6f,
+            "recorded stateblock captures full VS float constant register");
+  checkNear(state.vsConst.float4[6][0], 41.0f, 1.0e-6f,
+            "recorded stateblock leaves unrecorded VS float register alone");
+  checkEq(state.vsConst.int4[2][2], -303,
+          "recorded stateblock captures current VS int constant");
+  checkEq(state.vsConst.bools[3], true,
+          "recorded stateblock captures current VS bool constant");
+  checkNear(state.psConst.float4[4][2], 33.0f, 1.0e-6f,
+            "recorded stateblock captures current PS float constant");
+  checkEq(state.psConst.int4[1][3], 504,
+          "recorded stateblock captures current PS int constant");
+  checkEq(state.psConst.bools[5], false,
+          "recorded stateblock captures false PS bool constant");
+  checkEq(state.psConst.bools[7], false,
+          "recorded stateblock leaves unrecorded PS bool register alone");
+}
+
 }  // namespace
 
 int main() {
   try {
     testAllStateBlockRestoresTextureSamplerTssAndRenderTargets();
     testRecordedDeltaStateBlockAppliesOnlyChangedResourcePayloads();
+    testRecordedDeltaStateBlockCapturesShaderConstantPayloads();
   } catch (const TestFailure& e) {
     std::cerr << "core_stateblock_restore_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;
