@@ -2496,3 +2496,139 @@ owner = "core/wsi"
 requirements = ["R-TEST-12.10"]
 acceptance = ["ResetEx with new BackBufferWidth/Height resizes the implicit swapchain and the new backbuffer GetDesc reports the new dimensions; non-Ex Reset with mismatched present parameters resolves to D3D_OK or D3DERR_INVALIDCALL"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_float_texture_format_policy"
+source = "wine/dlls/d3d9/tests/visual.c:float_texture_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "texture-format"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["IDirect3D9::CheckDeviceFormat reports D3DFMT_R32F texture support on supporting adapters and a 4x4 managed-pool R32F texture locks with Pitch >= 16 bytes"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_g16r16_texture_format_policy"
+source = "wine/dlls/d3d9/tests/visual.c:g16r16_texture_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "texture-format"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["IDirect3D9::CheckDeviceFormat reports D3DFMT_G16R16 texture support on supporting adapters and a 4x4 managed-pool G16R16 texture locks with Pitch >= 16 bytes"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_volume_v16u16_format_policy"
+source = "wine/dlls/d3d9/tests/visual.c:volume_v16u16_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "volume-texture"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["IDirect3D9::CheckDeviceFormat reports D3DFMT_V16U16 volume-texture support on supporting adapters and a 4x4x2 managed-pool V16U16 volume locks with positive row and slice pitch divisible by 4"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_srgb_texture_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:srgbtexture_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["IDirect3D9::CheckDeviceFormat with D3DUSAGE_QUERY_SRGBREAD on D3DFMT_A8R8G8B8 textures returns S_OK or D3DERR_NOTAVAILABLE"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_srgb_write_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:srgbwrite_format_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["IDirect3D9::CheckDeviceFormat with D3DUSAGE_QUERY_SRGBWRITE on D3DFMT_A8R8G8B8 textures returns S_OK or D3DERR_NOTAVAILABLE"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_volume_srgb_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:volume_srgb_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["IDirect3D9::CheckDeviceFormat with D3DUSAGE_QUERY_SRGBREAD on D3DFMT_A8R8G8B8 volume textures returns S_OK or D3DERR_NOTAVAILABLE"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_volume_dxtn_format_policy"
+source = "wine/dlls/d3d9/tests/visual.c:volume_dxtn_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "volume-texture"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["IDirect3D9::CheckDeviceFormat reports D3DFMT_DXT1 volume-texture support on supporting adapters and a 4x4x4 managed-pool DXT1 volume locks with RowPitch >= 8 bytes (one DXT1 block per row)"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_signed_formats_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_signed_formats"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["IDirect3D9::CheckDeviceFormat for D3DFMT_V8U8, D3DFMT_V16U16, and D3DFMT_Q8W8V8U8 as 2D textures returns either S_OK or D3DERR_NOTAVAILABLE for each format"]
+status = "scaffolded"

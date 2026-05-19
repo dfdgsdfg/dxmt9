@@ -449,4 +449,13 @@ void test_get_render_target_data_policy(const struct d3d9_api *api);
 void test_render_target_device_mismatch(const struct d3d9_api *api);
 void test_create_depth_stencil_surface_ex(const struct d3d9_api *api);
 
+void test_visual_float_texture_format_policy(const struct d3d9_api *api);
+void test_visual_g16r16_texture_format_policy(const struct d3d9_api *api);
+void test_visual_volume_v16u16_format_policy(const struct d3d9_api *api);
+void test_visual_srgb_texture_caps_policy(const struct d3d9_api *api);
+void test_visual_srgb_write_caps_policy(const struct d3d9_api *api);
+void test_visual_volume_srgb_caps_policy(const struct d3d9_api *api);
+void test_visual_volume_dxtn_format_policy(const struct d3d9_api *api);
+void test_visual_signed_formats_caps_policy(const struct d3d9_api *api);
+
 #endif /* DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H */

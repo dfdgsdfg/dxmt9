@@ -204,6 +204,22 @@ static const struct test_case tests[] =
             test_reset_fullscreen_focus_window_policy},
     {"window_position_present_parameter_policy",
             test_window_position_present_parameter_policy},
+    {"visual_float_texture_format_policy",
+            test_visual_float_texture_format_policy},
+    {"visual_g16r16_texture_format_policy",
+            test_visual_g16r16_texture_format_policy},
+    {"visual_volume_v16u16_format_policy",
+            test_visual_volume_v16u16_format_policy},
+    {"visual_srgb_texture_caps_policy",
+            test_visual_srgb_texture_caps_policy},
+    {"visual_srgb_write_caps_policy",
+            test_visual_srgb_write_caps_policy},
+    {"visual_volume_srgb_caps_policy",
+            test_visual_volume_srgb_caps_policy},
+    {"visual_volume_dxtn_format_policy",
+            test_visual_volume_dxtn_format_policy},
+    {"visual_signed_formats_caps_policy",
+            test_visual_signed_formats_caps_policy},
 };
 
 int main(void)
