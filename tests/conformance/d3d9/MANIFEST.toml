@@ -1384,6 +1384,57 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_resource.c"
+function = "test_texture_level_surface_desc_parity"
+source = "wine/dlls/d3d9/tests/device.c:test_resource_type"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["texture level surfaces expose descriptors that match their owning texture level descriptors across base, middle, and tail mip levels"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_cube_texture_face_desc_parity"
+source = "wine/dlls/d3d9/tests/device.c:test_resource_type"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-description"
+owner = "core/resources"
+requirements = ["R-TEST-12.13"]
+acceptance = ["cube texture face surfaces expose descriptors matching the cube texture level descriptor for multiple faces"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
+function = "test_resource_get_device_wrapper_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_refcount"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-lifetime"
+owner = "pe/com"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["surface, texture, cube texture, volume texture, vertex-buffer, and index-buffer GetDevice methods return the parent device and AddRef it"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_resource.c"
 function = "test_index_buffer_desc_binding_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_surface_blocks"
 source_kind = "behavioral-oracle"
