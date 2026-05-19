@@ -168,6 +168,38 @@ core_stateblock_restore_spec = executable(
 test('dxmt9-core-stateblock-restore-spec', core_stateblock_restore_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
+# Wine D3D9 behavioral oracle: test_miptree_layout. Pure value-level
+# pin on the NPOT mip-chain dimension / pitch / byte-size contract for
+# A8R8G8B8 and DXT1 textures; mirrors the observable lock-rect layout
+# without touching a device.
+core_d3d9_miptree_layout_spec = executable(
+  'dxmt9-core-d3d9-miptree-layout-spec',
+  'core_d3d9_miptree_layout_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-d3d9-miptree-layout-spec', core_d3d9_miptree_layout_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
+# Wine D3D9 behavioral oracle: test_multiply_transform. Pure value-level
+# pin on the row-major 4x4 multiply convention used by
+# IDirect3DDevice9::MultiplyTransform (M_current * M_new) — companion
+# to the stateblock conformance test
+# tests/conformance/d3d9/d3d9_conformance_query_stateblock.c::
+# test_stateblock_multiply_transform_capture.
+core_d3d9_multiply_transform_spec = executable(
+  'dxmt9-core-d3d9-multiply-transform-spec',
+  'core_d3d9_multiply_transform_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-core-d3d9-multiply-transform-spec', core_d3d9_multiply_transform_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 # CPU-only chunk-build microbenchmark (V1 audit item (a), boundary B1).
 # Times the cost of building POD chunk records from a typical D3D9
 # hot-path mix isolated from any bridge / Metal / GPU work. Output
