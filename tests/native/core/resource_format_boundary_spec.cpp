@@ -760,6 +760,104 @@ void testCubeAndVolumeSubresourceUploadMetadata() {
           "deep volume upload slice1 byte");
 }
 
+void testCubeTextureFaceMajorMiptreeSubresourceBoundaries() {
+  PublicDevice fixture;
+
+  const auto cubeBefore = fixture.backend->createdTextures.size();
+  auto cube = UniqueTexture(dxmt9c_device_create_cube_texture(
+      fixture.c(), 16, 5, 0, kD3DFmtA8R8G8B8, kD3DPoolManaged));
+  check(cube != nullptr, "cube miptree creation succeeds");
+  checkEq(fixture.backend->createdTextures.size(), cubeBefore + size_t{1},
+          "cube miptree reaches backend");
+  const auto& cubeDesc = fixture.backend->createdTextures[cubeBefore];
+  checkEq(cubeDesc.type, TextureType::Cube, "cube miptree backend type");
+  checkEq(cubeDesc.width, 16u, "cube miptree backend width");
+  checkEq(cubeDesc.height, 16u, "cube miptree backend height");
+  checkEq(cubeDesc.levels, 5u, "cube miptree backend level count");
+  checkEq(dxmt9c_texture_get_level_count(cube.get()), 5u,
+          "cube miptree public level count");
+
+  const std::array<u32, 5> mipSizes{{16u, 8u, 4u, 2u, 1u}};
+  const u32 levelCount = dxmt9c_texture_get_level_count(cube.get());
+  for (u32 face : {0u, 2u, 5u}) {
+    for (u32 mip = 0; mip < levelCount; ++mip) {
+      const u32 subresource = face * levelCount + mip;
+      checkEq(cube->obj->levelBytes(subresource).size(),
+              size_t{mipSizes[mip]} * mipSizes[mip] * 4u,
+              "cube face-major CPU subresource size");
+
+      const auto surfaceBefore = fixture.backend->textureSurfaces.size();
+      auto surface =
+          UniqueSurface(dxmt9c_texture_get_surface_level(cube.get(), subresource));
+      check(surface != nullptr, "cube face-major surface exists");
+      checkEq(fixture.backend->textureSurfaces.size(), surfaceBefore + size_t{1},
+              "cube face-major surface reaches backend");
+      const auto& surfaceRecord = fixture.backend->textureSurfaces.back();
+      checkEq(surfaceRecord.texture, cube->obj->handle(),
+              "cube face-major surface aliases parent texture");
+      checkEq(surfaceRecord.subresource, subresource,
+              "cube face-major backend subresource index");
+      checkEq(surfaceRecord.desc.width, mipSizes[mip],
+              "cube face-major backend mip width");
+      checkEq(surfaceRecord.desc.height, mipSizes[mip],
+              "cube face-major backend mip height");
+      checkEq(surfaceRecord.desc.format, Format::A8R8G8B8,
+              "cube face-major backend format");
+
+      const auto publicDesc =
+          surfaceDesc(surface.get(), "cube face-major public desc");
+      checkEq(publicDesc.resourceType, kD3DResourceTypeSurface,
+              "cube face-major public surface type");
+      checkEq(publicDesc.width, mipSizes[mip],
+              "cube face-major public mip width");
+      checkEq(publicDesc.height, mipSizes[mip],
+              "cube face-major public mip height");
+    }
+  }
+
+  const u32 face2Mip3 = 2u * levelCount + 3u;
+  const auto uploadBefore = fixture.backend->textureUploads.size();
+  D9CLockedRect lock{};
+  checkEq(dxmt9c_texture_lock_rect(cube.get(), face2Mip3, &lock, nullptr, 0),
+          D3D_OK, "cube face-major lock succeeds");
+  check(lock.bits != nullptr, "cube face-major lock bits");
+  checkEq(lock.pitch, 8, "cube face-major mip3 row pitch");
+  auto* bytes = static_cast<u8*>(lock.bits);
+  bytes[0] = 0x31u;
+  bytes[15] = 0x7bu;
+  checkEq(dxmt9c_texture_unlock_rect(cube.get(), face2Mip3), D3D_OK,
+          "cube face-major unlock succeeds");
+  checkEq(fixture.backend->textureUploads.size(), uploadBefore + size_t{1},
+          "cube face-major unlock uploads once");
+  const auto& upload = fixture.backend->textureUploads.back();
+  checkEq(upload.handle, cube->obj->handle(), "cube face-major upload handle");
+  checkEq(upload.level, face2Mip3,
+          "cube face-major upload preserves subresource");
+  checkEq(upload.width, 2u, "cube face-major upload width");
+  checkEq(upload.height, 2u, "cube face-major upload height");
+  checkEq(upload.depth, 1u, "cube face-major upload depth");
+  checkEq(upload.pitch, 8u, "cube face-major upload row pitch");
+  checkEq(upload.slicePitch, 16u, "cube face-major upload slice pitch");
+  checkEq(upload.bytes[0], 0x31u, "cube face-major upload first byte");
+  checkEq(upload.bytes[15], 0x7bu, "cube face-major upload last byte");
+  checkEq(cube->obj->levelBytes(3)[0], 0u,
+          "cube face0 mip3 remains isolated from face2 upload");
+
+  const u32 invalidSubresource = 6u * levelCount;
+  const auto surfaceBefore = fixture.backend->textureSurfaces.size();
+  auto invalidSurface =
+      UniqueSurface(dxmt9c_texture_get_surface_level(cube.get(), invalidSubresource));
+  check(invalidSurface == nullptr, "cube invalid face-major surface rejected");
+  checkEq(fixture.backend->textureSurfaces.size(), surfaceBefore,
+          "cube invalid face-major surface does not reach backend");
+  D9CLockedRect invalidLock{123, reinterpret_cast<void*>(0x1)};
+  checkEq(dxmt9c_texture_lock_rect(cube.get(), invalidSubresource, &invalidLock,
+                                   nullptr, 0),
+          D3DERR_INVALIDCALL, "cube invalid face-major lock rejected");
+  checkEq(invalidLock.pitch, 0, "cube invalid lock clears pitch");
+  check(invalidLock.bits == nullptr, "cube invalid lock clears bits");
+}
+
 void testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch() {
   PublicDevice fixture;
 
@@ -907,6 +1005,7 @@ int main() {
     testCompressedCreationAndBlockRowRounding();
     testCubeAndVolumeCreationDescriptors();
     testCubeAndVolumeSubresourceUploadMetadata();
+    testCubeTextureFaceMajorMiptreeSubresourceBoundaries();
     testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
