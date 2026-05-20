@@ -82,6 +82,9 @@ extern "C" int32_t dxmt9c_factory_get_adapter_identifier(D9CFactory* f,
   if (!out) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  if (adapter >= f->iface->GetAdapterCount()) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   auto id = f->iface->GetAdapterIdentifier(adapter);
   std::memset(out, 0, sizeof(*out));
   std::strncpy(out->driver, id.driver.c_str(), sizeof(out->driver) - 1);
@@ -98,6 +101,9 @@ extern "C" int32_t dxmt9c_factory_get_adapter_identifier(D9CFactory* f,
 extern "C" uint32_t dxmt9c_factory_get_adapter_mode_count(D9CFactory* f,
                                                           uint32_t adapter,
                                                           uint32_t d3dFmt) {
+  if (adapter >= f->iface->GetAdapterCount()) {
+    return 0;
+  }
   auto modes = f->iface->EnumAdapterModes(adapter, fmtFromD3D(d3dFmt));
   return static_cast<uint32_t>(modes.size());
 }
@@ -106,6 +112,9 @@ extern "C" int32_t dxmt9c_factory_enum_adapter_modes(D9CFactory* f, uint32_t ada
                                                      uint32_t d3dFmt, uint32_t modeIdx,
                                                      uint32_t* outW, uint32_t* outH,
                                                      uint32_t* outRefresh, uint32_t* outFmt) {
+  if (adapter >= f->iface->GetAdapterCount()) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   auto modes = f->iface->EnumAdapterModes(adapter, fmtFromD3D(d3dFmt));
   if (modeIdx >= modes.size()) {
     return dxmt9::core::D3DERR_INVALIDCALL;
@@ -129,6 +138,9 @@ extern "C" int32_t dxmt9c_factory_enum_adapter_modes(D9CFactory* f, uint32_t ada
 extern "C" int32_t dxmt9c_factory_get_adapter_display_mode(D9CFactory* f, uint32_t adapter,
                                                            uint32_t* outW, uint32_t* outH,
                                                            uint32_t* outRefresh, uint32_t* outFmt) {
+  if (adapter >= f->iface->GetAdapterCount()) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   const auto mode = f->iface->GetAdapterDisplayMode(adapter);
   if (outW) {
     *outW = mode.width;
@@ -146,6 +158,9 @@ extern "C" int32_t dxmt9c_factory_get_adapter_display_mode(D9CFactory* f, uint32
 }
 
 extern "C" uint64_t dxmt9c_factory_get_adapter_monitor(D9CFactory* f, uint32_t adapter) {
+  if (adapter >= f->iface->GetAdapterCount()) {
+    return 0;
+  }
   return static_cast<uint64_t>(f->iface->GetAdapterMonitor(adapter));
 }
 
@@ -181,6 +196,9 @@ extern "C" int32_t dxmt9c_factory_check_device_multisample(D9CFactory* f, uint32
 
 extern "C" int32_t dxmt9c_factory_get_caps(D9CFactory* f, uint32_t adapter, D9CCaps* out) {
   if (!out) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  if (adapter >= f->iface->GetAdapterCount()) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   fillCCaps(f->iface->GetDeviceCaps(adapter), out);
