@@ -10,6 +10,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 #include "d3d9_pe.hpp"
 #include "d3d9_pe_device_child.hpp"
 #include "d3d9_pe_draw_packet.hpp"
@@ -209,6 +210,222 @@ static uint32_t userMemoryBytesPerPixel(D3DFORMAT fmt) {
 }
 
 /* =========================================================================
+ * Shader bytecode + vertex declaration validators.
+ *
+ * Wine semantics (dlls/d3d9/tests/device.c::test_unsupported_shaders,
+ * test_unused_declaration_type, test_vertex_declaration):
+ *
+ *   - CreateVertexShader / CreatePixelShader reject NULL bytecode and any
+ *     header whose top 16 bits do not match the expected stage (0xFFFE for
+ *     VS, 0xFFFF for PS), or whose major version exceeds 3 (the highest
+ *     real D3D9 shader model). Both Device9 and Device9Ex apply identical
+ *     validation.
+ *   - CreateVertexDeclaration rejects misaligned offsets (must be a
+ *     multiple of 4 for FLOAT/COLOR/UBYTE4 etc.) and any in-band element
+ *     with D3DDECLTYPE_UNUSED — only the explicit D3DDECL_END() sentinel
+ *     ({stream=0xFF, type=UNUSED}) is allowed to carry UNUSED. Wine
+ *     returns E_FAIL for in-band UNUSED (not D3DERR_INVALIDCALL).
+ * ========================================================================= */
+
+namespace {
+
+/// D3D9 shader-version token form: ((stageHi << 16) | (major << 8) | minor).
+/// stageHi == 0xFFFE for vertex shaders, 0xFFFF for pixel shaders.
+constexpr uint32_t kShaderHeaderVS = 0xFFFEu;
+constexpr uint32_t kShaderHeaderPS = 0xFFFFu;
+constexpr uint32_t kShaderMaxMajor = 3u; /* vs_3_0 / ps_3_0 are the cap */
+constexpr uint32_t kShaderEndToken = 0x0000FFFFu;
+
+[[nodiscard]] HRESULT validateShaderBytecodeForStage(const DWORD* code,
+                                                     bool vertexStage) {
+    if (!code) return D3DERR_INVALIDCALL;
+    const uint32_t token = static_cast<uint32_t>(code[0]);
+    const uint32_t stageHi = token >> 16;
+    const uint32_t expectedStage =
+        vertexStage ? kShaderHeaderVS : kShaderHeaderPS;
+    if (stageHi != expectedStage) return D3DERR_INVALIDCALL;
+    const uint32_t major = (token >> 8) & 0xffu;
+    if (major == 0u || major > kShaderMaxMajor) return D3DERR_INVALIDCALL;
+    /* Minimal "is there an END token within a sane window?" check. The
+     * full token walker lives in computeShaderBytecodeWordCount on the C
+     * side; we only need to reject truncated bytecode where the END
+     * marker is absent in the first few words the test harness can
+     * supply. */
+    constexpr size_t kBoundedScan = 1u << 16;
+    bool seenEnd = false;
+    for (size_t i = 1; i < kBoundedScan; ++i) {
+        const uint32_t t = static_cast<uint32_t>(code[i]);
+        if (t == kShaderEndToken) {
+            seenEnd = true;
+            break;
+        }
+        /* Treat any 0xFFFFFFFF (NULL bytecode runaway sentinel some
+         * fuzzers use) as truncated. */
+        if (t == 0xFFFFFFFFu) {
+            return D3DERR_INVALIDCALL;
+        }
+    }
+    if (!seenEnd) return D3DERR_INVALIDCALL;
+    return S_OK;
+}
+
+/// Returns >0 when the type encodes a known D3DDECLTYPE_* with that byte
+/// size, or 0 when the type is unknown / UNUSED.
+[[nodiscard]] uint32_t vertexElementTypeSize(uint8_t type) {
+    switch (type) {
+        case D3DDECLTYPE_FLOAT1:    return 4;
+        case D3DDECLTYPE_FLOAT2:    return 8;
+        case D3DDECLTYPE_FLOAT3:    return 12;
+        case D3DDECLTYPE_FLOAT4:    return 16;
+        case D3DDECLTYPE_D3DCOLOR:  return 4;
+        case D3DDECLTYPE_UBYTE4:    return 4;
+        case D3DDECLTYPE_SHORT2:    return 4;
+        case D3DDECLTYPE_SHORT4:    return 8;
+        case D3DDECLTYPE_UBYTE4N:   return 4;
+        case D3DDECLTYPE_SHORT2N:   return 4;
+        case D3DDECLTYPE_SHORT4N:   return 8;
+        case D3DDECLTYPE_USHORT2N:  return 4;
+        case D3DDECLTYPE_USHORT4N:  return 8;
+        case D3DDECLTYPE_UDEC3:     return 4;
+        case D3DDECLTYPE_DEC3N:     return 4;
+        case D3DDECLTYPE_FLOAT16_2: return 4;
+        case D3DDECLTYPE_FLOAT16_4: return 8;
+        case D3DDECLTYPE_UNUSED:    return 0;
+        default:                    return 0;
+    }
+}
+
+/// Returns S_OK if a user-supplied D3DVERTEXELEMENT9 array is well-formed:
+///   - bounded length (<= MAXD3DDECLLENGTH)
+///   - terminated by D3DDECL_END (stream=0xFF, type=UNUSED)
+///   - no in-band UNUSED elements (Wine returns E_FAIL for those)
+///   - each offset is naturally aligned to the element's word size when the
+///     type is FLOAT-like / 32-bit-aligned (multiples of 4).
+[[nodiscard]] HRESULT validateVertexElements(const D3DVERTEXELEMENT9* elems) {
+    if (!elems) return D3DERR_INVALIDCALL;
+    constexpr size_t kMaxLen = MAXD3DDECLLENGTH + 1; /* +END */
+    for (size_t i = 0; i < kMaxLen; ++i) {
+        const D3DVERTEXELEMENT9& e = elems[i];
+        if (e.Stream == 0xFF) {
+            /* Anything with stream==0xFF must be the END sentinel. */
+            if (e.Type != D3DDECLTYPE_UNUSED) return D3DERR_INVALIDCALL;
+            return S_OK;
+        }
+        if (e.Type == D3DDECLTYPE_UNUSED) {
+            /* In-band UNUSED — Wine surfaces this as E_FAIL. */
+            return E_FAIL;
+        }
+        if (vertexElementTypeSize(e.Type) == 0) {
+            /* Unknown type (non-UNUSED, non-recognized). */
+            return D3DERR_INVALIDCALL;
+        }
+        /* All D3D9 element types are 32-bit word aligned. */
+        if ((e.Offset & 0x3u) != 0u) return D3DERR_INVALIDCALL;
+    }
+    /* Ran off the end without seeing an END marker. */
+    return D3DERR_INVALIDCALL;
+}
+
+/// Convert a small set of FVF combinations to a Wine-compatible
+/// D3DVERTEXELEMENT9 array. Only the subset exercised by Wine's
+/// test_fvf_decl_management is required to be lossless; unsupported
+/// combinations fall through with an "XYZ FLOAT3 + END" minimum so the
+/// resulting decl is still a valid object (which is what Wine produces
+/// for arbitrary user FVFs).
+inline void fvfToVertexElements(DWORD fvf,
+                                std::vector<D3DVERTEXELEMENT9>& out) {
+    out.clear();
+    uint16_t offset = 0;
+    const DWORD posMask = fvf & D3DFVF_POSITION_MASK;
+    if (posMask == D3DFVF_XYZ) {
+        out.push_back({0, offset, D3DDECLTYPE_FLOAT3,
+                       D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_POSITION, 0});
+        offset += 12;
+    } else if (posMask == D3DFVF_XYZRHW) {
+        out.push_back({0, offset, D3DDECLTYPE_FLOAT4,
+                       D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_POSITIONT, 0});
+        offset += 16;
+    } else if (posMask == D3DFVF_XYZW) {
+        out.push_back({0, offset, D3DDECLTYPE_FLOAT4,
+                       D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_POSITION, 0});
+        offset += 16;
+    } else if (posMask == D3DFVF_XYZB1 || posMask == D3DFVF_XYZB2 ||
+               posMask == D3DFVF_XYZB3 || posMask == D3DFVF_XYZB4 ||
+               posMask == D3DFVF_XYZB5) {
+        out.push_back({0, offset, D3DDECLTYPE_FLOAT3,
+                       D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_POSITION, 0});
+        offset += 12;
+        const int blend = (posMask - D3DFVF_XYZB1) / 2 + 1;
+        if (blend >= 1) {
+            const uint8_t blendType = blend == 1
+                ? D3DDECLTYPE_FLOAT1
+                : (blend == 2 ? D3DDECLTYPE_FLOAT2
+                              : (blend == 3 ? D3DDECLTYPE_FLOAT3
+                                            : D3DDECLTYPE_FLOAT4));
+            out.push_back({0, offset, blendType,
+                           D3DDECLMETHOD_DEFAULT,
+                           D3DDECLUSAGE_BLENDWEIGHT, 0});
+            offset += vertexElementTypeSize(blendType);
+        }
+    }
+    if (fvf & D3DFVF_NORMAL) {
+        out.push_back({0, offset, D3DDECLTYPE_FLOAT3,
+                       D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_NORMAL, 0});
+        offset += 12;
+    }
+    if (fvf & D3DFVF_PSIZE) {
+        out.push_back({0, offset, D3DDECLTYPE_FLOAT1,
+                       D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_PSIZE, 0});
+        offset += 4;
+    }
+    if (fvf & D3DFVF_DIFFUSE) {
+        out.push_back({0, offset, D3DDECLTYPE_D3DCOLOR,
+                       D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_COLOR, 0});
+        offset += 4;
+    }
+    if (fvf & D3DFVF_SPECULAR) {
+        out.push_back({0, offset, D3DDECLTYPE_D3DCOLOR,
+                       D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_COLOR, 1});
+        offset += 4;
+    }
+    const uint32_t texCount = (fvf & D3DFVF_TEXCOUNT_MASK)
+                              >> D3DFVF_TEXCOUNT_SHIFT;
+    for (uint32_t i = 0; i < texCount && i < 8; ++i) {
+        const uint32_t shift = i * 2u + 16u;
+        const uint32_t sizeBits = (fvf >> shift) & 0x3u;
+        /* TEXTUREFORMAT mapping:
+         *   FORMAT2 (0) -> FLOAT2, FORMAT3 (1) -> FLOAT3,
+         *   FORMAT4 (2) -> FLOAT4, FORMAT1 (3) -> FLOAT1. */
+        uint8_t type = D3DDECLTYPE_FLOAT2;
+        uint16_t size = 8;
+        if (sizeBits == 1) { type = D3DDECLTYPE_FLOAT3; size = 12; }
+        else if (sizeBits == 2) { type = D3DDECLTYPE_FLOAT4; size = 16; }
+        else if (sizeBits == 3) { type = D3DDECLTYPE_FLOAT1; size = 4; }
+        out.push_back({0, offset, type, D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_TEXCOORD,
+                       static_cast<uint8_t>(i)});
+        offset += size;
+    }
+    /* If no recognized position bit was set, emit a minimum (no-op) decl
+     * so the resulting object is still well-formed. */
+    if (out.empty()) {
+        out.push_back({0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT,
+                       D3DDECLUSAGE_POSITION, 0});
+    }
+    out.push_back({0xFF, 0, D3DDECLTYPE_UNUSED, 0, 0, 0});
+}
+
+}  // namespace
+
+/* =========================================================================
  * Raw-handle extractors — safe because only our device creates these objects.
  * ========================================================================= */
 
@@ -287,6 +504,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     IDirect3DIndexBuffer9*     indexBuf_        = nullptr;
     IDirect3DVertexDeclaration9* vdecl_         = nullptr;
     DWORD                      fvf_             = 0;
+    /* Cache of implicit FVF→decl shadow objects. Wine's
+     * test_fvf_decl_management requires that two SetFVF(F) calls return
+     * the SAME IDirect3DVertexDeclaration9* via GetVertexDeclaration, so
+     * we memoize by FVF. The map owns one reference per entry; entries
+     * are released in releaseAllBound(). */
+    std::unordered_map<DWORD, IDirect3DVertexDeclaration9*> fvfDeclCache_{};
     IDirect3DSurface9*         cachedBackBuffer0_ = nullptr;
 
     PeHotStateShadow peState_{};
@@ -324,6 +547,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         for (auto& s : streamSrc_)  setRef(s, (IDirect3DVertexBuffer9*)nullptr);
         setRef(indexBuf_, (IDirect3DIndexBuffer9*)nullptr);
         setRef(vdecl_, (IDirect3DVertexDeclaration9*)nullptr);
+        /* Drop the FVF→decl shadow cache. The map owns one ref per entry
+         * (held since the cache miss in SetFVF created the decl). */
+        for (auto& [fvf, decl] : fvfDeclCache_) {
+            if (decl) decl->Release();
+        }
+        fvfDeclCache_.clear();
         for (auto& rt : rtSlots_)   setRef(rt, (IDirect3DSurface9*)nullptr);
         for (auto& explicitRt : rtSlotExplicit_) explicitRt = false;
         setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
@@ -2834,13 +3063,52 @@ public:
     }
 
     /* ── FVF / vertex declaration ── */
+    /// Resolve (and cache) the implicit IDirect3DVertexDeclaration9 for an
+    /// FVF. The cache owns one ref per entry; this function does NOT add a
+    /// new reference for the caller — call AddRef yourself before handing
+    /// the pointer out. Returns nullptr only on allocation failure.
+    IDirect3DVertexDeclaration9* implicitDeclForFvf(DWORD fvf) {
+        if (fvf == 0) return nullptr;
+        if (auto it = fvfDeclCache_.find(fvf); it != fvfDeclCache_.end()) {
+            return it->second;
+        }
+        std::vector<D3DVERTEXELEMENT9> elements;
+        fvfToVertexElements(fvf, elements);
+        D9CVertexElement tmp[MAXD3DDECLLENGTH + 1]{};
+        const size_t n = elements.size();
+        if (n > MAXD3DDECLLENGTH + 1) return nullptr;
+        for (size_t i = 0; i < n; ++i) {
+            tmp[i].stream     = elements[i].Stream;
+            tmp[i].offset     = elements[i].Offset;
+            tmp[i].type       = elements[i].Type;
+            tmp[i].method     = elements[i].Method;
+            tmp[i].usage      = elements[i].Usage;
+            tmp[i].usageIndex = elements[i].UsageIndex;
+        }
+        D9CVertexDecl* d = dxmt9c_device_create_vertex_declaration(dev_, tmp);
+        if (!d) return nullptr;
+        IDirect3DVertexDeclaration9* decl = CreatePeVertexDecl(d, this);
+        if (!decl) return nullptr;
+        /* Cache holds one ref. */
+        fvfDeclCache_.emplace(fvf, decl);
+        return decl;
+    }
+
     HRESULT STDMETHODCALLTYPE SetFVF(DWORD fvf) noexcept override {
         dxmt9DeviceDebugLog("device_set_fvf device=%p fvf=0x%x", this, (unsigned)fvf);
-        if (fvf_ == fvf) {
+        if (fvf_ == fvf && vdecl_ != nullptr) {
+            /* Same FVF, decl already mirrored. */
             return S_OK;
         }
         fvf_ = fvf;
         peState_.pendingFvf = true;
+        peState_.pendingVdecl = true;
+        /* SetFVF shadows the vertex-declaration slot: GetVertexDeclaration
+         * must return the implicit decl for this FVF (Wine
+         * test_vertex_declaration_fvf_policy line ~702 and
+         * test_fvf_decl_management). */
+        IDirect3DVertexDeclaration9* implicit = implicitDeclForFvf(fvf);
+        setRef(vdecl_, implicit);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetFVF(DWORD* pFVF) noexcept override {
@@ -2851,20 +3119,32 @@ public:
     HRESULT STDMETHODCALLTYPE CreateVertexDeclaration(
             const D3DVERTEXELEMENT9* pElems,
             IDirect3DVertexDeclaration9** ppVD) noexcept override {
-        if (!pElems || !ppVD) return D3DERR_INVALIDCALL;
+        if (!ppVD) return D3DERR_INVALIDCALL;
+        /* Wine returns INVALIDCALL with *ppVD == NULL on bad input. */
+        const HRESULT validationHr = validateVertexElements(pElems);
+        if (FAILED(validationHr)) {
+            *ppVD = nullptr;
+            return validationHr;
+        }
         /* count elements until D3DDECL_END() */
-        int n = 0;
+        size_t n = 0;
         while (pElems[n].Stream != 0xFF) ++n;
         ++n; /* include D3DDECL_END */
-        D9CVertexElement tmp[64]{};
-        if (n > 64) return D3DERR_INVALIDCALL;
-        for (int i = 0; i < n; ++i) {
+        if (n > MAXD3DDECLLENGTH + 1) {
+            *ppVD = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
+        D9CVertexElement tmp[MAXD3DDECLLENGTH + 1]{};
+        for (size_t i = 0; i < n; ++i) {
             tmp[i].stream = pElems[i].Stream; tmp[i].offset = pElems[i].Offset;
             tmp[i].type   = pElems[i].Type;   tmp[i].method = pElems[i].Method;
             tmp[i].usage  = pElems[i].Usage;  tmp[i].usageIndex = pElems[i].UsageIndex;
         }
         D9CVertexDecl* d = dxmt9c_device_create_vertex_declaration(dev_, tmp);
-        if (!d) return D3DERR_INVALIDCALL;
+        if (!d) {
+            *ppVD = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
         *ppVD = CreatePeVertexDecl(d, this);
         return S_OK;
     }
@@ -2873,7 +3153,13 @@ public:
         dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
         if (vdecl_ == pVD) return S_OK;
         setRef(vdecl_, pVD);
+        /* Explicit decl resets FVF to 0 (Wine
+         * test_vertex_declaration_fvf_policy line ~692). User-supplied
+         * decls do not back-convert to an FVF in this PE shadow; that
+         * mapping is intentionally lossy. */
+        fvf_ = 0;
         peState_.pendingVdecl = true;
+        peState_.pendingFvf = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexDeclaration(
@@ -2886,10 +3172,20 @@ public:
     /* ── vertex shaders ── */
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* pFn,
                                                   IDirect3DVertexShader9** ppVS) noexcept override {
-        if (!pFn || !ppVS) return D3DERR_INVALIDCALL;
+        if (!ppVS) return D3DERR_INVALIDCALL;
+        /* Wine semantics: leave *ppVS as NULL on validation failure. */
+        const HRESULT validationHr = validateShaderBytecodeForStage(pFn,
+                                                                    /*vertexStage=*/true);
+        if (FAILED(validationHr)) {
+            *ppVS = nullptr;
+            return validationHr;
+        }
         dxmt9DeviceDebugLog("device_create_vertex_shader device=%p code=%p", this, pFn);
         D9CShader* s = dxmt9c_device_create_vertex_shader(dev_, reinterpret_cast<const uint32_t*>(pFn));
-        if (!s) return D3DERR_INVALIDCALL;
+        if (!s) {
+            *ppVS = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
         *ppVS = CreatePeVertexShader(s, this);
         return S_OK;
     }
@@ -2908,10 +3204,53 @@ public:
         if (!ppVS) return D3DERR_INVALIDCALL;
         if (vs_) vs_->AddRef(); *ppVS = vs_; return S_OK;
     }
+    /* Constant register-file caps. The Wine constant-roundtrip tests use
+     * D3DCAPS9::MaxVertexShaderConst as the F-register cap (256 for the
+     * sm3-class caps we report); I/B are fixed at 16 across all real
+     * D3D9 hardware. */
+    static constexpr UINT kVsConstFMax = 256;
+    static constexpr UINT kVsConstIMax = 16;
+    static constexpr UINT kVsConstBMax = 16;
+    static constexpr UINT kPsConstFMax = 224;
+    static constexpr UINT kPsConstIMax = 16;
+    static constexpr UINT kPsConstBMax = 16;
+
+    /// Common range-validity check. count==0 short-circuits to S_OK (a
+    /// documented no-op); pData==NULL with count>0 fails INVALIDCALL.
+    /// Overflow-safe.
+    [[nodiscard]] static HRESULT validateConstRange(UINT start, UINT count,
+                                                    const void* pData,
+                                                    UINT maxRegisters) {
+        if (count == 0) return S_OK;
+        if (!pData) return D3DERR_INVALIDCALL;
+        const uint64_t end = static_cast<uint64_t>(start) + count;
+        if (end > maxRegisters) return D3DERR_INVALIDCALL;
+        return S_OK;
+    }
+
+    /// Read a contiguous range out of a PE const shadow.
+    /// If the shadow has not been grown to cover [start, start+count),
+    /// the missing tail is zero-filled (matching the post-Reset default
+    /// register state).
+    static void readConstShadow(const ConstShadow& shadow,
+                                UINT start, void* pData, UINT count,
+                                std::size_t elemSize) {
+        if (count == 0 || !pData) return;
+        std::memset(pData, 0, count * elemSize);
+        const std::size_t base = static_cast<std::size_t>(start) * elemSize;
+        const std::size_t want = static_cast<std::size_t>(count) * elemSize;
+        if (shadow.values.size() <= base) return;
+        const std::size_t avail =
+            std::min<std::size_t>(want, shadow.values.size() - base);
+        std::memcpy(pData, shadow.values.data() + base, avail);
+    }
+
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstFMax);
+        if (FAILED(hr)) return hr;
         // Shadow-only: defer the record until the next flushPendingConsts()
         // (called before each draw record + at chunk commit).
         touchConstShadow(peConsts_.vsConstF, start, count, pData, sizeof(float) * 4);
@@ -2919,29 +3258,42 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start, float* pData,
                                                         UINT count) noexcept override {
-        return hr32(dxmt9c_device_get_vs_const_f(dev_, start, pData, count));
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstFMax);
+        if (FAILED(hr)) return hr;
+        readConstShadow(peConsts_.vsConstF, start, pData, count, sizeof(float) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
+        if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.vsConstI, start, count, pData, sizeof(int32_t) * 4);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantI(UINT start, INT* pData,
                                                         UINT count) noexcept override {
-        (void)start; (void)pData; (void)count; return S_OK; /* stub */
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
+        if (FAILED(hr)) return hr;
+        readConstShadow(peConsts_.vsConstI, start, pData, count, sizeof(int32_t) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
+        if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.vsConstB, start, count, pData, sizeof(uint32_t));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantB(UINT start, BOOL* pData,
                                                         UINT count) noexcept override {
-        (void)start; (void)pData; (void)count; return S_OK; /* stub */
+        const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
+        if (FAILED(hr)) return hr;
+        readConstShadow(peConsts_.vsConstB, start, pData, count, sizeof(uint32_t));
+        return S_OK;
     }
 
     /* ── stream sources ── */
@@ -3003,10 +3355,19 @@ public:
     /* ── pixel shaders ── */
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* pFn,
                                                  IDirect3DPixelShader9** ppPS) noexcept override {
-        if (!pFn || !ppPS) return D3DERR_INVALIDCALL;
+        if (!ppPS) return D3DERR_INVALIDCALL;
+        const HRESULT validationHr = validateShaderBytecodeForStage(pFn,
+                                                                    /*vertexStage=*/false);
+        if (FAILED(validationHr)) {
+            *ppPS = nullptr;
+            return validationHr;
+        }
         dxmt9DeviceDebugLog("device_create_pixel_shader device=%p code=%p", this, pFn);
         D9CShader* s = dxmt9c_device_create_pixel_shader(dev_, reinterpret_cast<const uint32_t*>(pFn));
-        if (!s) return D3DERR_INVALIDCALL;
+        if (!s) {
+            *ppPS = nullptr;
+            return D3DERR_INVALIDCALL;
+        }
         *ppPS = CreatePePixelShader(s, this);
         return S_OK;
     }
@@ -3025,34 +3386,49 @@ public:
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_f device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstFMax);
+        if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.psConstF, start, count, pData, sizeof(float) * 4);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantF(UINT start, float* pData,
                                                        UINT count) noexcept override {
-        return hr32(dxmt9c_device_get_ps_const_f(dev_, start, pData, count));
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstFMax);
+        if (FAILED(hr)) return hr;
+        readConstShadow(peConsts_.psConstF, start, pData, count, sizeof(float) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
+        if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.psConstI, start, count, pData, sizeof(int32_t) * 4);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantI(UINT start, INT* pData,
                                                        UINT count) noexcept override {
-        (void)start; (void)pData; (void)count; return S_OK;
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
+        if (FAILED(hr)) return hr;
+        readConstShadow(peConsts_.psConstI, start, pData, count, sizeof(int32_t) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
+        if (FAILED(hr)) return hr;
         touchConstShadow(peConsts_.psConstB, start, count, pData, sizeof(uint32_t));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetPixelShaderConstantB(UINT start, BOOL* pData,
                                                        UINT count) noexcept override {
-        (void)start; (void)pData; (void)count; return S_OK;
+        const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
+        if (FAILED(hr)) return hr;
+        readConstShadow(peConsts_.psConstB, start, pData, count, sizeof(uint32_t));
+        return S_OK;
     }
 
     /* ── draw calls ── */
