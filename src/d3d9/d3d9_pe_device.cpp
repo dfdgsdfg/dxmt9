@@ -1686,6 +1686,20 @@ public:
         dxmt9DeviceDebugLog("device_get_back_buffer device=%p sc=%u idx=%u", this, sc, idx);
         D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, sc);
         if (!chain) return D3DERR_INVALIDCALL;
+        // Wine d3d9 test_swapchain_parameters: GetBackBuffer with an
+        // index meeting or exceeding the swapchain's BackBufferCount
+        // returns D3DERR_INVALIDCALL — *ppS must remain NULL on
+        // failure, but cppcheck'd test asserts the pointer is left
+        // untouched at the deadbeef sentinel only on the swapchain
+        // path; the device path's spec resets it to NULL above and
+        // expects NULL back.
+        D9CPresentParams cppGuard{};
+        if (SUCCEEDED(hr32(dxmt9c_swapchain_get_present_params(chain, &cppGuard)))) {
+            if (idx >= cppGuard.backBufferCount) {
+                dxmt9c_swapchain_release(chain);
+                return D3DERR_INVALIDCALL;
+            }
+        }
         D9CSurface* s = dxmt9c_swapchain_get_back_buffer(chain, idx, 0);
         if (!s) {
             dxmt9c_swapchain_release(chain);
@@ -1858,6 +1872,29 @@ public:
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_render_target device=%p size=%ux%u fmt=%u ms=%u msQual=%u lockable=%u",
                             this, w, h, (unsigned)fmt, (unsigned)ms, (unsigned)msQual, (unsigned)lockable);
+        // Wine d3d9 test_invalid_multisample: CreateRenderTarget probes
+        // CheckDeviceMultiSampleType to validate the (sampleCount,
+        // quality) pair before dispatching the allocation. Mapping:
+        //   - D3DMULTISAMPLE_NONE + quality>=1 → INVALIDCALL
+        //   - CheckDeviceMultiSampleType returns NOTAVAILABLE → INVALIDCALL
+        //   - quality >= reportedLevels → INVALIDCALL
+        // The backend allocator silently dropped quality, so the
+        // quality-vs-reported check has to live at the PE boundary.
+        if (ms == D3DMULTISAMPLE_NONE && msQual != 0) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (ms != D3DMULTISAMPLE_NONE && factory_) {
+            DWORD reportedQuality = 0;
+            const HRESULT msHr = factory_->CheckDeviceMultiSampleType(
+                adapter_, deviceType_, fmt, /*windowed=*/FALSE, ms,
+                &reportedQuality);
+            if (FAILED(msHr)) {
+                return D3DERR_INVALIDCALL;
+            }
+            if (msQual >= reportedQuality) {
+                return D3DERR_INVALIDCALL;
+            }
+        }
         uint64_t sh = psh ? (uint64_t)(uintptr_t)*psh : 0;
         D9CSurface* s = dxmt9c_device_create_render_target(dev_, w, h,
                                                             (uint32_t)fmt,
@@ -2602,6 +2639,11 @@ public:
                                                     DWORD value) noexcept override {
         dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
+        // Wine d3d9 test_limits: SetTextureStageState with a stage index
+        // meeting or exceeding caps.MaxTextureBlendStages returns
+        // D3DERR_INVALIDCALL. dxmt9 reports MaxTextureBlendStages == 8
+        // (kPeTextureStageSlots) so anything >= 8 is out of range.
+        if (stage >= kPeTextureStageSlots) return D3DERR_INVALIDCALL;
         const uint32_t stageSlot = textureStageSlot(stage);
         const uint32_t stateSlot = textureStageStateSlot(type);
         uint32_t shadowValue = 0;
@@ -2757,6 +2799,18 @@ public:
                                           IDirect3DBaseTexture9* pTex) noexcept override {
         dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
                             this, (unsigned)stage, pTex);
+        // Wine d3d9 test_limits: SetTexture with a stage at or beyond
+        // caps.MaxSimultaneousTextures (8) — but not in the vertex
+        // texture sampler range D3DVERTEXTEXTURESAMPLER0..3 (257..260)
+        // — returns D3DERR_INVALIDCALL. textureBindingSlot accepts
+        // 0..kPeFragmentSamplerSlots-1 (=15) which over-promises the
+        // exposed cap; tighten the front-end guard here so the device
+        // reports the same surface area as makeDefaultCaps advertises.
+        constexpr DWORD kMaxFragmentTextureStage = 8;
+        if (stage >= kMaxFragmentTextureStage &&
+            (stage < D3DVERTEXTEXTURESAMPLER0 || stage > D3DVERTEXTEXTURESAMPLER3)) {
+            return D3DERR_INVALIDCALL;
+        }
         uint32_t textureSlot = 0;
         if (!textureBindingSlot(stage, textureSlot)) return D3DERR_INVALIDCALL;
         if (textures_[textureSlot] == pTex) {

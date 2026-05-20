@@ -388,8 +388,17 @@ public:
       UINT idx, D3DBACKBUFFER_TYPE, IDirect3DSurface9 **ppS) noexcept override {
     if (!ppS)
       return D3DERR_INVALIDCALL;
-    *ppS = nullptr;
     dxmt9DeviceDebugLog("swapchain_get_back_buffer sc=%p idx=%u", this, idx);
+    // Wine d3d9 test_swapchain_parameters: GetBackBuffer with an index
+    // >= BackBufferCount returns D3DERR_INVALIDCALL and must NOT
+    // overwrite the caller-supplied *ppS (the test seeds it with
+    // 0xdeadbeef and asserts the sentinel survives).
+    D9CPresentParams cppGuard{};
+    if (SUCCEEDED(hr32(dxmt9c_swapchain_get_present_params(sc_, &cppGuard)))) {
+      if (idx >= cppGuard.backBufferCount)
+        return D3DERR_INVALIDCALL;
+    }
+    *ppS = nullptr;
     D9CSurface *s = dxmt9c_swapchain_get_back_buffer(sc_, idx, 0);
     if (!s)
       return D3DERR_INVALIDCALL;
