@@ -11,6 +11,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstring>
+#include <unordered_map>
 
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
@@ -317,6 +318,11 @@ class D3D9SwapChainImpl final : public IDirect3DSwapChain9Ex {
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
   bool extended_ = false;
+  // Wine d3d9 contract (test_swapchain_backbuffer_getter_policy +
+  // test_additional_swapchain_backbuffer_bounds): repeated
+  // GetBackBuffer(idx, *, &out) calls must return the same COM pointer
+  // for the same idx regardless of D3DBACKBUFFER_TYPE.
+  std::unordered_map<UINT, IDirect3DSurface9 *> cachedBackBuffers_;
 
 public:
   D3D9SwapChainImpl(D9CSwapChain *sc, IDirect3DDevice9 *device,
@@ -327,6 +333,11 @@ public:
       device_->AddRef();
   }
   ~D3D9SwapChainImpl() {
+    for (auto &entry : cachedBackBuffers_) {
+      if (entry.second)
+        entry.second->Release();
+    }
+    cachedBackBuffers_.clear();
     dxmt9c_swapchain_release(sc_);
     if (device_)
       device_->Release();
@@ -399,12 +410,22 @@ public:
         return D3DERR_INVALIDCALL;
     }
     *ppS = nullptr;
+    if (auto it = cachedBackBuffers_.find(idx); it != cachedBackBuffers_.end()) {
+      it->second->AddRef();
+      *ppS = it->second;
+      return S_OK;
+    }
     D9CSurface *s = dxmt9c_swapchain_get_back_buffer(sc_, idx, 0);
     if (!s)
       return D3DERR_INVALIDCALL;
-    *ppS = CreatePeSurface(s, device_,
-                           static_cast<IDirect3DSwapChain9 *>(this), recorder_,
-                           false);
+    auto *surface = CreatePeSurface(
+        s, device_, static_cast<IDirect3DSwapChain9 *>(this), recorder_, false);
+    // Wine d3d9: same idx must yield the same COM pointer across calls.
+    // Keep one internal reference so future Get* lookups can AddRef and
+    // return the cached pointer.
+    surface->AddRef();
+    cachedBackBuffers_.emplace(idx, surface);
+    *ppS = surface;
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE

@@ -1801,6 +1801,21 @@ public:
         D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
         if (!sc) return D3DERR_INVALIDCALL;
         *ppSC = CreatePeSwapChain(sc, this, this, extended_);
+        // Wine d3d9 post-create mutation of pPP (additional swapchain only):
+        //   * BackBufferCount=0 normalises to 1 (clamped to a documented
+        //     minimum) and is written back to the caller's struct.
+        //   * hDeviceWindow is cleared on the additional swapchain's view
+        //     of the present parameters — the swapchain's internal record
+        //     still stores the device's focus window (which
+        //     IDirect3DSwapChain9::GetPresentParameters reports), but the
+        //     mutated pPP struct visible to the caller has hDeviceWindow
+        //     zeroed.
+        // Tests: test_additional_swapchain_backbuffer_bounds at
+        // tests/conformance/d3d9/d3d9_conformance_swapchain.c:443-444.
+        if (pPP->BackBufferCount == 0) {
+            pPP->BackBufferCount = 1;
+        }
+        pPP->hDeviceWindow = nullptr;
         return S_OK;
     }
 
@@ -3358,21 +3373,12 @@ public:
         dxmt9DeviceDebugLog("device_set_stream_source device=%p stream=%u buf=%p offset=%u stride=%u",
                             this, stream, pBuf, offset, stride);
         if (stream >= 16) return D3DERR_INVALIDCALL;
-        // Wine d3d9 quirk: SetStreamSource(NULL, 0, 0) is the
-        // "deactivate stream" idiom -- apps call it to detach the bound
-        // buffer without losing the previously cached offset/stride.
-        // See test_stream_source_null_layout_policy. Other null calls
-        // (buffer==NULL with non-zero offset, see
-        // test_stream_source_null_offset_alignment_policy) flow
-        // through the regular update path.
-        if (pBuf == nullptr && offset == 0 && stride == 0) {
-            if (streamSrc_[stream] == nullptr) {
-                return S_OK;
-            }
-            setRef(streamSrc_[stream], (IDirect3DVertexBuffer9*)nullptr);
-            peState_.pendingStreamMask |= 1u << stream;
-            return S_OK;
-        }
+        // Wine d3d9: SetStreamSource stores the caller-supplied
+        // (buffer, offset, stride) verbatim. Get* round-trips that
+        // exact triple regardless of whether the buffer pointer is
+        // NULL — null+(4,32) keeps (4,32); null+(0,0) keeps (0,0).
+        // Tests: test_stream_source_null_layout_policy (null+(4,32))
+        // and test_null_stream_state (null+(0,0)).
         if (shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
             return S_OK;
         }
