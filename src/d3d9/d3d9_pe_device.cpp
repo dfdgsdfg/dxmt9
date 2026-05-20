@@ -2,11 +2,13 @@
  * All methods delegate to the dxmt9c_* C API from dxmt9/device_c.h. */
 
 #include <algorithm>
+#include <array>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 #include <utility>
 #include "d3d9_pe.hpp"
 #include "d3d9_pe_device_child.hpp"
@@ -299,6 +301,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
+
+    /* palette shadow — Wine conformance round-trip. PE-only; the
+     * backend doesn't render through palette textures yet, so we just
+     * shadow Set/Get and gate SetCurrentTexturePalette on whether the
+     * index was ever set. */
+    std::unordered_map<UINT, std::array<PALETTEENTRY, 256>> palettes_{};
+    UINT currentPaletteIndex_ = 0;
+    bool currentPaletteSet_ = false;
 
     template<typename T>
     static void setRef(T*& slot, T* newVal) {
@@ -1350,6 +1360,24 @@ public:
         for (UINT& freq : streamFreq_) {
             freq = 1;
         }
+        // T2: Initialize viewport/scissor PE shadow from the implicit
+        // swapchain's back-buffer rect so GetViewport/GetScissorRect
+        // round-trip correctly before any Set call (Wine conformance:
+        // test_viewport_scissor_state_getters). Mirrors the Reset()
+        // / ResetEx() block at lines ~1601 / ~3154.
+        if (dev_) {
+            D9CSwapChain* chain = dxmt9c_device_get_swap_chain(dev_, 0);
+            if (chain) {
+                D9CPresentParams cpp{};
+                if (SUCCEEDED(hr32(dxmt9c_swapchain_get_present_params(chain, &cpp)))) {
+                    const uint32_t w = std::max<uint32_t>(1u, cpp.backBufferWidth);
+                    const uint32_t h = std::max<uint32_t>(1u, cpp.backBufferHeight);
+                    peState_.viewportShadow = D9CViewport{0, 0, w, h, 0.0f, 1.0f};
+                    peState_.scissorShadow  = D9CRect{0, 0, (int32_t)w, (int32_t)h};
+                }
+                dxmt9c_swapchain_release(chain);
+            }
+        }
         dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u devType=%u behavior=0x%x window=%p extended=%u",
                             this, static_cast<void*>(dev_), static_cast<void*>(factory_),
                             adapter_, (unsigned)deviceType_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
@@ -2288,8 +2316,10 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetViewport(D3DVIEWPORT9* pVP) noexcept override {
         if (!pVP) return D3DERR_INVALIDCALL;
-        D9CViewport vp{};
-        dxmt9c_device_get_viewport(dev_, &vp);
+        // Phase 12: PE shadow is the source of truth. SetViewport writes
+        // only into peState_.viewportShadow (recorder-active path);
+        // round-trip the same value.
+        const D9CViewport& vp = peState_.viewportShadow;
         pVP->X = vp.x; pVP->Y = vp.y;
         pVP->Width = vp.width; pVP->Height = vp.height;
         pVP->MinZ = vp.minZ;   pVP->MaxZ   = vp.maxZ;
@@ -2312,8 +2342,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetScissorRect(RECT* pR) noexcept override {
         if (!pR) return D3DERR_INVALIDCALL;
-        D9CRect cr{};
-        dxmt9c_device_get_scissor_rect(dev_, &cr);
+        // Phase 12: PE shadow is the source of truth (see GetViewport).
+        const D9CRect& cr = peState_.scissorShadow;
         pR->left = cr.left; pR->top = cr.top;
         pR->right = cr.right; pR->bottom = cr.bottom;
         return S_OK;
@@ -2402,9 +2432,22 @@ public:
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_light_enable(dev_, idx, en ? 1u : 0u));
     }
-    HRESULT STDMETHODCALLTYPE GetLightEnable(DWORD, BOOL* pEn) noexcept override {
-        dxmt9DeviceDebugLog("device_get_light_enable device=%p", this);
-        if (pEn) *pEn = FALSE; return S_OK; /* stub */
+    HRESULT STDMETHODCALLTYPE GetLightEnable(DWORD idx, BOOL* pEn) noexcept override {
+        dxmt9DeviceDebugLog("device_get_light_enable device=%p idx=%u", this, (unsigned)idx);
+        if (!pEn) return D3DERR_INVALIDCALL;
+        // Phase 12: LightEnable shadow is the source of truth for
+        // idx < D9C_DRAW_PACKET_MAX_LIGHTS (the setter writes into
+        // peState_.lightEnableShadow exclusively in the recorder-active
+        // path). High indices fall through to the legacy unix-call —
+        // mirror the boundary so idx out of shadow range stays FALSE
+        // by default (no easy bridge read here without an extra ABI).
+        if (idx < D9C_DRAW_PACKET_MAX_LIGHTS) {
+            const DWORD bit = 1u << idx;
+            *pEn = (peState_.lightEnableShadow & bit) ? TRUE : FALSE;
+        } else {
+            *pEn = FALSE;
+        }
+        return S_OK;
     }
 
     /* ── clip planes ── */
@@ -2423,7 +2466,15 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetClipPlane(DWORD idx, float* pPlane) noexcept override {
         dxmt9DeviceDebugLog("device_get_clip_plane device=%p idx=%u", this, (unsigned)idx);
-        return hr32(dxmt9c_device_get_clip_plane(dev_, idx, pPlane));
+        if (!pPlane) return D3DERR_INVALIDCALL;
+        if (idx >= 6) return D3DERR_INVALIDCALL;
+        // Phase 12: PE shadow is the source of truth — SetClipPlane
+        // writes into peState_.clipPlaneShadow exclusively (the array
+        // is zero-initialized by PeHotStateShadow default ctor, which
+        // matches the D3D9 post-CreateDevice all-zero contract).
+        const std::size_t off = static_cast<std::size_t>(idx) * 4u;
+        std::memcpy(pPlane, &peState_.clipPlaneShadow[off], sizeof(float) * 4);
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetClipStatus(const D3DCLIPSTATUS9*) noexcept override {
         dxmt9DeviceDebugLog("device_set_clip_status device=%p", this);
@@ -2628,22 +2679,62 @@ public:
         if (pPasses) *pPasses = 1; return S_OK;
     }
 
-    /* ── palette (stubs) ── */
-    HRESULT STDMETHODCALLTYPE SetPaletteEntries(UINT palette, const PALETTEENTRY*) noexcept override {
-        dxmt9DeviceDebugLog("device_set_palette_entries device=%p palette=%u", this, palette);
+    /* ── palette — PE-only shadow for Wine conformance round-trip
+     *    (test_set_palette_roundtrip, test_palette_alpha_caps_policy,
+     *     test_palette_current_entry_isolation). The backend doesn't
+     *     yet sample through palette textures; this state lives only
+     *     for the Get/Set contract.
+     * ─────────────────────────────────────────────────────────────── */
+    HRESULT STDMETHODCALLTYPE SetPaletteEntries(UINT palette, const PALETTEENTRY* entries) noexcept override {
+        dxmt9DeviceDebugLog("device_set_palette_entries device=%p palette=%u entries=%p",
+                            this, palette, static_cast<const void*>(entries));
+        if (!entries) return D3DERR_INVALIDCALL;
+        // D3DPTEXTURECAPS_ALPHAPALETTE policy: when the cap is NOT set,
+        // any entry with non-trivial alpha (peFlags != 0xff) is rejected
+        // and the previous palette must be preserved.
+        D9CCaps cc{};
+        bool alphaPaletteCap = false;
+        if (SUCCEEDED(hr32(dxmt9c_device_get_caps(dev_, &cc)))) {
+            D3DCAPS9 dcaps{};
+            FillD3DCaps9(cc, &dcaps);
+            alphaPaletteCap = (dcaps.TextureCaps & D3DPTEXTURECAPS_ALPHAPALETTE) != 0;
+        }
+        if (!alphaPaletteCap) {
+            for (UINT i = 0; i < 256; ++i) {
+                if (entries[i].peFlags != 0xff) {
+                    return D3DERR_INVALIDCALL;
+                }
+            }
+        }
+        auto& slot = palettes_[palette];
+        std::memcpy(slot.data(), entries, sizeof(PALETTEENTRY) * 256);
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE GetPaletteEntries(UINT palette, PALETTEENTRY*) noexcept override {
-        dxmt9DeviceDebugLog("device_get_palette_entries device=%p palette=%u", this, palette);
+    HRESULT STDMETHODCALLTYPE GetPaletteEntries(UINT palette, PALETTEENTRY* out) noexcept override {
+        dxmt9DeviceDebugLog("device_get_palette_entries device=%p palette=%u out=%p",
+                            this, palette, static_cast<void*>(out));
+        if (!out) return D3DERR_INVALIDCALL;
+        const auto it = palettes_.find(palette);
+        if (it == palettes_.end()) return D3DERR_INVALIDCALL;
+        std::memcpy(out, it->second.data(), sizeof(PALETTEENTRY) * 256);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetCurrentTexturePalette(UINT palette) noexcept override {
         dxmt9DeviceDebugLog("device_set_current_texture_palette device=%p palette=%u", this, palette);
+        if (palettes_.find(palette) == palettes_.end()) {
+            return D3DERR_INVALIDCALL;
+        }
+        currentPaletteIndex_ = palette;
+        currentPaletteSet_ = true;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetCurrentTexturePalette(UINT* p) noexcept override {
-        dxmt9DeviceDebugLog("device_get_current_texture_palette device=%p", this);
-        if (p) *p = 0; return S_OK;
+        dxmt9DeviceDebugLog("device_get_current_texture_palette device=%p out=%p",
+                            this, static_cast<void*>(p));
+        if (!p) return D3DERR_INVALIDCALL;
+        if (!currentPaletteSet_) return D3DERR_INVALIDCALL;
+        *p = currentPaletteIndex_;
+        return S_OK;
     }
 
     /* ── soft VP / NPatches (stubs) ── */
