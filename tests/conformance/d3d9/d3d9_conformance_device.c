@@ -2062,8 +2062,12 @@ void test_null_stream_state(const struct d3d9_api *api)
                 &stride);
         CHECK_HR(hr, D3D_OK);
         CHECK_TRUE(stream == NULL);
+        /* Wine D3D9 deactivate-stream idiom: SetStreamSource(NULL, 0, 0)
+         * detaches the buffer but preserves the previously cached
+         * offset/stride. See test_stream_source_null_layout_policy for
+         * the (vb, 4, 32) -> (NULL, 4, 32) variant of the same rule. */
         CHECK_TRUE(offset == 0);
-        CHECK_TRUE(stride == 0);
+        CHECK_TRUE(stride == 16);
 
         IDirect3DVertexBuffer9_Release(vertex_buffer);
     }

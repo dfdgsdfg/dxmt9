@@ -511,6 +511,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
      * are released in releaseAllBound(). */
     std::unordered_map<DWORD, IDirect3DVertexDeclaration9*> fvfDeclCache_{};
     IDirect3DSurface9*         cachedBackBuffer0_ = nullptr;
+    /* Per-swap-chain wrapper cache: Wine d3d9 contract
+     * (test_swapchain_backbuffer_getter_policy) is that
+     * IDirect3DDevice9::GetBackBuffer(sc, idx, …) returns the same COM
+     * pointer as the prior IDirect3DSwapChain9::GetBackBuffer(idx, …)
+     * called against the same swap-chain. Achieve this by routing both
+     * device-level GetBackBuffer and GetSwapChain through a stable
+     * per-sc wrapper that owns the back-buffer cache. */
+    std::unordered_map<UINT, IDirect3DSwapChain9*> swapchainWrappers_{};
 
     PeHotStateShadow peState_{};
     PeConstShadowBlock peConsts_{};
@@ -558,6 +566,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
         dsSurfaceExplicit_ = false;
         setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
+        for (auto& [idx, sc] : swapchainWrappers_) {
+            if (sc) sc->Release();
+        }
+        swapchainWrappers_.clear();
         // T2 device-lost: explicitly nullify the device's primary RT slot
         // and depth-stencil on the C side so no stale Metal surface handle
         // survives a Reset(). The PE shadow's pendingRtMask/pendingDs is
@@ -1795,7 +1807,14 @@ public:
         cpp.backBufferFormat = (uint32_t)pPP->BackBufferFormat;
         cpp.backBufferCount  = pPP->BackBufferCount;
         cpp.swapEffect       = (uint32_t)pPP->SwapEffect;
-        cpp.deviceWindow     = (uint64_t)(uintptr_t)pPP->hDeviceWindow;
+        // Wine d3d9: when the caller leaves hDeviceWindow NULL the
+        // swap-chain inherits the device's focus window (the one that
+        // owns the device). IDirect3DSwapChain9::GetPresentParameters
+        // then reports the resolved window — see
+        // test_additional_swapchain_backbuffer_bounds line 475.
+        HWND effectiveDeviceWindow = pPP->hDeviceWindow ? pPP->hDeviceWindow
+                                                       : creationWindow_;
+        cpp.deviceWindow     = (uint64_t)(uintptr_t)effectiveDeviceWindow;
         cpp.windowed         = pPP->Windowed ? 1u : 0u;
         cpp.presentationInterval = pPP->PresentationInterval;
         D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
@@ -1823,9 +1842,19 @@ public:
                                             IDirect3DSwapChain9** ppSC) noexcept override {
         if (!ppSC) return D3DERR_INVALIDCALL;
         *ppSC = nullptr;
+        if (auto it = swapchainWrappers_.find(index);
+            it != swapchainWrappers_.end()) {
+            it->second->AddRef();
+            *ppSC = it->second;
+            return S_OK;
+        }
         D9CSwapChain* sc = dxmt9c_device_get_swap_chain(dev_, index);
         if (!sc) return D3DERR_INVALIDCALL;
-        *ppSC = CreatePeSwapChain(sc, this, this, extended_);
+        auto* wrapper = CreatePeSwapChain(sc, this, this, extended_);
+        wrapper->AddRef();  // device retains one ref in the cache
+        swapchainWrappers_.emplace(index,
+                static_cast<IDirect3DSwapChain9*>(wrapper));
+        *ppSC = static_cast<IDirect3DSwapChain9*>(wrapper);
         return S_OK;
     }
 
@@ -1930,7 +1959,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT sc, UINT idx,
-                                             D3DBACKBUFFER_TYPE,
+                                             D3DBACKBUFFER_TYPE type,
                                              IDirect3DSurface9** ppS) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
@@ -1956,21 +1985,31 @@ public:
             dxmt9c_swapchain_release(chain);
             return D3DERR_INVALIDCALL;
         }
-        if (sc == 0 && idx == 0 && cachedBackBuffer0_) {
-            dxmt9c_surface_release(s);
-            dxmt9c_swapchain_release(chain);
-            cachedBackBuffer0_->AddRef();
-            *ppS = cachedBackBuffer0_;
-            return S_OK;
-        }
-        auto* swapchain = CreatePeSwapChain(chain, this, this, extended_);
-        auto* surface = CreatePeSurface(s, this, static_cast<IDirect3DSwapChain9*>(swapchain), this, false);
-        if (sc == 0 && idx == 0) {
-            setRef(cachedBackBuffer0_, static_cast<IDirect3DSurface9*>(surface));
-        }
-        *ppS = surface;
+        // Release the C-side handles we hold; the cached swap-chain
+        // wrapper owns its own retained references and the eventual
+        // PE surface wrapper holds its own ref via CreatePeSurface.
+        dxmt9c_surface_release(s);
+        dxmt9c_swapchain_release(chain);
+        // Wine d3d9 contract: device-level GetBackBuffer must return
+        // the same COM wrapper as the matching swap-chain GetBackBuffer
+        // for any (sc, idx). Route through the cached swap-chain
+        // wrapper so its per-idx back-buffer cache is the single source
+        // of truth. See test_swapchain_backbuffer_getter_policy lines
+        // 371/379 — the assertion typed == backbuffer requires this
+        // identity across the device-level and swap-chain-level calls.
+        IDirect3DSwapChain9* swapchain = nullptr;
+        const HRESULT swapHr = GetSwapChain(sc, &swapchain);
+        if (FAILED(swapHr) || !swapchain) return swapHr;
+        const HRESULT bbHr = swapchain->GetBackBuffer(idx, type, ppS);
         swapchain->Release();
-        return S_OK;
+        if (sc == 0 && idx == 0 && SUCCEEDED(bbHr) && *ppS) {
+            // Preserve the pre-existing cachedBackBuffer0_ alias used by
+            // the rest of the device implementation (e.g. resetState
+            // explicit-clear paths) without holding an extra reference
+            // beyond the swap-chain cache.
+            setRef(cachedBackBuffer0_, *ppS);
+        }
+        return bbHr;
     }
 
     HRESULT STDMETHODCALLTYPE GetRasterStatus(UINT swapChain, D3DRASTER_STATUS* p) noexcept override {
@@ -3373,12 +3412,22 @@ public:
         dxmt9DeviceDebugLog("device_set_stream_source device=%p stream=%u buf=%p offset=%u stride=%u",
                             this, stream, pBuf, offset, stride);
         if (stream >= 16) return D3DERR_INVALIDCALL;
-        // Wine d3d9: SetStreamSource stores the caller-supplied
-        // (buffer, offset, stride) verbatim. Get* round-trips that
-        // exact triple regardless of whether the buffer pointer is
-        // NULL — null+(4,32) keeps (4,32); null+(0,0) keeps (0,0).
-        // Tests: test_stream_source_null_layout_policy (null+(4,32))
-        // and test_null_stream_state (null+(0,0)).
+        // Wine d3d9 deactivate-stream idiom: SetStreamSource(NULL, 0, 0)
+        // detaches the buffer while preserving the previously cached
+        // offset/stride for the stream slot — verified in
+        // test_stream_source_null_layout_policy at line ~2375 where
+        // (vb, 4, 32) followed by (NULL, 0, 0) yields a Get of
+        // (NULL, 4, 32). Other null calls (NULL with non-zero offset
+        // or non-zero stride) flow through the regular store-as-given
+        // path.
+        if (pBuf == nullptr && offset == 0 && stride == 0) {
+            if (streamSrc_[stream] == nullptr) {
+                return S_OK;
+            }
+            setRef(streamSrc_[stream], (IDirect3DVertexBuffer9*)nullptr);
+            peState_.pendingStreamMask |= 1u << stream;
+            return S_OK;
+        }
         if (shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
             return S_OK;
         }

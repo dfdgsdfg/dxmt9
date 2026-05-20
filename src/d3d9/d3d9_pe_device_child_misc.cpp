@@ -395,6 +395,27 @@ public:
   GetFrontBufferData(IDirect3DSurface9 *) noexcept override {
     return D3DERR_INVALIDCALL;
   }
+  // Cache lookup shared by the swapchain-level and device-level
+  // GetBackBuffer paths so the same idx always reports the same COM
+  // pointer regardless of the entry surface (see
+  // test_swapchain_backbuffer_getter_policy where the device-level
+  // IDirect3DDevice9::GetBackBuffer call must match the prior
+  // swapchain-level call).
+  IDirect3DSurface9 *acquireCachedBackBuffer(UINT idx) {
+    if (auto it = cachedBackBuffers_.find(idx); it != cachedBackBuffers_.end()) {
+      it->second->AddRef();
+      return it->second;
+    }
+    D9CSurface *s = dxmt9c_swapchain_get_back_buffer(sc_, idx, 0);
+    if (!s)
+      return nullptr;
+    auto *surface = CreatePeSurface(
+        s, device_, static_cast<IDirect3DSwapChain9 *>(this), recorder_, false);
+    surface->AddRef();
+    cachedBackBuffers_.emplace(idx, surface);
+    return surface;
+  }
+
   HRESULT STDMETHODCALLTYPE GetBackBuffer(
       UINT idx, D3DBACKBUFFER_TYPE, IDirect3DSurface9 **ppS) noexcept override {
     if (!ppS)
