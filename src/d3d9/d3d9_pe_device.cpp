@@ -583,7 +583,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         fvf_ = 0;
         std::memset(streamOff_, 0, sizeof(streamOff_));
         std::memset(streamStr_, 0, sizeof(streamStr_));
-        std::memset(streamFreq_, 0, sizeof(streamFreq_));
+        // D3D9 default stream-source frequency divider is 1 (not 0,
+        // which encodes an invalid value -- a zero divider with no
+        // INDEXED/INSTANCE flag is rejected at Set time). Restoring 1
+        // here keeps Reset()-then-Get round-trips consistent with
+        // test_stream_source_frequency_state.
+        for (UINT& freq : streamFreq_) {
+            freq = 1;
+        }
     }
 
     bool hasPendingHotState() const {
@@ -2863,16 +2870,41 @@ public:
     }
 
     /* ── texture stage / sampler states ── */
+    // Wine d3d9 texture-stage-state input validation. Tested by
+    // test_texture_stage_states (line ~1535): the stage must be within
+    // [0..MaxTextureBlendStages-1] and the type id must be a defined
+    // D3DTSS_*. dxmt9 reports MaxTextureBlendStages=8.
+    static constexpr DWORD kFragmentBlendStageCount = 8;
+    static bool isValidTextureStageStateType(D3DTEXTURESTAGESTATETYPE type) noexcept {
+        const uint32_t t = static_cast<uint32_t>(type);
+        if (t == 0u || t > 32u) return false;
+        // Valid D3DTSS_* IDs in d3d9types.h within [1..32]:
+        //   1..11  COLOROP, COLORARG1, COLORARG2, ALPHAOP, ALPHAARG1,
+        //          ALPHAARG2, BUMPENVMAT00..11, TEXCOORDINDEX
+        //   22..24 BUMPENVLSCALE, BUMPENVLOFFSET, TEXTURETRANSFORMFLAGS
+        //   26..28 COLORARG0, ALPHAARG0, RESULTARG
+        //   32     CONSTANT
+        // Reserved gaps (12..21, 25, 29..31) report INVALIDCALL on
+        // native -- 0xdead is filtered by the t>32 check above; the
+        // bit-mask below pins the in-range gaps as well.
+        constexpr uint64_t kValid =
+            (0x7FFull << 1) |   // 1..11
+            (0x7ull << 22) |    // 22..24
+            (0x7ull << 26) |    // 26..28
+            (1ull << 32);       // 32
+        return (kValid & (1ull << t)) != 0;
+    }
     HRESULT STDMETHODCALLTYPE SetTextureStageState(DWORD stage,
                                                     D3DTEXTURESTAGESTATETYPE type,
                                                     DWORD value) noexcept override {
         dxmt9DeviceDebugLog("device_set_texture_stage_state device=%p stage=%u type=%u value=0x%x",
                             this, (unsigned)stage, (unsigned)type, (unsigned)value);
-        // Wine d3d9 test_limits: SetTextureStageState with a stage index
-        // meeting or exceeding caps.MaxTextureBlendStages returns
-        // D3DERR_INVALIDCALL. dxmt9 reports MaxTextureBlendStages == 8
-        // (kPeTextureStageSlots) so anything >= 8 is out of range.
-        if (stage >= kPeTextureStageSlots) return D3DERR_INVALIDCALL;
+        // Wine d3d9 test_limits + test_texture_stage_states: reject
+        // out-of-range stage (>= caps.MaxTextureBlendStages == 8) and
+        // unrecognised D3DTSS_* type with D3DERR_INVALIDCALL at the
+        // device-method boundary.
+        if (stage >= kFragmentBlendStageCount) return D3DERR_INVALIDCALL;
+        if (!isValidTextureStageStateType(type)) return D3DERR_INVALIDCALL;
         const uint32_t stageSlot = textureStageSlot(stage);
         const uint32_t stateSlot = textureStageStateSlot(type);
         uint32_t shadowValue = 0;
@@ -2895,6 +2927,8 @@ public:
                                                     D3DTEXTURESTAGESTATETYPE type,
                                                     DWORD* pValue) noexcept override {
         if (!pValue) return D3DERR_INVALIDCALL;
+        if (stage >= kFragmentBlendStageCount) return D3DERR_INVALIDCALL;
+        if (!isValidTextureStageStateType(type)) return D3DERR_INVALIDCALL;
         const uint32_t stageSlot = textureStageSlot(stage);
         const uint32_t stateSlot = textureStageStateSlot(type);
         uint32_t shadowValue = 0;
@@ -3024,6 +3058,22 @@ public:
     float   STDMETHODCALLTYPE GetNPatchMode() noexcept override { return 0.0f; }
 
     /* ── textures ── */
+    // Wine d3d9 texture-stage validation. Valid stages are the FFP
+    // fragment sampler range [0..MaxSimultaneousTextures-1] (=[0..7]
+    // under the caps dxmt9 reports) plus the vertex texture sampler
+    // range D3DVERTEXTEXTURESAMPLER0..D3DVERTEXTEXTURESAMPLER3.
+    // Anything else is D3DERR_INVALIDCALL (see test_get_set_texture
+    // around line 2693: SetTexture(MaxSimultaneousTextures, ...) must
+    // fail and GetTexture must leave the caller's out-pointer
+    // untouched).
+    static constexpr DWORD kFragmentTextureStageCount = 8;
+    static bool fragmentTextureStageSlot(DWORD stage, uint32_t& slot) noexcept {
+        if (stage < kFragmentTextureStageCount) {
+            slot = static_cast<uint32_t>(stage);
+            return true;
+        }
+        return vertexTextureSamplerSlot(stage, slot);
+    }
     HRESULT STDMETHODCALLTYPE SetTexture(DWORD stage,
                                           IDirect3DBaseTexture9* pTex) noexcept override {
         dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
@@ -3041,7 +3091,7 @@ public:
             return D3DERR_INVALIDCALL;
         }
         uint32_t textureSlot = 0;
-        if (!textureBindingSlot(stage, textureSlot)) return D3DERR_INVALIDCALL;
+        if (!fragmentTextureStageSlot(stage, textureSlot)) return D3DERR_INVALIDCALL;
         if (textures_[textureSlot] == pTex) {
             return S_OK;
         }
@@ -3053,8 +3103,13 @@ public:
                                           IDirect3DBaseTexture9** ppTex) noexcept override {
         if (!ppTex) return D3DERR_INVALIDCALL;
         uint32_t textureSlot = 0;
-        IDirect3DBaseTexture9* t =
-            textureBindingSlot(stage, textureSlot) ? textures_[textureSlot] : nullptr;
+        if (!fragmentTextureStageSlot(stage, textureSlot)) {
+            // Wine leaves the caller's out-pointer untouched on
+            // INVALIDCALL -- test_get_set_texture asserts the sentinel
+            // value (0xdeadbeef) survives the failed call.
+            return D3DERR_INVALIDCALL;
+        }
+        IDirect3DBaseTexture9* t = textures_[textureSlot];
         if (t) t->AddRef();
         *ppTex = t;
         dxmt9DeviceDebugLog("device_get_texture device=%p stage=%u -> tex=%p",
@@ -3303,6 +3358,21 @@ public:
         dxmt9DeviceDebugLog("device_set_stream_source device=%p stream=%u buf=%p offset=%u stride=%u",
                             this, stream, pBuf, offset, stride);
         if (stream >= 16) return D3DERR_INVALIDCALL;
+        // Wine d3d9 quirk: SetStreamSource(NULL, 0, 0) is the
+        // "deactivate stream" idiom -- apps call it to detach the bound
+        // buffer without losing the previously cached offset/stride.
+        // See test_stream_source_null_layout_policy. Other null calls
+        // (buffer==NULL with non-zero offset, see
+        // test_stream_source_null_offset_alignment_policy) flow
+        // through the regular update path.
+        if (pBuf == nullptr && offset == 0 && stride == 0) {
+            if (streamSrc_[stream] == nullptr) {
+                return S_OK;
+            }
+            setRef(streamSrc_[stream], (IDirect3DVertexBuffer9*)nullptr);
+            peState_.pendingStreamMask |= 1u << stream;
+            return S_OK;
+        }
         if (shadowedStreamSourceEquals(stream, pBuf, offset, stride)) {
             return S_OK;
         }
@@ -3316,24 +3386,49 @@ public:
                                                IDirect3DVertexBuffer9** ppBuf,
                                                UINT* pOffset, UINT* pStride) noexcept override {
         if (!ppBuf) return D3DERR_INVALIDCALL;
-        IDirect3DVertexBuffer9* b = streamSrc_[stream < 16 ? stream : 0];
+        if (stream >= 16) return D3DERR_INVALIDCALL;
+        IDirect3DVertexBuffer9* b = streamSrc_[stream];
         if (b) b->AddRef();
         *ppBuf = b;
-        if (pOffset) *pOffset = streamOff_[stream < 16 ? stream : 0];
-        if (pStride) *pStride = streamStr_[stream < 16 ? stream : 0];
+        if (pOffset) *pOffset = streamOff_[stream];
+        if (pStride) *pStride = streamStr_[stream];
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetStreamSourceFreq(UINT stream, UINT freq) noexcept override {
         dxmt9DeviceDebugLog("device_set_stream_source_freq device=%p stream=%u freq=0x%x",
                             this, stream, (unsigned)freq);
+        if (stream >= 16) return D3DERR_INVALIDCALL;
+        // D3D9 SetStreamSourceFreq encoding (D3DSTREAMSOURCE_* in
+        // d3d9types.h):
+        //   - low 24 bits: divider value
+        //   - bit 0x40000000 (INDEXEDDATA): per-instance source stream
+        //   - bit 0x80000000 (INSTANCEDATA): the index source stream
+        // Rules (Wine wined3d_device_set_stream_source_freq, matched by
+        // test_stream_source_frequency_state):
+        //   - Stream 0 may not carry INSTANCEDATA (it cannot be the
+        //     index source stream).
+        //   - INDEXEDDATA and INSTANCEDATA are mutually exclusive.
+        //   - A freq value of 0 (divider 0 with no flag) is invalid.
+        const UINT kIndexedData  = 0x40000000u;
+        const UINT kInstanceData = 0x80000000u;
+        const bool indexedFlag  = (freq & kIndexedData)  != 0;
+        const bool instanceFlag = (freq & kInstanceData) != 0;
+        if (indexedFlag && instanceFlag) return D3DERR_INVALIDCALL;
+        if (stream == 0 && instanceFlag) return D3DERR_INVALIDCALL;
+        if (!indexedFlag && !instanceFlag &&
+            (freq & ~(kIndexedData | kInstanceData)) == 0) {
+            return D3DERR_INVALIDCALL;
+        }
         const HRESULT flushHr = flushPeRecorder();
         if (FAILED(flushHr)) return flushHr;
-        streamFreq_[stream < 16 ? stream : 0] = freq;
+        streamFreq_[stream] = freq;
         return hr32(dxmt9c_device_set_stream_source_freq(dev_, stream, freq));
     }
     HRESULT STDMETHODCALLTYPE GetStreamSourceFreq(UINT stream, UINT* pFreq) noexcept override {
-        const UINT freq = streamFreq_[stream < 16 ? stream : 0];
-        if (pFreq) *pFreq = freq;
+        if (!pFreq) return D3DERR_INVALIDCALL;
+        if (stream >= 16) return D3DERR_INVALIDCALL;
+        const UINT freq = streamFreq_[stream];
+        *pFreq = freq;
         dxmt9DeviceDebugLog("device_get_stream_source_freq device=%p stream=%u -> freq=0x%x",
                             this, stream, (unsigned)freq);
         return S_OK;
