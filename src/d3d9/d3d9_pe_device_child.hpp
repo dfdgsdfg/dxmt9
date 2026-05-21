@@ -98,6 +98,10 @@ CreatePeSwapChain(D9CSwapChain *swapChain, IDirect3DDevice9 *device,
                   bool extended = false);
 
 D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface);
+// True when the PE wrapper currently has a successful Lock outstanding.
+// Used by IDirect3DDevice9::UpdateSurface to enforce the wined3d invariant
+// that the source surface must not be locked when the copy is initiated.
+bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface);
 D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture);
 D9CBuffer *D3D9PeRawVertexBuffer(IDirect3DVertexBuffer9 *buffer);
 D9CBuffer *D3D9PeRawIndexBuffer(IDirect3DIndexBuffer9 *buffer);

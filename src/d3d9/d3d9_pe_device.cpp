@@ -2334,6 +2334,55 @@ public:
                             this, src, dst,
                             srcRect ? "<custom>" : "<full>",
                             dstPt ? "<custom>" : "<origin>");
+        // Wine d3d9 conformance (test_mipmap_surface_update_lock_policy):
+        // UpdateSurface requires the source to be SYSTEMMEM, the
+        // destination to be DEFAULT, matching formats, and the source
+        // not be currently locked. wined3d's
+        // device_update_surface validates all four invariants before
+        // initiating the copy; mirroring them here keeps a malformed
+        // call from generating an upload record.
+        if (!src || !dst) {
+            return D3DERR_INVALIDCALL;
+        }
+        D3DSURFACE_DESC srcDesc{};
+        D3DSURFACE_DESC dstDesc{};
+        if (FAILED(src->GetDesc(&srcDesc)) || FAILED(dst->GetDesc(&dstDesc))) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (srcDesc.Pool != D3DPOOL_SYSTEMMEM ||
+            dstDesc.Pool != D3DPOOL_DEFAULT) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (srcDesc.Format != dstDesc.Format) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (D3D9PeSurfaceIsLocked(src) || D3D9PeSurfaceIsLocked(dst)) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (srcRect) {
+            if (srcRect->left < 0 || srcRect->top < 0 ||
+                srcRect->right <= srcRect->left ||
+                srcRect->bottom <= srcRect->top ||
+                static_cast<UINT>(srcRect->right) > srcDesc.Width ||
+                static_cast<UINT>(srcRect->bottom) > srcDesc.Height) {
+                return D3DERR_INVALIDCALL;
+            }
+        }
+        {
+            const UINT copyW = srcRect ? static_cast<UINT>(srcRect->right - srcRect->left)
+                                       : srcDesc.Width;
+            const UINT copyH = srcRect ? static_cast<UINT>(srcRect->bottom - srcRect->top)
+                                       : srcDesc.Height;
+            if (dstPt) {
+                if (dstPt->x < 0 || dstPt->y < 0 ||
+                    static_cast<UINT>(dstPt->x) + copyW > dstDesc.Width ||
+                    static_cast<UINT>(dstPt->y) + copyH > dstDesc.Height) {
+                    return D3DERR_INVALIDCALL;
+                }
+            } else if (copyW > dstDesc.Width || copyH > dstDesc.Height) {
+                return D3DERR_INVALIDCALL;
+            }
+        }
         D9CRect cs{}, cd{};
         if (srcRect) cs = toR(*srcRect);
         if (dstPt) { cd.left = dstPt->x; cd.top = dstPt->y;

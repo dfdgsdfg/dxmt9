@@ -116,6 +116,43 @@ static DWORD setTextureLod(D9CTexture *texture, DWORD &lod, DWORD value) {
   return S_OK;
 }
 
+// Wine d3d9 conformance: rect/box bounds check shared by surface and
+// texture/cube/volume Lock paths. Returns false when the rect is
+// degenerate (right<=left, bottom<=top), has negative origins, or
+// exceeds the surface dimensions. Matches wined3d's
+// wined3d_resource_check_box_dimensions for the 2D case.
+static bool rectWithinExtents(const RECT *r, UINT width, UINT height) {
+  if (!r)
+    return true;
+  if (r->left < 0 || r->top < 0)
+    return false;
+  if (r->right <= r->left || r->bottom <= r->top)
+    return false;
+  if (static_cast<UINT>(r->right) > width ||
+      static_cast<UINT>(r->bottom) > height) {
+    return false;
+  }
+  return true;
+}
+
+static bool boxWithinExtents(const D3DBOX *b, UINT width, UINT height,
+                             UINT depth) {
+  if (!b)
+    return true;
+  if (b->Right <= b->Left || b->Bottom <= b->Top || b->Back <= b->Front)
+    return false;
+  if (b->Right > width || b->Bottom > height || b->Back > depth)
+    return false;
+  return true;
+}
+
+// D3DLOCK_DISCARD is only valid on textures created with D3DUSAGE_DYNAMIC.
+static bool lockDiscardIsValid(DWORD flags, DWORD usage) {
+  if ((flags & D3DLOCK_DISCARD) == 0)
+    return true;
+  return (usage & D3DUSAGE_DYNAMIC) != 0;
+}
+
 [[nodiscard]] static HRESULT lockTextureBox(D9CTexture *texture, UINT level,
                               D3DLOCKED_BOX *locked, const D3DBOX *box,
                               DWORD flags, D3D9PeRecorderFlush *recorder) {
@@ -204,6 +241,16 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   D3D9PeRecorderFlush *recorder_;
   HDC dc_ = nullptr;
   bool defaultPoolTracked_ = false;
+  // Wine d3d9 conformance: PE-side lock-state mirror used to enforce
+  // double-Lock / Unlock-without-Lock invariants before the C-side
+  // recorder flush. Distinct from the C-side authority but kept in
+  // sync via the C-side return values.
+  bool locked_ = false;
+  // Wine d3d9 conformance: surfaces obtained through
+  // IDirect3DTexture9::GetSurfaceLevel share their lock state with the
+  // owning texture and accept a redundant Unlock with S_OK (cube and
+  // volume containers do not — see test_texture_level_surface_unlock_policy).
+  bool ownerIsTexture2D_ = false;
   // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when non-null this
   // surface aliases caller-owned memory; LockRect short-circuits the
   // bridge path and returns userMemory_ + userMemoryPitch_ directly.
@@ -223,9 +270,21 @@ public:
       device_->AddRef();
     if (container_)
       container_->AddRef();
+    if (container_) {
+      IDirect3DBaseTexture9 *base = nullptr;
+      if (SUCCEEDED(container_->QueryInterface(IID_IDirect3DBaseTexture9,
+                                               reinterpret_cast<void **>(&base))) &&
+          base) {
+        ownerIsTexture2D_ = (base->GetType() == D3DRTYPE_TEXTURE);
+        base->Release();
+      }
+    }
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              trackDefaultPool && surfaceIsDefaultPool(s_));
   }
+
+  bool peLocked() const { return locked_; }
+
   ~D3D9SurfaceImpl() {
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     if (dc_)
@@ -334,6 +393,20 @@ public:
                                      DWORD flags) noexcept override {
     if (!pLR)
       return D3DERR_INVALIDCALL;
+    // Wine d3d9 conformance (test_resource_lock_error_policy): reject a
+    // double-Lock and an out-of-bounds / inverted / negative rect before
+    // the recorder flush. The C-side already tracks lock state but it
+    // is reached only AFTER the recorder flush; mirroring the check here
+    // keeps a malformed Lock from committing pending records.
+    if (locked_)
+      return D3DERR_INVALIDCALL;
+    if (pRect) {
+      D9CSurfaceDesc desc{};
+      if (SUCCEEDED(hr32(dxmt9c_surface_get_desc(s_, &desc)))) {
+        if (!rectWithinExtents(pRect, desc.width, desc.height))
+          return D3DERR_INVALIDCALL;
+      }
+    }
     // T4: if this surface aliases caller-owned memory (SYSTEMMEM
     // shared-handle path), short-circuit the bridge. The caller's
     // pointer is the lock target; pRect is ignored (Wine reports the
@@ -342,6 +415,7 @@ public:
     if (userMemory_) {
       pLR->Pitch = userMemoryPitch_;
       pLR->pBits = userMemory_;
+      locked_ = true;
       dxmt9DeviceDebugLog(
           "surface_lock_rect (user-memory) surface=%p pitch=%d bits=%p", this,
           userMemoryPitch_, userMemory_);
@@ -361,6 +435,7 @@ public:
     if (SUCCEEDED(hr)) {
       pLR->Pitch = lr.pitch;
       pLR->pBits = lr.bits;
+      locked_ = true;
       dxmt9DeviceDebugLog("surface_lock_rect -> pitch=%ld bits=%p",
                           (long)pLR->Pitch, pLR->pBits);
     } else {
@@ -373,12 +448,37 @@ public:
     // T4: user-memory aliasing has no GPU staging to flush; treat the
     // lock as a pure CPU op so unlock is a no-op success.
     if (userMemory_) {
+      if (!locked_)
+        return ownerIsTexture2D_ ? S_OK : D3DERR_INVALIDCALL;
+      locked_ = false;
       return S_OK;
+    }
+    // Wine d3d9 conformance: Unlock-without-Lock returns INVALIDCALL
+    // for standalone and cube-derived surfaces (the C side enforces
+    // this for both PE-tracked and texture-shared cases). Doing the
+    // check here too skips a wasteful recorder flush on the failing
+    // call. 2D-texture-derived surfaces forward unconditionally
+    // because Wine treats redundant level-Unlock as idempotent and we
+    // must keep the C-side lockedLevels in sync if the parent texture
+    // performed the Lock.
+    if (!locked_ && !ownerIsTexture2D_) {
+      return D3DERR_INVALIDCALL;
     }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
-    return hr32(dxmt9c_surface_unlock_rect(s_));
+    HRESULT hr = hr32(dxmt9c_surface_unlock_rect(s_));
+    // Wine d3d9 conformance: 2D-texture-derived surfaces accept a
+    // redundant Unlock with S_OK (wined3d treats the per-level Unlock
+    // as idempotent on mipmap chains). Standalone and cube-derived
+    // surfaces propagate INVALIDCALL. See
+    // test_texture_level_surface_unlock_policy lines 1166 vs 1191.
+    if (hr == D3DERR_INVALIDCALL && ownerIsTexture2D_) {
+      hr = S_OK;
+    }
+    if (SUCCEEDED(hr))
+      locked_ = false;
+    return hr;
   }
   HRESULT STDMETHODCALLTYPE GetDC(HDC *phdc) noexcept override {
     dxmt9DeviceDebugLog("surface_get_dc surface=%p phdc=%p", this, phdc);
@@ -564,6 +664,23 @@ public:
                                      DWORD flags) noexcept override {
     if (!pLR)
       return D3DERR_INVALIDCALL;
+    // Wine d3d9 conformance (test_resource_lock_error_policy /
+    // check_texture_lock_policy): reject an out-of-range level, an
+    // out-of-bounds / inverted rect, and a D3DLOCK_DISCARD on a
+    // non-D3DUSAGE_DYNAMIC texture before reaching the recorder
+    // flush. The C-side double-lock check (lockedLevels) remains
+    // authoritative for the in-flight state.
+    if (level >= dxmt9c_texture_get_level_count(t_))
+      return D3DERR_INVALIDCALL;
+    {
+      D9CSurfaceDesc desc{};
+      if (SUCCEEDED(textureLevelDesc(t_, level, &desc))) {
+        if (!rectWithinExtents(pRect, desc.width, desc.height))
+          return D3DERR_INVALIDCALL;
+        if (!lockDiscardIsValid(flags, desc.usage))
+          return D3DERR_INVALIDCALL;
+      }
+    }
     // T4: user-memory aliasing path (SYSTEMMEM shared-handle). The
     // partial scope only creates level-1 textures, so level == 0 is the
     // only valid lock target.
@@ -598,6 +715,10 @@ public:
     return hr;
   }
   HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) noexcept override {
+    // Wine d3d9 conformance: Unlock-with-invalid-level returns
+    // INVALIDCALL before reaching the recorder flush.
+    if (level >= dxmt9c_texture_get_level_count(t_))
+      return D3DERR_INVALIDCALL;
     // T4: user-memory aliasing has no staging copy to flush.
     if (userMemory_ && level == 0) {
       return S_OK;
@@ -1080,8 +1201,22 @@ public:
   HRESULT STDMETHODCALLTYPE LockBox(UINT level, D3DLOCKED_BOX *locked,
                                     const D3DBOX *box,
                                     DWORD flags) noexcept override {
+    if (!locked)
+      return D3DERR_INVALIDCALL;
     if (level >= dxmt9c_texture_get_level_count(t_))
       return D3DERR_INVALIDCALL;
+    // Wine d3d9 conformance (check_volume_lock_policy): reject an
+    // inverted / out-of-bounds box and a D3DLOCK_DISCARD on a
+    // non-dynamic volume texture before the recorder flush.
+    {
+      D9CSurfaceDesc desc{};
+      if (SUCCEEDED(textureLevelDesc(t_, level, &desc))) {
+        if (!boxWithinExtents(box, desc.width, desc.height, desc.depth))
+          return D3DERR_INVALIDCALL;
+        if (!lockDiscardIsValid(flags, desc.usage))
+          return D3DERR_INVALIDCALL;
+      }
+    }
     return lockTextureBox(t_, level, locked, box, flags, recorder_);
   }
   HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) noexcept override {
@@ -1132,6 +1267,10 @@ IDirect3DCubeTexture9 *CreatePeCubeTexture(D9CTexture *texture,
 
 D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface) {
   return surface ? static_cast<D3D9SurfaceImpl *>(surface)->raw() : nullptr;
+}
+
+bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface) {
+  return surface ? static_cast<D3D9SurfaceImpl *>(surface)->peLocked() : false;
 }
 
 D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture) {
