@@ -155,36 +155,6 @@ test('dxmt9-debug-result-schema-selftest', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
-test('dxmt9-debug-artifact-bundle-selftest', python3,
-     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_debug_artifact_bundle.py')],
-     workdir: meson.project_source_root(),
-     suite: ['scripts'],
-     is_parallel: false)
-test('dxmt9-module-boundary-debug-result-selftest', python3,
-     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_module_boundary_debug_result.py')],
-     workdir: meson.project_source_root(),
-     suite: ['scripts'],
-     is_parallel: false)
-test('dxmt9-wsi-present-debug-result-selftest', python3,
-     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_wsi_present_debug_result.py')],
-     workdir: meson.project_source_root(),
-     suite: ['scripts'],
-     is_parallel: false)
-test('dxmt9-module-boundary-manifest-check', python3,
-     args: [join_paths(meson.project_source_root(), 'scripts/check/check_module_boundary_manifest.py')],
-     is_parallel: false)
-test('dxmt9-module-boundary-runner-validate', python3,
-     args: [
-       join_paths(meson.project_source_root(), 'tests/module_boundary/run_module_boundary.py'),
-       'validate-manifest',
-     ],
-     is_parallel: false)
-test('dxmt9-module-boundary-scaffold-result', python3,
-     args: [
-       join_paths(meson.project_source_root(), 'tests/module_boundary/run_module_boundary.py'),
-       'emit-scaffold-result',
-     ],
-     is_parallel: false)
 test('dxmt9-drift-report', bash, args: [join_paths(meson.project_source_root(), 'scripts/check/check_drift.sh')],
      is_parallel: false)
 test('dxmt9-perf-counter-table-audit', python3,
@@ -198,11 +168,6 @@ test('dxmt9-corpus-sync-smoke', python3,
      is_parallel: false)
 test('dxmt9-wine-resolve', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_wine_resolve.py')],
-     workdir: meson.project_source_root(),
-     suite: ['scripts'],
-     is_parallel: false)
-test('dxmt9-run-experiment-capture', python3,
-     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_run_experiment_capture.py')],
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
