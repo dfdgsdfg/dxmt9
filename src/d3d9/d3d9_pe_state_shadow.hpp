@@ -426,6 +426,18 @@ struct PeHotStateShadow {
     FixedStateTable<kPeRenderStateSlots> pendingRenderStates{};
     FixedStateTable<kPeRenderStateSlots> stateBlockRenderStateRestore{};
     FixedTransformTable stateBlockTransformRestore{};
+    // PE-shadow stateblock support. Captures the NEW transform value that
+    // SetTransform writes during BeginStateBlock/EndStateBlock recording.
+    // EndStateBlock hands this to the newly-created D3D9StateBlockImpl
+    // before the *Restore loop reverts the device shadow to pre-Begin
+    // values; on Apply the stateblock replays these values via the existing
+    // IDirect3DDevice9::SetTransform path. MultiplyTransform intentionally
+    // bypasses this table to match wined3d's "MultiplyTransform during
+    // recording is not captured" quirk (see Wine d3d9 tests).
+    FixedTransformTable stateBlockTransformRecorded{};
+    // True if SetVertexDeclaration was called between Begin/End. Same role
+    // as stateBlockTransformRecorded but for the singleton vdecl slot.
+    bool stateBlockVdeclRecorded = false;
     DWORD pendingTextureMask = 0;
     DWORD pendingStreamMask = 0;
     bool pendingFvf = false;

@@ -2,7 +2,35 @@
 
 #include "d3d9_pe.hpp"
 
+#include "d3d9_pe_state_shadow.hpp"
+
 #include <cstddef>
+#include <cstdint>
+#include <vector>
+
+// PE-side snapshot taken by D3D9StateBlockImpl::Capture(). Lives entirely in
+// the PE process; never crosses the unix boundary. Holds enough state to
+// restore the transforms / shader constants / vertex declaration the test
+// suite checks via IDirect3DStateBlock9 round-trips. AddRef policy: vdecl is
+// AddRef'd by the snapshot owner; release in the destructor and on overwrite.
+struct D3D9StateBlockShadow {
+  FixedTransformTable transforms{};
+  std::vector<std::uint8_t> vsConstF;
+  std::vector<std::uint8_t> vsConstI;
+  std::vector<std::uint8_t> vsConstB;
+  std::vector<std::uint8_t> psConstF;
+  std::vector<std::uint8_t> psConstI;
+  std::vector<std::uint8_t> psConstB;
+  bool hasVdecl = false;
+  IDirect3DVertexDeclaration9 *vdecl = nullptr;
+
+  // True once D3D9StateBlockImpl::ctor has populated the shadow once.
+  // CaptureStateBlockShadowForChild uses this to distinguish the initial
+  // snapshot (which fixes the tracked-keys set) from a later
+  // D3D9StateBlockImpl::Capture() call (which only refreshes values of
+  // already-tracked keys).
+  bool initialized = false;
+};
 
 struct D3D9PeRecorderFlush {
   virtual HRESULT FlushPeRecorderForChild() = 0;
@@ -12,6 +40,12 @@ struct D3D9PeRecorderFlush {
   virtual void ReleaseDefaultPoolResourceRefForChild() = 0;
   virtual bool IsChunkRecorderEnabledForChild() const = 0;
   virtual HRESULT AppendRecordForChild(const void *data, size_t bytes) = 0;
+
+  // PE-shadow stateblock support. Captures the device's current transform /
+  // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM
+  // pointers. The caller (D3D9StateBlockImpl) owns the resulting shadow and
+  // is responsible for Release on destruction.
+  virtual void CaptureStateBlockShadowForChild(D3D9StateBlockShadow &out) = 0;
 
 protected:
   ~D3D9PeRecorderFlush() = default;

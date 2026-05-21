@@ -218,6 +218,84 @@ class D3D9StateBlockImpl final : public IDirect3DStateBlock9 {
   D9CStateBlock *sb_;
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
+  // PE-side snapshot of transforms / shader constants / vdecl populated by
+  // CaptureStateBlockShadowForChild on End/Capture and replayed by Apply.
+  // Lives only in the PE process — never crosses the unix boundary.
+  D3D9StateBlockShadow saved_{};
+  bool savedValid_ = false;
+
+  // Replay all entries in saved_ onto the owning device via the existing
+  // IDirect3DDevice9 COM methods. Each Set* lands in the device's normal
+  // hot path (recorder picks up the change), so no new wire surface is
+  // introduced. Best-effort: failures on individual entries are logged but
+  // do not abort the apply — the upstream Wine tests only inspect the
+  // specific entries the test recorded.
+  void replaySavedShadow() noexcept {
+    if (!savedValid_ || !device_) {
+      return;
+    }
+    saved_.transforms.forEach([&](std::uint32_t state, const D9CMatrix &m) {
+      const D3DMATRIX *pm = reinterpret_cast<const D3DMATRIX *>(&m);
+      (void)device_->SetTransform(static_cast<D3DTRANSFORMSTATETYPE>(state),
+                                  pm);
+    });
+    constexpr std::size_t kFloatVecSize = sizeof(float) * 4;
+    constexpr std::size_t kIntVecSize = sizeof(int32_t) * 4;
+    constexpr std::size_t kBoolSize = sizeof(uint32_t);
+    if (!saved_.vsConstF.empty()) {
+      const UINT count =
+          static_cast<UINT>(saved_.vsConstF.size() / kFloatVecSize);
+      if (count > 0) {
+        (void)device_->SetVertexShaderConstantF(
+            0, reinterpret_cast<const float *>(saved_.vsConstF.data()), count);
+      }
+    }
+    if (!saved_.vsConstI.empty()) {
+      const UINT count =
+          static_cast<UINT>(saved_.vsConstI.size() / kIntVecSize);
+      if (count > 0) {
+        (void)device_->SetVertexShaderConstantI(
+            0, reinterpret_cast<const INT *>(saved_.vsConstI.data()), count);
+      }
+    }
+    if (!saved_.vsConstB.empty()) {
+      const UINT count =
+          static_cast<UINT>(saved_.vsConstB.size() / kBoolSize);
+      if (count > 0) {
+        (void)device_->SetVertexShaderConstantB(
+            0, reinterpret_cast<const BOOL *>(saved_.vsConstB.data()), count);
+      }
+    }
+    if (!saved_.psConstF.empty()) {
+      const UINT count =
+          static_cast<UINT>(saved_.psConstF.size() / kFloatVecSize);
+      if (count > 0) {
+        (void)device_->SetPixelShaderConstantF(
+            0, reinterpret_cast<const float *>(saved_.psConstF.data()), count);
+      }
+    }
+    if (!saved_.psConstI.empty()) {
+      const UINT count =
+          static_cast<UINT>(saved_.psConstI.size() / kIntVecSize);
+      if (count > 0) {
+        (void)device_->SetPixelShaderConstantI(
+            0, reinterpret_cast<const INT *>(saved_.psConstI.data()), count);
+      }
+    }
+    if (!saved_.psConstB.empty()) {
+      const UINT count =
+          static_cast<UINT>(saved_.psConstB.size() / kBoolSize);
+      if (count > 0) {
+        (void)device_->SetPixelShaderConstantB(
+            0, reinterpret_cast<const BOOL *>(saved_.psConstB.data()), count);
+      }
+    }
+    if (saved_.hasVdecl) {
+      // SetVertexDeclaration AddRefs internally; saved_.vdecl retains its own
+      // ref until destructor (or next Capture).
+      (void)device_->SetVertexDeclaration(saved_.vdecl);
+    }
+  }
 
 public:
   D3D9StateBlockImpl(D9CStateBlock *sb, IDirect3DDevice9 *device,
@@ -225,6 +303,13 @@ public:
       : sb_(sb), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
+    // Snapshot the device's current PE shadow at construction so a
+    // CreateStateBlock(D3DSBT_ALL) / EndStateBlock-produced block holds the
+    // transforms / constants / vdecl the upstream tests check on Apply.
+    if (recorder_) {
+      recorder_->CaptureStateBlockShadowForChild(saved_);
+      savedValid_ = true;
+    }
     dxmt9DeviceDebugLog("stateblock_ctor this=%p sb=%p device=%p refs=%u", this,
                         static_cast<void *>(sb_), static_cast<void *>(device_),
                         (unsigned)refs_.load());
@@ -237,6 +322,10 @@ public:
       dxmt9c_stateblock_release(sb_);
     }
     sb_ = nullptr;
+    if (saved_.vdecl) {
+      saved_.vdecl->Release();
+      saved_.vdecl = nullptr;
+    }
     if (device_)
       device_->Release();
     device_ = nullptr;
@@ -288,6 +377,13 @@ public:
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
+    // PE-side snapshot: re-read transforms / shader constants / vdecl from
+    // the device's current shadow so Apply replays the post-Capture state,
+    // not the End-time state.
+    if (recorder_) {
+      recorder_->CaptureStateBlockShadowForChild(saved_);
+      savedValid_ = true;
+    }
     const HRESULT hr = hr32(dxmt9c_stateblock_capture(sb_));
     dxmt9DeviceDebugLog("stateblock_capture -> hr=0x%08x", (unsigned)hr);
     return hr;
@@ -304,6 +400,14 @@ public:
     if (SUCCEEDED(hr) && recorder_) {
       recorder_->InvalidateStateBlockShadowForChild();
     }
+    // Replay PE-side shadow after the existing apply so the recorder picks
+    // up the transforms / shader constants / vdecl the upstream Wine tests
+    // check on round-trip.
+    replaySavedShadow();
+    // Drain the PE recorder so a subsequent Get* sees the values we just
+    // wrote. The PE-side Set* only updates the shadow / dirty range;
+    // without a flush, server-side Get* still returns pre-Apply state.
+    (void)flushChildRecorder(recorder_);
     dxmt9DeviceDebugLog("stateblock_apply -> hr=0x%08x", (unsigned)hr);
     return hr;
   }

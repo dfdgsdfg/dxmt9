@@ -491,6 +491,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool         deviceNotReset_ = false;
     uint32_t     defaultPoolResourceRefs_ = 0;
     bool         stateBlockRecording_ = false;
+    // Internal guard: when true, SetTransform during recording will NOT
+    // append to stateBlockTransformRecorded. MultiplyTransform raises this
+    // around its internal SetTransform so its product does not get recorded
+    // into the stateblock — matches wined3d semantics that
+    // MultiplyTransform inside BeginStateBlock/EndStateBlock is invisible
+    // to the resulting stateblock (the device state itself IS modified,
+    // and is NOT reverted at EndStateBlock).
+    bool         suppressStateBlockTransformRecord_ = false;
+    // True only inside EndStateBlock's CreatePeStateBlock call. Tells the
+    // freshly-constructed D3D9StateBlockImpl that its initial transform
+    // tracked-keys set should be EXACTLY stateBlockTransformRecorded —
+    // even if that table is empty (a Begin/End block where everything was
+    // MultiplyTransform). Without this flag, an empty recorded set would
+    // be indistinguishable from a CreateStateBlock(D3DSBT_ALL) call,
+    // which legitimately needs every populated transform captured.
+    bool         insideEndStateBlock_ = false;
     std::recursive_mutex recorderMutex_{};
 
     /* bound resource tracking (AddRef'd) */
@@ -1597,6 +1613,90 @@ public:
         return appendCommandRecord(data, bytes);
     }
 
+    // PE-shadow stateblock support.
+    //
+    // Initial snapshot mode (called from D3D9StateBlockImpl ctor inside
+    // EndStateBlock, when `stateBlockTransformRecorded` is still populated):
+    // copy the recorded transform set into `out.transforms` to fix the
+    // *tracked keys* — those will be the only transforms the stateblock
+    // replays on Apply. Keys touched only by MultiplyTransform are absent
+    // from this table (wined3d quirk), so they will not be captured or
+    // replayed. The shader-constant register files and the bound vdecl
+    // mirror whatever the device shadow currently holds.
+    //
+    // Refresh mode (called from D3D9StateBlockImpl::Capture, post-End,
+    // when `stateBlockTransformRecorded` is empty): re-read the value of
+    // each already-tracked key from the live `transformShadow`. The set
+    // of tracked keys is FIXED at End; mid-game Captures only refresh
+    // values, never add keys. Shader-constant register files and vdecl
+    // are re-snapshotted in full.
+    void CaptureStateBlockShadowForChild(D3D9StateBlockShadow& out) override {
+        const bool initialSnapshot = !out.initialized;
+        if (initialSnapshot) {
+            // Called from D3D9StateBlockImpl ctor.
+            // Begin/End path (insideEndStateBlock_): take the recorded
+            // set verbatim — even if it is empty (the block tracked no
+            // transforms; Apply is a no-op for transforms).
+            // CreateStateBlock path: capture the entire live shadow.
+            if (insideEndStateBlock_) {
+                out.transforms = peState_.stateBlockTransformRecorded;
+            } else {
+                out.transforms = peState_.transformShadow;
+            }
+            out.initialized = true;
+        } else {
+            // Refresh mode (mid-game D3D9StateBlockImpl::Capture()).
+            // The set of tracked transform keys is FIXED at ctor;
+            // Capture() only refreshes their values from the live
+            // shadow. Keys absent from out.transforms (e.g. a block
+            // whose End-time recorded set was empty because everything
+            // was MultiplyTransform) stay absent — Apply will not
+            // touch them.
+            FixedTransformTable refreshed{};
+            out.transforms.forEach([&](uint32_t state, const D9CMatrix& /*old*/) {
+                D9CMatrix latest{};
+                if (peState_.transformShadow.get(state, latest)) {
+                    refreshed.set(state, latest);
+                } else {
+                    // Server lost the binding (e.g. Reset); keep the
+                    // previously-captured value as a best-effort fallback.
+                    D9CMatrix prior{};
+                    out.transforms.get(state, prior);
+                    refreshed.set(state, prior);
+                }
+            });
+            out.transforms = refreshed;
+        }
+        out.vsConstF   = peConsts_.vsConstF.values;
+        out.vsConstI   = peConsts_.vsConstI.values;
+        out.vsConstB   = peConsts_.vsConstB.values;
+        out.psConstF   = peConsts_.psConstF.values;
+        out.psConstI   = peConsts_.psConstI.values;
+        out.psConstB   = peConsts_.psConstB.values;
+        // vdecl tracking:
+        //   - Initial snapshot, Begin/End path → track only if
+        //     SetVertexDeclaration was called during recording.
+        //   - Initial snapshot, CreateStateBlock path → always track.
+        //   - Mid-game refresh → preserve the initial-time decision
+        //     (out.hasVdecl set at ctor time).
+        bool shouldTrackVdecl;
+        if (initialSnapshot) {
+            shouldTrackVdecl =
+                insideEndStateBlock_ ? peState_.stateBlockVdeclRecorded : true;
+        } else {
+            shouldTrackVdecl = out.hasVdecl;
+        }
+        if (out.vdecl) {
+            out.vdecl->Release();
+            out.vdecl = nullptr;
+        }
+        out.hasVdecl = shouldTrackVdecl && (vdecl_ != nullptr);
+        if (shouldTrackVdecl && vdecl_) {
+            vdecl_->AddRef();
+            out.vdecl = vdecl_;
+        }
+    }
+
     D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
                    UINT adapter, D3DDEVTYPE deviceType, DWORD behaviorFlags,
                    HWND window, bool extended)
@@ -1888,6 +1988,8 @@ public:
             stateBlockRecording_ = false;
             peState_.stateBlockRenderStateRestore.clear();
             peState_.stateBlockTransformRestore.clear();
+            peState_.stateBlockTransformRecorded.clear();
+            peState_.stateBlockVdeclRecorded = false;
             deviceNotReset_ = true;
             return D3DERR_INVALIDCALL;
         }
@@ -1895,6 +1997,8 @@ public:
         stateBlockRecording_ = false;
         peState_.stateBlockRenderStateRestore.clear();
         peState_.stateBlockTransformRestore.clear();
+        peState_.stateBlockTransformRecorded.clear();
+        peState_.stateBlockVdeclRecorded = false;
         const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
         if (SUCCEEDED(hr)) {
             deviceNotReset_ = false;
@@ -2559,6 +2663,22 @@ public:
                 (void)peState_.transformShadow.get(stateKey, previous);
                 peState_.stateBlockTransformRestore.set(stateKey, previous);
             }
+            // PE-shadow stateblock support. The NEW value being set inside
+            // BeginStateBlock/EndStateBlock is what the resulting stateblock
+            // must replay on Apply. MultiplyTransform sets
+            // suppressStateBlockTransformRecord_ around its internal
+            // SetTransform call so the multiply does NOT land in this table —
+            // wined3d's "MultiplyTransform during recording is ignored by the
+            // stateblock" quirk.
+            if (!suppressStateBlockTransformRecord_) {
+                peState_.stateBlockTransformRecorded.set(stateKey, wireM);
+            }
+            // Keep the PE shadow in sync with the server during recording so
+            // a subsequent MultiplyTransform / GetTransform on the same key
+            // observes the in-flight value, not pre-Begin state. EndStateBlock
+            // is responsible for reverting shadow entries that should not
+            // survive the block (see the *Restore loop).
+            peState_.transformShadow.set(stateKey, wireM);
             return hr32(dxmt9c_device_set_transform(dev_, stateKey, &wireM));
         }
         uint32_t transformSlotIndex = 0;
@@ -2610,6 +2730,10 @@ public:
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_multiply_transform device=%p state=%u", this, (unsigned)state);
         D3DMATRIX cur{};
+        // GetTransform reads the PE shadow (which is also updated during
+        // recording — see SetTransform's recording branch), so we observe
+        // the in-flight multiplicand whether we are inside Begin/End or
+        // not.
         GetTransform(state, &cur);
         /* multiply 4x4 */
         D3DMATRIX result{};
@@ -2620,7 +2744,17 @@ public:
                     s += cur.m[r][k] * pM->m[k][c];
                 result.m[r][c] = s;
             }
-        return SetTransform(state, &result);
+        // wined3d quirk: MultiplyTransform inside BeginStateBlock/
+        // EndStateBlock updates the device state but does NOT contribute
+        // to the resulting stateblock's tracked entries — guard the
+        // recursive SetTransform call so it skips stateBlockTransformRecorded
+        // (the *Restore branch still runs so the device shadow stays in
+        // sync, but the resulting stateblock will not replay this state).
+        const bool wasSuppressed = suppressStateBlockTransformRecord_;
+        suppressStateBlockTransformRecord_ = true;
+        const HRESULT hr = SetTransform(state, &result);
+        suppressStateBlockTransformRecord_ = wasSuppressed;
+        return hr;
     }
 
     /* ── viewport / scissor ── */
@@ -2886,6 +3020,8 @@ public:
             stateBlockRecording_ = true;
             peState_.stateBlockRenderStateRestore.clear();
             peState_.stateBlockTransformRestore.clear();
+            peState_.stateBlockTransformRecorded.clear();
+            peState_.stateBlockVdeclRecorded = false;
         }
         dxmt9DeviceDebugLog("device_begin_state_block -> hr=0x%08x", (unsigned)hr);
         return hr;
@@ -2908,15 +3044,32 @@ public:
                 peState_.pendingRenderStates.erase(state);
             });
             peState_.stateBlockRenderStateRestore.clear();
-            peState_.stateBlockTransformRestore.forEach([&](uint32_t state, const D9CMatrix& value) {
-                (void)dxmt9c_device_set_transform(dev_, state, &value);
-                peState_.transformShadow.set(state, value);
+            // wined3d semantics: state set / multiplied inside Begin/End
+            // remains on the device after End. The PE shadow was updated
+            // along with the server during the recording branch of
+            // SetTransform, so no revert loop is needed here. Just drop the
+            // (now-stale) *Restore entries.
+            peState_.stateBlockTransformRestore.forEach([&](uint32_t state, const D9CMatrix& /*old*/) {
+                // Drain any pending Sets that were re-routed during recording
+                // — they have already been forwarded to the server.
                 peState_.pendingTransforms.erase(state);
             });
             peState_.stateBlockTransformRestore.clear();
             if (sb) {
+                // Mark Begin/End context so the new stateblock's ctor
+                // takes its tracked-keys set from
+                // stateBlockTransformRecorded (which may be empty if all
+                // recording was MultiplyTransform) instead of falling
+                // back to a full transformShadow capture.
+                insideEndStateBlock_ = true;
                 *ppSB = CreatePeStateBlock(sb, this, this);
+                insideEndStateBlock_ = false;
             }
+            // Clear AFTER CreatePeStateBlock so the new stateblock's ctor
+            // can read stateBlockTransformRecorded via
+            // CaptureStateBlockShadowForChild.
+            peState_.stateBlockTransformRecorded.clear();
+            peState_.stateBlockVdeclRecorded = false;
         }
         dxmt9DeviceDebugLog("device_end_state_block -> hr=0x%08x sb=%p out=%p",
                             (unsigned)hr, static_cast<void*>(sb), *ppSB);
@@ -3273,6 +3426,13 @@ public:
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(
             IDirect3DVertexDeclaration9* pVD) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_declaration device=%p decl=%p", this, pVD);
+        // PE-shadow stateblock support: remember that vdecl was touched
+        // during BeginStateBlock/EndStateBlock so the resulting block's
+        // tracked set includes the vdecl slot. The flag is consumed by
+        // CaptureStateBlockShadowForChild and cleared in EndStateBlock.
+        if (stateBlockRecording_) {
+            peState_.stateBlockVdeclRecorded = true;
+        }
         if (vdecl_ == pVD) return S_OK;
         setRef(vdecl_, pVD);
         /* Explicit decl resets FVF to 0 (Wine
@@ -3383,8 +3543,7 @@ public:
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstFMax);
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.vsConstF, start, pData, count, sizeof(float) * 4);
-        return S_OK;
-    }
+        return S_OK;    }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
                                                         UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
@@ -3398,8 +3557,7 @@ public:
                                                         UINT count) noexcept override {
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstIMax);
         if (FAILED(hr)) return hr;
-        readConstShadow(peConsts_.vsConstI, start, pData, count, sizeof(int32_t) * 4);
-        return S_OK;
+        readConstShadow(peConsts_.vsConstI, start, pData, count, sizeof(int32_t) * 4);        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
                                                         UINT count) noexcept override {
@@ -3414,8 +3572,7 @@ public:
                                                         UINT count) noexcept override {
         const HRESULT hr = validateConstRange(start, count, pData, kVsConstBMax);
         if (FAILED(hr)) return hr;
-        readConstShadow(peConsts_.vsConstB, start, pData, count, sizeof(uint32_t));
-        return S_OK;
+        readConstShadow(peConsts_.vsConstB, start, pData, count, sizeof(uint32_t));        return S_OK;
     }
 
     /* ── stream sources ── */
@@ -3559,8 +3716,7 @@ public:
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstFMax);
         if (FAILED(hr)) return hr;
         readConstShadow(peConsts_.psConstF, start, pData, count, sizeof(float) * 4);
-        return S_OK;
-    }
+        return S_OK;    }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
                                                        UINT count) noexcept override {
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
@@ -3574,8 +3730,7 @@ public:
                                                        UINT count) noexcept override {
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstIMax);
         if (FAILED(hr)) return hr;
-        readConstShadow(peConsts_.psConstI, start, pData, count, sizeof(int32_t) * 4);
-        return S_OK;
+        readConstShadow(peConsts_.psConstI, start, pData, count, sizeof(int32_t) * 4);        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
                                                        UINT count) noexcept override {
@@ -3590,8 +3745,7 @@ public:
                                                        UINT count) noexcept override {
         const HRESULT hr = validateConstRange(start, count, pData, kPsConstBMax);
         if (FAILED(hr)) return hr;
-        readConstShadow(peConsts_.psConstB, start, pData, count, sizeof(uint32_t));
-        return S_OK;
+        readConstShadow(peConsts_.psConstB, start, pData, count, sizeof(uint32_t));        return S_OK;
     }
 
     /* ── draw calls ── */
@@ -3828,6 +3982,8 @@ public:
         stateBlockRecording_ = false;
         peState_.stateBlockRenderStateRestore.clear();
         peState_.stateBlockTransformRestore.clear();
+        peState_.stateBlockTransformRecorded.clear();
+        peState_.stateBlockVdeclRecorded = false;
         const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
             pFsMode ? &cdme : nullptr));
         if (SUCCEEDED(hr)) {
