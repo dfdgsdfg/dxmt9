@@ -171,12 +171,17 @@ static bool lockDiscardIsValid(DWORD flags, DWORD usage) {
   if (FAILED(hr))
     return hr;
 
+  // Wine D3D9 contract (check_volume_lock_policy line 660): SlicePitch
+  // reflects the full slice stride of the underlying volume level, not
+  // the locked sub-box height. Take the level desc as the source of
+  // truth and fall back to the box height only if the desc lookup
+  // fails.
   D9CSurfaceDesc desc{};
   UINT height = 1;
-  if (box && box->Bottom > box->Top) {
-    height = box->Bottom - box->Top;
-  } else if (SUCCEEDED(textureLevelDesc(texture, level, &desc))) {
+  if (SUCCEEDED(textureLevelDesc(texture, level, &desc))) {
     height = std::max<UINT>(1, desc.height);
+  } else if (box && box->Bottom > box->Top) {
+    height = box->Bottom - box->Top;
   }
   locked->RowPitch = lockedRect.pitch;
   locked->SlicePitch = lockedRect.pitch * static_cast<int>(height);
