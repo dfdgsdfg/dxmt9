@@ -319,6 +319,8 @@ static const struct test_case tests[] =
     {"vendor_policy_resz_caps", test_vendor_policy_resz_caps},
     {"vendor_policy_mipmap_upload_policy",
             test_vendor_policy_mipmap_upload_policy},
+    {"miptree_layout_lock_pitch_policy",
+            test_miptree_layout_lock_pitch_policy},
 };
 
 int main(void)

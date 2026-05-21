@@ -260,3 +260,73 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_miptree_layout
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * The deterministic block/byte layout math is covered by the native
+ * spec tests/native/core/core_d3d9_miptree_layout_spec.cpp; this
+ * scaffold pins the public-ABI portion (per-level GetLevelDesc dims
+ * + LockRect.Pitch) for an A8R8G8B8 mip chain.
+ */
+void test_miptree_layout_lock_pitch_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    UINT level;
+    UINT levels;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    CHECK_HR(IDirect3DDevice9_CreateTexture(device, 64, 64, 0, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &texture, NULL), D3D_OK);
+    if (!texture)
+        goto done_device;
+
+    levels = IDirect3DTexture9_GetLevelCount(texture);
+    CHECK_TRUE(levels == 7);
+
+    for (level = 0; level < levels; ++level)
+    {
+        D3DSURFACE_DESC desc;
+        D3DLOCKED_RECT locked;
+        UINT expected_dim = 64u >> level;
+        if (!expected_dim) expected_dim = 1;
+
+        memset(&desc, 0xcc, sizeof(desc));
+        CHECK_HR(IDirect3DTexture9_GetLevelDesc(texture, level, &desc), D3D_OK);
+        CHECK_TRUE(desc.Width == expected_dim);
+        CHECK_TRUE(desc.Height == expected_dim);
+        CHECK_TRUE(desc.Format == D3DFMT_A8R8G8B8);
+
+        memset(&locked, 0xcc, sizeof(locked));
+        CHECK_HR(IDirect3DTexture9_LockRect(texture, level, &locked, NULL, 0), D3D_OK);
+        CHECK_TRUE(locked.pBits != NULL);
+        /* A8R8G8B8 = 4 bytes/pel; pitch must accommodate the level row width. */
+        CHECK_TRUE(locked.Pitch >= (INT)(expected_dim * 4u));
+        CHECK_HR(IDirect3DTexture9_UnlockRect(texture, level), D3D_OK);
+    }
+
+    IDirect3DTexture9_Release(texture);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

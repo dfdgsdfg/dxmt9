@@ -529,4 +529,7 @@ void test_vendor_policy_fetch4_caps(const struct d3d9_api *api);
 void test_vendor_policy_resz_caps(const struct d3d9_api *api);
 void test_vendor_policy_mipmap_upload_policy(const struct d3d9_api *api);
 
+
+/* Wine miptree layout PE-side scaffold (G4). */
+void test_miptree_layout_lock_pitch_policy(const struct d3d9_api *api);
 #endif /* DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H */
