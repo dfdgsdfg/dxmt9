@@ -508,4 +508,9 @@ void test_multithreaded_device_creation_policy(const struct d3d9_api *api);
 
 void test_visual_shadow_depth_compare_caps_policy(const struct d3d9_api *api);
 
+/* Wine visual.c raster / line-AA / blit policy scaffolds (G2). */
+void test_visual_filling_convention_caps_policy(const struct d3d9_api *api);
+void test_visual_line_antialiasing_blending_state_policy(const struct d3d9_api *api);
+void test_visual_blit_format_conversion_policy(const struct d3d9_api *api);
+
 #endif /* DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H */

@@ -294,6 +294,12 @@ static const struct test_case tests[] =
             test_multithreaded_device_creation_policy},
     {"visual_shadow_depth_compare_caps_policy",
             test_visual_shadow_depth_compare_caps_policy},
+    {"visual_filling_convention_caps_policy",
+            test_visual_filling_convention_caps_policy},
+    {"visual_line_antialiasing_blending_state_policy",
+            test_visual_line_antialiasing_blending_state_policy},
+    {"visual_blit_format_conversion_policy",
+            test_visual_blit_format_conversion_policy},
 };
 
 int main(void)
