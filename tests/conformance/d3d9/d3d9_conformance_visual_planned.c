@@ -1,0 +1,394 @@
+/*
+ * Planned-item conformance scaffolds derived from Wine's
+ * dlls/d3d9/tests/visual.c oracle. These scaffolds absorb the
+ * remaining specs/wine_test.plan.md section 5.1 planned/EXP-route
+ * rows whose observable contract is expressible at the public D3D9
+ * ABI level without a full runtime probe.
+ *
+ * Wine behavioral oracle:
+ * - dlls/d3d9/tests/visual.c
+ * Wine commit 6e073d28dee3af7f4c965daec94644e0f9f92727.
+ *
+ * Wine is referenced as an LGPL behavioral oracle only; no Wine
+ * implementation, control flow, or table data is copied here.
+ */
+
+#include "d3d9_conformance_fixtures.h"
+
+#ifndef D3DFMT_NULL
+#define D3DFMT_NULL ((D3DFORMAT)MAKEFOURCC('N','U','L','L'))
+#endif
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_specular_lighting
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_specular_lighting_render_state_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DMATERIAL9 material;
+    D3DMATERIAL9 out;
+    HWND window;
+    DWORD specular_enable;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Default specular enable is FALSE. */
+    specular_enable = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_SPECULARENABLE,
+            &specular_enable), D3D_OK);
+    CHECK_TRUE(specular_enable == FALSE);
+
+    /* Round-trip TRUE then back to FALSE. */
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SPECULARENABLE,
+            TRUE), D3D_OK);
+    specular_enable = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_SPECULARENABLE,
+            &specular_enable), D3D_OK);
+    CHECK_TRUE(specular_enable == TRUE);
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_SPECULARENABLE,
+            FALSE), D3D_OK);
+    specular_enable = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_SPECULARENABLE,
+            &specular_enable), D3D_OK);
+    CHECK_TRUE(specular_enable == FALSE);
+
+    /* Default material: black specular, power 0.0f. */
+    memset(&out, 0xcc, sizeof(out));
+    CHECK_HR(IDirect3DDevice9_GetMaterial(device, &out), D3D_OK);
+    CHECK_TRUE(out.Specular.r == 0.0f);
+    CHECK_TRUE(out.Specular.g == 0.0f);
+    CHECK_TRUE(out.Specular.b == 0.0f);
+    CHECK_TRUE(out.Specular.a == 0.0f);
+    CHECK_TRUE(out.Power == 0.0f);
+
+    memset(&material, 0, sizeof(material));
+    material.Diffuse.r = 0.25f;
+    material.Specular.r = 0.5f;
+    material.Specular.g = 0.75f;
+    material.Specular.b = 1.0f;
+    material.Specular.a = 1.0f;
+    material.Power = 25.0f;
+    CHECK_HR(IDirect3DDevice9_SetMaterial(device, &material), D3D_OK);
+
+    memset(&out, 0xcc, sizeof(out));
+    CHECK_HR(IDirect3DDevice9_GetMaterial(device, &out), D3D_OK);
+    CHECK_TRUE(out.Specular.r == 0.5f);
+    CHECK_TRUE(out.Specular.g == 0.75f);
+    CHECK_TRUE(out.Specular.b == 1.0f);
+    CHECK_TRUE(out.Specular.a == 1.0f);
+    CHECK_TRUE(out.Power == 25.0f);
+    CHECK_TRUE(out.Diffuse.r == 0.25f);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_max_index16
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_max_index16_draw_policy(const struct d3d9_api *api)
+{
+    IDirect3DVertexBuffer9 *vb = NULL;
+    IDirect3DIndexBuffer9 *ib = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DCAPS9 caps;
+    HWND window;
+    HRESULT hr;
+    void *data = NULL;
+    WORD *indices;
+    float *verts;
+    unsigned int i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    CHECK_TRUE(caps.MaxVertexIndex >= 0xfffe);
+
+    hr = IDirect3DDevice9_CreateIndexBuffer(device, sizeof(WORD) * 4,
+            D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &ib, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    hr = IDirect3DIndexBuffer9_Lock(ib, 0, 0, &data, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        indices = (WORD *)data;
+        indices[0] = 0;
+        indices[1] = (WORD)0xfffd;
+        indices[2] = (WORD)0xfffe;
+        indices[3] = 0;
+        CHECK_HR(IDirect3DIndexBuffer9_Unlock(ib), D3D_OK);
+    }
+
+    /* Small VB so MinVertexIndex/NumVertices declares 0..0xfffe. */
+    hr = IDirect3DDevice9_CreateVertexBuffer(device, sizeof(float) * 3 * 3,
+            D3DUSAGE_WRITEONLY, D3DFVF_XYZ, D3DPOOL_DEFAULT, &vb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_ib;
+
+    data = NULL;
+    hr = IDirect3DVertexBuffer9_Lock(vb, 0, 0, &data, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        verts = (float *)data;
+        for (i = 0; i < 9; ++i)
+            verts[i] = 0.0f;
+        CHECK_HR(IDirect3DVertexBuffer9_Unlock(vb), D3D_OK);
+    }
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, vb, 0,
+            sizeof(float) * 3), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetIndices(device, ib), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ), D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    /* Accept either S_OK or D3DERR_INVALIDCALL; must not crash. */
+    hr = IDirect3DDevice9_DrawIndexedPrimitive(device, D3DPT_TRIANGLELIST,
+            0, 0, 0xffff, 0, 1);
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+
+    IDirect3DVertexBuffer9_Release(vb);
+done_ib:
+    IDirect3DIndexBuffer9_Release(ib);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_null_format
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_null_format_caps_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DSURFACE_DESC desc;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    /* CheckDeviceFormat at the factory level — record whichever HRESULT
+     * the host reports. NULL render-target surfaces are an optional cap. */
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DUSAGE_RENDERTARGET,
+            D3DRTYPE_SURFACE, D3DFMT_NULL);
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_NOTAVAILABLE);
+
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_NULL render targets are not supported");
+        goto done_d3d9;
+    }
+
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 64, 64, D3DFMT_NULL,
+            D3DMULTISAMPLE_NONE, 0, FALSE, &surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&desc, 0xcc, sizeof(desc));
+        CHECK_HR(IDirect3DSurface9_GetDesc(surface, &desc), D3D_OK);
+        /* Format round-trips. Some hosts normalize to the canonical
+         * D3DFMT_NULL fourcc — accept either equality form. */
+        CHECK_TRUE(desc.Format == D3DFMT_NULL);
+        CHECK_TRUE(desc.Width == 64);
+        CHECK_TRUE(desc.Height == 64);
+        IDirect3DSurface9_Release(surface);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_sample_mask
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_sample_mask_render_state_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    DWORD value;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Default multisample mask is all-ones. */
+    value = 0;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_MULTISAMPLEMASK,
+            &value), D3D_OK);
+    CHECK_TRUE(value == 0xffffffff);
+
+    /* Round-trip an arbitrary 32-bit mask byte-equal. */
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_MULTISAMPLEMASK,
+            0xdeadbeef), D3D_OK);
+    value = 0;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device, D3DRS_MULTISAMPLEMASK,
+            &value), D3D_OK);
+    CHECK_TRUE(value == 0xdeadbeef);
+
+    /* Default MULTISAMPLEANTIALIAS is TRUE. */
+    value = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device,
+            D3DRS_MULTISAMPLEANTIALIAS, &value), D3D_OK);
+    CHECK_TRUE(value == TRUE);
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device,
+            D3DRS_MULTISAMPLEANTIALIAS, FALSE), D3D_OK);
+    value = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device,
+            D3DRS_MULTISAMPLEANTIALIAS, &value), D3D_OK);
+    CHECK_TRUE(value == FALSE);
+
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device,
+            D3DRS_MULTISAMPLEANTIALIAS, TRUE), D3D_OK);
+    value = 0xdeadbeef;
+    CHECK_HR(IDirect3DDevice9_GetRenderState(device,
+            D3DRS_MULTISAMPLEANTIALIAS, &value), D3D_OK);
+    CHECK_TRUE(value == TRUE);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_depth_stencil_init
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ */
+void test_visual_depth_stencil_init_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *ds = NULL;
+    IDirect3DSurface9 *out = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    D3DSURFACE_DESC desc;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    window = create_test_window();
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    hr = IDirect3DDevice9_CreateDepthStencilSurface(device, 64, 64,
+            D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, TRUE, &ds, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_device;
+
+    memset(&desc, 0xcc, sizeof(desc));
+    CHECK_HR(IDirect3DSurface9_GetDesc(ds, &desc), D3D_OK);
+    CHECK_TRUE(desc.Width == 64);
+    CHECK_TRUE(desc.Height == 64);
+    CHECK_TRUE(desc.Format == D3DFMT_D24S8);
+    CHECK_TRUE(desc.Pool == D3DPOOL_DEFAULT);
+    CHECK_TRUE(desc.Type == D3DRTYPE_SURFACE);
+
+    /* SetDepthStencilSurface(ds) then GetDepthStencilSurface returns the
+     * same surface AddRef'd. */
+    CHECK_HR(IDirect3DDevice9_SetDepthStencilSurface(device, ds), D3D_OK);
+    out = NULL;
+    CHECK_HR(IDirect3DDevice9_GetDepthStencilSurface(device, &out), D3D_OK);
+    CHECK_TRUE(out == ds);
+    if (out)
+        IDirect3DSurface9_Release(out);
+
+    /* SetDepthStencilSurface(NULL) then GetDepthStencilSurface yields
+     * D3DERR_NOTFOUND with NULL out-pointer. */
+    CHECK_HR(IDirect3DDevice9_SetDepthStencilSurface(device, NULL), D3D_OK);
+    out = (IDirect3DSurface9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_GetDepthStencilSurface(device, &out);
+    CHECK_HR(hr, D3DERR_NOTFOUND);
+    CHECK_TRUE(out == NULL);
+
+    IDirect3DSurface9_Release(ds);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
