@@ -96,6 +96,7 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
   bool defaultPoolTracked_ = false;
+  bool locked_ = false;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -168,16 +169,44 @@ public:
   }
   HRESULT STDMETHODCALLTYPE Lock(UINT off, UINT size, void **pp,
                                  DWORD flags) noexcept override {
+    // Wine d3d9 conformance: validate the argument shape before the
+    // recorder flush so a bogus Lock never causes pending work to
+    // commit. The four invariants below mirror dlls/d3d9/buffer.c
+    // (test_vb_lock_flags / wined3d_resource_check_box_dimensions).
+    if (!pp)
+      return D3DERR_INVALIDCALL;
+    if (locked_)
+      return D3DERR_INVALIDCALL;
+    {
+      D9CBufferDesc desc{};
+      if (SUCCEEDED(hr32(dxmt9c_buffer_get_desc(b_, &desc)))) {
+        const UINT bufSize = desc.size;
+        // Wine treats size==0 as "lock from off to end of buffer";
+        // any non-zero size must fit within [off, bufSize].
+        if (off > bufSize)
+          return D3DERR_INVALIDCALL;
+        if (size != 0 && size > bufSize - off)
+          return D3DERR_INVALIDCALL;
+      }
+    }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
-    return hr32(dxmt9c_buffer_lock(b_, off, size, pp, flags));
+    const HRESULT lockHr = hr32(dxmt9c_buffer_lock(b_, off, size, pp, flags));
+    if (SUCCEEDED(lockHr))
+      locked_ = true;
+    return lockHr;
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
+    if (!locked_)
+      return D3DERR_INVALIDCALL;
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))
       return flushHr;
-    return hr32(dxmt9c_buffer_unlock(b_));
+    const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(b_));
+    if (SUCCEEDED(unlockHr))
+      locked_ = false;
+    return unlockHr;
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DVERTEXBUFFER_DESC *pDesc) noexcept override {

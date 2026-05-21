@@ -3030,6 +3030,19 @@ public:
             *pValue = 0;
             return S_OK;
         }
+        // Phase 34: serve from the PE-side shadow so a Set/Get round-trip
+        // is observable without forcing a recorder flush. Mirrors the
+        // GetTextureStageState pattern (see above): shadow first, fall
+        // back to the core-side read for slots the app has never written
+        // (those return the resetState() defaults).
+        uint32_t stateSlot = 0;
+        if (samplerStateSlot(type, stateSlot)) {
+            uint32_t shadowValue = 0;
+            if (peState_.samplerStateShadow.get(samplerIndex, stateSlot, shadowValue)) {
+                *pValue = shadowValue;
+                return S_OK;
+            }
+        }
         *pValue = dxmt9c_device_get_sampler_state(dev_, samplerIndex, (uint32_t)type);
         return S_OK;
     }
