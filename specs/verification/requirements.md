@@ -95,6 +95,30 @@ No other path to the Freed state may exist.
 `DestroyPending` is eventually freed once the GPU has drained past its
 last-use sequence ID (no permanent leak).
 
+**R-VERIF-3.4** The formal spec must prove that (slot, generation)
+tagged-handle lookups are ABA-safe: an unregistered id never resolves
+to a re-handed occupant of the same slot, and a lookup of an id always
+returns the entity in exactly the slot the id points at. This applies
+to `HandleArena` today and to any future `PresenterSlot`-style registry
+that hands out stable opaque ids across threads. Coverage is provided
+by `tla/PresentIdAba.tla`.
+
+**R-VERIF-3.5** The formal spec must prove the cross-side
+generation-stamp invariant on the PE → unix command-chunk bridge:
+a wire entry whose stamped generation differs from the live arena
+generation at admit time must be rejected before any record dispatch.
+The legacy NONE sentinel (opaque-pointer recorder path) is an
+intentional soft exception and must always be accepted. Coverage is
+provided by `tla/WireHandleGeneration.tla`.
+
+**R-VERIF-3.6** The formal spec must prove that the
+`PresentDrawableToken` stash → wait → take → complete/fail handoff
+between the PE thread, the async-acquire worker, and the encoder
+thread is race-free: `complete()` and `fail()` are mutually
+exclusive and single-use, `take` from the queue's slot is single-use,
+and `waitDrawable()` eventually returns under fair fulfilment.
+Coverage is provided by `tla/DrawableToken.tla`.
+
 ---
 
 ## 4. Encoder Lifecycle
