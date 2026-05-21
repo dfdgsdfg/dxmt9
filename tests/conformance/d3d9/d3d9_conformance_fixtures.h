@@ -513,4 +513,20 @@ void test_visual_filling_convention_caps_policy(const struct d3d9_api *api);
 void test_visual_line_antialiasing_blending_state_policy(const struct d3d9_api *api);
 void test_visual_blit_format_conversion_policy(const struct d3d9_api *api);
 
+
+/* Wine visual.c planned-item scaffolds (G1). */
+void test_visual_specular_lighting_render_state_policy(const struct d3d9_api *api);
+void test_visual_max_index16_draw_policy(const struct d3d9_api *api);
+void test_visual_null_format_caps_policy(const struct d3d9_api *api);
+void test_visual_sample_mask_render_state_policy(const struct d3d9_api *api);
+void test_visual_depth_stencil_init_policy(const struct d3d9_api *api);
+
+/* Wine vendor-format / SM1 deferred-policy scaffolds (G3). */
+void test_vendor_policy_texbem_unsupported(const struct d3d9_api *api);
+void test_vendor_policy_texdepth_unsupported(const struct d3d9_api *api);
+void test_vendor_policy_intz_caps(const struct d3d9_api *api);
+void test_vendor_policy_fetch4_caps(const struct d3d9_api *api);
+void test_vendor_policy_resz_caps(const struct d3d9_api *api);
+void test_vendor_policy_mipmap_upload_policy(const struct d3d9_api *api);
+
 #endif /* DXMT9_TESTS_D3D9_CONFORMANCE_FIXTURES_H */

@@ -3261,3 +3261,241 @@ owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["CheckDeviceFormat returns a Wine-compatible HRESULT when probing D3DUSAGE_DEPTHSTENCIL with D3DRTYPE_TEXTURE for D3DFMT_D16, D3DFMT_D24S8, and D3DFMT_D24X8 (shadow-texture sampling caps)"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_specular_lighting_render_state_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_specular_lighting"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "lighting"
+owner = "core/device"
+requirements = ["R-TEST-12.9"]
+acceptance = ["D3DRS_SPECULARENABLE round-trips TRUE/FALSE byte-equal, SetMaterial/GetMaterial round-trips Specular and Power byte-equal, default Power is 0.0f and default specular is black"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_max_index16_draw_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_max_index16"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "draw-primitive"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["D3DFMT_INDEX16 buffers accept indices up to 0xfffe, DrawIndexedPrimitive with NumVertices=0xffff returns S_OK or D3DERR_INVALIDCALL without crashing, caps.MaxVertexIndex is at least 0xfffe"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_null_format_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_null_format"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "format-caps"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["CheckDeviceFormat for D3DFMT_NULL surface render targets returns S_OK or D3DERR_NOTAVAILABLE; when supported, CreateRenderTarget(D3DFMT_NULL) succeeds and GetDesc reports the format and dimensions back"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_sample_mask_render_state_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_sample_mask"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "render-state"
+owner = "core/device"
+requirements = ["R-TEST-12.9"]
+acceptance = ["D3DRS_MULTISAMPLEMASK defaults to 0xffffffff and round-trips arbitrary 32-bit values byte-equal; D3DRS_MULTISAMPLEANTIALIAS defaults to TRUE and round-trips TRUE/FALSE"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_depth_stencil_init_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_depth_stencil_init"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "depth-stencil"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["CreateDepthStencilSurface(D24S8) succeeds with matching dims/format/Pool=DEFAULT/Type=SURFACE, SetDepthStencilSurface round-trips through Get with AddRef, and SetDepthStencilSurface(NULL) yields D3DERR_NOTFOUND with NULL out-pointer"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_visual_filling_convention_caps_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_filling_convention"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "raster-state"
+owner = "core/encoder"
+requirements = ["R-TEST-12.9"]
+acceptance = ["caps report CULLNONE/CW/CCW, D3DRS_CULLMODE defaults to CCW and round-trips for all three modes, LineCaps D3DLINECAPS_ANTIALIAS is queried without crash"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_visual_line_antialiasing_blending_state_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_line_antialiasing_blending"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "render-state"
+owner = "core/device"
+requirements = ["R-TEST-12.9"]
+acceptance = ["D3DRS_ANTIALIASEDLINEENABLE defaults FALSE and round-trips, D3DRS_ALPHABLENDENABLE defaults FALSE, BLENDOP/SRCBLEND/DESTBLEND round-trip the SRCALPHA/INVSRCALPHA/ADD pipeline"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_visual_blit_format_conversion_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_blit_format_conversion"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "surface"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["StretchRect between A8R8G8B8 RTs in DEFAULT pool succeeds, A8R8G8B8 to X8R8G8B8 returns S_OK or D3DERR_INVALIDCALL, MSAA mismatch returns S_OK or D3DERR_INVALIDCALL"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_vendor_policy.c"
+function = "test_vendor_policy_texbem_unsupported"
+source = "wine/dlls/d3d9/tests/visual.c:texbem_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vendor-format-policy"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormat(D3DFMT_V8U8, QUERY_BUMPENVMAP) returns one of {S_OK, D3DERR_NOTAVAILABLE} stably; TEXBEM opcode lowering deferred until NATIVE BEM oracle exists"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_vendor_policy.c"
+function = "test_vendor_policy_texdepth_unsupported"
+source = "wine/dlls/d3d9/tests/visual.c:texdepth_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vendor-format-policy"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["D3DCAPS9 exposes ps_1_4 with finite PixelShader1xMaxValue; TEXDEPTH opcode lowering deferred until SM1 depth-readback oracle exists"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_vendor_policy.c"
+function = "test_vendor_policy_intz_caps"
+source = "wine/dlls/d3d9/tests/visual.c:intz_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vendor-format-policy"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormat for INTZ sampleable depth-stencil texture returns D3DERR_NOTAVAILABLE; dxmt9 does not expose INTZ on Metal"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_vendor_policy.c"
+function = "test_vendor_policy_fetch4_caps"
+source = "wine/dlls/d3d9/tests/visual.c:test_fetch4"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vendor-format-policy"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormat for D24S8 sampleable depth-stencil texture and GET4 FOURCC both return D3DERR_NOTAVAILABLE; FETCH4 enable token unsupported on dxmt9"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_vendor_policy.c"
+function = "test_vendor_policy_resz_caps"
+source = "wine/dlls/d3d9/tests/visual.c:resz_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vendor-format-policy"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceFormat for RESZ FOURCC returns D3DERR_NOTAVAILABLE; dxmt9 uses resolve attachments + dedicated blit on Metal instead of RESZ-style enable token"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_vendor_policy.c"
+function = "test_vendor_policy_mipmap_upload_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_mipmap_upload"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "vendor-format-policy"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["D3DCAPS9 advertises D3DPTEXTURECAPS_MIPMAP with at least one blend stage and one simultaneous texture; per-level Lock upload contract deferred to NATIVE follow-up"]
+status = "scaffolded"
