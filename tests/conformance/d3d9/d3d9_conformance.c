@@ -321,6 +321,12 @@ static const struct test_case tests[] =
             test_vendor_policy_mipmap_upload_policy},
     {"miptree_layout_lock_pitch_policy",
             test_miptree_layout_lock_pitch_policy},
+    {"visual_bumpenvmap_tss_policy", test_visual_bumpenvmap_tss_policy},
+    {"visual_pretransformed_vertex_declaration_policy",
+            test_visual_pretransformed_vertex_declaration_policy},
+    {"visual_vface_pixel_shader_create_policy",
+            test_visual_vface_pixel_shader_create_policy},
+    {"visual_fp_special_caps_policy", test_visual_fp_special_caps_policy},
 };
 
 int main(void)

@@ -21,6 +21,7 @@ d3d9_conformance = executable(
     'd3d9_conformance_visual_raster.c',
     'd3d9_conformance_visual_planned.c',
     'd3d9_conformance_vendor_policy.c',
+    'd3d9_conformance_sr_blocked_policy.c',
   ],
   dependencies: [
     c.find_library('gdi32', required: true),
