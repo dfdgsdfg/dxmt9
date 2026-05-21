@@ -2155,17 +2155,29 @@ void testVs20IndexedConstSourceLowersToClampedConstAccess() {
                    "indexed access is no longer rewritten as a static cFloat[5] read");
 }
 
-void testVs30VertexTextureFetchThrowsDeterministically() {
+void testVs30VertexTextureFetchLowersDeterministically() {
   // Wine visual.c `test_vertex_texture` exercises real VS texture fetch only
-  // when caps expose D3DUSAGE_QUERY_VERTEXTEXTURE. dxmt9 currently has
-  // fragment-stage texture/sampler commands in the Stage 1 winemetal ABI;
-  // emitting `tex0.sample` from the vertex function would produce invalid MSL,
-  // so the translator must fail this lane at source generation until a
-  // vertex-stage texture/sampler binding ABI is added.
-  checkThrowsContains([] {
-    (void)translateVertex(makeVs30VertexTextureBytecode());
-  }, "vertex texture fetch requires vertex-stage texture/sampler binding ABI",
-                      "VS texture fetch gap is classified deterministically");
+  // when caps expose D3DUSAGE_QUERY_VERTEXTEXTURE. The vertex-stage
+  // texture/sampler binding ABI now exists, and the MSL translator lowers
+  // VS TEXLDL to a Metal `tex<N>.sample(samp<N>, coord, level(coord.w))`
+  // call at the vertex function. This test pins the lowering so the
+  // closed-gap behavior cannot silently regress to either a throw (the
+  // historical pre-ABI behavior) or a quiet no-op.
+  //
+  // Safe-rejection contract context: commit e867a2a wraps
+  // `translateD3DBytecodeToSpirv` in a try/catch that converts any
+  // `DecoderReject` / `std::exception` into an empty SpirvModule and
+  // bumps a `shader_decoder_reject_*` perf counter. That contract
+  // applies to malformed bytecode (see
+  // `tests/native/core/shader_bytecode_validation_spec.cpp`); the
+  // VS texture fetch fixture here is well-formed and must reach the
+  // MSL emitter, so the contract observable for this case is the
+  // emitted source string — not a counter bump.
+  const auto source = translateVertex(makeVs30VertexTextureBytecode());
+  checkContains(source, "tex0.sample(samp0",
+                "VS TEXLDL lowers to a vertex-stage Metal sample call on sampler 0");
+  checkContains(source, "level(",
+                "VS TEXLDL preserves the explicit LOD argument from src.w");
 }
 
 void testPs14ConstantSourcesClampBeforeArithmetic() {
@@ -2240,7 +2252,7 @@ int main() {
     testVs20DefLiteralWithRelAddrBitDoesNotDriftParser();
     testVs20IndexedConstSourceParserConsumesRelAddrDword();
     testVs20IndexedConstSourceLowersToClampedConstAccess();
-    testVs30VertexTextureFetchThrowsDeterministically();
+    testVs30VertexTextureFetchLowersDeterministically();
     testPs14ConstantSourcesClampBeforeArithmetic();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
