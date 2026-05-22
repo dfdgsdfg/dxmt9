@@ -2516,6 +2516,9 @@ public:
                                                            HANDLE* psh) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
+        // Wine D3D9 contract from test_surface_dimensions: width or
+        // height of zero is rejected with D3DERR_INVALIDCALL.
+        if (w == 0 || h == 0) return D3DERR_INVALIDCALL;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForSurface(extended_, psh, pool, true);
         if (FAILED(sharedHr)) return sharedHr;
