@@ -153,11 +153,68 @@ static bool lockDiscardIsValid(DWORD flags, DWORD usage) {
   return (usage & D3DUSAGE_DYNAMIC) != 0;
 }
 
+// Wine volume_block_lock_layout: block-compressed (DXT*/ATI*) volume
+// textures require the lock box to be 4-pixel aligned on Left/Top.
+// Non-aligned boxes return D3DERR_INVALIDCALL before any backend work.
+static bool formatIsBlockCompressed(uint32_t fmt) {
+  switch (fmt) {
+  case D3DFMT_DXT1:
+  case D3DFMT_DXT2:
+  case D3DFMT_DXT3:
+  case D3DFMT_DXT4:
+  case D3DFMT_DXT5:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// Bytes-per-pixel for the small set of formats the conformance lock-box
+// tests exercise. Returns 0 for unknown / block-compressed formats — the
+// caller must skip the offset adjustment in that case.
+static uint32_t formatBytesPerPixel(uint32_t fmt) {
+  switch (fmt) {
+  case D3DFMT_A8R8G8B8:
+  case D3DFMT_X8R8G8B8:
+  case D3DFMT_A8B8G8R8:
+  case D3DFMT_X8B8G8R8:
+    return 4;
+  case D3DFMT_R8G8B8:
+    return 3;
+  case D3DFMT_A1R5G5B5:
+  case D3DFMT_X1R5G5B5:
+  case D3DFMT_R5G6B5:
+  case D3DFMT_A4R4G4B4:
+  case D3DFMT_X4R4G4B4:
+  case D3DFMT_A8L8:
+  case D3DFMT_V8U8:
+    return 2;
+  case D3DFMT_A8:
+  case D3DFMT_L8:
+  case D3DFMT_P8:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
 [[nodiscard]] static HRESULT lockTextureBox(D9CTexture *texture, UINT level,
                               D3DLOCKED_BOX *locked, const D3DBOX *box,
                               DWORD flags, D3D9PeRecorderFlush *recorder) {
   if (!locked)
     return D3DERR_INVALIDCALL;
+  // Reject misaligned boxes on block-compressed volumes BEFORE the
+  // recorder flush so a malformed Lock never commits pending records.
+  D9CSurfaceDesc preDesc{};
+  const bool descOk =
+      SUCCEEDED(textureLevelDesc(texture, level, &preDesc));
+  if (box && descOk && formatIsBlockCompressed(preDesc.format)) {
+    if ((box->Left & 3u) != 0u || (box->Top & 3u) != 0u
+        || ((box->Right & 3u) != 0u && box->Right != preDesc.width)
+        || ((box->Bottom & 3u) != 0u && box->Bottom != preDesc.height)) {
+      return D3DERR_INVALIDCALL;
+    }
+  }
   const HRESULT flushHr = flushChildRecorder(recorder);
   if (FAILED(flushHr))
     return flushHr;
@@ -178,14 +235,25 @@ static bool lockDiscardIsValid(DWORD flags, DWORD usage) {
   // fails.
   D9CSurfaceDesc desc{};
   UINT height = 1;
+  uint32_t format = preDesc.format;
   if (SUCCEEDED(textureLevelDesc(texture, level, &desc))) {
     height = std::max<UINT>(1, desc.height);
+    format = desc.format;
   } else if (box && box->Bottom > box->Top) {
     height = box->Bottom - box->Top;
   }
   locked->RowPitch = lockedRect.pitch;
   locked->SlicePitch = lockedRect.pitch * static_cast<int>(height);
   locked->pBits = lockedRect.bits;
+  // volume_lockbox_bounds_offset_policy: D9CRect only carries 2D
+  // (left/top/right/bottom) so the C side already advanced pBits by the
+  // top/left offset but cannot apply the Front/Back Z component. Add the
+  // Z component here so the final pointer matches the box origin.
+  if (box && lockedRect.bits && box->Front != 0) {
+    auto *base = static_cast<uint8_t *>(lockedRect.bits);
+    locked->pBits = base
+        + static_cast<ptrdiff_t>(box->Front) * locked->SlicePitch;
+  }
   return S_OK;
 }
 
