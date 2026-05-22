@@ -354,56 +354,66 @@ void Presenter::preAcquireNextDrawable(uint64_t seqId) {
 }
 
 void Presenter::runAsyncAcquireLoop() {
+  // Worker thread has no AppKit run loop, so it owns no top-level
+  // autorelease pool. `layer_.nextDrawableRetained()` crosses into
+  // the unix .mm provider where `[CAMetalLayer nextDrawable]` and any
+  // QuartzCore/Foundation temporaries it spawns would otherwise
+  // accumulate until thread exit. Wrap each iteration's acquire body
+  // in @autoreleasepool to drain those temporaries per-frame. See
+  // agents/rules/codebase_conventions.rules.md "Metal / ObjC++
+  // Runtime" — Presenter is the runtime-side drawable owner.
   while (true) {
-    AsyncAcquireRequest request{};
-    {
-      std::unique_lock lock(asyncAcquireMutex_);
-      asyncAcquireCv_.wait(lock, [this] {
-        return asyncAcquireStop_ ||
-               (!asyncAcquireRequests_.empty() && !asyncAcquireDrawableHeld_);
-      });
-      if (asyncAcquireStop_ && asyncAcquireRequests_.empty()) {
-        return;
+    @autoreleasepool {
+      AsyncAcquireRequest request{};
+      {
+        std::unique_lock lock(asyncAcquireMutex_);
+        asyncAcquireCv_.wait(lock, [this] {
+          return asyncAcquireStop_ ||
+                 (!asyncAcquireRequests_.empty() && !asyncAcquireDrawableHeld_);
+        });
+        if (asyncAcquireStop_ && asyncAcquireRequests_.empty()) {
+          return;
+        }
+        if (asyncAcquireStop_) {
+          return;
+        }
+        request = std::move(asyncAcquireRequests_.front());
+        asyncAcquireRequests_.pop_front();
+        asyncAcquireDrawableHeld_ = true;
       }
-      if (asyncAcquireStop_) {
-        return;
+
+      if (!request.token) {
+        finishAsyncAcquireToken();
+        continue;
       }
-      request = std::move(asyncAcquireRequests_.front());
-      asyncAcquireRequests_.pop_front();
-      asyncAcquireDrawableHeld_ = true;
-    }
+      if (!layer_) {
+        request.token->fail();
+        finishAsyncAcquireToken();
+        continue;
+      }
 
-    if (!request.token) {
-      finishAsyncAcquireToken();
-      continue;
-    }
-    if (!layer_) {
-      request.token->fail();
-      finishAsyncAcquireToken();
-      continue;
-    }
+      {
+        std::lock_guard lock(stateMutex_);
+        configureLayer(request.params);
+      }
 
-    {
-      std::lock_guard lock(stateMutex_);
-      configureLayer(request.params);
-    }
-
-    presentimpl::traceEvent("asyncAcquire.begin", request.params.seqId, hwnd_);
-    const auto acquireStarted = std::chrono::steady_clock::now();
-    auto drawable = layer_.nextDrawableRetained();
-    const auto acquireElapsed = std::chrono::steady_clock::now() - acquireStarted;
-    const auto acquireNs = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(acquireElapsed).count());
-    perf::countPresentAcquireWait(acquireNs);
-    perf::countPresentAsyncAcquireWait(acquireNs);
-    if (!drawable) {
-      presentimpl::traceEvent("asyncAcquire.nil", request.params.seqId, hwnd_);
-      request.token->fail();
-      finishAsyncAcquireToken();
-      continue;
-    }
-    presentimpl::traceEvent("asyncAcquire.ok", request.params.seqId, hwnd_);
-    request.token->complete(std::move(drawable));
+      presentimpl::traceEvent("asyncAcquire.begin", request.params.seqId, hwnd_);
+      const auto acquireStarted = std::chrono::steady_clock::now();
+      auto drawable = layer_.nextDrawableRetained();
+      const auto acquireElapsed = std::chrono::steady_clock::now() - acquireStarted;
+      const auto acquireNs = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(acquireElapsed).count());
+      perf::countPresentAcquireWait(acquireNs);
+      perf::countPresentAsyncAcquireWait(acquireNs);
+      if (!drawable) {
+        presentimpl::traceEvent("asyncAcquire.nil", request.params.seqId, hwnd_);
+        request.token->fail();
+        finishAsyncAcquireToken();
+        continue;
+      }
+      presentimpl::traceEvent("asyncAcquire.ok", request.params.seqId, hwnd_);
+      request.token->complete(std::move(drawable));
+    }  // @autoreleasepool
   }
 }
 

@@ -38,7 +38,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_shader_archive.cpp',
   'dxmt9_hud.mm',
   'dxmt9_perf_counters.cpp',
-  'dxmt9_presenter.cpp',
+  'dxmt9_presenter.mm',
   'dxmt9_presenter_macdrv.cpp',
   'dxmt9_signposts.cpp',
   'dxmt9_queue.cpp',
