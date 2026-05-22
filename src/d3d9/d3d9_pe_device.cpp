@@ -485,6 +485,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     UINT         adapter_ = 0;
     D3DDEVTYPE   deviceType_ = D3DDEVTYPE_HAL;
     DWORD        behaviorFlags_ = 0;
+    // Wine d3d9ex test_frame_latency: default Ex device latency is 3.
+    UINT         maxFrameLatencyShadow_ = 3;
     bool         extended_ = false;
     bool         cursorSurfaceSet_ = false;
     bool         cursorVisible_ = false;
@@ -2654,18 +2656,25 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetDepthStencilSurface(IDirect3DSurface9** ppS) noexcept override {
         if (!ppS) return D3DERR_INVALIDCALL;
+        // Wine d3d9 contract: when there is no depth-stencil surface bound,
+        // the return code is D3DERR_NOTFOUND (not S_FALSE) and *ppS is NULL.
+        // visual_depth_buffer_reset_policy + visual_depth_stencil_init_policy.
         if (dsSurfaceExplicit_) {
-            if (dsSurface_) dsSurface_->AddRef();
+            if (!dsSurface_) {
+                *ppS = nullptr;
+                return D3DERR_NOTFOUND;
+            }
+            dsSurface_->AddRef();
             *ppS = dsSurface_;
             dxmt9DeviceDebugLog("device_get_depth_stencil_surface device=%p -> cached surface=%p",
                                 this, static_cast<void*>(*ppS));
-            return *ppS ? S_OK : S_FALSE;
+            return S_OK;
         }
         D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
         *ppS = s ? CreatePeSurface(s, this, nullptr, this) : nullptr;
         dxmt9DeviceDebugLog("device_get_depth_stencil_surface device=%p -> surface=%p",
                             this, ppS ? static_cast<void*>(*ppS) : nullptr);
-        return s ? S_OK : S_FALSE;
+        return s ? S_OK : D3DERR_NOTFOUND;
     }
 
     /* ── scene ── */
@@ -2924,8 +2933,11 @@ public:
     HRESULT STDMETHODCALLTYPE GetMaterial(D3DMATERIAL9* pM) noexcept override {
         if (!pM) return D3DERR_INVALIDCALL;
         dxmt9DeviceDebugLog("device_get_material device=%p", this);
-        return hr32(dxmt9c_device_get_material(dev_,
-                    reinterpret_cast<D9CMaterial*>(pM)));
+        // PE-shadow is the source of truth: SetMaterial only writes the
+        // shadow, never the C-side state. Reading from C would return the
+        // default-constructed value instead of the last Set value.
+        std::memcpy(pM, &peState_.materialShadow, sizeof(D3DMATERIAL9));
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetLight(DWORD idx, const D3DLIGHT9* pL) noexcept override {
         if (!pL) return D3DERR_INVALIDCALL;
@@ -2964,9 +2976,32 @@ public:
         if (FAILED(flushHr)) return flushHr;
         return hr32(dxmt9c_device_set_light(dev_, idx, &cl));
     }
-    HRESULT STDMETHODCALLTYPE GetLight(DWORD, D3DLIGHT9* pL) noexcept override {
-        dxmt9DeviceDebugLog("device_get_light device=%p", this);
-        if (pL) memset(pL, 0, sizeof(*pL)); return S_OK; /* stub */
+    HRESULT STDMETHODCALLTYPE GetLight(DWORD idx, D3DLIGHT9* pL) noexcept override {
+        dxmt9DeviceDebugLog("device_get_light device=%p idx=%u", this, (unsigned)idx);
+        if (!pL) return D3DERR_INVALIDCALL;
+        if (idx >= D9C_DRAW_PACKET_MAX_LIGHTS) {
+            // Unset slot — Wine returns INVALIDCALL for never-Set indices.
+            return D3DERR_INVALIDCALL;
+        }
+        const D9CLight& cl = peState_.lightShadow[idx];
+        pL->Type = (D3DLIGHTTYPE)cl.type;
+        std::memcpy(&pL->Diffuse,  &cl.diffuse,  sizeof(D3DCOLORVALUE));
+        std::memcpy(&pL->Specular, &cl.specular, sizeof(D3DCOLORVALUE));
+        std::memcpy(&pL->Ambient,  &cl.ambient,  sizeof(D3DCOLORVALUE));
+        pL->Position.x = cl.position[0];
+        pL->Position.y = cl.position[1];
+        pL->Position.z = cl.position[2];
+        pL->Direction.x = cl.direction[0];
+        pL->Direction.y = cl.direction[1];
+        pL->Direction.z = cl.direction[2];
+        pL->Range = cl.range;
+        pL->Falloff = cl.falloff;
+        pL->Attenuation0 = cl.attenuation0;
+        pL->Attenuation1 = cl.attenuation1;
+        pL->Attenuation2 = cl.attenuation2;
+        pL->Theta = cl.theta;
+        pL->Phi = cl.phi;
+        return S_OK;
     }
     HRESULT STDMETHODCALLTYPE LightEnable(DWORD idx, BOOL en) noexcept override {
         dxmt9DeviceDebugLog("device_light_enable device=%p idx=%u enable=%u", this, (unsigned)idx, (unsigned)en);
@@ -3369,7 +3404,11 @@ public:
     }
     BOOL    STDMETHODCALLTYPE GetSoftwareVertexProcessing() noexcept override {
         dxmt9DeviceDebugLog("device_get_software_vertex_processing device=%p", this);
-        return FALSE;
+        // Wine d3d9 contract: when the device was created with
+        // D3DCREATE_SOFTWARE_VERTEXPROCESSING, the default state is TRUE.
+        // (Apps may override via SetSoftwareVertexProcessing on a mixed-mode
+        // device, but dxmt9 does not yet expose mixed-mode.)
+        return (behaviorFlags_ & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE;
     }
     HRESULT STDMETHODCALLTYPE SetNPatchMode(float segments) noexcept override {
         dxmt9DeviceDebugLog("device_set_npatch_mode device=%p segments=%f", this, segments);
@@ -3995,11 +4034,18 @@ public:
                                                       UINT32) noexcept override { return S_OK; }
 
     HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT maxLatency) noexcept override {
+        // Wine d3d9ex test_frame_latency contract: valid range is 1..30.
+        // 0 or >= 31 must return D3DERR_INVALIDCALL.
+        if (maxLatency == 0 || maxLatency >= 31)
+            return D3DERR_INVALIDCALL;
+        maxFrameLatencyShadow_ = maxLatency;
         return hr32(dxmt9c_device_set_maximum_frame_latency(dev_, maxLatency));
     }
     HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* p) noexcept override {
         if (!p) return D3DERR_INVALIDCALL;
-        *p = dxmt9c_device_get_maximum_frame_latency(dev_); return S_OK;
+        // PE-shadow: return value previously set or the default of 3.
+        *p = maxFrameLatencyShadow_;
+        return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE CheckDeviceState(HWND wnd) noexcept override {

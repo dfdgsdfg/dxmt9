@@ -527,6 +527,21 @@ public:
                                  (unsigned)rtype);
             return D3DERR_INVALIDCALL;
         }
+        /* vendor_policy_fetch4_caps: sampleable-depth (USAGE_DEPTHSTENCIL on
+         * a TEXTURE resource) for D24S8 must report NOTAVAILABLE so apps
+         * fall off the FETCH4 fast path. dxmt9 does not implement
+         * depth-as-texture sampling. */
+        if (rtype == D3DRTYPE_TEXTURE && (usage & D3DUSAGE_DEPTHSTENCIL)
+                && (fmt == D3DFMT_D24S8 || fmt == D3DFMT_D24X8
+                    || fmt == D3DFMT_D16 || fmt == D3DFMT_D32
+                    || fmt == D3DFMT_D15S1 || fmt == D3DFMT_D24X4S4
+                    || fmt == D3DFMT_D24FS8 || fmt == D3DFMT_D32F_LOCKABLE
+                    || fmt == D3DFMT_D16_LOCKABLE
+                    || fmt == D3DFMT_D32_LOCKABLE)) {
+            dxmt9FactoryDebugLog("CheckDeviceFormat -> depth-as-texture NOTAVAILABLE fmt=%u",
+                                 (unsigned)fmt);
+            return D3DERR_NOTAVAILABLE;
+        }
         HRESULT hr = hr32(dxmt9c_factory_check_device_format2(
             f_, adapter, (uint32_t)fmt, usage, (uint32_t)rtype));
         /* D3DUSAGE_AUTOGENMIPMAP is informational: when the underlying

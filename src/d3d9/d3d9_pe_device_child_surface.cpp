@@ -743,7 +743,25 @@ public:
     }
     return hr;
   }
-  HRESULT STDMETHODCALLTYPE AddDirtyRect(const RECT *) noexcept override {
+  HRESULT STDMETHODCALLTYPE AddDirtyRect(const RECT *pRect) noexcept override {
+    // visual_add_dirty_rect_policy: AddDirtyRect is only valid for
+    // D3DPOOL_MANAGED textures (and SYSTEMMEM-backed Ex-defaultpool). For
+    // DEFAULT-pool textures, Wine returns D3DERR_INVALIDCALL.
+    D9CSurfaceDesc desc{};
+    if (SUCCEEDED(textureLevelDesc(t_, 0, &desc))
+        && desc.pool != D3DPOOL_MANAGED
+        && desc.pool != D3DPOOL_SYSTEMMEM) {
+      return D3DERR_INVALIDCALL;
+    }
+    // Inverted / empty rect rejection (Wine d3d9: AddDirtyRect validates
+    // rect bounds before recording).
+    if (pRect) {
+      if (pRect->left < 0 || pRect->top < 0
+          || pRect->right <= pRect->left
+          || pRect->bottom <= pRect->top) {
+        return D3DERR_INVALIDCALL;
+      }
+    }
     return S_OK;
   }
 };
