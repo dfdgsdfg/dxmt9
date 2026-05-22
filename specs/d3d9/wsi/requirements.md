@@ -97,3 +97,56 @@ with `D3DERR_NOTAVAILABLE` after parameter validation.
 Adapter and monitor reporting must remain stable for the process lifetime.
 Where multiple monitors are exposed, each adapter identifier must include a
 stable display identity such as the host `CGDirectDisplayID`.
+
+---
+
+## 6. Backbuffer Readback And `framebufferOnly` Layer Mode
+
+The D3D9-visible backbuffer surface returned by
+`IDirect3DSwapChain9::GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, …)` and the
+`CAMetalLayer` drawable used at present time are distinct Metal objects in
+dxmt9. The backbuffer is a dxmt9-owned `MTLTexture` allocated through the
+queue's resource pool (see `core_resources.cpp:319`); the drawable is acquired
+from the layer's `nextDrawable` only inside the present encoder
+(`dxmt9_presenter.cpp`) and is the destination of the present blit, not its
+source.
+
+The `DXMT9_LAYER_FRAMEBUFFER_ONLY` environment knob (see
+`agents/rules/environment_variables.rules.md`) toggles
+`CAMetalLayer.framebufferOnly` between `false` (default) and `true`. The
+property describes the **drawable** backing, not the backbuffer texture.
+
+**R-CORE-WSI-6.1** (Backbuffer Lock/Readback independence from layer mode)
+`IDirect3DSurface9::LockRect`, `IDirect3DSurface9::UnlockRect`, and
+`IDirect3DDevice9::GetRenderTargetData` invoked on the surface returned by
+`IDirect3DSwapChain9::GetBackBuffer` must continue to behave per their normal
+D3D9 contracts (Wine-oracle parity for invalid-rect / double-Lock /
+Unlock-without-Lock / `D3DERR_INVALIDCALL` HRESULTs and successful pixel data
+return on a valid lock) regardless of the value of
+`DXMT9_LAYER_FRAMEBUFFER_ONLY`. The knob controls the
+`CAMetalLayer.framebufferOnly` drawable property only; the dxmt9 backbuffer
+`MTLTexture` is created with full read / blit usage flags through the queue
+resource pool and is the source of any D3D9-side readback. The present-time
+copy from the backbuffer texture into the drawable is the only operation
+affected by the drawable's tile-only mode.
+
+**R-CORE-WSI-6.2** (Configuration scope and no-op classification — D)
+This requirement records the **current implementation behavior** as
+unspecified at the D3D9-API surface: `DXMT9_LAYER_FRAMEBUFFER_ONLY=1` MUST
+NOT silently change any D3D9 `Lock` / `GetRenderTargetData` HRESULT, MUST
+NOT zero-fill caller buffers, and MUST NOT emit a per-call warning in any
+log level. There is no `framebufferOnly` branch on the D3D9 Lock / readback
+code paths (`src/d3d9/d3d9_pe_device_child_surface.cpp:397` for `LockRect`;
+`src/d3d9/d3d9_pe_device.cpp:2426` and `src/d3d9/core_surface.cpp:354` for
+`GetRenderTargetData`). Whether the present-side optimisation observably
+changes any D3D9-visible behavior on a future Metal release is currently
+not under test; the contract is "no D3D9-visible side effect today" and any
+intentional future divergence must add a corresponding
+`R-CORE-WSI-6.x` requirement and a Wine-oracle case before shipping.
+
+Note: behavior **classification D (no framebufferOnly branch in the D3D9 API
+surface; the toggle is a pure present-side optimisation)** applies. The
+historical comment thread in `dxmt9_presenter.cpp:226-235` referring to
+"D3D9 Lock() / GetRenderTargetData() on the backbuffer can read it" is
+about the drawable's system-memory residency for the WindowServer
+compositor path, not about the dxmt9 backbuffer `MTLTexture` read path.
