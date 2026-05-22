@@ -13,8 +13,11 @@ namespace {
 
 // R-WMB-6.2 / test_wild.rules.md: the experiment harness needs to surface
 // which WSI layer acquisition path was selected without requiring the opt-in
-// DXMT_TRACE_QUEUE channel. Emit one info-level line per process so the
-// `run_experiment.py` parser can populate result.json:wsi.layer_acquisition.
+// DXMT_TRACE_QUEUE channel. Emit one Warn-level line per process so the
+// default-Warn run_experiment.py parser can populate
+// result.json:wsi.layer_acquisition without requiring DXMT_LOG_LEVEL=Info.
+// The atomic guard keeps this to a single emission per process even under
+// concurrent first-acquire calls.
 std::atomic<bool> g_layerAcquisitionLogged{false};
 
 void logLayerAcquisitionOnce(const char* path, u64 hwnd) {
@@ -23,7 +26,7 @@ void logLayerAcquisitionOnce(const char* path, u64 hwnd) {
           expected, true, std::memory_order_acq_rel)) {
     return;
   }
-  dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-wsi",
+  dxmt9::util::logf(dxmt9::util::LogLevel::Warn, "dxmt9-wsi",
                     "layer_acquisition=%s hwnd=0x%llx",
                     path,
                     static_cast<unsigned long long>(hwnd));

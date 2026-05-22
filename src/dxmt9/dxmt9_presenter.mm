@@ -419,43 +419,50 @@ void Presenter::runAsyncAcquireLoop() {
 
 void Presenter::runPreAcquireLoop() {
   while (true) {
-    uint64_t seqId = 0;
-    uint64_t generation = 0;
-    {
-      std::unique_lock lock(preAcquireMutex_);
-      preAcquireCv_.wait(lock, [this] {
-        return preAcquireStop_ || preAcquireRequested_;
-      });
-      if (preAcquireStop_) {
-        return;
+    // Same Cocoa-temporary drain rationale as runAsyncAcquireLoop —
+    // `nextDrawableRetained()` calls into AppKit/Metal on a worker
+    // thread; wrap each iteration in @autoreleasepool so the temporary
+    // objects drain per-iteration rather than accumulating to thread
+    // exit (codebase_conventions.rules.md "Metal / ObjC++ Runtime").
+    @autoreleasepool {
+      uint64_t seqId = 0;
+      uint64_t generation = 0;
+      {
+        std::unique_lock lock(preAcquireMutex_);
+        preAcquireCv_.wait(lock, [this] {
+          return preAcquireStop_ || preAcquireRequested_;
+        });
+        if (preAcquireStop_) {
+          return;
+        }
+        seqId = preAcquireSeqId_;
+        generation = preAcquireGeneration_;
+        preAcquireRequested_ = false;
+        preAcquireInFlight_ = true;
       }
-      seqId = preAcquireSeqId_;
-      generation = preAcquireGeneration_;
-      preAcquireRequested_ = false;
-      preAcquireInFlight_ = true;
-    }
 
-    presentimpl::traceEvent("preAcquire.begin", seqId, hwnd_);
-    const auto acquireStarted = std::chrono::steady_clock::now();
-    auto drawable = layer_.nextDrawableRetained();
-    const auto acquireElapsed = std::chrono::steady_clock::now() - acquireStarted;
-    perf::countPresentPreAcquireWait(static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(acquireElapsed).count()));
-    if (!drawable) {
-      presentimpl::traceEvent("preAcquire.nil", seqId, hwnd_);
-    } else {
-      std::lock_guard lock(preAcquireMutex_);
-      if (!preAcquireStop_ && generation == preAcquireGeneration_ && !prefetchedDrawable_) {
-        prefetchedDrawable_ = std::move(drawable);
-        presentimpl::traceEvent("preAcquire.ok", seqId, hwnd_);
+      presentimpl::traceEvent("preAcquire.begin", seqId, hwnd_);
+      const auto acquireStarted = std::chrono::steady_clock::now();
+      auto drawable = layer_.nextDrawableRetained();
+      const auto acquireElapsed = std::chrono::steady_clock::now() - acquireStarted;
+      perf::countPresentPreAcquireWait(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(acquireElapsed).count()));
+      if (!drawable) {
+        presentimpl::traceEvent("preAcquire.nil", seqId, hwnd_);
+      } else {
+        std::lock_guard lock(preAcquireMutex_);
+        if (!preAcquireStop_ && generation == preAcquireGeneration_ && !prefetchedDrawable_) {
+          prefetchedDrawable_ = std::move(drawable);
+          presentimpl::traceEvent("preAcquire.ok", seqId, hwnd_);
+        }
       }
-    }
 
-    {
-      std::lock_guard lock(preAcquireMutex_);
-      preAcquireInFlight_ = false;
-    }
-    preAcquireCv_.notify_all();
+      {
+        std::lock_guard lock(preAcquireMutex_);
+        preAcquireInFlight_ = false;
+      }
+      preAcquireCv_.notify_all();
+    }  // @autoreleasepool
   }
 }
 
