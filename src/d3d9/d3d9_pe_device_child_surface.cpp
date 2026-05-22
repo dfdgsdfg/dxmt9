@@ -11,6 +11,29 @@
 #include <cstdarg>
 #include <cstdint>
 
+// Wine's d3dkmthk.h is not in the llvm-mingw SDK; inline the minimum
+// surface needed for the D3DKMTCreateDCFromMemory call path used by
+// `ex_user_memory_getdc_dib_identity`. Layout matches Wine's
+// `include/ddk/d3dkmthk.h`.
+extern "C" {
+  typedef enum _D3DDDIFORMAT { D3DDDIFMT_A8R8G8B8 = 21 } D3DDDIFORMAT;
+  typedef struct _D3DKMT_CREATEDCFROMMEMORY {
+    void *pMemory;
+    D3DDDIFORMAT Format;
+    UINT Width;
+    UINT Height;
+    UINT Pitch;
+    HDC hDeviceDc;
+    PALETTEENTRY *pColorTable;
+    HDC hDc;
+    HANDLE hBitmap;
+  } D3DKMT_CREATEDCFROMMEMORY;
+  typedef struct _D3DKMT_DESTROYDCFROMMEMORY {
+    HDC hDc;
+    HANDLE hBitmap;
+  } D3DKMT_DESTROYDCFROMMEMORY;
+}
+
 static inline HRESULT hr32(int32_t r) { return (HRESULT)r; }
 
 static void dxmt9DeviceDebugLog(const char *fmt, ...) {
@@ -332,6 +355,15 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   IUnknown *container_;
   D3D9PeRecorderFlush *recorder_;
   HDC dc_ = nullptr;
+  // ex_user_memory_getdc_dib_identity: for user-memory-aliased surfaces,
+  // GetDC must return a DC whose selected bitmap is a DIB section whose
+  // dsBm.bmBits literally equals the caller's data pointer. Wine's
+  // gdi32 exposes `D3DKMTCreateDCFromMemory` (forwards to
+  // win32u!NtGdiDdDDICreateDCFromMemory) which builds exactly such a
+  // DC/bitmap pair. The Win32-public CreateDIBSection path always
+  // allocates fresh bits and cannot satisfy the identity assertion.
+  HBITMAP dibBitmap_ = nullptr;
+  HDC kmtDc_ = nullptr;
   bool defaultPoolTracked_ = false;
   // Wine d3d9 conformance: PE-side lock-state mirror used to enforce
   // double-Lock / Unlock-without-Lock invariants before the C-side
@@ -630,9 +662,55 @@ public:
     }
     if (dc_)
       return D3DERR_INVALIDCALL;
-    dc_ = CreateCompatibleDC(nullptr);
-    if (!dc_)
-      return E_FAIL;
+    // ex_user_memory_getdc_dib_identity: when this surface aliases a
+    // caller-supplied user-memory buffer (D3D9Ex SYSTEMMEM
+    // shared-handle path), use D3DKMTCreateDCFromMemory — Wine's
+    // gdi32 entry point that builds a DC + DIB-section pair whose
+    // bmBits is the supplied pMemory pointer. This is exactly the
+    // mechanism Wine's wined3d uses for the same case.
+    if (userMemory_) {
+      D9CSurfaceDesc desc{};
+      if (SUCCEEDED(hr32(dxmt9c_surface_get_desc(s_, &desc)))
+          && desc.width != 0 && desc.height != 0) {
+        const uint32_t bpp = formatBytesPerPixel(desc.format);
+        if (bpp != 0) {
+          using PFN_D3DKMTCreateDCFromMemory =
+              LONG (WINAPI *)(D3DKMT_CREATEDCFROMMEMORY *);
+          static auto pCreate = []() -> PFN_D3DKMTCreateDCFromMemory {
+            HMODULE gdi = GetModuleHandleA("gdi32.dll");
+            if (!gdi) gdi = LoadLibraryA("gdi32.dll");
+            if (!gdi) return nullptr;
+            return reinterpret_cast<PFN_D3DKMTCreateDCFromMemory>(
+                reinterpret_cast<void *>(
+                    GetProcAddress(gdi, "D3DKMTCreateDCFromMemory")));
+          }();
+          if (pCreate) {
+            D3DKMT_CREATEDCFROMMEMORY req{};
+            req.pMemory = userMemory_;
+            // D3D9 D3DFMT_A8R8G8B8 maps to D3DDDIFMT_A8R8G8B8 (value 21).
+            req.Format = static_cast<D3DDDIFORMAT>(desc.format);
+            req.Width = desc.width;
+            req.Height = desc.height;
+            req.Pitch = static_cast<UINT>(userMemoryPitch_ != 0
+                ? userMemoryPitch_
+                : static_cast<int32_t>(desc.width * bpp));
+            HDC deviceDc = ::GetDC(nullptr);  // screen DC as device hint
+            req.hDeviceDc = deviceDc;
+            if (pCreate(&req) == 0 /* STATUS_SUCCESS */) {
+              kmtDc_ = req.hDc;
+              dibBitmap_ = static_cast<HBITMAP>(req.hBitmap);
+              dc_ = kmtDc_;
+            }
+            if (deviceDc) ::ReleaseDC(nullptr, deviceDc);
+          }
+        }
+      }
+    }
+    if (!dc_) {
+      dc_ = CreateCompatibleDC(nullptr);
+      if (!dc_)
+        return E_FAIL;
+    }
     *phdc = dc_;
     return S_OK;
   }
@@ -640,6 +718,27 @@ public:
     dxmt9DeviceDebugLog("surface_release_dc surface=%p hdc=%p", this, hdc);
     if (!dc_ || hdc != dc_)
       return D3DERR_INVALIDCALL;
+    if (kmtDc_) {
+      using PFN_D3DKMTDestroyDCFromMemory =
+          LONG (WINAPI *)(D3DKMT_DESTROYDCFROMMEMORY *);
+      static auto pDestroy = []() -> PFN_D3DKMTDestroyDCFromMemory {
+        HMODULE gdi = GetModuleHandleA("gdi32.dll");
+        if (!gdi) return nullptr;
+        return reinterpret_cast<PFN_D3DKMTDestroyDCFromMemory>(
+            reinterpret_cast<void *>(
+                GetProcAddress(gdi, "D3DKMTDestroyDCFromMemory")));
+      }();
+      if (pDestroy) {
+        D3DKMT_DESTROYDCFROMMEMORY req{};
+        req.hDc = kmtDc_;
+        req.hBitmap = dibBitmap_;
+        pDestroy(&req);
+      }
+      kmtDc_ = nullptr;
+      dibBitmap_ = nullptr;
+      dc_ = nullptr;
+      return S_OK;
+    }
     DeleteDC(dc_);
     dc_ = nullptr;
     return S_OK;
