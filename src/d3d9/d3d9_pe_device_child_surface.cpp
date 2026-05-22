@@ -213,6 +213,25 @@ static bool textureIsDefaultPool(D9CTexture *texture) {
          desc.pool == D3DPOOL_DEFAULT;
 }
 
+// Wine d3d9 resource_priority_pool_policy: SetPriority only stores the
+// value on D3DPOOL_MANAGED resources; DEFAULT / SYSTEMMEM / SCRATCH ignore
+// the new value but still return the previous shadow.
+static bool surfacePriorityWriteable(D9CSurface *surface) {
+  if (!surface)
+    return false;
+  D9CSurfaceDesc desc{};
+  return SUCCEEDED(hr32(dxmt9c_surface_get_desc(surface, &desc))) &&
+         desc.pool == D3DPOOL_MANAGED;
+}
+
+static bool texturePriorityWriteable(D9CTexture *texture) {
+  if (!texture)
+    return false;
+  D9CSurfaceDesc desc{};
+  return SUCCEEDED(textureLevelDesc(texture, 0, &desc)) &&
+         desc.pool == D3DPOOL_MANAGED;
+}
+
 static void trackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
                                      bool &tracked, bool shouldTrack) {
   if (!recorder || !shouldTrack || tracked)
@@ -261,6 +280,7 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   // bridge path and returns userMemory_ + userMemoryPitch_ directly.
   void *userMemory_ = nullptr;
   int32_t userMemoryPitch_ = 0;
+  DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -352,8 +372,19 @@ public:
   HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
     return freePrivateData(privateData_, guid, "surface", this);
   }
-  DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-  DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
+  DWORD STDMETHODCALLTYPE SetPriority(DWORD newPriority) noexcept override {
+    const DWORD previous = priorityShadow_;
+    // Surfaces obtained from a parent texture / cube / volume container are
+    // never priority-writeable — the parent owns the priority. Standalone
+    // surfaces (CreateOffscreenPlainSurface, CreateRenderTarget) honor the
+    // pool rule (only MANAGED stores).
+    if (!container_ && surfacePriorityWriteable(s_))
+      priorityShadow_ = newPriority;
+    return previous;
+  }
+  DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
+    return priorityShadow_;
+  }
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_SURFACE;
@@ -527,6 +558,7 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
   // partial scope restricts SYSTEMMEM-shared textures to levels == 1.
   void *userMemory_ = nullptr;
   int32_t userMemoryPitch_ = 0;
+  DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -600,8 +632,15 @@ public:
   HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
     return freePrivateData(privateData_, guid, "texture", this);
   }
-  DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-  DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
+  DWORD STDMETHODCALLTYPE SetPriority(DWORD newPriority) noexcept override {
+    const DWORD previous = priorityShadow_;
+    if (texturePriorityWriteable(t_))
+      priorityShadow_ = newPriority;
+    return previous;
+  }
+  DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
+    return priorityShadow_;
+  }
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_TEXTURE;
@@ -777,6 +816,7 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
+  DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -855,8 +895,15 @@ public:
   HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
     return freePrivateData(privateData_, guid, "cube", this);
   }
-  DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-  DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
+  DWORD STDMETHODCALLTYPE SetPriority(DWORD newPriority) noexcept override {
+    const DWORD previous = priorityShadow_;
+    if (texturePriorityWriteable(t_))
+      priorityShadow_ = newPriority;
+    return previous;
+  }
+  DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
+    return priorityShadow_;
+  }
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_CUBETEXTURE;
@@ -1099,6 +1146,7 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
+  DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -1169,8 +1217,15 @@ public:
   HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
     return freePrivateData(privateData_, guid, "volume", this);
   }
-  DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-  DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
+  DWORD STDMETHODCALLTYPE SetPriority(DWORD newPriority) noexcept override {
+    const DWORD previous = priorityShadow_;
+    if (texturePriorityWriteable(t_))
+      priorityShadow_ = newPriority;
+    return previous;
+  }
+  DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
+    return priorityShadow_;
+  }
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_VOLUMETEXTURE;

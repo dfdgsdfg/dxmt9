@@ -71,6 +71,16 @@ static bool bufferIsDefaultPool(D9CBuffer *buffer) {
          desc.pool == D3DPOOL_DEFAULT;
 }
 
+// Wine d3d9 resource_priority_pool_policy: SetPriority only persists for
+// D3DPOOL_MANAGED resources.
+static bool bufferPriorityWriteable(D9CBuffer *buffer) {
+  if (!buffer)
+    return false;
+  D9CBufferDesc desc{};
+  return SUCCEEDED(hr32(dxmt9c_buffer_get_desc(buffer, &desc))) &&
+         desc.pool == D3DPOOL_MANAGED;
+}
+
 static void trackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
                                      bool &tracked, bool shouldTrack) {
   if (!recorder || !shouldTrack || tracked)
@@ -97,6 +107,7 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
   D3D9PeRecorderFlush *recorder_;
   bool defaultPoolTracked_ = false;
   bool locked_ = false;
+  DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -161,8 +172,15 @@ public:
   HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
     return freePrivateData(privateData_, guid, "vb", this);
   }
-  DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-  DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
+  DWORD STDMETHODCALLTYPE SetPriority(DWORD newPriority) noexcept override {
+    const DWORD previous = priorityShadow_;
+    if (bufferPriorityWriteable(b_))
+      priorityShadow_ = newPriority;
+    return previous;
+  }
+  DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
+    return priorityShadow_;
+  }
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_VERTEXBUFFER;
@@ -240,6 +258,7 @@ class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
   bool defaultPoolTracked_ = false;
+  DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
@@ -304,8 +323,15 @@ public:
   HRESULT STDMETHODCALLTYPE FreePrivateData(REFGUID guid) noexcept override {
     return freePrivateData(privateData_, guid, "ib", this);
   }
-  DWORD STDMETHODCALLTYPE SetPriority(DWORD) noexcept override { return 0; }
-  DWORD STDMETHODCALLTYPE GetPriority() noexcept override { return 0; }
+  DWORD STDMETHODCALLTYPE SetPriority(DWORD newPriority) noexcept override {
+    const DWORD previous = priorityShadow_;
+    if (bufferPriorityWriteable(b_))
+      priorityShadow_ = newPriority;
+    return previous;
+  }
+  DWORD STDMETHODCALLTYPE GetPriority() noexcept override {
+    return priorityShadow_;
+  }
   void STDMETHODCALLTYPE PreLoad() noexcept override {}
   D3DRESOURCETYPE STDMETHODCALLTYPE GetType() noexcept override {
     return D3DRTYPE_INDEXBUFFER;

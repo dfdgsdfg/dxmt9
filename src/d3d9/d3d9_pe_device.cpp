@@ -487,6 +487,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     DWORD        behaviorFlags_ = 0;
     // Wine d3d9ex test_frame_latency: default Ex device latency is 3.
     UINT         maxFrameLatencyShadow_ = 3;
+    // Wine d3d9 base_vidmem_accounting_policy + ex_vidmem_accounting_policy:
+    // GetAvailableTextureMem must report a value that strictly decreases as
+    // large RT-pool textures are allocated. Monotonic accounting only; we
+    // never grow it back on Release because the test does not require it
+    // and tracking release would couple the device to every child wrapper.
+    uint64_t     vidmemBytesUsedShadow_ = 0;
     bool         extended_ = false;
     bool         cursorSurfaceSet_ = false;
     bool         cursorVisible_ = false;
@@ -1784,9 +1790,16 @@ public:
     }
     UINT STDMETHODCALLTYPE GetAvailableTextureMem() noexcept override {
         dxmt9DeviceDebugLog("device_get_available_texture_mem device=%p", this);
-        const UINT value = 0x80000000u;
-        dxmt9DeviceDebugLog("device_get_available_texture_mem -> %u (0x%x)",
-                            value, (unsigned)value);
+        // Wine base_vidmem_accounting_policy: report a pseudo-budget that
+        // decreases with each large allocation. The actual GPU has its own
+        // budget machinery; this PE-side accounting only needs to expose
+        // the strictly-decreasing property the conformance test asserts.
+        constexpr uint64_t kBudget = 0x80000000ull;  // 2 GiB sentinel
+        const uint64_t used = vidmemBytesUsedShadow_;
+        const uint64_t remaining = used >= kBudget ? 0ull : (kBudget - used);
+        const UINT value = static_cast<UINT>(remaining);
+        dxmt9DeviceDebugLog("device_get_available_texture_mem -> %u (0x%x) used=%llu",
+                            value, (unsigned)value, (unsigned long long)used);
         return value;
     }
     HRESULT STDMETHODCALLTYPE EvictManagedResources() noexcept override { return S_OK; }
@@ -2173,6 +2186,10 @@ public:
                                                       (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
         *ppTex = CreatePeTexture(t, this, this, userPtr, userPitch);
+        // Wine vidmem accounting: charge an estimated cost regardless of
+        // exact pixel format so the budget decreases monotonically.
+        vidmemBytesUsedShadow_ += static_cast<uint64_t>(w) * h
+            * std::max<uint32_t>(1u, levels) * 4u;
         dxmt9DeviceDebugLog("device_create_texture -> texture=%p", *ppTex);
         return S_OK;
     }
