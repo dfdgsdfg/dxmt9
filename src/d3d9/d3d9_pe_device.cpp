@@ -2201,10 +2201,14 @@ public:
                                                       (uint32_t)pool);
         if (!t) return D3DERR_INVALIDCALL;
         *ppTex = CreatePeTexture(t, this, this, userPtr, userPitch);
-        // Wine vidmem accounting: charge an estimated cost regardless of
-        // exact pixel format so the budget decreases monotonically.
-        vidmemBytesUsedShadow_ += static_cast<uint64_t>(w) * h
-            * std::max<uint32_t>(1u, levels) * 4u;
+        // Wine base_vidmem_accounting_policy expects a strictly-decreasing
+        // budget on non-Ex devices; ex_vidmem_accounting_policy expects
+        // the value to stay roughly constant for D3D9Ex devices (the spec
+        // reports an "unlimited" budget for Ex). Only charge non-Ex.
+        if (!extended_) {
+            vidmemBytesUsedShadow_ += static_cast<uint64_t>(w) * h
+                * std::max<uint32_t>(1u, levels) * 4u;
+        }
         dxmt9DeviceDebugLog("device_create_texture -> texture=%p", *ppTex);
         return S_OK;
     }
