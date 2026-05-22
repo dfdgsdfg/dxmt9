@@ -99,6 +99,22 @@ Before reporting a dxmt9 regression from a wild run, confirm:
 4. **`abi-hash handshake OK` is in `<binary>_dxmt9.log`.** If it is
    absent the PE-side `winemetal.dll` either failed `DllMain` or never
    ran the handshake; further bridge errors are downstream of that.
+5. **`winemetal.so` install_name deps are `@rpath/winemac.so` /
+   `@rpath/ntdll.so`.** Bare-dep `.so` files (`winemac.so` /
+   `ntdll.so` without the `@rpath/` prefix) silently break Wine's
+   `NtQueryVirtualMemory(info=kMemoryWineLoadUnixLib=1000)` lookup —
+   the bridge falls through to the unsupported `info=1002` path and
+   `DllMain` rejects `winemetal.dll` with `abi-hash unix-call
+   failed status=0xc0000003`. The
+   `winemetal_unix_install_name_fixup` `custom_target` in
+   `src/winemetal/unix/meson.build` is supposed to rewrite the deps
+   to `@rpath/...` post-link, but it only runs when the canonical
+   build target is invoked. A direct `ninja src/winemetal/unix/winemetal.so`
+   skips the stamp and leaves the .so with bare deps. The audit
+   `scripts/check/audit_winemetal_install_names.py`
+   (`dxmt9-winemetal-install-name-audit` meson test) checks for this
+   and reports the manual `install_name_tool -change` command to
+   undo the regression.
 
 ## Related
 
