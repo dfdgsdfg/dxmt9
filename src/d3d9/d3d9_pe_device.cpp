@@ -2223,6 +2223,10 @@ public:
                                                   HANDLE* psh) noexcept override {
         if (!ppBuf) return D3DERR_INVALIDCALL;
         *ppBuf = nullptr;
+        // Wine D3D9 (test_vertex_buffer_desc_binding_policy line 2887):
+        // SCRATCH pool is invalid for vertex buffers; Wine returns
+        // D3DERR_INVALIDCALL.
+        if (pool == D3DPOOL_SCRATCH) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForBuffer(extended_, psh, pool);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_vertex_buffer device=%p len=%u usage=0x%x fvf=0x%x pool=%u",
@@ -2241,6 +2245,10 @@ public:
                                                  HANDLE* psh) noexcept override {
         if (!ppBuf) return D3DERR_INVALIDCALL;
         *ppBuf = nullptr;
+        // Wine D3D9 (test_index_buffer_desc_binding_policy line 2768):
+        // SCRATCH pool is invalid for index buffers; Wine returns
+        // D3DERR_INVALIDCALL.
+        if (pool == D3DPOOL_SCRATCH) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForBuffer(extended_, psh, pool);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_index_buffer device=%p len=%u usage=0x%x fmt=%u pool=%u",
