@@ -2,10 +2,34 @@
 
 #include "dxmt9_queue.hpp"
 #include "../winemetal/Metal.hpp"
+#include "util/log/log.hpp"
 
+#include <atomic>
 #include <sstream>
 
 namespace dxmt9::presentimpl {
+
+namespace {
+
+// R-WMB-6.2 / test_wild.rules.md: the experiment harness needs to surface
+// which WSI layer acquisition path was selected without requiring the opt-in
+// DXMT_TRACE_QUEUE channel. Emit one info-level line per process so the
+// `run_experiment.py` parser can populate result.json:wsi.layer_acquisition.
+std::atomic<bool> g_layerAcquisitionLogged{false};
+
+void logLayerAcquisitionOnce(const char* path, u64 hwnd) {
+  bool expected = false;
+  if (!g_layerAcquisitionLogged.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+    return;
+  }
+  dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-wsi",
+                    "layer_acquisition=%s hwnd=0x%llx",
+                    path,
+                    static_cast<unsigned long long>(hwnd));
+}
+
+}  // namespace
 
 void traceEvent(const char* event, u64 seqId, u64 hwnd) {
   using namespace dxmt9::core::metalqueue;
@@ -42,6 +66,7 @@ LayerAcquisition acquireLayerForHwnd(u64 hwnd, u64 seqId) {
         WMT::CreateMetalViewFromHWND(static_cast<intptr_t>(hwnd), macdrvDevice, layer);
     if (metalView && layer) {
       traceEvent("metal-view.ok", seqId, hwnd);
+      logLayerAcquisitionOnce("macdrv_functions", hwnd);
       // Retain the layer for ourselves; winemetal returns +1 on the view but
       // the layer is -[macdrv_view metalLayer] which is +0.
       NSObject_retain(layer.handle);
@@ -60,6 +85,7 @@ LayerAcquisition acquireLayerForHwnd(u64 hwnd, u64 seqId) {
   obj_handle_t legacyLayer = ::AcquireLegacyHwndLayer(static_cast<intptr_t>(hwnd));
   if (legacyLayer) {
     traceEvent("legacy-view.ok", seqId, hwnd);
+    logLayerAcquisitionOnce("legacy_macdrv_get_cocoa_view", hwnd);
     // Release the macdrv device acquired above; legacy path doesn't need it.
     if (result.macdrvDeviceHandle) {
       WMT::MacdrvMetalDevice{result.macdrvDeviceHandle}.release();
@@ -70,6 +96,7 @@ LayerAcquisition acquireLayerForHwnd(u64 hwnd, u64 seqId) {
   }
 
   traceEvent("legacy-view.nil", seqId, hwnd);
+  logLayerAcquisitionOnce("fallback_nil", hwnd);
   releaseLayerAcquisition(result);
   return result;
 }

@@ -171,3 +171,8 @@ test('dxmt9-wine-resolve', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-run-experiment-wsi-acquisition', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_wsi_layer_acquisition_extract.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)

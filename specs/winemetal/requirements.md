@@ -250,6 +250,35 @@ state.
 2. "If you have a custom Wine, run `scripts/wine/check_patch.py <root>` to confirm the symbols are visible."
 3. A link to this spec (`specs/winemetal/{requirements,design}.md`).
 
+**R-WMB-7.4** The presenter
+(`src/dxmt9/dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd`) emits
+one info-level log line per process recording which path was taken:
+
+```
+[dxmt9-wsi] info: layer_acquisition=<path> hwnd=0x<hex>
+```
+
+where `<path>` is one of `macdrv_functions` (modern, primary),
+`legacy_macdrv_get_cocoa_view` (legacy fallback), or `fallback_nil`
+(both lookups failed). The experiment harness
+(`scripts/run_apps/run_experiment.py::extract_wsi_layer_acquisition`)
+parses this line and surfaces it in `result.json`:
+
+```json
+{
+  "wsi": {
+    "layer_acquisition": "macdrv_functions"
+  }
+}
+```
+
+If the log never reaches the presenter (process crashed before
+`Present`, or `dxmt9.log` is absent), the value is `"unavailable"`.
+This field gives wild-experiment triage a single, machine-readable
+signal of whether the runtime hit the validated `macdrv_functions`
+path (R-WMB-6.2 supported set) or silently degraded — see
+`agents/rules/test_wild.rules.md` "Diagnostic Checklist".
+
 ---
 
 ## 8. Documentation

@@ -68,6 +68,19 @@ BRIDGE_COUNTER_PATTERN = re.compile(r"^\[dxmt9-bridge-perf\]\s+(.*)$")
 PE_RECORDER_COUNTER_PATTERN = re.compile(r"^\[dxmt9-device\]\s+(?:[A-Za-z]+:\s+)?pe_recorder_stats\s+(.*)$")
 PERF_PROBE_PATTERN = re.compile(r"^\[perf-probe\]\s+(.*)$")
 PERF_COUNTER_VALUE_PATTERN = re.compile(r"([A-Za-z0-9_]+)=([^\s}]+)")
+# R-WMB-6.2 / test_wild.rules.md: surface which WSI layer acquisition path the
+# presenter (`dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd`) selected.
+# The presenter emits one line per process via the dxmt9-wsi logger tag, e.g.:
+#   [dxmt9-wsi] info: layer_acquisition=macdrv_functions hwnd=0x12345
+WSI_LAYER_ACQUISITION_PATTERN = re.compile(
+    r"^\[dxmt9-wsi\]\s+\w+:\s+layer_acquisition=([A-Za-z0-9_]+)"
+)
+VALID_WSI_LAYER_ACQUISITION_PATHS = (
+    "macdrv_functions",
+    "legacy_macdrv_get_cocoa_view",
+    "fallback_nil",
+    "unavailable",
+)
 _DRIVE_LETTER_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 
 
@@ -604,6 +617,32 @@ def extract_dxmt9_pe_recorder_counters(log_path: Path) -> dict[str, int | float 
     return counters
 
 
+def extract_wsi_layer_acquisition(log_path: Path) -> str:
+    """Return the WSI layer acquisition path the presenter selected.
+
+    Parses the one-time `[dxmt9-wsi] info: layer_acquisition=<path> hwnd=...`
+    line emitted by `dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd` (R-WMB-6.2
+    / `agents/rules/test_wild.rules.md`). Returns one of
+    `VALID_WSI_LAYER_ACQUISITION_PATHS`. If the log is absent, never emitted
+    (e.g. process exited before presenting), or contains an unrecognised value,
+    returns ``"unavailable"`` so callers can distinguish "never reached the
+    presenter" from a recorded selection.
+    """
+    if not log_path.exists():
+        return "unavailable"
+    for line in log_path.read_text(errors="replace").splitlines():
+        match = WSI_LAYER_ACQUISITION_PATTERN.match(line)
+        if not match:
+            continue
+        path = match.group(1)
+        if path in VALID_WSI_LAYER_ACQUISITION_PATHS:
+            return path
+        # Unknown path token — record verbatim so the diagnostic is visible
+        # but flag it so reviewers know to update the valid set.
+        return path
+    return "unavailable"
+
+
 def extract_perf_probe_timings(log_path: Path) -> dict[str, int | float | str]:
     if not log_path.exists():
         return {}
@@ -1003,6 +1042,13 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         perf_probe_timings = extract_perf_probe_timings(log_path)
         if perf_probe_timings:
             result["perf_probe_timings"] = perf_probe_timings
+        # R-WMB-6.2 / test_wild.rules.md: record which WSI layer acquisition
+        # path the presenter selected so wild-experiment triage can tell at a
+        # glance whether the run hit `macdrv_functions`, the legacy fallback,
+        # or never reached the presenter at all.
+        result["wsi"] = {
+            "layer_acquisition": extract_wsi_layer_acquisition(log_path),
+        }
 
         if actual_dump_path.exists():
             Image.open(actual_dump_path).save(actual_path)
