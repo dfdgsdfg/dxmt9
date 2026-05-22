@@ -1292,6 +1292,19 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // Pool storage + queue's wait-for-sequence rule under one mutex.
   std::unique_lock lock(mutex_);
   const std::uint64_t waitSeq = pool_.mapWaitSeqId(handle, flags);
+  // Wine writeonly_vertex_buffer_readback_policy (#66): a Draw followed
+  // by a Lock without an intervening Present must still observe the
+  // draw on read. The drawn slot's seqId is set as soon as the draw is
+  // appended to the current chunk, but the chunk hasn't been committed
+  // to Metal yet — without committing, completedSeqId_ can never reach
+  // waitSeq and the wait below would block forever. Drive the pending
+  // chunk into the submit pipeline first.
+  if (waitSeq > lastCommittedSeqId_) {
+    queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](const core::ChunkSlot& slot) {
+          markSlotResourcesUnlocked(pool_, slot);
+        });
+  }
   if (waitSeq > completedSeqId_) {
     queueLifecycle_.waitForSequence(lock, waitSeq);
   }
