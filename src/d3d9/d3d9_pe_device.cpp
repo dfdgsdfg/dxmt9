@@ -2289,6 +2289,14 @@ public:
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        // create_rt_ds_failure_policy: depth-stencil formats cannot be RTs.
+        if (fmt == D3DFMT_D16 || fmt == D3DFMT_D24X8 || fmt == D3DFMT_D24S8
+                || fmt == D3DFMT_D32 || fmt == D3DFMT_D15S1
+                || fmt == D3DFMT_D24X4S4 || fmt == D3DFMT_D24FS8
+                || fmt == D3DFMT_D32F_LOCKABLE || fmt == D3DFMT_D16_LOCKABLE
+                || fmt == D3DFMT_D32_LOCKABLE) {
+            return D3DERR_INVALIDCALL;
+        }
         const HRESULT sharedHr = validateSharedHandleForDefaultSurface(extended_, psh);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_render_target device=%p size=%ux%u fmt=%u ms=%u msQual=%u lockable=%u",
@@ -2337,6 +2345,15 @@ public:
         if (!ppS) return D3DERR_INVALIDCALL;
         *ppS = nullptr;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        // create_rt_ds_failure_policy: only depth-stencil formats are valid
+        // as a DS surface. Colour formats must reject with INVALIDCALL.
+        const bool isDepthFormat =
+            fmt == D3DFMT_D16 || fmt == D3DFMT_D24X8 || fmt == D3DFMT_D24S8
+            || fmt == D3DFMT_D32 || fmt == D3DFMT_D15S1
+            || fmt == D3DFMT_D24X4S4 || fmt == D3DFMT_D24FS8
+            || fmt == D3DFMT_D32F_LOCKABLE || fmt == D3DFMT_D16_LOCKABLE
+            || fmt == D3DFMT_D32_LOCKABLE;
+        if (!isDepthFormat) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForDefaultSurface(extended_, psh);
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface device=%p size=%ux%u fmt=%u ms=%u msQual=%u discard=%u",
@@ -2470,6 +2487,9 @@ public:
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         dxmt9DeviceDebugLog("device_get_render_target_data device=%p rt=%p dst=%p",
                             this, rt, dst);
+        // get_render_target_data_policy: both args must be non-NULL. Wine
+        // rejects NULL with INVALIDCALL before any backend work.
+        if (!rt || !dst) return D3DERR_INVALIDCALL;
         // Phase 24: chunk-recorder path. The PE caller is synchronous —
         // the call doesn't return until the data is in dst — but
         // routing through the chunk record stream keeps ordering atomic
@@ -2575,6 +2595,10 @@ public:
         // height of zero is rejected with D3DERR_INVALIDCALL.
         if (w == 0 || h == 0) return D3DERR_INVALIDCALL;
         if (isUnknownFormat(fmt)) return D3DERR_INVALIDCALL;
+        // visual_offscreen_surface_creation_policy: only DEFAULT, SYSTEMMEM
+        // and SCRATCH are valid pools for offscreen-plain surfaces. MANAGED
+        // is rejected with INVALIDCALL.
+        if (pool == D3DPOOL_MANAGED) return D3DERR_INVALIDCALL;
         const HRESULT sharedHr = validateSharedHandleForSurface(extended_, psh, pool, true);
         if (FAILED(sharedHr)) return sharedHr;
         // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): SYSTEMMEM
@@ -2610,6 +2634,17 @@ public:
         dxmt9DeviceDebugLog("device_set_render_target device=%p idx=%u surf=%p",
                             this, (unsigned)idx, pSurf);
         if (idx >= 4) return D3DERR_INVALIDCALL;
+        // render_target_device_mismatch: a surface created by a different
+        // device cannot be bound. Compare via GetDevice; it AddRef's, so
+        // Release the borrowed pointer immediately.
+        if (pSurf) {
+            IDirect3DDevice9* owner = nullptr;
+            if (SUCCEEDED(pSurf->GetDevice(&owner)) && owner) {
+                const bool foreign = owner != static_cast<IDirect3DDevice9*>(this);
+                owner->Release();
+                if (foreign) return D3DERR_INVALIDCALL;
+            }
+        }
         if (idx == 0) {
             setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
         }
@@ -2659,6 +2694,31 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pSurf) noexcept override {
         dxmt9DeviceDebugLog("device_set_depth_stencil device=%p surf=%p", this, pSurf);
+        // render_target_device_mismatch: reject foreign-device surfaces.
+        if (pSurf) {
+            IDirect3DDevice9* owner = nullptr;
+            if (SUCCEEDED(pSurf->GetDevice(&owner)) && owner) {
+                const bool foreign = owner != static_cast<IDirect3DDevice9*>(this);
+                owner->Release();
+                if (foreign) return D3DERR_INVALIDCALL;
+            }
+            // visual_multisample_rt_ds_mismatch_policy: the DS multisample
+            // type must match the bound RT[0] multisample type. Query both
+            // descs (via the C ABI helpers) and reject the mismatch.
+            if (rtSlots_[0]) {
+                D9CSurface* dsRaw = rawSurf(pSurf);
+                D9CSurface* rtRaw = rawSurf(rtSlots_[0]);
+                if (dsRaw && rtRaw) {
+                    D9CSurfaceDesc dsDesc{};
+                    D9CSurfaceDesc rtDesc{};
+                    if (SUCCEEDED(hr32(dxmt9c_surface_get_desc(dsRaw, &dsDesc)))
+                            && SUCCEEDED(hr32(dxmt9c_surface_get_desc(rtRaw, &rtDesc)))
+                            && dsDesc.multiSampleType != rtDesc.multiSampleType) {
+                        return D3DERR_INVALIDCALL;
+                    }
+                }
+            }
+        }
         const bool wasExplicit = dsSurfaceExplicit_;
         const bool valueChanged = dsSurface_ != pSurf;
         dsSurfaceExplicit_ = true;
