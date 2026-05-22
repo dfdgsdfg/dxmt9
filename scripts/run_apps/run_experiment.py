@@ -971,7 +971,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                             window_info = capture_full_screen(actual_path)
                         except Exception:  # noqa: BLE001
                             pass
-                process.wait(timeout=args.timeout or app.run_timeout_sec)
+                wait_timeout_sec = app.run_timeout_sec if args.timeout is None else args.timeout
+                process.wait(timeout=None if wait_timeout_sec <= 0.0 else wait_timeout_sec)
             except subprocess.TimeoutExpired:
                 timed_out = True
                 terminate_process_group(process, signal.SIGTERM)
@@ -1176,7 +1177,7 @@ def main() -> int:
     )
     run_parser.add_argument("--prefix", help="Wine prefix path")
     run_parser.add_argument("--binary", help="Override the binary path for this run")
-    run_parser.add_argument("--timeout", type=float, help="Override timeout seconds")
+    run_parser.add_argument("--timeout", type=float, help="Override timeout seconds; <= 0 disables the run timeout")
     run_parser.add_argument("--pe-build-dir", help="PE build dir containing d3d9.dll")
     run_parser.add_argument("--runtime-pe-build-dir", help="builtin PE build dir containing runtime winemetal.dll")
     run_parser.add_argument("--wow64-pe-build-dir", help="32-bit PE build dir containing d3d9.dll")
