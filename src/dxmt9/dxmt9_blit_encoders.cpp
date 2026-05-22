@@ -120,6 +120,10 @@ void encodeReadback(WMT::CommandBuffer& commandBuffer,
   }
   auto blit = commandBuffer.blitCommandEncoder();
   if (!blit) return;
+  blit.setLabel(labels::makeLabelStringFmt(
+      "Blit[Readback src=0x%llx dst=0x%llx]",
+      static_cast<unsigned long long>(readback.source.value),
+      static_cast<unsigned long long>(readback.destination.value)));
   {
     UsedHeapSet set;
     considerSurface(pool, readback.source, set);
@@ -162,6 +166,10 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
   if (canCopyStretchRect(*src, *dst, stretch)) {
     auto blit = commandBuffer.blitCommandEncoder();
     if (!blit) return;
+    blit.setLabel(labels::makeLabelStringFmt(
+        "Blit[StretchRect src=0x%llx dst=0x%llx]",
+        static_cast<unsigned long long>(stretch.source.value),
+        static_cast<unsigned long long>(stretch.destination.value)));
     {
       UsedHeapSet set;
       considerSurface(pool, stretch.source, set);
@@ -245,6 +253,10 @@ void encodeSurfaceCopy(WMT::CommandBuffer& commandBuffer,
   if (srcW == dstW && srcH == dstH) {
     auto blit = commandBuffer.blitCommandEncoder();
     if (!blit) return;
+    blit.setLabel(labels::makeLabelStringFmt(
+        "Blit[SurfaceCopy src=0x%llx dst=0x%llx]",
+        static_cast<unsigned long long>(copy.source.value),
+        static_cast<unsigned long long>(copy.destination.value)));
     {
       UsedHeapSet set;
       considerSurface(pool, copy.source, set);
@@ -450,6 +462,9 @@ bool readbackSurface(CommandQueue& queue,
   if (!blit) {
     return false;
   }
+  blit.setLabel(labels::makeLabelStringFmt(
+      "Blit[ReadbackSurface stage src=0x%llx]",
+      static_cast<unsigned long long>(desc.source.value)));
   {
     // Source is a Pool surface that may alias a heap-backed parent
     // texture; destination is an ephemeral staging texture (not pooled,
@@ -486,6 +501,9 @@ bool readbackSurface(CommandQueue& queue,
     if (cmdBuf2) {
       auto blit2 = cmdBuf2.blitCommandEncoder();
       if (blit2) {
+        blit2.setLabel(labels::makeLabelStringFmt(
+            "Blit[ReadbackSurface drain src=0x%llx]",
+            static_cast<unsigned long long>(desc.source.value)));
         // Both source (staging) and destination (readback buffer) are
         // ephemeral, non-pooled allocations — neither can be
         // heap-backed, so no useHeap is required. The empty walk is
