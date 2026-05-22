@@ -427,6 +427,12 @@ class D3D9SwapChainImpl final : public IDirect3DSwapChain9Ex {
   // GetBackBuffer(idx, *, &out) calls must return the same COM pointer
   // for the same idx regardless of D3DBACKBUFFER_TYPE.
   std::unordered_map<UINT, IDirect3DSurface9 *> cachedBackBuffers_;
+  // Wine reset_lockable_backbuffer_policy / lockable_backbuffer_lock_policy:
+  // the C ABI does not currently preserve D3DPRESENT_PARAMETERS.Flags
+  // through CreateDevice / Reset, so cache the originally-requested Flags
+  // on the wrapper and OR them into the value reported by
+  // GetPresentParameters.
+  DWORD flagsShadow_ = 0;
 
 public:
   D3D9SwapChainImpl(D9CSwapChain *sc, IDirect3DDevice9 *device,
@@ -436,6 +442,8 @@ public:
     if (device_)
       device_->AddRef();
   }
+
+  void setFlagsShadow(DWORD flags) { flagsShadow_ = flags; }
   ~D3D9SwapChainImpl() {
     for (auto &entry : cachedBackBuffers_) {
       if (entry.second)
@@ -610,7 +618,7 @@ public:
       pPP->Windowed = cpp.windowed ? TRUE : FALSE;
       pPP->EnableAutoDepthStencil = cpp.enableAutoDepthStencil ? TRUE : FALSE;
       pPP->AutoDepthStencilFormat = (D3DFORMAT)cpp.autoDepthStencilFormat;
-      pPP->Flags = cpp.flags;
+      pPP->Flags = cpp.flags | flagsShadow_;
       pPP->FullScreen_RefreshRateInHz = cpp.fullScreenRefreshRateHz;
       pPP->PresentationInterval = cpp.presentationInterval;
     }
@@ -678,8 +686,12 @@ IDirect3DStateBlock9 *CreatePeStateBlock(D9CStateBlock *stateBlock,
 IDirect3DSwapChain9Ex *CreatePeSwapChain(D9CSwapChain *swapChain,
                                          IDirect3DDevice9 *device,
                                          D3D9PeRecorderFlush *recorder,
-                                         bool extended) {
-  return new D3D9SwapChainImpl(swapChain, device, recorder, extended);
+                                         bool extended,
+                                         DWORD presentFlagsShadow) {
+  auto *impl =
+      new D3D9SwapChainImpl(swapChain, device, recorder, extended);
+  impl->setFlagsShadow(presentFlagsShadow);
+  return impl;
 }
 
 D9CVertexDecl *D3D9PeRawVertexDecl(IDirect3DVertexDeclaration9 *decl) {

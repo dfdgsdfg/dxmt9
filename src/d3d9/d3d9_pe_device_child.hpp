@@ -95,7 +95,8 @@ CreatePeStateBlock(D9CStateBlock *stateBlock, IDirect3DDevice9 *device,
 IDirect3DSwapChain9Ex *
 CreatePeSwapChain(D9CSwapChain *swapChain, IDirect3DDevice9 *device,
                   D3D9PeRecorderFlush *recorder = nullptr,
-                  bool extended = false);
+                  bool extended = false,
+                  DWORD presentFlagsShadow = 0);
 
 D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface);
 // True when the PE wrapper currently has a successful Lock outstanding.

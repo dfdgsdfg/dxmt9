@@ -556,6 +556,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     /* present params copy for GetCreationParameters */
     HWND creationWindow_ = nullptr;
+    // Wine reset_lockable_backbuffer_policy: the implicit swap-chain's
+    // PresentParameters.Flags is captured at CreateDevice and re-captured at
+    // Reset because the C ABI does not yet round-trip the field.
+    DWORD implicitSwapchainFlagsShadow_ = 0;
 
     /* palette shadow — Wine conformance round-trip. PE-only; the
      * backend doesn't render through palette textures yet, so we just
@@ -1707,11 +1711,13 @@ public:
 
     D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
                    UINT adapter, D3DDEVTYPE deviceType, DWORD behaviorFlags,
-                   HWND window, bool extended)
+                   HWND window, bool extended,
+                   DWORD implicitSwapchainFlags)
         : dev_(dev), factory_(factory)
         , adapter_(adapter), deviceType_(deviceType), behaviorFlags_(behaviorFlags)
         , extended_(extended)
-        , creationWindow_(window) {
+        , creationWindow_(window)
+        , implicitSwapchainFlagsShadow_(implicitSwapchainFlags) {
         if (factory_) factory_->AddRef();
         for (UINT& freq : streamFreq_) {
             freq = 1;
@@ -1934,7 +1940,7 @@ public:
         cpp.presentationInterval = pPP->PresentationInterval;
         D9CSwapChain* sc = dxmt9c_device_create_additional_swap_chain(dev_, &cpp);
         if (!sc) return D3DERR_INVALIDCALL;
-        *ppSC = CreatePeSwapChain(sc, this, this, extended_);
+        *ppSC = CreatePeSwapChain(sc, this, this, extended_, pPP->Flags);
         // Wine d3d9 post-create mutation of pPP (additional swapchain only):
         //   * BackBufferCount=0 normalises to 1 (clamped to a documented
         //     minimum) and is written back to the caller's struct.
@@ -1965,7 +1971,12 @@ public:
         }
         D9CSwapChain* sc = dxmt9c_device_get_swap_chain(dev_, index);
         if (!sc) return D3DERR_INVALIDCALL;
-        auto* wrapper = CreatePeSwapChain(sc, this, this, extended_);
+        // index 0 = implicit swap chain; additional swap chains are
+        // created with their own flags through CreateAdditionalSwapChain
+        // and that path already sets the shadow. For lazy-created index-0
+        // wrappers fall back to the device's captured implicit flags.
+        const DWORD wrapperFlags = (index == 0) ? implicitSwapchainFlagsShadow_ : 0;
+        auto* wrapper = CreatePeSwapChain(sc, this, this, extended_, wrapperFlags);
         wrapper->AddRef();  // device retains one ref in the cache
         swapchainWrappers_.emplace(index,
                 static_cast<IDirect3DSwapChain9*>(wrapper));
@@ -2017,6 +2028,10 @@ public:
         const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
         if (SUCCEEDED(hr)) {
             deviceNotReset_ = false;
+            // reset_lockable_backbuffer_policy: capture the new
+            // PresentParameters.Flags so future GetSwapChain wrapper
+            // creations see the updated value.
+            implicitSwapchainFlagsShadow_ = pPP->Flags;
             // T2: per Wine d3d9_device_Reset, viewport and scissor must
             // be set to {0, 0, BackBufferWidth, BackBufferHeight, 0, 1}
             // after a successful Reset. The core::Device already sets
@@ -4211,6 +4226,8 @@ public:
             pFsMode ? &cdme : nullptr));
         if (SUCCEEDED(hr)) {
             deviceNotReset_ = false;
+            // Same flags-capture as Reset().
+            implicitSwapchainFlagsShadow_ = pPP->Flags;
             // T2: same viewport/scissor reset semantics as Reset().
             const uint32_t w = std::max<uint32_t>(1u, cpp.backBufferWidth);
             const uint32_t h = std::max<uint32_t>(1u, cpp.backBufferHeight);
@@ -4248,7 +4265,9 @@ public:
 IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev, IDirect3D9Ex* pFactory,
                                      UINT adapter, D3DDEVTYPE deviceType,
                                      DWORD behaviorFlags,
-                                     HWND window, bool extended) {
+                                     HWND window, bool extended,
+                                     DWORD implicitSwapchainFlags) {
     return new D3D9DeviceImpl(dev, pFactory, adapter, deviceType,
-                              behaviorFlags, window, extended);
+                              behaviorFlags, window, extended,
+                              implicitSwapchainFlags);
 }

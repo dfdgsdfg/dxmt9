@@ -700,7 +700,9 @@ public:
             dxmt9FactoryDebugLog("CreateDevice -> succeeded without device");
             return D3DERR_INVALIDCALL;
         }
-        *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType, behaviorFlags, hwnd, extended_);
+        *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
+                                     behaviorFlags, hwnd, extended_,
+                                     pPP->Flags);
         dxmt9FactoryDebugLog("CreateDevice -> device=%p", *ppDevice);
         return S_OK;
     }
@@ -822,7 +824,9 @@ public:
             dxmt9FactoryDebugLog("CreateDeviceEx -> succeeded without device");
             return D3DERR_INVALIDCALL;
         }
-        *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType, behaviorFlags, hwnd, extended_);
+        *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
+                                     behaviorFlags, hwnd, extended_,
+                                     pPP->Flags);
         dxmt9FactoryDebugLog("CreateDeviceEx -> device=%p", *ppDevice);
         return S_OK;
     }

@@ -432,6 +432,25 @@ public:
                                      DWORD flags) noexcept override {
     if (!pLR)
       return D3DERR_INVALIDCALL;
+    // Wine lockable_backbuffer_lock_policy / nonlockable_backbuffer_getdc_policy:
+    // a backbuffer surface is only lockable if its owning swap chain was
+    // created with D3DPRESENTFLAG_LOCKABLE_BACKBUFFER. Check via the
+    // container (the swap-chain wrapper) — non-backbuffer surfaces have
+    // either no container or a texture container.
+    if (container_) {
+      IDirect3DSwapChain9 *containerSwap = nullptr;
+      if (SUCCEEDED(container_->QueryInterface(IID_IDirect3DSwapChain9,
+                                               reinterpret_cast<void **>(&containerSwap)))
+          && containerSwap) {
+        D3DPRESENT_PARAMETERS pp{};
+        const HRESULT ppHr = containerSwap->GetPresentParameters(&pp);
+        containerSwap->Release();
+        if (SUCCEEDED(ppHr)
+            && (pp.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER) == 0) {
+          return D3DERR_INVALIDCALL;
+        }
+      }
+    }
     // Wine d3d9 conformance (test_resource_lock_error_policy): reject a
     // double-Lock and an out-of-bounds / inverted / negative rect before
     // the recorder flush. The C-side already tracks lock state but it
@@ -523,6 +542,24 @@ public:
     dxmt9DeviceDebugLog("surface_get_dc surface=%p phdc=%p", this, phdc);
     if (!phdc)
       return D3DERR_INVALIDCALL;
+    // nonlockable_backbuffer_getdc_policy: GetDC on a non-lockable
+    // backbuffer must return INVALIDCALL AND leave *phdc untouched. Check
+    // the swap chain's present flags before any other work.
+    if (container_) {
+      IDirect3DSwapChain9 *containerSwap = nullptr;
+      if (SUCCEEDED(container_->QueryInterface(IID_IDirect3DSwapChain9,
+                                               reinterpret_cast<void **>(&containerSwap)))
+          && containerSwap) {
+        D3DPRESENT_PARAMETERS pp{};
+        const HRESULT ppHr = containerSwap->GetPresentParameters(&pp);
+        containerSwap->Release();
+        if (SUCCEEDED(ppHr)
+            && (pp.Flags & D3DPRESENTFLAG_LOCKABLE_BACKBUFFER) == 0) {
+          // Leave *phdc unchanged.
+          return D3DERR_INVALIDCALL;
+        }
+      }
+    }
     if (dc_)
       return D3DERR_INVALIDCALL;
     dc_ = CreateCompatibleDC(nullptr);

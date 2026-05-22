@@ -14,5 +14,6 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev,
                                      D3DDEVTYPE deviceType,
                                      DWORD behaviorFlags,
                                      HWND window,
-                                     bool extended);
+                                     bool extended,
+                                     DWORD implicitSwapchainFlags);
 void FillD3DCaps9(const D9CCaps& src, D3DCAPS9* out);
