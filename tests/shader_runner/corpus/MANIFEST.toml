@@ -1331,6 +1331,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_nan_inf_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 def-constant NaN/-Inf/+Inf round-trip through diffuse interpolant"
+oracle-date = "2026-05-23"
+
+[[test]]
 file = "vs_specific/dxmt9_vs_multistream_textured_quad.shader_test"
 status = "passing"
 source = "dxmt9"

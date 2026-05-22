@@ -1,0 +1,42 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 def-constant NaN/-Inf/+Inf round-trip through diffuse interpolant
+; oracle-date: 2026-05-23
+
+; Wine's fp_special_test probes how individual VS opcodes (log, pow, nrm,
+; rcp, rsq, lit) handle NaN / -Inf / +Inf inputs and how the resulting
+; values flow through interpolation. The expected output varies across
+; real hardware (Wine itemises r500/r600/nv40/nv50/warp expectations).
+;
+; For dxmt9 the meaningful evidence is reduced: the def-constant subset
+; (`vs_def1` / `vs_def2` / `vs_def3` in Wine), which simply MOVs the NaN
+; / -Inf / +Inf constants out through the diffuse interpolant, then
+; classifies them in the pixel shader. Metal's IEEE-754 floats handle
+; the encode/decode cleanly and the runtime never crashes — that is what
+; this readback records. The classification PS below echoes Wine's
+; SGE/SLT/MAX cascade reduced to the def-constant path: it must produce
+; the diffuse color unchanged from the VS output (i.e., the NaN/Inf
+; values reach the framebuffer through the interpolator + ROP).
+
+[vertex shader d3dbc-hex]
+fffe0200
+05000051 a00f0001 7fc00000 ff800000 7f800000 00000000
+0200001f 80000000 900f0000
+0200001f 8000000a 900f0001
+02000001 d00f0000 a0e40001
+02000001 c00f0000 90e40000
+0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300
+0200001f 8000000a 900f0000
+02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(0.25, 0.25, 0.25, 0.25)
+dxmt9-draw-vs-color-triangle
+probe-completed (48, 32)

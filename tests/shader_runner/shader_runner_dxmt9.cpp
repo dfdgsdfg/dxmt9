@@ -47,6 +47,14 @@ struct ProbeExpectation {
   u32 y = 0;
   std::array<u8, 4> expected{};
   u32 tolerance = 0;
+  // Wine fp_special_test family: probe-completed records "the draw
+  // reached the framebuffer with some non-clear value at this pixel"
+  // without enforcing a specific RGBA. Useful for IEEE-754 special
+  // value (NaN/Inf) cases where the hardware-defined output varies.
+  // When set, `expected` / `tolerance` are ignored in favour of an
+  // any-value-but-clear-color check.
+  bool acceptAnyNonClear = false;
+  std::array<u8, 4> clearColor{};
 };
 
 struct TextureLevelSetup {
@@ -1820,6 +1828,20 @@ std::optional<ProbeExpectation> parseProbe(std::string_view line) {
   return probe;
 }
 
+std::optional<ProbeExpectation> parseProbeCompleted(std::string_view line) {
+  // `probe-completed (x, y)` records that the pixel at (x, y) reached
+  // the framebuffer with any value other than the clear color. Used
+  // for fp_special-style IEEE-754 special-value probes where the
+  // implementation-defined hardware output may not be predictable.
+  ProbeExpectation probe;
+  if (std::sscanf(std::string(line).c_str(), "probe-completed (%u, %u)",
+                  &probe.x, &probe.y) != 2) {
+    return std::nullopt;
+  }
+  probe.acceptAnyNonClear = true;
+  return probe;
+}
+
 std::optional<ProbeExpectation> parseRenderTargetProbe(std::string_view line) {
   ProbeExpectation probe;
   float r = 0.0f;
@@ -2094,6 +2116,11 @@ void parseTestLine(CorpusTest& test, std::string_view rawLine) {
   }
 
   if (auto probe = parseProbe(line)) {
+    test.probes.push_back(*probe);
+    return;
+  }
+
+  if (auto probe = parseProbeCompleted(line)) {
     test.probes.push_back(*probe);
     return;
   }
@@ -4176,7 +4203,12 @@ void runCorpusFile(const std::string& path) {
     std::array<std::shared_ptr<Surface>, kMaxRenderTargets> probeSurfaces{};
     std::array<std::vector<u8>, kMaxRenderTargets> probePixels{};
     std::array<u32, kMaxRenderTargets> probePitches{};
-    for (const auto& probe : test.probes) {
+    const auto clearBgra =
+        toBGRA(test.clearColor.value_or(ColorRGBA{0.0f, 0.0f, 0.0f, 1.0f}));
+    for (auto probe : test.probes) {
+      if (probe.acceptAnyNonClear) {
+        probe.clearColor = clearBgra;
+      }
       if (probe.x >= params.backBufferWidth || probe.y >= params.backBufferHeight) {
         fail("probe coordinate out of range");
       }
@@ -4207,6 +4239,22 @@ void runCorpusFile(const std::string& path) {
       const size_t offset =
           static_cast<size_t>(probe.y) * probePitches[probe.target] + static_cast<size_t>(probe.x) * 4;
       const std::array<u8, 4> actual{pixels[offset + 0], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]};
+      // probe-completed: assert only that the draw produced a pixel
+      // other than the clear color. Hardware-defined NaN/Inf outputs
+      // (Wine fp_special_test family) make a precise RGBA comparison
+      // meaningless; the meaningful evidence is "the shader compiled,
+      // ran, and the framebuffer was written without crashing".
+      if (probe.acceptAnyNonClear) {
+        if (actual == probe.clearColor) {
+          std::ostringstream out;
+          out << path << ": probe-completed rt" << probe.target << " (" << probe.x << ", " << probe.y
+              << ") expected non-clear pixel, got clear_bgra=("
+              << static_cast<unsigned>(actual[0]) << "," << static_cast<unsigned>(actual[1]) << ","
+              << static_cast<unsigned>(actual[2]) << "," << static_cast<unsigned>(actual[3]) << ")";
+          fail(out.str());
+        }
+        continue;
+      }
       for (size_t i = 0; i < actual.size(); ++i) {
         const int diff = std::abs(static_cast<int>(actual[i]) - static_cast<int>(probe.expected[i]));
         if (static_cast<u32>(diff) > probe.tolerance) {

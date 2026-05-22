@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -47,6 +48,17 @@ std::string pixelPositionExpression(const std::string& pixelInputs) {
 }
 
 std::string formatFloatLiteral(f32 value) {
+  // IEEE-754 special values (Wine fp_special_test). The default
+  // `ostringstream` output emits "nan", "-inf", "inf" without a
+  // C-literal suffix; appending ".0f" produces invalid MSL like
+  // `nan.0f`. Emit them as the canonical math.h macros instead so
+  // Metal's compiler accepts the constant unchanged.
+  if (std::isnan(value)) {
+    return std::string("NAN");
+  }
+  if (std::isinf(value)) {
+    return value < 0.0f ? std::string("-INFINITY") : std::string("INFINITY");
+  }
   std::ostringstream out;
   out << std::setprecision(9) << value;
   std::string text = out.str();
