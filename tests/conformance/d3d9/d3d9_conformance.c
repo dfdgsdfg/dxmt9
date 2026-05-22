@@ -329,20 +329,41 @@ static const struct test_case tests[] =
     {"visual_fp_special_caps_policy", test_visual_fp_special_caps_policy},
 };
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct d3d9_api api;
     unsigned int i;
+    unsigned int total = sizeof(tests) / sizeof(tests[0]);
+    unsigned int start_idx = 0;
+    unsigned int end_idx = total;
+    const char *name_substr = NULL;
+    int a;
+
+    for (a = 1; a < argc; ++a)
+    {
+        if (strncmp(argv[a], "start=", 6) == 0)
+            start_idx = (unsigned int)atoi(argv[a] + 6);
+        else if (strncmp(argv[a], "end=", 4) == 0)
+            end_idx = (unsigned int)atoi(argv[a] + 4);
+        else if (strncmp(argv[a], "filter=", 7) == 0)
+            name_substr = argv[a] + 7;
+    }
+    if (end_idx > total) end_idx = total;
+    if (start_idx > end_idx) start_idx = end_idx;
 
     if (!load_d3d9_api(&api))
         return 77;
 
-    for (i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
+    for (i = start_idx; i < end_idx; ++i)
     {
-        unsigned int failures_before = checks_failed;
+        unsigned int failures_before;
 
+        if (name_substr && !strstr(tests[i].name, name_substr))
+            continue;
+
+        failures_before = checks_failed;
         current_test = tests[i].name;
-        printf("RUN  [%s]\n", current_test);
+        printf("RUN  [%u:%s]\n", i, current_test);
         tests[i].func(&api);
         pump_window_messages();
         printf("%s [%s]\n", checks_failed == failures_before ? "PASS" : "FAIL",
