@@ -2418,6 +2418,18 @@ public:
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
                                              IDirect3DBaseTexture9* dst) noexcept override {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        // Wine d3d9 IDirect3DDevice9::UpdateTexture: both args non-NULL;
+        // src must be SYSTEMMEM; dst must NOT be SYSTEMMEM/SCRATCH. See
+        // test_update_texture_pool_copy_2d in d3d9_conformance_resource.c.
+        if (!src || !dst) return D3DERR_INVALIDCALL;
+        if (src->GetType() == D3DRTYPE_TEXTURE && dst->GetType() == D3DRTYPE_TEXTURE) {
+            D3DSURFACE_DESC sd{}, dd{};
+            ((IDirect3DTexture9*)src)->GetLevelDesc(0, &sd);
+            ((IDirect3DTexture9*)dst)->GetLevelDesc(0, &dd);
+            if (sd.Pool != D3DPOOL_SYSTEMMEM) return D3DERR_INVALIDCALL;
+            if (dd.Pool == D3DPOOL_SYSTEMMEM || dd.Pool == D3DPOOL_SCRATCH)
+                return D3DERR_INVALIDCALL;
+        }
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
         auto* const srcRaw = rawTex(src);
@@ -2427,6 +2439,9 @@ public:
         record.header.size = sizeof(record);
         record.srcWire = reinterpret_cast<uint64_t>(srcRaw);
         record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
+        // Wine d3d9 UpdateTexture: both args non-NULL; src in SYSTEMMEM;
+        // dst not SYSTEMMEM/SCRATCH. test_update_texture_pool_copy_2d.
+        (void)0;
         return appendCommandRecordRetained(&record, sizeof(record),
                                            nullptr, nullptr, srcRaw, dstRaw);
     }
@@ -2501,6 +2516,19 @@ public:
                                          const RECT* pRect,
                                          D3DCOLOR color) noexcept override {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        // Wine d3d9 ColorFill: DXT-compressed and SYSTEMMEM surfaces are
+        // rejected. visual_colorfill_format_policy.
+        if (!pSurf) return D3DERR_INVALIDCALL;
+        {
+            D3DSURFACE_DESC sd{};
+            if (SUCCEEDED(pSurf->GetDesc(&sd))) {
+                if (sd.Pool == D3DPOOL_SYSTEMMEM) return D3DERR_INVALIDCALL;
+                const D3DFORMAT f = sd.Format;
+                if (f == D3DFMT_DXT1 || f == D3DFMT_DXT2 || f == D3DFMT_DXT3 ||
+                    f == D3DFMT_DXT4 || f == D3DFMT_DXT5)
+                    return D3DERR_INVALIDCALL;
+            }
+        }
         dxmt9DeviceDebugLog("device_color_fill device=%p surf=%p rect=%s color=0x%08x",
                             this, pSurf, pRect ? "<custom>" : "<full>", (unsigned)color);
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
@@ -2667,6 +2695,18 @@ public:
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         // T2 device-lost gate.
         if (deviceNotReset_) return D3DERR_DEVICELOST;
+        // Wine d3d9: Clear count/pRects must agree, and Z clears require
+        // a bound depth-stencil. visual_clear_color_only_policy /
+        // visual_depth_buffer_clear_policy.
+        if (count == 0 && pRects != nullptr) return D3DERR_INVALIDCALL;
+        if (count > 0 && pRects == nullptr) return D3DERR_INVALIDCALL;
+        if ((flags & D3DCLEAR_ZBUFFER) && !dsSurfaceExplicit_) {
+            D9CSurface* s = dxmt9c_device_get_depth_stencil(dev_);
+            if (!s) return D3DERR_INVALIDCALL;
+            dxmt9c_surface_release(s);
+        } else if ((flags & D3DCLEAR_ZBUFFER) && dsSurfaceExplicit_ && !dsSurface_) {
+            return D3DERR_INVALIDCALL;
+        }
         dxmt9DeviceDebugLog("device_clear device=%p count=%u flags=0x%x color=0x%08x z=%f stencil=%u",
                             this, (unsigned)count, (unsigned)flags, (unsigned)color, z,
                             (unsigned)stencil);
