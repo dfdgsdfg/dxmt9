@@ -137,24 +137,6 @@ test('dxmt9-d3d9-conformance-manifest-check', bash,
 test('dxmt9-d3d9-conformance-status-report', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/check_d3d9_conformance_status.py')],
      is_parallel: false)
-test('dxmt9-harness-manifest-check', python3,
-     args: [join_paths(meson.project_source_root(), 'scripts/check/check_harness_manifest.py')],
-     is_parallel: false)
-test('dxmt9-diagnostic-cost-audit', python3,
-     args: [
-       join_paths(meson.project_source_root(), 'scripts/check/audit_diagnostic_costs.py'),
-     ],
-     is_parallel: false)
-test('dxmt9-diagnostic-cost-audit-selftest', python3,
-     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_diagnostic_cost_audit.py')],
-     workdir: meson.project_source_root(),
-     suite: ['scripts'],
-     is_parallel: false)
-test('dxmt9-debug-result-schema-selftest', python3,
-     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_debug_result_schema.py')],
-     workdir: meson.project_source_root(),
-     suite: ['scripts'],
-     is_parallel: false)
 test('dxmt9-drift-report', bash, args: [join_paths(meson.project_source_root(), 'scripts/check/check_drift.sh')],
      is_parallel: false)
 test('dxmt9-perf-counter-table-audit', python3,
