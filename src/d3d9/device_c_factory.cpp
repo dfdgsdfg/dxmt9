@@ -173,12 +173,17 @@ extern "C" int32_t dxmt9c_factory_check_device_type(D9CFactory* f, uint32_t adap
 
 extern "C" int32_t dxmt9c_factory_check_device_format(D9CFactory* f, uint32_t adapter,
                                                       uint32_t d3dFmt, uint32_t usage) {
+  // Wine d3d9: vendor FOURCC GET4 (fetch4) is not implemented anywhere
+  // dxmt9 ships; report NOTAVAILABLE so app paths take the fallback.
+  // vendor_policy_fetch4_caps.
+  if (d3dFmt == 0x34544547u /*'GET4'*/) return dxmt9::core::D3DERR_NOTAVAILABLE;
   return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt), usageFromD3D(usage));
 }
 
 extern "C" int32_t dxmt9c_factory_check_device_format2(D9CFactory* f, uint32_t adapter,
                                                        uint32_t d3dFmt, uint32_t usage,
                                                        uint32_t resourceType) {
+  if (d3dFmt == 0x34544547u /*'GET4'*/) return dxmt9::core::D3DERR_NOTAVAILABLE;
   return f->iface->CheckDeviceFormat(adapter, fmtFromD3D(d3dFmt),
                                      usageFromD3D(usage) | usageFromResourceType(resourceType));
 }

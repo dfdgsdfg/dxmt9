@@ -126,6 +126,13 @@ void DeviceState::reset() {
   inScene = false;
 
   renderStates.set(RS_LIGHTING, 1);
+  // Wine d3d9: RS_SHADEMODE default is D3DSHADE_GOURAUD (2);
+  // RS_MULTISAMPLEMASK = 0xffffffff; RS_MULTISAMPLEANTIALIAS = TRUE.
+  // visual_shademode_render_state_policy /
+  // visual_sample_mask_render_state_policy.
+  renderStates.set(9u /*RS_SHADEMODE*/, 2u);
+  renderStates.set(161u /*RS_MULTISAMPLEANTIALIAS*/, 1u);
+  renderStates.set(162u /*RS_MULTISAMPLEMASK*/, 0xffffffffu);
   renderStates.set(RS_SPECULAR_ENABLE, 0);
   renderStates.set(RS_NORMALIZE_NORMALS, 0);
   renderStates.set(RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::None));

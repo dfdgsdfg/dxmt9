@@ -375,7 +375,10 @@ public:
     HRESULT hr = hr32(dxmt9c_surface_get_desc(s_, &sd));
     if (SUCCEEDED(hr)) {
       pD->Format = (D3DFORMAT)sd.format;
-      pD->Type = (D3DRESOURCETYPE)sd.resourceType;
+      // Wine d3d9: any D3D9Surface always reports D3DRTYPE_SURFACE
+      // regardless of the parent texture's resource type.
+      // cube_texture_level_surface_policy.
+      pD->Type = D3DRTYPE_SURFACE;
       pD->Usage = sd.usage;
       pD->Pool = (D3DPOOL)sd.pool;
       pD->MultiSampleType = (D3DMULTISAMPLE_TYPE)sd.multiSampleType;
@@ -634,7 +637,8 @@ public:
     HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
     if (SUCCEEDED(hr)) {
       pD->Format = (D3DFORMAT)sd.format;
-      pD->Type = D3DRTYPE_TEXTURE;
+      // Wine d3d9: level descriptor is a surface.
+      pD->Type = D3DRTYPE_SURFACE;
       pD->Usage = sd.usage;
       pD->Pool = (D3DPOOL)sd.pool;
       pD->MultiSampleType = (D3DMULTISAMPLE_TYPE)sd.multiSampleType;
@@ -870,7 +874,9 @@ public:
     HRESULT hr = hr32(dxmt9c_texture_get_level_desc(t_, level, &sd));
     if (SUCCEEDED(hr)) {
       pD->Format = (D3DFORMAT)sd.format;
-      pD->Type = D3DRTYPE_CUBETEXTURE;
+      // Wine d3d9: cube level descriptor is a surface.
+      // cube_texture_level_surface_policy.
+      pD->Type = D3DRTYPE_SURFACE;
       pD->Usage = sd.usage;
       pD->Pool = (D3DPOOL)sd.pool;
       pD->MultiSampleType = (D3DMULTISAMPLE_TYPE)sd.multiSampleType;
@@ -1210,15 +1216,20 @@ public:
       return D3DERR_INVALIDCALL;
     if (level >= dxmt9c_texture_get_level_count(t_))
       return D3DERR_INVALIDCALL;
-    // Wine d3d9 conformance (check_volume_lock_policy): reject an
-    // inverted / out-of-bounds box and a D3DLOCK_DISCARD on a
-    // non-dynamic volume texture before the recorder flush.
+    // Wine d3d9 conformance:
+    //  - check_volume_lock_policy: reject inverted/out-of-bounds box
+    //    and D3DLOCK_DISCARD on non-dynamic volume.
+    //  - volume_block_lock_layout: D3DLOCK_READONLY on DEFAULT pool
+    //    volume is rejected with INVALIDCALL.
     {
       D9CSurfaceDesc desc{};
       if (SUCCEEDED(textureLevelDesc(t_, level, &desc))) {
         if (!boxWithinExtents(box, desc.width, desc.height, desc.depth))
           return D3DERR_INVALIDCALL;
         if (!lockDiscardIsValid(flags, desc.usage))
+          return D3DERR_INVALIDCALL;
+        if ((flags & D3DLOCK_READONLY) &&
+            (D3DPOOL)desc.pool == D3DPOOL_DEFAULT)
           return D3DERR_INVALIDCALL;
       }
     }
