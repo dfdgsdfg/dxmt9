@@ -132,6 +132,7 @@ static const struct test_case tests[] =
             test_base_texture_metadata_iface_policy},
     {"texture_autogen_filter_level_policy",
             test_texture_autogen_filter_level_policy},
+    {"managed_autogen_mipmap_policy", test_managed_autogen_mipmap_policy},
     {"surface_format_null_policy", test_surface_format_null_policy},
     {"resource_type", test_resource_type},
     {"texture_level_surface_desc_parity",

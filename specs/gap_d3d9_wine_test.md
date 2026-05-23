@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `05e4416cbe8c1886973f827bfb435e0ff842e699` — **work tree dirty** |
-| Short  | `05e4416` |
-| Tag / describe | `05e4416` |
+| Commit | `b562c667367d35f3c448497cd7d6905845197181` — **work tree dirty** |
+| Short  | `b562c66` |
+| Tag / describe | `b562c66` |
 | Author date | `2026-05-24` |
-| Subject | tests/conformance/d3d9: add test_multisample_render_target_init_policy; test_multisample_init partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_get_render_target_data_msaa_policy; multisample_get_rtdata_test partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 05e4416cbe8c1886973f827bfb435e0ff842e699
+git -C "$DXMT9_REPO" checkout b562c667367d35f3c448497cd7d6905845197181
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 65 | 62 | 8 | 0 | 0 |
+| `visual.c` | 135 | 65 | 63 | 7 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **194** | **8** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **195** | **7** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -167,7 +167,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_generated_texcoords` | 29067 | ✅ | — |
 | `test_lighting_matrices` | 28945 | 📐 | `test_visual_lighting_world_view_matrix_policy` |
 | `test_line_antialiasing_blending` | 23684 | 📐 | `test_visual_line_antialiasing_blending_state_policy` |
-| `test_managed_generate_mipmap` | 27515 | 🟡 | — |
+| `test_managed_generate_mipmap` | 27515 | 📐 | `test_managed_autogen_mipmap_policy` |
 | `test_managed_reset` | 27484 | ✅ | — |
 | `test_map_synchronisation` | 24996 | ✅ | — |
 | `test_max_index16` | 24074 | 📐 | `test_visual_max_index16_draw_policy` |

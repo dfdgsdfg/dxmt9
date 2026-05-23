@@ -418,6 +418,7 @@ void test_surface_dimensions(const struct d3d9_api *api);
 void test_texture_auto_mipmap_level_count(const struct d3d9_api *api);
 void test_base_texture_metadata_iface_policy(const struct d3d9_api *api);
 void test_texture_autogen_filter_level_policy(const struct d3d9_api *api);
+void test_managed_autogen_mipmap_policy(const struct d3d9_api *api);
 void test_surface_format_null_policy(const struct d3d9_api *api);
 void test_resource_type(const struct d3d9_api *api);
 void test_texture_level_surface_desc_parity(const struct d3d9_api *api);

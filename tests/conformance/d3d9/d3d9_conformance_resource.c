@@ -2129,6 +2129,83 @@ done_d3d9:
 }
 
 /*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_managed_generate_mipmap()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Pins the HRESULT contract for D3DUSAGE_AUTOGENMIPMAP textures in
+ * MANAGED pool vs. SYSTEMMEM pool. AUTOGENMIPMAP is valid in MANAGED
+ * (and DEFAULT) pool but invalid in SYSTEMMEM. The runtime hides
+ * intermediate mip levels so GetLevelCount() returns 1.
+ */
+void test_managed_autogen_mipmap_policy(const struct d3d9_api *api)
+{
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DTexture9 *texture2 = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    DWORD levels;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DUSAGE_AUTOGENMIPMAP,
+            D3DRTYPE_TEXTURE, D3DFMT_A8R8G8B8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("A8R8G8B8 autogen mipmap is not supported");
+        goto done_d3d9;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Positive: MANAGED pool + AUTOGENMIPMAP. */
+    hr = IDirect3DDevice9_CreateTexture(device, 64, 64, 0,
+            D3DUSAGE_AUTOGENMIPMAP, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
+            &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr) && texture)
+    {
+        levels = IDirect3DTexture9_GetLevelCount(texture);
+        CHECK_TRUE(levels == 1u);
+        IDirect3DTexture9_Release(texture);
+        texture = NULL;
+    }
+
+    /* Negative: SYSTEMMEM pool + AUTOGENMIPMAP is rejected. */
+    hr = IDirect3DDevice9_CreateTexture(device, 64, 64, 0,
+            D3DUSAGE_AUTOGENMIPMAP, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM,
+            &texture2, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    if (SUCCEEDED(hr) && texture2)
+    {
+        IDirect3DTexture9_Release(texture2);
+        texture2 = NULL;
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
  * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_surface_format_null()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
