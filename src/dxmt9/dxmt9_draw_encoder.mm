@@ -51,6 +51,7 @@ using core::SAMP_ADDRESS_W;
 using core::SAMP_BORDER_COLOR;
 using core::SAMP_MAG_FILTER;
 using core::SAMP_MAX_ANISOTROPY;
+using core::SAMP_MAX_MIP_LEVEL;
 using core::SAMP_MIN_FILTER;
 using core::SAMP_MIP_FILTER;
 using core::kMaxSamplers;
@@ -717,6 +718,7 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot, float lodMinClam
   const auto addressW = samplerStateOr(snapshot, SAMP_ADDRESS_W, 1u);
   const auto borderColor = samplerStateOr(snapshot, SAMP_BORDER_COLOR, 0u);
   const auto maxAnisotropy = samplerStateOr(snapshot, SAMP_MAX_ANISOTROPY, 0u);
+  const auto maxMipLevel = samplerStateOr(snapshot, SAMP_MAX_MIP_LEVEL, 0u);
   WMTSamplerInfo info{};
   info.min_filter = minFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
   info.mag_filter = magFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
@@ -735,8 +737,12 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot, float lodMinClam
   }
   // Keep explicit texldl / mip-filter sampling from being clamped to level 0.
   // LOD bias is still intentionally ignored because WMTSamplerInfo has no
-  // separate bias field.
-  info.lod_min_clamp = lodMinClamp;
+  // separate bias field. D3DSAMP_MAXMIPLEVEL clamps the sampled mip from
+  // above (most-detailed level), and combines with IDirect3DBaseTexture9::
+  // SetLOD (already encoded in `lodMinClamp`) as max — picking the coarser
+  // (numerically larger) of the two. Wine d3d9 visual.c maxmip_test
+  // (gap_d3d9_wine_test §5.1) is the behavioral oracle.
+  info.lod_min_clamp = std::max(lodMinClamp, static_cast<float>(maxMipLevel));
   info.lod_max_clamp = 1e9f;
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
@@ -768,6 +774,7 @@ WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>
   const auto addressW = samplerStateOr(states, SAMP_ADDRESS_W, 1u);
   const auto borderColor = samplerStateOr(states, SAMP_BORDER_COLOR, 0u);
   const auto maxAnisotropy = samplerStateOr(states, SAMP_MAX_ANISOTROPY, 0u);
+  const auto maxMipLevel = samplerStateOr(states, SAMP_MAX_MIP_LEVEL, 0u);
   WMTSamplerInfo info{};
   info.min_filter = minFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
   info.mag_filter = magFilter == 2u ? WMTSamplerMinMagFilterLinear : WMTSamplerMinMagFilterNearest;
@@ -784,7 +791,9 @@ WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>
       info.r_address_mode == WMTSamplerAddressModeClampToBorderColor) {
     info.border_color = resolveSamplerBorderColor(borderColor);
   }
-  info.lod_min_clamp = lodMinClamp;
+  // See FlatStateSet sibling above: combine D3DSAMP_MAXMIPLEVEL with SetLOD
+  // (encoded in `lodMinClamp`) as max — Wine d3d9 visual.c maxmip_test.
+  info.lod_min_clamp = std::max(lodMinClamp, static_cast<float>(maxMipLevel));
   info.lod_max_clamp = 1e9f;
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;

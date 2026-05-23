@@ -1250,6 +1250,8 @@ std::optional<SamplerSetup> parseDxmt9Sampler(std::string_view line) {
       sampler.states[SAMP_MIP_FILTER] = parseTextureFilter(value);
     } else if (key == "srgbtexture" || key == "srgb") {
       sampler.states[SAMP_SRGB_TEXTURE] = parseBoolState(value);
+    } else if (key == "maxmiplevel" || key == "max_mip_level") {
+      sampler.states[SAMP_MAX_MIP_LEVEL] = parseU32Value(value);
     } else {
       fail("unsupported dxmt9-sampler state");
     }

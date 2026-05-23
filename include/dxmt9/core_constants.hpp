@@ -449,6 +449,13 @@ inline constexpr u32 SAMP_MAG_FILTER = 5;
 inline constexpr u32 SAMP_MIN_FILTER = 6;
 inline constexpr u32 SAMP_MIP_FILTER = 7;
 inline constexpr u32 SAMP_MIPMAP_LOD_BIAS = 8;
+inline constexpr u32 SAMP_MAX_MIP_LEVEL = 9;  // D3DSAMP_MAXMIPLEVEL — clamps
+                                              // the sampled mip from above
+                                              // (most-detailed level); combined
+                                              // with IDirect3DBaseTexture9::SetLOD
+                                              // as max(SetLOD, MAXMIPLEVEL) when
+                                              // building the Metal sampler
+                                              // `lod_min_clamp`.
 inline constexpr u32 SAMP_MAX_ANISOTROPY = 10;
 inline constexpr u32 SAMP_SRGB_TEXTURE = 11;
 
@@ -467,6 +474,7 @@ static_assert(SAMP_MAG_FILTER == 5, "D3DSAMP_MAGFILTER = 5");
 static_assert(SAMP_MIN_FILTER == 6, "D3DSAMP_MINFILTER = 6");
 static_assert(SAMP_MIP_FILTER == 7, "D3DSAMP_MIPFILTER = 7");
 static_assert(SAMP_MIPMAP_LOD_BIAS == 8, "D3DSAMP_MIPMAPLODBIAS = 8");
+static_assert(SAMP_MAX_MIP_LEVEL == 9, "D3DSAMP_MAXMIPLEVEL = 9");
 static_assert(SAMP_MAX_ANISOTROPY == 10, "D3DSAMP_MAXANISOTROPY = 10");
 static_assert(SAMP_SRGB_TEXTURE == 11, "D3DSAMP_SRGBTEXTURE = 11");
 

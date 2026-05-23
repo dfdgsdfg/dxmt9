@@ -2507,6 +2507,18 @@ oracle = "Wine d3d9 visual.c maxmip_test behavior, reduced to SetLOD selecting t
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "texture/dxmt9_ffp_sampler_max_mip_level_clamp_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c maxmip_test behavior, reduced to D3DSAMP_MAXMIPLEVEL=1 selecting mip 1 instead of mip 0"
+oracle-date = "2026-05-23"
+
+[[test]]
 file = "vs_specific/dxmt9_vs_constant_no_clamp_readback.shader_test"
 status = "passing"
 source = "dxmt9"

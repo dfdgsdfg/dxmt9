@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `e2b5863ca34338c3e57cbb78b32a1f339f6cbe7d` — **work tree dirty** |
-| Short  | `e2b5863` |
-| Tag / describe | `e2b5863` |
+| Commit | `8ba18315d6c230a5aa296bd823685d51188bd032` — **work tree dirty** |
+| Short  | `8ba1831` |
+| Tag / describe | `8ba1831` |
 | Author date | `2026-05-23` |
-| Subject | specs/gap_d3d9_wine_test: promote 4 more partial → covered |
+| Subject | d3d9 test_depthbias: depth_bias DSL + occlusion corpus + backend gap recorded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout e2b5863ca34338c3e57cbb78b32a1f339f6cbe7d
+git -C "$DXMT9_REPO" checkout 8ba18315d6c230a5aa296bd823685d51188bd032
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 63 | 55 | 17 | 0 | 0 |
+| `visual.c` | 135 | 64 | 55 | 16 | 0 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **64** | **176** | **28** | **0** | **0** |
+| **TOTAL** | **268** | **65** | **176** | **27** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -114,7 +114,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `intz_test` | 14871 | 📐 | `test_vendor_policy_intz_caps` |
 | `lighting_test` | 490 | 📐 | `test_visual_lighting_render_state_policy` |
 | `loop_index_test` | 13791 | ✅ | — |
-| `maxmip_test` | 4671 | 🟡 | — |
+| `maxmip_test` | 4671 | ✅ | — |
 | `multiple_rendertargets_test` | 11617 | 🟢 | — |
 | `multisample_get_rtdata_test` | 17106 | 🟡 | — |
 | `multisampled_depth_buffer_test` | 17240 | 📐 | `test_visual_multisampled_depth_buffer_caps_policy` |
