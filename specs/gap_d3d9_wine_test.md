@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `d5855a72049f6a31b50af758df2bfb4bca41b5d5` |
-| Short  | `d5855a7` |
-| Tag / describe | `d5855a7` |
+| Commit | `c203365b071647572c6c18491802d3e1378d0424` |
+| Short  | `c203365` |
+| Tag / describe | `c203365` |
 | Author date | `2026-05-23` |
-| Subject | specs/gap_d3d9_wine_test: promote 7 fog/TSS partial entries → covered |
+| Subject | specs/gap_d3d9_wine_test: promote 2 more partial → covered |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout d5855a72049f6a31b50af758df2bfb4bca41b5d5
+git -C "$DXMT9_REPO" checkout c203365b071647572c6c18491802d3e1378d0424
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 54 | 55 | 26 | 0 | 0 |
+| `visual.c` | 135 | 57 | 55 | 23 | 0 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **55** | **176** | **37** | **0** | **0** |
+| **TOTAL** | **268** | **58** | **176** | **34** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -88,7 +88,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 |------------|----------:|:------:|---------------------------------|
 | `add_dirty_rect_test` | 18885 | 📐 | `test_visual_add_dirty_rect_policy` |
 | `alphareplicate_test` | 13262 | ✅ | — |
-| `alphatest_test` | 13507 | 🟡 | — |
+| `alphatest_test` | 13507 | ✅ | — |
 | `clear_test` | 1154 | 📐 | `test_visual_clear_color_only_policy` |
 | `clip_planes_test` | 16182 | 🟡 | — |
 | `cnd_test` | 6675 | ✅ | — |
@@ -201,14 +201,14 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_updatetexture` | 21506 | ✅ | — |
 | `test_vertex_blending` | 21243 | ✅ | — |
 | `test_vertex_texture` | 24394 | 🟢 | — |
-| `test_viewport` | 13994 | 🟡 | — |
+| `test_viewport` | 13994 | ✅ | — |
 | `test_vshader_float16` | 9676 | ✅ | — |
 | `test_vshader_input` | 7787 | ✅ | — |
 | `texbem_test` | 3440 | ✅ | `test_vendor_policy_texbem_unsupported` |
 | `texdepth_test` | 5242 | ✅ | `test_vendor_policy_texdepth_unsupported` |
 | `texkill_test` | 5465 | ✅ | — |
 | `texop_range_test` | 13126 | ✅ | — |
-| `texop_test` | 12604 | 🟡 | — |
+| `texop_test` | 12604 | ✅ | — |
 | `tssargtemp_test` | 12041 | ✅ | — |
 | `unbound_sampler_test` | 16760 | 📐 | `test_sampler_state_edges` |
 | `update_surface_test` | 16915 | 📐 | `test_visual_update_surface_policy` |
