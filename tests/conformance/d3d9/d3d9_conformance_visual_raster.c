@@ -386,3 +386,102 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: depth_blit_test
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's depth_blit_test exercises StretchRect between two depth-stencil
+ * surfaces and verifies that depth samples round-trip through the blit.
+ * The pixel round-trip portion is EXP-route (needs depth-sample readback).
+ * This PE scaffold pins the public-ABI policy: matching-format depth-to-
+ * depth StretchRect in DEFAULT pool returns S_OK or D3DERR_INVALIDCALL
+ * (dxmt9 may legitimately reject depth-to-depth blit), and cross-format
+ * depth blit (D24S8 -> D16) must return D3DERR_INVALIDCALL.
+ */
+void test_stretch_rect_depth_stencil_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *src_ds = NULL;
+    IDirect3DSurface9 *dst_ds = NULL;
+    IDirect3DSurface9 *mismatch_ds = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Two matching-format DS surfaces. D24S8 is the conformant baseline
+     * format Wine's depth_blit_test uses; DEFAULT pool is implicit for
+     * CreateDepthStencilSurface. Discard=FALSE so the surface is eligible
+     * as a StretchRect source. */
+    hr = IDirect3DDevice9_CreateDepthStencilSurface(device, 64, 64,
+            D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &src_ds, NULL);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateDepthStencilSurface src failed with %s",
+                hr_buffer);
+        goto done_device;
+    }
+
+    hr = IDirect3DDevice9_CreateDepthStencilSurface(device, 64, 64,
+            D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &dst_ds, NULL);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateDepthStencilSurface dst failed with %s",
+                hr_buffer);
+        goto done_src;
+    }
+
+    /* Matching-format depth-to-depth StretchRect. D3D9 historically
+     * permits this only for DEFAULT-pool same-format depth surfaces;
+     * some drivers (and dxmt9, depending on backend support) may reject
+     * it with D3DERR_INVALIDCALL. Either outcome is conformant. */
+    hr = IDirect3DDevice9_StretchRect(device, src_ds, NULL, dst_ds, NULL,
+            D3DTEXF_NONE);
+    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_INVALIDCALL);
+
+    /* Cross-format depth blit (D24S8 source -> D16 destination). D3D9
+     * requires source and destination depth surfaces to match format;
+     * this must always be rejected. CreateDepthStencilSurface for D16
+     * may fail on some configurations -- only run the negative test if
+     * the mismatched surface was actually created. */
+    hr = IDirect3DDevice9_CreateDepthStencilSurface(device, 64, 64,
+            D3DFMT_D16, D3DMULTISAMPLE_NONE, 0, FALSE, &mismatch_ds, NULL);
+    if (SUCCEEDED(hr))
+    {
+        hr = IDirect3DDevice9_StretchRect(device, src_ds, NULL, mismatch_ds,
+                NULL, D3DTEXF_NONE);
+        CHECK_HR(hr, D3DERR_INVALIDCALL);
+        IDirect3DSurface9_Release(mismatch_ds);
+    }
+
+    IDirect3DSurface9_Release(dst_ds);
+done_src:
+    IDirect3DSurface9_Release(src_ds);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

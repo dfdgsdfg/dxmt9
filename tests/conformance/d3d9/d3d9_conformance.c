@@ -314,6 +314,8 @@ static const struct test_case tests[] =
             test_visual_blit_format_conversion_policy},
     {"stretch_rect_null_and_degenerate_policy",
             test_stretch_rect_null_and_degenerate_policy},
+    {"stretch_rect_depth_stencil_policy",
+            test_stretch_rect_depth_stencil_policy},
     {"visual_specular_lighting_render_state_policy",
             test_visual_specular_lighting_render_state_policy},
     {"visual_max_index16_draw_policy",

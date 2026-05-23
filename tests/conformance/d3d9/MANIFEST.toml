@@ -3519,6 +3519,23 @@ status = "scaffolded"
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_raster.c"
+function = "test_stretch_rect_depth_stencil_policy"
+source = "wine/dlls/d3d9/tests/visual.c:depth_blit_test"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "surface-blit"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["StretchRect on two matching D24S8 DEFAULT-pool depth-stencil surfaces returns S_OK or D3DERR_INVALIDCALL, cross-format D24S8 -> D16 depth blit returns D3DERR_INVALIDCALL"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_vendor_policy.c"
 function = "test_vendor_policy_texbem_unsupported"
 source = "wine/dlls/d3d9/tests/visual.c:texbem_test"

@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `870a8e4a91e5a2916353ae0f4fcc25f786137a72` — **work tree dirty** |
-| Short  | `870a8e4` |
-| Tag / describe | `870a8e4` |
+| Commit | `ff4ae2d3b4432de784415229e191eccf4b974a24` — **work tree dirty** |
+| Short  | `ff4ae2d` |
+| Tag / describe | `ff4ae2d` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_device_desktop_window_present_policy scaffold; test_desktop_window partial → scaffolded (visual.c + d3d9ex.c) |
+| Subject | tests/conformance/d3d9: add test_ex_device_sysmem_vertex_buffer_policy scaffold; test_sysmem_draw partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 870a8e4a91e5a2916353ae0f4fcc25f786137a72
+git -C "$DXMT9_REPO" checkout ff4ae2d3b4432de784415229e191eccf4b974a24
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 65 | 56 | 14 | 0 | 0 |
+| `visual.c` | 135 | 65 | 57 | 13 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **188** | **14** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **189** | **13** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -95,7 +95,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `color_fill_test` | 1663 | 📐 | `test_visual_colorfill_format_policy` |
 | `conditional_np2_repeat_test` | 9841 | ✅ | — |
 | `constant_clamp_ps_test` | 6379 | ✅ | — |
-| `depth_blit_test` | 14713 | 🟡 | — |
+| `depth_blit_test` | 14713 | 📐 | `test_stretch_rect_depth_stencil_policy` |
 | `depth_bounds_test` | 14307 | 📐 | `test_visual_depth_bounds_caps_policy` |
 | `depth_buffer2_test` | 14597 | 📐 | `test_visual_depth_buffer_reset_policy` |
 | `depth_buffer_test` | 14442 | 📐 | `test_visual_depth_buffer_clear_policy` |
