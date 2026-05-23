@@ -296,6 +296,8 @@ static const struct test_case tests[] =
             test_query_get_data_size_policy},
     {"check_device_format_conversion_matrix",
             test_check_device_format_conversion_matrix},
+    {"check_device_type_display_format_policy",
+            test_check_device_type_display_format_policy},
     {"multithreaded_device_creation_policy",
             test_multithreaded_device_creation_policy},
     {"visual_shadow_depth_compare_caps_policy",

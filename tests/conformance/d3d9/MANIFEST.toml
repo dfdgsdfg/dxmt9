@@ -3282,6 +3282,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_check_device_type_display_format_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_display_formats"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "device-format"
+owner = "core/factory"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["CheckDeviceType returns S_OK for displayable adapter/backbuffer pairs (X8R8G8B8+A8R8G8B8, X8R8G8B8+X8R8G8B8, R5G6B5+R5G6B5 windowed) and D3DERR_NOTAVAILABLE for non-displayable adapter formats (DXT1 windowed) or alpha-channel adapter formats in exclusive fullscreen (A8R8G8B8+X8R8G8B8)"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_multithreaded_device_creation_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_creation_parameters"
 source_kind = "behavioral-oracle"

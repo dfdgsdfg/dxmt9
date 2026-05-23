@@ -3923,6 +3923,60 @@ void test_check_device_format_conversion_matrix(const struct d3d9_api *api)
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_display_formats (focused on CheckDeviceType displayable
+ * adapter / backbuffer format pairs)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Pin a tight policy on a small fixed (adapter, backbuf, windowed) matrix:
+ *   X8R8G8B8 + A8R8G8B8, windowed   -> S_OK (displayable pair)
+ *   X8R8G8B8 + X8R8G8B8, windowed   -> S_OK
+ *   R5G6B5   + R5G6B5,   windowed   -> S_OK
+ *   DXT1     + A8R8G8B8, windowed   -> D3DERR_NOTAVAILABLE (non-display
+ *                                     adapter format is rejected)
+ *   A8R8G8B8 + X8R8G8B8, fullscreen -> D3DERR_NOTAVAILABLE (adapter formats
+ *                                     with an alpha channel are invalid in
+ *                                     exclusive fullscreen)
+ */
+void test_check_device_type_display_format_policy(const struct d3d9_api *api)
+{
+    static const struct
+    {
+        D3DFORMAT adapter;
+        D3DFORMAT backbuf;
+        BOOL windowed;
+        HRESULT expected_hr;
+    } matrix[] =
+    {
+        {D3DFMT_X8R8G8B8, D3DFMT_A8R8G8B8, TRUE,  D3D_OK},
+        {D3DFMT_X8R8G8B8, D3DFMT_X8R8G8B8, TRUE,  D3D_OK},
+        {D3DFMT_R5G6B5,   D3DFMT_R5G6B5,   TRUE,  D3D_OK},
+        {D3DFMT_DXT1,     D3DFMT_A8R8G8B8, TRUE,  D3DERR_NOTAVAILABLE},
+        {D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8, FALSE, D3DERR_NOTAVAILABLE},
+    };
+    IDirect3D9 *d3d9;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(matrix); ++i)
+    {
+        hr = IDirect3D9_CheckDeviceType(d3d9, D3DADAPTER_DEFAULT,
+                D3DDEVTYPE_HAL, matrix[i].adapter, matrix[i].backbuf,
+                matrix[i].windowed);
+        CHECK_HR(hr, matrix[i].expected_hr);
+    }
+
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_creation_parameters (focused on D3DCREATE_MULTITHREADED)
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

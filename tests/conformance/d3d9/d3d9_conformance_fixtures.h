@@ -508,6 +508,7 @@ void test_state_management_vertex_capture_apply_slice(const struct d3d9_api *api
 /* Wine device.c advanced query / format / multithreading scaffolds. */
 void test_query_get_data_size_policy(const struct d3d9_api *api);
 void test_check_device_format_conversion_matrix(const struct d3d9_api *api);
+void test_check_device_type_display_format_policy(const struct d3d9_api *api);
 void test_multithreaded_device_creation_policy(const struct d3d9_api *api);
 void test_draw_primitive_outside_scene_policy(const struct d3d9_api *api);
 void test_set_get_depth_stencil_surface_policy(const struct d3d9_api *api);
