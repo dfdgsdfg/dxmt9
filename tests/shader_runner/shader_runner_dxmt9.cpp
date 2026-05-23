@@ -956,6 +956,12 @@ u32 parseTextureStageOp(std::string_view text) {
   if (token == "lerp") {
     return static_cast<u32>(TextureOp::Lerp);
   }
+  if (token == "bumpenvmap") {
+    return static_cast<u32>(TextureOp::BumpEnvMap);
+  }
+  if (token == "bumpenvmapluminance") {
+    return static_cast<u32>(TextureOp::BumpEnvMapLuminance);
+  }
   return parseU32Value(text);
 }
 

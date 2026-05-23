@@ -222,6 +222,14 @@ void emitFfpTextureOpHelper(std::ostringstream& out) {
   out << "    case 12u: return mix(arg2, arg1, diffuse.a);\n";
   out << "    case 13u: return mix(arg2, arg1, texture.a);\n";
   out << "    case 14u: return mix(arg2, arg1, tfactor.a);\n";
+  // D3DTOP_BUMPENVMAP (22) and D3DTOP_BUMPENVMAPLUMINANCE (23): the
+  // perturbation + luminance scale has already been baked into the
+  // stage's `texColor` (and therefore into `texture` here) by the
+  // FFP shader generator's per-stage prelude. The texop itself just
+  // returns the (already-perturbed, optionally-scaled) sample so
+  // chained stages can read it via `current` or `D3DTA_TEXTURE`.
+  out << "    case 22u: return texture;\n";
+  out << "    case 23u: return texture;\n";
   out << "    case 25u: return saturate(arg1 + arg2 * current);\n";
   out << "    default: return dxmt9_apply_texture_op(op, arg1, arg2, current);\n";
   out << "  }\n";
@@ -799,9 +807,41 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       }
       const bool hasTexture = context.textures[stage];
       const u32 coordIndex = stageKey.texCoordIndex & 0xffffu;
+      // Wine fixed_function_bumpmap_test (D3DTOP_BUMPENVMAP = 22,
+      // D3DTOP_BUMPENVMAPLUMINANCE = 23): when this stage's colorOp is
+      // a bump-env op, the *current* stage's texture is sampled at
+      // coords perturbed by the PREVIOUS stage's RG output via
+      // BUMPENVMAT, then optionally scaled by the bump luminance
+      // formula for op 23. The perturbed sample replaces the standard
+      // texCoord lookup before any texop dispatch runs.
+      const bool isBumpEnv = stageKey.colorOp == 22u;
+      const bool isBumpEnvLum = stageKey.colorOp == 23u;
       if (hasTexture) {
-        out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
-            << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy);\n";
+        if ((isBumpEnv || isBumpEnvLum) && stage > 0u) {
+          const auto bumpStage = std::to_string(stage - 1u);
+          const auto s = std::to_string(stage);
+          out << "  float2 baseUV" << stage << " = dxmt9_select_texcoord(in, "
+              << coordIndex << "u).xy;\n";
+          out << "  float2 bumpDelta" << stage
+              << " = float2(ffpPs.bumpEnvMat[" << s << "].x * texColor"
+              << bumpStage << ".r + ffpPs.bumpEnvMat[" << s
+              << "].z * texColor" << bumpStage << ".g, ffpPs.bumpEnvMat["
+              << s << "].y * texColor" << bumpStage
+              << ".r + ffpPs.bumpEnvMat[" << s << "].w * texColor"
+              << bumpStage << ".g);\n";
+          out << "  float4 texColor" << stage << " = tex" << stage
+              << ".sample(samp" << stage << ", baseUV" << stage
+              << " + bumpDelta" << stage << ");\n";
+          if (isBumpEnvLum) {
+            out << "  float bumpLum" << stage
+                << " = saturate(texColor" << bumpStage << ".b * ffpPs.bumpEnvLum["
+                << s << "].x + ffpPs.bumpEnvLum[" << s << "].y);\n";
+            out << "  texColor" << stage << ".rgb *= bumpLum" << stage << ";\n";
+          }
+        } else {
+          out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
+              << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy);\n";
+        }
       } else {
         out << "  float4 texColor" << stage << " = float4(1.0f);\n";
       }

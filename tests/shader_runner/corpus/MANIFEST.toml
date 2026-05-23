@@ -2723,6 +2723,18 @@ oracle = "Wine d3d9 visual.c test_color_vertex behavior, reduced to D3DMCS_COLOR
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "ffp/dxmt9_ffp_bumpenvmap_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Wine d3d9 visual.c fixed_function_bumpmap_test behavior, reduced to FFP D3DTOP_BUMPENVMAP stage-1 perturbation readback"
+oracle-date = "2026-05-23"
+
+[[test]]
 file = "ffp/dxmt9_ffp_decl_missing_defaults_readback.shader_test"
 status = "passing"
 source = "dxmt9"

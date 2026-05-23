@@ -1,0 +1,31 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c fixed_function_bumpmap_test behavior, reduced to FFP D3DTOP_BUMPENVMAP stage-1 perturbation readback
+; oracle-date: 2026-05-23
+
+; Wine fixed_function_bumpmap_test exercises the FFP texop family
+; D3DTOP_BUMPENVMAP / D3DTOP_BUMPENVMAPLUMINANCE — distinct from the
+; programmable SM1 TEXBEM opcode covered by the legacy_sm1 corpus.
+; This readback reduces the Wine path to:
+;   stage 0: bump map (1x1 mid-grey R/G = 0.5 → 0 after the -0.5 offset)
+;   stage 1: destination texture (red); BUMPENVMAT = identity, scale 0.0
+; With a zero bump delta the perturbed sample at stage 1 reads the
+; destination texture's centre pixel unchanged → red (1.0, 0.0, 0.0).
+
+[test]
+dxmt9-render-state zenable=off
+dxmt9-render-state lighting=off
+dxmt9-texture 0 1 1 A8R8G8B8 rgba(0.5,0.5,0.0,1.0)
+dxmt9-texture 1 1 1 A8R8G8B8 rgba(1.0,0.0,0.0,1.0)
+dxmt9-bind-texture 0 0
+dxmt9-bind-texture 1 1
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-sampler 1 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 color_arg1=texture alpha_op=selectarg1 alpha_arg1=texture
+dxmt9-texture-stage 1 color_op=bumpenvmap color_arg1=texture alpha_op=selectarg1 alpha_arg1=texture bumpenvmat00=0.0 bumpenvmat01=0.0 bumpenvmat10=0.0 bumpenvmat11=0.0
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-draw-textured-quad-tex2
+probe (32, 32) rgba(1.0,0.0,0.0,1.0) 2
