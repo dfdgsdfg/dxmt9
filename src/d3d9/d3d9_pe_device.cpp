@@ -588,30 +588,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
      * transport across the PE/unix boundary, both of which would
      * widen the winemetal ABI and are out of scope for this track.
      * The shadow is therefore sufficient for the Wine round-trip
-     * conformance shape but does NOT calibrate the displayed image. */
+     * conformance shape but does NOT calibrate the displayed image.
+     *
+     * Option A follow-up: `dxmt9c_device_set_gamma_ramp` now pushes
+     * the same payload across the PE/unix boundary into core::Device
+     * on every SetGammaRamp, so the present-pass actually applies the
+     * ramp; this shadow remains the source of truth for Get reads. */
     D3DGAMMARAMP gammaRamp_{};
 
     // Initialize the gamma ramp shadow to the identity ramp. Called
     // from the constructor; the all-zero default-constructed state is
     // observably different from identity and would surprise apps that
     // never call SetGammaRamp.
-    void initGammaRampIdentity() noexcept {
-        for (UINT i = 0; i < 256; ++i) {
-            const WORD v = static_cast<WORD>(i << 8);
-            gammaRamp_.red[i]   = v;
-            gammaRamp_.green[i] = v;
-            gammaRamp_.blue[i]  = v;
-        }
-    }
-
-    /* gamma ramp shadow — G2-B Option B retained for the GetGammaRamp
-     * round-trip contract. The unix-side present-pass apply (Option A)
-     * pushes the same payload through dxmt9c_device_set_gamma_ramp into
-     * core::Device on every SetGammaRamp, so the PE shadow is solely the
-     * source of truth for Get reads. Default ramp is identity (entry[i]
-     * = i << 8 per channel), matching wined3d's orig_gamma baseline. */
-    D3DGAMMARAMP gammaRamp_{};
-
     void initGammaRampIdentity() noexcept {
         for (UINT i = 0; i < 256; ++i) {
             const WORD v = static_cast<WORD>(i << 8);
