@@ -431,10 +431,21 @@ inline constexpr u32 SAMP_SRGB_TEXTURE = 11;
 inline constexpr u32 SAMP_BORDER_COLOR = 15;
 inline constexpr u32 QUERY_GETDATA_FLUSH = 1u << 0;
 
+// Canonical transform-slot layout. World matrices occupy a contiguous block
+// of `kMaxWorldMatrices` (256) entries starting at XFORM_WORLD_BASE so the
+// D3D9 `D3DTS_WORLDMATRIX(i)` range (i ∈ [0, 255]) round-trips through
+// `SetTransform`/`GetTransform` without truncation. Wine caps the HW indexed
+// vertex-blend matrix index at `MAX_VERTEX_BLEND_MATRIX_INDEX = 255`; the
+// FFP path is separately capped at `MAX_VERTEX_BLEND_MATRICES = 4`, so the
+// FFP shader-source generator in `src/dxmt9/dxmt9_ffp_shaders.cpp` only
+// reads the first four entries even though storage spans the full block.
+// Memory cost: 256 * sizeof(Matrix4x4) = 16 KB in the transform-storage
+// array per DeviceState — acceptable for a single per-device record.
 inline constexpr u32 XFORM_WORLD_BASE = 1;
-inline constexpr u32 XFORM_VIEW = 100;
-inline constexpr u32 XFORM_PROJECTION = 101;
-inline constexpr u32 XFORM_TEXTURE_BASE = 200;
+inline constexpr u32 kMaxWorldMatrices = 256;
+inline constexpr u32 XFORM_VIEW = XFORM_WORLD_BASE + kMaxWorldMatrices;
+inline constexpr u32 XFORM_PROJECTION = XFORM_VIEW + 1;
+inline constexpr u32 XFORM_TEXTURE_BASE = XFORM_PROJECTION + 1;
 inline constexpr u32 kMaxTransformSlots = XFORM_TEXTURE_BASE + kMaxTextureStages;
 
 inline constexpr u32 MAX_TEXTURE_STAGE_INDEX = 7;

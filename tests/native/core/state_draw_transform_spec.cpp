@@ -734,6 +734,65 @@ void testTransformMultiplicationOrderAndBlendSlots() {
                   "unset blend slot uses identity WORLD2");
 }
 
+void testExtendedWorldMatrixTransformRoundTrip() {
+  // P0-2: D3DTS_WORLDMATRIX(i) was previously capped at i < 4 in
+  // `transformStateFromD3D`, silently dropping anything beyond. Verify
+  // the public-ABI codes (256 + i) for i = 5 and i = 254 now map into
+  // distinct canonical slots, round-trip through the canonical state
+  // table, and survive the makeDrawDescFromState transform readback.
+  using dxmt9::d3d9::devicec::transformStateFromD3D;
+  constexpr u32 kD3dtsWorldBase = 256u;
+  constexpr u32 kHighIndex = 254u;
+  constexpr u32 kMidIndex = 5u;
+
+  const u32 slotMid = transformStateFromD3D(kD3dtsWorldBase + kMidIndex);
+  const u32 slotHigh = transformStateFromD3D(kD3dtsWorldBase + kHighIndex);
+  checkEq(slotMid, XFORM_WORLD_BASE + kMidIndex,
+          "D3DTS_WORLDMATRIX(5) maps to XFORM_WORLD_BASE + 5");
+  checkEq(slotHigh, XFORM_WORLD_BASE + kHighIndex,
+          "D3DTS_WORLDMATRIX(254) maps to XFORM_WORLD_BASE + 254");
+  check(slotHigh < kMaxTransformSlots,
+        "extended world-matrix slot stays inside canonical slot table");
+  check(slotMid != XFORM_VIEW && slotHigh != XFORM_VIEW,
+        "extended world-matrix slots do not collide with XFORM_VIEW");
+  check(slotMid != XFORM_PROJECTION && slotHigh != XFORM_PROJECTION,
+        "extended world-matrix slots do not collide with XFORM_PROJECTION");
+  check(slotMid < XFORM_TEXTURE_BASE && slotHigh < XFORM_TEXTURE_BASE,
+        "extended world-matrix slots do not collide with XFORM_TEXTURE_BASE");
+
+  const Matrix4x4 midMatrix = taggedMatrix(500.0f);
+  const Matrix4x4 highMatrix = taggedMatrix(2540.0f);
+
+  DeviceState state;
+  state.reset();
+  state.transforms.set(slotMid, midMatrix);
+  state.transforms.set(slotHigh, highMatrix);
+
+  check(state.transforms.contains(slotMid),
+        "transform table accepts mid extended world slot");
+  check(state.transforms.contains(slotHigh),
+        "transform table accepts high extended world slot");
+  checkEq(state.transforms.at(slotMid), midMatrix,
+          "transform table round-trips D3DTS_WORLDMATRIX(5) matrix");
+  checkEq(state.transforms.at(slotHigh), highMatrix,
+          "transform table round-trips D3DTS_WORLDMATRIX(254) matrix");
+
+  // FFP consumer cap: per Wine's MAX_VERTEX_BLEND_MATRICES = 4 the FFP
+  // shader-source generator only consumes the first four world slots,
+  // so high indices must not pollute makeBlendWorldViewProjFromState.
+  // The downstream draw-desc array is sized at 4 by intent.
+  Matrix4x4 identity{};
+  identity.m = {1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f};
+  state.transforms.set(XFORM_VIEW, identity);
+  state.transforms.set(XFORM_PROJECTION, identity);
+  const DrawDesc desc = makeDrawDescFromState(state, {});
+  checkEq(desc.ffpBlendWorldViewProj.size(), std::size_t{4},
+          "ffpBlendWorldViewProj retains 4-matrix FFP cap (Wine parity)");
+}
+
 void testClipPlaneLimitsAtCoreBoundary() {
   auto backend = std::make_shared<dxmt9::core::spec::RecordingBackend>();
   Factory factory(BackendLimits{}, backend);
@@ -2244,6 +2303,7 @@ int main() {
   testStateValueTableDirtyHashContract();
   testStateDrawTransform();
   testTransformMultiplicationOrderAndBlendSlots();
+  testExtendedWorldMatrixTransformRoundTrip();
   testClipPlaneLimitsAtCoreBoundary();
   testClipPlaneTransformPayloadAndMaskBounds();
   testConstantsAndShaderRefs();

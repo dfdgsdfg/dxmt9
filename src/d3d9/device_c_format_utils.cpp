@@ -360,7 +360,14 @@ uint32_t transformStateFromD3D(uint32_t state) {
   if (state >= 16u && state < 24u) {
     return dxmt9::core::XFORM_TEXTURE_BASE + (state - 16u);
   }
-  if (state >= 256u && state < 260u) {
+  // D3DTS_WORLDMATRIX(i) is encoded as state == 256 + i for i in [0, 255].
+  // Previously this mapping clamped at i < 4 (matching the legacy
+  // 4-matrix FFP fixed-function blend slots) and silently dropped
+  // anything beyond, which broke programmable vertex-shader skinning
+  // rigs that bind more than four world matrices. Wine routes the
+  // full range to wined3d without truncation; the canonical slot
+  // table reserves kMaxWorldMatrices entries to match.
+  if (state >= 256u && state < 256u + dxmt9::core::kMaxWorldMatrices) {
     return dxmt9::core::XFORM_WORLD_BASE + (state - 256u);
   }
   return state;
