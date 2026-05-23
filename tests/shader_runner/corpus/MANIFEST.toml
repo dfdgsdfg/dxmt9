@@ -1956,7 +1956,7 @@ oracle-date = "2026-05-17"
 
 [[test]]
 file = "render_state/dxmt9_depth_bias_occlusion_readback.shader_test"
-status = "failing"
+status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
 license = "MIT"

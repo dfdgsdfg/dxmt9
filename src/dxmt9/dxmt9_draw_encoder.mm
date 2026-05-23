@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdarg>
 #include <cstddef>
@@ -550,9 +551,17 @@ void setRasterizerCullMode(EncodeContext& ctx,
                            const core::FlatStateSet<core::kMaxStateSlots>& renderStates,
                            WMTCullMode cullMode) {
   cullMode = applyDebugCullOverride(cullMode);
+  // D3D9 RS_DEPTH_BIAS / RS_SLOPE_SCALE_DEPTH_BIAS are stored as DWORDs but
+  // semantically float; bit_cast restores the IEEE 754 layout that
+  // MTLRenderCommandEncoder.setDepthBias:slopeScale:clamp: expects. clamp is
+  // not exposed by D3D9 RS and is left at 0.0f (Metal's "unbounded" sentinel).
+  const float depthBias = std::bit_cast<float>(
+      core::flatStateOr(renderStates, core::RS_DEPTH_BIAS, 0u));
+  const float slopeScale = std::bit_cast<float>(
+      core::flatStateOr(renderStates, core::RS_SLOPE_SCALE_DEPTH_BIAS, 0u));
   recordedSetRasterizerState(ctx, encoder, triangleFillModeFromRenderState(renderStates), cullMode,
                              WMTDepthClipModeClip, frontFaceWinding(),
-                             0.0f, 0.0f, 0.0f);
+                             depthBias, slopeScale, 0.0f);
   countRasterizerBind();
 }
 
@@ -1155,9 +1164,16 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
                  static_cast<double>(hot.viewport.viewport.maxZ)};
   encoder.setViewport(vp);
   countViewportBind();
+  // D3D9 RS_DEPTH_BIAS / RS_SLOPE_SCALE_DEPTH_BIAS are stored as DWORDs but
+  // semantically float (see setRasterizerCullMode for the per-draw equivalent).
+  // Prologue value is the initial baseline; per-draw rebinds will override.
+  const float prologueDepthBias = std::bit_cast<float>(
+      core::flatStateOr(hot.renderStates, core::RS_DEPTH_BIAS, 0u));
+  const float prologueSlopeScale = std::bit_cast<float>(
+      core::flatStateOr(hot.renderStates, core::RS_SLOPE_SCALE_DEPTH_BIAS, 0u));
   encoder.setRasterizerState(WMTTriangleFillModeFill, WMTCullModeNone,
                               WMTDepthClipModeClip, frontFaceWinding(),
-                              0.0f, 0.0f, 0.0f);
+                              prologueDepthBias, prologueSlopeScale, 0.0f);
   countRasterizerBind();
   return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
 }

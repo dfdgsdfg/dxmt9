@@ -11,10 +11,10 @@
 ; the drawn z below the cleared 0.5 so that zfunc=less accepts it. Without depth-bias
 ; plumbing this fails: the strict-less test rejects 0.5 vs 0.5 and the cleared red shows.
 ;
-; Status note: dxmt9_draw_encoder.mm currently hardcodes depth_bias/slope_scale/clamp
-; to 0.0 in setRasterizerCullMode and the prologue setRasterizerState (lines ~554 and
-; ~1149), so D3DRS_DEPTHBIAS / D3DRS_SLOPESCALEDEPTHBIAS never reach Metal. See the
-; commit message for the documented backend gap.
+; Backend wire-up: setRasterizerCullMode and the prologue setRasterizerState in
+; dxmt9_draw_encoder.mm read RS_DEPTH_BIAS / RS_SLOPE_SCALE_DEPTH_BIAS from
+; FlatStateSet via bit_cast<float>(...) and forward them to
+; MTLRenderCommandEncoder.setDepthBias:slopeScale:clamp:.
 
 [pixel shader d3dbc-hex]
 ffff0200 05000051 a00f0000 00000000 3f800000 00000000 3f800000

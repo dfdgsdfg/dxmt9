@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `8ba18315d6c230a5aa296bd823685d51188bd032` — **work tree dirty** |
-| Short  | `8ba1831` |
-| Tag / describe | `8ba1831` |
+| Commit | `47b15ab0cd68b8ecea1ca81e04ea1e299e909aff` — **work tree dirty** |
+| Short  | `47b15ab` |
+| Tag / describe | `47b15ab` |
 | Author date | `2026-05-23` |
-| Subject | d3d9 test_depthbias: depth_bias DSL + occlusion corpus + backend gap recorded |
+| Subject | d3d9 maxmip_test: max_mip_level DSL + clamp corpus + plan flip → covered |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 8ba18315d6c230a5aa296bd823685d51188bd032
+git -C "$DXMT9_REPO" checkout 47b15ab0cd68b8ecea1ca81e04ea1e299e909aff
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 64 | 55 | 16 | 0 | 0 |
+| `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **65** | **176** | **27** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **176** | **26** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -148,7 +148,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_default_attribute_components` | 27807 | ✅ | — |
 | `test_default_diffuse` | 27607 | ✅ | — |
 | `test_depth_stencil_init` | 22556 | 📐 | `test_visual_depth_stencil_init_policy` |
-| `test_depthbias` | 21851 | 🟡 | — |
+| `test_depthbias` | 21851 | ✅ | — |
 | `test_desktop_window` | 25880 | 🟡 | — |
 | `test_draw_mapped_buffer` | 26213 | 🟡 | — |
 | `test_drawindexedprimitiveup` | 24293 | ✅ | — |
