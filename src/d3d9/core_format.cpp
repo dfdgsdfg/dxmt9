@@ -125,6 +125,13 @@ const std::vector<FormatEntry> &formatEntries() {
         FormatClass::Optional, 8, false, true, false, true}},
       {{Format::S8_LOCKABLE, BackendPixelFormat::Unknown,
         FormatClass::Unsupported, 1, false, false, false, true}},
+      // INTZ — vendor FOURCC depth-as-color sampler trick. Backed by
+      // Depth32Float on Metal; sampled returns depth in .r. The format
+      // is required to advertise depthStencil=true so CheckDeviceFormat
+      // with D3DUSAGE_DEPTHSTENCIL succeeds; renderTarget stays false
+      // because INTZ is not a color render target.
+      {{Format::INTZ, BackendPixelFormat::Depth32Float, FormatClass::Optional,
+        4, false, true, false, false}},
       {{Format::INDEX16, BackendPixelFormat::Unknown, FormatClass::Required, 2,
         false, false, false, true}},
       {{Format::INDEX32, BackendPixelFormat::Unknown, FormatClass::Required, 4,
@@ -326,6 +333,8 @@ std::string formatName(Format format) {
     return "D24FS8";
   case Format::S8_LOCKABLE:
     return "S8_LOCKABLE";
+  case Format::INTZ:
+    return "INTZ";
   case Format::INDEX16:
     return "INDEX16";
   case Format::INDEX32:

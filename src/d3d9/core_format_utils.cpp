@@ -232,6 +232,7 @@ bool isDepthFormat(Format format) {
   case Format::D32F_LOCKABLE:
   case Format::D16_LOCKABLE:
   case Format::D24FS8:
+  case Format::INTZ:
     return true;
   default:
     return false;
@@ -385,7 +386,8 @@ void fillDepthStencil(std::vector<u8> &bytes, u32 pitch, u32 width, u32 height,
         break;
       }
       case Format::D32:
-      case Format::D32F_LOCKABLE: {
+      case Format::D32F_LOCKABLE:
+      case Format::INTZ: {
         const u32 raw =
             std::bit_cast<u32>(std::array<u8, 4>{px[0], px[1], px[2], px[3]});
         currentDepth = std::bit_cast<f32>(raw);
@@ -432,7 +434,8 @@ void fillDepthStencil(std::vector<u8> &bytes, u32 pitch, u32 width, u32 height,
         break;
       }
       case Format::D32:
-      case Format::D32F_LOCKABLE: {
+      case Format::D32F_LOCKABLE:
+      case Format::INTZ: {
         const u32 raw = std::bit_cast<u32>(currentDepth);
         const auto bytes32 = std::bit_cast<std::array<u8, 4>>(raw);
         px[0] = bytes32[0];

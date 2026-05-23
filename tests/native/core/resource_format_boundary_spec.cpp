@@ -39,6 +39,8 @@ constexpr u32 kD3DFmtA8L8 = 51u;
 constexpr u32 kD3DFmtD24S8 = 75u;
 constexpr u32 kD3DFmtD24X8 = 77u;
 constexpr u32 kD3DFmtDXT5 = 894720068u;
+// FOURCC 'INTZ' = ('I')|('N'<<8)|('T'<<16)|('Z'<<24) = 0x5A544E49.
+constexpr u32 kD3DFmtINTZ = 1515474505u;
 
 // Native unit tests can drive the public D9C creation calls into core
 // resources and the recording backend. They cannot see the final
@@ -993,6 +995,61 @@ void testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch() {
           "offscreen surface unlock succeeds");
 }
 
+// INTZ — FOURCC depth-as-color sampler trick. dxmt9 maps the format
+// onto MTLPixelFormatDepth32Float and exposes both ShaderRead and
+// RenderTarget usage so the same texture can be a depth-stencil target
+// and a sampler source. The format table is asserted directly so the
+// mapping survives refactors of the surface-creation seam.
+void testIntzDepthSampleableFormatMapping() {
+  checkEq(dxmt9::d3d9::devicec::fmtFromD3D(kD3DFmtINTZ), Format::INTZ,
+          "INTZ FOURCC maps to core Format::INTZ");
+  checkEq(dxmt9::d3d9::devicec::fmtToD3D(Format::INTZ), kD3DFmtINTZ,
+          "INTZ core format round-trips back to FOURCC");
+
+  const auto* info = findFormatInfo(Format::INTZ);
+  check(info != nullptr, "INTZ has a format-table entry");
+  if (info) {
+    check(info->depthStencil, "INTZ is a depth-stencil format");
+    check(!info->renderTarget, "INTZ is not a color render target");
+    check(!info->compressed, "INTZ is not block-compressed");
+    checkEq(info->bytesPerPixel, 4u,
+            "INTZ is four bytes per pixel (Depth32Float storage)");
+    checkEq(info->backendFormat, BackendPixelFormat::Depth32Float,
+            "INTZ backend pixel format is Depth32Float");
+  }
+
+  const auto limits = defaultLimits();
+  checkEq(dxmt9::convert::toPixelFormat(Format::INTZ, limits),
+          WMTPixelFormatDepth32Float,
+          "INTZ Metal pixel format is Depth32Float");
+  check(dxmt9::convert::formatHasDepthAspect(Format::INTZ),
+        "INTZ exposes a depth aspect");
+  check(!dxmt9::convert::formatHasStencilAspect(Format::INTZ),
+        "INTZ has no stencil aspect");
+
+  // INTZ + D3DUSAGE_DEPTHSTENCIL + D3DRTYPE_TEXTURE must be supported.
+  check(formatSupportsUsage(Format::INTZ,
+                            UsageTexture | UsageDepthStencil, limits),
+        "INTZ supports depth-stencil texture usage");
+  // INTZ + D3DUSAGE_RENDERTARGET must NOT be supported — INTZ is a
+  // depth-only target on the GPU side.
+  check(!formatSupportsUsage(Format::INTZ,
+                             UsageTexture | UsageRenderTarget, limits),
+        "INTZ does not support color render-target usage");
+
+  // The TextureDesc → WMTTextureUsage path must produce both ShaderRead
+  // and RenderTarget so a single texture can be sampled and used as a
+  // depth target — the whole point of INTZ.
+  TextureDesc desc{};
+  desc.format = Format::INTZ;
+  desc.usage = UsageDepthStencil;
+  const auto wmtUsage = dxmt9::convert::toTextureUsage(desc);
+  check(hasWmtUsage(wmtUsage, WMTTextureUsageShaderRead),
+        "INTZ texture usage includes ShaderRead");
+  check(hasWmtUsage(wmtUsage, WMTTextureUsageRenderTarget),
+        "INTZ texture usage includes RenderTarget");
+}
+
 }  // namespace
 
 int main() {
@@ -1007,6 +1064,7 @@ int main() {
     testCubeAndVolumeSubresourceUploadMetadata();
     testCubeTextureFaceMajorMiptreeSubresourceBoundaries();
     testSurfaceDescriptorsMultisampleDepthFallbackAndOffscreenPitch();
+    testIntzDepthSampleableFormatMapping();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

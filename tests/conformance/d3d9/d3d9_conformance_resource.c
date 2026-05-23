@@ -3734,6 +3734,115 @@ done_d3d9:
 }
 
 /*
+ * INTZ vendor pseudo-format (FOURCC 'INTZ'). Depth-stencil texture that
+ * is also bindable as a shader resource — used by UE3/UE4-era titles
+ * for depth-of-field and screen-space ambient occlusion. dxmt9 maps it
+ * onto MTLPixelFormatDepth32Float with both ShaderRead + RenderTarget
+ * usage. See specs/gap_d3d9.md §C.5.
+ *
+ * Behavioural oracle: Wine `dlls/wined3d/utils.c` registers
+ * WINED3DFMT_INTZ with depth + texture-can-sample attributes, gated on
+ * `gl_info->supported[ARB_DEPTH_TEXTURE]`. The dxmt9 build always has
+ * the equivalent Metal capability, so CheckDeviceFormat returns
+ * D3D_OK unconditionally for the INTZ + D3DUSAGE_DEPTHSTENCIL +
+ * D3DRTYPE_TEXTURE triple.
+ */
+void test_intz_depth_sampleable_texture_policy(const struct d3d9_api *api)
+{
+    static const D3DFORMAT intz_format = (D3DFORMAT)MAKEFOURCC('I','N','T','Z');
+    IDirect3DSurface9 *original_ds = NULL;
+    IDirect3DSurface9 *intz_surface = NULL;
+    IDirect3DTexture9 *intz_texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    /* INTZ + D3DUSAGE_DEPTHSTENCIL + D3DRTYPE_TEXTURE must succeed. */
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DUSAGE_DEPTHSTENCIL,
+            D3DRTYPE_TEXTURE, intz_format);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("INTZ depth-sampleable texture format is unavailable");
+        goto done_d3d9;
+    }
+    CHECK_HR(hr, D3D_OK);
+
+    /* INTZ + D3DUSAGE_RENDERTARGET must NOT succeed — INTZ is a
+     * depth-stencil-only target on the GPU side. */
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, D3DUSAGE_RENDERTARGET,
+            D3DRTYPE_TEXTURE, intz_format);
+    CHECK_TRUE(hr == D3DERR_NOTAVAILABLE);
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Create an INTZ texture with D3DUSAGE_DEPTHSTENCIL + D3DPOOL_DEFAULT. */
+    hr = IDirect3DDevice9_CreateTexture(device, 64, 64, 1,
+            D3DUSAGE_DEPTHSTENCIL, intz_format, D3DPOOL_DEFAULT,
+            &intz_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(intz_texture != NULL);
+    if (!intz_texture)
+        goto done_device;
+
+    /* The texture must expose its level-zero surface so it can be bound
+     * as a depth-stencil target via SetDepthStencilSurface. */
+    hr = IDirect3DTexture9_GetSurfaceLevel(intz_texture, 0, &intz_surface);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(intz_surface != NULL);
+    if (!intz_surface)
+        goto done_texture;
+
+    /* Save the current depth-stencil so the rest of the conformance
+     * suite isn't disturbed. */
+    IDirect3DDevice9_GetDepthStencilSurface(device, &original_ds);
+
+    /* Bind the INTZ surface as the depth-stencil target. */
+    hr = IDirect3DDevice9_SetDepthStencilSurface(device, intz_surface);
+    CHECK_HR(hr, D3D_OK);
+
+    /* Bind the same INTZ texture as a sampler resource. The whole
+     * point of INTZ is dual-use: depth target AND shader resource at
+     * stage 0. SetTexture must accept it. */
+    hr = IDirect3DDevice9_SetTexture(device, 0,
+            (IDirect3DBaseTexture9 *)intz_texture);
+    CHECK_HR(hr, D3D_OK);
+
+    /* Tear down the bindings in the reverse order so the test leaves
+     * a clean state for subsequent cases. */
+    IDirect3DDevice9_SetTexture(device, 0, NULL);
+    IDirect3DDevice9_SetDepthStencilSurface(device, original_ds);
+    if (original_ds)
+        IDirect3DSurface9_Release(original_ds);
+
+    IDirect3DSurface9_Release(intz_surface);
+done_texture:
+    IDirect3DTexture9_Release(intz_texture);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
  * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_resource_priority()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727

@@ -155,6 +155,8 @@ static const struct test_case tests[] =
             test_volume_lockbox_bounds_offset_policy},
     {"vendor_format_public_api_policy",
             test_vendor_format_public_api_policy},
+    {"intz_depth_sampleable_texture_policy",
+            test_intz_depth_sampleable_texture_policy},
     {"resource_priority_roundtrip", test_resource_priority_roundtrip},
     {"resource_priority_pool_policy", test_resource_priority_pool_policy},
     {"base_vidmem_accounting_policy", test_base_vidmem_accounting_policy},

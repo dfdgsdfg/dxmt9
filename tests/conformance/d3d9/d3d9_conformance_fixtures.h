@@ -431,6 +431,7 @@ void test_volume_mipmap_level_desc_policy(const struct d3d9_api *api);
 void test_volume_block_lock_layout(const struct d3d9_api *api);
 void test_volume_lockbox_bounds_offset_policy(const struct d3d9_api *api);
 void test_vendor_format_public_api_policy(const struct d3d9_api *api);
+void test_intz_depth_sampleable_texture_policy(const struct d3d9_api *api);
 void test_resource_priority_roundtrip(const struct d3d9_api *api);
 void test_resource_priority_pool_policy(const struct d3d9_api *api);
 void test_base_vidmem_accounting_policy(const struct d3d9_api *api);

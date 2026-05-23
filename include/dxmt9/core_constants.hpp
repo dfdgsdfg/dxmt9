@@ -287,6 +287,12 @@ enum class Format : u32 {
   D24X4S4,
   D24FS8,
   S8_LOCKABLE,
+  // Vendor pseudo-format. FOURCC 'INTZ' (0x5A544E49). A depth-stencil
+  // texture that is also sampleable as a single-channel R32F-equivalent
+  // shader resource. UE3/UE4-era titles depend on it for SSAO / DoF.
+  // Backed by MTLPixelFormatDepth32Float; sampled returns depth in .r.
+  // See specs/gap_d3d9.md §C.5.
+  INTZ,
   INDEX16,
   INDEX32,
 };
