@@ -90,7 +90,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `alphareplicate_test` | 13262 | ✅ | — |
 | `alphatest_test` | 13507 | ✅ | — |
 | `clear_test` | 1154 | 📐 | `test_visual_clear_color_only_policy` |
-| `clip_planes_test` | 16182 | 🟡 | — |
+| `clip_planes_test` | 16182 | 🟡 | partial: degenerate (plane (0,0,0,-1) clips everything) covered by `dxmt9_clip_plane_runtime_readback.shader_test`; half-space discrimination still failing — see `dxmt9_clip_plane_halfspace_readback.shader_test` (status=failing). Half-fix landed: FFP VS now initializes unset `out.clipDistance[]` slots to +1 (src/dxmt9/dxmt9_ffp_shaders.cpp ~798, src/dxmt9/dxmt9_shader_metal_ir.cpp ~1836) so disabled planes do not discard fragments. Residual failure (non-degenerate plane clips all pixels) is not in shader emission — generated MSL is correct — and reproduces for every plane direction (X, Y, all four signs); next-step investigation is `ffpVs.clipPlaneMask` / `ffpVs.clipPlanes[0]` runtime values reaching the shader. |
 | `cnd_test` | 6675 | ✅ | — |
 | `color_fill_test` | 1663 | 📐 | `test_visual_colorfill_format_policy` |
 | `conditional_np2_repeat_test` | 9841 | ✅ | — |

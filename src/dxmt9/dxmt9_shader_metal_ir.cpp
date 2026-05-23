@@ -1832,6 +1832,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (context.clipPlaneMask != 0) {
+      // Initialize all 6 slots to +1 (passes) so disabled planes do not
+      // discard fragments. See note in dxmt9_ffp_shaders.cpp.
+      out << "  for (uint i = 0; i < 6; ++i) { out.clipDistance[i] = 1.0f; }\n";
       out << "  for (uint i = 0; i < 6; ++i) {\n";
       out << "    if ((ffpVs.clipPlaneMask & (1u << i)) != 0u) {\n";
       out << "      out.clipDistance[i] = dot(ffpVs.clipPlanes[i], out.position);\n";

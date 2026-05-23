@@ -359,6 +359,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
+file = "render_state/dxmt9_clip_plane_halfspace_readback.shader_test"
+status = "failing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c clip_planes_test (half-space discrimination)"
+oracle-date = "2026-05-23"
+
+[[test]]
 file = "render_state/dxmt9_color_write_mask.shader_test"
 status = "passing"
 source = "dxmt9"

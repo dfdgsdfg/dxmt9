@@ -802,6 +802,12 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
   }
   emitLightingBlock(out, key);
   if (key.clipPlaneMask != 0 || context.clipPlaneMask != 0) {
+    // Initialize all 6 slots to +1 (positive = pass) so disabled planes
+    // never produce a negative clip distance. Metal's [[clip_distance]]
+    // semantics discard fragments whose any-slot distance is < 0; without
+    // this init, the zeroed-plane × zero-init-out.clipDistance is
+    // implementation-defined and observably clips everything on Apple7+.
+    out << "  for (uint i = 0; i < 6; ++i) { out.clipDistance[i] = 1.0f; }\n";
     out << "  for (uint i = 0; i < 6; ++i) {\n";
     out << "    if ((ffpVs.clipPlaneMask & (1u << i)) != 0u) {\n";
       out << "      out.clipDistance[i] = dot(ffpVs.clipPlanes[i], out.position);\n";

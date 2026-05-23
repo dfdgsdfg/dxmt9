@@ -1,0 +1,35 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c clip_planes_test — half-space discrimination
+;         (FFP, plane (0, 1, 0, 0): keeps positive-y clip-space, clips
+;         negative-y).
+; oracle-date: 2026-05-23
+
+; FAILING — under investigation. Initializing unset clip-distance slots to
+; +1 (the half-fix in this commit) is necessary but not sufficient: every
+; non-degenerate FFP clip plane still clips ALL fragments on Apple7. The
+; remaining ground truth is whether `ffpVs.clipPlaneMask` or
+; `ffpVs.clipPlanes[0]` at runtime is reaching the shader with the values
+; the test set. The existing `dxmt9_clip_plane_runtime_readback.shader_test`
+; (VS path, plane (0,0,0,-1) → dot=-w=-1) passes because every fragment is
+; clipped; that case is degenerate and does not exercise half-space
+; discrimination. This corpus is the regression seed for the residual gap.
+
+[test]
+clip-plane-mask 1
+clear rgba(1.0, 0.0, 0.0, 1.0)
+dxmt9-render-state zenable=off
+dxmt9-texture 0 1 1 A8R8G8B8 rgba(1.0,1.0,1.0,1.0)
+dxmt9-bind-texture 0 0
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
+dxmt9-texture-stage 0 color_op=selectarg1 color_arg1=diffuse alpha_op=selectarg1 alpha_arg1=diffuse
+dxmt9-clip-plane 0 0.0 1.0 0.0 0.0
+dxmt9-render-state clip_planes=1
+dxmt9-draw-ffp-color-vertex-quad
+; Expected (Wine): upper half of NDC y survives → upper screen rows show
+; green; lower half clipped → lower rows show clear red.
+probe (32, 8) rgba(0.0, 1.0, 0.0, 1.0) 2
+probe (32, 56) rgba(1.0, 0.0, 0.0, 1.0) 2
