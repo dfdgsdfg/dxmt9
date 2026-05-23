@@ -499,11 +499,15 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
     if (shaders::vsoutEmitPointSize()) {
       if (layout->hasPointSize) {
-        out << "  out.pointSize = dxmt9_load_f32(stream0, base + "
+        out << "  float dxmt9_pointSize = dxmt9_load_f32(stream0, base + "
             << layout->pointSizeOffset << "u);\n";
       } else {
-        out << "  out.pointSize = 1.0;\n";
+        out << "  float dxmt9_pointSize = ffpVs.pointSize;\n";
       }
+      // Pre-transformed verts have no view-space; distance attenuation is
+      // a no-op in this branch even when POINTSCALEENABLE is set. The
+      // clamp by [POINTSIZE_MIN, POINTSIZE_MAX] still applies.
+      out << "  out.pointSize = clamp(dxmt9_pointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);\n";
     }
   } else if (layout) {
     emitVertexSig(/*withStream=*/true);
@@ -646,11 +650,18 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     }
     if (shaders::vsoutEmitPointSize()) {
       if (layout->hasPointSize) {
-        out << "  out.pointSize = dxmt9_load_f32(stream0, base + "
+        out << "  float dxmt9_pointSize = dxmt9_load_f32(stream0, base + "
             << layout->pointSizeOffset << "u);\n";
       } else {
-        out << "  out.pointSize = 1.0;\n";
+        out << "  float dxmt9_pointSize = ffpVs.pointSize;\n";
       }
+      if (key.pointScaleEnable) {
+        // size = pointSize * rsqrt(A + B*d + C*d^2), d = length(view-space pos)
+        out << "  float dxmt9_pointDist = length(dxmt9_cameraPosition.xyz);\n";
+        out << "  float dxmt9_pointAtten = ffpVs.pointScaleA + ffpVs.pointScaleB * dxmt9_pointDist + ffpVs.pointScaleC * dxmt9_pointDist * dxmt9_pointDist;\n";
+        out << "  dxmt9_pointSize = dxmt9_pointSize * rsqrt(max(dxmt9_pointAtten, 1.0e-6f));\n";
+      }
+      out << "  out.pointSize = clamp(dxmt9_pointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);\n";
     }
   } else {
     emitVertexSig(/*withStream=*/false);
@@ -667,7 +678,9 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.texcoord" << i << " = out.texcoord0;\n";
     }
     if (shaders::vsoutEmitFogFactor()) out << "  out.fogFactor = 1.0;\n";
-    if (shaders::vsoutEmitPointSize()) out << "  out.pointSize = 1.0;\n";
+    if (shaders::vsoutEmitPointSize()) {
+      out << "  out.pointSize = clamp(ffpVs.pointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);\n";
+    }
   }
   emitLightingBlock(out, key);
   if (key.clipPlaneMask != 0 || context.clipPlaneMask != 0) {
@@ -720,11 +733,24 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // fragment entry point takes a single argument buffer at slot 30 for
   // `psConsts`/`ffpPs`. Texture/sampler parameters remain direct so
   // texture-bound Stage 2 draws share the proven Stage 1 resource lane.
+  // POINTSPRITEENABLE: per D3D9, the FFP point primitive emits an
+  // auto-generated [0,1]² texcoord at every fragment. Metal exposes the
+  // same value via the [[point_coord]] attribute. We bind it as a
+  // separate FS input only when the variant key calls for it -- adding
+  // an unused [[point_coord]] would cost a function-constant slot
+  // without value.
+  const auto emitPointCoordParam = [&]() {
+    if (key.pointSpriteEnable) {
+      out << ", float2 dxmt9_pointCoord [[point_coord]]";
+    }
+  };
   if (textured) {
     if (argbufHybrid) {
       out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
              "constant ArgbufLayout& abuf [[buffer("
-          << shaders::kArgbufHybridBindSlot << ")]], ";
+          << shaders::kArgbufHybridBindSlot << ")]]";
+      emitPointCoordParam();
+      out << ", ";
       for (size_t i = 0; i < activeStages.size(); ++i) {
         const size_t stage = activeStages[i];
         if (i != 0) {
@@ -739,7 +765,9 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     } else {
       out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
              "constant PsConsts& psConsts [[buffer(0)]], "
-             "constant FfpPsConsts& ffpPs [[buffer(3)]], ";
+             "constant FfpPsConsts& ffpPs [[buffer(3)]]";
+      emitPointCoordParam();
+      out << ", ";
       for (size_t i = 0; i < activeStages.size(); ++i) {
         const size_t stage = activeStages[i];
         if (i != 0) {
@@ -755,15 +783,25 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     if (argbufHybrid) {
       out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
              "constant ArgbufLayout& abuf [[buffer("
-          << shaders::kArgbufHybridBindSlot << ")]]) {\n";
+          << shaders::kArgbufHybridBindSlot << ")]]";
+      emitPointCoordParam();
+      out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
     } else {
       out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
              "constant PsConsts& psConsts [[buffer(0)]], "
-             "constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+             "constant FfpPsConsts& ffpPs [[buffer(3)]]";
+      emitPointCoordParam();
+      out << ") {\n";
     }
     out << "  (void)psConsts;\n";
+    if (key.pointSpriteEnable) {
+      // Untextured sprite-enabled FS never reads point_coord; keep the
+      // attribute on the entry-point signature for variant-key parity
+      // with the textured form and suppress the unused-param warning.
+      out << "  (void)dxmt9_pointCoord;\n";
+    }
   }
   out << "  float4 color = in.color;\n";
   out << "  float4 current = color;\n";
@@ -771,9 +809,25 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   out << "  float4 specular = in.secondaryColor;\n";
   out << "  float4 tfactor = ffpPs.textureFactor;\n";
   out << "  float4 temp = float4(0.0);\n";
+  // POINTSPRITEENABLE: every active stage's UV source becomes the
+  // auto-generated [[point_coord]] regardless of TSS_TEXCOORD_INDEX.
+  // Wine's `state_pointsprite` mirrors the same override at the fixed
+  // function pixel pipeline.
+  const auto sampleCoord = [&](u32 coordIndex) -> std::string {
+    if (key.pointSpriteEnable) {
+      return "float2(dxmt9_pointCoord)";
+    }
+    std::ostringstream s;
+    s << "dxmt9_select_texcoord(in, " << coordIndex << "u).xy";
+    return s.str();
+  };
   if (textured) {
     if (debugFfpUv) {
-      out << "  return float4(fract(in.texcoord0.x), fract(in.texcoord0.y), 0.0, 1.0);\n";
+      if (key.pointSpriteEnable) {
+        out << "  return float4(dxmt9_pointCoord.x, dxmt9_pointCoord.y, 0.0, 1.0);\n";
+      } else {
+        out << "  return float4(fract(in.texcoord0.x), fract(in.texcoord0.y), 0.0, 1.0);\n";
+      }
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
@@ -782,7 +836,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       const size_t stage = activeStages.front();
       const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
       out << "  return tex" << stage << ".sample(samp" << stage
-          << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy);\n";
+          << ", " << sampleCoord(coordIndex) << ");\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
@@ -791,7 +845,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       const size_t stage = activeStages.front();
       const u32 coordIndex = key.stages[stage].texCoordIndex & 0xffffu;
       out << "  float alpha = tex" << stage << ".sample(samp" << stage
-          << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy).a;\n";
+          << ", " << sampleCoord(coordIndex) << ").a;\n";
       out << "  return float4(alpha, alpha, alpha, 1.0);\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
@@ -818,6 +872,12 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       const bool isBumpEnvLum = stageKey.colorOp == 23u;
       if (hasTexture) {
         if ((isBumpEnv || isBumpEnvLum) && stage > 0u) {
+          // BUMPENVMAP perturbs the stage's own texcoord by the prior
+          // stage's RG output via BUMPENVMAT — independent of point-sprite
+          // mode. With point sprites the base UV would normally come from
+          // `[[point_coord]]`; bump-env is stage-specific and rarely
+          // combined with sprites, so we keep the per-vertex texcoord
+          // here. (Wine wined3d does the same.)
           const auto bumpStage = std::to_string(stage - 1u);
           const auto s = std::to_string(stage);
           out << "  float2 baseUV" << stage << " = dxmt9_select_texcoord(in, "
@@ -840,7 +900,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
           }
         } else {
           out << "  float4 texColor" << stage << " = tex" << stage << ".sample(samp" << stage
-              << ", dxmt9_select_texcoord(in, " << coordIndex << "u).xy);\n";
+              << ", " << sampleCoord(coordIndex) << ");\n";
         }
       } else {
         out << "  float4 texColor" << stage << " = float4(1.0f);\n";

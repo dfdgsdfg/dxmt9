@@ -357,15 +357,9 @@ constexpr u32 kRsWrap7 = 135;
 constexpr u32 kRsClipping = 136;
 constexpr u32 kRsColorVertex = 141;
 constexpr u32 kRsLocalViewer = 142;
-constexpr u32 kRsPointSize = 154;
-constexpr u32 kRsPointSizeMin = 155;
-constexpr u32 kRsPointScaleA = 158;
-constexpr u32 kRsPointScaleB = 159;
-constexpr u32 kRsPointScaleC = 160;
 constexpr u32 kRsMultisampleAntialias = 161;
 constexpr u32 kRsMultisampleMask = 162;
 constexpr u32 kRsPatchEdgeStyle = 163;
-constexpr u32 kRsPointSizeMax = 166;
 constexpr u32 kRsIndexedVertexBlendEnable = 167;
 constexpr u32 kRsTweenFactor = 170;
 constexpr u32 kRsPositionDegree = 172;
@@ -488,13 +482,13 @@ constexpr auto kVertexStateRenderStates = std::to_array<u32>({
     kRsNormalDegree,
     RS_NORMALIZE_NORMALS,
     kRsPatchEdgeStyle,
-    kRsPointScaleA,
-    kRsPointScaleB,
-    kRsPointScaleC,
+    RS_POINTSCALE_A,
+    RS_POINTSCALE_B,
+    RS_POINTSCALE_C,
     RS_POINT_SCALE_ENABLE,
-    kRsPointSize,
-    kRsPointSizeMax,
-    kRsPointSizeMin,
+    RS_POINTSIZE,
+    RS_POINTSIZE_MAX,
+    RS_POINTSIZE_MIN,
     RS_POINT_SPRITE_ENABLE,
     kRsPositionDegree,
     RS_RANGE_FOG,

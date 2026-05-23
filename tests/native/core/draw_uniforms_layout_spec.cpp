@@ -26,7 +26,7 @@ using dxmt9::state::VsConsts;
 
 static_assert(sizeof(VsConsts) == 4416, "VsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(PsConsts) == 3904, "PsConsts size pinned for MSL prelude parity");
-static_assert(sizeof(FfpVsConsts) == 1712, "FfpVsConsts size pinned for MSL prelude parity");
+static_assert(sizeof(FfpVsConsts) == 1736, "FfpVsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(FfpPsConsts) == 384, "FfpPsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(DrawVolatile) == 16, "DrawVolatile size pinned for MSL prelude parity");
 
@@ -72,6 +72,12 @@ static_assert(offsetof(FfpVsConsts, fogDensity) == 1696);
 static_assert(offsetof(FfpVsConsts, fogMode) == 1700);
 static_assert(offsetof(FfpVsConsts, rangeFog) == 1704);
 static_assert(offsetof(FfpVsConsts, clipPlaneMask) == 1708);
+static_assert(offsetof(FfpVsConsts, pointSize) == 1712);
+static_assert(offsetof(FfpVsConsts, pointSizeMin) == 1716);
+static_assert(offsetof(FfpVsConsts, pointSizeMax) == 1720);
+static_assert(offsetof(FfpVsConsts, pointScaleA) == 1724);
+static_assert(offsetof(FfpVsConsts, pointScaleB) == 1728);
+static_assert(offsetof(FfpVsConsts, pointScaleC) == 1732);
 
 // FfpPsConsts: textureFactor | per-stage constants | 4x f32 | 4x u32 |
 // bump-env arrays.
@@ -156,6 +162,12 @@ void checkMslPreludeContainsStructDecls() {
   requireSubstring(prelude, "uint fogMode", "FfpVsConsts.fogMode");
   requireSubstring(prelude, "uint rangeFog", "FfpVsConsts.rangeFog");
   requireSubstring(prelude, "uint clipPlaneMask", "FfpVsConsts.clipPlaneMask");
+  requireSubstring(prelude, "float pointSize", "FfpVsConsts.pointSize");
+  requireSubstring(prelude, "float pointSizeMin", "FfpVsConsts.pointSizeMin");
+  requireSubstring(prelude, "float pointSizeMax", "FfpVsConsts.pointSizeMax");
+  requireSubstring(prelude, "float pointScaleA", "FfpVsConsts.pointScaleA");
+  requireSubstring(prelude, "float pointScaleB", "FfpVsConsts.pointScaleB");
+  requireSubstring(prelude, "float pointScaleC", "FfpVsConsts.pointScaleC");
 
   // FfpPsConsts fields.
   requireSubstring(prelude, "float4 textureFactor", "FfpPsConsts.textureFactor");

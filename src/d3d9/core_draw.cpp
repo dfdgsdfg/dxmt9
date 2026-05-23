@@ -931,6 +931,8 @@ u64 hashFfpVertexKey(const FfpVertexKey &key) {
   hash = hashCombine(hash, key.vertexBlend);
   hash = hashCombine(hash, static_cast<u64>(key.indexedVertexBlend));
   hash = hashCombine(hash, key.clipPlaneMask);
+  hash = hashCombine(hash, static_cast<u64>(key.pointSpriteEnable));
+  hash = hashCombine(hash, static_cast<u64>(key.pointScaleEnable));
   return hash;
 }
 
@@ -950,6 +952,7 @@ u64 hashFfpPixelKey(const FfpPixelKey &key) {
   hash = hashCombine(hash, static_cast<u64>(key.fogMode));
   hash = hashCombine(hash, static_cast<u64>(key.alphaTestEnable));
   hash = hashCombine(hash, key.alphaTestFunc);
+  hash = hashCombine(hash, static_cast<u64>(key.pointSpriteEnable));
   return hash;
 }
 
@@ -2202,6 +2205,12 @@ FfpVertexKey makeFfpVertexKey(const DeviceState &state) {
   key.clipPlaneMask = state.renderStates.contains(RS_CLIP_PLANE_ENABLE)
                           ? state.renderStates.at(RS_CLIP_PLANE_ENABLE)
                           : 0;
+  key.pointSpriteEnable =
+      state.renderStates.contains(RS_POINT_SPRITE_ENABLE) &&
+      state.renderStates.at(RS_POINT_SPRITE_ENABLE) != 0;
+  key.pointScaleEnable =
+      state.renderStates.contains(RS_POINT_SCALE_ENABLE) &&
+      state.renderStates.at(RS_POINT_SCALE_ENABLE) != 0;
   key.hash = hashFfpVertexKey(key);
   return key;
 }
@@ -2240,6 +2249,9 @@ FfpPixelKey makeFfpPixelKey(const DeviceState &state) {
   key.alphaTestFunc = state.renderStates.contains(RS_ALPHA_FUNC)
                           ? state.renderStates.at(RS_ALPHA_FUNC)
                           : 0;
+  key.pointSpriteEnable =
+      state.renderStates.contains(RS_POINT_SPRITE_ENABLE) &&
+      state.renderStates.at(RS_POINT_SPRITE_ENABLE) != 0;
   key.hash = hashFfpPixelKey(key);
   return key;
 }

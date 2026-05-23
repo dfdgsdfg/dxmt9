@@ -364,8 +364,14 @@ inline constexpr u32 RS_AMBIENT_MATERIAL_SOURCE = 147;
 inline constexpr u32 RS_EMISSIVE_MATERIAL_SOURCE = 148;
 inline constexpr u32 RS_VERTEX_BLEND = 151;
 inline constexpr u32 RS_CLIP_PLANE_ENABLE = 152;
+inline constexpr u32 RS_POINTSIZE = 154;
+inline constexpr u32 RS_POINTSIZE_MIN = 155;
 inline constexpr u32 RS_POINT_SPRITE_ENABLE = 156;
 inline constexpr u32 RS_POINT_SCALE_ENABLE = 157;
+inline constexpr u32 RS_POINTSCALE_A = 158;
+inline constexpr u32 RS_POINTSCALE_B = 159;
+inline constexpr u32 RS_POINTSCALE_C = 160;
+inline constexpr u32 RS_POINTSIZE_MAX = 166;
 inline constexpr u32 RS_INDEXED_VERTEX_BLEND_ENABLE = 167;
 inline constexpr u32 RS_CULL_MODE = 22;
 inline constexpr u32 RS_FILL_MODE = 8;
@@ -593,6 +599,8 @@ struct FfpVertexKey {
   u32 vertexBlend = 0;
   bool indexedVertexBlend = false;
   u32 clipPlaneMask = 0;
+  bool pointSpriteEnable = false;
+  bool pointScaleEnable = false;
   u64 hash = 0;
 
   friend constexpr bool operator==(const FfpVertexKey&, const FfpVertexKey&) = default;
@@ -632,6 +640,7 @@ struct FfpPixelKey {
   FogMode fogMode = FogMode::None;
   bool alphaTestEnable = false;
   u32 alphaTestFunc = 0;
+  bool pointSpriteEnable = false;
   u64 hash = 0;
 
   friend constexpr bool operator==(const FfpPixelKey&, const FfpPixelKey&) = default;

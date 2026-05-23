@@ -61,8 +61,14 @@ struct FfpVsConsts {
   u32 fogMode = 0;
   u32 rangeFog = 0;
   u32 clipPlaneMask = 0;
+  f32 pointSize = 1.0f;
+  f32 pointSizeMin = 1.0f;
+  f32 pointSizeMax = 64.0f;
+  f32 pointScaleA = 1.0f;
+  f32 pointScaleB = 0.0f;
+  f32 pointScaleC = 0.0f;
 };
-static_assert(sizeof(FfpVsConsts) == 1712,
+static_assert(sizeof(FfpVsConsts) == 1736,
               "FfpVsConsts layout must match MSL prelude declaration");
 
 struct FfpPsConsts {

@@ -21,6 +21,12 @@ using core::RS_FOG_ENABLE;
 using core::RS_FOG_FROM_VERTEX;
 using core::RS_FOG_START;
 using core::RS_FOG_TABLE_MODE;
+using core::RS_POINTSCALE_A;
+using core::RS_POINTSCALE_B;
+using core::RS_POINTSCALE_C;
+using core::RS_POINTSIZE;
+using core::RS_POINTSIZE_MAX;
+using core::RS_POINTSIZE_MIN;
 using core::RS_RANGE_FOG;
 using core::RS_STENCIL_CCW_FAIL;
 using core::RS_STENCIL_CCW_FUNC;
@@ -143,6 +149,20 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
                                   static_cast<u32>(core::FogMode::None));
   out.rangeFog = core::flatStateOr(hot.renderStates, RS_RANGE_FOG, 0u) != 0 ? 1u : 0u;
   out.clipPlaneMask = hot.clipPlaneMask;
+  // Point-size family: stored as DWORD but reinterpret-cast to float, same
+  // pattern as fog start/end/density and D3DSAMP_MIPMAPLODBIAS.
+  out.pointSize = std::bit_cast<f32>(
+      core::flatStateOr(hot.renderStates, RS_POINTSIZE, std::bit_cast<u32>(1.0f)));
+  out.pointSizeMin = std::bit_cast<f32>(
+      core::flatStateOr(hot.renderStates, RS_POINTSIZE_MIN, std::bit_cast<u32>(1.0f)));
+  out.pointSizeMax = std::bit_cast<f32>(
+      core::flatStateOr(hot.renderStates, RS_POINTSIZE_MAX, std::bit_cast<u32>(64.0f)));
+  out.pointScaleA = std::bit_cast<f32>(
+      core::flatStateOr(hot.renderStates, RS_POINTSCALE_A, std::bit_cast<u32>(1.0f)));
+  out.pointScaleB = std::bit_cast<f32>(
+      core::flatStateOr(hot.renderStates, RS_POINTSCALE_B, std::bit_cast<u32>(0.0f)));
+  out.pointScaleC = std::bit_cast<f32>(
+      core::flatStateOr(hot.renderStates, RS_POINTSCALE_C, std::bit_cast<u32>(0.0f)));
   return out;
 }
 

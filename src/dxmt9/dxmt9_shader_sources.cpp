@@ -170,6 +170,12 @@ std::string makeShaderPrelude(bool withClipDistances) {
   out << "  uint fogMode;\n";
   out << "  uint rangeFog;\n";
   out << "  uint clipPlaneMask;\n";
+  out << "  float pointSize;\n";
+  out << "  float pointSizeMin;\n";
+  out << "  float pointSizeMax;\n";
+  out << "  float pointScaleA;\n";
+  out << "  float pointScaleB;\n";
+  out << "  float pointScaleC;\n";
   out << "};\n";
   out << "struct FfpPsConsts {\n";
   out << "  float4 textureFactor;\n";

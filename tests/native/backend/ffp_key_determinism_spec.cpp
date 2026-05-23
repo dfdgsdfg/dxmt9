@@ -258,6 +258,93 @@ void testVertexKeySensitiveToVsStatePerturbations() {
           "vertex key insensitive to RS_NORMALIZE_NORMALS toggle");
 }
 
+// Case 7 (P1-4): point-sprite + point-scale enable bits are key bits on
+// both the vertex and pixel sides; the six size/scale uniforms must NOT
+// flip the key (they ride the uniform record). Combined enables produce
+// keys distinct from either single-enable variant.
+void testPointSpriteAndScaleKeyBitsAreKeyOnly() {
+  const auto base = makeRepresentativeFfpState();
+  const auto baseVk = makeFfpVertexKey(base);
+  const auto basePk = makeFfpPixelKey(base);
+
+  // POINTSPRITEENABLE flips both vertex AND pixel keys.
+  auto sprite = base;
+  sprite.renderStates[RS_POINT_SPRITE_ENABLE] = 1u;
+  const auto spriteVk = makeFfpVertexKey(sprite);
+  const auto spritePk = makeFfpPixelKey(sprite);
+  checkNe(spriteVk, baseVk,
+          "vertex key insensitive to RS_POINT_SPRITE_ENABLE toggle");
+  checkNe(spritePk, basePk,
+          "pixel key insensitive to RS_POINT_SPRITE_ENABLE toggle");
+
+  // POINTSCALEENABLE flips only the vertex key (FS does not branch on it).
+  auto scale = base;
+  scale.renderStates[RS_POINT_SCALE_ENABLE] = 1u;
+  const auto scaleVk = makeFfpVertexKey(scale);
+  const auto scalePk = makeFfpPixelKey(scale);
+  checkNe(scaleVk, baseVk,
+          "vertex key insensitive to RS_POINT_SCALE_ENABLE toggle");
+  checkEq(scalePk, basePk,
+          "pixel key incorrectly sensitive to RS_POINT_SCALE_ENABLE");
+
+  // Both enabled produces a vertex key distinct from either single-enable.
+  auto both = base;
+  both.renderStates[RS_POINT_SPRITE_ENABLE] = 1u;
+  both.renderStates[RS_POINT_SCALE_ENABLE] = 1u;
+  const auto bothVk = makeFfpVertexKey(both);
+  checkNe(bothVk, baseVk,
+          "vertex key insensitive to combined POINTSPRITE+POINTSCALE");
+  checkNe(bothVk, spriteVk,
+          "vertex key sprite==sprite+scale (POINTSCALE absorbed)");
+  checkNe(bothVk, scaleVk,
+          "vertex key scale==sprite+scale (POINTSPRITE absorbed)");
+
+  // The six size/scale uniforms (POINTSIZE, _MIN, _MAX, SCALE_A/B/C) are
+  // uniform-only and MUST NOT flip the variant key. They participate in
+  // the FfpVsConsts record instead -- buildFfpVsConsts coverage is
+  // exercised by the backend-side ffp uniform fixtures.
+  const std::array<u32, 6> uniformRs{
+      RS_POINTSIZE,     RS_POINTSIZE_MIN, RS_POINTSIZE_MAX,
+      RS_POINTSCALE_A, RS_POINTSCALE_B, RS_POINTSCALE_C,
+  };
+  for (u32 rs : uniformRs) {
+    auto perturbed = base;
+    // 0x3fc00000 = 1.5f bit pattern; any non-default value works.
+    perturbed.renderStates[rs] = 0x3fc00000u;
+    checkEq(makeFfpVertexKey(perturbed), baseVk,
+            "vertex key incorrectly sensitive to a size/scale uniform RS");
+    checkEq(makeFfpPixelKey(perturbed), basePk,
+            "pixel key incorrectly sensitive to a size/scale uniform RS");
+  }
+}
+
+// Case 8 (P1-4): determinism — repeated builds with point-sprite or
+// point-scale enabled produce byte-identical keys (including hash).
+void testPointStateKeysDeterministic() {
+  auto state = makeRepresentativeFfpState();
+  state.renderStates[RS_POINT_SPRITE_ENABLE] = 1u;
+  state.renderStates[RS_POINT_SCALE_ENABLE] = 1u;
+  state.renderStates[RS_POINTSIZE] = 0x40400000u;       // 3.0f
+  state.renderStates[RS_POINTSIZE_MIN] = 0x3f800000u;   // 1.0f
+  state.renderStates[RS_POINTSIZE_MAX] = 0x42800000u;   // 64.0f
+  state.renderStates[RS_POINTSCALE_A] = 0x3f800000u;
+  state.renderStates[RS_POINTSCALE_B] = 0x3dcccccdu;    // 0.1f
+  state.renderStates[RS_POINTSCALE_C] = 0x3c23d70au;    // 0.01f
+
+  const auto baselineVk = makeFfpVertexKey(state);
+  const auto baselinePk = makeFfpPixelKey(state);
+  check(baselineVk.hash != 0,
+        "point-state vertex key baseline hash is nonzero");
+  check(baselinePk.hash != 0,
+        "point-state pixel key baseline hash is nonzero");
+  for (int i = 0; i < kRepeatN; ++i) {
+    checkEq(makeFfpVertexKey(state), baselineVk,
+            "point-state vertex key drifted across repeated builds");
+    checkEq(makeFfpPixelKey(state), baselinePk,
+            "point-state pixel key drifted across repeated builds");
+  }
+}
+
 // Case 5: directly brace-initialized keys round-trip through operator==
 // and copy-construction. Covers test fixtures that bypass `DeviceState`
 // and the canonical builders. We do NOT compare a brace-init key against
@@ -350,6 +437,8 @@ int main() {
     testVertexKeySensitiveToVsStatePerturbations();
     testDirectInitKeyOperatorEqualityIsStable();
     testBuilderIgnoresMapInsertionOrder();
+    testPointSpriteAndScaleKeyBitsAreKeyOnly();
+    testPointStateKeysDeterministic();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

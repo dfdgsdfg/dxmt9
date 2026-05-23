@@ -192,8 +192,16 @@ void testVisualDerivedFfpCoverage() {
       FfpVertexKey{}, dxmt9::drawshader::makeShaderSourceContext(declDefaultDesc));
   checkContains(declDefaultSource, "out.color = float4(1.0);",
                 "missing diffuse defaults to white FFP color");
-  checkContains(declDefaultSource, "out.pointSize = 1.0;",
-                "missing point-size input defaults to one-pixel point size");
+  // P1-4: missing PSIZE -> uses RS_POINTSIZE uniform (default 1.0 in
+  // FfpVsConsts), clamped by [POINTSIZE_MIN, POINTSIZE_MAX]. Pre-transformed
+  // verts have no view-space distance, so POINTSCALE attenuation is a no-op
+  // here even when enabled.
+  checkContains(declDefaultSource,
+                "float dxmt9_pointSize = ffpVs.pointSize;",
+                "missing PSIZE on pre-transformed verts reads from FfpVsConsts");
+  checkContains(declDefaultSource,
+                "out.pointSize = clamp(dxmt9_pointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);",
+                "pre-transformed pointSize is clamped by min/max uniforms");
 
   // behavioral oracle: Wine visual.c:texop_test
   DeviceState texopState;
@@ -272,8 +280,15 @@ void testFixedFunctionDeclarationMissingInputsEmitD3DDefaults() {
   checkContains(source,
                 "float4 dxmt9_texcoord0 = float4(0.0f, 0.0f, 1.0f, 1.0f);",
                 "missing TEXCOORD0 defaults to D3D xyz/w payload");
-  checkContains(source, "out.pointSize = 1.0;",
-                "missing PSIZE defaults to one-pixel point size");
+  // P1-4: missing PSIZE -> RS_POINTSIZE uniform (default 1.0). For
+  // untransformed verts, POINTSCALE attenuation gates on key.pointScaleEnable,
+  // which is false in this baseline key.
+  checkContains(source,
+                "float dxmt9_pointSize = ffpVs.pointSize;",
+                "missing PSIZE on untransformed verts reads from FfpVsConsts");
+  checkContains(source,
+                "out.pointSize = clamp(dxmt9_pointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);",
+                "untransformed pointSize is clamped by min/max uniforms");
 }
 
 void testVisualPortCoverage() {
