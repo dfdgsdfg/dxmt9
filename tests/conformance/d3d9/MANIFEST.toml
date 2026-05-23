@@ -2070,7 +2070,7 @@ lane = "app-local"
 arch = "x64"
 status = "passing"
 source = "specs/gap.md:170"
-summary = "Focused x64 app-local auxiliary runtime evidence passes; builtin and x86 evidence remain unrecorded."
+summary = "Focused x64 app-local auxiliary runtime evidence passes; QI/AddRef/Release/Begin/Instruction/End exercised. Builtin and x86 lanes scaffolded via shared executable, evidence collection pending."
 
 [[case]]
 executable = "d3d9_auxiliary_x64.exe"

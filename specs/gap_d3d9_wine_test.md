@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `fbc0027d72b8171af7c7f680b149fc9ac951b863` — **work tree dirty** |
-| Short  | `fbc0027` |
-| Tag / describe | `fbc0027` |
+| Commit | `35f46cc73cf45a758e10169a01af65d0a5524402` — **work tree dirty** |
+| Short  | `35f46cc` |
+| Tag / describe | `35f46cc` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_stretch_rect_null_and_degenerate_policy scaffold; test_stretch_rect partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_create_cube_texture_dim_policy scaffold; test_cube_textures partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout fbc0027d72b8171af7c7f680b149fc9ac951b863
+git -C "$DXMT9_REPO" checkout 35f46cc73cf45a758e10169a01af65d0a5524402
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
-| `device.c` | 105 | 1 | 103 | 1 | 0 | 0 |
+| `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **184** | **18** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **185** | **17** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -299,7 +299,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_set_rt_vp_scissor` | 6055 | 📐 | `test_viewport_scissor_state_getters` |
 | `test_set_stream_source` | 3468 | 📐 | `test_set_stream_source_state`, `test_stream_source_null_layout_policy`, `test_stream_source_null_offset_alignment_policy`, `test_stream_source_vb_offset_alignment_policy`, `test_stream_source_zero_stride_policy` |
 | `test_shader_constant_apply` | 11446 | 📐 | `test_shader_constant_stateblock_cross_stage` |
-| `test_shader_validator` | 14660 | 🟡 | `shader_validator_stub_behavior` |
+| `test_shader_validator` | 14660 | 📐 | `shader_validator_stub_behavior` |
 | `test_shared_handle` | 11088 | 📐 | `test_shared_handle_policy` |
 | `test_stretch_rect` | 13277 | 📐 | `test_stretch_rect_null_and_degenerate_policy` |
 | `test_surface_alignment` | 8360 | 📐 | `test_surface_alignment` |
