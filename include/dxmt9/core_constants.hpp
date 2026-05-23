@@ -884,6 +884,13 @@ struct AdapterIdentifier {
   u32 subSysId = 0;
   u32 revision = 0;
   u32 monitor = 0;
+  // R-CAPS / C.9 (gap.md): byte-stable per-adapter GUID derived from
+  // (vendorId, deviceId, description). Several legacy D3D9 titles refuse to
+  // launch when D3DADAPTER_IDENTIFIER9::DeviceIdentifier is the zero GUID
+  // (they use it as an installation fingerprint). WHQL stays 0 — Apple
+  // Silicon GPUs are not WHQL-certified, which the D3D9 spec allows.
+  std::array<u8, 16> deviceIdentifier{};
+  u32 whqlLevel = 0;
 };
 
 struct DeviceCaps {

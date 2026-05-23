@@ -66,6 +66,67 @@ void testFormatAndCaps() {
   checkEq(identifier.monitor, 1u, "adapter monitor");
   checkEq(factory.getAdapterMonitor(0), 1u, "adapter monitor lookup");
 
+  // gap.md §C.7 — D3DCAPS9::AlphaCmpCaps must be sourced from the
+  // dedicated alphaCmpCaps slot (not from alphaBlendCaps) and must
+  // expose the standard D3D9 comparison set. Every Metal-capable GPU
+  // supports all eight comparison ops.
+  constexpr u32 kD3DPCMPCAPS_NEVER        = 0x00000001u;
+  constexpr u32 kD3DPCMPCAPS_LESS         = 0x00000002u;
+  constexpr u32 kD3DPCMPCAPS_EQUAL        = 0x00000004u;
+  constexpr u32 kD3DPCMPCAPS_LESSEQUAL    = 0x00000008u;
+  constexpr u32 kD3DPCMPCAPS_GREATER      = 0x00000010u;
+  constexpr u32 kD3DPCMPCAPS_NOTEQUAL     = 0x00000020u;
+  constexpr u32 kD3DPCMPCAPS_GREATEREQUAL = 0x00000040u;
+  constexpr u32 kD3DPCMPCAPS_ALWAYS       = 0x00000080u;
+  constexpr u32 kAlphaCmpRequired = kD3DPCMPCAPS_NEVER | kD3DPCMPCAPS_LESS |
+                                    kD3DPCMPCAPS_EQUAL | kD3DPCMPCAPS_LESSEQUAL |
+                                    kD3DPCMPCAPS_GREATER | kD3DPCMPCAPS_NOTEQUAL |
+                                    kD3DPCMPCAPS_GREATEREQUAL |
+                                    kD3DPCMPCAPS_ALWAYS;
+  const auto &caps0 = factory.caps(0);
+  check(caps0.alphaCmpCaps != 0u,
+        "AlphaCmpCaps must be non-zero (zero GUID-equivalent for legacy apps)");
+  check((caps0.alphaCmpCaps & kAlphaCmpRequired) == kAlphaCmpRequired,
+        "AlphaCmpCaps must expose the full eight-op comparison set");
+  // Cross-check via the C ABI marshaller. fillCCaps populates both
+  // the legacy alphaBlendCaps carrier slot and the dedicated
+  // alphaCmpCaps slot; both must agree, and the dedicated slot is
+  // the canonical source for D3DCAPS9::AlphaCmpCaps.
+  D9CCaps cCaps{};
+  dxmt9::d3d9::devicec::fillCCaps(caps0, &cCaps);
+  checkEq(cCaps.alphaCmpCaps, caps0.alphaCmpCaps,
+          "fillCCaps must mirror core::DeviceCaps::alphaCmpCaps into the "
+          "dedicated D9CCaps::alphaCmpCaps slot (gap.md §C.7 fix)");
+  checkEq(cCaps.alphaBlendCaps, caps0.alphaCmpCaps,
+          "fillCCaps must keep the legacy alphaBlendCaps carrier in sync "
+          "for back-compat with older PE bridge reads");
+
+  // gap.md §C.9 — D3DADAPTER_IDENTIFIER9::DeviceIdentifier must be a
+  // non-zero, byte-stable per-adapter GUID. Several legacy D3D9
+  // titles refuse to launch when it's the zero GUID (they use it as
+  // an installation fingerprint).
+  bool anyNonZero = false;
+  for (auto byte : identifier.deviceIdentifier) {
+    if (byte != 0u) {
+      anyNonZero = true;
+      break;
+    }
+  }
+  check(anyNonZero,
+        "AdapterIdentifier::deviceIdentifier must not be the zero GUID");
+
+  // Two consecutive calls must return byte-equal GUIDs (determinism
+  // contract — used as an installation fingerprint).
+  const auto identifier2 = factory.getAdapterIdentifier(0);
+  checkEq(identifier2.deviceIdentifier == identifier.deviceIdentifier, true,
+          "AdapterIdentifier::deviceIdentifier must be byte-stable across "
+          "consecutive GetAdapterIdentifier calls");
+
+  // WHQL level intentionally stays 0 — Apple Silicon GPUs are not
+  // WHQL-certified, which the D3D9 spec allows.
+  checkEq(identifier.whqlLevel, 0u,
+          "AdapterIdentifier::whqlLevel stays 0 on Apple Silicon");
+
   checkEq(factory.checkDeviceFormat(0, Format::A8R8G8B8, UsageTexture), D3D_OK, "A8R8G8B8 texture support");
   checkEq(factory.checkDeviceFormat(0, Format::L8, UsageRenderTarget), D3DERR_NOTAVAILABLE,
           "L8 render-target support");

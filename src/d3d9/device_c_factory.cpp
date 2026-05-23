@@ -95,6 +95,14 @@ extern "C" int32_t dxmt9c_factory_get_adapter_identifier(D9CFactory* f,
   out->deviceId = id.deviceId;
   out->subSysId = id.subSysId;
   out->revision = id.revision;
+  // gap.md §C.9: byte-stable per-adapter GUID + WHQL level. Both
+  // come from core::Factory::getAdapterIdentifier() so the value is
+  // deterministic across consecutive calls on the same machine.
+  static_assert(sizeof(out->deviceIdentifier) == 16,
+                "D9CAdapterIdentifier::deviceIdentifier must be 16 bytes");
+  std::memcpy(out->deviceIdentifier, id.deviceIdentifier.data(),
+              sizeof(out->deviceIdentifier));
+  out->whqlLevel = id.whqlLevel;
   return dxmt9::core::D3D_OK;
 }
 

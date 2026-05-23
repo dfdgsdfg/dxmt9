@@ -2968,6 +2968,7 @@ done_d3d9:
 void test_multi_adapter(const struct d3d9_api *api)
 {
     D3DADAPTER_IDENTIFIER9 identifier;
+    D3DADAPTER_IDENTIFIER9 identifier2;
     IDirect3D9 *d3d9;
     D3DCAPS9 caps;
     UINT count;
@@ -2992,6 +2993,54 @@ void test_multi_adapter(const struct d3d9_api *api)
                 D3D_OK);
         CHECK_HR(IDirect3D9_GetDeviceCaps(d3d9, i, D3DDEVTYPE_HAL, &caps),
                 D3D_OK);
+
+        /*
+         * gap.md §C.7 — AlphaCmpCaps must be sourced from the
+         * dedicated alphaCmpCaps slot, not from alphaBlendCaps.
+         * Every Metal-capable GPU supports the full eight-op
+         * comparison set; assert at least the three ops that legacy
+         * D3D9 titles consistently rely on (ALWAYS / NEVER /
+         * LESSEQUAL).
+         */
+        CHECK_TRUE(caps.AlphaCmpCaps != 0);
+        CHECK_TRUE((caps.AlphaCmpCaps & (D3DPCMPCAPS_ALWAYS
+                | D3DPCMPCAPS_NEVER | D3DPCMPCAPS_LESSEQUAL))
+                == (D3DPCMPCAPS_ALWAYS | D3DPCMPCAPS_NEVER
+                | D3DPCMPCAPS_LESSEQUAL));
+
+        /*
+         * gap.md §C.9 — D3DADAPTER_IDENTIFIER9::DeviceIdentifier
+         * must be a non-zero, byte-stable per-adapter GUID. Several
+         * legacy D3D9 titles use it as an installation fingerprint
+         * and refuse to launch when it's the zero GUID.
+         */
+        {
+            const unsigned char *guid_bytes =
+                    (const unsigned char *)&identifier.DeviceIdentifier;
+            int any_non_zero = 0;
+            size_t k;
+            for (k = 0; k < sizeof(identifier.DeviceIdentifier); ++k)
+            {
+                if (guid_bytes[k] != 0)
+                {
+                    any_non_zero = 1;
+                    break;
+                }
+            }
+            CHECK_TRUE(any_non_zero);
+        }
+
+        /*
+         * Determinism contract: two consecutive
+         * GetAdapterIdentifier calls must return byte-equal GUIDs
+         * (installation-fingerprint usage requires byte stability).
+         */
+        memset(&identifier2, 0xcc, sizeof(identifier2));
+        CHECK_HR(IDirect3D9_GetAdapterIdentifier(d3d9, i, 0, &identifier2),
+                D3D_OK);
+        CHECK_TRUE(memcmp(&identifier.DeviceIdentifier,
+                &identifier2.DeviceIdentifier,
+                sizeof(identifier.DeviceIdentifier)) == 0);
     }
 
     memset(&identifier, 0xcc, sizeof(identifier));

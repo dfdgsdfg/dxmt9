@@ -285,6 +285,11 @@ void fillCCaps(const dxmt9::core::DeviceCaps& src, D9CCaps* out) {
   out->zCmpCaps = src.zCmpCaps;
   out->srcBlendCaps = src.srcBlendCaps;
   out->destBlendCaps = src.destBlendCaps;
+  // gap.md §C.7: AlphaCmpCaps now has a dedicated slot. The legacy
+  // alphaBlendCaps slot remains populated (same value) so older PE
+  // bridge code paths that still read from it continue to see the
+  // correct bitmask while we migrate to alphaCmpCaps.
+  out->alphaCmpCaps = src.alphaCmpCaps;
   out->alphaBlendCaps = src.alphaCmpCaps;
   out->shadeCaps = src.shadeCaps;
   out->textureCaps = src.textureCaps;

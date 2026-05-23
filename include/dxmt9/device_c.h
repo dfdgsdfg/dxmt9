@@ -98,6 +98,15 @@ typedef struct D9CCaps {
     uint32_t rasterCaps;
     uint32_t zCmpCaps;
     uint32_t srcBlendCaps, destBlendCaps, alphaBlendCaps;
+    /*
+     * gap.md §C.7: D3DCAPS9::AlphaCmpCaps lives in its own dedicated
+     * slot (not in alphaBlendCaps above — D3D9 has no AlphaBlendCaps
+     * member at all, the alphaBlendCaps slot existed only as a
+     * mis-named carrier for AlphaCmpCaps and is kept for ABI
+     * compatibility with the legacy d3d9.dll PE bridge but is no
+     * longer the canonical source).
+     */
+    uint32_t alphaCmpCaps;
     uint32_t shadeCaps;
     uint32_t textureCaps;
     uint32_t textureFilterCaps;

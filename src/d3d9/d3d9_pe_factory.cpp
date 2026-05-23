@@ -261,7 +261,11 @@ static void fillD3DCaps9(const D9CCaps& src, D3DCAPS9* out) {
     out->ZCmpCaps               = src.zCmpCaps;
     out->SrcBlendCaps           = src.srcBlendCaps;
     out->DestBlendCaps          = src.destBlendCaps;
-    out->AlphaCmpCaps           = src.alphaBlendCaps;
+    // gap.md §C.7: source from the dedicated alphaCmpCaps slot (was
+    // previously sourced from alphaBlendCaps, which is not a real
+    // D3D9 capability field — D3DCAPS9 has no AlphaBlendCaps member
+    // at all).
+    out->AlphaCmpCaps           = src.alphaCmpCaps;
     out->ShadeCaps              = src.shadeCaps;
     out->TextureCaps            = src.textureCaps;
     out->TextureFilterCaps      = src.textureFilterCaps;

@@ -248,6 +248,58 @@ const DeviceCaps &Factory::caps(size_t index) const {
   return adapterCaps_[index];
 }
 
+namespace {
+
+// FNV-1a 64-bit hash. Deterministic, byte-stable, no dependency on
+// time / RNG / hardware state. Used to derive D3DADAPTER_IDENTIFIER9
+// ::DeviceIdentifier from (vendorId, deviceId, description) per the
+// gap.md §C.9 fix (R-CAPS-DEVICE-IDENTIFIER). Two consecutive calls
+// produce byte-equal output; two distinct adapters produce different
+// output with FNV-quality collision resistance (sufficient for an
+// installation fingerprint — these are not security tokens).
+constexpr u64 kFnvOffsetBasis = 14695981039346656037ull;
+constexpr u64 kFnvPrime = 1099511628211ull;
+
+u64 fnv1a64(u64 seed, const void *data, std::size_t bytes) {
+  const auto *p = static_cast<const u8 *>(data);
+  for (std::size_t i = 0; i < bytes; ++i) {
+    seed ^= static_cast<u64>(p[i]);
+    seed *= kFnvPrime;
+  }
+  return seed;
+}
+
+// Pack two FNV-1a 64-bit digests into the 16-byte GUID layout. The
+// two hash inputs are kept disjoint (different seeds + length tag) so
+// the high and low halves of the GUID do not collide for adapters
+// that differ only in description length.
+std::array<u8, 16> makeAdapterDeviceIdentifier(u32 vendorId, u32 deviceId,
+                                               const std::string &description) {
+  u64 lo = kFnvOffsetBasis;
+  lo = fnv1a64(lo, &vendorId, sizeof(vendorId));
+  lo = fnv1a64(lo, &deviceId, sizeof(deviceId));
+  lo = fnv1a64(lo, description.data(), description.size());
+
+  // Independent digest seeded with a different basis + length tag so
+  // the upper 8 bytes are not a trivial transform of the lower 8.
+  constexpr u64 kSecondaryBasis = 0x9e3779b97f4a7c15ull;
+  const u64 descLen = static_cast<u64>(description.size());
+  u64 hi = kSecondaryBasis;
+  hi = fnv1a64(hi, &descLen, sizeof(descLen));
+  hi = fnv1a64(hi, &deviceId, sizeof(deviceId));
+  hi = fnv1a64(hi, &vendorId, sizeof(vendorId));
+  hi = fnv1a64(hi, description.data(), description.size());
+
+  std::array<u8, 16> bytes{};
+  for (std::size_t i = 0; i < 8; ++i) {
+    bytes[i] = static_cast<u8>((lo >> (i * 8)) & 0xffu);
+    bytes[i + 8] = static_cast<u8>((hi >> (i * 8)) & 0xffu);
+  }
+  return bytes;
+}
+
+} // namespace
+
 AdapterIdentifier Factory::getAdapterIdentifier(size_t index) const {
   const auto &info = adapter(index);
   AdapterIdentifier identifier;
@@ -265,6 +317,13 @@ AdapterIdentifier Factory::getAdapterIdentifier(size_t index) const {
   identifier.subSysId = 0;
   identifier.revision = 0;
   identifier.monitor = info.displayId;
+  // gap.md §C.9: derive a byte-stable per-adapter GUID so apps that
+  // use D3DADAPTER_IDENTIFIER9::DeviceIdentifier as an installation
+  // fingerprint do not see the all-zero GUID and refuse to launch.
+  identifier.deviceIdentifier = makeAdapterDeviceIdentifier(
+      identifier.vendorId, identifier.deviceId, identifier.description);
+  // Apple Silicon GPUs are not WHQL-certified; D3D9 spec permits 0.
+  identifier.whqlLevel = 0;
   return identifier;
 }
 
