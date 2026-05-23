@@ -3652,3 +3652,20 @@ owner = "core/device"
 requirements = ["R-TEST-12.3"]
 acceptance = ["DrawPrimitive issued outside a BeginScene/EndScene pair returns D3DERR_INVALIDCALL; inside a scene, DrawPrimitive with PrimitiveCount=0 is a no-op that returns S_OK; after EndScene the scene precondition is re-armed and DrawPrimitive rejects again"]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_set_get_depth_stencil_surface_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_depthstenciltest"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "depth-stencil"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["GetDepthStencilSurface on a device created with EnableAutoDepthStencil=TRUE returns the implicit D24S8 surface; SetDepthStencilSurface(NULL) detaches it so a follow-up Get yields D3DERR_NOTFOUND with the out-pointer cleared; re-attaching the saved surface restores the binding; GetDepthStencilSurface(NULL) rejects with D3DERR_INVALIDCALL without disturbing the binding"]
+status = "scaffolded"

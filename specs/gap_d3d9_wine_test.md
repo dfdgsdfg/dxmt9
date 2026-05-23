@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `88dc6520df6f3fa7491334d7b03a962d00860de5` — **work tree dirty** |
-| Short  | `88dc652` |
-| Tag / describe | `88dc652` |
+| Commit | `5c4d80c9b41fae0ca4baa0342523c89a8d215205` — **work tree dirty** |
+| Short  | `5c4d80c` |
+| Tag / describe | `5c4d80c` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_device_get_swap_chain_bounds_policy scaffold; test_swapchain partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_draw_primitive_outside_scene_policy scaffold; test_draw_primitive partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 88dc6520df6f3fa7491334d7b03a962d00860de5
+git -C "$DXMT9_REPO" checkout 5c4d80c9b41fae0ca4baa0342523c89a8d215205
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
-| `device.c` | 105 | 1 | 98 | 6 | 0 | 0 |
+| `device.c` | 105 | 1 | 99 | 5 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **179** | **23** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **180** | **22** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -239,7 +239,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_cursor_clipping` | 14865 | 📐 | `window_cursor_ownership` |
 | `test_cursor_pos` | 5286 | 📐 | `window_cursor_ownership` |
 | `test_d3d9on12` | 15138 | 📐 | `d3d9on12_loader_safe_failure` |
-| `test_depthstenciltest` | 2869 | 🟡 | — |
+| `test_depthstenciltest` | 2869 | 📐 | `test_set_get_depth_stencil_surface_policy` |
 | `test_destroyed_window` | 13008 | 📐 | `window_cursor_ownership` |
 | `test_device_caps` | 13482 | 📐 | — |
 | `test_device_window_reset` | 5899 | 📐 | `window_cursor_ownership` |

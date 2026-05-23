@@ -4026,3 +4026,104 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_depthstenciltest
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Pins the Set/Get DepthStencilSurface round-trip and NULL-detach
+ * contract observed in Wine's test_depthstenciltest. A device created
+ * with EnableAutoDepthStencil=TRUE owns an implicit DS surface that
+ * GetDepthStencilSurface returns AddRef'd. SetDepthStencilSurface(NULL)
+ * detaches that surface so a follow-up Get yields D3DERR_NOTFOUND with
+ * the out-pointer cleared, and a follow-up Set restores the surface so
+ * Get returns it again.
+ */
+void test_set_get_depth_stencil_surface_policy(const struct d3d9_api *api)
+{
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    IDirect3DSurface9 *original_ds = NULL;
+    IDirect3DSurface9 *out = NULL;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    /* Use an explicit auto-depth-stencil present params block so the
+     * implicit DS attach/detach contract is observable. */
+    pp = default_present_parameters(window);
+    pp.EnableAutoDepthStencil = TRUE;
+    pp.AutoDepthStencilFormat = D3DFMT_D24S8;
+
+    hr = IDirect3D9_CreateDevice(d3d9, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+            window, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    if (FAILED(hr))
+    {
+        char hr_buffer[16];
+        print_hr(hr_buffer, sizeof(hr_buffer), hr);
+        skip_current_test("CreateDevice with auto-depth-stencil failed with %s",
+                hr_buffer);
+        goto done_window;
+    }
+
+    /* Implicit DS is attached: GetDepthStencilSurface returns the auto
+     * depth-stencil surface AddRef'd. */
+    hr = IDirect3DDevice9_GetDepthStencilSurface(device, &original_ds);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(original_ds != NULL);
+    if (!original_ds)
+        goto done_device;
+
+    /* SetDepthStencilSurface(NULL) detaches the implicit DS. */
+    CHECK_HR(IDirect3DDevice9_SetDepthStencilSurface(device, NULL), D3D_OK);
+
+    /* GetDepthStencilSurface after NULL detach yields D3DERR_NOTFOUND
+     * with the out-pointer cleared. */
+    out = (IDirect3DSurface9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_GetDepthStencilSurface(device, &out);
+    CHECK_HR(hr, D3DERR_NOTFOUND);
+    CHECK_TRUE(out == NULL);
+
+    /* Re-attaching the original DS restores the binding so a follow-up
+     * Get returns the same surface AddRef'd. */
+    CHECK_HR(IDirect3DDevice9_SetDepthStencilSurface(device, original_ds), D3D_OK);
+    out = NULL;
+    hr = IDirect3DDevice9_GetDepthStencilSurface(device, &out);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(out == original_ds);
+    if (out)
+        IDirect3DSurface9_Release(out);
+
+    /* NULL out-pointer must reject without touching device state. */
+    hr = IDirect3DDevice9_GetDepthStencilSurface(device, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    /* The binding is still the original DS after the NULL-out probe. */
+    out = NULL;
+    hr = IDirect3DDevice9_GetDepthStencilSurface(device, &out);
+    CHECK_HR(hr, D3D_OK);
+    CHECK_TRUE(out == original_ds);
+    if (out)
+        IDirect3DSurface9_Release(out);
+
+    IDirect3DSurface9_Release(original_ds);
+done_device:
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
