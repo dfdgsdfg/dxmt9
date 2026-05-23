@@ -180,7 +180,23 @@ core_d3d9_miptree_layout_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 
+# IDirect3DDevice9::Set/GetGammaRamp PE-side shadow round-trip (G2-B
+# track, Option B). Mirrors the D3DGAMMARAMP-shaped
+# { WORD red[256]; WORD green[256]; WORD blue[256]; } byte layout at
+# value level so we do not need to instantiate D3D9DeviceImpl
+# (Windows-only build).
+core_d3d9_gamma_ramp_spec = executable(
+  'dxmt9-core-d3d9-gamma-ramp-spec',
+  'core_d3d9_gamma_ramp_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
 test('dxmt9-core-d3d9-miptree-layout-spec', core_d3d9_miptree_layout_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
+test('dxmt9-core-d3d9-gamma-ramp-spec', core_d3d9_gamma_ramp_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
 # Wine D3D9 behavioral oracle: test_multiply_transform. Pure value-level

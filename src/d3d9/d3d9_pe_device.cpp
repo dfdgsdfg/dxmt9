@@ -571,6 +571,39 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     UINT currentPaletteIndex_ = 0;
     bool currentPaletteSet_ = false;
 
+    /* gamma ramp shadow — Set/GetGammaRamp round-trip (G1-4 audit
+     * dispatch, Option B). CAMetalLayer has no per-channel gamma LUT
+     * and Quartz Display Services mutates the entire display, so the
+     * present-time apply pass is a follow-up track. For now we shadow
+     * Set/Get so apps that probe the ramp round-trip see byte-equal
+     * values, and SetGammaRamp no longer silently drops the ramp.
+     *
+     * Default is the identity ramp (ramp[i] = i << 8 per channel),
+     * which is what wined3d also reports as the "original" gamma at
+     * swap-chain creation when the platform exposes no real ramp.
+     *
+     * Wire-side apply (present-pass fullscreen-quad MSL gather with a
+     * 256-entry LUT uniform) is intentionally deferred — it requires
+     * a new Presenter pipeline variant + a 1.5 KB uniform-buffer
+     * transport across the PE/unix boundary, both of which would
+     * widen the winemetal ABI and are out of scope for this track.
+     * The shadow is therefore sufficient for the Wine round-trip
+     * conformance shape but does NOT calibrate the displayed image. */
+    D3DGAMMARAMP gammaRamp_{};
+
+    // Initialize the gamma ramp shadow to the identity ramp. Called
+    // from the constructor; the all-zero default-constructed state is
+    // observably different from identity and would surprise apps that
+    // never call SetGammaRamp.
+    void initGammaRampIdentity() noexcept {
+        for (UINT i = 0; i < 256; ++i) {
+            const WORD v = static_cast<WORD>(i << 8);
+            gammaRamp_.red[i]   = v;
+            gammaRamp_.green[i] = v;
+            gammaRamp_.blue[i]  = v;
+        }
+    }
+
     template<typename T>
     static void setRef(T*& slot, T* newVal) {
         if (newVal) newVal->AddRef();
@@ -1742,6 +1775,7 @@ public:
                 dxmt9c_swapchain_release(chain);
             }
         }
+        initGammaRampIdentity();
         dxmt9DeviceDebugLog("device_ctor this=%p dev=%p factory=%p adapter=%u devType=%u behavior=0x%x window=%p extended=%u",
                             this, static_cast<void*>(dev_), static_cast<void*>(factory_),
                             adapter_, (unsigned)deviceType_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
@@ -2185,12 +2219,34 @@ public:
         // the conformance manifest aligned. Toggling has no observable effect.
         return S_OK;
     }
-    void    STDMETHODCALLTYPE SetGammaRamp(UINT swapChain, DWORD flags, const D3DGAMMARAMP*) noexcept override {
-        dxmt9DeviceDebugLog("device_set_gamma_ramp device=%p swapChain=%u flags=0x%x",
-                            this, swapChain, (unsigned)flags);
+    // SetGammaRamp / GetGammaRamp: shadow-only (G1-4 audit Option B —
+    // see gammaRamp_ comment). D3D9 spec: void return; D3D9-side calls
+    // can't fail. Wine's wined3d_swapchain_set_gamma_ramp ignores
+    // unknown bits in `flags` (`FIXME: Ignoring flags`), so we accept
+    // both D3DSGR_NO_CALIBRATION (0) and D3DSGR_CALIBRATE (1) without
+    // any per-call branching; macOS has no calibrator either way.
+    //
+    // iSwapChain is unused: D3D9 SetGammaRamp returns void so there is
+    // no error channel for "invalid swapchain index". Wine forwards to
+    // the per-swapchain output; dxmt9 stores into a single device-wide
+    // shadow. A multi-swapchain app probing sc>0 reads back the same
+    // values, which is observationally indistinguishable from a
+    // per-output forward as long as the platform output truly is
+    // shared (macOS single-display laptop case).
+    void    STDMETHODCALLTYPE SetGammaRamp(UINT swapChain, DWORD flags, const D3DGAMMARAMP* ramp) noexcept override {
+        dxmt9DeviceDebugLog("device_set_gamma_ramp device=%p swapChain=%u flags=0x%x ramp=%p",
+                            this, swapChain, (unsigned)flags,
+                            static_cast<const void*>(ramp));
+        if (!ramp) return;
+        // Byte-copy: D3DGAMMARAMP is a POD (3 * 256 * WORD). sizeof
+        // is the safe shape regardless of any future struct growth.
+        std::memcpy(&gammaRamp_, ramp, sizeof(D3DGAMMARAMP));
     }
-    void    STDMETHODCALLTYPE GetGammaRamp(UINT, D3DGAMMARAMP* p) noexcept override {
-        if (p) memset(p, 0, sizeof(*p));
+    void    STDMETHODCALLTYPE GetGammaRamp(UINT swapChain, D3DGAMMARAMP* p) noexcept override {
+        dxmt9DeviceDebugLog("device_get_gamma_ramp device=%p swapChain=%u out=%p",
+                            this, swapChain, static_cast<void*>(p));
+        if (!p) return;
+        std::memcpy(p, &gammaRamp_, sizeof(D3DGAMMARAMP));
     }
 
     /* ── resource creation ── */
