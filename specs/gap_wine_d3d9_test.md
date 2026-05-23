@@ -12,7 +12,28 @@ staging; this gap doc tracks **which Wine oracles exist** and
 Generated from Wine source + plan tables by
 `scripts/tools/gen_wine_d3d9_test_inventory.py` (see commit history).
 
-## Wine reference revision
+## Provenance
+
+The inventory is reproducible from two pinned commits: the dxmt9
+commit whose plan / manifest fed the status column, and the Wine
+commit whose source provided the line numbers. Capture both before
+relying on the table for any cross-reference.
+
+### dxmt9 generation revision
+
+Captured from `git -C <repo>` at the moment this file was rendered.
+A dirty work tree means the porting-status column may include
+changes not yet visible upstream.
+
+| Field | Value |
+|-------|-------|
+| Commit | `5e1ef5df50f322fddfa6a04a9ec9fa8ceb7e5b87` |
+| Short  | `5e1ef5d` |
+| Tag / describe | `5e1ef5d` |
+| Author date | `2026-05-23` |
+| Subject | scripts/tools/gen_wine_d3d9_test_inventory: capture dxmt9 provenance |
+
+### Wine reference revision
 
 The `Wine line` column below points into the Wine commit captured at
 generation time. To reproduce the line numbers verbatim, check out
@@ -28,8 +49,9 @@ the same commit in the Wine checkout before opening the source.
 | Upstream | https://gitlab.winehq.org/wine/wine/-/commit/6e073d28dee3af7f4c965daec94644e0f9f92727 |
 
 ```sh
-# Reproduce the line numbers in this table:
-git -C "$WINE_REPO" checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
+# Reproduce the inventory verbatim from a clean tree:
+git -C "$DXMT9_REPO" checkout 5e1ef5df50f322fddfa6a04a9ec9fa8ceb7e5b87
+git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
 
