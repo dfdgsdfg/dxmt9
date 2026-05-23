@@ -428,13 +428,36 @@ inline constexpr u32 TSS_TEXTURE_TYPE = 63;  // Internal shader-source texture k
 inline constexpr u32 SAMP_ADDRESS_U = 1;
 inline constexpr u32 SAMP_ADDRESS_V = 2;
 inline constexpr u32 SAMP_ADDRESS_W = 3;
+inline constexpr u32 SAMP_BORDER_COLOR = 4;  // D3DSAMP_BORDERCOLOR — must match
+                                             // d3d9types.h identity mapping;
+                                             // PE shadow `samplerStateSlot`
+                                             // routes by D3DSAMPLERSTATETYPE
+                                             // numeric value directly.
 inline constexpr u32 SAMP_MAG_FILTER = 5;
 inline constexpr u32 SAMP_MIN_FILTER = 6;
 inline constexpr u32 SAMP_MIP_FILTER = 7;
 inline constexpr u32 SAMP_MIPMAP_LOD_BIAS = 8;
 inline constexpr u32 SAMP_MAX_ANISOTROPY = 10;
 inline constexpr u32 SAMP_SRGB_TEXTURE = 11;
-inline constexpr u32 SAMP_BORDER_COLOR = 15;
+
+// `samplerStateSlot` in `d3d9_pe_state_shadow.hpp` identity-maps
+// `D3DSAMPLERSTATETYPE` to the canonical record's slot index, so each
+// `SAMP_*` constant above must equal the public `D3DSAMP_*` ordinal. The
+// asserts below lock that contract — a silent off-by-one (regression seen
+// for `SAMP_BORDER_COLOR = 15` instead of 4) made every border-color
+// sampler read slot 15 (never written) so border sampling effectively
+// rendered black regardless of the app's chosen color.
+static_assert(SAMP_ADDRESS_U == 1, "D3DSAMP_ADDRESSU = 1");
+static_assert(SAMP_ADDRESS_V == 2, "D3DSAMP_ADDRESSV = 2");
+static_assert(SAMP_ADDRESS_W == 3, "D3DSAMP_ADDRESSW = 3");
+static_assert(SAMP_BORDER_COLOR == 4, "D3DSAMP_BORDERCOLOR = 4");
+static_assert(SAMP_MAG_FILTER == 5, "D3DSAMP_MAGFILTER = 5");
+static_assert(SAMP_MIN_FILTER == 6, "D3DSAMP_MINFILTER = 6");
+static_assert(SAMP_MIP_FILTER == 7, "D3DSAMP_MIPFILTER = 7");
+static_assert(SAMP_MIPMAP_LOD_BIAS == 8, "D3DSAMP_MIPMAPLODBIAS = 8");
+static_assert(SAMP_MAX_ANISOTROPY == 10, "D3DSAMP_MAXANISOTROPY = 10");
+static_assert(SAMP_SRGB_TEXTURE == 11, "D3DSAMP_SRGBTEXTURE = 11");
+
 inline constexpr u32 QUERY_GETDATA_FLUSH = 1u << 0;
 
 // Canonical transform-slot layout. World matrices occupy a contiguous block
