@@ -562,3 +562,86 @@ done_window:
 done_d3d9:
     IDirect3D9_Release(d3d9);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: np2_stretch_rect_test
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727 (visual.c:12487)
+ *
+ * Wine's np2_stretch_rect_test exercises StretchRect on non-power-of-two
+ * (NPOT) surfaces. This PE scaffold pins the public-ABI policy: NPOT
+ * D3DPOOL_DEFAULT D3DFMT_A8R8G8B8 offscreen surfaces must accept
+ * StretchRect with D3DTEXF_LINEAR and return S_OK, including NPOT->NPOT
+ * (matching), NPOT->POT (non-square scaling), and asymmetric NPOT->NPOT
+ * combinations. Pairs where CreateOffscreenPlainSurface itself fails on
+ * the runtime are skipped rather than failing the test.
+ */
+void test_stretch_rect_npot_dimension_policy(const struct d3d9_api *api)
+{
+    static const struct {
+        UINT src_w;
+        UINT src_h;
+        UINT dst_w;
+        UINT dst_h;
+    } pairs[] = {
+        { 33, 33, 33, 33 },  /* NPOT -> same NPOT */
+        { 33, 33, 64, 64 },  /* NPOT -> POT, non-square scaling */
+        { 15,  7, 33, 17 },  /* asymmetric NPOT -> NPOT */
+    };
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    size_t i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); ++i)
+    {
+        IDirect3DSurface9 *src = NULL;
+        IDirect3DSurface9 *dst = NULL;
+
+        hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device,
+                pairs[i].src_w, pairs[i].src_h, D3DFMT_A8R8G8B8,
+                D3DPOOL_DEFAULT, &src, NULL);
+        if (FAILED(hr))
+            continue;
+
+        hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device,
+                pairs[i].dst_w, pairs[i].dst_h, D3DFMT_A8R8G8B8,
+                D3DPOOL_DEFAULT, &dst, NULL);
+        if (FAILED(hr))
+        {
+            IDirect3DSurface9_Release(src);
+            continue;
+        }
+
+        /* NPOT whole-surface blit -> S_OK. */
+        hr = IDirect3DDevice9_StretchRect(device, src, NULL, dst, NULL,
+                D3DTEXF_LINEAR);
+        CHECK_HR(hr, D3D_OK);
+
+        IDirect3DSurface9_Release(dst);
+        IDirect3DSurface9_Release(src);
+    }
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}

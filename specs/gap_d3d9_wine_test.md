@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `d18f68a8d93b7778f4e881b83ac1b2c888a8e49c` — **work tree dirty** |
-| Short  | `d18f68a` |
-| Tag / describe | `d18f68a` |
-| Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_stretch_rect_depth_stencil_policy scaffold; depth_blit_test partial → scaffolded |
+| Commit | `c53ffda0687351080775c4b3192fc7a4e4763c84` — **work tree dirty** |
+| Short  | `c53ffda` |
+| Tag / describe | `c53ffda` |
+| Author date | `2026-05-24` |
+| Subject | tests/conformance/d3d9: add test_stretch_rect_format_matrix_policy; stretchrect_test partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout d18f68a8d93b7778f4e881b83ac1b2c888a8e49c
+git -C "$DXMT9_REPO" checkout c53ffda0687351080775c4b3192fc7a4e4763c84
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 65 | 58 | 12 | 0 | 0 |
+| `visual.c` | 135 | 65 | 59 | 11 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **190** | **12** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **191** | **11** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -119,7 +119,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `multisample_get_rtdata_test` | 17106 | 🟡 | — |
 | `multisampled_depth_buffer_test` | 17240 | 📐 | `test_visual_multisampled_depth_buffer_caps_policy` |
 | `nested_loop_test` | 7219 | ✅ | — |
-| `np2_stretch_rect_test` | 12487 | 🟡 | — |
+| `np2_stretch_rect_test` | 12487 | 📐 | `test_stretch_rect_npot_dimension_policy` |
 | `offscreen_test` | 2850 | 📐 | `test_visual_offscreen_surface_creation_policy` |
 | `pixelshader_blending_test` | 11844 | ✅ | — |
 | `pretransformed_varying_test` | 7316 | ✅ | `test_visual_pretransformed_vertex_declaration_policy` |
