@@ -74,6 +74,19 @@ enum class DecoderRejectReason : u32 {
   // source/destination operand carries the label kind in its type
   // bits, which has no MSL lowering.
   LabelUnsupported,
+  // D3DDECLUSAGE codes 6..8 and 11..13 (TANGENT, BINORMAL, TESSFACTOR,
+  // FOG, DEPTH, SAMPLE) appear on vertex declarations / DCL semantic
+  // tokens for which dxmt9 has no Metal lowering. Without this reject
+  // the decoder forwards the usage code unchanged and the binding loop
+  // silently picks the first vertex-element match, misbinding the
+  // attribute. See specs/gap_d3d9.md §A.4.
+  DeclUsageUnsupported,
+  // D3DDECLMETHOD values 1..6 (PARTIALU, PARTIALV, CROSSUV, UV, LOOKUP,
+  // LOOKUPPRESAMPLED) require N-patch / displacement-map tessellator
+  // stages that dxmt9 does not implement. Only DEFAULT (0) — a direct
+  // per-vertex read at the given offset — is supported. See
+  // specs/gap_d3d9.md §A.5.
+  DeclMethodUnsupported,
 };
 
 struct DecoderReject : std::runtime_error {
@@ -105,7 +118,43 @@ inline void bumpShaderDecoderReject(DecoderRejectReason reason) {
     case DecoderRejectReason::LabelUnsupported:
       ::dxmt9::perf::countShaderDecoderRejectLabelUnsupported();
       break;
+    case DecoderRejectReason::DeclUsageUnsupported:
+      ::dxmt9::perf::countShaderDecoderRejectDeclUsageUnsupported();
+      break;
+    case DecoderRejectReason::DeclMethodUnsupported:
+      ::dxmt9::perf::countShaderDecoderRejectDeclMethodUnsupported();
+      break;
   }
+}
+
+// D3DDECLUSAGE / D3DDECLMETHOD support tables — anything outside the
+// "supported" set safe-rejects via DecoderReject above. The boundaries
+// are documented in specs/gap.md §A.4 / §A.5; the helpers stay local to
+// keep the decoder TU self-contained.
+inline bool isSupportedDeclUsage(u32 usage) {
+  // 0..5, 9, 10 are the eight codes dxmt9 lowers (POSITION, BLENDWEIGHT,
+  // BLENDINDICES, NORMAL, PSIZE, TEXCOORD, POSITIONT, COLOR).
+  switch (usage) {
+    case kD3DDeclUsagePosition:
+    case kD3DDeclUsageBlendWeight:
+    case kD3DDeclUsageBlendIndices:
+    case kD3DDeclUsageNormal:
+    case kD3DDeclUsagePSize:
+    case kD3DDeclUsageTexcoord:
+    case kD3DDeclUsagePositionT:
+    case kD3DDeclUsageColor:
+      return true;
+    default:
+      return false;
+  }
+}
+
+inline bool isSupportedDeclMethod(u32 method) {
+  // Only D3DDECLMETHOD_DEFAULT (0) — a direct per-vertex read at the
+  // declared offset. Methods 1..6 (PARTIALU, PARTIALV, CROSSUV, UV,
+  // LOOKUP, LOOKUPPRESAMPLED) drive fixed-function tessellator stages
+  // that dxmt9 does not implement.
+  return method == 0u;
 }
 
 // Spec maxima for D3D9 register files. Anything beyond these caps is
@@ -1274,6 +1323,25 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
   module.words.reserve(bytes.size() / sizeof(u32));
   module.stage = vertex ? D3DShaderStage::Vertex : D3DShaderStage::Pixel;
 
+  // Validate the bound vertex declaration eagerly so an unsupported
+  // D3DDECLUSAGE / D3DDECLMETHOD short-circuits to an empty SpirvModule
+  // before any downstream binding consumer (decodeVertexShaderInputLayout
+  // for SM2+/SM3 inputs, the FFP layout decoder for legacy paths) silently
+  // misbinds the attribute. The check runs for both stages because a pixel
+  // shader can share the same context.vertexDecl, and a malformed decl
+  // should surface on the first translate call regardless of which side
+  // hit the cache first.
+  for (const auto& element : context.vertexDecl.elements) {
+    if (!isSupportedDeclMethod(element.method)) {
+      throw DecoderReject{DecoderRejectReason::DeclMethodUnsupported,
+                           "D3DDECLMETHOD outside DEFAULT has no Metal lowering"};
+    }
+    if (!isSupportedDeclUsage(element.usage)) {
+      throw DecoderReject{DecoderRejectReason::DeclUsageUnsupported,
+                           "D3DDECLUSAGE TANGENT/BINORMAL/TESSFACTOR/FOG/DEPTH/SAMPLE has no Metal lowering"};
+    }
+  }
+
   auto readWord = [&](size_t offset) {
     u32 word = 0;
     std::memcpy(&word, bytes.data() + offset, sizeof(u32));
@@ -1460,6 +1528,20 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
       const auto dst = decodeRegisterRef(instruction.operands[1], module.stage);
       if (dst.kind == D3DRegisterKind::Sampler && dst.index < module.samplerTextureTypes.size()) {
         module.samplerTextureTypes[dst.index] = decodeDclTextureType(instruction.operands[0]);
+      }
+      // Vertex-INPUT DCL tokens are the second silent-misbind surface:
+      // `dcl_tangent v3` in a binary whose vertex declaration legitimately
+      // describes a tangent stream still cannot be lowered (no Metal
+      // attribute mapping). Reject only on the vertex-input side; FOG /
+      // DEPTH on vertex-OUTPUT TexCoordOut (lowered by dxmt9_shader_metal_ir
+      // via `vertexOutputMapping`) and pixel-INPUT semantics (carry the
+      // VS->PS fog factor as TEXCOORD) must keep flowing.
+      if (module.stage == D3DShaderStage::Vertex && dst.kind == D3DRegisterKind::Input) {
+        const u32 usage = (instruction.operands[0] & kD3DSP_DCL_USAGE_MASK) >> kD3DSP_DCL_USAGE_SHIFT;
+        if (!isSupportedDeclUsage(usage)) {
+          throw DecoderReject{DecoderRejectReason::DeclUsageUnsupported,
+                               "D3D shader DCL token uses unsupported D3DDECLUSAGE"};
+        }
       }
     }
     module.instructions.push_back(std::move(instruction));

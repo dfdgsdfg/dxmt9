@@ -200,6 +200,29 @@ constexpr u32 kD3DSPR_CONST2 = 11u;
 constexpr u32 kD3DSPR_TEMPFLOAT16 = 16u;
 constexpr u32 kD3DSPR_LABEL = 18u;
 
+// D3DDECLUSAGE / D3DDECLMETHOD constants used by the new boundary cases
+// below. Self-contained — canonical definitions live in
+// dxmt9_shader_decoder.hpp / Wine d3d9types.h. See
+// specs/gap_d3d9.md §A.4/§A.5.
+constexpr u32 kD3DDeclUsageTangent = 6u;
+constexpr u32 kD3DDeclMethodPartialU = 1u;
+
+// Single non-terminator vertex-declaration element for the decoder's
+// up-front element-loop validation. Stream 0, offset 0, float4 type
+// (D3DDECLTYPE_FLOAT4 = 2); only `method` and `usage` vary.
+dxmt9::core::VertexDeclSnapshot makeSingleElementDecl(u32 method, u32 usage) {
+  dxmt9::core::VertexDeclSnapshot decl;
+  dxmt9::core::VertexElement element;
+  element.stream = 0;
+  element.offset = 0;
+  element.type = 2;
+  element.method = method;
+  element.usage = usage;
+  element.usageIndex = 0;
+  decl.elements.push_back(element);
+  return decl;
+}
+
 void testConst2RegisterAliasesToConstFloat() {
   // vs_3_0 MOV r0, c0  with the source register encoded as CONST2 (11)
   // instead of CONST (2). The decoder must alias it to ConstFloat and
@@ -270,6 +293,58 @@ void testLabelRegisterRejectsCleanly() {
           "LABEL does not double-count as tempfloat16_unsupported");
   checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
           "LABEL does not double-count as invalid_opcode");
+}
+
+void testTangentUsageRejectsCleanly() {
+  // A vertex declaration that names D3DDECLUSAGE_TANGENT must safe-reject
+  // — dxmt9 has no Metal lowering for tangent vertex streams and silently
+  // matching them against a TEXCOORD DCL token would misbind the
+  // attribute. The valid vs_2_0 MOV body confirms the reject fires from
+  // the vertex-declaration path, not from the operand parser.
+  const auto words = makeVertexBytecode();
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::Bytecode;
+  shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(words.data()),
+                               reinterpret_cast<const u8*>(words.data() + words.size()));
+  DrawDesc desc{};
+  desc.vertexShader = shader;
+  desc.vertexDecl = makeSingleElementDecl(/*method=*/0u, /*usage=*/kD3DDeclUsageTangent);
+  const auto before = rejectSnapshot();
+  const auto module = dxmt9::translator::test::decodeD3DBytecodeForTest(shader, /*vertex=*/true, desc);
+  const auto after = rejectSnapshot();
+  expectReject(module, "vertex decl with D3DDECLUSAGE_TANGENT");
+  checkEq(after.declUsageUnsupported - before.declUsageUnsupported, 1ull,
+          "TANGENT increments shader_decoder_reject_decl_usage_unsupported");
+  checkEq(after.declMethodUnsupported - before.declMethodUnsupported, 0ull,
+          "TANGENT does not double-count as decl_method_unsupported");
+  checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
+          "TANGENT does not double-count as invalid_opcode");
+}
+
+void testPartialUMethodRejectsCleanly() {
+  // A vertex declaration whose method is D3DDECLMETHOD_PARTIALU must
+  // safe-reject — only the DEFAULT (0) read path is implemented and the
+  // other six methods drive tessellator stages that dxmt9 does not
+  // support. Usage is POSITION (0), which is otherwise valid, so the
+  // bucket increment isolates the method-side check.
+  const auto words = makeVertexBytecode();
+  ShaderRef shader{};
+  shader.kind = ShaderRef::Kind::Bytecode;
+  shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(words.data()),
+                               reinterpret_cast<const u8*>(words.data() + words.size()));
+  DrawDesc desc{};
+  desc.vertexShader = shader;
+  desc.vertexDecl = makeSingleElementDecl(/*method=*/kD3DDeclMethodPartialU, /*usage=*/kD3DDeclUsagePosition);
+  const auto before = rejectSnapshot();
+  const auto module = dxmt9::translator::test::decodeD3DBytecodeForTest(shader, /*vertex=*/true, desc);
+  const auto after = rejectSnapshot();
+  expectReject(module, "vertex decl with D3DDECLMETHOD_PARTIALU");
+  checkEq(after.declMethodUnsupported - before.declMethodUnsupported, 1ull,
+          "PARTIALU increments shader_decoder_reject_decl_method_unsupported");
+  checkEq(after.declUsageUnsupported - before.declUsageUnsupported, 0ull,
+          "PARTIALU does not double-count as decl_usage_unsupported");
+  checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
+          "PARTIALU does not double-count as invalid_opcode");
 }
 
 void testInvalidOpcode() {
@@ -354,6 +429,10 @@ void testValidBytecodeDoesNotIncrement() {
           "valid: tempfloat16_unsupported unchanged");
   checkEq(after.labelUnsupported - before.labelUnsupported, 0ull,
           "valid: label_unsupported unchanged");
+  checkEq(after.declUsageUnsupported - before.declUsageUnsupported, 0ull,
+          "valid: decl_usage_unsupported unchanged");
+  checkEq(after.declMethodUnsupported - before.declMethodUnsupported, 0ull,
+          "valid: decl_method_unsupported unchanged");
 }
 
 }  // namespace
@@ -381,6 +460,8 @@ int main() {
     testConst2RegisterAliasesToConstFloat();
     testTempFloat16RegisterRejectsCleanly();
     testLabelRegisterRejectsCleanly();
+    testTangentUsageRejectsCleanly();
+    testPartialUMethodRejectsCleanly();
     testFragmentSourceFallbackOnReject();
     testValidBytecodeDoesNotIncrement();
   } catch (const TestFailure& error) {

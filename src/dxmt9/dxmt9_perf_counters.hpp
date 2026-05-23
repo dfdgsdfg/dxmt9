@@ -180,6 +180,19 @@ void countStage1Bytes(std::uint64_t bytes);
 //                          by `inlineShaderSubroutines`; this bucket
 //                          only fires for a register source/dest with
 //                          the label kind, which has no MSL lowering.
+//   * decl_usage_unsupported:  a vertex-declaration DCL usage code
+//                          (D3DDECLUSAGE) is one of the six values
+//                          dxmt9 cannot lower (TANGENT=6, BINORMAL=7,
+//                          TESSFACTOR=8, FOG=11, DEPTH=12, SAMPLE=13).
+//                          Single category counter — per-code
+//                          inventory lives in specs/gap_d3d9.md §A.4.
+//   * decl_method_unsupported: a vertex-declaration DCL method code
+//                          (D3DDECLMETHOD) is non-DEFAULT (PARTIALU=1,
+//                          PARTIALV=2, CROSSUV=3, UV=4, LOOKUP=5,
+//                          LOOKUPPRESAMPLED=6). dxmt9 only honors the
+//                          DEFAULT (0) read path; the rest require
+//                          tessellator stages with no Metal mapping.
+//                          See specs/gap_d3d9.md §A.5.
 void countShaderDecoderRejectTruncated();
 void countShaderDecoderRejectUnsupportedVersion();
 void countShaderDecoderRejectOobRegister();
@@ -187,6 +200,8 @@ void countShaderDecoderRejectMissingEnd();
 void countShaderDecoderRejectInvalidOpcode();
 void countShaderDecoderRejectTempFloat16Unsupported();
 void countShaderDecoderRejectLabelUnsupported();
+void countShaderDecoderRejectDeclUsageUnsupported();
+void countShaderDecoderRejectDeclMethodUnsupported();
 
 namespace test {
 // Test-only seam: snapshot the `shader_decoder_reject_*` buckets in
@@ -202,6 +217,8 @@ struct ShaderDecoderRejectSnapshot {
   std::uint64_t invalidOpcode = 0;
   std::uint64_t tempFloat16Unsupported = 0;
   std::uint64_t labelUnsupported = 0;
+  std::uint64_t declUsageUnsupported = 0;
+  std::uint64_t declMethodUnsupported = 0;
 };
 ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects();
 }  // namespace test
