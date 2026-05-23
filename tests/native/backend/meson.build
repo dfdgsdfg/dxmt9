@@ -69,6 +69,21 @@ backend_pipeline_key_spec = executable(
 
 test('dxmt9-backend-pipeline-key-spec', backend_pipeline_key_spec)
 
+# P1-1 regression guard for D3DRS_BLENDOP / D3DRS_BLENDOPALPHA /
+# D3DRS_SEPARATEALPHABLENDENABLE / D3DRS_SRCBLENDALPHA /
+# D3DRS_DESTBLENDALPHA → MTLBlendOperation + separate-alpha lane wiring.
+# Pure CPU spec on `makeBlendAttachmentKeys` + `toBlendOperation`; no
+# Metal device required.
+blend_op_family_spec = executable(
+  'dxmt9-blend-op-family-spec',
+  'blend_op_family_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-blend-op-family-spec', blend_op_family_spec)
+
 dod_replay_observer_spec = executable(
   'dxmt9-dod-replay-observer-spec',
   'dod_replay_observer_spec.cpp',
