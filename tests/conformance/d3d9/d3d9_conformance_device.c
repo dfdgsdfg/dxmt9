@@ -1919,6 +1919,90 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_scissor_size()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's oracle verifies that the device's default scissor rect equals the
+ * back-buffer dimensions at CreateDevice time and is re-derived from the
+ * present-parameter back-buffer size on Reset(). This scaffold mirrors that
+ * shape using the existing 640x480 device fixture, then drives a Reset() to
+ * a different size and re-queries GetScissorRect.
+ */
+void test_scissor_default_matches_backbuffer_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    D3DPRESENT_PARAMETERS pp;
+    IDirect3D9 *d3d9;
+    RECT actual_rect;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    /*
+     * Step 1: device-default scissor matches the present-parameter
+     * back-buffer dimensions. create_base_device() uses the
+     * default_present_parameters() (640x480) fixture so the expected
+     * rect mirrors that.
+     */
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(&actual_rect, 0xcc, sizeof(actual_rect));
+    hr = IDirect3DDevice9_GetScissorRect(device, &actual_rect);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(actual_rect.left == 0);
+        CHECK_TRUE(actual_rect.top == 0);
+        CHECK_TRUE(actual_rect.right == 640);
+        CHECK_TRUE(actual_rect.bottom == 480);
+    }
+
+    /*
+     * Step 2: Reset() to a different back-buffer size re-derives the
+     * default scissor from the new dimensions.
+     */
+    pp = default_present_parameters(window);
+    pp.BackBufferWidth = 320;
+    pp.BackBufferHeight = 240;
+    hr = IDirect3DDevice9_Reset(device, &pp);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        memset(&actual_rect, 0xcc, sizeof(actual_rect));
+        hr = IDirect3DDevice9_GetScissorRect(device, &actual_rect);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            CHECK_TRUE(actual_rect.left == 0);
+            CHECK_TRUE(actual_rect.top == 0);
+            CHECK_TRUE(actual_rect.right == 320);
+            CHECK_TRUE(actual_rect.bottom == 240);
+        }
+    }
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_clip_planes_limits()
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

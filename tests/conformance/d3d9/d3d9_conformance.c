@@ -57,6 +57,8 @@ static const struct test_case tests[] =
     {"fpu_setup", test_fpu_setup},
     {"limits", test_limits},
     {"viewport_scissor_state_getters", test_viewport_scissor_state_getters},
+    {"scissor_default_matches_backbuffer_policy",
+            test_scissor_default_matches_backbuffer_policy},
     {"clip_plane_state_getters", test_clip_plane_state_getters},
     {"null_stream_state", test_null_stream_state},
     {"null_stream_shader_draw_policy",

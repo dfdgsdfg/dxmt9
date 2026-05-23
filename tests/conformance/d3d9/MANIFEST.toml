@@ -714,6 +714,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_scissor_default_matches_backbuffer_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_scissor_size"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "viewport-scissor"
+owner = "core/device"
+requirements = ["R-TEST-12.3", "R-TEST-12.17"]
+acceptance = ["default scissor rect equals the back-buffer dimensions at CreateDevice and is re-derived from the present-parameter back-buffer size on Reset()"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_clip_plane_state_getters"
 source = "wine/dlls/d3d9/tests/device.c:test_clip_planes_limits"
 source_kind = "behavioral-oracle"

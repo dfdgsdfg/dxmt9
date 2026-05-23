@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `47b15ab0cd68b8ecea1ca81e04ea1e299e909aff` — **work tree dirty** |
-| Short  | `47b15ab` |
-| Tag / describe | `47b15ab` |
+| Commit | `16e17c5725ba7d67e5b5868dca96e040ebc6a18d` |
+| Short  | `16e17c5` |
+| Tag / describe | `16e17c5` |
 | Author date | `2026-05-23` |
-| Subject | d3d9 maxmip_test: max_mip_level DSL + clamp corpus + plan flip → covered |
+| Subject | tests/conformance/d3d9: add test_scissor_default_matches_backbuffer_policy scaffold; partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 47b15ab0cd68b8ecea1ca81e04ea1e299e909aff
+git -C "$DXMT9_REPO" checkout 16e17c5725ba7d67e5b5868dca96e040ebc6a18d
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
-| `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
+| `device.c` | 105 | 1 | 96 | 8 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **176** | **26** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **177** | **25** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -90,7 +90,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `alphareplicate_test` | 13262 | ✅ | — |
 | `alphatest_test` | 13507 | ✅ | — |
 | `clear_test` | 1154 | 📐 | `test_visual_clear_color_only_policy` |
-| `clip_planes_test` | 16182 | 🟡 | partial: degenerate (plane (0,0,0,-1) clips everything) covered by `dxmt9_clip_plane_runtime_readback.shader_test`; half-space discrimination still failing — see `dxmt9_clip_plane_halfspace_readback.shader_test` (status=failing). Half-fix landed: FFP VS now initializes unset `out.clipDistance[]` slots to +1 (src/dxmt9/dxmt9_ffp_shaders.cpp ~798, src/dxmt9/dxmt9_shader_metal_ir.cpp ~1836) so disabled planes do not discard fragments. Residual failure (non-degenerate plane clips all pixels) is not in shader emission — generated MSL is correct — and reproduces for every plane direction (X, Y, all four signs); next-step investigation is `ffpVs.clipPlaneMask` / `ffpVs.clipPlanes[0]` runtime values reaching the shader. |
+| `clip_planes_test` | 16182 | 🟡 | — |
 | `cnd_test` | 6675 | ✅ | — |
 | `color_fill_test` | 1663 | 📐 | `test_visual_colorfill_format_policy` |
 | `conditional_np2_repeat_test` | 9841 | ✅ | — |
@@ -294,7 +294,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_resource_priority` | 12209 | 📐 | `test_resource_priority_pool_policy`, `test_resource_priority_roundtrip` |
 | `test_resource_type` | 11789 | 📐 | `test_base_texture_metadata_iface_policy`, `test_cube_texture_face_desc_parity`, `test_resource_type`, `test_texture_level_surface_desc_parity`, `test_volume_mipmap_level_desc_policy` |
 | `test_scene` | 2678 | 📐 | — |
-| `test_scissor_size` | 3631 | 🟡 | — |
+| `test_scissor_size` | 3631 | 📐 | `test_scissor_default_matches_backbuffer_policy` |
 | `test_set_palette` | 9935 | 📐 | `test_palette_alpha_caps_policy`, `test_palette_current_entry_isolation`, `test_set_palette_roundtrip` |
 | `test_set_rt_vp_scissor` | 6055 | 📐 | `test_viewport_scissor_state_getters` |
 | `test_set_stream_source` | 3468 | 📐 | `test_set_stream_source_state`, `test_stream_source_null_layout_policy`, `test_stream_source_null_offset_alignment_policy`, `test_stream_source_vb_offset_alignment_policy`, `test_stream_source_zero_stride_policy` |

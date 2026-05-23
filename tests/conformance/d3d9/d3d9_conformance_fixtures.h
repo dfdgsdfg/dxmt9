@@ -345,6 +345,7 @@ void test_light_enable_state(const struct d3d9_api *api);
 void test_fpu_setup(const struct d3d9_api *api);
 void test_limits(const struct d3d9_api *api);
 void test_viewport_scissor_state_getters(const struct d3d9_api *api);
+void test_scissor_default_matches_backbuffer_policy(const struct d3d9_api *api);
 void test_clip_plane_state_getters(const struct d3d9_api *api);
 void test_null_stream_state(const struct d3d9_api *api);
 void test_null_stream_shader_draw_policy(const struct d3d9_api *api);
