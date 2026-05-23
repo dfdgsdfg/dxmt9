@@ -3907,3 +3907,20 @@ owner = "core/resources"
 requirements = ["R-TEST-12.13", "R-TEST-12.14"]
 acceptance = ["Direct3DCreate9Ex + CreateDeviceEx(HAL, HARDWARE_VERTEXPROCESSING, Windowed=TRUE, SwapEffect=DISCARD, A8R8G8B8) returns S_OK; CreateVertexBuffer(size=256, Usage=0, FVF=0, Pool=D3DPOOL_SYSTEMMEM) on the Ex device returns S_OK; a no-flag Lock(0,0,&ptr,0) on the resulting sysmem VB returns S_OK and yields a non-NULL pointer; Unlock returns S_OK. HRESULT-contract scope only: no draw is issued, no pixel readback is sampled — the visual-correctness pin lives in the visual.c:test_sysmem_draw ✅ row. D3DUSAGE_DYNAMIC + SYSTEMMEM and DISCARD-on-non-dynamic policy are pinned separately by test_pinned_buffers_d3dusage_policy."]
 status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
+function = "test_draw_mapped_buffer_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_draw_mapped_buffer"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "draw-primitive"
+owner = "core/device"
+requirements = ["R-TEST-12.3"]
+acceptance = ["CreateVertexBuffer(size=256, Usage=0, FVF=0, Pool=D3DPOOL_DEFAULT) returns S_OK; SetStreamSource(0, vb, 0, stride=16) and SetFVF(D3DFVF_XYZ|D3DFVF_DIFFUSE) return S_OK; Lock(0,0,&ptr,0) on the bound VB returns S_OK leaving the buffer mapped; inside BeginScene/EndScene, DrawPrimitive(TRIANGLELIST, 0, 1) returns either D3DERR_INVALIDCALL (Wine oracle — draws from a mapped VB must reject) or S_OK (dxmt9's deferred-record path may currently permit it; accept-either pins the HRESULT shape without forcing the fix landing order); EndScene returns S_OK; Unlock returns S_OK; after Unlock, BeginScene + DrawPrimitive(TRIANGLELIST, 0, 1) + EndScene all return S_OK — Unlock re-arms the stream-source for normal use."]
+status = "scaffolded"

@@ -364,6 +364,7 @@ static const struct test_case tests[] =
             test_device_desktop_window_present_policy},
     {"ex_device_sysmem_vertex_buffer_policy",
             test_ex_device_sysmem_vertex_buffer_policy},
+    {"draw_mapped_buffer_policy", test_draw_mapped_buffer_policy},
 };
 
 int main(int argc, char **argv)
