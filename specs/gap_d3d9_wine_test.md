@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `d7905e486c5b22eed05feda304ac98ef3ad4d9c0` |
-| Short  | `d7905e4` |
-| Tag / describe | `d7905e4` |
+| Commit | `e4074609441693ce775fd8300964b80af804044b` — **work tree dirty** |
+| Short  | `e407460` |
+| Tag / describe | `e407460` |
 | Author date | `2026-05-23` |
-| Subject | d3d9 test_blend: add SRC_ALPHA/INV_SRC_ALPHA corpus + plan flip → covered |
+| Subject | specs/gap_d3d9_wine_test: test_constant_clamp_vs partial → covered |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout d7905e486c5b22eed05feda304ac98ef3ad4d9c0
+git -C "$DXMT9_REPO" checkout e4074609441693ce775fd8300964b80af804044b
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 59 | 55 | 21 | 0 | 0 |
+| `visual.c` | 135 | 63 | 55 | 17 | 0 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **60** | **176** | **32** | **0** | **0** |
+| **TOTAL** | **268** | **64** | **176** | **28** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -93,7 +93,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `clip_planes_test` | 16182 | 🟡 | — |
 | `cnd_test` | 6675 | ✅ | — |
 | `color_fill_test` | 1663 | 📐 | `test_visual_colorfill_format_policy` |
-| `conditional_np2_repeat_test` | 9841 | 🟡 | — |
+| `conditional_np2_repeat_test` | 9841 | ✅ | — |
 | `constant_clamp_ps_test` | 6379 | ✅ | — |
 | `depth_blit_test` | 14713 | 🟡 | — |
 | `depth_bounds_test` | 14307 | 📐 | `test_visual_depth_bounds_caps_policy` |
@@ -146,7 +146,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_constant_clamp_vs` | 6189 | ✅ | — |
 | `test_cube_wrap` | 2664 | ✅ | — |
 | `test_default_attribute_components` | 27807 | ✅ | — |
-| `test_default_diffuse` | 27607 | 🟡 | — |
+| `test_default_diffuse` | 27607 | ✅ | — |
 | `test_depth_stencil_init` | 22556 | 📐 | `test_visual_depth_stencil_init_policy` |
 | `test_depthbias` | 21851 | 🟡 | — |
 | `test_desktop_window` | 25880 | 🟡 | — |
@@ -163,7 +163,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_fog_interpolation` | 19817 | ✅ | — |
 | `test_format_conversion` | 27960 | 🟡 | — |
 | `test_fragment_coords` | 10666 | ✅ | — |
-| `test_generate_mipmap` | 5644 | 🟡 | — |
+| `test_generate_mipmap` | 5644 | ✅ | — |
 | `test_generated_texcoords` | 29067 | ✅ | — |
 | `test_lighting_matrices` | 28945 | 📐 | `test_visual_lighting_world_view_matrix_policy` |
 | `test_line_antialiasing_blending` | 23684 | 📐 | `test_visual_line_antialiasing_blending_state_policy` |
@@ -171,7 +171,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_managed_reset` | 27484 | ✅ | — |
 | `test_map_synchronisation` | 24996 | ✅ | — |
 | `test_max_index16` | 24074 | 📐 | `test_visual_max_index16_draw_policy` |
-| `test_mipmap_autogen` | 5773 | 🟡 | — |
+| `test_mipmap_autogen` | 5773 | ✅ | — |
 | `test_mipmap_upload` | 27550 | 📐 | `test_vendor_policy_mipmap_upload_policy` |
 | `test_mismatched_sample_types` | 25977 | ✅ | — |
 | `test_mova` | 1965 | ✅ | — |
