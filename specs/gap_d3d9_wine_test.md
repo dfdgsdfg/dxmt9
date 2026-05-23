@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `6c86d91825ab95a3d5aad7aa26173d455d1749f1` |
-| Short  | `6c86d91` |
-| Tag / describe | `6c86d91` |
+| Commit | `d5855a72049f6a31b50af758df2bfb4bca41b5d5` |
+| Short  | `d5855a7` |
+| Tag / describe | `d5855a7` |
 | Author date | `2026-05-23` |
-| Subject | d3d9 FFP: FS samples by stage index after VS TCI+matrix resolution |
+| Subject | specs/gap_d3d9_wine_test: promote 7 fog/TSS partial entries → covered |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 6c86d91825ab95a3d5aad7aa26173d455d1749f1
+git -C "$DXMT9_REPO" checkout d5855a72049f6a31b50af758df2bfb4bca41b5d5
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 52 | 55 | 28 | 0 | 0 |
+| `visual.c` | 135 | 54 | 55 | 26 | 0 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **53** | **176** | **39** | **0** | **0** |
+| **TOTAL** | **268** | **55** | **176** | **37** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -94,7 +94,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `cnd_test` | 6675 | ✅ | — |
 | `color_fill_test` | 1663 | 📐 | `test_visual_colorfill_format_policy` |
 | `conditional_np2_repeat_test` | 9841 | 🟡 | — |
-| `constant_clamp_ps_test` | 6379 | 🟡 | — |
+| `constant_clamp_ps_test` | 6379 | ✅ | — |
 | `depth_blit_test` | 14713 | 🟡 | — |
 | `depth_bounds_test` | 14307 | 📐 | `test_visual_depth_bounds_caps_policy` |
 | `depth_buffer2_test` | 14597 | 📐 | `test_visual_depth_buffer_reset_policy` |
@@ -104,7 +104,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `dp3_alpha_test` | 13324 | ✅ | — |
 | `ds_size_test` | 16645 | 📐 | `test_visual_ds_smaller_than_rt_policy` |
 | `fixed_function_bumpmap_test` | 10140 | 📐 | `test_visual_bumpenvmap_tss_policy` |
-| `fixed_function_decl_test` | 9042 | 🟡 | — |
+| `fixed_function_decl_test` | 9042 | ✅ | — |
 | `float_texture_test` | 5022 | 📐 | `test_visual_float_texture_format_policy` |
 | `fog_special_test` | 18220 | ✅ | — |
 | `fog_test` | 2118 | ✅ | — |
