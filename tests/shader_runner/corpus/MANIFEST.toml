@@ -1626,7 +1626,7 @@ source_kind = "project-authored"
 license = "MIT"
 license_scope = "project-mit"
 models = ["ffp"]
-opcodes = []
+opcodes = ["PROBE"]
 oracle = "Wine d3d9 visual.c test_ffp_w behavior, reduced to D3DFVF_XYZW non-1.0 W forced to 1.0 by FFP transform"
 oracle-date = "2026-05-23"
 
