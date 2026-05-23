@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `d154ac399f4db0b8d7823ad5d1dc0f211415c522` — **work tree dirty** |
-| Short  | `d154ac3` |
-| Tag / describe | `d154ac3` |
+| Commit | `d7905e486c5b22eed05feda304ac98ef3ad4d9c0` |
+| Short  | `d7905e4` |
+| Tag / describe | `d7905e4` |
 | Author date | `2026-05-23` |
-| Subject | specs/gap_d3d9_wine_test: promote texop/alphatest/viewport partial → covered |
+| Subject | d3d9 test_blend: add SRC_ALPHA/INV_SRC_ALPHA corpus + plan flip → covered |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout d154ac399f4db0b8d7823ad5d1dc0f211415c522
+git -C "$DXMT9_REPO" checkout d7905e486c5b22eed05feda304ac98ef3ad4d9c0
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 58 | 55 | 22 | 0 | 0 |
+| `visual.c` | 135 | 59 | 55 | 21 | 0 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **59** | **176** | **33** | **0** | **0** |
+| **TOTAL** | **268** | **60** | **176** | **32** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -143,7 +143,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_color_clamping` | 23463 | ✅ | — |
 | `test_color_vertex` | 25212 | ✅ | — |
 | `test_compare_instructions` | 7614 | ✅ | — |
-| `test_constant_clamp_vs` | 6189 | 🟡 | — |
+| `test_constant_clamp_vs` | 6189 | ✅ | — |
 | `test_cube_wrap` | 2664 | ✅ | — |
 | `test_default_attribute_components` | 27807 | ✅ | — |
 | `test_default_diffuse` | 27607 | 🟡 | — |
