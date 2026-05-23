@@ -150,6 +150,27 @@ encode_draw_recorder_spec = executable(
 test('dxmt9-encode-draw-recorder-spec', encode_draw_recorder_spec,
      env: dxmt9_native_test_env)
 
+# P0-3 (specs/d3d9.plan.md §2) — D3DRS_STENCILREF pass-through.
+# Before the fix, the encoder caller at dxmt9_draw_encoder.mm:1341
+# invoked recordedSetDepthStencilState without a stencilRef and the
+# default-argument zero silently applied. This spec locks both the
+# pure-value transform (state::computeStencilRef) and the
+# encoder-driven depth bind so a future regression would break the
+# test before it ships.
+stencil_ref_spec = executable(
+  'dxmt9-stencil-ref-spec',
+  'stencil_ref_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-stencil-ref-spec', stencil_ref_spec,
+     env: dxmt9_native_test_env)
+
 metalcapture_spec = executable(
   'dxmt9-metalcapture-spec',
   'metalcapture_spec.cpp',

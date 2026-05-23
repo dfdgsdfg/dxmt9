@@ -33,6 +33,7 @@ using core::RS_STENCIL_FAIL;
 using core::RS_STENCIL_FUNC;
 using core::RS_STENCIL_MASK;
 using core::RS_STENCIL_PASS;
+using core::RS_STENCIL_REF;
 using core::RS_STENCIL_WRITEMASK;
 using core::RS_STENCIL_ZFAIL;
 using core::RS_TEXTURE_FACTOR;
@@ -235,6 +236,18 @@ pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {
   key.back.writeMask = core::flatStateOr(rs, RS_STENCIL_CCW_WRITEMASK, key.front.writeMask);
   key.back.enabled = key.front.enabled;
   return key;
+}
+
+// D3DRS_STENCILREF (=57) is a DWORD but Metal stencil compares are 8-bit, so
+// truncate to the low byte. D3D9 has no D3DRS_CCW_STENCILREF — Wine's
+// `wined3d_device_apply_stencil_ref` applies the same `state->stencil_ref`
+// to both faces regardless of D3DRS_TWOSIDEDSTENCILMODE; WMT exposes only a
+// single-ref setter (`setStencilReferenceValue`) which Metal applies to
+// front and back together. Front-and-back symmetry is therefore correct and
+// matches the Wine oracle exactly.
+std::uint8_t computeStencilRef(core::FlatDrawStateView state) {
+  const auto& rs = state.hot->renderStates;
+  return static_cast<std::uint8_t>(core::flatStateOr(rs, RS_STENCIL_REF, 0u) & 0xffu);
 }
 
 }  // namespace dxmt9::state

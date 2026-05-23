@@ -1338,7 +1338,12 @@ bool encodeDraw(EncodeContext& ctx,
       depthState = WMT::DepthStencilState{depthStateRef.handle};
     }
     if (depthState) {
-      recordedSetDepthStencilState(ctx, encoder, depthState);
+      // P0-3: propagate D3DRS_STENCILREF through to Metal. D3D9 has only
+      // one stencil ref slot (Wine `wined3d_device_apply_stencil_ref`),
+      // so the same byte applies to front and back faces — WMT's
+      // `setStencilReferenceValue` mirrors that.
+      const std::uint8_t stencilRef = state::computeStencilRef(drawState);
+      recordedSetDepthStencilState(ctx, encoder, depthState, stencilRef);
       countDepthStateBind();
     }
     // M1: label the pipeline with the shader-variant hash so frame

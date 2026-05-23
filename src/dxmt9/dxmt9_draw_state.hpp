@@ -106,4 +106,10 @@ DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
 // Compose a depth/stencil cache key from flat render-state storage.
 pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state);
 
+// Extract the D3D9 D3DRS_STENCILREF byte (0..255). D3D9 only carries a
+// single stencil ref (no D3DRS_CCW_STENCILREF — see
+// `~/workspaces/wine/include/d3d9types.h:1029-1033`), so the value is
+// applied to both faces; Metal's `setStencilReferenceValue` mirrors that.
+std::uint8_t computeStencilRef(core::FlatDrawStateView state);
+
 }  // namespace dxmt9::state
