@@ -321,6 +321,8 @@ static const struct test_case tests[] =
             test_stretch_rect_format_matrix_policy},
     {"stretch_rect_npot_dimension_policy",
             test_stretch_rect_npot_dimension_policy},
+    {"stretch_rect_format_conversion_policy",
+            test_stretch_rect_format_conversion_policy},
     {"stretch_rect_multisample_resolve_policy",
             test_stretch_rect_multisample_resolve_policy},
     {"multisample_render_target_init_policy",

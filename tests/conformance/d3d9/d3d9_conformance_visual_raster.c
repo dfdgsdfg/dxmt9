@@ -648,6 +648,128 @@ done_d3d9:
 
 /*
  * Wine provenance: dlls/d3d9/tests/visual.c
+ * function: test_format_conversion (visual.c:27960)
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine's test_format_conversion exercises StretchRect across mismatched
+ * surface formats. This PE scaffold pins the public-ABI HRESULT contract
+ * for the StretchRect format-conversion matrix:
+ *   - Same 32-bit BGRA channel-equivalent pair (A8R8G8B8 <-> X8R8G8B8) is
+ *     a legal whole-surface DEFAULT-pool offscreen blit and must return
+ *     S_OK (in both directions).
+ *   - A 32-bit -> 16-bit conversion (A8R8G8B8 -> R5G6B5) is permitted by
+ *     the Wine reference; runtimes may accept it (S_OK) or reject it
+ *     (D3DERR_INVALIDCALL) — both are valid outcomes.
+ *   - A compressed -> uncompressed conversion (DXT1 -> A8R8G8B8) is not
+ *     supported by StretchRect and must fail with D3DERR_INVALIDCALL.
+ *     If the runtime cannot create the compressed offscreen surface at
+ *     all (CreateOffscreenPlainSurface returns non-S_OK for DXT1), the
+ *     compressed probe is skipped rather than failing the test.
+ */
+void test_stretch_rect_format_conversion_policy(const struct d3d9_api *api)
+{
+    IDirect3DSurface9 *src_argb = NULL;
+    IDirect3DSurface9 *dst_xrgb = NULL;
+    IDirect3DSurface9 *src_xrgb = NULL;
+    IDirect3DSurface9 *dst_argb = NULL;
+    IDirect3DSurface9 *src_565 = NULL;
+    IDirect3DSurface9 *dst_565 = NULL;
+    IDirect3DSurface9 *src_dxt1 = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    /* Compatible: A8R8G8B8 -> X8R8G8B8 (channel-equivalent BGRA). */
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &src_argb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &dst_xrgb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (src_argb && dst_xrgb)
+    {
+        hr = IDirect3DDevice9_StretchRect(device, src_argb, NULL, dst_xrgb,
+                NULL, D3DTEXF_LINEAR);
+        CHECK_HR(hr, D3D_OK);
+    }
+
+    /* Compatible reverse: X8R8G8B8 -> A8R8G8B8. */
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &src_xrgb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &dst_argb, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (src_xrgb && dst_argb)
+    {
+        hr = IDirect3DDevice9_StretchRect(device, src_xrgb, NULL, dst_argb,
+                NULL, D3DTEXF_LINEAR);
+        CHECK_HR(hr, D3D_OK);
+    }
+
+    /* 32-bit -> 16-bit conversion: runtime-dependent — accept either
+     * S_OK or D3DERR_INVALIDCALL. */
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_R5G6B5, D3DPOOL_DEFAULT, &dst_565, NULL);
+    if (SUCCEEDED(hr) && src_argb)
+    {
+        hr = IDirect3DDevice9_StretchRect(device, src_argb, NULL, dst_565,
+                NULL, D3DTEXF_LINEAR);
+        CHECK_TRUE(hr == S_OK || hr == D3DERR_INVALIDCALL);
+    }
+    (void)src_565;
+
+    /* Truly incompatible: compressed (DXT1) -> uncompressed (A8R8G8B8).
+     * If the runtime cannot create the DXT1 offscreen surface at all,
+     * skip the compressed probe rather than failing. */
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 64, 64,
+            D3DFMT_DXT1, D3DPOOL_DEFAULT, &src_dxt1, NULL);
+    if (SUCCEEDED(hr) && src_dxt1 && dst_argb)
+    {
+        hr = IDirect3DDevice9_StretchRect(device, src_dxt1, NULL, dst_argb,
+                NULL, D3DTEXF_LINEAR);
+        CHECK_HR(hr, D3DERR_INVALIDCALL);
+    }
+
+    if (src_dxt1)
+        IDirect3DSurface9_Release(src_dxt1);
+    if (dst_565)
+        IDirect3DSurface9_Release(dst_565);
+    if (dst_argb)
+        IDirect3DSurface9_Release(dst_argb);
+    if (src_xrgb)
+        IDirect3DSurface9_Release(src_xrgb);
+    if (dst_xrgb)
+        IDirect3DSurface9_Release(dst_xrgb);
+    if (src_argb)
+        IDirect3DSurface9_Release(src_argb);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/visual.c
  * function: test_multisample_stretch_rect (visual.c:4494)
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  *

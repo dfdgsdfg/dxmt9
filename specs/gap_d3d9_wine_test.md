@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `b562c667367d35f3c448497cd7d6905845197181` — **work tree dirty** |
-| Short  | `b562c66` |
-| Tag / describe | `b562c66` |
+| Commit | `b3034410000a6a508fd9ec1603bf80f855871e69` — **work tree dirty** |
+| Short  | `b303441` |
+| Tag / describe | `b303441` |
 | Author date | `2026-05-24` |
-| Subject | tests/conformance/d3d9: add test_get_render_target_data_msaa_policy; multisample_get_rtdata_test partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_managed_autogen_mipmap_policy; test_managed_generate_mipmap partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout b562c667367d35f3c448497cd7d6905845197181
+git -C "$DXMT9_REPO" checkout b3034410000a6a508fd9ec1603bf80f855871e69
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 65 | 63 | 7 | 0 | 0 |
+| `visual.c` | 135 | 65 | 64 | 6 | 0 | 0 |
 | `device.c` | 105 | 1 | 104 | 0 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 27 | 0 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **195** | **7** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **196** | **6** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -161,7 +161,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_flip` | 22028 | 📐 | `test_visual_swapchain_flip_present_policy` |
 | `test_fog` | 28198 | ✅ | — |
 | `test_fog_interpolation` | 19817 | ✅ | — |
-| `test_format_conversion` | 27960 | 🟡 | — |
+| `test_format_conversion` | 27960 | 📐 | `test_stretch_rect_format_conversion_policy` |
 | `test_fragment_coords` | 10666 | ✅ | — |
 | `test_generate_mipmap` | 5644 | ✅ | — |
 | `test_generated_texcoords` | 29067 | ✅ | — |
