@@ -1331,7 +1331,103 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
-file = "vs_specific/dxmt9_vs2_fp_special_nan_inf_readback.shader_test"
+file = "vs_specific/dxmt9_vs2_fp_special_log_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "LOG", "MOV"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 log sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_pow_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV", "POW"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 pow sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_nrm_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV", "NRM"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 nrm sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_rcp1_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV", "RCP"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 rcp1 sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_rcp2_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV", "RCP"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 rcp2 sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_rsq1_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV", "RSQ"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 rsq1 sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_rsq2_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV", "RSQ"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 rsq2 sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_lit_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "LIT", "MOV"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 lit sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_def1_readback.shader_test"
 status = "passing"
 source = "dxmt9"
 source_kind = "project-authored"
@@ -1339,7 +1435,31 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ps_3_0", "vs_2_0"]
 opcodes = ["DCL", "DEF", "MOV"]
-oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 def-constant NaN/-Inf/+Inf round-trip through diffuse interpolant"
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 def1 sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_def2_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 def2 sub-case on NaN/-Inf/+Inf inputs"
+oracle-date = "2026-05-23"
+
+[[test]]
+file = "vs_specific/dxmt9_vs2_fp_special_def3_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_3_0", "vs_2_0"]
+opcodes = ["DCL", "DEF", "MOV"]
+oracle = "Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 def3 sub-case on NaN/-Inf/+Inf inputs"
 oracle-date = "2026-05-23"
 
 [[test]]

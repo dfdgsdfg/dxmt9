@@ -92,6 +92,7 @@ inline constexpr u32 kD3DSIO_SLT = 12;
 inline constexpr u32 kD3DSIO_SGE = 13;
 inline constexpr u32 kD3DSIO_EXP = 14;
 inline constexpr u32 kD3DSIO_LOG = 15;
+inline constexpr u32 kD3DSIO_LIT = 16;
 inline constexpr u32 kD3DSIO_LRP = 18;
 inline constexpr u32 kD3DSIO_FRC = 19;
 inline constexpr u32 kD3DSIO_M4x4 = 20;

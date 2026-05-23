@@ -1,0 +1,33 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c fp_special_test behavior, reduced to vs_2_0 def1 sub-case on NaN/-Inf/+Inf inputs
+; oracle-date: 2026-05-23
+
+; Wine fp_special_test def1 variant: invoke the target opcode with
+; the c1 = {NaN, -Inf, +Inf, 0} constant as input and route the
+; result through the diffuse interpolant. Hardware-defined output
+; values (Wine itemises r500 / r600 / nv40 / nv50 / warp expectations)
+; make a literal `probe rgba(...)` unstable, so this fixture asserts
+; only that Metal accepted the program and the framebuffer received a
+; non-clear pixel — which is the meaningful evidence that the
+; MSL-emit NaN/Inf literal fix in `formatFloatLiteral` is live and
+; the pipeline did not silently fall back to a passthrough VS.
+
+[vertex shader d3dbc-hex]
+fffe0200 05000051 a00f0000 00000000 3f000000 3f800000
+40000000 05000051 a00f0001 7fc00000 ff800000 7f800000
+00000000 0200001f 80000000 900f0000 0200001f 8000000a
+900f0001 02000001 80010000 a0000001 02000001 d00f0000
+80000000 02000001 c00f0000 90e40000 0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300 0200001f 8000000a 900f0000 02000001 800f0800
+90e40000 0000ffff
+
+[test]
+clear rgba(0.25, 0.25, 0.25, 0.25)
+dxmt9-draw-vs-color-triangle
+probe-completed (48, 32)

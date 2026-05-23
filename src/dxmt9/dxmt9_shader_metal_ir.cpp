@@ -1450,6 +1450,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       case kD3DSIO_SGE:
       case kD3DSIO_EXP:
       case kD3DSIO_LOG:
+      case kD3DSIO_LIT:
       case kD3DSIO_EXPP:
       case kD3DSIO_LOGP:
       case kD3DSIO_SINCOS:
@@ -1517,6 +1518,19 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             case kD3DSIO_LOGP:
               value = "float4(log2(max(" + readSrc(1) + ", float4(1.0e-8f))))";
               break;
+            case kD3DSIO_LIT: {
+              // D3D9 LIT: dst = (1, max(src.x, 0),
+              //                  src.x > 0 ? pow(max(src.y, 0), clamp(src.w, -128, 128)) : 0,
+              //                  1). Used by fixed-function-style lighting helpers.
+              const auto src = readSrc(1);
+              value = std::string("([&](){ float4 lit_src = ") + src + ";"
+                      " float lit_x = lit_src.x;"
+                      " float lit_y = lit_src.y;"
+                      " float lit_w = clamp(lit_src.w, -128.0f, 128.0f);"
+                      " float lit_z = (lit_x > 0.0f) ? pow(max(lit_y, 0.0f), lit_w) : 0.0f;"
+                      " return float4(1.0f, max(lit_x, 0.0f), lit_z, 1.0f); }())";
+              break;
+            }
             case kD3DSIO_SINCOS:
               value = "float4(sin(" + readSrc(1) + "), cos(" + readSrc(1) + "), 0.0f, 0.0f)";
               break;
@@ -2501,6 +2515,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       case kD3DSIO_SGE:
       case kD3DSIO_EXP:
       case kD3DSIO_LOG:
+      case kD3DSIO_LIT:
       case kD3DSIO_EXPP:
       case kD3DSIO_LOGP:
       case kD3DSIO_SINCOS:
@@ -2565,6 +2580,21 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           case kD3DSIO_LOGP:
             value = "float4(log2(max(" + readSrc(1) + ", float4(1.0e-8f))))";
             break;
+          case kD3DSIO_LIT: {
+            // D3D9 LIT: see the corresponding emit in the SM2+ branch
+            // above. Same expansion duplicated here so the SM1 lowering
+            // path (which uses this separate switch) gets the lighting
+            // helper too — Wine fp_special_test's vs_lit sub-case
+            // depends on this opcode reaching MSL on vs_2_0.
+            const auto src = readSrc(1);
+            value = std::string("([&](){ float4 lit_src = ") + src + ";"
+                    " float lit_x = lit_src.x;"
+                    " float lit_y = lit_src.y;"
+                    " float lit_w = clamp(lit_src.w, -128.0f, 128.0f);"
+                    " float lit_z = (lit_x > 0.0f) ? pow(max(lit_y, 0.0f), lit_w) : 0.0f;"
+                    " return float4(1.0f, max(lit_x, 0.0f), lit_z, 1.0f); }())";
+            break;
+          }
           case kD3DSIO_SINCOS:
             value = "float4(sin(" + readSrc(1) + "), cos(" + readSrc(1) + "), 0.0f, 0.0f)";
             break;

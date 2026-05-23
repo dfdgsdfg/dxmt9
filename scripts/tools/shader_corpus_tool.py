@@ -35,7 +35,7 @@ VALID_OPCODES = {
     "ABS", "ADD", "ALPHA_TEST", "BREAK", "BREAKC", "BREAKP", "CALL", "CALLNZ",
     "CLEAR", "CMP", "CND", "CRS", "DCL", "DEF", "DEFB", "DEFI", "DP2ADD",
     "DP3", "DP4", "DSX", "DSY", "ELSE", "ENDIF", "ENDLOOP", "ENDREP", "EXP",
-    "EXPP", "FRC", "HLSL", "IF", "IFC", "LABEL", "LOG", "LOGP", "LOOP",
+    "EXPP", "FRC", "HLSL", "IF", "IFC", "LABEL", "LIT", "LOG", "LOGP", "LOOP",
     "LRP", "M3x2", "M3x3", "M3x4", "M4x3", "M4x4", "MAD", "MAX", "MIN",
     "MOV", "MOVA", "MUL", "NOP", "NRM", "POW", "PROBE", "RCP", "REP",
     "RET", "RSQ", "SETP", "SGE", "SGN", "SINCOS", "SLT", "SUB", "TEX",
