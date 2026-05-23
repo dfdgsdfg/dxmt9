@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `1fc97c0a8ae01365785c5edbc2cd7e4028d4581a` — **work tree dirty** |
-| Short  | `1fc97c0` |
-| Tag / describe | `1fc97c0` |
+| Commit | `20dc0089b34c0f3d93dd0092bedff18a97e028bb` — **work tree dirty** |
+| Short  | `20dc008` |
+| Tag / describe | `20dc008` |
 | Author date | `2026-05-23` |
-| Subject | d3d9: apply SetGammaRamp at present time (Option A) |
+| Subject | d3d9: remove duplicate gammaRamp_ shadow after Option A merge |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 1fc97c0a8ae01365785c5edbc2cd7e4028d4581a
+git -C "$DXMT9_REPO" checkout 20dc0089b34c0f3d93dd0092bedff18a97e028bb
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -72,11 +72,11 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
-| `visual.c` | 135 | 33 | 55 | 36 | 11 | 0 |
+| `visual.c` | 135 | 38 | 55 | 36 | 6 | 0 |
 | `device.c` | 105 | 1 | 95 | 9 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **34** | **176** | **47** | **11** | **0** |
+| **TOTAL** | **268** | **39** | **176** | **47** | **6** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -101,7 +101,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `depth_buffer_test` | 14442 | 📐 | `test_visual_depth_buffer_clear_policy` |
 | `depth_clamp_test` | 14124 | 📐 | `test_visual_depth_clamp_render_state_policy` |
 | `dp2add_ps_test` | 6551 | ✅ | — |
-| `dp3_alpha_test` | 13324 | 🔴 | — |
+| `dp3_alpha_test` | 13324 | ✅ | — |
 | `ds_size_test` | 16645 | 📐 | `test_visual_ds_smaller_than_rt_policy` |
 | `fixed_function_bumpmap_test` | 10140 | 📐 | `test_visual_bumpenvmap_tss_policy` |
 | `fixed_function_decl_test` | 9042 | 🟡 | — |
@@ -118,7 +118,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `multiple_rendertargets_test` | 11617 | 🟢 | — |
 | `multisample_get_rtdata_test` | 17106 | 🟡 | — |
 | `multisampled_depth_buffer_test` | 17240 | 📐 | `test_visual_multisampled_depth_buffer_caps_policy` |
-| `nested_loop_test` | 7219 | 🟠 | — |
+| `nested_loop_test` | 7219 | ✅ | — |
 | `np2_stretch_rect_test` | 12487 | 🟡 | — |
 | `offscreen_test` | 2850 | 📐 | `test_visual_offscreen_surface_creation_policy` |
 | `pixelshader_blending_test` | 11844 | ✅ | — |
@@ -152,7 +152,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_desktop_window` | 25880 | 🟡 | — |
 | `test_draw_mapped_buffer` | 26213 | 🟡 | — |
 | `test_drawindexedprimitiveup` | 24293 | ✅ | — |
-| `test_dsy` | 23840 | 🟠 | — |
+| `test_dsy` | 23840 | ✅ | — |
 | `test_dynamic_map_synchronization` | 26843 | ✅ | — |
 | `test_evict_bound_resources` | 23967 | 📐 | `test_visual_evict_managed_resources_policy` |
 | `test_fetch4` | 15189 | 📐 | `test_vendor_policy_fetch4_caps` |
@@ -162,7 +162,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_fog` | 28198 | 🟡 | — |
 | `test_fog_interpolation` | 19817 | 🟡 | — |
 | `test_format_conversion` | 27960 | 🟡 | — |
-| `test_fragment_coords` | 10666 | 🟠 | — |
+| `test_fragment_coords` | 10666 | ✅ | — |
 | `test_generate_mipmap` | 5644 | 🟡 | — |
 | `test_generated_texcoords` | 29067 | 🔴 | — |
 | `test_lighting_matrices` | 28945 | 📐 | `test_visual_lighting_world_view_matrix_policy` |
@@ -174,7 +174,7 @@ Source: [`dlls/d3d9/tests/visual.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_mipmap_autogen` | 5773 | 🟡 | — |
 | `test_mipmap_upload` | 27550 | 📐 | `test_vendor_policy_mipmap_upload_policy` |
 | `test_mismatched_sample_types` | 25977 | ✅ | — |
-| `test_mova` | 1965 | 🟠 | — |
+| `test_mova` | 1965 | ✅ | — |
 | `test_multisample_get_front_buffer_data` | 17168 | 📐 | `test_visual_multisample_get_front_buffer_data_policy` |
 | `test_multisample_init` | 22489 | 🟡 | — |
 | `test_multisample_mismatch` | 20823 | 📐 | `test_visual_multisample_rt_ds_mismatch_policy` |
