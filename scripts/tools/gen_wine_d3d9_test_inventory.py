@@ -23,29 +23,52 @@ PLAN = REPO / "specs" / "wine_test.plan.md"
 OUT = REPO / "specs" / "gap_wine_d3d9_test.md"
 
 
-def wine_provenance() -> dict[str, str]:
-    """Capture the Wine reference commit so the inventory has stable
-    provenance: any reader can `git -C $WINE_REPO checkout <hash>` and
-    reproduce the line numbers in the table."""
-    out: dict[str, str] = {"hash": "unknown", "short": "unknown",
-                            "date": "unknown", "subject": "unknown",
-                            "describe": "unknown",
-                            "root": str(WINE_ROOT)}
-    if not (WINE_ROOT / ".git").exists():
+def _git_capture(root: Path) -> dict[str, str]:
+    """Run a fixed set of `git` queries against `root` and return the
+    captured fields. Empty / missing entries are reported as
+    `"unknown"` so the rendered doc never has blank cells. A dirty
+    work tree is flagged via the `dirty` field."""
+    out: dict[str, str] = {
+        "hash": "unknown", "short": "unknown",
+        "date": "unknown", "subject": "unknown",
+        "describe": "unknown", "dirty": "no",
+        "root": str(root),
+    }
+    if not (root / ".git").exists():
         return out
+
     def _run(args: list[str]) -> str:
         try:
             return subprocess.check_output(
-                ["git", "-C", str(WINE_ROOT)] + args, text=True,
+                ["git", "-C", str(root)] + args, text=True,
                 stderr=subprocess.DEVNULL).strip()
         except subprocess.CalledProcessError:
             return ""
+
     out["hash"] = _run(["rev-parse", "HEAD"]) or out["hash"]
     out["short"] = _run(["rev-parse", "--short", "HEAD"]) or out["short"]
     out["date"] = _run(["show", "-s", "--format=%ad", "--date=short", "HEAD"]) or out["date"]
     out["subject"] = _run(["show", "-s", "--format=%s", "HEAD"]) or out["subject"]
     out["describe"] = _run(["describe", "--always", "--tags"]) or out["describe"]
+    dirty_status = _run(["status", "--porcelain"])
+    out["dirty"] = "yes" if dirty_status else "no"
     return out
+
+
+def wine_provenance() -> dict[str, str]:
+    """Capture the Wine reference commit so the inventory has stable
+    provenance: any reader can `git -C $WINE_REPO checkout <hash>` and
+    reproduce the line numbers in the table."""
+    return _git_capture(WINE_ROOT)
+
+
+def dxmt9_provenance() -> dict[str, str]:
+    """Capture the dxmt9 commit at generation time. Pairs with
+    `wine_provenance()` so the inventory is bidirectionally
+    reproducible: which dxmt9 plan/manifest state was the source of
+    the porting-status column, and against which Wine source those
+    statuses were evaluated."""
+    return _git_capture(REPO)
 
 SOURCES = ["visual", "device", "d3d9ex", "stateblock"]
 
@@ -176,6 +199,7 @@ def main() -> None:
         summary_rows.append((src, len(rows), per_status))
 
     prov = wine_provenance()
+    self_prov = dxmt9_provenance()
 
     lines: list[str] = []
     lines.append("# Wine D3D9 Test Inventory")
@@ -192,7 +216,29 @@ def main() -> None:
     lines.append("Generated from Wine source + plan tables by")
     lines.append("`scripts/tools/gen_wine_d3d9_test_inventory.py` (see commit history).")
     lines.append("")
-    lines.append("## Wine reference revision")
+    lines.append("## Provenance")
+    lines.append("")
+    lines.append("The inventory is reproducible from two pinned commits: the dxmt9")
+    lines.append("commit whose plan / manifest fed the status column, and the Wine")
+    lines.append("commit whose source provided the line numbers. Capture both before")
+    lines.append("relying on the table for any cross-reference.")
+    lines.append("")
+    lines.append("### dxmt9 generation revision")
+    lines.append("")
+    self_dirty = (" — **work tree dirty**" if self_prov["dirty"] == "yes" else "")
+    lines.append("Captured from `git -C <repo>` at the moment this file was rendered.")
+    lines.append("A dirty work tree means the porting-status column may include")
+    lines.append("changes not yet visible upstream.")
+    lines.append("")
+    lines.append("| Field | Value |")
+    lines.append("|-------|-------|")
+    lines.append(f"| Commit | `{self_prov['hash']}`{self_dirty} |")
+    lines.append(f"| Short  | `{self_prov['short']}` |")
+    lines.append(f"| Tag / describe | `{self_prov['describe']}` |")
+    lines.append(f"| Author date | `{self_prov['date']}` |")
+    lines.append(f"| Subject | {self_prov['subject']} |")
+    lines.append("")
+    lines.append("### Wine reference revision")
     lines.append("")
     lines.append("The `Wine line` column below points into the Wine commit captured at")
     lines.append("generation time. To reproduce the line numbers verbatim, check out")
@@ -208,8 +254,9 @@ def main() -> None:
     lines.append(f"| Upstream | https://gitlab.winehq.org/wine/wine/-/commit/{prov['hash']} |")
     lines.append("")
     lines.append("```sh")
-    lines.append("# Reproduce the line numbers in this table:")
-    lines.append(f"git -C \"$WINE_REPO\" checkout {prov['hash']}")
+    lines.append("# Reproduce the inventory verbatim from a clean tree:")
+    lines.append(f"git -C \"$DXMT9_REPO\" checkout {self_prov['hash']}")
+    lines.append(f"git -C \"$WINE_REPO\"  checkout {prov['hash']}")
     lines.append("python3 scripts/tools/gen_wine_d3d9_test_inventory.py")
     lines.append("```")
     lines.append("")
