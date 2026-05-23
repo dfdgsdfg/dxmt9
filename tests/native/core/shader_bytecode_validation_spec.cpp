@@ -188,6 +188,90 @@ void testOversizedConstantRegister() {
           "c512 increments shader_decoder_reject_oob_register");
 }
 
+// SM3 spec defines four float-constant register files
+// (`D3DSPR_CONST` = 2, `_CONST2` = 11, `_CONST3` = 12, `_CONST4` = 13).
+// dxmt9 (mirroring Wine `dlls/wined3d/wined3d_private.h` which keeps
+// these in the same numeric slots without dedicated lowering) aliases
+// CONST2..4 to the primary ConstFloat namespace. A bytecode that
+// addresses `c[CONST2]` must decode normally and must NOT trip the
+// `oob_register`, `tempfloat16_unsupported`, or `label_unsupported`
+// buckets. specs/d3d9.plan.md §3 P1-2.
+constexpr u32 kD3DSPR_CONST2 = 11u;
+constexpr u32 kD3DSPR_TEMPFLOAT16 = 16u;
+constexpr u32 kD3DSPR_LABEL = 18u;
+
+void testConst2RegisterAliasesToConstFloat() {
+  // vs_3_0 MOV r0, c0  with the source register encoded as CONST2 (11)
+  // instead of CONST (2). The decoder must alias it to ConstFloat and
+  // produce a non-empty module.
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(true, 3, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 0));
+  words.push_back(makeSrcToken(kD3DSPR_CONST2, 0));
+  words.push_back(kD3DSIO_END);
+  const auto before = rejectSnapshot();
+  const auto module = decode(words, /*vertex=*/true);
+  const auto after = rejectSnapshot();
+  check(!module.instructions.empty(),
+        "CONST2 source decodes into module instructions (aliased to ConstFloat)");
+  checkEq(after.oobRegister - before.oobRegister, 0ull,
+          "CONST2 does not increment shader_decoder_reject_oob_register");
+  checkEq(after.tempFloat16Unsupported - before.tempFloat16Unsupported, 0ull,
+          "CONST2 does not increment shader_decoder_reject_tempfloat16_unsupported");
+  checkEq(after.labelUnsupported - before.labelUnsupported, 0ull,
+          "CONST2 does not increment shader_decoder_reject_label_unsupported");
+  checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
+          "CONST2 does not increment shader_decoder_reject_invalid_opcode");
+}
+
+void testTempFloat16RegisterRejectsCleanly() {
+  // ps_3_0 MOV r0, h0 — source register kind = TEMPFLOAT16 (16). dxmt9
+  // has no fp16 lowering path so the decoder must safe-reject (empty
+  // module + dedicated counter bump) instead of silently misbinding it
+  // as a fp32 temp via the Unknown fallback.
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(false, 3, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 0));
+  words.push_back(makeSrcToken(kD3DSPR_TEMPFLOAT16, 0));
+  words.push_back(kD3DSIO_END);
+  const auto before = rejectSnapshot();
+  const auto module = decode(words, /*vertex=*/false);
+  const auto after = rejectSnapshot();
+  expectReject(module, "TEMPFLOAT16 source register");
+  checkEq(after.tempFloat16Unsupported - before.tempFloat16Unsupported, 1ull,
+          "TEMPFLOAT16 increments shader_decoder_reject_tempfloat16_unsupported");
+  checkEq(after.labelUnsupported - before.labelUnsupported, 0ull,
+          "TEMPFLOAT16 does not double-count as label_unsupported");
+  checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
+          "TEMPFLOAT16 does not double-count as invalid_opcode");
+}
+
+void testLabelRegisterRejectsCleanly() {
+  // vs_3_0 MOV r0, label[0] — source register kind = LABEL (18) used
+  // as a register source rather than as a label-index operand. The
+  // opcode-level kD3DSIO_LABEL / CALL / CALLNZ are already inlined by
+  // the decoder; this reject only fires when LABEL appears in a
+  // register source/dest, which has no MSL lowering.
+  std::vector<u32> words;
+  words.push_back(makeVersionToken(true, 3, 0));
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 0));
+  words.push_back(makeSrcToken(kD3DSPR_LABEL, 0));
+  words.push_back(kD3DSIO_END);
+  const auto before = rejectSnapshot();
+  const auto module = decode(words, /*vertex=*/true);
+  const auto after = rejectSnapshot();
+  expectReject(module, "LABEL register source");
+  checkEq(after.labelUnsupported - before.labelUnsupported, 1ull,
+          "LABEL increments shader_decoder_reject_label_unsupported");
+  checkEq(after.tempFloat16Unsupported - before.tempFloat16Unsupported, 0ull,
+          "LABEL does not double-count as tempfloat16_unsupported");
+  checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
+          "LABEL does not double-count as invalid_opcode");
+}
+
 void testInvalidOpcode() {
   // vs_2_0, then an opcode (0x0fff) that is neither in the fixed
   // operand table nor a no-arg control flow opcode, AND has a token
@@ -266,6 +350,10 @@ void testValidBytecodeDoesNotIncrement() {
   checkEq(after.missingEnd - before.missingEnd, 0ull, "valid: missing_end unchanged");
   checkEq(after.invalidOpcode - before.invalidOpcode, 0ull,
           "valid: invalid_opcode unchanged");
+  checkEq(after.tempFloat16Unsupported - before.tempFloat16Unsupported, 0ull,
+          "valid: tempfloat16_unsupported unchanged");
+  checkEq(after.labelUnsupported - before.labelUnsupported, 0ull,
+          "valid: label_unsupported unchanged");
 }
 
 }  // namespace
@@ -290,6 +378,9 @@ int main() {
     (void)testOversizedConstantRegister;
     testInvalidOpcode();
     testDstOpcodeAccepted();
+    testConst2RegisterAliasesToConstFloat();
+    testTempFloat16RegisterRejectsCleanly();
+    testLabelRegisterRejectsCleanly();
     testFragmentSourceFallbackOnReject();
     testValidBytecodeDoesNotIncrement();
   } catch (const TestFailure& error) {

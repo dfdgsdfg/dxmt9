@@ -276,6 +276,11 @@ struct Counters {
   std::atomic<std::uint64_t> shaderDecoderRejectOobRegister{0};
   std::atomic<std::uint64_t> shaderDecoderRejectMissingEnd{0};
   std::atomic<std::uint64_t> shaderDecoderRejectInvalidOpcode{0};
+  // SM3 unsupported register kinds — see specs/d3d9.plan.md §3 P1-2.
+  // `kD3DSPR_TEMPFLOAT16` (16) and `kD3DSPR_LABEL` (18) have no MSL
+  // lowering; the decoder safe-rejects instead of misbinding.
+  std::atomic<std::uint64_t> shaderDecoderRejectTempFloat16Unsupported{0};
+  std::atomic<std::uint64_t> shaderDecoderRejectLabelUnsupported{0};
   std::atomic<std::uint64_t> renderPassLoadActionLoad{0};
   std::atomic<std::uint64_t> renderPassLoadActionClear{0};
   std::atomic<std::uint64_t> renderPassLoadActionDontCare{0};
@@ -577,7 +582,7 @@ struct CounterEntry {
   double percentile;
 };
 
-constexpr std::array<CounterEntry, 379> kCounterTable = {{
+constexpr std::array<CounterEntry, 381> kCounterTable = {{
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
@@ -774,6 +779,8 @@ constexpr std::array<CounterEntry, 379> kCounterTable = {{
     {"shader_decoder_reject_oob_register", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectOobRegister, nullptr, nullptr, 0.0},
     {"shader_decoder_reject_missing_end", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectMissingEnd, nullptr, nullptr, 0.0},
     {"shader_decoder_reject_invalid_opcode", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectInvalidOpcode, nullptr, nullptr, 0.0},
+    {"shader_decoder_reject_tempfloat16_unsupported", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectTempFloat16Unsupported, nullptr, nullptr, 0.0},
+    {"shader_decoder_reject_label_unsupported", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectLabelUnsupported, nullptr, nullptr, 0.0},
     {"render_pass_load_action_load", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionLoad, nullptr, nullptr, 0.0},
     {"render_pass_load_action_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionClear, nullptr, nullptr, 0.0},
     {"render_pass_load_action_dontcare", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLoadActionDontCare, nullptr, nullptr, 0.0},
@@ -1455,6 +1462,12 @@ void countShaderDecoderRejectMissingEnd() {
 void countShaderDecoderRejectInvalidOpcode() {
   add(counters().shaderDecoderRejectInvalidOpcode);
 }
+void countShaderDecoderRejectTempFloat16Unsupported() {
+  add(counters().shaderDecoderRejectTempFloat16Unsupported);
+}
+void countShaderDecoderRejectLabelUnsupported() {
+  add(counters().shaderDecoderRejectLabelUnsupported);
+}
 
 namespace test {
 ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects() {
@@ -1465,6 +1478,8 @@ ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects() {
       load(c.shaderDecoderRejectOobRegister),
       load(c.shaderDecoderRejectMissingEnd),
       load(c.shaderDecoderRejectInvalidOpcode),
+      load(c.shaderDecoderRejectTempFloat16Unsupported),
+      load(c.shaderDecoderRejectLabelUnsupported),
   };
 }
 }  // namespace test

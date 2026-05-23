@@ -180,9 +180,34 @@ inline constexpr u32 kD3DSPR_CONSTINT = 7;
 inline constexpr u32 kD3DSPR_COLOROUT = 8;
 inline constexpr u32 kD3DSPR_DEPTHOUT = 9;
 inline constexpr u32 kD3DSPR_SAMPLER = 10;
+// SM3 multi-constant-buffer register kinds. The D3D9 spec defines four
+// distinct float-constant register files (`c[0]..c[N]` per index) so
+// shaders compiled for SM3 may legitimately address `CONST2..4`. dxmt9
+// (and Wine — `dlls/wined3d/wined3d_private.h` defines `WINED3DSPR_CONST2`
+// through `_CONST4` in the same numeric slots without dedicated switch
+// arms) treats them as aliases of the primary constant-float namespace.
+// See specs/d3d9.plan.md §3 P1-2.
+inline constexpr u32 kD3DSPR_CONST2 = 11;
+inline constexpr u32 kD3DSPR_CONST3 = 12;
+inline constexpr u32 kD3DSPR_CONST4 = 13;
 inline constexpr u32 kD3DSPR_CONSTBOOL = 14;
 inline constexpr u32 kD3DSPR_LOOP = 15;
+// Half-precision temporary register (declared in `d3d9types.h` but
+// unused in any released SM2/SM3 compiler). dxmt9 has no fp16 lowering
+// path so the decoder safe-rejects this kind via
+// `DecoderRejectReason::TempFloat16Unsupported` rather than misbinding
+// it as a fp32 temp. See `DXMT9_FS_HALF_PRECISION` in
+// `agents/rules/environment_variables.rules.md` for the experimental
+// fp16 status.
+inline constexpr u32 kD3DSPR_TEMPFLOAT16 = 16;
 inline constexpr u32 kD3DSPR_MISCTYPE = 17;
+// SM3 subroutine label register. The decoder already inlines
+// `kD3DSIO_LABEL` / `_CALL` / `_CALLNZ` opcodes (label opcode operands
+// carry a label index, not a register), but a register source/dest
+// that encodes `D3DSPR_LABEL` (kind=18) in its type bits has no valid
+// MSL lowering. Safe-rejected via
+// `DecoderRejectReason::LabelUnsupported`.
+inline constexpr u32 kD3DSPR_LABEL = 18;
 inline constexpr u32 kD3DSPR_PREDICATE = 19;
 
 // Dcl token usage/usage-index shifts.

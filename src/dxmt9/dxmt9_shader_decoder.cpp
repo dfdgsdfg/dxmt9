@@ -62,6 +62,18 @@ enum class DecoderRejectReason : u32 {
   OobRegister,
   MissingEnd,
   InvalidOpcode,
+  // SM3 half-precision temporary (`kD3DSPR_TEMPFLOAT16` = 16). dxmt9
+  // has no fp16 lowering path (the `DXMT9_FS_HALF_PRECISION` env knob
+  // is documented experimental and not functional). A register operand
+  // that encodes this kind cannot be honored, so the decoder rejects
+  // cleanly instead of silently misbinding it as a fp32 temp.
+  TempFloat16Unsupported,
+  // SM3 subroutine-label register kind (`kD3DSPR_LABEL` = 18). The
+  // opcode-level LABEL / CALL / CALLNZ are already inlined by
+  // `inlineShaderSubroutines`; this reject only fires when a register
+  // source/destination operand carries the label kind in its type
+  // bits, which has no MSL lowering.
+  LabelUnsupported,
 };
 
 struct DecoderReject : std::runtime_error {
@@ -86,6 +98,12 @@ inline void bumpShaderDecoderReject(DecoderRejectReason reason) {
       break;
     case DecoderRejectReason::InvalidOpcode:
       ::dxmt9::perf::countShaderDecoderRejectInvalidOpcode();
+      break;
+    case DecoderRejectReason::TempFloat16Unsupported:
+      ::dxmt9::perf::countShaderDecoderRejectTempFloat16Unsupported();
+      break;
+    case DecoderRejectReason::LabelUnsupported:
+      ::dxmt9::perf::countShaderDecoderRejectLabelUnsupported();
       break;
   }
 }
@@ -205,12 +223,29 @@ D3DRegisterKind decodeRegisterKind(u32 type, D3DShaderStage stage) {
       return D3DRegisterKind::DepthOut;
     case kD3DSPR_SAMPLER:
       return D3DRegisterKind::Sampler;
+    // Why: SM3 declares CONST2..4 as separate constant-buffer register
+    // files (D3D9 SDK), but Wine `dlls/wined3d/wined3d_private.h` keeps
+    // them in the same numeric slots (11..13) without dedicated GLSL
+    // lowering — the d3d9 frontend uploads all four into the same
+    // `c[N]` namespace. dxmt9 mirrors that aliasing so a legitimate
+    // SM3 shader does not silently misbind. See specs/d3d9.plan.md
+    // §3 P1-2.
+    case kD3DSPR_CONST2:
+    case kD3DSPR_CONST3:
+    case kD3DSPR_CONST4:
+      return D3DRegisterKind::ConstFloat;
     case kD3DSPR_CONSTBOOL:
       return D3DRegisterKind::ConstBool;
     case kD3DSPR_LOOP:
       return D3DRegisterKind::Loop;
+    case kD3DSPR_TEMPFLOAT16:
+      throw DecoderReject{DecoderRejectReason::TempFloat16Unsupported,
+                           "D3D fp16 temporary (TEMPFLOAT16) has no MSL lowering"};
     case kD3DSPR_MISCTYPE:
       return D3DRegisterKind::MiscType;
+    case kD3DSPR_LABEL:
+      throw DecoderReject{DecoderRejectReason::LabelUnsupported,
+                           "D3D LABEL register source/dest has no MSL lowering"};
     case kD3DSPR_PREDICATE:
       return D3DRegisterKind::Predicate;
     default:
@@ -1394,15 +1429,24 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
       offset += sizeof(u32);
       module.words.push_back(operandToken);
       instruction.operands.push_back(operandToken);
-      if (operandIsRegister(opcode, i) && tokenHasRelativeAddressing(operandToken)) {
-        if (offset + sizeof(u32) > bytes.size()) {
-          throw DecoderReject{DecoderRejectReason::Truncated,
-                               "truncated D3D rel-addr operand"};
+      if (operandIsRegister(opcode, i)) {
+        // Validate register kind eagerly. CONST2..4 alias to ConstFloat
+        // and return normally; TEMPFLOAT16 / LABEL register operands
+        // throw `DecoderReject` so a malformed or unsupported SM3
+        // bytecode safe-rejects with the dedicated counter instead of
+        // silently misbinding through the metal-IR `Unknown` fallback.
+        // See specs/d3d9.plan.md §3 P1-2.
+        (void)decodeRegisterKind(decodeRegisterType(operandToken), module.stage);
+        if (tokenHasRelativeAddressing(operandToken)) {
+          if (offset + sizeof(u32) > bytes.size()) {
+            throw DecoderReject{DecoderRejectReason::Truncated,
+                                 "truncated D3D rel-addr operand"};
+          }
+          const u32 relAddrToken = readWord(offset);
+          offset += sizeof(u32);
+          module.words.push_back(relAddrToken);
+          instruction.relAddrTokens[i] = relAddrToken;
         }
-        const u32 relAddrToken = readWord(offset);
-        offset += sizeof(u32);
-        module.words.push_back(relAddrToken);
-        instruction.relAddrTokens[i] = relAddrToken;
       }
     }
     if (opcode == kD3DSIO_TEX || opcode == kD3DSIO_TEXLDD || opcode == kD3DSIO_TEXLDL ||

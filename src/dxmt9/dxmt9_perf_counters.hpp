@@ -169,15 +169,28 @@ void countStage1Bytes(std::uint64_t bytes);
 //                          count cannot be determined (catch-all for
 //                          internal parser errors lifted out of
 //                          std::runtime_error throws)
+//   * tempfloat16_unsupported: a register operand encoded the SM3
+//                          `D3DSPR_TEMPFLOAT16` (16) kind. dxmt9 has
+//                          no fp16 lowering path so this rejects
+//                          rather than silently misbinding as fp32.
+//                          See specs/d3d9.plan.md §3 P1-2.
+//   * label_unsupported:   a register operand encoded the SM3
+//                          `D3DSPR_LABEL` (18) kind. Opcode-level
+//                          LABEL / CALL / CALLNZ are already inlined
+//                          by `inlineShaderSubroutines`; this bucket
+//                          only fires for a register source/dest with
+//                          the label kind, which has no MSL lowering.
 void countShaderDecoderRejectTruncated();
 void countShaderDecoderRejectUnsupportedVersion();
 void countShaderDecoderRejectOobRegister();
 void countShaderDecoderRejectMissingEnd();
 void countShaderDecoderRejectInvalidOpcode();
+void countShaderDecoderRejectTempFloat16Unsupported();
+void countShaderDecoderRejectLabelUnsupported();
 
 namespace test {
-// Test-only seam: snapshot the five `shader_decoder_reject_*` buckets
-// in declaration order. Returned values are raw counter atoms — when
+// Test-only seam: snapshot the `shader_decoder_reject_*` buckets in
+// declaration order. Returned values are raw counter atoms — when
 // `DXMT_PERF_COUNTERS` is unset the count*() helpers no-op and the
 // snapshot reads zero. Spec callers set the env var before invoking
 // the decoder.
@@ -187,6 +200,8 @@ struct ShaderDecoderRejectSnapshot {
   std::uint64_t oobRegister = 0;
   std::uint64_t missingEnd = 0;
   std::uint64_t invalidOpcode = 0;
+  std::uint64_t tempFloat16Unsupported = 0;
+  std::uint64_t labelUnsupported = 0;
 };
 ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects();
 }  // namespace test
