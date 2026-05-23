@@ -3299,6 +3299,23 @@ status = "scaffolded"
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
+function = "test_create_texture_npot_policy"
+source = "wine/dlls/d3d9/tests/device.c:test_npot_textures"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "texture-creation"
+owner = "core/resources"
+requirements = ["R-TEST-12.8", "R-TEST-12.13"]
+acceptance = ["CreateTexture with non-power-of-two dimensions (3x5, 15x17, 33x65, 127x255) in both MANAGED and DEFAULT pools returns S_OK, and CreateCubeTexture with NPOT edge length (33) in MANAGED pool returns S_OK — dxmt9 reports modern full-NPOT caps"]
+status = "scaffolded"
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_device.c"
 function = "test_multithreaded_device_creation_policy"
 source = "wine/dlls/d3d9/tests/device.c:test_creation_parameters"
 source_kind = "behavioral-oracle"

@@ -3977,6 +3977,87 @@ void test_check_device_type_display_format_policy(const struct d3d9_api *api)
 
 /*
  * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_npot_textures
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Wine test_npot_textures exercises three NPOT (non-power-of-two) caps
+ * configurations: pure NPOT, conditional NPOT
+ * (D3DPTEXTURECAPS_NONPOW2CONDITIONAL), and POW2-only adapters. dxmt9
+ * reports the modern caps (full NPOT), so this minimum scaffold pins
+ * that CreateTexture / CreateCubeTexture with NPOT dimensions in both
+ * MANAGED and DEFAULT pools returns S_OK.
+ */
+void test_create_texture_npot_policy(const struct d3d9_api *api)
+{
+    static const struct
+    {
+        UINT width;
+        UINT height;
+    } dims[] =
+    {
+        {3, 5},
+        {15, 17},
+        {33, 65},
+        {127, 255},
+    };
+    IDirect3DCubeTexture9 *cube = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    for (i = 0; i < ARRAY_SIZE(dims); ++i)
+    {
+        texture = NULL;
+        hr = IDirect3DDevice9_CreateTexture(device, dims[i].width,
+                dims[i].height, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
+                &texture, NULL);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr) && texture)
+            IDirect3DTexture9_Release(texture);
+
+        texture = NULL;
+        hr = IDirect3DDevice9_CreateTexture(device, dims[i].width,
+                dims[i].height, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT,
+                &texture, NULL);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr) && texture)
+            IDirect3DTexture9_Release(texture);
+    }
+
+    hr = IDirect3DDevice9_CreateCubeTexture(device, 33, 1, 0,
+            D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &cube, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr) && cube)
+        IDirect3DCubeTexture9_Release(cube);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
  * function: test_creation_parameters (focused on D3DCREATE_MULTITHREADED)
  * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
  */

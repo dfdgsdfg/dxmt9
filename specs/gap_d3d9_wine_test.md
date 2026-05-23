@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `89975b49f249908bad1c759be934b46742430994` — **work tree dirty** |
-| Short  | `89975b4` |
-| Tag / describe | `89975b4` |
+| Commit | `334e0d9ba33fc110be969bd198f9c5696da3e998` — **work tree dirty** |
+| Short  | `334e0d9` |
+| Tag / describe | `334e0d9` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_set_get_depth_stencil_surface_policy scaffold; test_depthstenciltest partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_check_device_type_display_format_policy scaffold; test_display_formats partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 89975b49f249908bad1c759be934b46742430994
+git -C "$DXMT9_REPO" checkout 334e0d9ba33fc110be969bd198f9c5696da3e998
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
-| `device.c` | 105 | 1 | 100 | 4 | 0 | 0 |
+| `device.c` | 105 | 1 | 101 | 3 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **181** | **21** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **182** | **20** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -277,7 +277,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_multi_adapter` | 14502 | 📐 | `test_multi_adapter` |
 | `test_multi_device` | 3712 | 📐 | `test_multi_device_independent_state` |
 | `test_multiply_transform` | 14100 | 📐 | `test_stateblock_multiply_transform_capture` |
-| `test_npot_textures` | 10090 | 🟡 | — |
+| `test_npot_textures` | 10090 | 📐 | `test_create_texture_npot_policy` |
 | `test_null_stream` | 3330 | 📐 | `test_null_stream_shader_draw_policy`, `test_null_stream_state` |
 | `test_occlusion_query` | 6511 | 📐 | `occlusion_query_public_sizes`, `test_query_get_data_size_policy` |
 | `test_pinned_buffers` | 9992 | 📐 | `test_pinned_buffers_d3dusage_policy` |

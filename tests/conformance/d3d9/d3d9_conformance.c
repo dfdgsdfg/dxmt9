@@ -298,6 +298,8 @@ static const struct test_case tests[] =
             test_check_device_format_conversion_matrix},
     {"check_device_type_display_format_policy",
             test_check_device_type_display_format_policy},
+    {"create_texture_npot_policy",
+            test_create_texture_npot_policy},
     {"multithreaded_device_creation_policy",
             test_multithreaded_device_creation_policy},
     {"visual_shadow_depth_compare_caps_policy",
