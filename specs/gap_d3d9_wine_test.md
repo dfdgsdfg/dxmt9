@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `16e17c5725ba7d67e5b5868dca96e040ebc6a18d` |
-| Short  | `16e17c5` |
-| Tag / describe | `16e17c5` |
+| Commit | `4262a3af05359b075b1413d0388f9f5f4ee8a4fa` |
+| Short  | `4262a3a` |
+| Tag / describe | `4262a3a` |
 | Author date | `2026-05-23` |
-| Subject | tests/conformance/d3d9: add test_scissor_default_matches_backbuffer_policy scaffold; partial → scaffolded |
+| Subject | tests/conformance/d3d9: add test_device_get_swap_chain_bounds_policy scaffold; test_swapchain partial → scaffolded |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout 16e17c5725ba7d67e5b5868dca96e040ebc6a18d
+git -C "$DXMT9_REPO" checkout 4262a3af05359b075b1413d0388f9f5f4ee8a4fa
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
@@ -73,10 +73,10 @@ python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 | Wine source | Tests | covered | scaffolded | partial | failing | other |
 |-------------|-----:|--------:|----------:|--------:|--------:|------:|
 | `visual.c` | 135 | 65 | 55 | 15 | 0 | 0 |
-| `device.c` | 105 | 1 | 96 | 8 | 0 | 0 |
+| `device.c` | 105 | 1 | 97 | 7 | 0 | 0 |
 | `d3d9ex.c` | 27 | 0 | 25 | 2 | 0 | 0 |
 | `stateblock.c` | 1 | 0 | 1 | 0 | 0 | 0 |
-| **TOTAL** | **268** | **66** | **177** | **25** | **0** | **0** |
+| **TOTAL** | **268** | **66** | **178** | **24** | **0** | **0** |
 
 `other` rolls up `deferred`, `partial/deferred`, and any UNTRACKED rows.
 
@@ -308,7 +308,7 @@ Source: [`dlls/d3d9/tests/device.c`](https://gitlab.winehq.org/wine/wine/-/blob/
 | `test_surface_double_unlock` | 9471 | 📐 | `test_surface_double_unlock_pool_policy` |
 | `test_surface_format_null` | 9371 | 📐 | `test_surface_format_null_policy`, `test_vendor_format_public_api_policy` |
 | `test_surface_get_container` | 8291 | 📐 | `resource_container_level_desc_and_locks`, `test_texture_surface_container_policy` |
-| `test_swapchain` | 1269 | 🟡 | — |
+| `test_swapchain` | 1269 | 📐 | `test_device_get_swap_chain_bounds_policy`, `test_swapchain_backbuffer_getter_policy`, `test_additional_swapchain_backbuffer_bounds`, `test_present_parameter_normalization`, `test_present_parameter_validation` |
 | `test_swapchain_multisample_reset` | 13219 | 📐 | `test_swapchain_multisample_reset` |
 | `test_swapchain_parameters` | 12337 | 📐 | `test_additional_swapchain_backbuffer_bounds`, `test_present_parameter_normalization`, `test_present_parameter_validation`, `test_swapchain_backbuffer_getter_policy` |
 | `test_texture_stage_states` | 7658 | 📐 | `test_texture_stage_states` |

@@ -37,6 +37,8 @@ static const struct test_case tests[] =
             test_swapchain_backbuffer_getter_policy},
     {"additional_swapchain_backbuffer_bounds",
             test_additional_swapchain_backbuffer_bounds},
+    {"device_get_swap_chain_bounds_policy",
+            test_device_get_swap_chain_bounds_policy},
     {"ex_create_reset_mode_validation",
             test_ex_create_reset_mode_validation},
     {"scene_invalid_transitions", test_scene_invalid_transitions},

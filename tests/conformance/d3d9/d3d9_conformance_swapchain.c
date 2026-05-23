@@ -1657,3 +1657,78 @@ done_window:
 done_d3d9:
     IDirect3D9Ex_Release(d3d9ex);
 }
+
+/*
+ * Wine provenance: dlls/d3d9/tests/device.c
+ * function: test_swapchain()
+ * commit: 6e073d28dee3af7f4c965daec94644e0f9f92727
+ *
+ * Mirrors the GetBackBuffer ordinal-bounds policy at the
+ * GetSwapChain(idx) level: an implicit swapchain device must accept
+ * every index in [0, GetNumberOfSwapChains()) and reject every index
+ * at or above that count with D3DERR_INVALIDCALL, clearing the
+ * out-pointer. A NULL out-pointer is also rejected with
+ * D3DERR_INVALIDCALL.
+ */
+void test_device_get_swap_chain_bounds_policy(const struct d3d9_api *api)
+{
+    IDirect3DSwapChain9 *swapchain = NULL;
+    IDirect3DDevice9 *device = NULL;
+    IDirect3D9 *d3d9;
+    HWND window;
+    UINT count;
+    UINT i;
+    HRESULT hr;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    count = IDirect3DDevice9_GetNumberOfSwapChains(device);
+    CHECK_TRUE(count >= 1);
+
+    for (i = 0; i < count; ++i)
+    {
+        swapchain = NULL;
+        hr = IDirect3DDevice9_GetSwapChain(device, i, &swapchain);
+        CHECK_HR(hr, D3D_OK);
+        CHECK_TRUE(swapchain != NULL);
+        if (swapchain)
+        {
+            IDirect3DSwapChain9_Release(swapchain);
+            swapchain = NULL;
+        }
+    }
+
+    swapchain = (IDirect3DSwapChain9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_GetSwapChain(device, count, &swapchain);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(swapchain == NULL);
+
+    swapchain = (IDirect3DSwapChain9 *)0xdeadbeef;
+    hr = IDirect3DDevice9_GetSwapChain(device, 999, &swapchain);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+    CHECK_TRUE(swapchain == NULL);
+
+    hr = IDirect3DDevice9_GetSwapChain(device, 0, NULL);
+    CHECK_HR(hr, D3DERR_INVALIDCALL);
+
+    IDirect3DDevice9_Release(device);
+
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
