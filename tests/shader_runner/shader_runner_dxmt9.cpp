@@ -1732,6 +1732,11 @@ bool parseDxmt9RenderState(CorpusTest& test, std::string_view line) {
                key == "scissortestenable" || key == "scissortestenabled") {
       test.renderStateSetups.push_back({RS_SCISSOR_TEST_ENABLE, parseBoolState(value)});
       sawState = true;
+    } else if (key == "depthbias" || key == "depth_bias") {
+      // D3DRS_DEPTHBIAS stores a DWORD-as-float constant z offset added in
+      // clip space. Same DWORD-as-float bit cast as fogstart.
+      test.renderStateSetups.push_back({RS_DEPTH_BIAS, bitCastFloatState(value)});
+      sawState = true;
     } else {
       fail("unsupported dxmt9-render-state state");
     }

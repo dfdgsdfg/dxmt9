@@ -416,6 +416,8 @@ inline constexpr u32 RS_STENCIL_CCW_REF = RS_STENCIL_REF;
 inline constexpr u32 RS_STENCIL_CCW_MASK = RS_STENCIL_MASK;
 inline constexpr u32 RS_STENCIL_CCW_WRITEMASK = RS_STENCIL_WRITEMASK;
 inline constexpr u32 RS_TEXTURE_FACTOR = 60;
+inline constexpr u32 RS_DEPTH_BIAS = 195;
+inline constexpr u32 RS_SLOPE_SCALE_DEPTH_BIAS = 175;
 
 inline constexpr u32 TSS_COLOR_OP = 1;
 inline constexpr u32 TSS_COLOR_ARG1 = 2;

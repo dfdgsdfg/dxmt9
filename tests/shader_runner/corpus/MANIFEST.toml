@@ -1955,6 +1955,18 @@ oracle = "Wine d3d9 visual.c zwriteenable_test/depth-state behavior, reduced to 
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "render_state/dxmt9_depth_bias_occlusion_readback.shader_test"
+status = "failing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["PROBE"]
+oracle = "Wine d3d9 visual.c test_depthbias behavior, reduced to constant DEPTHBIAS occluding a coplanar quad"
+oracle-date = "2026-05-23"
+
+[[test]]
 file = "render_state/dxmt9_cull_none_keeps_clockwise_triangle.shader_test"
 status = "passing"
 source = "dxmt9"

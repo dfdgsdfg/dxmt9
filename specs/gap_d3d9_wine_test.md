@@ -27,11 +27,11 @@ changes not yet visible upstream.
 
 | Field | Value |
 |-------|-------|
-| Commit | `e4074609441693ce775fd8300964b80af804044b` — **work tree dirty** |
-| Short  | `e407460` |
-| Tag / describe | `e407460` |
+| Commit | `e2b5863ca34338c3e57cbb78b32a1f339f6cbe7d` — **work tree dirty** |
+| Short  | `e2b5863` |
+| Tag / describe | `e2b5863` |
 | Author date | `2026-05-23` |
-| Subject | specs/gap_d3d9_wine_test: test_constant_clamp_vs partial → covered |
+| Subject | specs/gap_d3d9_wine_test: promote 4 more partial → covered |
 
 ### Wine reference revision
 
@@ -50,7 +50,7 @@ the same commit in the Wine checkout before opening the source.
 
 ```sh
 # Reproduce the inventory verbatim from a clean tree:
-git -C "$DXMT9_REPO" checkout e4074609441693ce775fd8300964b80af804044b
+git -C "$DXMT9_REPO" checkout e2b5863ca34338c3e57cbb78b32a1f339f6cbe7d
 git -C "$WINE_REPO"  checkout 6e073d28dee3af7f4c965daec94644e0f9f92727
 python3 scripts/tools/gen_wine_d3d9_test_inventory.py
 ```
